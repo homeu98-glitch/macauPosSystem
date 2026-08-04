@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { loadOrders } from "@/lib/storage";
+import { AppSidebar } from "@/components/app-sidebar";
+import { PosOrder } from "@/lib/types";
 
 function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
@@ -11,7 +11,21 @@ function formatMoney(amount: number) {
 
 export function ReportsDashboard() {
   const [range, setRange] = useState<"today" | "30d">("today");
-  const orders = loadOrders();
+  const [orders, setOrders] = useState<PosOrder[]>([]);
+
+  useEffect(() => {
+    async function loadOrdersFromApi() {
+      try {
+        const response = await fetch("/api/pos/orders");
+        const payload = (await response.json()) as { orders?: PosOrder[] };
+        setOrders(payload.orders ?? []);
+      } catch {
+        setOrders([]);
+      }
+    }
+
+    void loadOrdersFromApi();
+  }, []);
 
   const filteredOrders = useMemo(() => {
     const now = new Date();
@@ -57,43 +71,8 @@ export function ReportsDashboard() {
 
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
-      <div className="flex h-screen overflow-hidden">
-        <aside className="hidden w-[72px] shrink-0 flex-col justify-between bg-slate-900 px-2 py-3 text-white lg:flex">
-          <div className="grid gap-2">
-            <Link
-              className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200"
-              href="/"
-            >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">點</span>
-              <span>點餐</span>
-            </Link>
-            <Link
-              className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200"
-              href="/orders"
-            >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">單</span>
-              <span>訂單</span>
-            </Link>
-            <div className="flex flex-col items-center gap-2 rounded-2xl bg-orange-500 px-2 py-3 text-xs font-semibold text-white">
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
-              <span>報表</span>
-            </div>
-            <Link
-              className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200"
-              href="/members"
-            >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">會</span>
-              <span>會員</span>
-            </Link>
-          </div>
-          <Link
-            className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"
-            href="/settings"
-          >
-            設置
-          </Link>
-        </aside>
-
+      <AppSidebar />
+      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">

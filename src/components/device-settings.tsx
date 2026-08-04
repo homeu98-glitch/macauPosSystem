@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { AppSidebar } from "@/components/app-sidebar";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -54,6 +55,30 @@ export function DeviceSettings() {
     }
 
     void loadOnlineOrderSettings();
+  }, []);
+
+  useEffect(() => {
+    async function loadRemoteConfig() {
+      try {
+        const response = await fetch("/api/pos/device-config");
+        const payload = (await response.json()) as {
+          deviceConfig?: DeviceConfig | null;
+          localSettings?: PosLocalSettings | null;
+        };
+        if (payload.deviceConfig) {
+          setConfig(payload.deviceConfig);
+          saveDeviceConfig(payload.deviceConfig);
+        }
+        if (payload.localSettings) {
+          setLocalSettings(payload.localSettings);
+          savePosLocalSettings(payload.localSettings);
+        }
+      } catch {
+        // 保留本機設定
+      }
+    }
+
+    void loadRemoteConfig();
   }, []);
 
   const printerGroupOptions = useMemo(
@@ -164,8 +189,9 @@ export function DeviceSettings() {
 
   return (
     <div className="min-h-screen bg-slate-100">
+      <AppSidebar />
       <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[88px]">
           <div>
             <div className="text-lg font-semibold text-slate-900">設置</div>
             <div className="mt-1 text-sm text-slate-500">
@@ -178,7 +204,7 @@ export function DeviceSettings() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-[1600px] px-4 py-3">
+      <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[88px]">
         <div className="mb-3 flex flex-wrap gap-2">
           {[
             ["device", "打印機"],

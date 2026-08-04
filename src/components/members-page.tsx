@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { AppSidebar } from "@/components/app-sidebar";
 import { loadMembers, saveMembers } from "@/lib/storage";
 import { MemberCoupon, MemberProfile } from "@/lib/types";
 
@@ -40,42 +40,33 @@ export function MembersPage() {
   function rechargeMember(memberId: string) {
     const amount = Number(rechargeValues[memberId] ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) return;
-
-    const nextMembers = members.map((member) =>
-      member.id === memberId ? { ...member, balance: member.balance + amount } : member,
-    );
-    setMembers(nextMembers);
-    saveMembers(nextMembers);
-    setRechargeValues((current) => ({ ...current, [memberId]: "" }));
+    void (async () => {
+      try {
+        const response = await fetch("/api/members", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "recharge", memberId, amount }),
+        });
+        const payload = (await response.json()) as { member?: MemberProfile };
+        const nextMembers = members.map((member) => (member.id === memberId ? payload.member ?? member : member));
+        setMembers(nextMembers);
+        saveMembers(nextMembers);
+        setRechargeValues((current) => ({ ...current, [memberId]: "" }));
+      } catch {
+        const nextMembers = members.map((member) =>
+          member.id === memberId ? { ...member, balance: member.balance + amount } : member,
+        );
+        setMembers(nextMembers);
+        saveMembers(nextMembers);
+        setRechargeValues((current) => ({ ...current, [memberId]: "" }));
+      }
+    })();
   }
 
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
-      <div className="flex h-screen overflow-hidden">
-        <aside className="hidden w-[72px] shrink-0 flex-col justify-between bg-slate-900 px-2 py-3 text-white lg:flex">
-          <div className="grid gap-2">
-            <Link className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200" href="/">
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">點</span>
-              <span>點餐</span>
-            </Link>
-            <div className="flex flex-col items-center gap-2 rounded-2xl bg-orange-500 px-2 py-3 text-xs font-semibold text-white">
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">會</span>
-              <span>會員</span>
-            </div>
-            <Link className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200" href="/orders">
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">單</span>
-              <span>訂單</span>
-            </Link>
-            <Link className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200" href="/reports">
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
-              <span>報表</span>
-            </Link>
-          </div>
-          <Link className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200" href="/settings">
-            設置
-          </Link>
-        </aside>
-
+      <AppSidebar />
+      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="text-lg font-semibold text-slate-900">會員</div>

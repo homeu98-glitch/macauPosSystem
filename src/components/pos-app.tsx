@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { defaultDeviceConfig } from "@/lib/mock-data";
@@ -16,12 +16,14 @@ import {
   loadPrintJobs,
   loadQueue,
   saveBootstrapCache,
+  saveDeviceConfig,
   saveMembers,
   saveOrders,
+  savePosLocalSettings,
   savePrintJobs,
   saveQueue,
 } from "@/lib/storage";
-import { MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 type Toast = {
   tone: "info" | "success";
@@ -73,7 +75,6 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
 }
 
 export function PosApp() {
-  const router = useRouter();
   const cachedBootstrapRaw = loadBootstrapCache();
   const cachedBootstrap = cachedBootstrapRaw ? normalizeBootstrapPayload(cachedBootstrapRaw) : null;
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
@@ -111,6 +112,7 @@ export function PosApp() {
   const [useMemberBalance, setUseMemberBalance] = useState(true);
   const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
+  const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -134,11 +136,60 @@ export function PosApp() {
   }, []);
 
   useEffect(() => {
+    async function loadRuntimeState() {
+      try {
+        const response = await fetch("/api/pos/state");
+        const payload = (await response.json()) as {
+          orders?: PosOrder[];
+          queue?: QueueEvent[];
+          printJobs?: PrintJob[];
+          members?: MemberProfile[];
+          localSettings?: PosLocalSettings;
+          deviceConfig?: DeviceConfig | null;
+        };
+
+        if (Array.isArray(payload.orders)) {
+          setOrders(payload.orders);
+          saveOrders(payload.orders);
+        }
+        if (Array.isArray(payload.queue)) {
+          setQueue(payload.queue);
+          saveQueue(payload.queue);
+        }
+        if (Array.isArray(payload.printJobs)) {
+          setPrintJobs(payload.printJobs);
+          savePrintJobs(payload.printJobs);
+        }
+        if (Array.isArray(payload.members)) {
+          setMembersCache(payload.members);
+          saveMembers(payload.members);
+        }
+        if ("localSettings" in payload && payload.localSettings) {
+          savePosLocalSettings(payload.localSettings);
+        }
+        if ("deviceConfig" in payload && payload.deviceConfig) {
+          saveDeviceConfig(payload.deviceConfig);
+        }
+      } catch {
+        // 保留本機快取
+      }
+    }
+
+    void loadRuntimeState();
+  }, []);
+
+  useEffect(() => {
     if (!toast) return;
 
     const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!orderSuccessFlash) return;
+    const timer = window.setTimeout(() => setOrderSuccessFlash(false), 1000);
+    return () => window.clearTimeout(timer);
+  }, [orderSuccessFlash]);
 
   const activeTable = useMemo(
     () => bootstrap?.tables.find((table) => table.id === activeTableId) ?? null,
@@ -812,6 +863,7 @@ export function PosApp() {
     setDiscountValue(String(order.discountAmount));
     setReceivedAmount("");
     setBaseOrderItems(order.items);
+    setOrderSuccessFlash(true);
     setToast({
       tone: "success",
       message: networkOnline
@@ -934,65 +986,8 @@ export function PosApp() {
 
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
-      <div className="flex h-screen overflow-hidden">
-        <aside className="hidden w-[72px] shrink-0 flex-col justify-between bg-slate-900 px-2 py-3 text-white lg:flex">
-          <div className="grid gap-2">
-            {[
-              ["點餐", "點"],
-              ["訂單", "單"],
-            ].map(([label, short]) => (
-              <button
-                key={label}
-                className={`flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold ${
-                  label === "點餐" ? "bg-orange-500 text-white" : "text-slate-300 hover:bg-slate-800"
-                }`}
-                onClick={() => {
-                  if (label === "訂單") {
-                    router.push("/orders");
-                  }
-                }}
-                type="button"
-              >
-                <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">{short}</span>
-                <span>{label}</span>
-              </button>
-            ))}
-            <button
-              className="flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-              onClick={() => router.push("/reports")}
-              type="button"
-            >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
-              <span>報表</span>
-            </button>
-            <button
-              className="flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-              onClick={() => router.push("/members")}
-              type="button"
-            >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">會</span>
-              <span>會員</span>
-            </button>
-          </div>
-          <div className="grid gap-2">
-            <button
-              className={`rounded-2xl px-2 py-2 text-xs font-semibold ${
-                networkOnline ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"
-              }`}
-              onClick={() => setNetworkOnline((current) => !current)}
-              type="button"
-            >
-              {networkOnline ? "在線" : "離線"}
-            </button>
-            <Link
-              className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"
-              href="/settings"
-            >
-              設置
-            </Link>
-          </div>
-        </aside>
-
+      <AppSidebar />
+      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
         {posMode === "tables" ? (
           <div className="grid h-screen flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_330px]">
             <main className="flex h-full flex-col overflow-hidden bg-slate-100">
@@ -1776,6 +1771,14 @@ export function PosApp() {
           }`}
         >
           {toast.message}
+        </div>
+      ) : null}
+
+      {orderSuccessFlash ? (
+        <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
+          <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
+            下單成功
+          </div>
         </div>
       ) : null}
     </div>
