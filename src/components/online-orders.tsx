@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-type OrderTypeKey = "dine_in" | "pickup" | "self_delivery" | "rider_delivery";
+type OrderTypeKey = "all" | "dine_in" | "pickup" | "self_delivery" | "rider_delivery";
 
 type OnlineOrder = {
   id: string;
@@ -16,6 +16,7 @@ type OnlineOrder = {
 };
 
 const TABS: Array<{ key: OrderTypeKey; label: string }> = [
+  { key: "all", label: "全部" },
   { key: "dine_in", label: "堂食" },
   { key: "pickup", label: "外賣自取" },
   { key: "self_delivery", label: "自送" },
@@ -27,7 +28,7 @@ function formatMoney(amount: number) {
 }
 
 export function OnlineOrders() {
-  const [activeTab, setActiveTab] = useState<OrderTypeKey>("dine_in");
+  const [activeTab, setActiveTab] = useState<OrderTypeKey>("all");
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<OnlineOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +100,13 @@ export function OnlineOrders() {
               className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"
               href="/settings"
             >
-              設備
+              設置
+            </Link>
+            <Link
+              className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"
+              href="/reports"
+            >
+              報表
             </Link>
           </div>
         </aside>
@@ -205,4 +212,3 @@ export function OnlineOrders() {
     </div>
   );
 }
-

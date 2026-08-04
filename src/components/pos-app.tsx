@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { InputPadModal } from "@/components/input-pad-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
   loadDeviceConfig,
+  loadPosLocalSettings,
   loadOrders,
   loadPrintJobs,
   loadQueue,
@@ -63,6 +65,12 @@ export function PosApp() {
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
   const [posMode, setPosMode] = useState<"tables" | "order">("tables");
+  const [activeFloorId, setActiveFloorId] = useState("");
+  const [padOpen, setPadOpen] = useState(false);
+  const [padMode, setPadMode] = useState<"number" | "text">("number");
+  const [padTitle, setPadTitle] = useState("");
+  const [padValue, setPadValue] = useState("");
+  const [padApply, setPadApply] = useState<(value: string) => void>(() => () => {});
 
   useEffect(() => {
     async function bootstrapApp() {
@@ -102,6 +110,9 @@ export function PosApp() {
   );
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
+  const localSettings = useMemo(() => loadPosLocalSettings(), []);
+  const floors = localSettings.floors;
+  const paymentMethods = localSettings.paymentMethods;
 
   const effectiveCategoryId = useMemo(() => {
     if (!bootstrap) return "";
@@ -119,6 +130,11 @@ export function PosApp() {
 
     return base.filter((item) => item.name.includes(keyword));
   }, [bootstrap, effectiveCategoryId, searchKeyword]);
+  const effectiveFloorId = activeFloorId || floors[0]?.id || "";
+  const visibleTables = useMemo(
+    () => floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [],
+    [effectiveFloorId, floors],
+  );
 
   const recentOrders = useMemo(() => orders.slice(0, 5), [orders]);
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
@@ -157,14 +173,14 @@ export function PosApp() {
   const paymentBase = activeOrder && cartItems.length === 0
     ? {
         subtotal: activeOrder.subtotal,
-        serviceChargeAmount: activeOrder.serviceChargeAmount,
+          serviceChargeAmount: 0,
         taxAmount: activeOrder.taxAmount,
-        total: activeOrder.subtotal + activeOrder.serviceChargeAmount + activeOrder.taxAmount,
+          total: activeOrder.subtotal + activeOrder.taxAmount,
       }
     : totals;
   const paymentSummary = {
     subtotal: paymentBase.subtotal,
-    serviceChargeAmount: paymentBase.serviceChargeAmount,
+    serviceChargeAmount: 0,
     taxAmount: paymentBase.taxAmount,
     discountAmount,
     total: Math.max(0, paymentBase.total - discountAmount),
@@ -206,6 +222,19 @@ export function PosApp() {
     const order = tableOrderMap.get(tableId) ?? null;
     loadOrderIntoWorkspace(order, tableId);
     setPosMode("order");
+  }
+
+  function openPad(
+    title: string,
+    mode: "number" | "text",
+    value: string,
+    apply: (nextValue: string) => void,
+  ) {
+    setPadTitle(title);
+    setPadMode(mode);
+    setPadValue(value);
+    setPadApply(() => apply);
+    setPadOpen(true);
   }
 
   function upsertCurrentOrder(nextStatus: "draft" | "sent_to_kitchen", allowEmpty = false) {
@@ -410,19 +439,6 @@ export function PosApp() {
     });
   }
 
-  function settleLatestOrder() {
-    const targetOrder =
-      activeOrder?.status === "sent_to_kitchen"
-        ? activeOrder
-        : orders.find((order) => order.status === "sent_to_kitchen");
-    if (!targetOrder) {
-      setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
-      return;
-    }
-    setPayingOrderId(targetOrder.id);
-    setToast({ tone: "info", message: `已選中 ${targetOrder.localOrderNo}，可直接在右側完成收款。` });
-  }
-
   function confirmPayment(method: PosBootstrap["rules"]["paymentMethods"][number]) {
     if (!bootstrap) return;
 
@@ -476,6 +492,18 @@ export function PosApp() {
     });
   }
 
+  function openSettlementModal() {
+    const targetOrder =
+      activeOrder?.status === "sent_to_kitchen"
+        ? activeOrder
+        : orders.find((order) => order.status === "sent_to_kitchen");
+    if (!targetOrder) {
+      setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
+      return;
+    }
+    setPayingOrderId(targetOrder.id);
+  }
+
   if (isBootstrapping || !bootstrap) {
     return <div className="empty-state">正在載入門店設定…</div>;
   }
@@ -505,6 +533,14 @@ export function PosApp() {
                 <span>{label}</span>
               </button>
             ))}
+            <button
+              className="flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              onClick={() => router.push("/reports")}
+              type="button"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
+              <span>報表</span>
+            </button>
           </div>
           <div className="grid gap-2">
             <button
@@ -520,7 +556,7 @@ export function PosApp() {
               className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"
               href="/settings"
             >
-              設備
+              設置
             </Link>
           </div>
         </aside>
@@ -546,8 +582,23 @@ export function PosApp() {
               </div>
 
               <div className="flex-1 overflow-auto p-4">
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {floors.map((floor) => (
+                    <button
+                      key={floor.id}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                        effectiveFloorId === floor.id ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+                      }`}
+                      onClick={() => setActiveFloorId(floor.id)}
+                      type="button"
+                    >
+                      {floor.name}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
-                  {bootstrap.tables.map((table) => {
+                  {visibleTables.map((table) => {
                     const status = tableOrderMap.get(table.id)?.status ?? "idle";
                     const label =
                       status === "sent_to_kitchen" ? "已下單" : status === "draft" ? "未下單" : "空閒";
@@ -741,12 +792,14 @@ export function PosApp() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input
+                    readOnly
                     className={`rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400 ${
                       searchFocused ? "w-full xl:w-72" : "w-32 xl:w-40"
                     }`}
-                    onChange={(event) => setSearchKeyword(event.target.value)}
-                    onBlur={() => setSearchFocused(false)}
-                    onFocus={() => setSearchFocused(true)}
+                    onClick={() => {
+                      setSearchFocused(true);
+                      openPad("搜尋商品", "text", searchKeyword, (value) => setSearchKeyword(value));
+                    }}
                     placeholder="搜尋商品"
                     value={searchKeyword}
                   />
@@ -815,12 +868,6 @@ export function PosApp() {
                     {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
                   </span>
                 </div>
-                <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
-                  <span>服務費</span>
-                  <span className="font-semibold text-slate-900">
-                    {formatMoney(paymentSummary.serviceChargeAmount, bootstrap.currency)}
-                  </span>
-                </div>
                 <div className="mt-4 border-t border-slate-200 pt-4">
                   <div className="mb-3 flex items-center justify-between text-sm text-slate-500">
                     <span>折扣</span>
@@ -832,51 +879,6 @@ export function PosApp() {
                   <div className="mt-2 text-3xl font-semibold tracking-tight text-orange-600">
                     {formatMoney(paymentSummary.total, bootstrap.currency)}
                   </div>
-                </div>
-              </div>
-
-              <div className="mt-5 grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    折扣金額
-                    <input
-                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:border-orange-400"
-                      onChange={(event) => setDiscountValue(event.target.value)}
-                      placeholder="0"
-                      value={discountValue}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    實收金額
-                    <input
-                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none focus:border-orange-400"
-                      onChange={(event) => setReceivedAmount(event.target.value)}
-                      placeholder="0"
-                      value={receivedAmount}
-                    />
-                  </label>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl bg-white px-3 py-3 text-sm">
-                  <span className="text-slate-500">找續</span>
-                  <span className="text-lg font-semibold text-emerald-600">
-                    {formatMoney(changeDue, bootstrap.currency)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <div className="mb-2 text-xs font-semibold text-slate-500">支付方式</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {bootstrap.rules.paymentMethods.map((method) => (
-                    <button
-                      key={method}
-                      className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-700 hover:border-orange-300"
-                      onClick={() => confirmPayment(method)}
-                      type="button"
-                    >
-                      {method === "cash" ? "現金" : method === "card" ? "銀行卡" : "MPay"}
-                    </button>
-                  ))}
                 </div>
               </div>
 
@@ -900,7 +902,7 @@ export function PosApp() {
                 </button>
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800"
-                  onClick={settleLatestOrder}
+                  onClick={openSettlementModal}
                   type="button"
                 >
                   去結帳
@@ -967,6 +969,128 @@ export function PosApp() {
         </div>
         )}
       </div>
+
+      <InputPadModal
+        mode={padMode}
+        onChange={setPadValue}
+        onClose={() => {
+          setPadOpen(false);
+          setSearchFocused(false);
+        }}
+        onConfirm={() => {
+          padApply(padValue);
+          setPadOpen(false);
+          setSearchFocused(false);
+        }}
+        open={padOpen}
+        title={padTitle}
+        value={padValue}
+      />
+
+      {payingOrderId ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">結帳</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {currentSettlementOrder ? `訂單 ${currentSettlementOrder.localOrderNo}` : "待結帳訂單"}
+                </div>
+              </div>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => setPayingOrderId(null)}
+                type="button"
+              >
+                關閉
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">本次支付內容</div>
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">小計</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">折扣</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatMoney(paymentSummary.discountAmount, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">應收</span>
+                    <span className="text-2xl font-semibold text-orange-600">
+                      {formatMoney(paymentSummary.total, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">找續</span>
+                    <span className="font-semibold text-emerald-600">
+                      {formatMoney(changeDue, bootstrap.currency)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    折扣金額
+                    <input
+                      readOnly
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      onClick={() =>
+                        openPad("折扣金額", "number", discountValue, (value) => setDiscountValue(value || "0"))
+                      }
+                      value={discountValue}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    實收金額
+                    <input
+                      readOnly
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      onClick={() =>
+                        openPad("實收金額", "number", receivedAmount, (value) => setReceivedAmount(value))
+                      }
+                      value={receivedAmount}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-sm font-semibold text-slate-900">支付方式</div>
+                <div className="mt-3 grid gap-2">
+                  {paymentMethods.map((method) => (
+                    <button
+                      key={method}
+                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
+                      onClick={() => confirmPayment(method as "cash" | "card" | "mpay")}
+                      type="button"
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
+                  onClick={() =>
+                    confirmPayment((paymentMethods[0] ?? "現金") as "cash" | "card" | "mpay")
+                  }
+                  type="button"
+                >
+                  已結帳
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {toast ? (
         <div

@@ -1,4 +1,4 @@
-import { PosBootstrap, DeviceConfig } from "@/lib/types";
+import { PosBootstrap, DeviceConfig, PosLocalSettings } from "@/lib/types";
 
 export const mockBootstrap: PosBootstrap = {
   sourceVersion: 1,
@@ -48,17 +48,17 @@ export const mockBootstrap: PosBootstrap = {
     },
   ],
   tables: [
-    { id: "table-a01", name: "A01", area: "大堂" },
-    { id: "table-a02", name: "A02", area: "大堂" },
-    { id: "table-b01", name: "B01", area: "窗邊" },
-    { id: "table-b02", name: "B02", area: "窗邊" },
+    { id: "table-a01", name: "A01", area: "1樓", floorId: "floor-1" },
+    { id: "table-a02", name: "A02", area: "1樓", floorId: "floor-1" },
+    { id: "table-b01", name: "B01", area: "1樓", floorId: "floor-1" },
+    { id: "table-b02", name: "B02", area: "2樓", floorId: "floor-2" },
   ],
   rules: {
     orderFlow: "send_then_pay",
     allowSplitBill: false,
     allowMemberLookup: false,
     taxRate: 0,
-    serviceChargeRate: 0.1,
+    serviceChargeRate: 0,
     paymentMethods: ["cash", "card", "mpay"],
   },
   printerGroups: ["kitchen", "drinks", "receipt"],
@@ -96,4 +96,27 @@ export const defaultDeviceConfig: DeviceConfig = {
       enabled: true,
     },
   ],
+};
+
+export const defaultPosLocalSettings: PosLocalSettings = {
+  floors: [
+    {
+      id: "floor-1",
+      name: "1樓",
+      tables: [
+        { id: "table-a01", name: "A01", area: "1樓", floorId: "floor-1" },
+        { id: "table-a02", name: "A02", area: "1樓", floorId: "floor-1" },
+        { id: "table-a03", name: "A03", area: "1樓", floorId: "floor-1" },
+      ],
+    },
+    {
+      id: "floor-2",
+      name: "2樓",
+      tables: [
+        { id: "table-b01", name: "B01", area: "2樓", floorId: "floor-2" },
+        { id: "table-b02", name: "B02", area: "2樓", floorId: "floor-2" },
+      ],
+    },
+  ],
+  paymentMethods: ["現金", "Mpay", "中銀"],
 };

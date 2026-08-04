@@ -28,6 +28,13 @@ export interface StoreTable {
   id: string;
   name: string;
   area: string;
+  floorId?: string;
+}
+
+export interface FloorConfig {
+  id: string;
+  name: string;
+  tables: StoreTable[];
 }
 
 export interface PosRules {
@@ -68,6 +75,11 @@ export interface DeviceConfig {
   storeId: string;
   printers: DevicePrinterConfig[];
   updatedAt: string;
+}
+
+export interface PosLocalSettings {
+  floors: FloorConfig[];
+  paymentMethods: string[];
 }
 
 export interface OrderItem {

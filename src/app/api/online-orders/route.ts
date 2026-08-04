@@ -6,7 +6,7 @@ type OnlineOrderType = "dine_in" | "pickup" | "self_delivery" | "rider_delivery"
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const type = (searchParams.get("type") ?? "dine_in") as OnlineOrderType;
+  const type = searchParams.get("type") ?? "all";
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
       orders: [
         {
           id: "online-001",
-          type,
+          type: type === "all" ? "dine_in" : type,
           status: "new",
           customerName: "線上客戶",
           total: 86,
@@ -32,12 +32,17 @@ export async function GET(request: Request) {
 
   // 預留：你之後告訴我實際表名/欄位，我就把這段換成真查詢
   // 目前先用一個通用假設：表名 online_orders
-  const { data, error } = await supabase
+  let query = supabase
     .from("online_orders")
-    .select("*")
-    .eq("type", type)
+    .select("*, online_order_items(product_name, qty)")
     .order("created_at", { ascending: false })
     .limit(50);
+
+  if (type !== "all") {
+    query = query.eq("type", type as OnlineOrderType);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json(
@@ -46,6 +51,21 @@ export async function GET(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, source: "supabase", orders: data ?? [] });
+  return NextResponse.json({
+    ok: true,
+    source: "supabase",
+    orders:
+      data?.map((order) => ({
+        id: order.order_no ?? order.id,
+        type: order.type,
+        status: order.status,
+        customerName: order.customer_name,
+        total: Number(order.total ?? 0),
+        createdAt: order.created_at,
+        items: (order.online_order_items ?? []).map((item: { product_name: string; qty: number }) => ({
+          name: item.product_name,
+          qty: item.qty,
+        })),
+      })) ?? [],
+  });
 }
-

@@ -1,4 +1,5 @@
-import { DeviceConfig, PosBootstrap, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { defaultPosLocalSettings } from "@/lib/mock-data";
 
 const KEYS = {
   bootstrap: "macau-pos/bootstrap",
@@ -6,6 +7,7 @@ const KEYS = {
   queue: "macau-pos/sync-queue",
   orders: "macau-pos/orders",
   printJobs: "macau-pos/print-jobs",
+  localSettings: "macau-pos/local-settings",
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -71,4 +73,12 @@ export function loadPrintJobs() {
 
 export function savePrintJobs(printJobs: PrintJob[]) {
   writeJson(KEYS.printJobs, printJobs);
+}
+
+export function loadPosLocalSettings() {
+  return readJson<PosLocalSettings>(KEYS.localSettings, defaultPosLocalSettings);
+}
+
+export function savePosLocalSettings(settings: PosLocalSettings) {
+  writeJson(KEYS.localSettings, settings);
 }

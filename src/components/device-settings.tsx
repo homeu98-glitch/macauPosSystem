@@ -3,9 +3,17 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { defaultDeviceConfig } from "@/lib/mock-data";
-import { loadDeviceConfig, saveDeviceConfig, saveQueue, loadQueue } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, QueueEvent } from "@/lib/types";
+import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
+import { InputPadModal } from "@/components/input-pad-modal";
+import {
+  loadDeviceConfig,
+  loadPosLocalSettings,
+  loadQueue,
+  saveDeviceConfig,
+  savePosLocalSettings,
+  saveQueue,
+} from "@/lib/storage";
+import { DeviceConfig, DevicePrinterConfig, PosLocalSettings, QueueEvent } from "@/lib/types";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -13,14 +21,36 @@ function uid(prefix: string) {
 
 export function DeviceSettings() {
   const cachedConfig = loadDeviceConfig();
+  const cachedLocalSettings = loadPosLocalSettings();
   const [config, setConfig] = useState<DeviceConfig>(cachedConfig ?? defaultDeviceConfig);
+  const [localSettings, setLocalSettings] = useState<PosLocalSettings>(cachedLocalSettings ?? defaultPosLocalSettings);
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
+  const [activeTab, setActiveTab] = useState<"device" | "tables" | "payments">("device");
+  const [padOpen, setPadOpen] = useState(false);
+  const [padMode, setPadMode] = useState<"number" | "text">("text");
+  const [padTitle, setPadTitle] = useState("");
+  const [padValue, setPadValue] = useState("");
+  const [padApply, setPadApply] = useState<(value: string) => void>(() => () => {});
 
   useEffect(() => {
     if (!cachedConfig) {
       saveDeviceConfig(defaultDeviceConfig);
     }
-  }, [cachedConfig]);
+    savePosLocalSettings(cachedLocalSettings ?? defaultPosLocalSettings);
+  }, [cachedConfig, cachedLocalSettings]);
+
+  function openPad(
+    title: string,
+    mode: "number" | "text",
+    value: string,
+    apply: (nextValue: string) => void,
+  ) {
+    setPadTitle(title);
+    setPadMode(mode);
+    setPadValue(value);
+    setPadApply(() => apply);
+    setPadOpen(true);
+  }
 
   function updatePrinter(printerId: string, patch: Partial<DevicePrinterConfig>) {
     setConfig((current) => ({
@@ -34,19 +64,25 @@ export function DeviceSettings() {
 
   function saveLocal() {
     saveDeviceConfig(config);
+    savePosLocalSettings(localSettings);
     setStatus("已保存到本機，尚未回寫後台。");
   }
 
   async function syncConfig() {
     const updatedConfig = { ...config, updatedAt: new Date().toISOString() };
     saveDeviceConfig(updatedConfig);
+    savePosLocalSettings(localSettings);
     setConfig(updatedConfig);
 
     const event: QueueEvent = {
       id: uid("evt"),
       type: "DEVICE_CONFIG_UPDATED",
       entityId: updatedConfig.deviceId,
-      payload: updatedConfig,
+      payload: {
+        device: updatedConfig,
+        tables: localSettings.floors,
+        paymentMethods: localSettings.paymentMethods,
+      },
       status: "pending",
       createdAt: updatedConfig.updatedAt,
     };
@@ -106,9 +142,9 @@ export function DeviceSettings() {
       <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-3">
           <div>
-            <div className="text-lg font-semibold text-slate-900">設備與打印設定</div>
+          <div className="text-lg font-semibold text-slate-900">設置</div>
             <div className="mt-1 text-sm text-slate-500">
-              只處理本機打印機綁定（LAN / USB），收銀規則由主系統下發。
+              可管理打印機、樓層/桌台與支付方式。收銀規則仍然來自主系統。
             </div>
           </div>
           <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
@@ -118,6 +154,26 @@ export function DeviceSettings() {
       </div>
 
       <div className="mx-auto max-w-[1440px] px-4 py-3">
+        <div className="mb-3 flex flex-wrap gap-2">
+          {[
+            ["device", "打印機"],
+            ["tables", "樓層與桌台"],
+            ["payments", "支付方式"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                activeTab === key ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+              }`}
+              onClick={() => setActiveTab(key as "device" | "tables" | "payments")}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "device" ? (
         <div className="grid gap-3 lg:grid-cols-[1fr_1.2fr]">
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
@@ -134,17 +190,25 @@ export function DeviceSettings() {
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
                 <span className="text-xs text-slate-500">設備 ID</span>
                 <input
+                  readOnly
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500"
-                  onChange={(event) => setConfig((current) => ({ ...current, deviceId: event.target.value }))}
+                  onClick={() =>
+                    openPad("設備 ID", "text", config.deviceId, (value) =>
+                      setConfig((current) => ({ ...current, deviceId: value })),
+                    )
+                  }
                   value={config.deviceId}
                 />
               </label>
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
                 <span className="text-xs text-slate-500">收銀機名稱</span>
                 <input
+                  readOnly
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500"
-                  onChange={(event) =>
-                    setConfig((current) => ({ ...current, terminalName: event.target.value }))
+                  onClick={() =>
+                    openPad("收銀機名稱", "text", config.terminalName, (value) =>
+                      setConfig((current) => ({ ...current, terminalName: value })),
+                    )
                   }
                   value={config.terminalName}
                 />
@@ -152,8 +216,13 @@ export function DeviceSettings() {
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
                 <span className="text-xs text-slate-500">門店 ID</span>
                 <input
+                  readOnly
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500"
-                  onChange={(event) => setConfig((current) => ({ ...current, storeId: event.target.value }))}
+                  onClick={() =>
+                    openPad("門店 ID", "text", config.storeId, (value) =>
+                      setConfig((current) => ({ ...current, storeId: value })),
+                    )
+                  }
                   value={config.storeId}
                 />
               </label>
@@ -214,8 +283,13 @@ export function DeviceSettings() {
                     <label className="grid gap-1 text-sm font-semibold text-slate-700">
                       <span className="text-xs text-slate-500">打印機名稱</span>
                       <input
+                        readOnly
                         className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500"
-                        onChange={(event) => updatePrinter(printer.id, { name: event.target.value })}
+                        onClick={() =>
+                          openPad("打印機名稱", "text", printer.name, (value) =>
+                            updatePrinter(printer.id, { name: value }),
+                          )
+                        }
                         value={printer.name}
                       />
                     </label>
@@ -237,8 +311,13 @@ export function DeviceSettings() {
                     <label className="grid gap-1 text-sm font-semibold text-slate-700">
                       <span className="text-xs text-slate-500">IP 地址（LAN）</span>
                       <input
+                        readOnly
                         className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500"
-                        onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
+                        onClick={() =>
+                          openPad("IP 地址", "text", printer.ipAddress ?? "", (value) =>
+                            updatePrinter(printer.id, { ipAddress: value }),
+                          )
+                        }
                         placeholder="192.168.1.110"
                         value={printer.ipAddress ?? ""}
                       />
@@ -246,8 +325,13 @@ export function DeviceSettings() {
                     <label className="grid gap-1 text-sm font-semibold text-slate-700">
                       <span className="text-xs text-slate-500">USB 標籤（USB）</span>
                       <input
+                        readOnly
                         className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-indigo-500"
-                        onChange={(event) => updatePrinter(printer.id, { usbLabel: event.target.value })}
+                        onClick={() =>
+                          openPad("USB 標籤", "text", printer.usbLabel ?? "", (value) =>
+                            updatePrinter(printer.id, { usbLabel: value }),
+                          )
+                        }
                         placeholder="USB-Receipt-01"
                         value={printer.usbLabel ?? ""}
                       />
@@ -268,7 +352,178 @@ export function DeviceSettings() {
             </div>
           </section>
         </div>
+        ) : null}
+
+        {activeTab === "tables" ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">樓層與桌台</h2>
+                <p className="mt-1 text-sm text-slate-500">兩層結構：先樓層，再桌號。點餐頁會按這個結構顯示。</p>
+              </div>
+              <button
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() =>
+                  setLocalSettings((current) => ({
+                    ...current,
+                    floors: [
+                      ...current.floors,
+                      { id: crypto.randomUUID(), name: `新樓層`, tables: [] },
+                    ],
+                  }))
+                }
+                type="button"
+              >
+                新增樓層
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              {localSettings.floors.map((floor) => (
+                <article key={floor.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">{floor.name}</div>
+                    <div className="flex gap-2">
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() =>
+                          openPad("樓層名稱", "text", floor.name, (value) =>
+                            setLocalSettings((current) => ({
+                              ...current,
+                              floors: current.floors.map((item) =>
+                                item.id === floor.id ? { ...item, name: value || item.name } : item,
+                              ),
+                            })),
+                          )
+                        }
+                        type="button"
+                      >
+                        修改樓層
+                      </button>
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() =>
+                          setLocalSettings((current) => ({
+                            ...current,
+                            floors: current.floors.map((item) =>
+                              item.id === floor.id
+                                ? {
+                                    ...item,
+                                    tables: [
+                                      ...item.tables,
+                                      {
+                                        id: crypto.randomUUID(),
+                                        name: `桌號${item.tables.length + 1}`,
+                                        area: item.name,
+                                        floorId: item.id,
+                                      },
+                                    ],
+                                  }
+                                : item,
+                            ),
+                          }))
+                        }
+                        type="button"
+                      >
+                        新增桌子
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
+                    {floor.tables.map((table) => (
+                      <button
+                        key={table.id}
+                        className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left text-sm font-semibold text-slate-900 shadow-sm"
+                        onClick={() =>
+                          openPad("桌號", "text", table.name, (value) =>
+                            setLocalSettings((current) => ({
+                              ...current,
+                              floors: current.floors.map((item) =>
+                                item.id === floor.id
+                                  ? {
+                                      ...item,
+                                      tables: item.tables.map((currentTable) =>
+                                        currentTable.id === table.id
+                                          ? { ...currentTable, name: value || currentTable.name, area: item.name }
+                                          : currentTable,
+                                      ),
+                                    }
+                                  : item,
+                              ),
+                            })),
+                          )
+                        }
+                        type="button"
+                      >
+                        {table.name}
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "payments" ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">支付方式</h2>
+                <p className="mt-1 text-sm text-slate-500">自由文字方式，會記錄到 transaction。預設：現金、Mpay、中銀。</p>
+              </div>
+              <button
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() =>
+                  setLocalSettings((current) => ({
+                    ...current,
+                    paymentMethods: [...current.paymentMethods, `新支付方式`],
+                  }))
+                }
+                type="button"
+              >
+                新增支付方式
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {localSettings.paymentMethods.map((method, index) => (
+                <button
+                  key={`${method}-${index}`}
+                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-900"
+                  onClick={() =>
+                    openPad("支付方式", "text", method, (value) =>
+                      setLocalSettings((current) => ({
+                        ...current,
+                        paymentMethods: current.paymentMethods.map((item, itemIndex) =>
+                          itemIndex === index ? value || item : item,
+                        ),
+                      })),
+                    )
+                  }
+                  type="button"
+                >
+                  {method}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
+
+      <InputPadModal
+        mode={padMode}
+        onChange={setPadValue}
+        onClose={() => setPadOpen(false)}
+        onConfirm={() => {
+          padApply(padValue);
+          setPadOpen(false);
+        }}
+        open={padOpen}
+        title={padTitle}
+        value={padValue}
+      />
     </div>
   );
 }
