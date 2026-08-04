@@ -1,4 +1,4 @@
-import { PosBootstrap, DeviceConfig, PosLocalSettings } from "@/lib/types";
+import { PosBootstrap, DeviceConfig, PosLocalSettings, MemberProfile } from "@/lib/types";
 
 export const mockBootstrap: PosBootstrap = {
   sourceVersion: 1,
@@ -24,6 +24,47 @@ export const mockBootstrap: PosBootstrap = {
       name: "牛腩麵",
       price: 52,
       printerGroup: "kitchen",
+    },
+    {
+      id: "item-fish-pot",
+      categoryId: "cat-rice",
+      name: "酸菜魚",
+      price: 138,
+      printerGroup: "kitchen",
+      specGroups: [
+        {
+          id: "spice",
+          name: "辣度",
+          selectionMode: "single",
+          required: true,
+          options: [
+            { id: "mild", label: "小辣", priceDelta: 0 },
+            { id: "medium", label: "中辣", priceDelta: 0 },
+            { id: "hot", label: "大辣", priceDelta: 0 },
+          ],
+        },
+        {
+          id: "size",
+          name: "份量",
+          selectionMode: "single",
+          required: true,
+          options: [
+            { id: "small", label: "小份", priceDelta: 0 },
+            { id: "large", label: "大份", priceDelta: 20 },
+          ],
+        },
+        {
+          id: "addon",
+          name: "配菜",
+          selectionMode: "multi",
+          required: false,
+          options: [
+            { id: "regular", label: "標準", priceDelta: 0 },
+            { id: "tofu", label: "加豆腐", priceDelta: 8 },
+            { id: "vermicelli", label: "加粉絲", priceDelta: 10 },
+          ],
+        },
+      ],
     },
     {
       id: "item-toast",
@@ -119,4 +160,91 @@ export const defaultPosLocalSettings: PosLocalSettings = {
     },
   ],
   paymentMethods: ["現金", "Mpay", "中銀"],
+  menuPrinterOverrides: {
+    "item-bbq-rice": "kitchen",
+    "item-beef-noodle": "kitchen",
+    "item-fish-pot": "kitchen",
+    "item-toast": "kitchen",
+    "item-lemon-tea": "drinks",
+    "item-milk-tea": "drinks",
+  },
+  onlineOrderSettings: {
+    autoAccept: false,
+  },
 };
+
+export const defaultMembers: MemberProfile[] = [
+  {
+    id: "mem-001",
+    name: "陳小明",
+    phone: "66112233",
+    balance: 320,
+    level: "金卡",
+    coupons: [
+      {
+        id: "cp-001",
+        title: "滿100減20",
+        type: "amount_off",
+        amountOff: 20,
+        minSpend: 100,
+        stackable: false,
+        expiresAt: "2026-12-31T23:59:59.000Z",
+      },
+      {
+        id: "cp-002",
+        title: "95折（最多減30）",
+        type: "percent_off",
+        percentOff: 5,
+        maxOff: 30,
+        minSpend: 50,
+        stackable: false,
+        expiresAt: "2026-12-31T23:59:59.000Z",
+      },
+    ],
+  },
+  {
+    id: "mem-002",
+    name: "李小姐",
+    phone: "66334455",
+    balance: 58,
+    level: "銀卡",
+    coupons: [
+      {
+        id: "cp-010",
+        title: "滿50減10",
+        type: "amount_off",
+        amountOff: 10,
+        minSpend: 50,
+        stackable: true,
+        expiresAt: "2026-12-31T23:59:59.000Z",
+      },
+      {
+        id: "cp-011",
+        title: "飲品券 -10",
+        type: "amount_off",
+        amountOff: 10,
+        minSpend: 0,
+        stackable: true,
+        expiresAt: "2026-12-31T23:59:59.000Z",
+      },
+    ],
+  },
+  {
+    id: "mem-003",
+    name: "黃先生",
+    phone: "66778899",
+    balance: 0,
+    level: "普通",
+    coupons: [
+      {
+        id: "cp-020",
+        title: "滿80減15",
+        type: "amount_off",
+        amountOff: 15,
+        minSpend: 80,
+        stackable: false,
+        expiresAt: "2026-12-31T23:59:59.000Z",
+      },
+    ],
+  },
+];

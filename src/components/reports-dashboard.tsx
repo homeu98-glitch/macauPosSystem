@@ -17,6 +17,7 @@ export function ReportsDashboard() {
     const now = new Date();
     return orders
       .filter((order) => {
+        if (order.status !== "settled") return false;
         const date = new Date(order.updatedAt);
         if (range === "today") {
           return (
@@ -77,6 +78,13 @@ export function ReportsDashboard() {
               <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
               <span>報表</span>
             </div>
+            <Link
+              className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200"
+              href="/members"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">會</span>
+              <span>會員</span>
+            </Link>
           </div>
           <Link
             className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"

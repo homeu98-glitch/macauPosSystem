@@ -16,6 +16,7 @@ export async function GET(request: Request) {
       orders: [
         {
           id: "online-001",
+          sourceId: "online-001",
           type: type === "all" ? "dine_in" : type,
           status: "new",
           customerName: "線上客戶",
@@ -57,6 +58,7 @@ export async function GET(request: Request) {
     orders:
       data?.map((order) => ({
         id: order.order_no ?? order.id,
+        sourceId: order.id,
         type: order.type,
         status: order.status,
         customerName: order.customer_name,
@@ -67,5 +69,89 @@ export async function GET(request: Request) {
           qty: item.qty,
         })),
       })) ?? [],
+  });
+}
+
+export async function POST(request: Request) {
+  const payload = (await request.json()) as {
+    action?: "accept" | "assign_table" | "auto_accept" | "handoff_to_rider";
+    orderId?: string;
+    tableName?: string;
+    orderIds?: string[];
+    riderFee?: number;
+    riderNote?: string;
+  };
+
+  const supabase = getSupabaseServerClient();
+
+  if (!supabase) {
+    return NextResponse.json({
+      ok: true,
+      source: "mock",
+      action: payload.action ?? null,
+      orderId: payload.orderId ?? null,
+      tableName: payload.tableName ?? null,
+      orderIds: payload.orderIds ?? [],
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  if (payload.action === "accept" && payload.orderId) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status: "accepted", accepted_at: new Date().toISOString() })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  if (payload.action === "assign_table" && payload.orderId) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status: "accepted", assigned_table_name: payload.tableName ?? null })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  if (payload.action === "auto_accept" && Array.isArray(payload.orderIds) && payload.orderIds.length > 0) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status: "accepted", accepted_at: new Date().toISOString() })
+      .in("id", payload.orderIds);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  if (payload.action === "handoff_to_rider" && payload.orderId) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({
+        type: "rider_delivery",
+        status: "accepted",
+        rider_fee: payload.riderFee ?? null,
+        rider_note: payload.riderNote ?? null,
+      })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    source: "supabase",
+    action: payload.action ?? null,
+    orderId: payload.orderId ?? null,
+    tableName: payload.tableName ?? null,
+    orderIds: payload.orderIds ?? [],
+    updatedAt: new Date().toISOString(),
   });
 }

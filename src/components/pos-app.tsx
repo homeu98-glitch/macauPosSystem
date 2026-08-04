@@ -4,21 +4,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { InputPadModal } from "@/components/input-pad-modal";
+import { ItemSpecModal } from "@/components/item-spec-modal";
+import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
   loadDeviceConfig,
+  loadMembers,
   loadPosLocalSettings,
   loadOrders,
   loadPrintJobs,
   loadQueue,
   saveBootstrapCache,
+  saveMembers,
   saveOrders,
   savePrintJobs,
   saveQueue,
 } from "@/lib/storage";
-import { MenuItem, OrderItem, PosBootstrap, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 type Toast = {
   tone: "info" | "success";
@@ -33,6 +36,33 @@ function formatMoney(amount: number, currency: string) {
   return `${currency} ${amount.toFixed(0)}`;
 }
 
+function ticketTypeLabel(ticketType: PrintJob["ticketType"]) {
+  if (ticketType === "addon") return "加單";
+  if (ticketType === "void") return "VOID / 退菜";
+  return "正常下單";
+}
+
+function couponIsExpired(coupon: MemberCoupon) {
+  if (!coupon.expiresAt) return false;
+  return Date.parse(coupon.expiresAt) <= Date.now();
+}
+
+function couponDiscountAmount(coupon: MemberCoupon, baseAmount: number) {
+  if (coupon.usedAt) return 0;
+  if (couponIsExpired(coupon)) return 0;
+  const minSpend = coupon.minSpend ?? 0;
+  if (baseAmount < minSpend) return 0;
+
+  if (coupon.type === "amount_off") {
+    return Math.max(0, Math.min(coupon.amountOff ?? 0, baseAmount));
+  }
+
+  const percent = coupon.percentOff ?? 0;
+  const raw = Math.floor((baseAmount * percent) / 100);
+  const limited = coupon.maxOff ? Math.min(raw, coupon.maxOff) : raw;
+  return Math.max(0, Math.min(limited, baseAmount));
+}
+
 function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const serviceChargeAmount = subtotal * bootstrap.rules.serviceChargeRate;
@@ -44,7 +74,8 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
 
 export function PosApp() {
   const router = useRouter();
-  const cachedBootstrap = loadBootstrapCache();
+  const cachedBootstrapRaw = loadBootstrapCache();
+  const cachedBootstrap = cachedBootstrapRaw ? normalizeBootstrapPayload(cachedBootstrapRaw) : null;
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
@@ -66,20 +97,27 @@ export function PosApp() {
   const [posMode, setPosMode] = useState<"tables" | "order">("tables");
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
-  const [padOpen, setPadOpen] = useState(false);
-  const [padMode, setPadMode] = useState<"number" | "text">("number");
-  const [padTitle, setPadTitle] = useState("");
-  const [padValue, setPadValue] = useState("");
-  const [padApply, setPadApply] = useState<(value: string) => void>(() => () => {});
   const [itemActionKey, setItemActionKey] = useState<string | null>(null);
   const [suppressedClickKey, setSuppressedClickKey] = useState<string | null>(null);
+  const [specModalOpen, setSpecModalOpen] = useState(false);
+  const [specModalItem, setSpecModalItem] = useState<MenuItem | null>(null);
+  const [specEditingKey, setSpecEditingKey] = useState<string | null>(null);
+  const [selectedSpecValues, setSelectedSpecValues] = useState<Record<string, string[]>>({});
+  const [voidRequest, setVoidRequest] = useState<{ item: OrderItem; mode: "one" | "all" } | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [membersCache, setMembersCache] = useState<MemberProfile[]>(() => loadMembers());
+  const [memberPhone, setMemberPhone] = useState("");
+  const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
+  const [useMemberBalance, setUseMemberBalance] = useState(true);
+  const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const longPressTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     async function bootstrapApp() {
       try {
         const response = await fetch("/api/pos/bootstrap");
-        const data = (await response.json()) as PosBootstrap;
+        const data = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
         saveBootstrapCache(data);
         setBootstrap(data);
         setActiveTableId((current) => current || data.tables[0]?.id || "");
@@ -116,6 +154,10 @@ export function PosApp() {
   const localSettings = useMemo(() => loadPosLocalSettings(), []);
   const floors = localSettings.floors;
   const paymentMethods = localSettings.paymentMethods;
+  const menuItemMap = useMemo(
+    () => new Map((bootstrap?.menuItems ?? []).map((item) => [item.id, item])),
+    [bootstrap],
+  );
 
   const effectiveCategoryId = useMemo(() => {
     if (!bootstrap) return "";
@@ -180,12 +222,39 @@ export function PosApp() {
           total: activeOrder.subtotal + activeOrder.taxAmount,
       }
     : totals;
+  const couponDiscount = useMemo(() => {
+    if (!memberMatch || selectedCouponIds.length === 0) return 0;
+    const baseAmount = Math.max(0, paymentBase.total - discountAmount);
+    const selected = memberMatch.coupons.filter((coupon) => selectedCouponIds.includes(coupon.id));
+
+    // 不可疊加券：只允許一張
+    const nonStackable = selected.find((coupon) => !coupon.stackable);
+    const effectiveCoupons = nonStackable ? [nonStackable] : selected;
+
+    let remaining = baseAmount;
+    let totalDiscount = 0;
+    for (const coupon of effectiveCoupons) {
+      const off = couponDiscountAmount(coupon, remaining);
+      if (off <= 0) continue;
+      totalDiscount += off;
+      remaining = Math.max(0, remaining - off);
+    }
+    return Math.min(totalDiscount, baseAmount);
+  }, [discountAmount, memberMatch, paymentBase.total, selectedCouponIds]);
+  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+  const memberDeduction = useMemo(() => {
+    if (!useMemberBalance || !memberMatch) return 0;
+    return Math.min(memberMatch.balance, payableBeforeMember);
+  }, [memberMatch, payableBeforeMember, useMemberBalance]);
   const paymentSummary = {
     subtotal: paymentBase.subtotal,
     serviceChargeAmount: 0,
     taxAmount: paymentBase.taxAmount,
-    discountAmount,
-    total: Math.max(0, paymentBase.total - discountAmount),
+    discountAmount: discountAmount + couponDiscount,
+    manualDiscountAmount: discountAmount,
+    couponDiscount,
+    memberDeduction,
+    total: Math.max(0, payableBeforeMember - memberDeduction),
   };
   const changeDue = useMemo(() => {
     const received = Number(receivedAmount);
@@ -194,18 +263,15 @@ export function PosApp() {
   }, [receivedAmount, paymentSummary.total]);
   const selectedTableStatus = activeTableId ? tableOrderMap.get(activeTableId)?.status ?? "idle" : "idle";
   const isAddOnOrder = activeOrder?.status === "sent_to_kitchen";
-  const orderedItemQtyMap = useMemo(() => {
+  const orderedItemQtyMap = (() => {
     const map = new Map<string, number>();
     for (const row of baseOrderItems) {
-      const key = `${row.menuItemId}|${row.note ?? ""}`;
+      const key = itemIdentity(row);
       map.set(key, (map.get(key) ?? 0) + row.quantity);
     }
     return map;
-  }, [baseOrderItems]);
-  const actionItem = useMemo(
-    () => cartItems.find((item) => itemIdentity(item) === itemActionKey) ?? null,
-    [cartItems, itemActionKey],
-  );
+  })();
+  const actionItem = cartItems.find((item) => itemIdentity(item) === itemActionKey) ?? null;
   const timelineOrderId = activeOrder?.id ?? currentSettlementOrder?.id ?? null;
   const orderTimeline = useMemo(() => {
     if (!timelineOrderId) return [];
@@ -221,6 +287,15 @@ export function PosApp() {
       .slice()
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   }, [queue, timelineOrderId]);
+  const previewPrintJob = useMemo(() => {
+    if (!timelineOrderId) return null;
+    return (
+      printJobs
+        .filter((job) => job.orderId === timelineOrderId)
+        .slice()
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null
+    );
+  }, [printJobs, timelineOrderId]);
 
   function persistOrders(nextOrders: PosOrder[]) {
     setOrders(nextOrders);
@@ -246,25 +321,17 @@ export function PosApp() {
     setDiscountValue(String(order?.discountAmount ?? 0));
     setReceivedAmount("");
     setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
+    setMemberPhone("");
+    setMemberMatch(null);
+    setSelectedPaymentMethod("");
+    setUseMemberBalance(true);
+    setSelectedCouponIds([]);
   }
 
   function selectTable(tableId: string) {
     const order = tableOrderMap.get(tableId) ?? null;
     loadOrderIntoWorkspace(order, tableId);
     setPosMode("order");
-  }
-
-  function openPad(
-    title: string,
-    mode: "number" | "text",
-    value: string,
-    apply: (nextValue: string) => void,
-  ) {
-    setPadTitle(title);
-    setPadMode(mode);
-    setPadValue(value);
-    setPadApply(() => apply);
-    setPadOpen(true);
   }
 
   function upsertCurrentOrder(nextStatus: "draft" | "sent_to_kitchen", allowEmpty = false) {
@@ -328,6 +395,10 @@ export function PosApp() {
     setPayingOrderId(null);
     setActiveOrderId(null);
     setBaseOrderItems([]);
+    setMemberPhone("");
+    setMemberMatch(null);
+    setSelectedPaymentMethod("");
+    setSelectedCouponIds([]);
   }
 
   function startItemLongPress(itemKey: string, orderedQty: number) {
@@ -348,34 +419,69 @@ export function PosApp() {
     }
   }
 
+  function serializeSpecs(item: OrderItem) {
+    return (item.selectedSpecs ?? [])
+      .map((spec) => `${spec.groupId}:${spec.optionId}`)
+      .sort()
+      .join("|");
+  }
+
+  function specText(item: OrderItem) {
+    return (item.selectedSpecs ?? []).map((spec) => spec.optionLabel).join(" / ");
+  }
+
+  function priceWithSpecs(item: MenuItem, selectedSpecs: OrderItem["selectedSpecs"] = []) {
+    return item.price + selectedSpecs.reduce((sum, spec) => sum + spec.priceDelta, 0);
+  }
+
+  function buildSelectedSpecs(
+    specGroups: MenuSpecGroup[],
+    selectedMap: Record<string, string[]>,
+  ): OrderItem["selectedSpecs"] {
+    return specGroups
+      .flatMap((group) => {
+        const selectedIds = selectedMap[group.id] ?? [];
+        return group.options
+          .filter((candidate) => selectedIds.includes(candidate.id))
+          .map((option) => ({
+            groupId: group.id,
+            groupName: group.name,
+            optionId: option.id,
+            optionLabel: option.label,
+            priceDelta: option.priceDelta,
+          }));
+      })
+      .filter((item): item is NonNullable<OrderItem["selectedSpecs"]>[number] => Boolean(item));
+  }
+
   function itemIdentity(item: OrderItem) {
-    return `${item.menuItemId}|${item.note ?? ""}`;
+    return `${item.menuItemId}|${serializeSpecs(item)}|${item.note ?? ""}`;
   }
 
-  function updateItemNote(item: OrderItem) {
-    const key = itemIdentity(item);
-    if (suppressedClickKey === key) {
-      setSuppressedClickKey(null);
-      return;
-    }
-
-    setSelectedItemId(item.menuItemId);
-    openPad("菜品備註", "text", item.note ?? "", (value) => {
-      const note = value.trim();
-      setCartItems((current) =>
-        current.map((row) =>
-          itemIdentity(row) === key ? { ...row, note: note || undefined } : row,
-        ),
-      );
-    });
-  }
-
-  function addMenuItem(item: MenuItem) {
+  function commitMenuItem(item: MenuItem, selectedSpecs: OrderItem["selectedSpecs"] = []) {
+    const finalPrice = priceWithSpecs(item, selectedSpecs);
+    const targetPrinterGroup = localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup;
     setCartItems((current) => {
-      const existing = current.find((cartItem) => cartItem.menuItemId === item.id && !cartItem.note);
+      const existing = current.find(
+        (cartItem) => cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: 1,
+          price: finalPrice,
+          printerGroup: targetPrinterGroup,
+          selectedSpecs,
+        }),
+      );
       if (existing) {
         return current.map((cartItem) =>
-          cartItem.menuItemId === item.id && !cartItem.note
+          cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
+            menuItemId: item.id,
+            name: item.name,
+            quantity: 1,
+            price: finalPrice,
+            printerGroup: targetPrinterGroup,
+            selectedSpecs,
+          })
             ? { ...cartItem, quantity: cartItem.quantity + 1 }
             : cartItem,
         );
@@ -387,20 +493,75 @@ export function PosApp() {
           menuItemId: item.id,
           name: item.name,
           quantity: 1,
-          price: item.price,
-          printerGroup: item.printerGroup,
+          price: finalPrice,
+          printerGroup: targetPrinterGroup,
+          selectedSpecs,
         },
       ];
     });
-
-    // 新增菜品後立即彈出備註窗口（符合門店操作習慣）
     setSelectedItemId(item.id);
-    openPad("菜品備註", "text", "", (value) => {
-      const note = value.trim();
+  }
+
+  function openSpecPicker(
+    item: MenuItem,
+    editingKey?: string,
+    currentSpecs?: Record<string, string[]>,
+  ) {
+    setSpecModalItem(item);
+    setSpecEditingKey(editingKey ?? null);
+    setSelectedSpecValues(currentSpecs ?? {});
+    setSpecModalOpen(true);
+  }
+
+  function applySpecSelection(specMap: Record<string, string[]>) {
+    if (!specModalItem) return;
+    const selectedSpecs = buildSelectedSpecs(specModalItem.specGroups ?? [], specMap);
+    const nextPrice = priceWithSpecs(specModalItem, selectedSpecs);
+
+    if (specEditingKey) {
       setCartItems((current) =>
-        current.map((row) => (row.menuItemId === item.id ? { ...row, note: note || undefined } : row)),
+        current.map((row) =>
+          itemIdentity(row) === specEditingKey ? { ...row, selectedSpecs, price: nextPrice } : row,
+        ),
       );
-    });
+    } else {
+      commitMenuItem(specModalItem, selectedSpecs);
+    }
+
+    setSpecModalOpen(false);
+    setSpecModalItem(null);
+    setSpecEditingKey(null);
+    setSelectedSpecValues({});
+  }
+
+  function updateItemNote(item: OrderItem) {
+    const key = itemIdentity(item);
+    if (suppressedClickKey === key) {
+      setSuppressedClickKey(null);
+      return;
+    }
+
+    setSelectedItemId(item.menuItemId);
+    const menuItem = menuItemMap.get(item.menuItemId);
+    if (menuItem?.specGroups?.length) {
+      openSpecPicker(
+        menuItem,
+        key,
+        (item.selectedSpecs ?? []).reduce<Record<string, string[]>>((acc, spec) => {
+          acc[spec.groupId] = [...(acc[spec.groupId] ?? []), spec.optionId];
+          return acc;
+        }, {}),
+      );
+    }
+  }
+
+  function addMenuItem(item: MenuItem) {
+    if (item.specGroups?.length) {
+      openSpecPicker(item);
+      return;
+    }
+
+    commitMenuItem(item);
   }
 
   function updateQuantity(menuItemId: string, delta: number) {
@@ -468,7 +629,39 @@ export function PosApp() {
       createdAt: updatedOrder.updatedAt,
     };
 
-    pushEvents([voidEvent]);
+    const voidPrintJobs = (loadDeviceConfig() ?? defaultDeviceConfig).printers
+      .filter((printer) => printer.enabled && printer.group === target.printerGroup)
+      .map<PrintJob>((printer) => ({
+        id: uid("print"),
+        orderId: activeOrder.id,
+        orderNo: activeOrder.localOrderNo,
+        tableName: activeOrder.tableName,
+        ticketType: "void",
+        printerGroup: printer.group,
+        printerName: printer.name,
+        items: [
+          {
+            name: target.name,
+            quantity: voidQty,
+            specs: (target.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+            note: reason || target.note,
+          },
+        ],
+        status: networkOnline ? "sent" : "pending",
+        createdAt: updatedOrder.updatedAt,
+      }));
+
+    persistPrintJobs([...voidPrintJobs, ...printJobs]);
+    const voidPrintEvents = voidPrintJobs.map<QueueEvent>((printJob) => ({
+      id: uid("evt"),
+      type: "PRINT_JOB_CREATED",
+      entityId: printJob.id,
+      payload: printJob,
+      status: networkOnline ? "synced" : "pending",
+      createdAt: updatedOrder.updatedAt,
+    }));
+
+    pushEvents([voidEvent, ...voidPrintEvents]);
     setToast({
       tone: "success",
       message: mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`,
@@ -500,8 +693,19 @@ export function PosApp() {
       return { title: "已結帳", detail: `支付方式：${payload.paymentMethod ?? "--"}` };
     }
     if (event.type === "PRINT_JOB_CREATED") {
-      const payload = event.payload as { printerName?: string; printerGroup?: string };
-      return { title: "已打印", detail: `${payload.printerName ?? "--"} · ${payload.printerGroup ?? "--"}` };
+      const payload = event.payload as {
+        printerName?: string;
+        printerGroup?: string;
+        ticketType?: PrintJob["ticketType"];
+        items?: Array<{ name?: string; specs?: string[] }>;
+      };
+      const firstItem = payload.items?.[0];
+      const specSuffix =
+        firstItem?.specs && firstItem.specs.length > 0 ? ` · ${firstItem.specs.join(" / ")}` : "";
+      return {
+        title: "已打印",
+        detail: `${ticketTypeLabel(payload.ticketType ?? "normal")} · ${payload.printerName ?? "--"} · ${payload.printerGroup ?? "--"}${firstItem ? ` · ${firstItem.name ?? ""}${specSuffix}` : ""}`,
+      };
     }
     return { title: event.type, detail: "已記錄" };
   }
@@ -541,12 +745,12 @@ export function PosApp() {
 
     const baseMap = new Map<string, number>();
     for (const row of baseOrderItems) {
-      const key = `${row.menuItemId}|${row.note ?? ""}`;
+      const key = itemIdentity(row);
       baseMap.set(key, (baseMap.get(key) ?? 0) + row.quantity);
     }
     const addedItems = cartItems
       .map((row) => {
-        const key = `${row.menuItemId}|${row.note ?? ""}`;
+        const key = itemIdentity(row);
         const baseQty = baseMap.get(key) ?? 0;
         const delta = row.quantity - baseQty;
         return delta > 0 ? { ...row, quantity: delta } : null;
@@ -566,8 +770,19 @@ export function PosApp() {
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: order.id,
+        orderNo: order.localOrderNo,
+        tableName: order.tableName,
+        ticketType: isAddOnOrder ? "addon" : "normal",
         printerGroup: printer.group,
         printerName: printer.name,
+        items: printTargetItems
+          .filter((item) => item.printerGroup === printer.group)
+          .map((item) => ({
+            name: item.name,
+            quantity: item.quantity,
+            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+            note: item.note,
+          })),
         status: networkOnline ? "sent" : "pending",
         createdAt: timestamp,
       }));
@@ -618,17 +833,44 @@ export function PosApp() {
       unsettledOrder;
     if (!targetOrder) return;
 
+    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: "settled",
-      paymentMethod: method,
-      discountAmount,
-      total: paymentSummary.total,
+      paymentMethod:
+        memberDeduction > 0
+          ? paymentSummary.total > 0
+            ? `會員餘額 + ${method}`
+            : "會員餘額"
+          : couponDiscount > 0
+            ? `優惠券 + ${method}`
+            : method,
+      discountAmount: discountAmount + couponDiscount,
+      total: settledGrandTotal,
       updatedAt: new Date().toISOString(),
     };
 
     const nextOrders = orders.map((order) => (order.id === targetOrder.id ? updatedOrder : order));
     persistOrders(nextOrders);
+
+    if (memberMatch && (memberDeduction > 0 || selectedCouponIds.length > 0)) {
+      const nextMembers = membersCache.map((member) =>
+        member.id === memberMatch.id
+          ? {
+              ...member,
+              balance: Math.max(0, member.balance - memberDeduction),
+              coupons: member.coupons.map((coupon) =>
+                selectedCouponIds.includes(coupon.id)
+                  ? { ...coupon, usedAt: new Date().toISOString() }
+                  : coupon,
+              ),
+            }
+          : member,
+      );
+      setMembersCache(nextMembers);
+      saveMembers(nextMembers);
+      setMemberMatch(nextMembers.find((member) => member.id === memberMatch.id) ?? null);
+    }
 
     const paymentEvent: QueueEvent = {
       id: uid("evt"),
@@ -636,11 +878,15 @@ export function PosApp() {
       entityId: updatedOrder.id,
       payload: {
         orderId: updatedOrder.id,
-        total: updatedOrder.total,
-        receivedAmount: Number(receivedAmount) || updatedOrder.total,
+        total: settledGrandTotal,
+        receivedAmount: Number(receivedAmount) || paymentSummary.total,
         changeDue,
-        discountAmount,
-        paymentMethod: method,
+        discountAmount: discountAmount + couponDiscount,
+        paymentMethod: updatedOrder.paymentMethod,
+        memberPhone: memberMatch?.phone ?? null,
+        memberDeduction,
+        couponDiscount,
+        couponIds: selectedCouponIds,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedOrder.updatedAt,
@@ -654,6 +900,11 @@ export function PosApp() {
     setReceivedAmount("");
     setSelectedItemId("");
     setBaseOrderItems([]);
+    setMemberPhone("");
+    setMemberMatch(null);
+    setSelectedPaymentMethod("");
+    setUseMemberBalance(true);
+    setSelectedCouponIds([]);
     setToast({
       tone: "success",
       message: networkOnline
@@ -672,6 +923,9 @@ export function PosApp() {
       return;
     }
     setPayingOrderId(targetOrder.id);
+    setMembersCache(loadMembers());
+    setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
+    setSelectedCouponIds([]);
   }
 
   if (isBootstrapping || !bootstrap) {
@@ -710,6 +964,14 @@ export function PosApp() {
             >
               <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
               <span>報表</span>
+            </button>
+            <button
+              className="flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              onClick={() => router.push("/members")}
+              type="button"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">會</span>
+              <span>會員</span>
             </button>
           </div>
           <div className="grid gap-2">
@@ -898,7 +1160,7 @@ export function PosApp() {
                         >
                           <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {item.note || "未加備註"} · {formatMoney(item.price, bootstrap.currency)}
+                            {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
                           </div>
                         </button>
                         <div className="flex items-center gap-1">
@@ -932,9 +1194,9 @@ export function PosApp() {
             </div>
 
             <div className="border-t border-slate-100 px-4 py-4">
-              <div className="text-xs font-semibold text-slate-500">備註</div>
+              <div className="text-xs font-semibold text-slate-500">規格</div>
               <div className="mt-2 text-sm text-slate-700">
-                點選訂單明細中的菜品，可直接新增/修改備註。
+                只有有規格的菜品，點選後才會彈出規格選擇視窗。
               </div>
             </div>
           </section>
@@ -960,14 +1222,12 @@ export function PosApp() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input
-                    readOnly
                     className={`rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400 ${
                       searchFocused ? "w-full xl:w-72" : "w-32 xl:w-40"
                     }`}
-                    onClick={() => {
-                      setSearchFocused(true);
-                      openPad("搜尋商品", "text", searchKeyword, (value) => setSearchKeyword(value));
-                    }}
+                    onBlur={() => setSearchFocused(false)}
+                    onChange={(event) => setSearchKeyword(event.target.value)}
+                    onFocus={() => setSearchFocused(true)}
                     placeholder="搜尋商品"
                     value={searchKeyword}
                   />
@@ -994,7 +1254,9 @@ export function PosApp() {
                     <div className="flex min-h-[92px] flex-col justify-between">
                       <div>
                         <div className="line-clamp-2 text-sm font-semibold text-slate-900">{item.name}</div>
-                        <div className="mt-2 text-xs text-slate-500">{item.printerGroup}</div>
+                        <div className="mt-2 text-xs text-slate-500">
+                          {localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup}
+                        </div>
                       </div>
                       <div className="mt-4 flex items-center justify-between">
                         <div className="text-base font-semibold text-slate-900">
@@ -1113,6 +1375,55 @@ export function PosApp() {
                 </div>
               </div>
 
+              <div className="mt-5">
+                <div className="mb-2 text-xs font-semibold text-slate-500">廚房單預覽</div>
+                {previewPrintJob ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-3 border-b border-dashed border-slate-200 pb-3">
+                      <div>
+                        <div
+                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                            previewPrintJob.ticketType === "void"
+                              ? "bg-red-50 text-red-700"
+                              : previewPrintJob.ticketType === "addon"
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {ticketTypeLabel(previewPrintJob.ticketType)}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {previewPrintJob.printerName} · {previewPrintJob.printerGroup}
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-slate-500">
+                        <div>{previewPrintJob.orderNo ?? "--"}</div>
+                        <div className="mt-1">{previewPrintJob.tableName ?? "--"}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid gap-3">
+                      {(previewPrintJob.items ?? []).map((item, index) => (
+                        <div key={`${item.name}-${index}`} className="border-b border-dashed border-slate-100 pb-3 last:border-b-0 last:pb-0">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="text-sm font-semibold text-slate-900">{item.name}</div>
+                            <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
+                          </div>
+                          {item.specs?.length ? (
+                            <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div>
+                          ) : null}
+                          {item.note ? <div className="mt-1 text-xs text-slate-500">備註：{item.note}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                    這張桌子還沒有打印記錄
+                  </div>
+                )}
+              </div>
+
               {!networkOnline ? (
                 <button
                   className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
@@ -1133,21 +1444,19 @@ export function PosApp() {
         )}
       </div>
 
-      <InputPadModal
-        mode={padMode}
-        onChange={setPadValue}
+      <ItemSpecModal
+        key={`${specModalItem?.id ?? "none"}-${specEditingKey ?? "new"}-${JSON.stringify(selectedSpecValues)}`}
         onClose={() => {
-          setPadOpen(false);
-          setSearchFocused(false);
+          setSpecModalOpen(false);
+          setSpecModalItem(null);
+          setSpecEditingKey(null);
+          setSelectedSpecValues({});
         }}
-        onConfirm={() => {
-          padApply(padValue);
-          setPadOpen(false);
-          setSearchFocused(false);
-        }}
-        open={padOpen}
-        title={padTitle}
-        value={padValue}
+        onConfirm={applySpecSelection}
+        open={specModalOpen}
+        selectedSpecs={selectedSpecValues}
+        specGroups={specModalItem?.specGroups ?? []}
+        title={specModalItem ? `${specModalItem.name} 規格` : "規格"}
       />
 
       {payingOrderId ? (
@@ -1182,13 +1491,25 @@ export function PosApp() {
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-500">折扣</span>
                     <span className="font-semibold text-slate-900">
-                      {formatMoney(paymentSummary.discountAmount, bootstrap.currency)}
+                      {formatMoney(paymentSummary.manualDiscountAmount, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">優惠券抵扣</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatMoney(paymentSummary.couponDiscount, bootstrap.currency)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-500">應收</span>
                     <span className="text-2xl font-semibold text-orange-600">
                       {formatMoney(paymentSummary.total, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">會員扣款</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatMoney(paymentSummary.memberDeduction, bootstrap.currency)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
@@ -1203,36 +1524,138 @@ export function PosApp() {
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
                     折扣金額
                     <input
-                      readOnly
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
-                      onClick={() =>
-                        openPad("折扣金額", "number", discountValue, (value) => setDiscountValue(value || "0"))
-                      }
+                      inputMode="decimal"
+                      onChange={(event) => setDiscountValue(event.target.value)}
                       value={discountValue}
                     />
                   </label>
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
                     實收金額
                     <input
-                      readOnly
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
-                      onClick={() =>
-                        openPad("實收金額", "number", receivedAmount, (value) => setReceivedAmount(value))
-                      }
+                      inputMode="decimal"
+                      onChange={(event) => setReceivedAmount(event.target.value)}
                       value={receivedAmount}
                     />
                   </label>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <div className="text-xs font-semibold text-slate-500">會員號碼</div>
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        inputMode="numeric"
+                        maxLength={8}
+                        onChange={(event) => setMemberPhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                        placeholder="輸入 8 位手機號碼"
+                        value={memberPhone}
+                      />
+                      <button
+                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() => setMemberMatch(membersCache.find((member) => member.phone === memberPhone) ?? null)}
+                        type="button"
+                      >
+                        搜尋
+                      </button>
+                    </div>
+                    {memberMatch ? (
+                      <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
+                        <div className="font-semibold text-slate-900">
+                          {memberMatch.name} · {memberMatch.phone}
+                        </div>
+                        <div className="mt-1 text-slate-500">
+                          餘額 {formatMoney(memberMatch.balance, bootstrap.currency)} · 優惠券{" "}
+                          {memberMatch.coupons.filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon)).length} 張可用
+                        </div>
+                        <label className="mt-3 grid gap-1">
+                          <span className="text-xs font-semibold text-slate-600">使用優惠券</span>
+                          <div className="grid gap-2">
+                            {memberMatch.coupons.filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon)).length === 0 ? (
+                              <div className="text-xs text-slate-500">目前沒有可用優惠券</div>
+                            ) : (
+                              memberMatch.coupons
+                                .filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon))
+                                .map((coupon) => {
+                                  const baseAmount = Math.max(0, paymentBase.total - discountAmount);
+                                  const off = couponDiscountAmount(coupon, baseAmount);
+                                  const selected = selectedCouponIds.includes(coupon.id);
+                                  const hasNonStackableSelected = selectedCouponIds
+                                    .map((id) => memberMatch.coupons.find((c) => c.id === id))
+                                    .some((c) => c && !c.stackable);
+                                  const disableBecauseStackRule =
+                                    !selected && (hasNonStackableSelected || (!coupon.stackable && selectedCouponIds.length > 0));
+                                  const disabled = off <= 0 || disableBecauseStackRule;
+                                  return (
+                                    <label
+                                      key={coupon.id}
+                                      className={`flex items-start justify-between gap-3 rounded-2xl border px-3 py-2 ${
+                                        selected
+                                          ? "border-orange-300 bg-orange-50"
+                                          : "border-slate-200 bg-white"
+                                      } ${disabled ? "opacity-60" : ""}`}
+                                    >
+                                      <div>
+                                        <div className="text-sm font-semibold text-slate-900">{coupon.title}</div>
+                                        <div className="mt-1 text-xs text-slate-500">
+                                          {coupon.minSpend ? `滿 ${formatMoney(coupon.minSpend, bootstrap.currency)} 可用` : "無門檻"} ·{" "}
+                                          {coupon.stackable ? "可疊加" : "不可疊加"}
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <div className="text-xs font-semibold text-slate-700">
+                                          {off > 0 ? `- ${formatMoney(off, bootstrap.currency)}` : "不符合條件"}
+                                        </div>
+                                        <input
+                                          checked={selected}
+                                          disabled={disabled}
+                                          onChange={(event) => {
+                                            const checked = event.target.checked;
+                                            setSelectedCouponIds((current) => {
+                                              if (checked) {
+                                                // 若選中不可疊加券，清掉其他券
+                                                if (!coupon.stackable) return [coupon.id];
+                                                // 若已有不可疊加券，禁止再加（理論上 disabled 已擋）
+                                                return [...current, coupon.id];
+                                              }
+                                              return current.filter((id) => id !== coupon.id);
+                                            });
+                                          }}
+                                          type="checkbox"
+                                        />
+                                      </div>
+                                    </label>
+                                  );
+                                })
+                            )}
+                          </div>
+                        </label>
+                        <label className="mt-3 flex items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-slate-600">使用會員餘額先扣</span>
+                          <input
+                            checked={useMemberBalance}
+                            onChange={(event) => setUseMemberBalance(event.target.checked)}
+                            type="checkbox"
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="text-sm font-semibold text-slate-900">支付方式</div>
+                <div className="mt-1 text-xs text-slate-500">若會員餘額不足，剩餘金額可混支付。</div>
                 <div className="mt-3 grid gap-2">
                   {paymentMethods.map((method) => (
                     <button
                       key={method}
-                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
-                      onClick={() => confirmPayment(method)}
+                      className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold ${
+                        selectedPaymentMethod === method
+                          ? "border-orange-300 bg-orange-50 text-orange-700"
+                          : "border-slate-200 bg-slate-50 text-slate-900 hover:border-orange-300"
+                      }`}
+                      onClick={() => setSelectedPaymentMethod(method)}
                       type="button"
                     >
                       {method}
@@ -1242,7 +1665,7 @@ export function PosApp() {
 
                 <button
                   className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
-                  onClick={() => confirmPayment(paymentMethods[0] ?? "現金")}
+                  onClick={() => confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金")}
                   type="button"
                 >
                   已結帳
@@ -1285,31 +1708,61 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                修改備註
+                修改規格
               </button>
               <button
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
-                onClick={() =>
-                  openPad("退菜原因", "text", "", (value) => {
-                    setItemActionKey(null);
-                    voidOrderedItem(actionItem, "one", value.trim());
-                  })
-                }
+                onClick={() => setVoidRequest({ item: actionItem, mode: "one" })}
                 type="button"
               >
                 退 1 份
               </button>
               <button
                 className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-700 hover:bg-red-100"
-                onClick={() =>
-                  openPad("退菜原因", "text", "", (value) => {
-                    setItemActionKey(null);
-                    voidOrderedItem(actionItem, "all", value.trim());
-                  })
-                }
+                onClick={() => setVoidRequest({ item: actionItem, mode: "all" })}
                 type="button"
               >
                 全部退菜
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {voidRequest ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-slate-900">退菜原因</div>
+            <div className="mt-1 text-sm text-slate-500">{voidRequest.item.name}</div>
+            <input
+              autoFocus
+              className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+              onChange={(event) => setVoidReason(event.target.value)}
+              placeholder="例如：客人取消 / 廚房售罄"
+              value={voidReason}
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setVoidRequest(null);
+                  setVoidReason("");
+                }}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  voidOrderedItem(voidRequest.item, voidRequest.mode, voidReason.trim());
+                  setVoidRequest(null);
+                  setVoidReason("");
+                  setItemActionKey(null);
+                }}
+                type="button"
+              >
+                確認退菜
               </button>
             </div>
           </div>

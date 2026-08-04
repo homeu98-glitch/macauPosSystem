@@ -14,12 +14,27 @@ export type QueueEventType =
   | "PRINT_JOB_CREATED"
   | "TEST_PRINT_REQUESTED";
 
+export interface MenuSpecOption {
+  id: string;
+  label: string;
+  priceDelta: number;
+}
+
+export interface MenuSpecGroup {
+  id: string;
+  name: string;
+  selectionMode: "single" | "multi";
+  required: boolean;
+  options: MenuSpecOption[];
+}
+
 export interface MenuItem {
   id: string;
   categoryId: string;
   name: string;
   price: number;
   printerGroup: PrinterGroup;
+  specGroups?: MenuSpecGroup[];
 }
 
 export interface MenuCategory {
@@ -83,6 +98,34 @@ export interface DeviceConfig {
 export interface PosLocalSettings {
   floors: FloorConfig[];
   paymentMethods: string[];
+  menuPrinterOverrides: Record<string, PrinterGroup>;
+  onlineOrderSettings: {
+    autoAccept: boolean;
+  };
+}
+
+export type CouponType = "amount_off" | "percent_off";
+
+export interface MemberCoupon {
+  id: string;
+  title: string;
+  type: CouponType;
+  amountOff?: number;
+  percentOff?: number;
+  maxOff?: number;
+  minSpend?: number;
+  stackable: boolean;
+  expiresAt?: string;
+  usedAt?: string;
+}
+
+export interface MemberProfile {
+  id: string;
+  name: string;
+  phone: string;
+  balance: number;
+  coupons: MemberCoupon[];
+  level?: string;
 }
 
 export interface OrderItem {
@@ -91,6 +134,13 @@ export interface OrderItem {
   quantity: number;
   price: number;
   printerGroup: PrinterGroup;
+  selectedSpecs?: Array<{
+    groupId: string;
+    groupName: string;
+    optionId: string;
+    optionLabel: string;
+    priceDelta: number;
+  }>;
   note?: string;
 }
 
@@ -123,8 +173,17 @@ export interface QueueEvent {
 export interface PrintJob {
   id: string;
   orderId: string;
+  orderNo?: string;
+  tableName?: string;
+  ticketType: "normal" | "addon" | "void";
   printerGroup: PrinterGroup;
   printerName: string;
+  items?: Array<{
+    name: string;
+    quantity: number;
+    specs?: string[];
+    note?: string;
+  }>;
   status: "pending" | "sent" | "failed";
   createdAt: string;
 }

@@ -41,8 +41,8 @@ export function InputPadModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-      <div className="w-full max-w-xl rounded-3xl bg-white p-5 shadow-2xl">
+    <div className="pointer-events-none fixed inset-0 z-[90] flex items-end justify-end p-4">
+      <div className="pointer-events-auto w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-lg font-semibold text-slate-900">{title}</div>
@@ -125,4 +125,3 @@ export function InputPadModal({
     </div>
   );
 }
-
