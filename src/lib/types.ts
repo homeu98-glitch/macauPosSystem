@@ -2,10 +2,13 @@ export type ConnectionType = "lan" | "usb";
 
 export type PrinterGroup = "kitchen" | "drinks" | "receipt";
 
-export type PaymentMethod = "cash" | "card" | "mpay";
+// 支付方式為自由文字（由「設置」頁配置），用於交易記錄標記
+export type PaymentMethod = string;
 
 export type QueueEventType =
   | "ORDER_CREATED"
+  | "ORDER_UPDATED"
+  | "ORDER_ITEM_VOIDED"
   | "ORDER_SETTLED"
   | "DEVICE_CONFIG_UPDATED"
   | "PRINT_JOB_CREATED"

@@ -94,6 +94,13 @@ export function OnlineOrders() {
               <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">單</span>
               <span>訂單</span>
             </div>
+            <Link
+              className="flex flex-col items-center gap-2 rounded-2xl bg-slate-800 px-2 py-3 text-xs font-semibold text-slate-200"
+              href="/reports"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">報</span>
+              <span>報表</span>
+            </Link>
           </div>
           <div className="grid gap-2">
             <Link
@@ -101,12 +108,6 @@ export function OnlineOrders() {
               href="/settings"
             >
               設置
-            </Link>
-            <Link
-              className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200"
-              href="/reports"
-            >
-              報表
             </Link>
           </div>
         </aside>

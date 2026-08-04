@@ -13,27 +13,46 @@ export function ReportsDashboard() {
   const [range, setRange] = useState<"today" | "30d">("today");
   const orders = loadOrders();
 
-  const summary = useMemo(() => {
+  const filteredOrders = useMemo(() => {
     const now = new Date();
-    const filtered = orders.filter((order) => {
-      const date = new Date(order.updatedAt);
-      if (range === "today") {
-        return (
-          date.getFullYear() === now.getFullYear() &&
-          date.getMonth() === now.getMonth() &&
-          date.getDate() === now.getDate()
-        );
-      }
-      const diff = now.getTime() - date.getTime();
-      return diff <= 30 * 24 * 60 * 60 * 1000;
-    });
-
-    return {
-      total: filtered.reduce((sum, order) => sum + order.total, 0),
-      count: filtered.length,
-      settled: filtered.filter((order) => order.status === "settled").length,
-    };
+    return orders
+      .filter((order) => {
+        const date = new Date(order.updatedAt);
+        if (range === "today") {
+          return (
+            date.getFullYear() === now.getFullYear() &&
+            date.getMonth() === now.getMonth() &&
+            date.getDate() === now.getDate()
+          );
+        }
+        const diff = now.getTime() - date.getTime();
+        return diff <= 30 * 24 * 60 * 60 * 1000;
+      })
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [orders, range]);
+
+  const summary = useMemo(() => {
+    const total = filteredOrders.reduce((sum, order) => sum + order.total, 0);
+    return {
+      total,
+      count: filteredOrders.length,
+      settled: filteredOrders.filter((order) => order.status === "settled").length,
+    };
+  }, [filteredOrders]);
+
+  const orderRows = useMemo(() => {
+    return filteredOrders.map((order) => ({
+      id: order.localOrderNo,
+      table: order.tableName,
+      status: order.status,
+      total: order.total,
+      payment: order.paymentMethod ?? "--",
+      time: order.updatedAt.replace("T", " ").slice(0, 16),
+      items: order.items.reduce((sum, item) => sum + item.quantity, 0),
+    }));
+  }, [filteredOrders]);
+
+  const detailTitle = range === "today" ? "今日訂單明細" : "最近 30 天訂單明細";
 
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
@@ -112,10 +131,57 @@ export function ReportsDashboard() {
                 <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.settled}</div>
               </article>
             </div>
+
+            <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-base font-semibold text-slate-900">{detailTitle}</div>
+                <div className="text-xs text-slate-500">共 {orderRows.length} 筆</div>
+              </div>
+
+              <div className="mt-3 overflow-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold text-slate-500">
+                      <th className="border-b border-slate-200 py-2 pr-3">單號</th>
+                      <th className="border-b border-slate-200 py-2 pr-3">桌號</th>
+                      <th className="border-b border-slate-200 py-2 pr-3">狀態</th>
+                      <th className="border-b border-slate-200 py-2 pr-3">品項數</th>
+                      <th className="border-b border-slate-200 py-2 pr-3">支付</th>
+                      <th className="border-b border-slate-200 py-2 pr-3">金額</th>
+                      <th className="border-b border-slate-200 py-2">時間</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderRows.length === 0 ? (
+                      <tr>
+                        <td className="py-6 text-slate-500" colSpan={7}>
+                          這段時間內沒有訂單
+                        </td>
+                      </tr>
+                    ) : (
+                      orderRows.map((row) => (
+                        <tr key={row.id} className="text-slate-700">
+                          <td className="border-b border-slate-100 py-2 pr-3 font-semibold text-slate-900">
+                            {row.id}
+                          </td>
+                          <td className="border-b border-slate-100 py-2 pr-3">{row.table}</td>
+                          <td className="border-b border-slate-100 py-2 pr-3">{row.status}</td>
+                          <td className="border-b border-slate-100 py-2 pr-3">{row.items}</td>
+                          <td className="border-b border-slate-100 py-2 pr-3">{row.payment}</td>
+                          <td className="border-b border-slate-100 py-2 pr-3 font-semibold text-slate-900">
+                            {formatMoney(row.total)}
+                          </td>
+                          <td className="border-b border-slate-100 py-2">{row.time}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
         </main>
       </div>
     </div>
   );
 }
-

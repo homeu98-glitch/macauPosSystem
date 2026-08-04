@@ -49,7 +49,6 @@ export function PosApp() {
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
   const [cartItems, setCartItems] = useState<OrderItem[]>([]);
-  const [noteDraft, setNoteDraft] = useState("");
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const [networkOnline, setNetworkOnline] = useState(true);
   const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
@@ -65,12 +64,16 @@ export function PosApp() {
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
   const [posMode, setPosMode] = useState<"tables" | "order">("tables");
+  const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
   const [padOpen, setPadOpen] = useState(false);
   const [padMode, setPadMode] = useState<"number" | "text">("number");
   const [padTitle, setPadTitle] = useState("");
   const [padValue, setPadValue] = useState("");
   const [padApply, setPadApply] = useState<(value: string) => void>(() => () => {});
+  const [itemActionKey, setItemActionKey] = useState<string | null>(null);
+  const [suppressedClickKey, setSuppressedClickKey] = useState<string | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     async function bootstrapApp() {
@@ -136,7 +139,6 @@ export function PosApp() {
     [effectiveFloorId, floors],
   );
 
-  const recentOrders = useMemo(() => orders.slice(0, 5), [orders]);
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
   const openOrders = useMemo(
     () => orders.filter((order) => order.status === "draft" || order.status === "sent_to_kitchen"),
@@ -191,6 +193,34 @@ export function PosApp() {
     return Math.max(0, received - paymentSummary.total);
   }, [receivedAmount, paymentSummary.total]);
   const selectedTableStatus = activeTableId ? tableOrderMap.get(activeTableId)?.status ?? "idle" : "idle";
+  const isAddOnOrder = activeOrder?.status === "sent_to_kitchen";
+  const orderedItemQtyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of baseOrderItems) {
+      const key = `${row.menuItemId}|${row.note ?? ""}`;
+      map.set(key, (map.get(key) ?? 0) + row.quantity);
+    }
+    return map;
+  }, [baseOrderItems]);
+  const actionItem = useMemo(
+    () => cartItems.find((item) => itemIdentity(item) === itemActionKey) ?? null,
+    [cartItems, itemActionKey],
+  );
+  const timelineOrderId = activeOrder?.id ?? currentSettlementOrder?.id ?? null;
+  const orderTimeline = useMemo(() => {
+    if (!timelineOrderId) return [];
+
+    return queue
+      .filter((event) => {
+        if (event.entityId === timelineOrderId) return true;
+        if (typeof event.payload === "object" && event.payload !== null && "orderId" in event.payload) {
+          return (event.payload as { orderId?: string }).orderId === timelineOrderId;
+        }
+        return false;
+      })
+      .slice()
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  }, [queue, timelineOrderId]);
 
   function persistOrders(nextOrders: PosOrder[]) {
     setOrders(nextOrders);
@@ -210,12 +240,12 @@ export function PosApp() {
   function loadOrderIntoWorkspace(order: PosOrder | null, tableId: string) {
     setActiveTableId(tableId);
     setActiveOrderId(order?.id ?? null);
-    setPayingOrderId(order?.status === "sent_to_kitchen" ? order.id : null);
+    setPayingOrderId(null);
     setCartItems(order?.items ?? []);
     setSelectedItemId("");
-    setNoteDraft("");
     setDiscountValue(String(order?.discountAmount ?? 0));
     setReceivedAmount("");
+    setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
   }
 
   function selectTable(tableId: string) {
@@ -287,32 +317,57 @@ export function PosApp() {
     return order;
   }
 
-  function openTable() {
-    if (!activeTable) return;
-
-    const existingOrder = tableOrderMap.get(activeTable.id) ?? null;
-    if (existingOrder) {
-      loadOrderIntoWorkspace(existingOrder, activeTable.id);
-      setToast({ tone: "info", message: `已打開 ${activeTable.name} 的當前訂單。` });
-      return;
-    }
-
-    const order = upsertCurrentOrder("draft", true);
-    if (!order) return;
-
-    setToast({ tone: "success", message: `${activeTable.name} 已開台。` });
-    setPosMode("order");
-  }
+  // 開台：本輪需求中不再在點餐界面提供入口（桌台點入即可開始操作）
 
   function backToTables() {
     setPosMode("tables");
     setCartItems([]);
     setSelectedItemId("");
-    setNoteDraft("");
     setDiscountValue("0");
     setReceivedAmount("");
     setPayingOrderId(null);
     setActiveOrderId(null);
+    setBaseOrderItems([]);
+  }
+
+  function startItemLongPress(itemKey: string, orderedQty: number) {
+    if (orderedQty <= 0) return;
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+    }
+    longPressTimerRef.current = window.setTimeout(() => {
+      setItemActionKey(itemKey);
+      setSuppressedClickKey(itemKey);
+    }, 550);
+  }
+
+  function clearItemLongPress() {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+
+  function itemIdentity(item: OrderItem) {
+    return `${item.menuItemId}|${item.note ?? ""}`;
+  }
+
+  function updateItemNote(item: OrderItem) {
+    const key = itemIdentity(item);
+    if (suppressedClickKey === key) {
+      setSuppressedClickKey(null);
+      return;
+    }
+
+    setSelectedItemId(item.menuItemId);
+    openPad("菜品備註", "text", item.note ?? "", (value) => {
+      const note = value.trim();
+      setCartItems((current) =>
+        current.map((row) =>
+          itemIdentity(row) === key ? { ...row, note: note || undefined } : row,
+        ),
+      );
+    });
   }
 
   function addMenuItem(item: MenuItem) {
@@ -337,6 +392,15 @@ export function PosApp() {
         },
       ];
     });
+
+    // 新增菜品後立即彈出備註窗口（符合門店操作習慣）
+    setSelectedItemId(item.id);
+    openPad("菜品備註", "text", "", (value) => {
+      const note = value.trim();
+      setCartItems((current) =>
+        current.map((row) => (row.menuItemId === item.id ? { ...row, note: note || undefined } : row)),
+      );
+    });
   }
 
   function updateQuantity(menuItemId: string, delta: number) {
@@ -349,16 +413,97 @@ export function PosApp() {
     );
   }
 
-  function applyNote() {
-    if (!selectedItemId || !noteDraft.trim()) return;
+  function voidOrderedItem(target: OrderItem, mode: "one" | "all", reason: string) {
+    if (!bootstrap || !activeOrder || activeOrder.status !== "sent_to_kitchen") return;
 
-    setCartItems((current) =>
-      current.map((item) =>
-        item.menuItemId === selectedItemId ? { ...item, note: noteDraft.trim() } : item,
-      ),
-    );
-    setNoteDraft("");
-    setToast({ tone: "success", message: "已更新菜品備註。" });
+    const key = itemIdentity(target);
+    const orderedQty = orderedItemQtyMap.get(key) ?? 0;
+    if (orderedQty <= 0) {
+      setToast({ tone: "info", message: "這個菜品尚未正式下單，不能退菜。" });
+      return;
+    }
+
+    const voidQty = mode === "one" ? 1 : orderedQty;
+    const reduceQty = (list: OrderItem[]) =>
+      list
+        .map((row) => {
+          if (itemIdentity(row) !== key) return row;
+          const nextQty = row.quantity - voidQty;
+          return nextQty > 0 ? { ...row, quantity: nextQty } : null;
+        })
+        .filter((row): row is OrderItem => Boolean(row));
+
+    const nextCartItems = reduceQty(cartItems);
+    const nextBaseItems = reduceQty(baseOrderItems);
+    const nextTotals = orderTotals(nextCartItems, bootstrap);
+    const updatedOrder: PosOrder = {
+      ...activeOrder,
+      items: nextCartItems,
+      subtotal: nextTotals.subtotal,
+      serviceChargeAmount: 0,
+      taxAmount: nextTotals.taxAmount,
+      total: Math.max(0, nextTotals.total - activeOrder.discountAmount),
+      updatedAt: new Date().toISOString(),
+    };
+
+    persistOrders(orders.map((order) => (order.id === activeOrder.id ? updatedOrder : order)));
+    setCartItems(nextCartItems);
+    setBaseOrderItems(nextBaseItems);
+    setItemActionKey(null);
+
+    const voidEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_ITEM_VOIDED",
+      entityId: activeOrder.id,
+      payload: {
+        orderId: activeOrder.id,
+        menuItemId: target.menuItemId,
+        itemName: target.name,
+        note: target.note ?? null,
+        voidQuantity: voidQty,
+        mode,
+        reason: reason || "未填寫原因",
+      },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: updatedOrder.updatedAt,
+    };
+
+    pushEvents([voidEvent]);
+    setToast({
+      tone: "success",
+      message: mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`,
+    });
+  }
+
+  function describeTimelineEvent(event: QueueEvent) {
+    if (event.type === "ORDER_CREATED") {
+      return { title: "已下單", detail: "已送出本次點餐並打印廚房單" };
+    }
+    if (event.type === "ORDER_UPDATED") {
+      const addedItems = (event.payload as { addedItems?: OrderItem[] }).addedItems ?? [];
+      const count = addedItems.reduce((sum, item) => sum + item.quantity, 0);
+      return { title: "已加單", detail: `新增 ${count} 份菜品並打印加單單據` };
+    }
+    if (event.type === "ORDER_ITEM_VOIDED") {
+      const payload = event.payload as {
+        itemName?: string;
+        voidQuantity?: number;
+        reason?: string;
+      };
+      return {
+        title: "VOID / 退菜",
+        detail: `${payload.itemName ?? "菜品"} ×${payload.voidQuantity ?? 0} · ${payload.reason ?? "未填寫原因"}`,
+      };
+    }
+    if (event.type === "ORDER_SETTLED") {
+      const payload = event.payload as { paymentMethod?: string };
+      return { title: "已結帳", detail: `支付方式：${payload.paymentMethod ?? "--"}` };
+    }
+    if (event.type === "PRINT_JOB_CREATED") {
+      const payload = event.payload as { printerName?: string; printerGroup?: string };
+      return { title: "已打印", detail: `${payload.printerName ?? "--"} · ${payload.printerGroup ?? "--"}` };
+    }
+    return { title: event.type, detail: "已記錄" };
   }
 
   async function syncNow(nextQueue: QueueEvent[]) {
@@ -394,9 +539,30 @@ export function PosApp() {
     const order = upsertCurrentOrder("sent_to_kitchen");
     if (!order) return;
 
+    const baseMap = new Map<string, number>();
+    for (const row of baseOrderItems) {
+      const key = `${row.menuItemId}|${row.note ?? ""}`;
+      baseMap.set(key, (baseMap.get(key) ?? 0) + row.quantity);
+    }
+    const addedItems = cartItems
+      .map((row) => {
+        const key = `${row.menuItemId}|${row.note ?? ""}`;
+        const baseQty = baseMap.get(key) ?? 0;
+        const delta = row.quantity - baseQty;
+        return delta > 0 ? { ...row, quantity: delta } : null;
+      })
+      .filter((row): row is OrderItem => Boolean(row));
+
+    if (isAddOnOrder && addedItems.length === 0) {
+      setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
+      return;
+    }
+
+    const printTargetItems = isAddOnOrder ? addedItems : cartItems;
+
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
     const nextPrintJobs = configuredPrinters
-      .filter((printer) => cartItems.some((item) => item.printerGroup === printer.group))
+      .filter((printer) => printTargetItems.some((item) => item.printerGroup === printer.group))
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: order.id,
@@ -410,9 +576,9 @@ export function PosApp() {
 
     const orderEvent: QueueEvent = {
       id: uid("evt"),
-      type: "ORDER_CREATED",
+      type: isAddOnOrder ? "ORDER_UPDATED" : "ORDER_CREATED",
       entityId: order.id,
-      payload: order,
+      payload: isAddOnOrder ? { order, addedItems } : order,
       status: networkOnline ? "synced" : "pending",
       createdAt: timestamp,
     };
@@ -428,18 +594,22 @@ export function PosApp() {
 
     pushEvents([orderEvent, ...printEvents]);
     setActiveOrderId(order.id);
-    setPayingOrderId(order.id);
     setDiscountValue(String(order.discountAmount));
     setReceivedAmount("");
+    setBaseOrderItems(order.items);
     setToast({
       tone: "success",
       message: networkOnline
-        ? `已送廚房單，單號 ${order.localOrderNo}。`
-        : `已離線建立 ${order.localOrderNo}，待恢復網絡後補傳。`,
+        ? isAddOnOrder
+          ? `已加單並打印，單號 ${order.localOrderNo}。`
+          : `已下單並打印，單號 ${order.localOrderNo}。`
+        : isAddOnOrder
+          ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
+          : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
     });
   }
 
-  function confirmPayment(method: PosBootstrap["rules"]["paymentMethods"][number]) {
+  function confirmPayment(method: string) {
     if (!bootstrap) return;
 
     const targetOrder =
@@ -483,7 +653,7 @@ export function PosApp() {
     setDiscountValue("0");
     setReceivedAmount("");
     setSelectedItemId("");
-    setNoteDraft("");
+    setBaseOrderItems([]);
     setToast({
       tone: "success",
       message: networkOnline
@@ -710,15 +880,20 @@ export function PosApp() {
                 <div className="grid gap-2">
                   {cartItems.map((item) => (
                     <article
-                      key={item.menuItemId}
+                      key={itemIdentity(item)}
                       className={`rounded-2xl border px-3 py-3 ${
                         selectedItemId === item.menuItemId ? "border-orange-300 bg-orange-50/50" : "border-slate-100 bg-slate-50"
                       }`}
+                      onMouseDown={() => startItemLongPress(itemIdentity(item), orderedItemQtyMap.get(itemIdentity(item)) ?? 0)}
+                      onMouseLeave={clearItemLongPress}
+                      onMouseUp={clearItemLongPress}
+                      onTouchEnd={clearItemLongPress}
+                      onTouchStart={() => startItemLongPress(itemIdentity(item), orderedItemQtyMap.get(itemIdentity(item)) ?? 0)}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <button
                           className="min-w-0 text-left"
-                          onClick={() => setSelectedItemId(item.menuItemId)}
+                          onClick={() => updateItemNote(item)}
                           type="button"
                         >
                           <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
@@ -729,7 +904,10 @@ export function PosApp() {
                         <div className="flex items-center gap-1">
                           <button
                             className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
-                            onClick={() => updateQuantity(item.menuItemId, -1)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              updateQuantity(item.menuItemId, -1);
+                            }}
                             type="button"
                           >
                             -
@@ -737,7 +915,10 @@ export function PosApp() {
                           <div className="w-7 text-center text-sm font-semibold text-slate-800">{item.quantity}</div>
                           <button
                             className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
-                            onClick={() => updateQuantity(item.menuItemId, 1)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              updateQuantity(item.menuItemId, 1);
+                            }}
                             type="button"
                           >
                             +
@@ -751,23 +932,10 @@ export function PosApp() {
             </div>
 
             <div className="border-t border-slate-100 px-4 py-4">
-              <label className="block text-xs font-semibold text-slate-500" htmlFor="pos-note">
-                當前選中商品備註
-              </label>
-              <textarea
-                className="mt-2 min-h-[84px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
-                id="pos-note"
-                onChange={(event) => setNoteDraft(event.target.value)}
-                placeholder="例如：少飯、走甜、不要蔥"
-                value={noteDraft}
-              />
-              <button
-                className="mt-2 w-full rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                onClick={applyNote}
-                type="button"
-              >
-                更新備註
-              </button>
+              <div className="text-xs font-semibold text-slate-500">備註</div>
+              <div className="mt-2 text-sm text-slate-700">
+                點選訂單明細中的菜品，可直接新增/修改備註。
+              </div>
             </div>
           </section>
 
@@ -882,23 +1050,13 @@ export function PosApp() {
                 </div>
               </div>
 
-              <div className="mt-5">
-                <button
-                  className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                  onClick={openTable}
-                  type="button"
-                >
-                  開台
-                </button>
-              </div>
-
               <div className="mt-2 grid gap-2">
                 <button
                   className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
                   onClick={sendToKitchen}
                   type="button"
                 >
-                  下單並送廚房
+                  {isAddOnOrder ? "加單" : "下單"}
                 </button>
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800"
@@ -926,6 +1084,35 @@ export function PosApp() {
                 </div>
               </div>
 
+              <div className="mt-5">
+                <div className="mb-2 text-xs font-semibold text-slate-500">訂單時間線</div>
+                <div className="grid gap-2">
+                  {orderTimeline.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      目前還沒有事件記錄
+                    </div>
+                  ) : (
+                    orderTimeline.slice(0, 8).map((event) => {
+                      const info = describeTimelineEvent(event);
+                      return (
+                        <div
+                          key={event.id}
+                          className="rounded-2xl border border-slate-100 bg-slate-50 p-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm font-semibold text-slate-900">{info.title}</div>
+                            <div className="text-[11px] text-slate-400">
+                              {event.createdAt.replace("T", " ").slice(5, 16)}
+                            </div>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">{info.detail}</div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
               {!networkOnline ? (
                 <button
                   className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
@@ -939,31 +1126,7 @@ export function PosApp() {
                 </button>
               ) : null}
 
-              <div className="mt-5">
-                <div className="mb-2 text-xs font-semibold text-slate-500">最近訂單</div>
-                <div className="grid gap-2">
-                  {recentOrders.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-                      尚未建立訂單
-                    </div>
-                  ) : (
-                    recentOrders.slice(0, 4).map((order) => (
-                      <div
-                        key={order.id}
-                        className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 p-3"
-                      >
-                        <div>
-                          <div className="text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {order.tableName} · {formatMoney(order.total, bootstrap.currency)}
-                          </div>
-                        </div>
-                        <div className="text-xs font-semibold text-slate-500">{order.status}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+              {/* 最近訂單：點餐頁不顯示，避免干擾店員操作 */}
             </div>
           </section>
         </div>
@@ -1069,7 +1232,7 @@ export function PosApp() {
                     <button
                       key={method}
                       className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
-                      onClick={() => confirmPayment(method as "cash" | "card" | "mpay")}
+                      onClick={() => confirmPayment(method)}
                       type="button"
                     >
                       {method}
@@ -1079,14 +1242,75 @@ export function PosApp() {
 
                 <button
                   className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
-                  onClick={() =>
-                    confirmPayment((paymentMethods[0] ?? "現金") as "cash" | "card" | "mpay")
-                  }
+                  onClick={() => confirmPayment(paymentMethods[0] ?? "現金")}
                   type="button"
                 >
                   已結帳
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {actionItem ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">{actionItem.name}</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  已下單菜品可長按打開這個操作面板
+                </div>
+              </div>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => {
+                  setItemActionKey(null);
+                  setSuppressedClickKey(null);
+                }}
+                type="button"
+              >
+                關閉
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              <button
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
+                onClick={() => {
+                  setItemActionKey(null);
+                  setSuppressedClickKey(null);
+                  updateItemNote(actionItem);
+                }}
+                type="button"
+              >
+                修改備註
+              </button>
+              <button
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
+                onClick={() =>
+                  openPad("退菜原因", "text", "", (value) => {
+                    setItemActionKey(null);
+                    voidOrderedItem(actionItem, "one", value.trim());
+                  })
+                }
+                type="button"
+              >
+                退 1 份
+              </button>
+              <button
+                className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-700 hover:bg-red-100"
+                onClick={() =>
+                  openPad("退菜原因", "text", "", (value) => {
+                    setItemActionKey(null);
+                    voidOrderedItem(actionItem, "all", value.trim());
+                  })
+                }
+                type="button"
+              >
+                全部退菜
+              </button>
             </div>
           </div>
         </div>
