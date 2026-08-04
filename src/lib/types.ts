@@ -89,6 +89,7 @@ export interface PosOrder {
   subtotal: number;
   taxAmount: number;
   serviceChargeAmount: number;
+  discountAmount: number;
   total: number;
   paymentMethod?: PaymentMethod;
   createdAt: string;
