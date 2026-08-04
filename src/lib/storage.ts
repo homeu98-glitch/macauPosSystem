@@ -36,6 +36,33 @@ function writeJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function normalizeLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
+  return {
+    floors: Array.isArray(settings?.floors) ? settings.floors : defaultPosLocalSettings.floors,
+    paymentMethods: Array.isArray(settings?.paymentMethods)
+      ? settings.paymentMethods
+      : defaultPosLocalSettings.paymentMethods,
+    menuPrinterOverrides:
+      settings?.menuPrinterOverrides && typeof settings.menuPrinterOverrides === "object"
+        ? settings.menuPrinterOverrides
+        : defaultPosLocalSettings.menuPrinterOverrides,
+    onlineOrderSettings: {
+      autoAccept: Boolean(
+        settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,
+      ),
+    },
+  };
+}
+
+function normalizeMembers(members: MemberProfile[] | null | undefined): MemberProfile[] {
+  if (!Array.isArray(members)) return defaultMembers;
+
+  return members.map((member) => ({
+    ...member,
+    coupons: Array.isArray(member.coupons) ? member.coupons : [],
+  }));
+}
+
 export function loadBootstrapCache() {
   return readJson<PosBootstrap | null>(KEYS.bootstrap, null);
 }
@@ -77,7 +104,7 @@ export function savePrintJobs(printJobs: PrintJob[]) {
 }
 
 export function loadPosLocalSettings() {
-  return readJson<PosLocalSettings>(KEYS.localSettings, defaultPosLocalSettings);
+  return normalizeLocalSettings(readJson<PosLocalSettings>(KEYS.localSettings, defaultPosLocalSettings));
 }
 
 export function savePosLocalSettings(settings: PosLocalSettings) {
@@ -85,7 +112,7 @@ export function savePosLocalSettings(settings: PosLocalSettings) {
 }
 
 export function loadMembers() {
-  return readJson<MemberProfile[]>(KEYS.members, defaultMembers);
+  return normalizeMembers(readJson<MemberProfile[]>(KEYS.members, defaultMembers));
 }
 
 export function saveMembers(members: MemberProfile[]) {
