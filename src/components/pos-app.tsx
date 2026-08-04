@@ -53,6 +53,9 @@ export function PosApp() {
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
   const [toast, setToast] = useState<Toast | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
+  const [activeCategoryId, setActiveCategoryId] = useState<string>(() => cachedBootstrap?.categories[0]?.id ?? "");
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
 
   useEffect(() => {
     async function bootstrapApp() {
@@ -91,14 +94,24 @@ export function PosApp() {
     [bootstrap, cartItems],
   );
 
-  const menuByCategory = useMemo(() => {
+  const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
+
+  const effectiveCategoryId = useMemo(() => {
+    if (!bootstrap) return "";
+    return activeCategoryId || bootstrap.categories[0]?.id || "";
+  }, [activeCategoryId, bootstrap]);
+
+  const filteredMenuItems = useMemo(() => {
     if (!bootstrap) return [];
 
-    return bootstrap.categories.map((category) => ({
-      category,
-      items: bootstrap.menuItems.filter((item) => item.categoryId === category.id),
-    }));
-  }, [bootstrap]);
+    const keyword = searchKeyword.trim();
+    const base = bootstrap.menuItems.filter((item) =>
+      effectiveCategoryId ? item.categoryId === effectiveCategoryId : true,
+    );
+    if (!keyword) return base;
+
+    return base.filter((item) => item.name.includes(keyword));
+  }, [bootstrap, effectiveCategoryId, searchKeyword]);
 
   const recentOrders = useMemo(() => orders.slice(0, 5), [orders]);
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
@@ -264,11 +277,24 @@ export function PosApp() {
       setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
       return;
     }
+    setPayingOrderId(targetOrder.id);
+  }
+
+  function simulateReconnect() {
+    setNetworkOnline(true);
+    void syncNow(queue);
+  }
+
+  function confirmPayment(method: PosBootstrap["rules"]["paymentMethods"][number]) {
+    if (!bootstrap || !payingOrderId) return;
+
+    const targetOrder = orders.find((order) => order.id === payingOrderId);
+    if (!targetOrder) return;
 
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: "settled",
-      paymentMethod: "cash",
+      paymentMethod: method,
       updatedAt: new Date().toISOString(),
     };
 
@@ -282,13 +308,14 @@ export function PosApp() {
       payload: {
         orderId: updatedOrder.id,
         total: updatedOrder.total,
-        paymentMethod: "cash",
+        paymentMethod: method,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedOrder.updatedAt,
     };
 
     pushEvents([paymentEvent]);
+    setPayingOrderId(null);
     setToast({
       tone: "success",
       message: networkOnline
@@ -297,249 +324,399 @@ export function PosApp() {
     });
   }
 
-  function simulateReconnect() {
-    setNetworkOnline(true);
-    void syncNow(queue);
-  }
-
   if (isBootstrapping || !bootstrap) {
     return <div className="empty-state">正在載入門店設定…</div>;
   }
 
   return (
-    <div className="pos-page">
-      <header className="hero-card">
-        <div>
-          <p className="eyebrow">Macau POS MVP</p>
-          <h1>{bootstrap.storeName} 收銀台</h1>
-          <p className="hero-copy">
-            第一版按「先落單送廚房，後收錢」設計，會員暫不接入，收銀規則全部來自主系統。
-          </p>
-        </div>
-        <div className="hero-actions">
-          <button
-            className={`network-toggle ${networkOnline ? "online" : "offline"}`}
-            onClick={() => setNetworkOnline((current) => !current)}
-            type="button"
-          >
-            {networkOnline ? "目前在線" : "目前離線"}
-          </button>
-          <Link className="secondary-link" href="/settings">
-            設備與打印設定
-          </Link>
-        </div>
-      </header>
-
-      <section className="summary-grid">
-        <article className="summary-card">
-          <span className="summary-label">設定來源版本</span>
-          <strong>{bootstrap.sourceVersion}</strong>
-          <p>{bootstrap.lastUpdatedAt.slice(0, 10)}</p>
-        </article>
-        <article className="summary-card">
-          <span className="summary-label">待同步事件</span>
-          <strong>{pendingQueue.length}</strong>
-          <p>訂單、付款、打印與設備設定</p>
-        </article>
-        <article className="summary-card">
-          <span className="summary-label">最近打印任務</span>
-          <strong>{printJobs.length}</strong>
-          <p>只做 USB / LAN，不做藍牙</p>
-        </article>
-      </section>
-
-      <div className="workspace">
-        <section className="panel">
-          <div className="panel-head">
-            <div>
-              <h2>桌號與菜單</h2>
-              <p>主系統下發的設定已快取到本機，斷網時繼續使用。</p>
+    <div className="min-h-screen bg-slate-100">
+      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex items-baseline gap-2">
+              <div className="text-lg font-semibold text-slate-900">{bootstrap.storeName}</div>
+              <div className="text-sm text-slate-500">{deviceConfig.terminalName}</div>
+            </div>
+            <button
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                networkOnline ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+              }`}
+              onClick={() => setNetworkOnline((current) => !current)}
+              type="button"
+            >
+              {networkOnline ? "在線" : "離線"}
+            </button>
+            <div className="hidden items-center gap-2 text-sm text-slate-600 md:flex">
+              <span className="rounded-full bg-slate-100 px-3 py-1">桌號：{activeTable?.name ?? "--"}</span>
+              <span className="rounded-full bg-slate-100 px-3 py-1">版本：{bootstrap.sourceVersion}</span>
+              <span className="rounded-full bg-slate-100 px-3 py-1">待同步：{pendingQueue.length}</span>
             </div>
           </div>
-
-          <div className="table-strip">
-            {bootstrap.tables.map((table) => (
+          <div className="flex items-center gap-2">
+            {!networkOnline ? (
               <button
-                key={table.id}
-                className={table.id === activeTableId ? "table-chip active" : "table-chip"}
-                onClick={() => setActiveTableId(table.id)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={simulateReconnect}
                 type="button"
               >
-                {table.name}
+                模擬恢復並補傳
               </button>
-            ))}
+            ) : (
+              <button
+                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => void syncNow(queue)}
+                type="button"
+              >
+                立即同步
+              </button>
+            )}
+            <Link
+              className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"
+              href="/settings"
+            >
+              設備設定
+            </Link>
           </div>
+        </div>
+      </div>
 
-          <div className="category-sections">
-            {menuByCategory.map(({ category, items }) => (
-              <section key={category.id} className="category-block">
-                <div className="category-title">
-                  <h3>{category.name}</h3>
-                  <span>{items.length} 項</span>
+      <div className="mx-auto max-w-[1440px] px-4 py-3">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[220px_1fr_380px]">
+          <aside className="rounded-2xl border border-slate-200 bg-white p-2">
+            <div className="px-2 pb-2 text-xs font-semibold text-slate-500">分類</div>
+            <div className="grid gap-1">
+              {bootstrap.categories.map((category) => (
+                <button
+                  key={category.id}
+                  className={`flex items-center justify-between rounded-xl px-3 py-2 text-left text-sm font-semibold ${
+                    effectiveCategoryId === category.id
+                      ? "bg-indigo-50 text-indigo-700"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                  onClick={() => setActiveCategoryId(category.id)}
+                  type="button"
+                >
+                  <span>{category.name}</span>
+                  <span className="text-xs font-medium text-slate-400">
+                    {bootstrap.menuItems.filter((item) => item.categoryId === category.id).length}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+              第一版目標：穩定落單、離線暫存、LAN/USB 打印。
+            </div>
+          </aside>
+
+          <main className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">商品</h2>
+                <p className="text-sm text-slate-500">點擊商品加入訂單。長備註可在右側填寫。</p>
+              </div>
+              <div className="flex w-full max-w-md items-center gap-2">
+                <input
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
+                  onChange={(event) => setSearchKeyword(event.target.value)}
+                  placeholder="搜尋商品"
+                  value={searchKeyword}
+                />
+                <button
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                  onClick={() => setSearchKeyword("")}
+                  type="button"
+                >
+                  清除
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+              {filteredMenuItems.map((item) => (
+                <button
+                  key={item.id}
+                  className="rounded-2xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-sm"
+                  onClick={() => addMenuItem(item)}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">{item.printerGroup}</div>
+                    </div>
+                    <div className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                      {formatMoney(item.price, bootstrap.currency)}
+                    </div>
+                  </div>
+                </button>
+              ))}
+              {filteredMenuItems.length === 0 ? (
+                <div className="col-span-full rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                  沒有符合條件的商品。
                 </div>
-                <div className="menu-grid">
-                  {items.map((item) => (
-                    <button key={item.id} className="menu-card" onClick={() => addMenuItem(item)} type="button">
-                      <span className="menu-name">{item.name}</span>
-                      <span className="menu-meta">
-                        {formatMoney(item.price, bootstrap.currency)} · {item.printerGroup}
-                      </span>
-                    </button>
+              ) : null}
+            </div>
+          </main>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">當前訂單</h2>
+                <p className="text-sm text-slate-500">
+                  {activeTable ? `${activeTable.name} · ${activeTable.area}` : "未選桌號"}
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="text-xs font-semibold text-slate-500">打印機</div>
+                <div className="text-sm font-semibold text-slate-700">
+                  {deviceConfig.printers.filter((printer) => printer.enabled).length} 台已啟用
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              <div className="flex flex-wrap gap-2">
+                {bootstrap.tables.map((table) => (
+                  <button
+                    key={table.id}
+                    className={`rounded-full px-3 py-1 text-sm font-semibold ${
+                      table.id === activeTableId
+                        ? "bg-indigo-50 text-indigo-700"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                    onClick={() => setActiveTableId(table.id)}
+                    type="button"
+                  >
+                    {table.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4 max-h-[340px] overflow-auto rounded-2xl border border-slate-100 bg-slate-50 p-3">
+              {cartItems.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-500">未加入菜品</div>
+              ) : (
+                <div className="grid gap-2">
+                  {cartItems.map((item) => (
+                    <div
+                      key={item.menuItemId}
+                      className={`rounded-2xl border bg-white p-3 ${
+                        selectedItemId === item.menuItemId ? "border-indigo-300" : "border-slate-100"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <button
+                          className="min-w-0 text-left"
+                          onClick={() => setSelectedItemId(item.menuItemId)}
+                          type="button"
+                        >
+                          <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {formatMoney(item.price, bootstrap.currency)} · {item.note || "未加備註"}
+                          </div>
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="h-8 w-8 rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+                            onClick={() => updateQuantity(item.menuItemId, -1)}
+                            type="button"
+                          >
+                            -
+                          </button>
+                          <div className="w-6 text-center text-sm font-semibold text-slate-700">{item.quantity}</div>
+                          <button
+                            className="h-8 w-8 rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+                            onClick={() => updateQuantity(item.menuItemId, 1)}
+                            type="button"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   ))}
                 </div>
-              </section>
-            ))}
-          </div>
-        </section>
-
-        <aside className="panel order-panel">
-          <div className="panel-head">
-            <div>
-              <h2>當前訂單</h2>
-              <p>{activeTable ? `${activeTable.name} · ${activeTable.area}` : "未選桌號"}</p>
+              )}
             </div>
-          </div>
 
-          <div className="cart-list">
-            {cartItems.length === 0 ? (
-              <div className="empty-inline">未加入菜品。先在左邊點選品項。</div>
-            ) : (
-              cartItems.map((item) => (
-                <div key={item.menuItemId} className="cart-row">
-                  <div>
-                    <button
-                      className={`item-selector ${selectedItemId === item.menuItemId ? "selected" : ""}`}
-                      onClick={() => setSelectedItemId(item.menuItemId)}
-                      type="button"
-                    >
-                      {item.name}
-                    </button>
-                    <p>{formatMoney(item.price, bootstrap.currency)} · {item.note || "未加備註"}</p>
-                  </div>
-                  <div className="qty-control">
-                    <button onClick={() => updateQuantity(item.menuItemId, -1)} type="button">
-                      -
-                    </button>
-                    <span>{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item.menuItemId, 1)} type="button">
-                      +
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="note-box">
-            <label htmlFor="item-note">菜品備註</label>
-            <textarea
-              id="item-note"
-              onChange={(event) => setNoteDraft(event.target.value)}
-              placeholder="例如：少飯、走甜、不要蔥"
-              rows={3}
-              value={noteDraft}
-            />
-            <button className="ghost-button" onClick={applyNote} type="button">
-              更新備註
-            </button>
-          </div>
-
-          <div className="totals-box">
-            <div>
-              <span>小計</span>
-              <strong>{formatMoney(totals.subtotal, bootstrap.currency)}</strong>
-            </div>
-            <div>
-              <span>服務費</span>
-              <strong>{formatMoney(totals.serviceChargeAmount, bootstrap.currency)}</strong>
-            </div>
-            <div>
-              <span>合計</span>
-              <strong>{formatMoney(totals.total, bootstrap.currency)}</strong>
-            </div>
-          </div>
-
-          <div className="action-stack">
-            <button className="primary-button" onClick={sendToKitchen} type="button">
-              送廚房單
-            </button>
-            <button className="secondary-button" onClick={settleLatestOrder} type="button">
-              現金結帳
-            </button>
-            {!networkOnline ? (
-              <button className="ghost-button" onClick={simulateReconnect} type="button">
-                模擬恢復網絡並補傳
+            <div className="mt-4 grid gap-2">
+              <label className="text-xs font-semibold text-slate-600" htmlFor="pos-note">
+                菜品備註（選中項目後更新）
+              </label>
+              <textarea
+                className="min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
+                id="pos-note"
+                onChange={(event) => setNoteDraft(event.target.value)}
+                placeholder="例如：少飯、走甜、不要蔥"
+                value={noteDraft}
+              />
+              <button
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={applyNote}
+                type="button"
+              >
+                更新備註
               </button>
-            ) : null}
-          </div>
-        </aside>
-      </div>
-
-      <div className="workspace">
-        <section className="panel">
-          <div className="panel-head">
-            <div>
-              <h2>最近訂單</h2>
-              <p>展示本地已落單的堂食訂單，之後再接主系統回寫。</p>
             </div>
-          </div>
-          <div className="history-list">
-            {recentOrders.length === 0 ? (
-              <div className="empty-inline">尚未建立訂單。</div>
-            ) : (
-              recentOrders.map((order) => (
-                <article key={order.id} className="history-card">
-                  <div className="history-top">
-                    <strong>{order.localOrderNo}</strong>
-                    <span className={`status-pill ${order.status}`}>{order.status}</span>
-                  </div>
-                  <p>
-                    {order.tableName} · {formatMoney(order.total, bootstrap.currency)}
-                  </p>
-                  <small>{order.updatedAt.replace("T", " ").slice(0, 16)}</small>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
 
-        <section className="panel">
-          <div className="panel-head">
-            <div>
-              <h2>同步與打印狀態</h2>
-              <p>待辦事件與打印狀態都會先本地保存，避免高峰時段漏單。</p>
+            <div className="mt-4 rounded-2xl bg-slate-900 p-4 text-white">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-white/70">小計</span>
+                <span className="font-semibold">{formatMoney(totals.subtotal, bootstrap.currency)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-sm">
+                <span className="text-white/70">服務費</span>
+                <span className="font-semibold">{formatMoney(totals.serviceChargeAmount, bootstrap.currency)}</span>
+              </div>
+              <div className="mt-3 flex items-center justify-between text-base">
+                <span className="text-white/70">合計</span>
+                <span className="text-xl font-semibold">{formatMoney(totals.total, bootstrap.currency)}</span>
+              </div>
             </div>
-          </div>
-          <div className="sync-list">
-            {pendingQueue.length === 0 ? (
-              <div className="empty-inline">目前沒有待同步事件。</div>
-            ) : (
-              pendingQueue.map((event) => (
-                <article key={event.id} className="sync-row">
-                  <div>
-                    <strong>{event.type}</strong>
-                    <p>{event.entityId}</p>
-                  </div>
-                  <span className="status-pill pending">{event.status}</span>
-                </article>
-              ))
-            )}
-          </div>
-          <div className="print-list">
-            {printJobs.slice(0, 4).map((job) => (
-              <article key={job.id} className="sync-row">
-                <div>
-                  <strong>{job.printerName}</strong>
-                  <p>{job.printerGroup}</p>
+
+            <div className="mt-4 grid gap-2">
+              <button
+                className="rounded-2xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white hover:bg-indigo-700"
+                onClick={sendToKitchen}
+                type="button"
+              >
+                送廚房單
+              </button>
+              <button
+                className="rounded-2xl bg-white px-4 py-3 text-base font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                onClick={settleLatestOrder}
+                type="button"
+              >
+                結帳
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              <div className="text-xs font-semibold text-slate-500">同步狀態</div>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700">
+                <div className="flex items-center justify-between">
+                  <span>待同步事件</span>
+                  <span className="font-semibold">{pendingQueue.length}</span>
                 </div>
-                <span className={`status-pill ${job.status}`}>{job.status}</span>
-              </article>
-            ))}
-          </div>
-        </section>
+                <div className="mt-2 flex items-center justify-between">
+                  <span>最近打印任務</span>
+                  <span className="font-semibold">{printJobs.length}</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">最近訂單</h3>
+                <p className="text-sm text-slate-500">目前只保留在本機，之後再回寫主系統。</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                {orders.length} 筆
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {recentOrders.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                  尚未建立訂單
+                </div>
+              ) : (
+                recentOrders.map((order) => (
+                  <div key={order.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {order.tableName} · {formatMoney(order.total, bootstrap.currency)}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs font-semibold text-slate-600">{order.status}</div>
+                      <div className="mt-1 text-xs text-slate-400">{order.updatedAt.slice(11, 16)}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">同步隊列</h3>
+                <p className="text-sm text-slate-500">離線時先排隊，恢復後補傳。</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                {pendingQueue.length} pending
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {pendingQueue.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                  目前沒有待同步事件
+                </div>
+              ) : (
+                pendingQueue.slice(0, 6).map((event) => (
+                  <div key={event.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">{event.type}</div>
+                      <div className="mt-1 text-xs text-slate-500">{event.entityId}</div>
+                    </div>
+                    <div className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                      pending
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       </div>
 
-      {toast ? <div className={`toast ${toast.tone}`}>{toast.message}</div> : null}
+      {payingOrderId ? (
+        <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">選擇付款方式</h3>
+                <p className="mt-1 text-sm text-slate-500">第一版只做流程，之後再接主系統入帳。</p>
+              </div>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => setPayingOrderId(null)}
+                type="button"
+              >
+                取消
+              </button>
+            </div>
+            <div className="mt-4 grid gap-2">
+              {bootstrap.rules.paymentMethods.map((method) => (
+                <button
+                  key={method}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-indigo-300"
+                  onClick={() => confirmPayment(method)}
+                  type="button"
+                >
+                  {method === "cash" ? "現金" : method === "card" ? "卡" : "MPay"}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {toast ? (
+        <div
+          className={`fixed bottom-4 right-4 z-40 rounded-2xl px-4 py-3 text-sm font-semibold text-white shadow-lg ${
+            toast.tone === "success" ? "bg-emerald-600" : "bg-slate-900"
+          }`}
+        >
+          {toast.message}
+        </div>
+      ) : null}
     </div>
   );
 }
