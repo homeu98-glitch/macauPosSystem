@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { defaultDeviceConfig } from "@/lib/mock-data";
@@ -40,6 +41,7 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
 }
 
 export function PosApp() {
+  const router = useRouter();
   const cachedBootstrap = loadBootstrapCache();
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
@@ -55,10 +57,12 @@ export function PosApp() {
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => cachedBootstrap?.categories[0]?.id ?? "");
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
+  const [posMode, setPosMode] = useState<"tables" | "order">("tables");
 
   useEffect(() => {
     async function bootstrapApp() {
@@ -201,6 +205,7 @@ export function PosApp() {
   function selectTable(tableId: string) {
     const order = tableOrderMap.get(tableId) ?? null;
     loadOrderIntoWorkspace(order, tableId);
+    setPosMode("order");
   }
 
   function upsertCurrentOrder(nextStatus: "draft" | "sent_to_kitchen", allowEmpty = false) {
@@ -267,6 +272,18 @@ export function PosApp() {
     if (!order) return;
 
     setToast({ tone: "success", message: `${activeTable.name} 已開台。` });
+    setPosMode("order");
+  }
+
+  function backToTables() {
+    setPosMode("tables");
+    setCartItems([]);
+    setSelectedItemId("");
+    setNoteDraft("");
+    setDiscountValue("0");
+    setReceivedAmount("");
+    setPayingOrderId(null);
+    setActiveOrderId(null);
   }
 
   function addMenuItem(item: MenuItem) {
@@ -339,16 +356,6 @@ export function PosApp() {
     const nextQueue = [...queue, ...events];
     persistQueue(nextQueue);
     void syncNow(nextQueue);
-  }
-
-  function holdOrder() {
-    const order = upsertCurrentOrder("draft");
-    if (!order) {
-      setToast({ tone: "info", message: "請先加入菜品後再掛單。" });
-      return;
-    }
-
-    setToast({ tone: "success", message: `${order.localOrderNo} 已掛單。` });
   }
 
   function sendToKitchen() {
@@ -479,18 +486,19 @@ export function PosApp() {
         <aside className="hidden w-[72px] shrink-0 flex-col justify-between bg-slate-900 px-2 py-3 text-white lg:flex">
           <div className="grid gap-2">
             {[
-              ["首頁", "首"],
               ["點餐", "點"],
-              ["掛單", "掛"],
               ["訂單", "單"],
-              ["結算", "結"],
-              ["報表", "報"],
-            ].map(([label, short], index) => (
+            ].map(([label, short]) => (
               <button
                 key={label}
                 className={`flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold ${
-                  index === 1 ? "bg-orange-500 text-white" : "text-slate-300 hover:bg-slate-800"
+                  label === "點餐" ? "bg-orange-500 text-white" : "text-slate-300 hover:bg-slate-800"
                 }`}
+                onClick={() => {
+                  if (label === "訂單") {
+                    router.push("/orders");
+                  }
+                }}
                 type="button"
               >
                 <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">{short}</span>
@@ -517,6 +525,98 @@ export function PosApp() {
           </div>
         </aside>
 
+        {posMode === "tables" ? (
+          <div className="grid h-screen flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_330px]">
+            <main className="flex h-full flex-col overflow-hidden bg-slate-100">
+              <div className="border-b border-slate-200 bg-white px-4 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">桌台總覽</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單
+                    </div>
+                  </div>
+                  <Link
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                    href="/orders"
+                  >
+                    查看線上訂單
+                  </Link>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto p-4">
+                <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
+                  {bootstrap.tables.map((table) => {
+                    const status = tableOrderMap.get(table.id)?.status ?? "idle";
+                    const label =
+                      status === "sent_to_kitchen" ? "已下單" : status === "draft" ? "未下單" : "空閒";
+                    return (
+                      <button
+                        key={table.id}
+                        className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300"
+                        onClick={() => selectTable(table.id)}
+                        type="button"
+                      >
+                        <div className="text-base font-semibold text-slate-900">{table.name}</div>
+                        <div className="mt-2 text-xs text-slate-500">{table.area}</div>
+                        <div className="mt-4 inline-flex rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
+                          {label}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </main>
+
+            <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
+              <div className="border-b border-slate-100 px-4 py-4">
+                <div className="text-base font-semibold text-slate-900">快捷操作</div>
+                <div className="mt-1 text-xs text-slate-500">適合平板橫屏操作</div>
+              </div>
+              <div className="flex-1 overflow-auto px-4 py-4">
+                <div className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">待同步</span>
+                    <span className="font-semibold text-slate-900">{pendingQueue.length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">打印任務</span>
+                    <span className="font-semibold text-slate-900">{printJobs.length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">打印設備</span>
+                    <span className="font-semibold text-slate-900">
+                      {deviceConfig.printers.filter((printer) => printer.enabled).length}
+                    </span>
+                  </div>
+                </div>
+
+                {!networkOnline ? (
+                  <button
+                    className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
+                    onClick={() => {
+                      setNetworkOnline(true);
+                      void syncNow(queue);
+                    }}
+                    type="button"
+                  >
+                    恢復網絡並補傳
+                  </button>
+                ) : (
+                  <button
+                    className="mt-3 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                    onClick={() => void syncNow(queue)}
+                    type="button"
+                  >
+                    立即同步
+                  </button>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
         <div className="grid h-screen flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)_330px]">
           <section className="flex h-full flex-col overflow-hidden border-r border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">
@@ -529,28 +629,17 @@ export function PosApp() {
                   桌號 {activeTable?.name ?? "--"}
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {bootstrap.tables.map((table) => (
-                  <button
-                    key={table.id}
-                    className={`rounded-2xl px-3 py-2 text-left text-xs font-semibold ${
-                      table.id === activeTableId
-                        ? "bg-orange-50 text-orange-600 ring-1 ring-orange-200"
-                        : "bg-slate-100 text-slate-600"
-                    }`}
-                    onClick={() => selectTable(table.id)}
-                    type="button"
-                  >
-                    <div>{table.name}</div>
-                    <div className="mt-1 text-[11px] font-medium">
-                      {tableOrderMap.get(table.id)?.status === "draft"
-                        ? "掛單"
-                        : tableOrderMap.get(table.id)?.status === "sent_to_kitchen"
-                          ? "已下單"
-                          : "空閒"}
-                    </div>
-                  </button>
-                ))}
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <button
+                  className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={backToTables}
+                  type="button"
+                >
+                  返回桌台
+                </button>
+                <div className="text-xs text-slate-500">
+                  狀態：{selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
+                </div>
               </div>
             </div>
 
@@ -652,8 +741,12 @@ export function PosApp() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400 xl:w-72"
+                    className={`rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400 ${
+                      searchFocused ? "w-full xl:w-72" : "w-32 xl:w-40"
+                    }`}
                     onChange={(event) => setSearchKeyword(event.target.value)}
+                    onBlur={() => setSearchFocused(false)}
+                    onFocus={() => setSearchFocused(true)}
                     placeholder="搜尋商品"
                     value={searchKeyword}
                   />
@@ -709,7 +802,7 @@ export function PosApp() {
                 {currentSettlementOrder
                   ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
                   : selectedTableStatus === "draft"
-                    ? "目前為掛單狀態，可繼續加菜或送廚房"
+                    ? "目前尚未下單，可繼續加菜或送廚房"
                     : "目前未有待結帳訂單，可先開台或送廚房單"}
               </div>
             </div>
@@ -787,20 +880,13 @@ export function PosApp() {
                 </div>
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-2">
+              <div className="mt-5">
                 <button
-                  className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                   onClick={openTable}
                   type="button"
                 >
                   開台
-                </button>
-                <button
-                  className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                  onClick={holdOrder}
-                  type="button"
-                >
-                  掛單
                 </button>
               </div>
 
@@ -852,7 +938,7 @@ export function PosApp() {
               ) : null}
 
               <div className="mt-5">
-                <div className="mb-2 text-xs font-semibold text-slate-500">掛單 / 最近訂單</div>
+                <div className="mb-2 text-xs font-semibold text-slate-500">最近訂單</div>
                 <div className="grid gap-2">
                   {recentOrders.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
@@ -879,6 +965,7 @@ export function PosApp() {
             </div>
           </section>
         </div>
+        )}
       </div>
 
       {toast ? (
