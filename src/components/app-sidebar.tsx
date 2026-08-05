@@ -11,6 +11,8 @@ const navItems = [
   { href: "/orders", label: "訂單", short: "單" },
   { href: "/members", label: "會員", short: "會" },
   { href: "/reports", label: "報表", short: "報" },
+  { href: "/soldout", label: "沽清", short: "沽" },
+  { href: "/shift", label: "交班", short: "班" },
 ];
 
 export function AppSidebar() {

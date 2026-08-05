@@ -8,21 +8,14 @@ import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/l
 import {
   loadBootstrapCache,
   loadDeviceConfig,
-  loadOfflineMode,
   loadPosLocalSettings,
-  loadPrintJobs,
   loadQueue,
-  loadShiftState,
-  loadSoldOutState,
   saveBootstrapCache,
   saveDeviceConfig,
-  savePrintJobs,
   savePosLocalSettings,
   saveQueue,
-  saveShiftState,
-  saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, PosLocalSettings, QueueEvent } from "@/lib/types";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 
 function uid(prefix: string) {
@@ -37,7 +30,7 @@ export function DeviceSettings() {
   const [localSettings, setLocalSettings] = useState<PosLocalSettings>(cachedLocalSettings ?? defaultPosLocalSettings);
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
   const [activeTab, setActiveTab] = useState<
-    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "soldout" | "shift"
+    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders"
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
@@ -51,10 +44,6 @@ export function DeviceSettings() {
   });
   const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
   const [bulkPrinterGroup, setBulkPrinterGroup] = useState<DevicePrinterConfig["group"]>("kitchen");
-
-  const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
-  const [shift, setShift] = useState(() => loadShiftState());
-  const [shiftNote, setShiftNote] = useState("");
 
   useEffect(() => {
     if (!cachedConfig) {
@@ -245,8 +234,6 @@ export function DeviceSettings() {
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
             ["online-orders", "線上訂單"],
-            ["soldout", "沽清"],
-            ["shift", "交班"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -909,235 +896,6 @@ export function DeviceSettings() {
           </section>
         ) : null}
 
-        {activeTab === "soldout" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold text-slate-900">沽清</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  為菜品設定可售數量；每次下單會扣減，到 0 會標記售罄並通知主系統（API）。
-                </div>
-              </div>
-              <button
-                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
-                onClick={() => {
-                  saveSoldOutState(soldOutMap);
-                  window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap } }));
-                  setStatus("已保存沽清設定到本機。");
-                }}
-                type="button"
-              >
-                保存
-              </button>
-            </div>
-
-            <div className="mt-4 overflow-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="text-left text-xs font-semibold text-slate-500">
-                    <th className="border-b border-slate-200 py-2 pr-3">菜品</th>
-                    <th className="border-b border-slate-200 py-2 pr-3">剩餘</th>
-                    <th className="border-b border-slate-200 py-2 pr-3">設定數量</th>
-                    <th className="border-b border-slate-200 py-2">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {menuDraft.menuItems.map((item) => {
-                    const state = soldOutMap[item.id];
-                    const remaining = state ? state.remainingQty : "";
-                    const initial = state ? state.initialQty : "";
-                    const soldOut = state ? state.remainingQty <= 0 : false;
-                    return (
-                      <tr key={item.id} className={soldOut ? "bg-amber-50" : ""}>
-                        <td className="border-b border-slate-100 py-2 pr-3 font-semibold text-slate-900">
-                          {item.name}
-                          {soldOut ? <span className="ml-2 text-xs font-semibold text-amber-700">售罄</span> : null}
-                        </td>
-                        <td className="border-b border-slate-100 py-2 pr-3 text-slate-700">
-                          {remaining === "" ? "--" : remaining}
-                        </td>
-                        <td className="border-b border-slate-100 py-2 pr-3">
-                          <input
-                            className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            inputMode="numeric"
-                            onChange={(event) => {
-                              const value = Number(event.target.value);
-                              const qty = Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
-                              setSoldOutMap((current) => ({
-                                ...current,
-                                [item.id]: {
-                                  initialQty: qty,
-                                  remainingQty: qty,
-                                  updatedAt: new Date().toISOString(),
-                                },
-                              }));
-                            }}
-                            placeholder="例如 20"
-                            value={initial === "" ? "" : String(initial)}
-                          />
-                        </td>
-                        <td className="border-b border-slate-100 py-2">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                              onClick={() => {
-                                setSoldOutMap((current) => {
-                                  const next = { ...current };
-                                  delete next[item.id];
-                                  return next;
-                                });
-                              }}
-                              type="button"
-                            >
-                              清除
-                            </button>
-                            <button
-                              className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
-                              onClick={() => {
-                                setSoldOutMap((current) => ({
-                                  ...current,
-                                  [item.id]: {
-                                    initialQty: current[item.id]?.initialQty ?? 0,
-                                    remainingQty: 0,
-                                    updatedAt: new Date().toISOString(),
-                                  },
-                                }));
-                              }}
-                              type="button"
-                            >
-                              直接售罄
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        ) : null}
-
-        {activeTab === "shift" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold text-slate-900">交班</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  開工 → 營業 → 結數交班。結數後可打印一張交班單（收據打印機）。
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">狀態</div>
-                <div className="mt-2 text-sm text-slate-700">
-                  {shift.openedAt ? `已開工：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "未開工"}
-                </div>
-                {shift.closedAt ? (
-                  <div className="mt-1 text-sm text-slate-500">
-                    最近交班：{shift.closedAt.replace("T", " ").slice(0, 16)}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-semibold text-slate-900">備註</div>
-                <input
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setShiftNote(event.target.value)}
-                  placeholder="例如：現金箱交接已核對"
-                  value={shiftNote}
-                />
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {!shift.openedAt ? (
-                    <button
-                      className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                      onClick={() => {
-                        const next = { ...shift, openedAt: new Date().toISOString(), closedAt: undefined, openingNote: shiftNote };
-                        setShift(next);
-                        saveShiftState(next);
-                        setStatus("已開工。");
-                      }}
-                      type="button"
-                    >
-                      開工
-                    </button>
-                  ) : (
-                    <button
-                      className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                      onClick={async () => {
-                        const now = new Date().toISOString();
-                        const next = { ...shift, closedAt: now, closingNote: shiftNote };
-                        setShift(next);
-                        saveShiftState(next);
-
-                        // 打印交班單（寫入本機 printJobs + queue，並在在線時嘗試同步）
-                        const receiptPrinter = (config.printers ?? []).find(
-                          (printer) => printer.enabled && printer.group === "receipt",
-                        );
-                        const printerName = receiptPrinter?.name ?? "收據打印機";
-
-                        const summaryLines = [
-                          `交班時間：${now.replace("T", " ").slice(0, 16)}`,
-                          shift.openedAt ? `開工時間：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "",
-                          shiftNote ? `備註：${shiftNote}` : "",
-                        ].filter(Boolean);
-
-                        const printJob: PrintJob = {
-                          id: uid("print"),
-                          orderId: `shift-${now}`,
-                          orderNo: "交班單",
-                          tableName: "",
-                          ticketType: "normal",
-                          printerGroup: "receipt",
-                          printerName,
-                          items: summaryLines.map((line) => ({ name: line, quantity: 1 })),
-                          status: "pending",
-                          createdAt: now,
-                        };
-
-                        const nextPrintJobs = [printJob, ...loadPrintJobs()];
-                        savePrintJobs(nextPrintJobs);
-
-                        const event: QueueEvent = {
-                          id: uid("evt"),
-                          type: "PRINT_JOB_CREATED",
-                          entityId: printJob.id,
-                          payload: printJob,
-                          status: "pending",
-                          createdAt: now,
-                        };
-
-                        const nextQueue = [...loadQueue(), event];
-                        saveQueue(nextQueue);
-
-                        if (!loadOfflineMode()) {
-                          try {
-                            await fetch("/api/pos/sync", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ events: nextQueue }),
-                            });
-                            saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
-                          } catch {
-                            // ignore
-                          }
-                        }
-
-                        setStatus("已交班，交班單已加入打印隊列。");
-                      }}
-                      type="button"
-                    >
-                      結數交班並打印
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-        ) : null}
 
         {activeTab === "payments" ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
