@@ -52,11 +52,15 @@ export async function GET(request: Request) {
     );
   }
 
+  const filtered = (data ?? []).filter(
+    (order) => !(order.type === "dine_in" && order.assigned_table_name),
+  );
+
   return NextResponse.json({
     ok: true,
     source: "supabase",
     orders:
-      data?.map((order) => ({
+      filtered.map((order) => ({
         id: order.order_no ?? order.id,
         sourceId: order.id,
         type: order.type,

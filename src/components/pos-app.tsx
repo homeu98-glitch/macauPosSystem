@@ -11,6 +11,7 @@ import {
   loadBootstrapCache,
   loadDeviceConfig,
   loadMembers,
+  loadOfflineMode,
   loadPosLocalSettings,
   loadOrders,
   loadPrintJobs,
@@ -18,6 +19,7 @@ import {
   saveBootstrapCache,
   saveDeviceConfig,
   saveMembers,
+  saveOfflineMode,
   saveOrders,
   savePosLocalSettings,
   savePrintJobs,
@@ -82,7 +84,7 @@ export function PosApp() {
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
   const [cartItems, setCartItems] = useState<OrderItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string>("");
-  const [networkOnline, setNetworkOnline] = useState(true);
+  const [offlineMode, setOfflineMode] = useState(() => loadOfflineMode());
   const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
@@ -115,7 +117,30 @@ export function PosApp() {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
   const [settlementFlash, setSettlementFlash] = useState(false);
+  const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const longPressTimerRef = useRef<number | null>(null);
+
+  const networkOnline = !offlineMode;
+
+  function updateOfflineMode(next: boolean) {
+    setOfflineMode(next);
+    saveOfflineMode(next);
+    window.dispatchEvent(new CustomEvent("pos-offline-mode-changed", { detail: { offlineMode: next } }));
+  }
+
+  useEffect(() => {
+    function onOfflineModeChanged(event: Event) {
+      const detail = (event as CustomEvent<{ offlineMode?: boolean }>).detail;
+      if (typeof detail?.offlineMode === "boolean") {
+        setOfflineMode(detail.offlineMode);
+      } else {
+        setOfflineMode(loadOfflineMode());
+      }
+    }
+
+    window.addEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
+    return () => window.removeEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
+  }, []);
 
   useEffect(() => {
     async function bootstrapApp() {
@@ -138,10 +163,6 @@ export function PosApp() {
   }, []);
 
   useEffect(() => {
-    void refreshRuntimeState();
-  }, []);
-
-  useEffect(() => {
     if (!toast) return;
 
     const timer = window.setTimeout(() => setToast(null), 2600);
@@ -160,44 +181,49 @@ export function PosApp() {
     return () => window.clearTimeout(timer);
   }, [settlementFlash]);
 
-  async function refreshRuntimeState() {
-    try {
-      const response = await fetch("/api/pos/state");
-      const payload = (await response.json()) as {
-        orders?: PosOrder[];
-        queue?: QueueEvent[];
-        printJobs?: PrintJob[];
-        members?: MemberProfile[];
-        localSettings?: PosLocalSettings;
-        deviceConfig?: DeviceConfig | null;
-      };
+  useEffect(() => {
+    if (offlineMode) return;
+    async function loadRuntimeState() {
+      try {
+        const response = await fetch("/api/pos/state");
+        const payload = (await response.json()) as {
+          orders?: PosOrder[];
+          queue?: QueueEvent[];
+          printJobs?: PrintJob[];
+          members?: MemberProfile[];
+          localSettings?: PosLocalSettings;
+          deviceConfig?: DeviceConfig | null;
+        };
 
-      if (Array.isArray(payload.orders)) {
-        setOrders(payload.orders);
-        saveOrders(payload.orders);
+        if (Array.isArray(payload.orders)) {
+          setOrders(payload.orders);
+          saveOrders(payload.orders);
+        }
+        if (Array.isArray(payload.queue)) {
+          setQueue(payload.queue);
+          saveQueue(payload.queue);
+        }
+        if (Array.isArray(payload.printJobs)) {
+          setPrintJobs(payload.printJobs);
+          savePrintJobs(payload.printJobs);
+        }
+        if (Array.isArray(payload.members)) {
+          setMembersCache(payload.members);
+          saveMembers(payload.members);
+        }
+        if (payload.localSettings) {
+          savePosLocalSettings(payload.localSettings);
+        }
+        if (payload.deviceConfig) {
+          saveDeviceConfig(payload.deviceConfig);
+        }
+      } catch {
+        // ignore
       }
-      if (Array.isArray(payload.queue)) {
-        setQueue(payload.queue);
-        saveQueue(payload.queue);
-      }
-      if (Array.isArray(payload.printJobs)) {
-        setPrintJobs(payload.printJobs);
-        savePrintJobs(payload.printJobs);
-      }
-      if (Array.isArray(payload.members)) {
-        setMembersCache(payload.members);
-        saveMembers(payload.members);
-      }
-      if (payload.localSettings) {
-        savePosLocalSettings(payload.localSettings);
-      }
-      if (payload.deviceConfig) {
-        saveDeviceConfig(payload.deviceConfig);
-      }
-    } catch {
-      // ignore
     }
-  }
+
+    void loadRuntimeState();
+  }, [offlineMode, runtimeRefreshTick]);
 
   const activeTable = useMemo(
     () => bootstrap?.tables.find((table) => table.id === activeTableId) ?? null,
@@ -464,7 +490,7 @@ export function PosApp() {
     setMemberMatch(null);
     setSelectedPaymentMethod("");
     setSelectedCouponIds([]);
-    void refreshRuntimeState();
+    setRuntimeRefreshTick((current) => current + 1);
   }
 
   function startItemLongPress(itemKey: string, orderedQty: number) {
@@ -777,7 +803,7 @@ export function PosApp() {
   }
 
   async function syncNow(nextQueue: QueueEvent[]) {
-    if (!networkOnline || nextQueue.length === 0) {
+    if (offlineMode || nextQueue.length === 0) {
       return;
     }
 
@@ -807,7 +833,7 @@ export function PosApp() {
 
     const timestamp = new Date().toISOString();
     let nextOrderNo: string | undefined;
-    if (!activeOrderId && !tableOrderMap.get(activeTable.id)) {
+    if (!offlineMode && !activeOrderId && !tableOrderMap.get(activeTable.id)) {
       try {
         const response = await fetch("/api/pos/sequence", {
           method: "POST",
@@ -1152,16 +1178,16 @@ export function PosApp() {
                   </div>
                 </div>
 
-                {!networkOnline ? (
+                {offlineMode ? (
                   <button
                     className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
                     onClick={() => {
-                      setNetworkOnline(true);
+                      updateOfflineMode(false);
                       void syncNow(queue);
                     }}
                     type="button"
                   >
-                    恢復網絡並補傳
+                    退出離線並補傳
                   </button>
                 ) : (
                   <button
@@ -1500,16 +1526,16 @@ export function PosApp() {
                 )}
               </div>
 
-              {!networkOnline ? (
+              {offlineMode ? (
                 <button
                   className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
                   onClick={() => {
-                    setNetworkOnline(true);
+                    updateOfflineMode(false);
                     void syncNow(queue);
                   }}
                   type="button"
                 >
-                  恢復網絡並補傳
+                  退出離線並補傳
                 </button>
               ) : null}
 

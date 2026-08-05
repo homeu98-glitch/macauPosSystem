@@ -10,11 +10,13 @@ import {
   loadDeviceConfig,
   loadPosLocalSettings,
   loadQueue,
+  saveBootstrapCache,
   saveDeviceConfig,
   savePosLocalSettings,
   saveQueue,
 } from "@/lib/storage";
 import { DeviceConfig, DevicePrinterConfig, PosLocalSettings, QueueEvent } from "@/lib/types";
+import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -27,7 +29,21 @@ export function DeviceSettings() {
   const [config, setConfig] = useState<DeviceConfig>(cachedConfig ?? defaultDeviceConfig);
   const [localSettings, setLocalSettings] = useState<PosLocalSettings>(cachedLocalSettings ?? defaultPosLocalSettings);
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
-  const [activeTab, setActiveTab] = useState<"device" | "menu-print" | "tables" | "payments" | "online-orders">("device");
+  const [activeTab, setActiveTab] = useState<
+    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders"
+  >("device");
+  const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
+  const [menuSaving, setMenuSaving] = useState(false);
+  const [menuSpecJsonMap, setMenuSpecJsonMap] = useState<Record<string, string>>(() => {
+    const normalized = normalizeBootstrapPayload(cachedBootstrap);
+    const map: Record<string, string> = {};
+    for (const item of normalized.menuItems) {
+      map[item.id] = item.specGroups ? JSON.stringify(item.specGroups, null, 2) : "";
+    }
+    return map;
+  });
+  const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
+  const [bulkPrinterGroup, setBulkPrinterGroup] = useState<DevicePrinterConfig["group"]>("kitchen");
 
   useEffect(() => {
     if (!cachedConfig) {
@@ -209,6 +225,7 @@ export function DeviceSettings() {
           {[
             ["device", "打印機"],
             ["menu-print", "菜品打印設置"],
+            ["menu", "菜單"],
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
             ["online-orders", "線上訂單"],
@@ -397,10 +414,60 @@ export function DeviceSettings() {
               </div>
             </div>
 
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="text-sm text-slate-700">
+                已選 {bulkSelectedMenuIds.length} 個菜品
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setBulkPrinterGroup(event.target.value as DevicePrinterConfig["group"])}
+                  value={bulkPrinterGroup}
+                >
+                  <option value="kitchen">廚房</option>
+                  <option value="drinks">水吧</option>
+                  <option value="receipt">收據</option>
+                </select>
+                <button
+                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  disabled={bulkSelectedMenuIds.length === 0}
+                  onClick={() => {
+                    setLocalSettings((current) => ({
+                      ...current,
+                      menuPrinterOverrides: {
+                        ...current.menuPrinterOverrides,
+                        ...Object.fromEntries(bulkSelectedMenuIds.map((id) => [id, bulkPrinterGroup])),
+                      },
+                    }));
+                    setBulkSelectedMenuIds([]);
+                    setStatus("已套用批量打印分組，請記得保存。");
+                  }}
+                  type="button"
+                >
+                  批量套用
+                </button>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => setBulkSelectedMenuIds(cachedBootstrap.menuItems.map((item) => item.id))}
+                  type="button"
+                >
+                  全選
+                </button>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => setBulkSelectedMenuIds([])}
+                  type="button"
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+
             <div className="mt-4 overflow-auto">
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="text-left text-xs font-semibold text-slate-500">
+                    <th className="border-b border-slate-200 py-2 pr-3">選擇</th>
                     <th className="border-b border-slate-200 py-2 pr-3">菜品</th>
                     <th className="border-b border-slate-200 py-2 pr-3">分類</th>
                     <th className="border-b border-slate-200 py-2 pr-3">當前分組</th>
@@ -410,8 +477,20 @@ export function DeviceSettings() {
                 <tbody>
                   {cachedBootstrap.menuItems.map((item) => {
                     const group = localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup;
+                    const checked = bulkSelectedMenuIds.includes(item.id);
                     return (
                       <tr key={item.id}>
+                        <td className="border-b border-slate-100 py-2 pr-3">
+                          <input
+                            checked={checked}
+                            onChange={(event) =>
+                              setBulkSelectedMenuIds((current) =>
+                                event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id),
+                              )
+                            }
+                            type="checkbox"
+                          />
+                        </td>
                         <td className="border-b border-slate-100 py-2 pr-3 font-semibold text-slate-900">{item.name}</td>
                         <td className="border-b border-slate-100 py-2 pr-3 text-slate-600">{item.categoryId}</td>
                         <td className="border-b border-slate-100 py-2 pr-3">
@@ -441,6 +520,272 @@ export function DeviceSettings() {
                   })}
                 </tbody>
               </table>
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={syncConfig}
+                type="button"
+              >
+                保存菜品打印設置
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "menu" ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-base font-semibold text-slate-900">菜單</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  這裡是本店菜單資料來源。可修改分類、菜品、價格與規格（JSON），並保存到後台。
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={async () => {
+                    setStatus("正在重新載入後台菜單…");
+                    try {
+                      const response = await fetch("/api/pos/bootstrap");
+                      const raw = (await response.json()) as unknown as Parameters<typeof normalizeBootstrapPayload>[0];
+                      const payload = normalizeBootstrapPayload(raw);
+                      setMenuDraft(payload);
+                      saveBootstrapCache(payload);
+                      setMenuSpecJsonMap(() => {
+                        const map: Record<string, string> = {};
+                        for (const item of payload.menuItems) {
+                          map[item.id] = item.specGroups ? JSON.stringify(item.specGroups, null, 2) : "";
+                        }
+                        return map;
+                      });
+                      setStatus("已重新載入後台菜單。");
+                    } catch {
+                      setStatus("重新載入失敗，請稍後再試。");
+                    }
+                  }}
+                  type="button"
+                >
+                  同步菜單
+                </button>
+                <button
+                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  disabled={menuSaving}
+                  onClick={async () => {
+                    setMenuSaving(true);
+                    setStatus("正在保存菜單到後台…");
+                    try {
+                      const nextMenuItems = menuDraft.menuItems.map((item) => {
+                        const raw = menuSpecJsonMap[item.id] ?? "";
+                        if (!raw.trim()) return { ...item, specGroups: undefined };
+                        try {
+                          return { ...item, specGroups: JSON.parse(raw) as unknown as typeof item.specGroups };
+                        } catch {
+                          throw new Error(`菜品「${item.name}」的規格 JSON 格式不正確。`);
+                        }
+                      });
+                      await fetch("/api/pos/bootstrap", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          storeId: menuDraft.storeId,
+                          storeName: menuDraft.storeName,
+                          currency: menuDraft.currency,
+                          categories: menuDraft.categories,
+                          menuItems: nextMenuItems,
+                          tables: menuDraft.tables,
+                          rules: menuDraft.rules,
+                          printerGroups: menuDraft.printerGroups,
+                        }),
+                      });
+                      saveBootstrapCache({ ...menuDraft, menuItems: nextMenuItems });
+                      setStatus("菜單已保存到後台。");
+                    } catch (err) {
+                      setStatus(err instanceof Error ? err.message : "菜單保存失敗，請稍後再試。");
+                    } finally {
+                      setMenuSaving(false);
+                    }
+                  }}
+                  type="button"
+                >
+                  保存菜單
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-slate-900">分類</div>
+                  <button
+                    className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+                    onClick={() =>
+                      setMenuDraft((current) => ({
+                        ...current,
+                        categories: [
+                          ...current.categories,
+                          { id: crypto.randomUUID(), name: "新分類" },
+                        ],
+                      }))
+                    }
+                    type="button"
+                  >
+                    新增分類
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {menuDraft.categories.map((category) => (
+                    <input
+                      key={category.id}
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      onChange={(event) =>
+                        setMenuDraft((current) => ({
+                          ...current,
+                          categories: current.categories.map((item) =>
+                            item.id === category.id ? { ...item, name: event.target.value } : item,
+                          ),
+                        }))
+                      }
+                      value={category.name}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">菜品</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      規格（specGroups）使用 JSON 編輯：保持現有結構即可。
+                    </div>
+                  </div>
+                  <button
+                    className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+                    onClick={() =>
+                      setMenuDraft((current) => ({
+                        ...current,
+                        menuItems: [
+                          ...current.menuItems,
+                          {
+                            id: crypto.randomUUID(),
+                            categoryId: current.categories[0]?.id ?? "cat",
+                            name: "新菜品",
+                            price: 0,
+                            printerGroup: "kitchen",
+                          },
+                        ],
+                      }))
+                    }
+                    type="button"
+                  >
+                    新增菜品
+                  </button>
+                </div>
+
+                <div className="mt-4 overflow-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="text-left text-xs font-semibold text-slate-500">
+                        <th className="border-b border-slate-200 py-2 pr-3">名稱</th>
+                        <th className="border-b border-slate-200 py-2 pr-3">分類</th>
+                        <th className="border-b border-slate-200 py-2 pr-3">價格</th>
+                        <th className="border-b border-slate-200 py-2 pr-3">打印分組</th>
+                        <th className="border-b border-slate-200 py-2">規格 JSON</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {menuDraft.menuItems.map((item) => (
+                        <tr key={item.id} className="align-top">
+                          <td className="border-b border-slate-100 py-2 pr-3">
+                            <input
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) =>
+                                setMenuDraft((current) => ({
+                                  ...current,
+                                  menuItems: current.menuItems.map((row) =>
+                                    row.id === item.id ? { ...row, name: event.target.value } : row,
+                                  ),
+                                }))
+                              }
+                              value={item.name}
+                            />
+                          </td>
+                          <td className="border-b border-slate-100 py-2 pr-3">
+                            <select
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) =>
+                                setMenuDraft((current) => ({
+                                  ...current,
+                                  menuItems: current.menuItems.map((row) =>
+                                    row.id === item.id ? { ...row, categoryId: event.target.value } : row,
+                                  ),
+                                }))
+                              }
+                              value={item.categoryId}
+                            >
+                              {menuDraft.categories.map((category) => (
+                                <option key={category.id} value={category.id}>
+                                  {category.name}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="border-b border-slate-100 py-2 pr-3">
+                            <input
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              inputMode="decimal"
+                              onChange={(event) =>
+                                setMenuDraft((current) => ({
+                                  ...current,
+                                  menuItems: current.menuItems.map((row) =>
+                                    row.id === item.id ? { ...row, price: Number(event.target.value) || 0 } : row,
+                                  ),
+                                }))
+                              }
+                              value={String(item.price)}
+                            />
+                          </td>
+                          <td className="border-b border-slate-100 py-2 pr-3">
+                            <select
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) =>
+                                setMenuDraft((current) => ({
+                                  ...current,
+                                  menuItems: current.menuItems.map((row) =>
+                                    row.id === item.id
+                                      ? {
+                                          ...row,
+                                          printerGroup: event.target.value as DevicePrinterConfig["group"],
+                                        }
+                                      : row,
+                                  ),
+                                }))
+                              }
+                              value={item.printerGroup}
+                            >
+                              <option value="kitchen">廚房</option>
+                              <option value="drinks">水吧</option>
+                              <option value="receipt">收據</option>
+                            </select>
+                          </td>
+                          <td className="border-b border-slate-100 py-2">
+                            <textarea
+                              className="min-h-[84px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-mono text-xs"
+                              onChange={(event) =>
+                                setMenuSpecJsonMap((current) => ({ ...current, [item.id]: event.target.value }))
+                              }
+                              value={menuSpecJsonMap[item.id] ?? ""}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </section>
         ) : null}
@@ -573,6 +918,23 @@ export function DeviceSettings() {
                   value={method}
                 />
               ))}
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={saveLocal}
+                type="button"
+              >
+                只保存到本機
+              </button>
+              <button
+                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={syncConfig}
+                type="button"
+              >
+                保存並同步後台
+              </button>
             </div>
           </section>
         ) : null}

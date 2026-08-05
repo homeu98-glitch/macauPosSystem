@@ -368,7 +368,10 @@ export function OnlineOrders() {
                       tableId: table.id,
                       tableName: nextTableName,
                     })
-                      .then(() => setToast({ tone: "success", message: "安排桌台成功。" }))
+                      .then(() => {
+                        setToast({ tone: "success", message: "安排桌台成功，已轉入桌台點餐。" });
+                        setOrders((current) => current.filter((order) => order.id !== assigningOrderId));
+                      })
                       .catch((err) => setToast({ tone: "error", message: err instanceof Error ? err.message : "安排桌台回寫失敗" }));
                     setAssigningOrderId(null);
                   }}

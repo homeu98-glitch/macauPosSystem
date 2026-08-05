@@ -9,6 +9,7 @@ const KEYS = {
   printJobs: "macau-pos/print-jobs",
   localSettings: "macau-pos/local-settings",
   members: "macau-pos/members",
+  offlineMode: "macau-pos/offline-mode",
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -117,4 +118,22 @@ export function loadMembers() {
 
 export function saveMembers(members: MemberProfile[]) {
   writeJson(KEYS.members, members);
+}
+
+export function loadOfflineMode() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(KEYS.offlineMode) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveOfflineMode(enabled: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(KEYS.offlineMode, enabled ? "1" : "0");
+  } catch {
+    // ignore
+  }
 }
