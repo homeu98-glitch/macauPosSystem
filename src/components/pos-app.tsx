@@ -16,6 +16,7 @@ import {
   loadOrders,
   loadPrintJobs,
   loadQueue,
+  loadShiftState,
   loadSoldOutState,
   saveBootstrapCache,
   saveDeviceConfig,
@@ -25,6 +26,7 @@ import {
   savePosLocalSettings,
   savePrintJobs,
   saveQueue,
+  saveShiftState,
   saveSoldOutState,
 } from "@/lib/storage";
 import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
@@ -121,6 +123,7 @@ export function PosApp() {
   const [settlementFlash, setSettlementFlash] = useState(false);
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
+  const [shift, setShift] = useState(() => loadShiftState());
   const longPressTimerRef = useRef<number | null>(null);
 
   const networkOnline = !offlineMode;
@@ -156,6 +159,19 @@ export function PosApp() {
     }
     window.addEventListener("pos-soldout-changed", onSoldOutChanged as EventListener);
     return () => window.removeEventListener("pos-soldout-changed", onSoldOutChanged as EventListener);
+  }, []);
+
+  useEffect(() => {
+    function onShiftChanged(event: Event) {
+      const detail = (event as CustomEvent<{ shift?: ReturnType<typeof loadShiftState> }>).detail;
+      if (detail?.shift) {
+        setShift(detail.shift);
+      } else {
+        setShift(loadShiftState());
+      }
+    }
+    window.addEventListener("pos-shift-changed", onShiftChanged as EventListener);
+    return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
   }, []);
 
   function isItemSoldOut(menuItemId: string) {
@@ -197,6 +213,18 @@ export function PosApp() {
         });
       }
     }
+  }
+
+  function startWork() {
+    const next = {
+      ...shift,
+      openedAt: new Date().toISOString(),
+      closedAt: undefined,
+    };
+    setShift(next);
+    saveShiftState(next);
+    window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
+    setToast({ tone: "success", message: "已開工，開始今日營業。" });
   }
 
   useEffect(() => {
@@ -1993,6 +2021,25 @@ export function PosApp() {
           }`}
         >
           {toast.message}
+        </div>
+      ) : null}
+
+      {!shift.openedAt ? (
+        <div className="fixed inset-0 z-[52] grid place-items-center bg-slate-950/55 p-4 lg:pl-[72px]">
+          <div className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-2xl">
+            <div className="text-sm font-semibold tracking-widest text-orange-500">今日未開工</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">開始今日營業</div>
+            <div className="mt-2 text-sm text-slate-500">
+              未開工前不能點餐。按下方按鈕後，今日班次正式開始。
+            </div>
+            <button
+              className="mt-6 w-full rounded-3xl bg-orange-500 px-6 py-5 text-xl font-semibold text-white hover:bg-orange-600"
+              onClick={startWork}
+              type="button"
+            >
+              開工
+            </button>
+          </div>
         </div>
       ) : null}
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { loadMembers, saveMembers } from "@/lib/storage";
 import { MemberCoupon, MemberProfile } from "@/lib/types";
 
@@ -25,6 +26,7 @@ export function MembersPage() {
   const [createName, setCreateName] = useState("");
   const [createPhone, setCreatePhone] = useState("");
   const [createHint, setCreateHint] = useState("");
+  const [padTarget, setPadTarget] = useState<string>("search");
 
   useEffect(() => {
     async function load() {
@@ -98,6 +100,28 @@ export function MembersPage() {
     }
   }
 
+  const selectedMemberForPad =
+    padTarget.startsWith("recharge:") ? members.find((member) => member.id === padTarget.replace("recharge:", "")) ?? null : null;
+
+  const padValue =
+    padTarget === "search"
+      ? phone
+      : selectedMemberForPad
+        ? rechargeValues[selectedMemberForPad.id] ?? ""
+        : "";
+
+  function updatePadValue(value: string) {
+    if (padTarget === "search") {
+      setPhone(value.replace(/\D/g, "").slice(0, 8));
+      return;
+    }
+
+    if (selectedMemberForPad) {
+      const normalized = value.replace(/[^\d.]/g, "");
+      setRechargeValues((current) => ({ ...current, [selectedMemberForPad.id]: normalized }));
+    }
+  }
+
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
@@ -112,6 +136,7 @@ export function MembersPage() {
                 inputMode="numeric"
                 maxLength={8}
                 onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                onFocus={() => setPadTarget("search")}
                 placeholder="輸入 8 位手機號碼"
                 value={phone}
               />
@@ -174,6 +199,7 @@ export function MembersPage() {
                       onChange={(event) =>
                         setRechargeValues((current) => ({ ...current, [member.id]: event.target.value }))
                       }
+                      onFocus={() => setPadTarget(`recharge:${member.id}`)}
                       placeholder="充值金額"
                       value={rechargeValues[member.id] ?? ""}
                     />
@@ -190,6 +216,27 @@ export function MembersPage() {
             </div>
           </div>
         </main>
+
+        <div className="hidden w-[320px] shrink-0 lg:block">
+          <FixedNumberPad
+            confirmLabel={padTarget === "search" ? "搜尋" : "完成"}
+            subtitle={
+              padTarget === "search"
+                ? "輸入會員手機號碼"
+                : selectedMemberForPad
+                  ? `正在輸入：${selectedMemberForPad.name} 充值金額`
+                  : "點選左邊輸入框後可使用鍵盤"
+            }
+            title="數字鍵盤"
+            value={padValue}
+            onChange={updatePadValue}
+            onConfirm={() => {
+              if (padTarget.startsWith("recharge:") && selectedMemberForPad) {
+                rechargeMember(selectedMemberForPad.id);
+              }
+            }}
+          />
+        </div>
       </div>
 
       {createOpen ? (
