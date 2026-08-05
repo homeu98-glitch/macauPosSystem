@@ -156,10 +156,14 @@ export interface PosOrder {
   serviceChargeAmount: number;
   discountAmount: number;
   total: number;
+  prepaidAmount?: number;
+  onlineOrderId?: string;
   paymentMethod?: PaymentMethod;
   createdAt: string;
   updatedAt: string;
 }
+
+export type OnlinePaymentStatus = "paid" | "unpaid";
 
 export interface QueueEvent {
   id: string;

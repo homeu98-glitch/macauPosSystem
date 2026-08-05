@@ -109,10 +109,12 @@ export function PosApp() {
   const [membersCache, setMembersCache] = useState<MemberProfile[]>(() => loadMembers());
   const [memberPhone, setMemberPhone] = useState("");
   const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
+  const [memberSearchHint, setMemberSearchHint] = useState<string>("");
   const [useMemberBalance, setUseMemberBalance] = useState(true);
   const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
+  const [settlementFlash, setSettlementFlash] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -136,46 +138,7 @@ export function PosApp() {
   }, []);
 
   useEffect(() => {
-    async function loadRuntimeState() {
-      try {
-        const response = await fetch("/api/pos/state");
-        const payload = (await response.json()) as {
-          orders?: PosOrder[];
-          queue?: QueueEvent[];
-          printJobs?: PrintJob[];
-          members?: MemberProfile[];
-          localSettings?: PosLocalSettings;
-          deviceConfig?: DeviceConfig | null;
-        };
-
-        if (Array.isArray(payload.orders)) {
-          setOrders(payload.orders);
-          saveOrders(payload.orders);
-        }
-        if (Array.isArray(payload.queue)) {
-          setQueue(payload.queue);
-          saveQueue(payload.queue);
-        }
-        if (Array.isArray(payload.printJobs)) {
-          setPrintJobs(payload.printJobs);
-          savePrintJobs(payload.printJobs);
-        }
-        if (Array.isArray(payload.members)) {
-          setMembersCache(payload.members);
-          saveMembers(payload.members);
-        }
-        if ("localSettings" in payload && payload.localSettings) {
-          savePosLocalSettings(payload.localSettings);
-        }
-        if ("deviceConfig" in payload && payload.deviceConfig) {
-          saveDeviceConfig(payload.deviceConfig);
-        }
-      } catch {
-        // 保留本機快取
-      }
-    }
-
-    void loadRuntimeState();
+    void refreshRuntimeState();
   }, []);
 
   useEffect(() => {
@@ -190,6 +153,51 @@ export function PosApp() {
     const timer = window.setTimeout(() => setOrderSuccessFlash(false), 1000);
     return () => window.clearTimeout(timer);
   }, [orderSuccessFlash]);
+
+  useEffect(() => {
+    if (!settlementFlash) return;
+    const timer = window.setTimeout(() => setSettlementFlash(false), 1000);
+    return () => window.clearTimeout(timer);
+  }, [settlementFlash]);
+
+  async function refreshRuntimeState() {
+    try {
+      const response = await fetch("/api/pos/state");
+      const payload = (await response.json()) as {
+        orders?: PosOrder[];
+        queue?: QueueEvent[];
+        printJobs?: PrintJob[];
+        members?: MemberProfile[];
+        localSettings?: PosLocalSettings;
+        deviceConfig?: DeviceConfig | null;
+      };
+
+      if (Array.isArray(payload.orders)) {
+        setOrders(payload.orders);
+        saveOrders(payload.orders);
+      }
+      if (Array.isArray(payload.queue)) {
+        setQueue(payload.queue);
+        saveQueue(payload.queue);
+      }
+      if (Array.isArray(payload.printJobs)) {
+        setPrintJobs(payload.printJobs);
+        savePrintJobs(payload.printJobs);
+      }
+      if (Array.isArray(payload.members)) {
+        setMembersCache(payload.members);
+        saveMembers(payload.members);
+      }
+      if (payload.localSettings) {
+        savePosLocalSettings(payload.localSettings);
+      }
+      if (payload.deviceConfig) {
+        saveDeviceConfig(payload.deviceConfig);
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   const activeTable = useMemo(
     () => bootstrap?.tables.find((table) => table.id === activeTableId) ?? null,
@@ -292,7 +300,8 @@ export function PosApp() {
     }
     return Math.min(totalDiscount, baseAmount);
   }, [discountAmount, memberMatch, paymentBase.total, selectedCouponIds]);
-  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+  const prepaidAmount = (currentSettlementOrder?.prepaidAmount ?? activeOrder?.prepaidAmount ?? 0) || 0;
+  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - couponDiscount - prepaidAmount);
   const memberDeduction = useMemo(() => {
     if (!useMemberBalance || !memberMatch) return 0;
     return Math.min(memberMatch.balance, payableBeforeMember);
@@ -304,6 +313,7 @@ export function PosApp() {
     discountAmount: discountAmount + couponDiscount,
     manualDiscountAmount: discountAmount,
     couponDiscount,
+    prepaidAmount,
     memberDeduction,
     total: Math.max(0, payableBeforeMember - memberDeduction),
   };
@@ -385,7 +395,11 @@ export function PosApp() {
     setPosMode("order");
   }
 
-  function upsertCurrentOrder(nextStatus: "draft" | "sent_to_kitchen", allowEmpty = false) {
+  function upsertCurrentOrder(
+    nextStatus: "draft" | "sent_to_kitchen",
+    allowEmpty = false,
+    newLocalOrderNo?: string,
+  ) {
     if (!bootstrap || !activeTable) return null;
     if (!allowEmpty && cartItems.length === 0) return null;
 
@@ -412,7 +426,7 @@ export function PosApp() {
         }
       : {
           id: uid("order"),
-          localOrderNo: `POS-${new Date().getTime().toString().slice(-6)}`,
+          localOrderNo: newLocalOrderNo ?? `訂單${new Date().getTime().toString().slice(-2)}`,
           tableId: activeTable.id,
           tableName: activeTable.name,
           status: nextStatus,
@@ -450,6 +464,7 @@ export function PosApp() {
     setMemberMatch(null);
     setSelectedPaymentMethod("");
     setSelectedCouponIds([]);
+    void refreshRuntimeState();
   }
 
   function startItemLongPress(itemKey: string, orderedQty: number) {
@@ -787,11 +802,26 @@ export function PosApp() {
     void syncNow(nextQueue);
   }
 
-  function sendToKitchen() {
+  async function sendToKitchen() {
     if (!bootstrap || !activeTable || cartItems.length === 0) return;
 
     const timestamp = new Date().toISOString();
-    const order = upsertCurrentOrder("sent_to_kitchen");
+    let nextOrderNo: string | undefined;
+    if (!activeOrderId && !tableOrderMap.get(activeTable.id)) {
+      try {
+        const response = await fetch("/api/pos/sequence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "pos", storeId: bootstrap.storeId }),
+        });
+        const payload = (await response.json()) as { display?: string };
+        nextOrderNo = payload.display;
+      } catch {
+        // fallback
+      }
+    }
+
+    const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo);
     if (!order) return;
 
     const baseMap = new Map<string, number>();
@@ -885,7 +915,7 @@ export function PosApp() {
       unsettledOrder;
     if (!targetOrder) return;
 
-    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
+    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: "settled",
@@ -939,6 +969,7 @@ export function PosApp() {
         memberDeduction,
         couponDiscount,
         couponIds: selectedCouponIds,
+        prepaidAmount,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedOrder.updatedAt,
@@ -963,6 +994,56 @@ export function PosApp() {
         ? `已完成 ${updatedOrder.localOrderNo} 結帳。`
         : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
     });
+    setSettlementFlash(true);
+    backToTables();
+  }
+
+  function completeOnlinePaidOrder() {
+    if (!bootstrap) return;
+    const targetOrder =
+      (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
+      (activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
+      unsettledOrder;
+    if (!targetOrder) return;
+
+    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "settled",
+      paymentMethod: "線上已支付",
+      discountAmount: discountAmount + couponDiscount,
+      total: settledGrandTotal,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const nextOrders = orders.map((order) => (order.id === targetOrder.id ? updatedOrder : order));
+    persistOrders(nextOrders);
+
+    const paymentEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_SETTLED",
+      entityId: updatedOrder.id,
+      payload: {
+        orderId: updatedOrder.id,
+        total: settledGrandTotal,
+        receivedAmount: 0,
+        changeDue: 0,
+        discountAmount: discountAmount + couponDiscount,
+        paymentMethod: updatedOrder.paymentMethod,
+        memberPhone: null,
+        memberDeduction: 0,
+        couponDiscount,
+        couponIds: selectedCouponIds,
+        prepaidAmount,
+      },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: updatedOrder.updatedAt,
+    };
+
+    pushEvents([paymentEvent]);
+    setToast({ tone: "success", message: `客人已支付，已完成 ${updatedOrder.localOrderNo}。` });
+    setSettlementFlash(true);
+    backToTables();
   }
 
   function openSettlementModal() {
@@ -1310,7 +1391,7 @@ export function PosApp() {
               <div className="mt-2 grid gap-2">
                 <button
                   className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
-                  onClick={sendToKitchen}
+                  onClick={() => void sendToKitchen()}
                   type="button"
                 >
                   {isAddOnOrder ? "加單" : "下單"}
@@ -1495,8 +1576,18 @@ export function PosApp() {
                       {formatMoney(paymentSummary.couponDiscount, bootstrap.currency)}
                     </span>
                   </div>
+                  {paymentSummary.prepaidAmount > 0 ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">客人已支付</span>
+                      <span className="font-semibold text-emerald-700">
+                        {formatMoney(paymentSummary.prepaidAmount, bootstrap.currency)}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-500">應收</span>
+                    <span className="text-slate-500">
+                      {paymentSummary.prepaidAmount > 0 ? "剩餘需收" : "應收"}
+                    </span>
                     <span className="text-2xl font-semibold text-orange-600">
                       {formatMoney(paymentSummary.total, bootstrap.currency)}
                     </span>
@@ -1547,12 +1638,33 @@ export function PosApp() {
                       />
                       <button
                         className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => setMemberMatch(membersCache.find((member) => member.phone === memberPhone) ?? null)}
+                        onClick={() => {
+                          setMemberSearchHint("");
+                          setMemberMatch(null);
+                          if (!/^\d{8}$/.test(memberPhone)) {
+                            setMemberSearchHint("請輸入 8 位手機號碼。");
+                            return;
+                          }
+                          void (async () => {
+                            try {
+                              const response = await fetch(`/api/members?phone=${memberPhone}`);
+                              const payload = (await response.json()) as { members?: MemberProfile[] };
+                              const match = (payload.members ?? []).find((member) => member.phone === memberPhone) ?? null;
+                              setMemberMatch(match);
+                              setMemberSearchHint(match ? "" : "找不到會員。");
+                            } catch {
+                              const match = membersCache.find((member) => member.phone === memberPhone) ?? null;
+                              setMemberMatch(match);
+                              setMemberSearchHint(match ? "" : "找不到會員。");
+                            }
+                          })();
+                        }}
                         type="button"
                       >
                         搜尋
                       </button>
                     </div>
+                    {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
                     {memberMatch ? (
                       <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
                         <div className="font-semibold text-slate-900">
@@ -1660,10 +1772,18 @@ export function PosApp() {
 
                 <button
                   className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
-                  onClick={() => confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金")}
+                  onClick={() => {
+                    if (paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0) {
+                      completeOnlinePaidOrder();
+                      return;
+                    }
+                    confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
+                  }}
                   type="button"
                 >
-                  已結帳
+                  {paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
+                    ? "客人已支付，完成訂單"
+                    : "去結帳"}
                 </button>
               </div>
             </div>
@@ -1778,6 +1898,14 @@ export function PosApp() {
         <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
           <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
             下單成功
+          </div>
+        </div>
+      ) : null}
+
+      {settlementFlash ? (
+        <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
+          <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
+            已結帳
           </div>
         </div>
       ) : null}

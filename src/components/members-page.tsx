@@ -21,6 +21,10 @@ export function MembersPage() {
   const [phone, setPhone] = useState("");
   const [members, setMembers] = useState<MemberProfile[]>(() => loadMembers());
   const [rechargeValues, setRechargeValues] = useState<Record<string, string>>({});
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createPhone, setCreatePhone] = useState("");
+  const [createHint, setCreateHint] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -63,6 +67,37 @@ export function MembersPage() {
     })();
   }
 
+  async function createMember() {
+    setCreateHint("");
+    const name = createName.trim();
+    const phoneValue = createPhone.replace(/\D/g, "").slice(0, 8);
+    if (!name || !/^\d{8}$/.test(phoneValue)) {
+      setCreateHint("請填寫姓名及 8 位手機號碼。");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create", name, phone: phoneValue }),
+      });
+      const payload = (await response.json()) as { ok: boolean; member?: MemberProfile; error?: string };
+      if (!payload.ok || !payload.member) {
+        throw new Error(payload.error ?? "新增失敗");
+      }
+
+      const nextMembers = [payload.member, ...members];
+      setMembers(nextMembers);
+      saveMembers(nextMembers);
+      setCreateName("");
+      setCreatePhone("");
+      setCreateOpen(false);
+    } catch (err) {
+      setCreateHint(err instanceof Error ? err.message : "新增會員失敗");
+    }
+  }
+
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
@@ -71,14 +106,26 @@ export function MembersPage() {
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="text-lg font-semibold text-slate-900">會員</div>
             <div className="mt-1 text-sm text-slate-500">搜尋手機號碼 8 位數字，查看會員餘額、優惠券與充值。</div>
-            <input
-              className="mt-3 w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              inputMode="numeric"
-              maxLength={8}
-              onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
-              placeholder="輸入 8 位手機號碼"
-              value={phone}
-            />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                inputMode="numeric"
+                maxLength={8}
+                onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                placeholder="輸入 8 位手機號碼"
+                value={phone}
+              />
+              <button
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  setCreateHint("");
+                  setCreateOpen(true);
+                }}
+                type="button"
+              >
+                新增會員
+              </button>
+            </div>
             {!validSearch ? <div className="mt-2 text-xs text-red-600">只可輸入 8 位數字</div> : null}
           </div>
 
@@ -144,6 +191,51 @@ export function MembersPage() {
           </div>
         </main>
       </div>
+
+      {createOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-slate-900">新增會員</div>
+            <div className="mt-4 grid gap-3">
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">姓名</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setCreateName(event.target.value)}
+                  value={createName}
+                />
+              </label>
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">手機號碼（8 位）</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  inputMode="numeric"
+                  maxLength={8}
+                  onChange={(event) => setCreatePhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                  value={createPhone}
+                />
+              </label>
+              {createHint ? <div className="text-sm text-red-600">{createHint}</div> : null}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setCreateOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => void createMember()}
+                type="button"
+              >
+                確認新增
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

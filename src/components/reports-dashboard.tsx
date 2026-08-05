@@ -10,7 +10,7 @@ function formatMoney(amount: number) {
 }
 
 export function ReportsDashboard() {
-  const [range, setRange] = useState<"today" | "30d">("today");
+  const [range, setRange] = useState<"all" | "yesterday" | "7d" | "30d">("30d");
   const [orders, setOrders] = useState<PosOrder[]>([]);
 
   useEffect(() => {
@@ -28,21 +28,32 @@ export function ReportsDashboard() {
   }, []);
 
   const filteredOrders = useMemo(() => {
+    const settled = orders.filter((order) => order.status === "settled");
+    if (range === "all") {
+      return settled.slice().sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    }
+
     const now = new Date();
-    return orders
-      .filter((order) => {
-        if (order.status !== "settled") return false;
-        const date = new Date(order.updatedAt);
-        if (range === "today") {
-          return (
-            date.getFullYear() === now.getFullYear() &&
-            date.getMonth() === now.getMonth() &&
-            date.getDate() === now.getDate()
-          );
-        }
-        const diff = now.getTime() - date.getTime();
-        return diff <= 30 * 24 * 60 * 60 * 1000;
-      })
+    if (range === "yesterday") {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 1);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setHours(23, 59, 59, 999);
+      return settled
+        .filter((order) => {
+          const t = Date.parse(order.updatedAt);
+          return t >= start.getTime() && t <= end.getTime();
+        })
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    }
+
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    if (range === "7d") start.setDate(now.getDate() - 7);
+    if (range === "30d") start.setDate(now.getDate() - 30);
+    return settled
+      .filter((order) => Date.parse(order.updatedAt) >= start.getTime())
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [orders, range]);
 
@@ -67,7 +78,44 @@ export function ReportsDashboard() {
     }));
   }, [filteredOrders]);
 
-  const detailTitle = range === "today" ? "今日訂單明細" : "最近 30 天訂單明細";
+  const detailTitle =
+    range === "all"
+      ? "全部訂單明細"
+      : range === "yesterday"
+        ? "昨天訂單明細"
+        : range === "7d"
+          ? "最近 7 天訂單明細"
+          : "最近 30 天訂單明細";
+
+  function exportCsv() {
+    const rows: Array<Record<string, string | number>> = filteredOrders.map((order) => ({
+      單號: order.localOrderNo,
+      桌號: order.tableName,
+      狀態: order.status,
+      金額: order.total,
+      折扣: order.discountAmount,
+      支付方式: order.paymentMethod ?? "",
+      更新時間: order.updatedAt,
+    }));
+
+    const headers = Object.keys(rows[0] ?? { 單號: "" });
+    const csvLines = [
+      headers.join(","),
+      ...rows.map((row) =>
+        headers
+          .map((key) => `"${String(row[key] ?? "").replace(/"/g, '""')}"`)
+          .join(","),
+      ),
+    ];
+    const content = "\uFEFF" + csvLines.join("\n");
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `報表_${range}_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
@@ -81,23 +129,29 @@ export function ReportsDashboard() {
                 <div className="mt-1 text-sm text-slate-500">讓商家查看今天或最近 30 天營業額。</div>
               </div>
               <div className="flex items-center gap-2">
+                {[
+                  ["all", "全部"],
+                  ["yesterday", "昨天"],
+                  ["7d", "最近 7 天"],
+                  ["30d", "最近 30 天"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                      range === key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setRange(key as typeof range)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
                 <button
-                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                    range === "today" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                  }`}
-                  onClick={() => setRange("today")}
+                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={exportCsv}
                   type="button"
                 >
-                  今日
-                </button>
-                <button
-                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                    range === "30d" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                  }`}
-                  onClick={() => setRange("30d")}
-                  type="button"
-                >
-                  最近 30 天
+                  導出 CSV
                 </button>
               </div>
             </div>

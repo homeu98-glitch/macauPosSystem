@@ -55,6 +55,8 @@ export async function GET() {
         serviceChargeAmount: Number(order.service_charge_amount ?? 0),
         discountAmount: Number(order.discount_amount ?? 0),
         total: Number(order.total ?? 0),
+        prepaidAmount: Number(order.prepaid_amount ?? 0),
+        onlineOrderId: order.online_order_id ?? undefined,
         paymentMethod: order.payment_method ?? undefined,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
@@ -114,4 +116,3 @@ export async function GET() {
     localSettings: deviceConfigRow?.local_settings ?? defaultPosLocalSettings,
   });
 }
-

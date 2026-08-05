@@ -38,6 +38,8 @@ export async function POST(request: Request) {
               service_charge_amount: order.serviceChargeAmount,
               discount_amount: order.discountAmount,
               total: order.total,
+              prepaid_amount: order.prepaidAmount ?? 0,
+              online_order_id: order.onlineOrderId ?? null,
               payment_method: order.paymentMethod ?? null,
               created_at: order.createdAt,
               updated_at: order.updatedAt,

@@ -61,6 +61,8 @@ export async function GET(request: Request) {
         sourceId: order.id,
         type: order.type,
         status: order.status,
+        paymentStatus: (order.payment_status ?? "unpaid") as "paid" | "unpaid",
+        paidAmount: Number(order.paid_amount ?? 0),
         customerName: order.customer_name,
         total: Number(order.total ?? 0),
         createdAt: order.created_at,
@@ -77,6 +79,7 @@ export async function POST(request: Request) {
     action?: "accept" | "assign_table" | "auto_accept" | "handoff_to_rider";
     orderId?: string;
     tableName?: string;
+    tableId?: string;
     orderIds?: string[];
     riderFee?: number;
     riderNote?: string;
@@ -97,6 +100,7 @@ export async function POST(request: Request) {
   }
 
   if (payload.action === "accept" && payload.orderId) {
+    const { data: orderRow } = await supabase.from("online_orders").select("*").eq("id", payload.orderId).maybeSingle();
     const { error } = await supabase
       .from("online_orders")
       .update({ status: "accepted", accepted_at: new Date().toISOString() })
@@ -105,9 +109,31 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
+
+    // 自取單：生成「自取XX」單號（獨立序號）
+    if (orderRow?.type === "pickup" && !orderRow.order_no) {
+      const { data: seq } = await supabase.rpc("next_daily_sequence", {
+        p_store_id: orderRow.store_id ?? "macau-store-a",
+        p_kind: "pickup",
+      });
+      if (typeof seq === "number") {
+        const display = `自取${String(seq).padStart(2, "0")}`;
+        await supabase.from("online_orders").update({ order_no: display }).eq("id", payload.orderId);
+      }
+    }
   }
 
   if (payload.action === "assign_table" && payload.orderId) {
+    const { data: onlineOrder, error: orderError } = await supabase
+      .from("online_orders")
+      .select("*, online_order_items(product_name, qty)")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+
+    if (orderError || !onlineOrder) {
+      return NextResponse.json({ ok: false, error: orderError?.message ?? "線上訂單不存在" }, { status: 500 });
+    }
+
     const { error } = await supabase
       .from("online_orders")
       .update({ status: "accepted", assigned_table_name: payload.tableName ?? null })
@@ -115,6 +141,65 @@ export async function POST(request: Request) {
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+
+    // 堂食：選桌後把菜品轉入 POS 桌台訂單
+    if (onlineOrder.type === "dine_in" && payload.tableId) {
+      const { data: bootstrapRow } = await supabase
+        .from("pos_bootstrap_config")
+        .select("*")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const menuItems: Array<{ id: string; name: string; price: number; printerGroup: string }> = Array.isArray(bootstrapRow?.menu_items)
+        ? bootstrapRow!.menu_items
+        : [];
+
+      const mappedItems: Array<{
+        menuItemId: string;
+        name: string;
+        quantity: number;
+        price: number;
+        printerGroup: "kitchen" | "drinks" | "receipt";
+      }> = (onlineOrder.online_order_items ?? []).map((item: { product_name: string; qty: number }) => {
+        const menu = menuItems.find((m) => m.name === item.product_name);
+        return {
+          menuItemId: menu?.id ?? `ext-${item.product_name}`,
+          name: item.product_name,
+          quantity: item.qty,
+          price: Number(menu?.price ?? 0),
+          printerGroup: (menu?.printerGroup ?? "kitchen") as "kitchen" | "drinks" | "receipt",
+        };
+      });
+
+      const subtotal = mappedItems.reduce((sum, row) => sum + row.price * row.quantity, 0);
+      const taxAmount = 0;
+      const total = subtotal + taxAmount;
+      const prepaidAmount = Number(onlineOrder.paid_amount ?? 0);
+
+      await supabase.from("pos_orders").upsert(
+        {
+          id: `online-${onlineOrder.id}`,
+          local_order_no: onlineOrder.order_no ?? onlineOrder.id,
+          store_id: onlineOrder.store_id ?? "macau-store-a",
+          table_id: payload.tableId,
+          table_name: payload.tableName ?? "",
+          status: "sent_to_kitchen",
+          items: mappedItems,
+          subtotal,
+          tax_amount: taxAmount,
+          service_charge_amount: 0,
+          discount_amount: 0,
+          total,
+          prepaid_amount: prepaidAmount,
+          online_order_id: onlineOrder.id,
+          payment_method: null,
+          created_at: onlineOrder.created_at ?? new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" },
+      );
     }
   }
 

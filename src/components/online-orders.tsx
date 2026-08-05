@@ -12,6 +12,8 @@ type OnlineOrder = {
   sourceId?: string;
   type: OrderTypeKey;
   status: string;
+  paymentStatus?: "paid" | "unpaid";
+  paidAmount?: number;
   customerName?: string;
   phone?: string;
   total?: number;
@@ -59,6 +61,7 @@ export function OnlineOrders() {
     orderId?: string;
     orderIds?: string[];
     tableName?: string;
+    tableId?: string;
     riderFee?: number;
     riderNote?: string;
   }) {
@@ -278,6 +281,15 @@ export function OnlineOrders() {
                   <div className="mt-3 text-sm text-slate-700">
                     {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
                   </div>
+                  <div className="mt-1 text-sm text-slate-700">
+                    支付：{" "}
+                    <span className={order.paymentStatus === "paid" ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                      {order.paymentStatus === "paid" ? "已支付" : "未支付"}
+                    </span>
+                    {order.paymentStatus === "paid" ? (
+                      <span className="text-slate-500">（{formatMoney(order.paidAmount ?? order.total ?? 0)}）</span>
+                    ) : null}
+                  </div>
                   <div className="mt-1 text-sm text-slate-500">
                     {assignedTable ? `桌台：${assignedTable}` : order.type === "dine_in" ? "堂食未安排桌台" : "未需安排桌台"}
                   </div>
@@ -353,6 +365,7 @@ export function OnlineOrders() {
                     void writeBackOrder({
                       action: "assign_table",
                       orderId: (orders.find((order) => order.id === assigningOrderId)?.sourceId ?? assigningOrderId) as string,
+                      tableId: table.id,
                       tableName: nextTableName,
                     })
                       .then(() => setToast({ tone: "success", message: "安排桌台成功。" }))

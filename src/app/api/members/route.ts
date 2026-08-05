@@ -72,14 +72,61 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const payload = (await request.json()) as {
-    action?: "recharge";
+    action?: "recharge" | "create";
     memberId?: string;
     amount?: number;
+    name?: string;
+    phone?: string;
+    level?: string;
   };
 
   const supabase = getSupabaseServerClient();
-  if (!supabase || payload.action !== "recharge" || !payload.memberId) {
+  if (!supabase) {
     return NextResponse.json({ ok: true });
+  }
+
+  if (payload.action === "create") {
+    const name = (payload.name ?? "").trim();
+    const phone = (payload.phone ?? "").trim();
+    if (!name || !/^\d{8}$/.test(phone)) {
+      return NextResponse.json({ ok: false, error: "姓名或手機號碼不正確" }, { status: 400 });
+    }
+
+    const memberId = crypto.randomUUID();
+    const { data, error } = await supabase
+      .from("pos_members")
+      .insert({
+        id: memberId,
+        store_id: "macau-store-a",
+        name,
+        phone,
+        balance: 0,
+        level: payload.level ?? null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .select("*")
+      .maybeSingle();
+
+    if (error || !data) {
+      return NextResponse.json({ ok: false, error: error?.message ?? "新增會員失敗" }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      member: {
+        id: data.id,
+        name: data.name,
+        phone: data.phone,
+        balance: Number(data.balance ?? 0),
+        level: data.level ?? undefined,
+        coupons: [],
+      },
+    });
+  }
+
+  if (payload.action !== "recharge" || !payload.memberId) {
+    return NextResponse.json({ ok: false, error: "不支援的操作" }, { status: 400 });
   }
 
   const { data: member, error: readError } = await supabase
