@@ -1,5 +1,10 @@
 import { DeviceSettings } from "@/components/device-settings";
+import { AuthGuard } from "@/components/auth-guard";
 
 export default function SettingsPage() {
-  return <DeviceSettings />;
+  return (
+    <AuthGuard>
+      <DeviceSettings />
+    </AuthGuard>
+  );
 }

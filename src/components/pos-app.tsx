@@ -16,6 +16,7 @@ import {
   loadOrders,
   loadPrintJobs,
   loadQueue,
+  loadSoldOutState,
   saveBootstrapCache,
   saveDeviceConfig,
   saveMembers,
@@ -24,6 +25,7 @@ import {
   savePosLocalSettings,
   savePrintJobs,
   saveQueue,
+  saveSoldOutState,
 } from "@/lib/storage";
 import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
@@ -118,6 +120,7 @@ export function PosApp() {
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
   const [settlementFlash, setSettlementFlash] = useState(false);
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
+  const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const longPressTimerRef = useRef<number | null>(null);
 
   const networkOnline = !offlineMode;
@@ -141,6 +144,60 @@ export function PosApp() {
     window.addEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
     return () => window.removeEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
   }, []);
+
+  useEffect(() => {
+    function onSoldOutChanged(event: Event) {
+      const detail = (event as CustomEvent<{ soldOutMap?: ReturnType<typeof loadSoldOutState> }>).detail;
+      if (detail?.soldOutMap) {
+        setSoldOutMap(detail.soldOutMap);
+      } else {
+        setSoldOutMap(loadSoldOutState());
+      }
+    }
+    window.addEventListener("pos-soldout-changed", onSoldOutChanged as EventListener);
+    return () => window.removeEventListener("pos-soldout-changed", onSoldOutChanged as EventListener);
+  }, []);
+
+  function isItemSoldOut(menuItemId: string) {
+    const state = soldOutMap[menuItemId];
+    if (!state) return false;
+    return state.remainingQty <= 0;
+  }
+
+  function consumeSoldOut(items: OrderItem[]) {
+    if (!bootstrap) return;
+    const next = { ...soldOutMap };
+    const soldOutTriggered: Array<{ id: string; name: string }> = [];
+
+    for (const row of items) {
+      const state = next[row.menuItemId];
+      if (!state) continue;
+      const remaining = Math.max(0, state.remainingQty - row.quantity);
+      next[row.menuItemId] = { ...state, remainingQty: remaining, updatedAt: new Date().toISOString() };
+      if (state.remainingQty > 0 && remaining === 0) {
+        soldOutTriggered.push({ id: row.menuItemId, name: row.name });
+      }
+    }
+
+    setSoldOutMap(next);
+    saveSoldOutState(next);
+    window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: next } }));
+
+    if (!offlineMode) {
+      for (const item of soldOutTriggered) {
+        void fetch("/api/inventory/soldout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId: bootstrap.storeId,
+            menuItemId: item.id,
+            name: item.name,
+            soldOutAt: new Date().toISOString(),
+          }),
+        });
+      }
+    }
+  }
 
   useEffect(() => {
     async function bootstrapApp() {
@@ -648,6 +705,10 @@ export function PosApp() {
   }
 
   function addMenuItem(item: MenuItem) {
+    if (isItemSoldOut(item.id)) {
+      setToast({ tone: "info", message: `${item.name} 已售罄。` });
+      return;
+    }
     if (item.specGroups?.length) {
       openSpecPicker(item);
       return;
@@ -915,6 +976,7 @@ export function PosApp() {
     }));
 
     pushEvents([orderEvent, ...printEvents]);
+    consumeSoldOut(printTargetItems);
     setActiveOrderId(order.id);
     setDiscountValue(String(order.discountAmount));
     setReceivedAmount("");
@@ -1346,10 +1408,14 @@ export function PosApp() {
 
             <div className="flex-1 overflow-auto p-4">
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                {filteredMenuItems.map((item) => (
+                {filteredMenuItems.map((item) => {
+                  const soldOut = isItemSoldOut(item.id);
+                  return (
                   <button
                     key={item.id}
-                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-orange-300"
+                    className={`rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
+                      soldOut ? "opacity-60" : "hover:-translate-y-0.5 hover:border-orange-300"
+                    }`}
                     onClick={() => addMenuItem(item)}
                     type="button"
                   >
@@ -1359,18 +1425,28 @@ export function PosApp() {
                         <div className="mt-2 text-xs text-slate-500">
                           {localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup}
                         </div>
+                        {soldOut ? (
+                          <div className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                            售罄
+                          </div>
+                        ) : null}
                       </div>
                       <div className="mt-4 flex items-center justify-between">
                         <div className="text-base font-semibold text-slate-900">
                           {formatMoney(item.price, bootstrap.currency)}
                         </div>
-                        <div className="rounded-full bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-600">
-                          加入
+                        <div
+                          className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                            soldOut ? "bg-slate-100 text-slate-500" : "bg-orange-50 text-orange-600"
+                          }`}
+                        >
+                          {soldOut ? "不可加" : "加入"}
                         </div>
                       </div>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
                 {filteredMenuItems.length === 0 ? (
                   <div className="col-span-full rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
                     沒有符合條件的商品

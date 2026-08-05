@@ -10,6 +10,9 @@ const KEYS = {
   localSettings: "macau-pos/local-settings",
   members: "macau-pos/members",
   offlineMode: "macau-pos/offline-mode",
+  authSession: "macau-pos/auth-session",
+  soldOut: "macau-pos/sold-out",
+  shift: "macau-pos/shift",
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -136,4 +139,58 @@ export function saveOfflineMode(enabled: boolean) {
   } catch {
     // ignore
   }
+}
+
+export type AuthSession = {
+  account: string;
+  loggedInAt: string;
+};
+
+export function loadAuthSession(): AuthSession | null {
+  return readJson<AuthSession | null>(KEYS.authSession, null);
+}
+
+export function saveAuthSession(session: AuthSession) {
+  writeJson(KEYS.authSession, session);
+}
+
+export function clearAuthSession() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(KEYS.authSession);
+  } catch {
+    // ignore
+  }
+}
+
+export type SoldOutState = Record<
+  string,
+  {
+    initialQty: number;
+    remainingQty: number;
+    updatedAt: string;
+  }
+>;
+
+export function loadSoldOutState(): SoldOutState {
+  return readJson<SoldOutState>(KEYS.soldOut, {});
+}
+
+export function saveSoldOutState(state: SoldOutState) {
+  writeJson(KEYS.soldOut, state);
+}
+
+export type ShiftState = {
+  openedAt?: string;
+  closedAt?: string;
+  openingNote?: string;
+  closingNote?: string;
+};
+
+export function loadShiftState(): ShiftState {
+  return readJson<ShiftState>(KEYS.shift, {});
+}
+
+export function saveShiftState(state: ShiftState) {
+  writeJson(KEYS.shift, state);
 }

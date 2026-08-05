@@ -1,0 +1,117 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+import { saveAuthSession } from "@/lib/storage";
+
+export function LoginScreen() {
+  const router = useRouter();
+  const [account, setAccount] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function submit() {
+    setError("");
+    const normalizedAccount = account.replace(/\D/g, "").slice(0, 8);
+    const normalizedPin = pin.replace(/\D/g, "").slice(0, 4);
+
+    if (!/^\d{8}$/.test(normalizedAccount)) {
+      setError("請輸入 8 位數字帳號。");
+      return;
+    }
+    if (!/^\d{4}$/.test(normalizedPin)) {
+      setError("請輸入 4 位數字密碼。");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account: normalizedAccount, pin: normalizedPin }),
+      });
+      const payload = (await response.json()) as { ok: boolean; error?: string };
+      if (!payload.ok) {
+        throw new Error(payload.error ?? "登入失敗");
+      }
+
+      saveAuthSession({ account: normalizedAccount, loggedInAt: new Date().toISOString() });
+      router.replace("/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登入失敗");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+      <div className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-6 py-10">
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur">
+          <div className="text-center">
+            <div className="text-sm font-semibold tracking-widest text-orange-200/90">
+              澳門會員通POS系統
+            </div>
+            <div className="mt-2 text-2xl font-semibold text-white">登入</div>
+            <div className="mt-2 text-sm text-white/70">請使用 8 位數字帳號及 4 位 PIN。</div>
+          </div>
+
+          <div className="mt-6 grid gap-3">
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold text-white/70">帳號（8 位數字）</span>
+              <input
+                className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
+                inputMode="numeric"
+                maxLength={8}
+                onChange={(event) => {
+                  setError("");
+                  setAccount(event.target.value.replace(/\D/g, "").slice(0, 8));
+                }}
+                placeholder="例如：63936541"
+                value={account}
+              />
+            </label>
+
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold text-white/70">密碼（4 位 PIN）</span>
+              <input
+                className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
+                inputMode="numeric"
+                maxLength={4}
+                onChange={(event) => {
+                  setError("");
+                  setPin(event.target.value.replace(/\D/g, "").slice(0, 4));
+                }}
+                placeholder="例如：1234"
+                type="password"
+                value={pin}
+              />
+            </label>
+          </div>
+
+          {error ? (
+            <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-100">
+              {error}
+            </div>
+          ) : null}
+
+          <button
+            className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+            disabled={loading}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {loading ? "正在登入…" : "登入"}
+          </button>
+
+          <div className="mt-4 text-center text-xs text-white/40">
+            測試帳號：63936541 · PIN：1234
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

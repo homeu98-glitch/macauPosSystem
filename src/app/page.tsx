@@ -1,5 +1,10 @@
 import { PosApp } from "@/components/pos-app";
+import { AuthGuard } from "@/components/auth-guard";
 
 export default function Home() {
-  return <PosApp />;
+  return (
+    <AuthGuard>
+      <PosApp />
+    </AuthGuard>
+  );
 }
