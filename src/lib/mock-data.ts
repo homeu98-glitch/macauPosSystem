@@ -232,6 +232,23 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       ],
     },
   ],
+  printTemplates: {
+    receipt: {
+      showStoreName: true,
+      showOrderNo: true,
+      showTableName: true,
+      showPaymentMethod: true,
+      showOrderNote: true,
+      footerText: "多謝惠顧，歡迎再次光臨",
+    },
+    label: {
+      showOrderNo: true,
+      showSpecs: true,
+      showItemNote: true,
+      headerText: "飲品標籤",
+      footerText: "請盡快出品",
+    },
+  },
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   onlineOrderSettings: {
     autoAccept: false,

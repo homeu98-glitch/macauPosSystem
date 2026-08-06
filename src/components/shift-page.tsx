@@ -10,9 +10,11 @@ import {
   loadOrders,
   loadPrintJobs,
   loadQueue,
+  loadShiftHistory,
   loadShiftState,
   savePrintJobs,
   saveQueue,
+  saveShiftHistory,
   saveShiftState,
 } from "@/lib/storage";
 import { PrintJob, QueueEvent } from "@/lib/types";
@@ -28,20 +30,49 @@ function formatMoney(amount: number) {
 export function ShiftPage() {
   const [shift, setShift] = useState(() => loadShiftState());
   const [shiftNote, setShiftNote] = useState("");
+  const [actualCash, setActualCash] = useState("");
   const [status, setStatus] = useState("開工後可於下班時做結數交班並打印交班單。");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [shiftHistory, setShiftHistory] = useState(() => loadShiftHistory());
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
   const orders = useMemo(() => loadOrders(), []);
 
   const summary = useMemo(() => {
-    const settled = orders.filter((order) => order.status === "settled");
+    const closedOrders = orders.filter((order) =>
+      order.status === "settled" || order.status === "partially_refunded" || order.status === "refunded",
+    );
+    const refunded = orders.filter((order) => order.status === "partially_refunded" || order.status === "refunded");
+    const paymentBreakdown = closedOrders.reduce<Record<string, number>>((acc, order) => {
+      const key = order.paymentMethod ?? "未記錄";
+      acc[key] = (acc[key] ?? 0) + order.total;
+      return acc;
+    }, {});
     return {
-      count: settled.length,
-      revenue: settled.reduce((sum, order) => sum + order.total, 0),
-      prepaid: settled.reduce((sum, order) => sum + (order.prepaidAmount ?? 0), 0),
+      count: closedOrders.length,
+      revenue: closedOrders.reduce((sum, order) => sum + order.total, 0),
+      prepaid: closedOrders.reduce((sum, order) => sum + (order.prepaidAmount ?? 0), 0),
+      refundCount: refunded.length,
+      refundAmount: refunded.reduce((sum, order) => sum + (order.refundedAmount ?? order.total), 0),
+      paymentBreakdown,
     };
   }, [orders]);
+  const queueSummary = (() => {
+    const queue = loadQueue();
+    const printJobs = loadPrintJobs();
+    return {
+      pendingEvents: queue.filter((item) => item.status !== "synced").length,
+      pendingPrints: printJobs.filter((item) => item.status === "pending").length,
+    };
+  })();
+  const expectedCash = useMemo(() => {
+    const cashKeys = ["現金", "會員餘額 + 現金", "優惠券 + 現金"];
+    return Object.entries(summary.paymentBreakdown)
+      .filter(([key]) => cashKeys.some((cashKey) => key.includes(cashKey)))
+      .reduce((sum, [, value]) => sum + value, 0);
+  }, [summary.paymentBreakdown]);
+  const actualCashValue = Number(actualCash);
+  const cashDifference = Number.isFinite(actualCashValue) ? actualCashValue - expectedCash : 0;
 
   async function closeShift() {
     const now = new Date().toISOString();
@@ -50,9 +81,32 @@ export function ShiftPage() {
       openedAt: undefined,
       closedAt: now,
       closingNote: shiftNote,
+      actualCash: Number.isFinite(actualCashValue) ? actualCashValue : undefined,
+      cashDifference: Number.isFinite(actualCashValue) ? cashDifference : undefined,
+    };
+    const historyRecord = {
+      id: `shift-${now}`,
+      openedAt: shift.openedAt,
+      closedAt: now,
+      openingNote: shift.openingNote,
+      closingNote: shiftNote,
+      actualCash: Number.isFinite(actualCashValue) ? actualCashValue : undefined,
+      cashDifference: Number.isFinite(actualCashValue) ? cashDifference : undefined,
+      settledCount: summary.count,
+      revenue: summary.revenue,
+      prepaid: summary.prepaid,
+      refundCount: summary.refundCount,
+      refundAmount: summary.refundAmount,
+      expectedCash,
+      paymentBreakdown: summary.paymentBreakdown,
+      pendingEvents: queueSummary.pendingEvents,
+      pendingPrints: queueSummary.pendingPrints,
     };
     setShift(next);
     saveShiftState(next);
+    const nextHistory = [historyRecord, ...shiftHistory].slice(0, 60);
+    setShiftHistory(nextHistory);
+    saveShiftHistory(nextHistory);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
 
     const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.role === "receipt");
@@ -64,6 +118,12 @@ export function ShiftPage() {
       `已結帳訂單：${summary.count} 張`,
       `營業額：${formatMoney(summary.revenue)}`,
       `線上已支付：${formatMoney(summary.prepaid)}`,
+      `退款：${summary.refundCount} 張 / ${formatMoney(summary.refundAmount)}`,
+      `應收現金：${formatMoney(expectedCash)}`,
+      Number.isFinite(actualCashValue) ? `實收現金：${formatMoney(actualCashValue)}` : "",
+      Number.isFinite(actualCashValue) ? `現金差額：${formatMoney(cashDifference)}` : "",
+      `待同步事件：${queueSummary.pendingEvents}`,
+      `待補傳打印：${queueSummary.pendingPrints}`,
       shiftNote ? `備註：${shiftNote}` : "",
     ].filter(Boolean);
 
@@ -146,6 +206,28 @@ export function ShiftPage() {
                 value={shiftNote}
               />
             </label>
+            <label className="mt-3 grid gap-1">
+              <span className="text-xs font-semibold text-slate-500">實收現金</span>
+              <input
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                inputMode="decimal"
+                onChange={(event) => setActualCash(event.target.value)}
+                placeholder={`應收 ${formatMoney(expectedCash)}`}
+                value={actualCash}
+              />
+            </label>
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <div className="flex items-center justify-between">
+                <span>應收現金</span>
+                <span className="font-semibold text-slate-900">{formatMoney(expectedCash)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <span>差額</span>
+                <span className={`font-semibold ${cashDifference === 0 ? "text-emerald-700" : "text-red-700"}`}>
+                  {formatMoney(cashDifference)}
+                </span>
+              </div>
+            </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               {!shift.openedAt ? (
@@ -194,6 +276,88 @@ export function ShiftPage() {
                 <div className="text-sm text-slate-500">線上已支付</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.prepaid)}</div>
               </article>
+              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm text-slate-500">退款</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.refundCount}</div>
+                <div className="mt-1 text-xs text-slate-500">{formatMoney(summary.refundAmount)}</div>
+              </article>
+              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm text-slate-500">待同步事件</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingEvents}</div>
+              </article>
+              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm text-slate-500">待補傳打印</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingPrints}</div>
+              </article>
+            </div>
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">支付方式拆分</div>
+              <div className="mt-3 grid gap-2">
+                {Object.keys(summary.paymentBreakdown).length === 0 ? (
+                  <div className="text-sm text-slate-500">今天暫未有已結帳訂單。</div>
+                ) : (
+                  Object.entries(summary.paymentBreakdown).map(([method, amount]) => (
+                    <div key={method} className="flex items-center justify-between text-sm text-slate-700">
+                      <span>{method}</span>
+                      <span className="font-semibold text-slate-900">{formatMoney(amount)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-base font-semibold text-slate-900">交班歷史</div>
+                <div className="mt-1 text-sm text-slate-500">保留最近 60 次交班記錄，方便追數與核對。</div>
+              </div>
+            </div>
+            <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
+              <table className="w-full border-collapse text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
+                  <tr>
+                    <th className="border-b border-slate-200 px-3 py-2">交班時間</th>
+                    <th className="border-b border-slate-200 px-3 py-2">營業額</th>
+                    <th className="border-b border-slate-200 px-3 py-2">退款</th>
+                    <th className="border-b border-slate-200 px-3 py-2">應收/實收現金</th>
+                    <th className="border-b border-slate-200 px-3 py-2">差額</th>
+                    <th className="border-b border-slate-200 px-3 py-2">待同步</th>
+                    <th className="border-b border-slate-200 px-3 py-2">備註</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shiftHistory.length === 0 ? (
+                    <tr>
+                      <td className="px-3 py-4 text-slate-500" colSpan={7}>
+                        目前尚未有交班歷史。
+                      </td>
+                    </tr>
+                  ) : (
+                    shiftHistory.map((row) => (
+                      <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
+                        <td className="px-3 py-3 text-slate-700">{row.closedAt.replace("T", " ").slice(0, 16)}</td>
+                        <td className="px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
+                        <td className="px-3 py-3 text-slate-700">
+                          {row.refundCount} / {formatMoney(row.refundAmount)}
+                        </td>
+                        <td className="px-3 py-3 text-slate-700">
+                          {formatMoney(row.expectedCash)}
+                          {typeof row.actualCash === "number" ? ` / ${formatMoney(row.actualCash)}` : ""}
+                        </td>
+                        <td className={`px-3 py-3 font-semibold ${row.cashDifference === 0 ? "text-emerald-700" : "text-red-700"}`}>
+                          {typeof row.cashDifference === "number" ? formatMoney(row.cashDifference) : "--"}
+                        </td>
+                        <td className="px-3 py-3 text-slate-700">
+                          {row.pendingEvents} 事件 / {row.pendingPrints} 打印
+                        </td>
+                        <td className="px-3 py-3 text-slate-500">{row.closingNote || "--"}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
         </div>
@@ -220,10 +384,17 @@ export function ShiftPage() {
                 <div className="text-sm text-slate-500">線上已支付</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.prepaid)}</div>
               </article>
+              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm text-slate-500">退款</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.refundAmount)}</div>
+              </article>
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
               <div>{shift.openedAt ? `開工時間：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "未記錄開工時間"}</div>
+              <div className="mt-1">應收現金：{formatMoney(expectedCash)}</div>
+              <div className="mt-1">待同步事件：{queueSummary.pendingEvents} · 待補傳打印：{queueSummary.pendingPrints}</div>
+              {Number.isFinite(actualCashValue) ? <div className="mt-1">實收現金：{formatMoney(actualCashValue)} · 差額：{formatMoney(cashDifference)}</div> : null}
               {shiftNote ? <div className="mt-1">備註：{shiftNote}</div> : null}
             </div>
 

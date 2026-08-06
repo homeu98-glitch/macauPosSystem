@@ -112,6 +112,23 @@ export interface PosLocalSettings {
     name: string;
     specGroups: MenuSpecGroup[];
   }>;
+  printTemplates: {
+    receipt: {
+      showStoreName: boolean;
+      showOrderNo: boolean;
+      showTableName: boolean;
+      showPaymentMethod: boolean;
+      showOrderNote: boolean;
+      footerText: string;
+    };
+    label: {
+      showOrderNo: boolean;
+      showSpecs: boolean;
+      showItemNote: boolean;
+      headerText: string;
+      footerText: string;
+    };
+  };
   notePresets: string[];
   onlineOrderSettings: {
     autoAccept: boolean;
@@ -163,7 +180,7 @@ export interface PosOrder {
   localOrderNo: string;
   tableId: string;
   tableName: string;
-  status: "draft" | "sent_to_kitchen" | "paid" | "settled";
+  status: "draft" | "sent_to_kitchen" | "paid" | "settled" | "cancelled" | "partially_refunded" | "refunded";
   items: OrderItem[];
   orderNote?: string;
   subtotal: number;
@@ -174,6 +191,23 @@ export interface PosOrder {
   prepaidAmount?: number;
   onlineOrderId?: string;
   paymentMethod?: PaymentMethod;
+  cancelledAt?: string;
+  cancelledReason?: string;
+  refundedAt?: string;
+  refundedAmount?: number;
+  refundedReason?: string;
+  refundRecords?: Array<{
+    id: string;
+    amount: number;
+    reason: string;
+    items?: Array<{
+      itemKey: string;
+      name: string;
+      quantity: number;
+      amount: number;
+    }>;
+    createdAt: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 }

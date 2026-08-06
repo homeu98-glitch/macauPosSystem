@@ -13,6 +13,7 @@ const KEYS = {
   authSession: "macau-pos/auth-session",
   soldOut: "macau-pos/sold-out",
   shift: "macau-pos/shift",
+  shiftHistory: "macau-pos/shift-history",
   operatingMode: "macau-pos/operating-mode",
   quickAutoAccept: "macau-pos/quick-auto-accept",
   quickCompletedMinutes: "macau-pos/quick-completed-minutes",
@@ -86,6 +87,16 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         : defaultPosLocalSettings.menuPrinterOverrides,
     printZones: Array.isArray(settings?.printZones) ? settings.printZones : defaultPosLocalSettings.printZones,
     specTemplates: Array.isArray(settings?.specTemplates) ? settings.specTemplates : defaultPosLocalSettings.specTemplates,
+    printTemplates: {
+      receipt: {
+        ...defaultPosLocalSettings.printTemplates.receipt,
+        ...(settings?.printTemplates?.receipt ?? {}),
+      },
+      label: {
+        ...defaultPosLocalSettings.printTemplates.label,
+        ...(settings?.printTemplates?.label ?? {}),
+      },
+    },
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
     onlineOrderSettings: {
       autoAccept: Boolean(
@@ -225,6 +236,27 @@ export type ShiftState = {
   closedAt?: string;
   openingNote?: string;
   closingNote?: string;
+  actualCash?: number;
+  cashDifference?: number;
+};
+
+export type ShiftHistoryRecord = {
+  id: string;
+  openedAt?: string;
+  closedAt: string;
+  openingNote?: string;
+  closingNote?: string;
+  actualCash?: number;
+  cashDifference?: number;
+  settledCount: number;
+  revenue: number;
+  prepaid: number;
+  refundCount: number;
+  refundAmount: number;
+  expectedCash: number;
+  paymentBreakdown: Record<string, number>;
+  pendingEvents: number;
+  pendingPrints: number;
 };
 
 export function loadShiftState(): ShiftState {
@@ -233,6 +265,14 @@ export function loadShiftState(): ShiftState {
 
 export function saveShiftState(state: ShiftState) {
   writeJson(KEYS.shift, state);
+}
+
+export function loadShiftHistory() {
+  return readJson<ShiftHistoryRecord[]>(KEYS.shiftHistory, []);
+}
+
+export function saveShiftHistory(history: ShiftHistoryRecord[]) {
+  writeJson(KEYS.shiftHistory, history);
 }
 
 export type OperatingMode = "dinein" | "quick";

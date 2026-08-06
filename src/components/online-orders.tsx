@@ -39,6 +39,9 @@ function normalizeOrderStatus(status: string) {
   const s = String(status).toLowerCase();
   if (s.includes("cancel")) return "cancelled";
   if (s === "completed" || s === "done" || s === "settled") return "completed";
+  if (s === "ready_pickup") return "ready_pickup";
+  if (s === "ready_dispatch") return "ready_dispatch";
+  if (s === "delivering") return "delivering";
   if (s === "accepted" || s === "preparing") return "preparing";
   return "new";
 }
@@ -47,6 +50,9 @@ function statusLabel(status: string) {
   const normalized = normalizeOrderStatus(status);
   if (normalized === "cancelled") return "已取消";
   if (normalized === "completed") return "已完成";
+  if (normalized === "ready_pickup") return "待取餐";
+  if (normalized === "ready_dispatch") return "待交付";
+  if (normalized === "delivering") return "配送中";
   if (normalized === "preparing") return "製作中";
   return "新單";
 }
@@ -151,6 +157,7 @@ export function OnlineOrders() {
     action:
       | "accept"
       | "complete"
+      | "update_status"
       | "assign_table"
       | "auto_accept"
       | "handoff_to_rider"
@@ -163,6 +170,7 @@ export function OnlineOrders() {
     tableId?: string;
     riderFee?: number;
     riderNote?: string;
+    status?: string;
   }) {
     const response = await fetch("/api/online-orders", {
       method: "POST",
@@ -316,6 +324,20 @@ export function OnlineOrders() {
       setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "完成訂單失敗" });
+    }
+  }
+
+  async function updateOrderStatus(order: OnlineOrder, nextStatus: string, successMessage: string) {
+    try {
+      await writeBackOrder({ action: "update_status", orderId: order.sourceId ?? order.id, status: nextStatus });
+      setStatusMap((current) => ({ ...current, [order.id]: nextStatus }));
+      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: nextStatus } : row)));
+      setToast({ tone: "success", message: successMessage });
+      if (nextStatus === "completed") {
+        setViewingOrderId(null);
+      }
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "更新狀態失敗" });
     }
   }
 
@@ -484,7 +506,11 @@ export function OnlineOrders() {
                             ? "bg-red-50 text-red-700"
                             : normalizedStatus === "preparing"
                               ? "bg-amber-50 text-amber-700"
-                              : "bg-orange-50 text-orange-700"
+                              : normalizedStatus === "ready_pickup" || normalizedStatus === "ready_dispatch"
+                                ? "bg-sky-50 text-sky-700"
+                                : normalizedStatus === "delivering"
+                                  ? "bg-violet-50 text-violet-700"
+                                  : "bg-orange-50 text-orange-700"
                       }`}
                     >
                       {statusLabel(effectiveStatus)}
@@ -516,11 +542,7 @@ export function OnlineOrders() {
                       ))}
                     </div>
                   ) : null}
-                  <div
-                    className={`mt-4 grid gap-2 ${
-                      normalizedStatus === "new" ? "grid-cols-3" : normalizedStatus === "preparing" ? "grid-cols-2" : "grid-cols-1"
-                    }`}
-                  >
+                  <div className="mt-4 grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                     <button
                       className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                       onClick={() => setViewingOrderId(order.id)}
@@ -549,10 +571,43 @@ export function OnlineOrders() {
                     {normalizedStatus === "preparing" ? (
                       <button
                         className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        onClick={() =>
+                          void updateOrderStatus(
+                            order,
+                            order.type === "pickup" ? "ready_pickup" : "ready_dispatch",
+                            order.type === "pickup" ? "已轉為待取餐。" : "已轉為待交付。",
+                          )
+                        }
+                        type="button"
+                      >
+                        {order.type === "pickup" ? "待取餐" : "待交付"}
+                      </button>
+                    ) : null}
+                    {normalizedStatus === "ready_pickup" ? (
+                      <button
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
                         onClick={() => void completeOrder(order)}
                         type="button"
                       >
-                        已完成
+                        已取餐 / 已完成
+                      </button>
+                    ) : null}
+                    {normalizedStatus === "ready_dispatch" ? (
+                      <button
+                        className="rounded-2xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700"
+                        onClick={() => void updateOrderStatus(order, "delivering", "已轉為配送中。")}
+                        type="button"
+                      >
+                        配送中
+                      </button>
+                    ) : null}
+                    {normalizedStatus === "delivering" ? (
+                      <button
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        onClick={() => void completeOrder(order)}
+                        type="button"
+                      >
+                        已送達 / 已完成
                       </button>
                     ) : null}
                   </div>
@@ -772,10 +827,40 @@ export function OnlineOrders() {
               ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "preparing" ? (
                 <button
                   className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() =>
+                    void updateOrderStatus(
+                      viewingOrder,
+                      viewingOrder.type === "pickup" ? "ready_pickup" : "ready_dispatch",
+                      viewingOrder.type === "pickup" ? "已轉為待取餐。" : "已轉為待交付。",
+                    )
+                  }
+                  type="button"
+                >
+                  {viewingOrder.type === "pickup" ? "待取餐" : "待交付"}
+                </button>
+              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "ready_pickup" ? (
+                <button
+                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
                   onClick={() => void completeOrder(viewingOrder)}
                   type="button"
                 >
-                  已完成
+                  已取餐 / 已完成
+                </button>
+              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "ready_dispatch" ? (
+                <button
+                  className="rounded-2xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => void updateOrderStatus(viewingOrder, "delivering", "已轉為配送中。")}
+                  type="button"
+                >
+                  配送中
+                </button>
+              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "delivering" ? (
+                <button
+                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => void completeOrder(viewingOrder)}
+                  type="button"
+                >
+                  已送達 / 已完成
                 </button>
               ) : null}
             </div>

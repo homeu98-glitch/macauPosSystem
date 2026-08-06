@@ -125,6 +125,17 @@ export function PosApp() {
   const [selectedSpecValues, setSelectedSpecValues] = useState<Record<string, string[]>>({});
   const [voidRequest, setVoidRequest] = useState<{ item: OrderItem; mode: "one" | "all" } | null>(null);
   const [voidReason, setVoidReason] = useState("");
+  const [orderActionRequest, setOrderActionRequest] = useState<
+    | {
+        type: "cancel_order" | "refund_order";
+        orderId: string;
+      }
+    | null
+  >(null);
+  const [orderActionReason, setOrderActionReason] = useState("");
+  const [partialRefundOrderId, setPartialRefundOrderId] = useState<string | null>(null);
+  const [partialRefundReason, setPartialRefundReason] = useState("");
+  const [partialRefundQuantities, setPartialRefundQuantities] = useState<Record<string, number>>({});
   const [membersCache, setMembersCache] = useState<MemberProfile[]>(() => loadMembers());
   const [memberPhone, setMemberPhone] = useState("");
   const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
@@ -523,7 +534,11 @@ export function PosApp() {
 
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
   const openOrders = useMemo(
-    () => orders.filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid"),
+    () =>
+      orders.filter(
+        (order) =>
+          order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid",
+      ),
     [orders],
   );
   const recentCompletedOrders = useMemo(() => {
@@ -562,7 +577,16 @@ export function PosApp() {
   );
   const activeOrder = useMemo(() => {
     if (activeOrderId) {
-      return orders.find((order) => order.id === activeOrderId && order.status !== "settled") ?? null;
+      return (
+        orders.find(
+          (order) =>
+            order.id === activeOrderId &&
+            order.status !== "settled" &&
+            order.status !== "cancelled" &&
+            order.status !== "partially_refunded" &&
+            order.status !== "refunded",
+        ) ?? null
+      );
     }
     return (activeTableId ? tableOrderMap.get(activeTableId) : null) ?? null;
   }, [activeOrderId, activeTableId, orders, tableOrderMap]);
@@ -712,7 +736,16 @@ export function PosApp() {
     const timestamp = new Date().toISOString();
     const baseTotals = orderTotals(cartItems, bootstrap);
     const existingOrder =
-      (activeOrderId ? orders.find((order) => order.id === activeOrderId && order.status !== "settled") : null) ??
+      (activeOrderId
+        ? orders.find(
+            (order) =>
+              order.id === activeOrderId &&
+              order.status !== "settled" &&
+              order.status !== "cancelled" &&
+              order.status !== "partially_refunded" &&
+              order.status !== "refunded",
+          )
+        : null) ??
       tableOrderMap.get(activeTable.id) ??
       null;
 
@@ -840,6 +873,16 @@ export function PosApp() {
 
   function itemIdentity(item: OrderItem) {
     return `${item.menuItemId}|${serializeSpecs(item)}|${item.note ?? ""}`;
+  }
+
+  function refundedItemQtyMap(order: PosOrder) {
+    const result = new Map<string, number>();
+    for (const record of order.refundRecords ?? []) {
+      for (const item of record.items ?? []) {
+        result.set(item.itemKey, (result.get(item.itemKey) ?? 0) + item.quantity);
+      }
+    }
+    return result;
   }
 
   function commitMenuItem(item: MenuItem, selectedSpecs: OrderItem["selectedSpecs"] = []) {
@@ -1027,7 +1070,7 @@ export function PosApp() {
       ...activeOrder,
       items: nextCartItems,
       subtotal: nextTotals.subtotal,
-      serviceChargeAmount: 0,
+      serviceChargeAmount: nextTotals.serviceChargeAmount,
       taxAmount: nextTotals.taxAmount,
       total: Math.max(0, nextTotals.total - activeOrder.discountAmount),
       updatedAt: new Date().toISOString(),
@@ -1104,7 +1147,25 @@ export function PosApp() {
       return { title: "已下單", detail: "已送出本次點餐並打印廚房單" };
     }
     if (event.type === "ORDER_UPDATED") {
-      const addedItems = (event.payload as { addedItems?: OrderItem[] }).addedItems ?? [];
+      const payload = event.payload as {
+        addedItems?: OrderItem[];
+        action?: "completed" | "cancelled" | "refunded";
+        reason?: string;
+        amount?: number;
+      };
+      if (payload.action === "completed") {
+        return { title: "已完成", detail: "訂單已完成並離開待處理區" };
+      }
+      if (payload.action === "cancelled") {
+        return { title: "已取消結帳", detail: payload.reason ? `原因：${payload.reason}` : "已取消本單" };
+      }
+      if (payload.action === "refunded") {
+        return {
+          title: "已退款",
+          detail: `${payload.amount ? `金額 ${formatMoney(payload.amount, bootstrap?.currency ?? "MOP")} · ` : ""}${payload.reason ? `原因：${payload.reason}` : "整單退款"}`,
+        };
+      }
+      const addedItems = payload.addedItems ?? [];
       const count = addedItems.reduce((sum, item) => sum + item.quantity, 0);
       return { title: "已加單", detail: `新增 ${count} 份菜品並打印加單單據` };
     }
@@ -1387,13 +1448,237 @@ export function PosApp() {
         id: uid("evt"),
         type: "ORDER_UPDATED",
         entityId: updatedOrder.id,
-        payload: { order: updatedOrder },
+        payload: { order: updatedOrder, action: "completed" },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedOrder.updatedAt,
       },
     ]);
     setViewingOrderId(null);
     setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已完成。` });
+  }
+
+  function cancelOrder(orderId: string, reason: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder) return;
+    const updatedAt = new Date().toISOString();
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "cancelled",
+      cancelledAt: updatedAt,
+      cancelledReason: reason || "未填寫原因",
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: { order: updatedOrder, action: "cancelled", reason: updatedOrder.cancelledReason },
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedAt,
+      },
+    ]);
+    if (activeOrderId === orderId) {
+      setActiveOrderId(null);
+      setCartItems([]);
+      setBaseOrderItems([]);
+      setOrderNote("");
+      setDiscountValue("0");
+      setReceivedAmount("");
+    }
+    setViewingOrderId(null);
+    setOrderActionRequest(null);
+    setOrderActionReason("");
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已取消結帳。` });
+  }
+
+  function buildRefundReceiptJobs(
+    order: PosOrder,
+    amount: number,
+    reason: string,
+    timestamp: string,
+    title = "退款單號",
+  ) {
+    if (!bootstrap) return [] as PrintJob[];
+    return (loadDeviceConfig() ?? defaultDeviceConfig).printers
+      .filter((printer) => printer.enabled && printer.role === "receipt")
+      .map<PrintJob>((printer) => ({
+        id: uid("print"),
+        orderId: order.id,
+        orderNo: `${order.localOrderNo} 退款`,
+        tableName: order.tableName,
+        ticketType: "void",
+        printerGroup: "receipt",
+        printerName: printer.name,
+        items: [
+          { name: title, quantity: 1, note: order.localOrderNo },
+          { name: "退款金額", quantity: 1, note: formatMoney(amount, bootstrap.currency) },
+          { name: "退款原因", quantity: 1, note: reason },
+        ],
+        status: networkOnline ? "sent" : "pending",
+        createdAt: timestamp,
+      }));
+  }
+
+  function refundOrder(orderId: string, reason: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder || !bootstrap) return;
+    const updatedAt = new Date().toISOString();
+    const alreadyRefunded = targetOrder.refundedAmount ?? 0;
+    const remainingAmount = Math.max(0, targetOrder.total - alreadyRefunded);
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "refunded",
+      refundedAt: updatedAt,
+      refundedAmount: targetOrder.total,
+      refundedReason: reason || "未填寫原因",
+      refundRecords: [
+        ...(targetOrder.refundRecords ?? []),
+        {
+          id: uid("refund"),
+          amount: remainingAmount,
+          reason: reason || "未填寫原因",
+          createdAt: updatedAt,
+        },
+      ],
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    const refundEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_UPDATED",
+      entityId: updatedOrder.id,
+      payload: {
+        order: updatedOrder,
+        action: "refunded",
+        amount: updatedOrder.refundedAmount,
+        reason: updatedOrder.refundedReason,
+      },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: updatedAt,
+    };
+    const refundPrintJobs = buildRefundReceiptJobs(
+      updatedOrder,
+      remainingAmount,
+      updatedOrder.refundedReason ?? "未填寫原因",
+      updatedAt,
+    );
+    persistPrintJobs([...refundPrintJobs, ...printJobs]);
+    pushEvents([
+      refundEvent,
+      ...refundPrintJobs.map<QueueEvent>((job) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: job.id,
+        payload: job,
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    setViewingOrderId(null);
+    setOrderActionRequest(null);
+    setOrderActionReason("");
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已退款。` });
+  }
+
+  function partialRefundOrder(orderId: string, reason: string, quantities: Record<string, number>) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder || !bootstrap) return;
+    const refundedMap = refundedItemQtyMap(targetOrder);
+    type RefundLine = NonNullable<NonNullable<PosOrder["refundRecords"]>[number]["items"]>[number];
+    const refundItems = targetOrder.items
+      .map((item) => {
+        const key = itemIdentity(item);
+        const alreadyRefunded = refundedMap.get(key) ?? 0;
+        const available = Math.max(0, item.quantity - alreadyRefunded);
+        const requested = Math.max(0, Math.min(available, quantities[key] ?? 0));
+        if (requested <= 0) return null;
+        const unitAmount = item.quantity > 0 ? item.price : 0;
+        return {
+          itemKey: key,
+          name: item.name,
+          quantity: requested,
+          amount: unitAmount * requested,
+        };
+      })
+      .filter((item): item is RefundLine => Boolean(item));
+
+    if (refundItems.length === 0) {
+      setToast({ tone: "info", message: "請先選擇要退款的菜品數量。" });
+      return;
+    }
+
+    const refundSubtotal = refundItems.reduce((sum, item) => sum + item.amount, 0);
+    const subtotalBase = targetOrder.subtotal || 1;
+    const proportionalRatio = Math.min(1, refundSubtotal / subtotalBase);
+    const refundAmount = Math.max(
+      0,
+      Number((targetOrder.total * proportionalRatio).toFixed(0)),
+    );
+    const updatedAt = new Date().toISOString();
+    const totalRefundedAmount = Math.min(targetOrder.total, (targetOrder.refundedAmount ?? 0) + refundAmount);
+    const fullyRefunded = totalRefundedAmount >= targetOrder.total;
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: fullyRefunded ? "refunded" : "partially_refunded",
+      refundedAt: updatedAt,
+      refundedAmount: totalRefundedAmount,
+      refundedReason: reason || "未填寫原因",
+      refundRecords: [
+        ...(targetOrder.refundRecords ?? []),
+        {
+          id: uid("refund"),
+          amount: refundAmount,
+          reason: reason || "未填寫原因",
+          items: refundItems,
+          createdAt: updatedAt,
+        },
+      ],
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    const refundEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_UPDATED",
+      entityId: updatedOrder.id,
+      payload: {
+        order: updatedOrder,
+        action: "refunded",
+        amount: refundAmount,
+        reason: reason || "未填寫原因",
+        items: refundItems,
+      },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: updatedAt,
+    };
+    const refundPrintJobs = buildRefundReceiptJobs(
+      updatedOrder,
+      refundAmount,
+      reason || "未填寫原因",
+      updatedAt,
+      "部分退款單號",
+    );
+    persistPrintJobs([...refundPrintJobs, ...printJobs]);
+    pushEvents([
+      refundEvent,
+      ...refundPrintJobs.map<QueueEvent>((job) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: job.id,
+        payload: job,
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    setPartialRefundOrderId(null);
+    setPartialRefundReason("");
+    setPartialRefundQuantities({});
+    setViewingOrderId(null);
+    setToast({
+      tone: "success",
+      message: fullyRefunded ? `${updatedOrder.localOrderNo} 已全部退款。` : `${updatedOrder.localOrderNo} 已完成部分退款。`,
+    });
   }
 
   function printReceipt(order: PosOrder) {
@@ -2703,7 +2988,19 @@ export function PosApp() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {viewingOrder.status === "settled" ? (
+                {viewingOrder.status === "refunded" ? (
+                  <div className="inline-flex rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+                    已退款
+                  </div>
+                ) : viewingOrder.status === "partially_refunded" ? (
+                  <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                    部分退款
+                  </div>
+                ) : viewingOrder.status === "cancelled" ? (
+                  <div className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                    已取消
+                  </div>
+                ) : viewingOrder.status === "settled" ? (
                   <div className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
                     已完成
                   </div>
@@ -2761,6 +3058,24 @@ export function PosApp() {
                   </span>
                 </div>
               ) : null}
+              {viewingOrder.cancelledReason ? (
+                <div className="mt-2 text-sm text-slate-500">
+                  取消原因：<span className="font-semibold text-slate-900">{viewingOrder.cancelledReason}</span>
+                </div>
+              ) : null}
+              {viewingOrder.refundedReason ? (
+                <div className="mt-2 text-sm text-slate-500">
+                  退款原因：<span className="font-semibold text-slate-900">{viewingOrder.refundedReason}</span>
+                </div>
+              ) : null}
+              {(viewingOrder.refundedAmount ?? 0) > 0 ? (
+                <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
+                  <span>已退款</span>
+                  <span className="font-semibold text-red-700">
+                    {formatMoney(viewingOrder.refundedAmount ?? 0, bootstrap.currency)}
+                  </span>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
@@ -2779,7 +3094,8 @@ export function PosApp() {
                 重打單
               </button>
               {(viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total) &&
-              viewingOrder.status !== "settled" ? (
+              viewingOrder.status !== "settled" &&
+              viewingOrder.status !== "refunded" ? (
                 <button
                   className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
                   onClick={() => markOrderCompleted(viewingOrder.id)}
@@ -2788,7 +3104,47 @@ export function PosApp() {
                   已完成
                 </button>
               ) : null}
-              {viewingOrder.status !== "settled" && (viewingOrder.prepaidAmount ?? 0) < viewingOrder.total ? (
+              {(viewingOrder.status === "settled" || viewingOrder.status === "partially_refunded") ? (
+                <>
+                  <button
+                    className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      setPartialRefundOrderId(viewingOrder.id);
+                      setPartialRefundReason("");
+                      setPartialRefundQuantities({});
+                    }}
+                    type="button"
+                  >
+                    部分退款
+                  </button>
+                  <button
+                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      setOrderActionRequest({ type: "refund_order", orderId: viewingOrder.id });
+                      setOrderActionReason("");
+                    }}
+                    type="button"
+                  >
+                    整單退款
+                  </button>
+                </>
+              ) : null}
+              {(viewingOrder.status === "draft" || viewingOrder.status === "sent_to_kitchen") ? (
+                <button
+                  className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => {
+                    setOrderActionRequest({ type: "cancel_order", orderId: viewingOrder.id });
+                    setOrderActionReason("");
+                  }}
+                  type="button"
+                >
+                  取消結帳
+                </button>
+              ) : null}
+              {viewingOrder.status !== "settled" &&
+              viewingOrder.status !== "cancelled" &&
+              viewingOrder.status !== "refunded" &&
+              (viewingOrder.prepaidAmount ?? 0) < viewingOrder.total ? (
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
                   onClick={() => {
@@ -2820,13 +3176,28 @@ export function PosApp() {
                       : "待結帳訂單"}
                 </div>
               </div>
-              <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                onClick={() => setPayingOrderId(null)}
-                type="button"
-              >
-                關閉
-              </button>
+              <div className="flex items-center gap-2">
+                {currentSettlementOrder && currentSettlementOrder.status !== "paid" ? (
+                  <button
+                    className="rounded-full bg-red-50 px-3 py-2 text-sm font-semibold text-red-700"
+                    onClick={() => {
+                      setPayingOrderId(null);
+                      setOrderActionRequest({ type: "cancel_order", orderId: currentSettlementOrder.id });
+                      setOrderActionReason("");
+                    }}
+                    type="button"
+                  >
+                    取消結帳
+                  </button>
+                ) : null}
+                <button
+                  className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                  onClick={() => setPayingOrderId(null)}
+                  type="button"
+                >
+                  關閉
+                </button>
+              </div>
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
@@ -3115,6 +3486,190 @@ export function PosApp() {
                 全部退菜
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {orderActionRequest ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-slate-900">
+              {orderActionRequest.type === "refund_order" ? "退款原因" : "取消結帳原因"}
+            </div>
+            <div className="mt-1 text-sm text-slate-500">
+              {orders.find((order) => order.id === orderActionRequest.orderId)?.localOrderNo ?? "--"}
+            </div>
+            <input
+              autoFocus
+              className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+              onChange={(event) => setOrderActionReason(event.target.value)}
+              placeholder={orderActionRequest.type === "refund_order" ? "例如：客人退款 / 支付失敗" : "例如：客人不要了 / 重開一單"}
+              value={orderActionReason}
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setOrderActionRequest(null);
+                  setOrderActionReason("");
+                }}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  if (orderActionRequest.type === "refund_order") {
+                    refundOrder(orderActionRequest.orderId, orderActionReason.trim());
+                  } else {
+                    cancelOrder(orderActionRequest.orderId, orderActionReason.trim());
+                  }
+                }}
+                type="button"
+              >
+                {orderActionRequest.type === "refund_order" ? "確認退款" : "確認取消"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {partialRefundOrderId ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
+          <div className="flex w-full max-w-2xl max-h-[calc(100vh-32px)] flex-col rounded-3xl bg-white p-5 shadow-2xl">
+            {(() => {
+              const order = orders.find((item) => item.id === partialRefundOrderId);
+              if (!order || !bootstrap) return null;
+              const refundedMap = refundedItemQtyMap(order);
+              const refundableRows = order.items
+                .map((item) => {
+                  const key = itemIdentity(item);
+                  const alreadyRefunded = refundedMap.get(key) ?? 0;
+                  const availableQty = Math.max(0, item.quantity - alreadyRefunded);
+                  return {
+                    item,
+                    key,
+                    availableQty,
+                    selectedQty: Math.max(0, Math.min(availableQty, partialRefundQuantities[key] ?? 0)),
+                  };
+                })
+                .filter((row) => row.availableQty > 0);
+              const refundSubtotal = refundableRows.reduce(
+                (sum, row) => sum + row.item.price * row.selectedQty,
+                0,
+              );
+              const refundAmount = Math.max(
+                0,
+                Number(((order.total * (refundSubtotal / Math.max(order.subtotal || 1, 1))) || 0).toFixed(0)),
+              );
+              return (
+                <>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-lg font-semibold text-slate-900">部分退款</div>
+                      <div className="mt-1 text-sm text-slate-500">{order.localOrderNo} · 選擇要退款的菜品與數量</div>
+                    </div>
+                    <button
+                      className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                      onClick={() => {
+                        setPartialRefundOrderId(null);
+                        setPartialRefundReason("");
+                        setPartialRefundQuantities({});
+                      }}
+                      type="button"
+                    >
+                      關閉
+                    </button>
+                  </div>
+                  <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+                    <div className="grid gap-3">
+                      {refundableRows.map(({ item, key, availableQty, selectedQty }) => (
+                        <div key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-slate-900">{item.name}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                單價 {formatMoney(item.price, bootstrap.currency)} · 可退 {availableQty} 份
+                              </div>
+                              {item.selectedSpecs?.length ? (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                className="rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                                onClick={() =>
+                                  setPartialRefundQuantities((current) => ({
+                                    ...current,
+                                    [key]: Math.max(0, (current[key] ?? 0) - 1),
+                                  }))
+                                }
+                                type="button"
+                              >
+                                -
+                              </button>
+                              <div className="w-10 text-center text-sm font-semibold text-slate-900">{selectedQty}</div>
+                              <button
+                                className="rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                                onClick={() =>
+                                  setPartialRefundQuantities((current) => ({
+                                    ...current,
+                                    [key]: Math.min(availableQty, (current[key] ?? 0) + 1),
+                                  }))
+                                }
+                                type="button"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                    <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                      <span className="text-xs text-slate-500">退款原因</span>
+                      <input
+                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        onChange={(event) => setPartialRefundReason(event.target.value)}
+                        placeholder="例如：少做一杯 / 客人退某款配料"
+                        value={partialRefundReason}
+                      />
+                    </label>
+                    <div className="mt-3 flex items-center justify-between text-sm">
+                      <span className="text-slate-500">預計退款</span>
+                      <span className="text-lg font-semibold text-red-700">
+                        {formatMoney(refundAmount, bootstrap.currency)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                      onClick={() => {
+                        setPartialRefundOrderId(null);
+                        setPartialRefundReason("");
+                        setPartialRefundQuantities({});
+                      }}
+                      type="button"
+                    >
+                      取消
+                    </button>
+                    <button
+                      className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => partialRefundOrder(order.id, partialRefundReason.trim(), partialRefundQuantities)}
+                      type="button"
+                    >
+                      確認部分退款
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       ) : null}

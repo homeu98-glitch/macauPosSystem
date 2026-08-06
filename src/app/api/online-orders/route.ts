@@ -84,6 +84,7 @@ export async function POST(request: Request) {
     action?:
       | "accept"
       | "complete"
+      | "update_status"
       | "assign_table"
       | "auto_accept"
       | "handoff_to_rider"
@@ -97,6 +98,7 @@ export async function POST(request: Request) {
     orderIds?: string[];
     riderFee?: number;
     riderNote?: string;
+    status?: string;
   };
 
   const supabase = getSupabaseServerClient();
@@ -148,6 +150,19 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ ok: true, source: "supabase", status: "completed" });
+  }
+
+  if (payload.action === "update_status" && payload.orderId && payload.status) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status: payload.status })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, source: "supabase", status: payload.status });
   }
 
   if (payload.action === "assign_table" && payload.orderId) {

@@ -280,6 +280,7 @@ export function DeviceSettings() {
         menuPrinterOverrides: localSettings.menuPrinterOverrides,
         printZones: localSettings.printZones,
         specTemplates: localSettings.specTemplates,
+        printTemplates: localSettings.printTemplates,
         onlineOrderSettings: localSettings.onlineOrderSettings,
       },
       status: "pending",
