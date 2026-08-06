@@ -85,6 +85,7 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         ? settings.menuPrinterOverrides
         : defaultPosLocalSettings.menuPrinterOverrides,
     printZones: Array.isArray(settings?.printZones) ? settings.printZones : defaultPosLocalSettings.printZones,
+    specTemplates: Array.isArray(settings?.specTemplates) ? settings.specTemplates : defaultPosLocalSettings.specTemplates,
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
     onlineOrderSettings: {
       autoAccept: Boolean(

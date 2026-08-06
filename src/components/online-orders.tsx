@@ -51,6 +51,22 @@ function statusLabel(status: string) {
   return "新單";
 }
 
+function orderCodeLabel(order: Pick<OnlineOrder, "id" | "type">) {
+  const raw = String(order.id ?? "");
+  const suffix = raw.includes("-") ? raw.split("-").slice(1).join("-") : raw;
+  if (/^ONL-/i.test(raw)) {
+    return `線上單 ${suffix}`;
+  }
+  if (/^online-/i.test(raw)) {
+    return `線上單 ${suffix}`;
+  }
+  if (order.type === "pickup") return `自取單 ${suffix}`;
+  if (order.type === "self_delivery") return `自送單 ${suffix}`;
+  if (order.type === "rider_delivery") return `車手單 ${suffix}`;
+  if (order.type === "dine_in") return `堂食線上單 ${suffix}`;
+  return `線上單 ${suffix}`;
+}
+
 export function OnlineOrders() {
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const autoAccept = localSettings.onlineOrderSettings.autoAccept;
@@ -60,6 +76,7 @@ export function OnlineOrders() {
   const [error, setError] = useState<string | null>(null);
   const [statusMap, setStatusMap] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [riderModalOrderId, setRiderModalOrderId] = useState<string | null>(null);
   const [riderFee, setRiderFee] = useState("");
   const [riderNote, setRiderNote] = useState("");
@@ -70,6 +87,10 @@ export function OnlineOrders() {
   const viewingOrder = useMemo(
     () => (viewingOrderId ? orders.find((item) => item.id === viewingOrderId) ?? null : null),
     [orders, viewingOrderId],
+  );
+  const tables = useMemo(
+    () => localSettings.floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name }))),
+    [localSettings.floors],
   );
 
   useEffect(() => {
@@ -196,13 +217,13 @@ export function OnlineOrders() {
           }
 
           const baseOrders = (payload.orders ?? []).map((order) =>
-            autoAccept && order.status === "new"
+            autoAccept && order.status === "new" && order.type !== "dine_in"
               ? { ...order, status: "accepted" }
               : order,
           );
           if (autoAccept) {
             const newOrderIds = (payload.orders ?? [])
-              .filter((order) => order.status === "new")
+              .filter((order) => order.status === "new" && order.type !== "dine_in")
               .map((order) => order.sourceId ?? order.id);
             if (newOrderIds.length > 0) {
               void writeBackOrder({ action: "auto_accept", orderIds: newOrderIds }).catch((err) =>
@@ -250,6 +271,10 @@ export function OnlineOrders() {
 
   async function acceptOrder(order: OnlineOrder) {
     try {
+      if (order.type === "dine_in") {
+        setAssigningOrderId(order.id);
+        return;
+      }
       if (normalizeOrderStatus(statusMap[order.id] ?? order.status) !== "preparing") {
         await writeBackOrder({
           action: "accept",
@@ -261,6 +286,24 @@ export function OnlineOrders() {
       setToast({ tone: "success", message: "已接單，進入製作中。" });
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "接單回寫失敗" });
+    }
+  }
+
+  async function assignDineInTable(order: OnlineOrder, tableId: string, tableName: string) {
+    try {
+      await writeBackOrder({
+        action: "assign_table",
+        orderId: order.sourceId ?? order.id,
+        tableId,
+        tableName,
+      });
+      setStatusMap((current) => ({ ...current, [order.id]: "preparing" }));
+      setOrders((current) => current.filter((row) => row.id !== order.id));
+      setAssigningOrderId(null);
+      setViewingOrderId(null);
+      setToast({ tone: "success", message: `已接單並安排到 ${tableName}。` });
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "安排桌台失敗" });
     }
   }
 
@@ -428,7 +471,7 @@ export function OnlineOrders() {
                 <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">{order.id}</div>
+                      <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
                       <div className="mt-1 text-xs text-slate-500">
                         {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
                       </div>
@@ -492,7 +535,7 @@ export function OnlineOrders() {
                           onClick={() => void acceptOrder(order)}
                           type="button"
                         >
-                          接單
+                          {order.type === "dine_in" ? "接單並安排桌台" : "接單"}
                         </button>
                         <button
                           className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
@@ -519,6 +562,44 @@ export function OnlineOrders() {
           </div>
         </main>
       </div>
+
+      {assigningOrderId ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">安排堂食桌台</div>
+                <div className="mt-1 text-sm text-slate-500">接单后，把这张线上堂食单直接安排到桌台，不会再留在右侧待操作区。</div>
+              </div>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => setAssigningOrderId(null)}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-4 grid max-h-[60vh] grid-cols-2 gap-2 overflow-auto md:grid-cols-4">
+              {tables.map((table) => (
+                <button
+                  key={table.id}
+                  className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300 hover:bg-orange-50"
+                  onClick={() => {
+                    const order = orders.find((item) => item.id === assigningOrderId);
+                    if (!order) return;
+                    const tableName = `${table.floorName} · ${table.name}`;
+                    void assignDineInTable(order, table.id, tableName);
+                  }}
+                  type="button"
+                >
+                  <div>{table.name}</div>
+                  <div className="mt-1 text-xs text-slate-500">{table.floorName}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {riderModalOrderId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
@@ -596,7 +677,7 @@ export function OnlineOrders() {
               <div>
                 <div className="text-lg font-semibold text-slate-900">訂單詳情</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  {viewingOrder.id} · {TABS.find((tab) => tab.key === viewingOrder.type)?.label ?? viewingOrder.type}
+                  {orderCodeLabel(viewingOrder)} · {TABS.find((tab) => tab.key === viewingOrder.type)?.label ?? viewingOrder.type}
                 </div>
               </div>
               <button
@@ -685,7 +766,7 @@ export function OnlineOrders() {
                     onClick={() => void acceptOrder(viewingOrder)}
                     type="button"
                   >
-                    接單
+                    {viewingOrder.type === "dine_in" ? "接單並安排桌台" : "接單"}
                   </button>
                 </>
               ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "preparing" ? (

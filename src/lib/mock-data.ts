@@ -191,6 +191,47 @@ export const defaultPosLocalSettings: PosLocalSettings = {
     { id: "kitchen", name: "廚房" },
     { id: "drinks", name: "水吧" },
   ],
+  specTemplates: [
+    {
+      id: "tpl-drink-default",
+      name: "飲品通用規格",
+      specGroups: [
+        {
+          id: "drink-size",
+          name: "杯型",
+          selectionMode: "single",
+          required: true,
+          options: [
+            { id: "regular", label: "標準", priceDelta: 0 },
+            { id: "large", label: "大杯", priceDelta: 2 },
+          ],
+        },
+        {
+          id: "drink-ice",
+          name: "冰量",
+          selectionMode: "single",
+          required: true,
+          options: [
+            { id: "normal-ice", label: "正常冰", priceDelta: 0 },
+            { id: "less-ice", label: "少冰", priceDelta: 0 },
+            { id: "no-ice", label: "走冰", priceDelta: 0 },
+          ],
+        },
+        {
+          id: "drink-sugar",
+          name: "甜度",
+          selectionMode: "single",
+          required: true,
+          options: [
+            { id: "full-sugar", label: "正常甜", priceDelta: 0 },
+            { id: "half-sugar", label: "半糖", priceDelta: 0 },
+            { id: "less-sugar", label: "少甜", priceDelta: 0 },
+            { id: "no-sugar", label: "走甜", priceDelta: 0 },
+          ],
+        },
+      ],
+    },
+  ],
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   onlineOrderSettings: {
     autoAccept: false,

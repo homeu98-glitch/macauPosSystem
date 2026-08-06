@@ -107,6 +107,11 @@ export interface PosLocalSettings {
     id: string;
     name: string;
   }>;
+  specTemplates: Array<{
+    id: string;
+    name: string;
+    specGroups: MenuSpecGroup[];
+  }>;
   notePresets: string[];
   onlineOrderSettings: {
     autoAccept: boolean;
