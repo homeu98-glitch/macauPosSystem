@@ -30,6 +30,7 @@ export async function GET() {
         tableName: order.table_name,
         status: order.status,
         items: Array.isArray(order.items) ? order.items : [],
+        orderNote: order.order_note ?? undefined,
         subtotal: Number(order.subtotal ?? 0),
         taxAmount: Number(order.tax_amount ?? 0),
         serviceChargeAmount: Number(order.service_charge_amount ?? 0),

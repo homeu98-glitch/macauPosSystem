@@ -10,6 +10,7 @@ import {
   loadDeviceConfig,
   loadPosLocalSettings,
   loadQueue,
+  normalizePosLocalSettings,
   saveBootstrapCache,
   saveDeviceConfig,
   savePosLocalSettings,
@@ -112,8 +113,9 @@ export function DeviceSettings() {
           saveDeviceConfig(payload.deviceConfig);
         }
         if (payload.localSettings) {
-          setLocalSettings(payload.localSettings);
-          savePosLocalSettings(payload.localSettings);
+          const normalized = normalizePosLocalSettings(payload.localSettings);
+          setLocalSettings(normalized);
+          savePosLocalSettings(normalized);
         }
       } catch {
         // 保留本機設定

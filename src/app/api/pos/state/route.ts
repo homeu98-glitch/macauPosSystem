@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { defaultMembers } from "@/lib/mock-data";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { defaultPosLocalSettings } from "@/lib/mock-data";
+import { normalizePosLocalSettings } from "@/lib/storage";
 
 export async function GET() {
   const supabase = getSupabaseServerClient();
@@ -50,6 +51,7 @@ export async function GET() {
         tableName: order.table_name,
         status: order.status,
         items: Array.isArray(order.items) ? order.items : [],
+        orderNote: order.order_note ?? undefined,
         subtotal: Number(order.subtotal ?? 0),
         taxAmount: Number(order.tax_amount ?? 0),
         serviceChargeAmount: Number(order.service_charge_amount ?? 0),
@@ -113,6 +115,6 @@ export async function GET() {
           updatedAt: deviceConfigRow.updated_at,
         }
       : null,
-    localSettings: deviceConfigRow?.local_settings ?? defaultPosLocalSettings,
+    localSettings: normalizePosLocalSettings(deviceConfigRow?.local_settings ?? defaultPosLocalSettings),
   });
 }
