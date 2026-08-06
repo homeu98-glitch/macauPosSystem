@@ -89,6 +89,8 @@ function quickCompletionLabel(order: Pick<PosOrder, "tableName">) {
   return "待出餐";
 }
 
+const CART_PAYING_ID = "__cart__";
+
 export function PosApp() {
   const cachedBootstrapRaw = loadBootstrapCache();
   const cachedBootstrap = cachedBootstrapRaw ? normalizeBootstrapPayload(cachedBootstrapRaw) : null;
@@ -569,7 +571,7 @@ export function PosApp() {
     [orders],
   );
   const currentSettlementOrder =
-    (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
+    (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
     (activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
     unsettledOrder;
   const discountAmount = useMemo(() => {
@@ -1375,8 +1377,183 @@ export function PosApp() {
     setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已完成。` });
   }
 
+  function printReceipt(order: PosOrder) {
+    if (!bootstrap) return;
+    const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
+      (printer) => printer.enabled && printer.group === "receipt",
+    );
+    if (receiptPrinters.length === 0) return;
+
+    const timestamp = new Date().toISOString();
+    const receiptItems: NonNullable<PrintJob["items"]> = [
+      ...order.items.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+        note: item.note,
+      })),
+      ...(order.orderNote
+        ? [
+            {
+              name: "全單備註",
+              quantity: 1,
+              specs: [],
+              note: order.orderNote,
+            },
+          ]
+        : []),
+      {
+        name: "總計",
+        quantity: 1,
+        specs: [],
+        note: formatMoney(order.total, bootstrap.currency),
+      },
+      ...(order.paymentMethod
+        ? [
+            {
+              name: "付款方式",
+              quantity: 1,
+              specs: [],
+              note: String(order.paymentMethod),
+            },
+          ]
+        : []),
+    ];
+
+    const nextPrintJobs = receiptPrinters.map<PrintJob>((printer) => ({
+      id: uid("print"),
+      orderId: order.id,
+      orderNo: order.localOrderNo,
+      tableName: order.tableName,
+      ticketType: "normal",
+      printerGroup: "receipt",
+      printerName: printer.name,
+      items: receiptItems,
+      status: networkOnline ? "sent" : "pending",
+      createdAt: timestamp,
+    }));
+
+    persistPrintJobs([...nextPrintJobs, ...printJobs]);
+    pushEvents(
+      nextPrintJobs.map<QueueEvent>((printJob) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: printJob.id,
+        payload: printJob,
+        status: networkOnline ? "synced" : "pending",
+        createdAt: timestamp,
+      })),
+    );
+  }
+
   function confirmPayment(method: string) {
     if (!bootstrap) return;
+    const applyPaymentToOrder = (targetOrder: PosOrder, sourceOrders: PosOrder[]) => {
+      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+      const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+      const updatedOrder: PosOrder = {
+        ...targetOrder,
+        status: quickPaidFlow ? "paid" : "settled",
+        paymentMethod:
+          memberDeduction > 0
+            ? paymentSummary.total > 0
+              ? `會員餘額 + ${method}`
+              : "會員餘額"
+            : couponDiscount > 0
+              ? `優惠券 + ${method}`
+              : method,
+        discountAmount: discountAmount + couponDiscount,
+        total: settledGrandTotal,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const nextOrders = sourceOrders.some((order) => order.id === updatedOrder.id)
+        ? sourceOrders.map((order) => (order.id === updatedOrder.id ? updatedOrder : order))
+        : [updatedOrder, ...sourceOrders];
+      persistOrders(nextOrders);
+
+      if (memberMatch && (memberDeduction > 0 || selectedCouponIds.length > 0)) {
+        const nextMembers = membersCache.map((member) =>
+          member.id === memberMatch.id
+            ? {
+                ...member,
+                balance: Math.max(0, member.balance - memberDeduction),
+                coupons: member.coupons.map((coupon) =>
+                  selectedCouponIds.includes(coupon.id)
+                    ? { ...coupon, usedAt: new Date().toISOString() }
+                    : coupon,
+                ),
+              }
+            : member,
+        );
+        setMembersCache(nextMembers);
+        saveMembers(nextMembers);
+        setMemberMatch(nextMembers.find((member) => member.id === memberMatch.id) ?? null);
+      }
+
+      const paymentEvent: QueueEvent = {
+        id: uid("evt"),
+        type: "ORDER_SETTLED",
+        entityId: updatedOrder.id,
+        payload: {
+          orderId: updatedOrder.id,
+          total: settledGrandTotal,
+          receivedAmount: Number(receivedAmount) || paymentSummary.total,
+          changeDue,
+          discountAmount: discountAmount + couponDiscount,
+          paymentMethod: updatedOrder.paymentMethod,
+          memberPhone: memberMatch?.phone ?? null,
+          memberDeduction,
+          couponDiscount,
+          couponIds: selectedCouponIds,
+          prepaidAmount,
+          status: updatedOrder.status,
+        },
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedOrder.updatedAt,
+      };
+
+      pushEvents([paymentEvent]);
+      setPayingOrderId(null);
+      setActiveOrderId(null);
+      setCartItems([]);
+      setDiscountValue("0");
+      setReceivedAmount("");
+      setSelectedItemId("");
+      setBaseOrderItems([]);
+      setMemberPhone("");
+      setMemberMatch(null);
+      setSelectedPaymentMethod("");
+      setUseMemberBalance(true);
+      setSelectedCouponIds([]);
+      setToast({
+        tone: "success",
+        message: networkOnline
+          ? quickPaidFlow
+            ? `已收款 ${updatedOrder.localOrderNo}，等待製作完成。`
+            : `已完成 ${updatedOrder.localOrderNo} 結帳。`
+          : quickPaidFlow
+            ? `已離線記錄 ${updatedOrder.localOrderNo} 付款，待恢復網絡後補傳。`
+            : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
+      });
+      setSettlementFlash(true);
+      if (quickPaidFlow) {
+        printReceipt(updatedOrder);
+        setQuickPanel("local");
+        setViewingOrderId(updatedOrder.id);
+      } else {
+        backToTables();
+      }
+    };
+
+    if (isQuickMode && payingOrderId === CART_PAYING_ID) {
+      void (async () => {
+        const createdOrder = await sendToKitchen({ silent: true });
+        if (!createdOrder) return;
+        applyPaymentToOrder(createdOrder, orders);
+      })();
+      return;
+    }
 
     const targetOrder =
       (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
@@ -1384,98 +1561,7 @@ export function PosApp() {
       unsettledOrder;
     if (!targetOrder) return;
 
-    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
-    const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
-    const updatedOrder: PosOrder = {
-      ...targetOrder,
-      status: quickPaidFlow ? "paid" : "settled",
-      paymentMethod:
-        memberDeduction > 0
-          ? paymentSummary.total > 0
-            ? `會員餘額 + ${method}`
-            : "會員餘額"
-          : couponDiscount > 0
-            ? `優惠券 + ${method}`
-            : method,
-      discountAmount: discountAmount + couponDiscount,
-      total: settledGrandTotal,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const nextOrders = orders.map((order) => (order.id === targetOrder.id ? updatedOrder : order));
-    persistOrders(nextOrders);
-
-    if (memberMatch && (memberDeduction > 0 || selectedCouponIds.length > 0)) {
-      const nextMembers = membersCache.map((member) =>
-        member.id === memberMatch.id
-          ? {
-              ...member,
-              balance: Math.max(0, member.balance - memberDeduction),
-              coupons: member.coupons.map((coupon) =>
-                selectedCouponIds.includes(coupon.id)
-                  ? { ...coupon, usedAt: new Date().toISOString() }
-                  : coupon,
-              ),
-            }
-          : member,
-      );
-      setMembersCache(nextMembers);
-      saveMembers(nextMembers);
-      setMemberMatch(nextMembers.find((member) => member.id === memberMatch.id) ?? null);
-    }
-
-    const paymentEvent: QueueEvent = {
-      id: uid("evt"),
-      type: "ORDER_SETTLED",
-      entityId: updatedOrder.id,
-      payload: {
-        orderId: updatedOrder.id,
-        total: settledGrandTotal,
-        receivedAmount: Number(receivedAmount) || paymentSummary.total,
-        changeDue,
-        discountAmount: discountAmount + couponDiscount,
-        paymentMethod: updatedOrder.paymentMethod,
-        memberPhone: memberMatch?.phone ?? null,
-        memberDeduction,
-        couponDiscount,
-        couponIds: selectedCouponIds,
-        prepaidAmount,
-        status: updatedOrder.status,
-      },
-      status: networkOnline ? "synced" : "pending",
-      createdAt: updatedOrder.updatedAt,
-    };
-
-    pushEvents([paymentEvent]);
-    setPayingOrderId(null);
-    setActiveOrderId(null);
-    setCartItems([]);
-    setDiscountValue("0");
-    setReceivedAmount("");
-    setSelectedItemId("");
-    setBaseOrderItems([]);
-    setMemberPhone("");
-    setMemberMatch(null);
-    setSelectedPaymentMethod("");
-    setUseMemberBalance(true);
-    setSelectedCouponIds([]);
-    setToast({
-      tone: "success",
-      message: networkOnline
-        ? quickPaidFlow
-          ? `已收款 ${updatedOrder.localOrderNo}，等待製作完成。`
-          : `已完成 ${updatedOrder.localOrderNo} 結帳。`
-        : quickPaidFlow
-          ? `已離線記錄 ${updatedOrder.localOrderNo} 付款，待恢復網絡後補傳。`
-          : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
-    });
-    setSettlementFlash(true);
-    if (quickPaidFlow) {
-      setQuickPanel("local");
-      setViewingOrderId(updatedOrder.id);
-    } else {
-      backToTables();
-    }
+    applyPaymentToOrder(targetOrder, orders);
   }
 
   function completeOnlinePaidOrder() {
@@ -1539,19 +1625,22 @@ export function PosApp() {
   }
 
   async function openSettlementModal() {
-    const targetOrder =
-      activeOrder?.status === "sent_to_kitchen"
-        ? activeOrder
-        : orders.find((order) => order.status === "sent_to_kitchen");
-    if (!targetOrder && isQuickMode && cartItems.length > 0) {
-      const createdOrder = await sendToKitchen({ silent: true });
-      if (!createdOrder) return;
-      setPayingOrderId(createdOrder.id);
+    if (isQuickMode) {
+      if (cartItems.length === 0) {
+        setToast({ tone: "info", message: "請先點餐再結帳。" });
+        return;
+      }
+      setPayingOrderId(CART_PAYING_ID);
       setMembersCache(loadMembers());
       setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
       setSelectedCouponIds([]);
       return;
     }
+
+    const targetOrder =
+      activeOrder?.status === "sent_to_kitchen"
+        ? activeOrder
+        : orders.find((order) => order.status === "sent_to_kitchen");
     if (!targetOrder) {
       setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
       return;
@@ -1706,7 +1795,7 @@ export function PosApp() {
                   </button>
                 ) : (
                   <div className="text-xs font-semibold text-slate-600">
-                    {currentSettlementOrder ? `待結帳：${currentSettlementOrder.localOrderNo}` : "可直接點餐並結帳"}
+                    可直接點餐並結帳
                   </div>
                 )}
                 <div className="text-xs text-slate-500">
@@ -2693,7 +2782,11 @@ export function PosApp() {
               <div>
                 <div className="text-xl font-semibold text-slate-900">結帳</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  {currentSettlementOrder ? `訂單 ${currentSettlementOrder.localOrderNo}` : "待結帳訂單"}
+                  {payingOrderId === CART_PAYING_ID
+                    ? "本次結帳"
+                    : currentSettlementOrder
+                      ? `訂單 ${currentSettlementOrder.localOrderNo}`
+                      : "待結帳訂單"}
                 </div>
               </div>
               <button
