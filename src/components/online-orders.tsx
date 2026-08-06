@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
@@ -51,6 +51,7 @@ export function OnlineOrders() {
   const [riderNote, setRiderNote] = useState("");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [audioReady, setAudioReady] = useState(false);
+  const hasInitializedSnapshotRef = useRef(false);
 
   const viewingOrder = useMemo(
     () => (viewingOrderId ? orders.find((item) => item.id === viewingOrderId) ?? null : null),
@@ -170,11 +171,13 @@ export function OnlineOrders() {
             return !isCancelStatus(prev.status) && isCancelStatus(row.status);
           });
 
-          if (cancelOrders.length > 0) {
-            playSound("cancel_order");
-          } else if (newOrders.length > 0) {
-            const hasDelivery = newOrders.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
-            playSound(hasDelivery ? "new_delivery" : "new_order");
+          if (hasInitializedSnapshotRef.current) {
+            if (cancelOrders.length > 0) {
+              playSound("cancel_order");
+            } else if (newOrders.length > 0) {
+              const hasDelivery = newOrders.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
+              playSound(hasDelivery ? "new_delivery" : "new_order");
+            }
           }
 
           const baseOrders = (payload.orders ?? []).map((order) =>
@@ -199,6 +202,7 @@ export function OnlineOrders() {
             status: row.status,
             type: row.type,
           }));
+          hasInitializedSnapshotRef.current = true;
         }
       } catch (err) {
         if (!cancelled) {

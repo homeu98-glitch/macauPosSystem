@@ -83,6 +83,12 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
   return { subtotal, serviceChargeAmount, taxAmount, total };
 }
 
+function quickCompletionLabel(order: Pick<PosOrder, "tableName">) {
+  if (order.tableName === "自取") return "待取餐";
+  if (order.tableName === "外賣") return "待交付";
+  return "待出餐";
+}
+
 export function PosApp() {
   const cachedBootstrapRaw = loadBootstrapCache();
   const cachedBootstrap = cachedBootstrapRaw ? normalizeBootstrapPayload(cachedBootstrapRaw) : null;
@@ -237,11 +243,13 @@ export function PosApp() {
 
             quickOnlineSnapshotRef.current = nextMap;
 
-            if (hasCustomerCancel) {
-              void new Audio("/sounds/cancel-order.mp3").play();
-            } else if (newArrivals.length > 0) {
-              const hasDelivery = newArrivals.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
-              void new Audio(hasDelivery ? "/sounds/new-delivery-order.mp3" : "/sounds/new-order.mp3").play();
+            if (snapshot.size > 0) {
+              if (hasCustomerCancel) {
+                void new Audio("/sounds/cancel-order.mp3").play();
+              } else if (newArrivals.length > 0) {
+                const hasDelivery = newArrivals.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
+                void new Audio(hasDelivery ? "/sounds/new-delivery-order.mp3" : "/sounds/new-order.mp3").play();
+              }
             }
           }
         }
@@ -513,7 +521,7 @@ export function PosApp() {
 
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
   const openOrders = useMemo(
-    () => orders.filter((order) => order.status === "draft" || order.status === "sent_to_kitchen"),
+    () => orders.filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid"),
     [orders],
   );
   const recentCompletedOrders = useMemo(() => {
@@ -524,6 +532,17 @@ export function PosApp() {
       .filter((order) => Date.parse(order.updatedAt || order.createdAt) >= threshold)
       .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
   }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
+  const quickPreparingOrders = useMemo(
+    () =>
+      openOrders
+        .filter((order) => order.tableId === "counter")
+        .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen"),
+    [openOrders],
+  );
+  const quickWaitingOrders = useMemo(
+    () => openOrders.filter((order) => order.tableId === "counter").filter((order) => order.status === "paid"),
+    [openOrders],
+  );
 
   const viewingOrder = useMemo(() => {
     if (!viewingOrderId) return null;
@@ -1209,8 +1228,8 @@ export function PosApp() {
     setToast({ tone: "success", message: "已加入重打單打印隊列。" });
   }
 
-  async function sendToKitchen() {
-    if (!bootstrap || !activeTable || cartItems.length === 0) return;
+  async function sendToKitchen(options?: { silent?: boolean }) {
+    if (!bootstrap || !activeTable || cartItems.length === 0) return null;
 
     const timestamp = new Date().toISOString();
     let nextOrderNo: string | undefined;
@@ -1229,7 +1248,7 @@ export function PosApp() {
     }
 
     const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo);
-    if (!order) return;
+    if (!order) return null;
 
     const baseMap = new Map<string, number>();
     for (const row of baseOrderItems) {
@@ -1246,8 +1265,10 @@ export function PosApp() {
       .filter((row): row is OrderItem => Boolean(row));
 
     if (isAddOnOrder && addedItems.length === 0) {
-      setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
-      return;
+      if (!options?.silent) {
+        setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
+      }
+      return null;
     }
 
     const printTargetItems = isAddOnOrder ? addedItems : cartItems;
@@ -1314,16 +1335,44 @@ export function PosApp() {
     setReceivedAmount("");
     setBaseOrderItems(order.items);
     setOrderSuccessFlash(true);
-    setToast({
-      tone: "success",
-      message: networkOnline
-        ? isAddOnOrder
-          ? `已加單成功，單號 ${order.localOrderNo}。`
-          : `已下單成功，單號 ${order.localOrderNo}。`
-        : isAddOnOrder
-          ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
-          : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
-    });
+    if (!options?.silent) {
+      setToast({
+        tone: "success",
+        message: networkOnline
+          ? isAddOnOrder
+            ? `已加單成功，單號 ${order.localOrderNo}。`
+            : `已下單成功，單號 ${order.localOrderNo}。`
+          : isAddOnOrder
+            ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
+            : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
+      });
+    }
+    return order;
+  }
+
+  function markOrderCompleted(orderId: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder) return;
+
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "settled",
+      updatedAt: new Date().toISOString(),
+    };
+    const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
+    persistOrders(nextOrders);
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: { order: updatedOrder },
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedOrder.updatedAt,
+      },
+    ]);
+    setViewingOrderId(null);
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已完成。` });
   }
 
   function confirmPayment(method: string) {
@@ -1336,9 +1385,10 @@ export function PosApp() {
     if (!targetOrder) return;
 
     const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+    const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
     const updatedOrder: PosOrder = {
       ...targetOrder,
-      status: "settled",
+      status: quickPaidFlow ? "paid" : "settled",
       paymentMethod:
         memberDeduction > 0
           ? paymentSummary.total > 0
@@ -1390,6 +1440,7 @@ export function PosApp() {
         couponDiscount,
         couponIds: selectedCouponIds,
         prepaidAmount,
+        status: updatedOrder.status,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedOrder.updatedAt,
@@ -1411,11 +1462,20 @@ export function PosApp() {
     setToast({
       tone: "success",
       message: networkOnline
-        ? `已完成 ${updatedOrder.localOrderNo} 結帳。`
-        : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
+        ? quickPaidFlow
+          ? `已收款 ${updatedOrder.localOrderNo}，等待製作完成。`
+          : `已完成 ${updatedOrder.localOrderNo} 結帳。`
+        : quickPaidFlow
+          ? `已離線記錄 ${updatedOrder.localOrderNo} 付款，待恢復網絡後補傳。`
+          : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
     });
     setSettlementFlash(true);
-    backToTables();
+    if (quickPaidFlow) {
+      setQuickPanel("local");
+      setViewingOrderId(updatedOrder.id);
+    } else {
+      backToTables();
+    }
   }
 
   function completeOnlinePaidOrder() {
@@ -1427,9 +1487,10 @@ export function PosApp() {
     if (!targetOrder) return;
 
     const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+    const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
     const updatedOrder: PosOrder = {
       ...targetOrder,
-      status: "settled",
+      status: quickPaidFlow ? "paid" : "settled",
       paymentMethod: "線上已支付",
       discountAmount: discountAmount + couponDiscount,
       total: settledGrandTotal,
@@ -1455,22 +1516,42 @@ export function PosApp() {
         couponDiscount,
         couponIds: selectedCouponIds,
         prepaidAmount,
+        status: updatedOrder.status,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedOrder.updatedAt,
     };
 
     pushEvents([paymentEvent]);
-    setToast({ tone: "success", message: `客人已支付，已完成 ${updatedOrder.localOrderNo}。` });
+    setToast({
+      tone: "success",
+      message: quickPaidFlow
+        ? `客人已支付 ${updatedOrder.localOrderNo}，等待製作完成。`
+        : `客人已支付，已完成 ${updatedOrder.localOrderNo}。`,
+    });
     setSettlementFlash(true);
-    backToTables();
+    if (quickPaidFlow) {
+      setQuickPanel("local");
+      setViewingOrderId(updatedOrder.id);
+    } else {
+      backToTables();
+    }
   }
 
-  function openSettlementModal() {
+  async function openSettlementModal() {
     const targetOrder =
       activeOrder?.status === "sent_to_kitchen"
         ? activeOrder
         : orders.find((order) => order.status === "sent_to_kitchen");
+    if (!targetOrder && isQuickMode && cartItems.length > 0) {
+      const createdOrder = await sendToKitchen({ silent: true });
+      if (!createdOrder) return;
+      setPayingOrderId(createdOrder.id);
+      setMembersCache(loadMembers());
+      setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
+      setSelectedCouponIds([]);
+      return;
+    }
     if (!targetOrder) {
       setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
       return;
@@ -1671,22 +1752,6 @@ export function PosApp() {
                 </div>
               ) : null}
 
-              <div className="mt-3 flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold text-slate-600">全單備註</div>
-                  <div className="truncate text-xs text-slate-500">{orderNote ? orderNote : "（可選）"}</div>
-                </div>
-                <button
-                  className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                  onClick={() => {
-                    setNoteDraft(orderNote);
-                    setNoteModal({ type: "order" });
-                  }}
-                  type="button"
-                >
-                  編輯
-                </button>
-              </div>
             </div>
 
             <div className="flex-1 overflow-auto px-3 pb-3">
@@ -1763,9 +1828,21 @@ export function PosApp() {
             </div>
 
             <div className="border-t border-slate-100 px-4 py-4">
-              <div className="text-xs font-semibold text-slate-500">規格</div>
-              <div className="mt-2 text-sm text-slate-700">
-                只有有規格的菜品，點選後才會彈出規格選擇視窗。
+              <div className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-slate-600">全單備註</div>
+                  <div className="truncate text-xs text-slate-500">{orderNote ? orderNote : "（可選）"}</div>
+                </div>
+                <button
+                  className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={() => {
+                    setNoteDraft(orderNote);
+                    setNoteModal({ type: "order" });
+                  }}
+                  type="button"
+                >
+                  編輯
+                </button>
               </div>
             </div>
           </section>
@@ -2074,15 +2151,14 @@ export function PosApp() {
                 </div>
               ) : isQuickMode && quickPanel === "local" ? (
                 <div className="grid gap-3">
-                  <div className="text-xs font-semibold text-slate-500">未完成</div>
+                  <div className="text-xs font-semibold text-slate-500">製作中</div>
                   <div className="grid gap-2">
-                      {openOrders.filter((order) => order.tableId === "counter").length === 0 ? (
+                      {quickPreparingOrders.length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                          暫時沒有本機未結帳訂單
+                          暫時沒有製作中訂單
                         </div>
                       ) : (
-                        openOrders
-                          .filter((order) => order.tableId === "counter")
+                        quickPreparingOrders
                           .slice(0, 12)
                           .map((order) => (
                             <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -2094,6 +2170,17 @@ export function PosApp() {
                                   <div className="mt-1 text-xs text-slate-500">
                                     {formatMoney(order.total, bootstrap.currency)}
                                     {order.prepaidAmount ? ` · 已支付 ${formatMoney(order.prepaidAmount, bootstrap.currency)}` : ""}
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <span
+                                      className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${
+                                        order.status === "paid"
+                                          ? "bg-emerald-50 text-emerald-700"
+                                          : "bg-amber-50 text-amber-700"
+                                      }`}
+                                    >
+                                      製作中
+                                    </span>
                                   </div>
                                   <div className="mt-2 text-xs text-slate-500">
                                     {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
@@ -2113,6 +2200,52 @@ export function PosApp() {
                             </div>
                           ))
                       )}
+                  </div>
+
+                  <div className="mt-2 text-xs font-semibold text-slate-500">待取餐 / 待交付</div>
+                  <div className="grid gap-2">
+                    {quickWaitingOrders.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                        暫時沒有待取餐 / 待交付訂單
+                      </div>
+                    ) : (
+                      quickWaitingOrders.slice(0, 12).map((order) => (
+                        <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-900">
+                                {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {formatMoney(order.total, bootstrap.currency)}
+                                {order.prepaidAmount ? ` · 已支付 ${formatMoney(order.prepaidAmount, bootstrap.currency)}` : ""}
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
+                                  已支付
+                                </span>
+                                <span className="inline-flex rounded-full bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700">
+                                  {quickCompletionLabel(order)}
+                                </span>
+                              </div>
+                              <div className="mt-2 text-xs text-slate-500">
+                                {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
+                                {order.items.length > 3 ? " · ..." : ""}
+                              </div>
+                            </div>
+                            <button
+                              className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                              onClick={() => {
+                                setViewingOrderId(order.id);
+                              }}
+                              type="button"
+                            >
+                              查看訂單
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
@@ -2208,16 +2341,18 @@ export function PosApp() {
               </div>
 
               <div className="mt-2 grid gap-2">
-                <button
-                  className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
-                  onClick={() => void sendToKitchen()}
-                  type="button"
-                >
-                  {isAddOnOrder ? "加單" : "下單"}
-                </button>
+                {!isQuickMode ? (
+                  <button
+                    className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
+                    onClick={() => void sendToKitchen()}
+                    type="button"
+                  >
+                    {isAddOnOrder ? "加單" : "下單"}
+                  </button>
+                ) : null}
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800"
-                  onClick={openSettlementModal}
+                  onClick={() => void openSettlementModal()}
                   type="button"
                 >
                   去結帳
@@ -2448,10 +2583,19 @@ export function PosApp() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {viewingOrder.status === "settled" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total ? (
-                  <div className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                    已支付
+                {viewingOrder.status === "settled" ? (
+                  <div className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                    已完成
                   </div>
+                ) : viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total ? (
+                  <>
+                    <div className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                      已支付
+                    </div>
+                    <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                      待完成
+                    </div>
+                  </>
                 ) : (
                   <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
                     待結帳
@@ -2514,6 +2658,16 @@ export function PosApp() {
               >
                 重打單
               </button>
+              {(viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total) &&
+              viewingOrder.status !== "settled" ? (
+                <button
+                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => markOrderCompleted(viewingOrder.id)}
+                  type="button"
+                >
+                  已完成
+                </button>
+              ) : null}
               {viewingOrder.status !== "settled" && (viewingOrder.prepaidAmount ?? 0) < viewingOrder.total ? (
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { normalizePosLocalSettings } from "@/lib/storage";
 
 export async function GET() {
   const supabase = getSupabaseServerClient();
@@ -31,7 +32,7 @@ export async function GET() {
           updatedAt: data.updated_at,
         }
       : null,
-    localSettings: data?.local_settings ?? null,
+    localSettings: data?.local_settings ? normalizePosLocalSettings(data.local_settings) : null,
   });
 }
 

@@ -43,7 +43,7 @@ function writeJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
-function normalizeLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
+export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
   return {
     floors: Array.isArray(settings?.floors) ? settings.floors : defaultPosLocalSettings.floors,
     paymentMethods: Array.isArray(settings?.paymentMethods)
@@ -112,7 +112,7 @@ export function savePrintJobs(printJobs: PrintJob[]) {
 }
 
 export function loadPosLocalSettings() {
-  return normalizeLocalSettings(readJson<PosLocalSettings>(KEYS.localSettings, defaultPosLocalSettings));
+  return normalizePosLocalSettings(readJson<PosLocalSettings>(KEYS.localSettings, defaultPosLocalSettings));
 }
 
 export function savePosLocalSettings(settings: PosLocalSettings) {

@@ -33,6 +33,7 @@ export async function POST(request: Request) {
               table_name: order.tableName,
               status: order.status,
               items: order.items,
+              order_note: order.orderNote ?? null,
               subtotal: order.subtotal,
               tax_amount: order.taxAmount,
               service_charge_amount: order.serviceChargeAmount,
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
         await supabase
           .from("pos_orders")
           .update({
-            status: "settled",
+            status: event.payload.status ?? "settled",
             payment_method: event.payload.paymentMethod ?? null,
             discount_amount: event.payload.discountAmount ?? 0,
             total: event.payload.total ?? 0,

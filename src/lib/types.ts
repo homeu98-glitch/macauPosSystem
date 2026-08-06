@@ -150,7 +150,7 @@ export interface PosOrder {
   localOrderNo: string;
   tableId: string;
   tableName: string;
-  status: "draft" | "sent_to_kitchen" | "settled";
+  status: "draft" | "sent_to_kitchen" | "paid" | "settled";
   items: OrderItem[];
   orderNote?: string;
   subtotal: number;
