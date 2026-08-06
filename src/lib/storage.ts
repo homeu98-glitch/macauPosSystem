@@ -13,6 +13,9 @@ const KEYS = {
   authSession: "macau-pos/auth-session",
   soldOut: "macau-pos/sold-out",
   shift: "macau-pos/shift",
+  operatingMode: "macau-pos/operating-mode",
+  quickAutoAccept: "macau-pos/quick-auto-accept",
+  quickCompletedMinutes: "macau-pos/quick-completed-minutes",
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -193,4 +196,36 @@ export function loadShiftState(): ShiftState {
 
 export function saveShiftState(state: ShiftState) {
   writeJson(KEYS.shift, state);
+}
+
+export type OperatingMode = "dinein" | "quick";
+
+export function loadOperatingMode(): OperatingMode {
+  const value = readJson<string | null>(KEYS.operatingMode, null);
+  return value === "quick" ? "quick" : "dinein";
+}
+
+export function saveOperatingMode(mode: OperatingMode) {
+  writeJson(KEYS.operatingMode, mode);
+}
+
+export function loadQuickAutoAccept() {
+  const value = readJson<boolean | null>(KEYS.quickAutoAccept, null);
+  return value === true;
+}
+
+export function saveQuickAutoAccept(enabled: boolean) {
+  writeJson(KEYS.quickAutoAccept, enabled);
+}
+
+export function loadQuickCompletedMinutes() {
+  const value = readJson<number | null>(KEYS.quickCompletedMinutes, null);
+  if (!value) return 10;
+  if (value < 1) return 1;
+  if (value > 180) return 180;
+  return Math.floor(value);
+}
+
+export function saveQuickCompletedMinutes(minutes: number) {
+  writeJson(KEYS.quickCompletedMinutes, Math.floor(minutes));
 }

@@ -12,7 +12,10 @@ import {
   loadDeviceConfig,
   loadMembers,
   loadOfflineMode,
+  loadOperatingMode,
   loadPosLocalSettings,
+  loadQuickAutoAccept,
+  loadQuickCompletedMinutes,
   loadOrders,
   loadPrintJobs,
   loadQueue,
@@ -26,6 +29,8 @@ import {
   savePosLocalSettings,
   savePrintJobs,
   saveQueue,
+  saveQuickAutoAccept,
+  saveQuickCompletedMinutes,
   saveShiftState,
   saveSoldOutState,
 } from "@/lib/storage";
@@ -84,6 +89,7 @@ export function PosApp() {
   const cachedBootstrapRaw = loadBootstrapCache();
   const cachedBootstrap = cachedBootstrapRaw ? normalizeBootstrapPayload(cachedBootstrapRaw) : null;
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
+  const [operatingMode] = useState(() => loadOperatingMode());
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
   const [cartItems, setCartItems] = useState<OrderItem[]>([]);
@@ -101,7 +107,7 @@ export function PosApp() {
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
-  const [posMode, setPosMode] = useState<"tables" | "order">("tables");
+  const [posMode, setPosMode] = useState<"tables" | "order">(() => (loadOperatingMode() === "quick" ? "order" : "tables"));
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
   const [itemActionKey, setItemActionKey] = useState<string | null>(null);
@@ -124,9 +130,29 @@ export function PosApp() {
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
+  const [quickPanel, setQuickPanel] = useState<"cashier" | "pool">(() => (loadOperatingMode() === "quick" ? "pool" : "cashier"));
+  const [quickAutoAccept, setQuickAutoAccept] = useState(() => loadQuickAutoAccept());
+  const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
+  const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [onlineOrders, setOnlineOrders] = useState<
+    Array<{
+      id: string;
+      sourceId?: string;
+      type: string;
+      status: string;
+      paymentStatus?: "paid" | "unpaid";
+      paidAmount?: number;
+      total?: number;
+      createdAt?: string;
+      items?: Array<{ name: string; qty: number }>;
+    }>
+  >([]);
   const longPressTimerRef = useRef<number | null>(null);
+  const quickOrderProcessingRef = useRef<Set<string>>(new Set());
 
   const networkOnline = !offlineMode;
+  const isQuickMode = operatingMode === "quick";
 
   function updateOfflineMode(next: boolean) {
     setOfflineMode(next);
@@ -173,6 +199,74 @@ export function PosApp() {
     window.addEventListener("pos-shift-changed", onShiftChanged as EventListener);
     return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
   }, []);
+
+  useEffect(() => {
+    if (!isQuickMode) return;
+    let cancelled = false;
+
+    async function loadOnlineOrders() {
+      try {
+        const response = await fetch("/api/online-orders?type=all");
+        const payload = (await response.json()) as { ok: boolean; orders?: unknown[] };
+        if (!payload.ok) return;
+        if (!cancelled) setOnlineOrders((payload.orders ?? []) as typeof onlineOrders);
+      } catch {
+        // ignore
+      }
+    }
+
+    void loadOnlineOrders();
+    const timer = window.setInterval(loadOnlineOrders, 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isQuickMode]);
+
+  useEffect(() => {
+    if (!isQuickMode) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [isQuickMode]);
+
+  useEffect(() => {
+    if (!isQuickMode || !quickAutoAccept) return;
+    const pending = onlineOrders.filter((order) => order.status === "pending");
+    if (pending.length === 0) return;
+
+    for (const order of pending) {
+      const sourceId = order.sourceId ?? order.id;
+      if (quickOrderProcessingRef.current.has(sourceId)) continue;
+      quickOrderProcessingRef.current.add(sourceId);
+
+      void (async () => {
+        try {
+          await fetch("/api/online-orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "accept", orderId: sourceId }),
+          });
+          const response = await fetch("/api/online-orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
+          });
+          const payload = (await response.json()) as { ok: boolean; posOrder?: PosOrder; error?: string };
+          if (!payload.ok || !payload.posOrder) {
+            throw new Error(payload.error ?? "轉入快餐訂單失敗");
+          }
+          setOrders((current) => {
+            const next = [payload.posOrder!, ...current.filter((item) => item.id !== payload.posOrder!.id)];
+            saveOrders(next);
+            return next;
+          });
+          setToast({ tone: "success", message: "已自動接單並加入訂單池。" });
+        } catch (err) {
+          setToast({ tone: "info", message: err instanceof Error ? err.message : "自動接單失敗" });
+        }
+      })();
+    }
+  }, [isQuickMode, onlineOrders, quickAutoAccept]);
 
   function isItemSoldOut(menuItemId: string) {
     const state = soldOutMap[menuItemId];
@@ -310,10 +404,13 @@ export function PosApp() {
     void loadRuntimeState();
   }, [offlineMode, runtimeRefreshTick]);
 
-  const activeTable = useMemo(
-    () => bootstrap?.tables.find((table) => table.id === activeTableId) ?? null,
-    [bootstrap, activeTableId],
-  );
+  const activeTable = useMemo(() => {
+    if (!bootstrap) return null;
+    if (isQuickMode) {
+      return { id: "counter", name: "快餐", area: "" } as PosBootstrap["tables"][number];
+    }
+    return bootstrap.tables.find((table) => table.id === activeTableId) ?? null;
+  }, [bootstrap, activeTableId, isQuickMode]);
 
   const totals = useMemo(
     () => (bootstrap ? orderTotals(cartItems, bootstrap) : { subtotal: 0, serviceChargeAmount: 0, taxAmount: 0, total: 0 }),
@@ -356,6 +453,14 @@ export function PosApp() {
     () => orders.filter((order) => order.status === "draft" || order.status === "sent_to_kitchen"),
     [orders],
   );
+  const recentCompletedOrders = useMemo(() => {
+    if (!isQuickMode) return [];
+    const threshold = nowMs - quickCompletedMinutes * 60 * 1000;
+    return orders
+      .filter((order) => order.tableId === "counter" && order.status === "settled")
+      .filter((order) => Date.parse(order.updatedAt || order.createdAt) >= threshold)
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
+  }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
   const tableOrderMap = useMemo(
     () =>
       new Map(
@@ -521,11 +626,19 @@ export function PosApp() {
       tableOrderMap.get(activeTable.id) ??
       null;
 
+    const fallbackNo = isQuickMode
+      ? quickOrderType === "pickup"
+        ? `自取${new Date().getTime().toString().slice(-2)}`
+        : quickOrderType === "delivery"
+          ? `外賣${new Date().getTime().toString().slice(-2)}`
+          : `取餐${new Date().getTime().toString().slice(-2)}`
+      : `訂單${new Date().getTime().toString().slice(-2)}`;
+
     const order: PosOrder = existingOrder
       ? {
           ...existingOrder,
           tableId: activeTable.id,
-          tableName: activeTable.name,
+          tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
           items: cartItems,
           subtotal: baseTotals.subtotal,
@@ -537,9 +650,9 @@ export function PosApp() {
         }
       : {
           id: uid("order"),
-          localOrderNo: newLocalOrderNo ?? `訂單${new Date().getTime().toString().slice(-2)}`,
+          localOrderNo: newLocalOrderNo ?? fallbackNo,
           tableId: activeTable.id,
-          tableName: activeTable.name,
+          tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
           items: cartItems,
           subtotal: baseTotals.subtotal,
@@ -563,6 +676,7 @@ export function PosApp() {
   // 開台：本輪需求中不再在點餐界面提供入口（桌台點入即可開始操作）
 
   function backToTables() {
+    if (isQuickMode) return;
     setPosMode("tables");
     setCartItems([]);
     setSelectedItemId("");
@@ -917,6 +1031,65 @@ export function PosApp() {
     void syncNow(nextQueue);
   }
 
+  function quickTypeKind() {
+    if (quickOrderType === "pickup") return "pickup" as const;
+    if (quickOrderType === "delivery") return "delivery" as const;
+    return "counter" as const;
+  }
+
+  function quickTypeTableName() {
+    if (quickOrderType === "pickup") return "自取";
+    if (quickOrderType === "delivery") return "外賣";
+    return "堂食";
+  }
+
+  function reprintOrder(order: PosOrder) {
+    if (!bootstrap) return;
+    const timestamp = new Date().toISOString();
+
+    const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
+    const suffix = " (重打)";
+    const nextPrintJobs = configuredPrinters
+      .filter((printer) => order.items.some((item) => item.printerGroup === printer.group))
+      .map<PrintJob>((printer) => ({
+        id: uid("print"),
+        orderId: order.id,
+        orderNo: `${order.localOrderNo}${suffix}`,
+        tableName: order.tableName,
+        ticketType: "normal",
+        printerGroup: printer.group,
+        printerName: printer.name,
+        items: order.items
+          .filter((item) => item.printerGroup === printer.group)
+          .map((item) => ({
+            name: item.name,
+            quantity: item.quantity,
+            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+            note: item.note,
+          })),
+        status: networkOnline ? "sent" : "pending",
+        createdAt: timestamp,
+      }));
+
+    if (nextPrintJobs.length === 0) {
+      setToast({ tone: "info", message: "沒有可打印的菜品。" });
+      return;
+    }
+
+    persistPrintJobs([...nextPrintJobs, ...printJobs]);
+
+    const printEvents = nextPrintJobs.map<QueueEvent>((printJob) => ({
+      id: uid("evt"),
+      type: "PRINT_JOB_CREATED",
+      entityId: printJob.id,
+      payload: printJob,
+      status: networkOnline ? "synced" : "pending",
+      createdAt: timestamp,
+    }));
+    pushEvents(printEvents);
+    setToast({ tone: "success", message: "已加入重打單打印隊列。" });
+  }
+
   async function sendToKitchen() {
     if (!bootstrap || !activeTable || cartItems.length === 0) return;
 
@@ -927,7 +1100,7 @@ export function PosApp() {
         const response = await fetch("/api/pos/sequence", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: "pos", storeId: bootstrap.storeId }),
+          body: JSON.stringify({ kind: isQuickMode ? quickTypeKind() : "pos", storeId: bootstrap.storeId }),
         });
         const payload = (await response.json()) as { display?: string };
         nextOrderNo = payload.display;
@@ -1300,18 +1473,30 @@ export function PosApp() {
                   <div className="text-base font-semibold text-slate-900">{bootstrap.storeName}</div>
                   <div className="mt-1 text-xs text-slate-500">{deviceConfig.terminalName}</div>
                 </div>
-                <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  桌號 {activeTable?.name ?? "--"}
-                </div>
+                {isQuickMode ? (
+                  <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    快餐模式
+                  </div>
+                ) : (
+                  <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    桌號 {activeTable?.name ?? "--"}
+                  </div>
+                )}
               </div>
               <div className="mt-3 flex items-center justify-between gap-2">
-                <button
-                  className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                  onClick={backToTables}
-                  type="button"
-                >
-                  返回桌台
-                </button>
+                {!isQuickMode ? (
+                  <button
+                    className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                    onClick={backToTables}
+                    type="button"
+                  >
+                    返回桌台
+                  </button>
+                ) : (
+                  <div className="text-xs font-semibold text-slate-600">
+                    {currentSettlementOrder ? `待結帳：${currentSettlementOrder.localOrderNo}` : "可直接點餐並結帳"}
+                  </div>
+                )}
                 <div className="text-xs text-slate-500">
                   狀態：{selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
                 </div>
@@ -1323,6 +1508,37 @@ export function PosApp() {
                 <span className="font-semibold text-slate-900">訂單明細</span>
                 <span className="text-xs text-slate-500">{cartItems.length} 項</span>
               </div>
+              {isQuickMode ? (
+                <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2">
+                  <button
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                      quickOrderType === "dine_in" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setQuickOrderType("dine_in")}
+                    type="button"
+                  >
+                    堂食
+                  </button>
+                  <button
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                      quickOrderType === "delivery" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setQuickOrderType("delivery")}
+                    type="button"
+                  >
+                    外賣
+                  </button>
+                  <button
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                      quickOrderType === "pickup" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setQuickOrderType("pickup")}
+                    type="button"
+                  >
+                    自取
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex-1 overflow-auto px-3 pb-3">
@@ -1486,17 +1702,293 @@ export function PosApp() {
 
           <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">
-              <div className="text-base font-semibold text-slate-900">收銀與支付</div>
-              <div className="mt-1 text-xs text-slate-500">
-                {currentSettlementOrder
-                  ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
-                  : selectedTableStatus === "draft"
-                    ? "目前尚未下單，可繼續加菜或送廚房"
-                    : "目前未有待結帳訂單，可先開台或送廚房單"}
-              </div>
+              {isQuickMode ? (
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold text-slate-900">快捷操作</div>
+                    <div className="mt-1 text-xs text-slate-500">線上單與本機訂單會集中在這裡處理。</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        quickPanel === "pool" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                      }`}
+                      onClick={() => setQuickPanel("pool")}
+                      type="button"
+                    >
+                      訂單池
+                    </button>
+                    <button
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        quickPanel === "cashier" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                      }`}
+                      onClick={() => setQuickPanel("cashier")}
+                      type="button"
+                    >
+                      收銀
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-base font-semibold text-slate-900">收銀與支付</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {currentSettlementOrder
+                      ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
+                      : selectedTableStatus === "draft"
+                        ? "目前尚未下單，可繼續加菜或送廚房"
+                        : "目前未有待結帳訂單，可先開台或送廚房單"}
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="flex-1 overflow-auto px-4 py-4">
+              {isQuickMode && quickPanel === "pool" ? (
+                <div className="grid gap-4">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">線上訂單</div>
+                        <div className="mt-1 text-xs text-slate-500">自動接單會把新單自動轉入本機訂單。</div>
+                      </div>
+                      <button
+                        className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                          quickAutoAccept ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
+                        }`}
+                        onClick={() => {
+                          const next = !quickAutoAccept;
+                          setQuickAutoAccept(next);
+                          saveQuickAutoAccept(next);
+                        }}
+                        type="button"
+                      >
+                        {quickAutoAccept ? "自動接單：開" : "自動接單：關"}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 grid gap-2">
+                      {onlineOrders.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                          暫時沒有線上訂單
+                        </div>
+                      ) : (
+                        onlineOrders.slice(0, 12).map((order) => {
+                          const sourceId = order.sourceId ?? order.id;
+                          const paymentLabel =
+                            order.paymentStatus === "paid"
+                              ? `已支付 ${formatMoney(order.paidAmount ?? 0, bootstrap.currency)}`
+                              : "未支付";
+                          const statusLabel =
+                            order.status === "pending" ? "新單" : order.status === "accepted" ? "已接單" : order.status;
+                          const typeLabel =
+                            order.type === "dine_in"
+                              ? "堂食"
+                              : order.type === "pickup"
+                                ? "自取"
+                                : order.type === "rider_delivery"
+                                  ? "車手"
+                                  : "外送";
+
+                          return (
+                            <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-900">
+                                    {order.id} <span className="ml-2 text-xs font-semibold text-slate-500">{typeLabel}</span>
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {statusLabel} · {paymentLabel}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  {order.status === "pending" ? (
+                                    <button
+                                      className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+                                      onClick={() => {
+                                        void (async () => {
+                                          try {
+                                            await fetch("/api/online-orders", {
+                                              method: "POST",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ action: "accept", orderId: sourceId }),
+                                            });
+                                            const response = await fetch("/api/online-orders", {
+                                              method: "POST",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
+                                            });
+                                            const payload = (await response.json()) as {
+                                              ok: boolean;
+                                              posOrder?: PosOrder;
+                                              error?: string;
+                                            };
+                                            if (!payload.ok || !payload.posOrder) {
+                                              throw new Error(payload.error ?? "轉入快餐訂單失敗");
+                                            }
+                                            setOrders((current) => {
+                                              const next = [
+                                                payload.posOrder!,
+                                                ...current.filter((item) => item.id !== payload.posOrder!.id),
+                                              ];
+                                              saveOrders(next);
+                                              return next;
+                                            });
+                                            setPayingOrderId(payload.posOrder.id);
+                                            setQuickPanel("cashier");
+                                          } catch (err) {
+                                            setToast({ tone: "info", message: err instanceof Error ? err.message : "接單失敗" });
+                                          }
+                                        })();
+                                      }}
+                                      type="button"
+                                    >
+                                      接單並結帳
+                                    </button>
+                                  ) : (
+                                    <button
+                                      className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                                      onClick={() => {
+                                        void (async () => {
+                                          try {
+                                            const response = await fetch("/api/online-orders", {
+                                              method: "POST",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
+                                            });
+                                            const payload = (await response.json()) as {
+                                              ok: boolean;
+                                              posOrder?: PosOrder;
+                                              error?: string;
+                                            };
+                                            if (!payload.ok || !payload.posOrder) {
+                                              throw new Error(payload.error ?? "轉入快餐訂單失敗");
+                                            }
+                                            setOrders((current) => {
+                                              const next = [
+                                                payload.posOrder!,
+                                                ...current.filter((item) => item.id !== payload.posOrder!.id),
+                                              ];
+                                              saveOrders(next);
+                                              return next;
+                                            });
+                                            setPayingOrderId(payload.posOrder.id);
+                                            setQuickPanel("cashier");
+                                          } catch (err) {
+                                            setToast({ tone: "info", message: err instanceof Error ? err.message : "轉入失敗" });
+                                          }
+                                        })();
+                                      }}
+                                      type="button"
+                                    >
+                                      查看/結帳
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-slate-900">本機訂單</div>
+                    <div className="mt-3 grid gap-2">
+                      {openOrders.filter((order) => order.tableId === "counter").length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                          暫時沒有本機未結帳訂單
+                        </div>
+                      ) : (
+                        openOrders
+                          .filter((order) => order.tableId === "counter")
+                          .slice(0, 12)
+                          .map((order) => (
+                            <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-900">
+                                    {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {formatMoney(order.total, bootstrap.currency)}
+                                    {order.prepaidAmount ? ` · 已支付 ${formatMoney(order.prepaidAmount, bootstrap.currency)}` : ""}
+                                  </div>
+                                </div>
+                                <button
+                                  className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                                  onClick={() => {
+                                    setPayingOrderId(order.id);
+                                    setQuickPanel("cashier");
+                                  }}
+                                  type="button"
+                                >
+                                  結帳
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">已完成</div>
+                        <div className="mt-1 text-xs text-slate-500">保留 {quickCompletedMinutes} 分鐘，可一鍵重打單。</div>
+                      </div>
+                      <select
+                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          setQuickCompletedMinutes(next);
+                          saveQuickCompletedMinutes(next);
+                        }}
+                        value={String(quickCompletedMinutes)}
+                      >
+                        <option value="5">5 分鐘</option>
+                        <option value="10">10 分鐘</option>
+                        <option value="30">30 分鐘</option>
+                        <option value="60">60 分鐘</option>
+                      </select>
+                    </div>
+
+                    <div className="mt-3 grid gap-2">
+                      {recentCompletedOrders.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                          暫時沒有已完成訂單
+                        </div>
+                      ) : (
+                        recentCompletedOrders.slice(0, 12).map((order) => (
+                          <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-slate-900">
+                                  {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
+                                </div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {formatMoney(order.total, bootstrap.currency)}
+                                  {order.prepaidAmount ? ` · 已支付 ${formatMoney(order.prepaidAmount, bootstrap.currency)}` : ""}
+                                </div>
+                              </div>
+                              <button
+                                className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                                onClick={() => reprintOrder(order)}
+                                type="button"
+                              >
+                                重打單
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+              <>
               <div className="rounded-3xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between text-sm text-slate-500">
                   <span>小計</span>
@@ -1644,6 +2136,8 @@ export function PosApp() {
               ) : null}
 
               {/* 最近訂單：點餐頁不顯示，避免干擾店員操作 */}
+              </>
+              )}
             </div>
           </section>
         </div>

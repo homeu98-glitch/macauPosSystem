@@ -80,7 +80,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const payload = (await request.json()) as {
-    action?: "accept" | "assign_table" | "auto_accept" | "handoff_to_rider";
+    action?: "accept" | "assign_table" | "auto_accept" | "handoff_to_rider" | "convert_quick";
     orderId?: string;
     tableName?: string;
     tableId?: string;
@@ -205,6 +205,131 @@ export async function POST(request: Request) {
         { onConflict: "id" },
       );
     }
+  }
+
+  if (payload.action === "convert_quick" && payload.orderId) {
+    const { data: onlineOrder, error: orderError } = await supabase
+      .from("online_orders")
+      .select("*, online_order_items(product_name, qty)")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+
+    if (orderError || !onlineOrder) {
+      return NextResponse.json({ ok: false, error: orderError?.message ?? "線上訂單不存在" }, { status: 500 });
+    }
+
+    const { data: bootstrapRow } = await supabase
+      .from("pos_bootstrap_config")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const menuItems: Array<{ id: string; name: string; price: number; printerGroup: string }> = Array.isArray(bootstrapRow?.menu_items)
+      ? bootstrapRow!.menu_items
+      : [];
+
+    const mappedItems: Array<{
+      menuItemId: string;
+      name: string;
+      quantity: number;
+      price: number;
+      printerGroup: "kitchen" | "drinks" | "receipt";
+    }> = (onlineOrder.online_order_items ?? []).map((item: { product_name: string; qty: number }) => {
+      const menu = menuItems.find((m) => m.name === item.product_name);
+      return {
+        menuItemId: menu?.id ?? `ext-${item.product_name}`,
+        name: item.product_name,
+        quantity: item.qty,
+        price: Number(menu?.price ?? 0),
+        printerGroup: (menu?.printerGroup ?? "kitchen") as "kitchen" | "drinks" | "receipt",
+      };
+    });
+
+    const subtotal = mappedItems.reduce((sum, row) => sum + row.price * row.quantity, 0);
+    const taxAmount = 0;
+    const total = subtotal + taxAmount;
+    const prepaidAmount = Number(onlineOrder.paid_amount ?? 0);
+
+    let orderNo = onlineOrder.order_no ?? onlineOrder.id;
+    let tableName = "堂食";
+    let nextKind: "counter" | "pickup" | "delivery" | null = null;
+
+    if (onlineOrder.type === "dine_in") {
+      tableName = "堂食";
+      nextKind = "counter";
+    } else if (onlineOrder.type === "pickup") {
+      tableName = "自取";
+      nextKind = "pickup";
+    } else if (onlineOrder.type === "rider_delivery") {
+      tableName = "外賣";
+      nextKind = "delivery";
+    } else {
+      tableName = "外賣";
+      nextKind = "delivery";
+    }
+
+    if (nextKind && !onlineOrder.order_no) {
+      const { data: seq } = await supabase.rpc("next_daily_sequence", {
+        p_store_id: onlineOrder.store_id ?? "macau-store-a",
+        p_kind: nextKind,
+      });
+      if (typeof seq === "number") {
+        orderNo =
+          nextKind === "pickup"
+            ? `自取${String(seq).padStart(2, "0")}`
+            : nextKind === "delivery"
+              ? `外賣${String(seq).padStart(2, "0")}`
+              : `取餐${String(seq).padStart(2, "0")}`;
+        await supabase.from("online_orders").update({ order_no: orderNo }).eq("id", payload.orderId);
+      }
+    }
+
+    await supabase.from("pos_orders").upsert(
+      {
+        id: `online-${onlineOrder.id}`,
+        local_order_no: orderNo,
+        store_id: onlineOrder.store_id ?? "macau-store-a",
+        table_id: "counter",
+        table_name: tableName,
+        status: "sent_to_kitchen",
+        items: mappedItems,
+        subtotal,
+        tax_amount: taxAmount,
+        service_charge_amount: 0,
+        discount_amount: 0,
+        total,
+        prepaid_amount: prepaidAmount,
+        online_order_id: onlineOrder.id,
+        payment_method: null,
+        created_at: onlineOrder.created_at ?? new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
+
+    return NextResponse.json({
+      ok: true,
+      source: "supabase",
+      posOrder: {
+        id: `online-${onlineOrder.id}`,
+        localOrderNo: orderNo,
+        tableId: "counter",
+        tableName,
+        status: "sent_to_kitchen",
+        items: mappedItems,
+        subtotal,
+        taxAmount,
+        serviceChargeAmount: 0,
+        discountAmount: 0,
+        total,
+        prepaidAmount,
+        onlineOrderId: onlineOrder.id,
+        paymentMethod: undefined,
+        createdAt: onlineOrder.created_at ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    });
   }
 
   if (payload.action === "auto_accept" && Array.isArray(payload.orderIds) && payload.orderIds.length > 0) {

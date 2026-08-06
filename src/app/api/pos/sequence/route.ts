@@ -7,8 +7,18 @@ function pad2(value: number) {
 }
 
 export async function POST(request: Request) {
-  const payload = (await request.json()) as { kind?: "pos" | "pickup"; storeId?: string };
-  const kind = payload.kind === "pickup" ? "pickup" : "pos";
+  const payload = (await request.json()) as {
+    kind?: "pos" | "pickup" | "counter" | "delivery";
+    storeId?: string;
+  };
+  const kind =
+    payload.kind === "pickup"
+      ? "pickup"
+      : payload.kind === "counter"
+        ? "counter"
+        : payload.kind === "delivery"
+          ? "delivery"
+          : "pos";
   const storeId = payload.storeId ?? "macau-store-a";
 
   const supabase = getSupabaseServerClient();
@@ -23,7 +33,14 @@ export async function POST(request: Request) {
       source: "mock",
       kind,
       value: random,
-      display: kind === "pickup" ? `自取${pad2(random)}` : `訂單${pad2(random)}`,
+      display:
+        kind === "pickup"
+          ? `自取${pad2(random)}`
+          : kind === "counter"
+            ? `取餐${pad2(random)}`
+            : kind === "delivery"
+              ? `外賣${pad2(random)}`
+              : `訂單${pad2(random)}`,
       bizDate,
     });
   }
@@ -40,7 +57,14 @@ export async function POST(request: Request) {
       source: "supabase",
       kind,
       value: rpcData,
-      display: kind === "pickup" ? `自取${pad2(rpcData)}` : `訂單${pad2(rpcData)}`,
+      display:
+        kind === "pickup"
+          ? `自取${pad2(rpcData)}`
+          : kind === "counter"
+            ? `取餐${pad2(rpcData)}`
+            : kind === "delivery"
+              ? `外賣${pad2(rpcData)}`
+              : `訂單${pad2(rpcData)}`,
       bizDate,
     });
   }
@@ -55,4 +79,3 @@ export async function POST(request: Request) {
     { status: 500 },
   );
 }
-

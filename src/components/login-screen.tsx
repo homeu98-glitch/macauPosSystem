@@ -3,12 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { saveAuthSession } from "@/lib/storage";
+import { saveAuthSession, saveOperatingMode } from "@/lib/storage";
 
 export function LoginScreen() {
   const router = useRouter();
   const [account, setAccount] = useState("");
   const [pin, setPin] = useState("");
+  const [mode, setMode] = useState<"quick" | "dinein">("dinein");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -39,6 +40,7 @@ export function LoginScreen() {
       }
 
       saveAuthSession({ account: normalizedAccount, loggedInAt: new Date().toISOString() });
+      saveOperatingMode(mode === "quick" ? "quick" : "dinein");
       router.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
@@ -60,6 +62,31 @@ export function LoginScreen() {
           </div>
 
           <div className="mt-6 grid gap-3">
+            <div className="grid gap-1">
+              <span className="text-xs font-semibold text-white/70">模式</span>
+              <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/20 p-2">
+                <button
+                  className={`rounded-2xl px-3 py-2 text-sm font-semibold transition ${
+                    mode === "quick" ? "bg-orange-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                  onClick={() => setMode("quick")}
+                  type="button"
+                >
+                  快餐
+                </button>
+                <button
+                  className={`rounded-2xl px-3 py-2 text-sm font-semibold transition ${
+                    mode === "dinein" ? "bg-orange-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                  onClick={() => setMode("dinein")}
+                  type="button"
+                >
+                  堂食
+                </button>
+              </div>
+              <div className="text-xs text-white/40">快餐：無桌台，直接結帳；堂食：使用樓層與桌台。</div>
+            </div>
+
             <label className="grid gap-1">
               <span className="text-xs font-semibold text-white/70">帳號（8 位數字）</span>
               <input
