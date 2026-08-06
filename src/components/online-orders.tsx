@@ -35,6 +35,22 @@ function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
 }
 
+function normalizeOrderStatus(status: string) {
+  const s = String(status).toLowerCase();
+  if (s.includes("cancel")) return "cancelled";
+  if (s === "completed" || s === "done" || s === "settled") return "completed";
+  if (s === "accepted" || s === "preparing") return "preparing";
+  return "new";
+}
+
+function statusLabel(status: string) {
+  const normalized = normalizeOrderStatus(status);
+  if (normalized === "cancelled") return "已取消";
+  if (normalized === "completed") return "已完成";
+  if (normalized === "preparing") return "製作中";
+  return "新單";
+}
+
 export function OnlineOrders() {
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const autoAccept = localSettings.onlineOrderSettings.autoAccept;
@@ -43,8 +59,6 @@ export function OnlineOrders() {
   const [orders, setOrders] = useState<OnlineOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [statusMap, setStatusMap] = useState<Record<string, string>>({});
-  const [tableMap, setTableMap] = useState<Record<string, string>>({});
-  const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [riderModalOrderId, setRiderModalOrderId] = useState<string | null>(null);
   const [riderFee, setRiderFee] = useState("");
@@ -115,6 +129,7 @@ export function OnlineOrders() {
   async function writeBackOrder(payload: {
     action:
       | "accept"
+      | "complete"
       | "assign_table"
       | "auto_accept"
       | "handoff_to_rider"
@@ -229,39 +244,36 @@ export function OnlineOrders() {
       status: statusMap[order.id] ?? order.status,
     }));
     const total = effectiveOrders.length;
-    const pending = effectiveOrders.filter((order) => order.status === "new").length;
+    const pending = effectiveOrders.filter((order) => normalizeOrderStatus(order.status) === "new").length;
     return { total, pending };
   }, [orders, statusMap]);
 
-  const tables = localSettings.floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name })));
-
   async function acceptOrder(order: OnlineOrder) {
     try {
-      if ((statusMap[order.id] ?? order.status) !== "accepted") {
+      if (normalizeOrderStatus(statusMap[order.id] ?? order.status) !== "preparing") {
         await writeBackOrder({
           action: "accept",
           orderId: order.sourceId ?? order.id,
         });
       }
 
-      setStatusMap((current) => ({ ...current, [order.id]: "accepted" }));
-
-      if (order.type === "dine_in") {
-        setAssigningOrderId(order.id);
-        setToast({ tone: "success", message: "接單成功，請選擇桌台。" });
-        return;
-      }
-
-      setToast({ tone: "success", message: "接單成功。" });
+      setStatusMap((current) => ({ ...current, [order.id]: "preparing" }));
+      setToast({ tone: "success", message: "已接單，進入製作中。" });
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "接單回寫失敗" });
     }
   }
 
-  function openRiderModal(orderId: string) {
-    setRiderModalOrderId(orderId);
-    setRiderFee("");
-    setRiderNote("");
+  async function completeOrder(order: OnlineOrder) {
+    try {
+      await writeBackOrder({ action: "complete", orderId: order.sourceId ?? order.id });
+      setStatusMap((current) => ({ ...current, [order.id]: "completed" }));
+      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "completed" } : row)));
+      setToast({ tone: "success", message: "訂單已完成。" });
+      setViewingOrderId(null);
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "完成訂單失敗" });
+    }
   }
 
   async function confirmRiderHandoff() {
@@ -309,7 +321,6 @@ export function OnlineOrders() {
       await writeBackOrder({ action: "cancel", orderId: order.sourceId ?? order.id });
       setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_merchant" } : row)));
       setToast({ tone: "success", message: "已取消訂單，已回寫主系統。" });
-      playSound("cancel_order");
       setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "取消訂單失敗" });
@@ -412,7 +423,7 @@ export function OnlineOrders() {
             <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
               {orders.map((order) => {
                 const effectiveStatus = statusMap[order.id] ?? order.status;
-                const assignedTable = tableMap[order.id];
+                const normalizedStatus = normalizeOrderStatus(effectiveStatus);
                 return (
                 <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -422,8 +433,18 @@ export function OnlineOrders() {
                         {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
                       </div>
                     </div>
-                    <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
-                      {effectiveStatus}
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        normalizedStatus === "completed"
+                          ? "bg-slate-100 text-slate-700"
+                          : normalizedStatus === "cancelled"
+                            ? "bg-red-50 text-red-700"
+                            : normalizedStatus === "preparing"
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-orange-50 text-orange-700"
+                      }`}
+                    >
+                      {statusLabel(effectiveStatus)}
                     </span>
                   </div>
                   <div className="mt-3 text-sm text-slate-700">
@@ -438,9 +459,7 @@ export function OnlineOrders() {
                       <span className="text-slate-500">（{formatMoney(order.paidAmount ?? order.total ?? 0)}）</span>
                     ) : null}
                   </div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    {assignedTable ? `桌台：${assignedTable}` : order.type === "dine_in" ? "堂食未安排桌台" : "未需安排桌台"}
-                  </div>
+                  <div className="mt-1 text-sm text-slate-500">{order.type === "dine_in" ? "堂食訂單" : "非堂食訂單"}</div>
                   <div className="mt-2 text-sm font-semibold text-slate-900">
                     {typeof order.total === "number" ? formatMoney(order.total) : "金額：--"}
                   </div>
@@ -454,7 +473,11 @@ export function OnlineOrders() {
                       ))}
                     </div>
                   ) : null}
-                  <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div
+                    className={`mt-4 grid gap-2 ${
+                      normalizedStatus === "new" ? "grid-cols-3" : normalizedStatus === "preparing" ? "grid-cols-2" : "grid-cols-1"
+                    }`}
+                  >
                     <button
                       className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                       onClick={() => setViewingOrderId(order.id)}
@@ -462,23 +485,33 @@ export function OnlineOrders() {
                     >
                       查看
                     </button>
-                    {order.type === "self_delivery" && effectiveStatus === "accepted" ? (
+                    {normalizedStatus === "new" ? (
+                      <>
+                        <button
+                          className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                          onClick={() => void acceptOrder(order)}
+                          type="button"
+                        >
+                          接單
+                        </button>
+                        <button
+                          className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                          onClick={() => void cancelOrder(order)}
+                          type="button"
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : null}
+                    {normalizedStatus === "preparing" ? (
                       <button
-                        className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                        onClick={() => openRiderModal(order.id)}
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        onClick={() => void completeOrder(order)}
                         type="button"
                       >
-                        給車手接送
+                        已完成
                       </button>
-                    ) : (
-                      <button
-                        className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600"
-                        onClick={() => void acceptOrder(order)}
-                        type="button"
-                      >
-                        {effectiveStatus === "accepted" ? (order.type === "dine_in" ? "選桌" : "已接單") : "接單"}
-                      </button>
-                    )}
+                    ) : null}
                   </div>
                 </article>
               )})}
@@ -486,54 +519,6 @@ export function OnlineOrders() {
           </div>
         </main>
       </div>
-
-      {assigningOrderId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">安排堂食桌台</div>
-                <div className="mt-1 text-sm text-slate-500">自動接單後，商家可再決定客人入座哪張桌子。</div>
-              </div>
-              <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                onClick={() => setAssigningOrderId(null)}
-                type="button"
-              >
-                關閉
-              </button>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-              {tables.map((table) => (
-                <button
-                  key={table.id}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-semibold text-slate-900"
-                  onClick={() => {
-                    const nextTableName = `${table.floorName} · ${table.name}`;
-                    setTableMap((current) => ({ ...current, [assigningOrderId]: nextTableName }));
-                    void writeBackOrder({
-                      action: "assign_table",
-                      orderId: (orders.find((order) => order.id === assigningOrderId)?.sourceId ?? assigningOrderId) as string,
-                      tableId: table.id,
-                      tableName: nextTableName,
-                    })
-                      .then(() => {
-                        setToast({ tone: "success", message: "安排桌台成功，已轉入桌台點餐。" });
-                        setOrders((current) => current.filter((order) => order.id !== assigningOrderId));
-                      })
-                      .catch((err) => setToast({ tone: "error", message: err instanceof Error ? err.message : "安排桌台回寫失敗" }));
-                    setAssigningOrderId(null);
-                  }}
-                  type="button"
-                >
-                  <div>{table.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">{table.floorName}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {riderModalOrderId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
@@ -686,15 +671,32 @@ export function OnlineOrders() {
                     確認取消
                   </button>
                 </>
-              ) : (
+              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "new" ? (
+                <>
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={() => void cancelOrder(viewingOrder)}
+                    type="button"
+                  >
+                    取消
+                  </button>
+                  <button
+                    className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => void acceptOrder(viewingOrder)}
+                    type="button"
+                  >
+                    接單
+                  </button>
+                </>
+              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "preparing" ? (
                 <button
-                  className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => void cancelOrder(viewingOrder)}
+                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => void completeOrder(viewingOrder)}
                   type="button"
                 >
-                  取消訂單
+                  已完成
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         </div>

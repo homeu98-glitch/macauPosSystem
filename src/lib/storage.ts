@@ -43,6 +43,37 @@ function writeJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): DeviceConfig | null {
+  if (!config) return null;
+  return {
+    ...config,
+    printers: Array.isArray(config.printers)
+      ? config.printers.map((printer, index) => ({
+          id: printer.id ?? `printer-${index}`,
+          role:
+            printer.role ??
+            ((printer as { group?: string }).group === "receipt"
+              ? "receipt"
+              : (printer as { group?: string }).group
+                ? "zone"
+                : "zone"),
+          zoneId:
+            printer.zoneId ??
+            ((printer as { group?: string }).group && (printer as { group?: string }).group !== "receipt"
+              ? (printer as { group?: string }).group
+              : undefined),
+          connectionType: printer.connectionType ?? "lan",
+          name: printer.name ?? `打印機 ${index + 1}`,
+          model: printer.model ?? "",
+          paperSize: printer.paperSize ?? "",
+          ipAddress: printer.ipAddress ?? "",
+          usbLabel: printer.usbLabel ?? "",
+          enabled: Boolean(printer.enabled),
+        }))
+      : [],
+  };
+}
+
 export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
   return {
     floors: Array.isArray(settings?.floors) ? settings.floors : defaultPosLocalSettings.floors,
@@ -53,6 +84,7 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       settings?.menuPrinterOverrides && typeof settings.menuPrinterOverrides === "object"
         ? settings.menuPrinterOverrides
         : defaultPosLocalSettings.menuPrinterOverrides,
+    printZones: Array.isArray(settings?.printZones) ? settings.printZones : defaultPosLocalSettings.printZones,
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
     onlineOrderSettings: {
       autoAccept: Boolean(
@@ -80,7 +112,7 @@ export function saveBootstrapCache(data: PosBootstrap) {
 }
 
 export function loadDeviceConfig() {
-  return readJson<DeviceConfig | null>(KEYS.deviceConfig, null);
+  return normalizeDeviceConfig(readJson<DeviceConfig | null>(KEYS.deviceConfig, null));
 }
 
 export function saveDeviceConfig(data: DeviceConfig) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase-server";
-import { normalizePosLocalSettings } from "@/lib/storage";
+import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
 export async function GET() {
   const supabase = getSupabaseServerClient();
@@ -24,13 +24,13 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     deviceConfig: data
-      ? {
+      ? normalizeDeviceConfig({
           deviceId: data.device_id,
           terminalName: data.terminal_name,
           storeId: data.store_id,
           printers: Array.isArray(data.printers) ? data.printers : [],
           updatedAt: data.updated_at,
-        }
+        })
       : null,
     localSettings: data?.local_settings ? normalizePosLocalSettings(data.local_settings) : null,
   });

@@ -572,13 +572,13 @@ export function PosApp() {
   );
   const currentSettlementOrder =
     (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-    (activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
-    unsettledOrder;
+    (!isQuickMode && activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
+    (!isQuickMode ? unsettledOrder : null);
   const discountAmount = useMemo(() => {
     const value = Number(discountValue);
     return Number.isFinite(value) && value > 0 ? value : 0;
   }, [discountValue]);
-  const paymentBase = activeOrder && cartItems.length === 0
+  const paymentBase = !isQuickMode && activeOrder && cartItems.length === 0
     ? {
         subtotal: activeOrder.subtotal,
           serviceChargeAmount: 0,
@@ -892,6 +892,9 @@ export function PosApp() {
       ];
     });
     setSelectedItemId(item.id);
+    if (isQuickMode) {
+      setQuickPanel("cashier");
+    }
   }
 
   function openSpecPicker(
@@ -1053,14 +1056,19 @@ export function PosApp() {
     };
 
     const voidPrintJobs = (loadDeviceConfig() ?? defaultDeviceConfig).printers
-      .filter((printer) => printer.enabled && printer.group === target.printerGroup)
+      .filter(
+        (printer) =>
+          printer.enabled &&
+          (printer.role === "zone" || printer.role === "label") &&
+          (printer.zoneId ?? "") === target.printerGroup,
+      )
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: activeOrder.id,
         orderNo: activeOrder.localOrderNo,
         tableName: activeOrder.tableName,
         ticketType: "void",
-        printerGroup: printer.group,
+        printerGroup: printer.zoneId ?? target.printerGroup,
         printerName: printer.name,
         items: [
           {
@@ -1178,18 +1186,22 @@ export function PosApp() {
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
     const suffix = " (重打)";
     const nextPrintJobs = configuredPrinters
-      .filter((printer) => order.items.some((item) => item.printerGroup === printer.group))
+      .filter(
+        (printer) =>
+          (printer.role === "zone" || printer.role === "label") &&
+          order.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
+      )
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: order.id,
         orderNo: `${order.localOrderNo}${suffix}`,
         tableName: order.tableName,
         ticketType: "normal",
-        printerGroup: printer.group,
+        printerGroup: printer.zoneId ?? "",
         printerName: printer.name,
         items: [
           ...order.items
-            .filter((item) => item.printerGroup === printer.group)
+            .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
             .map((item) => ({
               name: item.name,
               quantity: item.quantity,
@@ -1277,18 +1289,22 @@ export function PosApp() {
 
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
     const nextPrintJobs = configuredPrinters
-      .filter((printer) => printTargetItems.some((item) => item.printerGroup === printer.group))
+      .filter(
+        (printer) =>
+          (printer.role === "zone" || printer.role === "label") &&
+          printTargetItems.some((item) => item.printerGroup === (printer.zoneId ?? "")),
+      )
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: order.id,
         orderNo: order.localOrderNo,
         tableName: order.tableName,
         ticketType: isAddOnOrder ? "addon" : "normal",
-        printerGroup: printer.group,
+        printerGroup: printer.zoneId ?? "",
         printerName: printer.name,
         items: [
           ...printTargetItems
-            .filter((item) => item.printerGroup === printer.group)
+            .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
             .map((item) => ({
               name: item.name,
               quantity: item.quantity,
@@ -1349,6 +1365,9 @@ export function PosApp() {
             : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
       });
     }
+    if (isQuickMode) {
+      setQuickPanel("cashier");
+    }
     return order;
   }
 
@@ -1380,12 +1399,24 @@ export function PosApp() {
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
     const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
-      (printer) => printer.enabled && printer.group === "receipt",
+      (printer) => printer.enabled && printer.role === "receipt",
     );
     if (receiptPrinters.length === 0) return;
 
     const timestamp = new Date().toISOString();
     const receiptItems: NonNullable<PrintJob["items"]> = [
+      {
+        name: "單號",
+        quantity: 1,
+        specs: [],
+        note: order.localOrderNo,
+      },
+      {
+        name: "類型",
+        quantity: 1,
+        specs: [],
+        note: order.tableName,
+      },
       ...order.items.map((item) => ({
         name: item.name,
         quantity: item.quantity,
@@ -1539,8 +1570,8 @@ export function PosApp() {
       setSettlementFlash(true);
       if (quickPaidFlow) {
         printReceipt(updatedOrder);
-        setQuickPanel("local");
-        setViewingOrderId(updatedOrder.id);
+        setQuickPanel("cashier");
+        setViewingOrderId(null);
       } else {
         backToTables();
       }
@@ -1617,8 +1648,8 @@ export function PosApp() {
     });
     setSettlementFlash(true);
     if (quickPaidFlow) {
-      setQuickPanel("local");
-      setViewingOrderId(updatedOrder.id);
+      setQuickPanel("cashier");
+      setViewingOrderId(null);
     } else {
       backToTables();
     }
@@ -2252,7 +2283,7 @@ export function PosApp() {
                           .map((order) => (
                             <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                               <div className="flex items-start justify-between gap-3">
-                                <div>
+                                <div className="min-w-0 flex-1">
                                   <div className="text-sm font-semibold text-slate-900">
                                     {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
                                   </div>
@@ -2277,7 +2308,7 @@ export function PosApp() {
                                   </div>
                                 </div>
                                 <button
-                                  className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                                  className="h-11 min-w-[96px] shrink-0 rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold whitespace-nowrap text-white"
                                   onClick={() => {
                                     setViewingOrderId(order.id);
                                   }}
@@ -2301,7 +2332,7 @@ export function PosApp() {
                       quickWaitingOrders.slice(0, 12).map((order) => (
                         <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                           <div className="flex items-start justify-between gap-3">
-                            <div>
+                            <div className="min-w-0 flex-1">
                               <div className="text-sm font-semibold text-slate-900">
                                 {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
                               </div>
@@ -2323,7 +2354,7 @@ export function PosApp() {
                               </div>
                             </div>
                             <button
-                              className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                              className="h-11 min-w-[96px] shrink-0 rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold whitespace-nowrap text-white"
                               onClick={() => {
                                 setViewingOrderId(order.id);
                               }}

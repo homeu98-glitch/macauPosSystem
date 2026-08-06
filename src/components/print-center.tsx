@@ -91,18 +91,22 @@ export function PrintCenter() {
     const timestamp = new Date().toISOString();
 
     const nextPrintJobs = enabledPrinters
-      .filter((printer) => order.items.some((item) => item.printerGroup === printer.group))
+      .filter(
+        (printer) =>
+          (printer.role === "zone" || printer.role === "label") &&
+          order.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
+      )
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: order.id,
         orderNo: `${order.localOrderNo} (重打)`,
         tableName: order.tableName,
         ticketType: "normal",
-        printerGroup: printer.group,
+        printerGroup: printer.zoneId ?? "",
         printerName: printer.name,
         items: [
           ...order.items
-            .filter((item) => item.printerGroup === printer.group)
+            .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
             .map((item) => ({
               name: item.name,
               quantity: item.quantity,

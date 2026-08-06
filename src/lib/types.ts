@@ -1,6 +1,7 @@
 export type ConnectionType = "lan" | "usb";
 
-export type PrinterGroup = "kitchen" | "drinks" | "receipt";
+export type PrinterGroup = string;
+export type PrinterRole = "zone" | "receipt" | "label";
 
 // 支付方式為自由文字（由「設置」頁配置），用於交易記錄標記
 export type PaymentMethod = string;
@@ -79,9 +80,12 @@ export interface PosBootstrap {
 
 export interface DevicePrinterConfig {
   id: string;
-  group: PrinterGroup;
+  role: PrinterRole;
+  zoneId?: string;
   connectionType: ConnectionType;
   name: string;
+  model?: string;
+  paperSize?: string;
   ipAddress?: string;
   usbLabel?: string;
   enabled: boolean;
@@ -99,6 +103,10 @@ export interface PosLocalSettings {
   floors: FloorConfig[];
   paymentMethods: string[];
   menuPrinterOverrides: Record<string, PrinterGroup>;
+  printZones: Array<{
+    id: string;
+    name: string;
+  }>;
   notePresets: string[];
   onlineOrderSettings: {
     autoAccept: boolean;

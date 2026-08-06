@@ -83,6 +83,7 @@ export async function POST(request: Request) {
   const payload = (await request.json()) as {
     action?:
       | "accept"
+      | "complete"
       | "assign_table"
       | "auto_accept"
       | "handoff_to_rider"
@@ -136,6 +137,19 @@ export async function POST(request: Request) {
     }
   }
 
+  if (payload.action === "complete" && payload.orderId) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status: "completed" })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, source: "supabase", status: "completed" });
+  }
+
   if (payload.action === "assign_table" && payload.orderId) {
     const { data: onlineOrder, error: orderError } = await supabase
       .from("online_orders")
@@ -174,7 +188,7 @@ export async function POST(request: Request) {
         name: string;
         quantity: number;
         price: number;
-        printerGroup: "kitchen" | "drinks" | "receipt";
+        printerGroup: string;
       }> = (onlineOrder.online_order_items ?? []).map((item: { product_name: string; qty: number }) => {
         const menu = menuItems.find((m) => m.name === item.product_name);
         return {
@@ -182,7 +196,7 @@ export async function POST(request: Request) {
           name: item.product_name,
           quantity: item.qty,
           price: Number(menu?.price ?? 0),
-          printerGroup: (menu?.printerGroup ?? "kitchen") as "kitchen" | "drinks" | "receipt",
+          printerGroup: String(menu?.printerGroup ?? "kitchen"),
         };
       });
 
@@ -243,7 +257,7 @@ export async function POST(request: Request) {
       name: string;
       quantity: number;
       price: number;
-      printerGroup: "kitchen" | "drinks" | "receipt";
+      printerGroup: string;
     }> = (onlineOrder.online_order_items ?? []).map((item: { product_name: string; qty: number }) => {
       const menu = menuItems.find((m) => m.name === item.product_name);
       return {
@@ -251,7 +265,7 @@ export async function POST(request: Request) {
         name: item.product_name,
         quantity: item.qty,
         price: Number(menu?.price ?? 0),
-        printerGroup: (menu?.printerGroup ?? "kitchen") as "kitchen" | "drinks" | "receipt",
+        printerGroup: String(menu?.printerGroup ?? "kitchen"),
       };
     });
 

@@ -10,6 +10,7 @@ import {
   loadDeviceConfig,
   loadPosLocalSettings,
   loadQueue,
+  normalizeDeviceConfig,
   normalizePosLocalSettings,
   saveBootstrapCache,
   saveDeviceConfig,
@@ -41,7 +42,7 @@ export function DeviceSettings() {
     draft: MenuSpecGroup[];
   }>({ open: false, itemId: null, draft: [] });
   const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
-  const [bulkPrinterGroup, setBulkPrinterGroup] = useState<DevicePrinterConfig["group"]>("kitchen");
+  const [bulkPrinterGroup, setBulkPrinterGroup] = useState<string>(cachedLocalSettings?.printZones?.[0]?.id ?? "kitchen");
   const [menuPrintCategoryId, setMenuPrintCategoryId] = useState<string>("all");
   const [menuPrintPage, setMenuPrintPage] = useState(1);
   const menuPrintPageSize = 50;
@@ -49,6 +50,7 @@ export function DeviceSettings() {
   const [menuPage, setMenuPage] = useState(1);
   const menuPageSize = 50;
   const [newNotePreset, setNewNotePreset] = useState("");
+  const [newPrintZoneName, setNewPrintZoneName] = useState("");
 
   const menuFilteredItems = useMemo(() => {
     return menuDraft.menuItems.filter((item) => menuCategoryId === "all" || item.categoryId === menuCategoryId);
@@ -109,8 +111,11 @@ export function DeviceSettings() {
           localSettings?: PosLocalSettings | null;
         };
         if (payload.deviceConfig) {
-          setConfig(payload.deviceConfig);
-          saveDeviceConfig(payload.deviceConfig);
+          const normalizedDevice = normalizeDeviceConfig(payload.deviceConfig);
+          if (normalizedDevice) {
+            setConfig(normalizedDevice);
+            saveDeviceConfig(normalizedDevice);
+          }
         }
         if (payload.localSettings) {
           const normalized = normalizePosLocalSettings(payload.localSettings);
@@ -128,21 +133,85 @@ export function DeviceSettings() {
   const printerGroupOptions = useMemo(
     () =>
       config.printers
-        .filter((printer) => printer.enabled)
+        .filter((printer) => printer.enabled && printer.role === "zone")
         .map((printer) => ({
-          value: printer.group,
-          label: `${printer.name} (${printer.group})`,
+          value: printer.zoneId ?? "",
+          label: `${printer.name} (${localSettings.printZones.find((zone) => zone.id === printer.zoneId)?.name ?? printer.zoneId ?? "未分區"})`,
         })),
-    [config.printers],
+    [config.printers, localSettings.printZones],
   );
 
   function updatePrinter(printerId: string, patch: Partial<DevicePrinterConfig>) {
+    setConfig((current) => {
+      const nextPrinters = current.printers.map((printer) => {
+        if (printer.id !== printerId) {
+          if (patch.role === "receipt" && printer.role === "receipt") {
+            return {
+              ...printer,
+              role: "zone" as DevicePrinterConfig["role"],
+              zoneId: printer.zoneId ?? localSettings.printZones[0]?.id ?? "kitchen",
+            };
+          }
+          return printer;
+        }
+        const merged = { ...printer, ...patch };
+        if (merged.role === "zone" || merged.role === "label") {
+          merged.zoneId = merged.zoneId ?? localSettings.printZones[0]?.id ?? "kitchen";
+        } else {
+          merged.zoneId = undefined;
+        }
+        if (merged.role === "receipt") {
+          merged.paperSize = merged.paperSize || "80mm";
+        }
+        return merged;
+      });
+      return {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        printers: nextPrinters,
+      };
+    });
+  }
+
+  function addPrinter(role: DevicePrinterConfig["role"]) {
+    const newPrinter: DevicePrinterConfig = {
+      id: uid("printer"),
+      role,
+      zoneId: role === "zone" || role === "label" ? localSettings.printZones[0]?.id ?? "kitchen" : undefined,
+      connectionType: "lan",
+      name: role === "receipt" ? "新收據打印機" : role === "label" ? "新標籤打印機" : "新分區打印機",
+      model: "",
+      paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
+      ipAddress: "",
+      usbLabel: "",
+      enabled: true,
+    };
     setConfig((current) => ({
       ...current,
       updatedAt: new Date().toISOString(),
-      printers: current.printers.map((printer) =>
-        printer.id === printerId ? { ...printer, ...patch } : printer,
-      ),
+      printers:
+        role === "receipt"
+          ? [
+              ...current.printers.map((printer) =>
+                printer.role === "receipt"
+                  ? {
+                      ...printer,
+                      role: "zone" as DevicePrinterConfig["role"],
+                      zoneId: printer.zoneId ?? localSettings.printZones[0]?.id ?? "kitchen",
+                    }
+                  : printer,
+              ),
+              newPrinter,
+            ]
+          : [...current.printers, newPrinter],
+    }));
+  }
+
+  function removePrinter(printerId: string) {
+    setConfig((current) => ({
+      ...current,
+      updatedAt: new Date().toISOString(),
+      printers: current.printers.filter((printer) => printer.id !== printerId),
     }));
   }
 
@@ -167,6 +236,7 @@ export function DeviceSettings() {
         tables: localSettings.floors,
         paymentMethods: localSettings.paymentMethods,
         menuPrinterOverrides: localSettings.menuPrinterOverrides,
+        printZones: localSettings.printZones,
         onlineOrderSettings: localSettings.onlineOrderSettings,
       },
       status: "pending",
@@ -330,12 +400,96 @@ export function DeviceSettings() {
                 <div>
                   <div className="text-base font-semibold text-slate-900">打印機綁定</div>
                   <div className="mt-1 text-sm text-slate-500">
-                    每台打印機可分配給廚房、飲品吧或收據。列表可向下滾動，不會再被截斷。
+                    支援自定義分區、唯一收據打印機，以及綁定分區的標籤機。
                   </div>
                 </div>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
                   {config.printers.length} printers
                 </span>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">打印分區</div>
+                <div className="mt-1 text-xs text-slate-500">分區可自由新增，例如：廚房、水吧、甜品、燒味。</div>
+                <div className="mt-3 grid gap-2">
+                  {localSettings.printZones.map((zone) => (
+                    <div key={zone.id} className="flex items-center gap-2">
+                      <input
+                        className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        onChange={(event) => {
+                          const next = {
+                            ...localSettings,
+                            printZones: localSettings.printZones.map((item) =>
+                              item.id === zone.id ? { ...item, name: event.target.value } : item,
+                            ),
+                          };
+                          setLocalSettings(next);
+                          savePosLocalSettings(next);
+                        }}
+                        value={zone.name}
+                      />
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                        disabled={localSettings.printZones.length <= 1}
+                        onClick={() => {
+                          const nextZones = localSettings.printZones.filter((item) => item.id !== zone.id);
+                          const fallbackZoneId = nextZones[0]?.id ?? "kitchen";
+                          const nextSettings = {
+                            ...localSettings,
+                            printZones: nextZones,
+                            menuPrinterOverrides: Object.fromEntries(
+                              Object.entries(localSettings.menuPrinterOverrides).map(([itemId, zoneId]) => [
+                                itemId,
+                                zoneId === zone.id ? fallbackZoneId : zoneId,
+                              ]),
+                            ),
+                          };
+                          setLocalSettings(nextSettings);
+                          setConfig((current) => ({
+                            ...current,
+                            printers: current.printers.map((printer) =>
+                              printer.zoneId === zone.id ? { ...printer, zoneId: fallbackZoneId } : printer,
+                            ),
+                          }));
+                          savePosLocalSettings(nextSettings);
+                          setStatus("已刪除打印分區。");
+                        }}
+                        type="button"
+                      >
+                        刪除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[240px]"
+                    onChange={(event) => setNewPrintZoneName(event.target.value)}
+                    placeholder="新增分區，例如：甜品"
+                    value={newPrintZoneName}
+                  />
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const text = newPrintZoneName.trim();
+                      if (!text) return;
+                      const next = {
+                        ...localSettings,
+                        printZones: [
+                          ...localSettings.printZones,
+                          { id: `${text.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`, name: text },
+                        ],
+                      };
+                      setLocalSettings(next);
+                      savePosLocalSettings(next);
+                      setNewPrintZoneName("");
+                      setStatus("已新增打印分區。");
+                    }}
+                    type="button"
+                  >
+                    新增分區
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4 max-h-[68vh] overflow-auto pr-1">
@@ -346,20 +500,34 @@ export function DeviceSettings() {
                         <div>
                           <div className="text-sm font-semibold text-slate-900">{printer.name}</div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {printer.group} · {printer.connectionType.toUpperCase()}
+                            {printer.role === "receipt"
+                              ? "收據"
+                              : printer.role === "label"
+                                ? `標籤 · ${localSettings.printZones.find((zone) => zone.id === printer.zoneId)?.name ?? printer.zoneId ?? "--"}`
+                                : `分區 · ${localSettings.printZones.find((zone) => zone.id === printer.zoneId)?.name ?? printer.zoneId ?? "--"}`}{" "}
+                            · {printer.connectionType.toUpperCase()}
                           </div>
                         </div>
-                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                          <input
-                            checked={printer.enabled}
-                            onChange={(event) => updatePrinter(printer.id, { enabled: event.target.checked })}
-                            type="checkbox"
-                          />
-                          啟用
-                        </label>
+                        <div className="flex items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                            <input
+                              checked={printer.enabled}
+                              onChange={(event) => updatePrinter(printer.id, { enabled: event.target.checked })}
+                              type="checkbox"
+                            />
+                            啟用
+                          </label>
+                          <button
+                            className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                            onClick={() => removePrinter(printer.id)}
+                            type="button"
+                          >
+                            刪除
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="mt-4 grid gap-3 md:grid-cols-3">
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">打印機名稱</span>
                           <input
@@ -369,19 +537,37 @@ export function DeviceSettings() {
                           />
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">打印分組</span>
+                          <span className="text-xs text-slate-500">用途</span>
                           <select
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) =>
-                              updatePrinter(printer.id, { group: event.target.value as DevicePrinterConfig["group"] })
-                            }
-                            value={printer.group}
+                            onChange={(event) => updatePrinter(printer.id, { role: event.target.value as DevicePrinterConfig["role"] })}
+                            value={printer.role}
                           >
-                            <option value="kitchen">廚房</option>
-                            <option value="drinks">水吧</option>
+                            <option value="zone">分區出單</option>
                             <option value="receipt">收據</option>
+                            <option value="label">標籤</option>
                           </select>
                         </label>
+                        {printer.role !== "receipt" ? (
+                          <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                            <span className="text-xs text-slate-500">{printer.role === "label" ? "標籤分區" : "打印分區"}</span>
+                            <select
+                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) => updatePrinter(printer.id, { zoneId: event.target.value })}
+                              value={printer.zoneId ?? localSettings.printZones[0]?.id ?? ""}
+                            >
+                              {localSettings.printZones.map((zone) => (
+                                <option key={zone.id} value={zone.id}>
+                                  {zone.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : (
+                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                            收銀台只會指定 1 台收據打印機
+                          </div>
+                        )}
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">連接方式</span>
                           <select
@@ -398,6 +584,29 @@ export function DeviceSettings() {
                           </select>
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                          <span className="text-xs text-slate-500">打印機型號</span>
+                          <input
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) => updatePrinter(printer.id, { model: event.target.value })}
+                            placeholder="例如：TM-T82X / QL-820NWB"
+                            value={printer.model ?? ""}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                          <span className="text-xs text-slate-500">紙寬 / 尺寸</span>
+                          <select
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) => updatePrinter(printer.id, { paperSize: event.target.value })}
+                            value={printer.paperSize ?? ""}
+                          >
+                            <option value="">請選擇</option>
+                            <option value="58mm">58mm</option>
+                            <option value="80mm">80mm</option>
+                            <option value="62mm">62mm 標籤</option>
+                            <option value="100x75mm">100x75mm 標籤</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">IP 地址</span>
                           <input
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
@@ -406,7 +615,7 @@ export function DeviceSettings() {
                           />
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2">
-                          <span className="text-xs text-slate-500">USB 標籤</span>
+                          <span className="text-xs text-slate-500">USB 標籤 / 系統映射</span>
                           <input
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                             onChange={(event) => updatePrinter(printer.id, { usbLabel: event.target.value })}
@@ -427,6 +636,30 @@ export function DeviceSettings() {
                     </article>
                   ))}
                 </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => addPrinter("zone")}
+                  type="button"
+                >
+                  新增分區打印機
+                </button>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => addPrinter("receipt")}
+                  type="button"
+                >
+                  新增收據打印機
+                </button>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => addPrinter("label")}
+                  type="button"
+                >
+                  新增標籤打印機
+                </button>
               </div>
             </section>
           </div>
@@ -516,9 +749,7 @@ export function DeviceSettings() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">菜品打印設置</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  最佳方案是兩層：菜品先分配到打印分組，再由打印機綁定分組。這樣換機時不用逐個菜改。
-                </div>
+                <div className="mt-1 text-sm text-slate-500">菜品先分配到打印分區，再由分區打印機或標籤機接收。</div>
               </div>
             </div>
 
@@ -545,12 +776,14 @@ export function DeviceSettings() {
                 </select>
                 <select
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setBulkPrinterGroup(event.target.value as DevicePrinterConfig["group"])}
+                  onChange={(event) => setBulkPrinterGroup(event.target.value)}
                   value={bulkPrinterGroup}
                 >
-                  <option value="kitchen">廚房</option>
-                  <option value="drinks">水吧</option>
-                  <option value="receipt">收據</option>
+                  {localSettings.printZones.map((zone) => (
+                    <option key={zone.id} value={zone.id}>
+                      {zone.name}
+                    </option>
+                  ))}
                 </select>
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
@@ -635,7 +868,7 @@ export function DeviceSettings() {
                     <th className="border-b border-slate-200 py-2 pr-3">選擇</th>
                     <th className="border-b border-slate-200 py-2 pr-3">菜品</th>
                     <th className="border-b border-slate-200 py-2 pr-3">分類</th>
-                    <th className="border-b border-slate-200 py-2 pr-3">當前分組</th>
+                    <th className="border-b border-slate-200 py-2 pr-3">當前分區</th>
                     <th className="border-b border-slate-200 py-2">會打印到</th>
                   </tr>
                 </thead>
@@ -691,15 +924,17 @@ export function DeviceSettings() {
                                 ...current,
                                 menuPrinterOverrides: {
                                   ...current.menuPrinterOverrides,
-                                  [item.id]: event.target.value as DevicePrinterConfig["group"],
+                                  [item.id]: event.target.value,
                                 },
                               }))
                             }
                             value={group}
                           >
-                            <option value="kitchen">廚房</option>
-                            <option value="drinks">水吧</option>
-                            <option value="receipt">收據</option>
+                            {localSettings.printZones.map((zone) => (
+                              <option key={zone.id} value={zone.id}>
+                                {zone.name}
+                              </option>
+                            ))}
                           </select>
                         </td>
                         <td className="border-b border-slate-100 py-2 text-slate-600">
@@ -996,7 +1231,7 @@ export function DeviceSettings() {
                                     row.id === item.id
                                       ? {
                                           ...row,
-                                          printerGroup: event.target.value as DevicePrinterConfig["group"],
+                                          printerGroup: event.target.value,
                                         }
                                       : row,
                                   ),
@@ -1004,9 +1239,11 @@ export function DeviceSettings() {
                               }
                               value={item.printerGroup}
                             >
-                              <option value="kitchen">廚房</option>
-                              <option value="drinks">水吧</option>
-                              <option value="receipt">收據</option>
+                              {localSettings.printZones.map((zone) => (
+                                <option key={zone.id} value={zone.id}>
+                                  {zone.name}
+                                </option>
+                              ))}
                             </select>
                           </td>
                           <td className="border-b border-slate-100 py-2">

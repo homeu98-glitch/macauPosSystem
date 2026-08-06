@@ -55,7 +55,7 @@ export function ShiftPage() {
     saveShiftState(next);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
 
-    const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.group === "receipt");
+    const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.role === "receipt");
     const printerName = receiptPrinter?.name ?? "收據打印機";
 
     const lines = [

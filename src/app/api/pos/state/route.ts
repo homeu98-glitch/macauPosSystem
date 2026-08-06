@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { defaultMembers } from "@/lib/mock-data";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { defaultPosLocalSettings } from "@/lib/mock-data";
-import { normalizePosLocalSettings } from "@/lib/storage";
+import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
 export async function GET() {
   const supabase = getSupabaseServerClient();
@@ -107,13 +107,13 @@ export async function GET() {
           })) ?? [],
       })) ?? [],
     deviceConfig: deviceConfigRow
-      ? {
+      ? normalizeDeviceConfig({
           deviceId: deviceConfigRow.device_id,
           terminalName: deviceConfigRow.terminal_name,
           storeId: deviceConfigRow.store_id,
           printers: Array.isArray(deviceConfigRow.printers) ? deviceConfigRow.printers : [],
           updatedAt: deviceConfigRow.updated_at,
-        }
+        })
       : null,
     localSettings: normalizePosLocalSettings(deviceConfigRow?.local_settings ?? defaultPosLocalSettings),
   });
