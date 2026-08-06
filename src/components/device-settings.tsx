@@ -15,7 +15,7 @@ import {
   savePosLocalSettings,
   saveQueue,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, PosLocalSettings, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosLocalSettings, QueueEvent } from "@/lib/types";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 
 function uid(prefix: string) {
@@ -30,18 +30,15 @@ export function DeviceSettings() {
   const [localSettings, setLocalSettings] = useState<PosLocalSettings>(cachedLocalSettings ?? defaultPosLocalSettings);
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
   const [activeTab, setActiveTab] = useState<
-    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders"
+    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes"
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
-  const [menuSpecJsonMap, setMenuSpecJsonMap] = useState<Record<string, string>>(() => {
-    const normalized = normalizeBootstrapPayload(cachedBootstrap);
-    const map: Record<string, string> = {};
-    for (const item of normalized.menuItems) {
-      map[item.id] = item.specGroups ? JSON.stringify(item.specGroups, null, 2) : "";
-    }
-    return map;
-  });
+  const [specEditor, setSpecEditor] = useState<{
+    open: boolean;
+    itemId: string | null;
+    draft: MenuSpecGroup[];
+  }>({ open: false, itemId: null, draft: [] });
   const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
   const [bulkPrinterGroup, setBulkPrinterGroup] = useState<DevicePrinterConfig["group"]>("kitchen");
   const [menuPrintCategoryId, setMenuPrintCategoryId] = useState<string>("all");
@@ -50,6 +47,19 @@ export function DeviceSettings() {
   const [menuCategoryId, setMenuCategoryId] = useState<string>("all");
   const [menuPage, setMenuPage] = useState(1);
   const menuPageSize = 50;
+  const [newNotePreset, setNewNotePreset] = useState("");
+
+  const menuFilteredItems = useMemo(() => {
+    return menuDraft.menuItems.filter((item) => menuCategoryId === "all" || item.categoryId === menuCategoryId);
+  }, [menuDraft.menuItems, menuCategoryId]);
+
+  const menuTotalPages = useMemo(() => Math.max(1, Math.ceil(menuFilteredItems.length / menuPageSize)), [menuFilteredItems.length]);
+
+  const menuPageItems = useMemo(() => {
+    const safePage = Math.min(menuPage, menuTotalPages);
+    const start = (safePage - 1) * menuPageSize;
+    return menuFilteredItems.slice(start, start + menuPageSize);
+  }, [menuFilteredItems, menuPage, menuTotalPages]);
 
   const categoryNameMap = useMemo(() => {
     const normalized = normalizeBootstrapPayload(cachedBootstrap);
@@ -245,6 +255,7 @@ export function DeviceSettings() {
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
             ["online-orders", "線上訂單"],
+            ["notes", "備註"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -414,6 +425,85 @@ export function DeviceSettings() {
                     </article>
                   ))}
                 </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {activeTab === "notes" ? (
+          <div className="grid gap-3 lg:grid-cols-[520px_minmax(0,1fr)]">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-base font-semibold text-slate-900">常用備註</div>
+              <div className="mt-1 text-sm text-slate-500">
+                這裡設定的備註是全局共用：可用於單品備註、也可用於全單備註。
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                <div className="grid gap-2">
+                  {localSettings.notePresets.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      暫時沒有常用備註
+                    </div>
+                  ) : (
+                    localSettings.notePresets.map((note) => (
+                      <div
+                        key={note}
+                        className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{note}</div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={() => {
+                            const next = {
+                              ...localSettings,
+                              notePresets: localSettings.notePresets.filter((item) => item !== note),
+                            };
+                            setLocalSettings(next);
+                            savePosLocalSettings(next);
+                            setStatus("已更新常用備註。");
+                          }}
+                          type="button"
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
+                    onChange={(event) => setNewNotePreset(event.target.value)}
+                    placeholder="新增常用備註..."
+                    value={newNotePreset}
+                  />
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const text = newNotePreset.trim();
+                      if (!text) return;
+                      const next = {
+                        ...localSettings,
+                        notePresets: Array.from(new Set([...localSettings.notePresets, text])),
+                      };
+                      setLocalSettings(next);
+                      savePosLocalSettings(next);
+                      setNewNotePreset("");
+                      setStatus("已新增常用備註。");
+                    }}
+                    type="button"
+                  >
+                    加入
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-base font-semibold text-slate-900">說明</div>
+              <div className="mt-3 text-sm text-slate-600">
+                點餐時可以直接點選常用備註（多選），也可以自由輸入。全單備註會跟隨訂單一起保存並可打印。
               </div>
             </section>
           </div>
@@ -641,7 +731,7 @@ export function DeviceSettings() {
               <div>
                 <div className="text-base font-semibold text-slate-900">菜單</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  這裡是本店菜單資料來源。可修改分類、菜品、價格與規格（JSON），並保存到後台。
+                  這裡是本店菜單資料來源。可修改分類、菜品、價格與規格，並保存到後台。
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -655,13 +745,6 @@ export function DeviceSettings() {
                       const payload = normalizeBootstrapPayload(raw);
                       setMenuDraft(payload);
                       saveBootstrapCache(payload);
-                      setMenuSpecJsonMap(() => {
-                        const map: Record<string, string> = {};
-                        for (const item of payload.menuItems) {
-                          map[item.id] = item.specGroups ? JSON.stringify(item.specGroups, null, 2) : "";
-                        }
-                        return map;
-                      });
                       setStatus("已重新載入後台菜單。");
                     } catch {
                       setStatus("重新載入失敗，請稍後再試。");
@@ -678,15 +761,6 @@ export function DeviceSettings() {
                     setMenuSaving(true);
                     setStatus("正在保存菜單到後台…");
                     try {
-                      const nextMenuItems = menuDraft.menuItems.map((item) => {
-                        const raw = menuSpecJsonMap[item.id] ?? "";
-                        if (!raw.trim()) return { ...item, specGroups: undefined };
-                        try {
-                          return { ...item, specGroups: JSON.parse(raw) as unknown as typeof item.specGroups };
-                        } catch {
-                          throw new Error(`菜品「${item.name}」的規格 JSON 格式不正確。`);
-                        }
-                      });
                       await fetch("/api/pos/bootstrap", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -695,13 +769,13 @@ export function DeviceSettings() {
                           storeName: menuDraft.storeName,
                           currency: menuDraft.currency,
                           categories: menuDraft.categories,
-                          menuItems: nextMenuItems,
+                          menuItems: menuDraft.menuItems,
                           tables: menuDraft.tables,
                           rules: menuDraft.rules,
                           printerGroups: menuDraft.printerGroups,
                         }),
                       });
-                      saveBootstrapCache({ ...menuDraft, menuItems: nextMenuItems });
+                      saveBootstrapCache(menuDraft);
                       setStatus("菜單已保存到後台。");
                     } catch (err) {
                       setStatus(err instanceof Error ? err.message : "菜單保存失敗，請稍後再試。");
@@ -934,13 +1008,23 @@ export function DeviceSettings() {
                             </select>
                           </td>
                           <td className="border-b border-slate-100 py-2">
-                            <textarea
-                              className="min-h-[84px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 font-mono text-xs"
-                              onChange={(event) =>
-                                setMenuSpecJsonMap((current) => ({ ...current, [item.id]: event.target.value }))
-                              }
-                              value={menuSpecJsonMap[item.id] ?? ""}
-                            />
+                            <div className="grid gap-2">
+                              <div className="text-xs text-slate-600">
+                                {item.specGroups?.length
+                                  ? `共 ${item.specGroups.length} 組規格（${item.specGroups.reduce((sum, g) => sum + (g.options?.length ?? 0), 0)} 個選項）`
+                                  : "無規格"}
+                              </div>
+                              <button
+                                className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                                onClick={() => {
+                                  const cloned = item.specGroups ? (JSON.parse(JSON.stringify(item.specGroups)) as MenuSpecGroup[]) : [];
+                                  setSpecEditor({ open: true, itemId: item.id, draft: cloned });
+                                }}
+                                type="button"
+                              >
+                                編輯規格
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1126,19 +1210,269 @@ export function DeviceSettings() {
                 <input
                   checked={localSettings.onlineOrderSettings.autoAccept}
                   onChange={(event) =>
-                    setLocalSettings((current) => ({
-                      ...current,
-                      onlineOrderSettings: {
-                        ...current.onlineOrderSettings,
-                        autoAccept: event.target.checked,
-                      },
-                    }))
+                    (() => {
+                      const next = {
+                        ...localSettings,
+                        onlineOrderSettings: {
+                          ...localSettings.onlineOrderSettings,
+                          autoAccept: event.target.checked,
+                        },
+                      };
+                      setLocalSettings(next);
+                      savePosLocalSettings(next);
+                      setStatus("已更新線上訂單自動接單設定。");
+                    })()
                   }
                   type="checkbox"
                 />
               </label>
             </div>
           </section>
+        ) : null}
+
+        {specEditor.open ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+            <div className="w-full max-w-3xl rounded-3xl bg-white p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">編輯規格</div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    可視化新增規格組與選項。支持一鍵套用到本頁（50 個）。
+                  </div>
+                </div>
+                <button
+                  className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                  onClick={() => setSpecEditor({ open: false, itemId: null, draft: [] })}
+                  type="button"
+                >
+                  關閉
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                {specEditor.draft.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                    尚未有規格組。你可以按下方「新增規格組」開始。
+                  </div>
+                ) : (
+                  specEditor.draft.map((group) => (
+                    <div key={group.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            className="w-[180px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                            onChange={(event) =>
+                              setSpecEditor((current) => ({
+                                ...current,
+                                draft: current.draft.map((row) =>
+                                  row.id === group.id ? { ...row, name: event.target.value } : row,
+                                ),
+                              }))
+                            }
+                            placeholder="規格名（例如：甜度）"
+                            value={group.name}
+                          />
+                          <select
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) =>
+                              setSpecEditor((current) => ({
+                                ...current,
+                                draft: current.draft.map((row) =>
+                                  row.id === group.id
+                                    ? { ...row, selectionMode: event.target.value as MenuSpecGroup["selectionMode"] }
+                                    : row,
+                                ),
+                              }))
+                            }
+                            value={group.selectionMode}
+                          >
+                            <option value="single">單選</option>
+                            <option value="multi">多選</option>
+                          </select>
+                          <label className="flex items-center gap-2 text-sm text-slate-700">
+                            <input
+                              checked={group.required}
+                              onChange={(event) =>
+                                setSpecEditor((current) => ({
+                                  ...current,
+                                  draft: current.draft.map((row) =>
+                                    row.id === group.id ? { ...row, required: event.target.checked } : row,
+                                  ),
+                                }))
+                              }
+                              type="checkbox"
+                            />
+                            必選
+                          </label>
+                        </div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                          onClick={() =>
+                            setSpecEditor((current) => ({
+                              ...current,
+                              draft: current.draft.filter((row) => row.id !== group.id),
+                            }))
+                          }
+                          type="button"
+                        >
+                          刪除規格組
+                        </button>
+                      </div>
+
+                      <div className="mt-3 grid gap-2">
+                        {group.options.map((opt) => (
+                          <div key={opt.id} className="grid grid-cols-[1fr_120px_80px] gap-2">
+                            <input
+                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) =>
+                                setSpecEditor((current) => ({
+                                  ...current,
+                                  draft: current.draft.map((row) =>
+                                    row.id !== group.id
+                                      ? row
+                                      : {
+                                          ...row,
+                                          options: row.options.map((o) =>
+                                            o.id === opt.id ? { ...o, label: event.target.value } : o,
+                                          ),
+                                        },
+                                  ),
+                                }))
+                              }
+                              placeholder="選項（例如：少冰）"
+                              value={opt.label}
+                            />
+                            <input
+                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) =>
+                                setSpecEditor((current) => ({
+                                  ...current,
+                                  draft: current.draft.map((row) =>
+                                    row.id !== group.id
+                                      ? row
+                                      : {
+                                          ...row,
+                                          options: row.options.map((o) =>
+                                            o.id === opt.id ? { ...o, priceDelta: Number(event.target.value) || 0 } : o,
+                                          ),
+                                        },
+                                  ),
+                                }))
+                              }
+                              placeholder="加價"
+                              type="number"
+                              value={String(opt.priceDelta)}
+                            />
+                            <button
+                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                              onClick={() =>
+                                setSpecEditor((current) => ({
+                                  ...current,
+                                  draft: current.draft.map((row) =>
+                                    row.id !== group.id
+                                      ? row
+                                      : { ...row, options: row.options.filter((o) => o.id !== opt.id) },
+                                  ),
+                                }))
+                              }
+                              type="button"
+                            >
+                              刪除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        className="mt-3 rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+                        onClick={() =>
+                          setSpecEditor((current) => ({
+                            ...current,
+                            draft: current.draft.map((row) =>
+                              row.id !== group.id
+                                ? row
+                                : {
+                                    ...row,
+                                    options: [
+                                      ...row.options,
+                                      { id: crypto.randomUUID(), label: "新選項", priceDelta: 0 },
+                                    ],
+                                  },
+                            ),
+                          }))
+                        }
+                        type="button"
+                      >
+                        新增選項
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() =>
+                    setSpecEditor((current) => ({
+                      ...current,
+                      draft: [
+                        ...current.draft,
+                        {
+                          id: crypto.randomUUID(),
+                          name: "新規格",
+                          selectionMode: "single",
+                          required: true,
+                          options: [{ id: crypto.randomUUID(), label: "新選項", priceDelta: 0 }],
+                        },
+                      ],
+                    }))
+                  }
+                  type="button"
+                >
+                  新增規格組
+                </button>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={() => {
+                      if (!specEditor.itemId) return;
+                      const nextSpec = specEditor.draft.length ? specEditor.draft : undefined;
+                      setMenuDraft((current) => ({
+                        ...current,
+                        menuItems: current.menuItems.map((item) =>
+                          item.id === specEditor.itemId ? { ...item, specGroups: nextSpec } : item,
+                        ),
+                      }));
+                      setSpecEditor({ open: false, itemId: null, draft: [] });
+                      setStatus("已更新規格，請記得保存菜單。");
+                    }}
+                    type="button"
+                  >
+                    保存
+                  </button>
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const nextSpec = specEditor.draft.length ? specEditor.draft : undefined;
+                      setMenuDraft((current) => ({
+                        ...current,
+                        menuItems: current.menuItems.map((item) =>
+                          menuPageItems.some((row) => row.id === item.id) ? { ...item, specGroups: nextSpec } : item,
+                        ),
+                      }));
+                      setSpecEditor({ open: false, itemId: null, draft: [] });
+                      setStatus("已批量套用規格到本頁菜品，請記得保存菜單。");
+                    }}
+                    type="button"
+                  >
+                    套用到本頁
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         ) : null}
       </div>
     </div>

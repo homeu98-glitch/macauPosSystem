@@ -168,6 +168,7 @@ export const defaultPosLocalSettings: PosLocalSettings = {
     "item-lemon-tea": "drinks",
     "item-milk-tea": "drinks",
   },
+  notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   onlineOrderSettings: {
     autoAccept: false,
   },

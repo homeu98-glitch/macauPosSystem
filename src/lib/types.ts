@@ -99,6 +99,7 @@ export interface PosLocalSettings {
   floors: FloorConfig[];
   paymentMethods: string[];
   menuPrinterOverrides: Record<string, PrinterGroup>;
+  notePresets: string[];
   onlineOrderSettings: {
     autoAccept: boolean;
   };
@@ -151,6 +152,7 @@ export interface PosOrder {
   tableName: string;
   status: "draft" | "sent_to_kitchen" | "settled";
   items: OrderItem[];
+  orderNote?: string;
   subtotal: number;
   taxAmount: number;
   serviceChargeAmount: number;

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
-import { loadPosLocalSettings } from "@/lib/storage";
+import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
 
 type OrderTypeKey = "all" | "dine_in" | "pickup" | "self_delivery" | "rider_delivery";
 
@@ -36,7 +36,7 @@ function formatMoney(amount: number) {
 }
 
 export function OnlineOrders() {
-  const localSettings = loadPosLocalSettings();
+  const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const autoAccept = localSettings.onlineOrderSettings.autoAccept;
   const [activeTab, setActiveTab] = useState<OrderTypeKey>("all");
   const [loading, setLoading] = useState(false);
@@ -76,6 +76,19 @@ export function OnlineOrders() {
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
     };
+  }, []);
+
+  useEffect(() => {
+    function onLocalSettingsChanged(event: Event) {
+      const detail = (event as CustomEvent<{ localSettings?: ReturnType<typeof loadPosLocalSettings> }>).detail;
+      if (detail?.localSettings) {
+        setLocalSettings(detail.localSettings);
+      } else {
+        setLocalSettings(loadPosLocalSettings());
+      }
+    }
+    window.addEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+    return () => window.removeEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
   }, []);
 
   const playSound = useCallback((kind: "new_order" | "new_delivery" | "cancel_order") => {
@@ -336,6 +349,25 @@ export function OnlineOrders() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <div className="mr-2 flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2">
+                  <span className="text-xs font-semibold text-slate-600">自動接單</span>
+                  <button
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      autoAccept ? "bg-emerald-600 text-white" : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
+                    }`}
+                    onClick={() => {
+                      const nextSettings = {
+                        ...localSettings,
+                        onlineOrderSettings: { ...localSettings.onlineOrderSettings, autoAccept: !autoAccept },
+                      };
+                      setLocalSettings(nextSettings);
+                      savePosLocalSettings(nextSettings);
+                    }}
+                    type="button"
+                  >
+                    {autoAccept ? "開" : "關"}
+                  </button>
+                </div>
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}

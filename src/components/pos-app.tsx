@@ -14,7 +14,6 @@ import {
   loadOfflineMode,
   loadOperatingMode,
   loadPosLocalSettings,
-  loadQuickAutoAccept,
   loadQuickCompletedMinutes,
   loadOrders,
   loadPrintJobs,
@@ -29,7 +28,6 @@ import {
   savePosLocalSettings,
   savePrintJobs,
   saveQueue,
-  saveQuickAutoAccept,
   saveQuickCompletedMinutes,
   saveShiftState,
   saveSoldOutState,
@@ -131,10 +129,12 @@ export function PosApp() {
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
+  const [orderNote, setOrderNote] = useState("");
+  const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
   const [quickPanel, setQuickPanel] = useState<"cashier" | "online" | "local">(() =>
     loadOperatingMode() === "quick" ? "online" : "cashier",
   );
-  const [quickAutoAccept, setQuickAutoAccept] = useState(() => loadQuickAutoAccept());
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -277,45 +277,6 @@ export function PosApp() {
       window.removeEventListener("keydown", unlock);
     };
   }, []);
-
-  useEffect(() => {
-    if (!isQuickMode || !quickAutoAccept) return;
-    const pending = onlineOrders.filter((order) => order.status === "new");
-    if (pending.length === 0) return;
-
-    for (const order of pending) {
-      const sourceId = order.sourceId ?? order.id;
-      if (quickOrderProcessingRef.current.has(sourceId)) continue;
-      quickOrderProcessingRef.current.add(sourceId);
-
-      void (async () => {
-        try {
-          await fetch("/api/online-orders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "accept", orderId: sourceId }),
-          });
-          const response = await fetch("/api/online-orders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
-          });
-          const payload = (await response.json()) as { ok: boolean; posOrder?: PosOrder; error?: string };
-          if (!payload.ok || !payload.posOrder) {
-            throw new Error(payload.error ?? "轉入快餐訂單失敗");
-          }
-          setOrders((current) => {
-            const next = [payload.posOrder!, ...current.filter((item) => item.id !== payload.posOrder!.id)];
-            saveOrders(next);
-            return next;
-          });
-          setToast({ tone: "success", message: "已自動接單並加入訂單池。" });
-        } catch (err) {
-          setToast({ tone: "info", message: err instanceof Error ? err.message : "自動接單失敗" });
-        }
-      })();
-    }
-  }, [isQuickMode, onlineOrders, quickAutoAccept]);
 
   function isItemSoldOut(menuItemId: string) {
     const state = soldOutMap[menuItemId];
@@ -467,9 +428,62 @@ export function PosApp() {
   );
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
-  const localSettings = useMemo(() => loadPosLocalSettings(), []);
+  const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const floors = localSettings.floors;
   const paymentMethods = localSettings.paymentMethods;
+  const autoAcceptOnlineOrders = localSettings.onlineOrderSettings.autoAccept;
+
+  useEffect(() => {
+    function onLocalSettingsChanged(event: Event) {
+      const detail = (event as CustomEvent<{ localSettings?: ReturnType<typeof loadPosLocalSettings> }>).detail;
+      if (detail?.localSettings) {
+        setLocalSettings(detail.localSettings);
+      } else {
+        setLocalSettings(loadPosLocalSettings());
+      }
+    }
+    window.addEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+    return () => window.removeEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+  }, []);
+
+  useEffect(() => {
+    if (!isQuickMode || !autoAcceptOnlineOrders) return;
+    const pending = onlineOrders.filter((order) => order.status === "new");
+    if (pending.length === 0) return;
+
+    for (const order of pending) {
+      const sourceId = order.sourceId ?? order.id;
+      if (quickOrderProcessingRef.current.has(sourceId)) continue;
+      quickOrderProcessingRef.current.add(sourceId);
+
+      void (async () => {
+        try {
+          await fetch("/api/online-orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "accept", orderId: sourceId }),
+          });
+          const response = await fetch("/api/online-orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
+          });
+          const payload = (await response.json()) as { ok: boolean; posOrder?: PosOrder; error?: string };
+          if (!payload.ok || !payload.posOrder) {
+            throw new Error(payload.error ?? "轉入快餐訂單失敗");
+          }
+          setOrders((current) => {
+            const next = [payload.posOrder!, ...current.filter((item) => item.id !== payload.posOrder!.id)];
+            saveOrders(next);
+            return next;
+          });
+          setToast({ tone: "success", message: "已自動接單並加入訂單池。" });
+        } catch (err) {
+          setToast({ tone: "info", message: err instanceof Error ? err.message : "自動接單失敗" });
+        }
+      })();
+    }
+  }, [isQuickMode, onlineOrders, autoAcceptOnlineOrders]);
   const menuItemMap = useMemo(
     () => new Map((bootstrap?.menuItems ?? []).map((item) => [item.id, item])),
     [bootstrap],
@@ -652,6 +666,7 @@ export function PosApp() {
     setDiscountValue(String(order?.discountAmount ?? 0));
     setReceivedAmount("");
     setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
+    setOrderNote(order?.orderNote ?? "");
     setMemberPhone("");
     setMemberMatch(null);
     setSelectedPaymentMethod("");
@@ -695,6 +710,7 @@ export function PosApp() {
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
           items: cartItems,
+          orderNote,
           subtotal: baseTotals.subtotal,
           serviceChargeAmount: baseTotals.serviceChargeAmount,
           taxAmount: baseTotals.taxAmount,
@@ -709,6 +725,7 @@ export function PosApp() {
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
           items: cartItems,
+          orderNote,
           subtotal: baseTotals.subtotal,
           serviceChargeAmount: baseTotals.serviceChargeAmount,
           taxAmount: baseTotals.taxAmount,
@@ -739,6 +756,7 @@ export function PosApp() {
     setPayingOrderId(null);
     setActiveOrderId(null);
     setBaseOrderItems([]);
+    setOrderNote("");
     setMemberPhone("");
     setMemberMatch(null);
     setSelectedPaymentMethod("");
@@ -807,6 +825,14 @@ export function PosApp() {
     const finalPrice = priceWithSpecs(item, selectedSpecs);
     const targetPrinterGroup = localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup;
     setCartItems((current) => {
+      const remaining = soldOutMap[item.id]?.remainingQty;
+      if (typeof remaining === "number" && remaining >= 0) {
+        const totalInCart = current.filter((row) => row.menuItemId === item.id).reduce((sum, row) => sum + row.quantity, 0);
+        if (totalInCart + 1 > remaining) {
+          setToast({ tone: "info", message: `只剩 ${remaining} 份，不能再加。` });
+          return current;
+        }
+      }
       const existing = current.find(
         (cartItem) => cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
           menuItemId: item.id,
@@ -900,6 +926,17 @@ export function PosApp() {
     }
   }
 
+  function openItemNoteEditor(item: OrderItem) {
+    setNoteDraft(item.note ?? "");
+    setNoteModal({ type: "item", itemKey: itemIdentity(item) });
+  }
+
+  function applyItemNote(itemKey: string, note: string) {
+    setCartItems((current) =>
+      current.map((item) => (itemIdentity(item) === itemKey ? { ...item, note: note.trim() } : item)),
+    );
+  }
+
   function addMenuItem(item: MenuItem) {
     if (isItemSoldOut(item.id)) {
       setToast({ tone: "info", message: `${item.name} 已售罄。` });
@@ -913,14 +950,30 @@ export function PosApp() {
     commitMenuItem(item);
   }
 
-  function updateQuantity(menuItemId: string, delta: number) {
-    setCartItems((current) =>
-      current
-        .map((item) =>
-          item.menuItemId === menuItemId ? { ...item, quantity: Math.max(0, item.quantity + delta) } : item,
+  function updateQuantity(itemKey: string, delta: number) {
+    setCartItems((current) => {
+      const target = current.find((row) => itemIdentity(row) === itemKey);
+      if (!target) return current;
+
+      if (delta > 0) {
+        const remaining = soldOutMap[target.menuItemId]?.remainingQty;
+        if (typeof remaining === "number" && remaining >= 0) {
+          const totalInCart = current
+            .filter((row) => row.menuItemId === target.menuItemId)
+            .reduce((sum, row) => sum + row.quantity, 0);
+          if (totalInCart + delta > remaining) {
+            setToast({ tone: "info", message: `只剩 ${remaining} 份，不能再加。` });
+            return current;
+          }
+        }
+      }
+
+      return current
+        .map((row) =>
+          itemIdentity(row) === itemKey ? { ...row, quantity: Math.max(0, row.quantity + delta) } : row,
         )
-        .filter((item) => item.quantity > 0),
-    );
+        .filter((row) => row.quantity > 0);
+    });
   }
 
   function voidOrderedItem(target: OrderItem, mode: "one" | "all", reason: string) {
@@ -1113,14 +1166,26 @@ export function PosApp() {
         ticketType: "normal",
         printerGroup: printer.group,
         printerName: printer.name,
-        items: order.items
-          .filter((item) => item.printerGroup === printer.group)
-          .map((item) => ({
-            name: item.name,
-            quantity: item.quantity,
-            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-            note: item.note,
-          })),
+        items: [
+          ...order.items
+            .filter((item) => item.printerGroup === printer.group)
+            .map((item) => ({
+              name: item.name,
+              quantity: item.quantity,
+              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+              note: item.note,
+            })),
+          ...(order.orderNote
+            ? [
+                {
+                  name: "全單備註",
+                  quantity: 1,
+                  specs: [],
+                  note: order.orderNote,
+                },
+              ]
+            : []),
+        ],
         status: networkOnline ? "sent" : "pending",
         createdAt: timestamp,
       }));
@@ -1198,14 +1263,26 @@ export function PosApp() {
         ticketType: isAddOnOrder ? "addon" : "normal",
         printerGroup: printer.group,
         printerName: printer.name,
-        items: printTargetItems
-          .filter((item) => item.printerGroup === printer.group)
-          .map((item) => ({
-            name: item.name,
-            quantity: item.quantity,
-            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-            note: item.note,
-          })),
+        items: [
+          ...printTargetItems
+            .filter((item) => item.printerGroup === printer.group)
+            .map((item) => ({
+              name: item.name,
+              quantity: item.quantity,
+              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+              note: item.note,
+            })),
+          ...(!isAddOnOrder && order.orderNote
+            ? [
+                {
+                  name: "全單備註",
+                  quantity: 1,
+                  specs: [],
+                  note: order.orderNote,
+                },
+              ]
+            : []),
+        ],
         status: networkOnline ? "sent" : "pending",
         createdAt: timestamp,
       }));
@@ -1593,6 +1670,23 @@ export function PosApp() {
                   </button>
                 </div>
               ) : null}
+
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-slate-600">全單備註</div>
+                  <div className="truncate text-xs text-slate-500">{orderNote ? orderNote : "（可選）"}</div>
+                </div>
+                <button
+                  className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={() => {
+                    setNoteDraft(orderNote);
+                    setNoteModal({ type: "order" });
+                  }}
+                  type="button"
+                >
+                  編輯
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto px-3 pb-3">
@@ -1630,7 +1724,7 @@ export function PosApp() {
                             className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
                             onClick={(event) => {
                               event.stopPropagation();
-                              updateQuantity(item.menuItemId, -1);
+                              updateQuantity(itemIdentity(item), -1);
                             }}
                             type="button"
                           >
@@ -1641,13 +1735,26 @@ export function PosApp() {
                             className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
                             onClick={(event) => {
                               event.stopPropagation();
-                              updateQuantity(item.menuItemId, 1);
+                              updateQuantity(itemIdentity(item), 1);
                             }}
                             type="button"
                           >
                             +
                           </button>
                         </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <button
+                          className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openItemNoteEditor(item);
+                          }}
+                          type="button"
+                        >
+                          {item.note ? "編輯備註" : "加備註"}
+                        </button>
+                        {item.note ? <div className="truncate text-xs text-slate-500">備註：{item.note}</div> : null}
                       </div>
                     </article>
                   ))}
@@ -1708,6 +1815,9 @@ export function PosApp() {
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                 {filteredMenuItems.map((item) => {
                   const soldOut = isItemSoldOut(item.id);
+                  const remainingQty = soldOutMap[item.id]?.remainingQty;
+                  const hasRemainingBadge =
+                    typeof remainingQty === "number" && remainingQty > 0 && (soldOutMap[item.id]?.initialQty ?? 0) > 0;
                   return (
                   <button
                     key={item.id}
@@ -1726,6 +1836,10 @@ export function PosApp() {
                         {soldOut ? (
                           <div className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
                             售罄
+                          </div>
+                        ) : hasRemainingBadge ? (
+                          <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                            只剩 {remainingQty} 份
                           </div>
                         ) : null}
                       </div>
@@ -1807,16 +1921,23 @@ export function PosApp() {
                     <div className="text-xs font-semibold text-slate-500">自動接單</div>
                     <button
                       className={`rounded-full px-3 py-2 text-xs font-semibold ${
-                        quickAutoAccept ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
+                        autoAcceptOnlineOrders ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
                       }`}
                       onClick={() => {
-                        const next = !quickAutoAccept;
-                        setQuickAutoAccept(next);
-                        saveQuickAutoAccept(next);
+                        const next = !autoAcceptOnlineOrders;
+                        const nextSettings = {
+                          ...localSettings,
+                          onlineOrderSettings: {
+                            ...localSettings.onlineOrderSettings,
+                            autoAccept: next,
+                          },
+                        };
+                        setLocalSettings(nextSettings);
+                        savePosLocalSettings(nextSettings);
                       }}
                       type="button"
                     >
-                      {quickAutoAccept ? "開" : "關"}
+                      {autoAcceptOnlineOrders ? "開" : "關"}
                     </button>
                   </div>
 
@@ -2235,6 +2356,87 @@ export function PosApp() {
         title={specModalItem ? `${specModalItem.name} 規格` : "規格"}
       />
 
+      {noteModal ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">
+                  {noteModal.type === "order" ? "全單備註" : "單品備註"}
+                </div>
+                <div className="mt-1 text-sm text-slate-500">可多選常用備註，也可自由輸入。</div>
+              </div>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => setNoteModal(null)}
+                type="button"
+              >
+                關閉
+              </button>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-slate-500">常用備註</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {localSettings.notePresets.length === 0 ? (
+                  <div className="text-sm text-slate-500">尚未設定常用備註（可到 設置 → 備註 新增）。</div>
+                ) : (
+                  localSettings.notePresets.map((preset) => (
+                    <button
+                      key={preset}
+                      className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                      onClick={() => {
+                        const base = noteDraft.trim();
+                        const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
+                        setNoteDraft(next);
+                      }}
+                      type="button"
+                    >
+                      {preset}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-slate-500">自由輸入</div>
+              <textarea
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none focus:border-orange-400"
+                onChange={(event) => setNoteDraft(event.target.value)}
+                placeholder="例如：不要吸管、少辣、走蔥..."
+                rows={4}
+                value={noteDraft}
+              />
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setNoteDraft("")}
+                type="button"
+              >
+                清空
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  if (noteModal.type === "order") {
+                    setOrderNote(noteDraft.trim());
+                  } else if (noteModal.itemKey) {
+                    applyItemNote(noteModal.itemKey, noteDraft);
+                  }
+                  setNoteModal(null);
+                }}
+                type="button"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {viewingOrder ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
           <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
@@ -2282,6 +2484,11 @@ export function PosApp() {
                 <span>總計</span>
                 <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>
               </div>
+              {viewingOrder.orderNote ? (
+                <div className="mt-2 text-sm text-slate-500">
+                  全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
+                </div>
+              ) : null}
               {viewingOrder.prepaidAmount ? (
                 <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
                   <span>已支付</span>

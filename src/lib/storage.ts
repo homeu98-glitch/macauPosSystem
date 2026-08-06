@@ -53,6 +53,7 @@ function normalizeLocalSettings(settings: Partial<PosLocalSettings> | null | und
       settings?.menuPrinterOverrides && typeof settings.menuPrinterOverrides === "object"
         ? settings.menuPrinterOverrides
         : defaultPosLocalSettings.menuPrinterOverrides,
+    notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
     onlineOrderSettings: {
       autoAccept: Boolean(
         settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,
@@ -116,6 +117,9 @@ export function loadPosLocalSettings() {
 
 export function savePosLocalSettings(settings: PosLocalSettings) {
   writeJson(KEYS.localSettings, settings);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-local-settings-changed", { detail: { localSettings: settings } }));
+  }
 }
 
 export function loadMembers() {
