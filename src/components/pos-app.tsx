@@ -130,7 +130,9 @@ export function PosApp() {
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
-  const [quickPanel, setQuickPanel] = useState<"cashier" | "pool">(() => (loadOperatingMode() === "quick" ? "pool" : "cashier"));
+  const [quickPanel, setQuickPanel] = useState<"cashier" | "online" | "local">(() =>
+    loadOperatingMode() === "quick" ? "online" : "cashier",
+  );
   const [quickAutoAccept, setQuickAutoAccept] = useState(() => loadQuickAutoAccept());
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
@@ -1187,8 +1189,8 @@ export function PosApp() {
       tone: "success",
       message: networkOnline
         ? isAddOnOrder
-          ? `已加單並打印，單號 ${order.localOrderNo}。`
-          : `已下單並打印，單號 ${order.localOrderNo}。`
+          ? `已加單成功，單號 ${order.localOrderNo}。`
+          : `已下單成功，單號 ${order.localOrderNo}。`
         : isAddOnOrder
           ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
           : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
@@ -1704,19 +1706,25 @@ export function PosApp() {
             <div className="border-b border-slate-100 px-4 py-4">
               {isQuickMode ? (
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold text-slate-900">快捷操作</div>
-                    <div className="mt-1 text-xs text-slate-500">線上單與本機訂單會集中在這裡處理。</div>
-                  </div>
-                  <div className="flex items-center gap-2">
+                  <div className="text-base font-semibold text-slate-900">快捷操作</div>
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        quickPanel === "pool" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                        quickPanel === "online" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                       }`}
-                      onClick={() => setQuickPanel("pool")}
+                      onClick={() => setQuickPanel("online")}
                       type="button"
                     >
-                      訂單池
+                      線上訂單
+                    </button>
+                    <button
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        quickPanel === "local" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                      }`}
+                      onClick={() => setQuickPanel("local")}
+                      type="button"
+                    >
+                      堂食訂單
                     </button>
                     <button
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -1744,7 +1752,7 @@ export function PosApp() {
             </div>
 
             <div className="flex-1 overflow-auto px-4 py-4">
-              {isQuickMode && quickPanel === "pool" ? (
+              {isQuickMode && quickPanel === "online" ? (
                 <div className="grid gap-4">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1892,9 +1900,11 @@ export function PosApp() {
                       )}
                     </div>
                   </div>
-
+                </div>
+              ) : isQuickMode && quickPanel === "local" ? (
+                <div className="grid gap-4">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-sm font-semibold text-slate-900">本機訂單</div>
+                    <div className="text-sm font-semibold text-slate-900">堂食訂單</div>
                     <div className="mt-3 grid gap-2">
                       {openOrders.filter((order) => order.tableId === "counter").length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
@@ -1924,7 +1934,7 @@ export function PosApp() {
                                   }}
                                   type="button"
                                 >
-                                  結帳
+                                  查看訂單
                                 </button>
                               </div>
                             </div>

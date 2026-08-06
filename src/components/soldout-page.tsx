@@ -193,6 +193,7 @@ export function SoldOutPage() {
         <div className="hidden w-[320px] shrink-0 lg:block">
           <FixedNumberPad
             confirmLabel="完成"
+            showDisplay={false}
             subtitle={selectedItem ? `正在設定：${selectedItem.name}` : "先在左邊選一個菜品"}
             title="數字鍵盤"
             value={padValue}

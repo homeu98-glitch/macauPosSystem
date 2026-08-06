@@ -220,6 +220,7 @@ export function MembersPage() {
         <div className="hidden w-[320px] shrink-0 lg:block">
           <FixedNumberPad
             confirmLabel={padTarget === "search" ? "搜尋" : "完成"}
+            showDisplay={false}
             subtitle={
               padTarget === "search"
                 ? "輸入會員手機號碼"

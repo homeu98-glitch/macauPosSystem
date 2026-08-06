@@ -7,6 +7,7 @@ type FixedNumberPadProps = {
   onChange: (value: string) => void;
   onConfirm?: () => void;
   confirmLabel?: string;
+  showDisplay?: boolean;
 };
 
 const KEYS = [
@@ -23,6 +24,7 @@ export function FixedNumberPad({
   onChange,
   onConfirm,
   confirmLabel = "確定",
+  showDisplay = true,
 }: FixedNumberPadProps) {
   function append(token: string) {
     onChange(`${value}${token}`);
@@ -35,11 +37,13 @@ export function FixedNumberPad({
         {subtitle ? <div className="mt-1 text-xs text-slate-500">{subtitle}</div> : null}
       </div>
 
-      <div className="px-4 py-4">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-2xl font-semibold text-slate-900">
-          {value || " "}
+      {showDisplay ? (
+        <div className="px-4 py-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-2xl font-semibold text-slate-900">
+            {value || " "}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="flex-1 px-4 pb-4">
         <div className="grid gap-2">
@@ -86,4 +90,3 @@ export function FixedNumberPad({
     </aside>
   );
 }
-
