@@ -44,6 +44,17 @@ export function DeviceSettings() {
   });
   const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
   const [bulkPrinterGroup, setBulkPrinterGroup] = useState<DevicePrinterConfig["group"]>("kitchen");
+  const [menuPrintCategoryId, setMenuPrintCategoryId] = useState<string>("all");
+  const [menuPrintPage, setMenuPrintPage] = useState(1);
+  const menuPrintPageSize = 50;
+  const [menuCategoryId, setMenuCategoryId] = useState<string>("all");
+  const [menuPage, setMenuPage] = useState(1);
+  const menuPageSize = 50;
+
+  const categoryNameMap = useMemo(() => {
+    const normalized = normalizeBootstrapPayload(cachedBootstrap);
+    return Object.fromEntries(normalized.categories.map((category) => [category.id, category.name]));
+  }, [cachedBootstrap]);
 
   useEffect(() => {
     if (!cachedConfig) {
@@ -426,6 +437,22 @@ export function DeviceSettings() {
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => {
+                    setMenuPrintCategoryId(event.target.value);
+                    setMenuPrintPage(1);
+                    setBulkSelectedMenuIds([]);
+                  }}
+                  value={menuPrintCategoryId}
+                >
+                  <option value="all">全部分類</option>
+                  {menuDraft.categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                   onChange={(event) => setBulkPrinterGroup(event.target.value as DevicePrinterConfig["group"])}
                   value={bulkPrinterGroup}
                 >
@@ -453,10 +480,17 @@ export function DeviceSettings() {
                 </button>
                 <button
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => setBulkSelectedMenuIds(cachedBootstrap.menuItems.map((item) => item.id))}
+                  onClick={() => {
+                    const filtered = cachedBootstrap.menuItems.filter(
+                      (item) => menuPrintCategoryId === "all" || item.categoryId === menuPrintCategoryId,
+                    );
+                    const start = (menuPrintPage - 1) * menuPrintPageSize;
+                    const ids = filtered.slice(start, start + menuPrintPageSize).map((item) => item.id);
+                    setBulkSelectedMenuIds(ids);
+                  }}
                   type="button"
                 >
-                  全選
+                  全選本頁
                 </button>
                 <button
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
@@ -468,7 +502,41 @@ export function DeviceSettings() {
               </div>
             </div>
 
-            <div className="mt-4 overflow-auto">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              {(() => {
+                const filteredCount = cachedBootstrap.menuItems.filter(
+                  (item) => menuPrintCategoryId === "all" || item.categoryId === menuPrintCategoryId,
+                ).length;
+                const totalPages = Math.max(1, Math.ceil(filteredCount / menuPrintPageSize));
+                return (
+                  <>
+                    <div className="text-sm text-slate-600">
+                      共 {filteredCount} 個菜品 · 第 {menuPrintPage}/{totalPages} 頁（每頁 {menuPrintPageSize}）
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                        disabled={menuPrintPage <= 1}
+                        onClick={() => setMenuPrintPage((current) => Math.max(1, current - 1))}
+                        type="button"
+                      >
+                        上一頁
+                      </button>
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                        disabled={menuPrintPage >= totalPages}
+                        onClick={() => setMenuPrintPage((current) => Math.min(totalPages, current + 1))}
+                        type="button"
+                      >
+                        下一頁
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="mt-2 max-h-[62vh] overflow-auto">
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="text-left text-xs font-semibold text-slate-500">
@@ -480,7 +548,30 @@ export function DeviceSettings() {
                   </tr>
                 </thead>
                 <tbody>
-                  {cachedBootstrap.menuItems.map((item) => {
+                  {(() => {
+                    const filtered = cachedBootstrap.menuItems.filter(
+                      (item) => menuPrintCategoryId === "all" || item.categoryId === menuPrintCategoryId,
+                    );
+                    const totalPages = Math.max(1, Math.ceil(filtered.length / menuPrintPageSize));
+                    const safePage = Math.min(menuPrintPage, totalPages);
+                    const start = (safePage - 1) * menuPrintPageSize;
+                    const pageItems = filtered.slice(start, start + menuPrintPageSize);
+
+                    const grouped = pageItems.reduce<Record<string, typeof pageItems>>((acc, row) => {
+                      acc[row.categoryId] = acc[row.categoryId] ?? [];
+                      acc[row.categoryId].push(row);
+                      return acc;
+                    }, {});
+
+                    return Object.entries(grouped).flatMap(([categoryId, items]) => {
+                      const categoryName = categoryNameMap[categoryId] ?? categoryId;
+                      return [
+                        <tr key={`cat-${categoryId}`} className="bg-slate-50">
+                          <td className="border-b border-slate-200 py-2 pr-3 text-xs font-semibold text-slate-500" colSpan={5}>
+                            {categoryName}
+                          </td>
+                        </tr>,
+                        ...items.map((item) => {
                     const group = localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup;
                     const checked = bulkSelectedMenuIds.includes(item.id);
                     return (
@@ -497,7 +588,9 @@ export function DeviceSettings() {
                           />
                         </td>
                         <td className="border-b border-slate-100 py-2 pr-3 font-semibold text-slate-900">{item.name}</td>
-                        <td className="border-b border-slate-100 py-2 pr-3 text-slate-600">{item.categoryId}</td>
+                        <td className="border-b border-slate-100 py-2 pr-3 text-slate-600">
+                          {categoryNameMap[item.categoryId] ?? item.categoryId}
+                        </td>
                         <td className="border-b border-slate-100 py-2 pr-3">
                           <select
                             className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
@@ -522,7 +615,10 @@ export function DeviceSettings() {
                         </td>
                       </tr>
                     );
-                  })}
+                        }),
+                      ];
+                    });
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -640,7 +736,8 @@ export function DeviceSettings() {
                     新增分類
                   </button>
                 </div>
-                <div className="mt-3 grid gap-2">
+                <div className="mt-3 max-h-[62vh] overflow-auto pr-1">
+                  <div className="grid gap-2">
                   {menuDraft.categories.map((category) => (
                     <input
                       key={category.id}
@@ -656,6 +753,7 @@ export function DeviceSettings() {
                       value={category.name}
                     />
                   ))}
+                  </div>
                 </div>
               </div>
 
@@ -667,30 +765,81 @@ export function DeviceSettings() {
                       規格（specGroups）使用 JSON 編輯：保持現有結構即可。
                     </div>
                   </div>
-                  <button
-                    className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
-                    onClick={() =>
-                      setMenuDraft((current) => ({
-                        ...current,
-                        menuItems: [
-                          ...current.menuItems,
-                          {
-                            id: crypto.randomUUID(),
-                            categoryId: current.categories[0]?.id ?? "cat",
-                            name: "新菜品",
-                            price: 0,
-                            printerGroup: "kitchen",
-                          },
-                        ],
-                      }))
-                    }
-                    type="button"
-                  >
-                    新增菜品
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                      onChange={(event) => {
+                        setMenuCategoryId(event.target.value);
+                        setMenuPage(1);
+                      }}
+                      value={menuCategoryId}
+                    >
+                      <option value="all">全部分類</option>
+                      {menuDraft.categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+                      onClick={() =>
+                        setMenuDraft((current) => ({
+                          ...current,
+                          menuItems: [
+                            ...current.menuItems,
+                            {
+                              id: crypto.randomUUID(),
+                              categoryId: current.categories[0]?.id ?? "cat",
+                              name: "新菜品",
+                              price: 0,
+                              printerGroup: "kitchen",
+                            },
+                          ],
+                        }))
+                      }
+                      type="button"
+                    >
+                      新增菜品
+                    </button>
+                  </div>
                 </div>
 
-                <div className="mt-4 overflow-auto">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                  {(() => {
+                    const filteredCount = menuDraft.menuItems.filter(
+                      (item) => menuCategoryId === "all" || item.categoryId === menuCategoryId,
+                    ).length;
+                    const totalPages = Math.max(1, Math.ceil(filteredCount / menuPageSize));
+                    return (
+                      <>
+                        <div className="text-xs text-slate-500">
+                          共 {filteredCount} 個菜品 · 第 {menuPage}/{totalPages} 頁（每頁 {menuPageSize}）
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                            disabled={menuPage <= 1}
+                            onClick={() => setMenuPage((current) => Math.max(1, current - 1))}
+                            type="button"
+                          >
+                            上一頁
+                          </button>
+                          <button
+                            className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                            disabled={menuPage >= totalPages}
+                            onClick={() => setMenuPage((current) => Math.min(totalPages, current + 1))}
+                            type="button"
+                          >
+                            下一頁
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                <div className="mt-2 max-h-[62vh] overflow-auto">
                   <table className="w-full border-collapse text-sm">
                     <thead>
                       <tr className="text-left text-xs font-semibold text-slate-500">
@@ -702,7 +851,15 @@ export function DeviceSettings() {
                       </tr>
                     </thead>
                     <tbody>
-                      {menuDraft.menuItems.map((item) => (
+                      {(() => {
+                        const filtered = menuDraft.menuItems.filter(
+                          (item) => menuCategoryId === "all" || item.categoryId === menuCategoryId,
+                        );
+                        const totalPages = Math.max(1, Math.ceil(filtered.length / menuPageSize));
+                        const safePage = Math.min(menuPage, totalPages);
+                        const start = (safePage - 1) * menuPageSize;
+                        return filtered.slice(start, start + menuPageSize);
+                      })().map((item) => (
                         <tr key={item.id} className="align-top">
                           <td className="border-b border-slate-100 py-2 pr-3">
                             <input

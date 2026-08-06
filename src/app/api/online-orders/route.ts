@@ -68,6 +68,7 @@ export async function GET(request: Request) {
         paymentStatus: (order.payment_status ?? "unpaid") as "paid" | "unpaid",
         paidAmount: Number(order.paid_amount ?? 0),
         customerName: order.customer_name,
+        phone: order.customer_phone ?? order.phone ?? null,
         total: Number(order.total ?? 0),
         createdAt: order.created_at,
         items: (order.online_order_items ?? []).map((item: { product_name: string; qty: number }) => ({
@@ -80,7 +81,15 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const payload = (await request.json()) as {
-    action?: "accept" | "assign_table" | "auto_accept" | "handoff_to_rider" | "convert_quick";
+    action?:
+      | "accept"
+      | "assign_table"
+      | "auto_accept"
+      | "handoff_to_rider"
+      | "convert_quick"
+      | "cancel"
+      | "confirm_customer_cancel"
+      | "reject_customer_cancel";
     orderId?: string;
     tableName?: string;
     tableId?: string;
@@ -357,6 +366,35 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
+  }
+
+  if ((payload.action === "cancel" || payload.action === "confirm_customer_cancel") && payload.orderId) {
+    const status = payload.action === "cancel" ? "cancelled_by_merchant" : "cancelled_by_customer";
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status, cancelled_at: new Date().toISOString() })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+
+    // TODO：對接主系統取消訂單 API（你提供 endpoint 後再接）
+    return NextResponse.json({ ok: true, source: "supabase", status });
+  }
+
+  if (payload.action === "reject_customer_cancel" && payload.orderId) {
+    const { error } = await supabase
+      .from("online_orders")
+      .update({ status: "cancel_rejected", cancel_rejected_at: new Date().toISOString() })
+      .eq("id", payload.orderId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+
+    // TODO：對接主系統「不認同取消」API（你提供 endpoint 後再接）
+    return NextResponse.json({ ok: true, source: "supabase", status: "cancel_rejected" });
   }
 
   return NextResponse.json({

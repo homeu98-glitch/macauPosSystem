@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { loadPosLocalSettings } from "@/lib/storage";
@@ -49,6 +49,13 @@ export function OnlineOrders() {
   const [riderModalOrderId, setRiderModalOrderId] = useState<string | null>(null);
   const [riderFee, setRiderFee] = useState("");
   const [riderNote, setRiderNote] = useState("");
+  const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
+  const [audioReady, setAudioReady] = useState(false);
+
+  const viewingOrder = useMemo(
+    () => (viewingOrderId ? orders.find((item) => item.id === viewingOrderId) ?? null : null),
+    [orders, viewingOrderId],
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -56,8 +63,50 @@ export function OnlineOrders() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    // iOS/Safari 需要用戶互動後才允許播放聲音
+    function unlock() {
+      setAudioReady(true);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    }
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  const playSound = useCallback((kind: "new_order" | "new_delivery" | "cancel_order") => {
+    if (!audioReady) return;
+    const src =
+      kind === "cancel_order"
+        ? "/sounds/cancel-order.mp3"
+        : kind === "new_delivery"
+          ? "/sounds/new-delivery-order.mp3"
+          : "/sounds/new-order.mp3";
+    try {
+      void new Audio(src).play();
+    } catch {
+      // ignore
+    }
+  }, [audioReady]);
+
+  function isCancelStatus(status: string) {
+    const s = status.toLowerCase();
+    return s.includes("cancel") || s.includes("canceled") || s.includes("cancelled");
+  }
+
   async function writeBackOrder(payload: {
-    action: "accept" | "assign_table" | "auto_accept" | "handoff_to_rider";
+    action:
+      | "accept"
+      | "assign_table"
+      | "auto_accept"
+      | "handoff_to_rider"
+      | "cancel"
+      | "confirm_customer_cancel"
+      | "reject_customer_cancel";
     orderId?: string;
     orderIds?: string[];
     tableName?: string;
@@ -78,6 +127,7 @@ export function OnlineOrders() {
 
   useEffect(() => {
     let cancelled = false;
+    let prevSnapshot: Array<{ id: string; sourceId?: string; status: string; type: OrderTypeKey }> = [];
 
     async function load() {
       setLoading(true);
@@ -96,6 +146,24 @@ export function OnlineOrders() {
         }
 
         if (!cancelled) {
+          // 聲音：新單 / 取消單
+          const currentRaw = payload.orders ?? [];
+          const prevIds = new Set(prevSnapshot.map((row) => row.sourceId ?? row.id));
+          const newOrders = currentRaw.filter((row) => !prevIds.has(row.sourceId ?? row.id));
+          const cancelOrders = currentRaw.filter((row) => {
+            const id = row.sourceId ?? row.id;
+            const prev = prevSnapshot.find((p) => (p.sourceId ?? p.id) === id);
+            if (!prev) return false;
+            return !isCancelStatus(prev.status) && isCancelStatus(row.status);
+          });
+
+          if (cancelOrders.length > 0) {
+            playSound("cancel_order");
+          } else if (newOrders.length > 0) {
+            const hasDelivery = newOrders.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
+            playSound(hasDelivery ? "new_delivery" : "new_order");
+          }
+
           const baseOrders = (payload.orders ?? []).map((order) =>
             autoAccept && order.status === "new"
               ? { ...order, status: "accepted" }
@@ -112,6 +180,12 @@ export function OnlineOrders() {
             }
           }
           setOrders(baseOrders);
+          prevSnapshot = currentRaw.map((row) => ({
+            id: row.id,
+            sourceId: row.sourceId,
+            status: row.status,
+            type: row.type,
+          }));
         }
       } catch (err) {
         if (!cancelled) {
@@ -125,10 +199,12 @@ export function OnlineOrders() {
     }
 
     void load();
+    const timer = window.setInterval(load, 6000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
-  }, [activeTab, autoAccept]);
+  }, [activeTab, autoAccept, playSound]);
 
   const stats = useMemo(() => {
     const effectiveOrders = orders.map((order) => ({
@@ -206,6 +282,42 @@ export function OnlineOrders() {
       setRiderModalOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "轉車手送單失敗" });
+    }
+  }
+
+  async function cancelOrder(order: OnlineOrder) {
+    const ok = window.confirm("確定要取消這張訂單？");
+    if (!ok) return;
+    try {
+      await writeBackOrder({ action: "cancel", orderId: order.sourceId ?? order.id });
+      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_merchant" } : row)));
+      setToast({ tone: "success", message: "已取消訂單，已回寫主系統。" });
+      playSound("cancel_order");
+      setViewingOrderId(null);
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "取消訂單失敗" });
+    }
+  }
+
+  async function confirmCustomerCancel(order: OnlineOrder) {
+    try {
+      await writeBackOrder({ action: "confirm_customer_cancel", orderId: order.sourceId ?? order.id });
+      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_customer" } : row)));
+      setToast({ tone: "success", message: "已確認客人取消。" });
+      setViewingOrderId(null);
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
+    }
+  }
+
+  async function rejectCustomerCancel(order: OnlineOrder) {
+    try {
+      await writeBackOrder({ action: "reject_customer_cancel", orderId: order.sourceId ?? order.id });
+      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancel_rejected" } : row)));
+      setToast({ tone: "success", message: "已不認同取消。" });
+      setViewingOrderId(null);
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
     }
   }
 
@@ -309,6 +421,7 @@ export function OnlineOrders() {
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     <button
                       className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                      onClick={() => setViewingOrderId(order.id)}
                       type="button"
                     >
                       查看
@@ -452,6 +565,102 @@ export function OnlineOrders() {
           }`}
         >
           {toast.message}
+        </div>
+      ) : null}
+
+      {viewingOrder ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">訂單詳情</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {viewingOrder.id} · {TABS.find((tab) => tab.key === viewingOrder.type)?.label ?? viewingOrder.type}
+                </div>
+              </div>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => setViewingOrderId(null)}
+                type="button"
+              >
+                關閉
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2 text-sm text-slate-700">
+              <div>客戶：{viewingOrder.customerName ?? "--"}</div>
+              <div>電話：{viewingOrder.phone ?? "--"}</div>
+              <div>
+                支付：
+                <span
+                  className={
+                    viewingOrder.paymentStatus === "paid"
+                      ? "ml-2 font-semibold text-emerald-700"
+                      : "ml-2 font-semibold text-amber-700"
+                  }
+                >
+                  {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
+                </span>
+                {typeof viewingOrder.paidAmount === "number" ? (
+                  <span className="ml-2 text-slate-500">（{formatMoney(viewingOrder.paidAmount)}）</span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">菜品明細</div>
+              <div className="mt-3 grid gap-2">
+                {viewingOrder.items?.length ? (
+                  viewingOrder.items.map((item) => (
+                    <div key={item.name} className="flex items-center justify-between text-sm text-slate-700">
+                      <span>{item.name}</span>
+                      <span className="font-semibold">x{item.qty}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-slate-500">--</div>
+                )}
+              </div>
+              <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+                <span>總計</span>
+                <span className="text-base font-semibold text-slate-900">
+                  {typeof viewingOrder.total === "number" ? formatMoney(viewingOrder.total) : "--"}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              {(() => {
+                const s = String(viewingOrder.status).toLowerCase();
+                return s.includes("cancel") && s.includes("customer");
+              })() ? (
+                <>
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={() => void rejectCustomerCancel(viewingOrder)}
+                    type="button"
+                  >
+                    不認同取消
+                  </button>
+                  <button
+                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => void confirmCustomerCancel(viewingOrder)}
+                    type="button"
+                  >
+                    確認取消
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => void cancelOrder(viewingOrder)}
+                  type="button"
+                >
+                  取消訂單
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

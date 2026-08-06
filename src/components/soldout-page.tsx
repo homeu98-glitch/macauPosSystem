@@ -16,6 +16,8 @@ export function SoldOutPage() {
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [status, setStatus] = useState("設定完成後可保存到本機，點餐頁會立即生效。");
   const [selectedMenuItemId, setSelectedMenuItemId] = useState<string>(bootstrap.menuItems[0]?.id ?? "");
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
   const [padValue, setPadValue] = useState(() => {
     const firstId = bootstrap.menuItems[0]?.id;
     if (!firstId) return "";
@@ -30,6 +32,8 @@ export function SoldOutPage() {
   }
 
   const selectedItem = bootstrap.menuItems.find((item) => item.id === selectedMenuItemId) ?? null;
+  const totalPages = Math.max(1, Math.ceil(bootstrap.menuItems.length / pageSize));
+  const pageItems = bootstrap.menuItems.slice((page - 1) * pageSize, page * pageSize);
 
   function applyPadValue(value: string) {
     setPadValue(value);
@@ -86,7 +90,30 @@ export function SoldOutPage() {
           </div>
 
           <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="overflow-auto">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm text-slate-600">
+              共 {bootstrap.menuItems.length} 個菜品 · 第 {page}/{totalPages} 頁（每頁 {pageSize}）
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                disabled={page <= 1}
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                type="button"
+              >
+                上一頁
+              </button>
+              <button
+                className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                disabled={page >= totalPages}
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                type="button"
+              >
+                下一頁
+              </button>
+            </div>
+          </div>
+          <div className="max-h-[62vh] overflow-auto">
               <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="text-left text-xs font-semibold text-slate-500">
@@ -97,7 +124,7 @@ export function SoldOutPage() {
                 </tr>
               </thead>
               <tbody>
-                  {bootstrap.menuItems.map((item) => {
+                  {pageItems.map((item) => {
                     const state = soldOutMap[item.id];
                     const remaining = state ? state.remainingQty : "";
                     const initial = state ? state.initialQty : "";

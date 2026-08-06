@@ -138,6 +138,7 @@ export function PosApp() {
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [audioReady, setAudioReady] = useState(false);
   const [onlineOrders, setOnlineOrders] = useState<
     Array<{
       id: string;
@@ -153,6 +154,7 @@ export function PosApp() {
   >([]);
   const longPressTimerRef = useRef<number | null>(null);
   const quickOrderProcessingRef = useRef<Set<string>>(new Set());
+  const quickOnlineSnapshotRef = useRef<Map<string, string>>(new Map());
 
   const networkOnline = !offlineMode;
   const isQuickMode = operatingMode === "quick";
@@ -212,7 +214,37 @@ export function PosApp() {
         const response = await fetch("/api/online-orders?type=all");
         const payload = (await response.json()) as { ok: boolean; orders?: unknown[] };
         if (!payload.ok) return;
-        if (!cancelled) setOnlineOrders((payload.orders ?? []) as typeof onlineOrders);
+        if (!cancelled) {
+          const nextOrders = (payload.orders ?? []) as typeof onlineOrders;
+          setOnlineOrders(nextOrders);
+
+          if (audioReady) {
+            const snapshot = quickOnlineSnapshotRef.current;
+            const nextMap = new Map<string, string>();
+            const newArrivals: Array<(typeof nextOrders)[number]> = [];
+            let hasCustomerCancel = false;
+
+            for (const order of nextOrders) {
+              const id = order.sourceId ?? order.id;
+              nextMap.set(id, order.status);
+              if (!snapshot.has(id)) newArrivals.push(order);
+              const prevStatus = snapshot.get(id);
+              const status = String(order.status).toLowerCase();
+              if (prevStatus && !String(prevStatus).toLowerCase().includes("cancel") && status.includes("cancel") && status.includes("customer")) {
+                hasCustomerCancel = true;
+              }
+            }
+
+            quickOnlineSnapshotRef.current = nextMap;
+
+            if (hasCustomerCancel) {
+              void new Audio("/sounds/cancel-order.mp3").play();
+            } else if (newArrivals.length > 0) {
+              const hasDelivery = newArrivals.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
+              void new Audio(hasDelivery ? "/sounds/new-delivery-order.mp3" : "/sounds/new-order.mp3").play();
+            }
+          }
+        }
       } catch {
         // ignore
       }
@@ -224,7 +256,7 @@ export function PosApp() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isQuickMode]);
+  }, [isQuickMode, audioReady]);
 
   useEffect(() => {
     if (!isQuickMode) return;
@@ -233,8 +265,22 @@ export function PosApp() {
   }, [isQuickMode]);
 
   useEffect(() => {
+    function unlock() {
+      setAudioReady(true);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    }
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isQuickMode || !quickAutoAccept) return;
-    const pending = onlineOrders.filter((order) => order.status === "pending");
+    const pending = onlineOrders.filter((order) => order.status === "new");
     if (pending.length === 0) return;
 
     for (const order of pending) {
