@@ -1,5 +1,24 @@
-import { DeviceConfig, MemberProfile, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
-import { defaultMembers, defaultPosLocalSettings } from "@/lib/mock-data";
+import {
+  AccountPermissionGroup,
+  AccountStore,
+  AccountUser,
+  DeviceConfig,
+  MemberProfile,
+  PosBootstrap,
+  PosLocalSettings,
+  PosOrder,
+  PrintJob,
+  QueueEvent,
+  UserPermissions,
+  UserRole,
+} from "@/lib/types";
+import {
+  defaultAccountStores,
+  defaultAccountUsers,
+  defaultMembers,
+  defaultPermissionGroups,
+  defaultPosLocalSettings,
+} from "@/lib/mock-data";
 
 const KEYS = {
   bootstrap: "macau-pos/bootstrap",
@@ -17,6 +36,9 @@ const KEYS = {
   operatingMode: "macau-pos/operating-mode",
   quickAutoAccept: "macau-pos/quick-auto-accept",
   quickCompletedMinutes: "macau-pos/quick-completed-minutes",
+  accountUsers: "macau-pos/account-users",
+  accountStores: "macau-pos/account-stores",
+  permissionGroups: "macau-pos/permission-groups",
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -171,6 +193,76 @@ function normalizeMembers(members: MemberProfile[] | null | undefined): MemberPr
   }));
 }
 
+function defaultPermissionsForRole(role: UserRole): UserPermissions {
+  if (role === "admin") {
+    return { refundOrder: true, voidItem: true, manageAccounts: true };
+  }
+  if (role === "manager") {
+    return { refundOrder: true, voidItem: true, manageAccounts: false };
+  }
+  return { refundOrder: false, voidItem: false, manageAccounts: false };
+}
+
+function normalizeAccountStores(stores: AccountStore[] | null | undefined): AccountStore[] {
+  const base = Array.isArray(stores) && stores.length > 0 ? stores : defaultAccountStores;
+  return base.map((store, index) => ({
+    id: store.id ?? `store-${index + 1}`,
+    name: store.name ?? `門店 ${index + 1}`,
+    active: store.active ?? true,
+    createdAt: store.createdAt ?? new Date().toISOString(),
+    updatedAt: store.updatedAt ?? store.createdAt ?? new Date().toISOString(),
+    note: store.note ?? "",
+  }));
+}
+
+function normalizePermissionGroups(groups: AccountPermissionGroup[] | null | undefined): AccountPermissionGroup[] {
+  const base = Array.isArray(groups) && groups.length > 0 ? groups : defaultPermissionGroups;
+  return base.map((group, index) => {
+    const role = group.role ?? (group.code?.includes("admin") ? "admin" : group.code?.includes("manager") ? "manager" : "cashier");
+    return {
+      id: group.id ?? `perm-${index + 1}`,
+      code: group.code ?? `group-${index + 1}`,
+      name: group.name ?? `權限組 ${index + 1}`,
+      role,
+      permissions: {
+        ...defaultPermissionsForRole(role),
+        ...(group.permissions ?? {}),
+      },
+      createdAt: group.createdAt ?? new Date().toISOString(),
+      updatedAt: group.updatedAt ?? group.createdAt ?? new Date().toISOString(),
+      note: group.note ?? "",
+    };
+  });
+}
+
+function normalizeAccountUsers(accounts: AccountUser[] | null | undefined): AccountUser[] {
+  const base = Array.isArray(accounts) && accounts.length > 0 ? accounts : defaultAccountUsers;
+  const permissionGroups = normalizePermissionGroups(readJson<AccountPermissionGroup[]>(KEYS.permissionGroups, defaultPermissionGroups));
+  return base.map((account, index) => {
+    const role = account.role ?? (account.account === "60000000" ? "admin" : account.account === "63936541" ? "manager" : "cashier");
+    const permissionGroup = permissionGroups.find((group) => group.id === account.permissionGroupId);
+    return {
+      id: account.id ?? `acct-${index + 1}`,
+      account: String(account.account ?? "").replace(/\D/g, "").slice(0, 8),
+      pin: String(account.pin ?? "").replace(/\D/g, "").slice(0, 4),
+      name: account.name ?? (role === "admin" ? "系統管理員" : role === "manager" ? "店長" : "收銀員"),
+      role,
+      active: account.active ?? true,
+      storeIds: Array.isArray(account.storeIds) ? account.storeIds : ["macau-store-a"],
+      permissionGroupId: account.permissionGroupId ?? permissionGroup?.id,
+      permissions: {
+        ...defaultPermissionsForRole(role),
+        ...(permissionGroup?.permissions ?? {}),
+        ...(account.permissions ?? {}),
+      },
+      createdAt: account.createdAt ?? new Date().toISOString(),
+      updatedAt: account.updatedAt ?? account.createdAt ?? new Date().toISOString(),
+      lastLoginAt: account.lastLoginAt,
+      note: account.note ?? "",
+    };
+  });
+}
+
 export function loadBootstrapCache() {
   return readJson<PosBootstrap | null>(KEYS.bootstrap, null);
 }
@@ -251,27 +343,88 @@ export function saveOfflineMode(enabled: boolean) {
 export type AuthSession = {
   account: string;
   name: string;
-  role: "manager" | "cashier";
-  permissions: {
-    refundOrder: boolean;
-    voidItem: boolean;
-  };
+  role: UserRole;
+  storeIds?: string[];
+  permissionGroupId?: string;
+  permissions: UserPermissions;
   loggedInAt: string;
 };
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
   if (!session?.account) return null;
-  const role = session.role ?? (session.account === "63936541" ? "manager" : "cashier");
+  const role =
+    session.role ?? (session.account === "60000000" ? "admin" : session.account === "63936541" ? "manager" : "cashier");
   return {
     account: session.account,
-    name: session.name ?? (role === "manager" ? "店長" : "收銀員"),
+    name: session.name ?? (role === "admin" ? "系統管理員" : role === "manager" ? "店長" : "收銀員"),
     role,
-    permissions:
-      session.permissions ??
-      (role === "manager"
-        ? { refundOrder: true, voidItem: true }
-        : { refundOrder: false, voidItem: false }),
+    storeIds: Array.isArray(session.storeIds) ? session.storeIds : ["macau-store-a"],
+    permissionGroupId: session.permissionGroupId,
+    permissions: {
+      ...defaultPermissionsForRole(role),
+      ...(session.permissions ?? {}),
+    },
     loggedInAt: session.loggedInAt ?? new Date().toISOString(),
+  };
+}
+
+export function loadAccountUsers() {
+  return normalizeAccountUsers(readJson<AccountUser[]>(KEYS.accountUsers, defaultAccountUsers));
+}
+
+export function saveAccountUsers(users: AccountUser[]) {
+  writeJson(KEYS.accountUsers, normalizeAccountUsers(users));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-account-users-changed"));
+  }
+}
+
+export function loadAccountStores() {
+  return normalizeAccountStores(readJson<AccountStore[]>(KEYS.accountStores, defaultAccountStores));
+}
+
+export function saveAccountStores(stores: AccountStore[]) {
+  writeJson(KEYS.accountStores, normalizeAccountStores(stores));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-account-stores-changed"));
+  }
+}
+
+export function loadPermissionGroups() {
+  return normalizePermissionGroups(readJson<AccountPermissionGroup[]>(KEYS.permissionGroups, defaultPermissionGroups));
+}
+
+export function savePermissionGroups(groups: AccountPermissionGroup[]) {
+  writeJson(KEYS.permissionGroups, normalizePermissionGroups(groups));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-permission-groups-changed"));
+  }
+}
+
+export function authenticateAccount(account: string, pin: string) {
+  const users = loadAccountUsers();
+  const matched = users.find((user) => user.account === account && user.pin === pin);
+  if (!matched) {
+    return { ok: false as const, error: "帳號或密碼不正確。" };
+  }
+  if (!matched.active) {
+    return { ok: false as const, error: "此帳戶已停用，請聯絡管理員。" };
+  }
+  const now = new Date().toISOString();
+  saveAccountUsers(
+    users.map((user) => (user.id === matched.id ? { ...user, lastLoginAt: now, updatedAt: now } : user)),
+  );
+  return {
+    ok: true as const,
+    session: normalizeAuthSession({
+      account: matched.account,
+      name: matched.name,
+      role: matched.role,
+      storeIds: matched.storeIds,
+      permissionGroupId: matched.permissionGroupId,
+      permissions: matched.permissions,
+      loggedInAt: now,
+    })!,
   };
 }
 

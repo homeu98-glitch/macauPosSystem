@@ -1,4 +1,121 @@
-import { PosBootstrap, DeviceConfig, PosLocalSettings, MemberProfile } from "@/lib/types";
+import {
+  AccountPermissionGroup,
+  AccountStore,
+  AccountUser,
+  PosBootstrap,
+  DeviceConfig,
+  PosLocalSettings,
+  MemberProfile,
+} from "@/lib/types";
+
+export const defaultAccountStores: AccountStore[] = [
+  {
+    id: "macau-store-a",
+    name: "澳門店 A",
+    active: true,
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "預設主門店。",
+  },
+  {
+    id: "macau-store-b",
+    name: "澳門店 B",
+    active: true,
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "分店示例。",
+  },
+];
+
+export const defaultPermissionGroups: AccountPermissionGroup[] = [
+  {
+    id: "perm-admin",
+    code: "admin-full",
+    name: "管理員全權",
+    role: "admin",
+    permissions: { refundOrder: true, voidItem: true, manageAccounts: true },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "可管理帳戶、退款、退菜。",
+  },
+  {
+    id: "perm-manager",
+    code: "store-manager",
+    name: "店長權限",
+    role: "manager",
+    permissions: { refundOrder: true, voidItem: true, manageAccounts: false },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "可退款、退菜，不可管理帳戶。",
+  },
+  {
+    id: "perm-cashier",
+    code: "cashier-basic",
+    name: "收銀權限",
+    role: "cashier",
+    permissions: { refundOrder: false, voidItem: false, manageAccounts: false },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "基本收銀權限。",
+  },
+];
+
+export const defaultAccountUsers: AccountUser[] = [
+  {
+    id: "acct-admin-1",
+    account: "60000000",
+    pin: "0000",
+    name: "系統管理員",
+    role: "admin",
+    active: true,
+    storeIds: ["macau-store-a", "macau-store-b"],
+    permissionGroupId: "perm-admin",
+    permissions: {
+      refundOrder: true,
+      voidItem: true,
+      manageAccounts: true,
+    },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "總管理帳戶，可管理所有帳戶狀態。",
+  },
+  {
+    id: "acct-manager-1",
+    account: "63936541",
+    pin: "1234",
+    name: "店長",
+    role: "manager",
+    active: true,
+    storeIds: ["macau-store-a"],
+    permissionGroupId: "perm-manager",
+    permissions: {
+      refundOrder: true,
+      voidItem: true,
+      manageAccounts: false,
+    },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "門店管理帳戶。",
+  },
+  {
+    id: "acct-cashier-1",
+    account: "63936542",
+    pin: "1234",
+    name: "收銀員",
+    role: "cashier",
+    active: true,
+    storeIds: ["macau-store-a"],
+    permissionGroupId: "perm-cashier",
+    permissions: {
+      refundOrder: false,
+      voidItem: false,
+      manageAccounts: false,
+    },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+    note: "前台收銀帳戶。",
+  },
+];
 
 export const mockBootstrap: PosBootstrap = {
   sourceVersion: 1,

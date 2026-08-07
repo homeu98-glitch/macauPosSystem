@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 
 import { clearAuthSession, loadAuthSession, loadOfflineMode, saveOfflineMode } from "@/lib/storage";
 
-const navItems = [
+const baseNavItems = [
   { href: "/", label: "點餐", short: "點" },
   { href: "/orders", label: "線上\n訂單", short: "單" },
   { href: "/members", label: "會員", short: "會" },
@@ -14,7 +14,7 @@ const navItems = [
   { href: "/reports", label: "報表", short: "報" },
   { href: "/soldout", label: "沽清", short: "沽" },
   { href: "/shift", label: "交班", short: "班" },
-];
+] as const;
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -39,6 +39,12 @@ export function AppSidebar() {
 
   // 不使用 effect 同步 loggedIn，避免 eslint react-hooks/set-state-in-effect；
   // 登出時會在按鈕點擊處更新狀態，登入成功則會跳頁重渲染。
+  const navItems =
+    session?.role === "admin"
+      ? [...baseNavItems, { href: "/admin", label: "管理", short: "管" }]
+      : baseNavItems;
+
+  const roleLabel = session?.role === "admin" ? "管理員" : session?.role === "manager" ? "店長" : "收銀";
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col justify-between bg-slate-900 px-2 py-3 text-white lg:flex">
@@ -64,7 +70,7 @@ export function AppSidebar() {
         {session ? (
           <div className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-[11px] font-semibold text-slate-200">
             <div>{session.name}</div>
-            <div className="mt-1 text-slate-400">{session.role === "manager" ? "店長" : "收銀"}</div>
+            <div className="mt-1 text-slate-400">{roleLabel}</div>
           </div>
         ) : null}
         <button

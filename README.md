@@ -103,6 +103,20 @@ npm run dev
 - `docs/system-overview.md`
 - `docs/integration-guide.md`
 - `docs/pos-functional-review.md`
+- `docs/admin-account-schema.sql`
+
+## Admin 帳戶管理
+
+- `/admin`
+  - 新增帳戶
+  - 修改 PIN
+  - 修改角色
+  - 刪除帳戶
+  - 綁定門店
+  - 綁定權限組
+  - 控制 `active / deactivate`
+
+如已配置 Supabase，admin 帳戶管理會使用資料庫；未配置時會退回本地 fallback 模式。
 
 ## 驗證
 

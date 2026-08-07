@@ -1,4 +1,47 @@
 export type ConnectionType = "lan" | "usb";
+export type UserRole = "admin" | "manager" | "cashier";
+
+export interface UserPermissions {
+  refundOrder: boolean;
+  voidItem: boolean;
+  manageAccounts?: boolean;
+}
+
+export interface AccountStore {
+  id: string;
+  name: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+  note?: string;
+}
+
+export interface AccountPermissionGroup {
+  id: string;
+  code: string;
+  name: string;
+  role: UserRole;
+  permissions: UserPermissions;
+  createdAt: string;
+  updatedAt: string;
+  note?: string;
+}
+
+export interface AccountUser {
+  id: string;
+  account: string;
+  pin: string;
+  name: string;
+  role: UserRole;
+  active: boolean;
+  storeIds: string[];
+  permissionGroupId?: string;
+  permissions: UserPermissions;
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt?: string;
+  note?: string;
+}
 
 export type PrinterGroup = string;
 export type PrinterRole = "zone" | "receipt" | "label";

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { KeyboardEvent, useState } from "react";
 
 import { PwaInstallButton } from "@/components/pwa-install-button";
-import { saveAuthSession, saveOperatingMode } from "@/lib/storage";
+import { authenticateAccount, saveAuthSession, saveOperatingMode } from "@/lib/storage";
 
 export function LoginScreen() {
   const router = useRouter();
@@ -35,19 +35,26 @@ export function LoginScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account: normalizedAccount, pin: normalizedPin }),
       });
-      const payload = (await response.json()) as {
+      let payload = (await response.json()) as {
         ok: boolean;
         error?: string;
+        source?: "supabase" | "mock";
         session?: {
           account: string;
           name: string;
-          role: "manager" | "cashier";
+          role: "admin" | "manager" | "cashier";
+          storeIds?: string[];
+          permissionGroupId?: string;
           permissions: {
             refundOrder: boolean;
             voidItem: boolean;
+            manageAccounts?: boolean;
           };
         };
       };
+      if (payload.source === "mock" || !payload.ok) {
+        payload = authenticateAccount(normalizedAccount, normalizedPin) as typeof payload;
+      }
       if (!payload.ok) {
         throw new Error(payload.error ?? "登入失敗");
       }
@@ -57,7 +64,7 @@ export function LoginScreen() {
       }
       saveAuthSession({ ...payload.session, loggedInAt: new Date().toISOString() });
       saveOperatingMode(mode === "quick" ? "quick" : "dinein");
-      router.replace("/");
+      router.replace(payload.session.role === "admin" ? "/admin" : "/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
     } finally {
