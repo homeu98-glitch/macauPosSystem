@@ -375,7 +375,6 @@ export function DeviceSettings() {
             ["menu", "菜單"],
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
-            ["online-orders", "線上訂單"],
             ["notes", "備註"],
           ].map(([key, label]) => (
             <button
@@ -1247,7 +1246,7 @@ export function DeviceSettings() {
             </div>
 
             {menuSubTab === "categories" ? (
-              <div className="mt-4 flex-1 min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold text-slate-900">分類</div>
                   <button
@@ -1263,7 +1262,7 @@ export function DeviceSettings() {
                     新增分類
                   </button>
                 </div>
-                <div className="mt-3 h-full overflow-auto pr-1">
+                <div className="mt-3 flex-1 min-h-0 overflow-auto pr-1">
                   <div className="grid gap-2">
                     {menuDraft.categories.map((category) => (
                       <input
@@ -1286,36 +1285,22 @@ export function DeviceSettings() {
             ) : null}
 
             {menuSubTab === "specs" ? (
-              <div className="mt-4 flex-1 min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-900">規格模板</div>
                     <div className="mt-1 text-xs text-slate-500">先建立模板，再到「菜品設置」一鍵套用到菜品。</div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                      onChange={(event) => setSelectedTemplateId(event.target.value)}
-                      value={selectedTemplateId}
-                    >
-                      <option value="">選擇模板</option>
-                      {localSettings.specTemplates.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                      onClick={() => openSpecEditorForTemplate(selectedTemplateId || undefined)}
-                      type="button"
-                    >
-                      {selectedSpecTemplate ? "編輯模板" : "新建模板"}
-                    </button>
-                  </div>
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => openSpecEditorForTemplate(undefined)}
+                    type="button"
+                  >
+                    新增模板
+                  </button>
                 </div>
 
-                <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
+                <div className="mt-4 flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-200">
                   <table className="w-full border-collapse text-sm">
                     <thead className="bg-white">
                       <tr className="text-left text-xs font-semibold text-slate-500">
@@ -1363,7 +1348,7 @@ export function DeviceSettings() {
             ) : null}
 
             {menuSubTab === "items" ? (
-              <div className="mt-4 flex-1 min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-900">菜品</div>
@@ -1741,41 +1726,6 @@ export function DeviceSettings() {
               >
                 保存並同步後台
               </button>
-            </div>
-          </section>
-        ) : null}
-
-        {activeTab === "online-orders" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-base font-semibold text-slate-900">線上訂單</div>
-            <div className="mt-1 text-sm text-slate-500">自動接單設定從 API 下發，但商家可以在這裡打開或關閉。</div>
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <label className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">自動接單</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    打開後，所有線上訂單都會自動變成已接單；堂食單仍然需要商家手動安排桌子。
-                  </div>
-                </div>
-                <input
-                  checked={localSettings.onlineOrderSettings.autoAccept}
-                  onChange={(event) =>
-                    (() => {
-                      const next = {
-                        ...localSettings,
-                        onlineOrderSettings: {
-                          ...localSettings.onlineOrderSettings,
-                          autoAccept: event.target.checked,
-                        },
-                      };
-                      setLocalSettings(next);
-                      savePosLocalSettings(next);
-                      setStatus("已更新線上訂單自動接單設定。");
-                    })()
-                  }
-                  type="checkbox"
-                />
-              </label>
             </div>
           </section>
         ) : null}

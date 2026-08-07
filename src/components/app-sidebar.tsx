@@ -7,13 +7,13 @@ import { useEffect, useState } from "react";
 import { clearAuthSession, loadAuthSession, loadOfflineMode, saveOfflineMode } from "@/lib/storage";
 
 const navItems = [
-  { href: "/", label: "點餐", short: "點" },
-  { href: "/orders", label: "線上訂單", short: "單" },
-  { href: "/members", label: "會員", short: "會" },
-  { href: "/prints", label: "打印", short: "印" },
-  { href: "/reports", label: "報表", short: "報" },
-  { href: "/soldout", label: "沽清", short: "沽" },
-  { href: "/shift", label: "交班", short: "班" },
+  { href: "/", label: "點餐" },
+  { href: "/orders", label: "線上\n訂單" },
+  { href: "/members", label: "會員" },
+  { href: "/prints", label: "打印" },
+  { href: "/reports", label: "報表" },
+  { href: "/soldout", label: "沽清" },
+  { href: "/shift", label: "交班" },
 ];
 
 export function AppSidebar() {
@@ -53,8 +53,7 @@ export function AppSidebar() {
               }`}
               href={item.href}
             >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">{item.short}</span>
-              <span>{item.label}</span>
+              <span className="whitespace-pre-line text-center leading-tight">{item.label}</span>
             </Link>
           );
         })}

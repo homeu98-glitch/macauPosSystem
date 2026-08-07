@@ -9,6 +9,7 @@ type ItemSpecModalProps = {
   title: string;
   specGroups: MenuSpecGroup[];
   selectedSpecs?: Record<string, string[]>;
+  isOptionDisabled?: (optionId: string) => boolean;
   onClose: () => void;
   onConfirm: (specs: Record<string, string[]>) => void;
 };
@@ -18,6 +19,7 @@ export function ItemSpecModal({
   title,
   specGroups,
   selectedSpecs,
+  isOptionDisabled,
   onClose,
   onConfirm,
 }: ItemSpecModalProps) {
@@ -65,14 +67,21 @@ export function ItemSpecModal({
               </div>
               <div className="mt-3 grid gap-2 md:grid-cols-2">
                 {group.options.map((option) => (
+                  (() => {
+                    const disabled = isOptionDisabled ? isOptionDisabled(option.id) : false;
+                    const selected = (draft[group.id] ?? []).includes(option.id);
+                    return (
                   <button
                     key={option.id}
                     className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold ${
-                      (draft[group.id] ?? []).includes(option.id)
+                      disabled
+                        ? "border-slate-200 bg-slate-100 text-slate-400"
+                        : selected
                         ? "border-orange-300 bg-orange-50 text-orange-700"
                         : "border-slate-200 bg-white text-slate-900"
-                    }`}
+                    } ${disabled ? "cursor-not-allowed opacity-75" : ""}`}
                     onClick={() => {
+                      if (disabled) return;
                       setDraft((current) => {
                         const currentIds = current[group.id] ?? [];
                         if (group.selectionMode === "single") {
@@ -98,6 +107,8 @@ export function ItemSpecModal({
                       {option.priceDelta > 0 ? `+MOP ${option.priceDelta}` : "不加價"}
                     </div>
                   </button>
+                    );
+                  })()
                 ))}
               </div>
             </section>

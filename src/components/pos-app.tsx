@@ -472,6 +472,12 @@ export function PosApp() {
     return state.remainingQty <= 0;
   }
 
+  function isSpecOptionSoldOut(optionId: string) {
+    const state = soldOutMap[`specopt:${optionId}`];
+    if (!state) return false;
+    return state.remainingQty <= 0;
+  }
+
   function consumeSoldOut(items: OrderItem[]) {
     if (!bootstrap) return;
     const next = { ...soldOutMap };
@@ -699,16 +705,16 @@ export function PosApp() {
   }, [isQuickMode, onlineOrders, autoAcceptOnlineOrders]);
   const effectiveCategoryId = useMemo(() => {
     if (!bootstrap) return "";
+    // 搜尋時一律視為「全部」，避免找不到商品
+    if (searchKeyword.trim()) return "";
     return activeCategoryId || bootstrap.categories[0]?.id || "";
-  }, [activeCategoryId, bootstrap]);
+  }, [activeCategoryId, bootstrap, searchKeyword]);
 
   const filteredMenuItems = useMemo(() => {
     if (!bootstrap) return [];
 
     const keyword = searchKeyword.trim();
-    const base = bootstrap.menuItems.filter((item) =>
-      effectiveCategoryId ? item.categoryId === effectiveCategoryId : true,
-    );
+    const base = bootstrap.menuItems.filter((item) => (effectiveCategoryId ? item.categoryId === effectiveCategoryId : true));
     if (!keyword) return base;
 
     return base.filter((item) => item.name.includes(keyword));
@@ -2389,6 +2395,7 @@ export function PosApp() {
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       {localSettings.dineInQuickActionOrder.map((actionId) => {
+                        if (actionId === "checkout" && !currentSettlementOrder) return null;
                         const actionMap = {
                           view_order: {
                             label: "查看本單",
@@ -2742,6 +2749,16 @@ export function PosApp() {
             <div className="border-b border-slate-200 bg-white px-4 py-3">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    key="all"
+                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                      effectiveCategoryId === "" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setActiveCategoryId("")}
+                    type="button"
+                  >
+                    全部
+                  </button>
                   {bootstrap.categories.map((category) => (
                     <button
                       key={category.id}
@@ -2763,7 +2780,14 @@ export function PosApp() {
                       searchFocused ? "w-full xl:w-72" : "w-32 xl:w-40"
                     }`}
                     onBlur={() => setSearchFocused(false)}
-                    onChange={(event) => setSearchKeyword(event.target.value)}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setSearchKeyword(next);
+                      if (next.trim()) {
+                        // 搜尋時自動切到「全部」
+                        setActiveCategoryId("");
+                      }
+                    }}
                     onFocus={() => setSearchFocused(true)}
                     placeholder="搜尋商品"
                     value={searchKeyword}
@@ -3398,6 +3422,7 @@ export function PosApp() {
 
       <ItemSpecModal
         key={`${specModalItem?.id ?? "none"}-${specEditingKey ?? "new"}-${JSON.stringify(selectedSpecValues)}`}
+        isOptionDisabled={isSpecOptionSoldOut}
         onClose={() => {
           setSpecModalOpen(false);
           setSpecModalItem(null);

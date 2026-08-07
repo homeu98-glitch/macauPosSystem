@@ -71,9 +71,16 @@ export function LoginScreen() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      <div className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-6 py-10">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur">
+    <div className="relative min-h-screen overflow-hidden login-animated-bg">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="login-blob absolute -left-24 top-10 h-72 w-72 rounded-full bg-fuchsia-500/60" />
+        <div className="login-blob absolute -right-24 top-24 h-80 w-80 rounded-full bg-cyan-400/60 [animation-delay:1.4s]" />
+        <div className="login-blob absolute left-1/3 bottom-[-120px] h-96 w-96 -translate-x-1/2 rounded-full bg-amber-400/50 [animation-delay:2.6s]" />
+        <div className="absolute inset-0 bg-slate-950/35" />
+      </div>
+
+      <div className="relative mx-auto flex min-h-screen max-w-lg flex-col justify-center px-6 py-10">
+        <div className="rounded-3xl border border-white/15 bg-white/10 p-8 shadow-2xl backdrop-blur">
           <div className="text-center">
             <div className="text-sm font-semibold tracking-widest text-orange-200/90">
               澳門會員通POS系統
