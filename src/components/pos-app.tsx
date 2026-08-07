@@ -643,10 +643,17 @@ export function PosApp() {
     () =>
       openOrders
         .filter((order) => order.tableId === "counter")
-        .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid"),
+        .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid")
+        .filter((order) => order.status !== "paid" || order.fulfillmentStatus !== "ready"),
     [openOrders],
   );
-  const quickWaitingOrders = useMemo(() => [] as PosOrder[], []);
+  const quickWaitingOrders = useMemo(
+    () =>
+      openOrders
+        .filter((order) => order.tableId === "counter")
+        .filter((order) => order.status === "paid" && order.fulfillmentStatus === "ready"),
+    [openOrders],
+  );
 
   const viewingOrder = useMemo(() => {
     if (!viewingOrderId) return null;
@@ -849,6 +856,8 @@ export function PosApp() {
           tableId: activeTable.id,
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
+          fulfillmentStatus:
+            isQuickMode && activeTable.id === "counter" ? existingOrder.fulfillmentStatus ?? "preparing" : undefined,
           items: cartItems,
           orderNote,
           subtotal: baseTotals.subtotal,
@@ -864,6 +873,7 @@ export function PosApp() {
           tableId: activeTable.id,
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
+          fulfillmentStatus: isQuickMode && activeTable.id === "counter" ? "preparing" : undefined,
           items: cartItems,
           orderNote,
           subtotal: baseTotals.subtotal,
@@ -1191,6 +1201,36 @@ export function PosApp() {
     setToast({
       tone: "success",
       message: mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`,
+    });
+  }
+
+  function updateQuickFulfillment(orderId: string, nextStatus: "preparing" | "ready") {
+    const target = orders.find((order) => order.id === orderId) ?? null;
+    if (!target) return;
+    if (target.tableId !== "counter" || target.status !== "paid") return;
+    const updatedAt = new Date().toISOString();
+    const updatedOrder: PosOrder = {
+      ...target,
+      fulfillmentStatus: nextStatus,
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === updatedOrder.id ? updatedOrder : order)));
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: {
+          order: updatedOrder,
+          action: nextStatus === "ready" ? "ready_pickup" : "back_to_preparing",
+        },
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedAt,
+      },
+    ]);
+    setToast({
+      tone: "success",
+      message: nextStatus === "ready" ? `${updatedOrder.localOrderNo} 已標記可取餐。` : `${updatedOrder.localOrderNo} 已返回製作中。`,
     });
   }
 
@@ -1597,13 +1637,14 @@ export function PosApp() {
     return order;
   }
 
-  function markOrderCompleted(orderId: string) {
+  function markOrderCompleted(orderId: string, options?: { label?: string }) {
     const targetOrder = orders.find((order) => order.id === orderId);
     if (!targetOrder) return;
 
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: "settled",
+      fulfillmentStatus: targetOrder.tableId === "counter" ? "ready" : targetOrder.fulfillmentStatus,
       updatedAt: new Date().toISOString(),
     };
     const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
@@ -1613,13 +1654,13 @@ export function PosApp() {
         id: uid("evt"),
         type: "ORDER_UPDATED",
         entityId: updatedOrder.id,
-        payload: { order: updatedOrder, action: "completed" },
+        payload: { order: updatedOrder, action: "completed", label: options?.label ?? "已完成" },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedOrder.updatedAt,
       },
     ]);
     setViewingOrderId(null);
-    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已完成。` });
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} ${options?.label ?? "已完成"}。` });
   }
 
   function cancelOrder(orderId: string, reason: string) {
@@ -1927,6 +1968,7 @@ export function PosApp() {
       const updatedOrder: PosOrder = {
         ...targetOrder,
         status: quickPaidFlow ? "paid" : "settled",
+        fulfillmentStatus: quickPaidFlow ? targetOrder.fulfillmentStatus ?? "preparing" : undefined,
         paymentMethod:
           memberDeduction > 0
             ? paymentSummary.total > 0
@@ -2434,23 +2476,38 @@ export function PosApp() {
                   請從右側商品區加入菜品
                 </div>
               ) : (
-                <div className="grid gap-2">
-                  {cartItems.map((item) => (
+                  <div className="grid gap-2">
+                  {cartItems.map((item) => {
+                    const itemKey = itemIdentity(item);
+                    const orderedQty = orderedItemQtyMap.get(itemKey) ?? 0;
+                    const locked = orderedQty > 0;
+                    return (
                     <article
-                      key={itemIdentity(item)}
+                      key={itemKey}
                       className={`rounded-2xl border px-3 py-3 ${
-                        selectedItemId === item.menuItemId ? "border-orange-300 bg-orange-50/50" : "border-slate-100 bg-slate-50"
+                        locked
+                          ? "border-slate-200 bg-slate-100 opacity-75"
+                          : selectedItemId === item.menuItemId
+                            ? "border-orange-300 bg-orange-50/50"
+                            : "border-slate-100 bg-slate-50"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
+                          <div className="truncate text-sm font-semibold text-slate-900">
+                            {item.name}
+                            {locked ? (
+                              <span className="ml-2 inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                已下單
+                              </span>
+                            ) : null}
+                          </div>
                           <div className="mt-1 text-xs text-slate-500">
                             {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
                           </div>
                         </div>
                         <div className="flex items-center gap-1">
-                          {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0 ? (
+                          {locked ? (
                             <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
                               已下單 x{item.quantity}
                             </div>
@@ -2460,7 +2517,7 @@ export function PosApp() {
                                 className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  updateQuantity(itemIdentity(item), -1);
+                                  updateQuantity(itemKey, -1);
                                 }}
                                 type="button"
                               >
@@ -2471,7 +2528,7 @@ export function PosApp() {
                                 className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  updateQuantity(itemIdentity(item), 1);
+                                  updateQuantity(itemKey, 1);
                                 }}
                                 type="button"
                               >
@@ -2483,7 +2540,7 @@ export function PosApp() {
                       </div>
                       <div className="mt-2 flex items-center justify-between">
                         <div className="flex flex-wrap items-center gap-2">
-                          {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) <= 0 ? (
+                          {!locked ? (
                             <button
                               className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                               onClick={(event) => {
@@ -2495,7 +2552,7 @@ export function PosApp() {
                               {item.note ? "編輯備註" : "加備註"}
                             </button>
                           ) : null}
-                          {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0 ? (
+                          {locked ? (
                             <button
                               className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
                               onClick={(event) => {
@@ -2513,16 +2570,17 @@ export function PosApp() {
                           ) : null}
                         </div>
                         <div className="min-w-0 text-right">
-                          {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0 && item.quantity < (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) ? (
+                          {locked && item.quantity < orderedQty ? (
                             <div className="text-xs font-semibold text-red-600">
-                              已退 {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) - item.quantity} 份
+                              已退 {orderedQty - item.quantity} 份
                             </div>
                           ) : null}
                           {item.note ? <div className="truncate text-xs text-slate-500">備註：{item.note}</div> : null}
                         </div>
                       </div>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2902,6 +2960,17 @@ export function PosApp() {
                                     >
                                       製作中
                                     </span>
+                                  {order.status === "paid" ? (
+                                    <>
+                                      <button
+                                        className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                                        onClick={() => updateQuickFulfillment(order.id, "ready")}
+                                        type="button"
+                                      >
+                                        製作完成 / 可取餐
+                                      </button>
+                                    </>
+                                  ) : null}
                                   </div>
                                   <div className="mt-2 text-xs text-slate-500">
                                     {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
@@ -2948,6 +3017,24 @@ export function PosApp() {
                                 <span className="inline-flex rounded-full bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700">
                                   {quickCompletionLabel(order)}
                                 </span>
+                                <button
+                                  className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white"
+                                  onClick={() =>
+                                    markOrderCompleted(order.id, {
+                                      label: order.tableName === "外賣" ? "已交付" : order.tableName === "自取" ? "已取餐" : "已完成",
+                                    })
+                                  }
+                                  type="button"
+                                >
+                                  {order.tableName === "外賣" ? "已交付" : order.tableName === "自取" ? "已取餐" : "已完成"}
+                                </button>
+                                <button
+                                  className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                                  onClick={() => updateQuickFulfillment(order.id, "preparing")}
+                                  type="button"
+                                >
+                                  返回製作中
+                                </button>
                               </div>
                               <div className="mt-2 text-xs text-slate-500">
                                 {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}

@@ -1,6 +1,6 @@
 "use client";
 
-import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import {
@@ -105,6 +105,14 @@ export function PrintCenter() {
   const [selectedReceiptSections, setSelectedReceiptSections] = useState<Array<(typeof RECEIPT_SECTION_META)[number]["id"]>>(["store_name"]);
   const [selectedLabelSections, setSelectedLabelSections] = useState<Array<(typeof LABEL_SECTION_META)[number]["id"]>>(["header"]);
   const [designerGuide, setDesignerGuide] = useState<{ type: "receipt" | "label"; x: number; y: number } | null>(null);
+  const receiptUndoRef = useRef<Array<(typeof localSettings)["printTemplates"]["receipt"]>>([]);
+  const receiptRedoRef = useRef<Array<(typeof localSettings)["printTemplates"]["receipt"]>>([]);
+  const labelUndoRef = useRef<Array<(typeof localSettings)["printTemplates"]["label"]>>([]);
+  const labelRedoRef = useRef<Array<(typeof localSettings)["printTemplates"]["label"]>>([]);
+  const [receiptUndoCount, setReceiptUndoCount] = useState(0);
+  const [receiptRedoCount, setReceiptRedoCount] = useState(0);
+  const [labelUndoCount, setLabelUndoCount] = useState(0);
+  const [labelRedoCount, setLabelRedoCount] = useState(0);
   const designerDragRef = useRef<{
     type: "receipt" | "label";
     section: string;
@@ -299,10 +307,88 @@ export function PrintCenter() {
     };
   }, [localSettings.printTemplates.label, sampleOrder]);
 
-  const updateLocalTemplate = useCallback((nextSettings: typeof localSettings) => {
+  function cloneJson<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  function syncHistoryCounts() {
+    setReceiptUndoCount(receiptUndoRef.current.length);
+    setReceiptRedoCount(receiptRedoRef.current.length);
+    setLabelUndoCount(labelUndoRef.current.length);
+    setLabelRedoCount(labelRedoRef.current.length);
+  }
+
+  function pushTemplateHistory(nextSettings: typeof localSettings) {
+    const receiptChanged = nextSettings.printTemplates.receipt !== localSettings.printTemplates.receipt;
+    const labelChanged = nextSettings.printTemplates.label !== localSettings.printTemplates.label;
+    if (receiptChanged) {
+      receiptUndoRef.current.push(cloneJson(localSettings.printTemplates.receipt));
+      if (receiptUndoRef.current.length > 60) receiptUndoRef.current.shift();
+      receiptRedoRef.current = [];
+    }
+    if (labelChanged) {
+      labelUndoRef.current.push(cloneJson(localSettings.printTemplates.label));
+      if (labelUndoRef.current.length > 60) labelUndoRef.current.shift();
+      labelRedoRef.current = [];
+    }
+    if (receiptChanged || labelChanged) syncHistoryCounts();
+  }
+
+  function updateLocalTemplate(nextSettings: typeof localSettings, options?: { recordHistory?: boolean }) {
+    if (options?.recordHistory !== false) {
+      pushTemplateHistory(nextSettings);
+    }
     setLocalSettings(nextSettings);
     savePosLocalSettings(nextSettings);
-  }, []);
+  }
+
+  function undoTemplate(type: "receipt" | "label") {
+    if (type === "receipt") {
+      const stack = receiptUndoRef.current;
+      if (stack.length === 0) return;
+      const prev = stack.pop()!;
+      receiptRedoRef.current.push(cloneJson(localSettings.printTemplates.receipt));
+      syncHistoryCounts();
+      updateLocalTemplate(
+        { ...localSettings, printTemplates: { ...localSettings.printTemplates, receipt: prev } },
+        { recordHistory: false },
+      );
+      return;
+    }
+    const stack = labelUndoRef.current;
+    if (stack.length === 0) return;
+    const prev = stack.pop()!;
+    labelRedoRef.current.push(cloneJson(localSettings.printTemplates.label));
+    syncHistoryCounts();
+    updateLocalTemplate(
+      { ...localSettings, printTemplates: { ...localSettings.printTemplates, label: prev } },
+      { recordHistory: false },
+    );
+  }
+
+  function redoTemplate(type: "receipt" | "label") {
+    if (type === "receipt") {
+      const stack = receiptRedoRef.current;
+      if (stack.length === 0) return;
+      const next = stack.pop()!;
+      receiptUndoRef.current.push(cloneJson(localSettings.printTemplates.receipt));
+      syncHistoryCounts();
+      updateLocalTemplate(
+        { ...localSettings, printTemplates: { ...localSettings.printTemplates, receipt: next } },
+        { recordHistory: false },
+      );
+      return;
+    }
+    const stack = labelRedoRef.current;
+    if (stack.length === 0) return;
+    const next = stack.pop()!;
+    labelUndoRef.current.push(cloneJson(localSettings.printTemplates.label));
+    syncHistoryCounts();
+    updateLocalTemplate(
+      { ...localSettings, printTemplates: { ...localSettings.printTemplates, label: next } },
+      { recordHistory: false },
+    );
+  }
 
   function toggleDesignerSelection<T extends string>(
     current: T[],
@@ -431,6 +517,17 @@ export function PrintCenter() {
     event.preventDefault();
     event.stopPropagation();
     if (type === "receipt") {
+      receiptUndoRef.current.push(cloneJson(localSettings.printTemplates.receipt));
+      if (receiptUndoRef.current.length > 60) receiptUndoRef.current.shift();
+      receiptRedoRef.current = [];
+      syncHistoryCounts();
+    } else {
+      labelUndoRef.current.push(cloneJson(localSettings.printTemplates.label));
+      if (labelUndoRef.current.length > 60) labelUndoRef.current.shift();
+      labelRedoRef.current = [];
+      syncHistoryCounts();
+    }
+    if (type === "receipt") {
       setSelectedReceiptSection(section as (typeof RECEIPT_SECTION_META)[number]["id"]);
     } else {
       setSelectedLabelSection(section as (typeof LABEL_SECTION_META)[number]["id"]);
@@ -446,6 +543,77 @@ export function PrintCenter() {
   }
 
   useEffect(() => {
+    function snapToSiblingEdges(
+      layouts: Record<string, { x: number; y: number; width: number; height: number }>,
+      activeKey: string,
+      proposed: { x: number; y: number; width: number; height: number },
+      mode: "move" | "resize",
+    ) {
+      const threshold = 6;
+      const keys = Object.keys(layouts).filter((key) => key !== activeKey);
+      if (keys.length === 0) return { layout: proposed, guide: { x: proposed.x, y: proposed.y } };
+      const candidatesX: number[] = [];
+      const candidatesY: number[] = [];
+      keys.forEach((key) => {
+        const l = layouts[key];
+        candidatesX.push(l.x, l.x + l.width, l.x + l.width / 2);
+        candidatesY.push(l.y, l.y + l.height, l.y + l.height / 2);
+      });
+
+      let x = proposed.x;
+      let y = proposed.y;
+      let width = proposed.width;
+      let height = proposed.height;
+
+      const trySnapValue = (value: number, candidates: number[]) => {
+        let best = value;
+        let bestDiff = threshold + 1;
+        candidates.forEach((candidate) => {
+          const diff = Math.abs(value - candidate);
+          if (diff < bestDiff) {
+            best = candidate;
+            bestDiff = diff;
+          }
+        });
+        return bestDiff <= threshold ? best : value;
+      };
+
+      if (mode === "move") {
+        const snappedLeft = trySnapValue(x, candidatesX);
+        const snappedRight = trySnapValue(x + width, candidatesX);
+        const snappedCenter = trySnapValue(x + width / 2, candidatesX);
+        if (snappedLeft !== x) {
+          x = snappedLeft;
+        } else if (snappedRight !== x + width) {
+          x = snappedRight - width;
+        } else if (snappedCenter !== x + width / 2) {
+          x = snappedCenter - width / 2;
+        }
+
+        const snappedTop = trySnapValue(y, candidatesY);
+        const snappedBottom = trySnapValue(y + height, candidatesY);
+        const snappedMiddle = trySnapValue(y + height / 2, candidatesY);
+        if (snappedTop !== y) {
+          y = snappedTop;
+        } else if (snappedBottom !== y + height) {
+          y = snappedBottom - height;
+        } else if (snappedMiddle !== y + height / 2) {
+          y = snappedMiddle - height / 2;
+        }
+      } else {
+        const snappedRight = trySnapValue(x + width, candidatesX);
+        if (snappedRight !== x + width) {
+          width = Math.max(20, snappedRight - x);
+        }
+        const snappedBottom = trySnapValue(y + height, candidatesY);
+        if (snappedBottom !== y + height) {
+          height = Math.max(20, snappedBottom - y);
+        }
+      }
+
+      return { layout: { ...proposed, x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) }, guide: { x: Math.round(x), y: Math.round(y) } };
+    }
+
     function onPointerMove(event: MouseEvent) {
       const drag = designerDragRef.current;
       if (!drag) return;
@@ -455,21 +623,27 @@ export function PrintCenter() {
         const current = localSettings.printTemplates.receipt;
         const currentLayout = current.sectionLayouts[drag.section as keyof typeof current.sectionLayouts];
         if (!currentLayout) return;
-        const snap = (value: number) => (current.snapToGrid ? Math.round(value / 8) * 8 : value);
-        const nextLayout =
+        const snapGrid = (value: number) => (current.snapToGrid ? Math.round(value / 8) * 8 : value);
+        let nextLayout =
           drag.mode === "move"
             ? {
                 ...currentLayout,
-                x: Math.max(0, snap(drag.startLayout.x + dx)),
-                y: Math.max(0, snap(drag.startLayout.y + dy)),
+                x: Math.max(0, snapGrid(drag.startLayout.x + dx)),
+                y: Math.max(0, snapGrid(drag.startLayout.y + dy)),
               }
             : {
                 ...currentLayout,
-                width: Math.max(80, snap(drag.startLayout.width + dx)),
-                height: Math.max(28, snap(drag.startLayout.height + dy)),
+                width: Math.max(80, snapGrid(drag.startLayout.width + dx)),
+                height: Math.max(28, snapGrid(drag.startLayout.height + dy)),
               };
-        setDesignerGuide({ type: "receipt", x: nextLayout.x, y: nextLayout.y });
-        updateLocalTemplate({
+        if (current.snapToGrid) {
+          const snapped = snapToSiblingEdges(current.sectionLayouts, drag.section, nextLayout, drag.mode);
+          nextLayout = snapped.layout;
+          setDesignerGuide({ type: "receipt", x: snapped.guide.x, y: snapped.guide.y });
+        } else {
+          setDesignerGuide({ type: "receipt", x: nextLayout.x, y: nextLayout.y });
+        }
+        const nextSettings = {
           ...localSettings,
           printTemplates: {
             ...localSettings.printTemplates,
@@ -481,26 +655,34 @@ export function PrintCenter() {
               },
             },
           },
-        });
+        };
+        setLocalSettings(nextSettings);
+        savePosLocalSettings(nextSettings);
       } else {
         const current = localSettings.printTemplates.label;
         const currentLayout = current.sectionLayouts[drag.section as keyof typeof current.sectionLayouts];
         if (!currentLayout) return;
-        const snap = (value: number) => (current.snapToGrid ? Math.round(value / 8) * 8 : value);
-        const nextLayout =
+        const snapGrid = (value: number) => (current.snapToGrid ? Math.round(value / 8) * 8 : value);
+        let nextLayout =
           drag.mode === "move"
             ? {
                 ...currentLayout,
-                x: Math.max(0, snap(drag.startLayout.x + dx)),
-                y: Math.max(0, snap(drag.startLayout.y + dy)),
+                x: Math.max(0, snapGrid(drag.startLayout.x + dx)),
+                y: Math.max(0, snapGrid(drag.startLayout.y + dy)),
               }
             : {
                 ...currentLayout,
-                width: Math.max(56, snap(drag.startLayout.width + dx)),
-                height: Math.max(24, snap(drag.startLayout.height + dy)),
+                width: Math.max(56, snapGrid(drag.startLayout.width + dx)),
+                height: Math.max(24, snapGrid(drag.startLayout.height + dy)),
               };
-        setDesignerGuide({ type: "label", x: nextLayout.x, y: nextLayout.y });
-        updateLocalTemplate({
+        if (current.snapToGrid) {
+          const snapped = snapToSiblingEdges(current.sectionLayouts, drag.section, nextLayout, drag.mode);
+          nextLayout = snapped.layout;
+          setDesignerGuide({ type: "label", x: snapped.guide.x, y: snapped.guide.y });
+        } else {
+          setDesignerGuide({ type: "label", x: nextLayout.x, y: nextLayout.y });
+        }
+        const nextSettings = {
           ...localSettings,
           printTemplates: {
             ...localSettings.printTemplates,
@@ -512,7 +694,9 @@ export function PrintCenter() {
               },
             },
           },
-        });
+        };
+        setLocalSettings(nextSettings);
+        savePosLocalSettings(nextSettings);
       }
     }
 
@@ -527,7 +711,7 @@ export function PrintCenter() {
       window.removeEventListener("mousemove", onPointerMove);
       window.removeEventListener("mouseup", onPointerUp);
     };
-  }, [localSettings, updateLocalTemplate]);
+  }, [localSettings]);
 
   function persistPrintJobs(next: PrintJob[]) {
     setPrintJobs(next);
@@ -1068,6 +1252,22 @@ export function PrintCenter() {
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <div className="text-xs text-slate-500">可拖動區塊，右下角可拉伸大小。</div>
                     <div className="flex items-center gap-2">
+                      <button
+                        className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
+                        disabled={receiptUndoCount === 0}
+                        onClick={() => undoTemplate("receipt")}
+                        type="button"
+                      >
+                        撤銷
+                      </button>
+                      <button
+                        className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
+                        disabled={receiptRedoCount === 0}
+                        onClick={() => redoTemplate("receipt")}
+                        type="button"
+                      >
+                        重做
+                      </button>
                       <span className="text-xs text-slate-500">縮放</span>
                       <input
                         max="1.6"
@@ -1553,6 +1753,22 @@ export function PrintCenter() {
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <div className="text-xs text-slate-500">可拖動區塊，右下角可拉伸大小。</div>
                     <div className="flex items-center gap-2">
+                      <button
+                        className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
+                        disabled={labelUndoCount === 0}
+                        onClick={() => undoTemplate("label")}
+                        type="button"
+                      >
+                        撤銷
+                      </button>
+                      <button
+                        className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
+                        disabled={labelRedoCount === 0}
+                        onClick={() => redoTemplate("label")}
+                        type="button"
+                      >
+                        重做
+                      </button>
                       <span className="text-xs text-slate-500">縮放</span>
                       <input
                         max="1.6"

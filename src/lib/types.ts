@@ -274,6 +274,7 @@ export interface PosOrder {
   tableId: string;
   tableName: string;
   status: "draft" | "sent_to_kitchen" | "paid" | "settled" | "cancelled" | "partially_refunded" | "refunded";
+  fulfillmentStatus?: "preparing" | "ready";
   items: OrderItem[];
   orderNote?: string;
   subtotal: number;
