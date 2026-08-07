@@ -128,6 +128,9 @@ export interface PosLocalSettings {
           fontWeight: 400 | 500 | 600 | 700;
           textAlign: "left" | "center" | "right";
           padding: number;
+          textColor: string;
+          borderColor: string;
+          backgroundColor: string;
         }
       >;
       sectionLayouts: Record<
@@ -171,6 +174,9 @@ export interface PosLocalSettings {
           fontWeight: 400 | 500 | 600 | 700;
           textAlign: "left" | "center" | "right";
           padding: number;
+          textColor: string;
+          borderColor: string;
+          backgroundColor: string;
         }
       >;
       sectionLayouts: Record<
@@ -214,6 +220,9 @@ export interface PosLocalSettings {
   notePresets: string[];
   cancelNotePresets: string[];
   fullVoidBehavior: "cancelled" | "refunded";
+  dineInQuickActionOrder: Array<
+    "view_order" | "send_kitchen" | "checkout" | "back_tables" | "prints" | "online_orders" | "shift" | "settings"
+  >;
   onlineOrderSettings: {
     autoAccept: boolean;
   };

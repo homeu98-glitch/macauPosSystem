@@ -442,7 +442,7 @@ export function DeviceSettings() {
               </div>
             </section>
 
-            <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+            <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-base font-semibold text-slate-900">打印機綁定</div>
@@ -476,8 +476,9 @@ export function DeviceSettings() {
                 </button>
               </div>
 
+              <div className="mt-4 flex-1 overflow-auto pr-1">
               {devicePrinterTab === "zones" ? (
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-semibold text-slate-900">打印分區</div>
                 <div className="mt-1 text-xs text-slate-500">分區可自由新增，例如：廚房、水吧、甜品、燒味。</div>
                 <div className="mt-3 grid gap-2">
@@ -563,7 +564,7 @@ export function DeviceSettings() {
               ) : null}
 
               {devicePrinterTab === "printers" ? (
-              <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100vh-360px)]">
+              <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100vh-420px)]">
                 <div className="grid gap-3">
                   {config.printers.map((printer) => (
                     <article key={printer.id} className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -710,8 +711,10 @@ export function DeviceSettings() {
               </div>
               ) : null}
 
+              </div>
+
               {devicePrinterTab === "printers" ? (
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
                   <button
                     className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                     onClick={() => addPrinter("zone")}
@@ -741,13 +744,13 @@ export function DeviceSettings() {
 
         {activeTab === "notes" ? (
           <div className="grid gap-3 lg:grid-cols-[520px_minmax(0,1fr)]">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
               <div className="text-base font-semibold text-slate-900">常用備註</div>
               <div className="mt-1 text-sm text-slate-500">
                 這裡設定的備註是全局共用：可用於單品備註、也可用於全單備註。
               </div>
 
-              <div className="mt-4 grid gap-3">
+              <div className="mt-4 grid gap-3 overflow-auto pr-1 flex-1">
                 <div className="grid gap-2">
                   <div className="text-sm font-semibold text-slate-900">點餐備註</div>
                   {localSettings.notePresets.length === 0 ? (
@@ -897,7 +900,7 @@ export function DeviceSettings() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap justify-end gap-2">
+                <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
                   <button
                     className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                     onClick={() => {
@@ -929,7 +932,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "menu-print" ? (
-          <section className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4">
+          <section className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">菜品打印設置</div>
@@ -1045,7 +1048,7 @@ export function DeviceSettings() {
               })()}
             </div>
 
-            <div className="mt-2 overflow-auto rounded-2xl border border-slate-200 max-h-[calc(100vh-300px)]">
+            <div className="mt-2 overflow-auto rounded-2xl border border-slate-200 flex-1 min-h-0">
               <table className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 z-10 bg-white">
                   <tr className="text-left text-xs font-semibold text-slate-500">
@@ -1134,7 +1137,7 @@ export function DeviceSettings() {
               </table>
             </div>
 
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
               <button
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
                 onClick={syncConfig}
@@ -1147,7 +1150,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "menu" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">菜單</div>
@@ -1211,7 +1214,7 @@ export function DeviceSettings() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="mt-4 grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)] overflow-auto pr-1 flex-1">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold text-slate-900">分類</div>
@@ -1503,7 +1506,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "tables" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">樓層與桌台</div>
@@ -1532,7 +1535,7 @@ export function DeviceSettings() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3">
+            <div className="mt-4 grid gap-3 overflow-auto pr-1 flex-1">
               {localSettings.floors.map((floor) => (
                 <article key={floor.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <div className="flex items-center justify-between gap-3">
@@ -1605,7 +1608,7 @@ export function DeviceSettings() {
 
 
         {activeTab === "payments" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">支付方式</div>
@@ -1624,7 +1627,7 @@ export function DeviceSettings() {
                 新增支付方式
               </button>
             </div>
-            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3 overflow-auto pr-1 flex-1">
               {localSettings.paymentMethods.map((method, index) => (
                 <input
                   key={`${method}-${index}`}
@@ -1642,7 +1645,7 @@ export function DeviceSettings() {
               ))}
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mt-4 flex justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                 onClick={saveLocal}

@@ -102,6 +102,8 @@ export function PrintCenter() {
   const [draggingLabelSection, setDraggingLabelSection] = useState<string | null>(null);
   const [selectedReceiptSection, setSelectedReceiptSection] = useState<(typeof RECEIPT_SECTION_META)[number]["id"]>("store_name");
   const [selectedLabelSection, setSelectedLabelSection] = useState<(typeof LABEL_SECTION_META)[number]["id"]>("header");
+  const [selectedReceiptSections, setSelectedReceiptSections] = useState<Array<(typeof RECEIPT_SECTION_META)[number]["id"]>>(["store_name"]);
+  const [selectedLabelSections, setSelectedLabelSections] = useState<Array<(typeof LABEL_SECTION_META)[number]["id"]>>(["header"]);
   const [designerGuide, setDesignerGuide] = useState<{ type: "receipt" | "label"; x: number; y: number } | null>(null);
   const designerDragRef = useRef<{
     type: "receipt" | "label";
@@ -301,6 +303,123 @@ export function PrintCenter() {
     setLocalSettings(nextSettings);
     savePosLocalSettings(nextSettings);
   }, []);
+
+  function toggleDesignerSelection<T extends string>(
+    current: T[],
+    nextId: T,
+    append: boolean,
+    setter: (value: T[]) => void,
+  ) {
+    if (!append) {
+      setter([nextId]);
+      return;
+    }
+    setter(current.includes(nextId) ? current.filter((item) => item !== nextId) : [...current, nextId]);
+  }
+
+  function paperWidthMm(type: "receipt" | "label") {
+    const printer = (loadDeviceConfig() ?? defaultDeviceConfig).printers.find((item) => item.enabled && item.role === type);
+    const size = printer?.paperSize ?? (type === "receipt" ? "80mm" : "62mm");
+    if (size.includes("100x75")) return 100;
+    if (size.includes("80")) return 80;
+    if (size.includes("62")) return 62;
+    return 58;
+  }
+
+  function mmStepPx(type: "receipt" | "label") {
+    const canvasWidth = type === "receipt" ? localSettings.printTemplates.receipt.canvas.width : localSettings.printTemplates.label.canvas.width;
+    return canvasWidth / paperWidthMm(type);
+  }
+
+  function alignOrDistribute(type: "receipt" | "label", action: "left" | "center" | "right" | "top" | "middle" | "bottom" | "h-space" | "v-space") {
+    if (type === "receipt") {
+      const sections = selectedReceiptSections;
+      if (sections.length < 2) return;
+      const layouts = { ...localSettings.printTemplates.receipt.sectionLayouts };
+      const selected = sections.map((id) => ({ id, ...layouts[id] }));
+      if (action === "left") {
+        const min = Math.min(...selected.map((item) => item.x));
+        sections.forEach((id) => (layouts[id] = { ...layouts[id], x: min }));
+      } else if (action === "center") {
+        const center = selected[0].x + selected[0].width / 2;
+        sections.forEach((id) => (layouts[id] = { ...layouts[id], x: Math.round(center - layouts[id].width / 2) }));
+      } else if (action === "right") {
+        const max = Math.max(...selected.map((item) => item.x + item.width));
+        sections.forEach((id) => (layouts[id] = { ...layouts[id], x: Math.round(max - layouts[id].width) }));
+      } else if (action === "top") {
+        const min = Math.min(...selected.map((item) => item.y));
+        sections.forEach((id) => (layouts[id] = { ...layouts[id], y: min }));
+      } else if (action === "middle") {
+        const middle = selected[0].y + selected[0].height / 2;
+        sections.forEach((id) => (layouts[id] = { ...layouts[id], y: Math.round(middle - layouts[id].height / 2) }));
+      } else if (action === "bottom") {
+        const max = Math.max(...selected.map((item) => item.y + item.height));
+        sections.forEach((id) => (layouts[id] = { ...layouts[id], y: Math.round(max - layouts[id].height) }));
+      } else if (action === "h-space") {
+        const ordered = selected.slice().sort((a, b) => a.x - b.x);
+        const min = ordered[0].x;
+        const max = ordered[ordered.length - 1].x;
+        const gap = ordered.length > 1 ? (max - min) / (ordered.length - 1) : 0;
+        ordered.forEach((item, index) => (layouts[item.id as keyof typeof layouts] = { ...layouts[item.id as keyof typeof layouts], x: Math.round(min + gap * index) }));
+      } else if (action === "v-space") {
+        const ordered = selected.slice().sort((a, b) => a.y - b.y);
+        const min = ordered[0].y;
+        const max = ordered[ordered.length - 1].y;
+        const gap = ordered.length > 1 ? (max - min) / (ordered.length - 1) : 0;
+        ordered.forEach((item, index) => (layouts[item.id as keyof typeof layouts] = { ...layouts[item.id as keyof typeof layouts], y: Math.round(min + gap * index) }));
+      }
+      updateLocalTemplate({
+        ...localSettings,
+        printTemplates: {
+          ...localSettings.printTemplates,
+          receipt: { ...localSettings.printTemplates.receipt, sectionLayouts: layouts },
+        },
+      });
+      return;
+    }
+    const sections = selectedLabelSections;
+    if (sections.length < 2) return;
+    const layouts = { ...localSettings.printTemplates.label.sectionLayouts };
+    const selected = sections.map((id) => ({ id, ...layouts[id] }));
+    if (action === "left") {
+      const min = Math.min(...selected.map((item) => item.x));
+      sections.forEach((id) => (layouts[id] = { ...layouts[id], x: min }));
+    } else if (action === "center") {
+      const center = selected[0].x + selected[0].width / 2;
+      sections.forEach((id) => (layouts[id] = { ...layouts[id], x: Math.round(center - layouts[id].width / 2) }));
+    } else if (action === "right") {
+      const max = Math.max(...selected.map((item) => item.x + item.width));
+      sections.forEach((id) => (layouts[id] = { ...layouts[id], x: Math.round(max - layouts[id].width) }));
+    } else if (action === "top") {
+      const min = Math.min(...selected.map((item) => item.y));
+      sections.forEach((id) => (layouts[id] = { ...layouts[id], y: min }));
+    } else if (action === "middle") {
+      const middle = selected[0].y + selected[0].height / 2;
+      sections.forEach((id) => (layouts[id] = { ...layouts[id], y: Math.round(middle - layouts[id].height / 2) }));
+    } else if (action === "bottom") {
+      const max = Math.max(...selected.map((item) => item.y + item.height));
+      sections.forEach((id) => (layouts[id] = { ...layouts[id], y: Math.round(max - layouts[id].height) }));
+    } else if (action === "h-space") {
+      const ordered = selected.slice().sort((a, b) => a.x - b.x);
+      const min = ordered[0].x;
+      const max = ordered[ordered.length - 1].x;
+      const gap = ordered.length > 1 ? (max - min) / (ordered.length - 1) : 0;
+      ordered.forEach((item, index) => (layouts[item.id as keyof typeof layouts] = { ...layouts[item.id as keyof typeof layouts], x: Math.round(min + gap * index) }));
+    } else if (action === "v-space") {
+      const ordered = selected.slice().sort((a, b) => a.y - b.y);
+      const min = ordered[0].y;
+      const max = ordered[ordered.length - 1].y;
+      const gap = ordered.length > 1 ? (max - min) / (ordered.length - 1) : 0;
+      ordered.forEach((item, index) => (layouts[item.id as keyof typeof layouts] = { ...layouts[item.id as keyof typeof layouts], y: Math.round(min + gap * index) }));
+    }
+    updateLocalTemplate({
+      ...localSettings,
+      printTemplates: {
+        ...localSettings.printTemplates,
+        label: { ...localSettings.printTemplates.label, sectionLayouts: layouts },
+      },
+    });
+  }
 
   function startDesignerDrag(
     type: "receipt" | "label",
@@ -719,7 +838,32 @@ export function PrintCenter() {
                       </div>
                     </div>
                     <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-xs font-semibold text-slate-500">區塊樣式：{RECEIPT_SECTION_META.find((item) => item.id === selectedReceiptSection)?.label}</div>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-semibold text-slate-500">
+                          區塊樣式：{RECEIPT_SECTION_META.find((item) => item.id === selectedReceiptSection)?.label} {selectedReceiptSections.length > 1 ? `· 已選 ${selectedReceiptSections.length} 個` : ""}
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {[
+                            ["left", "左齊"],
+                            ["center", "中線"],
+                            ["right", "右齊"],
+                            ["top", "上齊"],
+                            ["middle", "中高"],
+                            ["bottom", "下齊"],
+                            ["h-space", "均分X"],
+                            ["v-space", "均分Y"],
+                          ].map(([action, label]) => (
+                            <button
+                              key={action}
+                              className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                              onClick={() => alignOrDistribute("receipt", action as Parameters<typeof alignOrDistribute>[1])}
+                              type="button"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <label className="grid gap-1 text-xs font-semibold text-slate-600">
                           <span>字體大小</span>
@@ -834,6 +978,84 @@ export function PrintCenter() {
                             value={localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection].padding}
                           />
                         </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                          <span>字體顏色</span>
+                          <input
+                            className="h-10 rounded-xl border border-slate-200 bg-white px-2 py-1"
+                            onChange={(event) =>
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  receipt: {
+                                    ...localSettings.printTemplates.receipt,
+                                    sectionStyles: {
+                                      ...localSettings.printTemplates.receipt.sectionStyles,
+                                      [selectedReceiptSection]: {
+                                        ...localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection],
+                                        textColor: event.target.value,
+                                      },
+                                    },
+                                  },
+                                },
+                              })
+                            }
+                            type="color"
+                            value={localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection].textColor}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                          <span>邊框顏色</span>
+                          <input
+                            className="h-10 rounded-xl border border-slate-200 bg-white px-2 py-1"
+                            onChange={(event) =>
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  receipt: {
+                                    ...localSettings.printTemplates.receipt,
+                                    sectionStyles: {
+                                      ...localSettings.printTemplates.receipt.sectionStyles,
+                                      [selectedReceiptSection]: {
+                                        ...localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection],
+                                        borderColor: event.target.value,
+                                      },
+                                    },
+                                  },
+                                },
+                              })
+                            }
+                            type="color"
+                            value={localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection].borderColor}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                          <span>背景色</span>
+                          <input
+                            className="h-10 rounded-xl border border-slate-200 bg-white px-2 py-1"
+                            onChange={(event) =>
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  receipt: {
+                                    ...localSettings.printTemplates.receipt,
+                                    sectionStyles: {
+                                      ...localSettings.printTemplates.receipt.sectionStyles,
+                                      [selectedReceiptSection]: {
+                                        ...localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection],
+                                        backgroundColor: event.target.value,
+                                      },
+                                    },
+                                  },
+                                },
+                              })
+                            }
+                            type="color"
+                            value={localSettings.printTemplates.receipt.sectionStyles[selectedReceiptSection].backgroundColor}
+                          />
+                        </label>
                       </div>
                     </div>
                   </div>
@@ -886,15 +1108,15 @@ export function PrintCenter() {
                           {localSettings.printTemplates.receipt.showRuler ? (
                             <>
                               <div className="absolute left-0 top-0 z-20 h-5 w-full border-b border-slate-200 bg-slate-50">
-                                {Array.from({ length: Math.ceil(localSettings.printTemplates.receipt.canvas.width / 20) }).map((_, index) => (
-                                  <div key={`rx-${index}`} className="absolute top-0 h-5 border-l border-slate-300 text-[9px] text-slate-400" style={{ left: index * 20 }}>
-                                    <span className="absolute left-1 top-0">{index * 5}</span>
+                                {Array.from({ length: Math.ceil(paperWidthMm("receipt") / 5) + 1 }).map((_, index) => (
+                                  <div key={`rx-${index}`} className="absolute top-0 h-5 border-l border-slate-300 text-[9px] text-slate-400" style={{ left: index * 5 * mmStepPx("receipt") }}>
+                                    <span className="absolute left-1 top-0">{index * 5}mm</span>
                                   </div>
                                 ))}
                               </div>
                               <div className="absolute left-0 top-0 z-20 h-full w-5 border-r border-slate-200 bg-slate-50">
-                                {Array.from({ length: Math.ceil(localSettings.printTemplates.receipt.canvas.height / 20) }).map((_, index) => (
-                                  <div key={`ry-${index}`} className="absolute left-0 w-5 border-t border-slate-300 text-[9px] text-slate-400" style={{ top: index * 20 }}>
+                                {Array.from({ length: Math.ceil(localSettings.printTemplates.receipt.canvas.height / (5 * mmStepPx("receipt"))) + 1 }).map((_, index) => (
+                                  <div key={`ry-${index}`} className="absolute left-0 w-5 border-t border-slate-300 text-[9px] text-slate-400" style={{ top: index * 5 * mmStepPx("receipt") }}>
                                     <span className="absolute left-0 top-0">{index * 5}</span>
                                   </div>
                                 ))}
@@ -914,10 +1136,18 @@ export function PrintCenter() {
                             return (
                               <div
                                 key={section}
-                                className={`absolute cursor-move overflow-hidden rounded-lg bg-orange-50/40 ${
-                                  selectedReceiptSection === section ? "border-2 border-orange-500 shadow-md" : "border border-dashed border-orange-300"
+                                className={`absolute cursor-move overflow-hidden rounded-lg ${
+                                  selectedReceiptSections.includes(section) ? "border-2 border-orange-500 shadow-md" : "border border-dashed"
                                 }`}
-                                onClick={() => setSelectedReceiptSection(section)}
+                                onClick={(event) => {
+                                  setSelectedReceiptSection(section);
+                                  toggleDesignerSelection(
+                                    selectedReceiptSections,
+                                    section,
+                                    event.metaKey || event.ctrlKey,
+                                    setSelectedReceiptSections,
+                                  );
+                                }}
                                 onMouseDown={(event) => startDesignerDrag("receipt", section, "move", event, layout)}
                                 style={{
                                   left: layout.x,
@@ -926,14 +1156,16 @@ export function PrintCenter() {
                                   height: layout.height,
                                   padding: style.padding,
                                   textAlign: style.textAlign,
+                                  backgroundColor: style.backgroundColor,
+                                  borderColor: style.borderColor,
                                 }}
                               >
                                 <div className="text-[10px] font-semibold tracking-wide text-orange-700">
                                   {RECEIPT_SECTION_META.find((item) => item.id === section)?.label ?? section}
                                 </div>
                                 <div
-                                  className="mt-1 space-y-1 leading-4 text-slate-700"
-                                  style={{ fontSize: style.fontSize, fontWeight: style.fontWeight, textAlign: style.textAlign }}
+                                  className="mt-1 space-y-1 leading-4"
+                                  style={{ fontSize: style.fontSize, fontWeight: style.fontWeight, textAlign: style.textAlign, color: style.textColor }}
                                 >
                                   {lines.length > 0 ? lines.slice(0, 6).map((line, index) => <div key={`${section}-${index}`}>{line}</div>) : <div className="text-slate-400">未顯示</div>}
                                 </div>
@@ -1091,7 +1323,32 @@ export function PrintCenter() {
                       </div>
                     </div>
                     <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-xs font-semibold text-slate-500">區塊樣式：{LABEL_SECTION_META.find((item) => item.id === selectedLabelSection)?.label}</div>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-semibold text-slate-500">
+                          區塊樣式：{LABEL_SECTION_META.find((item) => item.id === selectedLabelSection)?.label} {selectedLabelSections.length > 1 ? `· 已選 ${selectedLabelSections.length} 個` : ""}
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {[
+                            ["left", "左齊"],
+                            ["center", "中線"],
+                            ["right", "右齊"],
+                            ["top", "上齊"],
+                            ["middle", "中高"],
+                            ["bottom", "下齊"],
+                            ["h-space", "均分X"],
+                            ["v-space", "均分Y"],
+                          ].map(([action, label]) => (
+                            <button
+                              key={action}
+                              className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                              onClick={() => alignOrDistribute("label", action as Parameters<typeof alignOrDistribute>[1])}
+                              type="button"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <label className="grid gap-1 text-xs font-semibold text-slate-600">
                           <span>字體大小</span>
@@ -1206,6 +1463,84 @@ export function PrintCenter() {
                             value={localSettings.printTemplates.label.sectionStyles[selectedLabelSection].padding}
                           />
                         </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                          <span>字體顏色</span>
+                          <input
+                            className="h-10 rounded-xl border border-slate-200 bg-white px-2 py-1"
+                            onChange={(event) =>
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  label: {
+                                    ...localSettings.printTemplates.label,
+                                    sectionStyles: {
+                                      ...localSettings.printTemplates.label.sectionStyles,
+                                      [selectedLabelSection]: {
+                                        ...localSettings.printTemplates.label.sectionStyles[selectedLabelSection],
+                                        textColor: event.target.value,
+                                      },
+                                    },
+                                  },
+                                },
+                              })
+                            }
+                            type="color"
+                            value={localSettings.printTemplates.label.sectionStyles[selectedLabelSection].textColor}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                          <span>邊框顏色</span>
+                          <input
+                            className="h-10 rounded-xl border border-slate-200 bg-white px-2 py-1"
+                            onChange={(event) =>
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  label: {
+                                    ...localSettings.printTemplates.label,
+                                    sectionStyles: {
+                                      ...localSettings.printTemplates.label.sectionStyles,
+                                      [selectedLabelSection]: {
+                                        ...localSettings.printTemplates.label.sectionStyles[selectedLabelSection],
+                                        borderColor: event.target.value,
+                                      },
+                                    },
+                                  },
+                                },
+                              })
+                            }
+                            type="color"
+                            value={localSettings.printTemplates.label.sectionStyles[selectedLabelSection].borderColor}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                          <span>背景色</span>
+                          <input
+                            className="h-10 rounded-xl border border-slate-200 bg-white px-2 py-1"
+                            onChange={(event) =>
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  label: {
+                                    ...localSettings.printTemplates.label,
+                                    sectionStyles: {
+                                      ...localSettings.printTemplates.label.sectionStyles,
+                                      [selectedLabelSection]: {
+                                        ...localSettings.printTemplates.label.sectionStyles[selectedLabelSection],
+                                        backgroundColor: event.target.value,
+                                      },
+                                    },
+                                  },
+                                },
+                              })
+                            }
+                            type="color"
+                            value={localSettings.printTemplates.label.sectionStyles[selectedLabelSection].backgroundColor}
+                          />
+                        </label>
                       </div>
                     </div>
                   </div>
@@ -1258,15 +1593,15 @@ export function PrintCenter() {
                           {localSettings.printTemplates.label.showRuler ? (
                             <>
                               <div className="absolute left-0 top-0 z-20 h-5 w-full border-b border-slate-200 bg-slate-50">
-                                {Array.from({ length: Math.ceil(localSettings.printTemplates.label.canvas.width / 20) }).map((_, index) => (
-                                  <div key={`lx-${index}`} className="absolute top-0 h-5 border-l border-slate-300 text-[9px] text-slate-400" style={{ left: index * 20 }}>
-                                    <span className="absolute left-1 top-0">{index * 5}</span>
+                                {Array.from({ length: Math.ceil(paperWidthMm("label") / 5) + 1 }).map((_, index) => (
+                                  <div key={`lx-${index}`} className="absolute top-0 h-5 border-l border-slate-300 text-[9px] text-slate-400" style={{ left: index * 5 * mmStepPx("label") }}>
+                                    <span className="absolute left-1 top-0">{index * 5}mm</span>
                                   </div>
                                 ))}
                               </div>
                               <div className="absolute left-0 top-0 z-20 h-full w-5 border-r border-slate-200 bg-slate-50">
-                                {Array.from({ length: Math.ceil(localSettings.printTemplates.label.canvas.height / 20) }).map((_, index) => (
-                                  <div key={`ly-${index}`} className="absolute left-0 w-5 border-t border-slate-300 text-[9px] text-slate-400" style={{ top: index * 20 }}>
+                                {Array.from({ length: Math.ceil(localSettings.printTemplates.label.canvas.height / (5 * mmStepPx("label"))) + 1 }).map((_, index) => (
+                                  <div key={`ly-${index}`} className="absolute left-0 w-5 border-t border-slate-300 text-[9px] text-slate-400" style={{ top: index * 5 * mmStepPx("label") }}>
                                     <span className="absolute left-0 top-0">{index * 5}</span>
                                   </div>
                                 ))}
@@ -1286,10 +1621,18 @@ export function PrintCenter() {
                             return (
                               <div
                                 key={section}
-                                className={`absolute cursor-move overflow-hidden rounded-lg bg-sky-50/50 ${
-                                  selectedLabelSection === section ? "border-2 border-sky-500 shadow-md" : "border border-dashed border-sky-300"
+                                className={`absolute cursor-move overflow-hidden rounded-lg ${
+                                  selectedLabelSections.includes(section) ? "border-2 border-sky-500 shadow-md" : "border border-dashed"
                                 }`}
-                                onClick={() => setSelectedLabelSection(section)}
+                                onClick={(event) => {
+                                  setSelectedLabelSection(section);
+                                  toggleDesignerSelection(
+                                    selectedLabelSections,
+                                    section,
+                                    event.metaKey || event.ctrlKey,
+                                    setSelectedLabelSections,
+                                  );
+                                }}
                                 onMouseDown={(event) => startDesignerDrag("label", section, "move", event, layout)}
                                 style={{
                                   left: layout.x,
@@ -1298,14 +1641,16 @@ export function PrintCenter() {
                                   height: layout.height,
                                   padding: style.padding,
                                   textAlign: style.textAlign,
+                                  backgroundColor: style.backgroundColor,
+                                  borderColor: style.borderColor,
                                 }}
                               >
                                 <div className="text-[10px] font-semibold tracking-wide text-sky-700">
                                   {LABEL_SECTION_META.find((item) => item.id === section)?.label ?? section}
                                 </div>
                                 <div
-                                  className="mt-1 space-y-1 leading-4 text-slate-700"
-                                  style={{ fontSize: style.fontSize, fontWeight: style.fontWeight, textAlign: style.textAlign }}
+                                  className="mt-1 space-y-1 leading-4"
+                                  style={{ fontSize: style.fontSize, fontWeight: style.fontWeight, textAlign: style.textAlign, color: style.textColor }}
                                 >
                                   {lines.length > 0 ? lines.slice(0, 4).map((line, index) => <div key={`${section}-${index}`}>{line}</div>) : <div className="text-slate-400">未顯示</div>}
                                 </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { KeyboardEvent, useState } from "react";
 
 import { saveAuthSession, saveOperatingMode } from "@/lib/storage";
 
@@ -64,6 +64,12 @@ export function LoginScreen() {
     }
   }
 
+  function handleEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void submit();
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
       <div className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-6 py-10">
@@ -108,6 +114,7 @@ export function LoginScreen() {
                 className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
                 inputMode="numeric"
                 maxLength={8}
+                onKeyDown={handleEnter}
                 onChange={(event) => {
                   setError("");
                   setAccount(event.target.value.replace(/\D/g, "").slice(0, 8));
@@ -123,6 +130,7 @@ export function LoginScreen() {
                 className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
                 inputMode="numeric"
                 maxLength={4}
+                onKeyDown={handleEnter}
                 onChange={(event) => {
                   setError("");
                   setPin(event.target.value.replace(/\D/g, "").slice(0, 4));

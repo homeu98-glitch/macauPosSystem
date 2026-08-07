@@ -356,9 +356,9 @@ export function ShiftPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="mx-auto max-w-[1600px] px-4 py-4 lg:pl-[88px]">
+      <div className="mx-auto h-screen max-w-[1600px] overflow-auto px-4 py-4 lg:pl-[88px]">
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="text-lg font-semibold text-slate-900">交班</div>
           <div className="mt-1 text-sm text-slate-500">

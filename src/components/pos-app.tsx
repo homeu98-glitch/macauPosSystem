@@ -161,6 +161,7 @@ export function PosApp() {
     loadOperatingMode() === "quick" ? "online" : "cashier",
   );
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
+  const [draggingQuickAction, setDraggingQuickAction] = useState<string | null>(null);
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioReady, setAudioReady] = useState(false);
@@ -599,11 +600,6 @@ export function PosApp() {
       })();
     }
   }, [isQuickMode, onlineOrders, autoAcceptOnlineOrders]);
-  const menuItemMap = useMemo(
-    () => new Map((bootstrap?.menuItems ?? []).map((item) => [item.id, item])),
-    [bootstrap],
-  );
-
   const effectiveCategoryId = useMemo(() => {
     if (!bootstrap) return "";
     return activeCategoryId || bootstrap.categories[0]?.id || "";
@@ -647,13 +643,10 @@ export function PosApp() {
     () =>
       openOrders
         .filter((order) => order.tableId === "counter")
-        .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen"),
+        .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid"),
     [openOrders],
   );
-  const quickWaitingOrders = useMemo(
-    () => openOrders.filter((order) => order.tableId === "counter").filter((order) => order.status === "paid"),
-    [openOrders],
-  );
+  const quickWaitingOrders = useMemo(() => [] as PosOrder[], []);
 
   const viewingOrder = useMemo(() => {
     if (!viewingOrderId) return null;
@@ -980,7 +973,7 @@ export function PosApp() {
           price: finalPrice,
           printerGroup: targetPrinterGroup,
           selectedSpecs,
-        }),
+        }) && (orderedItemQtyMap.get(itemIdentity(cartItem)) ?? 0) <= 0,
       );
       if (existing) {
         return current.map((cartItem) =>
@@ -1047,23 +1040,8 @@ export function PosApp() {
     setSelectedSpecValues({});
   }
 
-  function updateItemNote(item: OrderItem) {
-    const key = itemIdentity(item);
-    setSelectedItemId(item.menuItemId);
-    const menuItem = menuItemMap.get(item.menuItemId);
-    if (menuItem?.specGroups?.length) {
-      openSpecPicker(
-        menuItem,
-        key,
-        (item.selectedSpecs ?? []).reduce<Record<string, string[]>>((acc, spec) => {
-          acc[spec.groupId] = [...(acc[spec.groupId] ?? []), spec.optionId];
-          return acc;
-        }, {}),
-      );
-    }
-  }
-
   function openItemNoteEditor(item: OrderItem) {
+    if ((orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) return;
     setNoteDraft(item.note ?? "");
     setNoteModal({ type: "item", itemKey: itemIdentity(item) });
   }
@@ -1091,6 +1069,7 @@ export function PosApp() {
     setCartItems((current) => {
       const target = current.find((row) => itemIdentity(row) === itemKey);
       if (!target) return current;
+      if ((orderedItemQtyMap.get(itemKey) ?? 0) > 0) return current;
 
       if (delta > 0) {
         const remaining = soldOutMap[target.menuItemId]?.remainingQty;
@@ -2250,73 +2229,100 @@ export function PosApp() {
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                    <div className="text-xs font-semibold text-slate-500">桌台流程</div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button
-                        className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                        disabled={!activeTable || cartItems.length === 0}
-                        onClick={() => void sendToKitchen()}
-                        type="button"
-                      >
-                        送廚房
-                      </button>
-                      <button
-                        className="rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                        disabled={!currentSettlementOrder}
-                        onClick={() => setPayingOrderId(currentSettlementOrder?.id ?? null)}
-                        type="button"
-                      >
-                        去結帳
-                      </button>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={backToTables}
-                        type="button"
-                      >
-                        返回桌台
-                      </button>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
-                        disabled={!activeOrder}
-                        onClick={() => setViewingOrderId(activeOrder?.id ?? null)}
-                        type="button"
-                      >
-                        查看本單
-                      </button>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-slate-500">快捷入口</div>
+                      <div className="text-[11px] text-slate-400">可拖動排序</div>
                     </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                    <div className="text-xs font-semibold text-slate-500">營運入口</div>
                     <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button
-                        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => router.push("/prints")}
-                        type="button"
-                      >
-                        查看打印
-                      </button>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => router.push("/orders")}
-                        type="button"
-                      >
-                        線上訂單
-                      </button>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => router.push("/shift")}
-                        type="button"
-                      >
-                        交班核對
-                      </button>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => router.push("/settings")}
-                        type="button"
-                      >
-                        設置
-                      </button>
+                      {localSettings.dineInQuickActionOrder.map((actionId) => {
+                        const actionMap = {
+                          view_order: {
+                            label: "查看本單",
+                            disabled: !activeOrder,
+                            tone: "white",
+                            onClick: () => setViewingOrderId(activeOrder?.id ?? null),
+                          },
+                          send_kitchen: {
+                            label: "送廚房",
+                            disabled: !activeTable || cartItems.length === 0,
+                            tone: "dark",
+                            onClick: () => void sendToKitchen(),
+                          },
+                          checkout: {
+                            label: "去結帳",
+                            disabled: !currentSettlementOrder,
+                            tone: "orange",
+                            onClick: () => setPayingOrderId(currentSettlementOrder?.id ?? null),
+                          },
+                          back_tables: {
+                            label: "返回桌台",
+                            disabled: false,
+                            tone: "white",
+                            onClick: backToTables,
+                          },
+                          prints: {
+                            label: "查看打印",
+                            disabled: false,
+                            tone: "white",
+                            onClick: () => router.push("/prints"),
+                          },
+                          online_orders: {
+                            label: "線上訂單",
+                            disabled: false,
+                            tone: "white",
+                            onClick: () => router.push("/orders"),
+                          },
+                          shift: {
+                            label: "交班核對",
+                            disabled: false,
+                            tone: "white",
+                            onClick: () => router.push("/shift"),
+                          },
+                          settings: {
+                            label: "設置",
+                            disabled: false,
+                            tone: "white",
+                            onClick: () => router.push("/settings"),
+                          },
+                        } as const;
+                        const action = actionMap[actionId];
+                        return (
+                          <button
+                            key={actionId}
+                            className={`rounded-2xl px-4 py-3 text-sm font-semibold ${
+                              action.tone === "dark"
+                                ? "bg-slate-900 text-white"
+                                : action.tone === "orange"
+                                  ? "bg-orange-500 text-white"
+                                  : "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                            } disabled:opacity-50`}
+                            disabled={action.disabled}
+                            draggable
+                            onClick={action.onClick}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDragStart={() => setDraggingQuickAction(actionId)}
+                            onDrop={() => {
+                              if (!draggingQuickAction || draggingQuickAction === actionId) return;
+                              const nextOrder = [...localSettings.dineInQuickActionOrder];
+                              const fromIndex = nextOrder.indexOf(draggingQuickAction as (typeof nextOrder)[number]);
+                              const toIndex = nextOrder.indexOf(actionId as (typeof nextOrder)[number]);
+                              if (fromIndex === -1 || toIndex === -1) return;
+                              const [moved] = nextOrder.splice(fromIndex, 1);
+                              nextOrder.splice(toIndex, 0, moved);
+                              const nextSettings = {
+                                ...localSettings,
+                                dineInQuickActionOrder: nextOrder,
+                              };
+                              setLocalSettings(nextSettings);
+                              savePosLocalSettings(nextSettings);
+                              setDraggingQuickAction(null);
+                            }}
+                            type="button"
+                          >
+                            {action.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -2437,52 +2443,58 @@ export function PosApp() {
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <button
-                          className="min-w-0 text-left"
-                          onClick={() => updateItemNote(item)}
-                          type="button"
-                        >
+                        <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
                           <div className="mt-1 text-xs text-slate-500">
                             {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
                           </div>
-                        </button>
+                        </div>
                         <div className="flex items-center gap-1">
-                          <button
-                            className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              updateQuantity(itemIdentity(item), -1);
-                            }}
-                            type="button"
-                          >
-                            -
-                          </button>
-                          <div className="w-7 text-center text-sm font-semibold text-slate-800">{item.quantity}</div>
-                          <button
-                            className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              updateQuantity(itemIdentity(item), 1);
-                            }}
-                            type="button"
-                          >
-                            +
-                          </button>
+                          {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0 ? (
+                            <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
+                              已下單 x{item.quantity}
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  updateQuantity(itemIdentity(item), -1);
+                                }}
+                                type="button"
+                              >
+                                -
+                              </button>
+                              <div className="w-7 text-center text-sm font-semibold text-slate-800">{item.quantity}</div>
+                              <button
+                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  updateQuantity(itemIdentity(item), 1);
+                                }}
+                                type="button"
+                              >
+                                +
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                       <div className="mt-2 flex items-center justify-between">
                         <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openItemNoteEditor(item);
-                            }}
-                            type="button"
-                          >
-                            {item.note ? "編輯備註" : "加備註"}
-                          </button>
+                          {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) <= 0 ? (
+                            <button
+                              className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openItemNoteEditor(item);
+                              }}
+                              type="button"
+                            >
+                              {item.note ? "編輯備註" : "加備註"}
+                            </button>
+                          ) : null}
                           {(orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0 ? (
                             <button
                               className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
@@ -2674,7 +2686,7 @@ export function PosApp() {
                       onClick={() => setQuickPanel("local")}
                       type="button"
                     >
-                      堂食訂單
+                      本地快餐單
                     </button>
                     <button
                       className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
