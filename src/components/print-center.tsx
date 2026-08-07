@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import {
@@ -96,10 +96,18 @@ export function PrintCenter() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "sent" | "failed">("all");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [templatePreviewType, setTemplatePreviewType] = useState<"receipt" | "label" | null>(null);
+  const [activeTab, setActiveTab] = useState<"records" | "receipt-template" | "label-template">("records");
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings() ?? defaultPosLocalSettings);
   const [draggingReceiptSection, setDraggingReceiptSection] = useState<string | null>(null);
   const [draggingLabelSection, setDraggingLabelSection] = useState<string | null>(null);
+  const designerDragRef = useRef<{
+    type: "receipt" | "label";
+    section: string;
+    mode: "move" | "resize";
+    startX: number;
+    startY: number;
+    startLayout: { x: number; y: number; width: number; height: number };
+  } | null>(null);
   type PreviewItem = NonNullable<PrintJob["items"]>[number];
 
   useEffect(() => {
@@ -228,10 +236,166 @@ export function PrintCenter() {
     };
   }, [localSettings.printTemplates.label, sampleOrder]);
 
-  function updateLocalTemplate(nextSettings: typeof localSettings) {
+  const receiptPreviewBlocks = useMemo(() => {
+    if (!sampleOrder) return {} as Record<(typeof RECEIPT_SECTION_META)[number]["id"], string[]>;
+    const template = localSettings.printTemplates.receipt;
+    return {
+      store_name: template.showStoreName ? ["澳門店 A"] : [],
+      order_no: template.showOrderNo ? [sampleOrder.localOrderNo] : [],
+      table_name: template.showTableName ? [sampleOrder.tableName] : [],
+      items: sampleOrder.items.map((item) => {
+        const specs = (item.selectedSpecs ?? []).map((spec) => spec.optionLabel).join(" / ");
+        return [item.name, specs, item.note ?? ""].filter(Boolean).join(" · ");
+      }),
+      total: [`MOP ${sampleOrder.total.toFixed(0)}`],
+      payment_method: template.showPaymentMethod ? [sampleOrder.paymentMethod ?? "現金"] : [],
+      order_note: template.showOrderNote && sampleOrder.orderNote ? [sampleOrder.orderNote] : [],
+      footer: template.footerText ? [template.footerText] : [],
+    };
+  }, [localSettings.printTemplates.receipt, sampleOrder]);
+
+  const labelPreviewBlocks = useMemo(() => {
+    const sourceItem = sampleOrder?.items[0];
+    if (!sampleOrder || !sourceItem) return {} as Record<(typeof LABEL_SECTION_META)[number]["id"], string[]>;
+    const temperature =
+      getLabelSpecValue(sourceItem.selectedSpecs, ["溫度", "熱冷", "冷热", "冷熱"]) ||
+      getLabelOptionByKeywords(sourceItem.selectedSpecs, ["熱", "凍", "冷"]) ||
+      getLabelTextTag(sourceItem.note, ["熱", "凍", "冷"]);
+    const cupType = getLabelSpecValue(sourceItem.selectedSpecs, ["杯", "杯型", "大小", "尺寸"]);
+    const sugar = getLabelSpecValue(sourceItem.selectedSpecs, ["甜"]);
+    const ice = getLabelSpecValue(sourceItem.selectedSpecs, ["冰"]);
+    const sugarTag =
+      getLabelOptionByKeywords(sourceItem.selectedSpecs, ["半糖", "少甜", "微糖", "走糖", "無糖"]) ||
+      getLabelTextTag(sourceItem.note, ["半糖", "少甜", "微糖", "走糖", "無糖"]);
+    const iceTag =
+      getLabelOptionByKeywords(sourceItem.selectedSpecs, ["少冰", "微冰", "走冰", "去冰"]) ||
+      getLabelTextTag(sourceItem.note, ["少冰", "微冰", "走冰", "去冰"]);
+    const addonsFromNote = ["珍珠", "椰果", "奶蓋", "布丁", "仙草", "紅豆"].filter((keyword) =>
+      (sourceItem.note ?? "").includes(keyword),
+    );
+    const addons = Array.from(new Set([...getLabelAddonValues(sourceItem.selectedSpecs), ...addonsFromNote]));
+    return {
+      header: localSettings.printTemplates.label.headerText ? [localSettings.printTemplates.label.headerText] : [],
+      item_name: [sourceItem.name],
+      temperature: temperature ? [temperature] : [],
+      cup_type: cupType ? [cupType] : [],
+      sugar: sugar ? [sugar] : [],
+      ice: ice ? [ice] : [],
+      sugar_tag: sugarTag ? [sugarTag] : [],
+      ice_tag: iceTag ? [iceTag] : [],
+      addons: addons.length ? addons : [],
+      specs:
+        localSettings.printTemplates.label.showSpecs && (sourceItem.selectedSpecs ?? []).length
+          ? [(sourceItem.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")]
+          : [],
+      item_note: localSettings.printTemplates.label.showItemNote && sourceItem.note ? [sourceItem.note] : [],
+      order_no: localSettings.printTemplates.label.showOrderNo ? [sampleOrder.localOrderNo] : [],
+      footer: localSettings.printTemplates.label.footerText ? [localSettings.printTemplates.label.footerText] : [],
+    };
+  }, [localSettings.printTemplates.label, sampleOrder]);
+
+  const updateLocalTemplate = useCallback((nextSettings: typeof localSettings) => {
     setLocalSettings(nextSettings);
     savePosLocalSettings(nextSettings);
+  }, []);
+
+  function startDesignerDrag(
+    type: "receipt" | "label",
+    section: string,
+    mode: "move" | "resize",
+    event: ReactMouseEvent,
+    startLayout: { x: number; y: number; width: number; height: number },
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    designerDragRef.current = {
+      type,
+      section,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLayout,
+    };
   }
+
+  useEffect(() => {
+    function onPointerMove(event: MouseEvent) {
+      const drag = designerDragRef.current;
+      if (!drag) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (drag.type === "receipt") {
+        const current = localSettings.printTemplates.receipt;
+        const currentLayout = current.sectionLayouts[drag.section as keyof typeof current.sectionLayouts];
+        if (!currentLayout) return;
+        const nextLayout =
+          drag.mode === "move"
+            ? {
+                ...currentLayout,
+                x: Math.max(0, drag.startLayout.x + dx),
+                y: Math.max(0, drag.startLayout.y + dy),
+              }
+            : {
+                ...currentLayout,
+                width: Math.max(80, drag.startLayout.width + dx),
+                height: Math.max(28, drag.startLayout.height + dy),
+              };
+        updateLocalTemplate({
+          ...localSettings,
+          printTemplates: {
+            ...localSettings.printTemplates,
+            receipt: {
+              ...current,
+              sectionLayouts: {
+                ...current.sectionLayouts,
+                [drag.section]: nextLayout,
+              },
+            },
+          },
+        });
+      } else {
+        const current = localSettings.printTemplates.label;
+        const currentLayout = current.sectionLayouts[drag.section as keyof typeof current.sectionLayouts];
+        if (!currentLayout) return;
+        const nextLayout =
+          drag.mode === "move"
+            ? {
+                ...currentLayout,
+                x: Math.max(0, drag.startLayout.x + dx),
+                y: Math.max(0, drag.startLayout.y + dy),
+              }
+            : {
+                ...currentLayout,
+                width: Math.max(56, drag.startLayout.width + dx),
+                height: Math.max(24, drag.startLayout.height + dy),
+              };
+        updateLocalTemplate({
+          ...localSettings,
+          printTemplates: {
+            ...localSettings.printTemplates,
+            label: {
+              ...current,
+              sectionLayouts: {
+                ...current.sectionLayouts,
+                [drag.section]: nextLayout,
+              },
+            },
+          },
+        });
+      }
+    }
+
+    function onPointerUp() {
+      designerDragRef.current = null;
+    }
+
+    window.addEventListener("mousemove", onPointerMove);
+    window.addEventListener("mouseup", onPointerUp);
+    return () => {
+      window.removeEventListener("mousemove", onPointerMove);
+      window.removeEventListener("mouseup", onPointerUp);
+    };
+  }, [localSettings, updateLocalTemplate]);
 
   function persistPrintJobs(next: PrintJob[]) {
     setPrintJobs(next);
@@ -315,21 +479,20 @@ export function PrintCenter() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-slate-900">打印</div>
-                <div className="mt-1 text-sm text-slate-500">查看打印狀態、預覽與重打。</div>
+                <div className="mt-1 text-sm text-slate-500">查看打印狀態、模板預覽與重打。</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {[
-                  ["all", "全部"],
-                  ["sent", "已發送"],
-                  ["pending", "待補傳"],
-                  ["failed", "失敗"],
+                  ["records", "打印記錄"],
+                  ["receipt-template", "收據模板預覽"],
+                  ["label-template", "標籤模板預覽"],
                 ].map(([key, label]) => (
                   <button
                     key={key}
                     className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                      filter === key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                      activeTab === key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
-                    onClick={() => setFilter(key as typeof filter)}
+                    onClick={() => setActiveTab(key as typeof activeTab)}
                     type="button"
                   >
                     {label}
@@ -340,280 +503,461 @@ export function PrintCenter() {
           </div>
 
           <div className="flex-1 overflow-auto p-4">
-            <div className="mb-4 grid gap-3 lg:grid-cols-2">
-              <article className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">收據模板預覽</div>
-                    <div className="mt-1 text-xs text-slate-500">檢查客單格式、尺寸與打印內容。</div>
-                  </div>
-                  <button
-                    className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                    disabled={!receiptPreviewJob}
-                    onClick={() => setTemplatePreviewType("receipt")}
-                    type="button"
-                  >
-                    查看模板
-                  </button>
+            {activeTab === "records" ? (
+              <>
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  {[
+                    ["all", "全部"],
+                    ["sent", "已發送"],
+                    ["pending", "待補傳"],
+                    ["failed", "失敗"],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                        filter === key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                      }`}
+                      onClick={() => setFilter(key as typeof filter)}
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                <div className="mt-3 text-xs text-slate-500">
-                  {receiptPreviewJob ? receiptPreviewJob.printerName : "未設定啟用中的收據打印機"}
-                </div>
-                <div className="mt-4 grid gap-2">
-                  <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
-                    <span>顯示門店名</span>
-                    <input
-                      checked={localSettings.printTemplates.receipt.showStoreName}
-                      onChange={(event) => {
-                        const next = {
-                          ...localSettings,
-                          printTemplates: {
-                            ...localSettings.printTemplates,
-                            receipt: { ...localSettings.printTemplates.receipt, showStoreName: event.target.checked },
-                          },
-                        };
-                        setLocalSettings(next);
-                        savePosLocalSettings(next);
-                      }}
-                      type="checkbox"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
-                    <span>顯示付款方式</span>
-                    <input
-                      checked={localSettings.printTemplates.receipt.showPaymentMethod}
-                      onChange={(event) => {
-                        const next = {
-                          ...localSettings,
-                          printTemplates: {
-                            ...localSettings.printTemplates,
-                            receipt: { ...localSettings.printTemplates.receipt, showPaymentMethod: event.target.checked },
-                          },
-                        };
-                        setLocalSettings(next);
-                        savePosLocalSettings(next);
-                      }}
-                      type="checkbox"
-                    />
-                  </label>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-                    onChange={(event) => {
-                      const next = {
-                        ...localSettings,
-                        printTemplates: {
-                          ...localSettings.printTemplates,
-                          receipt: { ...localSettings.printTemplates.receipt, footerText: event.target.value },
-                        },
-                      };
-                      updateLocalTemplate(next);
-                    }}
-                    placeholder="收據頁尾文案"
-                    value={localSettings.printTemplates.receipt.footerText}
-                  />
-                  <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
-                    <div className="text-xs font-semibold text-slate-500">拖拽排序</div>
-                    <div className="mt-2 grid gap-2">
-                      {localSettings.printTemplates.receipt.sectionOrder.map((section) => (
-                        <div
-                          key={section}
-                          className="cursor-move rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
-                          draggable
-                          onDragOver={(event) => event.preventDefault()}
-                          onDragStart={() => setDraggingReceiptSection(section)}
-                          onDrop={() => {
-                            if (!draggingReceiptSection) return;
-                            const next = {
-                              ...localSettings,
-                              printTemplates: {
-                                ...localSettings.printTemplates,
-                                receipt: {
-                                  ...localSettings.printTemplates.receipt,
-                                  sectionOrder: reorderSections(
-                                    localSettings.printTemplates.receipt.sectionOrder,
-                                    draggingReceiptSection as (typeof localSettings.printTemplates.receipt.sectionOrder)[number],
-                                    section,
-                                  ),
-                                },
-                              },
-                            };
-                            updateLocalTemplate(next);
-                            setDraggingReceiptSection(null);
-                          }}
-                        >
-                          {RECEIPT_SECTION_META.find((item) => item.id === section)?.label ?? section}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </article>
-              <article className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">標籤模板預覽</div>
-                    <div className="mt-1 text-xs text-slate-500">檢查飲品杯貼 / 包裝標籤的核心內容。</div>
-                  </div>
-                  <button
-                    className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                    disabled={!labelPreviewJob}
-                    onClick={() => setTemplatePreviewType("label")}
-                    type="button"
-                  >
-                    查看模板
-                  </button>
-                </div>
-                <div className="mt-3 text-xs text-slate-500">
-                  {labelPreviewJob ? labelPreviewJob.printerName : "未設定啟用中的標籤打印機"}
-                </div>
-                <div className="mt-4 grid gap-2">
-                  <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
-                    <span>顯示規格</span>
-                    <input
-                      checked={localSettings.printTemplates.label.showSpecs}
-                      onChange={(event) => {
-                        const next = {
-                          ...localSettings,
-                          printTemplates: {
-                            ...localSettings.printTemplates,
-                            label: { ...localSettings.printTemplates.label, showSpecs: event.target.checked },
-                          },
-                        };
-                        setLocalSettings(next);
-                        savePosLocalSettings(next);
-                      }}
-                      type="checkbox"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
-                    <span>顯示單號</span>
-                    <input
-                      checked={localSettings.printTemplates.label.showOrderNo}
-                      onChange={(event) => {
-                        const next = {
-                          ...localSettings,
-                          printTemplates: {
-                            ...localSettings.printTemplates,
-                            label: { ...localSettings.printTemplates.label, showOrderNo: event.target.checked },
-                          },
-                        };
-                        setLocalSettings(next);
-                        savePosLocalSettings(next);
-                      }}
-                      type="checkbox"
-                    />
-                  </label>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-                    onChange={(event) => {
-                      const next = {
-                        ...localSettings,
-                        printTemplates: {
-                          ...localSettings.printTemplates,
-                          label: { ...localSettings.printTemplates.label, headerText: event.target.value },
-                        },
-                      };
-                      updateLocalTemplate(next);
-                    }}
-                    placeholder="標籤標題"
-                    value={localSettings.printTemplates.label.headerText}
-                  />
-                  <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
-                    <div className="text-xs font-semibold text-slate-500">拖拽排序</div>
-                    <div className="mt-2 grid gap-2">
-                      {localSettings.printTemplates.label.sectionOrder.map((section) => (
-                        <div
-                          key={section}
-                          className="cursor-move rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
-                          draggable
-                          onDragOver={(event) => event.preventDefault()}
-                          onDragStart={() => setDraggingLabelSection(section)}
-                          onDrop={() => {
-                            if (!draggingLabelSection) return;
-                            const next = {
-                              ...localSettings,
-                              printTemplates: {
-                                ...localSettings.printTemplates,
-                                label: {
-                                  ...localSettings.printTemplates.label,
-                                  sectionOrder: reorderSections(
-                                    localSettings.printTemplates.label.sectionOrder,
-                                    draggingLabelSection as (typeof localSettings.printTemplates.label.sectionOrder)[number],
-                                    section,
-                                  ),
-                                },
-                              },
-                            };
-                            updateLocalTemplate(next);
-                            setDraggingLabelSection(null);
-                          }}
-                        >
-                          {LABEL_SECTION_META.find((item) => item.id === section)?.label ?? section}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </article>
-            </div>
 
-            {filteredJobs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-                目前沒有打印記錄
-              </div>
-            ) : (
-              <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-                {filteredJobs.map((job) => (
-                  <article key={job.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-900">{job.orderNo ?? job.orderId}</div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {job.tableName ?? "--"} · {job.printerName} · {ticketTypeLabel(job.ticketType)}
+                {filteredJobs.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+                    目前沒有打印記錄
+                  </div>
+                ) : (
+                  <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                    {filteredJobs.map((job) => (
+                      <article key={job.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900">{job.orderNo ?? job.orderId}</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {job.tableName ?? "--"} · {job.printerName} · {ticketTypeLabel(job.ticketType)}
+                            </div>
+                          </div>
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                              job.status === "sent"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : job.status === "pending"
+                                  ? "bg-amber-50 text-amber-700"
+                                  : "bg-red-50 text-red-700"
+                            }`}
+                          >
+                            {job.status === "sent" ? "已發送" : job.status === "pending" ? "待補傳" : "失敗"}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 text-xs text-slate-500">{job.createdAt.replace("T", " ").slice(0, 16)}</div>
+
+                        <div className="mt-4 grid grid-cols-2 gap-2">
+                          <button
+                            className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                            onClick={() => setActiveJobId(job.id)}
+                            type="button"
+                          >
+                            查看
+                          </button>
+                          <button
+                            className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                            onClick={() => {
+                              const order = orderMap.get(job.orderId);
+                              if (!order) {
+                                setToast({ tone: "error", message: "找不到原始訂單，無法重打。" });
+                                return;
+                              }
+                              reprintOrder(order);
+                            }}
+                            type="button"
+                          >
+                            重打整單
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : null}
+
+            {activeTab === "receipt-template" ? (
+              <div className="grid gap-3 lg:grid-cols-[420px_minmax(0,1fr)]">
+                <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">收據模板設置</div>
+                  <div className="mt-1 text-xs text-slate-500">可拖拽排序，預覽會接近真實收據輸出。</div>
+                  <div className="mt-4 grid gap-2">
+                    <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
+                      <span>顯示門店名</span>
+                      <input
+                        checked={localSettings.printTemplates.receipt.showStoreName}
+                        onChange={(event) =>
+                          updateLocalTemplate({
+                            ...localSettings,
+                            printTemplates: {
+                              ...localSettings.printTemplates,
+                              receipt: { ...localSettings.printTemplates.receipt, showStoreName: event.target.checked },
+                            },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
+                      <span>顯示付款方式</span>
+                      <input
+                        checked={localSettings.printTemplates.receipt.showPaymentMethod}
+                        onChange={(event) =>
+                          updateLocalTemplate({
+                            ...localSettings,
+                            printTemplates: {
+                              ...localSettings.printTemplates,
+                              receipt: { ...localSettings.printTemplates.receipt, showPaymentMethod: event.target.checked },
+                            },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                      onChange={(event) =>
+                        updateLocalTemplate({
+                          ...localSettings,
+                          printTemplates: {
+                            ...localSettings.printTemplates,
+                            receipt: { ...localSettings.printTemplates.receipt, footerText: event.target.value },
+                          },
+                        })
+                      }
+                      placeholder="收據頁尾文案"
+                      value={localSettings.printTemplates.receipt.footerText}
+                    />
+                    <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
+                      <div className="text-xs font-semibold text-slate-500">拖拽排序</div>
+                      <div className="mt-2 grid gap-2">
+                        {localSettings.printTemplates.receipt.sectionOrder.map((section) => (
+                          <div
+                            key={section}
+                            className="cursor-move rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                            draggable
+                            onDragOver={(event) => event.preventDefault()}
+                            onDragStart={() => setDraggingReceiptSection(section)}
+                            onDrop={() => {
+                              if (!draggingReceiptSection) return;
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  receipt: {
+                                    ...localSettings.printTemplates.receipt,
+                                    sectionOrder: reorderSections(
+                                      localSettings.printTemplates.receipt.sectionOrder,
+                                      draggingReceiptSection as (typeof localSettings.printTemplates.receipt.sectionOrder)[number],
+                                      section,
+                                    ),
+                                  },
+                                },
+                              });
+                              setDraggingReceiptSection(null);
+                            }}
+                          >
+                            {RECEIPT_SECTION_META.find((item) => item.id === section)?.label ?? section}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+                <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">收據預覽</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {receiptPreviewJob ? receiptPreviewJob.printerName : "未設定啟用中的收據打印機"}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <div className="text-xs text-slate-500">可拖動區塊，右下角可拉伸大小。</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500">縮放</span>
+                      <input
+                        max="1.6"
+                        min="0.7"
+                        onChange={(event) =>
+                          updateLocalTemplate({
+                            ...localSettings,
+                            printTemplates: {
+                              ...localSettings.printTemplates,
+                              receipt: {
+                                ...localSettings.printTemplates.receipt,
+                                canvas: {
+                                  ...localSettings.printTemplates.receipt.canvas,
+                                  zoom: Number(event.target.value),
+                                },
+                              },
+                            },
+                          })
+                        }
+                        step="0.1"
+                        type="range"
+                        value={localSettings.printTemplates.receipt.canvas.zoom}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    {receiptPreviewJob ? (
+                      <div className="overflow-auto">
+                        <div
+                          className="relative mx-auto rounded-xl border border-dashed border-slate-300 bg-white shadow-sm"
+                          style={{
+                            width: localSettings.printTemplates.receipt.canvas.width,
+                            height: localSettings.printTemplates.receipt.canvas.height,
+                            transform: `scale(${localSettings.printTemplates.receipt.canvas.zoom})`,
+                            transformOrigin: "top center",
+                          }}
+                        >
+                          {localSettings.printTemplates.receipt.sectionOrder.map((section) => {
+                            const layout = localSettings.printTemplates.receipt.sectionLayouts[section];
+                            const lines = receiptPreviewBlocks[section] ?? [];
+                            return (
+                              <div
+                                key={section}
+                                className="absolute cursor-move overflow-hidden rounded-lg border border-dashed border-orange-300 bg-orange-50/40 p-2"
+                                onMouseDown={(event) => startDesignerDrag("receipt", section, "move", event, layout)}
+                                style={{
+                                  left: layout.x,
+                                  top: layout.y,
+                                  width: layout.width,
+                                  height: layout.height,
+                                }}
+                              >
+                                <div className="text-[10px] font-semibold tracking-wide text-orange-700">
+                                  {RECEIPT_SECTION_META.find((item) => item.id === section)?.label ?? section}
+                                </div>
+                                <div className="mt-1 space-y-1 text-[11px] leading-4 text-slate-700">
+                                  {lines.length > 0 ? lines.slice(0, 6).map((line, index) => <div key={`${section}-${index}`}>{line}</div>) : <div className="text-slate-400">未顯示</div>}
+                                </div>
+                                <button
+                                  className="absolute bottom-1 right-1 h-3 w-3 rounded-sm bg-orange-500"
+                                  onMouseDown={(event) => startDesignerDrag("receipt", section, "resize", event, layout)}
+                                  type="button"
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-white p-3">
+                          <div className="text-xs font-semibold text-slate-500">順序輸出預覽</div>
+                          <div className="mt-2 grid gap-2">
+                            {receiptPreviewJob.items?.map((item, index) => (
+                              <div key={`${item.name}-${index}`} className="border-b border-dashed border-slate-100 pb-2 last:border-b-0">
+                                <div className="flex items-start justify-between gap-3 text-sm">
+                                  <span className="font-semibold text-slate-900">{item.name}</span>
+                                  <span className="shrink-0 font-semibold text-slate-900">x{item.quantity}</span>
+                                </div>
+                                {item.specs?.length ? <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div> : null}
+                                {item.note ? <div className="mt-1 text-xs text-slate-500">{item.note}</div> : null}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          job.status === "sent"
-                            ? "bg-emerald-50 text-emerald-700"
-                            : job.status === "pending"
-                              ? "bg-amber-50 text-amber-700"
-                              : "bg-red-50 text-red-700"
-                        }`}
-                      >
-                        {job.status === "sent" ? "已發送" : job.status === "pending" ? "待補傳" : "失敗"}
-                      </span>
-                    </div>
-
-                    <div className="mt-3 text-xs text-slate-500">{job.createdAt.replace("T", " ").slice(0, 16)}</div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      <button
-                        className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                        onClick={() => setActiveJobId(job.id)}
-                        type="button"
-                      >
-                        查看
-                      </button>
-                      <button
-                        className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                        onClick={() => {
-                          const order = orderMap.get(job.orderId);
-                          if (!order) {
-                            setToast({ tone: "error", message: "找不到原始訂單，無法重打。" });
-                            return;
-                          }
-                          reprintOrder(order);
-                        }}
-                        type="button"
-                      >
-                        重打整單
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                    ) : (
+                      <div className="text-sm text-slate-500">未設定啟用中的收據打印機。</div>
+                    )}
+                  </div>
+                </article>
               </div>
-            )}
+            ) : null}
+
+            {activeTab === "label-template" ? (
+              <div className="grid gap-3 lg:grid-cols-[420px_minmax(0,1fr)]">
+                <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">標籤模板設置</div>
+                  <div className="mt-1 text-xs text-slate-500">可拖拽排序，並預覽更接近真實標籤輸出。</div>
+                  <div className="mt-4 grid gap-2">
+                    <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
+                      <span>顯示規格</span>
+                      <input
+                        checked={localSettings.printTemplates.label.showSpecs}
+                        onChange={(event) =>
+                          updateLocalTemplate({
+                            ...localSettings,
+                            printTemplates: {
+                              ...localSettings.printTemplates,
+                              label: { ...localSettings.printTemplates.label, showSpecs: event.target.checked },
+                            },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
+                      <span>顯示單號</span>
+                      <input
+                        checked={localSettings.printTemplates.label.showOrderNo}
+                        onChange={(event) =>
+                          updateLocalTemplate({
+                            ...localSettings,
+                            printTemplates: {
+                              ...localSettings.printTemplates,
+                              label: { ...localSettings.printTemplates.label, showOrderNo: event.target.checked },
+                            },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                      onChange={(event) =>
+                        updateLocalTemplate({
+                          ...localSettings,
+                          printTemplates: {
+                            ...localSettings.printTemplates,
+                            label: { ...localSettings.printTemplates.label, headerText: event.target.value },
+                          },
+                        })
+                      }
+                      placeholder="標籤標題"
+                      value={localSettings.printTemplates.label.headerText}
+                    />
+                    <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
+                      <div className="text-xs font-semibold text-slate-500">拖拽排序</div>
+                      <div className="mt-2 grid gap-2">
+                        {localSettings.printTemplates.label.sectionOrder.map((section) => (
+                          <div
+                            key={section}
+                            className="cursor-move rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                            draggable
+                            onDragOver={(event) => event.preventDefault()}
+                            onDragStart={() => setDraggingLabelSection(section)}
+                            onDrop={() => {
+                              if (!draggingLabelSection) return;
+                              updateLocalTemplate({
+                                ...localSettings,
+                                printTemplates: {
+                                  ...localSettings.printTemplates,
+                                  label: {
+                                    ...localSettings.printTemplates.label,
+                                    sectionOrder: reorderSections(
+                                      localSettings.printTemplates.label.sectionOrder,
+                                      draggingLabelSection as (typeof localSettings.printTemplates.label.sectionOrder)[number],
+                                      section,
+                                    ),
+                                  },
+                                },
+                              });
+                              setDraggingLabelSection(null);
+                            }}
+                          >
+                            {LABEL_SECTION_META.find((item) => item.id === section)?.label ?? section}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+                <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">標籤預覽</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {labelPreviewJob ? labelPreviewJob.printerName : "未設定啟用中的標籤打印機"}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <div className="text-xs text-slate-500">可拖動區塊，右下角可拉伸大小。</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500">縮放</span>
+                      <input
+                        max="1.6"
+                        min="0.7"
+                        onChange={(event) =>
+                          updateLocalTemplate({
+                            ...localSettings,
+                            printTemplates: {
+                              ...localSettings.printTemplates,
+                              label: {
+                                ...localSettings.printTemplates.label,
+                                canvas: {
+                                  ...localSettings.printTemplates.label.canvas,
+                                  zoom: Number(event.target.value),
+                                },
+                              },
+                            },
+                          })
+                        }
+                        step="0.1"
+                        type="range"
+                        value={localSettings.printTemplates.label.canvas.zoom}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    {labelPreviewJob ? (
+                      <div className="overflow-auto">
+                        <div
+                          className="relative mx-auto rounded-xl border border-dashed border-slate-300 bg-white shadow-sm"
+                          style={{
+                            width: localSettings.printTemplates.label.canvas.width,
+                            height: localSettings.printTemplates.label.canvas.height,
+                            transform: `scale(${localSettings.printTemplates.label.canvas.zoom})`,
+                            transformOrigin: "top center",
+                          }}
+                        >
+                          {localSettings.printTemplates.label.sectionOrder.map((section) => {
+                            const layout = localSettings.printTemplates.label.sectionLayouts[section];
+                            const lines = labelPreviewBlocks[section] ?? [];
+                            return (
+                              <div
+                                key={section}
+                                className="absolute cursor-move overflow-hidden rounded-lg border border-dashed border-sky-300 bg-sky-50/50 p-2"
+                                onMouseDown={(event) => startDesignerDrag("label", section, "move", event, layout)}
+                                style={{
+                                  left: layout.x,
+                                  top: layout.y,
+                                  width: layout.width,
+                                  height: layout.height,
+                                }}
+                              >
+                                <div className="text-[10px] font-semibold tracking-wide text-sky-700">
+                                  {LABEL_SECTION_META.find((item) => item.id === section)?.label ?? section}
+                                </div>
+                                <div className="mt-1 space-y-1 text-[11px] leading-4 text-slate-700">
+                                  {lines.length > 0 ? lines.slice(0, 4).map((line, index) => <div key={`${section}-${index}`}>{line}</div>) : <div className="text-slate-400">未顯示</div>}
+                                </div>
+                                <button
+                                  className="absolute bottom-1 right-1 h-3 w-3 rounded-sm bg-sky-500"
+                                  onMouseDown={(event) => startDesignerDrag("label", section, "resize", event, layout)}
+                                  type="button"
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-white p-3">
+                          <div className="text-xs font-semibold text-slate-500">順序輸出預覽</div>
+                          <div className="mt-2 grid gap-2">
+                            {labelPreviewJob.items?.map((item, index) => (
+                              <div key={`${item.name}-${index}`} className="border-b border-dashed border-slate-100 pb-2 last:border-b-0">
+                                <div className="flex items-start justify-between gap-3 text-sm">
+                                  <span className="font-semibold text-slate-900">{item.name}</span>
+                                  <span className="shrink-0 font-semibold text-slate-900">x{item.quantity}</span>
+                                </div>
+                                {item.specs?.length ? <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div> : null}
+                                {item.note ? <div className="mt-1 text-xs text-slate-500">{item.note}</div> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-500">未設定啟用中的標籤打印機，請先到設置啟用一台標籤打印機。</div>
+                    )}
+                  </div>
+                </article>
+              </div>
+            ) : null}
           </div>
         </main>
       </div>
@@ -661,59 +1005,6 @@ export function PrintCenter() {
                   </div>
                 ))}
               </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {templatePreviewType ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">
-                  {templatePreviewType === "receipt" ? "收據模板預覽" : "標籤模板預覽"}
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {templatePreviewType === "receipt" ? "這是客人收據的大致出紙內容。" : "這是杯貼 / 包裝標籤的大致打印內容。"}
-                </div>
-              </div>
-              <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                onClick={() => setTemplatePreviewType(null)}
-                type="button"
-              >
-                關閉
-              </button>
-            </div>
-            <div className="mt-4 rounded-2xl border border-slate-300 bg-slate-50 p-4">
-              {(() => {
-                const job = templatePreviewType === "receipt" ? receiptPreviewJob : labelPreviewJob;
-                if (!job) {
-                  return <div className="text-sm text-slate-500">目前沒有可預覽模板。</div>;
-                }
-                return (
-                  <div className={`mx-auto rounded-xl border border-dashed border-slate-300 bg-white p-4 ${templatePreviewType === "receipt" ? "max-w-[280px]" : "max-w-[360px]"}`}>
-                    <div className="text-center text-xs font-semibold tracking-[0.18em] text-slate-500">
-                      {templatePreviewType === "receipt" ? "RECEIPT PREVIEW" : "LABEL PREVIEW"}
-                    </div>
-                    <div className="mt-3 text-center text-sm font-semibold text-slate-900">{job.orderNo}</div>
-                    <div className="mt-1 text-center text-xs text-slate-500">{job.printerName}</div>
-                    <div className="mt-4 grid gap-3">
-                      {(job.items ?? []).map((item, index) => (
-                        <div key={`${item.name}-${index}`} className="border-b border-dashed border-slate-200 pb-2 last:border-b-0">
-                          <div className="flex items-start justify-between gap-3 text-sm">
-                            <span className="font-semibold text-slate-900">{item.name}</span>
-                            <span className="shrink-0 font-semibold text-slate-900">x{item.quantity}</span>
-                          </div>
-                          {item.specs?.length ? <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div> : null}
-                          {item.note ? <div className="mt-1 text-xs text-slate-500">{item.note}</div> : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
           </div>
         </div>

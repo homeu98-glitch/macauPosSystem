@@ -114,6 +114,15 @@ export interface PosLocalSettings {
   }>;
   printTemplates: {
     receipt: {
+      canvas: {
+        width: number;
+        height: number;
+        zoom: number;
+      };
+      sectionLayouts: Record<
+        "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer",
+        { x: number; y: number; width: number; height: number }
+      >;
       sectionOrder: Array<
         "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer"
       >;
@@ -125,6 +134,27 @@ export interface PosLocalSettings {
       footerText: string;
     };
     label: {
+      canvas: {
+        width: number;
+        height: number;
+        zoom: number;
+      };
+      sectionLayouts: Record<
+        | "header"
+        | "item_name"
+        | "temperature"
+        | "cup_type"
+        | "sugar"
+        | "ice"
+        | "sugar_tag"
+        | "ice_tag"
+        | "addons"
+        | "specs"
+        | "item_note"
+        | "order_no"
+        | "footer",
+        { x: number; y: number; width: number; height: number }
+      >;
       sectionOrder: Array<
         | "header"
         | "item_name"
@@ -148,6 +178,7 @@ export interface PosLocalSettings {
     };
   };
   notePresets: string[];
+  cancelNotePresets: string[];
   onlineOrderSettings: {
     autoAccept: boolean;
   };

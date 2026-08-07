@@ -234,6 +234,21 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   ],
   printTemplates: {
     receipt: {
+      canvas: {
+        width: 280,
+        height: 560,
+        zoom: 1,
+      },
+      sectionLayouts: {
+        store_name: { x: 12, y: 16, width: 256, height: 40 },
+        order_no: { x: 12, y: 60, width: 256, height: 40 },
+        table_name: { x: 12, y: 104, width: 256, height: 40 },
+        items: { x: 12, y: 152, width: 256, height: 190 },
+        total: { x: 12, y: 350, width: 256, height: 46 },
+        payment_method: { x: 12, y: 402, width: 256, height: 40 },
+        order_note: { x: 12, y: 448, width: 256, height: 46 },
+        footer: { x: 12, y: 500, width: 256, height: 38 },
+      },
       sectionOrder: ["store_name", "order_no", "table_name", "items", "total", "payment_method", "order_note", "footer"],
       showStoreName: true,
       showOrderNo: true,
@@ -243,6 +258,26 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       footerText: "多謝惠顧，歡迎再次光臨",
     },
     label: {
+      canvas: {
+        width: 360,
+        height: 260,
+        zoom: 1,
+      },
+      sectionLayouts: {
+        header: { x: 12, y: 12, width: 336, height: 28 },
+        item_name: { x: 12, y: 46, width: 180, height: 42 },
+        temperature: { x: 204, y: 46, width: 144, height: 34 },
+        cup_type: { x: 12, y: 94, width: 108, height: 32 },
+        sugar: { x: 126, y: 94, width: 108, height: 32 },
+        ice: { x: 240, y: 94, width: 108, height: 32 },
+        sugar_tag: { x: 12, y: 132, width: 108, height: 32 },
+        ice_tag: { x: 126, y: 132, width: 108, height: 32 },
+        addons: { x: 240, y: 132, width: 108, height: 48 },
+        specs: { x: 12, y: 186, width: 336, height: 34 },
+        item_note: { x: 12, y: 226, width: 180, height: 26 },
+        order_no: { x: 198, y: 226, width: 84, height: 26 },
+        footer: { x: 288, y: 226, width: 60, height: 26 },
+      },
       sectionOrder: [
         "header",
         "item_name",
@@ -266,6 +301,7 @@ export const defaultPosLocalSettings: PosLocalSettings = {
     },
   },
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
+  cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
   onlineOrderSettings: {
     autoAccept: false,
   },

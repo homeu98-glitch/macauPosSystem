@@ -78,6 +78,8 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
 export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
   const receiptDefaultOrder = defaultPosLocalSettings.printTemplates.receipt.sectionOrder;
   const labelDefaultOrder = defaultPosLocalSettings.printTemplates.label.sectionOrder;
+  const receiptDefaultLayouts = defaultPosLocalSettings.printTemplates.receipt.sectionLayouts;
+  const labelDefaultLayouts = defaultPosLocalSettings.printTemplates.label.sectionLayouts;
   const receiptStoredOrder = Array.isArray(settings?.printTemplates?.receipt?.sectionOrder)
     ? settings?.printTemplates?.receipt?.sectionOrder
     : [];
@@ -99,6 +101,14 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       receipt: {
         ...defaultPosLocalSettings.printTemplates.receipt,
         ...(settings?.printTemplates?.receipt ?? {}),
+        canvas: {
+          ...defaultPosLocalSettings.printTemplates.receipt.canvas,
+          ...(settings?.printTemplates?.receipt?.canvas ?? {}),
+        },
+        sectionLayouts: {
+          ...receiptDefaultLayouts,
+          ...(settings?.printTemplates?.receipt?.sectionLayouts ?? {}),
+        },
         sectionOrder: Array.from(new Set([...receiptStoredOrder, ...receiptDefaultOrder])).filter((item) =>
           receiptDefaultOrder.includes(item as (typeof receiptDefaultOrder)[number]),
         ) as typeof receiptDefaultOrder,
@@ -106,12 +116,23 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       label: {
         ...defaultPosLocalSettings.printTemplates.label,
         ...(settings?.printTemplates?.label ?? {}),
+        canvas: {
+          ...defaultPosLocalSettings.printTemplates.label.canvas,
+          ...(settings?.printTemplates?.label?.canvas ?? {}),
+        },
+        sectionLayouts: {
+          ...labelDefaultLayouts,
+          ...(settings?.printTemplates?.label?.sectionLayouts ?? {}),
+        },
         sectionOrder: Array.from(new Set([...labelStoredOrder, ...labelDefaultOrder])).filter((item) =>
           labelDefaultOrder.includes(item as (typeof labelDefaultOrder)[number]),
         ) as typeof labelDefaultOrder,
       },
     },
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
+    cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
+      ? settings?.cancelNotePresets
+      : defaultPosLocalSettings.cancelNotePresets,
     onlineOrderSettings: {
       autoAccept: Boolean(
         settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,

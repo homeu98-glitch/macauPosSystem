@@ -59,6 +59,8 @@ export function DeviceSettings() {
   const [newNotePreset, setNewNotePreset] = useState("");
   const [newPrintZoneName, setNewPrintZoneName] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(cachedLocalSettings?.specTemplates?.[0]?.id ?? "");
+  const [devicePrinterTab, setDevicePrinterTab] = useState<"zones" | "printers">("zones");
+  const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
 
   const menuFilteredItems = useMemo(() => {
     return menuDraft.menuItems.filter((item) => menuCategoryId === "all" || item.categoryId === menuCategoryId);
@@ -281,6 +283,7 @@ export function DeviceSettings() {
         printZones: localSettings.printZones,
         specTemplates: localSettings.specTemplates,
         printTemplates: localSettings.printTemplates,
+        cancelNotePresets: localSettings.cancelNotePresets,
         onlineOrderSettings: localSettings.onlineOrderSettings,
       },
       status: "pending",
@@ -452,6 +455,28 @@ export function DeviceSettings() {
                 </span>
               </div>
 
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    devicePrinterTab === "zones" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                  }`}
+                  onClick={() => setDevicePrinterTab("zones")}
+                  type="button"
+                >
+                  打印分區
+                </button>
+                <button
+                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    devicePrinterTab === "printers" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                  }`}
+                  onClick={() => setDevicePrinterTab("printers")}
+                  type="button"
+                >
+                  打印機列表
+                </button>
+              </div>
+
+              {devicePrinterTab === "zones" ? (
               <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-semibold text-slate-900">打印分區</div>
                 <div className="mt-1 text-xs text-slate-500">分區可自由新增，例如：廚房、水吧、甜品、燒味。</div>
@@ -535,7 +560,9 @@ export function DeviceSettings() {
                   </button>
                 </div>
               </div>
+              ) : null}
 
+              {devicePrinterTab === "printers" ? (
               <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100vh-360px)]">
                 <div className="grid gap-3">
                   {config.printers.map((printer) => (
@@ -681,30 +708,33 @@ export function DeviceSettings() {
                   ))}
                 </div>
               </div>
+              ) : null}
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => addPrinter("zone")}
-                  type="button"
-                >
-                  新增分區打印機
-                </button>
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => addPrinter("receipt")}
-                  type="button"
-                >
-                  新增收據打印機
-                </button>
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => addPrinter("label")}
-                  type="button"
-                >
-                  新增標籤打印機
-                </button>
-              </div>
+              {devicePrinterTab === "printers" ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={() => addPrinter("zone")}
+                    type="button"
+                  >
+                    新增廚房 / 分區打印機
+                  </button>
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={() => addPrinter("receipt")}
+                    type="button"
+                  >
+                    新增收據打印機
+                  </button>
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={() => addPrinter("label")}
+                    type="button"
+                  >
+                    新增標籤打印機
+                  </button>
+                </div>
+              ) : null}
             </section>
           </div>
         ) : null}
@@ -719,6 +749,7 @@ export function DeviceSettings() {
 
               <div className="mt-4 grid gap-3">
                 <div className="grid gap-2">
+                  <div className="text-sm font-semibold text-slate-900">點餐備註</div>
                   {localSettings.notePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                       暫時沒有常用備註
@@ -775,6 +806,64 @@ export function DeviceSettings() {
                   </button>
                 </div>
 
+                <div className="mt-2 grid gap-2">
+                  <div className="text-sm font-semibold text-slate-900">取消備註</div>
+                  {localSettings.cancelNotePresets.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      暫時沒有取消備註
+                    </div>
+                  ) : (
+                    localSettings.cancelNotePresets.map((note) => (
+                      <div
+                        key={note}
+                        className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{note}</div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={() => {
+                            const next = {
+                              ...localSettings,
+                              cancelNotePresets: localSettings.cancelNotePresets.filter((item) => item !== note),
+                            };
+                            setLocalSettings(next);
+                            setStatus("已更新取消備註草稿，請先保存。");
+                          }}
+                          type="button"
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
+                    onChange={(event) => setNewCancelNotePreset(event.target.value)}
+                    placeholder="新增取消備註..."
+                    value={newCancelNotePreset}
+                  />
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const text = newCancelNotePreset.trim();
+                      if (!text) return;
+                      const next = {
+                        ...localSettings,
+                        cancelNotePresets: Array.from(new Set([...localSettings.cancelNotePresets, text])),
+                      };
+                      setLocalSettings(next);
+                      setNewCancelNotePreset("");
+                      setStatus("已新增取消備註草稿，請先保存。");
+                    }}
+                    type="button"
+                  >
+                    加入取消備註
+                  </button>
+                </div>
+
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
                     className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
@@ -807,7 +896,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "menu-print" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <section className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">菜品打印設置</div>
@@ -1258,7 +1347,7 @@ export function DeviceSettings() {
                   })()}
                 </div>
 
-                <div className="mt-2 overflow-auto rounded-2xl border border-slate-200 max-h-[calc(100vh-360px)]">
+            <div className="mt-2 overflow-auto rounded-2xl border border-slate-200 max-h-[calc(100vh-260px)]">
                   <table className="w-full border-collapse text-sm">
                     <thead className="sticky top-0 z-10 bg-white">
                       <tr className="text-left text-xs font-semibold text-slate-500">
