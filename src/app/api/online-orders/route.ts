@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { publishOnlineOrderChanged } from "@/lib/hivemq-publisher";
 
 type OnlineOrderType = "dine_in" | "pickup" | "self_delivery" | "rider_delivery";
 
@@ -137,6 +138,8 @@ export async function POST(request: Request) {
         await supabase.from("online_orders").update({ order_no: display }).eq("id", payload.orderId);
       }
     }
+
+    await publishOnlineOrderChanged(orderRow?.store_id ?? "macau-store-a", payload.orderId, "accept");
   }
 
   if (payload.action === "complete" && payload.orderId) {
@@ -149,6 +152,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
 
+    const { data: row } = await supabase
+      .from("online_orders")
+      .select("store_id")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+    await publishOnlineOrderChanged(row?.store_id ?? "macau-store-a", payload.orderId, "complete");
     return NextResponse.json({ ok: true, source: "supabase", status: "completed" });
   }
 
@@ -162,6 +171,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
 
+    const { data: row } = await supabase
+      .from("online_orders")
+      .select("store_id")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+    await publishOnlineOrderChanged(row?.store_id ?? "macau-store-a", payload.orderId, `update_status:${payload.status}`);
     return NextResponse.json({ ok: true, source: "supabase", status: payload.status });
   }
 
@@ -243,6 +258,8 @@ export async function POST(request: Request) {
         { onConflict: "id" },
       );
     }
+
+    await publishOnlineOrderChanged(onlineOrder.store_id ?? "macau-store-a", payload.orderId, "assign_table");
   }
 
   if (payload.action === "convert_quick" && payload.orderId) {
@@ -346,6 +363,8 @@ export async function POST(request: Request) {
       { onConflict: "id" },
     );
 
+    await publishOnlineOrderChanged(onlineOrder.store_id ?? "macau-store-a", payload.orderId, "convert_quick");
+
     return NextResponse.json({
       ok: true,
       source: "supabase",
@@ -379,6 +398,8 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
+
+    await publishOnlineOrderChanged("macau-store-a", payload.orderIds[0], "auto_accept_batch");
   }
 
   if (payload.action === "handoff_to_rider" && payload.orderId) {
@@ -395,6 +416,13 @@ export async function POST(request: Request) {
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
+
+    const { data: row } = await supabase
+      .from("online_orders")
+      .select("store_id")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+    await publishOnlineOrderChanged(row?.store_id ?? "macau-store-a", payload.orderId, "handoff_to_rider");
   }
 
   if ((payload.action === "cancel" || payload.action === "confirm_customer_cancel") && payload.orderId) {
@@ -409,6 +437,12 @@ export async function POST(request: Request) {
     }
 
     // TODO：對接主系統取消訂單 API（你提供 endpoint 後再接）
+    const { data: row } = await supabase
+      .from("online_orders")
+      .select("store_id")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+    await publishOnlineOrderChanged(row?.store_id ?? "macau-store-a", payload.orderId, status);
     return NextResponse.json({ ok: true, source: "supabase", status });
   }
 
@@ -423,6 +457,12 @@ export async function POST(request: Request) {
     }
 
     // TODO：對接主系統「不認同取消」API（你提供 endpoint 後再接）
+    const { data: row } = await supabase
+      .from("online_orders")
+      .select("store_id")
+      .eq("id", payload.orderId)
+      .maybeSingle();
+    await publishOnlineOrderChanged(row?.store_id ?? "macau-store-a", payload.orderId, "reject_customer_cancel");
     return NextResponse.json({ ok: true, source: "supabase", status: "cancel_rejected" });
   }
 

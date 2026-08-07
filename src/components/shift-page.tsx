@@ -153,7 +153,31 @@ export function ShiftPage() {
     setStatus(`已把 ${row.closedAt.slice(0, 10)} 的交班單加入重打隊列。`);
   }
 
+  async function forceSyncBeforeClose() {
+    if (loadOfflineMode()) {
+      setStatus("目前為離線模式，無法強制同步。請先在收銀台退出離線模式再交班。");
+      return false;
+    }
+    const pending = loadQueue().filter((item) => item.status !== "synced");
+    if (pending.length === 0) return true;
+    try {
+      await fetch("/api/pos/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events: pending }),
+      });
+      saveQueue(pending.map((item) => ({ ...item, status: "synced" as const })));
+      setStatus(`已同步 ${pending.length} 筆待辦資料，準備交班。`);
+      return true;
+    } catch {
+      setStatus("強制同步失敗，請檢查網絡或稍後重試。");
+      return false;
+    }
+  }
+
   async function closeShift() {
+    const ok = await forceSyncBeforeClose();
+    if (!ok) return;
     const now = new Date().toISOString();
     const next = {
       ...shift,

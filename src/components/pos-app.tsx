@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import mqtt, { MqttClient } from "mqtt";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
@@ -165,6 +166,9 @@ export function PosApp() {
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioReady, setAudioReady] = useState(false);
+  const mqttClientRef = useRef<MqttClient | null>(null);
+  const [mqttOnline, setMqttOnline] = useState(false);
+  const onlineRefreshTimerRef = useRef<number | null>(null);
   const [onlineOrders, setOnlineOrders] = useState<
     Array<{
       id: string;
@@ -319,60 +323,128 @@ export function PosApp() {
     return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
   }, []);
 
+  function scheduleOnlineRefresh() {
+    if (onlineRefreshTimerRef.current) {
+      window.clearTimeout(onlineRefreshTimerRef.current);
+    }
+    onlineRefreshTimerRef.current = window.setTimeout(() => {
+      void loadOnlineOrdersFromApi();
+    }, 350);
+  }
+
+  async function loadOnlineOrdersFromApi() {
+    try {
+      const response = await fetch("/api/online-orders?type=all");
+      const payload = (await response.json()) as { ok: boolean; orders?: unknown[] };
+      if (!payload.ok) return;
+
+      const nextOrders = (payload.orders ?? []) as typeof onlineOrders;
+      setOnlineOrders(nextOrders);
+
+      if (audioReady) {
+        const snapshot = quickOnlineSnapshotRef.current;
+        const nextMap = new Map<string, string>();
+        const newArrivals: Array<(typeof nextOrders)[number]> = [];
+        let hasCustomerCancel = false;
+
+        for (const order of nextOrders) {
+          const id = order.sourceId ?? order.id;
+          nextMap.set(id, order.status);
+          if (!snapshot.has(id)) newArrivals.push(order);
+          const prevStatus = snapshot.get(id);
+          const status = String(order.status).toLowerCase();
+          if (
+            prevStatus &&
+            !String(prevStatus).toLowerCase().includes("cancel") &&
+            status.includes("cancel") &&
+            status.includes("customer")
+          ) {
+            hasCustomerCancel = true;
+          }
+        }
+
+        quickOnlineSnapshotRef.current = nextMap;
+
+        if (snapshot.size > 0) {
+          if (hasCustomerCancel) {
+            void new Audio("/sounds/cancel-order.mp3").play();
+          } else if (newArrivals.length > 0) {
+            const hasDelivery = newArrivals.some(
+              (row) => row.type === "self_delivery" || row.type === "rider_delivery",
+            );
+            void new Audio(hasDelivery ? "/sounds/new-delivery-order.mp3" : "/sounds/new-order.mp3").play();
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   useEffect(() => {
     if (!isQuickMode) return;
-    let cancelled = false;
 
-    async function loadOnlineOrders() {
+    void loadOnlineOrdersFromApi();
+
+    const wsUrl = process.env.NEXT_PUBLIC_HIVEMQ_WS_URL ?? "";
+    const username = process.env.NEXT_PUBLIC_HIVEMQ_USERNAME ?? "";
+    const password = process.env.NEXT_PUBLIC_HIVEMQ_PASSWORD ?? "";
+    const storeId = process.env.NEXT_PUBLIC_STORE_ID ?? "macau-store-a";
+
+    if (!wsUrl || !username || !password) {
+      const timer = window.setInterval(() => void loadOnlineOrdersFromApi(), 60_000);
+      return () => window.clearInterval(timer);
+    }
+
+    const client = mqtt.connect(wsUrl, {
+      username,
+      password,
+      keepalive: 30,
+      reconnectPeriod: 2000,
+      connectTimeout: 8000,
+      clean: true,
+    });
+    mqttClientRef.current = client;
+
+    const topic = `stores/${storeId}/online-orders/events`;
+
+    client.on("connect", () => {
+      setMqttOnline(true);
+      client.subscribe(topic, { qos: 1 });
+      scheduleOnlineRefresh();
+    });
+    client.on("reconnect", () => setMqttOnline(false));
+    client.on("close", () => setMqttOnline(false));
+    client.on("offline", () => setMqttOnline(false));
+    client.on("error", () => setMqttOnline(false));
+
+    client.on("message", (receivedTopic, payload) => {
+      if (receivedTopic !== topic) return;
       try {
-        const response = await fetch("/api/online-orders?type=all");
-        const payload = (await response.json()) as { ok: boolean; orders?: unknown[] };
-        if (!payload.ok) return;
-        if (!cancelled) {
-          const nextOrders = (payload.orders ?? []) as typeof onlineOrders;
-          setOnlineOrders(nextOrders);
-
-          if (audioReady) {
-            const snapshot = quickOnlineSnapshotRef.current;
-            const nextMap = new Map<string, string>();
-            const newArrivals: Array<(typeof nextOrders)[number]> = [];
-            let hasCustomerCancel = false;
-
-            for (const order of nextOrders) {
-              const id = order.sourceId ?? order.id;
-              nextMap.set(id, order.status);
-              if (!snapshot.has(id)) newArrivals.push(order);
-              const prevStatus = snapshot.get(id);
-              const status = String(order.status).toLowerCase();
-              if (prevStatus && !String(prevStatus).toLowerCase().includes("cancel") && status.includes("cancel") && status.includes("customer")) {
-                hasCustomerCancel = true;
-              }
-            }
-
-            quickOnlineSnapshotRef.current = nextMap;
-
-            if (snapshot.size > 0) {
-              if (hasCustomerCancel) {
-                void new Audio("/sounds/cancel-order.mp3").play();
-              } else if (newArrivals.length > 0) {
-                const hasDelivery = newArrivals.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
-                void new Audio(hasDelivery ? "/sounds/new-delivery-order.mp3" : "/sounds/new-order.mp3").play();
-              }
-            }
-          }
+        const msg = JSON.parse(payload.toString()) as { type?: string; orderId?: string; action?: string };
+        if (msg?.type === "online_order_changed") {
+          scheduleOnlineRefresh();
         }
       } catch {
         // ignore
       }
-    }
+    });
 
-    void loadOnlineOrders();
-    const timer = window.setInterval(loadOnlineOrders, 6000);
+    const fallbackTimer = window.setInterval(() => {
+      if (!mqttOnline) {
+        void loadOnlineOrdersFromApi();
+      }
+    }, 60_000);
+
     return () => {
-      cancelled = true;
-      window.clearInterval(timer);
+      window.clearInterval(fallbackTimer);
+      if (onlineRefreshTimerRef.current) window.clearTimeout(onlineRefreshTimerRef.current);
+      mqttClientRef.current?.end(true);
+      mqttClientRef.current = null;
+      setMqttOnline(false);
     };
-  }, [isQuickMode, audioReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isQuickMode, audioReady, mqttOnline]);
 
   useEffect(() => {
     if (!isQuickMode) return;
@@ -488,6 +560,8 @@ export function PosApp() {
 
   useEffect(() => {
     if (offlineMode) return;
+    // 方案B：若本機仍有待同步事件，先不要拉取後台狀態，避免後台舊資料覆蓋本機即時狀態。
+    if (queue.some((event) => event.status !== "synced")) return;
     async function loadRuntimeState() {
       try {
         const response = await fetch("/api/pos/state");
@@ -501,8 +575,31 @@ export function PosApp() {
         };
 
         if (Array.isArray(payload.orders)) {
-          setOrders(payload.orders);
-          saveOrders(payload.orders);
+          // 方案A：合併後台 orders 與本機 orders（以 updatedAt 較新的為準），避免覆蓋本機剛完成的結帳/狀態更新。
+          setOrders((current) => {
+            const byId = new Map<string, PosOrder>();
+            const timeOf = (order: PosOrder) => Date.parse(order.updatedAt || order.createdAt || "");
+            for (const order of current) {
+              byId.set(order.id, order);
+            }
+            for (const incoming of payload.orders!) {
+              const existing = byId.get(incoming.id);
+              if (!existing) {
+                byId.set(incoming.id, incoming);
+                continue;
+              }
+              const incomingTime = timeOf(incoming);
+              const existingTime = timeOf(existing);
+              if (!Number.isFinite(existingTime) || (Number.isFinite(incomingTime) && incomingTime > existingTime)) {
+                byId.set(incoming.id, incoming);
+              }
+            }
+            const merged = Array.from(byId.values()).sort(
+              (a, b) => timeOf(b) - timeOf(a),
+            );
+            saveOrders(merged);
+            return merged;
+          });
         }
         if (Array.isArray(payload.queue)) {
           setQueue(payload.queue);
@@ -528,7 +625,7 @@ export function PosApp() {
     }
 
     void loadRuntimeState();
-  }, [offlineMode, runtimeRefreshTick]);
+  }, [offlineMode, runtimeRefreshTick, queue]);
 
   const activeTable = useMemo(() => {
     if (!bootstrap) return null;
@@ -631,6 +728,18 @@ export function PosApp() {
       ),
     [orders],
   );
+
+  // 30s 批量同步（只在在線 + 有 pending 時進行；成功/失敗不彈 toast，避免打擾收銀）
+  useEffect(() => {
+    if (offlineMode) return;
+    const timer = window.setInterval(() => {
+      const next = pendingQueue;
+      if (next.length === 0) return;
+      void syncNow(next, { silent: true });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offlineMode, pendingQueue]);
   const recentCompletedOrders = useMemo(() => {
     if (!isQuickMode) return [];
     const threshold = nowMs - quickCompletedMinutes * 60 * 1000;
@@ -1407,7 +1516,7 @@ export function PosApp() {
     return { title: event.type, detail: "已記錄" };
   }
 
-  async function syncNow(nextQueue: QueueEvent[]) {
+  async function syncNow(nextQueue: QueueEvent[], options?: { silent?: boolean }) {
     if (offlineMode || nextQueue.length === 0) {
       return;
     }
@@ -1421,16 +1530,19 @@ export function PosApp() {
 
       const synced = nextQueue.map((event) => ({ ...event, status: "synced" as const }));
       persistQueue(synced);
-      setToast({ tone: "success", message: `已同步 ${synced.length} 筆待辦資料。` });
+      if (!options?.silent) {
+        setToast({ tone: "success", message: `已同步 ${synced.length} 筆待辦資料。` });
+      }
     } catch {
-      setToast({ tone: "info", message: "同步暫時失敗，資料已保留在本機。" });
+      if (!options?.silent) {
+        setToast({ tone: "info", message: "同步暫時失敗，資料已保留在本機。" });
+      }
     }
   }
 
   function pushEvents(events: QueueEvent[]) {
     const nextQueue = [...queue, ...events];
     persistQueue(nextQueue);
-    void syncNow(nextQueue);
   }
 
   function quickTypeKind() {
@@ -2374,7 +2486,7 @@ export function PosApp() {
                     className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
                     onClick={() => {
                       updateOfflineMode(false);
-                      void syncNow(queue);
+                      void syncNow(queue, { silent: false });
                     }}
                     type="button"
                   >
@@ -2383,7 +2495,7 @@ export function PosApp() {
                 ) : (
                   <button
                     className="mt-3 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                    onClick={() => void syncNow(queue)}
+                    onClick={() => void syncNow(queue, { silent: false })}
                     type="button"
                   >
                     立即同步
@@ -3267,7 +3379,7 @@ export function PosApp() {
                   className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
                   onClick={() => {
                     updateOfflineMode(false);
-                    void syncNow(queue);
+                    void syncNow(queue, { silent: false });
                   }}
                   type="button"
                 >
