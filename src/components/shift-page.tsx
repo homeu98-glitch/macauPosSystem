@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
+  loadAuthSession,
   loadDeviceConfig,
   loadOfflineMode,
   loadOrders,
@@ -27,6 +28,10 @@ function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
 }
 
+function csvCell(value: string | number | undefined) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
 export function ShiftPage() {
   const [shift, setShift] = useState(() => loadShiftState());
   const [shiftNote, setShiftNote] = useState("");
@@ -34,6 +39,11 @@ export function ShiftPage() {
   const [status, setStatus] = useState("開工後可於下班時做結數交班並打印交班單。");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [shiftHistory, setShiftHistory] = useState(() => loadShiftHistory());
+  const [historyDateFrom, setHistoryDateFrom] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyEmployeeFilter, setHistoryEmployeeFilter] = useState("");
+  const [historyNoteDrafts, setHistoryNoteDrafts] = useState<Record<string, string>>({});
+  const authSession = useMemo(() => loadAuthSession(), []);
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
   const orders = useMemo(() => loadOrders(), []);
@@ -73,6 +83,75 @@ export function ShiftPage() {
   }, [summary.paymentBreakdown]);
   const actualCashValue = Number(actualCash);
   const cashDifference = Number.isFinite(actualCashValue) ? actualCashValue - expectedCash : 0;
+  const filteredShiftHistory = useMemo(() => {
+    return shiftHistory.filter((row) => {
+      const day = row.closedAt.slice(0, 10);
+      if (historyDateFrom && day < historyDateFrom) return false;
+      if (historyDateTo && day > historyDateTo) return false;
+      if (historyEmployeeFilter && (row.employeeAccount ?? "") !== historyEmployeeFilter) return false;
+      return true;
+    });
+  }, [historyDateFrom, historyDateTo, historyEmployeeFilter, shiftHistory]);
+  const historyEmployeeOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          shiftHistory
+            .filter((row) => row.employeeAccount)
+            .map((row) => [row.employeeAccount as string, row.employeeName ?? row.employeeAccount ?? "未記錄"]),
+        ).entries(),
+      ),
+    [shiftHistory],
+  );
+
+  function buildShiftPrintLines(row: (typeof shiftHistory)[number]) {
+    return [
+      `交班時間：${row.closedAt.replace("T", " ").slice(0, 16)}`,
+      row.openedAt ? `開工時間：${row.openedAt.replace("T", " ").slice(0, 16)}` : "",
+      `已結帳訂單：${row.settledCount} 張`,
+      `營業額：${formatMoney(row.revenue)}`,
+      `線上已支付：${formatMoney(row.prepaid)}`,
+      `退款：${row.refundCount} 張 / ${formatMoney(row.refundAmount)}`,
+      `應收現金：${formatMoney(row.expectedCash)}`,
+      typeof row.actualCash === "number" ? `實收現金：${formatMoney(row.actualCash)}` : "",
+      typeof row.cashDifference === "number" ? `現金差額：${formatMoney(row.cashDifference)}` : "",
+      `待同步事件：${row.pendingEvents}`,
+      `待補傳打印：${row.pendingPrints}`,
+      row.closingNote ? `備註：${row.closingNote}` : "",
+    ].filter(Boolean);
+  }
+
+  function reprintShiftRecord(row: (typeof shiftHistory)[number]) {
+    const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.role === "receipt");
+    const printerName = receiptPrinter?.name ?? "收據打印機";
+    const now = new Date().toISOString();
+    const printJob: PrintJob = {
+      id: uid("print"),
+      orderId: row.id,
+      orderNo: `交班單重打 ${row.closedAt.slice(0, 10)}`,
+      tableName: "",
+      ticketType: "normal",
+      printerGroup: "receipt",
+      printerName,
+      items: buildShiftPrintLines(row).map((line) => ({ name: line, quantity: 1 })),
+      status: "pending",
+      createdAt: now,
+    };
+    const nextPrintJobs = [printJob, ...loadPrintJobs()];
+    savePrintJobs(nextPrintJobs);
+    window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    const event: QueueEvent = {
+      id: uid("evt"),
+      type: "PRINT_JOB_CREATED",
+      entityId: printJob.id,
+      payload: printJob,
+      status: "pending",
+      createdAt: now,
+    };
+    const nextQueue = [...loadQueue(), event];
+    saveQueue(nextQueue);
+    setStatus(`已把 ${row.closedAt.slice(0, 10)} 的交班單加入重打隊列。`);
+  }
 
   async function closeShift() {
     const now = new Date().toISOString();
@@ -86,6 +165,8 @@ export function ShiftPage() {
     };
     const historyRecord = {
       id: `shift-${now}`,
+      employeeAccount: authSession?.account,
+      employeeName: authSession?.name,
       openedAt: shift.openedAt,
       closedAt: now,
       openingNote: shift.openingNote,
@@ -170,6 +251,108 @@ export function ShiftPage() {
 
     setStatus("已交班，交班單已加入打印隊列，狀態已重置為待開工。");
     setConfirmOpen(false);
+  }
+
+  function saveHistoryNote(recordId: string) {
+    const note = (historyNoteDrafts[recordId] ?? "").trim();
+    const nextHistory = shiftHistory.map((row) => (row.id === recordId ? { ...row, closingNote: note } : row));
+    setShiftHistory(nextHistory);
+    saveShiftHistory(nextHistory);
+    setStatus("已更新交班歷史備註。");
+  }
+
+  function deleteHistoryRecord(recordId: string) {
+    const nextHistory = shiftHistory.filter((row) => row.id !== recordId);
+    setShiftHistory(nextHistory);
+    saveShiftHistory(nextHistory);
+    setStatus("已刪除交班歷史。");
+  }
+
+  function exportShiftHistoryCsv() {
+    if (filteredShiftHistory.length === 0 || typeof window === "undefined") {
+      setStatus("目前沒有符合條件的交班歷史可導出。");
+      return;
+    }
+    const rows = [
+      ["交班時間", "員工", "營業額", "退款金額", "應收現金", "實收現金", "現金差額", "待同步事件", "待補傳打印", "備註"].join(","),
+      ...filteredShiftHistory.map((row) =>
+        [
+          row.closedAt.replace("T", " ").slice(0, 16),
+          row.employeeName ?? row.employeeAccount ?? "未記錄",
+          row.revenue,
+          row.refundAmount,
+          row.expectedCash,
+          row.actualCash ?? "",
+          row.cashDifference ?? "",
+          row.pendingEvents,
+          row.pendingPrints,
+          row.closingNote ?? "",
+        ]
+          .map((cell) => csvCell(cell))
+          .join(","),
+      ),
+    ];
+    const blob = new Blob([`\uFEFF${rows.join("\n")}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "交班歷史.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatus("交班歷史 CSV 已導出。");
+  }
+
+  function exportShiftHistoryExcel() {
+    if (filteredShiftHistory.length === 0 || typeof window === "undefined") {
+      setStatus("目前沒有符合條件的交班歷史可導出。");
+      return;
+    }
+    const html = `
+      <table>
+        <thead>
+          <tr>
+            <th>交班時間</th>
+            <th>員工</th>
+            <th>營業額</th>
+            <th>退款金額</th>
+            <th>應收現金</th>
+            <th>實收現金</th>
+            <th>現金差額</th>
+            <th>待同步事件</th>
+            <th>待補傳打印</th>
+            <th>備註</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filteredShiftHistory
+            .map(
+              (row) => `
+                <tr>
+                  <td>${row.closedAt.replace("T", " ").slice(0, 16)}</td>
+                  <td>${row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
+                  <td>${row.revenue}</td>
+                  <td>${row.refundAmount}</td>
+                  <td>${row.expectedCash}</td>
+                  <td>${row.actualCash ?? ""}</td>
+                  <td>${row.cashDifference ?? ""}</td>
+                  <td>${row.pendingEvents}</td>
+                  <td>${row.pendingPrints}</td>
+                  <td>${row.closingNote ?? ""}</td>
+                </tr>
+              `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    `;
+    const blob = new Blob([`\uFEFF${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "交班歷史.xls";
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatus("交班歷史 Excel 已導出。");
   }
 
   return (
@@ -313,31 +496,75 @@ export function ShiftPage() {
                 <div className="text-base font-semibold text-slate-900">交班歷史</div>
                 <div className="mt-1 text-sm text-slate-500">保留最近 60 次交班記錄，方便追數與核對。</div>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setHistoryDateFrom(event.target.value)}
+                  type="date"
+                  value={historyDateFrom}
+                />
+                <span className="text-sm text-slate-400">至</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setHistoryDateTo(event.target.value)}
+                  type="date"
+                  value={historyDateTo}
+                />
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setHistoryEmployeeFilter(event.target.value)}
+                  value={historyEmployeeFilter}
+                >
+                  <option value="">全部員工</option>
+                  {historyEmployeeOptions.map(([account, name]) => (
+                    <option key={account} value={account}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={exportShiftHistoryCsv}
+                  type="button"
+                >
+                  導出 CSV
+                </button>
+                <button
+                  className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+                  onClick={exportShiftHistoryExcel}
+                  type="button"
+                >
+                  導出 Excel
+                </button>
+              </div>
             </div>
             <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
               <table className="w-full border-collapse text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                   <tr>
                     <th className="border-b border-slate-200 px-3 py-2">交班時間</th>
+                    <th className="border-b border-slate-200 px-3 py-2">員工</th>
                     <th className="border-b border-slate-200 px-3 py-2">營業額</th>
                     <th className="border-b border-slate-200 px-3 py-2">退款</th>
                     <th className="border-b border-slate-200 px-3 py-2">應收/實收現金</th>
                     <th className="border-b border-slate-200 px-3 py-2">差額</th>
                     <th className="border-b border-slate-200 px-3 py-2">待同步</th>
                     <th className="border-b border-slate-200 px-3 py-2">備註</th>
+                    <th className="border-b border-slate-200 px-3 py-2">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {shiftHistory.length === 0 ? (
+                  {filteredShiftHistory.length === 0 ? (
                     <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={7}>
-                        目前尚未有交班歷史。
+                      <td className="px-3 py-4 text-slate-500" colSpan={9}>
+                        目前沒有符合條件的交班歷史。
                       </td>
                     </tr>
                   ) : (
-                    shiftHistory.map((row) => (
+                    filteredShiftHistory.map((row) => (
                       <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
                         <td className="px-3 py-3 text-slate-700">{row.closedAt.replace("T", " ").slice(0, 16)}</td>
+                        <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
                         <td className="px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
                         <td className="px-3 py-3 text-slate-700">
                           {row.refundCount} / {formatMoney(row.refundAmount)}
@@ -352,7 +579,46 @@ export function ShiftPage() {
                         <td className="px-3 py-3 text-slate-700">
                           {row.pendingEvents} 事件 / {row.pendingPrints} 打印
                         </td>
-                        <td className="px-3 py-3 text-slate-500">{row.closingNote || "--"}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex min-w-[220px] items-center gap-2">
+                            <input
+                              className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                              onChange={(event) =>
+                                setHistoryNoteDrafts((current) => ({
+                                  ...current,
+                                  [row.id]: event.target.value,
+                                }))
+                              }
+                              placeholder="補錄備註"
+                              value={historyNoteDrafts[row.id] ?? row.closingNote ?? ""}
+                            />
+                            <button
+                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                              onClick={() => saveHistoryNote(row.id)}
+                              type="button"
+                            >
+                              保存
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                              onClick={() => reprintShiftRecord(row)}
+                              type="button"
+                            >
+                              重打交班單
+                            </button>
+                            <button
+                              className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
+                              onClick={() => deleteHistoryRecord(row.id)}
+                              type="button"
+                            >
+                              刪除
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     ))
                   )}

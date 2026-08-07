@@ -17,6 +17,68 @@ import {
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
 import { PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
+const RECEIPT_SECTION_META = [
+  { id: "store_name", label: "門店名" },
+  { id: "order_no", label: "單號" },
+  { id: "table_name", label: "類型/桌台" },
+  { id: "items", label: "菜品明細" },
+  { id: "total", label: "總計" },
+  { id: "payment_method", label: "付款方式" },
+  { id: "order_note", label: "全單備註" },
+  { id: "footer", label: "頁尾文案" },
+] as const;
+
+const LABEL_SECTION_META = [
+  { id: "header", label: "標題" },
+  { id: "item_name", label: "菜品名" },
+  { id: "temperature", label: "熱 / 冷" },
+  { id: "cup_type", label: "杯型" },
+  { id: "sugar", label: "甜度" },
+  { id: "ice", label: "冰量" },
+  { id: "sugar_tag", label: "甜度標籤" },
+  { id: "ice_tag", label: "冰量標籤" },
+  { id: "addons", label: "加料" },
+  { id: "specs", label: "規格" },
+  { id: "item_note", label: "單品備註" },
+  { id: "order_no", label: "單號" },
+  { id: "footer", label: "頁尾文案" },
+] as const;
+
+function reorderSections<T extends string>(list: T[], fromId: T, toId: T) {
+  const next = [...list];
+  const fromIndex = next.indexOf(fromId);
+  const toIndex = next.indexOf(toId);
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return next;
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+function getLabelSpecValue(specs: Array<{ groupName: string; optionLabel: string }> | undefined, keywords: string[]) {
+  const hit = (specs ?? []).find((spec) => keywords.some((keyword) => spec.groupName.includes(keyword)));
+  return hit?.optionLabel ?? "";
+}
+
+function getLabelOptionByKeywords(
+  specs: Array<{ groupName: string; optionLabel: string }> | undefined,
+  optionKeywords: string[],
+) {
+  const hit = (specs ?? []).find((spec) => optionKeywords.some((keyword) => spec.optionLabel.includes(keyword)));
+  return hit?.optionLabel ?? "";
+}
+
+function getLabelAddonValues(specs: Array<{ groupName: string; optionLabel: string }> | undefined) {
+  return (specs ?? [])
+    .filter((spec) => ["加料", "配料", "小料", "附加", "addon"].some((keyword) => spec.groupName.toLowerCase().includes(keyword.toLowerCase())))
+    .map((spec) => spec.optionLabel)
+    .filter(Boolean);
+}
+
+function getLabelTextTag(note: string | undefined, keywords: string[]) {
+  const text = note ?? "";
+  return keywords.find((keyword) => text.includes(keyword)) ?? "";
+}
+
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 }
@@ -36,6 +98,9 @@ export function PrintCenter() {
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [templatePreviewType, setTemplatePreviewType] = useState<"receipt" | "label" | null>(null);
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings() ?? defaultPosLocalSettings);
+  const [draggingReceiptSection, setDraggingReceiptSection] = useState<string | null>(null);
+  const [draggingLabelSection, setDraggingLabelSection] = useState<string | null>(null);
+  type PreviewItem = NonNullable<PrintJob["items"]>[number];
 
   useEffect(() => {
     function onOfflineModeChanged(event: Event) {
@@ -81,6 +146,21 @@ export function PrintCenter() {
     const printer = (loadDeviceConfig() ?? defaultDeviceConfig).printers.find((item) => item.enabled && item.role === "receipt");
     if (!printer || !sampleOrder) return null;
     const template = localSettings.printTemplates.receipt;
+    const sectionItems: Record<(typeof template.sectionOrder)[number], PreviewItem[]> = {
+      store_name: template.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: "澳門店 A" }] : [],
+      order_no: template.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: sampleOrder.localOrderNo }] : [],
+      table_name: template.showTableName ? [{ name: "類型", quantity: 1, specs: [], note: sampleOrder.tableName }] : [],
+      items: sampleOrder.items.map<PreviewItem>((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+        note: item.note,
+      })),
+      total: [{ name: "總計", quantity: 1, specs: [], note: `MOP ${sampleOrder.total.toFixed(0)}` }],
+      payment_method: template.showPaymentMethod ? [{ name: "付款方式", quantity: 1, specs: [], note: sampleOrder.paymentMethod ?? "現金" }] : [],
+      order_note: template.showOrderNote && sampleOrder.orderNote ? [{ name: "全單備註", quantity: 1, specs: [], note: sampleOrder.orderNote }] : [],
+      footer: template.footerText ? [{ name: "頁尾", quantity: 1, specs: [], note: template.footerText }] : [],
+    } as const;
     return {
       id: "preview-receipt",
       orderId: sampleOrder.id,
@@ -91,21 +171,7 @@ export function PrintCenter() {
       printerName: `${printer.name}${printer.paperSize ? ` · ${printer.paperSize}` : ""}`,
       status: "sent",
       createdAt: sampleOrder.updatedAt,
-      items: [
-        ...(template.showStoreName ? [{ name: "門店", quantity: 1, note: "澳門店 A" }] : []),
-        ...(template.showOrderNo ? [{ name: "單號", quantity: 1, note: sampleOrder.localOrderNo }] : []),
-        ...(template.showTableName ? [{ name: "類型", quantity: 1, note: sampleOrder.tableName }] : []),
-        ...sampleOrder.items.map((item) => ({
-          name: item.name,
-          quantity: item.quantity,
-          specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-          note: item.note,
-        })),
-        { name: "總計", quantity: 1, note: `MOP ${sampleOrder.total.toFixed(0)}` },
-        ...(template.showPaymentMethod ? [{ name: "付款方式", quantity: 1, note: sampleOrder.paymentMethod ?? "現金" }] : []),
-        ...(template.showOrderNote && sampleOrder.orderNote ? [{ name: "全單備註", quantity: 1, note: sampleOrder.orderNote }] : []),
-        ...(template.footerText ? [{ name: "頁尾", quantity: 1, note: template.footerText }] : []),
-      ],
+      items: template.sectionOrder.flatMap((section) => sectionItems[section]),
     };
   }, [localSettings.printTemplates.receipt, sampleOrder]);
   const labelPreviewJob = useMemo<PrintJob | null>(() => {
@@ -113,6 +179,41 @@ export function PrintCenter() {
     const sourceItem = sampleOrder?.items[0];
     if (!printer || !sampleOrder || !sourceItem) return null;
     const template = localSettings.printTemplates.label;
+    const temperature =
+      getLabelSpecValue(sourceItem.selectedSpecs, ["溫度", "熱冷", "冷热", "冷熱"]) ||
+      getLabelOptionByKeywords(sourceItem.selectedSpecs, ["熱", "凍", "冷"]) ||
+      getLabelTextTag(sourceItem.note, ["熱", "凍", "冷"]);
+    const cupType = getLabelSpecValue(sourceItem.selectedSpecs, ["杯", "杯型", "大小", "尺寸"]);
+    const sugar = getLabelSpecValue(sourceItem.selectedSpecs, ["甜"]);
+    const ice = getLabelSpecValue(sourceItem.selectedSpecs, ["冰"]);
+    const sugarTag =
+      getLabelOptionByKeywords(sourceItem.selectedSpecs, ["半糖", "少甜", "微糖", "走糖", "無糖"]) ||
+      getLabelTextTag(sourceItem.note, ["半糖", "少甜", "微糖", "走糖", "無糖"]);
+    const iceTag =
+      getLabelOptionByKeywords(sourceItem.selectedSpecs, ["少冰", "微冰", "走冰", "去冰"]) ||
+      getLabelTextTag(sourceItem.note, ["少冰", "微冰", "走冰", "去冰"]);
+    const addonsFromNote = ["珍珠", "椰果", "奶蓋", "布丁", "仙草", "紅豆"].filter((keyword) =>
+      (sourceItem.note ?? "").includes(keyword),
+    );
+    const addons = Array.from(new Set([...getLabelAddonValues(sourceItem.selectedSpecs), ...addonsFromNote]));
+    const sectionItems: Record<(typeof template.sectionOrder)[number], PreviewItem[]> = {
+      header: template.headerText ? [{ name: "標題", quantity: 1, specs: [], note: template.headerText }] : [],
+      item_name: [{ name: sourceItem.name, quantity: sourceItem.quantity, specs: [], note: undefined }],
+      temperature: temperature ? [{ name: "溫度", quantity: 1, specs: [], note: temperature }] : [],
+      cup_type: cupType ? [{ name: "杯型", quantity: 1, specs: [], note: cupType }] : [],
+      sugar: sugar ? [{ name: "甜度", quantity: 1, specs: [], note: sugar }] : [],
+      ice: ice ? [{ name: "冰量", quantity: 1, specs: [], note: ice }] : [],
+      sugar_tag: sugarTag ? [{ name: "甜度標籤", quantity: 1, specs: [], note: sugarTag }] : [],
+      ice_tag: iceTag ? [{ name: "冰量標籤", quantity: 1, specs: [], note: iceTag }] : [],
+      addons: addons.length ? [{ name: "加料", quantity: 1, specs: [], note: addons.join(" / ") }] : [],
+      specs:
+        template.showSpecs && (sourceItem.selectedSpecs ?? []).length
+          ? [{ name: "規格", quantity: 1, specs: [], note: (sourceItem.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ") }]
+          : [],
+      item_note: template.showItemNote && sourceItem.note ? [{ name: "備註", quantity: 1, specs: [], note: sourceItem.note }] : [],
+      order_no: template.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: sampleOrder.localOrderNo }] : [],
+      footer: template.footerText ? [{ name: "頁尾", quantity: 1, specs: [], note: template.footerText }] : [],
+    } as const;
     return {
       id: "preview-label",
       orderId: sampleOrder.id,
@@ -123,25 +224,14 @@ export function PrintCenter() {
       printerName: `${printer.name}${printer.paperSize ? ` · ${printer.paperSize}` : ""}`,
       status: "sent",
       createdAt: sampleOrder.updatedAt,
-      items: [
-        ...(template.headerText ? [{ name: "標題", quantity: 1, note: template.headerText }] : []),
-        {
-          name: sourceItem.name,
-          quantity: sourceItem.quantity,
-          specs: template.showSpecs
-            ? (sourceItem.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`)
-            : [],
-          note: [
-            template.showItemNote ? sourceItem.note : "",
-            template.showOrderNo ? `單號 ${sampleOrder.localOrderNo}` : "",
-            template.footerText || "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        },
-      ],
+      items: template.sectionOrder.flatMap((section) => sectionItems[section]),
     };
   }, [localSettings.printTemplates.label, sampleOrder]);
+
+  function updateLocalTemplate(nextSettings: typeof localSettings) {
+    setLocalSettings(nextSettings);
+    savePosLocalSettings(nextSettings);
+  }
 
   function persistPrintJobs(next: PrintJob[]) {
     setPrintJobs(next);
@@ -316,12 +406,46 @@ export function PrintCenter() {
                           receipt: { ...localSettings.printTemplates.receipt, footerText: event.target.value },
                         },
                       };
-                      setLocalSettings(next);
-                      savePosLocalSettings(next);
+                      updateLocalTemplate(next);
                     }}
                     placeholder="收據頁尾文案"
                     value={localSettings.printTemplates.receipt.footerText}
                   />
+                  <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
+                    <div className="text-xs font-semibold text-slate-500">拖拽排序</div>
+                    <div className="mt-2 grid gap-2">
+                      {localSettings.printTemplates.receipt.sectionOrder.map((section) => (
+                        <div
+                          key={section}
+                          className="cursor-move rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                          draggable
+                          onDragOver={(event) => event.preventDefault()}
+                          onDragStart={() => setDraggingReceiptSection(section)}
+                          onDrop={() => {
+                            if (!draggingReceiptSection) return;
+                            const next = {
+                              ...localSettings,
+                              printTemplates: {
+                                ...localSettings.printTemplates,
+                                receipt: {
+                                  ...localSettings.printTemplates.receipt,
+                                  sectionOrder: reorderSections(
+                                    localSettings.printTemplates.receipt.sectionOrder,
+                                    draggingReceiptSection as (typeof localSettings.printTemplates.receipt.sectionOrder)[number],
+                                    section,
+                                  ),
+                                },
+                              },
+                            };
+                            updateLocalTemplate(next);
+                            setDraggingReceiptSection(null);
+                          }}
+                        >
+                          {RECEIPT_SECTION_META.find((item) => item.id === section)?.label ?? section}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </article>
               <article className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -389,12 +513,46 @@ export function PrintCenter() {
                           label: { ...localSettings.printTemplates.label, headerText: event.target.value },
                         },
                       };
-                      setLocalSettings(next);
-                      savePosLocalSettings(next);
+                      updateLocalTemplate(next);
                     }}
                     placeholder="標籤標題"
                     value={localSettings.printTemplates.label.headerText}
                   />
+                  <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
+                    <div className="text-xs font-semibold text-slate-500">拖拽排序</div>
+                    <div className="mt-2 grid gap-2">
+                      {localSettings.printTemplates.label.sectionOrder.map((section) => (
+                        <div
+                          key={section}
+                          className="cursor-move rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                          draggable
+                          onDragOver={(event) => event.preventDefault()}
+                          onDragStart={() => setDraggingLabelSection(section)}
+                          onDrop={() => {
+                            if (!draggingLabelSection) return;
+                            const next = {
+                              ...localSettings,
+                              printTemplates: {
+                                ...localSettings.printTemplates,
+                                label: {
+                                  ...localSettings.printTemplates.label,
+                                  sectionOrder: reorderSections(
+                                    localSettings.printTemplates.label.sectionOrder,
+                                    draggingLabelSection as (typeof localSettings.printTemplates.label.sectionOrder)[number],
+                                    section,
+                                  ),
+                                },
+                              },
+                            };
+                            updateLocalTemplate(next);
+                            setDraggingLabelSection(null);
+                          }}
+                        >
+                          {LABEL_SECTION_META.find((item) => item.id === section)?.label ?? section}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </article>
             </div>

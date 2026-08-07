@@ -76,6 +76,14 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
 }
 
 export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
+  const receiptDefaultOrder = defaultPosLocalSettings.printTemplates.receipt.sectionOrder;
+  const labelDefaultOrder = defaultPosLocalSettings.printTemplates.label.sectionOrder;
+  const receiptStoredOrder = Array.isArray(settings?.printTemplates?.receipt?.sectionOrder)
+    ? settings?.printTemplates?.receipt?.sectionOrder
+    : [];
+  const labelStoredOrder = Array.isArray(settings?.printTemplates?.label?.sectionOrder)
+    ? settings?.printTemplates?.label?.sectionOrder
+    : [];
   return {
     floors: Array.isArray(settings?.floors) ? settings.floors : defaultPosLocalSettings.floors,
     paymentMethods: Array.isArray(settings?.paymentMethods)
@@ -91,10 +99,16 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       receipt: {
         ...defaultPosLocalSettings.printTemplates.receipt,
         ...(settings?.printTemplates?.receipt ?? {}),
+        sectionOrder: Array.from(new Set([...receiptStoredOrder, ...receiptDefaultOrder])).filter((item) =>
+          receiptDefaultOrder.includes(item as (typeof receiptDefaultOrder)[number]),
+        ) as typeof receiptDefaultOrder,
       },
       label: {
         ...defaultPosLocalSettings.printTemplates.label,
         ...(settings?.printTemplates?.label ?? {}),
+        sectionOrder: Array.from(new Set([...labelStoredOrder, ...labelDefaultOrder])).filter((item) =>
+          labelDefaultOrder.includes(item as (typeof labelDefaultOrder)[number]),
+        ) as typeof labelDefaultOrder,
       },
     },
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
@@ -194,11 +208,33 @@ export function saveOfflineMode(enabled: boolean) {
 
 export type AuthSession = {
   account: string;
+  name: string;
+  role: "manager" | "cashier";
+  permissions: {
+    refundOrder: boolean;
+    voidItem: boolean;
+  };
   loggedInAt: string;
 };
 
+function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
+  if (!session?.account) return null;
+  const role = session.role ?? (session.account === "63936541" ? "manager" : "cashier");
+  return {
+    account: session.account,
+    name: session.name ?? (role === "manager" ? "店長" : "收銀員"),
+    role,
+    permissions:
+      session.permissions ??
+      (role === "manager"
+        ? { refundOrder: true, voidItem: true }
+        : { refundOrder: false, voidItem: false }),
+    loggedInAt: session.loggedInAt ?? new Date().toISOString(),
+  };
+}
+
 export function loadAuthSession(): AuthSession | null {
-  return readJson<AuthSession | null>(KEYS.authSession, null);
+  return normalizeAuthSession(readJson<Partial<AuthSession> | null>(KEYS.authSession, null));
 }
 
 export function saveAuthSession(session: AuthSession) {
@@ -242,6 +278,8 @@ export type ShiftState = {
 
 export type ShiftHistoryRecord = {
   id: string;
+  employeeAccount?: string;
+  employeeName?: string;
   openedAt?: string;
   closedAt: string;
   openingNote?: string;

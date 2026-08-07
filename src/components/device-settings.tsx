@@ -391,8 +391,8 @@ export function DeviceSettings() {
         </div>
 
         {activeTab === "device" ? (
-          <div className="grid gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="grid min-w-0 gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
+            <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">
                 <label className="grid gap-1 text-sm font-semibold text-slate-700">
@@ -439,7 +439,7 @@ export function DeviceSettings() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-base font-semibold text-slate-900">打印機綁定</div>
@@ -536,14 +536,14 @@ export function DeviceSettings() {
                 </div>
               </div>
 
-              <div className="mt-4 max-h-[68vh] overflow-auto pr-1">
+              <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100vh-360px)]">
                 <div className="grid gap-3">
                   {config.printers.map((printer) => (
-                    <article key={printer.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <article key={printer.id} className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-900">{printer.name}</div>
-                          <div className="mt-1 text-xs text-slate-500">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-900">{printer.name}</div>
+                          <div className="mt-1 break-words text-xs text-slate-500">
                             {printer.role === "receipt"
                               ? "收據"
                               : printer.role === "label"
@@ -552,7 +552,7 @@ export function DeviceSettings() {
                             · {printer.connectionType.toUpperCase()}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex shrink-0 flex-wrap items-center gap-2">
                           <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
                             <input
                               checked={printer.enabled}
@@ -571,7 +571,7 @@ export function DeviceSettings() {
                         </div>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">打印機名稱</span>
                           <input
@@ -658,7 +658,7 @@ export function DeviceSettings() {
                             value={printer.ipAddress ?? ""}
                           />
                         </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2">
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-3">
                           <span className="text-xs text-slate-500">USB 標籤 / 系統映射</span>
                           <input
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
@@ -668,7 +668,7 @@ export function DeviceSettings() {
                         </label>
                       </div>
 
-                      <div className="mt-4 flex justify-end">
+                      <div className="mt-4 flex flex-wrap justify-end gap-2">
                         <button
                           className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                           onClick={() => testPrint(printer)}

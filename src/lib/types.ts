@@ -114,6 +114,9 @@ export interface PosLocalSettings {
   }>;
   printTemplates: {
     receipt: {
+      sectionOrder: Array<
+        "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer"
+      >;
       showStoreName: boolean;
       showOrderNo: boolean;
       showTableName: boolean;
@@ -122,6 +125,21 @@ export interface PosLocalSettings {
       footerText: string;
     };
     label: {
+      sectionOrder: Array<
+        | "header"
+        | "item_name"
+        | "temperature"
+        | "cup_type"
+        | "sugar"
+        | "ice"
+        | "sugar_tag"
+        | "ice_tag"
+        | "addons"
+        | "specs"
+        | "item_note"
+        | "order_no"
+        | "footer"
+      >;
       showOrderNo: boolean;
       showSpecs: boolean;
       showItemNote: boolean;
@@ -200,6 +218,8 @@ export interface PosOrder {
     id: string;
     amount: number;
     reason: string;
+    employeeAccount?: string;
+    employeeName?: string;
     items?: Array<{
       itemKey: string;
       name: string;

@@ -10,6 +10,7 @@ import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
   loadDeviceConfig,
+  loadAuthSession,
   loadMembers,
   loadOfflineMode,
   loadOperatingMode,
@@ -136,6 +137,10 @@ export function PosApp() {
   const [partialRefundOrderId, setPartialRefundOrderId] = useState<string | null>(null);
   const [partialRefundReason, setPartialRefundReason] = useState("");
   const [partialRefundQuantities, setPartialRefundQuantities] = useState<Record<string, number>>({});
+  const [refundSummaryExportOpen, setRefundSummaryExportOpen] = useState(false);
+  const [refundSummaryMode, setRefundSummaryMode] = useState<"date" | "employee">("date");
+  const [refundSummaryDateFrom, setRefundSummaryDateFrom] = useState("");
+  const [refundSummaryDateTo, setRefundSummaryDateTo] = useState("");
   const [membersCache, setMembersCache] = useState<MemberProfile[]>(() => loadMembers());
   const [memberPhone, setMemberPhone] = useState("");
   const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
@@ -148,6 +153,7 @@ export function PosApp() {
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
+  const [authSession] = useState(() => loadAuthSession());
   const [orderNote, setOrderNote] = useState("");
   const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
@@ -177,6 +183,95 @@ export function PosApp() {
 
   const networkOnline = !offlineMode;
   const isQuickMode = operatingMode === "quick";
+  const canRefundOrder = authSession?.permissions.refundOrder ?? true;
+  const canVoidItem = authSession?.permissions.voidItem ?? true;
+
+  function showPermissionDenied(actionLabel: string) {
+    setToast({ tone: "info", message: `目前帳號沒有${actionLabel}權限，請使用店長帳號操作。` });
+  }
+
+  function exportRefundDetails(order: PosOrder) {
+    if (!order.refundRecords?.length || typeof window === "undefined") return;
+    const rows = [
+      ["訂單號", "退款時間", "退款金額", "退款原因", "菜品", "數量", "項目金額"].join(","),
+      ...order.refundRecords.flatMap((record) => {
+        if (!record.items?.length) {
+          return [[order.localOrderNo, record.createdAt, String(record.amount), record.reason, "", "", ""].map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")];
+        }
+        return record.items.map((item) =>
+          [order.localOrderNo, record.createdAt, String(record.amount), record.reason, item.name, String(item.quantity), String(item.amount)]
+            .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+            .join(","),
+        );
+      }),
+    ];
+    const blob = new Blob([`\uFEFF${rows.join("\n")}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${order.localOrderNo}-退款明細.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setToast({ tone: "success", message: `${order.localOrderNo} 退款明細已導出。` });
+  }
+
+  function exportRefundSummary() {
+    const refundRows = orders.flatMap((order) =>
+      (order.refundRecords ?? []).map((record) => ({
+        orderNo: order.localOrderNo,
+        createdAt: record.createdAt,
+        date: record.createdAt.slice(0, 10),
+        employee: record.employeeName ?? record.employeeAccount ?? "未記錄",
+        amount: record.amount,
+      })),
+    );
+    const filtered = refundRows.filter((row) => {
+      if (refundSummaryDateFrom && row.date < refundSummaryDateFrom) return false;
+      if (refundSummaryDateTo && row.date > refundSummaryDateTo) return false;
+      return true;
+    });
+    if (filtered.length === 0 || typeof window === "undefined") {
+      setToast({ tone: "info", message: "目前沒有符合條件的退款資料可導出。" });
+      return;
+    }
+    const grouped = Array.from(
+      filtered.reduce(
+        (map, row) => {
+          const key = refundSummaryMode === "date" ? row.date : row.employee;
+          const current = map.get(key) ?? { key, count: 0, amount: 0, orders: new Set<string>() };
+          current.count += 1;
+          current.amount += row.amount;
+          current.orders.add(row.orderNo);
+          map.set(key, current);
+          return map;
+        },
+        new Map<string, { key: string; count: number; amount: number; orders: Set<string> }>(),
+      ).values(),
+    );
+    const rows = [
+      [refundSummaryMode === "date" ? "日期" : "員工", "退款次數", "退款總額", "涉及訂單數", "訂單"].join(","),
+      ...grouped.map((row) =>
+        [
+          row.key,
+          String(row.count),
+          String(row.amount),
+          String(row.orders.size),
+          Array.from(row.orders).join(" / "),
+        ]
+          .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+          .join(","),
+      ),
+    ];
+    const blob = new Blob([`\uFEFF${rows.join("\n")}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `退款匯總-${refundSummaryMode === "date" ? "按日期" : "按員工"}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setRefundSummaryExportOpen(false);
+    setToast({ tone: "success", message: "退款匯總已導出。" });
+  }
 
   function updateOfflineMode(next: boolean) {
     setOfflineMode(next);
@@ -1044,6 +1139,10 @@ export function PosApp() {
   }
 
   function voidOrderedItem(target: OrderItem, mode: "one" | "all", reason: string) {
+    if (!canVoidItem) {
+      showPermissionDenied("退菜");
+      return;
+    }
     if (!bootstrap || !activeOrder || activeOrder.status !== "sent_to_kitchen") return;
 
     const key = itemIdentity(target);
@@ -1522,6 +1621,10 @@ export function PosApp() {
   }
 
   function refundOrder(orderId: string, reason: string) {
+    if (!canRefundOrder) {
+      showPermissionDenied("退款");
+      return;
+    }
     const targetOrder = orders.find((order) => order.id === orderId);
     if (!targetOrder || !bootstrap) return;
     const updatedAt = new Date().toISOString();
@@ -1539,6 +1642,8 @@ export function PosApp() {
           id: uid("refund"),
           amount: remainingAmount,
           reason: reason || "未填寫原因",
+          employeeAccount: authSession?.account,
+          employeeName: authSession?.name,
           createdAt: updatedAt,
         },
       ],
@@ -1583,6 +1688,10 @@ export function PosApp() {
   }
 
   function partialRefundOrder(orderId: string, reason: string, quantities: Record<string, number>) {
+    if (!canRefundOrder) {
+      showPermissionDenied("退款");
+      return;
+    }
     const targetOrder = orders.find((order) => order.id === orderId);
     if (!targetOrder || !bootstrap) return;
     const refundedMap = refundedItemQtyMap(targetOrder);
@@ -1631,6 +1740,8 @@ export function PosApp() {
           id: uid("refund"),
           amount: refundAmount,
           reason: reason || "未填寫原因",
+          employeeAccount: authSession?.account,
+          employeeName: authSession?.name,
           items: refundItems,
           createdAt: updatedAt,
         },
@@ -1683,58 +1794,38 @@ export function PosApp() {
 
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
+    const localPrintSettings = loadPosLocalSettings().printTemplates.receipt;
+    type ReceiptItem = NonNullable<PrintJob["items"]>[number];
     const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
       (printer) => printer.enabled && printer.role === "receipt",
     );
     if (receiptPrinters.length === 0) return;
 
     const timestamp = new Date().toISOString();
-    const receiptItems: NonNullable<PrintJob["items"]> = [
-      {
-        name: "單號",
-        quantity: 1,
-        specs: [],
-        note: order.localOrderNo,
-      },
-      {
-        name: "類型",
-        quantity: 1,
-        specs: [],
-        note: order.tableName,
-      },
-      ...order.items.map((item) => ({
+    const receiptSections: Record<(typeof localPrintSettings.sectionOrder)[number], ReceiptItem[]> = {
+      store_name: localPrintSettings.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: bootstrap.storeName }] : [],
+      order_no: localPrintSettings.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: order.localOrderNo }] : [],
+      table_name: localPrintSettings.showTableName ? [{ name: "類型", quantity: 1, specs: [], note: order.tableName }] : [],
+      items: order.items.map<ReceiptItem>((item) => ({
         name: item.name,
         quantity: item.quantity,
         specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
         note: item.note,
       })),
-      ...(order.orderNote
-        ? [
-            {
-              name: "全單備註",
-              quantity: 1,
-              specs: [],
-              note: order.orderNote,
-            },
-          ]
-        : []),
-      {
-        name: "總計",
-        quantity: 1,
-        specs: [],
-        note: formatMoney(order.total, bootstrap.currency),
-      },
-      ...(order.paymentMethod
-        ? [
-            {
-              name: "付款方式",
-              quantity: 1,
-              specs: [],
-              note: String(order.paymentMethod),
-            },
-          ]
-        : []),
-    ];
+      total: [{ name: "總計", quantity: 1, specs: [], note: formatMoney(order.total, bootstrap.currency) }],
+      payment_method:
+        localPrintSettings.showPaymentMethod && order.paymentMethod
+          ? [{ name: "付款方式", quantity: 1, specs: [], note: String(order.paymentMethod) }]
+          : [],
+      order_note:
+        localPrintSettings.showOrderNote && order.orderNote
+          ? [{ name: "全單備註", quantity: 1, specs: [], note: order.orderNote }]
+          : [],
+      footer: localPrintSettings.footerText ? [{ name: "頁尾", quantity: 1, specs: [], note: localPrintSettings.footerText }] : [],
+    } as const;
+    const receiptItems: NonNullable<PrintJob["items"]> = localPrintSettings.sectionOrder.flatMap(
+      (section) => receiptSections[section],
+    );
 
     const nextPrintJobs = receiptPrinters.map<PrintJob>((printer) => ({
       id: uid("print"),
@@ -3076,6 +3167,58 @@ export function PosApp() {
                   </span>
                 </div>
               ) : null}
+              {viewingOrder.refundRecords?.length ? (
+                <div className="mt-4 rounded-2xl border border-red-100 bg-red-50/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">退款明細</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() => exportRefundDetails(viewingOrder)}
+                        type="button"
+                      >
+                        導出明細
+                      </button>
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() => setRefundSummaryExportOpen(true)}
+                        type="button"
+                      >
+                        匯總導出
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3">
+                    {viewingOrder.refundRecords
+                      .slice()
+                      .reverse()
+                      .map((record) => (
+                        <div key={record.id} className="rounded-2xl border border-red-100 bg-white p-3">
+                          <div className="flex items-center justify-between gap-3 text-sm">
+                            <span className="font-semibold text-slate-900">{record.createdAt.replace("T", " ").slice(0, 16)}</span>
+                            <span className="font-semibold text-red-700">
+                              {formatMoney(record.amount, bootstrap.currency)}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">原因：{record.reason}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            操作人：{record.employeeName ?? record.employeeAccount ?? "未記錄"}
+                          </div>
+                          {record.items?.length ? (
+                            <div className="mt-2 grid gap-1">
+                              {record.items.map((item) => (
+                                <div key={`${record.id}-${item.itemKey}`} className="flex items-center justify-between text-xs text-slate-600">
+                                  <span>{item.name} × {item.quantity}</span>
+                                  <span>{formatMoney(item.amount, bootstrap.currency)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
@@ -3107,8 +3250,13 @@ export function PosApp() {
               {(viewingOrder.status === "settled" || viewingOrder.status === "partially_refunded") ? (
                 <>
                   <button
-                    className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white"
+                    className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={!canRefundOrder}
                     onClick={() => {
+                      if (!canRefundOrder) {
+                        showPermissionDenied("退款");
+                        return;
+                      }
                       setPartialRefundOrderId(viewingOrder.id);
                       setPartialRefundReason("");
                       setPartialRefundQuantities({});
@@ -3118,8 +3266,13 @@ export function PosApp() {
                     部分退款
                   </button>
                   <button
-                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={!canRefundOrder}
                     onClick={() => {
+                      if (!canRefundOrder) {
+                        showPermissionDenied("退款");
+                        return;
+                      }
                       setOrderActionRequest({ type: "refund_order", orderId: viewingOrder.id });
                       setOrderActionReason("");
                     }}
@@ -3472,15 +3625,29 @@ export function PosApp() {
                 修改規格
               </button>
               <button
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300"
-                onClick={() => setVoidRequest({ item: actionItem, mode: "one" })}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300 disabled:opacity-50"
+                disabled={!canVoidItem}
+                onClick={() => {
+                  if (!canVoidItem) {
+                    showPermissionDenied("退菜");
+                    return;
+                  }
+                  setVoidRequest({ item: actionItem, mode: "one" });
+                }}
                 type="button"
               >
                 退 1 份
               </button>
               <button
-                className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-700 hover:bg-red-100"
-                onClick={() => setVoidRequest({ item: actionItem, mode: "all" })}
+                className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                disabled={!canVoidItem}
+                onClick={() => {
+                  if (!canVoidItem) {
+                    showPermissionDenied("退菜");
+                    return;
+                  }
+                  setVoidRequest({ item: actionItem, mode: "all" });
+                }}
                 type="button"
               >
                 全部退菜
@@ -3529,6 +3696,62 @@ export function PosApp() {
                 type="button"
               >
                 {orderActionRequest.type === "refund_order" ? "確認退款" : "確認取消"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {refundSummaryExportOpen ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-slate-900">退款匯總導出</div>
+            <div className="mt-1 text-sm text-slate-500">可按日期或按員工，把目前訂單中的退款記錄匯總導出成 CSV。</div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">匯總方式</span>
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setRefundSummaryMode(event.target.value as "date" | "employee")}
+                  value={refundSummaryMode}
+                >
+                  <option value="date">按日期</option>
+                  <option value="employee">按員工</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">開始日期</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setRefundSummaryDateFrom(event.target.value)}
+                  type="date"
+                  value={refundSummaryDateFrom}
+                />
+              </label>
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">結束日期</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setRefundSummaryDateTo(event.target.value)}
+                  type="date"
+                  value={refundSummaryDateTo}
+                />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setRefundSummaryExportOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={exportRefundSummary}
+                type="button"
+              >
+                導出 CSV
               </button>
             </div>
           </div>

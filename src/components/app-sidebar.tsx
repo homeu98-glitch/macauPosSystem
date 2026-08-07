@@ -21,6 +21,7 @@ export function AppSidebar() {
   const router = useRouter();
   const [offlineMode, setOfflineMode] = useState(() => loadOfflineMode());
   const [loggedIn, setLoggedIn] = useState(() => Boolean(loadAuthSession()));
+  const [session] = useState(() => loadAuthSession());
 
   useEffect(() => {
     function onOfflineModeChanged(event: Event) {
@@ -60,6 +61,12 @@ export function AppSidebar() {
       </div>
 
       <div className="grid gap-2">
+        {session ? (
+          <div className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-[11px] font-semibold text-slate-200">
+            <div>{session.name}</div>
+            <div className="mt-1 text-slate-400">{session.role === "manager" ? "店長" : "收銀"}</div>
+          </div>
+        ) : null}
         <button
           className={`rounded-2xl px-2 py-2 text-xs font-semibold transition ${
             offlineMode ? "bg-amber-500 text-white" : "bg-emerald-600 text-white"

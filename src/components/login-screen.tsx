@@ -34,12 +34,27 @@ export function LoginScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account: normalizedAccount, pin: normalizedPin }),
       });
-      const payload = (await response.json()) as { ok: boolean; error?: string };
+      const payload = (await response.json()) as {
+        ok: boolean;
+        error?: string;
+        session?: {
+          account: string;
+          name: string;
+          role: "manager" | "cashier";
+          permissions: {
+            refundOrder: boolean;
+            voidItem: boolean;
+          };
+        };
+      };
       if (!payload.ok) {
         throw new Error(payload.error ?? "登入失敗");
       }
 
-      saveAuthSession({ account: normalizedAccount, loggedInAt: new Date().toISOString() });
+      if (!payload.session) {
+        throw new Error("登入資料不完整");
+      }
+      saveAuthSession({ ...payload.session, loggedInAt: new Date().toISOString() });
       saveOperatingMode(mode === "quick" ? "quick" : "dinein");
       router.replace("/");
     } catch (err) {
@@ -135,7 +150,7 @@ export function LoginScreen() {
           </button>
 
           <div className="mt-4 text-center text-xs text-white/40">
-            測試帳號：63936541 · PIN：1234
+            店長：63936541 / 1234　　收銀：63936542 / 1234
           </div>
         </div>
       </div>

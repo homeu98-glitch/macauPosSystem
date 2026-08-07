@@ -234,6 +234,7 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   ],
   printTemplates: {
     receipt: {
+      sectionOrder: ["store_name", "order_no", "table_name", "items", "total", "payment_method", "order_note", "footer"],
       showStoreName: true,
       showOrderNo: true,
       showTableName: true,
@@ -242,6 +243,21 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       footerText: "多謝惠顧，歡迎再次光臨",
     },
     label: {
+      sectionOrder: [
+        "header",
+        "item_name",
+        "temperature",
+        "cup_type",
+        "sugar",
+        "ice",
+        "sugar_tag",
+        "ice_tag",
+        "addons",
+        "specs",
+        "item_note",
+        "order_no",
+        "footer",
+      ],
       showOrderNo: true,
       showSpecs: true,
       showItemNote: true,
