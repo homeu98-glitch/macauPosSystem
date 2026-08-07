@@ -349,23 +349,24 @@ export function DeviceSettings() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[88px]">
-          <div>
-            <div className="text-lg font-semibold text-slate-900">設置</div>
-            <div className="mt-1 text-sm text-slate-500">
-              打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。
+      <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
+        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[88px]">
+            <div>
+              <div className="text-lg font-semibold text-slate-900">設置</div>
+              <div className="mt-1 text-sm text-slate-500">
+                打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。
+              </div>
             </div>
+            <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
+              返回收銀台
+            </Link>
           </div>
-          <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
-            返回收銀台
-          </Link>
         </div>
-      </div>
 
-      <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[88px]">
+        <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[88px]">
         <div className="mb-3 flex flex-wrap gap-2">
           {[
             ["device", "打印機"],
@@ -442,7 +443,7 @@ export function DeviceSettings() {
               </div>
             </section>
 
-            <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col">
+            <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-base font-semibold text-slate-900">打印機綁定</div>
@@ -564,7 +565,7 @@ export function DeviceSettings() {
               ) : null}
 
               {devicePrinterTab === "printers" ? (
-              <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100vh-420px)]">
+              <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100dvh-420px)]">
                 <div className="grid gap-3">
                   {config.printers.map((printer) => (
                     <article key={printer.id} className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -744,7 +745,7 @@ export function DeviceSettings() {
 
         {activeTab === "notes" ? (
           <div className="grid gap-3 lg:grid-cols-[520px_minmax(0,1fr)]">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
               <div className="text-base font-semibold text-slate-900">常用備註</div>
               <div className="mt-1 text-sm text-slate-500">
                 這裡設定的備註是全局共用：可用於單品備註、也可用於全單備註。
@@ -933,7 +934,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "menu-print" ? (
-          <section className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
+          <section className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">菜品打印設置</div>
@@ -1151,7 +1152,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "menu" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">菜單</div>
@@ -1507,7 +1508,7 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "tables" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">樓層與桌台</div>
@@ -1609,7 +1610,7 @@ export function DeviceSettings() {
 
 
         {activeTab === "payments" ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100vh-150px)] flex flex-col overflow-hidden">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">支付方式</div>
@@ -1702,7 +1703,7 @@ export function DeviceSettings() {
 
         {specEditor.open ? (
           <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-            <div className="flex w-full max-w-4xl max-h-[calc(100vh-32px)] flex-col rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex w-full max-w-4xl max-h-[calc(100dvh-32px)] flex-col rounded-3xl bg-white p-5 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-lg font-semibold text-slate-900">
@@ -2076,6 +2077,7 @@ export function DeviceSettings() {
             </div>
           </div>
         ) : null}
+        </div>
       </div>
     </div>
   );
