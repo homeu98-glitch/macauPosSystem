@@ -864,6 +864,39 @@ export function DeviceSettings() {
                   </button>
                 </div>
 
+                <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-900">全部退菜後的整單狀態</div>
+                  <div className="mt-1 text-xs text-slate-500">可設定全部退菜後，未結帳整單是標成已取消還是已退完。</div>
+                  <div className="mt-3 grid gap-2">
+                    <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900">
+                      <input
+                        checked={localSettings.fullVoidBehavior === "cancelled"}
+                        onChange={() =>
+                          setLocalSettings((current) => ({
+                            ...current,
+                            fullVoidBehavior: "cancelled",
+                          }))
+                        }
+                        type="radio"
+                      />
+                      <span>已取消</span>
+                    </label>
+                    <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900">
+                      <input
+                        checked={localSettings.fullVoidBehavior === "refunded"}
+                        onChange={() =>
+                          setLocalSettings((current) => ({
+                            ...current,
+                            fullVoidBehavior: "refunded",
+                          }))
+                        }
+                        type="radio"
+                      />
+                      <span>已退完</span>
+                    </label>
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
                     className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"

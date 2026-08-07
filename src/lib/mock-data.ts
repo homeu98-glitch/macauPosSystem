@@ -234,10 +234,22 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   ],
   printTemplates: {
     receipt: {
+      showRuler: true,
+      snapToGrid: true,
       canvas: {
         width: 280,
         height: 560,
         zoom: 1,
+      },
+      sectionStyles: {
+        store_name: { fontSize: 16, fontWeight: 700, textAlign: "center", padding: 4 },
+        order_no: { fontSize: 12, fontWeight: 600, textAlign: "left", padding: 4 },
+        table_name: { fontSize: 12, fontWeight: 500, textAlign: "left", padding: 4 },
+        items: { fontSize: 11, fontWeight: 500, textAlign: "left", padding: 4 },
+        total: { fontSize: 14, fontWeight: 700, textAlign: "right", padding: 4 },
+        payment_method: { fontSize: 11, fontWeight: 500, textAlign: "left", padding: 4 },
+        order_note: { fontSize: 11, fontWeight: 500, textAlign: "left", padding: 4 },
+        footer: { fontSize: 10, fontWeight: 500, textAlign: "center", padding: 4 },
       },
       sectionLayouts: {
         store_name: { x: 12, y: 16, width: 256, height: 40 },
@@ -258,10 +270,27 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       footerText: "多謝惠顧，歡迎再次光臨",
     },
     label: {
+      showRuler: true,
+      snapToGrid: true,
       canvas: {
         width: 360,
         height: 260,
         zoom: 1,
+      },
+      sectionStyles: {
+        header: { fontSize: 14, fontWeight: 700, textAlign: "center", padding: 4 },
+        item_name: { fontSize: 16, fontWeight: 700, textAlign: "left", padding: 4 },
+        temperature: { fontSize: 12, fontWeight: 600, textAlign: "center", padding: 4 },
+        cup_type: { fontSize: 12, fontWeight: 600, textAlign: "center", padding: 4 },
+        sugar: { fontSize: 12, fontWeight: 600, textAlign: "center", padding: 4 },
+        ice: { fontSize: 12, fontWeight: 600, textAlign: "center", padding: 4 },
+        sugar_tag: { fontSize: 11, fontWeight: 600, textAlign: "center", padding: 4 },
+        ice_tag: { fontSize: 11, fontWeight: 600, textAlign: "center", padding: 4 },
+        addons: { fontSize: 11, fontWeight: 500, textAlign: "left", padding: 4 },
+        specs: { fontSize: 10, fontWeight: 500, textAlign: "left", padding: 4 },
+        item_note: { fontSize: 10, fontWeight: 500, textAlign: "left", padding: 4 },
+        order_no: { fontSize: 10, fontWeight: 600, textAlign: "center", padding: 4 },
+        footer: { fontSize: 10, fontWeight: 500, textAlign: "center", padding: 4 },
       },
       sectionLayouts: {
         header: { x: 12, y: 12, width: 336, height: 28 },
@@ -302,6 +331,7 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   },
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
+  fullVoidBehavior: "cancelled",
   onlineOrderSettings: {
     autoAccept: false,
   },

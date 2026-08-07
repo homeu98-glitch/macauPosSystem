@@ -80,6 +80,8 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
   const labelDefaultOrder = defaultPosLocalSettings.printTemplates.label.sectionOrder;
   const receiptDefaultLayouts = defaultPosLocalSettings.printTemplates.receipt.sectionLayouts;
   const labelDefaultLayouts = defaultPosLocalSettings.printTemplates.label.sectionLayouts;
+  const receiptDefaultStyles = defaultPosLocalSettings.printTemplates.receipt.sectionStyles;
+  const labelDefaultStyles = defaultPosLocalSettings.printTemplates.label.sectionStyles;
   const receiptStoredOrder = Array.isArray(settings?.printTemplates?.receipt?.sectionOrder)
     ? settings?.printTemplates?.receipt?.sectionOrder
     : [];
@@ -101,9 +103,17 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       receipt: {
         ...defaultPosLocalSettings.printTemplates.receipt,
         ...(settings?.printTemplates?.receipt ?? {}),
+        showRuler:
+          settings?.printTemplates?.receipt?.showRuler ?? defaultPosLocalSettings.printTemplates.receipt.showRuler,
+        snapToGrid:
+          settings?.printTemplates?.receipt?.snapToGrid ?? defaultPosLocalSettings.printTemplates.receipt.snapToGrid,
         canvas: {
           ...defaultPosLocalSettings.printTemplates.receipt.canvas,
           ...(settings?.printTemplates?.receipt?.canvas ?? {}),
+        },
+        sectionStyles: {
+          ...receiptDefaultStyles,
+          ...(settings?.printTemplates?.receipt?.sectionStyles ?? {}),
         },
         sectionLayouts: {
           ...receiptDefaultLayouts,
@@ -116,9 +126,16 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       label: {
         ...defaultPosLocalSettings.printTemplates.label,
         ...(settings?.printTemplates?.label ?? {}),
+        showRuler: settings?.printTemplates?.label?.showRuler ?? defaultPosLocalSettings.printTemplates.label.showRuler,
+        snapToGrid:
+          settings?.printTemplates?.label?.snapToGrid ?? defaultPosLocalSettings.printTemplates.label.snapToGrid,
         canvas: {
           ...defaultPosLocalSettings.printTemplates.label.canvas,
           ...(settings?.printTemplates?.label?.canvas ?? {}),
+        },
+        sectionStyles: {
+          ...labelDefaultStyles,
+          ...(settings?.printTemplates?.label?.sectionStyles ?? {}),
         },
         sectionLayouts: {
           ...labelDefaultLayouts,
@@ -133,6 +150,7 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
       ? settings?.cancelNotePresets
       : defaultPosLocalSettings.cancelNotePresets,
+    fullVoidBehavior: settings?.fullVoidBehavior ?? defaultPosLocalSettings.fullVoidBehavior,
     onlineOrderSettings: {
       autoAccept: Boolean(
         settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,

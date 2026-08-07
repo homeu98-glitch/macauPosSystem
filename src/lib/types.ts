@@ -114,11 +114,22 @@ export interface PosLocalSettings {
   }>;
   printTemplates: {
     receipt: {
+      showRuler: boolean;
+      snapToGrid: boolean;
       canvas: {
         width: number;
         height: number;
         zoom: number;
       };
+      sectionStyles: Record<
+        "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer",
+        {
+          fontSize: number;
+          fontWeight: 400 | 500 | 600 | 700;
+          textAlign: "left" | "center" | "right";
+          padding: number;
+        }
+      >;
       sectionLayouts: Record<
         "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer",
         { x: number; y: number; width: number; height: number }
@@ -134,11 +145,34 @@ export interface PosLocalSettings {
       footerText: string;
     };
     label: {
+      showRuler: boolean;
+      snapToGrid: boolean;
       canvas: {
         width: number;
         height: number;
         zoom: number;
       };
+      sectionStyles: Record<
+        | "header"
+        | "item_name"
+        | "temperature"
+        | "cup_type"
+        | "sugar"
+        | "ice"
+        | "sugar_tag"
+        | "ice_tag"
+        | "addons"
+        | "specs"
+        | "item_note"
+        | "order_no"
+        | "footer",
+        {
+          fontSize: number;
+          fontWeight: 400 | 500 | 600 | 700;
+          textAlign: "left" | "center" | "right";
+          padding: number;
+        }
+      >;
       sectionLayouts: Record<
         | "header"
         | "item_name"
@@ -179,6 +213,7 @@ export interface PosLocalSettings {
   };
   notePresets: string[];
   cancelNotePresets: string[];
+  fullVoidBehavior: "cancelled" | "refunded";
   onlineOrderSettings: {
     autoAccept: boolean;
   };

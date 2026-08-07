@@ -1229,16 +1229,21 @@ export function PosApp() {
     const nextCartItems = cartItems.filter((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) <= 0);
     const nextBaseItems = baseOrderItems.filter(() => false);
     const updatedAt = new Date().toISOString();
+    const fullVoidBehavior = localSettings.fullVoidBehavior;
+    const isRefundedRule = fullVoidBehavior === "refunded";
     const updatedOrder: PosOrder = {
       ...activeOrder,
-      status: "cancelled",
+      status: isRefundedRule ? "refunded" : "cancelled",
       items: nextCartItems,
       subtotal: 0,
       serviceChargeAmount: 0,
       taxAmount: 0,
       total: 0,
-      cancelledAt: updatedAt,
-      cancelledReason: reason || "全部退菜",
+      cancelledAt: isRefundedRule ? undefined : updatedAt,
+      cancelledReason: isRefundedRule ? undefined : reason || "全部退菜",
+      refundedAt: isRefundedRule ? updatedAt : undefined,
+      refundedAmount: isRefundedRule ? activeOrder.total : activeOrder.refundedAmount,
+      refundedReason: isRefundedRule ? reason || "全部退菜" : activeOrder.refundedReason,
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === activeOrder.id ? updatedOrder : order)));
@@ -1303,8 +1308,9 @@ export function PosApp() {
         entityId: updatedOrder.id,
         payload: {
           order: updatedOrder,
-          action: "cancelled",
+          action: isRefundedRule ? "refunded" : "cancelled",
           reason: reason || "全部退菜",
+          amount: isRefundedRule ? activeOrder.total : undefined,
         },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedAt,
@@ -1319,7 +1325,7 @@ export function PosApp() {
         createdAt: updatedAt,
       })),
     ]);
-    setToast({ tone: "success", message: "已全部退菜，整單已取消。" });
+    setToast({ tone: "success", message: isRefundedRule ? "已全部退菜，整單已退完。" : "已全部退菜，整單已取消。" });
   }
 
   function describeTimelineEvent(event: QueueEvent) {
