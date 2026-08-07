@@ -750,7 +750,8 @@ export function DeviceSettings() {
                 這裡設定的備註是全局共用：可用於單品備註、也可用於全單備註。
               </div>
 
-              <div className="mt-4 grid gap-3 overflow-auto pr-1 flex-1">
+              <div className="mt-4 flex-1 overflow-auto pr-1">
+                <div className="grid gap-3">
                 <div className="grid gap-2">
                   <div className="text-sm font-semibold text-slate-900">點餐備註</div>
                   {localSettings.notePresets.length === 0 ? (
@@ -899,26 +900,26 @@ export function DeviceSettings() {
                     </label>
                   </div>
                 </div>
-
-                <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
-                  <button
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    onClick={() => {
-                      savePosLocalSettings(localSettings);
-                      setStatus("常用備註已保存到本機，可立即使用。");
-                    }}
-                    type="button"
-                  >
-                    保存備註
-                  </button>
-                  <button
-                    className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
-                    onClick={syncConfig}
-                    type="button"
-                  >
-                    保存並同步後台
-                  </button>
                 </div>
+              </div>
+              <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() => {
+                    savePosLocalSettings(localSettings);
+                    setStatus("常用備註已保存到本機，可立即使用。");
+                  }}
+                  type="button"
+                >
+                  保存備註
+                </button>
+                <button
+                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={syncConfig}
+                  type="button"
+                >
+                  保存並同步後台
+                </button>
               </div>
             </section>
 
@@ -1214,8 +1215,8 @@ export function DeviceSettings() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)] overflow-auto pr-1 flex-1">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mt-4 grid flex-1 min-h-0 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex min-h-0 flex-col overflow-hidden">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold text-slate-900">分類</div>
                   <button
@@ -1234,7 +1235,7 @@ export function DeviceSettings() {
                     新增分類
                   </button>
                 </div>
-                <div className="mt-3 overflow-auto pr-1 max-h-[calc(100vh-330px)]">
+                <div className="mt-3 flex-1 min-h-0 overflow-auto pr-1">
                   <div className="grid gap-2">
                   {menuDraft.categories.map((category) => (
                     <input
@@ -1255,7 +1256,7 @@ export function DeviceSettings() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 flex min-h-0 flex-col overflow-hidden">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-900">菜品</div>
@@ -1383,7 +1384,7 @@ export function DeviceSettings() {
                   })()}
                 </div>
 
-            <div className="mt-2 overflow-auto rounded-2xl border border-slate-200 max-h-[calc(100vh-260px)]">
+            <div className="mt-2 flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-200">
                   <table className="w-full border-collapse text-sm">
                     <thead className="sticky top-0 z-10 bg-white">
                       <tr className="text-left text-xs font-semibold text-slate-500">
