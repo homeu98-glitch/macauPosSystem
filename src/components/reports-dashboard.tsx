@@ -148,7 +148,7 @@ export function ReportsDashboard() {
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[128px]">
+      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">

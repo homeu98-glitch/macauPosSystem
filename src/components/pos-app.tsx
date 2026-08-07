@@ -2300,7 +2300,7 @@ export function PosApp() {
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[128px]">
+      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
         {posMode === "tables" ? (
           <div className="grid h-screen flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_330px]">
             <main className="flex h-full flex-col overflow-hidden bg-slate-100">
@@ -4370,7 +4370,7 @@ export function PosApp() {
       ) : null}
 
       {!shift.openedAt ? (
-        <div className="fixed inset-0 z-[52] grid place-items-center bg-slate-950/55 p-4 lg:pl-[128px]">
+        <div className="fixed inset-0 z-[52] grid place-items-center bg-slate-950/55 p-4 lg:pl-[72px]">
           <div className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-2xl">
             <div className="text-sm font-semibold tracking-widest text-orange-500">今日未開工</div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">開始今日營業</div>

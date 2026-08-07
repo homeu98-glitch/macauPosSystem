@@ -365,7 +365,7 @@ export function DeviceSettings() {
       <AppSidebar />
       <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[144px]">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[88px]">
             <div>
               <div className="text-lg font-semibold text-slate-900">設置</div>
               <div className="mt-1 text-sm text-slate-500">
@@ -378,7 +378,7 @@ export function DeviceSettings() {
           </div>
         </div>
 
-        <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[144px]">
+        <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[88px]">
         <div className="mb-3 flex flex-wrap gap-2">
           {[
             ["device", "打印機"],
