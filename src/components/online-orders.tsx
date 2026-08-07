@@ -83,6 +83,7 @@ export function OnlineOrders() {
   const [statusMap, setStatusMap] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
+  const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [riderModalOrderId, setRiderModalOrderId] = useState<string | null>(null);
   const [riderFee, setRiderFee] = useState("");
   const [riderNote, setRiderNote] = useState("");
@@ -278,6 +279,8 @@ export function OnlineOrders() {
   }, [orders, statusMap]);
 
   async function acceptOrder(order: OnlineOrder) {
+    const loadingKey = `${order.id}:accept`;
+    setActionLoadingKey(loadingKey);
     try {
       if (order.type === "dine_in") {
         setAssigningOrderId(order.id);
@@ -294,10 +297,13 @@ export function OnlineOrders() {
       setToast({ tone: "success", message: "已接單，進入製作中。" });
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "接單回寫失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   async function assignDineInTable(order: OnlineOrder, tableId: string, tableName: string) {
+    setActionLoadingKey(`${order.id}:assign`);
     try {
       await writeBackOrder({
         action: "assign_table",
@@ -312,10 +318,13 @@ export function OnlineOrders() {
       setToast({ tone: "success", message: `已接單並安排到 ${tableName}。` });
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "安排桌台失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   async function completeOrder(order: OnlineOrder) {
+    setActionLoadingKey(`${order.id}:complete`);
     try {
       await writeBackOrder({ action: "complete", orderId: order.sourceId ?? order.id });
       setStatusMap((current) => ({ ...current, [order.id]: "completed" }));
@@ -324,10 +333,13 @@ export function OnlineOrders() {
       setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "完成訂單失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   async function updateOrderStatus(order: OnlineOrder, nextStatus: string, successMessage: string) {
+    setActionLoadingKey(`${order.id}:status:${nextStatus}`);
     try {
       await writeBackOrder({ action: "update_status", orderId: order.sourceId ?? order.id, status: nextStatus });
       setStatusMap((current) => ({ ...current, [order.id]: nextStatus }));
@@ -338,6 +350,8 @@ export function OnlineOrders() {
       }
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "更新狀態失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
@@ -345,6 +359,7 @@ export function OnlineOrders() {
     if (!riderModalOrderId) return;
     const order = orders.find((item) => item.id === riderModalOrderId);
     if (!order) return;
+    setActionLoadingKey(`${order.id}:rider`);
 
     const feeValue = Number(riderFee);
     const fee = Number.isFinite(feeValue) && feeValue > 0 ? feeValue : 0;
@@ -376,12 +391,15 @@ export function OnlineOrders() {
       setRiderModalOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "轉車手送單失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   async function cancelOrder(order: OnlineOrder) {
     const ok = window.confirm("確定要取消這張訂單？");
     if (!ok) return;
+    setActionLoadingKey(`${order.id}:cancel`);
     try {
       await writeBackOrder({ action: "cancel", orderId: order.sourceId ?? order.id });
       setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_merchant" } : row)));
@@ -389,10 +407,13 @@ export function OnlineOrders() {
       setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "取消訂單失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   async function confirmCustomerCancel(order: OnlineOrder) {
+    setActionLoadingKey(`${order.id}:confirm_cancel`);
     try {
       await writeBackOrder({ action: "confirm_customer_cancel", orderId: order.sourceId ?? order.id });
       setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_customer" } : row)));
@@ -400,10 +421,13 @@ export function OnlineOrders() {
       setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   async function rejectCustomerCancel(order: OnlineOrder) {
+    setActionLoadingKey(`${order.id}:reject_cancel`);
     try {
       await writeBackOrder({ action: "reject_customer_cancel", orderId: order.sourceId ?? order.id });
       setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancel_rejected" } : row)));
@@ -411,13 +435,15 @@ export function OnlineOrders() {
       setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
+    } finally {
+      setActionLoadingKey(null);
     }
   }
 
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
+      <div className="flex h-screen overflow-hidden lg:pl-[128px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -489,6 +515,7 @@ export function OnlineOrders() {
               {orders.map((order) => {
                 const effectiveStatus = statusMap[order.id] ?? order.status;
                 const normalizedStatus = normalizeOrderStatus(effectiveStatus);
+                const orderLoading = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
                 return (
                 <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -553,24 +580,30 @@ export function OnlineOrders() {
                     {normalizedStatus === "new" ? (
                       <>
                         <button
-                          className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                          aria-busy={orderLoading}
+                          className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+                          disabled={orderLoading}
                           onClick={() => void acceptOrder(order)}
                           type="button"
                         >
-                          {order.type === "dine_in" ? "接單並安排桌台" : "接單"}
+                          {orderLoading ? "提交中…" : order.type === "dine_in" ? "接單並安排桌台" : "接單"}
                         </button>
                         <button
-                          className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                          aria-busy={orderLoading}
+                          className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                          disabled={orderLoading}
                           onClick={() => void cancelOrder(order)}
                           type="button"
                         >
-                          取消
+                          {orderLoading ? "提交中…" : "取消"}
                         </button>
                       </>
                     ) : null}
                     {normalizedStatus === "preparing" ? (
                       <button
-                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        aria-busy={orderLoading}
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                        disabled={orderLoading}
                         onClick={() =>
                           void updateOrderStatus(
                             order,
@@ -580,34 +613,40 @@ export function OnlineOrders() {
                         }
                         type="button"
                       >
-                        {order.type === "pickup" ? "待取餐" : "待交付"}
+                        {orderLoading ? "提交中…" : order.type === "pickup" ? "待取餐" : "待交付"}
                       </button>
                     ) : null}
                     {normalizedStatus === "ready_pickup" ? (
                       <button
-                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        aria-busy={orderLoading}
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                        disabled={orderLoading}
                         onClick={() => void completeOrder(order)}
                         type="button"
                       >
-                        已取餐 / 已完成
+                        {orderLoading ? "提交中…" : "已取餐 / 已完成"}
                       </button>
                     ) : null}
                     {normalizedStatus === "ready_dispatch" ? (
                       <button
-                        className="rounded-2xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700"
+                        aria-busy={orderLoading}
+                        className="rounded-2xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                        disabled={orderLoading}
                         onClick={() => void updateOrderStatus(order, "delivering", "已轉為配送中。")}
                         type="button"
                       >
-                        配送中
+                        {orderLoading ? "提交中…" : "配送中"}
                       </button>
                     ) : null}
                     {normalizedStatus === "delivering" ? (
                       <button
-                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        aria-busy={orderLoading}
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                        disabled={orderLoading}
                         onClick={() => void completeOrder(order)}
                         type="button"
                       >
-                        已送達 / 已完成
+                        {orderLoading ? "提交中…" : "已送達 / 已完成"}
                       </button>
                     ) : null}
                   </div>
@@ -638,7 +677,9 @@ export function OnlineOrders() {
               {tables.map((table) => (
                 <button
                   key={table.id}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300 hover:bg-orange-50"
+                  aria-busy={Boolean(actionLoadingKey?.startsWith(`${assigningOrderId}:assign`))}
+                  className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300 hover:bg-orange-50 disabled:opacity-60"
+                  disabled={Boolean(actionLoadingKey?.startsWith(`${assigningOrderId}:assign`))}
                   onClick={() => {
                     const order = orders.find((item) => item.id === assigningOrderId);
                     if (!order) return;
@@ -698,17 +739,20 @@ export function OnlineOrders() {
             <div className="mt-4 flex justify-end gap-2">
               <button
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
                 onClick={() => setRiderModalOrderId(null)}
                 type="button"
               >
                 取消
               </button>
               <button
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                aria-busy={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
                 onClick={() => void confirmRiderHandoff()}
                 type="button"
               >
-                確認轉車手送單
+                {actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`) ? "提交中…" : "確認轉車手送單"}
               </button>
             </div>
           </div>

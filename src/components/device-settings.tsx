@@ -40,6 +40,9 @@ export function DeviceSettings() {
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
+  const [menuSyncing, setMenuSyncing] = useState(false);
+  const [syncingConfig, setSyncingConfig] = useState(false);
+  const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
   const [menuSubTab, setMenuSubTab] = useState<"categories" | "specs" | "items">("items");
   const [specEditor, setSpecEditor] = useState<{
     open: boolean;
@@ -267,6 +270,8 @@ export function DeviceSettings() {
   }
 
   async function syncConfig() {
+    if (syncingConfig) return;
+    setSyncingConfig(true);
     const updatedConfig = { ...config, updatedAt: new Date().toISOString() };
     saveDeviceConfig(updatedConfig);
     savePosLocalSettings(localSettings);
@@ -312,10 +317,14 @@ export function DeviceSettings() {
       setStatus("已同步到後台設定接口。");
     } catch {
       setStatus("同步失敗，已保留在本機待補傳。");
+    } finally {
+      setSyncingConfig(false);
     }
   }
 
   async function testPrint(printer: DevicePrinterConfig) {
+    if (testingPrinterId) return;
+    setTestingPrinterId(printer.id);
     const event: QueueEvent = {
       id: uid("evt"),
       type: "TEST_PRINT_REQUESTED",
@@ -346,6 +355,8 @@ export function DeviceSettings() {
       setStatus(`已送出 ${printer.name} 測試打印。`);
     } catch {
       setStatus(`未能送出 ${printer.name} 測試打印，事件已排隊。`);
+    } finally {
+      setTestingPrinterId(null);
     }
   }
 
@@ -354,7 +365,7 @@ export function DeviceSettings() {
       <AppSidebar />
       <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[88px]">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[144px]">
             <div>
               <div className="text-lg font-semibold text-slate-900">設置</div>
               <div className="mt-1 text-sm text-slate-500">
@@ -367,7 +378,7 @@ export function DeviceSettings() {
           </div>
         </div>
 
-        <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[88px]">
+        <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[144px]">
         <div className="mb-3 flex flex-wrap gap-2">
           {[
             ["device", "打印機"],
@@ -435,10 +446,12 @@ export function DeviceSettings() {
                 </button>
                 <button
                   className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                  aria-busy={syncingConfig}
+                  disabled={syncingConfig}
                   onClick={syncConfig}
                   type="button"
                 >
-                  保存並同步後台
+                  {syncingConfig ? "同步中…" : "保存並同步後台"}
                 </button>
               </div>
             </section>
@@ -700,10 +713,12 @@ export function DeviceSettings() {
                       <div className="mt-4 flex flex-wrap justify-end gap-2">
                         <button
                           className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                          aria-busy={testingPrinterId === printer.id}
+                          disabled={Boolean(testingPrinterId)}
                           onClick={() => testPrint(printer)}
                           type="button"
                         >
-                          測試打印
+                          {testingPrinterId === printer.id ? "打印中…" : "測試打印"}
                         </button>
                       </div>
                     </article>
@@ -919,10 +934,12 @@ export function DeviceSettings() {
               </button>
               <button
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                aria-busy={syncingConfig}
+                disabled={syncingConfig}
                 onClick={syncConfig}
                 type="button"
               >
-                保存並同步後台
+                {syncingConfig ? "同步中…" : "保存並同步後台"}
               </button>
             </div>
           </div>
@@ -1149,10 +1166,12 @@ export function DeviceSettings() {
             <div className="mt-4 flex justify-end border-t border-slate-100 pt-4">
               <button
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                aria-busy={syncingConfig}
+                disabled={syncingConfig}
                 onClick={syncConfig}
                 type="button"
               >
-                保存菜品打印設置
+                {syncingConfig ? "同步中…" : "保存菜品打印設置"}
               </button>
             </div>
           </section>
@@ -1170,7 +1189,10 @@ export function DeviceSettings() {
               <div className="flex flex-wrap gap-2">
                 <button
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  aria-busy={menuSyncing}
+                  disabled={menuSyncing || menuSaving}
                   onClick={async () => {
+                    setMenuSyncing(true);
                     setStatus("正在重新載入後台菜單…");
                     try {
                       const response = await fetch("/api/pos/bootstrap");
@@ -1181,14 +1203,17 @@ export function DeviceSettings() {
                       setStatus("已重新載入後台菜單。");
                     } catch {
                       setStatus("重新載入失敗，請稍後再試。");
+                    } finally {
+                      setMenuSyncing(false);
                     }
                   }}
                   type="button"
                 >
-                  同步菜單
+                  {menuSyncing ? "同步中…" : "同步菜單"}
                 </button>
                 <button
                   className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  aria-busy={menuSaving}
                   disabled={menuSaving}
                   onClick={async () => {
                     setMenuSaving(true);
@@ -1218,7 +1243,7 @@ export function DeviceSettings() {
                   }}
                   type="button"
                 >
-                  保存菜單
+                  {menuSaving ? "保存中…" : "保存菜單"}
                 </button>
               </div>
             </div>
@@ -1721,10 +1746,12 @@ export function DeviceSettings() {
               </button>
               <button
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                aria-busy={syncingConfig}
+                disabled={syncingConfig}
                 onClick={syncConfig}
                 type="button"
               >
-                保存並同步後台
+                {syncingConfig ? "同步中…" : "保存並同步後台"}
               </button>
             </div>
           </section>

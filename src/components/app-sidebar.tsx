@@ -41,15 +41,15 @@ export function AppSidebar() {
   // 登出時會在按鈕點擊處更新狀態，登入成功則會跳頁重渲染。
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col justify-between bg-slate-900 px-2 py-3 text-white lg:flex">
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[128px] flex-col justify-between bg-slate-950 px-3 py-4 text-white lg:flex">
       <div className="grid gap-2">
         {navItems.map((item) => {
           const active = pathname === item.href;
           return (
             <Link
               key={item.href}
-              className={`flex flex-col items-center gap-2 rounded-2xl px-2 py-3 text-xs font-semibold transition ${
-                active ? "bg-orange-500 text-white" : "bg-slate-800 text-slate-200 hover:bg-slate-700"
+              className={`flex min-h-[72px] items-center justify-center rounded-2xl px-3 py-3 text-center text-base font-semibold transition ${
+                active ? "bg-orange-500 text-white shadow-lg shadow-orange-900/30" : "bg-slate-800 text-slate-100 hover:bg-slate-700"
               }`}
               href={item.href}
             >
@@ -61,14 +61,14 @@ export function AppSidebar() {
 
       <div className="grid gap-2">
         {session ? (
-          <div className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-[11px] font-semibold text-slate-200">
+          <div className="rounded-2xl bg-slate-800 px-3 py-3 text-center text-xs font-semibold text-slate-200">
             <div>{session.name}</div>
             <div className="mt-1 text-slate-400">{session.role === "manager" ? "店長" : "收銀"}</div>
           </div>
         ) : null}
         <button
-          className={`rounded-2xl px-2 py-2 text-xs font-semibold transition ${
-            offlineMode ? "bg-amber-500 text-white" : "bg-emerald-600 text-white"
+          className={`min-h-[56px] rounded-2xl px-3 py-3 text-sm font-semibold transition ${
+            offlineMode ? "bg-amber-500 text-white shadow-lg shadow-amber-900/30" : "bg-emerald-600 text-white shadow-lg shadow-emerald-900/30"
           }`}
           onClick={() => {
             const next = !offlineMode;
@@ -83,7 +83,7 @@ export function AppSidebar() {
 
         {loggedIn ? (
           <button
-            className="rounded-2xl bg-slate-800 px-2 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+            className="min-h-[56px] rounded-2xl bg-slate-800 px-3 py-3 text-sm font-semibold text-slate-100 hover:bg-slate-700"
             onClick={() => {
               clearAuthSession();
               setLoggedIn(false);
@@ -96,8 +96,10 @@ export function AppSidebar() {
         ) : null}
 
         <Link
-          className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
-            pathname === "/settings" ? "bg-orange-500 text-white" : "bg-slate-800 text-slate-200 hover:bg-slate-700"
+          className={`flex min-h-[56px] items-center justify-center rounded-2xl px-3 py-3 text-center text-sm font-semibold transition ${
+            pathname === "/settings"
+              ? "bg-orange-500 text-white shadow-lg shadow-orange-900/30"
+              : "bg-slate-800 text-slate-100 hover:bg-slate-700"
           }`}
           href="/settings"
         >

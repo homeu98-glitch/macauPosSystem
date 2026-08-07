@@ -146,11 +146,13 @@ export function PosApp() {
   const [memberPhone, setMemberPhone] = useState("");
   const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
   const [memberSearchHint, setMemberSearchHint] = useState<string>("");
+  const [memberSearching, setMemberSearching] = useState(false);
   const [useMemberBalance, setUseMemberBalance] = useState(true);
   const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
   const [settlementFlash, setSettlementFlash] = useState(false);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
@@ -159,7 +161,7 @@ export function PosApp() {
   const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [quickPanel, setQuickPanel] = useState<"cashier" | "online" | "local">(() =>
-    loadOperatingMode() === "quick" ? "online" : "cashier",
+    loadOperatingMode() === "quick" ? (loadOfflineMode() ? "local" : "online") : "cashier",
   );
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
   const [draggingQuickAction, setDraggingQuickAction] = useState<string | null>(null);
@@ -189,6 +191,7 @@ export function PosApp() {
   const isQuickMode = operatingMode === "quick";
   const canRefundOrder = authSession?.permissions.refundOrder ?? true;
   const canVoidItem = authSession?.permissions.voidItem ?? true;
+  const effectiveQuickPanel = isQuickMode && offlineMode && quickPanel === "online" ? "local" : quickPanel;
 
   function showPermissionDenied(actionLabel: string) {
     setToast({ tone: "info", message: `目前帳號沒有${actionLabel}權限，請使用店長帳號操作。` });
@@ -962,7 +965,7 @@ export function PosApp() {
         ? `自取${new Date().getTime().toString().slice(-2)}`
         : quickOrderType === "delivery"
           ? `外賣${new Date().getTime().toString().slice(-2)}`
-          : `取餐${new Date().getTime().toString().slice(-2)}`
+          : `堂食${new Date().getTime().toString().slice(-2)}`
       : `訂單${new Date().getTime().toString().slice(-2)}`;
 
     const order: PosOrder = existingOrder
@@ -1129,7 +1132,7 @@ export function PosApp() {
     });
     setSelectedItemId(item.id);
     if (isQuickMode) {
-      setQuickPanel("cashier");
+      setQuickPanel("local");
     }
   }
 
@@ -1628,48 +1631,51 @@ export function PosApp() {
 
   async function sendToKitchen(options?: { silent?: boolean }) {
     if (!bootstrap || !activeTable || cartItems.length === 0) return null;
+    if (orderSubmitting) return null;
+    setOrderSubmitting(true);
 
-    const timestamp = new Date().toISOString();
-    let nextOrderNo: string | undefined;
-    if (!offlineMode && !activeOrderId && !tableOrderMap.get(activeTable.id)) {
-      try {
-        const response = await fetch("/api/pos/sequence", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: isQuickMode ? quickTypeKind() : "pos", storeId: bootstrap.storeId }),
-        });
-        const payload = (await response.json()) as { display?: string };
-        nextOrderNo = payload.display;
-      } catch {
-        // fallback
+    try {
+      const timestamp = new Date().toISOString();
+      let nextOrderNo: string | undefined;
+      if (!offlineMode && !activeOrderId && !tableOrderMap.get(activeTable.id)) {
+        try {
+          const response = await fetch("/api/pos/sequence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: isQuickMode ? quickTypeKind() : "pos", storeId: bootstrap.storeId }),
+          });
+          const payload = (await response.json()) as { display?: string };
+          nextOrderNo = payload.display;
+        } catch {
+          // fallback
+        }
       }
-    }
 
-    const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo);
-    if (!order) return null;
+      const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo);
+      if (!order) return null;
 
-    const baseMap = new Map<string, number>();
-    for (const row of baseOrderItems) {
-      const key = itemIdentity(row);
-      baseMap.set(key, (baseMap.get(key) ?? 0) + row.quantity);
-    }
-    const addedItems = cartItems
-      .map((row) => {
+      const baseMap = new Map<string, number>();
+      for (const row of baseOrderItems) {
         const key = itemIdentity(row);
-        const baseQty = baseMap.get(key) ?? 0;
-        const delta = row.quantity - baseQty;
-        return delta > 0 ? { ...row, quantity: delta } : null;
-      })
-      .filter((row): row is OrderItem => Boolean(row));
-
-    if (isAddOnOrder && addedItems.length === 0) {
-      if (!options?.silent) {
-        setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
+        baseMap.set(key, (baseMap.get(key) ?? 0) + row.quantity);
       }
-      return null;
-    }
+      const addedItems = cartItems
+        .map((row) => {
+          const key = itemIdentity(row);
+          const baseQty = baseMap.get(key) ?? 0;
+          const delta = row.quantity - baseQty;
+          return delta > 0 ? { ...row, quantity: delta } : null;
+        })
+        .filter((row): row is OrderItem => Boolean(row));
 
-    const printTargetItems = isAddOnOrder ? addedItems : cartItems;
+      if (isAddOnOrder && addedItems.length === 0) {
+        if (!options?.silent) {
+          setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
+        }
+        return null;
+      }
+
+      const printTargetItems = isAddOnOrder ? addedItems : cartItems;
 
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
     const nextPrintJobs = configuredPrinters
@@ -1710,7 +1716,7 @@ export function PosApp() {
         createdAt: timestamp,
       }));
 
-    persistPrintJobs([...nextPrintJobs, ...printJobs]);
+      persistPrintJobs([...nextPrintJobs, ...printJobs]);
 
     const orderEvent: QueueEvent = {
       id: uid("evt"),
@@ -1730,29 +1736,32 @@ export function PosApp() {
       createdAt: timestamp,
     }));
 
-    pushEvents([orderEvent, ...printEvents]);
-    consumeSoldOut(printTargetItems);
-    setActiveOrderId(order.id);
-    setDiscountValue(String(order.discountAmount));
-    setReceivedAmount("");
-    setBaseOrderItems(order.items);
-    setOrderSuccessFlash(true);
-    if (!options?.silent) {
-      setToast({
-        tone: "success",
-        message: networkOnline
-          ? isAddOnOrder
-            ? `已加單成功，單號 ${order.localOrderNo}。`
-            : `已下單成功，單號 ${order.localOrderNo}。`
-          : isAddOnOrder
-            ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
-            : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
-      });
+      pushEvents([orderEvent, ...printEvents]);
+      consumeSoldOut(printTargetItems);
+      setActiveOrderId(order.id);
+      setDiscountValue(String(order.discountAmount));
+      setReceivedAmount("");
+      setBaseOrderItems(order.items);
+      setOrderSuccessFlash(true);
+      if (!options?.silent) {
+        setToast({
+          tone: "success",
+          message: networkOnline
+            ? isAddOnOrder
+              ? `已加單成功，單號 ${order.localOrderNo}。`
+              : `已下單成功，單號 ${order.localOrderNo}。`
+            : isAddOnOrder
+              ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
+              : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
+        });
+      }
+      if (isQuickMode) {
+        setQuickPanel("local");
+      }
+      return order;
+    } finally {
+      setOrderSubmitting(false);
     }
-    if (isQuickMode) {
-      setQuickPanel("cashier");
-    }
-    return order;
   }
 
   function markOrderCompleted(orderId: string, options?: { label?: string }) {
@@ -2172,7 +2181,7 @@ export function PosApp() {
       setSettlementFlash(true);
       if (quickPaidFlow) {
         printReceipt(updatedOrder);
-        setQuickPanel("cashier");
+        setQuickPanel("local");
         setViewingOrderId(null);
       } else {
         backToTables();
@@ -2250,7 +2259,7 @@ export function PosApp() {
     });
     setSettlementFlash(true);
     if (quickPaidFlow) {
-      setQuickPanel("cashier");
+      setQuickPanel("local");
       setViewingOrderId(null);
     } else {
       backToTables();
@@ -2291,7 +2300,7 @@ export function PosApp() {
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
+      <div className="flex h-screen overflow-hidden lg:pl-[128px]">
         {posMode === "tables" ? (
           <div className="grid h-screen flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_330px]">
             <main className="flex h-full flex-col overflow-hidden bg-slate-100">
@@ -2404,7 +2413,7 @@ export function PosApp() {
                             onClick: () => setViewingOrderId(activeOrder?.id ?? null),
                           },
                           send_kitchen: {
-                            label: "送廚房",
+                            label: orderSubmitting ? "提交中…" : "送廚房",
                             disabled: !activeTable || cartItems.length === 0,
                             tone: "dark",
                             onClick: () => void sendToKitchen(),
@@ -2866,25 +2875,25 @@ export function PosApp() {
                 <div className="grid grid-cols-3 gap-2">
                     <button
                       className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
-                        quickPanel === "online" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                        effectiveQuickPanel === "online" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                       }`}
-                      onClick={() => setQuickPanel("online")}
+                      onClick={() => setQuickPanel(offlineMode ? "local" : "online")}
                       type="button"
                     >
                       線上訂單
                     </button>
                     <button
                       className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
-                        quickPanel === "local" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                        effectiveQuickPanel === "local" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                       }`}
                       onClick={() => setQuickPanel("local")}
                       type="button"
                     >
-                      本地快餐單
+                      線下訂單
                     </button>
                     <button
                       className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
-                        quickPanel === "cashier" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                        effectiveQuickPanel === "cashier" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                       }`}
                       onClick={() => setQuickPanel("cashier")}
                       type="button"
@@ -2907,7 +2916,7 @@ export function PosApp() {
             </div>
 
             <div className="flex-1 overflow-auto px-4 py-4">
-              {isQuickMode && quickPanel === "online" ? (
+              {isQuickMode && effectiveQuickPanel === "online" ? (
                 <div className="grid gap-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-semibold text-slate-500">自動接單</div>
@@ -3064,7 +3073,7 @@ export function PosApp() {
                     </div>
                   )}
                 </div>
-              ) : isQuickMode && quickPanel === "local" ? (
+              ) : isQuickMode && effectiveQuickPanel === "local" ? (
                 <div className="grid gap-3">
                   <div className="text-xs font-semibold text-slate-500">製作中</div>
                   <div className="grid gap-2">
@@ -3288,10 +3297,12 @@ export function PosApp() {
                 {!isQuickMode ? (
                   <button
                     className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
+                    aria-busy={orderSubmitting}
+                    disabled={orderSubmitting}
                     onClick={() => void sendToKitchen()}
                     type="button"
                   >
-                    {isAddOnOrder ? "加單" : "下單"}
+                    {orderSubmitting ? "提交中…" : isAddOnOrder ? "加單" : "下單"}
                   </button>
                 ) : null}
                 <button
@@ -3885,7 +3896,9 @@ export function PosApp() {
                         value={memberPhone}
                       />
                       <button
-                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        aria-busy={memberSearching}
+                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+                        disabled={memberSearching}
                         onClick={() => {
                           setMemberSearchHint("");
                           setMemberMatch(null);
@@ -3894,6 +3907,7 @@ export function PosApp() {
                             return;
                           }
                           void (async () => {
+                            setMemberSearching(true);
                             try {
                               const response = await fetch(`/api/members?phone=${memberPhone}`);
                               const payload = (await response.json()) as { members?: MemberProfile[] };
@@ -3904,12 +3918,14 @@ export function PosApp() {
                               const match = membersCache.find((member) => member.phone === memberPhone) ?? null;
                               setMemberMatch(match);
                               setMemberSearchHint(match ? "" : "找不到會員。");
+                            } finally {
+                              setMemberSearching(false);
                             }
                           })();
                         }}
                         type="button"
                       >
-                        搜尋
+                        {memberSearching ? "搜尋中…" : "搜尋"}
                       </button>
                     </div>
                     {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
@@ -4354,7 +4370,7 @@ export function PosApp() {
       ) : null}
 
       {!shift.openedAt ? (
-        <div className="fixed inset-0 z-[52] grid place-items-center bg-slate-950/55 p-4 lg:pl-[72px]">
+        <div className="fixed inset-0 z-[52] grid place-items-center bg-slate-950/55 p-4 lg:pl-[128px]">
           <div className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-2xl">
             <div className="text-sm font-semibold tracking-widest text-orange-500">今日未開工</div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">開始今日營業</div>

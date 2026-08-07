@@ -26,6 +26,8 @@ export function MembersPage() {
   const [createName, setCreateName] = useState("");
   const [createPhone, setCreatePhone] = useState("");
   const [createHint, setCreateHint] = useState("");
+  const [creatingMember, setCreatingMember] = useState(false);
+  const [rechargingMemberId, setRechargingMemberId] = useState<string | null>(null);
   const [padTarget, setPadTarget] = useState<string>("search");
 
   useEffect(() => {
@@ -46,7 +48,9 @@ export function MembersPage() {
   function rechargeMember(memberId: string) {
     const amount = Number(rechargeValues[memberId] ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) return;
+    if (rechargingMemberId) return;
     void (async () => {
+      setRechargingMemberId(memberId);
       try {
         const response = await fetch("/api/members", {
           method: "POST",
@@ -65,11 +69,15 @@ export function MembersPage() {
         setMembers(nextMembers);
         saveMembers(nextMembers);
         setRechargeValues((current) => ({ ...current, [memberId]: "" }));
+      } finally {
+        setRechargingMemberId(null);
       }
     })();
   }
 
   async function createMember() {
+    if (creatingMember) return;
+    setCreatingMember(true);
     setCreateHint("");
     const name = createName.trim();
     const phoneValue = createPhone.replace(/\D/g, "").slice(0, 8);
@@ -97,6 +105,8 @@ export function MembersPage() {
       setCreateOpen(false);
     } catch (err) {
       setCreateHint(err instanceof Error ? err.message : "新增會員失敗");
+    } finally {
+      setCreatingMember(false);
     }
   }
 
@@ -125,7 +135,7 @@ export function MembersPage() {
   return (
     <div className="h-screen overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
+      <div className="flex h-screen overflow-hidden lg:pl-[128px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="text-lg font-semibold text-slate-900">會員</div>
@@ -204,11 +214,13 @@ export function MembersPage() {
                       value={rechargeValues[member.id] ?? ""}
                     />
                     <button
-                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                      aria-busy={rechargingMemberId === member.id}
+                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      disabled={Boolean(rechargingMemberId)}
                       onClick={() => rechargeMember(member.id)}
                       type="button"
                     >
-                      充值
+                      {rechargingMemberId === member.id ? "提交中…" : "充值"}
                     </button>
                   </div>
                 </article>
@@ -268,17 +280,20 @@ export function MembersPage() {
             <div className="mt-4 flex justify-end gap-2">
               <button
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                disabled={creatingMember}
                 onClick={() => setCreateOpen(false)}
                 type="button"
               >
                 取消
               </button>
               <button
-                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                aria-busy={creatingMember}
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                disabled={creatingMember}
                 onClick={() => void createMember()}
                 type="button"
               >
-                確認新增
+                {creatingMember ? "提交中…" : "確認新增"}
               </button>
             </div>
           </div>

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { KeyboardEvent, useState } from "react";
 
+import { PwaInstallButton } from "@/components/pwa-install-button";
 import { saveAuthSession, saveOperatingMode } from "@/lib/storage";
 
 export function LoginScreen() {
@@ -163,6 +164,8 @@ export function LoginScreen() {
           >
             {loading ? "正在登入…" : "登入"}
           </button>
+
+          <PwaInstallButton />
 
           <div className="mt-4 text-center text-xs text-white/40">
             店長：63936541 / 1234　　收銀：63936542 / 1234
