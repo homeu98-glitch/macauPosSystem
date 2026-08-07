@@ -40,6 +40,7 @@ export function DeviceSettings() {
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
+  const [menuSubTab, setMenuSubTab] = useState<"categories" | "specs" | "items">("items");
   const [specEditor, setSpecEditor] = useState<{
     open: boolean;
     mode: "item" | "template";
@@ -744,17 +745,13 @@ export function DeviceSettings() {
         ) : null}
 
         {activeTab === "notes" ? (
-          <div className="grid gap-3 lg:grid-cols-[520px_minmax(0,1fr)]">
+          <div className="grid gap-3 lg:grid-cols-2">
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
               <div className="text-base font-semibold text-slate-900">常用備註</div>
-              <div className="mt-1 text-sm text-slate-500">
-                這裡設定的備註是全局共用：可用於單品備註、也可用於全單備註。
-              </div>
+              <div className="mt-1 text-sm text-slate-500">用於點餐時快速選擇（多選）。</div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
-                <div className="grid gap-3">
                 <div className="grid gap-2">
-                  <div className="text-sm font-semibold text-slate-900">點餐備註</div>
                   {localSettings.notePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                       暫時沒有常用備註
@@ -785,7 +782,7 @@ export function DeviceSettings() {
                   )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewNotePreset(event.target.value)}
@@ -810,9 +807,15 @@ export function DeviceSettings() {
                     加入
                   </button>
                 </div>
+              </div>
+            </section>
 
-                <div className="mt-2 grid gap-2">
-                  <div className="text-sm font-semibold text-slate-900">取消備註</div>
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
+              <div className="text-base font-semibold text-slate-900">取消備註</div>
+              <div className="mt-1 text-sm text-slate-500">用於退菜/取消時快速選擇。</div>
+
+              <div className="mt-4 flex-1 overflow-auto pr-1">
+                <div className="grid gap-2">
                   {localSettings.cancelNotePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                       暫時沒有取消備註
@@ -843,7 +846,7 @@ export function DeviceSettings() {
                   )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewCancelNotePreset(event.target.value)}
@@ -865,11 +868,11 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    加入取消備註
+                    加入
                   </button>
                 </div>
 
-                <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <div className="text-sm font-semibold text-slate-900">全部退菜後的整單狀態</div>
                   <div className="mt-1 text-xs text-slate-500">可設定全部退菜後，未結帳整單是標成已取消還是已退完。</div>
                   <div className="mt-3 grid gap-2">
@@ -901,35 +904,28 @@ export function DeviceSettings() {
                     </label>
                   </div>
                 </div>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => {
-                    savePosLocalSettings(localSettings);
-                    setStatus("常用備註已保存到本機，可立即使用。");
-                  }}
-                  type="button"
-                >
-                  保存備註
-                </button>
-                <button
-                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={syncConfig}
-                  type="button"
-                >
-                  保存並同步後台
-                </button>
               </div>
             </section>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="text-base font-semibold text-slate-900">說明</div>
-              <div className="mt-3 text-sm text-slate-600">
-                點餐時可以直接點選常用備註（多選），也可以自由輸入。全單備註會跟隨訂單一起保存並可打印。
-              </div>
-            </section>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4 lg:col-span-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  savePosLocalSettings(localSettings);
+                  setStatus("備註已保存到本機，可立即使用。");
+                }}
+                type="button"
+              >
+                保存備註
+              </button>
+              <button
+                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={syncConfig}
+                type="button"
+              >
+                保存並同步後台
+              </button>
+            </div>
           </div>
         ) : null}
 
@@ -992,27 +988,6 @@ export function DeviceSettings() {
                 >
                   批量套用
                 </button>
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => {
-                    const filtered = cachedBootstrap.menuItems.filter(
-                      (item) => menuPrintCategoryId === "all" || item.categoryId === menuPrintCategoryId,
-                    );
-                    const start = (menuPrintPage - 1) * menuPrintPageSize;
-                    const ids = filtered.slice(start, start + menuPrintPageSize).map((item) => item.id);
-                    setBulkSelectedMenuIds(ids);
-                  }}
-                  type="button"
-                >
-                  全選本頁
-                </button>
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() => setBulkSelectedMenuIds([])}
-                  type="button"
-                >
-                  清空
-                </button>
               </div>
             </div>
 
@@ -1054,7 +1029,40 @@ export function DeviceSettings() {
               <table className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 z-10 bg-white">
                   <tr className="text-left text-xs font-semibold text-slate-500">
-                    <th className="border-b border-slate-200 py-2 pr-3">選擇</th>
+                    <th className="border-b border-slate-200 py-2 pr-3">
+                      {(() => {
+                        const filtered = cachedBootstrap.menuItems.filter(
+                          (item) => menuPrintCategoryId === "all" || item.categoryId === menuPrintCategoryId,
+                        );
+                        const totalPages = Math.max(1, Math.ceil(filtered.length / menuPrintPageSize));
+                        const safePage = Math.min(menuPrintPage, totalPages);
+                        const start = (safePage - 1) * menuPrintPageSize;
+                        const pageIds = filtered.slice(start, start + menuPrintPageSize).map((item) => item.id);
+                        const allSelected =
+                          pageIds.length > 0 && pageIds.every((id) => bulkSelectedMenuIds.includes(id));
+                        return (
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              checked={allSelected}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setBulkSelectedMenuIds((current) => {
+                                  const set = new Set(current);
+                                  if (checked) {
+                                    pageIds.forEach((id) => set.add(id));
+                                  } else {
+                                    pageIds.forEach((id) => set.delete(id));
+                                  }
+                                  return Array.from(set);
+                                });
+                              }}
+                              type="checkbox"
+                            />
+                            <span>選擇</span>
+                          </label>
+                        );
+                      })()}
+                    </th>
                     <th className="border-b border-slate-200 py-2 pr-3">菜品</th>
                     <th className="border-b border-slate-200 py-2 pr-3">分類</th>
                     <th className="border-b border-slate-200 py-2 pr-3">當前分區</th>
@@ -1216,8 +1224,30 @@ export function DeviceSettings() {
               </div>
             </div>
 
-            <div className="mt-4 grid flex-1 min-h-0 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex min-h-0 flex-col overflow-hidden">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="text-sm font-semibold text-slate-700">內容</div>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  ["categories", "菜品分類"],
+                  ["specs", "規格管理"],
+                  ["items", "菜品設置"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                      menuSubTab === key ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+                    }`}
+                    onClick={() => setMenuSubTab(key as typeof menuSubTab)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {menuSubTab === "categories" ? (
+              <div className="mt-4 flex-1 min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold text-slate-900">分類</div>
                   <button
@@ -1225,10 +1255,7 @@ export function DeviceSettings() {
                     onClick={() =>
                       setMenuDraft((current) => ({
                         ...current,
-                        categories: [
-                          ...current.categories,
-                          { id: crypto.randomUUID(), name: "新分類" },
-                        ],
+                        categories: [...current.categories, { id: crypto.randomUUID(), name: "新分類" }],
                       }))
                     }
                     type="button"
@@ -1236,36 +1263,115 @@ export function DeviceSettings() {
                     新增分類
                   </button>
                 </div>
-                <div className="mt-3 flex-1 min-h-0 overflow-auto pr-1">
+                <div className="mt-3 h-full overflow-auto pr-1">
                   <div className="grid gap-2">
-                  {menuDraft.categories.map((category) => (
-                    <input
-                      key={category.id}
-                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
-                      onChange={(event) =>
-                        setMenuDraft((current) => ({
-                          ...current,
-                          categories: current.categories.map((item) =>
-                            item.id === category.id ? { ...item, name: event.target.value } : item,
-                          ),
-                        }))
-                      }
-                      value={category.name}
-                    />
-                  ))}
+                    {menuDraft.categories.map((category) => (
+                      <input
+                        key={category.id}
+                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                        onChange={(event) =>
+                          setMenuDraft((current) => ({
+                            ...current,
+                            categories: current.categories.map((item) =>
+                              item.id === category.id ? { ...item, name: event.target.value } : item,
+                            ),
+                          }))
+                        }
+                        value={category.name}
+                      />
+                    ))}
                   </div>
                 </div>
               </div>
+            ) : null}
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 flex min-h-0 flex-col overflow-hidden">
-                <div className="flex items-start justify-between gap-3">
+            {menuSubTab === "specs" ? (
+              <div className="mt-4 flex-1 min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">菜品</div>
-                    <div className="mt-1 text-xs text-slate-500">支援規格模板、逐項編輯與批量套用。</div>
+                    <div className="text-sm font-semibold text-slate-900">規格模板</div>
+                    <div className="mt-1 text-xs text-slate-500">先建立模板，再到「菜品設置」一鍵套用到菜品。</div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <select
-                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      onChange={(event) => setSelectedTemplateId(event.target.value)}
+                      value={selectedTemplateId}
+                    >
+                      <option value="">選擇模板</option>
+                      {localSettings.specTemplates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => openSpecEditorForTemplate(selectedTemplateId || undefined)}
+                      type="button"
+                    >
+                      {selectedSpecTemplate ? "編輯模板" : "新建模板"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
+                  <table className="w-full border-collapse text-sm">
+                    <thead className="bg-white">
+                      <tr className="text-left text-xs font-semibold text-slate-500">
+                        <th className="border-b border-slate-200 px-3 py-2">模板</th>
+                        <th className="border-b border-slate-200 px-3 py-2">規格組</th>
+                        <th className="border-b border-slate-200 px-3 py-2">選項數</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {localSettings.specTemplates.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-6 text-slate-500" colSpan={4}>
+                            目前沒有規格模板
+                          </td>
+                        </tr>
+                      ) : (
+                        localSettings.specTemplates.map((template) => (
+                          <tr key={template.id}>
+                            <td className="border-b border-slate-100 px-3 py-2 font-semibold text-slate-900">
+                              {template.name}
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-slate-600">
+                              {template.specGroups?.length ?? 0}
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-slate-600">
+                              {template.specGroups?.reduce((sum, g) => sum + (g.options?.length ?? 0), 0) ?? 0}
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right">
+                              <button
+                                className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                                onClick={() => openSpecEditorForTemplate(template.id)}
+                                type="button"
+                              >
+                                編輯
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {menuSubTab === "items" ? (
+              <div className="mt-4 flex-1 min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">菜品</div>
+                    <div className="mt-1 text-xs text-slate-500">規格可直接選模板套用；需要微調再按「編輯」。</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                       onChange={(event) => {
                         setMenuCategoryId(event.target.value);
                         setMenuPage(1);
@@ -1280,7 +1386,7 @@ export function DeviceSettings() {
                       ))}
                     </select>
                     <button
-                      className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
                       onClick={() =>
                         setMenuDraft((current) => ({
                           ...current,
@@ -1303,60 +1409,10 @@ export function DeviceSettings() {
                   </div>
                 </div>
 
-                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">規格模板</div>
-                      <div className="mt-1 text-xs text-slate-500">常用飲品規格可先做成模板，再套用到單個菜品或本頁菜品。</div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <select
-                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                        onChange={(event) => setSelectedTemplateId(event.target.value)}
-                        value={selectedTemplateId}
-                      >
-                        <option value="">選擇模板</option>
-                        {localSettings.specTemplates.map((template) => (
-                          <option key={template.id} value={template.id}>
-                            {template.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => openSpecEditorForTemplate(selectedTemplateId || undefined)}
-                        type="button"
-                      >
-                        {selectedSpecTemplate ? "編輯模板" : "新建模板"}
-                      </button>
-                      <button
-                        className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                        disabled={!selectedSpecTemplate}
-                        onClick={() => {
-                          if (!selectedSpecTemplate) return;
-                          const nextSpec = cloneSpecGroups(selectedSpecTemplate.specGroups);
-                          setMenuDraft((current) => ({
-                            ...current,
-                            menuItems: current.menuItems.map((item) =>
-                              menuPageItems.some((row) => row.id === item.id) ? { ...item, specGroups: nextSpec } : item,
-                            ),
-                          }));
-                          setStatus(`已把模板「${selectedSpecTemplate.name}」套用到本頁菜品，請保存菜單。`);
-                        }}
-                        type="button"
-                      >
-                        套用到本頁
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                   {(() => {
-                    const filteredCount = menuDraft.menuItems.filter(
-                      (item) => menuCategoryId === "all" || item.categoryId === menuCategoryId,
-                    ).length;
-                    const totalPages = Math.max(1, Math.ceil(filteredCount / menuPageSize));
+                    const filteredCount = menuFilteredItems.length;
+                    const totalPages = menuTotalPages;
                     return (
                       <>
                         <div className="text-xs text-slate-500">
@@ -1385,7 +1441,7 @@ export function DeviceSettings() {
                   })()}
                 </div>
 
-            <div className="mt-2 flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-200">
+                <div className="mt-2 flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-200">
                   <table className="w-full border-collapse text-sm">
                     <thead className="sticky top-0 z-10 bg-white">
                       <tr className="text-left text-xs font-semibold text-slate-500">
@@ -1397,113 +1453,136 @@ export function DeviceSettings() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(() => {
-                        const filtered = menuDraft.menuItems.filter(
-                          (item) => menuCategoryId === "all" || item.categoryId === menuCategoryId,
-                        );
-                        const totalPages = Math.max(1, Math.ceil(filtered.length / menuPageSize));
-                        const safePage = Math.min(menuPage, totalPages);
-                        const start = (safePage - 1) * menuPageSize;
-                        return filtered.slice(start, start + menuPageSize);
-                      })().map((item) => (
-                        <tr key={item.id} className="align-top">
-                          <td className="border-b border-slate-100 py-2 pr-3">
-                            <input
-                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              onChange={(event) =>
-                                setMenuDraft((current) => ({
-                                  ...current,
-                                  menuItems: current.menuItems.map((row) =>
-                                    row.id === item.id ? { ...row, name: event.target.value } : row,
-                                  ),
-                                }))
-                              }
-                              value={item.name}
-                            />
-                          </td>
-                          <td className="border-b border-slate-100 py-2 pr-3">
-                            <select
-                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              onChange={(event) =>
-                                setMenuDraft((current) => ({
-                                  ...current,
-                                  menuItems: current.menuItems.map((row) =>
-                                    row.id === item.id ? { ...row, categoryId: event.target.value } : row,
-                                  ),
-                                }))
-                              }
-                              value={item.categoryId}
-                            >
-                              {menuDraft.categories.map((category) => (
-                                <option key={category.id} value={category.id}>
-                                  {category.name}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="border-b border-slate-100 py-2 pr-3">
-                            <input
-                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              inputMode="decimal"
-                              onChange={(event) =>
-                                setMenuDraft((current) => ({
-                                  ...current,
-                                  menuItems: current.menuItems.map((row) =>
-                                    row.id === item.id ? { ...row, price: Number(event.target.value) || 0 } : row,
-                                  ),
-                                }))
-                              }
-                              value={String(item.price)}
-                            />
-                          </td>
-                          <td className="border-b border-slate-100 py-2 pr-3">
-                            <select
-                              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              onChange={(event) =>
-                                setMenuDraft((current) => ({
-                                  ...current,
-                                  menuItems: current.menuItems.map((row) =>
-                                    row.id === item.id
-                                      ? {
-                                          ...row,
-                                          printerGroup: event.target.value,
-                                        }
-                                      : row,
-                                  ),
-                                }))
-                              }
-                              value={item.printerGroup}
-                            >
-                              {localSettings.printZones.map((zone) => (
-                                <option key={zone.id} value={zone.id}>
-                                  {zone.name}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="border-b border-slate-100 py-2">
-                            <div className="grid gap-2">
-                              <div className="text-xs text-slate-600">
-                                {item.specGroups?.length
-                                  ? `共 ${item.specGroups.length} 組規格（${item.specGroups.reduce((sum, g) => sum + (g.options?.length ?? 0), 0)} 個選項）`
-                                  : "無規格"}
-                              </div>
-                              <button
-                                className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                                onClick={() => openSpecEditorForItem(item.id, item.specGroups)}
-                                type="button"
+                      {menuPageItems.map((item) => {
+                        const specKey = JSON.stringify(item.specGroups ?? []);
+                        const matchedTemplateId =
+                          localSettings.specTemplates.find((t) => JSON.stringify(t.specGroups ?? []) === specKey)?.id ??
+                          "";
+                        return (
+                          <tr key={item.id} className="align-top">
+                            <td className="border-b border-slate-100 py-2 pr-3">
+                              <input
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) =>
+                                  setMenuDraft((current) => ({
+                                    ...current,
+                                    menuItems: current.menuItems.map((row) =>
+                                      row.id === item.id ? { ...row, name: event.target.value } : row,
+                                    ),
+                                  }))
+                                }
+                                value={item.name}
+                              />
+                            </td>
+                            <td className="border-b border-slate-100 py-2 pr-3">
+                              <select
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) =>
+                                  setMenuDraft((current) => ({
+                                    ...current,
+                                    menuItems: current.menuItems.map((row) =>
+                                      row.id === item.id ? { ...row, categoryId: event.target.value } : row,
+                                    ),
+                                  }))
+                                }
+                                value={item.categoryId}
                               >
-                                編輯規格
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                                {menuDraft.categories.map((category) => (
+                                  <option key={category.id} value={category.id}>
+                                    {category.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="border-b border-slate-100 py-2 pr-3">
+                              <input
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                inputMode="decimal"
+                                onChange={(event) =>
+                                  setMenuDraft((current) => ({
+                                    ...current,
+                                    menuItems: current.menuItems.map((row) =>
+                                      row.id === item.id ? { ...row, price: Number(event.target.value) || 0 } : row,
+                                    ),
+                                  }))
+                                }
+                                value={String(item.price)}
+                              />
+                            </td>
+                            <td className="border-b border-slate-100 py-2 pr-3">
+                              <select
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) =>
+                                  setMenuDraft((current) => ({
+                                    ...current,
+                                    menuItems: current.menuItems.map((row) =>
+                                      row.id === item.id ? { ...row, printerGroup: event.target.value } : row,
+                                    ),
+                                  }))
+                                }
+                                value={item.printerGroup}
+                              >
+                                {localSettings.printZones.map((zone) => (
+                                  <option key={zone.id} value={zone.id}>
+                                    {zone.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="border-b border-slate-100 py-2">
+                              <div className="grid gap-2">
+                                <select
+                                  className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                  onChange={(event) => {
+                                    const templateId = event.target.value;
+                                    if (!templateId) {
+                                      setMenuDraft((current) => ({
+                                        ...current,
+                                        menuItems: current.menuItems.map((row) =>
+                                          row.id === item.id ? { ...row, specGroups: undefined } : row,
+                                        ),
+                                      }));
+                                      setStatus("已清空菜品規格，請保存菜單。");
+                                      return;
+                                    }
+                                    const template =
+                                      localSettings.specTemplates.find((t) => t.id === templateId) ?? null;
+                                    if (!template) return;
+                                    const nextSpec = cloneSpecGroups(template.specGroups);
+                                    setMenuDraft((current) => ({
+                                      ...current,
+                                      menuItems: current.menuItems.map((row) =>
+                                        row.id === item.id ? { ...row, specGroups: nextSpec } : row,
+                                      ),
+                                    }));
+                                    setStatus(`已套用模板「${template.name}」，請保存菜單。`);
+                                  }}
+                                  value={matchedTemplateId}
+                                >
+                                  <option value="">無規格</option>
+                                  {localSettings.specTemplates.map((template) => (
+                                    <option key={template.id} value={template.id}>
+                                      {template.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                                  onClick={() => openSpecEditorForItem(item.id, item.specGroups)}
+                                  type="button"
+                                >
+                                  編輯
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               </div>
-            </div>
+            ) : null}
           </section>
         ) : null}
 
