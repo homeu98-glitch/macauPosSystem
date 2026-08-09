@@ -401,9 +401,9 @@ export function ShiftPage() {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-100">
+    <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="mx-auto h-screen max-w-[1600px] overflow-auto px-4 py-4 lg:pl-[88px]">
+      <div className="mx-auto h-[100dvh] max-w-[1600px] overflow-auto px-4 py-4 md:pl-[88px]">
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="text-lg font-semibold text-slate-900">交班</div>
           <div className="mt-1 text-sm text-slate-500">
@@ -415,7 +415,7 @@ export function ShiftPage() {
           {status}
         </div>
 
-        <div className="mt-3 grid gap-3 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="mt-3 grid gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-base font-semibold text-slate-900">班次狀態</div>
             <div className="mt-3 space-y-2 text-sm text-slate-700">

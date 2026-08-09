@@ -134,9 +134,9 @@ export function MembersPage() {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-100">
+    <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
+      <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="text-lg font-semibold text-slate-900">會員</div>
@@ -230,7 +230,7 @@ export function MembersPage() {
           </div>
         </main>
 
-        <div className="hidden w-[320px] shrink-0 lg:block">
+        <div className="hidden w-[280px] shrink-0 md:block lg:w-[320px]">
           <FixedNumberPad
             confirmLabel={padTarget === "search" ? "搜尋" : "完成"}
             showDisplay={false}

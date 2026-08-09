@@ -90,7 +90,7 @@ export function SoldOutPage() {
   return (
     <div className="min-h-screen bg-slate-100">
       <AppSidebar />
-      <div className="flex min-h-screen lg:pl-[72px]">
+      <div className="flex min-h-screen md:pl-[72px]">
         <main className="flex-1 px-4 py-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -360,7 +360,7 @@ export function SoldOutPage() {
           </section>
         </main>
 
-        <div className="hidden w-[320px] shrink-0 lg:block">
+        <div className="hidden w-[280px] shrink-0 md:block lg:w-[320px]">
           <FixedNumberPad
             confirmLabel="完成"
             showDisplay={false}

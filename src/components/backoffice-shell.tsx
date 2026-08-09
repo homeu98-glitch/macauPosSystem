@@ -20,7 +20,7 @@ export function BackofficeShell({ children }: PropsWithChildren) {
   return (
     <div className="min-h-screen bg-slate-100">
       <div className="flex min-h-screen">
-        <aside className="hidden w-[240px] shrink-0 border-r border-slate-200 bg-slate-950 px-4 py-5 text-white lg:flex lg:flex-col">
+        <aside className="hidden w-[240px] shrink-0 border-r border-slate-200 bg-slate-950 px-4 py-5 text-white md:flex md:flex-col">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">HQ Console</div>
             <div className="mt-2 text-xl font-semibold">Backoffice</div>
@@ -59,7 +59,7 @@ export function BackofficeShell({ children }: PropsWithChildren) {
         </aside>
 
         <main className="flex min-h-screen flex-1 flex-col">
-          <header className="border-b border-slate-200 bg-white px-4 py-4 lg:px-6">
+          <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-slate-900">
@@ -81,6 +81,25 @@ export function BackofficeShell({ children }: PropsWithChildren) {
           <div className="flex-1">{children}</div>
         </main>
       </div>
+
+      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-2 py-2 backdrop-blur md:hidden">
+        <div className="grid grid-cols-3 gap-2">
+          {navItems.map((item) => {
+            const active = pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                className={`rounded-2xl px-3 py-2 text-center text-xs font-semibold ${
+                  active ? "bg-violet-500 text-white" : "bg-slate-100 text-slate-700"
+                }`}
+                href={item.href}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

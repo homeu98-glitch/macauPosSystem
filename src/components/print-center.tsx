@@ -793,9 +793,9 @@ export function PrintCenter() {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-100">
+    <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-screen overflow-hidden lg:pl-[72px]">
+      <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -916,7 +916,7 @@ export function PrintCenter() {
             ) : null}
 
             {activeTab === "receipt-template" ? (
-              <div className="grid gap-3 lg:grid-cols-[420px_minmax(0,1fr)]">
+              <div className="grid gap-3 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)]">
                 <article className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="text-sm font-semibold text-slate-900">收據模板設置</div>
                   <div className="mt-1 text-xs text-slate-500">可拖拽排序，預覽會接近真實收據輸出。</div>
@@ -1417,7 +1417,7 @@ export function PrintCenter() {
             ) : null}
 
             {activeTab === "label-template" ? (
-              <div className="grid gap-3 lg:grid-cols-[420px_minmax(0,1fr)]">
+              <div className="grid gap-3 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[420px_minmax(0,1fr)]">
                 <article className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="text-sm font-semibold text-slate-900">標籤模板設置</div>
                   <div className="mt-1 text-xs text-slate-500">可拖拽排序，並預覽更接近真實標籤輸出。</div>

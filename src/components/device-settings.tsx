@@ -366,7 +366,7 @@ export function DeviceSettings() {
       <AppSidebar />
       <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 lg:pl-[88px]">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 md:pl-[88px]">
             <div>
               <div className="text-lg font-semibold text-slate-900">設置</div>
               <div className="mt-1 text-sm text-slate-500">
@@ -379,7 +379,7 @@ export function DeviceSettings() {
           </div>
         </div>
 
-        <div className="mx-auto max-w-[1600px] px-4 py-3 lg:pl-[88px]">
+        <div className="mx-auto max-w-[1600px] px-4 py-3 md:pl-[88px]">
         <div className="mb-3 flex flex-wrap gap-2">
           {[
             ["device", "打印機"],
@@ -407,7 +407,7 @@ export function DeviceSettings() {
         </div>
 
         {activeTab === "device" ? (
-          <div className="grid min-w-0 gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
+          <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">

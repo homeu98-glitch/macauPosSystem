@@ -546,7 +546,7 @@ export function AdminAccountsPage() {
   return (
     <div className="min-h-screen bg-slate-100">
       <AppSidebar />
-      <div className="flex min-h-screen lg:pl-[72px]">
+      <div className="flex min-h-screen md:pl-[72px]">
         <main className="flex min-h-screen flex-1 flex-col">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
