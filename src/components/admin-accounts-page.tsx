@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import {
   loadAccountStores,
   loadAccountUsers,
@@ -443,10 +444,21 @@ export function AdminAccountsPage() {
 
   function renderAccountForm(title: string, submitLabel: string, onSubmit: () => void, showAccountAndPin: boolean) {
     return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-        <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
-          <div className="text-lg font-semibold text-slate-900">{title}</div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <ResponsiveModal
+        actions={
+          <>
+            <button className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200" onClick={() => { setCreateOpen(false); setEditOpen(false); }} type="button">
+              取消
+            </button>
+            <button aria-busy={saving} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={saving} onClick={onSubmit} type="button">
+              {saving ? "提交中…" : submitLabel}
+            </button>
+          </>
+        }
+        title={title}
+        widthClassName="max-w-2xl"
+      >
+          <div className="grid gap-3 md:grid-cols-2">
             <label className="grid gap-1 text-sm">
               <span className="text-xs text-slate-500">姓名</span>
               <input className="rounded-2xl border border-slate-200 px-3 py-2" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
@@ -527,16 +539,7 @@ export function AdminAccountsPage() {
               />
             </label>
           </div>
-          <div className="mt-5 flex justify-end gap-2">
-            <button className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200" onClick={() => { setCreateOpen(false); setEditOpen(false); }} type="button">
-              取消
-            </button>
-            <button aria-busy={saving} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={saving} onClick={onSubmit} type="button">
-              {saving ? "提交中…" : submitLabel}
-            </button>
-          </div>
-        </div>
-      </div>
+      </ResponsiveModal>
     );
   }
 
@@ -689,37 +692,41 @@ export function AdminAccountsPage() {
       {editOpen ? renderAccountForm("編輯帳戶", "保存修改", submitEdit, false) : null}
 
       {pinOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">修改 PIN</div>
-            <div className="mt-1 text-sm text-slate-500">{form.name} · {form.account}</div>
-            <label className="mt-4 grid gap-1 text-sm">
-              <span className="text-xs text-slate-500">新 PIN（4 位）</span>
-              <input className="rounded-2xl border border-slate-200 px-3 py-2" inputMode="numeric" maxLength={4} value={newPin} onChange={(event) => setNewPin(event.target.value.replace(/\D/g, "").slice(0, 4))} />
-            </label>
-            <div className="mt-5 flex justify-end gap-2">
+        <ResponsiveModal
+          actions={
+            <>
               <button className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200" onClick={() => setPinOpen(false)} type="button">取消</button>
               <button aria-busy={saving} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={saving} onClick={submitPinChange} type="button">
                 {saving ? "提交中…" : "保存 PIN"}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          description={`${form.name} · ${form.account}`}
+          title="修改 PIN"
+          widthClassName="max-w-md"
+        >
+            <label className="mt-4 grid gap-1 text-sm">
+              <span className="text-xs text-slate-500">新 PIN（4 位）</span>
+              <input className="rounded-2xl border border-slate-200 px-3 py-2" inputMode="numeric" maxLength={4} value={newPin} onChange={(event) => setNewPin(event.target.value.replace(/\D/g, "").slice(0, 4))} />
+            </label>
+        </ResponsiveModal>
       ) : null}
 
       {deleteOpen && selectedAccount ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">刪除帳戶</div>
-            <div className="mt-2 text-sm text-slate-600">確定要刪除 `{selectedAccount.name}`（{selectedAccount.account}）？</div>
-            <div className="mt-5 flex justify-end gap-2">
+        <ResponsiveModal
+          actions={
+            <>
               <button className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200" onClick={() => setDeleteOpen(false)} type="button">取消</button>
               <button aria-busy={saving} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={saving} onClick={submitDelete} type="button">
                 {saving ? "提交中…" : "確認刪除"}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          title="刪除帳戶"
+          widthClassName="max-w-md"
+        >
+          <div className="text-sm text-slate-600">確定要刪除 `{selectedAccount.name}`（{selectedAccount.account}）？</div>
+        </ResponsiveModal>
       ) : null}
     </div>
   );

@@ -7,6 +7,7 @@ import mqtt, { MqttClient } from "mqtt";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -3448,25 +3449,38 @@ export function PosApp() {
       />
 
       {noteModal ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">
-                  {noteModal.type === "order" ? "全單備註" : "單品備註"}
-                </div>
-                <div className="mt-1 text-sm text-slate-500">可多選常用備註，也可自由輸入。</div>
-              </div>
+        <ResponsiveModal
+          actions={
+            <>
               <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                onClick={() => setNoteModal(null)}
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setNoteDraft("")}
                 type="button"
               >
-                關閉
+                清空
               </button>
-            </div>
-
-            <div className="mt-4">
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  if (noteModal.type === "order") {
+                    setOrderNote(noteDraft.trim());
+                  } else if (noteModal.itemKey) {
+                    applyItemNote(noteModal.itemKey, noteDraft);
+                  }
+                  setNoteModal(null);
+                }}
+                type="button"
+              >
+                保存
+              </button>
+            </>
+          }
+          description="可多選常用備註，也可自由輸入。"
+          onClose={() => setNoteModal(null)}
+          title={noteModal.type === "order" ? "全單備註" : "單品備註"}
+          widthClassName="max-w-2xl"
+        >
+            <div>
               <div className="text-xs font-semibold text-slate-500">常用備註</div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {localSettings.notePresets.length === 0 ? (
@@ -3500,37 +3514,105 @@ export function PosApp() {
                 value={noteDraft}
               />
             </div>
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={() => setNoteDraft("")}
-                type="button"
-              >
-                清空
-              </button>
-              <button
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                onClick={() => {
-                  if (noteModal.type === "order") {
-                    setOrderNote(noteDraft.trim());
-                  } else if (noteModal.itemKey) {
-                    applyItemNote(noteModal.itemKey, noteDraft);
-                  }
-                  setNoteModal(null);
-                }}
-                type="button"
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {viewingOrder ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setViewingOrderId(null)}
+                type="button"
+              >
+                關閉
+              </button>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => reprintOrder(viewingOrder)}
+                type="button"
+              >
+                重打單
+              </button>
+              {(viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total) &&
+              viewingOrder.status !== "settled" &&
+              viewingOrder.status !== "refunded" ? (
+                <button
+                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => markOrderCompleted(viewingOrder.id)}
+                  type="button"
+                >
+                  已完成
+                </button>
+              ) : null}
+              {(viewingOrder.status === "settled" || viewingOrder.status === "partially_refunded") ? (
+                <>
+                  <button
+                    className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={!canRefundOrder}
+                    onClick={() => {
+                      if (!canRefundOrder) {
+                        showPermissionDenied("退款");
+                        return;
+                      }
+                      setPartialRefundOrderId(viewingOrder.id);
+                      setPartialRefundReason("");
+                      setPartialRefundQuantities({});
+                    }}
+                    type="button"
+                  >
+                    部分退款
+                  </button>
+                  <button
+                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={!canRefundOrder}
+                    onClick={() => {
+                      if (!canRefundOrder) {
+                        showPermissionDenied("退款");
+                        return;
+                      }
+                      setOrderActionRequest({ type: "refund_order", orderId: viewingOrder.id });
+                      setOrderActionReason("");
+                    }}
+                    type="button"
+                  >
+                    整單退款
+                  </button>
+                </>
+              ) : null}
+              {(viewingOrder.status === "draft" || viewingOrder.status === "sent_to_kitchen") ? (
+                <button
+                  className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => {
+                    setOrderActionRequest({ type: "cancel_order", orderId: viewingOrder.id });
+                    setOrderActionReason("");
+                  }}
+                  type="button"
+                >
+                  取消結帳
+                </button>
+              ) : null}
+              {viewingOrder.status !== "settled" &&
+              viewingOrder.status !== "cancelled" &&
+              viewingOrder.status !== "refunded" &&
+              (viewingOrder.prepaidAmount ?? 0) < viewingOrder.total ? (
+                <button
+                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                  onClick={() => {
+                    setViewingOrderId(null);
+                    setPayingOrderId(viewingOrder.id);
+                    setQuickPanel("cashier");
+                  }}
+                  type="button"
+                >
+                  去結帳
+                </button>
+              ) : null}
+            </>
+          }
+          description={`${viewingOrder.localOrderNo} · ${viewingOrder.tableName}`}
+          header={
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-xl font-semibold text-slate-900">訂單詳情</div>
@@ -3571,8 +3653,11 @@ export function PosApp() {
                 )}
               </div>
             </div>
-
-            <div className="mt-4 grid gap-2">
+          }
+          showCloseButton={false}
+          widthClassName="max-w-2xl"
+        >
+            <div className="grid gap-2">
               {viewingOrder.items.map((item, index) => (
                 <div key={`${item.menuItemId}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-start justify-between gap-3">
@@ -3680,104 +3765,12 @@ export function PosApp() {
                 </div>
               ) : null}
             </div>
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={() => setViewingOrderId(null)}
-                type="button"
-              >
-                關閉
-              </button>
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={() => reprintOrder(viewingOrder)}
-                type="button"
-              >
-                重打單
-              </button>
-              {(viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total) &&
-              viewingOrder.status !== "settled" &&
-              viewingOrder.status !== "refunded" ? (
-                <button
-                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => markOrderCompleted(viewingOrder.id)}
-                  type="button"
-                >
-                  已完成
-                </button>
-              ) : null}
-              {(viewingOrder.status === "settled" || viewingOrder.status === "partially_refunded") ? (
-                <>
-                  <button
-                    className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    disabled={!canRefundOrder}
-                    onClick={() => {
-                      if (!canRefundOrder) {
-                        showPermissionDenied("退款");
-                        return;
-                      }
-                      setPartialRefundOrderId(viewingOrder.id);
-                      setPartialRefundReason("");
-                      setPartialRefundQuantities({});
-                    }}
-                    type="button"
-                  >
-                    部分退款
-                  </button>
-                  <button
-                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    disabled={!canRefundOrder}
-                    onClick={() => {
-                      if (!canRefundOrder) {
-                        showPermissionDenied("退款");
-                        return;
-                      }
-                      setOrderActionRequest({ type: "refund_order", orderId: viewingOrder.id });
-                      setOrderActionReason("");
-                    }}
-                    type="button"
-                  >
-                    整單退款
-                  </button>
-                </>
-              ) : null}
-              {(viewingOrder.status === "draft" || viewingOrder.status === "sent_to_kitchen") ? (
-                <button
-                  className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => {
-                    setOrderActionRequest({ type: "cancel_order", orderId: viewingOrder.id });
-                    setOrderActionReason("");
-                  }}
-                  type="button"
-                >
-                  取消結帳
-                </button>
-              ) : null}
-              {viewingOrder.status !== "settled" &&
-              viewingOrder.status !== "cancelled" &&
-              viewingOrder.status !== "refunded" &&
-              (viewingOrder.prepaidAmount ?? 0) < viewingOrder.total ? (
-                <button
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => {
-                    setViewingOrderId(null);
-                    setPayingOrderId(viewingOrder.id);
-                    setQuickPanel("cashier");
-                  }}
-                  type="button"
-                >
-                  去結帳
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {payingOrderId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
+        <ResponsiveModal
+          header={
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-xl font-semibold text-slate-900">結帳</div>
@@ -3812,8 +3805,11 @@ export function PosApp() {
                 </button>
               </div>
             </div>
-
-            <div className="mt-5 grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
+          }
+          showCloseButton={false}
+          widthClassName="max-w-2xl"
+        >
+            <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-semibold text-slate-900">本次支付內容</div>
                 <div className="mt-3 space-y-2">
@@ -4051,27 +4047,13 @@ export function PosApp() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {orderActionRequest ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">
-              {orderActionRequest.type === "refund_order" ? "退款原因" : "取消結帳原因"}
-            </div>
-            <div className="mt-1 text-sm text-slate-500">
-              {orders.find((order) => order.id === orderActionRequest.orderId)?.localOrderNo ?? "--"}
-            </div>
-            <input
-              autoFocus
-              className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
-              onChange={(event) => setOrderActionReason(event.target.value)}
-              placeholder={orderActionRequest.type === "refund_order" ? "例如：客人退款 / 支付失敗" : "例如：客人不要了 / 重開一單"}
-              value={orderActionReason}
-            />
-            <div className="mt-4 flex justify-end gap-2">
+        <ResponsiveModal
+          actions={
+            <>
               <button
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                 onClick={() => {
@@ -4095,17 +4077,49 @@ export function PosApp() {
               >
                 {orderActionRequest.type === "refund_order" ? "確認退款" : "確認取消"}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          description={orders.find((order) => order.id === orderActionRequest.orderId)?.localOrderNo ?? "--"}
+          title={orderActionRequest.type === "refund_order" ? "退款原因" : "取消結帳原因"}
+          widthClassName="max-w-md"
+          zIndexClassName="z-[60]"
+        >
+              <input
+                autoFocus
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+                onChange={(event) => setOrderActionReason(event.target.value)}
+                placeholder={orderActionRequest.type === "refund_order" ? "例如：客人退款 / 支付失敗" : "例如：客人不要了 / 重開一單"}
+                value={orderActionReason}
+              />
+        </ResponsiveModal>
       ) : null}
 
       {refundSummaryExportOpen ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">退款匯總導出</div>
-            <div className="mt-1 text-sm text-slate-500">可按日期或按員工，把目前訂單中的退款記錄匯總導出成 CSV。</div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setRefundSummaryExportOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={exportRefundSummary}
+                type="button"
+              >
+                導出 CSV
+              </button>
+            </>
+          }
+          description="可按日期或按員工，把目前訂單中的退款記錄匯總導出成 CSV。"
+          title="退款匯總導出"
+          widthClassName="max-w-lg"
+          zIndexClassName="z-[60]"
+        >
+            <div className="grid gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
                 <span className="text-xs text-slate-500">匯總方式</span>
                 <select
@@ -4136,29 +4150,11 @@ export function PosApp() {
                 />
               </label>
             </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={() => setRefundSummaryExportOpen(false)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                onClick={exportRefundSummary}
-                type="button"
-              >
-                導出 CSV
-              </button>
-            </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {partialRefundOrderId ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
-          <div className="flex w-full max-w-2xl max-h-[calc(100vh-32px)] flex-col rounded-3xl bg-white p-5 shadow-2xl">
+        <ResponsiveModal widthClassName="max-w-2xl" zIndexClassName="z-[60]">
             {(() => {
               const order = orders.find((item) => item.id === partialRefundOrderId);
               if (!order || !bootstrap) return null;
@@ -4186,7 +4182,7 @@ export function PosApp() {
               );
               return (
                 <>
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
                     <div>
                       <div className="text-lg font-semibold text-slate-900">部分退款</div>
                       <div className="mt-1 text-sm text-slate-500">{order.localOrderNo} · 選擇要退款的菜品與數量</div>
@@ -4203,8 +4199,7 @@ export function PosApp() {
                       關閉
                     </button>
                   </div>
-                  <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-                    <div className="grid gap-3">
+                  <div className="mt-4 grid gap-3">
                       {refundableRows.map(({ item, key, availableQty, selectedQty }) => (
                         <div key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                           <div className="flex items-start justify-between gap-3">
@@ -4249,8 +4244,6 @@ export function PosApp() {
                           </div>
                         </div>
                       ))}
-                    </div>
-                  </div>
                   <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                     <label className="grid gap-1 text-sm font-semibold text-slate-700">
                       <span className="text-xs text-slate-500">退款原因</span>
@@ -4268,7 +4261,8 @@ export function PosApp() {
                       </span>
                     </div>
                   </div>
-                  <div className="mt-4 flex justify-end gap-2">
+                  </div>
+                  <div className="mt-4 sticky bottom-0 z-[1] flex justify-end gap-2 border-t border-slate-200 bg-white/95 pt-3 backdrop-blur">
                     <button
                       className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                       onClick={() => {
@@ -4291,44 +4285,13 @@ export function PosApp() {
                 </>
               );
             })()}
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {voidRequest ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">退菜原因</div>
-            <div className="mt-1 text-sm text-slate-500">
-              {voidRequest.isFullOrder ? "全部退菜" : `${voidRequest.item.name} · 只退 1 份`}
-            </div>
-            <div className="mt-4">
-              <div className="text-xs font-semibold text-slate-500">取消備註</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {localSettings.cancelNotePresets.map((preset) => (
-                  <button
-                    key={preset}
-                    className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
-                    onClick={() => {
-                      const base = voidReason.trim();
-                      const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
-                      setVoidReason(next);
-                    }}
-                    type="button"
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <input
-              autoFocus
-              className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
-              onChange={(event) => setVoidReason(event.target.value)}
-              placeholder="例如：客人取消 / 廚房售罄"
-              value={voidReason}
-            />
-            <div className="mt-4 flex justify-end gap-2">
+        <ResponsiveModal
+          actions={
+            <>
               <button
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                 onClick={() => {
@@ -4354,9 +4317,40 @@ export function PosApp() {
               >
                 確認退菜
               </button>
+            </>
+          }
+          description={voidRequest.isFullOrder ? "全部退菜" : `${voidRequest.item.name} · 只退 1 份`}
+          title="退菜原因"
+          widthClassName="max-w-md"
+          zIndexClassName="z-[60]"
+        >
+            <div>
+              <div className="text-xs font-semibold text-slate-500">取消備註</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {localSettings.cancelNotePresets.map((preset) => (
+                  <button
+                    key={preset}
+                    className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                    onClick={() => {
+                      const base = voidReason.trim();
+                      const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
+                      setVoidReason(next);
+                    }}
+                    type="button"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        </div>
+            <input
+              autoFocus
+              className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+              onChange={(event) => setVoidReason(event.target.value)}
+              placeholder="例如：客人取消 / 廚房售罄"
+              value={voidReason}
+            />
+        </ResponsiveModal>
       ) : null}
 
       {toast ? (
@@ -4370,8 +4364,12 @@ export function PosApp() {
       ) : null}
 
       {!shift.openedAt ? (
-        <div className="fixed inset-0 z-[52] grid place-items-center bg-slate-950/55 p-4 lg:pl-[72px]">
-          <div className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-2xl">
+        <ResponsiveModal
+          bodyClassName="text-center"
+          panelClassName="p-6 sm:p-8 lg:ml-[72px]"
+          widthClassName="max-w-md"
+          zIndexClassName="z-[52]"
+        >
             <div className="text-sm font-semibold tracking-widest text-orange-500">今日未開工</div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">開始今日營業</div>
             <div className="mt-2 text-sm text-slate-500">
@@ -4384,8 +4382,7 @@ export function PosApp() {
             >
               開工
             </button>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {orderSuccessFlash ? (

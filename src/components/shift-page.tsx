@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadAuthSession,
@@ -680,14 +681,34 @@ export function ShiftPage() {
       </div>
 
       {confirmOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">確認交班</div>
-            <div className="mt-1 text-sm text-slate-500">
-              請先核對今日總數，確認後會打印交班單，並把系統狀態切回待開工。
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                disabled={closingShift}
+                onClick={() => setConfirmOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                aria-busy={closingShift}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                disabled={closingShift}
+                onClick={() => void closeShift()}
+                type="button"
+              >
+                {closingShift ? "提交中…" : "確定並打印"}
+              </button>
+            </>
+          }
+          bodyClassName="grid gap-4"
+          description="請先核對今日總數，確認後會打印交班單，並把系統狀態切回待開工。"
+          title="確認交班"
+          widthClassName="max-w-2xl"
+        >
+            <div className="grid gap-3 md:grid-cols-3">
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">已結帳訂單</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.count}</div>
@@ -706,35 +727,16 @@ export function ShiftPage() {
               </article>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
               <div>{shift.openedAt ? `開工時間：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "未記錄開工時間"}</div>
               <div className="mt-1">應收現金：{formatMoney(expectedCash)}</div>
               <div className="mt-1">待同步事件：{queueSummary.pendingEvents} · 待補傳打印：{queueSummary.pendingPrints}</div>
               {Number.isFinite(actualCashValue) ? <div className="mt-1">實收現金：{formatMoney(actualCashValue)} · 差額：{formatMoney(cashDifference)}</div> : null}
               {shiftNote ? <div className="mt-1">備註：{shiftNote}</div> : null}
             </div>
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                disabled={closingShift}
-                onClick={() => setConfirmOpen(false)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                aria-busy={closingShift}
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                disabled={closingShift}
-                onClick={() => void closeShift()}
-                type="button"
-              >
-                {closingShift ? "提交中…" : "確定並打印"}
-              </button>
             </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
     </div>
   );

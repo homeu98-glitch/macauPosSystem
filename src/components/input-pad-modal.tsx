@@ -1,5 +1,7 @@
 "use client";
 
+import { ResponsiveModal } from "@/components/responsive-modal";
+
 type InputPadModalProps = {
   open: boolean;
   title: string;
@@ -41,33 +43,59 @@ export function InputPadModal({
   }
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[90] flex items-end justify-end p-4">
-      <div className="pointer-events-auto w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold text-slate-900">{title}</div>
-            <div className="mt-1 text-sm text-slate-500">
-              {mode === "number" ? "請輸入數字" : "請輸入文字"}
-            </div>
-          </div>
+    <ResponsiveModal
+      actions={
+        <>
+          {mode === "text" ? (
+            <button
+              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+              onClick={() => append(" ")}
+              type="button"
+            >
+              空格
+            </button>
+          ) : (
+            <button
+              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+              onClick={() => onChange("0")}
+              type="button"
+            >
+              歸零
+            </button>
+          )}
           <button
-            className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-            onClick={onClose}
+            className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+            onClick={() => onChange(value.slice(0, -1))}
             type="button"
           >
-            關閉
+            刪除
           </button>
-        </div>
-
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xl font-semibold text-slate-900">
+          <button
+            className="rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600"
+            onClick={onConfirm}
+            type="button"
+          >
+            確定
+          </button>
+        </>
+      }
+      allowPointerEventsOnOverlay={false}
+      bodyClassName="grid gap-3"
+      description={mode === "number" ? "請輸入數字" : "請輸入文字"}
+      onClose={onClose}
+      panelClassName="border border-slate-200"
+      placement="bottom"
+      title={title}
+      widthClassName="max-w-xl"
+      zIndexClassName="z-[90]"
+    >
+      <div className="shrink-0 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-semibold text-slate-900 sm:text-xl">
           {value || " "}
-        </div>
-
-        <div className="mt-4 grid gap-3">
-          {rows.map((row, index) => (
+      </div>
+      {rows.map((row, index) => (
             <div
               key={`${mode}-${index}`}
-              className={`grid gap-2 ${mode === "number" ? "grid-cols-3" : "grid-cols-10"}`}
+              className={`grid gap-2 ${mode === "number" ? "grid-cols-3" : "grid-cols-5 sm:grid-cols-10"}`}
             >
               {row.map((key) => (
                 <button
@@ -86,42 +114,6 @@ export function InputPadModal({
                 : null}
             </div>
           ))}
-        </div>
-
-        <div className="mt-4 grid grid-cols-4 gap-2">
-          {mode === "text" ? (
-            <button
-              className="col-span-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-              onClick={() => append(" ")}
-              type="button"
-            >
-              空格
-            </button>
-          ) : (
-            <button
-              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-              onClick={() => onChange("0")}
-              type="button"
-            >
-              歸零
-            </button>
-          )}
-          <button
-            className={`${mode === "text" ? "col-span-1" : "col-span-1"} rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50`}
-            onClick={() => onChange(value.slice(0, -1))}
-            type="button"
-          >
-            刪除
-          </button>
-          <button
-            className={`${mode === "text" ? "col-span-1" : "col-span-2"} rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600`}
-            onClick={onConfirm}
-            type="button"
-          >
-            確定
-          </button>
-        </div>
-      </div>
-    </div>
+    </ResponsiveModal>
   );
 }

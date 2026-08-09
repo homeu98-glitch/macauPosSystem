@@ -11,6 +11,15 @@ export interface AccountStore {
   id: string;
   name: string;
   active: boolean;
+  code?: string;
+  city?: string;
+  sourceStoreId?: string;
+  sourceActive?: boolean;
+  manualDeactivated?: boolean;
+  effectiveActive?: boolean;
+  syncStatus?: "ok" | "error" | "pending";
+  lastSyncedAt?: string;
+  lastHeartbeatAt?: string;
   createdAt: string;
   updatedAt: string;
   note?: string;
@@ -34,6 +43,11 @@ export interface AccountUser {
   name: string;
   role: UserRole;
   active: boolean;
+  sourceAccountId?: string;
+  sourceActive?: boolean;
+  manualDeactivated?: boolean;
+  effectiveActive?: boolean;
+  lastSyncedAt?: string;
   storeIds: string[];
   permissionGroupId?: string;
   permissions: UserPermissions;
@@ -41,6 +55,20 @@ export interface AccountUser {
   updatedAt: string;
   lastLoginAt?: string;
   note?: string;
+}
+
+export interface BackofficeSyncJob {
+  id: string;
+  jobType: "stores" | "accounts" | "bindings" | "full";
+  scope: string;
+  status: "success" | "failed" | "running";
+  startedAt: string;
+  finishedAt?: string;
+  pulledCount: number;
+  upsertedCount: number;
+  failedCount: number;
+  summary: string;
+  error?: string;
 }
 
 export type PrinterGroup = string;

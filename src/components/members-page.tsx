@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { loadMembers, saveMembers } from "@/lib/storage";
 import { MemberCoupon, MemberProfile } from "@/lib/types";
@@ -253,10 +254,32 @@ export function MembersPage() {
       </div>
 
       {createOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-slate-900">新增會員</div>
-            <div className="mt-4 grid gap-3">
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                disabled={creatingMember}
+                onClick={() => setCreateOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                aria-busy={creatingMember}
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                disabled={creatingMember}
+                onClick={() => void createMember()}
+                type="button"
+              >
+                {creatingMember ? "提交中…" : "確認新增"}
+              </button>
+            </>
+          }
+          title="新增會員"
+          widthClassName="max-w-md"
+        >
+              <div className="grid gap-3">
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
                 <span className="text-xs text-slate-500">姓名</span>
                 <input
@@ -276,28 +299,8 @@ export function MembersPage() {
                 />
               </label>
               {createHint ? <div className="text-sm text-red-600">{createHint}</div> : null}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                disabled={creatingMember}
-                onClick={() => setCreateOpen(false)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                aria-busy={creatingMember}
-                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                disabled={creatingMember}
-                onClick={() => void createMember()}
-                type="button"
-              >
-                {creatingMember ? "提交中…" : "確認新增"}
-              </button>
-            </div>
-          </div>
-        </div>
+              </div>
+        </ResponsiveModal>
       ) : null}
     </div>
   );

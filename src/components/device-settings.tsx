@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -1758,24 +1759,151 @@ export function DeviceSettings() {
         ) : null}
 
         {specEditor.open ? (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-            <div className="flex w-full max-w-4xl max-h-[calc(100dvh-32px)] flex-col rounded-3xl bg-white p-5 shadow-2xl">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-lg font-semibold text-slate-900">
-                    {specEditor.mode === "template" ? "編輯規格模板" : "編輯規格"}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-500">超出畫面時可滾動查看全部內容，支持保存為模板。</div>
-                </div>
+          <ResponsiveModal
+            actions={
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                  onClick={closeSpecEditor}
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  onClick={() =>
+                    setSpecEditor((current) => ({
+                      ...current,
+                      draft: [
+                        ...current.draft,
+                        {
+                          id: crypto.randomUUID(),
+                          name: "新規格",
+                          selectionMode: "single",
+                          required: true,
+                          options: [{ id: crypto.randomUUID(), label: "新選項", priceDelta: 0 }],
+                        },
+                      ],
+                    }))
+                  }
                   type="button"
                 >
-                  關閉
+                  新增規格組
                 </button>
-              </div>
 
+                {specEditor.mode === "template" ? (
+                  <>
+                    {specEditor.templateId ? (
+                      <button
+                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() => {
+                          const next = {
+                            ...localSettings,
+                            specTemplates: localSettings.specTemplates.filter((template) => template.id !== specEditor.templateId),
+                          };
+                          setLocalSettings(next);
+                          if (selectedTemplateId === specEditor.templateId) {
+                            setSelectedTemplateId(next.specTemplates[0]?.id ?? "");
+                          }
+                          savePosLocalSettings(next);
+                          closeSpecEditor();
+                          setStatus("已刪除規格模板。");
+                        }}
+                        type="button"
+                      >
+                        刪除模板
+                      </button>
+                    ) : null}
+                    <button
+                      className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => {
+                        const templateId = specEditor.templateId ?? crypto.randomUUID();
+                        const templateName = specEditor.templateName.trim() || "未命名模板";
+                        const nextTemplate = {
+                          id: templateId,
+                          name: templateName,
+                          specGroups: cloneSpecGroups(specEditor.draft),
+                        };
+                        const next = {
+                          ...localSettings,
+                          specTemplates: localSettings.specTemplates.some((template) => template.id === templateId)
+                            ? localSettings.specTemplates.map((template) => (template.id === templateId ? nextTemplate : template))
+                            : [...localSettings.specTemplates, nextTemplate],
+                        };
+                        setLocalSettings(next);
+                        setSelectedTemplateId(templateId);
+                        savePosLocalSettings(next);
+                        closeSpecEditor();
+                        setStatus(`已保存規格模板「${templateName}」。`);
+                      }}
+                      type="button"
+                    >
+                      保存模板
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                      onClick={() => {
+                        const templateName = `模板 ${localSettings.specTemplates.length + 1}`;
+                        const next = {
+                          ...localSettings,
+                          specTemplates: [
+                            ...localSettings.specTemplates,
+                            {
+                              id: crypto.randomUUID(),
+                              name: templateName,
+                              specGroups: cloneSpecGroups(specEditor.draft),
+                            },
+                          ],
+                        };
+                        setLocalSettings(next);
+                        savePosLocalSettings(next);
+                        setStatus(`已另存為規格模板「${templateName}」。`);
+                      }}
+                      type="button"
+                    >
+                      另存為模板
+                    </button>
+                    <button
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                      onClick={() => {
+                        if (!specEditor.itemId) return;
+                        const nextSpec = specEditor.draft.length ? cloneSpecGroups(specEditor.draft) : undefined;
+                        setMenuDraft((current) => ({
+                          ...current,
+                          menuItems: current.menuItems.map((item) =>
+                            item.id === specEditor.itemId ? { ...item, specGroups: nextSpec } : item,
+                          ),
+                        }));
+                        closeSpecEditor();
+                        setStatus("已更新菜品規格，請保存菜單。");
+                      }}
+                      type="button"
+                    >
+                      保存到當前菜品
+                    </button>
+                    <button
+                      className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => {
+                        const nextSpec = specEditor.draft.length ? cloneSpecGroups(specEditor.draft) : undefined;
+                        setMenuDraft((current) => ({
+                          ...current,
+                          menuItems: current.menuItems.map((item) =>
+                            menuPageItems.some((row) => row.id === item.id) ? { ...item, specGroups: nextSpec } : item,
+                          ),
+                        }));
+                        closeSpecEditor();
+                        setStatus("已批量套用規格到本頁菜品，請保存菜單。");
+                      }}
+                      type="button"
+                    >
+                      套用到本頁
+                    </button>
+                  </>
+                )}
+              </div>
+            }
+            bodyClassName="grid gap-4"
+            description="超出畫面時可滾動查看全部內容，支持保存為模板。"
+            onClose={closeSpecEditor}
+            title={specEditor.mode === "template" ? "編輯規格模板" : "編輯規格"}
+            widthClassName="max-w-4xl"
+          >
               {specEditor.mode === "template" ? (
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <label className="grid gap-1 text-sm font-semibold text-slate-700">
@@ -1832,8 +1960,7 @@ export function DeviceSettings() {
                 </div>
               )}
 
-              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-                <div className="grid gap-3">
+              <div className="grid gap-3">
                   {specEditor.draft.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                       尚未有規格組。你可以按下方「新增規格組」開始。
@@ -1989,149 +2116,8 @@ export function DeviceSettings() {
                       </div>
                     ))
                   )}
-                </div>
               </div>
-
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={() =>
-                    setSpecEditor((current) => ({
-                      ...current,
-                      draft: [
-                        ...current.draft,
-                        {
-                          id: crypto.randomUUID(),
-                          name: "新規格",
-                          selectionMode: "single",
-                          required: true,
-                          options: [{ id: crypto.randomUUID(), label: "新選項", priceDelta: 0 }],
-                        },
-                      ],
-                    }))
-                  }
-                  type="button"
-                >
-                  新增規格組
-                </button>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {specEditor.mode === "template" ? (
-                    <>
-                      {specEditor.templateId ? (
-                        <button
-                          className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                          onClick={() => {
-                            const next = {
-                              ...localSettings,
-                              specTemplates: localSettings.specTemplates.filter((template) => template.id !== specEditor.templateId),
-                            };
-                            setLocalSettings(next);
-                            if (selectedTemplateId === specEditor.templateId) {
-                              setSelectedTemplateId(next.specTemplates[0]?.id ?? "");
-                            }
-                            savePosLocalSettings(next);
-                            closeSpecEditor();
-                            setStatus("已刪除規格模板。");
-                          }}
-                          type="button"
-                        >
-                          刪除模板
-                        </button>
-                      ) : null}
-                      <button
-                        className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                        onClick={() => {
-                          const templateId = specEditor.templateId ?? crypto.randomUUID();
-                          const templateName = specEditor.templateName.trim() || "未命名模板";
-                          const nextTemplate = {
-                            id: templateId,
-                            name: templateName,
-                            specGroups: cloneSpecGroups(specEditor.draft),
-                          };
-                          const next = {
-                            ...localSettings,
-                            specTemplates: localSettings.specTemplates.some((template) => template.id === templateId)
-                              ? localSettings.specTemplates.map((template) => (template.id === templateId ? nextTemplate : template))
-                              : [...localSettings.specTemplates, nextTemplate],
-                          };
-                          setLocalSettings(next);
-                          setSelectedTemplateId(templateId);
-                          savePosLocalSettings(next);
-                          closeSpecEditor();
-                          setStatus(`已保存規格模板「${templateName}」。`);
-                        }}
-                        type="button"
-                      >
-                        保存模板
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => {
-                          const templateName = `模板 ${localSettings.specTemplates.length + 1}`;
-                          const next = {
-                            ...localSettings,
-                            specTemplates: [
-                              ...localSettings.specTemplates,
-                              {
-                                id: crypto.randomUUID(),
-                                name: templateName,
-                                specGroups: cloneSpecGroups(specEditor.draft),
-                              },
-                            ],
-                          };
-                          setLocalSettings(next);
-                          savePosLocalSettings(next);
-                          setStatus(`已另存為規格模板「${templateName}」。`);
-                        }}
-                        type="button"
-                      >
-                        另存為模板
-                      </button>
-                      <button
-                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        onClick={() => {
-                          if (!specEditor.itemId) return;
-                          const nextSpec = specEditor.draft.length ? cloneSpecGroups(specEditor.draft) : undefined;
-                          setMenuDraft((current) => ({
-                            ...current,
-                            menuItems: current.menuItems.map((item) =>
-                              item.id === specEditor.itemId ? { ...item, specGroups: nextSpec } : item,
-                            ),
-                          }));
-                          closeSpecEditor();
-                          setStatus("已更新菜品規格，請保存菜單。");
-                        }}
-                        type="button"
-                      >
-                        保存到當前菜品
-                      </button>
-                      <button
-                        className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                        onClick={() => {
-                          const nextSpec = specEditor.draft.length ? cloneSpecGroups(specEditor.draft) : undefined;
-                          setMenuDraft((current) => ({
-                            ...current,
-                            menuItems: current.menuItems.map((item) =>
-                              menuPageItems.some((row) => row.id === item.id) ? { ...item, specGroups: nextSpec } : item,
-                            ),
-                          }));
-                          closeSpecEditor();
-                          setStatus("已批量套用規格到本頁菜品，請保存菜單。");
-                        }}
-                        type="button"
-                      >
-                        套用到本頁
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+          </ResponsiveModal>
         ) : null}
         </div>
       </div>

@@ -64,7 +64,7 @@ export function LoginScreen() {
       }
       saveAuthSession({ ...payload.session, loggedInAt: new Date().toISOString() });
       saveOperatingMode(mode === "quick" ? "quick" : "dinein");
-      router.replace(payload.session.role === "admin" ? "/admin" : "/");
+      router.replace(payload.session.role === "admin" ? "/backoffice/stores" : "/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
     } finally {

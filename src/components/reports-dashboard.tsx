@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { loadOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 
@@ -263,25 +264,24 @@ export function ReportsDashboard() {
       </div>
 
       {detailOrder ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">訂單明細</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {detailOrder.localOrderNo} · {detailOrder.tableName} · {detailOrder.updatedAt.replace("T", " ").slice(0, 16)}
-                </div>
-              </div>
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={() => setDetailOrderId(null)}
-                type="button"
-              >
-                關閉
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+        <ResponsiveModal
+          bodyClassName="grid gap-4"
+          description={`${detailOrder.localOrderNo} · ${detailOrder.tableName} · ${detailOrder.updatedAt.replace("T", " ").slice(0, 16)}`}
+          onClose={() => setDetailOrderId(null)}
+          showCloseButton={false}
+          title="訂單明細"
+          widthClassName="max-w-2xl"
+          actions={
+            <button
+              className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+              onClick={() => setDetailOrderId(null)}
+              type="button"
+            >
+              關閉
+            </button>
+          }
+        >
+            <div className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-slate-500">狀態</span>
                 <span className="font-semibold text-slate-900">{detailOrder.status}</span>
@@ -307,9 +307,9 @@ export function ReportsDashboard() {
               ) : null}
             </div>
 
-            <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
+            <div className="overflow-auto rounded-2xl border border-slate-200">
               <table className="w-full border-collapse text-sm">
-                <thead className="bg-white">
+                <thead className="sticky top-0 z-[1] bg-white">
                   <tr className="text-left text-xs font-semibold text-slate-500">
                     <th className="border-b border-slate-200 px-3 py-2">菜品</th>
                     <th className="border-b border-slate-200 px-3 py-2">數量</th>
@@ -330,8 +330,7 @@ export function ReportsDashboard() {
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
     </div>
   );

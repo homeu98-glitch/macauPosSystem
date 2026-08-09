@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
 
 type OrderTypeKey = "all" | "dine_in" | "pickup" | "self_delivery" | "rider_delivery";
@@ -658,22 +659,13 @@ export function OnlineOrders() {
       </div>
 
       {assigningOrderId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">安排堂食桌台</div>
-                <div className="mt-1 text-sm text-slate-500">接单后，把这张线上堂食单直接安排到桌台，不会再留在右侧待操作区。</div>
-              </div>
-              <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                onClick={() => setAssigningOrderId(null)}
-                type="button"
-              >
-                关闭
-              </button>
-            </div>
-            <div className="mt-4 grid max-h-[60vh] grid-cols-2 gap-2 overflow-auto md:grid-cols-4">
+        <ResponsiveModal
+          description="接单后，把这张线上堂食单直接安排到桌台，不会再留在右侧待操作区。"
+          onClose={() => setAssigningOrderId(null)}
+          title="安排堂食桌台"
+          widthClassName="max-w-2xl"
+        >
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
               {tables.map((table) => (
                 <button
                   key={table.id}
@@ -693,28 +685,38 @@ export function OnlineOrders() {
                 </button>
               ))}
             </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {riderModalOrderId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">給車手接送</div>
-                <div className="mt-1 text-sm text-slate-500">設定車手價錢與備註，確認後會轉成車手送單。</div>
-              </div>
+        <ResponsiveModal
+          actions={
+            <>
               <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
                 onClick={() => setRiderModalOrderId(null)}
                 type="button"
               >
-                關閉
+                取消
               </button>
-            </div>
-
-            <div className="mt-4 grid gap-3">
+              <button
+                aria-busy={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
+                onClick={() => void confirmRiderHandoff()}
+                type="button"
+              >
+                {actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`) ? "提交中…" : "確認轉車手送單"}
+              </button>
+            </>
+          }
+          description="設定車手價錢與備註，確認後會轉成車手送單。"
+          onClose={() => setRiderModalOrderId(null)}
+          title="給車手接送"
+          widthClassName="max-w-lg"
+        >
+            <div className="grid gap-3">
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
                 <span className="text-xs text-slate-500">給車手價錢（MOP）</span>
                 <input
@@ -735,28 +737,7 @@ export function OnlineOrders() {
                 />
               </label>
             </div>
-
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
-                onClick={() => setRiderModalOrderId(null)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                aria-busy={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
-                onClick={() => void confirmRiderHandoff()}
-                type="button"
-              >
-                {actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`) ? "提交中…" : "確認轉車手送單"}
-              </button>
-            </div>
-          </div>
-        </div>
+        </ResponsiveModal>
       ) : null}
 
       {toast ? (
@@ -770,67 +751,9 @@ export function OnlineOrders() {
       ) : null}
 
       {viewingOrder ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">訂單詳情</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {orderCodeLabel(viewingOrder)} · {TABS.find((tab) => tab.key === viewingOrder.type)?.label ?? viewingOrder.type}
-                </div>
-              </div>
-              <button
-                className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                onClick={() => setViewingOrderId(null)}
-                type="button"
-              >
-                關閉
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-2 text-sm text-slate-700">
-              <div>客戶：{viewingOrder.customerName ?? "--"}</div>
-              <div>電話：{viewingOrder.phone ?? "--"}</div>
-              <div>
-                支付：
-                <span
-                  className={
-                    viewingOrder.paymentStatus === "paid"
-                      ? "ml-2 font-semibold text-emerald-700"
-                      : "ml-2 font-semibold text-amber-700"
-                  }
-                >
-                  {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
-                </span>
-                {typeof viewingOrder.paidAmount === "number" ? (
-                  <span className="ml-2 text-slate-500">（{formatMoney(viewingOrder.paidAmount)}）</span>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">菜品明細</div>
-              <div className="mt-3 grid gap-2">
-                {viewingOrder.items?.length ? (
-                  viewingOrder.items.map((item) => (
-                    <div key={item.name} className="flex items-center justify-between text-sm text-slate-700">
-                      <span>{item.name}</span>
-                      <span className="font-semibold">x{item.qty}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-sm text-slate-500">--</div>
-                )}
-              </div>
-              <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
-                <span>總計</span>
-                <span className="text-base font-semibold text-slate-900">
-                  {typeof viewingOrder.total === "number" ? formatMoney(viewingOrder.total) : "--"}
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <ResponsiveModal
+          actions={
+            <>
               {(() => {
                 const s = String(viewingOrder.status).toLowerCase();
                 return s.includes("cancel") && s.includes("customer");
@@ -907,9 +830,55 @@ export function OnlineOrders() {
                   已送達 / 已完成
                 </button>
               ) : null}
+            </>
+          }
+          description={`${orderCodeLabel(viewingOrder)} · ${TABS.find((tab) => tab.key === viewingOrder.type)?.label ?? viewingOrder.type}`}
+          onClose={() => setViewingOrderId(null)}
+          title="訂單詳情"
+          widthClassName="max-w-2xl"
+        >
+          <div className="grid gap-2 text-sm text-slate-700">
+            <div>客戶：{viewingOrder.customerName ?? "--"}</div>
+            <div>電話：{viewingOrder.phone ?? "--"}</div>
+            <div>
+              支付：
+              <span
+                className={
+                  viewingOrder.paymentStatus === "paid"
+                    ? "ml-2 font-semibold text-emerald-700"
+                    : "ml-2 font-semibold text-amber-700"
+                }
+              >
+                {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
+              </span>
+              {typeof viewingOrder.paidAmount === "number" ? (
+                <span className="ml-2 text-slate-500">（{formatMoney(viewingOrder.paidAmount)}）</span>
+              ) : null}
             </div>
           </div>
-        </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-900">菜品明細</div>
+            <div className="mt-3 grid gap-2">
+              {viewingOrder.items?.length ? (
+                viewingOrder.items.map((item) => (
+                  <div key={item.name} className="flex items-center justify-between text-sm text-slate-700">
+                    <span>{item.name}</span>
+                    <span className="font-semibold">x{item.qty}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-sm text-slate-500">--</div>
+              )}
+            </div>
+            <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+              <span>總計</span>
+              <span className="text-base font-semibold text-slate-900">
+                {typeof viewingOrder.total === "number" ? formatMoney(viewingOrder.total) : "--"}
+              </span>
+            </div>
+          </div>
+        </ResponsiveModal>
       ) : null}
     </div>
   );
