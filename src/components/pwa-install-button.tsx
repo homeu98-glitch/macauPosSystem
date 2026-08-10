@@ -56,43 +56,35 @@ export function PwaInstallButton() {
 
   if (isStandalone) return null;
 
-  if (available) {
-    return (
+  return (
+    <div className="mt-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-left text-sm text-white/85">
+      <div className="font-semibold text-white">PWA 安裝</div>
       <button
         className="mt-3 w-full rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
         disabled={installing}
         onClick={() => {
-          const prompt = window.__pwaDeferredPrompt;
-          if (!prompt) return;
-          void (async () => {
-            setInstalling(true);
-            await prompt.prompt();
-            await prompt.userChoice;
-            window.__pwaDeferredPrompt = null;
-            setAvailable(false);
-            setInstalling(false);
-          })();
+          if (available) {
+            const prompt = window.__pwaDeferredPrompt;
+            if (!prompt) return;
+            void (async () => {
+              setInstalling(true);
+              await prompt.prompt();
+              await prompt.userChoice;
+              window.__pwaDeferredPrompt = null;
+              setAvailable(false);
+              setInstalling(false);
+            })();
+            return;
+          }
+          setShowManualHelp((current) => !current);
         }}
         type="button"
       >
-        {installing ? "安裝中…" : "安裝到主頁"}
+        {installing ? "安裝中…" : available ? "安裝到主頁" : "下載 / 加入主畫面"}
       </button>
-    );
-  }
-
-  return (
-    <div className="mt-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-left text-sm text-white/85">
-      <div className="font-semibold text-white">PWA 安裝</div>
       {isIosLike ? (
         <>
           <div className="mt-1 text-white/70">iPad / iPhone 的 Safari 不會顯示自動安裝按鈕，請用手動加入主畫面。</div>
-          <button
-            className="mt-3 rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15"
-            onClick={() => setShowManualHelp((current) => !current)}
-            type="button"
-          >
-            {showManualHelp ? "收起說明" : "查看加入主畫面方法"}
-          </button>
           {showManualHelp ? (
             <div className="mt-3 rounded-2xl bg-black/20 px-3 py-3 text-xs leading-6 text-white/80">
               1. 用 Safari 開啟本系統
@@ -104,7 +96,18 @@ export function PwaInstallButton() {
           ) : null}
         </>
       ) : (
-        <div className="mt-1 text-white/70">如果未見自動安裝按鈕，請用瀏覽器選單中的「安裝應用程式」或「加入主畫面」。</div>
+        <>
+          <div className="mt-1 text-white/70">如果瀏覽器沒有彈出自動安裝視窗，也可以用瀏覽器選單中的「安裝應用程式」或「加入主畫面」。</div>
+          {showManualHelp ? (
+            <div className="mt-3 rounded-2xl bg-black/20 px-3 py-3 text-xs leading-6 text-white/80">
+              1. 打開瀏覽器右上角選單
+              <br />
+              2. 找「安裝應用程式」或「加入主畫面」
+              <br />
+              3. 確認安裝
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );
