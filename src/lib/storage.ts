@@ -46,7 +46,12 @@ function readJson<T>(key: string, fallback: T): T {
     return fallback;
   }
 
-  const raw = window.localStorage.getItem(key);
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    return fallback;
+  }
   if (!raw) {
     return fallback;
   }
@@ -63,7 +68,11 @@ function writeJson<T>(key: string, value: T) {
     return;
   }
 
-  window.localStorage.setItem(key, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage write failures on restricted browsers / kiosk devices
+  }
 }
 
 export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): DeviceConfig | null {

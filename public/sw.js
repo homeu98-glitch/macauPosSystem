@@ -1,4 +1,4 @@
-const CACHE_NAME = "macau-pos-v20-7-17";
+const CACHE_NAME = "macau-pos-v20-7-31";
 const APP_SHELL = ["/", "/login", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -20,6 +20,19 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/")) return;
+
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => caches.match(request).then((cached) => cached || caches.match("/login"))),
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(request).then((cached) => {

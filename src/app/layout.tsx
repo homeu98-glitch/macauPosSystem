@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { AppErrorBoundary } from "@/components/app-error-boundary";
 import { PwaRegister } from "@/components/pwa-register";
 
 const inter = Inter({
@@ -39,8 +40,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="h-full overflow-hidden flex flex-col">
-        <PwaRegister />
-        {children}
+        <AppErrorBoundary>
+          <PwaRegister />
+          {children}
+        </AppErrorBoundary>
       </body>
     </html>
   );

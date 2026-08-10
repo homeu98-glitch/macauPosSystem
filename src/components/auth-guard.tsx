@@ -34,6 +34,15 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     }
   }, [accountDisabled, pathname, roleBlocked, router, session]);
 
-  if ((!session || accountDisabled || roleBlocked) && pathname !== "/login") return null;
+  if ((!session || accountDisabled || roleBlocked) && pathname !== "/login") {
+    return (
+      <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+        <div>
+          <div className="text-base font-semibold text-slate-900">正在跳轉登入頁…</div>
+          <div className="mt-2 text-sm text-slate-500">如果長時間停留在這裡，請重新整理一次頁面。</div>
+        </div>
+      </div>
+    );
+  }
   return <>{children}</>;
 }
