@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-import { AppErrorBoundary } from "@/components/app-error-boundary";
+import { ClientOnly } from "@/components/client-only";
 import { PwaRegister } from "@/components/pwa-register";
 
 const inter = Inter({
@@ -40,10 +40,19 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="h-full overflow-hidden flex flex-col">
-        <AppErrorBoundary>
+        <ClientOnly
+          fallback={
+            <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+              <div>
+                <div className="text-base font-semibold text-slate-900">正在載入頁面…</div>
+                <div className="mt-2 text-sm text-slate-500">請稍候</div>
+              </div>
+            </div>
+          }
+        >
           <PwaRegister />
           {children}
-        </AppErrorBoundary>
+        </ClientOnly>
       </body>
     </html>
   );
