@@ -152,3 +152,14 @@ export function orderCodeLabel(order: Pick<LedgerOnlineOrder, "id" | "pickupCode
   if (order.tabType === "dine_in") return `堂食 ${suffix}`;
   return `線上單 ${suffix}`;
 }
+
+export function rawLedgerStatus(status: string): string {
+  return String(status).toLowerCase();
+}
+
+export function paymentModeLabel(mode?: string): string {
+  const value = String(mode ?? "").toLowerCase();
+  if (value === "balance") return "餘額扣點";
+  if (value === "in_store") return "到店付款";
+  return mode ?? "--";
+}

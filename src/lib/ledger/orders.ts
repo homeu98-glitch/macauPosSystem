@@ -37,9 +37,21 @@ export async function listMerchantOrders(params: ListMerchantOrdersParams): Prom
   return parseRpcOrderRows(data).map(mapLedgerOrderRow);
 }
 
-export async function getOrderDetail(orderId: string): Promise<{
-  items: Array<{ name: string; qty: number }>;
-}> {
+export type LedgerOrderDetailItem = {
+  name: string;
+  qty: number;
+  unitPrice?: number;
+  menuItemId?: string;
+  note?: string;
+};
+
+export type LedgerOrderDetail = {
+  items: LedgerOrderDetailItem[];
+  total?: number;
+  note?: string;
+};
+
+export async function getOrderDetail(orderId: string): Promise<LedgerOrderDetail> {
   const client = getLedgerSupabaseClient();
   if (!client) {
     throw new Error("Ledger Supabase 尚未設定。");
@@ -53,13 +65,39 @@ export async function getOrderDetail(orderId: string): Promise<{
     throw new Error(error.message);
   }
 
-  const payload = data as { items?: Array<{ product_name?: string; name?: string; qty?: number; quantity?: number }> } | null;
+  const payload = data as {
+    items?: Array<{
+      product_name?: string;
+      name?: string;
+      qty?: number;
+      quantity?: number;
+      unit_price_avos?: number;
+      price_avos?: number;
+      menu_item_id?: string;
+      note?: string;
+    }>;
+    total_avos?: number;
+    note?: string;
+  } | null;
+
   const items = Array.isArray(payload?.items)
     ? payload!.items!.map((item) => ({
         name: String(item.product_name ?? item.name ?? "品項"),
         qty: Number(item.quantity ?? item.qty ?? 1),
+        unitPrice:
+          item.unit_price_avos != null
+            ? Math.round(Number(item.unit_price_avos)) / 100
+            : item.price_avos != null
+              ? Math.round(Number(item.price_avos)) / 100
+              : undefined,
+        menuItemId: item.menu_item_id,
+        note: item.note ?? undefined,
       }))
     : [];
 
-  return { items };
+  return {
+    items,
+    total: payload?.total_avos != null ? Math.round(Number(payload.total_avos)) / 100 : undefined,
+    note: payload?.note ?? undefined,
+  };
 }

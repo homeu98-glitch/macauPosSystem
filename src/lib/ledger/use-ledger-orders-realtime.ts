@@ -23,13 +23,13 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
   useEffect(() => {
     if (!enabled || !merchantId) return;
 
-    const client = getLedgerSupabaseClient();
-    if (!client) return;
+    const supabase = getLedgerSupabaseClient();
+    if (!supabase) return;
 
     let cancelled = false;
     let reconnectTimer: number | null = null;
     let resubscribeTimer: number | null = null;
-    let channel: ReturnType<NonNullable<typeof client>["channel"]> | null = null;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
     function scheduleResubscribedSync() {
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);
@@ -39,7 +39,7 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
     }
 
     async function subscribe() {
-      if (cancelled) return;
+      if (cancelled || !supabase) return;
 
       const accessToken = getLedgerAccessToken();
       if (!accessToken) return;
@@ -48,12 +48,12 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
       if (cancelled) return;
 
       if (channel) {
-        await client.removeChannel(channel);
+        await supabase.removeChannel(channel);
         channel = null;
       }
 
       const filter = `merchant_id=eq.${merchantId}`;
-      channel = client
+      channel = supabase
         .channel(`pos-ledger-orders:${merchantId}`)
         .on(
           "postgres_changes",
@@ -100,7 +100,7 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);
       if (channel) {
-        void client.removeChannel(channel);
+        void supabase.removeChannel(channel);
       }
     };
   }, [enabled, merchantId]);

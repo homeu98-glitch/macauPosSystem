@@ -1,6 +1,20 @@
 "use client";
 
+import {
+  beginAcceptInFlight,
+  clearAcceptIdempotencyKey,
+  endAcceptInFlight,
+  getAcceptIdempotencyKey,
+} from "@/lib/ledger/accept-idempotency";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
+
+export type AcceptMethod = "deduct" | "in_store" | "status";
+
+export type AcceptOrderResult =
+  | { ok: true; method: AcceptMethod }
+  | { ok: false; code: "insufficient_balance"; message: string }
+  | { ok: false; code: "in_flight"; message: string }
+  | { ok: false; code: "error"; message: string };
 
 export function mapRpcErrorMessage(message: string): string {
   const lower = message.toLowerCase();
@@ -10,6 +24,10 @@ export function mapRpcErrorMessage(message: string): string {
   if (lower.includes("order already closed")) return "訂單已結束，無法再修改。";
   if (lower.includes("delivery dispatch active")) return "派送進行中，請先在 Ledger Web 處理。";
   return message;
+}
+
+function isInsufficientBalanceError(message: string): boolean {
+  return message.toLowerCase().includes("insufficient balance");
 }
 
 async function callRpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
@@ -45,31 +63,68 @@ export async function setOrderPaidInStore(orderId: string) {
   return callRpc("set_order_paid_in_store", { p_order_id: orderId });
 }
 
-/** Pick the correct accept RPC based on payment mode. */
 export async function acceptLedgerOrder(order: {
   id: string;
   paymentMode?: string;
   paymentStatus: string;
-}): Promise<void> {
+}): Promise<AcceptOrderResult> {
+  if (!beginAcceptInFlight(order.id)) {
+    return { ok: false, code: "in_flight", message: "接單處理中，請稍候…" };
+  }
+
   const mode = String(order.paymentMode ?? "").toLowerCase();
   const paid = order.paymentStatus === "paid";
 
-  if (mode === "balance" && !paid) {
-    const idempotencyKey = crypto.randomUUID();
-    await acceptOrderWithDeduct(order.id, idempotencyKey);
-    return;
-  }
+  try {
+    if (mode === "balance" && !paid) {
+      const idempotencyKey = getAcceptIdempotencyKey(order.id);
+      try {
+        await acceptOrderWithDeduct(order.id, idempotencyKey);
+        endAcceptInFlight(order.id);
+        return { ok: true, method: "deduct" };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "接單失敗";
+        if (isInsufficientBalanceError(message)) {
+          endAcceptInFlight(order.id);
+          return { ok: false, code: "insufficient_balance", message };
+        }
+        throw err;
+      }
+    }
 
-  if (mode === "balance" && paid) {
+    if (mode === "in_store" && !paid) {
+      await updateOrderStatus(order.id, "accepted");
+      endAcceptInFlight(order.id);
+      return { ok: true, method: "status" };
+    }
+
+    if (mode === "balance" && paid) {
+      await updateOrderStatus(order.id, "accepted");
+      endAcceptInFlight(order.id);
+      return { ok: true, method: "status" };
+    }
+
     await updateOrderStatus(order.id, "accepted");
-    return;
+    endAcceptInFlight(order.id);
+    return { ok: true, method: "status" };
+  } catch (err) {
+    endAcceptInFlight(order.id);
+    const message = err instanceof Error ? err.message : "接單失敗";
+    return { ok: false, code: "error", message };
   }
+}
 
-  if (mode === "in_store") {
-    await updateOrderStatus(order.id, "accepted");
-    return;
+export async function acceptLedgerOrderInStore(order: { id: string }): Promise<AcceptOrderResult> {
+  if (!beginAcceptInFlight(order.id)) {
+    return { ok: false, code: "in_flight", message: "接單處理中，請稍候…" };
   }
-
-  // Fallback: try generic accept for already-paid or unknown modes
-  await updateOrderStatus(order.id, "accepted");
+  try {
+    await acceptOrderInStore(order.id);
+    endAcceptInFlight(order.id);
+    return { ok: true, method: "in_store" };
+  } catch (err) {
+    endAcceptInFlight(order.id);
+    const message = err instanceof Error ? err.message : "接單失敗";
+    return { ok: false, code: "error", message };
+  }
 }
