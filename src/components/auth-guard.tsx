@@ -21,16 +21,18 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
 
   useEffect(() => {
     if (!session && pathname !== "/login") {
-      router.replace("/login");
+      // 某些商用平板/收銀機的 WebView/Chrome 對 History API 有限制，導致 next/navigation 跳轉失效而停留白屏。
+      // 這裡用硬跳轉確保一定能到登入頁。
+      window.location.replace("/login");
       return;
     }
     if (accountDisabled) {
       clearAuthSession();
-      router.replace("/login");
+      window.location.replace("/login");
       return;
     }
     if (roleBlocked) {
-      router.replace("/");
+      window.location.replace("/");
     }
   }, [accountDisabled, pathname, roleBlocked, router, session]);
 
@@ -39,7 +41,9 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
       <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
         <div>
           <div className="text-base font-semibold text-slate-900">正在跳轉登入頁…</div>
-          <div className="mt-2 text-sm text-slate-500">如果長時間停留在這裡，請重新整理一次頁面。</div>
+          <div className="mt-2 text-sm text-slate-500">
+            如果長時間停留在這裡，請重新整理一次頁面，或直接打開 <span className="font-semibold">/login</span>。
+          </div>
         </div>
       </div>
     );
