@@ -7,6 +7,7 @@ import mqtt, { MqttClient } from "mqtt";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
+import { NumericKeypad } from "@/components/numeric-keypad";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { defaultDeviceConfig } from "@/lib/mock-data";
@@ -148,6 +149,7 @@ export function PosApp() {
   const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
   const [memberSearchHint, setMemberSearchHint] = useState<string>("");
   const [memberSearching, setMemberSearching] = useState(false);
+  const memberSearchTimerRef = useRef<number | null>(null);
   const [useMemberBalance, setUseMemberBalance] = useState(true);
   const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
@@ -848,6 +850,59 @@ export function PosApp() {
     if (!useMemberBalance || !memberMatch) return 0;
     return Math.min(memberMatch.balance, payableBeforeMember);
   }, [memberMatch, payableBeforeMember, useMemberBalance]);
+
+  function scheduleMemberLookup(phone: string) {
+    if (memberSearchTimerRef.current) {
+      window.clearTimeout(memberSearchTimerRef.current);
+      memberSearchTimerRef.current = null;
+    }
+    memberSearchTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        setMemberSearching(true);
+        try {
+          const response = await fetch(`/api/members?phone=${phone}`);
+          const payload = (await response.json()) as { members?: MemberProfile[] };
+          const match = (payload.members ?? []).find((member) => member.phone === phone) ?? null;
+          setMemberMatch(match);
+          setMemberSearchHint(match ? "" : "找不到會員。");
+        } catch {
+          const match = membersCache.find((member) => member.phone === phone) ?? null;
+          setMemberMatch(match);
+          setMemberSearchHint(match ? "" : "找不到會員。");
+        } finally {
+          setMemberSearching(false);
+        }
+      })();
+    }, 300);
+  }
+
+  function handleMemberPhoneChange(input: string) {
+    const normalized = input.replace(/\D/g, "").slice(0, 8);
+    setMemberPhone(normalized);
+    setMemberSearchHint("");
+
+    if (memberSearchTimerRef.current) {
+      window.clearTimeout(memberSearchTimerRef.current);
+      memberSearchTimerRef.current = null;
+    }
+
+    if (normalized.length !== 8) {
+      setMemberSearching(false);
+      setMemberMatch(null);
+      setSelectedCouponIds([]);
+      setUseMemberBalance(false);
+      return;
+    }
+
+    scheduleMemberLookup(normalized);
+  }
+
+  useEffect(() => {
+    if (!payingOrderId && memberSearchTimerRef.current) {
+      window.clearTimeout(memberSearchTimerRef.current);
+      memberSearchTimerRef.current = null;
+    }
+  }, [payingOrderId]);
   const paymentSummary = {
     subtotal: paymentBase.subtotal,
     serviceChargeAmount: 0,
@@ -3807,12 +3862,13 @@ export function PosApp() {
             </div>
           }
           showCloseButton={false}
-          widthClassName="max-w-2xl"
+          widthClassName="max-w-5xl"
         >
-            <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">本次支付內容</div>
-                <div className="mt-3 space-y-2">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-900">本次支付內容</div>
+                  <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-500">小計</span>
                     <span className="font-semibold text-slate-900">
@@ -3859,9 +3915,9 @@ export function PosApp() {
                       {formatMoney(changeDue, bootstrap.currency)}
                     </span>
                   </div>
-                </div>
+                  </div>
 
-                <div className="mt-4 grid gap-3">
+                  <div className="mt-4 grid gap-3">
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
                     折扣金額
                     <input
@@ -3881,50 +3937,8 @@ export function PosApp() {
                     />
                   </label>
                   <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                    <div className="text-xs font-semibold text-slate-500">會員號碼</div>
-                    <div className="mt-2 flex gap-2">
-                      <input
-                        className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                        inputMode="numeric"
-                        maxLength={8}
-                        onChange={(event) => setMemberPhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
-                        placeholder="輸入 8 位手機號碼"
-                        value={memberPhone}
-                      />
-                      <button
-                        aria-busy={memberSearching}
-                        className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
-                        disabled={memberSearching}
-                        onClick={() => {
-                          setMemberSearchHint("");
-                          setMemberMatch(null);
-                          if (!/^\d{8}$/.test(memberPhone)) {
-                            setMemberSearchHint("請輸入 8 位手機號碼。");
-                            return;
-                          }
-                          void (async () => {
-                            setMemberSearching(true);
-                            try {
-                              const response = await fetch(`/api/members?phone=${memberPhone}`);
-                              const payload = (await response.json()) as { members?: MemberProfile[] };
-                              const match = (payload.members ?? []).find((member) => member.phone === memberPhone) ?? null;
-                              setMemberMatch(match);
-                              setMemberSearchHint(match ? "" : "找不到會員。");
-                            } catch {
-                              const match = membersCache.find((member) => member.phone === memberPhone) ?? null;
-                              setMemberMatch(match);
-                              setMemberSearchHint(match ? "" : "找不到會員。");
-                            } finally {
-                              setMemberSearching(false);
-                            }
-                          })();
-                        }}
-                        type="button"
-                      >
-                        {memberSearching ? "搜尋中…" : "搜尋"}
-                      </button>
-                    </div>
-                    {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
+                    <div className="text-xs font-semibold text-slate-500">會員優惠 / 餘額</div>
+                    <div className="mt-2 text-xs text-slate-500">右側輸入會員手機號碼後，可使用優惠券或餘額扣款。</div>
                     {memberMatch ? (
                       <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
                         <div className="font-semibold text-slate-900">
@@ -3956,9 +3970,7 @@ export function PosApp() {
                                     <label
                                       key={coupon.id}
                                       className={`flex items-start justify-between gap-3 rounded-2xl border px-3 py-2 ${
-                                        selected
-                                          ? "border-orange-300 bg-orange-50"
-                                          : "border-slate-200 bg-white"
+                                        selected ? "border-orange-300 bg-orange-50" : "border-slate-200 bg-white"
                                       } ${disabled ? "opacity-60" : ""}`}
                                     >
                                       <div>
@@ -3979,9 +3991,7 @@ export function PosApp() {
                                             const checked = event.target.checked;
                                             setSelectedCouponIds((current) => {
                                               if (checked) {
-                                                // 若選中不可疊加券，清掉其他券
                                                 if (!coupon.stackable) return [coupon.id];
-                                                // 若已有不可疊加券，禁止再加（理論上 disabled 已擋）
                                                 return [...current, coupon.id];
                                               }
                                               return current.filter((id) => id !== coupon.id);
@@ -4007,45 +4017,81 @@ export function PosApp() {
                       </div>
                     ) : null}
                   </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">支付方式</div>
+                  <div className="mt-1 text-xs text-slate-500">若會員餘額不足，剩餘金額可混支付。</div>
+                  <div className="mt-3 grid gap-2">
+                    {paymentMethods.map((method) => (
+                      <button
+                        key={method}
+                        className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold ${
+                          selectedPaymentMethod === method
+                            ? "border-orange-300 bg-orange-50 text-orange-700"
+                            : "border-slate-200 bg-slate-50 text-slate-900 hover:border-orange-300"
+                        }`}
+                        onClick={() => setSelectedPaymentMethod(method)}
+                        type="button"
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
+                    onClick={() => {
+                      if (paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0) {
+                        completeOnlinePaidOrder();
+                        return;
+                      }
+                      confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
+                    }}
+                    type="button"
+                  >
+                    {paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
+                      ? "客人已支付，完成訂單"
+                      : "去結帳"}
+                  </button>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-semibold text-slate-900">支付方式</div>
-                <div className="mt-1 text-xs text-slate-500">若會員餘額不足，剩餘金額可混支付。</div>
-                <div className="mt-3 grid gap-2">
-                  {paymentMethods.map((method) => (
-                    <button
-                      key={method}
-                      className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold ${
-                        selectedPaymentMethod === method
-                          ? "border-orange-300 bg-orange-50 text-orange-700"
-                          : "border-slate-200 bg-slate-50 text-slate-900 hover:border-orange-300"
-                      }`}
-                      onClick={() => setSelectedPaymentMethod(method)}
-                      type="button"
-                    >
-                      {method}
-                    </button>
-                  ))}
+              <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-100 px-4 py-4">
+                  <div className="text-sm font-semibold text-slate-900">會員</div>
+                  <div className="mt-1 text-xs text-slate-500">輸入 8 位手機號碼後會自動查詢</div>
                 </div>
-
-                <button
-                  className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
-                  onClick={() => {
-                    if (paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0) {
-                      completeOnlinePaidOrder();
-                      return;
-                    }
-                    confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
-                  }}
-                  type="button"
-                >
-                  {paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
-                    ? "客人已支付，完成訂單"
-                    : "去結帳"}
-                </button>
-              </div>
+                <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    會員號碼（8 位）
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base font-semibold text-slate-900 tracking-widest"
+                      inputMode="numeric"
+                      maxLength={8}
+                      onChange={(event) => handleMemberPhoneChange(event.target.value)}
+                      placeholder="例如：63936542"
+                      value={memberPhone}
+                    />
+                  </label>
+                  {memberSearching ? <div className="mt-2 text-xs text-slate-500">搜尋中…</div> : null}
+                  {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
+                  {memberMatch ? (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                      <div className="font-semibold text-slate-900">{memberMatch.name}</div>
+                      <div className="mt-1 text-xs text-slate-600">{memberMatch.phone}</div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        餘額 {formatMoney(memberMatch.balance, bootstrap.currency)} · 可用券{" "}
+                        {memberMatch.coupons.filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon)).length}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="shrink-0 border-t border-slate-200 px-4 py-4">
+                  <NumericKeypad value={memberPhone} onChange={handleMemberPhoneChange} maxLength={8} />
+                </div>
+              </aside>
             </div>
         </ResponsiveModal>
       ) : null}
