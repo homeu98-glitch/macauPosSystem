@@ -3,7 +3,8 @@
 import { usePathname, useRouter } from "next/navigation";
 import { PropsWithChildren, useEffect } from "react";
 
-import { clearAuthSession, loadAccountUsers, loadAuthSession } from "@/lib/storage";
+import { restoreLedgerSession } from "@/lib/ledger/session";
+import { clearAuthSession, loadAuthSession } from "@/lib/storage";
 import { UserRole } from "@/lib/types";
 
 type AuthGuardProps = PropsWithChildren<{
@@ -14,19 +15,21 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const router = useRouter();
   const pathname = usePathname();
   const session = loadAuthSession();
-  const accounts = loadAccountUsers();
-  const matchedAccount = session ? accounts.find((item) => item.account === session.account) : null;
+  const isLedgerSession = Boolean(session?.merchantId && session?.ledgerAccessToken);
   const roleBlocked = Boolean(session && allowedRoles && !allowedRoles.includes(session.role));
-  const accountDisabled = Boolean(session && matchedAccount && !matchedAccount.active);
+
+  useEffect(() => {
+    if (session?.ledgerAccessToken && session?.ledgerRefreshToken) {
+      void restoreLedgerSession();
+    }
+  }, [session?.ledgerAccessToken, session?.ledgerRefreshToken]);
 
   useEffect(() => {
     if (!session && pathname !== "/login") {
-      // 某些商用平板/收銀機的 WebView/Chrome 對 History API 有限制，導致 next/navigation 跳轉失效而停留白屏。
-      // 這裡用硬跳轉確保一定能到登入頁。
       window.location.replace("/login");
       return;
     }
-    if (accountDisabled) {
+    if (session && !isLedgerSession && pathname !== "/login") {
       clearAuthSession();
       window.location.replace("/login");
       return;
@@ -34,9 +37,9 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     if (roleBlocked) {
       window.location.replace("/");
     }
-  }, [accountDisabled, pathname, roleBlocked, router, session]);
+  }, [isLedgerSession, pathname, roleBlocked, router, session]);
 
-  if ((!session || accountDisabled || roleBlocked) && pathname !== "/login") {
+  if ((!session || roleBlocked) && pathname !== "/login") {
     return (
       <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
         <div>

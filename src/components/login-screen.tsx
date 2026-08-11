@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { KeyboardEvent, useState } from "react";
 
 import { PwaInstallButton } from "@/components/pwa-install-button";
-import { authenticateAccount, saveAuthSession, saveOperatingMode } from "@/lib/storage";
+import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
+import { saveAuthSession, saveOperatingMode } from "@/lib/storage";
 
 export function LoginScreen() {
   const router = useRouter();
@@ -30,41 +31,55 @@ export function LoginScreen() {
 
     setLoading(true);
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch("/api/ledger/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account: normalizedAccount, pin: normalizedPin }),
       });
-      let payload = (await response.json()) as {
+      const payload = (await response.json()) as {
         ok: boolean;
         error?: string;
-        source?: "supabase" | "mock";
         session?: {
           account: string;
           name: string;
           role: "admin" | "manager" | "cashier";
+          merchantId?: string;
           storeIds?: string[];
-          permissionGroupId?: string;
           permissions: {
             refundOrder: boolean;
             voidItem: boolean;
             manageAccounts?: boolean;
           };
+          ledgerAccessToken?: string;
+          ledgerRefreshToken?: string;
         };
+        accessToken?: string;
+        refreshToken?: string;
       };
-      if (payload.source === "mock" || !payload.ok) {
-        payload = authenticateAccount(normalizedAccount, normalizedPin) as typeof payload;
-      }
-      if (!payload.ok) {
+
+      if (!payload.ok || !payload.session) {
         throw new Error(payload.error ?? "登入失敗");
       }
 
-      if (!payload.session) {
-        throw new Error("登入資料不完整");
+      const session = {
+        ...payload.session,
+        loggedInAt: new Date().toISOString(),
+        ledgerAccessToken: payload.session.ledgerAccessToken ?? payload.accessToken,
+        ledgerRefreshToken: payload.session.ledgerRefreshToken ?? payload.refreshToken,
+      };
+
+      saveAuthSession(session);
+
+      const client = getLedgerSupabaseClient();
+      if (client && session.ledgerAccessToken && session.ledgerRefreshToken) {
+        await client.auth.setSession({
+          access_token: session.ledgerAccessToken,
+          refresh_token: session.ledgerRefreshToken,
+        });
       }
-      saveAuthSession({ ...payload.session, loggedInAt: new Date().toISOString() });
+
       saveOperatingMode(mode === "quick" ? "quick" : "dinein");
-      router.replace(payload.session.role === "admin" ? "/backoffice/stores" : "/");
+      router.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
     } finally {
@@ -90,11 +105,9 @@ export function LoginScreen() {
       <div className="relative mx-auto flex min-h-screen max-w-lg flex-col justify-center px-6 py-10">
         <div className="rounded-3xl border border-white/15 bg-white/10 p-8 shadow-2xl backdrop-blur">
           <div className="text-center">
-            <div className="text-sm font-semibold tracking-widest text-orange-200/90">
-              澳門會員通POS系統
-            </div>
+            <div className="text-sm font-semibold tracking-widest text-orange-200/90">澳門會員通POS系統</div>
             <div className="mt-2 text-2xl font-semibold text-white">登入</div>
-            <div className="mt-2 text-sm text-white/70">請使用 8 位數字帳號及 4 位 PIN。</div>
+            <div className="mt-2 text-sm text-white/70">請使用 Ledger 商戶 8 位電話及 4 位 PIN。</div>
           </div>
 
           <div className="mt-6 grid gap-3">
@@ -134,7 +147,7 @@ export function LoginScreen() {
                   setError("");
                   setAccount(event.target.value.replace(/\D/g, "").slice(0, 8));
                 }}
-                placeholder="例如：63936541"
+                placeholder="商戶電話"
                 value={account}
               />
             </label>
@@ -150,7 +163,7 @@ export function LoginScreen() {
                   setError("");
                   setPin(event.target.value.replace(/\D/g, "").slice(0, 4));
                 }}
-                placeholder="例如：1234"
+                placeholder="PIN"
                 type="password"
                 value={pin}
               />
@@ -174,9 +187,7 @@ export function LoginScreen() {
 
           <PwaInstallButton />
 
-          <div className="mt-4 text-center text-xs text-white/40">
-            店長：63936541 / 1234　　收銀：63936542 / 1234
-          </div>
+          <div className="mt-4 text-center text-xs text-white/40">使用會員通商戶帳號登入（與 Ledger Web / Android 相同）</div>
         </div>
       </div>
     </div>

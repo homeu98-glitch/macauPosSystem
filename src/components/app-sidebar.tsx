@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { clearAuthSession, loadAuthSession, loadOfflineMode, saveOfflineMode } from "@/lib/storage";
+import { signOutLedgerSession } from "@/lib/ledger/session";
+import { loadAuthSession, loadOfflineMode, saveOfflineMode } from "@/lib/storage";
 
 const baseNavItems = [
   { href: "/", label: "點餐", short: "點" },
@@ -90,9 +91,10 @@ export function AppSidebar() {
             <button
               className="rounded-2xl bg-slate-800 px-2 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
               onClick={() => {
-                clearAuthSession();
                 setLoggedIn(false);
-                router.replace("/login");
+                void signOutLedgerSession().then(() => {
+                  window.location.replace("/login");
+                });
               }}
               type="button"
             >

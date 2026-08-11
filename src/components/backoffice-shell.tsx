@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PropsWithChildren, useMemo } from "react";
 
-import { clearAuthSession, loadAuthSession } from "@/lib/storage";
+import { signOutLedgerSession } from "@/lib/ledger/session";
+import { loadAuthSession } from "@/lib/storage";
 
 const navItems = [
   { href: "/backoffice/stores", label: "店舖總覽" },
@@ -48,7 +49,9 @@ export function BackofficeShell({ children }: PropsWithChildren) {
             <button
               className="mt-4 w-full rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900"
               onClick={() => {
-                clearAuthSession();
+                void signOutLedgerSession().then(() => {
+                  window.location.replace("/login");
+                });
                 router.replace("/login");
               }}
               type="button"

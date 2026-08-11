@@ -4,102 +4,62 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
+import {
+  acceptLedgerOrder,
+  updateOrderStatus as updateLedgerOrderStatus,
+} from "@/lib/ledger/order-actions";
+import {
+  computeSyncCursor,
+  ledgerStatusLabel,
+  LedgerOnlineOrder,
+  LedgerOrderTab,
+  mergeLedgerOrders,
+  normalizeLedgerStatus,
+  orderCodeLabel,
+  tabLabel,
+} from "@/lib/ledger/order-mapper";
+import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
+import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
+import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
+import { loadPosLocalSettings } from "@/lib/storage";
 
-type OrderTypeKey = "all" | "dine_in" | "pickup" | "self_delivery" | "rider_delivery";
-
-type OnlineOrder = {
-  id: string;
-  sourceId?: string;
-  type: OrderTypeKey;
-  status: string;
-  paymentStatus?: "paid" | "unpaid";
-  paidAmount?: number;
-  customerName?: string;
-  phone?: string;
-  total?: number;
-  createdAt?: string;
-  items?: Array<{ name: string; qty: number }>;
-  riderFee?: number;
-  riderNote?: string;
-};
-
-const TABS: Array<{ key: OrderTypeKey; label: string }> = [
+const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
   { key: "all", label: "全部" },
   { key: "dine_in", label: "堂食" },
   { key: "pickup", label: "外賣自取" },
-  { key: "self_delivery", label: "自送" },
-  { key: "rider_delivery", label: "車手送單" },
+  { key: "self_delivery", label: "外送" },
 ];
 
 function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
 }
 
-function normalizeOrderStatus(status: string) {
-  const s = String(status).toLowerCase();
-  if (s.includes("cancel")) return "cancelled";
-  if (s === "completed" || s === "done" || s === "settled") return "completed";
-  if (s === "ready_pickup") return "ready_pickup";
-  if (s === "ready_dispatch") return "ready_dispatch";
-  if (s === "delivering") return "delivering";
-  if (s === "accepted" || s === "preparing") return "preparing";
-  return "new";
-}
-
-function statusLabel(status: string) {
-  const normalized = normalizeOrderStatus(status);
-  if (normalized === "cancelled") return "已取消";
-  if (normalized === "completed") return "已完成";
-  if (normalized === "ready_pickup") return "待取餐";
-  if (normalized === "ready_dispatch") return "待交付";
-  if (normalized === "delivering") return "配送中";
-  if (normalized === "preparing") return "製作中";
-  return "新單";
-}
-
-function orderCodeLabel(order: Pick<OnlineOrder, "id" | "type">) {
-  const raw = String(order.id ?? "");
-  const suffix = raw.includes("-") ? raw.split("-").slice(1).join("-") : raw;
-  if (/^ONL-/i.test(raw)) {
-    return `線上單 ${suffix}`;
-  }
-  if (/^online-/i.test(raw)) {
-    return `線上單 ${suffix}`;
-  }
-  if (order.type === "pickup") return `自取單 ${suffix}`;
-  if (order.type === "self_delivery") return `自送單 ${suffix}`;
-  if (order.type === "rider_delivery") return `車手單 ${suffix}`;
-  if (order.type === "dine_in") return `堂食線上單 ${suffix}`;
-  return `線上單 ${suffix}`;
-}
-
 export function OnlineOrders() {
-  const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
-  const autoAccept = localSettings.onlineOrderSettings.autoAccept;
-  const [activeTab, setActiveTab] = useState<OrderTypeKey>("all");
-  const [loading, setLoading] = useState(false);
-  const [orders, setOrders] = useState<OnlineOrder[]>([]);
+  const merchantId = getLedgerMerchantId();
+  const [activeTab, setActiveTab] = useState<LedgerOrderTab>("all");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [orders, setOrders] = useState<LedgerOnlineOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [statusMap, setStatusMap] = useState<Record<string, string>>({});
+  const [realtimeStatus, setRealtimeStatus] = useState<string>("INIT");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
-  const [riderModalOrderId, setRiderModalOrderId] = useState<string | null>(null);
-  const [riderFee, setRiderFee] = useState("");
-  const [riderNote, setRiderNote] = useState("");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
+  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number }> | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [audioReady, setAudioReady] = useState(false);
-  const hasInitializedSnapshotRef = useRef(false);
 
-  const viewingOrder = useMemo(
-    () => (viewingOrderId ? orders.find((item) => item.id === viewingOrderId) ?? null : null),
-    [orders, viewingOrderId],
-  );
+  const ordersRef = useRef<LedgerOnlineOrder[]>([]);
+  const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
+  const hasInitializedSnapshotRef = useRef(false);
+  const localSettings = useMemo(() => loadPosLocalSettings(), []);
   const tables = useMemo(
     () => localSettings.floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name }))),
     [localSettings.floors],
   );
+
+  ordersRef.current = orders;
 
   useEffect(() => {
     if (!toast) return;
@@ -108,7 +68,6 @@ export function OnlineOrders() {
   }, [toast]);
 
   useEffect(() => {
-    // iOS/Safari 需要用戶互動後才允許播放聲音
     function unlock() {
       setAudioReady(true);
       window.removeEventListener("pointerdown", unlock);
@@ -122,233 +81,201 @@ export function OnlineOrders() {
     };
   }, []);
 
-  useEffect(() => {
-    function onLocalSettingsChanged(event: Event) {
-      const detail = (event as CustomEvent<{ localSettings?: ReturnType<typeof loadPosLocalSettings> }>).detail;
-      if (detail?.localSettings) {
-        setLocalSettings(detail.localSettings);
-      } else {
-        setLocalSettings(loadPosLocalSettings());
+  const playSound = useCallback(
+    (kind: "new_order" | "new_delivery" | "cancel_order") => {
+      if (!audioReady) return;
+      const src =
+        kind === "cancel_order"
+          ? "/sounds/cancel-order.mp3"
+          : kind === "new_delivery"
+            ? "/sounds/new-delivery-order.mp3"
+            : "/sounds/new-order.mp3";
+      try {
+        void new Audio(src).play();
+      } catch {
+        // ignore
       }
-    }
-    window.addEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
-    return () => window.removeEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+    },
+    [audioReady],
+  );
+
+  const applyOrders = useCallback((next: LedgerOnlineOrder[]) => {
+    setOrders(next);
+    syncCursorRef.current = computeSyncCursor(next);
   }, []);
 
-  const playSound = useCallback((kind: "new_order" | "new_delivery" | "cancel_order") => {
-    if (!audioReady) return;
-    const src =
-      kind === "cancel_order"
-        ? "/sounds/cancel-order.mp3"
-        : kind === "new_delivery"
-          ? "/sounds/new-delivery-order.mp3"
-          : "/sounds/new-order.mp3";
-    try {
-      void new Audio(src).play();
-    } catch {
-      // ignore
-    }
-  }, [audioReady]);
+  const loadOrders = useCallback(
+    async (mode: "full" | "incremental" = "full") => {
+      if (!merchantId) {
+        setError("尚未取得商戶資料，請重新登入。");
+        setLoading(false);
+        return;
+      }
 
-  function isCancelStatus(status: string) {
-    const s = status.toLowerCase();
-    return s.includes("cancel") || s.includes("canceled") || s.includes("cancelled");
-  }
+      const cursor = syncCursorRef.current;
+      const rows = await listMerchantOrders({
+        merchantId,
+        since: mode === "incremental" ? cursor.since : null,
+        sinceId: mode === "incremental" ? cursor.sinceId : null,
+      });
 
-  async function writeBackOrder(payload: {
-    action:
-      | "accept"
-      | "complete"
-      | "update_status"
-      | "assign_table"
-      | "auto_accept"
-      | "handoff_to_rider"
-      | "cancel"
-      | "confirm_customer_cancel"
-      | "reject_customer_cancel";
-    orderId?: string;
-    orderIds?: string[];
-    tableName?: string;
-    tableId?: string;
-    riderFee?: number;
-    riderNote?: string;
-    status?: string;
-  }) {
-    const response = await fetch("/api/online-orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const result = (await response.json()) as { ok: boolean; error?: string };
-    if (!result.ok) {
-      throw new Error(result.error ?? "寫回失敗");
-    }
-  }
+      if (mode === "incremental" && cursor.since) {
+        applyOrders(mergeLedgerOrders(ordersRef.current, rows));
+      } else {
+        applyOrders(rows);
+      }
+    },
+    [applyOrders, merchantId],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    let prevSnapshot: Array<{ id: string; sourceId?: string; status: string; type: OrderTypeKey }> = [];
 
-    async function load() {
+    async function bootstrap() {
       setLoading(true);
       setError(null);
-
       try {
-        const response = await fetch(`/api/online-orders?type=${activeTab}`);
-        const payload = (await response.json()) as {
-          ok: boolean;
-          orders: OnlineOrder[];
-          error?: string;
-        };
-
-        if (!payload.ok) {
-          throw new Error(payload.error ?? "讀取線上訂單失敗");
-        }
-
-        if (!cancelled) {
-          // 聲音：新單 / 取消單
-          const currentRaw = payload.orders ?? [];
-          const prevIds = new Set(prevSnapshot.map((row) => row.sourceId ?? row.id));
-          const newOrders = currentRaw.filter((row) => !prevIds.has(row.sourceId ?? row.id));
-          const cancelOrders = currentRaw.filter((row) => {
-            const id = row.sourceId ?? row.id;
-            const prev = prevSnapshot.find((p) => (p.sourceId ?? p.id) === id);
-            if (!prev) return false;
-            return !isCancelStatus(prev.status) && isCancelStatus(row.status);
-          });
-
-          if (hasInitializedSnapshotRef.current) {
-            if (cancelOrders.length > 0) {
-              playSound("cancel_order");
-            } else if (newOrders.length > 0) {
-              const hasDelivery = newOrders.some((row) => row.type === "self_delivery" || row.type === "rider_delivery");
-              playSound(hasDelivery ? "new_delivery" : "new_order");
-            }
-          }
-
-          const baseOrders = (payload.orders ?? []).map((order) =>
-            autoAccept && order.status === "new" && order.type !== "dine_in"
-              ? { ...order, status: "accepted" }
-              : order,
-          );
-          if (autoAccept) {
-            const newOrderIds = (payload.orders ?? [])
-              .filter((order) => order.status === "new" && order.type !== "dine_in")
-              .map((order) => order.sourceId ?? order.id);
-            if (newOrderIds.length > 0) {
-              void writeBackOrder({ action: "auto_accept", orderIds: newOrderIds }).catch((err) =>
-                setToast({ tone: "error", message: err instanceof Error ? err.message : "自動接單回寫失敗" }),
-              );
-            }
-          }
-          setOrders(baseOrders);
-          prevSnapshot = currentRaw.map((row) => ({
-            id: row.id,
-            sourceId: row.sourceId,
-            status: row.status,
-            type: row.type,
-          }));
-          hasInitializedSnapshotRef.current = true;
-        }
+        await restoreLedgerSession();
+        if (cancelled) return;
+        await loadOrders("full");
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "讀取失敗");
+          setError(err instanceof Error ? err.message : "讀取會員通線上訂單失敗");
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
-    void load();
-    const timer = window.setInterval(load, 6000);
+    void bootstrap();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [activeTab, autoAccept, playSound]);
+  }, [loadOrders]);
+
+  const handleInsert = useCallback(
+    (order: LedgerOnlineOrder) => {
+      const prev = ordersRef.current;
+      const existed = prev.some((row) => row.id === order.id);
+      applyOrders(mergeLedgerOrders(prev, [order]));
+
+      if (hasInitializedSnapshotRef.current && !existed) {
+        const isDelivery = order.fulfillmentType === "merchant_delivery";
+        playSound(isDelivery ? "new_delivery" : "new_order");
+      }
+      hasInitializedSnapshotRef.current = true;
+    },
+    [applyOrders, playSound],
+  );
+
+  const handleUpdate = useCallback(
+    (order: LedgerOnlineOrder) => {
+      const prev = ordersRef.current;
+      const previous = prev.find((row) => row.id === order.id);
+      applyOrders(mergeLedgerOrders(prev, [order]));
+
+      if (
+        hasInitializedSnapshotRef.current &&
+        previous &&
+        normalizeLedgerStatus(previous.status) !== "cancelled" &&
+        normalizeLedgerStatus(order.status) === "cancelled"
+      ) {
+        playSound("cancel_order");
+      }
+      hasInitializedSnapshotRef.current = true;
+    },
+    [applyOrders, playSound],
+  );
+
+  useLedgerOrdersRealtime(merchantId, Boolean(merchantId), {
+    onInsert: handleInsert,
+    onUpdate: handleUpdate,
+    onResubscribed: () => {
+      void loadOrders("incremental").catch((err) => {
+        setError(err instanceof Error ? err.message : "增量同步失敗");
+      });
+    },
+    onStatusChange: setRealtimeStatus,
+  });
+
+  useEffect(() => {
+    if (!loading && orders.length >= 0) {
+      hasInitializedSnapshotRef.current = true;
+    }
+  }, [loading, orders.length]);
+
+  const filteredOrders = useMemo(() => {
+    if (activeTab === "all") return orders;
+    return orders.filter((order) => order.tabType === activeTab);
+  }, [activeTab, orders]);
 
   const stats = useMemo(() => {
-    const effectiveOrders = orders.map((order) => ({
-      ...order,
-      status: statusMap[order.id] ?? order.status,
-    }));
-    const total = effectiveOrders.length;
-    const pending = effectiveOrders.filter((order) => normalizeOrderStatus(order.status) === "new").length;
-    return { total, pending };
-  }, [orders, statusMap]);
+    const pending = filteredOrders.filter((order) => normalizeLedgerStatus(order.status) === "new").length;
+    return { total: filteredOrders.length, pending };
+  }, [filteredOrders]);
 
-  async function acceptOrder(order: OnlineOrder) {
-    const loadingKey = `${order.id}:accept`;
-    setActionLoadingKey(loadingKey);
+  async function manualRefresh() {
+    setRefreshing(true);
+    setError(null);
     try {
-      if (order.type === "dine_in") {
-        setAssigningOrderId(order.id);
-        return;
-      }
-      if (normalizeOrderStatus(statusMap[order.id] ?? order.status) !== "preparing") {
-        await writeBackOrder({
-          action: "accept",
-          orderId: order.sourceId ?? order.id,
-        });
-      }
-
-      setStatusMap((current) => ({ ...current, [order.id]: "preparing" }));
-      setToast({ tone: "success", message: "已接單，進入製作中。" });
+      await loadOrders(syncCursorRef.current.since ? "incremental" : "full");
     } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "接單回寫失敗" });
+      setError(err instanceof Error ? err.message : "刷新失敗");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function openOrderDetail(orderId: string) {
+    setViewingOrderId(orderId);
+    setDetailItems(null);
+    setDetailLoading(true);
+    try {
+      const detail = await getOrderDetail(orderId);
+      setDetailItems(detail.items);
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "讀取明細失敗" });
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function acceptOrder(order: LedgerOnlineOrder) {
+    if (order.tabType === "dine_in") {
+      setAssigningOrderId(order.id);
+      return;
+    }
+
+    setActionLoadingKey(`${order.id}:accept`);
+    try {
+      await acceptLedgerOrder(order);
+      setToast({ tone: "success", message: "已接單。" });
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "接單失敗" });
     } finally {
       setActionLoadingKey(null);
     }
   }
 
-  async function assignDineInTable(order: OnlineOrder, tableId: string, tableName: string) {
-    setActionLoadingKey(`${order.id}:assign`);
+  async function acceptDineInOrder(order: LedgerOnlineOrder) {
+    setActionLoadingKey(`${order.id}:accept-dinein`);
     try {
-      await writeBackOrder({
-        action: "assign_table",
-        orderId: order.sourceId ?? order.id,
-        tableId,
-        tableName,
-      });
-      setStatusMap((current) => ({ ...current, [order.id]: "preparing" }));
-      setOrders((current) => current.filter((row) => row.id !== order.id));
+      await acceptLedgerOrder(order);
       setAssigningOrderId(null);
-      setViewingOrderId(null);
-      setToast({ tone: "success", message: `已接單並安排到 ${tableName}。` });
+      setToast({ tone: "success", message: "堂食線上單已接單。" });
     } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "安排桌台失敗" });
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "接單失敗" });
     } finally {
       setActionLoadingKey(null);
     }
   }
 
-  async function completeOrder(order: OnlineOrder) {
-    setActionLoadingKey(`${order.id}:complete`);
+  async function pushStatus(order: LedgerOnlineOrder, nextStatus: string, successMessage: string) {
+    setActionLoadingKey(`${order.id}:${nextStatus}`);
     try {
-      await writeBackOrder({ action: "complete", orderId: order.sourceId ?? order.id });
-      setStatusMap((current) => ({ ...current, [order.id]: "completed" }));
-      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "completed" } : row)));
-      setToast({ tone: "success", message: "訂單已完成。" });
-      setViewingOrderId(null);
-    } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "完成訂單失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
-  }
-
-  async function updateOrderStatus(order: OnlineOrder, nextStatus: string, successMessage: string) {
-    setActionLoadingKey(`${order.id}:status:${nextStatus}`);
-    try {
-      await writeBackOrder({ action: "update_status", orderId: order.sourceId ?? order.id, status: nextStatus });
-      setStatusMap((current) => ({ ...current, [order.id]: nextStatus }));
-      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: nextStatus } : row)));
+      await updateLedgerOrderStatus(order.id, nextStatus);
       setToast({ tone: "success", message: successMessage });
-      if (nextStatus === "completed") {
-        setViewingOrderId(null);
-      }
+      if (nextStatus === "completed") setViewingOrderId(null);
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "更新狀態失敗" });
     } finally {
@@ -356,90 +283,14 @@ export function OnlineOrders() {
     }
   }
 
-  async function confirmRiderHandoff() {
-    if (!riderModalOrderId) return;
-    const order = orders.find((item) => item.id === riderModalOrderId);
-    if (!order) return;
-    setActionLoadingKey(`${order.id}:rider`);
-
-    const feeValue = Number(riderFee);
-    const fee = Number.isFinite(feeValue) && feeValue > 0 ? feeValue : 0;
-
-    try {
-      await writeBackOrder({
-        action: "handoff_to_rider",
-        orderId: order.sourceId ?? order.id,
-        riderFee: fee,
-        riderNote: riderNote.trim() || undefined,
-      });
-
-      setOrders((current) =>
-        current
-          .map((row) =>
-            row.id === order.id
-              ? {
-                  ...row,
-                  type: "rider_delivery" as const,
-                  status: "accepted",
-                  riderFee: fee,
-                  riderNote: riderNote.trim(),
-                }
-              : row,
-          )
-          .filter((row) => !(activeTab === "self_delivery" && row.id === order.id)),
-      );
-      setToast({ tone: "success", message: "已轉為車手送單。" });
-      setRiderModalOrderId(null);
-    } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "轉車手送單失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
-  }
-
-  async function cancelOrder(order: OnlineOrder) {
+  async function cancelOrder(order: LedgerOnlineOrder) {
     const ok = window.confirm("確定要取消這張訂單？");
     if (!ok) return;
-    setActionLoadingKey(`${order.id}:cancel`);
-    try {
-      await writeBackOrder({ action: "cancel", orderId: order.sourceId ?? order.id });
-      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_merchant" } : row)));
-      setToast({ tone: "success", message: "已取消訂單，已回寫主系統。" });
-      setViewingOrderId(null);
-    } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "取消訂單失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
+    await pushStatus(order, "cancelled", "已取消訂單。");
+    setViewingOrderId(null);
   }
 
-  async function confirmCustomerCancel(order: OnlineOrder) {
-    setActionLoadingKey(`${order.id}:confirm_cancel`);
-    try {
-      await writeBackOrder({ action: "confirm_customer_cancel", orderId: order.sourceId ?? order.id });
-      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancelled_by_customer" } : row)));
-      setToast({ tone: "success", message: "已確認客人取消。" });
-      setViewingOrderId(null);
-    } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
-  }
-
-  async function rejectCustomerCancel(order: OnlineOrder) {
-    setActionLoadingKey(`${order.id}:reject_cancel`);
-    try {
-      await writeBackOrder({ action: "reject_customer_cancel", orderId: order.sourceId ?? order.id });
-      setOrders((current) => current.map((row) => (row.id === order.id ? { ...row, status: "cancel_rejected" } : row)));
-      setToast({ tone: "success", message: "已不認同取消。" });
-      setViewingOrderId(null);
-    } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
-  }
+  const viewingOrder = viewingOrderId ? orders.find((item) => item.id === viewingOrderId) ?? null : null;
 
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
@@ -449,39 +300,26 @@ export function OnlineOrders() {
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold text-slate-900">線上訂單</div>
+                <div className="text-lg font-semibold text-slate-900">會員通線上訂單</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  類型：{TABS.find((tab) => tab.key === activeTab)?.label} · 共 {stats.total} 張 · 新單{" "}
-                  {stats.pending} 張
+                  Ledger 即時同步 · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單 {stats.pending} 張
                 </div>
+                <div className="mt-1 text-xs text-slate-400">Realtime：{realtimeStatus}</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className="mr-2 flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2">
-                  <span className="text-xs font-semibold text-slate-600">自動接單</span>
-                  <button
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      autoAccept ? "bg-emerald-600 text-white" : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
-                    }`}
-                    onClick={() => {
-                      const nextSettings = {
-                        ...localSettings,
-                        onlineOrderSettings: { ...localSettings.onlineOrderSettings, autoAccept: !autoAccept },
-                      };
-                      setLocalSettings(nextSettings);
-                      savePosLocalSettings(nextSettings);
-                    }}
-                    type="button"
-                  >
-                    {autoAccept ? "開" : "關"}
-                  </button>
-                </div>
+                <button
+                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                  disabled={refreshing || loading}
+                  onClick={() => void manualRefresh()}
+                  type="button"
+                >
+                  {refreshing ? "刷新中…" : "手動刷新"}
+                </button>
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}
                     className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                      tab.key === activeTab
-                        ? "bg-orange-500 text-white"
-                        : "bg-slate-100 text-slate-700"
+                      tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setActiveTab(tab.key)}
                     type="button"
@@ -495,164 +333,119 @@ export function OnlineOrders() {
 
           <div className="flex-1 overflow-auto p-4">
             {error ? (
-              <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {error}
-              </div>
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
             ) : null}
 
             {loading ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
-                正在載入…
-              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">正在載入…</div>
             ) : null}
 
-            {!loading && orders.length === 0 ? (
+            {!loading && filteredOrders.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
                 目前沒有訂單
               </div>
             ) : null}
 
             <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-              {orders.map((order) => {
-                const effectiveStatus = statusMap[order.id] ?? order.status;
-                const normalizedStatus = normalizeOrderStatus(effectiveStatus);
+              {filteredOrders.map((order) => {
+                const normalizedStatus = normalizeLedgerStatus(order.status);
                 const orderLoading = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
                 return (
-                <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
-                      </div>
-                    </div>
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        normalizedStatus === "completed"
-                          ? "bg-slate-100 text-slate-700"
-                          : normalizedStatus === "cancelled"
-                            ? "bg-red-50 text-red-700"
-                            : normalizedStatus === "preparing"
-                              ? "bg-amber-50 text-amber-700"
-                              : normalizedStatus === "ready_pickup" || normalizedStatus === "ready_dispatch"
-                                ? "bg-sky-50 text-sky-700"
-                                : normalizedStatus === "delivering"
-                                  ? "bg-violet-50 text-violet-700"
-                                  : "bg-orange-50 text-orange-700"
-                      }`}
-                    >
-                      {statusLabel(effectiveStatus)}
-                    </span>
-                  </div>
-                  <div className="mt-3 text-sm text-slate-700">
-                    {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-700">
-                    支付：{" "}
-                    <span className={order.paymentStatus === "paid" ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
-                      {order.paymentStatus === "paid" ? "已支付" : "未支付"}
-                    </span>
-                    {order.paymentStatus === "paid" ? (
-                      <span className="text-slate-500">（{formatMoney(order.paidAmount ?? order.total ?? 0)}）</span>
-                    ) : null}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-500">{order.type === "dine_in" ? "堂食訂單" : "非堂食訂單"}</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-900">
-                    {typeof order.total === "number" ? formatMoney(order.total) : "金額：--"}
-                  </div>
-                  {order.items?.length ? (
-                    <div className="mt-3 grid gap-1 text-xs text-slate-600">
-                      {order.items.slice(0, 4).map((item) => (
-                        <div key={item.name} className="flex items-center justify-between">
-                          <span>{item.name}</span>
-                          <span>x{item.qty}</span>
+                  <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
                         </div>
-                      ))}
+                      </div>
+                      <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
+                        {ledgerStatusLabel(order.status, order.fulfillmentType)}
+                      </span>
                     </div>
-                  ) : null}
-                  <div className="mt-4 grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                    <button
-                      className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                      onClick={() => setViewingOrderId(order.id)}
-                      type="button"
-                    >
-                      查看
-                    </button>
-                    {normalizedStatus === "new" ? (
-                      <>
-                        <button
-                          aria-busy={orderLoading}
-                          className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
-                          disabled={orderLoading}
-                          onClick={() => void acceptOrder(order)}
-                          type="button"
-                        >
-                          {orderLoading ? "提交中…" : order.type === "dine_in" ? "接單並安排桌台" : "接單"}
-                        </button>
-                        <button
-                          aria-busy={orderLoading}
-                          className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                          disabled={orderLoading}
-                          onClick={() => void cancelOrder(order)}
-                          type="button"
-                        >
-                          {orderLoading ? "提交中…" : "取消"}
-                        </button>
-                      </>
-                    ) : null}
-                    {normalizedStatus === "preparing" ? (
-                      <button
-                        aria-busy={orderLoading}
-                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                        disabled={orderLoading}
-                        onClick={() =>
-                          void updateOrderStatus(
-                            order,
-                            order.type === "pickup" ? "ready_pickup" : "ready_dispatch",
-                            order.type === "pickup" ? "已轉為待取餐。" : "已轉為待交付。",
-                          )
+                    <div className="mt-3 text-sm text-slate-700">
+                      {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
+                    </div>
+                    <div className="mt-1 text-sm text-slate-700">
+                      支付：{" "}
+                      <span
+                        className={
+                          order.paymentStatus === "paid" ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"
                         }
-                        type="button"
                       >
-                        {orderLoading ? "提交中…" : order.type === "pickup" ? "待取餐" : "待交付"}
-                      </button>
+                        {order.paymentStatus === "paid" ? "已支付" : "未支付"}
+                      </span>
+                      {order.paymentMode ? <span className="text-slate-500">（{order.paymentMode}）</span> : null}
+                    </div>
+                    <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
+                    {order.itemSummary ? (
+                      <div className="mt-3 text-xs text-slate-600">
+                        {order.itemSummary}
+                        {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
+                      </div>
                     ) : null}
-                    {normalizedStatus === "ready_pickup" ? (
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <button
-                        aria-busy={orderLoading}
-                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                        disabled={orderLoading}
-                        onClick={() => void completeOrder(order)}
+                        className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                        onClick={() => void openOrderDetail(order.id)}
                         type="button"
                       >
-                        {orderLoading ? "提交中…" : "已取餐 / 已完成"}
+                        查看
                       </button>
-                    ) : null}
-                    {normalizedStatus === "ready_dispatch" ? (
-                      <button
-                        aria-busy={orderLoading}
-                        className="rounded-2xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
-                        disabled={orderLoading}
-                        onClick={() => void updateOrderStatus(order, "delivering", "已轉為配送中。")}
-                        type="button"
-                      >
-                        {orderLoading ? "提交中…" : "配送中"}
-                      </button>
-                    ) : null}
-                    {normalizedStatus === "delivering" ? (
-                      <button
-                        aria-busy={orderLoading}
-                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                        disabled={orderLoading}
-                        onClick={() => void completeOrder(order)}
-                        type="button"
-                      >
-                        {orderLoading ? "提交中…" : "已送達 / 已完成"}
-                      </button>
-                    ) : null}
-                  </div>
-                </article>
-              )})}
+                      {normalizedStatus === "new" ? (
+                        <>
+                          <button
+                            className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+                            disabled={orderLoading}
+                            onClick={() => void acceptOrder(order)}
+                            type="button"
+                          >
+                            {orderLoading ? "提交中…" : order.tabType === "dine_in" ? "接單" : "接單"}
+                          </button>
+                          <button
+                            className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                            disabled={orderLoading}
+                            onClick={() => void cancelOrder(order)}
+                            type="button"
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : null}
+                      {normalizedStatus === "preparing" ? (
+                        <button
+                          className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                          disabled={orderLoading}
+                          onClick={() => void pushStatus(order, "ready", "已標記為就緒。")}
+                          type="button"
+                        >
+                          {order.tabType === "pickup" ? "待取餐" : "待交付"}
+                        </button>
+                      ) : null}
+                      {normalizedStatus === "ready" && order.fulfillmentType === "merchant_delivery" ? (
+                        <button
+                          className="rounded-2xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                          disabled={orderLoading}
+                          onClick={() => void pushStatus(order, "delivering", "已標記配送中。")}
+                          type="button"
+                        >
+                          配送中
+                        </button>
+                      ) : null}
+                      {normalizedStatus === "ready" || normalizedStatus === "delivering" ? (
+                        <button
+                          className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                          disabled={orderLoading}
+                          onClick={() => void pushStatus(order, "completed", "訂單已完成。")}
+                          type="button"
+                        >
+                          完成
+                        </button>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </div>
         </main>
@@ -660,83 +453,36 @@ export function OnlineOrders() {
 
       {assigningOrderId ? (
         <ResponsiveModal
-          description="接单后，把这张线上堂食单直接安排到桌台，不会再留在右侧待操作区。"
+          description="堂食線上單接單後，可在收銀台安排桌台（下一階段將自動轉入堂食單）。"
           onClose={() => setAssigningOrderId(null)}
-          title="安排堂食桌台"
+          title="堂食線上單接單"
           widthClassName="max-w-2xl"
         >
+          <div className="grid gap-3">
+            <button
+              className="rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+              disabled={Boolean(actionLoadingKey)}
+              onClick={() => {
+                const order = orders.find((item) => item.id === assigningOrderId);
+                if (!order) return;
+                void acceptDineInOrder(order);
+              }}
+              type="button"
+            >
+              確認接單
+            </button>
             <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
               {tables.map((table) => (
-                <button
+                <div
                   key={table.id}
-                  aria-busy={Boolean(actionLoadingKey?.startsWith(`${assigningOrderId}:assign`))}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300 hover:bg-orange-50 disabled:opacity-60"
-                  disabled={Boolean(actionLoadingKey?.startsWith(`${assigningOrderId}:assign`))}
-                  onClick={() => {
-                    const order = orders.find((item) => item.id === assigningOrderId);
-                    if (!order) return;
-                    const tableName = `${table.floorName} · ${table.name}`;
-                    void assignDineInTable(order, table.id, tableName);
-                  }}
-                  type="button"
+                  className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm text-slate-500"
                 >
                   <div>{table.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">{table.floorName}</div>
-                </button>
+                  <div className="mt-1 text-xs">{table.floorName}</div>
+                </div>
               ))}
             </div>
-        </ResponsiveModal>
-      ) : null}
-
-      {riderModalOrderId ? (
-        <ResponsiveModal
-          actions={
-            <>
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
-                onClick={() => setRiderModalOrderId(null)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                aria-busy={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                disabled={Boolean(actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`))}
-                onClick={() => void confirmRiderHandoff()}
-                type="button"
-              >
-                {actionLoadingKey?.startsWith(`${riderModalOrderId}:rider`) ? "提交中…" : "確認轉車手送單"}
-              </button>
-            </>
-          }
-          description="設定車手價錢與備註，確認後會轉成車手送單。"
-          onClose={() => setRiderModalOrderId(null)}
-          title="給車手接送"
-          widthClassName="max-w-lg"
-        >
-            <div className="grid gap-3">
-              <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">給車手價錢（MOP）</span>
-                <input
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  inputMode="decimal"
-                  onChange={(event) => setRiderFee(event.target.value)}
-                  placeholder="例如：20"
-                  value={riderFee}
-                />
-              </label>
-              <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">備註</span>
-                <input
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setRiderNote(event.target.value)}
-                  placeholder="例如：請先致電客人"
-                  value={riderNote}
-                />
-              </label>
-            </div>
+          </div>
         </ResponsiveModal>
       ) : null}
 
@@ -752,130 +498,40 @@ export function OnlineOrders() {
 
       {viewingOrder ? (
         <ResponsiveModal
-          actions={
-            <>
-              {(() => {
-                const s = String(viewingOrder.status).toLowerCase();
-                return s.includes("cancel") && s.includes("customer");
-              })() ? (
-                <>
-                  <button
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    onClick={() => void rejectCustomerCancel(viewingOrder)}
-                    type="button"
-                  >
-                    不認同取消
-                  </button>
-                  <button
-                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
-                    onClick={() => void confirmCustomerCancel(viewingOrder)}
-                    type="button"
-                  >
-                    確認取消
-                  </button>
-                </>
-              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "new" ? (
-                <>
-                  <button
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    onClick={() => void cancelOrder(viewingOrder)}
-                    type="button"
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
-                    onClick={() => void acceptOrder(viewingOrder)}
-                    type="button"
-                  >
-                    {viewingOrder.type === "dine_in" ? "接單並安排桌台" : "接單"}
-                  </button>
-                </>
-              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "preparing" ? (
-                <button
-                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() =>
-                    void updateOrderStatus(
-                      viewingOrder,
-                      viewingOrder.type === "pickup" ? "ready_pickup" : "ready_dispatch",
-                      viewingOrder.type === "pickup" ? "已轉為待取餐。" : "已轉為待交付。",
-                    )
-                  }
-                  type="button"
-                >
-                  {viewingOrder.type === "pickup" ? "待取餐" : "待交付"}
-                </button>
-              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "ready_pickup" ? (
-                <button
-                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => void completeOrder(viewingOrder)}
-                  type="button"
-                >
-                  已取餐 / 已完成
-                </button>
-              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "ready_dispatch" ? (
-                <button
-                  className="rounded-2xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => void updateOrderStatus(viewingOrder, "delivering", "已轉為配送中。")}
-                  type="button"
-                >
-                  配送中
-                </button>
-              ) : normalizeOrderStatus(statusMap[viewingOrder.id] ?? viewingOrder.status) === "delivering" ? (
-                <button
-                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => void completeOrder(viewingOrder)}
-                  type="button"
-                >
-                  已送達 / 已完成
-                </button>
-              ) : null}
-            </>
-          }
-          description={`${orderCodeLabel(viewingOrder)} · ${TABS.find((tab) => tab.key === viewingOrder.type)?.label ?? viewingOrder.type}`}
-          onClose={() => setViewingOrderId(null)}
+          description={`${orderCodeLabel(viewingOrder)} · ${tabLabel(viewingOrder.tabType)}`}
+          onClose={() => {
+            setViewingOrderId(null);
+            setDetailItems(null);
+          }}
           title="訂單詳情"
           widthClassName="max-w-2xl"
         >
           <div className="grid gap-2 text-sm text-slate-700">
             <div>客戶：{viewingOrder.customerName ?? "--"}</div>
             <div>電話：{viewingOrder.phone ?? "--"}</div>
-            <div>
-              支付：
-              <span
-                className={
-                  viewingOrder.paymentStatus === "paid"
-                    ? "ml-2 font-semibold text-emerald-700"
-                    : "ml-2 font-semibold text-amber-700"
-                }
-              >
-                {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
-              </span>
-              {typeof viewingOrder.paidAmount === "number" ? (
-                <span className="ml-2 text-slate-500">（{formatMoney(viewingOrder.paidAmount)}）</span>
-              ) : null}
-            </div>
+            {viewingOrder.deliveryAddress ? <div>地址：{viewingOrder.deliveryAddress}</div> : null}
+            {viewingOrder.note ? <div>備註：{viewingOrder.note}</div> : null}
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-semibold text-slate-900">菜品明細</div>
             <div className="mt-3 grid gap-2">
-              {viewingOrder.items?.length ? (
-                viewingOrder.items.map((item) => (
-                  <div key={item.name} className="flex items-center justify-between text-sm text-slate-700">
-                    <span>{item.name}</span>
-                    <span className="font-semibold">x{item.qty}</span>
-                  </div>
-                ))
-              ) : (
-                <div className="text-sm text-slate-500">--</div>
-              )}
+              {detailLoading ? <div className="text-sm text-slate-500">正在載入明細…</div> : null}
+              {!detailLoading && detailItems?.length
+                ? detailItems.map((item) => (
+                    <div key={`${item.name}-${item.qty}`} className="flex items-center justify-between text-sm text-slate-700">
+                      <span>{item.name}</span>
+                      <span className="font-semibold">x{item.qty}</span>
+                    </div>
+                  ))
+                : null}
+              {!detailLoading && !detailItems?.length ? (
+                <div className="text-sm text-slate-500">{viewingOrder.itemSummary ?? "--"}</div>
+              ) : null}
             </div>
             <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
               <span>總計</span>
-              <span className="text-base font-semibold text-slate-900">
-                {typeof viewingOrder.total === "number" ? formatMoney(viewingOrder.total) : "--"}
-              </span>
+              <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total)}</span>
             </div>
           </div>
         </ResponsiveModal>

@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import mqtt, { MqttClient } from "mqtt";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
@@ -171,8 +170,6 @@ export function PosApp() {
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioReady, setAudioReady] = useState(false);
-  const mqttClientRef = useRef<MqttClient | null>(null);
-  const [mqttOnline, setMqttOnline] = useState(false);
   const onlineRefreshTimerRef = useRef<number | null>(null);
   const [onlineOrders, setOnlineOrders] = useState<
     Array<{
@@ -329,128 +326,11 @@ export function PosApp() {
     return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
   }, []);
 
-  function scheduleOnlineRefresh() {
-    if (onlineRefreshTimerRef.current) {
-      window.clearTimeout(onlineRefreshTimerRef.current);
-    }
-    onlineRefreshTimerRef.current = window.setTimeout(() => {
-      void loadOnlineOrdersFromApi();
-    }, 350);
-  }
-
-  async function loadOnlineOrdersFromApi() {
-    try {
-      const response = await fetch("/api/online-orders?type=all");
-      const payload = (await response.json()) as { ok: boolean; orders?: unknown[] };
-      if (!payload.ok) return;
-
-      const nextOrders = (payload.orders ?? []) as typeof onlineOrders;
-      setOnlineOrders(nextOrders);
-
-      if (audioReady) {
-        const snapshot = quickOnlineSnapshotRef.current;
-        const nextMap = new Map<string, string>();
-        const newArrivals: Array<(typeof nextOrders)[number]> = [];
-        let hasCustomerCancel = false;
-
-        for (const order of nextOrders) {
-          const id = order.sourceId ?? order.id;
-          nextMap.set(id, order.status);
-          if (!snapshot.has(id)) newArrivals.push(order);
-          const prevStatus = snapshot.get(id);
-          const status = String(order.status).toLowerCase();
-          if (
-            prevStatus &&
-            !String(prevStatus).toLowerCase().includes("cancel") &&
-            status.includes("cancel") &&
-            status.includes("customer")
-          ) {
-            hasCustomerCancel = true;
-          }
-        }
-
-        quickOnlineSnapshotRef.current = nextMap;
-
-        if (snapshot.size > 0) {
-          if (hasCustomerCancel) {
-            void new Audio("/sounds/cancel-order.mp3").play();
-          } else if (newArrivals.length > 0) {
-            const hasDelivery = newArrivals.some(
-              (row) => row.type === "self_delivery" || row.type === "rider_delivery",
-            );
-            void new Audio(hasDelivery ? "/sounds/new-delivery-order.mp3" : "/sounds/new-order.mp3").play();
-          }
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
   useEffect(() => {
     if (!isQuickMode) return;
-
-    void loadOnlineOrdersFromApi();
-
-    const wsUrl = process.env.NEXT_PUBLIC_HIVEMQ_WS_URL ?? "";
-    const username = process.env.NEXT_PUBLIC_HIVEMQ_USERNAME ?? "";
-    const password = process.env.NEXT_PUBLIC_HIVEMQ_PASSWORD ?? "";
-    const storeId = process.env.NEXT_PUBLIC_STORE_ID ?? "macau-store-a";
-
-    if (!wsUrl || !username || !password) {
-      const timer = window.setInterval(() => void loadOnlineOrdersFromApi(), 60_000);
-      return () => window.clearInterval(timer);
-    }
-
-    const client = mqtt.connect(wsUrl, {
-      username,
-      password,
-      keepalive: 30,
-      reconnectPeriod: 2000,
-      connectTimeout: 8000,
-      clean: true,
-    });
-    mqttClientRef.current = client;
-
-    const topic = `stores/${storeId}/online-orders/events`;
-
-    client.on("connect", () => {
-      setMqttOnline(true);
-      client.subscribe(topic, { qos: 1 });
-      scheduleOnlineRefresh();
-    });
-    client.on("reconnect", () => setMqttOnline(false));
-    client.on("close", () => setMqttOnline(false));
-    client.on("offline", () => setMqttOnline(false));
-    client.on("error", () => setMqttOnline(false));
-
-    client.on("message", (receivedTopic, payload) => {
-      if (receivedTopic !== topic) return;
-      try {
-        const msg = JSON.parse(payload.toString()) as { type?: string; orderId?: string; action?: string };
-        if (msg?.type === "online_order_changed") {
-          scheduleOnlineRefresh();
-        }
-      } catch {
-        // ignore
-      }
-    });
-
-    const fallbackTimer = window.setInterval(() => {
-      if (!mqttOnline) {
-        void loadOnlineOrdersFromApi();
-      }
-    }, 60_000);
-
-    return () => {
-      window.clearInterval(fallbackTimer);
-      if (onlineRefreshTimerRef.current) window.clearTimeout(onlineRefreshTimerRef.current);
-      mqttClientRef.current?.end(true);
-      mqttClientRef.current = null;
-      setMqttOnline(false);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isQuickMode, audioReady, mqttOnline]);
+    // 會員通線上訂單改由 /orders 頁 Ledger Realtime 同步；收銀台禁止 polling。
+    setOnlineOrders([]);
+  }, [isQuickMode]);
 
   useEffect(() => {
     if (!isQuickMode) return;
@@ -672,42 +552,7 @@ export function PosApp() {
   }, []);
 
   useEffect(() => {
-    if (!isQuickMode || !autoAcceptOnlineOrders) return;
-    const pending = onlineOrders.filter((order) => order.status === "new");
-    if (pending.length === 0) return;
-
-    for (const order of pending) {
-      const sourceId = order.sourceId ?? order.id;
-      if (quickOrderProcessingRef.current.has(sourceId)) continue;
-      quickOrderProcessingRef.current.add(sourceId);
-
-      void (async () => {
-        try {
-          await fetch("/api/online-orders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "accept", orderId: sourceId }),
-          });
-          const response = await fetch("/api/online-orders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
-          });
-          const payload = (await response.json()) as { ok: boolean; posOrder?: PosOrder; error?: string };
-          if (!payload.ok || !payload.posOrder) {
-            throw new Error(payload.error ?? "轉入快餐訂單失敗");
-          }
-          setOrders((current) => {
-            const next = [payload.posOrder!, ...current.filter((item) => item.id !== payload.posOrder!.id)];
-            saveOrders(next);
-            return next;
-          });
-          setToast({ tone: "success", message: "已自動接單並加入訂單池。" });
-        } catch (err) {
-          setToast({ tone: "info", message: err instanceof Error ? err.message : "自動接單失敗" });
-        }
-      })();
-    }
+    // 自動接單已移至 /orders（Ledger RPC）
   }, [isQuickMode, onlineOrders, autoAcceptOnlineOrders]);
   const effectiveCategoryId = useMemo(() => {
     if (!bootstrap) return "";
@@ -3000,7 +2845,11 @@ export function PosApp() {
 
                   {onlineOrders.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有線上訂單
+                      會員通線上訂單請至{" "}
+                      <Link className="font-semibold text-orange-600 underline" href="/orders">
+                        線上訂單
+                      </Link>{" "}
+                      頁面（Ledger Realtime 同步）
                     </div>
                   ) : (
                     <div className="grid gap-2">

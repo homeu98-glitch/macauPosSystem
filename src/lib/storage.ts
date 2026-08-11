@@ -368,9 +368,12 @@ export type AuthSession = {
   name: string;
   role: UserRole;
   storeIds?: string[];
+  merchantId?: string;
   permissionGroupId?: string;
   permissions: UserPermissions;
   loggedInAt: string;
+  ledgerAccessToken?: string;
+  ledgerRefreshToken?: string;
 };
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
@@ -381,13 +384,20 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     account: session.account,
     name: session.name ?? (role === "admin" ? "系統管理員" : role === "manager" ? "店長" : "收銀員"),
     role,
-    storeIds: Array.isArray(session.storeIds) ? session.storeIds : ["macau-store-a"],
+    storeIds: Array.isArray(session.storeIds)
+      ? session.storeIds
+      : session.merchantId
+        ? [session.merchantId]
+        : ["macau-store-a"],
+    merchantId: session.merchantId,
     permissionGroupId: session.permissionGroupId,
     permissions: {
       ...defaultPermissionsForRole(role),
       ...(session.permissions ?? {}),
     },
     loggedInAt: session.loggedInAt ?? new Date().toISOString(),
+    ledgerAccessToken: session.ledgerAccessToken,
+    ledgerRefreshToken: session.ledgerRefreshToken,
   };
 }
 
