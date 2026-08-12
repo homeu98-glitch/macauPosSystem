@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { NumericKeypad } from "@/components/numeric-keypad";
-import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
+import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
@@ -165,9 +165,6 @@ export function PosApp() {
   const [orderNote, setOrderNote] = useState("");
   const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
-  const [quickPanel, setQuickPanel] = useState<"cashier" | "online" | "local">(() =>
-    loadOperatingMode() === "quick" ? (loadOfflineMode() ? "local" : "online") : "cashier",
-  );
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
   const [draggingQuickAction, setDraggingQuickAction] = useState<string | null>(null);
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
@@ -179,7 +176,6 @@ export function PosApp() {
   const isQuickMode = operatingMode === "quick";
   const canRefundOrder = authSession?.permissions.refundOrder ?? true;
   const canVoidItem = authSession?.permissions.voidItem ?? true;
-  const effectiveQuickPanel = isQuickMode && offlineMode && quickPanel === "online" ? "local" : quickPanel;
 
   function showPermissionDenied(actionLabel: string) {
     setToast({ tone: "info", message: `目前帳號沒有${actionLabel}權限，請使用店長帳號操作。` });
@@ -519,10 +515,6 @@ export function PosApp() {
   const floors = localSettings.floors;
   const paymentMethods = localSettings.paymentMethods;
   const autoAcceptOnlineOrders = localSettings.onlineOrderSettings.autoAccept;
-  const dineInTables = useMemo(
-    () => floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name }))),
-    [floors],
-  );
 
   useEffect(() => {
     function onLocalSettingsChanged(event: Event) {
@@ -1015,9 +1007,6 @@ export function PosApp() {
       ];
     });
     setSelectedItemId(item.id);
-    if (isQuickMode) {
-      setQuickPanel("local");
-    }
   }
 
   function openSpecPicker(
@@ -1643,9 +1632,6 @@ export function PosApp() {
               : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
         });
       }
-      if (isQuickMode) {
-        setQuickPanel("local");
-      }
       return order;
     } finally {
       setOrderSubmitting(false);
@@ -2028,7 +2014,6 @@ export function PosApp() {
       setSettlementFlash(true);
       printReceipt(updatedOrder);
       if (quickPaidFlow) {
-        setQuickPanel("local");
         setViewingOrderId(null);
       } else {
         backToTables();
@@ -2107,7 +2092,6 @@ export function PosApp() {
     setSettlementFlash(true);
     printReceipt(updatedOrder);
     if (quickPaidFlow) {
-      setQuickPanel("local");
       setViewingOrderId(null);
     } else {
       backToTables();
@@ -2369,7 +2353,8 @@ export function PosApp() {
             </section>
           </div>
         ) : (
-        <div className="grid h-[100dvh] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_330px]">
+        <div className="flex h-[100dvh] flex-1 flex-col overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_330px]">
           <section className="flex h-full flex-col overflow-hidden border-r border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">
               <div className="flex items-center justify-between">
@@ -2719,279 +2704,19 @@ export function PosApp() {
 
           <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">
-              {isQuickMode ? (
-                <div className="grid grid-cols-3 gap-2">
-                    <button
-                      className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
-                        effectiveQuickPanel === "online" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                      }`}
-                      onClick={() => setQuickPanel(offlineMode ? "local" : "online")}
-                      type="button"
-                    >
-                      線上訂單
-                    </button>
-                    <button
-                      className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
-                        effectiveQuickPanel === "local" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                      }`}
-                      onClick={() => setQuickPanel("local")}
-                      type="button"
-                    >
-                      線下訂單
-                    </button>
-                    <button
-                      className={`rounded-2xl px-3 py-2 text-sm font-semibold ${
-                        effectiveQuickPanel === "cashier" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                      }`}
-                      onClick={() => setQuickPanel("cashier")}
-                      type="button"
-                    >
-                      收銀
-                    </button>
-                </div>
-              ) : (
-                <>
-                  <div className="text-base font-semibold text-slate-900">收銀與支付</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {currentSettlementOrder
-                      ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
-                      : selectedTableStatus === "draft"
-                        ? "目前尚未下單，可繼續加菜或送廚房"
-                        : "目前未有待結帳訂單，可先開台或送廚房單"}
-                  </div>
-                </>
-              )}
+              <div className="text-base font-semibold text-slate-900">收銀與支付</div>
+              <div className="mt-1 text-xs text-slate-500">
+                {isQuickMode
+                  ? "點餐結帳在此；線上／線下訂單見螢幕下方"
+                  : currentSettlementOrder
+                    ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
+                    : selectedTableStatus === "draft"
+                      ? "目前尚未下單，可繼續加菜或送廚房"
+                      : "目前未有待結帳訂單，可先開台或送廚房單"}
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto px-4 py-4">
-              {isQuickMode && effectiveQuickPanel === "online" ? (
-                <QuickOnlineOrdersPanel
-                  autoAccept={autoAcceptOnlineOrders}
-                  currency={bootstrap?.currency ?? "MOP"}
-                  onAutoAcceptChange={(next) => {
-                    const nextSettings = {
-                      ...localSettings,
-                      onlineOrderSettings: {
-                        ...localSettings.onlineOrderSettings,
-                        autoAccept: next,
-                      },
-                    };
-                    setLocalSettings(nextSettings);
-                    savePosLocalSettings(nextSettings);
-                  }}
-                  onBridgedOrder={(posOrder) => {
-                    setOrders((current) => {
-                      const next = [posOrder, ...current.filter((item) => item.id !== posOrder.id)];
-                      saveOrders(next);
-                      return next;
-                    });
-                    setPrintJobs(loadPrintJobs());
-                    setViewingOrderId(posOrder.id);
-                    setQuickPanel("local");
-                  }}
-                  onToast={(payload) =>
-                    setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
-                  }
-                  tables={dineInTables}
-                />
-              ) : isQuickMode && effectiveQuickPanel === "local" ? (
-                <div className="grid gap-3">
-                  <div className="text-xs font-semibold text-slate-500">製作中</div>
-                  <div className="grid gap-2">
-                      {quickPreparingOrders.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                          暫時沒有製作中訂單
-                        </div>
-                      ) : (
-                        quickPreparingOrders
-                          .slice(0, 12)
-                          .map((order) => (
-                            <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-sm font-semibold text-slate-900">
-                                    {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
-                                  </div>
-                                  <div className="mt-1 text-xs text-slate-500">
-                                    {formatMoney(order.total, bootstrap.currency)}
-                                    {order.prepaidAmount ? ` · 已支付 ${formatMoney(order.prepaidAmount, bootstrap.currency)}` : ""}
-                                  </div>
-                                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                                    <span
-                                      className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${
-                                        order.status === "paid"
-                                          ? "bg-emerald-50 text-emerald-700"
-                                          : "bg-amber-50 text-amber-700"
-                                      }`}
-                                    >
-                                      製作中
-                                    </span>
-                                  {order.status === "paid" ? (
-                                    <>
-                                      <button
-                                        className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
-                                        onClick={() => updateQuickFulfillment(order.id, "ready")}
-                                        type="button"
-                                      >
-                                        製作完成 / 可取餐
-                                      </button>
-                                    </>
-                                  ) : null}
-                                  </div>
-                                  <div className="mt-2 text-xs text-slate-500">
-                                    {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
-                                    {order.items.length > 3 ? " · ..." : ""}
-                                  </div>
-                                </div>
-                                <button
-                                  className="h-11 min-w-[96px] shrink-0 rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold whitespace-nowrap text-white"
-                                  onClick={() => {
-                                    setViewingOrderId(order.id);
-                                  }}
-                                  type="button"
-                                >
-                                  查看訂單
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                      )}
-                  </div>
-
-                  <div className="mt-2 text-xs font-semibold text-slate-500">待取餐 / 待交付</div>
-                  <div className="grid gap-2">
-                    {quickWaitingOrders.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                        暫時沒有待取餐 / 待交付訂單
-                      </div>
-                    ) : (
-                      quickWaitingOrders.slice(0, 12).map((order) => (
-                        <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm font-semibold text-slate-900">
-                                {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
-                              </div>
-                              <div className="mt-1 text-xs text-slate-500">
-                                {formatMoney(order.total, bootstrap.currency)}
-                                {order.prepaidAmount ? ` · 已支付 ${formatMoney(order.prepaidAmount, bootstrap.currency)}` : ""}
-                              </div>
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
-                                  已支付
-                                </span>
-                                <span className="inline-flex rounded-full bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700">
-                                  {quickCompletionLabel(order)}
-                                </span>
-                                <button
-                                  className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white"
-                                  onClick={() =>
-                                    markOrderCompleted(order.id, {
-                                      label: order.tableName === "外賣" ? "已交付" : order.tableName === "自取" ? "已取餐" : "已完成",
-                                    })
-                                  }
-                                  type="button"
-                                >
-                                  {order.tableName === "外賣" ? "已交付" : order.tableName === "自取" ? "已取餐" : "已完成"}
-                                </button>
-                                <button
-                                  className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
-                                  onClick={() => updateQuickFulfillment(order.id, "preparing")}
-                                  type="button"
-                                >
-                                  返回製作中
-                                </button>
-                              </div>
-                              <div className="mt-2 text-xs text-slate-500">
-                                {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
-                                {order.items.length > 3 ? " · ..." : ""}
-                              </div>
-                            </div>
-                            <button
-                              className="h-11 min-w-[96px] shrink-0 rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold whitespace-nowrap text-white"
-                              onClick={() => {
-                                setViewingOrderId(order.id);
-                              }}
-                              type="button"
-                            >
-                              查看訂單
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-semibold text-slate-500">已完成</div>
-                    <div className="flex items-center gap-2">
-                      <div>
-                        <span className="text-xs text-slate-500">保留</span>
-                      </div>
-                      <select
-                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          setQuickCompletedMinutes(next);
-                          saveQuickCompletedMinutes(next);
-                        }}
-                        value={String(quickCompletedMinutes)}
-                      >
-                        <option value="5">5 分鐘</option>
-                        <option value="10">10 分鐘</option>
-                        <option value="30">30 分鐘</option>
-                        <option value="60">60 分鐘</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-2">
-                    {recentCompletedOrders.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                        暫時沒有已完成訂單
-                      </div>
-                    ) : (
-                      recentCompletedOrders.slice(0, 12).map((order) => (
-                        <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-semibold text-slate-900">
-                                {order.localOrderNo} <span className="ml-2 text-xs text-slate-500">{order.tableName}</span>
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                                <span>{formatMoney(order.total, bootstrap.currency)}</span>
-                                <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
-                                  已支付
-                                </span>
-                              </div>
-                              <div className="mt-2 text-xs text-slate-500">
-                                {order.items.slice(0, 3).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
-                                {order.items.length > 3 ? " · ..." : ""}
-                              </div>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                              <button
-                                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                                onClick={() => setViewingOrderId(order.id)}
-                                type="button"
-                              >
-                                查看
-                              </button>
-                              <button
-                                className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                                onClick={() => reprintOrder(order)}
-                                type="button"
-                              >
-                                重打單
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              ) : (
               <>
               <div className="rounded-3xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between text-sm text-slate-500">
@@ -3145,9 +2870,48 @@ export function PosApp() {
 
               {/* 最近訂單：點餐頁不顯示，避免干擾店員操作 */}
               </>
-              )}
             </div>
           </section>
+        </div>
+        {isQuickMode && !offlineMode && bootstrap ? (
+          <QuickModeOrdersBar
+            autoAcceptOnline={autoAcceptOnlineOrders}
+            completeLabel={(order) =>
+              order.tableName === "外賣" ? "已交付" : order.tableName === "自取" ? "已取餐" : "已完成"
+            }
+            completionLabel={quickCompletionLabel}
+            currency={bootstrap.currency}
+            onAutoAcceptOnlineChange={(next) => {
+              const nextSettings = {
+                ...localSettings,
+                onlineOrderSettings: {
+                  ...localSettings.onlineOrderSettings,
+                  autoAccept: next,
+                },
+              };
+              setLocalSettings(nextSettings);
+              savePosLocalSettings(nextSettings);
+            }}
+            onBridgedOnlineOrder={(posOrder) => {
+              setOrders((current) => {
+                const next = [posOrder, ...current.filter((item) => item.id !== posOrder.id)];
+                saveOrders(next);
+                return next;
+              });
+              setPrintJobs(loadPrintJobs());
+              setViewingOrderId(posOrder.id);
+            }}
+            onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
+            onMarkReady={(orderId) => updateQuickFulfillment(orderId, "ready")}
+            onOnlineToast={(payload) =>
+              setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
+            }
+            onReturnPreparing={(orderId) => updateQuickFulfillment(orderId, "preparing")}
+            onViewOrder={(orderId) => setViewingOrderId(orderId)}
+            preparingOrders={quickPreparingOrders}
+            waitingOrders={quickWaitingOrders}
+          />
+        ) : null}
         </div>
         )}
       </div>
@@ -3322,7 +3086,6 @@ export function PosApp() {
                   onClick={() => {
                     setViewingOrderId(null);
                     setPayingOrderId(viewingOrder.id);
-                    setQuickPanel("cashier");
                   }}
                   type="button"
                 >

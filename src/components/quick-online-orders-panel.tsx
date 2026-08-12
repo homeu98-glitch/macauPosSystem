@@ -33,9 +33,12 @@ type QuickOnlineOrdersPanelProps = {
   currency: string;
   autoAccept: boolean;
   onAutoAcceptChange: (next: boolean) => void;
-  tables: Array<{ id: string; name: string; floorName: string }>;
   onBridgedOrder: (posOrder: PosOrder) => void;
   onToast: (payload: { tone: "success" | "info" | "error"; message: string }) => void;
+  /** 快餐模式：堂食線上單不安排桌台，直接接單送廚 */
+  skipTableAssignment?: boolean;
+  layout?: "stack" | "strip";
+  tables?: Array<{ id: string; name: string; floorName: string }>;
 };
 
 function formatMoney(amount: number, currency: string) {
@@ -46,9 +49,11 @@ export function QuickOnlineOrdersPanel({
   currency,
   autoAccept,
   onAutoAcceptChange,
-  tables,
   onBridgedOrder,
   onToast,
+  skipTableAssignment = false,
+  layout = "stack",
+  tables = [],
 }: QuickOnlineOrdersPanelProps) {
   const merchantId = getLedgerMerchantId();
   const [loading, setLoading] = useState(true);
@@ -230,8 +235,8 @@ export function QuickOnlineOrdersPanel({
         if (status === "cancelled" || status === "completed") return false;
         return !bridgedOrderIds.has(order.id);
       })
-      .slice(0, 16);
-  }, [orders, bridgedOrderIds]);
+      .slice(0, layout === "strip" ? 24 : 16);
+  }, [orders, bridgedOrderIds, layout]);
 
   const runAcceptAndBridge = useCallback(
     async (
@@ -280,12 +285,12 @@ export function QuickOnlineOrdersPanel({
   useEffect(() => {
     if (!autoAccept || loading) return;
 
-    const pending = orders.filter(
-      (order) =>
-        rawLedgerStatus(order.status) === "pending" &&
-        order.tabType !== "dine_in" &&
-        !autoAcceptProcessingRef.current.has(order.id),
-    );
+    const pending = orders.filter((order) => {
+      if (rawLedgerStatus(order.status) !== "pending") return false;
+      if (autoAcceptProcessingRef.current.has(order.id)) return false;
+      if (!skipTableAssignment && order.tabType === "dine_in") return false;
+      return true;
+    });
 
     for (const order of pending) {
       autoAcceptProcessingRef.current.add(order.id);
@@ -299,7 +304,7 @@ export function QuickOnlineOrdersPanel({
           autoAcceptProcessingRef.current.delete(order.id);
         });
     }
-  }, [autoAccept, loading, orders, onToast, runAcceptAndBridge]);
+  }, [autoAccept, loading, orders, onToast, runAcceptAndBridge, skipTableAssignment]);
 
   async function bridgeExistingOrder(order: LedgerOnlineOrder) {
     setActionLoadingKey(`${order.id}:bridge`);
@@ -328,17 +333,114 @@ export function QuickOnlineOrdersPanel({
     }
   }
 
+  function startAccept(order: LedgerOnlineOrder) {
+    if (!skipTableAssignment && order.tabType === "dine_in") {
+      setAssigningOrderId(order.id);
+      return;
+    }
+    void runAcceptAndBridge(order);
+  }
+
   const assigningOrder = assigningOrderId ? orders.find((row) => row.id === assigningOrderId) ?? null : null;
   const balanceFallbackOrder = balanceFallbackOrderId
     ? orders.find((row) => row.id === balanceFallbackOrderId) ?? null
     : null;
 
+  const autoAcceptLabel = skipTableAssignment ? "自動接單" : "自動接單（非堂食）";
+
+  function renderOrderCard(order: LedgerOnlineOrder) {
+    const isPending = rawLedgerStatus(order.status) === "pending";
+    const paymentLabel =
+      order.paymentStatus === "paid"
+        ? `已支付 ${formatMoney(order.paidAmount, currency)}`
+        : paymentModeLabel(order.paymentMode) ?? "未支付";
+    const statusLabel = isPending ? "新單" : "已接單";
+    const typeLabel = tabLabel(order.tabType);
+    const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
+
+    if (layout === "strip") {
+      return (
+        <article key={order.id} className="w-[240px] shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+              <div className="mt-0.5 text-xs text-slate-500">{typeLabel}</div>
+            </div>
+            <span className="shrink-0 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
+              {statusLabel}
+            </span>
+          </div>
+          <div className="mt-2 text-xs text-slate-600">{paymentLabel}</div>
+          {order.itemSummary ? <div className="mt-1 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
+          <div className="mt-3">
+            {isPending ? (
+              <button
+                className="w-full rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                disabled={busy}
+                onClick={() => startAccept(order)}
+                type="button"
+              >
+                {busy ? "處理中…" : "接單"}
+              </button>
+            ) : (
+              <button
+                className="w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                disabled={busy}
+                onClick={() => void bridgeExistingOrder(order)}
+                type="button"
+              >
+                {busy ? "處理中…" : "轉入"}
+              </button>
+            )}
+          </div>
+        </article>
+      );
+    }
+
+    return (
+      <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">
+              {orderCodeLabel(order)} <span className="ml-2 text-xs font-semibold text-slate-500">{typeLabel}</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {statusLabel} · {paymentLabel}
+            </div>
+            {order.itemSummary ? <div className="mt-2 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {isPending ? (
+              <button
+                className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                disabled={busy}
+                onClick={() => startAccept(order)}
+                type="button"
+              >
+                {busy ? "處理中…" : skipTableAssignment || order.tabType !== "dine_in" ? "接單" : "安排桌台"}
+              </button>
+            ) : (
+              <button
+                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                disabled={busy}
+                onClick={() => void bridgeExistingOrder(order)}
+                type="button"
+              >
+                {busy ? "處理中…" : "轉入"}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-3">
+    <div className={layout === "strip" ? "grid gap-2" : "grid gap-3"}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-slate-500">自動接單（非堂食）</div>
+        <div className="text-xs font-semibold text-slate-500">{autoAcceptLabel}</div>
         <button
-          className={`rounded-full px-3 py-2 text-xs font-semibold ${
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
             autoAccept ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
           }`}
           onClick={() => onAutoAcceptChange(!autoAccept)}
@@ -353,84 +455,40 @@ export function QuickOnlineOrdersPanel({
       ) : null}
 
       {loading ? (
-        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+        <div
+          className={`rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500 ${
+            layout === "strip" ? "flex h-[108px] items-center px-4" : "p-4"
+          }`}
+        >
           正在載入 Ledger 線上訂單…
         </div>
       ) : visibleOrders.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-          暫無待處理線上訂單。完整列表請至{" "}
-          <Link className="font-semibold text-orange-600 underline" href="/orders">
-            線上訂單
-          </Link>
-          。
+        <div
+          className={`rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500 ${
+            layout === "strip" ? "flex h-[108px] items-center px-4" : "p-4"
+          }`}
+        >
+          暫無待處理線上訂單。
+          {layout === "stack" ? (
+            <>
+              {" "}
+              完整列表請至{" "}
+              <Link className="font-semibold text-orange-600 underline" href="/orders">
+                線上訂單
+              </Link>
+              。
+            </>
+          ) : null}
+        </div>
+      ) : layout === "strip" ? (
+        <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:thin]">
+          {visibleOrders.map(renderOrderCard)}
         </div>
       ) : (
-        <div className="grid gap-2">
-          {visibleOrders.map((order) => {
-            const isPending = rawLedgerStatus(order.status) === "pending";
-            const paymentLabel =
-              order.paymentStatus === "paid"
-                ? `已支付 ${formatMoney(order.paidAmount, currency)}`
-                : paymentModeLabel(order.paymentMode) ?? "未支付";
-            const statusLabel = isPending ? "新單" : "已接單";
-            const typeLabel = tabLabel(order.tabType);
-            const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
-
-            return (
-              <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-slate-900">
-                      {orderCodeLabel(order)}{" "}
-                      <span className="ml-2 text-xs font-semibold text-slate-500">{typeLabel}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {statusLabel} · {paymentLabel}
-                    </div>
-                    {order.itemSummary ? (
-                      <div className="mt-2 truncate text-xs text-slate-500">{order.itemSummary}</div>
-                    ) : null}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {isPending ? (
-                      order.tabType === "dine_in" ? (
-                        <button
-                          className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                          disabled={busy}
-                          onClick={() => setAssigningOrderId(order.id)}
-                          type="button"
-                        >
-                          安排桌台
-                        </button>
-                      ) : (
-                        <button
-                          className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                          disabled={busy}
-                          onClick={() => void runAcceptAndBridge(order)}
-                          type="button"
-                        >
-                          {busy ? "處理中…" : "接單"}
-                        </button>
-                      )
-                    ) : (
-                      <button
-                        className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                        disabled={busy}
-                        onClick={() => void bridgeExistingOrder(order)}
-                        type="button"
-                      >
-                        {busy ? "處理中…" : "轉入"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <div className="grid gap-2">{visibleOrders.map(renderOrderCard)}</div>
       )}
 
-      {assigningOrder ? (
+      {!skipTableAssignment && assigningOrder ? (
         <ResponsiveModal
           description="選擇堂食桌台後接單並送廚。"
           onClose={() => setAssigningOrderId(null)}
