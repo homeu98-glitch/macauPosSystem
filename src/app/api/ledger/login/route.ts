@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
+
+type StaffLookup = {
+  merchantId: string;
+  role: string | null;
+};
 
 const LOGIN_WINDOW_MS = 60_000;
 const LOGIN_MAX_ATTEMPTS = 10;
@@ -40,6 +45,38 @@ function mapStaffRole(rawRole: string | null | undefined): "admin" | "manager" |
   if (role.includes("admin") || role.includes("owner")) return "admin";
   if (role.includes("manager")) return "manager";
   return "cashier";
+}
+
+/** Use .limit(1) — NOT maybeSingle() (PGRST116 when user has >1 staff row). */
+async function lookupMerchantStaff(
+  client: SupabaseClient,
+  userId: string,
+): Promise<{ staff: StaffLookup | null; error: string | null }> {
+  const withRole = await client
+    .from("merchant_staff")
+    .select("merchant_id, role")
+    .eq("user_id", userId)
+    .limit(1);
+
+  if (!withRole.error && withRole.data?.[0]?.merchant_id) {
+    return {
+      staff: {
+        merchantId: String(withRole.data[0].merchant_id),
+        role: (withRole.data[0].role as string | null) ?? null,
+      },
+      error: null,
+    };
+  }
+
+  // role column may not exist on older Ledger schemas
+  const idOnly = await client.from("merchant_staff").select("merchant_id").eq("user_id", userId).limit(1);
+
+  if (!idOnly.error && idOnly.data?.[0]?.merchant_id) {
+    return { staff: { merchantId: String(idOnly.data[0].merchant_id), role: null }, error: null };
+  }
+
+  const err = withRole.error ?? idOnly.error;
+  return { staff: null, error: err?.message ?? null };
 }
 
 export async function POST(request: Request) {
@@ -84,35 +121,37 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "帳號或 PIN 不正確。" }, { status: 401 });
   }
 
-  // Reuse the same client — signInWithPassword already holds the session in memory.
-  // RLS policies rely on auth.uid(); a second client + header-only auth often returns zero rows.
-  const { data: staffRow, error: staffError } = await supabase
-    .from("merchant_staff")
-    .select("merchant_id, role")
-    .eq("user_id", authData.user.id)
-    .limit(1)
-    .maybeSingle();
+  await supabase.auth.setSession({
+    access_token: authData.session.access_token,
+    refresh_token: authData.session.refresh_token,
+  });
 
-  if (staffError) {
+  const { staff, error: staffLookupError } = await lookupMerchantStaff(supabase, authData.user.id);
+
+  if (staffLookupError) {
     await supabase.auth.signOut();
     return NextResponse.json(
-      { ok: false, error: "無法讀取商戶員工資料，請稍後再試或聯絡管理員。" },
+      {
+        ok: false,
+        error: "無法讀取商戶員工資料，請稍後再試或聯絡管理員。",
+        detail: staffLookupError,
+      },
       { status: 503 },
     );
   }
 
-  if (!staffRow?.merchant_id) {
+  if (!staff?.merchantId) {
     await supabase.auth.signOut();
     return NextResponse.json({ ok: false, error: "非本店 Ledger 帳號，無法登入 POS。" }, { status: 403 });
   }
 
-  const { data: merchantRow } = await supabase
+  const { data: merchantRows } = await supabase
     .from("merchants")
     .select("status, name")
-    .eq("id", staffRow.merchant_id)
-    .maybeSingle();
+    .eq("id", staff.merchantId)
+    .limit(1);
 
-  const merchant = merchantRow as { status?: string; name?: string } | null;
+  const merchant = (merchantRows?.[0] ?? null) as { status?: string; name?: string } | null;
   const merchantStatus = String(merchant?.status ?? "").toLowerCase();
   if (merchantStatus === "suspended") {
     await supabase.auth.signOut();
@@ -123,7 +162,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "商戶狀態異常，暫時無法登入。" }, { status: 403 });
   }
 
-  const role = mapStaffRole(staffRow.role as string | undefined);
+  const role = mapStaffRole(staff.role);
   const permissions =
     role === "admin"
       ? { refundOrder: true, voidItem: true, manageAccounts: true }
@@ -138,8 +177,8 @@ export async function POST(request: Request) {
       account: phone,
       name: merchant?.name ?? `店員 ${phone.slice(-4)}`,
       role,
-      merchantId: staffRow.merchant_id,
-      storeIds: [staffRow.merchant_id],
+      merchantId: staff.merchantId,
+      storeIds: [staff.merchantId],
       permissions,
       loggedInAt: new Date().toISOString(),
       ledgerAccessToken: authData.session.access_token,
