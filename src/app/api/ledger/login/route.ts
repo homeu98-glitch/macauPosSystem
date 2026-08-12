@@ -84,28 +84,35 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "帳號或 PIN 不正確。" }, { status: 401 });
   }
 
-  const authed = createClient(url, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    global: {
-      headers: {
-        Authorization: `Bearer ${authData.session.access_token}`,
-      },
-    },
-  });
-
-  const { data: staffRow, error: staffError } = await authed
+  // Reuse the same client — signInWithPassword already holds the session in memory.
+  // RLS policies rely on auth.uid(); a second client + header-only auth often returns zero rows.
+  const { data: staffRow, error: staffError } = await supabase
     .from("merchant_staff")
-    .select("merchant_id, role, merchants(status, name)")
+    .select("merchant_id, role")
     .eq("user_id", authData.user.id)
     .limit(1)
     .maybeSingle();
 
-  if (staffError || !staffRow?.merchant_id) {
+  if (staffError) {
+    await supabase.auth.signOut();
+    return NextResponse.json(
+      { ok: false, error: "無法讀取商戶員工資料，請稍後再試或聯絡管理員。" },
+      { status: 503 },
+    );
+  }
+
+  if (!staffRow?.merchant_id) {
     await supabase.auth.signOut();
     return NextResponse.json({ ok: false, error: "非本店 Ledger 帳號，無法登入 POS。" }, { status: 403 });
   }
 
-  const merchant = staffRow.merchants as { status?: string; name?: string } | null;
+  const { data: merchantRow } = await supabase
+    .from("merchants")
+    .select("status, name")
+    .eq("id", staffRow.merchant_id)
+    .maybeSingle();
+
+  const merchant = merchantRow as { status?: string; name?: string } | null;
   const merchantStatus = String(merchant?.status ?? "").toLowerCase();
   if (merchantStatus === "suspended") {
     await supabase.auth.signOut();
