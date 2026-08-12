@@ -501,18 +501,41 @@ export function DeviceSettings() {
 
         {activeTab === "device" ? (
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
-            {isPrintBridgeEnabled() ? (
-              <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                <span className="font-semibold text-slate-900">打印橋接：</span>
-                {bridgeHealth?.ok ? (
-                  <span className="text-emerald-700">
-                    已連線 · v{bridgeHealth.version ?? "?"} · {bridgeHealth.printerCount ?? 0} 台打印機設定
-                  </span>
-                ) : (
-                  <span className="text-red-700">{bridgeHealth?.error ?? "橋接服務離線，請在本機執行 print-bridge"}</span>
-                )}
-              </div>
-            ) : null}
+            <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
+              <div className="font-semibold text-slate-900">打印橋接（Android POS / print-bridge）</div>
+              <p className="mt-1 text-xs text-slate-500">
+                填寫店內橋接服務地址（例如 <code className="rounded bg-slate-100 px-1">http://192.168.1.50:9222</code>
+                ）。優先使用下方本機設定；若留空則使用部署環境變量{" "}
+                <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_PRINT_BRIDGE_URL</code>。
+              </p>
+              <label className="mt-3 grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">橋接 URL</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) =>
+                    setConfig((current) => ({ ...current, printBridgeUrl: event.target.value.trim() }))
+                  }
+                  placeholder="http://192.168.1.50:9222"
+                  value={config.printBridgeUrl ?? ""}
+                />
+              </label>
+              {isPrintBridgeEnabled() ? (
+                <div className="mt-2">
+                  <span className="font-semibold text-slate-900">狀態：</span>
+                  {bridgeHealth?.ok ? (
+                    <span className="text-emerald-700">
+                      已連線 · v{bridgeHealth.version ?? "?"} · {bridgeHealth.printerCount ?? 0} 台打印機設定
+                    </span>
+                  ) : (
+                    <span className="text-red-700">
+                      {bridgeHealth?.error ?? "橋接服務離線，請確認 Android POS App 或 print-bridge 已啟動"}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-amber-700">尚未設定橋接 URL，打印任務只會留在隊列中。</div>
+              )}
+            </div>
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">

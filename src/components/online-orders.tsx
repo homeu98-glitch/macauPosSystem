@@ -6,6 +6,10 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { bridgeLedgerOrderToPos } from "@/lib/ledger/ledger-pos-bridge";
 import {
+  printReceiptForLedgerOrderOnce,
+  printVoidForLedgerOrderOnce,
+} from "@/lib/print-jobs";
+import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
   setOrderPaidInStore,
@@ -23,6 +27,13 @@ import {
   rawLedgerStatus,
   tabLabel,
 } from "@/lib/ledger/order-mapper";
+import {
+  dateFilterLabel,
+  LedgerOrderDateFilter,
+  LEDGER_ORDER_DATE_FILTERS,
+  limitForDateFilter,
+  orderMatchesDateFilter,
+} from "@/lib/ledger/order-date-filter";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
@@ -45,6 +56,7 @@ export function OnlineOrders() {
   const autoAccept = localSettings.onlineOrderSettings.autoAccept;
 
   const [activeTab, setActiveTab] = useState<LedgerOrderTab>("all");
+  const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilter>("today");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [orders, setOrders] = useState<LedgerOnlineOrder[]>([]);
@@ -124,7 +136,7 @@ export function OnlineOrders() {
   }, []);
 
   const loadOrders = useCallback(
-    async (mode: "full" | "incremental" = "full") => {
+    async (mode: "full" | "incremental" = "full", filter: LedgerOrderDateFilter = dateFilter) => {
       if (!merchantId) {
         setError("尚未取得商戶資料，請重新登入。");
         setLoading(false);
@@ -134,6 +146,7 @@ export function OnlineOrders() {
       const cursor = syncCursorRef.current;
       const rows = await listMerchantOrders({
         merchantId,
+        limit: mode === "incremental" ? 50 : limitForDateFilter(filter),
         since: mode === "incremental" ? cursor.since : null,
         sinceId: mode === "incremental" ? cursor.sinceId : null,
       });
@@ -144,7 +157,7 @@ export function OnlineOrders() {
         applyOrders(rows);
       }
     },
-    [applyOrders, merchantId],
+    [applyOrders, dateFilter, merchantId],
   );
 
   useEffect(() => {
@@ -156,7 +169,7 @@ export function OnlineOrders() {
       try {
         await restoreLedgerSession();
         if (cancelled) return;
-        await loadOrders("full");
+        await loadOrders("full", dateFilter);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "讀取會員通線上訂單失敗");
@@ -171,6 +184,20 @@ export function OnlineOrders() {
       cancelled = true;
     };
   }, [loadOrders]);
+
+  function changeDateFilter(next: LedgerOrderDateFilter) {
+    if (next === dateFilter) return;
+    setDateFilter(next);
+    setRefreshing(true);
+    setError(null);
+    void loadOrders("full", next)
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "讀取訂單失敗");
+      })
+      .finally(() => {
+        setRefreshing(false);
+      });
+  }
 
   const handleInsert = useCallback(
     (order: LedgerOnlineOrder) => {
@@ -200,6 +227,18 @@ export function OnlineOrders() {
         normalizeLedgerStatus(order.status) === "cancelled"
       ) {
         playSound("cancel_order");
+        printVoidForLedgerOrderOnce(order.id);
+      }
+      if (
+        hasInitializedSnapshotRef.current &&
+        previous &&
+        normalizeLedgerStatus(previous.status) !== "completed" &&
+        normalizeLedgerStatus(order.status) === "completed" &&
+        order.paymentStatus === "paid"
+      ) {
+        void printReceiptForLedgerOrderOnce(order.id, {
+          paymentMethod: paymentModeLabel(order.paymentMode) || "線上已支付",
+        });
       }
       hasInitializedSnapshotRef.current = true;
     },
@@ -290,9 +329,10 @@ export function OnlineOrders() {
   }, [autoAccept, loading, orders, runAcceptAndBridge]);
 
   const filteredOrders = useMemo(() => {
-    if (activeTab === "all") return orders;
-    return orders.filter((order) => order.tabType === activeTab);
-  }, [activeTab, orders]);
+    const byDate = orders.filter((order) => orderMatchesDateFilter(order, dateFilter));
+    if (activeTab === "all") return byDate;
+    return byDate.filter((order) => order.tabType === activeTab);
+  }, [activeTab, dateFilter, orders]);
 
   const stats = useMemo(() => {
     const pending = filteredOrders.filter((order) => rawLedgerStatus(order.status) === "pending").length;
@@ -364,6 +404,7 @@ export function OnlineOrders() {
     setActionLoadingKey(`${order.id}:paid`);
     try {
       await setOrderPaidInStore(order.id);
+      await printReceiptForLedgerOrderOnce(order.id, { paymentMethod: "到店付款" });
       setToast({ tone: "success", message: "已標記到店付款。" });
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "標記失敗" });
@@ -376,6 +417,14 @@ export function OnlineOrders() {
     setActionLoadingKey(`${order.id}:${nextStatus}`);
     try {
       await updateLedgerOrderStatus(order.id, nextStatus);
+      if (nextStatus === "cancelled") {
+        printVoidForLedgerOrderOnce(order.id);
+      }
+      if (nextStatus === "completed" && order.paymentStatus === "paid") {
+        await printReceiptForLedgerOrderOnce(order.id, {
+          paymentMethod: paymentModeLabel(order.paymentMode) || "線上已支付",
+        });
+      }
       setToast({ tone: "success", message: successMessage });
       if (nextStatus === "completed") setViewingOrderId(null);
     } catch (err) {
@@ -489,7 +538,8 @@ export function OnlineOrders() {
               <div>
                 <div className="text-lg font-semibold text-slate-900">會員通線上訂單</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Ledger 即時同步 · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單 {stats.pending} 張
+                  Ledger 即時同步 · {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單{" "}
+                  {stats.pending} 張
                 </div>
                 <div className="mt-1 text-xs text-slate-400">Realtime：{realtimeStatus}</div>
               </div>
@@ -521,6 +571,20 @@ export function OnlineOrders() {
                 >
                   {refreshing ? "刷新中…" : "手動刷新"}
                 </button>
+                <div className="flex flex-wrap gap-2 rounded-full bg-slate-100 p-1">
+                  {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
+                    <button
+                      key={filter.key}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                      }`}
+                      onClick={() => changeDateFilter(filter.key)}
+                      type="button"
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}
@@ -548,7 +612,7 @@ export function OnlineOrders() {
 
             {!loading && filteredOrders.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-                目前沒有訂單
+                {dateFilter === "today" ? "今天暫無訂單" : `${dateFilterLabel(dateFilter)}暫無訂單`}
               </div>
             ) : null}
 

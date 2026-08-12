@@ -6,6 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { bridgeLedgerOrderToPos } from "@/lib/ledger/ledger-pos-bridge";
 import {
+  printReceiptForLedgerOrderOnce,
+  printVoidForLedgerOrderOnce,
+} from "@/lib/print-jobs";
+import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
 } from "@/lib/ledger/order-actions";
@@ -178,6 +182,18 @@ export function QuickOnlineOrdersPanel({
         normalizeLedgerStatus(order.status) === "cancelled"
       ) {
         playSound("cancel_order");
+        printVoidForLedgerOrderOnce(order.id);
+      }
+      if (
+        hasInitializedSnapshotRef.current &&
+        previous &&
+        normalizeLedgerStatus(previous.status) !== "completed" &&
+        normalizeLedgerStatus(order.status) === "completed" &&
+        order.paymentStatus === "paid"
+      ) {
+        void printReceiptForLedgerOrderOnce(order.id, {
+          paymentMethod: paymentModeLabel(order.paymentMode) || "線上已支付",
+        });
       }
       hasInitializedSnapshotRef.current = true;
     },

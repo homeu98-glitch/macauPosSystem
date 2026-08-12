@@ -1,7 +1,10 @@
 import { DeviceConfig, DevicePrinterConfig, PrintJob } from "@/lib/types";
+import { loadDeviceConfig } from "@/lib/storage";
 
 export function getPrintBridgeUrl(): string | null {
-  const raw = process.env.NEXT_PUBLIC_PRINT_BRIDGE_URL?.trim();
+  const deviceOverride =
+    typeof window !== "undefined" ? loadDeviceConfig()?.printBridgeUrl?.trim() : "";
+  const raw = deviceOverride || process.env.NEXT_PUBLIC_PRINT_BRIDGE_URL?.trim();
   if (!raw) return null;
   return raw.replace(/\/+$/, "");
 }

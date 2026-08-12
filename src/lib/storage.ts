@@ -79,6 +79,7 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
   if (!config) return null;
   return {
     ...config,
+    printBridgeUrl: config.printBridgeUrl?.trim() ?? "",
     printers: Array.isArray(config.printers)
       ? config.printers.map((printer, index) => ({
           id: printer.id ?? `printer-${index}`,

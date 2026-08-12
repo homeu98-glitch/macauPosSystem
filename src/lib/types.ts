@@ -168,6 +168,8 @@ export interface DeviceConfig {
   deviceId: string;
   terminalName: string;
   storeId: string;
+  /** 覆蓋 NEXT_PUBLIC_PRINT_BRIDGE_URL（例如 Android POS 橋接地址） */
+  printBridgeUrl?: string;
   printers: DevicePrinterConfig[];
   updatedAt: string;
 }

@@ -2,6 +2,7 @@
 
 import { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { getOrderDetail, LedgerOrderDetail } from "@/lib/ledger/orders";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -76,7 +77,7 @@ function buildPrintJobs(order: PosOrder): PrintJob[] {
           specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
           note: item.note,
         })),
-      status: "pending",
+      status: resolvePrintJobStatus(true),
       createdAt: timestamp,
     }));
 }

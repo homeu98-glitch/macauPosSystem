@@ -11,6 +11,7 @@ import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
+import { buildReceiptPrintJobs } from "@/lib/print-jobs";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -1916,53 +1917,10 @@ export function PosApp() {
 
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
-    const localPrintSettings = loadPosLocalSettings().printTemplates.receipt;
-    type ReceiptItem = NonNullable<PrintJob["items"]>[number];
-    const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
-      (printer) => printer.enabled && printer.role === "receipt",
-    );
-    if (receiptPrinters.length === 0) return;
+    const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap, networkOnline);
+    if (nextPrintJobs.length === 0) return;
 
-    const timestamp = new Date().toISOString();
-    const receiptSections: Record<(typeof localPrintSettings.sectionOrder)[number], ReceiptItem[]> = {
-      store_name: localPrintSettings.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: bootstrap.storeName }] : [],
-      order_no: localPrintSettings.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: order.localOrderNo }] : [],
-      table_name: localPrintSettings.showTableName ? [{ name: "類型", quantity: 1, specs: [], note: order.tableName }] : [],
-      items: order.items.map<ReceiptItem>((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-        note: item.note,
-      })),
-      total: [{ name: "總計", quantity: 1, specs: [], note: formatMoney(order.total, bootstrap.currency) }],
-      payment_method:
-        localPrintSettings.showPaymentMethod && order.paymentMethod
-          ? [{ name: "付款方式", quantity: 1, specs: [], note: String(order.paymentMethod) }]
-          : [],
-      order_note:
-        localPrintSettings.showOrderNote && order.orderNote
-          ? [{ name: "全單備註", quantity: 1, specs: [], note: order.orderNote }]
-          : [],
-      footer: localPrintSettings.footerText ? [{ name: "頁尾", quantity: 1, specs: [], note: localPrintSettings.footerText }] : [],
-    } as const;
-    const receiptItems: NonNullable<PrintJob["items"]> = localPrintSettings.sectionOrder.flatMap(
-      (section) => receiptSections[section],
-    );
-
-    const nextPrintJobs = receiptPrinters.map<PrintJob>((printer) => ({
-      id: uid("print"),
-      orderId: order.id,
-      orderNo: order.localOrderNo,
-      tableName: order.tableName,
-      ticketType: "normal",
-      printerGroup: "receipt",
-      printerId: printer.id,
-      printerName: printer.name,
-      items: receiptItems,
-      status: resolvePrintJobStatus(networkOnline),
-      createdAt: timestamp,
-    }));
-
+    const timestamp = nextPrintJobs[0]?.createdAt ?? new Date().toISOString();
     persistPrintJobs([...nextPrintJobs, ...printJobs]);
     pushEvents(
       nextPrintJobs.map<QueueEvent>((printJob) => ({
@@ -2068,8 +2026,8 @@ export function PosApp() {
             : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
       });
       setSettlementFlash(true);
+      printReceipt(updatedOrder);
       if (quickPaidFlow) {
-        printReceipt(updatedOrder);
         setQuickPanel("local");
         setViewingOrderId(null);
       } else {
@@ -2147,6 +2105,7 @@ export function PosApp() {
         : `客人已支付，已完成 ${updatedOrder.localOrderNo}。`,
     });
     setSettlementFlash(true);
+    printReceipt(updatedOrder);
     if (quickPaidFlow) {
       setQuickPanel("local");
       setViewingOrderId(null);
