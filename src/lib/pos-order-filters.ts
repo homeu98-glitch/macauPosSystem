@@ -1,10 +1,13 @@
 import { PosOrder } from "@/lib/types";
-
-/** 點餐頁底部操作列：線下單只顯示近 N 分鐘 */
-export const POS_ACTION_BAR_LOCAL_MINUTES = 60;
+import { quickCompletionLabel } from "@/lib/quick-order-fulfillment";
 
 export function isLocalPosOrder(order: PosOrder): boolean {
   return !order.onlineOrderId;
+}
+
+/** 快餐 counter 單（先收款、後出餐流程） */
+export function isQuickCounterOrder(order: PosOrder): boolean {
+  return isLocalPosOrder(order) && order.tableId === "counter";
 }
 
 export function orderTimestamp(order: PosOrder): number {
@@ -17,26 +20,34 @@ export function isWithinLastMinutes(order: PosOrder, minutes: number, nowMs = Da
   return ts >= nowMs - minutes * 60 * 1000;
 }
 
-export function isActionableLocalOrder(order: PosOrder): boolean {
-  if (!isLocalPosOrder(order)) return false;
-  if (order.status === "cancelled" || order.status === "refunded" || order.status === "partially_refunded") {
-    return false;
-  }
-  if (order.status === "settled") return false;
-  if (order.status === "paid" && order.fulfillmentStatus === "ready") {
-    return true;
-  }
+function isTerminalLocalOrder(order: PosOrder): boolean {
+  return (
+    order.status === "cancelled" ||
+    order.status === "refunded" ||
+    order.status === "partially_refunded" ||
+    order.status === "settled"
+  );
+}
+
+/** 快餐點餐頁底部：所有未完成的 counter 單（不限時間） */
+export function isActionableQuickOrder(order: PosOrder): boolean {
+  if (!isQuickCounterOrder(order)) return false;
+  if (isTerminalLocalOrder(order)) return false;
+  if (order.status === "paid" && order.fulfillmentStatus === "ready") return true;
   return order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid";
 }
 
-export function filterActionBarLocalOrders(orders: PosOrder[], nowMs = Date.now()): PosOrder[] {
-  return orders
-    .filter(isActionableLocalOrder)
-    .filter((order) => isWithinLastMinutes(order, POS_ACTION_BAR_LOCAL_MINUTES, nowMs))
-    .sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
+export function filterQuickActionBarOrders(orders: PosOrder[]): PosOrder[] {
+  return orders.filter(isActionableQuickOrder).sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
 }
 
 export function localOrderStatusLabel(order: PosOrder): string {
+  if (isQuickCounterOrder(order)) {
+    if (order.status === "paid" && order.fulfillmentStatus === "ready") {
+      return quickCompletionLabel(order);
+    }
+    if (order.status === "paid" || order.status === "sent_to_kitchen") return "製作中";
+  }
   if (order.status === "draft") return "點單中";
   if (order.status === "sent_to_kitchen") return "製作中";
   if (order.status === "paid" && order.fulfillmentStatus === "ready") return "待取餐";
@@ -47,21 +58,47 @@ export function localOrderStatusLabel(order: PosOrder): string {
   return order.status;
 }
 
-export type LocalOrderStatusTab = "all" | "active" | "settled" | "cancelled";
+export type LocalOrderPanelTab = "all" | "preparing" | "ready" | "settled" | "cancelled";
 
-export function matchesLocalStatusTab(order: PosOrder, tab: LocalOrderStatusTab): boolean {
+export function matchesLocalOrderPanelTab(order: PosOrder, tab: LocalOrderPanelTab): boolean {
   if (tab === "all") return true;
-  if (tab === "active") {
-    return (
-      order.status !== "settled" &&
-      order.status !== "cancelled" &&
-      order.status !== "refunded" &&
-      order.status !== "partially_refunded"
-    );
-  }
   if (tab === "settled") return order.status === "settled";
   if (tab === "cancelled") {
     return order.status === "cancelled" || order.status === "refunded" || order.status === "partially_refunded";
   }
+  if (tab === "ready") {
+    return isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready";
+  }
+  if (tab === "preparing") {
+    if (isQuickCounterOrder(order)) {
+      return (
+        order.status === "draft" ||
+        order.status === "sent_to_kitchen" ||
+        (order.status === "paid" && order.fulfillmentStatus !== "ready")
+      );
+    }
+    return order.status === "draft" || order.status === "sent_to_kitchen";
+  }
   return true;
+}
+
+/** @deprecated 使用 matchesLocalOrderPanelTab */
+export type LocalOrderStatusTab = LocalOrderPanelTab;
+
+/** @deprecated 使用 matchesLocalOrderPanelTab */
+export function matchesLocalStatusTab(order: PosOrder, tab: LocalOrderStatusTab): boolean {
+  return matchesLocalOrderPanelTab(order, tab);
+}
+
+/** @deprecated 使用 filterQuickActionBarOrders */
+export const POS_ACTION_BAR_LOCAL_MINUTES = 60;
+
+/** @deprecated 使用 isActionableQuickOrder + filterQuickActionBarOrders */
+export function isActionableLocalOrder(order: PosOrder): boolean {
+  return isActionableQuickOrder(order);
+}
+
+/** @deprecated 使用 filterQuickActionBarOrders */
+export function filterActionBarLocalOrders(orders: PosOrder[], _nowMs = Date.now()): PosOrder[] {
+  return filterQuickActionBarOrders(orders);
 }

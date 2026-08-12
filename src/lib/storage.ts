@@ -321,6 +321,9 @@ export function loadOrders() {
 
 export function saveOrders(orders: PosOrder[]) {
   writeJson(KEYS.orders, orders);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+  }
 }
 
 export function loadPrintJobs() {

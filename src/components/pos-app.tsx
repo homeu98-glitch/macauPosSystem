@@ -37,7 +37,11 @@ import {
   saveShiftState,
   saveSoldOutState,
 } from "@/lib/storage";
-import { filterActionBarLocalOrders, POS_ACTION_BAR_LOCAL_MINUTES } from "@/lib/pos-order-filters";
+import { filterQuickActionBarOrders } from "@/lib/pos-order-filters";
+import {
+  quickCompleteLabel,
+  quickCompletionLabel,
+} from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
@@ -88,12 +92,6 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
   const total = subtotal + serviceChargeAmount + taxAmount;
 
   return { subtotal, serviceChargeAmount, taxAmount, total };
-}
-
-function quickCompletionLabel(order: Pick<PosOrder, "tableName">) {
-  if (order.tableName === "自取") return "待取餐";
-  if (order.tableName === "外賣") return "待交付";
-  return "待出餐";
 }
 
 const CART_PAYING_ID = "__cart__";
@@ -561,11 +559,8 @@ export function PosApp() {
       .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
   }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
   const actionBarLocalOrders = useMemo(
-    () =>
-      filterActionBarLocalOrders(openOrders, nowMs).filter(
-        (order) => order.tableId === "counter" && !order.onlineOrderId,
-      ),
-    [openOrders, nowMs],
+    () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter" && !order.onlineOrderId),
+    [openOrders],
   );
   const quickPreparingOrders = useMemo(
     () =>
@@ -1969,6 +1964,7 @@ export function PosApp() {
           couponIds: selectedCouponIds,
           prepaidAmount,
           status: updatedOrder.status,
+          fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
         },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedOrder.updatedAt,
@@ -2010,7 +2006,7 @@ export function PosApp() {
       void (async () => {
         const createdOrder = await sendToKitchen({ silent: true });
         if (!createdOrder) return;
-        applyPaymentToOrder(createdOrder, orders);
+        applyPaymentToOrder(createdOrder, loadOrders());
       })();
       return;
     }
@@ -2848,9 +2844,7 @@ export function PosApp() {
         {isQuickMode && !offlineMode && bootstrap ? (
           <QuickModeOrdersBar
             autoAcceptOnline={autoAcceptOnlineOrders}
-            completeLabel={(order) =>
-              order.tableName === "外賣" ? "已交付" : order.tableName === "自取" ? "已取餐" : "已完成"
-            }
+            completeLabel={quickCompleteLabel}
             completionLabel={quickCompletionLabel}
             currency={bootstrap.currency}
             onAutoAcceptOnlineChange={(next) => {

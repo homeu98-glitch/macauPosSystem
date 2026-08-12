@@ -50,6 +50,7 @@ export async function GET() {
         tableId: order.table_id,
         tableName: order.table_name,
         status: order.status,
+        fulfillmentStatus: order.fulfillment_status ?? undefined,
         items: Array.isArray(order.items) ? order.items : [],
         orderNote: order.order_note ?? undefined,
         subtotal: Number(order.subtotal ?? 0),

@@ -32,6 +32,7 @@ export async function POST(request: Request) {
               table_id: order.tableId,
               table_name: order.tableName,
               status: order.status,
+              fulfillment_status: order.fulfillmentStatus ?? null,
               items: order.items,
               order_note: order.orderNote ?? null,
               subtotal: order.subtotal,
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
           .from("pos_orders")
           .update({
             status: event.payload.status ?? "settled",
+            fulfillment_status: event.payload.fulfillmentStatus ?? null,
             payment_method: event.payload.paymentMethod ?? null,
             discount_amount: event.payload.discountAmount ?? 0,
             total: event.payload.total ?? 0,
