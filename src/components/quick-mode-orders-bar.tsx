@@ -5,6 +5,7 @@ import { useState } from "react";
 import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 
+import { POS_ACTION_BAR_LOCAL_MINUTES } from "@/lib/pos-order-filters";
 import { PosOrder } from "@/lib/types";
 
 type QuickModeOrdersBarProps = {
@@ -78,7 +79,12 @@ export function QuickModeOrdersBar({
           />
         </section>
         <section className="min-w-0 px-3 py-2.5">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">線下訂單</div>
+          <div className="mb-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線下訂單</div>
+            <div className="mt-0.5 text-[10px] font-medium text-slate-400">
+              僅顯示近 {POS_ACTION_BAR_LOCAL_MINUTES} 分鐘待處理單 · 詳情請至「訂單」
+            </div>
+          </div>
           <QuickLocalOrdersStrip
             completeLabel={completeLabel}
             completionLabel={completionLabel}

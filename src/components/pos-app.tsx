@@ -39,6 +39,7 @@ import {
   saveShiftState,
   saveSoldOutState,
 } from "@/lib/storage";
+import { filterActionBarLocalOrders, POS_ACTION_BAR_LOCAL_MINUTES } from "@/lib/pos-order-filters";
 import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 type Toast = {
@@ -580,22 +581,26 @@ export function PosApp() {
       .filter((order) => Date.parse(order.updatedAt || order.createdAt) >= threshold)
       .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
   }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
+  const actionBarLocalOrders = useMemo(
+    () =>
+      filterActionBarLocalOrders(openOrders, nowMs).filter(
+        (order) => order.tableId === "counter" && !order.onlineOrderId,
+      ),
+    [openOrders, nowMs],
+  );
   const quickPreparingOrders = useMemo(
     () =>
-      openOrders
-        .filter((order) => order.tableId === "counter")
-        .filter((order) => !order.onlineOrderId)
-        .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid")
-        .filter((order) => order.status !== "paid" || order.fulfillmentStatus !== "ready"),
-    [openOrders],
+      actionBarLocalOrders.filter(
+        (order) =>
+          order.status === "draft" ||
+          order.status === "sent_to_kitchen" ||
+          (order.status === "paid" && order.fulfillmentStatus !== "ready"),
+      ),
+    [actionBarLocalOrders],
   );
   const quickWaitingOrders = useMemo(
-    () =>
-      openOrders
-        .filter((order) => order.tableId === "counter")
-        .filter((order) => !order.onlineOrderId)
-        .filter((order) => order.status === "paid" && order.fulfillmentStatus === "ready"),
-    [openOrders],
+    () => actionBarLocalOrders.filter((order) => order.status === "paid" && order.fulfillmentStatus === "ready"),
+    [actionBarLocalOrders],
   );
 
   const viewingOrder = useMemo(() => {

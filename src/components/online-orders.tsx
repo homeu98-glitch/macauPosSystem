@@ -52,7 +52,7 @@ function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
 }
 
-export function OnlineOrders() {
+export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const autoAccept = localSettings.onlineOrderSettings.autoAccept;
@@ -541,153 +541,154 @@ export function OnlineOrders() {
     : null;
   const assigningOrder = assigningOrderId ? orders.find((item) => item.id === assigningOrderId) ?? null : null;
 
-  return (
-    <div className="h-[100dvh] overflow-hidden bg-slate-100">
-      <AppSidebar />
-      <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
-        <main className="flex h-full flex-1 flex-col overflow-hidden">
-          <div className="border-b border-slate-200 bg-white px-4 py-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">會員通線上訂單</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Ledger 即時同步 · {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單{" "}
-                  {stats.pending} 張
-                </div>
-                <div className="mt-1 text-xs text-slate-400">Realtime：{realtimeStatus}</div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="mr-2 flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2">
-                  <span className="text-xs font-semibold text-slate-600">自動接單</span>
-                  <button
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      autoAccept ? "bg-emerald-600 text-white" : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
-                    }`}
-                    onClick={() => {
-                      const nextSettings = {
-                        ...localSettings,
-                        onlineOrderSettings: { ...localSettings.onlineOrderSettings, autoAccept: !autoAccept },
-                      };
-                      setLocalSettings(nextSettings);
-                      savePosLocalSettings(nextSettings);
-                    }}
-                    type="button"
-                  >
-                    {autoAccept ? "開" : "關"}
-                  </button>
-                </div>
+  const panel = (
+    <>
+      <div className={`shrink-0 border-b border-slate-200 bg-white px-4 ${embedded ? "py-3" : "py-4"}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className={`font-semibold text-slate-900 ${embedded ? "text-sm" : "text-lg"}`}>
+              {embedded ? "線上訂單" : "會員通線上訂單"}
+            </div>
+            <div className="mt-1 text-sm text-slate-500">
+              Ledger 即時同步 · {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單{" "}
+              {stats.pending} 張
+            </div>
+            <div className="mt-1 text-xs text-slate-400">Realtime：{realtimeStatus}</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="mr-2 flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2">
+              <span className="text-xs font-semibold text-slate-600">自動接單</span>
+              <button
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  autoAccept ? "bg-emerald-600 text-white" : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
+                }`}
+                onClick={() => {
+                  const nextSettings = {
+                    ...localSettings,
+                    onlineOrderSettings: { ...localSettings.onlineOrderSettings, autoAccept: !autoAccept },
+                  };
+                  setLocalSettings(nextSettings);
+                  savePosLocalSettings(nextSettings);
+                }}
+                type="button"
+              >
+                {autoAccept ? "開" : "關"}
+              </button>
+            </div>
+            <button
+              className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              disabled={refreshing || loading}
+              onClick={() => void manualRefresh()}
+              type="button"
+            >
+              {refreshing ? "刷新中…" : "手動刷新"}
+            </button>
+            <div className="flex flex-wrap gap-2 rounded-full bg-slate-100 p-1">
+              {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
                 <button
-                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                  disabled={refreshing || loading}
-                  onClick={() => void manualRefresh()}
+                  key={filter.key}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                    filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                  }`}
+                  onClick={() => changeDateFilter(filter.key)}
                   type="button"
                 >
-                  {refreshing ? "刷新中…" : "手動刷新"}
+                  {filter.label}
                 </button>
-                <div className="flex flex-wrap gap-2 rounded-full bg-slate-100 p-1">
-                  {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
-                    <button
-                      key={filter.key}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                        filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                      }`}
-                      onClick={() => changeDateFilter(filter.key)}
-                      type="button"
-                    >
-                      {filter.label}
-                    </button>
-                  ))}
-                </div>
-                {TABS.map((tab) => (
-                  <button
-                    key={tab.key}
-                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                      tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                    }`}
-                    onClick={() => setActiveTab(tab.key)}
-                    type="button"
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-auto p-4">
-            {error ? (
-              <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
-            ) : null}
-
-            {loading ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">正在載入…</div>
-            ) : null}
-
-            {!loading && filteredOrders.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-                {dateFilter === "today" ? "今天暫無訂單" : `${dateFilterLabel(dateFilter)}暫無訂單`}
-              </div>
-            ) : null}
-
-            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-              {filteredOrders.map((order) => (
-                <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
-                      </div>
-                    </div>
-                    <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
-                      {ledgerStatusLabel(order.status, order.fulfillmentType)}
-                    </span>
-                  </div>
-                  <div className="mt-3 text-sm text-slate-700">
-                    {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-700">
-                    支付：{" "}
-                    <span
-                      className={
-                        order.paymentStatus === "paid" ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"
-                      }
-                    >
-                      {order.paymentStatus === "paid" ? "已支付" : "未支付"}
-                    </span>
-                    {order.paymentMode ? (
-                      <span className="text-slate-500">（{paymentModeLabel(order.paymentMode)}）</span>
-                    ) : null}
-                  </div>
-                  <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
-                  {changeRequestLabel(order) ? (
-                    <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
-                      {changeRequestLabel(order)}
-                    </div>
-                  ) : null}
-                  {order.itemSummary ? (
-                    <div className="mt-3 text-xs text-slate-600">
-                      {order.itemSummary}
-                      {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
-                    </div>
-                  ) : null}
-                  <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <button
-                      className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                      onClick={() => void openOrderDetail(order.id)}
-                      type="button"
-                    >
-                      查看
-                    </button>
-                    {renderOrderActions(order)}
-                  </div>
-                </article>
               ))}
             </div>
+            {TABS.map((tab) => (
+              <button
+                key={tab.key}
+                className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                  tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                }`}
+                onClick={() => setActiveTab(tab.key)}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
-        </main>
+        </div>
       </div>
 
+      <div className={`min-h-0 flex-1 overflow-auto ${embedded ? "p-3" : "p-4"}`}>
+        {error ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+        ) : null}
+
+        {loading ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">正在載入…</div>
+        ) : null}
+
+        {!loading && filteredOrders.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+            {dateFilter === "today" ? "今天暫無訂單" : `${dateFilterLabel(dateFilter)}暫無訂單`}
+          </div>
+        ) : null}
+
+        <div className={`grid gap-3 ${embedded ? "grid-cols-1" : "lg:grid-cols-2 2xl:grid-cols-3"}`}>
+          {filteredOrders.map((order) => (
+            <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
+                  </div>
+                </div>
+                <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
+                  {ledgerStatusLabel(order.status, order.fulfillmentType)}
+                </span>
+              </div>
+              <div className="mt-3 text-sm text-slate-700">
+                {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
+              </div>
+              <div className="mt-1 text-sm text-slate-700">
+                支付：{" "}
+                <span
+                  className={
+                    order.paymentStatus === "paid" ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"
+                  }
+                >
+                  {order.paymentStatus === "paid" ? "已支付" : "未支付"}
+                </span>
+                {order.paymentMode ? (
+                  <span className="text-slate-500">（{paymentModeLabel(order.paymentMode)}）</span>
+                ) : null}
+              </div>
+              <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
+              {changeRequestLabel(order) ? (
+                <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                  {changeRequestLabel(order)}
+                </div>
+              ) : null}
+              {order.itemSummary ? (
+                <div className="mt-3 text-xs text-slate-600">
+                  {order.itemSummary}
+                  {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
+                </div>
+              ) : null}
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={() => void openOrderDetail(order.id)}
+                  type="button"
+                >
+                  查看
+                </button>
+                {renderOrderActions(order)}
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+
+  const modals = (
+    <>
       {assigningOrder ? (
         <ResponsiveModal
           description="選擇桌台後會接單、送廚，並在收銀台建立堂食單。"
@@ -800,6 +801,27 @@ export function OnlineOrders() {
           </div>
         </ResponsiveModal>
       ) : null}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {panel}
+        {modals}
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-[100dvh] overflow-hidden bg-slate-100">
+      <AppSidebar />
+      <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
+        <main className="flex h-full flex-1 flex-col overflow-hidden">
+          {panel}
+        </main>
+      </div>
+      {modals}
     </div>
   );
 }

@@ -1,10 +1,10 @@
-import { OnlineOrders } from "@/components/online-orders";
+import { OrdersHub } from "@/components/orders-hub";
 import { AuthGuard } from "@/components/auth-guard";
 
 export default function OrdersPage() {
   return (
     <AuthGuard>
-      <OnlineOrders />
+      <OrdersHub />
     </AuthGuard>
   );
 }

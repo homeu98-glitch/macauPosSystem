@@ -9,7 +9,7 @@ import { loadAuthSession, loadOfflineMode, saveOfflineMode } from "@/lib/storage
 
 const baseNavItems = [
   { href: "/", label: "點餐", short: "點" },
-  { href: "/orders", label: "線上\n訂單", short: "單" },
+  { href: "/orders", label: "訂單", short: "單" },
   { href: "/members", label: "會員", short: "會" },
   { href: "/prints", label: "打印", short: "印" },
   { href: "/reports", label: "報表", short: "報" },
