@@ -42,6 +42,8 @@ export type LedgerMenuImportPreview = {
   localItemCount: number;
   localCategoriesRemoved: number;
   localItemsRemoved: number;
+  specOptionsWithPrice: number;
+  specPriceSample: string;
 };
 
 export type LedgerMenuImportStats = LedgerMenuImportPreview;
@@ -52,6 +54,26 @@ function buildCategoryMaps(categories: MenuCategory[]) {
 
 function buildItemMaps(items: MenuItem[]) {
   return new Map(items.map((row) => [row.id, row]));
+}
+
+function summarizeLedgerSpecPrices(products: LedgerMenuProduct[]) {
+  let specOptionsWithPrice = 0;
+  let specPriceSample = "";
+
+  for (const product of products) {
+    for (const group of product.specGroups ?? []) {
+      for (const option of group.options) {
+        if (option.priceDelta > 0) {
+          specOptionsWithPrice += 1;
+          if (!specPriceSample) {
+            specPriceSample = `${product.name} · ${group.name}: ${option.label}(+${option.priceDelta})`;
+          }
+        }
+      }
+    }
+  }
+
+  return { specOptionsWithPrice, specPriceSample };
 }
 
 export function previewLedgerMenuImport(
@@ -87,6 +109,8 @@ export function previewLedgerMenuImport(
     else inStockCount += 1;
   }
 
+  const { specOptionsWithPrice, specPriceSample } = summarizeLedgerSpecPrices(ledger.products);
+
   return {
     enabled: ledger.enabled,
     openNow: ledger.openNow,
@@ -103,6 +127,8 @@ export function previewLedgerMenuImport(
     localItemCount,
     localCategoriesRemoved: options.removeLocalMenu ? localCategoryCount : 0,
     localItemsRemoved: options.removeLocalMenu ? localItemCount : 0,
+    specOptionsWithPrice,
+    specPriceSample,
   };
 }
 
@@ -120,7 +146,7 @@ function mapLedgerProduct(product: LedgerMenuProduct, existing?: MenuItem): Menu
     name: product.name,
     price: product.priceMop,
     printerGroup: existing?.printerGroup ?? "kitchen",
-    specGroups: product.specGroups ?? existing?.specGroups,
+    specGroups: product.specGroups !== undefined ? product.specGroups : existing?.specGroups,
   };
 }
 

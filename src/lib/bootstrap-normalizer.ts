@@ -7,6 +7,19 @@ function asRecord(value: unknown): UnknownRecord | null {
 }
 
 function resolveOptionPriceDeltaMop(optionRecord: UnknownRecord): number {
+  // Ledger 匯入以 avos 為準；先讀 avos，避免舊資料 priceDelta: 0 蓋掉 price_delta_avos
+  const avos =
+    optionRecord.price_delta_avos ??
+    optionRecord.extra_price_avos ??
+    optionRecord.addon_price_avos ??
+    optionRecord.delta_avos;
+  if (avos != null && avos !== "") {
+    const parsed = Math.round(Number(avos));
+    if (Number.isFinite(parsed) && parsed !== 0) {
+      return parsed / 100;
+    }
+  }
+
   if (optionRecord.priceDelta != null && optionRecord.priceDelta !== "") {
     return Number(optionRecord.priceDelta) || 0;
   }
@@ -17,14 +30,13 @@ function resolveOptionPriceDeltaMop(optionRecord: UnknownRecord): number {
     return Number(optionRecord.extra_price) || 0;
   }
 
-  const avos =
-    optionRecord.price_delta_avos ??
-    optionRecord.extra_price_avos ??
-    optionRecord.price_avos ??
-    optionRecord.addon_price_avos ??
-    optionRecord.delta_avos;
-  if (avos != null && avos !== "") {
-    return Math.round(Number(avos)) / 100;
+  // 選項本體 price_avos（非菜品 base price）僅在無其他加價欄位時視為加價
+  const optionPriceAvos = optionRecord.price_avos ?? optionRecord.priceAvos;
+  if (optionPriceAvos != null && optionPriceAvos !== "") {
+    const parsed = Math.round(Number(optionPriceAvos));
+    if (Number.isFinite(parsed) && parsed !== 0) {
+      return parsed / 100;
+    }
   }
 
   return 0;
@@ -81,13 +93,16 @@ export function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
 
       const options = normalizeSpecOptions(optionsRaw, groupIndex);
 
+      const selectionRaw = record.selectionMode ?? record.selection_mode ?? record.type;
+      const isMulti =
+        record.multi_select === true ||
+        record.multiSelect === true ||
+        String(selectionRaw).toLowerCase() === "multi";
+
       return {
         id: String(record.id ?? record.group_id ?? record.modifier_group_id ?? `grp-${groupIndex}`),
         name: String(record.name ?? record.group_name ?? record.title ?? "未命名規格"),
-        selectionMode:
-          String(record.selectionMode ?? record.selection_mode ?? record.type ?? "single") === "multi"
-            ? "multi"
-            : "single",
+        selectionMode: isMulti ? "multi" : "single",
         required: Boolean(record.required ?? record.is_required ?? record.must_select ?? false),
         options,
       };

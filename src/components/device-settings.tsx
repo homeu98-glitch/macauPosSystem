@@ -160,8 +160,9 @@ export function DeviceSettings() {
         loadSoldOutState(),
         { removeLocalMenu: ledgerImportRemoveLocal },
       );
-      setMenuDraft(bootstrap);
-      saveBootstrapCache(bootstrap);
+      const normalizedBootstrap = normalizeBootstrapPayload(bootstrap);
+      setMenuDraft(normalizedBootstrap);
+      saveBootstrapCache(normalizedBootstrap);
       saveSoldOutState(soldOut);
       window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: soldOut } }));
       setLedgerImportOpen(false);
@@ -1935,6 +1936,24 @@ export function DeviceSettings() {
                 Ledger 線上：{ledgerImportPreview.ledgerCategoryCount} 個分類、
                 {ledgerImportPreview.ledgerProductCount} 個菜品
                 {ledgerImportPreview.openNow ? " · 現正營業" : " · 非營業時段"}
+              </div>
+              <div
+                className={`rounded-xl border px-3 py-2 ${
+                  ledgerImportPreview.specOptionsWithPrice > 0
+                    ? "border-emerald-200 bg-emerald-50/60 text-emerald-900"
+                    : "border-amber-200 bg-amber-50/60 text-amber-900"
+                }`}
+              >
+                <div className="text-xs font-semibold">
+                  規格加價：{ledgerImportPreview.specOptionsWithPrice} 個選項有加價
+                </div>
+                {ledgerImportPreview.specPriceSample ? (
+                  <div className="mt-1 text-xs">範例：{ledgerImportPreview.specPriceSample}</div>
+                ) : (
+                  <div className="mt-1 text-xs">
+                    解析結果為 0 個加價選項；若 Ledger 後台有加價，請確認已部署最新版 POS 後再匯入。
+                  </div>
+                )}
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
