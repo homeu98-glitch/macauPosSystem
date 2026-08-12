@@ -302,7 +302,7 @@ export function QuickOnlineOrdersPanel({
   async function acceptInStoreFallback(order: LedgerOnlineOrder) {
     setActionLoadingKey(`${order.id}:in-store`);
     try {
-      await acceptLedgerOrderInStore(order.id);
+      await acceptLedgerOrderInStore(order);
       setBalanceFallbackOrderId(null);
       await runAcceptAndBridge(order);
     } catch (err) {
