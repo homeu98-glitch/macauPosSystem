@@ -5,6 +5,11 @@ import { MenuCategory, MenuItem, PosBootstrap } from "@/lib/types";
 export const LEDGER_CATEGORY_ID_PREFIX = "ledger-cat-";
 export const LEDGER_MENU_ITEM_ID_PREFIX = "ledger-";
 
+export type LedgerMenuImportOptions = {
+  /** 刪除非 Ledger 來源的本地分類／菜品（不含 `ledger-` 前綴） */
+  removeLocalMenu: boolean;
+};
+
 export function toLedgerCategoryId(rawId: string): string {
   return `${LEDGER_CATEGORY_ID_PREFIX}${rawId}`;
 }
@@ -13,9 +18,18 @@ export function toLedgerMenuItemId(rawId: string): string {
   return `${LEDGER_MENU_ITEM_ID_PREFIX}${rawId}`;
 }
 
+export function isLocalMenuCategory(id: string): boolean {
+  return !id.startsWith(LEDGER_CATEGORY_ID_PREFIX);
+}
+
+export function isLocalMenuItem(id: string): boolean {
+  return !id.startsWith(LEDGER_MENU_ITEM_ID_PREFIX);
+}
+
 export type LedgerMenuImportPreview = {
   enabled: boolean;
   openNow: boolean;
+  removeLocalMenu: boolean;
   categoriesAdded: number;
   categoriesUpdated: number;
   itemsAdded: number;
@@ -24,6 +38,10 @@ export type LedgerMenuImportPreview = {
   inStockCount: number;
   ledgerCategoryCount: number;
   ledgerProductCount: number;
+  localCategoryCount: number;
+  localItemCount: number;
+  localCategoriesRemoved: number;
+  localItemsRemoved: number;
 };
 
 export type LedgerMenuImportStats = LedgerMenuImportPreview;
@@ -39,9 +57,13 @@ function buildItemMaps(items: MenuItem[]) {
 export function previewLedgerMenuImport(
   bootstrap: PosBootstrap,
   ledger: LedgerOrderMenu,
+  options: LedgerMenuImportOptions = { removeLocalMenu: false },
 ): LedgerMenuImportPreview {
   const categoryById = buildCategoryMaps(bootstrap.categories);
   const itemById = buildItemMaps(bootstrap.menuItems);
+
+  const localCategoryCount = bootstrap.categories.filter((row) => isLocalMenuCategory(row.id)).length;
+  const localItemCount = bootstrap.menuItems.filter((row) => isLocalMenuItem(row.id)).length;
 
   let categoriesAdded = 0;
   let categoriesUpdated = 0;
@@ -68,6 +90,7 @@ export function previewLedgerMenuImport(
   return {
     enabled: ledger.enabled,
     openNow: ledger.openNow,
+    removeLocalMenu: options.removeLocalMenu,
     categoriesAdded,
     categoriesUpdated,
     itemsAdded,
@@ -76,6 +99,10 @@ export function previewLedgerMenuImport(
     inStockCount,
     ledgerCategoryCount: ledger.categories.length,
     ledgerProductCount: ledger.products.length,
+    localCategoryCount,
+    localItemCount,
+    localCategoriesRemoved: options.removeLocalMenu ? localCategoryCount : 0,
+    localItemsRemoved: options.removeLocalMenu ? localItemCount : 0,
   };
 }
 
@@ -119,28 +146,43 @@ function applySoldOutForProduct(
   return next;
 }
 
+function stripSoldOutForLocalItems(soldOut: SoldOutState, bootstrap: PosBootstrap): SoldOutState {
+  const next = { ...soldOut };
+  for (const item of bootstrap.menuItems) {
+    if (isLocalMenuItem(item.id)) {
+      delete next[item.id];
+    }
+  }
+  return next;
+}
+
 export function mergeLedgerMenuReference(
   bootstrap: PosBootstrap,
   ledger: LedgerOrderMenu,
   soldOutSeed: SoldOutState = {},
+  options: LedgerMenuImportOptions = { removeLocalMenu: false },
 ): { bootstrap: PosBootstrap; soldOut: SoldOutState; stats: LedgerMenuImportStats } {
   if (!ledger.enabled) {
     throw new Error("Ledger 線上點餐未啟用，無法匯入菜單。");
   }
 
-  const stats = previewLedgerMenuImport(bootstrap, ledger);
+  const stats = previewLedgerMenuImport(bootstrap, ledger, options);
   const timestamp = new Date().toISOString();
   const existingItems = buildItemMaps(bootstrap.menuItems);
 
-  const localCategories = bootstrap.categories.filter((row) => !row.id.startsWith(LEDGER_CATEGORY_ID_PREFIX));
-  const localItems = bootstrap.menuItems.filter((row) => !row.id.startsWith(LEDGER_MENU_ITEM_ID_PREFIX));
+  const localCategories = options.removeLocalMenu
+    ? []
+    : bootstrap.categories.filter((row) => isLocalMenuCategory(row.id));
+  const localItems = options.removeLocalMenu
+    ? []
+    : bootstrap.menuItems.filter((row) => isLocalMenuItem(row.id));
 
   const ledgerCategories = ledger.categories.map(mapLedgerCategory);
   const ledgerItems = ledger.products.map((product) =>
     mapLedgerProduct(product, existingItems.get(toLedgerMenuItemId(product.id))),
   );
 
-  let soldOut = { ...soldOutSeed };
+  let soldOut = options.removeLocalMenu ? stripSoldOutForLocalItems(soldOutSeed, bootstrap) : { ...soldOutSeed };
   for (const product of ledger.products) {
     soldOut = applySoldOutForProduct(soldOut, product, timestamp);
   }

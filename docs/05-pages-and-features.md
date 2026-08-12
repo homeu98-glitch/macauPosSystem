@@ -152,7 +152,7 @@ Tab：待接、製作中、待取餐、已完成、已取消
 | **POS 本地**（設置 → 菜單維護、`/api/pos/bootstrap`） | 店內收銀點單、打印分區 | 已可用 |
 | **Ledger** `list_merchant_order_menu` | 線上菜單／分類／**售罄對照**（唯讀） | ✅ 設置頁一鍵參考匯入 |
 
-> Phase 1 **不**把 Ledger 菜單全量匯入取代 POS 本地菜單；Ledger RPC 主要供線上單品項對照與售罄同步。詳見 [integration/ledger-client-api.md §5.3](./integration/ledger-client-api.md)。
+> Phase 1 **不**把 Ledger 菜單全量匯入取代 POS 本地菜單；Ledger RPC 主要供線上單品項對照與售罄同步。設置頁匯入時可選「刪除本地自建菜單」。詳見 [integration/ledger-client-api.md §5.3](./integration/ledger-client-api.md)。
 
 ---
 

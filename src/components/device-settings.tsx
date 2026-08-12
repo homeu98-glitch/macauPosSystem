@@ -56,6 +56,7 @@ export function DeviceSettings() {
   const [ledgerImportApplying, setLedgerImportApplying] = useState(false);
   const [ledgerImportPreview, setLedgerImportPreview] = useState<LedgerMenuImportPreview | null>(null);
   const [ledgerMenuPending, setLedgerMenuPending] = useState<LedgerOrderMenu | null>(null);
+  const [ledgerImportRemoveLocal, setLedgerImportRemoveLocal] = useState(false);
   const [ledgerImportError, setLedgerImportError] = useState<string | null>(null);
   const [syncingConfig, setSyncingConfig] = useState(false);
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
@@ -134,7 +135,8 @@ export function DeviceSettings() {
         throw new Error("Ledger 返回空菜單，請先在會員通後台設定線上菜品。");
       }
       setLedgerMenuPending(ledgerMenu);
-      setLedgerImportPreview(previewLedgerMenuImport(menuDraft, ledgerMenu));
+      setLedgerImportRemoveLocal(false);
+      setLedgerImportPreview(previewLedgerMenuImport(menuDraft, ledgerMenu, { removeLocalMenu: false }));
       setLedgerImportOpen(true);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "讀取 Ledger 菜單失敗。");
@@ -152,6 +154,7 @@ export function DeviceSettings() {
         menuDraft,
         ledgerMenuPending,
         loadSoldOutState(),
+        { removeLocalMenu: ledgerImportRemoveLocal },
       );
       setMenuDraft(bootstrap);
       saveBootstrapCache(bootstrap);
@@ -160,8 +163,13 @@ export function DeviceSettings() {
       setLedgerImportOpen(false);
       setLedgerMenuPending(null);
       setLedgerImportPreview(null);
+      setLedgerImportRemoveLocal(false);
+      const removedNote =
+        stats.localItemsRemoved > 0 || stats.localCategoriesRemoved > 0
+          ? `；已刪除本地 ${stats.localCategoriesRemoved} 分類、${stats.localItemsRemoved} 菜品`
+          : "";
       setStatus(
-        `已從 Ledger 參考匯入：${stats.ledgerCategoryCount} 分類、${stats.ledgerProductCount} 菜品（新增 ${stats.itemsAdded}、更新 ${stats.itemsUpdated}）；同步售罄 ${stats.soldOutCount} 項。請再按「保存菜單」寫入後台。`,
+        `已從 Ledger 參考匯入：${stats.ledgerCategoryCount} 分類、${stats.ledgerProductCount} 菜品（新增 ${stats.itemsAdded}、更新 ${stats.itemsUpdated}）；同步售罄 ${stats.soldOutCount} 項${removedNote}。請再按「保存菜單」寫入後台。`,
       );
     } catch (err) {
       setLedgerImportError(err instanceof Error ? err.message : "匯入失敗。");
@@ -1845,6 +1853,7 @@ export function DeviceSettings() {
                     setLedgerImportOpen(false);
                     setLedgerMenuPending(null);
                     setLedgerImportPreview(null);
+                    setLedgerImportRemoveLocal(false);
                     setLedgerImportError(null);
                   }}
                   type="button"
@@ -1862,12 +1871,17 @@ export function DeviceSettings() {
                 </button>
               </>
             }
-            description="僅合併 Ledger 線上菜品至本機草稿；不會刪除你手動建立的本地菜品。匯入後請再按「保存菜單」。"
+            description={
+              ledgerImportRemoveLocal
+                ? "將以 Ledger 線上菜單為主：本地自建分類／菜品會被刪除。匯入後請再按「保存菜單」。"
+                : "合併 Ledger 線上菜品至本機草稿，本地自建菜品會保留。匯入後請再按「保存菜單」。"
+            }
             onClose={() => {
               if (ledgerImportApplying) return;
               setLedgerImportOpen(false);
               setLedgerMenuPending(null);
               setLedgerImportPreview(null);
+              setLedgerImportRemoveLocal(false);
               setLedgerImportError(null);
             }}
             title="從 Ledger 參考匯入菜單"
@@ -1899,6 +1913,39 @@ export function DeviceSettings() {
                   </div>
                 </div>
               </div>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                <input
+                  checked={ledgerImportRemoveLocal}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-orange-500 focus:ring-orange-500"
+                  onChange={(event) => {
+                    const removeLocalMenu = event.target.checked;
+                    setLedgerImportRemoveLocal(removeLocalMenu);
+                    if (ledgerMenuPending) {
+                      setLedgerImportPreview(
+                        previewLedgerMenuImport(menuDraft, ledgerMenuPending, { removeLocalMenu }),
+                      );
+                    }
+                  }}
+                  type="checkbox"
+                />
+                <span className="min-w-0">
+                  <span className="block font-semibold text-slate-900">刪除本地自建菜單</span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    勾選後會移除目前 {ledgerImportPreview.localCategoryCount} 個本地分類、
+                    {ledgerImportPreview.localItemCount} 個本地菜品（不含先前已匯入的{" "}
+                    <code className="rounded bg-slate-100 px-1">ledger-</code> 菜品），改以 Ledger 為準。
+                  </span>
+                </span>
+              </label>
+
+              {ledgerImportRemoveLocal ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                  將刪除本地 {ledgerImportPreview.localCategoriesRemoved} 分類、
+                  {ledgerImportPreview.localItemsRemoved} 菜品；此操作在確認匯入後生效，且需再保存菜單才會寫入後台。
+                </div>
+              ) : null}
+
               <p className="text-xs text-slate-500">
                 匯入的 Ledger 菜品 ID 會帶 <code className="rounded bg-slate-100 px-1">ledger-</code> 前綴，方便與線上訂單對照；打印分區沿用既有設定（新菜默認 kitchen）。
               </p>
