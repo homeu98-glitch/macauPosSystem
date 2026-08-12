@@ -40,6 +40,7 @@
 | 結帳 | 支付方式、會員券、餘額抵扣 |
 | 同步狀態 | 離線標記、隊列待傳數 |
 | 提示音 | 新單、取消（public/sounds/） |
+| 快餐 · 線上訂單 | `quick-online-orders-panel.tsx`：Ledger Realtime 待接單、接單轉快餐單 |
 
 ---
 

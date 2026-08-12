@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "print-bridge": "npm --prefix print-bridge start",
+    "print-bridge:install": "npm --prefix print-bridge install"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.0",

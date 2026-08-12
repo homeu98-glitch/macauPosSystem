@@ -4,6 +4,8 @@ import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } f
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
+import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
 import {
   loadDeviceConfig,
   loadOfflineMode,
@@ -115,6 +117,7 @@ export function PrintCenter() {
   const [labelUndoCount, setLabelUndoCount] = useState(0);
   const [labelRedoCount, setLabelRedoCount] = useState(0);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const designerDragRef = useRef<{
     type: "receipt" | "label";
     section: string;
@@ -747,6 +750,7 @@ export function PrintCenter() {
         tableName: order.tableName,
         ticketType: "normal",
         printerGroup: printer.zoneId ?? "",
+        printerId: printer.id,
         printerName: printer.name,
         items: [
           ...order.items
@@ -768,7 +772,7 @@ export function PrintCenter() {
               ]
             : []),
         ],
-        status: offlineMode ? "pending" : "sent",
+        status: resolvePrintJobStatus(!offlineMode),
         createdAt: timestamp,
       }));
 
@@ -885,6 +889,30 @@ export function PrintCenter() {
                           >
                             查看
                           </button>
+                          {job.status === "failed" || job.status === "pending" ? (
+                            <button
+                              className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                              disabled={Boolean(retryingJobId)}
+                              onClick={() => {
+                                setRetryingJobId(job.id);
+                                void retryFailedPrintJob(job.id)
+                                  .then((next) => {
+                                    setPrintJobs(next);
+                                    setToast({
+                                      tone: "success",
+                                      message:
+                                        next.find((row) => row.id === job.id)?.status === "sent"
+                                          ? "已重新送出打印。"
+                                          : "重試失敗，請檢查橋接服務與打印機。",
+                                    });
+                                  })
+                                  .finally(() => setRetryingJobId(null));
+                              }}
+                              type="button"
+                            >
+                              {retryingJobId === job.id ? "重試中…" : "重試打印"}
+                            </button>
+                          ) : (
                           <button
                             aria-busy={(() => {
                               const order = orderMap.get(job.orderId);
@@ -907,6 +935,7 @@ export function PrintCenter() {
                               return order && reprintingOrderId === order.id ? "打印中…" : "重打整單";
                             })()}
                           </button>
+                          )}
                         </div>
                       </article>
                     ))}

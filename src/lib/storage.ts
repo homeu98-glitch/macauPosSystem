@@ -99,6 +99,7 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
           model: printer.model ?? "",
           paperSize: printer.paperSize ?? "",
           ipAddress: printer.ipAddress ?? "",
+          lanPort: Number(printer.lanPort ?? 9100) || 9100,
           usbLabel: printer.usbLabel ?? "",
           enabled: Boolean(printer.enabled),
         }))
@@ -300,6 +301,9 @@ export function loadDeviceConfig() {
 
 export function saveDeviceConfig(data: DeviceConfig) {
   writeJson(KEYS.deviceConfig, data);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-device-config-changed", { detail: { deviceConfig: data } }));
+  }
 }
 
 export function loadQueue() {

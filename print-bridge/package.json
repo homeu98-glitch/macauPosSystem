@@ -1,0 +1,15 @@
+{
+  "name": "macau-pos-print-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local LAN/USB ESC/POS print bridge for Macau POS",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3",
+    "printer": "^0.4.0"
+  }
+}

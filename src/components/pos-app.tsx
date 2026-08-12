@@ -7,8 +7,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { NumericKeypad } from "@/components/numeric-keypad";
+import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -170,22 +172,7 @@ export function PosApp() {
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioReady, setAudioReady] = useState(false);
-  const onlineRefreshTimerRef = useRef<number | null>(null);
-  const [onlineOrders, setOnlineOrders] = useState<
-    Array<{
-      id: string;
-      sourceId?: string;
-      type: string;
-      status: string;
-      paymentStatus?: "paid" | "unpaid";
-      paidAmount?: number;
-      total?: number;
-      createdAt?: string;
-      items?: Array<{ name: string; qty: number }>;
-    }>
-  >([]);
   const quickOrderProcessingRef = useRef<Set<string>>(new Set());
-  const quickOnlineSnapshotRef = useRef<Map<string, string>>(new Map());
 
   const networkOnline = !offlineMode;
   const isQuickMode = operatingMode === "quick";
@@ -325,12 +312,6 @@ export function PosApp() {
     window.addEventListener("pos-shift-changed", onShiftChanged as EventListener);
     return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
   }, []);
-
-  useEffect(() => {
-    if (!isQuickMode) return;
-    // 會員通線上訂單改由 /orders 頁 Ledger Realtime 同步；收銀台禁止 polling。
-    setOnlineOrders([]);
-  }, [isQuickMode]);
 
   useEffect(() => {
     if (!isQuickMode) return;
@@ -537,6 +518,10 @@ export function PosApp() {
   const floors = localSettings.floors;
   const paymentMethods = localSettings.paymentMethods;
   const autoAcceptOnlineOrders = localSettings.onlineOrderSettings.autoAccept;
+  const dineInTables = useMemo(
+    () => floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name }))),
+    [floors],
+  );
 
   useEffect(() => {
     function onLocalSettingsChanged(event: Event) {
@@ -551,9 +536,6 @@ export function PosApp() {
     return () => window.removeEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
   }, []);
 
-  useEffect(() => {
-    // 自動接單已移至 /orders（Ledger RPC）
-  }, [isQuickMode, onlineOrders, autoAcceptOnlineOrders]);
   const effectiveCategoryId = useMemo(() => {
     if (!bootstrap) return "";
     // 搜尋時一律視為「全部」，避免找不到商品
@@ -1193,6 +1175,7 @@ export function PosApp() {
         tableName: activeOrder.tableName,
         ticketType: "void",
         printerGroup: printer.zoneId ?? target.printerGroup,
+        printerId: printer.id,
         printerName: printer.name,
         items: [
           {
@@ -1202,7 +1185,7 @@ export function PosApp() {
             note: reason || target.note,
           },
         ],
-        status: networkOnline ? "sent" : "pending",
+        status: resolvePrintJobStatus(networkOnline),
         createdAt: updatedOrder.updatedAt,
       }));
 
@@ -1324,6 +1307,7 @@ export function PosApp() {
           tableName: activeOrder.tableName,
           ticketType: "void",
           printerGroup: printer.zoneId ?? item.printerGroup,
+          printerId: printer.id,
           printerName: printer.name,
           items: [
             {
@@ -1333,7 +1317,7 @@ export function PosApp() {
               note: reason || item.note,
             },
           ],
-          status: networkOnline ? "sent" : "pending",
+          status: resolvePrintJobStatus(networkOnline),
           createdAt: updatedAt,
         }));
       voidPrintJobs.push(...jobs);
@@ -1486,6 +1470,7 @@ export function PosApp() {
         tableName: order.tableName,
         ticketType: "normal",
         printerGroup: printer.zoneId ?? "",
+        printerId: printer.id,
         printerName: printer.name,
         items: [
           ...order.items
@@ -1507,7 +1492,7 @@ export function PosApp() {
               ]
             : []),
         ],
-        status: networkOnline ? "sent" : "pending",
+        status: resolvePrintJobStatus(networkOnline),
         createdAt: timestamp,
       }));
 
@@ -1592,6 +1577,7 @@ export function PosApp() {
         tableName: order.tableName,
         ticketType: isAddOnOrder ? "addon" : "normal",
         printerGroup: printer.zoneId ?? "",
+        printerId: printer.id,
         printerName: printer.name,
         items: [
           ...printTargetItems
@@ -1613,7 +1599,7 @@ export function PosApp() {
               ]
             : []),
         ],
-        status: networkOnline ? "sent" : "pending",
+        status: resolvePrintJobStatus(networkOnline),
         createdAt: timestamp,
       }));
 
@@ -1744,13 +1730,14 @@ export function PosApp() {
         tableName: order.tableName,
         ticketType: "void",
         printerGroup: "receipt",
+        printerId: printer.id,
         printerName: printer.name,
         items: [
           { name: title, quantity: 1, note: order.localOrderNo },
           { name: "退款金額", quantity: 1, note: formatMoney(amount, bootstrap.currency) },
           { name: "退款原因", quantity: 1, note: reason },
         ],
-        status: networkOnline ? "sent" : "pending",
+        status: resolvePrintJobStatus(networkOnline),
         createdAt: timestamp,
       }));
   }
@@ -1969,9 +1956,10 @@ export function PosApp() {
       tableName: order.tableName,
       ticketType: "normal",
       printerGroup: "receipt",
+      printerId: printer.id,
       printerName: printer.name,
       items: receiptItems,
-      status: networkOnline ? "sent" : "pending",
+      status: resolvePrintJobStatus(networkOnline),
       createdAt: timestamp,
     }));
 
@@ -2818,166 +2806,35 @@ export function PosApp() {
 
             <div className="flex-1 overflow-auto px-4 py-4">
               {isQuickMode && effectiveQuickPanel === "online" ? (
-                <div className="grid gap-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-semibold text-slate-500">自動接單</div>
-                    <button
-                      className={`rounded-full px-3 py-2 text-xs font-semibold ${
-                        autoAcceptOnlineOrders ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
-                      }`}
-                      onClick={() => {
-                        const next = !autoAcceptOnlineOrders;
-                        const nextSettings = {
-                          ...localSettings,
-                          onlineOrderSettings: {
-                            ...localSettings.onlineOrderSettings,
-                            autoAccept: next,
-                          },
-                        };
-                        setLocalSettings(nextSettings);
-                        savePosLocalSettings(nextSettings);
-                      }}
-                      type="button"
-                    >
-                      {autoAcceptOnlineOrders ? "開" : "關"}
-                    </button>
-                  </div>
-
-                  {onlineOrders.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      會員通線上訂單請至{" "}
-                      <Link className="font-semibold text-orange-600 underline" href="/orders">
-                        線上訂單
-                      </Link>{" "}
-                      頁面（Ledger Realtime 同步）
-                    </div>
-                  ) : (
-                    <div className="grid gap-2">
-                      {onlineOrders.slice(0, 16).map((order) => {
-                        const sourceId = order.sourceId ?? order.id;
-                        const paymentLabel =
-                          order.paymentStatus === "paid"
-                            ? `已支付 ${formatMoney(order.paidAmount ?? 0, bootstrap.currency)}`
-                            : "未支付";
-                        const statusLabel =
-                          order.status === "pending" ? "新單" : order.status === "accepted" ? "已接單" : order.status;
-                        const typeLabel =
-                          order.type === "dine_in"
-                            ? "堂食"
-                            : order.type === "pickup"
-                              ? "自取"
-                              : order.type === "rider_delivery"
-                                ? "車手"
-                                : "外送";
-
-                        return (
-                          <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-slate-900">
-                                  {order.id} <span className="ml-2 text-xs font-semibold text-slate-500">{typeLabel}</span>
-                                </div>
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {statusLabel} · {paymentLabel}
-                                </div>
-                                {order.items?.length ? (
-                                  <div className="mt-2 text-xs text-slate-500">
-                                    {order.items.slice(0, 3).map((item) => `${item.name}x${item.qty}`).join(" · ")}
-                                    {order.items.length > 3 ? " · ..." : ""}
-                                  </div>
-                                ) : null}
-                              </div>
-                              <div className="flex shrink-0 items-center gap-2">
-                                {order.status === "pending" ? (
-                                  <button
-                                    className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
-                                    onClick={() => {
-                                      void (async () => {
-                                        try {
-                                          await fetch("/api/online-orders", {
-                                            method: "POST",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ action: "accept", orderId: sourceId }),
-                                          });
-                                          const response = await fetch("/api/online-orders", {
-                                            method: "POST",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
-                                          });
-                                          const payload = (await response.json()) as {
-                                            ok: boolean;
-                                            posOrder?: PosOrder;
-                                            error?: string;
-                                          };
-                                          if (!payload.ok || !payload.posOrder) {
-                                            throw new Error(payload.error ?? "轉入快餐訂單失敗");
-                                          }
-                                          setOrders((current) => {
-                                            const next = [
-                                              payload.posOrder!,
-                                              ...current.filter((item) => item.id !== payload.posOrder!.id),
-                                            ];
-                                            saveOrders(next);
-                                            return next;
-                                          });
-                                            setViewingOrderId(payload.posOrder.id);
-                                            setQuickPanel("local");
-                                        } catch (err) {
-                                          setToast({ tone: "info", message: err instanceof Error ? err.message : "接單失敗" });
-                                        }
-                                      })();
-                                    }}
-                                    type="button"
-                                  >
-                                    接單
-                                  </button>
-                                ) : (
-                                  <button
-                                    className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                                    onClick={() => {
-                                      void (async () => {
-                                        try {
-                                          const response = await fetch("/api/online-orders", {
-                                            method: "POST",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ action: "convert_quick", orderId: sourceId }),
-                                          });
-                                          const payload = (await response.json()) as {
-                                            ok: boolean;
-                                            posOrder?: PosOrder;
-                                            error?: string;
-                                          };
-                                          if (!payload.ok || !payload.posOrder) {
-                                            throw new Error(payload.error ?? "轉入快餐訂單失敗");
-                                          }
-                                          setOrders((current) => {
-                                            const next = [
-                                              payload.posOrder!,
-                                              ...current.filter((item) => item.id !== payload.posOrder!.id),
-                                            ];
-                                            saveOrders(next);
-                                            return next;
-                                          });
-                                          setViewingOrderId(payload.posOrder.id);
-                                          setQuickPanel("local");
-                                        } catch (err) {
-                                          setToast({ tone: "info", message: err instanceof Error ? err.message : "轉入失敗" });
-                                        }
-                                      })();
-                                    }}
-                                    type="button"
-                                  >
-                                    查看
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                <QuickOnlineOrdersPanel
+                  autoAccept={autoAcceptOnlineOrders}
+                  currency={bootstrap?.currency ?? "MOP"}
+                  onAutoAcceptChange={(next) => {
+                    const nextSettings = {
+                      ...localSettings,
+                      onlineOrderSettings: {
+                        ...localSettings.onlineOrderSettings,
+                        autoAccept: next,
+                      },
+                    };
+                    setLocalSettings(nextSettings);
+                    savePosLocalSettings(nextSettings);
+                  }}
+                  onBridgedOrder={(posOrder) => {
+                    setOrders((current) => {
+                      const next = [posOrder, ...current.filter((item) => item.id !== posOrder.id)];
+                      saveOrders(next);
+                      return next;
+                    });
+                    setPrintJobs(loadPrintJobs());
+                    setViewingOrderId(posOrder.id);
+                    setQuickPanel("local");
+                  }}
+                  onToast={(payload) =>
+                    setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
+                  }
+                  tables={dineInTables}
+                />
               ) : isQuickMode && effectiveQuickPanel === "local" ? (
                 <div className="grid gap-3">
                   <div className="text-xs font-semibold text-slate-500">製作中</div>

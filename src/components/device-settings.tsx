@@ -28,7 +28,10 @@ import {
   mergeLedgerMenuReference,
   previewLedgerMenuImport,
 } from "@/lib/ledger/menu-import";
+import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
+import { isPrintBridgeEnabled, requestTestPrintBridge, syncPrintBridgeConfig } from "@/lib/print-bridge/client";
+import { usePrintBridgeHealth } from "@/components/print-bridge-worker";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -39,6 +42,7 @@ function cloneSpecGroups(specGroups?: MenuSpecGroup[]) {
 }
 
 export function DeviceSettings() {
+  const bridgeHealth = usePrintBridgeHealth();
   const cachedConfig = loadDeviceConfig();
   const cachedLocalSettings = loadPosLocalSettings();
   const cachedBootstrap = loadBootstrapCache() ?? mockBootstrap;
@@ -278,6 +282,7 @@ export function DeviceSettings() {
       model: "",
       paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
       ipAddress: "",
+      lanPort: 9100,
       usbLabel: "",
       enabled: true,
     };
@@ -401,23 +406,35 @@ export function DeviceSettings() {
   async function testPrint(printer: DevicePrinterConfig) {
     if (testingPrinterId) return;
     setTestingPrinterId(printer.id);
-    const event: QueueEvent = {
-      id: uid("evt"),
-      type: "TEST_PRINT_REQUESTED",
-      entityId: printer.id,
-      payload: {
-        printerId: printer.id,
-        printerName: printer.name,
-        connectionType: printer.connectionType,
-      },
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    };
-
-    const nextQueue = [...loadQueue(), event];
-    saveQueue(nextQueue);
 
     try {
+      if (isPrintBridgeEnabled()) {
+        await syncPrintBridgeConfig(config);
+        const result = await requestTestPrintBridge(printer);
+        if (result.ok) {
+          setStatus(`已透過本機橋接送出 ${printer.name} 測試打印。`);
+        } else {
+          setStatus(result.error);
+        }
+        return;
+      }
+
+      const event: QueueEvent = {
+        id: uid("evt"),
+        type: "TEST_PRINT_REQUESTED",
+        entityId: printer.id,
+        payload: {
+          printerId: printer.id,
+          printerName: printer.name,
+          connectionType: printer.connectionType,
+        },
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+
+      const nextQueue = [...loadQueue(), event];
+      saveQueue(nextQueue);
+
       await fetch("/api/pos/device-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -483,6 +500,18 @@ export function DeviceSettings() {
 
         {activeTab === "device" ? (
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
+            {isPrintBridgeEnabled() ? (
+              <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
+                <span className="font-semibold text-slate-900">打印橋接：</span>
+                {bridgeHealth?.ok ? (
+                  <span className="text-emerald-700">
+                    已連線 · v{bridgeHealth.version ?? "?"} · {bridgeHealth.printerCount ?? 0} 台打印機設定
+                  </span>
+                ) : (
+                  <span className="text-red-700">{bridgeHealth?.error ?? "橋接服務離線，請在本機執行 print-bridge"}</span>
+                )}
+              </div>
+            ) : null}
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">
@@ -769,15 +798,28 @@ export function DeviceSettings() {
                           </select>
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">IP 地址</span>
+                          <span className="text-xs text-slate-500">IP 地址（LAN）</span>
                           <input
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                             onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
+                            placeholder="192.168.1.110"
                             value={printer.ipAddress ?? ""}
                           />
                         </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-3">
-                          <span className="text-xs text-slate-500">USB 標籤 / 系統映射</span>
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                          <span className="text-xs text-slate-500">LAN 端口</span>
+                          <input
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            inputMode="numeric"
+                            onChange={(event) =>
+                              updatePrinter(printer.id, { lanPort: Number(event.target.value) || 9100 })
+                            }
+                            placeholder="9100"
+                            value={String(printer.lanPort ?? 9100)}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-2">
+                          <span className="text-xs text-slate-500">USB 系統印表機名稱</span>
                           <input
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                             onChange={(event) => updatePrinter(printer.id, { usbLabel: event.target.value })}
@@ -1624,8 +1666,9 @@ export function DeviceSettings() {
                                 ))}
                               </select>
                             </td>
-                            <td className="border-b border-slate-100 py-2">
+                            <td className="border-b border-slate-100 py-2 pr-3">
                               <div className="grid gap-2">
+                                <div className="text-xs text-slate-500">{formatSpecGroupsSummary(item.specGroups)}</div>
                                 <select
                                   className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                                   onChange={(event) => {

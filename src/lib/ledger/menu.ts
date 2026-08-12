@@ -1,6 +1,7 @@
 "use client";
 
-import { normalizeSpecGroups } from "@/lib/bootstrap-normalizer";
+import { parseLedgerProductSpecGroups } from "@/lib/ledger/menu-spec";
+import { MenuSpecGroup } from "@/lib/types";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 
@@ -22,7 +23,7 @@ export type LedgerMenuProduct = {
   name: string;
   priceMop: number;
   isSoldOut: boolean;
-  specGroups?: ReturnType<typeof normalizeSpecGroups>;
+  specGroups?: MenuSpecGroup[];
 };
 
 export type LedgerOrderMenu = {
@@ -71,7 +72,7 @@ function parseCategory(raw: unknown, index: number): LedgerMenuCategory | null {
   };
 }
 
-function parseProduct(raw: unknown): LedgerMenuProduct | null {
+function parseProduct(raw: unknown, menuRoot: UnknownRecord | null): LedgerMenuProduct | null {
   const record = asRecord(raw);
   if (!record) return null;
   const id = String(record.id ?? record.product_id ?? record.menu_item_id ?? "").trim();
@@ -85,12 +86,13 @@ function parseProduct(raw: unknown): LedgerMenuProduct | null {
     name,
     priceMop: resolveProductPriceMop(record),
     isSoldOut: Boolean(record.is_sold_out ?? record.isSoldOut ?? record.sold_out ?? false),
-    specGroups: normalizeSpecGroups(record.spec_groups ?? record.specGroups ?? record.options),
+    specGroups: parseLedgerProductSpecGroups(record, menuRoot),
   };
 }
 
 export function parseLedgerOrderMenu(data: unknown): LedgerOrderMenu {
   const record = asRecord(data) ?? {};
+  const menuRoot = record;
   const categoriesRaw = Array.isArray(record.categories) ? record.categories : [];
   const productsRaw = Array.isArray(record.products) ? record.products : [];
 
@@ -100,7 +102,7 @@ export function parseLedgerOrderMenu(data: unknown): LedgerOrderMenu {
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   const products = productsRaw
-    .map((row) => parseProduct(row))
+    .map((row) => parseProduct(row, menuRoot))
     .filter((row): row is LedgerMenuProduct => row !== null);
 
   return {

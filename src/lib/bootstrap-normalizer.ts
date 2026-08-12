@@ -6,6 +6,59 @@ function asRecord(value: unknown): UnknownRecord | null {
   return value && typeof value === "object" ? (value as UnknownRecord) : null;
 }
 
+function resolveOptionPriceDeltaMop(optionRecord: UnknownRecord): number {
+  if (optionRecord.priceDelta != null && optionRecord.priceDelta !== "") {
+    return Number(optionRecord.priceDelta) || 0;
+  }
+  if (optionRecord.price_delta != null && optionRecord.price_delta !== "") {
+    return Number(optionRecord.price_delta) || 0;
+  }
+  if (optionRecord.extra_price != null && optionRecord.extra_price !== "") {
+    return Number(optionRecord.extra_price) || 0;
+  }
+
+  const avos =
+    optionRecord.price_delta_avos ??
+    optionRecord.extra_price_avos ??
+    optionRecord.price_avos ??
+    optionRecord.addon_price_avos ??
+    optionRecord.delta_avos;
+  if (avos != null && avos !== "") {
+    return Math.round(Number(avos)) / 100;
+  }
+
+  return 0;
+}
+
+function normalizeSpecOptions(raw: unknown, groupIndex: number): MenuSpecGroup["options"] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((option, optionIndex) => {
+      const optionRecord = asRecord(option);
+      if (!optionRecord) return null;
+      return {
+        id: String(
+          optionRecord.id ??
+            optionRecord.option_id ??
+            optionRecord.choice_id ??
+            optionRecord.value_id ??
+            `opt-${groupIndex}-${optionIndex}`,
+        ),
+        label: String(
+          optionRecord.label ??
+            optionRecord.name ??
+            optionRecord.option_name ??
+            optionRecord.choice_name ??
+            optionRecord.value ??
+            "未命名選項",
+        ),
+        priceDelta: resolveOptionPriceDeltaMop(optionRecord),
+      };
+    })
+    .filter((option): option is NonNullable<typeof option> => Boolean(option));
+}
+
 export function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
   if (!Array.isArray(raw)) return undefined;
 
@@ -14,23 +67,27 @@ export function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
       const record = asRecord(group);
       if (!record) return null;
 
-      const optionsRaw = Array.isArray(record.options) ? record.options : Array.isArray(record.spec_options) ? record.spec_options : [];
-      const options = optionsRaw
-        .map((option, optionIndex) => {
-          const optionRecord = asRecord(option);
-          if (!optionRecord) return null;
-          return {
-            id: String(optionRecord.id ?? optionRecord.option_id ?? `opt-${groupIndex}-${optionIndex}`),
-            label: String(optionRecord.label ?? optionRecord.name ?? optionRecord.option_name ?? "未命名選項"),
-            priceDelta: Number(optionRecord.priceDelta ?? optionRecord.price_delta ?? 0),
-          };
-        })
-        .filter((option): option is NonNullable<typeof option> => Boolean(option));
+      const optionsRaw = Array.isArray(record.options)
+        ? record.options
+        : Array.isArray(record.spec_options)
+          ? record.spec_options
+          : Array.isArray(record.choices)
+            ? record.choices
+            : Array.isArray(record.values)
+              ? record.values
+              : Array.isArray(record.items)
+                ? record.items
+                : [];
+
+      const options = normalizeSpecOptions(optionsRaw, groupIndex);
 
       return {
-        id: String(record.id ?? record.group_id ?? `grp-${groupIndex}`),
-        name: String(record.name ?? record.group_name ?? "未命名規格"),
-        selectionMode: String(record.selectionMode ?? record.selection_mode ?? "single") === "multi" ? "multi" : "single",
+        id: String(record.id ?? record.group_id ?? record.modifier_group_id ?? `grp-${groupIndex}`),
+        name: String(record.name ?? record.group_name ?? record.title ?? "未命名規格"),
+        selectionMode:
+          String(record.selectionMode ?? record.selection_mode ?? record.type ?? "single") === "multi"
+            ? "multi"
+            : "single",
         required: Boolean(record.required ?? record.is_required ?? record.must_select ?? false),
         options,
       };

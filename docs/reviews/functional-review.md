@@ -61,7 +61,7 @@
 - 廚房單與收據模板預覽
 - 標籤打印內容模板
 - 線上訂單更細狀態（待取餐、配送中）
-- **真實 LAN/USB 打印驅動**（目前僅任務隊列）
+- **真實 LAN/USB 打印驅動** — `print-bridge` 本機服務（見 `print-bridge/README.md`）
 
 ### 中優先
 
@@ -101,7 +101,9 @@
 
 - Ledger 登入 + Realtime 線上訂單（v2 契約，`staff_role` 修正）
 - 報表頁接入 Ledger `get_merchant_report_summary`
-- 設置頁 Ledger 菜單一鍵參考匯入（`list_merchant_order_menu`）
+- 設置頁 Ledger 菜單一鍵參考匯入（`list_merchant_order_menu`，可選刪除本地）
+- 快餐模式「線上訂單」面板接入 Ledger Realtime + RPC
+- LAN/USB 打印橋接（`print-bridge` + `PrintBridgeWorker`）
 - 設置頁滾動與可見性
 - 菜品打印設置可操作性
 - 規格模板複用、規格彈窗滾動

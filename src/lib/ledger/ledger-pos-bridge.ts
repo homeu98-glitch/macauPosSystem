@@ -66,6 +66,7 @@ function buildPrintJobs(order: PosOrder): PrintJob[] {
       tableName: order.tableName,
       ticketType: "normal",
       printerGroup: printer.zoneId ?? "",
+      printerId: printer.id,
       printerName: printer.name,
       items: order.items
         .filter((item) => item.printerGroup === (printer.zoneId ?? ""))

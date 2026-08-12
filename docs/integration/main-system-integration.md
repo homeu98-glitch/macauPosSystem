@@ -141,13 +141,16 @@ GET → mock 或 `pos_members`；POST create/recharge。
 2. 管理打印機配置（role / zoneId / connectionType）
 3. 標記任務狀態
 
-**落地打印**建議本地橋接服務：
+**落地打印**由本 repo **`print-bridge/`** 本機服務負責：
 
 ```
-PrintJob → 本地服務 → LAN/USB → ESC/POS 打印機
+PrintJob → PrintBridgeWorker → http://127.0.0.1:9222 → LAN (9100) / USB (RAW)
 ```
 
-兼容：EPSON 80/58mm、Star 收據、Brother/TSC 標籤。
+安裝：`cd print-bridge && npm install && npm start`  
+POS env：`NEXT_PUBLIC_PRINT_BRIDGE_URL=http://127.0.0.1:9222`
+
+兼容：EPSON 80/58mm、Star 收據（ESC/POS GB18030）；USB 需填 Windows 印表機名稱。
 
 ---
 

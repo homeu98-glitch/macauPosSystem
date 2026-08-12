@@ -158,6 +158,8 @@ export interface DevicePrinterConfig {
   model?: string;
   paperSize?: string;
   ipAddress?: string;
+  /** Raw TCP port for LAN ESC/POS (default 9100) */
+  lanPort?: number;
   usbLabel?: string;
   enabled: boolean;
 }
@@ -397,6 +399,7 @@ export interface PrintJob {
   tableName?: string;
   ticketType: "normal" | "addon" | "void";
   printerGroup: PrinterGroup;
+  printerId?: string;
   printerName: string;
   items?: Array<{
     name: string;
