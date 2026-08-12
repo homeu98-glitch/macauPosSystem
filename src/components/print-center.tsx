@@ -8,7 +8,6 @@ import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
 import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
 import {
   loadDeviceConfig,
-  loadOfflineMode,
   loadOrders,
   loadPosLocalSettings,
   loadPrintJobs,
@@ -17,6 +16,7 @@ import {
   savePrintJobs,
   saveQueue,
 } from "@/lib/storage";
+import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
 import { PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
@@ -95,7 +95,8 @@ function ticketTypeLabel(type: PrintJob["ticketType"]) {
 export function PrintCenter() {
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
   const [orders] = useState<PosOrder[]>(() => loadOrders());
-  const [offlineMode, setOfflineMode] = useState(() => loadOfflineMode());
+  const networkOnline = useNetworkOnline();
+  const offlineMode = !networkOnline;
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "sent" | "failed">("all");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -127,19 +128,6 @@ export function PrintCenter() {
     startLayout: { x: number; y: number; width: number; height: number };
   } | null>(null);
   type PreviewItem = NonNullable<PrintJob["items"]>[number];
-
-  useEffect(() => {
-    function onOfflineModeChanged(event: Event) {
-      const detail = (event as CustomEvent<{ offlineMode?: boolean }>).detail;
-      if (typeof detail?.offlineMode === "boolean") {
-        setOfflineMode(detail.offlineMode);
-      } else {
-        setOfflineMode(loadOfflineMode());
-      }
-    }
-    window.addEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
-    return () => window.removeEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
-  }, []);
 
   useEffect(() => {
     if (!toast) return;

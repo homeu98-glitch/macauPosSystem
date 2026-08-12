@@ -1,10 +1,7 @@
 "use client";
 
-import { useState } from "react";
-
 import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
-
 import { POS_ACTION_BAR_LOCAL_MINUTES } from "@/lib/pos-order-filters";
 import { PosOrder } from "@/lib/types";
 
@@ -37,24 +34,12 @@ export function QuickModeOrdersBar({
   onMarkCompleted,
   onReturnPreparing,
 }: QuickModeOrdersBarProps) {
-  const [realtimeStatus, setRealtimeStatus] = useState("INIT");
-
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
       <div className="grid grid-cols-1 divide-y divide-slate-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線上訂單</div>
-              <span
-                className={`text-[10px] font-medium ${
-                  realtimeStatus === "SUBSCRIBED" ? "text-emerald-600" : "text-amber-600"
-                }`}
-                title={`Realtime: ${realtimeStatus}`}
-              >
-                {realtimeStatus === "SUBSCRIBED" ? "即時同步中" : "同步連線中…"}
-              </span>
-            </div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線上訂單</div>
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-medium text-slate-500">自動接單</span>
               <button
@@ -72,7 +57,6 @@ export function QuickModeOrdersBar({
             autoAccept={autoAcceptOnline}
             currency={currency}
             layout="strip"
-            onRealtimeStatusChange={setRealtimeStatus}
             onToast={onOnlineToast}
             showAutoAcceptControls={false}
             skipTableAssignment

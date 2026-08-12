@@ -6,7 +6,6 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import {
   dateFilterLabel,
   LedgerOrderDateFilter,
-  LEDGER_ORDER_DATE_FILTERS,
   orderMatchesDateFilter,
 } from "@/lib/ledger/order-date-filter";
 import {
@@ -35,10 +34,9 @@ function orderMatchesLocalDateFilter(order: PosOrder, filter: LedgerOrderDateFil
   return orderMatchesDateFilter(pseudo, filter);
 }
 
-export function LocalOrdersPanel() {
+export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: LedgerOrderDateFilter }) {
   const currency = loadBootstrapCache()?.currency ?? "MOP";
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalPosOrder));
-  const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilter>("today");
   const [statusTab, setStatusTab] = useState<LocalOrderStatusTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
 
@@ -63,35 +61,19 @@ export function LocalOrdersPanel() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
         <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
-            {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
-              <button
-                key={filter.key}
-                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                  filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                }`}
-                onClick={() => setDateFilter(filter.key)}
-                type="button"
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {STATUS_TABS.map((tab) => (
-              <button
-                key={tab.key}
-                className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
-                  tab.key === statusTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                }`}
-                onClick={() => setStatusTab(tab.key)}
-                type="button"
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {STATUS_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
+                tab.key === statusTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+              }`}
+              onClick={() => setStatusTab(tab.key)}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
         <div className="mt-2 text-xs text-slate-500">
           {dateFilterLabel(dateFilter)} · 共 {filteredOrders.length} 張

@@ -8,7 +8,6 @@ import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadAuthSession,
   loadDeviceConfig,
-  loadOfflineMode,
   loadOrders,
   loadPrintJobs,
   loadQueue,
@@ -19,6 +18,7 @@ import {
   saveShiftHistory,
   saveShiftState,
 } from "@/lib/storage";
+import { readNetworkOnline } from "@/lib/use-network-online";
 import { PrintJob, QueueEvent } from "@/lib/types";
 
 function uid(prefix: string) {
@@ -162,8 +162,8 @@ export function ShiftPage() {
   }
 
   async function forceSyncBeforeClose() {
-    if (loadOfflineMode()) {
-      setStatus("目前為離線模式，無法強制同步。請先在收銀台退出離線模式再交班。");
+    if (!readNetworkOnline()) {
+      setStatus("目前離線，無法強制同步。請恢復網絡後再交班。");
       return false;
     }
     const pending = loadQueue().filter((item) => item.status !== "synced");
@@ -274,7 +274,7 @@ export function ShiftPage() {
     const nextQueue = [...loadQueue(), event];
     saveQueue(nextQueue);
 
-    if (!loadOfflineMode()) {
+    if (readNetworkOnline()) {
       try {
         await fetch("/api/pos/sync", {
           method: "POST",

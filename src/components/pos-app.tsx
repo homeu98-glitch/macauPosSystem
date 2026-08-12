@@ -18,7 +18,6 @@ import {
   loadDeviceConfig,
   loadAuthSession,
   loadMembers,
-  loadOfflineMode,
   loadOperatingMode,
   loadPosLocalSettings,
   loadQuickCompletedMinutes,
@@ -30,7 +29,6 @@ import {
   saveBootstrapCache,
   saveDeviceConfig,
   saveMembers,
-  saveOfflineMode,
   saveOrders,
   savePosLocalSettings,
   savePrintJobs,
@@ -40,6 +38,7 @@ import {
   saveSoldOutState,
 } from "@/lib/storage";
 import { filterActionBarLocalOrders, POS_ACTION_BAR_LOCAL_MINUTES } from "@/lib/pos-order-filters";
+import { useNetworkOnline } from "@/lib/use-network-online";
 import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 type Toast = {
@@ -109,7 +108,8 @@ export function PosApp() {
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
   const [cartItems, setCartItems] = useState<OrderItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string>("");
-  const [offlineMode, setOfflineMode] = useState(() => loadOfflineMode());
+  const networkOnline = useNetworkOnline();
+  const offlineMode = !networkOnline;
   const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
@@ -173,7 +173,6 @@ export function PosApp() {
   const [audioReady, setAudioReady] = useState(false);
   const quickOrderProcessingRef = useRef<Set<string>>(new Set());
 
-  const networkOnline = !offlineMode;
   const isQuickMode = operatingMode === "quick";
   const canRefundOrder = authSession?.permissions.refundOrder ?? true;
   const canVoidItem = authSession?.permissions.voidItem ?? true;
@@ -264,26 +263,6 @@ export function PosApp() {
     setRefundSummaryExportOpen(false);
     setToast({ tone: "success", message: "退款匯總已導出。" });
   }
-
-  function updateOfflineMode(next: boolean) {
-    setOfflineMode(next);
-    saveOfflineMode(next);
-    window.dispatchEvent(new CustomEvent("pos-offline-mode-changed", { detail: { offlineMode: next } }));
-  }
-
-  useEffect(() => {
-    function onOfflineModeChanged(event: Event) {
-      const detail = (event as CustomEvent<{ offlineMode?: boolean }>).detail;
-      if (typeof detail?.offlineMode === "boolean") {
-        setOfflineMode(detail.offlineMode);
-      } else {
-        setOfflineMode(loadOfflineMode());
-      }
-    }
-
-    window.addEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
-    return () => window.removeEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
-  }, []);
 
   useEffect(() => {
     function onSoldOutChanged(event: Event) {
@@ -2337,16 +2316,9 @@ export function PosApp() {
                 </div>
 
                 {offlineMode ? (
-                  <button
-                    className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
-                    onClick={() => {
-                      updateOfflineMode(false);
-                      void syncNow(queue, { silent: false });
-                    }}
-                    type="button"
-                  >
-                    退出離線並補傳
-                  </button>
+                  <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                    目前離線，恢復網絡後可補傳資料
+                  </div>
                 ) : (
                   <button
                     className="mt-3 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
@@ -2863,16 +2835,9 @@ export function PosApp() {
               </div>
 
               {offlineMode ? (
-                <button
-                  className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700"
-                  onClick={() => {
-                    updateOfflineMode(false);
-                    void syncNow(queue, { silent: false });
-                  }}
-                  type="button"
-                >
-                  退出離線並補傳
-                </button>
+                <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                  目前離線，恢復網絡後可補傳資料
+                </div>
               ) : null}
 
               {/* 最近訂單：點餐頁不顯示，避免干擾店員操作 */}

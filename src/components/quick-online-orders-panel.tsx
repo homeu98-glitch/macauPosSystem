@@ -50,7 +50,6 @@ type QuickOnlineOrdersPanelProps = {
   layout?: "stack" | "strip";
   /** strip 模式由外層標題列控制自動接單 */
   showAutoAcceptControls?: boolean;
-  onRealtimeStatusChange?: (status: string) => void;
   tables?: Array<{ id: string; name: string; floorName: string }>;
 };
 
@@ -70,7 +69,6 @@ export function QuickOnlineOrdersPanel({
   skipTableAssignment = false,
   layout = "stack",
   showAutoAcceptControls = true,
-  onRealtimeStatusChange,
   tables = [],
 }: QuickOnlineOrdersPanelProps) {
   const merchantId = getLedgerMerchantId();
@@ -84,7 +82,6 @@ export function QuickOnlineOrdersPanel({
   const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number }> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
-  const [realtimeStatus, setRealtimeStatus] = useState("INIT");
 
   const ordersRef = useRef<LedgerOnlineOrder[]>([]);
   const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
@@ -92,10 +89,6 @@ export function QuickOnlineOrdersPanel({
   const autoAcceptProcessingRef = useRef<Set<string>>(new Set());
 
   ordersRef.current = orders;
-
-  useEffect(() => {
-    onRealtimeStatusChange?.(realtimeStatus);
-  }, [onRealtimeStatusChange, realtimeStatus]);
 
   useEffect(() => {
     function unlock() {
@@ -245,7 +238,6 @@ export function QuickOnlineOrdersPanel({
         setError(err instanceof Error ? err.message : "增量同步失敗");
       });
     },
-    onStatusChange: setRealtimeStatus,
   });
 
   useEffect(() => {
@@ -563,17 +555,7 @@ export function QuickOnlineOrdersPanel({
     <div className={layout === "strip" ? "grid gap-2" : "grid gap-3"}>
       {showAutoAcceptControls ? (
         <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="text-xs font-semibold text-slate-500">{autoAcceptLabel}</div>
-            <span
-              className={`truncate text-[10px] font-medium ${
-                realtimeStatus === "SUBSCRIBED" ? "text-emerald-600" : "text-amber-600"
-              }`}
-              title={`Realtime: ${realtimeStatus}`}
-            >
-              {realtimeStatus === "SUBSCRIBED" ? "即時同步中" : "同步連線中…"}
-            </span>
-          </div>
+          <div className="text-xs font-semibold text-slate-500">{autoAcceptLabel}</div>
           {onAutoAcceptChange ? (
             <button
               className={`rounded-full px-3 py-1.5 text-xs font-semibold ${

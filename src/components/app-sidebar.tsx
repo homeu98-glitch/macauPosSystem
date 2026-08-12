@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
 
+import { useNetworkOnline } from "@/lib/use-network-online";
 import { signOutLedgerSession } from "@/lib/ledger/session";
-import { loadAuthSession, loadOfflineMode, saveOfflineMode } from "@/lib/storage";
+import { loadAuthSession } from "@/lib/storage";
 
 const baseNavItems = [
   { href: "/", label: "點餐", short: "點" },
@@ -19,24 +20,9 @@ const baseNavItems = [
 
 export function AppSidebar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const [offlineMode, setOfflineMode] = useState(() => loadOfflineMode());
+  const networkOnline = useNetworkOnline();
   const [loggedIn, setLoggedIn] = useState(() => Boolean(loadAuthSession()));
   const [session] = useState(() => loadAuthSession());
-
-  useEffect(() => {
-    function onOfflineModeChanged(event: Event) {
-      const detail = (event as CustomEvent<{ offlineMode?: boolean }>).detail;
-      if (typeof detail?.offlineMode === "boolean") {
-        setOfflineMode(detail.offlineMode);
-      } else {
-        setOfflineMode(loadOfflineMode());
-      }
-    }
-
-    window.addEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
-    return () => window.removeEventListener("pos-offline-mode-changed", onOfflineModeChanged as EventListener);
-  }, []);
 
   // 不使用 effect 同步 loggedIn，避免 eslint react-hooks/set-state-in-effect；
   // 登出時會在按鈕點擊處更新狀態，登入成功則會跳頁重渲染。
@@ -72,20 +58,14 @@ export function AppSidebar() {
               <div className="mt-1 text-slate-400">{roleLabel}</div>
             </div>
           ) : null}
-          <button
-            className={`rounded-2xl px-2 py-2 text-xs font-semibold transition ${
-              offlineMode ? "bg-amber-500 text-white" : "bg-emerald-600 text-white"
+          <div
+            className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold ${
+              networkOnline ? "bg-emerald-600/90 text-white" : "bg-amber-500 text-white"
             }`}
-            onClick={() => {
-              const next = !offlineMode;
-              setOfflineMode(next);
-              saveOfflineMode(next);
-              window.dispatchEvent(new CustomEvent("pos-offline-mode-changed", { detail: { offlineMode: next } }));
-            }}
-            type="button"
+            title={networkOnline ? "網絡已連接" : "網絡已斷開"}
           >
-            {offlineMode ? "離線模式" : "在線"}
-          </button>
+            {networkOnline ? "在線" : "離線"}
+          </div>
 
           {loggedIn ? (
             <button

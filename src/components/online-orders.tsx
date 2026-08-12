@@ -52,18 +52,26 @@ function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
 }
 
-export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
+export function OnlineOrders({
+  embedded = false,
+  dateFilter: dateFilterProp,
+  onDateFilterChange,
+}: {
+  embedded?: boolean;
+  dateFilter?: LedgerOrderDateFilter;
+  onDateFilterChange?: (filter: LedgerOrderDateFilter) => void;
+}) {
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const autoAccept = localSettings.onlineOrderSettings.autoAccept;
 
   const [activeTab, setActiveTab] = useState<LedgerOrderTab>("all");
-  const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilter>("today");
+  const [internalDateFilter, setInternalDateFilter] = useState<LedgerOrderDateFilter>("today");
+  const dateFilter = dateFilterProp ?? internalDateFilter;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [orders, setOrders] = useState<LedgerOnlineOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [realtimeStatus, setRealtimeStatus] = useState<string>("INIT");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
@@ -77,6 +85,7 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
   const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
   const hasInitializedSnapshotRef = useRef(false);
   const autoAcceptProcessingRef = useRef<Set<string>>(new Set());
+  const embeddedDateFilterRef = useRef(dateFilter);
 
   const tables = useMemo(
     () => localSettings.floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name }))),
@@ -189,7 +198,11 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
 
   function changeDateFilter(next: LedgerOrderDateFilter) {
     if (next === dateFilter) return;
-    setDateFilter(next);
+    if (onDateFilterChange) {
+      onDateFilterChange(next);
+    } else {
+      setInternalDateFilter(next);
+    }
     setRefreshing(true);
     setError(null);
     void loadOrders("full", next)
@@ -200,6 +213,21 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
         setRefreshing(false);
       });
   }
+
+  useEffect(() => {
+    if (!onDateFilterChange) return;
+    if (embeddedDateFilterRef.current === dateFilter) return;
+    embeddedDateFilterRef.current = dateFilter;
+    setRefreshing(true);
+    setError(null);
+    void loadOrders("full", dateFilter)
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "讀取訂單失敗");
+      })
+      .finally(() => {
+        setRefreshing(false);
+      });
+  }, [dateFilter, loadOrders, onDateFilterChange]);
 
   const handleInsert = useCallback(
     (order: LedgerOnlineOrder) => {
@@ -255,7 +283,6 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
         setError(err instanceof Error ? err.message : "增量同步失敗");
       });
     },
-    onStatusChange: setRealtimeStatus,
   });
 
   useEffect(() => {
@@ -544,19 +571,17 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
   const panel = (
     <>
       <div className={`shrink-0 border-b border-slate-200 bg-white px-4 ${embedded ? "py-3" : "py-4"}`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
             <div className={`font-semibold text-slate-900 ${embedded ? "text-sm" : "text-lg"}`}>
               {embedded ? "線上訂單" : "會員通線上訂單"}
             </div>
-            <div className="mt-1 text-sm text-slate-500">
-              Ledger 即時同步 · {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單{" "}
-              {stats.pending} 張
+            <div className="mt-1 text-xs text-slate-500 sm:text-sm">
+              {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單 {stats.pending} 張
             </div>
-            <div className="mt-1 text-xs text-slate-400">Realtime：{realtimeStatus}</div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="mr-2 flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5">
               <span className="text-xs font-semibold text-slate-600">自動接單</span>
               <button
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -576,14 +601,30 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
               </button>
             </div>
             <button
-              className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               disabled={refreshing || loading}
               onClick={() => void manualRefresh()}
               type="button"
             >
               {refreshing ? "刷新中…" : "手動刷新"}
             </button>
-            <div className="flex flex-wrap gap-2 rounded-full bg-slate-100 p-1">
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+              }`}
+              onClick={() => setActiveTab(tab.key)}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+          {!embedded ? (
+            <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
               {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
                 <button
                   key={filter.key}
@@ -597,19 +638,7 @@ export function OnlineOrders({ embedded = false }: { embedded?: boolean }) {
                 </button>
               ))}
             </div>
-            {TABS.map((tab) => (
-              <button
-                key={tab.key}
-                className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                  tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-                }`}
-                onClick={() => setActiveTab(tab.key)}
-                type="button"
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          ) : null}
         </div>
       </div>
 
