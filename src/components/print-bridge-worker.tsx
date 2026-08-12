@@ -8,6 +8,7 @@ import { loadDeviceConfig } from "@/lib/storage";
 
 const FLUSH_INTERVAL_MS = 2500;
 const HEALTH_INTERVAL_MS = 15000;
+const CONFIG_SYNC_INTERVAL_MS = 60000;
 
 export function PrintBridgeWorker() {
   const [health, setHealth] = useState<PrintBridgeHealth | null>(null);
@@ -28,25 +29,39 @@ export function PrintBridgeWorker() {
     if (!bridgeUrl) return;
 
     let cancelled = false;
+    let bridgeOnline = false;
+    let lastConfigSyncAt = 0;
 
-    async function syncConfig() {
+    async function syncConfig(force = false) {
+      const now = Date.now();
+      if (!force && now - lastConfigSyncAt < CONFIG_SYNC_INTERVAL_MS) return;
       const deviceConfig = loadDeviceConfig();
-      if (deviceConfig) {
-        await syncPrintBridgeConfig(deviceConfig);
-      }
+      if (!deviceConfig) return;
+      const ok = await syncPrintBridgeConfig(deviceConfig);
+      if (ok) lastConfigSyncAt = now;
     }
 
     async function pollHealth() {
       const result = await fetchPrintBridgeHealth();
-      if (!cancelled) setHealth(result);
+      if (!cancelled) {
+        setHealth(result);
+        bridgeOnline = result.ok;
+      }
     }
 
-    void syncConfig();
-    void pollHealth();
-    void flushPendingPrintJobs();
+    async function tick() {
+      if (!bridgeOnline) return;
+      await syncConfig();
+      await flushPendingPrintJobs();
+    }
 
-    const flushTimer = window.setInterval(() => {
-      void flushPendingPrintJobs();
+    void syncConfig(true);
+    void pollHealth().then(() => {
+      if (!cancelled && bridgeOnline) void flushPendingPrintJobs();
+    });
+
+    const tickTimer = window.setInterval(() => {
+      void tick();
     }, FLUSH_INTERVAL_MS);
 
     const healthTimer = window.setInterval(() => {
@@ -54,14 +69,14 @@ export function PrintBridgeWorker() {
     }, HEALTH_INTERVAL_MS);
 
     function onDeviceConfigSaved() {
-      void syncConfig();
+      void syncConfig(true);
     }
 
     window.addEventListener("pos-device-config-changed", onDeviceConfigSaved as EventListener);
 
     return () => {
       cancelled = true;
-      window.clearInterval(flushTimer);
+      window.clearInterval(tickTimer);
       window.clearInterval(healthTimer);
       window.removeEventListener("pos-device-config-changed", onDeviceConfigSaved as EventListener);
     };

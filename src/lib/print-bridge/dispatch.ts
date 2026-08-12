@@ -20,14 +20,11 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   }
 
   const deviceConfig = loadDeviceConfig();
-  if (deviceConfig) {
-    await syncPrintBridgeConfig(deviceConfig);
-  }
-
-  const printers = deviceConfig?.printers ?? [];
   const jobs = loadPrintJobs();
   const pending = jobs.filter((job) => job.status === "pending");
   if (pending.length === 0) return jobs;
+
+  const printers = deviceConfig?.printers ?? [];
 
   let changed = false;
   const nextJobs = [...jobs];

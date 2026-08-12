@@ -6,7 +6,18 @@ export function getPrintBridgeUrl(): string | null {
     typeof window !== "undefined" ? loadDeviceConfig()?.printBridgeUrl?.trim() : "";
   const raw = deviceOverride || process.env.NEXT_PUBLIC_PRINT_BRIDGE_URL?.trim();
   if (!raw) return null;
-  return raw.replace(/\/+$/, "");
+
+  const url = raw.replace(/\/+$/, "");
+
+  // Env default localhost only works when POS is opened on the same machine as print-bridge.
+  if (typeof window !== "undefined" && !deviceOverride) {
+    const pageHost = window.location.hostname;
+    const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
+    const bridgeIsLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(url);
+    if (!pageIsLocal && bridgeIsLocal) return null;
+  }
+
+  return url;
 }
 
 export function isPrintBridgeEnabled(): boolean {
