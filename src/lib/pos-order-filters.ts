@@ -14,6 +14,20 @@ export function orderTimestamp(order: PosOrder): number {
   return Date.parse(order.updatedAt || order.createdAt || "") || 0;
 }
 
+/** 合併多份訂單列表，同 id 保留 updatedAt 較新者（防止雲端拉取覆蓋本機剛寫入的單） */
+export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
+  const byId = new Map<string, PosOrder>();
+  for (const list of sources) {
+    for (const order of list) {
+      const existing = byId.get(order.id);
+      if (!existing || orderTimestamp(order) >= orderTimestamp(existing)) {
+        byId.set(order.id, order);
+      }
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
+}
+
 export function isWithinLastMinutes(order: PosOrder, minutes: number, nowMs = Date.now()): boolean {
   const ts = orderTimestamp(order);
   if (!ts) return false;

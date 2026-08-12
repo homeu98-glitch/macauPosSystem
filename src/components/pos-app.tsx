@@ -37,7 +37,7 @@ import {
   saveShiftState,
   saveSoldOutState,
 } from "@/lib/storage";
-import { filterQuickActionBarOrders } from "@/lib/pos-order-filters";
+import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
 import {
   quickCompleteLabel,
   quickCompletionLabel,
@@ -423,28 +423,9 @@ export function PosApp() {
         };
 
         if (Array.isArray(payload.orders)) {
-          // 方案A：合併後台 orders 與本機 orders（以 updatedAt 較新的為準），避免覆蓋本機剛完成的結帳/狀態更新。
+          // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
           setOrders((current) => {
-            const byId = new Map<string, PosOrder>();
-            const timeOf = (order: PosOrder) => Date.parse(order.updatedAt || order.createdAt || "");
-            for (const order of current) {
-              byId.set(order.id, order);
-            }
-            for (const incoming of payload.orders!) {
-              const existing = byId.get(incoming.id);
-              if (!existing) {
-                byId.set(incoming.id, incoming);
-                continue;
-              }
-              const incomingTime = timeOf(incoming);
-              const existingTime = timeOf(existing);
-              if (!Number.isFinite(existingTime) || (Number.isFinite(incomingTime) && incomingTime > existingTime)) {
-                byId.set(incoming.id, incoming);
-              }
-            }
-            const merged = Array.from(byId.values()).sort(
-              (a, b) => timeOf(b) - timeOf(a),
-            );
+            const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
             saveOrders(merged);
             return merged;
           });
@@ -793,29 +774,50 @@ export function PosApp() {
     setPosMode("order");
   }
 
+  function resolveExistingOrderForUpsert(options?: { forceNewOrder?: boolean }) {
+    if (!activeTable) return null;
+    if (options?.forceNewOrder && isQuickMode && activeTable.id === "counter") {
+      return null;
+    }
+    if (activeOrderId) {
+      const byId = orders.find(
+        (order) =>
+          order.id === activeOrderId &&
+          order.status !== "settled" &&
+          order.status !== "cancelled" &&
+          order.status !== "partially_refunded" &&
+          order.status !== "refunded",
+      );
+      if (byId) return byId;
+    }
+    // 快餐 counter 可並存多張已收款單；僅合併未送廚的 draft / sent_to_kitchen
+    if (isQuickMode && activeTable.id === "counter") {
+      return (
+        orders.find(
+          (order) =>
+            order.tableId === "counter" &&
+            !order.onlineOrderId &&
+            (order.status === "draft" || order.status === "sent_to_kitchen"),
+        ) ?? null
+      );
+    }
+    const mapped = tableOrderMap.get(activeTable.id) ?? null;
+    if (mapped?.status === "paid") return null;
+    return mapped;
+  }
+
   function upsertCurrentOrder(
     nextStatus: "draft" | "sent_to_kitchen",
     allowEmpty = false,
     newLocalOrderNo?: string,
+    options?: { forceNewOrder?: boolean },
   ) {
     if (!bootstrap || !activeTable) return null;
     if (!allowEmpty && cartItems.length === 0) return null;
 
     const timestamp = new Date().toISOString();
     const baseTotals = orderTotals(cartItems, bootstrap);
-    const existingOrder =
-      (activeOrderId
-        ? orders.find(
-            (order) =>
-              order.id === activeOrderId &&
-              order.status !== "settled" &&
-              order.status !== "cancelled" &&
-              order.status !== "partially_refunded" &&
-              order.status !== "refunded",
-          )
-        : null) ??
-      tableOrderMap.get(activeTable.id) ??
-      null;
+    const existingOrder = resolveExistingOrderForUpsert(options);
 
     const fallbackNo = isQuickMode
       ? quickOrderType === "pickup"
@@ -832,7 +834,11 @@ export function PosApp() {
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           status: nextStatus,
           fulfillmentStatus:
-            isQuickMode && activeTable.id === "counter" ? existingOrder.fulfillmentStatus ?? "preparing" : undefined,
+            isQuickMode && activeTable.id === "counter"
+              ? nextStatus === "sent_to_kitchen"
+                ? "preparing"
+                : existingOrder.fulfillmentStatus
+              : undefined,
           items: cartItems,
           orderNote,
           subtotal: baseTotals.subtotal,
@@ -860,9 +866,10 @@ export function PosApp() {
           updatedAt: timestamp,
         };
 
+    const baseline = mergeOrderLists(loadOrders(), orders);
     const nextOrders = existingOrder
-      ? orders.map((current) => (current.id === order.id ? order : current))
-      : [order, ...orders];
+      ? baseline.map((current) => (current.id === order.id ? order : current))
+      : [order, ...baseline.filter((current) => current.id !== order.id)];
 
     persistOrders(nextOrders);
     setActiveOrderId(order.id);
@@ -1486,7 +1493,7 @@ export function PosApp() {
     setToast({ tone: "success", message: "已加入重打單打印隊列。" });
   }
 
-  async function sendToKitchen(options?: { silent?: boolean }) {
+  async function sendToKitchen(options?: { silent?: boolean; forceNewOrder?: boolean }) {
     if (!bootstrap || !activeTable || cartItems.length === 0) return null;
     if (orderSubmitting) return null;
     setOrderSubmitting(true);
@@ -1494,7 +1501,21 @@ export function PosApp() {
     try {
       const timestamp = new Date().toISOString();
       let nextOrderNo: string | undefined;
-      if (!offlineMode && !activeOrderId && !tableOrderMap.get(activeTable.id)) {
+      const counterHasOpenOrder =
+        !options?.forceNewOrder &&
+        (activeOrderId
+          ? orders.some(
+              (order) =>
+                order.id === activeOrderId &&
+                order.tableId === activeTable.id &&
+                (order.status === "draft" || order.status === "sent_to_kitchen"),
+            )
+          : orders.some(
+              (order) =>
+                order.tableId === activeTable.id &&
+                (order.status === "draft" || order.status === "sent_to_kitchen"),
+            ));
+      if (!offlineMode && !counterHasOpenOrder) {
         try {
           const response = await fetch("/api/pos/sequence", {
             method: "POST",
@@ -1508,7 +1529,9 @@ export function PosApp() {
         }
       }
 
-      const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo);
+      const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo, {
+        forceNewOrder: options?.forceNewOrder,
+      });
       if (!order) return null;
 
       const baseMap = new Map<string, number>();
@@ -1525,14 +1548,15 @@ export function PosApp() {
         })
         .filter((row): row is OrderItem => Boolean(row));
 
-      if (isAddOnOrder && addedItems.length === 0) {
+      const treatAsAddOn = !options?.forceNewOrder && isAddOnOrder;
+      if (treatAsAddOn && addedItems.length === 0) {
         if (!options?.silent) {
           setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
         }
         return null;
       }
 
-      const printTargetItems = isAddOnOrder ? addedItems : cartItems;
+      const printTargetItems = treatAsAddOn ? addedItems : cartItems;
 
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
     const nextPrintJobs = configuredPrinters
@@ -1546,7 +1570,7 @@ export function PosApp() {
         orderId: order.id,
         orderNo: order.localOrderNo,
         tableName: order.tableName,
-        ticketType: isAddOnOrder ? "addon" : "normal",
+        ticketType: treatAsAddOn ? "addon" : "normal",
         printerGroup: printer.zoneId ?? "",
         printerId: printer.id,
         printerName: printer.name,
@@ -1559,7 +1583,7 @@ export function PosApp() {
               specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
               note: item.note,
             })),
-          ...(!isAddOnOrder && order.orderNote
+          ...(!treatAsAddOn && order.orderNote
             ? [
                 {
                   name: "全單備註",
@@ -1578,9 +1602,9 @@ export function PosApp() {
 
     const orderEvent: QueueEvent = {
       id: uid("evt"),
-      type: isAddOnOrder ? "ORDER_UPDATED" : "ORDER_CREATED",
+      type: treatAsAddOn ? "ORDER_UPDATED" : "ORDER_CREATED",
       entityId: order.id,
-      payload: isAddOnOrder ? { order, addedItems } : order,
+      payload: treatAsAddOn ? { order, addedItems } : order,
       status: networkOnline ? "synced" : "pending",
       createdAt: timestamp,
     };
@@ -1605,10 +1629,10 @@ export function PosApp() {
         setToast({
           tone: "success",
           message: networkOnline
-            ? isAddOnOrder
+            ? treatAsAddOn
               ? `已加單成功，單號 ${order.localOrderNo}。`
               : `已下單成功，單號 ${order.localOrderNo}。`
-            : isAddOnOrder
+            : treatAsAddOn
               ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
               : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
         });
@@ -1903,7 +1927,7 @@ export function PosApp() {
 
   function confirmPayment(method: string) {
     if (!bootstrap) return;
-    const applyPaymentToOrder = (targetOrder: PosOrder, sourceOrders: PosOrder[]) => {
+    const applyPaymentToOrder = (targetOrder: PosOrder) => {
       const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
       const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
       const updatedOrder: PosOrder = {
@@ -1923,10 +1947,14 @@ export function PosApp() {
         updatedAt: new Date().toISOString(),
       };
 
-      const nextOrders = sourceOrders.some((order) => order.id === updatedOrder.id)
-        ? sourceOrders.map((order) => (order.id === updatedOrder.id ? updatedOrder : order))
-        : [updatedOrder, ...sourceOrders];
-      persistOrders(nextOrders);
+      setOrders((currentOrders) => {
+        const baseline = mergeOrderLists(loadOrders(), currentOrders);
+        const nextOrders = baseline.some((order) => order.id === updatedOrder.id)
+          ? baseline.map((order) => (order.id === updatedOrder.id ? updatedOrder : order))
+          : [updatedOrder, ...baseline];
+        saveOrders(nextOrders);
+        return nextOrders;
+      });
 
       if (memberMatch && (memberDeduction > 0 || selectedCouponIds.length > 0)) {
         const nextMembers = membersCache.map((member) =>
@@ -2004,9 +2032,12 @@ export function PosApp() {
 
     if (isQuickMode && payingOrderId === CART_PAYING_ID) {
       void (async () => {
-        const createdOrder = await sendToKitchen({ silent: true });
-        if (!createdOrder) return;
-        applyPaymentToOrder(createdOrder, loadOrders());
+        const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
+        if (!createdOrder) {
+          setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+          return;
+        }
+        applyPaymentToOrder(createdOrder);
       })();
       return;
     }
@@ -2017,7 +2048,7 @@ export function PosApp() {
       unsettledOrder;
     if (!targetOrder) return;
 
-    applyPaymentToOrder(targetOrder, orders);
+    applyPaymentToOrder(targetOrder);
   }
 
   function completeOnlinePaidOrder() {
