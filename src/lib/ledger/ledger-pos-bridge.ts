@@ -137,6 +137,9 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   const existingOrders = loadOrders();
   const nextOrders = [posOrder, ...existingOrders.filter((row) => row.id !== posOrder.id)];
   saveOrders(nextOrders);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+  }
 
   if (printJobs.length > 0) {
     savePrintJobs([...printJobs, ...loadPrintJobs()]);

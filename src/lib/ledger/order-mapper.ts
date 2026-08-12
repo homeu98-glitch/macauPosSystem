@@ -18,6 +18,8 @@ export type LedgerOrderRow = {
   item_count?: number | null;
   first_item_name?: string | null;
   merchant_id?: string | null;
+  change_request_type?: string | null;
+  change_request_status?: string | null;
 };
 
 export type LedgerOrderTab = "all" | "dine_in" | "pickup" | "self_delivery";
@@ -40,6 +42,8 @@ export type LedgerOnlineOrder = {
   note?: string;
   itemSummary?: string;
   itemCount?: number;
+  changeRequestType?: string;
+  changeRequestStatus?: string;
 };
 
 export function mapFulfillmentToTab(fulfillmentType: string | null | undefined): Exclude<LedgerOrderTab, "all"> {
@@ -83,6 +87,8 @@ export function mapLedgerOrderRow(row: LedgerOrderRow): LedgerOnlineOrder {
     note: row.note ?? undefined,
     itemSummary: row.first_item_name ?? undefined,
     itemCount: itemCount > 0 ? itemCount : undefined,
+    changeRequestType: row.change_request_type ?? undefined,
+    changeRequestStatus: row.change_request_status ?? undefined,
   };
 }
 
@@ -162,4 +168,17 @@ export function paymentModeLabel(mode?: string): string {
   if (value === "balance") return "餘額扣點";
   if (value === "in_store") return "到店付款";
   return mode ?? "--";
+}
+
+export function hasPendingCancelRequest(order: Pick<LedgerOnlineOrder, "changeRequestType" | "changeRequestStatus">): boolean {
+  const type = String(order.changeRequestType ?? "").toLowerCase();
+  const status = String(order.changeRequestStatus ?? "").toLowerCase();
+  if (!type || !status) return false;
+  if (status !== "pending" && status !== "requested") return false;
+  return type === "cancel" || type.includes("cancel");
+}
+
+export function changeRequestLabel(order: Pick<LedgerOnlineOrder, "changeRequestType" | "changeRequestStatus">): string | null {
+  if (!hasPendingCancelRequest(order)) return null;
+  return "客人申請取消";
 }

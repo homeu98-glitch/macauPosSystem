@@ -6,6 +6,7 @@ import {
   endAcceptInFlight,
   getAcceptIdempotencyKey,
 } from "@/lib/ledger/accept-idempotency";
+import { ensureLedgerSession } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 
 export type AcceptMethod = "deduct" | "in_store" | "status";
@@ -31,6 +32,9 @@ function isInsufficientBalanceError(message: string): boolean {
 }
 
 async function callRpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const accessToken = await ensureLedgerSession();
+  if (!accessToken) throw new Error("Ledger 登入已過期，請重新登入。");
+
   const client = getLedgerSupabaseClient();
   if (!client) throw new Error("Ledger Supabase 尚未設定。");
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { ensureLedgerSession } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { LedgerOrderRow, mapLedgerOrderRow, LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 
@@ -17,6 +18,11 @@ function parseRpcOrderRows(data: unknown): LedgerOrderRow[] {
 }
 
 export async function listMerchantOrders(params: ListMerchantOrdersParams): Promise<LedgerOnlineOrder[]> {
+  const accessToken = await ensureLedgerSession();
+  if (!accessToken) {
+    throw new Error("Ledger 登入已過期，請重新登入。");
+  }
+
   const client = getLedgerSupabaseClient();
   if (!client) {
     throw new Error("Ledger Supabase 尚未設定。");
@@ -52,6 +58,11 @@ export type LedgerOrderDetail = {
 };
 
 export async function getOrderDetail(orderId: string): Promise<LedgerOrderDetail> {
+  const accessToken = await ensureLedgerSession();
+  if (!accessToken) {
+    throw new Error("Ledger 登入已過期，請重新登入。");
+  }
+
   const client = getLedgerSupabaseClient();
   if (!client) {
     throw new Error("Ledger Supabase 尚未設定。");

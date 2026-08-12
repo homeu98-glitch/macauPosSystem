@@ -3,8 +3,8 @@
 import { useEffect, useRef } from "react";
 
 import { LedgerOrderRow, mapLedgerOrderRow } from "@/lib/ledger/order-mapper";
+import { ensureLedgerSession } from "@/lib/ledger/session";
 import { ensureLedgerRealtimeAuth, getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
-import { getLedgerAccessToken } from "@/lib/ledger/session";
 
 type RealtimeHandlers = {
   onInsert: (row: ReturnType<typeof mapLedgerOrderRow>) => void;
@@ -15,6 +15,7 @@ type RealtimeHandlers = {
 
 const RESUBSCRIBE_DEBOUNCE_MS = 3000;
 const RECONNECT_DELAY_MS = 3000;
+const SESSION_RETRY_DELAY_MS = 1500;
 
 export function useLedgerOrdersRealtime(merchantId: string | null, enabled: boolean, handlers: RealtimeHandlers) {
   const handlersRef = useRef(handlers);
@@ -29,6 +30,7 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
     let cancelled = false;
     let reconnectTimer: number | null = null;
     let resubscribeTimer: number | null = null;
+    let sessionRetryTimer: number | null = null;
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     function scheduleResubscribedSync() {
@@ -41,8 +43,15 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
     async function subscribe() {
       if (cancelled || !supabase) return;
 
-      const accessToken = getLedgerAccessToken();
-      if (!accessToken) return;
+      const accessToken = await ensureLedgerSession();
+      if (!accessToken) {
+        if (sessionRetryTimer) window.clearTimeout(sessionRetryTimer);
+        sessionRetryTimer = window.setTimeout(() => {
+          void subscribe();
+        }, SESSION_RETRY_DELAY_MS);
+        handlersRef.current.onStatusChange?.("WAITING_FOR_SESSION");
+        return;
+      }
 
       await ensureLedgerRealtimeAuth(accessToken);
       if (cancelled) return;
@@ -99,6 +108,7 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);
+      if (sessionRetryTimer) window.clearTimeout(sessionRetryTimer);
       if (channel) {
         void supabase.removeChannel(channel);
       }

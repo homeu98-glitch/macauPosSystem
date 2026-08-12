@@ -16,7 +16,9 @@ import {
   updateOrderStatus as updateLedgerOrderStatus,
 } from "@/lib/ledger/order-actions";
 import {
+  changeRequestLabel,
   computeSyncCursor,
+  hasPendingCancelRequest,
   ledgerStatusLabel,
   LedgerOnlineOrder,
   LedgerOrderTab,
@@ -290,9 +292,15 @@ export function OnlineOrders() {
           if (!options?.silent) {
             setToast({ tone: "success", message: "已接單（廚房單建立失敗，可稍後重打）。" });
           }
+          applyOrders(
+            mergeLedgerOrders(ordersRef.current, [{ ...order, status: "accepted", updatedAt: new Date().toISOString() }]),
+          );
           return true;
         }
 
+        applyOrders(
+          mergeLedgerOrders(ordersRef.current, [{ ...order, status: "accepted", updatedAt: new Date().toISOString() }]),
+        );
         if (!options?.silent) {
           setToast({ tone: "success", message: options?.tableId ? `已接單並安排到 ${options.tableName}。` : "已接單並已送廚。" });
         }
@@ -301,7 +309,7 @@ export function OnlineOrders() {
         setActionLoadingKey(null);
       }
     },
-    [],
+    [applyOrders],
   );
 
   useEffect(() => {
@@ -322,7 +330,7 @@ export function OnlineOrders() {
             setToast({ tone: "success", message: `已自動接單：${orderCodeLabel(order)}` });
           }
         })
-        .catch(() => {
+        .finally(() => {
           autoAcceptProcessingRef.current.delete(order.id);
         });
     }
@@ -464,9 +472,14 @@ export function OnlineOrders() {
               onClick={() => void cancelOrder(order)}
               type="button"
             >
-              取消
+              拒單
             </button>
           </>
+        ) : null}
+        {hasPendingCancelRequest(order) ? (
+          <span className={`${btn} bg-rose-50 text-rose-700 ring-1 ring-rose-200`}>
+            {changeRequestLabel(order)}（請至 Ledger Web 確認）
+          </span>
         ) : null}
         {raw === "accepted" ? (
           <button
@@ -647,6 +660,11 @@ export function OnlineOrders() {
                     ) : null}
                   </div>
                   <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
+                  {changeRequestLabel(order) ? (
+                    <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                      {changeRequestLabel(order)}
+                    </div>
+                  ) : null}
                   {order.itemSummary ? (
                     <div className="mt-3 text-xs text-slate-600">
                       {order.itemSummary}
