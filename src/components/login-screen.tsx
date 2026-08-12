@@ -5,7 +5,8 @@ import { KeyboardEvent, useState } from "react";
 
 import { PwaInstallButton } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
-import { saveAuthSession, saveOperatingMode } from "@/lib/storage";
+import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
+import { loadBootstrapCache, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
 
 export function LoginScreen() {
   const router = useRouter();
@@ -69,6 +70,11 @@ export function LoginScreen() {
       };
 
       saveAuthSession(session);
+
+      const cachedBootstrap = loadBootstrapCache();
+      if (cachedBootstrap && session.name) {
+        saveBootstrapCache(applyLedgerMerchantToBootstrap(cachedBootstrap, session));
+      }
 
       const client = getLedgerSupabaseClient();
       if (client && session.ledgerAccessToken && session.ledgerRefreshToken) {

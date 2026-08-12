@@ -9,6 +9,7 @@ import { ItemSpecModal } from "@/components/item-spec-modal";
 import { NumericKeypad } from "@/components/numeric-keypad";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
 import { buildReceiptPrintJobs } from "@/lib/print-jobs";
@@ -99,7 +100,9 @@ const CART_PAYING_ID = "__cart__";
 export function PosApp() {
   const router = useRouter();
   const cachedBootstrapRaw = loadBootstrapCache();
-  const cachedBootstrap = cachedBootstrapRaw ? normalizeBootstrapPayload(cachedBootstrapRaw) : null;
+  const cachedBootstrap = cachedBootstrapRaw
+    ? applyLedgerMerchantToBootstrap(normalizeBootstrapPayload(cachedBootstrapRaw), loadAuthSession())
+    : null;
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
   const [operatingMode] = useState(() => loadOperatingMode());
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
@@ -371,7 +374,8 @@ export function PosApp() {
     async function bootstrapApp() {
       try {
         const response = await fetch("/api/pos/bootstrap");
-        const data = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
+        const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
+        const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
         saveBootstrapCache(data);
         setBootstrap(data);
         setActiveTableId((current) => current || data.tables[0]?.id || "");
@@ -470,6 +474,14 @@ export function PosApp() {
   );
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
+  const displayStoreName = useMemo(
+    () => resolveStoreDisplayTitle(authSession, bootstrap),
+    [authSession, bootstrap],
+  );
+  const displayStoreSubtitle = useMemo(
+    () => resolveStoreDisplaySubtitle(authSession, deviceConfig.terminalName),
+    [authSession, deviceConfig.terminalName],
+  );
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   const floors = localSettings.floors;
   const paymentMethods = localSettings.paymentMethods;
@@ -2365,8 +2377,10 @@ export function PosApp() {
             <div className="border-b border-slate-100 px-4 py-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-base font-semibold text-slate-900">{bootstrap.storeName}</div>
-                  <div className="mt-1 text-xs text-slate-500">{deviceConfig.terminalName}</div>
+                  <div className="text-base font-semibold text-slate-900">{displayStoreName}</div>
+                  {displayStoreSubtitle ? (
+                    <div className="mt-1 text-xs text-slate-500">{displayStoreSubtitle}</div>
+                  ) : null}
                 </div>
                 {isQuickMode ? (
                   <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
