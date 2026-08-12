@@ -584,6 +584,7 @@ export function PosApp() {
     () =>
       openOrders
         .filter((order) => order.tableId === "counter")
+        .filter((order) => !order.onlineOrderId)
         .filter((order) => order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid")
         .filter((order) => order.status !== "paid" || order.fulfillmentStatus !== "ready"),
     [openOrders],
@@ -592,6 +593,7 @@ export function PosApp() {
     () =>
       openOrders
         .filter((order) => order.tableId === "counter")
+        .filter((order) => !order.onlineOrderId)
         .filter((order) => order.status === "paid" && order.fulfillmentStatus === "ready"),
     [openOrders],
   );
@@ -2891,15 +2893,6 @@ export function PosApp() {
               };
               setLocalSettings(nextSettings);
               savePosLocalSettings(nextSettings);
-            }}
-            onBridgedOnlineOrder={(posOrder) => {
-              setOrders((current) => {
-                const next = [posOrder, ...current.filter((item) => item.id !== posOrder.id)];
-                saveOrders(next);
-                return next;
-              });
-              setPrintJobs(loadPrintJobs());
-              setViewingOrderId(posOrder.id);
             }}
             onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
             onMarkReady={(orderId) => updateQuickFulfillment(orderId, "ready")}

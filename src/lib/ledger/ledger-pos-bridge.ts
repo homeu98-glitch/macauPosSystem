@@ -50,7 +50,12 @@ function mapDetailToOrderItems(
   });
 }
 
-function buildPrintJobs(order: PosOrder): PrintJob[] {
+function buildPrintJobsForItems(options: {
+  orderId: string;
+  orderNo: string;
+  tableName: string;
+  items: OrderItem[];
+}): PrintJob[] {
   const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
   const timestamp = new Date().toISOString();
 
@@ -58,18 +63,18 @@ function buildPrintJobs(order: PosOrder): PrintJob[] {
     .filter(
       (printer) =>
         (printer.role === "zone" || printer.role === "label") &&
-        order.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
+        options.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
     )
     .map<PrintJob>((printer) => ({
       id: uid("print"),
-      orderId: order.id,
-      orderNo: order.localOrderNo,
-      tableName: order.tableName,
+      orderId: options.orderId,
+      orderNo: options.orderNo,
+      tableName: options.tableName,
       ticketType: "normal",
       printerGroup: printer.zoneId ?? "",
       printerId: printer.id,
       printerName: printer.name,
-      items: order.items
+      items: options.items
         .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
         .map((item) => ({
           name: item.name,
@@ -80,6 +85,57 @@ function buildPrintJobs(order: PosOrder): PrintJob[] {
       status: resolvePrintJobStatus(true),
       createdAt: timestamp,
     }));
+}
+
+function buildPrintJobs(order: PosOrder): PrintJob[] {
+  return buildPrintJobsForItems({
+    orderId: order.id,
+    orderNo: order.localOrderNo,
+    tableName: order.tableName,
+    items: order.items,
+  });
+}
+
+function resolveQuickPickupTableName(order: LedgerOnlineOrder): string {
+  if (order.tabType === "pickup") return "自取";
+  if (order.tabType === "self_delivery") return "外賣";
+  return "堂食取餐";
+}
+
+function resolveLocalOrderNo(order: LedgerOnlineOrder): string {
+  return (
+    order.pickupCode ??
+    (order.tabType === "pickup"
+      ? `自取-${order.id.slice(0, 6)}`
+      : order.tabType === "self_delivery"
+        ? `外送-${order.id.slice(0, 6)}`
+        : `線上-${order.id.slice(0, 6)}`)
+  );
+}
+
+/** 接單後只送廚房打印，不建立本地 PosOrder。 */
+export async function printKitchenForLedgerOrder(
+  ledgerOrder: LedgerOnlineOrder,
+  detail?: LedgerOrderDetail,
+): Promise<PrintJob[]> {
+  const bootstrap = loadBootstrapCache();
+  const resolvedDetail = detail ?? (await getOrderDetail(ledgerOrder.id));
+  const items = mapDetailToOrderItems(resolvedDetail, bootstrap);
+  const printJobs = buildPrintJobsForItems({
+    orderId: `ledger-${ledgerOrder.id}`,
+    orderNo: resolveLocalOrderNo(ledgerOrder),
+    tableName: resolveQuickPickupTableName(ledgerOrder),
+    items,
+  });
+
+  if (printJobs.length > 0) {
+    savePrintJobs([...printJobs, ...loadPrintJobs()]);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    }
+  }
+
+  return printJobs;
 }
 
 export type BridgeLedgerOrderOptions = {

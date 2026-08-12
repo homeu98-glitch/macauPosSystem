@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { bridgeLedgerOrderToPos } from "@/lib/ledger/ledger-pos-bridge";
+import { printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
 import {
   printReceiptForLedgerOrderOnce,
   printVoidForLedgerOrderOnce,
@@ -12,12 +12,14 @@ import {
 import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
+  setOrderPaidInStore,
   updateOrderStatus,
 } from "@/lib/ledger/order-actions";
 import {
   changeRequestLabel,
   computeSyncCursor,
   hasPendingCancelRequest,
+  ledgerStatusLabel,
   LedgerOnlineOrder,
   mergeLedgerOrders,
   normalizeLedgerStatus,
@@ -26,21 +28,29 @@ import {
   rawLedgerStatus,
   tabLabel,
 } from "@/lib/ledger/order-mapper";
+import {
+  getPrimaryOnlineOrderAction,
+  isActiveOnlineOrder,
+  ledgerStatusBadgeLabel,
+  onlineOrderActionButtonClass,
+  OnlineOrderAction,
+  paymentSummaryLabel,
+} from "@/lib/ledger/online-order-actions";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
-import { loadOrders } from "@/lib/storage";
-import { PosOrder } from "@/lib/types";
 
 type QuickOnlineOrdersPanelProps = {
   currency: string;
   autoAccept: boolean;
-  onAutoAcceptChange: (next: boolean) => void;
-  onBridgedOrder: (posOrder: PosOrder) => void;
+  onAutoAcceptChange?: (next: boolean) => void;
   onToast: (payload: { tone: "success" | "info" | "error"; message: string }) => void;
-  /** 快餐模式：堂食線上單不安排桌台，直接接單送廚 */
+  /** 快餐模式：堂食線上單不安排桌台，出餐口取餐 */
   skipTableAssignment?: boolean;
   layout?: "stack" | "strip";
+  /** strip 模式由外層標題列控制自動接單 */
+  showAutoAcceptControls?: boolean;
+  onRealtimeStatusChange?: (status: string) => void;
   tables?: Array<{ id: string; name: string; floorName: string }>;
 };
 
@@ -48,14 +58,19 @@ function formatMoney(amount: number, currency: string) {
   return `${currency} ${amount.toFixed(0)}`;
 }
 
+function optimisticPatch(order: LedgerOnlineOrder, status: string): LedgerOnlineOrder {
+  return { ...order, status, updatedAt: new Date().toISOString() };
+}
+
 export function QuickOnlineOrdersPanel({
   currency,
   autoAccept,
   onAutoAcceptChange,
-  onBridgedOrder,
   onToast,
   skipTableAssignment = false,
   layout = "stack",
+  showAutoAcceptControls = true,
+  onRealtimeStatusChange,
   tables = [],
 }: QuickOnlineOrdersPanelProps) {
   const merchantId = getLedgerMerchantId();
@@ -65,9 +80,11 @@ export function QuickOnlineOrdersPanel({
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
+  const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
+  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number }> | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState("INIT");
-  const [posOrdersVersion, setPosOrdersVersion] = useState(0);
 
   const ordersRef = useRef<LedgerOnlineOrder[]>([]);
   const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
@@ -77,12 +94,8 @@ export function QuickOnlineOrdersPanel({
   ordersRef.current = orders;
 
   useEffect(() => {
-    function onPosOrdersChanged() {
-      setPosOrdersVersion((value) => value + 1);
-    }
-    window.addEventListener("pos-orders-changed", onPosOrdersChanged);
-    return () => window.removeEventListener("pos-orders-changed", onPosOrdersChanged);
-  }, []);
+    onRealtimeStatusChange?.(realtimeStatus);
+  }, [onRealtimeStatusChange, realtimeStatus]);
 
   useEffect(() => {
     function unlock() {
@@ -120,6 +133,13 @@ export function QuickOnlineOrdersPanel({
     setOrders(next);
     syncCursorRef.current = computeSyncCursor(next);
   }, []);
+
+  const patchOrder = useCallback(
+    (order: LedgerOnlineOrder, status: string) => {
+      applyOrders(mergeLedgerOrders(ordersRef.current, [optimisticPatch(order, status)]));
+    },
+    [applyOrders],
+  );
 
   const loadLedgerOrders = useCallback(
     async (mode: "full" | "incremental" = "full") => {
@@ -232,29 +252,38 @@ export function QuickOnlineOrdersPanel({
     if (!loading) hasInitializedSnapshotRef.current = true;
   }, [loading]);
 
-  const bridgedOrderIds = useMemo(() => {
-    return new Set(
-      loadOrders()
-        .map((order) => order.onlineOrderId)
-        .filter((id): id is string => Boolean(id)),
-    );
-  }, [orders, posOrdersVersion]);
+  useEffect(() => {
+    if (!viewingOrderId) {
+      setDetailItems(null);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    void getOrderDetail(viewingOrderId)
+      .then((detail) => {
+        if (!cancelled) {
+          setDetailItems(detail.items.map((item) => ({ name: item.name, qty: item.qty })));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setDetailItems(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingOrderId]);
 
   const visibleOrders = useMemo(() => {
-    return orders
-      .filter((order) => {
-        const status = rawLedgerStatus(order.status);
-        if (status === "pending") return true;
-        if (status === "cancelled" || status === "completed") return false;
-        return !bridgedOrderIds.has(order.id);
-      })
-      .slice(0, layout === "strip" ? 24 : 16);
-  }, [orders, bridgedOrderIds, layout]);
+    return orders.filter(isActiveOnlineOrder).slice(0, layout === "strip" ? 24 : 16);
+  }, [orders, layout]);
 
-  const runAcceptAndBridge = useCallback(
+  const runAccept = useCallback(
     async (
       order: LedgerOnlineOrder,
-      options?: { tableId?: string; tableName?: string; silent?: boolean },
+      options?: { silent?: boolean; autoStartPreparing?: boolean; tableId?: string; tableName?: string },
     ): Promise<boolean> => {
       setActionLoadingKey(`${order.id}:accept`);
       try {
@@ -270,32 +299,38 @@ export function QuickOnlineOrdersPanel({
         }
 
         const detail = await getOrderDetail(order.id);
-        const { posOrder } = await bridgeLedgerOrderToPos({
-          ledgerOrder: order,
-          tableId: options?.tableId,
-          tableName: options?.tableName,
-          detail,
-        });
+        try {
+          await printKitchenForLedgerOrder(order, detail);
+        } catch {
+          if (!options?.silent) {
+            onToast({ tone: "info", message: "已接單，但廚房單送出失敗，可稍後重打。" });
+          }
+        }
 
-        onBridgedOrder(posOrder);
-        applyOrders(
-          mergeLedgerOrders(ordersRef.current, [{ ...order, status: "accepted", updatedAt: new Date().toISOString() }]),
-        );
+        if (options?.autoStartPreparing) {
+          await updateOrderStatus(order.id, "preparing");
+          patchOrder(order, "preparing");
+        } else {
+          patchOrder(order, "accepted");
+        }
+
         if (!options?.silent) {
           onToast({
             tone: "success",
-            message: options?.tableId ? `已接單並安排到 ${options.tableName}。` : "已接單並已送廚。",
+            message: options?.autoStartPreparing
+              ? `已接單並開始製作：${orderCodeLabel(order)}`
+              : `已接單並已送廚：${orderCodeLabel(order)}`,
           });
         }
         return true;
       } catch (err) {
-        onToast({ tone: "info", message: err instanceof Error ? err.message : "接單失敗" });
+        onToast({ tone: "error", message: err instanceof Error ? err.message : "接單失敗" });
         return false;
       } finally {
         setActionLoadingKey(null);
       }
     },
-    [applyOrders, onBridgedOrder, onToast],
+    [onToast, patchOrder],
   );
 
   useEffect(() => {
@@ -310,7 +345,7 @@ export function QuickOnlineOrdersPanel({
 
     for (const order of pending) {
       autoAcceptProcessingRef.current.add(order.id);
-      void runAcceptAndBridge(order, { silent: true })
+      void runAccept(order, { silent: true, autoStartPreparing: true })
         .then((ok) => {
           if (ok) {
             onToast({ tone: "success", message: `已自動接單：${orderCodeLabel(order)}` });
@@ -320,46 +355,65 @@ export function QuickOnlineOrdersPanel({
           autoAcceptProcessingRef.current.delete(order.id);
         });
     }
-  }, [autoAccept, loading, orders, onToast, runAcceptAndBridge, skipTableAssignment]);
+  }, [autoAccept, loading, onToast, orders, runAccept, skipTableAssignment]);
 
-  async function rejectOrder(order: LedgerOnlineOrder) {
-    const ok = window.confirm("確定拒絕這張線上訂單？");
-    if (!ok) return;
-    setActionLoadingKey(`${order.id}:reject`);
-    try {
-      await updateOrderStatus(order.id, "cancelled");
-      applyOrders(
-        mergeLedgerOrders(ordersRef.current, [{ ...order, status: "cancelled", updatedAt: new Date().toISOString() }]),
-      );
-      printVoidForLedgerOrderOnce(order.id);
-      onToast({ tone: "success", message: "已拒絕訂單。" });
-    } catch (err) {
-      onToast({ tone: "error", message: err instanceof Error ? err.message : "拒絕訂單失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
-  }
+  const runAction = useCallback(
+    async (order: LedgerOnlineOrder, action: OnlineOrderAction) => {
+      if (action.key === "accept") {
+        if (!skipTableAssignment && order.tabType === "dine_in") {
+          setAssigningOrderId(order.id);
+          return;
+        }
+        await runAccept(order);
+        return;
+      }
 
-  async function bridgeExistingOrder(order: LedgerOnlineOrder) {
-    setActionLoadingKey(`${order.id}:bridge`);
-    try {
-      const detail = await getOrderDetail(order.id);
-      const { posOrder } = await bridgeLedgerOrderToPos({ ledgerOrder: order, detail });
-      onBridgedOrder(posOrder);
-      onToast({ tone: "success", message: "已轉入快餐訂單。" });
-    } catch (err) {
-      onToast({ tone: "info", message: err instanceof Error ? err.message : "轉入失敗" });
-    } finally {
-      setActionLoadingKey(null);
-    }
-  }
+      if (action.key === "reject") {
+        const ok = window.confirm("確定拒絕這張線上訂單？");
+        if (!ok) return;
+      }
+
+      setActionLoadingKey(`${order.id}:${action.key}`);
+      try {
+        if (action.key === "mark_paid_in_store") {
+          await setOrderPaidInStore(order.id);
+          await printReceiptForLedgerOrderOnce(order.id, { paymentMethod: "到店付款" });
+          onToast({ tone: "success", message: action.successMessage ?? "已標記到店付款。" });
+          return;
+        }
+
+        if (!action.nextStatus) return;
+
+        await updateOrderStatus(order.id, action.nextStatus);
+
+        if (action.nextStatus === "cancelled") {
+          printVoidForLedgerOrderOnce(order.id);
+          setViewingOrderId(null);
+        }
+        if (action.nextStatus === "completed" && order.paymentStatus === "paid") {
+          await printReceiptForLedgerOrderOnce(order.id, {
+            paymentMethod: paymentModeLabel(order.paymentMode) || "線上已支付",
+          });
+          setViewingOrderId(null);
+        }
+
+        patchOrder(order, action.nextStatus);
+        onToast({ tone: "success", message: action.successMessage ?? "已更新訂單。" });
+      } catch (err) {
+        onToast({ tone: "error", message: err instanceof Error ? err.message : "操作失敗" });
+      } finally {
+        setActionLoadingKey(null);
+      }
+    },
+    [onToast, patchOrder, runAccept, skipTableAssignment],
+  );
 
   async function acceptInStoreFallback(order: LedgerOnlineOrder) {
     setActionLoadingKey(`${order.id}:in-store`);
     try {
       await acceptLedgerOrderInStore(order);
       setBalanceFallbackOrderId(null);
-      await runAcceptAndBridge(order);
+      await runAccept(order, { autoStartPreparing: autoAccept });
     } catch (err) {
       onToast({ tone: "error", message: err instanceof Error ? err.message : "改到店付款失敗" });
     } finally {
@@ -367,14 +421,7 @@ export function QuickOnlineOrdersPanel({
     }
   }
 
-  function startAccept(order: LedgerOnlineOrder) {
-    if (!skipTableAssignment && order.tabType === "dine_in") {
-      setAssigningOrderId(order.id);
-      return;
-    }
-    void runAcceptAndBridge(order);
-  }
-
+  const viewingOrder = viewingOrderId ? orders.find((row) => row.id === viewingOrderId) ?? null : null;
   const assigningOrder = assigningOrderId ? orders.find((row) => row.id === assigningOrderId) ?? null : null;
   const balanceFallbackOrder = balanceFallbackOrderId
     ? orders.find((row) => row.id === balanceFallbackOrderId) ?? null
@@ -382,16 +429,57 @@ export function QuickOnlineOrdersPanel({
 
   const autoAcceptLabel = skipTableAssignment ? "自動接單" : "自動接單（非堂食）";
 
+  function renderModalActions(order: LedgerOnlineOrder) {
+    const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
+    const primary = getPrimaryOnlineOrderAction(order);
+
+    if (hasPendingCancelRequest(order)) return null;
+
+    return (
+      <>
+        {primary ? (
+          <button
+            className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            disabled={busy}
+            onClick={() => void runAction(order, primary)}
+            type="button"
+          >
+            {busy ? "處理中…" : primary.label}
+          </button>
+        ) : null}
+        {rawLedgerStatus(order.status) === "pending" ? (
+          <button
+            className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+            disabled={busy}
+            onClick={() =>
+              void runAction(order, {
+                key: "reject",
+                label: "拒單",
+                tone: "slate",
+                nextStatus: "cancelled",
+                successMessage: "已拒絕訂單。",
+              })
+            }
+            type="button"
+          >
+            拒單
+          </button>
+        ) : null}
+      </>
+    );
+  }
+
+  function renderStackActions(order: LedgerOnlineOrder) {
+    return renderModalActions(order);
+  }
+
   function renderOrderCard(order: LedgerOnlineOrder) {
-    const isPending = rawLedgerStatus(order.status) === "pending";
     const cancelRequest = changeRequestLabel(order);
-    const paymentLabel =
-      order.paymentStatus === "paid"
-        ? `已支付 ${formatMoney(order.paidAmount, currency)}`
-        : paymentModeLabel(order.paymentMode) ?? "未支付";
-    const statusLabel = isPending ? "新單" : "已接單";
+    const paymentLabel = paymentSummaryLabel(order, currency);
+    const statusLabel = ledgerStatusBadgeLabel(order.status, order.fulfillmentType);
     const typeLabel = tabLabel(order.tabType);
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
+    const primary = getPrimaryOnlineOrderAction(order);
 
     if (layout === "strip") {
       return (
@@ -410,40 +498,34 @@ export function QuickOnlineOrdersPanel({
             <div className="mt-1 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">{cancelRequest}</div>
           ) : null}
           {order.itemSummary ? <div className="mt-1 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
-          <div className="mt-3">
-            {isPending ? (
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                  disabled={busy}
-                  onClick={() => startAccept(order)}
-                  type="button"
-                >
-                  {busy ? "處理中…" : "接單"}
-                </button>
-                <button
-                  className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-800 disabled:opacity-60"
-                  disabled={busy}
-                  onClick={() => void rejectOrder(order)}
-                  type="button"
-                >
-                  拒單
-                </button>
-              </div>
-            ) : hasPendingCancelRequest(order) ? (
-              <div className="rounded-xl bg-rose-50 px-3 py-2 text-[10px] font-semibold text-rose-700">
-                請至 Ledger Web 確認取消
-              </div>
-            ) : (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <button
+              className="rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+              onClick={() => setViewingOrderId(order.id)}
+              type="button"
+            >
+              查看
+            </button>
+            {primary && !hasPendingCancelRequest(order) ? (
               <button
-                className="w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                className={onlineOrderActionButtonClass(primary.tone, true)}
                 disabled={busy}
-                onClick={() => void bridgeExistingOrder(order)}
+                onClick={() => void runAction(order, primary)}
                 type="button"
               >
-                {busy ? "處理中…" : "轉入"}
+                {busy ? "處理中…" : primary.label}
               </button>
-            )}
+            ) : null}
+            {rawLedgerStatus(order.status) === "pending" && !hasPendingCancelRequest(order) ? (
+              <button
+                className={onlineOrderActionButtonClass("slate", true)}
+                disabled={busy}
+                onClick={() => void runAction(order, { key: "reject", label: "拒單", tone: "slate", nextStatus: "cancelled", successMessage: "已拒絕訂單。" })}
+                type="button"
+              >
+                拒單
+              </button>
+            ) : null}
           </div>
         </article>
       );
@@ -459,43 +541,18 @@ export function QuickOnlineOrdersPanel({
             <div className="mt-1 text-xs text-slate-500">
               {statusLabel} · {paymentLabel}
             </div>
-            {cancelRequest ? (
-              <div className="mt-1 text-xs font-semibold text-rose-600">{cancelRequest}</div>
-            ) : null}
+            {cancelRequest ? <div className="mt-1 text-xs font-semibold text-rose-600">{cancelRequest}</div> : null}
             {order.itemSummary ? <div className="mt-2 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {isPending ? (
-              <>
-                <button
-                  className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                  disabled={busy}
-                  onClick={() => startAccept(order)}
-                  type="button"
-                >
-                  {busy ? "處理中…" : skipTableAssignment || order.tabType !== "dine_in" ? "接單" : "安排桌台"}
-                </button>
-                <button
-                  className="rounded-2xl bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-800 disabled:opacity-60"
-                  disabled={busy}
-                  onClick={() => void rejectOrder(order)}
-                  type="button"
-                >
-                  拒單
-                </button>
-              </>
-            ) : hasPendingCancelRequest(order) ? (
-              <span className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">待確認取消</span>
-            ) : (
-              <button
-                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                disabled={busy}
-                onClick={() => void bridgeExistingOrder(order)}
-                type="button"
-              >
-                {busy ? "處理中…" : "轉入"}
-              </button>
-            )}
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <button
+              className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+              onClick={() => setViewingOrderId(order.id)}
+              type="button"
+            >
+              查看
+            </button>
+            {renderStackActions(order)}
           </div>
         </div>
       </div>
@@ -504,28 +561,32 @@ export function QuickOnlineOrdersPanel({
 
   return (
     <div className={layout === "strip" ? "grid gap-2" : "grid gap-3"}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="text-xs font-semibold text-slate-500">{autoAcceptLabel}</div>
-          <span
-            className={`truncate text-[10px] font-medium ${
-              realtimeStatus === "SUBSCRIBED" ? "text-emerald-600" : "text-amber-600"
-            }`}
-            title={`Realtime: ${realtimeStatus}`}
-          >
-            {realtimeStatus === "SUBSCRIBED" ? "即時同步中" : "同步連線中…"}
-          </span>
+      {showAutoAcceptControls ? (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="text-xs font-semibold text-slate-500">{autoAcceptLabel}</div>
+            <span
+              className={`truncate text-[10px] font-medium ${
+                realtimeStatus === "SUBSCRIBED" ? "text-emerald-600" : "text-amber-600"
+              }`}
+              title={`Realtime: ${realtimeStatus}`}
+            >
+              {realtimeStatus === "SUBSCRIBED" ? "即時同步中" : "同步連線中…"}
+            </span>
+          </div>
+          {onAutoAcceptChange ? (
+            <button
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                autoAccept ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
+              }`}
+              onClick={() => onAutoAcceptChange(!autoAccept)}
+              type="button"
+            >
+              {autoAccept ? "開" : "關"}
+            </button>
+          ) : null}
         </div>
-        <button
-          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-            autoAccept ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
-          }`}
-          onClick={() => onAutoAcceptChange(!autoAccept)}
-          type="button"
-        >
-          {autoAccept ? "開" : "關"}
-        </button>
-      </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</div>
@@ -581,10 +642,7 @@ export function QuickOnlineOrdersPanel({
                   key={table.id}
                   className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                   onClick={() => {
-                    void runAcceptAndBridge(assigningOrder, {
-                      tableId: table.id,
-                      tableName: table.name,
-                    }).then((ok) => {
+                    void runAccept(assigningOrder, { tableId: table.id, tableName: table.name }).then((ok) => {
                       if (ok) setAssigningOrderId(null);
                     });
                   }}
@@ -625,6 +683,34 @@ export function QuickOnlineOrdersPanel({
           }
         >
           <div className="text-sm text-slate-600">{orderCodeLabel(balanceFallbackOrder)}</div>
+        </ResponsiveModal>
+      ) : null}
+
+      {viewingOrder ? (
+        <ResponsiveModal
+          actions={renderModalActions(viewingOrder)}
+          description={`${orderCodeLabel(viewingOrder)} · ${tabLabel(viewingOrder.tabType)} · ${ledgerStatusLabel(viewingOrder.status, viewingOrder.fulfillmentType)}`}
+          onClose={() => setViewingOrderId(null)}
+          title="線上訂單詳情"
+          widthClassName="max-w-md"
+        >
+          <div className="grid gap-2 text-sm text-slate-700">
+            <div>客戶：{viewingOrder.customerName ?? "--"}</div>
+            <div>電話：{viewingOrder.phone ?? "--"}</div>
+            {viewingOrder.deliveryAddress ? <div>地址：{viewingOrder.deliveryAddress}</div> : null}
+            {viewingOrder.note ? <div>備註：{viewingOrder.note}</div> : null}
+            <div>
+              支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}
+              {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
+            </div>
+            <div className="font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</div>
+            {detailLoading ? <div className="text-slate-500">載入品項…</div> : null}
+            {detailItems?.map((item) => (
+              <div key={`${item.name}-${item.qty}`}>
+                {item.name} × {item.qty}
+              </div>
+            ))}
+          </div>
         </ResponsiveModal>
       ) : null}
     </div>
