@@ -1,10 +1,10 @@
 # 第三方 POS ↔ Ledger 整合（Client 直連 Supabase）
 
-> **位置**：`docs/integration/ledger-client-api.md`（權威副本）  
 > **狀態**：Phase 1 契約 **v2**（2026-08-11）  
+> **權威路徑**：[`pos-ledger-client-api.md`](pos-ledger-client-api.md)（舊 `pos-readonly-client-api.md` 僅留 stub 導向）  
 > **夥伴 repo**：[homeu98-glitch/macauPosSystem](https://github.com/homeu98-glitch/macauPosSystem)（**獨立 Supabase**；店內 POS／打印／帳務由夥伴自理）  
-> **決策依據**：Macau-Ledger ADR-022（訂單狀態機）、ADR-024（client 直連 Supabase）、ADR-025（禁高頻 polling）  
-> **See also**：[生態系模組總覽](./ecosystem-modules.md) · [文檔索引](../README.md)
+> **決策依據**：[ADR-022](../adr/ADR-022-order-system.md)（訂單狀態機）、[ADR-024](../adr/ADR-024-macau-ledger-merchant-android.md)（client 直連 Supabase）、[ADR-025](../adr/ADR-025-cost-and-serverless-optimization.md)（禁高頻 polling、零 Ledger Vercel 增量）  
+> **See also**：[生態系模組總覽](ecosystem-modules.md)
 
 ## 給夥伴的一頁摘要
 
@@ -13,7 +13,7 @@
 | **訂單在哪？** | 會員通**線上**單以 Ledger `orders` 為**唯一權威**；POS 自有 DB 只存店內堂食／設備，**不得**再以 `online_orders` polling 鏡像會員通單。 |
 | **能做什麼？** | **寫**：接單／改狀態／標記到店付款（白名單 RPC，與 Android 相同）。**讀**：報表、菜單、列表、詳情。 |
 | **怎麼更新？** | 訂單頁 **訂閱 Supabase Realtime**（`merchant_id` filter）；重連後 `list_merchant_orders` 增量補洞。**禁止** 6s `setInterval` polling。 |
-| **不能做什麼？** | SiteB 派送、訂單聊天、Ledger Vercel HTTP、Webhook Phase 1、Ledger MQTT 憑證。 |
+| **不能做什麼？** | SiteB 派送、訂單聊天、**Ledger Web 登出／HTTP**、Webhook Phase 1、Ledger MQTT 憑證。 |
 | **需私下取得** | `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`、`AUTH_PIN_PEPPER`。**勿**索取 `SUPABASE_SERVICE_ROLE_KEY`、MQTT 帳密。 |
 
 ---
@@ -46,7 +46,7 @@
 | **顧客改單審核** | `merchant_*_order_change` |
 | **下單** | `create_order`（顧客端） |
 | **Webhook 推送** | Phase 1 **不做**；見 §8 |
-| **Ledger Vercel HTTP** | 不得呼叫 `macau-ledger.vercel.app` 上任何 API／Server Action |
+| **Ledger Vercel HTTP** | 不得呼叫 `macau-ledger.vercel.app` 上任何 API／Server Action（**含登出**） |
 | **Ledger MQTT** | 不向 POS 發 credentials；接單打印走 **POS LAN** |
 | **POS 堂食單寫回 Ledger** | 店內 POS 營收留在 POS DB；Ledger 報表僅含**會員通線上**訂單與記帳 |
 | **定時 polling** | 禁 `setInterval` 拉 `list_merchant_orders`／`merchant_pending_order_count`（Phase 1 以 Realtime 為主；未來 ≥5min count-only 備援非本契約） |
@@ -169,8 +169,21 @@ Ledger **不提供**夥伴可用的 Web 登出 API；**禁止**請求 `macau-led
 |------|------|
 | **登入後持有** | POS 前端或 POS login route 回傳之 Ledger `access_token`／`refresh_token`（或 `@supabase/supabase-js` session） |
 | **RPC／Realtime** | 同一 Ledger Supabase client 實例（或等效 `setSession`／`setAuth`） |
-| **登出（必做）** | ① 離開訂單頁時 **unsubscribe** Realtime channel；② **`supabase.auth.signOut()`**（Ledger 專案 client）；③ 清除 POS **自有** session 快取 |
+| **登出（必做）** | ① 離開訂單頁時 **unsubscribe** Realtime channel；② **`supabase.auth.signOut()`**（Ledger 專案 client）；③ 清除 POS **自有** session 快取（memory／`sessionStorage` 等，**勿**寫入 POS Supabase） |
 | **禁止** | 導向 Ledger Web「登出」、呼叫 Ledger Server Action、只清 POS 本地 UI 而不 `signOut` Ledger Auth |
+| **PWA** | 登入失敗／非店員／空狀態畫面**仍須**提供「登出」與「重新整理」；不可假設使用者能開瀏覽器網址列自救 |
+
+**建議流程（概念）**
+
+```typescript
+async function logoutLedgerSession(supabase: SupabaseClient) {
+  await supabase.removeAllChannels(); // 或逐 channel unsubscribe
+  await supabase.auth.signOut(); // scope 預設 local；多 tab 共用 Ledger session 時可評估 global
+  clearPosLedgerSessionStore(); // 夥伴自有：token、merchantId 等
+}
+```
+
+登出後導回 POS 登入頁；**不得**留在僅顯示錯誤、無法切換帳號的死角畫面（獨立安裝 PWA 常見）。
 
 ---
 
@@ -292,7 +305,7 @@ get_order_detail(p_order_id uuid) → jsonb
 
 #### 5.5.1 狀態機
 
-決策與守衛見 [Macau-Ledger](https://github.com/EricChang1015/Macau-Ledger) ADR-022、migration [`20260707171000_order_status_delivering_flow.sql`](../../supabase/migrations/20260707171000_order_status_delivering_flow.sql)。
+決策與守衛見 [ADR-022 §7](../adr/ADR-022-order-system.md)、migration [`20260707171000_order_status_delivering_flow.sql`](../../supabase/migrations/20260707171000_order_status_delivering_flow.sql)。
 
 **通用（`dine_in`／`takeaway`）— 經 `update_order_status`**
 
@@ -486,7 +499,7 @@ supabase
 | `AUTH_PIN_PEPPER` | **Tier-0 機密**；僅 POS **伺服器** env；與 Ledger 營運方私下交換；不得進 git／前端／log／support 截圖。外洩等同可對**任意** 8 位電話試 PIN 派生 Auth 密碼 |
 | PIN 明文 | 僅用於登入請求當下；**不得** log、持久化、送 analytics |
 | `service_role` | POS **不得**索取或使用 Ledger service_role |
-| Session token | 存於商戶裝置；POS 自有後端若代理登入，不得將 token 寫入可公開查詢的 POS DB；登出須清除 client session |
+| Session token | 存於商戶裝置；POS 自有後端若代理登入，不得將 token 寫入可公開查詢的 POS DB；**登出僅 POS 端** `auth.signOut`（§4.4），**不可**用 Ledger Web 登出 |
 | 夥伴 login route | **HTTPS only**；須自建 **rate limit**（Ledger `auth_throttle`／`checkPhone` **不**套用於夥伴 Vercel login） |
 
 ### 7.2 個資（對齊條款 §6）
@@ -518,7 +531,7 @@ v2 白名單 RPC 可對該店 pending 餘額單**扣點**、改狀態、取消�
 | HiveMQ `jobs` 打印 | 接單 `accepted`、取消 `print_kind=cancel` | **通常不觸發** |
 | 顧客 Web Push | `notifyOrderStatusPush` | **不觸發** |
 
-**POS 須自行**：接單／取消後 **LAN 出單**（若需要）；顧客推播由 Ledger Web／callback 路徑負責。Android 對照：[macau-ledger-merchant](https://github.com/EricChang1015/macau-ledger-merchant) — Realtime + 本地打印。
+**POS 須自行**：接單／取消後 **LAN 出單**（若需要）；顧客推播由 Ledger Web／callback 路徑負責。Android 對照：[ADR-024](../adr/ADR-024-macau-ledger-merchant-android.md) — Realtime + 本地打印。
 
 ---
 
@@ -554,8 +567,10 @@ v2 白名單 RPC 可對該店 pending 餘額單**扣點**、改狀態、取消�
 | 10 | 派送 | POS 無 SiteB 派送按鈕／API |
 | 11 | 打印 | 接單後 POS 自行 LAN 出單（若需要） |
 | 12 | 報表理解 | POS UI 標示「線上訂單／會員通」；不含店內 POS 現金單 |
-| 13 | 登入 | 非店員帳號無法讀取他店資料 |
+| 13 | 登入 | 非店員帳號無法讀取他店資料；`merchant_staff` 查 **`staff_role`** 非 `role` |
 | 14 | Realtime 節流 | `SUBSCRIBED` 增量 RPC 有 debounce；DevTools 可見離頁 channel 關閉 |
+| 15 | 登出 | 僅 POS 端 Realtime unsubscribe + `auth.signOut` + 清自有 session；**無** Ledger HTTP |
+| 16 | PWA 死角 | 錯誤／未綁定店員畫面仍有登出／重新整理 |
 
 ---
 
@@ -568,6 +583,7 @@ v2 白名單 RPC 可對該店 pending 餘額單**扣點**、改狀態、取消�
 3. 操作按鈕改呼叫 **§5.5 白名單 RPC**（狀態值對齊 ADR-022，勿自創 enum）。
 4. 保留 POS DB 給店內堂食、設備、**LAN 打印**。
 5. PWA 常開 tab 適合 Realtime；**不需**商戶 FCM（Web Push 為顧客端，見 ADR-027）。
+6. 登入查 `merchant_staff.staff_role`（**非** `role`）；登出僅 POS 端 session（§4.4），勿用 Ledger Web。
 
 ---
 
@@ -575,9 +591,9 @@ v2 白名單 RPC 可對該店 pending 餘額單**扣點**、改狀態、取消�
 
 | 文件 | 說明 |
 |------|------|
-| [Macau-Ledger ADR-022](https://github.com/EricChang1015/Macau-Ledger) | 訂單狀態機、付款模式 |
-| [macau-ledger-merchant](https://github.com/EricChang1015/macau-ledger-merchant) | Android 直連 Supabase、RPC 對照 |
-| [ecosystem-modules.md](./ecosystem-modules.md) | 生態系總覽 |
+| [ADR-022](../adr/ADR-022-order-system.md) | 訂單狀態機、付款模式 |
+| [ADR-024](../adr/ADR-024-macau-ledger-merchant-android.md) | Android 直連 Supabase、RPC 對照 |
+| [ADR-025 §K](../adr/ADR-025-cost-and-serverless-optimization.md) | egress／polling 成本 |
 | [architecture.md §4](../architecture.md) | RPC 索引 |
 | 夥伴 [integration-guide.md](https://github.com/homeu98-glitch/macauPosSystem/blob/main/docs/integration-guide.md) | POS 端 mock API（**僅供 POS 內部**；對 Ledger 以**本文件**為準） |
 
@@ -585,8 +601,8 @@ v2 白名單 RPC 可對該店 pending 餘額單**扣點**、改狀態、取消�
 
 ## 附：給夥伴的對外訊息草稿
 
-> 整合契約 **v2（訂單可寫 + Realtime）** 權威文件：[`ledger-client-api.md`](./ledger-client-api.md)
+> 整合契約 **v2（訂單可寫 + Realtime）** 權威文件：[`docs/integration/pos-ledger-client-api.md`](pos-ledger-client-api.md)（舊路徑 `pos-readonly-client-api.md` 為 stub）。
 >
-> **重點**：會員通線上單以 Ledger `orders` 為權威；請停止 `online_orders` polling。訂單頁訂閱 Supabase Realtime（`merchant_id` filter + `realtime.setAuth`），接單／改狀態用白名單 RPC（與 Android 相同）；`accept_order_with_deduct` 同一操作重試須**重用** `p_idempotency_key`。報表與菜單仍唯讀。SiteB 派送、Webhook、Ledger HTTP 仍不在 Phase 1。
+> **重點**：會員通線上單以 Ledger `orders` 為權威；請停止 `online_orders` polling。訂單頁訂閱 Supabase Realtime（`merchant_id` filter + `realtime.setAuth`），接單／改狀態用白名單 RPC；`accept_order_with_deduct` 同一操作重試須**重用** `p_idempotency_key`。登入後查 `merchant_staff.staff_role`（**勿**用不存在的 `role` 欄）。**登出僅 POS 端**（unsubscribe + `auth.signOut` + 清自有 session），**不可**呼叫 Ledger Web。報表與菜單仍唯讀。
 >
 > 請依文檔 §5 狀態機與 §6 同步流程實作，並用 §9 驗收清單自測。

@@ -32,7 +32,9 @@ export async function signOutLedgerSession(): Promise<void> {
   const client = getLedgerSupabaseClient();
   if (client) {
     try {
-      await client.auth.signOut();
+      const channels = client.getChannels();
+      await Promise.all(channels.map((channel) => client.removeChannel(channel)));
+      await client.auth.signOut({ scope: "local" });
     } catch {
       // ignore
     }
