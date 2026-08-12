@@ -11,7 +11,8 @@
 | 文檔 | 說明 | 何時閱讀 |
 |------|------|----------|
 | [main-system-integration.md](./main-system-integration.md) | POS 自有後台 API 對接（bootstrap、sync、device-config） | 接主系統 REST / POS Supabase |
-| [ledger-client-api.md](./ledger-client-api.md) | **澳門會員通 Ledger** 直連 Supabase 契約 v2 | 登入、線上訂單、報表 |
+| [ledger-client-api.md](./ledger-client-api.md) | **澳門會員通 Ledger** 直連 Supabase 契約 v2 | 登入、線上訂單、報表、菜單對照 |
+| [ledger-client-api-v2-source.md](./ledger-client-api-v2-source.md) | Ledger 官方 v2 契約原文（2026-08-11） | 與 Ledger 團隊對齊時參考 |
 | [ecosystem-modules.md](./ecosystem-modules.md) | 整個生態系（Ledger、Android、充值、派送） | 理解跨 repo 關係 |
 
 ---
@@ -44,8 +45,10 @@
 |------|----------|
 | 商戶登入 POS | Ledger → `/api/ledger/login` |
 | 接線上訂單 | Ledger RPC + Realtime |
+| Ledger 線上報表 | `get_merchant_report_summary`（報表頁） |
+| Ledger 線上菜單對照 | `list_merchant_order_menu`（設置 → 菜單 → 參考匯入） |
 | 店內堂食單上雲 | POS `/api/pos/sync` |
-| 菜單下發 | `/api/pos/bootstrap`（待接主系統） |
+| 店內堂食菜單 | `/api/pos/bootstrap` 或設置頁本地維護（**非** Ledger 全量匯入） |
 | 打印配置回寫 | `/api/pos/device-config` |
 | 了解充值/派送 | ecosystem-modules.md |
 

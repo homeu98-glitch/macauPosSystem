@@ -56,6 +56,7 @@
 | 規格模板 | 可複用規格組 |
 | 常用備註 | 預設備註詞 |
 | 菜單維護 | 本地菜品編輯（覆蓋） |
+| **Ledger 參考匯入** | 設置 → 菜單 →「從 Ledger 參考匯入」 |
 | 桌台 / 樓層 | 堂食布局 |
 | 支付方式 | 自由文字列表 |
 | 線上訂單 | 自動接單開關 |
@@ -137,9 +138,21 @@ Tab：待接、製作中、待取餐、已完成、已取消
 
 **元件**：`reports-dashboard.tsx`
 
-- Ledger `get_merchant_report_summary` RPC
-- 區間營業額、訂單數摘要
-- 僅含**會員通線上**訂單（不含店內 POS 單）
+| 區塊 | 資料來源 | 說明 |
+|------|----------|------|
+| 會員通線上 | Ledger `get_merchant_report_summary` | 線上訂單數、已付營業額、餘額扣點、到店付、充值／扣點記帳 |
+| 店內堂食 | 本機 `PosOrder`（可選 `/api/pos/orders` 合併） | 快餐／堂食現金單；**不含** Ledger 線上單 |
+
+---
+
+## 菜單：Ledger vs POS 本地
+
+| 來源 | 用途 | 狀態 |
+|------|------|------|
+| **POS 本地**（設置 → 菜單維護、`/api/pos/bootstrap`） | 店內收銀點單、打印分區 | 已可用 |
+| **Ledger** `list_merchant_order_menu` | 線上菜單／分類／**售罄對照**（唯讀） | ✅ 設置頁一鍵參考匯入 |
+
+> Phase 1 **不**把 Ledger 菜單全量匯入取代 POS 本地菜單；Ledger RPC 主要供線上單品項對照與售罄同步。詳見 [integration/ledger-client-api.md §5.3](./integration/ledger-client-api.md)。
 
 ---
 

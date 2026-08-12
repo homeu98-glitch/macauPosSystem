@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
+import { restoreLedgerSession } from "@/lib/ledger/session";
 import { loadOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 
@@ -15,6 +17,33 @@ export function ReportsDashboard() {
   const [range, setRange] = useState<"all" | "yesterday" | "7d" | "30d">("30d");
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
+  const [ledgerSummary, setLedgerSummary] = useState<LedgerReportSummary | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadLedgerSummary() {
+      setLedgerLoading(true);
+      setLedgerError(null);
+      try {
+        const restored = await restoreLedgerSession();
+        if (!restored) {
+          setLedgerSummary(null);
+          setLedgerError("尚未登入 Ledger，無法讀取會員通線上報表。");
+          return;
+        }
+        const summary = await getMerchantReportSummary(range);
+        setLedgerSummary(summary);
+      } catch (err) {
+        setLedgerSummary(null);
+        setLedgerError(err instanceof Error ? err.message : "讀取 Ledger 報表失敗");
+      } finally {
+        setLedgerLoading(false);
+      }
+    }
+
+    void loadLedgerSummary();
+  }, [range]);
 
   useEffect(() => {
     async function loadOrdersFromApi() {
@@ -155,7 +184,9 @@ export function ReportsDashboard() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-slate-900">報表</div>
-                <div className="mt-1 text-sm text-slate-500">讓商家查看今天或最近 30 天營業額。</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  店內堂食（本機）與會員通線上訂單（Ledger）分開統計。
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 {[
@@ -187,6 +218,58 @@ export function ReportsDashboard() {
           </div>
 
           <div className="flex-1 overflow-auto p-4">
+            <section className="mb-4 rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-base font-semibold text-slate-900">會員通線上（Ledger）</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    來源：`get_merchant_report_summary` · 不含店內現金堂食單
+                  </div>
+                </div>
+                {ledgerLoading ? <div className="text-xs text-slate-500">載入中…</div> : null}
+              </div>
+
+              {ledgerError ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800">
+                  {ledgerError}
+                </div>
+              ) : ledgerSummary ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                  <article className="rounded-xl border border-orange-100 bg-white p-4">
+                    <div className="text-xs text-slate-500">線上訂單數</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">{ledgerSummary.orderCount}</div>
+                  </article>
+                  <article className="rounded-xl border border-orange-100 bg-white p-4">
+                    <div className="text-xs text-slate-500">已付線上營業額</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">
+                      {formatMoney(ledgerSummary.orderPaidMop)}
+                    </div>
+                  </article>
+                  <article className="rounded-xl border border-orange-100 bg-white p-4">
+                    <div className="text-xs text-slate-500">餘額扣點</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">
+                      {formatMoney(ledgerSummary.orderBalancePaidMop)}
+                    </div>
+                  </article>
+                  <article className="rounded-xl border border-orange-100 bg-white p-4">
+                    <div className="text-xs text-slate-500">到店／貨到付款</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">
+                      {formatMoney(ledgerSummary.orderInStorePaidMop)}
+                    </div>
+                  </article>
+                  <article className="rounded-xl border border-orange-100 bg-white p-4">
+                    <div className="text-xs text-slate-500">充值記帳</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">{formatMoney(ledgerSummary.topupMop)}</div>
+                  </article>
+                  <article className="rounded-xl border border-orange-100 bg-white p-4">
+                    <div className="text-xs text-slate-500">扣點記帳</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">{formatMoney(ledgerSummary.deductMop)}</div>
+                  </article>
+                </div>
+              ) : null}
+            </section>
+
+            <div className="mb-2 text-sm font-semibold text-slate-700">店內堂食（本機 POS）</div>
             <div className="grid gap-3 md:grid-cols-3">
               <article className="rounded-2xl border border-slate-200 bg-white p-5">
                 <div className="text-sm text-slate-500">營業額</div>

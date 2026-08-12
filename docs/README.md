@@ -43,6 +43,7 @@ docs/
 │   ├── README.md                  ← 整合文檔索引
 │   ├── main-system-integration.md ← POS 自有後台 API 對接
 │   ├── ledger-client-api.md       ← 澳門會員通 Ledger 直連契約
+│   ├── ledger-client-api-v2-source.md ← Ledger 官方 v2 原文備份
 │   └── ecosystem-modules.md       ← 整個生態系模組關係
 ├── reviews/
 │   └── functional-review.md       ← 功能成熟度與上線建議

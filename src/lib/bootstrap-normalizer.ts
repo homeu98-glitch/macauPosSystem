@@ -6,7 +6,7 @@ function asRecord(value: unknown): UnknownRecord | null {
   return value && typeof value === "object" ? (value as UnknownRecord) : null;
 }
 
-function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
+export function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
   if (!Array.isArray(raw)) return undefined;
 
   const groups = raw

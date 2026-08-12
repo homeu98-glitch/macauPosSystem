@@ -11,15 +11,24 @@ import {
   loadDeviceConfig,
   loadPosLocalSettings,
   loadQueue,
+  loadSoldOutState,
   normalizeDeviceConfig,
   normalizePosLocalSettings,
   saveBootstrapCache,
   saveDeviceConfig,
   savePosLocalSettings,
   saveQueue,
+  saveSoldOutState,
 } from "@/lib/storage";
 import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosLocalSettings, QueueEvent } from "@/lib/types";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
+import { fetchLedgerOrderMenu, LedgerOrderMenu } from "@/lib/ledger/menu";
+import {
+  LedgerMenuImportPreview,
+  mergeLedgerMenuReference,
+  previewLedgerMenuImport,
+} from "@/lib/ledger/menu-import";
+import { restoreLedgerSession } from "@/lib/ledger/session";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -42,6 +51,12 @@ export function DeviceSettings() {
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
   const [menuSyncing, setMenuSyncing] = useState(false);
+  const [ledgerImportOpen, setLedgerImportOpen] = useState(false);
+  const [ledgerImportLoading, setLedgerImportLoading] = useState(false);
+  const [ledgerImportApplying, setLedgerImportApplying] = useState(false);
+  const [ledgerImportPreview, setLedgerImportPreview] = useState<LedgerMenuImportPreview | null>(null);
+  const [ledgerMenuPending, setLedgerMenuPending] = useState<LedgerOrderMenu | null>(null);
+  const [ledgerImportError, setLedgerImportError] = useState<string | null>(null);
   const [syncingConfig, setSyncingConfig] = useState(false);
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
   const [menuSubTab, setMenuSubTab] = useState<"categories" | "specs" | "items">("items");
@@ -101,6 +116,58 @@ export function DeviceSettings() {
   function saveTablesLocal() {
     savePosLocalSettings(localSettings);
     setStatus("已保存樓層與桌台到本機。");
+  }
+
+  async function beginLedgerMenuImport() {
+    setLedgerImportLoading(true);
+    setLedgerImportError(null);
+    try {
+      const restored = await restoreLedgerSession();
+      if (!restored) {
+        throw new Error("請先登入 POS（Ledger 商戶帳號）。");
+      }
+      const ledgerMenu = await fetchLedgerOrderMenu();
+      if (!ledgerMenu.enabled) {
+        throw new Error("Ledger 線上點餐未啟用，無法匯入。");
+      }
+      if (ledgerMenu.categories.length === 0 && ledgerMenu.products.length === 0) {
+        throw new Error("Ledger 返回空菜單，請先在會員通後台設定線上菜品。");
+      }
+      setLedgerMenuPending(ledgerMenu);
+      setLedgerImportPreview(previewLedgerMenuImport(menuDraft, ledgerMenu));
+      setLedgerImportOpen(true);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "讀取 Ledger 菜單失敗。");
+    } finally {
+      setLedgerImportLoading(false);
+    }
+  }
+
+  async function applyLedgerMenuImport() {
+    if (!ledgerMenuPending) return;
+    setLedgerImportApplying(true);
+    setLedgerImportError(null);
+    try {
+      const { bootstrap, soldOut, stats } = mergeLedgerMenuReference(
+        menuDraft,
+        ledgerMenuPending,
+        loadSoldOutState(),
+      );
+      setMenuDraft(bootstrap);
+      saveBootstrapCache(bootstrap);
+      saveSoldOutState(soldOut);
+      window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: soldOut } }));
+      setLedgerImportOpen(false);
+      setLedgerMenuPending(null);
+      setLedgerImportPreview(null);
+      setStatus(
+        `已從 Ledger 參考匯入：${stats.ledgerCategoryCount} 分類、${stats.ledgerProductCount} 菜品（新增 ${stats.itemsAdded}、更新 ${stats.itemsUpdated}）；同步售罄 ${stats.soldOutCount} 項。請再按「保存菜單」寫入後台。`,
+      );
+    } catch (err) {
+      setLedgerImportError(err instanceof Error ? err.message : "匯入失敗。");
+    } finally {
+      setLedgerImportApplying(false);
+    }
   }
 
   useEffect(() => {
@@ -1184,10 +1251,19 @@ export function DeviceSettings() {
               <div>
                 <div className="text-base font-semibold text-slate-900">菜單</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  這裡是本店菜單資料來源。可修改分類、菜品、價格與規格，並保存到後台。
+                  本店菜單以 POS 為準。可從 Ledger 一鍵參考匯入線上菜品（名稱／價格／售罄），本地自建菜品會保留。
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  aria-busy={ledgerImportLoading}
+                  disabled={ledgerImportLoading || menuSaving || menuSyncing}
+                  onClick={() => void beginLedgerMenuImport()}
+                  type="button"
+                >
+                  {ledgerImportLoading ? "讀取 Ledger…" : "從 Ledger 參考匯入"}
+                </button>
                 <button
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                   aria-busy={menuSyncing}
@@ -1756,6 +1832,81 @@ export function DeviceSettings() {
               </button>
             </div>
           </section>
+        ) : null}
+
+        {ledgerImportOpen && ledgerImportPreview ? (
+          <ResponsiveModal
+            actions={
+              <>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  disabled={ledgerImportApplying}
+                  onClick={() => {
+                    setLedgerImportOpen(false);
+                    setLedgerMenuPending(null);
+                    setLedgerImportPreview(null);
+                    setLedgerImportError(null);
+                  }}
+                  type="button"
+                >
+                  取消
+                </button>
+                <button
+                  className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  aria-busy={ledgerImportApplying}
+                  disabled={ledgerImportApplying}
+                  onClick={() => void applyLedgerMenuImport()}
+                  type="button"
+                >
+                  {ledgerImportApplying ? "匯入中…" : "確認匯入"}
+                </button>
+              </>
+            }
+            description="僅合併 Ledger 線上菜品至本機草稿；不會刪除你手動建立的本地菜品。匯入後請再按「保存菜單」。"
+            onClose={() => {
+              if (ledgerImportApplying) return;
+              setLedgerImportOpen(false);
+              setLedgerMenuPending(null);
+              setLedgerImportPreview(null);
+              setLedgerImportError(null);
+            }}
+            title="從 Ledger 參考匯入菜單"
+            widthClassName="max-w-lg"
+          >
+            <div className="grid gap-3 text-sm text-slate-700">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                Ledger 線上：{ledgerImportPreview.ledgerCategoryCount} 個分類、
+                {ledgerImportPreview.ledgerProductCount} 個菜品
+                {ledgerImportPreview.openNow ? " · 現正營業" : " · 非營業時段"}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
+                  <div className="text-xs text-slate-500">新增菜品</div>
+                  <div className="text-xl font-semibold text-slate-900">{ledgerImportPreview.itemsAdded}</div>
+                </div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2">
+                  <div className="text-xs text-slate-500">更新菜品</div>
+                  <div className="text-xl font-semibold text-slate-900">{ledgerImportPreview.itemsUpdated}</div>
+                </div>
+                <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2">
+                  <div className="text-xs text-slate-500">Ledger 售罄</div>
+                  <div className="text-xl font-semibold text-slate-900">{ledgerImportPreview.soldOutCount}</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-xs text-slate-500">分類新增／更新</div>
+                  <div className="text-xl font-semibold text-slate-900">
+                    {ledgerImportPreview.categoriesAdded} / {ledgerImportPreview.categoriesUpdated}
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500">
+                匯入的 Ledger 菜品 ID 會帶 <code className="rounded bg-slate-100 px-1">ledger-</code> 前綴，方便與線上訂單對照；打印分區沿用既有設定（新菜默認 kitchen）。
+              </p>
+              {ledgerImportError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-red-800">{ledgerImportError}</div>
+              ) : null}
+            </div>
+          </ResponsiveModal>
         ) : null}
 
         {specEditor.open ? (

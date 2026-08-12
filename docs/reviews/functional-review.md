@@ -99,7 +99,9 @@
 
 ## 近期已完成的優化（2026-08）
 
-- Ledger 登入 + Realtime 線上訂單（v2 契約）
+- Ledger 登入 + Realtime 線上訂單（v2 契約，`staff_role` 修正）
+- 報表頁接入 Ledger `get_merchant_report_summary`
+- 設置頁 Ledger 菜單一鍵參考匯入（`list_merchant_order_menu`）
 - 設置頁滾動與可見性
 - 菜品打印設置可操作性
 - 規格模板複用、規格彈窗滾動
