@@ -1,136 +1,152 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
-import { ResponsiveModal } from "@/components/responsive-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
-import { loadMembers, saveMembers } from "@/lib/storage";
-import { MemberCoupon, MemberProfile } from "@/lib/types";
+import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
+import {
+  avosToMop,
+  formatGrantExpiry,
+  grantStatusLabel,
+  grantTypeLabel,
+  isGrantActive,
+  LedgerMemberGrantRecord,
+  LedgerMemberProfile,
+} from "@/lib/ledger/member-types";
+import { lookupCustomerWallet } from "@/lib/ledger/members";
+import { listCustomerRewardGrants } from "@/lib/ledger/rewards";
+import { getLedgerMerchantId } from "@/lib/ledger/session";
+import { clearLegacyMembersCache } from "@/lib/storage";
+import { useNetworkOnline } from "@/lib/use-network-online";
 
 function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
 }
 
-function couponSummary(coupons: MemberCoupon[]) {
-  const now = Date.now();
-  const available = coupons.filter((coupon) => !coupon.usedAt && (!coupon.expiresAt || Date.parse(coupon.expiresAt) > now));
-  const used = coupons.filter((coupon) => Boolean(coupon.usedAt));
-  return { available: available.length, used: used.length, total: coupons.length };
+function grantSections(grants: LedgerMemberGrantRecord[]) {
+  const active = grants.filter(isGrantActive);
+  const inactive = grants.filter((grant) => !isGrantActive(grant));
+  return { active, inactive };
+}
+
+function GrantList({
+  emptyLabel,
+  grants,
+}: {
+  emptyLabel: string;
+  grants: LedgerMemberGrantRecord[];
+}) {
+  if (grants.length === 0) {
+    return <div className="text-sm text-slate-500">{emptyLabel}</div>;
+  }
+
+  return (
+    <div className="grid gap-2">
+      {grants.map((grant) => (
+        <div
+          key={grant.grantId}
+          className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3"
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">{grant.title}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              {grantTypeLabel(grant.prizeType)}
+              {grant.prizeType === "money_voucher"
+                ? ` · ${formatMoney(avosToMop(grant.rewardAmountAvos))}`
+                : null}
+              {" · "}
+              到期 {formatGrantExpiry(grant.expiresAt)}
+            </div>
+          </div>
+          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+            {grantStatusLabel(grant.status)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function MembersPage() {
+  const networkOnline = useNetworkOnline();
+  const offlineMode = !networkOnline;
   const [phone, setPhone] = useState("");
-  const [members, setMembers] = useState<MemberProfile[]>(() => loadMembers());
-  const [rechargeValues, setRechargeValues] = useState<Record<string, string>>({});
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState("");
-  const [createPhone, setCreatePhone] = useState("");
-  const [createHint, setCreateHint] = useState("");
-  const [creatingMember, setCreatingMember] = useState(false);
-  const [rechargingMemberId, setRechargingMemberId] = useState<string | null>(null);
-  const [padTarget, setPadTarget] = useState<string>("search");
-
-  useEffect(() => {
-    async function load() {
-      const response = await fetch(`/api/members${phone ? `?phone=${phone}` : ""}`);
-      const payload = (await response.json()) as { members: MemberProfile[] };
-      setMembers(payload.members ?? []);
-      if (!phone) {
-        saveMembers(payload.members ?? []);
-      }
-    }
-
-    void load();
-  }, [phone]);
+  const [member, setMember] = useState<LedgerMemberProfile | null>(null);
+  const [searchHint, setSearchHint] = useState("");
+  const [searching, setSearching] = useState(false);
+  const searchTimerRef = useRef<number | null>(null);
 
   const validSearch = useMemo(() => phone.length === 0 || /^\d{0,8}$/.test(phone), [phone]);
+  const grantGroups = useMemo(
+    () => (member ? grantSections(member.allGrants) : { active: [], inactive: [] }),
+    [member],
+  );
+  const paidBalanceAvos = member ? Math.max(0, member.balanceAvos - member.giftBalanceAvos) : 0;
 
-  function rechargeMember(memberId: string) {
-    const amount = Number(rechargeValues[memberId] ?? 0);
-    if (!Number.isFinite(amount) || amount <= 0) return;
-    if (rechargingMemberId) return;
-    void (async () => {
-      setRechargingMemberId(memberId);
-      try {
-        const response = await fetch("/api/members", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "recharge", memberId, amount }),
-        });
-        const payload = (await response.json()) as { member?: MemberProfile };
-        const nextMembers = members.map((member) => (member.id === memberId ? payload.member ?? member : member));
-        setMembers(nextMembers);
-        saveMembers(nextMembers);
-        setRechargeValues((current) => ({ ...current, [memberId]: "" }));
-      } catch {
-        const nextMembers = members.map((member) =>
-          member.id === memberId ? { ...member, balance: member.balance + amount } : member,
-        );
-        setMembers(nextMembers);
-        saveMembers(nextMembers);
-        setRechargeValues((current) => ({ ...current, [memberId]: "" }));
-      } finally {
-        setRechargingMemberId(null);
+  useEffect(() => {
+    clearLegacyMembersCache();
+    return () => {
+      if (searchTimerRef.current) {
+        window.clearTimeout(searchTimerRef.current);
       }
-    })();
-  }
+    };
+  }, []);
 
-  async function createMember() {
-    if (creatingMember) return;
-    setCreatingMember(true);
-    setCreateHint("");
-    const name = createName.trim();
-    const phoneValue = createPhone.replace(/\D/g, "").slice(0, 8);
-    if (!name || !/^\d{8}$/.test(phoneValue)) {
-      setCreateHint("請填寫姓名及 8 位手機號碼。");
+  function scheduleLookup(nextPhone: string) {
+    if (searchTimerRef.current) {
+      window.clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+
+    if (nextPhone.length !== 8) {
+      setSearching(false);
+      setMember(null);
+      setSearchHint("");
       return;
     }
 
-    try {
-      const response = await fetch("/api/members", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create", name, phone: phoneValue }),
-      });
-      const payload = (await response.json()) as { ok: boolean; member?: MemberProfile; error?: string };
-      if (!payload.ok || !payload.member) {
-        throw new Error(payload.error ?? "新增失敗");
-      }
+    searchTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        if (offlineMode) {
+          setMember(null);
+          setSearchHint("會員查詢須連線，請恢復網絡後再試。");
+          return;
+        }
 
-      const nextMembers = [payload.member, ...members];
-      setMembers(nextMembers);
-      saveMembers(nextMembers);
-      setCreateName("");
-      setCreatePhone("");
-      setCreateOpen(false);
-    } catch (err) {
-      setCreateHint(err instanceof Error ? err.message : "新增會員失敗");
-    } finally {
-      setCreatingMember(false);
-    }
+        const merchantId = getLedgerMerchantId();
+        if (!merchantId) {
+          setMember(null);
+          setSearchHint("無法取得商家 ID，請重新登入。");
+          return;
+        }
+
+        setSearching(true);
+        setSearchHint("");
+        try {
+          const wallet = await lookupCustomerWallet(merchantId, nextPhone);
+          if (!wallet.registered || !wallet.customerId) {
+            setMember(null);
+            setSearchHint("此電話尚未註冊會員通，請顧客先登入會員通或聯絡店主。");
+            return;
+          }
+
+          const allGrants = await listCustomerRewardGrants(merchantId, wallet.customerId);
+          setMember({ ...wallet, allGrants });
+        } catch (error) {
+          setMember(null);
+          setSearchHint(friendlyLedgerMemberError(error instanceof Error ? error.message : String(error)));
+        } finally {
+          setSearching(false);
+        }
+      })();
+    }, 300);
   }
 
-  const selectedMemberForPad =
-    padTarget.startsWith("recharge:") ? members.find((member) => member.id === padTarget.replace("recharge:", "")) ?? null : null;
-
-  const padValue =
-    padTarget === "search"
-      ? phone
-      : selectedMemberForPad
-        ? rechargeValues[selectedMemberForPad.id] ?? ""
-        : "";
-
-  function updatePadValue(value: string) {
-    if (padTarget === "search") {
-      setPhone(value.replace(/\D/g, "").slice(0, 8));
-      return;
-    }
-
-    if (selectedMemberForPad) {
-      const normalized = value.replace(/[^\d.]/g, "");
-      setRechargeValues((current) => ({ ...current, [selectedMemberForPad.id]: normalized }));
-    }
+  function handlePhoneChange(value: string) {
+    const normalized = value.replace(/\D/g, "").slice(0, 8);
+    setPhone(normalized);
+    scheduleLookup(normalized);
   }
 
   return (
@@ -140,168 +156,106 @@ export function MembersPage() {
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="text-lg font-semibold text-slate-900">會員</div>
-            <div className="mt-1 text-sm text-slate-500">搜尋手機號碼 8 位數字，查看會員餘額、優惠券與充值。</div>
+            <div className="mt-1 text-sm text-slate-500">
+              輸入 8 位手機號碼查詢 Ledger 會員餘額與獎賞券（須連線；資料不會儲存於本機）。
+            </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
                 className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                 inputMode="numeric"
                 maxLength={8}
-                onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
-                onFocus={() => setPadTarget("search")}
+                onChange={(event) => handlePhoneChange(event.target.value)}
                 placeholder="輸入 8 位手機號碼"
                 value={phone}
               />
-              <button
-                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
-                onClick={() => {
-                  setCreateHint("");
-                  setCreateOpen(true);
-                }}
-                type="button"
-              >
-                新增會員
-              </button>
             </div>
             {!validSearch ? <div className="mt-2 text-xs text-red-600">只可輸入 8 位數字</div> : null}
+            {offlineMode ? (
+              <div className="mt-2 text-xs text-amber-700">目前離線，無法查詢會員。</div>
+            ) : null}
+            {searching ? <div className="mt-2 text-xs text-slate-500">查詢中…</div> : null}
+            {searchHint ? <div className="mt-2 text-xs text-red-600">{searchHint}</div> : null}
           </div>
 
           <div className="flex-1 overflow-auto p-4">
-            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-              {members.map((member) => (
-                <article key={member.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-base font-semibold text-slate-900">{member.name}</div>
-                      <div className="mt-1 text-sm text-slate-500">{member.phone}</div>
+            {!member && phone.length < 8 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+                輸入完整 8 位手機號碼後，將顯示該會員的錢包與獎賞券。
+                <div className="mt-3 text-xs text-slate-400">
+                  Phase 1 不支援 POS 代建帳號或現場充值；新會員請透過會員通 App 或 Ledger Web 註冊。
+                </div>
+              </div>
+            ) : null}
+
+            {member ? (
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+                <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div>
+                    <div className="text-base font-semibold text-slate-900">
+                      {member.displayName ?? "會員"}
                     </div>
-                    <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
-                      {member.level ?? "普通"}
-                    </span>
+                    <div className="mt-1 text-sm text-slate-500">{member.customerPhone}</div>
                   </div>
-                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+
+                  <div className="mt-4 grid gap-3">
                     <div className="rounded-2xl bg-slate-50 p-3">
-                      <div className="text-xs text-slate-500">充值額度</div>
-                      <div className="mt-1 font-semibold text-slate-900">{formatMoney(member.balance)}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-3">
-                      <div className="text-xs text-slate-500">優惠券</div>
-                      <div className="mt-1 font-semibold text-slate-900">
-                        {couponSummary(member.coupons).available} 可用 · {couponSummary(member.coupons).total} 張
+                      <div className="text-xs text-slate-500">錢包合計</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-900">
+                        {formatMoney(avosToMop(member.balanceAvos))}
                       </div>
                     </div>
-                  </div>
-                  {member.coupons.length ? (
-                    <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3">
-                      <div className="text-xs font-semibold text-slate-500">券列表（前 3 張）</div>
-                      <div className="mt-2 grid gap-1 text-sm text-slate-700">
-                        {member.coupons.slice(0, 3).map((coupon) => (
-                          <div key={coupon.id} className="flex items-center justify-between gap-3">
-                            <span className="truncate">{coupon.title}</span>
-                            <span className="text-xs text-slate-500">{coupon.usedAt ? "已用" : "可用"}</span>
-                          </div>
-                        ))}
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <div className="text-xs text-slate-500">充值餘額</div>
+                        <div className="mt-1 font-semibold text-slate-900">
+                          {formatMoney(avosToMop(paidBalanceAvos))}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-3">
+                        <div className="text-xs text-slate-500">贈送餘額</div>
+                        <div className="mt-1 font-semibold text-slate-900">
+                          {formatMoney(avosToMop(member.giftBalanceAvos))}
+                        </div>
                       </div>
                     </div>
-                  ) : null}
-                  <div className="mt-4 flex gap-2">
-                    <input
-                      className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                      inputMode="decimal"
-                      onChange={(event) =>
-                        setRechargeValues((current) => ({ ...current, [member.id]: event.target.value }))
-                      }
-                      onFocus={() => setPadTarget(`recharge:${member.id}`)}
-                      placeholder="充值金額"
-                      value={rechargeValues[member.id] ?? ""}
-                    />
-                    <button
-                      aria-busy={rechargingMemberId === member.id}
-                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      disabled={Boolean(rechargingMemberId)}
-                      onClick={() => rechargeMember(member.id)}
-                      type="button"
-                    >
-                      {rechargingMemberId === member.id ? "提交中…" : "充值"}
-                    </button>
+                    <div className="rounded-2xl bg-orange-50 p-3 text-sm text-orange-900">
+                      可核銷 {grantGroups.active.length} 張 · 共 {member.allGrants.length} 張獎賞券
+                    </div>
                   </div>
                 </article>
-              ))}
-            </div>
+
+                <div className="grid gap-4">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-slate-900">可核銷獎賞券</div>
+                    <div className="mt-3">
+                      <GrantList emptyLabel="目前沒有可核銷獎賞券" grants={grantGroups.active} />
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-slate-900">已失效獎賞券</div>
+                    <div className="mt-3">
+                      <GrantList emptyLabel="沒有已兌換或過期的獎賞券" grants={grantGroups.inactive} />
+                    </div>
+                  </section>
+                </div>
+              </div>
+            ) : null}
           </div>
         </main>
 
         <div className="hidden w-[280px] shrink-0 md:block lg:w-[320px]">
           <FixedNumberPad
-            confirmLabel={padTarget === "search" ? "搜尋" : "完成"}
+            confirmLabel="搜尋"
             showDisplay={false}
-            subtitle={
-              padTarget === "search"
-                ? "輸入會員手機號碼"
-                : selectedMemberForPad
-                  ? `正在輸入：${selectedMemberForPad.name} 充值金額`
-                  : "點選左邊輸入框後可使用鍵盤"
-            }
+            subtitle="輸入會員手機號碼"
             title="數字鍵盤"
-            value={padValue}
-            onChange={updatePadValue}
-            onConfirm={() => {
-              if (padTarget.startsWith("recharge:") && selectedMemberForPad) {
-                rechargeMember(selectedMemberForPad.id);
-              }
-            }}
+            value={phone}
+            onChange={handlePhoneChange}
+            onConfirm={() => scheduleLookup(phone)}
           />
         </div>
       </div>
-
-      {createOpen ? (
-        <ResponsiveModal
-          actions={
-            <>
-              <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                disabled={creatingMember}
-                onClick={() => setCreateOpen(false)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                aria-busy={creatingMember}
-                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                disabled={creatingMember}
-                onClick={() => void createMember()}
-                type="button"
-              >
-                {creatingMember ? "提交中…" : "確認新增"}
-              </button>
-            </>
-          }
-          title="新增會員"
-          widthClassName="max-w-md"
-        >
-              <div className="grid gap-3">
-              <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">姓名</span>
-                <input
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setCreateName(event.target.value)}
-                  value={createName}
-                />
-              </label>
-              <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">手機號碼（8 位）</span>
-                <input
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  inputMode="numeric"
-                  maxLength={8}
-                  onChange={(event) => setCreatePhone(event.target.value.replace(/\D/g, "").slice(0, 8))}
-                  value={createPhone}
-                />
-              </label>
-              {createHint ? <div className="text-sm text-red-600">{createHint}</div> : null}
-              </div>
-        </ResponsiveModal>
-      ) : null}
     </div>
   );
 }

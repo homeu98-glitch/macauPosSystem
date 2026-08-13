@@ -6,7 +6,6 @@ import {
   PosBootstrap,
   DeviceConfig,
   PosLocalSettings,
-  MemberProfile,
 } from "@/lib/types";
 
 export const defaultAccountStores: AccountStore[] = [
@@ -527,79 +526,3 @@ export const defaultPosLocalSettings: PosLocalSettings = {
     autoAccept: false,
   },
 };
-
-export const defaultMembers: MemberProfile[] = [
-  {
-    id: "mem-001",
-    name: "陳小明",
-    phone: "66112233",
-    balance: 320,
-    level: "金卡",
-    coupons: [
-      {
-        id: "cp-001",
-        title: "滿100減20",
-        type: "amount_off",
-        amountOff: 20,
-        minSpend: 100,
-        stackable: false,
-        expiresAt: "2026-12-31T23:59:59.000Z",
-      },
-      {
-        id: "cp-002",
-        title: "95折（最多減30）",
-        type: "percent_off",
-        percentOff: 5,
-        maxOff: 30,
-        minSpend: 50,
-        stackable: false,
-        expiresAt: "2026-12-31T23:59:59.000Z",
-      },
-    ],
-  },
-  {
-    id: "mem-002",
-    name: "李小姐",
-    phone: "66334455",
-    balance: 58,
-    level: "銀卡",
-    coupons: [
-      {
-        id: "cp-010",
-        title: "滿50減10",
-        type: "amount_off",
-        amountOff: 10,
-        minSpend: 50,
-        stackable: true,
-        expiresAt: "2026-12-31T23:59:59.000Z",
-      },
-      {
-        id: "cp-011",
-        title: "飲品券 -10",
-        type: "amount_off",
-        amountOff: 10,
-        minSpend: 0,
-        stackable: true,
-        expiresAt: "2026-12-31T23:59:59.000Z",
-      },
-    ],
-  },
-  {
-    id: "mem-003",
-    name: "黃先生",
-    phone: "66778899",
-    balance: 0,
-    level: "普通",
-    coupons: [
-      {
-        id: "cp-020",
-        title: "滿80減15",
-        type: "amount_off",
-        amountOff: 15,
-        minSpend: 80,
-        stackable: false,
-        expiresAt: "2026-12-31T23:59:59.000Z",
-      },
-    ],
-  },
-];

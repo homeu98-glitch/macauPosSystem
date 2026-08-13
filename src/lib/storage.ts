@@ -3,7 +3,6 @@ import {
   AccountStore,
   AccountUser,
   DeviceConfig,
-  MemberProfile,
   PosBootstrap,
   PosLocalSettings,
   PosOrder,
@@ -15,7 +14,6 @@ import {
 import {
   defaultAccountStores,
   defaultAccountUsers,
-  defaultMembers,
   defaultPermissionGroups,
   defaultPosLocalSettings,
 } from "@/lib/mock-data";
@@ -27,7 +25,6 @@ const KEYS = {
   orders: "macau-pos/orders",
   printJobs: "macau-pos/print-jobs",
   localSettings: "macau-pos/local-settings",
-  members: "macau-pos/members",
   offlineMode: "macau-pos/offline-mode",
   authSession: "macau-pos/auth-session",
   soldOut: "macau-pos/sold-out",
@@ -195,15 +192,6 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
   };
 }
 
-function normalizeMembers(members: MemberProfile[] | null | undefined): MemberProfile[] {
-  if (!Array.isArray(members)) return defaultMembers;
-
-  return members.map((member) => ({
-    ...member,
-    coupons: Array.isArray(member.coupons) ? member.coupons : [],
-  }));
-}
-
 function defaultPermissionsForRole(role: UserRole): UserPermissions {
   if (role === "admin") {
     return { refundOrder: true, voidItem: true, manageAccounts: true };
@@ -345,12 +333,14 @@ export function savePosLocalSettings(settings: PosLocalSettings) {
   }
 }
 
-export function loadMembers() {
-  return normalizeMembers(readJson<MemberProfile[]>(KEYS.members, defaultMembers));
-}
-
-export function saveMembers(members: MemberProfile[]) {
-  writeJson(KEYS.members, members);
+/** 清除 Phase 3 前遗留的 mock 會員 localStorage（PII 不應持久化）。 */
+export function clearLegacyMembersCache() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem("macau-pos/members");
+  } catch {
+    // ignore storage failures on restricted browsers
+  }
 }
 
 export function loadOfflineMode() {

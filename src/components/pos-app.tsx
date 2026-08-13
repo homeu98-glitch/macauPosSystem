@@ -18,7 +18,7 @@ import {
   loadBootstrapCache,
   loadDeviceConfig,
   loadAuthSession,
-  loadMembers,
+  clearLegacyMembersCache,
   loadOperatingMode,
   loadPosLocalSettings,
   loadQuickCompletedMinutes,
@@ -29,7 +29,6 @@ import {
   loadSoldOutState,
   saveBootstrapCache,
   saveDeviceConfig,
-  saveMembers,
   saveOrders,
   savePosLocalSettings,
   savePrintJobs,
@@ -38,13 +37,25 @@ import {
   saveShiftState,
   saveSoldOutState,
 } from "@/lib/storage";
-import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
+import { executeLedgerMemberCheckout, LedgerMemberCheckoutError } from "@/lib/ledger/checkout-member";
+import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
+import { getLedgerMerchantId } from "@/lib/ledger/session";
+import { lookupCustomerWallet } from "@/lib/ledger/members";
+import {
+  avosToMop,
+  grantTypeLabel,
+  LedgerCheckoutMember,
+  mopToAvos,
+  sumMoneyVoucherAvos,
+} from "@/lib/ledger/member-types";
+import { listRedeemableGrantsForCustomer } from "@/lib/ledger/rewards";
 import {
   quickCompleteLabel,
   quickCompletionLabel,
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
-import { DeviceConfig, MemberCoupon, MemberProfile, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
+import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 type Toast = {
   tone: "info" | "success";
@@ -63,27 +74,6 @@ function ticketTypeLabel(ticketType: PrintJob["ticketType"]) {
   if (ticketType === "addon") return "加單";
   if (ticketType === "void") return "VOID / 退菜";
   return "正常下單";
-}
-
-function couponIsExpired(coupon: MemberCoupon) {
-  if (!coupon.expiresAt) return false;
-  return Date.parse(coupon.expiresAt) <= Date.now();
-}
-
-function couponDiscountAmount(coupon: MemberCoupon, baseAmount: number) {
-  if (coupon.usedAt) return 0;
-  if (couponIsExpired(coupon)) return 0;
-  const minSpend = coupon.minSpend ?? 0;
-  if (baseAmount < minSpend) return 0;
-
-  if (coupon.type === "amount_off") {
-    return Math.max(0, Math.min(coupon.amountOff ?? 0, baseAmount));
-  }
-
-  const percent = coupon.percentOff ?? 0;
-  const raw = Math.floor((baseAmount * percent) / 100);
-  const limited = coupon.maxOff ? Math.min(raw, coupon.maxOff) : raw;
-  return Math.max(0, Math.min(limited, baseAmount));
 }
 
 function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
@@ -148,14 +138,16 @@ export function PosApp() {
   const [refundSummaryMode, setRefundSummaryMode] = useState<"date" | "employee">("date");
   const [refundSummaryDateFrom, setRefundSummaryDateFrom] = useState("");
   const [refundSummaryDateTo, setRefundSummaryDateTo] = useState("");
-  const [membersCache, setMembersCache] = useState<MemberProfile[]>(() => loadMembers());
   const [memberPhone, setMemberPhone] = useState("");
-  const [memberMatch, setMemberMatch] = useState<MemberProfile | null>(null);
+  const [ledgerMember, setLedgerMember] = useState<LedgerCheckoutMember | null>(null);
   const [memberSearchHint, setMemberSearchHint] = useState<string>("");
   const [memberSearching, setMemberSearching] = useState(false);
   const memberSearchTimerRef = useRef<number | null>(null);
+  const memberCheckoutIdempotencyRef = useRef<string | null>(null);
+  const [memberCheckoutRedeemDone, setMemberCheckoutRedeemDone] = useState(false);
+  const [memberCheckoutSubmitting, setMemberCheckoutSubmitting] = useState(false);
   const [useMemberBalance, setUseMemberBalance] = useState(true);
-  const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
+  const [selectedGrantIds, setSelectedGrantIds] = useState<string[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
   const [settlementFlash, setSettlementFlash] = useState(false);
@@ -180,6 +172,17 @@ export function PosApp() {
 
   function showPermissionDenied(actionLabel: string) {
     setToast({ tone: "info", message: `目前帳號沒有${actionLabel}權限，請使用店長帳號操作。` });
+  }
+
+  function resetMemberCheckoutState() {
+    setMemberPhone("");
+    setLedgerMember(null);
+    setMemberSearchHint("");
+    setSelectedGrantIds([]);
+    setUseMemberBalance(true);
+    memberCheckoutIdempotencyRef.current = null;
+    setMemberCheckoutRedeemDone(false);
+    setMemberCheckoutSubmitting(false);
   }
 
   function exportRefundDetails(order: PosOrder) {
@@ -411,6 +414,10 @@ export function PosApp() {
   }, [settlementFlash]);
 
   useEffect(() => {
+    clearLegacyMembersCache();
+  }, []);
+
+  useEffect(() => {
     if (offlineMode) return;
     // 方案B：若本機仍有待同步事件，先不要拉取後台狀態，避免後台舊資料覆蓋本機即時狀態。
     if (queue.some((event) => event.status !== "synced")) return;
@@ -421,7 +428,6 @@ export function PosApp() {
           orders?: PosOrder[];
           queue?: QueueEvent[];
           printJobs?: PrintJob[];
-          members?: MemberProfile[];
           localSettings?: PosLocalSettings;
           deviceConfig?: DeviceConfig | null;
         };
@@ -441,10 +447,6 @@ export function PosApp() {
         if (Array.isArray(payload.printJobs)) {
           setPrintJobs(payload.printJobs);
           savePrintJobs(payload.printJobs);
-        }
-        if (Array.isArray(payload.members)) {
-          setMembersCache(payload.members);
-          saveMembers(payload.members);
         }
         if (payload.localSettings) {
           savePosLocalSettings(payload.localSettings);
@@ -619,31 +621,23 @@ export function PosApp() {
           total: activeOrder.subtotal + activeOrder.taxAmount,
       }
     : totals;
-  const couponDiscount = useMemo(() => {
-    if (!memberMatch || selectedCouponIds.length === 0) return 0;
-    const baseAmount = Math.max(0, paymentBase.total - discountAmount);
-    const selected = memberMatch.coupons.filter((coupon) => selectedCouponIds.includes(coupon.id));
-
-    // 不可疊加券：只允許一張
-    const nonStackable = selected.find((coupon) => !coupon.stackable);
-    const effectiveCoupons = nonStackable ? [nonStackable] : selected;
-
-    let remaining = baseAmount;
-    let totalDiscount = 0;
-    for (const coupon of effectiveCoupons) {
-      const off = couponDiscountAmount(coupon, remaining);
-      if (off <= 0) continue;
-      totalDiscount += off;
-      remaining = Math.max(0, remaining - off);
-    }
-    return Math.min(totalDiscount, baseAmount);
-  }, [discountAmount, memberMatch, paymentBase.total, selectedCouponIds]);
   const prepaidAmount = (currentSettlementOrder?.prepaidAmount ?? activeOrder?.prepaidAmount ?? 0) || 0;
-  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - couponDiscount - prepaidAmount);
+  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - prepaidAmount);
+  const selectedMoneyVoucherAvos = useMemo(
+    () => (ledgerMember ? sumMoneyVoucherAvos(ledgerMember.redeemableGrants, selectedGrantIds) : 0),
+    [ledgerMember, selectedGrantIds],
+  );
+  const memberAvailableAvos = useMemo(() => {
+    if (!ledgerMember) return 0;
+    return ledgerMember.balanceAvos + selectedMoneyVoucherAvos;
+  }, [ledgerMember, selectedMoneyVoucherAvos]);
   const memberDeduction = useMemo(() => {
-    if (!useMemberBalance || !memberMatch) return 0;
-    return Math.min(memberMatch.balance, payableBeforeMember);
-  }, [memberMatch, payableBeforeMember, useMemberBalance]);
+    if (!useMemberBalance || !ledgerMember) return 0;
+    return Math.min(avosToMop(memberAvailableAvos), payableBeforeMember);
+  }, [ledgerMember, memberAvailableAvos, payableBeforeMember, useMemberBalance]);
+  const memberLedgerOpsNeeded = Boolean(
+    ledgerMember && (selectedGrantIds.length > 0 || (useMemberBalance && memberDeduction > 0)),
+  );
 
   function scheduleMemberLookup(phone: string) {
     if (memberSearchTimerRef.current) {
@@ -652,17 +646,37 @@ export function PosApp() {
     }
     memberSearchTimerRef.current = window.setTimeout(() => {
       void (async () => {
+        if (offlineMode) {
+          setLedgerMember(null);
+          setMemberSearchHint("會員查詢須連線，請恢復網絡後再試。");
+          return;
+        }
+        const merchantId = getLedgerMerchantId();
+        if (!merchantId) {
+          setLedgerMember(null);
+          setMemberSearchHint("無法取得商家 ID，請重新登入。");
+          return;
+        }
         setMemberSearching(true);
         try {
-          const response = await fetch(`/api/members?phone=${phone}`);
-          const payload = (await response.json()) as { members?: MemberProfile[] };
-          const match = (payload.members ?? []).find((member) => member.phone === phone) ?? null;
-          setMemberMatch(match);
-          setMemberSearchHint(match ? "" : "找不到會員。");
-        } catch {
-          const match = membersCache.find((member) => member.phone === phone) ?? null;
-          setMemberMatch(match);
-          setMemberSearchHint(match ? "" : "找不到會員。");
+          const wallet = await lookupCustomerWallet(merchantId, phone);
+          if (!wallet.registered || !wallet.customerId) {
+            setLedgerMember(null);
+            setMemberSearchHint("此電話尚未註冊會員通。");
+            return;
+          }
+          const redeemableGrants = await listRedeemableGrantsForCustomer(merchantId, wallet.customerId);
+          setLedgerMember({ ...wallet, redeemableGrants });
+          setMemberSearchHint("");
+          setSelectedGrantIds([]);
+          setUseMemberBalance(true);
+          memberCheckoutIdempotencyRef.current = null;
+          setMemberCheckoutRedeemDone(false);
+        } catch (error) {
+          setLedgerMember(null);
+          setMemberSearchHint(
+            friendlyLedgerMemberError(error instanceof Error ? error.message : String(error)),
+          );
         } finally {
           setMemberSearching(false);
         }
@@ -674,6 +688,8 @@ export function PosApp() {
     const normalized = input.replace(/\D/g, "").slice(0, 8);
     setMemberPhone(normalized);
     setMemberSearchHint("");
+    memberCheckoutIdempotencyRef.current = null;
+    setMemberCheckoutRedeemDone(false);
 
     if (memberSearchTimerRef.current) {
       window.clearTimeout(memberSearchTimerRef.current);
@@ -682,8 +698,8 @@ export function PosApp() {
 
     if (normalized.length !== 8) {
       setMemberSearching(false);
-      setMemberMatch(null);
-      setSelectedCouponIds([]);
+      setLedgerMember(null);
+      setSelectedGrantIds([]);
       setUseMemberBalance(false);
       return;
     }
@@ -701,9 +717,7 @@ export function PosApp() {
     subtotal: paymentBase.subtotal,
     serviceChargeAmount: 0,
     taxAmount: paymentBase.taxAmount,
-    discountAmount: discountAmount + couponDiscount,
-    manualDiscountAmount: discountAmount,
-    couponDiscount,
+    discountAmount,
     prepaidAmount,
     memberDeduction,
     total: Math.max(0, payableBeforeMember - memberDeduction),
@@ -773,11 +787,8 @@ export function PosApp() {
     setReceivedAmount("");
     setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
     setOrderNote(order?.orderNote ?? "");
-    setMemberPhone("");
-    setMemberMatch(null);
+    resetMemberCheckoutState();
     setSelectedPaymentMethod("");
-    setUseMemberBalance(true);
-    setSelectedCouponIds([]);
   }
 
   function selectTable(tableId: string) {
@@ -901,10 +912,8 @@ export function PosApp() {
     setActiveOrderId(null);
     setBaseOrderItems([]);
     setOrderNote("");
-    setMemberPhone("");
-    setMemberMatch(null);
+    resetMemberCheckoutState();
     setSelectedPaymentMethod("");
-    setSelectedCouponIds([]);
     setRuntimeRefreshTick((current) => current + 1);
   }
 
@@ -1937,11 +1946,30 @@ export function PosApp() {
     );
   }
 
-  function confirmPayment(method: string) {
-    if (!bootstrap) return;
+  async function confirmPayment(method: string) {
+    if (!bootstrap || memberCheckoutSubmitting) return;
+
+    if (memberLedgerOpsNeeded && offlineMode) {
+      setToast({ tone: "info", message: "會員扣款／核銷券須連線，請恢復網絡後再試。" });
+      return;
+    }
+
+    const merchantId = getLedgerMerchantId();
+    if (memberLedgerOpsNeeded && !merchantId) {
+      setToast({ tone: "info", message: "無法取得商家 ID，請重新登入後再試。" });
+      return;
+    }
+
+    const deductAvos = useMemberBalance && ledgerMember ? mopToAvos(memberDeduction) : 0;
+    if (memberLedgerOpsNeeded && deductAvos > memberAvailableAvos) {
+      setToast({ tone: "info", message: "會員餘額不足（含所選現金券）。" });
+      return;
+    }
+
     const applyPaymentToOrder = (targetOrder: PosOrder) => {
-      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
       const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+      const hasGrantRedeem = selectedGrantIds.length > 0;
       const updatedOrder: PosOrder = {
         ...targetOrder,
         status: quickPaidFlow ? "paid" : "settled",
@@ -1951,10 +1979,10 @@ export function PosApp() {
             ? paymentSummary.total > 0
               ? `會員餘額 + ${method}`
               : "會員餘額"
-            : couponDiscount > 0
-              ? `優惠券 + ${method}`
+            : hasGrantRedeem
+              ? `會員券 + ${method}`
               : method,
-        discountAmount: discountAmount + couponDiscount,
+        discountAmount,
         total: settledGrandTotal,
         updatedAt: new Date().toISOString(),
       };
@@ -1968,25 +1996,6 @@ export function PosApp() {
         return nextOrders;
       });
 
-      if (memberMatch && (memberDeduction > 0 || selectedCouponIds.length > 0)) {
-        const nextMembers = membersCache.map((member) =>
-          member.id === memberMatch.id
-            ? {
-                ...member,
-                balance: Math.max(0, member.balance - memberDeduction),
-                coupons: member.coupons.map((coupon) =>
-                  selectedCouponIds.includes(coupon.id)
-                    ? { ...coupon, usedAt: new Date().toISOString() }
-                    : coupon,
-                ),
-              }
-            : member,
-        );
-        setMembersCache(nextMembers);
-        saveMembers(nextMembers);
-        setMemberMatch(nextMembers.find((member) => member.id === memberMatch.id) ?? null);
-      }
-
       const paymentEvent: QueueEvent = {
         id: uid("evt"),
         type: "ORDER_SETTLED",
@@ -1996,12 +2005,12 @@ export function PosApp() {
           total: settledGrandTotal,
           receivedAmount: Number(receivedAmount) || paymentSummary.total,
           changeDue,
-          discountAmount: discountAmount + couponDiscount,
+          discountAmount,
           paymentMethod: updatedOrder.paymentMethod,
-          memberPhone: memberMatch?.phone ?? null,
+          memberPhone: ledgerMember?.customerPhone ?? null,
           memberDeduction,
-          couponDiscount,
-          couponIds: selectedCouponIds,
+          couponDiscount: 0,
+          couponIds: selectedGrantIds,
           prepaidAmount,
           status: updatedOrder.status,
           fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
@@ -2018,11 +2027,8 @@ export function PosApp() {
       setReceivedAmount("");
       setSelectedItemId("");
       setBaseOrderItems([]);
-      setMemberPhone("");
-      setMemberMatch(null);
+      resetMemberCheckoutState();
       setSelectedPaymentMethod("");
-      setUseMemberBalance(true);
-      setSelectedCouponIds([]);
       setToast({
         tone: "success",
         message: networkOnline
@@ -2042,15 +2048,64 @@ export function PosApp() {
       }
     };
 
-    if (isQuickMode && payingOrderId === CART_PAYING_ID) {
-      void (async () => {
-        const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
-        if (!createdOrder) {
-          setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
-          return;
+    const runCheckout = async (targetOrder: PosOrder) => {
+      if (memberLedgerOpsNeeded && merchantId && ledgerMember) {
+        setMemberCheckoutSubmitting(true);
+        try {
+          const idempotencyKey =
+            memberCheckoutIdempotencyRef.current ?? crypto.randomUUID();
+          memberCheckoutIdempotencyRef.current = idempotencyKey;
+
+          const grantIdsToRedeem = memberCheckoutRedeemDone ? [] : selectedGrantIds;
+          const result = await executeLedgerMemberCheckout({
+            merchantId,
+            phone: ledgerMember.customerPhone,
+            deductAvos,
+            grantIds: grantIdsToRedeem,
+            idempotencyKey,
+            skipRedeem: memberCheckoutRedeemDone,
+          });
+
+          if (grantIdsToRedeem.length > 0) {
+            setMemberCheckoutRedeemDone(true);
+          }
+
+          if (typeof result.balanceAfterAvos === "number" && ledgerMember) {
+            setLedgerMember({
+              ...ledgerMember,
+              balanceAvos: result.balanceAfterAvos,
+              redeemableGrants: ledgerMember.redeemableGrants.filter(
+                (grant) => !selectedGrantIds.includes(grant.grantId),
+              ),
+            });
+          }
+
+          applyPaymentToOrder(targetOrder);
+        } catch (error) {
+          if (error instanceof LedgerMemberCheckoutError && error.redeemCompleted) {
+            setMemberCheckoutRedeemDone(true);
+            setMemberSearchHint("券已核銷，扣款失敗。請重試扣款（勿重複核銷券）。");
+          }
+          setToast({
+            tone: "info",
+            message: friendlyLedgerMemberError(error instanceof Error ? error.message : String(error)),
+          });
+        } finally {
+          setMemberCheckoutSubmitting(false);
         }
-        applyPaymentToOrder(createdOrder);
-      })();
+        return;
+      }
+
+      applyPaymentToOrder(targetOrder);
+    };
+
+    if (isQuickMode && payingOrderId === CART_PAYING_ID) {
+      const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
+      if (!createdOrder) {
+        setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+        return;
+      }
+      await runCheckout(createdOrder);
       return;
     }
 
@@ -2060,7 +2115,7 @@ export function PosApp() {
       unsettledOrder;
     if (!targetOrder) return;
 
-    applyPaymentToOrder(targetOrder);
+    await runCheckout(targetOrder);
   }
 
   function completeOnlinePaidOrder() {
@@ -2071,13 +2126,13 @@ export function PosApp() {
       unsettledOrder;
     if (!targetOrder) return;
 
-    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - couponDiscount);
+    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
     const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: quickPaidFlow ? "paid" : "settled",
       paymentMethod: "線上已支付",
-      discountAmount: discountAmount + couponDiscount,
+      discountAmount,
       total: settledGrandTotal,
       updatedAt: new Date().toISOString(),
     };
@@ -2094,12 +2149,12 @@ export function PosApp() {
         total: settledGrandTotal,
         receivedAmount: 0,
         changeDue: 0,
-        discountAmount: discountAmount + couponDiscount,
+        discountAmount,
         paymentMethod: updatedOrder.paymentMethod,
         memberPhone: null,
         memberDeduction: 0,
-        couponDiscount,
-        couponIds: selectedCouponIds,
+        couponDiscount: 0,
+        couponIds: [],
         prepaidAmount,
         status: updatedOrder.status,
       },
@@ -2130,9 +2185,8 @@ export function PosApp() {
         return;
       }
       setPayingOrderId(CART_PAYING_ID);
-      setMembersCache(loadMembers());
+      resetMemberCheckoutState();
       setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
-      setSelectedCouponIds([]);
       return;
     }
 
@@ -2145,9 +2199,8 @@ export function PosApp() {
       return;
     }
     setPayingOrderId(targetOrder.id);
-    setMembersCache(loadMembers());
+    resetMemberCheckoutState();
     setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
-    setSelectedCouponIds([]);
   }
 
   if (isBootstrapping || !bootstrap) {
@@ -3283,7 +3336,10 @@ export function PosApp() {
                 ) : null}
                 <button
                   className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
-                  onClick={() => setPayingOrderId(null)}
+                  onClick={() => {
+                    setPayingOrderId(null);
+                    resetMemberCheckoutState();
+                  }}
                   type="button"
                 >
                   關閉
@@ -3308,15 +3364,17 @@ export function PosApp() {
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-500">折扣</span>
                     <span className="font-semibold text-slate-900">
-                      {formatMoney(paymentSummary.manualDiscountAmount, bootstrap.currency)}
+                      {formatMoney(paymentSummary.discountAmount, bootstrap.currency)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-500">優惠券抵扣</span>
-                    <span className="font-semibold text-slate-900">
-                      {formatMoney(paymentSummary.couponDiscount, bootstrap.currency)}
-                    </span>
-                  </div>
+                  {selectedMoneyVoucherAvos > 0 ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">已選現金券（兌換入餘額）</span>
+                      <span className="font-semibold text-slate-900">
+                        {formatMoney(avosToMop(selectedMoneyVoucherAvos), bootstrap.currency)}
+                      </span>
+                    </div>
+                  ) : null}
                   {paymentSummary.prepaidAmount > 0 ? (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-slate-500">客人已支付</span>
@@ -3368,71 +3426,62 @@ export function PosApp() {
                   </label>
                   <div className="rounded-2xl border border-slate-200 bg-white p-3">
                     <div className="text-xs font-semibold text-slate-500">會員優惠 / 餘額</div>
-                    <div className="mt-2 text-xs text-slate-500">右側輸入會員手機號碼後，可使用優惠券或餘額扣款。</div>
-                    {memberMatch ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      右側輸入會員手機號碼後，可核銷獎賞券並以餘額扣款（須連線）。
+                    </div>
+                    {offlineMode && memberPhone.length === 8 ? (
+                      <div className="mt-2 text-xs text-amber-700">離線狀態無法查詢會員或扣款。</div>
+                    ) : null}
+                    {ledgerMember ? (
                       <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
                         <div className="font-semibold text-slate-900">
-                          {memberMatch.name} · {memberMatch.phone}
+                          {ledgerMember.displayName ?? "會員"} · {ledgerMember.customerPhone}
                         </div>
                         <div className="mt-1 text-slate-500">
-                          餘額 {formatMoney(memberMatch.balance, bootstrap.currency)} · 優惠券{" "}
-                          {memberMatch.coupons.filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon)).length} 張可用
+                          餘額 {formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} · 可用券{" "}
+                          {ledgerMember.redeemableGrants.length} 張
                         </div>
                         <label className="mt-3 grid gap-1">
-                          <span className="text-xs font-semibold text-slate-600">使用優惠券</span>
+                          <span className="text-xs font-semibold text-slate-600">核銷獎賞券</span>
                           <div className="grid gap-2">
-                            {memberMatch.coupons.filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon)).length === 0 ? (
-                              <div className="text-xs text-slate-500">目前沒有可用優惠券</div>
+                            {ledgerMember.redeemableGrants.length === 0 ? (
+                              <div className="text-xs text-slate-500">目前沒有可核銷獎賞券</div>
                             ) : (
-                              memberMatch.coupons
-                                .filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon))
-                                .map((coupon) => {
-                                  const baseAmount = Math.max(0, paymentBase.total - discountAmount);
-                                  const off = couponDiscountAmount(coupon, baseAmount);
-                                  const selected = selectedCouponIds.includes(coupon.id);
-                                  const hasNonStackableSelected = selectedCouponIds
-                                    .map((id) => memberMatch.coupons.find((c) => c.id === id))
-                                    .some((c) => c && !c.stackable);
-                                  const disableBecauseStackRule =
-                                    !selected && (hasNonStackableSelected || (!coupon.stackable && selectedCouponIds.length > 0));
-                                  const disabled = off <= 0 || disableBecauseStackRule;
-                                  return (
-                                    <label
-                                      key={coupon.id}
-                                      className={`flex items-start justify-between gap-3 rounded-2xl border px-3 py-2 ${
-                                        selected ? "border-orange-300 bg-orange-50" : "border-slate-200 bg-white"
-                                      } ${disabled ? "opacity-60" : ""}`}
-                                    >
-                                      <div>
-                                        <div className="text-sm font-semibold text-slate-900">{coupon.title}</div>
-                                        <div className="mt-1 text-xs text-slate-500">
-                                          {coupon.minSpend ? `滿 ${formatMoney(coupon.minSpend, bootstrap.currency)} 可用` : "無門檻"} ·{" "}
-                                          {coupon.stackable ? "可疊加" : "不可疊加"}
-                                        </div>
+                              ledgerMember.redeemableGrants.map((grant) => {
+                                const selected = selectedGrantIds.includes(grant.grantId);
+                                const disabled = memberCheckoutRedeemDone;
+                                return (
+                                  <label
+                                    key={grant.grantId}
+                                    className={`flex items-start justify-between gap-3 rounded-2xl border px-3 py-2 ${
+                                      selected ? "border-orange-300 bg-orange-50" : "border-slate-200 bg-white"
+                                    } ${disabled ? "opacity-60" : ""}`}
+                                  >
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">{grant.title}</div>
+                                      <div className="mt-1 text-xs text-slate-500">
+                                        {grantTypeLabel(grant.prizeType)}
+                                        {grant.prizeType === "money_voucher"
+                                          ? ` · ${formatMoney(avosToMop(grant.rewardAmountAvos), bootstrap.currency)} 入餘額`
+                                          : " · 結帳時核銷"}
                                       </div>
-                                      <div className="flex items-center gap-2">
-                                        <div className="text-xs font-semibold text-slate-700">
-                                          {off > 0 ? `- ${formatMoney(off, bootstrap.currency)}` : "不符合條件"}
-                                        </div>
-                                        <input
-                                          checked={selected}
-                                          disabled={disabled}
-                                          onChange={(event) => {
-                                            const checked = event.target.checked;
-                                            setSelectedCouponIds((current) => {
-                                              if (checked) {
-                                                if (!coupon.stackable) return [coupon.id];
-                                                return [...current, coupon.id];
-                                              }
-                                              return current.filter((id) => id !== coupon.id);
-                                            });
-                                          }}
-                                          type="checkbox"
-                                        />
-                                      </div>
-                                    </label>
-                                  );
-                                })
+                                    </div>
+                                    <input
+                                      checked={selected}
+                                      disabled={disabled}
+                                      onChange={(event) => {
+                                        const checked = event.target.checked;
+                                        setSelectedGrantIds((current) =>
+                                          checked
+                                            ? [...current, grant.grantId]
+                                            : current.filter((id) => id !== grant.grantId),
+                                        );
+                                      }}
+                                      type="checkbox"
+                                    />
+                                  </label>
+                                );
+                              })
                             )}
                           </div>
                         </label>
@@ -3440,6 +3489,7 @@ export function PosApp() {
                           <span className="text-xs font-semibold text-slate-600">使用會員餘額先扣</span>
                           <input
                             checked={useMemberBalance}
+                            disabled={memberCheckoutRedeemDone}
                             onChange={(event) => setUseMemberBalance(event.target.checked)}
                             type="checkbox"
                           />
@@ -3471,19 +3521,24 @@ export function PosApp() {
                   </div>
 
                   <button
-                    className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
+                    className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={memberCheckoutSubmitting}
                     onClick={() => {
                       if (paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0) {
                         completeOnlinePaidOrder();
                         return;
                       }
-                      confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
+                      void confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
                     }}
                     type="button"
                   >
-                    {paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
-                      ? "客人已支付，完成訂單"
-                      : "去結帳"}
+                    {memberCheckoutSubmitting
+                      ? "處理會員扣款中…"
+                      : paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
+                        ? "客人已支付，完成訂單"
+                        : memberCheckoutRedeemDone
+                          ? "重試扣款"
+                          : "去結帳"}
                   </button>
                 </div>
               </div>
@@ -3507,13 +3562,15 @@ export function PosApp() {
                   </label>
                   {memberSearching ? <div className="mt-2 text-xs text-slate-500">搜尋中…</div> : null}
                   {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
-                  {memberMatch ? (
+                  {ledgerMember ? (
                     <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                      <div className="font-semibold text-slate-900">{memberMatch.name}</div>
-                      <div className="mt-1 text-xs text-slate-600">{memberMatch.phone}</div>
+                      <div className="font-semibold text-slate-900">
+                        {ledgerMember.displayName ?? "會員"}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">{ledgerMember.customerPhone}</div>
                       <div className="mt-2 text-xs text-slate-500">
-                        餘額 {formatMoney(memberMatch.balance, bootstrap.currency)} · 可用券{" "}
-                        {memberMatch.coupons.filter((coupon) => !coupon.usedAt && !couponIsExpired(coupon)).length}
+                        餘額 {formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} · 可用券{" "}
+                        {ledgerMember.redeemableGrants.length}
                       </div>
                     </div>
                   ) : null}

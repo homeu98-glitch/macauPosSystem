@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { defaultMembers } from "@/lib/mock-data";
-import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { defaultPosLocalSettings } from "@/lib/mock-data";
+import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
 export async function GET() {
@@ -15,28 +14,17 @@ export async function GET() {
       orders: [],
       queue: [],
       printJobs: [],
-      members: defaultMembers,
       localSettings: defaultPosLocalSettings,
       deviceConfig: null,
     });
   }
 
-  const [{ data: orders }, { data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: members }, { data: coupons }] =
-    await Promise.all([
-      supabase.from("pos_orders").select("*").order("updated_at", { ascending: false }).limit(200),
-      supabase.from("pos_queue_events").select("*").order("created_at", { ascending: false }).limit(300),
-      supabase.from("pos_print_jobs").select("*").order("created_at", { ascending: false }).limit(200),
-      supabase.from("pos_device_configs").select("*").order("updated_at", { ascending: false }).limit(1),
-      supabase.from("pos_members").select("*").order("updated_at", { ascending: false }).limit(200),
-      supabase.from("pos_member_coupons").select("*").order("created_at", { ascending: false }).limit(500),
-    ]);
-
-  const couponMap = new Map<string, typeof coupons>();
-  (coupons ?? []).forEach((coupon) => {
-    const list = couponMap.get(coupon.member_id) ?? [];
-    list.push(coupon);
-    couponMap.set(coupon.member_id, list);
-  });
+  const [{ data: orders }, { data: queue }, { data: printJobs }, { data: deviceConfigs }] = await Promise.all([
+    supabase.from("pos_orders").select("*").order("updated_at", { ascending: false }).limit(200),
+    supabase.from("pos_queue_events").select("*").order("created_at", { ascending: false }).limit(300),
+    supabase.from("pos_print_jobs").select("*").order("created_at", { ascending: false }).limit(200),
+    supabase.from("pos_device_configs").select("*").order("updated_at", { ascending: false }).limit(1),
+  ]);
 
   const deviceConfigRow = deviceConfigs?.[0] ?? null;
 
@@ -85,27 +73,6 @@ export async function GET() {
         items: Array.isArray(job.items) ? job.items : [],
         status: job.status,
         createdAt: job.created_at,
-      })) ?? [],
-    members:
-      members?.map((member) => ({
-        id: member.id,
-        name: member.name,
-        phone: member.phone,
-        balance: Number(member.balance ?? 0),
-        level: member.level ?? undefined,
-        coupons:
-          couponMap.get(member.id)?.map((coupon) => ({
-            id: coupon.id,
-            title: coupon.title,
-            type: coupon.type,
-            amountOff: coupon.amount_off ?? undefined,
-            percentOff: coupon.percent_off ?? undefined,
-            maxOff: coupon.max_off ?? undefined,
-            minSpend: coupon.min_spend ?? undefined,
-            stackable: Boolean(coupon.stackable),
-            expiresAt: coupon.expires_at ?? undefined,
-            usedAt: coupon.used_at ?? undefined,
-          })) ?? [],
       })) ?? [],
     deviceConfig: deviceConfigRow
       ? normalizeDeviceConfig({

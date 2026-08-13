@@ -63,31 +63,6 @@ export async function POST(request: Request) {
             updated_at: event.createdAt,
           })
           .eq("id", event.payload.orderId);
-
-        if (event.payload.memberPhone) {
-          const { data: member } = await supabase
-            .from("pos_members")
-            .select("*")
-            .eq("phone", event.payload.memberPhone)
-            .maybeSingle();
-
-          if (member) {
-            await supabase
-              .from("pos_members")
-              .update({
-                balance: Math.max(0, Number(member.balance ?? 0) - Number(event.payload.memberDeduction ?? 0)),
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", member.id);
-
-            if (Array.isArray(event.payload.couponIds) && event.payload.couponIds.length > 0) {
-              await supabase
-                .from("pos_member_coupons")
-                .update({ used_at: new Date().toISOString() })
-                .in("id", event.payload.couponIds);
-            }
-          }
-        }
       }
 
       if (event.type === "PRINT_JOB_CREATED" && event.payload?.id) {

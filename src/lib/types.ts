@@ -303,30 +303,6 @@ export interface PosLocalSettings {
   };
 }
 
-export type CouponType = "amount_off" | "percent_off";
-
-export interface MemberCoupon {
-  id: string;
-  title: string;
-  type: CouponType;
-  amountOff?: number;
-  percentOff?: number;
-  maxOff?: number;
-  minSpend?: number;
-  stackable: boolean;
-  expiresAt?: string;
-  usedAt?: string;
-}
-
-export interface MemberProfile {
-  id: string;
-  name: string;
-  phone: string;
-  balance: number;
-  coupons: MemberCoupon[];
-  level?: string;
-}
-
 export interface OrderItem {
   menuItemId: string;
   name: string;
