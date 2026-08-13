@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { PropsWithChildren, useEffect } from "react";
 
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import { clearAuthSession, loadAuthSession } from "@/lib/storage";
+import { clearAuthSession, loadAuthSession, prepareStoreStorage } from "@/lib/storage";
 import { UserRole } from "@/lib/types";
 
 type AuthGuardProps = PropsWithChildren<{
@@ -17,6 +17,12 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const session = loadAuthSession();
   const isLedgerSession = Boolean(session?.merchantId && session?.ledgerAccessToken);
   const roleBlocked = Boolean(session && allowedRoles && !allowedRoles.includes(session.role));
+
+  useEffect(() => {
+    if (session?.merchantId) {
+      prepareStoreStorage(session.merchantId);
+    }
+  }, [session?.merchantId]);
 
   useEffect(() => {
     if (session?.ledgerAccessToken && session?.ledgerRefreshToken) {

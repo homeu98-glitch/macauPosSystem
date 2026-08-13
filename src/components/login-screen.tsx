@@ -6,7 +6,7 @@ import { KeyboardEvent, useState } from "react";
 import { PwaInstallButton } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
-import { loadBootstrapCache, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
+import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
 
 export function LoginScreen() {
   const router = useRouter();
@@ -69,6 +69,8 @@ export function LoginScreen() {
         ledgerRefreshToken: payload.session.ledgerRefreshToken ?? payload.refreshToken,
       };
 
+      const previousMerchantId = loadAuthSession()?.merchantId;
+
       saveAuthSession(session);
 
       const cachedBootstrap = loadBootstrapCache();
@@ -85,6 +87,15 @@ export function LoginScreen() {
       }
 
       saveOperatingMode(mode === "quick" ? "quick" : "dinein");
+
+      const storeSwitched =
+        Boolean(previousMerchantId && session.merchantId && previousMerchantId !== session.merchantId);
+
+      if (storeSwitched) {
+        window.location.replace("/");
+        return;
+      }
+
       router.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");

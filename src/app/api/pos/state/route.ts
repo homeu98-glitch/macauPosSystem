@@ -4,8 +4,10 @@ import { defaultPosLocalSettings } from "@/lib/mock-data";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
+  const { searchParams } = new URL(request.url);
+  const storeId = searchParams.get("storeId")?.trim() || null;
 
   if (!supabase) {
     return NextResponse.json({
@@ -19,11 +21,24 @@ export async function GET() {
     });
   }
 
+  const ordersQuery = storeId
+    ? supabase.from("pos_orders").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(200)
+    : supabase.from("pos_orders").select("*").order("updated_at", { ascending: false }).limit(200);
+  const queueQuery = supabase.from("pos_queue_events").select("*").order("created_at", { ascending: false }).limit(300);
+  const printJobsQuery = supabase
+    .from("pos_print_jobs")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  const deviceConfigQuery = storeId
+    ? supabase.from("pos_device_configs").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(1)
+    : supabase.from("pos_device_configs").select("*").order("updated_at", { ascending: false }).limit(1);
+
   const [{ data: orders }, { data: queue }, { data: printJobs }, { data: deviceConfigs }] = await Promise.all([
-    supabase.from("pos_orders").select("*").order("updated_at", { ascending: false }).limit(200),
-    supabase.from("pos_queue_events").select("*").order("created_at", { ascending: false }).limit(300),
-    supabase.from("pos_print_jobs").select("*").order("created_at", { ascending: false }).limit(200),
-    supabase.from("pos_device_configs").select("*").order("updated_at", { ascending: false }).limit(1),
+    ordersQuery,
+    queueQuery,
+    printJobsQuery,
+    deviceConfigQuery,
   ]);
 
   const deviceConfigRow = deviceConfigs?.[0] ?? null;

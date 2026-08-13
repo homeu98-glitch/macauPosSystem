@@ -376,7 +376,11 @@ export function PosApp() {
   useEffect(() => {
     async function bootstrapApp() {
       try {
-        const response = await fetch("/api/pos/bootstrap");
+        const merchantId = loadAuthSession()?.merchantId;
+        const bootstrapUrl = merchantId
+          ? `/api/pos/bootstrap?storeId=${encodeURIComponent(merchantId)}`
+          : "/api/pos/bootstrap";
+        const response = await fetch(bootstrapUrl);
         const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
         const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
         saveBootstrapCache(data);
@@ -423,7 +427,11 @@ export function PosApp() {
     if (queue.some((event) => event.status !== "synced")) return;
     async function loadRuntimeState() {
       try {
-        const response = await fetch("/api/pos/state");
+        const merchantId = loadAuthSession()?.merchantId;
+        const stateUrl = merchantId
+          ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}`
+          : "/api/pos/state";
+        const response = await fetch(stateUrl);
         const payload = (await response.json()) as {
           orders?: PosOrder[];
           queue?: QueueEvent[];
@@ -1418,7 +1426,10 @@ export function PosApp() {
       await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: nextQueue }),
+        body: JSON.stringify({
+          events: nextQueue,
+          storeId: bootstrap?.storeId ?? loadAuthSession()?.merchantId ?? undefined,
+        }),
       });
 
       const synced = nextQueue.map((event) => ({ ...event, status: "synced" as const }));

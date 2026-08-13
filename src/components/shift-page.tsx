@@ -172,7 +172,10 @@ export function ShiftPage() {
       await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: pending }),
+        body: JSON.stringify({
+          events: pending,
+          storeId: loadAuthSession()?.merchantId ?? undefined,
+        }),
       });
       saveQueue(pending.map((item) => ({ ...item, status: "synced" as const })));
       setStatus(`已同步 ${pending.length} 筆待辦資料，準備交班。`);
@@ -279,7 +282,10 @@ export function ShiftPage() {
         await fetch("/api/pos/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ events: nextQueue }),
+          body: JSON.stringify({
+            events: nextQueue,
+            storeId: loadAuthSession()?.merchantId ?? undefined,
+          }),
         });
         saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
       } catch {

@@ -5,6 +5,7 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 export async function POST(request: Request) {
   const payload = await request.json();
   const events = Array.isArray(payload?.events) ? payload.events : [];
+  const storeId = String(payload?.storeId ?? "macau-store-a");
   const supabase = getSupabaseServerClient();
 
   if (supabase && events.length > 0) {
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
             {
               id: order.id,
               local_order_no: order.localOrderNo,
-              store_id: "macau-store-a",
+              store_id: storeId,
               table_id: order.tableId,
               table_name: order.tableName,
               status: order.status,
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
         await supabase.from("pos_print_jobs").upsert(
           {
             id: job.id,
-            store_id: "macau-store-a",
+            store_id: storeId,
             order_id: job.orderId,
             order_no: job.orderNo ?? null,
             table_name: job.tableName ?? null,

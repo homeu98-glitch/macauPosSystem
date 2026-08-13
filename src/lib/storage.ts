@@ -19,24 +19,30 @@ import {
 } from "@/lib/mock-data";
 
 const KEYS = {
-  bootstrap: "macau-pos/bootstrap",
-  deviceConfig: "macau-pos/device-config",
-  queue: "macau-pos/sync-queue",
-  orders: "macau-pos/orders",
-  printJobs: "macau-pos/print-jobs",
-  localSettings: "macau-pos/local-settings",
   offlineMode: "macau-pos/offline-mode",
   authSession: "macau-pos/auth-session",
-  soldOut: "macau-pos/sold-out",
-  shift: "macau-pos/shift",
-  shiftHistory: "macau-pos/shift-history",
-  operatingMode: "macau-pos/operating-mode",
-  quickAutoAccept: "macau-pos/quick-auto-accept",
-  quickCompletedMinutes: "macau-pos/quick-completed-minutes",
   accountUsers: "macau-pos/account-users",
   accountStores: "macau-pos/account-stores",
   permissionGroups: "macau-pos/permission-groups",
-};
+} as const;
+
+/** 每店獨立的 localStorage 後綴（實際 key：`macau-pos/stores/{merchantId}/{suffix}`） */
+const STORE_SUFFIX = {
+  bootstrap: "bootstrap",
+  deviceConfig: "device-config",
+  queue: "sync-queue",
+  orders: "orders",
+  printJobs: "print-jobs",
+  localSettings: "local-settings",
+  soldOut: "sold-out",
+  shift: "shift",
+  shiftHistory: "shift-history",
+  operatingMode: "operating-mode",
+  quickAutoAccept: "quick-auto-accept",
+  quickCompletedMinutes: "quick-completed-minutes",
+} as const;
+
+type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") {
@@ -70,6 +76,75 @@ function writeJson<T>(key: string, value: T) {
   } catch {
     // ignore storage write failures on restricted browsers / kiosk devices
   }
+}
+
+function legacyGlobalKey(suffix: StoreSuffix): string {
+  return `macau-pos/${suffix}`;
+}
+
+function storeScopedStorageKey(suffix: StoreSuffix, merchantId?: string | null): string {
+  const scope = merchantId ?? getActiveMerchantId();
+  if (!scope) return legacyGlobalKey(suffix);
+  return `macau-pos/stores/${scope}/${suffix}`;
+}
+
+function readStoreJson<T>(suffix: StoreSuffix, fallback: T, merchantId?: string | null): T {
+  return readJson(storeScopedStorageKey(suffix, merchantId), fallback);
+}
+
+function writeStoreJson<T>(suffix: StoreSuffix, value: T, merchantId?: string | null) {
+  writeJson(storeScopedStorageKey(suffix, merchantId), value);
+}
+
+function readLegacyBootstrapStoreId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(legacyGlobalKey("bootstrap"));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { storeId?: string };
+    return parsed.storeId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function legacyDataBelongsToMerchant(merchantId: string): boolean {
+  const legacyStoreId = readLegacyBootstrapStoreId();
+  if (!legacyStoreId) return true;
+  return legacyStoreId === merchantId;
+}
+
+/** 登入後將舊版全局 cache 遷移至當前 merchant（僅當 legacy bootstrap 屬於該店）。 */
+export function prepareStoreStorage(merchantId: string) {
+  if (typeof window === "undefined" || !merchantId) return;
+  if (!legacyDataBelongsToMerchant(merchantId)) return;
+
+  for (const suffix of Object.values(STORE_SUFFIX)) {
+    const scopedKey = storeScopedStorageKey(suffix, merchantId);
+    if (window.localStorage.getItem(scopedKey)) continue;
+
+    const legacyRaw = window.localStorage.getItem(legacyGlobalKey(suffix));
+    if (!legacyRaw) continue;
+
+    window.localStorage.setItem(scopedKey, legacyRaw);
+  }
+
+  for (const suffix of Object.values(STORE_SUFFIX)) {
+    const legacyKey = legacyGlobalKey(suffix);
+    const scopedKey = storeScopedStorageKey(suffix, merchantId);
+    if (window.localStorage.getItem(legacyKey) && window.localStorage.getItem(scopedKey)) {
+      window.localStorage.removeItem(legacyKey);
+    }
+  }
+}
+
+export function getActiveStoreId(): string | null {
+  return getActiveMerchantId();
+}
+
+function getActiveMerchantId(): string | null {
+  const raw = readJson<Partial<{ merchantId?: string }> | null>(KEYS.authSession, null);
+  return raw?.merchantId ?? null;
 }
 
 export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): DeviceConfig | null {
@@ -277,57 +352,57 @@ function normalizeAccountUsers(accounts: AccountUser[] | null | undefined): Acco
 }
 
 export function loadBootstrapCache() {
-  return readJson<PosBootstrap | null>(KEYS.bootstrap, null);
+  return readStoreJson(STORE_SUFFIX.bootstrap, null as PosBootstrap | null);
 }
 
 export function saveBootstrapCache(data: PosBootstrap) {
-  writeJson(KEYS.bootstrap, data);
+  writeStoreJson(STORE_SUFFIX.bootstrap, data);
 }
 
 export function loadDeviceConfig() {
-  return normalizeDeviceConfig(readJson<DeviceConfig | null>(KEYS.deviceConfig, null));
+  return normalizeDeviceConfig(readStoreJson(STORE_SUFFIX.deviceConfig, null as DeviceConfig | null));
 }
 
 export function saveDeviceConfig(data: DeviceConfig) {
-  writeJson(KEYS.deviceConfig, data);
+  writeStoreJson(STORE_SUFFIX.deviceConfig, data);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-device-config-changed", { detail: { deviceConfig: data } }));
   }
 }
 
 export function loadQueue() {
-  return readJson<QueueEvent[]>(KEYS.queue, []);
+  return readStoreJson(STORE_SUFFIX.queue, [] as QueueEvent[]);
 }
 
 export function saveQueue(events: QueueEvent[]) {
-  writeJson(KEYS.queue, events);
+  writeStoreJson(STORE_SUFFIX.queue, events);
 }
 
 export function loadOrders() {
-  return readJson<PosOrder[]>(KEYS.orders, []);
+  return readStoreJson(STORE_SUFFIX.orders, [] as PosOrder[]);
 }
 
 export function saveOrders(orders: PosOrder[]) {
-  writeJson(KEYS.orders, orders);
+  writeStoreJson(STORE_SUFFIX.orders, orders);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
   }
 }
 
 export function loadPrintJobs() {
-  return readJson<PrintJob[]>(KEYS.printJobs, []);
+  return readStoreJson(STORE_SUFFIX.printJobs, [] as PrintJob[]);
 }
 
 export function savePrintJobs(printJobs: PrintJob[]) {
-  writeJson(KEYS.printJobs, printJobs);
+  writeStoreJson(STORE_SUFFIX.printJobs, printJobs);
 }
 
 export function loadPosLocalSettings() {
-  return normalizePosLocalSettings(readJson<PosLocalSettings>(KEYS.localSettings, defaultPosLocalSettings));
+  return normalizePosLocalSettings(readStoreJson(STORE_SUFFIX.localSettings, defaultPosLocalSettings));
 }
 
 export function savePosLocalSettings(settings: PosLocalSettings) {
-  writeJson(KEYS.localSettings, settings);
+  writeStoreJson(STORE_SUFFIX.localSettings, settings);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-local-settings-changed", { detail: { localSettings: settings } }));
   }
@@ -465,6 +540,9 @@ export function loadAuthSession(): AuthSession | null {
 
 export function saveAuthSession(session: AuthSession) {
   writeJson(KEYS.authSession, session);
+  if (session.merchantId) {
+    prepareStoreStorage(session.merchantId);
+  }
 }
 
 export function clearAuthSession() {
@@ -486,11 +564,11 @@ export type SoldOutState = Record<
 >;
 
 export function loadSoldOutState(): SoldOutState {
-  return readJson<SoldOutState>(KEYS.soldOut, {});
+  return readStoreJson(STORE_SUFFIX.soldOut, {} as SoldOutState);
 }
 
 export function saveSoldOutState(state: SoldOutState) {
-  writeJson(KEYS.soldOut, state);
+  writeStoreJson(STORE_SUFFIX.soldOut, state);
 }
 
 export type ShiftState = {
@@ -524,43 +602,43 @@ export type ShiftHistoryRecord = {
 };
 
 export function loadShiftState(): ShiftState {
-  return readJson<ShiftState>(KEYS.shift, {});
+  return readStoreJson(STORE_SUFFIX.shift, {} as ShiftState);
 }
 
 export function saveShiftState(state: ShiftState) {
-  writeJson(KEYS.shift, state);
+  writeStoreJson(STORE_SUFFIX.shift, state);
 }
 
 export function loadShiftHistory() {
-  return readJson<ShiftHistoryRecord[]>(KEYS.shiftHistory, []);
+  return readStoreJson(STORE_SUFFIX.shiftHistory, [] as ShiftHistoryRecord[]);
 }
 
 export function saveShiftHistory(history: ShiftHistoryRecord[]) {
-  writeJson(KEYS.shiftHistory, history);
+  writeStoreJson(STORE_SUFFIX.shiftHistory, history);
 }
 
 export type OperatingMode = "dinein" | "quick";
 
 export function loadOperatingMode(): OperatingMode {
-  const value = readJson<string | null>(KEYS.operatingMode, null);
+  const value = readStoreJson(STORE_SUFFIX.operatingMode, null as string | null);
   return value === "quick" ? "quick" : "dinein";
 }
 
 export function saveOperatingMode(mode: OperatingMode) {
-  writeJson(KEYS.operatingMode, mode);
+  writeStoreJson(STORE_SUFFIX.operatingMode, mode);
 }
 
 export function loadQuickAutoAccept() {
-  const value = readJson<boolean | null>(KEYS.quickAutoAccept, null);
+  const value = readStoreJson(STORE_SUFFIX.quickAutoAccept, null as boolean | null);
   return value === true;
 }
 
 export function saveQuickAutoAccept(enabled: boolean) {
-  writeJson(KEYS.quickAutoAccept, enabled);
+  writeStoreJson(STORE_SUFFIX.quickAutoAccept, enabled);
 }
 
 export function loadQuickCompletedMinutes() {
-  const value = readJson<number | null>(KEYS.quickCompletedMinutes, null);
+  const value = readStoreJson(STORE_SUFFIX.quickCompletedMinutes, null as number | null);
   if (!value) return 10;
   if (value < 1) return 1;
   if (value > 180) return 180;
@@ -568,5 +646,5 @@ export function loadQuickCompletedMinutes() {
 }
 
 export function saveQuickCompletedMinutes(minutes: number) {
-  writeJson(KEYS.quickCompletedMinutes, Math.floor(minutes));
+  writeStoreJson(STORE_SUFFIX.quickCompletedMinutes, Math.floor(minutes));
 }

@@ -4,19 +4,27 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { mockBootstrap } from "@/lib/mock-data";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
+  const { searchParams } = new URL(request.url);
+  const storeId = searchParams.get("storeId")?.trim() || null;
 
   if (!supabase) {
-    return NextResponse.json(normalizeBootstrapPayload(mockBootstrap));
+    const payload = normalizeBootstrapPayload(mockBootstrap);
+    if (storeId) {
+      return NextResponse.json({ ...payload, storeId });
+    }
+    return NextResponse.json(payload);
   }
 
-  const { data, error } = await supabase
-    .from("pos_bootstrap_config")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  let query = supabase.from("pos_bootstrap_config").select("*");
+  if (storeId) {
+    query = query.eq("store_id", storeId);
+  } else {
+    query = query.order("updated_at", { ascending: false }).limit(1);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error || !data) {
     return NextResponse.json(normalizeBootstrapPayload(mockBootstrap));
