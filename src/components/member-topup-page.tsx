@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ensureLedgerSession } from "@/lib/ledger/session";
 import { loadAuthSession } from "@/lib/storage";
 import { useNetworkOnline } from "@/lib/use-network-online";
 
@@ -30,14 +31,25 @@ export function MemberTopupPage() {
       return;
     }
 
+    const refreshedToken = await ensureLedgerSession();
+    const latestSession = loadAuthSession();
+    const accessToken = refreshedToken ?? latestSession?.ledgerAccessToken ?? session.ledgerAccessToken;
+    if (!accessToken) {
+      setState({ status: "error", message: "Ledger 登入已過期，請重新登入 POS。" });
+      return;
+    }
+
     try {
       const response = await fetch("/api/topup/owner-embed", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.ledgerAccessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ shopId: session.account }),
+        body: JSON.stringify({
+          shopId: latestSession?.account ?? session.account,
+          refreshToken: latestSession?.ledgerRefreshToken ?? session.ledgerRefreshToken,
+        }),
       });
       const payload = (await response.json()) as {
         ok?: boolean;
