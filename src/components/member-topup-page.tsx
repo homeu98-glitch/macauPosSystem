@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ensureLedgerSession } from "@/lib/ledger/session";
@@ -15,18 +17,30 @@ type EmbedState =
       shopName: string;
       shopId: string;
       staffAccount: string;
-      topupBaseUrl: string;
     }
   | { status: "error"; message: string };
 
+function buildTopupEntryUrl(embedUrl: string, returnUrl: string): string {
+  const url = new URL(embedUrl);
+  url.searchParams.set("siteAReturnUrl", returnUrl);
+  return url.toString();
+}
+
 export function MemberTopupPage() {
+  const searchParams = useSearchParams();
+  const returnedFromTopup = searchParams.get("returned") === "1";
   const networkOnline = useNetworkOnline();
   const [state, setState] = useState<EmbedState>({ status: "loading" });
-  const [iframeBlocked, setIframeBlocked] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
+
+  const returnUrl = useMemo(() => {
+    if (typeof window === "undefined") return "/topup?returned=1";
+    return `${window.location.origin}/topup?returned=1`;
+  }, []);
 
   const loadEmbed = useCallback(async () => {
     setState({ status: "loading" });
-    setIframeBlocked(false);
+    setRedirecting(false);
 
     const session = loadAuthSession();
     if (!session?.ledgerAccessToken) {
@@ -67,7 +81,6 @@ export function MemberTopupPage() {
         shopName?: string;
         shopId?: string;
         staffAccount?: string;
-        topupBaseUrl?: string;
       };
 
       if (!response.ok || !payload.ok || !payload.embedUrl) {
@@ -80,7 +93,6 @@ export function MemberTopupPage() {
         shopName: payload.shopName ?? payload.shopId ?? "",
         shopId: payload.shopId ?? latestSession?.topUpShopId ?? staffAccount,
         staffAccount: payload.staffAccount ?? staffAccount,
-        topupBaseUrl: payload.topupBaseUrl ?? "",
       });
     } catch (error) {
       setState({
@@ -91,67 +103,60 @@ export function MemberTopupPage() {
   }, [networkOnline]);
 
   useEffect(() => {
+    if (returnedFromTopup) return;
     void loadEmbed();
-  }, [loadEmbed]);
+  }, [loadEmbed, returnedFromTopup]);
+
+  useEffect(() => {
+    if (returnedFromTopup || state.status !== "ready" || redirecting) return;
+    setRedirecting(true);
+    const entryUrl = buildTopupEntryUrl(state.embedUrl, returnUrl);
+    window.location.replace(entryUrl);
+  }, [redirecting, returnUrl, returnedFromTopup, state]);
 
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
       <div className="flex h-[100dvh] flex-col overflow-hidden md:pl-[72px]">
         <header className="border-b border-slate-200 bg-white px-4 py-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-lg font-semibold text-slate-900">會員充值</div>
-              <div className="mt-1 text-sm text-slate-500">
-                線上轉帳截圖審核（topUpAutomation 店主後台）。登入後可直接批核；自動核准設定會保存在充值系統，無須一直開著此分頁。
+          <div className="text-lg font-semibold text-slate-900">會員充值</div>
+          <div className="mt-1 text-sm text-slate-500">
+            線上轉帳截圖審核（topUpAutomation 店主後台）。與澳門會員通相同，以 SSO 整頁開啟充值系統。
+          </div>
+        </header>
+
+        <main className="relative min-h-0 flex-1 bg-slate-100 p-4 pb-20 md:pb-4">
+          {returnedFromTopup ? (
+            <div className="mx-auto grid max-w-lg place-items-center rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <div className="text-base font-semibold text-slate-900">已返回 POS</div>
+              <div className="mt-2 text-sm text-slate-600">
+                充值審核在獨立網站完成。批核紀錄與自動核准設定已保存在充值系統，無須保持 POS 開啟。
               </div>
-            </div>
-            {state.status === "ready" ? (
-              <div className="flex flex-wrap gap-2">
-                <a
-                  className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
-                  href={state.embedUrl}
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  在新分頁開啟（建議）
-                </a>
+              <div className="mt-6 flex flex-wrap justify-center gap-3">
                 <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  className="rounded-2xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
                   onClick={() => void loadEmbed()}
                   type="button"
                 >
-                  重新取得 SSO
+                  再次進入充值審核
                 </button>
-              </div>
-            ) : null}
-          </div>
-
-          {state.status === "ready" ? (
-            <div className="mt-3 space-y-3">
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-                <div className="font-semibold">
-                  已接入 {state.shopName}（充值店舖編號 {state.shopId}）
-                </div>
-                <div className="mt-1 text-emerald-800">
-                  POS 登入帳號：{state.staffAccount}。充值系統使用 Ledger 商戶主檔電話作為店舖編號，與店員登入號可能不同。
-                </div>
-              </div>
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                iPad／Safari 可能阻擋 iframe 內的充值登入 Cookie。若下方顯示「請先登入」或資料不對，請用「在新分頁開啟（建議）」。
+                <Link
+                  className="rounded-2xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  href="/"
+                >
+                  返回收銀台
+                </Link>
               </div>
             </div>
           ) : null}
-        </header>
 
-        <main className="relative min-h-0 flex-1 bg-slate-100 p-3 pb-20 md:pb-3">
-          {state.status === "loading" ? (
-            <div className="grid h-full place-items-center rounded-2xl border border-dashed border-slate-300 bg-white text-sm text-slate-500">
-              正在向充值系統取得 SSO 登入連結…
+          {!returnedFromTopup && state.status === "loading" ? (
+            <div className="grid h-full place-items-center rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+              正在取得 SSO 登入連結，即將跳轉至充值審核…
             </div>
           ) : null}
 
-          {state.status === "error" ? (
+          {!returnedFromTopup && state.status === "error" ? (
             <div className="grid h-full place-items-center rounded-2xl border border-red-200 bg-white p-6 text-center">
               <div className="text-sm font-semibold text-red-700">{state.message}</div>
               <button
@@ -164,23 +169,21 @@ export function MemberTopupPage() {
             </div>
           ) : null}
 
-          {state.status === "ready" ? (
-            <>
-              {iframeBlocked ? (
-                <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                  瀏覽器可能阻擋嵌入顯示，請使用上方「在新分頁開啟（建議）」。
-                </div>
-              ) : null}
-              <iframe
-                key={state.embedUrl}
-                className="h-full w-full rounded-2xl border border-slate-200 bg-white shadow-sm"
-                referrerPolicy="no-referrer"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
-                src={state.embedUrl}
-                title="會員充值審核"
-                onError={() => setIframeBlocked(true)}
-              />
-            </>
+          {!returnedFromTopup && state.status === "ready" ? (
+            <div className="mx-auto grid max-w-lg place-items-center rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center">
+              <div className="text-base font-semibold text-emerald-900">
+                已接入 {state.shopName}（{state.shopId}）
+              </div>
+              <div className="mt-2 text-sm text-emerald-800">
+                POS 登入：{state.staffAccount}。正在跳轉至充值店主後台…
+              </div>
+              <a
+                className="mt-6 inline-flex rounded-2xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
+                href={buildTopupEntryUrl(state.embedUrl, returnUrl)}
+              >
+                若未自動跳轉，請按此進入
+              </a>
+            </div>
           ) : null}
         </main>
       </div>
