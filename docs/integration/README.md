@@ -1,6 +1,6 @@
 # 整合文檔索引
 
-> **最後更新**：2026-08-12
+> **最後更新**：2026-08-13
 
 本目錄包含 macauPosSystem 與外部系統的所有對接說明。
 
@@ -14,6 +14,7 @@
 | [ledger-client-api.md](./ledger-client-api.md) | **澳門會員通 Ledger** 直連 Supabase 契約 v2 | 登入、線上訂單、報表、菜單對照 |
 | [ledger-client-api-v2-source.md](./ledger-client-api-v2-source.md) | Ledger 官方 v2 契約原文（2026-08-11） | 與 Ledger 團隊對齊時參考 |
 | [ecosystem-modules.md](./ecosystem-modules.md) | 整個生態系（Ledger、Android、充值、派送） | 理解跨 repo 關係 |
+| [pos-member-system-requirements.md](./pos-member-system-requirements.md) | **POS → Ledger 會員對接需求書**（待 Ledger 回覆契約） | 會員查詢、新增、扣點、券 |
 
 ---
 
@@ -51,6 +52,7 @@
 | 店內堂食菜單 | `/api/pos/bootstrap` 或設置頁本地維護（**非** Ledger 全量匯入） |
 | 打印配置回寫 | `/api/pos/device-config` |
 | 了解充值/派送 | ecosystem-modules.md |
+| 會員／錢包／優惠券對接 | pos-member-system-requirements.md → 待 Ledger 回覆 |
 
 ---
 
