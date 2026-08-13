@@ -12,6 +12,7 @@ const baseNavItems = [
   { href: "/", label: "點餐", short: "點" },
   { href: "/orders", label: "訂單", short: "單" },
   { href: "/members", label: "會員", short: "會" },
+  { href: "/topup", label: "會員\n充值", short: "充" },
   { href: "/prints", label: "打印", short: "印" },
   { href: "/reports", label: "報表", short: "報" },
   { href: "/soldout", label: "沽清", short: "沽" },
