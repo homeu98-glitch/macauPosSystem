@@ -1,10 +1,5 @@
-import { AuthGuard } from "@/components/auth-guard";
-import { MemberTopupPage } from "@/components/member-topup-page";
+import { redirect } from "next/navigation";
 
 export default function TopupRoute() {
-  return (
-    <AuthGuard>
-      <MemberTopupPage />
-    </AuthGuard>
-  );
+  redirect("/members?tab=topup");
 }

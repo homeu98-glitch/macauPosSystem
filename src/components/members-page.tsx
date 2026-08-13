@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
+import { MemberTopupPanel } from "@/components/member-topup-panel";
+import { PendingDot } from "@/components/pending-dot";
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
 import {
   avosToMop,
@@ -18,7 +21,10 @@ import { lookupCustomerWallet } from "@/lib/ledger/members";
 import { listCustomerRewardGrants } from "@/lib/ledger/rewards";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { clearLegacyMembersCache } from "@/lib/storage";
+import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useNetworkOnline } from "@/lib/use-network-online";
+
+type MembersTab = "manage" | "topup";
 
 function formatMoney(amount: number) {
   return `MOP ${amount.toFixed(0)}`;
@@ -68,9 +74,42 @@ function GrantList({
   );
 }
 
+function MembersTabButton({
+  active,
+  label,
+  onClick,
+  showDot,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  showDot?: boolean;
+}) {
+  return (
+    <button
+      className={`relative inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+        active ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+      {showDot ? <PendingDot className={active ? "ring-2 ring-orange-500" : ""} /> : null}
+    </button>
+  );
+}
+
 export function MembersPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
+  const initialTab: MembersTab = searchParams.get("tab") === "topup" ? "topup" : "manage";
+  const [tab, setTab] = useState<MembersTab>(initialTab);
+  const { hasPending, configured: topupConfigured } = useTopupPendingCount({
+    fast: tab === "topup",
+  });
+
   const [phone, setPhone] = useState("");
   const [member, setMember] = useState<LedgerMemberProfile | null>(null);
   const [searchHint, setSearchHint] = useState("");
@@ -92,6 +131,16 @@ export function MembersPage() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const nextTab: MembersTab = searchParams.get("tab") === "topup" ? "topup" : "manage";
+    setTab(nextTab);
+  }, [searchParams]);
+
+  function switchTab(nextTab: MembersTab) {
+    setTab(nextTab);
+    router.replace(nextTab === "topup" ? "/members?tab=topup" : "/members", { scroll: false });
+  }
 
   function scheduleLookup(nextPhone: string) {
     if (searchTimerRef.current) {
@@ -155,106 +204,138 @@ export function MembersPage() {
       <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
-            <div className="text-lg font-semibold text-slate-900">會員</div>
-            <div className="mt-1 text-sm text-slate-500">
-              輸入 8 位手機號碼查詢 Ledger 會員餘額與獎賞券（須連線；資料不會儲存於本機）。
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">會員</div>
+                {tab === "manage" ? (
+                  <div className="mt-1 text-sm text-slate-500">
+                    輸入 8 位手機號碼查詢 Ledger 會員餘額與獎賞券（須連線；資料不會儲存於本機）。
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm text-slate-500">審核顧客線上轉帳充值截圖。</div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <MembersTabButton
+                  active={tab === "manage"}
+                  label="會員管理"
+                  onClick={() => switchTab("manage")}
+                />
+                <MembersTabButton
+                  active={tab === "topup"}
+                  label="會員充值"
+                  showDot={topupConfigured && hasPending}
+                  onClick={() => switchTab("topup")}
+                />
+              </div>
             </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <input
-                className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                inputMode="numeric"
-                maxLength={8}
-                onChange={(event) => handlePhoneChange(event.target.value)}
-                placeholder="輸入 8 位手機號碼"
-                value={phone}
-              />
-            </div>
-            {!validSearch ? <div className="mt-2 text-xs text-red-600">只可輸入 8 位數字</div> : null}
-            {offlineMode ? (
-              <div className="mt-2 text-xs text-amber-700">目前離線，無法查詢會員。</div>
+
+            {tab === "manage" ? (
+              <>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    inputMode="numeric"
+                    maxLength={8}
+                    onChange={(event) => handlePhoneChange(event.target.value)}
+                    placeholder="輸入 8 位手機號碼"
+                    value={phone}
+                  />
+                </div>
+                {!validSearch ? <div className="mt-2 text-xs text-red-600">只可輸入 8 位數字</div> : null}
+                {offlineMode ? (
+                  <div className="mt-2 text-xs text-amber-700">目前離線，無法查詢會員。</div>
+                ) : null}
+                {searching ? <div className="mt-2 text-xs text-slate-500">查詢中…</div> : null}
+                {searchHint ? <div className="mt-2 text-xs text-red-600">{searchHint}</div> : null}
+              </>
             ) : null}
-            {searching ? <div className="mt-2 text-xs text-slate-500">查詢中…</div> : null}
-            {searchHint ? <div className="mt-2 text-xs text-red-600">{searchHint}</div> : null}
           </div>
 
-          <div className="flex-1 overflow-auto p-4">
-            {!member && phone.length < 8 ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-                輸入完整 8 位手機號碼後，將顯示該會員的錢包與獎賞券。
-                <div className="mt-3 text-xs text-slate-400">
-                  Phase 1 不支援 POS 代建帳號或現場充值；新會員請透過會員通 App 或 Ledger Web 註冊。
-                </div>
-              </div>
-            ) : null}
-
-            {member ? (
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
-                <article className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div>
-                    <div className="text-base font-semibold text-slate-900">
-                      {member.displayName ?? "會員"}
-                    </div>
-                    <div className="mt-1 text-sm text-slate-500">{member.customerPhone}</div>
+          {tab === "manage" ? (
+            <div className="flex-1 overflow-auto p-4">
+              {!member && phone.length < 8 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+                  輸入完整 8 位手機號碼後，將顯示該會員的錢包與獎賞券。
+                  <div className="mt-3 text-xs text-slate-400">
+                    Phase 1 不支援 POS 代建帳號或現場充值；新會員請透過會員通 App 或 Ledger Web 註冊。
                   </div>
+                </div>
+              ) : null}
 
-                  <div className="mt-4 grid gap-3">
-                    <div className="rounded-2xl bg-slate-50 p-3">
-                      <div className="text-xs text-slate-500">錢包合計</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-900">
-                        {formatMoney(avosToMop(member.balanceAvos))}
+              {member ? (
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+                  <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div>
+                      <div className="text-base font-semibold text-slate-900">
+                        {member.displayName ?? "會員"}
                       </div>
+                      <div className="mt-1 text-sm text-slate-500">{member.customerPhone}</div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3 text-sm">
+
+                    <div className="mt-4 grid gap-3">
                       <div className="rounded-2xl bg-slate-50 p-3">
-                        <div className="text-xs text-slate-500">充值餘額</div>
-                        <div className="mt-1 font-semibold text-slate-900">
-                          {formatMoney(avosToMop(paidBalanceAvos))}
+                        <div className="text-xs text-slate-500">錢包合計</div>
+                        <div className="mt-1 text-lg font-semibold text-slate-900">
+                          {formatMoney(avosToMop(member.balanceAvos))}
                         </div>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 p-3">
-                        <div className="text-xs text-slate-500">贈送餘額</div>
-                        <div className="mt-1 font-semibold text-slate-900">
-                          {formatMoney(avosToMop(member.giftBalanceAvos))}
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <div className="text-xs text-slate-500">充值餘額</div>
+                          <div className="mt-1 font-semibold text-slate-900">
+                            {formatMoney(avosToMop(paidBalanceAvos))}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl bg-slate-50 p-3">
+                          <div className="text-xs text-slate-500">贈送餘額</div>
+                          <div className="mt-1 font-semibold text-slate-900">
+                            {formatMoney(avosToMop(member.giftBalanceAvos))}
+                          </div>
                         </div>
                       </div>
+                      <div className="rounded-2xl bg-orange-50 p-3 text-sm text-orange-900">
+                        可核銷 {grantGroups.active.length} 張 · 共 {member.allGrants.length} 張獎賞券
+                      </div>
                     </div>
-                    <div className="rounded-2xl bg-orange-50 p-3 text-sm text-orange-900">
-                      可核銷 {grantGroups.active.length} 張 · 共 {member.allGrants.length} 張獎賞券
-                    </div>
+                  </article>
+
+                  <div className="grid gap-4">
+                    <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-sm font-semibold text-slate-900">可核銷獎賞券</div>
+                      <div className="mt-3">
+                        <GrantList emptyLabel="目前沒有可核銷獎賞券" grants={grantGroups.active} />
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-sm font-semibold text-slate-900">已失效獎賞券</div>
+                      <div className="mt-3">
+                        <GrantList emptyLabel="沒有已兌換或過期的獎賞券" grants={grantGroups.inactive} />
+                      </div>
+                    </section>
                   </div>
-                </article>
-
-                <div className="grid gap-4">
-                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-sm font-semibold text-slate-900">可核銷獎賞券</div>
-                    <div className="mt-3">
-                      <GrantList emptyLabel="目前沒有可核銷獎賞券" grants={grantGroups.active} />
-                    </div>
-                  </section>
-
-                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-sm font-semibold text-slate-900">已失效獎賞券</div>
-                    <div className="mt-3">
-                      <GrantList emptyLabel="沒有已兌換或過期的獎賞券" grants={grantGroups.inactive} />
-                    </div>
-                  </section>
                 </div>
-              </div>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          ) : (
+            <MemberTopupPanel />
+          )}
         </main>
 
-        <div className="hidden w-[280px] shrink-0 md:block lg:w-[320px]">
-          <FixedNumberPad
-            confirmLabel="搜尋"
-            showDisplay={false}
-            subtitle="輸入會員手機號碼"
-            title="數字鍵盤"
-            value={phone}
-            onChange={handlePhoneChange}
-            onConfirm={() => scheduleLookup(phone)}
-          />
-        </div>
+        {tab === "manage" ? (
+          <div className="hidden w-[280px] shrink-0 md:block lg:w-[320px]">
+            <FixedNumberPad
+              confirmLabel="搜尋"
+              showDisplay={false}
+              subtitle="輸入會員手機號碼"
+              title="數字鍵盤"
+              value={phone}
+              onChange={handlePhoneChange}
+              onConfirm={() => scheduleLookup(phone)}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );
