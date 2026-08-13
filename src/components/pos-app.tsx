@@ -86,6 +86,7 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
 }
 
 const CART_PAYING_ID = "__cart__";
+const ALL_MENU_CATEGORY_ID = "__all__";
 
 export function PosApp() {
   const router = useRouter();
@@ -146,7 +147,7 @@ export function PosApp() {
   const memberCheckoutIdempotencyRef = useRef<string | null>(null);
   const [memberCheckoutRedeemDone, setMemberCheckoutRedeemDone] = useState(false);
   const [memberCheckoutSubmitting, setMemberCheckoutSubmitting] = useState(false);
-  const [useMemberBalance, setUseMemberBalance] = useState(true);
+  const [useMemberBalance, setUseMemberBalance] = useState(false);
   const [selectedGrantIds, setSelectedGrantIds] = useState<string[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
@@ -179,7 +180,7 @@ export function PosApp() {
     setLedgerMember(null);
     setMemberSearchHint("");
     setSelectedGrantIds([]);
-    setUseMemberBalance(true);
+    setUseMemberBalance(false);
     memberCheckoutIdempotencyRef.current = null;
     setMemberCheckoutRedeemDone(false);
     setMemberCheckoutSubmitting(false);
@@ -514,6 +515,7 @@ export function PosApp() {
     if (!bootstrap) return "";
     // 搜尋時一律視為「全部」，避免找不到商品
     if (searchKeyword.trim()) return "";
+    if (activeCategoryId === ALL_MENU_CATEGORY_ID) return "";
     return activeCategoryId || bootstrap.categories[0]?.id || "";
   }, [activeCategoryId, bootstrap, searchKeyword]);
 
@@ -677,7 +679,6 @@ export function PosApp() {
           setLedgerMember({ ...wallet, redeemableGrants });
           setMemberSearchHint("");
           setSelectedGrantIds([]);
-          setUseMemberBalance(true);
           memberCheckoutIdempotencyRef.current = null;
           setMemberCheckoutRedeemDone(false);
         } catch (error) {
@@ -2680,7 +2681,7 @@ export function PosApp() {
                     className={`rounded-full px-4 py-2 text-sm font-semibold ${
                       effectiveCategoryId === "" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
-                    onClick={() => setActiveCategoryId("")}
+                    onClick={() => setActiveCategoryId(ALL_MENU_CATEGORY_ID)}
                     type="button"
                   >
                     全部
@@ -2711,7 +2712,7 @@ export function PosApp() {
                       setSearchKeyword(next);
                       if (next.trim()) {
                         // 搜尋時自動切到「全部」
-                        setActiveCategoryId("");
+                        setActiveCategoryId(ALL_MENU_CATEGORY_ID);
                       }
                     }}
                     onFocus={() => setSearchFocused(true)}
@@ -3438,7 +3439,7 @@ export function PosApp() {
                   <div className="rounded-2xl border border-slate-200 bg-white p-3">
                     <div className="text-xs font-semibold text-slate-500">會員優惠 / 餘額</div>
                     <div className="mt-2 text-xs text-slate-500">
-                      右側輸入會員手機號碼後，可核銷獎賞券並以餘額扣款（須連線）。
+                      輸入會員手機號碼後，可在右側「支付方式」選「會員餘額」扣款，並核銷獎賞券（須連線）。
                     </div>
                     {offlineMode && memberPhone.length === 8 ? (
                       <div className="mt-2 text-xs text-amber-700">離線狀態無法查詢會員或扣款。</div>
@@ -3496,15 +3497,6 @@ export function PosApp() {
                             )}
                           </div>
                         </label>
-                        <label className="mt-3 flex items-center justify-between gap-3">
-                          <span className="text-xs font-semibold text-slate-600">使用會員餘額先扣</span>
-                          <input
-                            checked={useMemberBalance}
-                            disabled={memberCheckoutRedeemDone}
-                            onChange={(event) => setUseMemberBalance(event.target.checked)}
-                            type="checkbox"
-                          />
-                        </label>
                       </div>
                     ) : null}
                   </div>
@@ -3513,8 +3505,37 @@ export function PosApp() {
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="text-sm font-semibold text-slate-900">支付方式</div>
-                  <div className="mt-1 text-xs text-slate-500">若會員餘額不足，剩餘金額可混支付。</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    可選「會員餘額」搭配一種其他支付方式；餘額不足時剩餘金額以所選方式收取。
+                  </div>
                   <div className="mt-3 grid gap-2">
+                    <button
+                      className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                        !ledgerMember || memberCheckoutRedeemDone
+                          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                          : useMemberBalance
+                            ? "border-orange-300 bg-orange-50 text-orange-700"
+                            : "border-slate-200 bg-slate-50 text-slate-900 hover:border-orange-300"
+                      }`}
+                      disabled={!ledgerMember || memberCheckoutRedeemDone}
+                      onClick={() => {
+                        if (!ledgerMember || memberCheckoutRedeemDone) return;
+                        setUseMemberBalance((current) => !current);
+                      }}
+                      type="button"
+                    >
+                      <div>會員餘額</div>
+                      {ledgerMember ? (
+                        <div className="mt-1 text-xs font-normal opacity-80">
+                          可用 {formatMoney(avosToMop(memberAvailableAvos), bootstrap.currency)}
+                          {useMemberBalance && memberDeduction > 0
+                            ? ` · 本次扣 ${formatMoney(memberDeduction, bootstrap.currency)}`
+                            : ""}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs font-normal">請先在右側輸入會員手機號碼</div>
+                      )}
+                    </button>
                     {paymentMethods.map((method) => (
                       <button
                         key={method}
@@ -3533,13 +3554,29 @@ export function PosApp() {
 
                   <button
                     className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={memberCheckoutSubmitting}
+                    disabled={
+                      memberCheckoutSubmitting ||
+                      (useMemberBalance && memberDeduction > 0 && paymentSummary.total > 0 && !selectedPaymentMethod)
+                    }
                     onClick={() => {
                       if (paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0) {
                         completeOnlinePaidOrder();
                         return;
                       }
-                      void confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
+                      if (
+                        useMemberBalance &&
+                        memberDeduction > 0 &&
+                        paymentSummary.total > 0 &&
+                        !selectedPaymentMethod
+                      ) {
+                        setToast({ tone: "info", message: "會員餘額不足，請再選一種支付方式。" });
+                        return;
+                      }
+                      const method =
+                        useMemberBalance && memberDeduction > 0 && paymentSummary.total <= 0
+                          ? "會員餘額"
+                          : selectedPaymentMethod || paymentMethods[0] || "現金";
+                      void confirmPayment(method);
                     }}
                     type="button"
                   >
