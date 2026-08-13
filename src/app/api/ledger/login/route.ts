@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
-import { resolveTopupShopId } from "@/lib/topup/resolve-shop-id";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
+import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
 
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
 
   const { data: merchantRows, error: merchantError } = await supabase
     .from("merchants")
-    .select("status, name, phone")
+    .select("status, name")
     .eq("id", staffRow.merchant_id)
     .limit(1);
 
@@ -123,7 +123,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const merchant = merchantRows?.[0] as { status?: string; name?: string; phone?: string } | undefined;
+  const merchant = merchantRows?.[0] as { status?: string; name?: string } | undefined;
   const merchantStatus = String(merchant?.status ?? "").toLowerCase();
   if (merchantStatus === "suspended") {
     await supabase.auth.signOut({ scope: "local" });
@@ -135,7 +135,12 @@ export async function POST(request: Request) {
   }
 
   const role = mapLedgerStaffRole(staffRow.staff_role as string | undefined);
-  const topUpShopId = resolveTopupShopId({ merchantPhone: merchant?.phone, staffAccount: phone });
+  const { shopId: topUpShopId } = await fetchTopupShopId(supabase, {
+    merchantId: staffRow.merchant_id,
+    staffRole: staffRow.staff_role as string | undefined,
+    userEmail: authData.user.email,
+    staffAccount: phone,
+  });
   const permissions =
     role === "admin"
       ? { refundOrder: true, voidItem: true, manageAccounts: true }

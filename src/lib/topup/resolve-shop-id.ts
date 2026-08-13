@@ -5,10 +5,7 @@ export function normalizeTopupShopId(value: string | null | undefined): string {
   return normalizePhone(String(value ?? ""));
 }
 
-/**
- * 充值 SSO 須用 Ledger 商戶主檔電話（merchants.phone），
- * 店員 POS 登入號（merchant_staff 帳號）可能與店舖編號不同。
- */
+/** @deprecated 請改用 fetchTopupShopId（server）以解析店主電話。 */
 export function resolveTopupShopId(params: {
   merchantPhone?: string | null;
   staffAccount?: string | null;

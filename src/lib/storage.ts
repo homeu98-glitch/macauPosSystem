@@ -442,7 +442,7 @@ export type AuthSession = {
   role: UserRole;
   storeIds?: string[];
   merchantId?: string;
-  /** Ledger merchants.phone — topUp SSO 店舖編號，可能與 account（店員登入）不同 */
+  /** topUp SSO 8 位店舖編號（通常為店主電話，可能與 account 不同） */
   topUpShopId?: string;
   permissionGroupId?: string;
   permissions: UserPermissions;

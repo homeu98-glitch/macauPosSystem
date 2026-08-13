@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prepareLedgerServerClient, resolveLedgerPublicConfig } from "@/lib/ledger/supabase-server-auth";
-import { resolveTopupShopId } from "@/lib/topup/resolve-shop-id";
+import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
 import { buildTopupOwnerEmbedUrl, getTopupBaseUrl, isTopupSsoConfigured } from "@/lib/topup/sso.server";
 
 function readBearerToken(request: Request): string | null {
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
 
   const { data: merchantRows, error: merchantError } = await supabase
     .from("merchants")
-    .select("name, phone")
+    .select("name")
     .eq("id", staffRow.merchant_id)
     .limit(1);
 
@@ -89,10 +89,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const merchant = merchantRows?.[0] as { name?: string; phone?: string } | undefined;
+  const merchant = merchantRows?.[0] as { name?: string } | undefined;
   const staffAccount = String(body.staffAccount ?? "").replace(/\D/g, "").slice(0, 8);
-  const shopId = resolveTopupShopId({
-    merchantPhone: merchant?.phone,
+  const { shopId, source } = await fetchTopupShopId(supabase, {
+    merchantId: staffRow.merchant_id,
+    staffRole: staffRow.staff_role as string | undefined,
+    userEmail: userData.user.email,
     staffAccount,
   });
 
@@ -100,7 +102,8 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        error: "無法取得充值店舖編號，請確認 Ledger 商戶已設定 8 位電話（merchants.phone）。",
+        error:
+          "無法取得充值店舖編號。請以店主帳號登入 POS，或在 Vercel 設定 TOPUP_SHOP_ID_OVERRIDES（merchant UUID → 8 位店舖編號）。",
       },
       { status: 400 },
     );
@@ -117,6 +120,6 @@ export async function POST(request: Request) {
     shopId,
     shopName,
     staffAccount: ownerLogin,
-    merchantPhone: merchant?.phone ?? null,
+    shopIdSource: source,
   });
 }
