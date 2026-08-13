@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
+import { orderMatchesReportRange, ReportRangeKey, reportRangeLabel } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { loadOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
@@ -14,7 +15,7 @@ function formatMoney(amount: number) {
 }
 
 export function ReportsDashboard() {
-  const [range, setRange] = useState<"all" | "yesterday" | "7d" | "30d">("30d");
+  const [range, setRange] = useState<ReportRangeKey>("30d");
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
   const [ledgerSummary, setLedgerSummary] = useState<LedgerReportSummary | null>(null);
@@ -81,31 +82,8 @@ export function ReportsDashboard() {
     const closed = orders.filter(
       (order) => order.status === "settled" || order.status === "partially_refunded" || order.status === "refunded",
     );
-    if (range === "all") {
-      return closed.slice().sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-    }
-
-    const now = new Date();
-    if (range === "yesterday") {
-      const start = new Date(now);
-      start.setDate(now.getDate() - 1);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setHours(23, 59, 59, 999);
-      return closed
-        .filter((order) => {
-          const t = Date.parse(order.updatedAt);
-          return t >= start.getTime() && t <= end.getTime();
-        })
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-    }
-
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    if (range === "7d") start.setDate(now.getDate() - 7);
-    if (range === "30d") start.setDate(now.getDate() - 30);
     return closed
-      .filter((order) => Date.parse(order.updatedAt) >= start.getTime())
+      .filter((order) => orderMatchesReportRange(order, range))
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [orders, range]);
 
@@ -131,14 +109,7 @@ export function ReportsDashboard() {
     }));
   }, [filteredOrders]);
 
-  const detailTitle =
-    range === "all"
-      ? "全部訂單明細"
-      : range === "yesterday"
-        ? "昨天訂單明細"
-        : range === "7d"
-          ? "最近 7 天訂單明細"
-          : "最近 30 天訂單明細";
+  const detailTitle = `${reportRangeLabel(range)}訂單明細`;
 
   function exportCsv() {
     const rows: Array<Record<string, string | number>> = filteredOrders.map((order) => ({
@@ -190,6 +161,7 @@ export function ReportsDashboard() {
               </div>
               <div className="flex items-center gap-2">
                 {[
+                  ["today", "今天"],
                   ["all", "全部"],
                   ["yesterday", "昨天"],
                   ["7d", "最近 7 天"],
@@ -200,7 +172,7 @@ export function ReportsDashboard() {
                     className={`rounded-full px-4 py-2 text-sm font-semibold ${
                       range === key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
-                    onClick={() => setRange(key as typeof range)}
+                    onClick={() => setRange(key as ReportRangeKey)}
                     type="button"
                   >
                     {label}

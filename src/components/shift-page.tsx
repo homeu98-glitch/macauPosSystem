@@ -1,10 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
+import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
+import { orderMatchesReportRange } from "@/lib/ledger/report-period";
+import { restoreLedgerSession } from "@/lib/ledger/session";
+import { isLocalPosOrder } from "@/lib/pos-order-filters";
 import {
   loadAuthSession,
   loadDeviceConfig,
@@ -19,7 +23,30 @@ import {
   saveShiftState,
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
-import { PrintJob, QueueEvent } from "@/lib/types";
+import { PrintJob, PosOrder, QueueEvent } from "@/lib/types";
+
+function summarizeClosedOrders(orders: PosOrder[]) {
+  const closedOrders = orders.filter(
+    (order) =>
+      order.status === "settled" || order.status === "partially_refunded" || order.status === "refunded",
+  );
+  const refunded = closedOrders.filter(
+    (order) => order.status === "partially_refunded" || order.status === "refunded",
+  );
+  const paymentBreakdown = closedOrders.reduce<Record<string, number>>((acc, order) => {
+    const key = order.paymentMethod ?? "未記錄";
+    acc[key] = (acc[key] ?? 0) + order.total;
+    return acc;
+  }, {});
+  return {
+    count: closedOrders.length,
+    revenue: closedOrders.reduce((sum, order) => sum + order.total, 0),
+    prepaid: closedOrders.reduce((sum, order) => sum + (order.prepaidAmount ?? 0), 0),
+    refundCount: refunded.length,
+    refundAmount: refunded.reduce((sum, order) => sum + (order.refundedAmount ?? order.total), 0),
+    paymentBreakdown,
+  };
+}
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -47,30 +74,61 @@ export function ShiftPage() {
   const [historyNoteDrafts, setHistoryNoteDrafts] = useState<Record<string, string>>({});
   const [reprintingShiftId, setReprintingShiftId] = useState<string | null>(null);
   const [exportingType, setExportingType] = useState<"csv" | "excel" | null>(null);
+  const [ledgerToday, setLedgerToday] = useState<LedgerReportSummary | null>(null);
+  const [ledgerTodayLoading, setLedgerTodayLoading] = useState(false);
+  const [ledgerTodayError, setLedgerTodayError] = useState<string | null>(null);
   const authSession = useMemo(() => loadAuthSession(), []);
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
-  const orders = useMemo(() => loadOrders(), []);
+  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
 
-  const summary = useMemo(() => {
-    const closedOrders = orders.filter((order) =>
-      order.status === "settled" || order.status === "partially_refunded" || order.status === "refunded",
-    );
-    const refunded = orders.filter((order) => order.status === "partially_refunded" || order.status === "refunded");
-    const paymentBreakdown = closedOrders.reduce<Record<string, number>>((acc, order) => {
-      const key = order.paymentMethod ?? "未記錄";
-      acc[key] = (acc[key] ?? 0) + order.total;
-      return acc;
-    }, {});
-    return {
-      count: closedOrders.length,
-      revenue: closedOrders.reduce((sum, order) => sum + order.total, 0),
-      prepaid: closedOrders.reduce((sum, order) => sum + (order.prepaidAmount ?? 0), 0),
-      refundCount: refunded.length,
-      refundAmount: refunded.reduce((sum, order) => sum + (order.refundedAmount ?? order.total), 0),
-      paymentBreakdown,
-    };
-  }, [orders]);
+  useEffect(() => {
+    function refreshOrders() {
+      setOrders(loadOrders());
+    }
+    refreshOrders();
+    window.addEventListener("focus", refreshOrders);
+    return () => window.removeEventListener("focus", refreshOrders);
+  }, []);
+
+  const todayLocalOrders = useMemo(
+    () =>
+      orders.filter(
+        (order) =>
+          isLocalPosOrder(order) &&
+          orderMatchesReportRange(order, "today") &&
+          (order.status === "settled" ||
+            order.status === "partially_refunded" ||
+            order.status === "refunded"),
+      ),
+    [orders],
+  );
+
+  const summary = useMemo(() => summarizeClosedOrders(todayLocalOrders), [todayLocalOrders]);
+
+  useEffect(() => {
+    async function loadLedgerToday() {
+      setLedgerTodayLoading(true);
+      setLedgerTodayError(null);
+      try {
+        const restored = await restoreLedgerSession();
+        if (!restored) {
+          setLedgerToday(null);
+          setLedgerTodayError("尚未登入 Ledger，無法讀取今日線上訂單。");
+          return;
+        }
+        const data = await getMerchantReportSummary("today");
+        setLedgerToday(data);
+      } catch (error) {
+        setLedgerToday(null);
+        setLedgerTodayError(error instanceof Error ? error.message : "讀取今日線上報表失敗");
+      } finally {
+        setLedgerTodayLoading(false);
+      }
+    }
+
+    void loadLedgerToday();
+  }, []);
   const queueSummary = (() => {
     const queue = loadQueue();
     const printJobs = loadPrintJobs();
@@ -236,10 +294,20 @@ export function ShiftPage() {
     const lines = [
       `交班時間：${now.replace("T", " ").slice(0, 16)}`,
       shift.openedAt ? `開工時間：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "",
+      "— 店內（今日）—",
       `已結帳訂單：${summary.count} 張`,
       `營業額：${formatMoney(summary.revenue)}`,
-      `線上已支付：${formatMoney(summary.prepaid)}`,
+      `線上已支付（店內單）：${formatMoney(summary.prepaid)}`,
       `退款：${summary.refundCount} 張 / ${formatMoney(summary.refundAmount)}`,
+      ...(ledgerToday
+        ? [
+            "— 會員通線上（今日）—",
+            `線上訂單：${ledgerToday.orderCount} 張`,
+            `已付線上營業額：${formatMoney(ledgerToday.orderPaidMop)}`,
+            `餘額扣點：${formatMoney(ledgerToday.orderBalancePaidMop)}`,
+            `到店／貨到付款：${formatMoney(ledgerToday.orderInStorePaidMop)}`,
+          ]
+        : []),
       `應收現金：${formatMoney(expectedCash)}`,
       Number.isFinite(actualCashValue) ? `實收現金：${formatMoney(actualCashValue)}` : "",
       Number.isFinite(actualCashValue) ? `現金差額：${formatMoney(cashDifference)}` : "",
@@ -498,8 +566,11 @@ export function ShiftPage() {
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-base font-semibold text-slate-900">今日摘要</div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="text-base font-semibold text-slate-900">今日摘要（澳門時間）</div>
+            <div className="mt-1 text-xs text-slate-500">店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。</div>
+
+            <div className="mt-4 text-sm font-semibold text-slate-700">店內（線下 POS）</div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">已結帳訂單</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.count}</div>
@@ -509,7 +580,7 @@ export function ShiftPage() {
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.revenue)}</div>
               </article>
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">線上已支付</div>
+                <div className="text-sm text-slate-500">店內預付／線上已付</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.prepaid)}</div>
               </article>
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -527,10 +598,10 @@ export function ShiftPage() {
               </article>
             </div>
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">支付方式拆分</div>
+              <div className="text-sm font-semibold text-slate-900">店內支付方式拆分</div>
               <div className="mt-3 grid gap-2">
                 {Object.keys(summary.paymentBreakdown).length === 0 ? (
-                  <div className="text-sm text-slate-500">今天暫未有已結帳訂單。</div>
+                  <div className="text-sm text-slate-500">今天暫未有已結帳店內訂單。</div>
                 ) : (
                   Object.entries(summary.paymentBreakdown).map(([method, amount]) => (
                     <div key={method} className="flex items-center justify-between text-sm text-slate-700">
@@ -541,6 +612,34 @@ export function ShiftPage() {
                 )}
               </div>
             </div>
+
+            <div className="mt-6 text-sm font-semibold text-slate-700">會員通線上（Ledger）</div>
+            {ledgerTodayLoading ? <div className="mt-2 text-sm text-slate-500">載入今日線上報表…</div> : null}
+            {ledgerTodayError ? (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {ledgerTodayError}
+              </div>
+            ) : null}
+            {ledgerToday ? (
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
+                  <div className="text-sm text-slate-500">線上訂單數</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">{ledgerToday.orderCount}</div>
+                </article>
+                <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
+                  <div className="text-sm text-slate-500">已付線上營業額</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {formatMoney(ledgerToday.orderPaidMop)}
+                  </div>
+                </article>
+                <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
+                  <div className="text-sm text-slate-500">餘額扣點 / 到店付款</div>
+                  <div className="mt-2 text-base font-semibold text-slate-900">
+                    {formatMoney(ledgerToday.orderBalancePaidMop)} / {formatMoney(ledgerToday.orderInStorePaidMop)}
+                  </div>
+                </article>
+              </div>
+            ) : null}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 lg:col-span-2">
