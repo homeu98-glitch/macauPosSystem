@@ -442,6 +442,8 @@ export type AuthSession = {
   role: UserRole;
   storeIds?: string[];
   merchantId?: string;
+  /** Ledger merchants.phone — topUp SSO 店舖編號，可能與 account（店員登入）不同 */
+  topUpShopId?: string;
   permissionGroupId?: string;
   permissions: UserPermissions;
   loggedInAt: string;
@@ -463,6 +465,7 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
         ? [session.merchantId]
         : ["macau-store-a"],
     merchantId: session.merchantId,
+    topUpShopId: session.topUpShopId,
     permissionGroupId: session.permissionGroupId,
     permissions: {
       ...defaultPermissionsForRole(role),

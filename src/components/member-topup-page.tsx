@@ -9,7 +9,14 @@ import { useNetworkOnline } from "@/lib/use-network-online";
 
 type EmbedState =
   | { status: "loading" }
-  | { status: "ready"; embedUrl: string; shopName: string; shopId: string; topupBaseUrl: string }
+  | {
+      status: "ready";
+      embedUrl: string;
+      shopName: string;
+      shopId: string;
+      staffAccount: string;
+      topupBaseUrl: string;
+    }
   | { status: "error"; message: string };
 
 export function MemberTopupPage() {
@@ -39,6 +46,8 @@ export function MemberTopupPage() {
       return;
     }
 
+    const staffAccount = latestSession?.account ?? session.account;
+
     try {
       const response = await fetch("/api/topup/owner-embed", {
         method: "POST",
@@ -47,7 +56,7 @@ export function MemberTopupPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          shopId: latestSession?.account ?? session.account,
+          staffAccount,
           refreshToken: latestSession?.ledgerRefreshToken ?? session.ledgerRefreshToken,
         }),
       });
@@ -57,6 +66,7 @@ export function MemberTopupPage() {
         embedUrl?: string;
         shopName?: string;
         shopId?: string;
+        staffAccount?: string;
         topupBaseUrl?: string;
       };
 
@@ -68,7 +78,8 @@ export function MemberTopupPage() {
         status: "ready",
         embedUrl: payload.embedUrl,
         shopName: payload.shopName ?? payload.shopId ?? "",
-        shopId: payload.shopId ?? session.account,
+        shopId: payload.shopId ?? latestSession?.topUpShopId ?? staffAccount,
+        staffAccount: payload.staffAccount ?? staffAccount,
         topupBaseUrl: payload.topupBaseUrl ?? "",
       });
     } catch (error) {
@@ -98,32 +109,36 @@ export function MemberTopupPage() {
             {state.status === "ready" ? (
               <div className="flex flex-wrap gap-2">
                 <a
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
                   href={state.embedUrl}
                   rel="noopener noreferrer"
                   target="_blank"
                 >
-                  在新分頁開啟
+                  在新分頁開啟（建議）
                 </a>
                 <button
-                  className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                   onClick={() => void loadEmbed()}
                   type="button"
                 >
-                  重新登入 iframe
+                  重新取得 SSO
                 </button>
               </div>
             ) : null}
           </div>
 
           {state.status === "ready" ? (
-            <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              <div className="font-semibold">
-                已接入 {state.shopName}（{state.shopId}）
+            <div className="mt-3 space-y-3">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                <div className="font-semibold">
+                  已接入 {state.shopName}（充值店舖編號 {state.shopId}）
+                </div>
+                <div className="mt-1 text-emerald-800">
+                  POS 登入帳號：{state.staffAccount}。充值系統使用 Ledger 商戶主檔電話作為店舖編號，與店員登入號可能不同。
+                </div>
               </div>
-              <div className="mt-1 text-emerald-800">
-                在下方開啟「設定自動核准」後，充值系統會每分鐘在伺服器端執行批核（Vercel Cron），POS
-                關閉此頁後仍會生效。若需即時刷新待審列表，可開啟店主後台內的「即時更新」。
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                iPad／Safari 可能阻擋 iframe 內的充值登入 Cookie。若下方顯示「請先登入」或資料不對，請用「在新分頁開啟（建議）」。
               </div>
             </div>
           ) : null}
@@ -153,10 +168,11 @@ export function MemberTopupPage() {
             <>
               {iframeBlocked ? (
                 <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                  瀏覽器可能阻擋嵌入顯示，請使用上方「在新分頁開啟」。
+                  瀏覽器可能阻擋嵌入顯示，請使用上方「在新分頁開啟（建議）」。
                 </div>
               ) : null}
               <iframe
+                key={state.embedUrl}
                 className="h-full w-full rounded-2xl border border-slate-200 bg-white shadow-sm"
                 referrerPolicy="no-referrer"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"

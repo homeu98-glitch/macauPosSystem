@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prepareLedgerServerClient, resolveLedgerPublicConfig } from "@/lib/ledger/supabase-server-auth";
+import { resolveTopupShopId } from "@/lib/topup/resolve-shop-id";
 import { buildTopupOwnerEmbedUrl, getTopupBaseUrl, isTopupSsoConfigured } from "@/lib/topup/sso.server";
 
 function readBearerToken(request: Request): string | null {
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json().catch(() => ({}))) as {
-    shopId?: string;
+    staffAccount?: string;
     refreshToken?: string;
   };
 
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
 
   const { data: merchantRows, error: merchantError } = await supabase
     .from("merchants")
-    .select("name")
+    .select("name, phone")
     .eq("id", staffRow.merchant_id)
     .limit(1);
 
@@ -88,22 +89,26 @@ export async function POST(request: Request) {
     );
   }
 
-  const merchant = merchantRows?.[0] as { name?: string } | undefined;
-  const shopIdFromBody = String(body.shopId ?? "").replace(/\D/g, "").slice(0, 8);
-  const shopId = /^\d{8}$/.test(shopIdFromBody) ? shopIdFromBody : "";
+  const merchant = merchantRows?.[0] as { name?: string; phone?: string } | undefined;
+  const staffAccount = String(body.staffAccount ?? "").replace(/\D/g, "").slice(0, 8);
+  const shopId = resolveTopupShopId({
+    merchantPhone: merchant?.phone,
+    staffAccount,
+  });
 
   if (!/^\d{8}$/.test(shopId)) {
     return NextResponse.json(
       {
         ok: false,
-        error: "無法取得 8 位店舖編號，請確認 POS 登入帳號為 8 位商戶電話。",
+        error: "無法取得充值店舖編號，請確認 Ledger 商戶已設定 8 位電話（merchants.phone）。",
       },
       { status: 400 },
     );
   }
 
   const shopName = merchant?.name?.trim() || shopId;
-  const embedUrl = buildTopupOwnerEmbedUrl({ shopId, shopName });
+  const ownerLogin = /^\d{8}$/.test(staffAccount) ? staffAccount : shopId;
+  const embedUrl = buildTopupOwnerEmbedUrl({ shopId, shopName, ownerLogin });
 
   return NextResponse.json({
     ok: true,
@@ -111,5 +116,7 @@ export async function POST(request: Request) {
     topupBaseUrl: getTopupBaseUrl(),
     shopId,
     shopName,
+    staffAccount: ownerLogin,
+    merchantPhone: merchant?.phone ?? null,
   });
 }

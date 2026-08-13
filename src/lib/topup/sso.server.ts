@@ -13,7 +13,11 @@ export function isTopupSsoConfigured(): boolean {
 }
 
 /** 簽署 topUpAutomation Site B 店主 SSO JWT（對齊 sitea-jwt-integration-guide）。 */
-export function signTopupOwnerSsoToken(params: { shopId: string; shopName: string }) {
+export function signTopupOwnerSsoToken(params: {
+  shopId: string;
+  shopName: string;
+  ownerLogin?: string;
+}) {
   const secret = process.env.TOPUP_SITEA_SSO_SECRET?.trim();
   if (!secret) {
     throw new Error("伺服器尚未設定 TOPUP_SITEA_SSO_SECRET。");
@@ -26,6 +30,8 @@ export function signTopupOwnerSsoToken(params: { shopId: string; shopName: strin
 
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
+  const ownerLogin = (params.ownerLogin || shopId).replace(/\D/g, "").slice(0, 8) || shopId;
+
   const payload = {
     iss: process.env.TOPUP_SITEA_SSO_ISSUER?.trim() || "site-a",
     aud: process.env.TOPUP_SITEA_SSO_AUDIENCE?.trim() || "site-b",
@@ -35,9 +41,12 @@ export function signTopupOwnerSsoToken(params: { shopId: string; shopName: strin
     nbf: now - 60,
     exp: now + 900,
     role: "owner",
+    owner_login: ownerLogin,
+    owner_code: ownerLogin,
     shop: {
       shopId,
       shopName: params.shopName || shopId,
+      shopCode: shopId,
     },
     redirect: {
       path: "/owner.html",
@@ -51,7 +60,11 @@ export function signTopupOwnerSsoToken(params: { shopId: string; shopName: strin
   return `${encodedHeader}.${encodedPayload}.${signature}`;
 }
 
-export function buildTopupOwnerEmbedUrl(params: { shopId: string; shopName: string }) {
+export function buildTopupOwnerEmbedUrl(params: {
+  shopId: string;
+  shopName: string;
+  ownerLogin?: string;
+}) {
   const token = signTopupOwnerSsoToken(params);
   const base = getTopupBaseUrl();
   return `${base}/owner.html?ssoToken=${encodeURIComponent(token)}`;
