@@ -15,6 +15,7 @@ import type {
 } from "@/lib/salon/types";
 import {
   loadBookings,
+  loadSalonOrders,
   saveSalonOrders,
   loadSalonBootstrap,
 } from "@/lib/salon/storage";

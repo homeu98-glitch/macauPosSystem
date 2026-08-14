@@ -103,7 +103,7 @@ export function SalonSidebar() {
           {[...salonNavItems].map((item) => {
             const active =
               pathname === item.href ||
-              (item.href !== "/salon" && item.href !== "/" && pathname.startsWith(item.href));
+              (item.href !== "/salon" && pathname.startsWith(item.href));
             return (
               <Link
                 key={item.href}

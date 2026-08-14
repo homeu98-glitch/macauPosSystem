@@ -81,5 +81,5 @@ export function applyMockLedgerPayment(
   };
   customers[idx] = updated;
   saveCustomers(customers);
-  return { ok: true, remaining: updated.ledgerBalance };
+  return { ok: true, remaining: balance - amount };
 }
