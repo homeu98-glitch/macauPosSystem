@@ -16,10 +16,10 @@ import {
   setTerminalIndustry,
 } from "@/lib/salon/industry-config";
 import { seedMockBookingsIfEmpty, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
-import { signOutLedgerSession } from "@/lib/ledger/session";
 import type { SalonBootstrap, SalonBooking } from "@/lib/salon/types";
+import { SalonSidebar } from "@/components/salon/salon-sidebar";
 
-type Phase1Status = "loading" | "ready";
+type PhaseStatus = "loading" | "ready";
 
 function formatDateTime(date: Date) {
   const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getDay()];
@@ -41,16 +41,14 @@ function isSameDay(isoA: string, isoB: Date) {
 }
 
 export function SalonWorkbench() {
-  const [status, setStatus] = useState<Phase1Status>("loading");
+  const [status, setStatus] = useState<PhaseStatus>("loading");
   const [bootstrap, setBootstrap] = useState<SalonBootstrap | null>(null);
   const [bookings, setBookings] = useState<SalonBooking[]>([]);
   const [orderCount, setOrderCount] = useState(0);
   const [nowText, setNowText] = useState("");
   const [terminalIsSalon, setTerminalIsSalon] = useState(false);
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
-    // 首次啟動 seed；active store 用預設 storeId，實際部署再由登入決定。
     const seeded = ensureSalonBootstrap(DEFAULT_SALON_STORE_ID);
     setBootstrap(seeded);
     seedMockBookingsIfEmpty();
@@ -60,7 +58,6 @@ export function SalonWorkbench() {
     setStatus("ready");
   }, []);
 
-  // Listen to mock realtime events
   useEffect(() => {
     function handler() {
       setBookings(loadBookings());
@@ -107,19 +104,9 @@ export function SalonWorkbench() {
     setTerminalIsSalon(true);
   }
 
-  async function handleSignOut() {
-    setSigningOut(true);
-    try {
-      await signOutLedgerSession();
-      window.location.replace("/login");
-    } catch {
-      setSigningOut(false);
-    }
-  }
-
   if (status === "loading" || !bootstrap) {
     return (
-      <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+      <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center md:pl-[88px]">
         <div>
           <div className="text-base font-semibold text-slate-900">正在載入 salon 工作台…</div>
           <div className="mt-2 text-sm text-slate-500">首次啟動會種入預設服務資料。</div>
@@ -129,256 +116,210 @@ export function SalonWorkbench() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-100 text-slate-900">
-      {/* 頂部 header */}
-      <header className="border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-orange-500 text-base font-bold text-white">
-              院
-            </div>
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-                Salon POS · v0.1
+    <div className="flex min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
+      <SalonSidebar />
+
+      <div className="flex flex-1 flex-col">
+        {/* 頂部 header */}
+        <header className="border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-rose-500 text-base font-bold text-white">
+                院
               </div>
-              <div className="text-lg font-bold text-slate-900">{bootstrap.storeName}</div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                  Salon POS · v0.2
+                </div>
+                <div className="text-lg font-bold text-slate-900">{bootstrap.storeName}</div>
+              </div>
+              <span className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
+                美容院
+              </span>
             </div>
-            <span className="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
-              美容院
-            </span>
-            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
-              Phase 2
-            </span>
+            <div className="text-right text-sm text-slate-500">
+              <div className="font-semibold text-slate-700">{nowText}</div>
+              <div className="text-xs">storeId：{bootstrap.storeId}</div>
+            </div>
           </div>
-          <div className="text-right text-sm text-slate-500">
-            <div className="font-semibold text-slate-700">{nowText}</div>
-            <div className="text-xs">storeId：{bootstrap.storeId}</div>
-          </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Phase banner */}
-      <section className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="font-semibold">
-            Phase 2 — 預約看板 + Walk-in 開單。點擊「預約看板」或「快速開單」開始操作。
-          </div>
-          {!terminalIsSalon ? (
-            <button
-              type="button"
-              onClick={handleMarkSalonTerminal}
-              className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-700"
-            >
-              把此終端標記為 salon
-            </button>
-          ) : (
-            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-              本終端已標記為 salon
-            </span>
-          )}
-        </div>
-      </section>
-
-      {/* Quick actions */}
-      <section className="flex flex-wrap gap-3 px-6 py-3">
-        <Link
-          href="/salon/calendar"
-          className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-orange-600"
-        >
-          📅 預約看板
-        </Link>
-        <Link
-          href="/salon/booking/new"
-          className="rounded-xl bg-violet-500 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-violet-600"
-        >
-          + 快速開單
-        </Link>
-      </section>
-
-      {/* KPI 列 */}
-      <section className="grid grid-cols-2 gap-3 px-6 py-3 md:grid-cols-4">
-        <KpiCard
-          label="今日預約"
-          value={todayCounts.confirmed}
-          sub="confirmed + pending"
-          accent="bg-orange-500"
-        />
-        <KpiCard
-          label="服務中"
-          value={todayCounts.in_service}
-          sub="checked_in + in_service"
-          accent="bg-blue-500"
-        />
-        <KpiCard
-          label="待結帳"
-          value={todayCounts.completed}
-          sub="completed"
-          accent="bg-violet-500"
-        />
-        <KpiCard
-          label="已結帳"
-          value={todayCounts.settled}
-          sub="settled"
-          accent="bg-emerald-500"
-        />
-      </section>
-
-      {/* 區段：四個面板 */}
-      <section className="grid flex-1 grid-cols-1 gap-4 px-6 pb-6 md:grid-cols-2 lg:grid-cols-4">
-        <Panel
-          title="今日預約"
-          hint="點擊進入預約詳情"
-          emptyMessage="尚無預約"
-          action={
-            <Link
-              href="/salon/calendar"
-              className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-200"
-            >
-              看板
-            </Link>
-          }
-        >
-          <ul className="grid gap-2">
-            {todayBookings.length === 0 ? (
-              <li className="text-center text-xs text-slate-400">尚無預約</li>
+        {/* Phase banner */}
+        <section className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="font-semibold">
+              Phase 2 — 預約看板 + Walk-in 開單。點擊左側導航欄切換功能。
+            </div>
+            {!terminalIsSalon ? (
+              <button
+                type="button"
+                onClick={handleMarkSalonTerminal}
+                className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-700"
+              >
+                把此終端標記為 salon
+              </button>
             ) : (
-              todayBookings.slice(0, 8).map((b) => (
-                <li key={b.id}>
-                  <Link
-                    href={`/salon/booking/${b.id}`}
-                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:bg-orange-50"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate font-semibold">{b.customerName}</div>
-                      <div className="mt-0.5 truncate text-xs text-slate-500">
-                        {b.services.map((s) => s.name).join("、")}
-                      </div>
-                    </div>
-                    <div className="ml-2 shrink-0 text-right">
-                      <div className="text-xs font-semibold text-slate-700">
-                        {new Date(b.startAt).toLocaleTimeString("zh-HK", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </div>
-                      <div className="text-[10px] text-slate-400">{b.status}</div>
-                    </div>
-                  </Link>
-                </li>
-              ))
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                本終端已標記為 salon
+              </span>
             )}
-          </ul>
-        </Panel>
+          </div>
+        </section>
 
-        <Panel
-          title="走進客戶"
-          hint="walk-in 開單"
-          emptyMessage="點此開新 walk-in"
-          action={
+        {/* KPI 列 */}
+        <section className="grid grid-cols-2 gap-3 px-6 py-3 md:grid-cols-4">
+          <KpiCard
+            label="今日預約"
+            value={todayCounts.confirmed}
+            sub="confirmed + pending"
+            accent="bg-orange-500"
+          />
+          <KpiCard
+            label="服務中"
+            value={todayCounts.in_service}
+            sub="checked_in + in_service"
+            accent="bg-blue-500"
+          />
+          <KpiCard
+            label="待結帳"
+            value={todayCounts.completed}
+            sub="completed"
+            accent="bg-violet-500"
+          />
+          <KpiCard
+            label="已結帳"
+            value={todayCounts.settled}
+            sub="settled"
+            accent="bg-emerald-500"
+          />
+        </section>
+
+        {/* 區段：四個面板 */}
+        <section className="grid flex-1 grid-cols-1 gap-4 px-6 pb-6 md:grid-cols-2 lg:grid-cols-4">
+          <Panel
+            title="今日預約"
+            hint="點擊進入預約詳情"
+            emptyMessage="尚無預約"
+            action={
+              <Link
+                href="/salon/calendar"
+                className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-200"
+              >
+                看板
+              </Link>
+            }
+          >
+            <ul className="grid gap-2">
+              {todayBookings.length === 0 ? (
+                <li className="text-center text-xs text-slate-400">尚無預約</li>
+              ) : (
+                todayBookings.slice(0, 8).map((b) => (
+                  <li key={b.id}>
+                    <Link
+                      href={`/salon/booking/${b.id}`}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:bg-orange-50"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold">{b.customerName}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500">
+                          {b.services.map((s) => s.name).join("、")}
+                        </div>
+                      </div>
+                      <div className="ml-2 shrink-0 text-right">
+                        <div className="text-xs font-semibold text-slate-700">
+                          {new Date(b.startAt).toLocaleTimeString("zh-HK", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </div>
+                        <div className="text-[10px] text-slate-400">{b.status}</div>
+                      </div>
+                    </Link>
+                  </li>
+                ))
+              )}
+            </ul>
+          </Panel>
+
+          <Panel
+            title="走進客戶"
+            hint="walk-in 開單"
+            emptyMessage="點此開新 walk-in"
+            action={
+              <Link
+                href="/salon/booking/new"
+                className="rounded-lg bg-violet-100 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-200"
+              >
+                + 開單
+              </Link>
+            }
+          >
             <Link
               href="/salon/booking/new"
-              className="rounded-lg bg-violet-100 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-200"
+              className="grid h-full place-items-center rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50 px-4 py-6 text-center text-sm font-semibold text-violet-600 transition hover:bg-violet-100"
             >
-              + 開單
+              + 新 walk-in 預約
             </Link>
-          }
-        >
-          <Link
-            href="/salon/booking/new"
-            className="grid h-full place-items-center rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50 px-4 py-6 text-center text-sm font-semibold text-violet-600 transition hover:bg-violet-100"
+          </Panel>
+
+          <Panel
+            title="服務中"
+            hint="進行中服務"
+            emptyMessage="無進行中服務"
           >
-            + 新 walk-in 預約
-          </Link>
-        </Panel>
+            <ul className="grid gap-2">
+              {todayBookings.filter((b) => b.status === "in_service" || b.status === "checked_in").length === 0 ? (
+                <li className="text-center text-xs text-slate-400">無進行中服務</li>
+              ) : (
+                todayBookings
+                  .filter((b) => b.status === "in_service" || b.status === "checked_in")
+                  .map((b) => (
+                    <li key={b.id}>
+                      <Link
+                        href={`/salon/booking/${b.id}`}
+                        className="flex items-center justify-between rounded-xl border border-slate-200 bg-blue-50 px-3 py-2 text-sm transition hover:bg-blue-100"
+                      >
+                        <span className="font-semibold">{b.customerName}</span>
+                        <span className="text-xs text-slate-500">{b.status}</span>
+                      </Link>
+                    </li>
+                  ))
+              )}
+            </ul>
+          </Panel>
 
-        <Panel
-          title="服務中"
-          hint="進行中服務"
-          emptyMessage="無進行中服務"
-        >
-          <ul className="grid gap-2">
-            {todayBookings.filter((b) => b.status === "in_service" || b.status === "checked_in").length === 0 ? (
-              <li className="text-center text-xs text-slate-400">無進行中服務</li>
-            ) : (
-              todayBookings
-                .filter((b) => b.status === "in_service" || b.status === "checked_in")
-                .map((b) => (
-                  <li key={b.id}>
-                    <Link
-                      href={`/salon/booking/${b.id}`}
-                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-blue-50 px-3 py-2 text-sm transition hover:bg-blue-100"
-                    >
-                      <span className="font-semibold">{b.customerName}</span>
-                      <span className="text-xs text-slate-500">{b.status}</span>
-                    </Link>
-                  </li>
-                ))
-            )}
-          </ul>
-        </Panel>
-
-        <Panel
-          title="待結帳"
-          hint="服務完成，等候結帳"
-          emptyMessage="無待結帳"
-          trailing={
-            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
-              {orderCount} 筆訂單
-            </span>
-          }
-        >
-          <ul className="grid gap-2">
-            {todayBookings.filter((b) => b.status === "completed").length === 0 ? (
-              <li className="text-center text-xs text-slate-400">無待結帳</li>
-            ) : (
-              todayBookings
-                .filter((b) => b.status === "completed")
-                .map((b) => (
-                  <li key={b.id}>
-                    <Link
-                      href={`/salon/booking/${b.id}`}
-                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-violet-50 px-3 py-2 text-sm transition hover:bg-violet-100"
-                    >
-                      <span className="font-semibold">{b.customerName}</span>
-                      <span className="text-xs font-semibold text-violet-700">待結帳</span>
-                    </Link>
-                  </li>
-                ))
-            )}
-          </ul>
-        </Panel>
-      </section>
-
-      {/* 底部導航 */}
-      <footer className="border-t border-slate-200 bg-white px-6 py-3 text-sm shadow-inner">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-            <span>員工 {bootstrap.staff.length} 位</span>
-            <span>·</span>
-            <span>服務類目 {bootstrap.serviceCategories.length} 類</span>
-            <span>·</span>
-            <span>服務項目 {bootstrap.serviceItems.length} 項</span>
-            <span>·</span>
-            <span>房型 {bootstrap.stations.length} 個</span>
-          </div>
-          <div className="flex gap-2">
-            <a
-              href="/"
-              className="rounded-2xl bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700"
-            >
-              回餐飲主頁
-            </a>
-            <button
-              type="button"
-              onClick={() => void handleSignOut()}
-              disabled={signingOut}
-              className="rounded-2xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-            >
-              {signingOut ? "登出中…" : "登出"}
-            </button>
-          </div>
-        </div>
-      </footer>
+          <Panel
+            title="待結帳"
+            hint="服務完成，等候結帳"
+            emptyMessage="無待結帳"
+            trailing={
+              <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
+                {orderCount} 筆訂單
+              </span>
+            }
+          >
+            <ul className="grid gap-2">
+              {todayBookings.filter((b) => b.status === "completed").length === 0 ? (
+                <li className="text-center text-xs text-slate-400">無待結帳</li>
+              ) : (
+                todayBookings
+                  .filter((b) => b.status === "completed")
+                  .map((b) => (
+                    <li key={b.id}>
+                      <Link
+                        href={`/salon/booking/${b.id}`}
+                        className="flex items-center justify-between rounded-xl border border-slate-200 bg-violet-50 px-3 py-2 text-sm transition hover:bg-violet-100"
+                      >
+                        <span className="font-semibold">{b.customerName}</span>
+                        <span className="text-xs font-semibold text-violet-700">待結帳</span>
+                      </Link>
+                    </li>
+                  ))
+              )}
+            </ul>
+          </Panel>
+        </section>
+      </div>
     </div>
   );
 }

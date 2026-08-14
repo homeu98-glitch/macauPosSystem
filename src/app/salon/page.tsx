@@ -4,7 +4,9 @@ import { SalonWorkbench } from "@/components/salon/workbench";
 export default function SalonPage() {
   return (
     <AuthGuard>
-      <SalonWorkbench />
+      <div className="flex h-screen flex-col">
+        <SalonWorkbench />
+      </div>
     </AuthGuard>
   );
 }

@@ -42,7 +42,7 @@
 - 預約生命周期：建立 → 確認 → 接待 → 服務中 → 完成 → 結帳 / 取消 / 未到店
 - 結帳：現金 / 信用卡 / Ledger 餘額抵扣 / 小費 / 定金沖銷
 - 報表：店家營業額、技師業績、服務項目銷量
-- 列印：崗位單（房/椅崗位印表機分區），收據
+- 列印：收據 / 標籤 / 預約確認單（**不做崗位單** — 美容服務不以打印崗位單方式派工，2026-08-14 用戶決定）
 - 離線優先：與餐飲共用 `sync-queue` 框架
 - Backoffice / Admin 跨行業列管（門店總覽、帳號管理）
 
@@ -94,7 +94,7 @@
 **影響**：
 - `SalonServiceCategory` 為一級分類（臉部 / 身體 / 美甲 / 美睫 / 脫毛 / 按摩 / 瘦身…）
 - `SalonServiceItem` 屬於一個 category，帶 `durationMinutes`、`price`、`staffRoles`、`stationTypes`
-- 服務類目影響列印分區（不同類目可送不同崗位單）
+- 服務類目影響列印分區（不同類目可送不同收據 / 標籤 / 預約確認單分區；v1 不做崗位單）
 - 預約看板依類目做顏色或圖示區分
 
 **為何不做多 industry**：店家本質一家店，強行拆 industry 反而導致一個店面要切兩個帳號。
@@ -255,7 +255,7 @@ interface SalonStaff {
 | 訂單物件 | `PosOrder` | `SalonPosOrder` |
 | 訂單狀態機 | draft / open / settled / completed / cancelled | bookingStatus × orderStatus 雙軸 |
 | 打印分區 | `zone` / `receipt` / `label` | `station` / `receipt` / `label`（語意改，模型不變） |
-| 列印對象 | 廚房單 / 收據 / 標籤 | 崗位單 / 收據 / 標籤 |
+| 列印對象 | 廚房單 / 收據 / 標籤 | 收據 / 標籤 / 預約確認單 |
 | 支付 | 現金 / 卡 / 會員餘額 / 券 | + 小費 / 定金沖銷 / 服務組合拆帳 |
 | 會員 | `MemberProfile`（餘額、券） | + Ledger 積分（read-only） + 髮質膚質記錄 |
 | 庫存 | `soldOut` 簡單版 | v1 不做 |
@@ -380,7 +380,7 @@ export interface SalonAccountStore extends AccountStore {
 export interface SalonServiceCategory {
   id: string;
   name: string;                  // "臉部護理", "美甲", "美睫", "SPA", "脫毛", "按摩"
-  printerGroup: PrinterGroup;    // 對應列印分區（崗位單路由用）
+  printerGroup: PrinterGroup;    // 對應列印分區（v1 用於收據/標籤/預約確認單分類；非崗位單路由）
   sortOrder: number;
   color?: string;                // 看板配色
   active: boolean;
@@ -661,8 +661,8 @@ export type SalonPrinterGroup =
 
 // 預約觸發的列印：
 //   - 預約確認單（送客人；或留存）
-//   - 崗位單（接待後，送服務崗位印表機）
 //   - 收據（結帳時）
+//   （v1 不做崗位單）
 ```
 
 ---
@@ -779,7 +779,7 @@ export type SalonQueueEventType =
 └────────────────────────────────────────────┘
 ```
 
-服務執行支援多人接力（助理洗頭 → 設計師剪），每次接力記一筆 `ServiceExecutionLog`。
+> ⚠️ **已移除：多人接力（multi-person relay）** — 2026-08-14 用戶決定 v1 不做接力式服務。每筆服務執行只記單一 `staffId`；換技師視為改派，不疊加接力日誌（`ServiceExecutionLog` 為單條）。
 
 ### 9.4 結帳（`/salon/checkout/[bookingId]`）
 
@@ -838,7 +838,7 @@ Receptionist 在 /salon/booking/new 表單填資料
 客戶到店
   → receptionist 點「已接待」 → status=checked_in
   → 點「開始服務」 → status=in_service, startedAt=now
-  → 列印崗位單（依 services.printerGroup）
+  → 列印收據 / 預約確認單（依需要）
   → 走列隊：BOOKING_CHECKED_IN, SERVICE_STARTED, PRINT_JOB_CREATED
 ```
 
@@ -846,8 +846,8 @@ Receptionist 在 /salon/booking/new 表單填資料
 
 ```
 中途可：
-  - 加項：加 SalonServiceItem，跳出新崗位單
-  - 換技師：記接力日誌，原 staffId 改入 items
+  - 加項：加 SalonServiceItem（Phase 3 落實）
+  - 換技師：改派 staffId（不疊加接力日誌）
   - 記耗材：consumableNotes 文字備註（不扣庫存）
 ```
 
@@ -903,13 +903,15 @@ receptionist 點「取消」/「no-show」
 
 ## 11. 列印模型
 
-### 11.1 三類列印
+### 11.1 列印類別（v1 不含崗位單）
+
+> 2026-08-14 用戶決定：美容服務**不做崗位單**（不以打印方式向房/椅崗位派工）。
 
 | 類別 | salon 場景 | 對應 PrinterRole |
 |------|-----------|------------------|
-| **崗位單** | 服務開始時，送印服務崗位（臉部房 / 美甲台 / 水洗台等） | `zone`（語意改：對應 salon station） |
 | **收據** | 結帳時，給客人簽名 / 留存 | `receipt` |
 | **標籤** | （可選）客人專屬瓶罐標籤 | `label` |
+| **預約確認單** | 預約建立後（可選列印） | `receipt` 分區複用 |
 
 ### 11.2 列印分區對應
 
@@ -923,15 +925,15 @@ receptionist 點「取消」/「no-show」
 | `receipt` | 收銀台印表機 |
 | `label` | 標籤機 |
 
-`SalonServiceCategory.printerGroup` 決定該類服務送哪個分區。
+`SalonServiceCategory.printerGroup` 保留於資料模型（為未來 station 路由預留），v1 僅用於收據 / 標籤 / 預約確認單分類，不自動印崗位單。
 
 ### 11.3 列印內容模板
 
 | 模板 | 觸發時機 | 必含欄位 |
 |------|----------|----------|
-| **崗位單** | 服務開始 | 服務項、客人代號（姓+電話末四）、開始時間、執行技師、規格、備註 |
 | **收據** | 結帳 | 店家、訂單號、服務列表、定金、小費、付款明細、總計、時間 |
 | **預約確認單** | 預約建立後（可選列印） | 客人姓名、時間、技師、服務、店家聯絡電話 |
+| **標籤** | 客人專屬瓶罐（可選） | 客人代號、服務項、日期 |
 
 模板沿用既有 `PosLocalSettings.printTemplates` 結構，新加 salon section。
 
@@ -1009,19 +1011,21 @@ receptionist 點「取消」/「no-show」
 - [ ] 預約可改時間、改技師、取消
 - [ ] 與 Ledger 真實對接通後切換不掉資料
 
-### Phase 3 — 服務執行 + 列印（2 週）
+### Phase 3 — 服務執行 + 加項 + 收據列印（2 週）
+
+> 已移除：崗位單列印、多人接力（2026-08-14 用戶決定）。
 
 **交付**：
 - `/salon/booking/[id]` 服務執行頁
 - 服務狀態機（開始 / 加項 / 換人 / 完成）
 - `SalonStation`、`SalonStaff` CRUD
-- 崗位單列印（接 `print-bridge`）
+- 收據 / 預約確認單列印（接 `print-bridge`，非崗位單）
 - `/salon/settings` 服務類目 / 項目 / 員工 / 房管理
 
 **驗收**：
-- [ ] 接待後崗位單送對印表機（測試列印中心預覽）
-- [ ] 服務中途可加項、換人並記日誌
+- [ ] 服務中途可加項、換人（改派 staffId，不疊加接力）
 - [ ] 完成服務後狀態推進
+- [ ] 結帳前可預覽收據（測試列印中心預覽）
 - [ ] `/salon/settings` 完整 CRUD
 
 ### Phase 4 — 客戶檔案 + Ledger 積分（1 週）
@@ -1096,7 +1100,7 @@ receptionist 點「取消」/「no-show」
 | Ledger 不確定何時提供 booking RPC（L1–L4） | 高 | Phase 2 用 mock 先行；待 Ledger 提供後切換；介面先固定，實作可換 |
 | Ledger `orders` schema 改動可能影響既有餐飲 | 中 | 改動只在 Ledger 後端，POS 端介面層抽象 |
 | 服務執行過程中途掉線 | 中 | SalonBooking 與 Order 本地優先；sync-queue 重連補傳 |
-| 多技師接力歸屬與佣金糾紛 | 中 | 每筆服務執行日誌強制寫 staffId；報表可審計 |
+| 換技師歸屬與佣金糾紛 | 低 | 多人接力已移除；換技師僅改派 staffId，報表以最終 staffId 計績 |
 | 定金狀態與 Ledger 對不上 | 中 | 定金以 Ledger 為唯一權威；POS 只顯示不裁決 |
 | 服務類目命名混亂 | 低 | 預設八大類目；可由店家裁剪 |
 

@@ -144,7 +144,8 @@ export function BookingForm({
 
     setSubmitting(false);
     onSuccess?.(booking);
-    router.push(`/salon/booking/${booking.id}`);
+    // 導航到工作台而非詳情頁（sidebar 已提供導航）
+    router.push("/salon");
   }, [
     validate,
     dateStr,

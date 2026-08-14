@@ -141,7 +141,7 @@ export function CalendarBoard() {
   const weekdayNames = ["日", "一", "二", "三", "四", "五", "六"];
 
   return (
-    <div className="flex h-full flex-col bg-slate-100 text-slate-900">
+    <div className="flex h-full flex-col bg-slate-100 text-slate-900 md:pl-[72px]">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex items-center gap-2">
@@ -173,34 +173,28 @@ export function CalendarBoard() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-xl bg-slate-100 p-1">
-            <button
-              type="button"
-              onClick={() => setView("day")}
-              className={`rounded-lg px-3 py-1 text-xs font-semibold ${
-                view === "day" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
-              }`}
-            >
-              日
-            </button>
-            <button
-              type="button"
-              onClick={() => setView("week")}
-              className={`rounded-lg px-3 py-1 text-xs font-semibold ${
-                view === "week" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
-              }`}
-            >
-              週
-            </button>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-xl bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => setView("day")}
+                className={`rounded-lg px-3 py-1 text-xs font-semibold ${
+                  view === "day" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                }`}
+              >
+                日
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("week")}
+                className={`rounded-lg px-3 py-1 text-xs font-semibold ${
+                  view === "week" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                }`}
+              >
+                週
+              </button>
+            </div>
           </div>
-          <Link
-            href="/salon"
-            className="rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"
-          >
-            回工作台
-          </Link>
-        </div>
       </div>
 
       {/* Calendar body */}
