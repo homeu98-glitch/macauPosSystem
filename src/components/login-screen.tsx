@@ -7,12 +7,13 @@ import { PwaInstallButton } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
+import { setTerminalIndustry } from "@/lib/salon/industry-config";
 
 export function LoginScreen() {
   const router = useRouter();
   const [account, setAccount] = useState("");
   const [pin, setPin] = useState("");
-  const [mode, setMode] = useState<"quick" | "dinein">("dinein");
+  const [mode, setMode] = useState<"quick" | "dinein" | "salon">("dinein");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -91,6 +92,16 @@ export function LoginScreen() {
       const storeSwitched =
         Boolean(previousMerchantId && session.merchantId && previousMerchantId !== session.merchantId);
 
+      if (mode === "salon") {
+        setTerminalIndustry("salon");
+        if (storeSwitched) {
+          window.location.replace("/salon");
+          return;
+        }
+        router.replace("/salon");
+        return;
+      }
+
       if (storeSwitched) {
         window.location.replace("/");
         return;
@@ -130,7 +141,7 @@ export function LoginScreen() {
           <div className="mt-6 grid gap-3">
             <div className="grid gap-1">
               <span className="text-xs font-semibold text-white/70">模式</span>
-              <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/20 p-2">
+              <div className="grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-black/20 p-2">
                 <button
                   className={`rounded-2xl px-3 py-2 text-sm font-semibold transition ${
                     mode === "quick" ? "bg-orange-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
@@ -149,8 +160,21 @@ export function LoginScreen() {
                 >
                   堂食
                 </button>
+                <button
+                  className={`rounded-2xl px-3 py-2 text-sm font-semibold transition ${
+                    mode === "salon" ? "bg-rose-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                  onClick={() => setMode("salon")}
+                  type="button"
+                >
+                  美容
+                </button>
               </div>
-              <div className="text-xs text-white/40">快餐：無桌台，直接結帳；堂食：使用樓層與桌台。</div>
+              <div className="text-xs text-white/40">
+                {mode === "salon"
+                  ? "美容：預約制，服務執行與結帳。"
+                  : "快餐：無桌台，直接結帳；堂食：使用樓層與桌台。"}
+              </div>
             </div>
 
             <label className="grid gap-1">
