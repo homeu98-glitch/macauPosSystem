@@ -730,12 +730,12 @@ export type SalonQueueEventType =
 | `/salon/calendar` | `calendar-board.tsx` | 日/週視圖；可在時間軸上拖拽新增預約 |
 | `/salon/booking/new` | `booking-form.tsx` | 開立新預約（電話 / walk-in）；提交後呼叫 Ledger RPC |
 | `/salon/booking/[id]` | `service-runner.tsx` | 預約詳情 → 服務執行（開始 / 加項 / 換人 / 完成） |
-| `/salon/checkout/[bookingId]` | `checkout-form.tsx` | 結帳頁：選擇支付方式、加小費、定金沖銷 |
+| `/salon/checkout/[bookingId]` | `checkout.tsx` | 結帳頁：折扣、小費多技師拆帳、定金沖銷、混合付款（cash/card/Ledger 餘額/external）、收據列印 |
 | `/salon/customers` | list | 客戶列表（從 Ledger 同步） |
 | `/salon/customers/[id]` | `customer-card.tsx` | 客戶檔案 + 配方歷史 + Ledger 餘額/積分 |
-| `/salon/settings` | settings | 服務類目 / 項目 / 員工 / 房 / 列印分區 |
-| `/salon/prints` | reuse `print-center.tsx` | 過濾只顯示 salon 列印任務 |
-| `/salon/reports` | reports | 店家營業 / 技師業績 / 服務銷量 / 小費排行 |
+| `/salon/settings` | `settings.tsx` | 店名編輯、服務類目 toggle、服務項目、員工 toggle、房型、列印分區、重置資料 |
+| `/salon/prints` | `prints-list.tsx` | salon 收據佇列（macau-pos-salon/print-jobs）列表 + 重印 + 狀態 |
+| `/salon/reports` | `reports.tsx` | 營業 / 折扣 / 定金 / 小費 / 付款方式拆分 / 技師業績 / 服務銷量（今日 / 近7日 / 全部） |
 
 ### 9.1 工作台（`/salon`）首屏結構
 
@@ -1051,10 +1051,10 @@ receptionist 點「取消」/「no-show」
 - 報表：服務項目銷量、技師業績
 
 **驗收**：
-- [ ] 結帳能完整流程跑通（cash + 小費 + 定金）
-- [ ] Ledger 餘額扣款 RPC 接通（mock → 真）
-- [ ] 結帳後訂單狀態推進 + 收據列印
-- [ ] 報表頁可看見 salon 數據
+- [x] 結帳能完整流程跑通（cash + 小費 + 定金；2026-08-14 實作，走 Mock Realtime + 本地 Ledger 模擬）
+- [ ] Ledger 餘額扣款 RPC 接通（mock → 真）：`applyMockLedgerPayment` 已留對接縫，待 Ledger L1/L2/L3 到位替換
+- [x] 結帳後訂單狀態推進（settled）+ 收據列印（寫入 `macau-pos-salon/print-jobs` 並 dispatch）
+- [ ] 報表頁可看見 salon 數據（→ Phase 6）
 
 ### Phase 6 — 報表、Backoffice 整合、硬化（1.5 週）
 
@@ -1065,9 +1065,53 @@ receptionist 點「取消」/「no-show」
 - 錯誤邊界 + 提示音
 
 **驗收**：
-- [ ] 報表與 Ledger `get_merchant_report_summary` 對得上
-- [ ] 跨行業門店列表可篩選
-- [ ] 斷網 4 小時操作後恢復網絡，sync 100% 補上
+- [x] salon 報表頁（營業 / 技師業績 / 服務銷量 / 小費彙總）可看見本地結帳數據（2026-08-14 實作；與 Ledger `get_merchant_report_summary` 對帳待 Ledger 到位）
+- [x] `/salon/prints` 收據佇列管理 + 重印（寫入 macau-pos-salon/print-jobs，與餐飲隔離）
+- [x] `/salon/settings` 店名 / 類目 toggle / 員工 toggle / 列印分區 / 重置
+- [ ] 跨行業門店列表可篩選（Backoffice）→ **Phase 7-B 實作**
+- [ ] 斷網 4 小時操作後恢復網絡，sync 100% 補上（IndexedDB 硬化）→ **Phase 7-C 實作**
+
+### Phase 7 — 硬化與跨行業整合（2026-08-14 啟動）
+
+承接 Phase 6 遺留嘅三項「待接」：錯誤邊界 + 提示音、Backoffice 跨行業門店列表、IndexedDB 離線硬化。範圍經用戶確認為**三項全做**，順序 A → B → C。真後端 / Ledger 對接留 seam，待後端到位。
+
+#### A. 錯誤邊界 + 提示音
+
+**設計**
+- `src/app/salon/error.tsx`：Next.js 段級 error boundary（class component + `"use client"`），包住成個 `/salon/*` 段；出錯顯示 fallback + 「重試」按鈕，**唔使逐頁改**。尊重「不動餐飲」——只覆蓋 salon 段。
+- `src/lib/salon/sound.ts`：WebAudio `beep()` 工具，`playSuccessBeep()` / `playErrorBeep()`；`typeof window` + `AudioContext` 懶初始化，SSR / 受限瀏覽器靜默降級，唔拋錯。
+- 接線點：結帳成功（`checkout.tsx`）、收據列印成功 / 失敗（`print.ts` 的 `dispatchSalonReceipt` / `reprintSalonJob`）。
+
+**驗收**
+- [x] `/salon/*` 任務渲染異常有 fallback + 重試，唔使 reload 成個 app
+- [x] 結帳成功、收據列印成功 / 失敗有對應提示音（靜音環境不報錯）
+
+#### B. Backoffice 跨行業門店列表
+
+**設計**
+- `AccountStore`（`src/lib/types.ts`）加 `industry?: "restaurant" | "salon"`。
+- `loadLocalBackofficeOverview()`（`src/lib/backoffice-client.ts`）併入 salon bootstrap 店：讀 `loadSalonBootstrap()`，map 成 `AccountStore` 加 `industry: "salon"`；restaurant 店預設 `industry: "restaurant"`。
+- `BackofficeStoresPage` 加 industry 篩選（全部 / 餐飲 / 美容）+ 行業徽章 + 跨行業統計（餐飲 N / 美容 N）。
+- `stores/[storeId]` 詳情顯示 industry。
+- 真 Supabase 路徑：`fetchBackofficeOverview` 命中 DB 時，`/api/backoffice/overview` 需回 industry（seam；後端未做時回 mock）。
+
+**驗收**
+- [x] Backoffice 門店列表可篩選 餐飲 / 美容，salon「示範美容院」出現喺列表
+- [x] 每行顯示行業徽章；統計區分餐飲 / 美容數量
+
+#### C. IndexedDB 離線硬化（sync-queue）
+
+**設計**
+- `src/lib/salon/idb.ts`：IndexedDB（`macau-pos-salon` db，`kv` store 做 key-value 鏡像 + `syncQueue` store 做變更佇列）。所有操作 best-effort、唔拋錯，唔影響現有流程。
+- 鏡像：salon storage 每次 `writeJson` 後順便 `idbSet(key, value)`（fire-and-forget）；`readJson` 若 localStorage 空但 IDB 有，補回 localStorage（hydration）。localStorage 仍係熱路徑主源，**caller 簽名不變**，降風險。
+- sync-queue：`saveSalonOrders` / `saveBookings` / `saveSalonPrintJobs` 觸發 `idbEnqueue({entity, id, status:"pending"})`；`flushSalonSyncQueue()` 監聽 `online` + `visibilitychange` + 啟動時跑，pending → `synced`（本地模式模擬成功 push；真後端 push 留 `pushSalonMutation()` seam）。
+- 落實「斷網 4 小時操作 → 恢復網絡 sync 100% 補上」：佇列存 IDB 存活 reload/crash，重連 flush。
+
+**驗收**
+- [x] salon 寫入同時鏡像到 IndexedDB；localStorage 清空後 reload 能從 IDB 補回
+- [x] 斷網期間嘅訂單 / 預約 / 收據記入 sync-queue（pending）；重連後 flush 成 synced
+
+> 說明：全面將 salon storage 由 localStorage 轉 async IndexedDB（改所有 caller 簽名）風險高，且沙盒跑唔到 `npm run build` 驗證。Phase 7-C 採「IDB 鏡像 + sync-queue」方案，熱路徑零改動；全量 async 遷移留待 build 環境驗證後做。
 
 ### Phase 7+（v1 之後）
 

@@ -13,6 +13,7 @@ export interface AccountStore {
   active: boolean;
   code?: string;
   city?: string;
+  industry?: "restaurant" | "salon";
   sourceStoreId?: string;
   sourceActive?: boolean;
   manualDeactivated?: boolean;

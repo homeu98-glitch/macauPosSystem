@@ -24,6 +24,7 @@ export function BackofficeStoresPage() {
   const [status, setStatus] = useState("載入總部店舖資料中…");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "inactive">("all");
+  const [industry, setIndustry] = useState<"all" | "restaurant" | "salon">("all");
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   async function loadData() {
@@ -48,8 +49,10 @@ export function BackofficeStoresPage() {
     const keyword = search.trim().toLowerCase();
     return stores.filter((store) => {
       const active = store.effectiveActive ?? store.active;
+      const storeIndustry = store.industry ?? "restaurant";
       if (filter === "active" && !active) return false;
       if (filter === "inactive" && active) return false;
+      if (industry !== "all" && storeIndustry !== industry) return false;
       if (!keyword) return true;
       return (
         store.name.toLowerCase().includes(keyword) ||
@@ -57,7 +60,7 @@ export function BackofficeStoresPage() {
         (store.city ?? "").toLowerCase().includes(keyword)
       );
     });
-  }, [filter, search, stores]);
+  }, [filter, industry, search, stores]);
 
   const summary = useMemo(
     () => ({
@@ -65,6 +68,8 @@ export function BackofficeStoresPage() {
       active: stores.filter((store) => store.effectiveActive ?? store.active).length,
       inactive: stores.filter((store) => !(store.effectiveActive ?? store.active)).length,
       syncErrors: syncJobs.filter((job) => job.status === "failed").length,
+      restaurant: stores.filter((store) => (store.industry ?? "restaurant") === "restaurant").length,
+      salon: stores.filter((store) => store.industry === "salon").length,
     }),
     [stores, syncJobs],
   );
@@ -97,7 +102,7 @@ export function BackofficeStoresPage() {
 
   return (
     <div className="p-4 lg:p-6">
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-3">
         <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="text-sm text-slate-500">全部店舖</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.total}</div>
@@ -109,6 +114,14 @@ export function BackofficeStoresPage() {
         <article className="rounded-3xl border border-slate-200 bg-red-50 p-5 shadow-sm">
           <div className="text-sm text-red-700">已停用</div>
           <div className="mt-2 text-3xl font-semibold text-red-800">{summary.inactive}</div>
+        </article>
+        <article className="rounded-3xl border border-slate-200 bg-sky-50 p-5 shadow-sm">
+          <div className="text-sm text-sky-700">餐飲店</div>
+          <div className="mt-2 text-3xl font-semibold text-sky-800">{summary.restaurant}</div>
+        </article>
+        <article className="rounded-3xl border border-slate-200 bg-fuchsia-50 p-5 shadow-sm">
+          <div className="text-sm text-fuchsia-700">美容院</div>
+          <div className="mt-2 text-3xl font-semibold text-fuchsia-800">{summary.salon}</div>
         </article>
         <article className="rounded-3xl border border-slate-200 bg-amber-50 p-5 shadow-sm">
           <div className="text-sm text-amber-700">同步異常</div>
@@ -140,6 +153,23 @@ export function BackofficeStoresPage() {
               {label}
             </button>
           ))}
+          <span className="mx-1 h-6 w-px bg-slate-200" />
+          {[
+            ["all", "全部行業"],
+            ["restaurant", "餐飲"],
+            ["salon", "美容"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                industry === key ? "bg-sky-500 text-white" : "bg-slate-100 text-slate-700"
+              }`}
+              onClick={() => setIndustry(key as typeof industry)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">{status}</div>
       </div>
@@ -150,6 +180,7 @@ export function BackofficeStoresPage() {
             <thead className="bg-slate-50 text-left text-slate-500">
               <tr>
                 <th className="px-4 py-3 font-semibold">店舖</th>
+                <th className="px-4 py-3 font-semibold">行業</th>
                 <th className="px-4 py-3 font-semibold">狀態</th>
                 <th className="px-4 py-3 font-semibold">綁定帳戶</th>
                 <th className="px-4 py-3 font-semibold">最後同步</th>
@@ -160,13 +191,13 @@ export function BackofficeStoresPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="px-4 py-8 text-center text-slate-500" colSpan={6}>
+                  <td className="px-4 py-8 text-center text-slate-500" colSpan={7}>
                     載入中…
                   </td>
                 </tr>
               ) : filteredStores.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-8 text-center text-slate-500" colSpan={6}>
+                  <td className="px-4 py-8 text-center text-slate-500" colSpan={7}>
                     找不到符合條件的店舖
                   </td>
                 </tr>
@@ -183,6 +214,17 @@ export function BackofficeStoresPage() {
                         <div className="mt-1 text-xs text-slate-500">
                           {(store.code ?? store.id).toUpperCase()} · {store.city ?? "澳門"}
                         </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            (store.industry ?? "restaurant") === "salon"
+                              ? "bg-fuchsia-50 text-fuchsia-700"
+                              : "bg-sky-50 text-sky-700"
+                          }`}
+                        >
+                          {(store.industry ?? "restaurant") === "salon" ? "美容" : "餐飲"}
+                        </span>
                       </td>
                       <td className="px-4 py-4">
                         <span

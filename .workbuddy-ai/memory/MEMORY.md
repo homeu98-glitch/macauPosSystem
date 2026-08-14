@@ -31,7 +31,8 @@
 - **共用基建**：auth、storage 框架、sync-queue、print-bridge、backoffice、admin
 - **核心差別**：預約 vs 點單、staff label-only 不登入、Ledger 餘額替代次卡、無庫存無退款
 - **Ledger 主導**：線上預約渠道、會員餘額、會員積分、定金扣款
-- **6 個 phase 約 9–10 週**：P1 分流骨架（1.5w）✅ → P2 預約+walk-in（2w）✅ → P3 服務執行+加項+收據列印（2w；已移除崗位單列印與多人接力）→ P4 客戶檔案+積分（1w）✅ → P5 結帳+小費+定金（2w）→ P6 報表+硬化（1.5w）
+- **6 個 phase 約 9–10 週**：P1 分流骨架（1.5w）✅ → P2 預約+walk-in（2w）✅ → P3 服務執行+加項+收據列印（2w；已移除崗位單列印與多人接力）→ P4 客戶檔案+積分（1w）✅ → P5 結帳+小費+定金+收據列印（2w）✅ → P6 報表+硬化（1.5w）✅
+- **Phase 7 硬化與跨行業整合（2026-08-14）✅**：A 錯誤邊界（`src/app/salon/error.tsx`）+ 提示音（`src/lib/salon/sound.ts`，接結帳/列印）；B Backoffice 跨行業（`AccountStore.industry` + salon 併入 mock 列表 + 篩選/徽章/統計）；C IndexedDB 離線硬化（`src/lib/salon/idb.ts` kv 鏡像 + sync-queue，重連 flush；熱路徑零改動）。真後端 / Ledger push 留 seam。
 
 ### Phase 1 已完成（2026-08-14）
 

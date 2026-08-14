@@ -138,6 +138,15 @@ export function BackofficeStoreDetailPage({ storeId }: { storeId: string }) {
           <div className="flex gap-2">
             <span
               className={`rounded-full px-3 py-2 text-sm font-semibold ${
+                (detail.store.industry ?? "restaurant") === "salon"
+                  ? "bg-fuchsia-50 text-fuchsia-700"
+                  : "bg-sky-50 text-sky-700"
+              }`}
+            >
+              {(detail.store.industry ?? "restaurant") === "salon" ? "美容院" : "餐飲"}
+            </span>
+            <span
+              className={`rounded-full px-3 py-2 text-sm font-semibold ${
                 active ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
               }`}
             >

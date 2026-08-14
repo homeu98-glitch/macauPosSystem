@@ -1,0 +1,157 @@
+// Salon 收據列印（寫入 salon 隔離列印佇列 macau-pos-salon/print-jobs）
+//
+// 注意：刻意不呼叫餐飲的 loadPrintJobs/savePrintJobs（那些寫入 macau-pos/print-jobs）。
+// 這裡複用共享 PrintJob 型別與 dispatchJobToPrintBridge（print-bridge 基建共用）。
+
+import type { PrintJob } from "@/lib/types";
+import { loadDeviceConfig } from "@/lib/storage";
+import {
+  resolvePrintJobStatus,
+  dispatchJobToPrintBridge,
+} from "@/lib/print-bridge/client";
+import {
+  loadSalonPrintJobs,
+  saveSalonPrintJobs,
+  loadSalonBootstrap,
+} from "@/lib/salon/storage";
+import type { SalonPosOrder } from "@/lib/salon/types";
+import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
+
+export const SALON_PRINT_JOBS_CHANGED_EVENT = "salon-print-jobs-changed";
+
+function uid(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${rand}`;
+}
+
+type ReceiptLine = NonNullable<PrintJob["items"]>[number];
+
+/** 把 SalonPosOrder 轉成收據 PrintJob 的 items 段落 */
+function buildReceiptLines(order: SalonPosOrder, currency: string): ReceiptLine[] {
+  const lines: ReceiptLine[] = [];
+
+  const bootstrap = loadSalonBootstrap();
+  if (bootstrap?.storeName) {
+    lines.push({ name: "門店", quantity: 1, specs: [], note: bootstrap.storeName });
+  }
+  lines.push({ name: "單號", quantity: 1, specs: [], note: order.orderNo });
+  lines.push({ name: "客戶", quantity: 1, specs: [], note: order.customerName });
+
+  for (const it of order.items) {
+    lines.push({
+      name: it.name,
+      quantity: it.quantity,
+      specs: it.staffName ? [`技師:${it.staffName}`] : [],
+      note: `${currency} ${(it.unitPrice * it.quantity).toFixed(0)}`,
+    });
+  }
+
+  lines.push({ name: "小計", quantity: 1, specs: [], note: `${currency} ${order.subtotal.toFixed(0)}` });
+
+  if (order.discountAmount > 0) {
+    lines.push({ name: "折扣", quantity: 1, specs: [], note: `-${currency} ${order.discountAmount.toFixed(0)}` });
+  }
+  if (order.depositApplied && order.depositApplied > 0) {
+    lines.push({ name: "已付定金", quantity: 1, specs: [], note: `-${currency} ${order.depositApplied.toFixed(0)}` });
+  }
+  for (const t of order.tips) {
+    lines.push({ name: `小費·${t.staffName}`, quantity: 1, specs: [], note: `${currency} ${t.amount.toFixed(0)}` });
+  }
+  lines.push({ name: "應收總計", quantity: 1, specs: [], note: `${currency} ${order.grandTotal.toFixed(0)}` });
+
+  for (const p of order.payments) {
+    const methodLabel =
+      p.method === "cash"
+        ? "現金"
+        : p.method === "card"
+          ? "卡"
+          : p.method === "ledger_balance"
+            ? "Ledger餘額"
+            : "外部";
+    lines.push({ name: `付款·${methodLabel}`, quantity: 1, specs: [], note: `${currency} ${p.amount.toFixed(0)}` });
+  }
+  if (order.changeDue && order.changeDue > 0) {
+    lines.push({ name: "找零", quantity: 1, specs: [], note: `${currency} ${order.changeDue.toFixed(0)}` });
+  }
+  if (order.notes) {
+    lines.push({ name: "備註", quantity: 1, specs: [], note: order.notes });
+  }
+
+  return lines;
+}
+
+/**
+ * 把收據 PrintJob 寫入 salon 隔離列印佇列，並嘗試 dispatch 到 print-bridge。
+ * 回傳建立的 PrintJob（可能為空陣列，若無啟用的收據機）。
+ */
+export async function dispatchSalonReceipt(order: SalonPosOrder): Promise<PrintJob[]> {
+  if (typeof window === "undefined") return [];
+
+  const deviceConfig = loadDeviceConfig();
+  const printers = (deviceConfig?.printers ?? []).filter(
+    (p) => p.enabled && p.role === "receipt",
+  );
+  if (printers.length === 0) return [];
+
+  const bootstrap = loadSalonBootstrap();
+  const currency = bootstrap?.currency ?? "MOP";
+  const now = new Date().toISOString();
+  const items = buildReceiptLines(order, currency);
+
+  const jobs: PrintJob[] = printers.map((printer) => ({
+    id: uid("print"),
+    orderId: order.id,
+    orderNo: order.orderNo,
+    tableName: order.customerName,
+    ticketType: "normal",
+    printerGroup: "receipt",
+    printerId: printer.id,
+    printerName: printer.name,
+    items,
+    status: resolvePrintJobStatus(typeof navigator !== "undefined" ? navigator.onLine : true),
+    createdAt: now,
+  }));
+
+  const dispatched = await Promise.all(
+    jobs.map(async (job) => {
+      const printer = (deviceConfig?.printers ?? []).find((p) => p.id === job.printerId) ?? null;
+      const res = await dispatchJobToPrintBridge(job, printer, { source: "salon" });
+      return res.ok ? { ...job, status: "sent" as PrintJob["status"] } : job;
+    }),
+  );
+
+  saveSalonPrintJobs([...dispatched, ...loadSalonPrintJobs()]);
+  window.dispatchEvent(
+    new CustomEvent(SALON_PRINT_JOBS_CHANGED_EVENT, { detail: { count: jobs.length } }),
+  );
+
+  const allSent = dispatched.length > 0 && dispatched.every((j) => j.status === "sent");
+  if (allSent) playSuccessBeep();
+  else playErrorBeep();
+
+  return dispatched;
+}
+
+/**
+ * 重印既有收據任務：依 job.printerId 找到機器並重新 dispatch。
+ * 成功/失敗會同步更新 salon 佇列中該 job 的 status 並派發變更事件。
+ */
+export async function reprintSalonJob(job: PrintJob): Promise<{ ok: boolean; error?: string }> {
+  if (typeof window === "undefined") return { ok: false, error: "無效環境" };
+  const printer = (loadDeviceConfig()?.printers ?? []).find((p) => p.id === job.printerId) ?? null;
+  const res = await dispatchJobToPrintBridge(job, printer, { source: "salon" });
+  const nextStatus: PrintJob["status"] = res.ok ? "sent" : "failed";
+  const jobs = loadSalonPrintJobs().map((j) =>
+    j.id === job.id ? { ...j, status: nextStatus } : j,
+  );
+  saveSalonPrintJobs(jobs);
+  window.dispatchEvent(
+    new CustomEvent(SALON_PRINT_JOBS_CHANGED_EVENT, { detail: { count: 1 } }),
+  );
+  if (res.ok) playSuccessBeep();
+  else playErrorBeep();
+  return res;
+}

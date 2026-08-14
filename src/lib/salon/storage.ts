@@ -13,7 +13,14 @@ import {
   type SalonQueueEvent,
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
+import type { PrintJob } from "@/lib/types";
 import { buildDefaultSalonBootstrap, defaultSalonCustomers } from "@/lib/salon/mock-data";
+import {
+  idbSet,
+  idbEnqueue,
+  flushSalonSyncQueue,
+  hydrateSalonFromIdb,
+} from "@/lib/salon/idb";
 
 // ────────────────────────────────────────────────────────────────────
 // 通用 JSON 讀寫（與餐飲 storage.ts 同款，純內部使用）
@@ -51,6 +58,8 @@ function writeJson<T>(key: string, value: T) {
   } catch {
     // ignore storage write failures on restricted browsers / kiosk devices
   }
+  // Phase 7-C：鏡像到 IndexedDB（離線 / crash 後可補回）
+  void idbSet(key, value);
 }
 
 function removeKey(key: string) {
@@ -63,6 +72,27 @@ function removeKey(key: string) {
   } catch {
     // ignore
   }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Phase 7-C：IndexedDB 離線硬化初始化
+// - 啟動時先從 IDB 補回 localStorage（斷網 / crash 後恢復）
+// - 重連網絡 / 頁面可見時 flush 同步佇列（pending → synced）
+// 全部 best-effort，唔影響現有 localStorage 熱路徑。
+// ────────────────────────────────────────────────────────────────────
+
+const SALON_MIRROR_KEYS = Object.values(SALON_STORAGE_KEYS);
+
+if (typeof window !== "undefined") {
+  void hydrateSalonFromIdb(SALON_MIRROR_KEYS);
+  const triggerFlush = () => void flushSalonSyncQueue();
+  window.addEventListener("online", triggerFlush);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") triggerFlush();
+    });
+  }
+  void flushSalonSyncQueue();
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -132,6 +162,10 @@ export function loadBookings(): SalonBooking[] {
 
 export function saveBookings(bookings: SalonBooking[]) {
   writeJson(SALON_STORAGE_KEYS.bookings, bookings);
+  void idbEnqueue({
+    entity: "bookings",
+    refId: bookings[bookings.length - 1]?.id ?? "bookings",
+  });
 }
 
 export function loadSalonOrders(): SalonPosOrder[] {
@@ -140,6 +174,10 @@ export function loadSalonOrders(): SalonPosOrder[] {
 
 export function saveSalonOrders(orders: SalonPosOrder[]) {
   writeJson(SALON_STORAGE_KEYS.orders, orders);
+  void idbEnqueue({
+    entity: "orders",
+    refId: orders[orders.length - 1]?.id ?? "orders",
+  });
 }
 
 export function loadSalonStaff(): SalonStaff[] {
@@ -196,6 +234,24 @@ export function loadCustomers(): SalonCustomerProfile[] {
 
 export function saveCustomers(customers: SalonCustomerProfile[]) {
   writeJson(SALON_STORAGE_KEYS.customers, customers);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 列印佇列（salon 隔離鍵 macau-pos-salon/print-jobs）
+// 刻意不與餐飲 loadPrintJobs/savePrintJobs 共用，避免污染餐飲列印佇列；
+// 收據 PrintJob 仍複用共享 PrintJob 型別與 dispatchJobToPrintBridge。
+// ────────────────────────────────────────────────────────────────────
+
+export function loadSalonPrintJobs(): PrintJob[] {
+  return readJson<PrintJob[]>(SALON_STORAGE_KEYS.printJobs, []);
+}
+
+export function saveSalonPrintJobs(jobs: PrintJob[]) {
+  writeJson(SALON_STORAGE_KEYS.printJobs, jobs);
+  void idbEnqueue({
+    entity: "printJobs",
+    refId: jobs[jobs.length - 1]?.id ?? "printJobs",
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────
