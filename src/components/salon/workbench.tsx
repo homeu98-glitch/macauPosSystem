@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import {
   DEFAULT_SALON_STORE_ID,
@@ -14,6 +15,7 @@ import {
   isSalonTerminal,
   setTerminalIndustry,
 } from "@/lib/salon/industry-config";
+import { seedMockBookingsIfEmpty, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
 import { signOutLedgerSession } from "@/lib/ledger/session";
 import type { SalonBootstrap, SalonBooking } from "@/lib/salon/types";
 
@@ -51,10 +53,23 @@ export function SalonWorkbench() {
     // 首次啟動 seed；active store 用預設 storeId，實際部署再由登入決定。
     const seeded = ensureSalonBootstrap(DEFAULT_SALON_STORE_ID);
     setBootstrap(seeded);
+    seedMockBookingsIfEmpty();
     setBookings(loadBookings());
     setOrderCount(loadSalonOrders().length);
     setTerminalIsSalon(isSalonTerminal());
     setStatus("ready");
+  }, []);
+
+  // Listen to mock realtime events
+  useEffect(() => {
+    function handler() {
+      setBookings(loadBookings());
+      setOrderCount(loadSalonOrders().length);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener(MOCK_REALTIME_EVENT, handler);
+      return () => window.removeEventListener(MOCK_REALTIME_EVENT, handler);
+    }
   }, []);
 
   useEffect(() => {
@@ -132,7 +147,7 @@ export function SalonWorkbench() {
               美容院
             </span>
             <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
-              Phase 1 骨架
+              Phase 2
             </span>
           </div>
           <div className="text-right text-sm text-slate-500">
@@ -142,11 +157,11 @@ export function SalonWorkbench() {
         </div>
       </header>
 
-      {/* Phase 1 banner */}
+      {/* Phase banner */}
       <section className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="font-semibold">
-            Phase 1 — 行業分流骨架已就緒。後續功能（預約看板 / 服務執行 / 結帳）見 docs/26-beauty-salon-vertical.md §13。
+            Phase 2 — 預約看板 + Walk-in 開單。點擊「預約看板」或「快速開單」開始操作。
           </div>
           {!terminalIsSalon ? (
             <button
@@ -164,8 +179,24 @@ export function SalonWorkbench() {
         </div>
       </section>
 
+      {/* Quick actions */}
+      <section className="flex flex-wrap gap-3 px-6 py-3">
+        <Link
+          href="/salon/calendar"
+          className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-orange-600"
+        >
+          📅 預約看板
+        </Link>
+        <Link
+          href="/salon/booking/new"
+          className="rounded-xl bg-violet-500 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-violet-600"
+        >
+          + 快速開單
+        </Link>
+      </section>
+
       {/* KPI 列 */}
-      <section className="grid grid-cols-2 gap-3 px-6 py-4 md:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 px-6 py-3 md:grid-cols-4">
         <KpiCard
           label="今日預約"
           value={todayCounts.confirmed}
@@ -196,28 +227,43 @@ export function SalonWorkbench() {
       <section className="grid flex-1 grid-cols-1 gap-4 px-6 pb-6 md:grid-cols-2 lg:grid-cols-4">
         <Panel
           title="今日預約"
-          hint="從 Ledger Realtime 接收 + 電話/walk-in 開單（Phase 2）"
-          emptyMessage="尚無預約資料（Phase 1 骨架）"
+          hint="點擊進入預約詳情"
+          emptyMessage="尚無預約"
+          action={
+            <Link
+              href="/salon/calendar"
+              className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-200"
+            >
+              看板
+            </Link>
+          }
         >
           <ul className="grid gap-2">
-            {todayBookings.length === 0 ? null : (
-              todayBookings.slice(0, 5).map((b) => (
-                <li
-                  key={b.id}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
-                >
-                  <div className="flex items-center justify-between font-semibold">
-                    <span>{b.customerName}</span>
-                    <span className="text-xs text-slate-500">
-                      {new Date(b.startAt).toLocaleTimeString("zh-HK", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {b.services.map((s) => s.name).join("、")}
-                  </div>
+            {todayBookings.length === 0 ? (
+              <li className="text-center text-xs text-slate-400">尚無預約</li>
+            ) : (
+              todayBookings.slice(0, 8).map((b) => (
+                <li key={b.id}>
+                  <Link
+                    href={`/salon/booking/${b.id}`}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:bg-orange-50"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">{b.customerName}</div>
+                      <div className="mt-0.5 truncate text-xs text-slate-500">
+                        {b.services.map((s) => s.name).join("、")}
+                      </div>
+                    </div>
+                    <div className="ml-2 shrink-0 text-right">
+                      <div className="text-xs font-semibold text-slate-700">
+                        {new Date(b.startAt).toLocaleTimeString("zh-HK", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
+                      <div className="text-[10px] text-slate-400">{b.status}</div>
+                    </div>
+                  </Link>
                 </li>
               ))
             )}
@@ -226,31 +272,54 @@ export function SalonWorkbench() {
 
         <Panel
           title="走進客戶"
-          hint="walk-in 開單入口（Phase 2）"
+          hint="walk-in 開單"
           emptyMessage="點此開新 walk-in"
+          action={
+            <Link
+              href="/salon/booking/new"
+              className="rounded-lg bg-violet-100 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-200"
+            >
+              + 開單
+            </Link>
+          }
         >
-          <button
-            type="button"
-            disabled
-            className="w-full rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-400"
+          <Link
+            href="/salon/booking/new"
+            className="grid h-full place-items-center rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50 px-4 py-6 text-center text-sm font-semibold text-violet-600 transition hover:bg-violet-100"
           >
-            （Phase 2 上線）
-          </button>
+            + 新 walk-in 預約
+          </Link>
         </Panel>
 
         <Panel
           title="服務中"
-          hint="進行中服務（Phase 3）"
+          hint="進行中服務"
           emptyMessage="無進行中服務"
         >
-          <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-400">
-            空
-          </div>
+          <ul className="grid gap-2">
+            {todayBookings.filter((b) => b.status === "in_service" || b.status === "checked_in").length === 0 ? (
+              <li className="text-center text-xs text-slate-400">無進行中服務</li>
+            ) : (
+              todayBookings
+                .filter((b) => b.status === "in_service" || b.status === "checked_in")
+                .map((b) => (
+                  <li key={b.id}>
+                    <Link
+                      href={`/salon/booking/${b.id}`}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-blue-50 px-3 py-2 text-sm transition hover:bg-blue-100"
+                    >
+                      <span className="font-semibold">{b.customerName}</span>
+                      <span className="text-xs text-slate-500">{b.status}</span>
+                    </Link>
+                  </li>
+                ))
+            )}
+          </ul>
         </Panel>
 
         <Panel
           title="待結帳"
-          hint="服務完成，等候結帳（Phase 5）"
+          hint="服務完成，等候結帳"
           emptyMessage="無待結帳"
           trailing={
             <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
@@ -258,9 +327,25 @@ export function SalonWorkbench() {
             </span>
           }
         >
-          <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-400">
-            空
-          </div>
+          <ul className="grid gap-2">
+            {todayBookings.filter((b) => b.status === "completed").length === 0 ? (
+              <li className="text-center text-xs text-slate-400">無待結帳</li>
+            ) : (
+              todayBookings
+                .filter((b) => b.status === "completed")
+                .map((b) => (
+                  <li key={b.id}>
+                    <Link
+                      href={`/salon/booking/${b.id}`}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-violet-50 px-3 py-2 text-sm transition hover:bg-violet-100"
+                    >
+                      <span className="font-semibold">{b.customerName}</span>
+                      <span className="text-xs font-semibold text-violet-700">待結帳</span>
+                    </Link>
+                  </li>
+                ))
+            )}
+          </ul>
         </Panel>
       </section>
 
@@ -268,21 +353,13 @@ export function SalonWorkbench() {
       <footer className="border-t border-slate-200 bg-white px-6 py-3 text-sm shadow-inner">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-            <span>
-              員工 {bootstrap.staff.length} 位
-            </span>
+            <span>員工 {bootstrap.staff.length} 位</span>
             <span>·</span>
-            <span>
-              服務類目 {bootstrap.serviceCategories.length} 類
-            </span>
+            <span>服務類目 {bootstrap.serviceCategories.length} 類</span>
             <span>·</span>
-            <span>
-              服務項目 {bootstrap.serviceItems.length} 項
-            </span>
+            <span>服務項目 {bootstrap.serviceItems.length} 項</span>
             <span>·</span>
-            <span>
-              房型 {bootstrap.stations.length} 個
-            </span>
+            <span>房型 {bootstrap.stations.length} 個</span>
           </div>
           <div className="flex gap-2">
             <a
@@ -337,10 +414,11 @@ interface PanelProps {
   hint: string;
   emptyMessage: string;
   trailing?: React.ReactNode;
+  action?: React.ReactNode;
   children?: React.ReactNode;
 }
 
-function Panel({ title, hint, emptyMessage, trailing, children }: PanelProps) {
+function Panel({ title, hint, emptyMessage, trailing, action, children }: PanelProps) {
   return (
     <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
@@ -348,7 +426,10 @@ function Panel({ title, hint, emptyMessage, trailing, children }: PanelProps) {
           <h2 className="text-sm font-bold text-slate-900">{title}</h2>
           <p className="mt-0.5 text-xs text-slate-500">{hint}</p>
         </div>
-        {trailing}
+        <div className="flex items-center gap-2">
+          {action}
+          {trailing}
+        </div>
       </div>
       <div className="mt-3 flex-1">
         {children ?? (

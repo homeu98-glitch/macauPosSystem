@@ -31,15 +31,19 @@
 - **共用基建**：auth、storage 框架、sync-queue、print-bridge、backoffice、admin
 - **核心差別**：預約 vs 點單、staff label-only 不登入、Ledger 餘額替代次卡、無庫存無退款
 - **Ledger 主導**：線上預約渠道、會員餘額、會員積分、定金扣款
-- **6 個 phase 約 9–10 週**：P1 分流骨架（1.5w）✅ → P2 預約+walk-in（2w）→ P3 服務執行+列印（2w）→ P4 客戶檔案+積分（1w）→ P5 結帳+小費+定金（2w）→ P6 報表+硬化（1.5w）
+- **6 個 phase 約 9–10 週**：P1 分流骨架（1.5w）✅ → P2 預約+walk-in（2w）✅ → P3 服務執行+列印（2w）→ P4 客戶檔案+積分（1w）→ P5 結帳+小費+定金（2w）→ P6 報表+硬化（1.5w）
 
 ### Phase 1 已完成（2026-08-14）
 
-骨架檔案已落地，預設店家「示範美容院」/MOP 在 `ensureSalonBootstrap()` 首次啟動時種入；登入後導航到 `/salon` 看見 workbench。**未做**：登入後自動跳轉行業（login-screen.tsx 屬餐飲，未動）、預約看板、服務執行。詳見 `.workbuddy-ai/memory/2026-08-14.md`。
+骨架檔案已落地，預設店家「示範美容院」/MOP 在 `ensureSalonBootstrap()` 首次啟動時種入；登入後導航到 `/salon` 看見 workbench。**未做**：登入後自動跳轉行業（login-screen.tsx 屬餐飲，未動）。詳見 `.workbuddy-ai/memory/2026-08-14.md`。
+
+### Phase 2 已完成（2026-08-14）
+
+預約看板（日/週）、walk-in/電話開單表單、預約詳情/服務執行頁、Mock Realtime 層（5 筆假資料 seed）、工作台即時更新。全部走 Mock Realtime，Ledger 到位後切換 channel 即可。詳見 `.workbuddy-ai/memory/2026-08-14.md`。
 
 ### 注意：沙盒無 node_modules
 
-當前沙盒環境跑不了 `npm install`（EPERM），用戶在自己的 dev box 跑 `npm install && npm run lint && npm run build` 確認 Phase 1 無迴歸後再進 Phase 2。
+當前沙盒環境跑不了 `npm install`（EPERM），用戶在自己的 dev box 跑 `npm install && npm run lint && npm run build` 確認無迴歸後 push 到 Vercel。Phase 1 + Phase 2 均通過手動覆審，待真實 build 驗證。
 
 ## 重要約定
 
