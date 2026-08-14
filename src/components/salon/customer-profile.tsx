@@ -177,7 +177,7 @@ export function CustomerProfile() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl p-4 md:p-6">
+    <div className="mx-auto max-w-4xl p-4 pb-24 md:p-6 md:pb-6">
       <div className="mb-4 flex items-center justify-between">
         <Link href="/salon/customers" className="text-sm text-slate-500 hover:text-rose-500">
           ← 客戶列表

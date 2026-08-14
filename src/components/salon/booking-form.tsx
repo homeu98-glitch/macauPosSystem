@@ -189,7 +189,7 @@ export function BookingForm({
   const selectedTimeValue = hour * 60 + minute;
 
   return (
-    <div className="mx-auto max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="mx-auto w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-bold text-slate-900">開立新預約</h2>
         {onClose && (
@@ -357,7 +357,7 @@ export function BookingForm({
                   <div className="mb-2 text-xs font-bold" style={{ color: cat.color }}>
                     {cat.name}
                   </div>
-                  <div className="grid gap-1.5">
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                     {catItems.map((item) => {
                       const selected = selectedServiceIds.includes(item.id);
                       return (
@@ -371,8 +371,8 @@ export function BookingForm({
                               : "bg-white text-slate-700 hover:bg-slate-100"
                           }`}
                         >
-                          <span className="font-medium">{item.name}</span>
-                          <span className="text-xs opacity-80">
+                          <span className="min-w-0 truncate font-medium">{item.name}</span>
+                          <span className="ml-2 shrink-0 text-xs opacity-80">
                             ${item.price} · {item.durationMinutes}分
                           </span>
                         </button>
@@ -389,7 +389,7 @@ export function BookingForm({
         {/* Summary */}
         {selectedServices.length > 0 && (
           <div className="rounded-xl bg-orange-50 p-3 text-sm">
-            <div className="flex items-center justify-between font-semibold text-orange-800">
+            <div className="flex flex-wrap items-center justify-between gap-1 font-semibold text-orange-800">
               <span>已選 {selectedServices.length} 項</span>
               <span>合計 ${totalPrice} · {totalDuration} 分鐘</span>
             </div>

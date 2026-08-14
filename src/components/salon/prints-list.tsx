@@ -61,7 +61,7 @@ export function PrintsList() {
   );
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-6">
+    <div className="mx-auto max-w-4xl px-4 py-6 pb-24 md:pb-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-bold text-slate-900">列印任務</h1>
         <button

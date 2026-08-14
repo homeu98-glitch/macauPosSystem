@@ -84,7 +84,7 @@ export function Settings() {
 
   if (!bootstrap) {
     return (
-      <div className="mx-auto max-w-2xl px-4 py-6">
+      <div className="mx-auto max-w-5xl px-4 py-6 pb-24 md:pb-6">
         <div className="text-base font-semibold text-slate-900">載入中…</div>
       </div>
     );
@@ -93,12 +93,13 @@ export function Settings() {
   const categoryMap = new Map(bootstrap.serviceCategories.map((c) => [c.id, c.name]));
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-6">
+    <div className="mx-auto max-w-5xl px-4 py-6 pb-24 md:pb-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-bold text-slate-900">設置</h1>
         {saved && <span className="rounded-lg bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{saved}</span>}
       </div>
 
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       {/* 店家資料 */}
       <Section title="店家資料">
         <Field label="店家名稱">
@@ -223,6 +224,7 @@ export function Settings() {
         </button>
         <p className="mt-2 text-xs text-slate-400">清空預約 / 訂單 / 客戶 / 設置並重新種入預設。僅供開發測試。</p>
       </Section>
+      </div>
     </div>
   );
 }

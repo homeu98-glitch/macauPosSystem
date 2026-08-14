@@ -236,7 +236,7 @@ export function ServiceRunner() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
-      <div className="mx-auto max-w-3xl px-4 py-6">
+      <div className="mx-auto max-w-4xl px-4 py-6 pb-24 md:pb-6">
         {/* Header — 移除返回按鈕（sidebar 已提供導航） */}
         <div className="mb-4 flex items-center justify-end">
           <div className="text-sm text-slate-500">{booking.bookingNo}</div>

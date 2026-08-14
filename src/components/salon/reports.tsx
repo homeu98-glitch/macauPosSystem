@@ -119,7 +119,7 @@ export function Reports() {
   }, [settled, staffMap]);
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-6">
+    <div className="mx-auto max-w-5xl px-4 py-6 pb-24 md:pb-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-bold text-slate-900">報表</h1>
         <div className="flex gap-1.5">
@@ -147,6 +147,7 @@ export function Reports() {
         <Stat label="小費" value={money(summary.tip)} />
       </div>
 
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {/* 付款方式拆分 */}
       <Section title="付款方式">
         {Object.keys(summary.payments).length === 0 ? (
@@ -198,6 +199,7 @@ export function Reports() {
           </div>
         )}
       </Section>
+      </div>
 
       <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-800">
         <span className="font-semibold">說明：</span>

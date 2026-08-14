@@ -353,7 +353,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   if (booking.status === "settled" && !settled) {
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
-        <div className="mx-auto max-w-2xl px-4 py-10">
+        <div className="mx-auto max-w-4xl px-4 py-10 pb-24 md:pb-10">
           <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <div className="text-lg font-bold text-emerald-600">此預約已結帳</div>
             <div className="mt-2 text-sm text-slate-500">
@@ -375,7 +375,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   if (settled) {
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
-        <div className="mx-auto max-w-2xl px-4 py-10">
+        <div className="mx-auto max-w-4xl px-4 py-10 pb-24 md:pb-10">
           <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <div className="text-2xl font-bold text-emerald-600">結帳完成</div>
             <div className="mt-2 text-sm text-slate-500">收據單號 {settledOrderNo}</div>
@@ -402,7 +402,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
-      <div className="mx-auto max-w-2xl px-4 py-6">
+      <div className="mx-auto max-w-4xl px-4 py-6 pb-24 md:pb-6">
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
           <div>
@@ -548,7 +548,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           ) : (
             <div className="grid gap-2">
               {payments.map((p) => (
-                <div key={p.id} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+                <div key={p.id} className="flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
                   <select
                     value={p.method}
                     onChange={(e) => updatePayment(p.id, { method: e.target.value as SalonPaymentMethod })}

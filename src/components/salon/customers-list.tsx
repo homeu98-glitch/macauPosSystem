@@ -65,7 +65,7 @@ export function CustomersList() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl p-4 md:p-6">
+    <div className="mx-auto max-w-5xl p-4 pb-24 md:p-6 md:pb-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-bold text-slate-900">客戶檔案</h1>
         <button
@@ -135,7 +135,7 @@ export function CustomersList() {
         </div>
       )}
 
-      <div className="grid gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {filtered.map((c) => {
           const ledger = getMockLedgerMember(c.phone);
           return (
