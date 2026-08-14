@@ -33,7 +33,7 @@ export function SalonSidebar() {
       {/* Desktop sidebar — 固定寬度 72px，可滾動 */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col bg-slate-900 px-2 py-3 text-white md:flex">
         {/* 頂部：可滾動導航區 */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
           <div className="grid gap-2">
             {salonNavItems.map((item) => {
               const active =
