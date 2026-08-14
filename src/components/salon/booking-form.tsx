@@ -11,7 +11,11 @@ import type {
   SalonServiceCategory,
 } from "@/lib/salon/types";
 import { loadSalonBootstrap } from "@/lib/salon/storage";
-import { pushMockBooking } from "@/lib/salon/mock-realtime";
+import {
+  pushMockBooking,
+  ensureSalonCustomer,
+  updateMockBooking,
+} from "@/lib/salon/mock-realtime";
 
 interface BookingFormProps {
   initialStaffId?: string;
@@ -141,6 +145,10 @@ export function BookingForm({
       status: "confirmed",
       notes: notes.trim() || undefined,
     });
+
+    // Phase 4：walk-in / 電話開單自動 upsert 客戶檔案並連結 customerId
+    const customer = ensureSalonCustomer(customerName.trim(), customerPhone);
+    updateMockBooking(booking.id, { customerId: customer.id });
 
     setSubmitting(false);
     onSuccess?.(booking);

@@ -7,6 +7,7 @@ import type {
   SalonServiceItem,
   SalonStaff,
   SalonStation,
+  SalonCustomerProfile,
 } from "@/lib/salon/types";
 
 export const DEFAULT_SALON_STORE_ID = "demo-salon-001";
@@ -329,3 +330,107 @@ export function buildDefaultSalonBootstrap(): SalonBootstrap {
     lastUpdatedAt: new Date().toISOString(),
   };
 }
+
+// ────────────────────────────────────────────────────────────────────
+// 預設客戶（Phase 4 示範資料）
+// 電話與 seedMockBookingsIfEmpty 的示範預約對齊，方便從預約連回客戶檔案。
+// ledgerBalance / ledgerPoints / ledgerTier 為 Ledger 會員資料（mock 階段種入；
+// 真實 Ledger 到位後由 getMockLedgerMember 改讀 RPC，POS 永不寫入）。
+// ────────────────────────────────────────────────────────────────────
+
+export const defaultSalonCustomers: SalonCustomerProfile[] = [
+  {
+    id: "cust-001",
+    name: "林小姐",
+    phone: "66883333",
+    ledgerBalance: 1200,
+    ledgerPoints: 3400,
+    ledgerTier: "金卡會員",
+    birthday: "1990-05-12",
+    gender: "female",
+    tags: ["VIP", "敏感肌"],
+    skinType: "sensitive",
+    hairType: "fine",
+    allergies: ["香料", "酒精"],
+    preferences: "喜歡安靜環境，怕癢",
+    formulaHistory: [
+      {
+        date: "2026-06-15",
+        service: "保濕臉部護理",
+        formula: "溫和保濕精華 + 蘆薈",
+        staffId: "staff-002",
+        staffName: "阿龍",
+      },
+      {
+        date: "2026-07-20",
+        service: "抗老臉部護理",
+        formula: "視黃醇 0.3% + 神經醯胺",
+        staffId: "staff-002",
+        staffName: "阿龍",
+      },
+    ],
+    visitCount: 12,
+    lastVisitAt: "2026-08-10",
+    totalSpent: 8650,
+  },
+  {
+    id: "cust-002",
+    name: "王小姐",
+    phone: "66881111",
+    ledgerBalance: 300,
+    ledgerPoints: 1200,
+    ledgerTier: "銀卡會員",
+    gender: "female",
+    tags: ["美甲常客"],
+    skinType: "combination",
+    allergies: [],
+    formulaHistory: [],
+    visitCount: 5,
+    lastVisitAt: "2026-08-14",
+    totalSpent: 2400,
+  },
+  {
+    id: "cust-003",
+    name: "張小姐",
+    phone: "66884444",
+    ledgerBalance: 0,
+    ledgerPoints: 800,
+    ledgerTier: "普通會員",
+    gender: "female",
+    tags: [],
+    hairType: "damaged",
+    formulaHistory: [],
+    visitCount: 3,
+    lastVisitAt: "2026-08-14",
+    totalSpent: 1740,
+  },
+  {
+    id: "cust-004",
+    name: "陳先生",
+    phone: "66882222",
+    ledgerBalance: 500,
+    ledgerPoints: 2100,
+    ledgerTier: "銀卡會員",
+    gender: "male",
+    tags: ["SPA愛好者"],
+    preferences: "力度要重一點",
+    formulaHistory: [],
+    visitCount: 8,
+    lastVisitAt: "2026-08-14",
+    totalSpent: 7840,
+  },
+  {
+    id: "cust-005",
+    name: "黃先生",
+    phone: "66885555",
+    ledgerBalance: 0,
+    ledgerPoints: 150,
+    ledgerTier: "普通會員",
+    gender: "male",
+    tags: [],
+    formulaHistory: [],
+    visitCount: 1,
+    lastVisitAt: "2026-08-14",
+    totalSpent: 280,
+  },
+];

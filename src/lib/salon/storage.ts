@@ -13,7 +13,7 @@ import {
   type SalonQueueEvent,
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
-import { buildDefaultSalonBootstrap } from "@/lib/salon/mock-data";
+import { buildDefaultSalonBootstrap, defaultSalonCustomers } from "@/lib/salon/mock-data";
 
 // ────────────────────────────────────────────────────────────────────
 // 通用 JSON 讀寫（與餐飲 storage.ts 同款，純內部使用）
@@ -97,6 +97,8 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       writeJson(SALON_STORAGE_KEYS.serviceItems, seed.serviceItems);
       writeJson(SALON_STORAGE_KEYS.staff, seed.staff);
       writeJson(SALON_STORAGE_KEYS.stations, seed.stations);
+      // Phase 4：首次啟動種入示範客戶
+      writeJson(SALON_STORAGE_KEYS.customers, defaultSalonCustomers);
       seededForStore = seed.storeId;
       return seed;
     }

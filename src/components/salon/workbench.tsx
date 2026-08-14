@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 
 import {
@@ -354,9 +354,9 @@ interface PanelProps {
   title: string;
   hint: string;
   emptyMessage: string;
-  trailing?: React.ReactNode;
-  action?: React.ReactNode;
-  children?: React.ReactNode;
+  trailing?: ReactNode;
+  action?: ReactNode;
+  children?: ReactNode;
 }
 
 function Panel({ title, hint, emptyMessage, trailing, action, children }: PanelProps) {

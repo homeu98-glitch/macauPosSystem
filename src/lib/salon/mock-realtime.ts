@@ -2,8 +2,18 @@
 // Simulates Ledger Realtime by writing to localStorage + dispatching custom events.
 // When Ledger RPC (L1/L2/L3) is ready, swap this layer for real Supabase Realtime.
 
-import type { SalonBooking, SalonBookingStatus } from "@/lib/salon/types";
-import { loadBookings, saveBookings } from "@/lib/salon/storage";
+import type {
+  SalonBooking,
+  SalonBookingStatus,
+  SalonCustomerProfile,
+} from "@/lib/salon/types";
+import {
+  loadBookings,
+  saveBookings,
+  loadCustomers,
+  saveCustomers,
+} from "@/lib/salon/storage";
+import { defaultSalonCustomers } from "@/lib/salon/mock-data";
 
 export const MOCK_REALTIME_EVENT = "salon:booking-update";
 
@@ -188,5 +198,51 @@ export function seedMockBookingsIfEmpty(): SalonBooking[] {
   for (const s of seeds) {
     created.push(pushMockBooking(s));
   }
+  return created;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Seed — 示範客戶（供「客戶檔案」頁首次載入；idempotent）
+// ────────────────────────────────────────────────────────────────────
+
+export function seedMockCustomersIfEmpty(): SalonCustomerProfile[] {
+  const existing = loadCustomers();
+  if (existing.length > 0) return existing;
+  saveCustomers(defaultSalonCustomers);
+  return defaultSalonCustomers;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Walk-in / 電話開單時自動 upsert 客戶檔案（按電話識別）
+// 回傳客戶 id，呼叫方可寫入 booking.customerId 做連結。
+// ────────────────────────────────────────────────────────────────────
+
+export function ensureSalonCustomer(name: string, phone: string): SalonCustomerProfile {
+  const phoneNorm = phone.replace(/\D/g, "");
+  const existing = loadCustomers();
+  const found = existing.find((c) => c.phone === phoneNorm);
+
+  if (found) {
+    const updated: SalonCustomerProfile = {
+      ...found,
+      name: found.name || name,
+      visitCount: found.visitCount + 1,
+      lastVisitAt: new Date().toISOString(),
+    };
+    saveCustomers(existing.map((c) => (c.phone === phoneNorm ? updated : c)));
+    return updated;
+  }
+
+  const created: SalonCustomerProfile = {
+    id: "cust-" + Math.random().toString(36).slice(2, 10),
+    name,
+    phone: phoneNorm,
+    visitCount: 1,
+    lastVisitAt: new Date().toISOString(),
+    ledgerBalance: 0,
+    ledgerPoints: 0,
+    ledgerTier: "普通會員",
+  };
+  saveCustomers([...existing, created]);
   return created;
 }
