@@ -80,13 +80,6 @@ export function SalonSidebar() {
             {networkOnline ? "在線" : "離線"}
           </div>
 
-          <Link
-            href="/"
-            className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-xs font-semibold text-slate-200 hover:bg-slate-700"
-          >
-            餐飲
-          </Link>
-
           {loggedIn ? (
             <button
               className="rounded-2xl bg-slate-800 px-2 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
@@ -107,10 +100,7 @@ export function SalonSidebar() {
       {/* Mobile bottom nav — 可橫向滾動 */}
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-2 py-2 backdrop-blur md:hidden">
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {[
-            ...salonNavItems,
-            { href: "/", label: "餐飲", short: "餐" },
-          ].map((item) => {
+          {[...salonNavItems].map((item) => {
             const active =
               pathname === item.href ||
               (item.href !== "/salon" && item.href !== "/" && pathname.startsWith(item.href));
