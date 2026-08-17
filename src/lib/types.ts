@@ -1,4 +1,4 @@
-export type ConnectionType = "lan" | "usb" | "webusb";
+export type ConnectionType = "lan" | "usb" | "webusb" | "browser";
 export type UserRole = "admin" | "manager" | "cashier";
 
 export interface UserPermissions {

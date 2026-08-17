@@ -38,6 +38,7 @@ import {
   requestTestPrintWebUsb,
   webUsbDeviceLabel,
 } from "@/lib/print-webusb";
+import { printBrowserTestPage } from "@/lib/print-browser";
 import { usePrintBridgeHealth } from "@/components/print-bridge-worker";
 
 function uid(prefix: string) {
@@ -445,6 +446,12 @@ export function DeviceSettings() {
         return;
       }
 
+      if (printer.connectionType === "browser") {
+        const result = await printBrowserTestPage(printer);
+        setStatus(result.ok ? `已透過瀏覽器打印 ${printer.name} 測試頁（請在打印對話框揀部機）。` : result.error);
+        return;
+      }
+
       if (isPrintBridgeEnabled()) {
         await syncPrintBridgeConfig(config);
         const result = await requestTestPrintBridge(printer);
@@ -833,6 +840,7 @@ export function DeviceSettings() {
                             <option value="lan">LAN</option>
                             <option value="usb">USB</option>
                             <option value="webusb">WebUSB（browser 直印）</option>
+                            <option value="browser">瀏覽器打印（window.print）</option>
                           </select>
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
@@ -858,7 +866,7 @@ export function DeviceSettings() {
                             <option value="100x75mm">100x75mm 標籤</option>
                           </select>
                         </label>
-                        {printer.connectionType !== "webusb" && (
+                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">IP 地址（LAN）</span>
                           <input
@@ -869,7 +877,7 @@ export function DeviceSettings() {
                           />
                         </label>
                         )}
-                        {printer.connectionType !== "webusb" && (
+                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">LAN 端口</span>
                           <input
@@ -883,7 +891,7 @@ export function DeviceSettings() {
                           />
                         </label>
                         )}
-                        {printer.connectionType !== "webusb" && (
+                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
                         <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-2">
                           <span className="text-xs text-slate-500">USB 系統印表機名稱</span>
                           <input
@@ -947,6 +955,14 @@ export function DeviceSettings() {
                                 ) : null}
                               </div>
                             )}
+                          </div>
+                        )}
+                        {printer.connectionType === "browser" && (
+                          <div className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-2">
+                            <span className="text-xs text-slate-500">瀏覽器打印（window.print · 零額外安裝）</span>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
+                              經瀏覽器「列印」對話框出紙，web app 唔使裝任何嘢。需 Windows 已安裝打印機 driver（例如 WL-R80A-win），並在對話框揀部機。無 ESC/POS 切紙 / 錢箱指令。
+                            </div>
                           </div>
                         )}
                       </div>

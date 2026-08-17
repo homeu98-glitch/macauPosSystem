@@ -4,6 +4,7 @@ import {
   syncPrintBridgeConfig,
 } from "@/lib/print-bridge/client";
 import { isWebUsbSupported, printWebUsbJob } from "@/lib/print-webusb";
+import { printBrowserJob } from "@/lib/print-browser";
 import { loadDeviceConfig, loadPrintJobs, savePrintJobs } from "@/lib/storage";
 import { DevicePrinterConfig, PrintJob } from "@/lib/types";
 
@@ -47,6 +48,14 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
         continue;
       }
       const result = await printWebUsbJob(job, printer);
+      nextJobs[index] = { ...job, status: result.ok ? "sent" : "failed" };
+      changed = true;
+      continue;
+    }
+
+    // 瀏覽器原生打印（window.print / iframe）— 零額外安裝 fallback，唔使 bridge / webusb
+    if (printer.connectionType === "browser") {
+      const result = await printBrowserJob(job, printer);
       nextJobs[index] = { ...job, status: result.ok ? "sent" : "failed" };
       changed = true;
       continue;
