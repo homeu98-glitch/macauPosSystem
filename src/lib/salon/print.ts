@@ -59,6 +59,14 @@ function buildReceiptLines(order: SalonPosOrder, currency: string): ReceiptLine[
   if (order.packageDeduction && order.packageDeduction > 0) {
     lines.push({ name: "套票抵扣", quantity: 1, specs: [], note: `-${currency} ${order.packageDeduction.toFixed(0)}` });
   }
+  if (order.pointsDeduction && order.pointsDeduction > 0) {
+    lines.push({
+      name: "積分兌換",
+      quantity: 1,
+      specs: [],
+      note: `-${currency} ${order.pointsDeduction.toFixed(0)}（${order.pointsRedeemed ?? 0}分）`,
+    });
+  }
   if (order.depositApplied && order.depositApplied > 0) {
     lines.push({ name: "已付定金", quantity: 1, specs: [], note: `-${currency} ${order.depositApplied.toFixed(0)}` });
   }

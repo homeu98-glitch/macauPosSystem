@@ -574,6 +574,44 @@ export function CustomerProfile() {
         )}
       </Section>
 
+      {/* 積分兌換力（P-積分兌換）：顯示客戶現有積分可兌換哪些服務 */}
+      <Section title="積分兌換力">
+        {ledger ? (
+          <>
+            <div className="mb-2 text-xs text-slate-500">
+              現有 <span className="font-semibold text-amber-700">{ledger.ledgerPoints}</span> 分，
+              以下服務可於結帳時以積分兌換（部分積分 + 現金 mix 亦可）。
+            </div>
+            <div className="grid gap-2">
+              {serviceItems
+                .filter((s) => (s.pointsPrice ?? 0) > 0 && s.active)
+                .map((s) => {
+                  const times = Math.floor(ledger.ledgerPoints / (s.pointsPrice ?? 0));
+                  return (
+                    <div key={s.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">{s.name}</div>
+                        <div className="text-[11px] text-slate-500">
+                          MOP {s.price} / {s.pointsPrice} 分
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-bold text-emerald-600">可兌 {times} 次</div>
+                        <div className="text-[11px] text-slate-400">全額積分兌換</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              {serviceItems.filter((s) => (s.pointsPrice ?? 0) > 0 && s.active).length === 0 && (
+                <p className="text-xs text-slate-400">尚無服務設定積分價，請到「設置 → 服務項目」填寫。</p>
+              )}
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-slate-400">此客戶無 Ledger 會員資料，無法計算兌換力。</p>
+        )}
+      </Section>
+
       {buyOpen ? (
         <BuyPackageModal
           templates={packageTemplates}

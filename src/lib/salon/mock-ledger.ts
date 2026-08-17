@@ -128,3 +128,51 @@ export function applyMockLedgerBonus(
   saveCustomers(customers);
   return { ok: true };
 }
+
+export interface ApplyLedgerPointsPaymentResult {
+  ok: boolean;
+  remaining: number;
+  error?: string;
+}
+
+/**
+ * 兌換服務時扣減會員 Ledger 積分（本地模擬）。
+ * 真實環境應改為呼叫 Ledger RPC 扣積分；此處只動 localStorage 客戶檔案的 ledgerPoints。
+ * - identifier：電話或客戶 id
+ * - points：扣減積分數，必須 > 0
+ * 積分不足時回傳 ok:false 且不修改資料，UI 應提示「Ledger 積分不足」。
+ * 支援「部分積分 + 現金」mix：本函式只負責扣 points，兌換比例换算由結帳頁決定。
+ */
+export function applyMockLedgerPointsPayment(
+  identifier: string,
+  points: number,
+): ApplyLedgerPointsPaymentResult {
+  if (typeof window === "undefined" || !identifier) {
+    return { ok: false, remaining: 0, error: "無效參數" };
+  }
+  if (!Number.isFinite(points) || points <= 0) {
+    return { ok: false, remaining: 0, error: "兌換積分必須大於 0" };
+  }
+
+  const customers = loadCustomers();
+  const idx = customers.findIndex(
+    (x) => x.phone === identifier || x.id === identifier,
+  );
+  if (idx < 0) {
+    return { ok: false, remaining: 0, error: "找不到 Ledger 會員" };
+  }
+
+  const c = customers[idx];
+  const cur = c.ledgerPoints ?? 0;
+  if (points > cur) {
+    return { ok: false, remaining: cur, error: "Ledger 積分不足" };
+  }
+
+  const updated: SalonCustomerProfile = {
+    ...c,
+    ledgerPoints: cur - points,
+  };
+  customers[idx] = updated;
+  saveCustomers(customers);
+  return { ok: true, remaining: cur - points };
+}

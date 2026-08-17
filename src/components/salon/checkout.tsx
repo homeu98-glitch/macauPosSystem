@@ -23,7 +23,7 @@ import {
   saveSalonCustomerPackages,
 } from "@/lib/salon/storage";
 import { updateMockBooking, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
-import { getMockLedgerMember, applyMockLedgerPayment } from "@/lib/salon/mock-ledger";
+import { getMockLedgerMember, applyMockLedgerPayment, applyMockLedgerPointsPayment } from "@/lib/salon/mock-ledger";
 import { dispatchSalonReceipt } from "@/lib/salon/print";
 import { playSuccessBeep } from "@/lib/salon/sound";
 
@@ -123,6 +123,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
 
   // 套票抵扣（P2）：已套用的抵扣計劃；空陣 = 未套用
   const [packagePlan, setPackagePlan] = useState<SalonPackageDeduction[]>([]);
+
+  // 積分兌換（P-積分兌換）：每個服務項目分配的兌換積分數（key = booking.services 索引）
+  const [pointsByIndex, setPointsByIndex] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const b = loadBookings().find((x) => x.id === bookingId);
@@ -225,6 +228,45 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   const previewAmount = previewPlan.reduce((sum, d) => sum + d.amount, 0);
   const deductedAmount = packagePlan.reduce((sum, d) => sum + d.amount, 0);
 
+  // ── 積分兌換（P-積分兌換）──
+  // 取每個 booking 服務項的「積分價」（pointsPrice），僅有設定且 > 0 者才可兌換。
+  // 每位客戶可逐項 mix：分配部分積分 → 現金等值 = price * (points / pointsPrice)，餘額走現金 / Ledger。
+  const pointsEligible = useMemo(() => {
+    if (!booking) return [];
+    const bootstrap = loadSalonBootstrap();
+    const itemMap = new Map((bootstrap?.serviceItems ?? []).map((s) => [s.id, s]));
+    return booking.services
+      .map((s, idx) => {
+        const cfg = itemMap.get(s.serviceItemId);
+        const pointsPrice = cfg?.pointsPrice ?? 0;
+        return { index: idx, serviceItemId: s.serviceItemId, name: s.name, price: s.price, pointsPrice };
+      })
+      .filter((x) => x.pointsPrice > 0);
+  }, [booking]);
+
+  const pointsAlloc = useMemo(() => {
+    return pointsEligible.map((e) => {
+      const allocated = Math.min(pointsByIndex[String(e.index)] ?? 0, e.pointsPrice);
+      const cashEquiv = e.pointsPrice > 0 ? Math.round((e.price * allocated) / e.pointsPrice) : 0;
+      const cashLeft = Math.max(0, e.price - cashEquiv);
+      return { ...e, allocated, cashEquiv, cashLeft };
+    });
+  }, [pointsEligible, pointsByIndex]);
+
+  const totalPointsAllocated = pointsAlloc.reduce((sum, x) => sum + x.allocated, 0);
+  const pointsDeduction = pointsAlloc.reduce((sum, x) => sum + x.cashEquiv, 0);
+  const availablePoints = ledgerMember?.ledgerPoints ?? 0;
+  const pointsOverflow = totalPointsAllocated > availablePoints + 0.001;
+
+  const setPointsFor = useCallback((idx: number, points: number) => {
+    setPointsByIndex((prev) => {
+      const next = { ...prev };
+      if (points <= 0) delete next[String(idx)];
+      else next[String(idx)] = points;
+      return next;
+    });
+  }, []);
+
   // ── 計算 ──
   const subtotal = useMemo(
     () => (booking ? booking.services.reduce((sum, s) => sum + s.price, 0) : 0),
@@ -236,7 +278,10 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     return booking.depositPaid ? booking.depositAmount ?? 0 : 0;
   }, [booking]);
   const tipTotal = tips.reduce((sum, t) => sum + (t.amount || 0), 0);
-  const grandTotal = Math.max(0, afterDiscount + tipTotal - depositApplied - deductedAmount);
+  const grandTotal = Math.max(
+    0,
+    afterDiscount + tipTotal - depositApplied - deductedAmount - pointsDeduction,
+  );
   const paidTotal = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
   const changeDue = paidTotal > grandTotal ? paidTotal - grandTotal : 0;
   const remaining = Math.max(0, grandTotal - paidTotal);
@@ -251,7 +296,8 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     booking.status !== "settled" &&
     grandTotal >= 0 &&
     remaining <= 0.001 &&
-    ledgerPaymentAmount <= ledgerAvailable + 0.001;
+    ledgerPaymentAmount <= ledgerAvailable + 0.001 &&
+    !pointsOverflow;
 
   // ── 小費操作 ──
   const splitTipsEvenly = useCallback(() => {
@@ -316,6 +362,15 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       }
     }
 
+    // 1b) 扣 Ledger 積分（若有用積分兌換），不足即中止並保留訂單
+    if (totalPointsAllocated > 0) {
+      const res = applyMockLedgerPointsPayment(booking.customerPhone, totalPointsAllocated);
+      if (!res.ok) {
+        setSettleError(res.error ?? "Ledger 積分扣減失敗");
+        return;
+      }
+    }
+
     const now = new Date().toISOString();
     const orderId = uid("order");
     const orderNo = genOrderNo();
@@ -325,11 +380,18 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     for (const d of packagePlan) {
       coverLeft.set(d.serviceItemId, (coverLeft.get(d.serviceItemId) ?? 0) + 1);
     }
+    // 標記被積分兌換的服務項（依 booking.services 索引）
+    const pointLeft = new Map<number, number>();
+    for (const a of pointsAlloc) pointLeft.set(a.index, a.allocated);
 
-    const items: SalonOrderItem[] = booking.services.map((s) => {
+    const items: SalonOrderItem[] = booking.services.map((s, idx) => {
       const left = coverLeft.get(s.serviceItemId) ?? 0;
       const covered = left > 0;
       if (covered) coverLeft.set(s.serviceItemId, left - 1);
+      const usedPoints = pointLeft.get(idx) ?? 0;
+      const notes: string[] = [];
+      if (covered) notes.push("套票抵扣");
+      if (usedPoints > 0) notes.push(`積分兌換 ${usedPoints}分`);
       return {
         kind: "service",
         itemId: s.serviceItemId,
@@ -338,7 +400,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
         unitPrice: s.price,
         staffId: s.staffId,
         staffName: staffMap[s.staffId]?.nickname ?? staffMap[s.staffId]?.name ?? "",
-        note: covered ? "套票抵扣" : undefined,
+        note: notes.length > 0 ? notes.join(" · ") : undefined,
       };
     });
 
@@ -372,6 +434,8 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       subtotal,
       discountAmount,
       packageDeduction: deductedAmount > 0 ? deductedAmount : undefined,
+      pointsDeduction: pointsDeduction > 0 ? pointsDeduction : undefined,
+      pointsRedeemed: totalPointsAllocated > 0 ? totalPointsAllocated : undefined,
       total: afterDiscount,
       tips: tipRecords,
       tipTotal,
@@ -424,6 +488,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     changeDue,
     deductedAmount,
     packagePlan,
+    pointsAlloc,
+    pointsDeduction,
+    totalPointsAllocated,
     staffMap,
   ]);
 
@@ -658,6 +725,90 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           )}
         </div>
 
+        {/* 積分兌換（P-積分兌換）：逐項 mix，部分積分 + 部分現金 */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-bold text-slate-900">積分兌換</h3>
+            {booking.customerId && ledgerMember && (
+              <div className="text-xs text-amber-700">可用積分 {ledgerMember.ledgerPoints}</div>
+            )}
+          </div>
+          {!booking.customerId ? (
+            <div className="text-xs text-slate-400">本預約未綁定客戶，積分兌換需關聯 Ledger 會員。</div>
+          ) : !ledgerMember ? (
+            <div className="text-xs text-slate-400">此客戶無 Ledger 會員資料，無法兌換積分。</div>
+          ) : pointsEligible.length === 0 ? (
+            <div className="text-xs text-slate-400">本單服務項目無設定積分價，無法以積分兌換。</div>
+          ) : (
+            <div className="grid gap-2">
+              {pointsAlloc.map((a) => {
+                const on = a.allocated > 0;
+                return (
+                  <div key={a.index} className="rounded-xl bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-slate-800">{a.name}</span>
+                      <span className="text-xs text-slate-500">
+                        {money(a.price)} / {a.pointsPrice} 分
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={(e) => setPointsFor(a.index, e.target.checked ? a.pointsPrice : 0)}
+                          className="h-4 w-4"
+                        />
+                        用積分兌換
+                      </label>
+                      {on && (
+                        <>
+                          <input
+                            type="number"
+                            min={0}
+                            max={a.pointsPrice}
+                            value={a.allocated}
+                            onChange={(e) =>
+                              setPointsFor(
+                                a.index,
+                                Math.max(0, Math.min(a.pointsPrice, Number(e.target.value) || 0)),
+                              )
+                            }
+                            className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                          />
+                          <span className="text-xs text-slate-400">分（可少於 {a.pointsPrice} 以 mix）</span>
+                          <span className="ml-auto text-xs font-semibold text-emerald-700">
+                            抵 {money(a.cashEquiv)} · 餘 {money(a.cashLeft)} 現金
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {totalPointsAllocated > 0 && (
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-sm font-semibold text-slate-800">
+                    已兌換 {totalPointsAllocated} 分（抵 {money(pointsDeduction)}）
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPointsByIndex({})}
+                    className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                  >
+                    全部取消
+                  </button>
+                </div>
+              )}
+              {pointsOverflow && (
+                <div className="text-xs text-rose-600">
+                  積分不足：已分配 {totalPointsAllocated} 分，但可用僅 {availablePoints} 分。
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* 小費（多技師平分） */}
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
@@ -785,6 +936,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
             <Row label="小計" value={money(subtotal)} />
             {discountAmount > 0 && <Row label="折扣" value={`-${money(discountAmount)}`} />}
             {deductedAmount > 0 && <Row label="套票抵扣" value={`-${money(deductedAmount)}`} />}
+            {pointsDeduction > 0 && <Row label="積分兌換" value={`-${money(pointsDeduction)}`} />}
             {depositApplied > 0 && <Row label="已付定金" value={`-${money(depositApplied)}`} />}
             {tipTotal > 0 && <Row label="小費" value={money(tipTotal)} />}
             <div className="my-1 border-t border-slate-100" />

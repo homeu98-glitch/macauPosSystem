@@ -238,3 +238,42 @@ SalonCustomerPackage {
 
 ### 5.9 待 push 提醒（含 P1 + P2 + P3）
 - P1 + P2 + P3 全部改動 + 上輪兩處 build 修復均尚未 push。SQL 0006 用戶已執行。請本地 `npm run lint && npm run build` 確認無迴歸後 `git add -A && commit && push` 觸發 Vercel。
+
+### 5.10 P-積分兌換（per-item 積分價 + mix，2026-08-15 實施）
+
+用戶需求：每個服務項目各自設一個「積分價」（例如 項目1 現金 $200 = 5000 分），結帳可逐項選用積分兌換、並支援「部分積分 + 現金」mix；設置與結帳 / 客戶檔案都要顯示。經 AskUserQuestion 確認三點：**每項目個別積分價**（非全局匯率）、**mix 部分積分+現金**、**結帳 + 客戶檔案都顯示**。
+
+**設計要點**
+- 每位服務項目自帶 `pointsPrice`，隱含「每分等值 = price / pointsPrice」，**無需全局匯率設定**，契合用戶「逐項」選擇。
+- mix：分配 `k` 分（0 ≤ k ≤ pointsPrice）→ 現金等值 = `round(price × k / pointsPrice)`，餘額走現金 / Ledger 餘額。跨服務可部分用積分、部分現金。
+
+**A. 類型（`src/lib/salon/types.ts`）**
+- `SalonServiceItem` 加 `pointsPrice?: number`（積分價；0 = 不可兌換）。
+- `SalonPosOrder` 加 `pointsDeduction?: number`（MOP 等值現金減免）與 `pointsRedeemed?: number`（本次交易扣的 Ledger 積分總數）。
+
+**B. 設置頁（`src/components/salon/settings.tsx`）**
+- 服務項目編輯器 `itemFields` 加 `pointsPrice` 欄位（label「積分價 (分)」，type number，help 說明 mix 玩法）；`emptyItem()` 加 `pointsPrice: 0`。
+
+**C. 結帳頁（`src/components/salon/checkout.tsx`）**
+- 新增「積分兌換」區塊（位於套票抵扣與小費之間）：依 `booking.services` 索引取各項 `pointsPrice`，僅 `pointsPrice > 0` 者顯示「現金 $X / Y 分」。
+- 逐項 checkbox「用積分兌換」→ 預設填滿 `pointsPrice`；開啟後出現數字輸入框可下調至任意值以 mix，即時顯示「抵 $現金等值 · 餘 $餘額 現金」。
+- `pointsDeduction` 總額從 `grandTotal` 減除（`afterDiscount + tipTotal - depositApplied - deductedAmount - pointsDeduction`）；結算摘要加「積分兌換 -X」行；`canSettle` 加 `!pointsOverflow`（分配積分 ≤ 可用積分）。
+- `handleSettle`：結帳時先 `applyMockLedgerPointsPayment(customerPhone, totalPointsAllocated)` 扣 Ledger 積分（不足即中止保留訂單）；訂單寫 `pointsRedeemed` / `pointsDeduction`；被兌換項目 `SalonOrderItem.note` 串接「積分兌換 N分」。
+- 未綁定客戶 / 無 Ledger 會員 / 本單無積分價服務 → 顯示對應提示，不開放兌換。
+
+**D. 客戶檔案（`src/components/salon/customer-profile.tsx`）**
+- 新增「積分兌換力」區塊：列出所有 `pointsPrice > 0 && active` 的服務項目，顯示「現金 $X / Y 分」與「可兌 N 次」（`floor(ledgerPoints / pointsPrice)`）；無 Ledger 會員顯示提示。
+
+**E. 收據（`src/lib/salon/print.ts`）**
+- `buildReceiptLines` 於 `order.pointsDeduction > 0` 加「積分兌換 -X（N分）」行（置於套票抵扣之後、定金之前）；被兌換項目 note 串接顯示於收據。
+
+**F. mock Ledger seam（`src/lib/salon/mock-ledger.ts`）**
+- 加 `applyMockLedgerPointsPayment(identifier, points)`：本地扣 `ledgerPoints`，不足回傳 `ok:false` + `error`，不修改資料。真 RPC 到位後只換此函式實作。
+
+**P-積分兌換 範圍外 / 已知 gap**
+- Ledger 仍是 mock 層；扣積分僅寫本地客戶檔案，真 RPC 接通後生效。
+- 積分「全額兌換」與「mix 輸入值」皆未做最小單位（1 分）限制以外的校驗；員工輸錯積分會直接影響現金等值（UI 已即時顯示，可接受）。
+- `tsc --noEmit` 僅餘 `src/app/layout.tsx` 的 `LayoutProps` 誤報（與本輪無關）；積分兌換檔案零錯誤。仍待用戶 dev box `npm run lint && npm run build` + push 驗證。
+
+### 5.11 待 push 提醒（含 P1 + P2 + P3 + 積分兌換）
+- P1 + P2 + P3 + 積分兌換（§5.10）全部改動 + 上輪兩處 build 修復均尚未 push。SQL 0006 用戶已執行。請本地 `npm run lint && npm run build` 確認無迴歸後 `git add -A && commit && push` 觸發 Vercel。

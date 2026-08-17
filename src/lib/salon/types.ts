@@ -48,6 +48,8 @@ export interface SalonServiceItem {
   name: string;
   description?: string;
   price: number;
+  /** 積分價：以多少 Ledger 積分全額兌換本服務（替代現金價 price）；支持與現金 mix 抵扣（P-積分兌換） */
+  pointsPrice?: number;
   cost?: number;
   durationMinutes: number;
   stationTypes?: Array<"chair" | "bed" | "room" | "wash" | "nail_table">;
@@ -253,6 +255,10 @@ export interface SalonPosOrder {
   discountAmount: number;
   /** 套票抵扣總額（P2：以套票次數抵扣的服務金額，從應收減除） */
   packageDeduction?: number;
+  /** 積分兌換抵扣總額（MOP 等值的現金減免，由 pointsRedeemed 換算的消費額，P-積分兌換） */
+  pointsDeduction?: number;
+  /** 本次交易兌換所扣 Ledger 積分總數（P-積分兌換） */
+  pointsRedeemed?: number;
   serviceChargeAmount?: number;
   taxAmount?: number;
   total: number;
