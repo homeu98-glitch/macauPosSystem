@@ -61,6 +61,7 @@ export function BookingForm({
   const [hour, setHour] = useState(defaultHour);
   const [minute, setMinute] = useState(defaultMinute);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [catFilter, setCatFilter] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -107,6 +108,13 @@ export function BookingForm({
     () => selectedServices.reduce((sum, s) => sum + s.price, 0),
     [selectedServices]
   );
+
+  const endTime = useMemo(() => {
+    if (selectedServices.length === 0) return "—";
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const end = new Date(y, m - 1, d, hour, minute + totalDuration);
+    return `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+  }, [selectedServices, dateStr, hour, minute, totalDuration]);
 
   const validate = useCallback((): boolean => {
     const next: Record<string, string> = {};
@@ -188,253 +196,285 @@ export function BookingForm({
 
   const selectedTimeValue = hour * 60 + minute;
 
-  return (
-    <div className="mx-auto w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-bold text-slate-900">開立新預約</h2>
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-200"
-          >
-            ✕ 關閉
-          </button>
-        )}
-      </div>
+  const visibleItems = useMemo(
+    () => (catFilter ? items.filter((i) => i.categoryId === catFilter) : items),
+    [catFilter, items]
+  );
 
-      <div className="grid gap-4">
-        {/* Source */}
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-500">來源</label>
-          <div className="flex gap-2">
+  return (
+    <div className="flex h-full flex-col">
+      {/* 頂部 sticky 標題列 + 來源 */}
+      <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-100/95 px-4 py-3 backdrop-blur md:px-6">
+        <h2 className="text-lg font-bold text-slate-900">快速開單</h2>
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1.5">
             {(["walk_in", "phone"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setSource(s)}
-                className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                className={`rounded-xl px-3 py-1.5 text-sm font-semibold ${
                   source === s
                     ? "bg-orange-500 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    : "bg-slate-200 text-slate-700 hover:bg-slate-300"
                 }`}
               >
-                {s === "walk_in" ? "走進客戶" : "電話預約"}
+                {s === "walk_in" ? "走進" : "電話"}
               </button>
             ))}
           </div>
-        </div>
-
-        {/* Customer */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-500">
-              客戶姓名 <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={customerName}
-              onChange={(e) => {
-                setCustomerName(e.target.value);
-                setErrors((prev) => ({ ...prev, name: "" }));
-              }}
-              className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
-                errors.name ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-orange-200"
-              }`}
-              placeholder="姓名"
-            />
-            {errors.name && <p className="mt-1 text-xs text-rose-500">{errors.name}</p>}
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-500">
-              電話 <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="tel"
-              inputMode="numeric"
-              maxLength={8}
-              value={customerPhone}
-              onChange={(e) => {
-                setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 8));
-                setErrors((prev) => ({ ...prev, phone: "" }));
-              }}
-              className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
-                errors.phone ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-orange-200"
-              }`}
-              placeholder="8 位數字"
-            />
-            {errors.phone && <p className="mt-1 text-xs text-rose-500">{errors.phone}</p>}
-          </div>
-        </div>
-
-        {/* Date + Time */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-500">日期</label>
-            <input
-              type="date"
-              value={dateStr}
-              onChange={(e) => setDateStr(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-500">時間</label>
-            <select
-              value={selectedTimeValue}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setHour(Math.floor(v / 60));
-                setMinute(v % 60);
-              }}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-            >
-              {timeOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Staff */}
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-500">
-            技師 <span className="text-rose-500">*</span>
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {staffList.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => {
-                  setStaffId(s.id);
-                  setErrors((prev) => ({ ...prev, staff: "" }));
-                }}
-                className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
-                  staffId === s.id
-                    ? "bg-orange-500 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
-              >
-                {s.nickname ?? s.name}
-                <span className="ml-1 text-[10px] opacity-70">({s.role})</span>
-              </button>
-            ))}
-          </div>
-          {errors.staff && <p className="mt-1 text-xs text-rose-500">{errors.staff}</p>}
-        </div>
-
-        {/* Station */}
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-500">房型 / 椅</label>
-          <select
-            value={stationId}
-            onChange={(e) => setStationId(e.target.value)}
-            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-          >
-            <option value="">自動分配</option>
-            {stations.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.type}) · {s.location}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Services */}
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-500">
-            服務項目 <span className="text-rose-500">*</span>
-          </label>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {categories.map((cat) => {
-              const catItems = items.filter((i) => i.categoryId === cat.id);
-              if (catItems.length === 0) return null;
-              return (
-                <div key={cat.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="mb-2 text-xs font-bold" style={{ color: cat.color }}>
-                    {cat.name}
-                  </div>
-                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                    {catItems.map((item) => {
-                      const selected = selectedServiceIds.includes(item.id);
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => toggleService(item.id)}
-                          className={`flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${
-                            selected
-                              ? "bg-orange-500 text-white"
-                              : "bg-white text-slate-700 hover:bg-slate-100"
-                          }`}
-                        >
-                          <span className="min-w-0 truncate font-medium">{item.name}</span>
-                          <span className="ml-2 shrink-0 text-xs opacity-80">
-                            ${item.price} · {item.durationMinutes}分
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {errors.services && <p className="mt-1 text-xs text-rose-500">{errors.services}</p>}
-        </div>
-
-        {/* Summary */}
-        {selectedServices.length > 0 && (
-          <div className="rounded-xl bg-orange-50 p-3 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-1 font-semibold text-orange-800">
-              <span>已選 {selectedServices.length} 項</span>
-              <span>合計 ${totalPrice} · {totalDuration} 分鐘</span>
-            </div>
-            <div className="mt-1 text-xs text-orange-700">
-              預計結束：{(() => {
-                const [y, m, d] = dateStr.split("-").map(Number);
-                const end = new Date(y, m - 1, d, hour, minute + totalDuration);
-                return `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
-              })()}
-            </div>
-          </div>
-        )}
-
-        {/* Notes */}
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-slate-500">備註</label>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-            placeholder="客戶特殊需求、過敏史等"
-          />
-        </div>
-
-        {/* Actions */}
-        <div className="flex gap-3 pt-2">
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={submitting}
-            className="flex-1 rounded-xl bg-orange-500 py-3 text-sm font-bold text-white shadow-sm hover:bg-orange-600 disabled:opacity-50"
-          >
-            {submitting ? "建立中…" : "確認開單"}
-          </button>
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl bg-slate-100 px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+              className="rounded-xl bg-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-300"
             >
-              取消
+              關閉
             </button>
           )}
         </div>
+      </header>
+
+      <div className="flex flex-1 min-h-0 flex-col gap-4 p-4 md:flex-row md:gap-6 md:px-6">
+        {/* 左：服務目錄 */}
+        <section className="min-h-0 md:flex-1">
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setCatFilter(null)}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                catFilter === null
+                  ? "bg-orange-500 text-white"
+                  : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+              }`}
+            >
+              全部
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setCatFilter(cat.id)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  catFilter === cat.id
+                    ? "bg-orange-500 text-white"
+                    : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                }`}
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+
+          {visibleItems.length === 0 ? (
+            <div className="rounded-2xl bg-slate-50 px-4 py-10 text-center text-sm text-slate-400">
+              此類目暫無服務項目
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {visibleItems.map((item) => {
+                const selected = selectedServiceIds.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => toggleService(item.id)}
+                    className={`flex min-h-[64px] flex-col justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
+                      selected
+                        ? "bg-orange-500 text-white"
+                        : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="font-medium leading-tight">{item.name}</span>
+                    <span className="mt-1 text-xs opacity-80">
+                      ${item.price} · {item.durationMinutes}分
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* 右：開單摘要（桌面 sticky 常駐） */}
+        <aside className="md:w-[360px] md:shrink-0 lg:w-[400px]">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:sticky md:top-[72px] md:self-start">
+            <h3 className="mb-3 text-sm font-bold text-slate-900">開單摘要</h3>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500">
+                  客戶姓名 <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value);
+                    setErrors((prev) => ({ ...prev, name: "" }));
+                  }}
+                  className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
+                    errors.name ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-orange-200"
+                  }`}
+                  placeholder="姓名"
+                />
+                {errors.name && <p className="mt-1 text-xs text-rose-500">{errors.name}</p>}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500">
+                  電話 <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={8}
+                  value={customerPhone}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 8));
+                    setErrors((prev) => ({ ...prev, phone: "" }));
+                  }}
+                  className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
+                    errors.phone ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-orange-200"
+                  }`}
+                  placeholder="8 位數字"
+                />
+                {errors.phone && <p className="mt-1 text-xs text-rose-500">{errors.phone}</p>}
+              </div>
+            </div>
+
+            <div className="mt-2">
+              <label className="mb-1 block text-xs font-semibold text-slate-500">
+                技師 <span className="text-rose-500">*</span>
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {staffList.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setStaffId(s.id);
+                      setErrors((prev) => ({ ...prev, staff: "" }));
+                    }}
+                    className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold transition ${
+                      staffId === s.id
+                        ? "bg-orange-500 text-white"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    {s.nickname ?? s.name}
+                  </button>
+                ))}
+              </div>
+              {errors.staff && <p className="mt-1 text-xs text-rose-500">{errors.staff}</p>}
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500">日期</label>
+                <input
+                  type="date"
+                  value={dateStr}
+                  onChange={(e) => setDateStr(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500">時間</label>
+                <select
+                  value={selectedTimeValue}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setHour(Math.floor(v / 60));
+                    setMinute(v % 60);
+                  }}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                >
+                  {timeOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-2">
+              <label className="mb-1 block text-xs font-semibold text-slate-500">房型 / 椅</label>
+              <select
+                value={stationId}
+                onChange={(e) => setStationId(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+              >
+                <option value="">自動分配</option>
+                {stations.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.type}) · {s.location}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mt-3">
+              <div className="mb-1 flex items-center justify-between text-xs font-semibold text-slate-500">
+                <span>已選服務</span>
+                <span>{selectedServices.length} 項</span>
+              </div>
+              {selectedServices.length === 0 ? (
+                <div className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-400">尚未選擇服務</div>
+              ) : (
+                <div className="max-h-[26vh] space-y-1.5 overflow-y-auto pr-1">
+                  {selectedServices.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
+                      <span className="min-w-0 truncate text-sm text-slate-800">{s.name}</span>
+                      <span className="shrink-0 text-xs text-slate-500">
+                        ${s.price}·{s.durationMinutes}分
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleService(s.id)}
+                        className="shrink-0 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-600 hover:bg-rose-200"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedServices.length > 0 && (
+              <div className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800">
+                <div className="flex justify-between">
+                  <span>合計</span>
+                  <span>
+                    ${totalPrice} · {totalDuration}分
+                  </span>
+                </div>
+                <div className="mt-0.5 text-xs font-normal text-orange-700">預計結束 {endTime}</div>
+              </div>
+            )}
+
+            <div className="mt-2">
+              <label className="mb-1 block text-xs font-semibold text-slate-500">備註</label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                placeholder="客戶特殊需求、過敏史等"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="sticky bottom-[76px] z-10 mt-3 w-full rounded-xl bg-orange-500 py-3 text-sm font-bold text-white shadow-sm hover:bg-orange-600 disabled:opacity-50 md:static"
+            >
+              {submitting ? "建立中…" : "確認開單"}
+            </button>
+          </div>
+        </aside>
       </div>
     </div>
   );
