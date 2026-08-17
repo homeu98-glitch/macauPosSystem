@@ -83,6 +83,13 @@ export function CustomerProfile() {
 
   const staffList = useMemo(() => loadSalonStaff().filter((s) => s.active), []);
 
+  // 推薦人候選：所有客戶（排除自己）
+  const customersList = useMemo(() => loadCustomers(), []);
+  const referrer = useMemo(
+    () => (customer?.referrerId ? customersList.find((c) => c.id === customer.referrerId) ?? null : null),
+    [customer, customersList],
+  );
+
   // 套票（P1）：可售模板 + 服務名稱對照
   const packageTemplates = useMemo(() => loadSalonPackageTemplates().filter((t) => t.active), []);
   const serviceItems = useMemo(() => loadServiceItems(), []);
@@ -333,6 +340,41 @@ export function CustomerProfile() {
             加標籤
           </button>
         </div>
+      </Section>
+
+      {/* 推薦人（Phase 8） */}
+      <Section title="推薦人">
+        <div className="mb-1 flex items-center justify-between">
+          <div className="text-xs font-medium text-slate-500">由哪位客戶推薦</div>
+          {customer.referralRewarded ? (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+              已發獎勵
+            </span>
+          ) : null}
+        </div>
+        <select
+          value={customer.referrerId ?? ""}
+          onChange={(e) => persist({ ...customer, referrerId: e.target.value || undefined })}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+        >
+          <option value="">（無 / 自行到店）</option>
+          {customersList
+            .filter((c) => c.id !== customer.id)
+            .map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}（{c.phone}）
+              </option>
+            ))}
+        </select>
+        {referrer ? (
+          <div className="mt-2 text-xs text-slate-600">
+            推薦人：{referrer.name}（{referrer.phone}）
+            {customer.referralRewarded ? " · 首次結帳已發推薦積分" : " · 待其首次結帳發推薦積分"}
+          </div>
+        ) : null}
+        <p className="mt-1 text-[11px] text-slate-400">
+          設定後，本客戶首次結帳時，推薦人將獲得「設置 → 會員優惠」中的推薦積分（僅推薦人得分，防刷分）。
+        </p>
       </Section>
 
       {/* 膚質 / 髮質 */}

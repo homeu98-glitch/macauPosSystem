@@ -42,6 +42,16 @@
 
 預約看板（日/週）、walk-in/電話開單表單、預約詳情/服務執行頁、Mock Realtime 層（5 筆假資料 seed）、工作台即時更新。全部走 Mock Realtime，Ledger 到位後切換 channel 即可。詳見 `.workbuddy-ai/memory/2026-08-14.md`。
 
+### Salon 會員忠誠度 3 功能（2026-08-17 ✅）
+
+用戶要求加 3 個會員功能，設計經確認後全落地，詳見 `docs/30-salon-loyalty-referral-birthday.md`：
+
+- **① 推薦獎勵**：被推薦人**首次結帳**才發（防刷分），**只有推薦人得分**。客戶檔案設 `referrerId`；結帳時 `applyMockLedgerBonus(referrer, {points: referralPoints})` 並標 `referralRewarded`。
+- **② 生日彈性優惠**：商家自定窗口（當月 `month` / 當週 `week`）+ 折扣% 與積分倍率**各自獨立**（填 0 關閉）；結帳命中窗口自動套用，店員可逐單關掉。
+- **③ 每店積分配比 `pointsPerDollar`**（預設 1）；結帳賺分 = `floor(grandTotal / pointsPerDollar)` ×（生日窗口內倍率）。
+
+落點：`types.ts`（`SalonLoyaltySettings` + `SalonBootstrap.loyalty?` + `SalonCustomerProfile.referrerId/referralRewarded` + `SalonPosOrder.pointsEarned/birthdayDiscount`）、`mock-data.ts`（`DEFAULT_SALON_LOYALTY` seed）、`storage.ts`（`ensureSalonBootstrap` 舊店補預設遷移）、`settings.tsx`（「會員優惠」tab）、`checkout.tsx`（生日折扣 + 賺分 + 推薦獎勵整合）、`customer-profile.tsx`（推薦人下拉）、`print.ts`（收據加「本次賺分 / 生日折扣」）。`tsc --noEmit` 零錯誤（僅 `layout.tsx` LayoutProps 誤報），待用戶 build + push。
+
 ### 注意：沙盒無 node_modules
 
 當前沙盒環境跑不了 `npm install`（EPERM），用戶在自己的 dev box 跑 `npm install && npm run lint && npm run build` 確認無迴歸後 push 到 Vercel。Phase 1 + Phase 2 均通過手動覆審，待真實 build 驗證。

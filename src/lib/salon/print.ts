@@ -56,6 +56,9 @@ function buildReceiptLines(order: SalonPosOrder, currency: string): ReceiptLine[
   if (order.discountAmount > 0) {
     lines.push({ name: "折扣", quantity: 1, specs: [], note: `-${currency} ${order.discountAmount.toFixed(0)}` });
   }
+  if (order.birthdayDiscount) {
+    lines.push({ name: "生日折扣", quantity: 1, specs: [], note: "已享生日優惠" });
+  }
   if (order.packageDeduction && order.packageDeduction > 0) {
     lines.push({ name: "套票抵扣", quantity: 1, specs: [], note: `-${currency} ${order.packageDeduction.toFixed(0)}` });
   }
@@ -88,6 +91,9 @@ function buildReceiptLines(order: SalonPosOrder, currency: string): ReceiptLine[
   }
   if (order.changeDue && order.changeDue > 0) {
     lines.push({ name: "找零", quantity: 1, specs: [], note: `${currency} ${order.changeDue.toFixed(0)}` });
+  }
+  if (order.pointsEarned && order.pointsEarned > 0) {
+    lines.push({ name: "本次賺分", quantity: 1, specs: [], note: `+${order.pointsEarned} 分` });
   }
   if (order.notes) {
     lines.push({ name: "備註", quantity: 1, specs: [], note: order.notes });

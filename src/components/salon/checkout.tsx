@@ -13,6 +13,8 @@ import type {
   SalonPaymentMethod,
   SalonStaff,
   SalonCustomerPackage,
+  SalonCustomerProfile,
+  SalonLoyaltySettings,
 } from "@/lib/salon/types";
 import {
   loadBookings,
@@ -21,9 +23,17 @@ import {
   loadSalonBootstrap,
   loadSalonCustomerPackages,
   saveSalonCustomerPackages,
+  loadCustomers,
+  saveCustomers,
 } from "@/lib/salon/storage";
 import { updateMockBooking, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
-import { getMockLedgerMember, applyMockLedgerPayment, applyMockLedgerPointsPayment } from "@/lib/salon/mock-ledger";
+import {
+  getMockLedgerMember,
+  applyMockLedgerPayment,
+  applyMockLedgerPointsPayment,
+  applyMockLedgerBonus,
+} from "@/lib/salon/mock-ledger";
+import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import { dispatchSalonReceipt } from "@/lib/salon/print";
 import { playSuccessBeep } from "@/lib/salon/sound";
 
@@ -44,6 +54,37 @@ function genOrderNo(): string {
 
 function money(n: number): string {
   return `MOP ${n.toFixed(0)}`;
+}
+
+/**
+ * 取得 ISO 週序（1-53）。用於「生日當週」判斷。
+ */
+function isoWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = (d.getUTCDay() + 6) % 7; // 週一 = 0
+  d.setUTCDate(d.getUTCDate() - dayNum + 3); // 移到本週四
+  const firstThursday = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(
+    ((d.getTime() - firstThursday.getTime()) / 86400000 -
+      3 +
+      ((firstThursday.getUTCDay() + 6) % 7)) /
+      7,
+  );
+  return week;
+}
+
+/**
+ * 判斷生日是否落在指定窗口內（當月 / 當週）。
+ * 跨年生日視為「今年」的生日，與今天比週序 / 月序。
+ */
+function isBirthdayInWindow(birthday: string | undefined, window: "month" | "week"): boolean {
+  if (!birthday) return false;
+  const b = new Date(birthday);
+  if (Number.isNaN(b.getTime())) return false;
+  const now = new Date();
+  if (window === "month") return now.getMonth() === b.getMonth();
+  const thisYearBday = new Date(now.getFullYear(), b.getMonth(), b.getDate());
+  return isoWeek(thisYearBday) === isoWeek(now);
 }
 
 interface PaymentRow {
@@ -127,6 +168,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   // 積分兌換（P-積分兌換）：每個服務項目分配的兌換積分數（key = booking.services 索引）
   const [pointsByIndex, setPointsByIndex] = useState<Record<string, number>>({});
 
+  // 生日優惠逐單開關（結帳時自動套用，店員可關掉本單生日優惠）
+  const [birthdayApplied, setBirthdayApplied] = useState(true);
+
   useEffect(() => {
     const b = loadBookings().find((x) => x.id === bookingId);
     if (!b) {
@@ -134,6 +178,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       return;
     }
     setBooking(b);
+
+    // 切換預約時重置生日優惠開關（每單預設套用）
+    setBirthdayApplied(true);
 
     const bootstrap = loadSalonBootstrap();
     if (bootstrap) {
@@ -166,6 +213,33 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     if (!booking) return null;
     return getMockLedgerMember(booking.customerPhone);
   }, [booking]);
+
+  // ── 會員優惠（Phase 8：推薦獎勵 / 生日優惠 / 每店積分配比）──
+  // loyalty 設定來自 bootstrap（舊店家經 storage 遷移補預設）；無則用全域預設。
+  const loyalty: SalonLoyaltySettings = useMemo(
+    () => loadSalonBootstrap()?.loyalty ?? DEFAULT_SALON_LOYALTY,
+    [booking],
+  );
+
+  // 本單客戶檔案（用於讀 referrerId / birthday；依 customerId 或 phone 解析）
+  const customer = useMemo<SalonCustomerProfile | null>(() => {
+    if (!booking) return null;
+    const list = loadCustomers();
+    return (
+      list.find((c) => c.id === booking.customerId) ??
+      list.find((c) => c.phone === booking.customerPhone) ??
+      null
+    );
+  }, [booking]);
+
+  // 生日窗口是否命中（未計本單開關）
+  const birthdayMatched = useMemo(() => {
+    if (!loyalty.birthdayEnabled || !customer?.birthday) return false;
+    return isBirthdayInWindow(customer.birthday, loyalty.birthdayWindow);
+  }, [loyalty, customer]);
+
+  // 生日優惠是否實際套用（命中且未被本單關閉）
+  const birthdayActive = birthdayMatched && birthdayApplied;
 
   // ── 套票抵扣（P2）──
   // 客戶持有的 active 套票卡（未過期）；無綁定客戶則空陣
@@ -272,7 +346,11 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     () => (booking ? booking.services.reduce((sum, s) => sum + s.price, 0) : 0),
     [booking],
   );
-  const afterDiscount = Math.max(0, subtotal - discountAmount);
+  const birthdayDiscountAmount = useMemo(() => {
+    if (!birthdayActive || loyalty.birthdayDiscountPercent <= 0) return 0;
+    return Math.round(subtotal * (loyalty.birthdayDiscountPercent / 100));
+  }, [birthdayActive, loyalty.birthdayDiscountPercent, subtotal]);
+  const afterDiscount = Math.max(0, subtotal - discountAmount - birthdayDiscountAmount);
   const depositApplied = useMemo(() => {
     if (!booking) return 0;
     return booking.depositPaid ? booking.depositAmount ?? 0 : 0;
@@ -298,6 +376,15 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     remaining <= 0.001 &&
     ledgerPaymentAmount <= ledgerAvailable + 0.001 &&
     !pointsOverflow;
+
+  // 本次結帳預計賺取積分 = floor(grandTotal / pointsPerDollar) ×（生日窗口內積分倍率）
+  const pointsEarned = useMemo(() => {
+    if (!customer || loyalty.pointsPerDollar <= 0) return 0;
+    const base = Math.floor(grandTotal / loyalty.pointsPerDollar);
+    if (base <= 0) return 0;
+    const mult = birthdayActive && loyalty.birthdayPointsMultiplier > 0 ? loyalty.birthdayPointsMultiplier : 1;
+    return Math.floor(base * mult);
+  }, [customer, loyalty, grandTotal, birthdayActive]);
 
   // ── 小費操作 ──
   const splitTipsEvenly = useCallback(() => {
@@ -371,6 +458,29 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       }
     }
 
+    // 1c) 推薦獎勵：被推薦人「首次結帳」才發給推薦人（防刷分），僅推薦人得分
+    if (
+      customer?.referrerId &&
+      !customer.referralRewarded &&
+      loyalty.referralEnabled &&
+      loyalty.referralPoints > 0
+    ) {
+      const referrer = loadCustomers().find((c) => c.id === customer.referrerId);
+      if (referrer) {
+        applyMockLedgerBonus(referrer.phone || referrer.id, { points: loyalty.referralPoints });
+        // 標記已發，避免同一被推薦人重複發分
+        const all = loadCustomers().map((c) =>
+          c.id === customer!.id ? { ...c, referralRewarded: true } : c,
+        );
+        saveCustomers(all);
+      }
+    }
+
+    // 1d) 消費賺分：floor(grandTotal / pointsPerDollar) ×（生日窗口內積分倍率）
+    if (pointsEarned > 0 && customer) {
+      applyMockLedgerBonus(customer.phone || customer.id, { points: pointsEarned });
+    }
+
     const now = new Date().toISOString();
     const orderId = uid("order");
     const orderNo = genOrderNo();
@@ -436,6 +546,8 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       packageDeduction: deductedAmount > 0 ? deductedAmount : undefined,
       pointsDeduction: pointsDeduction > 0 ? pointsDeduction : undefined,
       pointsRedeemed: totalPointsAllocated > 0 ? totalPointsAllocated : undefined,
+      pointsEarned: pointsEarned > 0 ? pointsEarned : undefined,
+      birthdayDiscount: birthdayDiscountAmount > 0 ? true : undefined,
       total: afterDiscount,
       tips: tipRecords,
       tipTotal,
@@ -475,6 +587,8 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     playSuccessBeep();
   }, [
     booking,
+    customer,
+    loyalty,
     canSettle,
     ledgerPaymentAmount,
     tips,
@@ -482,6 +596,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     subtotal,
     discountAmount,
     afterDiscount,
+    birthdayDiscountAmount,
     tipTotal,
     grandTotal,
     depositApplied,
@@ -491,6 +606,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     pointsAlloc,
     pointsDeduction,
     totalPointsAllocated,
+    pointsEarned,
     staffMap,
   ]);
 
@@ -564,6 +680,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <div className="text-2xl font-bold text-emerald-600">結帳完成</div>
             <div className="mt-2 text-sm text-slate-500">收據單號 {settledOrderNo}</div>
+            {pointsEarned > 0 && (
+              <div className="mt-1 text-sm font-semibold text-amber-600">本單賺取 {pointsEarned} 分</div>
+            )}
             <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
               <button
                 type="button"
@@ -651,6 +770,34 @@ export function Checkout({ bookingId }: { bookingId: string }) {
             />
             <span className="text-sm text-slate-400">{currency}</span>
           </div>
+
+          {/* 生日優惠（命中窗口才顯示；可逐單關閉） */}
+          {birthdayMatched && (
+            <div className="mt-3 rounded-xl bg-pink-50 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-pink-700">
+                  生日優惠（{loyalty.birthdayWindow === "month" ? "當月生日" : "當週生日"}）
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBirthdayApplied(!birthdayApplied)}
+                  className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                    birthdayApplied ? "bg-pink-200 text-pink-800" : "bg-slate-200 text-slate-500"
+                  }`}
+                >
+                  {birthdayApplied ? "套用中" : "已關閉"}
+                </button>
+              </div>
+              <div className="mt-1 text-xs text-pink-600">
+                {loyalty.birthdayDiscountPercent > 0
+                  ? `享 ${loyalty.birthdayDiscountPercent}% 折扣（-${money(birthdayDiscountAmount)}）`
+                  : "不打折"}
+                {loyalty.birthdayPointsMultiplier > 0
+                  ? ` · 賺分 ×${loyalty.birthdayPointsMultiplier}`
+                  : " · 不加倍"}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 套票抵扣（P2）：自動匹配客戶 active 套票次數抵扣本單服務 */}
@@ -935,12 +1082,16 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           <div className="space-y-1.5 text-sm">
             <Row label="小計" value={money(subtotal)} />
             {discountAmount > 0 && <Row label="折扣" value={`-${money(discountAmount)}`} />}
+            {birthdayDiscountAmount > 0 && <Row label="生日折扣" value={`-${money(birthdayDiscountAmount)}`} />}
             {deductedAmount > 0 && <Row label="套票抵扣" value={`-${money(deductedAmount)}`} />}
             {pointsDeduction > 0 && <Row label="積分兌換" value={`-${money(pointsDeduction)}`} />}
             {depositApplied > 0 && <Row label="已付定金" value={`-${money(depositApplied)}`} />}
             {tipTotal > 0 && <Row label="小費" value={money(tipTotal)} />}
             <div className="my-1 border-t border-slate-100" />
             <Row label="應收總計" value={money(grandTotal)} bold />
+            {pointsEarned > 0 && (
+              <Row label="預計賺分" value={`+${pointsEarned} 分${birthdayActive && loyalty.birthdayPointsMultiplier > 1 ? `（生日 ×${loyalty.birthdayPointsMultiplier}）` : ""}`} />
+            )}
             <Row label="已收" value={money(paidTotal)} />
             {changeDue > 0 && <Row label="找零" value={money(changeDue)} />}
             {remaining > 0.001 && <Row label="尚欠" value={money(remaining)} negative />}

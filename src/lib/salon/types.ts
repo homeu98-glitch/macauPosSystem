@@ -263,6 +263,11 @@ export interface SalonPosOrder {
   taxAmount?: number;
   total: number;
 
+  /** 本次結帳賺取積分（依 pointsPerDollar 計算，生日窗口內乘倍率） */
+  pointsEarned?: number;
+  /** 本次結帳是否套用生日折扣 */
+  birthdayDiscount?: boolean;
+
   tips: SalonTip[];
   tipTotal: number;
   grandTotal: number;
@@ -311,6 +316,11 @@ export interface SalonCustomerProfile {
 
   birthday?: string;
   gender?: "female" | "male" | "other";
+
+  /** 推薦人客戶 id（本客戶由哪位現有客戶推薦而來；留空 = 無推薦） */
+  referrerId?: string;
+  /** 推薦獎勵是否已發出（防刷分：僅被推薦人首次結帳發一次） */
+  referralRewarded?: boolean;
   tags?: string[];
   skinType?: SalonSkinType;
   hairType?: SalonHairType;
@@ -382,6 +392,31 @@ export interface SalonCustomerPackage {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// 會員忠誠度設定（salon 本地設定，Ledger 主導餘額/積分/等級）
+// 設計決策（docs/30-salon-loyalty-referral-birthday.md）：
+// - pointsPerDollar：每消費多少 MOP 得 1 分（預設 1 = 1 元 1 分）；每店可自定。
+// - 推薦獎勵：被推薦人「首次結帳」才發給推薦人（防刷分），僅推薦人得分。
+// - 生日優惠：商家自定窗口（當月/當週）+ 折扣% 與 積分倍率 各自獨立（填 0 = 關閉）。
+// ────────────────────────────────────────────────────────────────────
+
+export interface SalonLoyaltySettings {
+  /** 每消費多少 MOP 得 1 分（預設 1 = 1 元 1 分） */
+  pointsPerDollar: number;
+  /** 推薦獎勵開關 */
+  referralEnabled: boolean;
+  /** 推薦獎勵積分：被推薦人首次結帳時發給推薦人 */
+  referralPoints: number;
+  /** 生日優惠開關 */
+  birthdayEnabled: boolean;
+  /** 生日窗口：當月 month / 當週 week */
+  birthdayWindow: "month" | "week";
+  /** 生日折扣%（0 = 關閉折扣） */
+  birthdayDiscountPercent: number;
+  /** 生日積分倍率（0 = 關閉多倍積分；1 = 不變；2 = 雙倍；以此類推） */
+  birthdayPointsMultiplier: number;
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Bootstrap 結構（店家資料）
 // ────────────────────────────────────────────────────────────────────
 
@@ -400,6 +435,8 @@ export interface SalonBootstrap {
   depositEnabled: boolean;
   /** 預設服務時長落點（分鐘），用於新服務預設值 */
   defaultServiceDurationMinutes: number;
+  /** 會員忠誠度設定（推薦獎勵 / 生日優惠 / 每店積分配比） */
+  loyalty?: SalonLoyaltySettings;
   lastUpdatedAt: string;
 }
 

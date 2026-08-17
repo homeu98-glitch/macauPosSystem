@@ -9,9 +9,28 @@ import type {
   SalonStation,
   SalonCustomerProfile,
   SalonPackageTemplate,
+  SalonLoyaltySettings,
 } from "@/lib/salon/types";
 
 export const DEFAULT_SALON_STORE_ID = "demo-salon-001";
+
+// ────────────────────────────────────────────────────────────────────
+// 預設會員忠誠度設定（Phase 8 示範資料）
+// 對應 docs/30-salon-loyalty-referral-birthday.md：
+// - pointsPerDollar=1（1 元 1 分，每店可改）
+// - 推薦獎勵開啟，被推薦人首次結帳發 100 分給推薦人
+// - 生日優惠開啟，當月生日享 9 折 + 雙倍積分（各自獨立，可填 0 關閉）
+// ────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_SALON_LOYALTY: SalonLoyaltySettings = {
+  pointsPerDollar: 1,
+  referralEnabled: true,
+  referralPoints: 100,
+  birthdayEnabled: true,
+  birthdayWindow: "month",
+  birthdayDiscountPercent: 10,
+  birthdayPointsMultiplier: 2,
+};
 
 const NOW = new Date().toISOString();
 
@@ -321,6 +340,7 @@ export const defaultSalonBootstrap: SalonBootstrap = {
   calendarSlotMinutes: 30,
   depositEnabled: true,
   defaultServiceDurationMinutes: 60,
+  loyalty: DEFAULT_SALON_LOYALTY,
   lastUpdatedAt: NOW,
 };
 

@@ -8,6 +8,7 @@ import type {
   SalonServiceItem,
   SalonStaff,
   SalonStation,
+  SalonLoyaltySettings,
 } from "@/lib/salon/types";
 import {
   loadSalonBootstrap,
@@ -16,6 +17,7 @@ import {
   reseedSalonConfig,
   loadSalonSyncQueue,
 } from "@/lib/salon/storage";
+import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import { PackageTemplatesTab } from "@/components/salon/package-templates";
 import { loadDeviceConfig, saveDeviceConfig } from "@/lib/storage";
 import type { DeviceConfig, DevicePrinterConfig } from "@/lib/types";
@@ -417,6 +419,7 @@ const TABS = [
   { id: "services", label: "服務管理" },
   { id: "staff", label: "員工" },
   { id: "packages", label: "套票模板" },
+  { id: "loyalty", label: "會員優惠" },
   { id: "dev", label: "開發工具" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -461,6 +464,23 @@ export function Settings() {
     resetSalonStorage();
     window.location.reload();
   }, []);
+
+  // 會員優惠設定（推薦獎勵 / 生日優惠 / 每店積分配比）
+  const loyalty: SalonLoyaltySettings = bootstrap?.loyalty ?? DEFAULT_SALON_LOYALTY;
+  const patchLoyalty = useCallback(
+    (patch: Partial<SalonLoyaltySettings>) => {
+      if (!bootstrap) return;
+      const next: SalonBootstrap = {
+        ...bootstrap,
+        loyalty: { ...(bootstrap.loyalty ?? DEFAULT_SALON_LOYALTY), ...patch },
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      setBootstrap(next);
+      saveSalonBootstrap(next);
+      flash("已儲存");
+    },
+    [bootstrap, flash],
+  );
 
   const doReseed = useCallback(() => {
     reseedSalonConfig();
@@ -881,6 +901,119 @@ export function Settings() {
         <Section title="套票模板">
           <PackageTemplatesTab />
         </Section>
+      )}
+
+      {/* 會員優惠（推薦獎勵 / 生日優惠 / 每店積分配比） */}
+      {activeTab === "loyalty" && (
+        <div className="grid gap-4">
+          {/* 每店積分配比 */}
+          <Section title="積分配比（每店）">
+            <Field label="每消費多少 MOP 得 1 分">
+              <input
+                type="number"
+                min={0}
+                step="0.1"
+                value={loyalty.pointsPerDollar}
+                onChange={(e) =>
+                  patchLoyalty({ pointsPerDollar: Number(e.target.value) || 0 })
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+              />
+            </Field>
+            <p className="mt-1 text-xs text-slate-400">
+              預設 1 = 1 元 1 分；可調高（如 10 = 每 10 元 1 分）或調低。Ledger 角度為 1 元 1 分，此欄為各店彈性設定。
+            </p>
+          </Section>
+
+          {/* 推薦獎勵 */}
+          <Section title="推薦獎勵">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-xs font-medium text-slate-500">啟用推薦獎勵</div>
+              <button
+                type="button"
+                onClick={() => patchLoyalty({ referralEnabled: !loyalty.referralEnabled })}
+                className={`rounded-full px-3 py-1 text-xs font-bold ${
+                  loyalty.referralEnabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"
+                }`}
+              >
+                {loyalty.referralEnabled ? "啟用" : "停用"}
+              </button>
+            </div>
+            <Field label="推薦積分（發給推薦人）">
+              <input
+                type="number"
+                min={0}
+                value={loyalty.referralPoints}
+                disabled={!loyalty.referralEnabled}
+                onChange={(e) =>
+                  patchLoyalty({ referralPoints: Number(e.target.value) || 0 })
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+              />
+            </Field>
+            <p className="mt-1 text-xs text-slate-400">
+              被推薦人「首次結帳」才發給推薦人（防刷分）；僅推薦人得分，被推薦人無 welcome 分。於客戶檔案設定「推薦人」。
+            </p>
+          </Section>
+
+          {/* 生日優惠 */}
+          <Section title="生日優惠">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-xs font-medium text-slate-500">啟用生日優惠</div>
+              <button
+                type="button"
+                onClick={() => patchLoyalty({ birthdayEnabled: !loyalty.birthdayEnabled })}
+                className={`rounded-full px-3 py-1 text-xs font-bold ${
+                  loyalty.birthdayEnabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"
+                }`}
+              >
+                {loyalty.birthdayEnabled ? "啟用" : "停用"}
+              </button>
+            </div>
+            <Field label="生日窗口">
+              <select
+                value={loyalty.birthdayWindow}
+                disabled={!loyalty.birthdayEnabled}
+                onChange={(e) =>
+                  patchLoyalty({ birthdayWindow: e.target.value as "month" | "week" })
+                }
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50"
+              >
+                <option value="month">當月生日</option>
+                <option value="week">當週生日</option>
+              </select>
+            </Field>
+            <Field label="生日折扣 %（0 = 不打折）">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={loyalty.birthdayDiscountPercent}
+                disabled={!loyalty.birthdayEnabled}
+                onChange={(e) =>
+                  patchLoyalty({ birthdayDiscountPercent: Number(e.target.value) || 0 })
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+              />
+            </Field>
+            <Field label="生日積分倍率（0 = 不加倍；1 = 不變；2 = 雙倍）">
+              <input
+                type="number"
+                min={0}
+                step="0.5"
+                value={loyalty.birthdayPointsMultiplier}
+                disabled={!loyalty.birthdayEnabled}
+                onChange={(e) =>
+                  patchLoyalty({ birthdayPointsMultiplier: Number(e.target.value) || 0 })
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+              />
+            </Field>
+            <p className="mt-1 text-xs text-slate-400">
+              折扣 % 與 積分倍率 各自獨立：填 0 即關閉該項。例：折扣 10 + 倍率 2 = 當月生日享 9 折且賺雙倍積分。結帳時自動套用，店員可逐單關掉。
+            </p>
+          </Section>
+        </div>
       )}
 
       {resetModal ? (

@@ -16,7 +16,7 @@ import {
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
 import type { PrintJob } from "@/lib/types";
-import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates } from "@/lib/salon/mock-data";
+import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import {
   idbSet,
   idbEnqueue,
@@ -135,6 +135,12 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       return seed;
     }
     seededForStore = existing.storeId;
+    // 升級既有店家：若 bootstrap 尚未含 loyalty 設定（Phase 8 前種入），補預設值並寫回。
+    // 不觸動其他設定，店家可自行到「設置 → 會員優惠」調整。
+    if (!existing.loyalty) {
+      existing.loyalty = DEFAULT_SALON_LOYALTY;
+      writeJson(SALON_STORAGE_KEYS.bootstrap, existing);
+    }
     return existing;
   }
 
