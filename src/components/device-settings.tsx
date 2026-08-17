@@ -31,6 +31,12 @@ import {
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { isPrintBridgeEnabled, requestTestPrintBridge, syncPrintBridgeConfig } from "@/lib/print-bridge/client";
+import {
+  isWebUsbSupported,
+  requestWebUsbDevice,
+  requestTestPrintWebUsb,
+  webUsbDeviceLabel,
+} from "@/lib/print-webusb";
 import { usePrintBridgeHealth } from "@/components/print-bridge-worker";
 
 function uid(prefix: string) {
@@ -64,6 +70,7 @@ export function DeviceSettings() {
   const [ledgerImportError, setLedgerImportError] = useState<string | null>(null);
   const [syncingConfig, setSyncingConfig] = useState(false);
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
+  const [webusbLabel, setWebusbLabel] = useState<Record<string, string>>({});
   const [menuSubTab, setMenuSubTab] = useState<"categories" | "specs" | "items">("items");
   const [specEditor, setSpecEditor] = useState<{
     open: boolean;
@@ -409,6 +416,16 @@ export function DeviceSettings() {
     setTestingPrinterId(printer.id);
 
     try {
+      if (printer.connectionType === "webusb") {
+        if (!isWebUsbSupported()) {
+          setStatus("此瀏覽器唔支援 WebUSB，請用 Chrome / Edge 並以 https / localhost 開啟。");
+          return;
+        }
+        const result = await requestTestPrintWebUsb(printer);
+        setStatus(result.ok ? `已透過 WebUSB 直印 ${printer.name} 測試頁。` : result.error);
+        return;
+      }
+
       if (isPrintBridgeEnabled()) {
         await syncPrintBridgeConfig(config);
         const result = await requestTestPrintBridge(printer);
@@ -796,6 +813,7 @@ export function DeviceSettings() {
                           >
                             <option value="lan">LAN</option>
                             <option value="usb">USB</option>
+                            <option value="webusb">WebUSB（browser 直印）</option>
                           </select>
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">

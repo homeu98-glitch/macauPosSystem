@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { fetchPrintBridgeHealth, getPrintBridgeUrl, PrintBridgeHealth, syncPrintBridgeConfig } from "@/lib/print-bridge/client";
 import { flushPendingPrintJobs } from "@/lib/print-bridge/dispatch";
+import { isWebUsbSupported } from "@/lib/print-webusb";
 import { loadDeviceConfig } from "@/lib/storage";
 
 const FLUSH_INTERVAL_MS = 2500;
@@ -26,7 +27,7 @@ export function PrintBridgeWorker() {
   }, []);
 
   useEffect(() => {
-    if (!bridgeUrl) return;
+    if (!bridgeUrl && !isWebUsbSupported()) return;
 
     let cancelled = false;
     let bridgeOnline = false;
@@ -42,6 +43,7 @@ export function PrintBridgeWorker() {
     }
 
     async function pollHealth() {
+      if (!bridgeUrl) return;
       const result = await fetchPrintBridgeHealth();
       if (!cancelled) {
         setHealth(result);
@@ -50,15 +52,14 @@ export function PrintBridgeWorker() {
     }
 
     async function tick() {
-      if (!bridgeOnline) return;
-      await syncConfig();
+      // flush 內部按 transport 分流（bridge / webusb），webusb 唔使等 bridge 上線
       await flushPendingPrintJobs();
+      if (bridgeOnline) await syncConfig();
     }
 
     void syncConfig(true);
-    void pollHealth().then(() => {
-      if (!cancelled && bridgeOnline) void flushPendingPrintJobs();
-    });
+    void pollHealth();
+    void flushPendingPrintJobs();
 
     const tickTimer = window.setInterval(() => {
       void tick();

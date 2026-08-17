@@ -1,4 +1,4 @@
-export type ConnectionType = "lan" | "usb";
+export type ConnectionType = "lan" | "usb" | "webusb";
 export type UserRole = "admin" | "manager" | "cashier";
 
 export interface UserPermissions {
@@ -162,6 +162,8 @@ export interface DevicePrinterConfig {
   /** Raw TCP port for LAN ESC/POS (default 9100) */
   lanPort?: number;
   usbLabel?: string;
+  /** WebUSB：授權設備嘅 serialNumber（用嚟配對已授予嘅 USB 設備，唔使手工 set 名） */
+  webusbSerial?: string;
   enabled: boolean;
 }
 
