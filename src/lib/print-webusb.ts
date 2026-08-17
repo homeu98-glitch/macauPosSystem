@@ -63,6 +63,17 @@ export function webUsbDeviceLabel(device: WebUsbDevice | null): string {
   return device.serialNumber ? `${name} · ${device.serialNumber}` : name;
 }
 
+function describeWebUsbError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/access denied|failed to execute ['"]?open/i.test(raw)) {
+    return "WebUSB 無法開啟部機（Access denied）：Windows 已將部 USB 打印機嘅 interface 綁住 driver（usbprint.sys），WebUSB 搶唔到。解決：① 用 Zadig 將部機 interface 換成 WinUSB（會令部機暫時唔係「正常 Windows 打印機」，可逆）；② 或改用 print-bridge + USB（連接方式選 USB、填 Windows 印表機名，由 OS driver 行 RAW 打印，最穩陣）。";
+  }
+  if (/claim/i.test(raw)) {
+    return `WebUSB 無法 claim 部機 interface（可能唔 claimable）：${raw}`;
+  }
+  return raw;
+}
+
 function findOutEndpoint(device: WebUsbDevice): { interfaceNumber: number; endpointNumber: number } | null {
   const cfg = device?.configuration;
   if (!cfg?.interfaces) return null;
@@ -98,7 +109,7 @@ export async function printToWebUsb(
     } catch {
       /* ignore */
     }
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: describeWebUsbError(err) };
   }
 }
 
