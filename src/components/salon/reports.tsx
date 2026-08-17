@@ -2,8 +2,21 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { SalonPosOrder, SalonStaff, SalonPaymentMethod } from "@/lib/salon/types";
-import { loadSalonOrders, loadSalonBootstrap } from "@/lib/salon/storage";
+import type {
+  SalonPosOrder,
+  SalonStaff,
+  SalonPaymentMethod,
+  SalonCustomerPackage,
+  SalonPackageTemplate,
+  SalonCustomerProfile,
+} from "@/lib/salon/types";
+import {
+  loadSalonOrders,
+  loadSalonBootstrap,
+  loadSalonCustomerPackages,
+  loadSalonPackageTemplates,
+  loadCustomers,
+} from "@/lib/salon/storage";
 
 type RangeKey = "today" | "week" | "all";
 
@@ -12,6 +25,9 @@ const RANGE_LABEL: Record<RangeKey, string> = {
   week: "近 7 日",
   all: "全部",
 };
+
+/** 即將到期催銷視窗（天） */
+const EXPIRE_WINDOW_DAYS = 30;
 
 const PAYMENT_LABELS: Record<SalonPaymentMethod, string> = {
   cash: "現金",
@@ -49,6 +65,11 @@ export function Reports() {
   const [currency, setCurrency] = useState("MOP");
   const [range, setRange] = useState<RangeKey>("today");
 
+  // P3：套票相關數據
+  const [packages, setPackages] = useState<SalonCustomerPackage[]>([]);
+  const [templates, setTemplates] = useState<SalonPackageTemplate[]>([]);
+  const [customers, setCustomers] = useState<SalonCustomerProfile[]>([]);
+
   useEffect(() => {
     setOrders(loadSalonOrders());
     const bootstrap = loadSalonBootstrap();
@@ -56,6 +77,9 @@ export function Reports() {
       setStaffList(bootstrap.staff);
       setCurrency(bootstrap.currency || "MOP");
     }
+    setPackages(loadSalonCustomerPackages());
+    setTemplates(loadSalonPackageTemplates());
+    setCustomers(loadCustomers());
   }, []);
 
   const staffMap = useMemo(() => {
@@ -118,6 +142,60 @@ export function Reports() {
     return { grandTotal, discount, deposit, tip, payments, staffSalesRank, staffTipsRank, serviceRank, count: settled.length };
   }, [settled, staffMap]);
 
+  // ── P3：套票銷售額 / 使用率（受 range 篩選，依 purchasedAt）──
+  const packageStats = useMemo(() => {
+    const inRangePkgs = packages.filter((p) => inRange(p.purchasedAt, range));
+    const salesAmount = inRangePkgs.reduce((s, p) => s + (p.price || 0), 0);
+
+    type TplRow = {
+      name: string;
+      sold: number;
+      sales: number;
+      usedSessions: number;
+      totalSessions: number;
+    };
+    const byTemplate = new Map<string, TplRow>();
+    for (const p of inRangePkgs) {
+      const tpl = templates.find((t) => t.id === p.templateId);
+      const originalTotal = tpl ? tpl.items.reduce((s, it) => s + it.sessions, 0) : 0;
+      const remainingSum = p.remaining.reduce((s, r) => s + r.sessionsLeft, 0);
+      const used = originalTotal > 0 ? Math.max(0, originalTotal - remainingSum) : 0;
+      const cur =
+        byTemplate.get(p.templateId) ??
+        { name: p.templateName, sold: 0, sales: 0, usedSessions: 0, totalSessions: 0 };
+      cur.sold += 1;
+      cur.sales += p.price || 0;
+      cur.usedSessions += used;
+      cur.totalSessions += originalTotal;
+      byTemplate.set(p.templateId, cur);
+    }
+
+    const rows = Array.from(byTemplate.values())
+      .map((r) => ({
+        ...r,
+        usageRate: r.totalSessions > 0 ? r.usedSessions / r.totalSessions : 0,
+      }))
+      .sort((a, b) => b.sales - a.sales);
+
+    return { salesAmount, rows };
+  }, [packages, templates, range]);
+
+  // ── P3：即將到期套票清單（催銷；往前看 EXPIRE_WINDOW_DAYS，不套用 range）──
+  const expiring = useMemo(() => {
+    const now = Date.now();
+    const custMap = new Map(customers.map((c) => [c.id, c.name]));
+    return packages
+      .filter((p) => p.status === "active" && p.expiresAt)
+      .map((p) => ({
+        ...p,
+        customerName: custMap.get(p.customerId) ?? "未知客戶",
+        daysLeft: Math.ceil((new Date(p.expiresAt as string).getTime() - now) / 86400000),
+        remainingTotal: p.remaining.reduce((s, r) => s + r.sessionsLeft, 0),
+      }))
+      .filter((p) => p.daysLeft >= 0 && p.daysLeft <= EXPIRE_WINDOW_DAYS)
+      .sort((a, b) => a.daysLeft - b.daysLeft);
+  }, [packages, customers]);
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 pb-24 md:pb-6">
       <div className="mb-4 flex items-center justify-between">
@@ -145,6 +223,7 @@ export function Reports() {
         <Stat label="折扣" value={money(summary.discount)} />
         <Stat label="已付定金" value={money(summary.deposit)} />
         <Stat label="小費" value={money(summary.tip)} />
+        <Stat label="套票銷售額" value={money(packageStats.salesAmount)} highlight />
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -201,9 +280,78 @@ export function Reports() {
       </Section>
       </div>
 
+      {/* P3：套票使用率 */}
+      <Section title="套票使用率（依購買範圍）">
+        {packageStats.rows.length === 0 ? (
+          <Empty />
+        ) : (
+          <div className="grid gap-3">
+            {packageStats.rows.map((r) => (
+              <div key={r.name} className="rounded-xl bg-slate-50 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-slate-800">{r.name}</span>
+                  <span className="text-xs text-slate-500">
+                    {r.sold} 張 · {money(r.sales)}
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-2 rounded-full bg-emerald-500"
+                      style={{ width: `${Math.round(r.usageRate * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-semibold text-slate-700">
+                    {Math.round(r.usageRate * 100)}%
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  已用 {r.usedSessions} / 總 {r.totalSessions} 次
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* P3：即將到期套票（催銷） */}
+      <Section title={`即將到期套票（${EXPIRE_WINDOW_DAYS} 日內 · 催銷）`}>
+        {expiring.length === 0 ? (
+          <Empty />
+        ) : (
+          <div className="grid gap-2">
+            {expiring.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-slate-800">
+                    {p.customerName} · {p.templateName}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    餘 {p.remainingTotal} 次 · 效期 {String(p.expiresAt).slice(0, 10)}
+                  </div>
+                </div>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    p.daysLeft <= 7
+                      ? "bg-rose-100 text-rose-700"
+                      : "bg-amber-100 text-amber-700"
+                  }`}
+                >
+                  {p.daysLeft} 天後到期
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
       <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-800">
         <span className="font-semibold">說明：</span>
-        報表由本地結帳訂單（status=settled）統計，僅供店內參考；積分與會員餘額變動以 Ledger 為準。
+        報表由本地結帳訂單（status=settled）與套票卡統計，僅供店內參考；積分與會員餘額變動以 Ledger 為準。套票使用率依上方「今日 / 近 7 日 / 全部」範圍的購買紀錄計算；即將到期清單為往前{" "}
+        {EXPIRE_WINDOW_DAYS} 日預警，不套用範圍篩選。
       </div>
     </div>
   );

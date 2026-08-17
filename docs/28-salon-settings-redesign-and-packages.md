@@ -219,3 +219,22 @@ SalonCustomerPackage {
 
 ### 5.7 待 push 提醒（含 P1 + P2）
 - P1 + P2 全部改動 + 上輪兩處 build 修復均尚未 push。SQL 0006 用戶已執行。請本地 `npm run lint && npm run build` 確認無迴歸後 `git add -A && commit && push` 觸發 Vercel。
+
+### 5.8 P3 美容院 Package 玩法 — 報表 + 即將到期提醒（2026-08-17 實施）
+
+依 §3.4 P3：報表 + 即將到期提醒。sidebar「報表」入口與 `src/app/salon/reports/page.tsx` 已存在，本輪擴充 `src/components/salon/reports.tsx`（既有為訂單營業報表，不動）。
+
+- 載入 `loadSalonCustomerPackages()` / `loadSalonPackageTemplates()` / `loadCustomers()`。
+- **套票銷售額**：總覽卡片新增「套票銷售額」，依上方範圍（今日 / 近 7 日 / 全部）按 `purchasedAt` 篩選 `Σ pkg.price`。
+- **套票使用率**：新增區塊，per 套票模板（依範圍內購買紀錄聚合）顯示 售出張數 / 銷售額 / 進度條使用率% / 已用 X / 總 Y 次。使用率 = `（模板總次數 − 現有剩餘次數之和）÷ 模板總次數`；模板缺失時銷售額仍計、使用率以「—」語意略過（本輪直接不顯示該模板進度，僅列有銷售之模板）。
+- **即將到期套票（催銷）**：新增區塊，列出 `status:"active"` 且 `expiresAt` 落在未來 `EXPIRE_WINDOW_DAYS = 30` 日內的套票卡，依剩餘天數升冪；顯示 客戶名 · 模板名 / 餘 X 次 · 效期 / 「N 天後到期」徽章（≤7 天轉玫瑰紅高亮）。**不套用範圍篩選**（往前預警性清單）。
+- 說明框更新：補充套票使用率依範圍、到期清單為往前 30 日預警。
+
+**P3 範圍外 / 已知 gap**
+- 報表均為本地統計（訂單 + 套票卡），未接 POS DB 聚合；多終端彙總須待真 Ledger / 後台報表。
+- 使用率依「購買範圍內」的套票卡計算，非終身累計；若只看「今日」會低估整體使用率（屬預期行為，說明已註明）。
+- 到期催銷僅「列出清單」，未做主動通知（SMS / push / Ledger 訊息）；如需自動催銷留待後續。
+- `tsc --noEmit` 僅餘 `src/app/layout.tsx` 的 `LayoutProps` 誤報（與本輪無關）。
+
+### 5.9 待 push 提醒（含 P1 + P2 + P3）
+- P1 + P2 + P3 全部改動 + 上輪兩處 build 修復均尚未 push。SQL 0006 用戶已執行。請本地 `npm run lint && npm run build` 確認無迴歸後 `git add -A && commit && push` 觸發 Vercel。
