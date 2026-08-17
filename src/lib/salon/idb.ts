@@ -18,7 +18,7 @@ const QUEUE_STORE = "syncQueue";
 
 export type SalonSyncQueueItem = {
   id: string;
-  entity: "orders" | "bookings" | "printJobs" | "customers" | "bootstrap";
+  entity: "orders" | "bookings" | "printJobs" | "customers" | "bootstrap" | "packageTemplates" | "customerPackages";
   refId: string;
   /** 整個 entity 陣列（由客戶端 save* 一併放入，避免再由 localStorage 還原造成循環 import） */
   payload: unknown;
@@ -154,6 +154,8 @@ function eventTypeForEntity(entity: SalonSyncQueueItem["entity"]): string {
   if (entity === "printJobs") return "PRINT_JOB_CREATED";
   if (entity === "orders") return "ORDER_SETTLED";
   if (entity === "bootstrap") return "BOOTSTRAP_UPDATED";
+  if (entity === "packageTemplates") return "PACKAGE_TEMPLATE_UPDATED";
+  if (entity === "customerPackages") return "CUSTOMER_PACKAGE_UPDATED";
   return "BOOKING_UPDATED";
 }
 

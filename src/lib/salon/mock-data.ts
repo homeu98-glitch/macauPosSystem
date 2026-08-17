@@ -8,6 +8,7 @@ import type {
   SalonStaff,
   SalonStation,
   SalonCustomerProfile,
+  SalonPackageTemplate,
 } from "@/lib/salon/types";
 
 export const DEFAULT_SALON_STORE_ID = "demo-salon-001";
@@ -432,5 +433,44 @@ export const defaultSalonCustomers: SalonCustomerProfile[] = [
     visitCount: 1,
     lastVisitAt: "2026-08-14",
     totalSpent: 280,
+  },
+];
+
+// ────────────────────────────────────────────────────────────────────
+// 預設套票模板（P1 示範資料）
+// 次數額度引用上面服務項目 id；贈送積分 / 儲值委託 Ledger（P2 才寫入）。
+// ────────────────────────────────────────────────────────────────────
+
+const NOW_PKG = new Date().toISOString();
+
+export const defaultSalonPackageTemplates: SalonPackageTemplate[] = [
+  {
+    id: "pkg-facial-10",
+    name: "面部 10 次豪華套票",
+    price: 6800,
+    validityDays: 180,
+    items: [
+      { serviceItemId: "srv-hydrating-facial", sessions: 10 },
+      { serviceItemId: "srv-shoulder-massage", sessions: 2 },
+    ],
+    bonusPoints: 500,
+    bonusBalance: 0,
+    note: "含 2 次肩頸按摩 + 贈 500 積分",
+    active: true,
+    createdAt: NOW_PKG,
+    updatedAt: NOW_PKG,
+  },
+  {
+    id: "pkg-gel-5",
+    name: "凝膠美甲 5 次套票",
+    price: 1500,
+    validityDays: 90,
+    items: [{ serviceItemId: "srv-gel-manicure", sessions: 5 }],
+    bonusPoints: 100,
+    bonusBalance: 0,
+    note: "效期 90 天",
+    active: true,
+    createdAt: NOW_PKG,
+    updatedAt: NOW_PKG,
   },
 ];

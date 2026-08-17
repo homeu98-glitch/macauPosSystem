@@ -156,3 +156,37 @@ SalonCustomerPackage {
 
 ### 5.3 驗證
 - 沙盒 EPERM 跑不到 `npm run build`；改動靠逐檔覆審。用戶須 dev box `npm run lint && npm run build` 確認無迴歸後 `git add -A && commit && push` 觸發 Vercel 重建。
+
+### 5.4 P1 美容院 Package 玩法（2026-08-14 實施）
+
+依 §3.4 落實 P1：**套票模板 CRUD（本地）+ 客戶套票卡購買/顯示**。次數額度留 salon 本地，儲值/積分/定金委託 Ledger（P2 才寫入）。
+
+**資料模型（src/lib/salon/types.ts）**
+- `SalonPackageTemplate`：id/name/price/validityDays/items:[{serviceItemId,sessions}]/bonusPoints/bonusBalance/note/active/createdAt/updatedAt
+- `SalonCustomerPackage`：id/customerId/templateId/templateName/price/purchasedAt/expiresAt?/remaining:[{serviceItemId,sessionsLeft}]/status/paymentMethod?
+- 同步事件：`PACKAGE_TEMPLATE_UPDATED` / `CUSTOMER_PACKAGE_UPDATED`
+
+**落地檔案**
+- `src/lib/salon/types.ts`：新增上述型別 + `SALON_STORAGE_KEYS.packageTemplates` / `customerPackages`
+- `src/lib/salon/idb.ts`：sync 佇列 entity union 加 `packageTemplates` / `customerPackages` + `eventTypeForEntity` 映射（沿用既有 mirror 模式，flush 時整個陣列上雲）
+- `src/lib/salon/storage.ts`：load/save 套票模板與客戶套票卡；`ensureSalonBootstrap` 首次種入 `defaultSalonPackageTemplates`；`resetSalonStorage` 清套票鍵；`hydrateSalonFromPosDb` 拉取套票
+- `src/lib/salon/mock-data.ts`：`defaultSalonPackageTemplates`（2 個示範：面部 10 次豪華套票 $6800 / 凝膠美甲 5 次 $1500）
+- `supabase/migrations/0006_salon_packages.sql`：`salon_package_templates` + `salon_customer_packages` 兩表 + RLS + seed（示範模板）
+- `src/app/api/salon/state/route.ts`：GET 一併拉 `packageTemplates` / `customerPackages`（含 mock 空陣）
+- `src/app/api/salon/sync/route.ts`：`upsertPackageTemplate` / `upsertCustomerPackage` + 兩事件分支
+- `src/components/salon/package-templates.tsx`（NEW）：套票模板管理 UI，含嵌套「服務明細」編輯器（加/刪行：服務 + 次數）、啟用停用、刪除（in-app 確認）
+- `src/components/salon/settings.tsx`：設置頁加第 6 個 tab「套票模板」（render `PackageTemplatesTab`）
+- `src/components/salon/customer-profile.tsx`：客戶檔案加「套票卡」section（顯示剩餘次數 + 狀態徽章 使用中/已過期/已用完）+ 「賣套票」modal（選模板 → 選付款方式 → 生成客戶套票卡）
+
+**P1 範圍外（待後續）**
+- P2：結帳 `checkout` 接入「套票抵扣」一步（扣對應項目次數；不夠才走現金/Ledger）+ 購買當下贈送積分/儲值寫入 Ledger
+- P3：報表 + 即將到期提醒
+- 真扣款/贈送寫入 Ledger 留 seam（本輪購買僅記錄付款方式，不實際扣 Ledger）
+
+**已知 gap / 風險**
+- 客戶套票卡的「已用完 / 已過期」狀態目前僅在客戶檔案 UI 推算顯示；抵扣後 `status` 欄位更新（used_up）留 P2 結帳時寫入。
+- 多終端套票卡同步已通（customerPackages 經 sync 佇列上雲 salon_customer_packages）。
+- 仍需用戶 dev box `npm run lint && npm run build` + push Vercel 驗證（沙盒 EPERM 跑不到 build）。
+
+### 5.5 待 push 提醒
+- 本次 P1 改動 + 上輪兩處 build 修復（`sync/route.ts` NonNullable、`settings.tsx` `??`/`||` 括號）均尚未 push。請本地驗證後一併 commit + push。

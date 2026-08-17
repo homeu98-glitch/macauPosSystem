@@ -10,11 +10,13 @@ import {
   type SalonServiceCategory,
   type SalonServiceItem,
   type SalonCustomerProfile,
+  type SalonPackageTemplate,
+  type SalonCustomerPackage,
   type SalonQueueEvent,
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
 import type { PrintJob } from "@/lib/types";
-import { buildDefaultSalonBootstrap, defaultSalonCustomers } from "@/lib/salon/mock-data";
+import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates } from "@/lib/salon/mock-data";
 import {
   idbSet,
   idbEnqueue,
@@ -136,6 +138,12 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
     return existing;
   }
 
+  // Phase P1：套票模板種子（僅種入一次；不覆蓋店家已建立的模板）。
+  // 放在 bootstrap 讀取之後，確保既有店家首次進入也能拿到示範套票。
+  if (!readJson<SalonPackageTemplate[] | null>(SALON_STORAGE_KEYS.packageTemplates, null)) {
+    writeJson(SALON_STORAGE_KEYS.packageTemplates, defaultSalonPackageTemplates);
+  }
+
   return readJson<SalonBootstrap>(SALON_STORAGE_KEYS.bootstrap, buildDefaultSalonBootstrap());
 }
 
@@ -167,6 +175,8 @@ export async function hydrateSalonFromPosDb(storeId?: string): Promise<void> {
       if (Array.isArray(state.orders)) writeJson(SALON_STORAGE_KEYS.orders, state.orders);
       if (Array.isArray(state.customers)) writeJson(SALON_STORAGE_KEYS.customers, state.customers);
       if (Array.isArray(state.printJobs)) writeJson(SALON_STORAGE_KEYS.printJobs, state.printJobs);
+      if (Array.isArray(state.packageTemplates)) writeJson(SALON_STORAGE_KEYS.packageTemplates, state.packageTemplates);
+      if (Array.isArray(state.customerPackages)) writeJson(SALON_STORAGE_KEYS.customerPackages, state.customerPackages);
     }
   } catch {
     // 網絡 / 解析失敗：留低本地數據，唔影響使用
@@ -281,6 +291,37 @@ export function saveCustomers(customers: SalonCustomerProfile[]) {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// 套票模板 / 客戶套票卡（P1）
+// 次數額度留本地；改動進 sync 佇列上雲 salon_package_templates / salon_customer_packages。
+// ────────────────────────────────────────────────────────────────────
+
+export function loadSalonPackageTemplates(): SalonPackageTemplate[] {
+  return readJson<SalonPackageTemplate[]>(SALON_STORAGE_KEYS.packageTemplates, []);
+}
+
+export function saveSalonPackageTemplates(templates: SalonPackageTemplate[]) {
+  writeJson(SALON_STORAGE_KEYS.packageTemplates, templates);
+  void idbEnqueue({
+    entity: "packageTemplates",
+    refId: "packageTemplates",
+    payload: templates,
+  });
+}
+
+export function loadSalonCustomerPackages(): SalonCustomerPackage[] {
+  return readJson<SalonCustomerPackage[]>(SALON_STORAGE_KEYS.customerPackages, []);
+}
+
+export function saveSalonCustomerPackages(pkgs: SalonCustomerPackage[]) {
+  writeJson(SALON_STORAGE_KEYS.customerPackages, pkgs);
+  void idbEnqueue({
+    entity: "customerPackages",
+    refId: "customerPackages",
+    payload: pkgs,
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────
 // 列印佇列（salon 隔離鍵 macau-pos-salon/print-jobs）
 // 刻意不與餐飲 loadPrintJobs/savePrintJobs 共用，避免污染餐飲列印佇列；
 // 收據 PrintJob 仍複用共享 PrintJob 型別與 dispatchJobToPrintBridge。
@@ -344,6 +385,8 @@ export function resetSalonStorage() {
   removeKey(SALON_STORAGE_KEYS.shift);
   removeKey(SALON_STORAGE_KEYS.shiftHistory);
   removeKey(SALON_STORAGE_KEYS.customers);
+  removeKey(SALON_STORAGE_KEYS.packageTemplates);
+  removeKey(SALON_STORAGE_KEYS.customerPackages);
   removeKey(SALON_STORAGE_KEYS.activeStore);
   seededForStore = null;
 }

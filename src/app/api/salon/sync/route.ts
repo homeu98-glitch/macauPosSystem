@@ -147,6 +147,46 @@ async function upsertBootstrap(supabase: NonNullable<ReturnType<typeof getSupaba
   );
 }
 
+async function upsertPackageTemplate(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
+  await supabase.from("salon_package_templates").upsert(
+    {
+      id: rec.id,
+      store_id: storeId,
+      name: rec.name ?? "",
+      price: rec.price ?? 0,
+      validity_days: rec.validityDays ?? 0,
+      items: rec.items ?? [],
+      bonus_points: rec.bonusPoints ?? 0,
+      bonus_balance: rec.bonusBalance ?? 0,
+      note: rec.note,
+      active: rec.active ?? true,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+}
+
+async function upsertCustomerPackage(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
+  await supabase.from("salon_customer_packages").upsert(
+    {
+      id: rec.id,
+      store_id: storeId,
+      customer_id: rec.customerId,
+      template_id: rec.templateId,
+      template_name: rec.templateName,
+      price: rec.price ?? 0,
+      purchased_at: rec.purchasedAt,
+      expires_at: rec.expiresAt,
+      remaining: rec.remaining ?? [],
+      status: rec.status,
+      payment_method: rec.paymentMethod,
+      note: rec.note,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+}
+
 export async function POST(request: Request) {
   const payload = (await request.json()) as {
     storeId?: string;
@@ -171,6 +211,10 @@ export async function POST(request: Request) {
           await upsertCustomer(supabase, storeId, rec);
         } else if (ev.type === "BOOTSTRAP_UPDATED") {
           await upsertBootstrap(supabase, rec);
+        } else if (ev.type === "PACKAGE_TEMPLATE_UPDATED") {
+          await upsertPackageTemplate(supabase, storeId, rec);
+        } else if (ev.type === "CUSTOMER_PACKAGE_UPDATED") {
+          await upsertCustomerPackage(supabase, storeId, rec);
         }
       }
 

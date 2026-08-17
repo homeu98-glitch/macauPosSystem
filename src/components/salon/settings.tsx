@@ -16,6 +16,7 @@ import {
   reseedSalonConfig,
   loadSalonSyncQueue,
 } from "@/lib/salon/storage";
+import { PackageTemplatesTab } from "@/components/salon/package-templates";
 import { loadDeviceConfig, saveDeviceConfig } from "@/lib/storage";
 import type { DeviceConfig, DevicePrinterConfig } from "@/lib/types";
 
@@ -415,6 +416,7 @@ const TABS = [
   { id: "category", label: "服務類目" },
   { id: "services", label: "服務管理" },
   { id: "staff", label: "員工" },
+  { id: "packages", label: "套票模板" },
   { id: "dev", label: "開發工具" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -865,6 +867,13 @@ export function Settings() {
             )}
           </Section>
         </div>
+      )}
+
+      {/* 套票模板（P1） */}
+      {activeTab === "packages" && (
+        <Section title="套票模板">
+          <PackageTemplatesTab />
+        </Section>
       )}
 
       {resetModal ? (

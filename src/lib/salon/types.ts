@@ -317,6 +317,63 @@ export interface SalonCustomerProfile {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// 美容院 Package / 套票玩法（P1）
+// 設計原則：次數額度（items.remaining）留 salon 本地；儲值 / 積分 / 定金委託 Ledger。
+// ────────────────────────────────────────────────────────────────────
+
+export interface SalonPackageItemEntry {
+  /** 套票含哪項服務 */
+  serviceItemId: string;
+  /** 該服務含多少次（例如 10 次面部） */
+  sessions: number;
+}
+
+export interface SalonPackageTemplate {
+  id: string;
+  name: string;
+  /** 售價（MOP） */
+  price: number;
+  /** 有效期限（天），自購買日起算；0 / 負數 = 永久 */
+  validityDays: number;
+  /** 套票內含服務明細（次數額度） */
+  items: SalonPackageItemEntry[];
+  /** 贈送積分（→ Ledger，P2 才寫入） */
+  bonusPoints: number;
+  /** 贈送儲值（→ Ledger，P2 才寫入） */
+  bonusBalance: number;
+  /** 展示用備註（例如「含 1 支精華」） */
+  note?: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SalonCustomerPackageRemaining {
+  serviceItemId: string;
+  sessionsLeft: number;
+}
+
+export type SalonCustomerPackageStatus = "active" | "used_up" | "expired";
+
+export interface SalonCustomerPackage {
+  id: string;
+  customerId: string;
+  templateId: string;
+  templateName: string;
+  /** 購買時售價（快照） */
+  price: number;
+  purchasedAt: string;
+  /** 到期日（ISO）；undefined 表示永久 */
+  expiresAt?: string;
+  /** 剩餘次數額度（視覺化用） */
+  remaining: SalonCustomerPackageRemaining[];
+  status: SalonCustomerPackageStatus;
+  /** 購買付款方式（P1 僅記錄；真扣款委託 Ledger P2） */
+  paymentMethod?: SalonPaymentMethod;
+  note?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Bootstrap 結構（店家資料）
 // ────────────────────────────────────────────────────────────────────
 
@@ -358,7 +415,9 @@ export type SalonQueueEventType =
   | "STATION_UPDATED"
   | "SERVICE_CATEGORY_UPDATED"
   | "SERVICE_ITEM_UPDATED"
-  | "BOOTSTRAP_UPDATED";
+  | "BOOTSTRAP_UPDATED"
+  | "PACKAGE_TEMPLATE_UPDATED"
+  | "CUSTOMER_PACKAGE_UPDATED";
 
 export interface SalonQueueEvent {
   id: string;
@@ -386,6 +445,8 @@ export const SALON_STORAGE_KEYS = {
   shift: "macau-pos-salon/shift",
   shiftHistory: "macau-pos-salon/shift-history",
   customers: "macau-pos-salon/customers",
+  packageTemplates: "macau-pos-salon/package-templates",
+  customerPackages: "macau-pos-salon/customer-packages",
   activeStore: "macau-pos-salon/active-store",
   terminalIndustry: "macau-pos-salon/terminal-industry",
 } as const;

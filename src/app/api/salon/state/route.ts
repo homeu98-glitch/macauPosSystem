@@ -103,6 +103,38 @@ function mapPrintJob(row: Record<string, unknown>) {
   };
 }
 
+function mapPackageTemplate(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    name: row.name,
+    price: Number(row.price ?? 0),
+    validityDays: Number(row.validity_days ?? 0),
+    items: Array.isArray(row.items) ? row.items : [],
+    bonusPoints: Number(row.bonus_points ?? 0),
+    bonusBalance: row.bonus_balance != null ? Number(row.bonus_balance) : 0,
+    note: row.note,
+    active: row.active ?? true,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapCustomerPackage(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    templateId: row.template_id,
+    templateName: row.template_name,
+    price: Number(row.price ?? 0),
+    purchasedAt: row.purchased_at,
+    expiresAt: row.expires_at,
+    remaining: Array.isArray(row.remaining) ? row.remaining : [],
+    status: row.status,
+    paymentMethod: row.payment_method,
+    note: row.note,
+  };
+}
+
 export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
   const { searchParams } = new URL(request.url);
@@ -116,6 +148,8 @@ export async function GET(request: Request) {
       orders: [],
       customers: [],
       printJobs: [],
+      packageTemplates: [],
+      customerPackages: [],
     });
   }
 
@@ -131,12 +165,27 @@ export async function GET(request: Request) {
   const printJobsQuery = storeId
     ? supabase.from("salon_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(300)
     : supabase.from("salon_print_jobs").select("*").order("created_at", { ascending: false }).limit(300);
+  const packageTemplatesQuery = storeId
+    ? supabase.from("salon_package_templates").select("*").eq("store_id", storeId)
+    : supabase.from("salon_package_templates").select("*");
+  const customerPackagesQuery = storeId
+    ? supabase.from("salon_customer_packages").select("*").eq("store_id", storeId)
+    : supabase.from("salon_customer_packages").select("*");
 
-  const [{ data: bookings }, { data: orders }, { data: customers }, { data: printJobs }] = await Promise.all([
+  const [
+    { data: bookings },
+    { data: orders },
+    { data: customers },
+    { data: printJobs },
+    { data: packageTemplates },
+    { data: customerPackages },
+  ] = await Promise.all([
     bookingsQuery,
     ordersQuery,
     customersQuery,
     printJobsQuery,
+    packageTemplatesQuery,
+    customerPackagesQuery,
   ]);
 
   return NextResponse.json({
@@ -146,5 +195,7 @@ export async function GET(request: Request) {
     orders: (orders ?? []).map(mapOrder),
     customers: (customers ?? []).map(mapCustomer),
     printJobs: (printJobs ?? []).map(mapPrintJob),
+    packageTemplates: (packageTemplates ?? []).map(mapPackageTemplate),
+    customerPackages: (customerPackages ?? []).map(mapCustomerPackage),
   });
 }
