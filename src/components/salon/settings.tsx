@@ -799,7 +799,7 @@ export function Settings() {
             fields={staffFields}
             emptyFactory={emptyStaff}
             activeLabels={["在職", "離職"]}
-            renderSummary={(s) => ({ title: s.nickname ?? s.name || "(未命名)", subtitle: labelOf(STAFF_ROLE_OPTS, s.role) })}
+            renderSummary={(s) => ({ title: (s.nickname ?? s.name) || "(未命名)", subtitle: labelOf(STAFF_ROLE_OPTS, s.role) })}
             onUpsert={upsertStaff}
             onDelete={deleteStaff}
             onToggle={toggleStaff}
