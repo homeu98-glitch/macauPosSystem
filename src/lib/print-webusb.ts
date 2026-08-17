@@ -77,11 +77,13 @@ function describeWebUsbError(err: unknown): string {
 function findOutEndpoint(device: WebUsbDevice): { interfaceNumber: number; endpointNumber: number } | null {
   const cfg = device?.configuration;
   if (!cfg?.interfaces) return null;
-  for (const iface of cfg.interfaces) {
+  const ifaces = cfg.interfaces as any[];
+  // 優先揀 Printer Class (0x07) interface 嘅 bulk-out；冇就第一部 bulk-out
+  const byClass = ifaces.find((i) => i.alternates?.[0]?.interfaceClass === PRINTER_CLASS_CODE);
+  const candidates = byClass ? [byClass, ...ifaces] : ifaces;
+  for (const iface of candidates) {
     const alt = iface.alternates?.[0];
-    const ep = alt?.endpoints?.find(
-      (e: any) => e.direction === "out" && e.type === "bulk",
-    );
+    const ep = alt?.endpoints?.find((e: any) => e.direction === "out" && e.type === "bulk");
     if (ep) return { interfaceNumber: iface.interfaceNumber, endpointNumber: ep.endpointNumber };
   }
   return null;
@@ -95,11 +97,25 @@ export async function printToWebUsb(
   if (!device) return { ok: false, error: "無 WebUSB 設備。" };
   try {
     if (!device.opened) await device.open();
-    if (!device.configuration) await device.selectConfiguration(1);
+    // 揀第一部 config（唔硬寫 1；部份機 config value 唔係 1，硬寫會 select 失敗）
+    if (!device.configuration) {
+      const first = device.configurations?.[0];
+      if (first) await device.selectConfiguration(first.configurationValue);
+    }
     const target = findOutEndpoint(device);
-    if (!target) return { ok: false, error: "找不到 USB 批量輸出端點（部機可能唔 claimable）。" };
+    if (!target) {
+      const ifaceCount = device.configuration?.interfaces?.length ?? 0;
+      const cfgCount = device.configurations?.length ?? 0;
+      return {
+        ok: false,
+        error: `找不到 USB 批量輸出端點（config=${cfgCount}, iface=${ifaceCount}；部機 descriptor 可能無 bulk-out，或 WinUSB 換錯咗 interface）。`,
+      };
+    }
+    console.debug("[print-webusb] transferOut", target, "bytes", bytes.length);
     await device.claimInterface(target.interfaceNumber);
     await device.transferOut(target.endpointNumber, bytes);
+    // 等部機 flush 再 release/close（部份熱敏機 print-on-close，太快收會漏印）
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await device.releaseInterface(target.interfaceNumber);
     if (device.opened) await device.close();
     return { ok: true };
