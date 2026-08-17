@@ -9,6 +9,8 @@
 // 所有操作 best-effort、絕不拋錯，絕不影響現有 localStorage 熱路徑。
 // 真後端 push 留 pushSalonMutation() seam，待 Ledger / 總部 API 到位。
 
+import { SALON_STORAGE_KEYS } from "@/lib/salon/types";
+
 const DB_NAME = "macau-pos-salon";
 const DB_VERSION = 1;
 const KV_STORE = "kv";
@@ -16,8 +18,10 @@ const QUEUE_STORE = "syncQueue";
 
 export type SalonSyncQueueItem = {
   id: string;
-  entity: "orders" | "bookings" | "printJobs";
+  entity: "orders" | "bookings" | "printJobs" | "customers";
   refId: string;
+  /** 整個 entity 陣列（由客戶端 save* 一併放入，避免再由 localStorage 還原造成循環 import） */
+  payload: unknown;
   status: "pending" | "synced" | "failed";
   createdAt: string;
   syncedAt?: string;
@@ -136,28 +140,68 @@ async function idbPatchQueueItem(id: string, patch: Partial<SalonSyncQueueItem>)
   }
 }
 
-/**
- * 真後端 push seam：Ledger / 總部 API 到位後，喺此發送 mutation。
- * 目前 local-only，直接當作成功。回傳 false 會令 queue item 標 failed。
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function pushSalonMutation(_item: SalonSyncQueueItem): Promise<boolean> {
-  return true;
+function readActiveSalonStore(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(SALON_STORAGE_KEYS.activeStore);
+  } catch {
+    return null;
+  }
 }
 
-/** 處理 pending 變更：本地模式直接標 synced（模擬成功 push）。 */
+function eventTypeForEntity(entity: SalonSyncQueueItem["entity"]): string {
+  if (entity === "customers") return "CUSTOMER_UPDATED";
+  if (entity === "printJobs") return "PRINT_JOB_CREATED";
+  if (entity === "orders") return "ORDER_SETTLED";
+  return "BOOKING_UPDATED";
+}
+
+/**
+ * 真後端 push：將 pending 變更 POST 去 /api/salon/sync（POS Supabase）。
+ * payload 由客戶端 save* 一併放入 sync-queue，唔使再由 localStorage 還原，
+ * 避免與 storage.ts 形成循環 import。
+ */
+async function pushSalonMutation(item: SalonSyncQueueItem): Promise<boolean> {
+  if (item.payload === undefined || item.payload === null) return true;
+  const storeId = readActiveSalonStore() ?? undefined;
+  try {
+    const res = await fetch("/api/salon/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        storeId,
+        events: [{ type: eventTypeForEntity(item.entity), entityId: item.refId, payload: item.payload }],
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 處理 pending 變更：POST 去 POS Supabase；失敗標 failed 等下次重試。 */
 export async function flushSalonSyncQueue(): Promise<void> {
   if (typeof window !== "undefined" && typeof navigator !== "undefined" && !navigator.onLine) {
     return;
   }
   const queue = await idbGetQueue();
   const pending = queue.filter((item) => item.status === "pending");
-  for (const item of pending) {
-    const ok = await pushSalonMutation(item);
-    await idbPatchQueueItem(item.id, {
-      status: ok ? "synced" : "failed",
-      syncedAt: new Date().toISOString(),
-    });
+  if (pending.length === 0) return;
+
+  // 同一 entity 只 push 最新一份（payload 已係整個陣列），減少重複上傳。
+  const latestByEntity = new Map<SalonSyncQueueItem["entity"], SalonSyncQueueItem>();
+  for (const item of pending) latestByEntity.set(item.entity, item);
+
+  for (const latest of latestByEntity.values()) {
+    const ok = await pushSalonMutation(latest);
+    for (const item of pending) {
+      if (item.entity === latest.entity) {
+        await idbPatchQueueItem(item.id, {
+          status: ok ? "synced" : "failed",
+          syncedAt: new Date().toISOString(),
+        });
+      }
+    }
   }
 }
 

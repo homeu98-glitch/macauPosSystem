@@ -139,6 +139,40 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
   return readJson<SalonBootstrap>(SALON_STORAGE_KEYS.bootstrap, buildDefaultSalonBootstrap());
 }
 
+/**
+ * 開機由 POS DB hydrate：有網 + 配咗 Supabase 就 GET bootstrap + state 寫入 localStorage。
+ * 用 writeJson（唔 enqueue）避免 hydrate → save* → enqueue → flush → 回寫 DB 嘅 loop。
+ * source=mock（未配 Supabase / 表空）時唔寫，保留本地 mock。
+ * 由 src/app/salon/layout.tsx 開機 fire 一次（冪等）。
+ */
+export async function hydrateSalonFromPosDb(storeId?: string): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+  const sid = storeId ?? loadActiveSalonStore() ?? undefined;
+  const q = sid ? `?storeId=${encodeURIComponent(sid)}` : "";
+  try {
+    const [bootRes, stateRes] = await Promise.all([
+      fetch(`/api/salon/bootstrap${q}`),
+      fetch(`/api/salon/state${q}`),
+    ]);
+    if (!bootRes.ok || !stateRes.ok) return;
+    const boot = await bootRes.json();
+    const state = await stateRes.json();
+
+    if (boot?.source === "supabase") {
+      saveSalonBootstrap(boot);
+    }
+    if (state?.source === "supabase") {
+      if (Array.isArray(state.bookings)) writeJson(SALON_STORAGE_KEYS.bookings, state.bookings);
+      if (Array.isArray(state.orders)) writeJson(SALON_STORAGE_KEYS.orders, state.orders);
+      if (Array.isArray(state.customers)) writeJson(SALON_STORAGE_KEYS.customers, state.customers);
+      if (Array.isArray(state.printJobs)) writeJson(SALON_STORAGE_KEYS.printJobs, state.printJobs);
+    }
+  } catch {
+    // 網絡 / 解析失敗：留低本地數據，唔影響使用
+  }
+}
+
 export function loadSalonBootstrap(): SalonBootstrap | null {
   return readJson<SalonBootstrap | null>(SALON_STORAGE_KEYS.bootstrap, null);
 }
@@ -164,7 +198,8 @@ export function saveBookings(bookings: SalonBooking[]) {
   writeJson(SALON_STORAGE_KEYS.bookings, bookings);
   void idbEnqueue({
     entity: "bookings",
-    refId: bookings[bookings.length - 1]?.id ?? "bookings",
+    refId: "bookings",
+    payload: bookings,
   });
 }
 
@@ -176,7 +211,8 @@ export function saveSalonOrders(orders: SalonPosOrder[]) {
   writeJson(SALON_STORAGE_KEYS.orders, orders);
   void idbEnqueue({
     entity: "orders",
-    refId: orders[orders.length - 1]?.id ?? "orders",
+    refId: "orders",
+    payload: orders,
   });
 }
 
@@ -234,6 +270,11 @@ export function loadCustomers(): SalonCustomerProfile[] {
 
 export function saveCustomers(customers: SalonCustomerProfile[]) {
   writeJson(SALON_STORAGE_KEYS.customers, customers);
+  void idbEnqueue({
+    entity: "customers",
+    refId: "customers",
+    payload: customers,
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -250,7 +291,8 @@ export function saveSalonPrintJobs(jobs: PrintJob[]) {
   writeJson(SALON_STORAGE_KEYS.printJobs, jobs);
   void idbEnqueue({
     entity: "printJobs",
-    refId: jobs[jobs.length - 1]?.id ?? "printJobs",
+    refId: "printJobs",
+    payload: jobs,
   });
 }
 
