@@ -13,7 +13,7 @@ function newId(): string {
   return `qe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function upsertBooking(supabase: ReturnType<typeof getSupabaseServerClient>, storeId: string, rec: Record<string, unknown>) {
+async function upsertBooking(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
   await supabase.from("salon_bookings").upsert(
     {
       id: rec.id,
@@ -44,7 +44,7 @@ async function upsertBooking(supabase: ReturnType<typeof getSupabaseServerClient
   );
 }
 
-async function upsertOrder(supabase: ReturnType<typeof getSupabaseServerClient>, storeId: string, rec: Record<string, unknown>) {
+async function upsertOrder(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
   await supabase.from("salon_orders").upsert(
     {
       id: rec.id,
@@ -81,7 +81,7 @@ async function upsertOrder(supabase: ReturnType<typeof getSupabaseServerClient>,
   );
 }
 
-async function upsertPrintJob(supabase: ReturnType<typeof getSupabaseServerClient>, storeId: string, rec: Record<string, unknown>) {
+async function upsertPrintJob(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
   await supabase.from("salon_print_jobs").upsert(
     {
       id: rec.id,
@@ -100,7 +100,7 @@ async function upsertPrintJob(supabase: ReturnType<typeof getSupabaseServerClien
   );
 }
 
-async function upsertCustomer(supabase: ReturnType<typeof getSupabaseServerClient>, storeId: string, rec: Record<string, unknown>) {
+async function upsertCustomer(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
   await supabase.from("salon_customers").upsert(
     {
       id: rec.id,
@@ -127,6 +127,26 @@ async function upsertCustomer(supabase: ReturnType<typeof getSupabaseServerClien
   );
 }
 
+async function upsertBootstrap(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, rec: Record<string, unknown>) {
+  await supabase.from("salon_bootstrap_config").upsert(
+    {
+      store_id: rec.storeId ?? "demo-salon-001",
+      source_version: rec.sourceVersion ?? 1,
+      store_name: rec.storeName ?? "示範美容院",
+      currency: rec.currency ?? "MOP",
+      service_categories: rec.serviceCategories ?? [],
+      service_items: rec.serviceItems ?? [],
+      staff: rec.staff ?? [],
+      stations: rec.stations ?? [],
+      calendar_slot_minutes: rec.calendarSlotMinutes ?? 30,
+      deposit_enabled: rec.depositEnabled ?? false,
+      default_service_duration_minutes: rec.defaultServiceDurationMinutes ?? 60,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "store_id" },
+  );
+}
+
 export async function POST(request: Request) {
   const payload = (await request.json()) as {
     storeId?: string;
@@ -149,6 +169,8 @@ export async function POST(request: Request) {
           await upsertPrintJob(supabase, storeId, rec);
         } else if (ev.type === "CUSTOMER_UPDATED") {
           await upsertCustomer(supabase, storeId, rec);
+        } else if (ev.type === "BOOTSTRAP_UPDATED") {
+          await upsertBootstrap(supabase, rec);
         }
       }
 

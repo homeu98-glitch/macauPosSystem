@@ -183,6 +183,9 @@ export function saveSalonBootstrap(bootstrap: SalonBootstrap) {
   writeJson(SALON_STORAGE_KEYS.serviceItems, bootstrap.serviceItems);
   writeJson(SALON_STORAGE_KEYS.staff, bootstrap.staff);
   writeJson(SALON_STORAGE_KEYS.stations, bootstrap.stations);
+  // Phase 7-C：類目 / 服務 / 員工 / 場地改動同步上雲 salon_bootstrap_config（多終端設定一致）。
+  // payload 為整個 bootstrap，flush 按 entity 去重只推最新一份。
+  void idbEnqueue({ entity: "bootstrap", refId: "bootstrap", payload: bootstrap });
   seededForStore = bootstrap.storeId;
 }
 
@@ -343,4 +346,16 @@ export function resetSalonStorage() {
   removeKey(SALON_STORAGE_KEYS.customers);
   removeKey(SALON_STORAGE_KEYS.activeStore);
   seededForStore = null;
+}
+
+/**
+ * 只重種「店家設定」層（類目 / 服務項目 / 員工 / 房型椅）回預設 mock，
+ * 保留 預約 / 訂單 / 客戶 / 列印 / sync 佇列。供開發工具 tab 使用，
+ * 不會清掉營運數據（與 resetSalonStorage 不同）。
+ */
+export function reseedSalonConfig() {
+  const seed = buildDefaultSalonBootstrap();
+  const activeStore = loadActiveSalonStore();
+  if (activeStore) seed.storeId = activeStore;
+  saveSalonBootstrap(seed);
 }

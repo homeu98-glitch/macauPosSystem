@@ -357,7 +357,8 @@ export type SalonQueueEventType =
   | "STAFF_UPDATED"
   | "STATION_UPDATED"
   | "SERVICE_CATEGORY_UPDATED"
-  | "SERVICE_ITEM_UPDATED";
+  | "SERVICE_ITEM_UPDATED"
+  | "BOOTSTRAP_UPDATED";
 
 export interface SalonQueueEvent {
   id: string;
