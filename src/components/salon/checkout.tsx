@@ -12,12 +12,15 @@ import type {
   SalonPayment,
   SalonPaymentMethod,
   SalonStaff,
+  SalonCustomerPackage,
 } from "@/lib/salon/types";
 import {
   loadBookings,
   loadSalonOrders,
   saveSalonOrders,
   loadSalonBootstrap,
+  loadSalonCustomerPackages,
+  saveSalonCustomerPackages,
 } from "@/lib/salon/storage";
 import { updateMockBooking, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
 import { getMockLedgerMember, applyMockLedgerPayment } from "@/lib/salon/mock-ledger";
@@ -55,6 +58,40 @@ interface TipRow {
   amount: number;
 }
 
+// 套票抵扣：每一筆記錄「哪項服務 / 哪張套票卡 / 抵扣多少」
+interface SalonPackageDeduction {
+  serviceItemId: string;
+  serviceName: string;
+  packageId: string;
+  packageName: string;
+  amount: number;
+}
+
+/**
+ * 結帳時把套票抵扣寫回客戶套票卡：扣減對應 remaining 次數，
+ * 若某張卡全部次數歸零則 status 置 "used_up"。走 saveSalonCustomerPackages（sync 上雲）。
+ * plan 內每條 (packageId, serviceItemId) 唯一，至多扣 1 次。
+ */
+function applyCustomerPackageDeductions(plan: SalonPackageDeduction[]) {
+  if (plan.length === 0) return;
+  const all = loadSalonCustomerPackages();
+  const byId = new Map(all.map((p) => [p.id, p]));
+  for (const d of plan) {
+    const pkg = byId.get(d.packageId);
+    if (!pkg) continue;
+    let allZero = true;
+    pkg.remaining = pkg.remaining.map((r) => {
+      if (r.serviceItemId === d.serviceItemId && r.sessionsLeft > 0) {
+        return { ...r, sessionsLeft: r.sessionsLeft - 1 };
+      }
+      return r;
+    });
+    for (const r of pkg.remaining) if (r.sessionsLeft > 0) allZero = false;
+    if (allZero) pkg.status = "used_up";
+  }
+  saveSalonCustomerPackages(all);
+}
+
 const PAYMENT_LABELS: Record<SalonPaymentMethod, string> = {
   cash: "現金",
   card: "信用卡 / 移動支付",
@@ -83,6 +120,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   const [tips, setTips] = useState<TipRow[]>([]);
   const [tipPool, setTipPool] = useState(0);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
+
+  // 套票抵扣（P2）：已套用的抵扣計劃；空陣 = 未套用
+  const [packagePlan, setPackagePlan] = useState<SalonPackageDeduction[]>([]);
 
   useEffect(() => {
     const b = loadBookings().find((x) => x.id === bookingId);
@@ -124,6 +164,67 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     return getMockLedgerMember(booking.customerPhone);
   }, [booking]);
 
+  // ── 套票抵扣（P2）──
+  // 客戶持有的 active 套票卡（未過期）；無綁定客戶則空陣
+  const activePackages = useMemo<SalonCustomerPackage[]>(() => {
+    if (!booking?.customerId) return [];
+    const now = Date.now();
+    return loadSalonCustomerPackages().filter(
+      (p) =>
+        p.customerId === booking.customerId &&
+        p.status === "active" &&
+        !(p.expiresAt && new Date(p.expiresAt).getTime() < now),
+    );
+  }, [booking]);
+
+  // 自動匹配：對每個 booking 服務項，找一張仍有餘次的套票卡扣 1 次；
+  // 不夠次數的服務自然不會被抵扣，留待現金 / Ledger 結算。
+  const computePlan = useCallback((): SalonPackageDeduction[] => {
+    if (!booking) return [];
+    const work = new Map<string, Map<string, number>>();
+    for (const p of activePackages) {
+      const m = new Map<string, number>();
+      for (const r of p.remaining) m.set(r.serviceItemId, r.sessionsLeft);
+      work.set(p.id, m);
+    }
+    const plan: SalonPackageDeduction[] = [];
+    for (const s of booking.services) {
+      for (const p of activePackages) {
+        const m = work.get(p.id);
+        if (!m) continue;
+        const left = m.get(s.serviceItemId) ?? 0;
+        if (left > 0) {
+          m.set(s.serviceItemId, left - 1);
+          plan.push({
+            serviceItemId: s.serviceItemId,
+            serviceName: s.name,
+            packageId: p.id,
+            packageName: p.templateName,
+            amount: s.price,
+          });
+          break;
+        }
+      }
+    }
+    return plan;
+  }, [booking, activePackages]);
+
+  const applyPackage = useCallback(() => {
+    setPackagePlan(computePlan());
+  }, [computePlan]);
+
+  const cancelPackage = useCallback(() => {
+    setPackagePlan([]);
+  }, []);
+
+  // 未套用時的預覽（可抵扣多少）；套用後以 packagePlan 為準
+  const previewPlan = useMemo(
+    () => (packagePlan.length > 0 ? [] : computePlan()),
+    [packagePlan, computePlan],
+  );
+  const previewAmount = previewPlan.reduce((sum, d) => sum + d.amount, 0);
+  const deductedAmount = packagePlan.reduce((sum, d) => sum + d.amount, 0);
+
   // ── 計算 ──
   const subtotal = useMemo(
     () => (booking ? booking.services.reduce((sum, s) => sum + s.price, 0) : 0),
@@ -135,7 +236,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     return booking.depositPaid ? booking.depositAmount ?? 0 : 0;
   }, [booking]);
   const tipTotal = tips.reduce((sum, t) => sum + (t.amount || 0), 0);
-  const grandTotal = Math.max(0, afterDiscount + tipTotal - depositApplied);
+  const grandTotal = Math.max(0, afterDiscount + tipTotal - depositApplied - deductedAmount);
   const paidTotal = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
   const changeDue = paidTotal > grandTotal ? paidTotal - grandTotal : 0;
   const remaining = Math.max(0, grandTotal - paidTotal);
@@ -219,15 +320,27 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     const orderId = uid("order");
     const orderNo = genOrderNo();
 
-    const items: SalonOrderItem[] = booking.services.map((s) => ({
-      kind: "service",
-      itemId: s.serviceItemId,
-      name: s.name,
-      quantity: 1,
-      unitPrice: s.price,
-      staffId: s.staffId,
-      staffName: staffMap[s.staffId]?.nickname ?? staffMap[s.staffId]?.name ?? "",
-    }));
+    // 標記被套票抵扣的服務項（同 serviceItemId 可能多行，依 plan 數量遞減）
+    const coverLeft = new Map<string, number>();
+    for (const d of packagePlan) {
+      coverLeft.set(d.serviceItemId, (coverLeft.get(d.serviceItemId) ?? 0) + 1);
+    }
+
+    const items: SalonOrderItem[] = booking.services.map((s) => {
+      const left = coverLeft.get(s.serviceItemId) ?? 0;
+      const covered = left > 0;
+      if (covered) coverLeft.set(s.serviceItemId, left - 1);
+      return {
+        kind: "service",
+        itemId: s.serviceItemId,
+        name: s.name,
+        quantity: 1,
+        unitPrice: s.price,
+        staffId: s.staffId,
+        staffName: staffMap[s.staffId]?.nickname ?? staffMap[s.staffId]?.name ?? "",
+        note: covered ? "套票抵扣" : undefined,
+      };
+    });
 
     const tipRecords: SalonTip[] = tips
       .filter((t) => (t.amount || 0) > 0)
@@ -258,6 +371,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       items,
       subtotal,
       discountAmount,
+      packageDeduction: deductedAmount > 0 ? deductedAmount : undefined,
       total: afterDiscount,
       tips: tipRecords,
       tipTotal,
@@ -271,9 +385,11 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       updatedAt: now,
     };
 
-    // 2) 存訂單 + 更新預約狀態為 settled
+    // 2) 存訂單 + 套票扣次 + 更新預約狀態為 settled
     try {
       saveSalonOrders([...loadSalonOrders(), order]);
+      // 套票抵扣：訂單存妥後才寫回客戶套票卡次數（避免訂單失敗卻已扣次）
+      applyCustomerPackageDeductions(packagePlan);
     } catch {
       setSettleError("儲存訂單失敗，請重試。");
       return;
@@ -306,6 +422,8 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     grandTotal,
     depositApplied,
     changeDue,
+    deductedAmount,
+    packagePlan,
     staffMap,
   ]);
 
@@ -468,6 +586,78 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           </div>
         </div>
 
+        {/* 套票抵扣（P2）：自動匹配客戶 active 套票次數抵扣本單服務 */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 text-sm font-bold text-slate-900">套票抵扣</h3>
+          {!booking.customerId ? (
+            <div className="text-xs text-slate-400">
+              本預約未綁定客戶，套票抵扣需於預約關聯客戶後使用。
+            </div>
+          ) : activePackages.length === 0 ? (
+            <div className="text-xs text-slate-400">
+              此客戶無可用套票（無 active 套票或已用完 / 過期）。
+            </div>
+          ) : packagePlan.length > 0 ? (
+            <div className="grid gap-2">
+              {packagePlan.map((d, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2 text-sm"
+                >
+                  <span className="text-slate-700">{d.serviceName}</span>
+                  <span className="text-xs text-emerald-700">
+                    以「{d.packageName}」抵扣 {money(d.amount)}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm font-semibold text-slate-800">
+                  已抵扣合計 {money(deductedAmount)}
+                </span>
+                <button
+                  type="button"
+                  onClick={cancelPackage}
+                  className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                >
+                  取消抵扣
+                </button>
+              </div>
+            </div>
+          ) : previewAmount > 0 ? (
+            <div className="grid gap-2">
+              {previewPlan.map((d, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm"
+                >
+                  <span className="text-slate-700">{d.serviceName}</span>
+                  <span className="text-xs text-slate-500">
+                    可用「{d.packageName}」{money(d.amount)}
+                  </span>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={applyPackage}
+                className="mt-1 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600"
+              >
+                套用套票抵扣（省 {money(previewAmount)}）
+              </button>
+              {booking.services.some(
+                (s) => !previewPlan.some((d) => d.serviceItemId === s.serviceItemId),
+              ) && (
+                <div className="text-[11px] text-slate-400">
+                  其餘服務無套票次數，將以現金 / Ledger 結算。
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400">
+              本單服務項目無符合套票（套票內含服務與本單不符）。
+            </div>
+          )}
+        </div>
+
         {/* 小費（多技師平分） */}
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
@@ -594,6 +784,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           <div className="space-y-1.5 text-sm">
             <Row label="小計" value={money(subtotal)} />
             {discountAmount > 0 && <Row label="折扣" value={`-${money(discountAmount)}`} />}
+            {deductedAmount > 0 && <Row label="套票抵扣" value={`-${money(deductedAmount)}`} />}
             {depositApplied > 0 && <Row label="已付定金" value={`-${money(depositApplied)}`} />}
             {tipTotal > 0 && <Row label="小費" value={money(tipTotal)} />}
             <div className="my-1 border-t border-slate-100" />

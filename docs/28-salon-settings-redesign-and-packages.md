@@ -190,3 +190,32 @@ SalonCustomerPackage {
 
 ### 5.5 待 push 提醒
 - 本次 P1 改動 + 上輪兩處 build 修復（`sync/route.ts` NonNullable、`settings.tsx` `??`/`||` 括號）均尚未 push。請本地驗證後一併 commit + push。
+
+### 5.6 P2 美容院 Package 玩法（2026-08-15 實施）
+
+依 §3.4 落實 P2：**結帳套票抵扣一步** + **購買當下贈送積分/儲值寫入 Ledger**。
+
+**A. 結帳套票抵扣（`src/components/salon/checkout.tsx`）**
+- 新增 `SalonPackageDeduction` 介面（serviceItemId/serviceName/packageId/packageName/amount）+ 模組級 `applyCustomerPackageDeductions(plan)`：依 plan 扣減對應套票卡 `remaining[].sessionsLeft`，全部歸零則 `status:"used_up"`，經 `saveSalonCustomerPackages` 寫回（sync 上雲）。
+- 結帳頁讀 `booking.customerId` 取 active 套票卡（status=active 且未過期），`computePlan()` 自動對每個 booking 服務項找一張仍有餘次的套票卡扣 1 次；不夠次數的服務自然不抵扣，留待現金/Ledger。
+- UI：「套票抵扣」區塊放於折扣與小費之間。未套用時顯示預覽（可抵扣哪些服務 + 省多少 + 一鍵「套用套票抵扣」）；套用後顯示已抵扣明細 + 「取消抵扣」。
+- `deductedAmount` 從 `grandTotal` 減除（`afterDiscount + tipTotal - depositApplied - deductedAmount`）；結算摘要加「套票抵扣 -X」行；`canSettle`/`remaining` 自動反映。
+- `handleSettle`：訂單存妥後才 `applyCustomerPackageDeductions(packagePlan)`（避免訂單失敗卻已扣次）；被抵扣的 `SalonOrderItem.note` 標「套票抵扣」。
+- `SalonPosOrder` 加 `packageDeduction?: number`（結帳/收據用）。
+
+**B. 購買贈送寫入 Ledger（mock 層）**
+- `src/lib/salon/mock-ledger.ts` 加 `applyMockLedgerBonus(identifier, {points, balance})`：本地寫入客戶 `ledgerPoints` / `ledgerBalance`（沿用 `loadCustomers`/`saveCustomers`）。真 Ledger RPC 到位後只換此函式實作。
+- `src/components/salon/customer-profile.tsx` 的 `buyPackage` 於生成套票卡後呼叫 `applyMockLedgerBonus(customer.phone, {points: tpl.bonusPoints, balance: tpl.bonusBalance})`；Modal 提示文字更新為「購買當下寫入 Ledger」。
+
+**C. 收據（`src/lib/salon/print.ts`）**
+- `buildReceiptLines` 於 `order.packageDeduction > 0` 加「套票抵扣 -X」行（置於折扣與定金之間）；被抵扣項目 note 串接「套票抵扣」顯示於收據。
+
+**P2 範圍外 / 已知 gap**
+- P3：報表 + 即將到期提醒（未做）。
+- 套票抵扣目前按「先購先抵扣」選卡；未做「指定哪張卡」手選（v1 自動即可）。
+- 折扣與套票抵扣疊加：折扣為絕對金額減免，套票抵扣為服務項次數抵扣，兩者各自獨立從應收減除；極端情況（折扣把整單折到 0 仍有套票可抵扣）下 `grandTotal` 已 clamp 0，套票次數仍會照扣——屬已知簡化，待真實營運回饋再調。
+- Ledger 仍是 mock 層；贈送積分/儲值僅寫本地客戶檔案，真 RPC 接通後生效。
+- 沙盒 `tsc --noEmit` 僅餘 `src/app/layout.tsx` 的 `LayoutProps` 誤報（next build 生成之全局型別，與本輪無關）；其餘 P2 檔案零錯誤。仍待用戶 dev box `npm run lint && npm run build` + push 驗證。
+
+### 5.7 待 push 提醒（含 P1 + P2）
+- P1 + P2 全部改動 + 上輪兩處 build 修復均尚未 push。SQL 0006 用戶已執行。請本地 `npm run lint && npm run build` 確認無迴歸後 `git add -A && commit && push` 觸發 Vercel。

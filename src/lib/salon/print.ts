@@ -41,11 +41,13 @@ function buildReceiptLines(order: SalonPosOrder, currency: string): ReceiptLine[
   lines.push({ name: "客戶", quantity: 1, specs: [], note: order.customerName });
 
   for (const it of order.items) {
+    const noteParts = [`${currency} ${(it.unitPrice * it.quantity).toFixed(0)}`];
+    if (it.note) noteParts.push(it.note);
     lines.push({
       name: it.name,
       quantity: it.quantity,
       specs: it.staffName ? [`技師:${it.staffName}`] : [],
-      note: `${currency} ${(it.unitPrice * it.quantity).toFixed(0)}`,
+      note: noteParts.join(" · "),
     });
   }
 
@@ -53,6 +55,9 @@ function buildReceiptLines(order: SalonPosOrder, currency: string): ReceiptLine[
 
   if (order.discountAmount > 0) {
     lines.push({ name: "折扣", quantity: 1, specs: [], note: `-${currency} ${order.discountAmount.toFixed(0)}` });
+  }
+  if (order.packageDeduction && order.packageDeduction > 0) {
+    lines.push({ name: "套票抵扣", quantity: 1, specs: [], note: `-${currency} ${order.packageDeduction.toFixed(0)}` });
   }
   if (order.depositApplied && order.depositApplied > 0) {
     lines.push({ name: "已付定金", quantity: 1, specs: [], note: `-${currency} ${order.depositApplied.toFixed(0)}` });

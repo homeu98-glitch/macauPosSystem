@@ -83,3 +83,48 @@ export function applyMockLedgerPayment(
   saveCustomers(customers);
   return { ok: true, remaining: balance - amount };
 }
+
+export interface ApplyLedgerBonusResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * 購買套票時贈送積分 / 儲值（本地模擬寫入 Ledger）。
+ * 真實環境應改為呼叫 Ledger RPC；此處只動 localStorage 客戶檔案的 ledger* 欄位。
+ * - identifier：電話或客戶 id
+ * - points：贈送積分（加到 ledgerPoints）
+ * - balance：贈送儲值（加到 ledgerBalance，MOP）
+ * 兩者皆為 0 時視為 no-op 直接回傳 ok:true（不浪費寫入）。
+ */
+export function applyMockLedgerBonus(
+  identifier: string,
+  opts: { points?: number; balance?: number },
+): ApplyLedgerBonusResult {
+  if (typeof window === "undefined" || !identifier) {
+    return { ok: false, error: "無效參數" };
+  }
+  const points = opts.points ?? 0;
+  const balance = opts.balance ?? 0;
+  if (points <= 0 && balance <= 0) {
+    return { ok: true };
+  }
+
+  const customers = loadCustomers();
+  const idx = customers.findIndex(
+    (x) => x.phone === identifier || x.id === identifier,
+  );
+  if (idx < 0) {
+    return { ok: false, error: "找不到 Ledger 會員" };
+  }
+
+  const c = customers[idx];
+  const updated: SalonCustomerProfile = {
+    ...c,
+    ledgerPoints: (c.ledgerPoints ?? 0) + points,
+    ledgerBalance: (c.ledgerBalance ?? 0) + balance,
+  };
+  customers[idx] = updated;
+  saveCustomers(customers);
+  return { ok: true };
+}

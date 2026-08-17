@@ -251,6 +251,8 @@ export interface SalonPosOrder {
 
   subtotal: number;
   discountAmount: number;
+  /** 套票抵扣總額（P2：以套票次數抵扣的服務金額，從應收減除） */
+  packageDeduction?: number;
   serviceChargeAmount?: number;
   taxAmount?: number;
   total: number;

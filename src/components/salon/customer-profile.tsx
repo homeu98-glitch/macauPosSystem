@@ -14,7 +14,7 @@ import {
   saveSalonCustomerPackages,
   loadServiceItems,
 } from "@/lib/salon/storage";
-import { getMockLedgerMember } from "@/lib/salon/mock-ledger";
+import { getMockLedgerMember, applyMockLedgerBonus } from "@/lib/salon/mock-ledger";
 import type {
   SalonCustomerProfile,
   SalonSkinType,
@@ -112,6 +112,14 @@ export function CustomerProfile() {
     saveSalonCustomerPackages(next);
     setPackages(next.filter((p) => p.customerId === customer.id));
     setBuyOpen(false);
+
+    // P2：購買當下贈送積分 / 儲值寫入 Ledger（mock 層本地寫入；真 RPC 到位後只換 applyMockLedgerBonus 實作）
+    if ((tpl.bonusPoints > 0 || tpl.bonusBalance > 0) && customer.phone) {
+      applyMockLedgerBonus(customer.phone, {
+        points: tpl.bonusPoints,
+        balance: tpl.bonusBalance,
+      });
+    }
   };
 
   if (!loaded) return null;
@@ -654,7 +662,8 @@ function BuyPackageModal({
                   ))}
                 </ul>
                 {tpl.validityDays > 0 ? <div className="mt-1">效期 {tpl.validityDays} 天</div> : null}
-                {tpl.bonusPoints > 0 ? <div className="mt-1 text-amber-700">贈 {tpl.bonusPoints} 積分（P2 寫入 Ledger）</div> : null}
+                {tpl.bonusPoints > 0 ? <div className="mt-1 text-amber-700">贈 {tpl.bonusPoints} 積分（購買當下寫入 Ledger）</div> : null}
+                {tpl.bonusBalance > 0 ? <div className="mt-1 text-emerald-700">贈儲值 MOP {tpl.bonusBalance}（購買當下寫入 Ledger）</div> : null}
               </div>
             ) : null}
             <div>
@@ -675,7 +684,7 @@ function BuyPackageModal({
               </div>
             </div>
             <p className="text-[11px] text-slate-400">
-              確認後生成客戶套票卡，扣款 / 贈送積分委託 Ledger（P2 接通）。
+              確認後生成客戶套票卡；贈送積分 / 儲值即時寫入 Ledger（mock 層），結帳時可一鍵抵扣次數。
             </p>
           </div>
         )}
