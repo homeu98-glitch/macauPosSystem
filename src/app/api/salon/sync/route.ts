@@ -208,6 +208,40 @@ async function upsertBootstrap(supabase: NonNullable<ReturnType<typeof getSupaba
     },
     { onConflict: "store_id" },
   );
+  // 產品目錄同步入獨立 salon_products 表（用家要求：所有內容上雲）。
+  // 產品本來就經 BOOTSTRAP_UPDATED 帶成個 array 過嚟，呢度順手 upsert 入表，
+  // 前端唔使改。刪除產品唔做 cascading delete，避免清走 seed / 其他來源嘅 product。
+  const storeId = String(rec.storeId ?? "demo-salon-001");
+  const products = Array.isArray(rec.products) ? (rec.products as Record<string, unknown>[]) : [];
+  await upsertSalonProducts(supabase, storeId, products);
+}
+
+async function upsertSalonProducts(
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+  storeId: string,
+  products: Record<string, unknown>[],
+) {
+  for (const p of products) {
+    if (p?.id == null) continue;
+    const { error } = await supabase.from("salon_products").upsert(
+      {
+        id: p.id,
+        store_id: storeId,
+        name: typeof p.name === "string" ? p.name : "",
+        category: typeof p.category === "string" ? p.category : null,
+        price: typeof p.price === "number" ? p.price : Number(p.price) || 0,
+        cost: p.cost == null ? null : typeof p.cost === "number" ? p.cost : Number(p.cost),
+        commission_rate: typeof p.commissionRate === "number" ? p.commissionRate : Number(p.commissionRate) || 0,
+        active: p.active ?? true,
+        sort_order: typeof p.sortOrder === "number" ? p.sortOrder : Number(p.sortOrder) || 0,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
+    if (error) {
+      console.error("[salon-sync] upsertSalonProducts failed:", error.message);
+    }
+  }
 }
 
 async function upsertPackageTemplate(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
