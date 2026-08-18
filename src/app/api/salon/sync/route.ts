@@ -197,7 +197,13 @@ async function upsertBootstrap(supabase: NonNullable<ReturnType<typeof getSupaba
       deposit_enabled: rec.depositEnabled ?? false,
       default_service_duration_minutes: rec.defaultServiceDurationMinutes ?? 60,
       products: rec.products ?? [],
-      staff_level_multipliers: rec.staffLevelMultipliers ?? {},
+      staff_level_multipliers: (Array.isArray(rec.staffLevelTypes) ? rec.staffLevelTypes : []).reduce(
+        (m: Record<string, number>, t: { id?: string; multiplier?: number }) => {
+          if (t?.id) m[t.id] = Number(t.multiplier) || 0;
+          return m;
+        },
+        {},
+      ),
       updated_at: new Date().toISOString(),
     },
     { onConflict: "store_id" },

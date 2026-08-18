@@ -11,6 +11,7 @@ import type {
   SalonStation,
   SalonServiceCategory,
   SalonBookingServiceEntry,
+  SalonBootstrap,
 } from "@/lib/salon/types";
 import { loadSalonBootstrap, loadBookings } from "@/lib/salon/storage";
 import {
@@ -18,7 +19,7 @@ import {
   advanceBookingStatus,
   MOCK_REALTIME_EVENT,
 } from "@/lib/salon/mock-realtime";
-import { SALON_STAFF_ROLE_LABELS } from "@/lib/salon/salon-labels";
+import { salonRoleLabel } from "@/lib/salon/salon-labels";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "待確認",
@@ -52,6 +53,7 @@ export function ServiceRunner() {
   const [items, setItems] = useState<SalonServiceItem[]>([]);
   const [categories, setCategories] = useState<SalonServiceCategory[]>([]);
   const [stations, setStations] = useState<SalonStation[]>([]);
+  const [bootstrap, setBootstrap] = useState<SalonBootstrap | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [actionError, setActionError] = useState("");
 
@@ -68,12 +70,13 @@ export function ServiceRunner() {
     }
     setBooking(b);
 
-    const bootstrap = loadSalonBootstrap();
-    if (bootstrap) {
-      setStaffList(bootstrap.staff);
-      setItems(bootstrap.serviceItems);
-      setCategories(bootstrap.serviceCategories);
-      setStations(bootstrap.stations);
+    const bs = loadSalonBootstrap();
+    setBootstrap(bs);
+    if (bs) {
+      setStaffList(bs.staff);
+      setItems(bs.serviceItems);
+      setCategories(bs.serviceCategories);
+      setStations(bs.stations);
     }
   }, [bookingId]);
 
@@ -329,7 +332,7 @@ export function ServiceRunner() {
             >
               {staffList.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.nickname ?? s.name} ({s.roles.map((r) => SALON_STAFF_ROLE_LABELS[r]).join(" / ")})
+                  {s.nickname ?? s.name} ({s.roles.map((r) => salonRoleLabel(r, bootstrap)).join(" / ")})
                 </option>
               ))}
             </select>

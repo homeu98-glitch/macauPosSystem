@@ -9,6 +9,7 @@ import type {
   SalonBooking,
   SalonStaffLeave,
   SalonStaffShift,
+  SalonBootstrap,
 } from "@/lib/salon/types";
 import {
   loadSalonStaff,
@@ -20,10 +21,11 @@ import {
   saveSalonStaffLeaves,
   loadSalonStaffShifts,
   saveSalonStaffShifts,
+  loadSalonBootstrap,
 } from "@/lib/salon/storage";
 import {
-  SALON_STAFF_ROLE_LABELS,
-  SALON_STAFF_LEVEL_LABELS,
+  getSalonStaffRoleLabels,
+  getSalonStaffLevelLabels,
   SALON_STAFF_STATUS_LABELS,
   SALON_STAFF_STATUS_ORDER,
   SALON_STAFF_STATUS_BADGE,
@@ -48,6 +50,7 @@ export function StaffDetail() {
   const [staff, setStaff] = useState<SalonStaff | null>(null);
   const [leaves, setLeaves] = useState<SalonStaffLeave[]>([]);
   const [shifts, setShifts] = useState<SalonStaffShift[]>([]);
+  const [bootstrap, setBootstrap] = useState<SalonBootstrap | null>(null);
 
   // 表單態
   const [leaveStart, setLeaveStart] = useState("");
@@ -62,7 +65,12 @@ export function StaffDetail() {
     setStaff(all.find((s) => s.id === staffId) ?? null);
     setLeaves(loadSalonStaffLeaves().filter((l) => l.staffId === staffId));
     setShifts(loadSalonStaffShifts().filter((s) => s.staffId === staffId));
+    setBootstrap(loadSalonBootstrap());
   }, [staffId]);
+
+  // 可配置角色 / 級別標籤（依 bootstrap；缺省回退預設，再回退 id）
+  const roleLabels = useMemo(() => getSalonStaffRoleLabels(bootstrap), [bootstrap]);
+  const levelLabels = useMemo(() => getSalonStaffLevelLabels(bootstrap), [bootstrap]);
 
   const bookings = useMemo(() => loadBookings(), [staff, leaves, shifts]);
   const orders = useMemo(() => loadSalonOrders(), [staff, leaves, shifts]);
@@ -210,12 +218,12 @@ export function StaffDetail() {
           <div>
             <div className="text-xs text-slate-400">角色</div>
             <div className="font-semibold text-slate-800">
-              {staff.roles.map((r) => SALON_STAFF_ROLE_LABELS[r]).join(" / ") || "—"}
+              {staff.roles.map((r) => roleLabels[r] ?? r).join(" / ") || "—"}
             </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">級別</div>
-            <div className="font-semibold text-slate-800">{SALON_STAFF_LEVEL_LABELS[staff.level]}</div>
+            <div className="font-semibold text-slate-800">{levelLabels[staff.level] ?? staff.level}</div>
           </div>
           <div>
             <div className="text-xs text-slate-400">電話</div>

@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-import type { SalonStaff, SalonBooking } from "@/lib/salon/types";
-import { loadSalonStaff, loadBookings } from "@/lib/salon/storage";
+import type { SalonStaff, SalonBooking, SalonBootstrap } from "@/lib/salon/types";
+import { loadSalonStaff, loadBookings, loadSalonBootstrap } from "@/lib/salon/storage";
 import {
-  SALON_STAFF_ROLE_LABELS,
-  SALON_STAFF_ROLE_ORDER,
-  SALON_STAFF_LEVEL_LABELS,
+  getSalonStaffRoleTypes,
+  getSalonStaffRoleLabels,
+  getSalonStaffLevelLabels,
   SALON_STAFF_STATUS_LABELS,
   SALON_STAFF_STATUS_BADGE,
 } from "@/lib/salon/salon-labels";
@@ -21,11 +21,21 @@ function isSameDay(iso: string, d: Date): boolean {
 export function StaffList() {
   const [staff, setStaff] = useState<SalonStaff[]>([]);
   const [bookings, setBookings] = useState<SalonBooking[]>([]);
+  const [bootstrap, setBootstrap] = useState<SalonBootstrap | null>(null);
 
   useEffect(() => {
     setStaff(loadSalonStaff());
     setBookings(loadBookings());
+    setBootstrap(loadSalonBootstrap());
   }, []);
+
+  // 可配置角色 / 級別標籤（依 bootstrap；缺省回退預設，再回退 id）
+  const roleLabels = useMemo(() => getSalonStaffRoleLabels(bootstrap), [bootstrap]);
+  const levelLabels = useMemo(() => getSalonStaffLevelLabels(bootstrap), [bootstrap]);
+  const roleOrder = useMemo(
+    () => getSalonStaffRoleTypes(bootstrap).map((t) => t.id),
+    [bootstrap],
+  );
 
   const today = useMemo(() => new Date(), []);
 
@@ -56,7 +66,7 @@ export function StaffList() {
   // 依角色分組（可兼任多角色，故同一人可能出現於多組）
   const grouped = useMemo(() => {
     const g: Record<string, SalonStaff[]> = {};
-    for (const r of SALON_STAFF_ROLE_ORDER) g[r] = [];
+    for (const r of roleOrder) g[r] = [];
     for (const s of staff) {
       for (const r of s.roles) {
         if (!g[r]) g[r] = [];
@@ -64,19 +74,19 @@ export function StaffList() {
       }
     }
     return g;
-  }, [staff]);
+  }, [staff, roleOrder]);
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-24 md:p-6 md:pb-6">
       <h1 className="mb-4 text-xl font-bold text-slate-900">員工管理</h1>
 
-      {SALON_STAFF_ROLE_ORDER.map((role) => {
+      {roleOrder.map((role) => {
         const list = grouped[role] ?? [];
         if (list.length === 0) return null;
         return (
           <section key={role} className="mb-5">
             <div className="mb-2 flex items-center gap-2">
-              <h2 className="text-sm font-bold text-slate-700">{SALON_STAFF_ROLE_LABELS[role]}</h2>
+              <h2 className="text-sm font-bold text-slate-700">{roleLabels[role] ?? role}</h2>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
                 {list.length}
               </span>
@@ -105,14 +115,14 @@ export function StaffList() {
 
                     <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-slate-500">
                       <span className="rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">
-                        {SALON_STAFF_LEVEL_LABELS[s.level]}
+                        {levelLabels[s.level] ?? s.level}
                       </span>
                       {/* 其餘兼任角色（除當前組別） */}
                       {s.roles
                         .filter((r) => r !== role)
                         .map((r) => (
                           <span key={r} className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
-                            {SALON_STAFF_ROLE_LABELS[r]}
+                            {roleLabels[r] ?? r}
                           </span>
                         ))}
                     </div>

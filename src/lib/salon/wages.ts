@@ -8,16 +8,7 @@ import type {
   SalonBootstrap,
   SalonOrderItem,
 } from "@/lib/salon/types";
-
-/** 級別倍率預設值（bootstrap.staffLevelMultipliers 缺省時用） */
-export const DEFAULT_STAFF_LEVEL_MULTIPLIERS: Record<
-  "junior" | "senior" | "master",
-  number
-> = {
-  junior: 1,
-  senior: 1.3,
-  master: 1.6,
-};
+import { getStaffLevelMultipliers } from "@/lib/salon/salon-labels";
 
 /**
  * 計算單次服務工錢。
@@ -34,9 +25,8 @@ export function computeStaffWage(
     staff.roles.find((r) => serviceItem.wages?.[r] != null) ?? staff.roles[0];
   const base = role ? serviceItem.wages?.[role] : undefined;
   if (base == null || base <= 0) return 0;
-  const multipliers =
-    bootstrap?.staffLevelMultipliers ?? DEFAULT_STAFF_LEVEL_MULTIPLIERS;
-  const mult = multipliers[staff.level] ?? DEFAULT_STAFF_LEVEL_MULTIPLIERS[staff.level] ?? 1;
+  const multipliers = getStaffLevelMultipliers(bootstrap);
+  const mult = multipliers[staff.level] ?? 1;
   return Math.round(base * mult);
 }
 

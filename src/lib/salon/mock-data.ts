@@ -12,6 +12,10 @@ import type {
   SalonLoyaltySettings,
   SalonProduct,
 } from "@/lib/salon/types";
+import {
+  DEFAULT_SALON_STAFF_ROLE_TYPES,
+  DEFAULT_SALON_STAFF_LEVEL_TYPES,
+} from "@/lib/salon/salon-labels";
 
 export const DEFAULT_SALON_STORE_ID = "demo-salon-001";
 
@@ -396,7 +400,8 @@ export const defaultSalonBootstrap: SalonBootstrap = {
   depositEnabled: true,
   defaultServiceDurationMinutes: 60,
   loyalty: DEFAULT_SALON_LOYALTY,
-  staffLevelMultipliers: { junior: 1, senior: 1.3, master: 1.6 },
+  staffRoleTypes: DEFAULT_SALON_STAFF_ROLE_TYPES,
+  staffLevelTypes: DEFAULT_SALON_STAFF_LEVEL_TYPES,
   lastUpdatedAt: NOW,
 };
 

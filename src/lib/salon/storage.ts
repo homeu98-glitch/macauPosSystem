@@ -23,6 +23,10 @@ import {
 import type { PrintJob } from "@/lib/types";
 import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY, DEFAULT_SALON_PRODUCTS } from "@/lib/salon/mock-data";
 import {
+  DEFAULT_SALON_STAFF_ROLE_TYPES,
+  DEFAULT_SALON_STAFF_LEVEL_TYPES,
+} from "@/lib/salon/salon-labels";
+import {
   idbSet,
   idbEnqueue,
   flushSalonSyncQueue,
@@ -157,7 +161,7 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       existing.loyalty = DEFAULT_SALON_LOYALTY;
       changed = true;
     }
-    // F1+F3 工錢 / 級別：員工補 level / status，bootstrap 補 staffLevelMultipliers
+    // F1+F3 工錢 / 級別：員工補 level / status；bootstrap 補可配置角色 / 級別清單
     if (existing.staff?.length) {
       for (const s of existing.staff) {
         if (!s.level) {
@@ -176,8 +180,22 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
         }
       }
     }
-    if (!existing.staffLevelMultipliers) {
-      existing.staffLevelMultipliers = { junior: 1, senior: 1.3, master: 1.6 };
+    // 角色清單：舊店缺 staffRoleTypes → 補預設 5 角色（商家可於設置增刪）
+    if (!existing.staffRoleTypes || existing.staffRoleTypes.length === 0) {
+      existing.staffRoleTypes = DEFAULT_SALON_STAFF_ROLE_TYPES;
+      changed = true;
+    }
+    // 級別清單：舊店缺 staffLevelTypes → 由舊 staffLevelMultipliers 重建（保保留倍率），
+    // 否則補預設 3 級別。
+    if (!existing.staffLevelTypes || existing.staffLevelTypes.length === 0) {
+      const legacy = (existing as unknown as { staffLevelMultipliers?: Record<string, number> }).staffLevelMultipliers;
+      existing.staffLevelTypes = legacy
+        ? Object.entries(legacy).map(([id, multiplier]) => ({
+            id,
+            label: DEFAULT_SALON_STAFF_LEVEL_TYPES.find((t) => t.id === id)?.label ?? id,
+            multiplier,
+          }))
+        : DEFAULT_SALON_STAFF_LEVEL_TYPES;
       changed = true;
     }
     // F4 產品目錄：bootstrap 補 products 預設（僅當 products 完全缺）

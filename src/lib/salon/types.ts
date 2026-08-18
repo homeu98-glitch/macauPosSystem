@@ -68,15 +68,37 @@ export interface SalonServiceItem {
 // 員工（label-only，不登入 POS）
 // ────────────────────────────────────────────────────────────────────
 
-export type SalonStaffRole =
-  | "stylist"
-  | "colorist"
-  | "therapist"
-  | "assistant"
-  | "receptionist";
+/**
+ * 員工角色 id（機讀字串）。
+ * 具體角色列表由 SalonBootstrap.staffRoleTypes 定義（商家可於設置自行增刪），
+ * 預設為 stylist / colorist / therapist / assistant / receptionist，但不再硬編碼。
+ */
+export type SalonStaffRole = string;
 
-/** 員工級別：影響工錢倍率（junior 1.0 / senior 1.3 / master 1.6，見 SalonBootstrap.staffLevelMultipliers） */
-export type SalonStaffLevel = "junior" | "senior" | "master";
+/**
+ * 員工級別 id（機讀字串）。
+ * 具體級別與其工錢倍率由 SalonBootstrap.staffLevelTypes 定義（商家可於設置自行增刪），
+ * 預設為 junior / senior / master（倍率 1 / 1.3 / 1.6），但不再硬編碼。
+ */
+export type SalonStaffLevel = string;
+
+/** 商家自定角色類型（設置 → 角色與級別 可增刪；取代硬編碼 5 角色） */
+export interface SalonConfigRoleType {
+  /** 機讀 id（作為 SalonStaff.roles / SalonServiceItem.wages 的鍵） */
+  id: string;
+  /** 顯示名稱（繁中） */
+  label: string;
+}
+
+/** 商家自定級別類型（設置 → 角色與級別 可增刪；含工錢倍率） */
+export interface SalonConfigLevelType {
+  /** 機讀 id（作為 SalonStaff.level 的鍵） */
+  id: string;
+  /** 顯示名稱（繁中） */
+  label: string;
+  /** 工錢倍率（例如 1.3 = 高級 1.3 倍；見 computeStaffWage） */
+  multiplier: number;
+}
 
 /** 員工狀態：在職 / 放假 / 離職（取代舊 active:boolean + terminatedAt 的歧義） */
 export type SalonStaffStatus = "active" | "on_leave" | "terminated";
@@ -543,8 +565,10 @@ export interface SalonBootstrap {
   defaultServiceDurationMinutes: number;
   /** 會員忠誠度設定（推薦獎勵 / 生日優惠 / 每店積分配比） */
   loyalty?: SalonLoyaltySettings;
-  /** 員工級別對工錢倍率（預設 junior 1 / senior 1.3 / master 1.6；F1+F3） */
-  staffLevelMultipliers?: Record<SalonStaffLevel, number>;
+  /** 商家自定角色類型（取代硬編碼 5 角色；設置 → 角色與級別 可增刪） */
+  staffRoleTypes?: SalonConfigRoleType[];
+  /** 商家自定級別類型（含工錢倍率；取代硬編碼 junior/senior/master；設置 → 角色與級別 可增刪） */
+  staffLevelTypes?: SalonConfigLevelType[];
   lastUpdatedAt: string;
 }
 

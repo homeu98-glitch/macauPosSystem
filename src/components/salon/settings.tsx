@@ -7,10 +7,11 @@ import type {
   SalonServiceCategory,
   SalonServiceItem,
   SalonStaff,
-  SalonStaffRole,
   SalonStation,
   SalonProduct,
   SalonLoyaltySettings,
+  SalonConfigRoleType,
+  SalonConfigLevelType,
 } from "@/lib/salon/types";
 import {
   loadSalonBootstrap,
@@ -21,10 +22,10 @@ import {
 } from "@/lib/salon/storage";
 import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import {
-  SALON_STAFF_ROLE_LABELS,
-  SALON_STAFF_ROLE_ORDER,
-  SALON_STAFF_LEVEL_LABELS,
-  SALON_STAFF_LEVEL_ORDER,
+  getSalonStaffRoleTypes,
+  getSalonStaffLevelTypes,
+  getSalonStaffRoleLabels,
+  getSalonStaffLevelLabels,
   SALON_STAFF_STATUS_LABELS,
   SALON_STAFF_STATUS_ORDER,
 } from "@/lib/salon/salon-labels";
@@ -406,19 +407,6 @@ const PRINTER_GROUP_OPTS: Option[] = [
   { value: "label", label: "標籤" },
 ];
 
-const STAFF_ROLE_OPTS: Option[] = [
-  { value: "stylist", label: "髮型師" },
-  { value: "colorist", label: "染燙師" },
-  { value: "therapist", label: "療師" },
-  { value: "assistant", label: "助理" },
-  { value: "receptionist", label: "接待" },
-];
-
-const STAFF_LEVEL_OPTS: Option[] = SALON_STAFF_LEVEL_ORDER.map((v) => ({
-  value: v,
-  label: SALON_STAFF_LEVEL_LABELS[v],
-}));
-
 const STAFF_STATUS_OPTS: Option[] = SALON_STAFF_STATUS_ORDER.map((v) => ({
   value: v,
   label: SALON_STAFF_STATUS_LABELS[v],
@@ -450,6 +438,7 @@ const TABS = [
   { id: "services", label: "服務管理" },
   { id: "products", label: "產品" },
   { id: "staff", label: "員工" },
+  { id: "roles", label: "角色與級別" },
   { id: "packages", label: "套票模板" },
   { id: "loyalty", label: "會員優惠" },
   { id: "prints", label: "打印" },
@@ -468,9 +457,6 @@ export function Settings() {
   const [saved, setSaved] = useState("");
   const [resetModal, setResetModal] = useState(false);
   const [reseedModal, setReseedModal] = useState(false);
-
-  const levelMultipliers =
-    bootstrap?.staffLevelMultipliers ?? { junior: 1, senior: 1.3, master: 1.6 };
 
   useEffect(() => {
     const b = loadSalonBootstrap();
@@ -624,6 +610,29 @@ export function Settings() {
   const deleteProduct = (p: SalonProduct) =>
     patchBootstrap({ products: (bootstrap.products ?? []).filter((x) => x.id !== p.id) });
 
+  // 角色類型 / 級別類型（商家可配置；設置 → 角色與級別）
+  const upsertRoleType = (t: SalonConfigRoleType) =>
+    patchBootstrap({
+      staffRoleTypes: (() => {
+        const arr = bootstrap.staffRoleTypes ?? [];
+        const i = arr.findIndex((x) => x.id === t.id);
+        return i >= 0 ? arr.map((x) => (x.id === t.id ? t : x)) : [...arr, t];
+      })(),
+    });
+  const deleteRoleType = (t: SalonConfigRoleType) =>
+    patchBootstrap({ staffRoleTypes: (bootstrap.staffRoleTypes ?? []).filter((x) => x.id !== t.id) });
+
+  const upsertLevelType = (t: SalonConfigLevelType) =>
+    patchBootstrap({
+      staffLevelTypes: (() => {
+        const arr = bootstrap.staffLevelTypes ?? [];
+        const i = arr.findIndex((x) => x.id === t.id);
+        return i >= 0 ? arr.map((x) => (x.id === t.id ? t : x)) : [...arr, t];
+      })(),
+    });
+  const deleteLevelType = (t: SalonConfigLevelType) =>
+    patchBootstrap({ staffLevelTypes: (bootstrap.staffLevelTypes ?? []).filter((x) => x.id !== t.id) });
+
   const upsertPrinter = (p: DevicePrinterConfig) => {
     const arr = printers;
     const i = arr.findIndex((x) => x.id === p.id);
@@ -690,6 +699,15 @@ export function Settings() {
     active: true,
     sortOrder: (bootstrap.products ?? []).length + 1,
   });
+  const emptyRoleType = (): SalonConfigRoleType => ({
+    id: genId("role"),
+    label: "",
+  });
+  const emptyLevelType = (): SalonConfigLevelType => ({
+    id: genId("lvl"),
+    label: "",
+    multiplier: 1,
+  });
 
   // ── field defs（category 依賴 categoryMap，故在此計算）──
   const categoryFields: FieldDef[] = [
@@ -731,8 +749,8 @@ export function Settings() {
   const staffFields: FieldDef[] = [
     { key: "name", label: "姓名", type: "text" },
     { key: "nickname", label: "暱稱", type: "text", placeholder: "顯示用" },
-    { key: "roles", label: "角色（可多選）", type: "multiselect", options: STAFF_ROLE_OPTS, help: "可兼任多種角色，例如同時是染色師與助理" },
-    { key: "level", label: "級別", type: "select", options: STAFF_LEVEL_OPTS, help: "高級 / 首席 的工錢會按級別倍率提高" },
+    { key: "roles", label: "角色（可多選）", type: "multiselect", options: getSalonStaffRoleTypes(bootstrap).map((t) => ({ value: t.id, label: t.label })), help: "可兼任多種角色，例如同時是染色師與助理（角色於「角色與級別」分頁自定）" },
+    { key: "level", label: "級別", type: "select", options: getSalonStaffLevelTypes(bootstrap).map((t) => ({ value: t.id, label: t.label })), help: "各級別的工錢倍率於「角色與級別」分頁設定" },
     { key: "status", label: "狀態", type: "select", options: STAFF_STATUS_OPTS },
     {
       key: "serviceCategoryIds",
@@ -758,6 +776,13 @@ export function Settings() {
     { key: "commissionRate", label: "佣金率 %", type: "number", help: "銷售該產品給員工的佣金比例（如 10 = 10%）" },
     { key: "sortOrder", label: "排序", type: "number" },
     { key: "active", label: "啟用", type: "toggle" },
+  ];
+  const roleTypeFields: FieldDef[] = [
+    { key: "label", label: "角色名稱", type: "text", placeholder: "例如 造型師 / 染燙師 / 美甲師", help: "顯示用名稱；內部代號會自動產生（綠色顯示於列表中），建立後請勿重複同名" },
+  ];
+  const levelTypeFields: FieldDef[] = [
+    { key: "label", label: "級別名稱", type: "text", placeholder: "例如 初級 / 高級 / 總監" },
+    { key: "multiplier", label: "工錢倍率", type: "number", help: "執行服務工錢 = 職位工錢 × 此倍率（例如 1.3 = 高級 1.3 倍）" },
   ];
 
   return (
@@ -871,23 +896,24 @@ export function Settings() {
               onDelete={deleteItem}
               onToggle={toggleItem}
               extraEditor={(_item, draft, set) => {
-                const wages = (draft.wages as Partial<Record<SalonStaffRole, number>> | undefined) ?? {};
+                const wages = (draft.wages as Partial<Record<string, number>> | undefined) ?? {};
+                const roleTypes = getSalonStaffRoleTypes(bootstrap);
                 return (
                   <div>
                     <div className="mb-1 text-xs font-medium text-slate-500">各職位工錢 (MOP)</div>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {SALON_STAFF_ROLE_ORDER.map((role) => (
-                        <label key={role} className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-2 py-1.5">
-                          <span className="text-xs text-slate-600">{SALON_STAFF_ROLE_LABELS[role]}</span>
+                      {roleTypes.map((rt) => (
+                        <label key={rt.id} className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-2 py-1.5">
+                          <span className="text-xs text-slate-600">{rt.label}</span>
                           <input
                             type="number"
                             min={0}
-                            value={wages[role] ?? ""}
+                            value={wages[rt.id] ?? ""}
                             placeholder="—"
                             onChange={(e) => {
-                              const next: Partial<Record<SalonStaffRole, number>> = { ...wages };
-                              if (e.target.value === "") delete next[role];
-                              else next[role] = Number(e.target.value) || 0;
+                              const next: Partial<Record<string, number>> = { ...wages };
+                              if (e.target.value === "") delete next[rt.id];
+                              else next[rt.id] = Number(e.target.value) || 0;
                               set("wages", next);
                             }}
                             className="w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-rose-200"
@@ -896,7 +922,7 @@ export function Settings() {
                       ))}
                     </div>
                     <p className="mt-1 text-[11px] text-slate-400">
-                      該次工錢 = 此職位工錢 × 員工級別倍率（見「員工」分頁的級別設定）。留空表示該職位不計工錢。
+                      該次工錢 = 此職位工錢 × 員工級別倍率（見「角色與級別」分頁設定）。留空表示該職位不計工錢。角色清單於「角色與級別」分頁自定。
                     </p>
                   </div>
                 );
@@ -955,7 +981,7 @@ export function Settings() {
               isActive={(s) => s.status === "active"}
               renderSummary={(s) => ({
                 title: (s.nickname ?? s.name) || "(未命名)",
-                subtitle: `${s.roles.map((r) => SALON_STAFF_ROLE_LABELS[r]).join(" / ") || "—"} · ${SALON_STAFF_LEVEL_LABELS[s.level]} · ${SALON_STAFF_STATUS_LABELS[s.status]}`,
+                subtitle: `${s.roles.map((r) => getSalonStaffRoleLabels(bootstrap)[r] ?? r).join(" / ") || "—"} · ${getSalonStaffLevelLabels(bootstrap)[s.level] ?? s.level} · ${SALON_STAFF_STATUS_LABELS[s.status]}`,
               })}
               onUpsert={upsertStaff}
               onDelete={deleteStaff}
@@ -963,34 +989,41 @@ export function Settings() {
               addLabel="＋ 新增員工"
             />
           </Section>
-          <Section title="級別工錢倍率">
-            <p className="mb-2 text-[11px] text-slate-400">
-              員工執行服務時，該次工錢 = 服務細項工錢 × 以下級別倍率。例如高級 1.3 倍、首席 1.6 倍。
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              {SALON_STAFF_LEVEL_ORDER.map((lv) => (
-                <label key={lv} className="rounded-xl border border-slate-200 px-3 py-2">
-                  <div className="text-xs font-medium text-slate-500">{SALON_STAFF_LEVEL_LABELS[lv]}</div>
-                  <div className="mt-1 flex items-center gap-1">
-                    <span className="text-sm text-slate-400">×</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min={0}
-                      value={levelMultipliers[lv]}
-                      onChange={(e) =>
-                        patchBootstrap({
-                          staffLevelMultipliers: { ...levelMultipliers, [lv]: Number(e.target.value) || 0 },
-                        })
-                      }
-                      className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-rose-200"
-                    />
-                  </div>
-                </label>
-              ))}
-            </div>
-          </Section>
         </>
+      )}
+
+      {/* 角色與級別（商家可配置角色類型 / 級別類型 + 工錢倍率） */}
+      {activeTab === "roles" && (
+        <div className="grid gap-4">
+          <Section title="角色類型">
+            <p className="mb-2 text-[11px] text-slate-400">
+              商家可自行新增 / 編輯 / 刪除角色（例如 造型師、染燙師、療師、助理、接待）。新增後即可在「員工」分頁的多選角色與「服務管理」的職位工錢中使用。
+            </p>
+            <CrudSection<SalonConfigRoleType>
+              items={bootstrap.staffRoleTypes ?? []}
+              fields={roleTypeFields}
+              emptyFactory={emptyRoleType}
+              renderSummary={(t) => ({ title: t.label || "(未命名)", subtitle: `id: ${t.id}` })}
+              onUpsert={upsertRoleType}
+              onDelete={deleteRoleType}
+              addLabel="＋ 新增角色"
+            />
+          </Section>
+          <Section title="級別類型（含工錢倍率）">
+            <p className="mb-2 text-[11px] text-slate-400">
+              員工執行服務時，該次工錢 = 服務細項工錢 × 以下級別倍率。例如高級 1.3 倍、首席 1.6 倍。可自由新增級別（如 見習、總監）。
+            </p>
+            <CrudSection<SalonConfigLevelType>
+              items={bootstrap.staffLevelTypes ?? []}
+              fields={levelTypeFields}
+              emptyFactory={emptyLevelType}
+              renderSummary={(t) => ({ title: t.label || "(未命名)", subtitle: `id: ${t.id} · 倍率 ×${t.multiplier}` })}
+              onUpsert={upsertLevelType}
+              onDelete={deleteLevelType}
+              addLabel="＋ 新增級別"
+            />
+          </Section>
+        </div>
       )}
 
       {/* 打印（F7：列印任務管理移入設置） */}
