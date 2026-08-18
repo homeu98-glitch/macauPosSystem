@@ -117,6 +117,11 @@ if (typeof window !== "undefined") {
 // ────────────────────────────────────────────────────────────────────
 
 let seededForStore: string | null = null;
+// 已為該真實 store 清走過 demo 殘留單據，避免重複清（清走會冇 idempotent 問題，但減少無謂寫）。
+let staleDemoClearedFor: string | null = null;
+
+// 示範預約用嘅電話前綴（mock-realtime.ts seedMockBookingsIfEmpty），用嚟識別 demo 殘留單。
+const DEMO_PHONE_PREFIX = "6688";
 
 /**
  * 確保 salon bootstrap 已就緒。
@@ -178,8 +183,31 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       writeJson(SALON_STORAGE_KEYS.stations, empty.stations);
       writeJson(SALON_STORAGE_KEYS.products, empty.products);
       writeJson(SALON_STORAGE_KEYS.customers, []);
+      // 一併清走舊 demo 嘅單據/銷售/預約，避免真店工作台出現非本店資料。
+      writeJson(SALON_STORAGE_KEYS.bookings, []);
+      writeJson(SALON_STORAGE_KEYS.orders, []);
+      writeJson(SALON_STORAGE_KEYS.productSales, []);
+      writeJson(SALON_STORAGE_KEYS.printJobs, []);
+      writeJson(SALON_STORAGE_KEYS.packageTemplates, []);
+      writeJson(SALON_STORAGE_KEYS.customerPackages, []);
       seededForStore = empty.storeId;
       return empty;
+    }
+    // 真實 Ledger 商戶（已切換過，existing.storeId 已係真店）但本地仲殘留 demo 預約/客戶
+    // （上一輪 seed 在 reset 後又種入）：清走一次，唔動 hydrate 落嚟嘅真實資料。
+    const isRealStoreNow = activeStore && activeStore !== DEFAULT_SALON_STORE_ID && existing.storeId === activeStore;
+    if (isRealStoreNow && staleDemoClearedFor !== activeStore) {
+      const bookings = readJson<Array<{ customerPhone?: string }>>(SALON_STORAGE_KEYS.bookings, []);
+      const hasDemoBooking = bookings.some((b) => String(b.customerPhone ?? "").startsWith(DEMO_PHONE_PREFIX));
+      const customers = readJson<Array<{ phone?: string }>>(SALON_STORAGE_KEYS.customers, []);
+      const hasDemoCustomer = customers.some((c) => String(c.phone ?? "").startsWith(DEMO_PHONE_PREFIX));
+      if (hasDemoBooking || hasDemoCustomer) {
+        writeJson(SALON_STORAGE_KEYS.bookings, []);
+        writeJson(SALON_STORAGE_KEYS.orders, []);
+        writeJson(SALON_STORAGE_KEYS.productSales, []);
+        if (hasDemoCustomer) writeJson(SALON_STORAGE_KEYS.customers, []);
+      }
+      staleDemoClearedFor = activeStore;
     }
     // 升級既有店家：補齊後續 phase 新增欄位（不觸動其他設定，店家可自行到設置調整）。
     let changed = false;

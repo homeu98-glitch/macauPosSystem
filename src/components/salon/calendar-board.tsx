@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 
 import type { SalonBooking, SalonStaff, SalonServiceItem, SalonServiceCategory } from "@/lib/salon/types";
-import { loadBookings, loadSalonBootstrap } from "@/lib/salon/storage";
+import { loadActiveSalonStore, loadBookings, loadSalonBootstrap } from "@/lib/salon/storage";
 import { MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
 import { seedMockBookingsIfEmpty } from "@/lib/salon/mock-realtime";
 
@@ -79,7 +79,7 @@ export function CalendarBoard() {
       setItems(bootstrap.serviceItems.filter((i) => i.active));
       setCategories(bootstrap.serviceCategories.filter((c) => c.active));
     }
-    seedMockBookingsIfEmpty();
+    seedMockBookingsIfEmpty(loadActiveSalonStore());
     setBookings(loadBookings());
   }, []);
 

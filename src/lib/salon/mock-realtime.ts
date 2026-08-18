@@ -113,7 +113,9 @@ function makeId(): string {
   return "mock-" + Math.random().toString(36).slice(2, 10);
 }
 
-export function seedMockBookingsIfEmpty(): SalonBooking[] {
+export function seedMockBookingsIfEmpty(activeStore?: string | null): SalonBooking[] {
+  // 真實 Ledger 商戶（非 demo）唔種示範預約 —— 該店從未開過 salon 係正常，工作台應全空。
+  if (activeStore && activeStore !== "demo-salon-001") return loadBookings();
   const existing = loadBookings();
   if (existing.length > 0) return existing;
 
@@ -205,7 +207,9 @@ export function seedMockBookingsIfEmpty(): SalonBooking[] {
 // Seed — 示範客戶（供「客戶檔案」頁首次載入；idempotent）
 // ────────────────────────────────────────────────────────────────────
 
-export function seedMockCustomersIfEmpty(): SalonCustomerProfile[] {
+export function seedMockCustomersIfEmpty(activeStore?: string | null): SalonCustomerProfile[] {
+  // 真實 Ledger 商戶（非 demo）唔種示範客戶 —— 避免真店出現 demo 客戶檔案。
+  if (activeStore && activeStore !== "demo-salon-001") return loadCustomers();
   const existing = loadCustomers();
   if (existing.length > 0) return existing;
   saveCustomers(defaultSalonCustomers);

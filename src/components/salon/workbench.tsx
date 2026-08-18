@@ -55,7 +55,8 @@ export function SalonWorkbench() {
     const seedStoreId = activeStore ?? DEFAULT_SALON_STORE_ID;
     const seeded = ensureSalonBootstrap(seedStoreId);
     setBootstrap(seeded);
-    seedMockBookingsIfEmpty();
+    // 真實商戶唔種示範預約/客戶（避免工作台出現非本店單據）；只有 demo fallback 才種。
+    seedMockBookingsIfEmpty(activeStore);
     setBookings(loadBookings());
     setOrderCount(loadSalonOrders().length);
     setTerminalIsSalon(isSalonTerminal());

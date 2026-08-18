@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-import { loadCustomers, saveCustomers } from "@/lib/salon/storage";
+import { loadActiveSalonStore, loadCustomers, saveCustomers } from "@/lib/salon/storage";
 import { seedMockCustomersIfEmpty } from "@/lib/salon/mock-realtime";
 import { getMockLedgerMember } from "@/lib/salon/mock-ledger";
 import type { SalonCustomerProfile } from "@/lib/salon/types";
@@ -17,7 +17,7 @@ export function CustomersList() {
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    seedMockCustomersIfEmpty();
+    seedMockCustomersIfEmpty(loadActiveSalonStore());
     setCustomers(loadCustomers());
   }, []);
 
