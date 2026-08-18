@@ -10,6 +10,7 @@ import type {
   SalonCustomerProfile,
   SalonPackageTemplate,
   SalonLoyaltySettings,
+  SalonProduct,
 } from "@/lib/salon/types";
 
 export const DEFAULT_SALON_STORE_ID = "demo-salon-001";
@@ -241,6 +242,8 @@ const staff: SalonStaff[] = [
     name: "小美",
     nickname: "美姐",
     role: "stylist",
+    level: "senior",
+    status: "active",
     serviceCategoryIds: ["cat-nails", "cat-lashes"],
     phone: "66881234",
     active: true,
@@ -253,6 +256,8 @@ const staff: SalonStaff[] = [
     name: "阿龍",
     nickname: "龍哥",
     role: "therapist",
+    level: "master",
+    status: "active",
     serviceCategoryIds: [
       "cat-face",
       "cat-body",
@@ -272,12 +277,61 @@ const staff: SalonStaff[] = [
     name: "小玲",
     nickname: "玲玲",
     role: "assistant",
+    level: "junior",
+    status: "active",
     serviceCategoryIds: ["cat-nails", "cat-massage"],
     phone: "66889012",
     active: true,
     hiredAt: "2025-01-10",
     createdAt: NOW,
     updatedAt: NOW,
+  },
+];
+
+// ────────────────────────────────────────────────────────────────────
+// 產品目錄（F4 示範資料，無庫存，每項指定 commissionRate%）
+// ────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_SALON_PRODUCTS: SalonProduct[] = [
+  {
+    id: "prod-moisturizer",
+    name: "保濕精華 30ml",
+    category: "護膚",
+    price: 320,
+    cost: 120,
+    commissionRate: 10,
+    active: true,
+    sortOrder: 1,
+  },
+  {
+    id: "prod-serum",
+    name: "抗老血清 15ml",
+    category: "護膚",
+    price: 580,
+    cost: 220,
+    commissionRate: 12,
+    active: true,
+    sortOrder: 2,
+  },
+  {
+    id: "prod-nail-oil",
+    name: "指甲營養油",
+    category: "美甲",
+    price: 90,
+    cost: 30,
+    commissionRate: 8,
+    active: true,
+    sortOrder: 3,
+  },
+  {
+    id: "prod-lash-care",
+    name: "睫毛養護液",
+    category: "美睫",
+    price: 150,
+    cost: 55,
+    commissionRate: 10,
+    active: true,
+    sortOrder: 4,
   },
 ];
 
@@ -337,10 +391,12 @@ export const defaultSalonBootstrap: SalonBootstrap = {
   serviceItems: items,
   staff,
   stations,
+  products: DEFAULT_SALON_PRODUCTS,
   calendarSlotMinutes: 30,
   depositEnabled: true,
   defaultServiceDurationMinutes: 60,
   loyalty: DEFAULT_SALON_LOYALTY,
+  staffLevelMultipliers: { junior: 1, senior: 1.3, master: 1.6 },
   lastUpdatedAt: NOW,
 };
 

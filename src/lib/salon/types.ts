@@ -57,6 +57,8 @@ export interface SalonServiceItem {
   specGroups?: MenuSpecGroup[];
   /** v1：用品消耗為自由文字備註，不扣庫存 */
   consumableNotes?: string;
+  /** 各職位基礎工錢（MOP）。執行該項時工錢 = wages[員工職位] × 級別倍率；無該職位 → 0（F1） */
+  wages?: Partial<Record<SalonStaffRole, number>>;
   active: boolean;
   imageUrl?: string;
   sortOrder: number;
@@ -73,20 +75,60 @@ export type SalonStaffRole =
   | "assistant"
   | "receptionist";
 
+/** 員工級別：影響工錢倍率（junior 1.0 / senior 1.3 / master 1.6，見 SalonBootstrap.staffLevelMultipliers） */
+export type SalonStaffLevel = "junior" | "senior" | "master";
+
+/** 員工狀態：在職 / 放假 / 離職（取代舊 active:boolean + terminatedAt 的歧義） */
+export type SalonStaffStatus = "active" | "on_leave" | "terminated";
+
 export interface SalonStaff {
   id: string;
   name: string;
   nickname?: string;
   role: SalonStaffRole;
+  /** 級別（預設 junior） */
+  level: SalonStaffLevel;
+  /** 狀態（預設 active） */
+  status: SalonStaffStatus;
   /** 可執行服務類目白名單 */
   serviceCategoryIds: string[];
   phone?: string;
-  active: boolean;
   hiredAt?: string;
-  terminatedAt?: string;
   note?: string;
   createdAt: string;
   updatedAt: string;
+  /** 舊欄位：保留做遷移用（active 舊值）；新邏輯一律讀 status */
+  active?: boolean;
+  /** 舊欄位：保留做遷移用（離職日）；新邏輯一律讀 status */
+  terminatedAt?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 員工放假 / shift 記錄（F2：log 形式記錄，先唔做週排班 grid）
+// ────────────────────────────────────────────────────────────────────
+
+export interface SalonStaffLeave {
+  id: string;
+  staffId: string;
+  /** 開始日（ISO date YYYY-MM-DD） */
+  start: string;
+  /** 結束日（ISO date YYYY-MM-DD） */
+  end: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface SalonStaffShift {
+  id: string;
+  staffId: string;
+  /** 上班日（ISO date YYYY-MM-DD） */
+  date: string;
+  /** 上班開始時段 "HH:MM" */
+  start: string;
+  /** 上班結束時段 "HH:MM" */
+  end: string;
+  note?: string;
+  createdAt: string;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -208,6 +250,8 @@ export interface SalonOrderItem {
   specSelections?: SalonOrderItemSpec[];
   consumableNotes?: string;
   note?: string;
+  /** 該次服務工錢（MOP，已乘級別倍率、取整）。僅 kind:"service" 且有 staffId 時有意義（F1） */
+  wageAmount?: number;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -321,6 +365,8 @@ export interface SalonCustomerProfile {
   referrerId?: string;
   /** 推薦獎勵是否已發出（防刷分：僅被推薦人首次結帳發一次） */
   referralRewarded?: boolean;
+  /** 檔案號碼（free text），供商家與實體文件對照（F5） */
+  fileNumber?: string;
   tags?: string[];
   skinType?: SalonSkinType;
   hairType?: SalonHairType;
@@ -417,6 +463,46 @@ export interface SalonLoyaltySettings {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// 產品目錄 + 產品銷售（F4：獨立產品目錄 + 獨立賣產品流程，無庫存）
+// ────────────────────────────────────────────────────────────────────
+
+export interface SalonProduct {
+  id: string;
+  name: string;
+  /** 分類（護膚 / 彩妝 / 髮品…，可選） */
+  category?: string;
+  /** 售價（MOP） */
+  price: number;
+  /** 成本（MOP，可選） */
+  cost?: number;
+  /** 佣金率%（如 10 = 10%） */
+  commissionRate: number;
+  active: boolean;
+  sortOrder: number;
+}
+
+export interface SalonProductSale {
+  id: string;
+  productId: string;
+  productName: string;
+  /** 成交價（通常 = product.price） */
+  price: number;
+  /** 佣金率% 快照 */
+  commissionRate: number;
+  /** 佣金金額 = round(price × commissionRate / 100) */
+  commissionAmount: number;
+  staffId: string;
+  staffName: string;
+  customerId?: string;
+  customerName: string;
+  /** 收錢方式（可選） */
+  paymentMethod?: SalonPaymentMethod;
+  /** 成交時間（ISO datetime） */
+  soldAt: string;
+  note?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Bootstrap 結構（店家資料）
 // ────────────────────────────────────────────────────────────────────
 
@@ -429,6 +515,8 @@ export interface SalonBootstrap {
   serviceItems: SalonServiceItem[];
   staff: SalonStaff[];
   stations: SalonStation[];
+  /** 產品目錄（F4，獨立賣產品流程） */
+  products?: SalonProduct[];
   /** 預約時間間隔（分鐘），例如 30 表示日曆以 30 分鐘為一格 */
   calendarSlotMinutes: number;
   /** 是否啟用定金機制（顯示欄位用，邏輯以 Ledger 為準） */
@@ -437,6 +525,8 @@ export interface SalonBootstrap {
   defaultServiceDurationMinutes: number;
   /** 會員忠誠度設定（推薦獎勵 / 生日優惠 / 每店積分配比） */
   loyalty?: SalonLoyaltySettings;
+  /** 員工級別對工錢倍率（預設 junior 1 / senior 1.3 / master 1.6；F1+F3） */
+  staffLevelMultipliers?: Record<SalonStaffLevel, number>;
   lastUpdatedAt: string;
 }
 
@@ -485,6 +575,10 @@ export const SALON_STORAGE_KEYS = {
   stations: "macau-pos-salon/stations",
   serviceCategories: "macau-pos-salon/service-categories",
   serviceItems: "macau-pos-salon/service-items",
+  products: "macau-pos-salon/products",
+  productSales: "macau-pos-salon/product-sales",
+  staffLeaves: "macau-pos-salon/staff-leaves",
+  staffShifts: "macau-pos-salon/staff-shifts",
   printJobs: "macau-pos-salon/print-jobs",
   syncQueue: "macau-pos-salon/sync-queue",
   shift: "macau-pos-salon/shift",

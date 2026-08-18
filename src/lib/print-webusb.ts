@@ -12,20 +12,62 @@ import { loadDeviceConfig } from "@/lib/storage";
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
 import { renderKitchenTicket, renderReceiptTicket, renderTestPage } from "@/lib/escpos";
 
-// WebUSB 類型喺部份 TS lib 唔一定齊，用 minimal any 避開編譯問題。
-type WebUsbDevice = any;
+// WebUSB 類型喺部份 TS lib 唔一定齊，定義 minimal interface 取代 any。
+interface WebUsbEndpoint {
+  endpointNumber: number;
+  direction: string;
+  type: string;
+}
+interface WebUsbAlternate {
+  interfaceClass?: number;
+  endpoints?: WebUsbEndpoint[];
+}
+interface WebUsbInterface {
+  interfaceNumber: number;
+  alternates?: WebUsbAlternate[];
+}
+interface WebUsbConfiguration {
+  configurationValue: number;
+  interfaces?: WebUsbInterface[];
+}
+interface WebUsbDevice {
+  productName?: string;
+  vendorId?: number;
+  productId?: number;
+  serialNumber?: string;
+  opened?: boolean;
+  configuration?: WebUsbConfiguration;
+  configurations?: WebUsbConfiguration[];
+  open(): Promise<void>;
+  close(): Promise<void>;
+  selectConfiguration(value: number): Promise<void>;
+  claimInterface(number: number): Promise<void>;
+  releaseInterface(number: number): Promise<void>;
+  transferOut(number: number, data: Uint8Array): Promise<unknown>;
+}
+interface WebUsb {
+  requestDevice(opts: { filters: Array<{ classCode: number }> }): Promise<WebUsbDevice>;
+  getDevices(): Promise<WebUsbDevice[]>;
+}
 
 const PRINTER_CLASS_CODE = 0x07;
 
+function getWebUsb(): WebUsb | undefined {
+  if (typeof navigator === "undefined") return undefined;
+  return (navigator as Navigator & { usb?: WebUsb }).usb;
+}
+
 export function isWebUsbSupported(): boolean {
-  return typeof window !== "undefined" && Boolean((navigator as any)?.usb);
+  return getWebUsb() !== undefined;
 }
 
 /** 彈授權對話框，等 user 揀部打印機並授予。返回授予嘅 device 或 null。 */
 export async function requestWebUsbDevice(): Promise<WebUsbDevice | null> {
   if (!isWebUsbSupported()) return null;
   try {
-    const device = await (navigator as any).usb.requestDevice({
+    const usb = getWebUsb();
+    if (!usb) return null;
+    const device = await usb.requestDevice({
       filters: [{ classCode: PRINTER_CLASS_CODE }],
     });
     return device ?? null;
@@ -39,7 +81,9 @@ export async function requestWebUsbDevice(): Promise<WebUsbDevice | null> {
 export async function listWebUsbDevices(): Promise<WebUsbDevice[]> {
   if (!isWebUsbSupported()) return [];
   try {
-    const devices = await (navigator as any).usb.getDevices();
+    const usb = getWebUsb();
+    if (!usb) return [];
+    const devices = await usb.getDevices();
     return Array.isArray(devices) ? devices : [];
   } catch {
     return [];
@@ -77,13 +121,13 @@ function describeWebUsbError(err: unknown): string {
 function findOutEndpoint(device: WebUsbDevice): { interfaceNumber: number; endpointNumber: number } | null {
   const cfg = device?.configuration;
   if (!cfg?.interfaces) return null;
-  const ifaces = cfg.interfaces as any[];
+  const ifaces = cfg.interfaces ?? [];
   // 優先揀 Printer Class (0x07) interface 嘅 bulk-out；冇就第一部 bulk-out
   const byClass = ifaces.find((i) => i.alternates?.[0]?.interfaceClass === PRINTER_CLASS_CODE);
   const candidates = byClass ? [byClass, ...ifaces] : ifaces;
   for (const iface of candidates) {
     const alt = iface.alternates?.[0];
-    const ep = alt?.endpoints?.find((e: any) => e.direction === "out" && e.type === "bulk");
+    const ep = alt?.endpoints?.find((e: WebUsbEndpoint) => e.direction === "out" && e.type === "bulk");
     if (ep) return { interfaceNumber: iface.interfaceNumber, endpointNumber: ep.endpointNumber };
   }
   return null;

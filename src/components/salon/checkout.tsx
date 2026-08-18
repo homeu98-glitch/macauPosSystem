@@ -34,6 +34,7 @@ import {
   applyMockLedgerBonus,
 } from "@/lib/salon/mock-ledger";
 import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
+import { computeStaffWage } from "@/lib/salon/wages";
 import { dispatchSalonReceipt } from "@/lib/salon/print";
 import { playSuccessBeep } from "@/lib/salon/sound";
 
@@ -494,6 +495,10 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     const pointLeft = new Map<number, number>();
     for (const a of pointsAlloc) pointLeft.set(a.index, a.allocated);
 
+    // 工錢計算：讀 bootstrap（含級別倍率）與服務細項工錢表
+    const settleBootstrap = loadSalonBootstrap();
+    const svcMap = new Map((settleBootstrap?.serviceItems ?? []).map((s) => [s.id, s]));
+
     const items: SalonOrderItem[] = booking.services.map((s, idx) => {
       const left = coverLeft.get(s.serviceItemId) ?? 0;
       const covered = left > 0;
@@ -510,6 +515,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
         unitPrice: s.price,
         staffId: s.staffId,
         staffName: staffMap[s.staffId]?.nickname ?? staffMap[s.staffId]?.name ?? "",
+        wageAmount: computeStaffWage(svcMap.get(s.serviceItemId), staffMap[s.staffId], settleBootstrap),
         note: notes.length > 0 ? notes.join(" · ") : undefined,
       };
     });

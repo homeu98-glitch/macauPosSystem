@@ -13,6 +13,7 @@ import {
   loadSalonCustomerPackages,
   saveSalonCustomerPackages,
   loadServiceItems,
+  loadSalonProductSales,
 } from "@/lib/salon/storage";
 import { getMockLedgerMember, applyMockLedgerBonus } from "@/lib/salon/mock-ledger";
 import type {
@@ -94,6 +95,16 @@ export function CustomerProfile() {
   const packageTemplates = useMemo(() => loadSalonPackageTemplates().filter((t) => t.active), []);
   const serviceItems = useMemo(() => loadServiceItems(), []);
   const serviceName = (sid: string) => serviceItems.find((s) => s.id === sid)?.name ?? sid;
+
+  const productSales = useMemo(
+    () =>
+      customer
+        ? loadSalonProductSales()
+            .filter((s) => s.customerId === customer.id)
+            .sort((a, b) => (a.soldAt < b.soldAt ? 1 : -1))
+        : [],
+    [customer],
+  );
 
   const buyPackage = (templateId: string, method: SalonPaymentMethod) => {
     const tpl = packageTemplates.find((t) => t.id === templateId);
@@ -342,6 +353,20 @@ export function CustomerProfile() {
         </div>
       </Section>
 
+      {/* 檔案號碼（F5：free text，供商家與實體文件對照） */}
+      <Section title="檔案號碼">
+        <input
+          type="text"
+          value={customer.fileNumber ?? ""}
+          placeholder="例如 A-2026-001"
+          onChange={(e) => persist({ ...customer, fileNumber: e.target.value.trim() || undefined })}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+        />
+        <p className="mt-1 text-[11px] text-slate-400">
+          自由輸入，用於與實體紙本檔案對照（如會員卡號 / 紙本編號）。
+        </p>
+      </Section>
+
       {/* 推薦人（Phase 8） */}
       <Section title="推薦人">
         <div className="mb-1 flex items-center justify-between">
@@ -375,6 +400,30 @@ export function CustomerProfile() {
         <p className="mt-1 text-[11px] text-slate-400">
           設定後，本客戶首次結帳時，推薦人將獲得「設置 → 會員優惠」中的推薦積分（僅推薦人得分，防刷分）。
         </p>
+      </Section>
+
+      {/* 購買產品（F4：雙介面顯示） */}
+      <Section title="購買產品">
+        {productSales.length === 0 ? (
+          <p className="text-xs text-slate-400">尚無產品購買記錄。</p>
+        ) : (
+          <ul className="grid gap-1.5">
+            {productSales.map((s) => (
+              <li key={s.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                <div>
+                  <div className="font-medium text-slate-800">{s.productName}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {s.soldAt.slice(0, 10)} · 員工 {s.staffName}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-semibold text-slate-700">MOP {s.price}</div>
+                  <div className="text-[11px] text-emerald-600">佣金 MOP {s.commissionAmount}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </Section>
 
       {/* 膚質 / 髮質 */}

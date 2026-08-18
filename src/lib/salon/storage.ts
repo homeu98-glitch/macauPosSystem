@@ -13,10 +13,14 @@ import {
   type SalonPackageTemplate,
   type SalonCustomerPackage,
   type SalonQueueEvent,
+  type SalonProduct,
+  type SalonProductSale,
+  type SalonStaffLeave,
+  type SalonStaffShift,
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
 import type { PrintJob } from "@/lib/types";
-import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
+import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY, DEFAULT_SALON_PRODUCTS } from "@/lib/salon/mock-data";
 import {
   idbSet,
   idbEnqueue,
@@ -135,11 +139,41 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       return seed;
     }
     seededForStore = existing.storeId;
-    // 升級既有店家：若 bootstrap 尚未含 loyalty 設定（Phase 8 前種入），補預設值並寫回。
-    // 不觸動其他設定，店家可自行到「設置 → 會員優惠」調整。
+    // 升級既有店家：補齊後續 phase 新增欄位（不觸動其他設定，店家可自行到設置調整）。
+    let changed = false;
+    // Phase 8 忠誠度：loyalty 設定
     if (!existing.loyalty) {
       existing.loyalty = DEFAULT_SALON_LOYALTY;
+      changed = true;
+    }
+    // F1+F3 工錢 / 級別：員工補 level / status，bootstrap 補 staffLevelMultipliers
+    if (existing.staff?.length) {
+      for (const s of existing.staff) {
+        if (!s.level) {
+          s.level = "junior";
+          changed = true;
+        }
+        if (!s.status) {
+          s.status = s.active === false || s.terminatedAt ? "terminated" : "active";
+          changed = true;
+        }
+      }
+    }
+    if (!existing.staffLevelMultipliers) {
+      existing.staffLevelMultipliers = { junior: 1, senior: 1.3, master: 1.6 };
+      changed = true;
+    }
+    // F4 產品目錄：bootstrap 補 products 預設（僅當 products 完全缺）
+    if (!existing.products) {
+      existing.products = DEFAULT_SALON_PRODUCTS;
+      changed = true;
+    }
+    if (changed) {
       writeJson(SALON_STORAGE_KEYS.bootstrap, existing);
+    }
+    // 首次啟動種入產品獨立鍵（仿 packageTemplates：僅當鍵為空才種入，唔覆蓋店家已建）
+    if (!readJson<SalonProduct[] | null>(SALON_STORAGE_KEYS.products, null)) {
+      writeJson(SALON_STORAGE_KEYS.products, existing.products ?? DEFAULT_SALON_PRODUCTS);
     }
     return existing;
   }
@@ -287,6 +321,66 @@ export function loadCustomers(): SalonCustomerProfile[] {
   return readJson<SalonCustomerProfile[]>(SALON_STORAGE_KEYS.customers, []);
 }
 
+// ────────────────────────────────────────────────────────────────────
+// 產品目錄 / 產品銷售（F4）
+// 產品目錄雙寫 bootstrap.products + 獨立鍵；產品銷售為獨立 collection。
+// ────────────────────────────────────────────────────────────────────
+
+export function loadSalonProducts(): SalonProduct[] {
+  return readJson<SalonProduct[]>(SALON_STORAGE_KEYS.products, []);
+}
+
+export function saveSalonProducts(products: SalonProduct[]) {
+  writeJson(SALON_STORAGE_KEYS.products, products);
+  const bootstrap = loadSalonBootstrap();
+  if (bootstrap) {
+    saveSalonBootstrap({ ...bootstrap, products, lastUpdatedAt: new Date().toISOString() });
+  }
+}
+
+export function loadSalonProductSales(): SalonProductSale[] {
+  return readJson<SalonProductSale[]>(SALON_STORAGE_KEYS.productSales, []);
+}
+
+export function saveSalonProductSales(sales: SalonProductSale[]) {
+  writeJson(SALON_STORAGE_KEYS.productSales, sales);
+  void idbEnqueue({
+    entity: "productSales",
+    refId: "productSales",
+    payload: sales,
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 員工放假 / shift 記錄（F2）
+// ────────────────────────────────────────────────────────────────────
+
+export function loadSalonStaffLeaves(): SalonStaffLeave[] {
+  return readJson<SalonStaffLeave[]>(SALON_STORAGE_KEYS.staffLeaves, []);
+}
+
+export function saveSalonStaffLeaves(leaves: SalonStaffLeave[]) {
+  writeJson(SALON_STORAGE_KEYS.staffLeaves, leaves);
+  void idbEnqueue({
+    entity: "staffLeaves",
+    refId: "staffLeaves",
+    payload: leaves,
+  });
+}
+
+export function loadSalonStaffShifts(): SalonStaffShift[] {
+  return readJson<SalonStaffShift[]>(SALON_STORAGE_KEYS.staffShifts, []);
+}
+
+export function saveSalonStaffShifts(shifts: SalonStaffShift[]) {
+  writeJson(SALON_STORAGE_KEYS.staffShifts, shifts);
+  void idbEnqueue({
+    entity: "staffShifts",
+    refId: "staffShifts",
+    payload: shifts,
+  });
+}
+
 export function saveCustomers(customers: SalonCustomerProfile[]) {
   writeJson(SALON_STORAGE_KEYS.customers, customers);
   void idbEnqueue({
@@ -386,6 +480,10 @@ export function resetSalonStorage() {
   removeKey(SALON_STORAGE_KEYS.stations);
   removeKey(SALON_STORAGE_KEYS.serviceCategories);
   removeKey(SALON_STORAGE_KEYS.serviceItems);
+  removeKey(SALON_STORAGE_KEYS.products);
+  removeKey(SALON_STORAGE_KEYS.productSales);
+  removeKey(SALON_STORAGE_KEYS.staffLeaves);
+  removeKey(SALON_STORAGE_KEYS.staffShifts);
   removeKey(SALON_STORAGE_KEYS.printJobs);
   removeKey(SALON_STORAGE_KEYS.syncQueue);
   removeKey(SALON_STORAGE_KEYS.shift);

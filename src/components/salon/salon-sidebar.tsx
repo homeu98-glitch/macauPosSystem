@@ -12,11 +12,10 @@ import { loadAuthSession } from "@/lib/storage";
 
 const salonNavItems = [
   { href: "/salon", label: "工作台", short: "台" },
-  { href: "/salon/calendar", label: "預約看板", short: "約" },
   { href: "/salon/booking/new", label: "快速開單", short: "單" },
   { href: "/salon/customers", label: "客戶檔案", short: "客" },
+  { href: "/salon/products", label: "產品", short: "品" },
   { href: "/salon/reports", label: "報表", short: "報" },
-  { href: "/salon/prints", label: "打印", short: "印" },
   { href: "/salon/settings", label: "設置", short: "設" },
 ] as const;
 

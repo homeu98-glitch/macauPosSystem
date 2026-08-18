@@ -7,6 +7,7 @@ import type {
   SalonServiceCategory,
   SalonServiceItem,
   SalonStaff,
+  SalonStaffRole,
   SalonStation,
   SalonLoyaltySettings,
 } from "@/lib/salon/types";
@@ -18,7 +19,16 @@ import {
   loadSalonSyncQueue,
 } from "@/lib/salon/storage";
 import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
+import {
+  SALON_STAFF_ROLE_LABELS,
+  SALON_STAFF_ROLE_ORDER,
+  SALON_STAFF_LEVEL_LABELS,
+  SALON_STAFF_LEVEL_ORDER,
+  SALON_STAFF_STATUS_LABELS,
+  SALON_STAFF_STATUS_ORDER,
+} from "@/lib/salon/salon-labels";
 import { PackageTemplatesTab } from "@/components/salon/package-templates";
+import { PrintsContent } from "@/components/salon/prints-content";
 import { loadDeviceConfig, saveDeviceConfig } from "@/lib/storage";
 import type { DeviceConfig, DevicePrinterConfig } from "@/lib/types";
 
@@ -59,12 +69,14 @@ function FormModal({
   initial,
   onSubmit,
   onClose,
+  extraEditor,
 }: {
   title: string;
   fields: FieldDef[];
   initial: Record<string, unknown>;
   onSubmit: (draft: Record<string, unknown>) => void;
   onClose: () => void;
+  extraEditor?: (draft: Record<string, unknown>, set: (k: string, v: unknown) => void) => ReactNode;
 }) {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...initial }));
 
@@ -157,6 +169,7 @@ function FormModal({
               {f.help ? <div className="mt-1 text-[11px] text-slate-400">{f.help}</div> : null}
             </div>
           ))}
+          {extraEditor ? <div className="border-t border-slate-100 pt-3">{extraEditor(draft, set)}</div> : null}
         </div>
         <div className="mt-5 flex gap-2">
           <button
@@ -243,6 +256,10 @@ interface CrudSectionProps<T extends { id: string }> {
   onToggle?: (t: T) => void;
   canDelete?: (t: T) => { ok: boolean; reason?: string };
   addLabel?: string;
+  /** 自定義編輯區（例如服務細項的工錢矩陣），渲染於通用欄位之後 */
+  extraEditor?: (item: T, draft: Record<string, unknown>, set: (k: string, v: unknown) => void) => ReactNode;
+  /** 自定義「啟用」判斷（預設讀 activeKey 的布林值；員工用 status === "active"） */
+  isActive?: (t: T) => boolean;
 }
 
 function CrudSection<T extends { id: string }>({
@@ -257,6 +274,8 @@ function CrudSection<T extends { id: string }>({
   onToggle,
   canDelete,
   addLabel = "＋ 新增",
+  extraEditor,
+  isActive,
 }: CrudSectionProps<T>) {
   const [editing, setEditing] = useState<{ mode: "add" | "edit"; data: T } | null>(null);
   const [delTarget, setDelTarget] = useState<T | null>(null);
@@ -304,7 +323,7 @@ function CrudSection<T extends { id: string }>({
           <div className="rounded-xl bg-slate-50 px-3 py-4 text-center text-xs text-slate-400">尚未有資料，點右上角新增。</div>
         ) : (
           items.map((it) => {
-            const on = Boolean((it as Record<string, unknown>)[activeKey]);
+            const on = isActive ? isActive(it) : Boolean((it as Record<string, unknown>)[activeKey]);
             return (
               <div key={it.id} className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
                 <div className="min-w-0">
@@ -351,6 +370,7 @@ function CrudSection<T extends { id: string }>({
           initial={editing.data as unknown as Record<string, unknown>}
           onSubmit={submit}
           onClose={() => setEditing(null)}
+          extraEditor={extraEditor ? (draft, set) => extraEditor(editing.data, draft, set) : undefined}
         />
       ) : null}
 
@@ -393,6 +413,16 @@ const STAFF_ROLE_OPTS: Option[] = [
   { value: "receptionist", label: "接待" },
 ];
 
+const STAFF_LEVEL_OPTS: Option[] = SALON_STAFF_LEVEL_ORDER.map((v) => ({
+  value: v,
+  label: SALON_STAFF_LEVEL_LABELS[v],
+}));
+
+const STAFF_STATUS_OPTS: Option[] = SALON_STAFF_STATUS_ORDER.map((v) => ({
+  value: v,
+  label: SALON_STAFF_STATUS_LABELS[v],
+}));
+
 const STATION_TYPE_OPTS: Option[] = [
   { value: "chair", label: "椅" },
   { value: "bed", label: "床" },
@@ -420,6 +450,7 @@ const TABS = [
   { id: "staff", label: "員工" },
   { id: "packages", label: "套票模板" },
   { id: "loyalty", label: "會員優惠" },
+  { id: "prints", label: "打印" },
   { id: "dev", label: "開發工具" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -435,6 +466,9 @@ export function Settings() {
   const [saved, setSaved] = useState("");
   const [resetModal, setResetModal] = useState(false);
   const [reseedModal, setReseedModal] = useState(false);
+
+  const levelMultipliers =
+    bootstrap?.staffLevelMultipliers ?? { junior: 1, senior: 1.3, master: 1.6 };
 
   useEffect(() => {
     const b = loadSalonBootstrap();
@@ -573,7 +607,8 @@ export function Settings() {
     });
   };
   const deleteStaff = (s: SalonStaff) => patchBootstrap({ staff: bootstrap.staff.filter((x) => x.id !== s.id) });
-  const toggleStaff = (s: SalonStaff) => upsertStaff({ ...s, active: !s.active });
+  const toggleStaff = (s: SalonStaff) =>
+    upsertStaff({ ...s, status: s.status === "active" ? "terminated" : "active" });
 
   const upsertPrinter = (p: DevicePrinterConfig) => {
     const arr = printers;
@@ -615,6 +650,8 @@ export function Settings() {
     name: "",
     nickname: "",
     role: "therapist",
+    level: "junior",
+    status: "active",
     serviceCategoryIds: [],
     phone: "",
     active: true,
@@ -671,6 +708,8 @@ export function Settings() {
     { key: "name", label: "姓名", type: "text" },
     { key: "nickname", label: "暱稱", type: "text", placeholder: "顯示用" },
     { key: "role", label: "角色", type: "select", options: STAFF_ROLE_OPTS },
+    { key: "level", label: "級別", type: "select", options: STAFF_LEVEL_OPTS, help: "高級 / 首席 的工錢會按級別倍率提高" },
+    { key: "status", label: "狀態", type: "select", options: STAFF_STATUS_OPTS },
     {
       key: "serviceCategoryIds",
       label: "可服務類目",
@@ -678,7 +717,6 @@ export function Settings() {
       options: bootstrap.serviceCategories.map((c) => ({ value: c.id, label: c.name })),
     },
     { key: "phone", label: "電話", type: "text" },
-    { key: "active", label: "在職", type: "toggle" },
   ];
   const printerFields: FieldDef[] = [
     { key: "name", label: "印表機名稱", type: "text", placeholder: "例如 收銀機" },
@@ -799,6 +837,37 @@ export function Settings() {
               onUpsert={upsertItem}
               onDelete={deleteItem}
               onToggle={toggleItem}
+              extraEditor={(_item, draft, set) => {
+                const wages = (draft.wages as Partial<Record<SalonStaffRole, number>> | undefined) ?? {};
+                return (
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-slate-500">各職位工錢 (MOP)</div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {SALON_STAFF_ROLE_ORDER.map((role) => (
+                        <label key={role} className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-2 py-1.5">
+                          <span className="text-xs text-slate-600">{SALON_STAFF_ROLE_LABELS[role]}</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={wages[role] ?? ""}
+                            placeholder="—"
+                            onChange={(e) => {
+                              const next: Partial<Record<SalonStaffRole, number>> = { ...wages };
+                              if (e.target.value === "") delete next[role];
+                              else next[role] = Number(e.target.value) || 0;
+                              set("wages", next);
+                            }}
+                            className="w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      該次工錢 = 此職位工錢 × 員工級別倍率（見「員工」分頁的級別設定）。留空表示該職位不計工錢。
+                    </p>
+                  </div>
+                );
+              }}
               addLabel="＋ 新增服務"
             />
           </Section>
@@ -822,19 +891,59 @@ export function Settings() {
 
       {/* 員工 */}
       {activeTab === "staff" && (
-        <Section title="員工">
-          <CrudSection<SalonStaff>
-            items={bootstrap.staff}
-            fields={staffFields}
-            emptyFactory={emptyStaff}
-            activeLabels={["在職", "離職"]}
-            renderSummary={(s) => ({ title: (s.nickname ?? s.name) || "(未命名)", subtitle: labelOf(STAFF_ROLE_OPTS, s.role) })}
-            onUpsert={upsertStaff}
-            onDelete={deleteStaff}
-            onToggle={toggleStaff}
-            addLabel="＋ 新增員工"
-          />
-        </Section>
+        <>
+          <Section title="員工">
+            <CrudSection<SalonStaff>
+              items={bootstrap.staff}
+              fields={staffFields}
+              emptyFactory={emptyStaff}
+              activeLabels={["在職", "離職"]}
+              isActive={(s) => s.status === "active"}
+              renderSummary={(s) => ({
+                title: (s.nickname ?? s.name) || "(未命名)",
+                subtitle: `${labelOf(STAFF_ROLE_OPTS, s.role)} · ${SALON_STAFF_LEVEL_LABELS[s.level]} · ${SALON_STAFF_STATUS_LABELS[s.status]}`,
+              })}
+              onUpsert={upsertStaff}
+              onDelete={deleteStaff}
+              onToggle={toggleStaff}
+              addLabel="＋ 新增員工"
+            />
+          </Section>
+          <Section title="級別工錢倍率">
+            <p className="mb-2 text-[11px] text-slate-400">
+              員工執行服務時，該次工錢 = 服務細項工錢 × 以下級別倍率。例如高級 1.3 倍、首席 1.6 倍。
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              {SALON_STAFF_LEVEL_ORDER.map((lv) => (
+                <label key={lv} className="rounded-xl border border-slate-200 px-3 py-2">
+                  <div className="text-xs font-medium text-slate-500">{SALON_STAFF_LEVEL_LABELS[lv]}</div>
+                  <div className="mt-1 flex items-center gap-1">
+                    <span className="text-sm text-slate-400">×</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      value={levelMultipliers[lv]}
+                      onChange={(e) =>
+                        patchBootstrap({
+                          staffLevelMultipliers: { ...levelMultipliers, [lv]: Number(e.target.value) || 0 },
+                        })
+                      }
+                      className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                    />
+                  </div>
+                </label>
+              ))}
+            </div>
+          </Section>
+        </>
+      )}
+
+      {/* 打印（F7：列印任務管理移入設置） */}
+      {activeTab === "prints" && (
+        <div className="mx-auto max-w-4xl">
+          <PrintsContent />
+        </div>
       )}
 
       {/* 開發工具（列印分區 + 工具） */}

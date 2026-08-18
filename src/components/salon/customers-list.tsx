@@ -28,6 +28,7 @@ export function CustomersList() {
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.phone.includes(q) ||
+        (c.fileNumber ?? "").toLowerCase().includes(q) ||
         (c.tags ?? []).some((t) => t.toLowerCase().includes(q)),
     );
   }, [customers, query]);
@@ -149,6 +150,11 @@ export function CustomersList() {
                   <div className="flex items-center gap-2">
                     <span className="text-base font-bold text-slate-900">{c.name}</span>
                     <span className="text-xs text-slate-400">{c.phone}</span>
+                    {c.fileNumber ? (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                        檔 {c.fileNumber}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {(c.tags ?? []).map((t) => (

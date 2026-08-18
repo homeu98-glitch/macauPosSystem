@@ -194,6 +194,57 @@ export function SalonWorkbench() {
           />
         </section>
 
+        {/* F6：今日預約看板（精簡）— 嵌入工作台，右上跳完整看板 */}
+        <section className="px-6 pb-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-900">今日預約看板（精簡）</h2>
+              <Link
+                href="/salon/calendar"
+                className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-200"
+              >
+                完整看板 →
+              </Link>
+            </div>
+            {todayBookings.length === 0 ? (
+              <div className="py-6 text-center text-xs text-slate-400">今日尚無預約</div>
+            ) : (
+              <ul className="mt-3 grid gap-1.5">
+                {[...todayBookings]
+                  .sort((a, b) => (a.startAt < b.startAt ? -1 : 1))
+                  .map((b) => {
+                    const st = bootstrap?.staff.find((s) => s.id === b.staffId);
+                    return (
+                      <li key={b.id}>
+                        <Link
+                          href={`/salon/booking/${b.id}`}
+                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:bg-orange-50"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="shrink-0 font-semibold text-slate-700">
+                              {new Date(b.startAt).toLocaleTimeString("zh-HK", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-slate-800">{b.customerName}</div>
+                              <div className="truncate text-[11px] text-slate-500">
+                                {b.services.map((s) => s.name).join("、")}
+                                {st ? ` · ${st.nickname ?? st.name}` : ""}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="ml-2 shrink-0 text-[10px] text-slate-400">{b.status}</span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+              </ul>
+            )}
+          </div>
+        </section>
+
         {/* 區段：四個面板 */}
         <section className="grid flex-1 grid-cols-1 gap-4 px-6 pb-6 md:grid-cols-2 lg:grid-cols-4">
           <Panel

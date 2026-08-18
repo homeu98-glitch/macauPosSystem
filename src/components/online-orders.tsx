@@ -92,7 +92,9 @@ export function OnlineOrders({
     [localSettings.floors],
   );
 
-  ordersRef.current = orders;
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
 
   useEffect(() => {
     if (!toast) return;

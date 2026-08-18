@@ -88,7 +88,9 @@ export function QuickOnlineOrdersPanel({
   const hasInitializedSnapshotRef = useRef(false);
   const autoAcceptProcessingRef = useRef<Set<string>>(new Set());
 
-  ordersRef.current = orders;
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
 
   useEffect(() => {
     function unlock() {
