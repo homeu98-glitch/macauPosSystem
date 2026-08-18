@@ -113,6 +113,16 @@ let seededForStore: string | null = null;
  * 若 macau-pos-salon/bootstrap 為空，種入預設 mock 資料。
  * activeStore 為當前綁定的 salon storeId；不同 store 之後可換 seed 來源。
  */
+/**
+ * 防舊資料（只有單一 role、無 roles 陣列）令 r.roles is not iterable。
+ * 任何讀取員工嘅路徑都經此 normalize，確保 roles 一定係陣列。
+ */
+function normalizeStaff(s: SalonStaff): SalonStaff {
+  if (s.roles && s.roles.length > 0) return s;
+  const legacyRole = (s as unknown as { role?: string }).role;
+  return { ...s, roles: legacyRole ? [legacyRole as SalonStaffRole] : ["therapist"] };
+}
+
 export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
   if (typeof window === "undefined") {
     return buildDefaultSalonBootstrap();
@@ -177,6 +187,8 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
     }
     if (changed) {
       writeJson(SALON_STORAGE_KEYS.bootstrap, existing);
+      // 同步寫回獨立員工鍵（loadSalonStaff 讀呢度），避免舊店家 standalone key 仍係 role-only 記錄
+      writeJson(SALON_STORAGE_KEYS.staff, existing.staff);
     }
     // 首次啟動種入產品獨立鍵（仿 packageTemplates：僅當鍵為空才種入，唔覆蓋店家已建）
     if (!readJson<SalonProduct[] | null>(SALON_STORAGE_KEYS.products, null)) {
@@ -231,7 +243,10 @@ export async function hydrateSalonFromPosDb(storeId?: string): Promise<void> {
 }
 
 export function loadSalonBootstrap(): SalonBootstrap | null {
-  return readJson<SalonBootstrap | null>(SALON_STORAGE_KEYS.bootstrap, null);
+  const b = readJson<SalonBootstrap | null>(SALON_STORAGE_KEYS.bootstrap, null);
+  if (!b) return b;
+  if (b.staff?.length) b.staff = b.staff.map(normalizeStaff);
+  return b;
 }
 
 export function saveSalonBootstrap(bootstrap: SalonBootstrap) {
@@ -277,7 +292,7 @@ export function saveSalonOrders(orders: SalonPosOrder[]) {
 }
 
 export function loadSalonStaff(): SalonStaff[] {
-  return readJson<SalonStaff[]>(SALON_STORAGE_KEYS.staff, []);
+  return readJson<SalonStaff[]>(SALON_STORAGE_KEYS.staff, []).map(normalizeStaff);
 }
 
 export function saveSalonStaff(staff: SalonStaff[]) {
