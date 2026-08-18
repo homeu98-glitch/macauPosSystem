@@ -18,6 +18,7 @@ import {
   advanceBookingStatus,
   MOCK_REALTIME_EVENT,
 } from "@/lib/salon/mock-realtime";
+import { SALON_STAFF_ROLE_LABELS } from "@/lib/salon/salon-labels";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "待確認",
@@ -328,7 +329,7 @@ export function ServiceRunner() {
             >
               {staffList.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.nickname ?? s.name} ({s.role})
+                  {s.nickname ?? s.name} ({s.roles.map((r) => SALON_STAFF_ROLE_LABELS[r]).join(" / ")})
                 </option>
               ))}
             </select>

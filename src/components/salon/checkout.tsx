@@ -343,10 +343,12 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   }, []);
 
   // ── 計算 ──
-  const subtotal = useMemo(
-    () => (booking ? booking.services.reduce((sum, s) => sum + s.price, 0) : 0),
-    [booking],
-  );
+  const subtotal = useMemo(() => {
+    if (!booking) return 0;
+    const svc = booking.services.reduce((sum, s) => sum + s.price, 0);
+    const prod = (booking.productSelections ?? []).reduce((sum, p) => sum + p.price * p.quantity, 0);
+    return svc + prod;
+  }, [booking]);
   const birthdayDiscountAmount = useMemo(() => {
     if (!birthdayActive || loyalty.birthdayDiscountPercent <= 0) return 0;
     return Math.round(subtotal * (loyalty.birthdayDiscountPercent / 100));
@@ -499,7 +501,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     const settleBootstrap = loadSalonBootstrap();
     const svcMap = new Map((settleBootstrap?.serviceItems ?? []).map((s) => [s.id, s]));
 
-    const items: SalonOrderItem[] = booking.services.map((s, idx) => {
+    const serviceItems: SalonOrderItem[] = booking.services.map((s, idx) => {
       const left = coverLeft.get(s.serviceItemId) ?? 0;
       const covered = left > 0;
       if (covered) coverLeft.set(s.serviceItemId, left - 1);
@@ -519,6 +521,28 @@ export function Checkout({ bookingId }: { bookingId: string }) {
         note: notes.length > 0 ? notes.join(" · ") : undefined,
       };
     });
+
+    // 產品（R4：併入同一張單結帳；佣金按快照 commissionRate 計）
+    const productItems: SalonOrderItem[] = (booking.productSelections ?? []).map((p) => {
+      const staffName = p.staffId
+        ? staffMap[p.staffId]?.nickname ?? staffMap[p.staffId]?.name ?? ""
+        : undefined;
+      const commissionAmount = p.staffId
+        ? Math.round((p.price * p.quantity * p.commissionRate) / 100)
+        : 0;
+      return {
+        kind: "product",
+        itemId: p.productId,
+        name: p.name,
+        quantity: p.quantity,
+        unitPrice: p.price,
+        staffId: p.staffId,
+        staffName,
+        commissionAmount: commissionAmount > 0 ? commissionAmount : undefined,
+      };
+    });
+
+    const items: SalonOrderItem[] = [...serviceItems, ...productItems];
 
     const tipRecords: SalonTip[] = tips
       .filter((t) => (t.amount || 0) > 0)
@@ -747,6 +771,32 @@ export function Checkout({ bookingId }: { bookingId: string }) {
             ))}
           </div>
         </div>
+
+        {/* 產品（R4：併入同一張單結帳） */}
+        {booking.productSelections && booking.productSelections.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-bold text-slate-900">產品</h3>
+            <div className="grid gap-2">
+              {booking.productSelections.map((p, i) => (
+                <div key={i} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">{p.name}</div>
+                    <div className="text-xs text-slate-500">
+                      銷售：
+                      {p.staffId
+                        ? staffMap[p.staffId]?.nickname ?? staffMap[p.staffId]?.name ?? "未知"
+                        : "未指定"}
+                      {p.commissionRate > 0 ? ` · 佣金 ${p.commissionRate}%` : ""}
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold text-slate-700">
+                    {money(p.price)} × {p.quantity}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 折扣 */}
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

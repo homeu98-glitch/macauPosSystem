@@ -112,6 +112,7 @@ async function upsertCustomer(supabase: NonNullable<ReturnType<typeof getSupabas
       ledger_tier: rec.ledgerTier,
       birthday: rec.birthday,
       gender: rec.gender,
+      file_number: rec.fileNumber ?? null,
       tags: rec.tags ?? [],
       skin_type: rec.skinType,
       hair_type: rec.hairType,
@@ -122,6 +123,60 @@ async function upsertCustomer(supabase: NonNullable<ReturnType<typeof getSupabas
       last_visit_at: rec.lastVisitAt,
       total_spent: rec.totalSpent,
       updated_at: rec.updatedAt ?? new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+}
+
+async function upsertProductSale(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
+  await supabase.from("salon_product_sales").upsert(
+    {
+      id: rec.id,
+      store_id: storeId,
+      product_id: rec.productId,
+      product_name: rec.productName,
+      price: rec.price,
+      commission_rate: rec.commissionRate,
+      commission_amount: rec.commissionAmount,
+      staff_id: rec.staffId,
+      staff_name: rec.staffName,
+      customer_id: rec.customerId ?? null,
+      customer_name: rec.customerName,
+      payment_method: rec.paymentMethod ?? null,
+      sold_at: rec.soldAt ?? null,
+      note: rec.note ?? null,
+      created_at: rec.createdAt ?? new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+}
+
+async function upsertStaffLeave(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
+  await supabase.from("salon_staff_leaves").upsert(
+    {
+      id: rec.id,
+      store_id: storeId,
+      staff_id: rec.staffId,
+      start_date: rec.start,
+      end_date: rec.end,
+      reason: rec.reason ?? null,
+      created_at: rec.createdAt ?? new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+}
+
+async function upsertStaffShift(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
+  await supabase.from("salon_staff_shifts").upsert(
+    {
+      id: rec.id,
+      store_id: storeId,
+      staff_id: rec.staffId,
+      date: rec.date,
+      start_time: rec.start,
+      end_time: rec.end,
+      note: rec.note ?? null,
+      created_at: rec.createdAt ?? new Date().toISOString(),
     },
     { onConflict: "id" },
   );
@@ -141,6 +196,8 @@ async function upsertBootstrap(supabase: NonNullable<ReturnType<typeof getSupaba
       calendar_slot_minutes: rec.calendarSlotMinutes ?? 30,
       deposit_enabled: rec.depositEnabled ?? false,
       default_service_duration_minutes: rec.defaultServiceDurationMinutes ?? 60,
+      products: rec.products ?? [],
+      staff_level_multipliers: rec.staffLevelMultipliers ?? {},
       updated_at: new Date().toISOString(),
     },
     { onConflict: "store_id" },
@@ -215,6 +272,12 @@ export async function POST(request: Request) {
           await upsertPackageTemplate(supabase, storeId, rec);
         } else if (ev.type === "CUSTOMER_PACKAGE_UPDATED") {
           await upsertCustomerPackage(supabase, storeId, rec);
+        } else if (ev.type === "PRODUCT_SALE_CREATED") {
+          await upsertProductSale(supabase, storeId, rec);
+        } else if (ev.type === "STAFF_LEAVE_UPDATED") {
+          await upsertStaffLeave(supabase, storeId, rec);
+        } else if (ev.type === "STAFF_SHIFT_UPDATED") {
+          await upsertStaffShift(supabase, storeId, rec);
         }
       }
 

@@ -85,7 +85,8 @@ export interface SalonStaff {
   id: string;
   name: string;
   nickname?: string;
-  role: SalonStaffRole;
+  /** 角色（可多選；染色 / 療師 / 助理等可兼任） */
+  roles: SalonStaffRole[];
   /** 級別（預設 junior） */
   level: SalonStaffLevel;
   /** 狀態（預設 active） */
@@ -175,6 +176,18 @@ export interface SalonBookingServiceEntry {
   staffId: string;
 }
 
+/** 預約中選購的產品（F-產品；快速開單「產品」tab 加入，併入同一張單結帳） */
+export interface SalonBookingProductSelection {
+  productId: string;
+  name: string;
+  price: number;
+  quantity: number;
+  /** 銷售員工（計佣金用） */
+  staffId?: string;
+  /** 佣金率%（快照） */
+  commissionRate: number;
+}
+
 // ────────────────────────────────────────────────────────────────────
 // 預約 Booking
 // ────────────────────────────────────────────────────────────────────
@@ -198,6 +211,9 @@ export interface SalonBooking {
   endAt: string;
 
   services: SalonBookingServiceEntry[];
+
+  /** 選購產品（快速開單「產品」tab；併入同一張單結帳，結帳時轉 order item kind=product） */
+  productSelections?: SalonBookingProductSelection[];
 
   depositAmount?: number;
   depositPaid?: boolean;
@@ -252,6 +268,8 @@ export interface SalonOrderItem {
   note?: string;
   /** 該次服務工錢（MOP，已乘級別倍率、取整）。僅 kind:"service" 且有 staffId 時有意義（F1） */
   wageAmount?: number;
+  /** 產品佣金（MOP，= round(price × quantity × commissionRate / 100)）。僅 kind:"product" 且有 staffId 時有意義（F4 併入同單） */
+  commissionAmount?: number;
 }
 
 // ────────────────────────────────────────────────────────────────────

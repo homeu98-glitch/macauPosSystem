@@ -96,14 +96,26 @@ export function StaffDetail() {
     return { total, count };
   }, [orders, staffId]);
 
-  // 產品佣金匯總
+  // 產品佣金匯總（R4：兼計快速開單併入同單的產品佣金，與舊 SalonProductSale 歷史紀錄）
   const commissionSummary = useMemo(() => {
     let total = 0;
+    let count = 0;
     for (const s of productSales) {
-      if (s.staffId === staffId) total += s.commissionAmount;
+      if (s.staffId === staffId) {
+        total += s.commissionAmount;
+        count += 1;
+      }
     }
-    return { total, count: productSales.filter((s) => s.staffId === staffId).length };
-  }, [productSales, staffId]);
+    for (const o of orders) {
+      for (const it of o.items) {
+        if (it.kind === "product" && it.staffId === staffId && it.commissionAmount) {
+          total += it.commissionAmount;
+          count += 1;
+        }
+      }
+    }
+    return { total, count };
+  }, [productSales, orders, staffId]);
 
   if (!staff) {
     return (
@@ -197,7 +209,9 @@ export function StaffDetail() {
           </div>
           <div>
             <div className="text-xs text-slate-400">角色</div>
-            <div className="font-semibold text-slate-800">{SALON_STAFF_ROLE_LABELS[staff.role]}</div>
+            <div className="font-semibold text-slate-800">
+              {staff.roles.map((r) => SALON_STAFF_ROLE_LABELS[r]).join(" / ") || "—"}
+            </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">級別</div>

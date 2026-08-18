@@ -29,7 +29,10 @@ export function computeStaffWage(
   bootstrap: SalonBootstrap | null,
 ): number {
   if (!serviceItem || !staff) return 0;
-  const base = serviceItem.wages?.[staff.role];
+  // 多選角色：取第一個有設定工錢嘅角色；否則取第一個角色
+  const role =
+    staff.roles.find((r) => serviceItem.wages?.[r] != null) ?? staff.roles[0];
+  const base = role ? serviceItem.wages?.[role] : undefined;
   if (base == null || base <= 0) return 0;
   const multipliers =
     bootstrap?.staffLevelMultipliers ?? DEFAULT_STAFF_LEVEL_MULTIPLIERS;

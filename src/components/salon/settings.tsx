@@ -9,6 +9,7 @@ import type {
   SalonStaff,
   SalonStaffRole,
   SalonStation,
+  SalonProduct,
   SalonLoyaltySettings,
 } from "@/lib/salon/types";
 import {
@@ -447,6 +448,7 @@ const TABS = [
   { id: "store", label: "店家資料" },
   { id: "category", label: "服務類目" },
   { id: "services", label: "服務管理" },
+  { id: "products", label: "產品" },
   { id: "staff", label: "員工" },
   { id: "packages", label: "套票模板" },
   { id: "loyalty", label: "會員優惠" },
@@ -610,6 +612,18 @@ export function Settings() {
   const toggleStaff = (s: SalonStaff) =>
     upsertStaff({ ...s, status: s.status === "active" ? "terminated" : "active" });
 
+  // 產品（R7：產品新增 / 編輯移入設置；獨立賣產品流程由快速開單「產品」tab 取代）
+  const upsertProduct = (p: SalonProduct) =>
+    patchBootstrap({
+      products: (() => {
+        const arr = bootstrap.products ?? [];
+        const i = arr.findIndex((x) => x.id === p.id);
+        return i >= 0 ? arr.map((x) => (x.id === p.id ? p : x)) : [...arr, p];
+      })(),
+    });
+  const deleteProduct = (p: SalonProduct) =>
+    patchBootstrap({ products: (bootstrap.products ?? []).filter((x) => x.id !== p.id) });
+
   const upsertPrinter = (p: DevicePrinterConfig) => {
     const arr = printers;
     const i = arr.findIndex((x) => x.id === p.id);
@@ -649,7 +663,7 @@ export function Settings() {
     id: genId("staff"),
     name: "",
     nickname: "",
-    role: "therapist",
+    roles: ["therapist"],
     level: "junior",
     status: "active",
     serviceCategoryIds: [],
@@ -665,6 +679,16 @@ export function Settings() {
     name: "",
     enabled: true,
     lanPort: 9100,
+  });
+  const emptyProduct = (): SalonProduct => ({
+    id: genId("prod"),
+    name: "",
+    category: "",
+    price: 0,
+    cost: undefined,
+    commissionRate: 10,
+    active: true,
+    sortOrder: (bootstrap.products ?? []).length + 1,
   });
 
   // ── field defs（category 依賴 categoryMap，故在此計算）──
@@ -707,7 +731,7 @@ export function Settings() {
   const staffFields: FieldDef[] = [
     { key: "name", label: "姓名", type: "text" },
     { key: "nickname", label: "暱稱", type: "text", placeholder: "顯示用" },
-    { key: "role", label: "角色", type: "select", options: STAFF_ROLE_OPTS },
+    { key: "roles", label: "角色（可多選）", type: "multiselect", options: STAFF_ROLE_OPTS, help: "可兼任多種角色，例如同時是染色師與助理" },
     { key: "level", label: "級別", type: "select", options: STAFF_LEVEL_OPTS, help: "高級 / 首席 的工錢會按級別倍率提高" },
     { key: "status", label: "狀態", type: "select", options: STAFF_STATUS_OPTS },
     {
@@ -725,6 +749,15 @@ export function Settings() {
     { key: "ipAddress", label: "IP 位址", type: "text", placeholder: "LAN 模式填寫" },
     { key: "lanPort", label: "Port", type: "number" },
     { key: "enabled", label: "啟用", type: "toggle" },
+  ];
+  const productFields: FieldDef[] = [
+    { key: "name", label: "產品名稱", type: "text", placeholder: "例如 保濕精華" },
+    { key: "category", label: "分類（可選）", type: "text", placeholder: "例如 護膚 / 美甲" },
+    { key: "price", label: "售價 (MOP)", type: "number" },
+    { key: "cost", label: "成本 (MOP，可選)", type: "number" },
+    { key: "commissionRate", label: "佣金率 %", type: "number", help: "銷售該產品給員工的佣金比例（如 10 = 10%）" },
+    { key: "sortOrder", label: "排序", type: "number" },
+    { key: "active", label: "啟用", type: "toggle" },
   ];
 
   return (
@@ -889,6 +922,27 @@ export function Settings() {
         </div>
       )}
 
+      {/* 產品（R7：產品新增 / 編輯移入設置；前台於快速開單「產品」tab 銷售） */}
+      {activeTab === "products" && (
+        <Section title="產品目錄">
+          <CrudSection<SalonProduct>
+            items={bootstrap.products ?? []}
+            fields={productFields}
+            emptyFactory={emptyProduct}
+            renderSummary={(p) => ({
+              title: p.name || "(未命名)",
+              subtitle: `MOP ${p.price} · 佣金 ${p.commissionRate}%${p.category ? " · " + p.category : ""}`,
+            })}
+            onUpsert={upsertProduct}
+            onDelete={deleteProduct}
+            addLabel="＋ 新增產品"
+          />
+          <p className="mt-2 text-[11px] text-slate-400">
+            產品銷售已併入「快速開單 → 產品」tab，與服務項目同一張單結帳（佣金一併計算）。
+          </p>
+        </Section>
+      )}
+
       {/* 員工 */}
       {activeTab === "staff" && (
         <>
@@ -901,7 +955,7 @@ export function Settings() {
               isActive={(s) => s.status === "active"}
               renderSummary={(s) => ({
                 title: (s.nickname ?? s.name) || "(未命名)",
-                subtitle: `${labelOf(STAFF_ROLE_OPTS, s.role)} · ${SALON_STAFF_LEVEL_LABELS[s.level]} · ${SALON_STAFF_STATUS_LABELS[s.status]}`,
+                subtitle: `${s.roles.map((r) => SALON_STAFF_ROLE_LABELS[r]).join(" / ") || "—"} · ${SALON_STAFF_LEVEL_LABELS[s.level]} · ${SALON_STAFF_STATUS_LABELS[s.status]}`,
               })}
               onUpsert={upsertStaff}
               onDelete={deleteStaff}

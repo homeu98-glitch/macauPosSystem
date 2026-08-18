@@ -6,6 +6,7 @@ import {
   type SalonBooking,
   type SalonPosOrder,
   type SalonStaff,
+  type SalonStaffRole,
   type SalonStation,
   type SalonServiceCategory,
   type SalonServiceItem,
@@ -155,6 +156,12 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
         }
         if (!s.status) {
           s.status = s.active === false || s.terminatedAt ? "terminated" : "active";
+          changed = true;
+        }
+        // F-角色多選：舊資料只有單一 role，補齊 roles 陣列（唔改其他設定）
+        const legacyRole = (s as unknown as { role?: string }).role;
+        if (!s.roles || s.roles.length === 0) {
+          s.roles = legacyRole ? [legacyRole as SalonStaffRole] : ["therapist"];
           changed = true;
         }
       }
