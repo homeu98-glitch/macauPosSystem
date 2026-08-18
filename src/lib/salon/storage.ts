@@ -21,7 +21,7 @@ import {
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
 import type { PrintJob } from "@/lib/types";
-import { buildDefaultSalonBootstrap, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY, DEFAULT_SALON_PRODUCTS } from "@/lib/salon/mock-data";
+import { buildDefaultSalonBootstrap, buildEmptySalonBootstrap, DEFAULT_SALON_STORE_ID, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY, DEFAULT_SALON_PRODUCTS } from "@/lib/salon/mock-data";
 import {
   DEFAULT_SALON_STAFF_ROLE_TYPES,
   DEFAULT_SALON_STAFF_LEVEL_TYPES,
@@ -144,7 +144,12 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       null,
     );
     if (!existing) {
-      const seed = buildDefaultSalonBootstrap();
+      // 真實 Ledger 商戶（非 demo）首次進入 → 全空（該店從未開過 salon 係正常）；
+      // 只有未登入 / demo fallback 才種入示範資料。
+      const isRealStore = Boolean(activeStore) && activeStore !== DEFAULT_SALON_STORE_ID;
+      const seed = isRealStore
+        ? buildEmptySalonBootstrap(activeStore as string)
+        : buildDefaultSalonBootstrap();
       if (activeStore) {
         seed.storeId = activeStore;
       }
@@ -160,6 +165,22 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       return seed;
     }
     seededForStore = existing.storeId;
+    // 從 demo 切換到真實 Ledger 商戶：既有 demo 資料唔應該帶去真店，
+    // 重置為全空（該店從未開過 salon 係正常）。其後 hydrate 會由 POS DB 拉真實資料。
+    const switchedToRealStore =
+      activeStore && activeStore !== DEFAULT_SALON_STORE_ID && existing.storeId === DEFAULT_SALON_STORE_ID;
+    if (switchedToRealStore) {
+      const empty = buildEmptySalonBootstrap(activeStore as string);
+      writeJson(SALON_STORAGE_KEYS.bootstrap, empty);
+      writeJson(SALON_STORAGE_KEYS.serviceCategories, empty.serviceCategories);
+      writeJson(SALON_STORAGE_KEYS.serviceItems, empty.serviceItems);
+      writeJson(SALON_STORAGE_KEYS.staff, empty.staff);
+      writeJson(SALON_STORAGE_KEYS.stations, empty.stations);
+      writeJson(SALON_STORAGE_KEYS.products, empty.products);
+      writeJson(SALON_STORAGE_KEYS.customers, []);
+      seededForStore = empty.storeId;
+      return empty;
+    }
     // 升級既有店家：補齊後續 phase 新增欄位（不觸動其他設定，店家可自行到設置調整）。
     let changed = false;
     // Phase 8 忠誠度：loyalty 設定

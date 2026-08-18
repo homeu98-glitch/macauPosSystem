@@ -8,6 +8,7 @@ import {
 } from "@/lib/salon/mock-data";
 import {
   ensureSalonBootstrap,
+  loadActiveSalonStore,
   loadBookings,
   loadSalonOrders,
 } from "@/lib/salon/storage";
@@ -49,7 +50,10 @@ export function SalonWorkbench() {
   const [terminalIsSalon, setTerminalIsSalon] = useState(false);
 
   useEffect(() => {
-    const seeded = ensureSalonBootstrap(DEFAULT_SALON_STORE_ID);
+    // 優先用真實 Ledger 商戶（登入時寫入 active-store）；無 active store 才 fallback demo（開發/未登入）。
+    const activeStore = loadActiveSalonStore();
+    const seedStoreId = activeStore ?? DEFAULT_SALON_STORE_ID;
+    const seeded = ensureSalonBootstrap(seedStoreId);
     setBootstrap(seeded);
     seedMockBookingsIfEmpty();
     setBookings(loadBookings());

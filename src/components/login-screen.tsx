@@ -8,6 +8,7 @@ import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
 import { setTerminalIndustry } from "@/lib/salon/industry-config";
+import { saveActiveSalonStore } from "@/lib/salon/storage";
 
 export function LoginScreen() {
   const router = useRouter();
@@ -94,6 +95,10 @@ export function LoginScreen() {
 
       if (mode === "salon") {
         setTerminalIndustry("salon");
+        // 綁定真實 Ledger 商戶（store）：salon 數據以 merchantId 為 scope，唔再用 demo-salon-001。
+        if (session.merchantId) {
+          saveActiveSalonStore(session.merchantId);
+        }
         if (storeSwitched) {
           window.location.replace("/salon");
           return;

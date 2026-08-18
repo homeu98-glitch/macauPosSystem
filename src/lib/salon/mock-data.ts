@@ -413,6 +413,31 @@ export function buildDefaultSalonBootstrap(): SalonBootstrap {
   };
 }
 
+/**
+ * 真實 Ledger 商戶（非 demo）首次進入 salon、而該店從未開過 salon 時，
+ * 返回全空 bootstrap（唔種 demo 資料）。店家可於設置內自行建立服務 / 員工 / 產品。
+ */
+export function buildEmptySalonBootstrap(storeId: string): SalonBootstrap {
+  return {
+    sourceVersion: 1,
+    storeId,
+    storeName: "",
+    currency: "MOP",
+    serviceCategories: [],
+    serviceItems: [],
+    staff: [],
+    stations: [],
+    products: [],
+    calendarSlotMinutes: 30,
+    depositEnabled: false,
+    defaultServiceDurationMinutes: 60,
+    loyalty: DEFAULT_SALON_LOYALTY,
+    staffRoleTypes: DEFAULT_SALON_STAFF_ROLE_TYPES,
+    staffLevelTypes: DEFAULT_SALON_STAFF_LEVEL_TYPES,
+    lastUpdatedAt: new Date().toISOString(),
+  };
+}
+
 // ────────────────────────────────────────────────────────────────────
 // 預設客戶（Phase 4 示範資料）
 // 電話與 seedMockBookingsIfEmpty 的示範預約對齊，方便從預約連回客戶檔案。

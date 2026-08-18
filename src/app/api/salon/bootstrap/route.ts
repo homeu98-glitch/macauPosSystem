@@ -25,7 +25,25 @@ export async function GET(request: Request) {
 
   const { data, error } = await query.maybeSingle();
 
+  // 指定 storeId 但無記錄 → 該店從未開過 salon，返回全空（唔種 demo 資料）。
   if (error || !data) {
+    if (storeId) {
+      return NextResponse.json({
+        source: "empty",
+        storeId,
+        storeName: "",
+        currency: "MOP",
+        serviceCategories: [],
+        serviceItems: [],
+        staff: [],
+        stations: [],
+        calendarSlotMinutes: 30,
+        depositEnabled: false,
+        defaultServiceDurationMinutes: 60,
+        products: [],
+        lastUpdatedAt: null,
+      });
+    }
     return NextResponse.json({ ...buildDefaultSalonBootstrap(), source: "mock" });
   }
 

@@ -290,7 +290,13 @@ export async function POST(request: Request) {
     events?: Array<{ type: string; entityId?: string; payload?: unknown }>;
   };
   const events = Array.isArray(payload?.events) ? payload.events : [];
-  const storeId = String(payload?.storeId ?? "demo-salon-001");
+  // storeId 優先取 client 傳入（active-store = 真實 Ledger merchantId）；
+  // 缺省時退而取 BOOTSTRAP_UPDATED payload 內嵌嘅 storeId；最後先 fallback demo。
+  const bootstrapEv = events.find((e) => e.type === "BOOTSTRAP_UPDATED");
+  const bootstrapStoreId = bootstrapEv?.payload && !Array.isArray(bootstrapEv.payload)
+    ? (bootstrapEv.payload as Record<string, unknown>).storeId
+    : undefined;
+  const storeId = String(payload?.storeId ?? bootstrapStoreId ?? "demo-salon-001");
   const supabase = getSupabaseServerClient();
 
   if (supabase && events.length > 0) {
