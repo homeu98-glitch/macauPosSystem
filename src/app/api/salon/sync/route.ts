@@ -335,6 +335,15 @@ export async function POST(request: Request) {
     }
   }
 
+  if (!supabase && events.length > 0) {
+    // 診斷：收到 sync 事件但 server 冇 Supabase client —— 檢查部署 env 有冇
+    // SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY（POS Supabase，唔係 Ledger 嗰個）。
+    console.warn(
+      `[salon-sync] received ${events.length} event(s) but Supabase server client is null ` +
+        `(check SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY env). Nothing written to DB.`,
+    );
+  }
+
   return NextResponse.json({
     ok: true,
     syncedCount: events.length,

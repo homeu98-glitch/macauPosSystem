@@ -45,13 +45,15 @@ function openDb(): Promise<IDBDatabase> | null {
         }
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onerror = () => {
+        dbPromise = null; // 開啟失敗唔快取，下次 call 再試
+        reject(req.error);
+      };
     } catch {
+      dbPromise = null;
       reject(new Error("idb open failed"));
     }
   });
-  // 吞掉開啟失敗，caller 不會因 IDB 出事而掛掉
-  void dbPromise.catch(() => undefined);
   return dbPromise;
 }
 
@@ -94,19 +96,27 @@ function uid(prefix: string): string {
 }
 
 export async function idbEnqueue(item: Omit<SalonSyncQueueItem, "id" | "status" | "createdAt">): Promise<void> {
-  const db = await openDb();
+  const dbOrNull = openDb();
+  const db = dbOrNull == null ? null : await dbOrNull.catch(() => null);
   if (!db) return;
   try {
-    const tx = db.transaction(QUEUE_STORE, "readwrite");
-    tx.objectStore(QUEUE_STORE).put({
-      id: uid("q"),
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      ...item,
-    } satisfies SalonSyncQueueItem);
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(QUEUE_STORE, "readwrite");
+      tx.objectStore(QUEUE_STORE).put({
+        id: uid("q"),
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        ...item,
+      } satisfies SalonSyncQueueItem);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
   } catch {
     // ignore
   }
+  // 排完即試 flush：解決「一直 online、冇切 tab」時 queue 永遠冇人 push 嘅問題。
+  // flush 內部已經檢查 navigator.onLine + 按 entity dedupe，離線 / 冇嘢可推時零成本。
+  void flushSalonSyncQueue();
 }
 
 export async function idbGetQueue(): Promise<SalonSyncQueueItem[]> {
@@ -179,20 +189,22 @@ async function pushSalonMutation(item: SalonSyncQueueItem): Promise<boolean> {
         events: [{ type: eventTypeForEntity(item.entity), entityId: item.refId, payload: item.payload }],
       }),
     });
+    console.log(`[salon-sync] pushed ${item.entity} -> ${res.ok ? "ok" : "http " + res.status}`);
     return res.ok;
   } catch {
+    console.log(`[salon-sync] push failed (offline?): ${item.entity}`);
     return false;
   }
 }
 
-/** 處理 pending 變更：POST 去 POS Supabase；失敗標 failed 等下次重試。 */
+/** 處理 pending / failed 變更：POST 去 POS Supabase；失敗標 failed 等下次重試。 */
 export async function flushSalonSyncQueue(): Promise<void> {
-  if (typeof window !== "undefined" && typeof navigator !== "undefined" && !navigator.onLine) {
-    return;
-  }
+  // 唔再用 navigator.onLine 做硬性擋（好多環境會誤報 offline，令 sync 永遠唔發）；
+  // 直接嘗試 fetch，離線嗰陣 fetch 自然失敗並標 failed，下次 retry。
   const queue = await idbGetQueue();
-  const pending = queue.filter((item) => item.status === "pending");
+  const pending = queue.filter((item) => item.status === "pending" || item.status === "failed");
   if (pending.length === 0) return;
+  console.log(`[salon-sync] flush: ${pending.length} pending/failed event(s)`);
 
   // 同一 entity 只 push 最新一份（payload 已係整個陣列），減少重複上傳。
   const latestByEntity = new Map<SalonSyncQueueItem["entity"], SalonSyncQueueItem>();

@@ -94,6 +94,8 @@ function removeKey(key: string) {
 
 const SALON_MIRROR_KEYS = Object.values(SALON_STORAGE_KEYS);
 
+let salonFlushTimer: ReturnType<typeof setInterval> | null = null;
+
 if (typeof window !== "undefined") {
   void hydrateSalonFromIdb(SALON_MIRROR_KEYS);
   const triggerFlush = () => void flushSalonSyncQueue();
@@ -104,6 +106,10 @@ if (typeof window !== "undefined") {
     });
   }
   void flushSalonSyncQueue();
+  // 安全網：定時 retry 失敗 / 遺留嘅 queue item（flush 內部無 pending 時零成本）。
+  if (salonFlushTimer === null) {
+    salonFlushTimer = setInterval(triggerFlush, 20000);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────
