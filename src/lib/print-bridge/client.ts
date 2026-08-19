@@ -5,7 +5,17 @@ export function getPrintBridgeUrl(): string | null {
   const deviceOverride =
     typeof window !== "undefined" ? loadDeviceConfig()?.printBridgeUrl?.trim() : "";
   const raw = deviceOverride || process.env.NEXT_PUBLIC_PRINT_BRIDGE_URL?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    // On-prem：若 app 本身由 LAN IP 載（例如 http://192.168.31.106:3000），
+    // bridge 同喺部機 :9222 跑，自動推斷，店主零配置。
+    if (typeof window !== "undefined") {
+      const h = window.location.hostname;
+      if (/^(\d{1,3}\.){3}\d{1,3}$/.test(h) && h !== "127.0.0.1" && h !== "localhost") {
+        return `http://${h}:9222`;
+      }
+    }
+    return null;
+  }
 
   const url = raw.replace(/\/+$/, "");
 

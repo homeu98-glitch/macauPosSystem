@@ -11,8 +11,8 @@
 解法有兩條，你揀咗 **Path ②：keep Vercel，幫 bridge 加 HTTPS**。
 
 > 另一條路（Path ①）係將 POS 本身都跑喺店內 HTTP（on-prem），咁就無 mixed content 問題。
-> 但既然你要 keep Vercel，就必須行 Path ② —— bridge 要提供 **公眾信任（public CA）** 嘅 HTTPS，
-> 咁 POS 機（iPad / Android / 電腦）唔使逐部安裝自簽證書。
+> 但既然你要 keep Vercel，就必須行 Path ② —— bridge 要提供 HTTPS。
+> 有 domain 就用 Let's Encrypt（公眾信任，POS 機零配置）；**無 domain** 就用 **方案 B 自簽證書 + 逐部機裝信任**。
 
 ---
 
@@ -243,7 +243,7 @@ Let's Encrypt 證書 90 日過期。acme.sh 安裝時已經幫你加咗 cron / s
 | 情況 | 原因 / 解決 |
 |------|------------|
 | 改咗 `https://...` 仍然紅 | 域名喺店內**未**解析去 `192.168.31.106`（Step 1b DNS 覆寫未做 / 未生效）；`ping bridge.yourdomain.com` 查吓 |
-| 瀏覽器開 `https://bridge.yourdomain.com:8443` 報「唔安全」 | 證書唔係公眾 CA（例如自簽）。Path ② 必須用 Let's Encrypt DNS-01，唔可以自簽 |
+| 行 Let's Encrypt 方案時瀏覽器報「唔安全」 | 證書未正確安裝 / 域名解析錯；Let's Encrypt 係公眾 CA 唔應該報。如行**自簽方案 B**，報「唔安全」係正常，要將 `.cer` 裝入該機受信任根 CA（見方案 B Step B4） |
 | `TLS cert/key 讀取失敗` 起唔到 | `.env` 路徑錯 / 證書未發 / 權限唔夠讀 `/etc/print-bridge` |
 | 店內連到但公網連唔到 | 正常！bridge 只服務 LAN，唔使對公網開 8443（亦**唔建議**對公網開） |
 | 想本地 debug | 暫時 `PRINT_BRIDGE_ALSO_HTTP=1` 開多個 HTTP 9222，但 POS 請用 HTTPS |
@@ -259,10 +259,83 @@ Let's Encrypt 證書 90 日過期。acme.sh 安裝時已經幫你加咗 cron / s
 
 ---
 
-## 無 domain 點算？
+## 方案 B · 自簽證書（無 domain 頂住先）
 
-Let's Encrypt **唔會**對 raw IP 發證。如果你冇 domain：
+如果你冇 domain（例如純 Vercel 無 DNS 提供商），可以用 **自簽證書** 頂住：
+對住 bridge 個 LAN IP 出一份自簽證書，POS 填 `https://192.168.31.106:8443`，
+**但每部 POS 機要將 `.cer` 裝入「受信任根 CA」**，否則瀏覽器 `fetch` 會因證書不受信任而失敗（無得 click-through）。
 
-- 要么去 registrar 買個最平嘅 domain（幾十蚊一年），行上面 Path ②；
-- 要么退而求其次：用 **自簽證書 + 逐部 POS 機手動安裝信任**（麻煩，唔推薦）；
-- 要么轉 **Path ①**（POS 本身跑喺店內 HTTP on-prem），咁就無 mixed content，bridge 保持 HTTP 就得。
+> 優點：唔使 domain、唔使 DNS 覆寫、即出即用。
+> 缺點：每部新 POS 機都要手動裝一次證書；bridge IP 一變（DHCP）就要重出證書。
+
+### 前置
+
+1. `openssl` 已裝：Termux 跑 `pkg install openssl`；macOS/Linux 通常內建；Windows 用 Git Bash 或 WSL。
+2. **bridge 部機建議設 DHCP 固定 IP**（router 綁 MAC → `192.168.31.106`），否則 IP 變咗證書 SAN 唔 match。
+3. 證書只係公開嘅 `.cer`（無私鑰），可以安全抄去各部機。
+
+### Step B1 · 出證書
+
+喺跑 bridge 嗰部機：
+
+```bash
+cd /path/to/macauPosSystem/print-bridge
+BRIDGE_IP=192.168.31.106 \
+CERT_OUT_DIR=$HOME/print-bridge-certs \
+bash scripts/issue-selfsigned.sh
+```
+
+落到 `$HOME/print-bridge-certs/bridge-selfsigned.cer` + `.key`（SAN = IP `192.168.31.106`）。
+
+### Step B2 · `.env` 用自簽路徑
+
+```env
+PRINT_BRIDGE_TLS=1
+PRINT_BRIDGE_TLS_CERT=$HOME/print-bridge-certs/bridge-selfsigned.cer
+PRINT_BRIDGE_TLS_KEY=$HOME/print-bridge-certs/bridge-selfsigned.key
+PRINT_BRIDGE_TLS_PORT=8443
+PRINT_BRIDGE_ALSO_HTTP=0
+```
+
+### Step B3 · 起 bridge + 驗證
+
+```bash
+bash start.sh
+curl -k https://192.168.31.106:8443/health   # 睇到 tls:true 就掂
+```
+
+### Step B4 · 逐部 POS 機裝證書（最關鍵）
+
+將 `bridge-selfsigned.cer` 抄去該機，裝入 **「受信任的根憑證授權單位 / Trusted Root CA」**：
+
+| 平台 | 做法 |
+|------|------|
+| **Windows** | 雙撃 `.cer` → 「安裝憑證」→ 本機電腦 → 將所有憑證放入下列存放區 → 受信任的根憑證授權單位。Chrome / Edge 跟系統 store |
+| **macOS** | 雙撃 `.cer` → 鑰匙圈存取 → 系統 → 取得該證書 → 顯示簡介 → 信任 → 使用此憑證時：永遠信任。Safari/Chrome 跟系統 store |
+| **Linux (Chrome)** | `sudo cp bridge-selfsigned.cer /usr/local/share/ca-certificates/ && sudo update-ca-certificates`；Firefox 要自己 Options → Privacy & Security → View Certificates → Authorities → Import 同埋剔「信任呢個 CA 辨識網站」 |
+| **Android** | 設定 → 安全性 → 安裝憑證 → CA 憑證 → 選 `.cer`。裝完 Chrome 會信任（user-installed CA） |
+| **iPad / iOS** | 用 AirDrop/郵件收 `.cer` → 設定 → 已下載的描述檔 → 安裝 → 再 設定 → 一般 → 關於本機 → 憑證信任設定 → 開啟該證書嘅完整信任 |
+
+> ⚠️ 只裝「使用者」層級而唔係「根 CA」嘅話，瀏覽器 `fetch` 仍會當不受信任。一定要入去「受信任根 CA」。
+> 裝完要 **重開瀏覽器**（最好重啟部機）先生效。
+
+### Step B5 · POS 填 URL
+
+設定 → 設備 → 橋接 URL 填：
+
+```
+https://192.168.31.106:8443
+```
+
+狀態變綠色即過關。
+
+### 證書續期 / 換 IP
+
+自簽證書預設 825 日。IP 變咗或要換：
+
+```bash
+rm $HOME/print-bridge-certs/bridge-selfsigned.cer $HOME/print-bridge-certs/bridge-selfsigned.key
+BRIDGE_IP=新IP bash scripts/issue-selfsigned.sh
+bash start.sh   # 重啟生效
+# 每部機要重新裝新 .cer（舊嘅可留可刪，建議刪走避免混淆）
+```
