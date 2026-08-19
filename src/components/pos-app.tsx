@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
+import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { NumericKeypad } from "@/components/numeric-keypad";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -122,6 +123,10 @@ export function PosApp() {
   const [specModalItem, setSpecModalItem] = useState<MenuItem | null>(null);
   const [specEditingKey, setSpecEditingKey] = useState<string | null>(null);
   const [selectedSpecValues, setSelectedSpecValues] = useState<Record<string, string[]>>({});
+  const [marketPriceItem, setMarketPriceItem] = useState<MenuItem | null>(null);
+  const [marketPriceValue, setMarketPriceValue] = useState("");
+  const [marketPriceSpecs, setMarketPriceSpecs] = useState<NonNullable<OrderItem["selectedSpecs"]>>([]);
+  const [specThenMarketPrice, setSpecThenMarketPrice] = useState(false);
   const [voidRequest, setVoidRequest] = useState<{ item: OrderItem; mode: "one" | "all"; isFullOrder?: boolean } | null>(null);
   const [voidReason, setVoidReason] = useState("");
   const [orderActionRequest, setOrderActionRequest] = useState<
@@ -962,7 +967,7 @@ export function PosApp() {
   }
 
   function itemIdentity(item: OrderItem) {
-    return `${item.menuItemId}|${serializeSpecs(item)}|${item.note ?? ""}`;
+    return `${item.menuItemId}|${serializeSpecs(item)}|${item.price}|${item.note ?? ""}`;
   }
 
   function refundedItemQtyMap(order: PosOrder) {
@@ -975,8 +980,13 @@ export function PosApp() {
     return result;
   }
 
-  function commitMenuItem(item: MenuItem, selectedSpecs: OrderItem["selectedSpecs"] = []) {
-    const finalPrice = priceWithSpecs(item, selectedSpecs);
+  function commitMenuItem(
+    item: MenuItem,
+    selectedSpecs: OrderItem["selectedSpecs"] = [],
+    overridePrice?: number,
+  ) {
+    const isMarket = typeof overridePrice === "number";
+    const finalPrice = isMarket ? overridePrice : priceWithSpecs(item, selectedSpecs);
     const targetPrinterGroup = localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup;
     setCartItems((current) => {
       const remaining = soldOutMap[item.id]?.remainingQty;
@@ -987,6 +997,22 @@ export function PosApp() {
           return current;
         }
       }
+
+      // 時價菜：每次落單都係獨立一行，唔可以同其他價錢合併
+      if (isMarket) {
+        return [
+          ...current,
+          {
+            menuItemId: item.id,
+            name: item.name,
+            quantity: 1,
+            price: finalPrice,
+            printerGroup: targetPrinterGroup,
+            selectedSpecs,
+          },
+        ];
+      }
+
       const existing = current.find(
         (cartItem) => cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
           menuItemId: item.id,
@@ -1049,6 +1075,10 @@ export function PosApp() {
           itemIdentity(row) === specEditingKey ? { ...row, selectedSpecs, price: nextPrice } : row,
         ),
       );
+    } else if (specThenMarketPrice) {
+      setMarketPriceSpecs(selectedSpecs ?? []);
+      setMarketPriceValue("");
+      setMarketPriceItem(specModalItem);
     } else {
       commitMenuItem(specModalItem, selectedSpecs);
     }
@@ -1057,6 +1087,7 @@ export function PosApp() {
     setSpecModalItem(null);
     setSpecEditingKey(null);
     setSelectedSpecValues({});
+    setSpecThenMarketPrice(false);
   }
 
   function openItemNoteEditor(item: OrderItem) {
@@ -1076,12 +1107,37 @@ export function PosApp() {
       setToast({ tone: "info", message: `${item.name} 已售罄。` });
       return;
     }
+    if (item.isMarketPrice) {
+      if (item.specGroups?.length) {
+        setSpecThenMarketPrice(true);
+        openSpecPicker(item);
+        return;
+      }
+      setMarketPriceSpecs([]);
+      setMarketPriceValue("");
+      setMarketPriceItem(item);
+      return;
+    }
+    setSpecThenMarketPrice(false);
     if (item.specGroups?.length) {
       openSpecPicker(item);
       return;
     }
 
     commitMenuItem(item);
+  }
+
+  function confirmMarketPrice() {
+    if (!marketPriceItem) return;
+    const parsed = Number(marketPriceValue);
+    if (!marketPriceValue || Number.isNaN(parsed) || parsed <= 0) {
+      setToast({ tone: "info", message: "請輸入有效的時價金額。" });
+      return;
+    }
+    commitMenuItem(marketPriceItem, marketPriceSpecs, parsed);
+    setMarketPriceItem(null);
+    setMarketPriceValue("");
+    setMarketPriceSpecs([]);
   }
 
   function updateQuantity(itemKey: string, delta: number) {
@@ -2998,6 +3054,52 @@ export function PosApp() {
         specGroups={specModalItem?.specGroups ?? []}
         title={specModalItem ? `${specModalItem.name} 規格` : "規格"}
       />
+
+      {marketPriceItem ? (
+        <ResponsiveModal
+          onClose={() => {
+            setMarketPriceItem(null);
+            setMarketPriceValue("");
+            setMarketPriceSpecs([]);
+          }}
+          widthClassName="max-w-3xl"
+          zIndexClassName="z-[60]"
+          bodyClassName="p-0"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_300px] md:h-[520px]">
+            <div className="p-5">
+              <div className="text-xs font-semibold uppercase tracking-wide text-rose-500">時價菜</div>
+              <h3 className="mt-1 text-xl font-bold text-slate-900">{marketPriceItem.name}</h3>
+              {marketPriceSpecs.length > 0 ? (
+                <ul className="mt-3 space-y-1 text-sm text-slate-500">
+                  {marketPriceSpecs.map((spec) => (
+                    <li key={`${spec.groupId}-${spec.optionId}`}>
+                      • {spec.groupName}：{spec.optionLabel}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <p className="mt-4 text-sm text-slate-500">
+                請輸入本次下單的時價金額（{bootstrap.currency}）。
+              </p>
+              <div className="mt-3 rounded-2xl bg-slate-50 px-4 py-3 text-3xl font-bold text-slate-900">
+                {bootstrap.currency} {marketPriceValue || "0.00"}
+              </div>
+              <p className="mt-3 text-xs text-slate-400">
+                金額每次落單都不同，請向廚房確認後填入。
+              </p>
+            </div>
+            <FixedNumberPad
+              title="時價金額"
+              value={marketPriceValue}
+              onChange={setMarketPriceValue}
+              onConfirm={confirmMarketPrice}
+              confirmLabel="加入單"
+              showDisplay
+            />
+          </div>
+        </ResponsiveModal>
+      ) : null}
 
       {noteModal ? (
         <ResponsiveModal

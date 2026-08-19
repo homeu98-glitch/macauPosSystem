@@ -1784,6 +1784,24 @@ export function DeviceSettings() {
                                 }
                                 value={String(item.price)}
                               />
+                              <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
+                                <input
+                                  checked={Boolean(item.isMarketPrice)}
+                                  className="h-3.5 w-3.5 rounded border-slate-300"
+                                  onChange={(event) =>
+                                    setMenuDraft((current) => ({
+                                      ...current,
+                                      menuItems: current.menuItems.map((row) =>
+                                        row.id === item.id
+                                          ? { ...row, isMarketPrice: event.target.checked }
+                                          : row,
+                                      ),
+                                    }))
+                                  }
+                                  type="checkbox"
+                                />
+                                時價菜（落單時改價）
+                              </label>
                             </td>
                             <td className="border-b border-slate-100 py-2 pr-3">
                               <select

@@ -108,6 +108,8 @@ export interface MenuItem {
   price: number;
   printerGroup: PrinterGroup;
   specGroups?: MenuSpecGroup[];
+  /** 時價菜：落單時強制彈窗輸入當次價錢（用於海鮮 / 每日特色菜等價格浮動項） */
+  isMarketPrice?: boolean;
 }
 
 export interface MenuCategory {
