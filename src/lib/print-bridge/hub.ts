@@ -238,6 +238,7 @@ export async function fetchHubStatus(): Promise<{
   port?: number;
   deviceCount?: number;
   bound?: number;
+  subnetPrefix?: string;
   devices?: HubDevice[];
   error?: string;
 }> {
@@ -252,6 +253,7 @@ export async function fetchHubStatus(): Promise<{
       port?: number;
       deviceCount?: number;
       bound?: number;
+      subnetPrefix?: string;
       devices?: HubDevice[];
     };
     return {
@@ -261,6 +263,7 @@ export async function fetchHubStatus(): Promise<{
       port: j.port,
       deviceCount: j.deviceCount,
       bound: j.bound,
+      subnetPrefix: j.subnetPrefix,
       devices: j.devices,
     };
   } catch (e) {
@@ -319,8 +322,22 @@ export function clearHubPrinters() {
   return hubPost("/api/clear", {});
 }
 
-export function startHubScan(prefix?: string) {
-  return hubPost("/api/scan", { prefix: prefix ?? "", identify: "true" });
+export async function startHubScan(prefix?: string) {
+  // Hub 嘅 requestScan() 要求 prefix 係 3 段 IP（網段，例如 192.168.1），
+  // 否則直接 return false 唔掃描。冇傳 prefix 就由 /api/status 嘅 subnetPrefix 自動拎。
+  let p = (prefix ?? "").trim();
+  if (!p) {
+    const st = await fetchHubStatus();
+    p = st.subnetPrefix ?? "";
+  }
+  if (!p) {
+    return {
+      ok: false,
+      error: "請先填寫掃描網段（例如 192.168.1），或等 Hub 自動偵測網段",
+      devices: [],
+    };
+  }
+  return hubPost("/api/scan", { prefix: p, identify: "true" });
 }
 
 // ─────────────────────────────────────────────────────────────

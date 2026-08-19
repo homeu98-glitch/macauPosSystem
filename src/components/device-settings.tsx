@@ -85,6 +85,8 @@ export function DeviceSettings() {
   const [manualIp, setManualIp] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualService, setManualService] = useState<string>("kitchen");
+  const [hubSubnet, setHubSubnet] = useState<string>("");
+  const [hubSubnetInput, setHubSubnetInput] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scanStreamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<number | null>(null);
@@ -530,6 +532,8 @@ export function DeviceSettings() {
     setHubStatusText(
       `Hub 已連線 · IP ${st.localIp ?? "?"} · ${st.bound ?? 0}/${st.deviceCount ?? 0} 台已綁定`,
     );
+    setHubSubnet(st.subnetPrefix ?? "");
+    setHubSubnetInput((v) => v || st.subnetPrefix || "");
     const dev = await fetchHubDevices();
     if (dev.ok) setHubDevices(dev.devices ?? []);
   }
@@ -573,7 +577,7 @@ export function DeviceSettings() {
   async function handleStartScan() {
     setHubScanning(true);
     setStatus("正在掃描區網打印機…");
-    const r = await startHubScan();
+    const r = await startHubScan(hubSubnetInput.trim() || undefined);
     setHubScanning(false);
     if (r.ok) {
       setHubDevices(r.devices ?? []);
@@ -846,6 +850,15 @@ export function DeviceSettings() {
                     {hubScanning ? "掃描中…" : "掃描區網"}
                   </button>
                 </div>
+                <label className="mt-2 grid gap-1 text-xs font-semibold text-slate-600">
+                  <span>掃描網段（IP 頭 3 段，例如 192.168.1）</span>
+                  <input
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm font-normal text-slate-900"
+                    placeholder={hubSubnet || "192.168.1"}
+                    value={hubSubnetInput}
+                    onChange={(e) => setHubSubnetInput(e.target.value)}
+                  />
+                </label>
                 <div className="mt-2 grid gap-2">
                   {hubDevices.map((d) => (
                     <div
