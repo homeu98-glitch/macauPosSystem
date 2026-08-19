@@ -69,6 +69,21 @@ NEXT_PUBLIC_PRINT_BRIDGE_URL=http://127.0.0.1:9222
 
 點餐機用 WiFi/LAN 沒問題；打印請求走 HTTP 到 bridge，bridge 再轉發到打印機。
 
+## 雲端 HTTPS POS 連 LAN bridge（Path ②）
+
+若 POS 部署在 **HTTPS** 網站（如 Vercel），瀏覽器有 mixed content 限制，**不能 `fetch` HTTP 的 LAN bridge**，會報 `Failed to fetch`、health 紅色。
+
+解法：bridge 改開 **HTTPS（Let's Encrypt 證書，DNS-01 發出，公眾信任）**，POS 機零配置。
+
+1. 擁有一個 domain，用 `scripts/issue-cert.sh`（DNS-01）發證書；
+2. 店內 DNS 將 `bridge.yourdomain.com` 覆寫指向 bridge 的 LAN IP（如 `192.168.31.106`）；
+3. `.env` 設 `PRINT_BRIDGE_TLS=1` + 證書路徑 + `PRINT_BRIDGE_TLS_PORT=8443`，用 `bash start.sh` 啟動；
+4. POS 設定頁「橋接 URL」填 `https://bridge.yourdomain.com:8443`。
+
+完整步驟、店內 DNS 覆寫做法、續期與排錯見 **`docs/33-print-bridge-https-lan.md`**。
+
+server.mjs 已支援 `node:https`：由 `PRINT_BRIDGE_TLS` 控制啟用，`startHttps()` 讀 `PRINT_BRIDGE_TLS_CERT` / `PRINT_BRIDGE_TLS_KEY` 起 HTTPS；`PRINT_BRIDGE_ALSO_HTTP=1` 可同時開 HTTP 9222 做本地除錯。
+
 ## 開機自啟（可選）
 
 建立 Windows 工作排程器，登入時執行：

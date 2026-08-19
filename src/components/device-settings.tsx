@@ -547,8 +547,10 @@ export function DeviceSettings() {
             <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
               <div className="font-semibold text-slate-900">打印橋接（Android POS / print-bridge）</div>
               <p className="mt-1 text-xs text-slate-500">
-                填寫店內橋接服務地址（例如 <code className="rounded bg-slate-100 px-1">http://192.168.1.50:9222</code>
-                ）。優先使用下方本機設定；若留空則使用部署環境變量{" "}
+                填寫店內橋接服務地址。若 POS 部署在 HTTPS 網站（如 Vercel），橋接必須用{" "}
+                <code className="rounded bg-slate-100 px-1">https://</code>（見 docs/33-print-bridge-https-lan.md）；
+                純本機／LAN 可用 <code className="rounded bg-slate-100 px-1">http://192.168.1.50:9222</code>
+                。優先使用下方本機設定；若留空則使用部署環境變量{" "}
                 <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_PRINT_BRIDGE_URL</code>。
               </p>
               <label className="mt-3 grid gap-1 text-sm font-semibold text-slate-700">
@@ -558,7 +560,7 @@ export function DeviceSettings() {
                   onChange={(event) =>
                     setConfig((current) => ({ ...current, printBridgeUrl: event.target.value.trim() }))
                   }
-                  placeholder="http://192.168.1.50:9222"
+                  placeholder="https://bridge.yourdomain.com:8443"
                   value={config.printBridgeUrl ?? ""}
                 />
               </label>

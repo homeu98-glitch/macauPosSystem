@@ -9,6 +9,7 @@
     "dev": "node --watch src/server.mjs"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "iconv-lite": "^0.6.3",
     "printer": "^0.4.0"
   }
