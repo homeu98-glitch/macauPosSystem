@@ -12,10 +12,6 @@ import {
   loadBookings,
   loadSalonOrders,
 } from "@/lib/salon/storage";
-import {
-  isSalonTerminal,
-  setTerminalIndustry,
-} from "@/lib/salon/industry-config";
 import { seedMockBookingsIfEmpty, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
 import type { SalonBootstrap, SalonBooking } from "@/lib/salon/types";
 import { SalonSidebar } from "@/components/salon/salon-sidebar";
@@ -47,7 +43,6 @@ export function SalonWorkbench() {
   const [bookings, setBookings] = useState<SalonBooking[]>([]);
   const [orderCount, setOrderCount] = useState(0);
   const [nowText, setNowText] = useState("");
-  const [terminalIsSalon, setTerminalIsSalon] = useState(false);
 
   useEffect(() => {
     // 優先用真實 Ledger 商戶（登入時寫入 active-store）；無 active store 才 fallback demo（開發/未登入）。
@@ -59,7 +54,6 @@ export function SalonWorkbench() {
     seedMockBookingsIfEmpty(activeStore);
     setBookings(loadBookings());
     setOrderCount(loadSalonOrders().length);
-    setTerminalIsSalon(isSalonTerminal());
     setStatus("ready");
   }, []);
 
@@ -104,11 +98,6 @@ export function SalonWorkbench() {
     return by;
   }, [todayBookings]);
 
-  function handleMarkSalonTerminal() {
-    setTerminalIndustry("salon");
-    setTerminalIsSalon(true);
-  }
-
   if (status === "loading" || !bootstrap) {
     return (
       <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center md:pl-[88px]">
@@ -121,10 +110,10 @@ export function SalonWorkbench() {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
+    <div className="flex h-screen overflow-hidden bg-slate-100 text-slate-900 md:pl-[72px]">
       <SalonSidebar />
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* 頂部 header */}
         <header className="border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -149,28 +138,8 @@ export function SalonWorkbench() {
           </div>
         </header>
 
-        {/* Phase banner */}
-        <section className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="font-semibold">
-              Phase 2 — 預約看板 + Walk-in 開單。點擊左側導航欄切換功能。
-            </div>
-            {!terminalIsSalon ? (
-              <button
-                type="button"
-                onClick={handleMarkSalonTerminal}
-                className="rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-700"
-              >
-                把此終端標記為 salon
-              </button>
-            ) : (
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                本終端已標記為 salon
-              </span>
-            )}
-          </div>
-        </section>
-
+        {/* 可滾動內容區：只有內容超出視窗時先滾動 */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
         {/* KPI 列 */}
         <section className="grid grid-cols-2 gap-3 px-6 py-3 md:grid-cols-4">
           <KpiCard
@@ -199,59 +168,8 @@ export function SalonWorkbench() {
           />
         </section>
 
-        {/* F6：今日預約看板（精簡）— 嵌入工作台，右上跳完整看板 */}
-        <section className="px-6 pb-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-900">今日預約看板（精簡）</h2>
-              <Link
-                href="/salon/calendar"
-                className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-200"
-              >
-                完整看板 →
-              </Link>
-            </div>
-            {todayBookings.length === 0 ? (
-              <div className="py-6 text-center text-xs text-slate-400">今日尚無預約</div>
-            ) : (
-              <ul className="mt-3 grid gap-1.5">
-                {[...todayBookings]
-                  .sort((a, b) => (a.startAt < b.startAt ? -1 : 1))
-                  .map((b) => {
-                    const st = bootstrap?.staff.find((s) => s.id === b.staffId);
-                    return (
-                      <li key={b.id}>
-                        <Link
-                          href={`/salon/booking/${b.id}`}
-                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:bg-orange-50"
-                        >
-                          <div className="flex min-w-0 items-center gap-3">
-                            <span className="shrink-0 font-semibold text-slate-700">
-                              {new Date(b.startAt).toLocaleTimeString("zh-HK", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="truncate font-medium text-slate-800">{b.customerName}</div>
-                              <div className="truncate text-[11px] text-slate-500">
-                                {b.services.map((s) => s.name).join("、")}
-                                {st ? ` · ${st.nickname ?? st.name}` : ""}
-                              </div>
-                            </div>
-                          </div>
-                          <span className="ml-2 shrink-0 text-[10px] text-slate-400">{b.status}</span>
-                        </Link>
-                      </li>
-                    );
-                  })}
-              </ul>
-            )}
-          </div>
-        </section>
-
         {/* 區段：四個面板 */}
-        <section className="grid flex-1 grid-cols-1 gap-4 px-6 pb-6 md:grid-cols-2 lg:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 px-6 pb-6 pt-2 md:grid-cols-2 lg:grid-cols-4">
           <Panel
             title="今日預約"
             hint="點擊進入預約詳情"
@@ -375,6 +293,7 @@ export function SalonWorkbench() {
             </ul>
           </Panel>
         </section>
+        </div>
       </div>
     </div>
   );
