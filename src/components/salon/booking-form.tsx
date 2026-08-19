@@ -66,7 +66,7 @@ export function BookingForm({
   });
   const [hour, setHour] = useState(defaultHour);
   const [minute, setMinute] = useState(defaultMinute);
-  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [serviceCounts, setServiceCounts] = useState<Record<string, number>>({});
   const [selectedProducts, setSelectedProducts] = useState<SalonBookingProductSelection[]>([]);
   const [leftTab, setLeftTab] = useState<"service" | "product">("service");
   const [catFilter, setCatFilter] = useState<string | null>(null);
@@ -92,31 +92,42 @@ export function BookingForm({
 
   // Auto-select station based on first selected service
   useEffect(() => {
-    if (selectedServiceIds.length === 0) {
+    const selectedIds = Object.keys(serviceCounts).filter((id) => (serviceCounts[id] ?? 0) > 0);
+    if (selectedIds.length === 0) {
       setStationId("");
       return;
     }
-    const firstItem = items.find((i) => i.id === selectedServiceIds[0]);
+    const firstItem = items.find((i) => i.id === selectedIds[0]);
     if (!firstItem?.stationTypes?.length) return;
     const compatible = stations.filter((s) => firstItem.stationTypes!.includes(s.type));
     if (compatible.length > 0 && !compatible.find((s) => s.id === stationId)) {
       setStationId(compatible[0].id);
     }
-  }, [selectedServiceIds, items, stations, stationId]);
+  }, [serviceCounts, items, stations, stationId]);
 
   const selectedServices = useMemo(
-    () => items.filter((i) => selectedServiceIds.includes(i.id)),
-    [items, selectedServiceIds],
+    () => items.filter((i) => (serviceCounts[i.id] ?? 0) > 0),
+    [items, serviceCounts],
   );
 
   const totalDuration = useMemo(
-    () => selectedServices.reduce((sum, s) => sum + s.durationMinutes, 0),
-    [selectedServices],
+    () => items.reduce((sum, s) => sum + s.durationMinutes * (serviceCounts[s.id] ?? 0), 0),
+    [items, serviceCounts],
   );
 
   const servicePrice = useMemo(
-    () => selectedServices.reduce((sum, s) => sum + s.price, 0),
-    [selectedServices],
+    () => items.reduce((sum, s) => sum + s.price * (serviceCounts[s.id] ?? 0), 0),
+    [items, serviceCounts],
+  );
+
+  const serviceLineCount = useMemo(
+    () => Object.values(serviceCounts).reduce((sum, c) => sum + c, 0),
+    [serviceCounts],
+  );
+
+  const hasService = useMemo(
+    () => Object.values(serviceCounts).some((c) => c > 0),
+    [serviceCounts],
   );
 
   const productPrice = useMemo(
@@ -138,11 +149,11 @@ export function BookingForm({
     if (!customerName.trim()) next.name = "請輸入客戶姓名";
     if (!/^\d{8}$/.test(customerPhone.replace(/\D/g, ""))) next.phone = "請輸入 8 位數字電話";
     if (!staffId) next.staff = "請選擇技師";
-    if (selectedServiceIds.length === 0 && selectedProducts.length === 0)
+    if (!hasService && selectedProducts.length === 0)
       next.services = "請選擇至少一項服務或產品";
     setErrors(next);
     return Object.keys(next).length === 0;
-  }, [customerName, customerPhone, staffId, selectedServiceIds, selectedProducts]);
+  }, [customerName, customerPhone, staffId, hasService, selectedProducts]);
 
   const handleSubmit = useCallback(() => {
     if (!validate()) return;
@@ -151,13 +162,17 @@ export function BookingForm({
     const [y, m, d] = dateStr.split("-").map(Number);
     const startAt = new Date(y, m - 1, d, hour, minute, 0).toISOString();
 
-    const services = selectedServices.map((s) => ({
-      serviceItemId: s.id,
-      name: s.name,
-      price: s.price,
-      durationMinutes: s.durationMinutes,
-      staffId,
-    }));
+    const services = items
+      .filter((s) => (serviceCounts[s.id] ?? 0) > 0)
+      .flatMap((s) =>
+        Array.from({ length: serviceCounts[s.id] }, () => ({
+          serviceItemId: s.id,
+          name: s.name,
+          price: s.price,
+          durationMinutes: s.durationMinutes,
+          staffId,
+        })),
+      );
 
     const booking = pushMockBooking({
       id: "booking-" + Math.random().toString(36).slice(2, 10),
@@ -190,7 +205,8 @@ export function BookingForm({
     dateStr,
     hour,
     minute,
-    selectedServices,
+    items,
+    serviceCounts,
     selectedProducts,
     staffId,
     stationId,
@@ -204,9 +220,15 @@ export function BookingForm({
   ]);
 
   const toggleService = useCallback((id: string) => {
-    setSelectedServiceIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
+    setServiceCounts((prev) => ({ ...prev, [id]: prev[id] ? 0 : 1 }));
+  }, []);
+
+  const incService = useCallback((id: string) => {
+    setServiceCounts((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }));
+  }, []);
+
+  const decService = useCallback((id: string) => {
+    setServiceCounts((prev) => ({ ...prev, [id]: Math.max(0, (prev[id] ?? 0) - 1) }));
   }, []);
 
   const toggleProduct = useCallback(
@@ -302,7 +324,7 @@ export function BookingForm({
                 aria-pressed={source === s}
                 className={`rounded-xl px-3 py-1.5 text-sm font-semibold ring-1 transition ${
                   source === s
-                    ? "bg-orange-500 text-white ring-orange-500"
+                    ? "bg-rose-500 text-white ring-rose-500"
                     : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50"
                 }`}
               >
@@ -329,11 +351,11 @@ export function BookingForm({
             <button
               type="button"
               onClick={() => setLeftTab("service")}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                leftTab === "service"
-                  ? "bg-orange-500 text-white"
-                  : "bg-slate-200 text-slate-700 hover:bg-slate-300"
-              }`}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  leftTab === "service"
+                    ? "bg-rose-500 text-white"
+                    : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                }`}
             >
               項目（服務）
             </button>
@@ -342,7 +364,7 @@ export function BookingForm({
               onClick={() => setLeftTab("product")}
               className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
                 leftTab === "product"
-                  ? "bg-orange-500 text-white"
+                  ? "bg-rose-500 text-white"
                   : "bg-slate-200 text-slate-700 hover:bg-slate-300"
               }`}
             >
@@ -358,7 +380,7 @@ export function BookingForm({
                   onClick={() => setCatFilter(null)}
                   className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
                     catFilter === null
-                      ? "bg-orange-500 text-white"
+                      ? "bg-rose-500 text-white"
                       : "bg-slate-200 text-slate-700 hover:bg-slate-300"
                   }`}
                 >
@@ -369,11 +391,11 @@ export function BookingForm({
                     key={cat.id}
                     type="button"
                     onClick={() => setCatFilter(cat.id)}
-                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                      catFilter === cat.id
-                        ? "bg-orange-500 text-white"
-                        : "bg-slate-200 text-slate-700 hover:bg-slate-300"
-                    }`}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                          catFilter === cat.id
+                            ? "bg-rose-500 text-white"
+                            : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                        }`}
                   >
                     {cat.name}
                   </button>
@@ -387,18 +409,24 @@ export function BookingForm({
               ) : (
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {visibleItems.map((item) => {
-                    const selected = selectedServiceIds.includes(item.id);
+                    const selected = (serviceCounts[item.id] ?? 0) > 0;
+                    const svcCount = serviceCounts[item.id] ?? 0;
                     return (
                       <button
                         key={item.id}
                         type="button"
                         onClick={() => toggleService(item.id)}
-                        className={`flex min-h-[64px] flex-col justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
+                        className={`relative flex min-h-[64px] flex-col justify-between rounded-2xl px-3 py-2 text-left text-sm shadow-sm transition ${
                           selected
-                            ? "bg-orange-500 text-white"
-                            : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                            ? "bg-rose-500 text-white ring-1 ring-rose-500"
+                            : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-rose-50"
                         }`}
                       >
+                        {selected && svcCount > 1 && (
+                          <span className="absolute right-2 top-2 rounded-full bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">
+                            ×{svcCount}
+                          </span>
+                        )}
                         <span className="font-medium leading-tight">{item.name}</span>
                         <span className="mt-1 text-xs opacity-80">
                           ${item.price} · {item.durationMinutes}分
@@ -424,10 +452,10 @@ export function BookingForm({
                         key={p.id}
                         type="button"
                         onClick={() => toggleProduct(p)}
-                        className={`flex min-h-[64px] flex-col justify-between rounded-xl px-3 py-2 text-left text-sm transition ${
+                        className={`relative flex min-h-[64px] flex-col justify-between rounded-2xl px-3 py-2 text-left text-sm shadow-sm transition ${
                           sel
-                            ? "bg-orange-500 text-white"
-                            : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                            ? "bg-rose-500 text-white ring-1 ring-rose-500"
+                            : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-rose-50"
                         }`}
                       >
                         <span className="font-medium leading-tight">{p.name}</span>
@@ -472,7 +500,7 @@ export function BookingForm({
               <select
                 value={selectedCustomerId}
                 onChange={(e) => onMemberChange(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
               >
                 <option value="">（手動輸入新客 / 非會員）</option>
                 {customerList.map((c) => (
@@ -497,7 +525,7 @@ export function BookingForm({
                     setErrors((prev) => ({ ...prev, name: "" }));
                   }}
                   className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
-                    errors.name ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-orange-200"
+                    errors.name ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-rose-200"
                   }`}
                   placeholder="姓名"
                 />
@@ -518,7 +546,7 @@ export function BookingForm({
                     setErrors((prev) => ({ ...prev, phone: "" }));
                   }}
                   className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
-                    errors.phone ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-orange-200"
+                    errors.phone ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-rose-200"
                   } ${source === "phone" ? "bg-sky-50" : ""}`}
                   placeholder="8 位數字"
                 />
@@ -541,7 +569,7 @@ export function BookingForm({
                     }}
                     className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold transition ${
                       staffId === s.id
-                        ? "bg-orange-500 text-white"
+                        ? "bg-rose-500 text-white"
                         : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                     }`}
                   >
@@ -559,7 +587,7 @@ export function BookingForm({
                   type="date"
                   value={dateStr}
                   onChange={(e) => setDateStr(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
                 />
               </div>
               <div>
@@ -571,7 +599,7 @@ export function BookingForm({
                     setHour(Math.floor(v / 60));
                     setMinute(v % 60);
                   }}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
                 >
                   {timeOptions.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -587,7 +615,7 @@ export function BookingForm({
               <select
                 value={stationId}
                 onChange={(e) => setStationId(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
               >
                 <option value="">自動分配</option>
                 {stations.map((s) => (
@@ -598,11 +626,11 @@ export function BookingForm({
               </select>
             </div>
 
-            {/* 已選服務 */}
+            {/* 已選服務（支援步進器加減，對齊餐飲購物車） */}
             <div className="mt-3">
               <div className="mb-1 flex items-center justify-between text-xs font-semibold text-slate-500">
                 <span>已選服務</span>
-                <span>{selectedServices.length} 項</span>
+                <span>{serviceLineCount} 項</span>
               </div>
               {selectedServices.length === 0 ? (
                 <div className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-400">尚未選擇服務</div>
@@ -614,13 +642,32 @@ export function BookingForm({
                       <span className="shrink-0 text-xs text-slate-500">
                         ${s.price}·{s.durationMinutes}分
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => toggleService(s.id)}
-                        className="shrink-0 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-600 hover:bg-rose-200"
-                      >
-                        ✕
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => decService(s.id)}
+                          className="grid h-6 w-6 place-items-center rounded-md bg-white text-sm font-bold text-slate-600 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                        >
+                          −
+                        </button>
+                        <span className="w-4 text-center text-xs font-semibold text-slate-700">
+                          {serviceCounts[s.id] ?? 0}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => incService(s.id)}
+                          className="grid h-6 w-6 place-items-center rounded-md bg-rose-500 text-sm font-bold text-white shadow-sm hover:bg-rose-600"
+                        >
+                          ＋
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleService(s.id)}
+                          className="ml-1 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-600 hover:bg-rose-200"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -674,7 +721,7 @@ export function BookingForm({
                         <select
                           value={p.staffId ?? ""}
                           onChange={(e) => setProductStaff(p.productId, e.target.value)}
-                          className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-200"
+                          className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-rose-200"
                         >
                           <option value="">（未指定）</option>
                           {allStaff.map((s) => (
@@ -691,13 +738,13 @@ export function BookingForm({
             </div>
 
             {(selectedServices.length > 0 || selectedProducts.length > 0) && (
-              <div className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800">
+              <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800">
                 <div className="flex justify-between">
                   <span>合計</span>
                   <span>${totalPrice}</span>
                 </div>
                 {selectedServices.length > 0 && (
-                  <div className="mt-0.5 text-xs font-normal text-orange-700">
+                  <div className="mt-0.5 text-xs font-normal text-rose-700">
                     預計結束 {endTime}
                   </div>
                 )}
@@ -710,7 +757,7 @@ export function BookingForm({
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={2}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
                 placeholder="客戶特殊需求、過敏史等"
               />
             </div>
@@ -719,7 +766,7 @@ export function BookingForm({
               type="button"
               onClick={handleSubmit}
               disabled={submitting}
-              className="sticky bottom-[76px] z-10 mt-3 w-full rounded-xl bg-orange-500 py-3 text-sm font-bold text-white shadow-sm hover:bg-orange-600 disabled:opacity-50 md:static"
+              className="sticky bottom-[76px] z-10 mt-3 w-full rounded-xl bg-rose-500 py-3 text-sm font-bold text-white shadow-sm hover:bg-rose-600 disabled:opacity-50 md:static"
             >
               {submitting ? "建立中…" : "確認開單"}
             </button>

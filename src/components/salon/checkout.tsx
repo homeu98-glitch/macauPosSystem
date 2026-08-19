@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -18,6 +19,7 @@ import type {
 } from "@/lib/salon/types";
 import {
   loadBookings,
+  saveBookings,
   loadSalonOrders,
   saveSalonOrders,
   loadSalonBootstrap,
@@ -37,6 +39,8 @@ import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import { computeStaffWage } from "@/lib/salon/wages";
 import { dispatchSalonReceipt } from "@/lib/salon/print";
 import { playSuccessBeep } from "@/lib/salon/sound";
+import { NumericKeypad } from "@/components/numeric-keypad";
+import { FixedNumberPad } from "@/components/fixed-number-pad";
 
 function uid(prefix: string): string {
   const rand =
@@ -141,6 +145,9 @@ const PAYMENT_LABELS: Record<SalonPaymentMethod, string> = {
   external: "外部平台",
 };
 
+// 付款方式顯示順序（對齊餐飲高亮按鈕組）
+const PAYMENT_ORDER: SalonPaymentMethod[] = ["cash", "card", "ledger_balance", "external"];
+
 const DISCOUNT_QUICK: Array<{ label: string; rate: number }> = [
   { label: "9 折", rate: 0.9 },
   { label: "85 折", rate: 0.85 },
@@ -163,6 +170,12 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   const [tipPool, setTipPool] = useState(0);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
 
+  // 結帳會員電話（預設為預約客戶電話；店員可輸入 8 位查餘額 / 積分，對齊餐飲會員側欄）
+  const [memberPhone, setMemberPhone] = useState("");
+
+  // 折扣「精確輸入」大鍵盤開關
+  const [discountPadOpen, setDiscountPadOpen] = useState(false);
+
   // 套票抵扣（P2）：已套用的抵扣計劃；空陣 = 未套用
   const [packagePlan, setPackagePlan] = useState<SalonPackageDeduction[]>([]);
 
@@ -182,6 +195,15 @@ export function Checkout({ bookingId }: { bookingId: string }) {
 
     // 切換預約時重置生日優惠開關（每單預設套用）
     setBirthdayApplied(true);
+    // 結帳會員電話預設為預約客戶電話
+    setMemberPhone(b.customerPhone ?? "");
+    // 付款方式重置為一筆現金（金額 0，待店員輸入）
+    setPayments([{ id: uid("pay"), method: "cash", amount: 0 }]);
+    // 清空折扣 / 套票 / 積分，避免跨單殘留
+    setDiscountAmount(0);
+    setPackagePlan([]);
+    setPointsByIndex({});
+    setDiscountPadOpen(false);
 
     const bootstrap = loadSalonBootstrap();
     if (bootstrap) {
@@ -211,9 +233,10 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   }, [staffList]);
 
   const ledgerMember = useMemo(() => {
-    if (!booking) return null;
-    return getMockLedgerMember(booking.customerPhone);
-  }, [booking]);
+    const phone = memberPhone.replace(/\D/g, "");
+    if (!phone) return null;
+    return getMockLedgerMember(phone);
+  }, [memberPhone]);
 
   // ── 會員優惠（Phase 8：推薦獎勵 / 生日優惠 / 每店積分配比）──
   // loyalty 設定來自 bootstrap（舊店家經 storage 遷移補預設）；無則用全域預設。
@@ -389,6 +412,43 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     return Math.floor(base * mult);
   }, [customer, loyalty, grandTotal, birthdayActive]);
 
+  // 主付款方式（payments[0]）；可選一筆分拆（payments[1]）
+  const primary = payments[0];
+
+  // 服務項目按 serviceItemId 分組顯示（支援步進器加減 → 增刪同名服務行）
+  const serviceGroups = useMemo(() => {
+    if (!booking) return [];
+    const map = new Map<
+      string,
+      {
+        serviceItemId: string;
+        name: string;
+        price: number;
+        staffId: string;
+        durationMinutes: number;
+        count: number;
+        staffName: string;
+      }
+    >();
+    for (const s of booking.services) {
+      const existing = map.get(s.serviceItemId);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(s.serviceItemId, {
+          serviceItemId: s.serviceItemId,
+          name: s.name,
+          price: s.price,
+          staffId: s.staffId,
+          durationMinutes: s.durationMinutes,
+          count: 1,
+          staffName: staffMap[s.staffId]?.nickname ?? staffMap[s.staffId]?.name ?? "未知技師",
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [booking, staffMap]);
+
   // ── 小費操作 ──
   const splitTipsEvenly = useCallback(() => {
     if (tips.length === 0) return;
@@ -427,6 +487,75 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     setPayments((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
+  // ── 結帳頁內聯編輯（對齊餐飲購物車：服務 / 產品可加減、移除）──
+  const persistBooking = useCallback((next: SalonBooking) => {
+    saveBookings(loadBookings().map((x) => (x.id === next.id ? next : x)));
+    setBooking(next);
+  }, []);
+
+  const addServiceLine = useCallback(
+    (s: { serviceItemId: string; name: string; price: number; staffId: string; durationMinutes: number }) => {
+      if (!booking) return;
+      persistBooking({ ...booking, services: [...booking.services, { ...s }] });
+    },
+    [booking, persistBooking],
+  );
+
+  const removeOneService = useCallback(
+    (serviceItemId: string) => {
+      if (!booking) return;
+      const idx = booking.services.map((s) => s.serviceItemId).lastIndexOf(serviceItemId);
+      if (idx < 0) return;
+      persistBooking({
+        ...booking,
+        services: booking.services.filter((_, i) => i !== idx),
+      });
+    },
+    [booking, persistBooking],
+  );
+
+  const changeProductQty = useCallback(
+    (productId: string, delta: number) => {
+      if (!booking) return;
+      const sel = (booking.productSelections ?? []).map((p) =>
+        p.productId === productId ? { ...p, quantity: Math.max(1, p.quantity + delta) } : p,
+      );
+      persistBooking({ ...booking, productSelections: sel });
+    },
+    [booking, persistBooking],
+  );
+
+  const removeProductLine = useCallback(
+    (productId: string) => {
+      if (!booking) return;
+      const sel = (booking.productSelections ?? []).filter((p) => p.productId !== productId);
+      persistBooking({ ...booking, productSelections: sel.length ? sel : undefined });
+    },
+    [booking, persistBooking],
+  );
+
+  // ── 付款方式：單一主方式（高亮）+ 可選一筆分拆 ──
+  const setPrimaryMethod = useCallback(
+    (method: SalonPaymentMethod) => {
+      setPayments((prev) => {
+        const next = [...prev];
+        if (next.length === 0) next.push({ id: uid("pay"), method, amount: 0 });
+        else next[0] = { ...next[0], method };
+        if (method === "ledger_balance") {
+          next[0] = { ...next[0], amount: Math.min(grandTotal, ledgerAvailable) };
+        }
+        return next;
+      });
+    },
+    [grandTotal, ledgerAvailable],
+  );
+
+  const addSplitPayment = useCallback(() => {
+    setPayments((prev) =>
+      prev.length >= 2 ? prev : [...prev, { id: uid("pay"), method: "cash", amount: 0 }],
+    );
+  }, []);
+
   // ── 折扣快速鍵 ──
   const applyDiscountRate = useCallback(
     (rate: number) => {
@@ -443,9 +572,11 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       return;
     }
 
+    const settlePhone = memberPhone.replace(/\D/g, "");
+
     // 1) 先扣 Ledger 餘額（若有用餘額付款），不足即中止並保留訂單
     if (ledgerPaymentAmount > 0) {
-      const res = applyMockLedgerPayment(booking.customerPhone, ledgerPaymentAmount);
+      const res = applyMockLedgerPayment(settlePhone, ledgerPaymentAmount);
       if (!res.ok) {
         setSettleError(res.error ?? "Ledger 扣款失敗");
         return;
@@ -454,7 +585,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
 
     // 1b) 扣 Ledger 積分（若有用積分兌換），不足即中止並保留訂單
     if (totalPointsAllocated > 0) {
-      const res = applyMockLedgerPointsPayment(booking.customerPhone, totalPointsAllocated);
+      const res = applyMockLedgerPointsPayment(settlePhone, totalPointsAllocated);
       if (!res.ok) {
         setSettleError(res.error ?? "Ledger 積分扣減失敗");
         return;
@@ -638,6 +769,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     totalPointsAllocated,
     pointsEarned,
     staffMap,
+    memberPhone,
   ]);
 
   const reprintReceipt = useCallback(async () => {
@@ -735,288 +867,339 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
-      <div className="mx-auto max-w-4xl px-4 py-6 pb-24 md:pb-6">
-        {/* Header */}
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <div className="text-2xl font-bold text-slate-900">{booking.customerName}</div>
-            <div className="mt-1 text-sm text-slate-500">
-              {booking.customerPhone} · {booking.bookingNo}
-            </div>
-          </div>
-          {ledgerMember && (
-            <div className="rounded-xl bg-amber-50 px-3 py-2 text-right text-xs text-amber-800">
-              <div className="font-semibold">{ledgerMember.ledgerTier}</div>
-              <div>餘額 {money(ledgerMember.ledgerBalance)}</div>
-              <div>積分 {ledgerMember.ledgerPoints}</div>
-            </div>
-          )}
-        </div>
-
-        {/* 服務項目 */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 text-sm font-bold text-slate-900">服務項目</h3>
-          <div className="grid gap-2">
-            {booking.services.map((s, idx) => (
-              <div key={idx} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="text-sm font-semibold text-slate-800">{s.name}</div>
-                  <div className="text-xs text-slate-500">
-                    技師：{staffMap[s.staffId]?.nickname ?? staffMap[s.staffId]?.name ?? "未知"}
-                  </div>
-                </div>
-                <div className="text-sm font-semibold text-slate-700">{money(s.price)}</div>
-              </div>
-            ))}
+    <div className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900 md:pl-[72px]">
+      {/* Header */}
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 md:px-6">
+        <div className="min-w-0">
+          <div className="truncate text-xl font-bold text-slate-900">{booking.customerName}</div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            {booking.customerPhone} · {booking.bookingNo}
           </div>
         </div>
+        <Link
+          href="/salon"
+          className="shrink-0 rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200"
+        >
+          ← 工作台
+        </Link>
+      </header>
 
-        {/* 產品（R4：併入同一張單結帳） */}
-        {booking.productSelections && booking.productSelections.length > 0 && (
-          <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="mb-3 text-sm font-bold text-slate-900">產品</h3>
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {/* 左欄：訂單內容（可滾動） */}
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 md:px-6">
+          {/* 服務項目（步進器加減 / 移除，對齊餐飲購物車） */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-bold text-slate-900">服務項目</h3>
             <div className="grid gap-2">
-              {booking.productSelections.map((p, i) => (
-                <div key={i} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">{p.name}</div>
+              {serviceGroups.map((g) => (
+                <div
+                  key={g.serviceItemId}
+                  className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-800">{g.name}</div>
                     <div className="text-xs text-slate-500">
-                      銷售：
-                      {p.staffId
-                        ? staffMap[p.staffId]?.nickname ?? staffMap[p.staffId]?.name ?? "未知"
-                        : "未指定"}
-                      {p.commissionRate > 0 ? ` · 佣金 ${p.commissionRate}%` : ""}
+                      技師：{g.staffName}
                     </div>
                   </div>
-                  <div className="text-sm font-semibold text-slate-700">
-                    {money(p.price)} × {p.quantity}
+                  <div className="flex items-center gap-2">
+                    <Stepper
+                      count={g.count}
+                      onDec={() => removeOneService(g.serviceItemId)}
+                      onInc={() =>
+                        addServiceLine({
+                          serviceItemId: g.serviceItemId,
+                          name: g.name,
+                          price: g.price,
+                          staffId: g.staffId,
+                          durationMinutes: g.durationMinutes,
+                        })
+                      }
+                    />
+                    <div className="text-right">
+                      <div className="text-sm font-semibold text-slate-700">{money(g.price * g.count)}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {money(g.price)} × {g.count}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
-        )}
 
-        {/* 折扣 */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900">折扣</h3>
-            <div className="flex gap-1.5">
-              {DISCOUNT_QUICK.map((d) => (
-                <button
-                  key={d.label}
-                  type="button"
-                  onClick={() => applyDiscountRate(d.rate)}
-                  className="rounded-lg bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-100"
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-500">減免金額</span>
-            <input
-              type="number"
-              min={0}
-              value={discountAmount}
-              onChange={(e) => setDiscountAmount(Math.max(0, Number(e.target.value) || 0))}
-              className="w-32 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
-            />
-            <span className="text-sm text-slate-400">{currency}</span>
-          </div>
-
-          {/* 生日優惠（命中窗口才顯示；可逐單關閉） */}
-          {birthdayMatched && (
-            <div className="mt-3 rounded-xl bg-pink-50 p-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-semibold text-pink-700">
-                  生日優惠（{loyalty.birthdayWindow === "month" ? "當月生日" : "當週生日"}）
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setBirthdayApplied(!birthdayApplied)}
-                  className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                    birthdayApplied ? "bg-pink-200 text-pink-800" : "bg-slate-200 text-slate-500"
-                  }`}
-                >
-                  {birthdayApplied ? "套用中" : "已關閉"}
-                </button>
-              </div>
-              <div className="mt-1 text-xs text-pink-600">
-                {loyalty.birthdayDiscountPercent > 0
-                  ? `享 ${loyalty.birthdayDiscountPercent}% 折扣（-${money(birthdayDiscountAmount)}）`
-                  : "不打折"}
-                {loyalty.birthdayPointsMultiplier > 0
-                  ? ` · 賺分 ×${loyalty.birthdayPointsMultiplier}`
-                  : " · 不加倍"}
+          {/* 產品 */}
+          {booking.productSelections && booking.productSelections.length > 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="mb-3 text-sm font-bold text-slate-900">產品</h3>
+              <div className="grid gap-2">
+                {booking.productSelections.map((p) => (
+                  <div
+                    key={p.productId}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-800">{p.name}</div>
+                      <div className="text-xs text-slate-500">
+                        銷售：
+                        {p.staffId
+                          ? staffMap[p.staffId]?.nickname ?? staffMap[p.staffId]?.name ?? "未知"
+                          : "未指定"}
+                        {p.commissionRate > 0 ? ` · 佣金 ${p.commissionRate}%` : ""}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Stepper
+                        count={p.quantity}
+                        onDec={() => changeProductQty(p.productId, -1)}
+                        onInc={() => changeProductQty(p.productId, 1)}
+                        onRemove={() => removeProductLine(p.productId)}
+                      />
+                      <div className="text-right">
+                        <div className="text-sm font-semibold text-slate-700">
+                          {money(p.price * p.quantity)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
-        </div>
 
-        {/* 套票抵扣（P2）：自動匹配客戶 active 套票次數抵扣本單服務 */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 text-sm font-bold text-slate-900">套票抵扣</h3>
-          {!booking.customerId ? (
-            <div className="text-xs text-slate-400">
-              本預約未綁定客戶，套票抵扣需於預約關聯客戶後使用。
-            </div>
-          ) : activePackages.length === 0 ? (
-            <div className="text-xs text-slate-400">
-              此客戶無可用套票（無 active 套票或已用完 / 過期）。
-            </div>
-          ) : packagePlan.length > 0 ? (
-            <div className="grid gap-2">
-              {packagePlan.map((d, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2 text-sm"
-                >
-                  <span className="text-slate-700">{d.serviceName}</span>
-                  <span className="text-xs text-emerald-700">
-                    以「{d.packageName}」抵扣 {money(d.amount)}
-                  </span>
-                </div>
-              ))}
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-sm font-semibold text-slate-800">
-                  已抵扣合計 {money(deductedAmount)}
-                </span>
+          {/* 折扣 */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">折扣</h3>
+              <div className="flex gap-1.5">
+                {DISCOUNT_QUICK.map((d) => (
+                  <button
+                    key={d.label}
+                    type="button"
+                    onClick={() => applyDiscountRate(d.rate)}
+                    className="rounded-lg bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-100"
+                  >
+                    {d.label}
+                  </button>
+                ))}
                 <button
                   type="button"
-                  onClick={cancelPackage}
+                  onClick={() => setDiscountPadOpen((o) => !o)}
                   className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
                 >
-                  取消抵扣
+                  精確
                 </button>
               </div>
             </div>
-          ) : previewAmount > 0 ? (
-            <div className="grid gap-2">
-              {previewPlan.map((d, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm"
-                >
-                  <span className="text-slate-700">{d.serviceName}</span>
-                  <span className="text-xs text-slate-500">
-                    可用「{d.packageName}」{money(d.amount)}
-                  </span>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={applyPackage}
-                className="mt-1 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600"
-              >
-                套用套票抵扣（省 {money(previewAmount)}）
-              </button>
-              {booking.services.some(
-                (s) => !previewPlan.some((d) => d.serviceItemId === s.serviceItemId),
-              ) && (
-                <div className="text-[11px] text-slate-400">
-                  其餘服務無套票次數，將以現金 / Ledger 結算。
-                </div>
-              )}
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <span>減免金額</span>
+              <span className="text-base font-semibold text-slate-800">{money(discountAmount)}</span>
             </div>
-          ) : (
-            <div className="text-xs text-slate-400">
-              本單服務項目無符合套票（套票內含服務與本單不符）。
-            </div>
-          )}
-        </div>
 
-        {/* 積分兌換（P-積分兌換）：逐項 mix，部分積分 + 部分現金 */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900">積分兌換</h3>
-            {booking.customerId && ledgerMember && (
-              <div className="text-xs text-amber-700">可用積分 {ledgerMember.ledgerPoints}</div>
+            {discountPadOpen && (
+              <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+                <FixedNumberPad
+                  title="折扣減免金額"
+                  subtitle={`小計 ${money(subtotal)}`}
+                  value={String(discountAmount)}
+                  onChange={(v) => setDiscountAmount(Math.max(0, Number(v) || 0))}
+                  showDisplay
+                  confirmLabel="完成"
+                  onConfirm={() => setDiscountPadOpen(false)}
+                />
+              </div>
+            )}
+
+            {/* 生日優惠（命中窗口才顯示；可逐單關閉） */}
+            {birthdayMatched && (
+              <div className="mt-3 rounded-xl bg-pink-50 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-pink-700">
+                    生日優惠（{loyalty.birthdayWindow === "month" ? "當月生日" : "當週生日"}）
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBirthdayApplied(!birthdayApplied)}
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                      birthdayApplied ? "bg-pink-200 text-pink-800" : "bg-slate-200 text-slate-500"
+                    }`}
+                  >
+                    {birthdayApplied ? "套用中" : "已關閉"}
+                  </button>
+                </div>
+                <div className="mt-1 text-xs text-pink-600">
+                  {loyalty.birthdayDiscountPercent > 0
+                    ? `享 ${loyalty.birthdayDiscountPercent}% 折扣（-${money(birthdayDiscountAmount)}）`
+                    : "不打折"}
+                  {loyalty.birthdayPointsMultiplier > 0
+                    ? ` · 賺分 ×${loyalty.birthdayPointsMultiplier}`
+                    : " · 不加倍"}
+                </div>
+              </div>
             )}
           </div>
-          {!booking.customerId ? (
-            <div className="text-xs text-slate-400">本預約未綁定客戶，積分兌換需關聯 Ledger 會員。</div>
-          ) : !ledgerMember ? (
-            <div className="text-xs text-slate-400">此客戶無 Ledger 會員資料，無法兌換積分。</div>
-          ) : pointsEligible.length === 0 ? (
-            <div className="text-xs text-slate-400">本單服務項目無設定積分價，無法以積分兌換。</div>
-          ) : (
-            <div className="grid gap-2">
-              {pointsAlloc.map((a) => {
-                const on = a.allocated > 0;
-                return (
-                  <div key={a.index} className="rounded-xl bg-slate-50 px-3 py-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-slate-800">{a.name}</span>
-                      <span className="text-xs text-slate-500">
-                        {money(a.price)} / {a.pointsPrice} 分
-                      </span>
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          onChange={(e) => setPointsFor(a.index, e.target.checked ? a.pointsPrice : 0)}
-                          className="h-4 w-4"
-                        />
-                        用積分兌換
-                      </label>
-                      {on && (
-                        <>
-                          <input
-                            type="number"
-                            min={0}
-                            max={a.pointsPrice}
-                            value={a.allocated}
-                            onChange={(e) =>
-                              setPointsFor(
-                                a.index,
-                                Math.max(0, Math.min(a.pointsPrice, Number(e.target.value) || 0)),
-                              )
-                            }
-                            className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
-                          />
-                          <span className="text-xs text-slate-400">分（可少於 {a.pointsPrice} 以 mix）</span>
-                          <span className="ml-auto text-xs font-semibold text-emerald-700">
-                            抵 {money(a.cashEquiv)} · 餘 {money(a.cashLeft)} 現金
-                          </span>
-                        </>
-                      )}
-                    </div>
+
+          {/* 套票抵扣（P2） */}
+          <CollapsibleSection
+            title="套票抵扣"
+            defaultOpen={packagePlan.length > 0 || previewAmount > 0}
+          >
+            {!booking.customerId ? (
+              <div className="text-xs text-slate-400">
+                本預約未綁定客戶，套票抵扣需於預約關聯客戶後使用。
+              </div>
+            ) : activePackages.length === 0 ? (
+              <div className="text-xs text-slate-400">
+                此客戶無可用套票（無 active 套票或已用完 / 過期）。
+              </div>
+            ) : packagePlan.length > 0 ? (
+              <div className="grid gap-2">
+                {packagePlan.map((d, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2 text-sm"
+                  >
+                    <span className="text-slate-700">{d.serviceName}</span>
+                    <span className="text-xs text-emerald-700">
+                      以「{d.packageName}」抵扣 {money(d.amount)}
+                    </span>
                   </div>
-                );
-              })}
-              {totalPointsAllocated > 0 && (
+                ))}
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-sm font-semibold text-slate-800">
-                    已兌換 {totalPointsAllocated} 分（抵 {money(pointsDeduction)}）
+                    已抵扣合計 {money(deductedAmount)}
                   </span>
                   <button
                     type="button"
-                    onClick={() => setPointsByIndex({})}
+                    onClick={cancelPackage}
                     className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
                   >
-                    全部取消
+                    取消抵扣
                   </button>
                 </div>
-              )}
-              {pointsOverflow && (
-                <div className="text-xs text-rose-600">
-                  積分不足：已分配 {totalPointsAllocated} 分，但可用僅 {availablePoints} 分。
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+              </div>
+            ) : previewAmount > 0 ? (
+              <div className="grid gap-2">
+                {previewPlan.map((d, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm"
+                  >
+                    <span className="text-slate-700">{d.serviceName}</span>
+                    <span className="text-xs text-slate-500">
+                      可用「{d.packageName}」{money(d.amount)}
+                    </span>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={applyPackage}
+                  className="mt-1 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-600"
+                >
+                  套用套票抵扣（省 {money(previewAmount)}）
+                </button>
+                {booking.services.some(
+                  (s) => !previewPlan.some((d) => d.serviceItemId === s.serviceItemId),
+                ) && (
+                  <div className="text-[11px] text-slate-400">
+                    其餘服務無套票次數，將以現金 / Ledger 結算。
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400">
+                本單服務項目無符合套票（套票內含服務與本單不符）。
+              </div>
+            )}
+          </CollapsibleSection>
 
-        {/* 小費（多技師平分） */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900">小費（按技師）</h3>
-            <div className="flex gap-1.5">
+          {/* 積分兌換（P-積分兌換） */}
+          <CollapsibleSection
+            title="積分兌換"
+            defaultOpen={pointsEligible.length > 0}
+            subtitle={
+              booking.customerId && ledgerMember ? `可用積分 ${ledgerMember.ledgerPoints}` : undefined
+            }
+          >
+            {!booking.customerId ? (
+              <div className="text-xs text-slate-400">本預約未綁定客戶，積分兌換需關聯 Ledger 會員。</div>
+            ) : !ledgerMember ? (
+              <div className="text-xs text-slate-400">此客戶無 Ledger 會員資料，無法兌換積分。</div>
+            ) : pointsEligible.length === 0 ? (
+              <div className="text-xs text-slate-400">本單服務項目無設定積分價，無法以積分兌換。</div>
+            ) : (
+              <div className="grid gap-2">
+                {pointsAlloc.map((a) => {
+                  const on = a.allocated > 0;
+                  return (
+                    <div key={a.index} className="rounded-xl bg-slate-50 px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-slate-800">{a.name}</span>
+                        <span className="text-xs text-slate-500">
+                          {money(a.price)} / {a.pointsPrice} 分
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={(e) => setPointsFor(a.index, e.target.checked ? a.pointsPrice : 0)}
+                            className="h-4 w-4"
+                          />
+                          用積分兌換
+                        </label>
+                        {on && (
+                          <>
+                            <input
+                              type="number"
+                              min={0}
+                              max={a.pointsPrice}
+                              value={a.allocated}
+                              onChange={(e) =>
+                                setPointsFor(
+                                  a.index,
+                                  Math.max(0, Math.min(a.pointsPrice, Number(e.target.value) || 0)),
+                                )
+                              }
+                              className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                            />
+                            <span className="text-xs text-slate-400">分（可少於 {a.pointsPrice} 以 mix）</span>
+                            <span className="ml-auto text-xs font-semibold text-emerald-700">
+                              抵 {money(a.cashEquiv)} · 餘 {money(a.cashLeft)} 現金
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {totalPointsAllocated > 0 && (
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-sm font-semibold text-slate-800">
+                      已兌換 {totalPointsAllocated} 分（抵 {money(pointsDeduction)}）
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPointsByIndex({})}
+                      className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                    >
+                      全部取消
+                    </button>
+                  </div>
+                )}
+                {pointsOverflow && (
+                  <div className="text-xs text-rose-600">
+                    積分不足：已分配 {totalPointsAllocated} 分，但可用僅 {availablePoints} 分。
+                  </div>
+                )}
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* 小費（多技師平分） */}
+          <CollapsibleSection title="小費（按技師）" defaultOpen={false}>
+            <div className="mb-2 flex items-center justify-end gap-1.5">
               <button
                 type="button"
                 onClick={splitTipsEvenly}
@@ -1034,143 +1217,256 @@ export function Checkout({ bookingId }: { bookingId: string }) {
                 清零
               </button>
             </div>
-          </div>
-          {tips.length === 0 ? (
-            <div className="text-xs text-slate-400">此預約無指定技師，無需分拆小費。</div>
-          ) : (
-            <div className="grid gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">小費總池</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={tipPool}
-                  onChange={(e) => setTipPool(Math.max(0, Number(e.target.value) || 0))}
-                  className="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
-                />
-                <button
-                  type="button"
-                  onClick={splitTipsEvenly}
-                  className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-100"
-                >
-                  分配到各技師
-                </button>
-              </div>
-              {tips.map((t) => (
-                <div key={t.staffId} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                  <span className="text-sm text-slate-700">{t.staffName}</span>
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={0}
-                      value={t.amount}
-                      onChange={(e) => updateTipAmount(t.staffId, Math.max(0, Number(e.target.value) || 0))}
-                      className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
-                    />
-                    <span className="text-xs text-slate-400">{currency}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* 付款方式 */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900">付款方式</h3>
-            <button
-              type="button"
-              onClick={addPayment}
-              className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200"
-            >
-              + 新增
-            </button>
-          </div>
-          {payments.length === 0 ? (
-            <div className="text-xs text-slate-400">尚未新增付款，請選擇付款方式並輸入金額。</div>
-          ) : (
-            <div className="grid gap-2">
-              {payments.map((p) => (
-                <div key={p.id} className="flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
-                  <select
-                    value={p.method}
-                    onChange={(e) => updatePayment(p.id, { method: e.target.value as SalonPaymentMethod })}
-                    className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
-                  >
-                    {Object.entries(PAYMENT_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  {p.method === "ledger_balance" && (
-                    <span className="text-xs text-amber-700">可用 {money(ledgerAvailable)}</span>
-                  )}
+            {tips.length === 0 ? (
+              <div className="text-xs text-slate-400">此預約無指定技師，無需分拆小費。</div>
+            ) : (
+              <div className="grid gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">小費總池</span>
                   <input
                     type="number"
                     min={0}
-                    value={p.amount}
-                    onChange={(e) => updatePayment(p.id, { amount: Math.max(0, Number(e.target.value) || 0) })}
-                    className="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                    value={tipPool}
+                    onChange={(e) => setTipPool(Math.max(0, Number(e.target.value) || 0))}
+                    className="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
                   />
-                  <span className="text-xs text-slate-400">{currency}</span>
                   <button
                     type="button"
-                    onClick={() => removePayment(p.id)}
-                    className="ml-auto rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                    onClick={splitTipsEvenly}
+                    className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-100"
                   >
-                    移除
+                    分配到各技師
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
-          {ledgerPaymentAmount > ledgerAvailable + 0.001 && (
-            <div className="mt-2 text-xs text-rose-600">
-              Ledger 餘額不足：已選用餘額付款 {money(ledgerPaymentAmount)}，但可用僅 {money(ledgerAvailable)}。
-            </div>
-          )}
-        </div>
-
-        {/* 結算摘要 */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="space-y-1.5 text-sm">
-            <Row label="小計" value={money(subtotal)} />
-            {discountAmount > 0 && <Row label="折扣" value={`-${money(discountAmount)}`} />}
-            {birthdayDiscountAmount > 0 && <Row label="生日折扣" value={`-${money(birthdayDiscountAmount)}`} />}
-            {deductedAmount > 0 && <Row label="套票抵扣" value={`-${money(deductedAmount)}`} />}
-            {pointsDeduction > 0 && <Row label="積分兌換" value={`-${money(pointsDeduction)}`} />}
-            {depositApplied > 0 && <Row label="已付定金" value={`-${money(depositApplied)}`} />}
-            {tipTotal > 0 && <Row label="小費" value={money(tipTotal)} />}
-            <div className="my-1 border-t border-slate-100" />
-            <Row label="應收總計" value={money(grandTotal)} bold />
-            {pointsEarned > 0 && (
-              <Row label="預計賺分" value={`+${pointsEarned} 分${birthdayActive && loyalty.birthdayPointsMultiplier > 1 ? `（生日 ×${loyalty.birthdayPointsMultiplier}）` : ""}`} />
+                {tips.map((t) => (
+                  <div
+                    key={t.staffId}
+                    className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"
+                  >
+                    <span className="text-sm text-slate-700">{t.staffName}</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        value={t.amount}
+                        onChange={(e) => updateTipAmount(t.staffId, Math.max(0, Number(e.target.value) || 0))}
+                        className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                      />
+                      <span className="text-xs text-slate-400">{currency}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-            <Row label="已收" value={money(paidTotal)} />
-            {changeDue > 0 && <Row label="找零" value={money(changeDue)} />}
-            {remaining > 0.001 && <Row label="尚欠" value={money(remaining)} negative />}
+          </CollapsibleSection>
+        </div>
+
+        {/* 右欄：收銀與支付（sticky） */}
+        <aside className="flex min-h-0 w-full shrink-0 flex-col border-t border-slate-200 bg-white md:w-[400px] md:border-l md:border-t-0">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+            {/* 應收大字 */}
+            <div className="rounded-2xl bg-rose-500 px-4 py-4 text-white shadow-sm">
+              <div className="text-xs font-medium opacity-90">應收總計</div>
+              <div className="text-3xl font-extrabold tracking-tight">{money(grandTotal)}</div>
+              <div className="mt-1 flex justify-between text-xs opacity-90">
+                <span>小計 {money(subtotal)}</span>
+                {(discountAmount + birthdayDiscountAmount + deductedAmount + pointsDeduction + depositApplied) > 0 && (
+                  <span>
+                    已減{" "}
+                    {money(
+                      discountAmount + birthdayDiscountAmount + deductedAmount + pointsDeduction + depositApplied,
+                    )}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* 會員（輸入 8 位電話查餘額 / 積分） */}
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="mb-2 text-xs font-semibold text-slate-500">
+                會員（輸入 8 位電話查餘額 / 積分）
+              </div>
+              <NumericKeypad
+                value={memberPhone}
+                onChange={(v) => setMemberPhone(v.replace(/\D/g, "").slice(0, 8))}
+                maxLength={8}
+                showConfirm={false}
+              />
+              {ledgerMember ? (
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-xl bg-amber-50 px-2 py-2">
+                    <div className="text-[11px] text-amber-700">級別</div>
+                    <div className="text-sm font-bold text-amber-800">{ledgerMember.ledgerTier}</div>
+                  </div>
+                  <div className="rounded-xl bg-amber-50 px-2 py-2">
+                    <div className="text-[11px] text-amber-700">餘額</div>
+                    <div className="text-sm font-bold text-amber-800">{money(ledgerMember.ledgerBalance)}</div>
+                  </div>
+                  <div className="rounded-xl bg-amber-50 px-2 py-2">
+                    <div className="text-[11px] text-amber-700">積分</div>
+                    <div className="text-sm font-bold text-amber-800">{ledgerMember.ledgerPoints}</div>
+                  </div>
+                </div>
+              ) : memberPhone.replace(/\D/g, "").length === 8 ? (
+                <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-400">
+                  無 Ledger 會員資料
+                </div>
+              ) : null}
+              {pointsEarned > 0 && (
+                <div className="mt-2 text-center text-xs font-semibold text-rose-600">
+                  本單預計賺 {pointsEarned} 分
+                </div>
+              )}
+            </div>
+
+            {/* 付款方式（單一主方式高亮 + 可選分拆） */}
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="mb-2 text-xs font-semibold text-slate-500">付款方式</div>
+              <div className="grid grid-cols-2 gap-2">
+                {PAYMENT_ORDER.map((m) => {
+                  const selected = primary?.method === m;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setPrimaryMethod(m)}
+                      className={`rounded-xl px-2 py-2.5 text-xs font-semibold transition ${
+                        selected
+                          ? "bg-rose-500 text-white shadow-sm"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {PAYMENT_LABELS[m]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {primary?.method === "ledger_balance" && (
+                <div className="mt-2 flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <span>可用餘額 {money(ledgerAvailable)}</span>
+                  <button
+                    type="button"
+                    onClick={() => primary && updatePayment(primary.id, { amount: Math.min(grandTotal, ledgerAvailable) })}
+                    className="rounded-lg bg-amber-200 px-2 py-1 font-semibold text-amber-900 hover:bg-amber-300"
+                  >
+                    全額抵扣
+                  </button>
+                </div>
+              )}
+              {ledgerPaymentAmount > ledgerAvailable + 0.001 && (
+                <div className="mt-2 text-xs text-rose-600">
+                  Ledger 餘額不足：已選用餘額付款 {money(ledgerPaymentAmount)}，但可用僅 {money(ledgerAvailable)}。
+                </div>
+              )}
+
+              {payments.length > 1 && (
+                <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2">
+                  <div className="mb-1 text-[11px] font-semibold text-slate-500">分拆付款</div>
+                  {payments.slice(1).map((p) => (
+                    <div key={p.id} className="flex items-center gap-2 py-1">
+                      <select
+                        value={p.method}
+                        onChange={(e) => updatePayment(p.id, { method: e.target.value as SalonPaymentMethod })}
+                        className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-rose-200"
+                      >
+                        {PAYMENT_ORDER.map((m) => (
+                          <option key={m} value={m}>
+                            {PAYMENT_LABELS[m]}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={0}
+                        value={p.amount}
+                        onChange={(e) => updatePayment(p.id, { amount: Math.max(0, Number(e.target.value) || 0) })}
+                        className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                      />
+                      <span className="text-xs text-slate-400">{currency}</span>
+                      <button
+                        type="button"
+                        onClick={() => removePayment(p.id)}
+                        className="ml-auto rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                      >
+                        移除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {payments.length < 2 && primary?.method !== "ledger_balance" && (
+                <button
+                  type="button"
+                  onClick={addSplitPayment}
+                  className="mt-3 w-full rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                >
+                  ＋ 分拆付款
+                </button>
+              )}
+            </div>
+
+            {/* 實收金額（非 Ledger 時用大鍵盤輸入，自動計找零） */}
+            {primary?.method !== "ledger_balance" && (
+              <div className="overflow-hidden rounded-2xl border border-slate-200">
+                <FixedNumberPad
+                  title="實收金額"
+                  subtitle={`應收 ${money(grandTotal)}`}
+                  value={String(primary?.amount ?? 0)}
+                  onChange={(v) => primary && updatePayment(primary.id, { amount: Math.max(0, Number(v) || 0) })}
+                  showDisplay
+                  confirmLabel="結帳"
+                  onConfirm={handleSettle}
+                />
+              </div>
+            )}
+
+            {/* 結算摘要 */}
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="space-y-1.5 text-sm">
+                <Row label="小計" value={money(subtotal)} />
+                {discountAmount > 0 && <Row label="折扣" value={`-${money(discountAmount)}`} />}
+                {birthdayDiscountAmount > 0 && <Row label="生日折扣" value={`-${money(birthdayDiscountAmount)}`} />}
+                {deductedAmount > 0 && <Row label="套票抵扣" value={`-${money(deductedAmount)}`} />}
+                {pointsDeduction > 0 && <Row label="積分兌換" value={`-${money(pointsDeduction)}`} />}
+                {depositApplied > 0 && <Row label="已付定金" value={`-${money(depositApplied)}`} />}
+                {tipTotal > 0 && <Row label="小費" value={money(tipTotal)} />}
+                <div className="my-1 border-t border-slate-100" />
+                <Row label="應收總計" value={money(grandTotal)} bold />
+                {pointsEarned > 0 && (
+                  <Row
+                    label="預計賺分"
+                    value={`+${pointsEarned} 分${birthdayActive && loyalty.birthdayPointsMultiplier > 1 ? `（生日 ×${loyalty.birthdayPointsMultiplier}）` : ""}`}
+                  />
+                )}
+                <Row label="已收" value={money(paidTotal)} />
+                {changeDue > 0 && <Row label="找零" value={money(changeDue)} />}
+                {remaining > 0.001 && <Row label="尚欠" value={money(remaining)} negative />}
+              </div>
+            </div>
+
+            {settleError && (
+              <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{settleError}</div>
+            )}
+
+            <div className="rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              <span className="font-semibold">定金提示：</span>
+              若預約已付定金，將於本頁自動抵減。退款請到 Ledger 後台操作；POS 僅顯示記錄。
+            </div>
           </div>
-        </div>
 
-        {settleError && (
-          <div className="mb-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{settleError}</div>
-        )}
-
-        <button
-          type="button"
-          onClick={handleSettle}
-          disabled={!canSettle}
-          className="w-full rounded-xl bg-rose-500 px-4 py-3.5 text-base font-bold text-white shadow-sm hover:bg-rose-600 disabled:cursor-not-allowed disabled:bg-slate-300"
-        >
-          {remaining > 0.001 ? `尚欠 ${money(remaining)}` : "確認結帳"}
-        </button>
-
-        <div className="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-800">
-          <span className="font-semibold">定金提示：</span>
-          若預約已付定金，將於本頁自動抵減。退款請到 Ledger 後台操作；POS 僅顯示記錄。
-        </div>
+          {/* 底部大字「確認結帳」 */}
+          <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:px-6">
+            <button
+              type="button"
+              onClick={handleSettle}
+              disabled={!canSettle}
+              className="w-full rounded-xl bg-rose-500 py-4 text-lg font-bold text-white shadow-sm hover:bg-rose-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {remaining > 0.001 ? `尚欠 ${money(remaining)}` : "確認結帳"}
+            </button>
+          </div>
+        </aside>
       </div>
     </div>
   );
@@ -1201,6 +1497,77 @@ function Row({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+function Stepper({
+  count,
+  onDec,
+  onInc,
+  onRemove,
+}: {
+  count: number;
+  onDec: () => void;
+  onInc: () => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={onDec}
+        className="grid h-7 w-7 place-items-center rounded-lg bg-white text-base font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+      >
+        −
+      </button>
+      <span className="w-5 text-center text-sm font-semibold text-slate-800">{count}</span>
+      <button
+        type="button"
+        onClick={onInc}
+        className="grid h-7 w-7 place-items-center rounded-lg bg-rose-500 text-base font-bold text-white shadow-sm hover:bg-rose-600"
+      >
+        ＋
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="ml-1 grid h-7 w-7 place-items-center rounded-lg bg-rose-100 text-xs font-bold text-rose-600 hover:bg-rose-200"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  subtitle,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between rounded-2xl px-5 py-3 text-left"
+      >
+        <span className="text-sm font-bold text-slate-900">
+          {title}
+          {subtitle ? <span className="ml-2 text-xs font-normal text-amber-700">{subtitle}</span> : null}
+        </span>
+        <span className="text-xs text-slate-400">{open ? "收起 ▲" : "展開 ▼"}</span>
+      </button>
+      {open ? <div className="px-5 pb-5 pt-0">{children}</div> : null}
     </div>
   );
 }
