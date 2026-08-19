@@ -147,13 +147,14 @@ export function BookingForm({
   const validate = useCallback((): boolean => {
     const next: Record<string, string> = {};
     if (!customerName.trim()) next.name = "請輸入客戶姓名";
-    if (!/^\d{8}$/.test(customerPhone.replace(/\D/g, ""))) next.phone = "請輸入 8 位數字電話";
+    if (source === "phone" && !/^\d{8}$/.test(customerPhone.replace(/\D/g, "")))
+      next.phone = "電話落單必須填寫 8 位數字電話";
     if (!staffId) next.staff = "請選擇技師";
     if (!hasService && selectedProducts.length === 0)
       next.services = "請選擇至少一項服務或產品";
     setErrors(next);
     return Object.keys(next).length === 0;
-  }, [customerName, customerPhone, staffId, hasService, selectedProducts]);
+  }, [customerName, customerPhone, staffId, hasService, selectedProducts, source]);
 
   const handleSubmit = useCallback(() => {
     if (!validate()) return;
@@ -190,11 +191,14 @@ export function BookingForm({
 
     // Phase 4：walk-in / 電話開單自動 upsert 客戶檔案並連結 customerId；
     // 若已從會員清單選取，優先使用其 id 以保留會員連結。
+    // 走進模式電話為選填：無電話時不強行建立客戶檔案（避免空電話孤兒檔案）。
+    const phoneNorm = customerPhone.replace(/\D/g, "");
     const customer = selectedCustomerId
-      ? loadCustomers().find((c) => c.id === selectedCustomerId) ??
-        ensureSalonCustomer(customerName.trim(), customerPhone)
-      : ensureSalonCustomer(customerName.trim(), customerPhone);
-    updateMockBooking(booking.id, { customerId: customer.id });
+      ? loadCustomers().find((c) => c.id === selectedCustomerId)
+      : phoneNorm
+        ? ensureSalonCustomer(customerName.trim(), customerPhone)
+        : null;
+    if (customer) updateMockBooking(booking.id, { customerId: customer.id });
 
     setSubmitting(false);
     onSuccess?.(booking);
@@ -533,7 +537,12 @@ export function BookingForm({
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-500">
-                  電話 <span className="text-rose-500">*</span>
+                  電話{" "}
+                  {source === "phone" ? (
+                    <span className="text-rose-500">*</span>
+                  ) : (
+                    <span className="text-slate-400">（選填）</span>
+                  )}
                 </label>
                 <input
                   type="tel"
@@ -548,7 +557,7 @@ export function BookingForm({
                   className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${
                     errors.phone ? "border-rose-300 focus:ring-rose-200" : "border-slate-200 focus:ring-rose-200"
                   } ${source === "phone" ? "bg-sky-50" : ""}`}
-                  placeholder="8 位數字"
+                  placeholder={source === "phone" ? "8 位數字" : "8 位數字（選填）"}
                 />
                 {errors.phone && <p className="mt-1 text-xs text-rose-500">{errors.phone}</p>}
               </div>

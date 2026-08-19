@@ -166,7 +166,24 @@ export function seedMockBookingsIfEmpty(activeStore?: string | null): SalonBooki
       services: [
         { serviceItemId: "srv-hydrating-facial", ...serviceMap["srv-hydrating-facial"], staffId: staffIds[2] },
       ],
-      status: "completed",
+      status: "pending",
+      notes: "客人經 Ledger 線上預約，請確認後安排師傅。",
+    },
+    {
+      id: makeId(),
+      source: "online_ledger",
+      customerName: "何太",
+      customerPhone: "66886666",
+      staffId: "",
+      stationId: undefined,
+      startAt: todayAt(13, 30),
+      services: [
+        { serviceItemId: "srv-aroma-spa", ...serviceMap["srv-aroma-spa"], staffId: "" },
+        { serviceItemId: "srv-lash-extension", ...serviceMap["srv-lash-extension"], staffId: "" },
+      ],
+      status: "pending",
+      depositAmount: 200,
+      depositPaid: false,
     },
     {
       id: makeId(),
