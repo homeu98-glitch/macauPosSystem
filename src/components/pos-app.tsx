@@ -12,7 +12,7 @@ import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
-import { resolvePrintJobStatus } from "@/lib/print-bridge/client";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/hub";
 import { buildReceiptPrintJobs } from "@/lib/print-jobs";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {

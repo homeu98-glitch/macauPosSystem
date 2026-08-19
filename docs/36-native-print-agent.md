@@ -1,218 +1,139 @@
-# 36. Native Android Print Agent（WebView Shell + JS Bridge）
+# 36. Printer Hub 配對（POS 網頁 ↔ Sunmi Hub APK）
 
-> **取代方案**：Node print-bridge / Cloudflare Tunnel / 自管 HTTPS 證書 → 全部唔使。
-> 唯一要求：POS 需跑喺 Android 裝置上（手機 / 平板）。
+> **本文取代舊方案**：WebView Shell + `window.PosNative` JS Bridge（`print-agent-android` 那隻 WebView APK 已棄用）。
+> 用戶最終要嘅係：**POS 網頁設定頁** 配對一隻 **喺 Sunmi 機上面跑嘅 Hub APK**（同事做緊，唔喺本 repo），
+> POS 落單後經 HTTP 發信號畀 Hub，Hub 再經 LAN 出單到打印機。本 repo 只負責 POS 網頁嗰邊。
 
 ## 架構概要
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Android Tablet / Phone                              │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  WebView (com.macau.pos.printagent)           │  │
-│  │  ┌──────────────────────────────────────────┐ │  │
-│  │  │  POS Web App (Vercel HTTPS)              │ │  │
-│  │  │  https://macau-pos-system.vercel.app     │ │  │
-│  │  │                                          │ │  │
-│  │  │  window.PosNative.printJob(json) ──┐    │ │  │
-│  │  └────────────────────────────────────│───┘ │  │
-│  │                                       │      │  │
-│  │  ┌────────────────────────────────────▼───┐  │  │
-│  │  │  Kotlin JS Bridge (@JavascriptInterface) │  │
-│  │  │  Bridge.printJob(payloadJson)           │  │  │
-│  │  │  → EscPosRenderer.render* (GB18030)     │  │  │
-│  │  │  → EscPosPrinter.printRaw(ip:9100)      │  │  │
-│  │  └────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────┘  │
-│                         │                            │
-│                    LAN (raw socket)                   │
-│                         ▼                            │
-│              ┌─────────────────────┐                 │
-│              │  ESC/POS Printer    │                 │
-│              │  192.168.1.110:9100 │                 │
-│              └─────────────────────┘                 │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  POS Web App (Vercel HTTPS)                                 │
+│  macau-pos-system.vercel.app                               │
+│                                                            │
+│   device-settings 打印設置 tab：                           │
+│     QR 掃描 / 手動填 IP 配對 Hub                           │
+│     → 記低 posHubIp / posHubPort（localStorage）          │
+│                                                            │
+│   order 落單 → buildReceiptPrintJobs → pending PrintJob    │
+│     → HubPrintWorker 定時 flush                          │
+│     → sendJobToHub(job)                                   │
+│        mapGroupToService(group) → front/bar/kitchen       │
+│        renderJobToText(job) → 可讀文本票                  │
+│        sendToHub(service, text) ──┐                       │
+└───────────────────────────────────│──────────────────────┘
+                                     │ HTTP（按合約，見下）
+                                     ▼
+┌────────────────────────────────────────────────────────────┐
+│  Sunmi 機：Printer Hub APK（同事做，LAN :8787）            │
+│  （唔喺本 repo）                                           │
+│                                                            │
+│  收到 /api/print → 按 service 分發到綁定嘅打印機           │
+│     → raw socket :9100 → ESC/POS 出單                     │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### 點解唔使 mixed content / Tunnel？
+### 兩件獨立嘅嘢
 
-- POS 喺 HTTPS（Vercel）上面跑。
-- POS 呼叫 `window.PosNative.printJob()` —— 呢個係 **JavaScript method call**，唔係 HTTP `fetch`。
-- Kotlin 端用 `Socket(IP, 9100)` raw TCP 直出 ESC/POS bytes —— 唔經瀏覽器網絡層。
-- 冇 mixed content violation、冇 Private Network Access preflight、冇 HTTPS cert 需求、冇 Tunnel。
-- **斷網照印**：LAN socket 係本地網絡，唔使上網。
+1. **POS 網頁配對 UI（本 repo）**：`device-settings.tsx` 打印設置 tab + `hub.ts` adapter。
+2. **Sunmi Hub APK（同事做）**：喺 Sunmi 機安裝，開 App 顯示 QR，Listen `:8787`，掃描區網打印機、做 service 綁定、收 `/api/print` 再轉 ESC/POS 出單。
 
-## 與舊方案對照
+POS 同 Hub 之間**完全靠 HTTP 合約**溝通，POS 唔使知 Hub 內部點做。
 
-| | Node print-bridge + Tunnel | Native Agent |
+### 點解要用 mixed-content 兩段式發送？
+
+POS 喺 HTTPS（Vercel）上面跑，但 Hub 喺店內 LAN 係 `http://IP:8787`（冇 TLS）。
+直 `fetch` 會被瀏覽器 mixed-content  rule block。參考 `print.html` demo 嘅做法：
+
+- **非 HTTPS 先**（例如 LAN IP 載 POS）：直接用 `fetch POST /api/print`。
+- **HTTPS 頁**（Vercel）：用 `<img src="/beacon.png?...">` 隱藏圖片 chunked 傳輸（passive mixed content 唔會被 block）。每 chunk ≤ 1400 字元，Hub 端再拼返。
+- 用戶已確認 Sunmi 機上面呢套做法可行。
+
+## Hub API 合約（POS → Hub）
+
+Hub APK 暴露嘅 HTTP 接口（同 demo `LanHttpServer.kt` 一致）：
+
+| Method | Path | Body / Query | 說明 |
+|---|---|---|---|
+| GET | `/api/status` | — | 回 `{ok, listening, localIp, port, deviceCount, bound, devices[]}` |
+| GET | `/api/devices` | — | 回 `{ok, devices[]}`；每部 `{key,name,ip,mac,openPorts,service,canRawPrint}` |
+| POST | `/api/scan` | `prefix`,`identify` | 掃描區網打印機 |
+| POST | `/api/assign` | `key`,`service` | 將某部機綁定到 front/bar/kitchen |
+| POST | `/api/manual` | `ip`,`name`,`service` | 手動添加打印機 |
+| POST | `/api/remove` | `key` | 移除一部 |
+| POST | `/api/clear` | — | 清除全部綁定 |
+| POST | `/api/print` | `{service,message}` 或 `{ip,title,message}` | 真正出單（service 按綁定分發 / ip 直打某部） |
+| GET | `/beacon.png` | chunked query（job/seq/total/chunk + service 或 ip） | mixed-content 被動傳輸通道 |
+| GET | `/setup.html` | — | Hub 內部設定頁（POS 側「開啟 Hub 設定頁」會開佢） |
+
+### service 對應（PrinterService）
+
+| service id | 中文 | 對應 PrintJob.printerGroup |
 |---|---|---|
-| 印表路徑 | POS → HTTPS fetch → Tunnel → HTTP bridge → LAN socket | POS → JS call → Kotlin → LAN socket |
-| 需要上網 | ✅（Tunnel） | ❌（純 LAN） |
-| 斷網 | 印唔到（fetch fail） | 照印 |
-| HTTPS 證書 | 需要（Tunnel 或自管） | 唔使 |
-| 店主操作 | 設定 Tunnel URL | 裝 APK 即可 |
-| 非打印機功能（落單、結帳） | 斷網仍可用（離線 mode） | 斷網仍可用（WebView cache） |
-| 適用裝置 | 任何裝置（browser） | **只有 Android** |
+| `front` | 前台 | `receipt` / `label` / 其他 |
+| `bar` | 水吧 | `bar` |
+| `kitchen` | 廚房 | `kitchen` / `zone` |
 
-## 代碼位置
+## POS 側實作（本 repo）
 
 ```
 macauPosSystem/
-├── print-agent-android/           ← Android Studio 專案
-│   ├── app/
-│   │   ├── build.gradle.kts       ← applicationId = com.macau.pos.printagent
-│   │   └── src/main/
-│   │       ├── AndroidManifest.xml
-│   │       ├── java/com/macau/pos/printagent/
-│   │       │   ├── MainActivity.kt          ← WebView + PosNative bridge
-│   │       │   ├── model/
-│   │       │   │   ├── PrintJobDto.kt       ← JSON → PrintJob 解析
-│   │       │   │   └── PrinterCfgDto.kt    ← JSON → Printer 解析 + 匹配
-│   │       │   ├── net/
-│   │       │   │   ├── EscPosRenderer.kt   ← ESC/POS bytes（GB18030，port 自 escpos.mjs）
-│   │       │   │   ├── EscPosPrinter.kt    ← raw Socket(ip, 9100)
-│   │       │   │   └── LanScanner.kt       ← subnet 掃描
-│   │       │   └── hub/                     ← PrinterHub + 前台服務（fallback）
-│   │       └── assets/index.html           ← app 內打印機設定 UI
-│   └── settings.gradle.kts
-│
 ├── src/lib/print-bridge/
-│   ├── native.ts                  ← isNativeBridgeAvailable() + dispatchJobToNative()
-│   ├── client.ts                  ← 舊 HTTP bridge（fallback）
-│   └── dispatch.ts                ← 統一 dispatch：native 優先 → webusb → browser → HTTP bridge
+│   ├── hub.ts          ← 唯一 print path adapter：配對、status/devices、send、QR、service 映射
+│   └── dispatch.ts     ← flushPendingPrintJobs：pending job → sendJobToHub；retryFailedPrintJob
 │
-├── src/lib/salon/print.ts         ← salon 收據 dispatch（也走 native 優先）
-└── src/components/
-    ├── device-settings.tsx        ← native 連線狀態 banner + charset 下拉
-    └── print-bridge-worker.tsx    ← native 模式跳過 HTTP health/config sync
+├── src/lib/salon/print.ts   ← salon 收據 dispatch（call sendJobToHub）
+│
+├── src/components/
+│   ├── device-settings.tsx  ← 打印設置 tab：Hub 配對 UI（QR 掃描 / 手動 IP / 設備列表 / service 綁定）
+│   └── hub-print-worker.tsx ← 背景定時 flush pending job（取代舊 print-bridge-worker.tsx）
+│
+└── src/app/layout.tsx       ← 掛 <HubPrintWorker />
 ```
 
-## Bridge 合約
+### 打印派發流程
 
-POS 側（TypeScript）呼叫 → Kotlin 側接收：
-
-| JS call | 參數 | 回傳 | 說明 |
-|---|---|---|---|
-| `PosNative.printJob(payloadJson)` | `{job, printer?, kind?, storeName?, paymentMethod?, total?}` | `"{ok,queued,jobId,ip,port}"` 同步；異步 `window.__posNativePrintResult(json)` | 主路：POS 帶齊 printer 資料 |
-| `PosNative.testPrint(payloadJson)` | `{printer, storeName?}` | 同上 | 測試打印 |
-| `PosNative.getStatus()` | — | `"{ok,available,localIp,printerCount}"` | 健康檢查 |
-| `PosNative.listDevices()` | — | `"{ok,devices:[...]}"` | 列出已綁定打印機 |
-| `PosNative.openPrinterSettings()` | — | void | 跳 app 內掃描 / 綁定 UI |
-| `PosNative.backToPos()` | — | void | 返回 POS |
-
-### payload JSON 形狀
-
-```json
-{
-  "job": {
-    "id": "print-abc123",
-    "orderId": "order-001",
-    "orderNo": "A001",
-    "tableName": "桌5",
-    "ticketType": "normal",
-    "printerGroup": "kitchen",
-    "printerId": "printer-001",
-    "printerName": "廚房主印",
-    "items": [
-      { "name": "炸雞桶", "quantity": 2, "specs": ["辣"], "note": "少鹽" }
-    ],
-    "createdAt": "2026-08-19T10:30:00.000Z"
-  },
-  "printer": {
-    "id": "printer-001",
-    "name": "廚房主印",
-    "connectionType": "lan",
-    "ipAddress": "192.168.1.110",
-    "lanPort": 9100,
-    "paperSize": "80mm",
-    "charset": "gb18030"
-  },
-  "kind": "kitchen",
-  "storeName": "示範餐廳"
-}
+```
+order 落單
+  → buildReceiptPrintJobs() / dispatchSalonReceipt()
+  → 新建 PrintJob status = resolvePrintJobStatus()
+       ├─ 已配對 Hub → "sent"（樂觀，等 worker flush）
+       └─ 未配對 Hub → "pending"（等店主喺設置頁配對）
+  → HubPrintWorker 定時 flushPendingPrintJobs()
+       ├─ isHubConfigured() == false → 保持 pending
+       └─ 否則 sendJobToHub(job)
+            mapGroupToService(job.printerGroup)
+            → renderJobToText(job)  // 可讀文本票
+            → sendToHub(service, text)  // fetch 或 beacon
+            → ok ? "sent" : "failed"
 ```
 
-## ESC/POS 字集（每台可配）
+### 配對 UI（device-settings 打印設置 tab）
 
-| charset | 支援 | 預設 |
-|---|---|---|
-| `gb18030` | 簡體中文 + 繁體基本 | ✅ 預設 |
-| `gbk` | 簡體中文 | |
-| `big5` | 繁體中文 | |
-| `utf-8` | 全 Unicode（部分打印機唔支援） | |
+- **QR 掃描**：`navigator.mediaDevices.getUserMedia` + 動態載入 jsQR（CDN `jsqr@1.4.0`），解析 `http://IP:PORT` / `poshub://IP:PORT` / `IP:PORT` / `IP`。
+- **選取 QR 圖片**：`<input type=file capture=environment>` → 解碼圖片入面嘅 QR。
+- **手動填 IP + Port**（預設 `8787`）→ 「記住 IP」寫 `localStorage.posHubIp / posHubPort`。
+- **狀態列**：`fetchHubStatus()` 顯示 Hub IP / 已綁定數；設備列表 show 每部機 service `<select>` 綁定 + 「移除」。
+- **手動添加打印機** + **掃描區網** + **清除全部**（call `/api/manual` `/api/scan` `/api/clear`）。
+- **開啟 Hub 設定頁**：`window.open("http://IP:PORT/setup.html")`。
+- **測試打印**：未配對 → 提示先配對；配對咗 → `sendToHubIp(printer.ipAddress, printer.name, "Macau POS 測試打印\nPrinter Hub OK")`。
 
-- Kotlin 端用 `Charset.forName(charset)` 做 encoding。
-- POS 側 `DevicePrinterConfig.charset` 可選填；留空走 Kotlin 預設 GB18030。
-- 設定頁 → 打印機列表 → 每台 LAN 打印機有「ESC/POS 跨碼」下拉。
+## 已移除（按用戶指示：fallback print-bridge / native bridge 唔使要）
 
-## POS URL 配置
+| 檔案 | 原因 |
+|---|---|
+| `src/lib/print-bridge/client.ts` | 舊 HTTP print-bridge（`getPrintBridgeUrl` / `syncPrintBridgeConfig` 等）。`resolvePrintJobStatus` 已搬去 `hub.ts` 並改 Hub-aware。 |
+| `src/lib/print-bridge/native.ts` | `window.PosNative` native bridge（`isNativeBridgeAvailable` / `dispatchJobToNative`）。 |
+| `src/components/print-bridge-worker.tsx` | 改名 `hub-print-worker.tsx`，改成只 flush Hub。 |
+| `print-agent-android/`（WebView Shell APK） | 舊方案：WebView 載 POS + `PosNative` bridge。已棄用，改用同事隻獨立 Hub APK。倉庫入面嘅 `app-debug.apk` 唔再係目標成品。 |
 
-`app/build.gradle.kts`：
-```kotlin
-buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
-```
+> ⚠️ **唯一路徑**：依家打印只經 Hub。未配對 Hub 嘅 job 會一直 `pending`，等店主喺設置頁配對 Sunmi Hub 先出單。
+> 非 Sunmi / 冇裝 Hub APK 嘅裝置（desktop、iPad）暫時冇打印出口。
 
-- 改 URL：改呢一行，重新 build APK。
-- 預設 fallback：`MainActivity.DEFAULT_POS_URL = "https://macau-pos-system.vercel.app"`。
+## 驗收
 
-## 打印機站點對應
-
-POS 側 `DeviceConfig.printers` 已有 `role`（`kitchen` / `receipt` / `zone` / `label`）+ `zoneId`。
-Native bridge 接收 POS 帶嚟嘅 `printer` object（已經係配對好嘅具體打印機），唔使自己再路由。
-
-Fallback（POS 冇帶 printer）：Kotlin `resolvePrinterFromHub(job)` 用 `job.printerName` 或 `job.printerId` 去 `PrinterHub` 已綁定設備度搵。
-
-## 構建 APK
-
-### 前置
-
-- Android Studio (Hedgehog 或更新)
-- JDK 17（Android Studio 自帶）
-- Android SDK 36（compileSdk）
-
-### 步驟
-
-```bash
-cd print-agent-android
-
-# Debug APK
-./gradlew assembleDebug
-# → app/build/outputs/apk/debug/app-debug.apk
-
-# Release APK（需簽名）
-./gradlew assembleRelease
-```
-
-### 安裝到裝置
-
-```bash
-adb install app/build/outputs/apk/debug/app-debug.apk
-```
-
-或者 copy APK 到手機再點擊安裝。
-
-## 使用流程
-
-1. 喺 Android 裝置裝好 APK
-2. 開 app → 自動載入 POS（Vercel）
-3. 落單 → POS call `window.PosNative.printJob()` → 打印機出單
-4. 測試：POS 設定 → 打印機列表 → 測試打印按鈕 → 經 native bridge 出測試頁
-5. 綁定新打印機：POS 設定 → 「開啟打印機設定」→ app 內掃描 UI
-
-## 完全取代嘅限制
-
-> ⚠️ **只有 Android 裝置能打印。**
-
-- Desktop / iPad / 非 Android 平板：冇 `window.PosNative` → POS fallback 走舊 HTTP bridge（如有設 URL）。
-- 如果冇設 HTTP bridge URL：非 Android 裝置嘅打印 job 會維持 `pending` 狀態，唔會出單。
-- 這是 confirmed 的 trade-off（用戶選擇「完全取代」方案 A）。
-
-## 離線行為
-
-- **POS 離線**：WebView cache + LocalStorage 離線 mode 照常落單。
-- **打印機離線**：`EscPosPrinter.printRaw` 4 秒超時 → 回報失敗 → job status = `failed`。
-- **兩者都斷**：落單正常（離線 mode），打印 job 維持 pending，等下次 flush 重試。
+- `tsc --noEmit`：除咗 `layout.tsx` 預存 `LayoutProps` 誤報（同本任務無關）外，零錯誤。
+- WebUSB / browser 直印測試（device-settings 入面）保留做手動測試工具，但**唔係** order 派發路徑。
 
 ## 文檔關聯
 
@@ -221,4 +142,4 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 | docs/33 | 自管 HTTPS 證書 | 舊方案（被取代） |
 | docs/34 | 本機部署（LAN HTTP） | 舊方案（部分保留） |
 | docs/35 | Cloudflare Tunnel | 舊方案（被取代） |
-| **docs/36** | **Native Android Agent** | **本文（推薦）** |
+| **docs/36** | **Printer Hub 配對** | **本文（現行方案）** |

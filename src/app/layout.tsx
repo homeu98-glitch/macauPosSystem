@@ -3,7 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ClientOnly } from "@/components/client-only";
 import { PwaRegister } from "@/components/pwa-register";
-import { PrintBridgeWorker } from "@/components/print-bridge-worker";
+import { HubPrintWorker } from "@/components/hub-print-worker";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -52,7 +52,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           }
         >
           <PwaRegister />
-          <PrintBridgeWorker />
+          <HubPrintWorker />
           {children}
         </ClientOnly>
       </body>
