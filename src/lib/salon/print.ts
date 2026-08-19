@@ -3,12 +3,16 @@
 // 注意：刻意不呼叫餐飲的 loadPrintJobs/savePrintJobs（那些寫入 macau-pos/print-jobs）。
 // 這裡複用共享 PrintJob 型別與 dispatchJobToPrintBridge（print-bridge 基建共用）。
 
-import type { PrintJob } from "@/lib/types";
+import type { PrintJob, DevicePrinterConfig } from "@/lib/types";
 import { loadDeviceConfig } from "@/lib/storage";
 import {
   resolvePrintJobStatus,
   dispatchJobToPrintBridge,
 } from "@/lib/print-bridge/client";
+import {
+  isNativeBridgeAvailable,
+  dispatchJobToNative,
+} from "@/lib/print-bridge/native";
 import {
   loadSalonPrintJobs,
   saveSalonPrintJobs,
@@ -16,6 +20,21 @@ import {
 } from "@/lib/salon/storage";
 import type { SalonPosOrder } from "@/lib/salon/types";
 import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
+
+/**
+ * 統一 dispatch 入口：native bridge 優先，fallback 走 HTTP bridge。
+ * 餐飲同 salon 都用呢條路。
+ */
+async function dispatchPrint(
+  job: PrintJob,
+  printer: DevicePrinterConfig | null,
+  meta?: Record<string, unknown>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (isNativeBridgeAvailable()) {
+    return dispatchJobToNative(job, printer, meta);
+  }
+  return dispatchJobToPrintBridge(job, printer, meta);
+}
 
 export const SALON_PRINT_JOBS_CHANGED_EVENT = "salon-print-jobs-changed";
 
@@ -137,7 +156,7 @@ export async function dispatchSalonReceipt(order: SalonPosOrder): Promise<PrintJ
   const dispatched = await Promise.all(
     jobs.map(async (job) => {
       const printer = (deviceConfig?.printers ?? []).find((p) => p.id === job.printerId) ?? null;
-      const res = await dispatchJobToPrintBridge(job, printer, { source: "salon" });
+      const res = await dispatchPrint(job, printer, { source: "salon" });
       return res.ok ? { ...job, status: "sent" as PrintJob["status"] } : job;
     }),
   );

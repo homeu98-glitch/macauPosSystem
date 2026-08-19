@@ -3,6 +3,7 @@ import {
   isPrintBridgeEnabled,
   syncPrintBridgeConfig,
 } from "@/lib/print-bridge/client";
+import { isNativeBridgeAvailable, dispatchJobToNative } from "@/lib/print-bridge/native";
 import { isWebUsbSupported, printWebUsbJob } from "@/lib/print-webusb";
 import { printBrowserJob } from "@/lib/print-browser";
 import { loadDeviceConfig, loadPrintJobs, savePrintJobs } from "@/lib/storage";
@@ -25,6 +26,7 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   const printers = deviceConfig?.printers ?? [];
   const bridgeOn = isPrintBridgeEnabled();
   const webusbOn = isWebUsbSupported();
+  const nativeOn = isNativeBridgeAvailable();
 
   let changed = false;
   const nextJobs = [...jobs];
@@ -56,6 +58,15 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     // 瀏覽器原生打印（window.print / iframe）— 零額外安裝 fallback，唔使 bridge / webusb
     if (printer.connectionType === "browser") {
       const result = await printBrowserJob(job, printer);
+      nextJobs[index] = { ...job, status: result.ok ? "sent" : "failed" };
+      changed = true;
+      continue;
+    }
+
+    // Native Android bridge（POS 跑喺 WebView 外殼入面）—— 最高優先，
+    // 直接 LAN raw socket，唔使 HTTP fetch，無 mixed content，斷網照印。
+    if (nativeOn) {
+      const result = await dispatchJobToNative(job, printer);
       nextJobs[index] = { ...job, status: result.ok ? "sent" : "failed" };
       changed = true;
       continue;

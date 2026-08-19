@@ -84,6 +84,24 @@ NEXT_PUBLIC_PRINT_BRIDGE_URL=http://127.0.0.1:9222
 
 server.mjs 已支援 `node:https`：由 `PRINT_BRIDGE_TLS` 控制啟用，`startHttps()` 讀 `PRINT_BRIDGE_TLS_CERT` / `PRINT_BRIDGE_TLS_KEY` 起 HTTPS；`PRINT_BRIDGE_ALSO_HTTP=1` 可同時開 HTTP 9222 做本地除錯。
 
+## Cloudflare Tunnel（Path X，推薦 · 店主零操作）
+
+若你 **有 domain** 又想免證書，上面 Path ② 要自己發 Let's Encrypt 證書 + 店內 DNS 覆寫，對店主太重。更簡單：
+
+用 **Cloudflare Tunnel** 喺 bridge 手機（Android Termux）跑 `cloudflared`，將本地 `http://localhost:9222` 暴露成公眾信任嘅 `https://<random>.trycloudflare.com` —— **唔使 domain、唔使 DNS、唔使證書**，POS 照樣喺 Vercel（HTTPS）直接連呢個 URL，無 mixed content。斷線開單靠現有 offline mode。
+
+```bash
+# 喺 print-bridge 目錄：
+bash scripts/start-tunnel.sh
+# → 自動起 bridge(HTTP :9222) + cloudflared，螢幕會印出：
+#   bridge 公眾 URL（複製落 POS 設定 → 橋接 URL）：
+#     https://xxxx.trycloudflare.com
+```
+
+再將呢條 URL 貼入 POS 設定頁 → 橋接 URL，健康檢查變綠即可。完整安裝、開機自啟（Termux:Boot）、穩定 URL（named tunnel + domain）與排錯見 **`docs/35-cloudflare-tunnel-print-bridge.md`**。
+
+> 三條路對比：Path ②（自管證書，店主太重）／ on-prem（docs/34，斷網照印但要搬 app）／ **Path X Tunnel（本方案，最平、零操作、斷線靠 offline mode）**。
+
 ## 開機自啟（可選）
 
 建立 Windows 工作排程器，登入時執行：

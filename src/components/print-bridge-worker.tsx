@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchPrintBridgeHealth, getPrintBridgeUrl, PrintBridgeHealth, syncPrintBridgeConfig } from "@/lib/print-bridge/client";
+import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { flushPendingPrintJobs } from "@/lib/print-bridge/dispatch";
 import { isWebUsbSupported } from "@/lib/print-webusb";
 import { loadDeviceConfig } from "@/lib/storage";
@@ -27,13 +28,14 @@ export function PrintBridgeWorker() {
   }, []);
 
   useEffect(() => {
-    if (!bridgeUrl && !isWebUsbSupported()) return;
+    if (!bridgeUrl && !isWebUsbSupported() && !isNativeBridgeAvailable()) return;
 
     let cancelled = false;
     let bridgeOnline = false;
     let lastConfigSyncAt = 0;
 
     async function syncConfig(force = false) {
+      if (isNativeBridgeAvailable()) return; // native 唔使 sync config 到 HTTP bridge
       const now = Date.now();
       if (!force && now - lastConfigSyncAt < CONFIG_SYNC_INTERVAL_MS) return;
       const deviceConfig = loadDeviceConfig();
@@ -44,6 +46,8 @@ export function PrintBridgeWorker() {
 
     async function pollHealth() {
       if (!bridgeUrl) return;
+      // Native bridge 唔使 HTTP health check（window.PosNative 已注入）
+      if (isNativeBridgeAvailable()) return;
       const result = await fetchPrintBridgeHealth();
       if (!cancelled) {
         setHealth(result);

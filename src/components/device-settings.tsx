@@ -31,6 +31,7 @@ import {
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { isPrintBridgeEnabled, requestTestPrintBridge, syncPrintBridgeConfig } from "@/lib/print-bridge/client";
+import { isNativeBridgeAvailable, testPrintNative, fetchNativeHealth } from "@/lib/print-bridge/native";
 import {
   isWebUsbSupported,
   listWebUsbDevices,
@@ -452,6 +453,17 @@ export function DeviceSettings() {
         return;
       }
 
+      // Native Android bridge 優先——直接 LAN raw socket，唔使 HTTP fetch
+      if (isNativeBridgeAvailable()) {
+        const result = await testPrintNative(printer);
+        if (result.ok) {
+          setStatus(`已透過 native bridge 送出 ${printer.name} 測試打印。`);
+        } else {
+          setStatus(result.error);
+        }
+        return;
+      }
+
       if (isPrintBridgeEnabled()) {
         await syncPrintBridgeConfig(config);
         const result = await requestTestPrintBridge(printer);
@@ -544,13 +556,36 @@ export function DeviceSettings() {
 
         {activeTab === "device" ? (
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
+            {isNativeBridgeAvailable() ? (
+              <div className="lg:col-span-2 rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm">
+                <div className="font-semibold text-emerald-900">Native Print Agent 已連線</div>
+                <p className="mt-1 text-xs text-emerald-700">
+                  POS 正在 Android WebView 外殼入面運行，window.PosNative bridge 已注入。
+                  所有 LAN 打印機直接經 raw socket（9100）出單，唔使 HTTP 橋接、唔使 Tunnel、斷網照印。
+                  {(() => {
+                    const h = fetchNativeHealth();
+                    return h.ok ? ` 本機 IP: ${h.localIp ?? "—"} · 已綁定 ${h.printerCount ?? 0} 台` : "";
+                  })()}
+                </p>
+                <button
+                  className="mt-2 rounded-full border border-emerald-400 bg-white px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                  onClick={() => {
+                    if (window.PosNative) window.PosNative.openPrinterSettings();
+                  }}
+                >
+                  開啟打印機設定（掃描 / 綁定）
+                </button>
+              </div>
+            ) : (
             <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
               <div className="font-semibold text-slate-900">打印橋接（Android POS / print-bridge）</div>
               <p className="mt-1 text-xs text-slate-500">
                 填寫店內橋接服務地址。若 POS 部署在 HTTPS 網站（如 Vercel），橋接必須用{" "}
-                <code className="rounded bg-slate-100 px-1">https://</code>（見 docs/33-print-bridge-https-lan.md）；
-                純本機／LAN 可用 <code className="rounded bg-slate-100 px-1">http://192.168.1.50:9222</code>
-                。無 domain 可用自簽證書對住 IP（見 docs/33 方案 B）。
+                <code className="rounded bg-slate-100 px-1">https://</code>。
+                最簡單零操作嘅做法：喺 bridge 手機跑 Cloudflare Tunnel，會得到一條{" "}
+                <code className="rounded bg-slate-100 px-1">https://xxxx.trycloudflare.com</code>
+                （唔使 domain／DNS／證書，見 docs/35-cloudflare-tunnel-print-bridge.md）；自管證書見 docs/33。
+                純本機／LAN 可用 <code className="rounded bg-slate-100 px-1">http://192.168.1.50:9222</code>。
                 優先使用下方本機設定；若留空則使用部署環境變量{" "}
                 <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_PRINT_BRIDGE_URL</code>。
               </p>
@@ -561,7 +596,7 @@ export function DeviceSettings() {
                   onChange={(event) =>
                     setConfig((current) => ({ ...current, printBridgeUrl: event.target.value.trim() }))
                   }
-                  placeholder="https://192.168.31.106:8443"
+                  placeholder="https://xxxx.trycloudflare.com"
                   value={config.printBridgeUrl ?? ""}
                 />
               </label>
@@ -582,6 +617,7 @@ export function DeviceSettings() {
                 <div className="mt-2 text-xs text-amber-700">尚未設定橋接 URL，打印任務只會留在隊列中。</div>
               )}
             </div>
+            )}
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">
@@ -892,6 +928,22 @@ export function DeviceSettings() {
                             placeholder="9100"
                             value={String(printer.lanPort ?? 9100)}
                           />
+                        </label>
+                        )}
+                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                          <span className="text-xs text-slate-500">ESC/POS 跨碼（中文字集）</span>
+                          <select
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) => updatePrinter(printer.id, { charset: event.target.value || undefined })}
+                            value={printer.charset ?? ""}
+                          >
+                            <option value="">GB18030（預設）</option>
+                            <option value="gb18030">GB18030</option>
+                            <option value="gbk">GBK</option>
+                            <option value="big5">Big5</option>
+                            <option value="utf-8">UTF-8</option>
+                          </select>
                         </label>
                         )}
                         {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (

@@ -13,7 +13,8 @@
 - `src/lib/types.ts` — **只讀權威**，所有類型定義
 - `src/lib/storage.ts` — localStorage 包裝
 - `src/lib/ledger/` — Ledger Supabase 整合
-- `src/lib/print-bridge/` — 列印橋接
+- `src/lib/print-bridge/` — 列印橋接（`client.ts` HTTP bridge + `native.ts` Android JS bridge + `dispatch.ts` 統一路由）
+- `print-agent-android/` — Native Android Print Agent（WebView shell + PosNative JS bridge，取代 Tunnel/cert）
 - `docs/` — 編號文檔（01 全局設計...25 review）
 
 ## 業務定位
@@ -55,6 +56,17 @@
 ### 注意：沙盒無 node_modules
 
 當前沙盒環境跑不了 `npm install`（EPERM），用戶在自己的 dev box 跑 `npm install && npm run lint && npm run build` 確認無迴歸後 push 到 Vercel。Phase 1 + Phase 2 均通過手動覆審，待真實 build 驗證。
+
+## Native Print Agent（2026-08-19 ✅）
+
+取代 Node print-bridge + Cloudflare Tunnel + 自管證書。POS 跑喺 Android WebView 外殼，注入 `window.PosNative` JS bridge，POS call `PosNative.printJob(json)` → Kotlin raw socket `IP:9100` ESC/POS。無 mixed content、無 Tunnel、無 cert、斷網照印。
+
+- `print-agent-android/` — Kotlin app（`com.macau.pos.printagent`）；WebView 載 `BuildConfig.POS_URL`（`https://macau-pos-system.vercel.app`）
+- `src/lib/print-bridge/native.ts` — `isNativeBridgeAvailable()` + `dispatchJobToNative()` + `testPrintNative()` + `fetchNativeHealth()`
+- `dispatch.ts` + `salon/print.ts` — native 優先 → fallback HTTP bridge
+- `DevicePrinterConfig.charset` — 每台可配 ESC/POS encoding（預設 GB18030，支援 gbk/big5/utf-8）
+- **完全取代策略**：只有 Android 裝置能打印；非 Android fallback 走舊 HTTP bridge（如有設 URL）
+- 詳見 `docs/36-native-print-agent.md`；沙盒無 Android SDK，APK build 待用戶 dev box
 
 ## 重要約定
 
