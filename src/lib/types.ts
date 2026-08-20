@@ -124,6 +124,10 @@ export interface StoreTable {
   name: string;
   area: string;
   floorId?: string;
+  /** 返結 temp 枱標記（結帳／取消後由 removeReopenTempTable 清除） */
+  isReopenTemp?: boolean;
+  /** 關聯嘅返結訂單 id（供移除 temp 枱用） */
+  reopenOrderId?: string;
 }
 
 export interface FloorConfig {
@@ -373,6 +377,10 @@ export interface PosOrder {
   reopenCount?: number;
   /** 首次結帳（settled）時間，重結後保留以便對帳 */
   originalSettledAt?: string;
+  /** 返結時原枱 id（temp 枱結帳後還原用） */
+  reopenOriginalTableId?: string;
+  /** 返結時原枱名（temp 枱結帳後還原用） */
+  reopenOriginalTableName?: string;
 
   // ── 返結會員扣款快照（供反向回滾 / 重結用）──
   /** 上次結帳透過會員餘額扣減的 avos（不含券），供返結反向回滾 */

@@ -3,8 +3,8 @@
 import { applyPosAdd } from "@/lib/ledger/members";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { appendPrintJobs, buildReopenPrintJobs } from "@/lib/print-jobs";
-import { loadOrders, saveOrders } from "@/lib/storage";
-import { PosOrder } from "@/lib/types";
+import { loadOrders, loadPosLocalSettings, saveOrders, savePosLocalSettings } from "@/lib/storage";
+import { FloorConfig, PosOrder, StoreTable } from "@/lib/types";
 
 /**
  * 可返結：只可對「已結帳」（settled / paid）嘅單返結。
@@ -34,7 +34,91 @@ export type ReopenResult = {
   memberReversed?: boolean;
   /** add RPC 失敗原因（不阻擋返結，僅標記） */
   memberReverseError?: string;
+  /** 返結後嘅 temp 枱（結帳／取消後移除）；冇 floors 時為 undefined（降級：原枱直接變可編輯） */
+  tempTable?: ReopenTempTable;
+  /** 返結後嘅訂單（tableId 已轉去 temp 枱） */
+  order?: PosOrder;
 };
+
+/** 返結 temp 枱：只喺編輯期間存在，結帳／取消後移除 */
+export type ReopenTempTable = {
+  id: string;
+  name: string;
+  area: string;
+  floorId: string;
+};
+
+function findFloorContainingTable(floors: FloorConfig[], tableId: string): FloorConfig | null {
+  return floors.find((floor) => floor.tables.some((table) => table.id === tableId)) ?? null;
+}
+
+/**
+ * 為返結單建立一張 temp 枱（放喺原枱所屬 floor），令原枱唔會被「取代」。
+ * 唔支援多枱 / 無 floors 時降級：用 floors[0]，再無就新建一個 "返結枱" floor。
+ * 建立後寫入 localSettings.floors 並 dispatch 事件，pos-app 會即時刷新枱面。
+ */
+function createReopenTempTable(order: PosOrder): ReopenTempTable | null {
+  const settings = loadPosLocalSettings();
+  const floors = settings.floors?.length ? settings.floors : [];
+
+  let targetFloor: FloorConfig;
+  let nextFloors: FloorConfig[];
+  const matched = findFloorContainingTable(floors, order.tableId);
+  if (matched) {
+    targetFloor = matched;
+    nextFloors = floors;
+  } else if (floors.length > 0) {
+    targetFloor = floors[0];
+    nextFloors = floors;
+  } else {
+    targetFloor = { id: "reopen-floor", name: "返結枱", tables: [] };
+    nextFloors = [targetFloor];
+  }
+
+  const id = `temp-reopen-${order.id}`;
+  const name = `返結 ${order.tableName || order.localOrderNo}`;
+  const area = `返結·${targetFloor.name}`;
+  const tempTable: StoreTable = {
+    id,
+    name,
+    area,
+    floorId: targetFloor.id,
+    isReopenTemp: true,
+    reopenOrderId: order.id,
+  };
+
+  const updatedFloors = nextFloors.map((floor) =>
+    floor.id === targetFloor.id ? { ...floor, tables: [...floor.tables, tempTable] } : floor,
+  );
+  const updatedSettings = { ...settings, floors: updatedFloors };
+  savePosLocalSettings(updatedSettings);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("pos-local-settings-changed", { detail: { localSettings: updatedSettings } }),
+    );
+  }
+
+  return { id, name, area, floorId: targetFloor.id };
+}
+
+/** 結帳／取消後移除返結 temp 枱（按 reopenOrderId 配對） */
+export function removeReopenTempTable(orderId: string) {
+  const settings = loadPosLocalSettings();
+  const floors = settings.floors ?? [];
+  const hasTemp = floors.some((floor) => floor.tables.some((table) => table.reopenOrderId === orderId));
+  if (!hasTemp) return;
+  const updatedFloors = floors.map((floor) => ({
+    ...floor,
+    tables: floor.tables.filter((table) => table.reopenOrderId !== orderId),
+  }));
+  const updatedSettings = { ...settings, floors: updatedFloors };
+  savePosLocalSettings(updatedSettings);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("pos-local-settings-changed", { detail: { localSettings: updatedSettings } }),
+    );
+  }
+}
 
 /**
  * 餐飲返結（反結賬）：把已結單退回可編輯狀態。
@@ -86,11 +170,19 @@ export async function reopenPosOrder(params: {
     }
   }
 
+  // ①.5 建立 temp 枱，將返結單由「原枱」搬到 temp 枱（原枱唔會被取代）
+  const tempTable = createReopenTempTable(order);
+
   // ② 切狀態 + 寫審計
   const now = new Date().toISOString();
   const updated: PosOrder = {
     ...order,
     status: "reopened",
+    // 搬到 temp 枱；記低原枱以便結帳後還原
+    tableId: tempTable ? tempTable.id : order.tableId,
+    tableName: tempTable ? tempTable.name : order.tableName,
+    reopenOriginalTableId: tempTable ? order.tableId : order.reopenOriginalTableId,
+    reopenOriginalTableName: tempTable ? order.tableName : order.reopenOriginalTableName,
     reopenedAt: now,
     reopenedBy: params.operator,
     reopenReason: reason,
@@ -111,5 +203,5 @@ export async function reopenPosOrder(params: {
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
   }
 
-  return { ok: true, memberReversed, memberReverseError };
+  return { ok: true, memberReversed, memberReverseError, tempTable: tempTable ?? undefined, order: updated };
 }

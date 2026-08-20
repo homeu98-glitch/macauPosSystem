@@ -57,7 +57,7 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
-import { reopenPosOrder } from "@/lib/pos-orders";
+import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
@@ -142,6 +142,16 @@ export function PosApp() {
     }
     loadOrderIntoWorkspace(order, order.tableId);
     setPosMode("order");
+    // 若載入嘅係返結 temp 枱，鎖定佢所屬 floor 方便返枱面時睇到
+    if (order.tableId.startsWith("temp-reopen-")) {
+      const floors = loadPosLocalSettings().floors ?? [];
+      for (const floor of floors) {
+        if (floor.tables.some((table) => table.id === order.tableId)) {
+          setActiveFloorId(floor.id);
+          break;
+        }
+      }
+    }
     router.replace("/");
     // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -518,7 +528,15 @@ export function PosApp() {
     if (isQuickMode) {
       return { id: "counter", name: "快餐", area: "" } as PosBootstrap["tables"][number];
     }
-    return bootstrap.tables.find((table) => table.id === activeTableId) ?? null;
+    const fromBootstrap = bootstrap.tables.find((table) => table.id === activeTableId);
+    if (fromBootstrap) return fromBootstrap;
+    // 返結 temp 枱只喺 localSettings.floors（唔喺 bootstrap.tables），呢度補回解析
+    const floors = loadPosLocalSettings().floors ?? [];
+    for (const floor of floors) {
+      const found = floor.tables.find((table) => table.id === activeTableId);
+      if (found) return found;
+    }
+    return null;
   }, [bootstrap, activeTableId, isQuickMode]);
 
   const totals = useMemo(
@@ -668,7 +686,7 @@ export function PosApp() {
   );
   const currentSettlementOrder =
     (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-    (!isQuickMode && activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
+    (!isQuickMode && (activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened") ? activeOrder : null) ??
     (!isQuickMode ? unsettledOrder : null);
   const discountAmount = useMemo(() => {
     const value = Number(discountValue);
@@ -1820,6 +1838,7 @@ export function PosApp() {
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    removeReopenTempTable(orderId);
     pushEvents([
       {
         id: uid("evt"),
@@ -1903,6 +1922,7 @@ export function PosApp() {
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    removeReopenTempTable(orderId);
     const refundEvent: QueueEvent = {
       id: uid("evt"),
       type: "ORDER_UPDATED",
@@ -2002,6 +2022,7 @@ export function PosApp() {
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    removeReopenTempTable(orderId);
     const refundEvent: QueueEvent = {
       id: uid("evt"),
       type: "ORDER_UPDATED",
@@ -2089,10 +2110,16 @@ export function PosApp() {
       const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
       const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
       const hasGrantRedeem = selectedGrantIds.length > 0;
+      // 返結 temp 枱重結：還原原枱並清掉 temp 標記
+      const isReopenRestore = Boolean(targetOrder.reopenOriginalTableId);
       const updatedOrder: PosOrder = {
         ...targetOrder,
         status: quickPaidFlow ? "paid" : "settled",
         fulfillmentStatus: quickPaidFlow ? targetOrder.fulfillmentStatus ?? "preparing" : undefined,
+        tableId: isReopenRestore ? targetOrder.reopenOriginalTableId! : targetOrder.tableId,
+        tableName: isReopenRestore ? targetOrder.reopenOriginalTableName! : targetOrder.tableName,
+        reopenOriginalTableId: undefined,
+        reopenOriginalTableName: undefined,
         paymentMethod:
           memberDeduction > 0
             ? paymentSummary.total > 0
@@ -2124,6 +2151,11 @@ export function PosApp() {
         saveOrders(nextOrders);
         return nextOrders;
       });
+
+      // 返結 temp 枱重結完成：移除 temp 枱（訂單記錄唔新增，只改返結嗰條）
+      if (isReopenRestore) {
+        removeReopenTempTable(targetOrder.id);
+      }
 
       const paymentEvent: QueueEvent = {
         id: uid("evt"),
@@ -2323,9 +2355,9 @@ export function PosApp() {
     }
 
     const targetOrder =
-      activeOrder?.status === "sent_to_kitchen"
+      activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened"
         ? activeOrder
-        : orders.find((order) => order.status === "sent_to_kitchen");
+        : orders.find((order) => order.status === "sent_to_kitchen" || order.status === "reopened");
     if (!targetOrder) {
       setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
       return;
@@ -2354,6 +2386,13 @@ export function PosApp() {
       }
       setRoReason("");
       setRoModalOpen(false);
+      // 進入 temp 枱工作枱（原枱唔會被取代；亦可唔改直接結帳）
+      const temp = result.tempTable;
+      if (temp) {
+        setActiveFloorId(temp.floorId);
+        setPosMode("order");
+        loadOrderIntoWorkspace(result.order ?? null, temp.id);
+      }
       setToast({
         tone: "success",
         message: result.memberReversed
@@ -2431,7 +2470,7 @@ export function PosApp() {
                         type="button"
                       >
                         <div className="text-base font-semibold text-slate-900">
-                          {isReopenedTable ? `返結帳 ${table.name}` : table.name}
+                          {table.name}
                         </div>
                         <div className="mt-2 text-xs text-slate-500">{table.area}</div>
                         <div

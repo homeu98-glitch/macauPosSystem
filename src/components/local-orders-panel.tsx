@@ -161,8 +161,8 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
       setReopenReason("");
       setViewingOrderId(null);
       setReopenTargetOrderId(null);
-      // 跳去點餐枱面：進入可編輯「返結帳」狀態，可加餐 / 改價 / 重結
-      const tableId = order.tableId && order.tableId !== "counter" ? order.tableId : "";
+      // 跳去點餐枱面：進入 temp 枱可編輯「返結帳」狀態，可加餐 / 改價 / 重結（原枱唔會被取代）
+      const tableId = result.tempTable?.id ?? (order.tableId && order.tableId !== "counter" ? order.tableId : "");
       router.push(`/?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`);
     } finally {
       setReopenSubmitting(false);
