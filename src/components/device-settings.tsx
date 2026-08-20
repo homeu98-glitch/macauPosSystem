@@ -33,7 +33,6 @@ import { restoreLedgerSession } from "@/lib/ledger/session";
 import {
   HUB_SERVICES,
   applyPairText,
-  assignHubPrinter,
   clearHubPrinters,
   fetchHubDevices,
   fetchHubStatus,
@@ -45,6 +44,7 @@ import {
   sendToHubIp,
   startHubScan,
   type HubDevice,
+  type HubServiceId,
 } from "@/lib/print-bridge/hub";
 import {
   isWebUsbSupported,
@@ -538,14 +538,45 @@ export function DeviceSettings() {
     if (dev.ok) setHubDevices(dev.devices ?? []);
   }
 
-  async function handleAssign(key: string, serviceId: string) {
-    const r = await assignHubPrinter(key, serviceId);
-    if (r.ok) {
-      setHubDevices(r.devices ?? []);
-      setStatus("已綁定打印機到 " + serviceId);
-    } else {
-      setStatus(r.error ?? "綁定失敗");
+  /** 將 Hub 發現嘅機一鍵加入本機打印機列表（master）。 */
+  async function handleAddDiscoveredToPrinterList(device: HubDevice) {
+    const ip = device.ip.trim();
+    if (!ip) {
+      setStatus("呢部機冇 IP，無法加入列表");
+      return;
     }
+    if (config.printers.some((p) => p.ipAddress && p.ipAddress.trim() === ip)) {
+      setStatus(`打印機 ${device.name}（${ip}）已經喺列表入面`);
+      return;
+    }
+    const svc: HubServiceId = (device.service as HubServiceId) || "kitchen";
+    const role: DevicePrinterConfig["role"] = svc === "front" ? "receipt" : "zone";
+    const newPrinter: DevicePrinterConfig = {
+      id: uid("printer"),
+      role,
+      zoneId: role === "zone" ? localSettings.printZones[0]?.id ?? "kitchen" : undefined,
+      connectionType: "lan",
+      name: device.name || `打印機 ${ip}`,
+      model: "",
+      paperSize: "80mm",
+      ipAddress: ip,
+      lanPort: 9100,
+      usbLabel: "",
+      charset: "gb18030",
+      enabled: true,
+    };
+    setConfig((current) => ({
+      ...current,
+      updatedAt: new Date().toISOString(),
+      printers: [...current.printers, newPrinter],
+    }));
+    // 路由交畀 config.printers（按 role/zoneId → ipAddress 經 Hub 直打），唔使再 service 綁定
+    setStatus(`已加入打印機列表：${newPrinter.name}（${svc === "front" ? "收銀" : svc === "bar" ? "水吧" : "廚房"}）`);
+  }
+
+  /** role 改動時更新本機打印機設定（IP 路由會自動按 role/zoneId 搵到呢部機）。 */
+  function handleRoleChange(printer: DevicePrinterConfig, newRole: DevicePrinterConfig["role"]) {
+    updatePrinter(printer.id, { role: newRole });
   }
 
   async function handleManualAdd() {
@@ -553,15 +584,43 @@ export function DeviceSettings() {
       setStatus("請填寫打印機 IP");
       return;
     }
+    // 1) 寫入 APK（讓 Hub 認得呢部機）
     const r = await manualAddHubPrinter(manualIp.trim(), manualName.trim(), manualService);
-    if (r.ok) {
-      setHubDevices(r.devices ?? []);
-      setManualIp("");
-      setManualName("");
-      setStatus("已手動添加打印機");
-    } else {
-      setStatus(r.error ?? "添加失敗");
+    if (!r.ok) {
+      setStatus(`Hub 添加失敗：${r.error ?? ""}`);
+      return;
     }
+    setHubDevices(r.devices ?? []);
+    // 2) 同時寫入本機打印機列表（master）
+    const ip = manualIp.trim();
+    if (config.printers.some((p) => p.ipAddress && p.ipAddress.trim() === ip)) {
+      setStatus(`打印機 ${manualName || ip}（${ip}）已經喺列表入面`);
+    } else {
+      const svc = manualService as HubServiceId;
+      const role: DevicePrinterConfig["role"] = svc === "front" ? "receipt" : "zone";
+      const newPrinter: DevicePrinterConfig = {
+        id: uid("printer"),
+        role,
+        zoneId: role === "zone" ? localSettings.printZones[0]?.id ?? "kitchen" : undefined,
+        connectionType: "lan",
+        name: manualName.trim() || `打印機 ${ip}`,
+        model: "",
+        paperSize: "80mm",
+        ipAddress: ip,
+        lanPort: 9100,
+        usbLabel: "",
+        charset: "gb18030",
+        enabled: true,
+      };
+      setConfig((current) => ({
+        ...current,
+        updatedAt: new Date().toISOString(),
+        printers: [...current.printers, newPrinter],
+      }));
+      setStatus(`已手動添加打印機並加入列表：${newPrinter.name}`);
+    }
+    setManualIp("");
+    setManualName("");
   }
 
   async function handleRemove(key: string) {
@@ -839,7 +898,7 @@ export function DeviceSettings() {
               <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold text-slate-800">
-                    打印機（{hubDevices.length}）
+                    發現的打印機（{hubDevices.length}）
                   </span>
                   <button
                     type="button"
@@ -860,46 +919,52 @@ export function DeviceSettings() {
                   />
                 </label>
                 <div className="mt-2 grid gap-2">
-                  {hubDevices.map((d) => (
-                    <div
-                      key={d.key}
-                      className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-                    >
-                      <span className="min-w-0 flex-1 text-sm">
-                        <span className="font-medium text-slate-800">{d.name}</span>{" "}
-                        <span className="text-slate-500">{d.ip}</span>
-                        {!d.canRawPrint && (
-                          <span className="ml-1 text-xs text-red-600">（無 9100）</span>
+                  {hubDevices.map((d) => {
+                    const linked = config.printers.some(
+                      (p) => p.ipAddress && p.ipAddress.trim() === d.ip.trim(),
+                    );
+                    return (
+                      <div
+                        key={d.key}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"
+                      >
+                        <span className="min-w-0 flex-1 text-sm">
+                          <span className="font-medium text-slate-800">{d.name}</span>{" "}
+                          <span className="text-slate-500">{d.ip}</span>
+                          {!d.canRawPrint && (
+                            <span className="ml-1 text-xs text-red-600">（無 9100）</span>
+                          )}
+                        </span>
+                        {linked ? (
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+                            已加入 ✓
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="rounded-lg bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-700"
+                            onClick={() => handleAddDiscoveredToPrinterList(d)}
+                          >
+                            ＋ 加入列表
+                          </button>
                         )}
-                      </span>
-                      <select
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                        value={d.service}
-                        onChange={(e) => handleAssign(d.key, e.target.value)}
-                      >
-                        <option value="">未綁定</option>
-                        {HUB_SERVICES.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="rounded-lg px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
-                        onClick={() => handleRemove(d.key)}
-                      >
-                        移除
-                      </button>
-                    </div>
-                  ))}
+                        <button
+                          type="button"
+                          className="rounded-lg px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                          onClick={() => handleRemove(d.key)}
+                        >
+                          移除
+                        </button>
+                      </div>
+                    );
+                  })}
                   {hubDevices.length === 0 && (
                     <p className="text-xs text-slate-400">尚未掃描到打印機，請按「掃描區網」。</p>
                   )}
                 </div>
 
                 <div className="mt-3 grid gap-1">
-                  <span className="text-xs font-semibold text-slate-600">手動添加打印機</span>
+                  <span className="text-xs font-semibold text-slate-600">手動添加打印機（同時加入列表）</span>
                   <div className="flex flex-wrap gap-2">
                     <input
                       className="min-w-[120px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
@@ -939,7 +1004,7 @@ export function DeviceSettings() {
                   className="mt-3 text-xs font-semibold text-red-600 hover:underline"
                   onClick={handleClear}
                 >
-                  清除全部已綁定
+                  清除 Hub 綁定
                 </button>
               </div>
             </div>
@@ -1120,7 +1185,29 @@ export function DeviceSettings() {
                     <article key={printer.id} className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">{printer.name}</div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              title={
+                                printer.ipAddress &&
+                                hubDevices.some(
+                                  (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
+                                )
+                                  ? "Hub 已連線"
+                                  : printer.ipAddress
+                                    ? "未連線 Hub / 未在線"
+                                    : "未設定 IP"
+                              }
+                              className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
+                                printer.ipAddress &&
+                                hubDevices.some(
+                                  (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
+                                )
+                                  ? "bg-emerald-500"
+                                  : "bg-slate-300"
+                              }`}
+                            />
+                            <div className="truncate text-sm font-semibold text-slate-900">{printer.name}</div>
+                          </div>
                           <div className="mt-1 break-words text-xs text-slate-500">
                             {printer.role === "receipt"
                               ? "收據"
@@ -1162,7 +1249,7 @@ export function DeviceSettings() {
                           <span className="text-xs text-slate-500">用途</span>
                           <select
                             className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { role: event.target.value as DevicePrinterConfig["role"] })}
+                            onChange={(event) => handleRoleChange(printer, event.target.value as DevicePrinterConfig["role"])}
                             value={printer.role}
                           >
                             <option value="zone">分區出單</option>

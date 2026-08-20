@@ -8,7 +8,9 @@
  * 命名空間 localStorage：posHubIp / posHubPort
  */
 
-import type { PrintJob } from "@/lib/types";
+import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
+import { loadDeviceConfig } from "@/lib/storage";
+import { defaultDeviceConfig } from "@/lib/mock-data";
 
 declare global {
   interface Window {
@@ -99,13 +101,6 @@ export function applyPairText(raw: string): { ip: string; port: string } | null 
   return ip ? { ip, port } : null;
 }
 
-/** 將 PrintJob.printerGroup 映射到 Hub service id。 */
-export function mapGroupToService(group: string): HubServiceId {
-  if (group === "kitchen" || group === "zone") return "kitchen";
-  if (group === "bar") return "bar";
-  return "front"; // receipt / label / 其他 → 前台
-}
-
 /** 將 PrintJob 渲染成可讀文本票（Hub 嘅 Android 端再做 ESC/POS 封裝）。 */
 export function renderJobToText(job: PrintJob): string {
   const lines: string[] = [];
@@ -191,16 +186,6 @@ async function sendFetch(
   }
 }
 
-/** 發送到指定 service（按 service 分發到綁定嘅打印機）。 */
-export async function sendToHub(service: HubServiceId | string, message: string): Promise<void> {
-  const base = getHubUrl();
-  if (!base) throw new Error("未配對 Printer Hub");
-  if (typeof location !== "undefined" && location.protocol !== "https:") {
-    if (await sendFetch(base, { service, message })) return;
-  }
-  sendBeacon(base, { service }, message);
-}
-
 /** 發送到指定 IP（直接打某部打印機，唔經 service 分發）。 */
 export async function sendToHubIp(ip: string, title: string, message: string): Promise<void> {
   const base = getHubUrl();
@@ -211,20 +196,48 @@ export async function sendToHubIp(ip: string, title: string, message: string): P
   sendBeacon(base, { ip, title }, message);
 }
 
-/** 高階：將 PrintJob 渲染 + 映射 service + 發送到 Hub。 */
+/**
+ * 高階：將 PrintJob 經 Printer Hub（Sunmi APK）直打到對應打印機 IP（:9100）。
+ * 路由按 config.printers 嘅 role / zoneId 對應（單一真源），唔再用 Hub service 綁定
+ * （assign / printService 路徑於最新 APK 已非主要路徑，且實測唔 work）。
+ */
 export async function sendJobToHub(
   job: PrintJob,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const base = getHubUrl();
   if (!base) return { ok: false, error: "未配對 Printer Hub" };
-  const service = mapGroupToService(job.printerGroup);
+  const printer = resolveJobPrinter(job);
+  if (!printer || !printer.ipAddress) {
+    return { ok: false, error: `搵唔到對應打印機 IP（printerGroup=${job.printerGroup}）` };
+  }
   const message = renderJobToText(job);
   try {
-    await sendToHub(service, message);
+    await sendToHubIp(printer.ipAddress, printer.name, message);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "發送到 Hub 失敗" };
   }
+}
+
+/** 按 PrintJob.printerGroup 由 config.printers 搵出目標打印機（單一真源）。 */
+export function resolveJobPrinter(job: PrintJob): DevicePrinterConfig | undefined {
+  const printers = (loadDeviceConfig() ?? defaultDeviceConfig).printers;
+  // 1) 直接用 job 記錄嘅 printerId（建 job 時已對應到某部 config.printers）
+  if (job.printerId) {
+    const byId = printers.find((p) => p.id === job.printerId && p.enabled);
+    if (byId) return byId;
+  }
+  // 2) 按 printerGroup 對應 role / zoneId
+  if (job.printerGroup === "receipt") {
+    return printers.find((p) => p.role === "receipt" && p.enabled);
+  }
+  if (job.printerGroup === "label") {
+    return printers.find((p) => p.role === "label" && p.enabled);
+  }
+  // 分區打印機：zoneId 對應 printerGroup
+  return printers.find(
+    (p) => (p.role === "zone" || p.role === "label") && (p.zoneId ?? "") === job.printerGroup && p.enabled,
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -304,10 +317,6 @@ async function hubPost(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Hub 離線" };
   }
-}
-
-export function assignHubPrinter(key: string, serviceId: HubServiceId | string) {
-  return hubPost("/api/assign", { key, service: serviceId });
 }
 
 export function manualAddHubPrinter(ip: string, name: string, serviceId: HubServiceId | string) {

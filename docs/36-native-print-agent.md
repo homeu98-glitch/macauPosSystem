@@ -18,9 +18,9 @@
 │   order 落單 → buildReceiptPrintJobs → pending PrintJob    │
 │     → HubPrintWorker 定時 flush                          │
 │     → sendJobToHub(job)                                   │
-│        mapGroupToService(group) → front/bar/kitchen       │
+│        resolveJobPrinter(job) → config.printers 按 role/zoneId 搵 IP │
 │        renderJobToText(job) → 可讀文本票                  │
-│        sendToHub(service, text) ──┐                       │
+│        sendToHubIp(ip, name, text) ──┐                    │
 └───────────────────────────────────│──────────────────────┘
                                      │ HTTP（按合約，見下）
                                      ▼
@@ -28,7 +28,7 @@
 │  Sunmi 機：Printer Hub APK（同事做，LAN :8787）            │
 │  （唔喺本 repo）                                           │
 │                                                            │
-│  收到 /api/print → 按 service 分發到綁定嘅打印機           │
+│  收到 /api/print → ip 唔空就 printToIp(ip) 直打（優先）    │
 │     → raw socket :9100 → ESC/POS 出單                     │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -58,15 +58,18 @@ Hub APK 暴露嘅 HTTP 接口（同 demo `LanHttpServer.kt` 一致）：
 | GET | `/api/status` | — | 回 `{ok, listening, localIp, port, deviceCount, bound, devices[]}` |
 | GET | `/api/devices` | — | 回 `{ok, devices[]}`；每部 `{key,name,ip,mac,openPorts,service,canRawPrint}` |
 | POST | `/api/scan` | `prefix`,`identify` | 掃描區網打印機 |
-| POST | `/api/assign` | `key`,`service` | 將某部機綁定到 front/bar/kitchen |
-| POST | `/api/manual` | `ip`,`name`,`service` | 手動添加打印機 |
+| POST | `/api/assign` | `key`,`service` | ⚠️ **已棄用**：POS 改行 IP 直打，唔再 service 綁定（留喺 APK 合約但 POS 唔 call） |
+| POST | `/api/manual` | `ip`,`name`,`service` | 手動添加打印機（service 欄 POS 已唔使，但 APK 合約仲收） |
 | POST | `/api/remove` | `key` | 移除一部 |
 | POST | `/api/clear` | — | 清除全部綁定 |
 | POST | `/api/print` | `{service,message}` 或 `{ip,title,message}` | 真正出單（service 按綁定分發 / ip 直打某部） |
 | GET | `/beacon.png` | chunked query（job/seq/total/chunk + service 或 ip） | mixed-content 被動傳輸通道 |
 | GET | `/setup.html` | — | Hub 內部設定頁（POS 側「開啟 Hub 設定頁」會開佢） |
 
-### service 對應（PrinterService）
+### service 對應（PrinterService）— ⚠️ 已棄用，僅留作文檔
+
+> 2026-08-20 起 POS 改行 **IP 直打**（`sendToHubIp`），唔再用 service 綁定路由。
+> 下面對應表只係舊 contract 嘅參考，APK 端 `printToIp(ip)` 優先過 `printService(service)`。
 
 | service id | 中文 | 對應 PrintJob.printerGroup |
 |---|---|---|
@@ -79,7 +82,7 @@ Hub APK 暴露嘅 HTTP 接口（同 demo `LanHttpServer.kt` 一致）：
 ```
 macauPosSystem/
 ├── src/lib/print-bridge/
-│   ├── hub.ts          ← 唯一 print path adapter：配對、status/devices、send、QR、service 映射
+│   ├── hub.ts          ← 唯一 print path adapter：配對、status/devices、send、QR、resolveJobPrinter 按 config.printers IP 路由
 │   └── dispatch.ts     ← flushPendingPrintJobs：pending job → sendJobToHub；retryFailedPrintJob
 │
 ├── src/lib/salon/print.ts   ← salon 收據 dispatch（call sendJobToHub）
@@ -102,9 +105,9 @@ order 落單
   → HubPrintWorker 定時 flushPendingPrintJobs()
        ├─ isHubConfigured() == false → 保持 pending
        └─ 否則 sendJobToHub(job)
-            mapGroupToService(job.printerGroup)
+            resolveJobPrinter(job) → config.printers 按 role/zoneId 搵目標打印機 IP
             → renderJobToText(job)  // 可讀文本票
-            → sendToHub(service, text)  // fetch 或 beacon
+            → sendToHubIp(ip, name, text)  // 經 Hub 直打該 IP（fetch 或 beacon）
             → ok ? "sent" : "failed"
 ```
 
@@ -113,9 +116,20 @@ order 落單
 - **QR 掃描**：`navigator.mediaDevices.getUserMedia` + 動態載入 jsQR（CDN `jsqr@1.4.0`），解析 `http://IP:PORT` / `poshub://IP:PORT` / `IP:PORT` / `IP`。
 - **選取 QR 圖片**：`<input type=file capture=environment>` → 解碼圖片入面嘅 QR。
 - **手動填 IP + Port**（預設 `8787`）→ 「記住 IP」寫 `localStorage.posHubIp / posHubPort`。
-- **狀態列**：`fetchHubStatus()` 顯示 Hub IP / 已綁定數；設備列表 show 每部機 service `<select>` 綁定 + 「移除」。
-- **手動添加打印機** + **掃描區網** + **清除全部**（call `/api/manual` `/api/scan` `/api/clear`）。
 - **開啟 Hub 設定頁**：`window.open("http://IP:PORT/setup.html")`。
+
+#### UI 合併 + IP 路由（2026-08-19 → 2026-08-20 改 IP 路由）
+
+用戶要求將「Hub 掃描到嘅打印機」同原本「打印機列表」（`config.printers`）合埋，用**打印機列表做單一真源**；「Hub ID 配對」區（QR / IP / Port / 記住 / 設定頁）保留不動。
+
+> **2026-08-20 路由策略改為方案 B（按 IP 直打）**：經核對 APK `LanHttpServer.kt`，`runPrint(service, ip, title, message)` 優先 `ip.isNotBlank() → hub.printToIp(ip,...)`，service 路徑係舊嘅、且 user 確認「之前 hub service 其實都不 work」。所以**移除晒所有 service 綁定代碼**（`mapGroupToService` / `sendToHub` / `assignHubPrinter` / `/api/assign` call），改為 `sendJobToHub` 按 `config.printers` 嘅 `role`/`zoneId` 搵 `ipAddress` → `sendToHubIp`。徹底單一真源，`dispatch.ts` 同 `salon/print.ts` 都 call `sendJobToHub`，改呢度就兩邊一齊改。
+
+- **發現區重構**：`hubDevices` 唔再做 service `<select>` 綁定 UI，改為每行一部機 + 「＋ 加入列表」掣；IP 已經喺 `config.printers` 嘅顯示「已加入 ✓」（用 ip 去重）；保留「移除」（call `/api/remove`）同「清除 Hub 綁定」（call `/api/clear`）。
+- **`handleAddDiscoveredToPrinterList(device)`**：用 `hubDevice` 預填一條 `config.printers`（`name/ipAddress/lanPort=9100/connectionType=lan/charset=gb18030/role` 由 `device.service` 映射 `front→receipt` 其餘→zone/`enabled=true`）。IP 已存在則跳過。唔再做任何 service 綁定（`assignHubPrinter` 已刪）。
+- **`handleManualAdd`**：同時寫入 APK（`/api/manual`）+ `config.printers`（master），APK 回傳 error 用 `setStatus` 顯示（修咗之前「添加打印機唔行」冇 error 嘅問題）。
+- **打印機列表狀態燈**：每條 printer 用 `ipAddress` 對照即時 `hubDevices`，連到且 `canRawPrint` → 綠點「Hub 已連線」，否則灰點。
+- **`handleRoleChange`**：同步 `updatePrinter(printer.id, { role: newRole })`；只改 `config.printers` 嘅 role（IP 路由靠 role/zoneId，唔使重新綁 service）。
+- **路由策略（方案 B · 按 IP 直打 · 2026-08-20）**：`sendJobToHub(job)` → `resolveJobPrinter(job)` 按 `config.printers` 搵目標（先 `printerId`，再 `role`/`zoneId` 配 `job.printerGroup`）→ 攞 `ipAddress` → `sendToHubIp(ip, name, text)`。`dispatch.ts` / `salon/print.ts` 唔使改，食 `sendJobToHub` 新行為。
 - **測試打印**：未配對 → 提示先配對；配對咗 → `sendToHubIp(printer.ipAddress, printer.name, "Macau POS 測試打印\nPrinter Hub OK")`。
 
 ## 已移除（按用戶指示：fallback print-bridge / native bridge 唔使要）
