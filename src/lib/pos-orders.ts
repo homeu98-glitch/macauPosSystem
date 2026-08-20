@@ -6,8 +6,21 @@ import { appendPrintJobs, buildReopenPrintJobs } from "@/lib/print-jobs";
 import { loadOrders, saveOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 
-/** 可返結的狀態：只可對已結帳單（settled / paid）返結；refunded / cancelled 禁止。 */
+/**
+ * 可返結：只可對「已結帳」（settled / paid）嘅單返結。
+ *
+ * 線上單分兩種：
+ * - 純線上快餐 / 自取 / 外賣（onlineOrderId 存在，且未轉枱 = tableId 係 counter 或無枱）：
+ *   由上游 Ledger 對賬，POS 端唔支援返結。
+ * - 「線上堂食單轉到枱」（onlineOrderId 存在 + tableId 唔係 counter）：
+ *   已變成喺店堂食單，當本地單處理，可以返結。
+ * 美容同其他本地單無 onlineOrderId，一律當本地單。
+ */
 export function isReopenable(order: PosOrder): boolean {
+  if (order.onlineOrderId) {
+    const isInStoreDineIn = !!order.tableId && order.tableId !== "counter";
+    if (!isInStoreDineIn) return false;
+  }
   return order.status === "settled" || order.status === "paid";
 }
 

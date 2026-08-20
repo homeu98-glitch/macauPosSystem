@@ -31,6 +31,7 @@
 1. **完整回滾**：返結時一併反向回滾會員餘額 / 積分 / 套票扣次；重結時重新扣。防會員被雙重扣款。
 2. **權限門控（2026-08-20 晚取消）**：用戶決定**唔加 PIN 同權限門控**，理由係步驟太多會浪費工人時間。改為：**任何員工都可以直接返結**，只需強制揀「返結原因」（從設置清單揀，不可空白）。餐飲 `UserPermissions.reopenOrder` 權位保留喺 types 但**唔做門控**；美容唔另起權限。
 3. **強制原因（保留）**：返結必須填原因；「設置」內「返結原因 / 備註」**可配置清單**（似銀豹「反結賬&退貨原因設置」），餐飲 `settings.tsx` 與美容 `salon/settings.tsx` 各加，存各自 bootstrap。經理 PIN 授權 **取消**。
+4. **線上訂單範圍（2026-08-20 收尾追加，後經用戶澄清收窄）**：用戶澄清「線上訂單唔可以返結」只係指**純線上快餐 / 自取 / 外賣**（counter / 未轉枱）；**「線上堂食單轉到枱」已變成喺店單，要可以返結**，美容同理（到店服務單）。判定邏輯：`isReopenable` 對有 `onlineOrderId` 嘅單改為「只有 `tableId != "counter"`（已轉枱堂食）先放行；counter / 無枱線上單照擋」。本地面板列表過濾由 `isLocalPosOrder`（= `!onlineOrderId`）放寬為 `isLocalOrTransferredDineIn`（本地單 + 已轉枱線上堂食單），令呢類單出得返面板、按到「返結」；純線上快餐/自取/外賣仍只喺 online-orders 面板、唔入本地面板、唔可返結。保留 `onlineOrderId` 唔清走（唔影響 Ledger 對賬）。美容無 `onlineOrderId` 字段，一向當本地單，唔受影響。
 
 ## 4. 狀態機
 
@@ -62,6 +63,7 @@
 - [x] 揀原因 → 轉 `reopened` + 印返結單 + **反向回滾會員餘額**（best-effort，見 §7 / docs/39）。
 - [x] 重結：複用 `confirmPayment`（源 reopened 單）→ 回 `settled` + 重推 `ORDER_SETTLED` + 重新扣。
 - 實施筆記：返結入口在 orders-hub 的「已完成」訂單詳情；重結在 POS 工作台選回該枱位（`openOrders` 已含 `reopened`，枱位會載入可編輯），改正後結帳即重結。
+- 線上訂單範圍（見 §3 決策 4）：純線上快餐/自取/外賣（counter / 未轉枱）排除返結；「線上堂食轉枱」單（`onlineOrderId` + `tableId!="counter"`）當本地單可返結。本地面板過濾由 `isLocalPosOrder` 放寬為 `isLocalOrTransferredDineIn`，令轉枱堂食單出得返面板；`isReopenable` 同步放行，`reopenPosOrder` 內部再審。
 
 ### Phase C — 美容
 - [x] 返結入口放在 `checkout`「已結帳」屏（預約結帳後即見；經 service-runner 重開 settled 預約亦可達），免另起 drill-down 列表。
@@ -116,6 +118,7 @@ reopenReasons: string[];
 - 餐飲 Ledger 反向 RPC 依賴同事（同 docs/37 模式）。
 - 美容 `reopened` 狀態對 report / sync 的影響要回歸測（狀態機只數 settled）。
 - 「返結原因」清單兩模組都要落 storage，建議存各自 bootstrap。
+- 線上訂單對賬：純線上快餐/自取/外賣（counter / 未轉枱）責任歸上游 Ledger，POS 唔返結（見 §3 決策 4）；「線上堂食轉枱」單已視作喺店單，可返結。美容無 `onlineOrderId`，一向當本地單。
 
 ## 9. 驗收清單（Phase A）
 

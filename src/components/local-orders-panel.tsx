@@ -9,7 +9,7 @@ import {
   orderMatchesDateFilter,
 } from "@/lib/ledger/order-date-filter";
 import {
-  isLocalPosOrder,
+  isLocalOrTransferredDineIn,
   isQuickCounterOrder,
   localOrderStatusLabel,
   LocalOrderPanelTab,
@@ -99,7 +99,7 @@ function QuickOrderActions({
 
 export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: LedgerOrderDateFilter }) {
   const currency = loadBootstrapCache()?.currency ?? "MOP";
-  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalPosOrder));
+  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalOrTransferredDineIn));
   const [statusTab, setStatusTab] = useState<LocalOrderPanelTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -107,7 +107,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
 
   function refresh() {
-    setOrders(loadOrders().filter(isLocalPosOrder));
+    setOrders(loadOrders().filter(isLocalOrTransferredDineIn));
   }
 
   useEffect(() => {

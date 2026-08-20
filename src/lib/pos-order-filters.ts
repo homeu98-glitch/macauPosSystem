@@ -5,6 +5,17 @@ export function isLocalPosOrder(order: PosOrder): boolean {
   return !order.onlineOrderId;
 }
 
+/**
+ * 本地面板可見範圍：本地單 + 「已轉到堂食枱」嘅線上堂食單。
+ * 純線上快餐 / 自取 / 外賣（counter / 無枱）屬上游 Ledger 對賬，唔喺本地面板管理，亦唔可以返結。
+ * 美容同其他本地單無 onlineOrderId，一律當本地單。
+ */
+export function isLocalOrTransferredDineIn(order: PosOrder): boolean {
+  if (!order.onlineOrderId) return true; // 本地單
+  // 線上堂食單，已轉到枱（tableId 唔係 counter）→ 當本地單管理
+  return !!order.tableId && order.tableId !== "counter";
+}
+
 /** 快餐 counter 單（先收款、後出餐流程） */
 export function isQuickCounterOrder(order: PosOrder): boolean {
   return isLocalPosOrder(order) && order.tableId === "counter";
