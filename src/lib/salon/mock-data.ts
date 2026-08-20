@@ -402,6 +402,7 @@ export const defaultSalonBootstrap: SalonBootstrap = {
   loyalty: DEFAULT_SALON_LOYALTY,
   staffRoleTypes: DEFAULT_SALON_STAFF_ROLE_TYPES,
   staffLevelTypes: DEFAULT_SALON_STAFF_LEVEL_TYPES,
+  reopenReasons: ["結帳錯誤", "加錯項目", "折扣計錯", "會員扣錯", "客人要求改單"],
   lastUpdatedAt: NOW,
 };
 
@@ -434,6 +435,7 @@ export function buildEmptySalonBootstrap(storeId: string): SalonBootstrap {
     loyalty: DEFAULT_SALON_LOYALTY,
     staffRoleTypes: DEFAULT_SALON_STAFF_ROLE_TYPES,
     staffLevelTypes: DEFAULT_SALON_STAFF_LEVEL_TYPES,
+    reopenReasons: ["結帳錯誤", "加錯項目", "折扣計錯", "會員扣錯", "客人要求改單"],
     lastUpdatedAt: new Date().toISOString(),
   };
 }

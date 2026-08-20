@@ -129,6 +129,44 @@ export function applyMockLedgerBonus(
   return { ok: true };
 }
 
+/**
+ * 會員 Ledger 數值增減（本地模擬，供返結反向回滾用）。
+ * 與 applyMockLedgerBonus 不同，本函式支援「負 delta」：
+ * - 正向：加回餘額 / 積分（返結時把先前扣減的餘額 / 兌換的積分退返客戶）。
+ * - 負向：扣減積分（返結時把先前「消費賺分」/「推薦獎勵」加回的積分收回）。
+ * 真實環境應改為呼叫 Ledger RPC；此處只動 localStorage 客戶檔案的 ledger* 欄位。
+ * 餘額 / 積分下限為 0（不允許變負）。
+ */
+export function applyMockLedgerDelta(
+  identifier: string,
+  opts: { pointsDelta?: number; balanceDelta?: number },
+): ApplyLedgerBonusResult {
+  if (typeof window === "undefined" || !identifier) {
+    return { ok: false, error: "無效參數" };
+  }
+  const pointsDelta = opts.pointsDelta ?? 0;
+  const balanceDelta = opts.balanceDelta ?? 0;
+  if (pointsDelta === 0 && balanceDelta === 0) {
+    return { ok: true };
+  }
+
+  const customers = loadCustomers();
+  const idx = customers.findIndex((x) => x.phone === identifier || x.id === identifier);
+  if (idx < 0) {
+    return { ok: false, error: "找不到 Ledger 會員" };
+  }
+
+  const c = customers[idx];
+  const updated: SalonCustomerProfile = {
+    ...c,
+    ledgerPoints: Math.max(0, (c.ledgerPoints ?? 0) + pointsDelta),
+    ledgerBalance: Math.max(0, (c.ledgerBalance ?? 0) + balanceDelta),
+  };
+  customers[idx] = updated;
+  saveCustomers(customers);
+  return { ok: true };
+}
+
 export interface ApplyLedgerPointsPaymentResult {
   ok: boolean;
   remaining: number;

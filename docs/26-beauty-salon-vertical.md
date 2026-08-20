@@ -310,7 +310,7 @@ macauPosSystem/
             ├── order.ts                    # 結帳邏輯
             ├── ledger-bridge.ts            # 與 Ledger RPC 對接
             ├── print.ts                    # Booking / Order → PrintJob
-            └── realtime.ts                 # 接收 Ledger 預約事件
+            └── mock-realtime.ts            # 接收 Ledger 預約事件（Mock Realtime）
 ```
 
 ### 5.2 行業分流
@@ -710,7 +710,7 @@ export type SalonQueueEventType =
   | "SERVICE_ITEM_UPDATED";
 ```
 
-事件透過既有 `sync-queue` 框架上傳 POS Supabase；Realtime 事件（來自 Ledger）獨立走 `src/lib/salon/realtime.ts`。
+事件透過既有 `sync-queue` 框架上傳 POS Supabase；Realtime 事件（來自 Ledger）獨立走 `src/lib/salon/mock-realtime.ts`。
 
 ### 8.3 不衝突關鍵點
 
@@ -815,7 +815,7 @@ export type SalonQueueEventType =
 客人透過 Ledger 微信小程式下預約
   → Ledger 寫入 orders 表（type=booking）
   → Ledger Realtime 廣播
-  → POS 訂閱 → src/lib/salon/realtime.ts
+  → POS 訂閱 → src/lib/salon/mock-realtime.ts
   → mapping → SalonBooking { source: "online_ledger", ledgerBookingId }
   → 寫 macau-pos-salon/bookings
   → 預約看板彈出卡片 + 提示音

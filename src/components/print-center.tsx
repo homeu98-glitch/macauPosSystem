@@ -18,6 +18,7 @@ import {
 } from "@/lib/storage";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
+import { formatMoney } from "@/lib/format";
 import { PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 const RECEIPT_SECTION_META = [
@@ -163,14 +164,14 @@ export function PrintCenter() {
     const sectionItems: Record<(typeof template.sectionOrder)[number], PreviewItem[]> = {
       store_name: template.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: "澳門店 A" }] : [],
       order_no: template.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: sampleOrder.localOrderNo }] : [],
-      table_name: template.showTableName ? [{ name: "類型", quantity: 1, specs: [], note: sampleOrder.tableName }] : [],
+      table_name: template.showTableName ? [{ name: "桌號", quantity: 1, specs: [], note: sampleOrder.tableName }] : [],
       items: sampleOrder.items.map<PreviewItem>((item) => ({
         name: item.name,
         quantity: item.quantity,
         specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
         note: item.note,
       })),
-      total: [{ name: "總計", quantity: 1, specs: [], note: `MOP ${sampleOrder.total.toFixed(0)}` }],
+      total: [{ name: "總計", quantity: 1, specs: [], note: formatMoney(sampleOrder.total) }],
       payment_method: template.showPaymentMethod ? [{ name: "付款方式", quantity: 1, specs: [], note: sampleOrder.paymentMethod ?? "現金" }] : [],
       order_note: template.showOrderNote && sampleOrder.orderNote ? [{ name: "全單備註", quantity: 1, specs: [], note: sampleOrder.orderNote }] : [],
       footer: template.footerText ? [{ name: "頁尾", quantity: 1, specs: [], note: template.footerText }] : [],
@@ -253,7 +254,7 @@ export function PrintCenter() {
         const specs = (item.selectedSpecs ?? []).map((spec) => spec.optionLabel).join(" / ");
         return [item.name, specs, item.note ?? ""].filter(Boolean).join(" · ");
       }),
-      total: [`MOP ${sampleOrder.total.toFixed(0)}`],
+      total: [formatMoney(sampleOrder.total)],
       payment_method: template.showPaymentMethod ? [sampleOrder.paymentMethod ?? "現金"] : [],
       order_note: template.showOrderNote && sampleOrder.orderNote ? [sampleOrder.orderNote] : [],
       footer: template.footerText ? [template.footerText] : [],

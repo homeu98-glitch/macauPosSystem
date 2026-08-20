@@ -1,8 +1,11 @@
-# 36. Printer Hub 配對（POS 網頁 ↔ Sunmi Hub APK）
+# 36. Printer Hub 配對（POS 網頁 ↔ Native Print Agent）
 
-> **本文取代舊方案**：WebView Shell + `window.PosNative` JS Bridge（`print-agent-android` 那隻 WebView APK 已棄用）。
-> 用戶最終要嘅係：**POS 網頁設定頁** 配對一隻 **喺 Sunmi 機上面跑嘅 Hub APK**（同事做緊，唔喺本 repo），
-> POS 落單後經 HTTP 發信號畀 Hub，Hub 再經 LAN 出單到打印機。本 repo 只負責 POS 網頁嗰邊。
+> **本文係 `print-agent-android` 入面 Hub / HTTP fallback 部分嘅說明。** `print-agent-android` 係**現役**方案：
+> 佢係一隻 Android App，**WebView 外殼載入 POS 網頁（Vercel HTTPS）+ 注入 `window.PosNative` JS bridge**，
+> POS 落單經 `PosNative.printJob(json)` 直接 raw socket `:9100` ESC/POS 出單（**無 mixed content、無 Tunnel、斷網照印**）。
+> 本文檔描述嘅 HTTP Hub（`:8787` / `/api/print`）係同一隻 APK 內、做 **fallback** 用嘅通道（POS 無 native bridge 嗰陣先會用）。
+> 舊嘅 Node `print-bridge`（Cloudflare Tunnel + 自簽 HTTPS 證書）已經被呢隻 APK **完全取代**，見 [`docs/37-apk-native-bridge-print-format.md`](./37-apk-native-bridge-print-format.md)。
+> 本 repo 只負責 POS 網頁嗰邊（配對 UI、`sendJobToHub`、native dispatch）。
 
 ## 架構概要
 

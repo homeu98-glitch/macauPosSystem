@@ -121,6 +121,7 @@ export function DeviceSettings() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(cachedLocalSettings?.specTemplates?.[0]?.id ?? "");
   const [devicePrinterTab, setDevicePrinterTab] = useState<"zones" | "printers">("zones");
   const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
+  const [newReopenReason, setNewReopenReason] = useState("");
 
   const menuFilteredItems = useMemo(() => {
     return menuDraft.menuItems.filter((item) => menuCategoryId === "all" || item.categoryId === menuCategoryId);
@@ -1488,6 +1489,70 @@ export function DeviceSettings() {
                       <span>已退完</span>
                     </label>
                   </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden lg:col-span-2">
+              <div className="text-base font-semibold text-slate-900">返結原因</div>
+              <div className="mt-1 text-sm text-slate-500">用於返結（反結賬）時選擇退回可編輯狀態的原因，強制填寫以便對帳。</div>
+
+              <div className="mt-4 flex-1 overflow-auto pr-1">
+                <div className="grid gap-2">
+                  {localSettings.reopenReasons.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      暫時沒有返結原因
+                    </div>
+                  ) : (
+                    localSettings.reopenReasons.map((note) => (
+                      <div
+                        key={note}
+                        className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{note}</div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={() => {
+                            const next = {
+                              ...localSettings,
+                              reopenReasons: localSettings.reopenReasons.filter((item) => item !== note),
+                            };
+                            setLocalSettings(next);
+                            setStatus("已更新返結原因草稿，請先保存。");
+                          }}
+                          type="button"
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
+                    onChange={(event) => setNewReopenReason(event.target.value)}
+                    placeholder="新增返結原因..."
+                    value={newReopenReason}
+                  />
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const text = newReopenReason.trim();
+                      if (!text) return;
+                      const next = {
+                        ...localSettings,
+                        reopenReasons: Array.from(new Set([...localSettings.reopenReasons, text])),
+                      };
+                      setLocalSettings(next);
+                      setNewReopenReason("");
+                      setStatus("已新增返結原因草稿，請先保存。");
+                    }}
+                    type="button"
+                  >
+                    加入
+                  </button>
                 </div>
               </div>
             </section>

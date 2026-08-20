@@ -40,6 +40,7 @@ import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
 import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
+import { formatMoney } from "@/lib/format";
 
 const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -47,10 +48,6 @@ const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
   { key: "pickup", label: "外賣自取" },
   { key: "self_delivery", label: "外送" },
 ];
-
-function formatMoney(amount: number) {
-  return `MOP ${amount.toFixed(0)}`;
-}
 
 export function OnlineOrders({
   embedded = false,

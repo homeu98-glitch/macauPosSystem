@@ -9,10 +9,7 @@ import { orderMatchesReportRange, ReportRangeKey, reportRangeLabel } from "@/lib
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { loadOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
-
-function formatMoney(amount: number) {
-  return `MOP ${amount.toFixed(0)}`;
-}
+import { formatMoney } from "@/lib/format";
 
 export function ReportsDashboard() {
   const [range, setRange] = useState<ReportRangeKey>("30d");

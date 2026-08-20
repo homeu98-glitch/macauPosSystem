@@ -261,6 +261,7 @@ export type SalonOrderStatus =
   | "in_service"
   | "ready_to_pay"
   | "settled"
+  | "reopened"
   | "cancelled"
   | "no_show";
 
@@ -369,6 +370,30 @@ export interface SalonPosOrder {
   settledAt?: string;
 
   ledgerOrderId?: string;
+
+  // ── 返結（反結賬）審計欄位 ──
+  /** 最近一次返結時間（ISO） */
+  reopenedAt?: string;
+  /** 操作人（店長 / 授權人） */
+  reopenedBy?: string;
+  /** 返結原因（來自設置 reopenReasons 或自填） */
+  reopenReason?: string;
+  /** 累計返結次數 */
+  reopenCount?: number;
+  /** 首次結帳（settled）時間，重結後保留以便對帳 */
+  originalSettledAt?: string;
+
+  // ── 返結會員扣款快照（供反向回滾 / 重結用）──
+  /** 上次結帳透過會員餘額扣減的 MOP 金額，供返結反向回滾 */
+  ledgerPaymentAmount?: number;
+  /** 上次結帳扣減的套票項目（planId + serviceItemId + 扣次），供返結反向回滾 */
+  packageDeductionEntries?: Array<{
+    planId: string;
+    planName: string;
+    serviceItemId: string;
+    sessionsUsed: number;
+  }>;
+
   createdAt: string;
   updatedAt: string;
 }
@@ -569,6 +594,8 @@ export interface SalonBootstrap {
   staffRoleTypes?: SalonConfigRoleType[];
   /** 商家自定級別類型（含工錢倍率；取代硬編碼 junior/senior/master；設置 → 角色與級別 可增刪） */
   staffLevelTypes?: SalonConfigLevelType[];
+  /** 返結（反結賬）可選原因清單，設置 → 返結設定 可增刪 */
+  reopenReasons: string[];
   lastUpdatedAt: string;
 }
 

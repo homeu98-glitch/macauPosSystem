@@ -1,3 +1,5 @@
+> ⚠️ **已取代（Deprecated）**：本文件嘅 Cloudflare Tunnel 打印橋接方案（手機跑 `cloudflared` 暴露 `:9222`）已經被 **Native Print Agent（`print-agent-android`）** 完全取代——POS 喺 Android WebView 外殼跑，`PosNative.printJob` 直接 raw socket `:9100` ESC/POS 出單，無 Tunnel、無自簽證書、斷網照印。見 [`docs/36-native-print-agent.md`](./36-native-print-agent.md) 同 [`docs/37-apk-native-bridge-print-format.md`](./37-apk-native-bridge-print-format.md)。以下內容只作歷史參考。
+
 # 35 · Cloudflare Tunnel 打印橋接（Path X，店主零操作）
 
 > 目標：讓部署在 **Vercel（HTTPS）** 的 POS，能夠連到 **店內 Android 手機**上跑的 print-bridge，

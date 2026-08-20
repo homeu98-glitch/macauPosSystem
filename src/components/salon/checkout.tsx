@@ -28,7 +28,7 @@ import {
   loadCustomers,
   saveCustomers,
 } from "@/lib/salon/storage";
-import { updateMockBooking, MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
+import { updateMockBooking } from "@/lib/salon/mock-realtime";
 import {
   getMockLedgerMember,
   applyMockLedgerPayment,
@@ -38,7 +38,10 @@ import {
 import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import { computeStaffWage } from "@/lib/salon/wages";
 import { dispatchSalonReceipt } from "@/lib/salon/print";
+import { reopenSalonOrder } from "@/lib/salon/orders";
 import { playSuccessBeep } from "@/lib/salon/sound";
+import { formatMoney } from "@/lib/format";
+import { loadAuthSession } from "@/lib/storage";
 import { NumericKeypad } from "@/components/numeric-keypad";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 
@@ -58,7 +61,7 @@ function genOrderNo(): string {
 }
 
 function money(n: number): string {
-  return `MOP ${n.toFixed(0)}`;
+  return formatMoney(n);
 }
 
 /**
@@ -164,6 +167,10 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   const [settleError, setSettleError] = useState("");
   const [settled, setSettled] = useState(false);
   const [settledOrderNo, setSettledOrderNo] = useState("");
+
+  // 返結（反結賬）狀態
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
 
   const [discountAmount, setDiscountAmount] = useState(0);
   const [tips, setTips] = useState<TipRow[]>([]);
@@ -616,8 +623,12 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     }
 
     const now = new Date().toISOString();
-    const orderId = uid("order");
-    const orderNo = genOrderNo();
+    // 重結（re-settle）：若 booking.orderId 已指向一張單（返結後重結），就地更新；否則新增
+    const existingOrder = booking.orderId
+      ? loadSalonOrders().find((o) => o.id === booking.orderId)
+      : undefined;
+    const orderId = existingOrder?.id ?? uid("order");
+    const orderNo = existingOrder?.orderNo ?? genOrderNo();
 
     // 標記被套票抵扣的服務項（同 serviceItemId 可能多行，依 plan 數量遞減）
     const coverLeft = new Map<string, number>();
@@ -716,29 +727,51 @@ export function Checkout({ bookingId }: { bookingId: string }) {
       payments: paymentRecords,
       depositApplied: depositApplied > 0 ? depositApplied : undefined,
       changeDue: changeDue > 0 ? changeDue : undefined,
+      // ── 會員扣款快照：供返結反向回滾 ──
+      ledgerPaymentAmount: ledgerPaymentAmount > 0 ? ledgerPaymentAmount : undefined,
+      packageDeductionEntries:
+        packagePlan.length > 0
+          ? packagePlan.map((d) => ({
+              planId: d.packageId,
+              planName: d.packageName,
+              serviceItemId: d.serviceItemId,
+              sessionsUsed: 1,
+            }))
+          : undefined,
       status: "settled",
       settledAt: now,
-      createdAt: now,
+      createdAt: existingOrder?.createdAt ?? now,
       updatedAt: now,
     };
 
-    // 2) 存訂單 + 套票扣次 + 更新預約狀態為 settled
+    // 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）
+    const finalOrder: SalonPosOrder = {
+      ...order,
+      originalSettledAt: order.originalSettledAt ?? (existingOrder?.originalSettledAt ?? order.settledAt),
+      reopenCount: existingOrder?.reopenCount ?? 0,
+      reopenedAt: existingOrder?.reopenedAt,
+      reopenedBy: existingOrder?.reopenedBy,
+      reopenReason: existingOrder?.reopenReason,
+    };
+
+    // 2) 存訂單（就地更新或新增）+ 套票扣次 + 更新預約狀態為 settled
     try {
-      saveSalonOrders([...loadSalonOrders(), order]);
+      const allOrders = loadSalonOrders();
+      const nextOrders = allOrders.some((o) => o.id === finalOrder.id)
+        ? allOrders.map((o) => (o.id === finalOrder.id ? finalOrder : o))
+        : [...allOrders, finalOrder];
+      saveSalonOrders(nextOrders);
       // 套票抵扣：訂單存妥後才寫回客戶套票卡次數（避免訂單失敗卻已扣次）
       applyCustomerPackageDeductions(packagePlan);
     } catch {
       setSettleError("儲存訂單失敗，請重試。");
       return;
     }
-    updateMockBooking(booking.id, { status: "settled", orderId });
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent(MOCK_REALTIME_EVENT, { detail: { source: "checkout" } }));
-    }
+    updateMockBooking(booking.id, { status: "settled", orderId: finalOrder.id });
 
     // 3) 列印收據（寫入 salon 隔離佇列 + dispatch）
     try {
-      await dispatchSalonReceipt(order);
+      await dispatchSalonReceipt(finalOrder);
     } catch {
       // 列印失敗不阻塞結帳；收據已入佇列，可於「打印」頁重試
     }
@@ -784,6 +817,31 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     }
   }, [settledOrderNo]);
 
+  // 返結（反結賬）：把已結預約退回可編輯狀態，改正後重新結帳
+  const handleReopen = useCallback(async () => {
+    if (!booking || !reopenReason.trim()) {
+      setSettleError("請先揀返結原因");
+      return;
+    }
+    setReopenSubmitting(true);
+    setSettleError("");
+    try {
+      const session = loadAuthSession();
+      const operator = session?.name ?? session?.account ?? "店長";
+      const result = await reopenSalonOrder({ bookingId: booking.id, reason: reopenReason, operator });
+      if (!result.ok) {
+        setSettleError(result.error ?? "返結失敗");
+        return;
+      }
+      setReopenReason("");
+      // 重新載入預約（狀態已改回 completed），讓結帳頁回到可編輯狀態
+      const refreshed = loadBookings().find((b) => b.id === booking.id) ?? booking;
+      setBooking(refreshed);
+    } finally {
+      setReopenSubmitting(false);
+    }
+  }, [booking, reopenReason]);
+
   // ── 渲染 ──
   if (notFound) {
     return (
@@ -814,6 +872,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
 
   // 已結帳
   if (booking.status === "settled" && !settled) {
+    const reopenReasons = loadSalonBootstrap()?.reopenReasons ?? [];
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900 md:pl-[72px]">
         <div className="mx-auto max-w-4xl px-4 py-10 pb-24 md:pb-10">
@@ -822,6 +881,36 @@ export function Checkout({ bookingId }: { bookingId: string }) {
             <div className="mt-2 text-sm text-slate-500">
               {booking.customerName} · {booking.bookingNo}
             </div>
+
+            <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-left">
+              <div className="text-sm font-semibold text-amber-800">返結（反結賬）</div>
+              <p className="mt-1 text-xs text-amber-700">
+                把此單退回可編輯，改正後重新結帳。會員餘額 / 積分 / 套票將自動退回，重結時重新扣。必須揀返結原因。
+              </p>
+              <select
+                className="mt-3 w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
+                value={reopenReason}
+                onChange={(e) => setReopenReason(e.target.value)}
+              >
+                <option value="" disabled>
+                  揀返結原因…
+                </option>
+                {reopenReasons.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="mt-3 w-full rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                disabled={!reopenReason || reopenSubmitting}
+                onClick={handleReopen}
+              >
+                {reopenSubmitting ? "處理中…" : "確認返結"}
+              </button>
+            </div>
+
             <Link
               href="/salon"
               className="mt-6 inline-block rounded-xl bg-rose-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-600"

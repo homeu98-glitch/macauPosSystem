@@ -23,12 +23,9 @@ import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { clearLegacyMembersCache } from "@/lib/storage";
 import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useNetworkOnline } from "@/lib/use-network-online";
+import { formatMoney } from "@/lib/format";
 
 type MembersTab = "manage" | "topup";
-
-function formatMoney(amount: number) {
-  return `MOP ${amount.toFixed(0)}`;
-}
 
 function grantSections(grants: LedgerMemberGrantRecord[]) {
   const active = grants.filter(isGrantActive);

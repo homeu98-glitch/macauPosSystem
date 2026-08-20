@@ -10,13 +10,10 @@ import {
   savePrintJobs,
 } from "@/lib/storage";
 import { PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
+import { formatMoney } from "@/lib/format";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-function formatMoney(amount: number, currency: string) {
-  return `${currency} ${amount.toFixed(0)}`;
 }
 
 export function appendPrintJobs(jobs: PrintJob[]) {
@@ -41,7 +38,7 @@ export function buildReceiptPrintJobs(
   const receiptSections: Record<(typeof receiptSettings.sectionOrder)[number], ReceiptItem[]> = {
     store_name: receiptSettings.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: bootstrap.storeName }] : [],
     order_no: receiptSettings.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: order.localOrderNo }] : [],
-    table_name: receiptSettings.showTableName ? [{ name: "類型", quantity: 1, specs: [], note: order.tableName }] : [],
+    table_name: receiptSettings.showTableName ? [{ name: "桌號", quantity: 1, specs: [], note: order.tableName }] : [],
     items: order.items.map<ReceiptItem>((item) => ({
       name: item.name,
       quantity: item.quantity,
@@ -113,6 +110,48 @@ export function buildVoidPrintJobsForOrder(order: PosOrder, reason: string): Pri
   }
 
   return voidPrintJobs;
+}
+
+/**
+ * 返結（反結賬）列印：把已結單退回可編輯狀態時，印一張「返結單」到所有啟用中的
+ * 區域 / 標籤印表機，記錄原單號、原因、操作人，便於廚房 / 吧檯與收銀對帳。
+ * ticketType 沿用 "void"（修正單），並於項目名稱前加【返結】標記。
+ */
+export function buildReopenPrintJobs(order: PosOrder, reason: string, operator: string): PrintJob[] {
+  const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
+  const timestamp = new Date().toISOString();
+  const reopenPrintJobs: PrintJob[] = [];
+
+  for (const item of order.items) {
+    const jobs = configuredPrinters
+      .filter(
+        (printer) =>
+          (printer.role === "zone" || printer.role === "label") && (printer.zoneId ?? "") === item.printerGroup,
+      )
+      .map<PrintJob>((printer) => ({
+        id: uid("print"),
+        orderId: order.id,
+        orderNo: order.localOrderNo,
+        tableName: order.tableName,
+        ticketType: "void",
+        printerGroup: printer.zoneId ?? item.printerGroup,
+        printerId: printer.id,
+        printerName: printer.name,
+        items: [
+          {
+            name: `【返結】${item.name}`,
+            quantity: item.quantity,
+            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+            note: `原因：${reason || "結帳錯誤"}｜操作人：${operator}`,
+          },
+        ],
+        status: "pending",
+        createdAt: timestamp,
+      }));
+    reopenPrintJobs.push(...jobs);
+  }
+
+  return reopenPrintJobs;
 }
 
 export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {

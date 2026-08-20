@@ -258,6 +258,11 @@ export function ensureSalonBootstrap(activeStore?: string): SalonBootstrap {
       existing.products = DEFAULT_SALON_PRODUCTS;
       changed = true;
     }
+    // 返結設定：舊店缺 reopenReasons → 補預設原因清單（商家可於設置增刪）
+    if (!existing.reopenReasons || existing.reopenReasons.length === 0) {
+      existing.reopenReasons = ["結帳錯誤", "加錯項目", "折扣計錯", "會員扣錯", "客人要求改單"];
+      changed = true;
+    }
     if (changed) {
       writeJson(SALON_STORAGE_KEYS.bootstrap, existing);
       // 同步寫回獨立員工鍵（loadSalonStaff 讀呢度），避免舊店家 standalone key 仍係 role-only 記錄

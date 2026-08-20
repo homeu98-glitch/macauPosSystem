@@ -24,6 +24,7 @@ import {
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
 import { PrintJob, PosOrder, QueueEvent } from "@/lib/types";
+import { formatMoney } from "@/lib/format";
 
 function summarizeClosedOrders(orders: PosOrder[]) {
   const closedOrders = orders.filter(
@@ -50,10 +51,6 @@ function summarizeClosedOrders(orders: PosOrder[]) {
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-function formatMoney(amount: number) {
-  return `MOP ${amount.toFixed(0)}`;
 }
 
 function csvCell(value: string | number | undefined) {

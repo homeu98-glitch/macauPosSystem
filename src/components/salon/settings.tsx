@@ -439,6 +439,7 @@ const TABS = [
   { id: "roles", label: "角色與級別" },
   { id: "packages", label: "套票模板" },
   { id: "loyalty", label: "會員優惠" },
+  { id: "reopen", label: "返結設定" },
   { id: "prints", label: "打印" },
   { id: "dev", label: "開發工具" },
 ] as const;
@@ -1206,6 +1207,71 @@ export function Settings() {
             <p className="mt-1 text-xs text-slate-400">
               折扣 % 與 積分倍率 各自獨立：填 0 即關閉該項。例：折扣 10 + 倍率 2 = 當月生日享 9 折且賺雙倍積分。結帳時自動套用，店員可逐單關掉。
             </p>
+          </Section>
+        </div>
+      )}
+
+      {/* 返結設定（返結原因清單） */}
+      {activeTab === "reopen" && (
+        <div className="mx-auto max-w-4xl">
+          <Section title="返結原因">
+            <p className="mb-3 text-xs text-slate-400">
+              返結（反結賬）時必須選擇 / 填寫原因，此清單提供快速選項，可增刪。
+            </p>
+            <div className="grid gap-2">
+              {(bootstrap.reopenReasons ?? []).map((reason) => (
+                <div
+                  key={reason}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+                >
+                  <div className="text-sm font-semibold text-slate-900">{reason}</div>
+                  <button
+                    type="button"
+                    className="rounded-xl bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                    onClick={() =>
+                      patchBootstrap({
+                        reopenReasons: (bootstrap.reopenReasons ?? []).filter((item) => item !== reason),
+                      })
+                    }
+                  >
+                    刪除
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                id="salon-reopen-reason-input"
+                type="text"
+                placeholder="新增返結原因..."
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 lg:w-[320px]"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const target = e.target as HTMLInputElement;
+                  const text = target.value.trim();
+                  if (!text) return;
+                  patchBootstrap({
+                    reopenReasons: Array.from(new Set([...(bootstrap.reopenReasons ?? []), text])),
+                  });
+                  target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  const input = document.getElementById("salon-reopen-reason-input") as HTMLInputElement | null;
+                  const text = input?.value.trim() ?? "";
+                  if (!text) return;
+                  patchBootstrap({
+                    reopenReasons: Array.from(new Set([...(bootstrap.reopenReasons ?? []), text])),
+                  });
+                  if (input) input.value = "";
+                }}
+              >
+                加入
+              </button>
+            </div>
           </Section>
         </div>
       )}

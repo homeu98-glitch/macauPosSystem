@@ -253,6 +253,9 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
       ? settings?.cancelNotePresets
       : defaultPosLocalSettings.cancelNotePresets,
+    reopenReasons: Array.isArray(settings?.reopenReasons)
+      ? settings.reopenReasons
+      : defaultPosLocalSettings.reopenReasons,
     fullVoidBehavior: settings?.fullVoidBehavior ?? defaultPosLocalSettings.fullVoidBehavior,
     dineInQuickActionOrder: Array.isArray(settings?.dineInQuickActionOrder)
       ? settings?.dineInQuickActionOrder

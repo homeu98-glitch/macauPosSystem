@@ -7,6 +7,7 @@ import { updateMockBooking } from "@/lib/salon/mock-realtime";
 import { loadBookings, loadSalonBootstrap } from "@/lib/salon/storage";
 import { MOCK_REALTIME_EVENT } from "@/lib/salon/mock-realtime";
 import type { SalonBooking, SalonBookingServiceEntry, SalonBookingStatus } from "@/lib/salon/types";
+import { formatMoney, formatDateTime } from "@/lib/format";
 
 // 過濾分頁：線上訂單嘅處理階段
 type FilterKey = "pending" | "confirmed" | "checked_in" | "done";
@@ -60,16 +61,8 @@ function StatusBadge({ status }: { status: SalonBookingStatus }) {
   );
 }
 
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const weekday = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}（週${weekday}）${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 function money(n: number): string {
-  return `MOP ${n.toLocaleString("zh-MO")}`;
+  return formatMoney(n);
 }
 
 // ────────────────────────────────────────────────────────────────────

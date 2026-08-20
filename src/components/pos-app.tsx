@@ -57,6 +57,7 @@ import {
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { formatMoney } from "@/lib/format";
 
 type Toast = {
   tone: "info" | "success";
@@ -65,10 +66,6 @@ type Toast = {
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-function formatMoney(amount: number, currency: string) {
-  return `${currency} ${amount.toFixed(0)}`;
 }
 
 function ticketTypeLabel(ticketType: PrintJob["ticketType"]) {
@@ -544,7 +541,10 @@ export function PosApp() {
     () =>
       orders.filter(
         (order) =>
-          order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid",
+          order.status === "draft" ||
+          order.status === "sent_to_kitchen" ||
+          order.status === "paid" ||
+          order.status === "reopened",
       ),
     [orders],
   );
@@ -2035,6 +2035,7 @@ export function PosApp() {
     }
 
     const applyPaymentToOrder = (targetOrder: PosOrder) => {
+      const now = new Date().toISOString();
       const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
       const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
       const hasGrantRedeem = selectedGrantIds.length > 0;
@@ -2052,7 +2053,17 @@ export function PosApp() {
               : method,
         discountAmount,
         total: settledGrandTotal,
-        updatedAt: new Date().toISOString(),
+        // ── 會員扣款快照：供返結反向回滾；無會員扣款則清掉 ──
+        ledgerMemberPhone:
+          deductAvos > 0 ? (ledgerMember?.customerPhone ?? targetOrder.ledgerMemberPhone ?? null) : null,
+        memberDeductionAvos: deductAvos > 0 ? deductAvos : 0,
+        // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
+        originalSettledAt: targetOrder.originalSettledAt ?? now,
+        reopenCount: targetOrder.reopenCount ?? 0,
+        reopenedAt: targetOrder.reopenedAt,
+        reopenedBy: targetOrder.reopenedBy,
+        reopenReason: targetOrder.reopenReason,
+        updatedAt: now,
       };
 
       setOrders((currentOrders) => {
@@ -2179,7 +2190,9 @@ export function PosApp() {
 
     const targetOrder =
       (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
+      (activeOrder && (activeOrder.status === "sent_to_kitchen" || activeOrder.status === "reopened")
+        ? activeOrder
+        : null) ??
       unsettledOrder;
     if (!targetOrder) return;
 

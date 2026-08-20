@@ -17,6 +17,7 @@ import {
   loadSalonPackageTemplates,
   loadCustomers,
 } from "@/lib/salon/storage";
+import { formatMoney } from "@/lib/format";
 
 type RangeKey = "today" | "week" | "all";
 
@@ -37,7 +38,7 @@ const PAYMENT_LABELS: Record<SalonPaymentMethod, string> = {
 };
 
 function money(n: number): string {
-  return `MOP ${n.toFixed(0)}`;
+  return formatMoney(n);
 }
 
 function inRange(iso: string | undefined, range: RangeKey): boolean {

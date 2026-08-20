@@ -47,6 +47,8 @@ export async function dispatchJobToNative(
       id: job.id,
       orderNo: job.orderNo ?? "",
       tableName: job.tableName ?? "",
+      orderId: job.orderId ?? "",
+      printerGroup: job.printerGroup,
       ticketType: job.ticketType,
       printerId: job.printerId ?? "",
       printerName: job.printerName,

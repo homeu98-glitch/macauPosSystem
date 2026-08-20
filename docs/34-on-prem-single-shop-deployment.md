@@ -1,3 +1,5 @@
+> ⚠️ **已取代（Deprecated）**：本文件嘅 on-prem 單店部署方案（POS app + bridge 都搬落店內手機跑本地 HTTP）已經被 **Native Print Agent（`print-agent-android`）** 取代——POS 直接喺 Android WebView 外殼入面跑，經 `PosNative` bridge 原生打印，斷網照印、店主零操作，唔使再搞 on-prem / mixed content / 證書。見 [`docs/36-native-print-agent.md`](./36-native-print-agent.md)。以下內容只作歷史參考。
+
 # 34 · On-prem 單店部署（斷網照印 · 店主零操作）
 
 ## 點解係呢條路

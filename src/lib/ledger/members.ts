@@ -81,3 +81,44 @@ export async function applyPosDeduct(params: {
     throw new Error(friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)));
   }
 }
+
+/**
+ * 反向加回（返結 / 退款時把先前扣減的餘額退返客戶）。
+ * 走 Ledger `merchant_apply_pos_txn` p_type:"add"。
+ *
+ * 注意：現階段 Ledger 後端可能尚未佈署 add 分支（見 docs/39 需求書）。
+ * 本函數會如實拋錯，由呼叫方（reopenPosOrder）以 best-effort 方式 catch 後
+ * 繼續完成返結狀態切換，不阻擋工人操作。
+ */
+export async function applyPosAdd(params: {
+  merchantId: string;
+  phone: string;
+  amountAvos: number;
+  idempotencyKey: string;
+}): Promise<ApplyPosDeductResult> {
+  if (!params.idempotencyKey.trim()) {
+    throw new Error("idempotency key required");
+  }
+  if (params.amountAvos <= 0) {
+    throw new Error("加回金額須大於 0");
+  }
+  try {
+    const client = await requireRpcClient();
+    const { data, error } = await client.rpc("merchant_apply_pos_txn", {
+      p_merchant_id: params.merchantId,
+      p_type: "add",
+      p_phone: params.phone,
+      p_amount_avos: params.amountAvos,
+      p_idempotency_key: params.idempotencyKey,
+    });
+    if (error) throw new Error(error.message);
+    const row = (data ?? {}) as Record<string, unknown>;
+    return {
+      txnId: String(row.txn_id ?? ""),
+      amountAvos: Number(row.amount_avos ?? params.amountAvos),
+      balanceAfterAvos: Number(row.balance_after ?? 0),
+    };
+  } catch (err) {
+    throw new Error(friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)));
+  }
+}

@@ -25,6 +25,8 @@ export type SalonSyncQueueItem = {
   status: "pending" | "synced" | "failed";
   createdAt: string;
   syncedAt?: string;
+  /** 失敗重推次數（舊 code 漏咗，導致 failed item 永遠唔刪、queue 無限增長） */
+  attempts?: number;
 };
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -115,7 +117,7 @@ export async function idbEnqueue(item: Omit<SalonSyncQueueItem, "id" | "status" 
     // ignore
   }
   // 排完即試 flush：解決「一直 online、冇切 tab」時 queue 永遠冇人 push 嘅問題。
-  // flush 內部已經檢查 navigator.onLine + 按 entity dedupe，離線 / 冇嘢可推時零成本。
+  // flush 經 chain 序列化（唔會同時開多個），內部按 entity dedupe + 離線時 fetch 自然失敗標 failed，零成本。
   void flushSalonSyncQueue();
 }
 
@@ -138,13 +140,34 @@ async function idbPatchQueueItem(id: string, patch: Partial<SalonSyncQueueItem>)
   const db = await openDb();
   if (!db) return;
   try {
-    const tx = db.transaction(QUEUE_STORE, "readwrite");
-    const store = tx.objectStore(QUEUE_STORE);
-    const getReq = store.get(id);
-    getReq.onsuccess = () => {
-      const existing = getReq.result as SalonSyncQueueItem | undefined;
-      if (existing) store.put({ ...existing, ...patch });
-    };
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(QUEUE_STORE, "readwrite");
+      const store = tx.objectStore(QUEUE_STORE);
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result as SalonSyncQueueItem | undefined;
+        if (existing) store.put({ ...existing, ...patch });
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function idbDeleteQueueItem(id: string): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(QUEUE_STORE, "readwrite");
+      tx.objectStore(QUEUE_STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
   } catch {
     // ignore
   }
@@ -197,30 +220,78 @@ async function pushSalonMutation(item: SalonSyncQueueItem): Promise<boolean> {
   }
 }
 
-/** 處理 pending / failed 變更：POST 去 POS Supabase；失敗標 failed 等下次重試。 */
+// ── flush（序列化 + 去重 + 成功即刪，解決 queue 無限增長 + 寫覆蓋競態）──
+
+const MAX_SYNC_ATTEMPTS = 5; // 同一 item 最多推 MAX 次，之後放棄（數據已喺 localStorage / IDB kv mirror，唔會丟失）
+const MAX_FLUSH_LOOP = 50; // 防止離線時 flush 內部無限重推嘅安全閥
+
+// 用 chain 串起所有 flush：並發呼叫者排喺上一趟之後跑，確保新 enqueue 嘅 item 唔會漏推，
+// 又唔會同時開多個 flush 搶同一個 queue（解決重複上推 + 寫覆蓋競態）。
+let flushChain: Promise<void> = Promise.resolve();
+
+/**
+ * 重連 / 頁面可見 / 每次 enqueue 後都會 call。
+ * 唔再用 navigator.onLine 做硬性擋（好多環境會誤報 offline，令 sync 永遠唔發）；
+ * 直接試 fetch，離線嗰陣 fetch 自然失敗並標 failed，下次 retry。
+ */
 export async function flushSalonSyncQueue(): Promise<void> {
-  // 唔再用 navigator.onLine 做硬性擋（好多環境會誤報 offline，令 sync 永遠唔發）；
-  // 直接嘗試 fetch，離線嗰陣 fetch 自然失敗並標 failed，下次 retry。
-  const queue = await idbGetQueue();
-  const pending = queue.filter((item) => item.status === "pending" || item.status === "failed");
-  if (pending.length === 0) return;
-  console.log(`[salon-sync] flush: ${pending.length} pending/failed event(s)`);
+  const run = flushChain.then(() => flushLoop());
+  flushChain = run.catch(() => {}); // 永遠指去最新一趟，等下次 call 會等埋今次
+  return run;
+}
 
-  // 同一 entity 只 push 最新一份（payload 已係整個陣列），減少重複上傳。
+async function flushLoop(): Promise<void> {
+  for (let i = 0; i < MAX_FLUSH_LOOP; i++) {
+    const queue = await idbGetQueue();
+    if (queue.length === 0) return;
+
+    // 清屋仔：舊 code 成功後標 `synced` 但永遠唔刪，留低嘅殘餘 entry 一併清走（修無限增長）
+    const synced = queue.filter((it) => it.status === "synced");
+    for (const s of synced) await idbDeleteQueueItem(s.id);
+
+    const pending = queue.filter((it) => it.status === "pending" || it.status === "failed");
+    if (pending.length === 0) return;
+
+    const deleted = await flushBatch(pending);
+    // 離線 / 後端未到位：呢輪全部失敗（deleted=0）就收手，等下次觸發，避免無限重推
+    if (deleted === 0) return;
+  }
+}
+
+/** 處理一批 pending / failed：同一 entity 只推最新一份（payload 已係整個陣列），成功即刪、失敗計次。 */
+async function flushBatch(pending: SalonSyncQueueItem[]): Promise<number> {
+  // 同一 entity 只推最新一份（按 createdAt 取最新，payload 已係整個陣列），減少重複上傳
   const latestByEntity = new Map<SalonSyncQueueItem["entity"], SalonSyncQueueItem>();
-  for (const item of pending) latestByEntity.set(item.entity, item);
+  for (const item of pending) {
+    const cur = latestByEntity.get(item.entity);
+    if (!cur || item.createdAt > cur.createdAt) latestByEntity.set(item.entity, item);
+  }
 
+  let deleted = 0;
   for (const latest of latestByEntity.values()) {
     const ok = await pushSalonMutation(latest);
     for (const item of pending) {
-      if (item.entity === latest.entity) {
-        await idbPatchQueueItem(item.id, {
-          status: ok ? "synced" : "failed",
-          syncedAt: new Date().toISOString(),
-        });
+      if (item.entity !== latest.entity) continue;
+      if (ok) {
+        // 成功：直接刪（最新 payload 已含整個陣列，同 entity 舊 entry 被涵蓋，唔使留）
+        await idbDeleteQueueItem(item.id);
+        deleted++;
+      } else {
+        const attempts = (item.attempts ?? 0) + 1;
+        if (attempts >= MAX_SYNC_ATTEMPTS) {
+          // 試夠 MAX 次都推唔出（後端未到位 / 離線）：放棄呢個通知，唔使留低霸住 IDB
+          await idbDeleteQueueItem(item.id);
+        } else {
+          await idbPatchQueueItem(item.id, {
+            status: "failed",
+            attempts,
+            syncedAt: new Date().toISOString(),
+          });
+        }
       }
     }
   }
+  return deleted;
 }
 
 /**

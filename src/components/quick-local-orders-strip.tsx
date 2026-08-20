@@ -1,6 +1,7 @@
 "use client";
 
 import { PosOrder } from "@/lib/types";
+import { formatMoney } from "@/lib/format";
 
 type QuickLocalOrdersStripProps = {
   currency: string;
@@ -13,10 +14,6 @@ type QuickLocalOrdersStripProps = {
   onMarkCompleted: (orderId: string, label: string) => void;
   onReturnPreparing: (orderId: string) => void;
 };
-
-function formatMoney(amount: number, currency: string) {
-  return `${currency} ${amount.toFixed(0)}`;
-}
 
 function OrderCard({
   order,

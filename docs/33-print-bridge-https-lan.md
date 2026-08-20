@@ -1,3 +1,5 @@
+> ⚠️ **已取代（Deprecated）**：本文件描述嘅舊 Node `print-bridge`（雲端 HTTPS POS + LAN bridge + 自簽證書）架構，已經被 **Native Print Agent（`print-agent-android`：WebView 外殼載入 POS + `window.PosNative` JS bridge，經 raw socket `:9100` ESC/POS）** 完全取代。相關文件：[`docs/36-native-print-agent.md`](./36-native-print-agent.md)（配對 / Hub fallback）、[`docs/37-apk-native-bridge-print-format.md`](./37-apk-native-bridge-print-format.md)（native 打印格式）。POS 而家喺 Android WebView 入面跑，唔使再處理 mixed content / Cloudflare Tunnel / 自簽證書。以下內容只作歷史參考。
+
 # 33 · 雲端 HTTPS POS 連 LAN print-bridge（Path ②）
 
 ## 背景：點解要 HTTPS？

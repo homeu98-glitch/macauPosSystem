@@ -67,16 +67,18 @@ export function localOrderStatusLabel(order: PosOrder): string {
   if (order.status === "paid" && order.fulfillmentStatus === "ready") return "待取餐";
   if (order.status === "paid") return "已付款";
   if (order.status === "settled") return "已完成";
+  if (order.status === "reopened") return "已返結";
   if (order.status === "cancelled") return "已取消";
   if (order.status === "refunded" || order.status === "partially_refunded") return "已退款";
   return order.status;
 }
 
-export type LocalOrderPanelTab = "all" | "preparing" | "ready" | "settled" | "cancelled";
+export type LocalOrderPanelTab = "all" | "preparing" | "ready" | "settled" | "reopened" | "cancelled";
 
 export function matchesLocalOrderPanelTab(order: PosOrder, tab: LocalOrderPanelTab): boolean {
   if (tab === "all") return true;
   if (tab === "settled") return order.status === "settled";
+  if (tab === "reopened") return order.status === "reopened";
   if (tab === "cancelled") {
     return order.status === "cancelled" || order.status === "refunded" || order.status === "partially_refunded";
   }

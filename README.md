@@ -1,6 +1,6 @@
 # Macau POS System
 
-澳門餐飲 POS 第一版 MVP — 前台收銀、打印、線上訂單、離線同步。
+澳門餐飲 + 美容院（salon）Web POS — 前台收銀、打印、線上訂單、離線同步，美容院預約看板、服務執行與會員忠誠度；打印經 Android Native Print Agent 直打 LAN `:9100` ESC/POS。
 
 | 項目 | 連結 |
 |------|------|
@@ -31,6 +31,8 @@ npm run dev
 - 打印分區、收據、標籤配置
 - 離線隊列 + 可選 POS Supabase 雲同步
 - PWA 可安裝至平板
+- 美容院（salon）縱向擴展：預約看板、服務執行、客戶檔案、會員忠誠度（推薦 / 生日優惠 / 積分）
+- Android Native Print Agent（`print-agent-android`）：POS 喺 WebView 外殼跑，經 `PosNative` bridge 直打 `:9100` ESC/POS
 
 ---
 
@@ -57,7 +59,7 @@ npm run build
 
 ## 業務邊界（v1）
 
-- 打印：USB / LAN only（無藍牙）
+- 打印：經 Android Native Print Agent（`print-agent-android`）直打 LAN `:9100` ESC/POS；無藍牙、無 Cloudflare Tunnel / 自簽證書
 - 會員權威在 Ledger；POS 做店內查詢與抵扣
 - 線上訂單：**禁止 polling**，用 Supabase Realtime
 - 收銀規則由主系統下發，POS 只讀快取

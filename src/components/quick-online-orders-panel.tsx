@@ -39,6 +39,7 @@ import {
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
+import { formatMoney } from "@/lib/format";
 
 type QuickOnlineOrdersPanelProps = {
   currency: string;
@@ -52,10 +53,6 @@ type QuickOnlineOrdersPanelProps = {
   showAutoAcceptControls?: boolean;
   tables?: Array<{ id: string; name: string; floorName: string }>;
 };
-
-function formatMoney(amount: number, currency: string) {
-  return `${currency} ${amount.toFixed(0)}`;
-}
 
 function optimisticPatch(order: LedgerOnlineOrder, status: string): LedgerOnlineOrder {
   return { ...order, status, updatedAt: new Date().toISOString() };

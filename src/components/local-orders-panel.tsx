@@ -22,20 +22,19 @@ import {
   quickCompletionLabel,
   updateQuickFulfillmentInStore,
 } from "@/lib/quick-order-fulfillment";
-import { loadBootstrapCache, loadOrders } from "@/lib/storage";
+import { isReopenable, reopenPosOrder } from "@/lib/pos-orders";
+import { loadAuthSession, loadBootstrapCache, loadOrders, loadPosLocalSettings } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
+import { formatMoney } from "@/lib/format";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
   { key: "preparing", label: "製作中" },
   { key: "ready", label: "待取餐" },
   { key: "settled", label: "已完成" },
+  { key: "reopened", label: "已返結" },
   { key: "cancelled", label: "已取消" },
 ];
-
-function formatMoney(amount: number, currency: string) {
-  return `${currency} ${amount.toFixed(0)}`;
-}
 
 function orderMatchesLocalDateFilter(order: PosOrder, filter: LedgerOrderDateFilter): boolean {
   const pseudo = { createdAt: order.createdAt, updatedAt: order.updatedAt };
@@ -104,6 +103,8 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   const [statusTab, setStatusTab] = useState<LocalOrderPanelTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [reopenReason, setReopenReason] = useState<string>("");
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
 
   function refresh() {
     setOrders(loadOrders().filter(isLocalPosOrder));
@@ -132,6 +133,33 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   function handleQuickAction() {
     refresh();
     setToast("已更新訂單狀態");
+  }
+
+  async function handleReopen(order: PosOrder) {
+    if (!reopenReason.trim()) {
+      setToast("請先揀返結原因");
+      return;
+    }
+    setReopenSubmitting(true);
+    try {
+      const session = loadAuthSession();
+      const operator = session?.name ?? session?.account ?? "收銀";
+      const result = await reopenPosOrder({ orderId: order.id, reason: reopenReason, operator });
+      if (!result.ok) {
+        setToast(result.error ?? "返結失敗");
+        return;
+      }
+      if (result.memberReverseError) {
+        setToast("已返結並印單；會員餘額退回待 Ledger 對接");
+      } else {
+        setToast(result.memberReversed ? "已返結、會員餘額已退回並印單" : "已返結並印返結單");
+      }
+      setReopenReason("");
+      setViewingOrderId(null);
+      refresh();
+    } finally {
+      setReopenSubmitting(false);
+    }
   }
 
   return (
@@ -195,7 +223,10 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   <button
                     className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                    onClick={() => setViewingOrderId(order.id)}
+                    onClick={() => {
+                      setReopenReason("");
+                      setViewingOrderId(order.id);
+                    }}
                     type="button"
                   >
                     查看
@@ -246,6 +277,36 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   }}
                   order={viewingOrder}
                 />
+              </div>
+            ) : null}
+            {isReopenable(viewingOrder) ? (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <div className="text-xs font-semibold text-amber-800">返結（反結賬）</div>
+                <p className="mt-1 text-[11px] text-amber-700">
+                  把此單退回可編輯，改正後重新結帳。必須揀返結原因。
+                </p>
+                <select
+                  className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
+                  value={reopenReason}
+                  onChange={(e) => setReopenReason(e.target.value)}
+                >
+                  <option value="" disabled>
+                    揀返結原因…
+                  </option>
+                  {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  disabled={!reopenReason || reopenSubmitting}
+                  onClick={() => handleReopen(viewingOrder)}
+                >
+                  {reopenSubmitting ? "處理中…" : "確認返結"}
+                </button>
               </div>
             ) : null}
           </div>

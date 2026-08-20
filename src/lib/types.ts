@@ -4,6 +4,7 @@ export type UserRole = "admin" | "manager" | "cashier";
 export interface UserPermissions {
   refundOrder: boolean;
   voidItem: boolean;
+  reopenOrder: boolean;
   manageAccounts?: boolean;
 }
 
@@ -296,6 +297,8 @@ export interface PosLocalSettings {
   };
   notePresets: string[];
   cancelNotePresets: string[];
+  /** 返結（反結賬）可選原因清單，設置 → 備註 可增刪 */
+  reopenReasons: string[];
   fullVoidBehavior: "cancelled" | "refunded";
   dineInQuickActionOrder: Array<
     "view_order" | "send_kitchen" | "checkout" | "back_tables" | "prints" | "online_orders" | "shift" | "settings"
@@ -326,7 +329,7 @@ export interface PosOrder {
   localOrderNo: string;
   tableId: string;
   tableName: string;
-  status: "draft" | "sent_to_kitchen" | "paid" | "settled" | "cancelled" | "partially_refunded" | "refunded";
+  status: "draft" | "sent_to_kitchen" | "paid" | "settled" | "reopened" | "cancelled" | "partially_refunded" | "refunded";
   fulfillmentStatus?: "preparing" | "ready";
   items: OrderItem[];
   orderNote?: string;
@@ -357,6 +360,25 @@ export interface PosOrder {
     }>;
     createdAt: string;
   }>;
+
+  // ── 返結（反結賬）審計欄位 ──
+  /** 最近一次返結時間（ISO） */
+  reopenedAt?: string;
+  /** 操作人帳號（餐飲為登入員工；美容為店長） */
+  reopenedBy?: string;
+  /** 返結原因（來自設置 reopenReasons 或自填） */
+  reopenReason?: string;
+  /** 累計返結次數 */
+  reopenCount?: number;
+  /** 首次結帳（settled）時間，重結後保留以便對帳 */
+  originalSettledAt?: string;
+
+  // ── 返結會員扣款快照（供反向回滾 / 重結用）──
+  /** 上次結帳透過會員餘額扣減的 avos（不含券），供返結反向回滾 */
+  memberDeductionAvos?: number;
+  /** 上次結帳扣款的會員電話（Ledger phone），供返結反向回滾 */
+  ledgerMemberPhone?: string;
+
   createdAt: string;
   updatedAt: string;
 }
