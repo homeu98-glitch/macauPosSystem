@@ -17,7 +17,10 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   const pending = jobs.filter((job) => job.status === "pending");
   if (pending.length === 0) return jobs;
 
-  const hubOn = isHubConfigured();
+  // 有無任何派發通道：native bridge（Android APK）或已配對 Hub。
+  // 舊邏輯喺「未配 Hub」時直接 continue 跳過，令 native-only 模式（Sunmi APK）
+  // 嘅待印 job 永遠卡 pending、收據靜默唔印。現改為：無通道先維持 pending 等下次 flush。
+  const hasChannel = isNativeBridgeAvailable() || isHubConfigured();
   let changed = false;
   const nextJobs = [...jobs];
 
@@ -25,15 +28,15 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     const index = nextJobs.findIndex((row) => row.id === job.id);
     if (index < 0) continue;
 
-    if (!hubOn) {
-      // 未配對 Hub：維持 pending，等店主喺設置頁配對 Sunmi Hub。
-      nextJobs[index] = { ...job, status: "pending" };
-      changed = true;
-      continue;
-    }
-
     const result = await dispatchOneJob(job);
-    nextJobs[index] = { ...job, status: result.ok ? "sent" : "failed" };
+    if (result.ok) {
+      nextJobs[index] = { ...job, status: "sent" };
+    } else if (!hasChannel) {
+      // 完全無通道（未配 Hub、又無 native bridge）：維持 pending，等店主配對後下次 flush 再試。
+      nextJobs[index] = { ...job, status: "pending" };
+    } else {
+      nextJobs[index] = { ...job, status: "failed" };
+    }
     changed = true;
   }
 

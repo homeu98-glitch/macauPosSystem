@@ -6,13 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "print-bridge": "npm --prefix print-bridge start",
-    "print-bridge:install": "npm --prefix print-bridge install"
+    "lint": "eslint"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.0",
-    "mqtt": "^5.15.2",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

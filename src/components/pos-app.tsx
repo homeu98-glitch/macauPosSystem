@@ -1997,7 +1997,7 @@ export function PosApp() {
 
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
-    const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap, networkOnline);
+    const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap);
     if (nextPrintJobs.length === 0) return;
 
     const timestamp = nextPrintJobs[0]?.createdAt ?? new Date().toISOString();

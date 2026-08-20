@@ -95,24 +95,3 @@ export function matchesLocalOrderPanelTab(order: PosOrder, tab: LocalOrderPanelT
   }
   return true;
 }
-
-/** @deprecated 使用 matchesLocalOrderPanelTab */
-export type LocalOrderStatusTab = LocalOrderPanelTab;
-
-/** @deprecated 使用 matchesLocalOrderPanelTab */
-export function matchesLocalStatusTab(order: PosOrder, tab: LocalOrderStatusTab): boolean {
-  return matchesLocalOrderPanelTab(order, tab);
-}
-
-/** @deprecated 使用 filterQuickActionBarOrders */
-export const POS_ACTION_BAR_LOCAL_MINUTES = 60;
-
-/** @deprecated 使用 isActionableQuickOrder + filterQuickActionBarOrders */
-export function isActionableLocalOrder(order: PosOrder): boolean {
-  return isActionableQuickOrder(order);
-}
-
-/** @deprecated 使用 filterQuickActionBarOrders */
-export function filterActionBarLocalOrders(orders: PosOrder[], _nowMs = Date.now()): PosOrder[] {
-  return filterQuickActionBarOrders(orders);
-}

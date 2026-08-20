@@ -20,7 +20,7 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosLocalSettings, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { fetchLedgerOrderMenu, LedgerOrderMenu } from "@/lib/ledger/menu";
 import {
@@ -45,6 +45,7 @@ import {
   type HubDevice,
   type HubServiceId,
 } from "@/lib/print-bridge/hub";
+import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -408,9 +409,39 @@ export function DeviceSettings() {
     setTestingPrinterId(printer.id);
 
     try {
-      // 所有打印機都經 Printer Hub（Sunmi APK）直打（按 config.printers IP 路由）
+      // 1) Native Print Agent（Sunmi APK WebView）優先：經 PosNative 觸發 APK renderTestPage
+      if (isNativeBridgeAvailable()) {
+        const storeName = loadBootstrapCache()?.storeName;
+        const testJob: PrintJob = {
+          id: uid("print"),
+          orderId: "",
+          orderNo: "TEST",
+          tableName: "",
+          ticketType: "normal",
+          printerGroup:
+            printer.role === "receipt"
+              ? "receipt"
+              : printer.role === "label"
+                ? "label"
+                : printer.zoneId ?? "zone:test",
+          printerId: printer.id,
+          printerName: printer.name,
+          items: [{ name: "Macau POS 測試打印", quantity: 1, specs: [], note: "Printer Agent OK" }],
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        };
+        const res = await dispatchJobToNative(testJob, { printer, kind: "test", storeName });
+        if (res.ok) {
+          setStatus(`已透過 Native Print Agent 送出 ${printer.name} 測試打印。`);
+        } else {
+          setStatus(res.error || `未能送出 ${printer.name} 測試打印。`);
+        }
+        return;
+      }
+
+      // 2) Fallback：經 Printer Hub（Sunmi APK HTTP :8787）直打
       if (!isHubConfigured()) {
-        setStatus("請先喺上方配對 Printer Hub（Sunmi APK），再測試打印。");
+        setStatus("請先喺上方配對 Printer Hub（Sunmi APK），或於 Sunmi APK 環境內測試打印。");
         return;
       }
       if (!printer.ipAddress) {

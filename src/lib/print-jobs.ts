@@ -1,6 +1,5 @@
 "use client";
 
-import { resolvePrintJobStatus } from "@/lib/print-bridge/hub";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -29,7 +28,6 @@ export function appendPrintJobs(jobs: PrintJob[]) {
 export function buildReceiptPrintJobs(
   order: PosOrder,
   bootstrap: PosBootstrap,
-  networkOnline = true,
 ): PrintJob[] {
   const receiptSettings = loadPosLocalSettings().printTemplates.receipt;
   type ReceiptItem = NonNullable<PrintJob["items"]>[number];
@@ -75,12 +73,12 @@ export function buildReceiptPrintJobs(
     printerId: printer.id,
     printerName: printer.name,
     items: receiptItems,
-    status: resolvePrintJobStatus(networkOnline),
+    status: "pending",
     createdAt: timestamp,
   }));
 }
 
-export function buildVoidPrintJobsForOrder(order: PosOrder, reason: string, networkOnline = true): PrintJob[] {
+export function buildVoidPrintJobsForOrder(order: PosOrder, reason: string): PrintJob[] {
   const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
   const timestamp = new Date().toISOString();
   const voidPrintJobs: PrintJob[] = [];
@@ -108,7 +106,7 @@ export function buildVoidPrintJobsForOrder(order: PosOrder, reason: string, netw
             note: reason || "線上訂單已取消",
           },
         ],
-        status: resolvePrintJobStatus(networkOnline),
+        status: "pending",
         createdAt: timestamp,
       }));
     voidPrintJobs.push(...jobs);
@@ -122,18 +120,18 @@ export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {
   return loadOrders().find((row) => row.id === posOrderId || row.onlineOrderId === ledgerOrderId) ?? null;
 }
 
-export function printReceiptForPosOrder(order: PosOrder, networkOnline = true): number {
+export function printReceiptForPosOrder(order: PosOrder): number {
   const bootstrap = loadBootstrapCache();
   if (!bootstrap) return 0;
-  const jobs = buildReceiptPrintJobs(order, bootstrap, networkOnline);
+  const jobs = buildReceiptPrintJobs(order, bootstrap);
   appendPrintJobs(jobs);
   return jobs.length;
 }
 
-export function printVoidForLedgerOrder(ledgerOrderId: string, reason = "線上訂單已取消", networkOnline = true): number {
+export function printVoidForLedgerOrder(ledgerOrderId: string, reason = "線上訂單已取消"): number {
   const order = findPosOrderForLedger(ledgerOrderId);
   if (!order || order.items.length === 0) return 0;
-  const jobs = buildVoidPrintJobsForOrder(order, reason, networkOnline);
+  const jobs = buildVoidPrintJobsForOrder(order, reason);
   appendPrintJobs(jobs);
   return jobs.length;
 }
@@ -149,7 +147,7 @@ export async function printReceiptForLedgerOrder(
     order = { ...order, paymentMethod: options.paymentMethod };
   }
 
-  return printReceiptForPosOrder(order, options?.networkOnline ?? true);
+  return printReceiptForPosOrder(order);
 }
 
 const recentVoidLedgerIds = new Set<string>();
