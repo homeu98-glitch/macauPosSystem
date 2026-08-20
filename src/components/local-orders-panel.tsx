@@ -104,6 +104,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalOrTransferredDineIn));
   const [statusTab, setStatusTab] = useState<LocalOrderPanelTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
+  const [reopenTargetOrderId, setReopenTargetOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState<string>("");
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
@@ -131,6 +132,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   }, [dateFilter, orders, statusTab]);
 
   const viewingOrder = viewingOrderId ? orders.find((row) => row.id === viewingOrderId) ?? null : null;
+  const reopenTarget = reopenTargetOrderId ? orders.find((row) => row.id === reopenTargetOrderId) ?? null : null;
 
   function handleQuickAction() {
     refresh();
@@ -158,6 +160,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
       }
       setReopenReason("");
       setViewingOrderId(null);
+      setReopenTargetOrderId(null);
       // 跳去點餐枱面：進入可編輯「返結帳」狀態，可加餐 / 改價 / 重結
       const tableId = order.tableId && order.tableId !== "counter" ? order.tableId : "";
       router.push(`/?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`);
@@ -228,12 +231,14 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   <button
                     className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
                     onClick={() => {
-                      if (!order.tableId || order.tableId === "counter") {
-                        // 快餐/外賣/無枱 → 保留小窗
-                        setReopenReason("");
-                        setViewingOrderId(order.id);
-                      } else if (order.status === "settled") {
-                        // 已結堂食單 → 唯讀 modal（唔可直接編輯），內有「返結帳」掣先跳枱面
+                      if (order.status === "settled" && isReopenable(order)) {
+                        // 已結堂食單 → 跳點餐介面（唯讀灰掣模式），入面掣全部鎖定
+                        const tableId = order.tableId && order.tableId !== "counter" ? order.tableId : "";
+                        router.push(
+                          `/?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`,
+                        );
+                      } else if (!order.tableId || order.tableId === "counter") {
+                        // 快餐/外賣/無枱 → 保留小窗唯讀
                         setReopenReason("");
                         setViewingOrderId(order.id);
                       } else {
@@ -247,6 +252,18 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   >
                     查看
                   </button>
+                  {order.status === "settled" && isReopenable(order) ? (
+                    <button
+                      className="rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
+                      onClick={() => {
+                        setReopenReason("");
+                        setReopenTargetOrderId(order.id);
+                      }}
+                      type="button"
+                    >
+                      返結帳
+                    </button>
+                  ) : null}
                   <QuickOrderActions onChanged={handleQuickAction} order={order} />
                 </div>
               </article>
@@ -263,11 +280,6 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
           widthClassName="max-w-md"
         >
           <div className="grid gap-2 text-sm text-slate-700">
-            {viewingOrder.status === "settled" ? (
-              <div className="rounded-xl bg-slate-100 px-3 py-2 text-[11px] text-slate-600">
-                此單已結帳 · 唯讀預覽，不可直接改動。如需改價／加餐，請按下方「返結帳」。
-              </div>
-            ) : null}
             {isQuickCounterOrder(viewingOrder) ? (
               <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
                 {viewingOrder.status === "settled"
@@ -300,36 +312,46 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                 />
               </div>
             ) : null}
-            {isReopenable(viewingOrder) ? (
-              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                <div className="text-xs font-semibold text-amber-800">返結帳（反結賬）</div>
-                <p className="mt-1 text-[11px] text-amber-700">
-                  把此單退回可編輯，改正後重新結帳。必須揀返結原因，確認後跳去點餐枱面操作。
-                </p>
-                <select
-                  className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
-                  value={reopenReason}
-                  onChange={(e) => setReopenReason(e.target.value)}
-                >
-                  <option value="" disabled>
-                    揀返結原因…
-                  </option>
-                  {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="mt-2 w-full rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                  disabled={!reopenReason || reopenSubmitting}
-                  onClick={() => handleReopen(viewingOrder)}
-                >
-                  {reopenSubmitting ? "處理中…" : "返結帳"}
-                </button>
-              </div>
-            ) : null}
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {reopenTarget ? (
+        <ResponsiveModal
+          description="把此單退回可編輯，改正後重新結帳"
+          onClose={() => {
+            setReopenTargetOrderId(null);
+            setReopenReason("");
+          }}
+          title="返結帳（反結賬）"
+          widthClassName="max-w-md"
+        >
+          <div className="grid gap-3">
+            <p className="text-[11px] text-amber-700">
+              必須揀返結原因，確認後跳去點餐枱面操作（可改價／加餐／重結）。
+            </p>
+            <select
+              className="w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+            >
+              <option value="" disabled>
+                揀返結原因…
+              </option>
+              {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="w-full rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+              disabled={!reopenReason || reopenSubmitting}
+              onClick={() => handleReopen(reopenTarget)}
+            >
+              {reopenSubmitting ? "處理中…" : "返結帳"}
+            </button>
           </div>
         </ResponsiveModal>
       ) : null}

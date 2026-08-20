@@ -57,6 +57,7 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
+import { reopenPosOrder } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
@@ -111,6 +112,9 @@ export function PosApp() {
   const [searchFocused, setSearchFocused] = useState(false);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
+  const [roReason, setRoReason] = useState("");
+  const [roModalOpen, setRoModalOpen] = useState(false);
+  const [roSubmitting, setRoSubmitting] = useState(false);
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
@@ -142,6 +146,13 @@ export function PosApp() {
     // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, operatingMode, router]);
+
+  // 外部（面板 / 本頁「返結帳」）改完 orders 後，刷新本地 state，令 activeOrder 重算（settled→reopened 後變可編輯）
+  useEffect(() => {
+    const onChanged = () => setOrders(loadOrders());
+    window.addEventListener("pos-orders-changed", onChanged);
+    return () => window.removeEventListener("pos-orders-changed", onChanged);
+  }, []);
 
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
@@ -645,6 +656,12 @@ export function PosApp() {
     }
     return (activeTableId ? tableOrderMap.get(activeTableId) : null) ?? null;
   }, [activeOrderId, activeTableId, orders, tableOrderMap]);
+  // 唯讀鎖定：已結帳單經 deep-link 載入工作台（activeOrder 因 status=settled 被排除，但 activeOrderId/cartItems 已設）
+  const workspaceOrder = useMemo(
+    () => (activeOrderId ? orders.find((order) => order.id === activeOrderId) ?? null : null),
+    [activeOrderId, orders],
+  );
+  const isReadOnlySettled = workspaceOrder?.status === "settled";
   const unsettledOrder = useMemo(
     () => orders.find((order) => order.status === "sent_to_kitchen") ?? null,
     [orders],
@@ -1120,6 +1137,7 @@ export function PosApp() {
   }
 
   function openItemNoteEditor(item: OrderItem) {
+    if (isReadOnlySettled) return;
     if ((orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) return;
     setNoteDraft(item.note ?? "");
     setNoteModal({ type: "item", itemKey: itemIdentity(item) });
@@ -1132,6 +1150,7 @@ export function PosApp() {
   }
 
   function addMenuItem(item: MenuItem) {
+    if (isReadOnlySettled) return;
     if (isItemSoldOut(item.id)) {
       setToast({ tone: "info", message: `${item.name} 已售罄。` });
       return;
@@ -1170,6 +1189,7 @@ export function PosApp() {
   }
 
   function updateQuantity(itemKey: string, delta: number) {
+    if (isReadOnlySettled) return;
     setCartItems((current) => {
       const target = current.find((row) => itemIdentity(row) === itemKey);
       if (!target) return current;
@@ -1612,6 +1632,7 @@ export function PosApp() {
   }
 
   async function sendToKitchen(options?: { silent?: boolean; forceNewOrder?: boolean }) {
+    if (isReadOnlySettled) return null;
     if (!bootstrap || !activeTable || cartItems.length === 0) return null;
     if (orderSubmitting) return null;
     setOrderSubmitting(true);
@@ -2289,6 +2310,7 @@ export function PosApp() {
   }
 
   async function openSettlementModal() {
+    if (isReadOnlySettled) return;
     if (isQuickMode) {
       if (cartItems.length === 0) {
         setToast({ tone: "info", message: "請先點餐再結帳。" });
@@ -2311,6 +2333,38 @@ export function PosApp() {
     setPayingOrderId(targetOrder.id);
     resetMemberCheckoutState();
     setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
+  }
+
+  // 本頁「返結帳」：把已結單退回可編輯（status → reopened）。
+  // 成功後 pos-orders-changed listener 會刷新 orders → activeOrder 變 reopened → 工作台變可編輯。
+  async function handlePosReopen() {
+    if (!activeOrderId) return;
+    if (!roReason.trim()) {
+      setToast({ tone: "info", message: "請先揀返結原因" });
+      return;
+    }
+    setRoSubmitting(true);
+    try {
+      const session = loadAuthSession();
+      const operator = session?.name ?? session?.account ?? "收銀";
+      const result = await reopenPosOrder({ orderId: activeOrderId, reason: roReason, operator });
+      if (!result.ok) {
+        setToast({ tone: "info", message: result.error ?? "返結失敗" });
+        return;
+      }
+      setRoReason("");
+      setRoModalOpen(false);
+      setToast({
+        tone: "success",
+        message: result.memberReversed
+          ? "已返結、會員餘額已退回並印單"
+          : result.memberReverseError
+            ? "已返結並印單；會員餘額退回待 Ledger 對接"
+            : "已返結並印返結單",
+      });
+    } finally {
+      setRoSubmitting(false);
+    }
   }
 
   if (isBootstrapping || !bootstrap) {
@@ -2360,8 +2414,15 @@ export function PosApp() {
                 <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
                   {visibleTables.map((table) => {
                     const status = tableOrderMap.get(table.id)?.status ?? "idle";
+                    const isReopenedTable = status === "reopened";
                     const label =
-                      status === "sent_to_kitchen" ? "已下單" : status === "draft" ? "未下單" : "空閒";
+                      isReopenedTable
+                        ? "待重結"
+                        : status === "sent_to_kitchen"
+                          ? "已下單"
+                          : status === "draft"
+                            ? "未下單"
+                            : "空閒";
                     return (
                       <button
                         key={table.id}
@@ -2369,9 +2430,15 @@ export function PosApp() {
                         onClick={() => selectTable(table.id)}
                         type="button"
                       >
-                        <div className="text-base font-semibold text-slate-900">{table.name}</div>
+                        <div className="text-base font-semibold text-slate-900">
+                          {isReopenedTable ? `返結帳 ${table.name}` : table.name}
+                        </div>
                         <div className="mt-2 text-xs text-slate-500">{table.area}</div>
-                        <div className="mt-4 inline-flex rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
+                        <div
+                          className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                            isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
+                          }`}
+                        >
                           {label}
                         </div>
                       </button>
@@ -2592,6 +2659,30 @@ export function PosApp() {
               </div>
             ) : null}
 
+            {isReadOnlySettled ? (
+              <div className="mx-4 mb-1 mt-2 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-slate-500 px-2 py-0.5 text-[11px] font-bold text-white">已結帳</span>
+                    <span className="text-xs font-semibold text-slate-700">唯讀預覽 · 所有操作已鎖定</span>
+                  </div>
+                  <button
+                    className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    disabled={roSubmitting}
+                    onClick={() => setRoModalOpen(true)}
+                    type="button"
+                  >
+                    返結帳
+                  </button>
+                </div>
+                {workspaceOrder?.originalSettledAt || workspaceOrder?.updatedAt ? (
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    結帳時間：{(workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt)!.replace("T", " ").slice(0, 16)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="px-4 py-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="font-semibold text-slate-900">訂單明細</span>
@@ -2675,7 +2766,8 @@ export function PosApp() {
                           ) : (
                             <>
                               <button
-                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   updateQuantity(itemKey, -1);
@@ -2686,7 +2778,8 @@ export function PosApp() {
                               </button>
                               <div className="w-7 text-center text-sm font-semibold text-slate-800">{item.quantity}</div>
                               <button
-                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   updateQuantity(itemKey, 1);
@@ -2702,30 +2795,32 @@ export function PosApp() {
                       <div className="mt-2 flex items-center justify-between">
                         <div className="flex flex-wrap items-center gap-2">
                           {!locked ? (
-                            <button
-                              className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openItemNoteEditor(item);
-                              }}
-                              type="button"
-                            >
+                              <button
+                                className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openItemNoteEditor(item);
+                                }}
+                                type="button"
+                              >
                               {item.note ? "編輯備註" : "加備註"}
                             </button>
                           ) : null}
                           {locked ? (
-                            <button
-                              className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                if (!canVoidItem) {
-                                  showPermissionDenied("退菜");
-                                  return;
-                                }
-                                setVoidRequest({ item, mode: "one" });
-                              }}
-                              type="button"
-                            >
+                              <button
+                                className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (!canVoidItem) {
+                                    showPermissionDenied("退菜");
+                                    return;
+                                  }
+                                  setVoidRequest({ item, mode: "one" });
+                                }}
+                                type="button"
+                              >
                               退 1 份
                             </button>
                           ) : null}
@@ -2750,7 +2845,8 @@ export function PosApp() {
               {isAddOnOrder && cartItems.some((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) ? (
                 <div className="mb-3 flex justify-end">
                   <button
-                    className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
+                    className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isReadOnlySettled}
                     onClick={() => {
                       if (!canVoidItem) {
                         showPermissionDenied("退菜");
@@ -2773,14 +2869,15 @@ export function PosApp() {
                   <div className="text-xs font-semibold text-slate-600">全單備註</div>
                   <div className="truncate text-xs text-slate-500">{orderNote ? orderNote : "（可選）"}</div>
                 </div>
-                <button
-                  className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                  onClick={() => {
-                    setNoteDraft(orderNote);
-                    setNoteModal({ type: "order" });
-                  }}
-                  type="button"
-                >
+                  <button
+                    className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isReadOnlySettled}
+                    onClick={() => {
+                      setNoteDraft(orderNote);
+                      setNoteModal({ type: "order" });
+                    }}
+                    type="button"
+                  >
                   編輯
                 </button>
               </div>
@@ -2857,7 +2954,8 @@ export function PosApp() {
                     key={item.id}
                     className={`rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
                       soldOut ? "opacity-60" : "hover:-translate-y-0.5 hover:border-orange-300"
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    disabled={isReadOnlySettled}
                     onClick={() => addMenuItem(item)}
                     type="button"
                   >
@@ -2942,9 +3040,9 @@ export function PosApp() {
               <div className="mt-2 grid gap-2">
                 {!isQuickMode ? (
                   <button
-                    className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600"
+                    className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-busy={orderSubmitting}
-                    disabled={orderSubmitting}
+                    disabled={orderSubmitting || isReadOnlySettled}
                     onClick={() => void sendToKitchen()}
                     type="button"
                   >
@@ -2952,7 +3050,8 @@ export function PosApp() {
                   </button>
                 ) : null}
                 <button
-                  className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800"
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={isReadOnlySettled}
                   onClick={() => void openSettlementModal()}
                   type="button"
                 >
@@ -3228,6 +3327,52 @@ export function PosApp() {
             </div>
         </ResponsiveModal>
       ) : null}
+
+      {roModalOpen && activeOrderId
+        ? (() => {
+            const target = orders.find((o) => o.id === activeOrderId) ?? null;
+            if (!target) return null;
+            return (
+              <ResponsiveModal
+                description={`${target.tableName} · 退回可編輯後重新結帳`}
+                onClose={() => {
+                  setRoModalOpen(false);
+                  setRoReason("");
+                }}
+                title="返結帳（反結賬）"
+                widthClassName="max-w-md"
+              >
+                <div className="grid gap-3">
+                  <p className="text-[11px] text-amber-700">
+                    必須揀返結原因。確認後此單退回可編輯，可改價／加餐後重新結帳。
+                  </p>
+                  <select
+                    className="w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
+                    value={roReason}
+                    onChange={(e) => setRoReason(e.target.value)}
+                  >
+                    <option value="" disabled>
+                      揀返結原因…
+                    </option>
+                    {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="w-full rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    disabled={!roReason || roSubmitting}
+                    onClick={() => void handlePosReopen()}
+                  >
+                    {roSubmitting ? "處理中…" : "返結帳"}
+                  </button>
+                </div>
+              </ResponsiveModal>
+            );
+          })()
+        : null}
 
       {viewingOrder ? (
         <ResponsiveModal
