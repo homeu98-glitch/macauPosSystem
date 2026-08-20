@@ -2612,42 +2612,25 @@ export function PosApp() {
                           : status === "draft"
                             ? "未下單"
                             : "空閒";
-                    const isVoidable = Boolean(findVoidableTableOrder(table.id));
                     return (
-                      <div
+                      <button
                         key={table.id}
-                        className="relative rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300"
+                        className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300"
+                        onClick={() => selectTable(table.id)}
+                        type="button"
                       >
-                        <button
-                          className="w-full text-left"
-                          onClick={() => selectTable(table.id)}
-                          type="button"
+                        <div className="text-base font-semibold text-slate-900">
+                          {table.name}
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500">{table.area}</div>
+                        <div
+                          className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                            isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
+                          }`}
                         >
-                          <div className="text-base font-semibold text-slate-900">
-                            {table.name}
-                          </div>
-                          <div className="mt-2 text-xs text-slate-500">{table.area}</div>
-                          <div
-                            className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                              isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
-                            }`}
-                          >
-                            {label}
-                          </div>
-                        </button>
-                        {isVoidable ? (
-                          <button
-                            className="absolute right-2 top-2 rounded-full bg-red-50 px-2 py-1 text-[11px] font-bold text-red-600 ring-1 ring-red-200 hover:bg-red-100"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setVoidTableRequest(table.id);
-                            }}
-                            type="button"
-                          >
-                            退桌
-                          </button>
-                        ) : null}
-                      </div>
+                          {label}
+                        </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -2929,7 +2912,7 @@ export function PosApp() {
             </div>
 
             <div className="flex-1 overflow-auto px-3 pb-3">
-              {cartItems.length === 0 ? (
+              {cartItems.length === 0 && voidedItems.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
                   請從右側商品區加入菜品
                 </div>
@@ -3093,6 +3076,24 @@ export function PosApp() {
                     type="button"
                   >
                     全部退菜
+                  </button>
+                </div>
+              ) : null}
+              {findVoidableTableOrder(activeTableId) ? (
+                <div className="mb-3 flex justify-end">
+                  <button
+                    className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isReadOnlySettled}
+                    onClick={() => {
+                      if (!canVoidItem) {
+                        showPermissionDenied("退桌");
+                        return;
+                      }
+                      setVoidTableRequest(activeTableId);
+                    }}
+                    type="button"
+                  >
+                    退桌
                   </button>
                 </div>
               ) : null}
