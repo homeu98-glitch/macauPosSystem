@@ -883,7 +883,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
             </div>
 
             <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-left">
-              <div className="text-sm font-semibold text-amber-800">返結（反結賬）</div>
+              <div className="text-sm font-semibold text-amber-800">返結帳（反結賬）</div>
               <p className="mt-1 text-xs text-amber-700">
                 把此單退回可編輯，改正後重新結帳。會員餘額 / 積分 / 套票將自動退回，重結時重新扣。必須揀返結原因。
               </p>
@@ -907,7 +907,7 @@ export function Checkout({ bookingId }: { bookingId: string }) {
                 disabled={!reopenReason || reopenSubmitting}
                 onClick={handleReopen}
               >
-                {reopenSubmitting ? "處理中…" : "確認返結"}
+                {reopenSubmitting ? "處理中…" : "返結帳"}
               </button>
             </div>
 
@@ -955,6 +955,8 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     );
   }
 
+  const currentOrder = loadSalonOrders().find((o) => o.id === booking.orderId);
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900 md:pl-[72px]">
       {/* Header */}
@@ -972,6 +974,18 @@ export function Checkout({ bookingId }: { bookingId: string }) {
           ← 工作台
         </Link>
       </header>
+
+      {currentOrder?.status === "reopened" ? (
+        <div className="px-4 py-2 md:px-6">
+          <div className="flex items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+            <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white">返結帳</span>
+            <span className="text-xs font-semibold text-amber-800">此單為返結單，可改價／加服務後重新結帳</span>
+            {currentOrder.reopenReason ? (
+              <span className="ml-auto text-[11px] text-amber-700">返結原因：{currentOrder.reopenReason}</span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* 左欄：訂單內容（可滾動） */}

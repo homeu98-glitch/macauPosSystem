@@ -470,7 +470,7 @@ function BookingBlock({ booking, items, categories, slotHeight, compact }: Booki
 
   return (
     <Link
-      href={`/salon/booking/${booking.id}`}
+      href={booking.status === "settled" ? `/salon/checkout/${booking.id}` : `/salon/booking/${booking.id}`}
       className="absolute inset-x-0.5 top-0.5 z-10 overflow-hidden rounded-lg px-1.5 py-1 text-xs shadow-sm transition hover:brightness-95"
       style={{
         height,

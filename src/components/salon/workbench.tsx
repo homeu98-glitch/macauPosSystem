@@ -190,7 +190,7 @@ export function SalonWorkbench() {
                 todayBookings.slice(0, 8).map((b) => (
                   <li key={b.id}>
                     <Link
-                      href={`/salon/booking/${b.id}`}
+                      href={b.status === "settled" ? `/salon/checkout/${b.id}` : `/salon/booking/${b.id}`}
                       className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:bg-orange-50"
                     >
                       <div className="min-w-0">

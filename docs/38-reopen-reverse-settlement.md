@@ -80,6 +80,11 @@
 - [x] 返結入口放在 `checkout`「已結帳」屏（預約結帳後即見；經 service-runner 重開 settled 預約亦可達），免另起 drill-down 列表。
 - [x] 返結 → `reopened` + 印單 + **本地 mock 反向回滾**（客戶檔案 ledgerBalance / ledgerPoints / 套票次數加返、pointsEarned 減返、推薦獎勵扣返並重置標記）。
 - [x] 重結：複用 salon `checkout`，針對同一 `booking.orderId` 就地更新 order（不新增），重新扣。
+- [x] **已完成單唯讀 + 返結帳掣對齊餐飲（2026-08-20 晚追加）**：salon 無「快餐」概念，故 `isSalonReopenable` 唔需排除 counter；對齊做法——
+  - **訂單列表入口**：`workbench.tsx`「今日預約」、`calendar-board.tsx` 日曆格嘅 settled 預約 `<Link>` 由 `/salon/booking/{id}` 改為條件式：`status === "settled" ? /salon/checkout/{id} : /salon/booking/{id}`，令已結單「查看」直入 checkout **唯讀「已結帳」屏**（屏內只顯示「此預約已結帳」+ 返結面板 + 回工作台，無任何其他操作掣，已係唯讀）。未結單仍去 booking 詳情做服務執行。
+  - **checkout「已結帳」屏**：「確認返結」掣 label 改「**返結帳**」、標題改「**返結帳（反結賬）**」，與餐飲一致；按掣 → `reopenSalonOrder` → `booking.status` 變 `completed` + `order.status` 變 `reopened` → `setBooking` 回可編輯（同一屏，salon 唔使 jump）。
+  - **可編輯 reopened 視圖**：`checkout.tsx` 頭部下加「**返結帳**」格（琥珀色標記 + 返結原因），對齊餐飲 POS 嘅「返結帳」格；重結後狀態變返 `settled`、屏轉「結帳完成」，該格自動消失。
+  - salon 與餐飲差異：餐飲係「modal 唯讀 → 跳枱面 editable」兩屏；salon 係「同一 checkout 屏靠 `booking.status` 切 read-only ↔ editable」，本質同等（已完成先唯讀、經「返結帳」掣才入可編輯）。
 
 ### Phase D — 硬化
 - [x] 強制原因（設置清單，不可空白）。
