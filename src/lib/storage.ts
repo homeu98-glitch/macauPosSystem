@@ -167,13 +167,12 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
             ((printer as { group?: string }).group && (printer as { group?: string }).group !== "receipt"
               ? (printer as { group?: string }).group
               : undefined),
-          connectionType: printer.connectionType ?? "lan",
+          connectionType: "lan",
           name: printer.name ?? `打印機 ${index + 1}`,
           model: printer.model ?? "",
           paperSize: printer.paperSize ?? "",
           ipAddress: printer.ipAddress ?? "",
           lanPort: Number(printer.lanPort ?? 9100) || 9100,
-          usbLabel: printer.usbLabel ?? "",
           enabled: Boolean(printer.enabled),
         }))
       : [],

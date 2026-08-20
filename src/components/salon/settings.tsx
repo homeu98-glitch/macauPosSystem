@@ -427,9 +427,7 @@ const PRINTER_ROLE_OPTS: Option[] = [
 ];
 
 const PRINTER_CONN_OPTS: Option[] = [
-  { value: "lan", label: "LAN" },
-  { value: "usb", label: "USB" },
-  { value: "bluetooth", label: "藍牙" },
+  { value: "lan", label: "LAN（經 Printer Hub 直打）" },
 ];
 
 const TABS = [

@@ -1,4 +1,4 @@
-export type ConnectionType = "lan" | "usb" | "webusb" | "browser";
+export type ConnectionType = "lan";
 export type UserRole = "admin" | "manager" | "cashier";
 
 export interface UserPermissions {
@@ -163,9 +163,6 @@ export interface DevicePrinterConfig {
   ipAddress?: string;
   /** Raw TCP port for LAN ESC/POS (default 9100) */
   lanPort?: number;
-  usbLabel?: string;
-  /** WebUSB：授權設備嘅 serialNumber（用嚟配對已授予嘅 USB 設備，唔使手工 set 名） */
-  webusbSerial?: string;
   /** ESC/POS 編碼（每台可配；預設 GB18030。可選: gb18030 / gbk / big5 / utf-8） */
   charset?: string;
   enabled: boolean;

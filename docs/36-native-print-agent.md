@@ -147,7 +147,7 @@ order 落單
 ## 驗收
 
 - `tsc --noEmit`：除咗 `layout.tsx` 預存 `LayoutProps` 誤報（同本任務無關）外，零錯誤。
-- WebUSB / browser 直印測試（device-settings 入面）保留做手動測試工具，但**唔係** order 派發路徑。
+- 連接方式只餘 **LAN（經 Printer Hub 直打）**：USB / WebUSB / 瀏覽器打印（`window.print`）三種連接方法已移除（唔 work，且 Hub-only 架構下全部走 Hub → raw socket :9100）。`print-webusb.ts` / `print-browser.ts` / `escpos.ts` 三個模塊已刪除。`ConnectionType` 收窄為 `"lan"`，`DevicePrinterConfig` 移除 `usbLabel` / `webusbSerial` 欄位。
 
 ## 文檔關聯
 

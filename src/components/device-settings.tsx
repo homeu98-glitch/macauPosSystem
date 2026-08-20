@@ -46,14 +46,6 @@ import {
   type HubDevice,
   type HubServiceId,
 } from "@/lib/print-bridge/hub";
-import {
-  isWebUsbSupported,
-  listWebUsbDevices,
-  requestWebUsbDevice,
-  requestTestPrintWebUsb,
-  webUsbDeviceLabel,
-} from "@/lib/print-webusb";
-import { printBrowserTestPage } from "@/lib/print-browser";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -105,25 +97,7 @@ export function DeviceSettings() {
   const [ledgerImportError, setLedgerImportError] = useState<string | null>(null);
   const [syncingConfig, setSyncingConfig] = useState(false);
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
-  const [webusbLabel, setWebusbLabel] = useState<Record<string, string>>({});
 
-  // 載入頁面時，列出已授權嘅 WebUSB 打印機；按 serial 填回 label，
-  // 咁已綁定嘅 printer 唔使再撳掣就顯示設備名（零設定體驗）。
-  useEffect(() => {
-    if (!isWebUsbSupported()) return;
-    listWebUsbDevices()
-      .then((devices) => {
-        if (devices.length === 0) return;
-        setWebusbLabel((current) => {
-          const next = { ...current };
-          for (const device of devices) {
-            if (device?.serialNumber) next[device.serialNumber] = webUsbDeviceLabel(device);
-          }
-          return next;
-        });
-      })
-      .catch(() => {});
-  }, []);
   const [menuSubTab, setMenuSubTab] = useState<"categories" | "specs" | "items">("items");
   const [specEditor, setSpecEditor] = useState<{
     open: boolean;
@@ -344,7 +318,6 @@ export function DeviceSettings() {
       paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
       ipAddress: "",
       lanPort: 9100,
-      usbLabel: "",
       enabled: true,
     };
     setConfig((current) => ({
@@ -469,23 +442,7 @@ export function DeviceSettings() {
     setTestingPrinterId(printer.id);
 
     try {
-      if (printer.connectionType === "webusb") {
-        if (!isWebUsbSupported()) {
-          setStatus("此瀏覽器唔支援 WebUSB，請用 Chrome / Edge 並以 https / localhost 開啟。");
-          return;
-        }
-        const result = await requestTestPrintWebUsb(printer);
-        setStatus(result.ok ? `已透過 WebUSB 直印 ${printer.name} 測試頁。` : result.error);
-        return;
-      }
-
-      if (printer.connectionType === "browser") {
-        const result = await printBrowserTestPage(printer);
-        setStatus(result.ok ? `已透過瀏覽器打印 ${printer.name} 測試頁（請在打印對話框揀部機）。` : result.error);
-        return;
-      }
-
-      // LAN / USB 系統打印機 → 經 Printer Hub（Sunmi APK）發送測試頁
+      // 所有打印機都經 Printer Hub（Sunmi APK）直打（按 config.printers IP 路由）
       if (!isHubConfigured()) {
         setStatus("請先喺上方配對 Printer Hub（Sunmi APK），再測試打印。");
         return;
@@ -561,7 +518,6 @@ export function DeviceSettings() {
       paperSize: "80mm",
       ipAddress: ip,
       lanPort: 9100,
-      usbLabel: "",
       charset: "gb18030",
       enabled: true,
     };
@@ -608,7 +564,6 @@ export function DeviceSettings() {
         paperSize: "80mm",
         ipAddress: ip,
         lanPort: 9100,
-        usbLabel: "",
         charset: "gb18030",
         enabled: true,
       };
@@ -1277,23 +1232,12 @@ export function DeviceSettings() {
                             收銀台只會指定 1 台收據打印機
                           </div>
                         )}
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                        <div className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">連接方式</span>
-                          <select
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) =>
-                              updatePrinter(printer.id, {
-                                connectionType: event.target.value as DevicePrinterConfig["connectionType"],
-                              })
-                            }
-                            value={printer.connectionType}
-                          >
-                            <option value="lan">LAN</option>
-                            <option value="usb">USB</option>
-                            <option value="webusb">WebUSB（browser 直印）</option>
-                            <option value="browser">瀏覽器打印（window.print）</option>
-                          </select>
-                        </label>
+                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                            LAN（經 Printer Hub 直打）
+                          </div>
+                        </div>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">打印機型號</span>
                           <input
@@ -1317,7 +1261,6 @@ export function DeviceSettings() {
                             <option value="100x75mm">100x75mm 標籤</option>
                           </select>
                         </label>
-                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">IP 地址（LAN）</span>
                           <input
@@ -1327,8 +1270,6 @@ export function DeviceSettings() {
                             value={printer.ipAddress ?? ""}
                           />
                         </label>
-                        )}
-                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">LAN 端口</span>
                           <input
@@ -1341,8 +1282,6 @@ export function DeviceSettings() {
                             value={String(printer.lanPort ?? 9100)}
                           />
                         </label>
-                        )}
-                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">ESC/POS 跨碼（中文字集）</span>
                           <select
@@ -1357,81 +1296,6 @@ export function DeviceSettings() {
                             <option value="utf-8">UTF-8</option>
                           </select>
                         </label>
-                        )}
-                        {printer.connectionType !== "webusb" && printer.connectionType !== "browser" && (
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-2">
-                          <span className="text-xs text-slate-500">USB 系統印表機名稱</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { usbLabel: event.target.value })}
-                            value={printer.usbLabel ?? ""}
-                          />
-                        </label>
-                        )}
-                        {printer.connectionType === "webusb" && (
-                          <div className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-2">
-                            <span className="text-xs text-slate-500">WebUSB 打印機（browser 直印 · 零設定）</span>
-                            {!isWebUsbSupported() ? (
-                              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                                此瀏覽器唔支援 WebUSB，請用 Chrome / Edge 並以 https 或 localhost 開啟本頁。
-                              </div>
-                            ) : (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
-                                  onClick={async () => {
-                                    try {
-                                      const device = await requestWebUsbDevice();
-                                      if (!device) {
-                                        setStatus("未選擇任何 WebUSB 打印機。");
-                                        return;
-                                      }
-                                      const label = webUsbDeviceLabel(device);
-                                      updatePrinter(printer.id, { webusbSerial: device.serialNumber ?? undefined });
-                                      if (device.serialNumber) {
-                                        setWebusbLabel((current) => ({
-                                          ...current,
-                                          [device.serialNumber as string]: label,
-                                        }));
-                                      }
-                                      setStatus(`已綁定 WebUSB 打印機：${label}`);
-                                    } catch (error) {
-                                      setStatus(`WebUSB 授權失敗：${error instanceof Error ? error.message : String(error)}`);
-                                    }
-                                  }}
-                                  type="button"
-                                >
-                                  偵測 / 綁定 WebUSB 打印機
-                                </button>
-                                {printer.webusbSerial ? (
-                                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                                    已綁定：{webusbLabel[printer.webusbSerial] ?? printer.webusbSerial}
-                                  </span>
-                                ) : null}
-                                {printer.webusbSerial ? (
-                                  <button
-                                    className="rounded-2xl bg-white px-3 py-1 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                                    onClick={() => {
-                                      updatePrinter(printer.id, { webusbSerial: undefined });
-                                      setStatus("已解除 WebUSB 打印機綁定。");
-                                    }}
-                                    type="button"
-                                  >
-                                    解除綁定
-                                  </button>
-                                ) : null}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {printer.connectionType === "browser" && (
-                          <div className="grid gap-1 text-sm font-semibold text-slate-700 md:col-span-2 2xl:col-span-2">
-                            <span className="text-xs text-slate-500">瀏覽器打印（window.print · 零額外安裝）</span>
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
-                              經瀏覽器「列印」對話框出紙，web app 唔使裝任何嘢。需 Windows 已安裝打印機 driver（例如 WL-R80A-win），並在對話框揀部機。無 ESC/POS 切紙 / 錢箱指令。
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       <div className="mt-4 flex flex-wrap justify-end gap-2">
