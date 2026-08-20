@@ -6,9 +6,11 @@
 import type { PrintJob } from "@/lib/types";
 import { loadDeviceConfig } from "@/lib/storage";
 import {
+  resolveJobPrinter,
   resolvePrintJobStatus,
   sendJobToHub,
 } from "@/lib/print-bridge/hub";
+import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import {
   loadSalonPrintJobs,
   saveSalonPrintJobs,
@@ -18,12 +20,18 @@ import type { SalonPosOrder } from "@/lib/salon/types";
 import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
 
 /**
- * 統一 dispatch 入口：經 Printer Hub（Sunmi APK HTTP :8787）發送。
- * 餐飲同 salon 都用同一條 Hub 路徑。
+ * 統一 dispatch 入口：native bridge（PosNative.printJob，完整 ESC/POS 格式）優先，
+ * 唔得就 fallback Printer Hub HTTP 純文字。餐飲同 salon 共用同一條基建。
  */
 async function dispatchPrint(
   job: PrintJob,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const printer = resolveJobPrinter(job);
+  if (printer && printer.ipAddress && isNativeBridgeAvailable()) {
+    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+    const storeName = loadSalonBootstrap()?.storeName;
+    return dispatchJobToNative(job, { printer, kind, storeName });
+  }
   return sendJobToHub(job);
 }
 

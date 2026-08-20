@@ -132,23 +132,33 @@ order 落單
 - **路由策略（方案 B · 按 IP 直打 · 2026-08-20）**：`sendJobToHub(job)` → `resolveJobPrinter(job)` 按 `config.printers` 搵目標（先 `printerId`，再 `role`/`zoneId` 配 `job.printerGroup`）→ 攞 `ipAddress` → `sendToHubIp(ip, name, text)`。`dispatch.ts` / `salon/print.ts` 唔使改，食 `sendJobToHub` 新行為。
 - **測試打印**：未配對 → 提示先配對；配對咗 → `sendToHubIp(printer.ipAddress, printer.name, "Macau POS 測試打印\nPrinter Hub OK")`。
 
-## 已移除（按用戶指示：fallback print-bridge / native bridge 唔使要）
+#### Native bridge 重新啟用（2026-08-20 · 打印格式適配）
+
+確認過 APK `EscPosRenderer`（`renderReceiptTicket` / `renderKitchenTicket`）先係真正嘅票據格式引擎（店名抬頭、票種、單號、時間戳、切紙、每台 charset）。但佢只會喺 `PosNative.printJob({job, printer, kind})` 呢條路被 call 到；舊嘅 HTTP `sendJobToHub → renderJobToText` 只係把純文字包 minimal ESC/POS（冇店名、冇時間、收據/廚房無分版、charset 強行 UTF-8）。
+
+所以 dispatch 改為 **native 優先 → Hub HTTP fallback**：
+
+- `src/lib/print-bridge/native.ts`（重建）：`isNativeBridgeAvailable()` 檢查 `window.PosNative.printJob`；`dispatchJobToNative(job, {printer, kind, storeName})` 將 `PrintJob` 映射成 APK `PrintJobDto` / `PrinterCfgDto` JSON（`createdAt` 轉 epoch millis，`charset` 帶落去），call `PosNative.printJob(JSON)`。
+- `dispatch.ts` `dispatchOneJob` + `salon/print.ts` `dispatchPrint`：先 `resolveJobPrinter` 搵 printer → 若 `isNativeBridgeAvailable()` 就 `dispatchJobToNative`（kind 按 `printer.role` 分 `receipt` / `kitchen`，`storeName` 取 bootstrap）→ 否則 fallback `sendJobToHub`（純文字）。
+- APK `EscPosRenderer.renderReceiptTicket` 改為同 `renderKitchenTicket` 一樣 render item 嘅 `specs` 同 `note`（我哋收據 builder 將總計/付款/店名全部塞喺 note，唔 render 就會漏）。呢個係 native 對接必要嘅 APK 改動。
+- 非 Android / 無 native（desktop、iPad、瀏覽器開 Vercel）自動 fallback 去 Hub HTTP 純文字路徑。
+
+> ⚠️ **雙路徑**：Android（Sunmi）走 native bridge → 完整 ESC/POS 格式；其他裝置 / 未配對 fallback 去 Hub HTTP 純文字。未配對 Hub 且無 native 嘅 job 會一直 `pending`，等店主喺設置頁配對 Sunmi Hub 先出單。
+
+## 已移除（按用戶指示：舊 fallback print-bridge / 舊 WebView Shell APK 唔使要）
 
 | 檔案 | 原因 |
 |---|---|
 | `src/lib/print-bridge/client.ts` | 舊 HTTP print-bridge（`getPrintBridgeUrl` / `syncPrintBridgeConfig` 等）。`resolvePrintJobStatus` 已搬去 `hub.ts` 並改 Hub-aware。 |
-| `src/lib/print-bridge/native.ts` | `window.PosNative` native bridge（`isNativeBridgeAvailable` / `dispatchJobToNative`）。 |
 | `src/components/print-bridge-worker.tsx` | 改名 `hub-print-worker.tsx`，改成只 flush Hub。 |
-| `print-agent-android/`（WebView Shell APK） | 舊方案：WebView 載 POS + `PosNative` bridge。已棄用，改用同事隻獨立 Hub APK。倉庫入面嘅 `app-debug.apk` 唔再係目標成品。 |
-
-> ⚠️ **唯一路徑**：依家打印只經 Hub。未配對 Hub 嘅 job 會一直 `pending`，等店主喺設置頁配對 Sunmi Hub 先出單。
-> 非 Sunmi / 冇裝 Hub APK 嘅裝置（desktop、iPad）暫時冇打印出口。
+| `print-agent-android/`（舊 WebView Shell APK） | 舊方案：WebView 載 POS + `PosNative` bridge，當時以為唔使要。2026-08-20 重新確認 native bridge 係格式適配主路，但係**新 APK 係同事做緊嘅獨立 Hub APK 仍保留 `PosNative` bridge**（見 `MainActivity.Bridge.printJob`），所以 native 路徑重新啟用。倉庫入面嘅 `app-debug.apk` 唔再係目標成品。 |
 
 ## 驗收
 
 - `tsc --noEmit`：除咗 `layout.tsx` 預存 `LayoutProps` 誤報（同本任務無關）外，零錯誤。
 - 連接方式只餘 **LAN（經 Printer Hub 直打）**：USB / WebUSB / 瀏覽器打印（`window.print`）三種連接方法已移除（唔 work，且 Hub-only 架構下全部走 Hub → raw socket :9100）。`print-webusb.ts` / `print-browser.ts` / `escpos.ts` 三個模塊已刪除。`ConnectionType` 收窄為 `"lan"`，`DevicePrinterConfig` 移除 `usbLabel` / `webusbSerial` 欄位。
 - **打印機只可以 IP 新增**：「新增廚房/分區 / 收據 / 標籤打印機」三個空白掣已刪除（開出嚟冇 IP、Hub-only 下印唔到）。改為統一經「手動添加打印機」表單（填 IP + 名稱 + **角色** 收據/分區/標籤；分區/標籤會再揀所屬 print zone）或 Hub 掃描「＋ 加入列表」新增。`addPrinter()` 函數已刪除；`handleManualAdd` 改用 `manualRole` / `manualZoneId` 決定 `role` / `zoneId`，`HUB_SERVICES` import 移除（Hub 註冊 service 只係 metadata，路由靠 IP/role/zoneId）。
+- **打印格式適配（native bridge · 2026-08-20）**：重建 `src/lib/print-bridge/native.ts`（`isNativeBridgeAvailable` / `dispatchJobToNative`），`dispatch.ts` `dispatchOneJob` + `salon/print.ts` `dispatchPrint` 改為 native 優先 → Hub HTTP fallback。`dispatchJobToNative` 將 `PrintJob` 映射成 APK `PrintJobDto` / `PrinterCfgDto` JSON（createdAt→epoch millis、charset 帶落去）。APK `EscPosRenderer.renderReceiptTicket` 改為 render item `specs`/`note`（否則收據漏總計/付款/店名）。`tsc --noEmit` 零錯誤（只餘 `layout.tsx` 預存誤報）。APK 需要 rebuild 令 `renderReceiptTicket` 改動生效。
 
 ## 文檔關聯
 
