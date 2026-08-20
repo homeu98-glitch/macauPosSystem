@@ -2055,7 +2055,7 @@ export function PosApp() {
         total: settledGrandTotal,
         // ── 會員扣款快照：供返結反向回滾；無會員扣款則清掉 ──
         ledgerMemberPhone:
-          deductAvos > 0 ? (ledgerMember?.customerPhone ?? targetOrder.ledgerMemberPhone ?? null) : null,
+          deductAvos > 0 ? (ledgerMember?.customerPhone ?? targetOrder.ledgerMemberPhone ?? undefined) : undefined,
         memberDeductionAvos: deductAvos > 0 ? deductAvos : 0,
         // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
         originalSettledAt: targetOrder.originalSettledAt ?? now,

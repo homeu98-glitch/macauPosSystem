@@ -4,7 +4,8 @@ export type UserRole = "admin" | "manager" | "cashier";
 export interface UserPermissions {
   refundOrder: boolean;
   voidItem: boolean;
-  reopenOrder: boolean;
+  /** 返結權位（保留，現階段唔做門控：任何員工可返結，只強制揀原因） */
+  reopenOrder?: boolean;
   manageAccounts?: boolean;
 }
 
