@@ -21,6 +21,7 @@ import {
   loadAuthSession,
   clearLegacyMembersCache,
   loadOperatingMode,
+  saveOperatingMode,
   loadPosLocalSettings,
   loadQuickCompletedMinutes,
   loadOrders,
@@ -93,7 +94,7 @@ export function PosApp() {
     ? applyLedgerMerchantToBootstrap(normalizeBootstrapPayload(cachedBootstrapRaw), loadAuthSession())
     : null;
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
-  const [operatingMode] = useState(() => loadOperatingMode());
+  const [operatingMode, setOperatingModeState] = useState(() => loadOperatingMode());
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
   const [cartItems, setCartItems] = useState<OrderItem[]>([]);
@@ -114,6 +115,34 @@ export function PosApp() {
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
   const [posMode, setPosMode] = useState<"tables" | "order">(() => (loadOperatingMode() === "quick" ? "order" : "tables"));
+
+  // ── Deep-link：orders 面板「查看」非 counter 單會跳到 /?tableId=...&orderId=... ──
+  // 喺呢度載入單到工作台（已結/未結/已返結一律支援，搵全量 orders 唔靠 openOrders）。
+  // quick mode 下 activeTable 鎖死 counter、真枱載唔到，故遇到堂食單要切返 dinein。
+  // 用 ref 做 one-shot，避免 router.replace 後重複觸發。
+  // 用 window.location.search 讀 query，避開 useSearchParams 喺 server page 嘅 Suspense 要求。
+  const deepLinkConsumedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkConsumedRef.current) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const tableId = params.get("tableId");
+    const orderId = params.get("orderId");
+    if (!tableId || !orderId) return;
+    const order = orders.find((o) => o.id === orderId) ?? null;
+    if (!order) return;
+    deepLinkConsumedRef.current = true;
+    if (operatingMode === "quick") {
+      setOperatingModeState("dinein");
+      saveOperatingMode("dinein");
+    }
+    loadOrderIntoWorkspace(order, order.tableId);
+    setPosMode("order");
+    router.replace("/");
+    // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, operatingMode, router]);
+
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
   const [specModalOpen, setSpecModalOpen] = useState(false);

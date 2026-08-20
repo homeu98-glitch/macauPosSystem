@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
 import {
@@ -99,6 +100,7 @@ function QuickOrderActions({
 
 export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: LedgerOrderDateFilter }) {
   const currency = loadBootstrapCache()?.currency ?? "MOP";
+  const router = useRouter();
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalOrTransferredDineIn));
   const [statusTab, setStatusTab] = useState<LocalOrderPanelTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
@@ -224,8 +226,16 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   <button
                     className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
                     onClick={() => {
-                      setReopenReason("");
-                      setViewingOrderId(order.id);
+                      if (!order.tableId || order.tableId === "counter") {
+                        // 快餐/外賣/無枱 → 保留小窗
+                        setReopenReason("");
+                        setViewingOrderId(order.id);
+                      } else {
+                        // 堂食（本地枱單 + 已轉枱線上堂食單）→ 跳去點餐枱位視圖載入單
+                        router.push(
+                          `/?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
+                        );
+                      }
                     }}
                     type="button"
                   >

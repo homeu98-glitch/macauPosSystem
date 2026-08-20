@@ -64,6 +64,7 @@
 - [x] 重結：複用 `confirmPayment`（源 reopened 單）→ 回 `settled` + 重推 `ORDER_SETTLED` + 重新扣。
 - 實施筆記：返結入口在 orders-hub 的「已完成」訂單詳情；重結在 POS 工作台選回該枱位（`openOrders` 已含 `reopened`，枱位會載入可編輯），改正後結帳即重結。
 - 線上訂單範圍（見 §3 決策 4）：純線上快餐/自取/外賣（counter / 未轉枱）排除返結；「線上堂食轉枱」單（`onlineOrderId` + `tableId!="counter"`）當本地單可返結。本地面板過濾由 `isLocalPosOrder` 放寬為 `isLocalOrTransferredDineIn`，令轉枱堂食單出得返面板；`isReopenable` 同步放行，`reopenPosOrder` 內部再審。
+- 查看入口 UX（2026-08-20 補充）：orders-hub「查看」掣對非 counter 單（`!tableId || tableId === "counter"` 以外）改為 `router.push("/?tableId=&orderId=")` 直接跳去 POS 枱位視圖（仿美團返結 UX：喺點餐區見到已返結枱，編輯完再結）。PosApp 端用 `window.location.search` 讀 query → `loadOrderIntoWorkspace(order, order.tableId)` 載單 → `setPosMode("order")` → `router.replace("/")` 清 query（one-shot ref 防重複）。已結 / 未結 / 已返結一律走呢條路（搵全量 `orders`，唔靠 `openOrders`——`openOrders` 唔包 `settled`）。quick mode 下真枱載唔到（`activeTable` 鎖死 counter），deep-link 自動切返 `dinein` 並 persist。counter 單 / 無枱單保留 `ResponsiveModal` 小窗。
 
 ### Phase C — 美容
 - [x] 返結入口放在 `checkout`「已結帳」屏（預約結帳後即見；經 service-runner 重開 settled 預約亦可達），免另起 drill-down 列表。
