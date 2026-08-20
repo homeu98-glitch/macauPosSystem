@@ -1621,13 +1621,7 @@ export function PosApp() {
     ]);
     // 本地移除這張單（退桌：直接刪除記錄），枱位因 cancelled 不再計入 openOrders 而變空閒
     persistOrders(orders.filter((o) => o.id !== order.id));
-    if (activeTableId === tableId || activeOrderId === order.id) {
-      setActiveOrderId(null);
-      setCartItems([]);
-      setBaseOrderItems([]);
-      setOrderNote("");
-      setVoidedItems([]);
-    }
+    backToTables();
     setToast({ tone: "success", message: `${order.tableName ?? tableId} 已退桌，枱位已釋放。` });
   }
 
