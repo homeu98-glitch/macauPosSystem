@@ -2575,6 +2575,23 @@ export function PosApp() {
               </div>
             </div>
 
+            {activeOrder?.status === "reopened" ? (
+              <div className="mx-4 mb-1 mt-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white">返結帳</span>
+                  <span className="text-xs font-semibold text-amber-800">此單為返結單，可改價／加餐後重新結帳</span>
+                </div>
+                {activeOrder.reopenReason ? (
+                  <div className="mt-1 text-[11px] text-amber-700">返結原因：{activeOrder.reopenReason}</div>
+                ) : null}
+                {activeOrder.originalSettledAt ? (
+                  <div className="mt-0.5 text-[11px] text-amber-600">
+                    原結帳時間：{activeOrder.originalSettledAt.replace("T", " ").slice(0, 16)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="px-4 py-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="font-semibold text-slate-900">訂單明細</span>

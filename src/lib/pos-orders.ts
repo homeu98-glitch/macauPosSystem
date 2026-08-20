@@ -17,9 +17,12 @@ import { PosOrder } from "@/lib/types";
  * 美容同其他本地單無 onlineOrderId，一律當本地單。
  */
 export function isReopenable(order: PosOrder): boolean {
+  // 快餐（本地 counter 單）唔支援返結
+  const isQuickCounter = !order.onlineOrderId && order.tableId === "counter";
+  if (isQuickCounter) return false;
   if (order.onlineOrderId) {
     const isInStoreDineIn = !!order.tableId && order.tableId !== "counter";
-    if (!isInStoreDineIn) return false;
+    if (!isInStoreDineIn) return false; // 純線上快餐 / 自取 / 外賣
   }
   return order.status === "settled" || order.status === "paid";
 }

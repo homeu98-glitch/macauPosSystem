@@ -158,7 +158,9 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
       }
       setReopenReason("");
       setViewingOrderId(null);
-      refresh();
+      // 跳去點餐枱面：進入可編輯「返結帳」狀態，可加餐 / 改價 / 重結
+      const tableId = order.tableId && order.tableId !== "counter" ? order.tableId : "";
+      router.push(`/?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`);
     } finally {
       setReopenSubmitting(false);
     }
@@ -230,8 +232,12 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                         // 快餐/外賣/無枱 → 保留小窗
                         setReopenReason("");
                         setViewingOrderId(order.id);
+                      } else if (order.status === "settled") {
+                        // 已結堂食單 → 唯讀 modal（唔可直接編輯），內有「返結帳」掣先跳枱面
+                        setReopenReason("");
+                        setViewingOrderId(order.id);
                       } else {
-                        // 堂食（本地枱單 + 已轉枱線上堂食單）→ 跳去點餐枱位視圖載入單
+                        // 未結堂食單（本地枱單 + 已轉枱線上堂食單）→ 直接跳枱面編輯
                         router.push(
                           `/?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
                         );
@@ -257,6 +263,11 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
           widthClassName="max-w-md"
         >
           <div className="grid gap-2 text-sm text-slate-700">
+            {viewingOrder.status === "settled" ? (
+              <div className="rounded-xl bg-slate-100 px-3 py-2 text-[11px] text-slate-600">
+                此單已結帳 · 唯讀預覽，不可直接改動。如需改價／加餐，請按下方「返結帳」。
+              </div>
+            ) : null}
             {isQuickCounterOrder(viewingOrder) ? (
               <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
                 {viewingOrder.status === "settled"
@@ -291,9 +302,9 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
             ) : null}
             {isReopenable(viewingOrder) ? (
               <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                <div className="text-xs font-semibold text-amber-800">返結（反結賬）</div>
+                <div className="text-xs font-semibold text-amber-800">返結帳（反結賬）</div>
                 <p className="mt-1 text-[11px] text-amber-700">
-                  把此單退回可編輯，改正後重新結帳。必須揀返結原因。
+                  把此單退回可編輯，改正後重新結帳。必須揀返結原因，確認後跳去點餐枱面操作。
                 </p>
                 <select
                   className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
@@ -315,7 +326,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   disabled={!reopenReason || reopenSubmitting}
                   onClick={() => handleReopen(viewingOrder)}
                 >
-                  {reopenSubmitting ? "處理中…" : "確認返結"}
+                  {reopenSubmitting ? "處理中…" : "返結帳"}
                 </button>
               </div>
             ) : null}
