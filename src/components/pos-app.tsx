@@ -99,6 +99,7 @@ export function PosApp() {
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
   const [cartItems, setCartItems] = useState<OrderItem[]>([]);
+  const [voidedItems, setVoidedItems] = useState<OrderItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
@@ -187,6 +188,8 @@ export function PosApp() {
   const [partialRefundOrderId, setPartialRefundOrderId] = useState<string | null>(null);
   const [partialRefundReason, setPartialRefundReason] = useState("");
   const [partialRefundQuantities, setPartialRefundQuantities] = useState<Record<string, number>>({});
+  const [voidTableRequest, setVoidTableRequest] = useState<string | null>(null);
+  const [voidTableReason, setVoidTableReason] = useState("");
   const [refundSummaryExportOpen, setRefundSummaryExportOpen] = useState(false);
   const [refundSummaryMode, setRefundSummaryMode] = useState<"date" | "employee">("date");
   const [refundSummaryDateFrom, setRefundSummaryDateFrom] = useState("");
@@ -863,6 +866,7 @@ export function PosApp() {
     setSelectedItemId("");
     setDiscountValue(String(order?.discountAmount ?? 0));
     setReceivedAmount("");
+    setVoidedItems(order?.voidedItems ?? []);
     setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
     setOrderNote(order?.orderNote ?? "");
     resetMemberCheckoutState();
@@ -947,6 +951,7 @@ export function PosApp() {
           taxAmount: baseTotals.taxAmount,
           discountAmount,
           total: Math.max(0, baseTotals.total - discountAmount),
+          voidedItems,
           updatedAt: timestamp,
         }
       : {
@@ -963,6 +968,7 @@ export function PosApp() {
           taxAmount: baseTotals.taxAmount,
           discountAmount,
           total: Math.max(0, baseTotals.total - discountAmount),
+          voidedItems: [],
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -989,6 +995,7 @@ export function PosApp() {
     setPayingOrderId(null);
     setActiveOrderId(null);
     setBaseOrderItems([]);
+    setVoidedItems([]);
     setOrderNote("");
     resetMemberCheckoutState();
     setSelectedPaymentMethod("");
@@ -1249,10 +1256,11 @@ export function PosApp() {
     }
 
     const voidQty = mode === "one" ? 1 : orderedQty;
+    // 只減「未退菜」嘅線；退菜記錄會另存一份，唔會喺購物車入面消失
     const reduceQty = (list: OrderItem[]) =>
       list
         .map((row) => {
-          if (itemIdentity(row) !== key) return row;
+          if (row.voided || itemIdentity(row) !== key) return row;
           const nextQty = row.quantity - voidQty;
           return nextQty > 0 ? { ...row, quantity: nextQty } : null;
         })
@@ -1260,20 +1268,35 @@ export function PosApp() {
 
     const nextCartItems = reduceQty(cartItems);
     const nextBaseItems = reduceQty(baseOrderItems);
+    const session = loadAuthSession();
+    const operator = session?.name ?? session?.account ?? "收銀";
+    const voidedAt = new Date().toISOString();
+    const voidedLine: OrderItem = {
+      ...target,
+      quantity: voidQty,
+      voided: true,
+      voidedAt,
+      voidedReason: reason || "未填寫原因",
+      voidedBy: operator,
+    };
+    const nextVoided = [...voidedItems, voidedLine];
+
     const nextTotals = orderTotals(nextCartItems, bootstrap);
     const updatedOrder: PosOrder = {
       ...activeOrder,
       items: nextCartItems,
+      voidedItems: nextVoided,
       subtotal: nextTotals.subtotal,
       serviceChargeAmount: nextTotals.serviceChargeAmount,
       taxAmount: nextTotals.taxAmount,
       total: Math.max(0, nextTotals.total - activeOrder.discountAmount),
-      updatedAt: new Date().toISOString(),
+      updatedAt: voidedAt,
     };
 
     persistOrders(orders.map((order) => (order.id === activeOrder.id ? updatedOrder : order)));
     setCartItems(nextCartItems);
     setBaseOrderItems(nextBaseItems);
+    setVoidedItems(nextVoided);
 
     const voidEvent: QueueEvent = {
       id: uid("evt"),
@@ -1479,6 +1502,133 @@ export function PosApp() {
       })),
     ]);
     setToast({ tone: "success", message: isRefundedRule ? "已全部退菜，整單已退完。" : "已全部退菜，整單已取消。" });
+  }
+
+  // 退桌：堂食枱客人離場，枱上所有菜作廢並釋放枱位。只接 draft / sent_to_kitchen 且非線上訂單。
+  function findVoidableTableOrder(tableId: string): PosOrder | null {
+    return (
+      orders.find(
+        (order) =>
+          order.tableId === tableId &&
+          order.tableId !== "counter" &&
+          !order.onlineOrderId &&
+          (order.status === "draft" || order.status === "sent_to_kitchen"),
+      ) ?? null
+    );
+  }
+
+  function voidTable(tableId: string, reason: string) {
+    if (!canVoidItem) {
+      showPermissionDenied("退桌");
+      return;
+    }
+    if (!bootstrap) return;
+    const order = findVoidableTableOrder(tableId);
+    if (!order) {
+      setToast({ tone: "info", message: "呢張枱冇可退桌嘅單。" });
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    const reasonText = reason?.trim() || "退桌";
+    const voidEvents: QueueEvent[] = [];
+    const voidPrintJobs: PrintJob[] = [];
+    // 只有已送廚房（sent_to_kitchen）嘅菜需要廚房退菜單 + 推單項作廢事件；未下單（draft）嘅菜安靜放棄
+    const sentItems = order.status === "sent_to_kitchen" ? (order.items ?? []) : [];
+    sentItems.forEach((item) => {
+      const orderedQty = item.quantity;
+      if (orderedQty <= 0) return;
+      voidEvents.push({
+        id: uid("evt"),
+        type: "ORDER_ITEM_VOIDED",
+        entityId: order.id,
+        payload: {
+          orderId: order.id,
+          menuItemId: item.menuItemId,
+          itemName: item.name,
+          note: item.note ?? null,
+          voidQuantity: orderedQty,
+          mode: "all",
+          reason: reasonText,
+        },
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedAt,
+      });
+      const jobs = (loadDeviceConfig() ?? defaultDeviceConfig).printers
+        .filter(
+          (printer) =>
+            printer.enabled &&
+            (printer.role === "zone" || printer.role === "label") &&
+            (printer.zoneId ?? "") === item.printerGroup,
+        )
+        .map<PrintJob>((printer) => ({
+          id: uid("print"),
+          orderId: order.id,
+          orderNo: order.localOrderNo,
+          tableName: order.tableName,
+          ticketType: "void",
+          printerGroup: printer.zoneId ?? item.printerGroup,
+          printerId: printer.id,
+          printerName: printer.name,
+          items: [
+            {
+              name: item.name,
+              quantity: orderedQty,
+              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+              note: reasonText,
+            },
+          ],
+          status: resolvePrintJobStatus(networkOnline),
+          createdAt: updatedAt,
+        }));
+      voidPrintJobs.push(...jobs);
+    });
+    // 推整單取消事件，server 標為已退/已取消；隨後由本地 orders 移除該單，枱位自動回落空閒
+    const cancelEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_UPDATED",
+      entityId: order.id,
+      payload: {
+        order: {
+          ...order,
+          status: "cancelled",
+          items: sentItems,
+          subtotal: 0,
+          serviceChargeAmount: 0,
+          taxAmount: 0,
+          total: 0,
+          cancelledAt: updatedAt,
+          cancelledReason: reasonText,
+          updatedAt,
+        },
+        action: "cancelled",
+        reason: reasonText,
+      },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: updatedAt,
+    };
+    persistPrintJobs([...voidPrintJobs, ...printJobs]);
+    pushEvents([
+      cancelEvent,
+      ...voidEvents,
+      ...voidPrintJobs.map<QueueEvent>((printJob) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: printJob.id,
+        payload: printJob,
+        status: networkOnline ? "synced" : "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    // 本地移除這張單（退桌：直接刪除記錄），枱位因 cancelled 不再計入 openOrders 而變空閒
+    persistOrders(orders.filter((o) => o.id !== order.id));
+    if (activeTableId === tableId || activeOrderId === order.id) {
+      setActiveOrderId(null);
+      setCartItems([]);
+      setBaseOrderItems([]);
+      setOrderNote("");
+      setVoidedItems([]);
+    }
+    setToast({ tone: "success", message: `${order.tableName ?? tableId} 已退桌，枱位已釋放。` });
   }
 
   function describeTimelineEvent(event: QueueEvent) {
@@ -2462,25 +2612,42 @@ export function PosApp() {
                           : status === "draft"
                             ? "未下單"
                             : "空閒";
+                    const isVoidable = Boolean(findVoidableTableOrder(table.id));
                     return (
-                      <button
+                      <div
                         key={table.id}
-                        className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300"
-                        onClick={() => selectTable(table.id)}
-                        type="button"
+                        className="relative rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300"
                       >
-                        <div className="text-base font-semibold text-slate-900">
-                          {table.name}
-                        </div>
-                        <div className="mt-2 text-xs text-slate-500">{table.area}</div>
-                        <div
-                          className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                            isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
-                          }`}
+                        <button
+                          className="w-full text-left"
+                          onClick={() => selectTable(table.id)}
+                          type="button"
                         >
-                          {label}
-                        </div>
-                      </button>
+                          <div className="text-base font-semibold text-slate-900">
+                            {table.name}
+                          </div>
+                          <div className="mt-2 text-xs text-slate-500">{table.area}</div>
+                          <div
+                            className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                              isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
+                            }`}
+                          >
+                            {label}
+                          </div>
+                        </button>
+                        {isVoidable ? (
+                          <button
+                            className="absolute right-2 top-2 rounded-full bg-red-50 px-2 py-1 text-[11px] font-bold text-red-600 ring-1 ring-red-200 hover:bg-red-100"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setVoidTableRequest(table.id);
+                            }}
+                            type="button"
+                          >
+                            退桌
+                          </button>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -2725,7 +2892,7 @@ export function PosApp() {
             <div className="px-4 py-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="font-semibold text-slate-900">訂單明細</span>
-                <span className="text-xs text-slate-500">{cartItems.length} 項</span>
+                <span className="text-xs text-slate-500">{cartItems.length + voidedItems.length} 項</span>
               </div>
               {isQuickMode ? (
                 <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2">
@@ -2876,6 +3043,32 @@ export function PosApp() {
                     </article>
                     );
                   })}
+                  {voidedItems.map((item, idx) => (
+                    <article
+                      key={`voided-${idx}-${itemIdentity(item)}`}
+                      className="rounded-2xl border border-red-200 bg-red-50/60 px-3 py-3 opacity-80"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-900 line-through">
+                            {item.name}
+                            <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
+                              已退菜
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
+                          </div>
+                          {item.voidedReason ? (
+                            <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                          ) : null}
+                        </div>
+                        <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
+                          已退 x{item.quantity}
+                        </div>
+                      </div>
+                    </article>
+                  ))}
                 </div>
               )}
             </div>
@@ -3566,6 +3759,34 @@ export function PosApp() {
                       {item.note ? <div className="mt-1 text-xs text-slate-500">備註：{item.note}</div> : null}
                     </div>
                     <div className="shrink-0 text-sm font-semibold text-slate-900">x{item.quantity}</div>
+                  </div>
+                </div>
+              ))}
+              {(viewingOrder.voidedItems ?? []).map((item, index) => (
+                <div
+                  key={`voided-${item.menuItemId}-${index}`}
+                  className="rounded-2xl border border-red-200 bg-red-50/60 p-3 opacity-80"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-900 line-through">
+                        {item.name}
+                        <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
+                          已退菜
+                        </span>
+                      </div>
+                      {item.selectedSpecs?.length ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                        </div>
+                      ) : null}
+                      {item.voidedReason ? (
+                        <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
+                      已退 x{item.quantity}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -4276,6 +4497,67 @@ export function PosApp() {
               placeholder="例如：客人取消 / 廚房售罄"
               value={voidReason}
             />
+        </ResponsiveModal>
+      ) : null}
+
+      {voidTableRequest ? (
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setVoidTableRequest(null);
+                  setVoidTableReason("");
+                }}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  voidTable(voidTableRequest, voidTableReason.trim());
+                  setVoidTableRequest(null);
+                  setVoidTableReason("");
+                }}
+                type="button"
+              >
+                確認退桌
+              </button>
+            </>
+          }
+          description="退桌會將枱上所有菜作廢並釋放枱位，此操作不可還原"
+          title="退桌原因"
+          widthClassName="max-w-md"
+          zIndexClassName="z-[60]"
+        >
+          <div>
+            <div className="text-xs font-semibold text-slate-500">取消備註</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {localSettings.cancelNotePresets.map((preset) => (
+                <button
+                  key={preset}
+                  className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                  onClick={() => {
+                    const base = voidTableReason.trim();
+                    const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
+                    setVoidTableReason(next);
+                  }}
+                  type="button"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+          <input
+            autoFocus
+            className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+            onChange={(event) => setVoidTableReason(event.target.value)}
+            placeholder="例如：客人取消 / 臨時要走"
+            value={voidTableReason}
+          />
         </ResponsiveModal>
       ) : null}
 

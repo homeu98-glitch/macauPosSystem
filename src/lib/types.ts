@@ -327,6 +327,14 @@ export interface OrderItem {
     priceDelta: number;
   }>;
   note?: string;
+  /** 已退菜標記（訂單明細保留記錄用，不計費、不可再操作） */
+  voided?: boolean;
+  /** 退菜時間（ISO） */
+  voidedAt?: string;
+  /** 退菜原因 */
+  voidedReason?: string;
+  /** 操作人帳號 */
+  voidedBy?: string;
 }
 
 export interface PosOrder {
@@ -390,6 +398,8 @@ export interface PosOrder {
 
   createdAt: string;
   updatedAt: string;
+  /** 已退菜明細（保留記錄，不計費；結帳 / 退菜後仍留在單上以便追蹤） */
+  voidedItems?: OrderItem[];
 }
 
 export type OnlinePaymentStatus = "paid" | "unpaid";

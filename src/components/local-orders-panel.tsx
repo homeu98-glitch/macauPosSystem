@@ -296,6 +296,15 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                 <span className="font-semibold">×{item.quantity}</span>
               </div>
             ))}
+            {(viewingOrder.voidedItems ?? []).map((item, idx) => (
+              <div key={`voided-${item.menuItemId}-${idx}`} className="flex justify-between gap-2 text-red-600 line-through">
+                <span>
+                  {item.name}
+                  <span className="ml-1 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white">已退菜</span>
+                </span>
+                <span className="font-semibold">×{item.quantity}</span>
+              </div>
+            ))}
             <div className="mt-2 flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
               <span>總計</span>
               <span>{formatMoney(viewingOrder.total, currency)}</span>

@@ -39,12 +39,20 @@ export function buildReceiptPrintJobs(
     store_name: receiptSettings.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: bootstrap.storeName }] : [],
     order_no: receiptSettings.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: order.localOrderNo }] : [],
     table_name: receiptSettings.showTableName ? [{ name: "桌號", quantity: 1, specs: [], note: order.tableName }] : [],
-    items: order.items.map<ReceiptItem>((item) => ({
-      name: item.name,
-      quantity: item.quantity,
-      specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-      note: item.note,
-    })),
+    items: [
+      ...order.items.map<ReceiptItem>((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+        note: item.note,
+      })),
+      ...(order.voidedItems ?? []).map<ReceiptItem>((item) => ({
+        name: `（已退菜）${item.name}`,
+        quantity: item.quantity,
+        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+        note: item.voidedReason ?? item.note,
+      })),
+    ],
     total: [{ name: "總計", quantity: 1, specs: [], note: formatMoney(order.total, bootstrap.currency) }],
     payment_method:
       receiptSettings.showPaymentMethod && order.paymentMethod
