@@ -31,7 +31,6 @@ import {
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import {
-  HUB_SERVICES,
   applyPairText,
   clearHubPrinters,
   fetchHubDevices,
@@ -76,7 +75,8 @@ export function DeviceSettings() {
   const [hubPairing, setHubPairing] = useState(false);
   const [manualIp, setManualIp] = useState("");
   const [manualName, setManualName] = useState("");
-  const [manualService, setManualService] = useState<string>("kitchen");
+  const [manualRole, setManualRole] = useState<DevicePrinterConfig["role"]>("zone");
+  const [manualZoneId, setManualZoneId] = useState<string>(localSettings.printZones[0]?.id ?? "kitchen");
   const [hubSubnet, setHubSubnet] = useState<string>("");
   const [hubSubnetInput, setHubSubnetInput] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -307,40 +307,6 @@ export function DeviceSettings() {
     });
   }
 
-  function addPrinter(role: DevicePrinterConfig["role"]) {
-    const newPrinter: DevicePrinterConfig = {
-      id: uid("printer"),
-      role,
-      zoneId: role === "zone" || role === "label" ? localSettings.printZones[0]?.id ?? "kitchen" : undefined,
-      connectionType: "lan",
-      name: role === "receipt" ? "新收據打印機" : role === "label" ? "新標籤打印機" : "新分區打印機",
-      model: "",
-      paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
-      ipAddress: "",
-      lanPort: 9100,
-      enabled: true,
-    };
-    setConfig((current) => ({
-      ...current,
-      updatedAt: new Date().toISOString(),
-      printers:
-        role === "receipt"
-          ? [
-              ...current.printers.map((printer) =>
-                printer.role === "receipt"
-                  ? {
-                      ...printer,
-                      role: "zone" as DevicePrinterConfig["role"],
-                      zoneId: printer.zoneId ?? localSettings.printZones[0]?.id ?? "kitchen",
-                    }
-                  : printer,
-              ),
-              newPrinter,
-            ]
-          : [...current.printers, newPrinter],
-    }));
-  }
-
   function removePrinter(printerId: string) {
     setConfig((current) => ({
       ...current,
@@ -540,8 +506,9 @@ export function DeviceSettings() {
       setStatus("請填寫打印機 IP");
       return;
     }
-    // 1) 寫入 APK（讓 Hub 認得呢部機）
-    const r = await manualAddHubPrinter(manualIp.trim(), manualName.trim(), manualService);
+    // 1) 寫入 APK（讓 Hub 認得呢部機；service 只係 Hub 端 metadata，路由靠 IP/role/zoneId）
+    const svcForHub: HubServiceId = manualRole === "receipt" ? "front" : "kitchen";
+    const r = await manualAddHubPrinter(manualIp.trim(), manualName.trim(), svcForHub);
     if (!r.ok) {
       setStatus(`Hub 添加失敗：${r.error ?? ""}`);
       return;
@@ -552,16 +519,16 @@ export function DeviceSettings() {
     if (config.printers.some((p) => p.ipAddress && p.ipAddress.trim() === ip)) {
       setStatus(`打印機 ${manualName || ip}（${ip}）已經喺列表入面`);
     } else {
-      const svc = manualService as HubServiceId;
-      const role: DevicePrinterConfig["role"] = svc === "front" ? "receipt" : "zone";
+      const role = manualRole;
+      const zoneId = role === "receipt" ? undefined : manualZoneId;
       const newPrinter: DevicePrinterConfig = {
         id: uid("printer"),
         role,
-        zoneId: role === "zone" ? localSettings.printZones[0]?.id ?? "kitchen" : undefined,
+        zoneId,
         connectionType: "lan",
         name: manualName.trim() || `打印機 ${ip}`,
         model: "",
-        paperSize: "80mm",
+        paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
         ipAddress: ip,
         lanPort: 9100,
         charset: "gb18030",
@@ -935,15 +902,26 @@ export function DeviceSettings() {
                     />
                     <select
                       className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                      value={manualService}
-                      onChange={(e) => setManualService(e.target.value)}
+                      value={manualRole}
+                      onChange={(e) => setManualRole(e.target.value as DevicePrinterConfig["role"])}
                     >
-                      {HUB_SERVICES.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.label}
-                        </option>
-                      ))}
+                      <option value="zone">分區出單</option>
+                      <option value="receipt">收據</option>
+                      <option value="label">標籤</option>
                     </select>
+                    {manualRole !== "receipt" && (
+                      <select
+                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                        value={manualZoneId}
+                        onChange={(e) => setManualZoneId(e.target.value)}
+                      >
+                        {localSettings.printZones.map((zone) => (
+                          <option key={zone.id} value={zone.id}>
+                            {zone.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <button
                       type="button"
                       className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
@@ -1316,32 +1294,6 @@ export function DeviceSettings() {
               ) : null}
 
               </div>
-
-              {devicePrinterTab === "printers" ? (
-                <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
-                  <button
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    onClick={() => addPrinter("zone")}
-                    type="button"
-                  >
-                    新增廚房 / 分區打印機
-                  </button>
-                  <button
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    onClick={() => addPrinter("receipt")}
-                    type="button"
-                  >
-                    新增收據打印機
-                  </button>
-                  <button
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    onClick={() => addPrinter("label")}
-                    type="button"
-                  >
-                    新增標籤打印機
-                  </button>
-                </div>
-              ) : null}
             </section>
           </div>
         ) : null}

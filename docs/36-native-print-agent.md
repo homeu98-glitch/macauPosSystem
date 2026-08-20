@@ -148,6 +148,7 @@ order 落單
 
 - `tsc --noEmit`：除咗 `layout.tsx` 預存 `LayoutProps` 誤報（同本任務無關）外，零錯誤。
 - 連接方式只餘 **LAN（經 Printer Hub 直打）**：USB / WebUSB / 瀏覽器打印（`window.print`）三種連接方法已移除（唔 work，且 Hub-only 架構下全部走 Hub → raw socket :9100）。`print-webusb.ts` / `print-browser.ts` / `escpos.ts` 三個模塊已刪除。`ConnectionType` 收窄為 `"lan"`，`DevicePrinterConfig` 移除 `usbLabel` / `webusbSerial` 欄位。
+- **打印機只可以 IP 新增**：「新增廚房/分區 / 收據 / 標籤打印機」三個空白掣已刪除（開出嚟冇 IP、Hub-only 下印唔到）。改為統一經「手動添加打印機」表單（填 IP + 名稱 + **角色** 收據/分區/標籤；分區/標籤會再揀所屬 print zone）或 Hub 掃描「＋ 加入列表」新增。`addPrinter()` 函數已刪除；`handleManualAdd` 改用 `manualRole` / `manualZoneId` 決定 `role` / `zoneId`，`HUB_SERVICES` import 移除（Hub 註冊 service 只係 metadata，路由靠 IP/role/zoneId）。
 
 ## 文檔關聯
 
