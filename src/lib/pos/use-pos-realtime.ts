@@ -14,7 +14,7 @@ import {
 import { PosOrder, PrintJob } from "@/lib/types";
 
 type PosRealtimeHandlers = {
-  onOrderUpsert: (order: PosOrder) => void;
+  onOrderUpsert?: (order: PosOrder) => void;
   onPrintJobUpsert?: (job: PrintJob) => void;
   onSoldoutUpsert?: (row: PosSoldoutRow) => void;
   onStatusChange?: (status: string) => void;
@@ -71,7 +71,7 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
           { event: "*", schema: "public", table: "pos_orders", filter },
           (payload) => {
             const row = payload.new as PosOrderRow;
-            if (row && row.id) handlersRef.current.onOrderUpsert(mapPosOrderRow(row));
+            if (row && row.id) handlersRef.current.onOrderUpsert?.(mapPosOrderRow(row));
           },
         )
         .on(

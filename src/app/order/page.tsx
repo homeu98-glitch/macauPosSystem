@@ -34,7 +34,7 @@ type CartLine = {
 
 type SpecDraft = {
   item: MenuItem;
-  specs: OrderItem["selectedSpecs"];
+  specs: NonNullable<OrderItem["selectedSpecs"]>;
   priceDelta: number;
 };
 
@@ -269,7 +269,7 @@ export default function OrderPage() {
       setSpecDraft({ item, specs: [], priceDelta: 0 });
       return;
     }
-    pushLine({ menuItemId: item.id, name: item.name, price: item.price, quantity: 1, printerGroup: item.printerGroup });
+    pushLine({ menuItemId: item.id, name: item.name, price: item.price, printerGroup: item.printerGroup });
   }
 
   function pushLine(base: Omit<CartLine, "lineId" | "quantity">) {
@@ -545,7 +545,7 @@ export default function OrderPage() {
                         key={opt.id}
                         onClick={() => {
                           const others = specDraft.specs.filter((s) => s.groupId !== group.id);
-                          const nextSpecs: OrderItem["selectedSpecs"] =
+                          const nextSpecs: NonNullable<OrderItem["selectedSpecs"]> =
                             group.selectionMode === "single"
                               ? [
                                   ...others,
@@ -591,7 +591,6 @@ export default function OrderPage() {
                   menuItemId: specDraft.item.id,
                   name: specDraft.item.name,
                   price: specDraft.item.price + specDraft.priceDelta,
-                  quantity: 1,
                   printerGroup: specDraft.item.printerGroup,
                   selectedSpecs: specDraft.specs,
                 });
