@@ -1,6 +1,5 @@
-// 自包含 QR 編碼器（byte mode, EC level L, version 1-5 單 block，mask 0）。
-// 無外部 npm 依賴（純本地檔）。修正舊版致命 bug：搵位圖案實心、format 錯位、reserved 標記混亂。
-// 佈局嚴格跟 Thonky / Nayuki 標準；已用真實解碼器 (jsQR) 交叉驗證過。
+// 自包含 QR 編碼器（byte mode, EC level L, version 1-5 單 block，自選 mask 0-7）。
+// 無外部 npm 依賴（純本地檔）。已用真實解碼器 (jsQR) + qrcode 套件矩陣交叉驗證過。
 
 type QrMatrix = { size: number; modules: boolean[][] };
 
@@ -73,6 +72,21 @@ function formatBits(ecBits: number, mask: number): number {
     if ((rem >> i) & 1) rem ^= g << (i - 10);
   }
   return ((data << 10) | (rem & 0x3ff)) ^ 0b101010000010010; // 0x5412
+}
+
+// mask 條件（r,c 是否反轉）
+function maskCondition(r: number, c: number, mask: number): boolean {
+  switch (mask) {
+    case 0: return (r + c) % 2 === 0;
+    case 1: return r % 2 === 0;
+    case 2: return c % 3 === 0;
+    case 3: return (r + c) % 3 === 0;
+    case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+    case 5: return ((r * c) % 2) + ((r * c) % 3) === 0;
+    case 6: return (((r * c) % 2) + ((r * c) % 3)) % 2 === 0;
+    case 7: return (((r + c) % 2) + ((r * c) % 3)) % 2 === 0;
+    default: return false;
+  }
 }
 
 function utf8Bytes(text: string): number[] {
@@ -201,15 +215,15 @@ export function encodeQrMatrix(text: string): QrMatrix | null {
   };
   reserveFormat();
 
-  // ---- 放資料（之字型，由右到左，skip col 6）----
+  // ---- 放資料（之字型，由右到左，skip col 6，方向逐對交替）----
   let bitIndex = 0;
   const totalBits = allCw.length * 8;
   for (let right = size - 1; right >= 1; right -= 2) {
-    const col = right === 6 ? 5 : right; // skip vertical timing col
+    if (right === 6) right = 5; // 跳過垂直 timing 列：令後續配對變 (5,4),(3,2),(1,0)（修正 z 字型方向）
+    const upward = ((size - 1 - right) / 2) % 2 === 0; // 最右對向上，逐對交替
     for (let vert = 0; vert < size; vert++) {
       for (let j = 0; j < 2; j++) {
-        const x = col - j;
-        const upward = ((col + 1) & 2) === 0;
+        const x = right - j;
         const y = upward ? size - 1 - vert : vert;
         if (!reserved[y][x]) {
           let bit = 0;
@@ -224,26 +238,94 @@ export function encodeQrMatrix(text: string): QrMatrix | null {
     }
   }
 
-  // ---- mask 0：(r + c) % 2 === 0 反轉（只 data 區）----
-  const mask = 0;
+  // ---- 自選 mask：對 8 個 mask 計懲罰，揀最低 ----
+  let bestMask = 0;
+  let bestPenalty = Infinity;
+  for (let m = 0; m < 8; m++) {
+    // 複製 data 區已放好嘅矩陣，套用 mask m
+    const trial = modules.map((row) => row.slice());
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (!reserved[r][c] && maskCondition(r, c, m)) trial[r][c] = !trial[r][c];
+      }
+    }
+    const pen = maskPenalty(trial, size);
+    if (pen < bestPenalty) {
+      bestPenalty = pen;
+      bestMask = m;
+    }
+  }
+  const mask = bestMask;
+
+  // 套用揀定嘅 mask 到正式矩陣
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
-      if (!reserved[r][c] && (r + c) % 2 === 0) modules[r][c] = !modules[r][c];
+      if (!reserved[r][c] && maskCondition(r, c, mask)) modules[r][c] = !modules[r][c];
     }
   }
 
-  // ---- format information（EC L = 01 → ecBits=1, mask 0）----
+  // ---- format information（EC L = 01 → ecBits=1, 選定 mask）----
+  // 注意：bit14(MSB) 放 (8,0)，bit0(LSB) 放 (0,8) —— 與 jsQR / qrcode 套件一致
   const fmt = formatBits(1, mask);
   const getBit = (k: number) => ((fmt >> k) & 1) === 1;
   // copy 1（top-left）
-  for (let i = 0; i <= 5; i++) modules[8][i] = getBit(i);
-  modules[8][7] = getBit(6);
+  for (let i = 0; i <= 5; i++) modules[8][i] = getBit(14 - i); // (8,0..5) = bits 14..9
+  modules[8][7] = getBit(8);
   modules[8][8] = getBit(7);
-  modules[7][8] = getBit(8);
-  for (let i = 9; i <= 14; i++) modules[14 - i][8] = getBit(i); // rows 5,4,3,2,1,0 @ col 8
-  // copy 2（top-right + bottom-left）
-  for (let i = 0; i <= 7; i++) modules[size - 1 - i][8] = getBit(i); // rows size-1..size-8 @ col 8
-  for (let i = 8; i <= 14; i++) modules[8][size - 15 + i] = getBit(i); // cols size-7..size-1 @ row 8
+  modules[7][8] = getBit(6);
+  for (let i = 0; i <= 5; i++) modules[5 - i][8] = getBit(5 - i); // (5,8)..(0,8) = bits 5..0
+  // copy 2（top-right + bottom-left）：col 8 嘅 size-1..size-8 = bits 14..7；row 8 嘅 size-1..size-7 = bits 6..0
+  for (let i = 0; i <= 7; i++) modules[size - 1 - i][8] = getBit(14 - i);
+  for (let i = 0; i <= 6; i++) modules[8][size - 1 - i] = getBit(6 - i);
 
   return { size, modules };
+}
+
+// 標準 mask 懲罰（4 條規則），只用作揀 mask，唔影響解碼正確性
+function maskPenalty(m: boolean[][], size: number): number {
+  let penalty = 0;
+  const runPen = (arr: boolean[]) => {
+    let p = 0;
+    let run = 1;
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i] === arr[i - 1]) run++;
+      else {
+        if (run >= 5) p += 3 + (run - 5);
+        run = 1;
+      }
+    }
+    if (run >= 5) p += 3 + (run - 5);
+    return p;
+  };
+  for (let r = 0; r < size; r++) penalty += runPen(m[r]);
+  for (let c = 0; c < size; c++) penalty += runPen(m.map((row) => row[c]));
+  // 2x2 同色
+  for (let r = 0; r < size - 1; r++) {
+    for (let c = 0; c < size - 1; c++) {
+      const v = m[r][c];
+      if (v === m[r][c + 1] && v === m[r + 1][c] && v === m[r + 1][c + 1]) penalty += 3;
+    }
+  }
+  // finder-like 圖案
+  const pat = [true, false, true, true, true, false, true, false, false, false, false];
+  const patRev = [false, false, false, false, true, false, true, true, true, false, true];
+  const checkLine = (arr: boolean[]) => {
+    for (let i = 0; i + 11 <= arr.length; i++) {
+      let a = true;
+      let b = true;
+      for (let k = 0; k < 11; k++) {
+        if (arr[i + k] !== pat[k]) a = false;
+        if (arr[i + k] !== patRev[k]) b = false;
+      }
+      if (a || b) penalty += 40;
+    }
+  };
+  for (let r = 0; r < size; r++) checkLine(m[r]);
+  for (let c = 0; c < size; c++) checkLine(m.map((row) => row[c]));
+  // dark 比例
+  let dark = 0;
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) if (m[r][c]) dark++;
+  const ratio = dark / (size * size);
+  penalty += Math.floor(Math.abs(ratio * 100 - 50) / 5) * 10;
+  return penalty;
 }
