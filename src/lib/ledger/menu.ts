@@ -24,6 +24,7 @@ export type LedgerMenuProduct = {
   priceMop: number;
   isSoldOut: boolean;
   specGroups?: MenuSpecGroup[];
+  image?: string;
 };
 
 export type LedgerOrderMenu = {
@@ -37,6 +38,19 @@ function avosToMop(value: unknown): number | null {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return Math.round(n) / 100;
+}
+
+function resolveProductImage(record: UnknownRecord): string | undefined {
+  const raw =
+    record.image ??
+    record.image_url ??
+    record.imageUrl ??
+    record.photo ??
+    record.photo_url ??
+    record.img ??
+    record.thumbnail ??
+    record.picture;
+  return raw ? String(raw) : undefined;
 }
 
 function resolveProductPriceMop(record: UnknownRecord): number {
@@ -87,6 +101,7 @@ function parseProduct(raw: unknown, menuRoot: UnknownRecord | null): LedgerMenuP
     priceMop: resolveProductPriceMop(record),
     isSoldOut: Boolean(record.is_sold_out ?? record.isSoldOut ?? record.sold_out ?? false),
     specGroups: parseLedgerProductSpecGroups(record, menuRoot),
+    image: resolveProductImage(record),
   };
 }
 

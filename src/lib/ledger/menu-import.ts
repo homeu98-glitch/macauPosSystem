@@ -147,6 +147,7 @@ function mapLedgerProduct(product: LedgerMenuProduct, existing?: MenuItem): Menu
     price: product.priceMop,
     printerGroup: existing?.printerGroup ?? "kitchen",
     specGroups: product.specGroups !== undefined ? product.specGroups : existing?.specGroups,
+    image: product.image ?? existing?.image,
   };
 }
 

@@ -114,6 +114,8 @@ export interface MenuItem {
   isMarketPrice?: boolean;
   /** 掃碼點餐 / Kiosk 客人可點：false 時該項唔會出現喺客人介面（預設 true） */
   customerOrderable?: boolean;
+  /** 菜品圖片 URL（由 Ledger 線上點餐菜單同步過來；可空，前端有圖先 render） */
+  image?: string;
 }
 
 export interface MenuCategory {

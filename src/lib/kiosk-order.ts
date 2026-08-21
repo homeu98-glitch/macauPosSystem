@@ -73,6 +73,8 @@ export type BuildKioskOrderInput = {
   id?: string;
   status?: PosOrder["status"];
   fulfillmentStatus?: PosOrder["fulfillmentStatus"];
+  /** 落單號碼：優先用店內線下同日序號（/api/pos/sequence 嘅 display）；無值就 fallback 去 timestamp 後綴 */
+  localOrderNo?: string;
 };
 
 /** 建構 Kiosk 落單嘅 `PosOrder`（唔落本地 localStorage，推去 Supabase）。 */
@@ -103,7 +105,6 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
   if (input.mode === "dine_in") {
     tableId = input.tableId ?? "counter";
     tableName = input.tableName;
-    localOrderNo = `堂食${slice}`;
     if (input.kitchenMode === "dine_in_confirm") {
       // 待確認：落 draft，等收銀確認才 sent_to_kitchen
       status = "draft";
@@ -116,13 +117,23 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     tableId = "counter";
     if (input.quickType === "delivery") {
       tableName = "外賣";
-      localOrderNo = `外賣${slice}`;
     } else {
       tableName = "自取";
-      localOrderNo = `自取${slice}`;
     }
     status = "sent_to_kitchen";
     fulfillmentStatus = "preparing";
+  }
+
+  // 落單號碼：優先用店內線下同日序號（/api/pos/sequence 嘅 display），kiosk/掃碼同店內共用同一日序列表；
+  // 無序號（fetch 失敗 / 離線）先 fallback 去 timestamp 後綴，確保一定有號。
+  if (input.localOrderNo) {
+    localOrderNo = input.localOrderNo;
+  } else if (input.mode === "dine_in") {
+    localOrderNo = `堂食${slice}`;
+  } else if (input.quickType === "delivery") {
+    localOrderNo = `外賣${slice}`;
+  } else {
+    localOrderNo = `自取${slice}`;
   }
 
   // resume：重用現有單嘅狀態（唔可以因為改 mode 而把「待確認」變「已落廚房」）

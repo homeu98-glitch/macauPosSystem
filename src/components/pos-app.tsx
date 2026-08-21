@@ -649,6 +649,31 @@ export function PosApp() {
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, pendingQueue]);
+
+  // Kiosk 客人單可見性 fallback：realtime 靜默失敗（anon RLS / Realtime 未啟用）時，
+  // 週期拉取 pos_orders（server 端 service role，繞過 anon RLS）合併入本機 + localStorage，
+  // 確保收銀一定見到客人掃碼落嘅單（搭配上一輪 storeId 修正）。
+  useEffect(() => {
+    if (offlineMode) return;
+    const merchantId = loadAuthSession()?.merchantId;
+    if (!merchantId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(merchantId)}`);
+        const payload = (await response.json()) as { orders?: PosOrder[] };
+        if (Array.isArray(payload.orders)) {
+          setOrders((current) => {
+            const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
+            saveOrders(merged);
+            return merged;
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [offlineMode]);
   const recentCompletedOrders = useMemo(() => {
     if (!isQuickMode) return [];
     const threshold = nowMs - quickCompletedMinutes * 60 * 1000;

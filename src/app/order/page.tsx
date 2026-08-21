@@ -80,21 +80,21 @@ export default function OrderPage() {
   if (submittedOrder) {
     const isPickup = submittedOrder.tableId === "counter";
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center bg-slate-50 p-6 text-center">
-        <div className="mb-4 text-6xl">✅</div>
-        <h1 className="mb-2 text-2xl font-bold text-slate-900">{t("thanks")}</h1>
-        <div className="w-full rounded-2xl bg-white p-5 shadow-sm">
-          <div className="mb-3 text-sm text-slate-500">{t("orderNo")}</div>
-          <div className="mb-4 text-3xl font-bold text-slate-900">{submittedOrder.localOrderNo}</div>
-          <div className="mb-1 text-sm text-slate-500">
+      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 text-7xl">✅</div>
+        <h1 className="mb-3 text-4xl font-bold text-slate-900">{t("thanks")}</h1>
+        <div className="w-full rounded-3xl bg-white p-8 shadow-sm">
+          <div className="mb-2 text-base text-slate-500">{t("orderNo")}</div>
+          <div className="mb-4 text-5xl font-bold text-slate-900">{submittedOrder.localOrderNo}</div>
+          <div className="mb-1 text-base text-slate-500">
             {mode === "dine_in" ? t("table") : t("pickupNo")}
           </div>
-          <div className="text-lg font-semibold text-slate-900">{submittedOrder.tableName}</div>
+          <div className="text-2xl font-semibold text-slate-900">{submittedOrder.tableName}</div>
         </div>
-        <p className="mt-4 text-base text-slate-600">{t("payAtCounter")}</p>
+        <p className="mt-5 text-lg text-slate-600">{t("payAtCounter")}</p>
         <button
           onClick={() => setSubmittedOrder(null)}
-          className="mt-6 w-full rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white"
+          className="mt-7 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
         >
           {t("newOrder")}
         </button>
@@ -172,6 +172,15 @@ export default function OrderPage() {
                     sold ? "opacity-50" : "active:scale-95"
                   }`}
                 >
+                  {item.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- Ledger 圖片係任意外部域名，唔適合 next/image 固定 remotePatterns
+                    <img
+                      src={item.image}
+                      alt={item.name}
+                      className="mb-2 h-20 w-full rounded-xl object-cover"
+                      loading="lazy"
+                    />
+                  ) : null}
                   <span className="text-base font-semibold text-slate-900">{item.name}</span>
                   <span className="mt-1 text-sm text-orange-600">MOP {item.price}</span>
                   {sold && <span className="mt-1 text-xs text-red-500">{t("soldout")}</span>}

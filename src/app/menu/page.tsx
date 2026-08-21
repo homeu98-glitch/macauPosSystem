@@ -110,9 +110,9 @@ export default function MenuPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-[100dvh] w-full max-w-md flex-col bg-stone-50">
+    <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
       {/* 頂欄：店名 + 枱號 + 語言 */}
-      <header className="sticky top-0 z-10 bg-white/95 px-4 pb-3 pt-4 backdrop-blur">
+      <header className="sticky top-0 z-10 shrink-0 bg-white/95 px-4 pb-3 pt-4 backdrop-blur">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
             <div className="truncate text-lg font-bold text-stone-900">{displayStoreName}</div>
@@ -160,7 +160,7 @@ export default function MenuPage() {
       )}
 
       {/* 菜單：單欄 list */}
-      <section className="flex-1 space-y-2.5 px-4 py-3">
+      <section className="flex-1 space-y-2.5 overflow-y-auto px-4 py-3">
         {categoryItems.map((item) => {
           const sold = soldoutIds.has(item.id);
           const qty = cartCountByItem(item.id);
@@ -172,6 +172,15 @@ export default function MenuPage() {
                 sold ? "opacity-60" : ""
               }`}
             >
+              {item.image ? (
+                // eslint-disable-next-line @next/next/no-img-element -- Ledger 圖片係任意外部域名，唔適合 next/image 固定 remotePatterns
+                <img
+                  src={item.image}
+                  alt={item.name}
+                  className="h-14 w-14 shrink-0 rounded-xl object-cover"
+                  loading="lazy"
+                />
+              ) : null}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold text-stone-900">{item.name}</div>
                 <div className="mt-1 text-sm font-semibold text-orange-600">MOP {item.price}</div>
@@ -216,7 +225,7 @@ export default function MenuPage() {
 
       {/* 底部固定購物車 bar */}
       {cart.length > 0 && (
-        <div className="sticky bottom-0 z-10 border-t border-stone-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
+        <div className="sticky bottom-0 z-10 shrink-0 border-t border-stone-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
           <button
             onClick={() => setCartOpen(true)}
             className="flex w-full items-center justify-between rounded-2xl bg-orange-500 px-4 py-3.5 text-white active:scale-[0.99]"

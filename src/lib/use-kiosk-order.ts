@@ -383,6 +383,24 @@ export function useKioskOrder() {
         selectedSpecs: line.selectedSpecs,
         note: line.note,
       }));
+      // 落單號碼：跟店內線下同日序號（/api/pos/sequence），kiosk/掃碼與店內共用同一日序列表。
+      // kind 對齊店內：堂食→pos、自取→pickup、外賣→delivery；storeId 用所屬店。
+      let localOrderNo: string | undefined;
+      try {
+        const seqKind = mode === "dine_in" ? "pos" : quickType === "delivery" ? "delivery" : "pickup";
+        const seqRes = await fetch("/api/pos/sequence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: seqKind, storeId }),
+        });
+        if (seqRes.ok) {
+          const seqPayload = (await seqRes.json()) as { display?: string };
+          if (seqPayload.display) localOrderNo = seqPayload.display;
+        }
+      } catch {
+        // 失敗（離線 / 序列函數未佈署）就 fallback 去 buildKioskOrder 內嘅 timestamp 後綴
+      }
+
       const order = buildKioskOrder({
         storeId,
         tableId,
@@ -397,6 +415,7 @@ export function useKioskOrder() {
         id: resumedOrder?.id,
         status: resumedOrder?.status,
         fulfillmentStatus: resumedOrder?.fulfillmentStatus,
+        localOrderNo,
       });
       const printJobs = buildKioskKitchenPrintJobs(order, zoneNames);
       await submitKioskOrder(storeId, order, printJobs, resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED");

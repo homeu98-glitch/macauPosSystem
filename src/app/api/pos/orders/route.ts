@@ -2,18 +2,19 @@ import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
+  const { searchParams } = new URL(request.url);
+  const storeId = searchParams.get("storeId")?.trim() || null;
 
   if (!supabase) {
     return NextResponse.json({ ok: true, source: "mock", orders: [] });
   }
 
-  const { data, error } = await supabase
-    .from("pos_orders")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(500);
+  const query = storeId
+    ? supabase.from("pos_orders").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(500)
+    : supabase.from("pos_orders").select("*").order("updated_at", { ascending: false }).limit(500);
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

@@ -87,6 +87,10 @@
 
 - 共用邏輯抽去 `src/lib/use-kiosk-order.ts`（cart/realtime/resume/落單）；`/order` 係 3 欄平板（UI 唔變），`/menu` 係手機外賣 App 風（單欄 + 底 bar + bottom sheet）。
 - 枱 QR（`kiosk-qr-panel.tsx`）指去 `/menu?tableId=&store=&storeName=`；`login-screen.tsx:87` 仍 `router.replace("/order")` 係 kiosk 登入後去向。
+- **落單號碼跟店內線下序號**：kiosk/掃碼落單前經 `/api/pos/sequence`（`kind: dine_in→pos / pickup→pickup / delivery→delivery`，`storeId` 用所屬店）攞同日序號，同店內線下單共用 `next_daily_sequence` 同一日序列表；`buildKioskOrder` 收 `localOrderNo?` 參數，fetch 失敗先 fallback timestamp 後綴。
+- **收銀見單機制**：kiosk 單寫 `pos_orders`（store_id = 所屬店），收銀側靠 realtime（`use-pos-realtime.ts`，filter `store_id=eq.<merchantId>`）+ 15s 週期 `/api/pos/orders?storeId=<merchantId>` pull fallback（`pos-app.tsx` 內）合併入 localStorage 並顯示。storeId 必須＝收銀 `authSession.merchantId` 先見到（上一輪 storeId 修正已處理 QR/手機）。
+- **全局 `body{overflow:hidden}`**（`globals.css`）：手機 `/menu` 唔好靠整頁滾動，必須 `main h-[100dvh] overflow-hidden` + 菜單 `section flex-1 overflow-y-auto` + 頂欄/底 bar `shrink-0`，內部自滾。
+- 菜品圖片：`MenuItem.image?` 由 Ledger（`list_merchant_order_menu` RPC）同步，經 `pos_bootstrap_config.menu_items` 落到手機；前端有圖先 render（`<img>` arbitrary 外部域名，唔用 next/image）。
 - `tsc --noEmit` 唯一已知誤報：`layout.tsx(37) LayoutProps`（Next build 先生成 `.next/types`，standalone tsc 見唔到，唔影響 Vercel build）。
 
 ## 用戶偏好

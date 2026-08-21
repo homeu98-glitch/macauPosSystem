@@ -117,6 +117,8 @@ export function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
 
 function normalizeMenuItem(item: MenuItem | UnknownRecord): MenuItem {
   const record = item as UnknownRecord;
+  const imageRaw =
+    record.image ?? record.image_url ?? record.photo ?? record.img ?? record.thumbnail ?? record.picture;
   return {
     id: String(record.id),
     categoryId: String(record.categoryId ?? record.category_id ?? ""),
@@ -126,6 +128,7 @@ function normalizeMenuItem(item: MenuItem | UnknownRecord): MenuItem {
     specGroups: normalizeSpecGroups(record.specGroups ?? record.spec_groups),
     isMarketPrice: Boolean(record.isMarketPrice ?? record.is_market_price),
     customerOrderable: Boolean(record.customerOrderable ?? record.customer_orderable ?? true),
+    image: imageRaw ? String(imageRaw) : undefined,
   };
 }
 
