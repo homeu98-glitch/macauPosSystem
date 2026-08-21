@@ -675,8 +675,11 @@ export function PosApp() {
         ) ?? null
       );
     }
-    return (activeTableId ? tableOrderMap.get(activeTableId) : null) ?? null;
-  }, [activeOrderId, activeTableId, orders, tableOrderMap]);
+    // 快餐模式：activeTableId 喺 boot 時會落到第一張真枱（bootstrap.tables[0]），
+    // 唔可以靠佢去 resolve activeOrder，否則會鬼鬼祟祟將張枱嘅堂食單載入 workspace
+    //（「跳去桌面模式」）。快餐模式嘅單靠 activeOrderId 追蹤（落單時 setActiveOrderId）。
+    return (!isQuickMode && activeTableId ? tableOrderMap.get(activeTableId) : null) ?? null;
+  }, [activeOrderId, activeTableId, orders, tableOrderMap, isQuickMode]);
   // 唯讀鎖定：已結帳單經 deep-link 載入工作台（activeOrder 因 status=settled 被排除，但 activeOrderId/cartItems 已設）
   const workspaceOrder = useMemo(
     () => (activeOrderId ? orders.find((order) => order.id === activeOrderId) ?? null : null),
