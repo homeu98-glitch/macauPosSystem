@@ -37,6 +37,11 @@ export function saveKioskDeviceBinding(binding: KioskDeviceBinding): void {
   window.localStorage.setItem(KIOSK_BINDING_KEY, JSON.stringify(binding));
 }
 
+export function clearKioskDeviceBinding(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(KIOSK_BINDING_KEY);
+}
+
 // ─────────────────────────────────────────────────────────────
 // 購物車項目
 // ─────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { KioskQrPanel } from "@/components/kiosk-qr-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
@@ -84,7 +85,7 @@ export function DeviceSettings() {
   const scanStreamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<number | null>(null);
   const [activeTab, setActiveTab] = useState<
-    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes"
+    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "kiosk"
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
@@ -745,6 +746,7 @@ export function DeviceSettings() {
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
             ["notes", "備註"],
+            ["kiosk", "掃碼點餐"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -759,11 +761,15 @@ export function DeviceSettings() {
           ))}
         </div>
 
-        <div className="mb-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-          {status}
-        </div>
+  <div className="mb-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+    {status}
+  </div>
 
-        {activeTab === "device" ? (
+  {activeTab === "kiosk" ? (
+    <KioskQrPanel />
+  ) : null}
+
+  {activeTab === "device" ? (
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
             <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
               <div className="font-semibold text-slate-900">Printer Hub 配對（Sunmi APK）</div>

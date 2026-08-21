@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import { loadBootstrapCache } from "@/lib/storage";
@@ -9,7 +10,9 @@ import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
   buildKioskKitchenPrintJobs,
   buildKioskOrder,
+  clearKioskDeviceBinding,
   defaultZoneNames,
+  DEFAULT_KIOSK_STORE_ID,
   fetchUnsettledKioskOrder,
   KioskCartItem,
   KioskDeviceBinding,
@@ -174,27 +177,38 @@ export default function OrderPage() {
   const [resumedOrder, setResumedOrder] = useState<PosOrder | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanStoreId, setScanStoreId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const router = useRouter();
 
   const bootstrap = useMemo(() => loadBootstrapCache() ?? mockBootstrap, []);
-  const storeId = binding?.storeId ?? "macau-store-a";
+  // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之；最後 fallback 預設店
+  const storeId = binding?.storeId ?? scanStoreId ?? DEFAULT_KIOSK_STORE_ID;
   const kitchenMode = defaultPosLocalSettings.kioskKitchenMode;
   const zoneNames = defaultZoneNames();
 
-  // 初始化：讀 URL ?tableId=、綁店、語言
+  // 初始化：讀 URL ?tableId= / ?store=、綁店、語言
   useEffect(() => {
     const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
     const tid = params.get("tableId")?.trim() || null;
+    const sid = params.get("store")?.trim() || null;
     setTableId(tid);
+    setScanStoreId(sid);
 
     const b = loadKioskDeviceBinding();
     setBinding(b);
     if (b?.language) setLanguage(b.language);
 
     setActiveCategory(bootstrap.categories[0]?.id ?? "");
+    setHydrated(true);
   }, [bootstrap.categories]);
 
+  // ── 綁店閘門：kiosk 設備必須先登入綁店；掃碼連結（帶 tableId/store）唔使綁 ──
+  const isScanLink = Boolean(tableId) || Boolean(scanStoreId);
+  const needsBinding = !binding && !isScanLink;
+
   // 售罄即時（Realtime，禁 polling）
-  usePosRealtime(binding?.storeId ?? null, true, {
+  usePosRealtime(storeId, true, {
     onSoldoutUpsert: (row: PosSoldoutRow) => {
       setSoldoutIds((prev) => {
         const next = new Set(prev);
@@ -336,11 +350,42 @@ export default function OrderPage() {
     }
   }
 
-  function saveBinding(next: KioskDeviceBinding) {
-    saveKioskDeviceBinding(next);
-    setBinding(next);
-    setLanguage(next.language);
-    setSettingsOpen(false);
+  function persistLanguage(lng: KioskLanguage) {
+    setLanguage(lng);
+    if (binding) saveKioskDeviceBinding({ ...binding, language: lng });
+  }
+
+  function rebindStore() {
+    clearKioskDeviceBinding();
+    setBinding(null);
+    router.replace("/login?mode=kiosk");
+  }
+
+  // ── 載入中 / 未綁店閘門 ──
+  if (!hydrated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+        載入中…
+      </main>
+    );
+  }
+
+  if (needsBinding) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-4 text-6xl">🔒</div>
+        <h1 className="mb-2 text-xl font-bold text-slate-900">此裝置尚未綁定店鋪</h1>
+        <p className="mb-6 max-w-sm text-sm text-slate-500">
+          掃碼點餐機需要先以商戶帳號登入，綁定所屬店鋪後先可以使用。
+        </p>
+        <button
+          onClick={() => router.replace("/login?mode=kiosk")}
+          className="w-full max-w-xs rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white"
+        >
+          前往登入綁店
+        </button>
+      </main>
+    );
   }
 
   // ── 確認頁 ──
@@ -370,7 +415,7 @@ export default function OrderPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col bg-slate-50">
+    <main className="mx-auto flex min-h-[100dvh] w-full max-w-7xl flex-col bg-slate-50">
       {/* 頂欄 */}
       <header className="sticky top-0 z-10 flex items-center justify-between bg-white px-4 py-3 shadow-sm">
         <div>
@@ -410,7 +455,7 @@ export default function OrderPage() {
 
       <div className="flex flex-1">
         {/* 分類 */}
-        <nav className="w-28 shrink-0 border-r border-slate-200 bg-white p-2">
+        <nav className="w-28 shrink-0 overflow-y-auto border-r border-slate-200 bg-white p-2 sm:w-32">
           {bootstrap.categories.map((cat) => (
             <button
               key={cat.id}
@@ -425,9 +470,9 @@ export default function OrderPage() {
         </nav>
 
         {/* 菜單 */}
-        <section className="flex-1 p-3">
-          <h2 className="mb-3 text-sm font-semibold text-slate-500">{t("welcome")}</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <section className="flex-1 overflow-y-auto p-3 sm:p-4">
+          <h2 className="mb-3 text-base font-semibold text-slate-500">{t("welcome")}</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {categoryItems.map((item) => {
               const sold = soldoutIds.has(item.id);
               return (
@@ -435,7 +480,7 @@ export default function OrderPage() {
                   key={item.id}
                   disabled={sold}
                   onClick={() => addItem(item)}
-                  className={`flex flex-col rounded-2xl bg-white p-3 text-left shadow-sm ${
+                  className={`flex flex-col rounded-2xl bg-white p-4 text-left shadow-sm ${
                     sold ? "opacity-50" : "active:scale-95"
                   }`}
                 >
@@ -452,7 +497,7 @@ export default function OrderPage() {
         </section>
 
         {/* 購物車 */}
-        <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white p-3">
+        <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white p-3 sm:w-80 lg:w-96">
           <div className="mb-2 text-sm font-semibold text-slate-700">{t("cart")}</div>
           {mode === "quick" && (
             <div className="mb-3 flex gap-2 text-xs">
@@ -608,17 +653,14 @@ export default function OrderPage() {
       {settingsOpen && (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40" onClick={() => setSettingsOpen(false)}>
           <div className="w-full max-w-sm rounded-2xl bg-white p-4" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 text-base font-semibold text-slate-900">{t("bindStore")}</div>
-            <label className="mb-1 block text-xs text-slate-500">{t("storeId")}</label>
-            <input
-              defaultValue={storeId}
-              id="kiosk-store-id"
-              className="mb-3 w-full rounded-lg border border-slate-200 p-2 text-sm"
-            />
+            <div className="mb-3 text-base font-semibold text-slate-900">裝置設定</div>
+            <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              已綁定店鋪：<span className="font-semibold text-slate-900">{binding?.storeName ?? binding?.storeId ?? storeId}</span>
+            </div>
             <label className="mb-1 block text-xs text-slate-500">{t("language")}</label>
             <select
-              id="kiosk-lang"
-              defaultValue={language}
+              value={language}
+              onChange={(e) => persistLanguage(e.target.value as KioskLanguage)}
               className="mb-4 w-full rounded-lg border border-slate-200 p-2 text-sm"
             >
               <option value="zh-HK">中文 (繁)</option>
@@ -626,14 +668,16 @@ export default function OrderPage() {
               <option value="en">English</option>
             </select>
             <button
-              onClick={() => {
-                const sid = (document.getElementById("kiosk-store-id") as HTMLInputElement)?.value?.trim() || "macau-store-a";
-                const lng = (document.getElementById("kiosk-lang") as HTMLSelectElement)?.value as KioskLanguage;
-                saveBinding({ storeId: sid, language: lng, storeName: bootstrap.storeName, boundAt: new Date().toISOString() });
-              }}
+              onClick={rebindStore}
               className="w-full rounded-xl bg-orange-500 py-3 font-semibold text-white"
             >
-              {t("save")}
+              重新綁定（換店）
+            </button>
+            <button
+              onClick={() => setSettingsOpen(false)}
+              className="mt-2 w-full rounded-xl border border-slate-200 py-3 font-semibold text-slate-600"
+            >
+              {t("cancel")}
             </button>
           </div>
         </div>
