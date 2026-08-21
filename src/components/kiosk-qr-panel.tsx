@@ -47,8 +47,8 @@ function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
 
 /**
  * 掃碼點餐 QR 生成面板（商家側，喺 /settings「掃碼點餐」tab 內嵌）。
- * 按枱生成 /order?tableId=<id>&store=<merchantId>，印出貼枱。
- * 客人掃碼即開點餐介面；store 帶埋所屬店，確保客人手機落單落到正確店。
+ * 按枱生成 /menu?tableId=<id>&store=<merchantId>，印出貼枱。
+ * 客人掃碼即開手機點餐介面（/menu，外賣 App 風）；store 帶埋所屬店，確保客人手機落單落到正確店。
  */
 export function KioskQrPanel() {
   const [host, setHost] = useState("");
@@ -62,7 +62,7 @@ export function KioskQrPanel() {
     <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
       <div className="mb-1 text-base font-semibold text-slate-900">掃碼點餐 QR</div>
       <p className="mb-4 text-sm text-slate-500">
-        按枱生成 <code className="rounded bg-slate-100 px-1">/order?tableId=</code> 碼，印出貼枱。客人掃碼即開點餐介面（已帶所屬店鋪）。
+        按枱生成 <code className="rounded bg-slate-100 px-1">/menu?tableId=</code> 碼，印出貼枱。客人掃碼即開手機點餐介面（已帶所屬店鋪）。
       </p>
 
       <label className="mb-1 block text-xs text-slate-500">網址主機（host）</label>
@@ -79,7 +79,7 @@ export function KioskQrPanel() {
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {tables.map((table) => {
-            const url = `${origin}/order?tableId=${encodeURIComponent(table.id)}${storeId ? `&store=${encodeURIComponent(storeId)}` : ""}`;
+            const url = `${origin}/menu?tableId=${encodeURIComponent(table.id)}${storeId ? `&store=${encodeURIComponent(storeId)}` : ""}`;
             return (
               <div key={table.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
                 <div className="mb-2 text-sm font-semibold text-slate-900">
