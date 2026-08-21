@@ -18,8 +18,7 @@ export default function OrderPage() {
     language,
     setLanguage,
     persistLanguage,
-    binding,
-    storeId,
+    displayStoreName,
     mode,
     tableName,
     needsBinding,
@@ -109,7 +108,7 @@ export default function OrderPage() {
       <header className="sticky top-0 z-10 flex items-center justify-between bg-white px-4 py-3 shadow-sm">
         <div>
           <div className="text-lg font-bold text-slate-900">
-            {binding?.storeName ?? bootstrap.storeName}
+            {displayStoreName}
           </div>
           <div className="text-xs text-slate-500">
             {mode === "dine_in" ? `${t("dineIn")} · ${t("table")} ${tableName}` : t("pickup")}
@@ -344,7 +343,7 @@ export default function OrderPage() {
           <div className="w-full max-w-sm rounded-2xl bg-white p-4" onClick={(e) => e.stopPropagation()}>
             <div className="mb-3 text-base font-semibold text-slate-900">裝置設定</div>
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              已綁定店鋪：<span className="font-semibold text-slate-900">{binding?.storeName ?? binding?.storeId ?? storeId}</span>
+              已綁定店鋪：<span className="font-semibold text-slate-900">{displayStoreName}</span>
             </div>
             <label className="mb-1 block text-xs text-slate-500">{t("language")}</label>
             <select

@@ -14,7 +14,9 @@ export default function MenuPage() {
 
   const {
     hydrated,
+    menuLoading,
     bootstrap,
+    displayStoreName,
     language,
     setLanguage,
     mode,
@@ -58,8 +60,8 @@ export default function MenuPage() {
     pushLine({ menuItemId: item.id, name: item.name, price: item.price, printerGroup: item.printerGroup });
   }
 
-  // ── 載入中 ──
-  if (!hydrated) {
+  // ── 載入中（含手機攞所屬店 menu）──
+  if (!hydrated || menuLoading) {
     return (
       <main className="flex min-h-[100dvh] items-center justify-center bg-stone-50 text-sm text-stone-400">
         載入中…
@@ -113,7 +115,7 @@ export default function MenuPage() {
       <header className="sticky top-0 z-10 bg-white/95 px-4 pb-3 pt-4 backdrop-blur">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
-            <div className="truncate text-lg font-bold text-stone-900">{bootstrap.storeName}</div>
+            <div className="truncate text-lg font-bold text-stone-900">{displayStoreName}</div>
             <div className="mt-0.5 flex items-center gap-1.5 text-xs text-stone-500">
               <span className="rounded-full bg-orange-50 px-2 py-0.5 font-medium text-orange-600">
                 {mode === "dine_in" ? `${t("dineIn")} · ${t("table")} ${tableName}` : t("pickup")}

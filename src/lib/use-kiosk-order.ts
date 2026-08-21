@@ -22,7 +22,7 @@ import {
   saveKioskDeviceBinding,
   submitKioskOrder,
 } from "@/lib/kiosk-order";
-import { MenuItem, OrderItem, PosOrder, PrinterGroup } from "@/lib/types";
+import { MenuItem, OrderItem, PosBootstrap, PosOrder, PrinterGroup } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────
 // 共用型別：購物車一行 + 規格草稿（kiosk 平板 / 手機介面共用）
@@ -203,11 +203,25 @@ export function useKioskOrder() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scanStoreId, setScanStoreId] = useState<string | null>(null);
+  const [scanStoreName, setScanStoreName] = useState<string | null>(null);
+  const [fetchedBootstrap, setFetchedBootstrap] = useState<PosBootstrap | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  const bootstrap = useMemo(() => loadBootstrapCache() ?? mockBootstrap, []);
+  // 手機掃碼（scanStoreId 有值）先去 backend 攞所屬店嘅真 menu（pos_bootstrap_config，
+  // 與商家點餐機同一份）；kiosk 用本地 cache（唔變）。fallback 先本地 cache 再 mockBootstrap。
+  const bootstrap = useMemo(
+    () => fetchedBootstrap ?? loadBootstrapCache() ?? mockBootstrap,
+    [fetchedBootstrap],
+  );
+  // 手機仲攞緊所屬店 menu 時嘅 loading 狀態（kiosk 無 scanStoreId → 唔會 loading）
+  const menuLoading = Boolean(scanStoreId) && fetchedBootstrap === null;
   // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之；最後 fallback 預設店
   const storeId = binding?.storeId ?? scanStoreId ?? DEFAULT_KIOSK_STORE_ID;
+  // 顯示店名：綁店名 > 掃碼連結 ?storeName= > 本地 mock 店名
+  const displayStoreName = useMemo(
+    () => binding?.storeName ?? scanStoreName ?? bootstrap.storeName,
+    [binding, scanStoreName, bootstrap],
+  );
   const kitchenMode = defaultPosLocalSettings.kioskKitchenMode;
   const zoneNames = defaultZoneNames();
 
@@ -216,8 +230,10 @@ export function useKioskOrder() {
     const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
     const tid = params.get("tableId")?.trim() || null;
     const sid = params.get("store")?.trim() || null;
+    const sname = params.get("storeName")?.trim() || null;
     setTableId(tid);
     setScanStoreId(sid);
+    setScanStoreName(sname);
 
     const b = loadKioskDeviceBinding();
     setBinding(b);
@@ -242,6 +258,27 @@ export function useKioskOrder() {
       });
     },
   });
+
+  // 手機掃碼：按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu
+  useEffect(() => {
+    if (!scanStoreId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/pos/bootstrap?storeId=${encodeURIComponent(scanStoreId)}`);
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as PosBootstrap;
+        if (cancelled) return;
+        setFetchedBootstrap(data);
+        setActiveCategory(data.categories?.[0]?.id ?? "");
+      } catch {
+        // 失敗就保留本地 cache / mockBootstrap fallback
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [scanStoreId]);
 
   // resume：重複掃碼載入該枱 / 上次單嘅未結單
   useEffect(() => {
@@ -389,12 +426,14 @@ export function useKioskOrder() {
 
   return {
     hydrated,
+    menuLoading,
     bootstrap,
     language,
     setLanguage,
     persistLanguage,
     binding,
     storeId,
+    displayStoreName,
     tableId,
     scanStoreId,
     mode,

@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactElement } from "react";
 
 import { mockBootstrap } from "@/lib/mock-data";
 import { loadAuthSession, loadBootstrapCache } from "@/lib/storage";
+import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { encodeQrMatrix } from "@/lib/qrcode";
 
 function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
@@ -53,7 +54,13 @@ function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
 export function KioskQrPanel() {
   const [host, setHost] = useState("");
   const bootstrap = loadBootstrapCache() ?? mockBootstrap;
-  const storeId = loadAuthSession()?.merchantId ?? "";
+  // 優先用 kiosk 設備綁店（mode=kiosk 登入只 save 綁店、唔 save auth session，
+  // 所以 loadAuthSession() 喺「掃碼點餐」tab 係 null）；冇綁店先 fallback ledger auth session。
+  // store 帶埋 storeName，畀客人手機顯示「所屬店」而唔係 demo 店名。
+  const binding = loadKioskDeviceBinding();
+  const session = loadAuthSession();
+  const storeId = binding?.storeId ?? session?.merchantId ?? "";
+  const storeName = binding?.storeName ?? session?.name ?? "";
 
   const origin = host || (typeof window !== "undefined" ? window.location.origin : "https://macau-pos-system.vercel.app");
   const tables = bootstrap.tables;
@@ -79,7 +86,7 @@ export function KioskQrPanel() {
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {tables.map((table) => {
-            const url = `${origin}/menu?tableId=${encodeURIComponent(table.id)}${storeId ? `&store=${encodeURIComponent(storeId)}` : ""}`;
+            const url = `${origin}/menu?tableId=${encodeURIComponent(table.id)}${storeId ? `&store=${encodeURIComponent(storeId)}` : ""}${storeName ? `&storeName=${encodeURIComponent(storeName)}` : ""}`;
             return (
               <div key={table.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
                 <div className="mb-2 text-sm font-semibold text-slate-900">
