@@ -125,6 +125,7 @@ function normalizeMenuItem(item: MenuItem | UnknownRecord): MenuItem {
     printerGroup: String(record.printerGroup ?? record.printer_group ?? "kitchen") as MenuItem["printerGroup"],
     specGroups: normalizeSpecGroups(record.specGroups ?? record.spec_groups),
     isMarketPrice: Boolean(record.isMarketPrice ?? record.is_market_price),
+    customerOrderable: Boolean(record.customerOrderable ?? record.customer_orderable ?? true),
   };
 }
 

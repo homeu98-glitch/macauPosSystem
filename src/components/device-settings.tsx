@@ -2181,6 +2181,24 @@ export function DeviceSettings() {
                                 />
                                 時價菜（落單時改價）
                               </label>
+                              <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
+                                <input
+                                  checked={item.customerOrderable !== false}
+                                  className="h-3.5 w-3.5 rounded border-slate-300"
+                                  onChange={(event) =>
+                                    setMenuDraft((current) => ({
+                                      ...current,
+                                      menuItems: current.menuItems.map((row) =>
+                                        row.id === item.id
+                                          ? { ...row, customerOrderable: event.target.checked }
+                                          : row,
+                                      ),
+                                    }))
+                                  }
+                                  type="checkbox"
+                                />
+                                客人可點（掃碼點餐可見）
+                              </label>
                             </td>
                             <td className="border-b border-slate-100 py-2 pr-3">
                               <select

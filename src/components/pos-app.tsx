@@ -57,6 +57,7 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
+import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
@@ -525,6 +526,33 @@ export function PosApp() {
 
     void loadRuntimeState();
   }, [offlineMode, runtimeRefreshTick, queue]);
+
+  // Kiosk 客人自點：即時訂閱 pos_orders / pos_print_jobs（Realtime，禁 polling）。
+  // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 週期拉取作 fallback。
+  const kioskStoreId = useMemo(
+    () => (authSession as { merchantId?: string } | null)?.merchantId ?? null,
+    [authSession],
+  );
+  usePosRealtime(kioskStoreId, !offlineMode, {
+    onOrderUpsert: (order) => {
+      setOrders((current) => {
+        const merged = mergeOrderLists(loadOrders(), current, [order]);
+        saveOrders(merged);
+        return merged;
+      });
+      // 堂食 dine_in_confirm 單落 draft：彈「X 枱已落單請確認」，等員工確認才落廚房
+      if (order.status === "draft" && order.tableId && order.tableId !== "counter") {
+        setToast({ tone: "info", message: `${order.tableName} 已落單，請確認` });
+      }
+    },
+    onPrintJobUpsert: (job) => {
+      setPrintJobs((current) => {
+        const next = [job, ...current.filter((p) => p.id !== job.id)];
+        savePrintJobs(next);
+        return next;
+      });
+    },
+  });
 
   const activeTable = useMemo(() => {
     if (!bootstrap) return null;

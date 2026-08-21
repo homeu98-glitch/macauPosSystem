@@ -112,6 +112,8 @@ export interface MenuItem {
   specGroups?: MenuSpecGroup[];
   /** 時價菜：落單時強制彈窗輸入當次價錢（用於海鮮 / 每日特色菜等價格浮動項） */
   isMarketPrice?: boolean;
+  /** 掃碼點餐 / Kiosk 客人可點：false 時該項唔會出現喺客人介面（預設 true） */
+  customerOrderable?: boolean;
 }
 
 export interface MenuCategory {
@@ -311,6 +313,12 @@ export interface PosLocalSettings {
   onlineOrderSettings: {
     autoAccept: boolean;
   };
+  /**
+   * Kiosk 掃碼點餐落單模式：
+   * - "auto"：堂食單落單後自動出廚房（同線上訂單 autoAccept 行為）
+   * - "dine_in_confirm"：堂食單落單後排入「待確認」，等收銀 / 樓面確認才出廚房
+   */
+  kioskKitchenMode: "auto" | "dine_in_confirm";
 }
 
 export interface OrderItem {

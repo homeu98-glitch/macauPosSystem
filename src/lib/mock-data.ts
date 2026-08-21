@@ -526,4 +526,5 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   onlineOrderSettings: {
     autoAccept: false,
   },
+  kioskKitchenMode: "auto",
 };

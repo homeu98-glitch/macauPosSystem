@@ -265,6 +265,8 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,
       ),
     },
+    kioskKitchenMode:
+      settings?.kioskKitchenMode === "dine_in_confirm" ? "dine_in_confirm" : defaultPosLocalSettings.kioskKitchenMode,
   };
 }
 
