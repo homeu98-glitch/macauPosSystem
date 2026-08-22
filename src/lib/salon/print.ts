@@ -7,6 +7,7 @@ import type { PrintJob } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { loadDeviceConfig } from "@/lib/storage";
 import {
+  isHubConfigured,
   resolveJobPrinter,
   resolvePrintJobStatus,
   sendJobToHub,
