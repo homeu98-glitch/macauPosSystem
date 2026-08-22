@@ -130,6 +130,10 @@ export function useKioskOrder() {
   const [scanStoreName, setScanStoreName] = useState<string | null>(null);
   const [fetchedBootstrap, setFetchedBootstrap] = useState<PosBootstrap | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  // 落單介面前嘅 landing gate：未「開始點餐」就顯示 landing page（唔用點餐介面做主頁）
+  const [started, setStarted] = useState(
+    () => typeof window !== "undefined" && window.sessionStorage.getItem("kiosk-started") === "1",
+  );
 
   // 手機掃碼（scanStoreId 有值）先去 backend 攞所屬店嘅真 menu（pos_bootstrap_config，
   // 與商家點餐機同一份）；kiosk 用本地 cache（唔變）。fallback 先本地 cache 再 mockBootstrap。
@@ -395,6 +399,19 @@ export function useKioskOrder() {
     router.replace("/login?mode=kiosk");
   }
 
+  // 落單介面前嘅 landing：客人按「開始點餐」先入菜單（避免一開就係點餐介面）
+  function startOrdering() {
+    setStarted(true);
+    if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-started", "1");
+  }
+
+  // kiosk 落單成功 5 秒倒數後自動返回：清走成功頁 + 重置 landing（等下一個客人重新「開始點餐」）
+  function returnToHome() {
+    setSubmittedOrder(null);
+    setStarted(false);
+    if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
+  }
+
   return {
     hydrated,
     menuLoading,
@@ -433,6 +450,9 @@ export function useKioskOrder() {
     resumedOrder,
     activeTableOrder,
     addToOrder,
+    started,
+    startOrdering,
+    returnToHome,
     submitting,
     error,
     placeOrder,

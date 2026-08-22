@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
 import { OrderItem } from "@/lib/types";
@@ -74,17 +74,43 @@ export default function OrderPage() {
     pushLine,
     changeQty,
     submittedOrder,
-    setSubmittedOrder,
     activeTableOrder,
     addToOrder,
     submitting,
     error,
     placeOrder,
     rebindStore,
+    started,
+    startOrdering,
+    returnToHome,
   } = useKioskOrder();
 
   // kiosk 專屬 UI state：設定（綁店）彈窗開關
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // kiosk 落單成功：5 秒倒數自動返回主頁（loading 狀態）
+  const submittedRef = useRef(submittedOrder);
+  submittedRef.current = submittedOrder;
+  const [returnIn, setReturnIn] = useState(0);
+  useEffect(() => {
+    if (!submittedOrder) {
+      setReturnIn(0);
+      return;
+    }
+    setReturnIn(5);
+    const id = setInterval(() => {
+      setReturnIn((n) => {
+        if (n <= 1) {
+          clearInterval(id);
+          if (submittedRef.current) returnToHome();
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submittedOrder]);
 
   // ── 載入中 / 未綁店閘門 ──
   if (!hydrated) {
@@ -113,7 +139,24 @@ export default function OrderPage() {
     );
   }
 
-  // ── 確認頁 ──
+  // ── Landing：未「開始點餐」先顯示 landing page（唔用點餐介面做主頁）──
+  if (!started) {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-6 text-8xl">🍽️</div>
+        <h1 className="mb-2 text-3xl font-bold text-slate-900">{displayStoreName}</h1>
+        <p className="mb-10 text-base text-slate-500">歡迎光臨，點擊開始為您點餐</p>
+        <button
+          onClick={startOrdering}
+          className="w-full max-w-xs rounded-2xl bg-orange-500 py-5 text-2xl font-semibold text-white active:scale-[0.98]"
+        >
+          開始點餐
+        </button>
+      </main>
+    );
+  }
+
+  // ── 確認頁：落單成功後顯示 loading + 5 秒倒數，自動返回主頁 ──
   if (submittedOrder) {
     const isDineIn = mode === "dine_in";
     return (
@@ -130,33 +173,33 @@ export default function OrderPage() {
         </div>
         <p className="mt-5 text-lg text-slate-600">{t("payAtCounter")}</p>
 
-        {/* 堂食：顯示本枱已落單明細 + 加單；快餐：落單後唔准加單，只可再下一張新單 */}
-        {isDineIn ? (
-          <>
-            <div className="mt-5 w-full text-left">
-              <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
-            </div>
+        {/* 堂食：顯示本枱已落單明細（5 秒內可加單，否則自動返回主頁） */}
+        {isDineIn && (
+          <div className="mt-5 w-full text-left">
+            <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
+          </div>
+        )}
+
+        {/* 5 秒倒數自動返回主頁（loading 狀態） */}
+        <div className="mt-6 flex w-full flex-col items-center">
+          <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-slate-200">
+            <div
+              className="h-full bg-orange-500 transition-[width] duration-1000 ease-linear"
+              style={{ width: `${((5 - returnIn) / 5) * 100}%` }}
+            />
+          </div>
+          <div className="mt-3 text-sm text-slate-500">
+            {returnIn > 0 ? `${returnIn} 秒後自動返回主頁…` : t("submitting")}
+          </div>
+          {isDineIn && (
             <button
               onClick={addToOrder}
               className="mt-4 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
             >
               {t("addOrder")}
             </button>
-            <button
-              onClick={() => setSubmittedOrder(null)}
-              className="mt-2 w-full py-2.5 text-sm text-slate-400"
-            >
-              {t("done")}
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={() => setSubmittedOrder(null)}
-            className="mt-7 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
-          >
-            {t("newOrder")}
-          </button>
-        )}
+          )}
+        </div>
       </main>
     );
   }

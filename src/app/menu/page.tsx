@@ -71,12 +71,14 @@ export default function MenuPage() {
     pushLine,
     changeQty,
     submittedOrder,
-    setSubmittedOrder,
     activeTableOrder,
     addToOrder,
     submitting,
     error,
     placeOrder,
+    started,
+    startOrdering,
+    returnToHome,
   } = useKioskOrder();
 
   // 手機專屬 UI state
@@ -118,7 +120,24 @@ export default function MenuPage() {
     );
   }
 
-  // ── 落單成功確認頁 ──
+  // ── Landing：未「開始點餐」先顯示 landing page（唔用點餐介面做主頁）──
+  if (!started) {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+        <div className="mb-6 text-7xl">🍽️</div>
+        <h1 className="mb-2 text-2xl font-bold text-stone-900">{displayStoreName}</h1>
+        <p className="mb-8 text-sm text-stone-500">掃描枱上 QR，手機輕鬆點餐</p>
+        <button
+          onClick={startOrdering}
+          className="w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
+        >
+          開始點餐
+        </button>
+      </main>
+    );
+  }
+
+  // ── 落單成功確認頁：顯示下完單內容 + 加單（返回/完成唔會再顯示完整餐牌）──
   if (submittedOrder) {
     const isDineIn = mode === "dine_in";
     return (
@@ -134,39 +153,28 @@ export default function MenuPage() {
           </div>
         </div>
 
-        {/* 堂食：顯示本枱已落單明細 + 加單；快餐：落單後唔准加單，只可再下一張新單 */}
-        {isDineIn ? (
-          <>
-            <div className="mt-5 w-full text-left">
-              <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
-            </div>
-            <button
-              onClick={addToOrder}
-              className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
-            >
-              {t("addOrder")}
-            </button>
-            <button
-              onClick={() => {
-                setSubmittedOrder(null);
-                setCartOpen(false);
-              }}
-              className="mt-2 w-full py-2.5 text-sm text-stone-400"
-            >
-              {t("done")}
-            </button>
-          </>
-        ) : (
+        {/* 落單內容（本單明細）：所有模式都顯示，按返回只會見到呢個 + 加單 */}
+        <div className="mt-5 w-full text-left">
+          <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
+        </div>
+
+        {/* 加單：堂食先准（手機掃碼 = 枱號 → dine_in，故一定顯示）；快餐模式唔准加單 */}
+        {isDineIn && (
           <button
-            onClick={() => {
-              setSubmittedOrder(null);
-              setCartOpen(false);
-            }}
-            className="mt-6 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
+            onClick={addToOrder}
+            className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
           >
-            {t("newOrder")}
+            {t("addOrder")}
           </button>
         )}
+
+        {/* 完成：返回 landing（唔會再顯示完整餐牌，下次落單先「開始點餐」） */}
+        <button
+          onClick={returnToHome}
+          className="mt-2 w-full py-2.5 text-sm text-stone-400"
+        >
+          {t("done")}
+        </button>
       </main>
     );
   }
