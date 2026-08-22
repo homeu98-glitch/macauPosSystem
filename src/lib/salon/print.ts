@@ -12,6 +12,8 @@ import {
   sendJobToHub,
 } from "@/lib/print-bridge/hub";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
+import { getRelayTransport } from "@/lib/print-bridge/relay-config";
+import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
 import {
   loadSalonPrintJobs,
   saveSalonPrintJobs,
@@ -22,17 +24,46 @@ import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
 
 /**
  * 統一 dispatch 入口：native bridge（PosNative.printJob，完整 ESC/POS 格式）優先，
- * 唔得就 fallback Printer Hub HTTP 純文字。餐飲同 salon 共用同一條基建。
+ * 唔得就桌面 Companion（localhost HTTP，見 docs/47），再 fallback Printer Hub HTTP（LAN 直打），
+ * 最後經 Cloud Print Relay（互聯網備援，見 docs/46）。
+ * 餐飲同 salon 共用同一條基建（見 dispatch.ts）。
  */
 async function dispatchPrint(
   job: PrintJob,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const printer = resolveJobPrinter(job);
-  if (printer && printer.ipAddress && isNativeBridgeAvailable()) {
+  if (!printer) {
+    return { ok: false, error: `搵唔到對應打印機（printerGroup=${job.printerGroup}）` };
+  }
+  // 1) Native bridge（Android APK WebView）：native 側自己決定 LAN 直打 or relay
+  if (isNativeBridgeAvailable()) {
     const kind = printer.role === "receipt" ? "receipt" : "kitchen";
     const storeName = loadSalonBootstrap()?.storeName;
     return dispatchJobToNative(job, { printer, kind, storeName });
   }
+  // 2) 桌面 Companion（localhost HTTP）：瀏覽器開嘅 POS 喺桌面打到 LAN/USB/BT（見 docs/47）
+  const companion = getCompanionTransport();
+  if (companion) {
+    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+    const storeName = loadSalonBootstrap()?.storeName;
+    const res = await companion.send(job, printer, { kind, storeName });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: res.error || "companion 打印失敗" };
+  }
+  // 3) Hub HTTP（LAN 直打，經店內打印機 IP）
+  if (isHubConfigured() && printer.ipAddress) {
+    return sendJobToHub(job);
+  }
+  // 4) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
+  const relay = getRelayTransport();
+  if (relay) {
+    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+    const storeName = loadSalonBootstrap()?.storeName;
+    const res = await relay.send(job, printer, { kind, storeName });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: res.error || "relay 打印失敗" };
+  }
+  // 最舊 fallback（無 relay / 無 companion）：保持舊 Hub 行為
   return sendJobToHub(job);
 }
 

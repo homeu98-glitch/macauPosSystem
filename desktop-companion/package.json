@@ -1,0 +1,16 @@
+{
+  "name": "macau-pos-desktop-companion",
+  "version": "0.1.0",
+  "description": "Macau POS 桌面 Companion 代理：localhost HTTP，俾瀏覽器開嘅 POS 經 OS 權限打到 LAN/USB/BT 打印機（見 docs/47）",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -56,6 +56,8 @@ interface FieldDef {
   options?: Option[];
   placeholder?: string;
   help?: string;
+  /** 可選：只喺 draft 符合條件時顯示（例如 USB/BT 欄位只喺對應 connectionType 出現） */
+  showIf?: (draft: Record<string, unknown>) => boolean;
 }
 
 function labelOf(options: Option[] | undefined, value: string): string {
@@ -108,7 +110,9 @@ function FormModal({
       >
         <h3 className="mb-4 text-base font-bold text-slate-900">{title}</h3>
         <div className="grid gap-3">
-          {fields.map((f) => (
+          {fields.map((f) => {
+            if (f.showIf && !f.showIf(draft)) return null;
+            return (
             <div key={f.key}>
               <div className="mb-1 text-xs font-medium text-slate-500">{f.label}</div>
               {f.type === "text" || f.type === "number" || f.type === "color" ? (
@@ -170,7 +174,8 @@ function FormModal({
               ) : null}
               {f.help ? <div className="mt-1 text-[11px] text-slate-400">{f.help}</div> : null}
             </div>
-          ))}
+            );
+          })}
           {extraEditor ? <div className="border-t border-slate-100 pt-3">{extraEditor(draft, set)}</div> : null}
         </div>
         <div className="mt-5 flex gap-2">
@@ -427,7 +432,9 @@ const PRINTER_ROLE_OPTS: Option[] = [
 ];
 
 const PRINTER_CONN_OPTS: Option[] = [
-  { value: "lan", label: "LAN（經 Printer Hub 直打）" },
+  { value: "lan", label: "LAN（網絡打印機）" },
+  { value: "usb", label: "USB（直連打印機）" },
+  { value: "bluetooth", label: "Bluetooth（藍牙打印機）" },
 ];
 
 const TABS = [
@@ -763,8 +770,12 @@ export function Settings() {
     { key: "name", label: "印表機名稱", type: "text", placeholder: "例如 收銀機" },
     { key: "role", label: "角色", type: "select", options: PRINTER_ROLE_OPTS },
     { key: "connectionType", label: "連線方式", type: "select", options: PRINTER_CONN_OPTS },
-    { key: "ipAddress", label: "IP 位址", type: "text", placeholder: "LAN 模式填寫" },
-    { key: "lanPort", label: "Port", type: "number" },
+    { key: "ipAddress", label: "IP 位址", type: "text", placeholder: "LAN 模式填寫", showIf: (d) => d.connectionType === "lan" },
+    { key: "lanPort", label: "Port", type: "number", showIf: (d) => d.connectionType === "lan" },
+    { key: "usbVendorId", label: "USB Vendor ID", type: "text", placeholder: "例如 0x1234", showIf: (d) => d.connectionType === "usb", help: "16 進制，例如 0x1234；Android USB 打印機設定／Windows 裝置管理員查" },
+    { key: "usbProductId", label: "USB Product ID", type: "text", placeholder: "例如 0x5678", showIf: (d) => d.connectionType === "usb" },
+    { key: "bluetoothAddress", label: "藍牙地址 (MAC)", type: "text", placeholder: "例如 AA:BB:CC:DD:EE:FF", showIf: (d) => d.connectionType === "bluetooth" },
+    { key: "bluetoothName", label: "藍牙裝置名", type: "text", placeholder: "例如 POS-Printer", showIf: (d) => d.connectionType === "bluetooth" },
     { key: "enabled", label: "啟用", type: "toggle" },
   ];
   const productFields: FieldDef[] = [
@@ -1043,7 +1054,7 @@ export function Settings() {
               activeLabels={["啟用", "停用"]}
               renderSummary={(p) => ({
                 title: p.name || "(未命名)",
-                subtitle: `${labelOf(PRINTER_ROLE_OPTS, p.role)}${p.ipAddress ? " · " + p.ipAddress : ""}`,
+                subtitle: `${labelOf(PRINTER_ROLE_OPTS, p.role)} · ${labelOf(PRINTER_CONN_OPTS, p.connectionType)}${p.ipAddress ? " · " + p.ipAddress : ""}`,
               })}
               onUpsert={upsertPrinter}
               onDelete={deletePrinter}

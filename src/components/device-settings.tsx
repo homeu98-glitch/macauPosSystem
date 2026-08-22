@@ -78,6 +78,19 @@ export function DeviceSettings() {
   const [manualName, setManualName] = useState("");
   const [manualRole, setManualRole] = useState<DevicePrinterConfig["role"]>("zone");
   const [manualZoneId, setManualZoneId] = useState<string>(localSettings.printZones[0]?.id ?? "kitchen");
+  const [manualConn, setManualConn] = useState<DevicePrinterConfig["connectionType"]>("lan");
+  const [manualUsbVendor, setManualUsbVendor] = useState("");
+  const [manualUsbProduct, setManualUsbProduct] = useState("");
+  const [manualBtAddress, setManualBtAddress] = useState("");
+  const [manualBtName, setManualBtName] = useState("");
+  // ── 桌面 Companion 代理配對（localhost HTTP，見 docs/47）──
+  const [companionUrl, setCompanionUrl] = useState(() =>
+    typeof window !== "undefined" ? window.localStorage.getItem("macau-pos-companion-url") ?? "" : "",
+  );
+  const [companionToken, setCompanionToken] = useState(() =>
+    typeof window !== "undefined" ? window.localStorage.getItem("macau-pos-companion-token") ?? "" : "",
+  );
+  const [companionHealth, setCompanionHealth] = useState<string>("");
   const [hubSubnet, setHubSubnet] = useState<string>("");
   const [hubSubnetInput, setHubSubnetInput] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -484,6 +497,33 @@ export function DeviceSettings() {
     setHubStatusText(isHubConfigured() ? `已記住 http://${hubIp}:${hubPort || "8787"}` : "（未填 IP）");
   }
 
+  // 桌面 Companion 代理：寫入 localhost URL + token（dispatch 會經 CompanionTransport 出單，見 docs/47）
+  function saveCompanion() {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("macau-pos-companion-url", companionUrl.trim());
+    window.localStorage.setItem("macau-pos-companion-token", companionToken.trim());
+    setCompanionHealth(
+      companionUrl.trim() ? "已儲存，落單會經 localhost Companion 出單" : "已清空，將唔使用 Companion",
+    );
+  }
+
+  async function testCompanion() {
+    if (!companionUrl.trim()) {
+      setCompanionHealth("請先填 Companion 地址");
+      return;
+    }
+    try {
+      const res = await fetch(`${companionUrl.trim().replace(/\/+$/, "")}/api/health`, {
+        headers: companionToken.trim() ? { "x-companion-token": companionToken.trim() } : {},
+      });
+      const data = (await res.json()) as { ok?: boolean; version?: string };
+      if (data && data.ok === true) setCompanionHealth(`Companion 在線 · v${data.version ?? "?"}`);
+      else setCompanionHealth(`Companion 回應異常：${res.status}`);
+    } catch (e) {
+      setCompanionHealth(`連唔到 Companion：${e instanceof Error ? e.message : "fetch failed"}`);
+    }
+  }
+
   async function refreshHub() {
     if (!isHubConfigured()) {
       setHubDevices([]);
@@ -546,20 +586,34 @@ export function DeviceSettings() {
   }
 
   async function handleManualAdd() {
-    if (!manualIp.trim()) {
-      setStatus("請填寫打印機 IP");
-      return;
+    if (manualConn === "lan") {
+      if (!manualIp.trim()) {
+        setStatus("請填寫打印機 IP");
+        return;
+      }
+    } else if (manualConn === "usb") {
+      if (!manualUsbVendor.trim()) {
+        setStatus("請填寫 USB Vendor ID（例如 0x1234）");
+        return;
+      }
+    } else if (manualConn === "bluetooth") {
+      if (!manualBtAddress.trim()) {
+        setStatus("請填寫藍牙地址 (MAC，例如 AA:BB:CC:DD:EE:FF)");
+        return;
+      }
     }
     // 1) 寫入 APK（讓 Hub 認得呢部機；service 只係 Hub 端 metadata，路由靠 IP/role/zoneId）
     const svcForHub: HubServiceId = manualRole === "receipt" ? "front" : "kitchen";
-    const r = await manualAddHubPrinter(manualIp.trim(), manualName.trim(), svcForHub);
-    if (!r.ok) {
-      setStatus(`Hub 添加失敗：${r.error ?? ""}`);
-      return;
-    }
-    setHubDevices(r.devices ?? []);
-    // 2) 同時寫入本機打印機列表（master）
     const ip = manualIp.trim();
+    if (manualConn === "lan") {
+      const r = await manualAddHubPrinter(ip, manualName.trim(), svcForHub);
+      if (!r.ok) {
+        setStatus(`Hub 添加失敗：${r.error ?? ""}`);
+        return;
+      }
+      setHubDevices(r.devices ?? []);
+    }
+    // 2) 同時寫入本機打印機列表（master）
     if (config.printers.some((p) => p.ipAddress && p.ipAddress.trim() === ip)) {
       setStatus(`打印機 ${manualName || ip}（${ip}）已經喺列表入面`);
     } else {
@@ -569,13 +623,17 @@ export function DeviceSettings() {
         id: uid("printer"),
         role,
         zoneId,
-        connectionType: "lan",
-        name: manualName.trim() || `打印機 ${ip}`,
+        connectionType: manualConn,
+        name: manualName.trim() || `打印機 ${ip || manualConn.toUpperCase()}`,
         model: "",
         paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
-        ipAddress: ip,
+        ipAddress: manualConn === "lan" ? ip : undefined,
         lanPort: 9100,
         charset: "gb18030",
+        usbVendorId: manualConn === "usb" ? manualUsbVendor.trim() : undefined,
+        usbProductId: manualConn === "usb" ? manualUsbProduct.trim() : undefined,
+        bluetoothAddress: manualConn === "bluetooth" ? manualBtAddress.trim() : undefined,
+        bluetoothName: manualConn === "bluetooth" ? manualBtName.trim() : undefined,
         enabled: true,
       };
       setConfig((current) => ({
@@ -587,6 +645,10 @@ export function DeviceSettings() {
     }
     setManualIp("");
     setManualName("");
+    setManualUsbVendor("");
+    setManualUsbProduct("");
+    setManualBtAddress("");
+    setManualBtName("");
   }
 
   async function handleRemove(key: string) {
@@ -937,12 +999,53 @@ export function DeviceSettings() {
                 <div className="mt-3 grid gap-1">
                   <span className="text-xs font-semibold text-slate-600">手動添加打印機（同時加入列表）</span>
                   <div className="flex flex-wrap gap-2">
-                    <input
-                      className="min-w-[120px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                      placeholder="IP"
-                      value={manualIp}
-                      onChange={(e) => setManualIp(e.target.value)}
-                    />
+                    <select
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                      value={manualConn}
+                      onChange={(e) => setManualConn(e.target.value as DevicePrinterConfig["connectionType"])}
+                    >
+                      <option value="lan">LAN</option>
+                      <option value="usb">USB</option>
+                      <option value="bluetooth">藍牙</option>
+                    </select>
+                    {manualConn === "lan" ? (
+                      <input
+                        className="min-w-[120px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                        placeholder="IP"
+                        value={manualIp}
+                        onChange={(e) => setManualIp(e.target.value)}
+                      />
+                    ) : manualConn === "usb" ? (
+                      <>
+                        <input
+                          className="min-w-[110px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                          placeholder="USB VID（0x1234）"
+                          value={manualUsbVendor}
+                          onChange={(e) => setManualUsbVendor(e.target.value)}
+                        />
+                        <input
+                          className="min-w-[110px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                          placeholder="USB PID（0x5678）"
+                          value={manualUsbProduct}
+                          onChange={(e) => setManualUsbProduct(e.target.value)}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <input
+                          className="min-w-[140px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                          placeholder="BT MAC（AA:BB:…）"
+                          value={manualBtAddress}
+                          onChange={(e) => setManualBtAddress(e.target.value)}
+                        />
+                        <input
+                          className="min-w-[100px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                          placeholder="BT 名稱"
+                          value={manualBtName}
+                          onChange={(e) => setManualBtName(e.target.value)}
+                        />
+                      </>
+                    )}
                     <input
                       className="min-w-[100px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
                       placeholder="名稱"
@@ -989,6 +1092,54 @@ export function DeviceSettings() {
                   清除 Hub 綁定
                 </button>
               </div>
+            </div>
+
+            <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
+              <div className="font-semibold text-slate-900">桌面 Companion 代理（localhost）</div>
+              <p className="mt-1 text-xs text-slate-500">
+                喺桌面電腦（Windows/macOS/Linux）跑 <code>desktop-companion/server.mjs</code>
+                （見 docs/47），POS 網頁經 <code>http://127.0.0.1:9311</code> 交單，由 OS 權限打到 LAN / USB / BT
+                打印機。適用於「用瀏覽器開 POS」而唔係 Sunmi APK 嘅場景。
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                  <span className="text-xs text-slate-500">Companion 地址</span>
+                  <input
+                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    onChange={(e) => setCompanionUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:9311"
+                    value={companionUrl}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                  <span className="text-xs text-slate-500">配對 Token（可留空）</span>
+                  <input
+                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    onChange={(e) => setCompanionToken(e.target.value)}
+                    placeholder="與 Companion 配置一致"
+                    value={companionToken}
+                  />
+                </label>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                  onClick={saveCompanion}
+                >
+                  儲存配對
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={testCompanion}
+                >
+                  測試連線
+                </button>
+              </div>
+              {companionHealth ? (
+                <p className="mt-2 text-xs text-slate-500">{companionHealth}</p>
+              ) : null}
             </div>
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
@@ -1170,22 +1321,26 @@ export function DeviceSettings() {
                           <div className="flex items-center gap-2">
                             <span
                               title={
-                                printer.ipAddress &&
-                                hubDevices.some(
-                                  (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
-                                )
-                                  ? "Hub 已連線"
-                                  : printer.ipAddress
-                                    ? "未連線 Hub / 未在線"
-                                    : "未設定 IP"
+                                printer.connectionType !== "lan"
+                                  ? "USB / BT：由 Native Agent 經 OS 直連"
+                                  : printer.ipAddress &&
+                                      hubDevices.some(
+                                        (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
+                                      )
+                                    ? "Hub 已連線"
+                                    : printer.ipAddress
+                                      ? "未連線 Hub / 未在線"
+                                      : "未設定 IP"
                               }
                               className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
-                                printer.ipAddress &&
-                                hubDevices.some(
-                                  (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
-                                )
-                                  ? "bg-emerald-500"
-                                  : "bg-slate-300"
+                                printer.connectionType !== "lan"
+                                  ? "bg-slate-400"
+                                  : printer.ipAddress &&
+                                      hubDevices.some(
+                                        (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
+                                      )
+                                    ? "bg-emerald-500"
+                                    : "bg-slate-300"
                               }`}
                             />
                             <div className="truncate text-sm font-semibold text-slate-900">{printer.name}</div>
@@ -1259,12 +1414,22 @@ export function DeviceSettings() {
                             收銀台只會指定 1 台收據打印機
                           </div>
                         )}
-                        <div className="grid gap-1 text-sm font-semibold text-slate-700">
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">連接方式</span>
-                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                            LAN（經 Printer Hub 直打）
-                          </div>
-                        </div>
+                          <select
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) =>
+                              updatePrinter(printer.id, {
+                                connectionType: event.target.value as DevicePrinterConfig["connectionType"],
+                              })
+                            }
+                            value={printer.connectionType}
+                          >
+                            <option value="lan">LAN（網絡打印機）</option>
+                            <option value="usb">USB（直連打印機）</option>
+                            <option value="bluetooth">Bluetooth（藍牙打印機）</option>
+                          </select>
+                        </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">打印機型號</span>
                           <input
@@ -1288,27 +1453,73 @@ export function DeviceSettings() {
                             <option value="100x75mm">100x75mm 標籤</option>
                           </select>
                         </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">IP 地址（LAN）</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
-                            placeholder="192.168.1.110"
-                            value={printer.ipAddress ?? ""}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">LAN 端口</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            inputMode="numeric"
-                            onChange={(event) =>
-                              updatePrinter(printer.id, { lanPort: Number(event.target.value) || 9100 })
-                            }
-                            placeholder="9100"
-                            value={String(printer.lanPort ?? 9100)}
-                          />
-                        </label>
+                        {printer.connectionType === "lan" ? (
+                          <>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">IP 地址（LAN）</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
+                                placeholder="192.168.1.110"
+                                value={printer.ipAddress ?? ""}
+                              />
+                            </label>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">LAN 端口</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                inputMode="numeric"
+                                onChange={(event) =>
+                                  updatePrinter(printer.id, { lanPort: Number(event.target.value) || 9100 })
+                                }
+                                placeholder="9100"
+                                value={String(printer.lanPort ?? 9100)}
+                              />
+                            </label>
+                          </>
+                        ) : printer.connectionType === "usb" ? (
+                          <>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">USB Vendor ID</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) => updatePrinter(printer.id, { usbVendorId: event.target.value || undefined })}
+                                placeholder="例如 0x1234"
+                                value={printer.usbVendorId ?? ""}
+                              />
+                            </label>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">USB Product ID</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) => updatePrinter(printer.id, { usbProductId: event.target.value || undefined })}
+                                placeholder="例如 0x5678"
+                                value={printer.usbProductId ?? ""}
+                              />
+                            </label>
+                          </>
+                        ) : (
+                          <>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">藍牙地址 (MAC)</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) => updatePrinter(printer.id, { bluetoothAddress: event.target.value || undefined })}
+                                placeholder="例如 AA:BB:CC:DD:EE:FF"
+                                value={printer.bluetoothAddress ?? ""}
+                              />
+                            </label>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">藍牙裝置名</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) => updatePrinter(printer.id, { bluetoothName: event.target.value || undefined })}
+                                placeholder="例如 POS-Printer"
+                                value={printer.bluetoothName ?? ""}
+                              />
+                            </label>
+                          </>
+                        )}
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">ESC/POS 跨碼（中文字集）</span>
                           <select

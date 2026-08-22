@@ -482,6 +482,8 @@ export interface PrintSendResult {
   /** 已 queue 但未出單（終端 local agent 接受咗） */
   queued?: boolean;
   error?: string;
+  /** 錯誤碼（同 window.__posNativePrintResult 嘅 code，見 docs/45 §5） */
+  code?: string;
   /** 非同步結果會經 native bridge / relay 回傳呢個 id（對應 PrintJob.id） */
   ticketId?: string;
 }
