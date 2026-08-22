@@ -7,7 +7,11 @@ function resolveSupabaseUrl() {
 }
 
 function resolveAnonKey() {
-  return process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? null;
+  // 只可以用 POS 專案自己嘅 anon key；唔可以 fallback 去 Ledger 嘅 NEXT_PUBLIC key，
+  // 否則會靜默連去錯項目（Ledger）用 anon key 寫 pos_*/salon_* 表而無聲失敗。
+  // 伺服器端落單必須用 SUPABASE_SERVICE_ROLE_KEY（或 SUPABASE_SERVICE_KEY / SUPABASE_ANON_KEY，
+  // 三者都係 POS 專案嘅 key，唔係 Ledger 嘅 NEXT_PUBLIC 公開 key）。
+  return process.env.SUPABASE_ANON_KEY ?? null;
 }
 
 function resolveServiceRoleKey() {
