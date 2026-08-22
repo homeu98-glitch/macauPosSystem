@@ -514,57 +514,61 @@ export function PosApp() {
     clearLegacyMembersCache();
   }, []);
 
+  // 收銀 mount / 重連 / queue 清空時一次過 pull 現有 state（event-driven，非 polling）
   useEffect(() => {
     if (offlineMode) return;
     // 方案B：若本機仍有待同步事件，先不要拉取後台狀態，避免後台舊資料覆蓋本機即時狀態。
     if (queue.some((event) => event.status !== "synced")) return;
-    async function loadRuntimeState() {
-      try {
-        const merchantId = loadAuthSession()?.merchantId;
-        const stateUrl = merchantId
-          ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}`
-          : "/api/pos/state";
-        const response = await fetch(stateUrl);
-        const payload = (await response.json()) as {
-          orders?: PosOrder[];
-          queue?: QueueEvent[];
-          printJobs?: PrintJob[];
-          localSettings?: PosLocalSettings;
-          deviceConfig?: DeviceConfig | null;
-        };
-
-        if (Array.isArray(payload.orders)) {
-          // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
-          setOrders((current) => {
-            const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
-            saveOrders(merged);
-            return merged;
-          });
-        }
-        if (Array.isArray(payload.queue)) {
-          setQueue(payload.queue);
-          saveQueue(payload.queue);
-        }
-        if (Array.isArray(payload.printJobs)) {
-          setPrintJobs(payload.printJobs);
-          savePrintJobs(payload.printJobs);
-        }
-        if (payload.localSettings) {
-          savePosLocalSettings(payload.localSettings);
-        }
-        if (payload.deviceConfig) {
-          saveDeviceConfig(payload.deviceConfig);
-        }
-      } catch {
-        // ignore
-      }
-    }
-
     void loadRuntimeState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, runtimeRefreshTick, queue]);
 
+  // 一次過 backfill 現有 state（realtime 唔 backfill 舊 row；realtime (re)subscribe 時 call）。
+  // 以 localStorage 為底 merge，唔會 overwrite 本機即時狀態。component scope 定義俾 usePosRealtime onResubscribed 共用。
+  async function loadRuntimeState() {
+    try {
+      const merchantId = loadAuthSession()?.merchantId;
+      const stateUrl = merchantId
+        ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}`
+        : "/api/pos/state";
+      const response = await fetch(stateUrl);
+      const payload = (await response.json()) as {
+        orders?: PosOrder[];
+        queue?: QueueEvent[];
+        printJobs?: PrintJob[];
+        localSettings?: PosLocalSettings;
+        deviceConfig?: DeviceConfig | null;
+      };
+
+      if (Array.isArray(payload.orders)) {
+        // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
+        setOrders((current) => {
+          const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
+          saveOrders(merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(payload.queue)) {
+        setQueue(payload.queue);
+        saveQueue(payload.queue);
+      }
+      if (Array.isArray(payload.printJobs)) {
+        setPrintJobs(payload.printJobs);
+        savePrintJobs(payload.printJobs);
+      }
+      if (payload.localSettings) {
+        savePosLocalSettings(payload.localSettings);
+      }
+      if (payload.deviceConfig) {
+        saveDeviceConfig(payload.deviceConfig);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // Kiosk 客人自點：即時訂閱 pos_orders / pos_print_jobs（Realtime，禁 polling）。
-  // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 週期拉取作 fallback。
+  // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 只喺 mount / (re)subscribe 一次過 backfill（event-driven，非週期）。
   const kioskStoreId = useMemo(
     () => (authSession as { merchantId?: string } | null)?.merchantId ?? null,
     [authSession],
@@ -587,6 +591,11 @@ export function PosApp() {
         savePrintJobs(next);
         return next;
       });
+    },
+    // realtime (re)subscribe 成功 → 一次過 backfill 現有 open 單（event-driven，非 polling）。
+    // 補返 realtime 唔 backfill 舊 row 嘅缺口；visibilitychange / CHANNEL_ERROR 重連都會觸發。
+    onResubscribed: () => {
+      void loadRuntimeState();
     },
   });
 
@@ -694,30 +703,10 @@ export function PosApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, pendingQueue]);
 
-  // Kiosk 客人單可見性 fallback：realtime 靜默失敗（anon RLS / Realtime 未啟用）時，
-  // 週期拉取 pos_orders（server 端 service role，繞過 anon RLS）合併入本機 + localStorage，
-  // 確保收銀一定見到客人掃碼落嘅單（搭配上一輪 storeId 修正）。
-  useEffect(() => {
-    if (offlineMode) return;
-    const merchantId = loadAuthSession()?.merchantId;
-    if (!merchantId) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(merchantId)}`);
-        const payload = (await response.json()) as { orders?: PosOrder[] };
-        if (Array.isArray(payload.orders)) {
-          setOrders((current) => {
-            const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
-            saveOrders(merged);
-            return merged;
-          });
-        }
-      } catch {
-        // ignore
-      }
-    }, 15_000);
-    return () => window.clearInterval(timer);
-  }, [offlineMode]);
+  // ⚠️ 即時架構（用家要求：禁用 polling）：收銀見 kiosk 單唯一靠 Supabase Realtime 推。
+  // 冇任何 setInterval 輪詢。realtime (re)subscribe 成功後靠 onResubscribed 一次過 backfill
+  // 現有 open 單（event-driven，非週期性），之後新單全靠 postgres_changes 推入。
+  // → 前置條件：pos_orders 必須加落 supabase_realtime publication + anon read RLS（見 0011 / 下方 SQL）。
   const recentCompletedOrders = useMemo(() => {
     if (!isQuickMode) return [];
     const threshold = nowMs - quickCompletedMinutes * 60 * 1000;
