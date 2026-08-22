@@ -91,6 +91,8 @@ export default function OrderPage() {
   // kiosk 落單成功：5 秒倒數自動返回主頁（loading 狀態）
   const submittedRef = useRef(submittedOrder);
   submittedRef.current = submittedOrder;
+  const returnHomeRef = useRef(returnToHome);
+  returnHomeRef.current = returnToHome;
   const [returnIn, setReturnIn] = useState(0);
   useEffect(() => {
     if (!submittedOrder) {
@@ -111,6 +113,24 @@ export default function OrderPage() {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [submittedOrder]);
+
+  // kiosk 閒置 1 分鐘自動返回 landing（任何操作重置計時）
+  useEffect(() => {
+    if (!started) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => returnHomeRef.current(), 60_000);
+    };
+    const events = ["mousemove", "mousedown", "touchstart", "keydown", "scroll"];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [started]);
 
   // ── 載入中 / 未綁店閘門 ──
   if (!hydrated) {

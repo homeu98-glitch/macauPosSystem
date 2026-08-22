@@ -79,6 +79,7 @@ export default function MenuPage() {
     started,
     startOrdering,
     returnToHome,
+    ordering,
   } = useKioskOrder();
 
   // 手機專屬 UI state
@@ -169,6 +170,39 @@ export default function MenuPage() {
         )}
 
         {/* 完成：返回 landing（唔會再顯示完整餐牌，下次落單先「開始點餐」） */}
+        <button
+          onClick={returnToHome}
+          className="mt-2 w-full py-2.5 text-sm text-stone-400"
+        >
+          {t("done")}
+        </button>
+      </main>
+    );
+  }
+
+  // ── 已落單枱「明細」介面（鎖定餐牌，必須按加單先入點餐）──
+  if (activeTableOrder && !ordering) {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+        <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 text-5xl">🧾</div>
+        <h1 className="mb-1 text-2xl font-bold text-stone-900">已落單</h1>
+        <p className="mb-6 text-sm text-stone-500">如需加點，請按「加單」進入點餐</p>
+        <div className="w-full rounded-3xl bg-white p-6 shadow-sm">
+          <div className="mb-1 text-xs text-stone-400">{t("orderNo")}</div>
+          <div className="mb-4 text-4xl font-extrabold tracking-tight text-stone-900">{activeTableOrder.localOrderNo}</div>
+          <div className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
+            {t("dineIn")} · {t("table")} {tableName}
+          </div>
+        </div>
+        <div className="mt-5 w-full text-left">
+          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
+        </div>
+        <button
+          onClick={addToOrder}
+          className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
+        >
+          {t("addOrder")}
+        </button>
         <button
           onClick={returnToHome}
           className="mt-2 w-full py-2.5 text-sm text-stone-400"

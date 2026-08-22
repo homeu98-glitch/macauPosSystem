@@ -134,6 +134,8 @@ export function useKioskOrder() {
   const [started, setStarted] = useState(
     () => typeof window !== "undefined" && window.sessionStorage.getItem("kiosk-started") === "1",
   );
+  // 手機掃碼「已落單枱」鎖定：未按加單前唔開餐牌，只顯示本枱明細
+  const [ordering, setOrdering] = useState(false);
 
   // 手機掃碼（scanStoreId 有值）先去 backend 攞所屬店嘅真 menu（pos_bootstrap_config，
   // 與商家點餐機同一份）；kiosk 用本地 cache（唔變）。fallback 先本地 cache 再 mockBootstrap。
@@ -361,6 +363,7 @@ export function useKioskOrder() {
       // dine_in 保留本枱單（顯示已落單明細 + 加單）；quick 模式落單後清走，唔畀加單
       setTableOrder(mode === "dine_in" ? order : null);
       setOrderNote("");
+      setOrdering(false); // 落完單返去「明細」介面（鎖定餐牌）
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -391,6 +394,7 @@ export function useKioskOrder() {
     if (tableOrder.orderNote) setOrderNote(tableOrder.orderNote);
     setResumedOrder(tableOrder); // 下次 placeOrder 重用同一 id → ORDER_UPDATED
     setSubmittedOrder(null); // 返去 menu 繼續加菜
+    setOrdering(true); // 解鎖餐牌（進入點餐介面）
   }
 
   function rebindStore() {
@@ -402,6 +406,7 @@ export function useKioskOrder() {
   // 落單介面前嘅 landing：客人按「開始點餐」先入菜單（避免一開就係點餐介面）
   function startOrdering() {
     setStarted(true);
+    setOrdering(false); // 入餐牌前重置鎖定（無已落單枱 → 直接點餐；有 → 見明細）
     if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-started", "1");
   }
 
@@ -409,6 +414,7 @@ export function useKioskOrder() {
   function returnToHome() {
     setSubmittedOrder(null);
     setStarted(false);
+    setOrdering(false);
     if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
   }
 
@@ -453,6 +459,7 @@ export function useKioskOrder() {
     started,
     startOrdering,
     returnToHome,
+    ordering,
     submitting,
     error,
     placeOrder,
