@@ -68,11 +68,19 @@ export async function dispatchJobToNative(
       lanPort: opts.printer.lanPort ?? 9100,
       paperSize: opts.printer.paperSize ?? "",
       charset: opts.printer.charset ?? "gb18030",
+      // 雙路徑 contract（Phase 0）：USB / Bluetooth 連接識別
+      usbVendorId: opts.printer.usbVendorId ?? "",
+      usbProductId: opts.printer.usbProductId ?? "",
+      bluetoothAddress: opts.printer.bluetoothAddress ?? "",
+      bluetoothName: opts.printer.bluetoothName ?? "",
     },
     kind: opts.kind,
     storeName: opts.storeName ?? "",
     paymentMethod: opts.paymentMethod ?? "",
     total: typeof opts.total === "number" ? opts.total : null,
+    // 雙路徑 contract（Phase 0）：relay 路由 + job 過期
+    storeId: job.storeId ?? "",
+    ttl: typeof job.ttl === "number" ? job.ttl : null,
   };
 
   try {

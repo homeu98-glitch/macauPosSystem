@@ -1,4 +1,6 @@
-export type ConnectionType = "lan";
+// 跨平台雙路徑打印合約（Phase 0 骨架，見 docs/43-cross-platform-print-dual-path.md）
+// 三個平台（Android / desktop / iOS）共用同一份 connectionType 列舉。
+export type ConnectionType = "lan" | "usb" | "bluetooth";
 export type UserRole = "admin" | "manager" | "cashier";
 
 export interface UserPermissions {
@@ -177,6 +179,16 @@ export interface DevicePrinterConfig {
   lanPort?: number;
   /** ESC/POS 編碼（每台可配；預設 GB18030。可選: gb18030 / gbk / big5 / utf-8） */
   charset?: string;
+  // ── USB 連接（connectionType === "usb" 時使用）──
+  /** USB vendor id（hex string，例如 "0x1234"） */
+  usbVendorId?: string;
+  /** USB product id（hex string，例如 "0x5678"） */
+  usbProductId?: string;
+  // ── Bluetooth 連接（connectionType === "bluetooth" 時使用）──
+  /** Bluetooth MAC / 裝置地址（例如 "AA:BB:CC:DD:EE:FF"） */
+  bluetoothAddress?: string;
+  /** Bluetooth 裝置名（配對/列舉顯示用） */
+  bluetoothName?: string;
   enabled: boolean;
 }
 
@@ -444,4 +456,42 @@ export interface PrintJob {
   }>;
   status: "pending" | "sent" | "failed";
   createdAt: string;
+  /** 雙路徑：所屬店 ID（relay 路由用；LAN 直打可由終端補） */
+  storeId?: string;
+  /** 雙路徑：job 過期時間（epoch millis）；relay 丟棄過期 job，POS 側超時轉 fallback */
+  ttl?: number;
+}
+
+// ── 跨平台雙路徑打印：統一傳輸層合約（Phase 0 骨架） ──
+//
+// 三個平台各自實作一套 Transport（Android=Kotlin Socket/UsbManager/BluetoothSocket；
+// desktop=Node/Rust net+node-usb+COM；iOS=Swift Network.framework/BLE·MFi），
+// POS 網頁只靠呢個介面溝通，唔使知底層 OS 差異。見 docs/43。
+
+export type PrintKind = "receipt" | "kitchen" | "test";
+
+export interface PrintSendOptions {
+  kind: PrintKind;
+  storeName?: string;
+  paymentMethod?: string;
+  total?: number;
+}
+
+export interface PrintSendResult {
+  ok: boolean;
+  /** 已 queue 但未出單（終端 local agent 接受咗） */
+  queued?: boolean;
+  error?: string;
+  /** 非同步結果會經 native bridge / relay 回傳呢個 id（對應 PrintJob.id） */
+  ticketId?: string;
+}
+
+/** 統一列印傳輸層。LanTransport（path A）/ RelayTransport（path B）都實作佢。 */
+export interface PrintTransport {
+  /** 呢個 transport 能否處理某部打印機（按 connectionType） */
+  supports(printer: DevicePrinterConfig): boolean;
+  /** 發送一個 job；resolve 表示「已 queue / 已送出」，唔等物理出單 */
+  send(job: PrintJob, printer: DevicePrinterConfig, opts: PrintSendOptions): Promise<PrintSendResult>;
+  /** 可選：探測打印機 availability（LAN socket / USB 列舉 / BT 配對） */
+  probe?(printer: DevicePrinterConfig): Promise<boolean>;
 }
