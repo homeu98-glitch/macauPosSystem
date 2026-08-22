@@ -50,6 +50,7 @@ export default function OrderPage() {
 
   const {
     hydrated,
+    menuLoading,
     bootstrap,
     language,
     setLanguage,
@@ -220,6 +221,16 @@ export default function OrderPage() {
             </button>
           )}
         </div>
+      </main>
+    );
+  }
+
+  // ── 所屬店餐牌載入中（kiosk 綁店 / 手機掃碼都會去 backend 攞真 menu）──
+  // 未攞到前唔畀入餐牌，避免 flash demo store（macau-store-a）嘅餐牌。
+  if (menuLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+        載入中…
       </main>
     );
   }

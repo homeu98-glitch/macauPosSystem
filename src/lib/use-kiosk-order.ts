@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
-import { loadBootstrapCache } from "@/lib/storage";
+import { loadBootstrapCache, saveBootstrapCache } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
@@ -129,6 +129,8 @@ export function useKioskOrder() {
   const [scanStoreId, setScanStoreId] = useState<string | null>(null);
   const [scanStoreName, setScanStoreName] = useState<string | null>(null);
   const [fetchedBootstrap, setFetchedBootstrap] = useState<PosBootstrap | null>(null);
+  // 所屬店 menu 嘗試過攞（成功或失敗都設 true）：避免離線 / 失敗時 menuLoading 卡死無限 loading
+  const [menuFetchDone, setMenuFetchDone] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   // 落單介面前嘅 landing gate：未「開始點餐」就顯示 landing page（唔用點餐介面做主頁）
   const [started, setStarted] = useState(
@@ -137,14 +139,16 @@ export function useKioskOrder() {
   // 手機掃碼「已落單枱」鎖定：未按加單前唔開餐牌，只顯示本枱明細
   const [ordering, setOrdering] = useState(false);
 
-  // 手機掃碼（scanStoreId 有值）先去 backend 攞所屬店嘅真 menu（pos_bootstrap_config，
-  // 與商家點餐機同一份）；kiosk 用本地 cache（唔變）。fallback 先本地 cache 再 mockBootstrap。
+  // 手機掃碼（scanStoreId）同 kiosk 綁店（binding.storeId）都會去 backend 攞所屬店嘅真 menu
+  // （pos_bootstrap_config，與商家點餐機同一份）；fallback 先本地 cache 再 mockBootstrap。
   const bootstrap = useMemo(
     () => fetchedBootstrap ?? loadBootstrapCache() ?? mockBootstrap,
     [fetchedBootstrap],
   );
-  // 手機仲攞緊所屬店 menu 時嘅 loading 狀態（kiosk 無 scanStoreId → 唔會 loading）
-  const menuLoading = Boolean(scanStoreId) && fetchedBootstrap === null;
+  // 手機掃碼 / kiosk 綁店：攞緊所屬店 menu 時嘅 loading 狀態（確保唔會 flash demo 餐牌）。
+  // 用 menuFetchDone（成功或失敗都設 true）判斷，離線 / 失敗就 fallback 去 cache / mock，唔會卡死。
+  const menuLoading =
+    (Boolean(scanStoreId) || Boolean(binding?.storeId)) && !menuFetchDone;
   // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之；最後 fallback 預設店
   const storeId = binding?.storeId ?? scanStoreId ?? DEFAULT_KIOSK_STORE_ID;
   // 顯示店名：綁店名 > 掃碼連結 ?storeName= > 本地 mock 店名
@@ -189,26 +193,41 @@ export function useKioskOrder() {
     },
   });
 
-  // 手機掃碼：按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu
+  // 按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu：
+  // 手機掃碼用 scanStoreId；kiosk 綁店用 binding.storeId（避免 fallback 去 demo store macau-store-a）。
   useEffect(() => {
-    if (!scanStoreId) return;
+    const targetStoreId = scanStoreId ?? binding?.storeId ?? null;
+    if (!targetStoreId) return;
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/pos/bootstrap?storeId=${encodeURIComponent(scanStoreId)}`);
-        if (!res.ok || cancelled) return;
+        const res = await fetch(`/api/pos/bootstrap?storeId=${encodeURIComponent(targetStoreId)}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          // 後端回非 200（例如 500）：唔卡 loading，fallback 去 cache / mock
+          setMenuFetchDone(true);
+          return;
+        }
         const data = (await res.json()) as PosBootstrap;
         if (cancelled) return;
         setFetchedBootstrap(data);
         setActiveCategory(data.categories?.[0]?.id ?? "");
+        setMenuFetchDone(true);
+        // 寫入 cache：離線時 fallback 會係所屬店餐牌而唔係 demo
+        try {
+          saveBootstrapCache(data);
+        } catch {
+          // 寫 cache 失敗唔影響今次攞餐牌
+        }
       } catch {
         // 失敗就保留本地 cache / mockBootstrap fallback
+        setMenuFetchDone(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [scanStoreId]);
+  }, [scanStoreId, binding?.storeId]);
 
   // resume：重複掃碼載入該枱 / 上次單嘅未結單
   useEffect(() => {
