@@ -13,7 +13,7 @@ function uid(prefix: string) {
 export const KIOSK_BINDING_KEY = "macau-pos-kiosk-device";
 export const DEFAULT_KIOSK_STORE_ID = "macau-store-a";
 
-export type KioskLanguage = "zh-HK" | "pt" | "en";
+export type KioskLanguage = "zh-HK";
 
 export type KioskDeviceBinding = {
   storeId: string;

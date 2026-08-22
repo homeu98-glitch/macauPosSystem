@@ -3,7 +3,6 @@
 import { useState } from "react";
 
 import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
-import { KioskLanguage } from "@/lib/kiosk-order";
 import { MenuItem, OrderItem } from "@/lib/types";
 
 // 手機介面（客掃枱 QR 開 /menu）：外賣 App 風，與 kiosk 平板 /order 完全分家
@@ -17,8 +16,6 @@ export default function MenuPage() {
     menuLoading,
     bootstrap,
     displayStoreName,
-    language,
-    setLanguage,
     mode,
     tableName,
     needsBinding,
@@ -121,17 +118,6 @@ export default function MenuPage() {
                 {mode === "dine_in" ? `${t("dineIn")} · ${t("table")} ${tableName}` : t("pickup")}
               </span>
             </div>
-          </div>
-          <div className="flex shrink-0 overflow-hidden rounded-full border border-stone-200 text-xs">
-            {(["zh-HK", "pt", "en"] as KioskLanguage[]).map((lng) => (
-              <button
-                key={lng}
-                onClick={() => setLanguage(lng)}
-                className={`px-2.5 py-1 ${language === lng ? "bg-orange-500 text-white" : "bg-white text-stone-500"}`}
-              >
-                {lng === "zh-HK" ? "中" : lng === "pt" ? "PT" : "EN"}
-              </button>
-            ))}
           </div>
         </div>
 

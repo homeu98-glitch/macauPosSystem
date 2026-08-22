@@ -60,7 +60,7 @@ import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } fr
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
   tone: "info" | "success";
@@ -2978,7 +2978,7 @@ export function PosApp() {
                 ) : null}
                 {activeOrder.originalSettledAt ? (
                   <div className="mt-0.5 text-[11px] text-amber-600">
-                    原結帳時間：{activeOrder.originalSettledAt.replace("T", " ").slice(0, 16)}
+                    原結帳時間：{formatMacauDateTime(activeOrder.originalSettledAt)}
                   </div>
                 ) : null}
               </div>
@@ -3002,7 +3002,7 @@ export function PosApp() {
                 </div>
                 {workspaceOrder?.originalSettledAt || workspaceOrder?.updatedAt ? (
                   <div className="mt-1 text-[11px] text-slate-500">
-                    結帳時間：{(workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt)!.replace("T", " ").slice(0, 16)}
+                    結帳時間：{formatMacauDateTime(workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt)}
                   </div>
                 ) : null}
               </div>
@@ -3463,7 +3463,7 @@ export function PosApp() {
                           <div className="flex items-center justify-between gap-3">
                             <div className="text-sm font-semibold text-slate-900">{info.title}</div>
                             <div className="text-[11px] text-slate-400">
-                              {event.createdAt.replace("T", " ").slice(5, 16)}
+                              {formatMacauDateTime(event.createdAt).slice(5)}
                             </div>
                           </div>
                           <div className="mt-1 text-xs text-slate-500">{info.detail}</div>
@@ -3993,7 +3993,7 @@ export function PosApp() {
                       .map((record) => (
                         <div key={record.id} className="rounded-2xl border border-red-100 bg-white p-3">
                           <div className="flex items-center justify-between gap-3 text-sm">
-                            <span className="font-semibold text-slate-900">{record.createdAt.replace("T", " ").slice(0, 16)}</span>
+                            <span className="font-semibold text-slate-900">{formatMacauDateTime(record.createdAt)}</span>
                             <span className="font-semibold text-red-700">
                               {formatMoney(record.amount, bootstrap.currency)}
                             </span>

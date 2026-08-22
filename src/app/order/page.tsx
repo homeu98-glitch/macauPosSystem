@@ -3,7 +3,6 @@
 import { useState } from "react";
 
 import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
-import { KioskLanguage } from "@/lib/kiosk-order";
 import { OrderItem } from "@/lib/types";
 
 // kiosk 平板介面：3 欄佈局完全不變，邏輯抽去 useKioskOrder（與手機 /menu 共用）
@@ -115,17 +114,6 @@ export default function OrderPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex overflow-hidden rounded-lg border border-slate-200 text-xs">
-            {(["zh-HK", "pt", "en"] as KioskLanguage[]).map((lng) => (
-              <button
-                key={lng}
-                onClick={() => setLanguage(lng)}
-                className={`px-2 py-1 ${language === lng ? "bg-orange-500 text-white" : "bg-white text-slate-600"}`}
-              >
-                {lng === "zh-HK" ? "中" : lng === "pt" ? "PT" : "EN"}
-              </button>
-            ))}
-          </div>
           <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600"
@@ -354,16 +342,6 @@ export default function OrderPage() {
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
               已綁定店鋪：<span className="font-semibold text-slate-900">{displayStoreName}</span>
             </div>
-            <label className="mb-1 block text-xs text-slate-500">{t("language")}</label>
-            <select
-              value={language}
-              onChange={(e) => persistLanguage(e.target.value as KioskLanguage)}
-              className="mb-4 w-full rounded-lg border border-slate-200 p-2 text-sm"
-            >
-              <option value="zh-HK">中文 (繁)</option>
-              <option value="pt">Português</option>
-              <option value="en">English</option>
-            </select>
             <button
               onClick={rebindStore}
               className="w-full rounded-xl bg-orange-500 py-3 font-semibold text-white"
