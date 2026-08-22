@@ -14,7 +14,6 @@ import {
   loadQueue,
   loadSoldOutState,
   normalizeDeviceConfig,
-  normalizePosLocalSettings,
   saveBootstrapCache,
   saveDeviceConfig,
   savePosLocalSettings,
@@ -259,7 +258,6 @@ export function DeviceSettings() {
         const response = await fetch("/api/pos/device-config");
         const payload = (await response.json()) as {
           deviceConfig?: DeviceConfig | null;
-          localSettings?: PosLocalSettings | null;
         };
         if (payload.deviceConfig) {
           const normalizedDevice = normalizeDeviceConfig(payload.deviceConfig);
@@ -268,11 +266,10 @@ export function DeviceSettings() {
             saveDeviceConfig(normalizedDevice);
           }
         }
-        if (payload.localSettings) {
-          const normalized = normalizePosLocalSettings(payload.localSettings);
-          setLocalSettings(normalized);
-          savePosLocalSettings(normalized);
-        }
+        // 注意：唔可以喺呢度用遠端 local_settings 覆蓋本機 localSettings（樓層與桌台）。
+        // pos_device_configs 係按 updated_at desc limit 1 拎「全店最新一條」(任何 terminal)，
+        // 用佢覆蓋本機會將其他 terminal 嘅枱 / 支付方式蓋咗過嚟，令用家剛 save 嘅枱消失。
+        // 樓層與桌台係 per-terminal 本地 config，只信本機 localStorage。
       } catch {
         // 保留本機設定
       }
