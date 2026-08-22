@@ -142,7 +142,9 @@ export default function MenuPage() {
   if (submittedOrder) {
     const isDineIn = mode === "dine_in";
     return (
-      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+      <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
+        <div className="flex-1 overflow-y-auto">
+        <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
         <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-5xl">✅</div>
         <h1 className="mb-1 text-2xl font-bold text-stone-900">{t("thanks")}</h1>
         <p className="mb-6 text-sm text-stone-500">{t("payAtCounter")}</p>
@@ -176,6 +178,8 @@ export default function MenuPage() {
         >
           {t("done")}
         </button>
+        </div>
+        </div>
       </main>
     );
   }
@@ -183,7 +187,9 @@ export default function MenuPage() {
   // ── 已落單枱「明細」介面（鎖定餐牌，必須按加單先入點餐）──
   if (activeTableOrder && !ordering) {
     return (
-      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+      <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
+        <div className="flex-1 overflow-y-auto">
+        <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
         <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 text-5xl">🧾</div>
         <h1 className="mb-1 text-2xl font-bold text-stone-900">已落單</h1>
         <p className="mb-6 text-sm text-stone-500">如需加點，請按「加單」進入點餐</p>
@@ -209,6 +215,8 @@ export default function MenuPage() {
         >
           {t("done")}
         </button>
+        </div>
+        </div>
       </main>
     );
   }
