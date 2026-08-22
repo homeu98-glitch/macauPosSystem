@@ -17,8 +17,12 @@
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter);
-  --font-mono: var(--font-jetbrains-mono);
+  /* CJK 字體 fallback 一定要落喺 --font-sans，否則用 font-sans 工具類嘅元件（絕大部分 UI）
+     都會漏咗 CJK 字體，中文喺 WebView / kiosk 變缺字方格。 */
+  --font-sans: var(--font-inter), "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Noto Sans SC", "Hiragino Sans GB", "Heiti SC", "WenQuanYi Micro Hei", Arial, Helvetica,
+    sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 * {
@@ -29,7 +33,11 @@ html,
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+  /* Inter 只載入 latin 子集（冇 CJK 字形），必須 fallback 到系統 CJK 字體，
+     否則中文喺 Android WebView / kiosk 等環境會變成缺字方格（看似「亂碼」）。 */
+  font-family: var(--font-inter), "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Noto Sans SC", "Hiragino Sans GB", "Heiti SC", "WenQuanYi Micro Hei", Arial, Helvetica,
+    sans-serif;
   margin: 0;
   width: 100%;
   height: 100%;
