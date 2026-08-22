@@ -86,6 +86,42 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
   return { subtotal, serviceChargeAmount, taxAmount, total };
 }
 
+/**
+ * 枱檯 view 嘅樓層來源：以 `bootstrap.tables`（DB 共享真源）為基，按 area 分組；
+ * 再疊加本地獨有枱（唔喺 bootstrap，例如返結 temp 枱 / 本地新增）保留原 floor。
+ * 目的：kiosk / 掃碼落單用嘅枱 ID 來自 bootstrap.tables，收銀枱檯 view 必須收佢哋，
+ * 否則張單喺枱檯 view 無處可放（之前 localSettings.floors 唔包 bootstrap 枱 → 單 invisible）。
+ */
+function buildDisplayFloors(
+  bootstrapTables: PosBootstrap["tables"],
+  localFloors: PosLocalSettings["floors"],
+): PosLocalSettings["floors"] {
+  const floors: PosLocalSettings["floors"] = [];
+  const bootstrapIds = new Set(bootstrapTables.map((t) => t.id));
+
+  // 1) 共享真源：bootstrap.tables 按 area 分組成樓層
+  const byArea = new Map<string, PosBootstrap["tables"][number][]>();
+  for (const t of bootstrapTables) {
+    const key = t.area && t.area.trim() ? t.area.trim() : "未分區";
+    if (!byArea.has(key)) byArea.set(key, []);
+    byArea.get(key)!.push(t);
+  }
+  for (const [area, tables] of byArea) {
+    floors.push({ id: `area:${area}`, name: area, tables });
+  }
+
+  // 2) overlay：本地獨有枱（唔喺 bootstrap）保留原 local floor
+  for (const lf of localFloors) {
+    const localOnly = lf.tables.filter((t) => !bootstrapIds.has(t.id));
+    if (localOnly.length === 0) continue;
+    const existing = floors.find((f) => f.id === lf.id);
+    if (existing) existing.tables.push(...localOnly);
+    else floors.push({ id: lf.id, name: lf.name, tables: localOnly });
+  }
+
+  return floors;
+}
+
 const CART_PAYING_ID = "__cart__";
 const ALL_MENU_CATEGORY_ID = "__all__";
 
@@ -585,7 +621,12 @@ export function PosApp() {
     [authSession, deviceConfig.terminalName],
   );
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
-  const floors = localSettings.floors;
+  // 枱檯 view 改讀 bootstrap.tables（共享真源）而非 localSettings.floors，確保 kiosk / 掃碼落單嘅枱一定 render；
+  // 本地獨有枱（返結 temp 枱等）經 buildDisplayFloors overlay 保留。
+  const floors = useMemo(
+    () => buildDisplayFloors(bootstrap?.tables ?? [], localSettings.floors),
+    [bootstrap, localSettings],
+  );
   const paymentMethods = localSettings.paymentMethods;
   const autoAcceptOnlineOrders = localSettings.onlineOrderSettings.autoAccept;
 
@@ -619,7 +660,10 @@ export function PosApp() {
 
     return base.filter((item) => item.name.includes(keyword));
   }, [bootstrap, effectiveCategoryId, searchKeyword]);
-  const effectiveFloorId = activeFloorId || floors[0]?.id || "";
+  // activeFloorId 可能係舊嘅本地 floor id（改讀 bootstrap.tables 後 display floor id 變 area:<area>），
+  // 若佢已唔存在於 display floors，fallback 去第一個 display floor，避免枱 grid 變空。
+  const effectiveFloorId =
+    activeFloorId && floors.some((f) => f.id === activeFloorId) ? activeFloorId : floors[0]?.id ?? "";
   const visibleTables = useMemo(
     () => floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [],
     [effectiveFloorId, floors],
