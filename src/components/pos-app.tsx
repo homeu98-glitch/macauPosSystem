@@ -56,7 +56,7 @@ import {
   quickCompletionLabel,
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
-import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
+import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
@@ -728,6 +728,12 @@ export function PosApp() {
   }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
   const actionBarLocalOrders = useMemo(
     () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter" && !order.onlineOrderId),
+    [openOrders],
+  );
+  // 桌台總覽（dine-in）模式：kiosk / 掃碼落嘅自取、外賣單（table_id=counter）唔喺枱 grid 入面，
+  // 必須有專屬面板先會見到，否則收銀喺預設 dine-in 模式永遠睇唔到呢啲單（之前只喺 quick mode bar 出）。
+  const counterKioskOrders = useMemo(
+    () => openOrders.filter((order) => order.tableId === "counter" && !order.onlineOrderId),
     [openOrders],
   );
   const quickPreparingOrders = useMemo(
@@ -2866,6 +2872,53 @@ export function PosApp() {
                     </div>
                   </div>
                 </div>
+
+                {!isQuickMode && counterKioskOrders.length > 0 ? (
+                  <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-orange-700">自取 / 掃碼訂單</div>
+                      <div className="text-[11px] text-orange-500">{counterKioskOrders.length} 張待處理</div>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {counterKioskOrders.map((order) => (
+                        <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                            <div className="shrink-0 text-[11px] font-semibold text-orange-600">{localOrderStatusLabel(order)}</div>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              className="flex-1 rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                              onClick={() => setViewingOrderId(order.id)}
+                              type="button"
+                            >
+                              查看
+                            </button>
+                            {order.status === "paid" && order.fulfillmentStatus !== "ready" ? (
+                              <button
+                                className="flex-1 rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
+                                onClick={() => updateQuickFulfillment(order.id, "ready")}
+                                type="button"
+                              >
+                                標記可取
+                              </button>
+                            ) : null}
+                            <button
+                              className="flex-1 rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                              onClick={() => setPayingOrderId(order.id)}
+                              type="button"
+                            >
+                              結帳
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 {offlineMode ? (
                   <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">

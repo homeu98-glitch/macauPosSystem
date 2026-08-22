@@ -6,14 +6,23 @@
 -- 每 (store_id, kind, biz_date) 一日由 1 開始遞增，跨日歸零。
 -- biz_date 用 Macau 時區（Asia/Macau）決定，避免 UTC 午夜 cut-off 錯位。
 --
--- ⚠️ 重要：呢個 RPC 係 repo 之前漏咗嘅 migration（code 早 call 但無 SQL 建立），
---    所以依家補返。全部 idempotent：表 if not exists；函數 create or replace。
---    喺已有 DB 跑 → 表 no-op、函數重建（簽名不變則安全）；fresh DB 跑 → 完整建立。
+-- ⚠️ v2（2026-08-22）：用家早年手動建過 pos_daily_sequences / next_daily_sequence，
+--    欄位名可能唔同（last_no / seq 等）。用 `create table if not exists` 唔會改到舊表
+--    → 函數 call 彈 "column last_number does not exist"。所以呢版直接
+--    DROP + CREATE 做權威真源，唔理之前個舊 schema。
+--   每日序號會歸零（只影響今日計數，無損；跨日本身就歸零）。
+--   重跑安全：drop if exists → create，唔會彈錯。
 
 -- ───────────────────────────────────────────────────────────
--- 1) 序號計數表（idempotent）
+-- 0) 清走舊 schema（無就 no-op）
 -- ───────────────────────────────────────────────────────────
-create table if not exists pos_daily_sequences (
+drop function if exists next_daily_sequence(text, text);
+drop table if exists pos_daily_sequences;
+
+-- ───────────────────────────────────────────────────────────
+-- 1) 序號計數表
+-- ───────────────────────────────────────────────────────────
+create table pos_daily_sequences (
   store_id    text    not null,
   kind        text    not null,
   biz_date    date    not null,
@@ -25,7 +34,7 @@ create index if not exists pos_daily_sequences_store_idx
   on pos_daily_sequences (store_id, kind, biz_date);
 
 -- ───────────────────────────────────────────────────────────
--- 2) 取下一個序號（create or replace，可安全重跑）
+-- 2) 取下一個序號
 --    路徑：supabase.rpc("next_daily_sequence", { p_store_id, p_kind })
 --    返回 integer：該 (store, kind, 今日) 嘅下一個序號（首次 = 1，之後遞增）。
 --    用 ON CONFLICT DO UPDATE 保證同一 row 原子遞增（唔使先 select 再 update）。
