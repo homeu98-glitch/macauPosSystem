@@ -60,7 +60,8 @@ export function KioskQrPanel() {
   const binding = loadKioskDeviceBinding();
   const session = loadAuthSession();
   const storeId = binding?.storeId ?? session?.merchantId ?? "";
-  const storeName = binding?.storeName ?? session?.name ?? "";
+  // 唔將 storeName 放落 QR：網址越短越易掃；手機 /menu 會按 scanStoreId 去
+  // /api/pos/bootstrap 攞返所屬店真名（displayStoreName fallback 到 bootstrap.storeName）。
 
   const origin = host || (typeof window !== "undefined" ? window.location.origin : "https://macau-pos-system.vercel.app");
   const tables = bootstrap.tables;
@@ -86,7 +87,7 @@ export function KioskQrPanel() {
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {tables.map((table) => {
-            const url = `${origin}/menu?tableId=${encodeURIComponent(table.id)}${storeId ? `&store=${encodeURIComponent(storeId)}` : ""}${storeName ? `&storeName=${encodeURIComponent(storeName)}` : ""}`;
+            const url = `${origin}/menu?tableId=${encodeURIComponent(table.id)}${storeId ? `&store=${encodeURIComponent(storeId)}` : ""}`;
             return (
               <div key={table.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
                 <div className="mb-2 text-sm font-semibold text-slate-900">

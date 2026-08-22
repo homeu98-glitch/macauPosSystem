@@ -3,16 +3,25 @@
 
 type QrMatrix = { size: number; modules: boolean[][] };
 
-// version 1-5，EC level L，單 block
+// version 1-6，EC level L，單 block（v1-6 唔使 version information 模塊）
 const VERSION_INFO = [
   { size: 21, data: 19, ec: 7 }, // v1
   { size: 25, data: 34, ec: 10 }, // v2
   { size: 29, data: 55, ec: 15 }, // v3
   { size: 33, data: 80, ec: 20 }, // v4
   { size: 37, data: 108, ec: 26 }, // v5
+  { size: 41, data: 136, ec: 18 }, // v6
 ];
-// ALIGN_CENTER[actualVersion] = center coordinate (0 = 無 alignment)
-const ALIGN_CENTER = [0, 0, 18, 22, 26, 30];
+// ALIGN_POSITIONS[versionIdx] = alignment pattern 中心座標列（row/col 由呢啲座標兩兩組合；
+// 跳過同三個 finder 重疊嘅 (6,6)/(6,far)/(far,6)）。v1 無、v2-6 單點、v7+ 3x3 grid。
+const ALIGN_POSITIONS: number[][] = [
+  [], // v1
+  [18], // v2
+  [22], // v3
+  [26], // v4
+  [30], // v5
+  [34], // v6
+];
 
 // ---- GF(256) ----
 const GF_EXP = new Array<number>(256).fill(0);
@@ -185,16 +194,27 @@ export function encodeQrMatrix(text: string): QrMatrix | null {
     reserved[i][6] = true;
   }
 
-  // alignment pattern（v>=2，中心 5x5：外框 + 3x3 中心 dark，十字白）
-  const center = ALIGN_CENTER[versionIdx + 1];
-  if (center !== 0) {
-    for (let dr = -2; dr <= 2; dr++) {
-      for (let dc = -2; dc <= 2; dc++) {
-        const rr = center + dr;
-        const cc = center + dc;
-        const dark = Math.max(Math.abs(dr), Math.abs(dc)) !== 1;
-        modules[rr][cc] = dark;
-        reserved[rr][cc] = true;
+  // alignment pattern（v>=2，5x5：外框 + 3x3 中心 dark，十字白）。
+  // 由 ALIGN_POSITIONS[versionIdx] 嘅座標兩兩組合放置，跳過同 finder 重疊嘅三格。
+  const alignPositions = ALIGN_POSITIONS[versionIdx];
+  if (alignPositions.length > 0) {
+    const far = alignPositions[alignPositions.length - 1];
+    const placeAlignment = (r0: number, c0: number) => {
+      for (let dr = -2; dr <= 2; dr++) {
+        for (let dc = -2; dc <= 2; dc++) {
+          const rr = r0 + dr;
+          const cc = c0 + dc;
+          const dark = Math.max(Math.abs(dr), Math.abs(dc)) !== 1;
+          modules[rr][cc] = dark;
+          reserved[rr][cc] = true;
+        }
+      }
+    };
+    for (const r of alignPositions) {
+      for (const c of alignPositions) {
+        // 跳過同三個 finder 圖案重疊嘅位置
+        if ((r === 6 && c === 6) || (r === 6 && c === far) || (r === far && c === 6)) continue;
+        placeAlignment(r, c);
       }
     }
   }

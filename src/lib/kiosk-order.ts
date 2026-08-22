@@ -224,8 +224,15 @@ export async function submitKioskOrder(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ storeId, events }),
   });
-  if (!res.ok) {
-    throw new Error(`落單失敗（${res.status}）`);
+  let body: { ok?: boolean; error?: string } | null = null;
+  try {
+    body = (await res.json()) as { ok?: boolean; error?: string };
+  } catch {
+    // 回應非 JSON（例如 503 HTML），下面靠 status 判斷
+  }
+  if (!res.ok || body?.ok === false) {
+    const msg = body?.error ?? `落單失敗（${res.status}）`;
+    throw new Error(msg);
   }
 }
 
