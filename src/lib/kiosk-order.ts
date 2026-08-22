@@ -244,6 +244,9 @@ const TERMINAL_STATUSES = new Set<PosOrder["status"]>([
   "cancelled",
   "refunded",
   "partially_refunded",
+  // 已付款但未「已完成」嘅 counter 單（快餐先收款後出餐）：對客人嚟講已結帳，
+  // 唔應該再畀佢哋掃碼 resume 加單。
+  "paid",
 ]);
 
 export async function fetchUnsettledKioskOrder(
@@ -256,9 +259,20 @@ export async function fetchUnsettledKioskOrder(
     if (!res.ok) return null;
     const data = (await res.json()) as { orders?: PosOrder[] };
     const orders = Array.isArray(data.orders) ? data.orders : [];
-    const open = orders.filter((o) => !TERMINAL_STATUSES.has(o.status));
-    if (tableId) return open.find((o) => o.tableId === tableId) ?? null;
-    if (lastOrderId) return open.find((o) => o.id === lastOrderId) ?? null;
+    // /api/pos/state 已經按 updated_at desc 排序。下面一律以「該枱最新一張單」判斷，
+    // 避免舊嘅 open 單（例如收銀結帳後 30s 批量 sync 未到位嘅 sent_to_kitchen）遮住咗
+    // 新嘅 settled 單，令客人掃碼 resume 仲見到「已落單」。
+    if (tableId) {
+      const latest = orders.find((o) => o.tableId === tableId);
+      if (!latest) return null;
+      // 最新一張已結帳／已取消／已退款 → 枱已完結，唔畀客人再加單
+      if (TERMINAL_STATUSES.has(latest.status)) return null;
+      return latest; // 最新一張仍係 open → resume 呢張單
+    }
+    if (lastOrderId) {
+      const open = orders.filter((o) => !TERMINAL_STATUSES.has(o.status));
+      return open.find((o) => o.id === lastOrderId) ?? null;
+    }
     return null;
   } catch {
     return null;

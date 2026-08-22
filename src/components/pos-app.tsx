@@ -2420,6 +2420,9 @@ export function PosApp() {
       };
 
       pushEvents([paymentEvent]);
+      // 即時同步結帳狀態去 backend（唔等 30s 批量 flush）：收銀按結帳 → 客人掃碼 resume
+      // 即刻見到「枱已完結」，唔會再因 backend 仲係 sent_to_kitchen 而顯示「已落單」。
+      void syncNow([...queue, paymentEvent], { silent: true });
       setPayingOrderId(null);
       setActiveOrderId(null);
       setCartItems([]);
@@ -2565,6 +2568,8 @@ export function PosApp() {
     };
 
     pushEvents([paymentEvent]);
+    // 即時同步結帳狀態去 backend（唔等 30s 批量 flush），同上。
+    void syncNow([...queue, paymentEvent], { silent: true });
     setToast({
       tone: "success",
       message: quickPaidFlow
