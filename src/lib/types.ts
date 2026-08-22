@@ -128,6 +128,8 @@ export interface StoreTable {
   name: string;
   area: string;
   floorId?: string;
+  /** 該桌可容納座位數（人數）；桌台設置新增／編輯桌時填寫 */
+  capacity?: number;
   /** 返結 temp 枱標記（結帳／取消後由 removeReopenTempTable 清除） */
   isReopenTemp?: boolean;
   /** 關聯嘅返結訂單 id（供移除 temp 枱用） */
@@ -352,6 +354,8 @@ export interface PosOrder {
   localOrderNo: string;
   tableId: string;
   tableName: string;
+  /** 開桌入座人數（開桌彈窗揀選；僅作展示／對帳用） */
+  partySize?: number;
   status: "draft" | "sent_to_kitchen" | "paid" | "settled" | "reopened" | "cancelled" | "partially_refunded" | "refunded";
   fulfillmentStatus?: "preparing" | "ready";
   items: OrderItem[];

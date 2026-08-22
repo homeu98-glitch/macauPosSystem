@@ -212,12 +212,19 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     </div>
                   </div>
                   <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
                       isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready"
                         ? "bg-sky-50 text-sky-700"
                         : "bg-slate-100 text-slate-700"
                     }`}
                   >
+                    <span
+                      className={`h-4 w-4 rounded-full ${
+                        isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready"
+                          ? "bg-sky-500"
+                          : "bg-slate-500"
+                      }`}
+                    />
                     {localOrderStatusLabel(order)}
                   </span>
                 </div>

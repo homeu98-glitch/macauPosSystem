@@ -2348,11 +2348,11 @@ export function DeviceSettings() {
                           ...current,
                           floors: current.floors.map((item) =>
                             item.id === floor.id
-                              ? {
+                              ?                                 {
                                   ...item,
                                   tables: [
                                     ...item.tables,
-                                    { id: crypto.randomUUID(), name: `桌號${item.tables.length + 1}`, area: item.name, floorId: item.id },
+                                    { id: crypto.randomUUID(), name: `桌號${item.tables.length + 1}`, area: item.name, floorId: item.id, capacity: 4 },
                                   ],
                                 }
                               : item,
@@ -2366,28 +2366,53 @@ export function DeviceSettings() {
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
                     {floor.tables.map((table) => (
-                      <input
-                        key={table.id}
-                        className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900"
-                        onChange={(event) =>
-                          setLocalSettings((current) => ({
-                            ...current,
-                            floors: current.floors.map((item) =>
-                              item.id === floor.id
-                                ? {
-                                    ...item,
-                                    tables: item.tables.map((currentTable) =>
-                                      currentTable.id === table.id
-                                        ? { ...currentTable, name: event.target.value, area: item.name }
-                                        : currentTable,
-                                    ),
-                                  }
-                                : item,
-                            ),
-                          }))
-                        }
-                        value={table.name}
-                      />
+                      <div key={table.id} className="flex flex-col gap-1">
+                        <input
+                          className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900"
+                          onChange={(event) =>
+                            setLocalSettings((current) => ({
+                              ...current,
+                              floors: current.floors.map((item) =>
+                                item.id === floor.id
+                                  ? {
+                                      ...item,
+                                      tables: item.tables.map((currentTable) =>
+                                        currentTable.id === table.id
+                                          ? { ...currentTable, name: event.target.value, area: item.name }
+                                          : currentTable,
+                                      ),
+                                    }
+                                  : item,
+                              ),
+                            }))
+                          }
+                          value={table.name}
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                          onChange={(event) =>
+                            setLocalSettings((current) => ({
+                              ...current,
+                              floors: current.floors.map((item) =>
+                                item.id === floor.id
+                                  ? {
+                                      ...item,
+                                      tables: item.tables.map((currentTable) =>
+                                        currentTable.id === table.id
+                                          ? { ...currentTable, capacity: Number(event.target.value) || undefined }
+                                          : currentTable,
+                                      ),
+                                    }
+                                  : item,
+                              ),
+                            }))
+                          }
+                          placeholder="座位數"
+                          value={table.capacity ?? ""}
+                        />
+                      </div>
                     ))}
                   </div>
                 </article>
