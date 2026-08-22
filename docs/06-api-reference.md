@@ -99,11 +99,17 @@ Upsert bootstrap。需 POS Supabase，否則 500。
 ### POST `/api/pos/sequence`
 
 ```json
-{ "storeId": "...", "date": "2026-08-12" }
-→ { "sequence": 42 }
+// request
+{ "storeId": "<merchantId>", "kind": "pos | pickup | counter | delivery" }
+// response（有 Supabase，next_daily_sequence RPC）
+{ "ok": true, "source": "supabase", "kind": "pos", "value": 42,
+  "display": "訂單42", "bizDate": "2026-08-22" }
+// response（無 Supabase / RPC 未建立）：503 + { "ok": false, "error": "..." }
 ```
 
-有 Supabase：`next_daily_sequence` RPC；無：隨機 100–999。
+- kind 對齊店內：堂食→`pos`、自取→`pickup`、取餐→`counter`、外賣→`delivery`。
+- kiosk / 掃碼落單同店內收銀共用同一日序號（`pos_daily_sequences` 表 + `next_daily_sequence` RPC，由 `0012_daily_sequence.sql` 建立）。
+- 以前「無 Supabase 就隨機 100–999 fake 單號」已移除：無 DB 直接報錯，避免 kiosk 顯示假成功單號。
 
 ---
 
