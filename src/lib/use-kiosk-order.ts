@@ -83,6 +83,10 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     submitting: "落單中…",
     resumeHint: "此枱有未完成訂單，已載入可繼續加單",
     scanAgain: "如需重開新單，請向職員查詢",
+    tableOrderTitle: "本枱已落單",
+    addOrder: "加單",
+    currentTotal: "枱上總計",
+    done: "完成",
     viewCart: "查看購物車",
     specs: "規格",
     selectOptions: "請選規格",
@@ -118,6 +122,8 @@ export function useKioskOrder() {
   const [specDraft, setSpecDraft] = useState<SpecDraft | null>(null);
   const [submittedOrder, setSubmittedOrder] = useState<PosOrder | null>(null);
   const [resumedOrder, setResumedOrder] = useState<PosOrder | null>(null);
+  // 落單後仍然保留嘅「本枱現有單」（dine_in 用嚟顯示已落單明細 + 加單；quick 模式落單後唔保留）
+  const [tableOrder, setTableOrder] = useState<PosOrder | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scanStoreId, setScanStoreId] = useState<string | null>(null);
@@ -237,6 +243,12 @@ export function useKioskOrder() {
     return quickType === "delivery" ? KIOSK_I18N[language].delivery : KIOSK_I18N[language].pickup;
   }, [mode, tableId, quickType, bootstrap.tables, language]);
 
+  // 本枱現有單（用嚟顯示已落單明細 + 加單）：resume 載入嘅單 或 剛落嘅單（dine_in 先保留）
+  const activeTableOrder = useMemo(
+    () => (mode === "dine_in" ? resumedOrder ?? tableOrder : null),
+    [mode, resumedOrder, tableOrder],
+  );
+
   const visibleItems = useMemo(
     () =>
       bootstrap.menuItems.filter(
@@ -342,6 +354,8 @@ export function useKioskOrder() {
       setSubmittedOrder(order);
       setCart([]);
       setResumedOrder(null);
+      // dine_in 保留本枱單（顯示已落單明細 + 加單）；quick 模式落單後清走，唔畀加單
+      setTableOrder(mode === "dine_in" ? order : null);
       setOrderNote("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -353,6 +367,26 @@ export function useKioskOrder() {
   function persistLanguage(lng: KioskLanguage) {
     setLanguage(lng);
     if (binding) saveKioskDeviceBinding({ ...binding, language: lng });
+  }
+
+  // 加單（堂食先准）：把本枱現有單嘅項目載返入購物車，重用同一 order.id（下一次落單 → ORDER_UPDATED）
+  // 快餐模式（quick）唔准加單，落單後就要再下一張新單。
+  function addToOrder() {
+    if (mode !== "dine_in" || !tableOrder) return;
+    const lines: CartLine[] = tableOrder.items.map((it, idx) => ({
+      lineId: `resume-${idx}-${it.menuItemId}`,
+      menuItemId: it.menuItemId,
+      name: it.name,
+      price: it.price,
+      quantity: it.quantity,
+      printerGroup: it.printerGroup,
+      selectedSpecs: it.selectedSpecs,
+      note: it.note,
+    }));
+    setCart(lines);
+    if (tableOrder.orderNote) setOrderNote(tableOrder.orderNote);
+    setResumedOrder(tableOrder); // 下次 placeOrder 重用同一 id → ORDER_UPDATED
+    setSubmittedOrder(null); // 返去 menu 繼續加菜
   }
 
   function rebindStore() {
@@ -397,6 +431,8 @@ export function useKioskOrder() {
     submittedOrder,
     setSubmittedOrder,
     resumedOrder,
+    activeTableOrder,
+    addToOrder,
     submitting,
     error,
     placeOrder,

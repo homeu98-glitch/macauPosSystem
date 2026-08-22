@@ -8,6 +8,43 @@ import { OrderItem } from "@/lib/types";
 // kiosk 平板介面：3 欄佈局完全不變，邏輯抽去 useKioskOrder（與手機 /menu 共用）
 const I18N = KIOSK_I18N;
 
+// 本枱已落單 / 落單成功 共用嘅明細卡：菜式 + 數量 + 小計 + 總計 + 備註
+function OrderSummaryCard({ order, title }: { order: import("@/lib/types").PosOrder; title: string }) {
+  return (
+    <div className="rounded-xl bg-amber-50 p-3 text-left">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-semibold text-amber-800">{title}</span>
+        <span className="text-xs text-amber-600">#{order.localOrderNo}</span>
+      </div>
+      <div className="space-y-1.5">
+        {order.items.map((it, i) => (
+          <div key={i} className="flex items-center justify-between text-sm">
+            <span className="min-w-0 flex-1 truncate text-slate-800">
+              {it.name}
+              {it.selectedSpecs && it.selectedSpecs.length > 0 && (
+                <span className="ml-1 text-xs text-slate-400">
+                  ({it.selectedSpecs.map((s) => s.optionLabel).join(" / ")})
+                </span>
+              )}
+            </span>
+            <span className="ml-2 shrink-0 text-slate-500">x{it.quantity}</span>
+            <span className="ml-2 w-16 shrink-0 text-right text-slate-700">
+              MOP {(it.price * it.quantity).toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+      {order.orderNote ? (
+        <div className="mt-2 text-xs text-slate-500">備註：{order.orderNote}</div>
+      ) : null}
+      <div className="mt-2 flex items-center justify-between border-t border-amber-200 pt-2 text-sm">
+        <span className="font-medium text-amber-800">{KIOSK_I18N["zh-HK"].currentTotal}</span>
+        <span className="font-bold text-amber-900">MOP {order.total.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function OrderPage() {
   const t = (key: string) => I18N[language][key] ?? key;
 
@@ -38,7 +75,8 @@ export default function OrderPage() {
     changeQty,
     submittedOrder,
     setSubmittedOrder,
-    resumedOrder,
+    activeTableOrder,
+    addToOrder,
     submitting,
     error,
     placeOrder,
@@ -77,7 +115,7 @@ export default function OrderPage() {
 
   // ── 確認頁 ──
   if (submittedOrder) {
-    const isPickup = submittedOrder.tableId === "counter";
+    const isDineIn = mode === "dine_in";
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
         <div className="mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 text-7xl">✅</div>
@@ -86,17 +124,39 @@ export default function OrderPage() {
           <div className="mb-2 text-base text-slate-500">{t("orderNo")}</div>
           <div className="mb-4 text-5xl font-bold text-slate-900">{submittedOrder.localOrderNo}</div>
           <div className="mb-1 text-base text-slate-500">
-            {mode === "dine_in" ? t("table") : t("pickupNo")}
+            {isDineIn ? t("table") : t("pickupNo")}
           </div>
           <div className="text-2xl font-semibold text-slate-900">{submittedOrder.tableName}</div>
         </div>
         <p className="mt-5 text-lg text-slate-600">{t("payAtCounter")}</p>
-        <button
-          onClick={() => setSubmittedOrder(null)}
-          className="mt-7 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
-        >
-          {t("newOrder")}
-        </button>
+
+        {/* 堂食：顯示本枱已落單明細 + 加單；快餐：落單後唔准加單，只可再下一張新單 */}
+        {isDineIn ? (
+          <>
+            <div className="mt-5 w-full text-left">
+              <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
+            </div>
+            <button
+              onClick={addToOrder}
+              className="mt-4 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
+            >
+              {t("addOrder")}
+            </button>
+            <button
+              onClick={() => setSubmittedOrder(null)}
+              className="mt-2 w-full py-2.5 text-sm text-slate-400"
+            >
+              {t("done")}
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => setSubmittedOrder(null)}
+            className="mt-7 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
+          >
+            {t("newOrder")}
+          </button>
+        )}
       </main>
     );
   }
@@ -123,9 +183,9 @@ export default function OrderPage() {
         </div>
       </header>
 
-      {resumedOrder && (
-        <div className="bg-amber-50 px-4 py-2 text-center text-xs text-amber-700">
-          {t("resumeHint")}
+      {activeTableOrder && (
+        <div className="bg-amber-50 px-4 py-2">
+          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
         </div>
       )}
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { formatMacauDateTime } from "@/lib/format";
 import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -207,7 +208,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
                     <div className="mt-0.5 text-xs text-slate-500">{order.tableName}</div>
                     <div className="mt-1 text-xs text-slate-400">
-                      {(order.updatedAt || order.createdAt || "").replace("T", " ").slice(0, 16)}
+                      {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
                     </div>
                   </div>
                   <span

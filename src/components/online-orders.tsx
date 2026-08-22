@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -663,7 +664,7 @@ export function OnlineOrders({
                 <div>
                   <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
                   <div className="mt-1 text-xs text-slate-500">
-                    {order.createdAt ? order.createdAt.replace("T", " ").slice(0, 16) : "--"}
+                    {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
                   </div>
                 </div>
                 <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">

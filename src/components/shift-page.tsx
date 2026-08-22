@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -165,8 +166,8 @@ export function ShiftPage() {
 
   function buildShiftPrintLines(row: (typeof shiftHistory)[number]) {
     return [
-      `交班時間：${row.closedAt.replace("T", " ").slice(0, 16)}`,
-      row.openedAt ? `開工時間：${row.openedAt.replace("T", " ").slice(0, 16)}` : "",
+      `交班時間：${formatMacauDateTime(row.closedAt)}`,
+      row.openedAt ? `開工時間：${formatMacauDateTime(row.openedAt)}` : "",
       `已結帳訂單：${row.settledCount} 張`,
       `營業額：${formatMoney(row.revenue)}`,
       `線上已支付：${formatMoney(row.prepaid)}`,
@@ -289,8 +290,8 @@ export function ShiftPage() {
     const printerName = receiptPrinter?.name ?? "收據打印機";
 
     const lines = [
-      `交班時間：${now.replace("T", " ").slice(0, 16)}`,
-      shift.openedAt ? `開工時間：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "",
+      `交班時間：${formatMacauDateTime(now)}`,
+      shift.openedAt ? `開工時間：${formatMacauDateTime(shift.openedAt)}` : "",
       "— 店內（今日）—",
       `已結帳訂單：${summary.count} 張`,
       `營業額：${formatMoney(summary.revenue)}`,
@@ -390,7 +391,7 @@ export function ShiftPage() {
       ["交班時間", "員工", "營業額", "退款金額", "應收現金", "實收現金", "現金差額", "待同步事件", "待補傳打印", "備註"].join(","),
       ...filteredShiftHistory.map((row) =>
         [
-          row.closedAt.replace("T", " ").slice(0, 16),
+          formatMacauDateTime(row.closedAt),
           row.employeeName ?? row.employeeAccount ?? "未記錄",
           row.revenue,
           row.refundAmount,
@@ -445,7 +446,7 @@ export function ShiftPage() {
             .map(
               (row) => `
                 <tr>
-                  <td>${row.closedAt.replace("T", " ").slice(0, 16)}</td>
+                  <td>${formatMacauDateTime(row.closedAt)}</td>
                   <td>${row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
                   <td>${row.revenue}</td>
                   <td>${row.refundAmount}</td>
@@ -492,9 +493,9 @@ export function ShiftPage() {
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-base font-semibold text-slate-900">班次狀態</div>
             <div className="mt-3 space-y-2 text-sm text-slate-700">
-              <div>{shift.openedAt ? `已開工：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "未開工"}</div>
+              <div>{shift.openedAt ? `已開工：${formatMacauDateTime(shift.openedAt)}` : "未開工"}</div>
               {shift.closedAt ? (
-                <div className="text-slate-500">最近交班：{shift.closedAt.replace("T", " ").slice(0, 16)}</div>
+                <div className="text-slate-500">最近交班：{formatMacauDateTime(shift.closedAt)}</div>
               ) : null}
             </div>
 
@@ -716,7 +717,7 @@ export function ShiftPage() {
                   ) : (
                     filteredShiftHistory.map((row) => (
                       <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
-                        <td className="px-3 py-3 text-slate-700">{row.closedAt.replace("T", " ").slice(0, 16)}</td>
+                        <td className="px-3 py-3 text-slate-700">{formatMacauDateTime(row.closedAt)}</td>
                         <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
                         <td className="px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
                         <td className="px-3 py-3 text-slate-700">
@@ -833,7 +834,7 @@ export function ShiftPage() {
 
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-              <div>{shift.openedAt ? `開工時間：${shift.openedAt.replace("T", " ").slice(0, 16)}` : "未記錄開工時間"}</div>
+              <div>{shift.openedAt ? `開工時間：${formatMacauDateTime(shift.openedAt)}` : "未記錄開工時間"}</div>
               <div className="mt-1">應收現金：{formatMoney(expectedCash)}</div>
               <div className="mt-1">待同步事件：{queueSummary.pendingEvents} · 待補傳打印：{queueSummary.pendingPrints}</div>
               {Number.isFinite(actualCashValue) ? <div className="mt-1">實收現金：{formatMoney(actualCashValue)} · 差額：{formatMoney(cashDifference)}</div> : null}

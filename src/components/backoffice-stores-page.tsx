@@ -6,9 +6,11 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchBackofficeOverview, updateLocalStoreActive } from "@/lib/backoffice-client";
 import { AccountStore, AccountUser, BackofficeSyncJob } from "@/lib/types";
 
+import { formatMacauDateTime } from "@/lib/format";
+
 function formatTime(value?: string) {
   if (!value) return "未記錄";
-  return value.replace("T", " ").slice(0, 16);
+  return formatMacauDateTime(value);
 }
 
 function storeAccounts(accounts: AccountUser[], storeId: string) {

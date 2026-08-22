@@ -1,6 +1,7 @@
 "use client";
 
 import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -868,7 +869,7 @@ export function PrintCenter() {
                           </span>
                         </div>
 
-                        <div className="mt-3 text-xs text-slate-500">{job.createdAt.replace("T", " ").slice(0, 16)}</div>
+                        <div className="mt-3 text-xs text-slate-500">{formatMacauDateTime(job.createdAt)}</div>
 
                         <div className="mt-4 grid grid-cols-2 gap-2">
                           <button
@@ -1954,7 +1955,7 @@ export function PrintCenter() {
                     {activeJob.status === "sent" ? "已發送" : activeJob.status === "pending" ? "待補傳" : "失敗"}
                   </div>
                 </div>
-                <div className="text-right text-xs text-slate-500">{activeJob.createdAt.replace("T", " ").slice(0, 16)}</div>
+                <div className="text-right text-xs text-slate-500">{formatMacauDateTime(activeJob.createdAt)}</div>
               </div>
 
               <div className="mt-3 grid gap-3">
