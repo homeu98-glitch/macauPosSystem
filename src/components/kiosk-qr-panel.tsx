@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactElement } from "react";
 
 import { mockBootstrap } from "@/lib/mock-data";
-import { loadAuthSession, loadBootstrapCache } from "@/lib/storage";
+import { loadAuthSession, loadBootstrapCache, loadPosLocalSettings } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { encodeQrMatrix } from "@/lib/qrcode";
 
@@ -64,7 +64,15 @@ export function KioskQrPanel() {
   // /api/pos/bootstrap 攞返所屬店真名（displayStoreName fallback 到 bootstrap.storeName）。
 
   const origin = host || (typeof window !== "undefined" ? window.location.origin : "https://macau-pos-system.vercel.app");
-  const tables = bootstrap.tables;
+  // 合併共享 bootstrap.tables 同「樓層與桌台」本地枱（cashier 在設定新增嘅枱），按 id 去重。
+  // 確保掃碼區 QR 一定反映商家喺 POS 新增嘅枱，唔會漏咗只喺 localSettings.floors 嘅枱。
+  const localTables = loadPosLocalSettings().floors.flatMap((floor) => floor.tables);
+  const seenTableIds = new Set<string>();
+  const tables = [...bootstrap.tables, ...localTables].filter((table) => {
+    if (seenTableIds.has(table.id)) return false;
+    seenTableIds.add(table.id);
+    return true;
+  });
 
   return (
     <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">

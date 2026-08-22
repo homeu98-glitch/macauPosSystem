@@ -156,8 +156,22 @@ export function DeviceSettings() {
   }, [cachedConfig, cachedLocalSettings]);
 
   function saveTablesLocal() {
+    // 同步「樓層與桌台」嘅枱去 bootstrap.tables（掃碼區 QR / 手機 / kiosk 讀嘅共享真源），
+    // 唔好只留喺 localSettings.floors。用 merge（本地枱優先、bootstrap 獨有枱保留），
+    // 避免覆蓋式寫入誤刪 DB 已有嘅枱（例如舊 store 嘅枱只喺 bootstrap.tables）。
+    const localTables = localSettings.floors.flatMap((floor) => floor.tables);
+    const localIds = new Set(localTables.map((t) => t.id));
+    const cached = loadBootstrapCache();
+    if (cached) {
+      const mergedTables = [
+        ...localTables,
+        ...cached.tables.filter((t) => !localIds.has(t.id)),
+      ];
+      saveBootstrapCache({ ...cached, tables: mergedTables });
+      setMenuDraft((current) => (current ? { ...current, tables: mergedTables } : current));
+    }
     savePosLocalSettings(localSettings);
-    setStatus("已保存樓層與桌台到本機。");
+    setStatus("已保存樓層與桌台，並同步至掃碼區與後台草稿（按「保存菜單」推去手機 / kiosk）。");
   }
 
   async function beginLedgerMenuImport() {
