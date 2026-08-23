@@ -69,6 +69,16 @@ export function resolveJobPrinter(job: PrintJob): DevicePrinterConfig | undefine
   );
 }
 
+/**
+ * 新 PrintJob 嘅初始狀態。
+ * 一律回 "pending"，交畀背景 flush worker（dispatch.ts）按 native / companion / relay 通道派發；
+ * 無可用通道時 worker 會維持 pending 等下次 flush。Printer Hub 已移除（見 docs/50），
+ * 唔再樂觀標 "sent"（否則 worker 會 skip 呢啲 job，永遠唔會真正出單）。
+ */
+export function resolvePrintJobStatus(_networkOnline: boolean): PrintJob["status"] {
+  return "pending";
+}
+
 // ─────────────────────────────────────────────────────────────
 // QR 掃描（動態載入 jsQR from CDN，同 print.html）
 // ─────────────────────────────────────────────────────────────
