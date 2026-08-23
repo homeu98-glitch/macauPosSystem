@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 
 import { hydrateSalonFromPosDb } from "@/lib/salon/storage";
+import { tryAutoPairCompanion } from "@/lib/print-bridge/auto-pair-companion";
 
 // Salon 共享 layout：喺所有 /salon/* 頁面掛載時，由 POS DB hydrate 一次。
 // 唔改變現有頁面結構（頁面自行渲染 SalonSidebar + 內容）。
@@ -15,6 +16,7 @@ export default function SalonLayout({ children }: { children: ReactNode }) {
     if (hydrateStarted) return;
     hydrateStarted = true;
     void hydrateSalonFromPosDb();
+    tryAutoPairCompanion();
   }, []);
 
   return <>{children}</>;

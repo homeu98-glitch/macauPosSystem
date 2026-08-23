@@ -1,16 +1,47 @@
 {
   "name": "macau-pos-desktop-companion",
   "version": "0.1.0",
-  "description": "Macau POS 桌面 Companion 代理：localhost HTTP，俾瀏覽器開嘅 POS 經 OS 權限打到 LAN/USB/BT 打印機（見 docs/47）",
+  "description": "Macau POS 桌面 Companion 代理：localhost HTTP，喺桌面瀏覽器開嘅 POS 經 OS 權限打到 LAN 打印機（見 docs/47）。可打包成 exe 安裝檔。",
   "type": "module",
-  "main": "server.mjs",
+  "main": "electron/main.js",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "electron .",
+    "serve": "node server.mjs",
+    "dist": "electron-builder --win nsis"
   },
   "dependencies": {
     "iconv-lite": "^0.6.3"
   },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0"
+  },
   "engines": {
     "node": ">=18"
+  },
+  "build": {
+    "appId": "com.macau.pos.companion",
+    "productName": "Macau POS Companion",
+    "directories": {
+      "output": "dist",
+      "buildResources": "electron"
+    },
+    "files": [
+      "companion-server.mjs",
+      "server.mjs",
+      "electron/**/*",
+      "companion.config.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "electron/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Macau POS Companion"
+    }
   }
 }
