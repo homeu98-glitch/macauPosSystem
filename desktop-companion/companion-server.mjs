@@ -201,8 +201,15 @@ function createHandler() {
     }
 
     if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(statusPageHtml());
+      // 桌面殼（Electron）嘅視窗已經載 Vercel 網頁，唔使 companion 自己 serve 狀態頁。
+      // 狀態頁改由 electron/status.html 獨立提供（main 可另開視窗載佢）。
+      // 純 Node（npm run serve）模式如果你自己瀏覽器開，可以改叫 /status 睇：
+      if (req.url === "/status") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(statusPageHtml());
+      }
+      res.writeHead(404);
+      return res.end();
     }
 
     if (req.method === "GET" && req.url === "/api/health") {
