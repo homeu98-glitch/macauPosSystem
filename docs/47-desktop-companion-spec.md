@@ -152,11 +152,11 @@ Companion 要「開機自啟、常駐、自動更新、托盤圖示」：
 ## 8. 分階段
 
 - **P2.0（骨架，已完成）**：`server.mjs` localhost HTTP ＋ LAN TCP 出單 ＋ 最小 ESC/POS ＋ token/CORS ＋ health。網頁側 `companion-transport.ts` / `companion-config.ts` ＋ `dispatch.ts` 接駁。
-- **P2.1**：抽出共用 ESC/POS renderer（平台無關模組），替換骨架內最小版。
-- **P2.2**：USB 傳輸（node-usb ＋ 驅動／權限指引）。
-- **P2.3**：BT 傳輸（限需求）。
-- **P2.4**：打包成 Electron/Tauri 或後台 service ＋ 自啟 ＋ 自動更新 ＋ 簽名公證。
-- **P2.5**：設置頁「配對 Companion」UI（生成 token、寫 `localStorage`、探活）。
+- **P2.1（已於 2026-08 完成，見 doc 50）**：LAN mDNS 自動發現——`companion-server.mjs` 加 `bonjour` 掃描 ＋ `GET /api/discover`；網頁「掃描 LAN」按鈕自動填 IP。
+- **P2.2（已於 2026-08 完成，見 doc 50）**：USB 傳輸——`companion-server.mjs` `printUsb()` 經 `usb` 套件 `findByIds(vid,pid)` → `transfer(buf)`；`package.json` 加 `usb` dependency。
+- **P2.3（已於 2026-08 完成，見 doc 50）**：BT 傳輸——`companion-server.mjs` `printBluetooth()` 經 `serialport` 打 Windows 配對後虛擬 COM port（填落 `bluetoothName`）；`package.json` 加 `serialport` dependency。
+- **P2.4（已於 2026-08 完成，見 doc 48）**：打包成 Electron ＋ NSIS 安裝檔 ＋ tray ＋ 自動更新（electron-updater）；簽名公證待做（SmartScreen 警告）。
+- **P2.5（已於 2026-08 完成）**：設置頁「桌面 Companion 代理」UI（填 URL/token、探活、測試打印）+ QR 掃描配對。
 
 ---
 

@@ -90,11 +90,13 @@ Companion 同 POS 之間固定用 **`127.0.0.1:9311`（loopback）**，呢個係
 | localhost HTTP 服務 ＋ CORS ＋ token | ✅ |
 | `GET /api/health` | ✅ |
 | LAN 直打（TCP → IP:9100） | ✅ |
+| LAN mDNS 自動發現（`GET /api/discover`，bonjour） | ✅（2026-08，docs/50 P1） |
+| USB 傳輸（node-usb，VID/PID → bulk transfer） | ✅（2026-08，docs/50 P2；需 libusb 驅動） |
+| 藍牙傳輸（Windows 虛擬 COM port，serialport） | ✅（2026-08，docs/50 P2；BT 名稱填 COM port） |
 | 最小 ESC/POS renderer（init/文字/切紙/charset） | ✅（生產請替換成共用模組，docs/47 §4） |
-| USB 傳輸（node-usb） | ❌ stub（docs/47 P2.2） |
-| 藍牙傳輸 | ❌ stub（docs/47 P2.3） |
 | 共用 ESC/POS renderer 抽出 | ❌（docs/47 決策①） |
 | 自動更新 / 開機自啟（安裝後可手動加捷徑去啟動資料夾） | ⚠️ 安裝檔有桌面捷徑；開機自啟要手動排程或 P2.4 |
+| Printer Hub（Sunmi APK） | ❌ 已於 2026-08 移除（docs/50 P0），統一經 Companion / native bridge / relay |
 
 ## 安全
 

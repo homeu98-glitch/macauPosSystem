@@ -40,6 +40,69 @@ try {
   /* 未裝 iconv-lite：fallback utf-8 */
 }
 
+// ---- mDNS 自動發現 LAN 打印機（bonjour，純 JS 零原生依賴）----
+// 掃描 ESC/POS 打印機常見 mDNS 服務：_printer._tcp / _escpos._tcp / _pdl-datastream._tcp（HP RAW:9100）
+// 見 docs/50 P1。動態 import 避免 standalone server.mjs 無裝 bonjour 時崩。
+let bonjourLib = null;
+try {
+  bonjourLib = (await import("bonjour")).default;
+} catch {
+  /* 未裝 bonjour：/api/discover 會回空，唔影響其他功能 */
+}
+
+function discoverPrinters(timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    if (!bonjourLib) {
+      resolve([]);
+      return;
+    }
+    const bonjour = bonjourLib();
+    const found = new Map();
+    const services = ["_printer._tcp.local", "_escpos._tcp.local", "_pdl-datastream._tcp.local"];
+    let pending = services.length;
+    const done = () => {
+      if (pending <= 0) finish();
+    };
+    const finish = () => {
+      try {
+        bonjour.destroy();
+      } catch {}
+      resolve([...found.values()]);
+    };
+    const onUp = (svc) => {
+      const ip = (svc.addresses || []).find((a) => !a.startsWith(":")) || svc.host;
+      if (!ip) return;
+      const key = `${svc.name}@${ip}`;
+      if (!found.has(key)) {
+        found.set(key, {
+          name: svc.name || ip,
+          ip,
+          port: svc.port || 9100,
+          type: svc.type?.replace(".local", "") || "printer",
+        });
+      }
+    };
+    for (const s of services) {
+      try {
+        const browser = bonjour.find({ type: s.replace(".local", ""), protocol: "tcp" });
+        browser.on("up", onUp);
+        browser.on("error", () => {
+          pending -= 1;
+          done();
+        });
+        setTimeout(() => {
+          pending -= 1;
+          done();
+        }, timeoutMs);
+      } catch {
+        pending -= 1;
+        done();
+      }
+    }
+    if (pending <= 0) finish();
+  });
+}
+
 function encodeText(str, charset) {
   if (iconv) {
     try {
@@ -110,14 +173,86 @@ function printLan(printer, buf) {
   });
 }
 
-// ---- 按 connectionType 分派（USB/BT 骨架留 stub，見 docs/47 P2.2/P2.3）----
+// ---- USB 打印（node-usb，見 docs/50 P2）----
+// 經 VID/PID 搵 device → 開 interface → 搵 outbound endpoint → transfer ESC/POS buffer。
+let usbLib = null;
+try {
+  usbLib = (await import("usb")).default;
+} catch {
+  /* 未裝 usb：printUsb 會回錯 */
+}
+
+async function printUsb(printer, buf) {
+  if (!usbLib) return { ok: false, error: "companion 未安裝 usb 套件（USB 打印停用）" };
+  const vid = parseInt(String(printer.usbVendorId || "").replace(/^0x/, ""), 16);
+  const pid = parseInt(String(printer.usbProductId || "").replace(/^0x/, ""), 16);
+  if (!vid || !pid) return { ok: false, error: "USB 打印機缺 VID/PID" };
+  const dev = usbLib.findByIds(vid, pid);
+  if (!dev) return { ok: false, error: `搵唔到 USB 設備 ${printer.usbVendorId}:${printer.usbProductId}（確認已連接）` };
+  try {
+    dev.open();
+    const iface = dev.interfaces[0];
+    // 如果 kernel 已 claim，先 detach
+    try {
+      if (iface.isKernelDriverActive()) iface.detachKernelDriver();
+    } catch {}
+    iface.claim();
+    const outEp = iface.endpoints.find((ep) => ep.direction === "out" && ep.transferType === usbLib?.LIBUSB_TRANSFER_TYPE_BULK);
+    if (!outEp) {
+      iface.release(() => dev.close());
+      return { ok: false, error: "USB 設備無 outbound bulk endpoint" };
+    }
+    await new Promise((resolveEp, rejectEp) => {
+      outEp.transfer(buf, (err) => {
+        if (err) rejectEp(new Error(`USB transfer 失敗：${err.errno || err.message}`));
+        else resolveEp();
+      });
+    });
+    iface.release(() => dev.close());
+    return { ok: true };
+  } catch (e) {
+    try { dev.close(); } catch {}
+    return { ok: false, error: e instanceof Error ? e.message : "USB 打印失敗" };
+  }
+}
+
+// ---- 藍牙打印（Windows 配對後當虛擬 COM port，經 serialport 打；見 docs/50 P2）----
+let serialLib = null;
+try {
+  serialLib = (await import("serialport")).default;
+} catch {
+  /* 未裝 serialport：printBluetooth 會回錯 */
+}
+
+async function printBluetooth(printer, buf) {
+  if (!serialLib) return { ok: false, error: "companion 未安裝 serialport 套件（藍牙打印停用）" };
+  // bluetoothName 當 COM port 名（例如 "COM3"）或 bluetoothAddress 映射（平台特定）
+  const comPort = (printer.bluetoothName || "").match(/COM\d+/i)?.[0];
+  if (!comPort) {
+    return { ok: false, error: "藍牙打印機請填 Windows 配對後嘅 COM port（例如 COM3）落「BT 名稱」" };
+  }
+  const port = new serialLib({ path: comPort, baudRate: 9600, autoOpen: false });
+  return new Promise((resolvePort) => {
+    port.open((err) => {
+      if (err) {
+        resolvePort({ ok: false, error: `藍牙 COM 埠開啟失敗：${err.message}` });
+        return;
+      }
+      port.write(buf, (wErr) => {
+        port.drain(() => port.close());
+        if (wErr) resolvePort({ ok: false, error: `藍牙寫入失敗：${wErr.message}` });
+        else resolvePort({ ok: true });
+      });
+    });
+  });
+}
+
+// ---- 按 connectionType 分派（LAN / USB / 藍牙，見 docs/50 P2）----
 async function dispatch(job, printer) {
   const buf = renderEscPos(job, printer);
   if (printer.connectionType === "lan") return printLan(printer, buf);
-  if (printer.connectionType === "usb")
-    return { ok: false, error: "USB 打印未實作於骨架（見 docs/47 P2.2）" };
-  if (printer.connectionType === "bluetooth")
-    return { ok: false, error: "藍牙打印未實作於骨架（見 docs/47 P2.3）" };
+  if (printer.connectionType === "usb") return printUsb(printer, buf);
+  if (printer.connectionType === "bluetooth") return printBluetooth(printer, buf);
   return { ok: false, error: `唔支援嘅 connectionType：${printer.connectionType}` };
 }
 
@@ -210,6 +345,18 @@ function createHandler() {
       }
       res.writeHead(404);
       return res.end();
+    }
+
+    // LAN 打印機自動發現（mDNS）：返 { printers: [{name, ip, port, type}] }
+    // 見 docs/50 P1。前端「掃描 LAN 打印機」按鈕 call 呢度。
+    if (req.method === "GET" && req.url === "/api/discover") {
+      if (!bonjourLib) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ ok: true, printers: [], note: "companion 未安裝 bonjour（mDNS 掃描停用）" }));
+      }
+      const printers = await discoverPrinters();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, printers }));
     }
 
     if (req.method === "GET" && req.url === "/api/health") {

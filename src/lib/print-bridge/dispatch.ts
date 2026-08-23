@@ -1,4 +1,4 @@
-import { isHubConfigured, resolveJobPrinter, sendJobToHub } from "@/lib/print-bridge/hub";
+import { resolveJobPrinter } from "@/lib/print-bridge/hub";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { getCompanionTransport, isCompanionConfigured } from "@/lib/print-bridge/companion-config";
@@ -11,21 +11,20 @@ import { PrintJob } from "@/lib/types";
  * 路由優先級：
  *   1) Native bridge（Sunmi APK WebView，PosNative.printJob）→ 完整 ESC/POS 格式（EscPosRenderer）
  *   2) 否則桌面 Companion（localhost HTTP，瀏覽器開嘅 POS 喺桌面打到 LAN/USB/BT，見 docs/47）
- *   3) 否則 fallback 去 Printer Hub HTTP（sendJobToHub，LAN 直打純文字路徑）
- *   4) 否則經 Cloud Print Relay（relay-transport.ts）→ 店內 Stationary Agent（互聯網備援，見 docs/46）
+ *   3) 否則經 Cloud Print Relay（relay-transport.ts）→ 店內 Stationary Agent（互聯網備援，見 docs/46）
  *
- * 未配對 Hub、無 native、無 companion、又無 relay 嘅 job 維持 pending，等店主喺設置頁配對 Hub / 配置 companion / 配置 relay。
+ * 未配對 native / companion / relay 嘅 job 維持 pending，等店主喺設置頁配置 companion / relay。
+ * Printer Hub 已於 2026-08 評估（docs/50）移除。
  */
 export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   const jobs = loadPrintJobs();
   const pending = jobs.filter((job) => job.status === "pending");
   if (pending.length === 0) return jobs;
 
-  // 有無任何派發通道：native bridge（Android APK）或已配對 Hub。
-  // 舊邏輯喺「未配 Hub」時直接 continue 跳過，令 native-only 模式（Sunmi APK）
-  // 嘅待印 job 永遠卡 pending、收據靜默唔印。現改為：無通道先維持 pending 等下次 flush。
+  // 有無任何派發通道：native bridge（Android APK）/ Companion（桌面）/ relay（互聯網備援）。
+  // 無通道先維持 pending 等下次 flush（店主配置 companion / relay 後自動重試）。
   const hasChannel =
-    isNativeBridgeAvailable() || isCompanionConfigured() || isHubConfigured() || isRelayConfigured();
+    isNativeBridgeAvailable() || isCompanionConfigured() || isRelayConfigured();
   let changed = false;
   const nextJobs = [...jobs];
 
@@ -37,7 +36,7 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     if (result.ok) {
       nextJobs[index] = { ...job, status: "sent" };
     } else if (!hasChannel) {
-      // 完全無通道（未配 Hub、又無 native bridge）：維持 pending，等店主配對後下次 flush 再試。
+      // 完全無通道（未配 companion、又無 native bridge、又無 relay）：維持 pending，等店主配置後下次 flush 再試。
       nextJobs[index] = { ...job, status: "pending" };
     } else {
       nextJobs[index] = { ...job, status: "failed" };
@@ -95,14 +94,7 @@ async function dispatchOneJob(
     if (res.ok) return { ok: true };
     return { ok: false, error: res.error || "companion 打印失敗" };
   }
-  // 3) Hub HTTP（LAN 直打，經店內打印機 IP）
-  if (isHubConfigured()) {
-    if (!printer.ipAddress) {
-      return { ok: false, error: `打印機「${printer.name}」未設定 IP，Hub 無法 LAN 直打` };
-    }
-    return sendJobToHub(job);
-  }
-  // 4) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
+  // 3) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
   const relay = getRelayTransport();
   if (relay) {
     const kind = printer.role === "receipt" ? "receipt" : "kitchen";
@@ -111,5 +103,5 @@ async function dispatchOneJob(
     if (res.ok) return { ok: true };
     return { ok: false, error: res.error || "relay 打印失敗" };
   }
-  return { ok: false, error: "無可用打印通道（native / companion / Hub / relay 都無）" };
+  return { ok: false, error: "無可用打印通道（native / companion / relay 都無）" };
 }

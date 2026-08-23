@@ -1,11 +1,13 @@
 /**
- * Printer Hub adapter — POS 網頁配對 Sunmi 上面跑嘅 Print Agent APK（HTTP Hub :8787）。
+ * Print bridge 共用工具——原 Printer Hub adapter 已於 2026-08 評估（docs/50）移除。
  *
- * 架構：POS（Vercel HTTPS）→ HTTP Hub（店內 LAN :8787）→ raw socket :9100 → 打印機。
- * 同 demo print.html 嘅合約一致：非 HTTPS 先用 fetch POST /api/print，否則用
- * beacon.png 隱藏圖片 chunked 傳輸過 mixed content。
+ * 本檔現只保留三個不被 Hub 專屬、但被其他 transport 共用嘅函數：
+ *   - resolveJobPrinter：按 PrintJob.printerGroup 由 config.printers 搵目標打印機（單一真源，dispatch.ts 用）
+ *   - applyPairText：解析 QR / 手動輸入嘅配對地址（Companion QR 掃描用）
+ *   - loadJsQr：動態載入 jsQR（Companion QR 掃描用）
  *
- * 命名空間 localStorage：posHubIp / posHubPort
+ * 新打印通道：desktop 經 Companion（localhost）、Android 經 native bridge、互聯網備援經 relay。
+ * Hub 發送 / 管理 API 已全刪。
  */
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
@@ -23,200 +25,33 @@ declare global {
   }
 }
 
-/** Hub 嘅 service id（同 APK PrinterService 對齊）。 */
-export const HUB_SERVICES = [
-  { id: "front", label: "前台" },
-  { id: "bar", label: "水吧" },
-  { id: "kitchen", label: "廚房" },
-] as const;
-
-export type HubServiceId = (typeof HUB_SERVICES)[number]["id"];
-
-export interface HubDevice {
-  key: string;
-  name: string;
-  ip: string;
-  mac: string;
-  openPorts: number[];
-  service: string; // "" 或 front/bar/kitchen
-  canRawPrint: boolean;
-}
-
-const DEFAULT_PORT = "8787";
-
-/** 讀取已配對嘅 Hub base URL（http://IP:PORT）。 */
-export function getHubUrl(): string {
-  if (typeof window === "undefined") return "";
-  const ip = window.localStorage.getItem("posHubIp")?.trim();
-  const port = window.localStorage.getItem("posHubPort")?.trim() || DEFAULT_PORT;
-  if (!ip) return "";
-  return `http://${ip}:${port}`;
-}
-
-export function isHubConfigured(): boolean {
-  return getHubUrl() !== "";
-}
-
-/**
- * 新 PrintJob 嘅初始狀態（Hub-only）。
- * 已配對 Hub 嘅 job 交畀 flush worker 經 Hub 派發（樂觀標 sent，失敗再由 worker 改 failed）；
- * 未配對 Hub 嘅 job 維持 pending，等店主喺設置頁配對 Sunmi Hub。
- */
-export function resolvePrintJobStatus(networkOnline: boolean): PrintJob["status"] {
-  if (isHubConfigured()) return "sent";
-  return "pending";
-}
-
-export function saveHubConfig(ip: string, port: string) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem("posHubIp", ip.trim());
-  window.localStorage.setItem("posHubPort", port.trim() || DEFAULT_PORT);
-}
-
-/** 解析 QR / 手動輸入嘅 Hub 地址。支援 http://IP:PORT / poshub://IP:PORT / 純 IP:PORT / 純 IP。 */
+/** 解析 QR / 手動輸入嘅配對地址。支援 http://IP:PORT / poshub://IP:PORT / 純 IP:PORT / 純 IP。
+ *  現主要畀 Companion 代理地址配對用（Companion 同 Hub 格式兼容）。 */
 export function applyPairText(raw: string): { ip: string; port: string } | null {
   const text = String(raw || "").trim();
   let ip = "";
-  let port = DEFAULT_PORT;
+  let port = "8787";
   try {
     if (/^https?:\/\//i.test(text)) {
       const u = new URL(text);
       ip = u.hostname;
-      port = u.port || DEFAULT_PORT;
+      port = u.port || "8787";
     } else if (/^poshub:\/\//i.test(text)) {
       const rest = text.replace(/^poshub:\/\//i, "");
       const parts = rest.split(":");
       ip = parts[0];
-      port = parts[1] || DEFAULT_PORT;
+      port = parts[1] || "8787";
     } else {
       const m = text.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d+))?$/);
       if (m) {
         ip = m[1];
-        port = m[2] || DEFAULT_PORT;
+        port = m[2] || "8787";
       }
     }
   } catch {
     // ignore
   }
   return ip ? { ip, port } : null;
-}
-
-/** 將 PrintJob 渲染成可讀文本票（Hub 嘅 Android 端再做 ESC/POS 封裝）。 */
-export function renderJobToText(job: PrintJob): string {
-  const lines: string[] = [];
-  const tag =
-    job.ticketType === "addon" ? "[加單]" : job.ticketType === "void" ? "[取消]" : "";
-  const header = [
-    tag,
-    job.tableName ? `桌號 ${job.tableName}` : "",
-    job.orderNo ? `單號 ${job.orderNo}` : "",
-  ]
-    .filter(Boolean)
-    .join("  ");
-  if (header) lines.push(header);
-  lines.push("------------------------------");
-  for (const it of job.items ?? []) {
-    let line = `${it.name} x${it.quantity}`;
-    if (it.specs && it.specs.length) line += `  [${it.specs.join(" ")}]`;
-    lines.push(line);
-    if (it.note) lines.push(`  ${it.note}`);
-  }
-  lines.push("------------------------------");
-  return lines.join("\n");
-}
-
-// ─────────────────────────────────────────────────────────────
-// 發送（共用 print.html 合約）
-// ─────────────────────────────────────────────────────────────
-
-function chunkMessage(msg: string, maxEncoded: number): string[] {
-  const chunks: string[] = [];
-  let cur = "";
-  for (const ch of msg) {
-    const trial = cur + ch;
-    if (encodeURIComponent(trial).length > maxEncoded) {
-      if (cur) chunks.push(cur);
-      cur = ch;
-    } else {
-      cur = trial;
-    }
-  }
-  if (cur) chunks.push(cur);
-  return chunks.length ? chunks : [""];
-}
-
-function sendBeacon(
-  base: string,
-  params: { service?: string; ip?: string; title?: string },
-  message: string,
-) {
-  const parts = chunkMessage(message, 1400);
-  const job = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  parts.forEach((chunk, seq) => {
-    const q = new URLSearchParams({
-      job,
-      seq: String(seq),
-      total: String(parts.length),
-      chunk,
-      t: String(Date.now()),
-    });
-    if (params.service) q.set("service", params.service);
-    if (params.ip) q.set("ip", params.ip);
-    if (params.title) q.set("title", params.title);
-    const img = new Image();
-    img.referrerPolicy = "no-referrer";
-    img.src = `${base}/beacon.png?${q.toString()}`;
-  });
-}
-
-async function sendFetch(
-  base: string,
-  body: Record<string, string>,
-): Promise<boolean> {
-  try {
-    const r = await fetch(`${base}/api/print`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const j = (await r.json().catch(() => ({}))) as { received?: boolean; ok?: boolean };
-    return Boolean(j.received || j.ok);
-  } catch {
-    return false;
-  }
-}
-
-/** 發送到指定 IP（直接打某部打印機，唔經 service 分發）。 */
-export async function sendToHubIp(ip: string, title: string, message: string): Promise<void> {
-  const base = getHubUrl();
-  if (!base) throw new Error("未配對 Printer Hub");
-  if (typeof location !== "undefined" && location.protocol !== "https:") {
-    if (await sendFetch(base, { ip, title, message })) return;
-  }
-  sendBeacon(base, { ip, title }, message);
-}
-
-/**
- * 高階：將 PrintJob 經 Printer Hub（Sunmi APK）直打到對應打印機 IP（:9100）。
- * 路由按 config.printers 嘅 role / zoneId 對應（單一真源），唔再用 Hub service 綁定
- * （assign / printService 路徑於最新 APK 已非主要路徑，且實測唔 work）。
- */
-export async function sendJobToHub(
-  job: PrintJob,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const base = getHubUrl();
-  if (!base) return { ok: false, error: "未配對 Printer Hub" };
-  const printer = resolveJobPrinter(job);
-  if (!printer || !printer.ipAddress) {
-    return { ok: false, error: `搵唔到對應打印機 IP（printerGroup=${job.printerGroup}）` };
-  }
-  const message = renderJobToText(job);
-  try {
-    await sendToHubIp(printer.ipAddress, printer.name, message);
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "發送到 Hub 失敗" };
-  }
 }
 
 /** 按 PrintJob.printerGroup 由 config.printers 搵出目標打印機（單一真源）。 */
@@ -238,115 +73,6 @@ export function resolveJobPrinter(job: PrintJob): DevicePrinterConfig | undefine
   return printers.find(
     (p) => (p.role === "zone" || p.role === "label") && (p.zoneId ?? "") === job.printerGroup && p.enabled,
   );
-}
-
-// ─────────────────────────────────────────────────────────────
-// Hub 管理 API
-// ─────────────────────────────────────────────────────────────
-
-export async function fetchHubStatus(): Promise<{
-  ok: boolean;
-  listening?: boolean;
-  localIp?: string;
-  port?: number;
-  deviceCount?: number;
-  bound?: number;
-  subnetPrefix?: string;
-  devices?: HubDevice[];
-  error?: string;
-}> {
-  const base = getHubUrl();
-  if (!base) return { ok: false, error: "未配對 Printer Hub" };
-  try {
-    const r = await fetch(`${base}/api/status`, { cache: "no-store" });
-    const j = (await r.json()) as {
-      ok?: boolean;
-      listening?: boolean;
-      localIp?: string;
-      port?: number;
-      deviceCount?: number;
-      bound?: number;
-      subnetPrefix?: string;
-      devices?: HubDevice[];
-    };
-    return {
-      ok: j.ok ?? false,
-      listening: j.listening,
-      localIp: j.localIp,
-      port: j.port,
-      deviceCount: j.deviceCount,
-      bound: j.bound,
-      subnetPrefix: j.subnetPrefix,
-      devices: j.devices,
-    };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Hub 離線" };
-  }
-}
-
-export async function fetchHubDevices(): Promise<{
-  ok: boolean;
-  devices?: HubDevice[];
-  error?: string;
-}> {
-  const base = getHubUrl();
-  if (!base) return { ok: false, error: "未配對 Printer Hub" };
-  try {
-    const r = await fetch(`${base}/api/devices`, { cache: "no-store" });
-    const j = (await r.json()) as { ok?: boolean; devices?: HubDevice[] };
-    return { ok: j.ok ?? false, devices: j.devices };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Hub 離線" };
-  }
-}
-
-async function hubPost(
-  path: string,
-  body: Record<string, string>,
-): Promise<{ ok: boolean; devices?: HubDevice[]; error?: string }> {
-  const base = getHubUrl();
-  if (!base) return { ok: false, error: "未配對 Printer Hub" };
-  try {
-    const r = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(body).toString(),
-    });
-    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; devices?: HubDevice[]; error?: string };
-    return { ok: j.ok ?? false, devices: j.devices, error: j.error };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Hub 離線" };
-  }
-}
-
-export function manualAddHubPrinter(ip: string, name: string, serviceId: HubServiceId | string) {
-  return hubPost("/api/manual", { ip, name, service: serviceId });
-}
-
-export function removeHubPrinter(key: string) {
-  return hubPost("/api/remove", { key });
-}
-
-export function clearHubPrinters() {
-  return hubPost("/api/clear", {});
-}
-
-export async function startHubScan(prefix?: string) {
-  // Hub 嘅 requestScan() 要求 prefix 係 3 段 IP（網段，例如 192.168.1），
-  // 否則直接 return false 唔掃描。冇傳 prefix 就由 /api/status 嘅 subnetPrefix 自動拎。
-  let p = (prefix ?? "").trim();
-  if (!p) {
-    const st = await fetchHubStatus();
-    p = st.subnetPrefix ?? "";
-  }
-  if (!p) {
-    return {
-      ok: false,
-      error: "請先填寫掃描網段（例如 192.168.1），或等 Hub 自動偵測網段",
-      devices: [],
-    };
-  }
-  return hubPost("/api/scan", { prefix: p, identify: "true" });
 }
 
 // ─────────────────────────────────────────────────────────────
