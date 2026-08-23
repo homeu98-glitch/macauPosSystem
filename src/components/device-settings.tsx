@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { AppUpdatePanel } from "@/components/app-update-panel";
 import { KioskQrPanel } from "@/components/kiosk-qr-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
@@ -32,6 +33,7 @@ import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { applyPairText, loadJsQr } from "@/lib/print-bridge/hub";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
+import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
