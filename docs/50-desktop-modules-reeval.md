@@ -165,6 +165,12 @@
 - 網頁端 `companion-transport.ts` 已經傳 `printer`（含 `usbVendorId`/`usbProductId`/`bluetoothAddress`/`bluetoothName`）畀 companion，協議唔使改。
 - 限制：USB 要 `libusb` 驅動（Windows 可能要 Zadig 綁定）；BT 只 Windows COM port 路徑（macOS/Linux BT 要另行實作）；需用家 dev box 實機測試。
 
+### P2 後續 · `LIBUSB_ERROR_NOT_SUPPORTED` 排查 + USB 自動掃描（2026-08-24）
+- **成因**：Windows 對 USB 打印類設備（USB Print Class，`usbprint.sys`）預裝通用驅動並長期 claim 住 interface。`companion` 用 `node-usb` 嘅 `iface.detachKernelDriver()` 喺呢類驅動上會失敗（Windows 唔似 Linux 咁可以 detach generic driver），跟住 `iface.claim()` 直接掟 `LIBUSB_ERROR_NOT_SUPPORTED`，ESC/POS buffer 冇 interface 可 transfer → 印唔到。
+- **解決**：用 [Zadig](https://zadig.akeo.ie/) 將呢部設備嘅驅動由 `usbprint.sys` 替換成 **WinUSB**（VID/PID 唔使變，揀啱設備後 Option → 換 driver → Replace）。換完 `detachKernelDriver`/`claim` 就成功。唔想搞驅動就改行 **LAN 打印**（IP:9100，免驅動）。
+- **錯誤訊息硬化**：`printUsb()` 嘅 catch 已經偵測 `LIBUSB_ERROR_NOT_SUPPORTED` 並返中文指引（含 Zadig 步驟），POS 側 `測試連線`/出單失敗會直接顯示，唔使 user 自己查 errno。
+- **USB 免手抄 VID/PID**：新增 `GET /api/usb-list`（`companion-server.mjs`）經 `usb.getDeviceList()` 列舉已連接設備嘅 `vid`/`pid`；網頁端「添加打印機」USB 表單同「打印機綁定」USB 編輯都加咗「掃描 USB」按鈕，自動填 VID/PID（多過一部就出下拉揀選），用家唔使再自行查。
+
 ### 驗證狀態
 - `companion-server.mjs` / `electron/main.js`：`node --check` 過。
 - `device-settings.tsx` / `dispatch.ts` / `hub.ts`：tsc 因專案大 timeout 跑唔完，但 grep 確認改動檔無 `error TS`；import/export 對齊（hub.ts 剩 `resolveJobPrinter`/`applyPairText`/`loadJsQr`，dispatch/device-settings import 匹配）。

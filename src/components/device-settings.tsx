@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppUpdatePanel } from "@/components/app-update-panel";
@@ -31,7 +31,6 @@ import {
 } from "@/lib/ledger/menu-import";
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import { applyPairText, loadJsQr } from "@/lib/print-bridge/hub";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
 
@@ -53,6 +52,7 @@ export function DeviceSettings() {
 
   const [discovering, setDiscovering] = useState(false);
   const [discoveredLan, setDiscoveredLan] = useState<{ name: string; ip: string; port: number; type: string }[]>([]);
+  const [discoveredUsb, setDiscoveredUsb] = useState<{ vid: string; pid: string; bus?: number; address?: number }[]>([]);
   const [manualIp, setManualIp] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualRole, setManualRole] = useState<DevicePrinterConfig["role"]>("zone");
@@ -64,16 +64,14 @@ export function DeviceSettings() {
   const [manualBtName, setManualBtName] = useState("");
   // ── 桌面 Companion 代理配對（localhost HTTP，見 docs/47）──
   const [companionUrl, setCompanionUrl] = useState(() =>
-    typeof window !== "undefined" ? window.localStorage.getItem("macau-pos-companion-url") ?? "" : "",
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("macau-pos-companion-url") ?? "http://127.0.0.1:9311"
+      : "http://127.0.0.1:9311",
   );
   const [companionToken, setCompanionToken] = useState(() =>
     typeof window !== "undefined" ? window.localStorage.getItem("macau-pos-companion-token") ?? "" : "",
   );
   const [companionHealth, setCompanionHealth] = useState<string>("");
-  const [companionPairing, setCompanionPairing] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const scanStreamRef = useRef<MediaStream | null>(null);
-  const scanTimerRef = useRef<number | null>(null);
   const [activeTab, setActiveTab] = useState<
     "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "kiosk"
   >("device");
@@ -532,6 +530,38 @@ export function DeviceSettings() {
     }
   }
 
+  // USB 打印機自動發現（node-usb）：經 Companion /api/usb-list 列舉已連接設備，自動填入 VID/PID，用家唔使查。
+  async function handleScanUsb(onPick?: (vid: string, pid: string) => void) {
+    setStatus("正在掃描 USB 打印機…");
+    try {
+      const base = companionUrl.trim() || "http://127.0.0.1:9311";
+      const res = await fetch(`${base.replace(/\/+$/, "")}/api/usb-list`, {
+        headers: companionToken.trim() ? { "x-companion-token": companionToken.trim() } : {},
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        devices?: { vid: string; pid: string; bus?: number; address?: number }[];
+        note?: string;
+      };
+      const list = data.devices ?? [];
+      setDiscoveredUsb(list);
+      if (list.length === 0) {
+        setStatus(data.note || "未發現 USB 打印機，請確認已連接電腦，或手動填 VID/PID");
+      } else if (list.length === 1) {
+        const pick = onPick ?? ((v, p) => {
+          setManualUsbVendor(v);
+          setManualUsbProduct(p);
+        });
+        pick(list[0].vid, list[0].pid);
+        setStatus(`發現 USB 打印機 ${list[0].vid}:${list[0].pid}，已自動填入`);
+      } else {
+        setStatus(`發現 ${list.length} 部 USB 設備，請喺下方清單揀選`);
+      }
+    } catch (e) {
+      setStatus(`USB 掃描失敗：${e instanceof Error ? e.message : "companion 未連線"}`);
+    }
+  }
+
   async function handleManualAdd() {
     if (manualConn === "lan") {
       if (!manualIp.trim()) {
@@ -587,112 +617,6 @@ export function DeviceSettings() {
     setManualBtAddress("");
     setManualBtName("");
   }
-
-  // QR 掃描配對
-  function stopScan() {
-    if (scanTimerRef.current) {
-      window.clearTimeout(scanTimerRef.current);
-      scanTimerRef.current = null;
-    }
-    if (scanStreamRef.current) {
-      scanStreamRef.current.getTracks().forEach((t) => t.stop());
-      scanStreamRef.current = null;
-    }
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setCompanionPairing(false);
-  }
-
-  function applyCompanionPairFromQr(raw: string) {
-    const parsed = applyPairText(raw);
-    if (!parsed) return false;
-    const nextUrl = `http://${parsed.ip}:${parsed.port}`;
-    setCompanionUrl(nextUrl);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("macau-pos-companion-url", nextUrl);
-    }
-    setCompanionHealth(`已配對 ${nextUrl}`);
-    setStatus(`已配對 Companion：${nextUrl}`);
-    return true;
-  }
-
-  async function tickScan() {
-    const video = videoRef.current;
-    if (!video || !scanStreamRef.current) return;
-    const jsQR = await loadJsQr();
-    if (!jsQR) {
-      scanTimerRef.current = window.setTimeout(tickScan, 300);
-      return;
-    }
-    if (video.readyState >= 2 && video.videoWidth && video.videoHeight) {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(img.data, canvas.width, canvas.height);
-        if (code?.data && applyCompanionPairFromQr(code.data)) {
-          stopScan();
-          return;
-        }
-      }
-    }
-    scanTimerRef.current = window.setTimeout(tickScan, 180);
-  }
-
-  async function startScan() {
-    stopScan();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-      scanStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setCompanionPairing(true);
-      void tickScan();
-    } catch {
-      setStatus("無法開啟相機，請改手動輸入 Companion 地址或選取 QR 圖片");
-    }
-  }
-
-  async function handlePickQr(ev: React.ChangeEvent<HTMLInputElement>) {
-    const file = ev.target.files?.[0];
-    if (!file) return;
-    const jsQR = await loadJsQr();
-    if (!jsQR) {
-      setStatus("QR 解碼庫載入失敗，請稍後再試或手動輸入 Companion 地址");
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, img.width, img.height);
-      const code = jsQR(data.data, img.width, img.height);
-      if (code?.data) {
-        if (!applyCompanionPairFromQr(code.data)) {
-          setStatus("QR 無法辨識");
-        }
-      } else {
-        setStatus("圖片中找不到 QR");
-      }
-    };
-    img.src = URL.createObjectURL(file);
-  }
-
-  useEffect(() => {
-    return () => stopScan();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
@@ -796,6 +720,34 @@ export function DeviceSettings() {
                           value={manualUsbProduct}
                           onChange={(e) => setManualUsbProduct(e.target.value)}
                         />
+                        <button
+                          type="button"
+                          disabled={discovering}
+                          onClick={() => handleScanUsb()}
+                          className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                        >
+                          {discovering ? "掃描中…" : "掃描 USB"}
+                        </button>
+                        {discoveredUsb.length > 1 ? (
+                          <select
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                            value=""
+                            onChange={(e) => {
+                              const d = discoveredUsb[Number(e.target.value)];
+                              if (d) {
+                                setManualUsbVendor(d.vid);
+                                setManualUsbProduct(d.pid);
+                              }
+                            }}
+                          >
+                            <option value="">揀選 USB 設備…</option>
+                            {discoveredUsb.map((d, i) => (
+                              <option key={`${d.vid}-${d.pid}-${i}`} value={i}>
+                                {d.vid}:{d.pid}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
                       </>
                     ) : (
                       <>
@@ -916,48 +868,12 @@ export function DeviceSettings() {
                 >
                   測試連線
                 </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  onClick={startScan}
-                >
-                  掃描 QR
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  onClick={() => document.getElementById("companionQrFile")?.click()}
-                >
-                  選取 QR 圖片
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  onClick={stopScan}
-                >
-                  停止掃描
-                </button>
-                <input
-                  id="companionQrFile"
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={handlePickQr}
-                />
               </div>
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                className="mt-2 w-full rounded-lg bg-black"
-                style={{ display: companionPairing ? "block" : "none", maxHeight: 260 }}
-              />
               {companionHealth ? (
                 <p className="mt-2 text-xs text-slate-500">{companionHealth}</p>
               ) : null}
             </div>
-            <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
+            <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 lg:col-span-2">
               <AppUpdatePanel />
             </section>
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
@@ -1304,6 +1220,17 @@ export function DeviceSettings() {
                                 value={printer.usbProductId ?? ""}
                               />
                             </label>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleScanUsb((v, p) =>
+                                  updatePrinter(printer.id, { usbVendorId: v, usbProductId: p }),
+                                )
+                              }
+                              className="self-end rounded-2xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                            >
+                              掃描 USB
+                            </button>
                           </>
                         ) : (
                           <>

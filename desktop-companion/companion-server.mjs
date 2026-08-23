@@ -212,7 +212,44 @@ async function printUsb(printer, buf) {
     return { ok: true };
   } catch (e) {
     try { dev.close(); } catch {}
-    return { ok: false, error: e instanceof Error ? e.message : "USB 打印失敗" };
+    const msg = e instanceof Error ? e.message : "USB 打印失敗";
+    // LIBUSB_ERROR_NOT_SUPPORTED：Windows 通用 usbprint.sys 驅動佔住咗設備，libusb 搶唔到 interface。
+    if (/NOT_SUPPORTED|LIBUSB_ERROR_NOT_SUPPORTED/i.test(msg)) {
+      return {
+        ok: false,
+        error:
+          "LIBUSB_ERROR_NOT_SUPPORTED：Windows 用通用 usbprint.sys 驅動佔住咗部打印機，libusb 搶唔到 interface。" +
+          "解決：用 Zadig（zadig.akeo.ie）將呢部設備嘅驅動替換成 WinUSB（VID/PID 唔使變），再試一次；" +
+          "或者改用 LAN 打印（IP:9100，免驅動）。",
+      };
+    }
+    return { ok: false, error: `USB 打印失敗：${msg}` };
+  }
+}
+
+// ---- USB 設備列舉（免手動查 VID/PID，見 docs/50 P2）----
+// 前端「掃描 USB」按鈕 call 呢度，自動填入 VID/PID，用家唔使自行查。
+async function listUsbDevices() {
+  if (!usbLib) return { ok: true, devices: [], note: "companion 未安裝 usb 套件（USB 掃描停用）" };
+  try {
+    const list = usbLib.getDeviceList() || [];
+    const devices = list
+      .map((dev) => {
+        const d = dev.deviceDescriptor || {};
+        const vid = d.idVendor;
+        const pid = d.idProduct;
+        if (!vid || !pid) return null;
+        return {
+          vid: `0x${vid.toString(16).padStart(4, "0")}`,
+          pid: `0x${pid.toString(16).padStart(4, "0")}`,
+          bus: dev.busNumber,
+          address: dev.deviceAddress,
+        };
+      })
+      .filter(Boolean);
+    return { ok: true, devices };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "USB 列舉失敗" };
   }
 }
 
@@ -357,6 +394,13 @@ function createHandler() {
       const printers = await discoverPrinters();
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ ok: true, printers }));
+    }
+
+    // USB 設備列舉（免手動查 VID/PID）：前端「掃描 USB」按鈕 call 呢度。
+    if (req.method === "GET" && req.url === "/api/usb-list") {
+      const result = await listUsbDevices();
+      res.writeHead(result.ok ? 200 : 500, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(result));
     }
 
     if (req.method === "GET" && req.url === "/api/health") {
