@@ -35,7 +35,16 @@ function createWindow() {
     },
     show: false,
   });
-  win.loadURL("http://127.0.0.1:9311/");
+  // 載入狀態頁；若 server 仲未 ready（極短 race）就重試，避免空白視窗
+  let loadAttempts = 0;
+  const loadStatus = () => {
+    loadAttempts += 1;
+    win.loadURL("http://127.0.0.1:9311/");
+  };
+  win.webContents.on("did-fail-load", () => {
+    if (loadAttempts < 6) setTimeout(loadStatus, 600);
+  });
+  loadStatus();
   win.once("ready-to-show", () => win.show());
   // 關窗唔退出，收去 tray（代理繼續喺背景跑）
   win.on("close", (e) => {

@@ -251,10 +251,14 @@ function createHandler() {
 }
 
 // ---- 雙棧 loopback listen（IPv4 + IPv6），避免 localhost 解析到 ::1 但只綁 IPv4 嘅 mismatch ----
+// ⚠️ 必須用「兩個獨立 server 實例」各綁一個 stack：喺同一個 server 實例上 call listen() 兩次會令
+//    兩個 bind 都報 EADDRINUSE → 咩都冇 bind 到 → 視窗載入 http://127.0.0.1:9311/ 失敗變空白。
 export function startCompanionServer() {
-  const server = http.createServer(createHandler());
+  const handler = createHandler();
   const hosts = ["127.0.0.1", "::1"];
+  const servers = [];
   for (const host of hosts) {
+    const server = http.createServer(handler);
     const onErr = (e) => {
       if (e.code === "EADDRINUSE") {
         console.warn(`[macau-companion] ${host}:${cfg.port} 已被佔用，跳過（可能已經喺度）`);
@@ -267,7 +271,8 @@ export function startCompanionServer() {
       server.removeListener("error", onErr);
       console.log(`[macau-companion] listening on http://${host}:${cfg.port}`);
     });
+    servers.push(server);
   }
   console.log(`[macau-companion] token ${cfg.token ? "enabled" : "disabled"} · POS=${cfg.posUrl}`);
-  return server;
+  return servers;
 }
