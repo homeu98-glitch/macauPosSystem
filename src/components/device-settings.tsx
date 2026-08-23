@@ -453,12 +453,11 @@ export function DeviceSettings() {
         return;
       }
 
-      // 3) 無 Companion / 無 Native：Hub 已於 2026-08 決定移除（見 docs/50），唔再 try Hub。
-      //    desktop 版本統一經 Companion（localhost）出單；Android 經 native bridge。
+      // 3) 無 Companion / 無 Native：desktop 版本統一經 Companion（localhost）出單；Android 經 native bridge。
       setStatus(
         printer.connectionType === "lan" && !printer.ipAddress
           ? `打印機「${printer.name}」未設定 IP，請填寫 LAN 打印機 IP 或經 Companion 代理出單。`
-          : "桌面請先設定 Companion 代理（見「桌面 Companion 代理」設定），或於 Sunmi APK 環境內測試打印。",
+          : "桌面請先設定 Companion 代理（見「桌面 Companion 代理」設定）後再測試打印。",
       );
     } catch {
       setStatus(`未能送出 ${printer.name} 測試打印。`);

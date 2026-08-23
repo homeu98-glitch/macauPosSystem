@@ -40,14 +40,14 @@ try {
   /* 未裝 iconv-lite：fallback utf-8 */
 }
 
-// ---- mDNS 自動發現 LAN 打印機（bonjour，純 JS 零原生依賴）----
+// ---- mDNS 自動發現 LAN 打印機（bonjour-service，純 JS 零原生依賴，bonjour 嘅持續維護 fork）----
 // 掃描 ESC/POS 打印機常見 mDNS 服務：_printer._tcp / _escpos._tcp / _pdl-datastream._tcp（HP RAW:9100）
-// 見 docs/50 P1。動態 import 避免 standalone server.mjs 無裝 bonjour 時崩。
+// 見 docs/50 P1。動態 import 避免 standalone server.mjs 無裝 bonjour-service 時崩。
 let bonjourLib = null;
 try {
-  bonjourLib = (await import("bonjour")).default;
+  bonjourLib = (await import("bonjour-service")).default;
 } catch {
-  /* 未裝 bonjour：/api/discover 會回空，唔影響其他功能 */
+  /* 未裝 bonjour-service：/api/discover 會回空，唔影響其他功能 */
 }
 
 function discoverPrinters(timeoutMs = 3000) {
@@ -56,7 +56,7 @@ function discoverPrinters(timeoutMs = 3000) {
       resolve([]);
       return;
     }
-    const bonjour = bonjourLib();
+    const bonjour = new bonjourLib();
     const found = new Map();
     const services = ["_printer._tcp.local", "_escpos._tcp.local", "_pdl-datastream._tcp.local"];
     let pending = services.length;

@@ -14,7 +14,6 @@ import { PrintJob } from "@/lib/types";
  *   3) 否則經 Cloud Print Relay（relay-transport.ts）→ 店內 Stationary Agent（互聯網備援，見 docs/46）
  *
  * 未配對 native / companion / relay 嘅 job 維持 pending，等店主喺設置頁配置 companion / relay。
- * Printer Hub 已於 2026-08 評估（docs/50）移除。
  */
 export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   const jobs = loadPrintJobs();
@@ -67,7 +66,7 @@ export async function retryFailedPrintJob(jobId: string): Promise<PrintJob[]> {
 }
 
 /**
- * 單一 job 派發：native bridge 優先 → 桌面 Companion（localhost）→ Hub HTTP（LAN 直打）→ relay（互聯網備援）。
+ * 單一 job 派發：native bridge 優先 → 桌面 Companion（localhost）→ relay（互聯網備援）。
  * 路由按 resolveJobPrinter 搵出目標打印機（單一真源）。
  */
 async function dispatchOneJob(

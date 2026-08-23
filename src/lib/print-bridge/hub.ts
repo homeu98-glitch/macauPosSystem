@@ -1,13 +1,12 @@
 /**
- * Print bridge 共用工具——原 Printer Hub adapter 已於 2026-08 評估（docs/50）移除。
+ * Print bridge 共用工具（舊 Printer Hub adapter 已於 2026-08 移除，見 docs/50）。
  *
- * 本檔現只保留三個不被 Hub 專屬、但被其他 transport 共用嘅函數：
+ * 本檔現只保留三個被多個 transport 共用嘅函數：
  *   - resolveJobPrinter：按 PrintJob.printerGroup 由 config.printers 搵目標打印機（單一真源，dispatch.ts 用）
  *   - applyPairText：解析 QR / 手動輸入嘅配對地址（Companion QR 掃描用）
  *   - loadJsQr：動態載入 jsQR（Companion QR 掃描用）
  *
  * 新打印通道：desktop 經 Companion（localhost）、Android 經 native bridge、互聯網備援經 relay。
- * Hub 發送 / 管理 API 已全刪。
  */
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
@@ -25,8 +24,8 @@ declare global {
   }
 }
 
-/** 解析 QR / 手動輸入嘅配對地址。支援 http://IP:PORT / poshub://IP:PORT / 純 IP:PORT / 純 IP。
- *  現主要畀 Companion 代理地址配對用（Companion 同 Hub 格式兼容）。 */
+/** 解析 QR / 手動輸入嘅配對地址。支援 http://IP:PORT / 純 IP:PORT / 純 IP。
+ *  主要畀 Companion 代理地址配對用。 */
 export function applyPairText(raw: string): { ip: string; port: string } | null {
   const text = String(raw || "").trim();
   let ip = "";
@@ -36,11 +35,6 @@ export function applyPairText(raw: string): { ip: string; port: string } | null 
       const u = new URL(text);
       ip = u.hostname;
       port = u.port || "8787";
-    } else if (/^poshub:\/\//i.test(text)) {
-      const rest = text.replace(/^poshub:\/\//i, "");
-      const parts = rest.split(":");
-      ip = parts[0];
-      port = parts[1] || "8787";
     } else {
       const m = text.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d+))?$/);
       if (m) {

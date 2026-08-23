@@ -1,16 +1,14 @@
 // Salon 收據列印（寫入 salon 隔離列印佇列 macau-pos-salon/print-jobs）
 //
 // 注意：刻意不呼叫餐飲的 loadPrintJobs/savePrintJobs（那些寫入 macau-pos/print-jobs）。
-// 這裡複用共享 PrintJob 型別與 sendJobToHub（Printer Hub 基建共用）。
+// 這裡複用共享 PrintJob 型別與 print-bridge 共用工具（resolveJobPrinter / resolvePrintJobStatus）。
 
 import type { PrintJob } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { loadDeviceConfig } from "@/lib/storage";
 import {
-  isHubConfigured,
   resolveJobPrinter,
   resolvePrintJobStatus,
-  sendJobToHub,
 } from "@/lib/print-bridge/hub";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getRelayTransport } from "@/lib/print-bridge/relay-config";
@@ -25,8 +23,7 @@ import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
 
 /**
  * 統一 dispatch 入口：native bridge（PosNative.printJob，完整 ESC/POS 格式）優先，
- * 唔得就桌面 Companion（localhost HTTP，見 docs/47），再 fallback Printer Hub HTTP（LAN 直打），
- * 最後經 Cloud Print Relay（互聯網備援，見 docs/46）。
+ * 唔得就桌面 Companion（localhost HTTP，見 docs/47），最後經 Cloud Print Relay（互聯網備援，見 docs/46）。
  * 餐飲同 salon 共用同一條基建（見 dispatch.ts）。
  */
 async function dispatchPrint(
@@ -51,11 +48,7 @@ async function dispatchPrint(
     if (res.ok) return { ok: true };
     return { ok: false, error: res.error || "companion 打印失敗" };
   }
-  // 3) Hub HTTP（LAN 直打，經店內打印機 IP）
-  if (isHubConfigured() && printer.ipAddress) {
-    return sendJobToHub(job);
-  }
-  // 4) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
+  // 3) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
   const relay = getRelayTransport();
   if (relay) {
     const kind = printer.role === "receipt" ? "receipt" : "kitchen";
@@ -64,8 +57,7 @@ async function dispatchPrint(
     if (res.ok) return { ok: true };
     return { ok: false, error: res.error || "relay 打印失敗" };
   }
-  // 最舊 fallback（無 relay / 無 companion）：保持舊 Hub 行為
-  return sendJobToHub(job);
+  return { ok: false, error: "無可用打印通道（native / companion / relay 都無）" };
 }
 
 export const SALON_PRINT_JOBS_CHANGED_EVENT = "salon-print-jobs-changed";

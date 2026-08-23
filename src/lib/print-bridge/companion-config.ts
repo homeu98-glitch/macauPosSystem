@@ -1,5 +1,5 @@
 // Phase 2 桌面 Companion 配置讀取（見 docs/47）。
-// baseUrl + token 由 localStorage 提供（設置頁配對 Companion 嗰陣寫入，同 Hub 配對類似）。
+// baseUrl + token 由 localStorage 提供（設置頁設定 Companion 嗰陣寫入）。
 
 import { CompanionTransport } from "@/lib/print-bridge/companion-transport";
 

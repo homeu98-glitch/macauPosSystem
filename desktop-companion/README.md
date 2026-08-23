@@ -90,7 +90,7 @@ Companion 同 POS 之間固定用 **`127.0.0.1:9311`（loopback）**，呢個係
 | localhost HTTP 服務 ＋ CORS ＋ token | ✅ |
 | `GET /api/health` | ✅ |
 | LAN 直打（TCP → IP:9100） | ✅ |
-| LAN mDNS 自動發現（`GET /api/discover`，bonjour） | ✅（2026-08，docs/50 P1） |
+| LAN mDNS 自動發現（`GET /api/discover`，bonjour-service） | ✅（2026-08，docs/50 P1） |
 | USB 傳輸（node-usb，VID/PID → bulk transfer） | ✅（2026-08，docs/50 P2；需 libusb 驅動） |
 | 藍牙傳輸（Windows 虛擬 COM port，serialport） | ✅（2026-08，docs/50 P2；BT 名稱填 COM port） |
 | 最小 ESC/POS renderer（init/文字/切紙/charset） | ✅（生產請替換成共用模組，docs/47 §4） |
