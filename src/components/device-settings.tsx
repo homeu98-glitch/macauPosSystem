@@ -191,17 +191,49 @@ export function DeviceSettings() {
       setLedgerMenuPending(null);
       setLedgerImportPreview(null);
       setLedgerImportRemoveLocal(false);
+      // 匯入後自動保存菜單到後台，唔使再手動撳「保存菜單」
+      const saved = await saveMenuToBackend(normalizedBootstrap);
       const removedNote =
         stats.localItemsRemoved > 0 || stats.localCategoriesRemoved > 0
           ? `；已刪除本地 ${stats.localCategoriesRemoved} 分類、${stats.localItemsRemoved} 菜品`
           : "";
       setStatus(
-        `已從 Ledger 參考匯入：${stats.ledgerCategoryCount} 分類、${stats.ledgerProductCount} 菜品（新增 ${stats.itemsAdded}、更新 ${stats.itemsUpdated}）；同步售罄 ${stats.soldOutCount} 項${removedNote}。請再按「保存菜單」寫入後台。`,
+        `已從 Ledger 參考匯入：${stats.ledgerCategoryCount} 分類、${stats.ledgerProductCount} 菜品（新增 ${stats.itemsAdded}、更新 ${stats.itemsUpdated}）；同步售罄 ${stats.soldOutCount} 項${removedNote}${saved ? "，已自動保存菜單到後台。" : "，但菜單保存失敗，請手動撳「保存菜單」。"}`,
       );
     } catch (err) {
       setLedgerImportError(err instanceof Error ? err.message : "匯入失敗。");
     } finally {
       setLedgerImportApplying(false);
+    }
+  }
+
+  async function saveMenuToBackend(draft: ReturnType<typeof normalizeBootstrapPayload>) {
+    if (!draft) return false;
+    setMenuSaving(true);
+    setStatus("正在保存菜單到後台…");
+    try {
+      await fetch("/api/pos/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: draft.storeId,
+          storeName: draft.storeName,
+          currency: draft.currency,
+          categories: draft.categories,
+          menuItems: draft.menuItems,
+          tables: draft.tables,
+          rules: draft.rules,
+          printerGroups: draft.printerGroups,
+        }),
+      });
+      saveBootstrapCache(draft);
+      setStatus("菜單已保存到後台。");
+      return true;
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "菜單保存失敗，請稍後再試。");
+      return false;
+    } finally {
+      setMenuSaving(false);
     }
   }
 
@@ -1469,30 +1501,7 @@ export function DeviceSettings() {
                   aria-busy={menuSaving}
                   disabled={menuSaving}
                   onClick={async () => {
-                    setMenuSaving(true);
-                    setStatus("正在保存菜單到後台…");
-                    try {
-                      await fetch("/api/pos/bootstrap", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          storeId: menuDraft.storeId,
-                          storeName: menuDraft.storeName,
-                          currency: menuDraft.currency,
-                          categories: menuDraft.categories,
-                          menuItems: menuDraft.menuItems,
-                          tables: menuDraft.tables,
-                          rules: menuDraft.rules,
-                          printerGroups: menuDraft.printerGroups,
-                        }),
-                      });
-                      saveBootstrapCache(menuDraft);
-                      setStatus("菜單已保存到後台。");
-                    } catch (err) {
-                      setStatus(err instanceof Error ? err.message : "菜單保存失敗，請稍後再試。");
-                    } finally {
-                      setMenuSaving(false);
-                    }
+                    await saveMenuToBackend(menuDraft);
                   }}
                   type="button"
                 >
