@@ -103,7 +103,7 @@ export interface CompanionProbeResult {
 
 /** 探測指定（或當前已配對）Companion 地址是否可用 */
 export async function probeCompanion(urlOverride?: string): Promise<CompanionProbeResult> {
-  const url = urlOverride ?? getCompanionUrl() || COMPANION_DEFAULT_URL;
+  const url = urlOverride ?? (getCompanionUrl() || COMPANION_DEFAULT_URL);
   try {
     const j = (await companionJson<{ ok?: boolean; version?: string }>(url, "/api/health")) as {
       ok?: boolean;
