@@ -13,6 +13,13 @@ import {
   tryAutoPairCompanion,
   type PrinterCandidate,
 } from "@/lib/print-bridge/companion";
+import {
+  isNativeBridgeAvailable,
+  listNativeBtPrinters,
+  listNativeUsbPrinters,
+  requestNativeBtPermission,
+  scanNativeBtPrinters,
+} from "@/lib/print-bridge/native";
 import { CHARSET_OPTIONS, PAPER_SIZE_OPTIONS } from "@/lib/print-bridge/printer-models";
 
 export interface PrinterRoleOption {
@@ -166,6 +173,37 @@ function AddPrinterWizard({
   const [usbOpen, setUsbOpen] = useState(false);
   const [btList, setBtList] = useState<PrinterCandidate[]>([]);
   const [btOpen, setBtOpen] = useState(false);
+  const [btScanning, setBtScanning] = useState(false);
+  const isAndroid = isNativeBridgeAvailable();
+
+  // Android APK：接收原生藍牙/USB 發現回調（對應 PosNative 嘅 onBtPrinterFound / onUsbPrinterAttached）
+  useEffect(() => {
+    if (!isAndroid) return;
+    const w = window as unknown as {
+      onBtPrinterFound?: (raw: Record<string, unknown>) => void;
+      onUsbPrinterAttached?: (json: string) => void;
+    };
+    w.onBtPrinterFound = (raw) => {
+      const cand: PrinterCandidate = {
+        source: "bluetooth",
+        name: String(raw.name ?? raw.bluetoothName ?? raw.address ?? "藍牙打印機"),
+        connectionType: "bluetooth",
+        bluetoothName: raw.bluetoothName ? String(raw.bluetoothName) : undefined,
+        bluetoothAddress: raw.address ? String(raw.address) : undefined,
+      };
+      setBtList((prev) =>
+        prev.some((p) => p.bluetoothAddress === cand.bluetoothAddress) ? prev : [...prev, cand],
+      );
+    };
+    w.onUsbPrinterAttached = () => {
+      // 插機 auto-add：重拉 USB 清單
+      void listNativeUsbPrinters().then(setUsbList);
+    };
+    return () => {
+      w.onBtPrinterFound = undefined;
+      w.onUsbPrinterAttached = undefined;
+    };
+  }, [isAndroid]);
 
   function pick(c: PrinterCandidate) {
     setSelected(c);
@@ -183,7 +221,7 @@ function AddPrinterWizard({
   }
   async function scanUsb() {
     setScanning("usb");
-    const list = await enumerateCompanionUsbPrinters();
+    const list = isAndroid ? await listNativeUsbPrinters() : await enumerateCompanionUsbPrinters();
     setCandidates(list);
     setScanning(null);
   }
@@ -198,13 +236,29 @@ function AddPrinterWizard({
     setUsbOpen(true);
     setManualLanOpen(false);
     setBtOpen(false);
-    setUsbList(await enumerateCompanionUsbPrinters());
+    setUsbList(isAndroid ? await listNativeUsbPrinters() : await enumerateCompanionUsbPrinters());
   }
   async function startManualBt() {
     setBtOpen(true);
     setManualLanOpen(false);
     setUsbOpen(false);
-    setBtList(await enumerateCompanionBluetoothDevices());
+    setBtList(isAndroid ? await listNativeBtPrinters() : await enumerateCompanionBluetoothDevices());
+  }
+
+  // Android：彈 runtime 授權 → 列出已配對 → 開始探索（結果經 onBtPrinterFound 回傳）
+  async function startBtScan() {
+    if (!isAndroid) {
+      pick({ source: "bluetooth", name: "藍牙打印機", connectionType: "bluetooth" });
+      return;
+    }
+    setBtScanning(true);
+    setBtOpen(true);
+    setManualLanOpen(false);
+    setUsbOpen(false);
+    await requestNativeBtPermission();
+    setBtList(await listNativeBtPrinters());
+    await scanNativeBtPrinters();
+    setBtScanning(false);
   }
   function submitManualLan() {
     const ip = lanIp.trim();
@@ -245,6 +299,7 @@ function AddPrinterWizard({
     }
     if (selected.connectionType === "bluetooth") {
       base.bluetoothName = bluetoothName.trim();
+      base.bluetoothAddress = selected.bluetoothAddress ?? bluetoothName.trim();
     }
     onAddPrinter(base);
     // 重置 wizard
@@ -280,11 +335,11 @@ function AddPrinterWizard({
         </button>
         <button
           type="button"
-          onClick={() => pick({ source: "bluetooth", name: "藍牙打印機", connectionType: "bluetooth" })}
-          disabled={scanning !== null}
+          onClick={startBtScan}
+          disabled={btScanning}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
-          + 藍牙打印機
+          {btScanning ? "探索中…" : "+ 藍牙打印機"}
         </button>
 
         <span className="w-full text-[11px] text-slate-400">auto search 失敗？用手動 fallback：</span>

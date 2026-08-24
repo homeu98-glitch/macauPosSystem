@@ -214,6 +214,7 @@ export interface PrinterCandidate {
   usbVendorId?: string;
   usbProductId?: string;
   bluetoothName?: string;
+  bluetoothAddress?: string;
   model?: string;
   charset?: string;
   paperSize?: string;

@@ -8,6 +8,7 @@
 // 去 sendJobToCompanion（桌面 Companion 代理），所以呢度只負責「有 bridge 時點樣發」。
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
+import type { PrinterCandidate } from "@/lib/print-bridge/companion";
 
 export type NativePrintKind = "receipt" | "kitchen" | "test";
 
@@ -100,5 +101,121 @@ export async function dispatchJobToNative(
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Android APK 原生發現（USB / 藍牙）—— 對應 PosNative 嘅 listUsbPrinters /
+// listBtPrinters / scanBtPrinters / requestUsbPermission / requestBtPermission。
+// 只有跑喺 Android WebView（isNativeBridgeAvailable）先有用；PC 用 Companion agent。
+// ──────────────────────────────────────────────────────────────────────────
+
+function nativeHexId(n: unknown): string {
+  const num = typeof n === "number" ? n : parseInt(String(n ?? ""), 10);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  return "0x" + num.toString(16).toUpperCase().padStart(4, "0");
+}
+
+interface NativeBridge {
+  listUsbPrinters?: () => unknown;
+  requestUsbPermission?: (vid: number, pid: number) => unknown;
+  listBtPrinters?: () => unknown;
+  scanBtPrinters?: () => unknown;
+  stopBtScan?: () => unknown;
+  requestBtPermission?: () => unknown;
+}
+
+function getNativeBridge(): NativeBridge | null {
+  if (typeof window === "undefined") return null;
+  const p = (window as unknown as { PosNative?: NativeBridge }).PosNative;
+  return p ?? null;
+}
+
+/** Android：插住嘅 USB ESC/POS 打印機清單（VID/PID/label/權限）。 */
+export async function listNativeUsbPrinters(): Promise<PrinterCandidate[]> {
+  const b = getNativeBridge();
+  if (!b?.listUsbPrinters) return [];
+  try {
+    const res = b.listUsbPrinters() as unknown;
+    const parsed = typeof res === "string" ? (JSON.parse(res) as { printers?: unknown[] }) : (res as { printers?: unknown[] });
+    const list = parsed.printers ?? [];
+    return list.map((raw) => {
+      const p = raw as { vendorId?: number; productId?: number; label?: string; name?: string; productName?: string };
+      return {
+        source: "usb",
+        name: p.label || p.productName || p.name || `USB 打印機 ${nativeHexId(p.vendorId)}`,
+        connectionType: "usb",
+        usbVendorId: nativeHexId(p.vendorId),
+        usbProductId: nativeHexId(p.productId),
+      } as PrinterCandidate;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Android：彈出系統授權對話框畀指定 VID/PID（已授權返 granted=true）。 */
+export async function requestNativeUsbPermission(
+  vid: number,
+  pid: number,
+): Promise<{ granted: boolean }> {
+  const b = getNativeBridge();
+  if (!b?.requestUsbPermission) return { granted: false };
+  try {
+    const res = b.requestUsbPermission(vid, pid) as unknown;
+    const parsed = typeof res === "string" ? (JSON.parse(res) as { granted?: boolean }) : (res as { granted?: boolean });
+    return { granted: !!parsed.granted };
+  } catch {
+    return { granted: false };
+  }
+}
+
+/** Android：已配對（bonded）藍牙打印機清單。 */
+export async function listNativeBtPrinters(): Promise<PrinterCandidate[]> {
+  const b = getNativeBridge();
+  if (!b?.listBtPrinters) return [];
+  try {
+    const res = b.listBtPrinters() as unknown;
+    const parsed = typeof res === "string" ? (JSON.parse(res) as { printers?: unknown[] }) : (res as { printers?: unknown[] });
+    const list = parsed.printers ?? [];
+    return list.map((raw) => {
+      const p = raw as { address?: string; name?: string; bluetoothName?: string };
+      const name = p.name || p.bluetoothName || p.address || "藍牙打印機";
+      return {
+        source: "bluetooth",
+        name,
+        connectionType: "bluetooth",
+        bluetoothName: name,
+        bluetoothAddress: p.address,
+      } as PrinterCandidate;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Android：開始藍牙探索；結果經 window.onBtPrinterFound(candidate) 回傳。 */
+export async function scanNativeBtPrinters(): Promise<{ ok: boolean }> {
+  const b = getNativeBridge();
+  if (!b?.scanBtPrinters) return { ok: false };
+  try {
+    const res = b.scanBtPrinters() as unknown;
+    const parsed = typeof res === "string" ? (JSON.parse(res) as { ok?: boolean }) : (res as { ok?: boolean });
+    return { ok: parsed.ok !== false };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Android：觸發藍牙 runtime 授權（Android 12+）。 */
+export async function requestNativeBtPermission(): Promise<{ ok: boolean }> {
+  const b = getNativeBridge();
+  if (!b?.requestBtPermission) return { ok: false };
+  try {
+    const res = b.requestBtPermission() as unknown;
+    const parsed = typeof res === "string" ? (JSON.parse(res) as { ok?: boolean }) : (res as { ok?: boolean });
+    return { ok: parsed.ok !== false };
+  } catch {
+    return { ok: false };
   }
 }
