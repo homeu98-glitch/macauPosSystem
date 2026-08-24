@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { formatMacauDateTime } from "@/lib/format";
 import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -207,16 +208,23 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
                     <div className="mt-0.5 text-xs text-slate-500">{order.tableName}</div>
                     <div className="mt-1 text-xs text-slate-400">
-                      {(order.updatedAt || order.createdAt || "").replace("T", " ").slice(0, 16)}
+                      {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
                     </div>
                   </div>
                   <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
                       isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready"
                         ? "bg-sky-50 text-sky-700"
                         : "bg-slate-100 text-slate-700"
                     }`}
                   >
+                    <span
+                      className={`h-4 w-4 rounded-full ${
+                        isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready"
+                          ? "bg-sky-500"
+                          : "bg-slate-500"
+                      }`}
+                    />
                     {localOrderStatusLabel(order)}
                   </span>
                 </div>

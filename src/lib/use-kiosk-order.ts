@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
-import { loadBootstrapCache } from "@/lib/storage";
+import { loadBootstrapCache, saveBootstrapCache } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
@@ -83,93 +83,15 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     submitting: "落單中…",
     resumeHint: "此枱有未完成訂單，已載入可繼續加單",
     scanAgain: "如需重開新單，請向職員查詢",
+    tableOrderTitle: "本枱已落單",
+    addOrder: "加單",
+    currentTotal: "枱上總計",
+    done: "完成",
     viewCart: "查看購物車",
     specs: "規格",
     selectOptions: "請選規格",
     clearCart: "清空購物車",
     addToCart: "加入購物車",
-  },
-  pt: {
-    welcome: "Bem-vindo, por favor faça o pedido",
-    pickup: "Recolha",
-    delivery: "Entrega",
-    dineIn: "Comer aqui",
-    table: "Mesa",
-    cart: "Carrinho",
-    empty: "Ainda não pediu",
-    add: "Adicionar",
-    qty: "Qtd",
-    note: "Nota",
-    notePlaceholder: "Ex: sem gelo, pouco doce (opcional)",
-    place: "Encomendar",
-    subtotal: "Subtotal",
-    tax: "Imposto",
-    service: "Serviço",
-    total: "Total",
-    confirm: "Confirmar",
-    cancel: "Cancelar",
-    thanks: "Pedido enviado!",
-    payAtCounter: "Por favor pague / recolha no balcão",
-    orderNo: "Número",
-    pickupNo: "Número de recolha",
-    settings: "Definições",
-    bindStore: "Vincular loja",
-    storeId: "ID da loja",
-    language: "Idioma",
-    save: "Guardar",
-    newOrder: "Novo pedido",
-    soldout: "Esgotado",
-    needSpec: "Escolha opções",
-    specConfirm: "OK",
-    submitting: "A enviar…",
-    resumeHint: "Mesa com pedido em aberto, carregado para continuar",
-    scanAgain: "Para novo pedido, fale com o funcionário",
-    viewCart: "Ver carrinho",
-    specs: "Opções",
-    selectOptions: "Escolha opções",
-    clearCart: "Limpar carrinho",
-    addToCart: "Adicionar ao carrinho",
-  },
-  en: {
-    welcome: "Welcome, please order",
-    pickup: "Pickup",
-    delivery: "Delivery",
-    dineIn: "Dine-in",
-    table: "Table",
-    cart: "Cart",
-    empty: "Nothing ordered yet",
-    add: "Add",
-    qty: "Qty",
-    note: "Note",
-    notePlaceholder: "e.g. no ice, less sweet (optional)",
-    place: "Place order",
-    subtotal: "Subtotal",
-    tax: "Tax",
-    service: "Service",
-    total: "Total",
-    confirm: "Confirm",
-    cancel: "Cancel",
-    thanks: "Order placed!",
-    payAtCounter: "Please pay / collect at the counter",
-    orderNo: "Order No.",
-    pickupNo: "Pickup No.",
-    settings: "Settings",
-    bindStore: "Bind store",
-    storeId: "Store ID",
-    language: "Language",
-    save: "Save",
-    newOrder: "New order",
-    soldout: "Sold out",
-    needSpec: "Choose options",
-    specConfirm: "OK",
-    submitting: "Submitting…",
-    resumeHint: "Table has an open order, loaded so you can add more",
-    scanAgain: "For a new order, ask a staff member",
-    viewCart: "View cart",
-    specs: "Options",
-    selectOptions: "Choose options",
-    clearCart: "Clear cart",
-    addToCart: "Add to cart",
   },
 };
 
@@ -200,21 +122,33 @@ export function useKioskOrder() {
   const [specDraft, setSpecDraft] = useState<SpecDraft | null>(null);
   const [submittedOrder, setSubmittedOrder] = useState<PosOrder | null>(null);
   const [resumedOrder, setResumedOrder] = useState<PosOrder | null>(null);
+  // 落單後仍然保留嘅「本枱現有單」（dine_in 用嚟顯示已落單明細 + 加單；quick 模式落單後唔保留）
+  const [tableOrder, setTableOrder] = useState<PosOrder | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scanStoreId, setScanStoreId] = useState<string | null>(null);
   const [scanStoreName, setScanStoreName] = useState<string | null>(null);
   const [fetchedBootstrap, setFetchedBootstrap] = useState<PosBootstrap | null>(null);
+  // 所屬店 menu 嘗試過攞（成功或失敗都設 true）：避免離線 / 失敗時 menuLoading 卡死無限 loading
+  const [menuFetchDone, setMenuFetchDone] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  // 落單介面前嘅 landing gate：未「開始點餐」就顯示 landing page（唔用點餐介面做主頁）
+  const [started, setStarted] = useState(
+    () => typeof window !== "undefined" && window.sessionStorage.getItem("kiosk-started") === "1",
+  );
+  // 手機掃碼「已落單枱」鎖定：未按加單前唔開餐牌，只顯示本枱明細
+  const [ordering, setOrdering] = useState(false);
 
-  // 手機掃碼（scanStoreId 有值）先去 backend 攞所屬店嘅真 menu（pos_bootstrap_config，
-  // 與商家點餐機同一份）；kiosk 用本地 cache（唔變）。fallback 先本地 cache 再 mockBootstrap。
+  // 手機掃碼（scanStoreId）同 kiosk 綁店（binding.storeId）都會去 backend 攞所屬店嘅真 menu
+  // （pos_bootstrap_config，與商家點餐機同一份）；fallback 先本地 cache 再 mockBootstrap。
   const bootstrap = useMemo(
     () => fetchedBootstrap ?? loadBootstrapCache() ?? mockBootstrap,
     [fetchedBootstrap],
   );
-  // 手機仲攞緊所屬店 menu 時嘅 loading 狀態（kiosk 無 scanStoreId → 唔會 loading）
-  const menuLoading = Boolean(scanStoreId) && fetchedBootstrap === null;
+  // 手機掃碼 / kiosk 綁店：攞緊所屬店 menu 時嘅 loading 狀態（確保唔會 flash demo 餐牌）。
+  // 用 menuFetchDone（成功或失敗都設 true）判斷，離線 / 失敗就 fallback 去 cache / mock，唔會卡死。
+  const menuLoading =
+    (Boolean(scanStoreId) || Boolean(binding?.storeId)) && !menuFetchDone;
   // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之；最後 fallback 預設店
   const storeId = binding?.storeId ?? scanStoreId ?? DEFAULT_KIOSK_STORE_ID;
   // 顯示店名：綁店名 > 掃碼連結 ?storeName= > 本地 mock 店名
@@ -259,26 +193,41 @@ export function useKioskOrder() {
     },
   });
 
-  // 手機掃碼：按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu
+  // 按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu：
+  // 手機掃碼用 scanStoreId；kiosk 綁店用 binding.storeId（避免 fallback 去 demo store macau-store-a）。
   useEffect(() => {
-    if (!scanStoreId) return;
+    const targetStoreId = scanStoreId ?? binding?.storeId ?? null;
+    if (!targetStoreId) return;
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/pos/bootstrap?storeId=${encodeURIComponent(scanStoreId)}`);
-        if (!res.ok || cancelled) return;
+        const res = await fetch(`/api/pos/bootstrap?storeId=${encodeURIComponent(targetStoreId)}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          // 後端回非 200（例如 500）：唔卡 loading，fallback 去 cache / mock
+          setMenuFetchDone(true);
+          return;
+        }
         const data = (await res.json()) as PosBootstrap;
         if (cancelled) return;
         setFetchedBootstrap(data);
         setActiveCategory(data.categories?.[0]?.id ?? "");
+        setMenuFetchDone(true);
+        // 寫入 cache：離線時 fallback 會係所屬店餐牌而唔係 demo
+        try {
+          saveBootstrapCache(data);
+        } catch {
+          // 寫 cache 失敗唔影響今次攞餐牌
+        }
       } catch {
         // 失敗就保留本地 cache / mockBootstrap fallback
+        setMenuFetchDone(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [scanStoreId]);
+  }, [scanStoreId, binding?.storeId]);
 
   // resume：重複掃碼載入該枱 / 上次單嘅未結單
   useEffect(() => {
@@ -318,6 +267,12 @@ export function useKioskOrder() {
     }
     return quickType === "delivery" ? KIOSK_I18N[language].delivery : KIOSK_I18N[language].pickup;
   }, [mode, tableId, quickType, bootstrap.tables, language]);
+
+  // 本枱現有單（用嚟顯示已落單明細 + 加單）：resume 載入嘅單 或 剛落嘅單（dine_in 先保留）
+  const activeTableOrder = useMemo(
+    () => (mode === "dine_in" ? resumedOrder ?? tableOrder : null),
+    [mode, resumedOrder, tableOrder],
+  );
 
   const visibleItems = useMemo(
     () =>
@@ -424,7 +379,10 @@ export function useKioskOrder() {
       setSubmittedOrder(order);
       setCart([]);
       setResumedOrder(null);
+      // dine_in 保留本枱單（顯示已落單明細 + 加單）；quick 模式落單後清走，唔畀加單
+      setTableOrder(mode === "dine_in" ? order : null);
       setOrderNote("");
+      setOrdering(false); // 落完單返去「明細」介面（鎖定餐牌）
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -437,10 +395,46 @@ export function useKioskOrder() {
     if (binding) saveKioskDeviceBinding({ ...binding, language: lng });
   }
 
+  // 加單（堂食先准）：把本枱現有單嘅項目載返入購物車，重用同一 order.id（下一次落單 → ORDER_UPDATED）
+  // 快餐模式（quick）唔准加單，落單後就要再下一張新單。
+  function addToOrder() {
+    if (mode !== "dine_in" || !tableOrder) return;
+    const lines: CartLine[] = tableOrder.items.map((it, idx) => ({
+      lineId: `resume-${idx}-${it.menuItemId}`,
+      menuItemId: it.menuItemId,
+      name: it.name,
+      price: it.price,
+      quantity: it.quantity,
+      printerGroup: it.printerGroup,
+      selectedSpecs: it.selectedSpecs,
+      note: it.note,
+    }));
+    setCart(lines);
+    if (tableOrder.orderNote) setOrderNote(tableOrder.orderNote);
+    setResumedOrder(tableOrder); // 下次 placeOrder 重用同一 id → ORDER_UPDATED
+    setSubmittedOrder(null); // 返去 menu 繼續加菜
+    setOrdering(true); // 解鎖餐牌（進入點餐介面）
+  }
+
   function rebindStore() {
     clearKioskDeviceBinding();
     setBinding(null);
     router.replace("/login?mode=kiosk");
+  }
+
+  // 落單介面前嘅 landing：客人按「開始點餐」先入菜單（避免一開就係點餐介面）
+  function startOrdering() {
+    setStarted(true);
+    setOrdering(false); // 入餐牌前重置鎖定（無已落單枱 → 直接點餐；有 → 見明細）
+    if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-started", "1");
+  }
+
+  // kiosk 落單成功 5 秒倒數後自動返回：清走成功頁 + 重置 landing（等下一個客人重新「開始點餐」）
+  function returnToHome() {
+    setSubmittedOrder(null);
+    setStarted(false);
+    setOrdering(false);
+    if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
   }
 
   return {
@@ -479,6 +473,12 @@ export function useKioskOrder() {
     submittedOrder,
     setSubmittedOrder,
     resumedOrder,
+    activeTableOrder,
+    addToOrder,
+    started,
+    startOrdering,
+    returnToHome,
+    ordering,
     submitting,
     error,
     placeOrder,

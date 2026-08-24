@@ -1,19 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
-import { KioskLanguage } from "@/lib/kiosk-order";
 import { OrderItem } from "@/lib/types";
 
 // kiosk 平板介面：3 欄佈局完全不變，邏輯抽去 useKioskOrder（與手機 /menu 共用）
 const I18N = KIOSK_I18N;
+
+// 本枱已落單 / 落單成功 共用嘅明細卡：菜式 + 數量 + 小計 + 總計 + 備註
+function OrderSummaryCard({ order, title }: { order: import("@/lib/types").PosOrder; title: string }) {
+  return (
+    <div className="rounded-xl bg-amber-50 p-3 text-left">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-semibold text-amber-800">{title}</span>
+        <span className="text-xs text-amber-600">#{order.localOrderNo}</span>
+      </div>
+      <div className="space-y-1.5">
+        {order.items.map((it, i) => (
+          <div key={i} className="flex items-center justify-between text-sm">
+            <span className="min-w-0 flex-1 truncate text-slate-800">
+              {it.name}
+              {it.selectedSpecs && it.selectedSpecs.length > 0 && (
+                <span className="ml-1 text-xs text-slate-400">
+                  ({it.selectedSpecs.map((s) => s.optionLabel).join(" / ")})
+                </span>
+              )}
+            </span>
+            <span className="ml-2 shrink-0 text-slate-500">x{it.quantity}</span>
+            <span className="ml-2 w-16 shrink-0 text-right text-slate-700">
+              MOP {(it.price * it.quantity).toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+      {order.orderNote ? (
+        <div className="mt-2 text-xs text-slate-500">備註：{order.orderNote}</div>
+      ) : null}
+      <div className="mt-2 flex items-center justify-between border-t border-amber-200 pt-2 text-sm">
+        <span className="font-medium text-amber-800">{KIOSK_I18N["zh-HK"].currentTotal}</span>
+        <span className="font-bold text-amber-900">MOP {order.total.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
 
 export default function OrderPage() {
   const t = (key: string) => I18N[language][key] ?? key;
 
   const {
     hydrated,
+    menuLoading,
     bootstrap,
     language,
     setLanguage,
@@ -38,16 +75,63 @@ export default function OrderPage() {
     pushLine,
     changeQty,
     submittedOrder,
-    setSubmittedOrder,
-    resumedOrder,
+    activeTableOrder,
+    addToOrder,
     submitting,
     error,
     placeOrder,
     rebindStore,
+    started,
+    startOrdering,
+    returnToHome,
   } = useKioskOrder();
 
   // kiosk 專屬 UI state：設定（綁店）彈窗開關
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // kiosk 落單成功：5 秒倒數自動返回主頁（loading 狀態）
+  const submittedRef = useRef(submittedOrder);
+  submittedRef.current = submittedOrder;
+  const returnHomeRef = useRef(returnToHome);
+  returnHomeRef.current = returnToHome;
+  const [returnIn, setReturnIn] = useState(0);
+  useEffect(() => {
+    if (!submittedOrder) {
+      setReturnIn(0);
+      return;
+    }
+    setReturnIn(5);
+    const id = setInterval(() => {
+      setReturnIn((n) => {
+        if (n <= 1) {
+          clearInterval(id);
+          if (submittedRef.current) returnToHome();
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submittedOrder]);
+
+  // kiosk 閒置 1 分鐘自動返回 landing（任何操作重置計時）
+  useEffect(() => {
+    if (!started) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => returnHomeRef.current(), 60_000);
+    };
+    const events = ["mousemove", "mousedown", "touchstart", "keydown", "scroll"];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [started]);
 
   // ── 載入中 / 未綁店閘門 ──
   if (!hydrated) {
@@ -76,9 +160,26 @@ export default function OrderPage() {
     );
   }
 
-  // ── 確認頁 ──
+  // ── Landing：未「開始點餐」先顯示 landing page（唔用點餐介面做主頁）──
+  if (!started) {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-6 text-8xl">🍽️</div>
+        <h1 className="mb-2 text-3xl font-bold text-slate-900">{displayStoreName}</h1>
+        <p className="mb-10 text-base text-slate-500">歡迎光臨，點擊開始為您點餐</p>
+        <button
+          onClick={startOrdering}
+          className="w-full max-w-xs rounded-2xl bg-orange-500 py-5 text-2xl font-semibold text-white active:scale-[0.98]"
+        >
+          開始點餐
+        </button>
+      </main>
+    );
+  }
+
+  // ── 確認頁：落單成功後顯示 loading + 5 秒倒數，自動返回主頁 ──
   if (submittedOrder) {
-    const isPickup = submittedOrder.tableId === "counter";
+    const isDineIn = mode === "dine_in";
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
         <div className="mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 text-7xl">✅</div>
@@ -87,17 +188,49 @@ export default function OrderPage() {
           <div className="mb-2 text-base text-slate-500">{t("orderNo")}</div>
           <div className="mb-4 text-5xl font-bold text-slate-900">{submittedOrder.localOrderNo}</div>
           <div className="mb-1 text-base text-slate-500">
-            {mode === "dine_in" ? t("table") : t("pickupNo")}
+            {isDineIn ? t("table") : t("pickupNo")}
           </div>
           <div className="text-2xl font-semibold text-slate-900">{submittedOrder.tableName}</div>
         </div>
         <p className="mt-5 text-lg text-slate-600">{t("payAtCounter")}</p>
-        <button
-          onClick={() => setSubmittedOrder(null)}
-          className="mt-7 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
-        >
-          {t("newOrder")}
-        </button>
+
+        {/* 堂食：顯示本枱已落單明細（5 秒內可加單，否則自動返回主頁） */}
+        {isDineIn && (
+          <div className="mt-5 w-full text-left">
+            <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
+          </div>
+        )}
+
+        {/* 5 秒倒數自動返回主頁（loading 狀態） */}
+        <div className="mt-6 flex w-full flex-col items-center">
+          <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-slate-200">
+            <div
+              className="h-full bg-orange-500 transition-[width] duration-1000 ease-linear"
+              style={{ width: `${((5 - returnIn) / 5) * 100}%` }}
+            />
+          </div>
+          <div className="mt-3 text-sm text-slate-500">
+            {returnIn > 0 ? `${returnIn} 秒後自動返回主頁…` : t("submitting")}
+          </div>
+          {isDineIn && (
+            <button
+              onClick={addToOrder}
+              className="mt-4 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
+            >
+              {t("addOrder")}
+            </button>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  // ── 所屬店餐牌載入中（kiosk 綁店 / 手機掃碼都會去 backend 攞真 menu）──
+  // 未攞到前唔畀入餐牌，避免 flash demo store（macau-store-a）嘅餐牌。
+  if (menuLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+        載入中…
       </main>
     );
   }
@@ -115,17 +248,6 @@ export default function OrderPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex overflow-hidden rounded-lg border border-slate-200 text-xs">
-            {(["zh-HK", "pt", "en"] as KioskLanguage[]).map((lng) => (
-              <button
-                key={lng}
-                onClick={() => setLanguage(lng)}
-                className={`px-2 py-1 ${language === lng ? "bg-orange-500 text-white" : "bg-white text-slate-600"}`}
-              >
-                {lng === "zh-HK" ? "中" : lng === "pt" ? "PT" : "EN"}
-              </button>
-            ))}
-          </div>
           <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600"
@@ -135,9 +257,9 @@ export default function OrderPage() {
         </div>
       </header>
 
-      {resumedOrder && (
-        <div className="bg-amber-50 px-4 py-2 text-center text-xs text-amber-700">
-          {t("resumeHint")}
+      {activeTableOrder && (
+        <div className="bg-amber-50 px-4 py-2">
+          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
         </div>
       )}
 
@@ -354,16 +476,6 @@ export default function OrderPage() {
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
               已綁定店鋪：<span className="font-semibold text-slate-900">{displayStoreName}</span>
             </div>
-            <label className="mb-1 block text-xs text-slate-500">{t("language")}</label>
-            <select
-              value={language}
-              onChange={(e) => persistLanguage(e.target.value as KioskLanguage)}
-              className="mb-4 w-full rounded-lg border border-slate-200 p-2 text-sm"
-            >
-              <option value="zh-HK">中文 (繁)</option>
-              <option value="pt">Português</option>
-              <option value="en">English</option>
-            </select>
             <button
               onClick={rebindStore}
               className="w-full rounded-xl bg-orange-500 py-3 font-semibold text-white"

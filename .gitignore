@@ -43,3 +43,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 print-agent-android/
+/desktop-companion
+desktop-companion.rar

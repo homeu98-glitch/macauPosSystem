@@ -18,11 +18,17 @@ function toDate(iso: string | number | Date): Date {
   return iso instanceof Date ? iso : new Date(iso);
 }
 
-/** ISO 字串 → `YYYY-MM-DD（週X）HH:MM`（Macau 顯示用）。無效值原樣返回。 */
+const MACAU_TZ = "Asia/Macau";
+
+/** ISO 字串 → `YYYY-MM-DD HH:MM`（澳門時間，強制 Asia/Macau，唔受裝置時區影響）。 */
 export function formatDateTime(iso: string | number | Date): string {
   const d = toDate(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}（週${WEEKDAYS[d.getDay()]}）${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return d.toLocaleString("zh-HK", {
+    timeZone: MACAU_TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
 }
 
 /** ISO 字串 → `YYYY-MM-DD（週X）`。 */
@@ -32,9 +38,29 @@ export function formatDate(iso: string | number | Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}（週${WEEKDAYS[d.getDay()]}）`;
 }
 
-/** ISO 字串 → `HH:MM`（24 小時）。 */
+/** ISO 字串 → `HH:MM`（24 小時，澳門時間）。 */
 export function formatTime(iso: string | number | Date): string {
   const d = toDate(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return d.toLocaleString("zh-HK", { timeZone: MACAU_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+/** ISO 字串 → `YYYY-MM-DD HH:MM`（澳門時間）。專門取代原先直接剁 UTC ISO 嘅寫法（收銀/報表/後台）。 */
+export function formatMacauDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("zh-HK", {
+    timeZone: MACAU_TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+
+/** ISO 字串 → `HH:MM`（澳門時間）。 */
+export function formatMacauTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("zh-HK", { timeZone: MACAU_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
 }

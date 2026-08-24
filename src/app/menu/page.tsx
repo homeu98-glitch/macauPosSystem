@@ -3,11 +3,47 @@
 import { useState } from "react";
 
 import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
-import { KioskLanguage } from "@/lib/kiosk-order";
 import { MenuItem, OrderItem } from "@/lib/types";
 
 // 手機介面（客掃枱 QR 開 /menu）：外賣 App 風，與 kiosk 平板 /order 完全分家
 const I18N = KIOSK_I18N;
+
+// 本枱已落單 / 落單成功 共用嘅明細卡：菜式 + 數量 + 小計 + 總計 + 備註
+function OrderSummaryCard({ order, title }: { order: import("@/lib/types").PosOrder; title: string }) {
+  return (
+    <div className="rounded-xl bg-amber-50 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-semibold text-amber-800">{title}</span>
+        <span className="text-xs text-amber-600">#{order.localOrderNo}</span>
+      </div>
+      <div className="space-y-1.5">
+        {order.items.map((it, i) => (
+          <div key={i} className="flex items-center justify-between text-sm">
+            <span className="min-w-0 flex-1 truncate text-stone-800">
+              {it.name}
+              {it.selectedSpecs && it.selectedSpecs.length > 0 && (
+                <span className="ml-1 text-xs text-stone-400">
+                  ({it.selectedSpecs.map((s) => s.optionLabel).join(" / ")})
+                </span>
+              )}
+            </span>
+            <span className="ml-2 shrink-0 text-stone-500">x{it.quantity}</span>
+            <span className="ml-2 w-16 shrink-0 text-right text-stone-700">
+              MOP {(it.price * it.quantity).toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+      {order.orderNote ? (
+        <div className="mt-2 text-xs text-stone-500">備註：{order.orderNote}</div>
+      ) : null}
+      <div className="mt-2 flex items-center justify-between border-t border-amber-200 pt-2 text-sm">
+        <span className="font-medium text-amber-800">{KIOSK_I18N["zh-HK"].currentTotal}</span>
+        <span className="font-bold text-amber-900">MOP {order.total.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
 
 export default function MenuPage() {
   const t = (key: string) => I18N[language][key] ?? key;
@@ -18,7 +54,6 @@ export default function MenuPage() {
     bootstrap,
     displayStoreName,
     language,
-    setLanguage,
     mode,
     tableName,
     needsBinding,
@@ -36,11 +71,15 @@ export default function MenuPage() {
     pushLine,
     changeQty,
     submittedOrder,
-    setSubmittedOrder,
-    resumedOrder,
+    activeTableOrder,
+    addToOrder,
     submitting,
     error,
     placeOrder,
+    started,
+    startOrdering,
+    returnToHome,
+    ordering,
   } = useKioskOrder();
 
   // 手機專屬 UI state
@@ -82,10 +121,30 @@ export default function MenuPage() {
     );
   }
 
-  // ── 落單成功確認頁 ──
-  if (submittedOrder) {
+  // ── Landing：未「開始點餐」先顯示 landing page（唔用點餐介面做主頁）──
+  if (!started) {
     return (
       <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+        <div className="mb-6 text-7xl">🍽️</div>
+        <h1 className="mb-2 text-2xl font-bold text-stone-900">{displayStoreName}</h1>
+        <p className="mb-8 text-sm text-stone-500">掃描枱上 QR，手機輕鬆點餐</p>
+        <button
+          onClick={startOrdering}
+          className="w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
+        >
+          開始點餐
+        </button>
+      </main>
+    );
+  }
+
+  // ── 落單成功確認頁：顯示下完單內容 + 加單（返回/完成唔會再顯示完整餐牌）──
+  if (submittedOrder) {
+    const isDineIn = mode === "dine_in";
+    return (
+      <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
+        <div className="flex-1 overflow-y-auto">
+        <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
         <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-5xl">✅</div>
         <h1 className="mb-1 text-2xl font-bold text-stone-900">{t("thanks")}</h1>
         <p className="mb-6 text-sm text-stone-500">{t("payAtCounter")}</p>
@@ -93,18 +152,71 @@ export default function MenuPage() {
           <div className="mb-1 text-xs text-stone-400">{t("orderNo")}</div>
           <div className="mb-4 text-4xl font-extrabold tracking-tight text-stone-900">{submittedOrder.localOrderNo}</div>
           <div className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
-            {mode === "dine_in" ? `${t("dineIn")} · ${t("table")} ${tableName}` : tableName}
+            {isDineIn ? `${t("dineIn")} · ${t("table")} ${tableName}` : tableName}
           </div>
         </div>
+
+        {/* 落單內容（本單明細）：所有模式都顯示，按返回只會見到呢個 + 加單 */}
+        <div className="mt-5 w-full text-left">
+          <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
+        </div>
+
+        {/* 加單：堂食先准（手機掃碼 = 枱號 → dine_in，故一定顯示）；快餐模式唔准加單 */}
+        {isDineIn && (
+          <button
+            onClick={addToOrder}
+            className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
+          >
+            {t("addOrder")}
+          </button>
+        )}
+
+        {/* 完成：返回 landing（唔會再顯示完整餐牌，下次落單先「開始點餐」） */}
         <button
-          onClick={() => {
-            setSubmittedOrder(null);
-            setCartOpen(false);
-          }}
-          className="mt-6 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
+          onClick={returnToHome}
+          className="mt-2 w-full py-2.5 text-sm text-stone-400"
         >
-          {t("newOrder")}
+          {t("done")}
         </button>
+        </div>
+        </div>
+      </main>
+    );
+  }
+
+  // ── 已落單枱「明細」介面（鎖定餐牌，必須按加單先入點餐）──
+  if (activeTableOrder && !ordering) {
+    return (
+      <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
+        <div className="flex-1 overflow-y-auto">
+        <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
+        <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 text-5xl">🧾</div>
+        <h1 className="mb-1 text-2xl font-bold text-stone-900">已落單</h1>
+        <p className="mb-6 text-sm text-stone-500">如需加點，請按「加單」進入點餐</p>
+        <div className="w-full rounded-3xl bg-white p-6 shadow-sm">
+          <div className="mb-1 text-xs text-stone-400">{t("orderNo")}</div>
+          <div className="mb-4 text-4xl font-extrabold tracking-tight text-stone-900">{activeTableOrder.localOrderNo}</div>
+          <div className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
+            {t("dineIn")} · {t("table")} {tableName}
+          </div>
+        </div>
+        <div className="mt-5 w-full text-left">
+          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
+        </div>
+        <button
+          onClick={addToOrder}
+          className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
+        >
+          {t("addOrder")}
+        </button>
+        <button
+          onClick={returnToHome}
+          className="mt-2 w-full py-2.5 text-sm text-stone-400"
+        >
+          {t("done")}
+        </button>
+        </div>
+        </div>
       </main>
     );
   }
@@ -121,17 +233,6 @@ export default function MenuPage() {
                 {mode === "dine_in" ? `${t("dineIn")} · ${t("table")} ${tableName}` : t("pickup")}
               </span>
             </div>
-          </div>
-          <div className="flex shrink-0 overflow-hidden rounded-full border border-stone-200 text-xs">
-            {(["zh-HK", "pt", "en"] as KioskLanguage[]).map((lng) => (
-              <button
-                key={lng}
-                onClick={() => setLanguage(lng)}
-                className={`px-2.5 py-1 ${language === lng ? "bg-orange-500 text-white" : "bg-white text-stone-500"}`}
-              >
-                {lng === "zh-HK" ? "中" : lng === "pt" ? "PT" : "EN"}
-              </button>
-            ))}
           </div>
         </div>
 
@@ -153,9 +254,9 @@ export default function MenuPage() {
         </div>
       </header>
 
-      {resumedOrder && (
-        <div className="mx-4 mt-2 rounded-xl bg-amber-50 px-3 py-2 text-center text-xs text-amber-700">
-          {t("resumeHint")}
+      {activeTableOrder && (
+        <div className="mx-4 mt-2">
+          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
         </div>
       )}
 

@@ -1,0 +1,14 @@
+{
+  "name": "macau-pos-print-relay",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Cloud Print Relay + Stationary Agent 骨架（Phase 5 互聯網備援，見 docs/46）",
+  "scripts": {
+    "relay": "node server.mjs",
+    "agent": "node stationary-agent.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

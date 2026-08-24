@@ -524,7 +524,7 @@ export function saveSalonCustomerPackages(pkgs: SalonCustomerPackage[]) {
 // ────────────────────────────────────────────────────────────────────
 // 列印佇列（salon 隔離鍵 macau-pos-salon/print-jobs）
 // 刻意不與餐飲 loadPrintJobs/savePrintJobs 共用，避免污染餐飲列印佇列；
-// 收據 PrintJob 仍複用共享 PrintJob 型別，並經 sendJobToHub 派發到 Printer Hub。
+// 收據 PrintJob 仍複用共享 PrintJob 型別，並經 print-bridge（dispatch.ts）派發。
 // ────────────────────────────────────────────────────────────────────
 
 export function loadSalonPrintJobs(): PrintJob[] {

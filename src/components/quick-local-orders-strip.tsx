@@ -46,10 +46,15 @@ function OrderCard({
           <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
         </div>
         <span
-          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
             mode === "waiting" ? "bg-sky-50 text-sky-700" : "bg-amber-50 text-amber-700"
           }`}
         >
+          <span
+            className={`h-4 w-4 rounded-full ${
+              mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
+            }`}
+          />
           {mode === "waiting" ? completionLabel(order) : "製作中"}
         </span>
       </div>

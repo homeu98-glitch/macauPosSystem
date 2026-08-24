@@ -1,3 +1,8 @@
+<<<<<<< HEAD
+=======
+// 跨平台雙路徑打印合約（Phase 0 骨架，見 docs/43-cross-platform-print-dual-path.md）
+// 三個平台（Android / desktop / iOS）共用同一份 connectionType 列舉。
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
 export type ConnectionType = "lan" | "usb" | "bluetooth";
 export type UserRole = "admin" | "manager" | "cashier";
 
@@ -128,6 +133,8 @@ export interface StoreTable {
   name: string;
   area: string;
   floorId?: string;
+  /** 該桌可容納座位數（人數）；桌台設置新增／編輯桌時填寫 */
+  capacity?: number;
   /** 返結 temp 枱標記（結帳／取消後由 removeReopenTempTable 清除） */
   isReopenTemp?: boolean;
   /** 關聯嘅返結訂單 id（供移除 temp 枱用） */
@@ -175,6 +182,7 @@ export interface DevicePrinterConfig {
   lanPort?: number;
   /** ESC/POS 編碼（每台可配；預設 GB18030。可選: gb18030 / gbk / big5 / utf-8） */
   charset?: string;
+<<<<<<< HEAD
   /** USB 打印機 VID（自動偵測，商家唔使手填；Meituan 式型號表對照） */
   usbVendorId?: string;
   /** USB 打印機 PID（自動偵測） */
@@ -183,6 +191,18 @@ export interface DevicePrinterConfig {
   bluetoothName?: string;
   /** true = 由 Companion 自動偵測加入（唔經手動輸入 VID/PID） */
   autoDetected?: boolean;
+=======
+  // ── USB 連接（connectionType === "usb" 時使用）──
+  /** USB vendor id（hex string，例如 "0x1234"） */
+  usbVendorId?: string;
+  /** USB product id（hex string，例如 "0x5678"） */
+  usbProductId?: string;
+  // ── Bluetooth 連接（connectionType === "bluetooth" 時使用）──
+  /** Bluetooth MAC / 裝置地址（例如 "AA:BB:CC:DD:EE:FF"） */
+  bluetoothAddress?: string;
+  /** Bluetooth 裝置名（配對/列舉顯示用） */
+  bluetoothName?: string;
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
   enabled: boolean;
 }
 
@@ -360,6 +380,8 @@ export interface PosOrder {
   localOrderNo: string;
   tableId: string;
   tableName: string;
+  /** 開桌入座人數（開桌彈窗揀選；僅作展示／對帳用） */
+  partySize?: number;
   status: "draft" | "sent_to_kitchen" | "paid" | "settled" | "reopened" | "cancelled" | "partially_refunded" | "refunded";
   fulfillmentStatus?: "preparing" | "ready";
   items: OrderItem[];
@@ -448,4 +470,44 @@ export interface PrintJob {
   }>;
   status: "pending" | "sent" | "failed";
   createdAt: string;
+  /** 雙路徑：所屬店 ID（relay 路由用；LAN 直打可由終端補） */
+  storeId?: string;
+  /** 雙路徑：job 過期時間（epoch millis）；relay 丟棄過期 job，POS 側超時轉 fallback */
+  ttl?: number;
+}
+
+// ── 跨平台雙路徑打印：統一傳輸層合約（Phase 0 骨架） ──
+//
+// 三個平台各自實作一套 Transport（Android=Kotlin Socket/UsbManager/BluetoothSocket；
+// desktop=Node/Rust net+node-usb+COM；iOS=Swift Network.framework/BLE·MFi），
+// POS 網頁只靠呢個介面溝通，唔使知底層 OS 差異。見 docs/43。
+
+export type PrintKind = "receipt" | "kitchen" | "test";
+
+export interface PrintSendOptions {
+  kind: PrintKind;
+  storeName?: string;
+  paymentMethod?: string;
+  total?: number;
+}
+
+export interface PrintSendResult {
+  ok: boolean;
+  /** 已 queue 但未出單（終端 local agent 接受咗） */
+  queued?: boolean;
+  error?: string;
+  /** 錯誤碼（同 window.__posNativePrintResult 嘅 code，見 docs/45 §5） */
+  code?: string;
+  /** 非同步結果會經 native bridge / relay 回傳呢個 id（對應 PrintJob.id） */
+  ticketId?: string;
+}
+
+/** 統一列印傳輸層。LanTransport（path A）/ RelayTransport（path B）都實作佢。 */
+export interface PrintTransport {
+  /** 呢個 transport 能否處理某部打印機（按 connectionType） */
+  supports(printer: DevicePrinterConfig): boolean;
+  /** 發送一個 job；resolve 表示「已 queue / 已送出」，唔等物理出單 */
+  send(job: PrintJob, printer: DevicePrinterConfig, opts: PrintSendOptions): Promise<PrintSendResult>;
+  /** 可選：探測打印機 availability（LAN socket / USB 列舉 / BT 配對） */
+  probe?(printer: DevicePrinterConfig): Promise<boolean>;
 }

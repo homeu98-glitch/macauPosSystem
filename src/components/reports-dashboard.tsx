@@ -9,7 +9,7 @@ import { orderMatchesReportRange, ReportRangeKey, reportRangeLabel } from "@/lib
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { loadOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
-import { formatMoney } from "@/lib/format";
+import { formatMacauDateTime, formatMoney } from "@/lib/format";
 
 export function ReportsDashboard() {
   const [range, setRange] = useState<ReportRangeKey>("30d");
@@ -101,7 +101,7 @@ export function ReportsDashboard() {
       status: order.status,
       total: order.total,
       payment: order.paymentMethod ?? "--",
-      time: order.updatedAt.replace("T", " ").slice(0, 16),
+      time: formatMacauDateTime(order.updatedAt),
       items: order.items.reduce((sum, item) => sum + item.quantity, 0),
     }));
   }, [filteredOrders]);
@@ -318,7 +318,7 @@ export function ReportsDashboard() {
       {detailOrder ? (
         <ResponsiveModal
           bodyClassName="grid gap-4"
-          description={`${detailOrder.localOrderNo} · ${detailOrder.tableName} · ${detailOrder.updatedAt.replace("T", " ").slice(0, 16)}`}
+          description={`${detailOrder.localOrderNo} · ${detailOrder.tableName} · ${formatMacauDateTime(detailOrder.updatedAt)}`}
           onClose={() => setDetailOrderId(null)}
           showCloseButton={false}
           title="訂單明細"

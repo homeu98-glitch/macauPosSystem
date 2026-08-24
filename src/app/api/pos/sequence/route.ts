@@ -27,22 +27,15 @@ export async function POST(request: Request) {
   const bizDate = now.toISOString().slice(0, 10); // 先用 UTC 字串，SQL function 會用 Macau 時區更準
 
   if (!supabase) {
-    const random = Math.floor(Math.random() * 99) + 1;
-    return NextResponse.json({
-      ok: true,
-      source: "mock",
-      kind,
-      value: random,
-      display:
-        kind === "pickup"
-          ? `自取${pad2(random)}`
-          : kind === "counter"
-            ? `取餐${pad2(random)}`
-            : kind === "delivery"
-              ? `外賣${pad2(random)}`
-              : `訂單${pad2(random)}`,
-      bizDate,
-    });
+    // 唔可以 fake 一個隨機單號當成功：否則 kiosk 會顯示「訂單12」但其實冇寫入 DB。
+    // 直接失敗，等 kiosk / 收銀見到真錯誤。
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Supabase 伺服器端未配置（缺少 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY），無法取單號。",
+      },
+      { status: 503 },
+    );
   }
 
   // 優先使用 SQL function（若你已在 DB 裡建立）

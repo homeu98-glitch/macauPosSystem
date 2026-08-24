@@ -1,7 +1,11 @@
 // Salon 收據列印（寫入 salon 隔離列印佇列 macau-pos-salon/print-jobs）
 //
 // 注意：刻意不呼叫餐飲的 loadPrintJobs/savePrintJobs（那些寫入 macau-pos/print-jobs）。
+<<<<<<< HEAD
 // 這裡複用共享 PrintJob 型別與 sendJobToCompanion（桌面 Companion 代理基建共用）。
+=======
+// 這裡複用共享 PrintJob 型別與 print-bridge 共用工具（resolveJobPrinter / resolvePrintJobStatus）。
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
 
 import type { PrintJob } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
@@ -10,9 +14,15 @@ import {
   isCompanionConfigured,
   resolveJobPrinter,
   resolvePrintJobStatus,
+<<<<<<< HEAD
   sendJobToCompanion,
 } from "@/lib/print-bridge/companion";
+=======
+} from "@/lib/print-bridge/hub";
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
+import { getRelayTransport } from "@/lib/print-bridge/relay-config";
+import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
 import {
   loadSalonPrintJobs,
   saveSalonPrintJobs,
@@ -23,18 +33,32 @@ import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
 
 /**
  * 統一 dispatch 入口：native bridge（PosNative.printJob，完整 ESC/POS 格式）優先，
+<<<<<<< HEAD
  * 唔得就 fallback 桌面 Companion 代理（經 loopback → :9100 / USB / 藍牙）。
  * 餐飲同 salon 共用同一條基建。
+=======
+ * 唔得就桌面 Companion（localhost HTTP，見 docs/47），最後經 Cloud Print Relay（互聯網備援，見 docs/46）。
+ * 餐飲同 salon 共用同一條基建（見 dispatch.ts）。
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
  */
 async function dispatchPrint(
   job: PrintJob,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const printer = resolveJobPrinter(job);
+<<<<<<< HEAD
   if (printer && isNativeBridgeAvailable()) {
+=======
+  if (!printer) {
+    return { ok: false, error: `搵唔到對應打印機（printerGroup=${job.printerGroup}）` };
+  }
+  // 1) Native bridge（Android APK WebView）：native 側自己決定 LAN 直打 or relay
+  if (isNativeBridgeAvailable()) {
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
     const kind = printer.role === "receipt" ? "receipt" : "kitchen";
     const storeName = loadSalonBootstrap()?.storeName;
     return dispatchJobToNative(job, { printer, kind, storeName });
   }
+<<<<<<< HEAD
   if (printer && isCompanionConfigured()) {
     return sendJobToCompanion(job, printer);
   }
@@ -42,6 +66,27 @@ async function dispatchPrint(
     return { ok: false, error: "搵唔到對應收據打印機" };
   }
   return { ok: false, error: "未配對打印通道（Companion 代理未啟動）" };
+=======
+  // 2) 桌面 Companion（localhost HTTP）：瀏覽器開嘅 POS 喺桌面打到 LAN/USB/BT（見 docs/47）
+  const companion = getCompanionTransport();
+  if (companion) {
+    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+    const storeName = loadSalonBootstrap()?.storeName;
+    const res = await companion.send(job, printer, { kind, storeName });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: res.error || "companion 打印失敗" };
+  }
+  // 3) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
+  const relay = getRelayTransport();
+  if (relay) {
+    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+    const storeName = loadSalonBootstrap()?.storeName;
+    const res = await relay.send(job, printer, { kind, storeName });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: res.error || "relay 打印失敗" };
+  }
+  return { ok: false, error: "無可用打印通道（native / companion / relay 都無）" };
+>>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
 }
 
 export const SALON_PRINT_JOBS_CHANGED_EVENT = "salon-print-jobs-changed";

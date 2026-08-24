@@ -29,9 +29,11 @@ type StoreDetailPayload = {
   localSettingsUpdatedAt?: string;
 };
 
+import { formatMacauDateTime } from "@/lib/format";
+
 function formatTime(value?: string) {
   if (!value) return "未記錄";
-  return value.replace("T", " ").slice(0, 16);
+  return formatMacauDateTime(value);
 }
 
 function roleLabel(role: AccountUser["role"]) {

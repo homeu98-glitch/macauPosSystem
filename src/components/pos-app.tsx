@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { tryAutoPairCompanion } from "@/lib/print-bridge/auto-pair-companion";
+
 import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
@@ -56,11 +58,11 @@ import {
   quickCompletionLabel,
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
-import { filterQuickActionBarOrders, mergeOrderLists } from "@/lib/pos-order-filters";
+import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
   tone: "info" | "success";
@@ -84,6 +86,42 @@ function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
   const total = subtotal + serviceChargeAmount + taxAmount;
 
   return { subtotal, serviceChargeAmount, taxAmount, total };
+}
+
+/**
+ * 枱檯 view 嘅樓層來源：以 `bootstrap.tables`（DB 共享真源）為基，按 area 分組；
+ * 再疊加本地獨有枱（唔喺 bootstrap，例如返結 temp 枱 / 本地新增）保留原 floor。
+ * 目的：kiosk / 掃碼落單用嘅枱 ID 來自 bootstrap.tables，收銀枱檯 view 必須收佢哋，
+ * 否則張單喺枱檯 view 無處可放（之前 localSettings.floors 唔包 bootstrap 枱 → 單 invisible）。
+ */
+function buildDisplayFloors(
+  bootstrapTables: PosBootstrap["tables"],
+  localFloors: PosLocalSettings["floors"],
+): PosLocalSettings["floors"] {
+  const floors: PosLocalSettings["floors"] = [];
+  const bootstrapIds = new Set(bootstrapTables.map((t) => t.id));
+
+  // 1) 共享真源：bootstrap.tables 按 area 分組成樓層
+  const byArea = new Map<string, PosBootstrap["tables"][number][]>();
+  for (const t of bootstrapTables) {
+    const key = t.area && t.area.trim() ? t.area.trim() : "未分區";
+    if (!byArea.has(key)) byArea.set(key, []);
+    byArea.get(key)!.push(t);
+  }
+  for (const [area, tables] of byArea) {
+    floors.push({ id: `area:${area}`, name: area, tables });
+  }
+
+  // 2) overlay：本地獨有枱（唔喺 bootstrap）保留原 local floor
+  for (const lf of localFloors) {
+    const localOnly = lf.tables.filter((t) => !bootstrapIds.has(t.id));
+    if (localOnly.length === 0) continue;
+    const existing = floors.find((f) => f.id === lf.id);
+    if (existing) existing.tables.push(...localOnly);
+    else floors.push({ id: lf.id, name: lf.name, tables: localOnly });
+  }
+
+  return floors;
 }
 
 const CART_PAYING_ID = "__cart__";
@@ -115,12 +153,24 @@ export function PosApp() {
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [roReason, setRoReason] = useState("");
+  // ── 開桌彈窗（空閒枱 click → 揀入座人數）──
+  const [openTableModalTableId, setOpenTableModalTableId] = useState<string | null>(null);
+  const [openTablePartySize, setOpenTablePartySize] = useState<number>(1);
+  const [seatedPartySizes, setSeatedPartySizes] = useState<Record<string, number>>(() => {
+    const all = loadOrders();
+    return Object.fromEntries(all.filter((o) => o.partySize != null).map((o) => [o.tableId, o.partySize as number]));
+  });
   const [roModalOpen, setRoModalOpen] = useState(false);
   const [roSubmitting, setRoSubmitting] = useState(false);
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
   const [discountValue, setDiscountValue] = useState("0");
   const [receivedAmount, setReceivedAmount] = useState("");
   const [posMode, setPosMode] = useState<"tables" | "order">(() => (loadOperatingMode() === "quick" ? "order" : "tables"));
+
+  // ── 自動配對桌面 Companion：mount 嗰陣 ran 一次，唔使用家手動填 URL（見 auto-pair-companion.ts）──
+  useEffect(() => {
+    tryAutoPairCompanion();
+  }, []);
 
   // ── Deep-link：orders 面板「查看」非 counter 單會跳到 /?tableId=...&orderId=... ──
   // 喺呢度載入單到工作台（已結/未結/已返結一律支援，搵全量 orders 唔靠 openOrders）。
@@ -478,57 +528,61 @@ export function PosApp() {
     clearLegacyMembersCache();
   }, []);
 
+  // 收銀 mount / 重連 / queue 清空時一次過 pull 現有 state（event-driven，非 polling）
   useEffect(() => {
     if (offlineMode) return;
     // 方案B：若本機仍有待同步事件，先不要拉取後台狀態，避免後台舊資料覆蓋本機即時狀態。
     if (queue.some((event) => event.status !== "synced")) return;
-    async function loadRuntimeState() {
-      try {
-        const merchantId = loadAuthSession()?.merchantId;
-        const stateUrl = merchantId
-          ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}`
-          : "/api/pos/state";
-        const response = await fetch(stateUrl);
-        const payload = (await response.json()) as {
-          orders?: PosOrder[];
-          queue?: QueueEvent[];
-          printJobs?: PrintJob[];
-          localSettings?: PosLocalSettings;
-          deviceConfig?: DeviceConfig | null;
-        };
-
-        if (Array.isArray(payload.orders)) {
-          // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
-          setOrders((current) => {
-            const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
-            saveOrders(merged);
-            return merged;
-          });
-        }
-        if (Array.isArray(payload.queue)) {
-          setQueue(payload.queue);
-          saveQueue(payload.queue);
-        }
-        if (Array.isArray(payload.printJobs)) {
-          setPrintJobs(payload.printJobs);
-          savePrintJobs(payload.printJobs);
-        }
-        if (payload.localSettings) {
-          savePosLocalSettings(payload.localSettings);
-        }
-        if (payload.deviceConfig) {
-          saveDeviceConfig(payload.deviceConfig);
-        }
-      } catch {
-        // ignore
-      }
-    }
-
     void loadRuntimeState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, runtimeRefreshTick, queue]);
 
+  // 一次過 backfill 現有 state（realtime 唔 backfill 舊 row；realtime (re)subscribe 時 call）。
+  // 以 localStorage 為底 merge，唔會 overwrite 本機即時狀態。component scope 定義俾 usePosRealtime onResubscribed 共用。
+  async function loadRuntimeState() {
+    try {
+      const merchantId = loadAuthSession()?.merchantId;
+      const stateUrl = merchantId
+        ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}`
+        : "/api/pos/state";
+      const response = await fetch(stateUrl);
+      const payload = (await response.json()) as {
+        orders?: PosOrder[];
+        queue?: QueueEvent[];
+        printJobs?: PrintJob[];
+        localSettings?: PosLocalSettings;
+        deviceConfig?: DeviceConfig | null;
+      };
+
+      if (Array.isArray(payload.orders)) {
+        // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
+        setOrders((current) => {
+          const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
+          saveOrders(merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(payload.queue)) {
+        setQueue(payload.queue);
+        saveQueue(payload.queue);
+      }
+      if (Array.isArray(payload.printJobs)) {
+        setPrintJobs(payload.printJobs);
+        savePrintJobs(payload.printJobs);
+      }
+      if (payload.localSettings) {
+        savePosLocalSettings(payload.localSettings);
+      }
+      if (payload.deviceConfig) {
+        saveDeviceConfig(payload.deviceConfig);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // Kiosk 客人自點：即時訂閱 pos_orders / pos_print_jobs（Realtime，禁 polling）。
-  // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 週期拉取作 fallback。
+  // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 只喺 mount / (re)subscribe 一次過 backfill（event-driven，非週期）。
   const kioskStoreId = useMemo(
     () => (authSession as { merchantId?: string } | null)?.merchantId ?? null,
     [authSession],
@@ -551,6 +605,11 @@ export function PosApp() {
         savePrintJobs(next);
         return next;
       });
+    },
+    // realtime (re)subscribe 成功 → 一次過 backfill 現有 open 單（event-driven，非 polling）。
+    // 補返 realtime 唔 backfill 舊 row 嘅缺口；visibilitychange / CHANNEL_ERROR 重連都會觸發。
+    onResubscribed: () => {
+      void loadRuntimeState();
     },
   });
 
@@ -585,7 +644,12 @@ export function PosApp() {
     [authSession, deviceConfig.terminalName],
   );
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
-  const floors = localSettings.floors;
+  // 枱檯 view 改讀 bootstrap.tables（共享真源）而非 localSettings.floors，確保 kiosk / 掃碼落單嘅枱一定 render；
+  // 本地獨有枱（返結 temp 枱等）經 buildDisplayFloors overlay 保留。
+  const floors = useMemo(
+    () => buildDisplayFloors(bootstrap?.tables ?? [], localSettings.floors),
+    [bootstrap, localSettings],
+  );
   const paymentMethods = localSettings.paymentMethods;
   const autoAcceptOnlineOrders = localSettings.onlineOrderSettings.autoAccept;
 
@@ -619,7 +683,10 @@ export function PosApp() {
 
     return base.filter((item) => item.name.includes(keyword));
   }, [bootstrap, effectiveCategoryId, searchKeyword]);
-  const effectiveFloorId = activeFloorId || floors[0]?.id || "";
+  // activeFloorId 可能係舊嘅本地 floor id（改讀 bootstrap.tables 後 display floor id 變 area:<area>），
+  // 若佢已唔存在於 display floors，fallback 去第一個 display floor，避免枱 grid 變空。
+  const effectiveFloorId =
+    activeFloorId && floors.some((f) => f.id === activeFloorId) ? activeFloorId : floors[0]?.id ?? "";
   const visibleTables = useMemo(
     () => floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [],
     [effectiveFloorId, floors],
@@ -650,30 +717,10 @@ export function PosApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, pendingQueue]);
 
-  // Kiosk 客人單可見性 fallback：realtime 靜默失敗（anon RLS / Realtime 未啟用）時，
-  // 週期拉取 pos_orders（server 端 service role，繞過 anon RLS）合併入本機 + localStorage，
-  // 確保收銀一定見到客人掃碼落嘅單（搭配上一輪 storeId 修正）。
-  useEffect(() => {
-    if (offlineMode) return;
-    const merchantId = loadAuthSession()?.merchantId;
-    if (!merchantId) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(merchantId)}`);
-        const payload = (await response.json()) as { orders?: PosOrder[] };
-        if (Array.isArray(payload.orders)) {
-          setOrders((current) => {
-            const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
-            saveOrders(merged);
-            return merged;
-          });
-        }
-      } catch {
-        // ignore
-      }
-    }, 15_000);
-    return () => window.clearInterval(timer);
-  }, [offlineMode]);
+  // ⚠️ 即時架構（用家要求：禁用 polling）：收銀見 kiosk 單唯一靠 Supabase Realtime 推。
+  // 冇任何 setInterval 輪詢。realtime (re)subscribe 成功後靠 onResubscribed 一次過 backfill
+  // 現有 open 單（event-driven，非週期性），之後新單全靠 postgres_changes 推入。
+  // → 前置條件：pos_orders 必須加落 supabase_realtime publication + anon read RLS（見 0011 / 下方 SQL）。
   const recentCompletedOrders = useMemo(() => {
     if (!isQuickMode) return [];
     const threshold = nowMs - quickCompletedMinutes * 60 * 1000;
@@ -684,6 +731,12 @@ export function PosApp() {
   }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
   const actionBarLocalOrders = useMemo(
     () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter" && !order.onlineOrderId),
+    [openOrders],
+  );
+  // 桌台總覽（dine-in）模式：kiosk / 掃碼落嘅自取、外賣單（table_id=counter）唔喺枱 grid 入面，
+  // 必須有專屬面板先會見到，否則收銀喺預設 dine-in 模式永遠睇唔到呢啲單（之前只喺 quick mode bar 出）。
+  const counterKioskOrders = useMemo(
+    () => openOrders.filter((order) => order.tableId === "counter" && !order.onlineOrderId),
     [openOrders],
   );
   const quickPreparingOrders = useMemo(
@@ -930,8 +983,24 @@ export function PosApp() {
   }
 
   function selectTable(tableId: string) {
-    const order = tableOrderMap.get(tableId) ?? null;
-    loadOrderIntoWorkspace(order, tableId);
+    const existing = tableOrderMap.get(tableId);
+    if (!existing) {
+      // 空閒枱 → 彈開桌窗揀入座人數，唔直接入點餐
+      setOpenTablePartySize(1);
+      setOpenTableModalTableId(tableId);
+      return;
+    }
+    loadOrderIntoWorkspace(existing, tableId);
+    setPosMode("order");
+  }
+
+  function confirmOpenTable() {
+    const tableId = openTableModalTableId;
+    if (!tableId) return;
+    const size = openTablePartySize > 0 ? openTablePartySize : 1;
+    setSeatedPartySizes((current) => ({ ...current, [tableId]: size }));
+    setOpenTableModalTableId(null);
+    loadOrderIntoWorkspace(null, tableId);
     setPosMode("order");
   }
 
@@ -993,6 +1062,7 @@ export function PosApp() {
           ...existingOrder,
           tableId: activeTable.id,
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
+          partySize: existingOrder.partySize ?? seatedPartySizes[activeTable.id],
           status: nextStatus,
           fulfillmentStatus:
             isQuickMode && activeTable.id === "counter"
@@ -1015,6 +1085,7 @@ export function PosApp() {
           localOrderNo: newLocalOrderNo ?? fallbackNo,
           tableId: activeTable.id,
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
+          partySize: seatedPartySizes[activeTable.id],
           status: nextStatus,
           fulfillmentStatus: isQuickMode && activeTable.id === "counter" ? "preparing" : undefined,
           items: cartItems,
@@ -2381,6 +2452,9 @@ export function PosApp() {
       };
 
       pushEvents([paymentEvent]);
+      // 即時同步結帳狀態去 backend（唔等 30s 批量 flush）：收銀按結帳 → 客人掃碼 resume
+      // 即刻見到「枱已完結」，唔會再因 backend 仲係 sent_to_kitchen 而顯示「已落單」。
+      void syncNow([...queue, paymentEvent], { silent: true });
       setPayingOrderId(null);
       setActiveOrderId(null);
       setCartItems([]);
@@ -2526,6 +2600,8 @@ export function PosApp() {
     };
 
     pushEvents([paymentEvent]);
+    // 即時同步結帳狀態去 backend（唔等 30s 批量 flush），同上。
+    void syncNow([...queue, paymentEvent], { silent: true });
     setToast({
       tone: "success",
       message: quickPaidFlow
@@ -2654,6 +2730,7 @@ export function PosApp() {
                   {visibleTables.map((table) => {
                     const status = tableOrderMap.get(table.id)?.status ?? "idle";
                     const isReopenedTable = status === "reopened";
+                    const seated = seatedPartySizes[table.id];
                     const label =
                       isReopenedTable
                         ? "待重結"
@@ -2662,6 +2739,7 @@ export function PosApp() {
                           : status === "draft"
                             ? "未下單"
                             : "空閒";
+                    const labelFull = seated ? `${label} · ${seated}人` : label;
                     return (
                       <button
                         key={table.id}
@@ -2672,13 +2750,16 @@ export function PosApp() {
                         <div className="text-base font-semibold text-slate-900">
                           {table.name}
                         </div>
-                        <div className="mt-2 text-xs text-slate-500">{table.area}</div>
+                        <div className="mt-2 text-xs text-slate-500">
+                          {table.area}
+                          {table.capacity ? ` · ${table.capacity} 座位` : ""}
+                        </div>
                         <div
                           className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
                             isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
                           }`}
                         >
-                          {label}
+                          {labelFull}
                         </div>
                       </button>
                     );
@@ -2686,6 +2767,51 @@ export function PosApp() {
                 </div>
               </div>
             </main>
+
+            {openTableModalTableId ? (
+              <ResponsiveModal
+                title="開桌"
+                onClose={() => setOpenTableModalTableId(null)}
+                actions={
+                  <>
+                    <button
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200"
+                      onClick={() => setOpenTableModalTableId(null)}
+                      type="button"
+                    >
+                      取消
+                    </button>
+                    <button
+                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => confirmOpenTable()}
+                      type="button"
+                    >
+                      開桌
+                    </button>
+                  </>
+                }
+              >
+                <div className="space-y-3">
+                  <div className="text-sm text-slate-600">
+                    桌台：
+                    {visibleTables.find((t) => t.id === openTableModalTableId)?.name ?? ""}
+                    {visibleTables.find((t) => t.id === openTableModalTableId)?.capacity
+                      ? `（${visibleTables.find((t) => t.id === openTableModalTableId)?.capacity} 座位）`
+                      : ""}
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-900">入座人數</label>
+                    <input
+                      type="number"
+                      min={1}
+                      className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      onChange={(event) => setOpenTablePartySize(Number(event.target.value) || 1)}
+                      value={openTablePartySize}
+                    />
+                  </div>
+                </div>
+              </ResponsiveModal>
+            ) : null}
 
             <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-4 py-4">
@@ -2823,6 +2949,56 @@ export function PosApp() {
                   </div>
                 </div>
 
+                {!isQuickMode && counterKioskOrders.length > 0 ? (
+                  <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-orange-700">自取 / 掃碼訂單</div>
+                      <div className="text-[11px] text-orange-500">{counterKioskOrders.length} 張待處理</div>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {counterKioskOrders.map((order) => (
+                        <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1 text-[22px] font-semibold text-orange-700">
+                              <span className="h-4 w-4 rounded-full bg-orange-500" />
+                              {localOrderStatusLabel(order)}
+                            </div>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              className="flex-1 rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                              onClick={() => setViewingOrderId(order.id)}
+                              type="button"
+                            >
+                              查看
+                            </button>
+                            {order.status === "paid" && order.fulfillmentStatus !== "ready" ? (
+                              <button
+                                className="flex-1 rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
+                                onClick={() => updateQuickFulfillment(order.id, "ready")}
+                                type="button"
+                              >
+                                標記可取
+                              </button>
+                            ) : null}
+                            <button
+                              className="flex-1 rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                              onClick={() => setPayingOrderId(order.id)}
+                              type="button"
+                            >
+                              結帳
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {offlineMode ? (
                   <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
                     目前離線，恢復網絡後可補傳資料
@@ -2884,7 +3060,10 @@ export function PosApp() {
             {activeOrder?.status === "reopened" ? (
               <div className="mx-4 mb-1 mt-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white">返結帳</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500 px-3 py-1 text-[22px] font-bold text-white">
+                    <span className="h-4 w-4 rounded-full bg-white" />
+                    返結帳
+                  </span>
                   <span className="text-xs font-semibold text-amber-800">此單為返結單，可改價／加餐後重新結帳</span>
                 </div>
                 {activeOrder.reopenReason ? (
@@ -2892,7 +3071,7 @@ export function PosApp() {
                 ) : null}
                 {activeOrder.originalSettledAt ? (
                   <div className="mt-0.5 text-[11px] text-amber-600">
-                    原結帳時間：{activeOrder.originalSettledAt.replace("T", " ").slice(0, 16)}
+                    原結帳時間：{formatMacauDateTime(activeOrder.originalSettledAt)}
                   </div>
                 ) : null}
               </div>
@@ -2902,7 +3081,10 @@ export function PosApp() {
               <div className="mx-4 mb-1 mt-2 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-slate-500 px-2 py-0.5 text-[11px] font-bold text-white">已結帳</span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-500 px-3 py-1 text-[22px] font-bold text-white">
+                      <span className="h-4 w-4 rounded-full bg-white" />
+                      已結帳
+                    </span>
                     <span className="text-xs font-semibold text-slate-700">唯讀預覽 · 所有操作已鎖定</span>
                   </div>
                   <button
@@ -2916,7 +3098,7 @@ export function PosApp() {
                 </div>
                 {workspaceOrder?.originalSettledAt || workspaceOrder?.updatedAt ? (
                   <div className="mt-1 text-[11px] text-slate-500">
-                    結帳時間：{(workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt)!.replace("T", " ").slice(0, 16)}
+                    結帳時間：{formatMacauDateTime(workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt)}
                   </div>
                 ) : null}
               </div>
@@ -3377,7 +3559,7 @@ export function PosApp() {
                           <div className="flex items-center justify-between gap-3">
                             <div className="text-sm font-semibold text-slate-900">{info.title}</div>
                             <div className="text-[11px] text-slate-400">
-                              {event.createdAt.replace("T", " ").slice(5, 16)}
+                              {formatMacauDateTime(event.createdAt).slice(5)}
                             </div>
                           </div>
                           <div className="mt-1 text-xs text-slate-500">{info.detail}</div>
@@ -3907,7 +4089,7 @@ export function PosApp() {
                       .map((record) => (
                         <div key={record.id} className="rounded-2xl border border-red-100 bg-white p-3">
                           <div className="flex items-center justify-between gap-3 text-sm">
-                            <span className="font-semibold text-slate-900">{record.createdAt.replace("T", " ").slice(0, 16)}</span>
+                            <span className="font-semibold text-slate-900">{formatMacauDateTime(record.createdAt)}</span>
                             <span className="font-semibold text-red-700">
                               {formatMoney(record.amount, bootstrap.currency)}
                             </span>
