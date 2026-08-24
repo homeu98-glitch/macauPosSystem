@@ -153,6 +153,9 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
     ...config,
     printers: Array.isArray(config.printers)
       ? config.printers.map((printer, index) => ({
+          // 先 spread 原物件，保留 charset / connectionType / usbVendorId / usbProductId /
+          // bluetoothName / bluetoothAddress / autoDetected 等字段，避免每次 load 被 normalize 掉。
+          ...printer,
           id: printer.id ?? `printer-${index}`,
           role:
             printer.role ??
@@ -166,13 +169,19 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
             ((printer as { group?: string }).group && (printer as { group?: string }).group !== "receipt"
               ? (printer as { group?: string }).group
               : undefined),
-          connectionType: "lan",
+          connectionType: printer.connectionType ?? "lan",
           name: printer.name ?? `打印機 ${index + 1}`,
           model: printer.model ?? "",
           paperSize: printer.paperSize ?? "",
           ipAddress: printer.ipAddress ?? "",
           lanPort: Number(printer.lanPort ?? 9100) || 9100,
           enabled: Boolean(printer.enabled),
+          charset: printer.charset ?? undefined,
+          usbVendorId: printer.usbVendorId ?? undefined,
+          usbProductId: printer.usbProductId ?? undefined,
+          bluetoothName: printer.bluetoothName ?? undefined,
+          bluetoothAddress: printer.bluetoothAddress ?? undefined,
+          autoDetected: printer.autoDetected ?? undefined,
         }))
       : [],
   };

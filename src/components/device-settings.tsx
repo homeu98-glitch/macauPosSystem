@@ -264,10 +264,31 @@ export function DeviceSettings() {
           deviceConfig?: DeviceConfig | null;
         };
         if (payload.deviceConfig) {
-          const normalizedDevice = normalizeDeviceConfig(payload.deviceConfig);
-          if (normalizedDevice) {
-            setConfig(normalizedDevice);
-            saveDeviceConfig(normalizedDevice);
+          const remote = normalizeDeviceConfig(payload.deviceConfig);
+          if (remote) {
+            // 唔盲目覆蓋本機設定：遠端（GET 經 normalizeDeviceConfig，或佢 terminal 舊 app）可能缺
+            // charset / connectionType / usb / bt 等打印機綁定欄位。用家啱啱 save 嘅設定唔可以被
+            // 呢條「全店最新」config 清走。故 remote 缺嘅綁定欄位，保留本機 localStorage 嘅值。
+            const local = loadDeviceConfig();
+            const localPrinters = new Map((local?.printers ?? []).map((p) => [p.id, p]));
+            const mergedPrinters = remote.printers.map((rp) => {
+              const lp = localPrinters.get(rp.id);
+              return lp
+                ? {
+                    ...rp,
+                    charset: rp.charset ?? lp.charset,
+                    connectionType: rp.connectionType ?? lp.connectionType,
+                    usbVendorId: rp.usbVendorId ?? lp.usbVendorId,
+                    usbProductId: rp.usbProductId ?? lp.usbProductId,
+                    bluetoothName: rp.bluetoothName ?? lp.bluetoothName,
+                    bluetoothAddress: rp.bluetoothAddress ?? lp.bluetoothAddress,
+                    autoDetected: rp.autoDetected ?? lp.autoDetected,
+                  }
+                : rp;
+            });
+            const merged = { ...remote, printers: mergedPrinters };
+            setConfig(merged);
+            saveDeviceConfig(merged);
           }
         }
         // 注意：唔可以喺呢度用遠端 local_settings 覆蓋本機 localSettings（樓層與桌台）。
