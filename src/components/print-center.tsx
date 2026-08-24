@@ -20,7 +20,7 @@ import {
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
 import { formatMoney } from "@/lib/format";
-import { PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 
 const RECEIPT_SECTION_META = [
   { id: "store_name", label: "門店名" },
@@ -48,6 +48,54 @@ const LABEL_SECTION_META = [
   { id: "order_no", label: "單號" },
   { id: "footer", label: "頁尾文案" },
 ] as const;
+
+/**
+ * 示例訂單：當店內仲未有任何真實訂單時，模板預覽改用呢個，
+ * 令「收據模板預覽 / 標籤模板預覽」喺有啟用打印機嘅情況下一定出到嘢，
+ * 唔會再被「未設定啟用中打印機」嘅死訊息誤導（真因其實係無訂單可取樣）。
+ */
+const SYNTHETIC_SAMPLE_ORDER: PosOrder = {
+  id: "__preview_sample__",
+  localOrderNo: "A1001",
+  tableId: "table-a01",
+  tableName: "A01",
+  status: "paid",
+  items: [
+    {
+      menuItemId: "item-pearl-milk-tea",
+      name: "珍珠奶茶",
+      quantity: 1,
+      price: 28,
+      printerGroup: "drinks",
+      selectedSpecs: [
+        { groupId: "sugar", groupName: "甜度", optionId: "half", optionLabel: "半糖", priceDelta: 0 },
+        { groupId: "ice", groupName: "冰量", optionId: "less", optionLabel: "少冰", priceDelta: 0 },
+        { groupId: "cup", groupName: "杯型", optionId: "large", optionLabel: "大杯", priceDelta: 0 },
+      ],
+      note: "",
+    },
+    {
+      menuItemId: "item-lemon-tea",
+      name: "檸檬茶",
+      quantity: 2,
+      price: 22,
+      printerGroup: "drinks",
+      selectedSpecs: [
+        { groupId: "sugar", groupName: "甜度", optionId: "normal", optionLabel: "全糖", priceDelta: 0 },
+        { groupId: "ice", groupName: "冰量", optionId: "none", optionLabel: "走冰", priceDelta: 0 },
+      ],
+      note: "加珍珠",
+    },
+  ],
+  subtotal: 72,
+  taxAmount: 0,
+  serviceChargeAmount: 0,
+  discountAmount: 0,
+  total: 72,
+  paymentMethod: "現金",
+  createdAt: "2026-08-24T12:00:00.000Z",
+  updatedAt: "2026-08-24T12:00:00.000Z",
+};
 
 function reorderSections<T extends string>(list: T[], fromId: T, toId: T) {
   const next = [...list];
@@ -104,6 +152,9 @@ export function PrintCenter() {
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [activeTab, setActiveTab] = useState<"records" | "receipt-template" | "label-template">("records");
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings() ?? defaultPosLocalSettings);
+  const [deviceConfig, setDeviceConfig] = useState<DeviceConfig>(() => loadDeviceConfig() ?? defaultDeviceConfig);
+  const [selectedReceiptPrinterId, setSelectedReceiptPrinterId] = useState<string | null>(null);
+  const [selectedLabelPrinterId, setSelectedLabelPrinterId] = useState<string | null>(null);
   const [draggingReceiptSection, setDraggingReceiptSection] = useState<string | null>(null);
   const [draggingLabelSection, setDraggingLabelSection] = useState<string | null>(null);
   const [selectedReceiptSection, setSelectedReceiptSection] = useState<(typeof RECEIPT_SECTION_META)[number]["id"]>("store_name");
@@ -145,6 +196,15 @@ export function PrintCenter() {
     return () => window.removeEventListener("pos-print-jobs-changed", onPrintJobsChanged);
   }, []);
 
+  // 聯合設置模組：設置內新增/啟用/改用途打印機後，即時同步到預覽
+  useEffect(() => {
+    function onDeviceConfigChanged() {
+      setDeviceConfig(loadDeviceConfig() ?? defaultDeviceConfig);
+    }
+    window.addEventListener("pos-device-config-changed", onDeviceConfigChanged);
+    return () => window.removeEventListener("pos-device-config-changed", onDeviceConfigChanged);
+  }, []);
+
   const filteredJobs = useMemo(() => {
     const base = printJobs.slice().sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (filter === "all") return base;
@@ -157,9 +217,40 @@ export function PrintCenter() {
   );
 
   const orderMap = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders]);
-  const sampleOrder = useMemo(() => orders[0] ?? null, [orders]);
+  // 聯合設置模組：有啟用打印機就應出到預覽，唔好等真實訂單。無訂單時退用示例訂單。
+  const usingSampleOrder = orders.length === 0;
+  const sampleOrder = useMemo<PosOrder>(() => orders[0] ?? SYNTHETIC_SAMPLE_ORDER, [orders]);
+
+  // 聯合設置模組：由 deviceConfig 解析預覽用打印機（設置新增/啟用即時反映）
+  const enabledPrinters = useMemo(() => deviceConfig.printers.filter((item) => item.enabled), [deviceConfig]);
+
+  // 收據預覽打印機：優先「收據」用途，否則退而取第一台啟用中打印機（避免無謂「未設定」死訊息）
+  const receiptPrinter = useMemo(() => {
+    const byRole = enabledPrinters.find((item) => item.role === "receipt");
+    return byRole ?? enabledPrinters[0] ?? null;
+  }, [enabledPrinters]);
+
+  const labelPrinter = useMemo(() => {
+    const byRole = enabledPrinters.find((item) => item.role === "label");
+    return byRole ?? enabledPrinters[0] ?? null;
+  }, [enabledPrinters]);
+
+  // 用家可在預覽內手選打印機；未選時跟隨上述自動解析
+  const receiptPreviewPrinter = useMemo(() => {
+    const chosen = selectedReceiptPrinterId
+      ? deviceConfig.printers.find((item) => item.id === selectedReceiptPrinterId && item.enabled)
+      : null;
+    return chosen ?? receiptPrinter;
+  }, [selectedReceiptPrinterId, deviceConfig, receiptPrinter]);
+
+  const labelPreviewPrinter = useMemo(() => {
+    const chosen = selectedLabelPrinterId
+      ? deviceConfig.printers.find((item) => item.id === selectedLabelPrinterId && item.enabled)
+      : null;
+    return chosen ?? labelPrinter;
+  }, [selectedLabelPrinterId, deviceConfig, labelPrinter]);
   const receiptPreviewJob = useMemo<PrintJob | null>(() => {
-    const printer = (loadDeviceConfig() ?? defaultDeviceConfig).printers.find((item) => item.enabled && item.role === "receipt");
+    const printer = receiptPreviewPrinter;
     if (!printer || !sampleOrder) return null;
     const template = localSettings.printTemplates.receipt;
     const sectionItems: Record<(typeof template.sectionOrder)[number], PreviewItem[]> = {
@@ -189,9 +280,9 @@ export function PrintCenter() {
       createdAt: sampleOrder.updatedAt,
       items: template.sectionOrder.flatMap((section) => sectionItems[section]),
     };
-  }, [localSettings.printTemplates.receipt, sampleOrder]);
+  }, [receiptPreviewPrinter, localSettings.printTemplates.receipt, sampleOrder]);
   const labelPreviewJob = useMemo<PrintJob | null>(() => {
-    const printer = (loadDeviceConfig() ?? defaultDeviceConfig).printers.find((item) => item.enabled && item.role === "label");
+    const printer = labelPreviewPrinter;
     const sourceItem = sampleOrder?.items[0];
     if (!printer || !sampleOrder || !sourceItem) return null;
     const template = localSettings.printTemplates.label;
@@ -242,7 +333,7 @@ export function PrintCenter() {
       createdAt: sampleOrder.updatedAt,
       items: template.sectionOrder.flatMap((section) => sectionItems[section]),
     };
-  }, [localSettings.printTemplates.label, sampleOrder]);
+  }, [labelPreviewPrinter, localSettings.printTemplates.label, sampleOrder]);
 
   const receiptPreviewBlocks = useMemo(() => {
     if (!sampleOrder) return {} as Record<(typeof RECEIPT_SECTION_META)[number]["id"], string[]>;
@@ -399,7 +490,7 @@ export function PrintCenter() {
   }
 
   function paperWidthMm(type: "receipt" | "label") {
-    const printer = (loadDeviceConfig() ?? defaultDeviceConfig).printers.find((item) => item.enabled && item.role === type);
+    const printer = deviceConfig.printers.find((item) => item.enabled && item.role === type);
     const size = printer?.paperSize ?? (type === "receipt" ? "80mm" : "62mm");
     if (size.includes("100x75")) return 100;
     if (size.includes("80")) return 80;
@@ -1279,8 +1370,34 @@ export function PrintCenter() {
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="text-sm font-semibold text-slate-900">收據預覽</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {receiptPreviewJob ? receiptPreviewJob.printerName : "未設定啟用中的收據打印機"}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>{receiptPreviewJob ? receiptPreviewJob.printerName : "未設定啟用中的收據打印機"}</span>
+                    {usingSampleOrder && receiptPreviewJob ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">示例訂單</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-500">預覽打印機</span>
+                    <select
+                      className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                      onChange={(event) => setSelectedReceiptPrinterId(event.target.value || null)}
+                      value={receiptPreviewPrinter?.id ?? ""}
+                    >
+                      {enabledPrinters.length === 0 ? (
+                        <option value="">（無啟用打印機）</option>
+                      ) : (
+                        enabledPrinters.map((printer) => (
+                          <option key={printer.id} value={printer.id}>
+                            {printer.name}（{printer.role === "receipt" ? "收據" : printer.role === "label" ? "標籤" : "分區出單"}）
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    {receiptPreviewJob && receiptPreviewPrinter && receiptPreviewPrinter.role !== "receipt" ? (
+                      <span className="text-[11px] text-amber-600">
+                        此機用途為「{receiptPreviewPrinter.role === "label" ? "標籤" : "分區出單"}」，建議到設置設為「收據」
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <div className="text-xs text-slate-500">可拖動區塊，右下角可拉伸大小。</div>
@@ -1780,8 +1897,34 @@ export function PrintCenter() {
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="text-sm font-semibold text-slate-900">標籤預覽</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {labelPreviewJob ? labelPreviewJob.printerName : "未設定啟用中的標籤打印機"}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>{labelPreviewJob ? labelPreviewJob.printerName : "未設定啟用中的標籤打印機"}</span>
+                    {usingSampleOrder && labelPreviewJob ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">示例訂單</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-500">預覽打印機</span>
+                    <select
+                      className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                      onChange={(event) => setSelectedLabelPrinterId(event.target.value || null)}
+                      value={labelPreviewPrinter?.id ?? ""}
+                    >
+                      {enabledPrinters.length === 0 ? (
+                        <option value="">（無啟用打印機）</option>
+                      ) : (
+                        enabledPrinters.map((printer) => (
+                          <option key={printer.id} value={printer.id}>
+                            {printer.name}（{printer.role === "receipt" ? "收據" : printer.role === "label" ? "標籤" : "分區出單"}）
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    {labelPreviewJob && labelPreviewPrinter && labelPreviewPrinter.role !== "label" ? (
+                      <span className="text-[11px] text-amber-600">
+                        此機用途為「{labelPreviewPrinter.role === "receipt" ? "收據" : "分區出單"}」，建議到設置設為「標籤」
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <div className="text-xs text-slate-500">可拖動區塊，右下角可拉伸大小。</div>
