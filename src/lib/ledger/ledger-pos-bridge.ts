@@ -2,7 +2,7 @@
 
 import { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { getOrderDetail, LedgerOrderDetail } from "@/lib/ledger/orders";
-import { resolvePrintJobStatus } from "@/lib/print-bridge/hub";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,

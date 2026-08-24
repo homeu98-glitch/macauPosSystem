@@ -4,7 +4,7 @@ import { MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } f
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { resolvePrintJobStatus } from "@/lib/print-bridge/hub";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
 import {
   loadDeviceConfig,

@@ -1,16 +1,17 @@
 // Salon 收據列印（寫入 salon 隔離列印佇列 macau-pos-salon/print-jobs）
 //
 // 注意：刻意不呼叫餐飲的 loadPrintJobs/savePrintJobs（那些寫入 macau-pos/print-jobs）。
-// 這裡複用共享 PrintJob 型別與 sendJobToHub（Printer Hub 基建共用）。
+// 這裡複用共享 PrintJob 型別與 sendJobToCompanion（桌面 Companion 代理基建共用）。
 
 import type { PrintJob } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { loadDeviceConfig } from "@/lib/storage";
 import {
+  isCompanionConfigured,
   resolveJobPrinter,
   resolvePrintJobStatus,
-  sendJobToHub,
-} from "@/lib/print-bridge/hub";
+  sendJobToCompanion,
+} from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import {
   loadSalonPrintJobs,
@@ -22,18 +23,25 @@ import { playSuccessBeep, playErrorBeep } from "@/lib/salon/sound";
 
 /**
  * 統一 dispatch 入口：native bridge（PosNative.printJob，完整 ESC/POS 格式）優先，
- * 唔得就 fallback Printer Hub HTTP 純文字。餐飲同 salon 共用同一條基建。
+ * 唔得就 fallback 桌面 Companion 代理（經 loopback → :9100 / USB / 藍牙）。
+ * 餐飲同 salon 共用同一條基建。
  */
 async function dispatchPrint(
   job: PrintJob,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const printer = resolveJobPrinter(job);
-  if (printer && printer.ipAddress && isNativeBridgeAvailable()) {
+  if (printer && isNativeBridgeAvailable()) {
     const kind = printer.role === "receipt" ? "receipt" : "kitchen";
     const storeName = loadSalonBootstrap()?.storeName;
     return dispatchJobToNative(job, { printer, kind, storeName });
   }
-  return sendJobToHub(job);
+  if (printer && isCompanionConfigured()) {
+    return sendJobToCompanion(job, printer);
+  }
+  if (!printer) {
+    return { ok: false, error: "搵唔到對應收據打印機" };
+  }
+  return { ok: false, error: "未配對打印通道（Companion 代理未啟動）" };
 }
 
 export const SALON_PRINT_JOBS_CHANGED_EVENT = "salon-print-jobs-changed";
