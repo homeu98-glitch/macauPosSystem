@@ -1,4 +1,4 @@
-export type ConnectionType = "lan";
+export type ConnectionType = "lan" | "usb" | "bluetooth";
 export type UserRole = "admin" | "manager" | "cashier";
 
 export interface UserPermissions {
@@ -175,6 +175,14 @@ export interface DevicePrinterConfig {
   lanPort?: number;
   /** ESC/POS 編碼（每台可配；預設 GB18030。可選: gb18030 / gbk / big5 / utf-8） */
   charset?: string;
+  /** USB 打印機 VID（自動偵測，商家唔使手填；Meituan 式型號表對照） */
+  usbVendorId?: string;
+  /** USB 打印機 PID（自動偵測） */
+  usbProductId?: string;
+  /** 藍牙打印機名稱 / 配對位址 */
+  bluetoothName?: string;
+  /** true = 由 Companion 自動偵測加入（唔經手動輸入 VID/PID） */
+  autoDetected?: boolean;
   enabled: boolean;
 }
 
