@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { KioskQrPanel } from "@/components/kiosk-qr-panel";
@@ -31,21 +31,8 @@ import {
 } from "@/lib/ledger/menu-import";
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import {
-  applyPairText,
-  clearHubPrinters,
-  fetchHubDevices,
-  fetchHubStatus,
-  isHubConfigured,
-  loadJsQr,
-  manualAddHubPrinter,
-  removeHubPrinter,
-  saveHubConfig,
-  sendToHubIp,
-  startHubScan,
-  type HubDevice,
-  type HubServiceId,
-} from "@/lib/print-bridge/hub";
+import { PrinterCompanionPanel } from "@/components/printer-companion-panel";
+import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 
 function uid(prefix: string) {
@@ -64,26 +51,6 @@ export function DeviceSettings() {
   const [localSettings, setLocalSettings] = useState<PosLocalSettings>(cachedLocalSettings ?? defaultPosLocalSettings);
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
 
-  // ── Printer Hub（Sunmi APK）配對狀態 ──
-  const [hubIp, setHubIp] = useState(() =>
-    typeof window !== "undefined" ? window.localStorage.getItem("posHubIp") ?? "" : "",
-  );
-  const [hubPort, setHubPort] = useState(() =>
-    typeof window !== "undefined" ? window.localStorage.getItem("posHubPort") ?? "8787" : "8787",
-  );
-  const [hubDevices, setHubDevices] = useState<HubDevice[]>([]);
-  const [hubStatusText, setHubStatusText] = useState<string>("");
-  const [hubScanning, setHubScanning] = useState(false);
-  const [hubPairing, setHubPairing] = useState(false);
-  const [manualIp, setManualIp] = useState("");
-  const [manualName, setManualName] = useState("");
-  const [manualRole, setManualRole] = useState<DevicePrinterConfig["role"]>("zone");
-  const [manualZoneId, setManualZoneId] = useState<string>(localSettings.printZones[0]?.id ?? "kitchen");
-  const [hubSubnet, setHubSubnet] = useState<string>("");
-  const [hubSubnetInput, setHubSubnetInput] = useState<string>("");
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const scanStreamRef = useRef<MediaStream | null>(null);
-  const scanTimerRef = useRef<number | null>(null);
   const [activeTab, setActiveTab] = useState<
     "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "kiosk"
   >("device");
@@ -154,6 +121,10 @@ export function DeviceSettings() {
       savePosLocalSettings(defaultPosLocalSettings);
     }
   }, [cachedConfig, cachedLocalSettings]);
+
+  useEffect(() => {
+    void tryAutoPairCompanion();
+  }, []);
 
   function saveTablesLocal() {
     savePosLocalSettings(localSettings);
@@ -441,21 +412,30 @@ export function DeviceSettings() {
         return;
       }
 
-      // 2) Fallback：經 Printer Hub（Sunmi APK HTTP :8787）直打
-      if (!isHubConfigured()) {
-        setStatus("請先喺上方配對 Printer Hub（Sunmi APK），或於 Sunmi APK 環境內測試打印。");
+      // 2) Fallback：經 Companion 代理（loopback http://127.0.0.1:9311）直打
+      if (isCompanionConfigured()) {
+        const testJob: PrintJob = {
+          id: uid("test"),
+          orderId: "test",
+          orderNo: "TEST",
+          ticketType: "normal",
+          printerGroup:
+            printer.role === "receipt"
+              ? "receipt"
+              : printer.role === "label"
+                ? "label"
+                : printer.zoneId ?? "zone:test",
+          printerId: printer.id,
+          printerName: printer.name,
+          items: [{ name: "Macau POS 測試打印", quantity: 1, note: "Printer Companion OK" }],
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        };
+        const r = await sendJobToCompanion(testJob, printer);
+        setStatus(r.ok ? `已透過 Companion 送出 ${printer.name} 測試打印。` : `Companion 測試打印失敗：${r.error ?? ""}`);
         return;
       }
-      if (!printer.ipAddress) {
-        setStatus(`打印機「${printer.name}」未設定 IP，請先喺 Hub 掃描並綁定。`);
-        return;
-      }
-      try {
-        await sendToHubIp(printer.ipAddress, printer.name, "Macau POS 測試打印\nPrinter Hub OK");
-        setStatus(`已透過 Printer Hub 送出 ${printer.name} 測試打印。`);
-      } catch (e) {
-        setStatus(e instanceof Error ? e.message : "測試打印失敗");
-      }
+      setStatus("未配對 Companion 代理（請確認桌面 Companion 已啟動）。");
     } catch {
       setStatus(`未能送出 ${printer.name} 測試打印。`);
     } finally {
@@ -465,259 +445,30 @@ export function DeviceSettings() {
 
 
   // ─────────────────────────────────────────────────────────────
-  // Printer Hub（Sunmi APK）配對 + 管理
+  // ─────────────────────────────────────────────────────────────
+  // 打印機經 Companion 代理管理（零配置自動配對）
   // ─────────────────────────────────────────────────────────────
 
-  function saveHub() {
-    saveHubConfig(hubIp, hubPort);
-    setHubStatusText(isHubConfigured() ? `已記住 http://${hubIp}:${hubPort || "8787"}` : "（未填 IP）");
-  }
-
-  async function refreshHub() {
-    if (!isHubConfigured()) {
-      setHubDevices([]);
-      setHubStatusText("尚未配對 Printer Hub");
-      return;
-    }
-    const st = await fetchHubStatus();
-    if (!st.ok) {
-      setHubStatusText(`Hub 離線：${st.error ?? ""}`);
-      setHubDevices([]);
-      return;
-    }
-    setHubStatusText(
-      `Hub 已連線 · IP ${st.localIp ?? "?"} · ${st.bound ?? 0}/${st.deviceCount ?? 0} 台已綁定`,
-    );
-    setHubSubnet(st.subnetPrefix ?? "");
-    setHubSubnetInput((v) => v || st.subnetPrefix || "");
-    const dev = await fetchHubDevices();
-    if (dev.ok) setHubDevices(dev.devices ?? []);
-  }
-
-  /** 將 Hub 發現嘅機一鍵加入本機打印機列表（master）。 */
-  async function handleAddDiscoveredToPrinterList(device: HubDevice) {
-    const ip = device.ip.trim();
-    if (!ip) {
-      setStatus("呢部機冇 IP，無法加入列表");
-      return;
-    }
-    if (config.printers.some((p) => p.ipAddress && p.ipAddress.trim() === ip)) {
-      setStatus(`打印機 ${device.name}（${ip}）已經喺列表入面`);
-      return;
-    }
-    const svc: HubServiceId = (device.service as HubServiceId) || "kitchen";
-    const role: DevicePrinterConfig["role"] = svc === "front" ? "receipt" : "zone";
-    const newPrinter: DevicePrinterConfig = {
-      id: uid("printer"),
-      role,
-      zoneId: role === "zone" ? localSettings.printZones[0]?.id ?? "kitchen" : undefined,
-      connectionType: "lan",
-      name: device.name || `打印機 ${ip}`,
-      model: "",
-      paperSize: "80mm",
-      ipAddress: ip,
-      lanPort: 9100,
-      charset: "gb18030",
-      enabled: true,
-    };
-    setConfig((current) => ({
-      ...current,
-      updatedAt: new Date().toISOString(),
-      printers: [...current.printers, newPrinter],
-    }));
-    // 路由交畀 config.printers（按 role/zoneId → ipAddress 經 Hub 直打），唔使再 service 綁定
-    setStatus(`已加入打印機列表：${newPrinter.name}（${svc === "front" ? "收銀" : svc === "bar" ? "水吧" : "廚房"}）`);
-  }
-
-  /** role 改動時更新本機打印機設定（IP 路由會自動按 role/zoneId 搵到呢部機）。 */
+  /** role 改動時更新本機打印機設定（路由會自動按 role/zoneId 搵到呢部機）。 */
   function handleRoleChange(printer: DevicePrinterConfig, newRole: DevicePrinterConfig["role"]) {
     updatePrinter(printer.id, { role: newRole });
   }
 
-  async function handleManualAdd() {
-    if (!manualIp.trim()) {
-      setStatus("請填寫打印機 IP");
-      return;
-    }
-    // 1) 寫入 APK（讓 Hub 認得呢部機；service 只係 Hub 端 metadata，路由靠 IP/role/zoneId）
-    const svcForHub: HubServiceId = manualRole === "receipt" ? "front" : "kitchen";
-    const r = await manualAddHubPrinter(manualIp.trim(), manualName.trim(), svcForHub);
-    if (!r.ok) {
-      setStatus(`Hub 添加失敗：${r.error ?? ""}`);
-      return;
-    }
-    setHubDevices(r.devices ?? []);
-    // 2) 同時寫入本機打印機列表（master）
-    const ip = manualIp.trim();
-    if (config.printers.some((p) => p.ipAddress && p.ipAddress.trim() === ip)) {
-      setStatus(`打印機 ${manualName || ip}（${ip}）已經喺列表入面`);
-    } else {
-      const role = manualRole;
-      const zoneId = role === "receipt" ? undefined : manualZoneId;
-      const newPrinter: DevicePrinterConfig = {
-        id: uid("printer"),
-        role,
-        zoneId,
-        connectionType: "lan",
-        name: manualName.trim() || `打印機 ${ip}`,
-        model: "",
-        paperSize: role === "receipt" ? "80mm" : role === "label" ? "62mm" : "80mm",
-        ipAddress: ip,
-        lanPort: 9100,
-        charset: "gb18030",
-        enabled: true,
-      };
-      setConfig((current) => ({
-        ...current,
-        updatedAt: new Date().toISOString(),
-        printers: [...current.printers, newPrinter],
-      }));
-      setStatus(`已手動添加打印機並加入列表：${newPrinter.name}`);
-    }
-    setManualIp("");
-    setManualName("");
+  function handleAddCompanionPrinter(printer: DevicePrinterConfig) {
+    const nextPrinters = [...config.printers, printer];
+    setConfig((c) => ({ ...c, printers: nextPrinters }));
+    saveDeviceConfig({ ...config, printers: nextPrinters });
+    setStatus(`已加入打印機「${printer.name}」（自動偵測：${printer.connectionType}）。`);
   }
 
-  async function handleRemove(key: string) {
-    const r = await removeHubPrinter(key);
-    if (r.ok) setHubDevices(r.devices ?? []);
+  function printerReadiness(printer: DevicePrinterConfig): "ready" | "offline" | "disabled" {
+    if (!printer.enabled) return "disabled";
+    if (printer.connectionType === "lan") return printer.ipAddress ? "ready" : "offline";
+    if (printer.connectionType === "usb") return printer.usbVendorId ? "ready" : "offline";
+    if (printer.connectionType === "bluetooth") return printer.bluetoothName ? "ready" : "offline";
+    return "ready";
   }
 
-  async function handleClear() {
-    const r = await clearHubPrinters();
-    if (r.ok) setHubDevices(r.devices ?? []);
-  }
-
-  async function handleStartScan() {
-    setHubScanning(true);
-    setStatus("正在掃描區網打印機…");
-    const r = await startHubScan(hubSubnetInput.trim() || undefined);
-    setHubScanning(false);
-    if (r.ok) {
-      setHubDevices(r.devices ?? []);
-      setStatus("掃描完成");
-    } else {
-      setStatus(r.error ?? "掃描失敗");
-    }
-  }
-
-  async function handleOpenHubSetup() {
-    const base = isHubConfigured() ? `http://${hubIp}:${hubPort || "8787"}` : "";
-    if (!base) {
-      setStatus("請先填寫 Hub IP");
-      return;
-    }
-    window.open(`${base}/setup.html`, "_blank");
-  }
-
-  // QR 掃描配對
-  function stopScan() {
-    if (scanTimerRef.current) {
-      window.clearTimeout(scanTimerRef.current);
-      scanTimerRef.current = null;
-    }
-    if (scanStreamRef.current) {
-      scanStreamRef.current.getTracks().forEach((t) => t.stop());
-      scanStreamRef.current = null;
-    }
-    if (videoRef.current) videoRef.current.srcObject = null;
-  }
-
-  async function tickScan() {
-    const video = videoRef.current;
-    if (!video || !scanStreamRef.current) return;
-    const jsQR = await loadJsQr();
-    if (!jsQR) {
-      scanTimerRef.current = window.setTimeout(tickScan, 300);
-      return;
-    }
-    if (video.readyState >= 2 && video.videoWidth && video.videoHeight) {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(img.data, canvas.width, canvas.height);
-        if (code?.data) {
-          const parsed = applyPairText(code.data);
-          if (parsed) {
-            setHubIp(parsed.ip);
-            setHubPort(parsed.port);
-            saveHubConfig(parsed.ip, parsed.port);
-            setHubStatusText(`已配對 http://${parsed.ip}:${parsed.port}`);
-            stopScan();
-            void refreshHub();
-            return;
-          }
-        }
-      }
-    }
-    scanTimerRef.current = window.setTimeout(tickScan, 180);
-  }
-
-  async function startScan() {
-    stopScan();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-      scanStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setHubPairing(true);
-      void tickScan();
-    } catch {
-      setStatus("無法開啟相機，請改手動輸入 IP 或選取 QR 圖片");
-    }
-  }
-
-  async function handlePickQr(ev: React.ChangeEvent<HTMLInputElement>) {
-    const file = ev.target.files?.[0];
-    if (!file) return;
-    const jsQR = await loadJsQr();
-    if (!jsQR) {
-      setStatus("QR 解碼庫載入失敗，請稍後再試或手動輸入 IP");
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, img.width, img.height);
-      const code = jsQR(data.data, img.width, img.height);
-      if (code?.data) {
-        const parsed = applyPairText(code.data);
-        if (parsed) {
-          setHubIp(parsed.ip);
-          setHubPort(parsed.port);
-          saveHubConfig(parsed.ip, parsed.port);
-          setHubStatusText(`已配對 http://${parsed.ip}:${parsed.port}`);
-          void refreshHub();
-        } else {
-          setStatus("QR 無法辨識");
-        }
-      } else {
-        setStatus("圖片中找不到 QR");
-      }
-    };
-    img.src = URL.createObjectURL(file);
-  }
-
-  // 初次載入時若已配對就 refresh 一次
-  useEffect(() => {
-    if (isHubConfigured()) void refreshHub();
-    return () => stopScan();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
@@ -772,213 +523,8 @@ export function DeviceSettings() {
   {activeTab === "device" ? (
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
             <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-              <div className="font-semibold text-slate-900">Printer Hub 配對（Sunmi APK）</div>
-              <p className="mt-1 text-xs text-slate-500">
-                喺 Sunmi 機安裝 Printer Hub APK，開 App 會顯示 QR。用下面掃描或手動填 IP（預設 port
-                8787）配對。POS 落單後經 HTTP 發送到 Hub，Hub 再經 LAN 打印機（:9100）出單。
-              </p>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-full bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
-                  onClick={startScan}
-                >
-                  掃描 QR
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  onClick={() => document.getElementById("hubQrFile")?.click()}
-                >
-                  選取 QR 圖片
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  onClick={stopScan}
-                >
-                  停止掃描
-                </button>
-                <input
-                  id="hubQrFile"
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={handlePickQr}
-                />
-              </div>
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                className="mt-2 w-full rounded-lg bg-black"
-                style={{ display: hubPairing ? "block" : "none", maxHeight: 260 }}
-              />
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                  <span className="text-xs text-slate-500">Hub IP</span>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    onChange={(e) => setHubIp(e.target.value)}
-                    placeholder="例如 10.1.2.10"
-                    value={hubIp}
-                  />
-                </label>
-                <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                  <span className="text-xs text-slate-500">Port</span>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    onChange={(e) => setHubPort(e.target.value)}
-                    placeholder="8787"
-                    value={hubPort}
-                  />
-                </label>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-full bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
-                  onClick={saveHub}
-                >
-                  記住 IP
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  onClick={handleOpenHubSetup}
-                >
-                  開啟 Hub 設定頁
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-emerald-700">{hubStatusText}</p>
-
-              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-800">
-                    發現的打印機（{hubDevices.length}）
-                  </span>
-                  <button
-                    type="button"
-                    className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
-                    onClick={handleStartScan}
-                    disabled={hubScanning}
-                  >
-                    {hubScanning ? "掃描中…" : "掃描區網"}
-                  </button>
-                </div>
-                <label className="mt-2 grid gap-1 text-xs font-semibold text-slate-600">
-                  <span>掃描網段（IP 頭 3 段，例如 192.168.1）</span>
-                  <input
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm font-normal text-slate-900"
-                    placeholder={hubSubnet || "192.168.1"}
-                    value={hubSubnetInput}
-                    onChange={(e) => setHubSubnetInput(e.target.value)}
-                  />
-                </label>
-                <div className="mt-2 grid gap-2">
-                  {hubDevices.map((d) => {
-                    const linked = config.printers.some(
-                      (p) => p.ipAddress && p.ipAddress.trim() === d.ip.trim(),
-                    );
-                    return (
-                      <div
-                        key={d.key}
-                        className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-                      >
-                        <span className="min-w-0 flex-1 text-sm">
-                          <span className="font-medium text-slate-800">{d.name}</span>{" "}
-                          <span className="text-slate-500">{d.ip}</span>
-                          {!d.canRawPrint && (
-                            <span className="ml-1 text-xs text-red-600">（無 9100）</span>
-                          )}
-                        </span>
-                        {linked ? (
-                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                            已加入 ✓
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            className="rounded-lg bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-700"
-                            onClick={() => handleAddDiscoveredToPrinterList(d)}
-                          >
-                            ＋ 加入列表
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="rounded-lg px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
-                          onClick={() => handleRemove(d.key)}
-                        >
-                          移除
-                        </button>
-                      </div>
-                    );
-                  })}
-                  {hubDevices.length === 0 && (
-                    <p className="text-xs text-slate-400">尚未掃描到打印機，請按「掃描區網」。</p>
-                  )}
-                </div>
-
-                <div className="mt-3 grid gap-1">
-                  <span className="text-xs font-semibold text-slate-600">手動添加打印機（同時加入列表）</span>
-                  <div className="flex flex-wrap gap-2">
-                    <input
-                      className="min-w-[120px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                      placeholder="IP"
-                      value={manualIp}
-                      onChange={(e) => setManualIp(e.target.value)}
-                    />
-                    <input
-                      className="min-w-[100px] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                      placeholder="名稱"
-                      value={manualName}
-                      onChange={(e) => setManualName(e.target.value)}
-                    />
-                    <select
-                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                      value={manualRole}
-                      onChange={(e) => setManualRole(e.target.value as DevicePrinterConfig["role"])}
-                    >
-                      <option value="zone">分區出單</option>
-                      <option value="receipt">收據</option>
-                      <option value="label">標籤</option>
-                    </select>
-                    {manualRole !== "receipt" && (
-                      <select
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
-                        value={manualZoneId}
-                        onChange={(e) => setManualZoneId(e.target.value)}
-                      >
-                        {localSettings.printZones.map((zone) => (
-                          <option key={zone.id} value={zone.id}>
-                            {zone.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <button
-                      type="button"
-                      className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
-                      onClick={handleManualAdd}
-                    >
-                      添加
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="mt-3 text-xs font-semibold text-red-600 hover:underline"
-                  onClick={handleClear}
-                >
-                  清除 Hub 綁定
-                </button>
-              </div>
-            </div>
+              <PrinterCompanionPanel printZones={localSettings.printZones} onAddPrinter={handleAddCompanionPrinter} />
+          </div>
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">
@@ -1159,22 +705,18 @@ export function DeviceSettings() {
                           <div className="flex items-center gap-2">
                             <span
                               title={
-                                printer.ipAddress &&
-                                hubDevices.some(
-                                  (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
-                                )
-                                  ? "Hub 已連線"
-                                  : printer.ipAddress
-                                    ? "未連線 Hub / 未在線"
-                                    : "未設定 IP"
+                                printerReadiness(printer) === "ready"
+                                  ? "已連線"
+                                  : printerReadiness(printer) === "disabled"
+                                    ? "已停用"
+                                    : "未連線 / 未在線"
                               }
                               className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
-                                printer.ipAddress &&
-                                hubDevices.some(
-                                  (d) => d.ip.trim() === printer.ipAddress!.trim() && d.canRawPrint,
-                                )
+                                printerReadiness(printer) === "ready"
                                   ? "bg-emerald-500"
-                                  : "bg-slate-300"
+                                  : printerReadiness(printer) === "disabled"
+                                    ? "bg-slate-300"
+                                    : "bg-rose-500"
                               }`}
                             />
                             <div className="truncate text-sm font-semibold text-slate-900">{printer.name}</div>
@@ -1248,12 +790,22 @@ export function DeviceSettings() {
                             收銀台只會指定 1 台收據打印機
                           </div>
                         )}
-                        <div className="grid gap-1 text-sm font-semibold text-slate-700">
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">連接方式</span>
-                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                            LAN（經 Printer Hub 直打）
-                          </div>
-                        </div>
+                          <select
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            value={printer.connectionType}
+                            onChange={(event) =>
+                              updatePrinter(printer.id, {
+                                connectionType: event.target.value as DevicePrinterConfig["connectionType"],
+                              })
+                            }
+                          >
+                            <option value="lan">LAN（區網 / 網線）</option>
+                            <option value="usb">USB（自動偵測）</option>
+                            <option value="bluetooth">藍牙</option>
+                          </select>
+                        </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">打印機型號</span>
                           <input
@@ -1277,27 +829,64 @@ export function DeviceSettings() {
                             <option value="100x75mm">100x75mm 標籤</option>
                           </select>
                         </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">IP 地址（LAN）</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
-                            placeholder="192.168.1.110"
-                            value={printer.ipAddress ?? ""}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">LAN 端口</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            inputMode="numeric"
-                            onChange={(event) =>
-                              updatePrinter(printer.id, { lanPort: Number(event.target.value) || 9100 })
-                            }
-                            placeholder="9100"
-                            value={String(printer.lanPort ?? 9100)}
-                          />
-                        </label>
+                        {printer.connectionType === "lan" && (
+                          <>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">IP 地址（LAN）</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
+                                placeholder="192.168.1.110"
+                                value={printer.ipAddress ?? ""}
+                              />
+                            </label>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">LAN 端口</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                inputMode="numeric"
+                                onChange={(event) =>
+                                  updatePrinter(printer.id, { lanPort: Number(event.target.value) || 9100 })
+                                }
+                                placeholder="9100"
+                                value={String(printer.lanPort ?? 9100)}
+                              />
+                            </label>
+                          </>
+                        )}
+                        {printer.connectionType === "usb" && (
+                          <>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">USB Vendor ID（自動偵測）</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
+                                value={printer.usbVendorId ?? ""}
+                                disabled
+                                readOnly
+                              />
+                            </label>
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">USB Product ID（自動偵測）</span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
+                                value={printer.usbProductId ?? ""}
+                                disabled
+                                readOnly
+                              />
+                            </label>
+                          </>
+                        )}
+                        {printer.connectionType === "bluetooth" && (
+                          <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                            <span className="text-xs text-slate-500">藍牙名稱 / 配對位址</span>
+                            <input
+                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) => updatePrinter(printer.id, { bluetoothName: event.target.value })}
+                              placeholder="例如 BT-Printer-AB12"
+                              value={printer.bluetoothName ?? ""}
+                            />
+                          </label>
+                        )}
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">
                           <span className="text-xs text-slate-500">ESC/POS 跨碼（中文字集）</span>
                           <select
