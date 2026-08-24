@@ -33,6 +33,8 @@ import { PackageTemplatesTab } from "@/components/salon/package-templates";
 import { PrintsContent } from "@/components/salon/prints-content";
 import { loadDeviceConfig, saveDeviceConfig } from "@/lib/storage";
 import type { DeviceConfig, DevicePrinterConfig } from "@/lib/types";
+import { PrinterCompanionPanel } from "@/components/printer-companion-panel";
+import { tryAutoPairCompanion } from "@/lib/print-bridge/companion";
 
 // ────────────────────────────────────────────────────────────────────
 // 通用：ID 產生
@@ -427,7 +429,9 @@ const PRINTER_ROLE_OPTS: Option[] = [
 ];
 
 const PRINTER_CONN_OPTS: Option[] = [
-  { value: "lan", label: "LAN（經 Printer Hub 直打）" },
+  { value: "lan", label: "LAN（經 Companion 代理 :9100）" },
+  { value: "usb", label: "USB（自動偵測）" },
+  { value: "bluetooth", label: "藍牙" },
 ];
 
 const TABS = [
@@ -639,6 +643,10 @@ export function Settings() {
   };
   const deletePrinter = (p: DevicePrinterConfig) => savePrinters(printers.filter((x) => x.id !== p.id));
   const togglePrinter = (p: DevicePrinterConfig) => upsertPrinter({ ...p, enabled: !p.enabled });
+
+  const handleAddSalonCompanionPrinter = (p: DevicePrinterConfig) => {
+    upsertPrinter(p);
+  };
 
   // ── empty factories ──
   const emptyCategory = (): SalonServiceCategory => ({
@@ -1036,6 +1044,11 @@ export function Settings() {
       {activeTab === "dev" && (
         <div className="grid gap-4">
           <Section title="列印分區（裝置設定，可新增 / 刪除 / 啟用停用）">
+            <PrinterCompanionPanel
+              printZones={[{ id: "receipt", name: "收據" }]}
+              onAddPrinter={handleAddSalonCompanionPrinter}
+              roles={[{ value: "receipt", label: "收據" }]}
+            />
             <CrudSection<DevicePrinterConfig>
               items={printers}
               fields={printerFields}
