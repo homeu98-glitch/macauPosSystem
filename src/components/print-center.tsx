@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
+import { clearSentPrintJobs } from "@/lib/print-jobs";
 import {
   loadDeviceConfig,
   loadOrders,
@@ -930,6 +931,13 @@ export function PrintCenter() {
                       {label}
                     </button>
                   ))}
+                  <button
+                    className="ml-auto rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300"
+                    onClick={() => clearSentPrintJobs()}
+                    type="button"
+                  >
+                    清除已發送
+                  </button>
                 </div>
 
                 {filteredJobs.length === 0 ? (

@@ -221,3 +221,40 @@ export async function printReceiptForLedgerOrderOnce(
   if (!rememberOnce(recentReceiptLedgerIds, ledgerOrderId)) return 0;
   return printReceiptForLedgerOrder(ledgerOrderId, options);
 }
+
+/**
+ * 自動清理：移除已發送（sent）超過 olderThanDays 日嘅打印單，避免 localStorage 無限累積。
+ * 保留 recent sent（俾用家短時間內喺打印中心見到「已發送」）+ 所有 pending / failed（等跟進）。
+ * flush worker 每次 tick 完會 call（見 dispatch.ts）。
+ */
+export function pruneSentPrintJobs(olderThanDays = 7): number {
+  const jobs = loadPrintJobs();
+  const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+  const kept = jobs.filter((j) => {
+    if (j.status !== "sent") return true;
+    const t = j.createdAt ? new Date(j.createdAt).getTime() : 0;
+    return Number.isNaN(t) ? true : t > cutoff;
+  });
+  const removed = jobs.length - kept.length;
+  if (removed > 0) {
+    savePrintJobs(kept);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
+    }
+  }
+  return removed;
+}
+
+/** 手動「清除已發送」：移除所有 sent 單（保留 pending / failed 等用家跟進）。打印中心按鈕 call。 */
+export function clearSentPrintJobs(): number {
+  const jobs = loadPrintJobs();
+  const kept = jobs.filter((j) => j.status !== "sent");
+  const removed = jobs.length - kept.length;
+  if (removed > 0) {
+    savePrintJobs(kept);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
+    }
+  }
+  return removed;
+}

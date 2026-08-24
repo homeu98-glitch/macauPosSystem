@@ -3,6 +3,7 @@ import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { getCompanionTransport, isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { loadBootstrapCache, loadPrintJobs, savePrintJobs } from "@/lib/storage";
+import { pruneSentPrintJobs } from "@/lib/print-jobs";
 import { PrintJob } from "@/lib/types";
 
 /**
@@ -15,8 +16,15 @@ import { PrintJob } from "@/lib/types";
  *
  * 未配對 native / companion / relay 嘅 job 維持 pending，等店主喺設置頁配置 companion / relay。
  */
+let isFlushing = false;
+
 export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
-  const jobs = loadPrintJobs();
+  // 防止 PrintFlushWorker 每 2.5s tick 重疊：若上一次 flush 仲喺度（companion 慢 / 多 job），
+  // 今次直接 skip，避免同一張 pending job 被 dispatch 兩次 → 重複打印。
+  if (isFlushing) return loadPrintJobs();
+  isFlushing = true;
+  try {
+    const jobs = loadPrintJobs();
   const pending = jobs.filter((job) => job.status === "pending");
   if (pending.length === 0) return jobs;
 
@@ -50,7 +58,11 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     );
   }
 
+  if (jobs.length > 0) pruneSentPrintJobs();
   return nextJobs;
+  } finally {
+    isFlushing = false;
+  }
 }
 
 export async function retryFailedPrintJob(jobId: string): Promise<PrintJob[]> {
