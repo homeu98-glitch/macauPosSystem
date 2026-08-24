@@ -1,4 +1,8 @@
-import { isHubConfigured, resolveJobPrinter, sendJobToHub } from "@/lib/print-bridge/hub";
+import {
+  isCompanionConfigured,
+  resolveJobPrinter,
+  sendJobToCompanion,
+} from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { loadBootstrapCache, loadPrintJobs, savePrintJobs } from "@/lib/storage";
 import { PrintJob } from "@/lib/types";
@@ -7,20 +11,19 @@ import { PrintJob } from "@/lib/types";
  * 刷新待打印佇列：所有 pending job 發送。
  *
  * 路由優先級：
- *   1) Native bridge（Sunmi APK WebView，PosNative.printJob）→ 完整 ESC/POS 格式（EscPosRenderer）
- *   2) 否則 fallback 去 Printer Hub HTTP（sendJobToHub，純文字路徑）
+ *   1) Native bridge（Sunmi Android WebView，PosNative.printJob）→ 完整 ESC/POS 格式
+ *   2) 否則 fallback 去桌面 Companion 代理（sendJobToCompanion，經 loopback → :9100/USB/BT）
  *
- * 未配對 Hub 且無 native 嘅 job 維持 pending，等店主喺設置頁配對 Hub。
+ * 未配對 Companion 且無 native 嘅 job 維持 pending，等店主喺設置頁配對 Companion / 重連後再試。
+ * （Sunmi Printer Hub 基建已移除，由桌面 Companion 取代。）
  */
 export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   const jobs = loadPrintJobs();
   const pending = jobs.filter((job) => job.status === "pending");
   if (pending.length === 0) return jobs;
 
-  // 有無任何派發通道：native bridge（Android APK）或已配對 Hub。
-  // 舊邏輯喺「未配 Hub」時直接 continue 跳過，令 native-only 模式（Sunmi APK）
-  // 嘅待印 job 永遠卡 pending、收據靜默唔印。現改為：無通道先維持 pending 等下次 flush。
-  const hasChannel = isNativeBridgeAvailable() || isHubConfigured();
+  // 有無任何派發通道：native bridge（Android）或已配對 Companion。
+  const hasChannel = isNativeBridgeAvailable() || isCompanionConfigured();
   let changed = false;
   const nextJobs = [...jobs];
 
@@ -32,7 +35,7 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     if (result.ok) {
       nextJobs[index] = { ...job, status: "sent" };
     } else if (!hasChannel) {
-      // 完全無通道（未配 Hub、又無 native bridge）：維持 pending，等店主配對後下次 flush 再試。
+      // 完全無通道（未配 Companion、又無 native bridge）：維持 pending，等配對後下次 flush 再試。
       nextJobs[index] = { ...job, status: "pending" };
     } else {
       nextJobs[index] = { ...job, status: "failed" };
@@ -63,20 +66,24 @@ export async function retryFailedPrintJob(jobId: string): Promise<PrintJob[]> {
 }
 
 /**
- * 單一 job 派發：native bridge 優先，fallback Hub HTTP 純文字。
+ * 單一 job 派發：native bridge 優先，fallback 桌面 Companion 代理。
  * 路由按 resolveJobPrinter 搵出目標打印機（單一真源）。
+ * 注意：USB / 藍牙打印機無 ipAddress，故唔再以 ipAddress 缺失而報錯（交由 Companion 處理）。
  */
 async function dispatchOneJob(
   job: PrintJob,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const printer = resolveJobPrinter(job);
-  if (!printer || !printer.ipAddress) {
-    return { ok: false, error: `搵唔到對應打印機 IP（printerGroup=${job.printerGroup}）` };
+  if (!printer) {
+    return { ok: false, error: `搵唔到對應打印機（printerGroup=${job.printerGroup}）` };
   }
   if (isNativeBridgeAvailable()) {
     const kind = printer.role === "receipt" ? "receipt" : "kitchen";
     const storeName = loadBootstrapCache()?.storeName;
     return dispatchJobToNative(job, { printer, kind, storeName });
   }
-  return sendJobToHub(job);
+  if (isCompanionConfigured()) {
+    return sendJobToCompanion(job, printer);
+  }
+  return { ok: false, error: "未配對打印通道（Companion 代理未啟動）" };
 }
