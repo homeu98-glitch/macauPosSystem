@@ -323,6 +323,33 @@ export async function listCompanionPrinters(): Promise<PrinterCandidate[]> {
   }
 }
 
+interface BluetoothPortRow {
+  path?: string;
+  friendlyName?: string;
+  pnpId?: string;
+  manufacturer?: string;
+}
+
+/** 列舉藍牙（SPP）序列埠，俾「手動+ 藍牙打印機」從清單揀（Companion 經 serialport 列，網頁本身列唔到） */
+export async function enumerateCompanionBluetoothDevices(): Promise<PrinterCandidate[]> {
+  const url = getCompanionUrl();
+  if (!url) return [];
+  try {
+    const j = (await companionJson<{ ok?: boolean; ports?: BluetoothPortRow[] }>(
+      url,
+      "/api/bluetooth",
+    )) as { ok?: boolean; ports?: BluetoothPortRow[] };
+    return (j.ports ?? []).map((p) => ({
+      source: "bluetooth",
+      name: p.friendlyName || p.path || "藍牙打印機",
+      connectionType: "bluetooth",
+      bluetoothName: p.path || "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // 共用路由 helpers（取代 hub.ts 同名函式）
 // ─────────────────────────────────────────────────────────────

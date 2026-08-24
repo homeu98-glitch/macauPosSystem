@@ -6,6 +6,7 @@ import type { DevicePrinterConfig } from "@/lib/types";
 import {
   COMPANION_DEFAULT_URL,
   discoverCompanionLanPrinters,
+  enumerateCompanionBluetoothDevices,
   enumerateCompanionUsbPrinters,
   isCompanionAvailable,
   testCompanionConnection,
@@ -157,6 +158,15 @@ function AddPrinterWizard({
   const [charset, setCharset] = useState<string>(CHARSET_OPTIONS[0]?.value ?? "gb18030");
   const [bluetoothName, setBluetoothName] = useState("");
 
+  // 手動 fallback（auto search 失敗時用）
+  const [manualLanOpen, setManualLanOpen] = useState(false);
+  const [lanIp, setLanIp] = useState("");
+  const [lanPort, setLanPort] = useState("9100");
+  const [usbList, setUsbList] = useState<PrinterCandidate[]>([]);
+  const [usbOpen, setUsbOpen] = useState(false);
+  const [btList, setBtList] = useState<PrinterCandidate[]>([]);
+  const [btOpen, setBtOpen] = useState(false);
+
   function pick(c: PrinterCandidate) {
     setSelected(c);
     setName(c.name);
@@ -176,6 +186,39 @@ function AddPrinterWizard({
     const list = await enumerateCompanionUsbPrinters();
     setCandidates(list);
     setScanning(null);
+  }
+
+  // 手動 fallback 開關 + 清單
+  function startManualLan() {
+    setManualLanOpen(true);
+    setUsbOpen(false);
+    setBtOpen(false);
+  }
+  async function startManualUsb() {
+    setUsbOpen(true);
+    setManualLanOpen(false);
+    setBtOpen(false);
+    setUsbList(await enumerateCompanionUsbPrinters());
+  }
+  async function startManualBt() {
+    setBtOpen(true);
+    setManualLanOpen(false);
+    setUsbOpen(false);
+    setBtList(await enumerateCompanionBluetoothDevices());
+  }
+  function submitManualLan() {
+    const ip = lanIp.trim();
+    if (!ip) return;
+    const port = parseInt(lanPort || "9100", 10) || 9100;
+    setSelected({
+      source: "lan",
+      name: `LAN 打印機 ${ip}`,
+      connectionType: "lan",
+      ipAddress: ip,
+      lanPort: port,
+    });
+    setManualLanOpen(false);
+    setLanIp("");
   }
 
   function submit() {
@@ -243,6 +286,30 @@ function AddPrinterWizard({
         >
           + 藍牙打印機
         </button>
+
+        <span className="w-full text-[11px] text-slate-400">auto search 失敗？用手動 fallback：</span>
+
+        <button
+          type="button"
+          onClick={startManualLan}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          手動+ 區網 / LAN 打印機
+        </button>
+        <button
+          type="button"
+          onClick={startManualUsb}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          手動+ USB 打印機
+        </button>
+        <button
+          type="button"
+          onClick={startManualBt}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          手動+ 藍牙打印機
+        </button>
       </div>
 
       {candidates.length > 0 && !selected && (
@@ -258,6 +325,106 @@ function AddPrinterWizard({
               <span className="text-[11px] uppercase text-slate-400">{c.connectionType}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {manualLanOpen && (
+        <div className="mt-3 space-y-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+          <div className="text-xs font-medium text-slate-600">手動加入 LAN 打印機（輸入 IP）</div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block">
+              <span className="text-[11px] text-slate-500">IP 位址</span>
+              <input
+                value={lanIp}
+                onChange={(e) => setLanIp(e.target.value)}
+                placeholder="192.168.1.50"
+                className="mt-1 w-44 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] text-slate-500">連接埠</span>
+              <input
+                value={lanPort}
+                onChange={(e) => setLanPort(e.target.value)}
+                className="mt-1 w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={submitManualLan}
+              disabled={!lanIp.trim()}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              以此 IP 加入
+            </button>
+            <button
+              type="button"
+              onClick={() => setManualLanOpen(false)}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {usbOpen && (
+        <div className="mt-3 space-y-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+          <div className="text-xs font-medium text-slate-600">手動選擇已連接嘅 USB 打印機</div>
+          {usbList.length === 0 ? (
+            <div className="text-[11px] text-slate-500">
+              未枚舉到 USB 打印機（請確認已插好並安裝驅動；未知型號可用 VID/PID 手填）。
+            </div>
+          ) : (
+            <select
+              onChange={(e) => {
+                const c = usbList[Number(e.target.value)];
+                if (c) setSelected(c);
+                setUsbOpen(false);
+              }}
+              defaultValue=""
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            >
+              <option value="" disabled>
+                — 選擇打印機 —
+              </option>
+              {usbList.map((c, i) => (
+                <option key={i} value={i}>
+                  {c.name}（VID {c.usbVendorId} / PID {c.usbProductId}）
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {btOpen && (
+        <div className="mt-3 space-y-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+          <div className="text-xs font-medium text-slate-600">手動選擇藍牙（SPP）打印機</div>
+          {btList.length === 0 ? (
+            <div className="text-[11px] text-slate-500">
+              未列舉到藍牙序列埠（請先於系統配對，Windows 會出虛擬 COM port；Companion 需裝 serialport 套件）。
+            </div>
+          ) : (
+            <select
+              onChange={(e) => {
+                const c = btList[Number(e.target.value)];
+                if (c) setSelected(c);
+                setBtOpen(false);
+              }}
+              defaultValue=""
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            >
+              <option value="" disabled>
+                — 選擇藍牙裝置 —
+              </option>
+              {btList.map((c, i) => (
+                <option key={i} value={i}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
 
