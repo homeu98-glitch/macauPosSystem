@@ -5,7 +5,7 @@
 // （店名抬頭、票種、單號、時間戳、切紙、每台 charset）。
 //
 // 非 Android / 無 native bridge 時，dispatch.ts 同 salon/print.ts 會 fallback
-// 去 sendJobToHub（純文字路徑），所以呢度只負責「有 bridge 時點樣發」。
+// 去 sendJobToCompanion（桌面 Companion 代理），所以呢度只負責「有 bridge 時點樣發」。
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
 
