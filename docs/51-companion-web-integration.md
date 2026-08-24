@@ -35,7 +35,7 @@
                                           │  · /api/print 派發           │
                                           └───────────┬────────┬─────────┘
                                                :9100 TCP │        │ USB / 藍牙
-                                                  LAN 機   │        │（stub，待擴充）
+                                                  LAN 機   │        │（node-usb / serialport）
                                                            ▼
                                                       熱感打印機
 ```
@@ -67,7 +67,7 @@
 | GET | `/api/discover` | `{ ok, printers: [{ name, ip, port, type }] }`（mDNS 區網 LAN 機；未裝 `bonjour-service` 回空陣列） |
 | GET | `/api/usb` | `{ ok, printers: [{ vendorId, productId, brand, model, charset, paperSize, connectionType:"usb", recognized }], note }`（node-usb 枚舉） |
 | GET | `/api/printers` | `{ ok, lan, usb, note }`（合併上面兩者） |
-| POST | `/api/print` | body `{ job, printer }` → 經 OS 權限打到 LAN `:9100`（USB/藍牙為 stub，待擴充） |
+| POST | `/api/print` | body `{ job, printer }` → 按 `printer.connectionType` 派發：LAN `:9100` TCP / USB（node-usb bulk transfer）/ 藍牙（serialport SPP → COM port） |
 
 - 雙棧 loopback 監聽（`127.0.0.1` + `::1`），避免單 stack 時 `EADDRINUSE` 雙 bind 都失敗。
 - `usb` / `bonjour-service` 唔裝就 graceful degrade，其他功能唔受影響。
@@ -115,5 +115,5 @@ npm run serve        # = node server.mjs → http://127.0.0.1:9311
 
 - 真後端 / Ledger push 仍留 seam，未接。
 - 沙盒無 Android SDK，APK build 待用戶 dev box；Companion 代理只需 Node ≥ 18。
-- USB / 藍牙嘅實際位元組傳輸喺代理端仍係 stub，LAN `:9100` 已可派發；接實體 USB/BT 機需喺代理補 `usb` / `serialport` 傳輸層。
+- **USB / 藍牙實際位元組傳輸已實作**（2026-08-24）：`printUsb` 經 node-usb 按 VID/PID `findByIds` → claim interface（Printer class 7 優先）→ bulk transfer；`printBluetooth` 經 serialport 寫 SPP COM port（支援直接填 COMx / 或填藍牙名稱由 `SerialPort.list()` 對照 friendlyName）。LAN `:9100`、USB、藍牙三條通道端到端可用；實體機測試需喺用戶 Windows/macOS 機進行（沙盒無硬件）。
 - `src/` 工作目錄曾被環境偶發清空，所有改動已逐檔 commit 入 git，必要時 `git checkout HEAD -- .` 即可還原。

@@ -1,6 +1,6 @@
 {
   "name": "macau-pos-desktop-companion",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Macau POS Desktop：Electron 殼載 Vercel 網頁 + 內嵌打印 Companion 代理（localhost:9311），經 OS 權限打 LAN/USB/BT。可打包成 exe 安裝檔並內建檢查更新。",
   "type": "module",
   "main": "electron/main.js",
