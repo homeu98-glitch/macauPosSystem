@@ -1,8 +1,3 @@
-<<<<<<< HEAD
-=======
-// 跨平台雙路徑打印合約（Phase 0 骨架，見 docs/43-cross-platform-print-dual-path.md）
-// 三個平台（Android / desktop / iOS）共用同一份 connectionType 列舉。
->>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
 export type ConnectionType = "lan" | "usb" | "bluetooth";
 export type UserRole = "admin" | "manager" | "cashier";
 
@@ -182,7 +177,6 @@ export interface DevicePrinterConfig {
   lanPort?: number;
   /** ESC/POS 編碼（每台可配；預設 GB18030。可選: gb18030 / gbk / big5 / utf-8） */
   charset?: string;
-<<<<<<< HEAD
   /** USB 打印機 VID（自動偵測，商家唔使手填；Meituan 式型號表對照） */
   usbVendorId?: string;
   /** USB 打印機 PID（自動偵測） */
@@ -191,18 +185,13 @@ export interface DevicePrinterConfig {
   bluetoothName?: string;
   /** true = 由 Companion 自動偵測加入（唔經手動輸入 VID/PID） */
   autoDetected?: boolean;
-=======
   // ── USB 連接（connectionType === "usb" 時使用）──
   /** USB vendor id（hex string，例如 "0x1234"） */
-  usbVendorId?: string;
   /** USB product id（hex string，例如 "0x5678"） */
-  usbProductId?: string;
   // ── Bluetooth 連接（connectionType === "bluetooth" 時使用）──
   /** Bluetooth MAC / 裝置地址（例如 "AA:BB:CC:DD:EE:FF"） */
   bluetoothAddress?: string;
   /** Bluetooth 裝置名（配對/列舉顯示用） */
-  bluetoothName?: string;
->>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
   enabled: boolean;
 }
 

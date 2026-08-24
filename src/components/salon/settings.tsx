@@ -434,15 +434,9 @@ const PRINTER_ROLE_OPTS: Option[] = [
 ];
 
 const PRINTER_CONN_OPTS: Option[] = [
-<<<<<<< HEAD
   { value: "lan", label: "LAN（經 Companion 代理 :9100）" },
   { value: "usb", label: "USB（自動偵測）" },
   { value: "bluetooth", label: "藍牙" },
-=======
-  { value: "lan", label: "LAN（網絡打印機）" },
-  { value: "usb", label: "USB（直連打印機）" },
-  { value: "bluetooth", label: "Bluetooth（藍牙打印機）" },
->>>>>>> 3e35bda0ada861ee6fd26497e72a3f326554dfe8
 ];
 
 const TABS = [
