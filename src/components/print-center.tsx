@@ -5,7 +5,7 @@ import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
+import { ReceiptTicketPreview, ReceiptItemLine } from "@/components/receipt-ticket-preview";
 import { KitchenTicketPreview } from "@/components/kitchen-ticket-preview";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
@@ -338,16 +338,28 @@ export function PrintCenter() {
     };
   }, [labelPreviewPrinter, localSettings.printTemplates.label, sampleOrder]);
 
-  const receiptPreviewBlocks = useMemo(() => {
-    if (!sampleOrder) return {} as Record<(typeof RECEIPT_SECTION_META)[number]["id"], string[]>;
+  const receiptPreviewBlocks = useMemo<
+    Partial<Record<(typeof RECEIPT_SECTION_META)[number]["id"], string[] | ReceiptItemLine[]>>
+  >(() => {
+    if (!sampleOrder) return {};
     const template = localSettings.printTemplates.receipt;
     return {
       store_name: template.showStoreName ? ["澳門店 A"] : [],
       order_no: template.showOrderNo ? [sampleOrder.localOrderNo] : [],
       table_name: template.showTableName ? [sampleOrder.tableName] : [],
-      items: sampleOrder.items.map((item) => {
-        const specs = (item.selectedSpecs ?? []).map((spec) => spec.optionLabel).join(" / ");
-        return [item.name, specs, item.note ?? ""].filter(Boolean).join(" · ");
+      // 菜品明細結構化：每張單 dish 主行（菜名 + x份數）+ 每個 spec/note 為獨立 sub-element
+      items: sampleOrder.items.flatMap<ReceiptItemLine>((item) => {
+        const lines: ReceiptItemLine[] = [{ kind: "dish", name: item.name, quantity: item.quantity }];
+        for (const spec of item.selectedSpecs ?? []) {
+          if (spec.optionLabel) {
+            lines.push({
+              kind: "spec",
+              label: `${spec.groupName ?? ""}：${spec.optionLabel}`.replace(/^：/, ""),
+            });
+          }
+        }
+        if (item.note) lines.push({ kind: "note", text: item.note });
+        return lines;
       }),
       total: [formatMoney(sampleOrder.total)],
       payment_method: template.showPaymentMethod ? [sampleOrder.paymentMethod ?? "現金"] : [],
@@ -1500,6 +1512,7 @@ export function PrintCenter() {
                             const layout = localSettings.printTemplates.receipt.sectionLayouts[section];
                             const lines = receiptPreviewBlocks[section] ?? [];
                             const style = localSettings.printTemplates.receipt.sectionStyles[section];
+                            const isItems = section === "items";
                             return (
                               <div
                                 key={section}
@@ -1534,7 +1547,46 @@ export function PrintCenter() {
                                   className="mt-1 space-y-1 leading-4"
                                   style={{ fontSize: style.fontSize, fontWeight: style.fontWeight, textAlign: style.textAlign, color: style.textColor }}
                                 >
-                                  {lines.length > 0 ? lines.slice(0, 6).map((line, index) => <div key={`${section}-${index}`}>{line}</div>) : <div className="text-slate-400">未顯示</div>}
+                                  {lines.length > 0 ? (
+                                    isItems ? (
+                                      // 菜品明細結構化：dish 主行（菜名 + x份數）+ spec/note sub-element
+                                      (lines as ReceiptItemLine[]).slice(0, 8).map((line, index) => {
+                                        if (line.kind === "dish") {
+                                          return (
+                                            <div key={`dish-${index}`} className="flex items-baseline justify-between gap-2">
+                                              <span style={{ fontWeight: 600 }}>{line.name}</span>
+                                              <span className="shrink-0 font-extrabold">x{line.quantity}</span>
+                                            </div>
+                                          );
+                                        }
+                                        if (line.kind === "spec") {
+                                          return (
+                                            <div
+                                              key={`spec-${index}`}
+                                              className="pl-3 text-[0.85em] opacity-80"
+                                              style={{ color: style.textColor }}
+                                            >
+                                              · {line.label}
+                                            </div>
+                                          );
+                                        }
+                                        return (
+                                          <div
+                                            key={`note-${index}`}
+                                            className="pl-3 text-[0.85em] font-semibold text-red-700"
+                                          >
+                                            注：{line.text}
+                                          </div>
+                                        );
+                                      })
+                                    ) : (
+                                      (lines as string[]).slice(0, 6).map((line, index) => (
+                                        <div key={`${section}-${index}`}>{line}</div>
+                                      ))
+                                    )
+                                  ) : (
+                                    <div className="text-slate-400">未顯示</div>
+                                  )}
                                 </div>
                                 <button
                                   className="absolute bottom-1 right-1 h-3 w-3 rounded-sm bg-orange-500"

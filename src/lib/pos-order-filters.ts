@@ -114,6 +114,59 @@ export function localOrderStatusLabel(order: PosOrder): string {
   return order.status;
 }
 
+/**
+ * 訂單狀態標籤嘅視覺 token（label + Tailwind classes），統一顏色編碼方便商家一眼辨識。
+ * 用法：
+ *   const b = getOrderStatusBadge(order);
+ *   <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${b.bgClass} ${b.textClass}`}>{b.label}</span>
+ * 配色：草稿=slate、製作中=amber、已付=blue、待取餐=sky/cyan、已完成=emerald、已取消=slate-300、
+ *      已退款=red、部分退款=orange、已返結=indigo。
+ */
+export interface OrderStatusBadge {
+  label: string;
+  bgClass: string;
+  textClass: string;
+  dotClass: string;
+}
+
+export function getOrderStatusBadge(order: PosOrder): OrderStatusBadge {
+  // 快餐 counter：paid+ready=待取餐；paid 期間=製作中（待廚出餐）
+  if (isQuickCounterOrder(order)) {
+    if (order.status === "settled") {
+      return { label: "已完成", bgClass: "bg-emerald-50", textClass: "text-emerald-700", dotClass: "bg-emerald-500" };
+    }
+    if (order.status === "paid" && order.fulfillmentStatus === "ready") {
+      return { label: quickCompletionLabel(order), bgClass: "bg-sky-50", textClass: "text-sky-700", dotClass: "bg-sky-500" };
+    }
+    if (order.status === "paid" || order.status === "sent_to_kitchen") {
+      return { label: "製作中", bgClass: "bg-amber-50", textClass: "text-amber-700", dotClass: "bg-amber-500" };
+    }
+  }
+  switch (order.status) {
+    case "draft":
+      return { label: "點單中", bgClass: "bg-slate-100", textClass: "text-slate-700", dotClass: "bg-slate-500" };
+    case "sent_to_kitchen":
+      return { label: "製作中", bgClass: "bg-amber-50", textClass: "text-amber-700", dotClass: "bg-amber-500" };
+    case "paid":
+      if (order.fulfillmentStatus === "ready") {
+        return { label: "待取餐", bgClass: "bg-sky-50", textClass: "text-sky-700", dotClass: "bg-sky-500" };
+      }
+      return { label: "已付款", bgClass: "bg-blue-50", textClass: "text-blue-700", dotClass: "bg-blue-500" };
+    case "settled":
+      return { label: "已完成", bgClass: "bg-emerald-50", textClass: "text-emerald-700", dotClass: "bg-emerald-500" };
+    case "cancelled":
+      return { label: "已取消", bgClass: "bg-slate-200", textClass: "text-slate-600", dotClass: "bg-slate-400" };
+    case "refunded":
+      return { label: "已退款", bgClass: "bg-red-50", textClass: "text-red-700", dotClass: "bg-red-500" };
+    case "partially_refunded":
+      return { label: "部分退款", bgClass: "bg-orange-50", textClass: "text-orange-700", dotClass: "bg-orange-500" };
+    case "reopened":
+      return { label: "已返結", bgClass: "bg-indigo-50", textClass: "text-indigo-700", dotClass: "bg-indigo-500" };
+    default:
+      return { label: String(order.status), bgClass: "bg-slate-100", textClass: "text-slate-700", dotClass: "bg-slate-500" };
+  }
+}
+
 export type LocalOrderPanelTab = "all" | "preparing" | "ready" | "settled" | "reopened" | "cancelled";
 
 export function matchesLocalOrderPanelTab(order: PosOrder, tab: LocalOrderPanelTab): boolean {

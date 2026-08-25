@@ -17,7 +17,7 @@ import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { buildReceiptPrintJobs } from "@/lib/print-jobs";
-import { isTerminalOrderStatus, filterResurrectedOrders } from "@/lib/pos-order-filters";
+import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -3411,8 +3411,8 @@ export function PosApp() {
             </div>
 
             <div className="border-t border-slate-100 px-4 py-4">
-              {isAddOnOrder && cartItems.some((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) ? (
-                <div className="mb-3 flex justify-end">
+              <div className="mb-3 flex flex-wrap justify-end gap-2">
+                {isAddOnOrder && cartItems.some((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) ? (
                   <button
                     className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
                     disabled={isReadOnlySettled}
@@ -3431,10 +3431,8 @@ export function PosApp() {
                   >
                     全部退菜
                   </button>
-                </div>
-              ) : null}
-              {findVoidableTableOrder(activeTableId) ? (
-                <div className="mb-3 flex justify-end">
+                ) : null}
+                {findVoidableTableOrder(activeTableId) ? (
                   <button
                     className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
                     disabled={isReadOnlySettled}
@@ -3449,8 +3447,8 @@ export function PosApp() {
                   >
                     退桌
                   </button>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
               <div className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-slate-600">全單備註</div>
@@ -4075,36 +4073,28 @@ export function PosApp() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {viewingOrder.status === "refunded" ? (
-                  <div className="inline-flex rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
-                    已退款
-                  </div>
-                ) : viewingOrder.status === "partially_refunded" ? (
-                  <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                    部分退款
-                  </div>
-                ) : viewingOrder.status === "cancelled" ? (
-                  <div className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                    已取消
-                  </div>
-                ) : viewingOrder.status === "settled" ? (
-                  <div className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                    已完成
-                  </div>
-                ) : viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total ? (
-                  <>
-                    <div className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                      已支付
-                    </div>
-                    <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                      待完成
-                    </div>
-                  </>
-                ) : (
-                  <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                    待結帳
-                  </div>
-                )}
+                {(() => {
+                  // 訂單狀態標籤（統一看板：草稿/製作中/已付款/待取餐/已完成/已取消/已退款/部分退款/已返結）
+                  // 顏色 token 見 getOrderStatusBadge（pos-order-filters.ts）
+                  const badge = getOrderStatusBadge(viewingOrder);
+                  const prepaidFull =
+                    viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total;
+                  return (
+                    <>
+                      <div
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${badge.bgClass} ${badge.textClass}`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
+                        {badge.label}
+                      </div>
+                      {prepaidFull && viewingOrder.status !== "settled" && viewingOrder.status !== "refunded" && viewingOrder.status !== "partially_refunded" ? (
+                        <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                          待完成
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           }

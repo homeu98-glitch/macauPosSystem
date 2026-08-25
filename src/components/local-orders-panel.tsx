@@ -14,15 +14,14 @@ import {
 import {
   isLocalOrTransferredDineIn,
   isQuickCounterOrder,
-  localOrderStatusLabel,
   LocalOrderPanelTab,
   matchesLocalOrderPanelTab,
   orderTimestamp,
+  getOrderStatusBadge,
 } from "@/lib/pos-order-filters";
 import {
   markQuickOrderCompletedInStore,
   quickCompleteLabel,
-  quickCompletionLabel,
   updateQuickFulfillmentInStore,
 } from "@/lib/quick-order-fulfillment";
 import { isReopenable, reopenPosOrder } from "@/lib/pos-orders";
@@ -268,19 +267,24 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   </div>
                   <span
                     className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
-                      isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready"
-                        ? "bg-sky-50 text-sky-700"
-                        : "bg-slate-100 text-slate-700"
+                      (() => {
+                        const b = getOrderStatusBadge(order);
+                        return `${b.bgClass} ${b.textClass}`;
+                      })()
                     }`}
                   >
                     <span
                       className={`h-4 w-4 rounded-full ${
-                        isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready"
-                          ? "bg-sky-500"
-                          : "bg-slate-500"
+                        (() => {
+                          const b = getOrderStatusBadge(order);
+                          return b.dotClass;
+                        })()
                       }`}
                     />
-                    {localOrderStatusLabel(order)}
+                    {(() => {
+                      const b = getOrderStatusBadge(order);
+                      return b.label;
+                    })()}
                   </span>
                 </div>
                 <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total, currency)}</div>
@@ -336,19 +340,24 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
 
       {viewingOrder ? (
         <ResponsiveModal
-          description={`${viewingOrder.tableName} · ${localOrderStatusLabel(viewingOrder)}`}
+          description={`${viewingOrder.tableName} · ${(() => { const b = getOrderStatusBadge(viewingOrder); return b.label; })()}`}
           onClose={() => setViewingOrderId(null)}
           title={viewingOrder.localOrderNo}
           widthClassName="max-w-md"
         >
           <div className="grid gap-2 text-sm text-slate-700">
             {isQuickCounterOrder(viewingOrder) ? (
-              <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                {viewingOrder.status === "settled"
-                  ? "已完成"
-                  : viewingOrder.status === "paid" && viewingOrder.fulfillmentStatus === "ready"
-                    ? quickCompletionLabel(viewingOrder)
-                    : "製作中"}
+              <div
+                className={`inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+                  (() => { const b = getOrderStatusBadge(viewingOrder); return `${b.bgClass} ${b.textClass}`; })()
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    (() => { const b = getOrderStatusBadge(viewingOrder); return b.dotClass; })()
+                  }`}
+                />
+                {(() => { const b = getOrderStatusBadge(viewingOrder); return b.label; })()}
               </div>
             ) : null}
             {viewingOrder.orderNote ? <div>備註：{viewingOrder.orderNote}</div> : null}
