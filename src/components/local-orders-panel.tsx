@@ -5,6 +5,7 @@ import { formatMacauDateTime } from "@/lib/format";
 import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import {
   dateFilterLabel,
   LedgerOrderDateFilter,
@@ -114,6 +115,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   const [statusTab, setStatusTab] = useState<LocalOrderPanelTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [reopenTargetOrderId, setReopenTargetOrderId] = useState<string | null>(null);
+  const [receiptPreviewOrderId, setReceiptPreviewOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState<string>("");
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
@@ -144,6 +146,7 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
 
   const viewingOrder = viewingOrderId ? orders.find((row) => row.id === viewingOrderId) ?? null : null;
   const reopenTarget = reopenTargetOrderId ? orders.find((row) => row.id === reopenTargetOrderId) ?? null : null;
+  const receiptPreviewOrder = receiptPreviewOrderId ? orders.find((row) => row.id === receiptPreviewOrderId) ?? null : null;
 
   function handleQuickAction() {
     refresh();
@@ -291,14 +294,13 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   <button
                     className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
                     onClick={() => {
-                      if (order.status === "settled" && isReopenable(order)) {
-                        // 已結堂食單 → 跳點餐介面（唯讀灰掣模式），入面掣全部鎖定
-                        const tableId = order.tableId && order.tableId !== "counter" ? order.tableId : "";
-                        router.push(
-                          `/?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`,
-                        );
-                      } else if (!order.tableId || order.tableId === "counter") {
-                        // 快餐/外賣/無枱 → 保留小窗唯讀
+                      if (order.status === "settled") {
+                        // 完成狀態：堂食 + 外賣都彈收據預覽（按打印模板樣式），唔跳點餐介面
+                        setReceiptPreviewOrderId(order.id);
+                        return;
+                      }
+                      if (!order.tableId || order.tableId === "counter") {
+                        // 快餐/外賣/無枱（未結）→ 保留小窗唯讀
                         setReopenReason("");
                         setViewingOrderId(order.id);
                       } else {
@@ -457,6 +459,17 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               </button>
             </div>
           </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {receiptPreviewOrder ? (
+        <ResponsiveModal
+          description="按現有收據打印模板樣式生成嘅預覽"
+          onClose={() => setReceiptPreviewOrderId(null)}
+          title={`收據預覽 · ${receiptPreviewOrder.localOrderNo}`}
+          widthClassName="max-w-md"
+        >
+          <ReceiptTicketPreview order={receiptPreviewOrder} />
         </ResponsiveModal>
       ) : null}
 
