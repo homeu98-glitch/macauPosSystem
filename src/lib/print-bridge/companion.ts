@@ -13,7 +13,6 @@
  */
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
-import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import { loadDeviceConfig } from "@/lib/storage";
 import { toHexId } from "@/lib/print-bridge/printer-models";
@@ -356,12 +355,15 @@ export async function enumerateCompanionBluetoothDevices(): Promise<PrinterCandi
 // ─────────────────────────────────────────────────────────────
 
 /**
- * 新 PrintJob 嘅初始狀態：
- *   - 有 native bridge（Android）或已配對 Companion → 樂觀標 "sent"，交 worker 實際派發；
- *   - 兩者都無 → 維持 "pending"，等配對 / 重連後下次 flush 再試。
+ * 新 PrintJob 嘅初始狀態。
+ * 一律回 "pending"，交畀背景 flush worker（dispatch.ts）按 native / companion / relay 通道派發；
+ * 無可用通道時 worker 會維持 pending 等下次 flush。
+ *
+ * ⚠️ 唔可以樂觀標 "sent"：flushPendingPrintJobs 只處理 status==="pending" 嘅 job，
+ * 如果呢度回 "sent"，worker 會 skip 呢啲 job，令真實落單 / 收據 / 退款嘅打印永遠唔會派發
+ * （打印靜默、Print Center 全部顯示「已發送」但張紙唔出）。見 hub.ts 同名函式註解。
  */
 export function resolvePrintJobStatus(_networkOnline: boolean): PrintJob["status"] {
-  if (isNativeBridgeAvailable() || isCompanionConfigured()) return "sent";
   return "pending";
 }
 
