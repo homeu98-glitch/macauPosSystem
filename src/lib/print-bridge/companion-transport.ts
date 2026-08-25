@@ -39,23 +39,27 @@ export class CompanionTransport implements PrintTransport {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 5000);
     try {
+      // [debug] companion 派發 trace：睇下 payload + 回應，排查 missing print 時用
+      const payload = {
+        job,
+        printer,
+        kind: opts.kind,
+        storeName: opts.storeName ?? "",
+        paymentMethod: opts.paymentMethod ?? "",
+        total: opts.total ?? null,
+      };
+      console.log(`[pos→companion] /api/print orderNo=${job.orderNo} ticketType=${job.ticketType} items=${job.items?.length ?? 0} bytes≈${JSON.stringify(payload).length}`);
       const res = await fetch(`${this.cfg.baseUrl}/api/print`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(this.cfg.token ? { "x-companion-token": this.cfg.token } : {}),
         },
-        body: JSON.stringify({
-          job,
-          printer,
-          kind: opts.kind,
-          storeName: opts.storeName ?? "",
-          paymentMethod: opts.paymentMethod ?? "",
-          total: opts.total ?? null,
-        }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
       const data = (await res.json()) as { ok?: boolean; queued?: boolean; error?: string };
+      console.log(`[companion→pos] /api/print orderNo=${job.orderNo} → ok=${data.ok} queued=${data.queued} error=${data.error ?? ""}`);
       if (data && (data.ok === true || data.queued === true)) {
         return { ok: true, queued: data.queued, ticketId: job.id };
       }

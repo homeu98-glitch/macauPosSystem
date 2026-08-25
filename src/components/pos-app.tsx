@@ -279,6 +279,9 @@ export function PosApp() {
   const [settlementFlash, setSettlementFlash] = useState(false);
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
+  // 追蹤上一次 backfill 載入嘅 queue 簽名（id+status），避免 setQueue 建立新 array reference
+  // 觸發自身 effect 依賴造成無限輪詢。saveQueue 仍然每次寫 localStorage，保持磁碟同步。
+  const lastLoadedQueueRef = useRef<string>("");
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
   const [authSession] = useState(() => loadAuthSession());
@@ -608,7 +611,17 @@ export function PosApp() {
         for (const e of localQueue) {
           if (!seen.has(e.id)) mergedQueue.push(e);
         }
-        setQueue(mergedQueue);
+        // 只有內容真正改變先 setQueue：避免 effect 依賴 queue 觸發自激迴圈
+        // （loadRuntimeState → setQueue(新 array ref) → effect 重跑 → loadRuntimeState → ...）。
+        // saveQueue 仍然每次寫 localStorage 保持磁碟同步。
+        const signature = mergedQueue
+          .map((e) => `${e.id}:${e.status}`)
+          .sort()
+          .join("|");
+        if (signature !== lastLoadedQueueRef.current) {
+          lastLoadedQueueRef.current = signature;
+          setQueue(mergedQueue);
+        }
         saveQueue(mergedQueue);
       }
       if (Array.isArray(payload.printJobs)) {
