@@ -616,7 +616,16 @@ export function PosApp() {
         persistPrintJobs(payload.printJobs);
       }
       if (payload.localSettings) {
-        savePosLocalSettings(payload.localSettings);
+        // 枱（floors）係 per-terminal 編輯真源：枱名 / 區 / 座位數（capacity）都喺本地
+        // localSettings.floors（見 docs/54 樓層修復）。後台 device_config.local_settings 冇呢啲
+        // per-terminal 枱編輯，直接用 server 版會沖走本地改動（例如座位數變空白）。
+        // 保留本地 floors，其餘 field 用 server 版本（server 優先，確保後台改嘅全局設定生效）。
+        const localFloors = loadPosLocalSettings().floors;
+        const merged: PosLocalSettings = {
+          ...payload.localSettings,
+          floors: localFloors?.length ? localFloors : payload.localSettings.floors,
+        };
+        savePosLocalSettings(merged);
       }
       if (payload.deviceConfig) {
         saveDeviceConfig(payload.deviceConfig);
