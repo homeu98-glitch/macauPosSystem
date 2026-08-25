@@ -85,8 +85,10 @@ export type QueueEventType =
   | "ORDER_UPDATED"
   | "ORDER_ITEM_VOIDED"
   | "ORDER_SETTLED"
+  | "ORDER_DELETED"
   | "DEVICE_CONFIG_UPDATED"
   | "PRINT_JOB_CREATED"
+  | "PRINT_JOB_DELETED"
   | "TEST_PRINT_REQUESTED";
 
 export interface MenuSpecOption {

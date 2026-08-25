@@ -40,6 +40,9 @@ const STORE_SUFFIX = {
   operatingMode: "operating-mode",
   quickAutoAccept: "quick-auto-accept",
   quickCompletedMinutes: "quick-completed-minutes",
+  // tombstone：本機已主動清除 / 刪除嘅記錄 id，backfill 唔可以將伺服器行復活佢哋（見 docs/52）
+  clearedPrintJobIds: "cleared-print-jobs",
+  deletedOrderIds: "deleted-orders",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -407,6 +410,42 @@ export function loadPrintJobs() {
 
 export function savePrintJobs(printJobs: PrintJob[]) {
   writeStoreJson(STORE_SUFFIX.printJobs, printJobs);
+}
+
+/**
+ * 本機已主動清除嘅打印 job id（tombstone）。backfill 合併時跳過呢啲 id，
+ * 唔會將伺服器仲未刪嘅 `pos_print_jobs` 行復活（見 docs/52）。
+ */
+export function loadClearedPrintJobIds(): string[] {
+  return readStoreJson(STORE_SUFFIX.clearedPrintJobIds, [] as string[]);
+}
+
+export function saveClearedPrintJobIds(ids: string[]) {
+  writeStoreJson(STORE_SUFFIX.clearedPrintJobIds, ids);
+}
+
+export function addClearedPrintJobIds(ids: string[]) {
+  if (ids.length === 0) return;
+  const next = Array.from(new Set([...loadClearedPrintJobIds(), ...ids]));
+  saveClearedPrintJobIds(next);
+}
+
+/**
+ * 本機已主動真刪除嘅訂單 id（tombstone）。backfill / realtime upsert 合併時跳過呢啲 id，
+ * 唔會將伺服器仲未刪嘅 `pos_orders` 行復活（見 docs/52）。
+ */
+export function loadDeletedOrderIds(): string[] {
+  return readStoreJson(STORE_SUFFIX.deletedOrderIds, [] as string[]);
+}
+
+export function saveDeletedOrderIds(ids: string[]) {
+  writeStoreJson(STORE_SUFFIX.deletedOrderIds, ids);
+}
+
+export function addDeletedOrderIds(ids: string[]) {
+  if (ids.length === 0) return;
+  const next = Array.from(new Set([...loadDeletedOrderIds(), ...ids]));
+  saveDeletedOrderIds(next);
 }
 
 export function loadPosLocalSettings() {

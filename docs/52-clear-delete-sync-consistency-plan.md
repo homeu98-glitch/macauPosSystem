@@ -2,7 +2,7 @@
 
 > 目的：診斷「打印中心清除已發送/失敗後記錄復活」與「點餐介面刪除訂單後經立即同步復活」兩個問題，
 > 確認清除/刪除是否真刪 DB，並給出一致性的修復方案。
-> 狀態：**方案待覆核（未實作）**。用家看過再修。
+> 狀態：**已實作（2026-08-25）**。用家決定：打印清除 + 訂單刪除均做「真刪（local + DB）」，pruneSentPrintJobs 一併接 tombstone；訂單詳情 modal 加「刪除訂單」硬刪按鈕。tsc 零錯誤（layout.tsx LayoutProps 為 standalone tsc 已知誤報，Vercel build 唔受影響）。
 
 ---
 
@@ -142,3 +142,62 @@
 - `src/app/api/pos/state/route.ts`（終態過濾，可選）
 - `src/app/api/pos/sync/route.ts`（PRINT_JOB_DELETED / ORDER_DELETED，層 B）
 - `src/lib/pos/use-pos-realtime.ts`（確認 backfill 觸發點，唔使改邏輯，只驗證）
+
+---
+
+## 八、實作紀錄（2026-08-25）
+
+用家確認四項決定後，已按「真刪（local + DB）」全量實作。tsc 零錯誤（layout.tsx LayoutProps 為 standalone tsc 已知誤報，Vercel build 唔受影響）。
+
+### 用家決定（覆核後）
+
+1. 打印清除範圍 → **真刪全部**（local + DB `pos_print_jobs`）
+2. 訂單刪除語義 → **真刪除**（測試用途，要徹底消失）
+3. `pruneSentPrintJobs` 自動清理 → **接 tombstone + 推伺服器 DELETE**
+4. 「刪除訂單」按鈕入口 → 係**訂單詳情 modal 內**個隻（快捷操作嘅訂單只係同批單喺 UI 放出嚟），所以 modal 內按刪除 = 全站清走該單
+
+### 實際改動
+
+**storage.ts**
+- `STORE_SUFFIX` 加 `clearedPrintJobIds: "cleared-print-jobs"`、`deletedOrderIds: "deleted-orders"`
+- 匯出 `loadClearedPrintJobIds / saveClearedPrintJobIds / addClearedPrintJobIds / loadDeletedOrderIds / saveDeletedOrderIds / addDeletedOrderIds`；每個 `add` 用 `Array.from(new Set([...load, ...ids]))` 去重
+
+**types.ts**
+- `QueueEventType` 聯合加 `"ORDER_DELETED"`、`"PRINT_JOB_DELETED"`
+
+**pos/print-job-merge.ts**
+- `mergePrintJobs(local, incoming, clearedIds?)`：incoming 單 `id ∈ cleared` → `continue` 跳過（唔補回）；`clearedIds` 支援 `string[] | Set`
+
+**print-jobs.ts**
+- `deletePrintJobsOnServer(ids)`：建 `PRINT_JOB_DELETED` 事件 POST `/api/pos/sync`，storeId 取自 `loadAuthSession()?.merchantId ?? loadBootstrapCache()?.storeId`，失敗靜默
+- `pruneSentPrintJobs` / `clearSentPrintJobs` / `clearFailedPrintJobs`：算 removed ids → `savePrintJobs(kept)` → `addClearedPrintJobIds(removedIds)` → `void deletePrintJobsOnServer(removedIds)` + dispatch `pos-print-jobs-changed`
+
+**api/pos/sync/route.ts**
+- 事件迴圈加兩分支：
+  - `PRINT_JOB_DELETED` → `delete from pos_print_jobs where id = payload.id and store_id = storeId`
+  - `ORDER_DELETED` → `delete from pos_orders where id = payload.orderId and store_id = storeId`（store_id 隔離，防跨店刪）
+
+**pos-order-filters.ts**
+- `isTerminalOrderStatus(status)` → cancelled/refunded/partially_refunded/settled 為 true
+- `filterResurrectedOrders(orders, deletedOrderIds, localOrders)`：濾走 tombstone id 同伺服器獨有終態單（除非本機原本就有）
+
+**pos-app.tsx**
+- import `loadClearedPrintJobIds / loadDeletedOrderIds / addDeletedOrderIds` + `isTerminalOrderStatus, filterResurrectedOrders`
+- `persistPrintJobs`：`mergePrintJobs(loadPrintJobs(), nextPrintJobs, loadClearedPrintJobIds())`
+- `onPrintJobUpsert`：`loadClearedPrintJobIds().includes(job.id)` → 直接 return
+- `loadRuntimeState` orders merge：包 `filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders())`
+- `onOrderUpsert`：`loadDeletedOrderIds().includes(order.id)` → return；merge 包 `filterResurrectedOrders`
+- `deleteOrderPermanently(orderId)`：加 tombstone → `persistOrders` 移除 → `pushEvents([ORDER_DELETED])` → 在線 `syncNow([...queue, deleteEvent], {silent:true})`；清 active order 狀態、關 modal、toast
+- 訂單詳情 modal actions 加紅色「刪除訂單」按鈕，`window.confirm` 防誤觸 → `deleteOrderPermanently(viewingOrder.id)`
+
+### 未做（可選，非必要）
+
+- `local-orders-panel.tsx` 嘅 `handleDeleteAllOrders` 未接 `deletedOrderIds`（用家確認入口係 modal 內按鈕，該路徑已做）。如日後要「全部刪除」也防復活，可補接。
+- `/api/pos/state/route.ts` 伺服器端終態過濾（客戶端 `filterResurrectedOrders` 已處理，唔使改 server）。
+
+### 手動回歸步驟
+
+1. 打印中心 → 清除已發送/失敗 → 切頁等 3s → 唔復活（tombstone 擋住 backfill）
+2. 訂單詳情 modal → 刪除訂單 → 立即同步 → 唔復活（tombstone + 伺服器 DELETE）
+3. 離線清/刪 → 重連 → syncNow 補傳 → 伺服器行清走、本地唔復活
+4. 多終端：A 清/刪，B backfill 後該單唔見（真刪伺服器行生效）

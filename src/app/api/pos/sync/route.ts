@@ -107,6 +107,26 @@ export async function POST(request: Request) {
       );
       if (jErr) errors.push(`pos_print_jobs ${job.id}: ${jErr.message}`);
     }
+
+    // 真刪打印記錄（打印中心「清除已發送 / 已失敗 / 自動清理」）；必須按 store_id 隔離，避免跨店刪除（見 docs/52）
+    if (event.type === "PRINT_JOB_DELETED" && event.payload?.id) {
+      const { error: dErr } = await supabase
+        .from("pos_print_jobs")
+        .delete()
+        .eq("id", event.payload.id)
+        .eq("store_id", storeId);
+      if (dErr) errors.push(`pos_print_jobs delete ${event.payload.id}: ${dErr.message}`);
+    }
+
+    // 真刪訂單（訂單詳情「刪除訂單」）；必須按 store_id 隔離，避免跨店刪除（見 docs/52）
+    if (event.type === "ORDER_DELETED" && event.payload?.orderId) {
+      const { error: dErr } = await supabase
+        .from("pos_orders")
+        .delete()
+        .eq("id", event.payload.orderId)
+        .eq("store_id", storeId);
+      if (dErr) errors.push(`pos_orders delete ${event.payload.orderId}: ${dErr.message}`);
+    }
   }
 
   if (errors.length > 0) {

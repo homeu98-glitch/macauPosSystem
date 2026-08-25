@@ -17,6 +17,7 @@ import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { buildReceiptPrintJobs } from "@/lib/print-jobs";
+import { isTerminalOrderStatus, filterResurrectedOrders } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
@@ -32,6 +33,9 @@ import {
   loadQueue,
   loadShiftState,
   loadSoldOutState,
+  loadClearedPrintJobIds,
+  loadDeletedOrderIds,
+  addDeletedOrderIds,
   saveBootstrapCache,
   saveDeviceConfig,
   saveOrders,
@@ -580,10 +584,12 @@ export function PosApp() {
 
       if (Array.isArray(payload.orders)) {
         // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
+        // docs/52：合併後過濾本機已真刪（tombstone）+ 伺服器單邊終態單，防 backfill 復活。
         setOrders((current) => {
           const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
-          saveOrders(merged);
-          return merged;
+          const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders());
+          saveOrders(cleaned);
+          return cleaned;
         });
       }
       if (Array.isArray(payload.queue)) {
@@ -628,10 +634,13 @@ export function PosApp() {
   );
   usePosRealtime(kioskStoreId, !offlineMode, {
     onOrderUpsert: (order) => {
+      // docs/52：本機已真刪除（tombstone）嘅訂單唔可以經 realtime 復活
+      if (loadDeletedOrderIds().includes(order.id)) return;
       setOrders((current) => {
         const merged = mergeOrderLists(loadOrders(), current, [order]);
-        saveOrders(merged);
-        return merged;
+        const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders());
+        saveOrders(cleaned);
+        return cleaned;
       });
       // 堂食 dine_in_confirm 單落 draft：彈「X 枱已落單請確認」，等員工確認才落廚房
       if (order.status === "draft" && order.tableId && order.tableId !== "counter") {
@@ -639,6 +648,8 @@ export function PosApp() {
       }
     },
     onPrintJobUpsert: (job) => {
+      // docs/52：本機已主動清除（tombstone）嘅 job 唔可以經 realtime 復活
+      if (loadClearedPrintJobIds().includes(job.id)) return;
       setPrintJobs((current) => {
         const existing = current.find((p) => p.id === job.id);
         // P0（R5 realtime 路徑）：本地已有該 job 就保留本地版本（sent/failed），唔用後台落後
@@ -1018,7 +1029,7 @@ export function PosApp() {
     // 否則 stale React state（flush worker 改咗 localStorage 但冇 update state）會將已打印嘅
     // job 復活成 pending，下一次 flush 又印一次 → 無限重複打印同一張單（見 2026-08-25 修復）。
     // 合併邏輯抽出做純函式 mergePrintJobs（src/lib/pos/print-job-merge.ts），backfill 同處重用。
-    const merged = mergePrintJobs(loadPrintJobs(), nextPrintJobs);
+    const merged = mergePrintJobs(loadPrintJobs(), nextPrintJobs, loadClearedPrintJobIds());
     setPrintJobs(merged);
     savePrintJobs(merged);
   }
@@ -2188,6 +2199,41 @@ export function PosApp() {
     setOrderActionRequest(null);
     setOrderActionReason("");
     setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已取消結帳。` });
+  }
+
+  /**
+   * 真刪除訂單（docs/52）：本機移除 + 記 deletedOrderIds tombstone（防 backfill / realtime 復活）
+   * + 推 ORDER_DELETED 事件入 queue，syncNow 成功 POST 去 /api/pos/sync 真刪伺服器 `pos_orders` 行。
+   * 離線：事件 status=pending，重連後 syncNow 補傳；tombstone 已經擋住本地復活。
+   */
+  function deleteOrderPermanently(orderId: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder) return;
+    const deleteEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_DELETED",
+      entityId: orderId,
+      payload: { orderId },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: new Date().toISOString(),
+    };
+    addDeletedOrderIds([orderId]);
+    persistOrders(orders.filter((o) => o.id !== orderId));
+    pushEvents([deleteEvent]);
+    // 在線即 push 去伺服器真刪；離線則留 pending，重連後 syncNow 補傳（tombstone 已擋本地復活）
+    if (!offlineMode) {
+      void syncNow([...queue, deleteEvent], { silent: true });
+    }
+    if (activeOrderId === orderId) {
+      setActiveOrderId(null);
+      setCartItems([]);
+      setBaseOrderItems([]);
+      setOrderNote("");
+      setDiscountValue("0");
+      setReceivedAmount("");
+    }
+    setViewingOrderId(null);
+    setToast({ tone: "success", message: `${targetOrder.localOrderNo} 已刪除。` });
   }
 
   function buildRefundReceiptJobs(
@@ -4006,6 +4052,17 @@ export function PosApp() {
                   去結帳
                 </button>
               ) : null}
+              <button
+                className="rounded-2xl bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
+                onClick={() => {
+                  if (window.confirm(`確定刪除訂單 ${viewingOrder.localOrderNo}？此操作不可復原，會同時刪除本機與伺服器紀錄。`)) {
+                    deleteOrderPermanently(viewingOrder.id);
+                  }
+                }}
+                type="button"
+              >
+                刪除訂單
+              </button>
             </>
           }
           description={`${viewingOrder.localOrderNo} · ${viewingOrder.tableName}`}

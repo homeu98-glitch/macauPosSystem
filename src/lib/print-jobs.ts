@@ -2,6 +2,8 @@
 
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
+  addClearedPrintJobIds,
+  loadAuthSession,
   loadBootstrapCache,
   loadDeviceConfig,
   loadOrders,
@@ -223,9 +225,39 @@ export async function printReceiptForLedgerOrderOnce(
 }
 
 /**
+ * 經 /api/pos/sync 推送 `PRINT_JOB_DELETED` 事件，真刪伺服器 `pos_print_jobs` 行。
+ * 離線 / 失敗唔阻礙：本機 tombstone（addClearedPrintJobIds）已經防止 backfill 復活，
+ * 伺服器行喺恢復網絡後由下次 sync 清走（見 docs/52）。
+ */
+export async function deletePrintJobsOnServer(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const storeId =
+    loadAuthSession()?.merchantId ?? loadBootstrapCache()?.storeId ?? undefined;
+  if (!storeId) return;
+  const events = ids.map((id) => ({
+    id: `pjd-${id}`,
+    type: "PRINT_JOB_DELETED" as const,
+    entityId: id,
+    payload: { id },
+    status: "synced" as const,
+    createdAt: new Date().toISOString(),
+  }));
+  try {
+    await fetch("/api/pos/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events, storeId }),
+    });
+  } catch {
+    // 離線：tombstone 已擋復活；成功連線後由 flush / sync 再清伺服器行
+  }
+}
+
+/**
  * 自動清理：移除已發送（sent）超過 olderThanDays 日嘅打印單，避免 localStorage 無限累積。
  * 保留 recent sent（俾用家短時間內喺打印中心見到「已發送」）+ 所有 pending / failed（等跟進）。
  * flush worker 每次 tick 完會 call（見 dispatch.ts）。
+ * 真刪：記錄 clearedPrintJobIds tombstone + 推送伺服器 DELETE（見 docs/52）。
  */
 export function pruneSentPrintJobs(olderThanDays = 7): number {
   const jobs = loadPrintJobs();
@@ -237,7 +269,10 @@ export function pruneSentPrintJobs(olderThanDays = 7): number {
   });
   const removed = jobs.length - kept.length;
   if (removed > 0) {
+    const prunedIds = jobs.filter((j) => !kept.includes(j)).map((j) => j.id);
     savePrintJobs(kept);
+    addClearedPrintJobIds(prunedIds);
+    void deletePrintJobsOnServer(prunedIds);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
     }
@@ -245,13 +280,17 @@ export function pruneSentPrintJobs(olderThanDays = 7): number {
   return removed;
 }
 
-/** 手動「清除已發送」：移除所有 sent 單（保留 pending / failed 等用家跟進）。打印中心按鈕 call。 */
+/** 手動「清除已發送」：移除所有 sent 單（保留 pending / failed 等用家跟進）。打印中心按鈕 call。
+ * 真刪：記錄 clearedPrintJobIds tombstone + 推送伺服器 DELETE（見 docs/52）。 */
 export function clearSentPrintJobs(): number {
   const jobs = loadPrintJobs();
   const kept = jobs.filter((j) => j.status !== "sent");
   const removed = jobs.length - kept.length;
   if (removed > 0) {
+    const removedIds = jobs.filter((j) => j.status === "sent").map((j) => j.id);
     savePrintJobs(kept);
+    addClearedPrintJobIds(removedIds);
+    void deletePrintJobsOnServer(removedIds);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
     }
@@ -259,13 +298,17 @@ export function clearSentPrintJobs(): number {
   return removed;
 }
 
-/** 手動「清除已失敗」：移除所有 failed 單（保留 pending / sent）。打印中心按鈕 call。 */
+/** 手動「清除已失敗」：移除所有 failed 單（保留 pending / sent）。打印中心按鈕 call。
+ * 真刪：記錄 clearedPrintJobIds tombstone + 推送伺服器 DELETE（見 docs/52）。 */
 export function clearFailedPrintJobs(): number {
   const jobs = loadPrintJobs();
   const kept = jobs.filter((j) => j.status !== "failed");
   const removed = jobs.length - kept.length;
   if (removed > 0) {
+    const removedIds = jobs.filter((j) => j.status === "failed").map((j) => j.id);
     savePrintJobs(kept);
+    addClearedPrintJobIds(removedIds);
+    void deletePrintJobsOnServer(removedIds);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
     }

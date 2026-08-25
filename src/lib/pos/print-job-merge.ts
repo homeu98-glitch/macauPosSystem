@@ -13,12 +13,19 @@ import type { PrintJob } from "@/lib/types";
  *  2. 本地有、incoming 冇 → 原樣保留（絕不刪本地單，防離線新單被 backfill 清走）
  *  3. incoming 有、本地冇 → 補入（跨終端 / realtime 漏咗嘅單喺 backfill 見返）
  */
-export function mergePrintJobs(local: PrintJob[], incoming: PrintJob[]): PrintJob[] {
+export function mergePrintJobs(
+  local: PrintJob[],
+  incoming: PrintJob[],
+  clearedIds?: string[] | Set<string>,
+): PrintJob[] {
+  const cleared = clearedIds instanceof Set ? clearedIds : new Set(clearedIds ?? []);
   const localById = new Map(local.map((j) => [j.id, j]));
   const merged: PrintJob[] = [];
   const seen = new Set<string>();
   for (const j of incoming) {
     seen.add(j.id);
+    // 本機已主動清除（tombstone）→ 唔補回，否則 backfill 會將伺服器未刪行復活（見 docs/52）
+    if (cleared.has(j.id)) continue;
     merged.push(localById.get(j.id) ?? j); // 本地有就用本地（保留 sent/failed）
   }
   for (const j of local) {

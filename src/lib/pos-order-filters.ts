@@ -54,6 +54,36 @@ function isTerminalLocalOrder(order: PosOrder): boolean {
   );
 }
 
+/** 匯出：終態訂單狀態（已取消 / 已退款 / 部分退款 / 已完成）。backfill / realtime 合併時，
+ * 伺服器單邊嘅終態單唔可以復活入活躍工作列表（見 docs/52）。 */
+export function isTerminalOrderStatus(status: string | undefined): boolean {
+  return (
+    status === "cancelled" ||
+    status === "refunded" ||
+    status === "partially_refunded" ||
+    status === "settled"
+  );
+}
+
+/**
+ * backfill / realtime 合併後嘅「防復活」過濾（見 docs/52）：
+ *  - 本機已真刪除嘅訂單（deletedOrderIds tombstone）一律唔顯示；
+ *  - 伺服器單邊嘅終態單（cancelled / refunded / partially_refunded / settled）唔可以復活入活躍列表，
+ *    除非本機 localStorage 已經有佢（留返本地對賬 tab 睇）。
+ * localOrders = 本地持久化 store（loadOrders()），用嚟判斷「本機已有」。
+ */
+export function filterResurrectedOrders(
+  orders: PosOrder[],
+  deletedOrderIds: string[],
+  localOrders: PosOrder[],
+): PosOrder[] {
+  const deleted = new Set(deletedOrderIds);
+  const localIds = new Set(localOrders.map((o) => o.id));
+  return orders.filter(
+    (o) => !deleted.has(o.id) && !(isTerminalOrderStatus(o.status) && !localIds.has(o.id)),
+  );
+}
+
 /** 快餐點餐頁底部：所有未完成的 counter 單（不限時間） */
 export function isActionableQuickOrder(order: PosOrder): boolean {
   if (!isQuickCounterOrder(order)) return false;
