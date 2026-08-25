@@ -5,9 +5,11 @@ import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
+import { KitchenTicketPreview } from "@/components/kitchen-ticket-preview";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
-import { clearSentPrintJobs } from "@/lib/print-jobs";
+import { clearSentPrintJobs, clearFailedPrintJobs } from "@/lib/print-jobs";
 import {
   loadDeviceConfig,
   loadOrders,
@@ -937,6 +939,13 @@ export function PrintCenter() {
                     type="button"
                   >
                     清除已發送
+                  </button>
+                  <button
+                    className="rounded-full bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-200"
+                    onClick={() => clearFailedPrintJobs()}
+                    type="button"
+                  >
+                    清除已失敗
                   </button>
                 </div>
 
@@ -2109,17 +2118,22 @@ export function PrintCenter() {
                 <div className="text-right text-xs text-slate-500">{formatMacauDateTime(activeJob.createdAt)}</div>
               </div>
 
-              <div className="mt-3 grid gap-3">
-                {(activeJob.items ?? []).map((item, index) => (
-                  <div key={`${item.name}-${index}`} className="border-b border-dashed border-slate-100 pb-3 last:border-b-0 last:pb-0">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="text-sm font-semibold text-slate-900">{item.name}</div>
-                      <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
-                    </div>
-                    {item.specs?.length ? <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div> : null}
-                    {item.note ? <div className="mt-1 text-xs text-slate-500">備註：{item.note}</div> : null}
-                  </div>
-                ))}
+              <div className="mt-3">
+                {activeJob.printerGroup === "receipt" ? (
+                  (() => {
+                    const order = orderMap.get(activeJob.orderId);
+                    if (order) {
+                      return <ReceiptTicketPreview order={order} />;
+                    }
+                    return (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+                        找不到對應訂單（{activeJob.orderId}），無法渲染收據模板。該打印任務可能來自已刪除或尚未載入的訂單。
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <KitchenTicketPreview job={activeJob} />
+                )}
               </div>
             </div>
         </ResponsiveModal>

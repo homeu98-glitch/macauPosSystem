@@ -258,3 +258,17 @@ export function clearSentPrintJobs(): number {
   }
   return removed;
 }
+
+/** 手動「清除已失敗」：移除所有 failed 單（保留 pending / sent）。打印中心按鈕 call。 */
+export function clearFailedPrintJobs(): number {
+  const jobs = loadPrintJobs();
+  const kept = jobs.filter((j) => j.status !== "failed");
+  const removed = jobs.length - kept.length;
+  if (removed > 0) {
+    savePrintJobs(kept);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
+    }
+  }
+  return removed;
+}

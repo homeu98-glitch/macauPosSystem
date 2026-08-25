@@ -99,31 +99,37 @@ function buildDisplayFloors(
   bootstrapTables: PosBootstrap["tables"],
   localFloors: PosLocalSettings["floors"],
 ): PosLocalSettings["floors"] {
-  const floors: PosLocalSettings["floors"] = [];
   const bootstrapIds = new Set(bootstrapTables.map((t) => t.id));
-
-  // 1) 共享真源：bootstrap.tables 按 area 分組成樓層
+  // 統一按 area 名（trim）分組：bootstrap 枱 + 本地獨有枱都併入同一個 floor，
+  // floor id 固定用 `area:<名>`，確保「一個樓層名 = 一個 floor」，唔會重複（如兩個「1樓」）。
   const byArea = new Map<string, PosBootstrap["tables"][number][]>();
-  for (const t of bootstrapTables) {
-    const key = t.area && t.area.trim() ? t.area.trim() : "未分區";
+
+  const addTable = (table: PosBootstrap["tables"][number], area: string | undefined) => {
+    const key = area && area.trim() ? area.trim() : table.area && table.area.trim() ? table.area.trim() : "未分區";
     if (!byArea.has(key)) byArea.set(key, []);
-    byArea.get(key)!.push(t);
-  }
-  for (const [area, tables] of byArea) {
-    floors.push({ id: `area:${area}`, name: area, tables });
-  }
+    byArea.get(key)!.push(table);
+  };
 
-  // 2) overlay：本地獨有枱（唔喺 bootstrap）保留原 local floor
+  // 1) 共享真源：bootstrap.tables 按 area 分組
+  for (const t of bootstrapTables) addTable(t, t.area);
+
+  // 2) overlay：本地獨有枱（唔喺 bootstrap）按 area 併入同層，避免重複樓層名
   for (const lf of localFloors) {
-    const localOnly = lf.tables.filter((t) => !bootstrapIds.has(t.id));
-    if (localOnly.length === 0) continue;
-    const existing = floors.find((f) => f.id === lf.id);
-    if (existing) existing.tables.push(...localOnly);
-    else floors.push({ id: lf.id, name: lf.name, tables: localOnly });
+    for (const t of lf.tables) {
+      if (bootstrapIds.has(t.id)) continue;
+      addTable(t, t.area || lf.name);
+    }
   }
 
-  return floors;
+  return Array.from(byArea.entries()).map(([area, tables]) => ({
+    id: `area:${area}`,
+    name: area,
+    tables,
+  }));
 }
+
+/** 樓層選擇器嘅「全部」特殊值：一掣顯示所有樓層嘅枱。 */
+const ALL_FLOOR_ID = "__all__";
 
 const CART_PAYING_ID = "__cart__";
 const ALL_MENU_CATEGORY_ID = "__all__";
@@ -195,20 +201,17 @@ export function PosApp() {
     }
     loadOrderIntoWorkspace(order, order.tableId);
     setPosMode("order");
-    // 若載入嘅係返結 temp 枱，鎖定佢所屬 floor 方便返枱面時睇到
-    if (order.tableId.startsWith("temp-reopen-")) {
-      const floors = loadPosLocalSettings().floors ?? [];
-      for (const floor of floors) {
-        if (floor.tables.some((table) => table.id === order.tableId)) {
-          setActiveFloorId(floor.id);
-          break;
-        }
-      }
+    // 鎖定枱所屬 floor（普通枱同 temp 返結枱都鎖），方便返枱面時直接見到該枱
+    const targetFloor = floors.find((floor) => floor.tables.some((table) => table.id === order.tableId));
+    if (targetFloor) setActiveFloorId(targetFloor.id);
+    // 用 history.replaceState 清 query，唔用 router.replace —— 否則會觸發 Next 導航令 PosApp 重掛載、
+    // posMode 被重置做初始 "tables" 而彈返枱面介面。
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/");
     }
-    router.replace("/");
     // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, operatingMode, router]);
+  }, [orders, operatingMode]);
 
   // 外部（面板 / 本頁「返結帳」）改完 orders 後，刷新本地 state，令 activeOrder 重算（settled→reopened 後變可編輯）
   useEffect(() => {
@@ -712,11 +715,13 @@ export function PosApp() {
   // activeFloorId 可能係舊嘅本地 floor id（改讀 bootstrap.tables 後 display floor id 變 area:<area>），
   // 若佢已唔存在於 display floors，fallback 去第一個 display floor，避免枱 grid 變空。
   const effectiveFloorId =
-    activeFloorId && floors.some((f) => f.id === activeFloorId) ? activeFloorId : floors[0]?.id ?? "";
-  const visibleTables = useMemo(
-    () => floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [],
-    [effectiveFloorId, floors],
-  );
+    activeFloorId && (activeFloorId === ALL_FLOOR_ID || floors.some((f) => f.id === activeFloorId))
+      ? activeFloorId
+      : floors[0]?.id ?? "";
+  const visibleTables = useMemo(() => {
+    if (effectiveFloorId === ALL_FLOOR_ID) return floors.flatMap((floor) => floor.tables);
+    return floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [];
+  }, [effectiveFloorId, floors]);
 
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
   const openOrders = useMemo(
@@ -2742,20 +2747,30 @@ export function PosApp() {
               </div>
 
               <div className="flex-1 overflow-auto p-4">
-                <div className="mb-4 flex flex-wrap gap-2">
-                  {floors.map((floor) => (
-                    <button
-                      key={floor.id}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                        effectiveFloorId === floor.id ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
-                      }`}
-                      onClick={() => setActiveFloorId(floor.id)}
-                      type="button"
-                    >
-                      {floor.name}
-                    </button>
-                  ))}
-                </div>
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  key={ALL_FLOOR_ID}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    effectiveFloorId === ALL_FLOOR_ID ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+                  }`}
+                  onClick={() => setActiveFloorId(ALL_FLOOR_ID)}
+                  type="button"
+                >
+                  全部
+                </button>
+                {floors.map((floor) => (
+                  <button
+                    key={floor.id}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                      effectiveFloorId === floor.id ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+                    }`}
+                    onClick={() => setActiveFloorId(floor.id)}
+                    type="button"
+                  >
+                    {floor.name}
+                  </button>
+                ))}
+              </div>
 
                 <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
                   {visibleTables.map((table) => {
