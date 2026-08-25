@@ -25,7 +25,15 @@ import {
   updateQuickFulfillmentInStore,
 } from "@/lib/quick-order-fulfillment";
 import { isReopenable, reopenPosOrder } from "@/lib/pos-orders";
-import { loadAuthSession, loadBootstrapCache, loadOrders, loadPosLocalSettings } from "@/lib/storage";
+import {
+  loadAuthSession,
+  loadBootstrapCache,
+  loadOrders,
+  loadPosLocalSettings,
+  loadQueue,
+  saveOrders,
+  saveQueue,
+} from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
@@ -109,6 +117,8 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   const [toast, setToast] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState<string>("");
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
+  const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
 
   function refresh() {
     setOrders(loadOrders().filter(isLocalOrTransferredDineIn));
@@ -138,6 +148,38 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   function handleQuickAction() {
     refresh();
     setToast("已更新訂單狀態");
+  }
+
+  async function handleDeleteAllOrders() {
+    const session = loadAuthSession();
+    const storeId = session?.merchantId;
+    if (!storeId) {
+      setToast("無法取得店舖編號，請重新登入");
+      return;
+    }
+    setDeletingAll(true);
+    try {
+      // 1) DB 先清（store 隔離 + exclude Ledger 線上單），免 backfill 重拉返晒出嚟
+      const res = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(storeId)}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || data.ok === false) {
+        setToast(`刪除失敗：${data.error ?? res.status}`);
+        return;
+      }
+      // 2) 清本地線下單（saveOrders([]) 只掂本店 localStorage）
+      saveOrders([]);
+      // 3) 清 order 相關 sync queue events，免重推落 DB（ORDER_CREATED/UPDATED/ITEM_VOIDED/SETTLED）
+      saveQueue(loadQueue().filter((e) => !(e.type && e.type.startsWith("ORDER_"))));
+      // 4) 廣播畀收銀 / 其他面板（pos-app 監聽 pos-orders-changed）
+      window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+      refresh();
+      setConfirmDeleteAllOpen(false);
+      setToast("已刪除全部線下訂單");
+    } catch {
+      setToast("刪除失敗，請檢查網絡");
+    } finally {
+      setDeletingAll(false);
+    }
   }
 
   async function handleReopen(order: PosOrder) {
@@ -173,7 +215,17 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
+          <button
+            type="button"
+            className="rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            onClick={() => setConfirmDeleteAllOpen(true)}
+            disabled={filteredOrders.length === 0}
+          >
+            刪除全部訂單
+          </button>
+        </div>
         <div className="mt-0.5 text-xs text-slate-500">快餐走製作中 → 待取餐 → 完成；堂食維持送廚結帳流程</div>
         <div className="mt-2 flex flex-wrap gap-1">
           {STATUS_TABS.map((tab) => (
@@ -369,6 +421,41 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
             >
               {reopenSubmitting ? "處理中…" : "返結帳"}
             </button>
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {confirmDeleteAllOpen ? (
+        <ResponsiveModal
+          description="此操作不可復原，會刪除本店全部「店內線下訂單」。"
+          onClose={() => setConfirmDeleteAllOpen(false)}
+          title="刪除全部訂單"
+          widthClassName="max-w-md"
+        >
+          <div className="grid gap-3">
+            <p className="text-xs text-red-700">
+              警告：一經確認即永久刪除本店所有線下訂單（含結帳紀錄），無法復原。
+              其他已開啟嘅收銀 / 點餐終端唔會自動清除，佢哋下次同步時會重新拉取空列表刷新畫面。
+              Ledger 線上訂單（會員餘額相關）唔會受影響。
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                onClick={() => setConfirmDeleteAllOpen(false)}
+                disabled={deletingAll}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                onClick={handleDeleteAllOrders}
+                disabled={deletingAll}
+              >
+                {deletingAll ? "刪除中…" : "確認刪除全部"}
+              </button>
+            </div>
           </div>
         </ResponsiveModal>
       ) : null}

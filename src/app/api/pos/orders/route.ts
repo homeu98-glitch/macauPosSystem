@@ -45,3 +45,32 @@ export async function GET(request: Request) {
       })) ?? [],
   });
 }
+
+export async function DELETE(request: Request) {
+  const supabase = getSupabaseServerClient();
+  const { searchParams } = new URL(request.url);
+  const storeId = searchParams.get("storeId")?.trim() || null;
+
+  if (!storeId) {
+    return NextResponse.json({ ok: false, error: "缺少 storeId" }, { status: 400 });
+  }
+
+  // 無 Supabase（mock 模式）：本地由前端清，DB 無嘢要刪，當成功。
+  if (!supabase) {
+    return NextResponse.json({ ok: true, source: "mock", deleted: 0 });
+  }
+
+  // 只清「店內線下訂單」：online_order_id IS NULL。
+  // exclude Ledger 線上單（online_order_id 唔空）→ 免同會員餘額 / 線上單脫鉤。
+  const { count, error } = await supabase
+    .from("pos_orders")
+    .delete({ count: "exact" })
+    .eq("store_id", storeId)
+    .is("online_order_id", null);
+
+  if (error) {
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, source: "supabase", deleted: count ?? 0, deletedAt: new Date().toISOString() });
+}
