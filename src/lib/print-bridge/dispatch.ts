@@ -89,31 +89,38 @@ async function dispatchOneJob(
   if (!printer) {
     return { ok: false, error: `搵唔到對應打印機（printerGroup=${job.printerGroup}）` };
   }
+  const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+  const storeName = loadBootstrapCache()?.storeName;
+  // 每次打單打印份數：未設定 / ≤1 / 非正整數 → 1 份（見 docs/54）
+  const copies = Math.max(1, Math.floor(printer.copies ?? 1));
+
   // 1) Native bridge（Android APK WebView）：native 側自己決定 LAN 直打 or relay
   if (isNativeBridgeAvailable()) {
-    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
-    const storeName = loadBootstrapCache()?.storeName;
-    return dispatchJobToNative(job, { printer, kind, storeName });
+    for (let i = 0; i < copies; i++) {
+      const res = await dispatchJobToNative(job, { printer, kind, storeName });
+      if (!res.ok) return res;
+    }
+    return { ok: true };
   }
   // 2) 桌面 Companion（localhost HTTP）：瀏覽器開嘅 POS 喺桌面（Windows/macOS/Linux）
   //    經 localhost agent 打到 LAN:9100 / USB / BT，由 OS 權限出單（見 docs/47 / companion-transport.ts）。
   //    唔需要 printer.ipAddress（USB/BT 機經標識符），所以唔做 IP 閘門。
   const companion = getCompanionTransport();
   if (companion) {
-    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
-    const storeName = loadBootstrapCache()?.storeName;
-    const res = await companion.send(job, printer, { kind, storeName });
-    if (res.ok) return { ok: true };
-    return { ok: false, error: res.error || "companion 打印失敗" };
+    for (let i = 0; i < copies; i++) {
+      const res = await companion.send(job, printer, { kind, storeName });
+      if (!res.ok) return { ok: false, error: res.error || "companion 打印失敗" };
+    }
+    return { ok: true };
   }
   // 3) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
   const relay = getRelayTransport();
   if (relay) {
-    const kind = printer.role === "receipt" ? "receipt" : "kitchen";
-    const storeName = loadBootstrapCache()?.storeName;
-    const res = await relay.send(job, printer, { kind, storeName });
-    if (res.ok) return { ok: true };
-    return { ok: false, error: res.error || "relay 打印失敗" };
+    for (let i = 0; i < copies; i++) {
+      const res = await relay.send(job, printer, { kind, storeName });
+      if (!res.ok) return { ok: false, error: res.error || "relay 打印失敗" };
+    }
+    return { ok: true };
   }
   return { ok: false, error: "無可用打印通道（native / companion / relay 都無）" };
 }

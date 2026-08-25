@@ -2843,7 +2843,9 @@ export function PosApp() {
                     const status = tableOrderMap.get(table.id)?.status ?? "idle";
                     const isReopenedTable = status === "reopened";
                     const isOccupied = status !== "idle";
-                    const seated = seatedPartySizes[table.id];
+                    const seatedCount = seatedPartySizes[table.id] ?? 0;
+                    const total = table.capacity ?? 0;
+                    const occupancy = total > 0 ? `${seatedCount}/${total}` : `${seatedCount}/—`;
                     const label =
                       isReopenedTable
                         ? "待重結"
@@ -2852,7 +2854,7 @@ export function PosApp() {
                           : status === "draft"
                             ? "未下單"
                             : "空閒";
-                    const labelFull = seated ? `${label} · ${seated}人` : label;
+                    const labelFull = label;
                     // 開桌（非空閒）枱：整張格子實底高對比配色，方便一眼分開「有單」vs「空閒」
                     // —— 待重結用琥珀、已下單/未下單用橙；空閒維持白底。
                     const cardTone = isReopenedTable
@@ -2876,10 +2878,14 @@ export function PosApp() {
                         </div>
                         <div className={`mt-2 text-xs ${areaTone}`}>
                           {table.area}
-                          {table.capacity ? ` · ${table.capacity} 座位` : ""}
                         </div>
                         <div
-                          className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${badgeTone}`}
+                          className={`mt-1 text-xs font-semibold ${isOccupied ? "text-white/90" : "text-slate-700"}`}
+                        >
+                          已坐 {occupancy}
+                        </div>
+                        <div
+                          className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${badgeTone}`}
                         >
                           {labelFull}
                         </div>

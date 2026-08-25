@@ -464,6 +464,8 @@ export function DeviceSettings() {
     if (testingPrinterId) return;
     setTestingPrinterId(printer.id);
 
+    const copies = Math.max(1, Math.floor(printer.copies ?? 1));
+
     const testJob: PrintJob = {
       id: uid("print"),
       orderId: "",
@@ -487,12 +489,19 @@ export function DeviceSettings() {
       // 1) Native Print Agent（Sunmi APK WebView）優先：經 PosNative 觸發 APK renderTestPage
       if (isNativeBridgeAvailable()) {
         const storeName = loadBootstrapCache()?.storeName;
-        const res = await dispatchJobToNative(testJob, { printer, kind: "test", storeName });
-        if (res.ok) {
-          setStatus(`已透過 Native Print Agent 送出 ${printer.name} 測試打印。`);
-        } else {
-          setStatus(res.error || `未能送出 ${printer.name} 測試打印。`);
+        let lastErr = "";
+        for (let i = 0; i < copies; i++) {
+          const res = await dispatchJobToNative(testJob, { printer, kind: "test", storeName });
+          if (!res.ok) {
+            lastErr = res.error || `未能送出 ${printer.name} 測試打印。`;
+            break;
+          }
         }
+        setStatus(
+          lastErr
+            ? lastErr
+            : `已透過 Native Print Agent 送出 ${printer.name} 測試打印（${copies} 份）。`,
+        );
         return;
       }
 
@@ -515,8 +524,19 @@ export function DeviceSettings() {
           status: "pending",
           createdAt: new Date().toISOString(),
         };
-        const r = await sendJobToCompanion(testJob, printer);
-        setStatus(r.ok ? `已透過 Companion 送出 ${printer.name} 測試打印。` : `Companion 測試打印失敗：${r.error ?? ""}`);
+        let lastErr = "";
+        for (let i = 0; i < copies; i++) {
+          const r = await sendJobToCompanion(testJob, printer);
+          if (!r.ok) {
+            lastErr = r.error ?? "";
+            break;
+          }
+        }
+        setStatus(
+          lastErr
+            ? `Companion 測試打印失敗：${lastErr}`
+            : `已透過 Companion 送出 ${printer.name} 測試打印（${copies} 份）。`,
+        );
         return;
       }
       setStatus("未配對 Companion 代理（請確認桌面 Companion 已啟動）。");
@@ -984,6 +1004,20 @@ export function DeviceSettings() {
                             <option value="big5">Big5</option>
                             <option value="utf-8">UTF-8</option>
                           </select>
+                        </label>
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                          <span className="text-xs text-slate-500">每次打單打印張數</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={9}
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) =>
+                              updatePrinter(printer.id, { copies: Number(event.target.value) || 1 })
+                            }
+                            placeholder="1"
+                            value={printer.copies ?? ""}
+                          />
                         </label>
                       </div>
 

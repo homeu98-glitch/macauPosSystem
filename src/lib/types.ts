@@ -185,6 +185,8 @@ export interface DevicePrinterConfig {
   usbProductId?: string;
   /** 藍牙打印機名稱 / 配對位址 */
   bluetoothName?: string;
+  /** 每次打單打印份數（1–9）；未設定或 ≤1 視為 1 份 */
+  copies?: number;
   /** true = 由 Companion 自動偵測加入（唔經手動輸入 VID/PID） */
   autoDetected?: boolean;
   // ── USB 連接（connectionType === "usb" 時使用）──
