@@ -1,6 +1,6 @@
 # 37 · 收銀端 printJobs backfill 靜默清單 / 重印 根因調查與處理計劃
 
-> 狀態：**✅ 已實施（2026-08-25 下午）** — P0 / P1 全數完成，`tsc --noEmit` 零新 error（僅 layout.tsx 已知 LayoutProps 誤報）
+> 狀態：**✅ P0–P3 全數完成（2026-08-25）** — `tsc --noEmit` 零新 error（僅 layout.tsx 已知 LayoutProps 誤報）；print job merge 回歸測試 4/4 pass
 > 範圍：餐飲收銀 `src/components/pos-app.tsx` 的 `loadRuntimeState` backfill 機制
 > 觸發：用戶要求「鎖定一項問題 → 深挖根因 → 梳理所有相關問題 → 出完整計劃，確認前不動手」→ 用家 confirm 後開工
 
@@ -138,4 +138,33 @@ const printJobsQuery = supabase
 
 ### 已知 follow-up（非今次範圍，待排期）
 - `pos_queue_events` 表**無 `store_id` 欄**，所以 `queue` backfill 仍會拉到跨店 queue 事件（本地優先 + 去重已避免本地事件被覆寫，但 `queue` state 仍含其他店 synced 事件）。要徹底解決需 DB schema 加 `store_id` + sync route 寫入 + state route 過濾，屬 schema 變更，另開 task。
-- P2-6 自動化回歸測試：repo 現無 test runner，改以手動驗證（離線開 N 單→重連→斷言 `printJobs` 不減、無重印、無別店單）。
+
+## 8. P2 / P3 實施記錄（2026-08-25，續 P0/P1 之後）
+
+用家 push P0/P1 成功後，續做 P2 / P3：
+
+### P2-5 狀態主權（契約落實，已透過 P0 代碼強制）
+- `server pos_print_jobs` = 存在性真源；`localStorage` = 派發狀態（sent/failed）真源。
+- 已由 P0-1（`printJobs` merge 留本地 sent/failed）+ `onPrintJobUpsert` 留本地版本 強制落實；`loadRuntimeState` / `persistPrintJobs` 都唔會用後台 `pending` 覆寫本地 `sent`。
+
+### P2-6 回歸測試（已加，4/4 pass）
+- 抽出純函式 `mergePrintJobs(local, incoming)` → `src/lib/pos/print-job-merge.ts`，`persistPrintJobs` 改用佢（DRY，行為不變）。
+- 加 `src/lib/pos/print-job-merge.test.ts`，用 Node built-in `node:test`（**唔引入新依賴**，合乎「不引入新依賴」約定）。
+- 指令：`node --experimental-strip-types --test src/lib/pos/print-job-merge.test.ts`（Node 22 需 `--experimental-strip-types`；Node 23.6+ 預設開啟）。
+- 覆蓋 4 個不變量：本地 sent 唔被 pending 覆寫（防重印）/ 本地有 server 冇→保留（離線新單唔清走）/ server 有本地冇→補入（跨終端見單）/ 離線→重連模擬（3 張離線新單 + 舊單 → 唔減唔重印唔漏）。
+- `tsconfig.json` 加 `allowImportingTsExtensions: true`（已有 `noEmit: true`，條件滿足），令 `.ts` 測試 import 過 tsc，`next build` 唔會喪。
+
+### P3 salon parity（核查結論：唔使改）
+- `src/app/api/salon/state/route.ts:166` 嘅 `salon_print_jobs` 查詢本來就過濾 `store_id`。
+- salon 客戶端（`src/components/salon`、`src/lib/salon`）無 `loadRuntimeState` / 無 `printJobs` backfill 硬覆寫（用 idb mirror + sync-queue），架構不同，不受此 bug 影響。
+- **P3 無代碼改動。**
+
+### P0–P3 總結
+| 階段 | 項 | 狀態 |
+|------|----|------|
+| P0 | printJobs merge / onResubscribed guard / onPrintJobUpsert 留本地 | ✅ |
+| P1 | state route store_id 過濾 / queue merge | ✅ |
+| P2 | 狀態主權落實 + 回歸測試 | ✅ |
+| P3 | salon parity 核查（無改動） | ✅ |
+
+剩餘唯一 follow-up：`pos_queue_events` 缺 `store_id`（跨店 queue 污染，schema 變更，另排）。

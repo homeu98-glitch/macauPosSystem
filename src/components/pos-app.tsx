@@ -15,6 +15,7 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
+import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { buildReceiptPrintJobs } from "@/lib/print-jobs";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -991,19 +992,8 @@ export function PosApp() {
     // 以 localStorage 為真源合併，保留已派發（sent / failed）狀態。
     // 否則 stale React state（flush worker 改咗 localStorage 但冇 update state）會將已打印嘅
     // job 復活成 pending，下一次 flush 又印一次 → 無限重複打印同一張單（見 2026-08-25 修復）。
-    const stored = loadPrintJobs();
-    const storedById = new Map(stored.map((j) => [j.id, j]));
-    const merged: PrintJob[] = [];
-    const seen = new Set<string>();
-    for (const j of nextPrintJobs) {
-      seen.add(j.id);
-      // 已存在嘅 job 用 stored 版本（保留 sent/failed 狀態），唔用 stale state 嘅 pending
-      merged.push(storedById.get(j.id) ?? j);
-    }
-    // stored 入面、incoming 冇涵蓋嘅 job（例如其他 component 建立 / flush 改過狀態）原樣保留
-    for (const j of stored) {
-      if (!seen.has(j.id)) merged.push(j);
-    }
+    // 合併邏輯抽出做純函式 mergePrintJobs（src/lib/pos/print-job-merge.ts），backfill 同處重用。
+    const merged = mergePrintJobs(loadPrintJobs(), nextPrintJobs);
     setPrintJobs(merged);
     savePrintJobs(merged);
   }
