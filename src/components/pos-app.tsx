@@ -62,7 +62,7 @@ import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
-import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
@@ -100,18 +100,28 @@ function buildDisplayFloors(
   localFloors: PosLocalSettings["floors"],
 ): PosLocalSettings["floors"] {
   const bootstrapIds = new Set(bootstrapTables.map((t) => t.id));
+  // 本地枱按 id 建索引：枱嘅 name / area / capacity 等以 localSettings 為準（per-terminal 編輯真源），
+  // bootstrap.tables 只負責補「枱 ID 存在性」呢層（kiosk / 掃碼落單共享真源），唔再話事 area。
+  const localTableById = new Map<string, StoreTable>();
+  for (const lf of localFloors) {
+    for (const t of lf.tables) localTableById.set(t.id, t);
+  }
+
   // 統一按 area 名（trim）分組：bootstrap 枱 + 本地獨有枱都併入同一個 floor，
   // floor id 固定用 `area:<名>`，確保「一個樓層名 = 一個 floor」，唔會重複（如兩個「1樓」）。
-  const byArea = new Map<string, PosBootstrap["tables"][number][]>();
+  const byArea = new Map<string, StoreTable[]>();
 
-  const addTable = (table: PosBootstrap["tables"][number], area: string | undefined) => {
+  const addTable = (table: StoreTable, area: string | undefined) => {
     const key = area && area.trim() ? area.trim() : table.area && table.area.trim() ? table.area.trim() : "未分區";
     if (!byArea.has(key)) byArea.set(key, []);
     byArea.get(key)!.push(table);
   };
 
-  // 1) 共享真源：bootstrap.tables 按 area 分組
-  for (const t of bootstrapTables) addTable(t, t.area);
+  // 1) 共享真源：bootstrap.tables 提供枱 ID；有對應本地枱就用本地版本（area 以本地編輯為準）
+  for (const t of bootstrapTables) {
+    const local = localTableById.get(t.id) ?? t;
+    addTable(local, local.area);
+  }
 
   // 2) overlay：本地獨有枱（唔喺 bootstrap）按 area 併入同層，避免重複樓層名
   for (const lf of localFloors) {
@@ -494,9 +504,19 @@ export function PosApp() {
         const response = await fetch(bootstrapUrl);
         const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
         const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
-        saveBootstrapCache(data);
-        setBootstrap(data);
-        setActiveTableId((current) => current || data.tables[0]?.id || "");
+        // merge：本地 cache 優先（枱 area / name 等 per-terminal 編輯唔應該被 server 舊數據覆蓋）；
+        // server 獨有枱（其他 terminal / kiosk 新加）保留；本地獨有枱亦保留。
+        // 咁 server bootstrap 每次啟動載到最新之餘，唔會清走本地嘅枱樓層編輯。
+        const localCache = loadBootstrapCache();
+        const localTableMap = new Map((localCache?.tables ?? []).map((t) => [t.id, t]));
+        const mergedTables: StoreTable[] = data.tables.map((st) => localTableMap.get(st.id) ?? st);
+        for (const lt of localCache?.tables ?? []) {
+          if (!mergedTables.some((t) => t.id === lt.id)) mergedTables.push(lt);
+        }
+        const merged: PosBootstrap = { ...data, tables: mergedTables };
+        saveBootstrapCache(merged);
+        setBootstrap(merged);
+        setActiveTableId((current) => current || merged.tables[0]?.id || "");
       } catch {
         if (!initialHasBootstrapRef.current) {
           setToast({ tone: "info", message: "未能連到設定來源，請稍後再試。" });
@@ -2776,6 +2796,7 @@ export function PosApp() {
                   {visibleTables.map((table) => {
                     const status = tableOrderMap.get(table.id)?.status ?? "idle";
                     const isReopenedTable = status === "reopened";
+                    const isOccupied = status !== "idle";
                     const seated = seatedPartySizes[table.id];
                     const label =
                       isReopenedTable
@@ -2786,24 +2807,33 @@ export function PosApp() {
                             ? "未下單"
                             : "空閒";
                     const labelFull = seated ? `${label} · ${seated}人` : label;
+                    // 開桌（非空閒）枱：整張格子實底高對比配色，方便一眼分開「有單」vs「空閒」
+                    // —— 待重結用琥珀、已下單/未下單用橙；空閒維持白底。
+                    const cardTone = isReopenedTable
+                      ? "border-amber-600 bg-amber-500 text-white"
+                      : isOccupied
+                        ? "border-orange-600 bg-orange-500 text-white"
+                        : "border-slate-200 bg-white text-slate-900";
+                    const areaTone = isOccupied ? "text-white/85" : "text-slate-500";
+                    const badgeTone = isOccupied ? "bg-white/25 text-white" : "bg-orange-50 text-orange-700";
                     return (
                       <button
                         key={table.id}
-                        className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300"
+                        className={`rounded-2xl border p-4 text-left shadow-sm transition-colors ${cardTone} ${
+                          isOccupied ? "" : "hover:border-orange-300"
+                        }`}
                         onClick={() => selectTable(table.id)}
                         type="button"
                       >
-                        <div className="text-base font-semibold text-slate-900">
+                        <div className="text-base font-semibold text-inherit">
                           {table.name}
                         </div>
-                        <div className="mt-2 text-xs text-slate-500">
+                        <div className={`mt-2 text-xs ${areaTone}`}>
                           {table.area}
                           {table.capacity ? ` · ${table.capacity} 座位` : ""}
                         </div>
                         <div
-                          className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                            isReopenedTable ? "bg-amber-100 text-amber-700" : "bg-orange-50 text-orange-700"
-                          }`}
+                          className={`mt-4 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${badgeTone}`}
                         >
                           {labelFull}
                         </div>

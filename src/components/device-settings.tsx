@@ -20,7 +20,7 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { fetchLedgerOrderMenu, LedgerOrderMenu } from "@/lib/ledger/menu";
 import {
@@ -126,7 +126,7 @@ export function DeviceSettings() {
     void tryAutoPairCompanion();
   }, []);
 
-  function saveTablesLocal() {
+  async function saveTablesLocal() {
     // 同步「樓層與桌台」嘅枱去 bootstrap.tables（掃碼區 QR / 手機 / kiosk 讀嘅共享真源），
     // 唔好只留喺 localSettings.floors。用 merge（本地枱優先、bootstrap 獨有枱保留），
     // 避免覆蓋式寫入誤刪 DB 已有嘅枱（例如舊 store 嘅枱只喺 bootstrap.tables）。
@@ -134,15 +134,33 @@ export function DeviceSettings() {
     const localIds = new Set(localTables.map((t) => t.id));
     const cached = loadBootstrapCache();
     if (cached) {
-      const mergedTables = [
-        ...localTables,
-        ...cached.tables.filter((t) => !localIds.has(t.id)),
-      ];
-      saveBootstrapCache({ ...cached, tables: mergedTables });
+      const mergedTables = [...localTables, ...cached.tables.filter((t) => !localIds.has(t.id))];
+      const mergedBootstrap: PosBootstrap = { ...cached, tables: mergedTables };
+      saveBootstrapCache(mergedBootstrap);
       setMenuDraft((current) => (current ? { ...current, tables: mergedTables } : current));
+      // 推去 server bootstrap（pos_bootstrap_config）：確保每次啟動 fetch 到最新枱樓層，唔會永遠舊版；
+      // kiosk / 掃碼落單讀 server bootstrap 亦見到正確樓層。離線就本地先存，下次有網再 push。
+      try {
+        await fetch("/api/pos/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId: mergedBootstrap.storeId,
+            storeName: mergedBootstrap.storeName,
+            currency: mergedBootstrap.currency,
+            categories: mergedBootstrap.categories,
+            menuItems: mergedBootstrap.menuItems,
+            tables: mergedTables,
+            rules: mergedBootstrap.rules,
+            printerGroups: mergedBootstrap.printerGroups,
+          }),
+        });
+      } catch {
+        // 離線：本地已存，bootstrapApp 嘅 merge 會保留本地編輯直到下次成功 push
+      }
     }
     savePosLocalSettings(localSettings);
-    setStatus("已保存樓層與桌台，並同步至掃碼區與後台草稿（按「保存菜單」推去手機 / kiosk）。");
+    setStatus("已保存樓層與桌台，並同步至掃碼區與後台（啟動時自動載入最新版本）。");
   }
 
   async function beginLedgerMenuImport() {
