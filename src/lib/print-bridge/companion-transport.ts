@@ -33,6 +33,11 @@ export class CompanionTransport implements PrintTransport {
   }
 
   async send(job: PrintJob, printer: DevicePrinterConfig, opts: PrintSendOptions): Promise<PrintSendResult> {
+    // A2（docs/56）：Companion URL 若係黑洞地址，冇 timeout 嘅 fetch 會長期唔返 →
+    // dispatch.ts 嘅 isFlushing 鎖永遠 true → 整個 flush worker 癱瘓、所有 job 永久卡 pending。
+    // 加 5s AbortController，超時當失敗，唔會拖垮後續 flush。
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5000);
     try {
       const res = await fetch(`${this.cfg.baseUrl}/api/print`, {
         method: "POST",
@@ -48,6 +53,7 @@ export class CompanionTransport implements PrintTransport {
           paymentMethod: opts.paymentMethod ?? "",
           total: opts.total ?? null,
         }),
+        signal: controller.signal,
       });
       const data = (await res.json()) as { ok?: boolean; queued?: boolean; error?: string };
       if (data && (data.ok === true || data.queued === true)) {
@@ -55,7 +61,14 @@ export class CompanionTransport implements PrintTransport {
       }
       return { ok: false, ticketId: job.id, error: data?.error || `companion HTTP ${res.status}` };
     } catch (e) {
-      return { ok: false, ticketId: job.id, error: e instanceof Error ? e.message : "companion fetch failed" };
+      const aborted = e instanceof DOMException && e.name === "AbortError";
+      return {
+        ok: false,
+        ticketId: job.id,
+        error: aborted ? "companion 逾時（5s 無回應），請檢查桌面代理是否開啟" : e instanceof Error ? e.message : "companion fetch failed",
+      };
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 }

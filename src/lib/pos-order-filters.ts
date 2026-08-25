@@ -25,14 +25,26 @@ export function orderTimestamp(order: PosOrder): number {
   return Date.parse(order.updatedAt || order.createdAt || "") || 0;
 }
 
-/** 合併多份訂單列表，同 id 保留 updatedAt 較新者（防止雲端拉取覆蓋本機剛寫入的單） */
+/**
+ * 合併多份訂單列表，同 id 保留 updatedAt 較新者（防止雲端拉取覆蓋本機剛寫入的單）。
+ *
+ * B4（docs/56）：`localOrderNo` 係單號嘅本地真源（下單嗰陣由 server 序號或本地每日序號 stamped）。
+ * realtime / backfill 合併時，若 server 版嘅 `localOrderNo` 同本機版唔同（例如 server 用緊
+ * `row.id` fallback、本機用緊真正序號），唔可以讓 server 版覆寫本機版，否則 UI 同打印單會對唔上
+ * （見「訂單8 vs 訂單84」bug）。所以當以 server 版取代本機版時，優先保留本機 `localOrderNo`。
+ */
 export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
   const byId = new Map<string, PosOrder>();
   for (const list of sources) {
     for (const order of list) {
       const existing = byId.get(order.id);
       if (!existing || orderTimestamp(order) >= orderTimestamp(existing)) {
-        byId.set(order.id, order);
+        // 以 server 版（較新）取代本機版時，保留本機 localOrderNo（B4）。
+        const merged =
+          existing && existing.localOrderNo && existing.localOrderNo !== order.localOrderNo
+            ? { ...order, localOrderNo: existing.localOrderNo }
+            : order;
+        byId.set(order.id, merged);
       }
     }
   }

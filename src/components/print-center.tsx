@@ -9,6 +9,9 @@ import { ReceiptTicketPreview, ReceiptItemLine } from "@/components/receipt-tick
 import { KitchenTicketPreview } from "@/components/kitchen-ticket-preview";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
+import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
+import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
+import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { clearSentPrintJobs, clearFailedPrintJobs } from "@/lib/print-jobs";
 import {
   loadDeviceConfig,
@@ -150,6 +153,8 @@ export function PrintCenter() {
   const [orders] = useState<PosOrder[]>(() => loadOrders());
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
+  // A1（docs/56）：打印通道健康自檢。三通道皆無 → 所有單據只排佇列唔出紙，出 banner 提示。
+  const hasChannel = isNativeBridgeAvailable() || isCompanionConfigured() || isRelayConfigured();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "sent" | "failed">("all");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -832,24 +837,27 @@ export function PrintCenter() {
     const deviceConfig = loadDeviceConfig() ?? defaultDeviceConfig;
     const enabledPrinters = deviceConfig.printers.filter((printer) => printer.enabled);
     const timestamp = new Date().toISOString();
+    // B2/B3（docs/56）：重打前由 localStorage re-fetch 最新 order 取本地真值 localOrderNo，
+    // 唔好直接讀 in-memory order（state 同 localStorage 唔同步會印錯號，見 8/84 bug）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === order.id) ?? order;
 
     const nextPrintJobs = enabledPrinters
       .filter(
         (printer) =>
           (printer.role === "zone" || printer.role === "label") &&
-          order.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
+          authoritativeOrder.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
       )
       .map<PrintJob>((printer) => ({
         id: uid("print"),
-        orderId: order.id,
-        orderNo: `${order.localOrderNo} (重打)`,
-        tableName: order.tableName,
+        orderId: authoritativeOrder.id,
+        orderNo: `${authoritativeOrder.localOrderNo} (重打)`,
+        tableName: authoritativeOrder.tableName,
         ticketType: "normal",
         printerGroup: printer.zoneId ?? "",
         printerId: printer.id,
         printerName: printer.name,
         items: [
-          ...order.items
+          ...authoritativeOrder.items
             .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
             .map((item) => ({
               name: item.name,
@@ -857,13 +865,13 @@ export function PrintCenter() {
               specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
               note: item.note,
             })),
-          ...(order.orderNote
+          ...(authoritativeOrder.orderNote
             ? [
                 {
                   name: "全單備註",
                   quantity: 1,
                   specs: [],
-                  note: order.orderNote,
+                  note: authoritativeOrder.orderNote,
                 },
               ]
             : []),
@@ -873,7 +881,14 @@ export function PrintCenter() {
       }));
 
     if (nextPrintJobs.length === 0) {
-      setToast({ tone: "error", message: "沒有可打印的內容。" });
+      // A3（docs/56）：診斷點解 0 張單 → 冇 zone/label 機 vs 分區對唔中。
+      const hasZonePrinter = enabledPrinters.some((p) => p.role === "zone" || p.role === "label");
+      setToast({
+        tone: "error",
+        message: hasZonePrinter
+          ? "菜品分區對唔中打印機，重打單不會打印，請檢查設備設置嘅打印機分區。"
+          : "未配置廚房（分區/標籤）打印機，重打單唔會打印，請到設備設置添加。",
+      });
       setReprintingOrderId(null);
       return;
     }
@@ -923,6 +938,12 @@ export function PrintCenter() {
               </div>
             </div>
           </div>
+
+          {!hasChannel && (
+            <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+              ⚠️ 未配置打印通道：Android 裝置需要 PosNative（APK），桌面瀏覽器請到「設備設置」配對桌面 Companion 代理（Companion URL），或設定雲端打印備援（relay）。未配置前所有單據只會排入佇列、唔會實際出紙。
+            </div>
+          )}
 
           <div className="flex-1 overflow-auto p-4">
             {activeTab === "records" ? (

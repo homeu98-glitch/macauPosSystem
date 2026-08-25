@@ -36,6 +36,7 @@ import {
   loadClearedPrintJobIds,
   loadDeletedOrderIds,
   addDeletedOrderIds,
+  nextLocalDailyOrderNo,
   saveBootstrapCache,
   saveDeviceConfig,
   saveOrders,
@@ -70,7 +71,7 @@ import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLoca
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
-  tone: "info" | "success";
+  tone: "info" | "success" | "warning" | "error";
   message: string;
 };
 
@@ -1125,13 +1126,11 @@ export function PosApp() {
     const baseTotals = orderTotals(cartItems, bootstrap);
     const existingOrder = resolveExistingOrderForUpsert(options);
 
-    const fallbackNo = isQuickMode
-      ? quickOrderType === "pickup"
-        ? `自取${new Date().getTime().toString().slice(-2)}`
-        : quickOrderType === "delivery"
-          ? `外賣${new Date().getTime().toString().slice(-2)}`
-          : `堂食${new Date().getTime().toString().slice(-2)}`
-      : `訂單${new Date().getTime().toString().slice(-2)}`;
+    const sequenceKind = isQuickMode ? quickTypeKind() : "pos";
+    const sequencePrefix = isQuickMode ? quickTypeTableName() : "訂單";
+    // B1（docs/56）：fallback 唔再用隨機時戳末兩位（會出「訂單84」呢類非順序號），
+    // 改用本地按 日期+kind 遞增嘅每日序號，保證 fallback 都單調易讀、同 server 序號對齊。
+    const fallbackNo = nextLocalDailyOrderNo(sequenceKind, sequencePrefix);
 
     const order: PosOrder = existingOrder
       ? {
@@ -1501,6 +1500,10 @@ export function PosApp() {
     setBaseOrderItems(nextBaseItems);
     setVoidedItems(nextVoided);
 
+    // B2/B3（docs/56）：建印 job 前由 localStorage re-fetch 最新 order，取本地真值 localOrderNo，
+    // 唔好直接讀 in-memory activeOrder（state 同 localStorage 唔同步會印錯號，見 8/84 bug）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === activeOrder.id) ?? activeOrder;
+
     const voidEvent: QueueEvent = {
       id: uid("evt"),
       type: "ORDER_ITEM_VOIDED",
@@ -1528,8 +1531,8 @@ export function PosApp() {
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: activeOrder.id,
-        orderNo: activeOrder.localOrderNo,
-        tableName: activeOrder.tableName,
+        orderNo: authoritativeOrder.localOrderNo,
+        tableName: authoritativeOrder.tableName,
         ticketType: "void",
         printerGroup: printer.zoneId ?? target.printerGroup,
         printerId: printer.id,
@@ -1547,6 +1550,10 @@ export function PosApp() {
       }));
 
     persistPrintJobs([...voidPrintJobs, ...printJobs]);
+    // A3（docs/56）：有啟用打印機但退菜 0 張 job 入隊 → 廚房退菜單唔會打印，提示用家。
+    const voidPrinted = voidPrintJobs.length > 0;
+    const voidConfiguredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
+    const voidHasZonePrinter = voidConfiguredPrinters.some((p) => p.role === "zone" || p.role === "label");
     const voidPrintEvents = voidPrintJobs.map<QueueEvent>((printJob) => ({
       id: uid("evt"),
       type: "PRINT_JOB_CREATED",
@@ -1558,8 +1565,12 @@ export function PosApp() {
 
     pushEvents([voidEvent, ...voidPrintEvents]);
     setToast({
-      tone: "success",
-      message: mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`,
+      tone: voidPrinted ? "success" : "warning",
+      message: voidPrinted
+        ? mode === "one"
+          ? `已退 1 份 ${target.name}`
+          : `已退掉 ${target.name}`
+        : `${mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`}，但廚房退菜單未打印（${voidHasZonePrinter ? "菜品分區對唔中打印機" : "未配置分區打印機"}）`,
     });
   }
 
@@ -2005,6 +2016,7 @@ export function PosApp() {
     try {
       const timestamp = new Date().toISOString();
       let nextOrderNo: string | undefined;
+      let sequenceFetchFailed = false;
       const counterHasOpenOrder =
         !options?.forceNewOrder &&
         (activeOrderId
@@ -2029,7 +2041,8 @@ export function PosApp() {
           const payload = (await response.json()) as { display?: string };
           nextOrderNo = payload.display;
         } catch {
-          // fallback
+          // 連線失敗 → nextOrderNo 保持 undefined，upsertCurrentOrder 會用本地每日序號 fallback
+          sequenceFetchFailed = true;
         }
       }
 
@@ -2037,6 +2050,14 @@ export function PosApp() {
         forceNewOrder: options?.forceNewOrder,
       });
       if (!order) return null;
+
+      // B1（docs/56）：連網取得店內序號失敗，落咗本地序號，提示用家連網後會對齊。
+      if (sequenceFetchFailed && !nextOrderNo && !options?.silent) {
+        setToast({
+          tone: "warning",
+          message: "單號使用本地序號（連線取得店內序號失敗），連網後會自動對齊。",
+        });
+      }
 
       const baseMap = new Map<string, number>();
       for (const row of baseOrderItems) {
@@ -2103,6 +2124,18 @@ export function PosApp() {
       }));
 
       persistPrintJobs([...nextPrintJobs, ...printJobs]);
+
+      // A3（docs/56）：有啟用打印機但呢張單 0 張 job 入隊 → 單據唔會打印，彈警告提示。
+      // 兩種成因：① 冇任何 zone/label 打印機；② 菜品 printerGroup 對唔中任何 printer.zoneId。
+      if (nextPrintJobs.length === 0 && !options?.silent) {
+        const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
+        setToast({
+          tone: "warning",
+          message: hasZonePrinter
+            ? "菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。"
+            : "未配置廚房（分區/標籤）打印機，落單唔會打印，請到設備設置添加。",
+        });
+      }
 
     const orderEvent: QueueEvent = {
       id: uid("evt"),
@@ -2304,6 +2337,9 @@ export function PosApp() {
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    // B2/B3（docs/56）：建退款印 job 前由 localStorage re-fetch 最新 order 取本地真值 localOrderNo，
+    // 唔好直接用 in-memory targetOrder（見 8/84 bug）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === orderId) ?? updatedOrder;
     removeReopenTempTable(orderId);
     const refundEvent: QueueEvent = {
       id: uid("evt"),
@@ -2319,7 +2355,7 @@ export function PosApp() {
       createdAt: updatedAt,
     };
     const refundPrintJobs = buildRefundReceiptJobs(
-      updatedOrder,
+      authoritativeOrder,
       remainingAmount,
       updatedOrder.refundedReason ?? "未填寫原因",
       updatedAt,
@@ -2419,8 +2455,10 @@ export function PosApp() {
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedAt,
     };
+    // B2/B3（docs/56）：partial refund 同樣 re-fetch 本地真值 localOrderNo。
+    const partialAuthoritativeOrder = loadOrders().find((row) => row.id === orderId) ?? updatedOrder;
     const refundPrintJobs = buildRefundReceiptJobs(
-      updatedOrder,
+      partialAuthoritativeOrder,
       refundAmount,
       reason || "未填寫原因",
       updatedAt,

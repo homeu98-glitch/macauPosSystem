@@ -43,6 +43,9 @@ const STORE_SUFFIX = {
   // tombstone：本機已主動清除 / 刪除嘅記錄 id，backfill 唔可以將伺服器行復活佢哋（見 docs/52）
   clearedPrintJobIds: "cleared-print-jobs",
   deletedOrderIds: "deleted-orders",
+  // 本地每日序號（offline / sequence API 失敗嗰陣做 fallback，取代隨機時戳）：
+  // 按 日期+kind 各自遞增，保證 fallback 單號單調、不重複、易讀（見 docs/56）。
+  localDailySeq: "local-daily-seq",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -701,4 +704,34 @@ export function loadQuickCompletedMinutes() {
 
 export function saveQuickCompletedMinutes(minutes: number) {
   writeStoreJson(STORE_SUFFIX.quickCompletedMinutes, Math.floor(minutes));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 本地每日序號（docs/56 · B1）
+//
+// offline / /api/pos/sequence 失敗嗰陣做 fallback 單號，取代原本 `訂單${時戳末兩位}`
+// 嘅隨機數（會出「訂單84」呢類非順序、易撞嘅號）。按 日期+kind 各自遞增，
+// 保證 fallback 都係單調、不重複、易讀，連網後同 server 同日序號對齊語意一致。
+// ──────────────────────────────────────────────────────────────────────────
+
+type LocalDailySeqState = Record<string, number>; // key = `${bizDate}:${kind}` → 已用到嘅最大序號
+
+function pad2Seq(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/**
+ * 取下一個本地每日序號並寫回 localStorage。
+ * @param kind  同 /api/pos/sequence 嘅 kind（pos / pickup / delivery / counter）
+ * @param prefix 單號抬頭（訂單 / 自取 / 外賣 / 堂食），由 caller 按 quick mode 決定
+ * @returns 完整單號，例如 `訂單08` / `自取12`
+ */
+export function nextLocalDailyOrderNo(kind: string, prefix: string): string {
+  const bizDate = new Date().toISOString().slice(0, 10);
+  const stateKey = `${bizDate}:${kind}`;
+  const state = readStoreJson<LocalDailySeqState>(STORE_SUFFIX.localDailySeq, {});
+  const next = (state[stateKey] ?? 0) + 1;
+  state[stateKey] = next;
+  writeStoreJson(STORE_SUFFIX.localDailySeq, state);
+  return `${prefix}${pad2Seq(next)}`;
 }
