@@ -25,11 +25,9 @@ export async function GET(request: Request) {
     ? supabase.from("pos_orders").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(200)
     : supabase.from("pos_orders").select("*").order("updated_at", { ascending: false }).limit(200);
   const queueQuery = supabase.from("pos_queue_events").select("*").order("created_at", { ascending: false }).limit(300);
-  const printJobsQuery = supabase
-    .from("pos_print_jobs")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(200);
+  const printJobsQuery = storeId
+    ? supabase.from("pos_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(200)
+    : supabase.from("pos_print_jobs").select("*").order("created_at", { ascending: false }).limit(200);
   const deviceConfigQuery = storeId
     ? supabase.from("pos_device_configs").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(1)
     : supabase.from("pos_device_configs").select("*").order("updated_at", { ascending: false }).limit(1);

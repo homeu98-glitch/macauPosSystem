@@ -563,12 +563,27 @@ export function PosApp() {
         });
       }
       if (Array.isArray(payload.queue)) {
-        setQueue(payload.queue);
-        saveQueue(payload.queue);
+        // 以 localStorage 為底 merge：保留本地（含未同步）事件，只補本機冇嘅 server 事件，
+        // 唔整份取代，避免清走本地 pending（R4）。pos_queue_events 無 store_id，server 列表含其他店，
+        // 但本地優先 + 去重已避免本地事件被覆寫（跨店 queue 污染另見 follow-up）。
+        const localQueue = loadQueue();
+        const localById = new Map(localQueue.map((e) => [e.id, e]));
+        const mergedQueue: QueueEvent[] = [];
+        const seen = new Set<string>();
+        for (const e of payload.queue) {
+          seen.add(e.id);
+          mergedQueue.push(localById.get(e.id) ?? e); // 本機有就用本機（保留 pending 狀態）
+        }
+        for (const e of localQueue) {
+          if (!seen.has(e.id)) mergedQueue.push(e);
+        }
+        setQueue(mergedQueue);
+        saveQueue(mergedQueue);
       }
       if (Array.isArray(payload.printJobs)) {
-        setPrintJobs(payload.printJobs);
-        savePrintJobs(payload.printJobs);
+        // P0-1：以 localStorage 為底 merge（復用 persistPrintJobs 語義），保留本地 sent/failed 狀態、
+        // 絕不刪本地單、只補本機冇嘅 server 單。修正整份硬覆寫導致嘅清單 / 重印（R1/R5）。
+        persistPrintJobs(payload.printJobs);
       }
       if (payload.localSettings) {
         savePosLocalSettings(payload.localSettings);
@@ -601,7 +616,14 @@ export function PosApp() {
     },
     onPrintJobUpsert: (job) => {
       setPrintJobs((current) => {
-        const next = [job, ...current.filter((p) => p.id !== job.id)];
+        const existing = current.find((p) => p.id === job.id);
+        // P0（R5 realtime 路徑）：本地已有該 job 就保留本地版本（sent/failed），唔用後台落後
+        // status 覆寫 → 防重印。本地無先 prepend server job（跨終端即時見單）。
+        if (existing) {
+          savePrintJobs(current);
+          return current;
+        }
+        const next = [job, ...current];
         savePrintJobs(next);
         return next;
       });
@@ -609,6 +631,9 @@ export function PosApp() {
     // realtime (re)subscribe 成功 → 一次過 backfill 現有 open 單（event-driven，非 polling）。
     // 補返 realtime 唔 backfill 舊 row 嘅缺口；visibilitychange / CHANNEL_ERROR 重連都會觸發。
     onResubscribed: () => {
+      // P0-2（R2）：加返 queue 同步保護，避免重連競態——未 sync 嘅離線新單未入 DB 前就 pull 清走。
+      if (offlineMode) return;
+      if (queue.some((event) => event.status !== "synced")) return;
       void loadRuntimeState();
     },
   });
