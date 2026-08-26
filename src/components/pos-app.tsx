@@ -633,11 +633,15 @@ export function PosApp() {
         // 枱（floors）係 per-terminal 編輯真源：枱名 / 區 / 座位數（capacity）都喺本地
         // localSettings.floors（見 docs/54 樓層修復）。後台 device_config.local_settings 冇呢啲
         // per-terminal 枱編輯，直接用 server 版會沖走本地改動（例如座位數變空白）。
-        // 保留本地 floors，其餘 field 用 server 版本（server 優先，確保後台改嘅全局設定生效）。
-        const localFloors = loadPosLocalSettings().floors;
+        // printTemplates 係 client-only 設計（docs/71 §8）：print-center 從未 POST 去後台，
+        // server 嘅 printTemplates 永遠係預設；直接用 server 版會令用家設嘅字型大小每逢同步
+        // 就彈返預設。故同步時保留本地 printTemplates，唔畀 server 預設蓋走。
+        // 其餘 field 用 server 版本（server 優先，確保後台改嘅全局設定生效）。
+        const local = loadPosLocalSettings();
         const merged: PosLocalSettings = {
           ...payload.localSettings,
-          floors: localFloors?.length ? localFloors : payload.localSettings.floors,
+          floors: local.floors?.length ? local.floors : payload.localSettings.floors,
+          printTemplates: local.printTemplates,
         };
         savePosLocalSettings(merged);
       }
