@@ -3048,17 +3048,9 @@ export function PosApp() {
 
                 {offlineMode ? (
                   <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-                    目前離線，恢復網絡後可補傳資料
+                    目前離線，恢復網絡後會自動補傳資料
                   </div>
-                ) : (
-                  <button
-                    className="mt-3 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                    onClick={() => void syncNow(queue, { silent: false })}
-                    type="button"
-                  >
-                    立即同步
-                  </button>
-                )}
+                ) : null}
               </div>
             </section>
           </div>

@@ -26,6 +26,7 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { isReopenable, reopenPosOrder } from "@/lib/pos-orders";
 import {
+  addDeletedOrderIds,
   loadAuthSession,
   loadBootstrapCache,
   loadOrders,
@@ -163,11 +164,18 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
     try {
       // 1) DB 先清（store 隔離 + exclude Ledger 線上單），免 backfill 重拉返晒出嚟
       const res = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(storeId)}`, { method: "DELETE" });
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; deleted?: number };
       if (!res.ok || data.ok === false) {
         setToast(`刪除失敗：${data.error ?? res.status}`);
         return;
       }
+      // 1.5) 本地線下單 id 記 tombstone（防 DB 刪除失效 / RLS 擋 / mock 模式時，backfill 又撈返嚟復活）
+      // 只記線下單（onlineOrderId 為空＝DB 真刪嗰批）；Ledger 線上單（onlineOrderId 唔空）唔記，
+      // 因為佢哋 DB 冇刪、用家亦無異議保留，下一次 backfill 應照常顯示。
+      const localOfflineIds = loadOrders()
+        .filter((o) => !o.onlineOrderId)
+        .map((o) => o.id);
+      if (localOfflineIds.length > 0) addDeletedOrderIds(localOfflineIds);
       // 2) 清本地線下單（saveOrders([]) 只掂本店 localStorage）
       saveOrders([]);
       // 3) 清 order 相關 sync queue events，免重推落 DB（ORDER_CREATED/UPDATED/ITEM_VOIDED/SETTLED）
@@ -176,7 +184,13 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
       window.dispatchEvent(new CustomEvent("pos-orders-changed"));
       refresh();
       setConfirmDeleteAllOpen(false);
-      setToast("已刪除全部線下訂單");
+      // 5) 回報 DB 實際刪除筆數；0 筆要警告（可能離線 / mock 模式 DB 冇真刪）
+      const deleted = typeof data.deleted === "number" ? data.deleted : localOfflineIds.length;
+      if (deleted === 0) {
+        setToast("已清除本機訂單，但 DB 未刪除任何單（可能離線 / mock 模式，請檢查連線）");
+      } else {
+        setToast(`已刪除 ${deleted} 筆線下訂單（本地 + DB）`);
+      }
     } catch {
       setToast("刪除失敗，請檢查網絡");
     } finally {
