@@ -485,6 +485,11 @@ export function PrintCenter() {
               </label>
             </div>
           )}
+          {sel !== "items" && (kind === "receipt" || isKitchen) ? (
+            <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+              想調整每道菜的「規格 / 備註」字體大小？請在左側「區塊順序」中點選「菜品明細」區塊，設定會出現在該區塊下方。
+            </div>
+          ) : null}
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {(isLabel || isKitchen) && (
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
