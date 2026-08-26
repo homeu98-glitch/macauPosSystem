@@ -722,8 +722,8 @@ export function CustomerProfile() {
       ) : null}
 
       {topupOpen ? (
-        <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/40 p-2 sm:p-6">
-          <div className="flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/40 p-2 sm:p-6" onClick={() => setTopupOpen(false)}>
+          <div className="flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-bold text-slate-900">會員充值 · {customer?.name}</h3>
               <button

@@ -219,6 +219,8 @@ export interface EscPosBlockStyle {
   size: EscPosSize;
   bold: boolean;
   align: EscPosAlign;
+  /** 次級 sub-line（菜品規格 / 備註）字型大小；預設 "s"。ESC/POS 只有 3 檔，避免規格細到睇唔到。可選——舊模板缺省當 "s"。 */
+  subSize?: EscPosSize;
 }
 
 export type ReceiptSectionId =
@@ -285,7 +287,7 @@ export type PrintTemplateKind = "receipt" | "label" | "kitchen";
 // 拼接落每張 PrintJob 嘅自包含、可序列化快照；renderer 印嗰時直接讀佢，唔使回頭查 settings。
 export interface EscPosTemplateSnapshot {
   kind: PrintTemplateKind;
-  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign }>;
+  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize }>;
 }
 
 export interface PosLocalSettings {

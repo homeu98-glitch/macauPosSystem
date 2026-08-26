@@ -30,12 +30,12 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                         <span className="shrink-0 font-extrabold">x{item.quantity}</span>
                       </div>
                       {(item.specs ?? []).map((s, si) => (
-                        <div key={`spec-${si}`} className="pl-3 opacity-70" style={{ fontSize: SIZE_PX.s }}>
+                        <div key={`spec-${si}`} className="pl-3 opacity-70" style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
                           · {s}
                         </div>
                       ))}
                       {item.note ? (
-                        <div key="note" className="pl-3 font-semibold" style={{ fontSize: SIZE_PX.s }}>
+                        <div key="note" className="pl-3 font-semibold" style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
                           注：{item.note}
                         </div>
                       ) : null}

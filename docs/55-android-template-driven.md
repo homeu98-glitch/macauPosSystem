@@ -30,8 +30,8 @@ if (job.template && Array.isArray(job.template.blocks) && job.template.blocks.le
       divider();
       for (const it of items) {
         textLine(`${it.name}  ${qty}`, b.size || "m", Boolean(b.bold), b.align || "left");
-        for (const s of it.specs || []) textLine(`  · ${s}`, "s", false, b.align || "left");
-        if (it.note) textLine(`  注：${it.note}`, "s", false, b.align || "left");
+        for (const s of it.specs || []) textLine(`  · ${s}`, b.subSize || "s", false, b.align || "left");
+        if (it.note) textLine(`  注：${it.note}`, b.subSize || "s", false, b.align || "left");
       }
       divider();
     } else {
@@ -117,7 +117,7 @@ export interface EscPosBlockStyle {
 }
 export interface EscPosTemplateSnapshot {
   kind: "receipt" | "label" | "kitchen";   // PrintTemplateKind
-  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign }>;
+  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize }>;
 }
 export interface PrintJob {
   // ...

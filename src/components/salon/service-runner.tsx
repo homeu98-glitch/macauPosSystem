@@ -435,8 +435,8 @@ export function ServiceRunner() {
 
       {/* 加項 modal */}
       {addOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center">
-          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center" onClick={closeAddService}>
+          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="sticky top-0 flex items-center justify-between border-b border-slate-100 bg-white px-5 py-3">
               <div className="text-sm font-bold text-slate-900">加項（中途追加服務）</div>
               <button

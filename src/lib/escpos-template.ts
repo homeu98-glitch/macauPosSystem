@@ -51,8 +51,14 @@ export const KITCHEN_SECTION_META: { id: KitchenSectionId; label: string }[] = [
   { id: "footer", label: "頁尾文案" },
 ];
 
-function block(visible: boolean, size: "s" | "m" | "l", bold: boolean, align: "left" | "center" | "right"): EscPosBlockStyle {
-  return { visible, size, bold, align };
+function block(
+  visible: boolean,
+  size: "s" | "m" | "l",
+  bold: boolean,
+  align: "left" | "center" | "right",
+  subSize: "s" | "m" | "l" = "s",
+): EscPosBlockStyle {
+  return { visible, size, bold, align, subSize };
 }
 
 const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {

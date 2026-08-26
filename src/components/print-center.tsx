@@ -469,6 +469,22 @@ export function PrintCenter() {
               <span>粗體</span>
             </label>
           </div>
+          {sel === "items" && (
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <span>規格 / 備註大小</span>
+                <select
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                  value={selStyle.subSize ?? "s"}
+                  onChange={(e) => patchBlock(kind, sel, { subSize: e.target.value as EscPosSize })}
+                >
+                  <option value="s">細</option>
+                  <option value="m">中</option>
+                  <option value="l">大</option>
+                </select>
+              </label>
+            </div>
+          )}
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {(isLabel || isKitchen) && (
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
@@ -681,7 +697,10 @@ export function PrintCenter() {
       </div>
 
       {activeJob ? (
-        <ResponsiveModal description={`${activeJob.orderNo ?? activeJob.orderId} · ${activeJob.tableName ?? "--"}`}>
+        <ResponsiveModal
+          description={`${activeJob.orderNo ?? activeJob.orderId} · ${activeJob.tableName ?? "--"}`}
+          onClose={() => setActiveJobId(null)}
+        >
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
               <div>

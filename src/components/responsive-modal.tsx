@@ -38,9 +38,11 @@ export function ResponsiveModal({
   return (
     <div
       className={`fixed inset-0 ${zIndexClassName} ${placement === "bottom" ? "flex items-end justify-center" : "grid place-items-center"} bg-slate-900/45 p-2 sm:p-4 ${allowPointerEventsOnOverlay ? "" : "pointer-events-none"}`}
+      onClick={onClose}
     >
       <div
         className={`flex w-full ${widthClassName} max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[calc(100dvh-32px)] ${allowPointerEventsOnOverlay ? "" : "pointer-events-auto"} ${panelClassName}`}
+        onClick={(event) => event.stopPropagation()}
       >
         {header ? (
           <div className="shrink-0 border-b border-slate-100 px-4 py-4 sm:px-5">{header}</div>

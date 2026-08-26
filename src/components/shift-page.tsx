@@ -810,6 +810,7 @@ export function ShiftPage() {
           }
           bodyClassName="grid gap-4"
           description="請先核對今日總數，確認後會打印交班單，並把系統狀態切回待開工。"
+          onClose={() => setConfirmOpen(false)}
           title="確認交班"
           widthClassName="max-w-2xl"
         >

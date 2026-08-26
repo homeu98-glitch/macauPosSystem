@@ -3878,6 +3878,7 @@ export function PosApp() {
 
       {viewingOrder ? (
         <ResponsiveModal
+          onClose={() => setViewingOrderId(null)}
           actions={
             <>
               <button
@@ -4159,6 +4160,7 @@ export function PosApp() {
 
       {payingOrderId ? (
         <ResponsiveModal
+          onClose={() => setPayingOrderId(null)}
           header={
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -4472,6 +4474,7 @@ export function PosApp() {
 
       {orderActionRequest ? (
         <ResponsiveModal
+          onClose={() => { setOrderActionRequest(null); setOrderActionReason(""); }}
           actions={
             <>
               <button
@@ -4516,6 +4519,7 @@ export function PosApp() {
 
       {refundSummaryExportOpen ? (
         <ResponsiveModal
+          onClose={() => setRefundSummaryExportOpen(false)}
           actions={
             <>
               <button
@@ -4574,7 +4578,7 @@ export function PosApp() {
       ) : null}
 
       {partialRefundOrderId ? (
-        <ResponsiveModal widthClassName="max-w-2xl" zIndexClassName="z-[60]">
+        <ResponsiveModal onClose={() => { setPartialRefundOrderId(null); setPartialRefundReason(""); setPartialRefundQuantities({}); }} widthClassName="max-w-2xl" zIndexClassName="z-[60]">
             {(() => {
               const order = orders.find((item) => item.id === partialRefundOrderId);
               if (!order || !bootstrap) return null;
@@ -4710,6 +4714,7 @@ export function PosApp() {
 
       {voidRequest ? (
         <ResponsiveModal
+          onClose={() => { setVoidRequest(null); setVoidReason(""); }}
           actions={
             <>
               <button
@@ -4775,6 +4780,7 @@ export function PosApp() {
 
       {voidTableRequest ? (
         <ResponsiveModal
+          onClose={() => { setVoidTableRequest(null); setVoidTableReason(""); }}
           actions={
             <>
               <button

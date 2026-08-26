@@ -458,6 +458,7 @@ export function AdminAccountsPage() {
           </>
         }
         title={title}
+        onClose={() => { setCreateOpen(false); setEditOpen(false); }}
         widthClassName="max-w-2xl"
       >
           <div className="grid gap-3 md:grid-cols-2">
@@ -705,6 +706,7 @@ export function AdminAccountsPage() {
           }
           description={`${form.name} · ${form.account}`}
           title="修改 PIN"
+          onClose={() => setPinOpen(false)}
           widthClassName="max-w-md"
         >
             <label className="mt-4 grid gap-1 text-sm">
@@ -725,6 +727,7 @@ export function AdminAccountsPage() {
             </>
           }
           title="刪除帳戶"
+          onClose={() => setDeleteOpen(false)}
           widthClassName="max-w-md"
         >
           <div className="text-sm text-slate-600">確定要刪除 `{selectedAccount.name}`（{selectedAccount.account}）？</div>
