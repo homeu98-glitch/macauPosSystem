@@ -44,6 +44,7 @@ export function renderEscPosLines(
 }
 
 // 預覽用：字型大小 → px（thermal 只有 3 檔，預覽用近似 px 表達）
-export const SIZE_PX: Record<EscPosSize, number> = { s: 11, m: 14, l: 18 };
+// l=22 ≈ 2× s，貼近實際 ESC 雙高雙寬（2×2）；m=14≈雙寬視覺。見 docs/70。
+export const SIZE_PX: Record<EscPosSize, number> = { s: 11, m: 14, l: 22 };
 
 export const SIZE_LABEL: Record<EscPosSize, string> = { s: "細", m: "中", l: "大" };

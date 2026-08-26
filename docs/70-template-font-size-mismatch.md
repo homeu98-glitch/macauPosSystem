@@ -107,5 +107,16 @@ CSS px 近似冇錯，但 `l:18` 相對 `s:11` 只係 ~1.64×，反映唔到真 
 ## 7. 實施狀態
 
 - **#1 Companion 已落碼（2026-08-26）**：`companion-server.mjs:227` `SIZE_BYTE = { s:0x00, m:0x20, l:0x30 }`；同時修正錯嘅 bit5/bit6 註解。語意：s=正常 / m=雙寬(2x1) / l=雙高雙寬(2x2)。**待用家 rebuild exe 並講新版本號**（依規約）方可生效。
-- #2 Android、#3 web 預覽：未做，待 confirm。
+- **#2 Android 已落碼（2026-08-26）**：
+  - `PrintDtos.kt`：`PrintJobDto` 加 `content: Map<String,String>?` + `template: TemplateDto?`（嵌套 `Block`/`TemplateDto` data class，`fromJson` 解析 `template.blocks` 嘅 size/bold/align/subSize/layout 同 `content`）。
+  - `EscPosRenderer.kt`：加 `SIZE_BYTE`（同源 Companion）、`Buf.style/align/reset`、新 `renderTemplateTicket(job, printer)` 模板驅動渲染（同 Companion `renderEscPos` + web `renderEscPosLines` 同源算法），消費 `job.template` 快照真正套用字型設定（修復之前 ignore 字型）。
+  - `MainActivity.kt`：`printJob` 改 `when` —— `job.template != null` 時優先 call `renderTemplateTicket`，否則 fallback 舊 receipt/kitchen/test 寫死 layout。
+  - **沙盒無 Android SDK，未編譯；待用家 dev box `./gradlew assembleDebug` 確認**。APK 要 rebuild（P7）。
+- **#3 web 預覽已落碼（2026-08-26）**：`escpos-render.ts:47` `SIZE_PX.l` `18 → 22`（l≈2× s，貼近紙面雙高雙寬）。`tsc --noEmit` 零新 error（僅 layout.tsx 已知誤報）。web 重 build + push 生效。
 - 用家貼出 localStorage `printTemplates.kitchen.blocks` 確認 `size` 值正確持久化（store_name=m / items=m / 其餘=s），假設 ①「未保存」正式排除。
+
+## 8. 驗證清單（用家 rebuild 後）
+
+- [ ] Companion exe 重 build + 講新版本號 → 桌面打印「大」區塊變雙高雙寬（紙上同「中」明顯唔同）。
+- [ ] Android APK 重 build → 模板設嘅 size/bold/align 喺 Android 出紙生效（之前完全 ignore）。
+- [ ] web 預覽「大」字型約 2×「細」，貼近實紙（設計＝預覽＝實紙 三者一致）。
