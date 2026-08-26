@@ -74,15 +74,18 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function writeJson<T>(key: string, value: T) {
+function writeJson<T>(key: string, value: T): boolean {
   if (typeof window === "undefined") {
-    return;
+    return false;
   }
 
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // ignore storage write failures on restricted browsers / kiosk devices
+    return true;
+  } catch (e) {
+    // 唔再靜默 ignore：回報失敗畀上層（docs/71 P1-A）。常見原因：私隱模式 / quota 滿 / kiosk WebView 限制。
+    console.error("[writeJson FAIL]", key, e instanceof Error ? e.message : e);
+    return false;
   }
 }
 
@@ -100,8 +103,8 @@ function readStoreJson<T>(suffix: StoreSuffix, fallback: T, merchantId?: string 
   return readJson(storeScopedStorageKey(suffix, merchantId), fallback);
 }
 
-function writeStoreJson<T>(suffix: StoreSuffix, value: T, merchantId?: string | null) {
-  writeJson(storeScopedStorageKey(suffix, merchantId), value);
+function writeStoreJson<T>(suffix: StoreSuffix, value: T, merchantId?: string | null): boolean {
+  return writeJson(storeScopedStorageKey(suffix, merchantId), value);
 }
 
 function readLegacyBootstrapStoreId(): string | null {
@@ -153,6 +156,23 @@ export function getActiveStoreId(): string | null {
 function getActiveMerchantId(): string | null {
   const raw = readJson<Partial<{ merchantId?: string }> | null>(KEYS.authSession, null);
   return raw?.merchantId ?? null;
+}
+
+/**
+ * 模板設定嘅穩定 store scope（docs/71 P1-B）：
+ * 優先登入店（authSession.merchantId）；無 session（kiosk / 未登入）時用 bootstrap 記錄嘅 storeId，
+ * 確保「設計介面 save」同「打印 load」永遠讀寫同一個 key，唔會因 authSession 當下值變動而 scope 翻轉。
+ */
+function resolveSettingsStoreScope(): string | null {
+  const mid = getActiveMerchantId();
+  if (mid) return mid;
+  const boot = loadBootstrapCache();
+  return boot?.storeId ?? null;
+}
+
+/** 畀 UI read-back 驗證用：返回當前模板設定實際寫入嘅 localStorage key。 */
+export function getLocalSettingsKey(): string {
+  return storeScopedStorageKey(STORE_SUFFIX.localSettings, resolveSettingsStoreScope());
 }
 
 export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): DeviceConfig | null {
@@ -437,14 +457,15 @@ export function addDeletedOrderIds(ids: string[]) {
 }
 
 export function loadPosLocalSettings() {
-  return normalizePosLocalSettings(readStoreJson(STORE_SUFFIX.localSettings, defaultPosLocalSettings));
+  return normalizePosLocalSettings(readStoreJson(STORE_SUFFIX.localSettings, defaultPosLocalSettings, resolveSettingsStoreScope()));
 }
 
-export function savePosLocalSettings(settings: PosLocalSettings) {
-  writeStoreJson(STORE_SUFFIX.localSettings, settings);
+export function savePosLocalSettings(settings: PosLocalSettings): boolean {
+  const ok = writeStoreJson(STORE_SUFFIX.localSettings, settings, resolveSettingsStoreScope());
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-local-settings-changed", { detail: { localSettings: settings } }));
   }
+  return ok;
 }
 
 /** 清除 Phase 3 前遗留的 mock 會員 localStorage（PII 不應持久化）。 */

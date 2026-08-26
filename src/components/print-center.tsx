@@ -13,6 +13,7 @@ import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearSentPrintJobs } from "@/lib/print-jobs";
 import {
+  getLocalSettingsKey,
   loadBootstrapCache,
   loadDeviceConfig,
   loadOrders,
@@ -225,6 +226,24 @@ export function PrintCenter() {
     savePosLocalSettings(applied);
   }
 
+  /** docs/71：明確「儲存模板」動作 + read-back 驗證 + 成功/失敗 toast（auto-save 仍保留，但呢個鈕做權威確認）。 */
+  function saveTemplateNow() {
+    const ok = savePosLocalSettings(localSettings);
+    if (!ok) {
+      setToast({
+        tone: "error",
+        message: "❌ 儲存失敗：localStorage 寫入被拒絕（私隱模式 / 配額滿 / kiosk 限制）。請檢查瀏覽器設定。",
+      });
+      return;
+    }
+    // read-back 驗證：確認剛寫入嘅 key 真係讀得返嘢
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(getLocalSettingsKey()) : null;
+    setToast({
+      tone: raw ? "success" : "error",
+      message: raw ? "✅ 已儲存模板設定（並已寫入本機）" : "⚠️ 已寫入但讀回為空，請重試。",
+    });
+  }
+
   function patchBlock(kind: TemplateKindState, id: string, patch: Partial<EscPosBlockStyle>) {
     const t = readTemplate(kind);
     applyTemplate(kind, { ...t, blocks: { ...t.blocks, [id]: { ...t.blocks[id], ...patch } } });
@@ -384,6 +403,13 @@ export function PrintCenter() {
               type="button"
             >
               重做
+            </button>
+            <button
+              className="rounded-xl bg-orange-500 px-2 py-1 text-[11px] font-semibold text-white shadow-sm hover:bg-orange-600"
+              onClick={() => saveTemplateNow()}
+              type="button"
+            >
+              💾 儲存模板
             </button>
           </div>
           <div className="mt-4 text-xs font-semibold text-slate-500">區塊順序（↑ / ↓ 調整）</div>
