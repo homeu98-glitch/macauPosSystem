@@ -78,11 +78,22 @@ export function isTerminalOrderStatus(status: string | undefined): boolean {
 }
 
 /**
- * backfill / realtime 合併後嘅「防復活」過濾（見 docs/52）：
+ * 舊 open 單最大年齡（由 updatedAt 計）。超過呢個時間、且本機無嘅 server 單邊 open 單，
+ * 經 backfill / realtime 唔可以復活 occupy 枱（見 docs/68）。預設 1 日——即「今日」嘅單
+ * （含 kiosk 即時新單）照常拉到；舊到昨日或之前嘅 open 單（卡住未結帳 / 落單冇成功 / 冇落單）
+ * 唔會再 occupy 空枱。可視需要調大（例如 2 日）。
+ */
+export const STALE_OPEN_ORDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * backfill / realtime 合併後嘅「防復活」過濾（docs/52 + docs/68）：
  *  - 本機已真刪除嘅訂單（deletedOrderIds tombstone）一律唔顯示；
  *  - 伺服器單邊嘅終態單（cancelled / refunded / partially_refunded / settled）唔可以復活入活躍列表，
- *    除非本機 localStorage 已經有佢（留返本地對賬 tab 睇）。
- * localOrders = 本地持久化 store（loadOrders()），用嚟判斷「本機已有」。
+ *    除非本機 localStorage 已經有佢（留返本地對賬 tab 睇）；
+ *  - 伺服器單邊嘅 open 單（draft / sent_to_kitchen / paid / reopened）若本機無、且 updatedAt
+ *    超過 STALE_OPEN_ORDER_MAX_AGE_MS → 當 stale 唔復活（docs/68：結帳後 backfill 唔會再拉舊單
+ *    occupy 空枱）。今日嘅 open 單（含 kiosk 即時新單）updatedAt 夠新，照常通過。
+ * localOrders = 本地持久化 store（loadOrders()），用嚟判斷「本機已有」（本機有嘅單永遠保留，唔理年齡）。
  */
 export function filterResurrectedOrders(
   orders: PosOrder[],
@@ -91,9 +102,18 @@ export function filterResurrectedOrders(
 ): PosOrder[] {
   const deleted = new Set(deletedOrderIds);
   const localIds = new Set(localOrders.map((o) => o.id));
-  return orders.filter(
-    (o) => !deleted.has(o.id) && !(isTerminalOrderStatus(o.status) && !localIds.has(o.id)),
-  );
+  const now = Date.now();
+  return orders.filter((o) => {
+    if (deleted.has(o.id)) return false;
+    // 終態單：server 單邊唔可以復活（docs/52）
+    if (isTerminalOrderStatus(o.status) && !localIds.has(o.id)) return false;
+    // 舊 open 單：server 單邊 + 本機無 + 超過 1 日 → 唔復活（docs/68）
+    if (!isTerminalOrderStatus(o.status) && !localIds.has(o.id)) {
+      const ts = orderTimestamp(o);
+      if (ts > 0 && now - ts > STALE_OPEN_ORDER_MAX_AGE_MS) return false;
+    }
+    return true;
+  });
 }
 
 /** 快餐點餐頁底部：所有未完成的 counter 單（不限時間） */
