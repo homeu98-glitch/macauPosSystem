@@ -756,6 +756,17 @@ export function PrintCenter() {
           </div>
         </ResponsiveModal>
       ) : null}
+
+      {toast && (
+        <div
+          className={`fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-xl px-4 py-2 text-sm font-semibold shadow-lg ${
+            toast.tone === "success" ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"
+          }`}
+          role="status"
+        >
+          {toast.message}
+        </div>
+      )}
     </div>
   );
 }
