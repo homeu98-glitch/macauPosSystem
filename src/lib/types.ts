@@ -207,6 +207,87 @@ export interface DeviceConfig {
   updatedAt: string;
 }
 
+// ── ESC/POS 模板（真實可打印子集） ──
+// 熱敏機：單色、字型有限、無 CSS 顏色 / 邊框 / 絕對定位。
+// 所以模板只攜帶「開關 + 字型大小 + 粗體 + 對齊」呢啲 ESC/POS 真係印到嘅設定，
+// 設計介面同實際輸出 100% 一致（見 escpos-template.ts / escpos-render.ts）。
+export type EscPosAlign = "left" | "center" | "right";
+export type EscPosSize = "s" | "m" | "l";
+
+export interface EscPosBlockStyle {
+  visible: boolean;
+  size: EscPosSize;
+  bold: boolean;
+  align: EscPosAlign;
+}
+
+export type ReceiptSectionId =
+  | "store_name"
+  | "order_no"
+  | "table_name"
+  | "items"
+  | "total"
+  | "payment_method"
+  | "order_note"
+  | "footer";
+export type LabelSectionId =
+  | "header"
+  | "item_name"
+  | "temperature"
+  | "cup_type"
+  | "sugar"
+  | "ice"
+  | "sugar_tag"
+  | "ice_tag"
+  | "addons"
+  | "specs"
+  | "item_note"
+  | "order_no"
+  | "footer";
+export type KitchenSectionId =
+  | "store_name"
+  | "order_no"
+  | "table_name"
+  | "order_type"
+  | "time"
+  | "server"
+  | "items"
+  | "customer_count"
+  | "order_note"
+  | "footer";
+
+export interface ReceiptTemplate {
+  blocks: Record<ReceiptSectionId, EscPosBlockStyle>;
+  order: ReceiptSectionId[];
+  footerText: string;
+}
+export interface LabelTemplate {
+  blocks: Record<LabelSectionId, EscPosBlockStyle>;
+  order: LabelSectionId[];
+  headerText: string;
+  footerText: string;
+}
+export interface KitchenTemplate {
+  blocks: Record<KitchenSectionId, EscPosBlockStyle>;
+  order: KitchenSectionId[];
+  headerText: string;
+  footerText: string;
+}
+
+export interface PrintTemplates {
+  receipt: ReceiptTemplate;
+  label: LabelTemplate;
+  kitchen: KitchenTemplate;
+}
+
+export type PrintTemplateKind = "receipt" | "label" | "kitchen";
+
+// 拼接落每張 PrintJob 嘅自包含、可序列化快照；renderer 印嗰時直接讀佢，唔使回頭查 settings。
+export interface EscPosTemplateSnapshot {
+  kind: PrintTemplateKind;
+  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign }>;
+}
+
 export interface PosLocalSettings {
   floors: FloorConfig[];
   paymentMethods: string[];
@@ -220,111 +301,7 @@ export interface PosLocalSettings {
     name: string;
     specGroups: MenuSpecGroup[];
   }>;
-  printTemplates: {
-    receipt: {
-      showRuler: boolean;
-      snapToGrid: boolean;
-      canvas: {
-        width: number;
-        height: number;
-        zoom: number;
-      };
-      sectionStyles: Record<
-        "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer",
-        {
-          fontSize: number;
-          fontWeight: 400 | 500 | 600 | 700;
-          textAlign: "left" | "center" | "right";
-          padding: number;
-          textColor: string;
-          borderColor: string;
-          backgroundColor: string;
-        }
-      >;
-      sectionLayouts: Record<
-        "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer",
-        { x: number; y: number; width: number; height: number }
-      >;
-      sectionOrder: Array<
-        "store_name" | "order_no" | "table_name" | "items" | "total" | "payment_method" | "order_note" | "footer"
-      >;
-      showStoreName: boolean;
-      showOrderNo: boolean;
-      showTableName: boolean;
-      showPaymentMethod: boolean;
-      showOrderNote: boolean;
-      footerText: string;
-    };
-    label: {
-      showRuler: boolean;
-      snapToGrid: boolean;
-      canvas: {
-        width: number;
-        height: number;
-        zoom: number;
-      };
-      sectionStyles: Record<
-        | "header"
-        | "item_name"
-        | "temperature"
-        | "cup_type"
-        | "sugar"
-        | "ice"
-        | "sugar_tag"
-        | "ice_tag"
-        | "addons"
-        | "specs"
-        | "item_note"
-        | "order_no"
-        | "footer",
-        {
-          fontSize: number;
-          fontWeight: 400 | 500 | 600 | 700;
-          textAlign: "left" | "center" | "right";
-          padding: number;
-          textColor: string;
-          borderColor: string;
-          backgroundColor: string;
-        }
-      >;
-      sectionLayouts: Record<
-        | "header"
-        | "item_name"
-        | "temperature"
-        | "cup_type"
-        | "sugar"
-        | "ice"
-        | "sugar_tag"
-        | "ice_tag"
-        | "addons"
-        | "specs"
-        | "item_note"
-        | "order_no"
-        | "footer",
-        { x: number; y: number; width: number; height: number }
-      >;
-      sectionOrder: Array<
-        | "header"
-        | "item_name"
-        | "temperature"
-        | "cup_type"
-        | "sugar"
-        | "ice"
-        | "sugar_tag"
-        | "ice_tag"
-        | "addons"
-        | "specs"
-        | "item_note"
-        | "order_no"
-        | "footer"
-      >;
-      showOrderNo: boolean;
-      showSpecs: boolean;
-      showItemNote: boolean;
-      headerText: string;
-      footerText: string;
-    };
-  };
+  printTemplates: PrintTemplates;
   notePresets: string[];
   cancelNotePresets: string[];
   /** 返結（反結賬）可選原因清單，設置 → 備註 可增刪 */
@@ -467,6 +444,10 @@ export interface PrintJob {
   storeId?: string;
   /** 雙路徑：job 過期時間（epoch millis）；relay 丟棄過期 job，POS 側超時轉 fallback */
   ttl?: number;
+  /** 商家 ESC/POS 模板快照（自包含、可序列化）；renderer 強制套用，缺位 fallback 舊格式 */
+  template?: EscPosTemplateSnapshot;
+  /** 靜態區塊文字（key = section id），renderer 按 block.style 印；items 區塊除外 */
+  content?: Record<string, string>;
 }
 
 // ── 跨平台雙路徑打印：統一傳輸層合約（Phase 0 骨架） ──

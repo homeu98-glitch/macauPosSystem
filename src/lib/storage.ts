@@ -3,6 +3,7 @@ import {
   AccountStore,
   AccountUser,
   DeviceConfig,
+  EscPosBlockStyle,
   PosBootstrap,
   PosLocalSettings,
   PosOrder,
@@ -17,6 +18,7 @@ import {
   defaultPermissionGroups,
   defaultPosLocalSettings,
 } from "@/lib/mock-data";
+import { DEFAULT_KITCHEN_TEMPLATE, DEFAULT_LABEL_TEMPLATE, DEFAULT_RECEIPT_TEMPLATE } from "@/lib/escpos-template";
 
 const KEYS = {
   offlineMode: "macau-pos/offline-mode",
@@ -193,19 +195,30 @@ export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): 
   };
 }
 
+/** 將商家儲存嘅 block 樣式 merge 落預設（逐 id 合併 visible/size/bold/align），保證新 section 唔會失蹤 */
+function mergeTemplateBlocks<T extends string>(
+  def: Record<T, EscPosBlockStyle>,
+  stored?: Partial<Record<T, EscPosBlockStyle>>,
+): Record<T, EscPosBlockStyle> {
+  const out: Record<T, EscPosBlockStyle> = { ...def };
+  if (stored) {
+    for (const id of Object.keys(def) as T[]) {
+      const s = stored[id];
+      if (s) out[id] = { ...def[id], ...s };
+    }
+  }
+  return out;
+}
+
+/** 順序：保留商家儲存嘅排序，過濾無效 id，並將預設入面新增大嘅 section 補落尾 */
+function mergeTemplateOrder<T extends string>(def: T[], stored?: T[]): T[] {
+  if (!Array.isArray(stored) || stored.length === 0) return [...def];
+  const valid = stored.filter((id) => (def as T[]).includes(id));
+  const missing = def.filter((id) => !valid.includes(id));
+  return [...valid, ...missing];
+}
+
 export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {
-  const receiptDefaultOrder = defaultPosLocalSettings.printTemplates.receipt.sectionOrder;
-  const labelDefaultOrder = defaultPosLocalSettings.printTemplates.label.sectionOrder;
-  const receiptDefaultLayouts = defaultPosLocalSettings.printTemplates.receipt.sectionLayouts;
-  const labelDefaultLayouts = defaultPosLocalSettings.printTemplates.label.sectionLayouts;
-  const receiptDefaultStyles = defaultPosLocalSettings.printTemplates.receipt.sectionStyles;
-  const labelDefaultStyles = defaultPosLocalSettings.printTemplates.label.sectionStyles;
-  const receiptStoredOrder = Array.isArray(settings?.printTemplates?.receipt?.sectionOrder)
-    ? settings?.printTemplates?.receipt?.sectionOrder
-    : [];
-  const labelStoredOrder = Array.isArray(settings?.printTemplates?.label?.sectionOrder)
-    ? settings?.printTemplates?.label?.sectionOrder
-    : [];
   return {
     floors: Array.isArray(settings?.floors) ? settings.floors : defaultPosLocalSettings.floors,
     paymentMethods: Array.isArray(settings?.paymentMethods)
@@ -219,49 +232,21 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     specTemplates: Array.isArray(settings?.specTemplates) ? settings.specTemplates : defaultPosLocalSettings.specTemplates,
     printTemplates: {
       receipt: {
-        ...defaultPosLocalSettings.printTemplates.receipt,
-        ...(settings?.printTemplates?.receipt ?? {}),
-        showRuler:
-          settings?.printTemplates?.receipt?.showRuler ?? defaultPosLocalSettings.printTemplates.receipt.showRuler,
-        snapToGrid:
-          settings?.printTemplates?.receipt?.snapToGrid ?? defaultPosLocalSettings.printTemplates.receipt.snapToGrid,
-        canvas: {
-          ...defaultPosLocalSettings.printTemplates.receipt.canvas,
-          ...(settings?.printTemplates?.receipt?.canvas ?? {}),
-        },
-        sectionStyles: {
-          ...receiptDefaultStyles,
-          ...(settings?.printTemplates?.receipt?.sectionStyles ?? {}),
-        },
-        sectionLayouts: {
-          ...receiptDefaultLayouts,
-          ...(settings?.printTemplates?.receipt?.sectionLayouts ?? {}),
-        },
-        sectionOrder: Array.from(new Set([...receiptStoredOrder, ...receiptDefaultOrder])).filter((item) =>
-          receiptDefaultOrder.includes(item as (typeof receiptDefaultOrder)[number]),
-        ) as typeof receiptDefaultOrder,
+        blocks: mergeTemplateBlocks(DEFAULT_RECEIPT_TEMPLATE.blocks, settings?.printTemplates?.receipt?.blocks),
+        order: mergeTemplateOrder(DEFAULT_RECEIPT_TEMPLATE.order, settings?.printTemplates?.receipt?.order),
+        footerText: settings?.printTemplates?.receipt?.footerText ?? DEFAULT_RECEIPT_TEMPLATE.footerText,
       },
       label: {
-        ...defaultPosLocalSettings.printTemplates.label,
-        ...(settings?.printTemplates?.label ?? {}),
-        showRuler: settings?.printTemplates?.label?.showRuler ?? defaultPosLocalSettings.printTemplates.label.showRuler,
-        snapToGrid:
-          settings?.printTemplates?.label?.snapToGrid ?? defaultPosLocalSettings.printTemplates.label.snapToGrid,
-        canvas: {
-          ...defaultPosLocalSettings.printTemplates.label.canvas,
-          ...(settings?.printTemplates?.label?.canvas ?? {}),
-        },
-        sectionStyles: {
-          ...labelDefaultStyles,
-          ...(settings?.printTemplates?.label?.sectionStyles ?? {}),
-        },
-        sectionLayouts: {
-          ...labelDefaultLayouts,
-          ...(settings?.printTemplates?.label?.sectionLayouts ?? {}),
-        },
-        sectionOrder: Array.from(new Set([...labelStoredOrder, ...labelDefaultOrder])).filter((item) =>
-          labelDefaultOrder.includes(item as (typeof labelDefaultOrder)[number]),
-        ) as typeof labelDefaultOrder,
+        blocks: mergeTemplateBlocks(DEFAULT_LABEL_TEMPLATE.blocks, settings?.printTemplates?.label?.blocks),
+        order: mergeTemplateOrder(DEFAULT_LABEL_TEMPLATE.order, settings?.printTemplates?.label?.order),
+        headerText: settings?.printTemplates?.label?.headerText ?? DEFAULT_LABEL_TEMPLATE.headerText,
+        footerText: settings?.printTemplates?.label?.footerText ?? DEFAULT_LABEL_TEMPLATE.footerText,
+      },
+      kitchen: {
+        blocks: mergeTemplateBlocks(DEFAULT_KITCHEN_TEMPLATE.blocks, settings?.printTemplates?.kitchen?.blocks),
+        order: mergeTemplateOrder(DEFAULT_KITCHEN_TEMPLATE.order, settings?.printTemplates?.kitchen?.order),
+        headerText: settings?.printTemplates?.kitchen?.headerText ?? DEFAULT_KITCHEN_TEMPLATE.headerText,
+        footerText: settings?.printTemplates?.kitchen?.footerText ?? DEFAULT_KITCHEN_TEMPLATE.footerText,
       },
     },
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,

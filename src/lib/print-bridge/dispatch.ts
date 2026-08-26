@@ -28,6 +28,18 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   const pending = jobs.filter((job) => job.status === "pending");
   if (pending.length === 0) return jobs;
 
+  // P1（docs/60）：模板快照保證「設計 == 預覽 == 出紙」。若仲有舊 job 冇 template 快照，
+  // 對應通道會 fallback 去硬編渲染（唔會出錯），但呢度 warn 出嚟方便排查。
+  if (process.env.NODE_ENV !== "production") {
+    for (const job of pending) {
+      if (!job.template || !Array.isArray(job.template.blocks) || job.template.blocks.length === 0) {
+        console.warn(
+          `[print] job ${job.id} (printerGroup=${job.printerGroup}, ticketType=${job.ticketType}) 冇 template 快照，將用通道 fallback 渲染`,
+        );
+      }
+    }
+  }
+
   // 有無任何派發通道：native bridge（Android APK）/ Companion（桌面）/ relay（互聯網備援）。
   // 無通道先維持 pending 等下次 flush（店主配置 companion / relay 後自動重試）。
   const hasChannel =

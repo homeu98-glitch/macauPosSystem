@@ -16,7 +16,7 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
-import { buildReceiptPrintJobs } from "@/lib/print-jobs";
+import { buildKitchenPrintJobs, buildLabelPrintJobs, buildReceiptPrintJobs, buildVoidPrintJobsForOrder } from "@/lib/print-jobs";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -1534,33 +1534,9 @@ export function PosApp() {
       createdAt: updatedOrder.updatedAt,
     };
 
-    const voidPrintJobs = (loadDeviceConfig() ?? defaultDeviceConfig).printers
-      .filter(
-        (printer) =>
-          printer.enabled &&
-          (printer.role === "zone" || printer.role === "label") &&
-          (printer.zoneId ?? "") === target.printerGroup,
-      )
-      .map<PrintJob>((printer) => ({
-        id: uid("print"),
-        orderId: activeOrder.id,
-        orderNo: authoritativeOrder.localOrderNo,
-        tableName: authoritativeOrder.tableName,
-        ticketType: "void",
-        printerGroup: printer.zoneId ?? target.printerGroup,
-        printerId: printer.id,
-        printerName: printer.name,
-        items: [
-          {
-            name: target.name,
-            quantity: voidQty,
-            specs: (target.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-            note: reason || target.note,
-          },
-        ],
-        status: resolvePrintJobStatus(networkOnline),
-        createdAt: updatedOrder.updatedAt,
-      }));
+    const voidPrintJobs = buildVoidPrintJobsForOrder(authoritativeOrder, reason, {
+      itemsOverride: [{ ...target, quantity: voidQty }],
+    });
 
     persistPrintJobs([...voidPrintJobs, ...printJobs]);
     // A3（docs/56）：有啟用打印機但退菜 0 張 job 入隊 → 廚房退菜單唔會打印，提示用家。
@@ -1654,7 +1630,6 @@ export function PosApp() {
     setBaseOrderItems(nextBaseItems);
     setOrderNote("");
     const voidEvents: QueueEvent[] = [];
-    const voidPrintJobs: PrintJob[] = [];
     uniqueOrderedItems.forEach((item) => {
       const orderedQty = orderedItemQtyMap.get(itemIdentity(item)) ?? 0;
       if (orderedQty <= 0) return;
@@ -1674,35 +1649,8 @@ export function PosApp() {
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedAt,
       });
-      const jobs = (loadDeviceConfig() ?? defaultDeviceConfig).printers
-        .filter(
-          (printer) =>
-            printer.enabled &&
-            (printer.role === "zone" || printer.role === "label") &&
-            (printer.zoneId ?? "") === item.printerGroup,
-        )
-        .map<PrintJob>((printer) => ({
-          id: uid("print"),
-          orderId: activeOrder.id,
-          orderNo: activeOrder.localOrderNo,
-          tableName: activeOrder.tableName,
-          ticketType: "void",
-          printerGroup: printer.zoneId ?? item.printerGroup,
-          printerId: printer.id,
-          printerName: printer.name,
-          items: [
-            {
-              name: item.name,
-              quantity: orderedQty,
-              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-              note: reason || item.note,
-            },
-          ],
-          status: resolvePrintJobStatus(networkOnline),
-          createdAt: updatedAt,
-        }));
-      voidPrintJobs.push(...jobs);
     });
+    const voidPrintJobs = buildVoidPrintJobsForOrder(activeOrder, reason);
     persistPrintJobs([...voidPrintJobs, ...printJobs]);
     pushEvents([
       {
@@ -1758,7 +1706,6 @@ export function PosApp() {
     const updatedAt = new Date().toISOString();
     const reasonText = reason?.trim() || "退桌";
     const voidEvents: QueueEvent[] = [];
-    const voidPrintJobs: PrintJob[] = [];
     // 只有已送廚房（sent_to_kitchen）嘅菜需要廚房退菜單 + 推單項作廢事件；未下單（draft）嘅菜安靜放棄
     const sentItems = order.status === "sent_to_kitchen" ? (order.items ?? []) : [];
     sentItems.forEach((item) => {
@@ -1780,35 +1727,8 @@ export function PosApp() {
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedAt,
       });
-      const jobs = (loadDeviceConfig() ?? defaultDeviceConfig).printers
-        .filter(
-          (printer) =>
-            printer.enabled &&
-            (printer.role === "zone" || printer.role === "label") &&
-            (printer.zoneId ?? "") === item.printerGroup,
-        )
-        .map<PrintJob>((printer) => ({
-          id: uid("print"),
-          orderId: order.id,
-          orderNo: order.localOrderNo,
-          tableName: order.tableName,
-          ticketType: "void",
-          printerGroup: printer.zoneId ?? item.printerGroup,
-          printerId: printer.id,
-          printerName: printer.name,
-          items: [
-            {
-              name: item.name,
-              quantity: orderedQty,
-              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-              note: reasonText,
-            },
-          ],
-          status: resolvePrintJobStatus(networkOnline),
-          createdAt: updatedAt,
-        }));
-      voidPrintJobs.push(...jobs);
     });
+    const voidPrintJobs = buildVoidPrintJobsForOrder(order, reasonText, { itemsOverride: sentItems });
     // 推整單取消事件，server 標為已退/已取消；隨後由本地 orders 移除該單，枱位自動回落空閒
     const cancelEvent: QueueEvent = {
       id: uid("evt"),
@@ -1959,47 +1879,11 @@ export function PosApp() {
   function reprintOrder(order: PosOrder) {
     if (!bootstrap) return;
     const timestamp = new Date().toISOString();
-
-    const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
-    const suffix = " (重打)";
-    const nextPrintJobs = configuredPrinters
-      .filter(
-        (printer) =>
-          (printer.role === "zone" || printer.role === "label") &&
-          order.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
-      )
-      .map<PrintJob>((printer) => ({
-        id: uid("print"),
-        orderId: order.id,
-        orderNo: `${order.localOrderNo}${suffix}`,
-        tableName: order.tableName,
-        ticketType: "normal",
-        printerGroup: printer.zoneId ?? "",
-        printerId: printer.id,
-        printerName: printer.name,
-        items: [
-          ...order.items
-            .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
-            .map((item) => ({
-              name: item.name,
-              quantity: item.quantity,
-              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-              note: item.note,
-            })),
-          ...(order.orderNote
-            ? [
-                {
-                  name: "全單備註",
-                  quantity: 1,
-                  specs: [],
-                  note: order.orderNote,
-                },
-              ]
-            : []),
-        ],
-        status: resolvePrintJobStatus(networkOnline),
-        createdAt: timestamp,
-      }));
+    const storeName = bootstrap.storeName;
+    const nextPrintJobs = [
+      ...buildKitchenPrintJobs(order, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+      ...buildLabelPrintJobs(order, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+    ];
 
     if (nextPrintJobs.length === 0) {
       setToast({ tone: "info", message: "沒有可打印的菜品。" });
@@ -2097,46 +1981,21 @@ export function PosApp() {
       const printTargetItems = treatAsAddOn ? addedItems : cartItems;
 
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
-    const nextPrintJobs = configuredPrinters
-      .filter(
-        (printer) =>
-          (printer.role === "zone" || printer.role === "label") &&
-          printTargetItems.some((item) => item.printerGroup === (printer.zoneId ?? "")),
-      )
-      .map<PrintJob>((printer) => ({
-        id: uid("print"),
-        orderId: order.id,
-        orderNo: order.localOrderNo,
-        tableName: order.tableName,
-        ticketType: treatAsAddOn ? "addon" : "normal",
-        printerGroup: printer.zoneId ?? "",
-        printerId: printer.id,
-        printerName: printer.name,
-        items: [
-          ...printTargetItems
-            .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
-            .map((item) => ({
-              name: item.name,
-              quantity: item.quantity,
-              specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-              note: item.note,
-            })),
-          ...(!treatAsAddOn && order.orderNote
-            ? [
-                {
-                  name: "全單備註",
-                  quantity: 1,
-                  specs: [],
-                  note: order.orderNote,
-                },
-              ]
-            : []),
-        ],
-        status: resolvePrintJobStatus(networkOnline),
-        createdAt: timestamp,
-      }));
+    const ticketType: "normal" | "addon" = treatAsAddOn ? "addon" : "normal";
+    const nextPrintJobs = [
+      ...buildKitchenPrintJobs(order, {
+        ticketType,
+        storeName: bootstrap.storeName,
+        itemsOverride: printTargetItems,
+      }),
+      ...buildLabelPrintJobs(order, {
+        ticketType,
+        storeName: bootstrap.storeName,
+        itemsOverride: printTargetItems,
+      }),
+    ];
 
-      persistPrintJobs([...nextPrintJobs, ...printJobs]);
+    persistPrintJobs([...nextPrintJobs, ...printJobs]);
 
       // A3（docs/56）：有啟用打印機但呢張單 0 張 job 入隊 → 單據唔會打印，彈警告提示。
       // 兩種成因：① 冇任何 zone/label 打印機；② 菜品 printerGroup 對唔中任何 printer.zoneId。

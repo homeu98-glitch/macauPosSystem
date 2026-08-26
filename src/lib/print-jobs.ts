@@ -13,9 +13,23 @@ import {
 } from "@/lib/storage";
 import { PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
+import {
+  buildKitchenContent,
+  buildLabelContent,
+  buildReceiptContent,
+  buildSnapshot,
+  ticketTypeLabel,
+} from "@/lib/escpos-template";
+import { PrintItemLine } from "@/lib/escpos-render";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function nowText() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export function appendPrintJobs(jobs: PrintJob[]) {
@@ -24,51 +38,25 @@ export function appendPrintJobs(jobs: PrintJob[]) {
   window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { count: jobs.length } }));
 }
 
-export function buildReceiptPrintJobs(
-  order: PosOrder,
-  bootstrap: PosBootstrap,
-): PrintJob[] {
-  const receiptSettings = loadPosLocalSettings().printTemplates.receipt;
-  type ReceiptItem = NonNullable<PrintJob["items"]>[number];
-
+// ── 收據：每台 receipt 打印機一張，附商家收據模板快照 + 靜態內容 ──
+export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap): PrintJob[] {
+  const receiptTemplate = loadPosLocalSettings().printTemplates.receipt;
+  const storeName = bootstrap.storeName;
+  const currency = bootstrap.currency;
   const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
     (printer) => printer.enabled && printer.role === "receipt",
   );
   if (receiptPrinters.length === 0) return [];
 
   const timestamp = new Date().toISOString();
-  const receiptSections: Record<(typeof receiptSettings.sectionOrder)[number], ReceiptItem[]> = {
-    store_name: receiptSettings.showStoreName ? [{ name: "門店", quantity: 1, specs: [], note: bootstrap.storeName }] : [],
-    order_no: receiptSettings.showOrderNo ? [{ name: "單號", quantity: 1, specs: [], note: order.localOrderNo }] : [],
-    table_name: receiptSettings.showTableName ? [{ name: "桌號", quantity: 1, specs: [], note: order.tableName }] : [],
-    items: [
-      ...order.items.map<ReceiptItem>((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-        note: item.note,
-      })),
-      ...(order.voidedItems ?? []).map<ReceiptItem>((item) => ({
-        name: `（已退菜）${item.name}`,
-        quantity: item.quantity,
-        specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-        note: item.voidedReason ?? item.note,
-      })),
-    ],
-    total: [{ name: "總計", quantity: 1, specs: [], note: formatMoney(order.total, bootstrap.currency) }],
-    payment_method:
-      receiptSettings.showPaymentMethod && order.paymentMethod
-        ? [{ name: "付款方式", quantity: 1, specs: [], note: String(order.paymentMethod) }]
-        : [],
-    order_note:
-      receiptSettings.showOrderNote && order.orderNote
-        ? [{ name: "全單備註", quantity: 1, specs: [], note: order.orderNote }]
-        : [],
-    footer: receiptSettings.footerText ? [{ name: "頁尾", quantity: 1, specs: [], note: receiptSettings.footerText }] : [],
-  };
-  const receiptItems: NonNullable<PrintJob["items"]> = receiptSettings.sectionOrder.flatMap(
-    (section) => receiptSections[section],
-  );
+  const items: PrintItemLine[] = order.items.map((it) => ({
+    name: it.name,
+    quantity: it.quantity,
+    specs: (it.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+    note: it.note,
+  }));
+  const content = buildReceiptContent(order, { storeName, currency, footerText: receiptTemplate.footerText });
+  const template = buildSnapshot("receipt", receiptTemplate);
 
   return receiptPrinters.map<PrintJob>((printer) => ({
     id: uid("print"),
@@ -79,89 +67,165 @@ export function buildReceiptPrintJobs(
     printerGroup: "receipt",
     printerId: printer.id,
     printerName: printer.name,
-    items: receiptItems,
+    items,
+    content,
+    template,
     status: "pending",
     createdAt: timestamp,
   }));
 }
 
-export function buildVoidPrintJobsForOrder(order: PosOrder, reason: string): PrintJob[] {
-  const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
-  const timestamp = new Date().toISOString();
-  const voidPrintJobs: PrintJob[] = [];
+export interface KitchenPrintOpts {
+  ticketType: "normal" | "addon" | "void";
+  storeName: string;
+  time?: string;
+  itemNamePrefix?: string;
+  itemNoteOverride?: string;
+  itemsOverride?: PosOrder["items"];
+  orderNoSuffix?: string;
+}
 
-  for (const item of order.items) {
-    const jobs = configuredPrinters
-      .filter(
-        (printer) =>
-          (printer.role === "zone" || printer.role === "label") && (printer.zoneId ?? "") === item.printerGroup,
-      )
-      .map<PrintJob>((printer) => ({
+// ── 廚房 / 分區單：每台 zone 打印機一張（只印該分區嘅菜品），附廚房模板快照 ──
+export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): PrintJob[] {
+  const kitchenTemplate = loadPosLocalSettings().printTemplates.kitchen;
+  const zonePrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
+    (printer) => printer.enabled && printer.role === "zone",
+  );
+  if (zonePrinters.length === 0) return [];
+  const timestamp = new Date().toISOString();
+  const typeLabel = ticketTypeLabel(opts.ticketType);
+  const time = opts.time ?? nowText();
+  const template = buildSnapshot("kitchen", kitchenTemplate);
+  const sourceItems = opts.itemsOverride ?? order.items;
+
+  const jobs: PrintJob[] = [];
+  for (const printer of zonePrinters) {
+    const matched = sourceItems.filter((it) => !printer.zoneId || it.printerGroup === printer.zoneId);
+    if (matched.length === 0) continue;
+    const items: PrintItemLine[] = matched.map((it) => ({
+      name: opts.itemNamePrefix ? `${opts.itemNamePrefix}${it.name}` : it.name,
+      quantity: it.quantity,
+      specs: (it.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+      note: opts.itemNoteOverride ?? it.note,
+    }));
+    const content = buildKitchenContent(order, {
+      storeName: opts.storeName,
+      footerText: kitchenTemplate.footerText,
+      typeLabel,
+      time,
+    });
+    const orderNo = `${order.localOrderNo}${opts.orderNoSuffix ?? ""}`;
+    content.order_no = orderNo;
+    jobs.push({
+      id: uid("print"),
+      orderId: order.id,
+      orderNo,
+      tableName: order.tableName,
+      ticketType: opts.ticketType,
+      printerGroup: printer.zoneId ?? "",
+      printerId: printer.id,
+      printerName: printer.name,
+      items,
+      content,
+      template,
+      status: "pending",
+      createdAt: timestamp,
+    });
+  }
+  return jobs;
+}
+
+export interface LabelPrintOpts {
+  ticketType: "normal" | "addon" | "void";
+  storeName: string;
+  itemNamePrefix?: string;
+  itemsOverride?: PosOrder["items"];
+  orderNoSuffix?: string;
+}
+
+// ── 標籤：每台 label 打印機，每項菜品一張（飲品標籤），附標籤模板快照 ──
+// （舊版冇 label builder，label 機一直收到同 zone 一樣嘅廚房式 job；呢度補返正確 label 單）
+export function buildLabelPrintJobs(order: PosOrder, opts: LabelPrintOpts): PrintJob[] {
+  const labelTemplate = loadPosLocalSettings().printTemplates.label;
+  const labelPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
+    (printer) => printer.enabled && printer.role === "label",
+  );
+  if (labelPrinters.length === 0) return [];
+  const timestamp = new Date().toISOString();
+  const template = buildSnapshot("label", labelTemplate);
+  const sourceItems = opts.itemsOverride ?? order.items;
+  const orderNo = `${order.localOrderNo}${opts.orderNoSuffix ?? ""}`;
+
+  const jobs: PrintJob[] = [];
+  for (const printer of labelPrinters) {
+    const matched = sourceItems.filter((it) => !printer.zoneId || it.printerGroup === printer.zoneId);
+    for (const item of matched) {
+      const content = buildLabelContent(order, item, {
+        storeName: opts.storeName,
+        headerText: labelTemplate.headerText,
+        footerText: labelTemplate.footerText,
+      });
+      content.order_no = orderNo;
+      jobs.push({
         id: uid("print"),
         orderId: order.id,
-        orderNo: order.localOrderNo,
+        orderNo,
         tableName: order.tableName,
-        ticketType: "void",
+        ticketType: opts.ticketType,
         printerGroup: printer.zoneId ?? item.printerGroup,
         printerId: printer.id,
         printerName: printer.name,
-        items: [
-          {
-            name: item.name,
-            quantity: item.quantity,
-            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-            note: reason || "線上訂單已取消",
-          },
-        ],
+        items: [],
+        content,
+        template,
         status: "pending",
         createdAt: timestamp,
-      }));
-    voidPrintJobs.push(...jobs);
+      });
+    }
   }
+  return jobs;
+}
 
-  return voidPrintJobs;
+// ── 退菜：廚房單（退）+ 標籤單（退），分區/標籤各自套對應模板 ──
+export function buildVoidPrintJobsForOrder(
+  order: PosOrder,
+  reason: string,
+  opts?: { itemsOverride?: PosOrder["items"]; orderNoSuffix?: string },
+): PrintJob[] {
+  const storeName = loadBootstrapCache()?.storeName ?? "門店";
+  const kitchenJobs = buildKitchenPrintJobs(order, {
+    ticketType: "void",
+    storeName,
+    itemNamePrefix: "（退）",
+    itemNoteOverride: reason || "線上訂單已取消",
+    itemsOverride: opts?.itemsOverride,
+    orderNoSuffix: opts?.orderNoSuffix,
+  });
+  const labelJobs = buildLabelPrintJobs(order, {
+    ticketType: "void",
+    storeName,
+    itemNamePrefix: "（退）",
+    itemsOverride: opts?.itemsOverride,
+    orderNoSuffix: opts?.orderNoSuffix,
+  });
+  return [...kitchenJobs, ...labelJobs];
 }
 
 /**
- * 返結（反結賬）列印：把已結單退回可編輯狀態時，印一張「返結單」到所有啟用中的
- * 區域 / 標籤印表機，記錄原單號、原因、操作人，便於廚房 / 吧檯與收銀對帳。
- * ticketType 沿用 "void"（修正單），並於項目名稱前加【返結】標記。
+ * 返結（反結賬）列印：把已結單退回可編輯狀態時，印一張「返結單」到所有啟用中
+ * 分區 / 標籤打印機，記錄原單號、原因、操作人。ticketType 沿用 "void"（修正單）。
  */
 export function buildReopenPrintJobs(order: PosOrder, reason: string, operator: string): PrintJob[] {
-  const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
-  const timestamp = new Date().toISOString();
-  const reopenPrintJobs: PrintJob[] = [];
-
-  for (const item of order.items) {
-    const jobs = configuredPrinters
-      .filter(
-        (printer) =>
-          (printer.role === "zone" || printer.role === "label") && (printer.zoneId ?? "") === item.printerGroup,
-      )
-      .map<PrintJob>((printer) => ({
-        id: uid("print"),
-        orderId: order.id,
-        orderNo: order.localOrderNo,
-        tableName: order.tableName,
-        ticketType: "void",
-        printerGroup: printer.zoneId ?? item.printerGroup,
-        printerId: printer.id,
-        printerName: printer.name,
-        items: [
-          {
-            name: `【返結】${item.name}`,
-            quantity: item.quantity,
-            specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-            note: `原因：${reason || "結帳錯誤"}｜操作人：${operator}`,
-          },
-        ],
-        status: "pending",
-        createdAt: timestamp,
-      }));
-    reopenPrintJobs.push(...jobs);
-  }
-
-  return reopenPrintJobs;
+  const storeName = loadBootstrapCache()?.storeName ?? "門店";
+  const voidReason = `原因：${reason || "結帳錯誤"}｜操作人：${operator}`;
+  const kitchenJobs = buildKitchenPrintJobs(order, {
+    ticketType: "void",
+    storeName,
+    itemNamePrefix: "【返結】",
+    itemNoteOverride: voidReason,
+  });
+  const labelJobs = buildLabelPrintJobs(order, { ticketType: "void", storeName, itemNamePrefix: "【返結】" });
+  return [...kitchenJobs, ...labelJobs];
 }
 
 export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {
