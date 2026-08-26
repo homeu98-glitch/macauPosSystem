@@ -1,6 +1,7 @@
 import { formatMoney } from "@/lib/format";
 import {
   EscPosBlockStyle,
+  EscPosItemsLayout,
   EscPosTemplateSnapshot,
   KitchenTemplate,
   LabelTemplate,
@@ -57,15 +58,16 @@ function block(
   bold: boolean,
   align: "left" | "center" | "right",
   subSize: "s" | "m" | "l" = "s",
+  layout?: EscPosItemsLayout,
 ): EscPosBlockStyle {
-  return { visible, size, bold, align, subSize };
+  return { visible, size, bold, align, subSize, layout };
 }
 
 const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   store_name: block(true, "m", true, "center"),
   order_no: block(true, "s", false, "left"),
   table_name: block(true, "s", false, "left"),
-  items: block(true, "m", true, "left"),
+  items: block(true, "m", true, "left", "s", "card"),
   total: block(true, "l", true, "right"),
   payment_method: block(true, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
@@ -93,7 +95,7 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
   order_type: block(true, "s", true, "left"),
   time: block(true, "s", false, "left"),
   server: block(false, "s", false, "left"),
-  items: block(true, "m", true, "left"),
+  items: block(true, "m", true, "left", "s", "card"),
   customer_count: block(false, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
   footer: block(true, "s", false, "center"),

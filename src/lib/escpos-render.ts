@@ -1,11 +1,11 @@
-import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot } from "@/lib/types";
+import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout } from "@/lib/types";
 
 export type PrintItemLine = { name: string; quantity: number; specs?: string[]; note?: string };
 
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }
   | { kind: "divider" }
-  | { kind: "items"; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize: EscPosSize; items: PrintItemLine[] };
+  | { kind: "items"; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize: EscPosSize; items: PrintItemLine[]; layout: EscPosItemsLayout };
 
 // 單據抬頭（label 唔印抬頭，62mm 標籤紙太細）
 const TITLE: Record<string, string> = {
@@ -32,7 +32,7 @@ export function renderEscPosLines(
     if (!b.visible) continue;
     if (b.id === "items") {
       lines.push({ kind: "divider" });
-      lines.push({ kind: "items", size: b.size, bold: b.bold, align: b.align, subSize: b.subSize ?? "s", items });
+      lines.push({ kind: "items", size: b.size, bold: b.bold, align: b.align, subSize: b.subSize ?? "s", items, layout: b.layout ?? "card" });
       lines.push({ kind: "divider" });
     } else {
       const text = content?.[b.id];

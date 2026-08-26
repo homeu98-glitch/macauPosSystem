@@ -213,6 +213,8 @@ export interface DeviceConfig {
 // 設計介面同實際輸出 100% 一致（見 escpos-template.ts / escpos-render.ts）。
 export type EscPosAlign = "left" | "center" | "right";
 export type EscPosSize = "s" | "m" | "l";
+/** 菜品明細（items）區塊嘅清單排版：inline=品名+數量左右排列（舊式）；card=分層卡片（品名加粗→名下虛線→規格成組縮排）；stacked=完全直向。預設 "card"（見 docs/67）。 */
+export type EscPosItemsLayout = "inline" | "card" | "stacked";
 
 export interface EscPosBlockStyle {
   visible: boolean;
@@ -221,6 +223,8 @@ export interface EscPosBlockStyle {
   align: EscPosAlign;
   /** 次級 sub-line（菜品規格 / 備註）字型大小；預設 "s"。ESC/POS 只有 3 檔，避免規格細到睇唔到。可選——舊模板缺省當 "s"。 */
   subSize?: EscPosSize;
+  /** 菜品明細清單排版；只有 items 區塊有意義。可選——舊模板缺省當 "card"。 */
+  layout?: EscPosItemsLayout;
 }
 
 export type ReceiptSectionId =
@@ -287,7 +291,7 @@ export type PrintTemplateKind = "receipt" | "label" | "kitchen";
 // 拼接落每張 PrintJob 嘅自包含、可序列化快照；renderer 印嗰時直接讀佢，唔使回頭查 settings。
 export interface EscPosTemplateSnapshot {
   kind: PrintTemplateKind;
-  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize }>;
+  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize; layout?: EscPosItemsLayout }>;
 }
 
 export interface PosLocalSettings {

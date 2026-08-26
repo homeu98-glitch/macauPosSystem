@@ -13,7 +13,7 @@ Option 1 收斂完成後，打印管線有三條「同源」渲染路徑，目�
 | 路徑 | 位置 | 狀態 |
 | --- | --- | --- |
 | Web 預覽 | `src/lib/escpos-render.ts` `renderEscPosLines` → `EscPosPreview` / `KitchenTicketPreview` | ✅ 已落地 |
-| 桌面 Companion | `companion-server.mjs` `renderEscPos(job, printer)` | ✅ **本輪已改為模板驅動**（0.1.8 → 0.1.9） |
+| 桌面 Companion | `companion-server.mjs` `renderEscPos(job, printer)` | ✅ **模板驅動**（現 0.1.11，含 items `card` 排版 / docs/67） |
 | Android APK | `print-agent-android` `EscPosRenderer.renderReceiptTicket` / `renderKitchenTicket` | ❌ **仍係硬編碼舊路，未讀 template** |
 
 Companion 嘅新路徑邏輯（`companion-server.mjs:253`）：
@@ -90,6 +90,8 @@ const payload = {
 
 - **有 `template`**：逐 block 行 `if (!visible) continue`；`items` block 印分隔線 + 每項 `name x qty` + specs/note 細字副行 + 尾分隔線；
   其他 block 由 `content[block.id]` 取值（空就 skip）。`size`/`bold`/`align` 經 ESC `!` / `E` / `a` 落去（見 `SIZE_BYTE` 對照表）。
+  - **`items` block 嘅 `layout` 欄位（docs/67）**：`"card"`（預設）= 序號 `1. 2. 3.` 前綴 + 品名行（加粗）+ 名下虛線規則線（`-` 重複一排）+ 規格/備註**成組縮排、唔加 bullet** + 菜與菜之間留白；`"inline"` = 舊式 `name x qty` 左右排列 + `·` 規格 bullet；`"stacked"` = 完全直向（待定，今輪只落咗 card）。
+  - APK 要同 Companion（`companion-server.mjs` items 分支）完全一致：名行 `textLine(\`${i+1}. ${name}  x${qty}\`)` → `divider()` → 每條 spec `textLine(\`  ${s}\`)` → note `textLine(\`  注：${note}\`)` → 菜間 `textLine("")` 留白。
 - **無 `template`**（舊 job / 其他來源）：保留而家嘅硬編碼渲染做 fallback，唔好拆。
 
 ESC/POS 指令對照（Kotlin 同樣適用）：
@@ -109,15 +111,18 @@ ESC/POS 指令對照（Kotlin 同樣適用）：
 來自 `src/lib/types.ts`：
 
 ```ts
+export type EscPosItemsLayout = "inline" | "card" | "stacked";  // 菜品明細清單排版（見 docs/67）
 export interface EscPosBlockStyle {
   visible: boolean;
   size: "s" | "m" | "l";      // EscPosSize
   bold: boolean;
   align: "left" | "center" | "right";  // EscPosAlign
+  subSize?: EscPosSize;       // 規格/備註次級字型
+  layout?: EscPosItemsLayout; // 只有 items block 有意義；缺省當 "card"
 }
 export interface EscPosTemplateSnapshot {
   kind: "receipt" | "label" | "kitchen";   // PrintTemplateKind
-  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize }>;
+  blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize; layout?: EscPosItemsLayout }>;
 }
 export interface PrintJob {
   // ...

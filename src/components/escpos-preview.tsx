@@ -15,30 +15,43 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
             return <div key={index} className="my-1 border-t border-dashed border-slate-300" />;
           }
           if (line.kind === "items") {
+            const isCard = line.layout === "card";
             return (
               <div key={index} className="space-y-1">
                 {line.items.length === 0 ? (
                   <div className="text-slate-400">（無菜品內容）</div>
                 ) : (
                   line.items.map((item, idx) => (
-                    <div key={idx}>
+                    <div key={idx} className={isCard ? "mb-2 last:mb-0" : ""}>
                       <div
                         className="flex items-baseline justify-between gap-2"
                         style={{ fontSize: SIZE_PX[line.size], fontWeight: line.bold ? 700 : 400, textAlign: line.align }}
                       >
-                        <span style={{ textAlign: "left" }}>{item.name}</span>
+                        <span style={{ textAlign: "left" }}>
+                          {isCard ? `${idx + 1}. ` : ""}
+                          {item.name}
+                        </span>
                         <span className="shrink-0 font-extrabold">x{item.quantity}</span>
                       </div>
-                      {(item.specs ?? []).map((s, si) => (
-                        <div key={`spec-${si}`} className="pl-3 opacity-70" style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
-                          · {s}
-                        </div>
-                      ))}
-                      {item.note ? (
-                        <div key="note" className="pl-3 font-semibold" style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
-                          注：{item.note}
-                        </div>
-                      ) : null}
+                      {isCard ? <div className="my-1 border-t border-dashed border-slate-300" /> : null}
+                      <div style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
+                        {(item.specs ?? []).map((s, si) => (
+                          <div
+                            key={`spec-${si}`}
+                            className={isCard ? "pl-4 opacity-70" : "pl-3 opacity-70"}
+                          >
+                            {isCard ? s : `· ${s}`}
+                          </div>
+                        ))}
+                        {item.note ? (
+                          <div
+                            key="note"
+                            className={isCard ? "pl-4 font-semibold" : "pl-3 font-semibold"}
+                          >
+                            注：{item.note}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   ))
                 )}
