@@ -3392,7 +3392,7 @@ export function PosApp() {
           <main className="flex h-full flex-col overflow-hidden bg-slate-100">
             <div className="border-b border-slate-200 bg-white px-4 py-3">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex flex-nowrap items-center gap-2 overflow-x-auto min-w-0">
+                <div className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden min-w-0">
                   <button
                     key="all"
                     className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
@@ -3418,7 +3418,7 @@ export function PosApp() {
                     </button>
                   ))}
                 </div>
-                <div className="flex w-full shrink-0 items-center gap-2 xl:w-72">
+                <div className="flex w-full shrink-0 items-center gap-2 xl:w-56">
                   <input
                     className="h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400"
                     onChange={(event) => {
