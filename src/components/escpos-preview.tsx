@@ -2,6 +2,10 @@
 
 import { EscPosLine, SIZE_PX } from "@/lib/escpos-render";
 
+// 相對行高（CSS）。因 SIZE_PX.l = 2× SIZE_PX.s（22 vs 11），l 行箱自然 = 2× s 行箱，
+// 同 Companion / Android ESC 3 n 表（s/m=30, l=60，比例 1:1:2）對齊 → 預覽 == 出紙（docs/74）。
+const PREVIEW_LINE_HEIGHT = 1.4;
+
 /**
  * 真實可打印樣式預覽：等寬字型、單色、粗體 / 對齊 / 字型大小對應 ESC/POS 輸出。
  * 唔用任何 CSS 顏色 / 邊框 / 絕對定位（熱敏機印唔到），確保設計介面 == 實際輸出。
@@ -9,7 +13,7 @@ import { EscPosLine, SIZE_PX } from "@/lib/escpos-render";
 export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[]; paperWidthMm?: number }) {
   return (
     <div className="mx-auto rounded-xl border border-slate-300 bg-white shadow-sm" style={{ width: Math.round(paperWidthMm * 3.2) }}>
-      <div className="px-2 py-3 font-mono text-slate-900" style={{ fontSize: SIZE_PX.s, lineHeight: 1.35 }}>
+      <div className="px-2 py-3 font-mono text-slate-900" style={{ fontSize: SIZE_PX.s, lineHeight: PREVIEW_LINE_HEIGHT }}>
         {lines.map((line, index) => {
           if (line.kind === "divider") {
             return <div key={index} className="my-1 border-t border-dashed border-slate-300" />;
@@ -25,7 +29,7 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                     <div key={idx} className={isCard ? "mb-2 last:mb-0" : ""}>
                       <div
                         className="flex items-baseline justify-between gap-2"
-                        style={{ fontSize: SIZE_PX[line.size], fontWeight: line.bold ? 700 : 400, textAlign: line.align }}
+                        style={{ fontSize: SIZE_PX[line.size], fontWeight: line.bold ? 700 : 400, textAlign: line.align, lineHeight: PREVIEW_LINE_HEIGHT }}
                       >
                         <span style={{ textAlign: "left" }}>
                           {isCard ? `${idx + 1}. ` : ""}
@@ -59,7 +63,7 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
             );
           }
           return (
-            <div key={index} style={{ fontSize: SIZE_PX[line.size], fontWeight: line.bold ? 700 : 400, textAlign: line.align }}>
+            <div key={index} style={{ fontSize: SIZE_PX[line.size], fontWeight: line.bold ? 700 : 400, textAlign: line.align, lineHeight: PREVIEW_LINE_HEIGHT }}>
               {line.text}
             </div>
           );
