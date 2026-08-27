@@ -50,6 +50,12 @@ export function InventoryView() {
   const [form, setForm] = useState<Partial<Product> & { editingId?: string | null }>({ editingId: null });
   const [saving, setSaving] = useState(false);
 
+  // M2.5 入貨登記（POS 側）
+  const [stockRows, setStockRows] = useState<{ name: string; unitPrice: string; quantity: string; unit: string }[]>([
+    { name: "", unitPrice: "", quantity: "", unit: "" },
+  ]);
+  const [stockSaving, setStockSaving] = useState(false);
+
   useEffect(() => {
     const s = loadAuthSession();
     if (s?.merchantId) {
@@ -145,6 +151,51 @@ export function InventoryView() {
     setForm({ editingId: null });
   }
 
+  function addStockRow() {
+    setStockRows((r) => [...r, { name: "", unitPrice: "", quantity: "", unit: "" }]);
+  }
+  function updateStockRow(idx: number, field: "name" | "unitPrice" | "quantity" | "unit", val: string) {
+    setStockRows((r) => r.map((row, i) => (i === idx ? { ...row, [field]: val } : row)));
+  }
+  function removeStockRow(idx: number) {
+    setStockRows((r) => (r.length === 1 ? r : r.filter((_, i) => i !== idx)));
+  }
+  const stockTotal = stockRows.reduce((s, row) => s + (Number(row.unitPrice) || 0) * (Number(row.quantity) || 0), 0);
+
+  async function submitStockIn() {
+    if (!merchantId) return;
+    const cleaned = stockRows.filter((r) => r.name.trim() && Number(r.unitPrice) > 0 && Number(r.quantity) > 0);
+    if (cleaned.length === 0) {
+      setError("請至少填一項：品名 + 單價 + 數量");
+      return;
+    }
+    setStockSaving(true);
+    try {
+      const res = await fetch("/api/inventory/stock-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: merchantId,
+          items: cleaned.map((r) => ({
+            name: r.name.trim(),
+            unitPrice: Number(r.unitPrice),
+            quantity: Number(r.quantity),
+            unit: r.unit.trim() || "unit",
+          })),
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string; schemaReady?: boolean };
+      if (!data.ok) {
+        setError(data.error || "入貨登記失敗");
+        return;
+      }
+      setStockRows([{ name: "", unitPrice: "", quantity: "", unit: "" }]);
+      await loadAll();
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
   if (!merchantId) {
     return (
       <div className="h-full w-full overflow-y-auto bg-slate-900 p-6 text-slate-300">
@@ -224,7 +275,7 @@ export function InventoryView() {
             <p className="text-sm text-slate-400">載入中…</p>
           ) : (summary?.todayStockIn?.length ?? 0) === 0 ? (
             <p className="text-sm text-slate-400">
-              今日尚無入貨單。入貨單請於 expenseRecorder 介面記錄（receipt_type=stock_in）。
+              今日尚無入貨單。可用上方「入貨登記」直接登記（自動標記 stock_in）。
             </p>
           ) : (
             <ul className="space-y-1 text-sm">
@@ -236,6 +287,73 @@ export function InventoryView() {
               ))}
             </ul>
           )}
+        </section>
+
+        {/* 入貨登記（POS 側，寫入 receipts stock_in + 自動過帳庫存） */}
+        <section className="mb-6 rounded-xl bg-slate-800 p-4">
+          <h2 className="mb-1 text-sm font-semibold text-slate-200">入貨登記</h2>
+          <p className="mb-3 text-xs text-slate-400">
+            在此登記今日入貨，自動計入「今日用料成本」並過帳庫存（加權平均單價）。
+          </p>
+          <div className="space-y-2">
+            {stockRows.map((row, idx) => (
+              <div key={idx} className="grid grid-cols-12 gap-2">
+                <input
+                  list="inv-product-names"
+                  className="col-span-5 rounded bg-slate-700 px-2 py-1 text-sm"
+                  placeholder="品名*"
+                  value={row.name}
+                  onChange={(e) => updateStockRow(idx, "name", e.target.value)}
+                />
+                <input
+                  className="col-span-2 rounded bg-slate-700 px-2 py-1 text-sm"
+                  type="number"
+                  placeholder="單價*"
+                  value={row.unitPrice}
+                  onChange={(e) => updateStockRow(idx, "unitPrice", e.target.value)}
+                />
+                <input
+                  className="col-span-2 rounded bg-slate-700 px-2 py-1 text-sm"
+                  type="number"
+                  placeholder="數量*"
+                  value={row.quantity}
+                  onChange={(e) => updateStockRow(idx, "quantity", e.target.value)}
+                />
+                <input
+                  className="col-span-2 rounded bg-slate-700 px-2 py-1 text-sm"
+                  placeholder="單位"
+                  value={row.unit}
+                  onChange={(e) => updateStockRow(idx, "unit", e.target.value)}
+                />
+                <button
+                  className="col-span-1 rounded bg-slate-600 px-2 py-1 text-sm hover:bg-slate-500 disabled:opacity-40"
+                  onClick={() => removeStockRow(idx)}
+                  disabled={stockRows.length === 1}
+                  aria-label="移除該項"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+          <datalist id="inv-product-names">
+            {products.map((p) => (
+              <option key={p.id} value={p.name} />
+            ))}
+          </datalist>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button onClick={addStockRow} className="rounded bg-slate-700 px-3 py-1 text-sm hover:bg-slate-600">
+              + 加一項
+            </button>
+            <button
+              onClick={() => void submitStockIn()}
+              disabled={stockSaving}
+              className="rounded bg-orange-500 px-4 py-1 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              {stockSaving ? "登記中…" : "登記入貨"}
+            </button>
+            <span className="text-sm text-slate-400">合計：{money(stockTotal)}</span>
+          </div>
         </section>
 
         {/* 庫存主檔 */}
