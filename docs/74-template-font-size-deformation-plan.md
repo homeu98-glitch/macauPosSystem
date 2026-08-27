@@ -131,7 +131,7 @@ const setStyle = (size, bold) => {
 |----|------|------|
 | P1 Companion | `C:\dev\desktop-companion\companion-server.mjs:263-271` `setStyle` | ✅ 已加 `ESC 3 n`（l→60 / s,m→30）+ `printer.lineSpacing` 覆寫位 |
 | P3 Web | `src/components/escpos-preview.tsx` | ✅ 加 `PREVIEW_LINE_HEIGHT=1.4` 常數，文字行/菜品行顯式 `lineHeight`，比例 1:1:2 對齊 ESC 3 n |
-| P2 Android | `EscPosRenderer.kt`（唔喺本 checkout，見 §8.1 patch） | ⏳ 畀用家喺 Android repo apply |
+| P2 Android | `EscPosRenderer.kt`（經 AAR `POSConnect` 連線 + `ESC 3 n` 修正，見 `docs/75 §7`/`§75b`） | ✅ 已落碼（路 b 混合） |
 
 > `node --check companion-server.mjs` ✅。`escpos-preview.tsx` 係 type-safe 微改（`lineHeight` prop 係 CSSProperties 合法 field），`tsc --noEmit` 唔應有新 error（layout.tsx 已知誤報除外）。
 
