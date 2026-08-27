@@ -171,7 +171,6 @@ export function PosApp() {
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => cachedBootstrap?.categories[0]?.id ?? "");
   const [searchKeyword, setSearchKeyword] = useState("");
-  const [searchFocused, setSearchFocused] = useState(false);
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [roReason, setRoReason] = useState("");
@@ -3103,11 +3102,11 @@ export function PosApp() {
             {activeOrder?.status === "reopened" ? (
               <div className="mx-4 mb-1 mt-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500 px-3 py-1 text-[22px] font-bold text-white">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-amber-500 px-3 py-1 text-sm font-bold text-white">
                     <span className="h-4 w-4 rounded-full bg-white" />
                     返結帳
                   </span>
-                  <span className="text-xs font-semibold text-amber-800">此單為返結單，可改價／加餐後重新結帳</span>
+                  <span className="min-w-0 flex-1 text-xs font-semibold text-amber-800">此單為返結單，可改價／加餐後重新結帳</span>
                 </div>
                 {activeOrder.reopenReason ? (
                   <div className="mt-1 text-[11px] text-amber-700">返結原因：{activeOrder.reopenReason}</div>
@@ -3124,11 +3123,11 @@ export function PosApp() {
               <div className="mx-4 mb-1 mt-2 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-500 px-3 py-1 text-[22px] font-bold text-white">
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-500 px-3 py-1 text-sm font-bold text-white">
                       <span className="h-4 w-4 rounded-full bg-white" />
                       已結帳
                     </span>
-                    <span className="text-xs font-semibold text-slate-700">唯讀預覽 · 所有操作已鎖定</span>
+                    <span className="min-w-0 flex-1 text-xs font-semibold text-slate-700">唯讀預覽 · 所有操作已鎖定</span>
                   </div>
                   <button
                     className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
@@ -3257,10 +3256,10 @@ export function PosApp() {
                         </div>
                       </div>
                       <div className="mt-2 flex items-center justify-between">
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-nowrap items-center gap-2">
                           {!locked ? (
                               <button
-                                className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -3273,7 +3272,7 @@ export function PosApp() {
                           ) : null}
                           {locked ? (
                               <button
-                                className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="whitespace-nowrap rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -3393,10 +3392,10 @@ export function PosApp() {
           <main className="flex h-full flex-col overflow-hidden bg-slate-100">
             <div className="border-b border-slate-200 bg-white px-4 py-3">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-nowrap items-center gap-2 overflow-x-auto min-w-0">
                   <button
                     key="all"
-                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
                       effectiveCategoryId === "" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setActiveCategoryId(ALL_MENU_CATEGORY_ID)}
@@ -3407,7 +3406,7 @@ export function PosApp() {
                   {bootstrap.categories.map((category) => (
                     <button
                       key={category.id}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                      className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
                         effectiveCategoryId === category.id
                           ? "bg-orange-500 text-white"
                           : "bg-slate-100 text-slate-700"
@@ -3419,12 +3418,9 @@ export function PosApp() {
                     </button>
                   ))}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex w-full shrink-0 items-center gap-2 xl:w-72">
                   <input
-                    className={`rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400 ${
-                      searchFocused ? "w-full xl:w-72" : "w-32 xl:w-40"
-                    }`}
-                    onBlur={() => setSearchFocused(false)}
+                    className="h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400"
                     onChange={(event) => {
                       const next = event.target.value;
                       setSearchKeyword(next);
@@ -3433,12 +3429,11 @@ export function PosApp() {
                         setActiveCategoryId(ALL_MENU_CATEGORY_ID);
                       }
                     }}
-                    onFocus={() => setSearchFocused(true)}
                     placeholder="搜尋商品"
                     value={searchKeyword}
                   />
                   <button
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                    className="h-10 whitespace-nowrap shrink-0 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
                     onClick={() => setSearchKeyword("")}
                     type="button"
                   >

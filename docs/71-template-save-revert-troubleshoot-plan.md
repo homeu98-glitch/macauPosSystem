@@ -193,3 +193,112 @@ console.log('STORE  =', localStorage.getItem(key));
 1. print-center 設「大」→ save → DevTools Console `localStorage.getItem('macau-pos/stores/<merchantId>/local-settings')` → 見 `"size":"l"` 確認寫入。
 2. 唔 reload，直接切去 pos-app 收銀介面（觸發 backfill）→ 再 `getItem` 同一 key → 變返預設 `"size":"m"/"s"` → 確證 8.2 係元凶。
 3. 修 A 後重做一次 → key 保持 "l" → revert 消失。
+
+---
+
+## 10. 第二個紙張成因（2026-08-25 落碼）：中文（Kanji）唔受 ESC ! n 倍大影響
+
+> 用家報（turn 4-5）：介面已將「所有內容」字體設大，但實際出紙**只有數字變大，中文字全部冇變大**。
+> 確認：呢個係**紙張（ESC/POS）層嘅 font 問題**，唔係 web 預覽 bug。
+
+### 10.1 Root cause —— 熱敏機有兩套獨立字庫
+
+熱敏印機同時有：
+- **Alphanumeric / Latin 字庫**（英數、數字、符號）→ 受 `ESC ! n`（0x1B 0x21 n）控制。
+  - `SIZE_BYTE = { s:0x00, m:0x20, l:0x30 }`（bit5=雙寬，bit4=雙高；見 §2/#1）。
+- **Kanji / CJK 字庫**（中日韓，中文經 GB18030/GBK/Big5 多字節入機）→ 受 `FS ! n`（0x1C 0x21 n）控制，**唔受 `ESC ! n` 影響**。
+  - `FS ! n` 嘅 bit 位同 `ESC ! n` **唔同**：`KANJI_SIZE_BYTE = { s:0x00(正常), m:0x01(雙寬), l:0x03(雙高雙寬) }`。（⚠️ 標準規格；**商頌 POS-80 實機唔認 `FS ! n`**，要 `FS &` 入 Kanji mode + `GS ! n` 倍大，見 §11，KANJI_SIZE_BYTE 改 0x20/0x30。）
+
+中文文字以多字節（GB18030 等）送落印機 → 印機自動路由去 Kanji 字庫 → `ESC ! n` 只切咗 Latin 字庫嘅大小，**Kanji 字庫維持預設 1x1**。結果同一行：數字（Latin）變大、中文（Kanji）唔變 → 正正係用家見到嘅「只有數字變大」。
+
+### 10.2 三層 symptom 拆解（重要，唔好同 §8 撈亂）
+
+- **預覽（web）**：`EscPosPreview` 每行 `fontSize: SIZE_PX[line.size]` 係整行 uniform 套 CSS px，**無分 Latin/Kanji** → 預覽設「大」整行（含中文）必變大。所以用家預覽「中文有變大」係正常。
+- **介面設「大字體」但預覽只數字變大（turn 3）**：查 `escpos-template.ts` `KITCHEN_BLOCK_DEFAULTS` → 用家當時只將 `order_no / table_name / time` 等**數值區塊**設大，中文字區塊（store_name / order_type / order_note / footer / items 名）仍 "s" → **per-block size 設定問題，唔係 font bug**。解：將所有區塊 size 設一致，或加「全部套用大字」批次鈕（未做）。
+- **介面全部設大、預覽中文有變大、但出紙中文仍唔變大（turn 4-5）**：呢個先係 §10 嘅 ESC/POS font 問題 → 要 `FS ! n` 先解。
+
+### 10.3 修復（已落碼，Companion + Android）
+
+**A. desktop-companion/companion-server.mjs（模板路徑 `textLine`，約 247-254）：**
+```js
+const KANJI_SIZE_BYTE = { s: 0x00, m: 0x01, l: 0x03 };
+const hasCJK = (s) => /[\u3400-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/.test(s || "");
+const textLine = (text, size, bold, align) => {
+  setAlign(align);
+  setStyle(size, bold);                      // ESC ! n（Latin 倍大）
+  if (hasCJK(text)) push(Buffer.from([0x1c, 0x21, KANJI_SIZE_BYTE[size] || 0x00])); // FS ! n（Kanji 倍大）
+  push(encodeText(text, charset));
+  push(Buffer.from([0x0a]));
+};
+```
+`node --check companion-server.mjs` ✅ 通過。
+
+**B. print-agent-android/.../net/EscPosRenderer.kt（`Buf` 類）：**
+```kotlin
+private const val FS = 0x1C
+private val KANJI_SIZE_BYTE = mapOf("s" to 0x00, "m" to 0x01, "l" to 0x03)
+private fun hasCJK(s: String): Boolean { /* 同 Companion 範圍 */ }
+
+private class Buf(private val cs: Charset) {
+    private var curSize: String = "s"        // 記低當前 ESC ! n 檔畀 FS ! n 用
+    fun str(s: String) = apply {
+        if (hasCJK(s)) cmd(FS, 0x21, KANJI_SIZE_BYTE[curSize] ?: 0x00)
+        out.write(encode(s, cs))
+    }
+    fun line(s: String = "") = apply {
+        if (hasCJK(s)) cmd(FS, 0x21, KANJI_SIZE_BYTE[curSize] ?: 0x00)
+        out.write(encode(s, cs)); out.write(LF)
+    }
+    fun style(size: String, bold: Boolean) = apply {
+        curSize = size                        // 模板路徑先 call style 再 call line → curSize 同步
+        cmd(ESC, 0x21, SIZE_BYTE[size] ?: 0x00)
+        cmd(ESC, 0x45, if (bold) 1 else 0)
+    }
+}
+```
+順序（ESC ! n → FS ! n → text）同 Companion 一致。`Buf.str/line` 亦被 legacy 路徑（`renderKitchenTicket` 等）直接 call，但佢哋從未 call `style` → `curSize` 留 "s" → `FS ! n 0x00`（正常 Kanji，no-op），安全。
+
+### 10.4 決定略過嘅路徑
+
+Companion **legacy fallback `line(text,{bold,center})`**（無 size 參數，固定預設字）冇加 `FS ! n`：因佢只處理「無 template 快照」舊 job，永遠單一預設字，加咗都只會 send `FS ! n 0x00`（no-op），對用家「設大字」症狀無幫助 → 略過。模板驅動路徑已全面覆蓋。
+
+### 10.5 已知風險（唔係 bug，係硬件限制）
+
+部分廉價熱敏機嘅 Kanji 字庫固定 24×24，會 ignore `FS ! n` → 改咗 code 都唔會倍大中文。本修對多數機（支援 `FS ! n` Kanji 縮放）有效，對呢類死字庫機無效。若用家機型屬此類，需換機或接受中文固定大小（數字仍可倍大）。
+
+### 10.6 部署（standing）
+
+- **Companion**：`npm run dist` rebuild exe（含 `KANJI_SIZE_BYTE` + `textLine` 修正）+ **報新版本號**（用家 standing instruction：每次 desktop app 更新要主動報版本）。
+- **Android**：`./gradlew assembleDebug` rebuild APK（含 `FS` 常數 + `Buf` 修正；沙盒無 Android SDK，待用家 dev box）。
+- **web**：`SIZE_PX.l=22` 早已 source 改，Vercel push 即生效；預覽層冇受 §10 影響（CSS uniform），唔使改。
+
+---
+
+## 11. 第三層成因（2026-08-27）：商頌 POS-80 唔認 FS ! n（要 FS & 入 Kanji mode）
+
+> 用家 confirm：① 中文區塊已全設「大」（Layer 1 排除）；② Companion/APK 已 rebuild 含 FS ! n（Layer 2 排除）。但中文仍唔變大 → 確證 Layer 3（印機 firmware 唔買 FS ! n 帳）。
+
+### 11.1 Root cause
+- 兩個 renderer 從未 send 任何「字集切換」指令：無 `FS &`（0x1C 0x26 入 Kanji mode）/ `FS .`（0x1C 0x2E 出）、無 `ESC t`（0x1B 0x74 code page）、無 `ESC ( C` 揀中文 font。
+- 商頌 POS-80 中文印到（細）係靠開機預設 auto-detect multibyte → 用預設 Kanji 字庫 render；`FS ! n` 只對「已入 Kanji mode（FS &）嘅 Kanji 字型」生效，無顯式 FS & 時變 no-op。
+- 推論：ESC ! n 生效（數字變大）證印機正常處理 ESC/POS 字型指令；只係中文路徑（Kanji font）未 engage → 加 `FS &`/`FS .` 包裝就係最可能的修。
+
+### 11.2 修正（已落碼，CONFIRMED 實機 V5/V6）
+- **指令順序（Companion + Android 完全一致）**：當行含 CJK →
+  `FS &`(0x1C 0x26) 入 Kanji mode → `GS ! n`(0x1D 0x21, KANJI_SIZE_BYTE[size]) 倍大中文 → 送 bytes → `FS .`(0x1C 0x2E) 出 Kanji mode。
+- **KANJI_SIZE_BYTE = { s:0x00, m:0x20, l:0x30 }**（= GS ! n bit，同 ESC ! n 位元；"大"→ l → 0x30 = V5）。
+- Companion `companion-server.mjs` `textLine`（227-258）：`KANJI_SIZE_BYTE` 改 0x20/0x30；`push([0x1d,0x21,...])`(GS ! n) + `FS &`/`FS .` wrap。`node --check` ✅。
+- Android `EscPosRenderer.kt` `Buf.str/line`（66-81）：`KANJI_SIZE_BYTE` map 改 0x20/0x30；`cmd(FS,0x26)` → `cmd(GS,0x21,KANJI_SIZE_BYTE[curSize])` → bytes → `cmd(FS,0x2e)`（`FS`/`GS` 常數 0x1C/0x1D 已存在）。curSize 由 `style()` 同步；legacy 路徑唔 call style → curSize="s" → GS ! n 0x00，包住 FS &/FS . 都只係入出 mode 唔倍大，安全。
+- **版本**：Companion bump `0.1.13 → 0.1.14`（0.1.13 係 FS ! n 嘗試，用家 rebuild 後實測 V1-V4 都唔得，故再升一版落 GS ! n，standing instruction：更新 desktop app 要報版本）。
+
+### 11.3 對照測試腳本（已完成使命，留底備查）
+`desktop-companion/test-kanji-size.mjs` 印 V1–V6 六 variant，用家報 **V5/V6 PASS** → 鎖定 `FS & + GS ! n`。
+- V1 = ESC!n only（中文唔變，現象重現）；V2 = FS!n 無 FS&（no-op）；V3 = FS&+FS!n(0x03)（no-op）；V4 = FS&+FS!n(0x30)（no-op）；V5 = FS&+GS!n(0x30) ✅；V6 = FS&+GS!n(0x03) ✅（對照組，證指令被收）。
+- 若日後換機再遇「中文唔變大」，可再跑此腳本對照；但已鎖定商頌 POS-80 用 V5 邏輯（即現 renderer）。
+- 用法：`node test-kanji-size.mjs <printer-ip> [port=9100]`（GB18030 經 iconv-lite encode；port 可帶 `[port=9100]` 括號）。
+
+### 11.4 部署（standing）
+- **Companion**：`npm run dist` → 出 **0.1.14**（含 FS & + GS ! n 修正，KANJI_SIZE_BYTE 0x20/0x30）。用家必須 rebuild 新 exe（0.1.13 含舊 FS ! n 仍唔得）。
+- **Android**：`./gradlew assembleDebug`（沙盒無 SDK，待用家 dev box；EscPosRenderer.kt 已落 GS ! n）。
+- **web**：預覽層 CSS uniform 無受影響（§10.2 已述）；`SIZE_PX.l=22` 早已 source 改，Vercel push 即生效。
+- 回歸：rebuild 後設「大」打印 → 數字 + 中文同時變大 = 修復完成。
