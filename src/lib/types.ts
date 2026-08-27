@@ -179,6 +179,13 @@ export interface DevicePrinterConfig {
   lanPort?: number;
   /** ESC/POS 編碼（每台可配；預設 GB18030。可選: gb18030 / gbk / big5 / utf-8） */
   charset?: string;
+  /** 中文（Kanji）倍大指令：商頌 POS-80 等機要用 GS ! n；標準 ESC/POS 機用 FS ! n。
+   *  空缺 = 渲染器預設 GS ! n（即「接上就用」嘅安全值，已喺商頌 POS-80 實機對照測試證實）。 */
+  kanjiEnlarge?: "FS!" | "GS!";
+  /** A 通道（OS spooler RAW）打印端口：driverless USB Printer Class（如商頌 POS-80 / Windows USB001 虛擬埠）
+   *  填 "USB001"（Windows）/ CUPS 隊列名（macOS·Linux）。有值時 Companion 優先用 OS spooler 打，
+   *  失敗再回落 node-usb B 通道。空缺 = 直接用 B 通道。 */
+  usbPort?: string;
   /** USB 打印機 VID（自動偵測，商家唔使手填；Meituan 式型號表對照） */
   usbVendorId?: string;
   /** USB 打印機 PID（自動偵測） */

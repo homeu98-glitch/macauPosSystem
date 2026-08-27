@@ -217,6 +217,9 @@ export interface PrinterCandidate {
   model?: string;
   charset?: string;
   paperSize?: string;
+  /** 中文（Kanji）倍大指令：商頌 POS-80 等機要用 GS ! n；標準 ESC/POS 機用 FS ! n。
+   *  Companion 由 VID/PID 對照型號表或 USB Printer Class 通用 fallback 回傳；web 直接採用。 */
+  kanjiEnlarge?: "FS!" | "GS!";
 }
 
 interface DiscoveredLanPrinter {
@@ -233,6 +236,7 @@ interface UsbPrinterRow {
   model?: string;
   charset?: string;
   paperSize?: string;
+  kanjiEnlarge?: "FS!" | "GS!";
   recognized?: boolean;
 }
 
@@ -279,6 +283,7 @@ export async function enumerateCompanionUsbPrinters(): Promise<PrinterCandidate[
         model: p.model,
         charset: p.charset,
         paperSize: p.paperSize,
+        kanjiEnlarge: p.kanjiEnlarge,
       } as PrinterCandidate;
     });
   } catch {
@@ -315,6 +320,7 @@ export async function listCompanionPrinters(): Promise<PrinterCandidate[]> {
         model: p.model,
         charset: p.charset,
         paperSize: p.paperSize,
+        kanjiEnlarge: p.kanjiEnlarge,
       } as PrinterCandidate;
     });
     return [...lan, ...usb];

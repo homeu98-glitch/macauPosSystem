@@ -15,6 +15,9 @@ export interface UsbModelMeta {
   model: string;
   charset: CharsetValue;
   paperSize: PaperSizeValue;
+  /** 中文（Kanji）倍大指令：商頌 POS-80 等機要用 GS ! n；標準 ESC/POS 機用 FS ! n。
+   *  空缺 = 用品牌預設 / 最終渲染器 fallback GS ! n（安全值）。 */
+  kanjiEnlarge?: "FS!" | "GS!";
 }
 
 export interface UsbVendorMeta {
@@ -22,6 +25,8 @@ export interface UsbVendorMeta {
   /** 預設 ESC/POS 編碼（該品牌大多數機型共用） */
   defaultCharset: CharsetValue;
   defaultPaperSize: PaperSizeValue;
+  /** 品牌預設中文倍大指令；標準 ESC/POS 機多數 FS ! n，商頌 POS-80 等例外 GS ! n */
+  defaultKanjiEnlarge?: "FS!" | "GS!";
   /** 已知 PID → 型號；冇命中就用 brand 同名 fallback */
   models: Record<string, UsbModelMeta>;
 }
@@ -171,6 +176,8 @@ export interface ResolvedUsbMeta {
   model: string;
   charset: CharsetValue;
   paperSize: PaperSizeValue;
+  /** 中文倍大指令：標準機 FS ! n / 商頌 POS-80 等 GS ! n；渲染器最終 fallback GS ! n */
+  kanjiEnlarge: "FS!" | "GS!";
   /** true = VID/PID 命中型號表；false = 認到 VID 但未有精確型號（用品牌預設） */
   generic: boolean;
 }
@@ -194,6 +201,7 @@ export function resolveUsbMeta(
       model: model.model,
       charset: model.charset,
       paperSize: model.paperSize,
+      kanjiEnlarge: model.kanjiEnlarge || vendor.defaultKanjiEnlarge || "FS!",
       generic: false,
     };
   }
@@ -202,6 +210,7 @@ export function resolveUsbMeta(
     model: vendor.brand,
     charset: vendor.defaultCharset,
     paperSize: vendor.defaultPaperSize,
+    kanjiEnlarge: vendor.defaultKanjiEnlarge || "FS!",
     generic: true,
   };
 }

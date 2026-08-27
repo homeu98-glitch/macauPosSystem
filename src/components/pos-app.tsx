@@ -3010,7 +3010,7 @@ export function PosApp() {
                         <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
-                            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1 text-[22px] font-semibold text-orange-700">
+                            <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-700">
                               <span className="h-4 w-4 rounded-full bg-orange-500" />
                               {localOrderStatusLabel(order)}
                             </div>

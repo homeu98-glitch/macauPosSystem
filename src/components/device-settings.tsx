@@ -34,6 +34,7 @@ import { PrinterCompanionPanel } from "@/components/printer-companion-panel";
 import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
+import { resolveUsbMeta } from "@/lib/print-bridge/printer-models";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -978,6 +979,36 @@ export function DeviceSettings() {
                                 readOnly
                               />
                             </label>
+                            {(() => {
+                              const r = resolveUsbMeta(printer.usbVendorId, printer.usbProductId);
+                              const isGeneric = !r; // 未知 VID（如商頌 POS-80 等 USB Printer Class 通用設備）
+                              return (
+                                <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                                  <span className="text-xs text-slate-500">偵測到嘅機型（命令檔）</span>
+                                  <input
+                                    className="rounded-2xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
+                                    value={
+                                      isGeneric
+                                        ? "通用 ESC/POS（USB Printer Class）"
+                                        : `${r!.brand} ${r!.model}`
+                                    }
+                                    disabled
+                                    readOnly
+                                  />
+                                </label>
+                              );
+                            })()}
+                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                              <span className="text-xs text-slate-500">
+                                OS 打印端口（A 通道 · driverless USB）
+                              </span>
+                              <input
+                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                onChange={(e) => updatePrinter(printer.id, { usbPort: e.target.value || undefined })}
+                                placeholder="USB001（Windows）/ CUPS 隊列名（macOS·Linux）"
+                                value={printer.usbPort ?? ""}
+                              />
+                            </label>
                           </>
                         )}
                         {printer.connectionType === "bluetooth" && (
@@ -1003,6 +1034,22 @@ export function DeviceSettings() {
                             <option value="gbk">GBK</option>
                             <option value="big5">Big5</option>
                             <option value="utf-8">UTF-8</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                          <span className="text-xs text-slate-500">中文倍大指令（Kanji 命令檔）</span>
+                          <select
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            onChange={(event) =>
+                              updatePrinter(printer.id, {
+                                kanjiEnlarge: (event.target.value || undefined) as DevicePrinterConfig["kanjiEnlarge"],
+                              })
+                            }
+                            value={printer.kanjiEnlarge ?? ""}
+                          >
+                            <option value="">自動（GS ! n · 接上就用）</option>
+                            <option value="FS!">FS ! n（標準 ESC/POS 機）</option>
+                            <option value="GS!">GS ! n（商頌 POS-80 等）</option>
                           </select>
                         </label>
                         <label className="grid gap-1 text-sm font-semibold text-slate-700">

@@ -69,6 +69,8 @@ export async function dispatchJobToNative(
       lanPort: opts.printer.lanPort ?? 9100,
       paperSize: opts.printer.paperSize ?? "",
       charset: opts.printer.charset ?? "gb18030",
+      // 中文倍大指令（商頌 POS-80 = GS ! n，標準機 = FS ! n；空缺 Android 渲染器 fallback GS ! n）
+      kanjiEnlarge: opts.printer.kanjiEnlarge ?? "GS!",
       // 雙路徑 contract（Phase 0）：USB / Bluetooth 連接識別
       usbVendorId: opts.printer.usbVendorId ?? "",
       usbProductId: opts.printer.usbProductId ?? "",

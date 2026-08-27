@@ -1,8 +1,8 @@
 # 72 · 通用即插即用 USB 打印方案（Meituan 式「接上就用、唔使裝 driver」）
 
-> 日期：2026-08-27
+> 日期：2026-08-27（2026-08-26 落碼 P2–P6）
 > 範圍：3 repo 共用 — `desktop-companion`（Windows/macOS/Linux Electron）、`print-agent-android`（USB Host）、`macauPosSystem` web（device-settings UI + printer-models.ts）
-> 狀態：**方案（分析 + 計劃，先出 plan，confirm 先落碼）**
+> 狀態：**已實施 P2–P6**（A 通道 + Model Profile 擴充 + Android profile 注入 + web 機型下拉；見 §10）
 > 目標：令商家「插 USB 就印」，唔使裝第三方 driver、唔使手填 VID/PID；必要時頂多喺 UI 揀機型 refine。
 
 ---
@@ -35,10 +35,10 @@
   - `components/device-settings.tsx`：`connectionType` 下拉已有 `lan / usb / bluetooth`；usb 顯示 VID/PID 欄；`charset` 下拉（約 909-976 行）。
   - `src/lib/print-bridge/printer-models.ts`：`USB_PRINTER_DB`（VID→brand/model/charset/paperSize）+ `resolveUsbMeta()` + `KNOWN_USB_PRINTER_VIDS` —— **Meituan 式 VID/PID 自動配對雛形已有**。
   - `src/lib/print-bridge/native.ts`：`isNativeBridgeAvailable` / `dispatchJobToNative` / `listNativeUsbPrinters` 已有；`src/lib/print-bridge/companion.ts` 已 expect Companion 後端 `/api/usb` 枚舉（node-usb）。
-- **Android `print-agent-android`（本 repo，**目前無 USB 實作代碼**）**：
-  - doc 52 規劃嘅 `net/UsbPrinter.kt` / `usb/UsbController.kt`（枚舉 `USB_CLASS_PRINTER(7)` → requestPermission → openDevice → claim → bulkTransfer）**只係計劃，未落碼**（目錄目前無 Kotlin 實作）。要達到「接上就用」必須喺呢層實作 —— 呢正係 Android USB Host 嘅 driverless 通道。
-- **Desktop Companion（`desktop-companion` repo，非本 checkout）**：
-  - 按 docs 47-52 應有 node-usb 枚舉 + `printUsb()` bulkTransfer（B 通道）；本 repo 嘅 `print-relay/server.mjs` 只係雲端 WebSocket relay，**並非 USB 打印驅動**，唔好混淆。Companion 實際代碼需喺該 repo 確認。
+- **Android `print-agent-android`（本 repo，**USB 實作已經有**）**：
+  - `net/UsbPrinter.kt`、`usb/UsbController.kt`、`model/UsbPrinterCandidate.kt` 均已落碼（枚舉 `USB_CLASS_PRINTER(7)` → requestPermission → openDevice → claim → bulkTransfer，driverless 通道齊全）；`net/EscPosRenderer.kt` 已喺 P2 接 `PrinterModelProfile`（讀 `PrinterCfgDto.kanjiEnlarge` 切 FS!/GS!）。UI 冇 USB 代碼嘅舊描述已過時。
+- **Desktop Companion（`desktop-companion` repo，**本 checkout 有**）**：
+  - `companion-server.mjs` 已含 node-usb 枚舉 + `printUsb()` bulkTransfer（B 通道）+ 今次新增 `printUsbClass()`（A 通道 spooler RAW，見 §10）；`enumerateUsbPrinters()` 已加 USB Printer Class（deviceClass 07h）通用 fallback。本 checkout 直接改到，`npm run dist` rebuild 即生效。
 
 **所以真正缺嘅係三件事：**
 1. **Android USB 實作**：`print-agent-android` 未落碼，要按 doc 52 寫 Kotlin USB Host（Android 端 driverless 核心）。
@@ -157,3 +157,41 @@ interface PrinterModelProfile {
   - **Windows Companion 係主要新做嘅位**：而家得 B 通道（libusb claim + detach），要**加 A 通道 `printUsbClass()`（spooler RAW 直通，優先）**。做法：`print /D:USB001 file.bin`（Windows）／ `lp -o raw`（macOS·Linux）。A 成功用 A；A 失敗（spooler 停用 / 無 class 設備）才 fallback B（libusb）。
   - 純 C（CH34x）機：今次目標機唔屬此類，但保留 serialport fallback 俾其他平價機。
 - **結論**：A 姿態 + 兩平台 → 落 P2（profile 擴充，含商頌 POS-80 `kanjiEnlarge:"GS!"`）→ P3（Companion A 通道）→ P4（Android profile）→ P5（web 機型下拉）→ P6 回歸（商頌 POS-80 + 另一部機）。
+
+---
+
+## 10. P2–P6 實施記錄（2026-08-26 落碼）
+
+> 三端同步擴 `kanjiEnlarge`（中文倍大 FS!/GS!）+ Companion 加 A 通道 + web 機型下拉。tsc（web）/ `node --check`（Companion）零錯。Android 未喺 sandbox 編譯（無 Android SDK），邏輯已對齊。
+
+### 10.1 P2 Model Profile 擴充（kanjiEnlarge 貫穿三端）
+- `src/lib/types.ts`：`DevicePrinterConfig` 加 `kanjiEnlarge?: "FS!"|"GS!"` + `usbPort?: string`（A 通道端口）。
+- `src/lib/print-bridge/printer-models.ts`：`UsbModelMeta` 加 `kanjiEnlarge`、`UsbVendorMeta` 加 `defaultKanjiEnlarge`、`ResolvedUsbMeta.kanjiEnlarge` 非可空；`resolveUsbMeta()` 回 `model.kanjiEnlarge || vendor.defaultKanjiEnlarge || "FS!"`（已知品牌預設 FS!，標準 ESC/POS 規格；商頌係 GS! 例外，經通用 fallback 處理）。
+- `src/lib/print-bridge/native.ts`：Android printer payload 加 `kanjiEnlarge: opts.printer.kanjiEnlarge ?? "GS!"`（web→Android 預設 GS! = 接上就用安全值）。
+- `src/lib/print-bridge/companion.ts`：`PrinterCandidate` + `UsbPrinterRow` 加 `kanjiEnlarge`，兩條 USB 枚舉路徑（enumerate / list）都透傳。
+- `desktop-companion/companion-server.mjs`：
+  - `resolveUsbMeta()` 加 `deviceClass` 參數 → **新增 USB Printer Class（07h）通用 fallback**：未知 VID 但 `deviceClass===7` 一律當通用 ESC/POS，`kanjiEnlarge:"GS!"`、`charset:"gb18030"`、`paperSize:"80mm` → **商頌 POS-80 等未知 VID 機「插上就見」**。
+  - `enumerateUsbPrinters()` 傳 `dev.deviceDescriptor.bDeviceClass` 入 `resolveUsbMeta`，回傳 `kanjiEnlarge`。
+  - `renderEscPos()` 讀 `printer.kanjiEnlarge`：非 `"FS!"` 用 `GS ! n`（0x1D 0x21），否則 `FS ! n`（0x1C 0x21）做中文倍大。
+- `print-agent-android/.../model/PrintDtos.kt`：`PrinterCfgDto` 加 `kanjiEnlarge` + `fromJson` 解析。
+- `print-agent-android/.../net/EscPosRenderer.kt`：`Buf` 加 `kanjiCmd`（依 `printer.kanjiEnlarge` 選 FS!/GS!），4 個 render 函式全部傳入 → Android 中文倍大跟機型。
+
+### 10.2 P3 Companion A 通道（printUsbClass）
+- `companion-server.mjs` 加 `import os` + `spawnSync`；新增 `printUsbClass(printer, buf)`：有 `printer.usbPort` → Windows `cmd /c print /D:<PORT> <tmp>`、macOS·Linux `lp -o raw -d <queue> <tmp>` 送 RAW；失敗回 `fallback:true`。
+- `dispatch()`：USB 先試 A（`printer.usbPort` 有值先試），失敗 warn + 回落 `printUsb()`（B 通道）；無 `usbPort` 直接 B。
+- web `device-settings.tsx` USB 區加「OS 打印端口」輸入（placeholder `USB001`），連 `DevicePrinterConfig.usbPort`。
+
+### 10.3 P4 Android profile 注入（見 10.1 Android 部分）
+- 已由 `EscPosRenderer` 讀 `PrinterCfgDto.kanjiEnlarge` 完成；`UsbController` 本就 attach 即枚舉 + 自動加機，profile 經 web `DevicePrinterConfig` 落到 Android。
+
+### 10.4 P5 web 機型下拉（device-settings.tsx）
+- USB 區加「偵測到嘅機型（命令檔）」唯讀欄：`resolveUsbMeta(vid,pid)` → 顯示 `品牌 型號`；未知 VID 顯示「通用 ESC/POS（USB Printer Class）」。
+- 加「中文倍大指令（Kanji 命令檔）」下拉：`""`=自動 GS! / `FS!`=標準機 / `GS!`=商頌 POS-80，寫 `printer.kanjiEnlarge`。
+- 加「OS 打印端口（A 通道）」輸入，寫 `printer.usbPort`。
+
+### 10.5 P6 回歸 / 部署
+- **web**：`npx tsc --noEmit`（過濾 `layout.tsx` 已知 `LayoutProps` 誤報）0 錯。
+- **Companion**：`node --check companion-server.mjs` 0 錯。需 `npm run dist` rebuild exe 先生效（改咗 server 核心）。
+- **Android**：無 SDK 未編譯；邏輯對齊 EscPosRenderer / PrintDtos，待 dev box `./gradlew assembleDebug` 驗證。
+- **部署步驟**：① web commit+push（Vercel 自動 build）；② desktop-companion `npm run dist` 出新 exe 版本（**新版號要主動告知用家**，規約見 MEMORY）；③ print-agent-android `assembleDebug` 出新 APK。
+- **用家待確認**：商頌 POS-80 實機插 Windows → Companion「掃描 USB」應見「通用 ESC/POS（USB Printer Class）」、`kanjiEnlarge=GS!`、`usbPort=USB001`，測試打印中文倍大正確。若 `deviceClass` 唔係 7（極少數 interface-class-only 機），將其 VID 加一行入 `USB_PRINTER_DB` 即可。
