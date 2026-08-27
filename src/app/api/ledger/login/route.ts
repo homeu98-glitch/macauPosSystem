@@ -4,7 +4,6 @@ import { createClient } from "@supabase/supabase-js";
 import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
 import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
-import { ensureExpenseShopUser } from "@/lib/expense-identity";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
 
@@ -146,24 +145,6 @@ export async function POST(request: Request) {
     role === "admin"
       ? { refundOrder: true, voidItem: true, manageAccounts: true }
       : { refundOrder: false, voidItem: false, manageAccounts: false };
-
-  // 整合：登入當下建立/刷新 expenseRecorder 專案的 shop_users 對應（§5.3）。
-  // 失敗不阻斷登入——inventory 分頁會降級顯示「未連線」。
-  try {
-    const mapped = await ensureExpenseShopUser({
-      merchantId: staffRow.merchant_id,
-      phone,
-      shopName: merchant?.name,
-    });
-    if (!mapped.ok) {
-      console.warn("[inventory] 身份對應失敗（不阻斷登入）:", mapped.reason);
-    }
-  } catch (mapErr) {
-    console.warn(
-      "[inventory] 身份對應例外（不阻斷登入）:",
-      mapErr instanceof Error ? mapErr.message : mapErr,
-    );
-  }
 
   return NextResponse.json({
     ok: true,
