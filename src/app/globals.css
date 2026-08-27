@@ -55,6 +55,16 @@ textarea {
   font: inherit;
 }
 
+/* 修正：<label className="grid ... font-semibold ..."> 包住 input / select / textarea 時，
+   font-semibold 會繼承俾所有仔女，造成 CJK 字喺欄位入面睇起嚟「整體變大、中間變形」
+   （font-weight 600 嘅中文字中間筆劃會變粗，整個字符視覺上漲大）。
+   強制表單欄位還原 normal（400），input 文字始終係正常字重。 */
+label.grid > input,
+label.grid > select,
+label.grid > textarea {
+  font-weight: 400;
+}
+
 button {
   transition:
     transform 120ms ease,
