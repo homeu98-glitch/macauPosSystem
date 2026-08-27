@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
+import {
+  buildPurchaseSummary,
+  receiptDateMatchesRange,
+  type StatReceipt,
+} from "@/lib/inventory-stats";
+import type { ReportRangeKey } from "@/lib/ledger/report-period";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,16 +17,22 @@ function isMissingTable(err: DbError): boolean {
   return /relation .* does not exist/i.test(err.message ?? "");
 }
 
+const VALID_RANGES: ReportRangeKey[] = ["today", "yesterday", "7d", "30d", "all"];
+
 /**
- * 唯讀：依 8 位帳號顯示 expenseRecorder 的收據。
+ * 唯讀：依 8 位帳號顯示 expenseRecorder 的收據，並回傳買貨統計。
  * 關聯：account → shop_users.login_id → shop_users.id
  *       收據經 user_id = shop_users.id 或 merchant_id ∈ (merchants WHERE user_id = shop_users.id)
  * 不寫入、不加表，直接沿用 expenseRecorder 原始 receipts / receipt_items 結構。
+ * 支援 range（today/yesterday/7d/30d/all，澳門時區依 receipt_date 過濾）。
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const account = searchParams.get("account");
   if (!account) return NextResponse.json({ ok: false, error: "缺少 account" }, { status: 400 });
+
+  const rawRange = searchParams.get("range") as ReportRangeKey | null;
+  const range: ReportRangeKey = rawRange && VALID_RANGES.includes(rawRange) ? rawRange : "all";
 
   const client = getExpenseSupabaseClient();
   if (!client) return NextResponse.json({ ok: false, error: "expense client 未設定" }, { status: 503 });
@@ -33,7 +45,7 @@ export async function GET(request: Request) {
     .maybeSingle();
   if (suErr) {
     if (isMissingTable(suErr))
-      return NextResponse.json({ ok: true, schemaReady: false, matched: false, receipts: [] });
+      return NextResponse.json({ ok: true, schemaReady: false, matched: false, receipts: [], summary: buildPurchaseSummary([]) });
     return NextResponse.json({ ok: false, error: suErr.message }, { status: 500 });
   }
   if (!shopUser) {
@@ -41,13 +53,25 @@ export async function GET(request: Request) {
       ok: true,
       matched: false,
       receipts: [],
+      summary: buildPurchaseSummary([]),
       message: "expenseRecorder 找不到相同帳號的店戶",
     });
   }
 
-  // 2) 該店戶的 merchants（收據可能經 merchant_id 掛，原始結構缺表時忽略）
-  const { data: merchants } = await client.from("merchants").select("id").eq("user_id", shopUser.id);
+  // 2) 該店戶的 merchants（取 id + name 做供貨商名稱對照）
+  const { data: merchants, error: mErr } = await client
+    .from("merchants")
+    .select("id, name")
+    .eq("user_id", shopUser.id);
+  if (mErr) {
+    if (isMissingTable(mErr))
+      return NextResponse.json({ ok: true, schemaReady: false, matched: true, receipts: [], summary: buildPurchaseSummary([]) });
+    return NextResponse.json({ ok: false, error: mErr.message }, { status: 500 });
+  }
   const merchantIds = (merchants ?? []).map((m) => m.id);
+  const merchantNameById = new Map<string, string>(
+    (merchants ?? []).map((m) => [m.id, typeof m.name === "string" && m.name.trim() ? m.name.trim() : "未知供應商"]),
+  );
 
   // 3) receipts（user_id 或 merchant_id）
   const orParts = [`user_id.eq.${shopUser.id}`];
@@ -59,7 +83,7 @@ export async function GET(request: Request) {
     .order("receipt_date", { ascending: false });
   if (rErr) {
     if (isMissingTable(rErr))
-      return NextResponse.json({ ok: true, schemaReady: false, matched: true, receipts: [] });
+      return NextResponse.json({ ok: true, schemaReady: false, matched: true, receipts: [], summary: buildPurchaseSummary([]) });
     return NextResponse.json({ ok: false, error: rErr.message }, { status: 500 });
   }
 
@@ -72,7 +96,7 @@ export async function GET(request: Request) {
       .in("receipt_id", ids);
     if (iErr) {
       if (isMissingTable(iErr))
-        return NextResponse.json({ ok: true, schemaReady: false, matched: true, receipts: [] });
+        return NextResponse.json({ ok: true, schemaReady: false, matched: true, receipts: [], summary: buildPurchaseSummary([]) });
       return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
     }
     items = itemRows ?? [];
@@ -86,7 +110,49 @@ export async function GET(request: Request) {
     itemsByReceipt.set(rid, arr);
   }
 
-  const enriched = (receipts ?? []).map((r) => ({ ...r, items: itemsByReceipt.get(r.id) ?? [] }));
+  const toStatReceipt = (r: Record<string, unknown>): StatReceipt => {
+    const raw = (r.raw_ocr_data ?? null) as Record<string, unknown> | null;
+    const getRaw = (key: string): string => {
+      const v = raw?.[key];
+      return typeof v === "string" && v.trim() ? v.trim() : "";
+    };
+    const receiptItems = (itemsByReceipt.get(String(r.id)) ?? []).map((it) => {
+      const item = it as Record<string, unknown>;
+      return {
+        name: typeof item.name === "string" ? item.name : "未命名品項",
+        unit_price: Number(item.unit_price) || 0,
+        quantity: Number(item.quantity) || 1,
+      };
+    });
+    return {
+      id: String(r.id),
+      merchant_name: merchantNameById.get(String(r.merchant_id ?? "")) ?? "未知供應商",
+      receipt_date: typeof r.receipt_date === "string" ? r.receipt_date : "",
+      total_amount: Number(r.total_amount) || 0,
+      payment_status: getRaw("payment_status") || "unpaid",
+      payment_method: getRaw("payment_method") || "on_delivery",
+      items: receiptItems,
+    };
+  };
 
-  return NextResponse.json({ ok: true, matched: true, receipts: enriched });
+  // 4) 依 range 過濾（澳門時區，in-memory）
+  const statReceipts: StatReceipt[] = (receipts ?? [])
+    .filter((r) => receiptDateMatchesRange(String(r.receipt_date ?? ""), range))
+    .map(toStatReceipt);
+
+  const enriched = statReceipts.map((sr) => ({
+    id: sr.id,
+    total_amount: sr.total_amount,
+    receipt_date: sr.receipt_date,
+    merchant_id: (receipts ?? []).find((r) => r.id === sr.id)?.merchant_id ?? null,
+    merchant_name: sr.merchant_name,
+    payment_method: sr.payment_method,
+    payment_status: sr.payment_status,
+    raw_ocr_data: (receipts ?? []).find((r) => r.id === sr.id)?.raw_ocr_data ?? null,
+    items: sr.items,
+  }));
+
+  const summary = buildPurchaseSummary(statReceipts);
+
+  return NextResponse.json({ ok: true, matched: true, range, receipts: enriched, summary });
 }

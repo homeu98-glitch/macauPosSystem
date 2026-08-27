@@ -9,6 +9,7 @@ import { defaultDeviceConfig } from "@/lib/mock-data";
 import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
 import { orderMatchesReportRange } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
+import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
 import {
   loadAuthSession,
@@ -75,6 +76,7 @@ export function ShiftPage() {
   const [ledgerToday, setLedgerToday] = useState<LedgerReportSummary | null>(null);
   const [ledgerTodayLoading, setLedgerTodayLoading] = useState(false);
   const [ledgerTodayError, setLedgerTodayError] = useState<string | null>(null);
+  const [purchaseToday, setPurchaseToday] = useState<PurchaseApiResponse | null>(null);
   const authSession = useMemo(() => loadAuthSession(), []);
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
@@ -127,6 +129,13 @@ export function ShiftPage() {
 
     void loadLedgerToday();
   }, []);
+
+  useEffect(() => {
+    const acc = loadAuthSession()?.account;
+    if (!acc) return;
+    void fetchPurchaseSummary(acc, "today").then(setPurchaseToday);
+  }, []);
+
   const queueSummary = (() => {
     const queue = loadQueue();
     const printJobs = loadPrintJobs();
@@ -172,6 +181,7 @@ export function ShiftPage() {
       `營業額：${formatMoney(row.revenue)}`,
       `線上已支付：${formatMoney(row.prepaid)}`,
       `退款：${row.refundCount} 張 / ${formatMoney(row.refundAmount)}`,
+      ...purchaseLines(),
       `應收現金：${formatMoney(row.expectedCash)}`,
       typeof row.actualCash === "number" ? `實收現金：${formatMoney(row.actualCash)}` : "",
       typeof row.cashDifference === "number" ? `現金差額：${formatMoney(row.cashDifference)}` : "",
@@ -179,6 +189,14 @@ export function ShiftPage() {
       `待補傳打印：${row.pendingPrints}`,
       row.closingNote ? `備註：${row.closingNote}` : "",
     ].filter(Boolean);
+  }
+
+  function purchaseLines(): string[] {
+    if (!purchaseToday?.summary) return [];
+    return [
+      `今日買貨成本（已付）：${formatMoney(purchaseToday.summary.paid)}`,
+      `今日買貨成本（未付，不計入）：${formatMoney(purchaseToday.summary.unpaid)}`,
+    ];
   }
 
   function reprintShiftRecord(row: (typeof shiftHistory)[number]) {
@@ -306,6 +324,7 @@ export function ShiftPage() {
             `到店／貨到付款：${formatMoney(ledgerToday.orderInStorePaidMop)}`,
           ]
         : []),
+      ...purchaseLines(),
       `應收現金：${formatMoney(expectedCash)}`,
       Number.isFinite(actualCashValue) ? `實收現金：${formatMoney(actualCashValue)}` : "",
       Number.isFinite(actualCashValue) ? `現金差額：${formatMoney(cashDifference)}` : "",
@@ -593,6 +612,15 @@ export function ShiftPage() {
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">待補傳打印</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingPrints}</div>
+              </article>
+              <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-sm text-emerald-700">今日買貨成本（已付）</div>
+                <div className="mt-2 text-2xl font-semibold text-emerald-700">
+                  {purchaseToday?.summary ? formatMoney(purchaseToday.summary.paid) : "--"}
+                </div>
+                {purchaseToday?.summary && purchaseToday.summary.unpaid > 0 ? (
+                  <div className="mt-1 text-xs text-amber-700">未付 {formatMoney(purchaseToday.summary.unpaid)} 不計入</div>
+                ) : null}
               </article>
             </div>
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">

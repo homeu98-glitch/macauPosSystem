@@ -7,7 +7,8 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
 import { orderMatchesReportRange, ReportRangeKey, reportRangeLabel } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import { loadOrders } from "@/lib/storage";
+import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
+import { loadAuthSession, loadOrders } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
 
@@ -18,6 +19,8 @@ export function ReportsDashboard() {
   const [ledgerSummary, setLedgerSummary] = useState<LedgerReportSummary | null>(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
+  const [purchase, setPurchase] = useState<PurchaseApiResponse | null>(null);
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
 
   useEffect(() => {
     async function loadLedgerSummary() {
@@ -41,6 +44,28 @@ export function ReportsDashboard() {
     }
 
     void loadLedgerSummary();
+  }, [range]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPurchase() {
+      setPurchaseLoading(true);
+      const acc = loadAuthSession()?.account;
+      if (!acc) {
+        setPurchase(null);
+        setPurchaseLoading(false);
+        return;
+      }
+      const res = await fetchPurchaseSummary(acc, range);
+      if (!cancelled) {
+        setPurchase(res);
+        setPurchaseLoading(false);
+      }
+    }
+    void loadPurchase();
+    return () => {
+      cancelled = true;
+    };
   }, [range]);
 
   useEffect(() => {
@@ -253,6 +278,39 @@ export function ReportsDashboard() {
                 <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.settled}</div>
               </article>
             </div>
+
+            <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-base font-semibold text-slate-900">買貨成本（expenseRecorder）</div>
+                <div className="text-xs text-slate-500">區間：{reportRangeLabel(range)}</div>
+              </div>
+              {purchaseLoading ? (
+                <div className="mt-3 text-sm text-slate-500">載入中…</div>
+              ) : purchase && purchase.schemaReady === false ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  尚未建立 expenseRecorder 資料表，無買貨成本資料。
+                </div>
+              ) : purchase?.summary ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                    <div className="text-xs text-emerald-700">買貨成本（已付，可扣）</div>
+                    <div className="mt-1 text-2xl font-semibold text-emerald-700">{formatMoney(purchase.summary.paid)}</div>
+                  </article>
+                  <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="text-xs text-amber-700">買貨成本（未付，不計入）</div>
+                    <div className="mt-1 text-2xl font-semibold text-amber-700">{formatMoney(purchase.summary.unpaid)}</div>
+                  </article>
+                  <article className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs text-slate-500">淨營收（營業額−已付）</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">
+                      {formatMoney(summary.total - purchase.summary.paid)}
+                    </div>
+                  </article>
+                </div>
+              ) : (
+                <div className="mt-3 text-sm text-slate-400">無買貨成本資料。</div>
+              )}
+            </section>
 
             <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-center justify-between">
