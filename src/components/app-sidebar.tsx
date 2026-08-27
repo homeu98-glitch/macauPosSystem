@@ -38,6 +38,8 @@ const baseNavItems = [
 
   { href: "/shift", label: "交班", short: "班" },
 
+  { href: "/inventory", label: "庫存", short: "庫" },
+
 ] as const;
 
 
