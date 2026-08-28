@@ -8,6 +8,7 @@ import { PAYMENT_METHOD_LABEL, type PurchaseSummary } from "@/lib/inventory-stat
 import { AreaChart } from "./charts/AreaChart";
 import { DonutChart } from "./charts/DonutChart";
 import { LineChart } from "./charts/LineChart";
+import { InventoryTable } from "./inventory-table";
 
 type ReceiptItem = {
   id: string;
@@ -394,6 +395,7 @@ function ReceiptFormModal({
 export function InventoryView() {
   const [account, setAccount] = useState<string | null>(null);
   const [storeName, setStoreName] = useState<string>("");
+  const [merchantId, setMerchantId] = useState<string | null>(null);
   const [range, setRange] = useState<ReportRangeKey>("today");
   const [data, setData] = useState<ReceiptsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -411,6 +413,7 @@ export function InventoryView() {
     if (s?.account) {
       setAccount(s.account);
       setStoreName(s.name || "");
+      if (s.merchantId) setMerchantId(s.merchantId);
     }
   }, []);
 
@@ -710,6 +713,11 @@ export function InventoryView() {
             )}
           </div>
         </section>
+
+        {/* 庫存表（POS 內建庫存概念） */}
+        {merchantId && (
+          <InventoryTable merchantId={merchantId} account={account} />
+        )}
 
         {/* 統計（多圖表） */}
         {summary && summary.count > 0 && (
