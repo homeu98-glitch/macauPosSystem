@@ -174,14 +174,16 @@ export function ReportsDashboard() {
       <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
         <main className="flex h-full flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-white px-4 py-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">報表</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  店內堂食（本機）與會員通線上訂單（Ledger）分開統計。
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
+            <div className="text-lg font-semibold text-slate-900">報表</div>
+            <div className="mt-1 text-sm text-slate-500">
+              店內堂食（本機）與會員通線上訂單（Ledger）分開統計。
+            </div>
+          </div>
+
+          <div className="flex flex-1 overflow-hidden">
+            <aside className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white p-4 overflow-auto">
+              <div className="text-sm font-semibold text-slate-700">時間範圍</div>
+              <div className="mt-3 grid gap-2">
                 {[
                   ["today", "今天"],
                   ["all", "全部"],
@@ -191,7 +193,7 @@ export function ReportsDashboard() {
                 ].map(([key, label]) => (
                   <button
                     key={key}
-                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    className={`w-full rounded-2xl px-4 py-2 text-left text-sm font-semibold ${
                       range === key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setRange(key as ReportRangeKey)}
@@ -200,16 +202,15 @@ export function ReportsDashboard() {
                     {label}
                   </button>
                 ))}
-                <button
-                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={exportCsv}
-                  type="button"
-                >
-                  導出 CSV
-                </button>
               </div>
-            </div>
-          </div>
+              <button
+                className="mt-6 w-full rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={exportCsv}
+                type="button"
+              >
+                導出 CSV
+              </button>
+            </aside>
 
           <div className="flex-1 overflow-auto p-4">
             <section className="mb-4 rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
@@ -369,6 +370,7 @@ export function ReportsDashboard() {
                 </table>
               </div>
             </section>
+          </div>
           </div>
         </main>
       </div>

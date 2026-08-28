@@ -33,7 +33,6 @@ import { restoreLedgerSession } from "@/lib/ledger/session";
 import { PrinterCompanionPanel } from "@/components/printer-companion-panel";
 import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
-import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
 import { resolveUsbMeta } from "@/lib/print-bridge/printer-models";
 
 function uid(prefix: string) {
@@ -57,7 +56,6 @@ export function DeviceSettings() {
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
-  const [menuSyncing, setMenuSyncing] = useState(false);
   const [ledgerImportOpen, setLedgerImportOpen] = useState(false);
   const [ledgerImportLoading, setLedgerImportLoading] = useState(false);
   const [ledgerImportApplying, setLedgerImportApplying] = useState(false);
@@ -1319,23 +1317,13 @@ export function DeviceSettings() {
 
             <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4 lg:col-span-2">
               <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={() => {
-                  savePosLocalSettings(localSettings);
-                  setStatus("備註已保存到本機，可立即使用。");
-                }}
-                type="button"
-              >
-                保存備註
-              </button>
-              <button
-                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 aria-busy={syncingConfig}
                 disabled={syncingConfig}
-                onClick={syncConfig}
+                onClick={() => void syncConfig()}
                 type="button"
               >
-                {syncingConfig ? "同步中…" : "保存並同步後台"}
+                {syncingConfig ? "同步中…" : "保存備註"}
               </button>
             </div>
           </div>
@@ -1586,35 +1574,11 @@ export function DeviceSettings() {
                 <button
                   className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                   aria-busy={ledgerImportLoading}
-                  disabled={ledgerImportLoading || menuSaving || menuSyncing}
+                  disabled={ledgerImportLoading || menuSaving}
                   onClick={() => void beginLedgerMenuImport()}
                   type="button"
                 >
                   {ledgerImportLoading ? "讀取 Ledger…" : "從 Ledger 參考匯入"}
-                </button>
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  aria-busy={menuSyncing}
-                  disabled={menuSyncing || menuSaving}
-                  onClick={async () => {
-                    setMenuSyncing(true);
-                    setStatus("正在重新載入後台菜單…");
-                    try {
-                      const response = await fetch("/api/pos/bootstrap");
-                      const raw = (await response.json()) as unknown as Parameters<typeof normalizeBootstrapPayload>[0];
-                      const payload = normalizeBootstrapPayload(raw);
-                      setMenuDraft(payload);
-                      saveBootstrapCache(payload);
-                      setStatus("已重新載入後台菜單。");
-                    } catch {
-                      setStatus("重新載入失敗，請稍後再試。");
-                    } finally {
-                      setMenuSyncing(false);
-                    }
-                  }}
-                  type="button"
-                >
-                  {menuSyncing ? "同步中…" : "同步菜單"}
                 </button>
                 <button
                   className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
