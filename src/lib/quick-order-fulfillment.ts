@@ -59,6 +59,7 @@ export function markQuickOrderCompletedInStore(
     ...target,
     status: "settled",
     fulfillmentStatus: "ready",
+    servedAt: target.servedAt ?? updatedAt,
     updatedAt,
   };
   const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));

@@ -419,6 +419,12 @@ export interface PosOrder {
   /** 上次結帳扣款的會員電話（Ledger phone），供返結反向回滾 */
   ledgerMemberPhone?: string;
 
+  // ── 出餐時間儀器化（Phase B，模塊 4）──
+  /** 首次送入廚房時間（ISO）。出餐時間 = servedAt − sentToKitchenAt。 */
+  sentToKitchenAt?: string;
+  /** 出餐（交到客人手上）時間（ISO）。堂食＝結帳 settled；快餐 counter＝標記 ready（可取餐／交付）。 */
+  servedAt?: string;
+
   createdAt: string;
   updatedAt: string;
   /** 已退菜明細（保留記錄，不計費；結帳 / 退菜後仍留在單上以便追蹤） */

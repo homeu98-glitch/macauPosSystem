@@ -53,6 +53,8 @@ export async function POST(request: Request) {
             table_name: order.tableName,
             status: order.status,
             fulfillment_status: order.fulfillmentStatus ?? null,
+            sent_to_kitchen_at: order.sentToKitchenAt ?? null,
+            served_at: order.servedAt ?? null,
             items: order.items,
             order_note: order.orderNote ?? null,
             subtotal: order.subtotal,
@@ -78,6 +80,8 @@ export async function POST(request: Request) {
         .update({
           status: event.payload.status ?? "settled",
           fulfillment_status: event.payload.fulfillmentStatus ?? null,
+          sent_to_kitchen_at: event.payload.sentToKitchenAt ?? null,
+          served_at: event.payload.servedAt ?? null,
           payment_method: event.payload.paymentMethod ?? null,
           discount_amount: event.payload.discountAmount ?? 0,
           total: event.payload.total ?? 0,

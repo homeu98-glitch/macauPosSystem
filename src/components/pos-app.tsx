@@ -1155,6 +1155,10 @@ export function PosApp() {
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           partySize: existingOrder.partySize ?? seatedPartySizes[activeTable.id],
           status: nextStatus,
+          sentToKitchenAt:
+            nextStatus === "sent_to_kitchen"
+              ? existingOrder.sentToKitchenAt ?? timestamp
+              : existingOrder.sentToKitchenAt,
           fulfillmentStatus:
             isQuickMode && activeTable.id === "counter"
               ? nextStatus === "sent_to_kitchen"
@@ -1178,6 +1182,7 @@ export function PosApp() {
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           partySize: seatedPartySizes[activeTable.id],
           status: nextStatus,
+          sentToKitchenAt: nextStatus === "sent_to_kitchen" ? timestamp : undefined,
           fulfillmentStatus: isQuickMode && activeTable.id === "counter" ? "preparing" : undefined,
           items: cartItems,
           orderNote,
@@ -1574,6 +1579,7 @@ export function PosApp() {
     const updatedOrder: PosOrder = {
       ...target,
       fulfillmentStatus: nextStatus,
+      servedAt: nextStatus === "ready" ? (target.servedAt ?? updatedAt) : target.servedAt,
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === updatedOrder.id ? updatedOrder : order)));
@@ -2063,6 +2069,7 @@ export function PosApp() {
       ...targetOrder,
       status: "settled",
       fulfillmentStatus: targetOrder.tableId === "counter" ? "ready" : targetOrder.fulfillmentStatus,
+      servedAt: targetOrder.servedAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
@@ -2411,6 +2418,8 @@ export function PosApp() {
         ...targetOrder,
         status: quickPaidFlow ? "paid" : "settled",
         fulfillmentStatus: quickPaidFlow ? targetOrder.fulfillmentStatus ?? "preparing" : undefined,
+        // 堂食結帳＝出餐；快餐 counter 出餐喺標記 ready 嗰刻（updateQuickFulfillment / markQuickOrderCompletedInStore）
+        servedAt: quickPaidFlow ? targetOrder.servedAt : targetOrder.servedAt ?? now,
         tableId: isReopenRestore ? targetOrder.reopenOriginalTableId! : targetOrder.tableId,
         tableName: isReopenRestore ? targetOrder.reopenOriginalTableName! : targetOrder.tableName,
         reopenOriginalTableId: undefined,
@@ -2470,6 +2479,8 @@ export function PosApp() {
           prepaidAmount,
           status: updatedOrder.status,
           fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
+          sentToKitchenAt: updatedOrder.sentToKitchenAt ?? null,
+          servedAt: updatedOrder.servedAt ?? null,
         },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedOrder.updatedAt,

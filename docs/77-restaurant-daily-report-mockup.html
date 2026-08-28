@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>餐飲店每日營運總結 · 原型</title>
+<style>
+  :root{
+    --bg:#f3f5f9; --surface:#ffffff; --fg:#121826; --muted:#667085;
+    --border:#d6dbea; --primary:#4f46e5; --primary-d:#3730a3;
+    --success:#0f9f6e; --warning:#b45309; --danger:#b91c1c;
+    --orange:#f97316; --orange-bg:#fff7ed; --rose:#e11d48; --emerald:#0f9f6e;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Hiragino Sans GB","Heiti SC",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1280px; margin:0 auto; padding:20px 18px 48px;}
+  /* header */
+  .topbar{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px;}
+  .topbar h1{font-size:24px; margin:0;}
+  .topbar .sub{color:var(--muted); font-size:13px; margin-top:4px;}
+  .filters{display:flex; gap:6px;}
+  .filters button{
+    border:1px solid var(--border); background:#fff; color:var(--muted);
+    border-radius:10px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer;
+  }
+  .filters button.active{background:var(--orange); color:#fff; border-color:var(--orange);}
+  /* kpi band */
+  .kpis{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:18px;}
+  .kpi{background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:16px;}
+  .kpi .l{font-size:12px; color:var(--muted);}
+  .kpi .v{font-size:24px; font-weight:700; margin-top:6px;}
+  .kpi.hl .v{color:var(--orange);}
+  .kpi .d{font-size:11px; margin-top:4px;}
+  .up{color:var(--success);} .down{color:var(--danger);}
+  /* grid */
+  .grid2{display:grid; grid-template-columns:1.4fr 1fr; gap:14px; margin-bottom:14px;}
+  .grid2b{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:18px;}
+  .card h3{margin:0 0 14px; font-size:15px; display:flex; align-items:center; justify-content:space-between;}
+  .card h3 .tag{font-size:11px; color:var(--muted); font-weight:500;}
+  /* dish ranking */
+  .row{display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid #eef1f6;}
+  .row:last-child{border-bottom:none;}
+  .row .name{font-weight:600; font-size:14px;}
+  .row .meta{font-size:12px; color:var(--muted); margin-top:2px;}
+  .chip{display:inline-block; font-size:10px; font-weight:700; border-radius:999px; padding:2px 8px; margin-left:6px;}
+  .chip.off{background:#eff6ff; color:#1d4ed8;}
+  .chip.in{background:#f1f5f9; color:#475569;}
+  .chip.mix{background:#faf5ff; color:#7e22ce;}
+  .qty{font-weight:700; font-size:14px;}
+  /* ingredient bars */
+  .bar{height:8px; border-radius:999px; background:#eef1f6; overflow:hidden; margin-top:6px;}
+  .bar > i{display:block; height:100%; background:var(--orange);}
+  /* serving time */
+  .stat3{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:12px;}
+  .stat3 div{background:#f8fafc; border-radius:12px; padding:10px; text-align:center;}
+  .stat3 .n{font-size:18px; font-weight:700;}
+  .stat3 .t{font-size:11px; color:var(--muted);}
+  .heat{display:grid; grid-template-columns:repeat(12,1fr); gap:4px; margin-top:6px;}
+  .heat span{height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;}
+  /* member / soldout */
+  .big{font-size:30px; font-weight:800;}
+  .pill{display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 10px; font-size:12px; font-weight:700;}
+  .pill.red{background:#fef2f2; color:var(--danger);}
+  .pill.amber{background:#fffbeb; color:var(--warning);}
+  .pill.green{background:#ecfdf3; color:var(--success);}
+  .chips{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .chips span{background:#fef2f2; color:var(--danger); border:1px solid #fecaca; border-radius:999px; padding:4px 10px; font-size:12px;}
+  /* suggestions */
+  .suggest{background:linear-gradient(180deg,#fff7ed,#fff); border:1px solid #fed7aa; border-radius:18px; padding:18px;}
+  .suggest h3{margin:0 0 12px; font-size:16px;}
+  .srow{display:flex; gap:10px; align-items:flex-start; padding:10px; border-radius:12px; background:#fff; border:1px solid #fde9d3; margin-bottom:8px;}
+  .srow .lv{font-size:10px; font-weight:800; border-radius:999px; padding:3px 9px; white-space:nowrap; margin-top:2px;}
+  .lv.r{background:#fef2f2; color:var(--danger);}
+  .lv.o{background:#fffbeb; color:var(--warning);}
+  .lv.i{background:#f1f5f9; color:#475569;}
+  .srow .tx{font-size:13px; line-height:1.5;}
+  .srow .tx b{color:var(--fg);}
+  @media(max-width:1000px){
+    .kpis{grid-template-columns:repeat(3,1fr);}
+    .grid2,.grid2b{grid-template-columns:1fr;}
+    .heat{grid-template-columns:repeat(6,1fr);}
+  }
+  @media(max-width:560px){ .kpis{grid-template-columns:repeat(2,1fr);} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 頂部標題 + 右上篩選 -->
+  <div class="topbar">
+    <div>
+      <h1>店鋪每日營運總結</h1>
+      <div class="sub">示範餐飲 · 2026-08-28（澳門）· 篩選影響全部模塊</div>
+    </div>
+    <div class="filters">
+      <button class="active">今天</button>
+      <button>昨天</button>
+      <button>7天</button>
+      <button>30天</button>
+      <button>全部</button>
+    </div>
+  </div>
+
+  <!-- 核心 KPI 帶 -->
+  <div class="kpis">
+    <div class="kpi hl"><div class="l">營業額</div><div class="v">MOP 8,420</div><div class="d up">▲ 12% vs 昨日</div></div>
+    <div class="kpi hl"><div class="l">毛利</div><div class="v">MOP 5,310</div><div class="d up">▲ 9% vs 昨日</div></div>
+    <div class="kpi"><div class="l">訂單數</div><div class="v">186</div><div class="d up">▲ 8% vs 昨日</div></div>
+    <div class="kpi"><div class="l">客單價</div><div class="v">MOP 45.3</div><div class="d down">▼ 3% vs 昨日</div></div>
+    <div class="kpi"><div class="l">覆蓋人數</div><div class="v">412</div><div class="d up">▲ 6% vs 昨日</div></div>
+    <div class="kpi"><div class="l">會員充值</div><div class="v">MOP 1,980</div><div class="d down">▼ 14% vs 昨日</div></div>
+  </div>
+
+  <!-- 模塊 3 + 模塊 1/2 -->
+  <div class="grid2">
+    <div class="card">
+      <h3>菜品銷售排行 <span class="tag">線上＋線下合併 · 渠道標籤</span></h3>
+      <div class="row"><div><div class="name">招牌炸雞（半隻）<span class="chip mix">混合</span></div><div class="meta">線下 62 · 線上 28</div></div><div class="qty">90 份</div></div>
+      <div class="row"><div><div class="name">珍珠奶茶（大）<span class="chip off">線上</span></div><div class="meta">線下 0 · 線上 74</div></div><div class="qty">74 份</div></div>
+      <div class="row"><div><div class="name">西多士<span class="chip in">線下</span></div><div class="meta">線下 51 · 線上 0</div></div><div class="qty">51 份</div></div>
+      <div class="row"><div><div class="name">咖哩牛腩飯<span class="chip mix">混合</span></div><div class="meta">線下 30 · 線上 12</div></div><div class="qty">42 份</div></div>
+      <div class="row"><div><div class="name">凍檸茶<span class="chip in">線下</span></div><div class="meta">線下 38 · 線上 0</div></div><div class="qty">38 份</div></div>
+    </div>
+    <div class="card">
+      <h3>食材消耗 Top <span class="tag">數量＋金額（估算）</span></h3>
+      <div style="display:flex;gap:18px;margin-bottom:12px;">
+        <div><div class="l" style="font-size:12px;color:var(--muted)">總消耗金額</div><div class="big" style="color:var(--emerald)">MOP 3,110</div></div>
+        <div><div class="l" style="font-size:12px;color:var(--muted)">食材成本率</div><div class="big" style="color:var(--warning)">37%</div></div>
+      </div>
+      <div>
+        <div class="row" style="border:none;padding-bottom:2px"><div class="name" style="font-size:13px">雞腿肉</div><div class="qty" style="font-size:13px">18kg · MOP 720</div></div>
+        <div class="bar"><i style="width:100%"></i></div>
+        <div class="row" style="border:none;padding:8px 0 2px"><div class="name" style="font-size:13px">珍珠（粉圓）</div><div class="qty" style="font-size:13px">12kg · MOP 410</div></div>
+        <div class="bar"><i style="width:62%"></i></div>
+        <div class="row" style="border:none;padding:8px 0 2px"><div class="name" style="font-size:13px">食用油</div><div class="qty" style="font-size:13px">9L · MOP 360</div></div>
+        <div class="bar"><i style="width:48%"></i></div>
+        <div class="row" style="border:none;padding:8px 0 2px"><div class="name" style="font-size:13px">咖哩醬</div><div class="qty" style="font-size:13px">6罐 · MOP 300</div></div>
+        <div class="bar"><i style="width:40%"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模塊 4 + 模塊 8 -->
+  <div class="grid2b">
+    <div class="card">
+      <h3>出餐時間統計 <span class="tag">送廚房 → 出餐</span></h3>
+      <div class="stat3">
+        <div><div class="n">11.2<span style="font-size:12px">分</span></div><div class="t">平均</div></div>
+        <div><div class="n">9.5<span style="font-size:12px">分</span></div><div class="t">中位數</div></div>
+        <div><div class="n" style="color:var(--danger)">21<span style="font-size:12px">分</span></div><div class="t">P95（尖峰）</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">每小時平均出餐（紅＝超 15 分閾值）</div>
+      <div class="heat">
+        <span style="background:#cbd5e1">11</span><span style="background:#cbd5e1">12</span><span style="background:#fdba74">13</span>
+        <span style="background:#fb923c">18</span><span style="background:#ef4444">23</span><span style="background:#fdba74">14</span>
+        <span style="background:#cbd5e1">12</span><span style="background:#cbd5e1">10</span><span style="background:#fdba74">13</span>
+        <span style="background:#fb923c">17</span><span style="background:#cbd5e1">11</span><span style="background:#cbd5e1">9</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>最熱門桌台排行 <span class="tag">單數 · 翻台率</span></h3>
+      <div class="row"><div class="name">A3（窗邊4人）</div><div class="qty">22 單 · 3.1x</div></div>
+      <div class="row"><div class="name">B1（卡座2人）</div><div class="qty">19 單 · 2.8x</div></div>
+      <div class="row"><div class="name">A1（大枱6人）</div><div class="qty">15 單 · 1.6x</div></div>
+      <div class="row"><div class="name">B4（卡座2人）</div><div class="qty">11 單 · 1.9x</div></div>
+      <div class="row"><div class="name">C2（角落2人）</div><div class="qty">6 單 · 0.8x</div></div>
+    </div>
+  </div>
+
+  <!-- 模塊 6 + 模塊 7 -->
+  <div class="grid2b">
+    <div class="card">
+      <h3>會員充值 & 會員數 <span class="tag">來源：Ledger</span></h3>
+      <div style="display:flex;align-items:baseline;gap:10px">
+        <div class="big" style="color:var(--primary)">MOP 1,980</div>
+        <div style="font-size:13px;color:var(--muted)">充值金額（今日）</div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <span class="pill green">會員數 326</span>
+        <span class="pill amber">會員消費佔比 41%</span>
+        <span class="pill red">充值 ▼14% vs 昨日</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>沽清菜品 & 低庫存 <span class="tag">即時</span></h3>
+      <span class="pill red">沽清 3 款</span>
+      <div class="chips">
+        <span>咖哩牛腩</span><span>凍檸茶</span><span>薯條</span>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--warning)">⚠ 低庫存：雞腿肉剩 2kg（安全存量 5kg）</div>
+    </div>
+  </div>
+
+  <!-- 模塊 5 + 補充：付款/渠道 -->
+  <div class="grid2b">
+    <div class="card">
+      <h3>人流 & 尖峰時段 <span class="tag">覆蓋人數（估算）</span></h3>
+      <div style="display:flex;align-items:baseline;gap:10px">
+        <div class="big">412</div><div style="font-size:13px;color:var(--muted)">人次 · ▲ 6% vs 昨日</div>
+      </div>
+      <div class="heat" style="margin-top:10px">
+        <span style="background:#cbd5e1">9</span><span style="background:#cbd5e1">14</span><span style="background:#fdba74">28</span>
+        <span style="background:#ef4444">46</span><span style="background:#fb923c">39</span><span style="background:#cbd5e1">22</span>
+        <span style="background:#cbd5e1">18</span><span style="background:#cbd5e1">15</span><span style="background:#fdba74">26</span>
+        <span style="background:#fb923c">34</span><span style="background:#cbd5e1">17</span><span style="background:#cbd5e1">12</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>付款方式 & 線上渠道佔比</h3>
+      <div class="row"><div class="name">現金</div><div class="qty">38% · MOP 3,200</div></div>
+      <div class="row"><div class="name">信用卡 / 移動支付</div><div class="qty">27% · MOP 2,270</div></div>
+      <div class="row"><div class="name">Ledger 會員餘額</div><div class="qty">21% · MOP 1,770</div></div>
+      <div class="row"><div class="name">線上預付（到店）</div><div class="qty">14% · MOP 1,180</div></div>
+      <div style="margin-top:10px;font-size:12px;color:var(--muted)">線上渠道佔總營收 <b style="color:var(--primary)">33%</b>（7日 ↑5pt）</div>
+    </div>
+  </div>
+
+  <!-- 模塊 9：自動化優化建議 -->
+  <div class="suggest">
+    <h3>🔔 自動化優化建議（今日）</h3>
+    <div class="srow"><span class="lv r">立即</span><div class="tx"><b>旺菜快冇料：</b>「招牌炸雞」今日賣 90 份，雞腿肉庫存剩 2kg（安全 5kg）。<b>建議：</b>今日優先補貨雞腿肉，避免沽清斷營收。</div></div>
+    <div class="srow"><span class="lv r">立即</span><div class="tx"><b>已沽清 3 款：</b>咖哩牛腩、凍檸茶、薯條斷貨。<b>建議：</b>即日補貨；凍檸茶為高銷飲品，優先處理。</div></div>
+    <div class="srow"><span class="lv o">關注</span><div class="tx"><b>尖峰出餐偏慢：</b>午市 12–13 時平均 23 分（＞15 分閾值）。<b>建議：</b>午市加開 1 名廚房人手或預製炸雞。</div></div>
+    <div class="srow"><span class="lv o">關注</span><div class="tx"><b>會員充值下滑：</b>今日充值 MOP 1,980，較昨日 ▼14%。<b>建議：</b>推「周末儲值贈 10%」喚醒沉睡會員。</div></div>
+    <div class="srow"><span class="lv i">資訊</span><div class="tx"><b>線上佔比上升：</b>線上渠道 7 日升 5pt 至 33%。<b>建議：</b>加強線上推廣，並確保廚房產能跟到外送單。</div></div>
+    <div class="srow"><span class="lv i">資訊</span><div class="tx"><b>食材成本率 37%：</b>略高於目標 35%。<b>建議：</b>檢討高耗料菜品售價或向供應商議價。</div></div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -12,6 +12,11 @@ export type LedgerReportSummary = {
   deductMop: number;
 };
 
+export type LedgerMemberSummary = {
+  /** 區間內活躍會員數（有消費／充值）；RPC 未接時為 null */
+  memberCount: number | null;
+};
+
 function avosToMop(value: unknown): number {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n)) return 0;
@@ -48,4 +53,31 @@ export async function getMerchantReportSummary(range: ReportRangeKey): Promise<L
     topupMop: avosToMop(payload.topup_avos),
     deductMop: avosToMop(payload.deduct_avos),
   };
+}
+
+/** Phase B（模塊 6）：區間內會員數。依賴 Ledger RPC `get_merchant_member_summary`；
+ *  未部署該 RPC 時拋錯，呼叫方應 try/catch 並降級顯示「—」。 */
+export async function getMerchantMemberSummary(range: ReportRangeKey): Promise<LedgerMemberSummary> {
+  const client = getLedgerSupabaseClient();
+  if (!client) {
+    throw new Error("Ledger Supabase 尚未設定。");
+  }
+
+  const period = ledgerReportRangeForKey(range);
+  if (!period) {
+    throw new Error("無法計算報表區間。");
+  }
+
+  const { data, error } = await client.rpc("get_merchant_member_summary", {
+    p_start: period.start,
+    p_end: period.end,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const count = payload.member_count ?? payload.count ?? payload.active_members;
+  return { memberCount: count === undefined || count === null ? null : Number(count) };
 }

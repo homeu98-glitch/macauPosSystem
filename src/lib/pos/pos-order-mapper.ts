@@ -10,6 +10,8 @@ export interface PosOrderRow {
   table_name: string | null;
   status: string;
   fulfillment_status: string | null;
+  sent_to_kitchen_at: string | null;
+  served_at: string | null;
   items: PosOrder["items"];
   order_note: string | null;
   subtotal: number;
@@ -32,6 +34,8 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     tableName: row.table_name ?? "",
     status: (row.status as PosOrder["status"]) ?? "draft",
     fulfillmentStatus: (row.fulfillment_status as PosOrder["fulfillmentStatus"]) ?? undefined,
+    sentToKitchenAt: row.sent_to_kitchen_at ?? undefined,
+    servedAt: row.served_at ?? undefined,
     items: Array.isArray(row.items) ? row.items : [],
     orderNote: row.order_note ?? undefined,
     subtotal: Number(row.subtotal ?? 0),

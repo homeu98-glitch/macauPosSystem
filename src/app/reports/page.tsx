@@ -1,10 +1,10 @@
-import { ReportsDashboard } from "@/components/reports-dashboard";
+import { RestaurantDailyReport } from "@/components/restaurant-daily-report";
 import { AuthGuard } from "@/components/auth-guard";
 
 export default function ReportsPage() {
   return (
     <AuthGuard>
-      <ReportsDashboard />
+      <RestaurantDailyReport />
     </AuthGuard>
   );
 }
