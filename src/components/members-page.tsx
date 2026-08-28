@@ -115,6 +115,9 @@ export function MembersPage() {
   const [searchHint, setSearchHint] = useState("");
   const [searching, setSearching] = useState(false);
   const [topupAmount, setTopupAmount] = useState("");
+  // 未註冊建檔用：會員名稱（可選，契約 §5.7.7 displayName ≤ 50 字）。
+  // 只在 unregistered 分支（ensure-customer）提交；已註冊會員唔經呢條。
+  const [topupName, setTopupName] = useState("");
   const [topupBusy, setTopupBusy] = useState(false);
   const [topupMsg, setTopupMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const searchTimerRef = useRef<number | null>(null);
@@ -306,6 +309,7 @@ export function MembersPage() {
           phone: targetPhone,
           amountAvos: avos,
           idempotencyKey: `ensure-${targetPhone}-${Date.now()}`,
+          displayName: topupName.trim() || undefined,
         });
         setTopupMsg({
           tone: "ok",
@@ -314,6 +318,7 @@ export function MembersPage() {
       }
 
       setTopupAmount("");
+      setTopupName("");
 
       // 刷新錢包餘額與券（建檔後 lookup 應由 registered=false 變 true）
       const wallet = await lookupCustomerWallet(merchantId, targetPhone);
@@ -601,6 +606,19 @@ export function MembersPage() {
                     建檔後顧客須自行到會員通
                     <span className="font-mono"> /wallet/login </span>
                     自設 4 位 PIN；POS 唔幫設 PIN。
+                  </div>
+                  <div className="mt-3">
+                    <div className="text-xs text-slate-500">
+                      會員名稱（可選，最多 50 字；留空由顧客日後於會員通自行填寫）
+                    </div>
+                    <input
+                      className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      maxLength={50}
+                      onChange={(e) => setTopupName(e.target.value)}
+                      placeholder="例如：陳小姐"
+                      type="text"
+                      value={topupName}
+                    />
                   </div>
                   {topupControls}
                 </section>

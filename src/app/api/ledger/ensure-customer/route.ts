@@ -94,6 +94,17 @@ export async function POST(request: Request) {
   if (!isValidMacauPhone(phone)) {
     return NextResponse.json({ ok: false, error: "請輸入 8 位數字會員電話。" }, { status: 400 });
   }
+  // 契約 §5.7.7：displayName 最多 50 字
+  if (displayName.length > 50) {
+    return NextResponse.json({ ok: false, error: "displayName 最多 50 字。" }, { status: 400 });
+  }
+  // 契約 §5.7.7：idempotencyKey 須為 8–128 字元
+  if (idempotencyKey && (idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
+    return NextResponse.json(
+      { ok: false, error: "idempotencyKey 須為 8–128 字元。" },
+      { status: 400 },
+    );
+  }
   if (amountAvos !== null) {
     if (!Number.isFinite(amountAvos) || !Number.isInteger(amountAvos) || amountAvos <= 0) {
       return NextResponse.json(
