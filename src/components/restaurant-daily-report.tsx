@@ -24,6 +24,12 @@ import {
   loadBom,
   type BomEntry,
 } from "@/lib/restaurant-bom";
+import {
+  footfallFocusKey,
+  footfallTotalInRange,
+  loadFootfallAll,
+  saveFootfallDay,
+} from "@/lib/restaurant-footfall";
 import { formatMoney } from "@/lib/format";
 import type { PosOrder } from "@/lib/types";
 import Link from "next/link";
@@ -225,6 +231,13 @@ export function RestaurantDailyReport() {
     yest: null,
   });
   const [member, setMember] = useState<LedgerMemberSummary | null>(null);
+  const [lowStock, setLowStock] = useState<
+    Array<{ name: string; qty: number; unit: string; par: number }> | null
+  >(null);
+  const [footfallMap, setFootfallMap] = useState<Record<string, number>>(() => loadFootfallAll());
+  const [footfallInput, setFootfallInput] = useState<number>(
+    () => footfallMap[footfallFocusKey(range)] ?? 0,
+  );
   const [loading, setLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
 
@@ -284,6 +297,29 @@ export function RestaurantDailyReport() {
       setLedger({ sel, d7, yest });
       setMember(mem);
       setPurchase({ sel: purSel?.summary ?? null, yest: purYest?.summary ?? null });
+
+      // 低庫存預警：讀本店 inv_products，current_qty <= reorder_level（par）即低庫存。
+      try {
+        const invRes = await fetch(`/api/inventory/products?store=${encodeURIComponent(merchantId)}`);
+        const invJson = await invRes.json();
+        if (invJson?.ok && Array.isArray(invJson.products)) {
+          const low = invJson.products
+            .filter((p: { current_qty: number; reorder_level: number }) => p.reorder_level > 0 && p.current_qty <= p.reorder_level)
+            .map((p: { name: string; current_qty: number; unit: string; reorder_level: number }) => ({
+              name: p.name,
+              qty: Number(p.current_qty) || 0,
+              unit: p.unit ?? "份",
+              par: Number(p.reorder_level) || 0,
+            }))
+            .sort((a: { qty: number }, b: { qty: number }) => a.qty - b.qty);
+          setLowStock(low);
+        } else {
+          setLowStock(null);
+        }
+      } catch {
+        setLowStock(null);
+      }
+
       if (!sel && !d7) setLedgerError("尚未連線 Ledger，會員/線上數據未能讀取（其餘模塊正常）。");
       setLoading(false);
     }
@@ -291,11 +327,24 @@ export function RestaurantDailyReport() {
     return () => {
       cancelled = true;
     };
+  }, [range, merchantId]);
+
+  // 範圍切換時，將人流輸入框同步到該範圍嘅焦點日（昨天範圍＝記昨天，否則今天）。
+  useEffect(() => {
+    setFootfallInput(loadFootfallAll()[footfallFocusKey(range)] ?? 0);
   }, [range]);
 
   const agg = useMemo(() => aggregate(orders, range), [orders, range]);
   const aggYest = useMemo(() => (range === "today" ? aggregate(orders, "yesterday") : null), [orders, range]);
   const agg7d = useMemo(() => aggregate(orders, "7d"), [orders]);
+
+  const focusKey = footfallFocusKey(range);
+  const footfallTotal = footfallTotalInRange(footfallMap, range);
+  const conversion = footfallTotal > 0 && agg.covers > 0 ? agg.covers / footfallTotal : null;
+
+  function saveFootfall() {
+    setFootfallMap(saveFootfallDay(focusKey, footfallInput));
+  }
 
   const grossProfit = useMemo(() => {
     const cogs = purchase.sel?.paid ?? 0;
@@ -694,6 +743,69 @@ export function RestaurantDailyReport() {
               </Card>
             </div>
 
+            {/* 模塊 5 人流 + 低庫存預警 */}
+            <div className="mb-4 grid gap-4 lg:grid-cols-2">
+              <Card title="當日人流（入店人次）" tag="手動記錄 · 轉化率">
+                <div className="flex items-baseline gap-2">
+                  <div className="text-3xl font-extrabold text-indigo-600">{footfallTotal}</div>
+                  <div className="text-xs text-slate-500">選取範圍累計入店人次</div>
+                </div>
+                {conversion != null ? (
+                  <div className="mt-1 text-xs text-slate-500">
+                    堂食轉化率 {Math.round(conversion * 100)}%（覆蓋 {agg.covers} 人 / 人流 {footfallTotal}）
+                  </div>
+                ) : null}
+                <div className="mt-3 flex items-end gap-2">
+                  <div>
+                    <div className="text-[11px] text-slate-400">{focusKey} 入店人次</div>
+                    <input
+                      type="number"
+                      value={footfallInput}
+                      onChange={(e) => setFootfallInput(Number(e.target.value) || 0)}
+                      className="mt-1 w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                    />
+                  </div>
+                  <button
+                    className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                    onClick={saveFootfall}
+                    type="button"
+                  >
+                    儲存
+                  </button>
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400">
+                  無門口計數硬件，由店員/老闆於收銀端記低每日人流；轉化率＝覆蓋人數 ÷ 入店人次。
+                </div>
+              </Card>
+
+              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）">
+                {lowStock === null ? (
+                  <div className="text-xs text-slate-400">
+                    未能讀取庫存（未連線 macau-pos Supabase 或尚無庫存品）。
+                  </div>
+                ) : lowStock.length === 0 ? (
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                    庫存充足
+                  </span>
+                ) : (
+                  <div className="grid gap-1">
+                    <div className="text-sm font-semibold text-rose-600">{lowStock.length} 款低庫存</div>
+                    {lowStock.slice(0, 8).map((p) => (
+                      <div
+                        key={p.name}
+                        className="flex items-center justify-between border-b border-slate-100 py-1.5 last:border-0"
+                      >
+                        <span className="text-sm text-slate-900">{p.name}</span>
+                        <span className="text-xs text-rose-600">
+                          {p.qty} / {p.par} {p.unit}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </div>
+
             {/* 模塊 9：自動化優化建議 */}
             <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
               <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
@@ -723,8 +835,8 @@ export function RestaurantDailyReport() {
             </div>
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
-              說明：營業額／訂單／菜品／桌台／人流（覆蓋人數）／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger。
-              出餐時間為「送廚房→出餐」實測（舊單缺時間戳時自動以落單→結帳估算，標「含估算」）；食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
+              說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
+              人流（入店人次）為收銀端手動記錄（無門口計數硬件），轉化率＝覆蓋人數 ÷ 入店人次。出餐時間為「送廚房→出餐」實測（舊單缺時間戳時自動以落單→結帳估算，標「含估算」）；食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
               毛利為「營業額 − 買貨成本（已付）」估算；會員數待 Ledger 部署 get_merchant_member_summary RPC 後自動顯示。
             </div>
           </div>

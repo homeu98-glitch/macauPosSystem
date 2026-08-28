@@ -287,5 +287,7 @@ _本方案為設計文檔，確認方向後再行實作。配套視覺原型見 
   - **出餐時間（模塊 4）儀器化**：`PosOrder` 加 `sentToKitchenAt?` / `servedAt?`（`src/lib/types.ts`），`PosOrderRow` + `mapPosOrderRow` 同步（`src/lib/pos/pos-order-mapper.ts`），`api/pos/sync/route.ts` 寫入 `sent_to_kitchen_at` / `served_at`（upsert + ORDER_SETTLED payload）；四個過渡點寫入——`upsertCurrentOrder`（送廚房）、`markOrderCompleted`（堂食 settled）、`applyPaymentToOrder`（堂食結帳）、`updateQuickFulfillment` + `markQuickOrderCompletedInStore`（快餐 ready）。報表計 avg / 中位數 / P95（分），舊單缺戳自動以落單→結帳估算並標「含估算」。新增 migration `0014_pos_serving_times.sql`。
   - **食材消耗（模塊 1 / 2）BOM 精確化**：新增 `src/lib/restaurant-bom.ts`（localStorage per-store 配方 + `computeIngredientConsumption` 按 BOM × 已售份數展開），報表新增「食材消耗（本月）」＋「食材使用量排行」兩卡，未設配方時顯示空白提示並連去 `/reports/bom` 配方管理頁（新增 `src/app/reports/bom/page.tsx`）。
   - **會員數（模塊 6）**：新增 `getMerchantMemberSummary`（`src/lib/ledger/reports.ts`，依賴 Ledger RPC `get_merchant_member_summary`）；部署前降級顯示「—（待接 RPC）」。
-  - 未做（留待確認）：人流計數（5，現以 `partySize` 覆蓋人數代理）、低庫存 par 預警（需 inventory_items.par_level）。`tsc --noEmit` + eslint 通過（剩 2 個 Phase A 既有 warning：`setOrders` 未用、`soldOut` useMemo dep）。
+  - **人流（模塊 5）**：新增 `src/lib/restaurant-footfall.ts`（本機按澳門日存「入店人次」手動記錄，無門口計數硬件）；報表加「當日人流」卡，按選取範圍累加並計「堂食轉化率＝覆蓋人數 ÷ 入店人次」，焦點日可編輯儲存。
+  - **低庫存預警**：讀本店 `inv_products`（migration `0013_inv_products.sql` 已有 `current_qty` / `reorder_level`），current_qty ≤ reorder_level（par）即低庫存；報表加「低庫存預警」卡，經 `/api/inventory/products?store=` 讀取，失敗降級顯示「未能讀取庫存」。
+  - Phase B 全數完成（A→B）。`tsc --noEmit` + eslint 通過（剩 2 個 Phase A 既有 warning：`setOrders` 未用、`soldOut` useMemo dep）。
 
