@@ -17,7 +17,7 @@ import {
   LedgerMemberGrantRecord,
   LedgerMemberProfile,
 } from "@/lib/ledger/member-types";
-import { lookupCustomerWallet } from "@/lib/ledger/members";
+import { applyPosTopup, lookupCustomerWallet } from "@/lib/ledger/members";
 import { listCustomerRewardGrants } from "@/lib/ledger/rewards";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { clearLegacyMembersCache } from "@/lib/storage";
@@ -111,6 +111,9 @@ export function MembersPage() {
   const [member, setMember] = useState<LedgerMemberProfile | null>(null);
   const [searchHint, setSearchHint] = useState("");
   const [searching, setSearching] = useState(false);
+  const [topupAmount, setTopupAmount] = useState("");
+  const [topupBusy, setTopupBusy] = useState(false);
+  const [topupMsg, setTopupMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const searchTimerRef = useRef<number | null>(null);
 
   const validSearch = useMemo(() => phone.length === 0 || /^\d{0,8}$/.test(phone), [phone]);
@@ -195,6 +198,41 @@ export function MembersPage() {
     scheduleLookup(normalized);
   }
 
+  async function handleTopup() {
+    if (!member) return;
+    const mop = Number(topupAmount);
+    const avos = Math.round(mop * 100);
+    if (!Number.isFinite(avos) || avos <= 0) {
+      setTopupMsg({ tone: "err", text: "請輸入大於 0 嘅充值金額（MOP）" });
+      return;
+    }
+    const merchantId = getLedgerMerchantId();
+    if (!merchantId) {
+      setTopupMsg({ tone: "err", text: "無法取得商家 ID，請重新登入。" });
+      return;
+    }
+    setTopupBusy(true);
+    setTopupMsg(null);
+    try {
+      await applyPosTopup({
+        merchantId,
+        phone: member.customerPhone,
+        amountAvos: avos,
+        idempotencyKey: `topup-${member.customerId}-${Date.now()}`,
+      });
+      setTopupMsg({ tone: "ok", text: `已為 ${member.displayName ?? "會員"} 充值 ${formatMoney(mop)}` });
+      setTopupAmount("");
+      // 刷新錢包餘額與券
+      const wallet = await lookupCustomerWallet(merchantId, member.customerPhone);
+      const allGrants = await listCustomerRewardGrants(merchantId, wallet.customerId!);
+      setMember({ ...wallet, allGrants });
+    } catch (err) {
+      setTopupMsg({ tone: "err", text: friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)) });
+    } finally {
+      setTopupBusy(false);
+    }
+  }
+
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
@@ -255,7 +293,7 @@ export function MembersPage() {
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
                   輸入完整 8 位手機號碼後，將顯示該會員的錢包與獎賞券。
                   <div className="mt-3 text-xs text-slate-400">
-                    Phase 1 不支援 POS 代建帳號或現場充值；新會員請透過會員通 App 或 Ledger Web 註冊。
+                    POS 支援已註冊會員現場充值（走 Ledger `merchant_apply_pos_txn(topup)`）；新增會員請顧客透過會員通 App 或 Ledger Web 註冊（POS 代建帳號待接）。
                   </div>
                 </div>
               ) : null}
@@ -309,6 +347,40 @@ export function MembersPage() {
                       <div className="text-sm font-semibold text-slate-900">已失效獎賞券</div>
                       <div className="mt-3">
                         <GrantList emptyLabel="沒有已兌換或過期的獎賞券" grants={grantGroups.inactive} />
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
+                      <div className="text-sm font-semibold text-slate-900">現場充值（已註冊會員）</div>
+                      <div className="mt-3 flex items-end gap-2">
+                        <div className="flex-1">
+                          <div className="text-xs text-slate-500">充值金額（MOP）</div>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min="0"
+                            value={topupAmount}
+                            onChange={(e) => setTopupAmount(e.target.value)}
+                            className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            placeholder="0.00"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={topupBusy}
+                          onClick={handleTopup}
+                          className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+                        >
+                          {topupBusy ? "處理中…" : "充值"}
+                        </button>
+                      </div>
+                      {topupMsg ? (
+                        <div className={`mt-2 text-xs ${topupMsg.tone === "ok" ? "text-emerald-600" : "text-rose-600"}`}>
+                          {topupMsg.text}
+                        </div>
+                      ) : null}
+                      <div className="mt-2 text-[11px] text-slate-400">
+                        充值走 Ledger `merchant_apply_pos_txn(topup)`，冪等鍵防重複；未註冊會員請先於會員通註冊。
                       </div>
                     </section>
                   </div>

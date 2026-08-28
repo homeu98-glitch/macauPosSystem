@@ -12,6 +12,7 @@ import {
   savePrintJobs,
 } from "@/lib/storage";
 import { PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
+import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
 import { formatMoney } from "@/lib/format";
 import {
   buildKitchenContent,
@@ -229,6 +230,10 @@ export function buildReopenPrintJobs(order: PosOrder, reason: string, operator: 
 }
 
 export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {
+  // 線上單唔 mirror 入 POS DB（契約 M3/M8），先查 in-memory bridge registry；
+  // 舊 persisted 線上單（legacy）仍會喺 loadOrders() 搵到。
+  const bridged = getBridgedPosOrder(ledgerOrderId);
+  if (bridged) return bridged;
   const posOrderId = `ledger-${ledgerOrderId}`;
   return loadOrders().find((row) => row.id === posOrderId || row.onlineOrderId === ledgerOrderId) ?? null;
 }

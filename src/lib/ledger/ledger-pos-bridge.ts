@@ -7,11 +7,22 @@ import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
   loadDeviceConfig,
-  loadOrders,
   loadPrintJobs,
-  saveOrders,
   savePrintJobs,
 } from "@/lib/storage";
+
+/**
+ * 契約 M3 / M8：線上單**唔** mirror 入 POS DB（loadOrders / saveOrders）。
+ * 呢度只留一份 in-memory 表示，俾「收銀見單」同 void/receipt 打印查詢用
+ * （見 print-jobs.ts 嘅 findPosOrderForLedger）。真正線上單權威係 Ledger DB，
+ * 顯示靠 use-ledger-orders-realtime（Realtime + list_merchant_orders）嘅 in-memory feed。
+ * 注意：換頁 / 重載後呢份 map 會清空；如需喺 reload 後補印， caller 應帶齊 Ledger order 資料。
+ */
+const bridgedOrders = new Map<string, PosOrder>();
+
+export function getBridgedPosOrder(ledgerOrderId: string): PosOrder | null {
+  return bridgedOrders.get(ledgerOrderId) ?? null;
+}
 import { OrderItem, PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
 
 function uid(prefix: string) {
@@ -190,12 +201,10 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   };
 
   const printJobs = buildPrintJobs(posOrder);
-  const existingOrders = loadOrders();
-  const nextOrders = [posOrder, ...existingOrders.filter((row) => row.id !== posOrder.id)];
-  saveOrders(nextOrders);
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
-  }
+
+  // 契約 M3 / M8：線上單唔 mirror 入 POS DB。只留 in-memory 表示（見檔頭 bridgedOrders），
+  // 唔 call saveOrders，唔 dispatch pos-orders-changed（POS 本機單唔含線上單）。
+  bridgedOrders.set(options.ledgerOrder.id, posOrder);
 
   if (printJobs.length > 0) {
     savePrintJobs([...printJobs, ...loadPrintJobs()]);

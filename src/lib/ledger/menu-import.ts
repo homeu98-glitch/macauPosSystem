@@ -1,5 +1,5 @@
-import { LedgerMenuCategory, LedgerMenuProduct, LedgerOrderMenu } from "@/lib/ledger/menu";
-import { SoldOutState } from "@/lib/storage";
+import { LedgerMenuCategory, LedgerMenuProduct, LedgerOrderMenu, parseLedgerOrderMenu } from "@/lib/ledger/menu";
+import { loadBootstrapCache, loadSoldOutState, saveBootstrapCache, saveSoldOutState, SoldOutState } from "@/lib/storage";
 import { MenuCategory, MenuItem, PosBootstrap } from "@/lib/types";
 
 export const LEDGER_CATEGORY_ID_PREFIX = "ledger-cat-";
@@ -224,4 +224,77 @@ export function mergeLedgerMenuReference(
     soldOut,
     stats,
   };
+}
+
+/**
+ * M7 — `public.products` Realtime 嘅本地 patch/upsert。
+ * 唔做全 `list_merchant_order_menu` re-fetch；只按單筆變更更新 bootstrap 餐牌 cache。
+ *
+ * - INSERT / UPDATE：parse 單筆 raw product → `LedgerMenuProduct` → `MenuItem`（重用 mapLedgerProduct），
+ *   按 `ledger-<id>` upsert；分類唔存在就補一筆；同步售罄狀態。
+ * - DELETE：移除 `ledger-<id>` 菜品同售罄標記。
+ * 改完 saveBootstrapCache + dispatch `pos-bootstrap-changed`（pos-app / kiosk 聽咗會重讀）。
+ *
+ * 守衛：若 bootstrap 根本未匯入 Ledger 餐牌（無任何 `ledger-` 菜品），跳過單筆 patch，
+ * 等下次完整匯入帶齊，避免出現孤兒菜品 / 殘缺分類。
+ */
+export function patchMenuFromRealtimeRecord(
+  record: unknown,
+  eventType: "INSERT" | "UPDATE" | "DELETE",
+): { changed: boolean } {
+  const bootstrap = loadBootstrapCache();
+  if (!bootstrap) return { changed: false };
+
+  const hasLedgerMenu = bootstrap.menuItems.some((row) => row.id.startsWith(LEDGER_MENU_ITEM_ID_PREFIX));
+  if (!hasLedgerMenu) return { changed: false };
+
+  const rawRecord = (record && typeof record === "object" ? (record as Record<string, unknown>) : null) ?? {};
+  const rawId = String(rawRecord.id ?? rawRecord.product_id ?? rawRecord.menu_item_id ?? "").trim();
+  if (!rawId) return { changed: false };
+
+  const posId = toLedgerMenuItemId(rawId);
+
+  if (eventType === "DELETE") {
+    const hadItem = bootstrap.menuItems.some((row) => row.id === posId);
+    if (!hadItem) return { changed: false };
+    const nextItems = bootstrap.menuItems.filter((row) => row.id !== posId);
+    const nextSoldOut = { ...loadSoldOutState() };
+    delete nextSoldOut[posId];
+    saveSoldOutState(nextSoldOut);
+    saveBootstrapCache({ ...bootstrap, menuItems: nextItems, lastUpdatedAt: new Date().toISOString() });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-bootstrap-changed"));
+    }
+    return { changed: true };
+  }
+
+  const parsed = parseLedgerOrderMenu({ products: [record], categories: [] });
+  const product = parsed.products[0];
+  if (!product) return { changed: false };
+
+  const itemById = buildItemMaps(bootstrap.menuItems);
+  const mapped = mapLedgerProduct(product, itemById.get(posId));
+
+  const catPosId = toLedgerCategoryId(product.categoryId);
+  const categories: MenuCategory[] = bootstrap.categories.some((row) => row.id === catPosId)
+    ? bootstrap.categories
+    : [...bootstrap.categories, { id: catPosId, name: String(rawRecord.category_name ?? catPosId) }];
+
+  const nextItems = bootstrap.menuItems.some((row) => row.id === posId)
+    ? bootstrap.menuItems.map((row) => (row.id === posId ? mapped : row))
+    : [...bootstrap.menuItems, mapped];
+
+  const soldOut = applySoldOutForProduct(loadSoldOutState(), product, new Date().toISOString());
+  saveSoldOutState(soldOut);
+
+  saveBootstrapCache({
+    ...bootstrap,
+    categories,
+    menuItems: nextItems,
+    lastUpdatedAt: new Date().toISOString(),
+  });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-bootstrap-changed"));
+  }
+  return { changed: true };
 }

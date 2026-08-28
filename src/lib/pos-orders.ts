@@ -1,7 +1,5 @@
 "use client";
 
-import { applyPosAdd } from "@/lib/ledger/members";
-import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { appendPrintJobs, buildReopenPrintJobs } from "@/lib/print-jobs";
 import { loadOrders, loadPosLocalSettings, saveOrders, savePosLocalSettings } from "@/lib/storage";
 import { FloorConfig, PosOrder, StoreTable } from "@/lib/types";
@@ -150,25 +148,11 @@ export async function reopenPosOrder(params: {
     return { ok: false, error: "此單狀態不可返結（只可返結已結帳單）" };
   }
 
-  // ① 反向回滾會員餘額（best-effort）
+  // ① 反向回滾會員餘額：v3.2 契約規定 POS 店內單返結唔動 Ledger 餘額
+  // （p_type="add" 唔開放 POS；真沖正請顧客用會員通 Web「退回」）。
+  // 故只切換 POS 本機狀態，唔 call Ledger。
   let memberReversed = false;
   let memberReverseError: string | undefined;
-  if (order.memberDeductionAvos && order.memberDeductionAvos > 0 && order.ledgerMemberPhone) {
-    const merchantId = getLedgerMerchantId();
-    if (merchantId) {
-      try {
-        await applyPosAdd({
-          merchantId,
-          phone: order.ledgerMemberPhone,
-          amountAvos: order.memberDeductionAvos,
-          idempotencyKey: `reopen-${order.id}-${(order.reopenCount ?? 0) + 1}-${Date.now()}`,
-        });
-        memberReversed = true;
-      } catch (err) {
-        memberReverseError = err instanceof Error ? err.message : String(err);
-      }
-    }
-  }
 
   // ①.5 建立 temp 枱，將返結單由「原枱」搬到 temp 枱（原枱唔會被取代）
   const tempTable = createReopenTempTable(order);

@@ -83,14 +83,11 @@ export async function applyPosDeduct(params: {
 }
 
 /**
- * 反向加回（返結 / 退款時把先前扣減的餘額退返客戶）。
- * 走 Ledger `merchant_apply_pos_txn` p_type:"add"。
- *
- * 注意：現階段 Ledger 後端可能尚未佈署 add 分支（見 docs/39 需求書）。
- * 本函數會如實拋錯，由呼叫方（reopenPosOrder）以 best-effort 方式 catch 後
- * 繼續完成返結狀態切換，不阻擋工人操作。
+ * 現場充值（已註冊會員）：走 Ledger `merchant_apply_pos_txn` p_type:"topup"。
+ * 帶冪等鍵；重試重用同一 key。契約明禁 p_type="add"（非充值、亦非沖正），
+ * 返結 / 退款嘅餘額沖正唔開放 POS，請顧客用會員通 Web「退回」。
  */
-export async function applyPosAdd(params: {
+export async function applyPosTopup(params: {
   merchantId: string;
   phone: string;
   amountAvos: number;
@@ -100,13 +97,13 @@ export async function applyPosAdd(params: {
     throw new Error("idempotency key required");
   }
   if (params.amountAvos <= 0) {
-    throw new Error("加回金額須大於 0");
+    throw new Error("充值金額須大於 0");
   }
   try {
     const client = await requireRpcClient();
     const { data, error } = await client.rpc("merchant_apply_pos_txn", {
       p_merchant_id: params.merchantId,
-      p_type: "add",
+      p_type: "topup",
       p_phone: params.phone,
       p_amount_avos: params.amountAvos,
       p_idempotency_key: params.idempotencyKey,

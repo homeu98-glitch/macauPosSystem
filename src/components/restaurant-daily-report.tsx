@@ -4,9 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import {
-  getMerchantMemberSummary,
   getMerchantReportSummary,
-  type LedgerMemberSummary,
   type LedgerReportSummary,
 } from "@/lib/ledger/reports";
 import { restoreLedgerSession } from "@/lib/ledger/session";
@@ -230,7 +228,6 @@ export function RestaurantDailyReport() {
     sel: null,
     yest: null,
   });
-  const [member, setMember] = useState<LedgerMemberSummary | null>(null);
   const [lowStock, setLowStock] = useState<
     Array<{ name: string; qty: number; unit: string; par: number }> | null
   >(null);
@@ -268,23 +265,13 @@ export function RestaurantDailyReport() {
     }
 
     let cancelled = false;
-    async function safeMember(r: ReportRangeKey): Promise<LedgerMemberSummary | null> {
-      try {
-        const restored = await restoreLedgerSession();
-        if (!restored) return null;
-        return await getMerchantMemberSummary(r);
-      } catch {
-        return null;
-      }
-    }
     async function load() {
       setLoading(true);
       setLedgerError(null);
-      const [sel, d7, yest, mem] = await Promise.all([
+      const [sel, d7, yest] = await Promise.all([
         safeLedger(range),
         safeLedger("7d"),
         range === "today" ? safeLedger("yesterday") : Promise.resolve(null),
-        safeMember(range),
       ]);
 
       const acc = loadAuthSession()?.account;
@@ -295,7 +282,6 @@ export function RestaurantDailyReport() {
 
       if (cancelled) return;
       setLedger({ sel, d7, yest });
-      setMember(mem);
       setPurchase({ sel: purSel?.summary ?? null, yest: purYest?.summary ?? null });
 
       // 低庫存預警：讀本店 inv_products，current_qty <= reorder_level（par）即低庫存。
@@ -638,10 +624,10 @@ export function RestaurantDailyReport() {
                   <div className="text-xs text-slate-500">充值金額（{FILTERS.find((f) => f.key === range)?.label}）</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {member?.memberCount != null ? (
-                    <Pill kind="amber">會員數 {member.memberCount}</Pill>
+                  {ledger.sel?.memberCount != null ? (
+                    <Pill kind="amber">會員數 {ledger.sel.memberCount}</Pill>
                   ) : (
-                    <Pill kind="amber">會員數 —（待接 RPC）</Pill>
+                    <Pill kind="amber">會員數 —（未連線）</Pill>
                   )}
                   <Pill kind="green">線上渠道佔比 {Math.round(onlineShare * 100)}%</Pill>
                   <Pill kind="slate">會員餘額扣減 {formatMoney(ledger.sel?.orderBalancePaidMop ?? 0)}</Pill>
@@ -837,7 +823,7 @@ export function RestaurantDailyReport() {
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
               說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
               人流（入店人次）為收銀端手動記錄（無門口計數硬件），轉化率＝覆蓋人數 ÷ 入店人次。出餐時間為「送廚房→出餐」實測（舊單缺時間戳時自動以落單→結帳估算，標「含估算」）；食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
-              毛利為「營業額 − 買貨成本（已付）」估算；會員數待 Ledger 部署 get_merchant_member_summary RPC 後自動顯示。
+              毛利為「營業額 − 買貨成本（已付）」估算；會員數來自 Ledger `get_merchant_report_summary` 的 member_count（未連線時顯示 —）。
             </div>
           </div>
         </main>

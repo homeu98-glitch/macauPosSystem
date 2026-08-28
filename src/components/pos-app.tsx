@@ -59,6 +59,8 @@ import {
   sumMoneyVoucherAvos,
 } from "@/lib/ledger/member-types";
 import { listRedeemableGrantsForCustomer } from "@/lib/ledger/rewards";
+import { patchMenuFromRealtimeRecord } from "@/lib/ledger/menu-import";
+import { useLedgerProductsRealtime } from "@/lib/ledger/use-ledger-products-realtime";
 import {
   quickCompleteLabel,
   quickCompletionLabel,
@@ -191,6 +193,26 @@ export function PosApp() {
   // ── 自動配對桌面 Companion：mount 嗰陣 ran 一次，唔使用家手動填 URL（見 auto-pair-companion.ts）──
   useEffect(() => {
     tryAutoPairCompanion();
+  }, []);
+
+  // ── M7：Ledger 餐牌 realtime ── 單筆 patch/upsert bootstrap cache，唔全 re-fetch。
+  const ledgerMerchantId = getLedgerMerchantId();
+  useLedgerProductsRealtime(ledgerMerchantId, Boolean(ledgerMerchantId), {
+    onChange: ({ record, eventType }) => {
+      patchMenuFromRealtimeRecord(record, eventType);
+    },
+  });
+
+  // 餐牌被 realtime / 匯入改動後，重讀 bootstrap 令收銀介面即時反映（kiosk 側已聽同一事件）。
+  useEffect(() => {
+    function onBootstrapChanged() {
+      const fresh = loadBootstrapCache();
+      if (fresh) {
+        setBootstrap(applyLedgerMerchantToBootstrap(normalizeBootstrapPayload(fresh), loadAuthSession()));
+      }
+    }
+    window.addEventListener("pos-bootstrap-changed", onBootstrapChanged);
+    return () => window.removeEventListener("pos-bootstrap-changed", onBootstrapChanged);
   }, []);
 
   // ── Deep-link：orders 面板「查看」非 counter 單會跳到 /?tableId=...&orderId=... ──

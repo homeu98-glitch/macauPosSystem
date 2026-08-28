@@ -10,11 +10,9 @@ export type LedgerReportSummary = {
   orderInStorePaidMop: number;
   topupMop: number;
   deductMop: number;
-};
-
-export type LedgerMemberSummary = {
-  /** 區間內活躍會員數（有消費／充值）；RPC 未接時為 null */
-  memberCount: number | null;
+  /** 本店會員總數（wallets 列數）；來自 RPC `get_merchant_report_summary` 的 member_count。
+   *  契約：店員呼叫省略 p_merchant_id；list_merchant_customers.total 只係搜尋筆數，唔係全店總數。 */
+  memberCount: number;
 };
 
 function avosToMop(value: unknown): number {
@@ -52,32 +50,13 @@ export async function getMerchantReportSummary(range: ReportRangeKey): Promise<L
     orderInStorePaidMop: avosToMop(payload.order_in_store_paid_avos),
     topupMop: avosToMop(payload.topup_avos),
     deductMop: avosToMop(payload.deduct_avos),
+    memberCount: Number(payload.member_count ?? 0),
   };
 }
 
-/** Phase B（模塊 6）：區間內會員數。依賴 Ledger RPC `get_merchant_member_summary`；
- *  未部署該 RPC 時拋錯，呼叫方應 try/catch 並降級顯示「—」。 */
-export async function getMerchantMemberSummary(range: ReportRangeKey): Promise<LedgerMemberSummary> {
-  const client = getLedgerSupabaseClient();
-  if (!client) {
-    throw new Error("Ledger Supabase 尚未設定。");
-  }
-
-  const period = ledgerReportRangeForKey(range);
-  if (!period) {
-    throw new Error("無法計算報表區間。");
-  }
-
-  const { data, error } = await client.rpc("get_merchant_member_summary", {
-    p_start: period.start,
-    p_end: period.end,
-  });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const payload = (data ?? {}) as Record<string, unknown>;
-  const count = payload.member_count ?? payload.count ?? payload.active_members;
-  return { memberCount: count === undefined || count === null ? null : Number(count) };
+/** Phase B（模塊 6）：會員總數。
+ * 契約確認 RPC `get_merchant_member_summary` 不存在；本店會員總數統一由
+ * `getMerchantReportSummary` 的 `member_count` 取得（wallets 列數）。故呢度唔再獨立 call RPC。 */
+export function reportMemberCount(summary: LedgerReportSummary | null): number | null {
+  return summary ? summary.memberCount : null;
 }
