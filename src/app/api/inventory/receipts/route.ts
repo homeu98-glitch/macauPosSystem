@@ -137,6 +137,7 @@ export async function GET(request: Request) {
       total_amount: Number(r.total_amount) || 0,
       payment_status: getRaw("payment_status") || "unpaid",
       payment_method: getRaw("payment_method") || "on_delivery",
+      category: getRaw("category") || "",
       items: receiptItems,
     };
   };
@@ -154,6 +155,7 @@ export async function GET(request: Request) {
     merchant_name: sr.merchant_name,
     payment_method: sr.payment_method,
     payment_status: sr.payment_status,
+    category: sr.category ?? "",
     raw_ocr_data: (receipts ?? []).find((r) => r.id === sr.id)?.raw_ocr_data ?? null,
     items: sr.items,
   }));
@@ -197,6 +199,7 @@ export async function POST(request: Request) {
     receipt_date: body.date,
     raw_ocr_data: {
       receipt_number: body.receipt_number || null,
+      category: body.category || null,
       payment_method: body.payment_method || "on_delivery",
       payment_status: body.payment_status || "unpaid",
       input_method: "pos_manual",

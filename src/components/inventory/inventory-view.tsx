@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadAuthSession } from "@/lib/storage";
 import { REPORT_RANGE_OPTIONS, reportRangeLabel, type ReportRangeKey } from "@/lib/ledger/report-period";
@@ -24,7 +24,8 @@ type Receipt = {
   merchant_name: string;
   payment_method: string;
   payment_status: string;
-  raw_ocr_data?: { receipt_number?: string; payment_method?: string; payment_status?: string } | null;
+  category?: string;
+  raw_ocr_data?: { receipt_number?: string; payment_method?: string; payment_status?: string; category?: string } | null;
   items: ReceiptItem[];
 };
 
@@ -46,80 +47,14 @@ const PAYMENT_METHODS = ["on_delivery", "cash", "card", "transfer"] as const;
 const STATUS_LABEL: Record<string, string> = { paid: "已付款", unpaid: "未付款" };
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 
-/* ---------------- 左滑顯示操作（手勢支援） ---------------- */
-function SwipeableRow({
-  children,
-  onEdit,
-  onDelete,
-}: {
-  children: ReactNode;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  const [dx, setDx] = useState(0);
-  const startX = useRef(0);
-  const dragging = useRef(false);
-
-  const onDown = (e: PointerEvent) => {
-    dragging.current = true;
-    startX.current = e.clientX;
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-  };
-  const onMove = (e: PointerEvent) => {
-    if (!dragging.current) return;
-    const d = e.clientX - startX.current;
-    setDx(Math.max(-140, Math.min(0, d)));
-  };
-  const onUp = () => {
-    dragging.current = false;
-    setDx((prev) => (prev < -70 ? -140 : 0));
-  };
-
-  return (
-    <div className="relative overflow-hidden rounded-2xl">
-      <div className="absolute inset-y-0 right-0 flex">
-        <button
-          type="button"
-          onClick={() => {
-            onEdit();
-            setDx(0);
-          }}
-          className="w-[70px] bg-amber-500 text-sm font-semibold text-white"
-        >
-          編輯
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            onDelete();
-            setDx(0);
-          }}
-          className="w-[70px] bg-red-500 text-sm font-semibold text-white"
-        >
-          刪除
-        </button>
-      </div>
-      <div
-        style={{ transform: `translateX(${dx}px)`, transition: dx === 0 ? "transform .2s" : "none" }}
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerCancel={onUp}
-        className="touch-none"
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- 收據表單（底部 sheet） ---------------- */
+/* ---------------- 收據表單（置中 modal，可編輯/刪除） ---------------- */
 type FormItem = { name: string; unit_price: string; quantity: string };
 type FormState = {
   id?: string;
   merchant_name: string;
   date: string;
   receipt_number: string;
+  category: string;
   payment_method: string;
   payment_status: string;
   items: FormItem[];
@@ -130,6 +65,7 @@ function emptyForm(): FormState {
     merchant_name: "",
     date: todayStr(),
     receipt_number: "",
+    category: "",
     payment_method: "on_delivery",
     payment_status: "unpaid",
     items: [{ name: "", unit_price: "", quantity: "1" }],
@@ -142,6 +78,7 @@ function formFromReceipt(r: Receipt): FormState {
     merchant_name: r.merchant_name,
     date: r.receipt_date,
     receipt_number: r.raw_ocr_data?.receipt_number ?? "",
+    category: r.category ?? "",
     payment_method: r.payment_method,
     payment_status: r.payment_status,
     items: r.items.length
@@ -150,7 +87,7 @@ function formFromReceipt(r: Receipt): FormState {
   };
 }
 
-function ReceiptFormSheet({
+function ReceiptFormModal({
   open,
   initial,
   supplierNames,
@@ -168,11 +105,13 @@ function ReceiptFormSheet({
   const [form, setForm] = useState<FormState>(emptyForm());
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [askDelete, setAskDelete] = useState(false);
 
   useEffect(() => {
     if (open) {
       setForm(initial ? formFromReceipt(initial) : emptyForm());
       setErr(null);
+      setAskDelete(false);
     }
   }, [open, initial]);
 
@@ -194,6 +133,7 @@ function ReceiptFormSheet({
       account,
       merchant_name: form.merchant_name.trim(),
       receipt_number: form.receipt_number || undefined,
+      category: form.category.trim() || undefined,
       payment_method: form.payment_method,
       payment_status: form.payment_status,
       date: form.date,
@@ -226,26 +166,60 @@ function ReceiptFormSheet({
     }
   };
 
+  const doDelete = async () => {
+    if (!form.id || !account) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/inventory/receipts/${form.id}?account=${encodeURIComponent(account)}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!json.ok) setErr(json.error || "刪除失敗");
+      else {
+        onSaved();
+        onClose();
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "網絡錯誤");
+    } finally {
+      setSaving(false);
+      setAskDelete(false);
+    }
+  };
+
+  // 加大輸入框：py-3.5 + text-base，品項 row 用 grid 對齊讓格寬合理
   const fieldCls =
-    "w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 outline-none focus:border-slate-400";
+    "w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base text-slate-900 outline-none focus:border-slate-400";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onPointerDown={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
       <div
-        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-slate-50 p-4 pb-6 md:rounded-3xl"
-        onPointerDown={(e) => e.stopPropagation()}
+        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 pb-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-slate-900">{form.id ? "編輯收據" : "新增收據"}</h3>
-          <button type="button" onClick={onClose} className="rounded-full bg-slate-200 px-4 py-2 text-sm font-medium text-slate-700">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-xl font-semibold text-slate-900">{form.id ? "編輯收據" : "新增收據"}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200"
+          >
             關閉
           </button>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm text-slate-600">供應商</label>
-            <input list="supplier-list" className={fieldCls} value={form.merchant_name} onChange={(e) => setForm({ ...form, merchant_name: e.target.value })} placeholder="輸入或選擇供應商" />
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">供應商</label>
+            <input
+              list="supplier-list"
+              className={fieldCls}
+              value={form.merchant_name}
+              onChange={(e) => setForm({ ...form, merchant_name: e.target.value })}
+              placeholder="輸入或選擇供應商"
+            />
             <datalist id="supplier-list">
               {supplierNames.map((n) => (
                 <option key={n} value={n} />
@@ -253,21 +227,45 @@ function ReceiptFormSheet({
             </datalist>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm text-slate-600">收據日期</label>
-              <input type="date" className={fieldCls} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">品類</label>
+              <input
+                className={fieldCls}
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                placeholder="例如：食材、清潔用品、餐具"
+              />
             </div>
             <div>
-              <label className="mb-1 block text-sm text-slate-600">收據編號</label>
-              <input className={fieldCls} value={form.receipt_number} onChange={(e) => setForm({ ...form, receipt_number: e.target.value })} placeholder="選填" />
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">收據編號</label>
+              <input
+                className={fieldCls}
+                value={form.receipt_number}
+                onChange={(e) => setForm({ ...form, receipt_number: e.target.value })}
+                placeholder="選填"
+              />
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">收據日期</label>
+            <input
+              type="date"
+              className={fieldCls}
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm text-slate-600">付款方式</label>
-              <select className={fieldCls} value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">付款方式</label>
+              <select
+                className={fieldCls}
+                value={form.payment_method}
+                onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
+              >
                 {PAYMENT_METHODS.map((m) => (
                   <option key={m} value={m}>
                     {PAYMENT_METHOD_LABEL[m] ?? m}
@@ -276,8 +274,12 @@ function ReceiptFormSheet({
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-sm text-slate-600">付款狀態</label>
-              <select className={fieldCls} value={form.payment_status} onChange={(e) => setForm({ ...form, payment_status: e.target.value })}>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">付款狀態</label>
+              <select
+                className={fieldCls}
+                value={form.payment_status}
+                onChange={(e) => setForm({ ...form, payment_status: e.target.value })}
+              >
                 <option value="paid">已付款</option>
                 <option value="unpaid">未付款</option>
               </select>
@@ -285,11 +287,11 @@ function ReceiptFormSheet({
           </div>
 
           <div>
-            <div className="mb-1 flex items-center justify-between">
-              <label className="text-sm text-slate-600">品項</label>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-700">品項</label>
               <button
                 type="button"
-                className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white"
+                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
                 onClick={() => setForm({ ...form, items: [...form.items, { name: "", unit_price: "", quantity: "1" }] })}
               >
                 ＋ 品項
@@ -298,18 +300,23 @@ function ReceiptFormSheet({
             <div className="space-y-2">
               {form.items.map((it, i) => (
                 <div key={i} className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <input className={fieldCls} value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} placeholder="品名" />
+                  <div className="min-w-0 flex-1">
+                    <input
+                      className={fieldCls}
+                      value={it.name}
+                      onChange={(e) => setItem(i, { name: e.target.value })}
+                      placeholder="品名"
+                    />
                   </div>
                   <input
-                    className={`${fieldCls} w-24`}
+                    className={`${fieldCls} w-28`}
                     inputMode="decimal"
                     value={it.unit_price}
                     onChange={(e) => setItem(i, { unit_price: e.target.value })}
                     placeholder="單價"
                   />
                   <input
-                    className={`${fieldCls} w-16`}
+                    className={`${fieldCls} w-20`}
                     inputMode="decimal"
                     value={it.quantity}
                     onChange={(e) => setItem(i, { quantity: e.target.value })}
@@ -317,8 +324,9 @@ function ReceiptFormSheet({
                   />
                   <button
                     type="button"
-                    className="rounded-xl bg-red-50 px-3 py-3 text-sm font-medium text-red-600"
+                    className="shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100"
                     onClick={() => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) })}
+                    aria-label="刪除品項"
                   >
                     ✕
                   </button>
@@ -327,18 +335,53 @@ function ReceiptFormSheet({
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3.5 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
             <span>合計</span>
             <span>{money(total)}</span>
           </div>
 
-          {err && <div className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 ring-1 ring-red-200">{err}</div>}
+          {err && (
+            <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{err}</div>
+          )}
+
+          {form.id && !askDelete && (
+            <button
+              type="button"
+              onClick={() => setAskDelete(true)}
+              className="w-full rounded-2xl border border-red-200 bg-red-50 py-3 text-base font-semibold text-red-600 hover:bg-red-100"
+            >
+              刪除收據
+            </button>
+          )}
+
+          {form.id && askDelete && (
+            <div className="space-y-2 rounded-2xl border border-red-200 bg-red-200/40 bg-red-50 p-4">
+              <p className="text-sm font-medium text-red-800">確定要刪除這張收據嗎？此操作不可復原。</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAskDelete(false)}
+                  className="flex-1 rounded-xl bg-white py-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void doDelete()}
+                  disabled={saving}
+                  className="flex-1 rounded-xl bg-red-600 py-3 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+                >
+                  {saving ? "刪除中…" : "確定刪除"}
+                </button>
+              </div>
+            </div>
+          )}
 
           <button
             type="button"
             onClick={save}
             disabled={saving}
-            className="w-full rounded-2xl bg-emerald-600 py-3.5 text-base font-semibold text-white disabled:opacity-60"
+            className="w-full rounded-2xl bg-emerald-600 py-3.5 text-base font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
           >
             {saving ? "儲存中…" : "儲存收據"}
           </button>
@@ -355,11 +398,9 @@ export function InventoryView() {
   const [data, setData] = useState<ReceiptsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [formInitial, setFormInitial] = useState<Receipt | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<Receipt | null>(null);
   const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
 
   const [merchantDraft, setMerchantDraft] = useState("");
@@ -404,22 +445,6 @@ export function InventoryView() {
   }, [receipts]);
   const supplierNames = useMemo(() => suppliers.map((s) => s.name), [suppliers]);
 
-  const doDeleteReceipt = async (r: Receipt) => {
-    if (!account) return;
-    setDeleteMsg(null);
-    try {
-      const res = await fetch(`/api/inventory/receipts/${r.id}?account=${encodeURIComponent(account)}`, { method: "DELETE" });
-      const json = await res.json();
-      if (!json.ok) setDeleteMsg(json.error || "刪除失敗");
-      else {
-        setConfirmDelete(null);
-        void loadAll();
-      }
-    } catch (e) {
-      setDeleteMsg(e instanceof Error ? e.message : "網絡錯誤");
-    }
-  };
-
   const doCreateMerchant = async () => {
     if (!account || !merchantDraft.trim()) return;
     try {
@@ -441,7 +466,9 @@ export function InventoryView() {
   const doDeleteMerchant = async (id: string) => {
     if (!account) return;
     try {
-      const res = await fetch(`/api/inventory/merchants/${id}?account=${encodeURIComponent(account)}`, { method: "DELETE" });
+      const res = await fetch(`/api/inventory/merchants/${id}?account=${encodeURIComponent(account)}`, {
+        method: "DELETE",
+      });
       const json = await res.json();
       if (json.ok) void loadAll();
       else setDeleteMsg(json.error || "刪除供應商失敗");
@@ -468,6 +495,11 @@ export function InventoryView() {
     }
   };
 
+  const openReceiptModal = (r: Receipt | null) => {
+    setFormInitial(r);
+    setFormOpen(true);
+  };
+
   if (!account) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-50 p-6 text-slate-500">
@@ -488,15 +520,15 @@ export function InventoryView() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => {
-                setFormInitial(null);
-                setFormOpen(true);
-              }}
+              onClick={() => openReceiptModal(null)}
               className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white"
             >
               ＋ 新增收據
             </button>
-            <button onClick={() => void loadAll()} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white">
+            <button
+              onClick={() => void loadAll()}
+              className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white"
+            >
               重新整理
             </button>
           </div>
@@ -560,9 +592,12 @@ export function InventoryView() {
           </div>
         </div>
 
-        {/* 收據清單 */}
+        {/* 收據清單：點擊任意位置開啟置中 modal（編輯+刪除） */}
         <section className="mb-6">
-          <h2 className="mb-3 text-sm font-medium text-slate-600">收據清單（expenseRecorder・{rangeLabel}）</h2>
+          <h2 className="mb-3 text-sm font-medium text-slate-600">
+            收據清單（expenseRecorder・{rangeLabel}）
+            <span className="ml-2 text-xs font-normal text-slate-400">點擊任一卡片開啟編輯</span>
+          </h2>
           {loading ? (
             <p className="text-sm text-slate-500">載入中…</p>
           ) : receipts.length === 0 ? (
@@ -572,81 +607,45 @@ export function InventoryView() {
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {receipts.map((r) => {
-                const open = expandedId === r.id;
-                const lineNo = r.raw_ocr_data?.receipt_number;
                 const paid = r.payment_status === "paid";
+                const lineNo = r.raw_ocr_data?.receipt_number;
                 return (
-                  <SwipeableRow
+                  <button
                     key={r.id}
-                    onEdit={() => {
-                      setFormInitial(r);
-                      setFormOpen(true);
-                    }}
-                    onDelete={() => setConfirmDelete(r)}
+                    type="button"
+                    onClick={() => openReceiptModal(r)}
+                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-300"
                   >
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-base font-medium text-slate-900">{r.merchant_name}</div>
-                          <div className="mt-0.5 text-xs text-slate-500">
-                            {r.receipt_date}
-                            {lineNo ? ` ・ #${lineNo}` : ""} ・ {r.items.length} 項
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-base font-medium text-slate-900">{r.merchant_name}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {r.receipt_date}
+                          {lineNo ? ` ・ #${lineNo}` : ""} ・ {r.items.length} 項
+                        </div>
+                        <div className="mt-0.5 text-xs text-slate-400">
+                          付款方式：{PAYMENT_METHOD_LABEL[r.payment_method] ?? r.payment_method}
+                        </div>
+                        {r.category && (
+                          <div className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                            {r.category}
                           </div>
-                          <div className="mt-0.5 text-xs text-slate-400">付款方式：{PAYMENT_METHOD_LABEL[r.payment_method] ?? r.payment_method}</div>
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
-                          <div className="text-base font-semibold text-slate-900">{money(r.total_amount)}</div>
-                          <span
-                            className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                              paid ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200" : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
-                            }`}
-                          >
-                            {STATUS_LABEL[r.payment_status] ?? r.payment_status}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setExpandedId(open ? null : r.id)}
-                            className="mt-1 text-[11px] text-slate-400"
-                          >
-                            {open ? "收起" : "展開"}
-                          </button>
-                        </div>
+                        )}
                       </div>
-
-                      {open && (
-                        <div className="mt-3 border-t border-slate-100 pt-3">
-                          <table className="w-full text-left text-sm">
-                            <thead className="text-slate-400">
-                              <tr>
-                                <th className="py-1 pr-2 font-normal">品名</th>
-                                <th className="py-1 pr-2 text-right font-normal">單價</th>
-                                <th className="py-1 pr-2 text-right font-normal">數量</th>
-                                <th className="py-1 text-right font-normal">小計</th>
-                              </tr>
-                            </thead>
-                            <tbody className="text-slate-700">
-                              {r.items.length === 0 ? (
-                                <tr>
-                                  <td colSpan={4} className="py-2 text-center text-slate-400">
-                                    無品項明細
-                                  </td>
-                                </tr>
-                              ) : (
-                                r.items.map((it) => (
-                                  <tr key={it.id} className="border-t border-slate-50">
-                                    <td className="py-1 pr-2">{it.name}</td>
-                                    <td className="py-1 pr-2 text-right">{money(it.unit_price)}</td>
-                                    <td className="py-1 pr-2 text-right">{Number(it.quantity || 0)}</td>
-                                    <td className="py-1 text-right">{money(Number(it.unit_price || 0) * Number(it.quantity || 0))}</td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <div className="text-base font-semibold text-slate-900">{money(r.total_amount)}</div>
+                        <span
+                          className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            paid
+                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                              : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                          }`}
+                        >
+                          {STATUS_LABEL[r.payment_status] ?? r.payment_status}
+                        </span>
+                      </div>
                     </div>
-                  </SwipeableRow>
+                  </button>
                 );
               })}
             </div>
@@ -685,7 +684,8 @@ export function InventoryView() {
                         defaultValue={s.name}
                         onBlur={(e) => void doRenameMerchant(s.id, e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") void doRenameMerchant(s.id, (e.target as HTMLInputElement).value);
+                          if (e.key === "Enter")
+                            void doRenameMerchant(s.id, (e.target as HTMLInputElement).value);
                         }}
                       />
                     ) : (
@@ -729,7 +729,9 @@ export function InventoryView() {
               {summary.paymentMethodBreakdown.length === 0 ? (
                 <div className="text-sm text-slate-400">無資料</div>
               ) : (
-                <DonutChart data={summary.paymentMethodBreakdown.map((b) => ({ label: b.label, value: b.total }))} />
+                <DonutChart
+                  data={summary.paymentMethodBreakdown.map((b) => ({ label: b.label, value: b.total }))}
+                />
               )}
             </div>
 
@@ -762,7 +764,7 @@ export function InventoryView() {
         )}
       </div>
 
-      <ReceiptFormSheet
+      <ReceiptFormModal
         open={formOpen}
         initial={formInitial}
         supplierNames={supplierNames}
@@ -770,25 +772,6 @@ export function InventoryView() {
         onClose={() => setFormOpen(false)}
         onSaved={() => void loadAll()}
       />
-
-      {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onPointerDown={() => setConfirmDelete(null)}>
-          <div className="w-full max-w-sm rounded-3xl bg-white p-5" onPointerDown={(e) => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-slate-900">刪除收據？</h3>
-            <p className="mt-2 text-sm text-slate-600">
-              確定要刪除「{confirmDelete.merchant_name}」的收據（{money(confirmDelete.total_amount)}）嗎？此操作不可復原。
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button type="button" onClick={() => setConfirmDelete(null)} className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-medium text-slate-700">
-                取消
-              </button>
-              <button type="button" onClick={() => void doDeleteReceipt(confirmDelete)} className="flex-1 rounded-xl bg-red-500 py-3 text-sm font-semibold text-white">
-                刪除
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

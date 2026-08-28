@@ -8,6 +8,7 @@ export type InventoryReceiptInput = {
   merchant_name?: string;
   merchant_id?: string;
   receipt_number?: string;
+  category?: string;
   payment_method?: string;
   payment_status?: string;
   date?: string;

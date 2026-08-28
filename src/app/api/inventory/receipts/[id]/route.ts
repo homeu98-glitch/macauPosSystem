@@ -38,6 +38,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
   const raw: Record<string, unknown> = {};
   if (body.receipt_number !== undefined) raw.receipt_number = body.receipt_number || null;
+  if (body.category !== undefined) raw.category = body.category || null;
   if (body.payment_method) raw.payment_method = body.payment_method;
   if (body.payment_status) raw.payment_status = body.payment_status;
   if (Object.keys(raw).length > 0) {

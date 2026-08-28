@@ -28,6 +28,7 @@ export type StatReceipt = {
   total_amount: number;
   payment_status: string; // "paid" | "unpaid" | ...
   payment_method: string;
+  category?: string;
   items: StatItem[];
 };
 
