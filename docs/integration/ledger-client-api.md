@@ -1,7 +1,9 @@
 # 第三方 POS ↔ Ledger 整合（Client 直連 Supabase）
 
-> **位置**：`docs/integration/ledger-client-api.md`（權威副本）  
-> **狀態**：Phase 1 契約 **v2**（2026-08-11）  
+> **位置**：`docs/integration/ledger-client-api.md`（夥伴端權威副本）  
+> **狀態**：契約 **v3.2（2026-08-28）** — 由 v2（2026-08-11）升級。v3.2 把**會員類 RPC 列入 POS 白名單**（見 §5.6–§5.9）；訂單契約不變。  
+> **上游權威**：Macau-Ledger **private** repo `docs/integration/pos-ledger-client-api.md`（v3.2）＋短清單 `docs/integration/pos-v3.2-partner-handover.md`。  
+> ⚠️ 該兩份只喺 Ledger private repo，**唔會**同步到本 repo；本檔 §5.6–§5.9 即其會員部分之轉錄，以本檔為準。  
 > **夥伴 repo**：[homeu98-glitch/macauPosSystem](https://github.com/homeu98-glitch/macauPosSystem)（**獨立 Supabase**；店內 POS／打印／帳務由夥伴自理）  
 > **決策依據**：Macau-Ledger ADR-022（訂單狀態機）、ADR-024（client 直連 Supabase）、ADR-025（禁高頻 polling）  
 > **See also**：[生態系模組總覽](./ecosystem-modules.md) · [文檔索引](../README.md)
@@ -11,7 +13,7 @@
 | 問題 | 答案 |
 |------|------|
 | **訂單在哪？** | 會員通**線上**單以 Ledger `orders` 為**唯一權威**；POS 自有 DB 只存店內堂食／設備，**不得**再以 `online_orders` polling 鏡像會員通單。 |
-| **能做什麼？** | **寫**：接單／改狀態／標記到店付款（白名單 RPC，與 Android 相同）。**讀**：報表、菜單、列表、詳情。 |
+| **能做什麼？** | **寫**：接單／改狀態／標記到店付款（白名單 RPC，與 Android 相同）。**讀**：報表、菜單、列表、詳情。**v3.2 起＋會員**：查錢包、會員搜尋列表（§5.7）、充值／扣點（§5.8）、未註冊建檔（§5.9，伺服器代打）。 |
 | **怎麼更新？** | 訂單頁 **訂閱 Supabase Realtime**（`merchant_id` filter）；重連後 `list_merchant_orders` 增量補洞。**禁止** 6s `setInterval` polling。 |
 | **不能做什麼？** | SiteB 派送、訂單聊天、Ledger Vercel HTTP、Webhook Phase 1、Ledger MQTT 憑證。 |
 | **需私下取得** | `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`、`AUTH_PIN_PEPPER`。**勿**索取 `SUPABASE_SERVICE_ROLE_KEY`、MQTT 帳密。 |
@@ -36,6 +38,10 @@
 - **訂單同步**：Supabase Realtime `public.orders`（`merchant_id=eq.<uuid>`）+ 重連／回前景增量 RPC
 - **讀 RPC**：`list_merchant_orders`、`get_merchant_report_summary`、`list_merchant_order_menu`；明細可選 `get_order_detail`
 - **寫 RPC**（§5.5）：`accept_order_with_deduct`、`accept_order_in_store`、`update_order_status`、`set_order_paid_in_store`
+- **會員（v3.2 新增 POS 白名單，§5.6–§5.9）**：
+  - 讀 `merchant_lookup_customer_wallet`（單一會員）、`list_merchant_customers`（搜尋式分頁列表）
+  - 寫 `merchant_apply_pos_txn`（`p_type: "topup" | "deduct"`；**禁 `add`**）
+  - 未註冊建檔／首充：Ledger **已上線**嘅 HTTP `ensure-customer`，**POS 伺服器代打**（§5.9）
 
 ### 1.2 本契約不包含（非目標）
 
@@ -352,9 +358,106 @@ update_order_status(p_order_id uuid, p_new_status public.order_status) → jsonb
 
 #### 5.5.3 禁止呼叫的 RPC（非白名單）
 
-`create_order`、`merchant_apply_pos_txn`（記帳另議）、派送相關 Server Action 等一切 **Ledger Vercel** 路徑；以及 `merchant_*_order_change`、訂單聊天 RPC。
+`create_order`、派送相關 Server Action 等一切 **Ledger Vercel** 路徑；以及 `merchant_*_order_change`、訂單聊天 RPC。
+
+> **v3.2 更新**：`merchant_apply_pos_txn` 已由「記帳另議」轉為**會員白名單**，限 `p_type: "topup" | "deduct"`（**禁 `add`**），詳見 §5.8。此處不再列為禁止。
 
 > **技術說明**：PostgREST 對 `authenticated` 的 `GRANT EXECUTE` 範圍**大於**上表白名單（例如 `merchant_apply_pos_txn` 技術上可呼叫）。白名單是**整合契約義務**，Ledger 以合約／稽核約束，**並非** API gateway 強制封鎖。夥伴不得因「能呼叫」而擴張 scope。
+
+---
+
+### 5.6 `merchant_lookup_customer_wallet`（讀 · 會員單一查詢）
+
+程式權威：[`src/lib/ledger/members.ts`](../../src/lib/ledger/members.ts) `lookupCustomerWallet`
+
+```ts
+supabase.rpc("merchant_lookup_customer_wallet", { p_merchant_id, p_phone });
+```
+
+| 項目 | 說明 |
+|------|------|
+| `p_merchant_id` | ✅ **要傳**（與 §5.7 唔同） |
+| `p_phone` | 8 位澳門電話 |
+| 輸出 | `registered`、`customer_id`、`customer_phone`、`display_name`、`balance_avos`、`gift_balance_avos` |
+| 用途 | 結帳／充值前**先 lookup**。`registered=false` **唔好**直接扣點 |
+
+---
+
+### 5.7 `list_merchant_customers`（讀 · 會員搜尋列表 · **v3.2 POS 白名單**）
+
+> **呢條唔係新建 RPC。** 自 migration `20260530160000` 已喺 DB，Ledger Web `/merchant/reports/users` 日常使用。
+> v3.2 **只係**將佢列入 POS 白名單，並加 `paid_balance_avos`／`gift_balance_avos`（migration `20260828120000`）。POS **唔使等新接口**。
+
+```ts
+supabase.rpc("list_merchant_customers", { p_search, p_page, p_page_size });
+```
+
+| 參數 | 規則 |
+|------|------|
+| `p_merchant_id` | ❌ **唔好傳**。店員傳咗會 `not admin`（RPC 由 `is_merchant_staff` 自行判定所屬店） |
+| `p_search` | ✅ **必須非空**：至少 2 字，或完整 8 位電話 |
+| `p_page_size` | ≤ 50 |
+| `p_page` | 一次一頁 |
+
+**回傳 items**：`wallet_id`、`customer_id`、`phone`、`display_name`、`nick_name`、`balance_avos`、`paid_balance_avos`、`gift_balance_avos`
+
+| 規則 | 說明 |
+|------|------|
+| ⚠️ 餘額 | `balance_avos` **已係 paid + gift 合計**，**唔好**再 `balance + gift` |
+| ⚠️ `total` | 只係**今次搜尋**筆數，**唔係**全店總數 |
+| ⛔ 禁止 | **禁止**進頁 dump 全店會員；**禁止**空搜尋當一覽；**禁止**寫入 POS DB／`localStorage`／IndexedDB（§7.2 PII） |
+| ⛔ 禁止 | 唔好 `setInterval` polling；唔好 subscribe `wallets` Realtime |
+
+**全店人數**：用 `get_merchant_report_summary` 嘅 `member_count`（**省略 `p_merchant_id`**；開報表打一次）。
+**唔好**用空搜尋嘅 `total` 當全店人數。
+
+**要瀏覽全店名單** → 用會員通 Web `/merchant/reports/users`，**唔好**喺 POS 做全量同步。
+
+---
+
+### 5.8 `merchant_apply_pos_txn`（寫 · 會員充值／扣點）
+
+```ts
+supabase.rpc("merchant_apply_pos_txn", {
+  p_merchant_id,
+  p_type: "topup" | "deduct",
+  p_phone,
+  p_amount_avos,
+  p_idempotency_key,
+});
+```
+
+| 項目 | 說明 |
+|------|------|
+| `p_type` | `topup`（現場充值）／`deduct`（扣點） |
+| ⛔ 禁止 | **`p_type = "add"` 禁用**（非充值、亦非沖正）。返結／退款嘅餘額沖正唔開放 POS → 請顧客用會員通 Web「退回」 |
+| 冪等 | 有金額**必填** `p_idempotency_key`；網路重試**重用同一 key** |
+| 前置 | 先 `lookup`；`registered=false` **唔好**直打（應走 §5.9） |
+
+---
+
+### 5.9 `ensure-customer`（寫 · **Ledger HTTP，POS 伺服器代打**）
+
+未註冊會員**建檔／首充**。Ledger **已上線**，POS 唔使等新 RPC，亦**唔好**自己實作一套同名邏輯當 Ledger 本體。
+
+```http
+POST https://membership-uat.macau-tech.com/api/integration/pos/ensure-customer
+Authorization: Bearer <店員 Ledger access_token>
+Content-Type: application/json
+
+{ "merchantId": "...", "phone": "60000003", "displayName?": "...", "amountAvos?": 5000, "idempotencyKey?": "..." }
+```
+
+| 項目 | 說明 |
+|------|------|
+| 呼叫端 | ⚠️ **POS 伺服器**（Next.js Route Handler）轉發；**唔可以喺 browser 直接打** |
+| 分流 | 先 `lookup`；`registered=true` → **唔好**打呢支，直連 §5.8 `topup` |
+| `amountAvos?` | 可選，附金額即首充；有金額時 `idempotencyKey?` **必填** |
+| PIN | POS **唔幫設 PIN**。建檔後顧客自行到會員通 `/wallet/login` 設 4 位 PIN |
+| 限流 | POS 側 30 次／15 分／店／操作者（in-memory） |
+
+**UAT**：店主 `60000001`／PIN `1111`；會員 `60000003`。
+回報問題請附：環境（UAT／正式）、HTTP 狀態、`RPC error` 原文。
 
 ---
 

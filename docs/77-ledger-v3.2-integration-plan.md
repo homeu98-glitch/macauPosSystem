@@ -3,7 +3,9 @@
 > **日期**：2026-08-28
 > **權威契約**：`pos-ledger-client-api.md`（v3.2，以該檔為準）
 > **實作清單**：`pos-v3.2-partner-handover.md`
-> **狀態**：計劃已定稿（5 個 open question 已獲夥伴解答）；**部分實作中** —— 已知確認項（M5①②、M3、M5 充值、M7、日報 member_count）已完成；**M5③ 新增會員（ensure-customer 路由）DEFER**，等用家向 Ledger 確認接口後補。
+> **狀態**：計劃已定稿（5 個 open question 已獲夥伴解答）；**全部已知確認項已完成** —— M5①②③、M3、M5 充值＋會員列表＋未註冊建檔、M4、M7，以及契約 v2→v3.2 同步（見 §8）。
+> 原 DEFER 嘅 **M5③ `ensure-customer` 已於 2026-08-28 解鎖落地**：Ledger HTTP 本體**已上線**，POS 只做薄轉發（校驗＋限流＋帶店員 Bearer token 轉發）。
+> ⚠️ 先前 DEFER 係**我方誤判**（本 repo 契約副本停喺 v2，而 Ledger 權威檔只喺其 private repo），並非 Ledger 未定稿。
 > **環境**：UAT `https://membership-uat.macau-tech.com`（先聯測）→ 正式 `https://membership.macau-tech.com`（migration `20260828120000` 已於 2026-08-28 上正式庫）。Supabase 沿用已私下提供之 `NEXT_PUBLIC_SUPABASE_URL` + `anon` + `AUTH_PIN_PEPPER`（**唔好**再攞 `service_role`）。
 
 ---
@@ -36,8 +38,8 @@
 | Ledger Supabase client 單例 | `getLedgerSupabaseClient` ✓ | 確認用 Ledger 嘅 `NEXT_PUBLIC_SUPABASE_URL`，Realtime 同一 client |
 | 會員 lookup | `merchant_lookup_customer_wallet` ✓ | — |
 | 已註冊 deduct | `applyPosDeduct`（有 idempotency key）✓ | **移除 `applyPosAdd`**（`p_type=add` 禁） |
-| 會員列表搜尋 | **無** | 新建 `list_merchant_customers` 封裝 |
-| 未註冊代建 | **無**（`ensure-customer` 路由不存在）| 新建伺服器路由 |
+| 會員列表搜尋 | ✅ **已做** | `src/lib/ledger/member-list.ts`（`list_merchant_customers`） |
+| 未註冊代建 | ✅ **已做** | POS 薄轉發 `src/app/api/ledger/ensure-customer/route.ts` → Ledger HTTP 本體（已上線） |
 | 線上訂單 realtime | `use-ledger-orders-realtime.ts`（orders）✓ | 加 `products` realtime（本地 patch/upsert）|
 | 日報會員數 | `getMerchantMemberSummary`（RPC `get_merchant_member_summary`）| **RPC 不存在** → 改用 `get_merchant_report_summary.member_count`；移除 `getMerchantMemberSummary` |
 | 線上營收摘要 | `getMerchantReportSummary` ✓ | 加 `memberCount` 欄（來自 `member_count`）|
@@ -110,8 +112,9 @@
 
 ## 4. 預計新增 / 修改檔案（只列，未實作）
 
-- **新增** `src/app/api/integration/pos/ensure-customer/route.ts`（伺服器路由，Bearer + 限流 + idempotency）
-- **新增** `src/lib/ledger/member-list.ts`（`list_merchant_customers` 封裝：省略 `p_merchant_id`、非空搜尋、p_page_size≤50、一次一頁）
+- ✅ **新增** `src/app/api/ledger/ensure-customer/route.ts`（POS **薄轉發**：Bearer + 限流 + idempotency → 轉發 Ledger 本體；**唔係** Ledger 本體）
+- ✅ **新增** `src/lib/ledger/member-list.ts`（`list_merchant_customers` 封裝：**唔傳** `p_merchant_id`、非空搜尋、`p_page_size≤50`、一次一頁）
+- ✅ **新增** `src/lib/ledger/ensure-customer.ts`（client wrapper，打 POS 薄轉發）
 - **改** `src/lib/ledger/reports.ts`：移除 `getMerchantMemberSummary` + `LedgerMemberSummary`；`LedgerReportSummary` 加 `memberCount`（來自 `member_count`）；確保呼叫省略 `p_merchant_id`
 - **改** `src/lib/ledger/members.ts`：移除 `applyPosAdd`；PII 唔落 storage；確保 `applyPosDeduct` 唔傳 `p_type=add`
 - **改** `src/components/restaurant-daily-report.tsx`：KPI 分源（會員數 / 線上營收讀 summary；菜品排行 / 出餐時間讀本地；標 scope）
@@ -170,9 +173,23 @@
 
 > **M3 副作用（順帶修正）**：移除 mirror 後，`restaurant-daily-report.tsx` 讀 `loadOrders()` 仲係「POS 堂食/前台」純本地單，線上單唔再污染菜品排行 / 出餐時間 scope（原本 mirror 會錯計）。符合 M4 scope 規則。
 
-### DEFER（等用家向 Ledger 確認）
+### ✅ 已完成（2026-08-28 晚 · v3.2 解鎖後）
 
-- **M5③ 新增會員 `ensure-customer` 路由**：契約要求 `POST /api/integration/pos/ensure-customer`（Bearer + 30/15min/店/操作者限流 + idempotency）。用家表示會再問 Ledger 拿接口，故**暫唔實作**。現有 `members-page.tsx` 充值 UI 註明「新增會員待補」。
+> **解除 DEFER 的原因**：先前 DEFER 係**我方誤判**——本 repo 嘅契約副本仍係 v2（2026-08-11），而 Ledger 權威
+> `pos-ledger-client-api.md`（v3.2）同 `pos-v3.2-partner-handover.md` 只喺 **Ledger private repo**，本 repo 搜唔到。
+> Ledger 2026-08-28 確認：`list_merchant_customers`（自 `20260530160000` 喺 DB）同 HTTP `ensure-customer`
+> **均已在線**，唔係新建。契約已轉錄進 `docs/integration/ledger-client-api.md` §5.6–§5.9（升級 v3.2）。
+
+| 項 | 改動 | 檔 |
+|---|---|---|
+| M5 會員列表 `list_merchant_customers` | `listMerchantCustomers({search,page})`：**唔傳** `p_merchant_id`（傳咗 `not admin`）、`p_search` 非空校驗、`p_page_size=50`；`balance_avos` 已係合計**唔好再加 gift**；會員頁加搜尋列＋結果列表＋「載入更多」 | `src/lib/ledger/member-list.ts`（新）、`src/lib/ledger/member-types.ts`、`src/components/members-page.tsx` |
+| M5③ 未註冊建檔 `ensure-customer` | **POS 薄轉發**（唔係 Ledger 本體）：校驗＋限流 30/15min/店/操作者＋帶店員 Bearer token 轉發到 `https://membership-uat.macau-tech.com/api/integration/pos/ensure-customer`；browser 只打 `/api/ledger/ensure-customer` | `src/app/api/ledger/ensure-customer/route.ts`（新）、`src/lib/ledger/ensure-customer.ts`（新） |
+| 充值分流（一掣兩分支） | `handleTopup`：`registered=true`→`applyPosTopup`；`registered=false`→`ensureCustomer`（建檔＋首充）；成功刷新錢包＋券；明禁 `p_type=add` | `src/components/members-page.tsx` |
+| 契約同步 v2 → v3.2 | 升級 `ledger-client-api.md` 為 v3.2 並新增 §5.6–§5.9；`pos-member-system-requirements.md` 移除「新建？」誤導標註 | `docs/integration/*.md` |
+
+> ⚠️ **「無輸入自動載入全店會員」係契約 v3.2 §5.7 明確禁止**（禁 dump 全店、禁空搜尋當一覽、PII 禁落地），
+> 唔係技術上做唔到。要睇全店名單 → 會員通 Web `/merchant/reports/users`。
+> 完整計劃／紀錄見 `docs/78-member-list-and-add-via-topup.md`。
 
 ### 待辦（確認項但非今輪範圍）
 

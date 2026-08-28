@@ -171,16 +171,25 @@ macauPosSystem 已完成 Ledger **登入**、**線上訂單**（Realtime + 白�
 
 以下為 POS **期望最小集**；名稱可調整，請 Ledger 在回覆契約中定稿。
 
-| 類型 | RPC（暫定名） | 對應需求 |
-|------|---------------|----------|
-| 讀 | `merchant_lookup_customer_wallet`（沿用？） | MEM-001 |
-| 讀 | `list_merchant_customer_coupons`（新建？） | MEM-004 |
-| 讀 | `list_merchant_customers`（新建？，可 Phase 2） | 會員列表 |
-| 寫 | `merchant_register_customer` 或等價（新建？） | MEM-002 |
-| 寫 | `merchant_apply_pos_txn`（沿用？） | MEM-003 |
-| 寫 | `merchant_redeem_customer_coupon`（新建？） | MEM-005 |
+> **v3.2（2026-08-28）已定稿** — 下表「新建？」為**本提案初稿時期**嘅標註，現況見
+> `docs/integration/ledger-client-api.md` §5.6–§5.9：
+> - `list_merchant_customers`：**唔係新建**。自 `20260530160000` 已喺 DB（Ledger Web
+>   `/merchant/reports/users` 日常使用）；v3.2 只係列入 POS 白名單＋加
+>   `paid_balance_avos`／`gift_balance_avos`（`20260828120000`）。
+> - MEM-002：Ledger 以 **HTTP `ensure-customer`** 提供（**已上線**），POS 伺服器代打，唔係 RPC。
+> - MEM-003 `merchant_apply_pos_txn`：**已開放** POS，限 `p_type: "topup" | "deduct"`，禁 `add`。
+
+| 類型 | RPC（暫定名） | 對應需求 | v3.2 狀態 |
+|------|---------------|----------|-----------|
+| 讀 | `merchant_lookup_customer_wallet`（沿用？） | MEM-001 | ✅ 沿用（§5.6） |
+| 讀 | `list_merchant_customer_coupons`（新建？） | MEM-004 | 見 `rewards.ts` |
+| 讀 | `list_merchant_customers`（~~新建？，可 Phase 2~~） | 會員列表 | ✅ **已存在＋v3.2 白名單**（§5.7） |
+| 寫 | ~~`merchant_register_customer` 或等價（新建？）~~ | MEM-002 | ✅ 改走 **HTTP `ensure-customer`**（§5.9，已上線） |
+| 寫 | `merchant_apply_pos_txn`（沿用？） | MEM-003 | ✅ 已開放，限 topup/deduct（§5.8） |
+| 寫 | `merchant_redeem_customer_coupon`（新建？） | MEM-005 | 見 `rewards.ts` |
 
 **請 Ledger 標註**：哪些可開放給 **Web POS**，哪些僅 Android／Ledger Web。
+（v3.2 已回答：上列 ✅ 項均開放 Web POS。）
 
 ---
 

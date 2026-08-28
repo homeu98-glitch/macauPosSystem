@@ -34,6 +34,25 @@ export type LedgerMemberProfile = LedgerCustomerWallet & {
   allGrants: LedgerMemberGrantRecord[];
 };
 
+/**
+ * 會員搜尋列表一列 — RPC `list_merchant_customers`（契約 v3.2 §5.7）。
+ *
+ * ⚠️ `balanceAvos` **已係 paid + gift 合計**（Ledger 端計好），
+ *    前端**唔好**再 `balanceAvos + giftBalanceAvos`，否則會雙計。
+ * ⚠️ `phone`／`displayName`／`nickName` 屬 PII，只可當次畫面 render，
+ *    禁止寫入 POS DB / localStorage / IndexedDB（契約 §7.2）。
+ */
+export type LedgerCustomerSummary = {
+  walletId: string | null;
+  customerId: string | null;
+  phone: string;
+  displayName: string | null;
+  nickName: string | null;
+  balanceAvos: number;
+  paidBalanceAvos: number;
+  giftBalanceAvos: number;
+};
+
 export function avosToMop(avos: number): number {
   return Math.round(Number(avos)) / 100;
 }

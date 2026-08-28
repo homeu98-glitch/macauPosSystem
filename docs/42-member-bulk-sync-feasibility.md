@@ -2,7 +2,19 @@
 
 > **日期**：2026-08-22  
 > **性質**：**只查詢、不動代碼**。確認能否將該店所有會員一次性同步顯示於我哋嘅會員介面。  
-> **結論先行**：**暫時唔可以**。現有 Ledger 契約只有「單一會員（按 8 位手機）查詢」RPC，**冇「列出該店全部會員」嘅 RPC**；要實現一次性同步，需要 Ledger 新建／白名單一個**分頁式 list RPC**（例如 `list_merchant_customers` / `list_merchant_members`），並解決 PII 快取限制。
+> **結論先行**：**唔可以做「一次性同步全店」**（PII + 契約限制），但**「搜尋式分頁列表」已經做得**。
+>
+> ⚠️ **2026-08-28 更新（本檔結論部分已過時，請以 v3.2 為準）**：
+> 本檔係基於本 repo 當日嘅 **v2（2026-08-11）契約副本**得出「冇 list RPC」嘅結論。Ledger 已於
+> **v3.2（2026-08-28）** 確認：`list_merchant_customers` **自 `20260530160000` 已喺 DB**、
+> Ledger Web `/merchant/reports/users` 日常使用，v3.2 只係將佢列入 POS 白名單並加
+> `paid_balance_avos`／`gift_balance_avos`（`20260828120000`）——**唔係新建 RPC**。
+> 現況：`docs/integration/ledger-client-api.md` §5.7 已係權威契約；`src/lib/ledger/member-list.ts`
+> 已實作搜尋式分頁列表。落實記錄見 `docs/78-member-list-and-add-via-topup.md` §5。
+>
+> **仍然成立嘅部分**：「一次性同步／dump 全店」確實唔得——呢個係**契約刻意禁止**（§5.7 禁 dump 全店、
+> 禁空搜尋當一覽；PII §7.2 禁落地），唔係因為冇接口。要睇全店名單請用會員通 Web
+> `/merchant/reports/users`。
 
 ---
 

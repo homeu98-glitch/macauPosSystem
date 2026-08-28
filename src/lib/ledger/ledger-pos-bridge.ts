@@ -1,7 +1,8 @@
 "use client";
 
 import { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
-import { getOrderDetail, LedgerOrderDetail } from "@/lib/ledger/orders";
+import { toLedgerMenuItemId } from "@/lib/ledger/menu-import";
+import { getOrderDetail, LedgerOrderDetail, LedgerOrderDetailItem } from "@/lib/ledger/orders";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -23,7 +24,14 @@ const bridgedOrders = new Map<string, PosOrder>();
 export function getBridgedPosOrder(ledgerOrderId: string): PosOrder | null {
   return bridgedOrders.get(ledgerOrderId) ?? null;
 }
-import { OrderItem, PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
+import {
+  DevicePrinterConfig,
+  MenuItem,
+  OrderItem,
+  PosBootstrap,
+  PosOrder,
+  PrintJob,
+} from "@/lib/types";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -42,14 +50,75 @@ function resolveTableMeta(order: LedgerOnlineOrder, tableId?: string, tableName?
   return { tableId: "counter", tableName: "堂食" };
 }
 
+/**
+ * 菜名正規化：去掉所有空白 + 轉小寫。只用作 fallback 配對，唔影響單據顯示名。
+ * 令「凍檸茶 」/「凍 檸 茶」/「凍檸茶」都對返同一項本地餐牌。
+ */
+function normalizeMenuName(value: string): string {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
+type MenuLookup = {
+  byId: Map<string, MenuItem>;
+  byName: Map<string, MenuItem>;
+  byNormalizedName: Map<string, MenuItem>;
+};
+
+function buildMenuLookup(items: MenuItem[]): MenuLookup {
+  const byId = new Map<string, MenuItem>();
+  const byName = new Map<string, MenuItem>();
+  const byNormalizedName = new Map<string, MenuItem>();
+  for (const row of items) {
+    if (!byId.has(row.id)) byId.set(row.id, row);
+    if (!byName.has(row.name)) byName.set(row.name, row);
+    const key = normalizeMenuName(row.name);
+    if (key && !byNormalizedName.has(key)) byNormalizedName.set(key, row);
+  }
+  return { byId, byName, byNormalizedName };
+}
+
+/**
+ * Ledger 明細 item → 本地餐牌項。命中與否直接決定 `printerGroup`，即張廚房單打去邊部機。
+ *
+ * 配對順序（愈前愈可信）：
+ *   1) `ledger-<menuItemId>`：匯入線上餐牌後本地 id 帶前綴（見 menu-import.ts），
+ *      而 Ledger 明細帶嘅係**冇前綴**嘅原始 product id。舊寫法 `row.id === item.menuItemId`
+ *      永遠對唔上，等於只剩「靠菜名撞」，呢度補返呢條最可靠嘅路。
+ *   2) 本地 id 直接相等（本地自建菜品 / 舊格式）
+ *   3) 菜名完全相同
+ *   4) 菜名正規化後相同（去空白 / 不分大小寫）
+ *
+ * 搵唔到就返回 undefined，caller 退回預設分區並 warn 提示重新匯入餐牌。
+ */
+function resolveMenuItem(
+  item: LedgerOrderDetailItem,
+  bootstrap: PosBootstrap | null,
+  lookup: MenuLookup,
+): MenuItem | undefined {
+  if (!bootstrap) return undefined;
+  if (item.menuItemId) {
+    const rawId = String(item.menuItemId);
+    const byLedgerId = lookup.byId.get(toLedgerMenuItemId(rawId));
+    if (byLedgerId) return byLedgerId;
+    const byRawId = lookup.byId.get(rawId);
+    if (byRawId) return byRawId;
+  }
+  const byName = lookup.byName.get(item.name);
+  if (byName) return byName;
+  const key = normalizeMenuName(item.name);
+  return key ? lookup.byNormalizedName.get(key) : undefined;
+}
+
 function mapDetailToOrderItems(
   detail: LedgerOrderDetail,
   bootstrap: PosBootstrap | null,
 ): OrderItem[] {
-  return detail.items.map((item) => {
-    const menu = bootstrap?.menuItems.find(
-      (row) => row.name === item.name || row.id === item.menuItemId,
-    );
+  const lookup = buildMenuLookup(bootstrap?.menuItems ?? []);
+  const unmatched: string[] = [];
+
+  const items = detail.items.map((item) => {
+    const menu = resolveMenuItem(item, bootstrap, lookup);
+    if (!menu) unmatched.push(item.name);
     return {
       menuItemId: menu?.id ?? item.menuItemId ?? `ext-${item.name}`,
       name: item.name,
@@ -59,6 +128,35 @@ function mapDetailToOrderItems(
       note: item.note,
     };
   });
+
+  if (unmatched.length > 0 && process.env.NODE_ENV !== "production") {
+    console.warn(
+      `[ledger→pos] ${unmatched.length} 項對唔到本地餐牌，分區退回 "kitchen"：` +
+        `${unmatched.join("、")}。請喺餐牌設定重新匯入線上餐牌（對返菜名／分區）。`,
+    );
+  }
+
+  return items;
+}
+
+/**
+ * 打印機 ↔ 菜品分區匹配——**與堂食 print-jobs.ts:buildKitchenPrintJobs 保持一致**：
+ * 冇填 zoneId 嘅機係「catch-all」，接晒所有菜品；填咗 zoneId 就只接自己分區。
+ *
+ * 舊寫法係嚴格 `item.printerGroup === (printer.zoneId ?? "")`，令「只設一台冇填分區嘅廚房機」
+ * 嘅店接單後**靜默唔出單**（堂食單有 catch-all 照印，線上單卻唔印）。
+ */
+function printerTakesItem(printer: DevicePrinterConfig, item: OrderItem): boolean {
+  return !printer.zoneId || item.printerGroup === printer.zoneId;
+}
+
+function toPrintItemLine(item: OrderItem) {
+  return {
+    name: item.name,
+    quantity: item.quantity,
+    specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+    note: item.note,
+  };
 }
 
 function buildPrintJobsForItems(options: {
@@ -70,32 +168,60 @@ function buildPrintJobsForItems(options: {
   const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
   const timestamp = new Date().toISOString();
 
-  return configuredPrinters
-    .filter(
-      (printer) =>
-        (printer.role === "zone" || printer.role === "label") &&
-        options.items.some((item) => item.printerGroup === (printer.zoneId ?? "")),
-    )
-    .map<PrintJob>((printer) => ({
-      id: uid("print"),
-      orderId: options.orderId,
-      orderNo: options.orderNo,
-      tableName: options.tableName,
-      ticketType: "normal",
-      printerGroup: printer.zoneId ?? "",
-      printerId: printer.id,
-      printerName: printer.name,
-      items: options.items
-        .filter((item) => item.printerGroup === (printer.zoneId ?? ""))
-        .map((item) => ({
-          name: item.name,
-          quantity: item.quantity,
-          specs: (item.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
-          note: item.note,
-        })),
-      status: resolvePrintJobStatus(true),
-      createdAt: timestamp,
-    }));
+  const kitchenTargets = configuredPrinters.filter(
+    (printer) => printer.role === "zone" || printer.role === "label",
+  );
+  if (kitchenTargets.length === 0 || options.items.length === 0) return [];
+
+  const makeJob = (printer: DevicePrinterConfig, items: OrderItem[]): PrintJob => ({
+    id: uid("print"),
+    orderId: options.orderId,
+    orderNo: options.orderNo,
+    tableName: options.tableName,
+    ticketType: "normal",
+    printerGroup: printer.zoneId ?? "",
+    printerId: printer.id,
+    printerName: printer.name,
+    items: items.map(toPrintItemLine),
+    status: resolvePrintJobStatus(true),
+    createdAt: timestamp,
+  });
+
+  const jobs: PrintJob[] = [];
+  const covered = new Set<number>();
+
+  for (const printer of kitchenTargets) {
+    const matched: OrderItem[] = [];
+    options.items.forEach((item, index) => {
+      if (!printerTakesItem(printer, item)) return;
+      covered.add(index);
+      matched.push(item);
+    });
+    if (matched.length === 0) continue;
+    jobs.push(makeJob(printer, matched));
+  }
+
+  // 兜底（無死角）：所有機都填咗 zoneId、而某啲菜嘅分區對唔中任何機（例如未匯入餐牌
+  // 退回 "kitchen" 但店內無 kitchen 分區）→ 舊寫法會靜默丟單。呢度兜底打落第一台廚房機，
+  // 寧願打錯部門都好過漏單，並 warn 提示檢查打印機分區。
+  const orphans = options.items.filter((_, index) => !covered.has(index));
+  if (orphans.length > 0) {
+    const fallbackPrinter = kitchenTargets[0];
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        `[ledger→pos] ${orphans.length} 項分區對唔中任何打印機，兜底打落「${fallbackPrinter.name}」：` +
+          `${orphans.map((item) => item.name).join("、")}。請檢查設備設定嘅打印機分區。`,
+      );
+    }
+    const lines = orphans.map(toPrintItemLine);
+    if (jobs.length > 0) {
+      jobs[0] = { ...jobs[0], items: [...(jobs[0].items ?? []), ...lines] };
+    } else {
+      jobs.push(makeJob(fallbackPrinter, orphans));
+    }
+  }
+
+  return jobs;
 }
 
 function buildPrintJobs(order: PosOrder): PrintJob[] {
@@ -169,7 +295,6 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   const serviceRate = bootstrap?.rules.serviceChargeRate ?? 0;
   const taxAmount = subtotal * taxRate;
   const serviceChargeAmount = subtotal * serviceRate;
-  const total = subtotal + taxAmount + serviceChargeAmount;
   const timestamp = new Date().toISOString();
   const localOrderNo =
     options.ledgerOrder.pickupCode ??
