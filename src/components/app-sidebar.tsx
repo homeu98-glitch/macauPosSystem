@@ -70,9 +70,10 @@ export function AppSidebar() {
 
     <>
 
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col justify-between bg-slate-900 px-2 py-3 text-white md:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col bg-slate-900 px-2 py-3 text-white md:flex">
 
-        <div className="grid gap-2">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+          <div className="grid gap-2">
 
           {navItems.map((item) => {
 
@@ -113,10 +114,9 @@ export function AppSidebar() {
           })}
 
         </div>
+        </div>
 
-
-
-        <div className="grid gap-2">
+        <div className="mt-2 grid shrink-0 gap-2 border-t border-slate-700 pt-2">
 
           {session ? (
 

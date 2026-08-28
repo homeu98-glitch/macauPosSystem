@@ -5,6 +5,14 @@
  */
 import { macauDateKey, type ReportRangeKey } from "@/lib/ledger/report-period";
 
+export const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  on_delivery: "貨到付款",
+  cash: "現金",
+  card: "信用卡",
+  transfer: "轉帳",
+  unknown: "未知",
+};
+
 export type StatItem = {
   name: string;
   unit_price: number;
@@ -26,6 +34,9 @@ export type StatReceipt = {
 export type SupplierStat = { name: string; count: number; total: number };
 export type MonthlyExpense = { key: string; name: string; amount: number };
 export type TrendSummary = { up: number; down: number };
+export type PaymentMethodBreakdown = { method: string; label: string; total: number; count: number };
+export type PriceTrendPoint = { key: string; name: string; up: number; down: number };
+
 export type PurchaseSummary = {
   total: number;
   paid: number;
@@ -34,6 +45,8 @@ export type PurchaseSummary = {
   supplierStats: SupplierStat[];
   monthlyExpenses: MonthlyExpense[];
   trend: TrendSummary;
+  paymentMethodBreakdown: PaymentMethodBreakdown[];
+  priceTrendSeries: PriceTrendPoint[];
 };
 
 export type PurchaseApiResponse = {
@@ -88,6 +101,8 @@ export function buildPurchaseSummary(receipts: StatReceipt[]): PurchaseSummary {
     supplierStats: buildSupplierStats(receipts),
     monthlyExpenses: buildMonthlyExpenses(receipts, 6),
     trend: buildTrendSummary(receipts),
+    paymentMethodBreakdown: buildPaymentMethodBreakdown(receipts),
+    priceTrendSeries: buildPriceTrendSeries(receipts, 6),
   };
 }
 
@@ -101,6 +116,25 @@ export function buildSupplierStats(receipts: StatReceipt[]): SupplierStat[] {
   }
   return Array.from(totals.values())
     .map((row) => ({ ...row, total: round2(row.total) }))
+    .sort((a, b) => b.total - a.total);
+}
+
+export function buildPaymentMethodBreakdown(receipts: StatReceipt[]): PaymentMethodBreakdown[] {
+  const totals = new Map<string, { total: number; count: number }>();
+  for (const r of receipts) {
+    const method = r.payment_method || "unknown";
+    const current = totals.get(method) ?? { total: 0, count: 0 };
+    current.total += normalizeNumber(r.total_amount, 0);
+    current.count += 1;
+    totals.set(method, current);
+  }
+  return Array.from(totals.entries())
+    .map(([method, v]) => ({
+      method,
+      label: PAYMENT_METHOD_LABEL[method] ?? method,
+      total: round2(v.total),
+      count: v.count,
+    }))
     .sort((a, b) => b.total - a.total);
 }
 
@@ -126,6 +160,37 @@ export function buildMonthlyExpenses(receipts: StatReceipt[], months = 6): Month
     key,
     name: `${new Date(`${key}-01`).getMonth() + 1}月`,
     amount: round2(buckets.get(key) ?? 0),
+  }));
+}
+
+export function buildPriceTrendSeries(receipts: StatReceipt[], months = 6): PriceTrendPoint[] {
+  const now = new Date();
+  const buckets = new Map<string, { up: number; down: number }>();
+  const keys: string[] = [];
+  for (let i = months - 1; i >= 0; i -= 1) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, { up: 0, down: 0 });
+      keys.push(key);
+    }
+  }
+  const rows = buildItemRows(receipts);
+  for (const row of rows) {
+    if (row.direction !== "up" && row.direction !== "down") continue;
+    const d = new Date(row.receipt_date);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const bucket = buckets.get(key);
+    if (!bucket) continue;
+    if (row.direction === "up") bucket.up += 1;
+    else bucket.down += 1;
+  }
+  return keys.map((key) => ({
+    key,
+    name: `${new Date(`${key}-01`).getMonth() + 1}月`,
+    up: buckets.get(key)?.up ?? 0,
+    down: buckets.get(key)?.down ?? 0,
   }));
 }
 

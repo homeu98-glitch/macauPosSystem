@@ -1,10 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 import { loadAuthSession } from "@/lib/storage";
 import { REPORT_RANGE_OPTIONS, reportRangeLabel, type ReportRangeKey } from "@/lib/ledger/report-period";
-import type { PurchaseSummary } from "@/lib/inventory-stats";
+import { PAYMENT_METHOD_LABEL, type PurchaseSummary } from "@/lib/inventory-stats";
+import { AreaChart } from "./charts/AreaChart";
+import { DonutChart } from "./charts/DonutChart";
+import { LineChart } from "./charts/LineChart";
 
 type ReceiptItem = {
   id: string;
@@ -39,16 +42,310 @@ type ReceiptsResponse = {
 const money = (n: number) =>
   `MOP ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const PAYMENT_METHOD_LABEL: Record<string, string> = {
-  on_delivery: "貨到付款",
-  cash: "現金",
-  card: "信用卡",
-  transfer: "轉帳",
-  unknown: "未知",
+const PAYMENT_METHODS = ["on_delivery", "cash", "card", "transfer"] as const;
+const STATUS_LABEL: Record<string, string> = { paid: "已付款", unpaid: "未付款" };
+const todayStr = () => new Date().toLocaleDateString("en-CA");
+
+/* ---------------- 左滑顯示操作（手勢支援） ---------------- */
+function SwipeableRow({
+  children,
+  onEdit,
+  onDelete,
+}: {
+  children: ReactNode;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [dx, setDx] = useState(0);
+  const startX = useRef(0);
+  const dragging = useRef(false);
+
+  const onDown = (e: PointerEvent) => {
+    dragging.current = true;
+    startX.current = e.clientX;
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+  };
+  const onMove = (e: PointerEvent) => {
+    if (!dragging.current) return;
+    const d = e.clientX - startX.current;
+    setDx(Math.max(-140, Math.min(0, d)));
+  };
+  const onUp = () => {
+    dragging.current = false;
+    setDx((prev) => (prev < -70 ? -140 : 0));
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-2xl">
+      <div className="absolute inset-y-0 right-0 flex">
+        <button
+          type="button"
+          onClick={() => {
+            onEdit();
+            setDx(0);
+          }}
+          className="w-[70px] bg-amber-500 text-sm font-semibold text-white"
+        >
+          編輯
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onDelete();
+            setDx(0);
+          }}
+          className="w-[70px] bg-red-500 text-sm font-semibold text-white"
+        >
+          刪除
+        </button>
+      </div>
+      <div
+        style={{ transform: `translateX(${dx}px)`, transition: dx === 0 ? "transform .2s" : "none" }}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+        className="touch-none"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- 收據表單（底部 sheet） ---------------- */
+type FormItem = { name: string; unit_price: string; quantity: string };
+type FormState = {
+  id?: string;
+  merchant_name: string;
+  date: string;
+  receipt_number: string;
+  payment_method: string;
+  payment_status: string;
+  items: FormItem[];
 };
 
-function paymentMethodLabel(value: string): string {
-  return PAYMENT_METHOD_LABEL[value] ?? value ?? "未知";
+function emptyForm(): FormState {
+  return {
+    merchant_name: "",
+    date: todayStr(),
+    receipt_number: "",
+    payment_method: "on_delivery",
+    payment_status: "unpaid",
+    items: [{ name: "", unit_price: "", quantity: "1" }],
+  };
+}
+
+function formFromReceipt(r: Receipt): FormState {
+  return {
+    id: r.id,
+    merchant_name: r.merchant_name,
+    date: r.receipt_date,
+    receipt_number: r.raw_ocr_data?.receipt_number ?? "",
+    payment_method: r.payment_method,
+    payment_status: r.payment_status,
+    items: r.items.length
+      ? r.items.map((it) => ({ name: it.name, unit_price: String(it.unit_price), quantity: String(it.quantity) }))
+      : [{ name: "", unit_price: "", quantity: "1" }],
+  };
+}
+
+function ReceiptFormSheet({
+  open,
+  initial,
+  supplierNames,
+  account,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  initial: Receipt | null;
+  supplierNames: string[];
+  account: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<FormState>(emptyForm());
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setForm(initial ? formFromReceipt(initial) : emptyForm());
+      setErr(null);
+    }
+  }, [open, initial]);
+
+  if (!open) return null;
+
+  const setItem = (i: number, patch: Partial<FormItem>) =>
+    setForm((f) => ({ ...f, items: f.items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)) }));
+
+  const total = form.items.reduce((s, it) => s + (Number(it.unit_price) || 0) * (Number(it.quantity) || 1), 0);
+
+  const save = async () => {
+    setErr(null);
+    if (!form.merchant_name.trim()) return setErr("請填寫供應商");
+    if (!form.date) return setErr("請選擇收據日期");
+    const items = form.items
+      .filter((it) => it.name.trim())
+      .map((it) => ({ name: it.name.trim(), unit_price: Number(it.unit_price) || 0, quantity: Number(it.quantity) || 1 }));
+    const payload = {
+      account,
+      merchant_name: form.merchant_name.trim(),
+      receipt_number: form.receipt_number || undefined,
+      payment_method: form.payment_method,
+      payment_status: form.payment_status,
+      date: form.date,
+      total_amount: Math.round(total * 100) / 100,
+      items,
+    };
+    setSaving(true);
+    try {
+      const res = form.id
+        ? await fetch(`/api/inventory/receipts/${form.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          })
+        : await fetch(`/api/inventory/receipts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+      const json = await res.json();
+      if (!json.ok) setErr(json.error || "儲存失敗");
+      else {
+        onSaved();
+        onClose();
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "網絡錯誤");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fieldCls =
+    "w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 outline-none focus:border-slate-400";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onPointerDown={onClose}>
+      <div
+        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-slate-50 p-4 pb-6 md:rounded-3xl"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900">{form.id ? "編輯收據" : "新增收據"}</h3>
+          <button type="button" onClick={onClose} className="rounded-full bg-slate-200 px-4 py-2 text-sm font-medium text-slate-700">
+            關閉
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">供應商</label>
+            <input list="supplier-list" className={fieldCls} value={form.merchant_name} onChange={(e) => setForm({ ...form, merchant_name: e.target.value })} placeholder="輸入或選擇供應商" />
+            <datalist id="supplier-list">
+              {supplierNames.map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm text-slate-600">收據日期</label>
+              <input type="date" className={fieldCls} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-600">收據編號</label>
+              <input className={fieldCls} value={form.receipt_number} onChange={(e) => setForm({ ...form, receipt_number: e.target.value })} placeholder="選填" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm text-slate-600">付款方式</label>
+              <select className={fieldCls} value={form.payment_method} onChange={(e) => setForm({ ...form, payment_method: e.target.value })}>
+                {PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {PAYMENT_METHOD_LABEL[m] ?? m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-600">付款狀態</label>
+              <select className={fieldCls} value={form.payment_status} onChange={(e) => setForm({ ...form, payment_status: e.target.value })}>
+                <option value="paid">已付款</option>
+                <option value="unpaid">未付款</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="text-sm text-slate-600">品項</label>
+              <button
+                type="button"
+                className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white"
+                onClick={() => setForm({ ...form, items: [...form.items, { name: "", unit_price: "", quantity: "1" }] })}
+              >
+                ＋ 品項
+              </button>
+            </div>
+            <div className="space-y-2">
+              {form.items.map((it, i) => (
+                <div key={i} className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <input className={fieldCls} value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} placeholder="品名" />
+                  </div>
+                  <input
+                    className={`${fieldCls} w-24`}
+                    inputMode="decimal"
+                    value={it.unit_price}
+                    onChange={(e) => setItem(i, { unit_price: e.target.value })}
+                    placeholder="單價"
+                  />
+                  <input
+                    className={`${fieldCls} w-16`}
+                    inputMode="decimal"
+                    value={it.quantity}
+                    onChange={(e) => setItem(i, { quantity: e.target.value })}
+                    placeholder="數量"
+                  />
+                  <button
+                    type="button"
+                    className="rounded-xl bg-red-50 px-3 py-3 text-sm font-medium text-red-600"
+                    onClick={() => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) })}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
+            <span>合計</span>
+            <span>{money(total)}</span>
+          </div>
+
+          {err && <div className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 ring-1 ring-red-200">{err}</div>}
+
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="w-full rounded-2xl bg-emerald-600 py-3.5 text-base font-semibold text-white disabled:opacity-60"
+          >
+            {saving ? "儲存中…" : "儲存收據"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function InventoryView() {
@@ -59,6 +356,14 @@ export function InventoryView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [formInitial, setFormInitial] = useState<Receipt | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Receipt | null>(null);
+  const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
+
+  const [merchantDraft, setMerchantDraft] = useState("");
+  const [editingSupplier, setEditingSupplier] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     const s = loadAuthSession();
@@ -88,9 +393,80 @@ export function InventoryView() {
     if (account) void loadAll();
   }, [account, loadAll]);
 
-  const receipts = data?.receipts ?? [];
+  const receipts = useMemo(() => data?.receipts ?? [], [data]);
   const summary = data?.summary;
   const rangeLabel = reportRangeLabel(range);
+
+  const suppliers = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of receipts) if (r.merchant_id) map.set(r.merchant_id, r.merchant_name);
+    return Array.from(map, ([id, name]) => ({ id, name }));
+  }, [receipts]);
+  const supplierNames = useMemo(() => suppliers.map((s) => s.name), [suppliers]);
+
+  const doDeleteReceipt = async (r: Receipt) => {
+    if (!account) return;
+    setDeleteMsg(null);
+    try {
+      const res = await fetch(`/api/inventory/receipts/${r.id}?account=${encodeURIComponent(account)}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!json.ok) setDeleteMsg(json.error || "刪除失敗");
+      else {
+        setConfirmDelete(null);
+        void loadAll();
+      }
+    } catch (e) {
+      setDeleteMsg(e instanceof Error ? e.message : "網絡錯誤");
+    }
+  };
+
+  const doCreateMerchant = async () => {
+    if (!account || !merchantDraft.trim()) return;
+    try {
+      const res = await fetch(`/api/inventory/merchants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account, name: merchantDraft.trim() }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setMerchantDraft("");
+        void loadAll();
+      } else setDeleteMsg(json.error || "新增供應商失敗");
+    } catch {
+      setDeleteMsg("網絡錯誤");
+    }
+  };
+
+  const doDeleteMerchant = async (id: string) => {
+    if (!account) return;
+    try {
+      const res = await fetch(`/api/inventory/merchants/${id}?account=${encodeURIComponent(account)}`, { method: "DELETE" });
+      const json = await res.json();
+      if (json.ok) void loadAll();
+      else setDeleteMsg(json.error || "刪除供應商失敗");
+    } catch {
+      setDeleteMsg("網絡錯誤");
+    }
+  };
+
+  const doRenameMerchant = async (id: string, name: string) => {
+    if (!account || !name.trim()) return;
+    try {
+      const res = await fetch(`/api/inventory/merchants/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account, name: name.trim() }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setEditingSupplier(null);
+        void loadAll();
+      } else setDeleteMsg(json.error || "修改供應商失敗");
+    } catch {
+      setDeleteMsg("網絡錯誤");
+    }
+  };
 
   if (!account) {
     return (
@@ -102,20 +478,28 @@ export function InventoryView() {
 
   return (
     <div className="h-full w-full overflow-y-auto bg-slate-50 p-4 text-slate-900 md:p-6">
-      <div className="mx-auto max-w-3xl">
-        <header className="mb-4 flex items-center justify-between">
+      <div className="mx-auto max-w-[1600px]">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold">庫存管理</h1>
             <p className="text-sm text-slate-500">
               店別：{storeName || account} ・ 帳號：{account}
             </p>
           </div>
-          <button
-            onClick={() => void loadAll()}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-          >
-            重新整理
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setFormInitial(null);
+                setFormOpen(true);
+              }}
+              className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white"
+            >
+              ＋ 新增收據
+            </button>
+            <button onClick={() => void loadAll()} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white">
+              重新整理
+            </button>
+          </div>
         </header>
 
         {/* 時間篩選 */}
@@ -125,9 +509,7 @@ export function InventoryView() {
               key={opt.key}
               onClick={() => setRange(opt.key)}
               className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                range === opt.key
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
+                range === opt.key ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
               }`}
               type="button"
             >
@@ -138,8 +520,7 @@ export function InventoryView() {
 
         {data && data.schemaReady === false && (
           <div className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
-            expenseRecorder 資料表尚未建立（receipts 不存在）。請在 expenseRecorder 專案執行
-            supabase_schema.sql。
+            expenseRecorder 資料表尚未建立（receipts 不存在）。請在 expenseRecorder 專案執行 supabase_schema.sql。
           </div>
         )}
         {data && data.matched === false && (
@@ -148,12 +529,18 @@ export function InventoryView() {
           </div>
         )}
         {error && (
+          <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{error}</div>
+        )}
+        {deleteMsg && (
           <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
-            {error}
+            {deleteMsg}
+            <button type="button" className="ml-2 underline" onClick={() => setDeleteMsg(null)}>
+              知道了
+            </button>
           </div>
         )}
 
-        {/* KPI：區間買貨統計 */}
+        {/* KPI */}
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-xs text-slate-500">{rangeLabel}總支出</div>
@@ -180,42 +567,49 @@ export function InventoryView() {
             <p className="text-sm text-slate-500">載入中…</p>
           ) : receipts.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
-              尚無收據。請在 expenseRecorder 記錄收據後，於此處檢視。
+              尚無收據。點擊「新增收據」建立第一張。
             </div>
           ) : (
-            <ul className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {receipts.map((r) => {
                 const open = expandedId === r.id;
                 const lineNo = r.raw_ocr_data?.receipt_number;
                 const paid = r.payment_status === "paid";
                 return (
-                  <li key={r.id}>
-                    <button
-                      type="button"
-                      onClick={() => setExpandedId(open ? null : r.id)}
-                      className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:bg-slate-50"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
+                  <SwipeableRow
+                    key={r.id}
+                    onEdit={() => {
+                      setFormInitial(r);
+                      setFormOpen(true);
+                    }}
+                    onDelete={() => setConfirmDelete(r)}
+                  >
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
                           <div className="text-base font-medium text-slate-900">{r.merchant_name}</div>
                           <div className="mt-0.5 text-xs text-slate-500">
                             {r.receipt_date}
                             {lineNo ? ` ・ #${lineNo}` : ""} ・ {r.items.length} 項
                           </div>
-                          <div className="mt-0.5 text-xs text-slate-400">
-                            付款方式：{paymentMethodLabel(r.payment_method)}
-                          </div>
+                          <div className="mt-0.5 text-xs text-slate-400">付款方式：{PAYMENT_METHOD_LABEL[r.payment_method] ?? r.payment_method}</div>
                         </div>
-                        <div className="shrink-0 text-right">
+                        <div className="flex shrink-0 flex-col items-end gap-1">
                           <div className="text-base font-semibold text-slate-900">{money(r.total_amount)}</div>
                           <span
-                            className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                               paid ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200" : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
                             }`}
                           >
-                            {paid ? "已付款" : "未付款"}
+                            {STATUS_LABEL[r.payment_status] ?? r.payment_status}
                           </span>
-                          <div className="mt-1 text-[11px] text-slate-400">{open ? "收起" : "展開"}</div>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(open ? null : r.id)}
+                            className="mt-1 text-[11px] text-slate-400"
+                          >
+                            {open ? "收起" : "展開"}
+                          </button>
                         </div>
                       </div>
 
@@ -243,9 +637,7 @@ export function InventoryView() {
                                     <td className="py-1 pr-2">{it.name}</td>
                                     <td className="py-1 pr-2 text-right">{money(it.unit_price)}</td>
                                     <td className="py-1 pr-2 text-right">{Number(it.quantity || 0)}</td>
-                                    <td className="py-1 text-right">
-                                      {money(Number(it.unit_price || 0) * Number(it.quantity || 0))}
-                                    </td>
+                                    <td className="py-1 text-right">{money(Number(it.unit_price || 0) * Number(it.quantity || 0))}</td>
                                   </tr>
                                 ))
                               )}
@@ -253,63 +645,109 @@ export function InventoryView() {
                           </table>
                         </div>
                       )}
-                    </button>
-                  </li>
+                    </div>
+                  </SwipeableRow>
                 );
               })}
-            </ul>
+            </div>
           )}
         </section>
 
-        {/* 統計區：鏡像 Expense recorder */}
-        {summary && summary.count > 0 && (
-          <section className="space-y-4">
-            <h2 className="text-sm font-medium text-slate-600">統計（{rangeLabel}）</h2>
-
-            {/* 供應商統計 */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-slate-700">供應商統計（Top 5）</div>
-              {summary.supplierStats.length === 0 ? (
-                <div className="text-sm text-slate-400">無資料</div>
-              ) : (
-                <ul className="divide-y divide-slate-100">
-                  {summary.supplierStats.slice(0, 5).map((s) => (
-                    <li key={s.name} className="flex items-center justify-between py-2 text-sm">
-                      <span className="text-slate-700">{s.name}</span>
-                      <span className="text-slate-500">
-                        {s.count} 張 ・ <span className="font-semibold text-slate-900">{money(s.total)}</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+        {/* 供應商管理 */}
+        <section className="mb-6">
+          <h2 className="mb-3 text-sm font-medium text-slate-600">供應商（新增 / 修改 / 刪除）</h2>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="mb-3 flex gap-2">
+              <input
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base text-slate-900 outline-none focus:border-slate-400"
+                value={merchantDraft}
+                onChange={(e) => setMerchantDraft(e.target.value)}
+                placeholder="新增供應商名稱"
+              />
+              <button
+                type="button"
+                onClick={() => void doCreateMerchant()}
+                className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white"
+              >
+                新增
+              </button>
             </div>
+            {suppliers.length === 0 ? (
+              <div className="text-sm text-slate-400">尚無供應商。</div>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {suppliers.map((s) => (
+                  <li key={s.id} className="flex items-center justify-between py-2">
+                    {editingSupplier?.id === s.id ? (
+                      <input
+                        autoFocus
+                        className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none"
+                        defaultValue={s.name}
+                        onBlur={(e) => void doRenameMerchant(s.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void doRenameMerchant(s.id, (e.target as HTMLInputElement).value);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="flex-1 text-left text-sm text-slate-700"
+                        onClick={() => setEditingSupplier({ id: s.id, name: s.name })}
+                      >
+                        {s.name}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void doDeleteMerchant(s.id)}
+                      className="ml-3 rounded-lg bg-red-50 px-3 py-1.5 text-sm font-medium text-red-600"
+                    >
+                      刪除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
 
-            {/* 近 6 月支出 */}
+        {/* 統計（多圖表） */}
+        {summary && summary.count > 0 && (
+          <section className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="mb-2 text-sm font-semibold text-slate-700">近 6 月支出</div>
-              {summary.monthlyExpenses.length === 0 ? (
+              <AreaChart data={summary.monthlyExpenses.map((m) => ({ label: m.name, value: m.amount }))} />
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mb-2 text-sm font-semibold text-slate-700">供應商支出佔比（Top 8）</div>
+              <DonutChart data={summary.supplierStats.slice(0, 8).map((s) => ({ label: s.name, value: s.total }))} />
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mb-2 text-sm font-semibold text-slate-700">付款方式分佈</div>
+              {summary.paymentMethodBreakdown.length === 0 ? (
                 <div className="text-sm text-slate-400">無資料</div>
               ) : (
-                <ul className="space-y-2">
-                  {summary.monthlyExpenses.map((m) => {
-                    const max = Math.max(...summary.monthlyExpenses.map((x) => x.amount), 1);
-                    const pct = max > 0 ? Math.round((m.amount / max) * 100) : 0;
-                    return (
-                      <li key={m.key} className="flex items-center gap-3 text-sm">
-                        <span className="w-10 shrink-0 text-slate-500">{m.name}</span>
-                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-slate-400" style={{ width: `${pct}%` }} />
-                        </div>
-                        <span className="w-24 shrink-0 text-right font-semibold text-slate-900">{money(m.amount)}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <DonutChart data={summary.paymentMethodBreakdown.map((b) => ({ label: b.label, value: b.total }))} />
               )}
             </div>
 
-            {/* 價格漲跌 */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mb-2 text-sm font-semibold text-slate-700">付款狀態</div>
+              <DonutChart
+                data={[
+                  { label: "已付", value: summary.paid },
+                  { label: "未付", value: summary.unpaid },
+                ]}
+              />
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 xl:col-span-2">
+              <div className="mb-2 text-sm font-semibold text-slate-700">價格漲跌趨勢（按月）</div>
+              <LineChart data={summary.priceTrendSeries.map((p) => ({ label: p.name, up: p.up, down: p.down }))} />
+            </div>
+
             <div className="flex gap-3">
               <div className="flex-1 rounded-2xl border border-red-200 bg-red-50 p-4">
                 <div className="text-xs text-red-700">價格上漲項</div>
@@ -323,6 +761,34 @@ export function InventoryView() {
           </section>
         )}
       </div>
+
+      <ReceiptFormSheet
+        open={formOpen}
+        initial={formInitial}
+        supplierNames={supplierNames}
+        account={account}
+        onClose={() => setFormOpen(false)}
+        onSaved={() => void loadAll()}
+      />
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onPointerDown={() => setConfirmDelete(null)}>
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5" onPointerDown={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-slate-900">刪除收據？</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              確定要刪除「{confirmDelete.merchant_name}」的收據（{money(confirmDelete.total_amount)}）嗎？此操作不可復原。
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setConfirmDelete(null)} className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-medium text-slate-700">
+                取消
+              </button>
+              <button type="button" onClick={() => void doDeleteReceipt(confirmDelete)} className="flex-1 rounded-xl bg-red-500 py-3 text-sm font-semibold text-white">
+                刪除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
 import {
+  buildReceiptItems,
+  resolveExpenseUserId,
+  resolveMerchantId,
+  type InventoryReceiptInput,
+} from "@/lib/expense-inventory";
+import {
   buildPurchaseSummary,
   receiptDateMatchesRange,
   type StatReceipt,
@@ -155,4 +161,60 @@ export async function GET(request: Request) {
   const summary = buildPurchaseSummary(statReceipts);
 
   return NextResponse.json({ ok: true, matched: true, range, receipts: enriched, summary });
+}
+
+/**
+ * 新增收據（mirror expenseRecorder save-receipt）：解析 user_id → upsert 供應商 → 插 receipts → 批量插 receipt_items。
+ * 寫入 expenseRecorder 現有 receipts / receipt_items / merchants，不新增 table。
+ */
+export async function POST(request: Request) {
+  const client = getExpenseSupabaseClient();
+  if (!client) return NextResponse.json({ ok: false, error: "expense client 未設定" }, { status: 503 });
+
+  let body: InventoryReceiptInput;
+  try {
+    body = (await request.json()) as InventoryReceiptInput;
+  } catch {
+    return NextResponse.json({ ok: false, error: "無效的 JSON 內容" }, { status: 400 });
+  }
+
+  const resolved = await resolveExpenseUserId(client, body.account ?? null);
+  if ("error" in resolved) return NextResponse.json({ ok: false, error: resolved.error }, { status: resolved.status });
+  const userId = resolved.userId;
+
+  if (!body.date) return NextResponse.json({ ok: false, error: "缺少 date" }, { status: 400 });
+
+  const merchant = await resolveMerchantId(client, userId, {
+    merchant_id: body.merchant_id,
+    merchant_name: body.merchant_name,
+  });
+  if ("error" in merchant) return NextResponse.json({ ok: false, error: merchant.error }, { status: merchant.status });
+
+  const receiptPayload = {
+    user_id: userId,
+    merchant_id: merchant.merchantId,
+    total_amount: Number(body.total_amount) || 0,
+    receipt_date: body.date,
+    raw_ocr_data: {
+      receipt_number: body.receipt_number || null,
+      payment_method: body.payment_method || "on_delivery",
+      payment_status: body.payment_status || "unpaid",
+      input_method: "pos_manual",
+    },
+  };
+
+  const { data: receipt, error: rErr } = await client
+    .from("receipts")
+    .insert(receiptPayload)
+    .select("id")
+    .single();
+  if (rErr) return NextResponse.json({ ok: false, error: rErr.message }, { status: 500 });
+
+  const itemRows = buildReceiptItems(receipt.id, userId, body.items);
+  if (itemRows.length > 0) {
+    const { error: iErr } = await client.from("receipt_items").insert(itemRows);
+    if (iErr) return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, id: receipt.id });
 }
