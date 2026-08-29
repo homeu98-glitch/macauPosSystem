@@ -182,6 +182,11 @@ export interface DevicePrinterConfig {
   /** 中文（Kanji）倍大指令：商頌 POS-80 等機要用 GS ! n；標準 ESC/POS 機用 FS ! n。
    *  空缺 = 渲染器預設 GS ! n（即「接上就用」嘅安全值，已喺商頌 POS-80 實機對照測試證實）。 */
   kanjiEnlarge?: "FS!" | "GS!";
+  /** 行距覆寫（docs/74 §8.2）：ESC/POS `ESC 3 n`，單位 1/180"。
+   *  渲染器預設 s/m=30、l=60（l 雙高 → 行距 double，避免大字上下行重疊變扁）。
+   *  個別機型實測若仍微微重疊 → l 試 64–66；太疏 → 試 50–54（安全 range 30–72）。
+   *  填空缺 = 用渲染器預設。改呢度唔使 rebuild APK / Companion（經 job payload 帶過去）。 */
+  lineSpacing?: { s?: number; m?: number; l?: number };
   /** A 通道（OS spooler RAW）打印端口：driverless USB Printer Class（如商頌 POS-80 / Windows USB001 虛擬埠）
    *  填 "USB001"（Windows）/ CUPS 隊列名（macOS·Linux）。有值時 Companion 優先用 OS spooler 打，
    *  失敗再回落 node-usb B 通道。空缺 = 直接用 B 通道。 */
@@ -475,7 +480,8 @@ export interface PrintJob {
 // desktop=Node/Rust net+node-usb+COM；iOS=Swift Network.framework/BLE·MFi），
 // POS 網頁只靠呢個介面溝通，唔使知底層 OS 差異。見 docs/43。
 
-export type PrintKind = "receipt" | "kitchen" | "test";
+/** 派發通道用嘅票種。label 原本長期缺位，搞到杯標籤被當 kitchen 出單（印咗「＊＊＊ 廚房 ＊＊＊」抬頭）。 */
+export type PrintKind = "receipt" | "kitchen" | "label" | "test";
 
 export interface PrintSendOptions {
   kind: PrintKind;

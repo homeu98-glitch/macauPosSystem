@@ -1,10 +1,14 @@
 import { resolveJobPrinter } from "@/lib/print-bridge/hub";
-import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
+import {
+  dispatchJobToNative,
+  isNativeBridgeAvailable,
+  type NativePrintKind,
+} from "@/lib/print-bridge/native";
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { getCompanionTransport, isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { loadBootstrapCache, loadPrintJobs, savePrintJobs } from "@/lib/storage";
 import { pruneSentPrintJobs } from "@/lib/print-jobs";
-import { PrintJob } from "@/lib/types";
+import { PrintJob, PrintKind } from "@/lib/types";
 
 /**
  * 刷新待打印佇列：所有 pending job 發送。
@@ -101,7 +105,13 @@ async function dispatchOneJob(
   if (!printer) {
     return { ok: false, error: `搵唔到對應打印機（printerGroup=${job.printerGroup}）` };
   }
-  const kind = printer.role === "receipt" ? "receipt" : "kitchen";
+  // docs/60：票種以「模板快照」為權威。之前一律 `receipt ? receipt : kitchen`，
+  // 搞到 label（杯標籤）機被當 kitchen → 標籤頂頭硬印「＊＊＊ 廚房 ＊＊＊」，版面錯晒。
+  const kind: PrintKind =
+    job.template?.kind ?? (printer.role === "receipt" ? "receipt" : printer.role === "label" ? "label" : "kitchen");
+  // 舊版 APK 只認 receipt / kitchen / test，所以 native 通道繼續發 legacy 值（避免舊 APK 收唔識嘅 kind）。
+  // 新版 APK 請改讀 `job.template.kind`（已隨 payload 轉發，見 docs/55 §2.1），嗰個先係權威。
+  const nativeKind: NativePrintKind = printer.role === "receipt" ? "receipt" : "kitchen";
   const storeName = loadBootstrapCache()?.storeName;
   // 每次打單打印份數：未設定 / ≤1 / 非正整數 → 1 份（見 docs/54）
   const copies = Math.max(1, Math.floor(printer.copies ?? 1));
@@ -109,7 +119,7 @@ async function dispatchOneJob(
   // 1) Native bridge（Android APK WebView）：native 側自己決定 LAN 直打 or relay
   if (isNativeBridgeAvailable()) {
     for (let i = 0; i < copies; i++) {
-      const res = await dispatchJobToNative(job, { printer, kind, storeName });
+      const res = await dispatchJobToNative(job, { printer, kind: nativeKind, storeName });
       if (!res.ok) return res;
     }
     return { ok: true };

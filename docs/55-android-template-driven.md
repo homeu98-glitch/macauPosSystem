@@ -147,8 +147,9 @@ APK 側 decode `payload.job.template` / `payload.job.content` 後，渲染演算
 
 ## 5. 待辦清單（checklist）
 
-- [ ] `native.ts` payload 加 `job.template` + `job.content`（本倉庫，見 2.1）
+- [x] `native.ts` payload 加 `job.template` + `job.content`（本倉庫，見 2.1）— **2026-08-28 已落**，見 `docs/80 §2.3`
 - [ ] Android `EscPosRenderer` 加 template 分支（Android 倉庫，見 2.2）
+      ⚠️ 一併要改 `ESC !` / `GS !` 唔可以同時發（會相乘變 4×），見 `docs/80 §4.2`
 - [ ] APK 定義 `EscPosTemplateSnapshot` / `content` Kotlin data class
 - [ ] APK 實機驗證矩陣（§4）
 - [ ] **APK 重新 build + 派版**（版本號要同 Companion 0.1.9 一齊記錄到 release note）

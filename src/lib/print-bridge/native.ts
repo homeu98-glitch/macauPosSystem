@@ -60,6 +60,13 @@ export async function dispatchJobToNative(
         note: it.note ?? "",
       })),
       createdAt,
+      // ── 模板驅動（docs/55 §2.1 / docs/74）：與 Companion 同源 ──
+      // 之前呢兩欄冇轉發，APK 收唔到模板快照 → fallback 硬編碼渲染，
+      // 導致用家喺 print-center 設嘅字型大小（細/中/大）、粗體、對齊、
+      // 區塊順序、抬頭/結尾文字一律唔會落到紙上（「揀大但出細」）。
+      // 舊版 APK 認唔到呢兩個欄位會自動忽略，屬向後兼容，唔會 regression。
+      template: job.template ?? null,
+      content: job.content ?? null,
     },
     printer: {
       id: opts.printer.id,
@@ -71,6 +78,8 @@ export async function dispatchJobToNative(
       charset: opts.printer.charset ?? "gb18030",
       // 中文倍大指令（商頌 POS-80 = GS ! n，標準機 = FS ! n；空缺 Android 渲染器 fallback GS ! n）
       kanjiEnlarge: opts.printer.kanjiEnlarge ?? "GS!",
+      // 行距覆寫（docs/74 §8.2）：逐機型校準大字行距，唔使 rebuild APK。空缺 = 渲染器預設 30/30/60。
+      lineSpacing: opts.printer.lineSpacing ?? null,
       // 雙路徑 contract（Phase 0）：USB / Bluetooth 連接識別
       usbVendorId: opts.printer.usbVendorId ?? "",
       usbProductId: opts.printer.usbProductId ?? "",
