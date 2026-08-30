@@ -260,12 +260,22 @@ export function DeviceSettings() {
       try {
         const response = await fetch("/api/online-order-settings");
         const payload = (await response.json()) as { autoAccept?: boolean };
-        setLocalSettings((current) => ({
-          ...current,
-          onlineOrderSettings: {
-            autoAccept: payload.autoAccept ?? current.onlineOrderSettings.autoAccept,
-          },
-        }));
+        setLocalSettings((current) => {
+          // 本地優先：如果 localStorage 已有 autoAccept=true，唔被 server 嘅 false 覆蓋。
+          // server 只用作「本地冇值時嘅補漏」，唔係權威真源。
+          // 呢度解決「線上訂單頁開咗自動接單 → 切去設置頁 → server 返回 false → 覆蓋本地 true」嘅 bug。
+          const localAutoAccept = current.onlineOrderSettings.autoAccept;
+          const serverAutoAccept = payload.autoAccept ?? false;
+          const merged = localAutoAccept || serverAutoAccept;
+          // 如果本地同 server 一致就唔更新（避免無謂 re-render）
+          if (localAutoAccept === merged) return current;
+          return {
+            ...current,
+            onlineOrderSettings: {
+              autoAccept: merged,
+            },
+          };
+        });
       } catch {
         // 保留本機設定
       }

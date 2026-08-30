@@ -3715,6 +3715,12 @@ export function PosApp() {
               };
               setLocalSettings(nextSettings);
               savePosLocalSettings(nextSettings);
+              // 同步到 server，防止 device-settings mount 時 fetch server 返回舊值覆蓋本地
+              void fetch("/api/online-order-settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(nextSettings.onlineOrderSettings),
+              });
             }}
             onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
             onMarkReady={(orderId) => updateQuickFulfillment(orderId, "ready")}

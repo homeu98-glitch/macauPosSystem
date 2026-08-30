@@ -315,10 +315,21 @@ export function OnlineOrders({
             tableName: options?.tableName,
             detail,
           });
-        } catch {
-          if (!options?.silent) {
-            setToast({ tone: "success", message: "已接單（廚房單建立失敗，可稍後重打）。" });
+        } catch (bridgeErr) {
+          // 根治性修復：唔再靜默吞錯。
+          // - 訂單已喺 Ledger 接咗，呢度只係本地打印 bridge 失敗，唔等於接單失敗。
+          // - 但要明確記錄同提示，唔俾 auto-accept silent 模式靜默跳過。
+          // - 返 true 係因為訂單已接，但加 warn 同 toast（即使 silent）令問題可見。
+          if (process.env.NODE_ENV !== "production") {
+            console.warn(
+              `[online-orders] 接單 ${order.id} 成功，但廚房單建立失敗：`,
+              bridgeErr instanceof Error ? bridgeErr.message : bridgeErr,
+            );
           }
+          setToast({
+            tone: "error",
+            message: "已接單（廚房單建立失敗，可稍後重打）。",
+          });
           applyOrders(
             mergeLedgerOrders(ordersRef.current, [{ ...order, status: "accepted", updatedAt: new Date().toISOString() }]),
           );
@@ -594,6 +605,12 @@ export function OnlineOrders({
                   };
                   setLocalSettings(nextSettings);
                   savePosLocalSettings(nextSettings);
+                  // 同步到 server，防止 device-settings mount 時 fetch server 返回舊值覆蓋本地
+                  void fetch("/api/online-order-settings", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(nextSettings.onlineOrderSettings),
+                  });
                 }}
                 type="button"
               >

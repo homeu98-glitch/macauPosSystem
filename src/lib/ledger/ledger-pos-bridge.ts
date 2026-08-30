@@ -171,7 +171,15 @@ function buildPrintJobsForItems(options: {
   const kitchenTargets = configuredPrinters.filter(
     (printer) => printer.role === "zone" || printer.role === "label",
   );
-  if (kitchenTargets.length === 0 || options.items.length === 0) return [];
+  if (kitchenTargets.length === 0) {
+    if (options.items.length > 0 && process.env.NODE_ENV !== "production") {
+      console.warn(
+        `[ledger→pos] 訂單 ${options.orderNo} 接單成功，但未配任何已啟用嘅廚房/標籤打印機（zone/label role）→ 零 PrintJob 產生，廚房單靜默丟失。請去「設置 → 打印機綁定」添加廚房打印機。`,
+      );
+    }
+    return [];
+  }
+  if (options.items.length === 0) return [];
 
   const makeJob = (printer: DevicePrinterConfig, items: OrderItem[]): PrintJob => ({
     id: uid("print"),
@@ -333,6 +341,11 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
 
   if (printJobs.length > 0) {
     savePrintJobs([...printJobs, ...loadPrintJobs()]);
+    // 同 printKitchenForLedgerOrder 一致：dispatch event 令 PrintFlushWorker 即時 flush，
+    // 以及 Print Center UI 即時刷新（唔靠 2.5s poll 兜底）。
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    }
   }
 
   return { posOrder, printJobs };
