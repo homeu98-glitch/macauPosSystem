@@ -178,6 +178,38 @@ export async function testCompanionConnection(): Promise<CompanionProbeResult> {
 }
 
 // ─────────────────────────────────────────────────────────────
+// LAN 連線探測（Meituan 式 wizard Step 3 用）
+// ─────────────────────────────────────────────────────────────
+
+export interface ProbeLanResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * 經 Companion 代理探測 LAN 打印機 TCP :9100 是否可連。
+ * 用於 Printer Wizard Step 3「測試連接」按鈕。
+ */
+export async function probeLan(ip: string, port = 9100): Promise<ProbeLanResult> {
+  const url = getCompanionUrl();
+  if (!url) {
+    // Companion 離線時只做 IP 格式驗證
+    const validIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip.trim());
+    return { ok: validIp, error: validIp ? undefined : "IP 格式不正確" };
+  }
+  try {
+    const r = await companionFetch(url, "/api/probe-lan", {
+      method: "POST",
+      body: JSON.stringify({ ip: ip.trim(), port }),
+    });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    return { ok: Boolean(j.ok), error: j.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "探測失敗" };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // 發送 PrintJob
 // ─────────────────────────────────────────────────────────────
 

@@ -237,3 +237,61 @@ export const CHARSET_OPTIONS: Array<{ value: CharsetValue; label: string }> = [
 /** 冇自動偵測到紙張/編碼時嘅安全預設 */
 export const DEFAULT_CHARSET: CharsetValue = "gb18030";
 export const DEFAULT_PAPER_SIZE: PaperSizeValue = "80mm";
+
+// ─────────────────────────────────────────────────────────────
+// LAN 型號列表（Meituan 式 Wizard Step 2 用）
+// ─────────────────────────────────────────────────────────────
+
+export interface LanModelOption {
+  brand: string;
+  model: string;
+  charset: CharsetValue;
+  paperSize: PaperSizeValue;
+  kanjiEnlarge: "FS!" | "GS!";
+}
+
+/**
+ * 產生 LAN 手動選擇用嘅型號列表。
+ * 扁平化 USB_PRINTER_DB + 通用兜底 + 商頌 POS-80 明確列出。
+ */
+export function getLanModelOptions(): LanModelOption[] {
+  const opts: LanModelOption[] = [];
+  for (const [, vendor] of Object.entries(USB_PRINTER_DB)) {
+    for (const [, model] of Object.entries(vendor.models)) {
+      opts.push({
+        brand: vendor.brand,
+        model: model.model,
+        charset: model.charset,
+        paperSize: model.paperSize,
+        kanjiEnlarge: model.kanjiEnlarge || vendor.defaultKanjiEnlarge || "FS!",
+      });
+    }
+  }
+  // 通用兜底（商頌 POS-80 等 USB Printer Class 設備，LAN 版本同型號）
+  opts.push({
+    brand: "通用 ESC/POS",
+    model: "通用 80mm 熱敏打印機",
+    charset: "gb18030",
+    paperSize: "80mm",
+    kanjiEnlarge: "GS!",
+  });
+  opts.push({
+    brand: "通用 ESC/POS",
+    model: "通用 58mm 熱敏打印機",
+    charset: "gb18030",
+    paperSize: "58mm",
+    kanjiEnlarge: "GS!",
+  });
+  // 商頌 POS-80 明確列出（如果 Gprinter GP-U80300 已喺表度就唔重複加）
+  const hasShangsong = opts.some((o) => o.brand === "Gprinter" && o.model.includes("GP-U80300"));
+  if (!hasShangsong) {
+    opts.push({
+      brand: "商頌",
+      model: "POS-80",
+      charset: "gb18030",
+      paperSize: "80mm",
+      kanjiEnlarge: "GS!",
+    });
+  }
+  return opts;
+}

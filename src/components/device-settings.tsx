@@ -31,9 +31,10 @@ import {
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { PrinterCompanionPanel } from "@/components/printer-companion-panel";
+import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
+import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
-import { resolveUsbMeta } from "@/lib/print-bridge/printer-models";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -87,6 +88,7 @@ export function DeviceSettings() {
   const [newPrintZoneName, setNewPrintZoneName] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(cachedLocalSettings?.specTemplates?.[0]?.id ?? "");
   const [devicePrinterTab, setDevicePrinterTab] = useState<"zones" | "printers">("zones");
+  const [printerWizardOpen, setPrinterWizardOpen] = useState(false);
   const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
   const [newReopenReason, setNewReopenReason] = useState("");
 
@@ -552,24 +554,11 @@ export function DeviceSettings() {
   // 打印機經 Companion 代理管理（零配置自動配對）
   // ─────────────────────────────────────────────────────────────
 
-  /** role 改動時更新本機打印機設定（路由會自動按 role/zoneId 搵到呢部機）。 */
-  function handleRoleChange(printer: DevicePrinterConfig, newRole: DevicePrinterConfig["role"]) {
-    updatePrinter(printer.id, { role: newRole });
-  }
-
   function handleAddCompanionPrinter(printer: DevicePrinterConfig) {
     const nextPrinters = [...config.printers, printer];
     setConfig((c) => ({ ...c, printers: nextPrinters }));
     saveDeviceConfig({ ...config, printers: nextPrinters });
     setStatus(`已加入打印機「${printer.name}」（自動偵測：${printer.connectionType}）。`);
-  }
-
-  function printerReadiness(printer: DevicePrinterConfig): "ready" | "offline" | "disabled" {
-    if (!printer.enabled) return "disabled";
-    if (printer.connectionType === "lan") return printer.ipAddress ? "ready" : "offline";
-    if (printer.connectionType === "usb") return printer.usbVendorId ? "ready" : "offline";
-    if (printer.connectionType === "bluetooth") return printer.bluetoothName ? "ready" : "offline";
-    return "ready";
   }
 
 
@@ -800,286 +789,33 @@ export function DeviceSettings() {
 
               {devicePrinterTab === "printers" ? (
               <div className="mt-4 min-w-0 overflow-auto pr-1 max-h-[calc(100dvh-420px)]">
-                <div className="grid gap-3">
-                  {config.printers.map((printer) => (
-                    <article key={printer.id} className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span
-                              title={
-                                printerReadiness(printer) === "ready"
-                                  ? "已連線"
-                                  : printerReadiness(printer) === "disabled"
-                                    ? "已停用"
-                                    : "未連線 / 未在線"
-                              }
-                              className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
-                                printerReadiness(printer) === "ready"
-                                  ? "bg-emerald-500"
-                                  : printerReadiness(printer) === "disabled"
-                                    ? "bg-slate-300"
-                                    : "bg-rose-500"
-                              }`}
-                            />
-                            <div className="truncate text-sm font-semibold text-slate-900">{printer.name}</div>
-                          </div>
-                          <div className="mt-1 break-words text-xs text-slate-500">
-                            {printer.role === "receipt"
-                              ? "收據"
-                              : printer.role === "label"
-                                ? `標籤 · ${localSettings.printZones.find((zone) => zone.id === printer.zoneId)?.name ?? printer.zoneId ?? "--"}`
-                                : `分區 · ${localSettings.printZones.find((zone) => zone.id === printer.zoneId)?.name ?? printer.zoneId ?? "--"}`}{" "}
-                            · {printer.connectionType.toUpperCase()}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 flex-wrap items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                            <input
-                              checked={printer.enabled}
-                              onChange={(event) => updatePrinter(printer.id, { enabled: event.target.checked })}
-                              type="checkbox"
-                            />
-                            啟用
-                          </label>
-                          <button
-                            className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                            onClick={() => removePrinter(printer.id)}
-                            type="button"
-                          >
-                            刪除
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">打印機名稱</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { name: event.target.value })}
-                            value={printer.name}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">用途</span>
-                          <select
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => handleRoleChange(printer, event.target.value as DevicePrinterConfig["role"])}
-                            value={printer.role}
-                          >
-                            <option value="zone">分區出單</option>
-                            <option value="receipt">收據</option>
-                            <option value="label">標籤</option>
-                          </select>
-                        </label>
-                        {printer.role !== "receipt" ? (
-                          <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                            <span className="text-xs text-slate-500">{printer.role === "label" ? "標籤分區" : "打印分區"}</span>
-                            <select
-                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              onChange={(event) => updatePrinter(printer.id, { zoneId: event.target.value })}
-                              value={printer.zoneId ?? localSettings.printZones[0]?.id ?? ""}
-                            >
-                              {localSettings.printZones.map((zone) => (
-                                <option key={zone.id} value={zone.id}>
-                                  {zone.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        ) : (
-                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                            收銀台只會指定 1 台收據打印機
-                          </div>
-                        )}
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">連接方式</span>
-                          <select
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            value={printer.connectionType}
-                            onChange={(event) =>
-                              updatePrinter(printer.id, {
-                                connectionType: event.target.value as DevicePrinterConfig["connectionType"],
-                              })
-                            }
-                          >
-                            <option value="lan">LAN（區網 / 網線）</option>
-                            <option value="usb">USB（自動偵測）</option>
-                            <option value="bluetooth">藍牙</option>
-                          </select>
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">打印機型號</span>
-                          <input
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { model: event.target.value })}
-                            placeholder="例如：TM-T82X / QL-820NWB"
-                            value={printer.model ?? ""}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">紙寬 / 尺寸</span>
-                          <select
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { paperSize: event.target.value })}
-                            value={printer.paperSize ?? ""}
-                          >
-                            <option value="">請選擇</option>
-                            <option value="58mm">58mm</option>
-                            <option value="80mm">80mm</option>
-                            <option value="62mm">62mm 標籤</option>
-                            <option value="100x75mm">100x75mm 標籤</option>
-                          </select>
-                        </label>
-                        {printer.connectionType === "lan" && (
-                          <>
-                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                              <span className="text-xs text-slate-500">IP 地址（LAN）</span>
-                              <input
-                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                                onChange={(event) => updatePrinter(printer.id, { ipAddress: event.target.value })}
-                                placeholder="192.168.1.110"
-                                value={printer.ipAddress ?? ""}
-                              />
-                            </label>
-                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                              <span className="text-xs text-slate-500">LAN 端口</span>
-                              <input
-                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                                inputMode="numeric"
-                                onChange={(event) =>
-                                  updatePrinter(printer.id, { lanPort: Number(event.target.value) || 9100 })
-                                }
-                                placeholder="9100"
-                                value={String(printer.lanPort ?? 9100)}
-                              />
-                            </label>
-                          </>
-                        )}
-                        {printer.connectionType === "usb" && (
-                          <>
-                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                              <span className="text-xs text-slate-500">USB Vendor ID（自動偵測）</span>
-                              <input
-                                className="rounded-2xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
-                                value={printer.usbVendorId ?? ""}
-                                disabled
-                                readOnly
-                              />
-                            </label>
-                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                              <span className="text-xs text-slate-500">USB Product ID（自動偵測）</span>
-                              <input
-                                className="rounded-2xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
-                                value={printer.usbProductId ?? ""}
-                                disabled
-                                readOnly
-                              />
-                            </label>
-                            {(() => {
-                              const r = resolveUsbMeta(printer.usbVendorId, printer.usbProductId);
-                              const isGeneric = !r; // 未知 VID（如商頌 POS-80 等 USB Printer Class 通用設備）
-                              return (
-                                <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                                  <span className="text-xs text-slate-500">偵測到嘅機型（命令檔）</span>
-                                  <input
-                                    className="rounded-2xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
-                                    value={
-                                      isGeneric
-                                        ? "通用 ESC/POS（USB Printer Class）"
-                                        : `${r!.brand} ${r!.model}`
-                                    }
-                                    disabled
-                                    readOnly
-                                  />
-                                </label>
-                              );
-                            })()}
-                            <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                              <span className="text-xs text-slate-500">
-                                OS 打印端口（A 通道 · driverless USB）
-                              </span>
-                              <input
-                                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                                onChange={(e) => updatePrinter(printer.id, { usbPort: e.target.value || undefined })}
-                                placeholder="USB001（Windows）/ CUPS 隊列名（macOS·Linux）"
-                                value={printer.usbPort ?? ""}
-                              />
-                            </label>
-                          </>
-                        )}
-                        {printer.connectionType === "bluetooth" && (
-                          <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                            <span className="text-xs text-slate-500">藍牙名稱 / 配對位址</span>
-                            <input
-                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              onChange={(event) => updatePrinter(printer.id, { bluetoothName: event.target.value })}
-                              placeholder="例如 BT-Printer-AB12"
-                              value={printer.bluetoothName ?? ""}
-                            />
-                          </label>
-                        )}
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">ESC/POS 跨碼（中文字集）</span>
-                          <select
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) => updatePrinter(printer.id, { charset: event.target.value || undefined })}
-                            value={printer.charset ?? ""}
-                          >
-                            <option value="">GB18030（預設）</option>
-                            <option value="gb18030">GB18030</option>
-                            <option value="gbk">GBK</option>
-                            <option value="big5">Big5</option>
-                            <option value="utf-8">UTF-8</option>
-                          </select>
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">中文倍大指令（Kanji 命令檔）</span>
-                          <select
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) =>
-                              updatePrinter(printer.id, {
-                                kanjiEnlarge: (event.target.value || undefined) as DevicePrinterConfig["kanjiEnlarge"],
-                              })
-                            }
-                            value={printer.kanjiEnlarge ?? ""}
-                          >
-                            <option value="">自動（GS ! n · 接上就用）</option>
-                            <option value="FS!">FS ! n（標準 ESC/POS 機）</option>
-                            <option value="GS!">GS ! n（商頌 POS-80 等）</option>
-                          </select>
-                        </label>
-                        <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                          <span className="text-xs text-slate-500">每次打單打印張數</span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={9}
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                            onChange={(event) =>
-                              updatePrinter(printer.id, { copies: Number(event.target.value) || 1 })
-                            }
-                            placeholder="1"
-                            value={printer.copies ?? ""}
-                          />
-                        </label>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap justify-end gap-2">
-                        <button
-                          className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                          aria-busy={testingPrinterId === printer.id}
-                          disabled={Boolean(testingPrinterId)}
-                          onClick={() => testPrint(printer)}
-                          type="button"
-                        >
-                          {testingPrinterId === printer.id ? "打印中…" : "測試打印"}
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                {config.printers.length === 0 ? (
+                  <PrinterEmptyState onAdd={() => setPrinterWizardOpen(true)} />
+                ) : (
+                  <div className="grid gap-3">
+                    {config.printers.map((printer) => (
+                      <PrinterCardV2
+                        key={printer.id}
+                        printer={printer}
+                        printZones={localSettings.printZones}
+                        testing={testingPrinterId === printer.id}
+                        onToggle={(id, enabled) => updatePrinter(id, { enabled })}
+                        onRemove={removePrinter}
+                        onTestPrint={testPrint}
+                        onUpdate={updatePrinter}
+                      />
+                    ))}
+                    <div className="flex justify-end">
+                      <button
+                        className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => setPrinterWizardOpen(true)}
+                        type="button"
+                      >
+                        + 添加打印機
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               ) : null}
 
@@ -1087,6 +823,13 @@ export function DeviceSettings() {
             </section>
           </div>
         ) : null}
+
+        <PrinterWizardModal
+          open={printerWizardOpen}
+          onClose={() => setPrinterWizardOpen(false)}
+          onAdd={handleAddCompanionPrinter}
+          printZones={localSettings.printZones}
+        />
 
         {activeTab === "notes" ? (
           <div className="grid gap-3 lg:grid-cols-2">

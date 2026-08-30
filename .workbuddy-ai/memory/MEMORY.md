@@ -68,6 +68,25 @@
 - **完全取代策略**：只有 Android 裝置能打印；非 Android fallback 走舊 HTTP bridge（如有設 URL）
 - 詳見 `docs/36-native-print-agent.md`；沙盒無 Android SDK，APK build 待用戶 dev box
 
+## ESC/POS 放大指令相乘 Bug + 修正（2026-08-30 ✅，Companion 0.1.15）
+
+第三方研究揭穿 docs/80 嘅 B1（APK 丟 template）唔係出事嗰張紙嘅主因——用家行緊 **Windows Companion → USB RAW ESC/POS → POS-80**，唔經 native.ts。真主因：`companion-server.mjs` 嘅 `setStyle` 發 `ESC!0x30` + `textLine` 喺 CJK 行再發 `GS!0x30` → Epson/Gprinter 系相乘（ASCII 4×4、中文 2×2）= 版面撕裂。
+
+**三套放大指令**（docs/81 §8.3 真相表）：
+- `ESC ! n`（1B 21）只管 ASCII；bit 語意 0x20=闊 0x10=高 → l=0x30
+- `FS ! n`（1C 21）只管 Kanji；bit 語意 0x04=闊 0x08=高 → l=0x0C
+- `GS ! n`（1D 21）管 ASCII+Kanji；**nibble** `(h-1)<<4|(w-1)` → l=0x11（唔係 0x30！）
+
+**修正**（`C:\dev\desktop-companion\companion-server.mjs` 0.1.15）：
+- P0-A：`setStyle` 加 `isCjkLine` 參數；`kanjiEnlarge=="GS!"` 時 CJK 行 `ESC!` 降 `0x00`（避免相乘），放大全靠 `GS!`
+- P0-B：`GS_SIZE_BYTE = {s:0x00, m:0x01, l:0x11}`（標準 nibble）；A/B 實機確認 `0x30` 係錯唔係韌體偏好（V-A 0x11 PASS / V-B 0x30 FAIL），舊 `KANJI_SIZE_BYTE_LEGACY` + `gsNibble` fallback 已移除
+- P1-B：`resetMagnify()` 喺單據結尾清 `GS!0x00`+`ESC!0x00`+`ESC 3 30`
+- `test-kanji-size.mjs` v2：A/B 變體 V-A~V-D 各自獨立（唔同時發 ESC!+GS!）
+
+**待用家**：`npm run dist` 打包 0.1.15 → 印 A/B 測試紙 → V-A 應正常 2×、V-D 應重現 4×4 巨怪 → 坐實 + 驗收。若 V-A 中文唔變大 → 設 `gsNibble=false`。
+
+APK 側同邏輯另案（唔阻塞 Companion）。Web 預覽危險提示（P2）+ docs/80 修訂（P3）最後做。詳見 `docs/81`。
+
 ## 重要約定
 
 - 餐飲用 `macau-pos/*` localStorage 鍵；salon 用 `macau-pos-salon/*`
