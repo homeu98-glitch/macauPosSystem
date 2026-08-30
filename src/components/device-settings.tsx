@@ -30,7 +30,6 @@ import {
 } from "@/lib/ledger/menu-import";
 import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import { PrinterCompanionPanel } from "@/components/printer-companion-panel";
 import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
@@ -614,9 +613,6 @@ export function DeviceSettings() {
 
   {activeTab === "device" ? (
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
-            <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-              <PrinterCompanionPanel printZones={localSettings.printZones} onAddPrinter={handleAddCompanionPrinter} />
-          </div>
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
               <div className="mt-4 grid gap-3">
