@@ -699,14 +699,18 @@ export function PosApp() {
       // docs/52：本機已主動清除（tombstone）嘅 job 唔可以經 realtime 復活
       if (loadClearedPrintJobIds().includes(job.id)) return;
       setPrintJobs((current) => {
-        const existing = current.find((p) => p.id === job.id);
-        // P0（R5 realtime 路徑）：本地已有該 job 就保留本地版本（sent/failed），唔用後台落後
-        // status 覆寫 → 防重印。本地無先 prepend server job（跨終端即時見單）。
+        // 以 localStorage 為基底合併，唔用 React state current —
+        // 因為 bridgeLedgerOrderToPos / printKitchenForLedgerOrder 等
+        // 線上訂單打印路徑直接 savePrintJobs 寫 localStorage 但唔更新 React state，
+        // 用 current 做 savePrintJobs 會沖走呢啲線上訂單嘅 print jobs。
+        const fromStorage = loadPrintJobs();
+        const existing = fromStorage.find((p) => p.id === job.id);
         if (existing) {
-          savePrintJobs(current);
-          return current;
+          // 本地已有 → 保留本地版本（sent/failed），唔用後台 status 覆寫 → 防重印
+          savePrintJobs(fromStorage);
+          return fromStorage;
         }
-        const next = [job, ...current];
+        const next = [job, ...fromStorage];
         savePrintJobs(next);
         return next;
       });
@@ -1080,6 +1084,10 @@ export function PosApp() {
     const merged = mergePrintJobs(loadPrintJobs(), nextPrintJobs, loadClearedPrintJobIds());
     setPrintJobs(merged);
     savePrintJobs(merged);
+    // Dispatch event 令 Print Center UI 即時刷新（唔靠下次 route 切換先 reload）
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    }
   }
 
   function loadOrderIntoWorkspace(order: PosOrder | null, tableId: string) {
@@ -2393,10 +2401,19 @@ export function PosApp() {
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
     const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap);
-    if (nextPrintJobs.length === 0) return;
+    if (nextPrintJobs.length === 0) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[printReceipt] No receipt printer configured — skipping receipt print");
+      }
+      return;
+    }
 
     const timestamp = nextPrintJobs[0]?.createdAt ?? new Date().toISOString();
     persistPrintJobs([...nextPrintJobs, ...printJobs]);
+    // Dispatch event 令 Print Center UI 即時刷新（persistPrintJobs 本身唔 dispatch）
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    }
     pushEvents(
       nextPrintJobs.map<QueueEvent>((printJob) => ({
         id: uid("evt"),
@@ -3715,11 +3732,16 @@ export function PosApp() {
               };
               setLocalSettings(nextSettings);
               savePosLocalSettings(nextSettings);
-              // 同步到 server，防止 device-settings mount 時 fetch server 返回舊值覆蓋本地
+              // 同步到 server。本地 localStorage 係權威真源。
+              // POST 失敗唔會覆蓋本地（device-settings mount fetch 已修為 local-only）。
               void fetch("/api/online-order-settings", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(nextSettings.onlineOrderSettings),
+              }).catch(() => {
+                if (process.env.NODE_ENV !== "production") {
+                  console.warn("[pos-app] autoAccept POST failed — local value is authoritative");
+                }
               });
             }}
             onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}

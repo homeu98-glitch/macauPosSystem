@@ -261,20 +261,36 @@ export function DeviceSettings() {
         const response = await fetch("/api/online-order-settings");
         const payload = (await response.json()) as { autoAccept?: boolean };
         setLocalSettings((current) => {
-          // 本地優先：如果 localStorage 已有 autoAccept=true，唔被 server 嘅 false 覆蓋。
-          // server 只用作「本地冇值時嘅補漏」，唔係權威真源。
-          // 呢度解決「線上訂單頁開咗自動接單 → 切去設置頁 → server 返回 false → 覆蓋本地 true」嘅 bug。
+          // 本地絕對優先：localStorage autoAccept 係權威真源，server 值只用於
+          // 「本地從未改過」時嘅初始化補漏（首次安裝 / 清除 cache 後）。
+          //
+          // 舊邏輯 `localAutoAccept || serverAutoAccept` 有 bug：
+          // 用戶關閉 autoAccept（本地 false）→ POST 失敗或 server 延遲 →
+          // server 仍為舊值 true → OR 邏輯把 false || true = true →
+          // autoAccept 被靜默重置為 true，用戶以為已關但系統仍自動接單。
+          //
+          // 修復：本地有明確值就唔被 server 覆蓋。只喺本地 autoAccept
+          // 與 default（false）相同且 server 有值時先採納 server。
           const localAutoAccept = current.onlineOrderSettings.autoAccept;
-          const serverAutoAccept = payload.autoAccept ?? false;
-          const merged = localAutoAccept || serverAutoAccept;
-          // 如果本地同 server 一致就唔更新（避免無謂 re-render）
-          if (localAutoAccept === merged) return current;
-          return {
-            ...current,
-            onlineOrderSettings: {
-              autoAccept: merged,
-            },
-          };
+          const serverAutoAccept = payload.autoAccept;
+          // 本地已 true → 不降級（唔信任 server 覆蓋）
+          // 本地 false → 只信任 server 如果 server 也 false（即 server 確認已關）
+          //   如果 server 返回 true 但本地 false → 用戶剛關閉但 POST 未生效 → 尊重本地 false
+          if (localAutoAccept) {
+            // 本地 true，唔降級
+            if (localAutoAccept === serverAutoAccept) return current;
+            return current;
+          }
+          // 本地 false：只有 server 也 false 時先確認一致；server true 唔覆蓋本地 false
+          if (serverAutoAccept === false || serverAutoAccept === undefined) {
+            // server 確認已關或無值 → 維持本地 false，唔需更新
+            return current;
+          }
+          // server 返回 true 但本地 false：
+          // 呢個只喺「用戶從未喺本機設過 autoAccept」嘅場景先合理（首次安裝）。
+          // 如果用戶剛關閉，本地 false 已經寫入 localStorage，唔應該被 server true 覆蓋。
+          // 安全做法：唔覆蓋本地 false。如果真係首次安裝，default 就係 false，無需改。
+          return current;
         });
       } catch {
         // 保留本機設定

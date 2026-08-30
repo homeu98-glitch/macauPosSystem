@@ -605,11 +605,18 @@ export function OnlineOrders({
                   };
                   setLocalSettings(nextSettings);
                   savePosLocalSettings(nextSettings);
-                  // 同步到 server，防止 device-settings mount 時 fetch server 返回舊值覆蓋本地
+                  // 同步到 server。本地 localStorage 係權威真源；
+                  // POST 失唔會覆蓋本地（device-settings mount fetch 已修為 local-only）。
                   void fetch("/api/online-order-settings", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(nextSettings.onlineOrderSettings),
+                  }).catch(() => {
+                    // POST 失敗：本地已生效，下次 POST 會由 device-settings sync 重試。
+                    // 唔 toast 打擾用戶，但 console 記錄。
+                    if (process.env.NODE_ENV !== "production") {
+                      console.warn("[online-orders] autoAccept POST failed — local value is authoritative");
+                    }
                   });
                 }}
                 type="button"

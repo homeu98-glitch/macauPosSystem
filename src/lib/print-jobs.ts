@@ -5,12 +5,14 @@ import {
   addClearedPrintJobIds,
   loadAuthSession,
   loadBootstrapCache,
+  loadClearedPrintJobIds,
   loadDeviceConfig,
   loadOrders,
   loadPosLocalSettings,
   loadPrintJobs,
   savePrintJobs,
 } from "@/lib/storage";
+import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
 import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
 import { formatMoney } from "@/lib/format";
@@ -35,7 +37,10 @@ function nowText() {
 
 export function appendPrintJobs(jobs: PrintJob[]) {
   if (jobs.length === 0 || typeof window === "undefined") return;
-  savePrintJobs([...jobs, ...loadPrintJobs()]);
+  const existing = loadPrintJobs();
+  const cleared = loadClearedPrintJobIds();
+  const merged = mergePrintJobs(existing, [...jobs, ...existing], cleared);
+  savePrintJobs(merged);
   window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { count: jobs.length } }));
 }
 

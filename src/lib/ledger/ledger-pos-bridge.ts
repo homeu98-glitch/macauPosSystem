@@ -7,10 +7,12 @@ import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
+  loadClearedPrintJobIds,
   loadDeviceConfig,
   loadPrintJobs,
   savePrintJobs,
 } from "@/lib/storage";
+import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 
 /**
  * 契約 M3 / M8：線上單**唔** mirror 入 POS DB（loadOrders / saveOrders）。
@@ -274,7 +276,10 @@ export async function printKitchenForLedgerOrder(
   });
 
   if (printJobs.length > 0) {
-    savePrintJobs([...printJobs, ...loadPrintJobs()]);
+    const existing = loadPrintJobs();
+    const cleared = loadClearedPrintJobIds();
+    const merged = mergePrintJobs(existing, [...printJobs, ...existing], cleared);
+    savePrintJobs(merged);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
     }
@@ -340,7 +345,12 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   bridgedOrders.set(options.ledgerOrder.id, posOrder);
 
   if (printJobs.length > 0) {
-    savePrintJobs([...printJobs, ...loadPrintJobs()]);
+    // 用 mergePrintJobs 統一合併邏輯（同 pos-app.persistPrintJobs 一致），
+    // 避免 spread 合併唔做去重 / tombstone 過濾。
+    const existing = loadPrintJobs();
+    const cleared = loadClearedPrintJobIds();
+    const merged = mergePrintJobs(existing, [...printJobs, ...existing], cleared);
+    savePrintJobs(merged);
     // 同 printKitchenForLedgerOrder 一致：dispatch event 令 PrintFlushWorker 即時 flush，
     // 以及 Print Center UI 即時刷新（唔靠 2.5s poll 兜底）。
     if (typeof window !== "undefined") {
