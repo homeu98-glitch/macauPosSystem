@@ -8,6 +8,7 @@ import { KioskQrPanel } from "@/components/kiosk-qr-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
+  loadAuthSession,
   loadBootstrapCache,
   loadDeviceConfig,
   loadPosLocalSettings,
@@ -258,7 +259,12 @@ export function DeviceSettings() {
   useEffect(() => {
     async function loadOnlineOrderSettings() {
       try {
-        const response = await fetch("/api/online-order-settings");
+        // 帶 storeId：舊 code 冇帶 → server 讀「全店最新一條（任何店）」，A 店會讀到 B 店設定。
+        const storeId = loadAuthSession()?.merchantId;
+        const url = storeId
+          ? `/api/online-order-settings?storeId=${encodeURIComponent(storeId)}`
+          : "/api/online-order-settings";
+        const response = await fetch(url);
         const payload = (await response.json()) as { autoAccept?: boolean };
         setLocalSettings((current) => {
           // 本地絕對優先：localStorage autoAccept 係權威真源，server 值只用於
@@ -472,10 +478,14 @@ export function DeviceSettings() {
           localSettings,
         }),
       });
+      // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，多間店共用同一行互相覆蓋。
       await fetch("/api/online-order-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(localSettings.onlineOrderSettings),
+        body: JSON.stringify({
+          ...localSettings.onlineOrderSettings,
+          storeId: loadAuthSession()?.merchantId ?? null,
+        }),
       });
       saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
       setStatus("已同步到後台設定接口。");

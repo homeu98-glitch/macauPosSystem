@@ -610,7 +610,12 @@ export function OnlineOrders({
                   void fetch("/api/online-order-settings", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(nextSettings.onlineOrderSettings),
+                    // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，
+                    // 多間店共用同一行互相覆蓋（見 /api/online-order-settings route 註釋）。
+                    body: JSON.stringify({
+                      ...nextSettings.onlineOrderSettings,
+                      storeId: getLedgerMerchantId(),
+                    }),
                   }).catch(() => {
                     // POST 失敗：本地已生效，下次 POST 會由 device-settings sync 重試。
                     // 唔 toast 打擾用戶，但 console 記錄。

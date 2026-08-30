@@ -657,12 +657,20 @@ export function PosApp() {
         // printTemplates 係 client-only 設計（docs/71 §8）：print-center 從未 POST 去後台，
         // server 嘅 printTemplates 永遠係預設；直接用 server 版會令用家設嘅字型大小每逢同步
         // 就彈返預設。故同步時保留本地 printTemplates，唔畀 server 預設蓋走。
+        // onlineOrderSettings（自動接單）係 per-terminal 設定，本機 localStorage 先係真源。
+        // 舊 bug：server 份 local_settings 係「全店最新一條（任何 terminal）」（見
+        // device-settings.tsx 既有警告註釋 + /api/pos/device-config GET 冇 terminal filter），
+        // 且 device-settings syncConfig() 會 POST 成份 localSettings 上去（含 autoAccept）。
+        // 結果只要曾經喺「自動接單 ON」時撳過任何儲存，server 就記低 autoAccept:true，
+        // 之後每次 loadRuntimeState() 同步都將本地「熄咗」嘅開關還原做 ON → 繼續自動接單。
+        // 故同 floors 一樣：本地優先，唔畀 server 蓋走。
         // 其餘 field 用 server 版本（server 優先，確保後台改嘅全局設定生效）。
         const local = loadPosLocalSettings();
         const merged: PosLocalSettings = {
           ...payload.localSettings,
           floors: local.floors?.length ? local.floors : payload.localSettings.floors,
           printTemplates: local.printTemplates,
+          onlineOrderSettings: local.onlineOrderSettings,
         };
         savePosLocalSettings(merged);
       }
@@ -3737,7 +3745,12 @@ export function PosApp() {
               void fetch("/api/online-order-settings", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(nextSettings.onlineOrderSettings),
+                // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，
+                // 多間店共用同一行互相覆蓋（見 /api/online-order-settings route 註釋）。
+                body: JSON.stringify({
+                  ...nextSettings.onlineOrderSettings,
+                  storeId: loadAuthSession()?.merchantId ?? null,
+                }),
               }).catch(() => {
                 if (process.env.NODE_ENV !== "production") {
                   console.warn("[pos-app] autoAccept POST failed — local value is authoritative");
