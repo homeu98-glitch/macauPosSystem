@@ -5,7 +5,7 @@ import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { bridgeLedgerOrderToPos } from "@/lib/ledger/ledger-pos-bridge";
+import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
 import {
   printReceiptForLedgerOrderOnce,
   printVoidForLedgerOrderOnce,
@@ -40,7 +40,7 @@ import {
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
-import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
+import { loadPosLocalSettings, loadPrintJobs, savePosLocalSettings } from "@/lib/storage";
 import { formatMoney } from "@/lib/format";
 
 const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
@@ -83,6 +83,7 @@ export function OnlineOrders({
   const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
   const hasInitializedSnapshotRef = useRef(false);
   const autoAcceptProcessingRef = useRef<Set<string>>(new Set());
+  const autoBridgeRef = useRef<Set<string>>(new Set());
   const embeddedDateFilterRef = useRef(dateFilter);
 
   const tables = useMemo(
@@ -145,6 +146,42 @@ export function OnlineOrders({
     setOrders(next);
     syncCursorRef.current = computeSyncCursor(next);
   }, []);
+
+  /**
+   * 自動補跑廚房單打印（根治「外部接單 → POS 零打印」問題）。
+   *
+   * 當一張線上單狀態為 accepted 或 preparing（即已被某方接單），
+   * 但本機 printJobs 從未有此 orderId 嘅 job（bridge 從未跑過），
+   * 就自動補跑 printKitchenForLedgerOrder 產生廚房 PrintJob。
+   *
+   * idempotent：autoBridgeRef 防同單重複觸發；mergePrintJobs 內部做去重 + tombstone 過濾。
+   */
+  const ensureKitchenPrintForAccepted = useCallback(
+    async (order: LedgerOnlineOrder) => {
+      const raw = rawLedgerStatus(order.status);
+      if (raw !== "accepted" && raw !== "preparing") return;
+      const ledgerId = order.id;
+      if (autoBridgeRef.current.has(ledgerId)) return;
+      // 檢查本地 printJobs 已有此單嘅 job（bridge 之前跑過）
+      const existing = loadPrintJobs();
+      const hasJob = existing.some((job) => job.orderId === `ledger-${ledgerId}`);
+      if (hasJob) return;
+      autoBridgeRef.current.add(ledgerId);
+      try {
+        await printKitchenForLedgerOrder(order);
+        // 成功產生 PrintJob → 提示收銀（非靜默）
+        setToast({ tone: "success", message: `已補印廚房單：${orderCodeLabel(order)}` });
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(`[online-orders] 補印廚房單失敗 ${ledgerId}:`, err instanceof Error ? err.message : err);
+        }
+        setToast({ tone: "error", message: `廚房單補印失敗：${orderCodeLabel(order)}` });
+      } finally {
+        autoBridgeRef.current.delete(ledgerId);
+      }
+    },
+    [],
+  );
 
   const loadOrders = useCallback(
     async (mode: "full" | "incremental" = "full", filter: LedgerOrderDateFilter = dateFilter) => {
@@ -240,8 +277,11 @@ export function OnlineOrders({
         playSound(isDelivery ? "new_delivery" : "new_order");
       }
       hasInitializedSnapshotRef.current = true;
+
+      // 新單 insert 時若已 accepted/preparing（被外部接單）→ 自動補印廚房單
+      void ensureKitchenPrintForAccepted(order);
     },
-    [applyOrders, playSound],
+    [applyOrders, playSound, ensureKitchenPrintForAccepted],
   );
 
   const handleUpdate = useCallback(
@@ -271,8 +311,11 @@ export function OnlineOrders({
         });
       }
       hasInitializedSnapshotRef.current = true;
+
+      // 狀態更新至 accepted/preparing（被外部接單）→ 自動補印廚房單
+      void ensureKitchenPrintForAccepted(order);
     },
-    [applyOrders, playSound],
+    [applyOrders, playSound, ensureKitchenPrintForAccepted],
   );
 
   useLedgerOrdersRealtime(merchantId, Boolean(merchantId), {
@@ -288,6 +331,18 @@ export function OnlineOrders({
   useEffect(() => {
     if (!loading) hasInitializedSnapshotRef.current = true;
   }, [loading]);
+
+  // 初次載入 / resubscribe 後 batch 同步嘅已接單單也補印廚房單
+  // （loadOrders 唔經 handleInsert/handleUpdate，要喺度掃一次）
+  useEffect(() => {
+    if (loading) return;
+    for (const order of orders) {
+      const raw = rawLedgerStatus(order.status);
+      if (raw === "accepted" || raw === "preparing") {
+        void ensureKitchenPrintForAccepted(order);
+      }
+    }
+  }, [orders, loading, ensureKitchenPrintForAccepted]);
 
   const runAcceptAndBridge = useCallback(
     async (
@@ -316,24 +371,24 @@ export function OnlineOrders({
             detail,
           });
         } catch (bridgeErr) {
-          // 根治性修復：唔再靜默吞錯。
-          // - 訂單已喺 Ledger 接咗，呢度只係本地打印 bridge 失敗，唔等於接單失敗。
-          // - 但要明確記錄同提示，唔俾 auto-accept silent 模式靜默跳過。
-          // - 返 true 係因為訂單已接，但加 warn 同 toast（即使 silent）令問題可見。
+          // 唔再假裝成功：舊寫法 return true → auto-accept effect 彈「已自動接單」success toast，
+          // 但廚房單其實已丟。改為 return false + error toast，令問題可見且唔誤導。
           if (process.env.NODE_ENV !== "production") {
             console.warn(
               `[online-orders] 接單 ${order.id} 成功，但廚房單建立失敗：`,
               bridgeErr instanceof Error ? bridgeErr.message : bridgeErr,
             );
           }
+          const errMsg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr);
           setToast({
             tone: "error",
-            message: "已接單（廚房單建立失敗，可稍後重打）。",
+            message: `已接單，但廚房單建立失敗：${errMsg}`,
           });
+          // 仍標 accepted（DB 已接），但 return false 令上層唔彈 success toast
           applyOrders(
             mergeLedgerOrders(ordersRef.current, [{ ...order, status: "accepted", updatedAt: new Date().toISOString() }]),
           );
-          return true;
+          return false;
         }
 
         applyOrders(
@@ -700,6 +755,9 @@ export function OnlineOrders({
                   {ledgerStatusLabel(order.status, order.fulfillmentType)}
                 </span>
               </div>
+              {rawLedgerStatus(order.status) === "accepted" ? (
+                <div className="mt-1 text-xs text-amber-600">此單已由外部接單，點擊「開始製作」送廚房</div>
+              ) : null}
               <div className="mt-3 text-sm text-slate-700">
                 {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
               </div>

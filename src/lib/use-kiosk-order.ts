@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
-import { loadBootstrapCache, saveBootstrapCache } from "@/lib/storage";
+import { mockBootstrap } from "@/lib/mock-data";
+import { loadBootstrapCache, loadPosLocalSettings, saveBootstrapCache } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
@@ -156,7 +156,9 @@ export function useKioskOrder() {
     () => binding?.storeName ?? scanStoreName ?? bootstrap.storeName,
     [binding, scanStoreName, bootstrap],
   );
-  const kitchenMode = defaultPosLocalSettings.kioskKitchenMode;
+  // 讀取用戶儲存嘅 kioskKitchenMode（舊 bug：硬讀 defaultPosLocalSettings = "auto"，
+  // 用戶改咗 dine_in_confirm 都唔生效）。
+  const kitchenMode = loadPosLocalSettings().kioskKitchenMode;
   const zoneNames = defaultZoneNames();
 
   // 初始化：讀 URL ?tableId= / ?store=、綁店、語言

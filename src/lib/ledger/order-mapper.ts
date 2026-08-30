@@ -146,6 +146,10 @@ export function ledgerStatusLabel(status: string, fulfillmentType: string): stri
   if (normalized === "ready") {
     return fulfillmentType === "takeaway" ? "待取餐" : "待交付";
   }
+  // 拆分 accepted vs preparing：舊寫法兩者都摺成「製作中」，
+  // 令收銀分唔清「已接單但未開始做」同「製作中」。
+  const raw = String(status).toLowerCase();
+  if (raw === "accepted") return "已接單";
   if (normalized === "preparing") return "製作中";
   return "新單";
 }

@@ -174,9 +174,11 @@ function buildPrintJobsForItems(options: {
     (printer) => printer.role === "zone" || printer.role === "label",
   );
   if (kitchenTargets.length === 0) {
-    if (options.items.length > 0 && process.env.NODE_ENV !== "production") {
-      console.warn(
-        `[ledger→pos] 訂單 ${options.orderNo} 接單成功，但未配任何已啟用嘅廚房/標籤打印機（zone/label role）→ 零 PrintJob 產生，廚房單靜默丟失。請去「設置 → 打印機綁定」添加廚房打印機。`,
+    if (options.items.length > 0) {
+      // 唔再靜默：生產環境也要讓上層 catch 到、顯示 toast。
+      // 舊寫法只 dev console.warn → 用戶零打印、零記錄、零提示，完全唔知點解。
+      throw new Error(
+        `未配任何已啟用嘅廚房/標籤打印機（zone/label role），無法產生廚房單。請去「設置 → 打印機綁定」添加廚房打印機。`,
       );
     }
     return [];
