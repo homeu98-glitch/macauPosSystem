@@ -14,7 +14,6 @@ type QuickLocalOrdersStripProps = {
   onViewOrder: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
-  onReturnPreparing: (orderId: string) => void;
 };
 
 function OrderCard({
@@ -26,7 +25,6 @@ function OrderCard({
   onViewOrder,
   onMarkReady,
   onMarkCompleted,
-  onReturnPreparing,
 }: {
   order: PosOrder;
   currency: string;
@@ -36,7 +34,6 @@ function OrderCard({
   onViewOrder: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
-  onReturnPreparing: (orderId: string) => void;
 }) {
   const completeText = completeLabel(order);
 
@@ -44,32 +41,32 @@ function OrderCard({
     <article className="w-[240px] shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          {/* 顯示位 ②：收銀台快餐單卡片（規格 7）。訂單號獨佔一行，來源標記移到第二行，避免 🖥️/📱 擋住號碼 */}
+          {/* 顯示位 ②：收銀台快餐單卡片（規格 7）。來源標記統一放到狀態藥丸下面、右對齊（規格 7 約定） */}
           <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1 truncate text-xs text-slate-500">
-            <span className="truncate">{order.tableName}</span>
-            <OrderSourceBadge order={order} />
-          </div>
+          <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
         </div>
-        <span
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
-            mode === "waiting" ? "bg-sky-50 text-sky-700" : "bg-amber-50 text-amber-700"
-          }`}
-        >
+        <div className="flex flex-col items-end gap-1.5">
           <span
-            className={`h-4 w-4 rounded-full ${
-              mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
+              mode === "waiting" ? "bg-sky-50 text-sky-700" : "bg-amber-50 text-amber-700"
             }`}
-          />
-          {mode === "waiting" ? completionLabel(order) : "製作中"}
-        </span>
+          >
+            <span
+              className={`h-4 w-4 rounded-full ${
+                mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
+              }`}
+            />
+            {mode === "waiting" ? completionLabel(order) : "製作中"}
+          </span>
+          <OrderSourceBadge order={order} />
+        </div>
       </div>
       <div className="mt-2 text-xs text-slate-600">{formatMoney(order.total, currency)}</div>
       <div className="mt-1 truncate text-xs text-slate-500">
         {order.items.slice(0, 2).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
         {order.items.length > 2 ? " · …" : ""}
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
+      <div className="mt-3 flex flex-nowrap gap-1.5">
         <button
           className="rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
           onClick={() => onViewOrder(order.id)}
@@ -90,22 +87,13 @@ function OrderCard({
           </button>
         ) : null}
         {mode === "waiting" ? (
-          <>
-            <button
-              className="rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
-              onClick={() => onMarkCompleted(order.id, completeText)}
-              type="button"
-            >
-              {completeText}
-            </button>
-            <button
-              className="rounded-xl bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200"
-              onClick={() => onReturnPreparing(order.id)}
-              type="button"
-            >
-              返回製作
-            </button>
-          </>
+          <button
+            className="rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+            onClick={() => onMarkCompleted(order.id, completeText)}
+            type="button"
+          >
+            {completeText}
+          </button>
         ) : null}
       </div>
     </article>
@@ -121,7 +109,6 @@ export function QuickLocalOrdersStrip({
   onViewOrder,
   onMarkReady,
   onMarkCompleted,
-  onReturnPreparing,
 }: QuickLocalOrdersStripProps) {
   const hasOrders = preparingOrders.length > 0 || waitingOrders.length > 0;
 
@@ -144,7 +131,6 @@ export function QuickLocalOrdersStrip({
           mode="preparing"
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
-          onReturnPreparing={onReturnPreparing}
           onViewOrder={onViewOrder}
           order={order}
         />
@@ -158,7 +144,6 @@ export function QuickLocalOrdersStrip({
           mode="waiting"
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
-          onReturnPreparing={onReturnPreparing}
           onViewOrder={onViewOrder}
           order={order}
         />

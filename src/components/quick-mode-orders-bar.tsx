@@ -16,7 +16,6 @@ type QuickModeOrdersBarProps = {
   onViewOrder: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
-  onReturnPreparing: (orderId: string) => void;
 };
 
 export function QuickModeOrdersBar({
@@ -31,7 +30,6 @@ export function QuickModeOrdersBar({
   onViewOrder,
   onMarkReady,
   onMarkCompleted,
-  onReturnPreparing,
 }: QuickModeOrdersBarProps) {
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
@@ -74,7 +72,6 @@ export function QuickModeOrdersBar({
             currency={currency}
             onMarkCompleted={onMarkCompleted}
             onMarkReady={onMarkReady}
-            onReturnPreparing={onReturnPreparing}
             onViewOrder={onViewOrder}
             preparingOrders={preparingOrders}
             waitingOrders={waitingOrders}

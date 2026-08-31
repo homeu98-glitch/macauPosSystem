@@ -1716,7 +1716,7 @@ export function PosApp() {
     });
   }
 
-  function updateQuickFulfillment(orderId: string, nextStatus: "preparing" | "ready") {
+  function updateQuickFulfillment(orderId: string) {
     const target = orders.find((order) => order.id === orderId) ?? null;
     if (!target) return;
     // docs/87 §6.3：放寬閘門，容許 sent_to_kitchen（自助單先出餐後付款）標記 ready
@@ -1725,8 +1725,8 @@ export function PosApp() {
     const updatedAt = new Date().toISOString();
     const updatedOrder: PosOrder = {
       ...target,
-      fulfillmentStatus: nextStatus,
-      servedAt: nextStatus === "ready" ? (target.servedAt ?? updatedAt) : target.servedAt,
+      fulfillmentStatus: "ready",
+      servedAt: target.servedAt ?? updatedAt,
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === updatedOrder.id ? updatedOrder : order)));
@@ -1737,7 +1737,7 @@ export function PosApp() {
         entityId: updatedOrder.id,
         payload: {
           order: updatedOrder,
-          action: nextStatus === "ready" ? "ready_pickup" : "back_to_preparing",
+          action: "ready_pickup",
         },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedAt,
@@ -1745,7 +1745,7 @@ export function PosApp() {
     ]);
     setToast({
       tone: "success",
-      message: nextStatus === "ready" ? `${updatedOrder.localOrderNo} 已標記可取餐。` : `${updatedOrder.localOrderNo} 已返回製作中。`,
+      message: `${updatedOrder.localOrderNo} 已標記可取餐。`,
     });
   }
 
@@ -3179,16 +3179,20 @@ export function PosApp() {
                     <div className="mt-3 space-y-2">
                       {counterKioskOrders.map((order) => (
                         <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-slate-900">{order.localOrderNo}</span>
-                            <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-700">
-                              <span className="h-4 w-4 rounded-full bg-orange-500" />
-                              {localOrderStatusLabel(order)}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                              <div className="mt-0.5 truncate text-xs text-slate-500">
+                                {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件
+                              </div>
                             </div>
-                          </div>
-                          <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
-                            <span>{order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件</span>
-                            <OrderSourceBadge order={order} />
+                            <div className="flex flex-col items-end gap-1.5">
+                              <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-700">
+                                <span className="h-4 w-4 rounded-full bg-orange-500" />
+                                {localOrderStatusLabel(order)}
+                              </div>
+                              <OrderSourceBadge order={order} />
+                            </div>
                           </div>
                           <div className="mt-2 flex gap-2">
                             <button
@@ -3237,7 +3241,7 @@ export function PosApp() {
                                 order.fulfillmentStatus !== "ready" ? (
                                   <button
                                     className="flex-1 rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
-                                    onClick={() => updateQuickFulfillment(order.id, "ready")}
+                                    onClick={() => updateQuickFulfillment(order.id)}
                                     type="button"
                                   >
                                     標記可取
@@ -3929,11 +3933,10 @@ export function PosApp() {
               });
             }}
             onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
-            onMarkReady={(orderId) => updateQuickFulfillment(orderId, "ready")}
+            onMarkReady={(orderId) => updateQuickFulfillment(orderId)}
             onOnlineToast={(payload) =>
               setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
             }
-            onReturnPreparing={(orderId) => updateQuickFulfillment(orderId, "preparing")}
             onViewOrder={(orderId) => setViewingOrderId(orderId)}
             preparingOrders={quickPreparingOrders}
             waitingOrders={quickWaitingOrders}

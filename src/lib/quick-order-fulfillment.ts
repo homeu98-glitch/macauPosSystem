@@ -24,10 +24,7 @@ function persistOrderUpdate(nextOrders: PosOrder[], event: QueueEvent) {
   saveQueue([event, ...queue]);
 }
 
-export function updateQuickFulfillmentInStore(
-  orderId: string,
-  nextStatus: "preparing" | "ready",
-): PosOrder | null {
+export function updateQuickFulfillmentInStore(orderId: string): PosOrder | null {
   const orders = loadOrders();
   const target = orders.find((order) => order.id === orderId) ?? null;
   // docs/87 §6.3：放寬閘門，容許「先出餐後付款」——自助點餐單可能係 sent_to_kitchen 就標記 ready
@@ -35,13 +32,13 @@ export function updateQuickFulfillmentInStore(
   if (!target || target.tableId !== "counter" || !allowedStatuses.has(target.status)) return null;
 
   const updatedAt = new Date().toISOString();
-  const updatedOrder: PosOrder = { ...target, fulfillmentStatus: nextStatus, updatedAt };
+  const updatedOrder: PosOrder = { ...target, fulfillmentStatus: "ready", updatedAt };
   const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
   persistOrderUpdate(nextOrders, {
     id: uid("evt"),
     type: "ORDER_UPDATED",
     entityId: updatedOrder.id,
-    payload: { order: updatedOrder, action: nextStatus === "ready" ? "ready" : "preparing" },
+    payload: { order: updatedOrder, action: "ready" },
     status: readNetworkOnline() ? "synced" : "pending",
     createdAt: updatedAt,
   });

@@ -78,7 +78,7 @@ function QuickOrderActions({
       <button
         className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
         onClick={() => {
-          updateQuickFulfillmentInStore(order.id, "ready");
+          updateQuickFulfillmentInStore(order.id);
           onChanged();
         }}
         type="button"
@@ -90,28 +90,16 @@ function QuickOrderActions({
 
   if (order.status === "paid" && order.fulfillmentStatus === "ready") {
     return (
-      <div className="flex flex-wrap gap-1.5">
-        <button
-          className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
-          onClick={() => {
-            markQuickOrderCompletedInStore(order.id, { label: completeText });
-            onChanged();
-          }}
-          type="button"
-        >
-          {completeText}
-        </button>
-        <button
-          className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
-          onClick={() => {
-            updateQuickFulfillmentInStore(order.id, "preparing");
-            onChanged();
-          }}
-          type="button"
-        >
-          返回製作
-        </button>
-      </div>
+      <button
+        className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
+        onClick={() => {
+          markQuickOrderCompletedInStore(order.id, { label: completeText });
+          onChanged();
+        }}
+        type="button"
+      >
+        {completeText}
+      </button>
     );
   }
 
@@ -284,37 +272,37 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    {/* 顯示位 ①：訂單頁（規格 7）。訂單號獨佔一行，來源標記移到第二行，避免 🖥️/📱 擋住號碼 */}
+                    {/* 顯示位 ①：訂單頁（規格 7）。來源標記統一放到狀態藥丸下面、右對齊（規格 7 約定） */}
                     <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
-                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-xs text-slate-500">
-                      <span className="truncate">{order.tableName}</span>
-                      <OrderSourceBadge order={order} />
-                    </div>
+                    <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
                     <div className="mt-1 text-xs text-slate-400">
                       {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
                     </div>
                   </div>
-                  <span
-                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
-                      (() => {
-                        const b = getOrderStatusBadge(order);
-                        return `${b.bgClass} ${b.textClass}`;
-                      })()
-                    }`}
-                  >
+                  <div className="flex flex-col items-end gap-1.5">
                     <span
-                      className={`h-4 w-4 rounded-full ${
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
                         (() => {
                           const b = getOrderStatusBadge(order);
-                          return b.dotClass;
+                          return `${b.bgClass} ${b.textClass}`;
                         })()
                       }`}
-                    />
-                    {(() => {
-                      const b = getOrderStatusBadge(order);
-                      return b.label;
-                    })()}
-                  </span>
+                    >
+                      <span
+                        className={`h-4 w-4 rounded-full ${
+                          (() => {
+                            const b = getOrderStatusBadge(order);
+                            return b.dotClass;
+                          })()
+                        }`}
+                      />
+                      {(() => {
+                        const b = getOrderStatusBadge(order);
+                        return b.label;
+                      })()}
+                    </span>
+                    <OrderSourceBadge order={order} />
+                  </div>
                 </div>
                 <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total, currency)}</div>
                 <div className="mt-1 truncate text-xs text-slate-500">
