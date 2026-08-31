@@ -1,4 +1,5 @@
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
+import { unitBasePrice } from "@/lib/escpos-render";
 import {
   EscPosBlockStyle,
   EscPosItemsLayout,
@@ -21,6 +22,9 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "order_time", label: "下單時間" },
   { id: "checkout_time", label: "結帳時間" },
   { id: "items", label: "菜品明細" },
+  { id: "subtotal_before_discount", label: "原價合計" },
+  { id: "rounding_amount", label: "系統抹零" },
+  { id: "discount_amount", label: "優惠合計" },
   { id: "total", label: "總計" },
   { id: "payment_method", label: "付款方式" },
   { id: "order_note", label: "全單備註" },
@@ -72,6 +76,9 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   order_time: block(true, "s", false, "left"),
   checkout_time: block(false, "s", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
+  subtotal_before_discount: block(true, "s", false, "right"),
+  rounding_amount: block(false, "s", false, "right"),
+  discount_amount: block(false, "s", false, "right"),
   total: block(true, "l", true, "right"),
   payment_method: block(true, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
@@ -107,7 +114,7 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
 
 export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
   blocks: { ...RECEIPT_BLOCK_DEFAULTS },
-  order: ["store_name", "order_no", "table_name", "order_time", "checkout_time", "items", "total", "payment_method", "order_note", "footer"],
+  order: ["store_name", "order_no", "table_name", "order_time", "checkout_time", "items", "subtotal_before_discount", "rounding_amount", "discount_amount", "total", "payment_method", "order_note", "footer"],
   footerText: "多謝惠顧，歡迎再次光臨",
 };
 
@@ -201,11 +208,36 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     table_name: order.tableName,
     order_time: order.createdAt ? `下單時間: ${formatMacauDateTime(order.createdAt)}` : "",
     checkout_time: checkoutTimeLabelWithPrefix(order),
+    subtotal_before_discount: `原價合計: ${formatMoney(computeSubtotalBeforeDiscount(order), opts.currency)}`,
+    rounding_amount: (order.roundingAmount ?? 0) > 0 ? `系統抹零: ${formatMoney(-(order.roundingAmount ?? 0), opts.currency)}` : "",
+    discount_amount: computeTotalDiscount(order) > 0 ? `優惠合計: ${formatMoney(-computeTotalDiscount(order), opts.currency)}` : "",
     total: `總金額: ${formatMoney(order.total, opts.currency)}`,
     payment_method: order.paymentMethod ?? "現金",
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
   };
+}
+
+/**
+ * 原價合計：Σ (unitBasePrice(it) × quantity)，未扣任何折扣（全單 / 單品都未計）。
+ * 唔用 `order.subtotal`（pos-app.tsx 入面 subtotal 已經係 post-單品折扣值），
+ * 收據「原價合計」要係 100% 原價先啱。見 docs/88 §4.3。
+ */
+export function computeSubtotalBeforeDiscount(order: PosOrder): number {
+  return order.items.reduce((sum, it) => sum + unitBasePrice(it) * it.quantity, 0);
+}
+
+/**
+ * 優惠合計：全單折扣（PosOrder.discountAmount = §19「減多少」）＋ 各單品折扣 savings。
+ * 單品折扣率 80 = 收 80 元 / 原價 100 → savings = 原價 × 20%。見 docs/88 §3.3 / §4.3。
+ */
+export function computeTotalDiscount(order: PosOrder): number {
+  const orderDiscount = order.discountAmount ?? 0;
+  const itemDiscount = order.items.reduce((sum, it) => {
+    const rate = it.discountRate ?? 0;
+    return sum + (rate > 0 ? unitBasePrice(it) * it.quantity * rate / 100 : 0);
+  }, 0);
+  return orderDiscount + itemDiscount;
 }
 
 /**

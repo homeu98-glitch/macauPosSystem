@@ -20,6 +20,17 @@ export type LedgerOrderRow = {
   merchant_id?: string | null;
   change_request_type?: string | null;
   change_request_status?: string | null;
+  /**
+   * 折扣欄位（defensive）：Ledger 後端未必有呢啲 key，但我哋先喺 type 預埋，
+   * 等 Ledger 加咗對應 SQL view / column 時即刻可顯示。RPC 可能嘅常見命名：
+   * `discount_avos` / `coupon_avos` / `promotion_avos` —— 任何一個有值都攞嚟做訂單折扣。
+   * 詳見 docs/折扣 v2 §Ledger integration（TODO: 確認 Ledger schema 後可收窄）。
+   */
+  discount_avos?: number | null;
+  coupon_avos?: number | null;
+  promotion_avos?: number | null;
+  /** 折扣前原價（list 顯示用，可選） */
+  subtotal_avos?: number | null;
 };
 
 export type LedgerOrderTab = "all" | "dine_in" | "pickup" | "self_delivery";
@@ -33,6 +44,10 @@ export type LedgerOnlineOrder = {
   customerName?: string;
   phone?: string;
   total: number;
+  /** 全單折扣金額（money，MOP）。null/0 = 冇折扣。從 Ledger `discount_avos` 等欄位攞。 */
+  discountAmount?: number;
+  /** 折扣前原價小計（money，MOP）。null = 未知。 */
+  subtotalBeforeDiscount?: number;
   createdAt?: string;
   updatedAt?: string;
   fulfillmentType: string;
@@ -68,16 +83,29 @@ export function mapLedgerOrderRow(row: LedgerOrderRow): LedgerOnlineOrder {
   const fulfillmentType = String(row.fulfillment_type ?? "takeaway");
   const tabType = mapFulfillmentToTab(fulfillmentType);
   const itemCount = Number(row.item_count ?? 0);
+  const total = avosToMop(row.total_avos);
+  // 折扣讀取（defensive）：三個可能欄位都試，加總（如果 Ledger 同時設多個唔合理但安全）。
+  const discountAvos = [row.discount_avos, row.coupon_avos, row.promotion_avos]
+    .reduce<number>((sum, v) => sum + (Number.isFinite(Number(v)) && Number(v) != null ? Number(v) : 0), 0);
+  const discountAmount = discountAvos > 0 ? Math.round(discountAvos) / 100 : undefined;
+  // subtotal（折扣前）= total + discount；如果 Ledger 提供 subtotal_avos 就用佢。
+  const subtotalBeforeDiscount = row.subtotal_avos != null
+    ? Math.round(Number(row.subtotal_avos)) / 100
+    : discountAmount != null
+      ? Math.round((total + discountAmount) * 100) / 100
+      : undefined;
 
   return {
     id: row.id,
     status: row.status,
     paymentStatus: row.payment_status === "paid" ? "paid" : "unpaid",
     paymentMode: row.payment_mode ?? undefined,
-    paidAmount: avosToMop(row.total_avos),
+    paidAmount: total,
     customerName: row.customer_display_name ?? undefined,
     phone: row.customer_phone ?? undefined,
-    total: avosToMop(row.total_avos),
+    total,
+    discountAmount,
+    subtotalBeforeDiscount,
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
     fulfillmentType,

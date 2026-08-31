@@ -33,6 +33,28 @@ export function itemDiscountSaving(item: Pick<OrderItem, "price" | "quantity" | 
   return roundMoney(original - discountedItemTotal(item));
 }
 
+/**
+ * 訂單所有單品折扣總和（money）。摺入全單小計後再做稅／服務費 / 全單折扣，
+ * 所以呢個值係「原本單品原價小計 - 摺咗單品折扣嘅 subtotal」嘅差。
+ *
+ * 用於顯示「優惠 XXX（單品折扣）」呢行，比 `order.discountAmount` 更精準——
+ * 後者只反映全單折扣；單品折扣已內含喺 subtotal / total 內，唔會重複計算。
+ */
+export function orderItemDiscountTotal(items: OrderItem[]): number {
+  return roundMoney(items.reduce((sum, item) => sum + itemDiscountSaving(item), 0));
+}
+
+/**
+ * 訂單總折扣 = 單品折扣 + 全單折扣 money 金額。
+ * 用於顯示「折扣 XXX」一行嘅總和（用戶需求：查看內要見到折扣多少、優惠多少）。
+ */
+export function orderTotalDiscount(
+  items: OrderItem[],
+  wholeOrderDiscountAmount: number,
+): number {
+  return roundMoney(orderItemDiscountTotal(items) + Math.max(0, wholeOrderDiscountAmount ?? 0));
+}
+
 /** 由折扣預設 id 搵返 preset；搵唔到返 undefined（表示「冇折扣」）。 */
 export function findDiscountPreset(discounts: DiscountPreset[], id: string | null | undefined): DiscountPreset | undefined {
   if (!id) return undefined;

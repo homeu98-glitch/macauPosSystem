@@ -9,6 +9,7 @@ import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
 import { OrderSourceBadge } from "@/components/order-source-badge";
+import { OrderDiscountRow } from "@/components/order-discount-display";
 import {
   dateFilterLabel,
   LedgerOrderDateFilter,
@@ -41,6 +42,7 @@ import {
 } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
+import { orderItemDiscountTotal } from "@/lib/pos/discount";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -306,6 +308,23 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   </div>
                 </div>
                 <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total, currency)}</div>
+                {(() => {
+                  // 折扣指示：原價（line-through）+ 折後價（amber）+ 折扣分項
+                  const itemSaving = orderItemDiscountTotal(order.items);
+                  const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+                  if (itemSaving + wholeSaving <= 0) return null;
+                  const original = Math.round((order.total + itemSaving + wholeSaving) * 100) / 100;
+                  return (
+                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-xs font-semibold text-amber-700 tabular-nums">
+                        已優惠 -{formatMoney(itemSaving + wholeSaving, currency)}
+                      </span>
+                      <span className="text-[11px] tabular-nums text-slate-400 line-through">
+                        原 {formatMoney(original, currency)}
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div className="mt-1 truncate text-xs text-slate-500">
                   {order.items
                     .slice(0, 3)
@@ -405,12 +424,22 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               </div>
             ) : null}
             {viewingOrder.orderNote ? <div>備註：{viewingOrder.orderNote}</div> : null}
-            {viewingOrder.items.map((item) => (
-              <div key={`${item.menuItemId}-${item.name}`} className="flex justify-between gap-2">
-                <span>{item.name}</span>
-                <span className="font-semibold">×{item.quantity}</span>
-              </div>
-            ))}
+            {viewingOrder.items.map((item) => {
+              const itemHasDiscount = item.discountRate != null && Number.isFinite(item.discountRate) && item.discountRate < 100;
+              return (
+                <div key={`${item.menuItemId}-${item.name}`} className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span>
+                    {item.name}
+                    {itemHasDiscount ? (
+                      <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                        {item.discountRate}% off
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="font-semibold tabular-nums">×{item.quantity}</span>
+                </div>
+              );
+            })}
             {(viewingOrder.voidedItems ?? []).map((item, idx) => (
               <div key={`voided-${item.menuItemId}-${idx}`} className="flex justify-between gap-2 text-red-600 line-through">
                 <span>
@@ -420,6 +449,13 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                 <span className="font-semibold">×{item.quantity}</span>
               </div>
             ))}
+            {/* 折扣分項（用戶要求所有訂單明細位都要見到） */}
+            <OrderDiscountRow
+              currency={currency}
+              items={viewingOrder.items}
+              variant="compact"
+              wholeOrderDiscountAmount={viewingOrder.discountAmount}
+            />
             <div className="mt-2 flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
               <span>總計</span>
               <span>{formatMoney(viewingOrder.total, currency)}</span>

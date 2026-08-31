@@ -121,6 +121,15 @@ function mapDetailToOrderItems(
   const items = detail.items.map((item) => {
     const menu = resolveMenuItem(item, bootstrap, lookup);
     if (!menu) unmatched.push(item.name);
+    // 單品折扣：優先用 discountRate（百分比）；冇就用 discountAvos（金額）除返原價算 rate。
+    let discountRate: number | undefined = item.discountRate;
+    if (discountRate == null && item.discountAvos != null && item.discountAvos > 0) {
+      const unitOriginal = item.unitPrice ?? menu?.price ?? 0;
+      if (unitOriginal > 0) {
+        const savingPerUnit = item.discountAvos / 100 / item.qty;
+        discountRate = Math.round(((1 - savingPerUnit / unitOriginal) * 100) * 100) / 100;
+      }
+    }
     return {
       menuItemId: menu?.id ?? item.menuItemId ?? `ext-${item.name}`,
       name: item.name,
@@ -128,6 +137,7 @@ function mapDetailToOrderItems(
       price: item.unitPrice ?? menu?.price ?? 0,
       printerGroup: menu?.printerGroup ?? "kitchen",
       note: item.note,
+      ...(discountRate != null && discountRate > 0 && discountRate < 100 ? { discountRate } : {}),
     };
   });
 
@@ -331,7 +341,12 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
     subtotal,
     taxAmount,
     serviceChargeAmount,
-    discountAmount: 0,
+    // 訂單層全單折扣（defensive 從 Ledger 攞）：優先 detail.discountAvos，
+    // 退而求其次用 options.ledgerOrder.discountAmount（list view 已經 map 好）。
+    discountAmount:
+      (detail.discountAvos != null ? detail.discountAvos / 100 : 0) ||
+      options.ledgerOrder.discountAmount ||
+      0,
     total: detail.total ?? options.ledgerOrder.total,
     prepaidAmount: options.ledgerOrder.paymentStatus === "paid" ? options.ledgerOrder.total : 0,
     onlineOrderId: options.ledgerOrder.id,

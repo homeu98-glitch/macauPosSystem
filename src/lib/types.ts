@@ -246,6 +246,9 @@ export type ReceiptSectionId =
   | "order_time"
   | "checkout_time"
   | "items"
+  | "subtotal_before_discount"
+  | "rounding_amount"
+  | "discount_amount"
   | "total"
   | "payment_method"
   | "order_note"
@@ -409,6 +412,22 @@ export interface PosOrder {
   taxAmount: number;
   serviceChargeAmount: number;
   discountAmount: number;
+  /**
+   * 系統抹零（金額，例如 0.4）。total = subtotal - discount - rounding。
+   * 收據「系統抹零」區段負值顯示；舊單（schema 升級前）冇呢個 field → 收據自動 hidden。
+   * 見 docs/88。
+   */
+  roundingAmount?: number;
+  /**
+   * 顧客實際畀嘅現金（預設 = total）。結帳頁「顧客付現金」input 寫入。
+   * 見 docs/88 §5.2。
+   */
+  cashTendered?: number;
+  /**
+   * 找零 = max(0, cashTendered - total)。結帳頁自動計、寫入。
+   * 見 docs/88 §5.2。
+   */
+  changeAmount?: number;
   total: number;
   prepaidAmount?: number;
   onlineOrderId?: string;

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { OrderDiscountRow } from "@/components/order-discount-display";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
 import {
@@ -824,6 +825,18 @@ export function OnlineOrders({
                 ) : null}
               </div>
               <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
+              {order.discountAmount && order.discountAmount > 0 ? (
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-xs font-semibold text-amber-700 tabular-nums">
+                    已優惠 -{formatMoney(order.discountAmount)}
+                  </span>
+                  {order.subtotalBeforeDiscount != null ? (
+                    <span className="text-[11px] tabular-nums text-slate-400 line-through">
+                      原 {formatMoney(order.subtotalBeforeDiscount)}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               {changeRequestLabel(order) ? (
                 <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
                   {changeRequestLabel(order)}
@@ -948,18 +961,40 @@ export function OnlineOrders({
             <div className="mt-3 grid gap-2">
               {detailLoading ? <div className="text-sm text-slate-500">正在載入明細…</div> : null}
               {!detailLoading && detailItems?.length
-                ? detailItems.map((item) => (
-                    <div key={`${item.name}-${item.qty}`} className="flex items-center justify-between text-sm text-slate-700">
-                      <span>{item.name}</span>
-                      <span className="font-semibold">x{item.qty}</span>
-                    </div>
-                  ))
+                ? detailItems.map((item) => {
+                    const itemHasDiscount =
+                      item.discountRate != null ||
+                      (item.discountAvos != null && item.discountAvos > 0);
+                    return (
+                      <div
+                        key={`${item.name}-${item.qty}`}
+                        className="flex flex-wrap items-baseline justify-between gap-2 text-sm text-slate-700"
+                      >
+                        <span>
+                          {item.name}
+                          {itemHasDiscount ? (
+                            <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                              {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="font-semibold tabular-nums">x{item.qty}</span>
+                      </div>
+                    );
+                  })
                 : null}
               {!detailLoading && !detailItems?.length ? (
                 <div className="text-sm text-slate-500">{viewingOrder.itemSummary ?? "--"}</div>
               ) : null}
             </div>
-            <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+            {/* 折扣分項（用戶要求所有訂單明細位都要見到「折扣多少、優惠多少」） */}
+            {viewingOrder.discountAmount && viewingOrder.discountAmount > 0 ? (
+              <div className="mt-3 flex items-center justify-between text-sm text-emerald-700">
+                <span className="font-semibold">折扣</span>
+                <span className="font-semibold tabular-nums">-{formatMoney(viewingOrder.discountAmount)}</span>
+              </div>
+            ) : null}
+            <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
               <span>總計</span>
               <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total)}</span>
             </div>

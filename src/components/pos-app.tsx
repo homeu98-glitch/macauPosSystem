@@ -11,6 +11,7 @@ import { ItemSpecModal } from "@/components/item-spec-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { NumericKeypad } from "@/components/numeric-keypad";
 import { OrderSourceBadge } from "@/components/order-source-badge";
+import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
@@ -32,7 +33,7 @@ import {
   buildVoidPrintJobsForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
-import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset } from "@/lib/pos/discount";
+import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset, orderItemDiscountTotal } from "@/lib/pos/discount";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -229,6 +230,8 @@ export function PosApp() {
   // 單品折扣彈窗內暫選嘅 preset id。
   const [itemDiscountDraft, setItemDiscountDraft] = useState("");
   const [receivedAmount, setReceivedAmount] = useState("");
+  // 系統抹零（結帳頁 input，寫 PosOrder.roundingAmount；見 docs/88 §5.1）。空 = 0。
+  const [roundingInput, setRoundingInput] = useState("");
   const [posMode, setPosMode] = useState<"tables" | "order">(() => (loadOperatingMode() === "quick" ? "order" : "tables"));
 
   // ── 自動配對桌面 Companion：mount 嗰陣 ran 一次，唔使用家手動填 URL（見 auto-pair-companion.ts）──
@@ -1151,9 +1154,11 @@ export function PosApp() {
   };
   const changeDue = useMemo(() => {
     const received = Number(receivedAmount);
+    const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
+    const due = Math.max(0, paymentSummary.total - rounding);
     if (!Number.isFinite(received) || received <= 0) return 0;
-    return Math.max(0, received - paymentSummary.total);
-  }, [receivedAmount, paymentSummary.total]);
+    return Math.max(0, received - due);
+  }, [receivedAmount, roundingInput, paymentSummary.total]);
   const selectedTableStatus = activeTableId ? tableOrderMap.get(activeTableId)?.status ?? "idle" : "idle";
   const isAddOnOrder = activeOrder?.status === "sent_to_kitchen";
   const orderedItemQtyMap = (() => {
@@ -1224,6 +1229,7 @@ export function PosApp() {
       matchDiscountId(localSettings.discounts, order?.total ?? 0, order?.discountAmount ?? 0),
     );
     setReceivedAmount("");
+    setRoundingInput("");
     setVoidedItems(order?.voidedItems ?? []);
     setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
     setOrderNote(order?.orderNote ?? "");
@@ -1372,6 +1378,7 @@ export function PosApp() {
     setSelectedItemId("");
     setDiscountValue("0");
     setReceivedAmount("");
+    setRoundingInput("");
     setPayingOrderId(null);
     setActiveOrderId(null);
     setBaseOrderItems([]);
@@ -2232,6 +2239,7 @@ export function PosApp() {
       setActiveOrderId(order.id);
       // discountValue（全單折扣 preset id）已經反映喺 order.discountAmount，唔使重設。
       setReceivedAmount("");
+    setRoundingInput("");
       setBaseOrderItems(order.items);
       setOrderSuccessFlash(true);
       if (!options?.silent) {
@@ -2309,6 +2317,7 @@ export function PosApp() {
       setOrderNote("");
       setDiscountValue("0");
       setReceivedAmount("");
+    setRoundingInput("");
     }
     setViewingOrderId(null);
     setOrderActionRequest(null);
@@ -2346,6 +2355,7 @@ export function PosApp() {
       setOrderNote("");
       setDiscountValue("0");
       setReceivedAmount("");
+    setRoundingInput("");
     }
     setViewingOrderId(null);
     setToast({ tone: "success", message: `${targetOrder.localOrderNo} 已刪除。` });
@@ -2609,7 +2619,9 @@ export function PosApp() {
 
     const applyPaymentToOrder = (targetOrder: PosOrder) => {
       const now = new Date().toISOString();
-      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
+      // 系統抹零（docs/88 §5.1）：total = base - discount - rounding。roundingInput 空 = 0。
+      const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
+      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - rounding);
       const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
       const hasGrantRedeem = selectedGrantIds.length > 0;
       // 返結 temp 枱重結：還原原枱並清掉 temp 標記
@@ -2633,6 +2645,11 @@ export function PosApp() {
               ? `會員券 + ${method}`
               : method,
         discountAmount,
+        // 系統抹零（docs/88 §5.1）：由結帳頁 input 寫入；total = subtotal - discount - rounding。
+        roundingAmount: rounding,
+        // 顧客付現金 + 找零（docs/88 §5.2）：receivedAmount 為空時當 = total（冇找零）。
+        cashTendered: receivedAmount ? Math.max(rounding, round2(Number(receivedAmount) || 0)) : settledGrandTotal,
+        changeAmount: changeDue,
         total: settledGrandTotal,
         // ── 會員扣款快照：供返結反向回滾；無會員扣款則清掉 ──
         ledgerMemberPhone:
@@ -2697,6 +2714,8 @@ export function PosApp() {
       setCartItems([]);
       setDiscountValue("0");
       setReceivedAmount("");
+    setRoundingInput("");
+      setRoundingInput("");
       setSelectedItemId("");
       setBaseOrderItems([]);
       resetMemberCheckoutState();
@@ -2807,6 +2826,10 @@ export function PosApp() {
       status: quickPaidFlow ? "paid" : "settled",
       paymentMethod: "線上已支付",
       discountAmount,
+      // 線上支付無現金／抹零，三個欄位留 0（收據 block 自動 hidden）。
+      roundingAmount: 0,
+      cashTendered: 0,
+      changeAmount: 0,
       total: settledGrandTotal,
       updatedAt: new Date().toISOString(),
     };
@@ -3099,8 +3122,50 @@ export function PosApp() {
                               <div className="mt-0.5 truncate text-xs text-slate-500">
                                 {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件
                               </div>
+                              {(() => {
+                                const itemSaving = orderItemDiscountTotal(order.items);
+                                const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+                                if (itemSaving + wholeSaving <= 0) return null;
+                                return (
+                                  <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-[11px]">
+                                    {itemSaving > 0 ? (
+                                      <span className="font-semibold text-emerald-700">
+                                        單品 -{formatMoney(itemSaving, bootstrap.currency)}
+                                      </span>
+                                    ) : null}
+                                    {wholeSaving > 0 ? (
+                                      <span className="font-semibold text-emerald-700">
+                                        全單 -{formatMoney(wholeSaving, bootstrap.currency)}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                );
+                              })()}
                             </div>
                             <div className="flex flex-col items-end gap-1.5">
+                              {(() => {
+                                const itemSaving = orderItemDiscountTotal(order.items);
+                                const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+                                const totalSaving = itemSaving + wholeSaving;
+                                if (totalSaving <= 0) {
+                                  return (
+                                    <div className="text-sm font-bold tabular-nums text-slate-900">
+                                      {formatMoney(order.total, bootstrap.currency)}
+                                    </div>
+                                  );
+                                }
+                                const original = Math.round((order.total + totalSaving) * 100) / 100;
+                                return (
+                                  <>
+                                    <div className="text-sm font-bold tabular-nums text-amber-700">
+                                      {formatMoney(order.total, bootstrap.currency)}
+                                    </div>
+                                    <div className="text-[10px] tabular-nums text-slate-400 line-through">
+                                      {formatMoney(original, bootstrap.currency)}
+                                    </div>
+                                  </>
+                                );
+                              })()}
                               <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-700">
                                 <span className="h-4 w-4 rounded-full bg-orange-500" />
                                 {localOrderStatusLabel(order)}
@@ -3694,13 +3759,20 @@ export function PosApp() {
                   </span>
                 </div>
                 <div className="mt-4 border-t border-slate-200 pt-4">
-                  <div className="mb-3 flex items-center justify-between text-sm text-slate-500">
-                    <span>折扣</span>
-                    <span className="font-semibold text-slate-900">
-                      {formatMoney(paymentSummary.discountAmount, bootstrap.currency)}
-                    </span>
-                  </div>
-                  <div className="text-xs font-semibold text-slate-500">應收</div>
+                  {/* 折扣分項：單品折扣 + 全單折扣（用戶要求所有訂單明細位都要見到） */}
+                  <OrderDiscountRow
+                    currency={bootstrap.currency}
+                    items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
+                    wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                  />
+                  {(!orderItemDiscountTotal(currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems) &&
+                    !(paymentSummary.discountAmount > 0)) ? (
+                    <div className="mb-3 flex items-center justify-between text-sm text-slate-500">
+                      <span>折扣</span>
+                      <span className="font-semibold text-slate-900">-{formatMoney(0, bootstrap.currency)}</span>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 text-xs font-semibold text-slate-500">應收</div>
                   <div className="mt-2 text-3xl font-semibold tracking-tight text-orange-600">
                     {formatMoney(paymentSummary.total, bootstrap.currency)}
                   </div>
@@ -4331,7 +4403,7 @@ export function PosApp() {
               {viewingOrder.items.map((item, index) => (
                 <div key={`${item.menuItemId}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
                       {item.selectedSpecs?.length ? (
                         <div className="mt-1 text-xs text-slate-500">
@@ -4342,8 +4414,17 @@ export function PosApp() {
                       {item.note ? (
                         <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">備註：{item.note}</div>
                       ) : null}
+                      {/* 單品折扣：原價刪除線 + 折後價 + 優惠金額（用戶要求查看內見到「折扣多少」） */}
+                      <div className="mt-1">
+                        <OrderItemDiscountLine currency={bootstrap.currency} item={item} />
+                      </div>
                     </div>
-                    <div className="shrink-0 text-sm font-semibold text-slate-900">x{item.quantity}</div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
+                      <div className="mt-0.5 text-xs tabular-nums text-slate-500">
+                        {formatMoney(item.price * item.quantity, bootstrap.currency)}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -4378,7 +4459,13 @@ export function PosApp() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="flex items-center justify-between text-sm text-slate-500">
+              {/* 全單折扣分項（單品折扣 + 全單折扣）— 用戶要求查看內見到「優惠多少」 */}
+              <OrderDiscountRow
+                currency={bootstrap.currency}
+                items={viewingOrder.items}
+                wholeOrderDiscountAmount={viewingOrder.discountAmount}
+              />
+              <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
                 <span>總計</span>
                 <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>
               </div>
@@ -4529,12 +4616,13 @@ export function PosApp() {
                       {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-500">折扣</span>
-                    <span className="font-semibold text-slate-900">
-                      {formatMoney(paymentSummary.discountAmount, bootstrap.currency)}
-                    </span>
-                  </div>
+                  {/* 折扣分項：單品折扣 + 全單折扣（用戶要求所有訂單明細位都要見到） */}
+                  <OrderDiscountRow
+                    currency={bootstrap.currency}
+                    items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
+                    variant="compact"
+                    wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                  />
                   {selectedMoneyVoucherAvos > 0 ? (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-slate-500">已選現金券（兌換入餘額）</span>
@@ -4588,6 +4676,16 @@ export function PosApp() {
                         </option>
                       ))}
                     </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    系統抹零
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      inputMode="decimal"
+                      onChange={(event) => setRoundingInput(event.target.value)}
+                      placeholder="0.00"
+                      value={roundingInput}
+                    />
                   </label>
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
                     實收金額
