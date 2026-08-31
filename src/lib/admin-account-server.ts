@@ -11,6 +11,11 @@ function defaultPermissionsForRole(role: UserRole): UserPermissions {
   return { refundOrder: false, voidItem: false, manageAccounts: false };
 }
 
+/** 由 response 中清除所有 PIN（敏感資料保護）。 */
+function stripPins<T extends { pin?: string }>(items: T[]): T[] {
+  return items.map((item) => ({ ...item, pin: "" }));
+}
+
 function buildSession(account: AccountUser): AuthSession {
   return {
     account: account.account,
@@ -60,7 +65,8 @@ export async function authenticateAccountFromServer(account: string, pin: string
     if (!matched.active) {
       return { ok: false as const, error: "此帳戶已停用，請聯絡管理員。", source: "mock" as const };
     }
-    return { ok: true as const, source: "mock" as const, session: buildSession(matched) };
+    // mock 模式都唔回傳 PIN（敏感資料保護）
+    return { ok: true as const, source: "mock" as const, session: buildSession({ ...matched, pin: "" }) };
   }
 
   const { data: accountRow, error } = await supabase
@@ -128,14 +134,14 @@ export async function authenticateAccountFromServer(account: string, pin: string
 export async function listAdminDataFromServer() {
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
-    return {
-      ok: true as const,
-      dbConfigured: false,
-      source: "mock" as const,
-      accounts: enrichAccounts(defaultAccountUsers, defaultPermissionGroups).map((a) => ({ ...a, pin: "" })),
-      stores: defaultAccountStores,
-      permissionGroups: defaultPermissionGroups,
-    };
+  return {
+    ok: true as const,
+    dbConfigured: false,
+    source: "mock" as const,
+    accounts: stripPins(enrichAccounts(defaultAccountUsers, defaultPermissionGroups)),
+    stores: defaultAccountStores,
+    permissionGroups: defaultPermissionGroups,
+  };
   }
 
   const [{ data: accounts, error: accountError }, { data: stores }, { data: permissionGroups }, { data: bindings }] =
@@ -149,6 +155,17 @@ export async function listAdminDataFromServer() {
   if (accountError) {
     return { ok: false as const, error: accountError.message };
   }
+
+  const mappedGroups: AccountPermissionGroup[] = (permissionGroups ?? []).map((row) => ({
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    role: row.role as UserRole,
+    permissions: (row.permissions ?? defaultPermissionsForRole(row.role as UserRole)) as UserPermissions,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    note: row.note ?? "",
+  }));
 
   const mappedAccounts: AccountUser[] = (accounts ?? []).map((row) => ({
     id: row.id,
@@ -166,6 +183,15 @@ export async function listAdminDataFromServer() {
     note: row.note ?? "",
   }));
 
+  // 雙保險：enrichAccounts 之後再清一次（萬一 enrich 引入咗含 pin 嘅 mock fallback）
+  const safeAccounts = stripPins(
+    enrichAccounts(
+      mappedAccounts,
+      mappedGroups,
+      (bindings ?? []).map((item) => ({ accountId: item.account_id, storeId: item.store_id })),
+    ),
+  );
+
   const mappedStores: AccountStore[] = (stores ?? []).map((row) => ({
     id: row.id,
     name: row.name,
@@ -175,26 +201,11 @@ export async function listAdminDataFromServer() {
     note: row.note ?? "",
   }));
 
-  const mappedGroups: AccountPermissionGroup[] = (permissionGroups ?? []).map((row) => ({
-    id: row.id,
-    code: row.code,
-    name: row.name,
-    role: row.role as UserRole,
-    permissions: (row.permissions ?? defaultPermissionsForRole(row.role as UserRole)) as UserPermissions,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    note: row.note ?? "",
-  }));
-
   return {
     ok: true as const,
     dbConfigured: true,
     source: "supabase" as const,
-    accounts: enrichAccounts(
-      mappedAccounts,
-      mappedGroups,
-      (bindings ?? []).map((item) => ({ accountId: item.account_id, storeId: item.store_id })),
-    ),
+    accounts: safeAccounts,
     stores: mappedStores,
     permissionGroups: mappedGroups,
   };

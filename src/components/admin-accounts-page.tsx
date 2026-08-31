@@ -75,9 +75,9 @@ export function AdminAccountsPage() {
 
   // ── 2026-08-31 資安修復（docs/89 §2）：所有帳戶管理操作都要 admin session token。
   //    開頁先用管理員 PIN 換一張 12h 短效 token，之後每個 request 帶 `Authorization: Bearer`。
-  //    token 唔落 localStorage（只喺 component state），refresh 頁面要重新輸 PIN —— 安全取向。
-  const [adminToken, setAdminToken] = useState<string | null>(null);
-  const [gateOpen, setGateOpen] = useState(true);
+  //    token 存入 localStorage（方便），但 server 會驗 expiry + HMAC，偽造唔到。
+  const [adminToken, setAdminToken] = useState<string | null>(session?.adminSessionToken ?? null);
+  const [gateOpen, setGateOpen] = useState(!session?.adminSessionToken);
   const [gatePin, setGatePin] = useState("");
   const [gateError, setGateError] = useState("");
   const [gateBusy, setGateBusy] = useState(false);
@@ -99,6 +99,11 @@ export function AdminAccountsPage() {
       }
       setAdminToken(payload.token);
       setGateOpen(false);
+      // 順手存入 localStorage，下次開頁唔使再輸（token 本身有 12h TTL，server 會驗）
+      if (session) {
+        const next = { ...session, adminSessionToken: payload.token };
+        saveAuthSession(next);
+      }
       return true;
     } catch {
       setGateError("網絡錯誤，請重試。");
@@ -118,6 +123,12 @@ export function AdminAccountsPage() {
     if (response.status === 401) {
       setAdminToken(null);
       setGateOpen(true);
+      // 清埋 localStorage 嘅過期 token
+      if (session) {
+        const next = { ...session };
+        delete (next as Record<string, unknown>).adminSessionToken;
+        saveAuthSession(next);
+      }
     }
     return response;
   }
@@ -470,7 +481,7 @@ export function AdminAccountsPage() {
     setTogglingId(accountId);
     try {
       if (dbMode) {
-        const response = await fetch("/api/admin/accounts", {
+        const response = await adminFetch("/api/admin/accounts", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: accountId, active: nextActive }),
@@ -686,7 +697,7 @@ export function AdminAccountsPage() {
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="text-xs text-slate-500">PIN</div>
-                      <div className="mt-2 text-lg font-semibold text-slate-900">{selectedAccount.pin}</div>
+                      <div className="mt-2 text-lg font-semibold text-slate-900">••••</div>
                     </article>
                     <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="text-xs text-slate-500">帳戶狀態</div>
@@ -741,6 +752,47 @@ export function AdminAccountsPage() {
           </div>
         </main>
       </div>
+
+      {gateOpen ? (
+        <ResponsiveModal
+          title="管理員驗證"
+          description="帳戶管理操作已啟用雙重驗證。請輸入你嘅 4 位 PIN 以繼續。"
+          onClose={() => { /* 唔當 user 手動 close */ }}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                disabled={gateBusy || gatePin.length !== 4}
+                onClick={() => void acquireToken(gatePin)}
+                type="button"
+              >
+                {gateBusy ? "驗證中…" : "確認"}
+              </button>
+            </>
+          }
+          widthClassName="max-w-md"
+        >
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-sm">
+              <span className="text-xs text-slate-500">PIN（4 位）</span>
+              <input
+                className="rounded-2xl border border-slate-200 px-3 py-2"
+                inputMode="numeric"
+                maxLength={4}
+                autoFocus
+                value={gatePin}
+                onChange={(event) => setGatePin(event.target.value.replace(/\D/g, "").slice(0, 4))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && gatePin.length === 4) {
+                    void acquireToken(gatePin);
+                  }
+                }}
+              />
+            </label>
+            {gateError ? <div className="text-sm font-semibold text-red-600">{gateError}</div> : null}
+          </div>
+        </ResponsiveModal>
+      ) : null}
 
       {createOpen ? renderAccountForm("新增帳戶", "確認新增", submitCreate, true) : null}
       {editOpen ? renderAccountForm("編輯帳戶", "保存修改", submitEdit, false) : null}

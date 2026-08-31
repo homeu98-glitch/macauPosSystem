@@ -367,7 +367,8 @@ function normalizeAccountUsers(accounts: AccountUser[] | null | undefined): Acco
   const base = Array.isArray(accounts) && accounts.length > 0 ? accounts : defaultAccountUsers;
   const permissionGroups = normalizePermissionGroups(readJson<AccountPermissionGroup[]>(KEYS.permissionGroups, defaultPermissionGroups));
   return base.map((account, index) => {
-    const role = account.role ?? (account.account === "60000000" ? "admin" : account.account === "63936541" ? "manager" : "cashier");
+    // 2026-08-31 資安修復（docs/89 §2）：移除硬編碼帳號→角色後門。
+    const role = account.role ?? "cashier";
     const permissionGroup = permissionGroups.find((group) => group.id === account.permissionGroupId);
     return {
       id: account.id ?? `acct-${index + 1}`,
@@ -542,8 +543,10 @@ export type AuthSession = {
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
   if (!session?.account) return null;
-  const role =
-    session.role ?? (session.account === "60000000" ? "admin" : session.account === "63936541" ? "manager" : "cashier");
+  // 2026-08-31 資安修復（docs/89 §2）：移除硬編碼帳號→角色後門。
+  // 舊 code 用 60000000/63936541 做 magic number，任何人改 localStorage 嘅 account 值
+  // 就可以升級做 admin/manager。角色必須由 server 驗證後寫入，唔可以再喺 client 推定。
+  const role = session.role ?? "cashier";
   return {
     account: session.account,
     name: session.name ?? (role === "admin" ? "系統管理員" : role === "manager" ? "店長" : "收銀員"),

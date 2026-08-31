@@ -2626,6 +2626,8 @@ export function PosApp() {
           fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
           sentToKitchenAt: updatedOrder.sentToKitchenAt ?? null,
           servedAt: updatedOrder.servedAt ?? null,
+          // 入座人數上雲（docs/89 §3）：結帳時補傳 partySize，確保報表「覆蓋人數」有數。
+          partySize: updatedOrder.partySize ?? null,
         },
         status: networkOnline ? "synced" : "pending",
         createdAt: updatedOrder.updatedAt,
@@ -2774,6 +2776,8 @@ export function PosApp() {
         couponIds: [],
         prepaidAmount,
         status: updatedOrder.status,
+        // 入座人數上雲（docs/89 §3）：線上支付結帳都要補傳。
+        partySize: updatedOrder.partySize ?? null,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: updatedOrder.updatedAt,
