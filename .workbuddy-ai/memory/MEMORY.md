@@ -30,6 +30,7 @@
 - **itemIdentity 三邊同步鐵律**：`pos-app.tsx:1301` `itemIdentity()` = `menuItemId|specs|price|note` —— **note 係 identity 一部分**。`orderedItemQtyMap` 由 `baseOrderItems` 用 identity 計 → `locked = orderedQty > 0`。任何改動已下單菜品（note / specs / price）都**必須同步 `cartItems` + `baseOrderItems` + `order.items`**，只改一邊會令 `locked` 變 false → 「已下單」標記消失、「退 1 份」消失、`voidOrderedItem` 彈「尚未正式下單，不能退菜」。參考 `voidOrderedItem` L1530-1531 嘅做法。
 - **`pos_orders.items` 係 JSONB 整條存**（`/api/pos/sync` L58）→ `OrderItem` 加新 field 唔使改 DB schema / 唔使 migration。
 - **備註鎖定鐵律（2026-08-31 ✅ 已實作，docs/84）**：備註／規格喺**送出（sent_to_kitchen）嗰刻即固定**，之後一律唔准改。真源係 `src/lib/pos/order-note-lock.ts`（`isOrderNoteLocked()` — 鎖 sent_to_kitchen/paid/settled/cancelled/partially_refunded/refunded；**唔鎖** draft 同 reopened 返結帳）。單品備註／規格另靠 `orderedItemQtyMap.get(identity) > 0` 判斷。UI 層（掣 disabled + 提示）同資料層（`applyItemNote` / `applySpecSelection` / 彈窗保存）**兩邊都要擋**。三條理由：① 廚房單係 PrintJob 建立時嘅 snapshot（`buildKitchenPrintJobs` L115），改咗唔會補印；② `items` 係 JSONB 整條寫入後台同收據 → 雙軌不一致；③ note/specs 係 itemIdentity 一部分，改咗會拆散「已下單」標記、退菜壞。結帳後 `setActiveOrderId(null)` 自動解鎖，唔影響下一張單。
+- **長文字換行鐵律（2026-08-31 ✅，docs/84 §7）**：任何用戶自由輸入嘅長文字（備註、地址等）一律用 `whitespace-pre-wrap break-words`，**唔好用 `truncate`**。`break-words`（`overflow-wrap: break-word`）係**必要**嘅——純 `break-normal` 對長串 CJK **無效**（CJK 冇空白位可斷，會照樣向右撐破容器）。長文字要放**獨立一行整寬**顯示，唔好同掣/短標籤塞同一個 flex row（會互相擠壓走位）；外層 flex 改 `items-start` 令掣留頂部。
 
 ## 線上訂單
 

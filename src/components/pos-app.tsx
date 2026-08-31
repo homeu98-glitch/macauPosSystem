@@ -3342,7 +3342,8 @@ export function PosApp() {
                           )}
                         </div>
                       </div>
-                      <div className="mt-2 flex items-center justify-between">
+                      {/* 動作列：只放掣 + 短狀態（「已退 N 份」），保持單行，唔會俾長備註擠走位 */}
+                      <div className="mt-2 flex items-center justify-between gap-2">
                         <div className="flex flex-nowrap items-center gap-2">
                           {!locked ? (
                               <button
@@ -3375,20 +3376,21 @@ export function PosApp() {
                             </button>
                           ) : null}
                         </div>
-                        <div className="min-w-0 text-right">
-                          {locked && item.quantity < orderedQty ? (
-                            <div className="text-xs font-semibold text-red-600">
-                              已退 {orderedQty - item.quantity} 份
-                            </div>
-                          ) : null}
-                          {item.note ? (
-                            <div className="truncate text-xs text-slate-500">
-                              備註：{item.note}
-                              {locked ? <span className="ml-1 text-[11px] font-medium text-amber-600">已鎖定</span> : null}
-                            </div>
-                          ) : null}
-                        </div>
+                        {locked && item.quantity < orderedQty ? (
+                          <div className="shrink-0 text-xs font-semibold text-red-600">
+                            已退 {orderedQty - item.quantity} 份
+                          </div>
+                        ) : null}
                       </div>
+                      {/* 單品備註（docs/84 §7）：獨立一行、整寬。長文字向下自動換行，
+                          break-words 令 CJK 都可靠邊斷行（純 break-normal 對長串中文無效）。
+                          唔再用 truncate 切走，亦唔會向右撐破 card 或產生橫向捲軸。 */}
+                      {item.note ? (
+                        <div className="mt-1.5 whitespace-pre-wrap break-words text-xs text-slate-500">
+                          備註：{item.note}
+                          {locked ? <span className="ml-1 text-[11px] font-medium text-amber-600">已鎖定</span> : null}
+                        </div>
+                      ) : null}
                     </article>
                     );
                   })}
@@ -3461,12 +3463,18 @@ export function PosApp() {
                   </button>
                 ) : null}
               </div>
-              <div className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="min-w-0">
+              {/* items-start：備註換行增高時，「編輯」掣留喺頂部唔會被拉到垂直居中而走位 */}
+              <div className="flex items-start justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                {/* flex-1 + min-w-0：文字區塊食晒剩餘寬度並以 card 邊界為限向下換行（docs/84 §7） */}
+                <div className="min-w-0 flex-1">
                   <div className="text-xs font-semibold text-slate-600">全單備註</div>
-                  <div className="truncate text-xs text-slate-500">{orderNote ? orderNote : "（可選）"}</div>
+                  <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-slate-500">
+                    {orderNote ? orderNote : <span className="text-slate-400">（可選）</span>}
+                  </div>
                   {orderNoteLocked ? (
-                    <div className="truncate text-[11px] font-medium text-amber-600">訂單已送出，備註已鎖定</div>
+                    <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] font-medium text-amber-600">
+                      訂單已送出，備註已鎖定
+                    </div>
                   ) : null}
                 </div>
                   <button
@@ -3738,7 +3746,10 @@ export function PosApp() {
                           {item.specs?.length ? (
                             <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div>
                           ) : null}
-                          {item.note ? <div className="mt-1 text-xs text-slate-500">備註：{item.note}</div> : null}
+                          {/* docs/84 §7：break-words 預防窄容器下長備註向右撐破版面 */}
+                          {item.note ? (
+                            <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">備註：{item.note}</div>
+                          ) : null}
                         </div>
                       ))}
                     </div>
@@ -4146,7 +4157,10 @@ export function PosApp() {
                           {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
                         </div>
                       ) : null}
-                      {item.note ? <div className="mt-1 text-xs text-slate-500">備註：{item.note}</div> : null}
+                      {/* docs/84 §7：break-words 預防窄容器下長備註向右撐破版面 */}
+                      {item.note ? (
+                        <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">備註：{item.note}</div>
+                      ) : null}
                     </div>
                     <div className="shrink-0 text-sm font-semibold text-slate-900">x{item.quantity}</div>
                   </div>
