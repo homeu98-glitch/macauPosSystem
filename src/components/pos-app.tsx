@@ -3039,37 +3039,6 @@ export function PosApp() {
                 <div className="mt-1 text-xs text-slate-500">桌台流程、收銀入口與營運操作集中在這裡</div>
               </div>
               <div className="flex-1 overflow-auto px-4 py-4">
-                <div className="grid gap-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[11px] font-semibold text-slate-500">當前桌台</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-900">{activeTable?.name ?? "--"}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[11px] font-semibold text-slate-500">待結帳</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-900">{currentSettlementOrder ? currentSettlementOrder.localOrderNo : "--"}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {currentSettlementOrder ? formatMoney(currentSettlementOrder.total, bootstrap.currency) : "目前沒有待結帳單"}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[11px] font-semibold text-slate-500">待同步</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-900">{pendingQueue.length}</div>
-                      <div className="mt-1 text-xs text-slate-500">離線 / 未補傳事件</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[11px] font-semibold text-slate-500">打印設備</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-900">
-                        {deviceConfig.printers.filter((printer) => printer.enabled).length}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">打印任務 {printJobs.length} 筆</div>
-                    </div>
-                  </div>
-                </div>
-
                 {!isQuickMode && counterKioskOrders.length > 0 ? (
                   <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
                     <div className="flex items-center justify-between">
