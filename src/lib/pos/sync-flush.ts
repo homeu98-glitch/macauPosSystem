@@ -42,6 +42,8 @@ type ExtendedQueueEvent = QueueEvent & { attempts?: number };
 let flushChain: Promise<void> = Promise.resolve();
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let listenersInstalled = false;
+let triggerFn: (() => void) | null = null;
+let visibilityHandler: (() => void) | null = null;
 
 /**
  * 排入 flush chain（serialized）：並發 caller 自動排隊，唔會同時開多個 flush。
@@ -64,6 +66,7 @@ export function installPosSyncQueueAutoFlush(): void {
   const trigger = () => {
     void flushPosSyncQueue({ silent: true });
   };
+  triggerFn = trigger;
 
   window.addEventListener("online", trigger);
   window.addEventListener("offline", trigger);
@@ -72,9 +75,10 @@ export function installPosSyncQueueAutoFlush(): void {
   // 任何 caller 主動 enqueue 後會 dispatch 呢個 event（見 notifyQueueChanged）
   window.addEventListener(POS_SYNC_QUEUE_CHANGED_EVENT, trigger as EventListener);
   // visibility 變化：tab 重新 active 時試 flush（背景 tab 未必觸發 online 事件）
-  document.addEventListener("visibilitychange", () => {
+  visibilityHandler = () => {
     if (document.visibilityState === "visible") trigger();
-  });
+  };
+  document.addEventListener("visibilitychange", visibilityHandler);
 
   intervalHandle = setInterval(trigger, FLUSH_INTERVAL_MS);
 
@@ -89,12 +93,21 @@ export function uninstallPosSyncQueueAutoFlush(): void {
   if (typeof window === "undefined") return;
   if (!listenersInstalled) return;
   listenersInstalled = false;
-  window.removeEventListener("online", () => {});
-  window.removeEventListener("offline", () => {});
+  if (triggerFn) {
+    window.removeEventListener("online", triggerFn);
+    window.removeEventListener("offline", triggerFn);
+    window.removeEventListener("pos-network-status-changed", triggerFn as EventListener);
+    window.removeEventListener(POS_SYNC_QUEUE_CHANGED_EVENT, triggerFn as EventListener);
+  }
+  if (visibilityHandler) {
+    document.removeEventListener("visibilitychange", visibilityHandler);
+  }
   if (intervalHandle) {
     clearInterval(intervalHandle);
   }
   intervalHandle = null;
+  triggerFn = null;
+  visibilityHandler = null;
 }
 
 /**
@@ -133,23 +146,18 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   const unflushed = allQueue.filter((e) => e.status !== "synced");
   if (unflushed.length === 0) return;
 
-  // Dedup by entityId：同一 entityId 只推最後一條（最後一條 status 為準）
-  // 注意 ORDER_UPDATED / ORDER_CREATED 同 entity 會 dedup，PRINT_JOB_CREATED 唔會（唔同 entityId）
-  // 唔同 type 嘅同一 entityId 都會 dedup（最後嗰條覆蓋前面所有）。
-  const latestByEntity = new Map<string, ExtendedQueueEvent>();
+  // Dedup by entityId + 過濾超 attempts：同一 entityId 只推最後一條（最後狀態為準），
+  // 超 attempts 嘅自動淘汰（同 entityId 有新未超 attempts 嘅就推嗰條）。
+  // 注意 ORDER_UPDATED / ORDER_CREATED 同 entity 會 dedup，PRINT_JOB_CREATED 唔會（唔同 entityId）。
+  const candidateByEntity = new Map<string, ExtendedQueueEvent>();
   for (const e of unflushed) {
-    const prev = latestByEntity.get(e.entityId);
+    if ((e.attempts ?? 0) >= MAX_SYNC_ATTEMPTS) continue;
+    const prev = candidateByEntity.get(e.entityId);
     if (!prev || prev.createdAt < e.createdAt) {
-      latestByEntity.set(e.entityId, e);
+      candidateByEntity.set(e.entityId, e);
     }
   }
-  const eventsToPush = Array.from(latestByEntity.values()).slice(0, MAX_EVENTS_PER_FLUSH);
-
-  // 全部超 attempts → 全部標 failed 留低，唔再嘗試（避免 hot loop）
-  const oversaturated = eventsToPush.filter((e) => (e.attempts ?? 0) >= MAX_SYNC_ATTEMPTS);
-  if (oversaturated.length === eventsToPush.length) return;
-
-  const flippable = eventsToPush.filter((e) => (e.attempts ?? 0) < MAX_SYNC_ATTEMPTS);
+  const flippable = Array.from(candidateByEntity.values()).slice(0, MAX_EVENTS_PER_FLUSH);
   if (flippable.length === 0) return;
 
   // 取 storeId：從 ORDER_UPDATED / ORDER_CREATED payload 提取，唔係的話 fallback DEFAULT

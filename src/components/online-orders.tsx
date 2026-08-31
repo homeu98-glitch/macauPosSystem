@@ -76,7 +76,7 @@ export function OnlineOrders({
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
-  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number }> | null>(null);
+  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number }> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
@@ -469,7 +469,14 @@ export function OnlineOrders({
     setDetailLoading(true);
     try {
       const detail = await getOrderDetail(orderId);
-      setDetailItems(detail.items.map((item) => ({ name: item.name, qty: item.qty })));
+      setDetailItems(
+        detail.items.map((item) => ({
+          name: item.name,
+          qty: item.qty,
+          discountRate: item.discountRate,
+          discountAvos: item.discountAvos,
+        })),
+      );
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "讀取明細失敗" });
     } finally {

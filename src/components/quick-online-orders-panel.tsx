@@ -78,7 +78,7 @@ export function QuickOnlineOrdersPanel({
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
-  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number }> | null>(null);
+  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number }> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
 
@@ -255,7 +255,14 @@ export function QuickOnlineOrdersPanel({
     void getOrderDetail(viewingOrderId)
       .then((detail) => {
         if (!cancelled) {
-          setDetailItems(detail.items.map((item) => ({ name: item.name, qty: item.qty })));
+          setDetailItems(
+              detail.items.map((item) => ({
+                name: item.name,
+                qty: item.qty,
+                discountRate: item.discountRate,
+                discountAvos: item.discountAvos,
+              })),
+            );
         }
       })
       .catch(() => {
@@ -520,7 +527,12 @@ export function QuickOnlineOrdersPanel({
               {statusLabel}
             </span>
           </div>
-          <div className="mt-2 text-xs text-slate-600">{paymentLabel}</div>
+          <div className="mt-2 flex items-baseline justify-between gap-2 text-xs">
+            <span className="text-slate-600">{paymentLabel}</span>
+            {order.discountAmount && order.discountAmount > 0 ? (
+              <span className="font-semibold text-amber-700">已優惠 -{formatMoney(order.discountAmount, currency)}</span>
+            ) : null}
+          </div>
           {cancelRequest ? (
             <div className="mt-1 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">{cancelRequest}</div>
           ) : null}
@@ -574,6 +586,11 @@ export function QuickOnlineOrdersPanel({
             <div className="mt-1 text-xs text-slate-500">
               {statusLabel} · {paymentLabel}
             </div>
+            {order.discountAmount && order.discountAmount > 0 ? (
+              <div className="mt-1 text-xs font-semibold text-amber-700 tabular-nums">
+                已優惠 -{formatMoney(order.discountAmount, currency)}
+              </div>
+            ) : null}
             {cancelRequest ? <div className="mt-1 text-xs font-semibold text-rose-600">{cancelRequest}</div> : null}
             {order.itemSummary ? <div className="mt-2 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
           </div>
@@ -726,13 +743,37 @@ export function QuickOnlineOrdersPanel({
               支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}
               {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
             </div>
+            {/* 折扣指示（用戶要求所有訂單明細位都要見到「折扣多少」） */}
+            {viewingOrder.discountAmount && viewingOrder.discountAmount > 0 ? (
+              <div className="flex items-baseline justify-between">
+                <span className="font-semibold text-amber-700">已優惠</span>
+                <span className="font-semibold text-amber-700 tabular-nums">
+                  -{formatMoney(viewingOrder.discountAmount, currency)}
+                </span>
+              </div>
+            ) : null}
             <div className="font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</div>
             {detailLoading ? <div className="text-slate-500">載入品項…</div> : null}
-            {detailItems?.map((item) => (
-              <div key={`${item.name}-${item.qty}`}>
-                {item.name} × {item.qty}
-              </div>
-            ))}
+            {detailItems?.map((item) => {
+              const itemHasDiscount =
+                item.discountRate != null ||
+                (item.discountAvos != null && item.discountAvos > 0);
+              return (
+                <div
+                  key={`${item.name}-${item.qty}`}
+                  className="flex items-baseline justify-between gap-2"
+                >
+                  <span>
+                    {item.name} × {item.qty}
+                    {itemHasDiscount ? (
+                      <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                        {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </ResponsiveModal>
       ) : null}
