@@ -66,20 +66,32 @@ function buildTemplateReceiptJobs(
   if (receiptPrinters.length === 0) return [];
 
   const timestamp = new Date().toISOString();
-  const items: PrintItemLine[] = order.items.map((it) => ({
-    name: it.name,
-    quantity: it.quantity,
-    // 收據主行印「菜品原價 × quantity」，唔印 final 價（避免同下面 spec row 重複收費）。
-    // 改用 `unitBasePrice` 從 OrderItem.price 倒推基價（OrderItem.price = 基價 + Σ spec delta）。
-    // companion / android 收到 `price` 欄位就會自動加印；未支援時亦唔影響主行。kitchen 唔加。
-    price: it.price > 0 ? Math.round(discountedUnitPrice(unitBasePrice(it), it.discountRate) * it.quantity) : undefined,
-    specs: (it.selectedSpecs ?? []).map((spec) => formatSpecLine(spec)),
-    note: it.note,
-  }));
+  const serverName = loadAuthSession()?.name;
+  const items: PrintItemLine[] = order.items.map((it) => {
+    const base = unitBasePrice(it);
+    const rate = it.discountRate;
+    const hasDiscount = typeof rate === "number" && rate > 0 && rate < 100;
+    const discounted = hasDiscount ? discountedUnitPrice(base, rate) : base;
+    const saving = hasDiscount ? Math.round((base - discounted) * it.quantity * 100) / 100 : 0;
+    return {
+      name: it.name,
+      quantity: it.quantity,
+      // 主行價：冇折扣 → 基價 × quantity；有折扣 → 折後價 × quantity（renderer 加印原價）。
+      price: it.price > 0 ? Math.round(discounted * it.quantity) : undefined,
+      discountRate: hasDiscount ? rate : undefined,
+      originalUnitPrice: hasDiscount ? Math.round(base) : undefined,
+      discountedUnitPrice: hasDiscount ? Math.round(discounted) : undefined,
+      savingAmount: saving > 0 ? saving : undefined,
+      specs: (it.selectedSpecs ?? []).map((spec) => formatSpecLine(spec)),
+      note: it.note,
+    };
+  });
   const content = buildReceiptContent(order, {
     storeName: bootstrap.storeName,
+    storeTel: bootstrap.storeTel,
     currency: bootstrap.currency,
     footerText: template.footerText,
+    serverName,
   });
   const snapshot = buildSnapshot("receipt", template);
 

@@ -23,8 +23,30 @@ function splitSpecLine(s: string): { label: string; price: string | null } {
 }
 
 /**
+ * 判斷一件菜有冇單品折扣：要同時有 discountRate 同 savingAmount > 0
+ * （renderer 唔信任 caller 嘅單一判斷）。
+ */
+function hasItemDiscount(item: { discountRate?: number; savingAmount?: number }): boolean {
+  const rate = item.discountRate;
+  if (rate == null || !Number.isFinite(rate) || rate <= 0 || rate >= 100) return false;
+  return typeof item.savingAmount === "number" && item.savingAmount > 0;
+}
+
+/** 把 item.discountRate 格式化到小票用嘅字串。80 → "80%"；7.5 → "7.5%"。 */
+function formatDiscountRate(rate: number): string {
+  return Number.isInteger(rate) ? `${rate}%` : `${rate.toFixed(1)}%`;
+}
+
+/**
  * 真實可打印樣式預覽：等寬字型、單色、粗體 / 對齊 / 字型大小對應 ESC/POS 輸出。
  * 唔用任何 CSS 顏色 / 邊框 / 絕對定位（熱敏機印唔到），確保設計介面 == 實際輸出。
+ *
+ * 主菜行規則（仿 57.doc 風格 + 適合小票寬度）：
+ * - 冇折扣：`1. 人氣半筋半肉麵 ............ x1   $72`
+ * - 有折扣：`1. 人氣半筋半肉麵 .......... x1   $58（原價 $72，8折 折讓 $14）`
+ *
+ * Spec rows：一律印右邊價錢（addons）。
+ * Item-level discount（無 spec row 位置）：sub-line 印「折扣率 X%  折讓 $Z」。
  */
 export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[]; paperWidthMm?: number }) {
   return (
@@ -45,6 +67,8 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                   <div className="text-slate-400">（無菜品內容）</div>
                 ) : (
                   line.items.map((item, idx) => {
+                    const hasDiscount = hasItemDiscount(item);
+                    const originalShown = hasDiscount && typeof item.originalUnitPrice === "number";
                     return (
                       <div key={idx} className={isCard ? "mb-2 last:mb-0" : ""}>
                         <div
@@ -58,10 +82,31 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                           <span className="shrink-0 font-extrabold tabular-nums">
                             x{item.quantity}
                             {typeof item.price === "number" && item.price > 0 ? (
-                              <span className="ml-1 text-slate-700" style={{ fontWeight: 600 }}>${item.price}</span>
+                              originalShown ? (
+                                // 有折扣時：主行只印「折後價」，原價搬到 subline 顯示
+                                <span className="ml-1 text-slate-900" style={{ fontWeight: 700 }}>${item.price}</span>
+                              ) : (
+                                <span className="ml-1 text-slate-700" style={{ fontWeight: 600 }}>${item.price}</span>
+                              )
                             ) : null}
                           </span>
                         </div>
+                        {/* 有單品折扣時喺菜名下附加一行「折扣率 X%  折讓 $Z」—— 仿 57.doc sub-line */}
+                        {hasDiscount ? (
+                          <div
+                            className={isCard ? "flex items-baseline justify-between gap-2 pl-4 text-amber-700" : "flex items-baseline justify-between gap-2 pl-3 text-amber-700"}
+                            style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}
+                          >
+                            <span>
+                              {isCard ? "" : "· "}
+                              折扣率 {formatDiscountRate(item.discountRate as number)}
+                              {originalShown ? `（原價 $${Math.round(item.originalUnitPrice as number)}）` : ""}
+                            </span>
+                            <span className="shrink-0 font-semibold tabular-nums opacity-90">
+                              折讓 ${Math.round(item.savingAmount as number)}
+                            </span>
+                          </div>
+                        ) : null}
                         {isCard ? <div className="my-1 border-t border-dashed border-slate-300" /> : null}
                         <div style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
                           {(item.specs ?? []).map((s, si) => {

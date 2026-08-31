@@ -157,6 +157,8 @@ export interface PosBootstrap {
   sourceVersion: number;
   storeId: string;
   storeName: string;
+  /** 店家電話（顯示喺收據抬頭，類似 57.doc 嘅「電話：xxx」）。可選 — 舊單冇就 fallback 唔顯示。 */
+  storeTel?: string;
   currency: string;
   categories: MenuCategory[];
   menuItems: MenuItem[];
@@ -241,15 +243,29 @@ export interface EscPosBlockStyle {
 
 export type ReceiptSectionId =
   | "store_name"
+  /** 店家電話（同 57.doc「電話：xxx」一欄；visible false 時省略）。可選 — bootstrap 冇 storeTel 就唔顯示。 */
+  | "store_tel"
   | "order_no"
   | "table_name"
   | "order_time"
   | "checkout_time"
+  /** 服務員（操作人顯示名）；可選。見 docs/88 §5.4 */
+  | "server"
   | "items"
+  /** 單品折扣明細：每件菜如有 discountRate，打印「折扣率 X% / 折讓 $Y」一行（仿 57.doc 嘅 sub-line）。 */
+  | "discount_breakdown"
   | "subtotal_before_discount"
+  /** 服務費（serviceChargeAmount）— 之前收據唔打，現在跟 57.doc 嘅習慣補返。 */
+  | "service_charge_amount"
+  /** 稅金（taxAmount）— 同上。 */
+  | "tax_amount"
   | "rounding_amount"
   | "discount_amount"
   | "total"
+  /** 顧客實付現金（cashTendered）— 同 57.doc 「实收」。 */
+  | "cash_tendered"
+  /** 找零（changeAmount）— 同 57.doc 「找零」。 */
+  | "change_amount"
   | "payment_method"
   | "order_note"
   | "footer";
@@ -513,6 +529,7 @@ export interface PrintJob {
   printerGroup: PrinterGroup;
   printerId?: string;
   printerName: string;
+  /** 要打印嘅菜品行（扁平後嘅 {@link PrintItemLine}）。可選 — 標籤單未必有 items。 */
   items?: Array<{
     name: string;
     quantity: number;
@@ -520,6 +537,14 @@ export interface PrintJob {
     price?: number;
     specs?: string[];
     note?: string;
+    /** 單品折扣百分比（0-100）；缺省 = 冇折扣。escpos-render.ts → PrintItemLine。 */
+    discountRate?: number;
+    /** 單件原價（未扣 spec delta、未套 discountRate）。同上源。 */
+    originalUnitPrice?: number;
+    /** 折後單價（已套 discountRate）。 */
+    discountedUnitPrice?: number;
+    /** 折讓 = (base − discounted) × quantity；0 = 冇折讓唔顯示。 */
+    savingAmount?: number;
   }>;
   status: "pending" | "sent" | "failed";
   createdAt: string;

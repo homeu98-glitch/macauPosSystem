@@ -60,6 +60,12 @@ export async function dispatchJobToNative(
         // 舊版 APK / Companion renderer 認唔到會忽略（forward-compatible）。
         // POS 自己嘅 EscPosPreview 已經 render；agent 升級後即可印到實紙。
         ...(typeof it.price === "number" ? { price: it.price } : {}),
+        // 單品折扣（原價 / 折後 / 折扣率 / 折讓）—— 仿 57.doc 風格嘅 sub-line 必須傳。
+        // 缺省不傳：forward-compatible（§20：只喺 typeof === "number" 時 spread）。
+        ...(typeof it.discountRate === "number" ? { discountRate: it.discountRate } : {}),
+        ...(typeof it.originalUnitPrice === "number" ? { originalUnitPrice: it.originalUnitPrice } : {}),
+        ...(typeof it.discountedUnitPrice === "number" ? { discountedUnitPrice: it.discountedUnitPrice } : {}),
+        ...(typeof it.savingAmount === "number" ? { savingAmount: it.savingAmount } : {}),
         specs: it.specs ?? [],
         note: it.note ?? "",
       })),

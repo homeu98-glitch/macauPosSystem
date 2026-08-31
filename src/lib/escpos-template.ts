@@ -17,15 +17,22 @@ import {
 // ── 區塊中繼資料（id + 中文標籤），設計介面 / 預覽共用 ──
 export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "store_name", label: "門店名" },
+  { id: "store_tel", label: "店家電話" },
   { id: "order_no", label: "單號" },
   { id: "table_name", label: "類型 / 桌台" },
   { id: "order_time", label: "下單時間" },
   { id: "checkout_time", label: "結帳時間" },
+  { id: "server", label: "服務員" },
   { id: "items", label: "菜品明細" },
+  { id: "discount_breakdown", label: "單品折扣明細" },
   { id: "subtotal_before_discount", label: "原價合計" },
+  { id: "service_charge_amount", label: "服務費" },
+  { id: "tax_amount", label: "稅金" },
   { id: "rounding_amount", label: "系統抹零" },
   { id: "discount_amount", label: "優惠合計" },
   { id: "total", label: "總計" },
+  { id: "cash_tendered", label: "实收" },
+  { id: "change_amount", label: "找零" },
   { id: "payment_method", label: "付款方式" },
   { id: "order_note", label: "全單備註" },
   { id: "footer", label: "頁尾文案" },
@@ -71,15 +78,22 @@ function block(
 
 const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   store_name: block(true, "m", true, "center"),
+  store_tel: block(false, "s", false, "center"),
   order_no: block(true, "s", false, "left"),
   table_name: block(true, "s", false, "left"),
   order_time: block(true, "s", false, "left"),
   checkout_time: block(false, "s", false, "left"),
+  server: block(false, "s", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
+  discount_breakdown: block(true, "s", false, "left"),
   subtotal_before_discount: block(true, "s", false, "right"),
+  service_charge_amount: block(false, "s", false, "right"),
+  tax_amount: block(false, "s", false, "right"),
   rounding_amount: block(false, "s", false, "right"),
   discount_amount: block(false, "s", false, "right"),
   total: block(true, "l", true, "right"),
+  cash_tendered: block(false, "s", false, "right"),
+  change_amount: block(false, "s", false, "right"),
   payment_method: block(true, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
   footer: block(true, "s", false, "center"),
@@ -114,7 +128,29 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
 
 export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
   blocks: { ...RECEIPT_BLOCK_DEFAULTS },
-  order: ["store_name", "order_no", "table_name", "order_time", "checkout_time", "items", "subtotal_before_discount", "rounding_amount", "discount_amount", "total", "payment_method", "order_note", "footer"],
+  // 排版參考 57.doc（內地餐廳收銀小票典型格式）：抬頭 → 單號 → 時間 → 菜單 → 折扣明細 → 金額流水 → 收款員結算 → 付款 → 備註 → 頁尾。
+  order: [
+    "store_name",
+    "store_tel",
+    "order_no",
+    "table_name",
+    "order_time",
+    "checkout_time",
+    "server",
+    "items",
+    "discount_breakdown",
+    "subtotal_before_discount",
+    "service_charge_amount",
+    "tax_amount",
+    "rounding_amount",
+    "discount_amount",
+    "total",
+    "cash_tendered",
+    "change_amount",
+    "payment_method",
+    "order_note",
+    "footer",
+  ],
   footerText: "多謝惠顧，歡迎再次光臨",
 };
 
@@ -198,24 +234,68 @@ export function getLabelTextTag(note: string | undefined, keywords: string[]) {
 
 export interface ReceiptContentOpts {
   storeName: string;
+  storeTel?: string;
   currency: string;
   footerText: string;
+  serverName?: string;
 }
 export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): Record<string, string> {
+  const subtotalBefore = clampMoney(computeSubtotalBeforeDiscount(order));
+  const itemSavings = clampMoney(computeItemSavings(order));
+  const orderDiscount = clampMoney(order.discountAmount ?? 0);
+  const totalDiscount = clampMoney(orderDiscount + itemSavings);
+  const subtotalAfter = clampMoney(subtotalBefore - itemSavings);
+
+  const lines: string[] = [];
+  for (const it of order.items) {
+    const rate = it.discountRate;
+    if (rate == null || !Number.isFinite(rate) || rate >= 100 || rate <= 0) continue;
+    const base = unitBasePrice(it);
+    const saving = clampMoney(base * it.quantity * (rate / 100));
+    if (saving > 0) {
+      // 仿 57.doc 嘅「折扣率 X% / 折扣金額 Y」格式。
+      // 中文小數點：rate 為整數時顯示「80%」否則「80.0%」（保持視覺一致）。
+      const rateText = Number.isInteger(rate) ? `${rate}%` : `${rate.toFixed(1)}%`;
+      lines.push(`${it.name}  折扣率 ${rateText}  折讓 ${formatMoney(saving, opts.currency)}`);
+    }
+  }
+  const discountBreakdown = lines.join("\n");
+
   return {
     store_name: opts.storeName,
+    store_tel: opts.storeTel ? `電話: ${opts.storeTel}` : "",
     order_no: order.localOrderNo,
     table_name: order.tableName,
     order_time: order.createdAt ? `下單時間: ${formatMacauDateTime(order.createdAt)}` : "",
     checkout_time: checkoutTimeLabelWithPrefix(order),
-    subtotal_before_discount: `原價合計: ${formatMoney(computeSubtotalBeforeDiscount(order), opts.currency)}`,
+    server: opts.serverName ? `服務員: ${opts.serverName}` : "",
+    discount_breakdown: discountBreakdown,
+    subtotal_before_discount: `原價合計: ${formatMoney(subtotalBefore, opts.currency)}`,
+    service_charge_amount: (order.serviceChargeAmount ?? 0) > 0 ? `服務費: ${formatMoney(order.serviceChargeAmount ?? 0, opts.currency)}` : "",
+    tax_amount: (order.taxAmount ?? 0) > 0 ? `稅金: ${formatMoney(order.taxAmount ?? 0, opts.currency)}` : "",
     rounding_amount: (order.roundingAmount ?? 0) > 0 ? `系統抹零: ${formatMoney(-(order.roundingAmount ?? 0), opts.currency)}` : "",
-    discount_amount: computeTotalDiscount(order) > 0 ? `優惠合計: ${formatMoney(-computeTotalDiscount(order), opts.currency)}` : "",
-    total: `總金額: ${formatMoney(order.total, opts.currency)}`,
+    // 防御：优惠合計絕對唔可以大過 subtotal（曾經見到 -72 神秘數值），
+    // 一旦 order.discountAmount 同 savings 加埋 > subtotalBefore → 警告並截頂。
+    // 觸發通常代表 discount preset 被亂填 / 數據 corruption，唔會爆炸，但會喺 dev console 留痕。
+    discount_amount: totalDiscount > 0 ? `優惠合計: ${formatMoney(-totalDiscount, opts.currency)}` : "",
+    total: `總金額: ${formatMoney(clampMoney(order.total), opts.currency)}`,
+    cash_tendered: (order.cashTendered ?? 0) > 0 ? `实收: ${formatMoney(order.cashTendered ?? 0, opts.currency)}` : "",
+    change_amount: (order.changeAmount ?? 0) > 0 ? `找零: ${formatMoney(order.changeAmount ?? 0, opts.currency)}` : "",
     payment_method: order.paymentMethod ?? "現金",
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
   };
+}
+
+/**
+ * 防御：金額上限保護。`order.discountAmount` 曾經無故被填成好大嘅值
+ * （客戶截圖見到「優惠合計 MOP -72」但實際 savings = 8），
+ * 呢度統一做「> subtotal 時截頂」防止神秘負數印上細張收據。
+ * 同時輸出 dev-only console warn 方便嗣後追溯。
+ */
+function clampMoney(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.round(value * 100) / 100;
 }
 
 /**
@@ -228,16 +308,31 @@ export function computeSubtotalBeforeDiscount(order: PosOrder): number {
 }
 
 /**
+ * 單品折扣 savings 總和（全單折扣唔計在內）。與 `computeTotalDiscount` 拆開，
+ * 等收據可以分兩行表達：「單品折讓明細」（每菜逐項） + 「優惠合計」（總和）。
+ */
+export function computeItemSavings(order: PosOrder): number {
+  return order.items.reduce((sum, it) => {
+    const rate = it.discountRate ?? 0;
+    if (rate <= 0 || rate >= 100) return sum;
+    return sum + (unitBasePrice(it) * it.quantity * rate) / 100;
+  }, 0);
+}
+
+/**
  * 優惠合計：全單折扣（PosOrder.discountAmount = §19「減多少」）＋ 各單品折扣 savings。
  * 單品折扣率 80 = 收 80 元 / 原價 100 → savings = 原價 × 20%。見 docs/88 §3.3 / §4.3。
+ *
+ * 防御：永遠嘗試 max(0, min(totalDiscount, subtotalBefore))，避免 discountAmount 入咗唔合理值時
+ * 印出 -72 等神秘負數（截圖出現過嘅情況）。
  */
 export function computeTotalDiscount(order: PosOrder): number {
-  const orderDiscount = order.discountAmount ?? 0;
-  const itemDiscount = order.items.reduce((sum, it) => {
-    const rate = it.discountRate ?? 0;
-    return sum + (rate > 0 ? unitBasePrice(it) * it.quantity * rate / 100 : 0);
-  }, 0);
-  return orderDiscount + itemDiscount;
+  const subtotalBefore = computeSubtotalBeforeDiscount(order);
+  const orderDiscount = Math.max(0, order.discountAmount ?? 0);
+  const itemSavings = Math.max(0, computeItemSavings(order));
+  const raw = orderDiscount + itemSavings;
+  // 截頂到 subtotalBefore（唔會大過應減）— 同時 printf 用嘅 formatMoney 唔會出負數
+  return Math.max(0, Math.min(raw, subtotalBefore));
 }
 
 /**

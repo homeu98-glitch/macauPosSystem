@@ -1,6 +1,39 @@
 import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout } from "@/lib/types";
 
-export type PrintItemLine = { name: string; quantity: number; price?: number; specs?: string[]; note?: string };
+/**
+ * `PrintItemLine`：每件菜品打印時用嘅扁平資料。
+ * 預覽（EscPosPreview）同 APK / Companion 嘅 renderer 都讀呢個結構，
+ * 所以**加新 field 後必須 audit `print-bridge/native.ts:56-65` 同 `companion-server.mjs`
+ * 嘅 payload map**，否則新 field 唔會去到 APK / Companion（docs/82 §18+20）。
+ *
+ * Optional + 數值類型：缺省即「數據未提供」，唔強求每個 caller 都填。
+ */
+export type PrintItemLine = {
+  name: string;
+  quantity: number;
+  /** 主行顯示價：折後單價 × quantity（companion / android 已支援；缺省 = 舊版）。 */
+  price?: number;
+  specs?: string[];
+  note?: string;
+  /** 單品折扣百分比（0-100）。80 = 收 80 元 / 原價 100。undefined = 冇折扣。 */
+  discountRate?: number;
+  /**
+   * 基價（單件原價，未扣 spec delta、未套 discountRate）。
+   * 收據「主行菜價」喺有 discountRate 時會拆兩欄：「原價 $X / 折後 $Y」。
+   * 冇 discountRate 就直接用 `price`。
+   */
+  originalUnitPrice?: number;
+  /**
+   * 折後每件單價（已套 discountRate）。同 `price / quantity` 數值一致，
+   * 但獨立保留可以畀 renderer 唔使行除法。
+   */
+  discountedUnitPrice?: number;
+  /**
+   * 單品折讓（原價 − 折後）× quantity，金額。0 = 冇折讓唔顯示。
+   * 收據「單品折扣明細」區塊會按呢個值生成「折讓 $X」一行（仿 57.doc）。
+   */
+  savingAmount?: number;
+};
 
 /**
  * 把 groupName / optionLabel / priceDelta 攤平成收據／廚房單用嘅單行字串。priceDelta > 0 會自動加 ` $X` 後綴；

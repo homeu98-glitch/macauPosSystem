@@ -319,16 +319,29 @@ export function PrintCenter() {
     }
     const content = buildReceiptContent(sampleOrder, {
       storeName: PREVIEW_STORE_NAME,
+      storeTel: "(853) 2888-0000",
       currency: "MOP",
       footerText: t.footerText,
+      serverName: "示範收銀員",
     });
-    const items: PrintItemLine[] = sampleOrder.items.map((it) => ({
-      name: it.name,
-      quantity: it.quantity,
-      price: it.price > 0 ? Math.round(discountedUnitPrice(unitBasePrice(it), it.discountRate) * it.quantity) : undefined,
-      specs: (it.selectedSpecs ?? []).map((s) => formatSpecLine(s)),
-      note: it.note,
-    }));
+    const items: PrintItemLine[] = sampleOrder.items.map((it) => {
+      const base = unitBasePrice(it);
+      const rate = it.discountRate;
+      const hasDiscount = typeof rate === "number" && rate > 0 && rate < 100;
+      const discounted = hasDiscount ? discountedUnitPrice(base, rate) : base;
+      const saving = hasDiscount ? Math.round((base - discounted) * it.quantity * 100) / 100 : 0;
+      return {
+        name: it.name,
+        quantity: it.quantity,
+        price: it.price > 0 ? Math.round(discounted * it.quantity) : undefined,
+        discountRate: hasDiscount ? rate : undefined,
+        originalUnitPrice: hasDiscount ? Math.round(base) : undefined,
+        discountedUnitPrice: hasDiscount ? Math.round(discounted) : undefined,
+        savingAmount: saving > 0 ? saving : undefined,
+        specs: (it.selectedSpecs ?? []).map((s) => formatSpecLine(s)),
+        note: it.note,
+      };
+    });
     return renderEscPosLines(snapshot, content, items);
   }
 
