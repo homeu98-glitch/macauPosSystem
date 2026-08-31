@@ -1,4 +1,4 @@
-import { formatMoney } from "@/lib/format";
+import { formatMacauDateTime, formatMoney } from "@/lib/format";
 import {
   EscPosBlockStyle,
   EscPosItemsLayout,
@@ -18,6 +18,8 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "store_name", label: "門店名" },
   { id: "order_no", label: "單號" },
   { id: "table_name", label: "類型 / 桌台" },
+  { id: "order_time", label: "下單時間" },
+  { id: "checkout_time", label: "結帳時間" },
   { id: "items", label: "菜品明細" },
   { id: "total", label: "總計" },
   { id: "payment_method", label: "付款方式" },
@@ -67,6 +69,8 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   store_name: block(true, "m", true, "center"),
   order_no: block(true, "s", false, "left"),
   table_name: block(true, "s", false, "left"),
+  order_time: block(true, "s", false, "left"),
+  checkout_time: block(false, "s", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
   total: block(true, "l", true, "right"),
   payment_method: block(true, "s", false, "left"),
@@ -103,7 +107,7 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
 
 export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
   blocks: { ...RECEIPT_BLOCK_DEFAULTS },
-  order: ["store_name", "order_no", "table_name", "items", "total", "payment_method", "order_note", "footer"],
+  order: ["store_name", "order_no", "table_name", "order_time", "checkout_time", "items", "total", "payment_method", "order_note", "footer"],
   footerText: "多謝惠顧，歡迎再次光臨",
 };
 
@@ -195,11 +199,23 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     store_name: opts.storeName,
     order_no: order.localOrderNo,
     table_name: order.tableName,
-    total: formatMoney(order.total, opts.currency),
+    order_time: formatMacauDateTime(order.createdAt),
+    checkout_time: checkoutTimeLabel(order),
+    total: `總金額: ${formatMoney(order.total, opts.currency)}`,
     payment_method: order.paymentMethod ?? "現金",
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
   };
+}
+
+/**
+ * 結帳時間：settled / partially_refunded / refunded → `originalSettledAt`（首次結帳，重結後保留）；
+ * sent_to_kitchen / paid（counter 標記可取餐）→ `servedAt`；未結帳 → 空字串（隱藏區塊）。
+ */
+function checkoutTimeLabel(order: PosOrder): string {
+  if (order.originalSettledAt) return formatMacauDateTime(order.originalSettledAt);
+  if (order.servedAt) return formatMacauDateTime(order.servedAt);
+  return "";
 }
 
 export interface KitchenContentOpts {

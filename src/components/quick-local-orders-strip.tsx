@@ -1,7 +1,7 @@
 "use client";
 
 import { PosOrder } from "@/lib/types";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMacauTime } from "@/lib/format";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 

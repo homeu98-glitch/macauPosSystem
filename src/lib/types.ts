@@ -243,6 +243,8 @@ export type ReceiptSectionId =
   | "store_name"
   | "order_no"
   | "table_name"
+  | "order_time"
+  | "checkout_time"
   | "items"
   | "total"
   | "payment_method"

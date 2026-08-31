@@ -36,7 +36,7 @@ import {
   LABEL_SECTION_META,
   RECEIPT_SECTION_META,
 } from "@/lib/escpos-template";
-import { EscPosLine, PrintItemLine, renderEscPosLines } from "@/lib/escpos-render";
+import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine } from "@/lib/escpos-render";
 
 /**
  * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
@@ -324,7 +324,8 @@ export function PrintCenter() {
     const items: PrintItemLine[] = sampleOrder.items.map((it) => ({
       name: it.name,
       quantity: it.quantity,
-      specs: (it.selectedSpecs ?? []).map((s) => `${s.groupName}:${s.optionLabel}`),
+      price: it.price > 0 ? Math.round(it.price * it.quantity) : undefined,
+      specs: (it.selectedSpecs ?? []).map((s) => formatSpecLine(s)),
       note: it.note,
     }));
     return renderEscPosLines(snapshot, content, items);

@@ -1,6 +1,18 @@
 import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout } from "@/lib/types";
 
-export type PrintItemLine = { name: string; quantity: number; specs?: string[]; note?: string };
+export type PrintItemLine = { name: string; quantity: number; price?: number; specs?: string[]; note?: string };
+
+/**
+ * 把 groupName / optionLabel / priceDelta 攤平成收據／廚房單用嘅單行字串。priceDelta > 0 會自動加 ` $X` 後綴；
+ * priceDelta === 0 唔加，唔加符號，避免冇加購嘅規格被誤會有收費。
+ */
+export function formatSpecLine(spec: { groupName: string; optionLabel: string; priceDelta?: number }): string {
+  const head = `${spec.groupName}:${spec.optionLabel}`;
+  const delta = Number(spec.priceDelta ?? 0);
+  if (!Number.isFinite(delta) || delta === 0) return head;
+  const abs = Math.abs(Math.round(delta));
+  return delta < 0 ? `${head} -${abs}` : `${head} $${abs}`;
+}
 
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }

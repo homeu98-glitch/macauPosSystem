@@ -24,6 +24,7 @@ import {
   ticketTypeLabel,
 } from "@/lib/escpos-template";
 import { PrintItemLine } from "@/lib/escpos-render";
+import { formatSpecLine } from "@/lib/escpos-render";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -67,7 +68,10 @@ function buildTemplateReceiptJobs(
   const items: PrintItemLine[] = order.items.map((it) => ({
     name: it.name,
     quantity: it.quantity,
-    specs: (it.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+    // 收據預覽右上角額外顯示單項小計（quantity × unit price）。companion / android 收到
+    // `price` 欄位就會自動加印；未支援時亦唔影響主行。kitchen 唔加。
+    price: it.price > 0 ? Math.round(it.price * it.quantity) : undefined,
+    specs: (it.selectedSpecs ?? []).map((spec) => formatSpecLine(spec)),
     note: it.note,
   }));
   const content = buildReceiptContent(order, {
