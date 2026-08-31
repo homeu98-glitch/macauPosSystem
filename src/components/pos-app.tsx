@@ -324,7 +324,6 @@ export function PosApp() {
   const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
-  const [draggingQuickAction, setDraggingQuickAction] = useState<string | null>(null);
   const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioReady, setAudioReady] = useState(false);
@@ -3067,105 +3066,6 @@ export function PosApp() {
                         {deviceConfig.printers.filter((printer) => printer.enabled).length}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">打印任務 {printJobs.length} 筆</div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-semibold text-slate-500">快捷入口</div>
-                      <div className="text-[11px] text-slate-400">可拖動排序</div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      {localSettings.dineInQuickActionOrder.map((actionId) => {
-                        if (actionId === "checkout" && !currentSettlementOrder) return null;
-                        const actionMap = {
-                          view_order: {
-                            label: "查看本單",
-                            disabled: !activeOrder,
-                            tone: "white",
-                            onClick: () => setViewingOrderId(activeOrder?.id ?? null),
-                          },
-                          send_kitchen: {
-                            label: orderSubmitting ? "提交中…" : "送廚房",
-                            disabled: !activeTable || cartItems.length === 0,
-                            tone: "dark",
-                            onClick: () => void sendToKitchen(),
-                          },
-                          checkout: {
-                            label: "去結帳",
-                            disabled: !currentSettlementOrder,
-                            tone: "orange",
-                            onClick: () => setPayingOrderId(currentSettlementOrder?.id ?? null),
-                          },
-                          back_tables: {
-                            label: "返回桌台",
-                            disabled: false,
-                            tone: "white",
-                            onClick: backToTables,
-                          },
-                          prints: {
-                            label: "查看打印",
-                            disabled: false,
-                            tone: "white",
-                            onClick: () => router.push("/prints"),
-                          },
-                          online_orders: {
-                            label: "線上訂單",
-                            disabled: false,
-                            tone: "white",
-                            onClick: () => router.push("/orders"),
-                          },
-                          shift: {
-                            label: "交班核對",
-                            disabled: false,
-                            tone: "white",
-                            onClick: () => router.push("/shift"),
-                          },
-                          settings: {
-                            label: "設置",
-                            disabled: false,
-                            tone: "white",
-                            onClick: () => router.push("/settings"),
-                          },
-                        } as const;
-                        const action = actionMap[actionId];
-                        return (
-                          <button
-                            key={actionId}
-                            className={`rounded-2xl px-4 py-3 text-sm font-semibold ${
-                              action.tone === "dark"
-                                ? "bg-slate-900 text-white"
-                                : action.tone === "orange"
-                                  ? "bg-orange-500 text-white"
-                                  : "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
-                            } disabled:opacity-50`}
-                            disabled={action.disabled}
-                            draggable
-                            onClick={action.onClick}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDragStart={() => setDraggingQuickAction(actionId)}
-                            onDrop={() => {
-                              if (!draggingQuickAction || draggingQuickAction === actionId) return;
-                              const nextOrder = [...localSettings.dineInQuickActionOrder];
-                              const fromIndex = nextOrder.indexOf(draggingQuickAction as (typeof nextOrder)[number]);
-                              const toIndex = nextOrder.indexOf(actionId as (typeof nextOrder)[number]);
-                              if (fromIndex === -1 || toIndex === -1) return;
-                              const [moved] = nextOrder.splice(fromIndex, 1);
-                              nextOrder.splice(toIndex, 0, moved);
-                              const nextSettings = {
-                                ...localSettings,
-                                dineInQuickActionOrder: nextOrder,
-                              };
-                              setLocalSettings(nextSettings);
-                              savePosLocalSettings(nextSettings);
-                              setDraggingQuickAction(null);
-                            }}
-                            type="button"
-                          >
-                            {action.label}
-                          </button>
-                        );
-                      })}
                     </div>
                   </div>
                 </div>

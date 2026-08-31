@@ -290,9 +290,6 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       ? settings.reopenReasons
       : defaultPosLocalSettings.reopenReasons,
     fullVoidBehavior: settings?.fullVoidBehavior ?? defaultPosLocalSettings.fullVoidBehavior,
-    dineInQuickActionOrder: Array.isArray(settings?.dineInQuickActionOrder)
-      ? settings?.dineInQuickActionOrder
-      : defaultPosLocalSettings.dineInQuickActionOrder,
     onlineOrderSettings: {
       autoAccept: Boolean(
         settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,

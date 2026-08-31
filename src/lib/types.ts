@@ -338,9 +338,6 @@ export interface PosLocalSettings {
   /** 返結（反結賬）可選原因清單，設置 → 備註 可增刪 */
   reopenReasons: string[];
   fullVoidBehavior: "cancelled" | "refunded";
-  dineInQuickActionOrder: Array<
-    "view_order" | "send_kitchen" | "checkout" | "back_tables" | "prints" | "online_orders" | "shift" | "settings"
-  >;
   onlineOrderSettings: {
     autoAccept: boolean;
   };

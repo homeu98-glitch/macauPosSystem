@@ -494,7 +494,6 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
   reopenReasons: ["結帳錯誤", "加錯項目", "折扣計錯", "找錯錢", "會員扣錯", "客人要求改單"],
   fullVoidBehavior: "cancelled",
-  dineInQuickActionOrder: ["checkout", "view_order", "send_kitchen", "prints", "online_orders", "shift", "settings", "back_tables"],
   onlineOrderSettings: {
     autoAccept: false,
   },
