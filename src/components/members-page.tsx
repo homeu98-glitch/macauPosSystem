@@ -433,10 +433,6 @@ export function MembersPage() {
                   >
                     {listBusy ? "搜尋中…" : "搜尋"}
                   </button>
-                  <span className="text-xs text-slate-500">
-                    契約 v3.2 §5.7：唔可以無輸入就列出全店會員；要睇全店名單請用會員通 Web
-                    <span className="font-mono"> /merchant/reports/users</span>。
-                  </span>
                 </div>
                 {!validSearch ? <div className="mt-2 text-xs text-red-600">只可輸入 8 位數字</div> : null}
                 {offlineMode ? (
@@ -518,16 +514,6 @@ export function MembersPage() {
               {!member && phone.length < 8 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
                   輸入完整 8 位手機號碼（查單一會員），或用上方搜尋框以姓名／電話搜尋。
-                  <div className="mt-3 text-xs text-slate-400">
-                    POS 支援已註冊會員現場充值（Ledger
-                    <span className="font-mono"> merchant_apply_pos_txn(topup)</span>）；未註冊電話亦可直接
-                    「建檔並充值」（Ledger <span className="font-mono">ensure-customer</span>，伺服器代打），
-                    顧客事後到會員通自設 PIN。
-                    <div className="mt-2">
-                      契約 v3.2：唔支援亦唔容許「無輸入列出全店會員」；睇全店名單請用會員通 Web
-                      <span className="font-mono"> /merchant/reports/users</span>。
-                    </div>
-                  </div>
                 </div>
               ) : null}
 

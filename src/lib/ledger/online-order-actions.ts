@@ -7,7 +7,9 @@ export type OnlineOrderActionKey =
   | "mark_ready"
   | "mark_delivering"
   | "complete"
-  | "mark_paid_in_store";
+  | "mark_paid_in_store"
+  | "confirm_cancel"
+  | "decline_cancel";
 
 export type OnlineOrderActionTone = "orange" | "slate" | "amber" | "emerald" | "violet" | "sky";
 
@@ -113,6 +115,32 @@ export function getSecondaryOnlineOrderActions(order: LedgerOnlineOrder): Online
     return [{ key: "reject", label: "拒單", tone: "slate", nextStatus: "cancelled", successMessage: "已拒絕訂單。" }];
   }
   return [];
+}
+
+/**
+ * 客人已發出取消請求（change_request_type=cancel + change_request_status=pending/requested）時，
+ * POS 收銀需要能夠「同意取消」或「拒絕取消」。這組按鈕取代原本被隱藏的接受／拒絕。
+ *
+ * - confirm_cancel：把訂單推進到 cancelled（與現有「拒單」走同一條 update_order_status 路徑）。
+ * - decline_cancel：通知 Ledger 商家拒絕取消，清除 change_request，訂單恢復正常流程。
+ */
+export function getCancelRequestActions(order: LedgerOnlineOrder): OnlineOrderAction[] {
+  if (!hasPendingCancelRequest(order)) return [];
+  return [
+    {
+      key: "confirm_cancel",
+      label: "同意取消",
+      tone: "slate",
+      nextStatus: "cancelled",
+      successMessage: "已同意客人取消，訂單已取消。",
+    },
+    {
+      key: "decline_cancel",
+      label: "拒絕取消",
+      tone: "violet",
+      successMessage: "已拒絕取消申請，訂單繼續處理。",
+    },
+  ];
 }
 
 export function onlineOrderActionButtonClass(tone: OnlineOrderActionTone, compact = false): string {

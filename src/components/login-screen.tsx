@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { KeyboardEvent, useState } from "react";
 
-import { PwaInstallButton } from "@/components/pwa-install-button";
+import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
@@ -22,6 +22,8 @@ export function LoginScreen() {
   const [mode, setMode] = useState<"quick" | "dinein" | "salon" | "kiosk">(initialMode);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // 原生殼（Android APK / PC Electron）入面唔使顯示 PWA 安裝入口
+  const [isNativeShell] = useState<boolean>(() => isRunningInNativeShell());
 
   async function submit() {
     setError("");
@@ -267,7 +269,7 @@ export function LoginScreen() {
             {loading ? "正在登入…" : "登入"}
           </button>
 
-          <PwaInstallButton />
+          {isNativeShell ? null : <PwaInstallButton />}
 
           <div className="mt-4 text-center text-xs text-white/40">使用會員通商戶帳號登入（與 Ledger Web / Android 相同）</div>
         </div>

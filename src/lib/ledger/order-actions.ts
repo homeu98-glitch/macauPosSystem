@@ -67,6 +67,20 @@ export async function setOrderPaidInStore(orderId: string) {
   return callRpc("set_order_paid_in_store", { p_order_id: orderId });
 }
 
+/**
+ * 商家回應客人的取消申請：把 change_request_status 設為 declined，令訂單恢復正常流程。
+ *
+ * 注意：RPC 名稱 `update_change_request_status` 與參數 `p_status` 需與 Ledger 後端確認。
+ * 若 Ledger 端實際命名不同（例如 `clear_change_request` / `respond_change_request`），
+ * 只需改此函式的 fn 與 args 即可，其餘 UI 不用動。
+ */
+export async function respondToCancelRequest(orderId: string, status: "declined" | "approved") {
+  return callRpc("update_change_request_status", {
+    p_order_id: orderId,
+    p_status: status,
+  });
+}
+
 export async function acceptLedgerOrder(order: {
   id: string;
   paymentMode?: string;

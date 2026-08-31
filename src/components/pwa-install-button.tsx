@@ -10,7 +10,24 @@ type DeferredPrompt = Event & {
 declare global {
   interface Window {
     __pwaDeferredPrompt?: DeferredPrompt | null;
+    // Android 原生 APK WebView 注入（print-bridge/native.ts 同款標記）
+    PosNative?: { printJob?: unknown } | undefined;
+    // PC 桌面 Electron 殼經 preload 注入（app-update-panel.tsx 同款標記）
+    companionShell?: unknown;
   }
+}
+
+/**
+ * 判斷當前網頁係咪已經跑喺我哋嘅原生殼入面（Android APK WebView / PC Electron）。
+ * 呢兩個係原生殼主動注入嘅 bridge 標記，比 userAgent sniff 可靠，亦係 codebase 現有慣例
+ * （PosNative → print-bridge/native.ts、companionShell → app-update-panel.tsx）。
+ * 喺原生殼入面 PWA 安裝根本冇意義（已經係 installed app），所以整個安裝入口要隱藏。
+ */
+export function isRunningInNativeShell(): boolean {
+  if (typeof window === "undefined") return false;
+  const hasPosNative = Boolean((window as unknown as { PosNative?: { printJob?: unknown } }).PosNative?.printJob);
+  const hasCompanionShell = Boolean((window as unknown as { companionShell?: unknown }).companionShell);
+  return hasPosNative || hasCompanionShell;
 }
 
 export function PwaInstallButton() {
@@ -55,6 +72,9 @@ export function PwaInstallButton() {
   }, []);
 
   if (isStandalone) return null;
+
+  // 原生殼（Android APK / PC Electron）入面 PWA 安裝冇意義，整個入口隱藏
+  if (isRunningInNativeShell()) return null;
 
   return (
     <div className="mt-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-left text-sm text-white/85">

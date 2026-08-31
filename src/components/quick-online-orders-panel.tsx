@@ -12,6 +12,7 @@ import {
 import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
+  respondToCancelRequest,
   setOrderPaidInStore,
   updateOrderStatus,
 } from "@/lib/ledger/order-actions";
@@ -30,6 +31,7 @@ import {
 } from "@/lib/ledger/order-mapper";
 import {
   getPrimaryOnlineOrderAction,
+  getCancelRequestActions,
   isActiveOnlineOrder,
   ledgerStatusBadgeLabel,
   onlineOrderActionButtonClass,
@@ -364,12 +366,23 @@ export function QuickOnlineOrdersPanel({
         if (!ok) return;
       }
 
+      if (action.key === "confirm_cancel") {
+        const ok = window.confirm("確定同意客人取消這張訂單？取消後不可復原。");
+        if (!ok) return;
+      }
+
       setActionLoadingKey(`${order.id}:${action.key}`);
       try {
         if (action.key === "mark_paid_in_store") {
           await setOrderPaidInStore(order.id);
           await printReceiptForLedgerOrderOnce(order.id, { paymentMethod: "到店付款" });
           onToast({ tone: "success", message: action.successMessage ?? "已標記到店付款。" });
+          return;
+        }
+
+        if (action.key === "decline_cancel") {
+          await respondToCancelRequest(order.id, "declined");
+          onToast({ tone: "success", message: action.successMessage ?? "已拒絕取消申請。" });
           return;
         }
 
@@ -420,11 +433,34 @@ export function QuickOnlineOrdersPanel({
 
   const autoAcceptLabel = skipTableAssignment ? "自動接單" : "自動接單（非堂食）";
 
+  function renderCancelRequestActions(order: LedgerOnlineOrder) {
+    const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
+    const cancelActions = getCancelRequestActions(order);
+    if (cancelActions.length === 0) return null;
+    return (
+      <>
+        {cancelActions.map((action) => (
+          <button
+            key={action.key}
+            className={onlineOrderActionButtonClass(action.tone, layout === "strip")}
+            disabled={busy}
+            onClick={() => void runAction(order, action)}
+            type="button"
+          >
+            {busy ? "處理中…" : action.label}
+          </button>
+        ))}
+      </>
+    );
+  }
+
   function renderModalActions(order: LedgerOnlineOrder) {
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
     const primary = getPrimaryOnlineOrderAction(order);
 
-    if (hasPendingCancelRequest(order)) return null;
+    if (hasPendingCancelRequest(order)) {
+      return renderCancelRequestActions(order);
+    }
 
     return (
       <>
@@ -497,26 +533,32 @@ export function QuickOnlineOrdersPanel({
             >
               查看
             </button>
-            {primary && !hasPendingCancelRequest(order) ? (
-              <button
-                className={onlineOrderActionButtonClass(primary.tone, true)}
-                disabled={busy}
-                onClick={() => void runAction(order, primary)}
-                type="button"
-              >
-                {busy ? "處理中…" : primary.label}
-              </button>
-            ) : null}
-            {rawLedgerStatus(order.status) === "pending" && !hasPendingCancelRequest(order) ? (
-              <button
-                className={onlineOrderActionButtonClass("slate", true)}
-                disabled={busy}
-                onClick={() => void runAction(order, { key: "reject", label: "拒單", tone: "slate", nextStatus: "cancelled", successMessage: "已拒絕訂單。" })}
-                type="button"
-              >
-                拒單
-              </button>
-            ) : null}
+            {hasPendingCancelRequest(order) ? (
+              renderCancelRequestActions(order)
+            ) : (
+              <>
+                {primary ? (
+                  <button
+                    className={onlineOrderActionButtonClass(primary.tone, true)}
+                    disabled={busy}
+                    onClick={() => void runAction(order, primary)}
+                    type="button"
+                  >
+                    {busy ? "處理中…" : primary.label}
+                  </button>
+                ) : null}
+                {rawLedgerStatus(order.status) === "pending" ? (
+                  <button
+                    className={onlineOrderActionButtonClass("slate", true)}
+                    disabled={busy}
+                    onClick={() => void runAction(order, { key: "reject", label: "拒單", tone: "slate", nextStatus: "cancelled", successMessage: "已拒絕訂單。" })}
+                    type="button"
+                  >
+                    拒單
+                  </button>
+                ) : null}
+              </>
+            )}
           </div>
         </article>
       );

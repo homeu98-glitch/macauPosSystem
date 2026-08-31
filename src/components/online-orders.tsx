@@ -13,6 +13,7 @@ import {
 import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
+  respondToCancelRequest,
   setOrderPaidInStore,
   updateOrderStatus as updateLedgerOrderStatus,
 } from "@/lib/ledger/order-actions";
@@ -551,6 +552,27 @@ export function OnlineOrders({
     setViewingOrderId(null);
   }
 
+  async function confirmCustomerCancel(order: LedgerOnlineOrder) {
+    const ok = window.confirm("確定同意客人取消這張訂單？取消後不可復原。");
+    if (!ok) return;
+    await pushStatus(order, "cancelled", "已同意客人取消，訂單已取消。");
+    setViewingOrderId(null);
+  }
+
+  async function declineCustomerCancel(order: LedgerOnlineOrder) {
+    const ok = window.confirm("確定拒絕客人的取消申請？訂單會繼續處理。");
+    if (!ok) return;
+    setActionLoadingKey(`${order.id}:decline_cancel`);
+    try {
+      await respondToCancelRequest(order.id, "declined");
+      setToast({ tone: "success", message: "已拒絕取消申請，訂單繼續處理。" });
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "拒絕取消失敗" });
+    } finally {
+      setActionLoadingKey(null);
+    }
+  }
+
   function renderOrderActions(order: LedgerOnlineOrder, compact = false) {
     const raw = rawLedgerStatus(order.status);
     const orderLoading = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
@@ -579,9 +601,27 @@ export function OnlineOrders({
           </>
         ) : null}
         {hasPendingCancelRequest(order) ? (
-          <span className={`${btn} bg-rose-50 text-rose-700 ring-1 ring-rose-200`}>
-            {changeRequestLabel(order)}（請至 Ledger Web 確認）
-          </span>
+          <>
+            <span className={`${btn} bg-rose-50 text-rose-700 ring-1 ring-rose-200`}>
+              {changeRequestLabel(order)}
+            </span>
+            <button
+              className={`${btn} bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60`}
+              disabled={orderLoading}
+              onClick={() => void confirmCustomerCancel(order)}
+              type="button"
+            >
+              同意取消
+            </button>
+            <button
+              className={`${btn} bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60`}
+              disabled={orderLoading}
+              onClick={() => void declineCustomerCancel(order)}
+              type="button"
+            >
+              拒絕取消
+            </button>
+          </>
         ) : null}
         {raw === "accepted" ? (
           <button
