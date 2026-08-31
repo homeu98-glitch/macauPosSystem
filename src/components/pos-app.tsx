@@ -82,7 +82,7 @@ import {
   quickCompletionLabel,
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
-import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
+import { filterQuickActionBarOrders, isQuickCounterOrder, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
@@ -4139,17 +4139,119 @@ export function PosApp() {
               >
                 重打單
               </button>
-              {(viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total) &&
-              viewingOrder.status !== "settled" &&
-              viewingOrder.status !== "refunded" ? (
-                <button
-                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => markOrderCompleted(viewingOrder.id)}
-                  type="button"
-                >
-                  已完成
-                </button>
-              ) : null}
+              {/* 用戶反饋：查看內嘅掣要同外面（quick strip）完全一致。
+                  將「已完成 / 去結帳 / 取消結帳」舊邏輯換成依訂單狀態 mirror strip：
+                  - 自助單（kiosk/scan counter）：split 雙掣 + 觸發後消失機制
+                  - 收銀台單（pos counter）：舊單鏈（可取餐 → 已取餐）
+                  - 堂食單：冇 strip 掣 → 用「取消結帳」/「去結帳」（管理員導向），唔變
+                  退款 / 部分退款（settled only）仍保留（modal 限定管理員操作，strip 冇）。 */}
+              {(() => {
+                const v = viewingOrder;
+                const isSelf = isSelfOrder(v);
+                const isQuick = isQuickCounterOrder(v);
+                const showSplit = isQuick && isSelf;
+                const isPaid = v.status === "paid";
+                const isReady = v.fulfillmentStatus === "ready";
+                const isBothDone = isPaid && isReady;
+                const completeText = quickCompleteLabel(v);
+
+                if (showSplit) {
+                  // 自助單：mirror strip 嘅 split 雙掣邏輯
+                  return (
+                    <>
+                      {!isPaid && v.status !== "draft" ? (
+                        <button
+                          className="rounded-2xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                          onClick={() => {
+                            setViewingOrderId(null);
+                            setPayingOrderId(v.id);
+                          }}
+                          type="button"
+                        >
+                          去結帳
+                        </button>
+                      ) : null}
+                      {!isReady && v.status !== "draft" ? (
+                        <button
+                          className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                          onClick={() => updateQuickFulfillment(v.id)}
+                          type="button"
+                        >
+                          可取餐
+                        </button>
+                      ) : null}
+                      {isBothDone ? (
+                        <button
+                          className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                          onClick={() => markOrderCompleted(v.id, { label: completeText })}
+                          type="button"
+                        >
+                          {completeText}
+                        </button>
+                      ) : null}
+                    </>
+                  );
+                }
+                if (isQuick) {
+                  // 收銀台快餐單：mirror strip 舊單鏈（可取餐 → 已取餐）
+                  const inPreparing = v.status === "sent_to_kitchen" || v.status === "paid";
+                  const inWaiting = isBothDone || (v.status === "paid" && isReady);
+                  if (inPreparing && !isReady) {
+                    return (
+                      <button
+                        className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                        onClick={() => updateQuickFulfillment(v.id)}
+                        type="button"
+                      >
+                        可取餐
+                      </button>
+                    );
+                  }
+                  if (inWaiting) {
+                    return (
+                      <button
+                        className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        onClick={() => markOrderCompleted(v.id, { label: completeText })}
+                        type="button"
+                      >
+                        {completeText}
+                      </button>
+                    );
+                  }
+                }
+                // 堂食單 / 其他：保留舊管理員導向掣
+                return (
+                  <>
+                    {(v.status === "draft" || v.status === "sent_to_kitchen") ? (
+                      <button
+                        className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => {
+                          setOrderActionRequest({ type: "cancel_order", orderId: v.id });
+                          setOrderActionReason("");
+                        }}
+                        type="button"
+                      >
+                        取消結帳
+                      </button>
+                    ) : null}
+                    {v.status !== "settled" &&
+                    v.status !== "cancelled" &&
+                    v.status !== "refunded" &&
+                    (v.prepaidAmount ?? 0) < v.total ? (
+                      <button
+                        className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => {
+                          setViewingOrderId(null);
+                          setPayingOrderId(v.id);
+                        }}
+                        type="button"
+                      >
+                        去結帳
+                      </button>
+                    ) : null}
+                  </>
+                );
+              })()}
               {(viewingOrder.status === "settled" || viewingOrder.status === "partially_refunded") ? (
                 <>
                   <button
@@ -4184,33 +4286,6 @@ export function PosApp() {
                     整單退款
                   </button>
                 </>
-              ) : null}
-              {(viewingOrder.status === "draft" || viewingOrder.status === "sent_to_kitchen") ? (
-                <button
-                  className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => {
-                    setOrderActionRequest({ type: "cancel_order", orderId: viewingOrder.id });
-                    setOrderActionReason("");
-                  }}
-                  type="button"
-                >
-                  取消結帳
-                </button>
-              ) : null}
-              {viewingOrder.status !== "settled" &&
-              viewingOrder.status !== "cancelled" &&
-              viewingOrder.status !== "refunded" &&
-              (viewingOrder.prepaidAmount ?? 0) < viewingOrder.total ? (
-                <button
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => {
-                    setViewingOrderId(null);
-                    setPayingOrderId(viewingOrder.id);
-                  }}
-                  type="button"
-                >
-                  去結帳
-                </button>
               ) : null}
             </>
           }

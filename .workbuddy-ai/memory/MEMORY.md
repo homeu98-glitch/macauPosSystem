@@ -63,6 +63,7 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 ## 打印
 
 - **Native Print Agent（2026-08-19 ✅）**：Android WebView 注入 `window.PosNative`，`PosNative.printJob(json)` → Kotlin raw socket `IP:9100` ESC/POS。非 Android fallback HTTP bridge。見 `docs/36`。
+- **🟥 Native bridge protocol 轉發（2026-09-01 ✅ §18+20）**：`src/lib/print-bridge/native.ts:56-61` 嘅 `dispatchJobToNative` payload map 顯式只攞 `name/quantity/specs/note` 四個 field — **主動 strip 走 `PrintItemLine` 上面任何新加嘅 field**（包括 `price`，包括將來任何 protocol 擴展）。Companion / Relay 通道用 `JSON.stringify({ job })` 直透傳唔 strip。**教訓**：每加新 field 到 `PrintItemLine` / `PrintJob.items[i]` 後，必須 audit `native.ts` 嘅 payload map — 否則 APK / Companion 收唔到 data。Forward-compatible 寫法：`...(typeof it.field === "number" ? { field: it.field } : {})`（optional spread，唔加 `undefined`）。
 - **ESC/POS 放大真相表（Companion 0.1.15）**：`ESC ! n`（1B21）只管 ASCII（`0x20`闊 `0x10`高）；`FS ! n`（1C21）只管 Kanji（`0x04`闊 `0x08`高）；`GS ! n`（1D21）管 ASCII+Kanji，nibble `(h-1)<<4|(w-1)` → l=`0x11`（**唔係 0x30**）。舊 bug：CJK 行 `ESC!0x30`+`GS!0x30` 相乘 4×4。已修 companion（`GS_SIZE_BYTE={s:0x00,m:0x01,l:0x11}` + `resetMagnify()`）。**待 `npm run dist` 打包 0.1.15 驗收**（見 `docs/81`）。
 
 ## 開發環境 / 偏好
