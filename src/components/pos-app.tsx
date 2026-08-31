@@ -4212,17 +4212,6 @@ export function PosApp() {
                   去結帳
                 </button>
               ) : null}
-              <button
-                className="rounded-2xl bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
-                onClick={() => {
-                  if (window.confirm(`確定刪除訂單 ${viewingOrder.localOrderNo}？此操作不可復原，會同時刪除本機與伺服器紀錄。`)) {
-                    deleteOrderPermanently(viewingOrder.id);
-                  }
-                }}
-                type="button"
-              >
-                刪除訂單
-              </button>
             </>
           }
           description={`${viewingOrder.localOrderNo} · ${viewingOrder.tableName}`}

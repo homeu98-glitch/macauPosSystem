@@ -56,6 +56,10 @@ export async function dispatchJobToNative(
       items: (job.items ?? []).map((it) => ({
         name: it.name,
         quantity: it.quantity,
+        // 收據主行菜價（基價 × quantity；OrderItem.price 已扣減 spec delta 避免重複收費，§17）。
+        // 舊版 APK / Companion renderer 認唔到會忽略（forward-compatible）。
+        // POS 自己嘅 EscPosPreview 已經 render；agent 升級後即可印到實紙。
+        ...(typeof it.price === "number" ? { price: it.price } : {}),
         specs: it.specs ?? [],
         note: it.note ?? "",
       })),
