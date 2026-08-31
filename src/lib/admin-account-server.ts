@@ -90,7 +90,8 @@ export async function authenticateAccountFromServer(account: string, pin: string
   const enriched: AccountUser = {
     id: accountRow.id,
     account: accountRow.account,
-    pin: accountRow.pin_code,
+    // 登入成功後唔需要保留 PIN 喺 session 物件入面（敏感資料保護）
+    pin: "",
     name: accountRow.name,
     role,
     active: Boolean(accountRow.active),

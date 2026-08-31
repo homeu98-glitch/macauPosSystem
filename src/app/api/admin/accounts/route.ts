@@ -90,7 +90,7 @@ export async function POST(request: Request) {
     );
   }
 
-  return GET();
+  return GET(request);
 }
 
 export async function PUT(request: Request) {
@@ -145,7 +145,7 @@ export async function PUT(request: Request) {
     }
   }
 
-  return GET();
+  return GET(request);
 }
 
 export async function DELETE(request: Request) {
@@ -168,5 +168,5 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
   }
 
-  return GET();
+  return GET(request);
 }

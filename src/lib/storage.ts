@@ -531,6 +531,13 @@ export type AuthSession = {
   loggedInAt: string;
   ledgerAccessToken?: string;
   ledgerRefreshToken?: string;
+  /**
+   * 管理員操作短效 token（HMAC-signed，12h TTL）。
+   * 2026-08-31 資安加固：/api/admin/accounts 四個 method 全部改驗 token，
+   * 唔再零授權。由 /api/admin/session 簽發，login 成功後存入 localStorage。
+   * 見 docs/89 §2。
+   */
+  adminSessionToken?: string;
 };
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
@@ -556,6 +563,7 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     loggedInAt: session.loggedInAt ?? new Date().toISOString(),
     ledgerAccessToken: session.ledgerAccessToken,
     ledgerRefreshToken: session.ledgerRefreshToken,
+    adminSessionToken: session.adminSessionToken,
   };
 }
 
