@@ -44,8 +44,17 @@ function OrderCard({
   const orderTime = formatMacauTime(order.createdAt);
 
   // 自助單（kiosk / scan）嘅快餐 counter 單：可取餐 + 結帳 兩個動作獨立並存，
-  // 先做嗰個會灰掉（disabled），兩個都做齊先出現「已取餐」（settled）。
+  // 對應狀態一旦觸發，掣就從介面消失（唔係灰掉）；兩個都做齊先出現「已取餐」（settled）。
   // 收銀台落單（source="pos"）嘅快餐單維持舊嘅單鏈邏輯（可取餐 → 已取餐）。
+  //
+  // 「消失後唔再出現」係由兩個單向閘保證：
+  // 1. `status` paid 之後唔會回到 sent_to_kitchen（confirmPayment 只寫 paid/settled，
+  //    settleOnly 唔 reset；返結 reopen 會去到 reopened 而非 sent_to_kitchen，reopened
+  //    嘅訂單唔再落 quick strip）。
+  // 2. `fulfillmentStatus` 一旦寫成 ready 唔會被 reset（`updateQuickFulfillmentInStore`
+  //    只寫 ready，markQuickOrderCompletedInStore 寫 ready + settled，唔 reset 落
+  //    preparing；餐飲 join 操作唔 reset fulfillmentStatus）。
+  // 所以 `isPaid` / `isReady` 一變 true 就永久 true，掣一消失就永久唔再 render。
   const showSplitActions = onCheckout && isQuickCounterOrder(order) && isSelfOrder(order);
   const isPaid = order.status === "paid";
   const isReady = order.fulfillmentStatus === "ready";
@@ -95,7 +104,7 @@ function OrderCard({
         </div>
       </div>
       {/* 按鈕：mt-auto 推到底（卡 fixed height，按鈕永遠對齊底部）。
-          自助單用 2 獨立按鈕 + 灰掉機制；收銀單維持舊單鏈。 */}
+          自助單用 2 獨立按鈕 + 觸發後消失機制；收銀單維持舊單鏈。 */}
       <div className="mt-auto flex flex-wrap gap-1.5">
         <button
           className="shrink-0 rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
@@ -106,31 +115,33 @@ function OrderCard({
         </button>
         {showSplitActions ? (
           <>
-            {/* 去結帳：已 paid 就灰掉（disabled），否則 active。draft 自助單唔顯示，要等確認出單先見到。 */}
-            {order.status !== "draft" && (
+            {/* 去結帳：未 paid 先 active；已 paid → 唔再 render（用戶要求「消失」而唔係灰掉）。
+                單向閘：`status` 由 paid → settled / cancelled / refunded 都唔會回退 paid，
+                所以呢個掣一消失就永久唔會再出現。draft 自助單唔顯示，要等確認出單。 */}
+            {!isPaid && order.status !== "draft" ? (
               <button
                 aria-label={`去結帳 ${order.localOrderNo}`}
-                className="shrink-0 rounded-xl bg-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isPaid}
+                className="shrink-0 rounded-xl bg-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800"
                 onClick={() => onCheckout?.(order.id)}
                 type="button"
               >
                 去結帳
               </button>
-            )}
-            {/* 可取餐：已 ready 就灰掉，否則 active。draft 自助單唔顯示。 */}
-            {order.status !== "draft" && (
+            ) : null}
+            {/* 可取餐：未 ready 先 active；已 ready → 唔再 render。單向閘：
+                `fulfillmentStatus` 一旦寫成 ready 就唔會 reset（`updateQuickFulfillmentInStore`
+                永遠寫 ready、唔覆寫其他值），所以呢個掣一消失就永久唔會再出現。draft 自助單唔顯示。 */}
+            {!isReady && order.status !== "draft" ? (
               <button
                 aria-label={`標記可取餐 ${order.localOrderNo}`}
-                className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isReady}
+                className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-orange-600"
                 onClick={() => onMarkReady(order.id)}
                 type="button"
               >
                 可取餐
               </button>
-            )}
-            {/* 兩個都做齊 → 出現「已取餐」按下變 settled。 */}
+            ) : null}
+            {/* 兩個都做齊 → 出現「已取餐」按下變 settled。settled 後單離開 strip。 */}
             {isBothDone ? (
               <button
                 aria-label={`完成取餐 ${order.localOrderNo}`}
