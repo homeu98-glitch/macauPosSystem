@@ -16,6 +16,11 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import {
+  isOrderNoteLocked,
+  ITEM_SPEC_LOCKED_MESSAGE,
+  ORDER_NOTE_LOCKED_MESSAGE,
+} from "@/lib/pos/order-note-lock";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, buildReceiptPrintJobs, buildVoidPrintJobsForOrder } from "@/lib/print-jobs";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
@@ -914,6 +919,9 @@ export function PosApp() {
     [activeOrderId, orders],
   );
   const isReadOnlySettled = workspaceOrder?.status === "settled";
+  // 全單備註鎖定（docs/84）：一送出（sent_to_kitchen）即固定。
+  // draft（未送出）同 reopened（返結帳）先改得；結完帳 setActiveOrderId(null) → 自動解鎖，唔影響下一張單。
+  const orderNoteLocked = isOrderNoteLocked(workspaceOrder);
   const unsettledOrder = useMemo(
     () => orders.find((order) => order.status === "sent_to_kitchen") ?? null,
     [orders],
@@ -1402,11 +1410,17 @@ export function PosApp() {
     const nextPrice = priceWithSpecs(specModalItem, selectedSpecs);
 
     if (specEditingKey) {
-      setCartItems((current) =>
-        current.map((row) =>
-          itemIdentity(row) === specEditingKey ? { ...row, selectedSpecs, price: nextPrice } : row,
-        ),
-      );
+      // 資料層防線：已下單嘅菜唔准改規格。規格同 note 一樣係 itemIdentity 一部分，
+      // 改咗會令「已下單」標記失效、退菜彈「尚未正式下單」，而且廚房單唔會補印。
+      if ((orderedItemQtyMap.get(specEditingKey) ?? 0) > 0) {
+        setToast({ tone: "info", message: ITEM_SPEC_LOCKED_MESSAGE });
+      } else {
+        setCartItems((current) =>
+          current.map((row) =>
+            itemIdentity(row) === specEditingKey ? { ...row, selectedSpecs, price: nextPrice } : row,
+          ),
+        );
+      }
     } else if (specThenMarketPrice) {
       setMarketPriceSpecs(selectedSpecs ?? []);
       setMarketPriceValue("");
@@ -1424,15 +1438,30 @@ export function PosApp() {
 
   function openItemNoteEditor(item: OrderItem) {
     if (isReadOnlySettled) return;
-    if ((orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) return;
+    // 已下單（送咗廚房）嘅菜：備註喺送出嗰刻已固定，唔可以再改。
+    if ((orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) {
+      setToast({ tone: "info", message: ORDER_NOTE_LOCKED_MESSAGE });
+      return;
+    }
     setNoteDraft(item.note ?? "");
     setNoteModal({ type: "item", itemKey: itemIdentity(item) });
   }
 
-  function applyItemNote(itemKey: string, note: string) {
+  /**
+   * 資料層防線：就算 UI 入口被繞過（日後新增入口 / 深層呼叫），已下單嘅菜都唔准改備註。
+   * 否則改咗會寫入 order.items 同步去後台同收據，但廚房單唔會補印 → 廚房同帳目對唔上；
+   * 而且 note 係 itemIdentity 一部分，改咗會令「已下單」標記消失、退菜失敗。
+   * @returns 係咪成功寫入（false = 被鎖定擋咗）
+   */
+  function applyItemNote(itemKey: string, note: string): boolean {
+    if ((orderedItemQtyMap.get(itemKey) ?? 0) > 0) {
+      setToast({ tone: "info", message: ORDER_NOTE_LOCKED_MESSAGE });
+      return false;
+    }
     setCartItems((current) =>
       current.map((item) => (itemIdentity(item) === itemKey ? { ...item, note: note.trim() } : item)),
     );
+    return true;
   }
 
   function addMenuItem(item: MenuItem) {
@@ -3352,7 +3381,12 @@ export function PosApp() {
                               已退 {orderedQty - item.quantity} 份
                             </div>
                           ) : null}
-                          {item.note ? <div className="truncate text-xs text-slate-500">備註：{item.note}</div> : null}
+                          {item.note ? (
+                            <div className="truncate text-xs text-slate-500">
+                              備註：{item.note}
+                              {locked ? <span className="ml-1 text-[11px] font-medium text-amber-600">已鎖定</span> : null}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </article>
@@ -3431,17 +3465,20 @@ export function PosApp() {
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-slate-600">全單備註</div>
                   <div className="truncate text-xs text-slate-500">{orderNote ? orderNote : "（可選）"}</div>
+                  {orderNoteLocked ? (
+                    <div className="truncate text-[11px] font-medium text-amber-600">訂單已送出，備註已鎖定</div>
+                  ) : null}
                 </div>
                   <button
                     className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={isReadOnlySettled}
+                    disabled={isReadOnlySettled || orderNoteLocked}
                     onClick={() => {
                       setNoteDraft(orderNote);
                       setNoteModal({ type: "order" });
                     }}
                     type="button"
                   >
-                  編輯
+                  {orderNoteLocked ? "已鎖定" : "編輯"}
                 </button>
               </div>
             </div>
@@ -3849,6 +3886,12 @@ export function PosApp() {
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
                 onClick={() => {
                   if (noteModal.type === "order") {
+                    // 資料層防線：全單備註喺訂單送出後即鎖定（就算彈窗被其他途徑打開都擋得住）。
+                    if (orderNoteLocked) {
+                      setToast({ tone: "info", message: ORDER_NOTE_LOCKED_MESSAGE });
+                      setNoteModal(null);
+                      return;
+                    }
                     setOrderNote(noteDraft.trim());
                   } else if (noteModal.itemKey) {
                     applyItemNote(noteModal.itemKey, noteDraft);

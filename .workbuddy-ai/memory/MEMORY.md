@@ -27,6 +27,9 @@
 - Ledger 介面層不可繞過（不走 Vercel HTTP，已 410）
 - 不引入新依賴
 - **設定真源規律**：per-terminal 設定（floors 枱、printTemplates、`onlineOrderSettings` 自動接單）本地 localStorage 優先，唔畀 server 蓋；其餘 field 先係 server 優先。因為 `pos_device_configs` GET 係 `.order(updated_at desc).limit(1)` = **全店最新一條（任何 terminal）**，本來就唔可信。
+- **itemIdentity 三邊同步鐵律**：`pos-app.tsx:1301` `itemIdentity()` = `menuItemId|specs|price|note` —— **note 係 identity 一部分**。`orderedItemQtyMap` 由 `baseOrderItems` 用 identity 計 → `locked = orderedQty > 0`。任何改動已下單菜品（note / specs / price）都**必須同步 `cartItems` + `baseOrderItems` + `order.items`**，只改一邊會令 `locked` 變 false → 「已下單」標記消失、「退 1 份」消失、`voidOrderedItem` 彈「尚未正式下單，不能退菜」。參考 `voidOrderedItem` L1530-1531 嘅做法。
+- **`pos_orders.items` 係 JSONB 整條存**（`/api/pos/sync` L58）→ `OrderItem` 加新 field 唔使改 DB schema / 唔使 migration。
+- **備註鎖定鐵律（2026-08-31 ✅ 已實作，docs/84）**：備註／規格喺**送出（sent_to_kitchen）嗰刻即固定**，之後一律唔准改。真源係 `src/lib/pos/order-note-lock.ts`（`isOrderNoteLocked()` — 鎖 sent_to_kitchen/paid/settled/cancelled/partially_refunded/refunded；**唔鎖** draft 同 reopened 返結帳）。單品備註／規格另靠 `orderedItemQtyMap.get(identity) > 0` 判斷。UI 層（掣 disabled + 提示）同資料層（`applyItemNote` / `applySpecSelection` / 彈窗保存）**兩邊都要擋**。三條理由：① 廚房單係 PrintJob 建立時嘅 snapshot（`buildKitchenPrintJobs` L115），改咗唔會補印；② `items` 係 JSONB 整條寫入後台同收據 → 雙軌不一致；③ note/specs 係 itemIdentity 一部分，改咗會拆散「已下單」標記、退菜壞。結帳後 `setActiveOrderId(null)` 自動解鎖，唔影響下一張單。
 
 ## 線上訂單
 
