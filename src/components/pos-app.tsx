@@ -32,6 +32,7 @@ import {
   buildVoidPrintJobsForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
+import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset } from "@/lib/pos/discount";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -84,7 +85,7 @@ import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
-import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
+import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
@@ -103,12 +104,32 @@ function ticketTypeLabel(ticketType: PrintJob["ticketType"]) {
 }
 
 function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
-  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  // 單品折扣摺入 subtotal：每項用折後單價計小計（docs/折扣需求 #3）。
+  const subtotal = items.reduce((sum, item) => {
+    const rate = item.discountRate;
+    const unit = rate != null && Number.isFinite(rate) ? (item.price * rate) / 100 : item.price;
+    return sum + Math.round(unit * 100 * item.quantity) / 100;
+  }, 0);
   const serviceChargeAmount = subtotal * bootstrap.rules.serviceChargeRate;
   const taxAmount = subtotal * bootstrap.rules.taxRate;
   const total = subtotal + serviceChargeAmount + taxAmount;
 
   return { subtotal, serviceChargeAmount, taxAmount, total };
+}
+
+/**
+ * 由已存 discountAmount 反向配對折扣預設 id：pre-discount 總額 = total + discountAmount，
+ * 逐個 preset 計應減金額，吻合就用嗰個 id；搵唔到（例如 preset 之後被刪）就返 ""（冇折扣）。
+ */
+function matchDiscountId(discounts: DiscountPreset[], orderTotal: number, storedDiscount: number): string {
+  if (!storedDiscount || storedDiscount <= 0) return "";
+  const preDiscountTotal = orderTotal + storedDiscount;
+  const match = discounts.find((d) => discountAmountFromRate(preDiscountTotal, d.rate) === round2(storedDiscount));
+  return match?.id ?? "";
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 /**
@@ -201,7 +222,12 @@ export function PosApp() {
   const [roModalOpen, setRoModalOpen] = useState(false);
   const [roSubmitting, setRoSubmitting] = useState(false);
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
-  const [discountValue, setDiscountValue] = useState("0");
+  // 全單折扣：儲存已選折扣預設 id（"" = 冇折扣）。由 preset.rate 計應減金額。
+  const [discountValue, setDiscountValue] = useState("");
+  // 單品折扣彈窗：正編輯緊嘅 cart item（key = itemIdentity），null = 關咗。
+  const [itemDiscountEditor, setItemDiscountEditor] = useState<string | null>(null);
+  // 單品折扣彈窗內暫選嘅 preset id。
+  const [itemDiscountDraft, setItemDiscountDraft] = useState("");
   const [receivedAmount, setReceivedAmount] = useState("");
   const [posMode, setPosMode] = useState<"tables" | "order">(() => (loadOperatingMode() === "quick" ? "order" : "tables"));
 
@@ -1001,10 +1027,6 @@ export function PosApp() {
     (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
     (!isQuickMode && (activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened") ? activeOrder : null) ??
     (!isQuickMode ? unsettledOrder : null);
-  const discountAmount = useMemo(() => {
-    const value = Number(discountValue);
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  }, [discountValue]);
   // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單（currentSettlementOrder），
   // 唔可以跟 activeOrder（當前選中枱嘅單）——否則喺 dine-in 模式從 counterKioskOrders 面板結帳會金額變 0。
   const paymentBase = currentSettlementOrder
@@ -1022,6 +1044,11 @@ export function PosApp() {
           total: activeOrder.subtotal + activeOrder.taxAmount,
         }
       : totals;
+  const discountAmount = useMemo(() => {
+    const preset = localSettings.discounts.find((d) => d.id === discountValue);
+    if (!preset) return 0;
+    return discountAmountFromRate(paymentBase.total, preset.rate);
+  }, [discountValue, localSettings.discounts, paymentBase.total]);
   const prepaidAmount = (currentSettlementOrder?.prepaidAmount ?? activeOrder?.prepaidAmount ?? 0) || 0;
   const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - prepaidAmount);
   const selectedMoneyVoucherAvos = useMemo(
@@ -1192,7 +1219,10 @@ export function PosApp() {
     setPayingOrderId(null);
     setCartItems(order?.items ?? []);
     setSelectedItemId("");
-    setDiscountValue(String(order?.discountAmount ?? 0));
+    // 由已存 discountAmount 反向配對折扣預設（金額吻合先用 preset，否則重置為冇折扣）。
+    setDiscountValue(
+      matchDiscountId(localSettings.discounts, order?.total ?? 0, order?.discountAmount ?? 0),
+    );
     setReceivedAmount("");
     setVoidedItems(order?.voidedItems ?? []);
     setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
@@ -1543,6 +1573,17 @@ export function PosApp() {
       current.map((item) => (itemIdentity(item) === itemKey ? { ...item, note: note.trim() } : item)),
     );
     return true;
+  }
+
+  /** 單品折扣：rate = 百分比（80 = 8 折）；undefined = 移除折扣。discountRate 唔係 itemIdentity 一部分，已下單菜品都改得。 */
+  function applyItemDiscount(itemKey: string, rate: number | undefined) {
+    setCartItems((current) =>
+      current.map((item) =>
+        itemIdentity(item) === itemKey
+          ? { ...item, discountRate: rate == null || !Number.isFinite(rate) ? undefined : rate }
+          : item,
+      ),
+    );
   }
 
   function addMenuItem(item: MenuItem) {
@@ -2189,7 +2230,7 @@ export function PosApp() {
       pushEvents([orderEvent, ...printEvents]);
       consumeSoldOut(printTargetItems);
       setActiveOrderId(order.id);
-      setDiscountValue(String(order.discountAmount));
+      // discountValue（全單折扣 preset id）已經反映喺 order.discountAmount，唔使重設。
       setReceivedAmount("");
       setBaseOrderItems(order.items);
       setOrderSuccessFlash(true);
@@ -3297,7 +3338,20 @@ export function PosApp() {
                             ) : null}
                           </div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
+                            {specText(item) || item.note || "未選規格"}
+                            {item.discountRate != null ? (
+                              <>
+                                {" · "}
+                                <span className="text-slate-400 line-through">
+                                  {formatMoney(item.price, bootstrap.currency)}
+                                </span>{" "}
+                                <span className="font-semibold text-amber-700">
+                                  {formatMoney(discountedUnitPrice(item.price, item.discountRate), bootstrap.currency)}
+                                </span>
+                              </>
+                            ) : (
+                              <> · {formatMoney(item.price, bootstrap.currency)}</>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center gap-1">
@@ -3350,6 +3404,26 @@ export function PosApp() {
                               {item.note ? "編輯備註" : "加備註"}
                             </button>
                           ) : null}
+                          <button
+                            className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold shadow-sm ring-1 disabled:cursor-not-allowed disabled:opacity-40 ${
+                              item.discountRate != null
+                                ? "bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100"
+                                : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50"
+                            }`}
+                            disabled={isReadOnlySettled}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setItemDiscountDraft(
+                                item.discountRate != null
+                                  ? localSettings.discounts.find((d) => d.rate === item.discountRate)?.id ?? ""
+                                  : "",
+                              );
+                              setItemDiscountEditor(itemKey);
+                            }}
+                            type="button"
+                          >
+                            {item.discountRate != null ? "改折扣" : "折扣"}
+                          </button>
                           {locked ? (
                               <button
                                 className="whitespace-nowrap rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
@@ -3949,6 +4023,57 @@ export function PosApp() {
         </ResponsiveModal>
       ) : null}
 
+      {/* 單品折扣彈窗：內容同「全單折扣」下拉一致，只套用於該單品（docs/折扣需求 #3）。 */}
+      {itemDiscountEditor ? (
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  applyItemDiscount(itemDiscountEditor, undefined);
+                  setItemDiscountEditor(null);
+                }}
+                type="button"
+              >
+                移除折扣
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  const preset = findDiscountPreset(localSettings.discounts, itemDiscountDraft);
+                  applyItemDiscount(itemDiscountEditor, preset?.rate);
+                  setItemDiscountEditor(null);
+                }}
+                type="button"
+              >
+                保存
+              </button>
+            </>
+          }
+          description="此折扣只套用於該單品，不影響全單。"
+          onClose={() => setItemDiscountEditor(null)}
+          title="單品折扣"
+          widthClassName="max-w-md"
+        >
+          <label className="grid gap-1 text-xs font-semibold text-slate-500">
+            選擇折扣
+            <select
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+              onChange={(event) => setItemDiscountDraft(event.target.value)}
+              value={itemDiscountDraft}
+            >
+              <option value="">冇折扣</option>
+              {localSettings.discounts.map((disc) => (
+                <option key={disc.id} value={disc.id}>
+                  {disc.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </ResponsiveModal>
+      ) : null}
+
       {roModalOpen && activeOrderId
         ? (() => {
             const target = orders.find((o) => o.id === activeOrderId) ?? null;
@@ -4386,13 +4511,19 @@ export function PosApp() {
 
                   <div className="mt-4 grid gap-3">
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    折扣金額
-                    <input
+                    全單折扣
+                    <select
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
-                      inputMode="decimal"
                       onChange={(event) => setDiscountValue(event.target.value)}
                       value={discountValue}
-                    />
+                    >
+                      <option value="">冇折扣</option>
+                      {localSettings.discounts.map((disc) => (
+                        <option key={disc.id} value={disc.id}>
+                          {disc.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
                     實收金額

@@ -22,7 +22,8 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
+import { newDiscountId } from "@/lib/pos/discount";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { filterReopenTempTables, isReopenTempTable, stripReopenTempTables } from "@/lib/pos/table-scope";
 import { fetchLedgerOrderMenu, LedgerOrderMenu } from "@/lib/ledger/menu";
@@ -55,7 +56,7 @@ export function DeviceSettings() {
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
 
   const [activeTab, setActiveTab] = useState<
-    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "kiosk"
+    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "discounts" | "kiosk"
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
@@ -93,6 +94,8 @@ export function DeviceSettings() {
   const [printerWizardOpen, setPrinterWizardOpen] = useState(false);
   const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
   const [newReopenReason, setNewReopenReason] = useState("");
+  const [newDiscountLabel, setNewDiscountLabel] = useState("");
+  const [newDiscountRate, setNewDiscountRate] = useState("");
 
   const menuFilteredItems = useMemo(() => {
     return menuDraft.menuItems.filter((item) => menuCategoryId === "all" || item.categoryId === menuCategoryId);
@@ -648,6 +651,7 @@ export function DeviceSettings() {
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
             ["notes", "備註"],
+            ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],
           ].map(([key, label]) => (
             <button
@@ -1126,6 +1130,122 @@ export function DeviceSettings() {
                 type="button"
               >
                 {syncingConfig ? "同步中…" : "保存備註"}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {activeTab === "discounts" ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
+              <div className="text-base font-semibold text-slate-900">折扣項目</div>
+              <div className="mt-1 text-sm text-slate-500">
+                用於結帳頁「全單折扣」下拉及單品折扣彈窗。每個折扣填名稱與百分比（例如「8折」+「80」），介面唔顯示「%」號。
+              </div>
+
+              <div className="mt-4 flex-1 overflow-auto pr-1">
+                <div className="grid gap-2">
+                  {localSettings.discounts.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      暫時沒有折扣項目
+                    </div>
+                  ) : (
+                    localSettings.discounts.map((disc) => (
+                      <div
+                        key={disc.id}
+                        className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-900">{disc.label}</div>
+                          <div className="text-xs text-slate-500">{disc.rate}%（即收 {disc.rate} 元 / 原價 100）</div>
+                        </div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={() => {
+                            const next = {
+                              ...localSettings,
+                              discounts: localSettings.discounts.filter((item) => item.id !== disc.id),
+                            };
+                            setLocalSettings(next);
+                            setStatus("已刪除折扣草稿，請先保存。");
+                          }}
+                          type="button"
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-3 grid gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    onChange={(event) => setNewDiscountLabel(event.target.value)}
+                    placeholder="折扣名稱，例如「8折」"
+                    value={newDiscountLabel}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      className="w-40 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      inputMode="decimal"
+                      onChange={(event) => setNewDiscountRate(event.target.value)}
+                      placeholder="百分比，例如 80"
+                      value={newDiscountRate}
+                    />
+                    <button
+                      className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => {
+                        const label = newDiscountLabel.trim();
+                        const rate = Number(newDiscountRate);
+                        if (!label) {
+                          setStatus("請填寫折扣名稱。");
+                          return;
+                        }
+                        if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+                          setStatus("百分比必須是 0–100 之間嘅數字。");
+                          return;
+                        }
+                        const next: PosLocalSettings = {
+                          ...localSettings,
+                          discounts: [
+                            ...localSettings.discounts,
+                            { id: newDiscountId(), label, rate } as DiscountPreset,
+                          ],
+                        };
+                        setLocalSettings(next);
+                        setNewDiscountLabel("");
+                        setNewDiscountRate("");
+                        setStatus("已新增折扣草稿，請先保存。");
+                      }}
+                      type="button"
+                    >
+                      加入
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
+              <div className="text-base font-semibold text-slate-900">說明</div>
+              <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                <div>· 百分比 = 實收比例。80 = 8 折（收 80 元）；50 = 5 折；100 = 冇折扣。</div>
+                <div>· 單品折扣只影響該菜品，會喺結帳頁該菜品旁顯示原價（刪除線）＋折後價。</div>
+                <div>· 全單折扣套用整張單，折扣金額會喺結帳摘要「折扣」一欄顯示。</div>
+                <div>· 修改後請撳右下方「保存折扣」同步到本機同伺服器。</div>
+              </div>
+            </section>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4 lg:col-span-2">
+              <button
+                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                aria-busy={syncingConfig}
+                disabled={syncingConfig}
+                onClick={() => void syncConfig()}
+                type="button"
+              >
+                {syncingConfig ? "同步中…" : "保存折扣"}
               </button>
             </div>
           </div>

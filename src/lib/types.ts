@@ -321,9 +321,19 @@ export interface EscPosTemplateSnapshot {
   blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize; layout?: EscPosItemsLayout }>;
 }
 
+/** 折扣預設（設置 → 折扣 tab）。rate = 百分比數字，例如 8 折填 80（介面唔顯示 %）。 */
+export interface DiscountPreset {
+  id: string;
+  label: string;
+  /** 折扣百分比（0-100）。80 = 收 80 元 / 原價 100；0 = 免費；100 = 冇折扣。 */
+  rate: number;
+}
+
 export interface PosLocalSettings {
   floors: FloorConfig[];
   paymentMethods: string[];
+  /** 折扣預設清單（設置 → 折扣 tab）。結帳頁「全單折扣」下拉 + 單品折扣彈窗共用。 */
+  discounts: DiscountPreset[];
   menuPrinterOverrides: Record<string, PrinterGroup>;
   printZones: Array<{
     id: string;
@@ -372,6 +382,8 @@ export interface OrderItem {
     priceDelta: number;
   }>;
   note?: string;
+  /** 單品折扣：折扣百分比（0-100）。80 = 收 80 元 / 原價 100；undefined = 冇折扣。 */
+  discountRate?: number;
   /** 已退菜標記（訂單明細保留記錄用，不計費、不可再操作） */
   voided?: boolean;
   /** 退菜時間（ISO） */
@@ -485,6 +497,8 @@ export interface PrintJob {
   items?: Array<{
     name: string;
     quantity: number;
+    /** 收據主行額外印單項小計（quantity × 基價）。companion / android renderer 識嘅就會印，唔識就忽略（out-of-scope 唔影響主行）。POS preview EscPosPreview 已 render。 */
+    price?: number;
     specs?: string[];
     note?: string;
   }>;

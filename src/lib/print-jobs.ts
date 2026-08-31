@@ -25,6 +25,7 @@ import {
 } from "@/lib/escpos-template";
 import { PrintItemLine } from "@/lib/escpos-render";
 import { formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { discountedUnitPrice } from "@/lib/pos/discount";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -71,7 +72,7 @@ function buildTemplateReceiptJobs(
     // 收據主行印「菜品原價 × quantity」，唔印 final 價（避免同下面 spec row 重複收費）。
     // 改用 `unitBasePrice` 從 OrderItem.price 倒推基價（OrderItem.price = 基價 + Σ spec delta）。
     // companion / android 收到 `price` 欄位就會自動加印；未支援時亦唔影響主行。kitchen 唔加。
-    price: it.price > 0 ? Math.round(unitBasePrice(it) * it.quantity) : undefined,
+    price: it.price > 0 ? Math.round(discountedUnitPrice(unitBasePrice(it), it.discountRate) * it.quantity) : undefined,
     specs: (it.selectedSpecs ?? []).map((spec) => formatSpecLine(spec)),
     note: it.note,
   }));

@@ -199,8 +199,8 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     store_name: opts.storeName,
     order_no: order.localOrderNo,
     table_name: order.tableName,
-    order_time: formatMacauDateTime(order.createdAt),
-    checkout_time: checkoutTimeLabel(order),
+    order_time: order.createdAt ? `下單時間: ${formatMacauDateTime(order.createdAt)}` : "",
+    checkout_time: checkoutTimeLabelWithPrefix(order),
     total: `總金額: ${formatMoney(order.total, opts.currency)}`,
     payment_method: order.paymentMethod ?? "現金",
     order_note: order.orderNote ?? "",
@@ -209,13 +209,22 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
 }
 
 /**
- * 結帳時間：settled / partially_refunded / refunded → `originalSettledAt`（首次結帳，重結後保留）；
- * sent_to_kitchen / paid（counter 標記可取餐）→ `servedAt`；未結帳 → 空字串（隱藏區塊）。
+ * 結帳時間 raw：settled / partially_refunded / refunded → `originalSettledAt`（首次結帳，重結後保留）；
+ * sent_to_kitchen / paid（counter 標記可取餐）→ `servedAt`；未結帳 → 空字串。
  */
 function checkoutTimeLabel(order: PosOrder): string {
   if (order.originalSettledAt) return formatMacauDateTime(order.originalSettledAt);
   if (order.servedAt) return formatMacauDateTime(order.servedAt);
   return "";
+}
+
+/**
+ * 結帳時間區塊：已結帳 → `結帳時間: YYYY-MM-DD HH:MM`；未結帳 → 空字串（隱藏區塊）。
+ * 同 `order_time` 一樣用「標題: 值」嘅格式，方便顧客一眼睇到時間軸。
+ */
+function checkoutTimeLabelWithPrefix(order: PosOrder): string {
+  const raw = checkoutTimeLabel(order);
+  return raw ? `結帳時間: ${raw}` : "";
 }
 
 export interface KitchenContentOpts {

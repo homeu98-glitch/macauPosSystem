@@ -286,6 +286,11 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
       ? settings?.cancelNotePresets
       : defaultPosLocalSettings.cancelNotePresets,
+    discounts: Array.isArray(settings?.discounts)
+      ? settings.discounts.filter(
+          (d) => d && typeof d.id === "string" && typeof d.label === "string" && typeof d.rate === "number",
+        )
+      : defaultPosLocalSettings.discounts,
     reopenReasons: Array.isArray(settings?.reopenReasons)
       ? settings.reopenReasons
       : defaultPosLocalSettings.reopenReasons,

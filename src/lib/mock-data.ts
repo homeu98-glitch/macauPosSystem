@@ -496,6 +496,12 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   },
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
+  discounts: [
+    { id: "disc-90", label: "9折", rate: 90 },
+    { id: "disc-85", label: "85折", rate: 85 },
+    { id: "disc-80", label: "8折", rate: 80 },
+    { id: "disc-50", label: "5折", rate: 50 },
+  ],
   reopenReasons: ["結帳錯誤", "加錯項目", "折扣計錯", "找錯錢", "會員扣錯", "客人要求改單"],
   fullVoidBehavior: "cancelled",
   onlineOrderSettings: {
