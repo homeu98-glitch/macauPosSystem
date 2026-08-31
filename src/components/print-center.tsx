@@ -37,6 +37,7 @@ import {
   RECEIPT_SECTION_META,
 } from "@/lib/escpos-template";
 import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { discountedUnitPrice } from "@/lib/pos/discount";
 
 /**
  * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
@@ -324,7 +325,7 @@ export function PrintCenter() {
     const items: PrintItemLine[] = sampleOrder.items.map((it) => ({
       name: it.name,
       quantity: it.quantity,
-      price: it.price > 0 ? Math.round(unitBasePrice(it) * it.quantity) : undefined,
+      price: it.price > 0 ? Math.round(discountedUnitPrice(unitBasePrice(it), it.discountRate) * it.quantity) : undefined,
       specs: (it.selectedSpecs ?? []).map((s) => formatSpecLine(s)),
       note: it.note,
     }));

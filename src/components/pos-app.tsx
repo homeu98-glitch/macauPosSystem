@@ -19,6 +19,7 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import { installPosSyncQueueAutoFlush, notifyQueueChanged } from "@/lib/pos/sync-flush";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -237,6 +238,12 @@ export function PosApp() {
   // ── 自動配對桌面 Companion：mount 嗰陣 ran 一次，唔使用家手動填 URL（見 auto-pair-companion.ts）──
   useEffect(() => {
     tryAutoPairCompanion();
+  }, []);
+
+  useEffect(() => {
+    // 安裝 sync flush auto worker（見 src/lib/pos/sync-flush.ts）。
+    // mount 時 flush 一次 stale pending；之後由 online / interval / visibility / enqueue trigger。
+    installPosSyncQueueAutoFlush();
   }, []);
 
   // ── M7：Ledger 餐牌 realtime ── 單筆 patch/upsert bootstrap cache，唔全 re-fetch。
@@ -2069,6 +2076,9 @@ export function PosApp() {
   function pushEvents(events: QueueEvent[]) {
     const nextQueue = [...queue, ...events];
     persistQueue(nextQueue);
+    // 觸發 sync flush worker（見 src/lib/pos/sync-flush.ts）。
+    // 唔 await —— 唔阻 render / 唔阻下一個 handler；flush 係 fire-and-forget。
+    notifyQueueChanged();
   }
 
   function quickTypeKind() {

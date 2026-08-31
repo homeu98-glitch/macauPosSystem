@@ -28,7 +28,8 @@
  */
 
 import { readNetworkOnline } from "@/lib/use-network-online";
-import { loadQueue, saveQueue } from "@/lib/storage";
+import { loadAuthSession, loadQueue, saveQueue } from "@/lib/storage";
+import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { QueueEvent } from "@/lib/types";
 
 export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
@@ -135,6 +136,24 @@ export function markQueueEventFailed(eventId: string, reason?: string): void {
   if (reason) console.warn(`[pos-sync-flush] event ${eventId} 標 failed：${reason}`);
 }
 
+/**
+ * 攞當前 sync 應寫嘅 storeId：
+ *   1. 收銀台登入咗 → authSession.merchantId
+ *   2. 否則 kiosk 綁咗店 → loadKioskDeviceBinding().storeId
+ *   3. 兩者都冇 → 唔傳 storeId（server-side 會 fallback DEFAULT_STORE_ID，唔影響 sync）。
+ *
+ * 注意：跨店污染嘅 source-of-truth 係 server 0016 migration + pos_orders.store_id。
+ * 客戶端傳 storeId 只係加速 server-side validation；server 落 row 時會以 payload
+ * `source` + 路由 storeId 對齊。如果唔對齊，server 嘅 RLS / unique constraint 會擋。
+ */
+function resolveStoreId(): string | undefined {
+  const auth = loadAuthSession();
+  if (auth?.merchantId) return auth.merchantId;
+  const binding = loadKioskDeviceBinding();
+  if (binding?.storeId) return binding.storeId;
+  return undefined;
+}
+
 async function doFlush(options: { silent?: boolean }): Promise<void> {
   if (typeof window === "undefined") return;
   if (!readNetworkOnline()) return;
@@ -160,16 +179,14 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   const flippable = Array.from(candidateByEntity.values()).slice(0, MAX_EVENTS_PER_FLUSH);
   if (flippable.length === 0) return;
 
-  // 取 storeId：從 ORDER_UPDATED / ORDER_CREATED payload 提取，唔係的話 fallback DEFAULT
-  //  避免 fetch fail 因為 storeId mismatch 導致跨店污染。
-  //  payload 唔一定有 storeId；喺前端從 authSession 攞係最穩陣，但呢個 module 唔想 import storage auth。
-  //  折衷：唔帶 storeId，讓 server-side default DEFAULT_STORE_ID（保持舊行為一致）。
   let result: Response;
   try {
+    const storeId = resolveStoreId();
     result = await fetch("/api/pos/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        ...(storeId ? { storeId } : {}),
         events: flippable.map((e) => ({
           id: e.id,
           type: e.type,

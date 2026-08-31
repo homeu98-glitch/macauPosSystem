@@ -7,6 +7,7 @@ import {
   buildLabelPrintJobs,
   buildReopenPrintJobs,
 } from "@/lib/print-jobs";
+import { notifyQueueChanged } from "@/lib/pos/sync-flush";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { TEMP_REOPEN_ID_PREFIX } from "@/lib/pos/table-scope";
 import {
@@ -280,6 +281,9 @@ export function confirmSelfOrder(orderId: string): ConfirmSelfOrderResult {
   };
   const queue = loadQueue();
   saveQueue([event, ...queue]);
+  // 立刻觸發 sync flush（之前只 persistQueue，DB 永遠唔知本地寫咗 cancelled/sent_to_kitchen
+  // → loadRuntimeState() pull server 嘅 draft 蓋返本地 → 「鬼」單又彈返嚟。見 sync-flush.ts 頂部說明。）
+  notifyQueueChanged();
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
@@ -327,6 +331,7 @@ export function rejectSelfOrder(orderId: string, reason?: string): { ok: boolean
   };
   const queue = loadQueue();
   saveQueue([event, ...queue]);
+  notifyQueueChanged();
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
