@@ -2,6 +2,7 @@
 
 import { PosOrder } from "@/lib/types";
 import { formatMoney, formatMacauTime } from "@/lib/format";
+import { isQuickCounterOrder } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 
@@ -14,6 +15,8 @@ type QuickLocalOrdersStripProps = {
   onViewOrder: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
+  /** 自助單獨立結帳入口（kiosk / scan），開啟付款 modal。 */
+  onCheckout?: (orderId: string) => void;
 };
 
 function OrderCard({
@@ -25,6 +28,7 @@ function OrderCard({
   onViewOrder,
   onMarkReady,
   onMarkCompleted,
+  onCheckout,
 }: {
   order: PosOrder;
   currency: string;
@@ -34,9 +38,18 @@ function OrderCard({
   onViewOrder: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
+  onCheckout?: (orderId: string) => void;
 }) {
   const completeText = completeLabel(order);
   const orderTime = formatMacauTime(order.createdAt);
+
+  // 自助單（kiosk / scan）嘅快餐 counter 單：可取餐 + 結帳 兩個動作獨立並存，
+  // 先做嗰個會灰掉（disabled），兩個都做齊先出現「已取餐」（settled）。
+  // 收銀台落單（source="pos"）嘅快餐單維持舊嘅單鏈邏輯（可取餐 → 已取餐）。
+  const showSplitActions = onCheckout && isQuickCounterOrder(order) && isSelfOrder(order);
+  const isPaid = order.status === "paid";
+  const isReady = order.fulfillmentStatus === "ready";
+  const isBothDone = isPaid && isReady;
 
   return (
     <article className="flex h-[180px] w-[240px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -81,8 +94,9 @@ function OrderCard({
           {formatMoney(order.total, currency)}
         </div>
       </div>
-      {/* 按鈕：mt-auto 推到底（卡 fixed height，按鈕永遠對齊底部） */}
-      <div className="mt-auto flex flex-nowrap gap-1.5">
+      {/* 按鈕：mt-auto 推到底（卡 fixed height，按鈕永遠對齊底部）。
+          自助單用 2 獨立按鈕 + 灰掉機制；收銀單維持舊單鏈。 */}
+      <div className="mt-auto flex flex-wrap gap-1.5">
         <button
           className="shrink-0 rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
           onClick={() => onViewOrder(order.id)}
@@ -90,27 +104,68 @@ function OrderCard({
         >
           查看
         </button>
-        {/* docs/87 §6.3：放寬閘門，sent_to_kitchen / paid 標記 ready（先出餐後付款）。
-            draft 自助單唔顯示「可取餐」——要等「確認出單」先變 sent_to_kitchen。 */}
-        {mode === "preparing" &&
-        (order.status === "sent_to_kitchen" || order.status === "paid") ? (
-          <button
-            className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
-            onClick={() => onMarkReady(order.id)}
-            type="button"
-          >
-            可取餐
-          </button>
-        ) : null}
-        {mode === "waiting" ? (
-          <button
-            className="shrink-0 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
-            onClick={() => onMarkCompleted(order.id, completeText)}
-            type="button"
-          >
-            {completeText}
-          </button>
-        ) : null}
+        {showSplitActions ? (
+          <>
+            {/* 去結帳：已 paid 就灰掉（disabled），否則 active。draft 自助單唔顯示，要等確認出單先見到。 */}
+            {order.status !== "draft" && (
+              <button
+                aria-label={`去結帳 ${order.localOrderNo}`}
+                className="shrink-0 rounded-xl bg-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isPaid}
+                onClick={() => onCheckout?.(order.id)}
+                type="button"
+              >
+                去結帳
+              </button>
+            )}
+            {/* 可取餐：已 ready 就灰掉，否則 active。draft 自助單唔顯示。 */}
+            {order.status !== "draft" && (
+              <button
+                aria-label={`標記可取餐 ${order.localOrderNo}`}
+                className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isReady}
+                onClick={() => onMarkReady(order.id)}
+                type="button"
+              >
+                可取餐
+              </button>
+            )}
+            {/* 兩個都做齊 → 出現「已取餐」按下變 settled。 */}
+            {isBothDone ? (
+              <button
+                aria-label={`完成取餐 ${order.localOrderNo}`}
+                className="shrink-0 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700"
+                onClick={() => onMarkCompleted(order.id, completeText)}
+                type="button"
+              >
+                {completeText}
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {/* 收銀台落單舊邏輯（可取餐 → 已取餐 單鏈）。 */}
+            {mode === "preparing" &&
+            (order.status === "sent_to_kitchen" || order.status === "paid") ? (
+              <button
+                className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+                onClick={() => onMarkReady(order.id)}
+                type="button"
+              >
+                可取餐
+              </button>
+            ) : null}
+            {mode === "waiting" ? (
+              <button
+                className="shrink-0 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+                onClick={() => onMarkCompleted(order.id, completeText)}
+                type="button"
+              >
+                {completeText}
+              </button>
+            ) : null}
+          </>
+        )}
       </div>
     </article>
   );
@@ -125,6 +180,7 @@ export function QuickLocalOrdersStrip({
   onViewOrder,
   onMarkReady,
   onMarkCompleted,
+  onCheckout,
 }: QuickLocalOrdersStripProps) {
   const hasOrders = preparingOrders.length > 0 || waitingOrders.length > 0;
 
@@ -145,6 +201,7 @@ export function QuickLocalOrdersStrip({
           completionLabel={completionLabel}
           currency={currency}
           mode="preparing"
+          onCheckout={onCheckout}
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
           onViewOrder={onViewOrder}
@@ -158,6 +215,7 @@ export function QuickLocalOrdersStrip({
           completionLabel={completionLabel}
           currency={currency}
           mode="waiting"
+          onCheckout={onCheckout}
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
           onViewOrder={onViewOrder}

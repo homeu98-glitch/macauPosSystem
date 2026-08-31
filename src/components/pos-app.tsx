@@ -938,6 +938,9 @@ export function PosApp() {
     () =>
       actionBarLocalOrders.filter(
         (order) =>
+          // 自助單（kiosk / scan）嘅快餐 counter 單：可取餐 + 結帳 兩動作獨立並存，
+          // 所以無論 sent_to_kitchen + ready 定 paid + preparing 都要留喺「製作中」區，
+          // 用戶先睇得到掣同「去結帳」入口。
           order.status === "draft" ||
           order.status === "sent_to_kitchen" ||
           (order.status === "paid" && order.fulfillmentStatus !== "ready"),
@@ -3799,6 +3802,7 @@ export function PosApp() {
             onOnlineToast={(payload) =>
               setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
             }
+            onCheckout={(orderId) => setPayingOrderId(orderId)}
             onViewOrder={(orderId) => setViewingOrderId(orderId)}
             preparingOrders={quickPreparingOrders}
             waitingOrders={quickWaitingOrders}

@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { loadBootstrapCache, loadPosLocalSettings } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { buildReceiptContent, buildSnapshot } from "@/lib/escpos-template";
-import { renderEscPosLines, formatSpecLine } from "@/lib/escpos-render";
+import { renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
 import { EscPosPreview } from "@/components/escpos-preview";
 
 /**
@@ -22,7 +22,7 @@ export function ReceiptTicketPreview({ order }: { order: PosOrder }) {
     const items = order.items.map((it) => ({
       name: it.name,
       quantity: it.quantity,
-      price: it.price > 0 ? Math.round(it.price * it.quantity) : undefined,
+      price: it.price > 0 ? Math.round(unitBasePrice(it) * it.quantity) : undefined,
       specs: (it.selectedSpecs ?? []).map((s) => formatSpecLine(s)),
       note: it.note,
     }));

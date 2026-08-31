@@ -16,6 +16,8 @@ type QuickModeOrdersBarProps = {
   onViewOrder: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
+  /** 自助單獨立結帳入口（kiosk / scan）：開啟付款 modal。 */
+  onCheckout?: (orderId: string) => void;
 };
 
 export function QuickModeOrdersBar({
@@ -30,6 +32,7 @@ export function QuickModeOrdersBar({
   onViewOrder,
   onMarkReady,
   onMarkCompleted,
+  onCheckout,
 }: QuickModeOrdersBarProps) {
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
@@ -70,6 +73,7 @@ export function QuickModeOrdersBar({
             completeLabel={completeLabel}
             completionLabel={completionLabel}
             currency={currency}
+            onCheckout={onCheckout}
             onMarkCompleted={onMarkCompleted}
             onMarkReady={onMarkReady}
             onViewOrder={onViewOrder}

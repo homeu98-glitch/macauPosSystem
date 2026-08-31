@@ -14,6 +14,26 @@ export function formatSpecLine(spec: { groupName: string; optionLabel: string; p
   return delta < 0 ? `${head} -${abs}` : `${head} $${abs}`;
 }
 
+/**
+ * 從 OrderItem 嘅 final unit price（同已選規格嘅 Σ priceDelta）倒推菜品「基價」。
+ *
+ * 收據主行印「菜品原價 × quantity」唔印 final 價，避免同下面 spec row（已經個別加印
+ * `$X`）重複收費：招牌牛三寶 基價 95 + 加購 燙青菜 +10 → 主行 `$95`、spec row `加購:燙青菜 $10`
+ *（而非主行 `$105`、spec row 仍 `$10`）。
+ *
+ * 冇 specs / specs 全 0 delta → 直接用 it.price（即基價 = final 價）。
+ *
+ * ⚠️ 只用於收據預覽，**唔動** OrderItem / PrintJob 持久資料：廚房單（kitchen builder）
+ * 唔印價、companion / android 未支援 `price` 欄位，所以實際熱敏紙冇分別（docs/82 收據改進）。
+ */
+export function unitBasePrice(it: { price: number; selectedSpecs?: Array<{ priceDelta?: number }> }): number {
+  const deltaSum = (it.selectedSpecs ?? []).reduce(
+    (sum, s) => sum + Number(s.priceDelta ?? 0),
+    0,
+  );
+  return Math.max(0, it.price - deltaSum);
+}
+
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }
   | { kind: "divider" }
