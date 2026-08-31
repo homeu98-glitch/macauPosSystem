@@ -11,11 +11,18 @@ import { PosOrder } from "@/lib/types";
  */
 export type OrderSource = NonNullable<PosOrder["source"]>;
 
-/** 來源標籤。收銀台落單（`pos`）回傳空字串——唔使顯示標記，避免畫面嘈。 */
+/**
+ * 來源標籤（docs/87 §5.2 · 規格 7）。三種下單方式都有統一嘅「icon + 文字標籤」格式：
+ * - `"pos"`   → 「商家下單」👤（收銀台落單）
+ * - `"kiosk"` → 「自助點餐機」🖥️
+ * - `"scan"`  → 「掃碼下單」📱
+ * 舊碼用空字串當「唔顯示」——依家統一顯示，保持三款格式一致。
+ */
 export function orderSourceLabel(source: OrderSource | undefined | null): string {
+  if (source === "pos") return "商家下單";
   if (source === "kiosk") return "自助點餐機";
-  if (source === "scan") return "掃碼落單";
-  return "";
+  if (source === "scan") return "掃碼下單";
+  return "商家下單";
 }
 
 /** 係咪「自助單」（自助點餐機 / 掃碼）。用嚟決定出單流程同顯示。 */
