@@ -301,8 +301,18 @@ export async function submitKioskOrder(
 }
 
 // ─────────────────────────────────────────────────────────────
-// 重複掃碼 resume：查該枱 / 上次單有冇未結單，有就 resume（點 9）
+// 重複掃碼 resume：查上次單有冇未結單，有就 resume（點 9）
 // ─────────────────────────────────────────────────────────────
+//
+// ⚠️ root-cause（2026-08-31 · 用戶掃 A01 見「已落單」但枱面「空間 / 已坐 0/10」）：
+// 舊邏輯以「該枱有任何 server-side open 單」＝「有人坐」，會被以下 stale state 誤擋：
+//   - 返結（`reopened`）後 temp 枱未清 / sync 時差，server 仍有 stale reopened record
+//   - 其他 terminal 嘅 draft / sent_to_kitchen 單 sync 落 server，枱 ID 撞咗
+//   - 商戶嘅 paid counter 單（quick）殘留喺 /api/pos/state 配對到枱 ID
+//
+// 修正：resume 嘅單一真源改為「客人自己嘅單」—— 用 sessionStorage `kiosk-last-order`
+// 配 server-side 對應 ID，且只認 `source === "scan"`（客人掃碼落嘅）。其他來源一律唔擋客人。
+// 商戶 / kiosk 落嘅單唔會被當客人 resume 對象（佢哋有自己嘅 round-trip，不需 resume）。
 const TERMINAL_STATUSES = new Set<PosOrder["status"]>([
   "settled",
   "cancelled",
@@ -312,6 +322,11 @@ const TERMINAL_STATUSES = new Set<PosOrder["status"]>([
   // 唔應該再畀佢哋掃碼 resume 加單。
   "paid",
 ]);
+
+/** 客人 scan 自己落嘅單（手機 /menu 掃碼）。`pos` / `kiosk` 都唔算客人 resume 對象。 */
+function isCustomerScanOrder(order: Pick<PosOrder, "source">): boolean {
+  return order.source === "scan";
+}
 
 export async function fetchUnsettledKioskOrder(
   storeId: string,
@@ -323,20 +338,21 @@ export async function fetchUnsettledKioskOrder(
     if (!res.ok) return null;
     const data = (await res.json()) as { orders?: PosOrder[] };
     const orders = Array.isArray(data.orders) ? data.orders : [];
-    // /api/pos/state 已經按 updated_at desc 排序。下面一律以「該枱最新一張單」判斷，
-    // 避免舊嘅 open 單（例如收銀結帳後 30s 批量 sync 未到位嘅 sent_to_kitchen）遮住咗
-    // 新嘅 settled 單，令客人掃碼 resume 仲見到「已落單」。
-    if (tableId) {
-      const latest = orders.find((o) => o.tableId === tableId);
-      if (!latest) return null;
-      // 最新一張已結帳／已取消／已退款 → 枱已完結，唔畀客人再加單
-      if (TERMINAL_STATUSES.has(latest.status)) return null;
-      return latest; // 最新一張仍係 open → resume 呢張單
-    }
+
+    // 主路徑：客人自己嘅 scan 單（sessionStorage 記住嘅 orderId）。
+    // 呢個就係 resume 嘅單一真源——唔再靠 tableId 推斷「有冇人坐」。
     if (lastOrderId) {
-      const open = orders.filter((o) => !TERMINAL_STATUSES.has(o.status));
-      return open.find((o) => o.id === lastOrderId) ?? null;
+      const candidate = orders.find(
+        (o) => o.id === lastOrderId && isCustomerScanOrder(o) && !TERMINAL_STATUSES.has(o.status),
+      );
+      return candidate ?? null;
     }
+
+    // Fallback：tableId 有但 sessionStorage 冇 lastOrderId（例如 sessionStorage 被清），
+    // 仍然唔可以用「該枱最新單」—— 會被商戶 / stale state 誤擋。
+    // 唔再做 server-side 推斷；return null 等客人正常落新單。
+    // 注意：客人第一次掃枱（sessionStorage 空）想落單就係呢條 path，必須 return null。
+    void tableId; // 保留參數以維持 call site 簽名穩定，但唔再用佢做判定
     return null;
   } catch {
     return null;
