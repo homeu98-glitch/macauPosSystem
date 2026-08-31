@@ -49,6 +49,19 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 - Kiosk 只寫 `pos_orders`（`source`），**唔推 `PRINT_JOB_CREATED`** → 廚房單一律收銀端建，避免雙印。
 - `source: "pos" | "kiosk" | "scan"`（migration 0015）。
 
+## Sync 架構（餐飲）
+
+- **Bug 教訓（2026-09-01 ✅ 修）**：舊版 `pushEvents()` 寫 queue event status="synced" 但**完全冇 sync scheduler** → 本地 cancelled 從不上 DB → 重開瀏覽器時 backfill 撈 draft 蓋返 → 「鬼」單復活（用戶截圖 8 張 kiosk 單全部「點單中」、仲有「確認/拒絕」掣）。
+- **根治（src/lib/pos/sync-flush.ts + src/components/pos-sync-flush-worker.tsx）**：
+  1. 全域 worker（root layout mount）自動 install listener：online / offline / pos-network-status-changed / pos-sync-queue-changed / visibilitychange / 30s interval / mount-time once
+  2. Chain lock 序列化（`flushChain`）防並發
+  3. Dedup by entityId（最新 status 蓋前面）
+  4. **Legacy heal**：首次 flush 將所有 status !== "failed 且未超 attempts" 都推一次（舊 queue 內 status 唔可信）
+  5. Attempts counter MAX=5 後標 failed 留底（人手 inspect）
+  6. Caller enqueue 後 call `notifyQueueChanged()` 立即 trigger flush
+- **storeId 解析**：authSession.merchantId → kiosk binding → fallback 無（server default）。跨店污染 pre-existing risk（ORDER_UPDATED upsert 冇 store filter）尚未處理。
+- **Mock mode 限制**：無 service_role key → server 返 503 → 5 次後 failed 留底，唔會自動清。要 console warn 提示補 env vars。
+
 ## Ledger 報表 DB 對接（docs/83 v1.1 ✅）
 
 - Ledger 直連 macau-pos Supabase，角色 `ledger_report_ro`（唯讀 + `connection limit 3`），經 `report_ro` schema 22 個 View。SQL：`docs/sql/83-ledger-readonly-access.sql`。**嚴禁 polling**。
@@ -69,7 +82,7 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 ## 開發環境 / 偏好
 
 - sandbox 自帶 `node_modules`，可直接 `npx tsc --noEmit`（`npm install` 可能 EPERM）。
-- `tsc --noEmit` 唯一已知誤報：`src/app/layout.tsx(37) LayoutProps`（standalone tsc 見唔到 `.next/types`，唔影響 Vercel build）。真正 `next build` 建議 dev box 跑。
+- `tsc --noEmit` 唯一已知誤報：`src/app/layout.tsx(38) LayoutProps`（standalone tsc 見唔到 `.next/types`，唔影響 Vercel build）。真正 `next build` 建議 dev box 跑。
 - 語言：繁體中文（廣東話風味）。工作流：先討論定方向 → 寫正式文檔 → 上 GitHub；重要決定要存檔。
 - 偏好「不動現有」增量擴展。排查時**要先徹底查根因再動手**，唔接受憑猜測俾修法。
 - 提問要用完整句子，唔好用 Q1-1 / Q2-7 呢類編號代稱。

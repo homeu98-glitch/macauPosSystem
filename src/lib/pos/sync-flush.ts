@@ -45,10 +45,25 @@ let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let listenersInstalled = false;
 let triggerFn: (() => void) | null = null;
 let visibilityHandler: (() => void) | null = null;
+/**
+ * 是否已跑過「legacy heal」flush。
+ *
+ * 舊版 pushEvents 寫 status:"synced" 但從未 fire fetch（即係 queue 內 status 完全不可信），
+ * 所以呢個 worker 第一次跑要將所有非「永久 failed」嘅 events 都推一次去 server（收到 200 先
+ * 標真正 synced）；之後就可以 filter synced 嘅唔再推。
+ */
+let legacyHealed = false;
 
 /**
  * 排入 flush chain（serialized）：並發 caller 自動排隊，唔會同時開多個 flush。
  * 唔會 throw（內部 try/catch + console.warn）。
+ *
+ * ⚠️ **Legacy「永遠 synced」嘅 bug 自動修復**：呢個 worker 會將 queue 入面所有
+ *  status !== "failed" 嘅 events 都視為可推。即係 status === "synced" 嘅 legacy events
+ * （其實從未真正 flush 上 server）都會被當「未推過」處理 → 重新推 → 收到 200 先標 synced。
+ * 因為現存 queue 嘅 status 完全不可信（過往寫入從未 fire sync endpoint），
+ * 用 status 做 gate 會令 legacy events 永遠留喺 queue。
+ * 唯一依賴 attempts counter 嚟保護（MAX_SYNC_ATTEMPTS 超就 failed 留低等人手 inspect）。
  */
 export function flushPosSyncQueue(options: { silent?: boolean } = {}): Promise<void> {
   flushChain = flushChain.then(() => doFlush(options));
@@ -109,6 +124,7 @@ export function uninstallPosSyncQueueAutoFlush(): void {
   intervalHandle = null;
   triggerFn = null;
   visibilityHandler = null;
+  legacyHealed = false; // 重裝後要再 heal 一次（罕用，主要 for tests）
 }
 
 /**
@@ -161,8 +177,13 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   const allQueue = loadQueue() as ExtendedQueueEvent[];
   if (allQueue.length === 0) return;
 
-  // 只推 pending + failed（synced 留喺度係預期行為：保留審計 + 防 silent data loss）
-  const unflushed = allQueue.filter((e) => e.status !== "synced");
+  // **Legacy heal（首次 flush）**：唔再 filter synced events（過往「寫 status:synced 但從未 fetch sync」
+  // 嘅 legacy queue 會永遠卡住，要靠呢次重新推）。
+  // 只 filter status:"failed" 且已超 attempts 嘅（嗰啲真係永久卡死，留低等人手 inspect）。
+  const unflushed = legacyHealed
+    ? allQueue.filter((e) => e.status !== "synced")
+    : allQueue.filter((e) => !(e.status === "failed" && (e.attempts ?? 0) >= MAX_SYNC_ATTEMPTS));
+  legacyHealed = true;
   if (unflushed.length === 0) return;
 
   // Dedup by entityId + 過濾超 attempts：同一 entityId 只推最後一條（最後狀態為準），
@@ -206,8 +227,9 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
 
   if (!result.ok) {
     // Server-side error：加 attempts。連續 MAX 次都失敗就標 failed。
+    const flippedIds = new Set(flippable.map((e) => e.id));
     const next = allQueue.map((e) => {
-      if (!flippable.find((f) => f.id === e.id)) return e;
+      if (!flippedIds.has(e.id)) return e;
       const attempts = (e.attempts ?? 0) + 1;
       return {
         ...e,

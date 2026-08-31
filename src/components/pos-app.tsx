@@ -19,7 +19,7 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
-import { installPosSyncQueueAutoFlush, notifyQueueChanged } from "@/lib/pos/sync-flush";
+import { notifyQueueChanged } from "@/lib/pos/sync-flush";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -240,11 +240,9 @@ export function PosApp() {
     tryAutoPairCompanion();
   }, []);
 
-  useEffect(() => {
-    // 安裝 sync flush auto worker（見 src/lib/pos/sync-flush.ts）。
-    // mount 時 flush 一次 stale pending；之後由 online / interval / visibility / enqueue trigger。
-    installPosSyncQueueAutoFlush();
-  }, []);
+  // 注意：sync flush worker 已經由 root layout 嘅 <PosSyncFlushWorker /> 統一安裝，
+  // 此處唔再重複裝（同 installPosSyncQueueAutoFlush() 內部 `listenersInstalled` guard 一致）。
+  // 推 queue 嘅位置（pushEvents）會經 notifyQueueChanged() 觸發 flush。
 
   // ── M7：Ledger 餐牌 realtime ── 單筆 patch/upsert bootstrap cache，唔全 re-fetch。
   const ledgerMerchantId = getLedgerMerchantId();
