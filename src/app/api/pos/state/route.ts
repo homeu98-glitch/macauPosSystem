@@ -52,6 +52,8 @@ export async function GET(request: Request) {
         tableName: order.table_name,
         status: order.status,
         fulfillmentStatus: order.fulfillment_status ?? undefined,
+        sentToKitchenAt: order.sent_to_kitchen_at ?? undefined,
+        servedAt: order.served_at ?? undefined,
         items: Array.isArray(order.items) ? order.items : [],
         orderNote: order.order_note ?? undefined,
         subtotal: Number(order.subtotal ?? 0),
@@ -61,6 +63,9 @@ export async function GET(request: Request) {
         total: Number(order.total ?? 0),
         prepaidAmount: Number(order.prepaid_amount ?? 0),
         onlineOrderId: order.online_order_id ?? undefined,
+        // docs/87 §5.2：訂單來源（kiosk / scan / pos）。舊 migration 冇呢欄 → fallback "pos"。
+        source: order.source ?? "pos",
+        partySize: order.party_size == null ? undefined : Number(order.party_size),
         paymentMethod: order.payment_method ?? undefined,
         createdAt: order.created_at,
         updatedAt: order.updated_at,

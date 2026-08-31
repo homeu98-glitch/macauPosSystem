@@ -63,12 +63,14 @@ function QuickOrderActions({
   onChanged: () => void;
 }) {
   if (!isQuickCounterOrder(order)) return null;
+  // draft 自助單唔顯示「可取餐」——要等「確認出單」先變 sent_to_kitchen（docs/87 §6）
+  if (order.status === "draft" && isSelfOrder(order)) return null;
 
   const completeText = quickCompleteLabel(order);
 
-  // docs/87 §6.3：放寬「可取餐」閘門，容許 draft / sent_to_kitchen / paid 都標記 ready（先出餐後付款）
+  // docs/87 §6.3：放寬「可取餐」閘門，容許 sent_to_kitchen / paid 標記 ready（先出餐後付款）
   const canBeReady =
-    (order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") &&
+    (order.status === "sent_to_kitchen" || order.status === "paid") &&
     order.fulfillmentStatus !== "ready";
 
   if (canBeReady) {

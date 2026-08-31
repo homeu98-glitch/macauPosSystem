@@ -2,6 +2,7 @@
 
 import { PosOrder } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
+import { isSelfOrder } from "@/lib/pos/order-source";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 
 type QuickLocalOrdersStripProps = {
@@ -76,9 +77,10 @@ function OrderCard({
         >
           查看
         </button>
-        {/* docs/87 §6.3：放寬閘門，draft / sent_to_kitchen / paid 都可以標記 ready（先出餐後付款） */}
+        {/* docs/87 §6.3：放寬閘門，sent_to_kitchen / paid 標記 ready（先出餐後付款）。
+            draft 自助單唔顯示「可取餐」——要等「確認出單」先變 sent_to_kitchen。 */}
         {mode === "preparing" &&
-        (order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") ? (
+        (order.status === "sent_to_kitchen" || order.status === "paid") ? (
           <button
             className="rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
             onClick={() => onMarkReady(order.id)}

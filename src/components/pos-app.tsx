@@ -1002,14 +1002,23 @@ export function PosApp() {
     const value = Number(discountValue);
     return Number.isFinite(value) && value > 0 ? value : 0;
   }, [discountValue]);
-  const paymentBase = !isQuickMode && activeOrder && cartItems.length === 0
+  // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單（currentSettlementOrder），
+  // 唔可以跟 activeOrder（當前選中枱嘅單）——否則喺 dine-in 模式從 counterKioskOrders 面板結帳會金額變 0。
+  const paymentBase = currentSettlementOrder
     ? {
-        subtotal: activeOrder.subtotal,
-          serviceChargeAmount: 0,
-        taxAmount: activeOrder.taxAmount,
-          total: activeOrder.subtotal + activeOrder.taxAmount,
+        subtotal: currentSettlementOrder.subtotal,
+        serviceChargeAmount: 0,
+        taxAmount: currentSettlementOrder.taxAmount,
+        total: currentSettlementOrder.subtotal + currentSettlementOrder.taxAmount,
       }
-    : totals;
+    : !isQuickMode && activeOrder && cartItems.length === 0
+      ? {
+          subtotal: activeOrder.subtotal,
+          serviceChargeAmount: 0,
+          taxAmount: activeOrder.taxAmount,
+          total: activeOrder.subtotal + activeOrder.taxAmount,
+        }
+      : totals;
   const prepaidAmount = (currentSettlementOrder?.prepaidAmount ?? activeOrder?.prepaidAmount ?? 0) || 0;
   const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - prepaidAmount);
   const selectedMoneyVoucherAvos = useMemo(
@@ -1710,7 +1719,9 @@ export function PosApp() {
   function updateQuickFulfillment(orderId: string, nextStatus: "preparing" | "ready") {
     const target = orders.find((order) => order.id === orderId) ?? null;
     if (!target) return;
-    if (target.tableId !== "counter" || target.status !== "paid") return;
+    // docs/87 §6.3：放寬閘門，容許 sent_to_kitchen（自助單先出餐後付款）標記 ready
+    const allowed = new Set<PosOrder["status"]>(["paid", "sent_to_kitchen"]);
+    if (target.tableId !== "counter" || !allowed.has(target.status)) return;
     const updatedAt = new Date().toISOString();
     const updatedOrder: PosOrder = {
       ...target,
