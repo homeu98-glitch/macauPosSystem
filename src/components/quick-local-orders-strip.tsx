@@ -38,16 +38,16 @@ function OrderCard({
   const completeText = completeLabel(order);
 
   return (
-    <article className="w-[240px] shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+    <article className="flex h-[180px] w-[240px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      {/* 頂部：訂單號 + 枱號（左）vs 狀態藥丸 + 來源標記（右，顯示位 ②） */}
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          {/* 顯示位 ②：收銀台快餐單卡片（規格 7）。來源標記統一放到狀態藥丸下面、右對齊（規格 7 約定） */}
-          <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
-          <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold leading-tight text-slate-900">{order.localOrderNo}</div>
+          <div className="mt-1 truncate text-xs text-slate-500">{order.tableName}</div>
         </div>
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
           <span
-            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
               mode === "waiting" ? "bg-sky-50 text-sky-700" : "bg-amber-50 text-amber-700"
             }`}
           >
@@ -61,14 +61,20 @@ function OrderCard({
           <OrderSourceBadge order={order} />
         </div>
       </div>
-      <div className="mt-2 text-xs text-slate-600">{formatMoney(order.total, currency)}</div>
-      <div className="mt-1 truncate text-xs text-slate-500">
-        {order.items.slice(0, 2).map((item) => `${item.name}x${item.quantity}`).join(" · ")}
-        {order.items.length > 2 ? " · …" : ""}
+      {/* 中間：分隔線 + 品項摘要 + 訂單總額同一行（用戶約定：品項名稱與價格同一行） */}
+      <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-100 pt-2">
+        <div className="min-w-0 flex-1 truncate text-xs text-slate-500">
+          {order.items.slice(0, 2).map((item) => `${item.name}×${item.quantity}`).join(" · ")}
+          {order.items.length > 2 ? " · …" : ""}
+        </div>
+        <div className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
+          {formatMoney(order.total, currency)}
+        </div>
       </div>
-      <div className="mt-3 flex flex-nowrap gap-1.5">
+      {/* 按鈕：mt-auto 推到底（卡 fixed height，按鈕永遠對齊底部） */}
+      <div className="mt-auto flex flex-nowrap gap-1.5">
         <button
-          className="rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+          className="shrink-0 rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
           onClick={() => onViewOrder(order.id)}
           type="button"
         >
@@ -79,7 +85,7 @@ function OrderCard({
         {mode === "preparing" &&
         (order.status === "sent_to_kitchen" || order.status === "paid") ? (
           <button
-            className="rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+            className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
             onClick={() => onMarkReady(order.id)}
             type="button"
           >
@@ -88,7 +94,7 @@ function OrderCard({
         ) : null}
         {mode === "waiting" ? (
           <button
-            className="rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+            className="shrink-0 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
             onClick={() => onMarkCompleted(order.id, completeText)}
             type="button"
           >
