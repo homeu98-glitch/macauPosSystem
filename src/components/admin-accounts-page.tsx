@@ -72,6 +72,55 @@ export function AdminAccountsPage() {
   const [form, setForm] = useState<AccountFormState>({ name: "", account: "", pin: "", role: "cashier", permissionGroupId: "", storeIds: [], note: "" });
   const [newPin, setNewPin] = useState("");
 
+  // ── 2026-08-31 資安修復（docs/89 §2）：所有帳戶管理操作都要 admin session token。
+  //    開頁先用管理員 PIN 換一張 12h 短效 token，之後每個 request 帶 `Authorization: Bearer`。
+  //    token 唔落 localStorage（只喺 component state），refresh 頁面要重新輸 PIN —— 安全取向。
+  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [gateOpen, setGateOpen] = useState(true);
+  const [gatePin, setGatePin] = useState("");
+  const [gateError, setGateError] = useState("");
+  const [gateBusy, setGateBusy] = useState(false);
+
+  async function acquireToken(pin: string): Promise<boolean> {
+    setGateBusy(true);
+    setGateError("");
+    try {
+      const account = session?.account ?? "";
+      const response = await fetch("/api/admin/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account, pin }),
+      });
+      const payload = (await response.json()) as { ok?: boolean; token?: string; error?: string };
+      if (!response.ok || !payload.ok || !payload.token) {
+        setGateError(payload.error ?? "驗證失敗，請重試。");
+        return false;
+      }
+      setAdminToken(payload.token);
+      setGateOpen(false);
+      return true;
+    } catch {
+      setGateError("網絡錯誤，請重試。");
+      return false;
+    } finally {
+      setGateBusy(false);
+    }
+  }
+
+  /** 帶 admin token 嘅 fetch；若 server 回 401 即 token 失效，自動彈返 gate。 */
+  async function adminFetch(input: string, init?: RequestInit): Promise<Response> {
+    const headers: Record<string, string> = {
+      ...(init?.headers as Record<string, string> | undefined),
+    };
+    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+    const response = await fetch(input, { ...init, headers });
+    if (response.status === 401) {
+      setAdminToken(null);
+      setGateOpen(true);
+    }
+    return response;
+  }
+
   function persistLocal(nextAccounts: AccountUser[], nextStores = stores, nextPermissionGroups = permissionGroups) {
     setAccounts(nextAccounts);
     setStores(nextStores);
@@ -82,9 +131,10 @@ export function AdminAccountsPage() {
   }
 
   async function loadDataset() {
+    if (!adminToken) return; // 未拎到 admin token 唔好打，server 會 401
     setLoading(true);
     try {
-      const response = await fetch("/api/admin/accounts", { cache: "no-store" });
+      const response = await adminFetch("/api/admin/accounts", { cache: "no-store" });
       const payload = (await response.json()) as {
         ok?: boolean;
         dbConfigured?: boolean;
@@ -132,7 +182,7 @@ export function AdminAccountsPage() {
       void loadDataset();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [adminToken]);
 
   useEffect(() => {
     function reload() {
@@ -238,7 +288,7 @@ export function AdminAccountsPage() {
     setSaving(true);
     try {
       if (dbMode) {
-        const response = await fetch("/api/admin/accounts", {
+        const response = await adminFetch("/api/admin/accounts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -297,7 +347,7 @@ export function AdminAccountsPage() {
     setSaving(true);
     try {
       if (dbMode) {
-        const response = await fetch("/api/admin/accounts", {
+        const response = await adminFetch("/api/admin/accounts", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -352,7 +402,7 @@ export function AdminAccountsPage() {
     setSaving(true);
     try {
       if (dbMode) {
-        const response = await fetch("/api/admin/accounts", {
+        const response = await adminFetch("/api/admin/accounts", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: form.id, pin }),
@@ -387,7 +437,7 @@ export function AdminAccountsPage() {
     setSaving(true);
     try {
       if (dbMode) {
-        const response = await fetch("/api/admin/accounts", {
+        const response = await adminFetch("/api/admin/accounts", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: selectedAccount.id }),

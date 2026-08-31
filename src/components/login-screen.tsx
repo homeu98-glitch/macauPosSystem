@@ -76,7 +76,13 @@ export function LoginScreen() {
         ledgerRefreshToken: payload.session.ledgerRefreshToken ?? payload.refreshToken,
       };
 
-      // ── Kiosk 模式：綁定呢台機到所屬店，跳去客人點餐頁（唔留 staff session）──
+      // ── Kiosk 模式：綁定呢台機到所屬店 ──
+      // ⚠️ 呢度**唔可以再 early return 掉 staff session**（docs/87 P0-7）。
+      // 自助點餐機要做 Ledger 會員扣款（`lookupCustomerWallet` / `applyPosDeduct`），
+      // 而呢啲 RPC 按 `docs/integration/ledger-client-api.md` 嘅合約，必須喺
+      // authenticated session 下 call（權限由 `auth.uid()` / `is_merchant_staff()` 保證），
+      // service_role 取代唔到。所以下面 saveAuthSession + Ledger setSession 要照行。
+      // 改動只係：額外寫綁店記錄，最後 redirect 去 `/order` 而唔係 `/`。
       if (mode === "kiosk") {
         saveKioskDeviceBinding({
           storeId: session.merchantId ?? DEFAULT_KIOSK_STORE_ID,
@@ -84,8 +90,6 @@ export function LoginScreen() {
           language: "zh-HK",
           boundAt: new Date().toISOString(),
         });
-        router.replace("/order");
-        return;
       }
 
       const previousMerchantId = loadAuthSession()?.merchantId;
@@ -105,7 +109,8 @@ export function LoginScreen() {
         });
       }
 
-      saveOperatingMode(mode === "quick" ? "quick" : "dinein");
+      // 自助點餐機只做快餐（規格 5），同「快餐」模式一樣用 quick
+      saveOperatingMode(mode === "kiosk" || mode === "quick" ? "quick" : "dinein");
 
       const storeSwitched =
         Boolean(previousMerchantId && session.merchantId && previousMerchantId !== session.merchantId);
@@ -124,12 +129,15 @@ export function LoginScreen() {
         return;
       }
 
+      // kiosk 綁店登入 → 去自助點餐介面；其他模式 → 收銀台
+      const homePath = mode === "kiosk" ? "/order" : "/";
+
       if (storeSwitched) {
-        window.location.replace("/");
+        window.location.replace(homePath);
         return;
       }
 
-      router.replace("/");
+      router.replace(homePath);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
     } finally {

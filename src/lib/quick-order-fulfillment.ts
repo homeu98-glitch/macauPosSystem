@@ -30,7 +30,9 @@ export function updateQuickFulfillmentInStore(
 ): PosOrder | null {
   const orders = loadOrders();
   const target = orders.find((order) => order.id === orderId) ?? null;
-  if (!target || target.tableId !== "counter" || target.status !== "paid") return null;
+  // docs/87 §6.3：放寬閘門，容許「先出餐後付款」——自助點餐單可能係 sent_to_kitchen 就標記 ready
+  const allowedStatuses = new Set<PosOrder["status"]>(["draft", "sent_to_kitchen", "paid"]);
+  if (!target || target.tableId !== "counter" || !allowedStatuses.has(target.status)) return null;
 
   const updatedAt = new Date().toISOString();
   const updatedOrder: PosOrder = { ...target, fulfillmentStatus: nextStatus, updatedAt };

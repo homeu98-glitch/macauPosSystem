@@ -43,6 +43,48 @@ export function clearKioskDeviceBinding(): void {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Kiosk 模式（裝置模式開關）
+// ─────────────────────────────────────────────────────────────
+export const KIOSK_MODE_KEY = "macau-pos-kiosk-mode";
+export const KIOSK_MODE_EVENT = "pos-kiosk-mode-changed";
+
+/**
+ * 呢部機係咪「自助點餐機」模式（docs/87 §1）。
+ *
+ * 開咗 → 開 `/` 會自動跳去 `/order`（客人自助點餐介面），唔做收銀。
+ * 熄咗 → 正常收銀台。
+ *
+ * 三個重點：
+ * 1. **純本機旗標**（localStorage，device-level 唔跟 store scope）——Android APK 同桌面 EXE
+ *    都係用 persistent localStorage 嘅 WebView / 瀏覽器裝住同一個 Vercel 網址，
+ *    所以加呢個模式**唔使 rebuild APK / EXE**（規格 1）。
+ * 2. **唔同步上 server**：絕對唔好放 `pos_device_configs`——嗰個 GET 係
+ *    `.order(updated_at desc).limit(1)` 冇 store filter，會讀到第啲機嘅設定
+ *    （同 `onlineOrderSettings.autoAccept` 嗰個 bug 同一類）。
+ * 3. 同「綁店」係兩回事：綁店（`KIOSK_BINDING_KEY`）決定**落單落去邊間店**，
+ *    kiosk mode 決定**呢部機開機做乜**。
+ */
+export function loadKioskMode(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(KIOSK_MODE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveKioskMode(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(KIOSK_MODE_KEY, enabled ? "1" : "0");
+  } catch {
+    // 寫唔到（私隱模式 / kiosk WebView 限制）就當冇開，起碼唔會令收銀台入唔到
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(KIOSK_MODE_EVENT, { detail: { enabled } }));
+}
+
+// ─────────────────────────────────────────────────────────────
 // 購物車項目
 // ─────────────────────────────────────────────────────────────
 export type KioskCartItem = {
@@ -64,7 +106,14 @@ export type BuildKioskOrderInput = {
   tableName: string;
   mode: KioskOrderMode;
   quickType?: KioskQuickType;
-  kitchenMode: "auto" | "dine_in_confirm";
+  /**
+   * 「自動接自助單」開關（DB `pos_kiosk_settings.self_order_auto_accept`，Kiosk 落單時讀一次）。
+   * - `true`：免確認，直接 `sent_to_kitchen`（規格 5 嘅預設）
+   * - `false`：落 `draft`，排入「待確認」，等收銀台撳確認先用代客下單流程出單
+   */
+  autoAcceptSelfOrder: boolean;
+  /** 訂單來源：自助點餐機 `"kiosk"` / 客人掃碼 `"scan"`（docs/87 §5.2） */
+  source: "kiosk" | "scan";
   items: KioskCartItem[];
   taxRate: number;
   serviceRate: number;
@@ -105,8 +154,8 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
   if (input.mode === "dine_in") {
     tableId = input.tableId ?? "counter";
     tableName = input.tableName;
-    if (input.kitchenMode === "dine_in_confirm") {
-      // 待確認：落 draft，等收銀確認才 sent_to_kitchen
+    if (!input.autoAcceptSelfOrder) {
+      // 待確認：落 draft，等收銀台撳「確認」先用代客下單流程出廚房（規格 5、6）
       status = "draft";
       fulfillmentStatus = undefined;
     } else {
@@ -120,8 +169,14 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     } else {
       tableName = "自取";
     }
-    status = "sent_to_kitchen";
-    fulfillmentStatus = "preparing";
+    if (!input.autoAcceptSelfOrder) {
+      // 快餐都受同一粒開關管（規格 6：堂食與快餐共用同一個開關）
+      status = "draft";
+      fulfillmentStatus = undefined;
+    } else {
+      status = "sent_to_kitchen";
+      fulfillmentStatus = "preparing";
+    }
   }
 
   // 落單號碼：優先用店內線下同日序號（/api/pos/sequence 嘅 display），kiosk/掃碼同店內共用同一日序列表；
@@ -157,12 +212,23 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     discountAmount: 0,
     total,
     prepaidAmount: 0,
+    source: input.source,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
 }
 
-/** 按 printerGroup 分區建廚房 / 水吧出單（print agent 會按 printerGroup 搵真機）。 */
+/**
+ * @deprecated **Kiosk 唔再建廚房單**（docs/87 §3.1）。
+ *
+ * 廚房單一律改由**收銀端**建立（realtime 收到自助點餐新單 → `buildKitchenPrintJobs()`），
+ * 好處：① 冇雙重打印（收銀端係唯一建立者）；② Kiosk 只需一部機印顧客小票；
+ * ③ 掃碼單同 Kiosk 單行為完全一致。
+ *
+ * 保留原因：僅供日後需要「Kiosk 直出廚房單」嘅場景參考，**目前冇 caller**。
+ * 另一個唔好直接復用嘅原因：呢個 builder 產生嘅 job **冇 `template` / `content` / `printerId`**，
+ * 打印端會行硬編 fallback（冇店名／時間／單據類型／頁尾，亦唔理商家設嘅字型大小）。
+ */
 export function buildKioskKitchenPrintJobs(order: PosOrder, zoneNames: Record<string, string>): PrintJob[] {
   const timestamp = order.createdAt;
   const groups = Array.from(new Set(order.items.map((it) => it.printerGroup)));
@@ -191,12 +257,18 @@ export function defaultZoneNames(): Record<string, string> {
   return Object.fromEntries(defaultPosLocalSettings.printZones.map((zone) => [zone.id, zone.name]));
 }
 
-/** 推 Kiosk 落單去 Supabase（經 `/api/pos/sync`，server 用 service role 寫入）。禁寫本地 localStorage。
- *  `eventType` 預設 ORDER_CREATED；resume 重用現有單時傳 ORDER_UPDATED（同一 order.id upsert）。 */
+/**
+ * 推 Kiosk 落單去 Supabase（經 `/api/pos/sync`，server 用 service role 寫入）。禁寫本地 localStorage。
+ * `eventType` 預設 ORDER_CREATED；resume 重用現有單時傳 ORDER_UPDATED（同一 order.id upsert）。
+ *
+ * ⚠️ **只會推訂單事件，絕對唔推 `PRINT_JOB_CREATED`**（docs/87 §3.1）。
+ * 原因：任何同步咗上 server 嘅 pending job，收銀端 `onPrintJobUpsert` 會 merge 落自己嘅
+ * localStorage，然後嗰部機嘅 `PrintFlushWorker` 會照印 → Kiosk 已經印咗一張，收銀台再印多張。
+ * Kiosk 嘅顧客小票屬於「本機打印」，由 `appendPrintJobs()` 寫本機就夠，唔好上雲。
+ */
 export async function submitKioskOrder(
   storeId: string,
   order: PosOrder,
-  printJobs: PrintJob[],
   eventType: "ORDER_CREATED" | "ORDER_UPDATED" = "ORDER_CREATED",
 ): Promise<void> {
   const now = new Date().toISOString();
@@ -209,14 +281,6 @@ export async function submitKioskOrder(
       status: "synced",
       createdAt: now,
     },
-    ...printJobs.map<QueueEvent>((job) => ({
-      id: uid("evt"),
-      type: "PRINT_JOB_CREATED",
-      entityId: job.id,
-      payload: job,
-      status: "synced",
-      createdAt: now,
-    })),
   ];
 
   const res = await fetch("/api/pos/sync", {

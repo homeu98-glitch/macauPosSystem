@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
+import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
+import { OrderSourceBadge } from "@/components/order-source-badge";
 import {
   dateFilterLabel,
   LedgerOrderDateFilter,
@@ -24,7 +26,8 @@ import {
   quickCompleteLabel,
   updateQuickFulfillmentInStore,
 } from "@/lib/quick-order-fulfillment";
-import { isReopenable, reopenPosOrder } from "@/lib/pos-orders";
+import { isSelfOrder } from "@/lib/pos/order-source";
+import { confirmSelfOrder, isReopenable, rejectSelfOrder, reopenPosOrder } from "@/lib/pos-orders";
 import {
   addDeletedOrderIds,
   loadAuthSession,
@@ -63,7 +66,12 @@ function QuickOrderActions({
 
   const completeText = quickCompleteLabel(order);
 
-  if (order.status === "paid" && order.fulfillmentStatus !== "ready") {
+  // docs/87 §6.3：放寬「可取餐」閘門，容許 draft / sent_to_kitchen / paid 都標記 ready（先出餐後付款）
+  const canBeReady =
+    (order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") &&
+    order.fulfillmentStatus !== "ready";
+
+  if (canBeReady) {
     return (
       <button
         className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
@@ -231,18 +239,19 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
-          <button
-            type="button"
-            className="rounded-xl bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-            onClick={() => setConfirmDeleteAllOpen(true)}
-            disabled={filteredOrders.length === 0}
-          >
-            刪除全部訂單
-          </button>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
+            <div className="mt-0.5 text-xs text-slate-500">快餐走製作中 → 待取餐 → 完成；堂食維持送廚結帳流程</div>
+          </div>
+          {/*
+            規格 6：「自動接自助單」開關直接取代原「刪除全部訂單」掣位。
+            ⚠️ 「刪除全部訂單」嘅**邏輯保留**（handleDeleteAllOrders + 下方確認彈窗），只係
+            介面上唔再需要入口（用戶明確指示：logic 唔好刪、UI 唔再需要）。
+            要還原只要喺度加返一粒 onClick={() => setConfirmDeleteAllOpen(true)} 嘅掣就得。
+          */}
+          <SelfOrderAutoAcceptToggle />
         </div>
-        <div className="mt-0.5 text-xs text-slate-500">快餐走製作中 → 待取餐 → 完成；堂食維持送廚結帳流程</div>
         <div className="mt-2 flex flex-wrap gap-1">
           {STATUS_TABS.map((tab) => (
             <button
@@ -273,7 +282,11 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                    {/* 顯示位 ①：訂單頁（規格 7）*/}
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</span>
+                      <OrderSourceBadge order={order} />
+                    </div>
                     <div className="mt-0.5 text-xs text-slate-500">{order.tableName}</div>
                     <div className="mt-1 text-xs text-slate-400">
                       {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
@@ -345,6 +358,41 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     </button>
                   ) : null}
                   <QuickOrderActions onChanged={handleQuickAction} order={order} />
+                  {/* 自助單 draft → 顯示「確認 / 拒絕」掣（規格 6：開關熄咗時需手動確認） */}
+                  {order.status === "draft" && isSelfOrder(order) ? (
+                    <>
+                      <button
+                        className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
+                        onClick={() => {
+                          const result = confirmSelfOrder(order.id);
+                          if (result.ok) {
+                            setToast(`已確認自助單 ${order.localOrderNo}`);
+                            refresh();
+                          } else {
+                            setToast(result.error ?? "確認失敗");
+                          }
+                        }}
+                        type="button"
+                      >
+                        確認出單
+                      </button>
+                      <button
+                        className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
+                        onClick={() => {
+                          const result = rejectSelfOrder(order.id);
+                          if (result.ok) {
+                            setToast(`已拒絕自助單 ${order.localOrderNo}`);
+                            refresh();
+                          } else {
+                            setToast(result.error ?? "拒絕失敗");
+                          }
+                        }}
+                        type="button"
+                      >
+                        拒絕
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </article>
             ))}
@@ -404,6 +452,43 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                   }}
                   order={viewingOrder}
                 />
+              </div>
+            ) : null}
+            {/* 查看彈窗：自助單 draft 亦顯示確認 / 拒絕 */}
+            {viewingOrder.status === "draft" && isSelfOrder(viewingOrder) ? (
+              <div className="mt-2 flex gap-2">
+                <button
+                  className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
+                  onClick={() => {
+                    const result = confirmSelfOrder(viewingOrder.id);
+                    if (result.ok) {
+                      setToast(`已確認自助單 ${viewingOrder.localOrderNo}`);
+                      refresh();
+                      setViewingOrderId(null);
+                    } else {
+                      setToast(result.error ?? "確認失敗");
+                    }
+                  }}
+                  type="button"
+                >
+                  確認出單
+                </button>
+                <button
+                  className="flex-1 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
+                  onClick={() => {
+                    const result = rejectSelfOrder(viewingOrder.id);
+                    if (result.ok) {
+                      setToast(`已拒絕自助單 ${viewingOrder.localOrderNo}`);
+                      refresh();
+                      setViewingOrderId(null);
+                    } else {
+                      setToast(result.error ?? "拒絕失敗");
+                    }
+                  }}
+                  type="button"
+                >
+                  拒絕
+                </button>
               </div>
             ) : null}
           </div>

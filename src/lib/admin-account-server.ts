@@ -116,6 +116,14 @@ export async function authenticateAccountFromServer(account: string, pin: string
   };
 }
 
+/**
+ * 伺服器端列出所有管理帳戶（DB 已配置時）。
+ * 用嚟俾管理頁面初始化資料。
+ *
+ * 2026-08-31 資安修復（docs/89 §2）：**絕對唔回傳 PIN**。舊 code 會 `pin: row.pin_code`
+ * 一齊 return，等於任何人打 `/api/admin/accounts` 就拎晒所有員工 4 位 PIN（明文）。
+ * 呢度改爲一律留空；改 PIN 係獨立操作，唔需要 server 返 PIN 俾前端。
+ */
 export async function listAdminDataFromServer() {
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
@@ -123,7 +131,7 @@ export async function listAdminDataFromServer() {
       ok: true as const,
       dbConfigured: false,
       source: "mock" as const,
-      accounts: enrichAccounts(defaultAccountUsers, defaultPermissionGroups),
+      accounts: enrichAccounts(defaultAccountUsers, defaultPermissionGroups).map((a) => ({ ...a, pin: "" })),
       stores: defaultAccountStores,
       permissionGroups: defaultPermissionGroups,
     };
@@ -144,7 +152,7 @@ export async function listAdminDataFromServer() {
   const mappedAccounts: AccountUser[] = (accounts ?? []).map((row) => ({
     id: row.id,
     account: row.account,
-    pin: row.pin_code,
+    pin: "", // 資安：唔回傳 PIN（見上方註解）
     name: row.name,
     role: row.role as UserRole,
     active: Boolean(row.active),

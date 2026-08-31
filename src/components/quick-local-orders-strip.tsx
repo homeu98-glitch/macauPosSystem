@@ -2,6 +2,7 @@
 
 import { PosOrder } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
+import { OrderSourceBadge } from "@/components/order-source-badge";
 
 type QuickLocalOrdersStripProps = {
   currency: string;
@@ -42,7 +43,11 @@ function OrderCard({
     <article className="w-[240px] shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+          {/* 顯示位 ②：收銀台快餐單卡片（規格 7）*/}
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</span>
+            <OrderSourceBadge order={order} />
+          </div>
           <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
         </div>
         <span
@@ -71,7 +76,9 @@ function OrderCard({
         >
           查看
         </button>
-        {mode === "preparing" && order.status === "paid" ? (
+        {/* docs/87 §6.3：放寬閘門，draft / sent_to_kitchen / paid 都可以標記 ready（先出餐後付款） */}
+        {mode === "preparing" &&
+        (order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") ? (
           <button
             className="rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
             onClick={() => onMarkReady(order.id)}

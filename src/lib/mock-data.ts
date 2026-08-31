@@ -473,6 +473,22 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       headerText: "",
       footerText: "廚房留底",
     },
+    // 自助點餐機模版（第四個槽位）：預設內容同收據一致（規格 8）。
+    // 商家可喺「打印」頁第四個分頁自行改，唔影響收銀台收據。
+    kiosk: {
+      blocks: {
+        store_name: { visible: true, size: "m", bold: true, align: "center" },
+        order_no: { visible: true, size: "s", bold: false, align: "left" },
+        table_name: { visible: true, size: "s", bold: false, align: "left" },
+        items: { visible: true, size: "m", bold: true, align: "left" },
+        total: { visible: true, size: "l", bold: true, align: "right" },
+        payment_method: { visible: true, size: "s", bold: false, align: "left" },
+        order_note: { visible: true, size: "s", bold: false, align: "left" },
+        footer: { visible: true, size: "s", bold: false, align: "center" },
+      },
+      order: ["store_name", "order_no", "table_name", "items", "total", "payment_method", "order_note", "footer"],
+      footerText: "多謝惠顧，歡迎再次光臨",
+    },
   },
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
@@ -482,5 +498,6 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   onlineOrderSettings: {
     autoAccept: false,
   },
-  kioskKitchenMode: "auto",
+  // 「自動接自助單」開關（取代 kioskKitchenMode）。true = 免確認直接出單（規格 5 嘅預設）。
+  autoAcceptSelfOrder: true,
 };

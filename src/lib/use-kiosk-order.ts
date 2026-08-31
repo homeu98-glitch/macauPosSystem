@@ -4,14 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { mockBootstrap } from "@/lib/mock-data";
-import { loadBootstrapCache, loadPosLocalSettings, saveBootstrapCache } from "@/lib/storage";
+import { loadBootstrapCache, saveBootstrapCache } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
+import { fetchKioskSettings } from "@/lib/pos/kiosk-settings";
+import { printKioskReceiptForOrder } from "@/lib/print-jobs";
 import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
-  buildKioskKitchenPrintJobs,
   buildKioskOrder,
   clearKioskDeviceBinding,
-  defaultZoneNames,
   DEFAULT_KIOSK_STORE_ID,
   fetchUnsettledKioskOrder,
   KioskCartItem,
@@ -156,11 +156,6 @@ export function useKioskOrder() {
     () => binding?.storeName ?? scanStoreName ?? bootstrap.storeName,
     [binding, scanStoreName, bootstrap],
   );
-  // 讀取用戶儲存嘅 kioskKitchenMode（舊 bug：硬讀 defaultPosLocalSettings = "auto"，
-  // 用戶改咗 dine_in_confirm 都唔生效）。
-  const kitchenMode = loadPosLocalSettings().kioskKitchenMode;
-  const zoneNames = defaultZoneNames();
-
   // 初始化：讀 URL ?tableId= / ?store=、綁店、語言
   useEffect(() => {
     const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -358,13 +353,20 @@ export function useKioskOrder() {
         // 失敗（離線 / 序列函數未佈署）就 fallback 去 buildKioskOrder 內嘅 timestamp 後綴
       }
 
+      // 「自動接自助單」開關嘅真源喺 DB（`pos_kiosk_settings`），落單當刻先攞一次（禁 polling）。
+      // 離線 / 後端失敗 → fallback 自動接單（規格 5：免確認直接出單係開關嘅預設值）。
+      const kioskSettings = await fetchKioskSettings(storeId);
+
       const order = buildKioskOrder({
         storeId,
         tableId,
         tableName,
         mode,
         quickType: mode === "quick" ? quickType : undefined,
-        kitchenMode,
+        autoAcceptSelfOrder: kioskSettings.selfOrderAutoAccept,
+        // 自助點餐機（綁定設備）vs 客人掃碼（URL 帶 tableId 或 ?store=）：
+        // kiosk 機本身唔會帶呢兩個參數，所以有就當掃碼落單。
+        source: isScanLink ? "scan" : "kiosk",
         items,
         taxRate: bootstrap.rules.taxRate,
         serviceRate: bootstrap.rules.serviceChargeRate,
@@ -374,8 +376,19 @@ export function useKioskOrder() {
         fulfillmentStatus: resumedOrder?.fulfillmentStatus,
         localOrderNo,
       });
-      const printJobs = buildKioskKitchenPrintJobs(order, zoneNames);
-      await submitKioskOrder(storeId, order, printJobs, resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED");
+      // ⚠️ 唔建廚房單、唔推 PRINT_JOB_CREATED（docs/87 §3.1）：
+      // 廚房單一律由收銀端收到單之後先建，否則會雙重打印。
+      await submitKioskOrder(storeId, order, resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED");
+
+      // 顧客小票：自助點餐機（kiosk）落單後即時印，本機排隊、唔上雲（同上，避免收銀端再印一次）。
+      // 掃碼單（scan）唔喺度印 —— 由收銀台部機印（規格 4：掃碼單嘅小票由收銀端打印機出）。
+      if (!isScanLink) {
+        try {
+          printKioskReceiptForOrder(order);
+        } catch {
+          // 打印失敗唔可以阻住落單：訂單已寫入 DB，收銀台會見到，可以手動補印。
+        }
+      }
 
       if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-last-order", order.id);
       setSubmittedOrder(order);

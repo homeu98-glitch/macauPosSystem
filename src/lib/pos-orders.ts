@@ -1,9 +1,24 @@
 "use client";
 
-import { appendPrintJobs, buildReopenPrintJobs } from "@/lib/print-jobs";
+import {
+  appendPrintJobs,
+  buildKioskReceiptPrintJobs,
+  buildKitchenPrintJobs,
+  buildLabelPrintJobs,
+  buildReopenPrintJobs,
+} from "@/lib/print-jobs";
+import { isSelfOrder } from "@/lib/pos/order-source";
 import { TEMP_REOPEN_ID_PREFIX } from "@/lib/pos/table-scope";
-import { loadOrders, loadPosLocalSettings, saveOrders, savePosLocalSettings } from "@/lib/storage";
-import { FloorConfig, PosOrder, StoreTable } from "@/lib/types";
+import {
+  loadBootstrapCache,
+  loadOrders,
+  loadPosLocalSettings,
+  loadQueue,
+  saveOrders,
+  savePosLocalSettings,
+  saveQueue,
+} from "@/lib/storage";
+import { FloorConfig, PosOrder, QueueEvent, StoreTable } from "@/lib/types";
 
 /**
  * 可返結：只可對「已結帳」（settled / paid）嘅單返結。
@@ -195,4 +210,127 @@ export async function reopenPosOrder(params: {
   }
 
   return { ok: true, memberReversed, memberReverseError, tempTable: tempTable ?? undefined, order: updated };
+}
+
+// ─────────────────────────────────────────────────────────────
+// 自助單確認／拒絕（docs/87 §3、規格 5+6）
+// ─────────────────────────────────────────────────────────────
+
+export type ConfirmSelfOrderResult = {
+  ok: boolean;
+  error?: string;
+  jobsCreated?: number;
+};
+
+/**
+ * 確認自助單（kiosk / 掃碼落單）：把 draft 單推去 sent_to_kitchen，並建廚房單 + 標籤單。
+ *
+ * 複用收銀台正常落單流程（`upsertCurrentOrder("sent_to_kitchen")` + `buildKitchenPrintJobs()` +
+ * `buildLabelPrintJobs()`），抽成共用函數供收銀台手動確認同自動流程呼叫（docs/87 §3.2）。
+ */
+export function confirmSelfOrder(orderId: string): ConfirmSelfOrderResult {
+  const orders = loadOrders();
+  const idx = orders.findIndex((o) => o.id === orderId);
+  if (idx < 0) return { ok: false, error: "找不到訂單" };
+
+  const order = orders[idx];
+  if (!isSelfOrder(order)) {
+    return { ok: false, error: "不是自助單" };
+  }
+  if (order.status !== "draft") {
+    return { ok: false, error: "訂單狀態不是待確認" };
+  }
+
+  const now = new Date().toISOString();
+  const updated: PosOrder = {
+    ...order,
+    status: "sent_to_kitchen",
+    fulfillmentStatus: "preparing",
+    sentToKitchenAt: now,
+    updatedAt: now,
+  };
+
+  const next = [...orders];
+  next[idx] = updated;
+  saveOrders(next);
+
+  // 建廚房單 + 標籤單（同 pos-app.tsx 正常落單流程一致）
+  const bootstrap = loadBootstrapCache();
+  const storeName = bootstrap?.storeName ?? "門店";
+  const jobs = [
+    ...buildKitchenPrintJobs(updated, { ticketType: "normal", storeName }),
+    ...buildLabelPrintJobs(updated, { ticketType: "normal", storeName }),
+  ];
+
+  // 掃碼單補顧客小票（收銀端打印機出；Kiosk 本機已自己印咗）
+  if (order.source === "scan" && bootstrap) {
+    jobs.push(...buildKioskReceiptPrintJobs(updated, bootstrap));
+  }
+
+  appendPrintJobs(jobs);
+
+  // 推同步事件（ORDER_UPDATED）
+  const event: QueueEvent = {
+    id: `evt-${crypto.randomUUID().slice(0, 8)}`,
+    type: "ORDER_UPDATED",
+    entityId: updated.id,
+    payload: updated,
+    status: "pending",
+    createdAt: now,
+  };
+  const queue = loadQueue();
+  saveQueue([event, ...queue]);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+  }
+
+  return { ok: true, jobsCreated: jobs.length };
+}
+
+/**
+ * 拒絕自助單：把 draft 單標記為 cancelled。
+ */
+export function rejectSelfOrder(orderId: string, reason?: string): { ok: boolean; error?: string } {
+  const orders = loadOrders();
+  const idx = orders.findIndex((o) => o.id === orderId);
+  if (idx < 0) return { ok: false, error: "找不到訂單" };
+
+  const order = orders[idx];
+  if (!isSelfOrder(order)) {
+    return { ok: false, error: "不是自助單" };
+  }
+  if (order.status !== "draft") {
+    return { ok: false, error: "訂單狀態不是待確認" };
+  }
+
+  const now = new Date().toISOString();
+  const updated: PosOrder = {
+    ...order,
+    status: "cancelled",
+    cancelledAt: now,
+    cancelledReason: reason || "收銀台拒絕",
+    updatedAt: now,
+  };
+
+  const next = [...orders];
+  next[idx] = updated;
+  saveOrders(next);
+
+  const event: QueueEvent = {
+    id: `evt-${crypto.randomUUID().slice(0, 8)}`,
+    type: "ORDER_UPDATED",
+    entityId: updated.id,
+    payload: updated,
+    status: "pending",
+    createdAt: now,
+  };
+  const queue = loadQueue();
+  saveQueue([event, ...queue]);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+  }
+
+  return { ok: true };
 }

@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
+import { loadKioskMode, saveKioskMode } from "@/lib/kiosk-order";
 import { OrderItem } from "@/lib/types";
 
 // kiosk 平板介面：3 欄佈局完全不變，邏輯抽去 useKioskOrder（與手機 /menu 共用）
@@ -46,6 +48,7 @@ function OrderSummaryCard({ order, title }: { order: import("@/lib/types").PosOr
 }
 
 export default function OrderPage() {
+  const router = useRouter();
   const t = (key: string) => I18N[language][key] ?? key;
 
   const {
@@ -88,6 +91,19 @@ export default function OrderPage() {
 
   // kiosk 專屬 UI state：設定（綁店）彈窗開關
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 裝置模式：部機係咪固定做自助點餐機（`loadKioskMode()`）。
+  // SSR 一定係 false（冇 localStorage），所以放 useEffect 讀，避免 hydration mismatch。
+  const [kioskMode, setKioskMode] = useState(false);
+  useEffect(() => {
+    setKioskMode(loadKioskMode());
+  }, []);
+
+  // 職員退出自助點餐模式：熄咗旗標再返收銀台（唔係「換店」，唔使重新登入）
+  function exitKioskMode() {
+    saveKioskMode(false);
+    setKioskMode(false);
+    router.replace("/");
+  }
 
   // kiosk 落單成功：5 秒倒數自動返回主頁（loading 狀態）
   const submittedRef = useRef(submittedOrder);
@@ -318,20 +334,10 @@ export default function OrderPage() {
         {/* 購物車 */}
         <aside className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white p-3 sm:w-80 lg:w-96">
           <div className="mb-2 text-sm font-semibold text-slate-700">{t("cart")}</div>
+          {/* docs/87 §5.1：自助點餐鎖「自取」，唔提供外賣（免配送地址 / 運費複雜度）。 */}
           {mode === "quick" && (
-            <div className="mb-3 flex gap-2 text-xs">
-              <button
-                onClick={() => setQuickType("pickup")}
-                className={`flex-1 rounded-lg py-2 ${quickType === "pickup" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600"}`}
-              >
-                {t("pickup")}
-              </button>
-              <button
-                onClick={() => setQuickType("delivery")}
-                className={`flex-1 rounded-lg py-2 ${quickType === "delivery" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-600"}`}
-              >
-                {t("delivery")}
-              </button>
+            <div className="mb-3 rounded-lg bg-orange-50 py-2 text-center text-xs font-semibold text-orange-700">
+              {t("pickup")}
             </div>
           )}
           <div className="flex-1 space-y-2 overflow-y-auto">
@@ -482,6 +488,14 @@ export default function OrderPage() {
             >
               重新綁定（換店）
             </button>
+            {kioskMode && (
+              <button
+                onClick={exitKioskMode}
+                className="mt-2 w-full rounded-xl bg-slate-900 py-3 font-semibold text-white"
+              >
+                退出自助點餐模式（返回收銀台）
+              </button>
+            )}
             <button
               onClick={() => setSettingsOpen(false)}
               className="mt-2 w-full rounded-xl border border-slate-200 py-3 font-semibold text-slate-600"

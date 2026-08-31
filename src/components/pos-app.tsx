@@ -10,6 +10,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { NumericKeypad } from "@/components/numeric-keypad";
+import { OrderSourceBadge } from "@/components/order-source-badge";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
@@ -21,7 +22,15 @@ import {
   ITEM_SPEC_LOCKED_MESSAGE,
   ORDER_NOTE_LOCKED_MESSAGE,
 } from "@/lib/pos/order-note-lock";
-import { buildKitchenPrintJobs, buildLabelPrintJobs, buildReceiptPrintJobs, buildVoidPrintJobsForOrder } from "@/lib/print-jobs";
+import {
+  appendPrintJobs,
+  buildKitchenPrintJobs,
+  buildKioskReceiptPrintJobs,
+  buildLabelPrintJobs,
+  buildReceiptPrintJobs,
+  buildVoidPrintJobsForOrder,
+} from "@/lib/print-jobs";
+import { isSelfOrder } from "@/lib/pos/order-source";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -73,7 +82,7 @@ import {
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { filterQuickActionBarOrders, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
-import { reopenPosOrder, removeReopenTempTable } from "@/lib/pos-orders";
+import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
@@ -619,6 +628,30 @@ export function PosApp() {
           const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
           const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders());
           saveOrders(cleaned);
+          // backfill 補建：收銀端恢復在線時，檢查有冇未出廚房單嘅自助單（docs/87 §11）
+          const selfOrdersNeedKitchen = cleaned.filter(
+            (o) =>
+              isSelfOrder(o) &&
+              o.status === "sent_to_kitchen" &&
+              !loadPrintJobs().some(
+                (job) =>
+                  job.orderId === o.id &&
+                  job.ticketType === "normal" &&
+                  job.printerGroup !== "receipt" &&
+                  (job.items?.length ?? 0) > 0,
+              ),
+          );
+          for (const o of selfOrdersNeedKitchen) {
+            const storeName = bootstrap?.storeName ?? "門店";
+            const jobs = [
+              ...buildKitchenPrintJobs(o, { ticketType: "normal", storeName }),
+              ...buildLabelPrintJobs(o, { ticketType: "normal", storeName }),
+            ];
+            if (o.source === "scan" && bootstrap) {
+              jobs.push(...buildKioskReceiptPrintJobs(o, bootstrap));
+            }
+            appendPrintJobs(jobs);
+          }
           return cleaned;
         });
       }
@@ -697,14 +730,49 @@ export function PosApp() {
     onOrderUpsert: (order) => {
       // docs/52：本機已真刪除（tombstone）嘅訂單唔可以經 realtime 復活
       if (loadDeletedOrderIds().includes(order.id)) return;
+
+      // 判斷是否新收到嘅自助單（realtime push 時本機未有）
+      const existing = loadOrders().find((o) => o.id === order.id);
+      const isNewSelfOrder = !existing && isSelfOrder(order);
+
       setOrders((current) => {
         const merged = mergeOrderLists(loadOrders(), current, [order]);
         const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders());
         saveOrders(cleaned);
         return cleaned;
       });
+
+      // 新收到嘅自助單（已自動確認 = sent_to_kitchen）→ 收銀端建廚房單 + 標籤單（docs/87 §3.1）
+      if (isNewSelfOrder && order.status === "sent_to_kitchen") {
+        // 用 print job 去重：若已經有該單嘅 kitchen job（normal ticket + 非 receipt + 有 items），就唔再建
+        const hasKitchen = loadPrintJobs().some(
+          (job) =>
+            job.orderId === order.id &&
+            job.ticketType === "normal" &&
+            job.printerGroup !== "receipt" &&
+            (job.items?.length ?? 0) > 0,
+        );
+        if (!hasKitchen) {
+          const storeName = bootstrap?.storeName ?? "門店";
+          const jobs = [
+            ...buildKitchenPrintJobs(order, { ticketType: "normal", storeName }),
+            ...buildLabelPrintJobs(order, { ticketType: "normal", storeName }),
+          ];
+          // 掃碼單冇本機打印機 → 收銀端補印顧客小票
+          if (order.source === "scan" && bootstrap) {
+            jobs.push(...buildKioskReceiptPrintJobs(order, bootstrap));
+          }
+          appendPrintJobs(jobs);
+        }
+      }
+
+      // 自助單 draft → 彈 toast 提示待確認（規格 6：開關熄咗時）
+      if (order.status === "draft" && isSelfOrder(order)) {
+        setToast({ tone: "info", message: `自助單 ${order.localOrderNo} 待確認` });
+      }
+
       // 堂食 dine_in_confirm 單落 draft：彈「X 枱已落單請確認」，等員工確認才落廚房
-      if (order.status === "draft" && order.tableId && order.tableId !== "counter") {
+      if (order.status === "draft" && order.tableId && order.tableId !== "counter" && !isSelfOrder(order)) {
         setToast({ tone: "info", message: `${order.tableName} 已落單，請確認` });
       }
     },
@@ -1238,6 +1306,7 @@ export function PosApp() {
           discountAmount,
           total: Math.max(0, baseTotals.total - discountAmount),
           voidedItems: [],
+          source: "pos",
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -3096,7 +3165,10 @@ export function PosApp() {
                       {counterKioskOrders.map((order) => (
                         <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <span className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</span>
+                              <OrderSourceBadge order={order} />
+                            </div>
                             <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-700">
                               <span className="h-4 w-4 rounded-full bg-orange-500" />
                               {localOrderStatusLabel(order)}
@@ -3113,22 +3185,60 @@ export function PosApp() {
                             >
                               查看
                             </button>
-                            {order.status === "paid" && order.fulfillmentStatus !== "ready" ? (
-                              <button
-                                className="flex-1 rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
-                                onClick={() => updateQuickFulfillment(order.id, "ready")}
-                                type="button"
-                              >
-                                標記可取
-                              </button>
-                            ) : null}
-                            <button
-                              className="flex-1 rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-                              onClick={() => setPayingOrderId(order.id)}
-                              type="button"
-                            >
-                              結帳
-                            </button>
+                            {/* 自助單 draft → 顯示確認 / 拒絕（規格 6） */}
+                            {order.status === "draft" && isSelfOrder(order) ? (
+                              <>
+                                <button
+                                  className="flex-1 rounded-xl bg-emerald-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                                  onClick={() => {
+                                    const result = confirmSelfOrder(order.id);
+                                    if (result.ok) {
+                                      setToast({ tone: "success", message: `已確認自助單 ${order.localOrderNo}` });
+                                    } else {
+                                      setToast({ tone: "error", message: result.error ?? "確認失敗" });
+                                    }
+                                  }}
+                                  type="button"
+                                >
+                                  確認出單
+                                </button>
+                                <button
+                                  className="flex-1 rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                                  onClick={() => {
+                                    const result = rejectSelfOrder(order.id);
+                                    if (result.ok) {
+                                      setToast({ tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` });
+                                    } else {
+                                      setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                                    }
+                                  }}
+                                  type="button"
+                                >
+                                  拒絕
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                {/* docs/87 §6.3：放寬可取餐閘門 */}
+                                {(order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") &&
+                                order.fulfillmentStatus !== "ready" ? (
+                                  <button
+                                    className="flex-1 rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
+                                    onClick={() => updateQuickFulfillment(order.id, "ready")}
+                                    type="button"
+                                  >
+                                    標記可取
+                                  </button>
+                                ) : null}
+                                <button
+                                  className="flex-1 rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                                  onClick={() => setPayingOrderId(order.id)}
+                                  type="button"
+                                >
+                                  結帳
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -4295,12 +4405,16 @@ export function PosApp() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-xl font-semibold text-slate-900">結帳</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {payingOrderId === CART_PAYING_ID
-                    ? "本次結帳"
-                    : currentSettlementOrder
-                      ? `訂單 ${currentSettlementOrder.localOrderNo}`
-                      : "待結帳訂單"}
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                  <span>
+                    {payingOrderId === CART_PAYING_ID
+                      ? "本次結帳"
+                      : currentSettlementOrder
+                        ? `訂單 ${currentSettlementOrder.localOrderNo}`
+                        : "待結帳訂單"}
+                  </span>
+                  {/* 顯示位 ③：結帳畫面（規格 7）*/}
+                  {currentSettlementOrder ? <OrderSourceBadge order={currentSettlementOrder} /> : null}
                 </div>
               </div>
               <div className="flex items-center gap-2">

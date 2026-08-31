@@ -21,6 +21,14 @@ export interface PosOrderRow {
   total: number;
   prepaid_amount: number;
   online_order_id: string | null;
+  /** 訂單來源（docs/87 §5.2）。舊列 default 'pos'；未跑 migration 嘅環境會冇呢欄。 */
+  source?: string | null;
+  /**
+   * 入座人數（covers）。0017 migration 新增；未跑 migration 嘅環境會冇呢欄 → undefined。
+   * 快餐／外賣／自取單一律 NULL（唔好填 1，會污染人均消費分母）。
+   * 見 docs/89 §3。
+   */
+  party_size?: number | null;
   payment_method: string | null;
   created_at: string;
   updated_at: string;
@@ -45,6 +53,10 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     total: Number(row.total ?? 0),
     prepaidAmount: Number(row.prepaid_amount ?? 0),
     onlineOrderId: row.online_order_id ?? undefined,
+    // 未跑 migration / 舊列會冇 source → fallback "pos"（收銀台落單，唔顯示來源標記）
+    source: (row.source as PosOrder["source"]) ?? "pos",
+    // 入座人數：冇欄 / NULL → undefined（前端「--」可改）。見 docs/89 §3。
+    partySize: row.party_size == null ? undefined : Number(row.party_size),
     paymentMethod: (row.payment_method as PosOrder["paymentMethod"]) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -64,6 +76,14 @@ export interface PosPrintJobRow {
   items: PrintJob["items"];
   status: string;
   created_at: string;
+  /**
+   * 0015 migration 新增。呢三欄冇咗嘅話，job 同步去第二部機會退化做硬編 fallback 渲染
+   * （冇店名／時間／單據類型／頁尾，亦唔理商家設嘅字型大小）→ 兩端印出嚟唔一致。
+   * 見 docs/87 §7。
+   */
+  template?: PrintJob["template"] | null;
+  content?: PrintJob["content"] | null;
+  printer_id?: string | null;
 }
 
 export function mapPosPrintJobRow(row: PosPrintJobRow): PrintJob {
@@ -78,6 +98,9 @@ export function mapPosPrintJobRow(row: PosPrintJobRow): PrintJob {
     items: Array.isArray(row.items) ? row.items : [],
     status: (row.status as PrintJob["status"]) ?? "pending",
     createdAt: row.created_at,
+    printerId: row.printer_id ?? undefined,
+    template: row.template ?? undefined,
+    content: row.content ?? undefined,
   };
 }
 

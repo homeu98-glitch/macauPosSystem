@@ -58,3 +58,22 @@ export function getSupabaseAdminClient() {
   if (!url || !key) return null;
   return createSupabaseClient(url, key);
 }
+
+/**
+ * 【寫入專用 client · 2026-08-31 資安加固，見 docs/89 §2】
+ *
+ * 與 `getSupabaseServerClient()` 嘅差別：**永遠唔會 fallback 去 anon key**。
+ *
+ * 點解要分開：
+ *   `NEXT_PUBLIC_SUPABASE_ANON_KEY` 係編譯入瀏覽器 bundle 嘅公開值，任何人開 devtools
+ *   就拎到。0016 migration 已經將所有業務表收做 service_role-only（RLS + revoke）。
+ *   如果寫入路徑仲留住「冇 service key 就退回 anon」嘅 fallback，會出現兩種爛結果：
+ *     1. 已加固嘅環境 → 寫入靜默失敗（RLS 擋），資料遺失但前端以為成功；
+ *     2. 未加固嘅環境 → 用一把公開 key 寫入，等於任何人都可以偽造落單。
+ *   所以寫入一律顯式要求 service key，缺就返 null，等 route 自己出清晰 503。
+ *
+ * 用法：所有做 upsert / update / delete / rpc(寫) 嘅 API route 都改用呢個。
+ */
+export function getSupabaseWriteClient() {
+  return getSupabaseAdminClient();
+}

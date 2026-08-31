@@ -13,7 +13,7 @@ import {
   savePrintJobs,
 } from "@/lib/storage";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
-import { PosBootstrap, PosOrder, PrintJob } from "@/lib/types";
+import { PosBootstrap, PosOrder, PrintJob, ReceiptTemplate } from "@/lib/types";
 import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
 import { formatMoney } from "@/lib/format";
 import {
@@ -45,10 +45,19 @@ export function appendPrintJobs(jobs: PrintJob[]) {
 }
 
 // ── 收據：每台 receipt 打印機一張，附商家收據模板快照 + 靜態內容 ──
-export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap): PrintJob[] {
-  const receiptTemplate = loadPosLocalSettings().printTemplates.receipt;
-  const storeName = bootstrap.storeName;
-  const currency = bootstrap.currency;
+/**
+ * 收據 / 自助點餐機小票共用嘅底層 builder，只差用邊一個模板槽位。
+ *
+ * ⚠️ `buildSnapshot()` 嘅 kind 一律係 `"receipt"`，即使傳入嘅係 kiosk 模板（docs/87 §2.3）。
+ * 三個下游 repo（POS / desktop-companion / print-agent-android）嘅標題表只認
+ * `receipt | label | kitchen`，傳 `"kiosk"` 會 fallthrough 到空標題。
+ * 用 `"receipt"` 就做到「獨立可改嘅模板內容 + 完全一致嘅出紙格式」（規格 8）。
+ */
+function buildTemplateReceiptJobs(
+  order: PosOrder,
+  bootstrap: PosBootstrap,
+  template: ReceiptTemplate,
+): PrintJob[] {
   const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
     (printer) => printer.enabled && printer.role === "receipt",
   );
@@ -61,8 +70,12 @@ export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap):
     specs: (it.selectedSpecs ?? []).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
     note: it.note,
   }));
-  const content = buildReceiptContent(order, { storeName, currency, footerText: receiptTemplate.footerText });
-  const template = buildSnapshot("receipt", receiptTemplate);
+  const content = buildReceiptContent(order, {
+    storeName: bootstrap.storeName,
+    currency: bootstrap.currency,
+    footerText: template.footerText,
+  });
+  const snapshot = buildSnapshot("receipt", template);
 
   return receiptPrinters.map<PrintJob>((printer) => ({
     id: uid("print"),
@@ -75,10 +88,31 @@ export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap):
     printerName: printer.name,
     items,
     content,
-    template,
+    template: snapshot,
     status: "pending",
     createdAt: timestamp,
   }));
+}
+
+/** 收銀台結帳收據：用 `printTemplates.receipt` 槽位。 */
+export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap): PrintJob[] {
+  return buildTemplateReceiptJobs(order, bootstrap, loadPosLocalSettings().printTemplates.receipt);
+}
+
+/**
+ * 自助點餐機 / 客人掃碼落單印畀客人嘅小票（docs/87 §2、規格 3+8）。
+ *
+ * 同收銀收據唯一差別：① 用 `printTemplates.kiosk` 呢個**獨立槽位**（商家可另行設計，
+ * 唔會影響收銀台收據）；② **固定印 1 張**（規格 8：打印數量唔開放設定）。
+ *
+ * 打印機沿用 `role === "receipt"`：kiosk mode 係同一部機嘅裝置模式，
+ * 「kiosk 隔籬嗰部打印機」就係呢部機自己 deviceConfig 入面嘅收據機，
+ * 唔使新增 PrinterRole，亦唔使改 APK / Companion（規格 1、2）。
+ */
+export function buildKioskReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap): PrintJob[] {
+  const jobs = buildTemplateReceiptJobs(order, bootstrap, loadPosLocalSettings().printTemplates.kiosk);
+  // 規格 8：job 層級寫死 1 份，優先於打印機層級嘅 `DevicePrinterConfig.copies`
+  return jobs.map((job) => ({ ...job, copies: 1 }));
 }
 
 export interface KitchenPrintOpts {
@@ -247,6 +281,19 @@ export function printReceiptForPosOrder(order: PosOrder): number {
   const bootstrap = loadBootstrapCache();
   if (!bootstrap) return 0;
   const jobs = buildReceiptPrintJobs(order, bootstrap);
+  appendPrintJobs(jobs);
+  return jobs.length;
+}
+
+/**
+ * 自助點餐機小票：本機排隊就得（**唔好推上雲**，docs/87 §3.1）。
+ * 任何同步咗上 server 嘅 pending job，收銀端會 merge 落自己 localStorage 再印多一次。
+ * 回傳實際加入隊列嘅張數（0 = 冇收據機 / 冇 bootstrap cache）。
+ */
+export function printKioskReceiptForOrder(order: PosOrder): number {
+  const bootstrap = loadBootstrapCache();
+  if (!bootstrap) return 0;
+  const jobs = buildKioskReceiptPrintJobs(order, bootstrap);
   appendPrintJobs(jobs);
   return jobs.length;
 }

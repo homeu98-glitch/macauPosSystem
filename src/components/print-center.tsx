@@ -38,13 +38,28 @@ import {
 } from "@/lib/escpos-template";
 import { EscPosLine, PrintItemLine, renderEscPosLines } from "@/lib/escpos-render";
 
-type TemplateKindState = "receipt" | "label" | "kitchen";
+/**
+ * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
+ * 渲染嗰陣一律用 `kind = "receipt"`（見 `KioskPreviewKind`），三個 repo 先唔使改。
+ */
+type TemplateKindState = "receipt" | "label" | "kitchen" | "kiosk";
 
 const SECTION_META: Record<TemplateKindState, { id: string; label: string }[]> = {
   receipt: RECEIPT_SECTION_META as unknown as { id: string; label: string }[],
   label: LABEL_SECTION_META as unknown as { id: string; label: string }[],
   kitchen: KITCHEN_SECTION_META as unknown as { id: string; label: string }[],
+  // 自助點餐機模版同收據係同一組區塊（規格 8：格式完全一致）
+  kiosk: RECEIPT_SECTION_META as unknown as { id: string; label: string }[],
 };
+
+/**
+ * docs/87 §2.3：自助點餐機模版係獨立槽位，但渲染時嘅 ESC/POS `kind` 必須係 `"receipt"`。
+ * 三個下游 repo（POS / desktop-companion / print-agent-android）嘅標題表只認
+ * `receipt | label | kitchen`，傳 `"kiosk"` 會 fallthrough 到空標題。
+ */
+function snapshotKindOf(kind: TemplateKindState): "receipt" | "label" | "kitchen" {
+  return kind === "kiosk" ? "receipt" : kind;
+}
 
 const PREVIEW_STORE_NAME = "澳門示範店";
 
@@ -115,13 +130,16 @@ export function PrintCenter() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "sent" | "failed">("all");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<"records" | "receipt-template" | "label-template" | "kitchen-template">("records");
+  const [activeTab, setActiveTab] = useState<
+    "records" | "receipt-template" | "label-template" | "kitchen-template" | "kiosk-template"
+  >("records");
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings() ?? defaultPosLocalSettings);
   const [deviceConfig, setDeviceConfig] = useState<DeviceConfig>(() => loadDeviceConfig() ?? defaultDeviceConfig);
   const [selectedSection, setSelectedSection] = useState<Record<TemplateKindState, string>>({
     receipt: "store_name",
     label: "header",
     kitchen: "store_name",
+    kiosk: "store_name",
   });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -272,7 +290,7 @@ export function PrintCenter() {
 
   function buildPreviewLines(kind: TemplateKindState): EscPosLine[] {
     const t = readTemplate(kind);
-    const snapshot = buildSnapshot(kind, t as unknown as Parameters<typeof buildSnapshot>[1]);
+    const snapshot = buildSnapshot(snapshotKindOf(kind), t as unknown as Parameters<typeof buildSnapshot>[1]);
     if (kind === "label") {
       const item = sampleOrder.items[0];
       if (!item) return [];
@@ -378,8 +396,16 @@ export function PrintCenter() {
     const selStyle = t.blocks[sel];
     const isLabel = kind === "label";
     const isKitchen = kind === "kitchen";
+    // 自助點餐機模版同收據共用同一組區塊（含 items.subSize），所以提示邏輯跟收據
+    const isReceiptLike = kind === "receipt" || kind === "kiosk";
     const title =
-      kind === "receipt" ? "收據模板（ESC/POS）" : kind === "label" ? "飲品標籤模板（ESC/POS）" : "廚房單模板（ESC/POS）";
+      kind === "receipt"
+        ? "收據模板（ESC/POS）"
+        : kind === "label"
+          ? "飲品標籤模板（ESC/POS）"
+          : kind === "kitchen"
+            ? "廚房單模板（ESC/POS）"
+            : "自助點餐機模板（ESC/POS）";
     return (
       <div className="grid gap-3 lg:grid-cols-[360px_minmax(0,1fr)]">
         <article className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -387,6 +413,12 @@ export function PrintCenter() {
           <div className="mt-1 text-xs text-slate-500">
             真實可打印設定：開關、字型大小、粗體、對齊。設計介面 = 螢幕預覽 = 實際出紙。
           </div>
+          {kind === "kiosk" && (
+            <div className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-700">
+              呢個模版只影響自助點餐機 / 客人掃碼落單時印畀客人嘅小票，<b>唔會</b>影響收銀台收據（兩者係獨立槽位）。
+              預設內容同收據完全一致；出紙格式亦固定用收據格式，所以三個打印端唔使改。
+            </div>
+          )}
           <div className="mt-3 flex items-center gap-2">
             <button
               className="rounded-xl bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
@@ -511,7 +543,7 @@ export function PrintCenter() {
               </label>
             </div>
           )}
-          {sel !== "items" && (kind === "receipt" || isKitchen) ? (
+          {sel !== "items" && (isReceiptLike || isKitchen) ? (
             <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
               想調整每道菜的「規格 / 備註」字體大小？請在左側「區塊順序」中點選「菜品明細」區塊，設定會出現在該區塊下方。
             </div>
@@ -568,6 +600,7 @@ export function PrintCenter() {
                   ["receipt-template", "收據模板"],
                   ["label-template", "標籤模板"],
                   ["kitchen-template", "廚房模板"],
+                  ["kiosk-template", "自助點餐機"],
                 ].map(([key, label]) => (
                   <button
                     key={key}
@@ -723,6 +756,7 @@ export function PrintCenter() {
             {activeTab === "receipt-template" ? renderDesigner("receipt") : null}
             {activeTab === "label-template" ? renderDesigner("label") : null}
             {activeTab === "kitchen-template" ? renderDesigner("kitchen") : null}
+            {activeTab === "kiosk-template" ? renderDesigner("kiosk") : null}
           </div>
         </main>
       </div>

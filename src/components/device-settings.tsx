@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { KioskModePanel } from "@/components/kiosk-mode-panel";
 import { KioskQrPanel } from "@/components/kiosk-qr-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
@@ -464,7 +465,11 @@ export function DeviceSettings() {
     // 但推上 server 嘅副本就要剝走 temp 枱：server `pos_device_configs.local_settings.floors`
     // 係全店同步嘅，其他 terminal 同步到一張「結帳後會消失」嘅枱只會造成混亂
     //（而且 `pos_device_configs` GET 係全店最新一條，污染會擴散去第二間 terminal）。
-    const serverSettings = { ...localSettings, floors: stripReopenTempTables(localSettings.floors) };
+    // 同時剝走 `autoAcceptSelfOrder`：真源喺 `pos_kiosk_settings`（按 store_id），
+    // 寫落 `pos_device_configs` 會被 `.order(updated_at desc).limit(1)` 冇 store filter 嘅讀取方式搞亂
+    //（同 `onlineOrderSettings.autoAccept` 嗰個 bug 同款，見 docs/52 / docs/87 §11）。
+    const { autoAcceptSelfOrder: _, ...localRest } = localSettings;
+    const serverSettings = { ...localRest, floors: stripReopenTempTables(localSettings.floors) };
 
     const event: QueueEvent = {
       id: uid("evt"),
@@ -663,7 +668,10 @@ export function DeviceSettings() {
   </div>
 
   {activeTab === "kiosk" ? (
-    <KioskQrPanel />
+    <div className="grid gap-3">
+      <KioskModePanel />
+      <KioskQrPanel />
+    </div>
   ) : null}
 
   {activeTab === "device" ? (

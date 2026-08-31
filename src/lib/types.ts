@@ -296,6 +296,19 @@ export interface PrintTemplates {
   receipt: ReceiptTemplate;
   label: LabelTemplate;
   kitchen: KitchenTemplate;
+  /**
+   * 自助點餐機模版（商家喺「打印」頁第四個分頁設定）。
+   *
+   * 結構同 `receipt` 一樣（`ReceiptTemplate`），但係**獨立槽位**：商家改佢唔會影響收銀台收據。
+   * 預設內容係 `DEFAULT_RECEIPT_TEMPLATE` 嘅深拷貝（規格 8：小票格式同現有小票完全一致，無需額外設計）。
+   *
+   * ⚠️ 渲染時 `buildSnapshot()` 嘅 kind **必須傳 `"receipt"`**，唔可以傳 `"kiosk"`：
+   * 三個 repo 嘅 TITLE map（`src/lib/escpos-render.ts`、`companion-server.mjs`、
+   * print-agent-android `EscPosRenderer.kt`）只認 receipt / label / kitchen，
+   * 傳 `"kiosk"` 會 fall through 去空字串 → 冇咗「＊＊＊ 收據 ＊＊＊」抬頭，格式就同收據唔一致。
+   * 用 `"receipt"` 嘅話三個 repo 全部原封不動，零跨 repo 改動。見 docs/87 §2.3。
+   */
+  kiosk: ReceiptTemplate;
 }
 
 export type PrintTemplateKind = "receipt" | "label" | "kitchen";
@@ -332,11 +345,18 @@ export interface PosLocalSettings {
     autoAccept: boolean;
   };
   /**
-   * Kiosk 掃碼點餐落單模式：
-   * - "auto"：堂食單落單後自動出廚房（同線上訂單 autoAccept 行為）
-   * - "dine_in_confirm"：堂食單落單後排入「待確認」，等收銀 / 樓面確認才出廚房
+   * 「自動接自助單」開關（取代舊嘅 `kioskKitchenMode`，見 docs/87 §4.1）。
+   * 堂食與快餐共用同一粒開關；外賣（Ledger 線上訂單）唔受影響，繼續用 `onlineOrderSettings.autoAccept`。
+   *
+   * - `true`（**預設**，規格 5）：免確認，客人落單後直接出廚房單
+   * - `false`：自助點餐單排入「待確認」，等收銀台撳「確認」先用代客下單流程出單
+   *
+   * ⚠️ 真源喺 DB（`pos_kiosk_settings.self_order_auto_accept`，按 `store_id`），
+   * 本機呢個值只係快取 —— Kiosk 落單時會向 server 讀一次。
+   * 因為舊嘅 `kioskKitchenMode` 係由 Kiosk 自己嘅 localStorage 讀，而 Kiosk 從來冇設定 UI，
+   * 結果永遠係 `"auto"` → 開關係死 code。見 docs/87 §9 P0 #4。
    */
-  kioskKitchenMode: "auto" | "dine_in_confirm";
+  autoAcceptSelfOrder: boolean;
 }
 
 export interface OrderItem {
@@ -381,6 +401,13 @@ export interface PosOrder {
   total: number;
   prepaidAmount?: number;
   onlineOrderId?: string;
+  /**
+   * 訂單來源（docs/87 §5.2 · 規格 7）。三處 UI 會顯示對應標記：訂單頁 / 收銀台快餐單卡片 / 結帳畫面。
+   * - `"pos"`：員工喺收銀台落單（預設，舊單全部係呢個值）
+   * - `"kiosk"`：自助點餐機（設備有 kioskDeviceBinding）
+   * - `"scan"`：客人掃碼自點（QR 連結帶 `?store=` / `?tableId=`）
+   */
+  source?: "pos" | "kiosk" | "scan";
   paymentMethod?: PaymentMethod;
   cancelledAt?: string;
   cancelledReason?: string;
@@ -472,6 +499,14 @@ export interface PrintJob {
   template?: EscPosTemplateSnapshot;
   /** 靜態區塊文字（key = section id），renderer 按 block.style 印；items 區塊除外 */
   content?: Record<string, string>;
+  /**
+   * 呢張單要印幾份。落單端寫死，優先於打印機層級嘅 `DevicePrinterConfig.copies`。
+   *
+   * 點解要 job 層面：份數而家係**跟打印機**唔係跟訂單（`dispatch.ts` 讀 `printer.copies`），
+   * 若廚房機設咗 2 份而自助點餐用同一部機，就會印 2 份。
+   * 自助點餐單固定 1 張（規格），所以一定要喺 job 帶 `copies: 1` 落去。見 docs/87 §6.1。
+   */
+  copies?: number;
 }
 
 // ── 跨平台雙路徑打印：統一傳輸層合約（Phase 0 骨架） ──

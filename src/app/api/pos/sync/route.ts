@@ -1,16 +1,115 @@
 import { NextResponse } from "next/server";
 
-import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { getSupabaseWriteClient } from "@/lib/supabase-server";
+
+/**
+ * POST /api/pos/sync — 收銀 / Kiosk 離線優先同步入口。
+ *
+ * 2026-08-31 資安加固（見 docs/89 §2）：
+ *   1. 寫入改行 `getSupabaseWriteClient()`（service_role only，唔再 fallback anon key）。
+ *      0016 migration 已將所有業務表收做 service_role-only，留 anon fallback 會靜默寫入失敗。
+ *   2. 加輸入驗證：body 大小、events 數量、storeId 白名單字元、字串長度、陣列長度、數值範圍。
+ *      之前任何人都 POST 任意 JSON 落嚟（`storeId` 任意、items 無上限）→ 可寫爆 DB / 跨店污染。
+ *   3. 錯誤訊息唔再直出 DB 內部訊息（會洩漏 schema / 欄位名），改記 server log、對外返通用訊息。
+ *
+ * 2026-08-31 party_size 上雲（見 docs/89 §3）：upsert 同 ORDER_SETTLED 都會寫 `party_size`。
+ */
+
+// ─────────────────────────────────────────────────────────────
+// 輸入驗證常數
+// ─────────────────────────────────────────────────────────────
+const MAX_BODY_BYTES = 4 * 1024 * 1024; // 4MB：一張單最多幾百個 item，綽綽有餘
+const MAX_EVENTS_PER_REQUEST = 200;
+const MAX_ORDER_ITEMS = 500;
+const MAX_ID_LEN = 128;
+const MAX_STORE_ID_LEN = 64;
+const MAX_TEXT_LEN = 2000; // order_note / 備註
+const MAX_NAME_LEN = 200;
+const MAX_PARTY_SIZE = 999; // 對齊 0017 migration 嘅 CHECK 約束
+const STORE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const DEFAULT_STORE_ID = "macau-store-a";
+
+const VALID_EVENT_TYPES = new Set([
+  "ORDER_CREATED",
+  "ORDER_UPDATED",
+  "ORDER_ITEM_VOIDED",
+  "ORDER_SETTLED",
+  "ORDER_DELETED",
+  "DEVICE_CONFIG_UPDATED",
+  "PRINT_JOB_CREATED",
+  "PRINT_JOB_DELETED",
+  "TEST_PRINT_REQUESTED",
+]);
+
+/** 截斷字串（防止超長輸入寫爆 jsonb / text 欄）。非字串一律 null。 */
+function text(value: unknown, maxLen = MAX_TEXT_LEN): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, maxLen);
+}
+
+/** 安全整數：非數字 / NaN / 負數 → null；超過 max → clamp。 */
+function intOrNull(value: unknown, max = 1_000_000_000): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.trunc(n);
+  if (i < 1) return null;
+  return Math.min(i, max);
+}
+
+/** 金額：非數字 → 0；clamp 到 ±1e9，避免 numeric 溢出 / 負數亂寫。 */
+function money(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-1_000_000_000, Math.min(1_000_000_000, n));
+}
+
+/** 入座人數：只接受 1..999 嘅整數，其餘一律 null（對齊 DB CHECK，避免 upsert 成單成批失敗）。 */
+function partySizeOrNull(value: unknown): number | null {
+  return intOrNull(value, MAX_PARTY_SIZE);
+}
 
 export async function POST(request: Request) {
-  const payload = await request.json();
-  const events = Array.isArray(payload?.events) ? payload.events : [];
-  const storeId = String(payload?.storeId ?? "macau-store-a");
-  const supabase = getSupabaseServerClient();
+  // ── 0) body 大小閘：超大 body 直接拒，唔好入 JSON.parse ──
+  const declaredLen = Number(request.headers.get("content-length") ?? 0);
+  if (declaredLen > MAX_BODY_BYTES) {
+    return NextResponse.json({ ok: false, error: "請求內容過大" }, { status: 413 });
+  }
 
-  // 冇 Supabase 伺服器端 client（env 未配 SUPABASE_URL / SERVICE_ROLE_KEY）→
-  // 唔可以靜默當成功，否則 kiosk 會顯示假成功（單號正常）但訂單其實冇寫入 DB。
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: "請求格式錯誤（不是合法 JSON）" }, { status: 400 });
+  }
+
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return NextResponse.json({ ok: false, error: "請求格式錯誤" }, { status: 400 });
+  }
+
+  const payload = raw as Record<string, unknown>;
+  const events = Array.isArray(payload?.events) ? payload.events : [];
+
+  // ── 1) storeId 驗證：長度 + 白名單字元（防 path/JSON 注入 + 跨店亂寫）──
+  const rawStoreId = typeof payload?.storeId === "string" ? payload.storeId.trim() : "";
+  const storeId = rawStoreId || DEFAULT_STORE_ID;
+  if (storeId.length > MAX_STORE_ID_LEN || !STORE_ID_PATTERN.test(storeId)) {
+    return NextResponse.json({ ok: false, error: "storeId 格式不合法" }, { status: 400 });
+  }
+
+  // ── 2) events 數量閘 ──
+  if (events.length > MAX_EVENTS_PER_REQUEST) {
+    return NextResponse.json(
+      { ok: false, error: `單次同步事件過多（上限 ${MAX_EVENTS_PER_REQUEST}）` },
+      { status: 413 },
+    );
+  }
+
+  // 寫入一律 service_role（0016 之後 anon 已經寫唔入，留 fallback 只會靜默失敗）
+  const supabase = getSupabaseWriteClient();
   if (!supabase) {
+    console.error("[pos/sync] SUPABASE_SERVICE_ROLE_KEY 未設定，寫入拒絕。");
     return NextResponse.json(
       {
         ok: false,
@@ -27,109 +126,188 @@ export async function POST(request: Request) {
 
   const errors: string[] = [];
 
-  for (const event of events) {
+  for (const rawEvent of events) {
+    if (typeof rawEvent !== "object" || rawEvent === null) {
+      errors.push("事件格式錯誤");
+      continue;
+    }
+    const event = rawEvent as Record<string, unknown>;
+    const eventId = text(event.id, MAX_ID_LEN);
+    const eventType = typeof event.type === "string" ? event.type : "";
+
+    if (!eventId) {
+      errors.push("事件缺少 id");
+      continue;
+    }
+    // ── 3) 事件類型白名單：唔喺名單內嘅一律跳過（防未知 type 走進寫入分支）──
+    if (!VALID_EVENT_TYPES.has(eventType)) {
+      errors.push(`未知事件類型：${eventType.slice(0, 40)}`);
+      continue;
+    }
+
+    const eventPayload = (typeof event.payload === "object" && event.payload !== null
+      ? event.payload
+      : {}) as Record<string, unknown>;
+
     const { error: qErr } = await supabase.from("pos_queue_events").upsert(
       {
-        id: event.id,
-        type: event.type,
-        entity_id: event.entityId,
-        payload: event.payload,
-        status: event.status,
-        created_at: event.createdAt,
+        id: eventId,
+        type: eventType,
+        entity_id: text(event.entityId, MAX_ID_LEN),
+        payload: eventPayload,
+        status: text(event.status, 64),
+        created_at: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
       },
       { onConflict: "id" },
     );
-    if (qErr) errors.push(`queue_events: ${qErr.message}`);
+    if (qErr) {
+      console.error("[pos/sync] queue_events upsert failed:", qErr.message);
+      errors.push(`queue_events 寫入失敗`);
+    }
 
-    if (event.type === "ORDER_CREATED" || event.type === "ORDER_UPDATED") {
-      const order = event.type === "ORDER_UPDATED" ? event.payload?.order : event.payload;
-      if (order?.id) {
+    if (eventType === "ORDER_CREATED" || eventType === "ORDER_UPDATED") {
+      const order = (eventType === "ORDER_UPDATED" ? eventPayload.order : eventPayload) as
+        | Record<string, unknown>
+        | undefined;
+      const orderId = order && typeof order.id === "string" ? order.id.slice(0, MAX_ID_LEN) : "";
+      // `order &&` 要再寫多次：TS 唔會由 `orderId` 嘅 truthiness 反推 `order` 已經 narrowing 咗，
+      // 唔加會令下面 23 處 `order.xxx` 全部報 TS18048「possibly undefined」。
+      if (order && orderId) {
+        const items = Array.isArray(order.items) ? order.items.slice(0, MAX_ORDER_ITEMS) : [];
         const { error: oErr } = await supabase.from("pos_orders").upsert(
           {
-            id: order.id,
-            local_order_no: order.localOrderNo,
+            id: orderId,
+            local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
             store_id: storeId,
-            table_id: order.tableId,
-            table_name: order.tableName,
-            status: order.status,
-            fulfillment_status: order.fulfillmentStatus ?? null,
-            sent_to_kitchen_at: order.sentToKitchenAt ?? null,
-            served_at: order.servedAt ?? null,
-            items: order.items,
-            order_note: order.orderNote ?? null,
-            subtotal: order.subtotal,
-            tax_amount: order.taxAmount,
-            service_charge_amount: order.serviceChargeAmount,
-            discount_amount: order.discountAmount,
-            total: order.total,
-            prepaid_amount: order.prepaidAmount ?? 0,
-            online_order_id: order.onlineOrderId ?? null,
-            payment_method: order.paymentMethod ?? null,
-            created_at: order.createdAt,
-            updated_at: order.updatedAt,
+            table_id: text(order.tableId, MAX_ID_LEN),
+            table_name: text(order.tableName, MAX_NAME_LEN),
+            status: text(order.status, 64) ?? "draft",
+            fulfillment_status: text(order.fulfillmentStatus, 64),
+            sent_to_kitchen_at: text(order.sentToKitchenAt, 64),
+            served_at: text(order.servedAt, 64),
+            items,
+            order_note: text(order.orderNote, MAX_TEXT_LEN),
+            subtotal: money(order.subtotal),
+            tax_amount: money(order.taxAmount),
+            service_charge_amount: money(order.serviceChargeAmount),
+            discount_amount: money(order.discountAmount),
+            total: money(order.total),
+            prepaid_amount: money(order.prepaidAmount),
+            online_order_id: text(order.onlineOrderId, MAX_ID_LEN),
+            // 訂單來源（docs/87 §5.2）："pos" 收銀台 / "kiosk" 自助點餐機 / "scan" 掃碼自點。
+            // 舊 client 冇呢個欄 → fallback "pos"。
+            source: text(order.source, 32) ?? "pos",
+            payment_method: text(order.paymentMethod, MAX_NAME_LEN),
+            // ── 入座人數上雲（docs/89 §3）：報表「覆蓋人數 / 人均消費」嘅唯一雲端來源。
+            //    快餐／外賣／自取單係 undefined → 寫 NULL（唔好填 1，會污染人均消費分母）。
+            party_size: partySizeOrNull(order.partySize),
+            created_at: text(order.createdAt, 64) ?? new Date().toISOString(),
+            updated_at: text(order.updatedAt, 64) ?? new Date().toISOString(),
           },
           { onConflict: "id" },
         );
-        if (oErr) errors.push(`pos_orders ${order.localOrderNo ?? order.id}: ${oErr.message}`);
+        if (oErr) {
+          console.error("[pos/sync] pos_orders upsert failed:", oErr.message);
+          errors.push(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 寫入失敗`);
+        }
       }
     }
 
-    if (event.type === "ORDER_SETTLED" && event.payload?.orderId) {
-      const { error: sErr } = await supabase
-        .from("pos_orders")
-        .update({
-          status: event.payload.status ?? "settled",
-          fulfillment_status: event.payload.fulfillmentStatus ?? null,
-          sent_to_kitchen_at: event.payload.sentToKitchenAt ?? null,
-          served_at: event.payload.servedAt ?? null,
-          payment_method: event.payload.paymentMethod ?? null,
-          discount_amount: event.payload.discountAmount ?? 0,
-          total: event.payload.total ?? 0,
-          updated_at: event.createdAt,
-        })
-        .eq("id", event.payload.orderId);
-      if (sErr) errors.push(`pos_orders settle ${event.payload.orderId}: ${sErr.message}`);
+    if (eventType === "ORDER_SETTLED") {
+      const settledOrderId =
+        typeof eventPayload.orderId === "string" ? eventPayload.orderId.slice(0, MAX_ID_LEN) : "";
+      if (settledOrderId) {
+        const patch: Record<string, unknown> = {
+          status: text(eventPayload.status, 64) ?? "settled",
+          fulfillment_status: text(eventPayload.fulfillmentStatus, 64),
+          sent_to_kitchen_at: text(eventPayload.sentToKitchenAt, 64),
+          served_at: eventPayload.servedAt ? text(eventPayload.servedAt, 64) : null,
+          payment_method: text(eventPayload.paymentMethod, MAX_NAME_LEN),
+          discount_amount: money(eventPayload.discountAmount),
+          total: money(eventPayload.total),
+          updated_at: text(event.createdAt, 64) ?? new Date().toISOString(),
+        };
+        // 入座人數：**唯有** payload 有帶先寫。舊版 client / 排隊中嘅舊事件冇呢個欄，
+        // 若無條件寫 null 會抹走之前 ORDER_UPDATED 寫入嘅值。
+        const settledPartySize = partySizeOrNull(eventPayload.partySize);
+        if (settledPartySize !== null) patch.party_size = settledPartySize;
+
+        const { error: sErr } = await supabase
+          .from("pos_orders")
+          .update(patch)
+          .eq("id", settledOrderId)
+          .eq("store_id", storeId);
+
+        if (sErr) {
+          console.error("[pos/sync] pos_orders settle failed:", sErr.message);
+          errors.push(`訂單結帳狀態寫入失敗`);
+        }
+      }
     }
 
-    if (event.type === "PRINT_JOB_CREATED" && event.payload?.id) {
-      const job = event.payload;
-      const { error: jErr } = await supabase.from("pos_print_jobs").upsert(
-        {
-          id: job.id,
-          store_id: storeId,
-          order_id: job.orderId,
-          order_no: job.orderNo ?? null,
-          table_name: job.tableName ?? null,
-          ticket_type: job.ticketType,
-          printer_group: job.printerGroup,
-          printer_name: job.printerName,
-          items: job.items ?? [],
-          status: job.status,
-          created_at: job.createdAt,
-        },
-        { onConflict: "id" },
-      );
-      if (jErr) errors.push(`pos_print_jobs ${job.id}: ${jErr.message}`);
+    if (eventType === "PRINT_JOB_CREATED") {
+      const jobId = typeof eventPayload.id === "string" ? eventPayload.id.slice(0, MAX_ID_LEN) : "";
+      if (jobId) {
+        const jobItems = Array.isArray(eventPayload.items) ? eventPayload.items.slice(0, MAX_ORDER_ITEMS) : [];
+        const { error: jErr } = await supabase.from("pos_print_jobs").upsert(
+          {
+            id: jobId,
+            store_id: storeId,
+            order_id: text(eventPayload.orderId, MAX_ID_LEN),
+            order_no: text(eventPayload.orderNo, MAX_NAME_LEN),
+            table_name: text(eventPayload.tableName, MAX_NAME_LEN),
+            ticket_type: text(eventPayload.ticketType, 64) ?? "normal",
+            printer_group: text(eventPayload.printerGroup, 64) ?? "kitchen",
+            printer_name: text(eventPayload.printerName, MAX_NAME_LEN),
+            items: jobItems,
+            status: text(eventPayload.status, 64) ?? "pending",
+            created_at: text(eventPayload.createdAt, 64) ?? new Date().toISOString(),
+            // 0015 migration 新增：模板快照 / 靜態內容 / 打印機綁定。
+            // 冇呢三欄，job 同步去第二部機會退化做硬編 fallback 渲染（冇店名／時間／單據類型／
+            // 頁尾，亦唔理商家設嘅字型大小）→ 兩部機印出嚟唔一致。見 docs/87 §7。
+            template: eventPayload.template ?? null,
+            content: eventPayload.content ?? null,
+            printer_id: text(eventPayload.printerId, MAX_ID_LEN),
+          },
+          { onConflict: "id" },
+        );
+        if (jErr) {
+          console.error("[pos/sync] pos_print_jobs upsert failed:", jErr.message);
+          errors.push(`列印工作寫入失敗`);
+        }
+      }
     }
 
     // 真刪打印記錄（打印中心「清除已發送 / 已失敗 / 自動清理」）；必須按 store_id 隔離，避免跨店刪除（見 docs/52）
-    if (event.type === "PRINT_JOB_DELETED" && event.payload?.id) {
-      const { error: dErr } = await supabase
-        .from("pos_print_jobs")
-        .delete()
-        .eq("id", event.payload.id)
-        .eq("store_id", storeId);
-      if (dErr) errors.push(`pos_print_jobs delete ${event.payload.id}: ${dErr.message}`);
+    if (eventType === "PRINT_JOB_DELETED") {
+      const jobId = typeof eventPayload.id === "string" ? eventPayload.id.slice(0, MAX_ID_LEN) : "";
+      if (jobId) {
+        const { error: dErr } = await supabase
+          .from("pos_print_jobs")
+          .delete()
+          .eq("id", jobId)
+          .eq("store_id", storeId);
+        if (dErr) {
+          console.error("[pos/sync] pos_print_jobs delete failed:", dErr.message);
+          errors.push(`列印工作刪除失敗`);
+        }
+      }
     }
 
     // 真刪訂單（訂單詳情「刪除訂單」）；必須按 store_id 隔離，避免跨店刪除（見 docs/52）
-    if (event.type === "ORDER_DELETED" && event.payload?.orderId) {
-      const { error: dErr } = await supabase
-        .from("pos_orders")
-        .delete()
-        .eq("id", event.payload.orderId)
-        .eq("store_id", storeId);
-      if (dErr) errors.push(`pos_orders delete ${event.payload.orderId}: ${dErr.message}`);
+    if (eventType === "ORDER_DELETED") {
+      const orderId = typeof eventPayload.orderId === "string" ? eventPayload.orderId.slice(0, MAX_ID_LEN) : "";
+      if (orderId) {
+        const { error: dErr } = await supabase
+          .from("pos_orders")
+          .delete()
+          .eq("id", orderId)
+          .eq("store_id", storeId);
+        if (dErr) {
+          console.error("[pos/sync] pos_orders delete failed:", dErr.message);
+          errors.push(`訂單刪除失敗`);
+        }
+      }
     }
   }
 
@@ -137,9 +315,9 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
+        // 對外只返第一條通用訊息；詳細 DB 錯誤只落 server log，唔外洩 schema / 欄位名
         error: errors[0],
-        detail: errors,
-        syncedCount: events.length - errors.length,
+        syncedCount: Math.max(0, events.length - errors.length),
       },
       { status: 500 },
     );

@@ -18,7 +18,12 @@ import {
   defaultPermissionGroups,
   defaultPosLocalSettings,
 } from "@/lib/mock-data";
-import { DEFAULT_KITCHEN_TEMPLATE, DEFAULT_LABEL_TEMPLATE, DEFAULT_RECEIPT_TEMPLATE } from "@/lib/escpos-template";
+import {
+  DEFAULT_KIOSK_TEMPLATE,
+  DEFAULT_KITCHEN_TEMPLATE,
+  DEFAULT_LABEL_TEMPLATE,
+  DEFAULT_RECEIPT_TEMPLATE,
+} from "@/lib/escpos-template";
 
 const KEYS = {
   offlineMode: "macau-pos/offline-mode",
@@ -268,6 +273,14 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         headerText: settings?.printTemplates?.kitchen?.headerText ?? DEFAULT_KITCHEN_TEMPLATE.headerText,
         footerText: settings?.printTemplates?.kitchen?.footerText ?? DEFAULT_KITCHEN_TEMPLATE.footerText,
       },
+      // 自助點餐機模版（第四個槽位）。結構同 receipt，預設內容係 DEFAULT_KIOSK_TEMPLATE
+      // （= 收據模版嘅深拷貝；規格 8：小票格式同現有小票完全一致，無需額外設計）。
+      // 舊 localStorage 冇呢個 key → merge 函數會全套用 DEFAULT_KIOSK_TEMPLATE，安全向後兼容。
+      kiosk: {
+        blocks: mergeTemplateBlocks(DEFAULT_KIOSK_TEMPLATE.blocks, settings?.printTemplates?.kiosk?.blocks),
+        order: mergeTemplateOrder(DEFAULT_KIOSK_TEMPLATE.order, settings?.printTemplates?.kiosk?.order),
+        footerText: settings?.printTemplates?.kiosk?.footerText ?? DEFAULT_KIOSK_TEMPLATE.footerText,
+      },
     },
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
     cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
@@ -285,8 +298,17 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         settings?.onlineOrderSettings?.autoAccept ?? defaultPosLocalSettings.onlineOrderSettings.autoAccept,
       ),
     },
-    kioskKitchenMode:
-      settings?.kioskKitchenMode === "dine_in_confirm" ? "dine_in_confirm" : defaultPosLocalSettings.kioskKitchenMode,
+    // 「自動接自助單」開關（取代舊嘅 kioskKitchenMode，見 docs/87 §4.1）。
+    // 舊值 migration："dine_in_confirm"（要確認）→ false；"auto"（免確認）→ true。
+    // 舊 key 唔存在 → 用 defaultPosLocalSettings（true = 免確認，規格 5 嘅預設）。
+    autoAcceptSelfOrder: (() => {
+      const legacy = (settings as { kioskKitchenMode?: unknown } | undefined)?.kioskKitchenMode;
+      if (legacy === "dine_in_confirm") return false;
+      if (legacy === "auto") return true;
+      return typeof settings?.autoAcceptSelfOrder === "boolean"
+        ? settings.autoAcceptSelfOrder
+        : defaultPosLocalSettings.autoAcceptSelfOrder;
+    })(),
   };
 }
 

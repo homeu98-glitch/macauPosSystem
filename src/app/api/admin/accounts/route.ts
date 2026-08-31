@@ -2,9 +2,26 @@ import { NextResponse } from "next/server";
 
 import { listAdminDataFromServer } from "@/lib/admin-account-server";
 import { getSupabaseAdminClient } from "@/lib/supabase-server";
+import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { UserRole } from "@/lib/types";
 
-export async function GET() {
+/**
+ * 2026-08-31 資安修復（docs/89 §2）：四個 method 全部都要 admin session token。
+ * 之前呢條 route 係零授權 —— 任何人打過嚟就可以拎晒所有員工帳號（連 PIN 明文）
+ * 同埋任意新增 / 改權限 / 停用 / 刪除管理員帳號。
+ */
+function requireAdmin(request: Request): NextResponse | null {
+  const claims = readAdminSessionFromRequest(request);
+  if (!claims) {
+    return NextResponse.json({ ok: false, error: "未授權：請先以管理員身分登入。" }, { status: 401 });
+  }
+  return null;
+}
+
+export async function GET(request: Request) {
+  const authError = requireAdmin(request);
+  if (authError) return authError;
+
   const result = await listAdminDataFromServer();
   if (!result.ok) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
@@ -13,6 +30,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const authError = requireAdmin(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ ok: false, error: "未配置資料庫，暫時只能使用本地模式。" }, { status: 503 });
@@ -74,6 +94,9 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  const authError = requireAdmin(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ ok: false, error: "未配置資料庫，暫時只能使用本地模式。" }, { status: 503 });
@@ -126,6 +149,9 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const authError = requireAdmin(request);
+  if (authError) return authError;
+
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
     return NextResponse.json({ ok: false, error: "未配置資料庫，暫時只能使用本地模式。" }, { status: 503 });

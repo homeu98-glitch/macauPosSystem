@@ -106,6 +106,26 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
   order: ["store_name", "order_no", "table_name", "items", "total", "payment_method", "order_note", "footer"],
   footerText: "多謝惠顧，歡迎再次光臨",
 };
+
+/**
+ * 自助點餐機模版（第四個槽位，`PrintTemplates.kiosk`）嘅預設內容。
+ *
+ * 規格 8：小票格式同現有小票完全一致、無需額外設計 → 呢度直接深拷貝
+ * `DEFAULT_RECEIPT_TEMPLATE`（連 `footerText` 都一樣）。商家之後可以喺「打印」頁
+ * 第四個分頁自行改，改咗都唔會影響收銀台收據（兩個係獨立槽位）。
+ *
+ * ⚠️ 呢個係**模版內容**，同渲染時用嘅 `kind` 係兩回事：
+ * 渲染嗰陣要 `buildSnapshot("receipt", kioskTemplate)`，kind 保持 `"receipt"`，
+ * 三個 repo（POS / desktop-companion / print-agent-android）先會印到同一個格式。
+ * 見 `PrintTemplates.kiosk` 嘅註釋同 docs/87 §2.3。
+ */
+export const DEFAULT_KIOSK_TEMPLATE: ReceiptTemplate = {
+  blocks: Object.fromEntries(
+    Object.entries(DEFAULT_RECEIPT_TEMPLATE.blocks).map(([id, style]) => [id, { ...style }]),
+  ) as ReceiptTemplate["blocks"],
+  order: [...DEFAULT_RECEIPT_TEMPLATE.order],
+  footerText: DEFAULT_RECEIPT_TEMPLATE.footerText,
+};
 export const DEFAULT_LABEL_TEMPLATE: LabelTemplate = {
   blocks: { ...LABEL_BLOCK_DEFAULTS },
   order: [
