@@ -14,6 +14,7 @@ import {
   savePermissionGroups,
 } from "@/lib/storage";
 import { AccountPermissionGroup, AccountStore, AccountUser, UserRole } from "@/lib/types";
+import { saveAuthSession } from "@/lib/storage";
 
 type AccountFormState = {
   id?: string;
