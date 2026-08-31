@@ -1,6 +1,7 @@
 "use client";
 
 import { appendPrintJobs, buildReopenPrintJobs } from "@/lib/print-jobs";
+import { TEMP_REOPEN_ID_PREFIX } from "@/lib/pos/table-scope";
 import { loadOrders, loadPosLocalSettings, saveOrders, savePosLocalSettings } from "@/lib/storage";
 import { FloorConfig, PosOrder, StoreTable } from "@/lib/types";
 
@@ -54,6 +55,12 @@ function findFloorContainingTable(floors: FloorConfig[], tableId: string): Floor
  * 為返結單建立一張 temp 枱（放喺原枱所屬 floor），令原枱唔會被「取代」。
  * 唔支援多枱 / 無 floors 時降級：用 floors[0]，再無就新建一個 "返結枱" floor。
  * 建立後寫入 localSettings.floors 並 dispatch 事件，pos-app 會即時刷新枱面。
+ *
+ * ⚠️ temp 枱係 push 入 `localSettings.floors[].tables[]`（同真實枱共用 collection），
+ * 生命週期只到結帳／取消（`removeReopenTempTable`）。**所有讀取 floors 嘅使用點，
+ * 除咗枱面 view，都要用 `isReopenTempTable` / `stripReopenTempTables` filter 走**，
+ * 否則 temp 枱會俾 admin 改名、產生掃碼 QR、派線上單，甚至寫上 server
+ * `pos_bootstrap_config.tables` 永久升級做真實枱。見 `pos/table-scope.ts`。
  */
 function createReopenTempTable(order: PosOrder): ReopenTempTable | null {
   const settings = loadPosLocalSettings();
@@ -73,7 +80,7 @@ function createReopenTempTable(order: PosOrder): ReopenTempTable | null {
     nextFloors = [targetFloor];
   }
 
-  const id = `temp-reopen-${order.id}`;
+  const id = `${TEMP_REOPEN_ID_PREFIX}${order.id}`;
   const name = `返結 ${order.tableName || order.localOrderNo}`;
   const area = `返結·${targetFloor.name}`;
   const tempTable: StoreTable = {
@@ -151,7 +158,7 @@ export async function reopenPosOrder(params: {
   // ① 反向回滾會員餘額：v3.2 契約規定 POS 店內單返結唔動 Ledger 餘額
   // （p_type="add" 唔開放 POS；真沖正請顧客用會員通 Web「退回」）。
   // 故只切換 POS 本機狀態，唔 call Ledger。
-  let memberReversed = false;
+  const memberReversed = false;
   let memberReverseError: string | undefined;
 
   // ①.5 建立 temp 枱，將返結單由「原枱」搬到 temp 枱（原枱唔會被取代）

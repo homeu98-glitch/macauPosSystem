@@ -30,6 +30,10 @@ begin
 end
 $$;
 
+-- 硬性限制同時連線數（報表係低頻場景；超額會直接報
+-- "FATAL: too many connections for role"，係 DB 層強制，唔係靠自覺）
+alter role ledger_report_ro with connection limit 3;
+
 -- ── A2. 會話級防呆設定 ───────────────────────────────────────────────────
 -- 說明：真正嘅強制唯讀係 A4「唔授予任何寫入權限」（PG 無 GRANT 即為拒絕）。
 --       以下 GUC 只係第二層防呆；客戶端可以自己 SET 覆寫，勿當硬性保證。
@@ -53,14 +57,16 @@ grant select on public.inv_products          to ledger_report_ro;
 grant select on public.inv_stock_movements   to ledger_report_ro;
 
 -- Salon 報表（/salon/reports）
-grant select on public.salon_orders              to ledger_report_ro;
-grant select on public.salon_bookings            to ledger_report_ro;
 grant select on public.salon_package_templates   to ledger_report_ro;
 grant select on public.salon_customer_packages   to ledger_report_ro;
 grant select on public.salon_product_sales       to ledger_report_ro;
 grant select on public.salon_products            to ledger_report_ro;
 
 -- ⚠️ 以下表**刻意唔授權**，如有需要請另行提出：
+--   public.salon_orders          含 customer_phone（PII 快照）
+--                                → 改用 report_ro.v_salon_orders / v_salon_order_items / v_salon_tips
+--   public.salon_bookings        含 customer_phone / internal_notes（PII）
+--                                → 改用 report_ro.v_salon_bookings（已剔除電話與內部備註）
 --   public.salon_customers       含客戶姓名 / 電話 / 生日 / 病歷偏好（PII）
 --                                → 只經 report_ro.v_salon_expiring_packages 暴露姓名
 --   public.pos_device_configs    含打印機 IP、終端本機設定（營運基建）
@@ -649,6 +655,40 @@ cross join lateral jsonb_array_elements(
 ) as s;
 
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- B17 · Salon：預約寬表（一條預約一行）
+--       v_salon_bookings
+--       資料最小化：剔除 customer_phone（PII）與 internal_notes（內部備註）。
+--       底表 salon_bookings 唔對 Ledger 授權。
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace view report_ro.v_salon_bookings as
+select
+  b.store_id,
+  b.id                                                     as booking_id,
+  b.booking_no,
+  b.source,
+  b.ledger_booking_id,
+  b.ledger_order_id,
+  b.customer_id,
+  b.customer_name,
+  b.staff_id,
+  b.station_id,
+  b.status,
+  b.start_at,
+  b.end_at,
+  b.order_id,
+  b.deposit_amount,
+  coalesce(b.deposit_paid, false)                          as deposit_paid,
+  ((b.start_at at time zone 'Asia/Macau')::date)           as biz_date,
+  coalesce(jsonb_array_length(
+    case when jsonb_typeof(b.services) = 'array' then b.services else '[]'::jsonb end
+  ), 0)                                                    as service_count,
+  (b.order_id is not null)                                 as converted_to_order,
+  b.created_at,
+  b.updated_at
+from public.salon_bookings b;
+
+
 -- 補授權（覆蓋重跑情況：View 喺 default privileges 設定前已經存在）
 grant select on all tables in schema report_ro to ledger_report_ro;
 
@@ -678,11 +718,19 @@ grant select on all tables in schema report_ro to ledger_report_ro;
 -- C4. 確認睇唔到未授權表（必須報錯）
 -- select count(*) from public.salon_customers;
 --   預期：ERROR: permission denied for table salon_customers
+-- select count(*) from public.salon_orders;
+--   預期：ERROR: permission denied for table salon_orders
+-- select count(*) from public.salon_bookings;
+--   預期：ERROR: permission denied for table salon_bookings
 -- select count(*) from public.pos_device_configs;
 --   預期：ERROR: permission denied for table pos_device_configs
 
 -- C5. 確認睇得到門店清單（store_id 係報表嘅必要過濾鍵）
 -- select distinct store_id from report_ro.v_pos_orders order by 1;
+
+-- C6. 確認連線數限制生效（開第 4 條連線時會被拒）
+-- select rolname, rolconnlimit from pg_roles where rolname = 'ledger_report_ro';
+--   預期：rolconnlimit = 3
 
 
 -- ═══════════════════════════════════════════════════════════════════════════

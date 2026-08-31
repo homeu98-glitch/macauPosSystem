@@ -41,6 +41,7 @@ import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
 import { loadPosLocalSettings, loadPrintJobs, savePosLocalSettings } from "@/lib/storage";
+import { isReopenTempTable } from "@/lib/pos/table-scope";
 import { formatMoney } from "@/lib/format";
 
 const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
@@ -87,7 +88,15 @@ export function OnlineOrders({
   const embeddedDateFilterRef = useRef(dateFilter);
 
   const tables = useMemo(
-    () => localSettings.floors.flatMap((floor) => floor.tables.map((table) => ({ ...table, floorName: floor.name }))),
+    // ⚠️ 必須剝走返結 temp 枱（`isReopenTemp`）：temp 枱只喺「返結單編輯期間」存在，
+    // 若職員將線上單派去一張 temp 枱，張枱會喺結帳後消失 → 線上單無處可放、
+    // 收銀枱面搵唔到。見 pos/table-scope.ts。
+    () =>
+      localSettings.floors.flatMap((floor) =>
+        floor.tables
+          .filter((table) => !isReopenTempTable(table))
+          .map((table) => ({ ...table, floorName: floor.name })),
+      ),
     [localSettings.floors],
   );
 

@@ -1,6 +1,10 @@
 # 83 · 線下自助點餐（Kiosk + 店內掃碼自點）：確認後實作計劃
 
-> 狀態：**待你確認**（盤點完成，未改任何代碼）
+> ⚠️ **已被 `docs/86-kiosk-self-order-v2-scope.md` 取代**（2026-08-31 第二輪八項需求改咗方向：
+> 打印機沿用現有 macau-pos 方案、廚房單唔另建模板、鎖快餐、開關取代「刪除全部訂單」掣、份數固定 1）。
+> 本文件保留作歷史記錄，其中「新增自助點餐機模版」同「新建 kiosk 設定表」兩個設計**已部分作廢**。
+>
+> 狀態：**已被 86 取代**（盤點完成，未改任何代碼）
 > 日期：2026-08-31　範圍：Kiosk mode + 店內掃碼自點（走 `pos_orders`、**無** `onlineOrderId`）
 > **唔包**：Ledger 線上訂單（已有 `onlineOrderSettings.autoAccept`）
 > 相關舊文檔：`docs/40-customer-self-order-kiosk.md`（設計）、`docs/41-kiosk-p1-implementation.md`（P1 實作記錄）

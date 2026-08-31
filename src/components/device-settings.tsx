@@ -23,6 +23,7 @@ import {
 } from "@/lib/storage";
 import { DeviceConfig, DevicePrinterConfig, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
+import { filterReopenTempTables, isReopenTempTable, stripReopenTempTables } from "@/lib/pos/table-scope";
 import { fetchLedgerOrderMenu, LedgerOrderMenu } from "@/lib/ledger/menu";
 import {
   LedgerMenuImportPreview,
@@ -131,11 +132,23 @@ export function DeviceSettings() {
     // 同步「樓層與桌台」嘅枱去 bootstrap.tables（掃碼區 QR / 手機 / kiosk 讀嘅共享真源），
     // 唔好只留喺 localSettings.floors。用 merge（本地枱優先、bootstrap 獨有枱保留），
     // 避免覆蓋式寫入誤刪 DB 已有嘅枱（例如舊 store 嘅枱只喺 bootstrap.tables）。
-    const localTables = localSettings.floors.flatMap((floor) => floor.tables);
+    //
+    // ⚠️ 必須剝走返結 temp 枱（`isReopenTemp`）：temp 枱只喺「返結單編輯期間」存在
+    // （`createReopenTempTable` 建立、`removeReopenTempTable` 喺結帳／取消後清除），
+    // 一旦寫入 bootstrap.tables 就**永久升級做真實枱**——kiosk / 掃碼落單 / 其他 terminal
+    // 全部會讀到一張會無端消失嘅枱。呢個係「返結後多咗張真實枱」嘅根因。
+    //
+    // `cached.tables` 都要 filter：修復前漏咗上 bootstrap 嘅 temp 枱要喺呢度 self-healing
+    // 清走，否則下面 `cached.tables.filter((t) => !localIds.has(t.id))` 會由 bootstrap
+    // 嗰邊**復活**返佢（localIds 已經唔包 temp 枱 id）。用戶撳一次保存即自動清舊污染。
+    const localTables = filterReopenTempTables(localSettings.floors.flatMap((floor) => floor.tables));
     const localIds = new Set(localTables.map((t) => t.id));
     const cached = loadBootstrapCache();
     if (cached) {
-      const mergedTables = [...localTables, ...cached.tables.filter((t) => !localIds.has(t.id))];
+      const mergedTables = [
+        ...localTables,
+        ...filterReopenTempTables(cached.tables).filter((t) => !localIds.has(t.id)),
+      ];
       const mergedBootstrap: PosBootstrap = { ...cached, tables: mergedTables };
       saveBootstrapCache(mergedBootstrap);
       setMenuDraft((current) => (current ? { ...current, tables: mergedTables } : current));
@@ -444,8 +457,14 @@ export function DeviceSettings() {
     setSyncingConfig(true);
     const updatedConfig = { ...config, updatedAt: new Date().toISOString() };
     saveDeviceConfig(updatedConfig);
+    // 本地保存**要保留** temp 枱：佢係本機返結單編輯期間嘅必要狀態。
     savePosLocalSettings(localSettings);
     setConfig(updatedConfig);
+
+    // 但推上 server 嘅副本就要剝走 temp 枱：server `pos_device_configs.local_settings.floors`
+    // 係全店同步嘅，其他 terminal 同步到一張「結帳後會消失」嘅枱只會造成混亂
+    //（而且 `pos_device_configs` GET 係全店最新一條，污染會擴散去第二間 terminal）。
+    const serverSettings = { ...localSettings, floors: stripReopenTempTables(localSettings.floors) };
 
     const event: QueueEvent = {
       id: uid("evt"),
@@ -453,7 +472,7 @@ export function DeviceSettings() {
       entityId: updatedConfig.deviceId,
       payload: {
         device: updatedConfig,
-        tables: localSettings.floors,
+        tables: serverSettings.floors,
         paymentMethods: localSettings.paymentMethods,
         menuPrinterOverrides: localSettings.menuPrinterOverrides,
         printZones: localSettings.printZones,
@@ -475,7 +494,7 @@ export function DeviceSettings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...updatedConfig,
-          localSettings,
+          localSettings: serverSettings,
         }),
       });
       // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，多間店共用同一行互相覆蓋。
@@ -1807,11 +1826,18 @@ export function DeviceSettings() {
                           ...current,
                           floors: current.floors.map((item) =>
                             item.id === floor.id
-                              ?                                 {
+                              ? {
                                   ...item,
                                   tables: [
                                     ...item.tables,
-                                    { id: crypto.randomUUID(), name: `桌號${item.tables.length + 1}`, area: item.name, floorId: item.id, capacity: 4 },
+                                    // 編號跟「可見枱」計：temp 枱唔顯示，計埋會令編號跳號
+                                    {
+                                      id: crypto.randomUUID(),
+                                      name: `桌號${item.tables.filter((t) => !isReopenTempTable(t)).length + 1}`,
+                                      area: item.name,
+                                      floorId: item.id,
+                                      capacity: 4,
+                                    },
                                   ],
                                 }
                               : item,
@@ -1824,7 +1850,11 @@ export function DeviceSettings() {
                     </button>
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
-                    {floor.tables.map((table) => (
+                    {/* ⚠️ 必須 filter 走返結 temp 枱：temp 枱只喺「返結單編輯期間」存在，
+                        唔係真實枱。喺管理頁顯示會令 admin 以為係真實枱而改名 / 改座位數，
+                        一撳保存就連 bootstrap 都寫埋 → 永久升級做真實枱（根因）。
+                        見 pos/table-scope.ts。 */}
+                    {floor.tables.filter((table) => !isReopenTempTable(table)).map((table) => (
                       <div key={table.id} className="flex flex-col gap-1">
                         <input
                           className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900"

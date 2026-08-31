@@ -1,7 +1,7 @@
 # Macau POS 報表數據 — Ledger 資料庫對接方案
 
 > **文件編號**：83
-> **版本**：v1.0
+> **版本**：v1.1（已逐條核對 `supabase/migrations/*` 真實 schema 與前端報表邏輯）
 > **最後更新**：2026-08-31
 > **對象**：Ledger 團隊（含對接嘅 AI Agent）
 > **目標**：Ledger 直接接入 macau-pos 嘅 Postgres（Supabase），以**唯讀**、**按需**方式取得「報表」功能嘅全部可得數據
@@ -118,7 +118,7 @@ postgresql://ledger_report_ro:<LEDGER_RO_PASSWORD>@db.<POS_PROJECT_REF>.supabase
 
 | 規約 | 值 |
 |------|-----|
-| 同時連線數上限 | **3**（報表係低頻場景，唔需要多連線） |
+| 同時連線數上限 | **3**（報表係低頻場景，唔需要多連線）。由角色級 `connection limit 3` **硬性強制**，超額直接 `FATAL: too many connections for role` |
 | `statement_timeout` | 30 秒（角色級預設；單次報表查詢需要更長可自行 `SET statement_timeout = '60s'`） |
 | `idle_in_transaction_session_timeout` | 60 秒 |
 | `default_transaction_read_only` | `on` |
@@ -203,6 +203,9 @@ const { rows } = await pool.query(
 -- 1) 建立角色
 create role ledger_report_ro login password 'CHANGE_ME_STRONG_PASSWORD_32CHARS';
 
+-- 1b) 硬性限制同時連線數（DB 層強制，超額直接連唔到）
+alter role ledger_report_ro with connection limit 3;
+
 -- 2) 會話級防呆
 alter role ledger_report_ro set default_transaction_read_only = on;
 alter role ledger_report_ro set statement_timeout                  = '30s';
@@ -219,13 +222,16 @@ grant select on public.pos_orders                to ledger_report_ro;
 grant select on public.pos_bootstrap_config      to ledger_report_ro;
 grant select on public.inv_products              to ledger_report_ro;
 grant select on public.inv_stock_movements       to ledger_report_ro;
-grant select on public.salon_orders              to ledger_report_ro;
-grant select on public.salon_bookings            to ledger_report_ro;
 grant select on public.salon_package_templates   to ledger_report_ro;
 grant select on public.salon_customer_packages   to ledger_report_ro;
 grant select on public.salon_product_sales       to ledger_report_ro;
 grant select on public.salon_products            to ledger_report_ro;
+
+-- ⚠️ salon_orders / salon_bookings 刻意唔直接授權（含 customer_phone / internal_notes），
+--    改由 report_ro 嘅 View 暴露（View 以 owner 權限讀底表，Ledger 唔使直讀底表）。
 ```
+
+完整語句見配套 SQL 嘅 **Part A / Part B**（含 `report_ro` schema、21 個唯讀 View、驗收語句）。
 
 ### 3.2 唯讀點樣保證
 
@@ -235,6 +241,7 @@ grant select on public.salon_products            to ledger_report_ro;
 | 物件擁有權層 | `ledger_report_ro` 唔擁有任何表、唔係 superuser、唔係 `postgres` 成員 | ✅ **硬性** |
 | DDL | `revoke create on schema public`；`report_ro` schema 只 `usage` | ✅ 硬性 |
 | 會話層 | `default_transaction_read_only = on` | ⚠️ 防呆（客戶端可 `SET` 覆寫） |
+| 連線數 | 角色級 `connection limit 3` | ✅ **硬性**（PG 直接拒絕第 4 條連線） |
 | 濫用防護 | `statement_timeout` / `idle_in_transaction_session_timeout` | ⚠️ 防呆 |
 
 > **結論**：寫入喺權限層已經被拒絕；GUC 只係第二層，用嚟防止誤操作同長查詢拖垮 DB。
@@ -246,10 +253,11 @@ grant select on public.salon_products            to ledger_report_ro;
 | `pos_orders` | ✅ | ❌ |
 | `pos_bootstrap_config` | ✅ | ❌ |
 | `inv_products` / `inv_stock_movements` | ✅ | ❌ |
-| `salon_orders` / `salon_bookings` | ✅ | ❌ |
 | `salon_package_templates` / `salon_customer_packages` | ✅ | ❌ |
 | `salon_product_sales` / `salon_products` | ✅ | ❌ |
 | `report_ro.*`（全部唯讀 View） | ✅ | ❌ |
+| `salon_orders`（含 `customer_phone`） | ❌ | ❌ **改用** `v_salon_orders` / `v_salon_order_items` / `v_salon_tips` |
+| `salon_bookings`（含 `customer_phone` / `internal_notes`） | ❌ | ❌ **改用** `v_salon_bookings`（已剔除電話與內部備註） |
 | `salon_bootstrap_config`（技師電話／薪資倍率） | ❌ | ❌ 只經 `v_salon_staff` / `v_salon_service_items` 暴露姓名、花名、角色、價目 |
 | `salon_customers`（PII：電話／生日／病歷） | ❌ | ❌ 只經 `v_salon_expiring_packages` 暴露姓名 |
 | `pos_device_configs`（打印機 IP／終端設定） | ❌ | ❌ |
@@ -269,6 +277,8 @@ grant select on public.salon_products            to ledger_report_ro;
 | C3 | `delete from public.salon_orders where 1=0;` | `ERROR: permission denied for table salon_orders` |
 | C3 | `create table public.t (id int);` | `ERROR: permission denied for schema public` |
 | C4 | `select count(*) from public.salon_customers;` | `ERROR: permission denied for table salon_customers` |
+| C4 | `select count(*) from public.salon_bookings;` | `ERROR: permission denied for table salon_bookings`（改用 `report_ro.v_salon_bookings`） |
+| C4 | `select count(*) from public.salon_orders;` | `ERROR: permission denied for table salon_orders`（改用 `report_ro.v_salon_orders`） |
 | C5 | `select distinct store_id from report_ro.v_pos_orders order by 1;` | 至少一列；呢個值就係報表嘅必要過濾鍵 |
 
 ### 3.5 密碼輪換 / 撤銷
@@ -304,7 +314,10 @@ where usename = 'ledger_report_ro' and pid <> pg_backend_pid();
 | `salon_customer_packages` | 客戶持有嘅套票卡 | 套票使用率、即將到期 |
 | `salon_product_sales` | 產品零售記錄 | 產品銷售（輔助） |
 | `salon_products` | 產品目錄 | 產品對照 |
-| `salon_bootstrap_config` | salon 主數據（技師、服務目錄） | 技師姓名對照 |
+| `salon_bootstrap_config` | salon 主數據（技師、服務目錄） | ❌ 唔直接開放，只經 `v_salon_staff` / `v_salon_service_items` |
+
+> ⚠️ `salon_orders` / `salon_bookings` 兩張表**唔直接授權**（含 `customer_phone` / `internal_notes`），
+> 一律經 `report_ro` View 讀取，見 §3.3。
 
 ### 4.2 `pos_orders`（餐飲訂單主表）
 
@@ -315,7 +328,7 @@ where usename = 'ledger_report_ro' and pid <> pg_backend_pid();
 | `store_id` | `text` | **店舖 ID（= Ledger merchantId）** | **必要過濾鍵** |
 | `table_id` | `text` | 枱 ID（快餐 counter 單 = `counter`） | 桌台排行 |
 | `table_name` | `text` | 枱名（冗餘快照） | 桌台排行顯示 |
-| `status` | `text` | 見 §4.8 狀態列舉 | 篩「已結帳」 |
+| `status` | `text` | 見 §4.9 狀態列舉 | 篩「已結帳」 |
 | `fulfillment_status` | `text` | `preparing` \| `ready`（快餐用） | 快餐完成狀態 |
 | `items` | `jsonb` | 明細陣列，**整條 `OrderItem[]` 原樣存**，見 §4.3 | 菜品／退菜／份數 |
 | `order_note` | `text` | 全單備註 | — |
@@ -374,28 +387,39 @@ where usename = 'ledger_report_ro' and pid <> pg_backend_pid();
 
 ### 4.5 `salon_orders`（salon 結帳單）
 
+⚠️ **底表唔直接授權**，請用 `report_ro.v_salon_orders` / `v_salon_order_items` / `v_salon_tips`
+（底表含 `customer_phone`，View 已剔除）。以下欄位表係畀你理解 View 背後嘅原始結構。
+
 | 欄位 | 型別 | 說明 |
 |------|------|------|
-| `id` | `text` PK | |
+| `id` | `text` PK | → View `order_id` |
 | `store_id` | `text` | **必要過濾鍵** |
 | `order_no` | `text` | 單號 |
 | `booking_id` | `text` | → `salon_bookings.id` |
 | `customer_id` | `text` | → `salon_customers.id`（**該表唔對 Ledger 開放**） |
-| `customer_name` / `customer_phone` | `text` | 落單時快照 |
+| `customer_name` | `text` | 落單時快照（View 有暴露） |
+| ~~`customer_phone`~~ | `text` | ❌ **唔開放**（PII；View 已剔除） |
 | `staff_id` / `station_id` | `text` | 主責技師 / 工位 |
 | `items` | `jsonb` | 明細陣列，見 §4.6 |
-| `subtotal` / `discount_amount` / `total` | `numeric(12,2)` | |
+| `subtotal` / `discount_amount` | `numeric(12,2)` | |
 | `tips` | `jsonb` | `[{staffId, staffName, amount, method}]` |
 | `tip_total` | `numeric(12,2)` | 小費合計 |
 | `grand_total` | `numeric(12,2)` | **實收總額（＝ 報表嘅「營業總額」）** |
 | `payments` | `jsonb` | `[{method, amount, ledgerTransactionId, note, createdAt}]` |
 | `deposit_applied` | `numeric(12,2)` | 已付定金抵扣 |
 | `change_due` | `numeric(12,2)` | 找贖 |
-| `status` | `text` | 見 §4.8 |
+| `total` | `numeric(12,2)` | 應收總額（`subtotal` − `discount_amount` + 服務費/稅） |
+| `service_charge_amount` | `numeric(12,2)` | 服務費（可為 NULL） |
+| `tax_amount` | `numeric(12,2)` | 稅（可為 NULL） |
+| `notes` | `text` | 全單備註 |
+| `status` | `text` | 見 §4.9（**只有 `settled` 計入報表**） |
 | `started_at` / `completed_at` / `settled_at` | `timestamptz` | **報表歸屬日 = `coalesce(settled_at, created_at)`** |
+| `created_at` / `updated_at` | `timestamptz` | 建單／最後更新 |
 | `ledger_order_id` | `text` | Ledger 線上單 ID（如有） |
 
-### 4.6 `salon_orders.items` / `.tips` / `.payments`
+> ⚠️ `service_charge_amount` / `tax_amount` / `deposit_applied` / `change_due` 可為 NULL，聚合時請用 `coalesce(..., 0)`。
+
+### 4.6 `salon_orders.items` / `.tips` / `.payments`（JSONB 結構）
 
 **items**（陣列）：`kind`(`service`\|`product`)、`itemId`、`name`、`quantity`、`unitPrice`、`serviceItemId`、`staffId`、`staffName`、`specSelections`、`wageAmount`、`commissionAmount`、`note`
 
@@ -403,11 +427,47 @@ where usename = 'ledger_report_ro' and pid <> pg_backend_pid();
 
 **payments**（陣列）：`method`(`cash`\|`card`\|`ledger_balance`\|`external`)、`amount`、`ledgerTransactionId`、`note`、`createdAt`
 
+> 呢三個 JSONB 欄**唔可以直接查**（底表唔授權）。對應嘅已拆解 View：
+> `items` → `v_salon_order_items`、`tips` → `v_salon_tips`、`payments` → `v_salon_orders` 嘅
+> `payment_cash` / `payment_card` / `payment_ledger_balance` / `payment_external` 四欄。
+
 ### 4.7 套票表
 
-**`salon_package_templates`**：`id`、`store_id`、`name`、`price`、`validity_days`、`items` jsonb（`[{serviceItemId, sessions}]`）、`bonus_points`、`bonus_balance`、`active`
+**`salon_package_templates`**（模板）
 
-**`salon_customer_packages`**：`id`、`store_id`、`customer_id`、`template_id`、`template_name`、`price`、`purchased_at`、`expires_at`、`remaining` jsonb（`[{serviceItemId, sessionsLeft}]`）、`status`(`active`\|`used_up`\|`expired`)、`payment_method`
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `id` | `text` PK | → `salon_customer_packages.template_id` |
+| `store_id` | `text` | **必要過濾鍵** |
+| `name` | `text` | 套票名 |
+| `price` | `numeric(12,2)` | 售價 |
+| `validity_days` | `integer` | 有效天數（買起計） |
+| `items` | `jsonb` | `[{ serviceItemId, sessions }]` —— **總次數 = Σ `sessions`** |
+| `bonus_points` / `bonus_balance` | `integer` / `numeric(12,2)` | 贈送積分／贈送餘額 |
+| `note` | `text` | 備註 |
+| `active` | `boolean` | 是否上架 |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+**`salon_customer_packages`**（客戶持有嘅套票卡）
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `id` | `text` PK | |
+| `store_id` | `text` | **必要過濾鍵** |
+| `customer_id` | `text` | → `salon_customers.id`（唔開放；只經 `v_salon_expiring_packages` 拎姓名） |
+| `template_id` / `template_name` | `text` | → `salon_package_templates.id` / 名稱快照 |
+| `price` | `numeric(12,2)` | 實收價（**套票銷售額 = `sum(price)`**） |
+| `purchased_at` | `timestamptz` | 購買日（**View 嘅 `purchase_date` = 澳門日**；報表範圍係依購買日，唔係結帳日） |
+| `expires_at` | `timestamptz` | 到期日（可為 NULL = 無限期） |
+| `remaining` | `jsonb` | `[{ serviceItemId, sessionsLeft }]` —— **剩餘次數 = Σ `sessionsLeft`** |
+| `status` | `text` | `active` \| `used_up` \| `expired` |
+| `payment_method` | `text` | 購買時嘅支付方式 |
+| `note` | `text` | 備註 |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+> **使用率口徑**（前端同 View 一致）：
+> `used_sessions = max(0, Σ模板sessions − Σremaining.sessionsLeft)`、`usage_rate = used_sessions / Σ模板sessions`。
+> ⚠️ 如果 `template_id` 喺 `salon_package_templates` 搵唔到（模板已刪），`total_sessions` 會係 0 → 使用率 0。
 
 ### 4.8 關聯關係
 
@@ -485,6 +545,78 @@ erDiagram
 | 金額 | `numeric`，單位 **MOP（澳門元）**。前端顯示四捨五入到 2 位 |
 | JSONB 數值 | `(it ->> 'price')::numeric` 取值；缺失用 `coalesce(..., 0)` |
 | 匯率 | 唔適用（全系統單一幣別 MOP） |
+
+### 4.11 `salon_bookings`（salon 預約）
+
+⚠️ **底表唔直接授權**，請用 `report_ro.v_salon_bookings`（已剔除 `customer_phone` / `internal_notes` / `notes`）。
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `id` | `text` PK | → View `booking_id` |
+| `store_id` | `text` | **必要過濾鍵** |
+| `booking_no` | `text` | 預約單號 |
+| `source` | `text` | 來源（門市電話／walk-in／線上…），自由文字 |
+| `ledger_booking_id` / `ledger_order_id` | `text` | Ledger 對應 ID（如有） |
+| `customer_id` | `text` | → `salon_customers.id`（該表唔開放） |
+| `customer_name` | `text` | 客戶名快照 |
+| ~~`customer_phone`~~ | text | ❌ **唔開放**（View 已剔除） |
+| `staff_id` / `station_id` | `text` | 主責技師 / 工位 |
+| `start_at` / `end_at` | `timestamptz` | 預約時段；**View 嘅 `biz_date` = `start_at` 嘅澳門日** |
+| `services` | `jsonb` | 預約服務陣列；View 提供 `service_count` = 陣列長度 |
+| `deposit_amount` / `deposit_paid` / `deposit_ledger_txn_id` | `numeric` / `boolean` / `text` | 定金（View 唔暴露 txn id） |
+| `status` | `text` | 預約狀態，自由文字（例如 `booked` / `completed` / `cancelled` / `no_show`） |
+| `order_id` | `text` | 已轉結帳單 → `salon_orders.id`；View 提供 `converted_to_order` |
+| ~~`notes` / `internal_notes`~~ | text | ❌ **唔開放**（內部備註） |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+> 前端 salon 報表**冇**用到 `salon_bookings`，呢張表只作預約分析嘅輔助數據。
+
+### 4.12 `salon_products` / `salon_product_sales`（產品目錄 / 零售記錄）
+
+⚠️ 前端 salon 報表**冇**獨立產品模組（產品銷售已含喺 `salon_orders.items` 嘅 `kind='product'`）。呢兩張表係補充數據，可直接查。
+
+**`salon_products`**：`id`、`store_id`、`name`、`category`、`price`、`cost`、`commission_rate`、`active`、`sort_order`、`updated_at`
+
+**`salon_product_sales`**：`id`、`store_id`、`product_id`、`product_name`、`price`、`commission_rate`、`commission_amount`、`staff_id`、`staff_name`、`customer_id`、`customer_name`、`payment_method`、`sold_at`（**報表歸屬日**）、`note`、`created_at`
+
+### 4.13 `inv_stock_movements`（庫存盤點異動流水）
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `id` | `uuid` PK | |
+| `store_id` | `text` | **必要過濾鍵** |
+| `product_id` | `uuid` | → `inv_products.id`（**唯一有實體 FK 嘅關聯**，`on delete cascade`） |
+| `movement_type` | `text` | 目前只有 `adjust`（盤點） |
+| `prev_qty` / `new_qty` / `delta` | `numeric(12,3)` | 盤點前／後／差值 |
+| `reason` | `text` | 盤點原因 |
+| `created_at` | `timestamptz` | 異動時間 |
+
+> 前端報表**冇**用到呢張表，只作庫存稽核軌跡。⚠️ 佢記嘅只係「人手盤點」，**唔係**銷售扣減（系統無自動扣庫存）。
+
+### 4.14 `pos_bootstrap_config`（餐飲門店主數據）
+
+`store_id`（PK）、`store_name`、`currency`、`source_version`、`updated_at`，加 5 個 JSONB 欄。View 用嘅 key 如下（**key 係 camelCase**）：
+
+| 欄位 | 陣列元素 key | `v_pos_menu_items` / `v_pos_tables` 抽嘅欄 |
+|------|--------------|------------------------------------------|
+| `menu_items` | `id`、`name`、`categoryId`、`price`、`printerGroup`、`active`、`specGroups`… | `menu_item_id` / `menu_item_name` / `category_id` / `price` |
+| `tables` | `id`、`name`、`area`、`floorId`、`seats`… | `table_id` / `table_name` / `area` / `floor_id` |
+| `categories` | `id`、`name`、`sortOrder`… | （未抽，可自行 `cross join lateral` 展開） |
+| `rules` / `printer_groups` | 營運規則 / 打印機分區 | 無對應 View（呢張表已直接授權，技術上可讀，但與報表無關） |
+
+展開寫法範例（同 View 內做法一致）：
+
+```sql
+select b.store_id, (m ->> 'id') as menu_item_id, (m ->> 'name') as menu_item_name,
+       (m ->> 'categoryId') as category_id, (m ->> 'price')::numeric as price
+from public.pos_bootstrap_config b
+cross join lateral jsonb_array_elements(
+  case when jsonb_typeof(b.menu_items) = 'array' then b.menu_items else '[]'::jsonb end
+) as m
+where b.store_id = $1;
+```
+
+> 菜名對照**建議直接用 `report_ro.v_pos_menu_items`**，唔使自己展開。
 
 ---
 
@@ -679,24 +811,64 @@ where store_id = $1 and biz_date between $2::date and $3::date;
 - 否則 → **估算** `coalesce(served_at, updated_at) - coalesce(sent_to_kitchen_at, created_at)`，並標「含估算」
   - ⚠️ 前端估算嘅終點係 `originalSettledAt ?? updatedAt`，而 `originalSettledAt` **未上雲**，故 DB 版一律用 `updated_at`。
 
+> ⚠️ **欄位歸屬**：`serving_minutes_measured` / `serving_minutes_fallback` / `serving_is_estimated` 屬於
+> **`report_ro.v_pos_orders`（列級）**；`serving_measured_count` / `serving_avg_min_measured` /
+> `serving_median_min_mixed` 等屬於 **`report_ro.v_pos_daily_summary`（日級）**。兩者唔好撈亂。
+
+**① 對齊前端 UI（含估算）— 用 `v_pos_orders` 列級計算**
+
 ```sql
 select
-  -- 只計實測（最乾淨）
-  sum(serving_measured_count)                                        as measured_count,
-  sum(serving_avg_min_measured * serving_measured_count)
-    / nullif(sum(serving_measured_count), 0)                         as avg_min_measured,
-  -- 含估算（對齊前端 UI 顯示）
-  count(*)                                                           as sample_count,
-  avg(coalesce(serving_minutes_measured, serving_minutes_fallback))  as avg_min,
-  percentile_cont(0.5)  within group (order by coalesce(serving_minutes_measured, serving_minutes_fallback)) as median_min,
-  percentile_cont(0.95) within group (order by coalesce(serving_minutes_measured, serving_minutes_fallback)) as p95_min,
-  bool_or(serving_is_estimated)                                      as contains_estimate
+  count(*)                                                     as sample_count,
+  count(*) filter (where serving_minutes_measured is not null)  as measured_count,
+  avg(coalesce(serving_minutes_measured, serving_minutes_fallback)) as avg_min,
+  percentile_cont(0.5)  within group (
+    order by coalesce(serving_minutes_measured, serving_minutes_fallback)::double precision
+  )                                                            as median_min,
+  percentile_cont(0.95) within group (
+    order by coalesce(serving_minutes_measured, serving_minutes_fallback)::double precision
+  )                                                            as p95_min,
+  bool_or(serving_is_estimated)                                as contains_estimate
 from report_ro.v_pos_orders
 where store_id = $1
   and is_closed
-  and ((coalesce(updated_at, created_at) at time zone 'Asia/Macau')::date)
-      between $2::date and $3::date;
+  and biz_date between $2::date and $3::date;
 ```
+
+**② 只計實測（最乾淨，剔除冇完整時間戳嘅單）**
+
+```sql
+select
+  count(*)                                                  as measured_count,
+  avg(serving_minutes_measured)                             as avg_min,
+  percentile_cont(0.5)  within group (order by serving_minutes_measured::double precision)  as median_min,
+  percentile_cont(0.95) within group (order by serving_minutes_measured::double precision)  as p95_min
+from report_ro.v_pos_orders
+where store_id = $1
+  and is_closed
+  and serving_minutes_measured is not null
+  and biz_date between $2::date and $3::date;
+```
+
+**③ 每日趨勢（直接讀日級 View，唔使自己 group by）**
+
+```sql
+select biz_date,
+       serving_measured_count,
+       serving_avg_min_measured, serving_median_min_measured, serving_p95_min_measured,
+       serving_avg_min_mixed,    serving_median_min_mixed,    serving_p95_min_mixed,
+       serving_contains_estimate
+from report_ro.v_pos_daily_summary
+where store_id = $1 and biz_date between $2::date and $3::date
+order by biz_date;
+```
+
+> ⚠️ **median / P95 唔可以跨日加總**：日級嘅 `serving_median_min_*` 只能逐日睇；要算「一段區間嘅中位數」
+> 一定要返去列級（`v_pos_orders`）用 ①／② 嘅寫法。
+>
+> ⚠️ `greatest(0, …)` 喺 PostgreSQL 會**忽略 NULL**。若 `created_at` 為 NULL，`serving_minutes_fallback`
+> 會變成 `0` 而唔係 NULL，會拉低平均值。實際資料 `created_at` 必填，但自訂報表請自行加
+> `and o.created_at is not null` 保險。
 
 ---
 
@@ -890,6 +1062,118 @@ order by days_left asc;
 
 ---
 
+### 5.17 報表 A9 — 智能建議（AI 洞察）
+
+前端 `suggestions` 係純規則運算（無 ML），7 條規則逐條對照：
+
+| # | 規則 | 觸發條件 | 等級 | 本 DB 可否計 |
+|---|------|----------|:----:|:------------:|
+| 1 | 沽清提醒 | 沽清菜品數 ≥ 3 | `r` 立即 | ❌ §6.4 |
+| 2 | 營業額暴跌 | 本期營業額 < 7 日均值 × 0.8 | `r` 立即 | ✅ |
+| 3 | 線上佔比上升 | 本期線上佔比 − 7 日線上佔比 > 0.05 | `o` 關注 | ✅ |
+| 4 | 會員充值下跌 | 本期充值 < 7 日均值 × 0.7 | `o` 關注 | ❌ §6.5（值喺 Ledger 自己 DB） |
+| 5 | 退菜率過高 | 退菜率 > 3% | `o` 關注 | ✅ |
+| 6 | 折扣佔比過高 | 折扣佔比 > 15% | `o` 關注 | ✅ |
+| 7 | 冷門桌台 | 永遠顯示排名最後一張枱 | `i` 資訊 | ✅ |
+
+排序：`r`（立即）→ `o`（關注）→ `i`（資訊）。
+
+**一次過攞晒 2/3/5/6 所需嘅輸入值**（`$2` = 本期起始日，`$3` = 本期結束日）：
+
+```sql
+with cur as (
+  select sum(revenue) revenue, sum(online_revenue) online_revenue,
+         sum(discount_amount) discount_amount, sum(void_qty) void_qty, sum(sold_qty) sold_qty
+  from report_ro.v_pos_daily_summary
+  where store_id = $1 and biz_date between $2::date and $3::date
+),
+base as (   -- 7 日均值：以本期結束日往前推 7 個日曆日
+  select sum(revenue) / 7.0 revenue_7d_avg,
+         case when sum(revenue) > 0 then sum(online_revenue) / sum(revenue) end online_share_7d
+  from report_ro.v_pos_daily_summary
+  where store_id = $1
+    and biz_date between ($3::date - 6) and $3::date
+)
+select
+  coalesce(c.revenue, 0)                                                     as revenue,
+  coalesce(b.revenue_7d_avg, 0)                                              as revenue_7d_avg,
+  coalesce(b.revenue_7d_avg > 0 and c.revenue < b.revenue_7d_avg * 0.8, false) as rule2_rev_drop,
+  case when c.revenue > 0 then c.online_revenue / c.revenue end              as online_share,
+  b.online_share_7d,
+  ( coalesce(case when c.revenue > 0 then c.online_revenue / c.revenue end, 0)
+    - coalesce(b.online_share_7d, 0) ) > 0.05                                as rule3_online_up,
+  case when c.sold_qty > 0 then c.void_qty / c.sold_qty end                  as void_rate,
+  ( coalesce(case when c.sold_qty > 0 then c.void_qty / c.sold_qty end, 0) > 0.03 ) as rule5_void_high,
+  case when c.revenue > 0 then c.discount_amount / c.revenue end             as discount_ratio,
+  ( coalesce(case when c.revenue > 0 then c.discount_amount / c.revenue end, 0) > 0.15 ) as rule6_discount_high
+from cur c cross join base b;
+```
+
+**規則 7（冷門桌台）**：用 §5.3 嘅 SQL 改 `order by sum(order_count) asc limit 1`。
+
+---
+
+### 5.18 報表 B8 — Salon 產品零售（補充模組）
+
+前端 salon 報表**冇**獨立顯示呢個模組（產品銷售已含喺 `salon_orders.items` 嘅 `kind='product'`），
+但 `salon_product_sales` 有獨立零售記錄可直接查：
+
+```sql
+select
+  product_id,
+  max(product_name)                                   as product_name,
+  count(*)                                            as sold_count,
+  sum(price)                                          as sales_amount,
+  sum(commission_amount)                              as commission_amount,
+  sum(case when staff_id is not null then 1 else 0 end) as with_staff_count
+from public.salon_product_sales
+where store_id = $1
+  and ((sold_at at time zone 'Asia/Macau')::date) between $2::date and $3::date
+group by product_id
+order by sales_amount desc;
+```
+
+> 想對照現價／成本：`left join public.salon_products p on p.id = product_id and p.store_id = $1`。
+
+---
+
+### 5.19 報表 B9 — Salon 預約分析（補充模組）
+
+前端 salon 報表**冇**用到預約數據；以下係經 `v_salon_bookings`（已剔 PII）提供嘅補充分析：
+
+```sql
+-- ① 預約量與轉化（預約 → 結帳單）
+select
+  count(*)                                                        as bookings,
+  count(*) filter (where converted_to_order)                      as converted,
+  case when count(*) > 0
+       then count(*) filter (where converted_to_order)::numeric / count(*) end as conversion_rate,
+  sum(coalesce(deposit_amount, 0))                                as deposit_amount,
+  count(*) filter (where deposit_paid)                            as deposit_paid_count
+from report_ro.v_salon_bookings
+where store_id = $1
+  and biz_date between $2::date and $3::date;
+
+-- ② 按來源拆分
+select coalesce(source, '(未填)') as source, count(*) as bookings
+from report_ro.v_salon_bookings
+where store_id = $1 and biz_date between $2::date and $3::date
+group by 1
+order by bookings desc;
+
+-- ③ 按技師拆分（預約數）
+select staff_id, count(*) as bookings, sum(service_count) as service_count
+from report_ro.v_salon_bookings
+where store_id = $1 and biz_date between $2::date and $3::date
+group by staff_id
+order by bookings desc;
+```
+
+> ⚠️ `status` 係**自由文字**，請先 `select distinct status from report_ro.v_salon_bookings where store_id = $1;`
+> 睇實際值再決定點樣篩「已完成／取消／no-show」。
+
+---
+
 ## 6. 已知資料缺口（DB 查唔到嘅報表項目）
 
 > 呢一節好重要：以下項目**唔喺本 DB**，請唔好嘗試用 SQL 搵。
@@ -1040,9 +1324,10 @@ macau-pos 會用 `pg_stat_activity` / `pg_stat_statements` 觀察 `ledger_report
 - [ ] C1 身分 / 時區 / read_only 正確
 - [ ] C2 讀得到 `report_ro.v_pos_daily_summary` / `v_salon_daily_summary`
 - [ ] C3 四條寫入語句**全部**報 `permission denied`
-- [ ] C4 `salon_customers` / `pos_device_configs` 報 `permission denied`
+- [ ] C4 `salon_customers` / `salon_orders` / `salon_bookings` / `pos_device_configs` 全部報 `permission denied`
 - [ ] 取得本店 `store_id`
-- [ ] 逐個報表模組對數：**A1 / A2 / A3 / A4 / A5 / A6 / A7**、**B1–B7**
+- [ ] 逐個報表模組對數：**A1 / A2 / A3 / A4 / A5 / A6 / A7 / A9**、**B1–B7**（B8 / B9 為選用補充模組）
+- [ ] 第 4 條連線會被拒（`FATAL: too many connections for role`，確認連線數限制生效）
 - [ ] 確認已知缺口（§6）已喺自己嘅 UI 做降級顯示（例如「覆蓋人數 —」）
 - [ ] 已實作 cache，確認無 polling（§7）
 
@@ -1121,6 +1406,20 @@ macau-pos 會用 `pg_stat_activity` / `pg_stat_statements` 觀察 `ledger_report
 | `report_ro.v_salon_package_usage` | 店 × 購買日 × 模板 | 套票使用率 |
 | `report_ro.v_salon_expiring_packages` | 即時快照 | 30 日內到期套票 |
 | `report_ro.v_salon_staff` / `v_salon_service_items` | 主數據 | 技師／服務對照 |
+| `report_ro.v_salon_bookings` | 一條預約一行 | 預約量／轉化／定金（已剔 PII），見 §5.19 |
+
+**可直接查嘅底表**（無對應 View，攞到 SELECT 授權）：
+
+| 表 | 用途 | 章節 |
+|----|------|------|
+| `public.pos_orders` | 餐飲訂單原始表（自己展開 JSONB，見 §5.9） | §4.2 |
+| `public.pos_bootstrap_config` | 餐飲主數據（菜牌／枱位 JSONB） | §4.14 |
+| `public.inv_products` | 庫存主檔（低庫存以外嘅查詢） | §4.4 |
+| `public.inv_stock_movements` | 盤點異動流水 | §4.13 |
+| `public.salon_products` / `salon_product_sales` | 產品目錄／零售記錄 | §4.12 |
+| `public.salon_package_templates` / `salon_customer_packages` | 套票模板／客戶套票卡 | §4.7 |
+
+**唔可以直接查**（必須經 View）：`salon_orders`、`salon_bookings`、`salon_customers`、`salon_bootstrap_config`、`pos_device_configs`、`pos_print_jobs`、`pos_queue_events`、`pos_soldout`、`salon_print_jobs`、`salon_queue_events`。
 
 ### 11.4 相關程式碼位置（macau-pos 內部參考）
 
@@ -1144,3 +1443,4 @@ macau-pos 會用 `pg_stat_activity` / `pg_stat_statements` 觀察 `ledger_report
 | 版本 | 日期 | 變更 |
 |------|------|------|
 | v1.0 | 2026-08-31 | 初版：唯讀角色 + `report_ro` View 層 + 餐飲／salon 報表查詢 + 反 polling 約束 |
+| v1.1 | 2026-08-31 | 逐條核對真實 schema（`supabase/migrations/*`）與前端報表邏輯後修正：<br>① **修 SQL bug**：§5.6 出餐時間查詢誤用只屬於 `v_pos_daily_summary` 嘅欄位（拆分為列級／日級三種寫法）；<br>② **修交叉引用**：§4.2 / §4.5 狀態說明指向 §4.8（關聯圖）→ 改為 §4.9；<br>③ **收緊 PII**：撤銷 `salon_orders` / `salon_bookings` 直接授權（含 `customer_phone` / `internal_notes`），新增 `report_ro.v_salon_bookings`；<br>④ **連線數硬性化**：加角色級 `connection limit 3`；<br>⑤ **補齊欄位定義**：新增 §4.11–§4.14（`salon_bookings` / `salon_products` / `inv_stock_movements` / `pos_bootstrap_config`），補全 `salon_orders` 缺漏欄位；<br>⑥ **補齊報表模組**：新增 §5.17 智能建議規則、§5.18 salon 產品零售、§5.19 salon 預約分析 |

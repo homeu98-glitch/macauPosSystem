@@ -30,6 +30,7 @@
 - **itemIdentity 三邊同步鐵律**：`pos-app.tsx:1301` `itemIdentity()` = `menuItemId|specs|price|note` —— **note 係 identity 一部分**。`orderedItemQtyMap` 由 `baseOrderItems` 用 identity 計 → `locked = orderedQty > 0`。任何改動已下單菜品（note / specs / price）都**必須同步 `cartItems` + `baseOrderItems` + `order.items`**，只改一邊會令 `locked` 變 false → 「已下單」標記消失、「退 1 份」消失、`voidOrderedItem` 彈「尚未正式下單，不能退菜」。參考 `voidOrderedItem` L1530-1531 嘅做法。
 - **`pos_orders.items` 係 JSONB 整條存**（`/api/pos/sync` L58）→ `OrderItem` 加新 field 唔使改 DB schema / 唔使 migration。
 - **備註鎖定鐵律（2026-08-31 ✅ 已實作，docs/84）**：備註／規格喺**送出（sent_to_kitchen）嗰刻即固定**，之後一律唔准改。真源係 `src/lib/pos/order-note-lock.ts`（`isOrderNoteLocked()` — 鎖 sent_to_kitchen/paid/settled/cancelled/partially_refunded/refunded；**唔鎖** draft 同 reopened 返結帳）。單品備註／規格另靠 `orderedItemQtyMap.get(identity) > 0` 判斷。UI 層（掣 disabled + 提示）同資料層（`applyItemNote` / `applySpecSelection` / 彈窗保存）**兩邊都要擋**。三條理由：① 廚房單係 PrintJob 建立時嘅 snapshot（`buildKitchenPrintJobs` L115），改咗唔會補印；② `items` 係 JSONB 整條寫入後台同收據 → 雙軌不一致；③ note/specs 係 itemIdentity 一部分，改咗會拆散「已下單」標記、退菜壞。結帳後 `setActiveOrderId(null)` 自動解鎖，唔影響下一張單。
+- **非永久狀態唔可以跨越佢嘅存在範圍（2026-08-31 反例，待修）**：返結 temp 枱 `isReopenTemp:true`，設計上「結帳／取消後由 `removeReopenTempTable` 清除」（`types.ts:135`、`pos-orders.ts:102`），但 `pos-orders.ts:58-100` `createReopenTempTable()` 把 temp 枱 push 入 `localSettings.floors[].tables[]`（同真實枱共用 collection），結果 `device-settings.tsx:134` `saveTablesLocal()` 攤平帶去 `/api/pos/bootstrap`（POST `pos_bootstrap_config.tables`）+ `:1827` 樓層管理頁 render 全部 `floor.tables`，**admin 一撳保存 temp 枱就永久升級**為 bootstrap 真實枱。鐵律：**任何 marked `*-temp / *-draft / *-ghost / isReopenTemp` 等非永久狀態嘅 entity，無論去到 render layer 定 persistence layer 都要 filter 走**，唔可以靠 caller 記得 filter。檢測時 grep `<entity>Temp|<entity>Draft` 嘅對應 render 點 + 對應 persist 寫入點，全部 filter 一次。
 - **長文字換行鐵律（2026-08-31 ✅，docs/84 §7）**：任何用戶自由輸入嘅長文字（備註、地址等）一律用 `whitespace-pre-wrap break-words`，**唔好用 `truncate`**。`break-words`（`overflow-wrap: break-word`）係**必要**嘅——純 `break-normal` 對長串 CJK **無效**（CJK 冇空白位可斷，會照樣向右撐破容器）。長文字要放**獨立一行整寬**顯示，唔好同掣/短標籤塞同一個 flex row（會互相擠壓走位）；外層 flex 改 `items-start` 令掣留頂部。
 
 ## 線上訂單
@@ -61,6 +62,22 @@
 - 落單號碼跟店內線下序號：`/api/pos/sequence`（`dine_in→pos / pickup / delivery`），同店共用 `next_daily_sequence`。
 - 收銀見單靠 realtime（filter `store_id=eq.<merchantId>`）+ 15s pull fallback；storeId 必須＝收銀 `authSession.merchantId`。
 - 全局 `body{overflow:hidden}`：手機頁要 `main h-[100dvh] overflow-hidden` + 內部 `section flex-1 overflow-y-auto` + 頂/底 `shrink-0`。
+
+## Ledger 報表 DB 對接（docs/83 v1.1 ✅）
+
+- 方案：Ledger 直連 macau-pos Supabase，角色 `ledger_report_ro`（唯讀 + `connection limit 3`），
+  經 `report_ro` schema 嘅 22 個 View 拎報表數據。配套 SQL：`docs/sql/83-ledger-readonly-access.sql`
+  （Part A 角色權限 / B View / C 驗收 / D 可選補 `pos_orders.party_size`）。**嚴禁 polling**，只按需查。
+- **PII 原則**：`salon_orders` / `salon_bookings` / `salon_customers` / `salon_bootstrap_config`
+  一律**唔直接授權**，只經 View（View 以 owner 權限讀底表）。加 View 時記得剔走
+  `customer_phone` / `internal_notes`。
+- **報表口徑真源**：`restaurant-daily-report.tsx aggregate()`（只計 settled/partially_refunded/refunded；
+  歸屬日 `coalesce(updatedAt, createdAt)`；退菜係 `items[].voided:true` 標記唔係刪行）同
+  `salon/reports.tsx`（`status==='settled'`；歸屬日 `coalesce(settledAt, createdAt)`；
+  技師業績含 `kind='product'`）。改報表邏輯時**要同步改 docs/83 §5 嘅範例 SQL**。
+- **列級 vs 日級欄位**：`serving_minutes_*` 喺 `v_pos_orders`（列級），
+  `serving_measured_count` / `serving_*_min_*` 喺 `v_pos_daily_summary`（日級）—— 唔好撈亂。
+  median/P95 唔可以跨日加總，要返列級計。
 
 ## Salon 縱向擴展（2026-08-14 ✅ 全 7 phase 完成）
 

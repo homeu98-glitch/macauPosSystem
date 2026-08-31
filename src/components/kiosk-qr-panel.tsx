@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { mockBootstrap } from "@/lib/mock-data";
 import { loadAuthSession, loadBootstrapCache, loadPosLocalSettings } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
+import { filterReopenTempTables } from "@/lib/pos/table-scope";
 import { encodeQrMatrix } from "@/lib/qrcode";
 
 function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
@@ -87,11 +88,17 @@ export function KioskQrPanel() {
   // 優先本地枱：商家即時改名 / 新增嘅枱一定用最新 copy，避免「共享 bootstrap cache 係舊嘅
   // （例如曾經從後台同步過、或某 terminal 寫入過亂碼版本）」嗰個 copy 蓋過商家最新編輯。
   // 同時過濾走冇 id 嘅枱（唔會生成到破損 URL 嘅 QR）。
-  const localTables = loadPosLocalSettings().floors.flatMap((floor) => floor.tables);
+  //
+  // ⚠️ 亦要剝走返結 temp 枱（`isReopenTemp`）：temp 枱只喺「返結單編輯期間」存在，
+  // 為佢生成掃碼 QR 會令客人掃到一張「返結 A03」落單，而張枱喺結帳後會消失 →
+  // 張單無處可放、收銀枱面搵唔到。見 pos/table-scope.ts。
+  // `bootstrap.tables` 都要 filter：self-healing 清走修復前漏咗上 bootstrap 嘅 temp 枱，
+  // 否則會由 bootstrap 嗰邊復活返（localIds 已經唔包 temp 枱 id）。
+  const localTables = filterReopenTempTables(loadPosLocalSettings().floors.flatMap((floor) => floor.tables));
   const localIds = new Set(localTables.map((table) => table.id).filter(Boolean));
   const tables = [
     ...localTables,
-    ...bootstrap.tables.filter((table) => table.id && !localIds.has(table.id)),
+    ...filterReopenTempTables(bootstrap.tables).filter((table) => table.id && !localIds.has(table.id)),
   ].filter((table) => Boolean(table.id));
 
   return (
