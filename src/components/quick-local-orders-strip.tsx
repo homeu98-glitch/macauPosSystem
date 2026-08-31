@@ -36,10 +36,11 @@ function OrderCard({
   onMarkCompleted: (orderId: string, label: string) => void;
 }) {
   const completeText = completeLabel(order);
+  const orderTime = formatMacauTime(order.createdAt);
 
   return (
     <article className="flex h-[180px] w-[240px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-      {/* 頂部：訂單號 + 枱號（左）vs 狀態藥丸 + 來源標記（右，顯示位 ②） */}
+      {/* 頂部：訂單號 + 枱號（左）vs 狀態藥丸（右） */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold leading-tight text-slate-900">{order.localOrderNo}</div>
@@ -58,7 +59,16 @@ function OrderCard({
             />
             {mode === "waiting" ? completionLabel(order) : "製作中"}
           </span>
-          <OrderSourceBadge order={order} />
+          {/* 時間（HH:MM，下單時間）+ 來源 chip 並排，貼右下（齊平 OrderSourceBadge 高度）。 */}
+          <div className="flex items-center gap-1.5">
+            <span
+              aria-label="下單時間"
+              className="inline-flex shrink-0 items-center tabular-nums text-[11px] font-semibold text-slate-500"
+            >
+              {orderTime}
+            </span>
+            <OrderSourceBadge order={order} />
+          </div>
         </div>
       </div>
       {/* 中間：分隔線 + 品項摘要 + 訂單總額同一行（用戶約定：品項名稱與價格同一行） */}

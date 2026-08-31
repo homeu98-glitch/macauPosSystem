@@ -13,6 +13,7 @@ import { NumericKeypad } from "@/components/numeric-keypad";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
@@ -3071,38 +3072,30 @@ export function PosApp() {
                             >
                               查看
                             </button>
-                            {/* 自助單 draft → 顯示確認 / 拒絕（規格 6） */}
+                            {/* 自助單 draft → 顯示確認 / 拒絕（規格 6，統一用 SelfOrderActionButtons 避免走樣） */}
                             {order.status === "draft" && isSelfOrder(order) ? (
-                              <>
-                                <button
-                                  className="flex-1 rounded-xl bg-emerald-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                                  onClick={() => {
-                                    const result = confirmSelfOrder(order.id);
-                                    if (result.ok) {
-                                      setToast({ tone: "success", message: `已確認自助單 ${order.localOrderNo}` });
-                                    } else {
-                                      setToast({ tone: "error", message: result.error ?? "確認失敗" });
-                                    }
-                                  }}
-                                  type="button"
-                                >
-                                  確認出單
-                                </button>
-                                <button
-                                  className="flex-1 rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
-                                  onClick={() => {
-                                    const result = rejectSelfOrder(order.id);
-                                    if (result.ok) {
-                                      setToast({ tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` });
-                                    } else {
-                                      setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
-                                    }
-                                  }}
-                                  type="button"
-                                >
-                                  拒絕
-                                </button>
-                              </>
+                              <SelfOrderActionButtons
+                                orderLabel={order.localOrderNo}
+                                size="sm"
+                                onConfirm={() => {
+                                  const result = confirmSelfOrder(order.id);
+                                  if (result.ok) {
+                                    setToast({ tone: "success", message: `已確認自助單 ${order.localOrderNo}` });
+                                  } else {
+                                    setToast({ tone: "error", message: result.error ?? "確認失敗" });
+                                  }
+                                  return result;
+                                }}
+                                onReject={() => {
+                                  const result = rejectSelfOrder(order.id);
+                                  if (result.ok) {
+                                    setToast({ tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` });
+                                  } else {
+                                    setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                                  }
+                                  return result;
+                                }}
+                              />
                             ) : (
                               <>
                                 {/* docs/87 §6.3：放寬可取餐閘門 */}

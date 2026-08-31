@@ -18,7 +18,7 @@ import { useState } from "react";
 
 import { Check, X } from "@/components/icons";
 
-export type SelfOrderAction = "confirm" | "reject";
+type Action = "confirm" | "reject";
 
 export function SelfOrderActionButtons({
   orderLabel,
@@ -32,24 +32,27 @@ export function SelfOrderActionButtons({
   /** "sm" = 收銀端 strip 用（px-2 py-1.5）；"md" = 訂單頁卡片/彈窗用（px-3 py-2）。 */
   size?: "sm" | "md";
 }) {
-  const [pending, setPending] = useState<SelfOrderAction | null>(null);
+  const [pending, setPending] = useState<Action | null>(null);
 
   const padding = size === "sm" ? "px-2 py-1.5" : "px-3 py-2";
   const iconSize = size === "sm" ? 14 : 16;
-  const handle = (action: SelfOrderAction, run: () => { ok: boolean; error?: string }) => () => {
+
+  const handle = (action: Action, run: () => { ok: boolean; error?: string }) => () => {
     if (pending) return;
     setPending(action);
-    try {
-      const result = run();
-      // onConfirm / onReject 內部已 set toast；呢度唔重覆
-      if (!result.ok) {
-        // 留低 console 方便排查；UI 提示由 onConfirm/onReject 嘅 setToast 負責
-        // eslint-disable-next-line no-console
-        console.warn(`[SelfOrderActionButtons] ${action} 失敗：${result.error ?? "unknown"}`);
+    // queueMicrotask 確保 pending 已 setState 之後先執行業務邏輯，等 React 排到下一輪 render
+    // 咁快速雙擊先會見到 disabled 狀態、唔會兩邊都 fire。
+    queueMicrotask(() => {
+      try {
+        const result = run();
+        if (!result.ok) {
+          // eslint-disable-next-line no-console
+          console.warn(`[SelfOrderActionButtons] ${action} 失敗：${result.error ?? "unknown"}`);
+        }
+      } finally {
+        setPending(null);
       }
-    } finally {
-      setPending(null);
-    }
+    });
   };
 
   return (

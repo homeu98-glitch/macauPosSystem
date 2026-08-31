@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
+import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import {
@@ -348,40 +349,31 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     </button>
                   ) : null}
                   <QuickOrderActions onChanged={handleQuickAction} order={order} />
-                  {/* 自助單 draft → 顯示「確認 / 拒絕」掣（規格 6：開關熄咗時需手動確認） */}
+                  {/* 自助單 draft → 顯示「確認 / 拒絕」掣（規格 6：開關熄咗時需手動確認，統一用 SelfOrderActionButtons 避免走樣） */}
                   {order.status === "draft" && isSelfOrder(order) ? (
-                    <>
-                      <button
-                        className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
-                        onClick={() => {
-                          const result = confirmSelfOrder(order.id);
-                          if (result.ok) {
-                            setToast(`已確認自助單 ${order.localOrderNo}`);
-                            refresh();
-                          } else {
-                            setToast(result.error ?? "確認失敗");
-                          }
-                        }}
-                        type="button"
-                      >
-                        確認出單
-                      </button>
-                      <button
-                        className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
-                        onClick={() => {
-                          const result = rejectSelfOrder(order.id);
-                          if (result.ok) {
-                            setToast(`已拒絕自助單 ${order.localOrderNo}`);
-                            refresh();
-                          } else {
-                            setToast(result.error ?? "拒絕失敗");
-                          }
-                        }}
-                        type="button"
-                      >
-                        拒絕
-                      </button>
-                    </>
+                    <SelfOrderActionButtons
+                      orderLabel={order.localOrderNo}
+                      onConfirm={() => {
+                        const result = confirmSelfOrder(order.id);
+                        if (result.ok) {
+                          setToast(`已確認自助單 ${order.localOrderNo}`);
+                          refresh();
+                        } else {
+                          setToast(result.error ?? "確認失敗");
+                        }
+                        return result;
+                      }}
+                      onReject={() => {
+                        const result = rejectSelfOrder(order.id);
+                        if (result.ok) {
+                          setToast(`已拒絕自助單 ${order.localOrderNo}`);
+                          refresh();
+                        } else {
+                          setToast(result.error ?? "拒絕失敗");
+                        }
+                        return result;
+                      }}
+                    />
                   ) : null}
                 </div>
               </article>
@@ -444,12 +436,12 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                 />
               </div>
             ) : null}
-            {/* 查看彈窗：自助單 draft 亦顯示確認 / 拒絕 */}
+            {/* 查看彈窗：自助單 draft 亦顯示確認 / 拒絕（統一用 SelfOrderActionButtons 避免走樣） */}
             {viewingOrder.status === "draft" && isSelfOrder(viewingOrder) ? (
               <div className="mt-2 flex gap-2">
-                <button
-                  className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
-                  onClick={() => {
+                <SelfOrderActionButtons
+                  orderLabel={viewingOrder.localOrderNo}
+                  onConfirm={() => {
                     const result = confirmSelfOrder(viewingOrder.id);
                     if (result.ok) {
                       setToast(`已確認自助單 ${viewingOrder.localOrderNo}`);
@@ -458,14 +450,9 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     } else {
                       setToast(result.error ?? "確認失敗");
                     }
+                    return result;
                   }}
-                  type="button"
-                >
-                  確認出單
-                </button>
-                <button
-                  className="flex-1 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
-                  onClick={() => {
+                  onReject={() => {
                     const result = rejectSelfOrder(viewingOrder.id);
                     if (result.ok) {
                       setToast(`已拒絕自助單 ${viewingOrder.localOrderNo}`);
@@ -474,11 +461,9 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                     } else {
                       setToast(result.error ?? "拒絕失敗");
                     }
+                    return result;
                   }}
-                  type="button"
-                >
-                  拒絕
-                </button>
+                />
               </div>
             ) : null}
           </div>
