@@ -284,12 +284,12 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    {/* 顯示位 ①：訂單頁（規格 7）*/}
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <span className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</span>
+                    {/* 顯示位 ①：訂單頁（規格 7）。訂單號獨佔一行，來源標記移到第二行，避免 🖥️/📱 擋住號碼 */}
+                    <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-xs text-slate-500">
+                      <span className="truncate">{order.tableName}</span>
                       <OrderSourceBadge order={order} />
                     </div>
-                    <div className="mt-0.5 text-xs text-slate-500">{order.tableName}</div>
                     <div className="mt-1 text-xs text-slate-400">
                       {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
                     </div>

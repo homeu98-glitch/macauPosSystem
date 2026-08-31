@@ -44,12 +44,12 @@ function OrderCard({
     <article className="w-[240px] shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          {/* 顯示位 ②：收銀台快餐單卡片（規格 7）*/}
-          <div className="flex min-w-0 items-center gap-1">
-            <span className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</span>
+          {/* 顯示位 ②：收銀台快餐單卡片（規格 7）。訂單號獨佔一行，來源標記移到第二行，避免 🖥️/📱 擋住號碼 */}
+          <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1 truncate text-xs text-slate-500">
+            <span className="truncate">{order.tableName}</span>
             <OrderSourceBadge order={order} />
           </div>
-          <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
         </div>
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
