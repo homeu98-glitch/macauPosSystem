@@ -95,45 +95,51 @@ function OrderCard({
           </div>
         </div>
       </div>
-      {/* 中間：分隔線 + 品項摘要 + 訂單總額同一行（用戶約定：品項名稱與價格同一行） */}
-      <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-100 pt-2">
-        <div className="min-w-0 flex-1 truncate text-xs text-slate-500">
-          {order.items.slice(0, 2).map((item) => `${item.name}×${item.quantity}`).join(" · ")}
-          {order.items.length > 2 ? " · …" : ""}
-        </div>
-        {(() => {
-          // 折扣顯示：計算原價（單品原價 × 數量 + 全單 subtotal/總 嘅差），
-          // 唔重新計算 subtotal；用一個 heuristic：原價 = total + 全單 discountAmount + 單品節省
-          const itemSaving = orderItemDiscountTotal(order.items);
-          const wholeSaving = Math.max(0, order.discountAmount ?? 0);
-          const totalSaving = itemSaving + wholeSaving;
-          if (totalSaving <= 0) {
+      {/* 中間：品項摘要 + 訂單總額同一行（用戶約定：品項名稱與價格同一行）。
+          重點：呢段固定 height + 內部 scroll，再多嘢都唔會撳到下面嘅掣。
+          撳唔到掣 → 即係失去主要功能（可取餐／已取餐），所以**按鈕係第一優先**。 */}
+      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-1 border-t border-slate-100 pt-2">
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="min-w-0 flex-1 truncate text-xs text-slate-500">
+            {order.items.slice(0, 2).map((item) => `${item.name}×${item.quantity}`).join(" · ")}
+            {order.items.length > 2 ? " · …" : ""}
+          </div>
+          {(() => {
+            // 折扣顯示：計算原價（單品原價 × 數量 + 全單 subtotal/總 嘅差），
+            // 唔重新計算 subtotal；用一個 heuristic：原價 = total + 全單 discountAmount + 單品節省
+            const itemSaving = orderItemDiscountTotal(order.items);
+            const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+            const totalSaving = itemSaving + wholeSaving;
+            if (totalSaving <= 0) {
+              return (
+                <div className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
+                  {formatMoney(order.total, currency)}
+                </div>
+              );
+            }
+            // 有折扣：顯示原價（line-through）+ 折後價（amber）
+            const original = Math.round((order.total + totalSaving) * 100) / 100;
             return (
-              <div className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
-                {formatMoney(order.total, currency)}
+              <div className="shrink-0 text-right">
+                <div className="text-sm font-bold tabular-nums text-amber-700">{formatMoney(order.total, currency)}</div>
+                <div className="text-[10px] tabular-nums text-slate-400 line-through">{formatMoney(original, currency)}</div>
               </div>
             );
-          }
-          // 有折扣：顯示原價（line-through）+ 折後價（amber）
-          const original = Math.round((order.total + totalSaving) * 100) / 100;
-          return (
-            <div className="shrink-0 text-right">
-              <div className="text-sm font-bold tabular-nums text-amber-700">{formatMoney(order.total, currency)}</div>
-              <div className="text-[10px] tabular-nums text-slate-400 line-through">{formatMoney(original, currency)}</div>
-            </div>
-          );
-        })()}
+          })()}
+        </div>
+        {/* 折扣明細行：overflow-y-auto，內容再多都唔會撳到下面嘅掣。 */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <OrderDiscountRow
+            currency={currency}
+            items={order.items}
+            variant="compact"
+            wholeOrderDiscountAmount={order.discountAmount}
+          />
+        </div>
       </div>
-      {/* 折扣明細行：所有訂單明細位都要見到折扣多少、優惠多少（用戶需求） */}
-      <OrderDiscountRow
-        currency={currency}
-        items={order.items}
-        variant="compact"
-        wholeOrderDiscountAmount={order.discountAmount}
-      />
-      {/* 按鈕：mt-auto 推到底（卡 fixed height，按鈕永遠對齊底部）。
+      {/* 按鈕：永遠喺卡最下層，唔會被折扣明細撳走。
           自助單用 2 獨立按鈕 + 觸發後消失機制；收銀單維持舊單鏈。 */}
-      <div className="mt-auto flex flex-wrap gap-1.5">
+      <div className="mt-2 flex shrink-0 flex-wrap gap-1.5 border-t border-slate-100 pt-2">
         <button
           className="shrink-0 rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
           onClick={() => onViewOrder(order.id)}
