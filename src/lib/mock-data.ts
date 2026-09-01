@@ -193,9 +193,12 @@ export const mockBootstrap: PosBootstrap = {
   sourceVersion: 1,
   storeId: "macau-store-a",
   storeName: "澳門店 A",
-  // 店家電話 — 顯示喺收據抬頭（仿 57.doc 「電話：xxx」一欄）。
-  // 演示用 mock 號；真實號由後台管理員填，落 `pos_stores.tel`（將來 migration 帶入）。
-  storeTel: "(853) 2888-0000",
+  // 店家電話（收據抬頭，仿 57.doc「電話：xxx」一欄）。
+  //
+  // ⚠️ 刻意**唔填**：mock bootstrap 係 fallback，呢度一填就會永遠壓住
+  // `resolveStoreTel()` 嘅「商家登入號碼」fallback，搞到所有舖都印同一個假號碼。
+  // 收據電話嘅單一真源係 `src/lib/pos/store-tel.ts`：
+  //   bootstrap.storeTel（將來 `pos_stores.tel`）→ 商家登入號碼 → 唔顯示。
   currency: "MOP",
   categories: [
     { id: "cat-rice", name: "飯類" },

@@ -13,6 +13,9 @@ import { getSupabaseWriteClient } from "@/lib/supabase-server";
  *   3. 錯誤訊息唔再直出 DB 內部訊息（會洩漏 schema / 欄位名），改記 server log、對外返通用訊息。
  *
  * 2026-08-31 party_size 上雲（見 docs/89 §3）：upsert 同 ORDER_SETTLED 都會寫 `party_size`。
+ *
+ * 2026-09-01 comp_note / comped_at 上雲（見 docs/91）：免單備註要落 `pos_orders` 直欄，
+ *   否則換機／清 cache 由 server state reload 之後會冇咗（本地有、雲端冇）。
  */
 
 // ─────────────────────────────────────────────────────────────
@@ -68,6 +71,22 @@ function money(value: unknown): number {
 /** 入座人數：只接受 1..999 嘅整數，其餘一律 null（對齊 DB CHECK，避免 upsert 成單成批失敗）。 */
 function partySizeOrNull(value: unknown): number | null {
   return intOrNull(value, MAX_PARTY_SIZE);
+}
+
+/**
+ * ISO 時間戳：非字串 / 空 / 唔係合法時間 → null。
+ *
+ * 同 `text()` 唔同：`comped_at` 呢類 `timestamptz` 欄位，Postgres 收到非法字串會**直接報錯**，
+ * 令成個 upsert 失敗（張單寫唔入雲），而唔係靜默截斷。所以必須驗過先寫。
+ * 回傳 null 只係「呢一欄留空」，唔影響同一行其他欄。
+ */
+function isoOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const ms = Date.parse(trimmed);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
 }
 
 export async function POST(request: Request) {
@@ -201,6 +220,11 @@ export async function POST(request: Request) {
             // ── 入座人數上雲（docs/89 §3）：報表「覆蓋人數 / 人均消費」嘅唯一雲端來源。
             //    快餐／外賣／自取單係 undefined → 寫 NULL（唔好填 1，會污染人均消費分母）。
             party_size: partySizeOrNull(order.partySize),
+            // ── 免單備註上雲（docs/91）：獨立審計欄，唔寫落 order_note
+            //    （廚房備註受 docs/84 鎖定，sent_to_kitchen 起鎖死）。
+            //    非免單單一律 undefined → 寫 NULL。
+            comp_note: text(order.compNote, MAX_TEXT_LEN),
+            comped_at: isoOrNull(order.compedAt),
             created_at: text(order.createdAt, 64) ?? new Date().toISOString(),
             updated_at: text(order.updatedAt, 64) ?? new Date().toISOString(),
           },
@@ -231,6 +255,16 @@ export async function POST(request: Request) {
         // 若無條件寫 null 會抹走之前 ORDER_UPDATED 寫入嘅值。
         const settledPartySize = partySizeOrNull(eventPayload.partySize);
         if (settledPartySize !== null) patch.party_size = settledPartySize;
+
+        // 免單備註（docs/91）：免單正正喺結帳嗰刻發生，所以 ORDER_SETTLED 呢度係主寫入點。
+        // 同樣**唯有 payload 有帶先寫** —— 一般結帳（現金／微信／信用卡）唔帶呢兩個欄，
+        // 若無條件寫 null 會抹走 ORDER_UPDATED 寫入嘅值（雖然正常唔會發生，但離線重推
+        // 時事件次序唔保證，保守寫法比較穩）。
+        const settledCompNote = text(eventPayload.compNote, MAX_TEXT_LEN);
+        if (settledCompNote) {
+          patch.comp_note = settledCompNote;
+          patch.comped_at = isoOrNull(eventPayload.compedAt) ?? new Date().toISOString();
+        }
 
         const { error: sErr } = await supabase
           .from("pos_orders")

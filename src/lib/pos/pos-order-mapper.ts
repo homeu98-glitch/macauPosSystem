@@ -29,6 +29,14 @@ export interface PosOrderRow {
    * 見 docs/89 §3。
    */
   party_size?: number | null;
+  /**
+   * 免單備註（原因）。0018 migration 新增；未跑 migration 嘅環境會冇呢欄 → undefined。
+   * ⚠️ 唔係 `order_note`（廚房備註，sent_to_kitchen 起鎖死，見 docs/84）。
+   * 非免單單一律 NULL。見 docs/91。
+   */
+  comp_note?: string | null;
+  /** 免單操作時間。0018 migration 新增；非免單單一律 NULL。見 docs/91。 */
+  comped_at?: string | null;
   payment_method: string | null;
   created_at: string;
   updated_at: string;
@@ -57,6 +65,9 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     source: (row.source as PosOrder["source"]) ?? "pos",
     // 入座人數：冇欄 / NULL → undefined（前端「--」可改）。見 docs/89 §3。
     partySize: row.party_size == null ? undefined : Number(row.party_size),
+    // 免單備註 / 免單時間：冇欄 / NULL → undefined。見 docs/91。
+    compNote: row.comp_note ?? undefined,
+    compedAt: row.comped_at ?? undefined,
     paymentMethod: (row.payment_method as PosOrder["paymentMethod"]) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

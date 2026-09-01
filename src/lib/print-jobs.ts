@@ -13,6 +13,7 @@ import {
   savePrintJobs,
 } from "@/lib/storage";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { PosBootstrap, PosOrder, PrintJob, ReceiptTemplate } from "@/lib/types";
 import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
 import { formatMoney } from "@/lib/format";
@@ -88,7 +89,8 @@ function buildTemplateReceiptJobs(
   });
   const content = buildReceiptContent(order, {
     storeName: bootstrap.storeName,
-    storeTel: bootstrap.storeTel,
+    // 收據電話：門店設定 → 商家登入號碼 fallback。見 src/lib/pos/store-tel.ts。
+    storeTel: resolveStoreTel(bootstrap.storeTel),
     currency: bootstrap.currency,
     footerText: template.footerText,
     serverName,

@@ -66,6 +66,12 @@ export async function GET(request: Request) {
         // docs/87 §5.2：訂單來源（kiosk / scan / pos）。舊 migration 冇呢欄 → fallback "pos"。
         source: order.source ?? "pos",
         partySize: order.party_size == null ? undefined : Number(order.party_size),
+        // 免單審計（docs/91 · 0018 migration）。
+        // ⚠️ 呢度一定要帶：mergeOrderLists() 係「timestamp 新嘅**成個 object** 取代舊嘅」，
+        //    唔係逐欄 merge。server 版冇呢兩欄 → reload 時會把本機嘅免單備註清走。
+        //    未跑 0018 migration 嘅環境會冇呢兩欄 → undefined（唔會崩）。
+        compNote: order.comp_note ?? undefined,
+        compedAt: order.comped_at ?? undefined,
         paymentMethod: order.payment_method ?? undefined,
         createdAt: order.created_at,
         updatedAt: order.updated_at,

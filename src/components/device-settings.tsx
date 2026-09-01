@@ -487,6 +487,12 @@ export function DeviceSettings() {
         printZones: localSettings.printZones,
         specTemplates: localSettings.specTemplates,
         printTemplates: localSettings.printTemplates,
+        // 三套備註清單要寫齊：以前淨係帶 `cancelNotePresets`，
+        // 搞到「常用備註」喺呢條 explicit list 入面長期缺失。
+        // 雖然而家呢個 payload 暫時冇下游消費（`serverSettings` 全份 spread
+        // 經 /api/pos/device-config 落雲先係真正生效嘅路徑），但 explicit list
+        // 一旦日後變成離線補傳 / 跨 terminal 廣播嘅真源，缺一欄就靜默唔同步。
+        notePresets: localSettings.notePresets,
         cancelNotePresets: localSettings.cancelNotePresets,
         compNotePresets: localSettings.compNotePresets,
         onlineOrderSettings: localSettings.onlineOrderSettings,

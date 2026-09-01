@@ -38,6 +38,7 @@ import {
 } from "@/lib/escpos-template";
 import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
 import { discountedUnitPrice } from "@/lib/pos/discount";
+import { resolveStoreTel } from "@/lib/pos/store-tel";
 
 /**
  * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
@@ -319,7 +320,9 @@ export function PrintCenter() {
     }
     const content = buildReceiptContent(sampleOrder, {
       storeName: PREVIEW_STORE_NAME,
-      storeTel: "(853) 2888-0000",
+      // 以前硬編 `(853) 2888-0000`，令「列印中心」預覽永遠顯示一個唔存在嘅假電話。
+      // 改用同一個 resolver：門店設定 → 商家登入號碼。見 src/lib/pos/store-tel.ts。
+      storeTel: resolveStoreTel(loadBootstrapCache()?.storeTel),
       currency: "MOP",
       footerText: t.footerText,
       serverName: "示範收銀員",

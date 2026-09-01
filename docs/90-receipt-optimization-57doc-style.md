@@ -81,13 +81,34 @@ v1.1：
 
 | Section ID | 顯示 | Default visible | 對應 57.doc |
 | --- | --- | --- | --- |
-| `store_tel` | `電話: (853) 2888-0000` | ❌（要 bootstrap.storeTel） | ✓ |
+| `store_tel` | `電話: 60000000`（商家登入號碼） | ✅（有登入就出） | ✓ |
 | `server` | `服務員: 收銀員名` | ❌（要 auth） | — |
 | `discount_breakdown` | `人氣半筋半肉麵  折扣率 80%  折讓 $14` | ✅ | ✓ |
 | `service_charge_amount` | `服務費: $5` | ❌ | — |
 | `tax_amount` | `稅金: $3` | ❌ | — |
 | `cash_tendered` | `实收: $80` | ❌（要 order.cashTendered） | ✓ |
 | `change_amount` | `找零: $3` | ❌（要 order.changeAmount） | ✓ |
+
+## 店家電話嘅真源（2026-09-01 改）
+
+收據電話唔再係固定設定，而係由 `src/lib/pos/store-tel.ts` 嘅 `resolveStoreTel()`
+單一決定，解析順序：
+
+1. `bootstrap.storeTel` —— 商家日後喺後台填嘅門店電話（將來 `pos_stores.tel`）。
+2. **商家登入號碼** `AuthSession.account`（例如 `60000000`）—— 邊個號碼開嘅舖就印邊個。
+3. 都冇 → `store_tel` 區段自動收起。
+
+⚠️ `mock-data.ts` 嘅 `mockBootstrap.storeTel` 刻意**留空**：mock bootstrap 係 fallback，
+一填假值（以前係 `(853) 2888-0000`）就會永遠壓住第 2 項，搞到所有舖印同一個假電話。
+
+三個消費點全部改用 resolver：
+- `src/lib/print-jobs.ts`（收據 + kiosk 小票實際打印）
+- `src/components/receipt-ticket-preview.tsx`（結帳預覽）
+- `src/components/print-center.tsx`（列印中心範本預覽，以前硬編 `(853) 2888-0000`）
+
+`RECEIPT_BLOCK_DEFAULTS.store_tel` 亦由 `visible: false` 改做 `true`
+（`escpos-template.ts`）—— 以前因為長期搵唔到電話值所以預設收起，而家
+「只要有登入就一定印到」。唔想印嘅商家照舊去 列印中心 → 收據模板 撳熄。
 
 ## Payload map 教訓（已 audit）
 

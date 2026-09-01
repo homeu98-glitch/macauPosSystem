@@ -7,6 +7,7 @@ import { PosOrder } from "@/lib/types";
 import { buildReceiptContent, buildSnapshot } from "@/lib/escpos-template";
 import { renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
 import { discountedUnitPrice } from "@/lib/pos/discount";
+import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { EscPosPreview } from "@/components/escpos-preview";
 
 /**
@@ -21,7 +22,8 @@ export function ReceiptTicketPreview({ order }: { order: PosOrder }) {
   const bootstrap = loadBootstrapCache();
   const storeName = bootstrap?.storeName ?? "門店";
   const currency = bootstrap?.currency ?? "MOP";
-  const storeTel = bootstrap?.storeTel;
+  // 收據電話：門店設定 → 商家登入號碼 fallback。見 src/lib/pos/store-tel.ts。
+  const storeTel = resolveStoreTel(bootstrap?.storeTel);
 
   const lines = useMemo(() => {
     const items = order.items.map((it) => {

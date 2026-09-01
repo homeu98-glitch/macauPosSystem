@@ -67,31 +67,69 @@ compedAt?: string;   // 免單操作時間（ISO）
 快餐模式購物車結帳（`payingOrderId === CART_PAYING_ID`）同 `confirmPayment` 一樣，
 要先 `sendToKitchen({ silent: true, forceNewOrder: true })` 落單先至結。
 
-## 5. 雲端 / 報表（follow-up）
+## 5. 雲端 / 報表（0018 migration · 2026-09-01 已完成）
 
-**現況**：免單備註跟 `ORDER_SETTLED` 事件嘅 `payload.compNote` 上雲。
-`queue_events.payload` 係 JSONB，**唔使 migration 就留到底稿**，報表可以
-由 `queue_events` 追溯「點解免單」。
+`pos_orders` 原本冇 `comp_note` 直欄 → 換機／清 cache 由 server state reload 之後
+免單備註會冇咗。已經補齊，五個落點：
 
-**未做**：`pos_orders` 冇 `comp_note` 直欄 —— 因為 `/api/pos/sync` 嘅
-`pos_orders` upsert 用**顯式欄位清單**（`src/app/api/pos/sync/route.ts:177-208`），
-加欄要跑 migration。要落嘅話：
+| # | 檔案 | 改動 |
+| --- | --- | --- |
+| 0 | `supabase/migrations/0018_pos_comp_note.sql` | `comp_note text` + `comped_at timestamptz`（nullable）+ partial index + `report_ro.v_pos_comp_orders` 稽核 View |
+| 1 | `src/app/api/pos/sync/route.ts` | `ORDER_CREATED/UPDATED` upsert 加 `comp_note` / `comped_at`；`ORDER_SETTLED` patch **唯有 payload 有帶先寫** |
+| 2 | `src/lib/pos/pos-order-mapper.ts` | `PosOrderRow.comp_note?` / `comped_at?` + `mapPosOrderRow` 映射（Realtime 訂閱用） |
+| 3 | `src/app/api/pos/state/route.ts` | backfill 嘅 inline mapping 加 `compNote` / `compedAt` |
+| 4 | `src/components/pos-app.tsx` | `settleCompOrder()` 嘅 `ORDER_SETTLED` payload 加 `compedAt: now` |
 
-```sql
--- supabase/migrations/0018_pos_comp_note.sql
-ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS comp_note text;
-ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS comped_at timestamptz;
+### 5.1 點解第 3 項一定要改（最易漏位）
+
+`mergeOrderLists()`（`src/lib/pos-order-filters.ts:77`）係
+**「timestamp 新嘅成個 object 取代舊嘅」**，唔係逐欄 merge：
+
+```ts
+if (!existing || orderTimestamp(order) >= orderTimestamp(existing)) {
+  byId.set(order.id, merged);   // ← 成個 object 取代
+}
 ```
 
-跟住要改三處：
-1. `src/app/api/pos/sync/route.ts` — `ORDER_CREATED/UPDATED` upsert 加
-   `comp_note: text(order.compNote, MAX_TEXT_LEN)`、`comped_at`
-2. 同上 `ORDER_SETTLED` patch 加 `comp_note: text(eventPayload.compNote, MAX_TEXT_LEN)`
-3. `src/lib/pos/pos-order-mapper.ts` — `PosOrderRow` 加欄 + `mapPosOrderRow` 映射
+所以 `/api/pos/state` 嗰份 inline mapping 只要少一欄，reload 時就會把本機嘅值
+**清走**。落咗 DB migration 但唔改呢度 = 白做。
 
-**喺跑 migration 之前**：`compNote` 只喺本機 localStorage + `queue_events` 有，
-由 server state 重新載入（`loadOrders()` from `/api/pos/state`）會**冇咗**呢個欄。
-即係「換機／清 cache 後睇唔到舊免單備註」。前台收銀當場睇冇問題。
+### 5.2 `comped_at` 要特別處理
+
+`timestamptz` 欄位收到非法字串，Postgres 會**直接報錯令成個 upsert 失敗**
+（張單寫唔入雲），唔似 `text()` 咁靜默截斷。所以 sync route 加咗 `isoOrNull()`：
+
+```ts
+function isoOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value.trim());
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+```
+
+### 5.3 執行方式
+
+migration 檔案寫好咗，但**未喺 Supabase 上跑**（本機冇 `.env.local`／DB 連線）。
+要去 Supabase Dashboard → SQL Editor 貼 `supabase/migrations/0018_pos_comp_note.sql`
+執行，或者 `supabase db push`（要先 link project）。
+
+全部 `if not exists` / DO block 守門，**可重複執行**，唔會 drop 任何嘢。
+
+**未跑 migration 之前**：`comp_note` / `comped_at` 兩欄唔存在 → 各處 mapping
+fallback `undefined`，前端唔會崩，只係換機後睇唔到舊免單備註。即係可以
+**先 deploy code、後跑 migration**，次序唔緊要。
+
+### 5.4 已知限制（同類問題，未處理）
+
+`pos_orders` 表**從來冇**以下欄位（查過 0011 / 0012 migration），所以呢啲
+`PosOrder` field 全部係**本機 only**，server reload 一樣會被清走：
+
+`roundingAmount`（系統抹零）、`cashTendered` / `changeAmount`（收銀找續）、
+`cancelledAt` / `cancelledReason`、`refundedAt` / `refundedAmount` / `refundedReason` /
+`refundRecords`、`reopenedAt` / `reopenedBy` / `reopenReason` / `originalSettledAt` /
+`reopenCount`、`ledgerMemberPhone` / `memberDeductionAvos`。
+
+即係「抹零同退款記錄換機之後會冇咗」。要根治要再開 0019 加一批直欄（同 0018 同一套路）。
 
 ## 6. 相關
 

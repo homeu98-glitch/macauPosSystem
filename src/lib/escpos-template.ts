@@ -78,7 +78,11 @@ function block(
 
 const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   store_name: block(true, "m", true, "center"),
-  store_tel: block(false, "s", false, "center"),
+  // 2026-09-01 改 default 做 visible：以前因為 `pos_stores` 冇電話欄，長期搵唔到值
+  // 所以預設收起；而家 `resolveStoreTel()` 一定 fallback 到商家登入號碼，
+  // 即係「只要有登入就一定印到電話」（57.doc 嘅抬頭格式）。
+  // 唔想印嘅商家照舊可以去 列印中心 → 收據模板 撳熄 `store_tel`。
+  store_tel: block(true, "s", false, "center"),
   order_no: block(true, "s", false, "left"),
   table_name: block(true, "s", false, "left"),
   order_time: block(true, "s", false, "left"),

@@ -2859,9 +2859,13 @@ export function PosApp() {
         servedAt: updatedOrder.servedAt ?? null,
         // 入座人數上雲（docs/89 §3）
         partySize: updatedOrder.partySize ?? null,
-        // 免單備註跟事件上雲：queue_events.payload 係 JSONB，唔使 migration 就留到底稿，
-        // 報表 / 對帳可追溯「點解免單」。pos_orders 嘅 comp_note 直欄係另一個 follow-up。
+        // 免單審計上雲（docs/91）：
+        //   1. queue_events.payload 係 JSONB → 唔使 migration 就留到底稿，
+        //      報表 / 對帳可追溯「點解免單」。
+        //   2. /api/pos/sync 會由呢度讀 compNote / compedAt 寫落 pos_orders 直欄
+        //      （0018 migration）→ 換機／清 cache 由 server state reload 都仲見到。
         compNote: reason,
+        compedAt: now,
       },
       status: networkOnline ? "synced" : "pending",
       createdAt: now,
