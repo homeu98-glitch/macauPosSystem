@@ -3777,7 +3777,7 @@ export function PosApp() {
                     </button>
                   ))}
                 </div>
-                <div className="flex w-full shrink-0 items-center gap-2 xl:w-56">
+                <div className="flex shrink-0 items-center gap-2 xl:w-28">
                   <input
                     className="h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400"
                     onChange={(event) => {
@@ -3791,13 +3791,6 @@ export function PosApp() {
                     placeholder="搜尋商品"
                     value={searchKeyword}
                   />
-                  <button
-                    className="h-10 whitespace-nowrap shrink-0 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
-                    onClick={() => setSearchKeyword("")}
-                    type="button"
-                  >
-                    清除
-                  </button>
                 </div>
               </div>
             </div>
