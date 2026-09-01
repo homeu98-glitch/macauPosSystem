@@ -20,11 +20,16 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 - **備註鎖定（docs/84）**：備註／規格喺送出（sent_to_kitchen）嗰刻固定。真源 `src/lib/pos/order-note-lock.ts` `isOrderNoteLocked()`（鎖 sent_to_kitchen/paid/settled/cancelled/partially_refunded/refunded；**唔鎖** draft 同 reopened）。UI（disabled）+ 資料層**兩邊都要擋**。
 - **非永久狀態唔可以越界（反例待修）**：返結 temp 枱 `isReopenTemp` 被 push 入 `localSettings.floors[].tables[]`，`device-settings.tsx saveTablesLocal()` 攤平帶去 bootstrap → admin 一撳保存 temp 枱永久升級。鐵律：任何 `*-temp / *-draft / *-ghost / isReopenTemp` entity，render 層同 persistence 層都要 filter 走。
 - **長文字換行（docs/84 §7）**：用戶自由輸入長文字一律 `whitespace-pre-wrap break-words`，唔好 `truncate`。純 `break-normal` 對長串 CJK 無效。
+- **菜單 card `printerGroup` 標籤**：菜單 card 個「kitchen / bar / dessert」細灰字 = `item.printerGroup`（落單時呢道菜嘅廚房單派去邊個分區嘅打印機），可由 `localSettings.menuPrinterOverrides[item.id]` 覆寫。唔係「呢道菜喺邊度煮」嘅描述。時價菜嘅價位顯示 `時價菜` 而非 `formatMoney(item.price)`（commit `7835686`）。
 - **訂單排序（2026-09-01 ✅ 第二輪）**：訂單顯示一律用 `compareOrderByLocalNo()`（`src/lib/pos-order-filters.ts`），但**純 `createdAt` ascending**（舊→新）。唔用單號做主 key：跨 prefix（同日 自取01 vs 外賣01）號碼會撞，純單號排會跳邊（用戶第一輪反映嘅「自取01 10:32 排得比 取餐09 01:25 仲前」就係呢個 bug）。**唔可以用 `orderTimestamp`（updatedAt）排** —— 改狀態就 refresh updatedAt → 張單彈去最前。序號 per `(store_id, kind, biz_date)` 見 migration 0012，所以同日多 prefix 序號會撞。UI 亦**唔好按狀態分段**（收銀 strip 已改單一列）。
 
 ## 線上訂單
 
 - **自動接單被 server 覆蓋（✅ 已修）**：`loadRuntimeState()` merged 冇保護 `onlineOrderSettings`。已修：merged 加保護 + `/api/online-order-settings` store 隔離。遺留：`syncConfig()` 仍把 autoAccept 寫上 server。
+- **🚨 鐵律：寫咗 migration ≠ 跑咗 migration（踩咗兩次：0018、0019）**。本機**冇 `.env.local`、冇 DB 連線、冇 `supabase/config.toml`** → `supabase db push` 跑唔到，一定要人手去 Supabase Dashboard SQL Editor 貼。每次寫完 migration 要用 `curl` 打 production API 驗證（**唔使連 DB 都驗到**，見下面「點驗 production 配置」）。
+- **點驗 production 配置（可重用手法）**：① 搵 Supabase project URL — `curl` 首頁 HTML → 拎 `<script src="/_next/...">` → 逐個 download → `grep -oE 'https://[a-z0-9]+\.supabase\.co'`（`NEXT_PUBLIC_` 會 inline 落 bundle）。2026-09-01 驗到 production 係 **`https://zymdemjflsckicwcinxl.supabase.co`**。② 直接打公開 API 探測：表唔存在會返 `Could not find the table 'public.xxx' in the schema cache`；`LEDGER_WEBHOOK_SECRET` 未設會返 `伺服器未設定 webhook secret。`。
+- **server error 唔可以靜默吞**：client `catch` 一律顯示「請稍後再試」會令「配置未做好」同「暫時網絡問題」變成同一個「冇反應」。要攞 server 嘅 `error` message 出嚟並翻譯成有行動指向嘅訊息（`describeServerError()` in `use-online-order-settings.ts`）。**共用元件嘅 `error` prop 要 check 有冇傳** —— `<AutoAcceptPill>` 支援 error 但兩個 call site 都冇傳 → 有 error 都顯示唔到。
+- **自動接單真源（docs/92）**：`pos_online_order_settings`（per-store，server 權威）→ 同步 Ledger；**線下「自動接自助單」**係 `pos_kiosk_settings.selfOrderAutoAccept`，**唔對接 Ledger**（docs/87 §11 範圍外）。兩粒掣樣式統一用 `<AutoAcceptPill variant="contained" size="md">`（2026-09-01 四個 call site 全部統一）。
 - **Print Center 冇 entry（✅ 已修）**：改以 `loadPrintJobs()` 為基底 + dispatch `pos-print-jobs-changed` + `mergePrintJobs()`（去重 + tombstone）。
 - 狀態顯示：`normalizeLedgerStatus()` 把 accepted+preparing 摺成 preparing；`ledgerStatusBadgeLabel()` 先會出「已接單」，只喺 `quick-online-orders-panel.tsx`。
 
