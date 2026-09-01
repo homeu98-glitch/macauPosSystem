@@ -1053,19 +1053,24 @@ export function PosApp() {
     (!isQuickMode ? unsettledOrder : null);
   // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單（currentSettlementOrder），
   // 唔可以跟 activeOrder（當前選中枱嘅單）——否則喺 dine-in 模式從 counterKioskOrders 面板結帳會金額變 0。
+  // docs/95 §14：base 總額必須 = subtotal + 服務費 + 稅，同 orderTotals() / 落單寫入（upsertCurrentOrder）一致。
+  // 之前呢度硬寫 `serviceChargeAmount: 0` 兼 `total = subtotal + taxAmount`，
+  // 只要 rules.serviceChargeRate > 0，結帳嗰刻服務費會靜默消失（落單收據有、結帳冇 → 收少咗錢）。
+  // 舊單（schema 升級前）冇 serviceChargeAmount field → `?? 0` 兜底。
+  const sumOrderBaseTotal = (order: PosOrder) => order.subtotal + (order.serviceChargeAmount ?? 0) + order.taxAmount;
   const paymentBase = currentSettlementOrder
     ? {
         subtotal: currentSettlementOrder.subtotal,
-        serviceChargeAmount: 0,
+        serviceChargeAmount: currentSettlementOrder.serviceChargeAmount ?? 0,
         taxAmount: currentSettlementOrder.taxAmount,
-        total: currentSettlementOrder.subtotal + currentSettlementOrder.taxAmount,
+        total: sumOrderBaseTotal(currentSettlementOrder),
       }
     : !isQuickMode && activeOrder && cartItems.length === 0
       ? {
           subtotal: activeOrder.subtotal,
-          serviceChargeAmount: 0,
+          serviceChargeAmount: activeOrder.serviceChargeAmount ?? 0,
           taxAmount: activeOrder.taxAmount,
-          total: activeOrder.subtotal + activeOrder.taxAmount,
+          total: sumOrderBaseTotal(activeOrder),
         }
       : totals;
   const discountAmount = useMemo(() => {
@@ -1166,7 +1171,8 @@ export function PosApp() {
   }, [payingOrderId]);
   const paymentSummary = {
     subtotal: paymentBase.subtotal,
-    serviceChargeAmount: 0,
+    // docs/95 §14：之前硬寫 0，同 paymentBase 對唔上；跟返 paymentBase 實際計出嘅服務費。
+    serviceChargeAmount: paymentBase.serviceChargeAmount,
     taxAmount: paymentBase.taxAmount,
     discountAmount,
     prepaidAmount,

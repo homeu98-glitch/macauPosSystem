@@ -1,5 +1,4 @@
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
-import { unitBasePrice } from "@/lib/escpos-render";
 import {
   EscPosBlockStyle,
   EscPosItemsLayout,
@@ -284,18 +283,52 @@ export interface ReceiptContentOpts {
   serverName?: string;
 }
 export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): Record<string, string> {
-  const subtotalBefore = clampMoney(computeSubtotalBeforeDiscount(order));
-  const itemSavings = clampMoney(computeItemSavings(order));
-  const orderDiscount = clampMoney(order.discountAmount ?? 0);
-  const totalDiscount = clampMoney(orderDiscount + itemSavings);
-  const subtotalAfter = clampMoney(subtotalBefore - itemSavings);
+  const subtotalBefore = roundMoney(computeSubtotalBeforeDiscount(order));
+  const itemSavings = roundMoney(computeItemSavings(order));
+  const orderDiscount = roundMoney(Math.max(0, order.discountAmount ?? 0));
+  const serviceCharge = roundMoney(Math.max(0, order.serviceChargeAmount ?? 0));
+  const tax = roundMoney(Math.max(0, order.taxAmount ?? 0));
+  const rounding = roundMoney(Math.max(0, order.roundingAmount ?? 0));
+  const orderTotal = roundMoney(Math.max(0, order.total ?? 0));
+
+  // 雙軌對帳（見 resolveTotalDiscount）：理論值 vs 由收據自己印出嚟嘅數反推嘅值。
+  const naive = roundMoney(orderDiscount + itemSavings);
+  const derived = roundMoney(subtotalBefore + serviceCharge + tax - rounding - orderTotal);
+  const totalDiscount = resolveTotalDiscount({ naive, derived, subtotalBefore });
+  if (process.env.NODE_ENV !== "production" && Math.abs(naive - totalDiscount) > 0.01) {
+    // 兩邊唔夾 = 張單有 stale 金額（退菜 / 加單 / 返結 之後 discountAmount 冇按新基數重計）。
+    // 留 console 紀錄方便追溯「優惠合計 -81」呢類神秘數字嘅來源。
+    console.warn("[escpos-template] 「優惠合計」雙軌對帳唔夾，已自動取細值。", {
+      localOrderNo: order.localOrderNo,
+      orderId: order.id,
+      // 來源好緊要：線上單（`source !== "pos"` / 有 onlineOrderId）嘅 discountAmount
+      // 係由 Ledger 提供，基數同 POS 本地 items 未必同一口徑。
+      source: order.source,
+      onlineOrderId: order.onlineOrderId,
+      subtotalBefore,
+      itemSavings,
+      orderDiscount,
+      serviceCharge,
+      tax,
+      rounding,
+      orderTotal,
+      naive,
+      derived,
+      used: totalDiscount,
+      orderSubtotal: order.subtotal,
+    });
+  }
 
   const lines: string[] = [];
   for (const it of order.items) {
     const rate = it.discountRate;
     if (rate == null || !Number.isFinite(rate) || rate >= 100 || rate <= 0) continue;
-    const base = unitBasePrice(it);
-    const saving = clampMoney(base * it.quantity * (rate / 100));
+    // ⚠️ base 用 `it.price`（已包加購 spec delta），同 `orderTotals()` 摺 subtotal 嘅基數一致。
+    // 唔好用 `unitBasePrice(it)`（會剝走加購 → 折讓計少咗，對唔返「原價合計 − 總金額」）。
+    const base = it.price;
+    // ⚠️ saving = 原價 × (100 - rate) / 100，唔好用 × rate / 100。
+    // rate 85 = 收 85% → 折讓 15%（原價 × 15%）。同 `computeItemSavings` 公式一致。
+    const saving = roundMoney(base * it.quantity * ((100 - rate) / 100));
     if (saving > 0) {
       // 仿 57.doc 嘅「折扣率 X% / 折扣金額 Y」格式。
       // 中文小數點：rate 為整數時顯示「80%」否則「80.0%」（保持視覺一致）。
@@ -318,11 +351,11 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     service_charge_amount: (order.serviceChargeAmount ?? 0) > 0 ? `服務費: ${formatMoney(order.serviceChargeAmount ?? 0, opts.currency)}` : "",
     tax_amount: (order.taxAmount ?? 0) > 0 ? `稅金: ${formatMoney(order.taxAmount ?? 0, opts.currency)}` : "",
     rounding_amount: (order.roundingAmount ?? 0) > 0 ? `系統抹零: ${formatMoney(-(order.roundingAmount ?? 0), opts.currency)}` : "",
-    // 防御：优惠合計絕對唔可以大過 subtotal（曾經見到 -72 神秘數值），
-    // 一旦 order.discountAmount 同 savings 加埋 > subtotalBefore → 警告並截頂。
-    // 觸發通常代表 discount preset 被亂填 / 數據 corruption，唔會爆炸，但會喺 dev console 留痕。
+    // 防御：優惠合計經 `resolveTotalDiscount` 雙軌對帳 + 截頂，
+    // 保證「原價合計 + 服務費 + 稅 − 抹零 − 優惠合計 === 總金額」永遠成立。
+    // 歷史上出現過 -72 / -81 呢類對唔到數嘅神秘數字（stale `order.discountAmount`）。
     discount_amount: totalDiscount > 0 ? `優惠合計: ${formatMoney(-totalDiscount, opts.currency)}` : "",
-    total: `總金額: ${formatMoney(clampMoney(order.total), opts.currency)}`,
+    total: `總金額: ${formatMoney(orderTotal, opts.currency)}`,
     cash_tendered: (order.cashTendered ?? 0) > 0 ? `实收: ${formatMoney(order.cashTendered ?? 0, opts.currency)}` : "",
     change_amount: (order.changeAmount ?? 0) > 0 ? `找零: ${formatMoney(order.changeAmount ?? 0, opts.currency)}` : "",
     // 其他金額區塊一律係「標題: 值」（原價合計: / 結帳時間: / 服務員: …），
@@ -333,35 +366,74 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
   };
 }
 
-/**
- * 防御：金額上限保護。`order.discountAmount` 曾經無故被填成好大嘅值
- * （客戶截圖見到「優惠合計 MOP -72」但實際 savings = 8），
- * 呢度統一做「> subtotal 時截頂」防止神秘負數印上細張收據。
- * 同時輸出 dev-only console warn 方便嗣後追溯。
- */
-function clampMoney(value: number): number {
-  if (!Number.isFinite(value) || value < 0) return 0;
+/** 金額四捨五入到 2 位小數；NaN / 負數一律當 0（收據唔會印負數金額）。 */
+function roundMoney(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.round(value * 100) / 100;
 }
 
 /**
- * 原價合計：Σ (unitBasePrice(it) × quantity)，未扣任何折扣（全單 / 單品都未計）。
- * 唔用 `order.subtotal`（pos-app.tsx 入面 subtotal 已經係 post-單品折扣值），
- * 收據「原價合計」要係 100% 原價先啱。見 docs/88 §4.3。
+ * 優惠合計嘅「雙軌對帳」取值（docs/95 §用戶反饋 R3-2）。
+ *
+ * 優惠合計有兩個計法，數據健康時兩邊一定相等：
+ * - `naive`   = 全單折扣（`order.discountAmount`）+ Σ 單品折讓（理論值）
+ * - `derived` = 原價合計 + 服務費 + 稅 − 抹零 − 總金額（用收據自己印出嚟嘅數反推）
+ *
+ * 一旦唔相等，代表張單有 stale 金額：退菜 / 加單 / 返結 之後
+ * `order.discountAmount` 冇按新基數重計（客戶見過「優惠合計 -72」、
+ * 「-81」呢類對唔到數嘅神秘數字，而實際折讓得 2 / 5 蚊）。
+ *
+ * 取值策略：**取細嗰個，再截頂到原價合計**。
+ * 寧願少報折讓，都唔好印一張「原價合計 − 優惠合計 ≠ 總金額」嘅收據畀客。
+ */
+export function resolveTotalDiscount(parts: {
+  /** 理論值：全單折扣 + Σ 單品折讓。 */
+  naive: number;
+  /** 反推值：原價合計 + 服務費 + 稅 − 抹零 − 總金額。NaN / 負數 = 唔可信，忽略。 */
+  derived: number;
+  /** 硬上限：折讓永遠唔可以大過原價合計。 */
+  subtotalBefore: number;
+}): number {
+  const { naive, derived, subtotalBefore } = parts;
+  const safeNaive = Number.isFinite(naive) ? Math.max(0, naive) : 0;
+  const cap = Number.isFinite(subtotalBefore) ? Math.max(0, subtotalBefore) : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(derived) || derived < 0) return Math.min(safeNaive, cap);
+  return Math.max(0, Math.min(safeNaive, derived, cap));
+}
+
+/**
+ * 原價合計：Σ (it.price × quantity)，未扣任何折扣（全單 / 單品都未計），
+ * **包括加購（spec delta）**。
+ *
+ * `it.price` 喺 `pos-app.tsx::priceWithSpecs` 入面已經包埋 spec delta：
+ * - 非折扣菜：`item.price + specDelta`
+ * - 折扣菜：`item.originalPrice + specDelta`（`priceWithSpecs` §菜品層折扣時用 originalPrice）
+ * 所以直接 `it.price` 就係「100% 原價」，唔再用 `unitBasePrice(it)`（會剝走加購）。
+ * 收據「原價合計」要係加埋加購先啱（docs/95 §用戶反饋 R1）。
  */
 export function computeSubtotalBeforeDiscount(order: PosOrder): number {
-  return order.items.reduce((sum, it) => sum + unitBasePrice(it) * it.quantity, 0);
+  return order.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
 }
 
 /**
  * 單品折扣 savings 總和（全單折扣唔計在內）。與 `computeTotalDiscount` 拆開，
  * 等收據可以分兩行表達：「單品折讓明細」（每菜逐項） + 「優惠合計」（總和）。
+ *
+ * ⚠️ **savings 公式係 `(100 - rate)` 唔好用 `rate`**：
+ * - rate 80 = 收 80 / 原價 100 → 折讓 20 = 原價 × 20%
+ * - rate 85 = 收 85 / 原價 15 → 折讓 2.25 = 原價 × 15%
+ * 用咗 `rate` 會算成「折後價」（80% / 85% of original），唔係「折讓金額」。
+ * 曾踩過：客戶截圖「優惠合計 MOP -13」但實際 savings 應該係 -2（見 docs/95 §用戶反饋 R3）。
+ *
+ * ⚠️ **基數用 `it.price`（包埋加購 spec delta）**，同 `pos-app.tsx::orderTotals()`
+ * 摺 subtotal 嘅基數一致。用 `unitBasePrice(it)` 會剝走加購 → 折讓計少咗，
+ * 「原價合計 − 優惠合計」對唔返「總金額」。
  */
 export function computeItemSavings(order: PosOrder): number {
   return order.items.reduce((sum, it) => {
     const rate = it.discountRate ?? 0;
     if (rate <= 0 || rate >= 100) return sum;
-    return sum + (unitBasePrice(it) * it.quantity * rate) / 100;
+    return sum + (it.price * it.quantity * (100 - rate)) / 100;
   }, 0);
 }
 
@@ -369,16 +441,22 @@ export function computeItemSavings(order: PosOrder): number {
  * 優惠合計：全單折扣（PosOrder.discountAmount = §19「減多少」）＋ 各單品折扣 savings。
  * 單品折扣率 80 = 收 80 元 / 原價 100 → savings = 原價 × 20%。見 docs/88 §3.3 / §4.3。
  *
- * 防御：永遠嘗試 max(0, min(totalDiscount, subtotalBefore))，避免 discountAmount 入咗唔合理值時
- * 印出 -72 等神秘負數（截圖出現過嘅情況）。
+ * 防御：經 `resolveTotalDiscount` 做雙軌對帳 + 截頂，避免 stale `discountAmount`
+ * 印出 -72 / -81 等對唔到數嘅負數（客戶截圖出現過）。
  */
 export function computeTotalDiscount(order: PosOrder): number {
   const subtotalBefore = computeSubtotalBeforeDiscount(order);
   const orderDiscount = Math.max(0, order.discountAmount ?? 0);
   const itemSavings = Math.max(0, computeItemSavings(order));
-  const raw = orderDiscount + itemSavings;
-  // 截頂到 subtotalBefore（唔會大過應減）— 同時 printf 用嘅 formatMoney 唔會出負數
-  return Math.max(0, Math.min(raw, subtotalBefore));
+  const serviceCharge = Math.max(0, order.serviceChargeAmount ?? 0);
+  const tax = Math.max(0, order.taxAmount ?? 0);
+  const rounding = Math.max(0, order.roundingAmount ?? 0);
+  const orderTotal = Math.max(0, order.total ?? 0);
+  return resolveTotalDiscount({
+    naive: orderDiscount + itemSavings,
+    derived: subtotalBefore + serviceCharge + tax - rounding - orderTotal,
+    subtotalBefore,
+  });
 }
 
 /**
