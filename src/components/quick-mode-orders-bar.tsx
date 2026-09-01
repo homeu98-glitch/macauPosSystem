@@ -65,9 +65,6 @@ export function QuickModeOrdersBar({
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線下訂單</div>
-            <div className="mt-0.5 text-[10px] font-medium text-slate-400">
-              進行中的快餐訂單 · 詳情請至「訂單」
-            </div>
           </div>
           <QuickLocalOrdersStrip
             completeLabel={completeLabel}
