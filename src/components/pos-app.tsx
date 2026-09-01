@@ -3837,7 +3837,7 @@ export function PosApp() {
                       </div>
                       <div className="mt-4 flex items-center justify-between">
                         <div className="text-base font-semibold text-slate-900">
-                          {formatMoney(item.price, bootstrap.currency)}
+                          {item.isMarketPrice ? "時價菜" : formatMoney(item.price, bootstrap.currency)}
                         </div>
                         <div
                           className={`rounded-full px-2 py-1 text-xs font-semibold ${
