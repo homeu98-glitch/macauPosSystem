@@ -235,7 +235,6 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
-            <div className="mt-0.5 text-xs text-slate-500">快餐走製作中 → 待取餐 → 完成；堂食維持送廚結帳流程</div>
           </div>
           {/*
             規格 6：「自動接自助單」開關直接取代原「刪除全部訂單」掣位。

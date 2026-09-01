@@ -69,34 +69,27 @@ export function SelfOrderAutoAcceptToggle() {
   }
 
   return (
-    <div className="flex shrink-0 flex-col items-end gap-0.5">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold text-slate-700">
-          自動接自助單
-          {loading ? <span className="ml-1 font-normal text-slate-400">（讀取中…）</span> : null}
-          {saving ? <span className="ml-1 font-normal text-slate-400">（儲存中…）</span> : null}
-        </span>
-        <button
-          aria-label="自動接自助單"
-          aria-pressed={enabled}
-          className={`relative h-6 w-12 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
-            enabled ? "bg-emerald-500" : "bg-slate-300"
-          }`}
-          disabled={loading || saving}
-          onClick={() => void toggle()}
-          type="button"
-        >
-          <span
-            className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all ${
-              enabled ? "left-7" : "left-1"
-            }`}
-          />
-        </button>
-      </div>
-      <span className="text-[11px] leading-tight text-slate-500">
-        {enabled ? "自助點餐／掃碼落單後直接出單" : "自助單需收銀台確認先出單"}
-        {error ? <span className="ml-1 font-semibold text-red-600">· {error}</span> : null}
+    // 與左邊「自動接單」掣共用同一個樣式（orders-hub 兩卡高度/設計一致）：
+    // label 「自動接自助單」+ pill button（emerald on / slate-white off，文字「開／關」）。
+    <div className="flex shrink-0 items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5">
+      <span className="text-xs font-semibold text-slate-600">
+        自動接自助單
+        {loading ? <span className="ml-1 font-normal text-slate-400">（讀取中…）</span> : null}
+        {saving ? <span className="ml-1 font-normal text-slate-400">（儲存中…）</span> : null}
       </span>
+      <button
+        aria-label="自動接自助單"
+        aria-pressed={enabled}
+        className={`rounded-full px-3 py-1 text-xs font-semibold disabled:opacity-50 ${
+          enabled ? "bg-emerald-600 text-white" : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
+        }`}
+        disabled={loading || saving}
+        onClick={() => void toggle()}
+        type="button"
+      >
+        {enabled ? "開" : "關"}
+      </button>
+      {error ? <span className="text-[11px] font-semibold text-red-600">· {error}</span> : null}
     </div>
   );
 }
