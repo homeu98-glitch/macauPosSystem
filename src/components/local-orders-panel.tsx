@@ -432,6 +432,12 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               </div>
             ) : null}
             {viewingOrder.orderNote ? <div>備註：{viewingOrder.orderNote}</div> : null}
+            {/* 免單審計：獨立欄位（唔係 orderNote，後者受 docs/84 鎖定） */}
+            {viewingOrder.compNote ? (
+              <div className="whitespace-pre-wrap break-words">
+                免單備註：<span className="font-semibold text-slate-900">{viewingOrder.compNote}</span>
+              </div>
+            ) : null}
             {viewingOrder.items.map((item) => {
               const itemHasDiscount = item.discountRate != null && Number.isFinite(item.discountRate) && item.discountRate < 100;
               return (

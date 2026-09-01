@@ -144,10 +144,19 @@ function mapLedgerProduct(product: LedgerMenuProduct, existing?: MenuItem): Menu
     id: toLedgerMenuItemId(product.id),
     categoryId: toLedgerCategoryId(product.categoryId),
     name: product.name,
+    // price = 客人實際畀嘅折後價（與 Ledger 線上客人對齊）
     price: product.priceMop,
     printerGroup: existing?.printerGroup ?? "kitchen",
     specGroups: product.specGroups !== undefined ? product.specGroups : existing?.specGroups,
     image: product.image ?? existing?.image,
+    // 菜品層折扣：原價 / 折扣率從 Ledger 帶落嚟。
+    // 同步方向 = 單向（§菜品折扣 v1）：Ledger 為權威；existing 嘅值只在 Ledger 無提供時先 fallback。
+    // 唔取 max / merge，避免店員本機改完折扣被下次 import 覆蓋之外，仲會出現「兩邊折扣不一致」
+    // 但 Ledger 已經係單一 source of truth。
+    ...(product.originalPriceMop != null ? { originalPrice: product.originalPriceMop } : {}),
+    ...(product.discountRate != null && product.discountRate > 0 && product.discountRate < 100
+      ? { discountRate: product.discountRate }
+      : {}),
   };
 }
 

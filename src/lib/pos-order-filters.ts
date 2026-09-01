@@ -28,11 +28,13 @@ export function orderTimestamp(order: PosOrder): number {
 /**
  * 由單號抽出排序 key：`(prefix, numeric)`。
  *
- * localOrderNo 格式帶非數字 prefix（堂食01 / 外賣01 / 自取10 / 取餐09），
- * 所以要拆開做 numeric compare，唔可以純 string compare（否則 "10" < "9"）。
- * prefix 只認「純非數字」——fallback 單號（例如 ledger bridge 嘅 `自取-a1b2c3`）
- * 唔認，當「冇號碼」處理，避免抽錯尾數做號碼。
+ * ⚠️ 2026-09-01 第二輪：原本呢個 helper 係畀 `compareOrderByLocalNo` 用嚟做
+ * 「單號由小到大、createdAt 輔助」。但收銀實際工作流係「先下單先做」——
+ * 跨 prefix（同日 自取01 / 外賣01）號碼會撞，純單號排會跳邊。
+ * 已改為純 `createdAt` 排序，呢個 helper 暫時冇 caller（保留做 documenting reference）。
+ * 之後如要改回單號排，復用返就得。
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function localOrderNoSortKey(order: PosOrder): { prefix: string; num: number } {
   const raw = (order.localOrderNo ?? "").trim();
   const matched = raw.match(/^(\D*?)(\d+)$/);
@@ -41,36 +43,26 @@ function localOrderNoSortKey(order: PosOrder): { prefix: string; num: number } {
 }
 
 /**
- * 訂單顯示排序：**單號由小到大（主）、createdAt 由舊到新（輔）**。
+ * 訂單顯示排序：**純下單時間（createdAt）由舊到新**。
  *
- * ⚠️ 唔可以用 `orderTimestamp`（即 updatedAt）排：每次改狀態（出餐 / 可取餐 / 結帳）
- * 都會 refresh `updatedAt`，張單即刻彈去最前 → 收銀撳完掣單序就亂晒。
- * 單號喺落單嗰刻 stamped，之後唔再變 → 狀態點改都唔會移位。
+ * 「先下單先做」係收銀端最直覺嘅工作流：誰先落單、邊張先處理。
  *
- * 跨 prefix 號碼會撞：序號係 per `(store_id, kind, biz_date)` 各自遞增
- * （見 supabase/migrations/0012），所以「自取01」同「外賣01」可以同一日並存。
- * 撞號碼時用 `createdAt` 分先後（跨 prefix 等於按下單時間排）。
+ * 唔用單號做主 key：
+  - 跨 prefix 嘅同日單號會撞（自取01 vs 外賣01 兩個都係 01），
+    純單號排會跨 prefix 跳邊（用戶 2026-09-01 第二輪反映嘅「自取01 10:32
+    排得比 取餐09 01:25 仲前」就係呢個 bug）。
  *
- * 全部 key 都撞晒先落到 prefix / id —— 只係為咗 deterministic，正常唔會用到。
+ * 唔用 `orderTimestamp`（即 updatedAt）：每次改狀態（出餐 / 可取餐 / 結帳）
+ * 都 refresh `updatedAt` → 張單彈去最前，狀態一改就移位。
+ *
+ * `createdAt` 一落單就 stamped 之後唔再變 → 改狀態唔會移位，
+ * 跨 prefix 用下單時間自動排好（誰先下單、邊個前），同收銀心模一致。
  */
 export function compareOrderByLocalNo(a: PosOrder, b: PosOrder): number {
-  const keyA = localOrderNoSortKey(a);
-  const keyB = localOrderNoSortKey(b);
-  const hasNumA = !Number.isNaN(keyA.num);
-  const hasNumB = !Number.isNaN(keyB.num);
-
-  // 有號碼嘅排先過冇號碼嘅（冇號碼多數係舊單 / fallback，靠 createdAt 排尾）
-  if (hasNumA !== hasNumB) return hasNumA ? -1 : 1;
-  if (hasNumA && hasNumB && keyA.num !== keyB.num) return keyA.num - keyB.num;
-
-  // 撞號碼（或兩邊都冇號碼）→ 用落單時間分先後
   const createdA = Date.parse(a.createdAt || "") || 0;
   const createdB = Date.parse(b.createdAt || "") || 0;
   if (createdA !== createdB) return createdA - createdB;
-
-  // 再撞 → prefix 分組，最後用 id 保證全序（sort 先至穩定）
-  const prefixCmp = keyA.prefix.localeCompare(keyB.prefix, "zh-Hant-HK");
-  if (prefixCmp !== 0) return prefixCmp;
+  // 同一刻落單（罕有：測試 fixture / batch import）→ id 分先後保證全序
   return String(a.id).localeCompare(String(b.id));
 }
 

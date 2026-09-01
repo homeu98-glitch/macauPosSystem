@@ -20,7 +20,7 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 - **備註鎖定（docs/84）**：備註／規格喺送出（sent_to_kitchen）嗰刻固定。真源 `src/lib/pos/order-note-lock.ts` `isOrderNoteLocked()`（鎖 sent_to_kitchen/paid/settled/cancelled/partially_refunded/refunded；**唔鎖** draft 同 reopened）。UI（disabled）+ 資料層**兩邊都要擋**。
 - **非永久狀態唔可以越界（反例待修）**：返結 temp 枱 `isReopenTemp` 被 push 入 `localSettings.floors[].tables[]`，`device-settings.tsx saveTablesLocal()` 攤平帶去 bootstrap → admin 一撳保存 temp 枱永久升級。鐵律：任何 `*-temp / *-draft / *-ghost / isReopenTemp` entity，render 層同 persistence 層都要 filter 走。
 - **長文字換行（docs/84 §7）**：用戶自由輸入長文字一律 `whitespace-pre-wrap break-words`，唔好 `truncate`。純 `break-normal` 對長串 CJK 無效。
-- **訂單排序（2026-09-01 ✅）**：訂單顯示一律用 `compareOrderByLocalNo()`（`src/lib/pos-order-filters.ts`）：單號 numeric ascending 為主 → `createdAt` ascending 為輔 → prefix → id。**唔可以用 `orderTimestamp`（updatedAt）排** —— 改狀態就 refresh updatedAt → 張單彈去最前。跨 prefix 號碼會撞（序號 per `(store_id, kind, biz_date)`，見 migration 0012），撞號碼時靠 createdAt 分先後。UI 亦**唔好按狀態分段**（收銀 strip 已改單一列）。
+- **訂單排序（2026-09-01 ✅ 第二輪）**：訂單顯示一律用 `compareOrderByLocalNo()`（`src/lib/pos-order-filters.ts`），但**純 `createdAt` ascending**（舊→新）。唔用單號做主 key：跨 prefix（同日 自取01 vs 外賣01）號碼會撞，純單號排會跳邊（用戶第一輪反映嘅「自取01 10:32 排得比 取餐09 01:25 仲前」就係呢個 bug）。**唔可以用 `orderTimestamp`（updatedAt）排** —— 改狀態就 refresh updatedAt → 張單彈去最前。序號 per `(store_id, kind, biz_date)` 見 migration 0012，所以同日多 prefix 序號會撞。UI 亦**唔好按狀態分段**（收銀 strip 已改單一列）。
 
 ## 線上訂單
 

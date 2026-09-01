@@ -109,6 +109,12 @@ export interface MenuItem {
   id: string;
   categoryId: string;
   name: string;
+  /**
+   * 揀菜時客人 / 店員見到嘅價錢。
+   * - 本地菜品 = 店家自行設定嘅價
+   * - Ledger import 菜品 = Ledger 嘅 `price_avos`（已經內含 `promo_rate_permille` 嘅折後價）
+   *   → `price` 與 Ledger 嘅「客人實際畀嘅價」對齊，唔另打折
+   */
   price: number;
   printerGroup: PrinterGroup;
   specGroups?: MenuSpecGroup[];
@@ -118,6 +124,22 @@ export interface MenuItem {
   customerOrderable?: boolean;
   /** 菜品圖片 URL（由 Ledger 線上點餐菜單同步過來；可空，前端有圖先 render） */
   image?: string;
+  /**
+   * 菜品原價（未折扣前）。可選 — 冇設就當 `price` 已經係原價。
+   * - 本地菜品：店家喺菜品編輯設「折扣」時自動填（亦可手動覆寫原價）
+   * - Ledger import：Ledger `price_avos` 已折後，所以 `price` 寫折後價、`originalPrice` 寫
+   *   `price_avos × 1000 / promo_rate_permille`（倒推 Ledger 嘅 base price）。冇 promo 就兩者相等。
+   */
+  originalPrice?: number;
+  /**
+   * 菜品折扣百分比（0-100）。語義同 DiscountPreset.rate / OrderItem.discountRate：
+   * `80` = 8折 = 收原價嘅 80%。`undefined` / `100` = 冇折扣。
+   * - 落單時若菜本身有 discountRate，會自動 pre-fill 到 OrderItem.discountRate（令出單 / 對帳
+   *   同 Ledger 嘅 promo 對齊）；已下單（sent_to_kitchen）後菜品再改 discountRate 唔影響舊單。
+   * - 同 OrderItem.discountRate 嘅分別：`OrderItem` 係當下單層嘅折扣（店員落單時可改），
+   *   `MenuItem.discountRate` 係菜品層嘅默認折扣（Ledger / 店家設定）。
+   */
+  discountRate?: number;
 }
 
 export interface MenuCategory {
@@ -364,8 +386,16 @@ export interface PosLocalSettings {
     specGroups: MenuSpecGroup[];
   }>;
   printTemplates: PrintTemplates;
+  /** 常用備註（點餐時快速選擇，多選）。 */
   notePresets: string[];
+  /** 取消備註（退菜 / 取消時快速選擇）。 */
   cancelNotePresets: string[];
+  /**
+   * 免單備註：結帳頁撳「免單」時要揀／輸入嘅原因（設置 → 備註 → 免單備註）。
+   * 同 cancelNotePresets 分開：退菜係「取消」，免單係「全額減免後照結帳」，語意唔同、
+   * 對帳口徑亦唔同（免單單會照出收據、計入營業額但實收 0）。
+   */
+  compNotePresets: string[];
   /** 返結（反結賬）可選原因清單，設置 → 備註 可增刪 */
   reopenReasons: string[];
   fullVoidBehavior: "cancelled" | "refunded";
@@ -455,6 +485,19 @@ export interface PosOrder {
    */
   source?: "pos" | "kiosk" | "scan";
   paymentMethod?: PaymentMethod;
+  /**
+   * 免單備註（結帳頁撳「免單」時寫入，來自設置 → 備註 → 免單備註，可自由輸入）。
+   *
+   * ⚠️ **唔可以用 `orderNote` 裝呢個值**：`orderNote` 係「廚房備註」，受 docs/84
+   * 鎖定（`isOrderNoteLocked()`：sent_to_kitchen 起鎖死），而免單一定發生喺
+   * sent_to_kitchen 之後。呢度跟 `cancelledReason` / `reopenReason` 嘅既有模式，
+   * 開一條**結帳期審計欄位**，喺邊個 lifecycle 階段寫就歸邊個管，兩邊唔互相污染。
+   *
+   * 免單語意：照出單照出收據、照計入營業額，但實收 0（全額減免）。
+   */
+  compNote?: string;
+  /** 免單操作時間（ISO） */
+  compedAt?: string;
   cancelledAt?: string;
   cancelledReason?: string;
   refundedAt?: string;

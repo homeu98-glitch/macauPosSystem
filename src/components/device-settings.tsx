@@ -93,6 +93,7 @@ export function DeviceSettings() {
   const [devicePrinterTab, setDevicePrinterTab] = useState<"zones" | "printers">("zones");
   const [printerWizardOpen, setPrinterWizardOpen] = useState(false);
   const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
+  const [newCompNotePreset, setNewCompNotePreset] = useState("");
   const [newReopenReason, setNewReopenReason] = useState("");
   const [newDiscountLabel, setNewDiscountLabel] = useState("");
   const [newDiscountRate, setNewDiscountRate] = useState("");
@@ -487,6 +488,7 @@ export function DeviceSettings() {
         specTemplates: localSettings.specTemplates,
         printTemplates: localSettings.printTemplates,
         cancelNotePresets: localSettings.cancelNotePresets,
+        compNotePresets: localSettings.compNotePresets,
         onlineOrderSettings: localSettings.onlineOrderSettings,
       },
       status: "pending",
@@ -951,6 +953,70 @@ export function DeviceSettings() {
                       setLocalSettings(next);
                       setNewNotePreset("");
                       setStatus("已新增常用備註草稿，請先保存。");
+                    }}
+                    type="button"
+                  >
+                    加入
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
+              <div className="text-base font-semibold text-slate-900">免單備註</div>
+              <div className="mt-1 text-sm text-slate-500">結帳頁按「免單」時要選擇的原因（必填）。</div>
+
+              <div className="mt-4 flex-1 overflow-auto pr-1">
+                <div className="grid gap-2">
+                  {localSettings.compNotePresets.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      暫時沒有免單備註
+                    </div>
+                  ) : (
+                    localSettings.compNotePresets.map((note) => (
+                      <div
+                        key={note}
+                        className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{note}</div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={() => {
+                            const next = {
+                              ...localSettings,
+                              compNotePresets: localSettings.compNotePresets.filter((item) => item !== note),
+                            };
+                            setLocalSettings(next);
+                            setStatus("已更新免單備註草稿，請先保存。");
+                          }}
+                          type="button"
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
+                    onChange={(event) => setNewCompNotePreset(event.target.value)}
+                    placeholder="新增免單備註..."
+                    value={newCompNotePreset}
+                  />
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const text = newCompNotePreset.trim();
+                      if (!text) return;
+                      const next = {
+                        ...localSettings,
+                        compNotePresets: Array.from(new Set([...localSettings.compNotePresets, text])),
+                      };
+                      setLocalSettings(next);
+                      setNewCompNotePreset("");
+                      setStatus("已新增免單備註草稿，請先保存。");
                     }}
                     type="button"
                   >

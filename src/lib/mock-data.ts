@@ -519,6 +519,8 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   },
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
+  // 免單備註：結帳頁撳「免單」時要揀嘅原因（設置 → 備註 → 免單備註 可增刪）
+  compNotePresets: ["老闆請客", "員工餐", "客人投訴補償", "試食推廣", "熟客優惠"],
   discounts: [
     { id: "disc-90", label: "9折", rate: 90 },
     { id: "disc-85", label: "85折", rate: 85 },

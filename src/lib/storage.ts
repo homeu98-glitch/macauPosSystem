@@ -286,6 +286,10 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
       ? settings?.cancelNotePresets
       : defaultPosLocalSettings.cancelNotePresets,
+    // 免單備註：舊版 localStorage 冇呢欄 → fallback 預設清單（唔會令結帳頁「免單」掣無嘢揀）
+    compNotePresets: Array.isArray(settings?.compNotePresets)
+      ? settings.compNotePresets
+      : defaultPosLocalSettings.compNotePresets,
     discounts: Array.isArray(settings?.discounts)
       ? settings.discounts.filter(
           (d) => d && typeof d.id === "string" && typeof d.label === "string" && typeof d.rate === "number",

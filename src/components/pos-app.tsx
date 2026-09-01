@@ -317,6 +317,10 @@ export function PosApp() {
   const [specThenMarketPrice, setSpecThenMarketPrice] = useState(false);
   const [voidRequest, setVoidRequest] = useState<{ item: OrderItem; mode: "one" | "all"; isFullOrder?: boolean } | null>(null);
   const [voidReason, setVoidReason] = useState("");
+  // 免單（comp）：結帳頁撳「免單」→ 彈窗揀備註（必填）→ confirmComp() 全額減免結帳。
+  // 備註來源 localSettings.compNotePresets（設置 → 備註 → 免單備註），可自由輸入補充。
+  const [compModalOpen, setCompModalOpen] = useState(false);
+  const [compNote, setCompNote] = useState("");
   const [orderActionRequest, setOrderActionRequest] = useState<
     | {
         type: "cancel_order" | "refund_order";
@@ -1386,7 +1390,27 @@ export function PosApp() {
   }
 
   function priceWithSpecs(item: MenuItem, selectedSpecs: OrderItem["selectedSpecs"] = []) {
-    return item.price + selectedSpecs.reduce((sum, spec) => sum + spec.priceDelta, 0);
+    // 若菜品層有折扣，揀菜價 (`item.price`) 已經係折後；OrderItem.price 改寫原價 +
+    // 單獨保存 discountRate（落單 §菜品折扣 v1 §B 方案），令收據 / 對帳可以分得出
+    // 「原價合計」與「折後價」。spec delta 一律加落原價 base — 規格加錢屬菜品本身，
+    // 唔再二次打折。
+    const specDelta = selectedSpecs.reduce((sum, spec) => sum + spec.priceDelta, 0);
+    if (item.discountRate != null && item.discountRate > 0 && item.discountRate < 100) {
+      const basePrice = item.originalPrice ?? item.price;
+      return basePrice + specDelta;
+    }
+    return item.price + specDelta;
+  }
+
+  /**
+   * 揀菜時由菜品層折扣推到 OrderItem 折扣率。已下單菜（cart 中嘅 baseOrderItems）由
+   * `isOrderNoteLocked` 守住，呢個 helper 只用嚟 commit 新 cart line。
+   */
+  function menuItemDiscountRate(item: MenuItem): number | undefined {
+    if (item.discountRate != null && item.discountRate > 0 && item.discountRate < 100) {
+      return item.discountRate;
+    }
+    return undefined;
   }
 
   function buildSelectedSpecs(
@@ -1456,6 +1480,7 @@ export function PosApp() {
         ];
       }
 
+      const discountRate = menuItemDiscountRate(item);
       const existing = current.find(
         (cartItem) => cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
           menuItemId: item.id,
@@ -1476,7 +1501,13 @@ export function PosApp() {
             printerGroup: targetPrinterGroup,
             selectedSpecs,
           })
-            ? { ...cartItem, quantity: cartItem.quantity + 1 }
+            ? {
+                ...cartItem,
+                quantity: cartItem.quantity + 1,
+                // 菜品層折扣由 menu 加返嘅情況：補返 discountRate 落 existing line（單向 upgrade），
+                // 已下單菜嘅折扣被 §84 鎖（isOrderNoteLocked）守住，呢個 cart line 唔受影響。
+                ...(discountRate != null && cartItem.discountRate == null ? { discountRate } : {}),
+              }
             : cartItem,
         );
       }
@@ -1490,6 +1521,9 @@ export function PosApp() {
           price: finalPrice,
           printerGroup: targetPrinterGroup,
           selectedSpecs,
+          // 菜品層折扣自動帶落 OrderItem；已下單菜嘅折扣係 §84 鎖定範圍，
+          // 但呢度 commitMenuItem 只產生新 cart line，舊 line 由 `isOrderNoteLocked` 守住。
+          ...(discountRate != null ? { discountRate } : {}),
         },
       ];
     });
@@ -2737,6 +2771,166 @@ export function PosApp() {
     if (!targetOrder) return;
 
     await runCheckout(targetOrder);
+  }
+
+  /**
+   * 免單（comp）：整張單全額減免後照結帳 —— 照出單、照出收據、照計入營業額，但實收 0。
+   *
+   * 同 `confirmPayment` 嘅分別：
+   *  - `total` 寫 0；`discountAmount` = 應收原額（全額減免）；`paymentMethod` = "免單"
+   *  - **唔行會員扣款／核券**：免費單唔需要扣會員錢，亦避免離線時俾 `memberLedgerOpsNeeded` 擋住
+   *  - 備註寫落 `compNote`（**唔係** `orderNote` —— 後者受 docs/84 鎖定，見 types.ts 註釋）
+   *
+   * 其餘（寫入 orders、推 ORDER_SETTLED 事件、即時 syncNow、打印收據、返回桌台）
+   * 同 `confirmPayment` 完全一致，確保對帳／報表口徑統一。
+   */
+  function settleCompOrder(targetOrder: PosOrder, reason: string, now: string) {
+    if (!bootstrap) return;
+    // 全額減免：結帳基準（未扣免單前）全部轉做 discountAmount，實收 0。
+    const compedAmount = Math.max(0, paymentBase.total);
+    const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+    // 返結 temp 枱重結：還原原枱並清掉 temp 標記
+    const isReopenRestore = Boolean(targetOrder.reopenOriginalTableId);
+
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: quickPaidFlow ? "paid" : "settled",
+      fulfillmentStatus: quickPaidFlow ? targetOrder.fulfillmentStatus ?? "preparing" : undefined,
+      servedAt: quickPaidFlow ? targetOrder.servedAt : targetOrder.servedAt ?? now,
+      tableId: isReopenRestore ? targetOrder.reopenOriginalTableId! : targetOrder.tableId,
+      tableName: isReopenRestore ? targetOrder.reopenOriginalTableName! : targetOrder.tableName,
+      reopenOriginalTableId: undefined,
+      reopenOriginalTableName: undefined,
+      paymentMethod: "免單",
+      discountAmount: compedAmount,
+      // 免單無現金／抹零／找續，三個欄位留 0（收據 block 自動 hidden）。
+      roundingAmount: 0,
+      cashTendered: 0,
+      changeAmount: 0,
+      total: 0,
+      // ── 免單審計：備註 + 時間（結帳期欄位，唔入 orderNote） ──
+      compNote: reason,
+      compedAt: now,
+      // 免單唔扣會員錢
+      ledgerMemberPhone: undefined,
+      memberDeductionAvos: 0,
+      // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
+      originalSettledAt: targetOrder.originalSettledAt ?? now,
+      reopenCount: targetOrder.reopenCount ?? 0,
+      reopenedAt: targetOrder.reopenedAt,
+      reopenedBy: targetOrder.reopenedBy,
+      reopenReason: targetOrder.reopenReason,
+      updatedAt: now,
+    };
+
+    setOrders((currentOrders) => {
+      const baseline = mergeOrderLists(loadOrders(), currentOrders);
+      const nextOrders = baseline.some((order) => order.id === updatedOrder.id)
+        ? baseline.map((order) => (order.id === updatedOrder.id ? updatedOrder : order))
+        : [updatedOrder, ...baseline];
+      saveOrders(nextOrders);
+      return nextOrders;
+    });
+
+    // 返結 temp 枱重結完成：移除 temp 枱（訂單記錄唔新增，只改返結嗰條）
+    if (isReopenRestore) {
+      removeReopenTempTable(targetOrder.id);
+    }
+
+    const paymentEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_SETTLED",
+      entityId: updatedOrder.id,
+      payload: {
+        orderId: updatedOrder.id,
+        total: 0,
+        receivedAmount: 0,
+        changeDue: 0,
+        discountAmount: compedAmount,
+        paymentMethod: "免單",
+        memberPhone: null,
+        memberDeduction: 0,
+        couponDiscount: 0,
+        couponIds: [],
+        prepaidAmount,
+        status: updatedOrder.status,
+        fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
+        sentToKitchenAt: updatedOrder.sentToKitchenAt ?? null,
+        servedAt: updatedOrder.servedAt ?? null,
+        // 入座人數上雲（docs/89 §3）
+        partySize: updatedOrder.partySize ?? null,
+        // 免單備註跟事件上雲：queue_events.payload 係 JSONB，唔使 migration 就留到底稿，
+        // 報表 / 對帳可追溯「點解免單」。pos_orders 嘅 comp_note 直欄係另一個 follow-up。
+        compNote: reason,
+      },
+      status: networkOnline ? "synced" : "pending",
+      createdAt: now,
+    };
+
+    pushEvents([paymentEvent]);
+    void syncNow([...queue, paymentEvent], { silent: true });
+
+    // 收尾：同 confirmPayment 一致
+    setPayingOrderId(null);
+    setCompModalOpen(false);
+    setCompNote("");
+    setActiveOrderId(null);
+    setCartItems([]);
+    setDiscountValue("0");
+    setReceivedAmount("");
+    setRoundingInput("");
+    setSelectedItemId("");
+    setBaseOrderItems([]);
+    resetMemberCheckoutState();
+    setSelectedPaymentMethod("");
+    setToast({
+      tone: "success",
+      message: networkOnline
+        ? `已免單 ${updatedOrder.localOrderNo}（${reason}）。`
+        : `已離線記錄 ${updatedOrder.localOrderNo} 免單，待補傳。`,
+    });
+    setSettlementFlash(true);
+    printReceipt(updatedOrder);
+    if (quickPaidFlow) {
+      setViewingOrderId(null);
+    } else {
+      backToTables();
+    }
+  }
+
+  /** 結帳頁「免單」掣：備註必填，揀好／輸入好先落單。 */
+  async function confirmComp(note: string) {
+    if (!bootstrap) return;
+    const reason = note.trim();
+    if (!reason) {
+      setToast({ tone: "error", message: "請選擇或輸入免單備註。" });
+      return;
+    }
+    const now = new Date().toISOString();
+
+    // 快餐模式購物車結帳：同 confirmPayment 一樣要先落單
+    if (isQuickMode && payingOrderId === CART_PAYING_ID) {
+      const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
+      if (!createdOrder) {
+        setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+        return;
+      }
+      settleCompOrder(createdOrder, reason, now);
+      return;
+    }
+
+    const targetOrder =
+      (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
+      (activeOrder && (activeOrder.status === "sent_to_kitchen" || activeOrder.status === "reopened")
+        ? activeOrder
+        : null) ??
+      unsettledOrder;
+    if (!targetOrder) {
+      setToast({ tone: "error", message: "搵唔到要免單嘅訂單。" });
+      return;
+    }
+
+    settleCompOrder(targetOrder, reason, now);
   }
 
   function completeOnlinePaidOrder() {
@@ -4303,6 +4497,16 @@ export function PosApp() {
                   全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
                 </div>
               ) : null}
+              {/* 免單：獨立審計欄位（唔係 orderNote —— 後者受 docs/84 鎖定）。
+                  docs/84 §7：長文字要 whitespace-pre-wrap break-words，唔好用 truncate。 */}
+              {viewingOrder.compNote ? (
+                <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                  免單備註：<span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
+                  {viewingOrder.compedAt ? (
+                    <span className="ml-2 text-xs">（{formatMacauDateTime(viewingOrder.compedAt)}）</span>
+                  ) : null}
+                </div>
+              ) : null}
               {viewingOrder.prepaidAmount ? (
                 <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
                   <span>已支付</span>
@@ -4673,9 +4877,23 @@ export function PosApp() {
                       ? "處理會員扣款中…"
                       : paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
                         ? "客人已支付，完成訂單"
-                        : memberCheckoutRedeemDone
+                          : memberCheckoutRedeemDone
                           ? "重試扣款"
                           : "去結帳"}
+                  </button>
+
+                  {/* 免單：全額減免後照結帳（實收 0），必須選／輸入備註。
+                      備註清單嚟自 設置 → 備註 → 免單備註（localSettings.compNotePresets）。 */}
+                  <button
+                    className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={memberCheckoutSubmitting}
+                    onClick={() => {
+                      setCompNote("");
+                      setCompModalOpen(true);
+                    }}
+                    type="button"
+                  >
+                    免單
                   </button>
                 </div>
               </div>
@@ -4957,6 +5175,72 @@ export function PosApp() {
                 </>
               );
             })()}
+        </ResponsiveModal>
+      ) : null}
+
+      {/* 免單備註彈窗：備註必填（設置 → 備註 → 免單備註 提供預設選項，可自由輸入補充） */}
+      {compModalOpen ? (
+        <ResponsiveModal
+          onClose={() => { setCompModalOpen(false); setCompNote(""); }}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setCompModalOpen(false);
+                  setCompNote("");
+                }}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!compNote.trim()}
+                onClick={() => void confirmComp(compNote)}
+                type="button"
+              >
+                確認免單
+              </button>
+            </>
+          }
+          description={`全額減免 · 應收 ${formatMoney(paymentBase.total, bootstrap.currency)} → 實收 ${formatMoney(0, bootstrap.currency)}`}
+          title="免單備註"
+          widthClassName="max-w-md"
+          zIndexClassName="z-[70]"
+        >
+          <div>
+            <div className="text-xs font-semibold text-slate-500">免單備註</div>
+            {localSettings.compNotePresets.length === 0 ? (
+              <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                尚未設定免單備註（可到 設置 → 備註 → 免單備註 新增）。
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {localSettings.compNotePresets.map((preset) => (
+                  <button
+                    key={preset}
+                    className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                      compNote === preset
+                        ? "bg-slate-900 text-white"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                    onClick={() => setCompNote(preset)}
+                    type="button"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <input
+            autoFocus
+            className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+            onChange={(event) => setCompNote(event.target.value)}
+            placeholder="可自由輸入免單原因，例如：客人投訴補償"
+            value={compNote}
+          />
         </ResponsiveModal>
       ) : null}
 
