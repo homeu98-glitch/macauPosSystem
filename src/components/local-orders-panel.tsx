@@ -138,12 +138,19 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const activeTabLabel = STATUS_TABS.find((t) => t.key === statusTab)?.label ?? "全部";
+
   const filteredOrders = useMemo(() => {
     return orders
       .filter((order) => orderMatchesLocalDateFilter(order, dateFilter))
       .filter((order) => matchesLocalOrderPanelTab(order, statusTab))
       .sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
   }, [dateFilter, orders, statusTab]);
+  // 與線上訂單頁「stats.pending」對齊：當前 tab + dateFilter 範圍內，狀態仲係 draft（未送廚房）嘅訂單。
+  const draftCount = useMemo(
+    () => filteredOrders.filter((order) => order.status === "draft").length,
+    [filteredOrders],
+  );
 
   const viewingOrder = viewingOrderId ? orders.find((row) => row.id === viewingOrderId) ?? null : null;
   const reopenTarget = reopenTargetOrderId ? orders.find((row) => row.id === reopenTargetOrderId) ?? null : null;
@@ -232,9 +239,13 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
+            {/* 與左卡「線上訂單」header 同格式：dateFilter · tab · 共 X 張 · 新單 X 張。 */}
+            <div className="mt-1 text-xs text-slate-500 sm:text-sm">
+              {dateFilterLabel(dateFilter)} · {activeTabLabel} · 共 {filteredOrders.length} 張 · 新單 {draftCount} 張
+            </div>
           </div>
           {/*
             規格 6：「自動接自助單」開關直接取代原「刪除全部訂單」掣位。
@@ -244,11 +255,11 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
           */}
           <SelfOrderAutoAcceptToggle />
         </div>
-        <div className="mt-2 flex flex-wrap gap-1">
+        <div className="mt-2 flex flex-wrap gap-2">
           {STATUS_TABS.map((tab) => (
             <button
               key={tab.key}
-              className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
                 tab.key === statusTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
               }`}
               onClick={() => setStatusTab(tab.key)}
@@ -257,9 +268,6 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
               {tab.label}
             </button>
           ))}
-        </div>
-        <div className="mt-2 text-xs text-slate-500">
-          {dateFilterLabel(dateFilter)} · 共 {filteredOrders.length} 張
         </div>
       </div>
 
