@@ -274,55 +274,13 @@ export function DeviceSettings() {
     }
   }
 
-  useEffect(() => {
-    async function loadOnlineOrderSettings() {
-      try {
-        // 帶 storeId：舊 code 冇帶 → server 讀「全店最新一條（任何店）」，A 店會讀到 B 店設定。
-        const storeId = loadAuthSession()?.merchantId;
-        const url = storeId
-          ? `/api/online-order-settings?storeId=${encodeURIComponent(storeId)}`
-          : "/api/online-order-settings";
-        const response = await fetch(url);
-        const payload = (await response.json()) as { autoAccept?: boolean };
-        setLocalSettings((current) => {
-          // 本地絕對優先：localStorage autoAccept 係權威真源，server 值只用於
-          // 「本地從未改過」時嘅初始化補漏（首次安裝 / 清除 cache 後）。
-          //
-          // 舊邏輯 `localAutoAccept || serverAutoAccept` 有 bug：
-          // 用戶關閉 autoAccept（本地 false）→ POST 失敗或 server 延遲 →
-          // server 仍為舊值 true → OR 邏輯把 false || true = true →
-          // autoAccept 被靜默重置為 true，用戶以為已關但系統仍自動接單。
-          //
-          // 修復：本地有明確值就唔被 server 覆蓋。只喺本地 autoAccept
-          // 與 default（false）相同且 server 有值時先採納 server。
-          const localAutoAccept = current.onlineOrderSettings.autoAccept;
-          const serverAutoAccept = payload.autoAccept;
-          // 本地已 true → 不降級（唔信任 server 覆蓋）
-          // 本地 false → 只信任 server 如果 server 也 false（即 server 確認已關）
-          //   如果 server 返回 true 但本地 false → 用戶剛關閉但 POST 未生效 → 尊重本地 false
-          if (localAutoAccept) {
-            // 本地 true，唔降級
-            if (localAutoAccept === serverAutoAccept) return current;
-            return current;
-          }
-          // 本地 false：只有 server 也 false 時先確認一致；server true 唔覆蓋本地 false
-          if (serverAutoAccept === false || serverAutoAccept === undefined) {
-            // server 確認已關或無值 → 維持本地 false，唔需更新
-            return current;
-          }
-          // server 返回 true 但本地 false：
-          // 呢個只喺「用戶從未喺本機設過 autoAccept」嘅場景先合理（首次安裝）。
-          // 如果用戶剛關閉，本地 false 已經寫入 localStorage，唔應該被 server true 覆蓋。
-          // 安全做法：唔覆蓋本地 false。如果真係首次安裝，default 就係 false，無需改。
-          return current;
-        });
-      } catch {
-        // 保留本機設定
-      }
-    }
-
-    void loadOnlineOrderSettings();
-  }, []);
+  // ⚠️ 2026-08-31 移除（docs/92 §1.2）：原本呢度有一段 mount GET `/api/online-order-settings`
+  // 去「同步」自動接單設定，但**每個分支都 `return current`** —— server 返嚟嘅值從來冇被採用過，
+  // 係死 code。更慘嘅係佢畀咗人錯覺「有做同步」，結果 Ledger 改咗 POS 完全唔會顯示。
+  //
+  // 而家統一由 `useOnlineOrderSettings()`（src/lib/pos/use-online-order-settings.ts）負責：
+  // server 係真源、全店共用、Realtime 即時推送。呢度唔好再自己讀，
+  // 否則又會出現兩個真源互相打架。
 
   useEffect(() => {
     async function loadRemoteConfig() {

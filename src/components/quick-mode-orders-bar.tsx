@@ -1,7 +1,9 @@
 "use client";
 
+import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
+import { useSelfOrderAutoAccept } from "@/components/self-order-auto-accept-toggle";
 import { PosOrder } from "@/lib/types";
 
 type QuickModeOrdersBarProps = {
@@ -19,6 +21,34 @@ type QuickModeOrdersBarProps = {
   /** 自助單獨立結帳入口（kiosk / scan）：開啟付款 modal。 */
   onCheckout?: (orderId: string) => void;
 };
+
+/**
+ * 快餐點餐介面 · 線下訂單嘅「自動接單」掣。
+ *
+ * 真源同訂單頁嗰粒一樣：DB `pos_kiosk_settings.selfOrderAutoAccept`（per-store 全店共用），
+ * **唔係** localStorage —— 自助點餐機同收銀台係兩部機，必須有共同真源（docs/87 §4.3）。
+ *
+ * 2026-09-01 改：用 `variant="contained" size="md"`（同線上訂單嗰粒完全對稱顯眼），
+ * 之後 plain sm 留俾其他 call site（如文件入面線下嘅 contained md = 顯眼）。
+ */
+function QuickSelfOrderAutoAcceptPill() {
+  const { enabled, loading, saving, error, storeId, setEnabled } = useSelfOrderAutoAccept();
+
+  if (!storeId) return null; // 冇登入記錄 → 唔顯示，避免商家以為設定咗
+
+  return (
+    <AutoAcceptPill
+      busy={loading || saving}
+      busyHint={loading ? "（讀取中…）" : saving ? "（儲存中…）" : undefined}
+      enabled={enabled}
+      error={error}
+      label="自動接單"
+      onChange={setEnabled}
+      size="md"
+      variant="contained"
+    />
+  );
+}
 
 export function QuickModeOrdersBar({
   currency,
@@ -40,18 +70,13 @@ export function QuickModeOrdersBar({
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線上訂單</div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-medium text-slate-500">自動接單</span>
-              <button
-                className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
-                  autoAcceptOnline ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
-                }`}
-                onClick={() => onAutoAcceptOnlineChange(!autoAcceptOnline)}
-                type="button"
-              >
-                {autoAcceptOnline ? "開" : "關"}
-              </button>
-            </div>
+            <AutoAcceptPill
+              enabled={autoAcceptOnline}
+              label="自動接單"
+              onChange={onAutoAcceptOnlineChange}
+              size="md"
+              variant="contained"
+            />
           </div>
           <QuickOnlineOrdersPanel
             autoAccept={autoAcceptOnline}
@@ -63,8 +88,9 @@ export function QuickModeOrdersBar({
           />
         </section>
         <section className="min-w-0 px-3 py-2.5">
-          <div className="mb-2">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線下訂單</div>
+            <QuickSelfOrderAutoAcceptPill />
           </div>
           <QuickLocalOrdersStrip
             completeLabel={completeLabel}

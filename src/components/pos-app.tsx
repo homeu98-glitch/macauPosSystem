@@ -69,6 +69,7 @@ import { executeLedgerMemberCheckout, LedgerMemberCheckoutError } from "@/lib/le
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { lookupCustomerWallet } from "@/lib/ledger/members";
+import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
 import {
   avosToMop,
   grantTypeLabel,
@@ -882,7 +883,13 @@ export function PosApp() {
     [bootstrap, localSettings],
   );
   const paymentMethods = localSettings.paymentMethods;
-  const autoAcceptOnlineOrders = localSettings.onlineOrderSettings.autoAccept;
+  // 自動接單：**server 係真源、全店共用**，localStorage 只係離線快取（docs/92）。
+  // 唔好再讀 `localSettings.onlineOrderSettings.autoAccept` —— 嗰個已經降級做快取，
+  // 而且冇渠道知 Ledger / 其他收銀機改咗。
+  const {
+    autoAccept: autoAcceptOnlineOrders,
+    setAutoAccept: setAutoAcceptOnlineOrders,
+  } = useOnlineOrderSettings(kioskStoreId, !offlineMode);
 
   useEffect(() => {
     function onLocalSettingsChanged(event: Event) {
@@ -3936,33 +3943,7 @@ export function PosApp() {
             completeLabel={quickCompleteLabel}
             completionLabel={quickCompletionLabel}
             currency={bootstrap.currency}
-            onAutoAcceptOnlineChange={(next) => {
-              const nextSettings = {
-                ...localSettings,
-                onlineOrderSettings: {
-                  ...localSettings.onlineOrderSettings,
-                  autoAccept: next,
-                },
-              };
-              setLocalSettings(nextSettings);
-              savePosLocalSettings(nextSettings);
-              // 同步到 server。本地 localStorage 係權威真源。
-              // POST 失敗唔會覆蓋本地（device-settings mount fetch 已修為 local-only）。
-              void fetch("/api/online-order-settings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，
-                // 多間店共用同一行互相覆蓋（見 /api/online-order-settings route 註釋）。
-                body: JSON.stringify({
-                  ...nextSettings.onlineOrderSettings,
-                  storeId: loadAuthSession()?.merchantId ?? null,
-                }),
-              }).catch(() => {
-                if (process.env.NODE_ENV !== "production") {
-                  console.warn("[pos-app] autoAccept POST failed — local value is authoritative");
-                }
-              });
-            }}
+            onAutoAcceptOnlineChange={(next) => void setAutoAcceptOnlineOrders(next)}
             onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
             onMarkReady={(orderId) => updateQuickFulfillment(orderId)}
             onOnlineToast={(payload) =>

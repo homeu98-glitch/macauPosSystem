@@ -70,6 +70,9 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 ## 開發環境 / 偏好
 
 - sandbox 自帶 `node_modules`，可直接 `npx tsc --noEmit`（`npm install` 可能 EPERM）。
+- **🚨 git 操作一律 `run_in_background`**：呢個 sandbox 會 SIGTERM 打死長時間嘅 foreground git（`git stash` / `git push` / `git clone` / `git gc`）。2026-08-31 就係咁搞到 `.git/refs/` + `.pack` 被刪、repo 變 `not a git repository`。想對比 lint baseline 唔好用 `git stash`。
+  - Git 損毀急救（已實證可行）：① 先 `cp` 改動檔去 `/tmp` ② `git ls-remote origin` 確認 remote ③ 背景 `git clone --no-checkout <url> <tmp>`（網絡可能 `curl 56`，加 `-c http.lowSpeedLimit=0 -c http.lowSpeedTime=0 -c http.postBuffer=524288000` + 重試）④ 換 `.git` ⑤ `git reset`（**mixed，唔好 `--hard`**，因為 `--no-checkout` clone 冇 index）⑥ `git status` 核對。
+  - sandbox 入面 `git status` / tracking ref 可能係 stale，push 前要用 `git ls-remote` 對。
 - `tsc --noEmit` 唯一已知誤報：`src/app/layout.tsx(38,50) LayoutProps`（standalone tsc 見唔到 `.next/types`，唔影響 Vercel build）。真正 `next build` 建議 dev box 跑。
 - 語言：繁體中文（廣東話風味）。工作流：先討論定方向 → 寫正式文檔 → 上 GitHub；重要決定要存檔。
 - 偏好「不動現有」增量擴展。排查時**要先徹底查根因再動手**，唔接受憑猜測俾修法。

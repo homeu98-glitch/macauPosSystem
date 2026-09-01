@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
@@ -42,7 +43,8 @@ import {
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
-import { loadPosLocalSettings, loadPrintJobs, savePosLocalSettings } from "@/lib/storage";
+import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
+import { loadPosLocalSettings, loadPrintJobs } from "@/lib/storage";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
 import { formatMoney } from "@/lib/format";
 
@@ -64,7 +66,9 @@ export function OnlineOrders({
 }) {
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
-  const autoAccept = localSettings.onlineOrderSettings.autoAccept;
+  // 自動接單：**server 係真源、全店共用**，localStorage 只係離線快取（docs/92）。
+  // 唔好再讀 `localSettings.onlineOrderSettings.autoAccept` —— 嗰個已經降級做快取。
+  const { autoAccept, setAutoAccept } = useOnlineOrderSettings(merchantId, Boolean(merchantId));
 
   const [activeTab, setActiveTab] = useState<LedgerOrderTab>("all");
   const [internalDateFilter, setInternalDateFilter] = useState<LedgerOrderDateFilter>("today");
@@ -704,43 +708,11 @@ export function OnlineOrders({
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5">
-              <span className="text-xs font-semibold text-slate-600">自動接單</span>
-              <button
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  autoAccept ? "bg-emerald-600 text-white" : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
-                }`}
-                onClick={() => {
-                  const nextSettings = {
-                    ...localSettings,
-                    onlineOrderSettings: { ...localSettings.onlineOrderSettings, autoAccept: !autoAccept },
-                  };
-                  setLocalSettings(nextSettings);
-                  savePosLocalSettings(nextSettings);
-                  // 同步到 server。本地 localStorage 係權威真源；
-                  // POST 失唔會覆蓋本地（device-settings mount fetch 已修為 local-only）。
-                  void fetch("/api/online-order-settings", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，
-                    // 多間店共用同一行互相覆蓋（見 /api/online-order-settings route 註釋）。
-                    body: JSON.stringify({
-                      ...nextSettings.onlineOrderSettings,
-                      storeId: getLedgerMerchantId(),
-                    }),
-                  }).catch(() => {
-                    // POST 失敗：本地已生效，下次 POST 會由 device-settings sync 重試。
-                    // 唔 toast 打擾用戶，但 console 記錄。
-                    if (process.env.NODE_ENV !== "production") {
-                      console.warn("[online-orders] autoAccept POST failed — local value is authoritative");
-                    }
-                  });
-                }}
-                type="button"
-              >
-                {autoAccept ? "開" : "關"}
-              </button>
-            </div>
+            <AutoAcceptPill
+              enabled={autoAccept}
+              onChange={(next) => void setAutoAccept(next)}
+              variant="contained"
+            />
             <button
               className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               disabled={refreshing || loading}
