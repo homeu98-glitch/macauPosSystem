@@ -99,12 +99,6 @@ function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-function ticketTypeLabel(ticketType: PrintJob["ticketType"]) {
-  if (ticketType === "addon") return "加單";
-  if (ticketType === "void") return "VOID / 退菜";
-  return "正常下單";
-}
-
 function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
   // 單品折扣摺入 subtotal：每項用折後單價計小計（docs/折扣需求 #3）。
   const subtotal = items.reduce((sum, item) => {
@@ -1174,31 +1168,6 @@ export function PosApp() {
     }
     return map;
   })();
-  const timelineOrderId = activeOrder?.id ?? currentSettlementOrder?.id ?? null;
-  const orderTimeline = useMemo(() => {
-    if (!timelineOrderId) return [];
-
-    return queue
-      .filter((event) => {
-        if (event.entityId === timelineOrderId) return true;
-        if (typeof event.payload === "object" && event.payload !== null && "orderId" in event.payload) {
-          return (event.payload as { orderId?: string }).orderId === timelineOrderId;
-        }
-        return false;
-      })
-      .slice()
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  }, [queue, timelineOrderId]);
-  const previewPrintJob = useMemo(() => {
-    if (!timelineOrderId) return null;
-    return (
-      printJobs
-        .filter((job) => job.orderId === timelineOrderId)
-        .slice()
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null
-    );
-  }, [printJobs, timelineOrderId]);
-
   function persistOrders(nextOrders: PosOrder[]) {
     setOrders(nextOrders);
     saveOrders(nextOrders);
@@ -1982,66 +1951,6 @@ export function PosApp() {
     persistOrders(orders.filter((o) => o.id !== order.id));
     backToTables();
     setToast({ tone: "success", message: `${order.tableName ?? tableId} 已退桌，枱位已釋放。` });
-  }
-
-  function describeTimelineEvent(event: QueueEvent) {
-    if (event.type === "ORDER_CREATED") {
-      return { title: "已下單", detail: "已送出本次點餐並打印廚房單" };
-    }
-    if (event.type === "ORDER_UPDATED") {
-      const payload = event.payload as {
-        addedItems?: OrderItem[];
-        action?: "completed" | "cancelled" | "refunded";
-        reason?: string;
-        amount?: number;
-      };
-      if (payload.action === "completed") {
-        return { title: "已完成", detail: "訂單已完成並離開待處理區" };
-      }
-      if (payload.action === "cancelled") {
-        return { title: "已取消結帳", detail: payload.reason ? `原因：${payload.reason}` : "已取消本單" };
-      }
-      if (payload.action === "refunded") {
-        return {
-          title: "已退款",
-          detail: `${payload.amount ? `金額 ${formatMoney(payload.amount, bootstrap?.currency ?? "MOP")} · ` : ""}${payload.reason ? `原因：${payload.reason}` : "整單退款"}`,
-        };
-      }
-      const addedItems = payload.addedItems ?? [];
-      const count = addedItems.reduce((sum, item) => sum + item.quantity, 0);
-      return { title: "已加單", detail: `新增 ${count} 份菜品並打印加單單據` };
-    }
-    if (event.type === "ORDER_ITEM_VOIDED") {
-      const payload = event.payload as {
-        itemName?: string;
-        voidQuantity?: number;
-        reason?: string;
-      };
-      return {
-        title: "VOID / 退菜",
-        detail: `${payload.itemName ?? "菜品"} ×${payload.voidQuantity ?? 0} · ${payload.reason ?? "未填寫原因"}`,
-      };
-    }
-    if (event.type === "ORDER_SETTLED") {
-      const payload = event.payload as { paymentMethod?: string };
-      return { title: "已結帳", detail: `支付方式：${payload.paymentMethod ?? "--"}` };
-    }
-    if (event.type === "PRINT_JOB_CREATED") {
-      const payload = event.payload as {
-        printerName?: string;
-        printerGroup?: string;
-        ticketType?: PrintJob["ticketType"];
-        items?: Array<{ name?: string; specs?: string[] }>;
-      };
-      const firstItem = payload.items?.[0];
-      const specSuffix =
-        firstItem?.specs && firstItem.specs.length > 0 ? ` · ${firstItem.specs.join(" / ")}` : "";
-      return {
-        title: "已打印",
-        detail: `${ticketTypeLabel(payload.ticketType ?? "normal")} · ${payload.printerName ?? "--"} · ${payload.printerGroup ?? "--"}${firstItem ? ` · ${firstItem.name ?? ""}${specSuffix}` : ""}`,
-      };
-    }
-    return { title: event.type, detail: "已記錄" };
   }
 
   async function syncNow(nextQueue: QueueEvent[], options?: { silent?: boolean }) {
@@ -3272,8 +3181,11 @@ export function PosApp() {
                   </div>
                 )}
               </div>
-              <div className="mt-3 flex items-center justify-between gap-2">
-                {!isQuickMode ? (
+              {/* 快餐模式：頂部只保留「店名 / 副標題 / 快餐模式」三樣，
+                  唔再顯示「可直接點餐並結帳」＋「狀態：XX」呢行（用戶要求精簡）。
+                  堂食模式保留呢行：「返回桌台」掣 + 桌台狀態。 */}
+              {!isQuickMode ? (
+                <div className="mt-3 flex items-center justify-between gap-2">
                   <button
                     className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                     onClick={backToTables}
@@ -3281,15 +3193,11 @@ export function PosApp() {
                   >
                     返回桌台
                   </button>
-                ) : (
-                  <div className="text-xs font-semibold text-slate-600">
-                    可直接點餐並結帳
+                  <div className="text-xs text-slate-500">
+                    狀態：{selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
                   </div>
-                )}
-                <div className="text-xs text-slate-500">
-                  狀態：{selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
                 </div>
-              </div>
+              ) : null}
             </div>
 
             {activeOrder?.status === "reopened" ? (
@@ -3807,104 +3715,6 @@ export function PosApp() {
                 >
                   去結帳
                 </button>
-              </div>
-
-              <div className="mt-5 grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">待同步</span>
-                  <span className="font-semibold text-slate-900">{pendingQueue.length}</span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">打印任務</span>
-                  <span className="font-semibold text-slate-900">{printJobs.length}</span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">打印設備</span>
-                  <span className="font-semibold text-slate-900">
-                    {deviceConfig.printers.filter((printer) => printer.enabled).length}
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <div className="mb-2 text-xs font-semibold text-slate-500">訂單時間線</div>
-                <div className="grid gap-2">
-                  {orderTimeline.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      目前還沒有事件記錄
-                    </div>
-                  ) : (
-                    orderTimeline.slice(0, 8).map((event) => {
-                      const info = describeTimelineEvent(event);
-                      return (
-                        <div
-                          key={event.id}
-                          className="rounded-2xl border border-slate-100 bg-slate-50 p-3"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm font-semibold text-slate-900">{info.title}</div>
-                            <div className="text-[11px] text-slate-400">
-                              {formatMacauDateTime(event.createdAt).slice(5)}
-                            </div>
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">{info.detail}</div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <div className="mb-2 text-xs font-semibold text-slate-500">廚房單預覽</div>
-                {previewPrintJob ? (
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-3 border-b border-dashed border-slate-200 pb-3">
-                      <div>
-                        <div
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                            previewPrintJob.ticketType === "void"
-                              ? "bg-red-50 text-red-700"
-                              : previewPrintJob.ticketType === "addon"
-                                ? "bg-amber-50 text-amber-700"
-                                : "bg-emerald-50 text-emerald-700"
-                          }`}
-                        >
-                          {ticketTypeLabel(previewPrintJob.ticketType)}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {previewPrintJob.printerName} · {previewPrintJob.printerGroup}
-                        </div>
-                      </div>
-                      <div className="text-right text-xs text-slate-500">
-                        <div>{previewPrintJob.orderNo ?? "--"}</div>
-                        <div className="mt-1">{previewPrintJob.tableName ?? "--"}</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 grid gap-3">
-                      {(previewPrintJob.items ?? []).map((item, index) => (
-                        <div key={`${item.name}-${index}`} className="border-b border-dashed border-slate-100 pb-3 last:border-b-0 last:pb-0">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="text-sm font-semibold text-slate-900">{item.name}</div>
-                            <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
-                          </div>
-                          {item.specs?.length ? (
-                            <div className="mt-1 text-xs text-slate-500">{item.specs.join(" / ")}</div>
-                          ) : null}
-                          {/* docs/84 §7：break-words 預防窄容器下長備註向右撐破版面 */}
-                          {item.note ? (
-                            <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">備註：{item.note}</div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    這張桌子還沒有打印記錄
-                  </div>
-                )}
               </div>
 
               {offlineMode ? (
