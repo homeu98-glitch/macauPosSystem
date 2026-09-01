@@ -16,11 +16,11 @@ import {
   orderMatchesDateFilter,
 } from "@/lib/ledger/order-date-filter";
 import {
+  compareOrderByLocalNo,
   isLocalOrTransferredDineIn,
   isQuickCounterOrder,
   LocalOrderPanelTab,
   matchesLocalOrderPanelTab,
-  orderTimestamp,
   getOrderStatusBadge,
 } from "@/lib/pos-order-filters";
 import {
@@ -144,7 +144,8 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
     return orders
       .filter((order) => orderMatchesLocalDateFilter(order, dateFilter))
       .filter((order) => matchesLocalOrderPanelTab(order, statusTab))
-      .sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
+      // 單號由小到大（同收銀條 strip 一致）；唔用 updatedAt，否則改狀態單會移位
+      .sort(compareOrderByLocalNo);
   }, [dateFilter, orders, statusTab]);
   // 與線上訂單頁「stats.pending」對齊：當前 tab + dateFilter 範圍內，狀態仲係 draft（未送廚房）嘅訂單。
   const draftCount = useMemo(

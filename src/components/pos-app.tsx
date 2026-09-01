@@ -84,7 +84,13 @@ import {
   quickCompletionLabel,
 } from "@/lib/quick-order-fulfillment";
 import { useNetworkOnline } from "@/lib/use-network-online";
-import { filterQuickActionBarOrders, isQuickCounterOrder, localOrderStatusLabel, mergeOrderLists } from "@/lib/pos-order-filters";
+import {
+  compareOrderByLocalNo,
+  filterQuickActionBarOrders,
+  isQuickCounterOrder,
+  localOrderStatusLabel,
+  mergeOrderLists,
+} from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
@@ -959,7 +965,12 @@ export function PosApp() {
   // 桌台總覽（dine-in）模式：kiosk / 掃碼落嘅自取、外賣單（table_id=counter）唔喺枱 grid 入面，
   // 必須有專屬面板先會見到，否則收銀喺預設 dine-in 模式永遠睇唔到呢啲單（之前只喺 quick mode bar 出）。
   const counterKioskOrders = useMemo(
-    () => openOrders.filter((order) => order.tableId === "counter" && !order.onlineOrderId),
+    // 單號由小到大（compareOrderByLocalNo）：openOrders 本身係 updatedAt 新→舊，
+    // 一改狀態張單就移位；呢個面板有「確認出單 / 拒絕」掣，移位會令收銀撳錯單。
+    () =>
+      openOrders
+        .filter((order) => order.tableId === "counter" && !order.onlineOrderId)
+        .sort(compareOrderByLocalNo),
     [openOrders],
   );
   const quickPreparingOrders = useMemo(

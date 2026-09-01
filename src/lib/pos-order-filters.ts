@@ -26,6 +26,55 @@ export function orderTimestamp(order: PosOrder): number {
 }
 
 /**
+ * 由單號抽出排序 key：`(prefix, numeric)`。
+ *
+ * localOrderNo 格式帶非數字 prefix（堂食01 / 外賣01 / 自取10 / 取餐09），
+ * 所以要拆開做 numeric compare，唔可以純 string compare（否則 "10" < "9"）。
+ * prefix 只認「純非數字」——fallback 單號（例如 ledger bridge 嘅 `自取-a1b2c3`）
+ * 唔認，當「冇號碼」處理，避免抽錯尾數做號碼。
+ */
+function localOrderNoSortKey(order: PosOrder): { prefix: string; num: number } {
+  const raw = (order.localOrderNo ?? "").trim();
+  const matched = raw.match(/^(\D*?)(\d+)$/);
+  if (!matched) return { prefix: raw, num: Number.NaN };
+  return { prefix: matched[1], num: Number.parseInt(matched[2], 10) };
+}
+
+/**
+ * 訂單顯示排序：**單號由小到大（主）、createdAt 由舊到新（輔）**。
+ *
+ * ⚠️ 唔可以用 `orderTimestamp`（即 updatedAt）排：每次改狀態（出餐 / 可取餐 / 結帳）
+ * 都會 refresh `updatedAt`，張單即刻彈去最前 → 收銀撳完掣單序就亂晒。
+ * 單號喺落單嗰刻 stamped，之後唔再變 → 狀態點改都唔會移位。
+ *
+ * 跨 prefix 號碼會撞：序號係 per `(store_id, kind, biz_date)` 各自遞增
+ * （見 supabase/migrations/0012），所以「自取01」同「外賣01」可以同一日並存。
+ * 撞號碼時用 `createdAt` 分先後（跨 prefix 等於按下單時間排）。
+ *
+ * 全部 key 都撞晒先落到 prefix / id —— 只係為咗 deterministic，正常唔會用到。
+ */
+export function compareOrderByLocalNo(a: PosOrder, b: PosOrder): number {
+  const keyA = localOrderNoSortKey(a);
+  const keyB = localOrderNoSortKey(b);
+  const hasNumA = !Number.isNaN(keyA.num);
+  const hasNumB = !Number.isNaN(keyB.num);
+
+  // 有號碼嘅排先過冇號碼嘅（冇號碼多數係舊單 / fallback，靠 createdAt 排尾）
+  if (hasNumA !== hasNumB) return hasNumA ? -1 : 1;
+  if (hasNumA && hasNumB && keyA.num !== keyB.num) return keyA.num - keyB.num;
+
+  // 撞號碼（或兩邊都冇號碼）→ 用落單時間分先後
+  const createdA = Date.parse(a.createdAt || "") || 0;
+  const createdB = Date.parse(b.createdAt || "") || 0;
+  if (createdA !== createdB) return createdA - createdB;
+
+  // 再撞 → prefix 分組，最後用 id 保證全序（sort 先至穩定）
+  const prefixCmp = keyA.prefix.localeCompare(keyB.prefix, "zh-Hant-HK");
+  if (prefixCmp !== 0) return prefixCmp;
+  return String(a.id).localeCompare(String(b.id));
+}
+
+/**
  * 合併多份訂單列表，同 id 保留 updatedAt 較新者（防止雲端拉取覆蓋本機剛寫入的單）。
  *
  * B4（docs/56）：`localOrderNo` 係單號嘅本地真源（下單嗰陣由 server 序號或本地每日序號 stamped）。
@@ -125,7 +174,9 @@ export function isActionableQuickOrder(order: PosOrder): boolean {
 }
 
 export function filterQuickActionBarOrders(orders: PosOrder[]): PosOrder[] {
-  return orders.filter(isActionableQuickOrder).sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
+  // 單號由小到大（compareOrderByLocalNo），唔係 updatedAt 新→舊：
+  // 否則一改狀態（出餐 / 可取餐）張單就彈去最前，收銀會撳錯單。
+  return orders.filter(isActionableQuickOrder).sort(compareOrderByLocalNo);
 }
 
 export function localOrderStatusLabel(order: PosOrder): string {

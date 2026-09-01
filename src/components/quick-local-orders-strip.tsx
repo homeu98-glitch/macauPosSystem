@@ -2,7 +2,7 @@
 
 import { PosOrder } from "@/lib/types";
 import { formatMoney, formatMacauTime } from "@/lib/format";
-import { isQuickCounterOrder } from "@/lib/pos-order-filters";
+import { compareOrderByLocalNo, isQuickCounterOrder } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
@@ -221,7 +221,16 @@ export function QuickLocalOrdersStrip({
   onMarkCompleted,
   onCheckout,
 }: QuickLocalOrdersStripProps) {
-  const hasOrders = preparingOrders.length > 0 || waitingOrders.length > 0;
+  // 單一列、全部按單號由小到大：**唔分「製作中 / 待取餐」兩段**。
+  // 分段的話，張單一撳「可取餐」就由左面彈去右面一段（即係「按狀態排」——
+  // 狀態一改、位置就變，正是用家 2026-09-01 反映嘅問題）。
+  // 每張卡嘅 mode（藥丸配色 + 掣）改由單自己嘅狀態決定，同分段時一致。
+  const cards = [
+    ...preparingOrders.map((order) => ({ order, mode: "preparing" as const })),
+    ...waitingOrders.map((order) => ({ order, mode: "waiting" as const })),
+  ].sort((a, b) => compareOrderByLocalNo(a.order, b.order));
+
+  const hasOrders = cards.length > 0;
 
   if (!hasOrders) {
     return (
@@ -233,27 +242,13 @@ export function QuickLocalOrdersStrip({
 
   return (
     <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:thin]">
-      {preparingOrders.map((order) => (
+      {cards.map(({ order, mode }) => (
         <OrderCard
           key={order.id}
           completeLabel={completeLabel}
           completionLabel={completionLabel}
           currency={currency}
-          mode="preparing"
-          onCheckout={onCheckout}
-          onMarkCompleted={onMarkCompleted}
-          onMarkReady={onMarkReady}
-          onViewOrder={onViewOrder}
-          order={order}
-        />
-      ))}
-      {waitingOrders.map((order) => (
-        <OrderCard
-          key={order.id}
-          completeLabel={completeLabel}
-          completionLabel={completionLabel}
-          currency={currency}
-          mode="waiting"
+          mode={mode}
           onCheckout={onCheckout}
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
