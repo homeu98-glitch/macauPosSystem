@@ -35,6 +35,8 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "change_amount", label: "找零" },
   { id: "payment_method", label: "付款方式" },
   { id: "order_note", label: "全單備註" },
+  /** 收據二維碼：網址喺「二維碼網址」輸入框設定；空白 = 唔印（連區塊都唔會出現）。 */
+  { id: "qr_code", label: "二維碼" },
   { id: "footer", label: "頁尾文案" },
 ];
 export const LABEL_SECTION_META: { id: LabelSectionId; label: string }[] = [
@@ -100,6 +102,8 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   change_amount: block(false, "s", false, "right"),
   payment_method: block(true, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
+  // 二維碼：只有 align 有意義（size / bold 對點陣圖無效）。網址空白就唔會出現。
+  qr_code: block(true, "s", false, "center"),
   footer: block(true, "s", false, "center"),
 };
 const LABEL_BLOCK_DEFAULTS: Record<LabelSectionId, EscPosBlockStyle> = {
@@ -153,9 +157,12 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
     "change_amount",
     "payment_method",
     "order_note",
+    "qr_code",
     "footer",
   ],
   footerText: "多謝惠顧，歡迎再次光臨",
+  // 二維碼預設留空：商家自己去「打印 → 收據模板」填網址先會印 QR。
+  qrUrl: "",
 };
 
 /**
@@ -176,6 +183,7 @@ export const DEFAULT_KIOSK_TEMPLATE: ReceiptTemplate = {
   ) as ReceiptTemplate["blocks"],
   order: [...DEFAULT_RECEIPT_TEMPLATE.order],
   footerText: DEFAULT_RECEIPT_TEMPLATE.footerText,
+  qrUrl: DEFAULT_RECEIPT_TEMPLATE.qrUrl ?? "",
 };
 export const DEFAULT_LABEL_TEMPLATE: LabelTemplate = {
   blocks: { ...LABEL_BLOCK_DEFAULTS },
@@ -204,11 +212,43 @@ export const DEFAULT_KITCHEN_TEMPLATE: KitchenTemplate = {
   footerText: "廚房留底",
 };
 
+/**
+ * 舊模版補新區塊（向前兼容）。
+ *
+ * 商家嘅 `printTemplates` 係存喺 localStorage：`order` 陣列同 `blocks` map 係**當初儲存時**
+ * 嘅快照。之後我哋新增區塊（例如 `qr_code`），舊設定唔會自動多到呢一項 →
+ * 設計介面見唔到、出紙亦唔會印。
+ *
+ * 呢度做「缺乜補乜」：冇 `qr_code` 就插落 `footer` 之前（收據底部、頁尾之上，
+ * 同新模版預設位置一致），並用 `RECEIPT_BLOCK_DEFAULTS` 補返 style，
+ * 唔改動商家任何既有設定。
+ */
+export function ensureReceiptSections(template: ReceiptTemplate): ReceiptTemplate {
+  if (template.order.includes("qr_code") && template.blocks.qr_code) return template;
+  // ⚠️ 唔好用 `order.filter((id) => id !== "qr_code")` 去重：TS 5.5 會由 callback
+  // 推斷出 type predicate，令 `order` 嘅元素類型收窄成 `Exclude<…,"qr_code">`，
+  // 之後再 splice("qr_code") 就 compile 唔到。用顯式型別註釋 + indexOf 去重就冇事。
+  const order: ReceiptSectionId[] = [...template.order];
+  const dup = order.indexOf("qr_code");
+  if (dup >= 0) order.splice(dup, 1);
+  const at = order.indexOf("footer");
+  if (at >= 0) order.splice(at, 0, "qr_code");
+  else order.push("qr_code");
+  return {
+    ...template,
+    order,
+    blocks: { ...template.blocks, qr_code: template.blocks.qr_code ?? RECEIPT_BLOCK_DEFAULTS.qr_code },
+  };
+}
+
 /** 將商家 template 解析成自包含快照（順序 + 開關 + 字型），拼接落 PrintJob.template */
 export function buildSnapshot(kind: PrintTemplateKind, template: ReceiptTemplate | LabelTemplate | KitchenTemplate): EscPosTemplateSnapshot {
+  // 收據（含自助點餐機槽位，兩者都係 kind="receipt"）先補新區塊，
+  // 等舊 localStorage 設定都可以用到後來加嘅 `qr_code`。
+  const source = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
   return {
     kind,
-    blocks: template.order.map((id) => ({ id, ...template.blocks[id as keyof typeof template.blocks] })),
+    blocks: source.order.map((id) => ({ id, ...source.blocks[id as keyof typeof source.blocks] })),
   };
 }
 
@@ -285,7 +325,9 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     total: `總金額: ${formatMoney(clampMoney(order.total), opts.currency)}`,
     cash_tendered: (order.cashTendered ?? 0) > 0 ? `实收: ${formatMoney(order.cashTendered ?? 0, opts.currency)}` : "",
     change_amount: (order.changeAmount ?? 0) > 0 ? `找零: ${formatMoney(order.changeAmount ?? 0, opts.currency)}` : "",
-    payment_method: order.paymentMethod ?? "現金",
+    // 其他金額區塊一律係「標題: 值」（原價合計: / 結帳時間: / 服務員: …），
+    // 得呢一格以前淨印值（「現金」），顧客睇唔出嗰個係乜。補返「支付方式: 」前綴保持一致。
+    payment_method: `支付方式: ${order.paymentMethod ?? "現金"}`,
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
   };

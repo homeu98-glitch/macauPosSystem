@@ -14,7 +14,7 @@ import { EscPosPreview } from "@/components/escpos-preview";
 export function KitchenTicketPreview({ job }: { job: PrintJob }) {
   const lines = useMemo(() => {
     if (job.template) {
-      return renderEscPosLines(job.template, job.content, job.items ?? []);
+      return renderEscPosLines(job.template, job.content, job.items ?? [], { qr: job.qr ?? null });
     }
     // 兼容舊 job：用預設廚房模板 + job 既有欄位
     const content: Record<string, string> = {

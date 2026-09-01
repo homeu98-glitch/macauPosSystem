@@ -1,4 +1,4 @@
-import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout } from "@/lib/types";
+import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout, QrPayload } from "@/lib/types";
 
 /**
  * `PrintItemLine`：每件菜品打印時用嘅扁平資料。
@@ -70,7 +70,26 @@ export function unitBasePrice(it: { price: number; selectedSpecs?: Array<{ price
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }
   | { kind: "divider" }
-  | { kind: "items"; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize: EscPosSize; items: PrintItemLine[]; layout: EscPosItemsLayout };
+  | { kind: "items"; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize: EscPosSize; items: PrintItemLine[]; layout: EscPosItemsLayout }
+  /** 收據二維碼（`qr_code` 區塊）。冇 `job.qr` 時 renderer 唔會產生呢一行。 */
+  | { kind: "qr"; align: EscPosAlign; qr: QrPayload };
+
+/** `renderEscPosLines` 嘅額外輸入。items 以外嘅非文字區塊（而家得二維碼）放呢度。 */
+export interface EscPosRenderExtras {
+  /** 二維碼點陣（由 `encodeQrPayload(template.qrUrl)` 產生）；null = 唔印。 */
+  qr?: QrPayload | null;
+}
+
+/**
+ * 80mm 熱敏紙每行可印嘅字符闊度（font A，203dpi，可印闊約 576 dots ÷ 12 dots/char = 48）。
+ *
+ * 收據 items 行要做「品名靠左 / 數量+價錢靠右」兩欄對齊，熱敏機冇 flex，
+ * 只能靠空格 padding，所以一定要知道紙闊有幾多「格」。
+ *
+ * ⚠️ 呢個常數三個 repo 要一致（`companion-server.mjs` / `EscPosRenderer.kt`），
+ * 否則同一張單喺唔同通道出紙會對唔齊。
+ */
+export const RECEIPT_PAPER_COLUMNS = 48;
 
 // 單據抬頭（label 唔印抬頭，62mm 標籤紙太細）
 const TITLE: Record<string, string> = {
@@ -88,6 +107,7 @@ export function renderEscPosLines(
   snapshot: EscPosTemplateSnapshot,
   content: Record<string, string> | undefined,
   items: PrintItemLine[],
+  extras?: EscPosRenderExtras,
 ): EscPosLine[] {
   const lines: EscPosLine[] = [];
   const title = TITLE[snapshot.kind] ?? "";
@@ -99,11 +119,19 @@ export function renderEscPosLines(
       lines.push({ kind: "divider" });
       lines.push({ kind: "items", size: b.size, bold: b.bold, align: b.align, subSize: b.subSize ?? "s", items, layout: b.layout ?? "card" });
       lines.push({ kind: "divider" });
-    } else {
-      const text = content?.[b.id];
-      if (!text) continue;
-      lines.push({ kind: "text", text, size: b.size, bold: b.bold, align: b.align });
+      continue;
     }
+    // 二維碼：內容唔喺 content（嗰度只放純文字），而係讀 extras.qr。
+    // 網址空白 / 編碼失敗 → qr 係 null → 直接略過，唔會留空框。
+    if (b.id === "qr_code") {
+      const qr = extras?.qr ?? null;
+      if (!qr) continue;
+      lines.push({ kind: "qr", align: b.align, qr });
+      continue;
+    }
+    const text = content?.[b.id];
+    if (!text) continue;
+    lines.push({ kind: "text", text, size: b.size, bold: b.bold, align: b.align });
   }
   return lines;
 }

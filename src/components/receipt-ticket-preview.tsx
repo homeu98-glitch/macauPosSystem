@@ -6,6 +6,7 @@ import { loadBootstrapCache, loadPosLocalSettings } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { buildReceiptContent, buildSnapshot } from "@/lib/escpos-template";
 import { renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { encodeQrPayload } from "@/lib/escpos-qr";
 import { discountedUnitPrice } from "@/lib/pos/discount";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { EscPosPreview } from "@/components/escpos-preview";
@@ -48,7 +49,10 @@ export function ReceiptTicketPreview({ order }: { order: PosOrder }) {
       };
     });
     const content = buildReceiptContent(order, { storeName, storeTel, currency, footerText: template.footerText });
-    return renderEscPosLines(buildSnapshot("receipt", template), content, items);
+    // 二維碼：同真實打印 job 用同一個 encodeQrPayload() → 預覽 == 出紙
+    return renderEscPosLines(buildSnapshot("receipt", template), content, items, {
+      qr: encodeQrPayload(template.qrUrl),
+    });
   }, [order, template, storeName, storeTel, currency]);
 
   return <EscPosPreview lines={lines} paperWidthMm={80} />;

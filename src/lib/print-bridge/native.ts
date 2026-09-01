@@ -77,6 +77,10 @@ export async function dispatchJobToNative(
       // 舊版 APK 認唔到呢兩個欄位會自動忽略，屬向後兼容，唔會 regression。
       template: job.template ?? null,
       content: job.content ?? null,
+      // 收據二維碼（docs/95 §2）：POS 端已 encode 成點陣，APK 淨負責點陣 → ESC/POS 點陣圖。
+      // 冇填網址時兩個欄位都係 undefined → 唔傳（舊版 APK 唔會因為多咗欄位而 parse 失敗）。
+      ...(job.qrUrl ? { qrUrl: job.qrUrl } : {}),
+      ...(job.qr ? { qr: job.qr } : {}),
     },
     printer: {
       id: opts.printer.id,

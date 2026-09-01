@@ -110,6 +110,10 @@ ESC/POS 指令對照（Kotlin 同樣適用）：
 
 來自 `src/lib/types.ts`：
 
+> 🔴 **2026-09-01 更新（docs/95 §1）**：下面嘅 `PrintJob` 合約以前**漏咗 `items[]` 嘅金額欄位**，
+> 搞到 Companion 同 APK 兩個 renderer 由始至終冇讀過 `price` → 收據印唔出價錢。
+> 而家三邊已補齊，**加欄位時必須同步改 `docs/95 §1.1` 嘅排查表**，否則會再踩同一個坑。
+
 ```ts
 export type EscPosItemsLayout = "inline" | "card" | "stacked";  // 菜品明細清單排版（見 docs/67）
 export interface EscPosBlockStyle {
@@ -128,8 +132,38 @@ export interface PrintJob {
   // ...
   template?: EscPosTemplateSnapshot;       // 第 448 行
   content?: Record<string, string>;        // 第 450 行：靜態區塊文字，key = section id，items 除外
+  // ↓ docs/95 新增
+  qrUrl?: string;                          // 收據二維碼原始網址（淨供除錯／續印）
+  qr?: QrPayload;                          // 收據二維碼點陣，POS 端 encode 好；null = 唔印
+}
+/** docs/95 §2.2：收據二維碼點陣。POS 端 encode 一次，三個 repo 共用同一個矩陣。 */
+export interface QrPayload {
+  size: number;   // modules 邊長（未計 quiet zone），v1=21 … v6=41
+  bits: string;   // 逐行 bit 字串，長度 = size × size；'1' = 黑點
 }
 ```
+
+### 3.1 `items[]` 嘅金額欄位（docs/95 §1）—— 以前漏咗，2026-09-01 補
+
+```ts
+export interface PrintItemLine {
+  name: string;
+  quantity: number;
+  specs?: string[];
+  note?: string;
+  // ↓ 以下 5 個以前三個 renderer 全部冇讀 → 收據印唔出價錢
+  price?: number;                 // 折後單價 × 數量
+  discountRate?: number;          // 折扣率百分比（80 = 8 折）
+  originalUnitPrice?: number;     // 折扣前單價
+  discountedUnitPrice?: number;   // 折後單價
+  savingAmount?: number;          // 折讓金額
+}
+```
+
+⚠️ **讀 optional 數字時唔好俾默認值 0**（Kotlin `optDouble(key, 0.0)` / JS `it.price || 0`）：
+會令「冇呢個欄位」同「價錢係 0」撈亂，舊 payload 會印出「$0」。要有就攞、冇就 `null`。
+
+⚠️ **價錢同折扣淨對 `kind === "receipt"` 生效**：廚房單 / 標籤單出紙要 byte-for-byte 維持原樣。
 
 APK 側 decode `payload.job.template` / `payload.job.content` 後，渲染演算法要同
 `renderEscPosLines`（`src/lib/escpos-render.ts`）以及 Companion `renderEscPos` 完全一致，
@@ -148,11 +182,13 @@ APK 側 decode `payload.job.template` / `payload.job.content` 後，渲染演算
 ## 5. 待辦清單（checklist）
 
 - [x] `native.ts` payload 加 `job.template` + `job.content`（本倉庫，見 2.1）— **2026-08-28 已落**，見 `docs/80 §2.3`
-- [ ] Android `EscPosRenderer` 加 template 分支（Android 倉庫，見 2.2）
-      ⚠️ 一併要改 `ESC !` / `GS !` 唔可以同時發（會相乘變 4×），見 `docs/80 §4.2`
-- [ ] APK 定義 `EscPosTemplateSnapshot` / `content` Kotlin data class
+- [x] Android `EscPosRenderer` 加 template 分支（`renderTemplateTicket`，見 2.2）
+      `ESC !` / `GS !` 唔同時發（會相乘變 4×）已處理，見 `docs/80 §4.2`
+- [x] APK 定義 `EscPosTemplateSnapshot` / `content` Kotlin data class（`PrintDtos.kt`）
+- [x] **items 金額欄位 + 二維碼點陣合約**（`docs/95 §1` / §2）—— 2026-09-01 三邊補齊
+      `versionCode 3` / `versionName 1.0.2`，APK 已 rebuild（`print-agent-1.0.2-debug.apk`）
 - [ ] APK 實機驗證矩陣（§4）
-- [ ] **APK 重新 build + 派版**（版本號要同 Companion 0.1.9 一齊記錄到 release note）
+- [ ] **APK 派版裝機**（版本號要同 Companion 一齊記錄到 release note）
 - [ ] 上 GitHub（Android 倉庫 PR）
 
 > 備註：Companion `0.1.8 → 0.1.9` 已經喺 dev box 改完 `companion-server.mjs` 並 bump version，

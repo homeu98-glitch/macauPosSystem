@@ -26,6 +26,7 @@ import {
 } from "@/lib/escpos-template";
 import { PrintItemLine } from "@/lib/escpos-render";
 import { formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { encodeQrPayload } from "@/lib/escpos-qr";
 import { discountedUnitPrice } from "@/lib/pos/discount";
 
 function uid(prefix: string) {
@@ -96,6 +97,9 @@ function buildTemplateReceiptJobs(
     serverName,
   });
   const snapshot = buildSnapshot("receipt", template);
+  // 二維碼：喺 POS 端 encode 一次，三個 repo 共用同一個點陣（設計 == 預覽 == 出紙）。
+  // 網址空白 / 太長編唔到 → 回傳 null → 唔帶 qr 欄位 → renderer 同預覽都自動略過。
+  const qr = encodeQrPayload(template.qrUrl);
 
   return receiptPrinters.map<PrintJob>((printer) => ({
     id: uid("print"),
@@ -109,6 +113,8 @@ function buildTemplateReceiptJobs(
     items,
     content,
     template: snapshot,
+    qrUrl: template.qrUrl?.trim() ? template.qrUrl.trim() : undefined,
+    qr: qr ?? undefined,
     status: "pending",
     createdAt: timestamp,
   }));

@@ -290,6 +290,12 @@ export type ReceiptSectionId =
   | "change_amount"
   | "payment_method"
   | "order_note"
+  /**
+   * 收據二維碼（商家自訂網址 → QR）。同 `items` 一樣係**特殊區塊**：
+   * 內容唔喺 `PrintJob.content`（嗰度只放純文字），而係讀 `PrintJob.qr`。
+   * 網址空白 / 編碼失敗 → 無 `qr` 欄位 → renderer 同預覽都自動略過（唔會印空框）。
+   */
+  | "qr_code"
   | "footer";
 export type LabelSectionId =
   | "header"
@@ -321,6 +327,17 @@ export interface ReceiptTemplate {
   blocks: Record<ReceiptSectionId, EscPosBlockStyle>;
   order: ReceiptSectionId[];
   footerText: string;
+  /**
+   * 收據底部二維碼嘅網址（例如會員連結 / 電子發票 / 網上點餐）。
+   *
+   * 空白 = 唔印二維碼（連 `qr_code` 區塊都唔會出，唔會留空白位）。
+   * 呢個係**模版層級**設定：`receipt` 同 `kiosk` 係兩個獨立槽位，可以各自填唔同網址。
+   *
+   * ⚠️ 三個 repo 都**唔好**自己 encode QR：POS 端統一用 `encodeQrPayload()` 編成點陣
+   * 放落 `PrintJob.qr`，Companion / APK 淨負責「點陣 → ESC/POS 點陣圖」。
+   * 咁先可以保證「設計介面 == 螢幕預覽 == 實際出紙」三者係同一個矩陣。
+   */
+  qrUrl?: string;
 }
 export interface LabelTemplate {
   blocks: Record<LabelSectionId, EscPosBlockStyle>;
@@ -355,6 +372,22 @@ export interface PrintTemplates {
 }
 
 export type PrintTemplateKind = "receipt" | "label" | "kitchen";
+
+/**
+ * 二維碼點陣（三個 repo 共用嘅序列化格式）。
+ *
+ * `bits` 係逐行、由左至右嘅 `'0'` / `'1'` 字串，長度 = `size × size`，`'1'` = 黑點。
+ * 用字串而唔係 `boolean[][]`：JSON 體積細一個數量級，Kotlin / JS 都直接 index 到。
+ *
+ * **唔包 quiet zone**（QR 規範要求四格白邊）—— 由 renderer 出紙時自己補，
+ * 預覽（SVG）亦補同一個 `QR_QUIET_MODULES`，兩邊先會一致。
+ */
+export interface QrPayload {
+  /** 邊長（modules），未計 quiet zone。v1=21 … v6=41。 */
+  size: number;
+  /** 逐行 bit 字串，長度 = size × size；'1' = 黑點。 */
+  bits: string;
+}
 
 // 拼接落每張 PrintJob 嘅自包含、可序列化快照；renderer 印嗰時直接讀佢，唔使回頭查 settings。
 export interface EscPosTemplateSnapshot {
@@ -597,8 +630,21 @@ export interface PrintJob {
   ttl?: number;
   /** 商家 ESC/POS 模板快照（自包含、可序列化）；renderer 強制套用，缺位 fallback 舊格式 */
   template?: EscPosTemplateSnapshot;
-  /** 靜態區塊文字（key = section id），renderer 按 block.style 印；items 區塊除外 */
+  /** 靜態區塊文字（key = section id），renderer 按 block.style 印；items / qr_code 區塊除外 */
   content?: Record<string, string>;
+  /**
+   * 收據二維碼目標網址（由 `ReceiptTemplate.qrUrl` 帶過嚟）。純參考 / 除錯用；
+   * renderer 實際打印係靠下面嘅 `qr` 點陣。空白 → 唔印。
+   */
+  qrUrl?: string;
+  /**
+   * 收據二維碼點陣（POS 端 `encodeQrPayload()` 預先編好）。
+   *
+   * 三個 repo 共用同一個矩陣 → 唔使各自實作 QR encoder，亦保證出紙同預覽 100% 一樣。
+   * renderer 用 ESC/POS 點陣圖指令（`GS v 0`）輸出，相容性高過 `GS ( k` 原生 QR 指令。
+   * 冇呢個欄位（網址空白 / 太長編唔到）→ `qr_code` 區塊直接略過。
+   */
+  qr?: QrPayload;
   /**
    * 呢張單要印幾份。落單端寫死，優先於打印機層級嘅 `DevicePrinterConfig.copies`。
    *

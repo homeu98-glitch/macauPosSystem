@@ -65,6 +65,13 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 - **Native Print Agent（docs/36）**：Android WebView 注入 `window.PosNative.printJob(json)` → Kotlin raw socket `IP:9100` ESC/POS；非 Android fallback HTTP bridge。
 - **🟥 native bridge protocol**：`src/lib/print-bridge/native.ts` `dispatchJobToNative` 只 map `name/quantity/specs/note`，**主動 strip 走 `PrintItemLine` 上任何新加 field**。Companion / Relay 通道係 `JSON.stringify({ job })` 直透傳唔 strip。每加 field 去 `PrintItemLine` 後必須 audit `native.ts`。Forward-compatible 寫法：`...(typeof it.field === "number" ? { field: it.field } : {})`。
 - **ESC/POS 放大真相表（Companion 0.1.15，詳見 docs/81）**：`ESC ! n`(1B21) 只管 ASCII（`0x20` 闢 / `0x10` 高）；`FS ! n`(1C21) 只管 Kanji（`0x04` 闢 / `0x08` 高）；`GS ! n`(1D21) 管 ASCII+Kanji，nibble `(h-1)<<4|(w-1)` → l=`0x11`（**唔係 0x30**）。**待 `npm run dist` 打包 0.1.15 驗收**。
+- **🟥 三倉 renderer 合約（docs/95，2026-09-01）**：「設計介面 == 螢幕預覽 == 實際出紙」有三條同源路徑 —— web `src/lib/escpos-render.ts`、Companion `companion-server.mjs renderEscPos`、APK `EscPosRenderer.kt renderTemplateTicket`。**加 `PrintItemLine` / `PrintJob` 任何欄位，必須同步 `docs/55 §3` 合約 + 三個 renderer**。血案：`price` 喺 web 算好轉發好，但兩個 renderer 冇讀、`PrintDtos.kt` 連欄位都冇宣告 → 收據印唔出價錢、改咗幾次都唔得；而「廚房單正常」只因佢淨用舊欄位（`name/quantity/specs/note`）。
+- **熱敏排版鐵律**：冇 flex → 兩欄靠空格 pad 到 `RECEIPT_PAPER_COLUMNS = 48`（80mm）；**中文字 2 格、ASCII 1 格**（用 `displayWidth()` 唔係 `length`）；太窄退化成兩空格分隔、**唔削名**。
+- **熱敏紙係 1-bit，顏色印唔出** → 底色/強調只能用 **反白 `ESC { n`（1B 7B）**，且「文字前開、文字後閂」**唔包 LF**（否則換行變黑邊 / 狀態殘留）。網頁預覽對應 `print-color-adjust: exact` + 保留顏色。
+- **QR 用 `GS v 0`（1D 76 30）點陣圖**，唔用 `GS ( k` 原生 QR（舊機唔支援）。POS 端 `src/lib/escpos-qr.ts encodeQrPayload()` encode 一次 → `PrintJob.qr { size, bits }` → 三倉共用同一矩陣。印圖前**必須 `resetMagnify()`**。
+- **收據專屬渲染一律用 `isReceipt = template.kind === "receipt"` 包住**（價錢 / 折扣 / QR），廚房單同標籤單出紙 byte-for-byte 維持原樣。
+- **Kotlin 對齊 JS 嘅坑**：`Double.toString()` 出 `"30.0"` vs JS `${n}` 出 `"30"` → 要 `num()`（`%.2f` trim）；optional 數字唔好俾默認值 0（`optDouble(k, 0.0)` 會令「冇欄位」=「價錢 0」→ 印「$0」）。
+- **文字變形根因 = synthetic bold**：`PREVIEW_FONT_STACK` 嘅 CJK fallback（PingFang TC）冇 700/800 字重，瀏覽器水平抹開假造粗體 → `fontSynthesis: "none"` + `letterSpacing: 0` 根治。
 
 ## 原生殼 / PWA
 
@@ -75,6 +82,8 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase 雙寫（Ledger �
 - sandbox 自帶 `node_modules`，可直接 `npx tsc --noEmit`（`npm install` 可能 EPERM）。
 - **🚨 git 操作一律 `run_in_background`**：sandbox 會 SIGTERM 打死長時間 foreground git（2026-08-31 搞到 `.git/refs/` + `.pack` 被刪、repo 變 not a git repository）。想對比 lint baseline 唔好用 `git stash`。sandbox 入面 `git status` / tracking ref 可能 stale，push 前用 `git ls-remote` 對。（急救步驟見 2026-08-31 daily log）
 - `tsc --noEmit` 唯一已知誤報：`src/app/layout.tsx(38,50) LayoutProps`（standalone tsc 見唔到 `.next/types`，唔影響 Vercel build）。
+- **Android build（sandbox）**：冇 `JAVA_HOME`/`java`，要 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`（Studio 內置 JBR）再用 `./gradlew assembleDebug --offline`（gradle cache 喺 `~/.gradle`，SDK 喺 `~/AppData/Local/Android/Sdk`）。約 40s–100s，**要 `run_in_background`**。改 renderer 後要 bump `app/build.gradle.kts` versionCode/versionName。
+- **TS 5.5 type-predicate 陷阱**：`arr.filter((x) => x !== "lit")` 會由 callback 推斷 type predicate，令陣列元素類型收窄成 `Exclude<…,"lit">`，之後 `.splice("lit")` compile 唔到 → 用顯式型別註釋 + `indexOf` 去重。
 - 語言：繁體中文（廣東話風味）。工作流：先討論定方向 → 寫正式文檔 → 上 GitHub；重要決定要存檔。
 - 偏好「不動現有」增量擴展。排查**先徹底查根因再動手**，唔接受憑猜測俾修法。
 - 桌面 app 更新要重 build 並**主動告知新版本號**（區分「source 已修」vs「已打包生效」）。

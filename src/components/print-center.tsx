@@ -32,11 +32,13 @@ import {
   buildLabelContent,
   buildReceiptContent,
   buildSnapshot,
+  ensureReceiptSections,
   KITCHEN_SECTION_META,
   LABEL_SECTION_META,
   RECEIPT_SECTION_META,
 } from "@/lib/escpos-template";
 import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { encodeQrPayload } from "@/lib/escpos-qr";
 import { discountedUnitPrice } from "@/lib/pos/discount";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 
@@ -197,10 +199,17 @@ export function PrintCenter() {
     order: string[];
     footerText: string;
     headerText?: string;
+    /** 收據二維碼網址（收據 / 自助點餐機兩個槽位各自設定）；空白 = 唔印。 */
+    qrUrl?: string;
   };
 
   function readTemplate(kind: TemplateKindState): AnyTemplate {
-    return localSettings.printTemplates[kind] as unknown as AnyTemplate;
+    const raw = localSettings.printTemplates[kind] as unknown as AnyTemplate;
+    // 舊 localStorage 設定（存檔時仲未有 qr_code）→ 喺設計介面即刻補返，
+    // 等「區塊順序」見到「二維碼」、選中時亦唔會因 blocks 缺 key 而炸。
+    return (kind === "receipt" || kind === "kiosk"
+      ? ensureReceiptSections(raw as never)
+      : raw) as unknown as AnyTemplate;
   }
 
   function updateLocalTemplate(nextSettings: typeof localSettings, options?: { recordHistory?: boolean }) {
@@ -285,6 +294,12 @@ export function PrintCenter() {
     applyTemplate(kind, { ...t, footerText: text });
   }
 
+  /** 收據二維碼網址（空白 = 唔印 QR，`qr_code` 區塊會自動消失，唔會留空框）。 */
+  function setQrUrl(kind: TemplateKindState, text: string) {
+    const t = readTemplate(kind);
+    applyTemplate(kind, { ...t, qrUrl: text });
+  }
+
   function setHeader(kind: TemplateKindState, text: string) {
     const t = readTemplate(kind);
     applyTemplate(kind, { ...t, headerText: text });
@@ -316,7 +331,7 @@ export function PrintCenter() {
         specs: (it.selectedSpecs ?? []).map((s) => `${s.groupName}:${s.optionLabel}`),
         note: it.note,
       }));
-      return renderEscPosLines(snapshot, content, items);
+      return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl) });
     }
     const content = buildReceiptContent(sampleOrder, {
       storeName: PREVIEW_STORE_NAME,
@@ -585,6 +600,23 @@ export function PrintCenter() {
                 onChange={(e) => setFooter(kind, e.target.value)}
               />
             </label>
+            {isReceiptLike ? (
+              <label className="grid gap-1 text-xs font-semibold text-slate-600 sm:col-span-2">
+                <span>二維碼網址（留空則不顯示二維碼）</span>
+                <input
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                  inputMode="url"
+                  placeholder="https://example.com"
+                  value={t.qrUrl ?? ""}
+                  onChange={(e) => setQrUrl(kind, e.target.value)}
+                />
+                <span className="text-[11px] font-normal leading-relaxed text-slate-500">
+                  {(t.qrUrl ?? "").trim() && !encodeQrPayload(t.qrUrl)
+                    ? "⚠️ 網址太長，無法生成二維碼（請用短網址）。"
+                    : "網址會喺收據底部印成二維碼；空白就唔會印。收據同自助點餐機係兩個獨立設定。"}
+                </span>
+              </label>
+            ) : null}
           </div>
           <div className="mt-4 text-sm font-semibold text-slate-900">即時預覽（真實熱敏樣式）</div>
           <div className="mt-2">
@@ -798,7 +830,9 @@ export function PrintCenter() {
             <div className="mt-3">
               {activeJob.template ? (
                 <EscPosPreview
-                  lines={renderEscPosLines(activeJob.template, activeJob.content, activeJob.items ?? [])}
+                  lines={renderEscPosLines(activeJob.template, activeJob.content, activeJob.items ?? [], {
+                    qr: activeJob.qr ?? null,
+                  })}
                   paperWidthMm={activeJob.template.kind === "label" ? 62 : 80}
                 />
               ) : (
