@@ -1,0 +1,94 @@
+-- =============================================================================
+-- 0021 · 收窄 pos_print_jobs 嘅 anon 讀取時間窗（14 days → 24 hours）
+--
+-- 狀態：**未跑**。本機冇 DB，要人手去 Supabase Dashboard → SQL Editor 貼。
+-- 相關分析：docs/97-cloud-relay-architecture.md §5.2
+-- =============================================================================
+
+-- ── 背景：點解要收窄 ──────────────────────────────────────────
+-- `0016_security_rls_hardening.sql` 對 `pos_print_jobs` 落咗呢條 anon 策略：
+--
+--   create policy "pos_print_jobs anon read recent" on public.pos_print_jobs
+--     for select to anon
+--     using (coalesce(created_at, now()) >= now() - interval '14 days');
+--
+-- 問題唔係「14 日太長」，而係 **條 policy 冇 filter `store_id`** ——
+-- 即係揸住 anon key（公開，喺 JS bundle 入面）可以讀到**全平台所有店**嘅打印單。
+--
+-- ── ⚠️ 兩個常見誤解（好重要，2026-09-02 查證）────────────────────
+--
+-- 誤解一：「收窄時間窗可以減少 Realtime 被濫用」
+--   ❌ 錯。Supabase Realtime `postgres_changes` **只推即時變更**，唔會回放歷史。
+--      所以時間窗對 Realtime 嘅暴露面**零影響** —— 窗係 14 日定 1 小時，
+--      一個 subscribe 緊嘅 client 收到嘅即時事件完全一樣。
+--      → 真正擋 Realtime 濫用一定要靠 `store_id` 隔離（下面「根治」）。
+--
+-- 誤解二：「收窄到 1 小時好穩陣」
+--   ❌ 錯，而且會出事。web POS（`src/lib/pos/use-pos-realtime.ts:79`）訂閱咗
+--      `pos_print_jobs` 嘅 `event: "*"`（包 UPDATE）。Realtime 對 UPDATE 事件係
+--      **用新 row 去過 RLS SELECT policy**，而 `created_at` 喺 UPDATE 時**唔會變**。
+--      → 一張 09:00 建、中繼機 12:00 先 claim 到嘅單，12:00 個 UPDATE 事件會因為
+--        `created_at` 已經 3 個鐘前而被 1 小時窗擋咗 → web 端收唔到出紙結果。
+--      呢個「延遲認領」正正係 Scheme B 設計上要支援嘅場景（60s 對賬 tick、
+--      attempts<5 自動重排），所以**唔可以**收到咁短。
+--
+-- ── 咁呢個 migration 有咩用？──────────────────────────────────
+-- 時間窗**淨係**影響 PostgREST 直接 SELECT（anon 有 `grant select`）。
+-- 14 日 → 24 小時，即係經 REST 可以摷到嘅歷史由 14 日減到 1 日（減 14 倍）。
+--
+-- 點解係 24 小時而唔係再短：
+--   · 24 小時 >> 任何合理嘅認領延遲（跨夜離線最長都唔會超過一日）
+--   · Realtime 事件全部照收（事件係即時，`created_at` ≈ now）
+--   · 對 web / Hub 兩邊行為零改變
+-- =============================================================================
+
+drop policy if exists "pos_print_jobs anon read recent" on public.pos_print_jobs;
+
+create policy "pos_print_jobs anon read recent" on public.pos_print_jobs
+  for select to anon
+  using (coalesce(created_at, now()) >= now() - interval '24 hours');
+
+-- =============================================================================
+-- 根治方案（**未做，需要 infra 配合**）
+--
+-- 要真正做到按店隔離，一定要喺 JWT 帶 `store_id` claim，然後 policy 改成：
+--
+--   create policy "pos_print_jobs agent read own store" on public.pos_print_jobs
+--     for select to authenticated
+--     using (
+--       store_id = coalesce(
+--         current_setting('request.jwt.claims', true)::json ->> 'store_id',
+--         ''
+--       )
+--     );
+--
+-- 前置條件（**要人手加，唔可以寫落 migration**）：
+--   1. Supabase Dashboard → Project Settings → API → 攞 **JWT Secret**
+--   2. 加落 Vercel env：`SUPABASE_JWT_SECRET`（server-only，**唔好**加 NEXT_PUBLIC_）
+--      —— 現時 `.env.example` 得 `SUPABASE_URL` / `SUPABASE_ANON_KEY` /
+--         `SUPABASE_SERVICE_ROLE_KEY`，**冇** JWT secret
+--   3. `POST /api/pos/print-agent/pair` 成功時，用 JWT secret 簽一個短命
+--      （例如 24 小時）嘅 token，claims 帶 `{ role: "authenticated", store_id }`，
+--      取代而家直接派 `anonKey` 畀 Hub
+--   4. Hub 攞到呢個 token 去連 Realtime（而唔係 anon key）
+--
+-- 到期點算：Hub 每輪 heartbeat 順便換 token（heartbeat 本身已經有 agent token 驗權，
+-- 唔使驚「拎新 token 嗰下冇權」）。
+--
+-- 另一條路（唔使 JWT）：中繼機改成**純輪詢** `POST /claim`（本身已經有 agent token
+-- 驗權，天然按店隔離），完全唔用 Realtime。代價係出紙延遲由毫秒級升到輪詢間隔
+-- （60s 對賬 tick 嘅話即係最慢 60 秒）。可接受嘅話呢條最簡單。
+-- =============================================================================
+
+-- ── 驗收 SQL（貼完跑一次）──────────────────────────────────────
+-- select policyname, qual
+--   from pg_policies
+--  where tablename = 'pos_print_jobs' and cmd = 'select';
+-- -- 期望見到：pos_print_jobs anon read recent
+-- --           | (COALESCE(created_at, now()) >= (now() - '24:00:00'::interval))
+--
+-- ── 回退（出事時貼）───────────────────────────────────────────
+-- drop policy if exists "pos_print_jobs anon read recent" on public.pos_print_jobs;
+-- create policy "pos_print_jobs anon read recent" on public.pos_print_jobs
+--   for select to anon
+--   using (coalesce(created_at, now()) >= now() - interval '14 days');

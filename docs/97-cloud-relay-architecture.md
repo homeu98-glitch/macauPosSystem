@@ -238,23 +238,75 @@ create policy "pos_print_jobs anon read recent" on public.pos_print_jobs
   using (coalesce(created_at, now()) >= now() - interval '14 days');
 ```
 
-即係：**揸住 anon key 可以 subscribe 到 14 日內所有店嘅 INSERT**。
-Hub 自己帶咗 `filter: store_id=eq.<storeId>`（server-side filter），
+即係：**揸住 anon key 可以讀到所有店嘅 print job**。
+Hub 自己帶咗 `filter: store_id=eq.<storeId>`（server-side 套用），
 所以正常行為係淨收到自己間店嘅嘢。
 
 但呢個 filter 係 **client 提供**嘅。一個改過嘅 client 可以唔帶 filter，
-然後收到全平台 14 日內嘅 print job（含單據內容）。
+然後收到全平台嘅 print job（含單據內容）。
 
 **點解而家仲未爆**：
 - 單據內容係菜品名 + 價錢 + 備註，**一般唔含客人 PII**
 - anon key 唔係秘密，但都要特登寫 client 去濫用
 - 拎到事件都**印唔到嘢** —— claim 一定要過 agent token + store_id 驗權
 
-**收窄嘅做法（未做）**：
-1. 短中期：Realtime 淨推「叫醒」，payload 淨帶 `id`，其餘一律經 claim RPC 攞
-   （其實而家已經係咁行 —— claim RPC 先係權威，Realtime payload 根本冇用到）
-2. 根治：用自簽 JWT 帶 `store_id` claim，RLS 改 `using (store_id = current_setting('request.jwt.claims')->>'store_id')`
-3. 折衷：收窄時間窗（`14 days` → `1 hour`），濫用價值大減
+#### ⚠️ 兩個常見誤解（2026-09-02 查證，寫低唔好再中伏）
+
+**誤解一：「收窄時間窗可以減少 Realtime 被濫用」** —— ❌ 錯。
+
+Supabase Realtime `postgres_changes` **只推即時變更，唔會回放歷史**。
+所以時間窗對 Realtime 嘅暴露面係 **零影響** —— 窗係 14 日定 1 小時，
+一個 subscribe 緊嘅 client 收到嘅即時事件**完全一樣**。
+要擋 Realtime 濫用，淨得「`store_id` 隔離」一條路。
+
+**誤解二：「收窄到 1 小時好穩陣」** —— ❌ 錯，而且會出事。
+
+web POS（`src/lib/pos/use-pos-realtime.ts:79`）訂閱咗 `pos_print_jobs` 嘅 `event: "*"`
+（**包 UPDATE**）。Realtime 對 UPDATE 事件係**用新 row 去過 RLS SELECT policy**，
+而 `created_at` 喺 UPDATE 時**唔會變**。
+
+→ 一張 09:00 建、中繼機 12:00 先 claim 到嘅單，12:00 嗰個 UPDATE 事件會因為
+`created_at` 已經 3 個鐘前而被 1 小時窗擋咗 → **web 端收唔到出紙結果**。
+
+而「延遲認領」正正係 Scheme B 設計上要支援嘅場景（60s 對賬 tick、`attempts<5`
+自動重排）。所以**唔可以**收到 1 小時咁短。
+
+#### 處置
+
+| 做法 | 狀態 | 說明 |
+|---|---|---|
+| 收窄時間窗 `14 days → 24 hours` | ✅ **migration 已寫好，等人手跑** | `supabase/migrations/0021_print_jobs_anon_window_24h.sql`。**淨影響 PostgREST 直接 SELECT**（anon 有 `grant select`），REST 可摷嘅歷史減 14 倍。Realtime 事件全部照收（事件係即時，`created_at` ≈ now），對 web / Hub 行為零改變 |
+| Realtime 淨推「叫醒」、payload 淨帶 `id` | ✅ 其實已經係咁行 | claim RPC 先係權威，Realtime payload 根本冇用到（見 §3.1） |
+| **根治：JWT 帶 `store_id` claim** | ⏳ **未做，要 infra 配合** | 見下面 |
+
+#### 根治方案：自簽 JWT 帶 `store_id`
+
+```sql
+create policy "pos_print_jobs agent read own store" on public.pos_print_jobs
+  for select to authenticated
+  using (
+    store_id = coalesce(
+      current_setting('request.jwt.claims', true)::json ->> 'store_id',
+      ''
+    )
+  );
+```
+
+前置條件（**要人手加，唔可以寫落 migration**）：
+1. Supabase Dashboard → Project Settings → API → 攞 **JWT Secret**
+2. 加落 Vercel env：`SUPABASE_JWT_SECRET`（server-only，**唔好**加 `NEXT_PUBLIC_`）
+   —— 現時 `.env.example` 得 `SUPABASE_URL` / `SUPABASE_ANON_KEY` /
+   `SUPABASE_SERVICE_ROLE_KEY`，**冇** JWT secret
+3. `POST /api/pos/print-agent/pair` 成功時，用 JWT secret 簽一個短命（例如 24 小時）
+   嘅 token，claims 帶 `{ role: "authenticated", store_id }`，取代而家直接派 `anonKey` 畀 Hub
+4. Hub 攞呢個 token 去連 Realtime（而唔係 anon key）
+
+到期點算：Hub 每輪 heartbeat 順便換 token（heartbeat 本身已經有 agent token 驗權，
+唔使驚「拎新 token 嗰下冇權」）。
+
+**另一條路（唔使 JWT）**：中繼機改成**純輪詢** `POST /claim` —— 本身已經有 agent token
+驗權，天然按店隔離，完全唔用 Realtime。代價係出紙延遲由毫秒級升到輪詢間隔
+（用 60s 對賬 tick 即係最慢 60 秒）。接受到嘅話呢條最簡單。
 
 > 呢條唔係 Scheme B 引入嘅新問題，係 `0016` 就已經係咁。記低佢，唔好以為「有 RLS 就安全」。
 
