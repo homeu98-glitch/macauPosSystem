@@ -26,20 +26,31 @@ export interface PairedAgent {
   tokenHash: string;
 }
 
-/** 由 agent_id 載入已配對 agent（service_role，可讀 token_hash）。 */
+/**
+ * 由 agent_id 載入已配對 agent（service_role，可讀 token_hash）。
+ *
+ * ⚠️ **唔好 select `store_name`** —— `pos_print_agents` 冇呢條欄（0020 migration 只係
+ * 喺 `pos_print_jobs` 加咗 `store_name`，agents 表淨得 `name`）。Select 佢會出
+ * `42703 column pos_print_agents.store_name does not exist` → 成個 function 返 null，
+ * 連鎖爆三處：① `GET /pair` 永遠 pending（Hub 拎唔到憑證）② `/pair-status` 500
+ * ③ **claim / result / heartbeat 嘅 verifyAgent() 全部驗唔過 → 成條中繼斷晒**。
+ *
+ * 店名喺 web 端由 auth session（`loadAuthSession().name`，即 `merchants.name`）直接攞，
+ * 唔使落 DB，亦唔使為咗個顯示名加 migration。
+ */
 export async function loadPairedAgent(agentId: string): Promise<PairedAgent | null> {
   const supabase = getSupabaseWriteClient();
   if (!supabase) return null;
   const { data, error } = await supabase
     .from("pos_print_agents")
-    .select("agent_id, store_id, store_name, name, revoked_at, token_hash")
+    .select("agent_id, store_id, name, revoked_at, token_hash")
     .eq("agent_id", agentId)
     .maybeSingle();
   if (error || !data) return null;
   return {
     agentId: data.agent_id,
     storeId: data.store_id,
-    storeName: data.store_name ?? null,
+    storeName: null, // 見上面註解：agents 表冇 store_name 欄
     name: data.name ?? null,
     revokedAt: data.revoked_at ?? null,
     tokenHash: data.token_hash,

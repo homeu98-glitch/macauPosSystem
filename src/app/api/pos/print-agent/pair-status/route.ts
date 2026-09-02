@@ -22,9 +22,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ paired: false, error: "Supabase 未配置" }, { status: 503 });
   }
 
+  // ⚠️ 唔好 select `store_name` —— `pos_print_agents` 冇呢條欄（0020 只喺 pos_print_jobs 加咗）。
+  // Select 佢會 42703 → 呢度變 500 → web 顯示「配對失敗」，但其實一早配對成功咗。
   const { data, error } = await supabase
     .from("pos_print_agents")
-    .select("agent_id, store_id, store_name")
+    .select("agent_id, store_id, name")
     .eq("store_id", storeId)
     .is("revoked_at", null)
     .maybeSingle();
@@ -38,6 +40,6 @@ export async function GET(request: Request) {
     paired: true,
     agentId: data.agent_id,
     storeId: data.store_id,
-    storeName: data.store_name ?? null,
+    storeName: null, // agents 表冇 store_name；web 端由 auth session 攞店名
   });
 }

@@ -17,6 +17,7 @@
 - 訂單排序一律 `compareOrderByLocalNo()` = 純 `createdAt` asc。
 - **storeId 單一真源 = `resolveStoreId()`（`src/lib/pos/sync-flush.ts`）**：登入 `merchantId` → kiosk binding → undefined。所有 sync / pair-status call site 必須用佢，唔好自己砌 `??` 鏈。
 - **`macau-store-a` 係 admin 帳號系統嘅示範店代碼，同 `merchants.id`（UUID）係兩套嘢**。見到就要警覺：寫落 `pos_print_jobs.store_id` 或拎去配對，會變「配咗對但印唔出單」。
+- **`pos_print_agents` 冇 `store_name` 欄**（0020 只喺 `pos_print_jobs` 加咗）。select/insert 佢會 42703 → `loadPairedAgent()` 返 null → claim/result/heartbeat 認證全斷 + `GET /pair` 永遠 pending + `/pair-status` 500。店名一律由 auth session（`merchants.name`）提供。
 
 ## 打印
 - **通道優先級**（`dispatch.ts`）：① native bridge ② Companion ③ Cloud Relay。relay 只喺 pure-web 觸發；`RelayPairingPanel` 已 self-gate（`isRunningInNativeShell()` → `return null`）。

@@ -37,7 +37,7 @@ const INFRA_ERROR_CODES = new Set(["42P01", "42501", "42703", "PGRST205", "PGRST
 const INVALID_TYPE_CODES = new Set(["22P02"]);
 
 type MerchantLookup =
-  | { kind: "found"; name: string | null }
+  | { kind: "found" }
   | { kind: "missing" } // 表讀到，但呢個 id 唔存在 → 要擋
   | { kind: "unknown" }; // 表讀唔到（基建問題）→ 放行，只 log
 
@@ -51,7 +51,7 @@ async function lookupMerchant(
 ): Promise<MerchantLookup> {
   const { data, error } = await supabase
     .from("merchants")
-    .select("id, name")
+    .select("id")
     .eq("id", storeId)
     .limit(1)
     .maybeSingle();
@@ -72,7 +72,7 @@ async function lookupMerchant(
     return { kind: "unknown" };
   }
   if (!data) return { kind: "missing" };
-  return { kind: "found", name: (data as { name?: string | null }).name ?? null };
+  return { kind: "found" };
 }
 
 export async function GET(request: Request) {
@@ -147,16 +147,8 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── 3) 載入店名：優先 merchants.name，無則 fallback pos_bootstrap_config ──
-  let storeName: string | null = merchant.kind === "found" ? merchant.name : null;
-  if (!storeName) {
-    const { data: boot } = await supabase
-      .from("pos_bootstrap_config")
-      .select("store_name")
-      .eq("store_id", storeId)
-      .maybeSingle();
-    if (boot?.store_name) storeName = boot.store_name;
-  }
+  // 註：唔寫 `store_name` —— `pos_print_agents` 冇呢條欄（0020 只喺 pos_print_jobs 加咗）。
+  // 寫佢會 42703 → 配對寫入失敗。店名由 web 端 auth session 提供，唔使落 DB。
 
   // upsert（重複配對同一 agentId 會更新 token_hash + 解除 revoke）
   const { error } = await supabase.from("pos_print_agents").upsert(

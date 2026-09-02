@@ -450,9 +450,14 @@ APK 實作位置：`C:\dev\print-agent-android\app\src\main\java\com\macau\pos\p
 | 情況 | Response |
 |---|---|
 | 未配對 | `{ "status": "pending" }` |
-| 已配對 | `{ "status": "paired", "storeId": "...", "storeName": "...", "supabaseUrl": "https://xxx.supabase.co", "anonKey": "eyJ..." }` |
+| 已配對 | `{ "status": "paired", "storeId": "...", "storeName": null, "supabaseUrl": "https://xxx.supabase.co", "anonKey": "eyJ..." }` |
 
 > `supabaseUrl` / `anonKey` 由 server 落而**唔係** APK hardcode —— 換環境唔使改 APK。
+>
+> ⚠️ `storeName` **永遠係 null**（`pos_print_agents` 冇 `store_name` 欄，0020 只喺 `pos_print_jobs` 加咗）。
+> Hub 要顯示店名就用 `storeId`，或者自己打 `/api/ledger/login` 拎 `session.name`。
+> **絕對唔好喺 `pos_print_agents` select / insert `store_name`** —— 會 42703，
+> `loadPairedAgent()` 返 null → claim/result/heartbeat 全部驗唔過 → 成條中繼斷晒（2026-09-02 踩過）。
 
 #### `POST /api/pos/print-agent/pair`（Android Hub 自註冊）
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import { isRunningInNativeShell } from "@/components/pwa-install-button";
+import { loadAuthSession } from "@/lib/storage";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import {
   clearRelayPairing,
@@ -43,6 +44,9 @@ export function RelayPairingPanel() {
   const [nativeShell] = useState(() => isRunningInNativeShell());
 
   const [storeId, setStoreId] = useState<string>("");
+  // 店名由 auth session 直接攞（即 merchants.name，login 時 server 落）。
+  // 唔使查 DB：pos_print_agents 冇 store_name 欄（0020 只喺 pos_print_jobs 加咗）。
+  const [storeName, setStoreName] = useState<string>("");
   const [pairing, setPairing] = useState(() => getRelayPairing());
   const [state, setState] = useState<CheckState>({ kind: "idle" });
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
@@ -51,6 +55,7 @@ export function RelayPairingPanel() {
   useEffect(() => {
     if (nativeShell) return;
     setStoreId(resolveStoreId() ?? "");
+    setStoreName(loadAuthSession()?.name ?? "");
     setPairing(getRelayPairing());
   }, [nativeShell]);
 
@@ -193,7 +198,7 @@ export function RelayPairingPanel() {
       {paired && pairing ? (
         <div className="mt-4 grid gap-3">
           <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            已連線：{pairing.storeName ?? pairing.storeId}
+            已連線：{storeName || pairing.storeName || pairing.storeId}
             <div className="mt-1 text-xs font-normal text-emerald-700">
               列印單據會經雲端中繼送到店內 Android 中繼機出紙。
             </div>

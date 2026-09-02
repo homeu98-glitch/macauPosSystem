@@ -34,10 +34,17 @@ create index if not exists pos_print_jobs_queue_idx
   on public.pos_print_jobs (store_id, status, created_at);
 
 -- ── B. 中繼機登記 ──────────────────────────────────────────
+-- ⚠️ 呢張表**冇 `store_name` 欄**（`store_name` 只係上面 A 段加咗落 `pos_print_jobs`）。
+--    2026-09-02 踩坑：code 三處 select 咗 `pos_print_agents.store_name` → 42703
+--    → `loadPairedAgent()` 返 null → 連鎖爆：① `GET /pair` 永遠 pending（Hub 拎唔到憑證）
+--    ② `/pair-status` 500（web 顯示「配對失敗」）③ claim/result/heartbeat 嘅
+--    `verifyAgent()` 全部驗唔過 → **成條中繼全斷**。
+--    店名一律由 web 端 auth session（`merchants.name`）提供，唔使落 DB。
+--    日後真係要喺 Hub UI 顯示店名，先至加欄 + 改 code，唔好倒轉。
 create table if not exists public.pos_print_agents (
   agent_id     text primary key,
   store_id     text not null,
-  name         text,
+  name         text,                   -- 中繼機嘅顯示名（例如「收銀旁 Print Hub」），**唔係**店名
   token_hash   text not null,          -- 只存 hash（sha256），明文 token 只喺配對嗰一刻交付一次
   created_at   timestamptz not null default now(),
   last_seen_at timestamptz,
