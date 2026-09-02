@@ -636,14 +636,27 @@ Server 實作：`update pos_print_agents set last_seen_at = now() where agent_id
 | 開機自動起身 | `relay/BootReceiver.kt` | `BOOT_COMPLETED` + `MY_PACKAGE_REPLACED`，得已配對先起 |
 | **APK 已 build** | `C:/dev/print-agent-android/print-agent-1.1.0-debug.apk` | versionCode 5 / versionName 1.1.0 / minSdk 24 |
 
-### ⏳ 未完成（web / DB 側）
+### ⏳ 未完成（web / DB 側）— **2026-09-02 更新：1–6 全部已完成**
 
-1. **跑 migration 0020** —— 人手去 Supabase Dashboard SQL Editor 貼，貼完跑 file 尾嘅驗收 SQL
-2. **4 條 Vercel routes**（§8.1 合約）
-3. **擴 sync payload**（§6.1）— 加 `printer, kind, store_name, payment_method, total, qr, qr_url, copies, ttl`
-4. **`RealtimePrintTransport`**（§6.2）+ 接入 `dispatch.ts`（§6.3）
-5. **`mapPosPrintJobRow`** 補新欄（§6.4）
-6. **配對 UI**（iPad 端掃描 → POST /pair）
+| # | 項目 | 狀態 | 位置 |
+|---|---|---|---|
+| 1 | 跑 migration 0020 | ✅ **已跑** | 由 2026-09-02 live 錯誤 `column pos_print_agents.store_name does not exist` 反證：Postgres 淨會喺**表存在**時先報呢個錯，即係 `pos_print_agents` 已經喺 DB 度 |
+| 2 | Vercel routes | ✅ 已完成（**6 條**，唔止 4 條） | `pair` / `claim` / `result` / `heartbeat` / `pair-status` / `unpair` |
+| 3 | 擴 sync payload | ✅ 已完成 | `src/app/api/pos/sync/route.ts` |
+| 4 | relay transport + 接入 `dispatch.ts` | ✅ 已完成 | `src/lib/print-bridge/relay-transport.ts`（名叫 `RelayTransport`，**唔開 socket**，只做 `flushPosSyncQueue()`）+ `dispatch.ts` 通道③ |
+| 5 | `mapPosPrintJobRow` 補新欄 | ✅ 已完成 | `src/lib/pos/pos-order-mapper.ts` |
+| 6 | 配對 UI | ✅ 已完成（**已改為三態檢查，唔係掃 QR**） | `src/components/relay-pairing-panel.tsx` |
+
+> ⚠️ `docs/97` 先係架構解釋文；呢份 96 係實作規格。
+>
+> ⚠️ 部署步驟第 5 步下文已改（唔再係「iPad 掃 QR」，係 Hub 自註冊）。
+
+**仲未做**：
+- **實機驗證**（見下面「⚠️ 未實機驗證過嘅地方」）
+- **收窄 Realtime anon 讀權限** —— `pos_print_jobs` 嘅 anon 策略係「14 日內全部」，
+  **冇按 store 隔離**。Hub 靠 client-side `filter: store_id=eq.<storeId>` 自保。
+  詳見 `docs/97 §5.2`。
+- **Hub APK v1.1.1（code 3）裝機** —— 已 build 好但未裝（等 USB 駁機）。
 
 ### 部署步驟（Sunmi V2）
 
@@ -651,9 +664,15 @@ Server 實作：`update pos_print_agents set last_seen_at = now() where agent_id
 2. 開 app → 因為 `relayHome` 預設 false，會入 POS WebView 畫面
 3. 喺 POS 嗰邊 call `window.PosNative.openRelay()`（或者先把 `relayHome` 設 true 再重開）
 4. 中繼畫面撳「設為開機首頁（中繼專用機）」→ 之後開機直接入中繼
-5. iPad 掃 QR → 配對完成
-6. 撳「電池最佳化設定」加入白名單（**必須**，否則鎖屏一陣 Realtime 會斷）
-7. 撳「測試打印（Sunmi 內置）」驗 58mm 紙寬 + 中文編碼
+5. **Hub 自註冊配對**（2026-09-02 改，舊嘅「iPad 掃 QR」已作廢）：
+   中繼畫面輸入 POS 登入號碼（8 位電話）+ 4 位 PIN
+   → `POST /api/ledger/login` 拎 `merchantId`
+   → `POST /api/pos/print-agent/pair { agentId, token, storeId: merchantId }`
+   → 輪詢 `GET /pair?agentId=` 直到 `status:"paired"`
+6. iPad 端「設置 → 打印機 → 雲端列印中繼」撳「檢查配對狀態」
+   見到綠色「已配對」即完成（**唔使輸入任何 ID**）
+7. 撳「電池最佳化設定」加入白名單（**必須**，否則鎖屏一陣 Realtime 會斷）
+8. 撳「測試打印（Sunmi 內置）」驗 58mm 紙寬 + 中文編碼
 
 ### ⚠️ 未實機驗證過嘅地方
 
