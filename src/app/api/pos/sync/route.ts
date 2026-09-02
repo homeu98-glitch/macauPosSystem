@@ -30,7 +30,8 @@ const MAX_TEXT_LEN = 2000; // order_note / 備註
 const MAX_NAME_LEN = 200;
 const MAX_PARTY_SIZE = 999; // 對齊 0017 migration 嘅 CHECK 約束
 const STORE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-const DEFAULT_STORE_ID = "macau-store-a";
+// 注意：唔好加 DEFAULT_STORE_ID fallback。缺 storeId 一定要大聲失敗（400），
+// 否則會靜默寫入假店（舊日嘅 "macau-store-a"），令雲端中繼配咗對但一張都印唔出。
 
 const VALID_EVENT_TYPES = new Set([
   "ORDER_CREATED",
@@ -112,7 +113,19 @@ export async function POST(request: Request) {
 
   // ── 1) storeId 驗證：長度 + 白名單字元（防 path/JSON 注入 + 跨店亂寫）──
   const rawStoreId = typeof payload?.storeId === "string" ? payload.storeId.trim() : "";
-  const storeId = rawStoreId || DEFAULT_STORE_ID;
+  if (!rawStoreId) {
+    // 大聲失敗：寧願 sync 報錯，都唔好靜默寫入預設店。
+    // 正常情況下 client 會由 resolveStoreId()（登入 merchantId 或 kiosk 綁定）帶上 storeId。
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "缺少 storeId：本機未帶店舖識別（未登入 POS 帳號，或自助點餐機未綁定店舖）。請重新登入 POS 帳號後再試。",
+      },
+      { status: 400 },
+    );
+  }
+  const storeId = rawStoreId;
   if (storeId.length > MAX_STORE_ID_LEN || !STORE_ID_PATTERN.test(storeId)) {
     return NextResponse.json({ ok: false, error: "storeId 格式不合法" }, { status: 400 });
   }

@@ -375,6 +375,10 @@ QR · 折扣與反白 · 規格行加購價錢靠右 · 時價菜 · 備註 · �
 改做 **HTTP 短輪詢**：APK 每 3s 打一次 `GET /pair?agentId=`（得配對嗰陣先至打，
 配到就停），server 唔使維持任何狀態，APK 唔使任何憑證。
 
+> 🔄 **2026-09-02 再改**：下面 §8 嘅 QR 流程已被 **Android Hub 自註冊**取代（QR 需要相機 +
+> 要人手對位，Hub 裝喺收銀枱底根本唔方便掃）。而家嘅流程係 Hub 直接打 `/pair`，
+> iPad 端**只剩「檢查配對狀態」一個掣**。QR 流程留底做歷史記錄。
+
 ```
 1. APK 首次啟動（或者撳「重新產生配對碼」）
      agentId = "ag-" + 16 bytes hex
@@ -396,8 +400,39 @@ QR · 折扣與反白 · 規格行加購價錢靠右 · 時價菜 · 備註 · �
      APK 存落 SharedPreferences，訂閱 Realtime，開始 claim 迴圈
 ```
 
-- token 只出現在：APK 螢幕上嘅 QR（配對嗰一刻）、`POST /pair` 嘅 request body（HTTPS）、
-  APK 嘅 SharedPreferences（app sandbox）。**server 淨存 sha256**。
+### 8.0.1 現行流程：Android Hub 自註冊（**呢個先係而家行緊嗰條**）
+
+```
+1. 用戶喺 Android Hub 輸入 POS 登入號碼（8 位電話 + 4 位 PIN）
+     POST /api/ledger/login { phone, pin }
+     ← { ok: true, session: { merchantId: "<merchants.id UUID>", ... } }
+
+2. Hub 用嗰個 merchantId 做 storeId 自註冊
+     agentId = "ag-" + 16 bytes hex（首次產生，之後存 SharedPreferences）
+     token   = 32 bytes hex
+     POST /api/pos/print-agent/pair { agentId, token, storeId: merchantId, name? }
+       · server 擋假店（黑名單 + 查 merchants 表驗真）
+       · token_hash = sha256(token)
+       · upsert pos_print_agents(...)
+     ← { ok: true }
+
+3. Hub 輪詢 GET /api/pos/print-agent/pair?agentId=<id>
+     ← { status:"paired", storeId, storeName, supabaseUrl, anonKey }
+     Hub 存落 SharedPreferences，訂閱 Realtime，開始 claim 迴圈
+
+4. iPad（web POS，已登入同一個 POS 號碼）
+     「設置 → 打印機 → 雲端列印中繼」撳「檢查配對狀態」
+     GET /api/pos/print-agent/pair-status?storeId=<loadAuthSession().merchantId>
+     ← { paired: true, agentId, storeId, storeName }
+     → 寫落 localStorage，isRelayConfigured() 變 true，dispatch 通道③ 啟用
+```
+
+**點解 web 端唔使輸入任何嘢**：Hub 同 web 用**同一組**憑證打**同一條** `/api/ledger/login`，
+拎到**同一個** `merchantId`。所以 `storeId` 係由登入身份隱含推導，唔係用戶要填嘅資料。
+web 端舊版嗰個「本店店舖 ID（輸入 Android 中繼機用）」欄位已喺 2026-09-02 移除。
+
+- token 只出現在：`POST /pair` 嘅 request body（HTTPS）、
+  Hub 嘅 SharedPreferences（app sandbox）。**server 淨存 sha256**。
 - server 每次驗 `sha256(x-agent-token)` 對 `token_hash` + `store_id` 一致 + `revoked_at is null`
 - 後台可以 revoke agent（寫 `revoked_at`）→ APK 下一輪 heartbeat 會收到 401，返去配對畫面
 
@@ -419,13 +454,30 @@ APK 實作位置：`C:\dev\print-agent-android\app\src\main\java\com\macau\pos\p
 
 > `supabaseUrl` / `anonKey` 由 server 落而**唔係** APK hardcode —— 換環境唔使改 APK。
 
-#### `POST /api/pos/print-agent/pair`（iPad 端，要 store session）
+#### `POST /api/pos/print-agent/pair`（Android Hub 自註冊）
+
+> **2026-09-02 更新**：配對流程已由「iPad 掃 QR 發起」改為 **Android Hub 自註冊**。
+> Hub 先用 POS 登入號碼（8 位電話 + 4 位 PIN）打 `/api/ledger/login` 拎 `merchantId`，
+> 再用嗰個 `merchantId` 做 `storeId` 打呢條 route。即係 **storeId 由登入身份隱含推導**，
+> 用戶完全唔使輸入任何店舖 ID。
 
 Request：
 ```json
-{ "agentId": "ag-...", "token": "<64 hex>", "storeId": "macau-store-a", "name": "收銀旁 Sunmi" }
+{
+  "agentId": "ag-...",
+  "token": "<64 hex>",
+  "storeId": "<merchants.id UUID — 由 /api/ledger/login 拎返嚟>",
+  "name": "收銀旁 Print Hub"
+}
 ```
 Response：`{ "ok": true }` / `{ "ok": false, "error": "..." }`
+
+> ⚠️ **`storeId` 唔可以係 `macau-store-a` 呢類 mock 值。**
+> `macau-store-a` 係 admin 帳號系統（`docs/sql/admin-account-schema.sql`）嘅示範店代碼，
+> **同 `merchants.id` 係兩套嘢**。配對用錯會出現最難 debug 嘅 silent failure：
+> `/pair-status` 話「已配對」，但 Realtime filter `store_id=eq.<真 UUID>` 唔 match、
+> `pos_claim_print_jobs()` 返 0 列 → **一張單都印唔出**。
+> server 現時會擋：① 假店黑名單 ② 查 `merchants` 表驗真（表讀唔到嘅基建錯誤會 warn 放行）。
 
 #### `POST /api/pos/print-agent/claim`
 
