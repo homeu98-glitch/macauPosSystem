@@ -11,21 +11,13 @@ import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { loadPairedAgent, sha256Hex } from "@/lib/print-agent-server";
+import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
 export const dynamic = "force-dynamic";
 
 const STORE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-/** 假店黑名單：呢啲係 mock / 範例值，一見即擋（唔使靠 DB 查詢，零基建風險）。 */
-const PLACEHOLDER_STORE_IDS = new Set([
-  "macau-store-a",
-  "macau-store-b",
-  "store-a",
-  "store-b",
-  "default",
-  "demo",
-  "test",
-]);
+/** 假店黑名單：共用一份（sync route 都用同一套），見 `@/lib/pos/store-id-guard`。 */
 
 /** PostgREST / Postgres「表唔存在或無權限」類錯誤碼 —— 呢啲係基建問題，應該 warn 而唔係擋配對。 */
 const INFRA_ERROR_CODES = new Set(["42P01", "42501", "42703", "PGRST205", "PGRST301", "PGRST202"]);
@@ -123,7 +115,7 @@ export async function POST(request: Request) {
   }
 
   // ── 1) 假店黑名單：mock / 範例值一見即擋（零 DB 依賴）──
-  if (PLACEHOLDER_STORE_IDS.has(storeId.toLowerCase())) {
+  if (isPlaceholderStoreId(storeId)) {
     return NextResponse.json(
       {
         ok: false,

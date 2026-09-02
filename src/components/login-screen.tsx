@@ -7,7 +7,7 @@ import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-insta
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
-import { DEFAULT_KIOSK_STORE_ID, saveKioskDeviceBinding } from "@/lib/kiosk-order";
+import { saveKioskDeviceBinding } from "@/lib/kiosk-order";
 import { setTerminalIndustry } from "@/lib/salon/industry-config";
 import { saveActiveSalonStore } from "@/lib/salon/storage";
 
@@ -86,12 +86,24 @@ export function LoginScreen() {
       // service_role 取代唔到。所以下面 saveAuthSession + Ledger setSession 要照行。
       // 改動只係：額外寫綁店記錄，最後 redirect 去 `/order` 而唔係 `/`。
       if (mode === "kiosk") {
-        saveKioskDeviceBinding({
-          storeId: session.merchantId ?? DEFAULT_KIOSK_STORE_ID,
-          storeName: session.name,
-          language: "zh-HK",
-          boundAt: new Date().toISOString(),
-        });
+        // ⚠️ 唔好再 `?? DEFAULT_KIOSK_STORE_ID`。
+        // `macau-store-a` 係示範店代碼（唔係 merchants.id），寫落綁定之後
+        // `resolveStoreId()` 會拎到佢 → sync 落 pos_print_jobs.store_id →
+        // 雲端中繼「配咗對但一張單都印唔出」（最難 debug 嗰種 silent failure）。
+        // 冇 merchantId 就**唔好寫綁定**：resolveStoreId() 會返 undefined，
+        // sync 大聲 400 提示重新登入 —— 好過靜默寫錯店。
+        if (session.merchantId) {
+          saveKioskDeviceBinding({
+            storeId: session.merchantId,
+            storeName: session.name,
+            language: "zh-HK",
+            boundAt: new Date().toISOString(),
+          });
+        } else {
+          console.error(
+            "[login] kiosk 模式但 session 冇 merchantId —— 唔寫綁定。呢部機嘅 sync 會 400 住，重新登入拎到 merchantId 先正常。",
+          );
+        }
       }
 
       const previousMerchantId = loadAuthSession()?.merchantId;

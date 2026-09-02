@@ -12,7 +12,6 @@ import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
   buildKioskOrder,
   clearKioskDeviceBinding,
-  DEFAULT_KIOSK_STORE_ID,
   fetchUnsettledKioskOrder,
   KioskCartItem,
   KioskDeviceBinding,
@@ -149,8 +148,12 @@ export function useKioskOrder() {
   // 用 menuFetchDone（成功或失敗都設 true）判斷，離線 / 失敗就 fallback 去 cache / mock，唔會卡死。
   const menuLoading =
     (Boolean(scanStoreId) || Boolean(binding?.storeId)) && !menuFetchDone;
-  // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之；最後 fallback 預設店
-  const storeId = binding?.storeId ?? scanStoreId ?? DEFAULT_KIOSK_STORE_ID;
+  // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之。
+  // ⚠️ 2026-09-02：**移除 `?? DEFAULT_KIOSK_STORE_ID`**。
+  // `macau-store-a` 係示範店代碼（唔係 merchants.id）。以前喺「有 ?tableId= 但冇 ?store=」
+  // 嘅 QR 情況下會 fall 落去，落單會寫落假店 —— 收銀永遠見唔到張單。
+  // 缺 storeId 就係缺，交畀下面 needsBinding 閘住，寧願唔畀落單都唔好寫錯店。
+  const storeId = binding?.storeId ?? scanStoreId ?? "";
   // 顯示店名：綁店名 > 掃碼連結 ?storeName= > 本地 mock 店名
   const displayStoreName = useMemo(
     () => binding?.storeName ?? scanStoreName ?? bootstrap.storeName,
@@ -174,9 +177,13 @@ export function useKioskOrder() {
     setHydrated(true);
   }, [bootstrap.categories]);
 
-  // ── 綁店閘門：kiosk 設備必須先登入綁店；掃碼連結（帶 tableId/store）唔使綁 ──
+  // ── 綁店閘門：必須拎到**真實** storeId 先畀落單 ──
+  // ⚠️ 2026-09-02：以前係 `!binding && !isScanLink`，即係「有 ?tableId= 就放行」。
+  // 但一張淨帶 ?tableId= 而冇 ?store= 嘅 QR，上面 storeId 會 fall 落 DEFAULT_KIOSK_STORE_ID
+  // （macau-store-a 示範店）→ 落單寫落假店、收銀永遠見唔到。
+  // 改為直接判 storeId 係咪非空：冇真店就閘住，唔理你係掃碼定綁店。
   const isScanLink = Boolean(tableId) || Boolean(scanStoreId);
-  const needsBinding = !binding && !isScanLink;
+  const needsBinding = !storeId;
 
   // 售罄即時（Realtime，禁 polling）
   usePosRealtime(storeId, true, {
@@ -231,6 +238,8 @@ export function useKioskOrder() {
     let cancelled = false;
     if (!tableId && submittedOrder) return;
     if (resumedOrder) return;
+    // 冇真實 storeId 就唔好去 server 查未結單（會查落假店 / 空店）
+    if (!storeId) return;
     void (async () => {
       const lastOrderId =
         typeof window !== "undefined" ? window.sessionStorage.getItem("kiosk-last-order") ?? undefined : undefined;

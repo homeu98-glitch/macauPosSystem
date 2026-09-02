@@ -3,8 +3,8 @@
 ## 結構
 澳門 Web POS（`C:\dev\macauPos\macauPosSystem`），前台已上線（macau-pos-system.vercel.app，Supabase `zymdemjflsckicwcinxl`）。Next.js 16 + React 19 + TS5 + Tailwind4 + Supabase（Ledger 必配 / POS 可選）+ PWA + LocalStorage 離線優先 + print-bridge。
 - `src/app/`（餐飲 v1 + salon）；`src/components/pos-app.tsx` 核心。`src/lib/types.ts` 權威。
-- **Android Print Agent**：獨立 repo `C:\dev\print-agent-android`（v1.1.1/code 6）。
-- **Print Hub**：獨立 repo `C:\dev\print hub`（com.macau.printhub, v1.1.0/code 2）。純 LAN relay hub（無 Sunmi、無 WebView）：IP 掃描 + NanoHTTPD 8787 + 日誌 + 配對。
+- **Android Print Agent**：獨立 repo `C:\dev\print-agent-android`（v1.1.2/code 7）。remote `origin` = github.com/EricChang1015/pos-printer-android。
+- **Print Hub**：獨立 repo `C:\dev\print hub`（com.macau.printhub, v1.1.2/code 4）。純 LAN relay hub（無 Sunmi、無 WebView）：IP 掃描 + NanoHTTPD 8787 + 日誌 + 配對。**2026-09-03 先至 `git init`**（之前一直無版控），首次 commit `d77a54e`，remote 未設。
 
 ## 重要約定
 - localStorage：餐飲 `macau-pos/*`；salon `macau-pos-salon/*`。PrintJob 模型共用。
@@ -50,6 +50,28 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 ## 開發環境
 - 語言：繁體中文（廣東話風味）。
 - git 一律 `run_in_background`；push 前 `git ls-remote` 對。
+- **⚠️ 絕對唔好喺呢個環境跑 `git rebase` / `git merge`（2026-09-03 實測中招）**：rebase 嘅 bulk checkout 會撞 sandbox 批量刪除保護，**連 `.git/refs/`、`.git/logs/` 同新嘅 loose object 一齊剷走**，repo 即時變 `fatal: not a git repository`，commit 全部變 dangling。
+  當時 `print-agent-android` 就係咁丟咗 `5f64e26` + `305adc7` 兩個本地 commit 嘅 object（working tree 反而冇事）。
+  要 reconcile 分歧 → **push 去新 branch，喺 GitHub 開 PR merge**，交畀 GitHub 處理衝突。
+- **修 `.git` 被剷嘅 SOP**（working tree 通常無事，只係指標斷咗）：
+  ① `mkdir -p .git/refs/heads .git/refs/tags .git/refs/remotes/origin .git/logs/refs/heads`
+  ② 將仲喺 object store 嘅 base commit SHA 寫入 `.git/refs/heads/<branch>`
+  ③ `git update-ref -d refs/remotes/origin/<branch>` 掉咗個指住死 object 嘅 tracking ref
+  ④ `git read-tree HEAD` 重建 index（`git status` 會報 `unable to read <sha>` 因為舊 index 指住死 blob）
+  ⑤ `git add -A` + 重新 commit。**動手前先 `cp -a` 備份 source**。
+- **GitHub credential 錯 account**：本機緩存係 `homeu98-glitch`，但 repo 屬 `EricChang1015` → push 會 403
+  （`Permission to ... denied to homeu98-glitch`）。read 正常所以 `ls-remote` 唔會報錯，好易睇漏。要用戶自己重登 / 換 PAT / 轉 SSH。
+- **`git fetch` 喺呢個環境可以「假成功」**：output 印咗 `old..new main -> origin/main` 但 tracking ref 其實冇 update
+  （寫唔到 `.git/refs/remotes/`）。判斷分歧**一定要用 SHA 直接對**（`git merge-base --is-ancestor <remote-sha> HEAD`、
+  `git rev-list --left-right --count <remote-sha>...HEAD`），唔好信 `origin/main` 呢個 ref。
+- **⚠️ 新 ref 靜默失敗（2026-09-03 實測）**：`git branch` / `git update-ref` **exit 0、冇任何 output，但 ref 根本冇寫到**。
+  原因係 git 自己要喺 `.git/refs/heads/` **開子目錄** —— 呢個 sandbox 唔批。實測：
+  - `git branch fixtmp <sha>`（**冇斜線**，唔使開目錄）→ ✅ 得
+  - `git branch fix/xxx <sha>`（有斜線）→ ❌ 靜默 no-op
+  - `mkdir -p .git/refs/heads/fix` 再 `echo <sha> > .git/refs/heads/fix/xxx` → ✅ 得（shell mkdir 可以，git 內部 mkdir 唔可以）
+  - `git commit` 更新**已存在**嘅 `refs/heads/main` → ✅ 得
+  **所以：凡係 `git branch -a` 睇唔到嘅新 branch，一律當冇建成，要靠驗證唔好靠 exit code。**
+  另外 push 唔使本地 branch —— 用 `git push origin <sha>:refs/heads/<name>` 可以完全避開呢個坑。
 - `tsc --noEmit` 唯一誤報：`layout.tsx LayoutProps`。
 - **`npx next build` 前要先 `mv .next .next.bak-<ts>`**，否則 Turbopack 清快取會撞 sandbox 批量刪除保護（count 50 / threshold 50）→ 卡 20 分鐘後報 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`。改名後 1.5 分鐘 build 完。`.gitignore` 已有 `/.next.bak*/`。
 - Android build：`export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"` + `./gradlew assembleDebug`。print hub 首次需 online（nanohttpd 等新 dep）。

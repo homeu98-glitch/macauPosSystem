@@ -2,6 +2,7 @@
 
 import { defaultPosLocalSettings } from "@/lib/mock-data";
 import { OrderItem, PosOrder, PrintJob, PrinterGroup, QueueEvent } from "@/lib/types";
+import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -11,6 +12,19 @@ function uid(prefix: string) {
 // Kiosk 設備綁店（存部機 localStorage，唔使客人 login）
 // ─────────────────────────────────────────────────────────────
 export const KIOSK_BINDING_KEY = "macau-pos-kiosk-device";
+
+/**
+ * @deprecated **唔好再當 fallback 用。**
+ *
+ * `macau-store-a` 係 admin 帳號系統（`docs/sql/admin-account-schema.sql`）嘅示範店代碼，
+ * 同 `merchants.id`（UUID）係兩套嘢。寫落 kiosk 綁定 → `resolveStoreId()` 會拎到佢 →
+ * sync 落 `pos_print_jobs.store_id` → 雲端中繼「配咗對但一張都印唔出」。
+ *
+ * 而家 `saveKioskDeviceBinding()` 會直接拒絕寫入假店，缺 merchantId 時應該**唔好寫綁定**
+ * （`resolveStoreId()` 返 undefined → sync 大聲 400，好過靜默寫錯店）。
+ *
+ * 保留呢個常數只係為咗向後兼容舊 import；新 code 一律唔好用。
+ */
 export const DEFAULT_KIOSK_STORE_ID = "macau-store-a";
 
 export type KioskLanguage = "zh-HK";
@@ -26,7 +40,12 @@ export function loadKioskDeviceBinding(): KioskDeviceBinding | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(KIOSK_BINDING_KEY);
-    return raw ? (JSON.parse(raw) as KioskDeviceBinding) : null;
+    if (!raw) return null;
+    const binding = JSON.parse(raw) as KioskDeviceBinding;
+    // 防禦：舊版本可能已經寫咗示範店代碼落嚟（見 DEFAULT_KIOSK_STORE_ID 嘅 deprecation 註解）。
+    // 當冇綁定處理 —— 寧願 sync 大聲 400，都唔好靜默寫錯店。
+    if (isPlaceholderStoreId(binding?.storeId)) return null;
+    return binding;
   } catch {
     return null;
   }
@@ -34,6 +53,14 @@ export function loadKioskDeviceBinding(): KioskDeviceBinding | null {
 
 export function saveKioskDeviceBinding(binding: KioskDeviceBinding): void {
   if (typeof window === "undefined") return;
+  // 硬閘：示範店代碼一律拒寫。呢度係最後一道防線，確保 resolveStoreId() 永遠拎唔到假店。
+  if (isPlaceholderStoreId(binding?.storeId)) {
+    console.error(
+      `[kiosk] 拒絕寫入示範店綁定（storeId=${binding?.storeId}）。` +
+        `呢個係 mock 值，會令雲端中繼「配咗對但印唔出單」。請確保登入有帶到 merchantId。`,
+    );
+    return;
+  }
   window.localStorage.setItem(KIOSK_BINDING_KEY, JSON.stringify(binding));
 }
 

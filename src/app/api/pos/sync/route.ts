@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
+import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
 /**
  * POST /api/pos/sync — 收銀 / Kiosk 離線優先同步入口。
@@ -128,6 +129,21 @@ export async function POST(request: Request) {
   const storeId = rawStoreId;
   if (storeId.length > MAX_STORE_ID_LEN || !STORE_ID_PATTERN.test(storeId)) {
     return NextResponse.json({ ok: false, error: "storeId 格式不合法" }, { status: 400 });
+  }
+  // ⚠️ 格式檢查擋唔到假店：`macau-store-a` 完全符合 STORE_ID_PATTERN。
+  // 照寫落 pos_print_jobs.store_id 會變「雲端中繼配咗對、但一張單都印唔出」嘅
+  // silent failure（Realtime filter 永遠唔 match）。所以呢度要額外過黑名單。
+  // 見 src/lib/pos/store-id-guard.ts 嘅註解。
+  if (isPlaceholderStoreId(storeId)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          `storeId「${storeId}」係示範店代碼，唔係真實商戶 ID。請重新登入 POS 帳號 —— ` +
+          `本機帶住嘅店舖識別應該係登入攞到嘅 merchants.id。`,
+      },
+      { status: 400 },
+    );
   }
 
   // ── 2) events 數量閘 ──
