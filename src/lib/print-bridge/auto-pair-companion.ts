@@ -7,6 +7,12 @@
 //
 // 安全：全部 try/catch；mixed content 擋到就靜默 skip（用家可改用手動卡或 localhost dev 版 POS）。
 // 寫入嘅 key 同 companion-config.ts 嘅 COMPANION_URL_KEY 一致，dispatch 自然會用 companion。
+//
+// ⚠️ 2026-09-02：loopback 探測加咗閘（shouldAutoDiscoverCompanion）——純 website 上從來冇
+// 配對過 Companion 嘅話唔好主動搵，否則每 mount 一次就打一次 127.0.0.1:9311 然後失敗。
+// 仍然照行：?companion= 參數、已儲存地址、設定頁「測試連線」掣。
+
+import { shouldAutoDiscoverCompanion } from "@/lib/print-bridge/companion";
 
 const COMPANION_URL_KEY = "macau-pos-companion-url";
 
@@ -19,6 +25,7 @@ export function tryAutoPairCompanion(): void {
       window.localStorage.setItem(COMPANION_URL_KEY, fromParam.trim());
       return;
     }
+    if (!shouldAutoDiscoverCompanion()) return;
     fetch("http://127.0.0.1:9311/api/config", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((cfg: { companionUrl?: string } | null) => {

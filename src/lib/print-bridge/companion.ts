@@ -58,6 +58,33 @@ export function isCompanionConfigured(): boolean {
   return getCompanionUrl() !== "";
 }
 
+/**
+ * 值唔值得主動去探 loopback（127.0.0.1:9311）搵 Companion？
+ *
+ * 背景（2026-09-02）：`PrintFlushWorker` 每 2.5 秒 call 一次 `tryAutoPairCompanion()`，
+ * 而 branch 3（零配置 loopback 探測）會喺**從來冇配對過 Companion** 嘅情況下照打
+ * `http://127.0.0.1:9311/api/health`。喺純 website（Vercel HTTPS）上冇裝 Companion 嘅話，
+ * 呢個 fetch 只會永久掟 `ERR_CONNECTION_REFUSED` —— 每 2.5 秒一條，洗晒 console 同 network
+ * tab，而收益係零（瀏覽器當 loopback 係 trustworthy origin，所以唔會被 mixed content 靜默擋，
+ * 而係真係嘗試連線然後失敗，先至咁嘈）。
+ *
+ * 規則：**冇理由相信本機有 Companion，就唔好主動搵。**
+ * 有理由 = ① 跑緊 PC 原生殼（Companion 啟動器／Electron 打包殼）② 個 page 本身就喺 localhost
+ *
+ * 仍然照行、唔受影響嘅路徑：
+ *   · URL `?companion=<url>` 參數（Companion 狀態頁「一鍵開 POS」帶入）
+ *   · localStorage 已存咗地址（即用家配對過，之後會一直探佢）
+ *   · 設定頁「測試連線」掣 / `PrinterCompanionPanel` 人手輸入地址
+ */
+export function shouldAutoDiscoverCompanion(): boolean {
+  if (typeof window === "undefined") return false;
+  // PC 原生殼：Companion 係呢個環境嘅主打印路徑，一定值得探
+  if ((window as { companionShell?: unknown }).companionShell) return true;
+  // 本機（dev 或本機架嘅 POS）：loopback 探測有意義
+  const h = window.location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
+}
+
 export function getCachedCompanionVersion(): string {
   return cachedVersion;
 }
@@ -100,9 +127,25 @@ export interface CompanionProbeResult {
   error?: string;
 }
 
-/** 探測指定（或當前已配對）Companion 地址是否可用 */
+/**
+ * 探測指定（或當前已配對）Companion 地址是否可用。
+ *
+ * ⚠️ 2026-09-02：`urlOverride` 留空 **且** 從未配對過時，以前會無條件 fallback 去
+ * `COMPANION_DEFAULT_URL`（即 `http://127.0.0.1:9311`）並真係打過去。純 website 上冇
+ * Companion，結果係永遠 `ERR_CONNECTION_REFUSED`。所以呢個 fallback 而家要過
+ * `shouldAutoDiscoverCompanion()` 呢道閘；過唔到就直接當離線，一啲 request 都唔好掟。
+ *
+ * 有明確 `urlOverride`（設定頁「測試連線」、`?companion=` 帶入嘅地址）一律照探 ——
+ * 呢啲係用家主動要求嘅，唔屬於「主動搵」。
+ */
 export async function probeCompanion(urlOverride?: string): Promise<CompanionProbeResult> {
-  const url = urlOverride ?? (getCompanionUrl() || COMPANION_DEFAULT_URL);
+  const stored = getCompanionUrl();
+  let url = urlOverride ?? stored;
+  if (!url && !shouldAutoDiscoverCompanion()) {
+    cachedAvailable = false;
+    return { ok: false, error: "未設定 Companion 地址" };
+  }
+  url = url || COMPANION_DEFAULT_URL;
   try {
     const j = (await companionJson<{ ok?: boolean; version?: string }>(url, "/api/health")) as {
       ok?: boolean;
@@ -152,6 +195,9 @@ export async function tryAutoPairCompanion(): Promise<boolean> {
   }
 
   // 3) 預設 loopback 探測（零配置）
+  //    只喺「有理由相信本機有 Companion」時先探（見 shouldAutoDiscoverCompanion 註解）。
+  //    純 website 上從來冇配對過 → 直接返 false，唔好每 2.5 秒掟一次 ERR_CONNECTION_REFUSED。
+  if (!shouldAutoDiscoverCompanion()) return false;
   const res = await probeCompanion(COMPANION_DEFAULT_URL);
   if (res.ok) {
     setCompanionUrl(COMPANION_DEFAULT_URL);
