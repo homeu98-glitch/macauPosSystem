@@ -306,6 +306,27 @@ export function PosApp() {
     return () => window.removeEventListener("pos-orders-changed", onChanged);
   }, []);
 
+  // PrintFlushWorker 每 2.5s 背景 flush，job 由 pending 轉 sent / failed 時會 dispatch
+  // "pos-print-jobs-changed"。主畫面一定要聽：以前得打印中心聽，即係收銀員喺落單畫面
+  // 完全唔會知道廚房機收唔到單（打印中心係 /prints 另一頁，冇人會特登去睇）。
+  // 同 print-center.tsx 一致：永遠重新讀 loadPrintJobs()，唔信 event detail。
+  // 事關 12 個 dispatch 位入面得 5 個有帶 printJobs，其餘 7 個係空 detail／淨係 {count}。
+  useEffect(() => {
+    const onPrintJobsChanged = () => setPrintJobs(loadPrintJobs());
+    window.addEventListener("pos-print-jobs-changed", onPrintJobsChanged);
+    return () => window.removeEventListener("pos-print-jobs-changed", onPrintJobsChanged);
+  }, []);
+
+  // 打印失敗一定要喺落單畫面睇得到：背景 flush 失敗時收銀員係零提示，
+  // 廚房就咁收唔到單。最新的排最前，等下面個提示卡顯示最近嗰個原因。
+  const failedPrintJobs = useMemo(
+    () =>
+      printJobs
+        .filter((job) => job.status === "failed")
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+    [printJobs],
+  );
+
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
   const [specModalOpen, setSpecModalOpen] = useState(false);
@@ -5358,6 +5379,23 @@ export function PosApp() {
             value={voidTableReason}
           />
         </ResponsiveModal>
+      ) : null}
+
+      {/* 列印失敗提示：背景 flush 失敗時收銀員喺落單畫面零提示，廚房就咁收唔到單。
+          放左下角避開右下角嘅 toast；left-[88px] 避開 72px 側欄。 */}
+      {failedPrintJobs.length > 0 ? (
+        <button
+          className="fixed bottom-4 left-4 z-40 max-w-xs rounded-2xl bg-red-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg hover:bg-red-700 md:left-[88px]"
+          onClick={() => router.push("/prints")}
+          type="button"
+        >
+          <div>列印失敗 {failedPrintJobs.length} 張 · 撳呢度去打印中心</div>
+          {failedPrintJobs[0]?.lastError ? (
+            <div className="mt-1 whitespace-pre-wrap break-words text-xs font-normal text-red-50">
+              {failedPrintJobs[0].lastError}
+            </div>
+          ) : null}
+        </button>
       ) : null}
 
       {toast ? (
