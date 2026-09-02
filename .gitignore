@@ -21,6 +21,9 @@
 # production
 /build
 
+# build logs（人手 redirect 出嚟嘅 build 輸出，唔好入 git）
+build-log-*.txt
+
 # misc
 .DS_Store
 *.pem
