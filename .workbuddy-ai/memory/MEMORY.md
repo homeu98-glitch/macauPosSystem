@@ -22,7 +22,11 @@
 ## 打印
 - **通道優先級**（`dispatch.ts`）：① native bridge ② Companion ③ Cloud Relay。relay 只喺 pure-web 觸發；`RelayPairingPanel` 已 self-gate（`isRunningInNativeShell()` → `return null`）。
 - **Companion loopback 唔好主動探**（2026-09-02）：`shouldAutoDiscoverCompanion()` 閘 —— 只有 PC 原生殼或 page 喺 localhost 先探 `127.0.0.1:9311`。純 website 探只會永久 `ERR_CONNECTION_REFUSED`（loopback 係 trustworthy origin，唔會被 mixed content 靜默擋）。用家主動嘅 `?companion=` / 設定頁「測試連線」照行。
-- **⚠️ 已知安全缺口（未修）**：`pos_print_jobs` 嘅 anon RLS 策略係 `created_at >= now() - 14 days`，**冇按 store 隔離**。改過嘅 client 唔帶 `filter: store_id=eq.<storeId>` 就收到全平台 14 日內 print job。0016 就係咁，唔係 Scheme B 引入。收窄方向見 `docs/97 §5.2`。
+- **⚠️ 已知安全缺口（未修）**：`pos_print_jobs` 嘅 anon RLS 策略 **冇 filter `store_id`** → 揸住 anon key（公開）讀到全平台所有店嘅 print job。0016 就係咁，唔係 Scheme B 引入。詳見 `docs/97 §5.2`。
+- **⚠️ Supabase RLS 兩個地雷（2026-09-02 查證，改 production policy 前必睇）**：
+  ① Realtime `postgres_changes` **只推即時變更、唔回放歷史** → 時間窗對 Realtime 暴露面**零影響**，淨影響 PostgREST 直接 SELECT。
+  ② Realtime 對 **UPDATE** 事件係用**新 row** 過 RLS SELECT policy，而 `created_at` UPDATE 時唔會變 → 時間窗太短（如 1h）會擋咗「延遲認領」單嘅 UPDATE，web 收唔到出紙結果。`use-pos-realtime.ts:79` 訂閱緊 `event: "*"`，中招。
+- migration `0021` 已寫好（14 days → 24 hours，**未跑**，要人手 Dashboard 貼）。根治要 JWT 帶 `store_id` claim，前置係 Vercel 加 `SUPABASE_JWT_SECRET`（而家冇）；替代方案係中繼機改純輪詢 `POST /claim`。
 - **三倉 renderer 合約（docs/95）**：web / Companion / APK 共用。加欄位必須同步三倉。
 - **收據金額鐵律**：`原價+服務費+稅−抹零−優惠===總金額`。雙軌 `resolveTotalDiscount()` 取 min 截頂。
 - 規格加購價靠右：三倉 `splitSpecLine()` + `twoColumn()`。中文字 2 格、ASCII 1 格。
