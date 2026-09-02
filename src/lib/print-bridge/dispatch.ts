@@ -22,6 +22,19 @@ import { PrintJob, PrintKind } from "@/lib/types";
  */
 let isFlushing = false;
 
+/**
+ * 去掉 job 上嘅 `lastError`（成功／重試時要清走舊原因，唔好殘留誤導人）。
+ *
+ * 用 `delete` 而唔係 `const { lastError: _dropped, ...rest } = job`：destructure 會留低個
+ * 必然 unused 嘅變數俾 eslint `@typescript-eslint/no-unused-vars` 捉（專案冇開
+ * `ignoreRestSiblings`）。`lastError` 係 optional 欄位，所以 `delete` 過到 TS strict。
+ */
+function withoutLastError(job: PrintJob): PrintJob {
+  const next: PrintJob = { ...job };
+  delete next.lastError;
+  return next;
+}
+
 export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
   // 防止 PrintFlushWorker 每 2.5s tick 重疊：若上一次 flush 仲喺度（companion 慢 / 多 job），
   // 今次直接 skip，避免同一張 pending job 被 dispatch 兩次 → 重複打印。
@@ -58,8 +71,7 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     const result = await dispatchOneJob(job);
     if (result.ok) {
       // 成功：清走上次嘅失敗原因，唔好留低誤導。
-      const { lastError: _dropped, ...cleanJob } = job;
-      nextJobs[index] = { ...cleanJob, status: "sent" };
+      nextJobs[index] = { ...withoutLastError(job), status: "sent" };
     } else if (!hasChannel) {
       // 完全無通道（未配 companion、又無 native bridge、又無 relay）：維持 pending，等店主配置後下次 flush 再試。
       nextJobs[index] = { ...job, status: "pending" };
@@ -91,8 +103,7 @@ export async function retryFailedPrintJob(jobId: string): Promise<PrintJob[]> {
   // 會殘留上一次嘅原因誤導人。
   const nextJobs = jobs.map((job) => {
     if (job.id !== jobId) return job;
-    const { lastError: _dropped, ...cleanJob } = job;
-    return { ...cleanJob, status: "pending" as const };
+    return { ...withoutLastError(job), status: "pending" as const };
   });
   savePrintJobs(nextJobs);
   window.dispatchEvent(
