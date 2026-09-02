@@ -30,6 +30,27 @@
 - **三倉 renderer 合約（docs/95）**：web / Companion / APK 共用。加欄位必須同步三倉。
 - **收據金額鐵律**：`原價+服務費+稅−抹零−優惠===總金額`。雙軌 `resolveTotalDiscount()` 取 min 截頂。
 - 規格加購價靠右：三倉 `splitSpecLine()` + `twoColumn()`。中文字 2 格、ASCII 1 格。
+- **⚠️ 錯誤原因「靜默失敗」checklist（2026-09-03，三倉全中過，寫錯誤處理照住對）**：
+  「有計到原因」唔等於「有傳到」，更唔等於「有人睇到」。五問：
+  ① 原因有冇**計出嚟** → ② 有冇**存落**資料結構（web 係 `PrintJob.lastError`；Android 係
+  `RelayState.lastPrintError`，有 `notePrintError()` helper）→ ③ **UI 有冇讀**
+  （留意：state 有唔等於有 render —— `pos-app.tsx` 嘅 `printJobs` 就係擺咗幾個月冇人讀）
+  → ④ **headless 場景**（通知欄）有冇 —— 中繼專用機鎖屏擺角落，常駐通知係唯一會俾人
+  望到嘅嘢，而且要 `.setStyle(BigTextStyle().bigText(...))`，否則長原因會被 cut
+  → ⑤ **會自動消失嘅 UI**（Toast／自動閂嘅頁）有冇機會睇 —— 8787 打印頁以前失敗都
+  700ms 自動閂，等於冇講；現改為「印到先自動閂」。
+  寫低原因嗰陣**記得喺成功／重試時清走**，否則殘留舊原因誤導人。
+  ⚠️ **清 optional 欄位唔好用 destructure-omit**（`const { x: _dropped, ...rest } = obj`）——
+  會留低個必然 unused 嘅變數俾 `@typescript-eslint/no-unused-vars` warn（本專案冇開
+  `ignoreRestSiblings`）。用 `dispatch.ts` 嘅 `withoutLastError()`：copy 完 `delete next.x`
+  （optional 欄位 `delete` 過到 TS strict）。見 commit `dcf95af`。
+- **`pos-print-jobs-changed` 事件**：12 個 dispatch 位入面**得 5 個有帶 `detail.printJobs`**，
+  其餘 7 個係空 detail 或者淨係 `{count}`（`print-jobs.ts:49`）。**listener 一律重新讀
+  `loadPrintJobs()`，唔好信 detail**（`print-center.tsx:162` + `pos-app.tsx` 都係咁做）。
+  新加 dispatch 位時唔使夾 detail，但**新加 listener 一定要用 `loadPrintJobs()`**。
+- **無打印通道 ≠ 失敗**：`flushPendingPrintJobs()` 喺 `!hasChannel`（未配 companion／
+  native bridge／relay）時維持 `pending`，**唔好當 failed 彈紅提示** —— 「從未設定打印」
+  係正常狀態，誤報會好煩。真正有通道但失敗先係 `failed`。
 
 ## 雲端中繼（Scheme B，解釋文 docs/97 / 規格 docs/96）
 iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:9100)。
@@ -76,6 +97,15 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
   要更新帶斜線嘅 branch → 手寫 ref 檔（`echo <sha> > .git/refs/heads/<dir>/<name>`）。
   要 push → 用 `git push origin <sha>:refs/heads/<name>`，完全唔使本地 ref，避開成個坑。
 - `tsc --noEmit` 唯一誤報：`layout.tsx LayoutProps`。
+- **⚠️ Next 16 冇咗 `next lint`**：`npx next lint` 會把 `lint` 當 project directory
+  （`Invalid project directory provided, no such directory: ...\lint`）。`package.json` 嘅
+  script 係 `"lint": "eslint"`，直接用 **`npx eslint <files>`**（成個 src 好慢，淨 lint 改過嘅檔）。
+- **eslint baseline（2026-09-03 實測，改動前後對照用）**：`pos-app.tsx` + `print-center.tsx`
+  已有 **9 個 unused-var warning（死碼）+ 4 個 `react-hooks/refs` error**，全部係既有嘅，唔使驚。
+  嗰 4 個 error 全部喺 `print-center.tsx:494`，係 React Compiler 規則對
+  `onChange={(e) => ... e.target.checked}` 嘅**已知 false positive**（同 `eslint.config.mjs`
+  已經閗咗 `react-hooks/set-state-in-effect` / `purity` 同一類）。
+  **判斷自己有冇引入新問題：淨係對照自己改過嘅行號。**
 - **`npx next build` 前要先 `mv .next .next.bak-<ts>`**，否則 Turbopack 清快取會撞 sandbox 批量刪除保護（count 50 / threshold 50）→ 卡 20 分鐘後報 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`。改名後 1.5 分鐘 build 完。`.gitignore` 已有 `/.next.bak*/`。
 - Android build：`export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"` + `./gradlew assembleDebug`。print hub 首次需 online（nanohttpd 等新 dep）。
 - **⚠️ 兩個 Gradle build 唔好並行跑**：print hub 同 print-agent 一齊 `assembleDebug`，
