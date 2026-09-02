@@ -75,6 +75,12 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
   **診斷法**：`git ls-remote` OK 但 push hang = 一定係憑證問題（ls-remote 唔使認證）。
   **解法**：叫用戶喺自己 terminal 跑 `git push`（GCM 喺嗰度彈到視窗）。本機冇 `gh` CLI、冇 SSH key，agent 自己搞唔掂。
   push 本身可以好慢（實測 58s ~ 6min），Hang 判定要睇有冇 output 而唔係等多耐。
+  **2026-09-03 再實測（決定性）**：`timeout 480 git push --progress origin main > push-out.txt 2>&1`
+  跑足 8 分鐘，`timeout` 掟咗（exit 124），而 **`push-out.txt` 係 0 bytes —— 連
+  「Enumerating objects」都冇**。真正慢嘅 push 一定會先印嘢，所以
+  **「N 分鐘 + output 檔 0 bytes」＝確證 hang，唔使再等**（之前試過 4m46s 掟咗，
+  以為殺早，結果再俾 8 分鐘都係零 —— 慳返 8 分鐘）。
+  另外：**push hang 嗰陣用 `Get-Process` 會搵唔到 git process**，唔好當佢已經退咗。
 - **⚠️ 絕對唔好喺呢個環境跑 `git rebase` / `git merge`（2026-09-03 實測中招）**：rebase 嘅 bulk checkout 會撞 sandbox 批量刪除保護，**連 `.git/refs/`、`.git/logs/` 同新嘅 loose object 一齊剷走**，repo 即時變 `fatal: not a git repository`，commit 全部變 dangling。
   當時 `print-agent-android` 就係咁丟咗 `5f64e26` + `305adc7` 兩個本地 commit 嘅 object（working tree 反而冇事）。
   要 reconcile 分歧 → **push 去新 branch，喺 GitHub 開 PR merge**，交畀 GitHub 處理衝突。
