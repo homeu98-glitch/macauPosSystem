@@ -1,11 +1,11 @@
-// Phase 5 終端側 relay transport 骨架（來自 docs/46 §6 / docs/43 path B）。
+// 雲端中繼 transport（docs/96 新設計：Supabase Realtime + claim RPC）。
 //
-// 實作 Phase 0 嘅 PrintTransport 接口。當 Terminal Local Agent 偵測到 off store-LAN
-// （LAN anchor 唔在，見 docs/43 / docs/46 §1）時，用呢個 transport 經 Cloud Print Relay
-// 出單：WSS submit → relay 中轉去店內 Stationary Agent → 回 result。
+// 與舊 docs/46 WSS 骨架唔同：呢度唔開 socket。Web 側「發單」= 確保張單已寫落雲端
+// pos_print_jobs（由中繼 APK 經 Realtime 訂閱 + claim RPC 拎走打印）。
 //
-// ⚠️ 骨架：暫未接入 dispatch.ts（留 P5.3）；auth/token/重連/anchor 切換要 P5.1–P5.5 補。
-// 協議訊息幀見 docs/46 §3。
+// 張單嘅 PRINT_JOB_CREATED 事件喺建單嗰陣已經入咗 sync queue（pos-app.tsx 等 9 處），
+// send() 做一次 flush 確保即時上雲，然後回 ok（已交咗畀雲端中繼）。
+// 真正出紙結果由 APK 經 /api/pos/print-agent/result 回報，雲端 pos_print_jobs.status 係權威。
 
 import type {
   DevicePrinterConfig,
@@ -14,93 +14,22 @@ import type {
   PrintSendResult,
   PrintTransport,
 } from "@/lib/types";
-
-export interface RelayTransportConfig {
-  /** wss:// 中繼地址（見 docs/46 §2 部署選型） */
-  relayUrl: string;
-  /** store-scoped token（由 Supabase Auth 派生，見 docs/46 §4） */
-  token: string;
-  storeId: string;
-  /** 等待 submit_ack / result 嘅超時（ms，預設 60s = job ttl） */
-  timeoutMs?: number;
-}
-
-interface PendingJob {
-  resolve: (r: PrintSendResult) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
+import { flushPosSyncQueue } from "@/lib/pos/sync-flush";
 
 export class RelayTransport implements PrintTransport {
-  private cfg: RelayTransportConfig;
-  private ws: WebSocket | null = null;
-  private pending = new Map<string, PendingJob>();
-
-  constructor(cfg: RelayTransportConfig) {
-    this.cfg = cfg;
-  }
-
-  /** relay 可以處理任何 connectionType（最終由店內 Stationary Agent 用對應 transport 出單）。 */
+  /** relay 可以處理任何 printer（最終由店內 APK 用對應通道出紙）。 */
   supports(_printer: DevicePrinterConfig): boolean {
     return true;
   }
 
-  private ensureSocket(): Promise<WebSocket> {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return Promise.resolve(this.ws);
-    return new Promise((resolve, reject) => {
-      const url =
-        `${this.cfg.relayUrl}?role=terminal&storeId=${encodeURIComponent(this.cfg.storeId)}` +
-        `&token=${encodeURIComponent(this.cfg.token)}`;
-      const ws = new WebSocket(url);
-      ws.onopen = () => {
-        this.ws = ws;
-        resolve(ws);
-      };
-      ws.onerror = () => reject(new Error("relay socket error"));
-      ws.onmessage = (ev) => this.onMessage(typeof ev.data === "string" ? ev.data : "");
-    });
-  }
-
-  private onMessage(raw: string): void {
-    let m: { type?: string; jobId?: string; ok?: boolean; code?: string; error?: string };
+  async send(_job: PrintJob, _printer: DevicePrinterConfig, _opts: PrintSendOptions): Promise<PrintSendResult> {
+    // 確保張單嘅 PRINT_JOB_CREATED 已推上雲（寫入 pos_print_jobs），中繼 APK 隨後 claim。
+    // 離線時 sync queue 會自己 retry，呢度樂觀回 ok（已交咗畀雲端中繼機制）。
     try {
-      m = JSON.parse(raw) as typeof m;
+      await flushPosSyncQueue({ silent: true });
     } catch {
-      return;
+      /* 靜默：sync queue 自行 retry */
     }
-    if ((m.type === "submit_ack" || m.type === "result") && m.jobId) {
-      const p = this.pending.get(m.jobId);
-      if (!p) return;
-      clearTimeout(p.timer);
-      this.pending.delete(m.jobId);
-      if (m.type === "result") {
-        // 真正物理出單結果（由店內 Stationary Agent 經 relay 返）
-        p.resolve({ ok: Boolean(m.ok), ticketId: m.jobId, code: m.code, error: m.error });
-      }
-      // submit_ack：relay 接受咗，等後續 result（pending 保留）
-    }
-  }
-
-  async send(job: PrintJob, printer: DevicePrinterConfig, opts: PrintSendOptions): Promise<PrintSendResult> {
-    const ws = await this.ensureSocket();
-    const timeoutMs = this.cfg.timeoutMs ?? 60_000;
-    return new Promise<PrintSendResult>((resolve) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(job.id);
-        resolve({ ok: false, ticketId: job.id, code: "RELAY_TIMEOUT", error: "relay timeout" });
-      }, timeoutMs);
-      this.pending.set(job.id, { resolve, timer });
-      ws.send(
-        JSON.stringify({
-          type: "submit",
-          storeId: this.cfg.storeId,
-          token: this.cfg.token,
-          job,
-          printer,
-          kind: opts.kind,
-          storeName: opts.storeName ?? "",
-          ttl: job.ttl ?? null,
-        }),
-      );
-    });
+    return { ok: true };
   }
 }

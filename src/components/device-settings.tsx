@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
 import { KioskQrPanel } from "@/components/kiosk-qr-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { RelayPairingPanel } from "@/components/relay-pairing-panel";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
   loadAuthSession,
@@ -644,7 +645,8 @@ export function DeviceSettings() {
     </div>
   ) : null}
 
-  {activeTab === "device" ? (
+        {activeTab === "device" ? (
+          <>
           <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
             <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-base font-semibold text-slate-900">本機資料</div>
@@ -851,6 +853,9 @@ export function DeviceSettings() {
               </div>
             </section>
           </div>
+
+          <RelayPairingPanel />
+          </>
         ) : null}
 
         <PrinterWizardModal

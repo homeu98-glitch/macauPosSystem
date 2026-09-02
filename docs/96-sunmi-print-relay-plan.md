@@ -362,46 +362,111 @@ QR · 折扣與反白 · 規格行加購價錢靠右 · 時價菜 · 備註 · �
 
 ---
 
-## 8. 配對流程
+## 8. 配對流程（**2026-09-02 已定案 + APK 已實作，web 端要跟呢份**）
 
-目標：**token 唔好落地喺任何 anon 可讀嘅表**，而且 Sunmi **唔使有相機**。
+目標：**token 唔好明文落地喺任何 anon 可讀嘅表**，而且 Sunmi **唔使有相機**。
+
+### 8.0 點解唔用原本諗嘅 Realtime broadcast
+
+初版設計係「APK 訂閱 `pair:<agentId>` broadcast channel，iPad POST 之後 server 推 token 落去」。
+**做唔到**：APK 喺配對完成前根本冇 `supabaseUrl` / `anonKey`，訂閱唔到 Realtime。
+先經 Vercel HTTP 攞呢兩樣嘢、再訂閱，等於要兩段式握手，複雜度唔抵。
+
+改做 **HTTP 短輪詢**：APK 每 3s 打一次 `GET /pair?agentId=`（得配對嗰陣先至打，
+配到就停），server 唔使維持任何狀態，APK 唔使任何憑證。
 
 ```
-1. Sunmi APK 首次啟動
-     生成 agentId = UUID
-     畫面顯示 QR：{ v:1, agentId }
-     開始訂閱 Realtime broadcast 頻道  pair:<agentId>   ← UUID 難估
+1. APK 首次啟動（或者撳「重新產生配對碼」）
+     agentId = "ag-" + 16 bytes hex
+     token   = 32 bytes hex（長期，用家明確要求）
+     畫面顯示 QR：「MPA1|<agentId>|<token>」
+     開始 GET /api/pos/print-agent/pair?agentId=<id>（每 3s）
 
 2. iPad（已登入、有 store session）
      用現有 loadJsQr() 掃 QR（復用 Companion 配對嘅掃描 UX）
-     POST /api/pos/print-agent/pair  { agentId, storeId, name }
-       · server 用 service_role 驗 store session
-       · 生成 agentToken，存 pos_print_agents(agent_id, store_id, token_hash, ...)
-       · 經 broadcast 頻道 pair:<agentId> 推送 { agentToken }（一次性，唔落 DB 可讀表）
-       · 同時直接回 token 畀 iPad
+     POST /api/pos/print-agent/pair  { agentId, token, storeId, name? }
+       · server 用 service_role 驗 store session 對唔對到 storeId
+       · token_hash = sha256(token)
+       · upsert pos_print_agents(agent_id, store_id, token_hash, name, created_at)
+       · 回 { ok: true }
 
-3. Sunmi APK 收到 broadcast
-     存落 EncryptedSharedPreferences
-     改訂閱 pos_print_jobs（filter store_id=eq.<storeId>）
-     畫面顯示「已配對 · <店名>」
+3. APK 下一次輪詢
+     server 見到 pos_print_agents 有呢條（revoked_at is null）
+     → 回 { status:"paired", storeId, storeName, supabaseUrl, anonKey }
+     APK 存落 SharedPreferences，訂閱 Realtime，開始 claim 迴圈
 ```
 
-- token 用喺兩個 API：`/api/pos/print-agent/claim`、`/api/pos/print-agent/result`
-- server 每次驗 `sha256(token)` 對 `token_hash` + `store_id` 一致 + `revoked_at is null`
-- 後台可以 revoke agent（寫 `revoked_at`）
+- token 只出現在：APK 螢幕上嘅 QR（配對嗰一刻）、`POST /pair` 嘅 request body（HTTPS）、
+  APK 嘅 SharedPreferences（app sandbox）。**server 淨存 sha256**。
+- server 每次驗 `sha256(x-agent-token)` 對 `token_hash` + `store_id` 一致 + `revoked_at is null`
+- 後台可以 revoke agent（寫 `revoked_at`）→ APK 下一輪 heartbeat 會收到 401，返去配對畫面
 
-> ⚠️ 已知風險：broadcast channel 用 anon key 係「任何人都可以向任意 channel 發嘢」。
-> 但 `pair:<agentId>` 係 UUID、配對過程一次性、而且 server 端綁定要已登入嘅 store session，
-> 風險可接受。若要再收緊，可以改做「店員喺 APK 手打 8 位配對碼」。
+> ⚠️ 風險：QR 明文帶 token。缓解：QR 只出現喺店內部機螢幕、掃完就應該收埋，
+> 而且**淨係拎到 token 都無用** —— 完成配對一定要已登入嘅 store session。
+> 若要再收緊（例如擔心被影相），可以改做「QR 淨帶 agentId + 6 位一次性 code，
+> code 由 server 產生並用 broadcast 推落 APK 核對」，但要先解決 8.0 嘅握手問題。
 
-### 8.1 新增 API routes（Vercel，全部 service_role）
+### 8.1 API routes（Vercel，全部 service_role）— **APK 客戶端合約**
 
-| Route | 用途 |
+APK 實作位置：`C:\dev\print-agent-android\app\src\main\java\com\macau\pos\printagent\relay\RelayApi.kt`
+
+#### `GET /api/pos/print-agent/pair?agentId=<id>`
+
+| 情況 | Response |
 |---|---|
-| `POST /api/pos/print-agent/pair` | iPad 拎 token + 推 broadcast 畀 APK |
-| `POST /api/pos/print-agent/claim` | APK 原子拎單（call `pos_claim_print_jobs` RPC） |
-| `POST /api/pos/print-agent/result` | APK 回報成功 / 失敗 |
-| `POST /api/pos/print-agent/heartbeat` | APK 心跳，寫 `last_seen_at`（店長睇中繼機在線狀態） |
+| 未配對 | `{ "status": "pending" }` |
+| 已配對 | `{ "status": "paired", "storeId": "...", "storeName": "...", "supabaseUrl": "https://xxx.supabase.co", "anonKey": "eyJ..." }` |
+
+> `supabaseUrl` / `anonKey` 由 server 落而**唔係** APK hardcode —— 換環境唔使改 APK。
+
+#### `POST /api/pos/print-agent/pair`（iPad 端，要 store session）
+
+Request：
+```json
+{ "agentId": "ag-...", "token": "<64 hex>", "storeId": "macau-store-a", "name": "收銀旁 Sunmi" }
+```
+Response：`{ "ok": true }` / `{ "ok": false, "error": "..." }`
+
+#### `POST /api/pos/print-agent/claim`
+
+Headers：`x-agent-id: <agentId>`、`x-agent-token: <token>`、`Content-Type: application/json`
+
+Request：`{ "agentId": "...", "storeId": "...", "limit": 5 }`
+
+Response：
+```json
+{
+  "ok": true,
+  "jobs": [ { /* pos_print_jobs 全行，snake_case */ } ],
+  "printers": [ { /* 該店 DevicePrinterConfig 陣列，可選 */ } ]
+}
+```
+
+Server 實作：`select * from pos_claim_print_jobs(storeId, agentId, limit)`
+（RPC 已內含 `for update skip locked` + 寫 `claimed_by/claimed_at/status='printing'/attempts+1`）
+
+#### `POST /api/pos/print-agent/result`
+
+Request：`{ "agentId": "...", "jobId": "...", "status": "sent" | "failed", "error": "..." }`
+Response：`{ "ok": true }`
+
+Server 實作：
+- `sent`   → `status='sent'`, `finished_at=now()`, `last_error=null`
+- `failed` → `status = case when attempts < 5 then 'pending' else 'failed' end`, `last_error=<error>`
+
+#### `POST /api/pos/print-agent/heartbeat`
+
+Request：
+```json
+{ "agentId": "...", "storeId": "...", "sunmiReady": true, "sunmiModal": "Sunmi V2",
+  "printedCount": 12, "failedCount": 0, "realtimeConnected": true,
+  "appVersion": "1.1.0", "versionCode": 5,
+  "deviceModel": "Sunmi V2", "androidSdk": 25 }
+```
+Response：`{ "ok": true, "serverTime": 1756... }`（`serverTime` 係 epoch millis，畀 APK 對時）
+
+Server 實作：`update pos_print_agents set last_seen_at = now() where agent_id = ...`
+（token 驗唔過 → HTTP 401，APK 會清配對返去配對畫面）
 
 ---
 
@@ -491,3 +556,50 @@ QR · 折扣與反白 · 規格行加購價錢靠右 · 時價菜 · 備註 · �
 | `anchor` 心跳 | `POST /api/pos/print-agent/heartbeat` → `pos_print_agents.last_seen_at` |
 | `ttl` | RPC 層 `ttl > now()` 過濾 |
 | `MAX_SYNC_ATTEMPTS=5` | RPC 層 `attempts < 5` |
+
+---
+
+## 14. 落地狀態（2026-09-02 更新）
+
+### ✅ 已完成
+
+| 項目 | 位置 | 備註 |
+|---|---|---|
+| Sunmi V2 硬件確認 | — | Android 7.1（API 25）、內置 **58mm** 打印機、WiFi 2.4G only、冇 RJ45 |
+| migration `0020` | `supabase/migrations/0020_print_relay.sql` | 15 個新欄位 + `pos_print_agents` + `pos_claim_print_jobs()` RPC。**未跑**（見 §5.1 警告） |
+| APK minSdk 26 → **24** | `print-agent-android/app/build.gradle.kts` | 等 API 25 嘅 Sunmi V2 裝到 |
+| 引入 `com.sunmi:printerlibrary:1.0.24` | 同上 | 純 Java AIDL、minSdk 19、無 JNI → 同 arm-v7a 無衝突 |
+| 引入 `com.squareup.okhttp3:okhttp:4.12.0` | 同上 | Realtime WSS + Vercel REST |
+| Sunmi 內置打印機輸出 | `net/SunmiPrinter.kt` | AIDL `sendRAWData(bytes)`，行同一個 `EscPosRenderer` |
+| `<queries>` 宣告 | `AndroidManifest.xml` | targetSdk ≥ 30 唔加就 bindService **靜默失敗** |
+| **58mm 紙寬修正** | `net/EscPosRenderer.kt` | `renderTemplateTicket` 之前所有 `twoColumn()` 唔傳 `cols` → 永遠 48 格（80mm）→ 58mm 機上價錢甩行。加咗 `paperColumns()`：58→32、80→48，分隔線同步 |
+| relay package | `relay/`（7 個檔） | `RelayPrefs` / `RelayState` / `RelayApi` / `RealtimeClient` / `JobRunner` / `RelayService` / `RelayActivity` / `BootReceiver` |
+| `PrintJobDto.fromRow()` | `model/PrintDtos.kt` | 直接食 `pos_print_jobs` DB row（snake_case），共用同一套 items/content/template parser |
+| `SdkPrinter.printBytes()` | `net/SdkPrinter.kt` | 中繼用：連線 → 送已 render 好嘅 bytes → 斷線 |
+| 開機自動起身 | `relay/BootReceiver.kt` | `BOOT_COMPLETED` + `MY_PACKAGE_REPLACED`，得已配對先起 |
+| **APK 已 build** | `C:/dev/print-agent-android/print-agent-1.1.0-debug.apk` | versionCode 5 / versionName 1.1.0 / minSdk 24 |
+
+### ⏳ 未完成（web / DB 側）
+
+1. **跑 migration 0020** —— 人手去 Supabase Dashboard SQL Editor 貼，貼完跑 file 尾嘅驗收 SQL
+2. **4 條 Vercel routes**（§8.1 合約）
+3. **擴 sync payload**（§6.1）— 加 `printer, kind, store_name, payment_method, total, qr, qr_url, copies, ttl`
+4. **`RealtimePrintTransport`**（§6.2）+ 接入 `dispatch.ts`（§6.3）
+5. **`mapPosPrintJobRow`** 補新欄（§6.4）
+6. **配對 UI**（iPad 端掃描 → POST /pair）
+
+### 部署步驟（Sunmi V2）
+
+1. sideload `print-agent-1.1.0-debug.apk`（`adb install -r` 或抄去 SD 卡裝）
+2. 開 app → 因為 `relayHome` 預設 false，會入 POS WebView 畫面
+3. 喺 POS 嗰邊 call `window.PosNative.openRelay()`（或者先把 `relayHome` 設 true 再重開）
+4. 中繼畫面撳「設為開機首頁（中繼專用機）」→ 之後開機直接入中繼
+5. iPad 掃 QR → 配對完成
+6. 撳「電池最佳化設定」加入白名單（**必須**，否則鎖屏一陣 Realtime 會斷）
+7. 撳「測試打印（Sunmi 內置）」驗 58mm 紙寬 + 中文編碼
+
+### ⚠️ 未實機驗證過嘅地方
+
+- Sunmi AIDL 喺真機上嘅 `onRunResult` 回調時機（超時 25s 當失敗嘅假設）
+- 58mm 出紙嘅實際斷行效果（`twoColumn` 退化邏輯：`pad < 1` 時變兩個空格分隔、唔削名）
+- Sunmi V2 ROM 對 `FOREGROUND_SERVICE_TYPE_SPECIAL_USE` 嘅相容性（API 25 其實無呢個概念，會自動忽略）
