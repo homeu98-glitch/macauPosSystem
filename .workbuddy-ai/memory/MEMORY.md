@@ -18,7 +18,7 @@ Next.js 16 App Router + React 19 + TS5 + Tailwind4 + Supabase（Ledger 必配 / 
 - **訂單排序**一律 `compareOrderByLocalNo()`（`pos-order-filters.ts`）= 純 `createdAt` asc；唔好按狀態分段。
 
 ## 打印
-- **通道優先級**（`dispatch.ts`）：① native bridge（Android `window.PosNative.printJob`）② Companion（localhost）③ Cloud Relay。relay 自然只喺 pure-web（iPad/PC browser）觸發 → native/Companion 冇 relay UI（gate = `!isRunningInNativeShell()`）。
+- **通道優先級**（`dispatch.ts`）：① native bridge（Android `window.PosNative.printJob`）② Companion（localhost）③ Cloud Relay。relay 只喺 pure-web（iPad/PC browser / PWA）觸發；`RelayPairingPanel` 已 self-gate（`isRunningInNativeShell()` → `return null`），所以 Android APK WebView（POS 終端模式）同 PC Companion 殼都唔會顯示中繼配對 UI。
 - **🟥 三倉 renderer 合約（docs/95）**：web `escpos-render.ts` / Companion `renderEscPos` / APK `EscPosRenderer.renderTemplateTicket`。**加 `PrintItemLine`/`PrintJob` 任何欄位必須同步三倉 + `docs/55 §3`**。
 - **ESC/POS 放大**：`GS ! n`(1D21) nibble `(h-1)<<4|(w-1)` → `0x11`（**唔係 0x30**）。QR 用 `GS v 0` 點陣圖（唔用 `GS ( k`），印前 `resetMagnify()`。
 - 熱敏：兩欄空格 pad 到 `RECEIPT_PAPER_COLUMNS`（80mm=48 / 58mm=32），中文字 2 格、ASCII 1 格（`displayWidth()`）。1-bit → 強調只用反白 `ESC { n`（唔包 LF）。

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { loadAuthSession, loadBootstrapCache } from "@/lib/storage";
+import { isRunningInNativeShell } from "@/components/pwa-install-button";
 import {
   clearRelayPairing,
   getRelayPairing,
@@ -27,6 +28,11 @@ export function RelayPairingPanel() {
   const [pairing, setPairing] = useState(() => getRelayPairing());
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  // 原生殼（Android APK WebView / PC Companion）入面唔使、亦唔應該顯示雲端中繼配對 UI：
+  // 呢啲環境本身就係打印終端（PosNative bridge / CompanionShell），relay 係畀純 website / PWA
+  // 嘅 iPad、PC browser 用。喺原生殼入面隱藏，亦順便慳咗一次無謂嘅 /pair-status 探測。
+  const [nativeShell] = useState(() => isRunningInNativeShell());
 
   // 自動探測：localStorage 冇配對，但雲端可能已經配對（例如 APK 早啲 self-register 過、
   // 或者 web 清過 cache）。避免每次都要人手撳「檢查」。
@@ -119,6 +125,8 @@ export function RelayPairingPanel() {
     setBusy(false);
     setMsg({ tone: "ok", text: "已解除雲端中繼配對。" });
   }
+
+  if (nativeShell) return null;
 
   return (
     <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
