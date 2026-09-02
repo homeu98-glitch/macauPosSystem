@@ -738,6 +738,13 @@ export function PrintCenter() {
                           </span>
                         </div>
 
+                        {job.status === "failed" && job.lastError ? (
+                          <div className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">
+                            <span className="font-semibold">失敗原因：</span>
+                            {job.lastError}
+                          </div>
+                        ) : null}
+
                         <div className="mt-3 text-xs text-slate-500">{formatMacauDateTime(job.createdAt)}</div>
 
                         <div className="mt-4 grid grid-cols-2 gap-2">

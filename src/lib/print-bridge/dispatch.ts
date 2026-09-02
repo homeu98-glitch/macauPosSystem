@@ -57,12 +57,16 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
 
     const result = await dispatchOneJob(job);
     if (result.ok) {
-      nextJobs[index] = { ...job, status: "sent" };
+      // 成功：清走上次嘅失敗原因，唔好留低誤導。
+      const { lastError: _dropped, ...cleanJob } = job;
+      nextJobs[index] = { ...cleanJob, status: "sent" };
     } else if (!hasChannel) {
       // 完全無通道（未配 companion、又無 native bridge、又無 relay）：維持 pending，等店主配置後下次 flush 再試。
       nextJobs[index] = { ...job, status: "pending" };
     } else {
-      nextJobs[index] = { ...job, status: "failed" };
+      // 一定要寫低原因：否則打印中心淨係顯示「失敗」，用戶完全無從追查
+      // （dispatchOneJob 整咗句好詳細嘅 error 出嚟，唔好喺呢度掉咗佢）。
+      nextJobs[index] = { ...job, status: "failed", lastError: result.error };
     }
     changed = true;
   }
@@ -83,9 +87,13 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
 
 export async function retryFailedPrintJob(jobId: string): Promise<PrintJob[]> {
   const jobs = loadPrintJobs();
-  const nextJobs = jobs.map((job) =>
-    job.id === jobId ? { ...job, status: "pending" as const } : job,
-  );
+  // 重試時清走舊嘅失敗原因：否則重試又失敗但新原因寫唔到（例如冇通道維持 pending），
+  // 會殘留上一次嘅原因誤導人。
+  const nextJobs = jobs.map((job) => {
+    if (job.id !== jobId) return job;
+    const { lastError: _dropped, ...cleanJob } = job;
+    return { ...cleanJob, status: "pending" as const };
+  });
   savePrintJobs(nextJobs);
   window.dispatchEvent(
     new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: nextJobs } }),

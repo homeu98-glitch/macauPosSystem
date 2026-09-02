@@ -623,6 +623,16 @@ export interface PrintJob {
     savingAmount?: number;
   }>;
   status: "pending" | "sent" | "failed";
+  /**
+   * 最近一次派發失敗嘅原因（嚟自 `dispatchOneJob()` 嘅 error）。
+   *
+   * 冇咗呢個欄位，打印中心淨係見到「失敗」兩個字，完全唔知衰邊度 ——
+   * 同 Print Hub 最初報嗰個 bug 同一個病：`dispatch.ts` 其實咁辛苦整咗句原因出嚟，
+   * 但寫落 job 嗰陣掉咗，根本冇傳到 UI。
+   *
+   * 由 `dispatch.ts` 負責寫同清：失敗寫低，成功／轉 pending 重試時清走。
+   */
+  lastError?: string;
   createdAt: string;
   /** 雙路徑：所屬店 ID（relay 路由用；LAN 直打可由終端補） */
   storeId?: string;
