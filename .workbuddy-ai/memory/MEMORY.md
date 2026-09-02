@@ -21,12 +21,17 @@
 
 ## 打印
 - **通道優先級**（`dispatch.ts`）：① native bridge ② Companion ③ Cloud Relay。relay 只喺 pure-web 觸發；`RelayPairingPanel` 已 self-gate（`isRunningInNativeShell()` → `return null`）。
+- **Companion loopback 唔好主動探**（2026-09-02）：`shouldAutoDiscoverCompanion()` 閘 —— 只有 PC 原生殼或 page 喺 localhost 先探 `127.0.0.1:9311`。純 website 探只會永久 `ERR_CONNECTION_REFUSED`（loopback 係 trustworthy origin，唔會被 mixed content 靜默擋）。用家主動嘅 `?companion=` / 設定頁「測試連線」照行。
+- **⚠️ 已知安全缺口（未修）**：`pos_print_jobs` 嘅 anon RLS 策略係 `created_at >= now() - 14 days`，**冇按 store 隔離**。改過嘅 client 唔帶 `filter: store_id=eq.<storeId>` 就收到全平台 14 日內 print job。0016 就係咁，唔係 Scheme B 引入。收窄方向見 `docs/97 §5.2`。
 - **三倉 renderer 合約（docs/95）**：web / Companion / APK 共用。加欄位必須同步三倉。
 - **收據金額鐵律**：`原價+服務費+稅−抹零−優惠===總金額`。雙軌 `resolveTotalDiscount()` 取 min 截頂。
 - 規格加購價靠右：三倉 `splitSpecLine()` + `twoColumn()`。中文字 2 格、ASCII 1 格。
 
-## 雲端中繼（Scheme B, docs/96）
+## 雲端中繼（Scheme B，解釋文 docs/97 / 規格 docs/96）
 iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:9100)。
+- **核心：Vercel 從來冇 call 過店內本機 app**。全部連線係 Hub 主動行出嚟（outbound），所以零入站連線 → 唔使 firewall / port forwarding / 固定 IP / VPN / Cloudflare Tunnel。
+- **relay 係備援唔係主力**：能直打（native bridge / Companion）就唔好行雲。
+- 「Realtime 負責快，RPC 負責準」：Realtime 斷/漏/截最多慢 60s，絕不漏單或重複印。
 - **配對 = Android 自註冊（用戶唔使輸入任何 ID）**：Hub 用 POS 號碼（8 位電話 + 4 位 PIN）打 `/api/ledger/login` → 拎 `merchantId` → `POST /pair` → `GET /pair?agentId=` 拎 `{storeId,supabaseUrl,anonKey}`。web 端行同一條 login 拎同一個 merchantId，所以兩邊天然對上。
 - **web 端只剩「檢查配對狀態」一個掣**（`GET /pair-status?storeId=<resolveStoreId()>`），「本店店舖 ID」輸入欄已於 2026-09-02 移除。
 - **`POST /pair` 會驗真 storeId**：假店黑名單 + 查 `merchants` 表（`22P02` 當 missing 擋；基建錯 fail-open 只 warn）。缺 storeId 嘅 sync 一律 400（無 DEFAULT fallback）。
