@@ -153,16 +153,31 @@ export function markQueueEventFailed(eventId: string, reason?: string): void {
 }
 
 /**
- * 攞當前 sync 應寫嘅 storeId：
- *   1. 收銀台登入咗 → authSession.merchantId
+ * 🚨 全 codebase 唯一嘅 storeId 真源 —— 所有要寫 store_id 嘅 call site 都必須用呢個。
+ *
+ * 優先序：
+ *   1. 收銀台登入咗 → authSession.merchantId（Ledger login 落嘅真 merchant UUID）
  *   2. 否則 kiosk 綁咗店 → loadKioskDeviceBinding().storeId
- *   3. 兩者都冇 → 唔傳 storeId（server-side 會 fallback DEFAULT_STORE_ID，唔影響 sync）。
+ *   3. 兩者都冇 → undefined（server 會返 400，寧願大聲失敗）
+ *
+ * ## 點解要統一（2026-09-02 修）
+ * 以前有 3 套唔同優先序散落喺 5 處，其中 `pos-app.tsx syncNow()` 係**反咗**
+ * （`bootstrap?.storeId ?? merchantId`）。而 `bootstrap.storeId` 有可能係 mock 值
+ * `macau-store-a`（`applyLedgerMerchantToBootstrap` 喺 session.name 空時唔修正）。
+ *
+ * 由於 `syncNow()` 係「成條 queue 連埋一齊 push」+ server `upsert({onConflict:"id"})`
+ * 包埋 store_id → **last write wins**，一次 syncNow 就可以將啱嘅 merchantId
+ * 全體覆寫做 macau-store-a。
+ *
+ * 對雲端中繼係致命嘅：`pos_print_jobs.store_id` 變成 macau-store-a，但中繼機
+ * 用 merchant UUID 註冊 → Realtime filter 唔 match、`pos_claim_print_jobs()` 返 0 列
+ * → **UI 顯示「已連線」但一張都印唔出**（最難 debug 嘅 silent failure）。
  *
  * 注意：跨店污染嘅 source-of-truth 係 server 0016 migration + pos_orders.store_id。
  * 客戶端傳 storeId 只係加速 server-side validation；server 落 row 時會以 payload
  * `source` + 路由 storeId 對齊。如果唔對齊，server 嘅 RLS / unique constraint 會擋。
  */
-function resolveStoreId(): string | undefined {
+export function resolveStoreId(): string | undefined {
   const auth = loadAuthSession();
   if (auth?.merchantId) return auth.merchantId;
   const binding = loadKioskDeviceBinding();

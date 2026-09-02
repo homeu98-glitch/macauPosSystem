@@ -25,6 +25,7 @@ import {
   saveShiftState,
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
+import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { PrintJob, PosOrder, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
@@ -248,7 +249,7 @@ export function ShiftPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           events: pending,
-          storeId: loadAuthSession()?.merchantId ?? undefined,
+          storeId: resolveStoreId(),
         }),
       });
       saveQueue(pending.map((item) => ({ ...item, status: "synced" as const })));
@@ -369,7 +370,7 @@ export function ShiftPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             events: nextQueue,
-            storeId: loadAuthSession()?.merchantId ?? undefined,
+            storeId: resolveStoreId(),
           }),
         });
         saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));

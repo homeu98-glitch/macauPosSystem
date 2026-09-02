@@ -19,7 +19,7 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
-import { notifyQueueChanged } from "@/lib/pos/sync-flush";
+import { notifyQueueChanged, resolveStoreId } from "@/lib/pos/sync-flush";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -2022,7 +2022,11 @@ export function PosApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           events: nextQueue,
-          storeId: bootstrap?.storeId ?? loadAuthSession()?.merchantId ?? undefined,
+          // 🚨 必須用 canonical helper（以前係 bootstrap?.storeId ?? merchantId，優先序反咗）。
+          // syncNow 係成條 queue 一齊 push + server upsert onConflict id 包埋 store_id
+          // → last write wins：bootstrap.storeId 若係 mock 值 macau-store-a，
+          //   會將啱嘅 merchantId 全體覆寫 → 雲端中繼 claim 唔到單、印唔出紙。
+          storeId: resolveStoreId(),
         }),
       });
 

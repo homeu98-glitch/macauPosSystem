@@ -14,6 +14,7 @@ import {
 } from "@/lib/storage";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
+import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { PosBootstrap, PosOrder, PrintJob, ReceiptTemplate } from "@/lib/types";
 import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
 import { formatMoney } from "@/lib/format";
@@ -378,8 +379,8 @@ export async function printReceiptForLedgerOrderOnce(
  */
 export async function deletePrintJobsOnServer(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const storeId =
-    loadAuthSession()?.merchantId ?? loadBootstrapCache()?.storeId ?? undefined;
+  // 用 canonical helper：唔好 fallback 去 bootstrap.storeId（可能係 mock 值 macau-store-a）。
+  const storeId = resolveStoreId();
   if (!storeId) return;
   const events = ids.map((id) => ({
     id: `pjd-${id}`,
