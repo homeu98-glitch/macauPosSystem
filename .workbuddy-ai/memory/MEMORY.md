@@ -64,15 +64,24 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 - **`git fetch` 喺呢個環境可以「假成功」**：output 印咗 `old..new main -> origin/main` 但 tracking ref 其實冇 update
   （寫唔到 `.git/refs/remotes/`）。判斷分歧**一定要用 SHA 直接對**（`git merge-base --is-ancestor <remote-sha> HEAD`、
   `git rev-list --left-right --count <remote-sha>...HEAD`），唔好信 `origin/main` 呢個 ref。
-- **⚠️ 新 ref 靜默失敗（2026-09-03 實測）**：`git branch` / `git update-ref` **exit 0、冇任何 output，但 ref 根本冇寫到**。
-  原因係 git 自己要喺 `.git/refs/heads/` **開子目錄** —— 呢個 sandbox 唔批。實測：
+- **⚠️ 帶 `/` 嘅 git ref 喺呢個 sandbox 係壞嘅（2026-09-03 實測，全部 exit 0 零 output）**：
+  原因係 git 自己要喺 `.git/refs/heads/` **開子目錄／rename** —— sandbox 唔批。實測：
   - `git branch fixtmp <sha>`（**冇斜線**，唔使開目錄）→ ✅ 得
   - `git branch fix/xxx <sha>`（有斜線）→ ❌ 靜默 no-op
-  - `mkdir -p .git/refs/heads/fix` 再 `echo <sha> > .git/refs/heads/fix/xxx` → ✅ 得（shell mkdir 可以，git 內部 mkdir 唔可以）
+  - `git update-ref refs/heads/fix/xxx <sha>` → ❌ 靜默 no-op
+  - **`git branch -f fix/xxx <sha>`（ref 已存在）→ ☠️ 會把條 ref 剷走！**（比 no-op 更衰，靜默 delete）
+  - `mkdir -p .git/refs/heads/fix` 再 `echo <sha> > .git/refs/heads/fix/xxx` → ✅ 得（shell mkdir 可以，git 內部唔可以）
   - `git commit` 更新**已存在**嘅 `refs/heads/main` → ✅ 得
-  **所以：凡係 `git branch -a` 睇唔到嘅新 branch，一律當冇建成，要靠驗證唔好靠 exit code。**
-  另外 push 唔使本地 branch —— 用 `git push origin <sha>:refs/heads/<name>` 可以完全避開呢個坑。
+  **鐵律：任何 git ref 操作完一定要 `git show-ref` verify，唔好信 exit code。**
+  要更新帶斜線嘅 branch → 手寫 ref 檔（`echo <sha> > .git/refs/heads/<dir>/<name>`）。
+  要 push → 用 `git push origin <sha>:refs/heads/<name>`，完全唔使本地 ref，避開成個坑。
 - `tsc --noEmit` 唯一誤報：`layout.tsx LayoutProps`。
 - **`npx next build` 前要先 `mv .next .next.bak-<ts>`**，否則 Turbopack 清快取會撞 sandbox 批量刪除保護（count 50 / threshold 50）→ 卡 20 分鐘後報 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`。改名後 1.5 分鐘 build 完。`.gitignore` 已有 `/.next.bak*/`。
 - Android build：`export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"` + `./gradlew assembleDebug`。print hub 首次需 online（nanohttpd 等新 dep）。
+- **⚠️ 兩個 Gradle build 唔好並行跑**：print hub 同 print-agent 一齊 `assembleDebug`，
+  其中一個會喺 `:app:dexBuilderDebug` 報 `desugar_graph/.../graph.bin (存取被拒。)`
+  `AccessDeniedException`。分開跑就正常（各 ~1min）。
+- **Kotlin 陷阱**：`runCatching { ... }` 嘅 lambda 最後一個 expression 如果本身係 `runCatching { }`，
+  返回型會變 `Result<Result<Unit>>` → 報「Return type mismatch」指住外層 `runCatching` 嗰行，
+  好難睇得出。改用普通 `try/catch`。
 - 寫咗 migration ≠ 跑咗 migration；本機冇 DB → 人手 Dashboard SQL Editor 貼。
