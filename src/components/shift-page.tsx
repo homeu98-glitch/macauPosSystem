@@ -243,8 +243,9 @@ export function ShiftPage() {
     }
     const pending = loadQueue().filter((item) => item.status !== "synced");
     if (pending.length === 0) return true;
+    let res: Response;
     try {
-      await fetch("/api/pos/sync", {
+      res = await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -252,13 +253,28 @@ export function ShiftPage() {
           storeId: resolveStoreId(),
         }),
       });
-      saveQueue(pending.map((item) => ({ ...item, status: "synced" as const })));
-      setStatus(`已同步 ${pending.length} 筆待辦資料，準備交班。`);
-      return true;
     } catch {
       setStatus("強制同步失敗，請檢查網絡或稍後重試。");
       return false;
     }
+
+    // ⚠️ 一定要 check result.ok：以前唔 check 就照 mark synced + 報「已同步 N 筆」。
+    // 若 server 拒收（400/500，例如 storeId 唔啱），啲單其實上唔到 DB，
+    // 但因為變咗 synced 就**永遠唔會再重試**，交班畫面仲要顯示成功 ——
+    // 交班係最需要確保資料落 DB 嘅一刻，唔可以報假數。
+    // （對照 sync-flush.ts 嘅 doFlush 係有 check result.ok 嘅，得呢度漏咗。）
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      setStatus(
+        `同步失敗（HTTP ${res.status}）：${detail.slice(0, 200) || "伺服器拒收"}。` +
+          `資料仲喺本機未上傳，請稍後再試或聯絡技術支援。`,
+      );
+      return false;
+    }
+
+    saveQueue(pending.map((item) => ({ ...item, status: "synced" as const })));
+    setStatus(`已同步 ${pending.length} 筆待辦資料，準備交班。`);
+    return true;
   }
 
   async function closeShift() {

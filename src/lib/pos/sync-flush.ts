@@ -34,6 +34,19 @@ import { QueueEvent } from "@/lib/types";
 
 export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
 
+/**
+ * 有 event **永久**同步失敗（attempts 到頂）時廣播畀 UI。
+ *
+ * ⚠️ 唔可以 reuse `POS_SYNC_QUEUE_CHANGED_EVENT`：嗰個被 `installPosSyncQueueAutoFlush`
+ * 當 trigger 用（聽到就 flush），喺 doFlush 入面 dispatch 佢會**無限迴圈**。呢個係淨係
+ * 畀 UI 聽嘅單向通知，flush 邏輯唔會聽。
+ *
+ * 點解要有：永久 failed 嘅 event 之後會俾 doFlush 第 209 行 `continue` 跳過，
+ * **永遠唔會再重試**；而全個 app 本來零 UI 顯示佢哋（backoffice 同步頁讀嘅係
+ * server 紀錄，傳唔到 server 嘅 event 當然唔會出現喺度）。
+ */
+export const POS_SYNC_FAILED_EVENT = "pos-sync-failed";
+
 const MAX_SYNC_ATTEMPTS = 5;
 const MAX_EVENTS_PER_FLUSH = 100; // 對齊 server-side `MAX_EVENTS_PER_REQUEST`
 const FLUSH_INTERVAL_MS = 30_000;
@@ -153,6 +166,34 @@ export function markQueueEventFailed(eventId: string, reason?: string): void {
 }
 
 /**
+ * 手動重試「永久失敗」嘅同步 event：attempts 歸零 + status 轉返 pending，
+ * 等 doFlush 上面第 209 行（`attempts >= MAX_SYNC_ATTEMPTS` 就 continue）唔再 skip 佢哋，
+ * 然後觸發一次 flush。
+ *
+ * 冇咗呢個入口，永久 failed 嘅 event 係死嘅：doFlush 唔會再揀佢，UI 又冇辦法救返，
+ * 資料就咁永遠留喺本機、上唔到 DB。
+ *
+ * 呢度 dispatch `POS_SYNC_QUEUE_CHANGED_EVENT` 係**安全**嘅（會即刻 flush 一次）：
+ * doFlush 失敗時 dispatch 嘅係另一個 `POS_SYNC_FAILED_EVENT`，唔會自觸發，唔會迴圈。
+ *
+ * @returns 重新排入嘅 event 數
+ */
+export function retryFailedSyncEvents(): number {
+  if (typeof window === "undefined") return 0;
+  const queue = loadQueue() as ExtendedQueueEvent[];
+  const failed = queue.filter((e) => e.status === "failed");
+  if (failed.length === 0) return 0;
+
+  const next = queue.map((e) =>
+    e.status === "failed" ? { ...e, status: "pending" as const, attempts: 0 } : e,
+  );
+  saveQueue(next);
+  window.dispatchEvent(new CustomEvent(POS_SYNC_QUEUE_CHANGED_EVENT, { detail: { queue: next } }));
+  console.log(`[pos-sync-flush] 手動重試 ${failed.length} 筆永久失敗嘅同步 event`);
+  return failed.length;
+}
+
+/**
  * 🚨 全 codebase 唯一嘅 storeId 真源 —— 所有要寫 store_id 嘅 call site 都必須用呢個。
  *
  * 優先序：
@@ -253,6 +294,19 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
       };
     });
     saveQueue(next);
+
+    // 永久失敗（attempts 到頂）一定要話畀 UI 知：呢啲 event 之後會俾上面第 209 行
+    // `continue` 跳過，**永遠唔會再重試**，資料淨係留喺本機。以前完全冇人講，
+    // 收銀以為單已經上咗 DB。
+    const justFailed = next.filter((e) => flippedIds.has(e.id) && e.status === "failed");
+    if (justFailed.length > 0) {
+      window.dispatchEvent(
+        new CustomEvent(POS_SYNC_FAILED_EVENT, {
+          detail: { count: justFailed.length, status: result.status },
+        }),
+      );
+    }
+
     if (!options.silent) {
       // eslint-disable-next-line no-console
       console.warn(`[pos-sync-flush] server 拒收 ${flippable.length} 筆同步事件（status ${result.status}）`);

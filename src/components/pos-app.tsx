@@ -19,7 +19,12 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
-import { notifyQueueChanged, resolveStoreId } from "@/lib/pos/sync-flush";
+import {
+  notifyQueueChanged,
+  resolveStoreId,
+  retryFailedSyncEvents,
+  POS_SYNC_FAILED_EVENT,
+} from "@/lib/pos/sync-flush";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -317,6 +322,18 @@ export function PosApp() {
     return () => window.removeEventListener("pos-print-jobs-changed", onPrintJobsChanged);
   }, []);
 
+  // 同步**永久**失敗（server 連續拒收 5 次）一定要喺落單畫面睇得到。
+  // 呢啲 event 之後會被 sync-flush 永久 skip，永遠唔會再重試，而全個 app 本來
+  // 零 UI 顯示佢哋（backoffice 同步頁讀嘅係 server 紀錄，傳唔到 server 嘅 event
+  // 當然唔會出現喺度）—— 收銀會以為單已經上咗 DB。
+  // 注意：唔好聽 POS_SYNC_QUEUE_CHANGED_EVENT，嗰個係 flush 自己嘅 trigger，
+  // 聽咗會每 30s 無謂 refresh。
+  useEffect(() => {
+    const onSyncFailed = () => setQueue(loadQueue());
+    window.addEventListener(POS_SYNC_FAILED_EVENT, onSyncFailed);
+    return () => window.removeEventListener(POS_SYNC_FAILED_EVENT, onSyncFailed);
+  }, []);
+
   // 打印失敗一定要喺落單畫面睇得到：背景 flush 失敗時收銀員係零提示，
   // 廚房就咁收唔到單。最新的排最前，等下面個提示卡顯示最近嗰個原因。
   const failedPrintJobs = useMemo(
@@ -325,6 +342,13 @@ export function PosApp() {
         .filter((job) => job.status === "failed")
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
     [printJobs],
+  );
+
+  // 永久同步失敗嘅 event 數。由 queue state 計，所以重新載入頁面都仲喺度
+  // （queue 初始值就係 loadQueue()，failed 事件一直留喺 localStorage）。
+  const failedSyncCount = useMemo(
+    () => queue.filter((event) => event.status === "failed").length,
+    [queue],
   );
 
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
@@ -5381,21 +5405,52 @@ export function PosApp() {
         </ResponsiveModal>
       ) : null}
 
-      {/* 列印失敗提示：背景 flush 失敗時收銀員喺落單畫面零提示，廚房就咁收唔到單。
-          放左下角避開右下角嘅 toast；left-[88px] 避開 72px 側欄。 */}
-      {failedPrintJobs.length > 0 ? (
-        <button
-          className="fixed bottom-4 left-4 z-40 max-w-xs rounded-2xl bg-red-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg hover:bg-red-700 md:left-[88px]"
-          onClick={() => router.push("/prints")}
-          type="button"
-        >
-          <div>列印失敗 {failedPrintJobs.length} 張 · 撳呢度去打印中心</div>
-          {failedPrintJobs[0]?.lastError ? (
-            <div className="mt-1 whitespace-pre-wrap break-words text-xs font-normal text-red-50">
-              {failedPrintJobs[0].lastError}
+      {/* 左下角問題提示區（垂直 stack）：避開右下角嘅 toast；md:left-[88px] 避開 72px 側欄。
+          兩種問題可以同時出現，所以要 stack 而唔係兩嚿 fixed 互相冚住。 */}
+      {failedPrintJobs.length > 0 || failedSyncCount > 0 ? (
+        <div className="fixed bottom-4 left-4 z-40 flex max-w-xs flex-col gap-2 md:left-[88px]">
+          {/* 同步永久失敗：server 連續拒收 5 次，呢啲 event 已經唔會再自動重試。
+              用 amber 而唔係 red —— 資料安全留喺本機，只係未上到 DB，唔係即刻營運事故。 */}
+          {failedSyncCount > 0 ? (
+            <div className="rounded-2xl bg-amber-500 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg">
+              <div>⚠ {failedSyncCount} 筆資料未同步到伺服器</div>
+              <div className="mt-1 text-xs font-normal text-amber-50">
+                伺服器連續拒收，已停止自動重試。資料仍然安全留喺本機。
+              </div>
+              <button
+                className="mt-2 rounded-lg bg-white/20 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/30"
+                onClick={() => {
+                  const revived = retryFailedSyncEvents();
+                  setQueue(loadQueue());
+                  setToast(
+                    revived > 0
+                      ? { tone: "success", message: `已重新排入 ${revived} 筆同步資料` }
+                      : { tone: "error", message: "搵唔到失敗嘅同步資料" },
+                  );
+                }}
+                type="button"
+              >
+                撳呢度重試同步
+              </button>
             </div>
           ) : null}
-        </button>
+
+          {/* 列印失敗：背景 flush 失敗時收銀員喺落單畫面零提示，廚房就咁收唔到單。 */}
+          {failedPrintJobs.length > 0 ? (
+            <button
+              className="rounded-2xl bg-red-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg hover:bg-red-700"
+              onClick={() => router.push("/prints")}
+              type="button"
+            >
+              <div>列印失敗 {failedPrintJobs.length} 張 · 撳呢度去打印中心</div>
+              {failedPrintJobs[0]?.lastError ? (
+                <div className="mt-1 whitespace-pre-wrap break-words text-xs font-normal text-red-50">
+                  {failedPrintJobs[0].lastError}
+                </div>
+              ) : null}
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {toast ? (
