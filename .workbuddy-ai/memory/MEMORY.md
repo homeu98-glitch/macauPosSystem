@@ -64,6 +64,23 @@
   - 結帳時收據印唔到要用 `describePrintFailures()` 顯示喺成功畫面（`salon/checkout.tsx`），
     因為列印失敗唔阻塞結帳，否則收銀員淨係見到「結帳完成」。
 
+- **⚠️ 同步失敗嘅「靜默」陷阱（2026-09-03 全修，動 sync 邏輯必睇）**：
+  - 網絡錯 → 保留 `pending`、**唔加 attempts** → 無限重試 ✅（刻意嘅設計，唔好改）
+  - Server 拒收 → attempts++，到 `MAX_SYNC_ATTEMPTS = 5` 標 `failed`
+  - **之後 doFlush 第 209 行 `attempts >= MAX` 就 `continue` → 永久 skip，死咗**
+  - `POS_SYNC_QUEUE_CHANGED_EVENT` 係 **flush trigger**（`installPosSyncQueueAutoFlush`
+    聽到就 flush）。**喺 doFlush 入面 dispatch 佢會無限迴圈**；要通知 UI 請用
+    `POS_SYNC_FAILED_EVENT`（淨係 UI 聽，flush 唔聽）。
+  - `retryFailedSyncEvents()`（attempts 歸零 + 轉 pending）係永久 failed event
+    **唯一嘅救命入口**。冇咗佢，資料永遠留喺本機、上唔到 DB。
+  - `pos-app.tsx` 嘅 `queue` state 同 `printJobs` 一樣：**要自己加 listener 先會更新**，
+    唔好假設佢反映緊最新狀態。
+  - `backoffice-sync-page` 讀嘅係 **server** `syncJobs`，**唔係**本地 queue ——
+    傳唔到 server 嘅 event 唔會出現喺度。
+- **`no-console` 喺 eslint config 冇開**：檔案入面嗰啲
+  `// eslint-disable-next-line no-console` 全部係多餘（會出「Unused eslint-disable
+  directive」warning）。**新寫 code 唔好再加**。
+
 ## 雲端中繼（Scheme B，解釋文 docs/97 / 規格 docs/96）
 iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:9100)。
 - **核心：Vercel 從來冇 call 過店內本機 app**。全部連線係 Hub 主動行出嚟（outbound），所以零入站連線 → 唔使 firewall / port forwarding / 固定 IP / VPN / Cloudflare Tunnel。
