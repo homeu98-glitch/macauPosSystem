@@ -3,19 +3,23 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
+  const { searchParams } = new URL(request.url);
+  const storeId = searchParams.get("storeId")?.trim() || null;
 
   if (!supabase) {
     return NextResponse.json({ ok: true, deviceConfig: null, localSettings: null });
   }
 
-  const { data, error } = await supabase
+  // 舊版冇 store_id 過濾，攞嘅係「全平台 updated_at 最新一行」——多店環境會撈錯店（見 docs/98 問題二）。
+  // 加咗選用 storeId 過濾：Hub 配對後帶自己嘅 storeId 嚟拎路由配置；web 端唔傳就維持舊行為。
+  let query = supabase
     .from("pos_device_configs")
     .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("updated_at", { ascending: false });
+  if (storeId) query = query.eq("store_id", storeId);
+  const { data, error } = await query.limit(1).maybeSingle();
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

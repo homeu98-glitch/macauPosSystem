@@ -655,7 +655,109 @@ Hub 端觀察（撳完落單 30 秒內）：
 
 **或者更簡單**：直接撳一次「清除已發送」按鈕（會刪所有 `status === 'sent'` 嘅 printJobs），雖然針對嘅唔係 queue，但係個衛生起手式。
 
-### 9.4 第二個問題（打印機路由可視性）未動
+### 9.4 第二個問題（打印機路由可視性）— 2026-09-03 18:35 已做（方向 A）
 
-仍係 TODO：Hub 端睇唔到「邊部機負責印咩內容」嘅配置喺邊。方向 A（讀 `pos_device_configs.printers` jsonb）、方向 B（行內 storeId 配 config API）、方向 C（hub 推配置）三條路徑都仲未做。建議下輪單獨開份 `docs/99-*` 處理。
+**用家確認**：「兩個問題」嘅第 2 個即係最初提嘅「Hub 端睇唔到打印機路由配置」。
+
+#### 根因（再確認）
+- 路由配置真源喺 web POS：`loadDeviceConfig()` + 雲端 `pos_device_configs.printers`（jsonb），
+  每部機有 `role`(zone/receipt/label)、`zoneId`、`name`、`ipAddress`、`lanPort`、`enabled`。
+- `GET /api/pos/device-config` **冇 store_id 過濾**（`route.ts:13-18` 舊版攞全平台 `updated_at` 最新一行）→ 多店會撈錯店。
+- Hub 端 `JobRunner.resolvePrinter()` 冇呢份配置 → 跌到「第一個開 9100 嘅機」（H6）。
+
+#### 設計決策（方向 A：Hub 直接讀雲端 config）
+- 唔做「Hub 端設定」（用家原本就係想喺 POS 設、Hub 只睇），唔做方向 C（web push 落 Hub，多餘）。
+- Hub 用配對後嘅 `storeId` 拉自己店嘅 config，每 60 秒一次（經 `HubService` tick，子 coroutine 唔阻塞 claim loop）。
+
+#### 改動清單（3 檔 POS + 4 檔 Hub）
+
+| # | 檔案 | 動作 |
+|---|---|---|
+| 1 | `src/app/api/pos/device-config/route.ts` | GET 加選用 `?storeId=` 過濾（順手修咗無 store_id 過濾坑；web 唔傳就維持舊行為） |
+| 2 | `relay/RelayState.kt` | 加 `data class RoutingPrinter(...)` + `deviceConfigPrinters: List<RoutingPrinter>` + `reset()` 清 |
+| 3 | `relay/RelayApi.kt` | 加 `fetchDeviceConfig(baseUrl, storeId): List<RoutingPrinter>?`（拉 `deviceConfig.printers`，parse 出 role/zoneId/ip/lanPort/enabled） |
+| 4 | `relay/HubService.kt` | 加 `lastConfigFetchAt` + `CONFIG_FETCH_MS=60s`；tick 內每 60s 叫 `fetchDeviceConfig()` 寫入 `RelayState` |
+| 5 | `ui/MainActivity.kt` | 加「打印機路由配置（web POS）」版面 + `refreshRouting()`（signature 比對，資料變先 rebuild） |
+
+#### 驗證步驟
+- **POS**（可 tsc 驗）：`tsc --noEmit` 零錯誤 ✅（2026-09-03 18:35 跑過）。
+- **Hub**（需 Android build，此環境無 SDK，手動跑）：
+  ```bash
+  cd C:/dev/print-relay && ./gradlew assembleDebug
+  ```
+  裝機後：web POS「設置 → 打印機」加一部 zone 機 + 一部 receipt 機 → 等 ≤60s → Hub App 拉到落去，
+  版面見「廚房 192.168.x.x:9100 [分區單 · 區 Z1]」「收銀 192.168.y.y:9100 [收據]」。
+  停部機 / 改 IP → 版面即時反映「⚠ 已停用」/ 新 IP。
+- **SQL 交叉驗證**（確認雲端真係有數、store_id 對）：
+  ```sql
+  select store_id, jsonb_array_length(printers) as n_printers,
+         printers -> 0 ->> 'role' as first_role
+    from public.pos_device_configs where store_id = '<HUB 嘅 storeId>';
+  ```
+
+#### 已知限制
+- ~~呢版只做**可視性**，冇改 `JobRunner.resolvePrinter()` 嘅實際路由邏輯（H6 仍在）~~ → **2026-09-03 18:50 已做**：
+  `resolvePrinter()` 加咗配置驅動揀機（step 1，權威）：`job.printer_id`（web uid）== `RoutingPrinter.id`，
+  直接 match 到配置機嘅 `ipAddress:lanPort` 印，取代舊 fallback「第一個開 9100 嘅機」。配置機 IP 空白就跌落本地發現匹配。
+  關鍵前提：雲端 `pos_print_jobs.printer_id`（sync/route.ts:333 寫自 `eventPayload.printerId`）
+  == `pos_device_configs.printers[].id` == `RoutingPrinter.id`（同源 `DevicePrinterConfig.id`），所以對碰成立。
+- Hub 拉 config 用 service-role client（同 state/device-config 路由），storeId 由 Hub 自己帶，未做額外鑑權（同現有 pattern 一致）。
+
+
+---
+
+## 10. 優化記錄（2026-09-03 18:25，問題一：網頁見唔到 failed）
+
+### 10.1 問題定義
+
+H10 修復後，單會正常上雲、Hub 會正常印。但網頁「打印中心」淨係會顯示 `已發送`（local `sent`），
+**Hub 印失敗（雲端 `pos_print_jobs.status='failed'` + `last_error`）完全反映唔到本地**。用家以為出咗紙，實際冇。
+
+根因：relay 年代，本地 `sent` 只代表「成功入咗雲端隊列」，**唔代表 Hub 真係印到**。
+真正打印結果（sent/failed + 原因）由 Hub 經 `POST /api/pos/print-agent/result` 寫落雲端
+（`result/route.ts:50-63`，雲端狀態機完整：`pending → claimed → sent/failed`），
+但網頁`print-center` 從未把呢個結果讀返本地。UI 其實已經支援 `failed` + `lastError` 顯示
+（`print-center.tsx:733-751`，紅色「失敗」badge + 「失敗原因：…」），只係冇人更新本地狀態。
+
+### 10.2 設計決策
+
+- **機制**：輪詢（每 8 秒）輕量端點，唔用 Realtime（收銀機網絡唔穩，長連接要寫重連邏輯，性價比低）。
+  最多慢 8 秒見到結果，對「失敗提示」呢個場景可接受。
+- **狀態精細度**：淨做「失敗回填」，唔做全套狀態機（打印中 / 已打印）。改動最細、唔碰 types 全場。
+- **覆寫方向**：雲端結果只可以「向上」覆寫本地 —— `failed` 覆寫一切、`sent` 只升唔降、
+  **絕對唔可以向下覆寫**（雲端 pending/claimed 唔會經呢個端點漏出嚟，所以唔會出現「本地 sent 被打回 pending」）。
+
+### 10.3 改動清單（代碼）
+
+| # | 檔案 | 動作 |
+|---|---|---|
+| 1 | `src/app/api/pos/print-jobs/status/route.ts` | **新增**。GET 端點，按 `store_id` 返 `pos_print_jobs` 入面 `status IN ('sent','failed')` 嘅 `{id,status,lastError}`，最多 200 行。 |
+| 2 | `src/components/print-center.tsx` | 新增 `import { resolveStoreId } from "@/lib/pos/sync-flush"` |
+| 3 | `src/components/print-center.tsx` | 新增 `syncCloudPrintOutcomes()`：拉端點 → 用 `job.id` 對碰 → 雲端 `failed` 覆寫本地（帶 `lastError`）；雲端 `sent` 只升唔降。有變先 `persistPrintJobs()`。 |
+| 4 | `src/components/print-center.tsx` | 新增 `useEffect`：載入即拉一次 + 每 8 秒 `setInterval` 輪詢，卸載清 interval。 |
+
+**關鍵對碰前提**：雲端 `pos_print_jobs.id` = 本地 `job.id`（`sync/route.ts:312,317` 用 `eventPayload.id` 寫入），
+所以 `cloudById.get(job.id)` 直接命中，唔使轉換。
+
+### 10.4 驗證步驟（deploy 後）
+
+1. 揀一部 LAN 打印機，人為令佢印唔到（e.g. 摺咗電源 / 改錯 IP）。
+2. 落單 → 等 8-15 秒 → 睇打印中心「失敗」tab：
+   - 應見到該單 `失敗` 紅 badge + `失敗原因：<雲端 last_error，例如 "connect ECONNREFUSED 192.168.x.x:9100">`
+   - 「全部」tab 過濾照常，可按「清除已失敗」清走
+3. 復原打印機 → 下張單正常 → 雲端 `sent` → 本地維持 `已發送`（唔會被錯誤打回）。
+
+```sql
+-- 確認雲端真係有 failed 行（同時睇 last_error 有冇值）
+select id, status, last_error, updated_at
+  from public.pos_print_jobs
+ where status = 'failed' order by updated_at desc limit 10;
+```
+
+### 10.5 已知限制（留待下輪）
+
+- 唔做「打印中 / 已打印」中間態：本地 `已發送` 同雲端 `sent`（Hub 印到）喺 UI 上重疊顯示為 `已發送`。
+  要區分就係做全套狀態機（加 `printing` / `printed` 值，改 types + 所有顯示位），改動大過而家呢版需求。
+- 輪詢每 8 秒一次，網絡慢時最遲 ~8 秒先見到失敗。若之後要即時，可加 Supabase Realtime 做主通道、輪詢做兜底。
+
 

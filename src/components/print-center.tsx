@@ -11,6 +11,7 @@ import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
 import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
+import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearSentPrintJobs } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
@@ -173,6 +174,21 @@ export function PrintCenter() {
     }
     window.addEventListener("pos-device-config-changed", onDeviceConfigChanged);
     return () => window.removeEventListener("pos-device-config-changed", onDeviceConfigChanged);
+  }, []);
+
+  // §10（docs/98）：輪詢雲端打印結果，令網頁見到 Hub 真實嘅「失敗 / 已印」。
+  // 每 8 秒一次；component 卸載即停。離線 / 網絡錯會喺 syncCloudPrintOutcomes 內靜默跳過。
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      if (alive) void syncCloudPrintOutcomes();
+    };
+    tick(); // 一入頁面就拉一次，唔使等首個 8 秒
+    const interval = window.setInterval(tick, 8000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
   }, []);
 
   const filteredJobs = useMemo(() => {
@@ -378,6 +394,47 @@ export function PrintCenter() {
     // （要等其他操作偶然觸發 syncNow 先被推送）。家陣同 pos-app.tsx 一致，
     // 入隊後即刻 dispatch POS_SYNC_QUEUE_CHANGED_EVENT，等 sync-flush worker 接力推上雲。
     notifyQueueChanged();
+  }
+
+  // §10（docs/98）：把雲端嘅打印結果回填本地 print job 狀態。
+  // relay 年代，本地嘅 `sent` 只代表「入咗雲端隊列」，真正印到 / 印唔到喺雲端（Hub 回報）。
+  // 所以雲端 failed 必須覆寫本地（否則用家永遠見唔到失敗）；
+  // 但雲端結果只可以「向上」覆寫——絕對唔可以將本地 sent 打回 pending
+  // （呢個端點亦只返 sent / failed，根本唔會有 pending 漏出嚟）。
+  async function syncCloudPrintOutcomes() {
+    const storeId = resolveStoreId();
+    if (!storeId) return;
+    let res: Response;
+    try {
+      res = await fetch(`/api/pos/print-jobs/status?storeId=${encodeURIComponent(storeId)}`);
+    } catch {
+      return; // 離線 / 網絡錯 → 靜默，下個 tick 再試
+    }
+    if (!res.ok) return;
+    const data = (await res.json().catch(() => null)) as
+      | { ok?: boolean; jobs?: Array<{ id: string; status: "sent" | "failed"; lastError?: string }> }
+      | null;
+    if (!data?.ok || !Array.isArray(data.jobs)) return;
+
+    const cloudById = new Map(data.jobs.map((j) => [j.id, j]));
+    const current = loadPrintJobs();
+    let changed = false;
+    const next = current.map((job) => {
+      const cloud = cloudById.get(job.id);
+      if (!cloud) return job;
+      if (cloud.status === "failed" && job.status !== "failed") {
+        changed = true;
+        return { ...job, status: "failed" as const, lastError: cloud.lastError ?? job.lastError };
+      }
+      if (cloud.status === "sent" && (job.status === "pending" || job.status === "sent")) {
+        if (job.status !== "sent") {
+          changed = true;
+          return { ...job, status: "sent" as const };
+        }
+      }
+      return job;
+    });
+    if (changed) persistPrintJobs(next);
   }
 
   function reprintOrder(order: PosOrder) {
