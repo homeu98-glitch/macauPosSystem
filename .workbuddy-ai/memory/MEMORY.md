@@ -103,13 +103,22 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 - **⚠️ `git push` 可能會無限期 hang（GCM 喺 sandbox 死）**：憑證快取過期後，Git Credential Manager 彈唔到認證視窗 → push 卡死無 output（實測 hang 20+ 分鐘）。device flow（`GCM_GITHUB_AUTHMODES=device`）一樣靜默 hang；`git -c credential.helper= push` 會即刻 `fatal: could not read Username`。
   **診斷法**：`git ls-remote` OK 但 push hang = 一定係憑證問題（ls-remote 唔使認證）。
   **解法**：叫用戶喺自己 terminal 跑 `git push`（GCM 喺嗰度彈到視窗）。本機冇 `gh` CLI、冇 SSH key，agent 自己搞唔掂。
-  push 本身可以好慢（實測 58s ~ 6min），Hang 判定要睇有冇 output 而唔係等多耐。
-  **2026-09-03 再實測（決定性）**：`timeout 480 git push --progress origin main > push-out.txt 2>&1`
-  跑足 8 分鐘，`timeout` 掟咗（exit 124），而 **`push-out.txt` 係 0 bytes —— 連
-  「Enumerating objects」都冇**。真正慢嘅 push 一定會先印嘢，所以
-  **「N 分鐘 + output 檔 0 bytes」＝確證 hang，唔使再等**（之前試過 4m46s 掟咗，
-  以為殺早，結果再俾 8 分鐘都係零 —— 慳返 8 分鐘）。
-  另外：**push hang 嗰陣用 `Get-Process` 會搵唔到 git process**，唔好當佢已經退咗。
+  Push 本身可以好慢（實測 58s ~ 6min），Hang 判定要睇有冇 output 而唔係等多耐。
+  **2026-09-03 第一次實測（hang）**：`timeout 480 git push --progress origin main > push-out.txt`
+  跑足 8 分鐘，`timeout` 掟咗（exit 124），**`push-out.txt` 係 0 bytes** —— 連
+  「Enumerating objects」都冇。另外 hang 嗰陣用 `Get-Process` 搵唔到 git process，
+  唔好當佢已經退咗。
+  **2026-09-03 第二次實測（成功！推翻上面嘅結論）**：同一個 sandbox、同一個指令，
+  **`timeout 300 git push --progress origin main` 2m26s 就成功**（exit 0，
+  `18eabf7..54b532b main -> main`，output 2737 bytes，正常 print 晒進度）。
+  ➡️ **正確理解：push hang 唔係必然，係「GCM 憑證有冇緩存」嘅 intermittant 問題。**
+  緩存命中 → 2~3 分鐘成功；緩存冇／過期 → 靜默 hang。所以**唔好一開始就認定
+  要交畀用戶**，實用做法：
+  ① 用 `run_in_background` + `--progress` + 重定向落檔案；
+  ② ~3 分鐘後睇 output bytes：**> 0 即係進行中，等佢**；**一直 0 bytes 即係 hang**；
+  ③ hang 就掟咗佢，叫用戶喺自己 terminal push（佢 push 完，憑證入咗緩存，
+     之後 agent 再 push 就得返）。
+  ④ push 完一定要 `git ls-remote origin` 對 SHA，唔好淨信 exit code。
 - **⚠️ 絕對唔好喺呢個環境跑 `git rebase` / `git merge`（2026-09-03 實測中招）**：rebase 嘅 bulk checkout 會撞 sandbox 批量刪除保護，**連 `.git/refs/`、`.git/logs/` 同新嘅 loose object 一齊剷走**，repo 即時變 `fatal: not a git repository`，commit 全部變 dangling。
   當時 `print-agent-android` 就係咁丟咗 `5f64e26` + `305adc7` 兩個本地 commit 嘅 object（working tree 反而冇事）。
   要 reconcile 分歧 → **push 去新 branch，喺 GitHub 開 PR merge**，交畀 GitHub 處理衝突。
