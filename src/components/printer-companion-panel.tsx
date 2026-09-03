@@ -51,7 +51,7 @@ function uid(prefix: string): string {
 
 type StatusState = "checking" | "online" | "offline";
 
-function CompanionStatusCard() {
+export function CompanionStatusCard() {
   const [status, setStatus] = useState<StatusState>("checking");
   const [version, setVersion] = useState("");
   const [testing, setTesting] = useState(false);

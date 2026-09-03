@@ -37,6 +37,7 @@ import { formatSpecGroupsSummary } from "@/lib/ledger/menu-spec";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
+import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 
@@ -853,6 +854,8 @@ export function DeviceSettings() {
               </div>
             </section>
           </div>
+
+          <CompanionStatusCard />
 
           <RelayPairingPanel />
           </>
