@@ -119,8 +119,14 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
   ③ hang 就掟咗佢，叫用戶喺自己 terminal push（佢 push 完，憑證入咗緩存，
      之後 agent 再 push 就得返）。
   ④ push 完一定要 `git ls-remote origin` 對 SHA，唔好淨信 exit code。
-- **⚠️ 絕對唔好喺呢個環境跑 `git rebase` / `git merge`（2026-09-03 實測中招）**：rebase 嘅 bulk checkout 會撞 sandbox 批量刪除保護，**連 `.git/refs/`、`.git/logs/` 同新嘅 loose object 一齊剷走**，repo 即時變 `fatal: not a git repository`，commit 全部變 dangling。
-  當時 `print-agent-android` 就係咁丟咗 `5f64e26` + `305adc7` 兩個本地 commit 嘅 object（working tree 反而冇事）。
+- **⚠️ 絕對唔好喺呢個環境跑 `git rebase` / `git merge`**：rebase 嘅 bulk checkout 會撞 sandbox 批量刪除保護。
+  **兩種實測結果都要記住**：
+  (a) 早前（2026-09-03）`print-agent-android` 真係中過招：`.git` 被剷，`5f64e26`+`305adc7` object 變 dangling。
+  (b) **2026-09-03 晚再遇一次，結果唔同**：另一個 rebase background task（`AxuaXW`，`git rebase 2a1e7ca`）
+      卡咗 **8h38m**，係因為保護**擋住咗** destructive checkout —— `.git` objects 105 個全 intact、
+      `git fsck` 零 error、local main 6 個 commit 全喺、無 rebase-merge/apply 殘留。kill 咗之後 repo 完好。
+  ➡️ 所以 rebase 喺呢度嘅實際後果係「長期 hang」多過「即時毀滅」，但**千祈唔好賭**——
+  見到 rebase background task 跑耐就即刻 `TaskStop` + kill git process，及時 kill 就唔會有破壞。
   要 reconcile 分歧 → **push 去新 branch，喺 GitHub 開 PR merge**，交畀 GitHub 處理衝突。
 - **修 `.git` 被剷嘅 SOP**（working tree 通常無事，只係指標斷咗）：
   ① `mkdir -p .git/refs/heads .git/refs/tags .git/refs/remotes/origin .git/logs/refs/heads`
@@ -130,9 +136,15 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
   ⑤ `git add -A` + 重新 commit。**動手前先 `cp -a` 備份 source**。
 - **GitHub credential 錯 account**：本機緩存係 `homeu98-glitch`，但 repo 屬 `EricChang1015` → push 會 403
   （`Permission to ... denied to homeu98-glitch`）。read 正常所以 `ls-remote` 唔會報錯，好易睇漏。要用戶自己重登 / 換 PAT / 轉 SSH。
-- **`git fetch` 喺呢個環境可以「假成功」**：output 印咗 `old..new main -> origin/main` 但 tracking ref 其實冇 update
-  （寫唔到 `.git/refs/remotes/`）。判斷分歧**一定要用 SHA 直接對**（`git merge-base --is-ancestor <remote-sha> HEAD`、
-  `git rev-list --left-right --count <remote-sha>...HEAD`），唔好信 `origin/main` 呢個 ref。
+- **`git fetch` / `git update-ref` 喺呢個環境可以「假成功」**：
+  - `git fetch origin main` 會印 `old..new main -> origin/main` 甚至 `* [new branch] main -> origin/main`，
+    但 tracking ref 往往**冇真係 persist**（`show-ref` 睇唔到、`git status` 照樣講 upstream gone）。
+  - `git update-ref refs/remotes/origin/main <sha>` 報 exit 0 但一樣冇 persist。
+  ➡️ **可靠做法：手寫 loose ref 檔**（`mkdir -p .git/refs/remotes/origin && printf '%s\n' <sha> > .git/refs/remotes/origin/main`）。
+  2026-09-03 晚實測：update-ref 靜默失敗，手寫之後 `show-ref` / `git status` 即刻恢復正常。
+  ⚠️ 記住末尾加 `\n`，唔係 `git fsck` 會 warning `refMissingNewline`（無害但污糟）。
+  判斷分歧**一定要用 SHA 直接對**（`git merge-base --is-ancestor <remote-sha> HEAD`、
+  `git rev-list --left-right --count <remote-sha>...HEAD`），唔好淨信 `origin/main` 呢個 ref。
 - **⚠️ 帶 `/` 嘅 git ref 喺呢個 sandbox 係壞嘅（2026-09-03 實測，全部 exit 0 零 output）**：
   原因係 git 自己要喺 `.git/refs/heads/` **開子目錄／rename** —— sandbox 唔批。實測：
   - `git branch fixtmp <sha>`（**冇斜線**，唔使開目錄）→ ✅ 得
