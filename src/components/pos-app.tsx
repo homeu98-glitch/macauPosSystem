@@ -1811,7 +1811,7 @@ export function PosApp() {
         mode,
         reason: reason || "未填寫原因",
       },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: updatedOrder.updatedAt,
     };
 
@@ -1829,7 +1829,7 @@ export function PosApp() {
       type: "PRINT_JOB_CREATED",
       entityId: printJob.id,
       payload: printJob,
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: updatedOrder.updatedAt,
     }));
 
@@ -1867,7 +1867,7 @@ export function PosApp() {
           order: updatedOrder,
           action: "ready_pickup",
         },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       },
     ]);
@@ -1930,7 +1930,7 @@ export function PosApp() {
           mode: "all",
           reason: reason || "未填寫原因",
         },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       });
     });
@@ -1947,7 +1947,7 @@ export function PosApp() {
           reason: reason || "全部退菜",
           amount: isRefundedRule ? activeOrder.total : undefined,
         },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       },
       ...voidEvents,
@@ -1956,7 +1956,7 @@ export function PosApp() {
         type: "PRINT_JOB_CREATED",
         entityId: printJob.id,
         payload: printJob,
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       })),
     ]);
@@ -2008,7 +2008,7 @@ export function PosApp() {
           mode: "all",
           reason: reasonText,
         },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       });
     });
@@ -2034,7 +2034,7 @@ export function PosApp() {
         action: "cancelled",
         reason: reasonText,
       },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: updatedAt,
     };
     persistPrintJobs([...voidPrintJobs, ...printJobs]);
@@ -2046,7 +2046,7 @@ export function PosApp() {
         type: "PRINT_JOB_CREATED",
         entityId: printJob.id,
         payload: printJob,
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       })),
     ]);
@@ -2128,7 +2128,7 @@ export function PosApp() {
       type: "PRINT_JOB_CREATED",
       entityId: printJob.id,
       payload: printJob,
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: timestamp,
     }));
     pushEvents(printEvents);
@@ -2245,7 +2245,7 @@ export function PosApp() {
       type: treatAsAddOn ? "ORDER_UPDATED" : "ORDER_CREATED",
       entityId: order.id,
       payload: treatAsAddOn ? { order, addedItems } : order,
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: timestamp,
     };
 
@@ -2254,7 +2254,7 @@ export function PosApp() {
       type: "PRINT_JOB_CREATED",
       entityId: printJob.id,
       payload: printJob,
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: timestamp,
     }));
 
@@ -2303,7 +2303,7 @@ export function PosApp() {
         type: "ORDER_UPDATED",
         entityId: updatedOrder.id,
         payload: { order: updatedOrder, action: "completed", label: options?.label ?? "已完成" },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedOrder.updatedAt,
       },
     ]);
@@ -2330,7 +2330,7 @@ export function PosApp() {
         type: "ORDER_UPDATED",
         entityId: updatedOrder.id,
         payload: { order: updatedOrder, action: "cancelled", reason: updatedOrder.cancelledReason },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       },
     ]);
@@ -2362,7 +2362,7 @@ export function PosApp() {
       type: "ORDER_DELETED",
       entityId: orderId,
       payload: { orderId },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: new Date().toISOString(),
     };
     addDeletedOrderIds([orderId]);
@@ -2458,7 +2458,7 @@ export function PosApp() {
         amount: updatedOrder.refundedAmount,
         reason: updatedOrder.refundedReason,
       },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: updatedAt,
     };
     const refundPrintJobs = buildRefundReceiptJobs(
@@ -2475,7 +2475,7 @@ export function PosApp() {
         type: "PRINT_JOB_CREATED",
         entityId: job.id,
         payload: job,
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       })),
     ]);
@@ -2559,7 +2559,7 @@ export function PosApp() {
         reason: reason || "未填寫原因",
         items: refundItems,
       },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: updatedAt,
     };
     // B2/B3（docs/56）：partial refund 同樣 re-fetch 本地真值 localOrderNo。
@@ -2579,7 +2579,7 @@ export function PosApp() {
         type: "PRINT_JOB_CREATED",
         entityId: job.id,
         payload: job,
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedAt,
       })),
     ]);
@@ -2615,7 +2615,7 @@ export function PosApp() {
         type: "PRINT_JOB_CREATED",
         entityId: printJob.id,
         payload: printJob,
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: timestamp,
       })),
     );
@@ -2725,7 +2725,7 @@ export function PosApp() {
           // 入座人數上雲（docs/89 §3）：結帳時補傳 partySize，確保報表「覆蓋人數」有數。
           partySize: updatedOrder.partySize ?? null,
         },
-        status: networkOnline ? "synced" : "pending",
+        status: "pending",
         createdAt: updatedOrder.updatedAt,
       };
 
@@ -2929,7 +2929,7 @@ export function PosApp() {
         compNote: reason,
         compedAt: now,
       },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: now,
     };
 
@@ -3045,7 +3045,7 @@ export function PosApp() {
         // 入座人數上雲（docs/89 §3）：線上支付結帳都要補傳。
         partySize: updatedOrder.partySize ?? null,
       },
-      status: networkOnline ? "synced" : "pending",
+      status: "pending",
       createdAt: updatedOrder.updatedAt,
     };
 

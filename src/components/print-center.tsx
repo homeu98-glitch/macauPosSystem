@@ -41,6 +41,7 @@ import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBaseP
 import { encodeQrPayload } from "@/lib/escpos-qr";
 import { discountedUnitPrice } from "@/lib/pos/discount";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
+import { notifyQueueChanged } from "@/lib/pos/sync-flush";
 
 /**
  * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
@@ -373,6 +374,10 @@ export function PrintCenter() {
     const currentQueue = loadQueue();
     const nextQueue = [...currentQueue, ...events];
     saveQueue(nextQueue);
+    // 補：以前 saveQueue 後從來唔 trigger flush worker，events 永遠留喺 queue
+    // （要等其他操作偶然觸發 syncNow 先被推送）。家陣同 pos-app.tsx 一致，
+    // 入隊後即刻 dispatch POS_SYNC_QUEUE_CHANGED_EVENT，等 sync-flush worker 接力推上雲。
+    notifyQueueChanged();
   }
 
   function reprintOrder(order: PosOrder) {
@@ -414,7 +419,7 @@ export function PrintCenter() {
       type: "PRINT_JOB_CREATED",
       entityId: job.id,
       payload: job,
-      status: offlineMode ? "pending" : "synced",
+      status: "pending",
       createdAt: timestamp,
     }));
     pushEvents(events);
