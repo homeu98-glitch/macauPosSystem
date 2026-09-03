@@ -8,9 +8,8 @@ import {
   discoverCompanionLanPrinters,
   enumerateCompanionBluetoothDevices,
   enumerateCompanionUsbPrinters,
-  isCompanionAvailable,
+  subscribeCompanionAvailability,
   testCompanionConnection,
-  tryAutoPairCompanion,
   type PrinterCandidate,
 } from "@/lib/print-bridge/companion";
 import {
@@ -58,16 +57,24 @@ function CompanionStatusCard() {
   const [testing, setTesting] = useState(false);
 
   useEffect(() => {
-    let active = true;
-    (async () => {
-      await tryAutoPairCompanion();
-      const ok = await isCompanionAvailable(true);
-      if (!active) return;
-      setStatus(ok ? "online" : "offline");
-    })();
-    return () => {
-      active = false;
-    };
+    // 連線狀態由 `subscribeCompanionAvailability()` 統一提供（判斷邏輯喺
+    // `src/lib/print-bridge/companion.ts` 嘅 `shouldKeepCompanionAlive()`，
+    // 同 `dispatch.ts` / `salon/print.ts` 嘅 Companion 通道 gate 共用）：
+    //   ┌────────────────────────────────┬───────────────────────────┐
+    //   │ Companion 環境（保留輪詢）     │ 純 Website 環境（停用輪詢）│
+    //   ├────────────────────────────────┼───────────────────────────┤
+    //   │ PC Desktop App / Android APK   │ 瀏覽器開網站（Vercel）    │
+    //   │ `?companion=<url>` 帶入分頁    │ PWA standalone            │
+    //   │                                │ localhost dev              │
+    //   ├────────────────────────────────┼───────────────────────────┤
+    //   │ 訂閱即探 + 15 秒週期輪詢       │ 一個 request 都唔掟        │
+    //   │ （持續反映 agent 狀態）        │ （loopback 注定連唔到）    │
+    //   └────────────────────────────────┴───────────────────────────┘
+    // 要用家主動驗，下面有「測試連線」掣（handleTest），任何環境都照行、行為不變。
+    return subscribeCompanionAvailability((s) => {
+      setStatus(s.available ? "online" : "offline");
+      setVersion(s.version || "");
+    });
   }, []);
 
   async function handleTest() {

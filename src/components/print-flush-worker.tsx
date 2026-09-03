@@ -13,11 +13,15 @@ const FLUSH_INTERVAL_MS = 2500;
  * 定時：
  *   1) 刷新 pending PrintJob 派發到打印機：native bridge（Android APK）優先，
  *      否則 fallback 桌面 Companion 代理（LAN :9100 / USB / 藍牙）。
+ *   2) mount 嗰次呼叫 `tryAutoPairCompanion()` —— 內部已經按兩種環境分流：
+ *      · Companion 環境（PC Desktop App / Android APK / `?companion=<url>` 分頁）
+ *        → 走 URL 參數 / 已儲存地址 / 預設 loopback 任一條路徑
+ *      · 純 Website 環境（瀏覽器開網站 / PWA standalone）
+ *        → 全部 branch skip，**完全唔掟** `http://127.0.0.1:9311/api/health`，
+ *          唔會每 2.5 秒洗 console + network tab
  *
- * 自動配對 Companion 只喺 mount 嗰陣做一次（見下面），**唔再擺落 2.5 秒嘅 flush 迴圈** ——
- * 否則冇裝 Companion 嘅網站會每 2.5 秒打一次 http://127.0.0.1:9311/api/health 然後
- * ERR_CONNECTION_REFUSED，永久洗 console + network tab。而 `tryAutoPairCompanion()`
- * 亦已加閘：純 website 上從來冇配對過就直接 skip（見 companion.ts 註解）。
+ * **本檔唔做 health check polling** —— 嗰個喺 `subscribeCompanionAvailability()`
+ * 統一處理（Companion 環境先探、純 Website 完全唔探），本 worker 唔重複。
  *
  * 經 root layout 全域掛載，餐飲同 salon 共用，唔使各自再配對。
  */

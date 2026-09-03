@@ -13,6 +13,7 @@ import {
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getRelayTransport } from "@/lib/print-bridge/relay-config";
 import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
+import { shouldKeepCompanionAlive } from "@/lib/print-bridge/companion";
 import {
   loadSalonPrintJobs,
   saveSalonPrintJobs,
@@ -46,14 +47,20 @@ async function dispatchPrint(
     }
     return { ok: true };
   }
-  // 2) 桌面 Companion（localhost HTTP）：瀏覽器開嘅 POS 喺桌面打到 LAN/USB/BT（見 docs/47）
-  const companion = getCompanionTransport();
-  if (companion) {
-    for (let i = 0; i < copies; i++) {
-      const res = await companion.send(job, printer, { kind, storeName });
-      if (!res.ok) return { ok: false, error: res.error || "companion 打印失敗" };
+  // 2) 桌面 Companion（localhost HTTP）：只喺**Companion 環境**先試 ——
+  //    原生殼（PC Desktop App / Android APK）或帶 `?companion=` 參數。
+  //    純 website / PWA 一律 skip —— 就算 localStorage 有舊地址，loopback 都注定
+  //    ERR_CONNECTION_REFUSED，每單白白等 5 秒 timeout
+  //    （見 companion.ts `shouldKeepCompanionAlive()` 註解 + docs/47）
+  if (shouldKeepCompanionAlive()) {
+    const companion = getCompanionTransport();
+    if (companion) {
+      for (let i = 0; i < copies; i++) {
+        const res = await companion.send(job, printer, { kind, storeName });
+        if (!res.ok) return { ok: false, error: res.error || "companion 打印失敗" };
+      }
+      return { ok: true };
     }
-    return { ok: true };
   }
   // 3) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
   const relay = getRelayTransport();

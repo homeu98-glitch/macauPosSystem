@@ -22,6 +22,7 @@
 ## 打印
 - **通道優先級**（`dispatch.ts`）：① native bridge ② Companion ③ Cloud Relay。relay 只喺 pure-web 觸發；`RelayPairingPanel` 已 self-gate（`isRunningInNativeShell()` → `return null`）。
 - **Companion loopback 唔好主動探**（2026-09-02）：`shouldAutoDiscoverCompanion()` 閘 —— 只有 PC 原生殼或 page 喺 localhost 先探 `127.0.0.1:9311`。純 website 探只會永久 `ERR_CONNECTION_REFUSED`（loopback 係 trustworthy origin，唔會被 mixed content 靜默擋）。用家主動嘅 `?companion=` / 設定頁「測試連線」照行。
+- **Health check polling 兩環境分流**（2026-09-03，`companion.ts` `subscribeCompanionAvailability()`）：純 Website early-return 唔探、唔輪詢、唔起 polling timer；Companion 環境（PC Desktop App / Android APK / `?companion=<url>` 分頁）探一次真實狀態 + 起 15 秒週期輪詢。判斷 = `shouldKeepCompanionAlive()`（同 `dispatch.ts` / `salon/print.ts` 通道 gate 共用一個 function）。Companion 環境嘅輪詢唔好停 —— 用嚟持續確認 native frame ↔ website 條橋（agent 被關掉/重啟時 UI 自動由「已連線」轉「未連線」）。
 - **⚠️ 已知安全缺口（未修）**：`pos_print_jobs` 嘅 anon RLS 策略 **冇 filter `store_id`** → 揸住 anon key（公開）讀到全平台所有店嘅 print job。0016 就係咁，唔係 Scheme B 引入。詳見 `docs/97 §5.2`。
 - **⚠️ Supabase RLS 兩個地雷（2026-09-02 查證，改 production policy 前必睇）**：
   ① Realtime `postgres_changes` **只推即時變更、唔回放歷史** → 時間窗對 Realtime 暴露面**零影響**，淨影響 PostgREST 直接 SELECT。

@@ -6,6 +6,7 @@ import {
 } from "@/lib/print-bridge/native";
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { getCompanionTransport, isCompanionConfigured } from "@/lib/print-bridge/companion-config";
+import { shouldKeepCompanionAlive } from "@/lib/print-bridge/companion";
 import { loadBootstrapCache, loadPrintJobs, savePrintJobs } from "@/lib/storage";
 import { pruneSentPrintJobs } from "@/lib/print-jobs";
 import { PrintJob, PrintKind } from "@/lib/types";
@@ -143,16 +144,22 @@ async function dispatchOneJob(
     }
     return { ok: true };
   }
-  // 2) 桌面 Companion（localhost HTTP）：瀏覽器開嘅 POS 喺桌面（Windows/macOS/Linux）
+  // 2) 桌面 Companion（localhost HTTP）：只喺**Companion 環境**先行 ——
+  //    即原生殼（PC Electron / Android APK）或帶 `?companion=` 參數（一鍵開 POS）。
+  //    純 website / PWA 即便 localStorage 有 stale URL 都要 skip ——
+  //    否則 send() 會 call loopback 127.0.0.1:9311 然後 5s timeout、永久洗 console + network。
+  //    見 `shouldKeepCompanionAlive()` / `shouldUseCompanionChannel()` 嘅完整規則。
   //    經 localhost agent 打到 LAN:9100 / USB / BT，由 OS 權限出單（見 docs/47 / companion-transport.ts）。
   //    唔需要 printer.ipAddress（USB/BT 機經標識符），所以唔做 IP 閘門。
-  const companion = getCompanionTransport();
-  if (companion) {
-    for (let i = 0; i < copies; i++) {
-      const res = await companion.send(job, printer, { kind, storeName });
-      if (!res.ok) return { ok: false, error: res.error || "companion 打印失敗" };
+  if (shouldKeepCompanionAlive()) {
+    const companion = getCompanionTransport();
+    if (companion) {
+      for (let i = 0; i < copies; i++) {
+        const res = await companion.send(job, printer, { kind, storeName });
+        if (!res.ok) return { ok: false, error: res.error || "companion 打印失敗" };
+      }
+      return { ok: true };
     }
-    return { ok: true };
   }
   // 3) 互聯網備援：經 Cloud Print Relay → 店內 Stationary Agent（見 docs/46 / relay-transport.ts）
   const relay = getRelayTransport();

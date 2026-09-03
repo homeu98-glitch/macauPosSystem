@@ -58,35 +58,101 @@ export function isCompanionConfigured(): boolean {
   return getCompanionUrl() !== "";
 }
 
+export function getCachedCompanionVersion(): string {
+  return cachedVersion;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 執行環境判斷（三層規則，由嚴到寬，唔好混淆）
+//
+//   ① shouldUseCompanionChannel()   ← 最嚴：淨係原生殼（PC Electron / Android APK）
+//   ② shouldKeepCompanionAlive()    ← ① + 帶 `?companion=` 參數
+//                                     用嚟決定「走唔走 companion 通道 / 起唔起輪詢」
+//   ③ shouldAutoDiscoverCompanion() ← ① + 本機 dev（localhost）
+//                                     用嚟決定「值唔值得探一次 loopback」
+//
+// 純 website / PWA（Vercel HTTPS、PWA standalone、自己打網址開）三個都 false
+// → 零 `http://127.0.0.1:9311/api/health` 請求，呢個就係呢層判斷存在嘅原因。
+// ─────────────────────────────────────────────────────────────
+
 /**
- * 值唔值得主動去探 loopback（127.0.0.1:9311）搵 Companion？
+ * 「Companion 環境」**真實定義**：當前 page 跑喺我哋自己嘅原生殼入面。
+ * 用原生殼主動注入嘅 bridge 標記（PosNative → Android APK WebView；
+ * companionShell → PC Electron 殼），係 codebase 現有慣例
+ * （見 `src/components/pwa-install-button.tsx`）。
  *
- * 背景（2026-09-02）：`PrintFlushWorker` 每 2.5 秒 call 一次 `tryAutoPairCompanion()`，
- * 而 branch 3（零配置 loopback 探測）會喺**從來冇配對過 Companion** 嘅情況下照打
- * `http://127.0.0.1:9311/api/health`。喺純 website（Vercel HTTPS）上冇裝 Companion 嘅話，
- * 呢個 fetch 只會永久掟 `ERR_CONNECTION_REFUSED` —— 每 2.5 秒一條，洗晒 console 同 network
- * tab，而收益係零（瀏覽器當 loopback 係 trustworthy origin，所以唔會被 mixed content 靜默擋，
- * 而係真係嘗試連線然後失敗，先至咁嘈）。
+ * **只有** 喺呢個環境入面，`http://127.0.0.1:9311/api/health` 嘅探測先有意義 —
+ * 因為 desktop agent 喺 loopback 住，可以喺 web view 探到。
+ *
+ * 純 website / PWA（Chrome standalone、macau-pos-system.vercel.app、localhost:3000
+ * 開個普通瀏覽器測）都**唔算** Companion 環境：loopback 探過去只會
+ * `ERR_CONNECTION_REFUSED`，冇 IPC 對手。
+ *
+ * 用嚟 gate：
+ *   · print dispatch 通道②（`dispatch.ts`、`salon/print.ts`）—— 純 website
+ *     就算 localStorage 有 stale URL 都要 skip
+ *   · PrintFlushWorker mount 嗰次 `tryAutoPairCompanion()`
+ */
+export function shouldUseCompanionChannel(): boolean {
+  // 攤平 import：避免 companion.ts 對 UI 檔有依賴
+  if (typeof window === "undefined") return false;
+  const hasPosNative = Boolean((window as unknown as { PosNative?: { printJob?: unknown } }).PosNative?.printJob);
+  const hasCompanionShell = Boolean((window as unknown as { companionShell?: unknown }).companionShell);
+  return hasPosNative || hasCompanionShell;
+}
+
+/**
+ * 值唔值得**自動**去探 loopback（127.0.0.1:9311）搵 Companion？——**探測**用
+ * （`auto-pair-companion.ts`、`tryAutoPairCompanion` branch 3、`probeCompanion()` fallback、
+ *   `PrinterCompanionPanel` CompanionStatusCard mount probe）
+ *
+ * 背景（2026-09-02 + 2026-09-03 修訂）：
+ * 舊版 `PrintFlushWorker` 每 2.5 秒 call 一次 `tryAutoPairCompanion()`，
+ * branch 3（零配置 loopback 探測）會喺**從來冇配對過 Companion** 嘅情況下照打
+ * `http://127.0.0.1:9311/api/health`。喺純 website（Vercel HTTPS / PWA standalone）上
+ * 冇裝 Companion，呢個 fetch 只會永久掟 `ERR_CONNECTION_REFUSED`。
  *
  * 規則：**冇理由相信本機有 Companion，就唔好主動搵。**
- * 有理由 = ① 跑緊 PC 原生殼（Companion 啟動器／Electron 打包殼）② 個 page 本身就喺 localhost
+ * 有理由 = ① 跑緊原生殼（PC Electron 殼 / Android APK WebView）→ 即
+ *            `shouldUseCompanionChannel()`
+ *          ② 個 page 本身就喺 localhost（`npm run dev` / 本機架嘅 POS）
  *
- * 仍然照行、唔受影響嘅路徑：
+ * 仍然照行、唔受影響嘅 deliberate user 路徑（無論咩環境）：
  *   · URL `?companion=<url>` 參數（Companion 狀態頁「一鍵開 POS」帶入）
  *   · localStorage 已存咗地址（即用家配對過，之後會一直探佢）
  *   · 設定頁「測試連線」掣 / `PrinterCompanionPanel` 人手輸入地址
+ *   · `probeCompanion(urlOverride)` 傳咗明確地址
  */
 export function shouldAutoDiscoverCompanion(): boolean {
   if (typeof window === "undefined") return false;
-  // PC 原生殼：Companion 係呢個環境嘅主打印路徑，一定值得探
-  if ((window as { companionShell?: unknown }).companionShell) return true;
+  // 原生殼（PC Electron / Android APK）：Companion loopback 係呢個環境嘅設計一部分
+  if (shouldUseCompanionChannel()) return true;
   // 本機（dev 或本機架嘅 POS）：loopback 探測有意義
   const h = window.location.hostname;
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
 }
 
-export function getCachedCompanionVersion(): string {
-  return cachedVersion;
+/** URL 上有冇 `?companion=<url>` 參數（桌面 Companion「一鍵開 POS」帶入） */
+function hasCompanionUrlParam(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return new URLSearchParams(window.location.search).has("companion");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 應唔應該**持續維持** Companion 連線（自動配對 + 健康檢查輪詢）？
+ *
+ * = 原生殼 **或** 帶咗 `?companion=` 參數。
+ * 後者係桌面 Companion「一鍵開 POS」開出嚟嘅分頁 —— 就算係系統瀏覽器（唔係我哋個殼），
+ * 用家都係由 Companion 嗰邊過嚟，desktop agent 的確喺度，所以要照輪詢、照顯示連線狀態。
+ *
+ * 純 website / PWA（自己打網址開、PWA standalone）一律 false → 零 /api/health 請求。
+ */
+export function shouldKeepCompanionAlive(): boolean {
+  return shouldUseCompanionChannel() || hasCompanionUrlParam();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -221,6 +287,128 @@ export async function testCompanionConnection(): Promise<CompanionProbeResult> {
   const url = getCompanionUrl();
   if (!url) return { ok: false, error: "未配對 Companion（地址空白）" };
   return probeCompanion(url);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 健康檢查輪詢（**按執行環境兩分**）
+//
+//   ┌────────────────────────────────┬────────────────────────────────┐
+//   │ Companion 環境（保留輪詢）     │ 純 Website 環境（停用輪詢）    │
+//   ├────────────────────────────────┼────────────────────────────────┤
+//   │ · PC Desktop App（Electron）   │ · 瀏覽器自己開網站              │
+//   │ · Android Native App（APK）    │   （Vercel HTTPS）              │
+//   │ · `?companion=<url>` 帶入分頁  │ · PWA standalone（Home Screen） │
+//   │   （桌面 Companion「一鍵       │ · 本機 dev（localhost）         │
+//   │     開 POS」嘅分頁）           │                                │
+//   ├────────────────────────────────┼────────────────────────────────┤
+//   │ ✅ mount 探一次真實狀態         │ ❌ 完全唔探、唔輪詢              │
+//   │ ✅ 15 秒週期性 /api/health      │ ❌ 連預設地址都唔掟              │
+//   └────────────────────────────────┴────────────────────────────────┘
+//
+// 純 Website 環境點解要停用：
+//   · 呢類環境喺用家嘅日常瀏覽器，根本連唔到本機端點（loopback 127.0.0.1:9311 唔存在）
+//   · 每次輪詢都係 ERR_CONNECTION_REFUSED
+//   · console + Network tab 永久洗錯誤訊息
+//   · 完全冇實質意義（探極都係零）
+//
+// Companion 環境點解要保留：
+//   · desktop agent 喺 loopback 住，web view 探得到
+//   · 需要持續確認 native frame ↔ website 條橋仲喺唔喺度
+//   · 例如 desktop agent 被關掉／升級重啟，畫面要自動由「已連線」轉「未連線」
+//
+// **單一真源** = `shouldKeepCompanionAlive()`（同 `dispatch.ts` / `salon/print.ts`
+// Companion 通道嘅 gate 用同一個函式，保證行為一致）。
+// 純 Website 環境一個 /api/health 都唔掟；Companion 環境 mount 即探、15 秒一輪。
+// ─────────────────────────────────────────────────────────────
+
+export interface CompanionAvailability {
+  available: boolean;
+  version: string;
+}
+
+/** 輪詢間隔：15 秒。夠快反映 agent 斷線，又唔會洗 network。 */
+const COMPANION_HEALTH_POLL_MS = 15_000;
+
+const availabilityListeners = new Set<(s: CompanionAvailability) => void>();
+let healthPollTimer: ReturnType<typeof setInterval> | null = null;
+let lastNotified: CompanionAvailability = { available: false, version: "" };
+
+function snapshotAvailability(): CompanionAvailability {
+  return { available: cachedAvailable, version: cachedVersion };
+}
+
+function notifyAvailability(next: CompanionAvailability) {
+  if (next.available === lastNotified.available && next.version === lastNotified.version) return;
+  lastNotified = next;
+  for (const fn of availabilityListeners) fn(next);
+}
+
+async function pollCompanionHealth(): Promise<void> {
+  // 分頁喺背景就唔好白白探（減省無謂請求）
+  if (typeof document !== "undefined" && document.hidden) return;
+  const res = await probeCompanion();
+  notifyAvailability({
+    available: res.ok,
+    version: res.ok ? res.version ?? cachedVersion : "",
+  });
+}
+
+function startHealthPolling(): void {
+  if (healthPollTimer !== null) return;
+  healthPollTimer = setInterval(() => {
+    void pollCompanionHealth();
+  }, COMPANION_HEALTH_POLL_MS);
+}
+
+function stopHealthPolling(): void {
+  if (healthPollTimer === null) return;
+  clearInterval(healthPollTimer);
+  healthPollTimer = null;
+}
+
+/**
+ * 訂閱 Companion 連線狀態（畫面用，例如 CompanionStatusCard 嗰粒燈）。
+ *
+ * **兩種環境嘅明確分流**（清晰、容易維護）：
+ *   · 純 Website 環境（瀏覽器開網站、PWA standalone、localhost dev）
+ *     → 訂閱當下畀一次目前 cached 狀態（`{available:false}`），之後**完全唔探、唔輪詢**。
+ *       一個 `/api/health` request 都唔掟 —— 純 Website 根本連唔到本機端點。
+ *   · Companion 環境（PC Desktop App / Android Native App / `?companion=` URL 分頁）
+ *     → 訂閱當下畀一次 cached 狀態，**即探一次真實狀態**，**起 15 秒週期輪詢**持續
+ *       確認 native frame ↔ website 條橋仲喺唔喺度（例如 agent 被關掉／升級重啟時
+ *       畫面自動由「已連線」轉「未連線」）。
+ *
+ * 用嚟決定嘅單一函式：`shouldKeepCompanionAlive()`（同 `dispatch.ts` / `salon/print.ts`
+ * 嘅 Companion 通道 gate 共用一個 function，保證兩邊行為一致）。
+ *
+ * @returns 取消訂閱函式（最後一個 listener 走咗會順手停輪詢器）
+ */
+export function subscribeCompanionAvailability(
+  fn: (s: CompanionAvailability) => void,
+): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  availabilityListeners.add(fn);
+  fn(snapshotAvailability());
+
+  // 純 Website 環境：early-return，唔探、唔輪詢。
+  // 連 cached 狀態都已經畀咗 listener（`fn(snapshotAvailability())` 上面），UI 即時見到
+  // 「未連線（代理未啟動）」—— 唔需要任何網絡請求。
+  if (!shouldKeepCompanionAlive()) {
+    return () => {
+      availabilityListeners.delete(fn);
+      // 冇起過 polling timer，所以唔需要 stopHealthPolling()
+    };
+  }
+
+  // Companion 環境：即刻探一次真實狀態 + 起 15 秒週期輪詢。
+  void pollCompanionHealth();
+  startHealthPolling();
+
+  return () => {
+    availabilityListeners.delete(fn);
+    if (availabilityListeners.size === 0) stopHealthPolling();
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
