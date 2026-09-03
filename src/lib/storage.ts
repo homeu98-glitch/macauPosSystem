@@ -700,6 +700,10 @@ export type ShiftHistoryRecord = {
   expectedCash: number;
   paymentBreakdown: Record<string, number>;
   pendingEvents: number;
+  // 永久同步失敗（server 連續拒收 5 次）嘅 event 數。由 2026-09-03 起記錄。
+  // 舊嘅交班記錄冇呢個欄（undefined），顯示時當 0 處理，所以開 optional。
+  // 唔好當佢係「待同步」—— 佢永遠上唔到 DB，落單畫面已經用 amber 提示卡叫人重試。
+  failedEvents?: number;
   pendingPrints: number;
 };
 

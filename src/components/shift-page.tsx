@@ -141,7 +141,11 @@ export function ShiftPage() {
     const queue = loadQueue();
     const printJobs = loadPrintJobs();
     return {
-      pendingEvents: queue.filter((item) => item.status !== "synced").length,
+      // 只計真正「會 retry」嘅 pending；failed 係永久失敗（server 連續拒收 5 次），
+      // 唔係「待同步」。如果當佢係待同步，交班記錄會講大話（話有 N 筆「待同步」
+      // 但其實永遠上唔到 DB），同落單畫面嘅 amber 提示卡對唔住。
+      pendingEvents: queue.filter((item) => item.status === "pending").length,
+      failedEvents: queue.filter((item) => item.status === "failed").length,
       pendingPrints: printJobs.filter((item) => item.status === "pending").length,
     };
   })();
@@ -186,7 +190,7 @@ export function ShiftPage() {
       `應收現金：${formatMoney(row.expectedCash)}`,
       typeof row.actualCash === "number" ? `實收現金：${formatMoney(row.actualCash)}` : "",
       typeof row.cashDifference === "number" ? `現金差額：${formatMoney(row.cashDifference)}` : "",
-      `待同步事件：${row.pendingEvents}`,
+      `待同步事件：${row.pendingEvents}` + (row.failedEvents ? ` · 永久失敗 ${row.failedEvents}` : ""),
       `待補傳打印：${row.pendingPrints}`,
       row.closingNote ? `備註：${row.closingNote}` : "",
     ].filter(Boolean);
@@ -241,15 +245,30 @@ export function ShiftPage() {
       setStatus("目前離線，無法強制同步。請恢復網絡後再交班。");
       return false;
     }
-    const pending = loadQueue().filter((item) => item.status !== "synced");
-    if (pending.length === 0) return true;
+    // 只 retry 真正「會 retry」嘅 pending event。
+    // ⚠️ 千祈唔好夾埋 failed event：failed 係 server 連續拒收 5 次嘅永久失敗，
+    // 再 POST 落 /api/pos/sync 一樣會被拒（例如 storeId 唔啱），而呢度一 check
+    // result.ok 就會 return false —— 交班就咁**永久閂唔到**（2026-09-03 發現嘅
+    // regression：之前改呢度加 result.ok check 時，冇諗到 failed 都會被揀入 batch）。
+    // failed 由落單畫面嘅「重試同步」掣處理（retryFailedSyncEvents），交班只專注 pending。
+    const retryable = loadQueue().filter((item) => item.status === "pending");
+    const failedCount = loadQueue().filter((item) => item.status === "failed").length;
+    if (retryable.length === 0) {
+      if (failedCount > 0) {
+        setStatus(
+          `有 ${failedCount} 筆資料永久同步失敗（伺服器連續拒收），已跳過，` +
+            `唔會阻住交班。請稍後喺落單畫面撳「重試同步」，或聯絡技術支援。`,
+        );
+      }
+      return true;
+    }
     let res: Response;
     try {
       res = await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          events: pending,
+          events: retryable,
           storeId: resolveStoreId(),
         }),
       });
@@ -272,8 +291,11 @@ export function ShiftPage() {
       return false;
     }
 
-    saveQueue(pending.map((item) => ({ ...item, status: "synced" as const })));
-    setStatus(`已同步 ${pending.length} 筆待辦資料，準備交班。`);
+    saveQueue(retryable.map((item) => ({ ...item, status: "synced" as const })));
+    setStatus(
+      `已同步 ${retryable.length} 筆待辦資料，準備交班。` +
+        (failedCount > 0 ? `（另有 ${failedCount} 筆永久失敗已跳過）` : ""),
+    );
     return true;
   }
 
@@ -312,6 +334,7 @@ export function ShiftPage() {
       expectedCash,
       paymentBreakdown: summary.paymentBreakdown,
       pendingEvents: queueSummary.pendingEvents,
+      failedEvents: queueSummary.failedEvents,
       pendingPrints: queueSummary.pendingPrints,
     };
     setShift(next);
@@ -345,7 +368,7 @@ export function ShiftPage() {
       `應收現金：${formatMoney(expectedCash)}`,
       Number.isFinite(actualCashValue) ? `實收現金：${formatMoney(actualCashValue)}` : "",
       Number.isFinite(actualCashValue) ? `現金差額：${formatMoney(cashDifference)}` : "",
-      `待同步事件：${queueSummary.pendingEvents}`,
+      `待同步事件：${queueSummary.pendingEvents}` + (queueSummary.failedEvents ? ` · 永久失敗 ${queueSummary.failedEvents}` : ""),
       `待補傳打印：${queueSummary.pendingPrints}`,
       shiftNote ? `備註：${shiftNote}` : "",
     ].filter(Boolean);
@@ -625,6 +648,11 @@ export function ShiftPage() {
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">待同步事件</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingEvents}</div>
+                {queueSummary.failedEvents > 0 ? (
+                  <div className="mt-1 text-xs font-semibold text-amber-600">
+                    ⚠ {queueSummary.failedEvents} 筆永久失敗
+                  </div>
+                ) : null}
               </article>
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">待補傳打印</div>
@@ -776,7 +804,7 @@ export function ShiftPage() {
                           {typeof row.cashDifference === "number" ? formatMoney(row.cashDifference) : "--"}
                         </td>
                         <td className="px-3 py-3 text-slate-700">
-                          {row.pendingEvents} 事件 / {row.pendingPrints} 打印
+                          {row.pendingEvents} 事件 / {row.pendingPrints} 打印{row.failedEvents ? ` · ${row.failedEvents} 失敗` : ""}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex min-w-[220px] items-center gap-2">
@@ -882,7 +910,7 @@ export function ShiftPage() {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
               <div>{shift.openedAt ? `開工時間：${formatMacauDateTime(shift.openedAt)}` : "未記錄開工時間"}</div>
               <div className="mt-1">應收現金：{formatMoney(expectedCash)}</div>
-              <div className="mt-1">待同步事件：{queueSummary.pendingEvents} · 待補傳打印：{queueSummary.pendingPrints}</div>
+              <div className="mt-1">待同步事件：{queueSummary.pendingEvents}{queueSummary.failedEvents ? ` · 永久失敗 ${queueSummary.failedEvents}` : ""} · 待補傳打印：{queueSummary.pendingPrints}</div>
               {Number.isFinite(actualCashValue) ? <div className="mt-1">實收現金：{formatMoney(actualCashValue)} · 差額：{formatMoney(cashDifference)}</div> : null}
               {shiftNote ? <div className="mt-1">備註：{shiftNote}</div> : null}
             </div>
