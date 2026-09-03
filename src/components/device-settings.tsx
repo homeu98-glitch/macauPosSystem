@@ -131,6 +131,23 @@ export function DeviceSettings() {
     }
   }, [cachedConfig, cachedLocalSettings]);
 
+  // 登入後自動取得 storeId 並寫入 config（取代以前手動輸入「門店 ID」）
+  useEffect(() => {
+    const auth = loadAuthSession();
+    if (auth?.merchantId && config.storeId !== auth.merchantId) {
+      const next = { ...config, storeId: auth.merchantId };
+      setConfig(next);
+      saveDeviceConfig(next);
+    }
+    // 自動填入設備 ID（如果本機仲係預設值）
+    if (auth?.merchantId && (config.deviceId === "tablet-01" || !config.deviceId)) {
+      const newDeviceId = `${auth.merchantId.slice(0, 8)}-${Date.now().toString(36)}`;
+      const next = { ...config, deviceId: newDeviceId, storeId: auth.merchantId };
+      setConfig(next);
+      saveDeviceConfig(next);
+    }
+  }, []);
+
   useEffect(() => {
     void tryAutoPairCompanion();
   }, []);
@@ -382,10 +399,75 @@ export function DeviceSettings() {
     }));
   }
 
+  // ── saveAll：合併保存（本機 + 同步後台）──
+  // 原本分「只保存到本機」同「保存並同步後台」兩個掣，而家合併做一個「保存」。
+  // 行為 = saveLocal（即時寫 localStorage）+ syncConfig（推 server）。
+  // 唔再畀用家揀「淨係本機」——登入後 server 係真源，本地淨係離線快取。
   function saveLocal() {
     saveDeviceConfig(config);
     savePosLocalSettings(localSettings);
-    setStatus("已保存到本機，尚未回寫後台。");
+  }
+
+  async function saveAll(label = "保存") {
+    if (syncingConfig) return;
+    setSyncingConfig(true);
+    saveLocal(); // 先寫本機，確保離線都有
+    const updatedConfig = { ...config, updatedAt: new Date().toISOString() };
+    saveDeviceConfig(updatedConfig);
+    setConfig(updatedConfig);
+
+    // 推上 server 嘅副本剝走 temp 枱同 autoAcceptSelfOrder（同原 syncConfig 邏輯一致）
+    const { autoAcceptSelfOrder: _, ...localRest } = localSettings;
+    const serverSettings = { ...localRest, floors: stripReopenTempTables(localSettings.floors) };
+
+    const event: QueueEvent = {
+      id: uid("evt"),
+      type: "DEVICE_CONFIG_UPDATED",
+      entityId: updatedConfig.deviceId,
+      payload: {
+        device: updatedConfig,
+        tables: serverSettings.floors,
+        paymentMethods: localSettings.paymentMethods,
+        menuPrinterOverrides: localSettings.menuPrinterOverrides,
+        printZones: localSettings.printZones,
+        specTemplates: localSettings.specTemplates,
+        printTemplates: localSettings.printTemplates,
+        notePresets: localSettings.notePresets,
+        cancelNotePresets: localSettings.cancelNotePresets,
+        compNotePresets: localSettings.compNotePresets,
+        onlineOrderSettings: localSettings.onlineOrderSettings,
+      },
+      status: "pending",
+      createdAt: updatedConfig.updatedAt,
+    };
+
+    const nextQueue = [...loadQueue(), event];
+    saveQueue(nextQueue);
+
+    try {
+      await fetch("/api/pos/device-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...updatedConfig,
+          localSettings: serverSettings,
+        }),
+      });
+      await fetch("/api/online-order-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...localSettings.onlineOrderSettings,
+          storeId: loadAuthSession()?.merchantId ?? null,
+        }),
+      });
+      saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
+      setStatus(`已${label}（本機 + 後台同步完成）。`);
+    } catch {
+      setStatus(`${label}失敗，已保留在本機待補傳。`);
+    } finally {
+      setSyncingConfig(false);
+    }
   }
 
   function openSpecEditorForItem(itemId: string, specGroups?: MenuSpecGroup[]) {
@@ -415,80 +497,6 @@ export function DeviceSettings() {
 
   function closeSpecEditor() {
     setSpecEditor({ open: false, mode: "item", itemId: null, templateId: null, templateName: "", draft: [] });
-  }
-
-  async function syncConfig() {
-    if (syncingConfig) return;
-    setSyncingConfig(true);
-    const updatedConfig = { ...config, updatedAt: new Date().toISOString() };
-    saveDeviceConfig(updatedConfig);
-    // 本地保存**要保留** temp 枱：佢係本機返結單編輯期間嘅必要狀態。
-    savePosLocalSettings(localSettings);
-    setConfig(updatedConfig);
-
-    // 但推上 server 嘅副本就要剝走 temp 枱：server `pos_device_configs.local_settings.floors`
-    // 係全店同步嘅，其他 terminal 同步到一張「結帳後會消失」嘅枱只會造成混亂
-    //（而且 `pos_device_configs` GET 係全店最新一條，污染會擴散去第二間 terminal）。
-    // 同時剝走 `autoAcceptSelfOrder`：真源喺 `pos_kiosk_settings`（按 store_id），
-    // 寫落 `pos_device_configs` 會被 `.order(updated_at desc).limit(1)` 冇 store filter 嘅讀取方式搞亂
-    //（同 `onlineOrderSettings.autoAccept` 嗰個 bug 同款，見 docs/52 / docs/87 §11）。
-    const { autoAcceptSelfOrder: _, ...localRest } = localSettings;
-    const serverSettings = { ...localRest, floors: stripReopenTempTables(localSettings.floors) };
-
-    const event: QueueEvent = {
-      id: uid("evt"),
-      type: "DEVICE_CONFIG_UPDATED",
-      entityId: updatedConfig.deviceId,
-      payload: {
-        device: updatedConfig,
-        tables: serverSettings.floors,
-        paymentMethods: localSettings.paymentMethods,
-        menuPrinterOverrides: localSettings.menuPrinterOverrides,
-        printZones: localSettings.printZones,
-        specTemplates: localSettings.specTemplates,
-        printTemplates: localSettings.printTemplates,
-        // 三套備註清單要寫齊：以前淨係帶 `cancelNotePresets`，
-        // 搞到「常用備註」喺呢條 explicit list 入面長期缺失。
-        // 雖然而家呢個 payload 暫時冇下游消費（`serverSettings` 全份 spread
-        // 經 /api/pos/device-config 落雲先係真正生效嘅路徑），但 explicit list
-        // 一旦日後變成離線補傳 / 跨 terminal 廣播嘅真源，缺一欄就靜默唔同步。
-        notePresets: localSettings.notePresets,
-        cancelNotePresets: localSettings.cancelNotePresets,
-        compNotePresets: localSettings.compNotePresets,
-        onlineOrderSettings: localSettings.onlineOrderSettings,
-      },
-      status: "pending",
-      createdAt: updatedConfig.updatedAt,
-    };
-
-    const nextQueue = [...loadQueue(), event];
-    saveQueue(nextQueue);
-
-    try {
-      await fetch("/api/pos/device-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...updatedConfig,
-          localSettings: serverSettings,
-        }),
-      });
-      // 帶 storeId：舊 code 冇帶 → server 一律寫落 "macau-store-a"，多間店共用同一行互相覆蓋。
-      await fetch("/api/online-order-settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...localSettings.onlineOrderSettings,
-          storeId: loadAuthSession()?.merchantId ?? null,
-        }),
-      });
-      saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
-      setStatus("已同步到後台設定接口。");
-    } catch {
-      setStatus("同步失敗，已保留在本機待補傳。");
-    } finally {
-      setSyncingConfig(false);
-    }
   }
 
   async function testPrint(printer: DevicePrinterConfig) {
@@ -648,57 +656,7 @@ export function DeviceSettings() {
 
         {activeTab === "device" ? (
           <>
-          <div className="grid min-w-0 gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
-            <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="text-base font-semibold text-slate-900">本機資料</div>
-              <div className="mt-4 grid gap-3">
-                <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                  <span className="text-xs text-slate-500">設備 ID</span>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    onChange={(event) => setConfig((current) => ({ ...current, deviceId: event.target.value }))}
-                    value={config.deviceId}
-                  />
-                </label>
-                <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                  <span className="text-xs text-slate-500">收銀機名稱</span>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    onChange={(event) => setConfig((current) => ({ ...current, terminalName: event.target.value }))}
-                    value={config.terminalName}
-                  />
-                </label>
-                <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                  <span className="text-xs text-slate-500">門店 ID</span>
-                  <input
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    onChange={(event) => setConfig((current) => ({ ...current, storeId: event.target.value }))}
-                    value={config.storeId}
-                  />
-                </label>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                  onClick={saveLocal}
-                  type="button"
-                >
-                  只保存到本機
-                </button>
-                <button
-                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
-                  aria-busy={syncingConfig}
-                  disabled={syncingConfig}
-                  onClick={syncConfig}
-                  type="button"
-                >
-                  {syncingConfig ? "同步中…" : "保存並同步後台"}
-                </button>
-              </div>
-            </section>
-
-            <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col">
+          <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-base font-semibold text-slate-900">打印機綁定</div>
@@ -706,9 +664,20 @@ export function DeviceSettings() {
                     支援自定義分區、唯一收據打印機，以及綁定分區的標籤機。
                   </div>
                 </div>
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                  {config.printers.length} printers
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {config.printers.length} printers
+                  </span>
+                  <button
+                    className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    aria-busy={syncingConfig}
+                    disabled={syncingConfig}
+                    onClick={() => void saveAll()}
+                    type="button"
+                  >
+                    {syncingConfig ? "同步中…" : "保存"}
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
@@ -853,7 +822,6 @@ export function DeviceSettings() {
 
               </div>
             </section>
-          </div>
 
           <CompanionStatusCard />
 
@@ -1164,7 +1132,7 @@ export function DeviceSettings() {
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 aria-busy={syncingConfig}
                 disabled={syncingConfig}
-                onClick={() => void syncConfig()}
+                onClick={() => void saveAll("保存備註")}
                 type="button"
               >
                 {syncingConfig ? "同步中…" : "保存備註"}
@@ -1280,7 +1248,7 @@ export function DeviceSettings() {
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 aria-busy={syncingConfig}
                 disabled={syncingConfig}
-                onClick={() => void syncConfig()}
+                onClick={() => void saveAll("保存折扣")}
                 type="button"
               >
                 {syncingConfig ? "同步中…" : "保存折扣"}
@@ -1512,7 +1480,7 @@ export function DeviceSettings() {
                 className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
                 aria-busy={syncingConfig}
                 disabled={syncingConfig}
-                onClick={syncConfig}
+                onClick={() => void saveAll("保存菜品打印設置")}
                 type="button"
               >
                 {syncingConfig ? "同步中…" : "保存菜品打印設置"}
@@ -2118,20 +2086,13 @@ export function DeviceSettings() {
 
             <div className="mt-4 flex justify-end gap-2 border-t border-slate-100 pt-4">
               <button
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-                onClick={saveLocal}
-                type="button"
-              >
-                只保存到本機
-              </button>
-              <button
-                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 aria-busy={syncingConfig}
                 disabled={syncingConfig}
-                onClick={syncConfig}
+                onClick={() => void saveAll("保存支付方式")}
                 type="button"
               >
-                {syncingConfig ? "同步中…" : "保存並同步後台"}
+                {syncingConfig ? "同步中…" : "保存"}
               </button>
             </div>
           </section>
