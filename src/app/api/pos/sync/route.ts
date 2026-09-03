@@ -312,31 +312,46 @@ export async function POST(request: Request) {
       const jobId = typeof eventPayload.id === "string" ? eventPayload.id.slice(0, MAX_ID_LEN) : "";
       if (jobId) {
         const jobItems = Array.isArray(eventPayload.items) ? eventPayload.items.slice(0, MAX_ORDER_ITEMS) : [];
-        const { error: jErr } = await supabase.from("pos_print_jobs").upsert(
-          {
+        // 唔郁 status 嘅列（重推同一個 id 時只更新內容快照，唔好把已 sent/failed/printing 嘅
+        // 單打回 pending —— 否則 hub 重開時會 claim 到呢啲舊單重印，見 docs/101）。
+        const contentPatch = {
+          order_id: text(eventPayload.orderId, MAX_ID_LEN),
+          order_no: text(eventPayload.orderNo, MAX_NAME_LEN),
+          table_name: text(eventPayload.tableName, MAX_NAME_LEN),
+          ticket_type: text(eventPayload.ticketType, 64) ?? "normal",
+          printer_group: text(eventPayload.printerGroup, 64) ?? "kitchen",
+          printer_name: text(eventPayload.printerName, MAX_NAME_LEN),
+          items: jobItems,
+          // 0015 migration 新增：模板快照 / 靜態內容 / 打印機綁定。
+          // 冇呢三欄，job 同步去第二部機會退化做硬編 fallback 渲染（冇店名／時間／單據類型／
+          // 頁尾，亦唔理商家設嘅字型大小）→ 兩部機印出嚟唔一致。見 docs/87 §7。
+          template: eventPayload.template ?? null,
+          content: eventPayload.content ?? null,
+          printer_id: text(eventPayload.printerId, MAX_ID_LEN),
+        };
+        // 1) 先試 update（只更新內容，唔動 status）—— 命中即張 job 已存在，唔應該重置佢嘅打印狀態
+        const { data: upd, error: uErr } = await supabase
+          .from("pos_print_jobs")
+          .update(contentPatch)
+          .eq("id", jobId)
+          .eq("store_id", storeId)
+          .select("id");
+        if (uErr) {
+          console.error("[pos/sync] pos_print_jobs update failed:", uErr.message);
+          errors.push(`列印工作寫入失敗`);
+        } else if (!upd || upd.length === 0) {
+          // 2) 冇命中 → 首次建立，呢刻先寫 status（用 payload 嘅，通常 pending）
+          const { error: iErr } = await supabase.from("pos_print_jobs").insert({
             id: jobId,
             store_id: storeId,
-            order_id: text(eventPayload.orderId, MAX_ID_LEN),
-            order_no: text(eventPayload.orderNo, MAX_NAME_LEN),
-            table_name: text(eventPayload.tableName, MAX_NAME_LEN),
-            ticket_type: text(eventPayload.ticketType, 64) ?? "normal",
-            printer_group: text(eventPayload.printerGroup, 64) ?? "kitchen",
-            printer_name: text(eventPayload.printerName, MAX_NAME_LEN),
-            items: jobItems,
+            ...contentPatch,
             status: text(eventPayload.status, 64) ?? "pending",
             created_at: text(eventPayload.createdAt, 64) ?? new Date().toISOString(),
-            // 0015 migration 新增：模板快照 / 靜態內容 / 打印機綁定。
-            // 冇呢三欄，job 同步去第二部機會退化做硬編 fallback 渲染（冇店名／時間／單據類型／
-            // 頁尾，亦唔理商家設嘅字型大小）→ 兩部機印出嚟唔一致。見 docs/87 §7。
-            template: eventPayload.template ?? null,
-            content: eventPayload.content ?? null,
-            printer_id: text(eventPayload.printerId, MAX_ID_LEN),
-          },
-          { onConflict: "id" },
-        );
-        if (jErr) {
-          console.error("[pos/sync] pos_print_jobs upsert failed:", jErr.message);
-          errors.push(`列印工作寫入失敗`);
+          });
+          if (iErr) {
+            console.error("[pos/sync] pos_print_jobs insert failed:", iErr.message);
+            errors.push(`列印工作寫入失敗`);
+          }
         }
       }
     }

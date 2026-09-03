@@ -82,22 +82,35 @@ async function upsertOrder(supabase: NonNullable<ReturnType<typeof getSupabaseSe
 }
 
 async function upsertPrintJob(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
-  await supabase.from("salon_print_jobs").upsert(
-    {
+  const contentPatch = {
+    order_id: rec.orderId,
+    order_no: rec.orderNo,
+    station_name: rec.tableName,
+    ticket_type: rec.ticketType,
+    printer_group: rec.printerGroup,
+    printer_name: rec.printerName,
+    items: rec.items ?? [],
+  };
+  // 先 update 內容（唔動 status），冇命中先 insert（首次先寫 status）。
+  // 避免重推把已 sent/failed 嘅單打回 pending → hub 重開重印（見 docs/101，pos 端同源修法）。
+  const { data: upd, error: uErr } = await supabase
+    .from("salon_print_jobs")
+    .update(contentPatch)
+    .eq("id", rec.id)
+    .eq("store_id", storeId)
+    .select("id");
+  if (uErr) {
+    console.error("[salon/sync] salon_print_jobs update failed:", uErr.message);
+  } else if (!upd || upd.length === 0) {
+    const { error: iErr } = await supabase.from("salon_print_jobs").insert({
       id: rec.id,
       store_id: storeId,
-      order_id: rec.orderId,
-      order_no: rec.orderNo,
-      station_name: rec.tableName,
-      ticket_type: rec.ticketType,
-      printer_group: rec.printerGroup,
-      printer_name: rec.printerName,
-      items: rec.items ?? [],
-      status: rec.status,
+      ...contentPatch,
+      status: rec.status ?? "pending",
       created_at: rec.createdAt,
-    },
-    { onConflict: "id" },
-  );
+    });
+    if (iErr) console.error("[salon/sync] salon_print_jobs insert failed:", iErr.message);
+  }
 }
 
 async function upsertCustomer(supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>, storeId: string, rec: Record<string, unknown>) {
