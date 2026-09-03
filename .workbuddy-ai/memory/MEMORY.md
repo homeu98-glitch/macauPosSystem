@@ -78,6 +78,14 @@
     唔好假設佢反映緊最新狀態。
   - `backoffice-sync-page` 讀嘅係 **server** `syncJobs`，**唔係**本地 queue ——
     傳唔到 server 嘅 event 唔會出現喺度。
+  - **⚠️ 揀「要 retry 嘅 event」嘅 filter 必須同 skip 條件對齊**：retry 嗰邊用
+    `status === "pending"`，**千祈唔好 `status !== "synced"`**—— 會夾埋 `failed`
+    event 一齊 retry。2026-09-03 實測：幫 `forceSyncBeforeClose()` 加 `result.ok`
+    check 嗰次，就係用 `!== "synced"` 揀 batch，failed event 再 POST 一樣被拒 →
+    `result.ok` false → **交班永久閂唔到**（regression，已修）。failed 係已知死嘅，
+    唯一救援係落單畫面「重試同步」掣（`retryFailedSyncEvents`，會 reset attempts）。
+  - 交班記錄 / 收據 / 統計卡顯示「待同步」時，要分開 `pendingEvents` 同 `failedEvents`
+    （`failed` 唔係待同步，係永久失敗），否則會寫大話。
 - **`no-console` 喺 eslint config 冇開**：檔案入面嗰啲
   `// eslint-disable-next-line no-console` 全部係多餘（會出「Unused eslint-disable
   directive」warning）。**新寫 code 唔好再加**。
