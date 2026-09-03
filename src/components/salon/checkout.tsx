@@ -37,7 +37,7 @@ import {
 } from "@/lib/salon/mock-ledger";
 import { DEFAULT_SALON_LOYALTY } from "@/lib/salon/mock-data";
 import { computeStaffWage } from "@/lib/salon/wages";
-import { dispatchSalonReceipt } from "@/lib/salon/print";
+import { describePrintFailures, dispatchSalonReceipt } from "@/lib/salon/print";
 import { reopenSalonOrder } from "@/lib/salon/orders";
 import { playSuccessBeep } from "@/lib/salon/sound";
 import { formatMoney } from "@/lib/format";
@@ -167,6 +167,12 @@ export function Checkout({ bookingId }: { bookingId: string }) {
   const [settleError, setSettleError] = useState("");
   const [settled, setSettled] = useState(false);
   const [settledOrderNo, setSettledOrderNo] = useState("");
+  /**
+   * 結帳後收據列印失敗嘅原因（多行，每行一張失敗嘢）。
+   * 冇咗呢個，收據印唔到只會喺入面 beep 一聲，跟住結帳流程照播
+   * playSuccessBeep() + 顯示「結帳完成」—— 收銀員完全唔知收據冇印到。
+   */
+  const [printError, setPrintError] = useState("");
 
   // 返結（反結賬）狀態
   const [reopenReason, setReopenReason] = useState("");
@@ -770,10 +776,16 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     updateMockBooking(booking.id, { status: "settled", orderId: finalOrder.id });
 
     // 3) 列印收據（寫入 salon 隔離佇列 + dispatch）
+    //    列印失敗唔阻塞結帳，但**一定要講出嚟**：以前淨係入面 beep 一聲，跟住
+    //    照播 playSuccessBeep() + 顯示「結帳完成」，收銀員當冇事發生。
+    //    收據冇印到 = 客人冇單 = 之後對數一定出事。
     try {
-      await dispatchSalonReceipt(finalOrder);
-    } catch {
-      // 列印失敗不阻塞結帳；收據已入佇列，可於「打印」頁重試
+      const printed = await dispatchSalonReceipt(finalOrder);
+      setPrintError(describePrintFailures(printed));
+    } catch (error) {
+      setPrintError(
+        `列印時發生錯誤：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     setSettledOrderNo(orderNo);
@@ -811,7 +823,9 @@ export function Checkout({ bookingId }: { bookingId: string }) {
     const order = orders.find((o) => o.orderNo === settledOrderNo);
     if (!order) return;
     try {
-      await dispatchSalonReceipt(order);
+      const printed = await dispatchSalonReceipt(order);
+      // 重印成功要清走結帳時嗰個警告，唔好留低誤導。
+      setPrintError(describePrintFailures(printed));
     } catch {
       setSettleError("重印失敗，請到「打印」頁重試。");
     }
@@ -934,6 +948,18 @@ export function Checkout({ bookingId }: { bookingId: string }) {
             {pointsEarned > 0 && (
               <div className="mt-1 text-sm font-semibold text-amber-600">本單賺取 {pointsEarned} 分</div>
             )}
+            {/* 收據冇印到一定要喺呢度講：否則收銀員淨係見到「結帳完成」，
+                以為搞掂，其實客人冇收到單，之後對數一定出事。
+                長文字用 whitespace-pre-wrap break-words（項目約定），唔好 truncate。 */}
+            {printError ? (
+              <div className="mt-4 whitespace-pre-wrap break-words rounded-xl bg-rose-50 px-4 py-3 text-left text-sm text-rose-700">
+                <div className="font-semibold">⚠ 收據列印失敗</div>
+                <div className="mt-1 text-xs leading-relaxed">{printError}</div>
+                <div className="mt-2 text-xs text-rose-500">
+                  可撳「再列印收據」重試，或去「打印」頁查睇。
+                </div>
+              </div>
+            ) : null}
             <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
               <button
                 type="button"

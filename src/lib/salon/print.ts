@@ -186,7 +186,12 @@ export async function dispatchSalonReceipt(order: SalonPosOrder): Promise<PrintJ
   const dispatched = await Promise.all(
     jobs.map(async (job) => {
       const res = await dispatchPrint(job);
-      return res.ok ? { ...job, status: "sent" as PrintJob["status"] } : job;
+      // 失敗一定要標 failed 兼寫低原因：salon **冇** background flush / retry
+      // （flushPendingPrintJobs 淨係食餐飲嗰條隊），留低 pending 係一世嘅謊言 ——
+      // 張單會永遠顯示「待列印」，原因被吞掉，而世上冇嘢會去重試佢。
+      return res.ok
+        ? { ...job, status: "sent" as PrintJob["status"] }
+        : { ...job, status: "failed" as PrintJob["status"], lastError: res.error };
     }),
   );
 
@@ -254,7 +259,10 @@ export async function dispatchSalonReopenTicket(
   const dispatched = await Promise.all(
     jobs.map(async (job) => {
       const res = await dispatchPrint(job);
-      return res.ok ? { ...job, status: "sent" as PrintJob["status"] } : job;
+      // 同上：salon 冇 retry，失敗就要標 failed + 寫低原因，唔好留低 pending 呃人。
+      return res.ok
+        ? { ...job, status: "sent" as PrintJob["status"] }
+        : { ...job, status: "failed" as PrintJob["status"], lastError: res.error };
     }),
   );
 
@@ -275,10 +283,17 @@ export async function dispatchSalonReopenTicket(
 export async function reprintSalonJob(job: PrintJob): Promise<{ ok: boolean; error?: string }> {
   if (typeof window === "undefined") return { ok: false, error: "無效環境" };
   const res = await dispatchPrint(job);
-  const nextStatus: PrintJob["status"] = res.ok ? "sent" : "failed";
-  const jobs = loadSalonPrintJobs().map((j) =>
-    j.id === job.id ? { ...j, status: nextStatus } : j,
-  );
+  // 失敗一定要寫低原因：以前淨係改 status 變「失敗」，但 res.error 掉咗，
+  // 打印中心就咁顯示「失敗」兩個字，用戶完全無從追查（同餐飲 e82c7ae 修嗰個 bug）。
+  // 成功要清走舊原因，唔好殘留誤導。
+  const jobs = loadSalonPrintJobs().map((j) => {
+    if (j.id !== job.id) return j;
+    const next: PrintJob = { ...j };
+    delete next.lastError;
+    next.status = res.ok ? "sent" : "failed";
+    if (!res.ok) next.lastError = res.error;
+    return next;
+  });
   saveSalonPrintJobs(jobs);
   window.dispatchEvent(
     new CustomEvent(SALON_PRINT_JOBS_CHANGED_EVENT, { detail: { count: 1 } }),
@@ -286,4 +301,21 @@ export async function reprintSalonJob(job: PrintJob): Promise<{ ok: boolean; err
   if (res.ok) playSuccessBeep();
   else playErrorBeep();
   return res;
+}
+
+/**
+ * 把一批 dispatch 完嘅 job 入面「失敗」嗰啲，砌成一段人睇得明嘅原因（每行一張：
+ * `<打印機名>：<原因>`）；全部成功就返空字串。
+ *
+ * 結帳畫面用（`salon/checkout.tsx`）：列印失敗唔阻塞結帳，如果唔額外講出嚟，
+ * 收銀員淨係見到「結帳完成」，唔知收據根本冇印到。
+ */
+export function describePrintFailures(jobs: PrintJob[]): string {
+  return jobs
+    .filter((job) => job.status === "failed")
+    .map(
+      (job) =>
+        `${job.printerName || job.printerId || "打印機"}：${job.lastError || "未知錯誤"}`,
+    )
+    .join("\n");
 }

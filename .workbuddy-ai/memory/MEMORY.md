@@ -51,6 +51,18 @@
 - **無打印通道 ≠ 失敗**：`flushPendingPrintJobs()` 喺 `!hasChannel`（未配 companion／
   native bridge／relay）時維持 `pending`，**唔好當 failed 彈紅提示** —— 「從未設定打印」
   係正常狀態，誤報會好煩。真正有通道但失敗先係 `failed`。
+- **⚠️ salon 打印係完全另一套 pipeline（2026-09-03 全修，改打印邏輯一定要兩邊都改）**：
+  - storage `loadSalonPrintJobs`（`macau-pos-salon/*`）、event `SALON_PRINT_JOBS_CHANGED_EVENT`
+    —— **唔係** 餐飲嗰套 `loadPrintJobs` / `pos-print-jobs-changed`。
+  - **唔經 `dispatch.ts`**：`salon/print.ts` 自己 call `dispatchJobToNative` /
+    `getRelayTransport` / `getCompanionTransport`。
+  - **冇 background flush / retry**：`flushPendingPrintJobs` 淨係食餐飲隊列。
+  - `resolvePrintJobStatus(_online)`（`companion.ts:450`）**永遠 return `"pending"`**（param 冇用）。
+  - **所以 salon 嘅 `pending` 係「一世嘅謊言」** —— 同餐飲**相反**：餐飲 pending 有 worker 會
+    重試（啱），salon pending 永遠唔會重試但又顯示「待列印」（錯，要標 `failed`）。
+    **改任何打印狀態邏輯，兩邊語義唔同，唔好直接照搬。**
+  - 結帳時收據印唔到要用 `describePrintFailures()` 顯示喺成功畫面（`salon/checkout.tsx`），
+    因為列印失敗唔阻塞結帳，否則收銀員淨係見到「結帳完成」。
 
 ## 雲端中繼（Scheme B，解釋文 docs/97 / 規格 docs/96）
 iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:9100)。

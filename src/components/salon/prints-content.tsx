@@ -107,6 +107,14 @@ export function PrintsContent() {
                     minute: "2-digit",
                   })}
                 </div>
+                {/* 失敗原因一定要睇得到：以前淨係出「失敗」兩個字，用戶完全無從追查。
+                    長文字用 whitespace-pre-wrap break-words，唔好 truncate（項目約定）。 */}
+                {job.status === "failed" && job.lastError ? (
+                  <div className="mt-2 max-w-md whitespace-pre-wrap break-words rounded-lg bg-rose-50 px-2 py-1.5 text-xs leading-relaxed text-rose-700">
+                    <span className="font-semibold">失敗原因：</span>
+                    {job.lastError}
+                  </div>
+                ) : null}
               </div>
               <button
                 type="button"
