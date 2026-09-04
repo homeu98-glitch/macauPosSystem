@@ -636,24 +636,49 @@ export function authenticateAccount(account: string, pin: string) {
   };
 }
 
+/** 廣播當 authSession 變更（同帳號不廣播，避免不必要的 reload / refetch）。
+ *  任何依賴 localStorage orders / bootstrap / deviceConfig 嘅 component 都應該訂閱呢個事件，
+ *  並喺收到時重置自己嘅 in-memory state + 重新 backfill / 重新讀 cache。
+ *
+ *  root cause（2026-09-04）：用戶切換帳號後，舊帳號嘅 orders 仍喺 React state；因為 React 唔會自動訂閱
+ *  localStorage，導致「明明換咗 authSession，但畫面仲顯示上一間店嘅資料」。 */
+export function notifyAuthSessionChanged(
+  prev: AuthSession | null,
+  next: AuthSession | null,
+) {
+  if (typeof window === "undefined") return;
+  if (prev?.account === next?.account) return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent("pos-auth-changed", { detail: { prev, next } }),
+    );
+  } catch {
+    // ignore
+  }
+}
+
 export function loadAuthSession(): AuthSession | null {
   return normalizeAuthSession(readJson<Partial<AuthSession> | null>(KEYS.authSession, null));
 }
 
 export function saveAuthSession(session: AuthSession) {
+  const prev = loadAuthSession();
   writeJson(KEYS.authSession, session);
   if (session.merchantId) {
     prepareStoreStorage(session.merchantId);
   }
+  notifyAuthSessionChanged(prev, session);
 }
 
 export function clearAuthSession() {
   if (typeof window === "undefined") return;
+  const prev = loadAuthSession();
   try {
     window.localStorage.removeItem(KEYS.authSession);
   } catch {
     // ignore
   }
+  notifyAuthSessionChanged(prev, null);
 }
 
 export type SoldOutState = Record<

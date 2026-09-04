@@ -42,7 +42,18 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     }
     if (roleBlocked) {
       window.location.replace("/");
+      return;
     }
+    // 兜底：唔係由 login-screen 嚟嘅 authSession 變更（例如直接在 storage 寫新值、
+    // 或者 kiosk binding auto-login），呢度訂閱 `pos-auth-changed` 同樣 force reload。
+    function onAuthChanged() {
+      if (pathname === "/login") return;
+      window.location.reload();
+    }
+    window.addEventListener("pos-auth-changed", onAuthChanged);
+    return () => {
+      window.removeEventListener("pos-auth-changed", onAuthChanged);
+    };
   }, [isLedgerSession, pathname, roleBlocked, router, session]);
 
   if ((!session || roleBlocked) && pathname !== "/login") {

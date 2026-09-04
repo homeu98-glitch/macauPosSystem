@@ -106,9 +106,15 @@ export function LoginScreen() {
         }
       }
 
-      const previousMerchantId = loadAuthSession()?.merchantId;
+      const previousAuth = loadAuthSession();
+      const previousMerchantId = previousAuth?.merchantId;
 
       saveAuthSession(session);
+
+      // 統一行為：saveAuthSession 已經自動 dispatch `pos-auth-changed`。
+      // 任何 React component 訂閱呢個事件都會自動 reset + 重 backfill；
+      // 喺呢度額外 force full reload，只係「保險網」，確保連冇訂閱嘅快取（kiosk binding、
+      // 不同 page 嘅 mount state）都會被洗。
 
       const cachedBootstrap = loadBootstrapCache();
       if (cachedBootstrap && session.name) {
@@ -126,8 +132,15 @@ export function LoginScreen() {
       // 自助點餐機只做快餐（規格 5），同「快餐」模式一樣用 quick
       saveOperatingMode(mode === "kiosk" || mode === "quick" ? "quick" : "dinein");
 
-      const storeSwitched =
-        Boolean(previousMerchantId && session.merchantId && previousMerchantId !== session.merchantId);
+      // 統一用「帳號」比對而唔係「merchantId」比對：
+      // - 60000002 → 65273599（同店換人）→ SPA 切換會殘留舊 store scope 嘅 React state；
+      // - 任何 account 變更都 force 整頁 reload，咁樣最安全。
+      const accountSwitched =
+        Boolean(previousAuth?.account) && previousAuth?.account !== session.account;
+      // 保留舊嘅 merchantId 切換判定（salon / 跨店）向下相容。
+      const storeSwitched = Boolean(
+        previousMerchantId && session.merchantId && previousMerchantId !== session.merchantId,
+      );
 
       if (mode === "salon") {
         setTerminalIndustry("salon");
@@ -135,7 +148,7 @@ export function LoginScreen() {
         if (session.merchantId) {
           saveActiveSalonStore(session.merchantId);
         }
-        if (storeSwitched) {
+        if (accountSwitched || storeSwitched) {
           window.location.replace("/salon");
           return;
         }
@@ -146,7 +159,10 @@ export function LoginScreen() {
       // kiosk 綁店登入 → 去自助點餐介面；其他模式 → 收銀台
       const homePath = mode === "kiosk" ? "/order" : "/";
 
-      if (storeSwitched) {
+      // 任何帳號切換（即使同一個 merchantId）→ 整頁 reload。
+      // 原因：SPA 切換會殘留舊 store scope 嘅 React state（orders / bootstrap / deviceConfig 等），
+      // 只有整頁 reload 先確保 authSession + 所有 localStorage + 所有 React state 一致。
+      if (accountSwitched || storeSwitched) {
         window.location.replace(homePath);
         return;
       }

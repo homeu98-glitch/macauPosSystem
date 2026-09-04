@@ -16,7 +16,6 @@ import {
   loadOrders,
   loadSoldOutState,
 } from "@/lib/storage";
-import { mergeOrderLists } from "@/lib/pos-order-filters";
 import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
 import {
   computeIngredientConsumption,
@@ -387,14 +386,20 @@ export function RestaurantDailyReport() {
   // 報表原本只讀 localStorage 訂單（loadOrders()）。換機 / 清 cache / 首次開啟時
   // localStorage 空 → 營業額、毛利、菜品排行、線上佔比全部空白；只有「會員充值」正常，
   // 因為嗰個係直接讀 Ledger 雲端（getMerchantReportSummary），唔經 localStorage。
-  // 呢度喺 mount 時從 `/api/pos/state` 拉本店訂單，同 localStorage 合併（mergeOrderLists），
-  // 令報表喺任何裝置都睇到同「線上模組」一致嘅完整數據。
+  // 呢度喺 mount / authSession 變更時從 `/api/pos/state` 拉本店訂單。
   //
-  // 注意兩點：
+  // 注意三點：
   // 1) 唔套 filterResurrectedOrders —— 嗰個係收銀工作台用嚟防止舊終態單「復活」佔枱；
   //    報表正正需要已結帳 / 退款單做營收口徑，所以只過濾本機已真刪除嘅 tombstone。
-  // 2) 只 setOrders（記憶體），唔 saveOrders 寫返 localStorage —— 避免污染收銀端嘅
+  // 2) 唔用 mergeOrderLists(loadOrders(), fetched) —— 切換帳號時本機 orders 可能
+  //    殘留舊 store scope 嘅單，硬 merge 會把兩間店資料混埋。雲端係單一可信源。
+  // 3) 只 setOrders（記憶體），唔 saveOrders 寫返 localStorage —— 避免污染收銀端嘅
   //    「本機工作清單」語義（docs/52 收銀端故意唔復活 server 單邊終態單）。
+  //
+  // 兜底：雲端 fetch 完全失敗（例如離線）時，先 fallback 用本機 orders（過 tombstone），
+  // 等下次 online 再補。但係，雲端有返「空陣列」（fetched.length === 0）就**唔可以**
+  // 視為失敗——可能該店真係冇單，要顯示空狀態而唔係 fallback 到可能嘅舊 store 殘留。
+  const [backfillSeq, setBackfillSeq] = useState(0);
   useEffect(() => {
     let cancelled = false;
     async function backfillOrders() {
@@ -404,6 +409,7 @@ export function RestaurantDailyReport() {
       const PAGE = 1000;
       const MAX_PAGES = 10;
       const fetched: PosOrder[] = [];
+      let cloudFailed = false;
       try {
         for (let page = 0; page < MAX_PAGES; page++) {
           const offset = page * PAGE;
@@ -411,24 +417,55 @@ export function RestaurantDailyReport() {
             ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1`
             : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1`;
           const res = await fetch(url);
+          if (!res.ok) {
+            cloudFailed = true;
+            break;
+          }
           const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
-          if (cancelled || !payload.ok || !Array.isArray(payload.orders)) break;
+          if (cancelled || !payload.ok || !Array.isArray(payload.orders)) {
+            cloudFailed = !payload.orders;
+            break;
+          }
           fetched.push(...payload.orders);
           if (payload.orders.length < PAGE) break; // 最後一頁
         }
       } catch {
         // 中途失敗：下面仍會用已成功拉到嘅部分（best-effort），唔會因一頁失敗而全丟。
+        cloudFailed = true;
       }
-      if (cancelled || fetched.length === 0) return;
-      const merged = mergeOrderLists(loadOrders(), fetched);
+      if (cancelled) return;
+
       const deletedIds = new Set(loadDeletedOrderIds());
-      setOrders(merged.filter((o) => !deletedIds.has(o.id)));
+      // 雲端有單 → 以雲端為唯一可信源。
+      // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
+      // 雲端空 + 成功 → 該店確實冇單，顯示空狀態（**唔可以用本機 orders 覆蓋**——可能係舊 store 殘留）。
+      if (fetched.length > 0) {
+        setOrders(fetched.filter((o) => !deletedIds.has(o.id)));
+      } else if (cloudFailed) {
+        setOrders(loadOrders().filter((o) => !deletedIds.has(o.id)));
+      } else {
+        setOrders([]);
+      }
     }
     void backfillOrders();
     return () => {
       cancelled = true;
     };
-  }, [merchantId]);
+  }, [merchantId, backfillSeq]);
+
+  // 訂閱 authSession 變更：切換帳號時重置 orders 並強制重跑 backfill。
+  // root cause 修復（2026-09-04）：React 唔會自動訂閱 localStorage，冇呢個 listener
+  // 嘅話切換帳號後 React state 仍係舊店嘅 orders。
+  useEffect(() => {
+    function onAuthChanged() {
+      setOrders([]);
+      setBackfillSeq((n) => n + 1);
+    }
+    window.addEventListener("pos-auth-changed", onAuthChanged);
+    return () => {
+      window.removeEventListener("pos-auth-changed", onAuthChanged);
+    };
+  }, []);
 
   useEffect(() => {
     async function safeLedger(r: ReportRangeKey): Promise<LedgerReportSummary | null> {
