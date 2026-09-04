@@ -8,6 +8,7 @@
 - **快照聚合（2026-09-04 定案）**：菜品銷售排行按「下單當時快照」聚合 —— key = `menuItemId|訂單內菜品名`，金額用訂單內快照價 `it.price`。快閃餐改名／改價（Ledger 菜品 ID 不變）時唔同名稱各自一行，歷史訂單唔會因改名對唔上當前餐牌。**唔好**改返用大類聚合或者強制對應當前餐牌名（已試過、用戶否決）。`buildMenuMeta()` / `resolveMenuMetaItem()` 而家只剩診斷面板用。
 - **診斷匹配統計**：診斷面板嘅菜品配對統計只計 `isSaleCountable` 嘅訂單 —— cancelled 測試單嘅孤兒菜品（舊 Ledger UUID）唔計入去，否則「未匹配名單」會出現髒資料假象。
 - **尖峰時段**：POS 線下單 `agg.byHour` + Ledger 線上單 `onlineByHour` 疊加成 `combinedByHour`。`onlineByHour` 由 `useEffect([merchantId, range])` 用 `listMerchantOrders` cursor pagination 抓，按「下單時間」createdAt 入帳。
+- **線上單明細併入菜品排行**：`onlineDishSource: {order, items}[]`（逐張 `getOrderDetail()`，MAX_DETAILS=200）；`aggregate()` 第三參數 `onlineWithItems`，明細以「線上」渠道併 dishMap + 時長估算。用 `onlineDishKey`（訂單 ID join）做 effect 穩定觸發；effect 必須放喺 `countableOnlineOrders` 宣告之後（否則 render TDZ ReferenceError）。防雙計：`posOnlineIds`（POS `onlineOrderId` Set）剔除已同步單。
 - **營運指標方案 B**：同時顯示 POS 7 日均（`rev7dAvg`）同 Ledger RPC 7 日均（`ledgerRev7dAvg = ledger.d7.orderPaidMop / 7`），並加 `POS vs Ledger 差距` row（正數 = POS 漏計線上單）。
 - **人流 / 時長同線上單**：`computeFootfallFromOrders()`（`src/lib/restaurant-footfall.ts`）計 settled/paid（同 `isSaleCountable` 一致）；`footfallTotal = posFootfall + countableOnlineOrders.length`，後者用 POS `onlineOrderId` Set 剔除已同步單避免雙計。時長統計：`aggregate(orders, range, onlineOrders?)` 對 Ledger 純線上單用「createdAt → updatedAt」估算整體（estimated），依 fulfillmentType 分堂食／快餐桶；只有主 `agg` 傳線上單，aggYest/agg7d 唔傳。
 
