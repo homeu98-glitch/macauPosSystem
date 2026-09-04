@@ -657,8 +657,53 @@ export function RestaurantDailyReport() {
     return aggYest.revenue - cogs;
   }, [aggYest, purchase.yest]);
 
-  const avgTicket = agg.count > 0 ? agg.revenue / agg.count : 0;
-  const avgTicketYest = aggYest && aggYest.count > 0 ? aggYest.revenue / aggYest.count : 0;
+  const ticketMopYest = aggYest && aggYest.count > 0 ? aggYest.revenue / aggYest.count : 0;
+
+  /** 「線下 vs 線上」分拆：
+   *  - 線下 = POS 收銀單且 *無* onlineOrderId（純現場收銀），由 POS DB 算；
+   *  - 線上 = Ledger 總（`orderCount` / `orderPaidMop`）減去線下，涵蓋：
+   *      · POS 接單的線上單（帶 onlineOrderId）
+   *      · 其他渠道的單（kiosk / 外賣平台 / 微信小程序等不經過 POS DB 的）
+   *  - 總值優先用 Ledger RPC（覆蓋整店全渠道，較 POS DB 權威）；
+   *    若 Ledger 連不上則 fallback POS DB（離線模式仍可用）。
+   */
+  const onlineOfflineSplit = useMemo(() => {
+    const inRange = orders
+      .filter(
+        (o) =>
+          o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
+      )
+      .filter((o) => orderMatchesReportRange(o, range));
+    const offline = inRange.filter((o) => !o.onlineOrderId);
+    const offlineCount = offline.length;
+    const offlineRevenueMop = offline.reduce((s, o) => s + o.total, 0);
+
+    const ledgerCount = ledger.sel?.orderCount;
+    const ledgerRevenueMop = ledger.sel?.orderPaidMop;
+    const hasLedger = typeof ledgerCount === "number" && typeof ledgerRevenueMop === "number";
+
+    if (hasLedger) {
+      return {
+        offlineCount,
+        offlineRevenueMop,
+        onlineCount: Math.max(0, ledgerCount - offlineCount),
+        onlineRevenueMop: Math.max(0, ledgerRevenueMop - offlineRevenueMop),
+        totalCount: ledgerCount,
+        totalRevenueMop: ledgerRevenueMop,
+        source: "ledger" as const,
+      };
+    }
+    // Ledger 連不上：退回 POS DB 整體（包含帶 onlineOrderId 的線上單）。
+    return {
+      offlineCount,
+      offlineRevenueMop,
+      onlineCount: inRange.length - offlineCount,
+      onlineRevenueMop: agg.onlineRevenue,
+      totalCount: inRange.length,
+      totalRevenueMop: agg.revenue,
+      source: "pos" as const,
+    };
+  }, [orders, range, ledger.sel, agg.onlineRevenue, agg.revenue]);
 
   const soldOut = useMemo(() => {
     const map = loadSoldOutState();
@@ -934,15 +979,39 @@ export function RestaurantDailyReport() {
 
             {/* 核心 KPI 帶 */}
             <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <Kpi label="營業額" value={formatMoney(agg.revenue)} highlight delta={pct(agg.revenue, aggYest?.revenue ?? null)} />
+              <Kpi
+                label="營業額"
+                value={formatMoney(onlineOfflineSplit.totalRevenueMop)}
+                highlight
+                delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
+                subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+              />
               <Kpi
                 label="毛利（估）"
                 value={formatMoney(grossProfit)}
                 highlight
                 delta={grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
               />
-              <Kpi label="訂單數" value={String(agg.count)} delta={pct(agg.count, aggYest?.count ?? null)} />
-              <Kpi label="客單價" value={formatMoney(avgTicket)} delta={pct(avgTicket, avgTicketYest)} />
+              <Kpi
+                label="訂單數"
+                value={String(onlineOfflineSplit.totalCount)}
+                delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
+                subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
+              />
+              <Kpi
+                label="客單價"
+                value={formatMoney(
+                  onlineOfflineSplit.totalCount > 0
+                    ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                    : 0,
+                )}
+                delta={pct(
+                  onlineOfflineSplit.totalCount > 0
+                    ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                    : 0,
+                  ticketMopYest,
+                )}
+              />
               <Kpi label="覆蓋人數" value={String(agg.covers)} delta={pct(agg.covers, aggYest?.covers ?? null)} />
               <Kpi
                 label="會員充值"
@@ -1289,16 +1358,20 @@ function Kpi({
   value,
   highlight,
   delta,
+  subtitle,
 }: {
   label: string;
   value: string;
   highlight?: boolean;
   delta: { arrow: string; cls: string } | null;
+  /** 大數下方的小字（如「線下/線上」分拆）。 */
+  subtitle?: string;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="text-xs text-slate-500">{label}</div>
       <div className={`mt-1 text-2xl font-bold ${highlight ? "text-orange-600" : "text-slate-900"}`}>{value}</div>
+      {subtitle ? <div className="mt-0.5 text-[11px] text-slate-500">{subtitle}</div> : null}
       {delta ? <div className={`mt-1 text-[11px] ${delta.cls}`}>{delta.arrow}</div> : null}
     </div>
   );
