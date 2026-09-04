@@ -400,9 +400,44 @@ export function RestaurantDailyReport() {
   // 等下次 online 再補。但係，雲端有返「空陣列」（fetched.length === 0）就**唔可以**
   // 視為失敗——可能該店真係冇單，要顯示空狀態而唔係 fallback 到可能嘅舊 store 殘留。
   const [backfillSeq, setBackfillSeq] = useState(0);
+
+  // DevTools debug panel state：用嚟喺瀏覽器直接觀察報表載入流程。
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<{
+    status: "idle" | "loading" | "success" | "error";
+    merchantId: string;
+    fetchedCount: number;
+    localCount: number;
+    finalCount: number;
+    lastUrl: string;
+    lastHttpStatus: number | null;
+    lastPayloadOk?: boolean;
+    lastError: string | null;
+    durationMs: number | null;
+  }>({
+    status: "idle",
+    merchantId,
+    fetchedCount: 0,
+    localCount: 0,
+    finalCount: 0,
+    lastUrl: "",
+    lastHttpStatus: null,
+    lastError: null,
+    durationMs: null,
+  });
+
   useEffect(() => {
     let cancelled = false;
     async function backfillOrders() {
+      setDebugInfo((prev) => ({
+        ...prev,
+        status: "loading",
+        merchantId,
+        lastError: null,
+        durationMs: null,
+      }));
+      const start = performance.now();
+
       // 分頁拉全量訂單（今天/7天/30天/全部都用同一份全集，再喺前端按範圍過濾）。
       // PAGE=1000、MAX_PAGES=10 → 上限 10000 單，覆蓋絕大多數餐廳幾個月嘅歷史；
       // 每頁加 ordersOnly=1 跳過 queue/printJobs/deviceConfig，只拉 pos_orders。
@@ -410,42 +445,68 @@ export function RestaurantDailyReport() {
       const MAX_PAGES = 10;
       const fetched: PosOrder[] = [];
       let cloudFailed = false;
+      let lastUrl = "";
+      let lastHttpStatus: number | null = null;
+      let lastPayloadOk: boolean | undefined;
+      let lastError: string | null = null;
       try {
         for (let page = 0; page < MAX_PAGES; page++) {
           const offset = page * PAGE;
           const url = merchantId
             ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1`
             : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1`;
+          lastUrl = url;
           const res = await fetch(url);
+          lastHttpStatus = res.status;
           if (!res.ok) {
             cloudFailed = true;
+            lastError = `HTTP ${res.status} ${res.statusText}`;
             break;
           }
           const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
+          lastPayloadOk = payload.ok;
           if (cancelled || !payload.ok || !Array.isArray(payload.orders)) {
-            cloudFailed = !payload.orders;
+            cloudFailed = !payload.ok;
+            lastError = payload.ok ? "payload.orders 不是陣列" : "payload.ok = false";
             break;
           }
           fetched.push(...payload.orders);
           if (payload.orders.length < PAGE) break; // 最後一頁
         }
-      } catch {
+      } catch (err) {
         // 中途失敗：下面仍會用已成功拉到嘅部分（best-effort），唔會因一頁失敗而全丟。
         cloudFailed = true;
+        lastError = err instanceof Error ? err.message : String(err);
       }
       if (cancelled) return;
 
       const deletedIds = new Set(loadDeletedOrderIds());
+      const localOrders = loadOrders();
       // 雲端有單 → 以雲端為唯一可信源。
       // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
       // 雲端空 + 成功 → 該店確實冇單，顯示空狀態（**唔可以用本機 orders 覆蓋**——可能係舊 store 殘留）。
+      let final: PosOrder[];
       if (fetched.length > 0) {
-        setOrders(fetched.filter((o) => !deletedIds.has(o.id)));
+        final = fetched.filter((o) => !deletedIds.has(o.id));
       } else if (cloudFailed) {
-        setOrders(loadOrders().filter((o) => !deletedIds.has(o.id)));
+        final = localOrders.filter((o) => !deletedIds.has(o.id));
       } else {
-        setOrders([]);
+        final = [];
       }
+      setOrders(final);
+
+      setDebugInfo({
+        status: cloudFailed && fetched.length === 0 ? "error" : "success",
+        merchantId,
+        fetchedCount: fetched.length,
+        localCount: localOrders.length,
+        finalCount: final.length,
+        lastUrl,
+        lastHttpStatus,
+        lastPayloadOk,
+        lastError,
+        durationMs: Math.round(performance.now() - start),
+      });
     }
     void backfillOrders();
     return () => {
@@ -733,6 +794,82 @@ export function RestaurantDailyReport() {
                 {ledgerError}
               </div>
             ) : null}
+
+            {/* DevTools debug panel：協助排查「報表打開後冇內容」 */}
+            <div className="mb-3 rounded-xl border border-slate-200 bg-white shadow-sm">
+              <button
+                type="button"
+                onClick={() => setDebugOpen((v) => !v)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <span>
+                  診斷面板（{debugInfo.status === "loading" ? "載入中" : debugInfo.status === "error" ? "異常" : "就緒"}）
+                </span>
+                <span className="text-slate-400">{debugOpen ? "▲" : "▼"}</span>
+              </button>
+              {debugOpen ? (
+                <div className="space-y-2 border-t border-slate-100 px-3 py-2 text-xs text-slate-600">
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">merchantId</span>
+                      <span className="font-mono font-medium break-all">{debugInfo.merchantId || "(未設定)"}</span>
+                    </div>
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">最後 HTTP 狀態</span>
+                      <span className="font-mono font-medium">{debugInfo.lastHttpStatus ?? "未發送"}</span>
+                    </div>
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">雲端拉回單數</span>
+                      <span className="font-mono font-medium">{debugInfo.fetchedCount}</span>
+                    </div>
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">最終顯示單數</span>
+                      <span className="font-mono font-medium">{debugInfo.finalCount}</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">本機 localStorage 單數</span>
+                      <span className="font-mono font-medium">{debugInfo.localCount}</span>
+                    </div>
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">耗時</span>
+                      <span className="font-mono font-medium">{debugInfo.durationMs ?? "-"} ms</span>
+                    </div>
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">payload.ok</span>
+                      <span className="font-mono font-medium">{String(debugInfo.lastPayloadOk)}</span>
+                    </div>
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <span className="block text-slate-400">最後錯誤</span>
+                      <span className="font-mono font-medium break-all text-red-600">{debugInfo.lastError || "無"}</span>
+                    </div>
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">最後請求 URL</span>
+                    <span className="break-all font-mono text-slate-700">{debugInfo.lastUrl || "尚未請求"}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBackfillSeq((n) => n + 1)}
+                      className="rounded bg-orange-500 px-2 py-1 text-xs font-semibold text-white hover:bg-orange-600"
+                    >
+                      重新拉取訂單
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        console.log("[report debug]", debugInfo);
+                      }}
+                      className="rounded bg-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-300"
+                    >
+                      Console.log 狀態
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             {/* 核心 KPI 帶 */}
             <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
