@@ -8,6 +8,8 @@ import {
   type LedgerReportSummary,
 } from "@/lib/ledger/reports";
 import { restoreLedgerSession } from "@/lib/ledger/session";
+import { listMerchantOrders } from "@/lib/ledger/orders";
+import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stats";
 import {
   loadAuthSession,
@@ -53,11 +55,15 @@ function macauHour(iso: string): number {
 }
 
 interface DishRow {
-  menuItemId: string;
+  /** 大類 ID；按 category 聚合時用。 */
+  categoryId: string;
+  /** 大類名稱；若無法對照則 fallback 用原菜品名。 */
   name: string;
   offlineQty: number;
   onlineQty: number;
   revenue: number;
+  /** 本類包含嘅菜品名稱樣本（最多 3 個），用嚟輔助辨識。 */
+  samples: string[];
 }
 
 interface TableRow {
@@ -217,11 +223,83 @@ interface Agg {
   quickServing: QuickServingBreakdown;
 }
 
-function aggregate(orders: PosOrder[], range: ReportRangeKey): Agg {
-  const closed = orders.filter(
-    (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
-  );
-  const inRange = closed.filter((o) => orderMatchesReportRange(o, range));
+interface MenuMeta {
+  /** menuItemId → MenuItem */
+  itemMap: Map<string, { categoryId: string; name: string }>;
+  /** categoryId → category name */
+  categoryMap: Map<string, string>;
+}
+
+function buildMenuMeta(): MenuMeta {
+  const boot = loadBootstrapCache();
+  const items = boot?.menuItems ?? [];
+  const categories = boot?.categories ?? [];
+  return {
+    itemMap: new Map(items.map((m) => [m.id, { categoryId: m.categoryId, name: m.name }])),
+    categoryMap: new Map(categories.map((c) => [c.id, c.name])),
+  };
+}
+
+/** 判斷訂單是否應計入銷售統計（菜品 / 營業額 / 桌台 / 尖峰時段）。
+ *  - 線下 POS 單：只統計 settled。
+ *  - 帶 onlineOrderId 的單（不論單據嚟自 POS 定 Ledger 同步）：settled 或 paid 都計。
+ *  - 退款狀態（refunded / partially_refunded）一律不計入銷售。 */
+function isSaleCountable(o: PosOrder): boolean {
+  if (o.status === "refunded" || o.status === "partially_refunded") return false;
+  if (o.status === "settled" || o.status === "paid") return true;
+  return false;
+}
+
+/** 掃描 localStorage 內 macau-pos/stores/&#123;storeId&#125;/orders 同 macau-pos/orders 嘅單數，
+ *  用嚟排查「舊分店（60000003 等）資料殘留」嘅來源。
+ *  - storageOrdersByStore：分店 ID → 訂單數
+ *  - legacyOrdersCount：macau-pos/orders 舊全域 key 嘅單數（v1 之前嘅 unscoped 殘留） */
+function scanStorageOrders(): {
+  storageOrdersByStore: Record<string, number>;
+  legacyOrdersCount: number;
+} {
+  const result: { storageOrdersByStore: Record<string, number>; legacyOrdersCount: number } = {
+    storageOrdersByStore: {},
+    legacyOrdersCount: 0,
+  };
+  if (typeof window === "undefined") return result;
+  try {
+    const prefix = "macau-pos/stores/";
+    const suffix = "/orders";
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k) continue;
+      if (k === `macau-pos/orders`) {
+        try {
+          const raw = window.localStorage.getItem(k);
+          const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
+          result.legacyOrdersCount = Array.isArray(arr) ? arr.length : 0;
+        } catch {
+          // ignore parse error
+        }
+        continue;
+      }
+      if (k.startsWith(prefix) && k.endsWith(suffix)) {
+        const storeId = k.slice(prefix.length, k.length - suffix.length);
+        try {
+          const raw = window.localStorage.getItem(k);
+          const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
+          result.storageOrdersByStore[storeId] = Array.isArray(arr) ? arr.length : 0;
+        } catch {
+          result.storageOrdersByStore[storeId] = -1; // 標記 parse 失敗
+        }
+      }
+    }
+  } catch {
+    // localStorage 可能喺 SSR / 私隱模式存取失敗
+  }
+  return result;
+}
+
+function aggregate(orders: PosOrder[], range: ReportRangeKey, menuMeta?: MenuMeta): Agg {
+  const meta = menuMeta ?? buildMenuMeta();
+  const counted = orders.filter((o) => isSaleCountable(o));
+  const inRange = counted.filter((o) => orderMatchesReportRange(o, range));
 
   let revenue = 0;
   let covers = 0;
@@ -259,13 +337,23 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey): Agg {
         continue;
       }
       totalSoldQty += it.quantity;
+
+      // 按「大類」聚合：用 menuItemId 對照 bootstrap 菜單嘅 categoryId。
+      // 對照唔到（舊店菜品／legacy 資料）→ fallback 用原菜品名，key 用 menuItemId，
+      // 令用戶可以一眼見到「呢啲菜唔喺當前菜單」。
+      const menuItem = meta.itemMap.get(it.menuItemId);
+      const categoryId = menuItem?.categoryId ?? it.menuItemId;
+      const categoryName = menuItem ? meta.categoryMap.get(menuItem.categoryId) : undefined;
+      const displayName = categoryName ?? it.name;
+
       const d =
-        dishMap.get(it.menuItemId) ??
-        { menuItemId: it.menuItemId, name: it.name, offlineQty: 0, onlineQty: 0, revenue: 0 };
+        dishMap.get(categoryId) ??
+        { categoryId, name: displayName, offlineQty: 0, onlineQty: 0, revenue: 0, samples: [] };
       d.revenue += it.price * it.quantity;
       if (isOnline) d.onlineQty += it.quantity;
       else d.offlineQty += it.quantity;
-      dishMap.set(it.menuItemId, d);
+      if (d.samples.length < 3 && !d.samples.includes(it.name)) d.samples.push(it.name);
+      dishMap.set(categoryId, d);
     }
   }
 
@@ -389,6 +477,26 @@ export function RestaurantDailyReport() {
   >(null);
   const [loading, setLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
+  /** Ledger 線上單每小時計數（澳門時區），用以把尖峰時段圖合併 POS 線下單。 */
+  const [onlineByHour, setOnlineByHour] = useState<number[]>(() => new Array<number>(24).fill(0));
+  /** 最近一次「線上單分鐘小時抓取」嘅筆數／狀態，畀診斷面板睇。 */
+  const [onlineFetchInfo, setOnlineFetchInfo] = useState<{
+    fetched: number;
+    counted: number;
+    outOfRange: number;
+    cancelled: number;
+    unpaid: number;
+    status: "idle" | "loading" | "success" | "error" | "skipped";
+    lastError: string | null;
+  }>({
+    fetched: 0,
+    counted: 0,
+    outOfRange: 0,
+    cancelled: 0,
+    unpaid: 0,
+    status: "idle",
+    lastError: null,
+  });
 
   const merchantId = useReportMerchantId();
   const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
@@ -446,6 +554,18 @@ export function RestaurantDailyReport() {
     sampleDates: string[];
     rangeStart?: string;
     rangeEnd?: string;
+    /** 各 storeId 嘅訂單數量統計（用嚟排查 60000003 殘留）。key = storeId，value = 數量。 */
+    storeIdBreakdown: Record<string, number>;
+    /** 本機 orders 內 storeId 唔等於當前 merchantId 嘅單數。 */
+    foreignStoreCount: number;
+    /** 命中當前菜單大類嘅菜品類別數（用嚟判斷「菜單不匹配」嘅比例）。 */
+    matchedCategoryCount: number;
+    /** 冇命中當前菜單嘅菜品類別數（fallback 用菜品 ID 當 key）。 */
+    unmatchedCategoryCount: number;
+    /** localStorage 內所有 macau-pos/stores/&#123;storeId&#125;/orders key 嘅快照（storeId → 單數）。 */
+    storageOrdersByStore: Record<string, number>;
+    /** localStorage 內 macau-pos/orders legacy unscoped key 嘅單數。 */
+    legacyOrdersCount: number;
   }>({
     status: "idle",
     merchantId,
@@ -462,6 +582,12 @@ export function RestaurantDailyReport() {
     statusBreakdown: {},
     countedStatus: 0,
     sampleDates: [],
+    storeIdBreakdown: {},
+    foreignStoreCount: 0,
+    matchedCategoryCount: 0,
+    unmatchedCategoryCount: 0,
+    storageOrdersByStore: {},
+    legacyOrdersCount: 0,
   });
 
   useEffect(() => {
@@ -554,8 +680,15 @@ export function RestaurantDailyReport() {
 
       // 診斷用：拆解訂單狀態同日期分佈
       const statusBreakdown: Record<string, number> = {};
+      const storeIdBreakdown: Record<string, number> = {};
+      let foreignStoreCount = 0;
       for (const o of final) {
         statusBreakdown[o.status] = (statusBreakdown[o.status] ?? 0) + 1;
+        const sid = o.storeId ?? "(undefined)";
+        storeIdBreakdown[sid] = (storeIdBreakdown[sid] ?? 0) + 1;
+        if (merchantId && o.storeId !== undefined && o.storeId !== merchantId) {
+          foreignStoreCount += 1;
+        }
       }
       const counted = final.filter(
         (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
@@ -563,6 +696,24 @@ export function RestaurantDailyReport() {
       const matchedCurrentRange = counted.filter((o) => orderMatchesReportRange(o, range)).length;
       const matchedYesterday = counted.filter((o) => orderMatchesReportRange(o, "yesterday")).length;
       const sampleDates = final.slice(0, 5).map((o) => `${o.status} | createdAt=${o.createdAt} | updatedAt=${o.updatedAt} | total=${o.total} | storeId=${o.storeId ?? "(null)"}`);
+
+      // 菜品大類命中診斷：直接由 final 訂單內 items 對照 bootstrap 菜單，避免引用下方 useMemo 嘅 agg（hooks 順序限制）。
+      // 用 Set 統計 distinct categoryId，方便診斷外店菜品比例。
+      const meta = buildMenuMeta();
+      const matchedCategorySet = new Set<string>();
+      const unmatchedCategorySet = new Set<string>();
+      for (const o of final) {
+        for (const it of o.items) {
+          if (it.voided) continue;
+          const mi = meta.itemMap.get(it.menuItemId);
+          const cid = mi?.categoryId ?? it.menuItemId;
+          if (meta.categoryMap.has(cid)) matchedCategorySet.add(cid);
+          else unmatchedCategorySet.add(cid);
+        }
+      }
+      const matchedCategoryCount = matchedCategorySet.size;
+      const unmatchedCategoryCount = unmatchedCategorySet.size;
+      const { storageOrdersByStore, legacyOrdersCount } = scanStorageOrders();
 
       setDebugInfo({
         status: cloudFailed && fetched.length === 0 ? "error" : "success",
@@ -583,6 +734,12 @@ export function RestaurantDailyReport() {
         sampleDates,
         rangeStart: period?.start,
         rangeEnd: period?.end,
+        storeIdBreakdown,
+        foreignStoreCount,
+        matchedCategoryCount,
+        unmatchedCategoryCount,
+        storageOrdersByStore,
+        legacyOrdersCount,
       });
     }
     void backfillOrders();
@@ -604,6 +761,140 @@ export function RestaurantDailyReport() {
       window.removeEventListener("pos-auth-changed", onAuthChanged);
     };
   }, []);
+
+  // 尖峰時段：抓 Ledger 線上單（依「下單時間」createdAt）並按澳門時區嘅鐘頭分組，
+  // 疊加到 POS 線下單嘅 byHour 上。線上單可能從未入 POS DB（直接由 Ledger / 外送平台落單），
+  // 所以必須額外抓一次，避免尖峰時段圖只反映線下收銀。
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOnlineByHour() {
+      if (!merchantId) {
+        // 未登入 Ledger 商戶 → 唔抓線上單。
+        setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineFetchInfo({
+          fetched: 0,
+          counted: 0,
+          outOfRange: 0,
+          cancelled: 0,
+          unpaid: 0,
+          status: "skipped",
+          lastError: "merchantId 未設定",
+        });
+        return;
+      }
+      setOnlineFetchInfo((prev) => ({ ...prev, status: "loading", lastError: null }));
+      try {
+        const restored = await restoreLedgerSession();
+        if (!restored) {
+          if (cancelled) return;
+          setOnlineByHour(new Array<number>(24).fill(0));
+          setOnlineFetchInfo({
+            fetched: 0,
+            counted: 0,
+            outOfRange: 0,
+            cancelled: 0,
+            unpaid: 0,
+            status: "skipped",
+            lastError: "尚未登入 Ledger",
+          });
+          return;
+        }
+
+        // 用 cursor-based pagination 撈齊 [rangeStart, rangeEnd] 區間內嘅線上單。
+        // RPC 預設 limit=50，呢度調大到 500／頁，並用 since+sinceId 行 cursor。
+        const period = backfillRangeFor(range);
+        const PAGE = 500;
+        const MAX_PAGES = 8; // 上限 4000 單，足以覆蓋繁忙餐廳 30 日滾動窗口
+        const rangeStartMs = period ? Date.parse(period.start) : null;
+        const rangeEndMs = period ? Date.parse(period.end) : null;
+        const collected: LedgerOnlineOrder[] = [];
+        let cursorSince: string | null = period?.start ?? null;
+        let cursorSinceId: string | null = null;
+        let outOfRange = 0;
+        let cancelledCount = 0;
+        let unpaidCount = 0;
+        let counted = 0;
+        const byHour = new Array<number>(24).fill(0);
+
+        outer: for (let page = 0; page < MAX_PAGES; page++) {
+          const rows = await listMerchantOrders({
+            merchantId,
+            limit: PAGE,
+            since: cursorSince,
+            sinceId: cursorSinceId,
+          });
+          if (cancelled) return;
+          if (rows.length === 0) break;
+
+          for (const o of rows) {
+            const ts = o.createdAt ?? o.updatedAt;
+            if (!ts) continue;
+            const t = Date.parse(ts);
+            if (!Number.isFinite(t)) continue;
+
+            // 篩掉超出範圍嘅單 + cancelled + unpaid。
+            if (rangeStartMs != null && t < rangeStartMs) {
+              // 由於 RPC 按 updatedAt DESC 排序，遇到 t < rangeStartMs 即可視為已過期。
+              outOfRange++;
+              // 如果確定已過 range 起點，後續無需再翻頁。
+              break outer;
+            }
+            if (rangeEndMs != null && t > rangeEndMs) {
+              outOfRange++;
+              continue;
+            }
+            if (String(o.status ?? "").toLowerCase().includes("cancel")) {
+              cancelledCount++;
+              continue;
+            }
+            if (o.paymentStatus !== "paid") {
+              unpaidCount++;
+              continue;
+            }
+            // 依「下單時間」createdAt 入帳；fallback updatedAt。
+            const hour = macauHour(ts);
+            byHour[hour] += 1;
+            counted++;
+          }
+          collected.push(...rows);
+
+          // 已經走到範圍起點之前、或本頁未填滿 → 結束。
+          if (rows.length < PAGE) break;
+          const last = rows[rows.length - 1];
+          cursorSince = last.updatedAt ?? last.createdAt ?? cursorSince;
+          cursorSinceId = last.id;
+        }
+        if (cancelled) return;
+
+        setOnlineByHour(byHour);
+        setOnlineFetchInfo({
+          fetched: collected.length,
+          counted,
+          outOfRange,
+          cancelled: cancelledCount,
+          unpaid: unpaidCount,
+          status: "success",
+          lastError: null,
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineFetchInfo({
+          fetched: 0,
+          counted: 0,
+          outOfRange: 0,
+          cancelled: 0,
+          unpaid: 0,
+          status: "error",
+          lastError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    void loadOnlineByHour();
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId, range]);
 
   useEffect(() => {
     async function safeLedger(r: ReportRangeKey): Promise<LedgerReportSummary | null> {
@@ -672,9 +963,13 @@ export function RestaurantDailyReport() {
     };
   }, [range, merchantId, merchantIdForQuery]);
 
-  const agg = useMemo(() => aggregate(orders, range), [orders, range]);
-  const aggYest = useMemo(() => (range === "today" ? aggregate(orders, "yesterday") : null), [orders, range]);
-  const agg7d = useMemo(() => aggregate(orders, "7d"), [orders]);
+  const menuMeta = useMemo(() => buildMenuMeta(), [merchantId]);
+  const agg = useMemo(() => aggregate(orders, range, menuMeta), [orders, range, menuMeta]);
+  const aggYest = useMemo(
+    () => (range === "today" ? aggregate(orders, "yesterday", menuMeta) : null),
+    [orders, range, menuMeta],
+  );
+  const agg7d = useMemo(() => aggregate(orders, "7d", menuMeta), [orders, menuMeta]);
 
   /**
    * docs/任務：當日人流改為完全由訂單自動計算，唔再由使用者手動輸入。
@@ -687,9 +982,7 @@ export function RestaurantDailyReport() {
 
   // 拆開堂食 / 快餐 兩類人流，方便報表顯示（商家一望就知邊類佔多）。
   const footfallBreakdown = useMemo(() => {
-    const terminal = orders.filter(
-      (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
-    );
+    const terminal = orders.filter((o) => isSaleCountable(o));
     const inRange = terminal.filter((o) => orderMatchesReportRange(o, range));
     let dineIn = 0;
     let counter = 0;
@@ -722,12 +1015,7 @@ export function RestaurantDailyReport() {
    *    若 Ledger 連不上則 fallback POS DB（離線模式仍可用）。
    */
   const onlineOfflineSplit = useMemo(() => {
-    const inRange = orders
-      .filter(
-        (o) =>
-          o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
-      )
-      .filter((o) => orderMatchesReportRange(o, range));
+    const inRange = orders.filter((o) => isSaleCountable(o)).filter((o) => orderMatchesReportRange(o, range));
     const offline = inRange.filter((o) => !o.onlineOrderId);
     const offlineCount = offline.length;
     const offlineRevenueMop = offline.reduce((s, o) => s + o.total, 0);
@@ -774,6 +1062,15 @@ export function RestaurantDailyReport() {
   const voidRate = agg.totalSoldQty > 0 ? agg.voidQty / agg.totalSoldQty : 0;
   const rev7dAvg = agg7d.revenue / 7;
   const topup7dAvg = (ledger.d7?.topupMop ?? 0) / 7;
+  // 方案 B（Ledger 全渠道 7 日均值）：
+  //   - rev7dAvg = POS 7 日均（保留舊邏輯，只反映本機訂單）
+  //   - ledgerRev7dAvg = Ledger RPC 7 日均（orderPaidMop / 7），全渠道權威值
+  //   - ledgerCount7dAvg = Ledger 7 日均單數（orderCount / 7）
+  //   - 差距 = POS 7 日均 vs Ledger 7 日均，可幫用戶一眼睇出「POS 漏計線上單」嘅程度。
+  const ledgerRev7dAvg = (ledger.d7?.orderPaidMop ?? 0) / 7;
+  const ledgerCount7dAvg = (ledger.d7?.orderCount ?? 0) / 7;
+  const rev7dGap = ledgerRev7dAvg - rev7dAvg; // 正數 = POS 比 Ledger 少（漏計）；負數 = POS 比 Ledger 多
+  const ledgerHasRev7d = (ledger.d7?.orderPaidMop ?? 0) > 0;
 
   const suggestions = useMemo<Suggestion[]>(() => {
     const out: Suggestion[] = [];
@@ -844,8 +1141,17 @@ export function RestaurantDailyReport() {
     };
   }
 
-  const peakHour = agg.byHour.indexOf(Math.max(...agg.byHour));
-  const maxHour = Math.max(...agg.byHour, 1);
+  // 尖峰時段合併圖：agg.byHour 來自 POS 本機訂單（含帶 onlineOrderId 嘅 POS 線上單）；
+  // onlineByHour 來自 Ledger 雲端純線上單（可能從未入 POS DB）。兩者相加先係全渠道。
+  // 注意：onlineByHour 可能因 ledger session 過期／網絡失敗而係全 0；UI 嘅 tag 會如實顯示來源。
+  const combinedByHour = useMemo(
+    () => agg.byHour.map((offlineCount, h) => offlineCount + (onlineByHour[h] ?? 0)),
+    [agg.byHour, onlineByHour],
+  );
+  const peakHour = combinedByHour.indexOf(Math.max(...combinedByHour));
+  const maxHour = Math.max(...combinedByHour, 1);
+  /** POS 線下單（不論帶唔帶 onlineOrderId）嘅 byHour，畀 tooltip 分拆。 */
+  const offlineHourOnly = useMemo(() => agg.byHour.slice(), [agg.byHour]);
 
   function exportCsv() {
     const rows = orders
@@ -994,6 +1300,69 @@ export function RestaurantDailyReport() {
                   <div className="rounded bg-slate-50 px-2 py-1">
                     <span className="block text-slate-400">匹配昨天範圍</span>
                     <span className="font-mono font-medium">{debugInfo.matchedYesterday}</span>
+                  </div>
+                </div>
+                {/* 60000003 等舊分店殘留診斷：列示本批訂單內各 storeId 嘅分佈 + localStorage 內
+                    各分店 orders key 嘅單數。命中 storeId 唔等於當前 merchantId =「外店污染」。 */}
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">訂單 storeId 分佈</span>
+                    <span className="break-all font-mono font-medium">
+                      {Object.entries(debugInfo.storeIdBreakdown)
+                        .map(([k, v]) => `${k}:${v}`)
+                        .join(", ") || "-"}
+                    </span>
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">外店單數（storeId ≠ 當前）</span>
+                    <span
+                      className={`font-mono font-medium ${
+                        debugInfo.foreignStoreCount > 0 ? "text-rose-600" : "text-slate-700"
+                      }`}
+                    >
+                      {debugInfo.foreignStoreCount}
+                    </span>
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">菜品大類命中當前菜單</span>
+                    <span className="font-mono font-medium">
+                      {debugInfo.matchedCategoryCount} /{" "}
+                      {debugInfo.matchedCategoryCount + debugInfo.unmatchedCategoryCount}
+                    </span>
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">未命中當前菜單嘅類別數</span>
+                    <span
+                      className={`font-mono font-medium ${
+                        debugInfo.unmatchedCategoryCount > 0 ? "text-rose-600" : "text-slate-700"
+                      }`}
+                    >
+                      {debugInfo.unmatchedCategoryCount}
+                    </span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">
+                      localStorage 各分店 orders（macau-pos/stores/&#123;storeId&#125;/orders）
+                    </span>
+                    <span className="break-all font-mono text-slate-700">
+                      {Object.entries(debugInfo.storageOrdersByStore).length > 0
+                        ? Object.entries(debugInfo.storageOrdersByStore)
+                            .map(([k, v]) => `${k}: ${v}`)
+                            .join(", ")
+                        : "(無)"}
+                    </span>
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">localStorage legacy（macau-pos/orders）</span>
+                    <span
+                      className={`break-all font-mono font-medium ${
+                        debugInfo.legacyOrdersCount > 0 ? "text-rose-600" : "text-slate-700"
+                      }`}
+                    >
+                      {debugInfo.legacyOrdersCount} 筆
+                    </span>
                   </div>
                 </div>
                 {debugInfo.rangeStart && debugInfo.rangeEnd ? (
@@ -1150,18 +1519,27 @@ export function RestaurantDailyReport() {
                     {agg.dishes.slice(0, 8).map((d) => {
                       const total = d.offlineQty + d.onlineQty;
                       const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
+                      const isMatched = menuMeta.categoryMap.has(d.categoryId);
                       return (
-                        <div key={d.menuItemId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900">
-                              {d.name}
+                        <div key={d.categoryId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <span className="truncate">{d.name}</span>
                               <ChannelChip kind={ch} />
+                              {!isMatched ? (
+                                <span className="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
+                                  未匹配當前菜單
+                                </span>
+                              ) : null}
                             </div>
                             <div className="mt-0.5 text-xs text-slate-500">
                               線下 {d.offlineQty} · 線上 {d.onlineQty}
+                              {d.samples.length > 0 ? (
+                                <span className="ml-2 text-slate-400">({d.samples.join("、")})</span>
+                              ) : null}
                             </div>
                           </div>
-                          <div className="text-right">
+                          <div className="shrink-0 text-right">
                             <div className="text-sm font-semibold text-slate-900">{total} 份</div>
                             <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
                           </div>
@@ -1233,34 +1611,78 @@ export function RestaurantDailyReport() {
 
             {/* 補充：尖峰時段 + 出餐時間 + 營運指標 */}
             <div className="mb-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <Card title="尖峰時段（每小時訂單）" tag={`高峰約 ${peakHour}:00`}>
+              <Card
+                title="尖峰時段（每小時訂單）"
+                tag={
+                  onlineFetchInfo.status === "success"
+                    ? `POS+Ledger · 高峰約 ${peakHour}:00`
+                    : onlineFetchInfo.status === "error"
+                      ? `僅 POS · 高峰約 ${peakHour}:00`
+                      : `POS · 高峰約 ${peakHour}:00`
+                }
+              >
                 <div className="grid grid-cols-12 gap-1">
-                  {agg.byHour.map((c, h) => (
-                    <div
-                      key={h}
-                      title={`${h}:00 · ${c} 單`}
-                      className="flex h-7 items-end justify-center rounded text-[9px] text-white"
-                      style={{
-                        background: c >= maxHour * 0.7 ? "#ef4444" : c >= maxHour * 0.4 ? "#fb923c" : "#cbd5e1",
-                      }}
-                    >
-                      {c > 0 ? c : ""}
-                    </div>
-                  ))}
+                  {combinedByHour.map((c, h) => {
+                    const offline = offlineHourOnly[h] ?? 0;
+                    const online = Math.max(0, c - offline);
+                    return (
+                      <div
+                        key={h}
+                        title={`${h}:00 · POS ${offline} 單 + Ledger 線上 ${online} 單 = 共 ${c} 單`}
+                        className="relative flex h-7 items-end justify-center overflow-hidden rounded text-[9px] text-white"
+                        style={{
+                          background: c >= maxHour * 0.7 ? "#ef4444" : c >= maxHour * 0.4 ? "#fb923c" : "#cbd5e1",
+                        }}
+                      >
+                        {/* 線上單疊加層（藍色），上到下垂直堆疊表達「線下 + 線上」總和。 */}
+                        {online > 0 && offline > 0 ? (
+                          <div
+                            className="absolute bottom-0 left-0 right-0 bg-blue-500/70"
+                            style={{ height: `${Math.min(100, (online / c) * 100)}%` }}
+                            aria-hidden
+                          />
+                        ) : null}
+                        <span className="relative z-10">{c > 0 ? c : ""}</span>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-center">
                   <Metric label="退菜率" value={`${Math.round(voidRate * 100)}%`} warn={voidRate > 0.03} />
                   <Metric label="折扣佔比" value={`${Math.round(discountRatio * 100)}%`} warn={discountRatio > 0.15} />
                   <Metric label="線上佔比" value={`${Math.round(onlineShare * 100)}%`} />
                 </div>
+                {onlineFetchInfo.status === "error" ? (
+                  <div className="mt-2 text-[11px] text-amber-700">
+                    Ledger 線上單抓取失敗：{onlineFetchInfo.lastError ?? "未知錯誤"}，尖峰時段僅含 POS 單。
+                  </div>
+                ) : null}
+                {onlineFetchInfo.status === "success" && onlineFetchInfo.outOfRange > 0 ? (
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    Ledger 抓取 {onlineFetchInfo.fetched} 單 · 入圖 {onlineFetchInfo.counted} · 越界 {onlineFetchInfo.outOfRange}
+                    {onlineFetchInfo.cancelled > 0 ? ` · 取消 ${onlineFetchInfo.cancelled}` : ""}
+                    {onlineFetchInfo.unpaid > 0 ? ` · 未付 ${onlineFetchInfo.unpaid}` : ""}
+                  </div>
+                ) : null}
               </Card>
 
               <Card title="營運指標 · 同環比" tag="vs 7 日均值">
                 <div className="grid gap-1">
-                  <Row label="營業額（7日均）" value={formatMoney(rev7dAvg)} />
-                  <Row label="線上渠道佔比（7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
+                  <Row label="POS 營業額（7日均）" value={formatMoney(rev7dAvg)} />
+                  <Row label="Ledger 全渠道營業額（7日均）" value={formatMoney(ledgerRev7dAvg)} />
+                  {ledgerHasRev7d ? (
+                    <Row
+                      label="POS vs Ledger 差距"
+                      value={`${rev7dGap >= 0 ? "+" : "-"}${formatMoney(Math.abs(rev7dGap))} / 日`}
+                    />
+                  ) : null}
+                  <Row label="Ledger 全渠道訂單數（7日均）" value={`${ledgerCount7dAvg.toFixed(1)} 單`} />
+                  <Row label="線上渠道佔比（POS 7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
                   <Row label="會員充值（7日均）" value={formatMoney(topup7dAvg)} />
                   <Row label="總售出份數" value={`${agg.totalSoldQty} 份`} />
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400">
+                  方案 B：保留 POS 7 日均（只反映本機訂單），並新增 Ledger RPC 全渠道 7 日均（涵蓋外送平台／kiosk／POS 漏計嘅線上單）；差距正數表示 POS 比 Ledger 少（多為線上單未入 POS DB）。
                 </div>
               </Card>
 
