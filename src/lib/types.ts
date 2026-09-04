@@ -622,7 +622,7 @@ export interface PrintJob {
     /** 折讓 = (base − discounted) × quantity；0 = 冇折讓唔顯示。 */
     savingAmount?: number;
   }>;
-  status: "pending" | "sent" | "failed";
+  status: "pending" | "sent" | "failed" | "printed";
   /**
    * 最近一次派發失敗嘅原因（嚟自 `dispatchOneJob()` 嘅 error）。
    *

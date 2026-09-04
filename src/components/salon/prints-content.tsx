@@ -19,12 +19,14 @@ const STATUS_LABEL: Record<PrintJob["status"], string> = {
   pending: "待列印",
   sent: "已送出",
   failed: "失敗",
+  printed: "已列印",
 };
 
 const STATUS_COLORS: Record<PrintJob["status"], string> = {
   pending: "bg-amber-100 text-amber-700",
   sent: "bg-emerald-100 text-emerald-700",
   failed: "bg-rose-100 text-rose-700",
+  printed: "bg-emerald-100 text-emerald-700",
 };
 
 /** 列印任務內容（F7：同時供「設置 → 打印」tab 與 /salon/prints 路由使用） */

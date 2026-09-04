@@ -39,9 +39,9 @@ await supabase.from("pos_print_jobs").upsert(
 `src/app/api/salon/sync/route.ts` 個 `upsertPrintJob()` 抽起嘅 `salon_print_jobs` upsert 有完全一樣嘅 bug，用同一招修（`.update().select("id")` → 空先 `.insert()`）。salon 同用 print-relay hub，唔修會同樣重印。
 
 ### 3.3 唔動嘅部分
-- `pos_claim_print_jobs` RPC：唔使改，佢揀 `pending`/`failed` 係啱嘅。
+- `pos_claim_print_jobs` RPC：唔使改，佢揀 `pending`/`failed` 係啱嘅（`printed` 自然亦唔會被揀）。
 - hub（`print-relay` APK）：唔使改，re-claim 行為正常。
-- `result` route（`sent`/`failed` 回報）：唔使改。
+- `result` route：後來喺 docs/103 改成成功後寫 `printed`，但對 hub 回報介面保持兼容。
 
 ## 4. 變更清單
 | 檔 | 改動 |

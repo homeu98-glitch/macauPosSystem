@@ -2133,7 +2133,7 @@ export function PosApp() {
   function reprintOrder(order: PosOrder) {
     if (!bootstrap) return;
     const timestamp = new Date().toISOString();
-    const storeName = bootstrap.storeName;
+    const storeName = bootstrap.storeName ?? "門店";
     const nextPrintJobs = [
       ...buildKitchenPrintJobs(order, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
       ...buildLabelPrintJobs(order, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
@@ -2239,12 +2239,12 @@ export function PosApp() {
     const nextPrintJobs = [
       ...buildKitchenPrintJobs(order, {
         ticketType,
-        storeName: bootstrap.storeName,
+        storeName: bootstrap.storeName ?? "門店",
         itemsOverride: printTargetItems,
       }),
       ...buildLabelPrintJobs(order, {
         ticketType,
-        storeName: bootstrap.storeName,
+        storeName: bootstrap.storeName ?? "門店",
         itemsOverride: printTargetItems,
       }),
     ];

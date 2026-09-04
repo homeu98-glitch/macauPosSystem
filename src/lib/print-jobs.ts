@@ -51,7 +51,7 @@ function nowText() {
  * @see `print-center.tsx` 嘅徽章邏輯、pos-app.tsx 嘅 failedPrintJobs 過濾。
  */
 export function normalizePrintJobStatus(job: PrintJob): PrintJob {
-  if (job.status === "pending" || job.status === "sent" || job.status === "failed") {
+  if (job.status === "pending" || job.status === "sent" || job.status === "failed" || job.status === "printed") {
     return job;
   }
   return {
@@ -432,7 +432,7 @@ export function pruneSentPrintJobs(olderThanDays = 7): number {
   const jobs = loadPrintJobs();
   const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
   const kept = jobs.filter((j) => {
-    if (j.status !== "sent") return true;
+    if (j.status !== "sent" && j.status !== "printed") return true;
     const t = j.createdAt ? new Date(j.createdAt).getTime() : 0;
     return Number.isNaN(t) ? true : t > cutoff;
   });
@@ -453,10 +453,10 @@ export function pruneSentPrintJobs(olderThanDays = 7): number {
  * 真刪：記錄 clearedPrintJobIds tombstone + 推送伺服器 DELETE（見 docs/52）。 */
 export function clearSentPrintJobs(): number {
   const jobs = loadPrintJobs();
-  const kept = jobs.filter((j) => j.status !== "sent");
+  const kept = jobs.filter((j) => j.status !== "sent" && j.status !== "printed");
   const removed = jobs.length - kept.length;
   if (removed > 0) {
-    const removedIds = jobs.filter((j) => j.status === "sent").map((j) => j.id);
+    const removedIds = jobs.filter((j) => j.status === "sent" || j.status === "printed").map((j) => j.id);
     savePrintJobs(kept);
     addClearedPrintJobIds(removedIds);
     void deletePrintJobsOnServer(removedIds);

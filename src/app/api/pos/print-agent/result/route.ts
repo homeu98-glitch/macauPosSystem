@@ -1,7 +1,8 @@
 // POST /api/pos/print-agent/result — 中繼 APK 回報單張結果。
 // 合約見 docs/96 §8 / RelayApi.report()。
-//   sent   → status='sent', finished_at=now(), last_error=null, claimed_by=null（釋放）
-//   failed → attempts<5 → status='pending', claimed_by=null（可重領）; 否則 status='failed'
+//   sent    → status='printed', finished_at=now(), last_error=null, claimed_by=null（釋放）
+//   printed → 同上（Hub 未來可直報 printed）
+//   failed  → attempts<5 → status='pending', claimed_by=null（可重領）; 否則 status='failed'
 import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
   };
   const jobId = (body.jobId ?? "").trim();
   const status = (body.status ?? "").trim();
-  if (!jobId || (status !== "sent" && status !== "failed")) {
+  if (!jobId || (status !== "sent" && status !== "printed" && status !== "failed")) {
     return NextResponse.json({ ok: false, error: "缺少 jobId / status" }, { status: 400 });
   }
 
@@ -47,8 +48,9 @@ export async function POST(request: Request) {
 
   const attempts = Number(job.attempts ?? 0);
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (status === "sent") {
-    patch.status = "sent";
+  if (status === "sent" || status === "printed") {
+    // 打印成功後設為終態 printed；RPC 只揀 pending/failed，printed 永遠唔會被 re-claim。
+    patch.status = "printed";
     patch.finished_at = new Date().toISOString();
     patch.last_error = null;
     patch.claimed_by = null;

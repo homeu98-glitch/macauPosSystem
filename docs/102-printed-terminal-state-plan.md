@@ -2,7 +2,7 @@
 
 > **一句講晒**：成功打印後把 server `pos_print_jobs.status` 由 `sent` 改為新終態 `printed`（RPC 只揀 `pending`/`failed`，`printed` 永唔會被 re-claim）；唯一重印途徑係 web 既有嘅 `reprintOrder`（已開新 job id）。零 APK 改動。
 
-> **性質**：**根治性修復方案（Plan，未動手）**。關聯 `docs/101`（幂等 upsert，本 plan 嘅前置/替代）。本 plan 只覆蓋 macau-pos；salon 另案。
+> **性質**：**根治性修復方案（已應用）**。關聯 `docs/101`（幂等 upsert）同 `docs/103`（雙問題診斷）。本 plan 只覆蓋 macau-pos；salon 另案。
 
 ---
 

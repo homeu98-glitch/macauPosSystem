@@ -314,6 +314,11 @@ export async function POST(request: Request) {
         const jobItems = Array.isArray(eventPayload.items) ? eventPayload.items.slice(0, MAX_ORDER_ITEMS) : [];
         // 唔郁 status 嘅列（重推同一個 id 時只更新內容快照，唔好把已 sent/failed/printing 嘅
         // 單打回 pending —— 否則 hub 重開時會 claim 到呢啲舊單重印，見 docs/101）。
+        const contentStoreName =
+          text(eventPayload.storeName, MAX_NAME_LEN) ??
+          (typeof eventPayload.content === "object" && eventPayload.content !== null
+            ? text((eventPayload.content as Record<string, unknown>).store_name, MAX_NAME_LEN)
+            : null);
         const contentPatch = {
           order_id: text(eventPayload.orderId, MAX_ID_LEN),
           order_no: text(eventPayload.orderNo, MAX_NAME_LEN),
@@ -328,6 +333,8 @@ export async function POST(request: Request) {
           template: eventPayload.template ?? null,
           content: eventPayload.content ?? null,
           printer_id: text(eventPayload.printerId, MAX_ID_LEN),
+          // 0020 新增：Hub fallback renderer 用 store_name 印抬頭；寫入端一直漏填導致印出 "null"。
+          store_name: contentStoreName,
         };
         // 1) 先試 update（只更新內容，唔動 status）—— 命中即張 job 已存在，唔應該重置佢嘅打印狀態
         const { data: upd, error: uErr } = await supabase

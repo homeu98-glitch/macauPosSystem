@@ -219,6 +219,7 @@ export function PrintCenter() {
       .filter((job) => printJobMatchesDateRange(job.createdAt, dateFilter))
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (filter === "all") return base;
+    if (filter === "sent") return base.filter((job) => job.status === "sent" || job.status === "printed");
     return base.filter((job) => job.status === filter);
   }, [printJobs, filter, dateFilter]);
 
@@ -844,14 +845,14 @@ export function PrintCenter() {
                           </div>
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                              job.status === "sent"
+                              job.status === "sent" || job.status === "printed"
                                 ? "bg-emerald-50 text-emerald-700"
                                 : job.status === "pending"
                                   ? "bg-amber-50 text-amber-700"
                                   : "bg-red-50 text-red-700"
                             }`}
                           >
-                            {job.status === "sent"
+                            {job.status === "sent" || job.status === "printed"
                               ? "已發送"
                               : job.status === "pending"
                                 ? "待補傳"
@@ -952,7 +953,11 @@ export function PrintCenter() {
                 <div className="text-sm font-semibold text-slate-900">{activeJob.printerName}</div>
                 <div className="mt-1 text-xs text-slate-500">
                   {activeJob.printerGroup} · {ticketTypeLabel(activeJob.ticketType)} ·{" "}
-                  {activeJob.status === "sent" ? "已發送" : activeJob.status === "pending" ? "待補傳" : "失敗"}
+                  {activeJob.status === "sent" || activeJob.status === "printed"
+                    ? "已發送"
+                    : activeJob.status === "pending"
+                      ? "待補傳"
+                      : "失敗"}
                 </div>
               </div>
               <div className="text-right text-xs text-slate-500">{formatMacauDateTime(activeJob.createdAt)}</div>
