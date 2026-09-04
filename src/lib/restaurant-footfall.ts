@@ -72,14 +72,13 @@ export function footfallFocusKey(range: ReportRangeKey): string {
  * - 堂食（`tableId !== "counter"`）→ 依 `partySize` 加總。
  * - 快餐 / 外賣 / 自取（`tableId === "counter"`）→ 一張單算 1 個人。
  *
- * 只計已結帳 / 已退款嘅終態單（同 `aggregate()` 嘅營業額口徑一致），排除 cancelled 單。
+ * 口徑同報表 `isSaleCountable()` 一致：settled / paid 都計（paid = Ledger 線上單同步入嚟嘅狀態），
+ * refunded / partially_refunded 一律唔計，cancelled / 進行中單（open / sent_to_kitchen）唔計。
  * 純參考數字，唔再由使用者手動輸入；如要重啟手動人流可保留舊 localStorage key 但不再依賴。
  */
 export function computeFootfallFromOrders(orders: PosOrder[], range: ReportRangeKey): number {
-  const terminal = orders.filter(
-    (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
-  );
-  const inRange = terminal.filter((o) => orderMatchesReportRange(o, range));
+  const countable = orders.filter((o) => o.status === "settled" || o.status === "paid");
+  const inRange = countable.filter((o) => orderMatchesReportRange(o, range));
   let total = 0;
   for (const o of inRange) {
     if (o.tableId === "counter") {

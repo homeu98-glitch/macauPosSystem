@@ -55,17 +55,13 @@ function macauHour(iso: string): number {
 }
 
 interface DishRow {
-  /** 大類 ID；按 category 聚合時用。 */
-  categoryId: string;
-  /** 大類名稱；若無法對照則 fallback 用原菜品名。 */
+  /** 聚合 key：`menuItemId|下單當時菜品名`。快閃餐改名／改價（ID 不變）時唔同名稱各自一行。 */
+  key: string;
+  /** 下單當時快照菜品名（唔強制對應返當前餐牌名稱）。 */
   name: string;
   offlineQty: number;
   onlineQty: number;
   revenue: number;
-  /** 本類包含嘅菜品名稱樣本（最多 3 個），用嚟輔助辨識。 */
-  samples: string[];
-  /** true = 至少一個樣本無法對照當前菜單（ID / 名稱都搵唔到）。 */
-  unmatched: boolean;
 }
 
 interface TableRow {
@@ -357,8 +353,7 @@ function scanStorageOrders(): {
   return result;
 }
 
-function aggregate(orders: PosOrder[], range: ReportRangeKey, menuMeta?: MenuMeta): Agg {
-  const meta = menuMeta ?? buildMenuMeta();
+function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineOrders?: LedgerOnlineOrder[]): Agg {
   const counted = orders.filter((o) => isSaleCountable(o));
   const inRange = counted.filter((o) => orderMatchesReportRange(o, range));
 
@@ -399,25 +394,18 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, menuMeta?: MenuMet
       }
       totalSoldQty += it.quantity;
 
-      // 按「大類」聚合：用 menuItemId → name → normalized name 對照 bootstrap 菜單。
-      // 對照唔到（舊店菜品／legacy 資料／未匯入 Ledger 餐牌）→ fallback 用原菜品名，
-      // key 用 menuItemId，令用戶可以一眼見到「呢啲菜唔喺當前菜單」。
-      const resolved = resolveMenuMetaItem(it.menuItemId, it.name, meta);
-      const categoryId = resolved.categoryId || it.menuItemId;
-      const categoryName = resolved.categoryId ? meta.categoryMap.get(resolved.categoryId) : undefined;
-      const displayName = categoryName ?? it.name;
-      const unmatched = resolved.matchedBy === null;
-
+      // 按「下單當時快照」聚合：menuItemId + 訂單內記錄嘅菜品名（快照）。
+      // 快閃餐只改名／改價（Ledger 菜品 ID 不變）時，唔同名稱／價格各自一行：
+      // 今天叫 A 餐、明天叫 B 餐 → 報表顯示「A餐 X 份、B餐 Y 份」，
+      // 唔會強制對應返當前餐牌名稱，歷史訂單亦唔會因改名而「失蹤」。
+      // 金額用訂單內快照價 it.price（落單當時賣出嘅價錢）。
+      const key = `${it.menuItemId}|${it.name}`;
       const d =
-        dishMap.get(categoryId) ??
-        { categoryId, name: displayName, offlineQty: 0, onlineQty: 0, revenue: 0, samples: [], unmatched };
+        dishMap.get(key) ?? { key, name: it.name, offlineQty: 0, onlineQty: 0, revenue: 0 };
       d.revenue += it.price * it.quantity;
       if (isOnline) d.onlineQty += it.quantity;
       else d.offlineQty += it.quantity;
-      if (d.samples.length < 3 && !d.samples.includes(it.name)) d.samples.push(it.name);
-      // 只要任一樣本未匹配，整個大類就標為未匹配
-      if (unmatched) d.unmatched = true;
-      dishMap.set(categoryId, d);
+      dishMap.set(key, d);
     }
   }
 
@@ -455,6 +443,18 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, menuMeta?: MenuMet
       if (steps.kitchenToSettle) dineInKitchenToSettle.push(steps.kitchenToSettle);
       if (steps.total) dineInTotal.push(steps.total);
     }
+  }
+
+  // Ledger 純線上單（可能從未入 POS DB）：冇送廚／出餐時間戳，
+  // 只可以用「下單 createdAt → 付款完成 updatedAt」估算整體時長（標記 estimated）。
+  // 依 fulfillmentType 分桶：dine_in → 堂食；其他（takeaway / delivery）→ 快餐 / 外賣。
+  for (const o of onlineOrders ?? []) {
+    const created = Date.parse(o.createdAt ?? "");
+    const done = Date.parse(o.updatedAt ?? "");
+    if (!Number.isFinite(created) || !Number.isFinite(done)) continue;
+    const sample = { ms: Math.max(0, done - created), estimated: true };
+    if (String(o.fulfillmentType ?? "").toLowerCase() === "dine_in") dineInTotal.push(sample);
+    else quickTotal.push(sample);
   }
   servingSamples.sort((a, b) => a - b);
   const servingCount = servingSamples.length;
@@ -543,6 +543,9 @@ export function RestaurantDailyReport() {
   const [ledgerError, setLedgerError] = useState<string | null>(null);
   /** Ledger 線上單每小時計數（澳門時區），用以把尖峰時段圖合併 POS 線下單。 */
   const [onlineByHour, setOnlineByHour] = useState<number[]>(() => new Array<number>(24).fill(0));
+  /** 當前範圍內可計入（paid、非 cancelled、區間內）嘅 Ledger 線上單，
+   *  用以補入「當日人流」同「時長統計」（呢啲單可能從未入 POS DB）。 */
+  const [onlineOrders, setOnlineOrders] = useState<LedgerOnlineOrder[]>([]);
   /** 最近一次「線上單分鐘小時抓取」嘅筆數／狀態，畀診斷面板睇。 */
   const [onlineFetchInfo, setOnlineFetchInfo] = useState<{
     fetched: number;
@@ -786,14 +789,15 @@ export function RestaurantDailyReport() {
       const matchedYesterday = counted.filter((o) => orderMatchesReportRange(o, "yesterday")).length;
       const sampleDates = final.slice(0, 5).map((o) => `${o.status} | createdAt=${o.createdAt} | updatedAt=${o.updatedAt} | total=${o.total} | storeId=${o.storeId ?? "(null)"}`);
 
-      // 菜品大類命中診斷：直接由 final 訂單內 items 對照 bootstrap 菜單，避免引用下方 useMemo 嘅 agg（hooks 順序限制）。
-      // 用 Set 統計 distinct categoryId，方便診斷外店菜品比例。
+      // 菜品匹配診斷：只計「可計入銷售」嘅訂單（settled / paid），
+      // 排除 cancelled 測試單 —— 呢啲單唔會出現喺菜品銷售排行，
+      // 計入去只會令「未匹配名單」出現髒資料假象。
       const meta = buildMenuMeta();
       const matchedCategorySet = new Set<string>();
       const unmatchedCategorySet = new Set<string>();
       const dishMatchBreakdown: Record<string, number> = {};
       const unmatchedItemNames: Record<string, number> = {};
-      for (const o of final) {
+      for (const o of counted) {
         for (const it of o.items) {
           if (it.voided) continue;
           const resolved = resolveMenuMetaItem(it.menuItemId, it.name, meta);
@@ -872,6 +876,7 @@ export function RestaurantDailyReport() {
       if (!merchantId) {
         // 未登入 Ledger 商戶 → 唔抓線上單。
         setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
         setOnlineFetchInfo({
           fetched: 0,
           counted: 0,
@@ -889,6 +894,7 @@ export function RestaurantDailyReport() {
         if (!restored) {
           if (cancelled) return;
           setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
           setOnlineFetchInfo({
             fetched: 0,
             counted: 0,
@@ -916,6 +922,7 @@ export function RestaurantDailyReport() {
         let unpaidCount = 0;
         let counted = 0;
         const byHour = new Array<number>(24).fill(0);
+        const kept: LedgerOnlineOrder[] = [];
 
         outer: for (let page = 0; page < MAX_PAGES; page++) {
           const rows = await listMerchantOrders({
@@ -956,6 +963,7 @@ export function RestaurantDailyReport() {
             const hour = macauHour(ts);
             byHour[hour] += 1;
             counted++;
+            kept.push(o);
           }
           collected.push(...rows);
 
@@ -968,6 +976,7 @@ export function RestaurantDailyReport() {
         if (cancelled) return;
 
         setOnlineByHour(byHour);
+        setOnlineOrders(kept);
         setOnlineFetchInfo({
           fetched: collected.length,
           counted,
@@ -980,6 +989,7 @@ export function RestaurantDailyReport() {
       } catch (err) {
         if (cancelled) return;
         setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
         setOnlineFetchInfo({
           fetched: 0,
           counted: 0,
@@ -1064,13 +1074,23 @@ export function RestaurantDailyReport() {
     };
   }, [range, merchantId, merchantIdForQuery]);
 
-  const menuMeta = useMemo(() => buildMenuMeta(), [merchantId]);
-  const agg = useMemo(() => aggregate(orders, range, menuMeta), [orders, range, menuMeta]);
-  const aggYest = useMemo(
-    () => (range === "today" ? aggregate(orders, "yesterday", menuMeta) : null),
-    [orders, range, menuMeta],
+  // Ledger 純線上單入報表前，先剔除已經同步入 POS DB 嘅單（以 POS onlineOrderId ↔ Ledger id 對應），
+  // 避免人流 / 時長統計雙重計算。剩低嘅就係「從未入 POS DB」嘅線上單。
+  const posOnlineIds = useMemo(
+    () => new Set(orders.map((o) => o.onlineOrderId).filter((v): v is string => !!v)),
+    [orders],
   );
-  const agg7d = useMemo(() => aggregate(orders, "7d", menuMeta), [orders, menuMeta]);
+  const countableOnlineOrders = useMemo(
+    () => onlineOrders.filter((o) => !posOnlineIds.has(o.id)),
+    [onlineOrders, posOnlineIds],
+  );
+
+  const agg = useMemo(
+    () => aggregate(orders, range, countableOnlineOrders),
+    [orders, range, countableOnlineOrders],
+  );
+  const aggYest = useMemo(() => (range === "today" ? aggregate(orders, "yesterday") : null), [orders, range]);
+  const agg7d = useMemo(() => aggregate(orders, "7d"), [orders]);
 
   /**
    * docs/任務：當日人流改為完全由訂單自動計算，唔再由使用者手動輸入。
@@ -1078,7 +1098,9 @@ export function RestaurantDailyReport() {
    * - 快餐 / 外賣 / 自取（tableId === "counter"）→ 一單 = 1 人
    * 純參考數字，唔影響營業額 / 結帳口徑。
    */
-  const footfallTotal = useMemo(() => computeFootfallFromOrders(orders, range), [orders, range]);
+  const posFootfall = useMemo(() => computeFootfallFromOrders(orders, range), [orders, range]);
+  // 人流 = POS 訂單人流 + Ledger 純線上單（線上單冇 partySize，一單 = 1 人）。
+  const footfallTotal = posFootfall + countableOnlineOrders.length;
   const conversion = footfallTotal > 0 && agg.covers > 0 ? agg.covers / footfallTotal : null;
 
   // 拆開堂食 / 快餐 兩類人流，方便報表顯示（商家一望就知邊類佔多）。
@@ -1657,37 +1679,26 @@ export function RestaurantDailyReport() {
 
             {/* 模塊 3 + 模塊 6 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-              <Card title="菜品銷售排行" tag="線上＋線下合併 · 渠道標籤">
+              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下">
                 {agg.dishes.length === 0 ? (
                   <Empty />
                 ) : (
                   <div className="grid gap-1">
-                    {agg.dishes.some((d) => d.unmatched) ? (
-                      <div className="mb-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
-                        部分菜品無法對應當前菜單大類（可能未匯入 Ledger 餐牌或菜單已更新）。
-                        請到「菜單管理」同步 Ledger 餐牌，或展開上方「診斷面板」查看詳情。
-                      </div>
-                    ) : null}
+                    <div className="mb-1 rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-500">
+                      依訂單內快照名稱／價格聚合：快閃餐改名改價（菜品 ID 不變）時，唔同日期嘅名稱會各自一行（例如 A 餐、B 餐分開顯示），歷史訂單唔會因改名而對唔上當前餐牌。
+                    </div>
                     {agg.dishes.slice(0, 8).map((d) => {
                       const total = d.offlineQty + d.onlineQty;
                       const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
                       return (
-                        <div key={d.categoryId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+                        <div key={d.key} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <span className="truncate">{d.name}</span>
                               <ChannelChip kind={ch} />
-                              {d.unmatched ? (
-                                <span className="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
-                                  未匹配當前菜單
-                                </span>
-                              ) : null}
                             </div>
                             <div className="mt-0.5 text-xs text-slate-500">
                               線下 {d.offlineQty} · 線上 {d.onlineQty}
-                              {d.samples.length > 0 ? (
-                                <span className="ml-2 text-slate-400">({d.samples.join("、")})</span>
-                              ) : null}
                             </div>
                           </div>
                           <div className="shrink-0 text-right">
@@ -1890,7 +1901,7 @@ export function RestaurantDailyReport() {
                   </div>
                 )}
                 <div className="mt-2 text-[11px] text-slate-400">
-                  每步列出平均 / 中位數 / P95，樣本 0 嘅步驟顯示 —；堂食以「送廚 → 結帳」涵蓋製作同服務時間，外賣/快餐以「出餐 → 完成」反映等待取餐/外送嘅時間。
+                  每步列出平均 / 中位數 / P95，樣本 0 嘅步驟顯示 —；堂食以「送廚 → 結帳」涵蓋製作同服務時間，外賣/快餐以「出餐 → 完成」反映等待取餐/外送嘅時間。Ledger 純線上單冇送廚／出餐時間戳，只以「下單 → 付款完成」估算整體時長（計入 estimated 樣本）。
                 </div>
               </Card>
             </div>
@@ -1912,6 +1923,11 @@ export function RestaurantDailyReport() {
                     <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.counter} 單</div>
                   </div>
                 </div>
+                {countableOnlineOrders.length > 0 ? (
+                  <div className="mt-2 text-xs text-indigo-600">
+                    含 Ledger 純線上單 {countableOnlineOrders.length} 單（已同步入 POS DB 嘅線上單唔會重複計）。
+                  </div>
+                ) : null}
                 {conversion != null ? (
                   <div className="mt-2 text-xs text-slate-500">
                     堂食轉化率 {Math.round(conversion * 100)}%（覆蓋 {agg.covers} 人 / 人流 {footfallTotal}）

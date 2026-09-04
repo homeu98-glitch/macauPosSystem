@@ -5,10 +5,11 @@
 ## 報表模塊（`restaurant-daily-report.tsx`）嘅關鍵約定
 
 - **狀態篩選 helper**：用 `isSaleCountable(o)`（已落地）取代舊嘅 inline `o.status === "settled" || ...`，統一口徑：線下 POS 只計 `settled`；帶 `onlineOrderId` 嘅單 `settled` 或 `paid` 都計；`refunded` / `partially_refunded` 一律唔計。
-- **大類聚合**：菜品銷售排行已改為按 `MenuItem.categoryId → MenuCategory.name` 聚合（`MenuMeta` + `buildMenuMeta()`）。對照唔到嘅菜品 fallback 用菜品 ID 當 key，UI 用「未匹配當前菜單」badge 提示用戶（用嚟搵 60000003 等外店污染）。
-- **菜品匹配 fallback**：`resolveMenuMetaItem()` 按 ID → 菜名 → 正規化菜名（去空白小寫）三級配對，處理 Ledger 明細帶冇前綴 product id 但本地 bootstrap 用 `ledger-` 前綴 id 嘅情況；完全對照唔到就標 `unmatched`。
+- **快照聚合（2026-09-04 定案）**：菜品銷售排行按「下單當時快照」聚合 —— key = `menuItemId|訂單內菜品名`，金額用訂單內快照價 `it.price`。快閃餐改名／改價（Ledger 菜品 ID 不變）時唔同名稱各自一行，歷史訂單唔會因改名對唔上當前餐牌。**唔好**改返用大類聚合或者強制對應當前餐牌名（已試過、用戶否決）。`buildMenuMeta()` / `resolveMenuMetaItem()` 而家只剩診斷面板用。
+- **診斷匹配統計**：診斷面板嘅菜品配對統計只計 `isSaleCountable` 嘅訂單 —— cancelled 測試單嘅孤兒菜品（舊 Ledger UUID）唔計入去，否則「未匹配名單」會出現髒資料假象。
 - **尖峰時段**：POS 線下單 `agg.byHour` + Ledger 線上單 `onlineByHour` 疊加成 `combinedByHour`。`onlineByHour` 由 `useEffect([merchantId, range])` 用 `listMerchantOrders` cursor pagination 抓，按「下單時間」createdAt 入帳。
 - **營運指標方案 B**：同時顯示 POS 7 日均（`rev7dAvg`）同 Ledger RPC 7 日均（`ledgerRev7dAvg = ledger.d7.orderPaidMop / 7`），並加 `POS vs Ledger 差距` row（正數 = POS 漏計線上單）。
+- **人流 / 時長同線上單**：`computeFootfallFromOrders()`（`src/lib/restaurant-footfall.ts`）計 settled/paid（同 `isSaleCountable` 一致）；`footfallTotal = posFootfall + countableOnlineOrders.length`，後者用 POS `onlineOrderId` Set 剔除已同步單避免雙計。時長統計：`aggregate(orders, range, onlineOrders?)` 對 Ledger 純線上單用「createdAt → updatedAt」估算整體（estimated），依 fulfillmentType 分堂食／快餐桶；只有主 `agg` 傳線上單，aggYest/agg7d 唔傳。
 
 ## 報表數據來源嘅口徑
 
