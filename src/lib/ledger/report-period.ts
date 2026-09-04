@@ -35,18 +35,26 @@ export function macauTodayRange(now = new Date()): { start: string; end: string 
   };
 }
 
+/** 將澳門本地日期 parts 轉成 Date（澳門 00:00 所對應嘅 UTC instant）。 */
+function macauDateFromParts(year: string, month: string, day: string): Date {
+  return new Date(`${year}-${month}-${day}T00:00:00+08:00`);
+}
+
 export function macauYesterdayRange(now = new Date()): { start: string; end: string } {
-  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const { year, month, day } = macauParts(yesterday);
+  const { year, month, day } = macauParts(now);
+  const d = macauDateFromParts(year, month, day);
+  d.setDate(d.getDate() - 1);
+  const y = macauParts(d);
   return {
-    start: macauDateToStartISO(year, month, day),
-    end: macauDateToEndISO(year, month, day),
+    start: macauDateToStartISO(y.year, y.month, y.day),
+    end: macauDateToEndISO(y.year, y.month, y.day),
   };
 }
 
 export function macauRollingRange(days: number, now = new Date()): { start: string; end: string } {
   const endParts = macauParts(now);
-  const startDate = new Date(now.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+  const startDate = macauDateFromParts(endParts.year, endParts.month, endParts.day);
+  startDate.setDate(startDate.getDate() - (days - 1));
   const startParts = macauParts(startDate);
   return {
     start: macauDateToStartISO(startParts.year, startParts.month, startParts.day),
@@ -87,20 +95,20 @@ export function orderMatchesReportRange(
   const instant = new Date(ts);
   if (Number.isNaN(instant.getTime())) return false;
 
-  if (range === "today") {
-    return macauDateKey(instant) === macauDateKey(now);
-  }
-
-  if (range === "yesterday") {
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    return macauDateKey(instant) === macauDateKey(yesterday);
-  }
-
+  // 「昨天／今天／7d／30d」統一用 macau{...}Range() 先計出 Macau 嘅起訖 ISO 字串，
+  // 再用 instant >= start && instant <= end 判斷，避免用 now.getTime() - 86400000 喺
+  // 跨午夜邊界時嘅 off-by-one。Macau 與 UTC 相差 +08:00，毫秒級計算嘅昨日邊界
+  // 喺凌晨 0–8 點可能跨越 Macau 日界，導致昨日的單被誤判到前天（或反之）。
   const period = ledgerReportRangeForKey(range, now);
-  if (!period) return false;
+  if (period) {
+    const time = instant.getTime();
+    const startMs = Date.parse(period.start);
+    const endMs = Date.parse(period.end);
+    return time >= startMs && time <= endMs;
+  }
 
-  const time = instant.getTime();
-  return time >= Date.parse(period.start) && time <= Date.parse(period.end);
+  // 兜底：理論上唔會去到（ReportRangeKey enum 已窮舉）。
+  return false;
 }
 
 export function reportRangeLabel(range: ReportRangeKey): string {

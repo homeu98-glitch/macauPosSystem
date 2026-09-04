@@ -7,6 +7,7 @@ import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage"
 /** `pos_orders` 資料表 row（snake_case）。與 `/api/pos/state` 既有映射保持一致。 */
 type PosOrderDbRow = {
   id: string;
+  store_id?: string | null;
   local_order_no: string | null;
   table_id: string | null;
   table_name: string | null;
@@ -36,6 +37,7 @@ type PosOrderDbRow = {
 function mapOrder(order: PosOrderDbRow) {
   return {
     id: order.id,
+    storeId: order.store_id ?? undefined,
     localOrderNo: order.local_order_no,
     tableId: order.table_id,
     tableName: order.table_name,
@@ -96,6 +98,12 @@ export async function GET(request: Request) {
   // 報表分頁時只需要訂單，跳過 queue/printJobs/deviceConfig 查詢，省時省流量。
   const ordersOnly = searchParams.get("ordersOnly") === "1";
 
+  // 報表區間過濾：只回傳 created_at 或 updated_at 落在 [start, end] 內嘅訂單。
+  // 用 created_at OR updated_at 可以同時覆蓋「區間內開單」同「區間內結帳/更新」兩種情況，
+  // 避免只篩 updated_at 時漏咗開咗單但尚未結帳嘅單。
+  const rangeStart = searchParams.get("start")?.trim() || null;
+  const rangeEnd = searchParams.get("end")?.trim() || null;
+
   if (!supabase) {
     if (ordersOnly) {
       return NextResponse.json({ ok: true, source: "mock", orders: [] });
@@ -111,18 +119,22 @@ export async function GET(request: Request) {
     });
   }
 
-  const ordersQuery = storeId
-    ? supabase
-        .from("pos_orders")
-        .select("*")
-        .eq("store_id", storeId)
-        .order("updated_at", { ascending: false })
-        .range(offset, offset + limit - 1)
-    : supabase
-        .from("pos_orders")
-        .select("*")
-        .order("updated_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+  const ordersBase = storeId
+    ? supabase.from("pos_orders").select("*").eq("store_id", storeId)
+    : supabase.from("pos_orders").select("*");
+
+  const ordersQuery = ordersBase
+    .or(
+      rangeStart && rangeEnd
+        ? `and(created_at.gte.${rangeStart},created_at.lte.${rangeEnd}),and(updated_at.gte.${rangeStart},updated_at.lte.${rangeEnd})`
+        : rangeStart
+          ? `created_at.gte.${rangeStart},updated_at.gte.${rangeStart}`
+          : rangeEnd
+            ? `created_at.lte.${rangeEnd},updated_at.lte.${rangeEnd}`
+            : "created_at.not.is.null,updated_at.not.is.null",
+    )
+    .order("updated_at", { ascending: false })
+    .range(offset, offset + limit - 1);
 
   // 報表分頁只拉訂單，跳過其餘 table。
   if (ordersOnly) {

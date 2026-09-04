@@ -16,7 +16,7 @@ import {
   loadOrders,
   loadSoldOutState,
 } from "@/lib/storage";
-import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, ledgerReportRangeForKey, type ReportRangeKey } from "@/lib/ledger/report-period";
 import {
   computeIngredientConsumption,
   inMacauMonth,
@@ -349,6 +349,29 @@ type Suggestion = { level: "r" | "o" | "i"; title: string; action: string };
 
 const LEVEL_LABEL: Record<Suggestion["level"], string> = { r: "立即", o: "關注", i: "資訊" };
 
+/** 持續訂閱 authSession 變化，確保切換店鋪後 merchantId 即時更新。
+ *  解決 root cause：React 唔會自動訂閱 localStorage，直接喺 render call loadAuthSession()
+ *  可能會喺切換帳號後短暫讀取舊店 merchantId。 */
+function useReportMerchantId(): string | null {
+  const [merchantId, setMerchantId] = useState<string | null>(() => loadAuthSession()?.merchantId ?? null);
+  useEffect(() => {
+    function sync() {
+      setMerchantId(loadAuthSession()?.merchantId ?? null);
+    }
+    window.addEventListener("pos-auth-changed", sync);
+    return () => window.removeEventListener("pos-auth-changed", sync);
+  }, []);
+  return merchantId;
+}
+
+/** 報表 backfill 需要嘅最大時間區間：
+ *  - today / yesterday / 7d / 30d：按實際區間拉，減少 payload 同確保唔會被分頁截斷。
+ *  - all：用 365 日滾動窗口（同 Ledger RPC 一致；足夠覆蓋絕大多數餐廳營運週期）。 */
+function backfillRangeFor(range: ReportRangeKey, now = new Date()): { start: string; end: string } | null {
+  if (range === "all") return ledgerReportRangeForKey("all", now);
+  return ledgerReportRangeForKey(range, now);
+}
+
 export function RestaurantDailyReport() {
   const [range, setRange] = useState<ReportRangeKey>("today");
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
@@ -367,9 +390,10 @@ export function RestaurantDailyReport() {
   const [loading, setLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
 
-  const merchantId = loadAuthSession()?.merchantId ?? "default";
+  const merchantId = useReportMerchantId();
+  const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
   const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date()).substring(0, 7);
-  const bom: BomEntry[] = useMemo(() => loadBom(merchantId), [merchantId]);
+  const bom: BomEntry[] = useMemo(() => loadBom(merchantId ?? ""), [merchantId]);
   const consRange = useMemo(
     () => computeIngredientConsumption(orders, (o) => orderMatchesReportRange(o, range), bom),
     [orders, range, bom],
@@ -405,31 +429,37 @@ export function RestaurantDailyReport() {
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{
     status: "idle" | "loading" | "success" | "error";
-    merchantId: string;
+    merchantId: string | null;
+    currentRange: ReportRangeKey;
     fetchedCount: number;
     localCount: number;
     finalCount: number;
+    matchedCurrentRange: number;
+    matchedYesterday: number;
     lastUrl: string;
     lastHttpStatus: number | null;
     lastPayloadOk?: boolean;
     lastError: string | null;
     durationMs: number | null;
     statusBreakdown: Record<string, number>;
-    matchedToday: number;
     countedStatus: number;
     sampleDates: string[];
+    rangeStart?: string;
+    rangeEnd?: string;
   }>({
     status: "idle",
     merchantId,
+    currentRange: "today",
     fetchedCount: 0,
     localCount: 0,
     finalCount: 0,
+    matchedCurrentRange: 0,
+    matchedYesterday: 0,
     lastUrl: "",
     lastHttpStatus: null,
     lastError: null,
     durationMs: null,
     statusBreakdown: {},
-    matchedToday: 0,
     countedStatus: 0,
     sampleDates: [],
   });
@@ -441,19 +471,24 @@ export function RestaurantDailyReport() {
         ...prev,
         status: "loading",
         merchantId,
+        currentRange: range,
         lastError: null,
         durationMs: null,
         statusBreakdown: {},
-        matchedToday: 0,
+        matchedCurrentRange: 0,
+        matchedYesterday: 0,
         countedStatus: 0,
         sampleDates: [],
       }));
       const start = performance.now();
 
-      // 分頁拉全量訂單（今天/7天/30天/全部都用同一份全集，再喺前端按範圍過濾）。
-      // PAGE=1000、MAX_PAGES=10 → 上限 10000 單，覆蓋絕大多數餐廳幾個月嘅歷史；
-      // 每頁加 ordersOnly=1 跳過 queue/printJobs/deviceConfig，只拉 pos_orders。
-      const PAGE = 1000;
+      // 依所選範圍 [start, end] 喺 SQL layer 做日期過濾（`/api/pos/state` 已支援，
+      // 同時 `eq("store_id", storeId)` 過濾本店；雙重保險：前端再加 `o.storeId === merchantId`）。
+      // - today / yesterday / 7d / 30d → 拉對應 Macau 邊界內嘅單。
+      // - all → 用 365 日滾動窗口（同 Ledger RPC 一致），避免唔設 end 拉爆 10000 上限。
+      // 分頁 PAGE=2000、MAX_PAGES=10 → 上限 20000 單，足夠覆蓋繁忙餐廳一年歷史。
+      const period = backfillRangeFor(range);
+      const PAGE = 2000;
       const MAX_PAGES = 10;
       const fetched: PosOrder[] = [];
       let cloudFailed = false;
@@ -464,9 +499,12 @@ export function RestaurantDailyReport() {
       try {
         for (let page = 0; page < MAX_PAGES; page++) {
           const offset = page * PAGE;
+          const rangeQs = period
+            ? `&start=${encodeURIComponent(period.start)}&end=${encodeURIComponent(period.end)}`
+            : "";
           const url = merchantId
-            ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1`
-            : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1`;
+            ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1${rangeQs}`
+            : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1${rangeQs}`;
           lastUrl = url;
           const res = await fetch(url);
           lastHttpStatus = res.status;
@@ -495,14 +533,20 @@ export function RestaurantDailyReport() {
       const deletedIds = new Set(loadDeletedOrderIds());
       const localOrders = loadOrders();
 
+      // 雙重保險：API 已用 `eq("store_id", storeId)` 過濾本店，但萬一 row 嘅 store_id
+      // 因舊 migration 唔齊，會被 SQL 過濾掉；前端再加 `o.storeId === merchantId` 再核一次。
+      // 當 o.storeId 係 undefined（legacy row）時保留——否則歷史單會全部丟失。
+      const belongsToStore = (o: PosOrder) =>
+        !merchantId || o.storeId === undefined || o.storeId === merchantId;
+
       // 雲端有單 → 以雲端為唯一可信源。
       // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
       // 雲端空 + 成功 → 該店確實冇單，顯示空狀態（**唔可以用本機 orders 覆蓋**——可能係舊 store 殘留）。
       let final: PosOrder[];
       if (fetched.length > 0) {
-        final = fetched.filter((o) => !deletedIds.has(o.id));
+        final = fetched.filter((o) => !deletedIds.has(o.id) && belongsToStore(o));
       } else if (cloudFailed) {
-        final = localOrders.filter((o) => !deletedIds.has(o.id));
+        final = localOrders.filter((o) => !deletedIds.has(o.id) && belongsToStore(o));
       } else {
         final = [];
       }
@@ -516,31 +560,36 @@ export function RestaurantDailyReport() {
       const counted = final.filter(
         (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
       );
-      const matchedToday = counted.filter((o) => orderMatchesReportRange(o, "today")).length;
-      const sampleDates = final.slice(0, 5).map((o) => `${o.status} | ${o.createdAt} | total=${o.total}`);
+      const matchedCurrentRange = counted.filter((o) => orderMatchesReportRange(o, range)).length;
+      const matchedYesterday = counted.filter((o) => orderMatchesReportRange(o, "yesterday")).length;
+      const sampleDates = final.slice(0, 5).map((o) => `${o.status} | createdAt=${o.createdAt} | updatedAt=${o.updatedAt} | total=${o.total} | storeId=${o.storeId ?? "(null)"}`);
 
       setDebugInfo({
         status: cloudFailed && fetched.length === 0 ? "error" : "success",
         merchantId,
+        currentRange: range,
         fetchedCount: fetched.length,
         localCount: localOrders.length,
         finalCount: final.length,
+        matchedCurrentRange,
+        matchedYesterday,
         lastUrl,
         lastHttpStatus,
         lastPayloadOk,
         lastError,
         durationMs: Math.round(performance.now() - start),
         statusBreakdown,
-        matchedToday,
         countedStatus: counted.length,
         sampleDates,
+        rangeStart: period?.start,
+        rangeEnd: period?.end,
       });
     }
     void backfillOrders();
     return () => {
       cancelled = true;
     };
-  }, [merchantId, backfillSeq]);
+  }, [merchantId, backfillSeq, range]);
 
   // 訂閱 authSession 變更：切換帳號時重置 orders 並強制重跑 backfill。
   // root cause 修復（2026-09-04）：React 唔會自動訂閱 localStorage，冇呢個 listener
@@ -589,21 +638,26 @@ export function RestaurantDailyReport() {
 
       // 低庫存預警：讀本店 inv_products，current_qty <= reorder_level（par）即低庫存。
       try {
-        const invRes = await fetch(`/api/inventory/products?store=${encodeURIComponent(merchantId)}`);
-        const invJson = await invRes.json();
-        if (invJson?.ok && Array.isArray(invJson.products)) {
-          const low = invJson.products
-            .filter((p: { current_qty: number; reorder_level: number }) => p.reorder_level > 0 && p.current_qty <= p.reorder_level)
-            .map((p: { name: string; current_qty: number; unit: string; reorder_level: number }) => ({
-              name: p.name,
-              qty: Number(p.current_qty) || 0,
-              unit: p.unit ?? "份",
-              par: Number(p.reorder_level) || 0,
-            }))
-            .sort((a: { qty: number }, b: { qty: number }) => a.qty - b.qty);
-          setLowStock(low);
-        } else {
+        const storeParam = merchantIdForQuery || (typeof window !== "undefined" ? loadAuthSession()?.merchantId ?? "" : "");
+        if (!storeParam) {
           setLowStock(null);
+        } else {
+          const invRes = await fetch(`/api/inventory/products?store=${encodeURIComponent(storeParam)}`);
+          const invJson = await invRes.json();
+          if (invJson?.ok && Array.isArray(invJson.products)) {
+            const low = invJson.products
+              .filter((p: { current_qty: number; reorder_level: number }) => p.reorder_level > 0 && p.current_qty <= p.reorder_level)
+              .map((p: { name: string; current_qty: number; unit: string; reorder_level: number }) => ({
+                name: p.name,
+                qty: Number(p.current_qty) || 0,
+                unit: p.unit ?? "份",
+                par: Number(p.reorder_level) || 0,
+              }))
+              .sort((a: { qty: number }, b: { qty: number }) => a.qty - b.qty);
+            setLowStock(low);
+          } else {
+            setLowStock(null);
+          }
         }
       } catch {
         setLowStock(null);
@@ -616,7 +670,7 @@ export function RestaurantDailyReport() {
     return () => {
       cancelled = true;
     };
-  }, [range, merchantId]);
+  }, [range, merchantId, merchantIdForQuery]);
 
   const agg = useMemo(() => aggregate(orders, range), [orders, range]);
   const aggYest = useMemo(() => (range === "today" ? aggregate(orders, "yesterday") : null), [orders, range]);
@@ -712,7 +766,7 @@ export function RestaurantDailyReport() {
       .filter(([k, v]) => !k.startsWith("specopt:") && (v?.remainingQty ?? 1) <= 0)
       .map(([k]) => names.get(k) ?? k);
     return items;
-  }, [orders]);
+  }, []);
 
   const onlineShare = agg.revenue > 0 ? agg.onlineRevenue / agg.revenue : 0;
   const onlineShare7d = agg7d.revenue > 0 ? agg7d.onlineRevenue / agg7d.revenue : 0;
@@ -932,14 +986,24 @@ export function RestaurantDailyReport() {
                     <span className="font-mono font-medium">{debugInfo.countedStatus}</span>
                   </div>
                   <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">匹配今天範圍</span>
-                    <span className="font-mono font-medium">{debugInfo.matchedToday}</span>
+                    <span className="block text-slate-400">匹配當前範圍</span>
+                    <span className="font-mono font-medium">
+                      {debugInfo.matchedCurrentRange} / {debugInfo.countedStatus}
+                    </span>
                   </div>
                   <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">範圍鍵</span>
-                    <span className="font-mono font-medium">{range}</span>
+                    <span className="block text-slate-400">匹配昨天範圍</span>
+                    <span className="font-mono font-medium">{debugInfo.matchedYesterday}</span>
                   </div>
                 </div>
+                {debugInfo.rangeStart && debugInfo.rangeEnd ? (
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">本次請求嘅澳門時間區間 [start, end]</span>
+                    <span className="break-all font-mono text-slate-700">
+                      {debugInfo.rangeStart} → {debugInfo.rangeEnd}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="rounded bg-slate-50 px-2 py-1">
                   <span className="block text-slate-400">最後請求 URL</span>
                   <span className="break-all font-mono text-slate-700">{debugInfo.lastUrl || "尚未請求"}</span>

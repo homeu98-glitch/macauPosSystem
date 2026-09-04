@@ -478,6 +478,8 @@ export interface OrderItem {
 
 export interface PosOrder {
   id: string;
+  /** 所屬店鋪 ID；報表 backfill 用嚴格驗證店鋪隔離。 */
+  storeId?: string;
   localOrderNo: string;
   tableId: string;
   tableName: string;
