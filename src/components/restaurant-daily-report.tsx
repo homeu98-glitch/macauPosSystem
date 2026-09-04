@@ -414,6 +414,10 @@ export function RestaurantDailyReport() {
     lastPayloadOk?: boolean;
     lastError: string | null;
     durationMs: number | null;
+    statusBreakdown: Record<string, number>;
+    matchedToday: number;
+    countedStatus: number;
+    sampleDates: string[];
   }>({
     status: "idle",
     merchantId,
@@ -424,6 +428,10 @@ export function RestaurantDailyReport() {
     lastHttpStatus: null,
     lastError: null,
     durationMs: null,
+    statusBreakdown: {},
+    matchedToday: 0,
+    countedStatus: 0,
+    sampleDates: [],
   });
 
   useEffect(() => {
@@ -435,6 +443,10 @@ export function RestaurantDailyReport() {
         merchantId,
         lastError: null,
         durationMs: null,
+        statusBreakdown: {},
+        matchedToday: 0,
+        countedStatus: 0,
+        sampleDates: [],
       }));
       const start = performance.now();
 
@@ -482,6 +494,7 @@ export function RestaurantDailyReport() {
 
       const deletedIds = new Set(loadDeletedOrderIds());
       const localOrders = loadOrders();
+
       // 雲端有單 → 以雲端為唯一可信源。
       // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
       // 雲端空 + 成功 → 該店確實冇單，顯示空狀態（**唔可以用本機 orders 覆蓋**——可能係舊 store 殘留）。
@@ -495,6 +508,17 @@ export function RestaurantDailyReport() {
       }
       setOrders(final);
 
+      // 診斷用：拆解訂單狀態同日期分佈
+      const statusBreakdown: Record<string, number> = {};
+      for (const o of final) {
+        statusBreakdown[o.status] = (statusBreakdown[o.status] ?? 0) + 1;
+      }
+      const counted = final.filter(
+        (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
+      );
+      const matchedToday = counted.filter((o) => orderMatchesReportRange(o, "today")).length;
+      const sampleDates = final.slice(0, 5).map((o) => `${o.status} | ${o.createdAt} | total=${o.total}`);
+
       setDebugInfo({
         status: cloudFailed && fetched.length === 0 ? "error" : "success",
         merchantId,
@@ -506,6 +530,10 @@ export function RestaurantDailyReport() {
         lastPayloadOk,
         lastError,
         durationMs: Math.round(performance.now() - start),
+        statusBreakdown,
+        matchedToday,
+        countedStatus: counted.length,
+        sampleDates,
       });
     }
     void backfillOrders();
@@ -840,16 +868,48 @@ export function RestaurantDailyReport() {
                       <span className="block text-slate-400">payload.ok</span>
                       <span className="font-mono font-medium">{String(debugInfo.lastPayloadOk)}</span>
                     </div>
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">最後錯誤</span>
-                      <span className="font-mono font-medium break-all text-red-600">{debugInfo.lastError || "無"}</span>
-                    </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">最後錯誤</span>
+                    <span className="font-mono font-medium break-all text-red-600">{debugInfo.lastError || "無"}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">狀態分佈</span>
+                    <span className="break-all font-mono font-medium">
+                      {Object.entries(debugInfo.statusBreakdown)
+                        .map(([k, v]) => `${k}:${v}`)
+                        .join(", ") || "-"}
+                    </span>
                   </div>
                   <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">最後請求 URL</span>
-                    <span className="break-all font-mono text-slate-700">{debugInfo.lastUrl || "尚未請求"}</span>
+                    <span className="block text-slate-400">可計入營業單數</span>
+                    <span className="font-mono font-medium">{debugInfo.countedStatus}</span>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">匹配今天範圍</span>
+                    <span className="font-mono font-medium">{debugInfo.matchedToday}</span>
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">範圍鍵</span>
+                    <span className="font-mono font-medium">{range}</span>
+                  </div>
+                </div>
+                <div className="rounded bg-slate-50 px-2 py-1">
+                  <span className="block text-slate-400">最後請求 URL</span>
+                  <span className="break-all font-mono text-slate-700">{debugInfo.lastUrl || "尚未請求"}</span>
+                </div>
+                {debugInfo.sampleDates.length > 0 ? (
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">前 5 筆訂單樣本（status | createdAt | total）</span>
+                    <ul className="mt-1 list-inside list-disc font-mono text-slate-700">
+                      {debugInfo.sampleDates.map((d, i) => (
+                        <li key={i}>{d}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => setBackfillSeq((n) => n + 1)}
@@ -861,10 +921,11 @@ export function RestaurantDailyReport() {
                       type="button"
                       onClick={() => {
                         console.log("[report debug]", debugInfo);
+                        console.log("[report orders]", orders);
                       }}
                       className="rounded bg-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-300"
                     >
-                      Console.log 狀態
+                      Console.log 狀態 + 訂單
                     </button>
                   </div>
                 </div>
