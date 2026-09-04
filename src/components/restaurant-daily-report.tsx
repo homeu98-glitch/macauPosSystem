@@ -12,9 +12,11 @@ import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stat
 import {
   loadAuthSession,
   loadBootstrapCache,
+  loadDeletedOrderIds,
   loadOrders,
   loadSoldOutState,
 } from "@/lib/storage";
+import { mergeOrderLists } from "@/lib/pos-order-filters";
 import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
 import {
   computeIngredientConsumption,
@@ -380,6 +382,53 @@ export function RestaurantDailyReport() {
 
   const storeName = loadBootstrapCache()?.storeName ?? "本店";
   const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date());
+
+  // ── 雲端訂單補載（root-cause 修復）─────────────────────────────────────
+  // 報表原本只讀 localStorage 訂單（loadOrders()）。換機 / 清 cache / 首次開啟時
+  // localStorage 空 → 營業額、毛利、菜品排行、線上佔比全部空白；只有「會員充值」正常，
+  // 因為嗰個係直接讀 Ledger 雲端（getMerchantReportSummary），唔經 localStorage。
+  // 呢度喺 mount 時從 `/api/pos/state` 拉本店訂單，同 localStorage 合併（mergeOrderLists），
+  // 令報表喺任何裝置都睇到同「線上模組」一致嘅完整數據。
+  //
+  // 注意兩點：
+  // 1) 唔套 filterResurrectedOrders —— 嗰個係收銀工作台用嚟防止舊終態單「復活」佔枱；
+  //    報表正正需要已結帳 / 退款單做營收口徑，所以只過濾本機已真刪除嘅 tombstone。
+  // 2) 只 setOrders（記憶體），唔 saveOrders 寫返 localStorage —— 避免污染收銀端嘅
+  //    「本機工作清單」語義（docs/52 收銀端故意唔復活 server 單邊終態單）。
+  useEffect(() => {
+    let cancelled = false;
+    async function backfillOrders() {
+      // 分頁拉全量訂單（今天/7天/30天/全部都用同一份全集，再喺前端按範圍過濾）。
+      // PAGE=1000、MAX_PAGES=10 → 上限 10000 單，覆蓋絕大多數餐廳幾個月嘅歷史；
+      // 每頁加 ordersOnly=1 跳過 queue/printJobs/deviceConfig，只拉 pos_orders。
+      const PAGE = 1000;
+      const MAX_PAGES = 10;
+      const fetched: PosOrder[] = [];
+      try {
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const offset = page * PAGE;
+          const url = merchantId
+            ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1`
+            : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1`;
+          const res = await fetch(url);
+          const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
+          if (cancelled || !payload.ok || !Array.isArray(payload.orders)) break;
+          fetched.push(...payload.orders);
+          if (payload.orders.length < PAGE) break; // 最後一頁
+        }
+      } catch {
+        // 中途失敗：下面仍會用已成功拉到嘅部分（best-effort），唔會因一頁失敗而全丟。
+      }
+      if (cancelled || fetched.length === 0) return;
+      const merged = mergeOrderLists(loadOrders(), fetched);
+      const deletedIds = new Set(loadDeletedOrderIds());
+      setOrders(merged.filter((o) => !deletedIds.has(o.id)));
+    }
+    void backfillOrders();
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId]);
 
   useEffect(() => {
     async function safeLedger(r: ReportRangeKey): Promise<LedgerReportSummary | null> {
