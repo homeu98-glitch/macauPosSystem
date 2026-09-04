@@ -546,7 +546,9 @@ function backfillRangeFor(range: ReportRangeKey, now = new Date()): { start: str
 
 export function RestaurantDailyReport() {
   const [range, setRange] = useState<ReportRangeKey>("today");
-  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
+  // 初始 orders 設為空：避免 hydration / 切店時短暫讀取錯誤 scope 嘅 localStorage。
+  // 真正訂單由下方 backfill effect 喺確認 merchantId 後拉取。
+  const [orders, setOrders] = useState<PosOrder[]>([]);
   const [ledger, setLedger] = useState<{
     sel: LedgerReportSummary | null;
     d7: LedgerReportSummary | null;
@@ -561,6 +563,14 @@ export function RestaurantDailyReport() {
   >(null);
   const [loading, setLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
+  // 整體載入門檻：POS 訂單補載 + Ledger 彙總都完成過至少一次，先唔顯示真實資料。
+  // 切店 / 切帳號時重置，令報表先顯示 skeleton 再載入新店資料（杜絕閃現舊店）。
+  const [backfillDone, setBackfillDone] = useState(false);
+  const [ledgerDone, setLedgerDone] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
+  useEffect(() => {
+    if (backfillDone && ledgerDone) setDataReady(true);
+  }, [backfillDone, ledgerDone]);
   /** Ledger 線上單每小時計數（澳門時區），用以把尖峰時段圖合併 POS 線下單。 */
   const [onlineByHour, setOnlineByHour] = useState<number[]>(() => new Array<number>(24).fill(0));
   /** 當前範圍內可計入（paid、非 cancelled、區間內）嘅 Ledger 線上單，
@@ -599,6 +609,37 @@ export function RestaurantDailyReport() {
   const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
   const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date()).substring(0, 7);
   const bom: BomEntry[] = useMemo(() => loadBom(merchantId ?? ""), [merchantId]);
+
+  // 雲端訂單補載序號：改變佢會強制重跑 backfill effect（切店 / 手動重新拉取）。
+  const [backfillSeq, setBackfillSeq] = useState(0);
+
+  // 切店 / 首次確認 merchantId 時立即清空舊店數據，杜絕閃現外店資料。
+  useEffect(() => {
+    setOrders([]);
+    setBackfillDone(false);
+    setLedgerDone(false);
+    setDataReady(false);
+    setOnlineOrders([]);
+    setOnlineByHour(new Array<number>(24).fill(0));
+    setOnlineDishSource([]);
+    setOnlineDetailInfo({ total: 0, ok: 0, failed: 0, status: "idle", lastError: null });
+    setOnlineFetchInfo({
+      fetched: 0,
+      counted: 0,
+      outOfRange: 0,
+      cancelled: 0,
+      unpaid: 0,
+      status: "idle",
+      lastError: null,
+    });
+    setBackfillSeq((n) => n + 1);
+  }, [merchantId]);
+
+  // 菜品銷售排行「更多」彈窗
+  const [dishModalOpen, setDishModalOpen] = useState(false);
+  const [dishModalPage, setDishModalPage] = useState(1);
+  const DISHES_PER_PAGE = 20;
+
   const consRange = useMemo(
     () => computeIngredientConsumption(orders, (o) => orderMatchesReportRange(o, range), bom),
     [orders, range, bom],
@@ -608,7 +649,10 @@ export function RestaurantDailyReport() {
     [orders, monthKey, bom],
   );
 
-  const storeName = loadBootstrapCache()?.storeName ?? "本店";
+  const storeName = useMemo(
+    () => loadBootstrapCache(merchantId ?? undefined)?.storeName ?? "本店",
+    [merchantId],
+  );
   const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date());
 
   // ── 雲端訂單補載（root-cause 修復）─────────────────────────────────────
@@ -628,7 +672,6 @@ export function RestaurantDailyReport() {
   // 兜底：雲端 fetch 完全失敗（例如離線）時，先 fallback 用本機 orders（過 tombstone），
   // 等下次 online 再補。但係，雲端有返「空陣列」（fetched.length === 0）就**唔可以**
   // 視為失敗——可能該店真係冇單，要顯示空狀態而唔係 fallback 到可能嘅舊 store 殘留。
-  const [backfillSeq, setBackfillSeq] = useState(0);
 
   // DevTools debug panel state：用嚟喺瀏覽器直接觀察報表載入流程。
   const [debugOpen, setDebugOpen] = useState(false);
@@ -781,13 +824,16 @@ export function RestaurantDailyReport() {
       if (cancelled) return;
 
       const deletedIds = new Set(loadDeletedOrderIds());
-      const localOrders = loadOrders();
+      // 帶 merchantId 讀本機 orders，避免 hydration / 切店嗰陣讀到錯誤 scope 嘅 localStorage。
+      const localOrders = merchantId ? loadOrders(merchantId) : [];
 
-      // 雙重保險：API 已用 `eq("store_id", storeId)` 過濾本店，但萬一 row 嘅 store_id
-      // 因舊 migration 唔齊，會被 SQL 過濾掉；前端再加 `o.storeId === merchantId` 再核一次。
-      // 當 o.storeId 係 undefined（legacy row）時保留——否則歷史單會全部丟失。
-      const belongsToStore = (o: PosOrder) =>
-        !merchantId || o.storeId === undefined || o.storeId === merchantId;
+      // 嚴格店鋪隔離：只顯示 storeId 同當前 merchantId 一致嘅訂單。
+      // 舊版 migration 遺留嘅 undefined storeId 單喺多店環境下無法判斷所屬店，
+      // 寧願丟失都唔可以顯示喺錯誤店鋪（呢啲單通常係早期測試髒資料）。
+      const belongsToStore = (o: PosOrder) => {
+        if (!merchantId) return true; // dev 模式未登入：放行
+        return o.storeId === merchantId;
+      };
 
       // 雲端有單 → 以雲端為唯一可信源。
       // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
@@ -802,7 +848,7 @@ export function RestaurantDailyReport() {
       }
       setOrders(final);
 
-      // 診斷用：拆解訂單狀態同日期分佈
+      // 診斷用：拆解訂單狀態同日期分佈；同時統計被前端過濾走嘅外店單數。
       const statusBreakdown: Record<string, number> = {};
       const storeIdBreakdown: Record<string, number> = {};
       let foreignStoreCount = 0;
@@ -810,6 +856,13 @@ export function RestaurantDailyReport() {
         statusBreakdown[o.status] = (statusBreakdown[o.status] ?? 0) + 1;
         const sid = o.storeId ?? "(undefined)";
         storeIdBreakdown[sid] = (storeIdBreakdown[sid] ?? 0) + 1;
+      }
+      for (const o of fetched) {
+        if (merchantId && o.storeId !== undefined && o.storeId !== merchantId) {
+          foreignStoreCount += 1;
+        }
+      }
+      for (const o of localOrders) {
         if (merchantId && o.storeId !== undefined && o.storeId !== merchantId) {
           foreignStoreCount += 1;
         }
@@ -876,6 +929,7 @@ export function RestaurantDailyReport() {
         dishMatchBreakdown,
         unmatchedItemNames,
       });
+      setBackfillDone(true);
     }
     void backfillOrders();
     return () => {
@@ -889,6 +943,9 @@ export function RestaurantDailyReport() {
   useEffect(() => {
     function onAuthChanged() {
       setOrders([]);
+      setBackfillDone(false);
+      setLedgerDone(false);
+      setDataReady(false);
       setBackfillSeq((n) => n + 1);
     }
     window.addEventListener("pos-auth-changed", onAuthChanged);
@@ -1099,6 +1156,7 @@ export function RestaurantDailyReport() {
 
       if (!sel && !d7) setLedgerError("尚未連線 Ledger，會員/線上數據未能讀取（其餘模塊正常）。");
       setLoading(false);
+      setLedgerDone(true);
     }
     void load();
     return () => {
@@ -1191,7 +1249,8 @@ export function RestaurantDailyReport() {
   const footfallTotal = posFootfall + countableOnlineOrders.length;
   const conversion = footfallTotal > 0 && agg.covers > 0 ? agg.covers / footfallTotal : null;
 
-  // 拆開堂食 / 快餐 兩類人流，方便報表顯示（商家一望就知邊類佔多）。
+  // 拆開堂食 / 快餐 / 線上 三類人流，令 total 同 breakdown 可互相解釋。
+  // 線上單（Ledger 純線上、冇入 POS DB）一單 = 1 人，計入「快餐 / 外賣 / 線上」。
   const footfallBreakdown = useMemo(() => {
     const terminal = orders.filter((o) => isSaleCountable(o));
     const inRange = terminal.filter((o) => orderMatchesReportRange(o, range));
@@ -1201,8 +1260,9 @@ export function RestaurantDailyReport() {
       if (o.tableId === "counter") counter += 1;
       else dineIn += Math.max(1, o.partySize ?? 1);
     }
-    return { dineIn, counter };
-  }, [orders, range]);
+    const online = countableOnlineOrders.length;
+    return { dineIn, counter, online };
+  }, [orders, range, countableOnlineOrders]);
 
   const grossProfit = useMemo(() => {
     const cogs = purchase.sel?.paid ?? 0;
@@ -1273,15 +1333,6 @@ export function RestaurantDailyReport() {
   const voidRate = agg.totalSoldQty > 0 ? agg.voidQty / agg.totalSoldQty : 0;
   const rev7dAvg = agg7d.revenue / 7;
   const topup7dAvg = (ledger.d7?.topupMop ?? 0) / 7;
-  // 方案 B（Ledger 全渠道 7 日均值）：
-  //   - rev7dAvg = POS 7 日均（保留舊邏輯，只反映本機訂單）
-  //   - ledgerRev7dAvg = Ledger RPC 7 日均（orderPaidMop / 7），全渠道權威值
-  //   - ledgerCount7dAvg = Ledger 7 日均單數（orderCount / 7）
-  //   - 差距 = POS 7 日均 vs Ledger 7 日均，可幫用戶一眼睇出「POS 漏計線上單」嘅程度。
-  const ledgerRev7dAvg = (ledger.d7?.orderPaidMop ?? 0) / 7;
-  const ledgerCount7dAvg = (ledger.d7?.orderCount ?? 0) / 7;
-  const rev7dGap = ledgerRev7dAvg - rev7dAvg; // 正數 = POS 比 Ledger 少（漏計）；負數 = POS 比 Ledger 多
-  const ledgerHasRev7d = (ledger.d7?.orderPaidMop ?? 0) > 0;
 
   const suggestions = useMemo<Suggestion[]>(() => {
     const out: Suggestion[] = [];
@@ -1667,51 +1718,63 @@ export function RestaurantDailyReport() {
             </div>
 
             {/* 核心 KPI 帶 */}
-            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <Kpi
-                label="營業額"
-                value={formatMoney(onlineOfflineSplit.totalRevenueMop)}
-                highlight
-                delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
-                subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
-              />
-              <Kpi
-                label="毛利（估）"
-                value={formatMoney(grossProfit)}
-                highlight
-                delta={grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
-              />
-              <Kpi
-                label="訂單數"
-                value={String(onlineOfflineSplit.totalCount)}
-                delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
-                subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
-              />
-              <Kpi
-                label="客單價"
-                value={formatMoney(
-                  onlineOfflineSplit.totalCount > 0
-                    ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
-                    : 0,
-                )}
-                delta={pct(
-                  onlineOfflineSplit.totalCount > 0
-                    ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
-                    : 0,
-                  ticketMopYest,
-                )}
-              />
-              <Kpi label="覆蓋人數" value={String(agg.covers)} delta={pct(agg.covers, aggYest?.covers ?? null)} />
-              <Kpi
-                label="會員充值"
-                value={formatMoney(ledger.sel?.topupMop ?? 0)}
-                delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null}
-              />
-            </div>
+            {dataReady ? (
+              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <Kpi
+                  label="營業額"
+                  value={formatMoney(onlineOfflineSplit.totalRevenueMop)}
+                  highlight
+                  delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
+                  subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                />
+                <Kpi
+                  label="毛利（估）"
+                  value={formatMoney(grossProfit)}
+                  highlight
+                  delta={grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
+                />
+                <Kpi
+                  label="訂單數"
+                  value={String(onlineOfflineSplit.totalCount)}
+                  delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
+                  subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
+                />
+                <Kpi
+                  label="客單價"
+                  value={formatMoney(
+                    onlineOfflineSplit.totalCount > 0
+                      ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                      : 0,
+                  )}
+                  delta={pct(
+                    onlineOfflineSplit.totalCount > 0
+                      ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                      : 0,
+                    ticketMopYest,
+                  )}
+                />
+                <Kpi label="覆蓋人數" value={String(agg.covers)} delta={pct(agg.covers, aggYest?.covers ?? null)} />
+                <Kpi
+                  label="會員充值"
+                  value={formatMoney(ledger.sel?.topupMop ?? 0)}
+                  delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null}
+                />
+              </div>
+            ) : (
+              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex h-16 items-center justify-center">
+                      <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* 模塊 1 + 模塊 2：食材消耗（BOM 精確化） */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="食材消耗（本月）" tag="BOM × 已售份數">
+              <Card title="食材消耗（本月）" tag="BOM × 已售份數" loading={!dataReady}>
                 {!consMonth.hasRecipes ? (
                   <div>
                     <div className="text-xs text-slate-400">尚未設定菜品配方，模塊顯示空白。</div>
@@ -1736,7 +1799,7 @@ export function RestaurantDailyReport() {
                 )}
               </Card>
 
-              <Card title="食材使用量排行" tag="本月 · 按成本">
+              <Card title="食材使用量排行" tag="本月 · 按成本" loading={!dataReady}>
                 {!consMonth.hasRecipes ? (
                   <Empty />
                 ) : consMonth.rows.length === 0 ? (
@@ -1767,7 +1830,7 @@ export function RestaurantDailyReport() {
 
             {/* 模塊 3 + 模塊 6 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下">
+              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下" loading={!dataReady}>
                 {agg.dishes.length === 0 ? (
                   <Empty />
                 ) : (
@@ -1791,32 +1854,99 @@ export function RestaurantDailyReport() {
                         {onlineDetailInfo.failed > 0 ? ` · ${onlineDetailInfo.failed} 張失敗` : ""}。
                       </div>
                     ) : null}
-                    {agg.dishes.slice(0, 8).map((d) => {
-                      const total = d.offlineQty + d.onlineQty;
-                      const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
-                      return (
-                        <div key={d.key} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                              <span className="truncate">{d.name}</span>
-                              <ChannelChip kind={ch} />
-                            </div>
-                            <div className="mt-0.5 text-xs text-slate-500">
-                              線下 {d.offlineQty} · 線上 {d.onlineQty}
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <div className="text-sm font-semibold text-slate-900">{total} 份</div>
-                            <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {agg.dishes.slice(0, 8).map((d) => (
+                      <DishRowItem key={d.key} d={d} />
+                    ))}
+                    {agg.dishes.length > 8 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDishModalPage(1);
+                          setDishModalOpen(true);
+                        }}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                      >
+                        更多（共 {agg.dishes.length} 個）
+                      </button>
+                    ) : null}
                   </div>
                 )}
               </Card>
 
-              <Card title="會員充值 & 會員數" tag="來源：Ledger">
+              {/* 菜品銷售排行完整列表彈窗 */}
+              {dishModalOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                  <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white p-4 shadow-xl">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <div className="text-base font-semibold text-slate-900">菜品銷售排行</div>
+                        <div className="text-xs text-slate-500">共 {agg.dishes.length} 個菜品 · 每頁 {DISHES_PER_PAGE} 個</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDishModalOpen(false)}
+                        className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+                      >
+                        關閉
+                      </button>
+                    </div>
+                    <div className="max-h-[55vh] overflow-y-auto pr-1">
+                      {(() => {
+                        const pageDishes = agg.dishes.slice((dishModalPage - 1) * DISHES_PER_PAGE, dishModalPage * DISHES_PER_PAGE);
+                        return (
+                          <div className="grid gap-1">
+                            {pageDishes.map((d, i) => (
+                              <div key={d.key} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                                    <span className="w-6 shrink-0 text-xs text-slate-400">{(dishModalPage - 1) * DISHES_PER_PAGE + i + 1}.</span>
+                                    <span className="truncate">{d.name}</span>
+                                    <ChannelChip
+                                      kind={d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in"}
+                                    />
+                                  </div>
+                                  <div className="mt-0.5 pl-8 text-xs text-slate-500">
+                                    線下 {d.offlineQty} · 線上 {d.onlineQty}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <div className="text-sm font-semibold text-slate-900">{d.offlineQty + d.onlineQty} 份</div>
+                                  <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    {agg.dishes.length > DISHES_PER_PAGE ? (
+                      <div className="mt-3 flex items-center justify-between">
+                        <button
+                          type="button"
+                          disabled={dishModalPage <= 1}
+                          onClick={() => setDishModalPage((p) => Math.max(1, p - 1))}
+                          className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                        >
+                          上一頁
+                        </button>
+                        <span className="text-sm text-slate-600">
+                          第 {dishModalPage} / {Math.ceil(agg.dishes.length / DISHES_PER_PAGE)} 頁
+                        </span>
+                        <button
+                          type="button"
+                          disabled={dishModalPage >= Math.ceil(agg.dishes.length / DISHES_PER_PAGE)}
+                          onClick={() => setDishModalPage((p) => Math.min(Math.ceil(agg.dishes.length / DISHES_PER_PAGE), p + 1))}
+                          className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                        >
+                          下一頁
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              <Card title="會員充值 & 會員數" tag="來源：Ledger" loading={!dataReady}>
                 <div className="flex items-baseline gap-2">
                   <div className="text-3xl font-extrabold text-indigo-600">
                     {formatMoney(ledger.sel?.topupMop ?? 0)}
@@ -1837,7 +1967,7 @@ export function RestaurantDailyReport() {
 
             {/* 模塊 7 + 模塊 8 */}
             <div className="mb-4 grid gap-4 md:grid-cols-2">
-              <Card title="沽清菜品" tag="即時">
+              <Card title="沽清菜品" tag="即時" loading={!dataReady}>
                 <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ${soldOut.length > 0 ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
                   {soldOut.length} 款沽清
                 </span>
@@ -1854,7 +1984,7 @@ export function RestaurantDailyReport() {
                 )}
               </Card>
 
-              <Card title="最熱門桌台排行" tag="單數 · 覆蓋人數">
+              <Card title="最熱門桌台排行" tag="單數 · 覆蓋人數" loading={!dataReady}>
                 {agg.tables.length === 0 ? (
                   <Empty />
                 ) : (
@@ -1886,6 +2016,7 @@ export function RestaurantDailyReport() {
                       ? `僅 POS · 高峰約 ${peakHour}:00`
                       : `POS · 高峰約 ${peakHour}:00`
                 }
+                loading={!dataReady}
               >
                 <div className="grid grid-cols-12 gap-1">
                   {combinedByHour.map((c, h) => {
@@ -1932,23 +2063,15 @@ export function RestaurantDailyReport() {
                 ) : null}
               </Card>
 
-              <Card title="營運指標 · 同環比" tag="vs 7 日均值">
+              <Card title="營運指標 · 同環比" tag="vs 7 日均值" loading={!dataReady}>
                 <div className="grid gap-1">
-                  <Row label="POS 營業額（7日均）" value={formatMoney(rev7dAvg)} />
-                  <Row label="Ledger 全渠道營業額（7日均）" value={formatMoney(ledgerRev7dAvg)} />
-                  {ledgerHasRev7d ? (
-                    <Row
-                      label="POS vs Ledger 差距"
-                      value={`${rev7dGap >= 0 ? "+" : "-"}${formatMoney(Math.abs(rev7dGap))} / 日`}
-                    />
-                  ) : null}
-                  <Row label="Ledger 全渠道訂單數（7日均）" value={`${ledgerCount7dAvg.toFixed(1)} 單`} />
-                  <Row label="線上渠道佔比（POS 7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
+                  <Row label="營業額（7日均）" value={formatMoney(rev7dAvg)} />
+                  <Row label="線上渠道佔比（7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
                   <Row label="會員充值（7日均）" value={formatMoney(topup7dAvg)} />
                   <Row label="總售出份數" value={`${agg.totalSoldQty} 份`} />
                 </div>
                 <div className="mt-2 text-[11px] text-slate-400">
-                  方案 B：保留 POS 7 日均（只反映本機訂單），並新增 Ledger RPC 全渠道 7 日均（涵蓋外送平台／kiosk／POS 漏計嘅線上單）；差距正數表示 POS 比 Ledger 少（多為線上單未入 POS DB）。
+                  營業額同線上佔比基於 POS 訂單 7 日均；會員充值來自 Ledger RPC。
                 </div>
               </Card>
 
@@ -1957,6 +2080,7 @@ export function RestaurantDailyReport() {
                 tag={
                   agg.dineInServing.total.estimated || agg.quickServing.total.estimated ? "含估算" : "實測"
                 }
+                loading={!dataReady}
               >
                 {agg.dineInServing.total.count === 0 && agg.quickServing.total.count === 0 ? (
                   <Empty />
@@ -2012,12 +2136,12 @@ export function RestaurantDailyReport() {
 
             {/* 模塊 5 人流 + 低庫存預警 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用">
+              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用" loading={!dataReady}>
                 <div className="flex items-baseline gap-2">
                   <div className="text-3xl font-extrabold text-indigo-600">{footfallTotal}</div>
                   <div className="text-xs text-slate-500">選取範圍累計入店人次</div>
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                     <div className="text-slate-400">堂食</div>
                     <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.dineIn} 人</div>
@@ -2026,23 +2150,22 @@ export function RestaurantDailyReport() {
                     <div className="text-slate-400">快餐 / 外賣</div>
                     <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.counter} 單</div>
                   </div>
-                </div>
-                {countableOnlineOrders.length > 0 ? (
-                  <div className="mt-2 text-xs text-indigo-600">
-                    含 Ledger 純線上單 {countableOnlineOrders.length} 單（已同步入 POS DB 嘅線上單唔會重複計）。
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                    <div className="text-slate-400">Ledger 純線上</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.online} 單</div>
                   </div>
-                ) : null}
+                </div>
                 {conversion != null ? (
                   <div className="mt-2 text-xs text-slate-500">
                     堂食轉化率 {Math.round(conversion * 100)}%（覆蓋 {agg.covers} 人 / 人流 {footfallTotal}）
                   </div>
                 ) : null}
                 <div className="mt-2 text-[11px] text-slate-400">
-                  由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人。純參考用，無門口計數硬件嘅替代方案。
+                  由訂單自動計算：堂食依 partySize 加總；快餐 / 外賣 / Ledger 純線上一單算一人。三項相加等於上方總人次。純參考用，無門口計數硬件嘅替代方案。
                 </div>
               </Card>
 
-              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）">
+              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）" loading={!dataReady}>
                 {lowStock === null ? (
                   <div className="text-xs text-slate-400">
                     未能讀取庫存（未連線 macau-pos Supabase 或尚無庫存品）。
@@ -2071,32 +2194,36 @@ export function RestaurantDailyReport() {
             </div>
 
             {/* 模塊 9：自動化優化建議 */}
-            <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-              <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
-              {loading ? (
-                <div className="text-sm text-slate-500">載入中…</div>
-              ) : suggestions.length === 0 ? (
-                <div className="text-sm text-slate-500">目前未觸發優化建議，營運狀況健康。</div>
-              ) : (
-                <div className="grid gap-2">
-                  {suggestions.map((s, i) => (
-                    <div key={i} className="flex gap-3 rounded-xl border border-orange-200 bg-white p-3">
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                          s.level === "r" ? "bg-rose-100 text-rose-700" : s.level === "o" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
-                        }`}
-                      >
-                        {LEVEL_LABEL[s.level]}
-                      </span>
-                      <div className="text-sm leading-relaxed text-slate-700">
-                        <span className="font-semibold text-slate-900">{s.title}：</span>
-                        {s.action}
+            {dataReady ? (
+              <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
+                <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
+                {loading ? (
+                  <div className="text-sm text-slate-500">載入中…</div>
+                ) : suggestions.length === 0 ? (
+                  <div className="text-sm text-slate-500">目前未觸發優化建議，營運狀況健康。</div>
+                ) : (
+                  <div className="grid gap-2">
+                    {suggestions.map((s, i) => (
+                      <div key={i} className="flex gap-3 rounded-xl border border-orange-200 bg-white p-3">
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            s.level === "r" ? "bg-rose-100 text-rose-700" : s.level === "o" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {LEVEL_LABEL[s.level]}
+                        </span>
+                        <div className="text-sm leading-relaxed text-slate-700">
+                          <span className="font-semibold text-slate-900">{s.title}：</span>
+                          {s.action}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <SectionSkeleton label="自動化優化建議" />
+            )}
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
               說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
@@ -2134,14 +2261,57 @@ function Kpi({
   );
 }
 
-function Card({ title, tag, children }: { title: string; tag?: string; children: React.ReactNode }) {
+function Card({ title, tag, children, loading }: { title: string; tag?: string; children: React.ReactNode; loading?: boolean }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-base font-semibold text-slate-900">{title}</div>
         {tag ? <div className="text-xs text-slate-400">{tag}</div> : null}
       </div>
-      {children}
+      {loading ? (
+        <div className="flex min-h-[140px] items-center justify-center rounded-xl bg-slate-50">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+function SectionSkeleton({ label, height = 140 }: { label?: string; height?: number }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 h-4 w-40 animate-pulse rounded bg-slate-200">{label ? <span className="sr-only">{label}</span> : null}</div>
+      <div className="flex items-center justify-center rounded-xl bg-slate-50" style={{ minHeight: height }}>
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+      </div>
+      <div className="mt-3 space-y-2">
+        <div className="h-3 w-full animate-pulse rounded bg-slate-100" />
+        <div className="h-3 w-4/5 animate-pulse rounded bg-slate-100" />
+      </div>
+    </div>
+  );
+}
+
+function DishRowItem({ d }: { d: DishRow }) {
+  const total = d.offlineQty + d.onlineQty;
+  const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
+  return (
+    <div className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <span className="truncate">{d.name}</span>
+          <ChannelChip kind={ch} />
+        </div>
+        <div className="mt-0.5 text-xs text-slate-500">
+          線下 {d.offlineQty} · 線上 {d.onlineQty}
+        </div>
+      </div>
+      <div className="shrink-0 text-right">
+        <div className="text-sm font-semibold text-slate-900">{total} 份</div>
+        <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
+      </div>
     </div>
   );
 }

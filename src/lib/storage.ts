@@ -403,8 +403,8 @@ function normalizeAccountUsers(accounts: AccountUser[] | null | undefined): Acco
   });
 }
 
-export function loadBootstrapCache() {
-  return readStoreJson(STORE_SUFFIX.bootstrap, null as PosBootstrap | null);
+export function loadBootstrapCache(merchantId?: string | null) {
+  return readStoreJson(STORE_SUFFIX.bootstrap, null as PosBootstrap | null, merchantId);
 }
 
 export function saveBootstrapCache(data: PosBootstrap) {
@@ -430,8 +430,8 @@ export function saveQueue(events: QueueEvent[]) {
   writeStoreJson(STORE_SUFFIX.queue, events);
 }
 
-export function loadOrders() {
-  return readStoreJson(STORE_SUFFIX.orders, [] as PosOrder[]);
+export function loadOrders(merchantId?: string | null) {
+  return readStoreJson(STORE_SUFFIX.orders, [] as PosOrder[], merchantId);
 }
 
 export function saveOrders(orders: PosOrder[]) {
