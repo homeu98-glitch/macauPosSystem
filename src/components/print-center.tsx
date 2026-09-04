@@ -12,7 +12,7 @@ import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
-import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearSentPrintJobs } from "@/lib/print-jobs";
+import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
   loadBootstrapCache,
@@ -28,6 +28,11 @@ import {
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
 import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import {
+  ledgerReportRangeForKey,
+  macauDateKey,
+  type ReportRangeKey,
+} from "@/lib/ledger/report-period";
 import {
   buildKitchenContent,
   buildLabelContent,
@@ -126,8 +131,24 @@ function ticketTypeLabel(type: PrintJob["ticketType"]) {
   return "正常";
 }
 
+/** 列印任務是否落在選定嘅時間範圍內（以 Asia/Macau 為準）。"all" 一律通過。 */
+function printJobMatchesDateRange(createdAt: string, range: ReportRangeKey, now = new Date()): boolean {
+  if (range === "all") return true;
+  const ts = Date.parse(createdAt);
+  if (!Number.isFinite(ts)) return false;
+  const instant = new Date(ts);
+  if (range === "today") return macauDateKey(instant) === macauDateKey(now);
+  if (range === "yesterday") {
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    return macauDateKey(instant) === macauDateKey(yesterday);
+  }
+  const period = ledgerReportRangeForKey(range, now);
+  if (!period) return true;
+  return ts >= Date.parse(period.start) && ts <= Date.parse(period.end);
+}
+
 export function PrintCenter() {
-  const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
+  const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs().map(normalizePrintJobStatus));
   const [orders] = useState<PosOrder[]>(() => loadOrders());
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
@@ -135,6 +156,8 @@ export function PrintCenter() {
   const hasChannel = isNativeBridgeAvailable() || isCompanionConfigured() || isRelayConfigured();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "sent" | "failed">("all");
+  // docs/任務：列印記錄加入時間篩選（今天 / 昨天 / 7天 / 30天 / 全部），預設「今天」。
+  const [dateFilter, setDateFilter] = useState<ReportRangeKey>("today");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [activeTab, setActiveTab] = useState<
     "records" | "receipt-template" | "label-template" | "kitchen-template" | "kiosk-template"
@@ -161,7 +184,7 @@ export function PrintCenter() {
 
   useEffect(() => {
     function onPrintJobsChanged() {
-      setPrintJobs(loadPrintJobs());
+      setPrintJobs(loadPrintJobs().map(normalizePrintJobStatus));
     }
     window.addEventListener("pos-print-jobs-changed", onPrintJobsChanged);
     return () => window.removeEventListener("pos-print-jobs-changed", onPrintJobsChanged);
@@ -192,10 +215,12 @@ export function PrintCenter() {
   }, []);
 
   const filteredJobs = useMemo(() => {
-    const base = printJobs.slice().sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    const base = printJobs
+      .filter((job) => printJobMatchesDateRange(job.createdAt, dateFilter))
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (filter === "all") return base;
     return base.filter((job) => job.status === filter);
-  }, [printJobs, filter]);
+  }, [printJobs, filter, dateFilter]);
 
   const activeJob = useMemo(
     () => (activeJobId ? filteredJobs.find((job) => job.id === activeJobId) ?? null : null),
@@ -381,8 +406,9 @@ export function PrintCenter() {
   }
 
   function persistPrintJobs(next: PrintJob[]) {
-    setPrintJobs(next);
-    savePrintJobs(next);
+    const normalized = next.map(normalizePrintJobStatus);
+    setPrintJobs(normalized);
+    savePrintJobs(normalized);
     window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
   }
 
@@ -756,6 +782,28 @@ export function PrintCenter() {
                       {label}
                     </button>
                   ))}
+                  {/* 時間篩選：今天 / 昨天 / 7天 / 30天 / 全部，預設「今天」。
+                      docs/任務：時間篩選與狀態篩選係 AND 關係。 */}
+                  <div className="ml-3 flex flex-wrap items-center gap-1 rounded-full bg-slate-100 p-1 text-xs font-semibold">
+                    {[
+                      ["today", "今天"],
+                      ["yesterday", "昨天"],
+                      ["7d", "7天"],
+                      ["30d", "30天"],
+                      ["all", "全部"],
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        className={`rounded-full px-3 py-1.5 ${
+                          dateFilter === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                        }`}
+                        onClick={() => setDateFilter(key as ReportRangeKey)}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <button
                     className="ml-auto rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300"
                     onClick={() => clearSentPrintJobs()}
@@ -775,6 +823,13 @@ export function PrintCenter() {
                 {filteredJobs.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
                     目前沒有打印記錄
+                    {dateFilter !== "all" || filter !== "all" ? (
+                      <div className="mt-2 text-xs text-slate-400">
+                        （已套用
+                        {dateFilter !== "all" ? `時間：${dateFilter === "today" ? "今天" : dateFilter === "yesterday" ? "昨天" : dateFilter === "7d" ? "最近 7 天" : "最近 30 天"}` : ""}
+                        {filter !== "all" ? `${dateFilter !== "all" ? "・" : ""}狀態：${filter === "sent" ? "已發送" : filter === "pending" ? "待補傳" : "失敗"}` : ""}）
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -796,7 +851,13 @@ export function PrintCenter() {
                                   : "bg-red-50 text-red-700"
                             }`}
                           >
-                            {job.status === "sent" ? "已發送" : job.status === "pending" ? "待補傳" : "失敗"}
+                            {job.status === "sent"
+                              ? "已發送"
+                              : job.status === "pending"
+                                ? "待補傳"
+                                : job.status === "failed"
+                                  ? "失敗"
+                                  : "失敗（狀態異常）"}
                           </span>
                         </div>
 

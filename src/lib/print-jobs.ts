@@ -40,6 +40,27 @@ function nowText() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * 列印任務狀態標準化。
+ *
+ * 列印任務 `status` 法定值係 `"pending" | "sent" | "failed"`，但舊 localStorage 或雲端
+ * 回填可能寫入無效值（例如 undefined / 空字串），導致 UI 徽章 catch-all 顯示「失敗」
+ * 但「失敗」分頁用 `=== "failed"` 過濾唔到。呢度喺讀取嗰陣把所有無效值歸一化為
+ * `"failed"`，確保徽章、過濾器、Toast 都睇同一個真相。
+ *
+ * @see `print-center.tsx` 嘅徽章邏輯、pos-app.tsx 嘅 failedPrintJobs 過濾。
+ */
+export function normalizePrintJobStatus(job: PrintJob): PrintJob {
+  if (job.status === "pending" || job.status === "sent" || job.status === "failed") {
+    return job;
+  }
+  return {
+    ...job,
+    status: "failed" as const,
+    lastError: job.lastError ?? "狀態欄位異常，已自動標記為失敗（請通知技術人員）",
+  };
+}
+
 export function appendPrintJobs(jobs: PrintJob[]) {
   if (jobs.length === 0 || typeof window === "undefined") return;
   const existing = loadPrintJobs();

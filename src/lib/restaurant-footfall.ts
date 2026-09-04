@@ -3,7 +3,8 @@
 // 報表按選取範圍累加並計「堂食轉化率 = 覆蓋人數 / 入店人次」。
 // 真門口計數器到位後，只要將 loadFootfallAll 換做讀取硬件 / Ledger RPC 即可。
 
-import type { ReportRangeKey } from "@/lib/ledger/report-period";
+import type { PosOrder } from "@/lib/types";
+import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
 
 const FOOT_KEY = "macau-pos-footfall";
 
@@ -64,4 +65,30 @@ export function footfallFocusKey(range: ReportRangeKey): string {
     return macauDateKey(y);
   }
   return macauDateKey(new Date());
+}
+
+/**
+ * docs/任務：由訂單自動計算「入店人次」：
+ * - 堂食（`tableId !== "counter"`）→ 依 `partySize` 加總。
+ * - 快餐 / 外賣 / 自取（`tableId === "counter"`）→ 一張單算 1 個人。
+ *
+ * 只計已結帳 / 已退款嘅終態單（同 `aggregate()` 嘅營業額口徑一致），排除 cancelled 單。
+ * 純參考數字，唔再由使用者手動輸入；如要重啟手動人流可保留舊 localStorage key 但不再依賴。
+ */
+export function computeFootfallFromOrders(orders: PosOrder[], range: ReportRangeKey): number {
+  const terminal = orders.filter(
+    (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
+  );
+  const inRange = terminal.filter((o) => orderMatchesReportRange(o, range));
+  let total = 0;
+  for (const o of inRange) {
+    if (o.tableId === "counter") {
+      // 快餐 / 自取 / 外賣：一張單 = 1 個人
+      total += 1;
+    } else {
+      // 堂食：依 partySize，缺省 1 個人（避免 partySize 未填時漏算）
+      total += Math.max(1, o.partySize ?? 1);
+    }
+  }
+  return total;
 }

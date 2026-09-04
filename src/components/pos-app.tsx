@@ -37,6 +37,7 @@ import {
   buildLabelPrintJobs,
   buildReceiptPrintJobs,
   buildVoidPrintJobsForOrder,
+  normalizePrintJobStatus,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset, orderItemDiscountTotal } from "@/lib/pos/discount";
@@ -316,8 +317,9 @@ export function PosApp() {
   // 完全唔會知道廚房機收唔到單（打印中心係 /prints 另一頁，冇人會特登去睇）。
   // 同 print-center.tsx 一致：永遠重新讀 loadPrintJobs()，唔信 event detail。
   // 事關 12 個 dispatch 位入面得 5 個有帶 printJobs，其餘 7 個係空 detail／淨係 {count}。
+  // 同 print-center 一齊做狀態標準化，避免舊 / 異常狀態導致 UI 同資料庫唔一致。
   useEffect(() => {
-    const onPrintJobsChanged = () => setPrintJobs(loadPrintJobs());
+    const onPrintJobsChanged = () => setPrintJobs(loadPrintJobs().map(normalizePrintJobStatus));
     window.addEventListener("pos-print-jobs-changed", onPrintJobsChanged);
     return () => window.removeEventListener("pos-print-jobs-changed", onPrintJobsChanged);
   }, []);
@@ -350,6 +352,27 @@ export function PosApp() {
     () => queue.filter((event) => event.status === "failed").length,
     [queue],
   );
+
+  /**
+   * docs/任務：列印失敗提示 3 秒自動消失，避免長期遮擋畫面。
+   * - 每次「出現」會啟動 3 秒 timer，3 秒後自動隱藏。
+   * - 有新嘅失敗單（job 數量變多、或最新一筆嘅 id 改變）會重置為「顯示」狀態。
+   * - 用戶主動撳提示去打印中心後亦視為「已處理」，清除計時。
+   */
+  const [printFailureDismissed, setPrintFailureDismissed] = useState(false);
+  const latestFailedJobId = failedPrintJobs[0]?.id ?? null;
+  useEffect(() => {
+    if (failedPrintJobs.length === 0) {
+      setPrintFailureDismissed(false);
+      return;
+    }
+    setPrintFailureDismissed(false);
+    const timer = window.setTimeout(() => setPrintFailureDismissed(true), 3000);
+    return () => window.clearTimeout(timer);
+    // 依賴最新一筆失敗單嘅 id，確保有新失敗時重新計時；數量變化亦包含在 id 變動內。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestFailedJobId, failedPrintJobs.length]);
+  const showPrintFailureToast = failedPrintJobs.length > 0 && !printFailureDismissed;
 
   const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
   const [activeFloorId, setActiveFloorId] = useState("");
@@ -5407,18 +5430,15 @@ export function PosApp() {
 
       {/* 左下角問題提示區（垂直 stack）：避開右下角嘅 toast；md:left-[88px] 避開 72px 側欄。
           兩種問題可以同時出現，所以要 stack 而唔係兩嚿 fixed 互相冚住。 */}
-      {failedPrintJobs.length > 0 || failedSyncCount > 0 ? (
-        <div className="fixed bottom-4 left-4 z-40 flex max-w-xs flex-col gap-2 md:left-[88px]">
+      {failedSyncCount > 0 || showPrintFailureToast ? (
+        <div className="fixed bottom-4 left-4 z-40 flex max-w-[10rem] flex-col gap-1.5 md:left-[88px]">
           {/* 同步永久失敗：server 連續拒收 5 次，呢啲 event 已經唔會再自動重試。
               用 amber 而唔係 red —— 資料安全留喺本機，只係未上到 DB，唔係即刻營運事故。 */}
           {failedSyncCount > 0 ? (
-            <div className="rounded-2xl bg-amber-500 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg">
-              <div>⚠ {failedSyncCount} 筆資料未同步到伺服器</div>
-              <div className="mt-1 text-xs font-normal text-amber-50">
-                伺服器連續拒收，已停止自動重試。資料仍然安全留喺本機。
-              </div>
+            <div className="rounded-xl bg-amber-500 px-2.5 py-1.5 text-left text-[11px] font-semibold text-white shadow-md">
+              <div>⚠ {failedSyncCount} 筆未同步</div>
               <button
-                className="mt-2 rounded-lg bg-white/20 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/30"
+                className="mt-1 rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
                 onClick={() => {
                   const revived = retryFailedSyncEvents();
                   setQueue(loadQueue());
@@ -5435,19 +5455,19 @@ export function PosApp() {
             </div>
           ) : null}
 
-          {/* 列印失敗：背景 flush 失敗時收銀員喺落單畫面零提示，廚房就咁收唔到單。 */}
-          {failedPrintJobs.length > 0 ? (
+          {/* 列印失敗：背景 flush 失敗時收銀員喺落單畫面零提示，廚房就咁收唔到單。
+              docs/任務：尺寸縮至原大小一半，3 秒後自動消失（避免長期遮擋畫面）。
+              有新失敗單會重新計時並再次出現。 */}
+          {showPrintFailureToast ? (
             <button
-              className="rounded-2xl bg-red-600 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg hover:bg-red-700"
-              onClick={() => router.push("/prints")}
+              className="rounded-xl bg-red-600 px-2.5 py-1.5 text-left text-[11px] font-semibold text-white shadow-md hover:bg-red-700"
+              onClick={() => {
+                setPrintFailureDismissed(true);
+                router.push("/prints");
+              }}
               type="button"
             >
-              <div>列印失敗 {failedPrintJobs.length} 張 · 撳呢度去打印中心</div>
-              {failedPrintJobs[0]?.lastError ? (
-                <div className="mt-1 whitespace-pre-wrap break-words text-xs font-normal text-red-50">
-                  {failedPrintJobs[0].lastError}
-                </div>
-              ) : null}
+              <div>列印失敗 {failedPrintJobs.length} 張 · 去打印中心</div>
             </button>
           ) : null}
         </div>

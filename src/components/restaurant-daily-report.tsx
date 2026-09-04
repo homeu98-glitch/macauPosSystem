@@ -23,10 +23,7 @@ import {
   type BomEntry,
 } from "@/lib/restaurant-bom";
 import {
-  footfallFocusKey,
-  footfallTotalInRange,
-  loadFootfallAll,
-  saveFootfallDay,
+  computeFootfallFromOrders,
 } from "@/lib/restaurant-footfall";
 import { formatMoney } from "@/lib/format";
 import type { PosOrder } from "@/lib/types";
@@ -74,8 +71,32 @@ interface ServingStats {
   avgMin: number;
   medianMin: number;
   p95Min: number;
-  /** true = 部分樣本缺 servedAt，用落單→結帳估算 */
+  /** true = 部分樣本缺時間戳，以落單→結帳/updatedAt 估算 */
   estimated: boolean;
+}
+
+/** 堂食/外賣流程每個步驟嘅統計（avg / median / P95 / 樣本數 / 估算標記）。 */
+interface StepStats {
+  count: number;
+  avgMin: number;
+  medianMin: number;
+  p95Min: number;
+  estimated: boolean;
+}
+
+/** 堂食（無出餐概念）：以「下單 → 送廚 → 結帳 → 整體」三段呈現。 */
+interface DineInServingBreakdown {
+  orderToKitchen: StepStats;
+  kitchenToSettle: StepStats;
+  total: StepStats;
+}
+
+/** 快餐 / 外賣（有明確出餐）：「下單 → 送廚 → 出餐 → 完成 → 整體」四段呈現。 */
+interface QuickServingBreakdown {
+  orderToKitchen: StepStats;
+  kitchenToServed: StepStats;
+  servedToSettled: StepStats;
+  total: StepStats;
 }
 
 /** 單張單嘅出餐分鐘數。有 sentToKitchenAt + servedAt 即實測；否則估算（落單→結帳）。 */
@@ -87,6 +108,77 @@ function servingMinutes(o: PosOrder): { ms: number; estimated: boolean } | null 
   const e = served ?? (o.originalSettledAt ? Date.parse(o.originalSettledAt) : Date.parse(o.updatedAt));
   if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
   return { ms: Math.max(0, e - s), estimated: true };
+}
+
+function emptyStepStats(): StepStats {
+  return { count: 0, avgMin: 0, medianMin: 0, p95Min: 0, estimated: false };
+}
+
+/** 收集「落單 → 送廚」、「送廚 → 出餐」、「出餐 → 結帳」、「整體」嘅樣本，傳回每段統計。 */
+function quickStepsForOrder(o: PosOrder): {
+  orderToKitchen: { ms: number; estimated: boolean } | null;
+  kitchenToServed: { ms: number; estimated: boolean } | null;
+  servedToSettled: { ms: number; estimated: boolean } | null;
+  total: { ms: number; estimated: boolean } | null;
+} {
+  const created = Date.parse(o.createdAt);
+  const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
+  const served = o.servedAt ? Date.parse(o.servedAt) : null;
+  const settled = o.originalSettledAt
+    ? Date.parse(o.originalSettledAt)
+    : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
+      ? Date.parse(o.updatedAt)
+      : NaN;
+  return {
+    orderToKitchen:
+      sent && Number.isFinite(created) ? { ms: Math.max(0, sent - created), estimated: false } : null,
+    kitchenToServed:
+      sent && served ? { ms: Math.max(0, served - sent), estimated: false } : null,
+    servedToSettled:
+      served && Number.isFinite(settled) ? { ms: Math.max(0, settled - served), estimated: false } : null,
+    total:
+      Number.isFinite(created) && Number.isFinite(settled)
+        ? { ms: Math.max(0, settled - created), estimated: false }
+        : null,
+  };
+}
+
+/** 堂食：下單 → 送廚 → 結帳 → 整體。缺時間戳嘅步驟用 fallback 估算。 */
+function dineInStepsForOrder(o: PosOrder): {
+  orderToKitchen: { ms: number; estimated: boolean } | null;
+  kitchenToSettle: { ms: number; estimated: boolean } | null;
+  total: { ms: number; estimated: boolean } | null;
+} {
+  const created = Date.parse(o.createdAt);
+  const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
+  const settled = o.originalSettledAt
+    ? Date.parse(o.originalSettledAt)
+    : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
+      ? Date.parse(o.updatedAt)
+      : NaN;
+  return {
+    orderToKitchen:
+      sent && Number.isFinite(created) ? { ms: Math.max(0, sent - created), estimated: false } : null,
+    kitchenToSettle:
+      sent && Number.isFinite(settled) ? { ms: Math.max(0, settled - sent), estimated: false } : null,
+    total:
+      Number.isFinite(created) && Number.isFinite(settled)
+        ? { ms: Math.max(0, settled - created), estimated: false }
+        : null,
+  };
+}
+
+function summarizeSteps(samples: Array<{ ms: number; estimated: boolean }>): StepStats {
+  if (samples.length === 0) return emptyStepStats();
+  const sortedMs = samples.map((s) => s.ms).sort((a, b) => a - b);
+  const total = sortedMs.reduce((s, v) => s + v, 0);
+  return {
+    count: samples.length,
+    avgMin: total / samples.length / 60000,
+    medianMin: medianOf(sortedMs) / 60000,
+    p95Min: p95Of(sortedMs) / 60000,
+    estimated: samples.some((s) => s.estimated),
+  };
 }
 
 function medianOf(sortedMs: number[]): number {
@@ -116,7 +208,12 @@ interface Agg {
   onlineRevenue: number;
   offlineRevenue: number;
   totalSoldQty: number;
+  /** 兼容舊 serving 欄位（出餐分鐘數），保留以便其他模塊用。 */
   serving: ServingStats;
+  /** 堂食時長：下單 → 送廚 → 結帳 → 整體 */
+  dineInServing: DineInServingBreakdown;
+  /** 外賣 / 快餐時長：下單 → 送廚 → 出餐 → 完成 → 整體 */
+  quickServing: QuickServingBreakdown;
 }
 
 function aggregate(orders: PosOrder[], range: ReportRangeKey): Agg {
@@ -178,11 +275,32 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey): Agg {
 
   const servingSamples: number[] = [];
   let servingEstimated = false;
+  const dineInOrderToKitchen: Array<{ ms: number; estimated: boolean }> = [];
+  const dineInKitchenToSettle: Array<{ ms: number; estimated: boolean }> = [];
+  const dineInTotal: Array<{ ms: number; estimated: boolean }> = [];
+  const quickOrderToKitchen: Array<{ ms: number; estimated: boolean }> = [];
+  const quickKitchenToServed: Array<{ ms: number; estimated: boolean }> = [];
+  const quickServedToSettled: Array<{ ms: number; estimated: boolean }> = [];
+  const quickTotal: Array<{ ms: number; estimated: boolean }> = [];
   for (const o of inRange) {
     const sm = servingMinutes(o);
     if (sm) {
       servingSamples.push(sm.ms);
       if (sm.estimated) servingEstimated = true;
+    }
+    if (o.tableId === "counter") {
+      // 快餐 / 自取 / 外賣：有明確出餐概念
+      const steps = quickStepsForOrder(o);
+      if (steps.orderToKitchen) quickOrderToKitchen.push(steps.orderToKitchen);
+      if (steps.kitchenToServed) quickKitchenToServed.push(steps.kitchenToServed);
+      if (steps.servedToSettled) quickServedToSettled.push(steps.servedToSettled);
+      if (steps.total) quickTotal.push(steps.total);
+    } else {
+      // 堂食：無出餐，以「送廚 → 結帳」當作整體服務時間
+      const steps = dineInStepsForOrder(o);
+      if (steps.orderToKitchen) dineInOrderToKitchen.push(steps.orderToKitchen);
+      if (steps.kitchenToSettle) dineInKitchenToSettle.push(steps.kitchenToSettle);
+      if (steps.total) dineInTotal.push(steps.total);
     }
   }
   servingSamples.sort((a, b) => a - b);
@@ -193,6 +311,18 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey): Agg {
     medianMin: medianOf(servingSamples) / 60000,
     p95Min: p95Of(servingSamples) / 60000,
     estimated: servingEstimated,
+  };
+
+  const dineInServing: DineInServingBreakdown = {
+    orderToKitchen: summarizeSteps(dineInOrderToKitchen),
+    kitchenToSettle: summarizeSteps(dineInKitchenToSettle),
+    total: summarizeSteps(dineInTotal),
+  };
+  const quickServing: QuickServingBreakdown = {
+    orderToKitchen: summarizeSteps(quickOrderToKitchen),
+    kitchenToServed: summarizeSteps(quickKitchenToServed),
+    servedToSettled: summarizeSteps(quickServedToSettled),
+    total: summarizeSteps(quickTotal),
   };
 
   return {
@@ -209,6 +339,8 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey): Agg {
     offlineRevenue,
     totalSoldQty,
     serving,
+    dineInServing,
+    quickServing,
   };
 }
 
@@ -231,10 +363,6 @@ export function RestaurantDailyReport() {
   const [lowStock, setLowStock] = useState<
     Array<{ name: string; qty: number; unit: string; par: number }> | null
   >(null);
-  const [footfallMap, setFootfallMap] = useState<Record<string, number>>(() => loadFootfallAll());
-  const [footfallInput, setFootfallInput] = useState<number>(
-    () => footfallMap[footfallFocusKey(range)] ?? 0,
-  );
   const [loading, setLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
 
@@ -315,22 +443,33 @@ export function RestaurantDailyReport() {
     };
   }, [range, merchantId]);
 
-  // 範圍切換時，將人流輸入框同步到該範圍嘅焦點日（昨天範圍＝記昨天，否則今天）。
-  useEffect(() => {
-    setFootfallInput(loadFootfallAll()[footfallFocusKey(range)] ?? 0);
-  }, [range]);
-
   const agg = useMemo(() => aggregate(orders, range), [orders, range]);
   const aggYest = useMemo(() => (range === "today" ? aggregate(orders, "yesterday") : null), [orders, range]);
   const agg7d = useMemo(() => aggregate(orders, "7d"), [orders]);
 
-  const focusKey = footfallFocusKey(range);
-  const footfallTotal = footfallTotalInRange(footfallMap, range);
+  /**
+   * docs/任務：當日人流改為完全由訂單自動計算，唔再由使用者手動輸入。
+   * - 堂食（tableId !== "counter"）→ partySize 加總
+   * - 快餐 / 外賣 / 自取（tableId === "counter"）→ 一單 = 1 人
+   * 純參考數字，唔影響營業額 / 結帳口徑。
+   */
+  const footfallTotal = useMemo(() => computeFootfallFromOrders(orders, range), [orders, range]);
   const conversion = footfallTotal > 0 && agg.covers > 0 ? agg.covers / footfallTotal : null;
 
-  function saveFootfall() {
-    setFootfallMap(saveFootfallDay(focusKey, footfallInput));
-  }
+  // 拆開堂食 / 快餐 兩類人流，方便報表顯示（商家一望就知邊類佔多）。
+  const footfallBreakdown = useMemo(() => {
+    const terminal = orders.filter(
+      (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
+    );
+    const inRange = terminal.filter((o) => orderMatchesReportRange(o, range));
+    let dineIn = 0;
+    let counter = 0;
+    for (const o of inRange) {
+      if (o.tableId === "counter") counter += 1;
+      else dineIn += Math.max(1, o.partySize ?? 1);
+    }
+    return { dineIn, counter };
+  }, [orders, range]);
 
   const grossProfit = useMemo(() => {
     const cogs = purchase.sel?.paid ?? 0;
@@ -708,59 +847,88 @@ export function RestaurantDailyReport() {
                 </div>
               </Card>
 
-              <Card title="出餐時間" tag={agg.serving.estimated ? "含估算" : "實測"}>
-                {agg.serving.count === 0 ? (
+              <Card
+                title="時長統計（堂食 / 外賣）"
+                tag={
+                  agg.dineInServing.total.estimated || agg.quickServing.total.estimated ? "含估算" : "實測"
+                }
+              >
+                {agg.dineInServing.total.count === 0 && agg.quickServing.total.count === 0 ? (
                   <Empty />
                 ) : (
-                  <div className="grid gap-2">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <Metric label="平均" value={`${agg.serving.avgMin.toFixed(1)} 分`} />
-                      <Metric label="中位數" value={`${agg.serving.medianMin.toFixed(1)} 分`} />
-                      <Metric label="P95" value={`${agg.serving.p95Min.toFixed(1)} 分`} warn={agg.serving.p95Min > 15} />
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <div className="mb-1.5 text-xs font-semibold text-slate-700">堂食時長</div>
+                      <div className="grid gap-1.5">
+                        <StepRow
+                          label="下單 → 送廚"
+                          stats={agg.dineInServing.orderToKitchen}
+                        />
+                        <StepRow
+                          label="送廚 → 結帳"
+                          stats={agg.dineInServing.kitchenToSettle}
+                        />
+                        <StepRow
+                          label="下單 → 結帳（整體）"
+                          stats={agg.dineInServing.total}
+                          bold
+                        />
+                      </div>
                     </div>
-                    <div className="mt-1 text-xs text-slate-400">
-                      樣本 {agg.serving.count} 單
-                      {agg.serving.estimated
-                        ? "（部分舊單缺時間戳，以落單→結帳估算）"
-                        : "（送廚房→出餐實測）"}
+                    <div>
+                      <div className="mb-1.5 text-xs font-semibold text-slate-700">快餐 / 外賣時長</div>
+                      <div className="grid gap-1.5">
+                        <StepRow
+                          label="下單 → 送廚"
+                          stats={agg.quickServing.orderToKitchen}
+                        />
+                        <StepRow
+                          label="送廚 → 出餐"
+                          stats={agg.quickServing.kitchenToServed}
+                        />
+                        <StepRow
+                          label="出餐 → 完成"
+                          stats={agg.quickServing.servedToSettled}
+                        />
+                        <StepRow
+                          label="下單 → 完成（整體）"
+                          stats={agg.quickServing.total}
+                          bold
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
+                <div className="mt-2 text-[11px] text-slate-400">
+                  每步列出平均 / 中位數 / P95，樣本 0 嘅步驟顯示 —；堂食以「送廚 → 結帳」涵蓋製作同服務時間，外賣/快餐以「出餐 → 完成」反映等待取餐/外送嘅時間。
+                </div>
               </Card>
             </div>
 
             {/* 模塊 5 人流 + 低庫存預警 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="當日人流（入店人次）" tag="手動記錄 · 轉化率">
+              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用">
                 <div className="flex items-baseline gap-2">
                   <div className="text-3xl font-extrabold text-indigo-600">{footfallTotal}</div>
                   <div className="text-xs text-slate-500">選取範圍累計入店人次</div>
                 </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                    <div className="text-slate-400">堂食</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.dineIn} 人</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                    <div className="text-slate-400">快餐 / 外賣</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.counter} 單</div>
+                  </div>
+                </div>
                 {conversion != null ? (
-                  <div className="mt-1 text-xs text-slate-500">
+                  <div className="mt-2 text-xs text-slate-500">
                     堂食轉化率 {Math.round(conversion * 100)}%（覆蓋 {agg.covers} 人 / 人流 {footfallTotal}）
                   </div>
                 ) : null}
-                <div className="mt-3 flex items-end gap-2">
-                  <div>
-                    <div className="text-[11px] text-slate-400">{focusKey} 入店人次</div>
-                    <input
-                      type="number"
-                      value={footfallInput}
-                      onChange={(e) => setFootfallInput(Number(e.target.value) || 0)}
-                      className="mt-1 w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-                    />
-                  </div>
-                  <button
-                    className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                    onClick={saveFootfall}
-                    type="button"
-                  >
-                    儲存
-                  </button>
-                </div>
                 <div className="mt-2 text-[11px] text-slate-400">
-                  無門口計數硬件，由店員/老闆於收銀端記低每日人流；轉化率＝覆蓋人數 ÷ 入店人次。
+                  由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人。純參考用，無門口計數硬件嘅替代方案。
                 </div>
               </Card>
 
@@ -822,7 +990,7 @@ export function RestaurantDailyReport() {
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
               說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
-              人流（入店人次）為收銀端手動記錄（無門口計數硬件），轉化率＝覆蓋人數 ÷ 入店人次。出餐時間為「送廚房→出餐」實測（舊單缺時間戳時自動以落單→結帳估算，標「含估算」）；食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
+              人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
               毛利為「營業額 − 買貨成本（已付）」估算；會員數來自 Ledger `get_merchant_report_summary` 的 member_count（未連線時顯示 —）。
             </div>
           </div>
@@ -903,4 +1071,42 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function Empty() {
   return <div className="text-xs text-slate-400">此範圍暫無資料。</div>;
+}
+
+/** 顯示一個流程步驟嘅平均 / 中位數 / P95；count = 0 時全部顯示 —。 */
+function StepRow({ label, stats, bold }: { label: string; stats: StepStats; bold?: boolean }) {
+  const noData = stats.count === 0;
+  return (
+    <div
+      className={`flex items-center justify-between gap-2 rounded-lg border border-slate-100 px-2.5 py-1.5 ${
+        bold ? "bg-slate-50" : ""
+      }`}
+    >
+      <div className={`min-w-0 truncate text-xs ${bold ? "font-semibold text-slate-800" : "text-slate-600"}`}>
+        {label}
+      </div>
+      <div className="flex shrink-0 items-baseline gap-2 text-[11px]">
+        <span className="text-slate-400">avg</span>
+        <span className={`w-12 text-right font-semibold ${noData ? "text-slate-300" : "text-slate-900"}`}>
+          {noData ? "—" : `${stats.avgMin.toFixed(1)} 分`}
+        </span>
+        <span className="text-slate-400">med</span>
+        <span className={`w-12 text-right font-semibold ${noData ? "text-slate-300" : "text-slate-900"}`}>
+          {noData ? "—" : `${stats.medianMin.toFixed(1)}`}
+        </span>
+        <span className="text-slate-400">P95</span>
+        <span
+          className={`w-12 text-right font-semibold ${
+            noData
+              ? "text-slate-300"
+              : stats.p95Min > 20
+                ? "text-rose-600"
+                : "text-slate-900"
+          }`}
+        >
+          {noData ? "—" : `${stats.p95Min.toFixed(1)}`}
+        </span>
+      </div>
+    </div>
+  );
 }
