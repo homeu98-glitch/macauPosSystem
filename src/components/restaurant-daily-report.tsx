@@ -243,6 +243,8 @@ interface MenuMeta {
     lastUpdatedAt: string;
     sampleMenuItemIds: string[];
     sampleCategoryIds: string[];
+    /** 當前餐牌菜品名樣本（前 12 個），用嚟同「未匹配菜品名」肉眼對照 */
+    sampleMenuItemNames: string[];
   };
 }
 
@@ -272,6 +274,7 @@ function buildMenuMeta(): MenuMeta {
       lastUpdatedAt: boot?.lastUpdatedAt ?? "",
       sampleMenuItemIds: items.slice(0, 5).map((m) => m.id),
       sampleCategoryIds: categories.slice(0, 5).map((c) => c.id),
+      sampleMenuItemNames: items.slice(0, 12).map((m) => m.name),
     },
   };
 }
@@ -636,9 +639,12 @@ export function RestaurantDailyReport() {
       lastUpdatedAt: string;
       sampleMenuItemIds: string[];
       sampleCategoryIds: string[];
+      sampleMenuItemNames: string[];
     };
     /** 菜品配對方式統計：id / name / normalized / unmatched。 */
     dishMatchBreakdown: Record<string, number>;
+    /** 完全對照唔到當前餐牌嘅菜品名 → 出現次數（用嚟直接睇「邊啲舊菜品變咗孤兒」）。 */
+    unmatchedItemNames: Record<string, number>;
   }>({
     status: "idle",
     merchantId,
@@ -669,8 +675,10 @@ export function RestaurantDailyReport() {
       lastUpdatedAt: "",
       sampleMenuItemIds: [],
       sampleCategoryIds: [],
+      sampleMenuItemNames: [],
     },
     dishMatchBreakdown: {},
+    unmatchedItemNames: {},
   });
 
   useEffect(() => {
@@ -784,6 +792,7 @@ export function RestaurantDailyReport() {
       const matchedCategorySet = new Set<string>();
       const unmatchedCategorySet = new Set<string>();
       const dishMatchBreakdown: Record<string, number> = {};
+      const unmatchedItemNames: Record<string, number> = {};
       for (const o of final) {
         for (const it of o.items) {
           if (it.voided) continue;
@@ -795,6 +804,8 @@ export function RestaurantDailyReport() {
           } else {
             unmatchedCategorySet.add(cid);
             dishMatchBreakdown.unmatched = (dishMatchBreakdown.unmatched ?? 0) + 1;
+            const label = `${it.name}(${it.menuItemId.slice(0, 20)}…)`;
+            unmatchedItemNames[label] = (unmatchedItemNames[label] ?? 0) + it.quantity;
           }
         }
       }
@@ -829,6 +840,7 @@ export function RestaurantDailyReport() {
         legacyOrdersCount,
         bootstrapSummary: meta.boot,
         dishMatchBreakdown,
+        unmatchedItemNames,
       });
     }
     void backfillOrders();
@@ -1444,6 +1456,11 @@ export function RestaurantDailyReport() {
                         菜品 ID 樣本：{debugInfo.bootstrapSummary.sampleMenuItemIds.join(", ")}
                       </div>
                     ) : null}
+                    {debugInfo.bootstrapSummary.sampleMenuItemNames.length > 0 ? (
+                      <div className="text-[10px] text-slate-500">
+                        當前餐牌菜品名（前 12）：{debugInfo.bootstrapSummary.sampleMenuItemNames.join("、")}
+                      </div>
+                    ) : null}
                     {debugInfo.bootstrapSummary.sampleCategoryIds.length > 0 ? (
                       <div className="text-[10px] text-slate-500">
                         分類 ID 樣本：{debugInfo.bootstrapSummary.sampleCategoryIds.join(", ")}
@@ -1460,6 +1477,14 @@ export function RestaurantDailyReport() {
                     <div className="mt-1 text-[10px] text-slate-500">
                       id=ID直接命中 · name=菜名命中 · normalized=正規化菜名命中 · unmatched=完全無法對照
                     </div>
+                    {Object.keys(debugInfo.unmatchedItemNames).length > 0 ? (
+                      <div className="mt-1 text-[10px] text-rose-600">
+                        未匹配菜品（名稱 × 數量）：
+                        {Object.entries(debugInfo.unmatchedItemNames)
+                          .map(([k, v]) => `${k}×${v}`)
+                          .join("、")}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
