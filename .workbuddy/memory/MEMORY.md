@@ -6,6 +6,7 @@
 
 - **狀態篩選 helper**：用 `isSaleCountable(o)`（已落地）取代舊嘅 inline `o.status === "settled" || ...`，統一口徑：線下 POS 只計 `settled`；帶 `onlineOrderId` 嘅單 `settled` 或 `paid` 都計；`refunded` / `partially_refunded` 一律唔計。
 - **大類聚合**：菜品銷售排行已改為按 `MenuItem.categoryId → MenuCategory.name` 聚合（`MenuMeta` + `buildMenuMeta()`）。對照唔到嘅菜品 fallback 用菜品 ID 當 key，UI 用「未匹配當前菜單」badge 提示用戶（用嚟搵 60000003 等外店污染）。
+- **菜品匹配 fallback**：`resolveMenuMetaItem()` 按 ID → 菜名 → 正規化菜名（去空白小寫）三級配對，處理 Ledger 明細帶冇前綴 product id 但本地 bootstrap 用 `ledger-` 前綴 id 嘅情況；完全對照唔到就標 `unmatched`。
 - **尖峰時段**：POS 線下單 `agg.byHour` + Ledger 線上單 `onlineByHour` 疊加成 `combinedByHour`。`onlineByHour` 由 `useEffect([merchantId, range])` 用 `listMerchantOrders` cursor pagination 抓，按「下單時間」createdAt 入帳。
 - **營運指標方案 B**：同時顯示 POS 7 日均（`rev7dAvg`）同 Ledger RPC 7 日均（`ledgerRev7dAvg = ledger.d7.orderPaidMop / 7`），並加 `POS vs Ledger 差距` row（正數 = POS 漏計線上單）。
 

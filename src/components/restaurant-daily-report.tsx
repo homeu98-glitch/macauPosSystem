@@ -64,6 +64,8 @@ interface DishRow {
   revenue: number;
   /** 本類包含嘅菜品名稱樣本（最多 3 個），用嚟輔助辨識。 */
   samples: string[];
+  /** true = 至少一個樣本無法對照當前菜單（ID / 名稱都搵唔到）。 */
+  unmatched: boolean;
 }
 
 interface TableRow {
@@ -228,16 +230,72 @@ interface MenuMeta {
   itemMap: Map<string, { categoryId: string; name: string }>;
   /** categoryId → category name */
   categoryMap: Map<string, string>;
+  /** 菜名 → MenuItem（fallback 配對用） */
+  nameMap: Map<string, { categoryId: string; name: string }>;
+  /** 正規化菜名 → MenuItem（去空白小寫 fallback） */
+  normalizedNameMap: Map<string, { categoryId: string; name: string }>;
+  /** 原始 bootstrap 摘要，用於診斷 */
+  boot: {
+    storeId: string;
+    storeName: string;
+    menuItemCount: number;
+    categoryCount: number;
+    lastUpdatedAt: string;
+    sampleMenuItemIds: string[];
+    sampleCategoryIds: string[];
+  };
 }
 
 function buildMenuMeta(): MenuMeta {
   const boot = loadBootstrapCache();
   const items = boot?.menuItems ?? [];
   const categories = boot?.categories ?? [];
+  const itemMap = new Map<string, { categoryId: string; name: string }>();
+  const nameMap = new Map<string, { categoryId: string; name: string }>();
+  const normalizedNameMap = new Map<string, { categoryId: string; name: string }>();
+  for (const m of items) {
+    if (!itemMap.has(m.id)) itemMap.set(m.id, { categoryId: m.categoryId, name: m.name });
+    if (!nameMap.has(m.name)) nameMap.set(m.name, { categoryId: m.categoryId, name: m.name });
+    const key = normalizeMenuName(m.name);
+    if (key && !normalizedNameMap.has(key)) normalizedNameMap.set(key, { categoryId: m.categoryId, name: m.name });
+  }
   return {
-    itemMap: new Map(items.map((m) => [m.id, { categoryId: m.categoryId, name: m.name }])),
+    itemMap,
     categoryMap: new Map(categories.map((c) => [c.id, c.name])),
+    nameMap,
+    normalizedNameMap,
+    boot: {
+      storeId: boot?.storeId ?? "",
+      storeName: boot?.storeName ?? "",
+      menuItemCount: items.length,
+      categoryCount: categories.length,
+      lastUpdatedAt: boot?.lastUpdatedAt ?? "",
+      sampleMenuItemIds: items.slice(0, 5).map((m) => m.id),
+      sampleCategoryIds: categories.slice(0, 5).map((c) => c.id),
+    },
   };
+}
+
+/** 菜名正規化：去掉所有空白 + 轉小寫。只用作 fallback 配對。 */
+function normalizeMenuName(value: string): string {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
+/** 按 menuItemId → name → normalized name 嘅順序，喺 bootstrap 搵對應嘅 MenuItem。
+ *  用嚟處理 Ledger 明細帶冇前綴 product id、但本地 bootstrap 用 `ledger-` 前綴 id 嘅情況。 */
+function resolveMenuMetaItem(
+  menuItemId: string,
+  itemName: string,
+  meta: MenuMeta,
+): { categoryId: string; name: string; matchedBy: "id" | "name" | "normalized" | null } {
+  const byId = meta.itemMap.get(menuItemId);
+  if (byId) return { ...byId, matchedBy: "id" };
+  const byName = meta.nameMap.get(itemName);
+  if (byName) return { ...byName, matchedBy: "name" };
+  const key = normalizeMenuName(itemName);
+  const byNorm = key ? meta.normalizedNameMap.get(key) : undefined;
+  if (byNorm) return { ...byNorm, matchedBy: "normalized" };
+  return { categoryId: "", name: "", matchedBy: null };
 }
 
 /** 判斷訂單是否應計入銷售統計（菜品 / 營業額 / 桌台 / 尖峰時段）。
@@ -338,21 +396,24 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, menuMeta?: MenuMet
       }
       totalSoldQty += it.quantity;
 
-      // 按「大類」聚合：用 menuItemId 對照 bootstrap 菜單嘅 categoryId。
-      // 對照唔到（舊店菜品／legacy 資料）→ fallback 用原菜品名，key 用 menuItemId，
-      // 令用戶可以一眼見到「呢啲菜唔喺當前菜單」。
-      const menuItem = meta.itemMap.get(it.menuItemId);
-      const categoryId = menuItem?.categoryId ?? it.menuItemId;
-      const categoryName = menuItem ? meta.categoryMap.get(menuItem.categoryId) : undefined;
+      // 按「大類」聚合：用 menuItemId → name → normalized name 對照 bootstrap 菜單。
+      // 對照唔到（舊店菜品／legacy 資料／未匯入 Ledger 餐牌）→ fallback 用原菜品名，
+      // key 用 menuItemId，令用戶可以一眼見到「呢啲菜唔喺當前菜單」。
+      const resolved = resolveMenuMetaItem(it.menuItemId, it.name, meta);
+      const categoryId = resolved.categoryId || it.menuItemId;
+      const categoryName = resolved.categoryId ? meta.categoryMap.get(resolved.categoryId) : undefined;
       const displayName = categoryName ?? it.name;
+      const unmatched = resolved.matchedBy === null;
 
       const d =
         dishMap.get(categoryId) ??
-        { categoryId, name: displayName, offlineQty: 0, onlineQty: 0, revenue: 0, samples: [] };
+        { categoryId, name: displayName, offlineQty: 0, onlineQty: 0, revenue: 0, samples: [], unmatched };
       d.revenue += it.price * it.quantity;
       if (isOnline) d.onlineQty += it.quantity;
       else d.offlineQty += it.quantity;
       if (d.samples.length < 3 && !d.samples.includes(it.name)) d.samples.push(it.name);
+      // 只要任一樣本未匹配，整個大類就標為未匹配
+      if (unmatched) d.unmatched = true;
       dishMap.set(categoryId, d);
     }
   }
@@ -566,6 +627,18 @@ export function RestaurantDailyReport() {
     storageOrdersByStore: Record<string, number>;
     /** localStorage 內 macau-pos/orders legacy unscoped key 嘅單數。 */
     legacyOrdersCount: number;
+    /** 當前 bootstrap cache 摘要（用嚟排查「未匹配當前菜單」係因為冇匯入 Ledger 餐牌定 ID 唔對）。 */
+    bootstrapSummary: {
+      storeId: string;
+      storeName: string;
+      menuItemCount: number;
+      categoryCount: number;
+      lastUpdatedAt: string;
+      sampleMenuItemIds: string[];
+      sampleCategoryIds: string[];
+    };
+    /** 菜品配對方式統計：id / name / normalized / unmatched。 */
+    dishMatchBreakdown: Record<string, number>;
   }>({
     status: "idle",
     merchantId,
@@ -588,6 +661,16 @@ export function RestaurantDailyReport() {
     unmatchedCategoryCount: 0,
     storageOrdersByStore: {},
     legacyOrdersCount: 0,
+    bootstrapSummary: {
+      storeId: "",
+      storeName: "",
+      menuItemCount: 0,
+      categoryCount: 0,
+      lastUpdatedAt: "",
+      sampleMenuItemIds: [],
+      sampleCategoryIds: [],
+    },
+    dishMatchBreakdown: {},
   });
 
   useEffect(() => {
@@ -690,9 +773,7 @@ export function RestaurantDailyReport() {
           foreignStoreCount += 1;
         }
       }
-      const counted = final.filter(
-        (o) => o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded",
-      );
+      const counted = final.filter((o) => isSaleCountable(o));
       const matchedCurrentRange = counted.filter((o) => orderMatchesReportRange(o, range)).length;
       const matchedYesterday = counted.filter((o) => orderMatchesReportRange(o, "yesterday")).length;
       const sampleDates = final.slice(0, 5).map((o) => `${o.status} | createdAt=${o.createdAt} | updatedAt=${o.updatedAt} | total=${o.total} | storeId=${o.storeId ?? "(null)"}`);
@@ -702,13 +783,19 @@ export function RestaurantDailyReport() {
       const meta = buildMenuMeta();
       const matchedCategorySet = new Set<string>();
       const unmatchedCategorySet = new Set<string>();
+      const dishMatchBreakdown: Record<string, number> = {};
       for (const o of final) {
         for (const it of o.items) {
           if (it.voided) continue;
-          const mi = meta.itemMap.get(it.menuItemId);
-          const cid = mi?.categoryId ?? it.menuItemId;
-          if (meta.categoryMap.has(cid)) matchedCategorySet.add(cid);
-          else unmatchedCategorySet.add(cid);
+          const resolved = resolveMenuMetaItem(it.menuItemId, it.name, meta);
+          const cid = resolved.categoryId || it.menuItemId;
+          if (resolved.matchedBy) {
+            matchedCategorySet.add(cid);
+            dishMatchBreakdown[resolved.matchedBy] = (dishMatchBreakdown[resolved.matchedBy] ?? 0) + 1;
+          } else {
+            unmatchedCategorySet.add(cid);
+            dishMatchBreakdown.unmatched = (dishMatchBreakdown.unmatched ?? 0) + 1;
+          }
         }
       }
       const matchedCategoryCount = matchedCategorySet.size;
@@ -740,6 +827,8 @@ export function RestaurantDailyReport() {
         unmatchedCategoryCount,
         storageOrdersByStore,
         legacyOrdersCount,
+        bootstrapSummary: meta.boot,
+        dishMatchBreakdown,
       });
     }
     void backfillOrders();
@@ -1341,6 +1430,38 @@ export function RestaurantDailyReport() {
                     </span>
                   </div>
                 </div>
+                {/* 菜單匹配診斷：顯示 bootstrap cache 狀態同逐條 item 嘅配對方式。 */}
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">bootstrap cache 菜單摘要</span>
+                    <span className="break-all font-mono text-slate-700">
+                      {debugInfo.bootstrapSummary.menuItemCount > 0
+                        ? `${debugInfo.bootstrapSummary.storeName}（${debugInfo.bootstrapSummary.storeId}）· ${debugInfo.bootstrapSummary.menuItemCount} 個菜品 · ${debugInfo.bootstrapSummary.categoryCount} 個分類 · 更新於 ${debugInfo.bootstrapSummary.lastUpdatedAt || "?"}`
+                        : "(無 bootstrap cache 或 menuItems 為空)"}
+                    </span>
+                    {debugInfo.bootstrapSummary.sampleMenuItemIds.length > 0 ? (
+                      <div className="mt-1 text-[10px] text-slate-500">
+                        菜品 ID 樣本：{debugInfo.bootstrapSummary.sampleMenuItemIds.join(", ")}
+                      </div>
+                    ) : null}
+                    {debugInfo.bootstrapSummary.sampleCategoryIds.length > 0 ? (
+                      <div className="text-[10px] text-slate-500">
+                        分類 ID 樣本：{debugInfo.bootstrapSummary.sampleCategoryIds.join(", ")}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="rounded bg-slate-50 px-2 py-1">
+                    <span className="block text-slate-400">菜品配對方式統計</span>
+                    <span className="break-all font-mono text-slate-700">
+                      {Object.entries(debugInfo.dishMatchBreakdown)
+                        .map(([k, v]) => `${k}:${v}`)
+                        .join(", ") || "-"}
+                    </span>
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      id=ID直接命中 · name=菜名命中 · normalized=正規化菜名命中 · unmatched=完全無法對照
+                    </div>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                   <div className="rounded bg-slate-50 px-2 py-1">
                     <span className="block text-slate-400">
@@ -1516,17 +1637,22 @@ export function RestaurantDailyReport() {
                   <Empty />
                 ) : (
                   <div className="grid gap-1">
+                    {agg.dishes.some((d) => d.unmatched) ? (
+                      <div className="mb-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                        部分菜品無法對應當前菜單大類（可能未匯入 Ledger 餐牌或菜單已更新）。
+                        請到「菜單管理」同步 Ledger 餐牌，或展開上方「診斷面板」查看詳情。
+                      </div>
+                    ) : null}
                     {agg.dishes.slice(0, 8).map((d) => {
                       const total = d.offlineQty + d.onlineQty;
                       const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
-                      const isMatched = menuMeta.categoryMap.has(d.categoryId);
                       return (
                         <div key={d.categoryId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <span className="truncate">{d.name}</span>
                               <ChannelChip kind={ch} />
-                              {!isMatched ? (
+                              {d.unmatched ? (
                                 <span className="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
                                   未匹配當前菜單
                                 </span>
