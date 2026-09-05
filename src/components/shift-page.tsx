@@ -37,11 +37,29 @@ function summarizeClosedOrders(orders: PosOrder[]) {
   const refunded = closedOrders.filter(
     (order) => order.status === "partially_refunded" || order.status === "refunded",
   );
-  const paymentBreakdown = closedOrders.reduce<Record<string, number>>((acc, order) => {
-    const key = order.paymentMethod ?? "未記錄";
-    acc[key] = (acc[key] ?? 0) + order.total;
-    return acc;
-  }, {});
+  // 計算每筆訂單的「應收」(菜品原價合計 + 服務費 + 稅) 與「實收」(order.total)。
+  // - 應收 = Σ item.price × item.quantity + order.serviceChargeAmount + order.taxAmount
+  //   （item.price = 落單時嘅 base price，未套單品 discountRate）
+  // - 實收 = order.total（已扣全單 discount + 抹零 後商家實際收嘅）
+  let receivableTotal = 0;
+  let paidTotal = 0;
+  const paymentBreakdown = closedOrders.reduce<Record<string, { receivable: number; paid: number; count: number }>>(
+    (acc, order) => {
+      const itemsGross = order.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      const orderReceivable =
+        itemsGross + (order.serviceChargeAmount ?? 0) + (order.taxAmount ?? 0);
+      receivableTotal += orderReceivable;
+      paidTotal += order.total;
+      const key = order.paymentMethod ?? "未記錄";
+      const bucket = acc[key] ?? { receivable: 0, paid: 0, count: 0 };
+      bucket.receivable += orderReceivable;
+      bucket.paid += order.total;
+      bucket.count += 1;
+      acc[key] = bucket;
+      return acc;
+    },
+    {},
+  );
   return {
     count: closedOrders.length,
     revenue: closedOrders.reduce((sum, order) => sum + order.total, 0),
@@ -49,6 +67,8 @@ function summarizeClosedOrders(orders: PosOrder[]) {
     refundCount: refunded.length,
     refundAmount: refunded.reduce((sum, order) => sum + (order.refundedAmount ?? order.total), 0),
     paymentBreakdown,
+    receivableTotal,
+    paidTotal,
   };
 }
 
@@ -153,7 +173,7 @@ export function ShiftPage() {
     const cashKeys = ["現金", "會員餘額 + 現金", "優惠券 + 現金"];
     return Object.entries(summary.paymentBreakdown)
       .filter(([key]) => cashKeys.some((cashKey) => key.includes(cashKey)))
-      .reduce((sum, [, value]) => sum + value, 0);
+      .reduce((sum, [, value]) => sum + (value?.paid ?? 0), 0);
   }, [summary.paymentBreakdown]);
   const actualCashValue = Number(actualCash);
   const cashDifference = Number.isFinite(actualCashValue) ? actualCashValue - expectedCash : 0;
@@ -179,11 +199,14 @@ export function ShiftPage() {
   );
 
   function buildShiftPrintLines(row: (typeof shiftHistory)[number]) {
-    return [
+    const lines = [
       `交班時間：${formatMacauDateTime(row.closedAt)}`,
       row.openedAt ? `開工時間：${formatMacauDateTime(row.openedAt)}` : "",
       `已結帳訂單：${row.settledCount} 張`,
       `營業額：${formatMoney(row.revenue)}`,
+      `應收金額合計（線下 POS）：${formatMoney(row.receivableTotal ?? 0)}`,
+      `實收金額合計（線下 POS）：${formatMoney(row.paidTotal ?? 0)}`,
+      `線上線下合計：${formatMoney((row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0))}`,
       `線上已支付：${formatMoney(row.prepaid)}`,
       `退款：${row.refundCount} 張 / ${formatMoney(row.refundAmount)}`,
       ...purchaseLines(),
@@ -193,7 +216,25 @@ export function ShiftPage() {
       `待同步事件：${row.pendingEvents}` + (row.failedEvents ? ` · 永久失敗 ${row.failedEvents}` : ""),
       `待補傳打印：${row.pendingPrints}`,
       row.closingNote ? `備註：${row.closingNote}` : "",
-    ].filter(Boolean);
+    ];
+    // 支付方式分項（每行寫「支付方式 應收 / 實收 / N 張」）。兼容舊版 value = number 嘅交班記錄。
+    if (row.paymentBreakdown && Object.keys(row.paymentBreakdown).length > 0) {
+      lines.push("— 支付方式分項 —");
+      Object.entries(row.paymentBreakdown)
+        .map(([method, value]) => ({
+          method,
+          receivable: typeof value === "number" ? value : value.receivable,
+          paid: typeof value === "number" ? value : value.paid,
+          count: typeof value === "number" ? 1 : value.count,
+        }))
+        .sort((a, b) => b.paid - a.paid)
+        .forEach((bucket) => {
+          lines.push(
+            `${bucket.method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
+          );
+        });
+    }
+    return lines.filter(Boolean);
   }
 
   function purchaseLines(): string[] {
@@ -328,6 +369,12 @@ export function ShiftPage() {
       cashDifference: Number.isFinite(actualCashValue) ? cashDifference : undefined,
       settledCount: summary.count,
       revenue: summary.revenue,
+      /** 線下 POS 應收金額合計（菜品原價合計 + 服務費 + 稅）。 */
+      receivableTotal: summary.receivableTotal,
+      /** 線下 POS 實收金額合計（order.total 合計）。 */
+      paidTotal: summary.paidTotal,
+      /** 線上 Ledger 實收金額（orderPaidMop）。線上應收暫時未拉 listMerchantOrders，留 null。 */
+      onlinePaidMop: ledgerToday?.orderPaidMop ?? 0,
       prepaid: summary.prepaid,
       refundCount: summary.refundCount,
       refundAmount: summary.refundAmount,
@@ -353,6 +400,8 @@ export function ShiftPage() {
       "— 店內（今日）—",
       `已結帳訂單：${summary.count} 張`,
       `營業額：${formatMoney(summary.revenue)}`,
+      `應收金額合計（線下 POS）：${formatMoney(summary.receivableTotal)}`,
+      `實收金額合計（線下 POS）：${formatMoney(summary.paidTotal)}`,
       `線上已支付（店內單）：${formatMoney(summary.prepaid)}`,
       `退款：${summary.refundCount} 張 / ${formatMoney(summary.refundAmount)}`,
       ...(ledgerToday
@@ -362,8 +411,18 @@ export function ShiftPage() {
             `已付線上營業額：${formatMoney(ledgerToday.orderPaidMop)}`,
             `餘額扣點：${formatMoney(ledgerToday.orderBalancePaidMop)}`,
             `到店／貨到付款：${formatMoney(ledgerToday.orderInStorePaidMop)}`,
+            `線上線下合計（實收金額合計）：${formatMoney(summary.paidTotal + ledgerToday.orderPaidMop)}`,
           ]
         : []),
+      "— 支付方式分項（線下 POS）—",
+      ...(Object.entries(summary.paymentBreakdown).length === 0
+        ? ["（今日暫無已結帳線下訂單）"]
+        : Object.entries(summary.paymentBreakdown)
+            .sort(([, a], [, b]) => b.paid - a.paid)
+            .map(
+              ([method, bucket]) =>
+                `${method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
+            )),
       ...purchaseLines(),
       `應收現金：${formatMoney(expectedCash)}`,
       Number.isFinite(actualCashValue) ? `實收現金：${formatMoney(actualCashValue)}` : "",
@@ -447,12 +506,16 @@ export function ShiftPage() {
       return;
     }
     const rows = [
-      ["交班時間", "員工", "營業額", "退款金額", "應收現金", "實收現金", "現金差額", "待同步事件", "待補傳打印", "備註"].join(","),
+      ["交班時間", "員工", "營業額", "應收金額合計", "實收金額合計", "線上已付", "線上線下合計", "退款金額", "應收現金", "實收現金", "現金差額", "待同步事件", "待補傳打印", "備註"].join(","),
       ...filteredShiftHistory.map((row) =>
         [
           formatMacauDateTime(row.closedAt),
           row.employeeName ?? row.employeeAccount ?? "未記錄",
           row.revenue,
+          row.receivableTotal ?? "",
+          row.paidTotal ?? "",
+          row.onlinePaidMop ?? "",
+          (row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0),
           row.refundAmount,
           row.expectedCash,
           row.actualCash ?? "",
@@ -491,6 +554,10 @@ export function ShiftPage() {
             <th>交班時間</th>
             <th>員工</th>
             <th>營業額</th>
+            <th>應收金額合計</th>
+            <th>實收金額合計</th>
+            <th>線上已付</th>
+            <th>線上線下合計</th>
             <th>退款金額</th>
             <th>應收現金</th>
             <th>實收現金</th>
@@ -508,6 +575,10 @@ export function ShiftPage() {
                   <td>${formatMacauDateTime(row.closedAt)}</td>
                   <td>${row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
                   <td>${row.revenue}</td>
+                  <td>${row.receivableTotal ?? ""}</td>
+                  <td>${row.paidTotal ?? ""}</td>
+                  <td>${row.onlinePaidMop ?? ""}</td>
+                  <td>${(row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0)}</td>
                   <td>${row.refundAmount}</td>
                   <td>${row.expectedCash}</td>
                   <td>${row.actualCash ?? ""}</td>
@@ -668,18 +739,73 @@ export function ShiftPage() {
                 ) : null}
               </article>
             </div>
+
+            {/* 金額合計（線上 + 線下）：應收金額合計 / 實收金額合計 / 線上線下合計 */}
+            <div className="mt-4">
+              <div className="text-sm font-semibold text-slate-700">金額合計（線上 + 線下）</div>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
+                  <div className="text-sm text-indigo-700">應收金額合計</div>
+                  <div className="mt-2 text-2xl font-semibold text-indigo-700">
+                    {formatMoney(summary.receivableTotal)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    線下 POS 原價合計 + 服務費 + 稅（線上 Ledger 應收暫以 paid 計）
+                  </div>
+                </article>
+                <article className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
+                  <div className="text-sm text-emerald-700">實收金額合計</div>
+                  <div className="mt-2 text-2xl font-semibold text-emerald-700">
+                    {formatMoney(summary.paidTotal)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">線下 POS：菜品優惠後商家實際收到 = order.total</div>
+                </article>
+                <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
+                  <div className="text-sm text-orange-700">線上線下合計（實收）</div>
+                  <div className="mt-2 text-2xl font-semibold text-orange-700">
+                    {formatMoney(summary.paidTotal + (ledgerToday?.orderPaidMop ?? 0))}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    線下 {formatMoney(summary.paidTotal)} + 線上 {formatMoney(ledgerToday?.orderPaidMop ?? 0)}
+                  </div>
+                </article>
+              </div>
+            </div>
+
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">店內支付方式拆分</div>
+              <div className="text-sm font-semibold text-slate-900">店內支付方式拆分（線下 POS）</div>
               <div className="mt-3 grid gap-2">
                 {Object.keys(summary.paymentBreakdown).length === 0 ? (
                   <div className="text-sm text-slate-500">今天暫未有已結帳店內訂單。</div>
                 ) : (
-                  Object.entries(summary.paymentBreakdown).map(([method, amount]) => (
-                    <div key={method} className="flex items-center justify-between text-sm text-slate-700">
-                      <span>{method}</span>
-                      <span className="font-semibold text-slate-900">{formatMoney(amount)}</span>
-                    </div>
-                  ))
+                  <div className="overflow-auto rounded-xl border border-slate-200 bg-white">
+                    <table className="w-full border-collapse text-sm">
+                      <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
+                        <tr>
+                          <th className="border-b border-slate-200 px-3 py-1.5">支付方式</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">張數</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">應收</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">實收</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(summary.paymentBreakdown)
+                          .sort(([, a], [, b]) => b.paid - a.paid)
+                          .map(([method, bucket]) => (
+                            <tr key={method} className="border-b border-slate-100 last:border-b-0">
+                              <td className="px-3 py-1.5 font-semibold text-slate-900">{method}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-700">{bucket.count}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-700">
+                                {formatMoney(bucket.receivable)}
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-semibold text-emerald-700">
+                                {formatMoney(bucket.paid)}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>
@@ -772,6 +898,9 @@ export function ShiftPage() {
                     <th className="border-b border-slate-200 px-3 py-2">交班時間</th>
                     <th className="border-b border-slate-200 px-3 py-2">員工</th>
                     <th className="border-b border-slate-200 px-3 py-2">營業額</th>
+                    <th className="border-b border-slate-200 px-3 py-2">應收金額合計</th>
+                    <th className="border-b border-slate-200 px-3 py-2">實收金額合計</th>
+                    <th className="border-b border-slate-200 px-3 py-2">線上線下合計</th>
                     <th className="border-b border-slate-200 px-3 py-2">退款</th>
                     <th className="border-b border-slate-200 px-3 py-2">應收/實收現金</th>
                     <th className="border-b border-slate-200 px-3 py-2">差額</th>
@@ -783,7 +912,7 @@ export function ShiftPage() {
                 <tbody>
                   {filteredShiftHistory.length === 0 ? (
                     <tr>
-                      <td className="px-3 py-4 text-slate-500" colSpan={9}>
+                      <td className="px-3 py-4 text-slate-500" colSpan={12}>
                         目前沒有符合條件的交班歷史。
                       </td>
                     </tr>
@@ -793,6 +922,19 @@ export function ShiftPage() {
                         <td className="px-3 py-3 text-slate-700">{formatMacauDateTime(row.closedAt)}</td>
                         <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
                         <td className="px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
+                        <td className="px-3 py-3 text-slate-700">
+                          {typeof row.receivableTotal === "number" ? formatMoney(row.receivableTotal) : "--"}
+                        </td>
+                        <td className="px-3 py-3 font-semibold text-emerald-700">
+                          {typeof row.paidTotal === "number" ? formatMoney(row.paidTotal) : "--"}
+                        </td>
+                        <td className="px-3 py-3 font-semibold text-orange-700">
+                          {typeof row.paidTotal === "number"
+                            ? formatMoney(row.paidTotal + (row.onlinePaidMop ?? 0))
+                            : typeof row.onlinePaidMop === "number"
+                              ? formatMoney(row.onlinePaidMop)
+                              : "--"}
+                        </td>
                         <td className="px-3 py-3 text-slate-700">
                           {row.refundCount} / {formatMoney(row.refundAmount)}
                         </td>

@@ -10,6 +10,7 @@ import {
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { getOrderDetail, listMerchantOrders, type LedgerOrderDetailItem } from "@/lib/ledger/orders";
 import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
+import { paymentModeLabel } from "@/lib/ledger/order-mapper";
 import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stats";
 import {
   loadAuthSession,
@@ -219,7 +220,31 @@ interface Agg {
   dineInServing: DineInServingBreakdown;
   /** 外賣 / 快餐時長：下單 → 送廚 → 出餐 → 完成 → 整體 */
   quickServing: QuickServingBreakdown;
+  /**
+   * 應收金額合計：菜品未優惠前的原價金額（= Σ item.price × quantity + serviceCharge + tax）。
+   * 注意：item.price = 落單時嘅 base price（未套單品 discountRate）；serviceChargeAmount / taxAmount
+   * 直接由 order 拎。對於純 Ledger 線上單冇本地 OrderItem，會由 subtotalBeforeDiscount 補上。
+   */
+  receivableTotal: number;
+  /**
+   * 實收金額合計：菜品優惠後商家實際收到的金額（= order.total）。對於 Ledger 線上單
+   * 即 paidAmount / total。
+   */
+  paidTotal: number;
+  /**
+   * 支付方式分項：key = 已中文化的支付方式名（POS 用 order.paymentMethod、Ledger 用 paymentModeLabel）。
+   * value = { receivable, paid, count }。
+   */
+  paymentBreakdown: PaymentBreakdown;
 }
+
+/** 一行支付方式統計：應收 / 實收 / 訂單數。 */
+interface PaymentMethodBucket {
+  receivable: number;
+  paid: number;
+  count: number;
+}
+type PaymentBreakdown = Record<string, PaymentMethodBucket>;
 
 interface MenuMeta {
   /** menuItemId → MenuItem */
@@ -368,10 +393,13 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
   let onlineRevenue = 0;
   let offlineRevenue = 0;
   let totalSoldQty = 0;
+  let receivableTotal = 0;
+  let paidTotal = 0;
 
   const dishMap = new Map<string, DishRow>();
   const tableMap = new Map<string, TableRow>();
   const byHour = new Array<number>(24).fill(0);
+  const paymentBreakdown: PaymentBreakdown = {};
 
   for (const o of inRange) {
     revenue += o.total;
@@ -380,6 +408,24 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
     const isOnline = !!o.onlineOrderId;
     if (isOnline) onlineRevenue += o.total;
     else offlineRevenue += o.total;
+
+    // 應收 = Σ(item.price × quantity) + serviceCharge + tax
+    //  - item.price = 落單時嘅 base price（未套單品 discountRate），已包含 voided 菜品的原價
+    //  - 服務費 + 稅都按未優惠前嘅 subtotal 計，所以原價合計 + service + tax = 「原價金額」
+    // 實收 = o.total（已扣全單 discount + 抹零 + 服務費 + 稅 後商家實際收嘅）
+    const itemsGross = o.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+    const orderReceivable =
+      itemsGross + (o.serviceChargeAmount ?? 0) + (o.taxAmount ?? 0);
+    receivableTotal += orderReceivable;
+    paidTotal += o.total;
+
+    // 支付方式分項（線上單可能嘅 paymentMethod 為 "線上" / 自訂字串，保留原樣）
+    const method = o.paymentMethod ?? "未記錄";
+    const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
+    bucket.receivable += orderReceivable;
+    bucket.paid += o.total;
+    bucket.count += 1;
+    paymentBreakdown[method] = bucket;
 
     byHour[macauHour(o.createdAt)] += 1;
 
@@ -415,7 +461,24 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
   // Ledger 純線上單菜品明細（get_order_detail 攞返嚟，可能從未入 POS DB）：
   // 以「線上」渠道併入菜品銷售排行。聚合 key 同 POS 快照一致（menuItemId|名稱），
   // 名稱用 Ledger 明細快照，唔強制對應當前餐牌。
-  for (const { items } of onlineWithItems ?? []) {
+  for (const { order: onlineOrder, items } of onlineWithItems ?? []) {
+    // 同一張單只入帳一次（合併應收／實收／支付方式分項）
+    const orderPaid = Number(onlineOrder.total ?? onlineOrder.paidAmount ?? 0);
+    const orderReceivable = Number(
+      onlineOrder.subtotalBeforeDiscount ?? onlineOrder.total + (onlineOrder.discountAmount ?? 0),
+    );
+    // 應收 fallback：若 subtotalBeforeDiscount 同 discountAmount 都冇，就退而用 paid
+    const safeReceivable = Number.isFinite(orderReceivable) && orderReceivable > 0 ? orderReceivable : orderPaid;
+    receivableTotal += safeReceivable;
+    paidTotal += orderPaid;
+    // 支付方式：Ledger 用 paymentModeLabel 翻譯 paymentMode（balance → 餘額扣點、in_store → 到店付款）
+    const method = paymentModeLabel(onlineOrder.paymentMode) || "線上單";
+    const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
+    bucket.receivable += safeReceivable;
+    bucket.paid += orderPaid;
+    bucket.count += 1;
+    paymentBreakdown[method] = bucket;
+
     for (const it of items) {
       const name = it.name || "(未知菜品)";
       const qty = Math.max(0, Number(it.qty) || 0);
@@ -514,6 +577,9 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
     serving,
     dineInServing,
     quickServing,
+    receivableTotal,
+    paidTotal,
+    paymentBreakdown,
   };
 }
 
@@ -1490,236 +1556,12 @@ export function RestaurantDailyReport() {
               </div>
             ) : null}
 
-            {/* DevTools debug panel：協助排查「報表打開後冇內容」 */}
-            <div className="mb-3 rounded-xl border border-slate-200 bg-white shadow-sm">
-              <button
-                type="button"
-                onClick={() => setDebugOpen((v) => !v)}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <span>
-                  診斷面板（{debugInfo.status === "loading" ? "載入中" : debugInfo.status === "error" ? "異常" : "就緒"}）
-                </span>
-                <span className="text-slate-400">{debugOpen ? "▲" : "▼"}</span>
-              </button>
-              {debugOpen ? (
-                <div className="space-y-2 border-t border-slate-100 px-3 py-2 text-xs text-slate-600">
-                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">merchantId</span>
-                      <span className="font-mono font-medium break-all">{debugInfo.merchantId || "(未設定)"}</span>
-                    </div>
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">最後 HTTP 狀態</span>
-                      <span className="font-mono font-medium">{debugInfo.lastHttpStatus ?? "未發送"}</span>
-                    </div>
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">雲端拉回單數</span>
-                      <span className="font-mono font-medium">{debugInfo.fetchedCount}</span>
-                    </div>
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">最終顯示單數</span>
-                      <span className="font-mono font-medium">{debugInfo.finalCount}</span>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">本機 localStorage 單數</span>
-                      <span className="font-mono font-medium">{debugInfo.localCount}</span>
-                    </div>
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">耗時</span>
-                      <span className="font-mono font-medium">{debugInfo.durationMs ?? "-"} ms</span>
-                    </div>
-                    <div className="rounded bg-slate-50 px-2 py-1">
-                      <span className="block text-slate-400">payload.ok</span>
-                      <span className="font-mono font-medium">{String(debugInfo.lastPayloadOk)}</span>
-                    </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">最後錯誤</span>
-                    <span className="font-mono font-medium break-all text-red-600">{debugInfo.lastError || "無"}</span>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">狀態分佈</span>
-                    <span className="break-all font-mono font-medium">
-                      {Object.entries(debugInfo.statusBreakdown)
-                        .map(([k, v]) => `${k}:${v}`)
-                        .join(", ") || "-"}
-                    </span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">可計入營業單數</span>
-                    <span className="font-mono font-medium">{debugInfo.countedStatus}</span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">匹配當前範圍</span>
-                    <span className="font-mono font-medium">
-                      {debugInfo.matchedCurrentRange} / {debugInfo.countedStatus}
-                    </span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">匹配昨天範圍</span>
-                    <span className="font-mono font-medium">{debugInfo.matchedYesterday}</span>
-                  </div>
-                </div>
-                {/* 60000003 等舊分店殘留診斷：列示本批訂單內各 storeId 嘅分佈 + localStorage 內
-                    各分店 orders key 嘅單數。命中 storeId 唔等於當前 merchantId =「外店污染」。 */}
-                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">訂單 storeId 分佈</span>
-                    <span className="break-all font-mono font-medium">
-                      {Object.entries(debugInfo.storeIdBreakdown)
-                        .map(([k, v]) => `${k}:${v}`)
-                        .join(", ") || "-"}
-                    </span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">外店單數（storeId ≠ 當前）</span>
-                    <span
-                      className={`font-mono font-medium ${
-                        debugInfo.foreignStoreCount > 0 ? "text-rose-600" : "text-slate-700"
-                      }`}
-                    >
-                      {debugInfo.foreignStoreCount}
-                    </span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">菜品大類命中當前菜單</span>
-                    <span className="font-mono font-medium">
-                      {debugInfo.matchedCategoryCount} /{" "}
-                      {debugInfo.matchedCategoryCount + debugInfo.unmatchedCategoryCount}
-                    </span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">未命中當前菜單嘅類別數</span>
-                    <span
-                      className={`font-mono font-medium ${
-                        debugInfo.unmatchedCategoryCount > 0 ? "text-rose-600" : "text-slate-700"
-                      }`}
-                    >
-                      {debugInfo.unmatchedCategoryCount}
-                    </span>
-                  </div>
-                </div>
-                {/* 菜單匹配診斷：顯示 bootstrap cache 狀態同逐條 item 嘅配對方式。 */}
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">bootstrap cache 菜單摘要</span>
-                    <span className="break-all font-mono text-slate-700">
-                      {debugInfo.bootstrapSummary.menuItemCount > 0
-                        ? `${debugInfo.bootstrapSummary.storeName}（${debugInfo.bootstrapSummary.storeId}）· ${debugInfo.bootstrapSummary.menuItemCount} 個菜品 · ${debugInfo.bootstrapSummary.categoryCount} 個分類 · 更新於 ${debugInfo.bootstrapSummary.lastUpdatedAt || "?"}`
-                        : "(無 bootstrap cache 或 menuItems 為空)"}
-                    </span>
-                    {debugInfo.bootstrapSummary.sampleMenuItemIds.length > 0 ? (
-                      <div className="mt-1 text-[10px] text-slate-500">
-                        菜品 ID 樣本：{debugInfo.bootstrapSummary.sampleMenuItemIds.join(", ")}
-                      </div>
-                    ) : null}
-                    {debugInfo.bootstrapSummary.sampleMenuItemNames.length > 0 ? (
-                      <div className="text-[10px] text-slate-500">
-                        當前餐牌菜品名（前 12）：{debugInfo.bootstrapSummary.sampleMenuItemNames.join("、")}
-                      </div>
-                    ) : null}
-                    {debugInfo.bootstrapSummary.sampleCategoryIds.length > 0 ? (
-                      <div className="text-[10px] text-slate-500">
-                        分類 ID 樣本：{debugInfo.bootstrapSummary.sampleCategoryIds.join(", ")}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">菜品配對方式統計</span>
-                    <span className="break-all font-mono text-slate-700">
-                      {Object.entries(debugInfo.dishMatchBreakdown)
-                        .map(([k, v]) => `${k}:${v}`)
-                        .join(", ") || "-"}
-                    </span>
-                    <div className="mt-1 text-[10px] text-slate-500">
-                      id=ID直接命中 · name=菜名命中 · normalized=正規化菜名命中 · unmatched=完全無法對照
-                    </div>
-                    {Object.keys(debugInfo.unmatchedItemNames).length > 0 ? (
-                      <div className="mt-1 text-[10px] text-rose-600">
-                        未匹配菜品（名稱 × 數量）：
-                        {Object.entries(debugInfo.unmatchedItemNames)
-                          .map(([k, v]) => `${k}×${v}`)
-                          .join("、")}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">
-                      localStorage 各分店 orders（macau-pos/stores/&#123;storeId&#125;/orders）
-                    </span>
-                    <span className="break-all font-mono text-slate-700">
-                      {Object.entries(debugInfo.storageOrdersByStore).length > 0
-                        ? Object.entries(debugInfo.storageOrdersByStore)
-                            .map(([k, v]) => `${k}: ${v}`)
-                            .join(", ")
-                        : "(無)"}
-                    </span>
-                  </div>
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">localStorage legacy（macau-pos/orders）</span>
-                    <span
-                      className={`break-all font-mono font-medium ${
-                        debugInfo.legacyOrdersCount > 0 ? "text-rose-600" : "text-slate-700"
-                      }`}
-                    >
-                      {debugInfo.legacyOrdersCount} 筆
-                    </span>
-                  </div>
-                </div>
-                {debugInfo.rangeStart && debugInfo.rangeEnd ? (
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">本次請求嘅澳門時間區間 [start, end]</span>
-                    <span className="break-all font-mono text-slate-700">
-                      {debugInfo.rangeStart} → {debugInfo.rangeEnd}
-                    </span>
-                  </div>
-                ) : null}
-                <div className="rounded bg-slate-50 px-2 py-1">
-                  <span className="block text-slate-400">最後請求 URL</span>
-                  <span className="break-all font-mono text-slate-700">{debugInfo.lastUrl || "尚未請求"}</span>
-                </div>
-                {debugInfo.sampleDates.length > 0 ? (
-                  <div className="rounded bg-slate-50 px-2 py-1">
-                    <span className="block text-slate-400">前 5 筆訂單樣本（status | createdAt | total）</span>
-                    <ul className="mt-1 list-inside list-disc font-mono text-slate-700">
-                      {debugInfo.sampleDates.map((d, i) => (
-                        <li key={i}>{d}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setBackfillSeq((n) => n + 1)}
-                      className="rounded bg-orange-500 px-2 py-1 text-xs font-semibold text-white hover:bg-orange-600"
-                    >
-                      重新拉取訂單
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        console.log("[report debug]", debugInfo);
-                        console.log("[report orders]", orders);
-                      }}
-                      className="rounded bg-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-300"
-                    >
-                      Console.log 狀態 + 訂單
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
+            {/* DevTools debug panel：暫時由 UI 隱藏 */}
+            {false}
 
             {/* 核心 KPI 帶 */}
             {dataReady ? (
-              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
+              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
                 <Kpi
                   label="營業額"
                   value={formatMoney(onlineOfflineSplit.totalRevenueMop)}
@@ -1753,13 +1595,25 @@ export function RestaurantDailyReport() {
                     ticketMopYest,
                   )}
                 />
-                <Kpi label="覆蓋人數" value={String(agg.covers)} delta={pct(agg.covers, aggYest?.covers ?? null)} />
+                <Kpi label="餘額總額" value={ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"} delta={null} />
                 <Kpi label="會員充值" value={formatMoney(ledger.sel?.topupMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null} subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`} />
                 <Kpi label="會員扣點" value={formatMoney(ledger.sel?.deductMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null} subtitle={`已付 ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`} />
+                <Kpi
+                  label="應收金額合計"
+                  value={formatMoney(agg.receivableTotal)}
+                  delta={null}
+                  subtitle={`原價合計 + 服務費 + 稅`}
+                />
+                <Kpi
+                  label="實收金額合計"
+                  value={formatMoney(agg.paidTotal)}
+                  delta={null}
+                  subtitle={`優惠後商家實際收到 = order.total`}
+                />
               </div>
             ) : (
-              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
-                {Array.from({ length: 7 }).map((_, i) => (
+              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
+                {Array.from({ length: 9 }).map((_, i) => (
                   <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="flex h-16 items-center justify-center">
                       <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
@@ -2008,6 +1862,72 @@ export function RestaurantDailyReport() {
                 </div>
               </Card>
             </div>
+
+            {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數 */}
+            <Card title="支付方式分項" tag="應收 = 原價合計 + 服務費 + 稅 · 實收 = order.total" loading={!dataReady}>
+              {Object.keys(agg.paymentBreakdown).length === 0 ? (
+                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+              ) : (
+                <div className="overflow-auto rounded-xl border border-slate-200">
+                  <table className="w-full border-collapse text-sm">
+                    <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
+                      <tr>
+                        <th className="border-b border-slate-200 px-3 py-2">支付方式</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">訂單數</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">應收金額合計</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">實收金額合計</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">折扣差額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(agg.paymentBreakdown)
+                        .sort(([, a], [, b]) => b.paid - a.paid)
+                        .map(([method, bucket]) => {
+                          const diff = bucket.receivable - bucket.paid;
+                          return (
+                            <tr key={method} className="border-b border-slate-100 last:border-b-0">
+                              <td className="px-3 py-2 font-semibold text-slate-900">{method}</td>
+                              <td className="px-3 py-2 text-right text-slate-700">{bucket.count}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-slate-900">
+                                {formatMoney(bucket.receivable)}
+                              </td>
+                              <td className="px-3 py-2 text-right font-semibold text-emerald-700">
+                                {formatMoney(bucket.paid)}
+                              </td>
+                              <td
+                                className={`px-3 py-2 text-right ${
+                                  diff > 0.01 ? "text-amber-700" : "text-slate-400"
+                                }`}
+                              >
+                                {diff > 0.01 ? `-${formatMoney(diff)}` : formatMoney(0)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {(() => {
+                        // 合計行
+                        const totalCount = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.count, 0);
+                        const totalReceivable = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.receivable, 0);
+                        const totalPaid = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.paid, 0);
+                        return (
+                          <tr className="bg-slate-50 text-sm font-semibold text-slate-900">
+                            <td className="px-3 py-2">合計</td>
+                            <td className="px-3 py-2 text-right">{totalCount}</td>
+                            <td className="px-3 py-2 text-right">{formatMoney(totalReceivable)}</td>
+                            <td className="px-3 py-2 text-right text-emerald-700">{formatMoney(totalPaid)}</td>
+                            <td className="px-3 py-2 text-right text-amber-700">
+                              {totalReceivable - totalPaid > 0.01
+                                ? `-${formatMoney(totalReceivable - totalPaid)}`
+                                : formatMoney(0)}
+                            </td>
+                          </tr>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
 
             {/* 模塊 7 + 模塊 8 */}
             <div className="mb-4 grid gap-4 md:grid-cols-2">

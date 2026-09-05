@@ -724,11 +724,18 @@ export type ShiftHistoryRecord = {
   cashDifference?: number;
   settledCount: number;
   revenue: number;
+  /** 線下 POS 應收金額合計（菜品原價合計 + 服務費 + 稅）。 */
+  receivableTotal?: number;
+  /** 線下 POS 實收金額合計（order.total 合計）。 */
+  paidTotal?: number;
+  /** 線上 Ledger 已付營業額（MOP），交班時由 ledgerToday.orderPaidMop 寫入。 */
+  onlinePaidMop?: number;
   prepaid: number;
   refundCount: number;
   refundAmount: number;
   expectedCash: number;
-  paymentBreakdown: Record<string, number>;
+  /** 支付方式分項：value = { receivable, paid, count }（舊記錄 value 可能係 number，已被向下兼容處理）。 */
+  paymentBreakdown: Record<string, number | { receivable: number; paid: number; count: number }>;
   pendingEvents: number;
   // 永久同步失敗（server 連續拒收 5 次）嘅 event 數。由 2026-09-03 起記錄。
   // 舊嘅交班記錄冇呢個欄（undefined），顯示時當 0 處理，所以開 optional。

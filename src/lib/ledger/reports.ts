@@ -35,6 +35,9 @@ export type LedgerReportSummary = {
   /** 區間內新增會員數。RPC 字段名多變：new_member_count / member_new_count / wallet_new_count。
    *  缺字段時 undefined，UI 唔 render。 */
   newMemberCount?: number;
+  /** 會員餘額總額（全店 wallets 餘額合計，÷100 = MOP）。RPC 字段名多變：balance_avos / total_balance_avos /
+   *  member_balance_avos / wallet_balance_avos / balance_total_avos。缺字段時 undefined，UI 顯示「—」。 */
+  balanceTotalMop?: number;
 };
 
 /** 一個 page load 只 dump 一次 RPC payload 嚟搵「筆數」等未對應欄位。避免 hot reload 重覆 dump。 */
@@ -120,6 +123,16 @@ export async function getMerchantReportSummary(range: ReportRangeKey): Promise<L
       "new_wallet_count",
       "members_new_count",
     ]),
+    balanceTotalMop: (() => {
+      const raw = pickAvosField(rawAvos, [
+        "balance_avos",
+        "total_balance_avos",
+        "member_balance_avos",
+        "wallet_balance_avos",
+        "balance_total_avos",
+      ]);
+      return raw != null ? avosToMop(raw) : undefined;
+    })(),
     rawAvos,
   };
 }

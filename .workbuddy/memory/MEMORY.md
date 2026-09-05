@@ -26,7 +26,7 @@
 - 報表頁用 `useReportMerchantId()` 訂閱 `pos-auth-changed` event，切店即時更新；listener 觸發 `setOrders([]) + setBackfillSeq++` 強制重跑 backfill。
 - 雙重保險：API `eq("store_id", storeId)` SQL 過濾 + 前端 `o.storeId === merchantId` 再核一次。
 - **讀取端嚴格隔離（2026-09-04）**：`loadOrders(merchantId)` / `loadBootstrapCache(merchantId)` 按 store scope 精確讀；`belongsToStore()` 現為 **strict** `o.storeId === merchantId`（undefined storeId 嘅 legacy row 寧願丟棄，唔可以顯示喺錯店）。初始 orders 設空，避免 hydration 讀錯 scope。
-- **載入門檻 `dataReady`**：POS 補載（`backfillDone`）+ Ledger 彙總（`ledgerDone`）都完成過先 `setDataReady(true)`；全部 section（`Card` 11 個 + KPI 帶 **7 格**（2026-09-05 由 6 升 7：加「會員扣點」）+ 模塊 9 自動化建議）套 `loading={!dataReady}` 顯示 `SectionSkeleton`（灰 block `animate-pulse` + 中間 `animate-spin` 轉圈）。切店 / 切帳號（`pos-auth-changed`）即時 `setDataReady(false)` 重置，避免閃現舊店資料。
+- **載入門檻 `dataReady`**：POS 補載（`backfillDone`）+ Ledger 彙總（`ledgerDone`）都完成過先 `setDataReady(true)`；全部 section（`Card` 11 個 + KPI 帶 **9 格**（2026-09-05 由 7 升 9：第 6 格「會員扣點」+ 第 8/9 格「應收金額合計」「實收金額合計」，grid 由 `xl:grid-cols-7` 改 `xl:grid-cols-9`）+ 模塊 9 自動化建議）套 `loading={!dataReady}` 顯示 `SectionSkeleton`（灰 block `animate-pulse` + 中間 `animate-spin` 轉圈）。切店 / 切帳號（`pos-auth-changed`）即時 `setDataReady(false)` 重置，避免閃現舊店資料。
 - **Ledger 欄位分類（2026-09-05 完整對齊）**：`getMerchantReportSummary` 返回 5 大類強型別欄位 ——
   - topup：`topupMop` (= paid + gift) / `topupPaidMop` / `topupGiftMop`，對應 Ledger UI「實際充值 / 贈送入帳」
   - deduct：`deductMop` (= paid + gift) / `deductPaidMop` / `deductGiftMop`，對應 Ledger UI「扣點」
