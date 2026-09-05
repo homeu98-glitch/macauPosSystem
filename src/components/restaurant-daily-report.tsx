@@ -1719,7 +1719,7 @@ export function RestaurantDailyReport() {
 
             {/* 核心 KPI 帶 */}
             {dataReady ? (
-              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
                 <Kpi
                   label="營業額"
                   value={formatMoney(onlineOfflineSplit.totalRevenueMop)}
@@ -1754,15 +1754,12 @@ export function RestaurantDailyReport() {
                   )}
                 />
                 <Kpi label="覆蓋人數" value={String(agg.covers)} delta={pct(agg.covers, aggYest?.covers ?? null)} />
-                <Kpi
-                  label="會員充值"
-                  value={formatMoney(ledger.sel?.topupMop ?? 0)}
-                  delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null}
-                />
+                <Kpi label="會員充值" value={formatMoney(ledger.sel?.topupMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null} subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`} />
+                <Kpi label="會員扣點" value={formatMoney(ledger.sel?.deductMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null} subtitle={`paid ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · gift ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`} />
               </div>
             ) : (
-              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-                {Array.from({ length: 6 }).map((_, i) => (
+              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
+                {Array.from({ length: 7 }).map((_, i) => (
                   <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="flex h-16 items-center justify-center">
                       <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
@@ -1953,6 +1950,13 @@ export function RestaurantDailyReport() {
                   </div>
                   <div className="text-xs text-slate-500">充值金額（{FILTERS.find((f) => f.key === range)?.label}）</div>
                 </div>
+                <div className="mt-1 grid gap-0.5 text-[11px] text-slate-500">
+                  <div>
+                    實際充值 <span className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupPaidMop ?? 0)}</span>
+                    {" · "}
+                    贈送入帳 <span className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupGiftMop ?? 0)}</span>
+                  </div>
+                </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {ledger.sel?.memberCount != null ? (
                     <Pill kind="amber">會員數 {ledger.sel.memberCount}</Pill>
@@ -1960,7 +1964,8 @@ export function RestaurantDailyReport() {
                     <Pill kind="amber">會員數 —（未連線）</Pill>
                   )}
                   <Pill kind="green">線上渠道佔比 {Math.round(onlineShare * 100)}%</Pill>
-                  <Pill kind="slate">會員餘額扣減 {formatMoney(ledger.sel?.orderBalancePaidMop ?? 0)}</Pill>
+                  <Pill kind="slate">會員扣點 {formatMoney(ledger.sel?.deductMop ?? 0)}</Pill>
+                  <Pill kind="slate">訂單餘額扣減 {formatMoney(ledger.sel?.orderBalancePaidMop ?? 0)}</Pill>
                 </div>
               </Card>
             </div>

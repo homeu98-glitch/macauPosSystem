@@ -29,6 +29,16 @@
 - **載入門檻 `dataReady`**：POS 補載（`backfillDone`）+ Ledger 彙總（`ledgerDone`）都完成過先 `setDataReady(true)`；全部 section（`Card` 11 個 + KPI 帶 6 格 + 模塊 9 自動化建議）套 `loading={!dataReady}` 顯示 `SectionSkeleton`（灰 block `animate-pulse` + 中間 `animate-spin` 轉圈）。切店 / 切帳號（`pos-auth-changed`）即時 `setDataReady(false)` 重置，避免閃現舊店資料。
 - **`60000003` 舊 demo 店（根因）**：`60000003` 係真實 merchant UUID（**唔係** hardcode、唔係 `macau-store-a`）。落單 `storeId` 來源 = Kiosk `binding.storeId`（localStorage `macau-pos-kiosk-device`）或掃碼 `?store=`；若呢啲被綁成 60000003，訂單就寫落 60000003（合法 merchant，寫入防護唔會擋）。讀取端已嚴格按 `store_id` 隔離，無「跨店串資料」bug；要修正寫入端就喺 A 店後台重新綁 Kiosk device（覆寫 `macau-pos-kiosk-device` 成 A 店 merchantId）／重新生成 `?store=<A店merchantId>` 掃碼 QR／確認 `loadAuthSession().merchantId` 係 A 店 UUID。
 
+## 執行環境判斷（原生殼 vs 純 website/PWA）
+
+- **判斷依據係原生殼注入嘅 bridge 標記，唔好用 userAgent sniff**：Android APK WebView → `window.PosNative.printJob`；PC Electron 殼 → `window.companionShell`（見 `pwa-install-button.tsx` 嘅 `isRunningInNativeShell()`）。
+- `src/lib/print-bridge/companion.ts` 三層 gate，由嚴到寬，**唔好混淆**：
+  - `shouldUseCompanionChannel()` = 淨原生殼（gate print dispatch 通道）。
+  - `shouldKeepCompanionAlive()` = 原生殼 OR `?companion=` 參數（gate 輪詢 / 健康檢查，純 website 零 `/api/health` 請求）。
+  - `shouldAutoDiscoverCompanion()` = 原生殼 OR localhost（gate 值唔值得探一次 loopback）。
+  - `shouldShowCompanionUi()`（2026-09-05 新增）= `shouldAutoDiscoverCompanion() || hasCompanionUrlParam()`，gate 「桌面 Companion 代理」卡嘅顯示；純 website / Vercel HTTPS / PWA standalone 一律 false → 成張卡隱藏。UI 要包埋 localhost（輪詢唔使），否則本機 dev 測唔到。
+- client component 讀 `window` 做環境判斷，一律用 mount-gated state（`useState<boolean|null>(null)` + `useEffect` 設值 + `if (!x) return null`），初始 null 保證 SSR HTML 同 client 首次 render 一致，否則 hydration mismatch。
+
 ## 開發注意事項
 
 - JSDoc 註解入面唔好直接寫 `macau-pos/stores/*/orders`，`*/` 會被 TypeScript parser 當成 comment 結尾導致後續 syntax errors；用 `macau-pos/stores/&#123;storeId&#125;/orders`（HTML entity）繞過。

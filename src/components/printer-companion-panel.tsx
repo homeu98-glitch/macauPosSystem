@@ -8,6 +8,7 @@ import {
   discoverCompanionLanPrinters,
   enumerateCompanionBluetoothDevices,
   enumerateCompanionUsbPrinters,
+  shouldShowCompanionUi,
   subscribeCompanionAvailability,
   testCompanionConnection,
   type PrinterCandidate,
@@ -56,6 +57,14 @@ export function CompanionStatusCard() {
   const [version, setVersion] = useState("");
   const [testing, setTesting] = useState(false);
 
+  // 環境門檻：純 website / PWA 永遠連唔到本機 loopback 代理，成張卡隱藏。
+  // 用 mount 後嘅 state（初始 null）而唔係直接讀 window —— 否則 SSR 出嚟嘅 HTML
+  // 同 client 第一次 render 唔一致，會 hydration mismatch。
+  const [envVisible, setEnvVisible] = useState<boolean | null>(null);
+  useEffect(() => {
+    setEnvVisible(shouldShowCompanionUi());
+  }, []);
+
   useEffect(() => {
     // 連線狀態由 `subscribeCompanionAvailability()` 統一提供（判斷邏輯喺
     // `src/lib/print-bridge/companion.ts` 嘅 `shouldKeepCompanionAlive()`，
@@ -103,6 +112,9 @@ export function CompanionStatusCard() {
       : status === "offline"
         ? "未連線（代理未啟動）"
         : "偵測中…";
+
+  // 未判定環境（SSR / 首次 render）或純 website / PWA：唔顯示呢張卡
+  if (!envVisible) return null;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">

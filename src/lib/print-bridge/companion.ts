@@ -155,6 +155,28 @@ export function shouldKeepCompanionAlive(): boolean {
   return shouldUseCompanionChannel() || hasCompanionUrlParam();
 }
 
+/**
+ * 應唔應該**顯示** Companion 相關 UI（「桌面 Companion 代理」狀態卡）？
+ *
+ * 桌面 Companion agent 住喺本機 loopback（127.0.0.1:9311），**只有**以下情況
+ * 先有可能連到，UI 出現先有意義：
+ *   ① 跑喺原生殼（PC Electron / Android APK WebView）→ `shouldUseCompanionChannel()`
+ *   ② 分頁由 Companion「一鍵開 POS」帶 `?companion=<url>` 開出嚟
+ *      （即使係系統瀏覽器，agent 的確喺度）→ `hasCompanionUrlParam()`
+ *   ③ 本機（localhost / 127.0.0.1）dev 或自架 POS → `shouldAutoDiscoverCompanion()` 內含
+ *
+ * **純 website / PWA（Vercel HTTPS、PWA standalone、自己打網址開）一律 false** →
+ * 狀態卡完全隱藏，唔會出現「未連線（代理未啟動）」呢啲對純網店用家無意義、
+ * 亦永遠解決唔到嘅紅燈。
+ *
+ * 同 `shouldKeepCompanionAlive()` 嘅分別：輪詢（keepAlive）唔包括 localhost dev
+ * （避免 dev 無謂輪詢），但 UI 顯示要包埋 localhost，否則本機開發測唔到張卡。
+ */
+export function shouldShowCompanionUi(): boolean {
+  if (typeof window === "undefined") return false;
+  return shouldAutoDiscoverCompanion() || hasCompanionUrlParam();
+}
+
 // ─────────────────────────────────────────────────────────────
 // 低階 fetch
 // ─────────────────────────────────────────────────────────────
