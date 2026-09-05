@@ -10,6 +10,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { NumericKeypad } from "@/components/numeric-keypad";
+import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
@@ -421,6 +422,9 @@ export function PosApp() {
   const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
   const [settlementFlash, setSettlementFlash] = useState(false);
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  // 點餐介面兩個手動打印掣嘅忙碌旗標（防連點重複入隊）
+  const [kitchenPrintSubmitting, setKitchenPrintSubmitting] = useState(false);
+  const [receiptPrintSubmitting, setReceiptPrintSubmitting] = useState(false);
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
   // 追蹤上一次 backfill 載入嘅 queue 簽名（id+status），避免 setQueue 建立新 array reference
   // 觸發自身 effect 依賴造成無限輪詢。saveQueue 仍然每次寫 localStorage，保持磁碟同步。
@@ -2132,31 +2136,212 @@ export function PosApp() {
 
   function reprintOrder(order: PosOrder) {
     if (!bootstrap) return;
-    const timestamp = new Date().toISOString();
+    // B2/B3（docs/56）：同打印中心「重打整單」一致 —— 由 localStorage re-fetch 最新 order，
+    // 唔好直接印 in-memory order（state 同 localStorage 唔同步會印錯單號）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === order.id) ?? order;
     const storeName = bootstrap.storeName ?? "門店";
     const nextPrintJobs = [
-      ...buildKitchenPrintJobs(order, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
-      ...buildLabelPrintJobs(order, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+      ...buildKitchenPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+      ...buildLabelPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
     ];
 
     if (nextPrintJobs.length === 0) {
-      setToast({ tone: "info", message: "沒有可打印的菜品。" });
+      // A3（docs/56）：診斷點解 0 張單 → 冇 zone/label 機 vs 分區對唔中。
+      setToast({ tone: "error", message: describeNoKitchenPrinterError() });
       return;
     }
 
-    persistPrintJobs([...nextPrintJobs, ...printJobs]);
-
-    const printEvents = nextPrintJobs.map<QueueEvent>((printJob) => ({
-      id: uid("evt"),
-      type: "PRINT_JOB_CREATED",
-      entityId: printJob.id,
-      payload: printJob,
-      status: "pending",
-      createdAt: timestamp,
-    }));
-    pushEvents(printEvents);
+    enqueuePrintJobs(nextPrintJobs);
     setToast({ tone: "success", message: "已加入重打單打印隊列。" });
   }
+
+  // ── 點餐介面 · 打印操作（堂食／外賣模式）──────────────────────────────
+  //
+  // 三件事（2026-09-05）：
+  //   1. 「打印廚房單」：補打一張廚房單，行為等同打印中心「重打整單」。
+  //   2. 「打印收據」：客人要提早拎單據時，即時印一張含當前所有已點項目嘅收據。
+  //   3. 「自動打印」開關：關閉時落單／結帳完全唔出單（手動掣依然照印）。
+
+  /** A3（docs/56）診斷：0 張單嘅兩種成因要分開講，否則用家無從入手。 */
+  function describeNoKitchenPrinterError(): string {
+    const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
+      (printer) => printer.enabled,
+    );
+    const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
+    return hasZonePrinter
+      ? "菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。"
+      : "未配置廚房（分區/標籤）打印機，請到設備設置添加。";
+  }
+
+  /** 把 print jobs 落本機隊列 + 推上雲（PRINT_JOB_CREATED）。回傳入隊張數。 */
+  function enqueuePrintJobs(jobs: PrintJob[]): number {
+    if (jobs.length === 0) return 0;
+    const timestamp = new Date().toISOString();
+    persistPrintJobs([...jobs, ...printJobs]);
+    pushEvents(
+      jobs.map<QueueEvent>((printJob) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: printJob.id,
+        payload: printJob,
+        status: "pending",
+        createdAt: timestamp,
+      })),
+    );
+    return jobs.length;
+  }
+
+  /** 當前工作台嘅訂單（已落單 / 已結帳都算；冇就 null）。 */
+  function currentWorkspaceTargetOrder(): PosOrder | null {
+    return workspaceOrder ?? activeOrder;
+  }
+
+  /**
+   * 「打印廚房單」掣：訂單已提交後補打一張廚房單（+ 飲品標籤單）。
+   *
+   * 行為對齊打印中心（/prints）嘅「重打整單」：由 localStorage 重新讀最新 order、
+   * 帶 ` (重打)` 後綴、入本機隊列再由 PrintFlushWorker 派出。
+   *
+   * ⚠️ **唔受「自動打印」開關影響** —— 呢粒掣係用家當下嘅明確意圖（用戶確認「手動優先」）。
+   */
+  function printKitchenTicketNow() {
+    if (kitchenPrintSubmitting) return;
+    if (!bootstrap) {
+      setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
+      return;
+    }
+    const target = currentWorkspaceTargetOrder();
+    if (!target) {
+      setToast({ tone: "info", message: "尚未落單，無法打印廚房單。請先落單。" });
+      return;
+    }
+    if (target.status === "draft") {
+      // 未提交（枱面「未下單」/ 工作枱未撳落單）：廚房根本未收到過單，
+      // 補打冇意義，要引導用家先落單。
+      setToast({ tone: "info", message: "此單尚未落單，請先撳「下單」再補打廚房單。" });
+      return;
+    }
+    if (target.items.length === 0) {
+      setToast({ tone: "info", message: "訂單沒有菜品，無需打印廚房單。" });
+      return;
+    }
+
+    setKitchenPrintSubmitting(true);
+    try {
+      const authoritativeOrder = loadOrders().find((row) => row.id === target.id) ?? target;
+      const storeName = bootstrap.storeName ?? "門店";
+      const jobs = [
+        ...buildKitchenPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+        ...buildLabelPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+      ];
+      if (jobs.length === 0) {
+        setToast({ tone: "error", message: describeNoKitchenPrinterError() });
+        return;
+      }
+      enqueuePrintJobs(jobs);
+      setToast({ tone: "success", message: `已補打廚房單（${authoritativeOrder.localOrderNo}）。` });
+    } catch {
+      // 寫唔到 localStorage（quota / 私隱模式）→ 一定要出聲，唔可以靜默吞掉。
+      setToast({ tone: "error", message: "加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。" });
+    } finally {
+      setKitchenPrintSubmitting(false);
+    }
+  }
+
+  /**
+   * 「打印收據」掣：客人想提早拎單據時，即時印一張含**當前所有已點項目**嘅收據。
+   *
+   * 同結帳收據（`printReceipt`）嘅差別：結帳收據印嘅係**已落單**嘅 `order.items`；
+   * 呢粒掣要印「購物車當下嘅全部項目」，包括仲未送出廚房嘅加菜 —— 所以由
+   * `cartItems` 現場砌一張**純打印用**嘅訂單快照，**唔寫入 orders、唔產生單號**。
+   *
+   * ⚠️ **唔受「自動打印」開關影響**（同上，手動優先）。
+   */
+  function printReceiptNow() {
+    if (receiptPrintSubmitting) return;
+    if (!bootstrap) {
+      setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
+      return;
+    }
+    if (cartItems.length === 0) {
+      setToast({ tone: "info", message: "購物車沒有菜品，無法打印收據。" });
+      return;
+    }
+
+    setReceiptPrintSubmitting(true);
+    try {
+      const target = currentWorkspaceTargetOrder();
+      const timestamp = new Date().toISOString();
+      const baseTotals = orderTotals(cartItems, bootstrap);
+      // 純打印快照：id / localOrderNo 沿用張單（有嘅話），方便收銀對單；
+      // 未落單就用臨時值，收據上會印「未落單」，唔會預先消耗一個真單號。
+      const tableId = target?.tableId ?? activeTable?.id ?? "counter";
+      const tableName =
+        target?.tableName ??
+        (isQuickMode ? quickTypeTableName() : activeTable?.name ?? "堂食");
+      const snapshotOrder: PosOrder = {
+        id: target?.id ?? uid("order"),
+        localOrderNo: target?.localOrderNo ?? "未落單",
+        tableId,
+        tableName,
+        status: target?.status ?? "draft",
+        items: cartItems,
+        orderNote,
+        subtotal: baseTotals.subtotal,
+        serviceChargeAmount: baseTotals.serviceChargeAmount,
+        taxAmount: baseTotals.taxAmount,
+        discountAmount,
+        total: Math.max(0, baseTotals.total - discountAmount),
+        source: target?.source ?? "pos",
+        createdAt: target?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+
+      const jobs = buildReceiptPrintJobs(snapshotOrder, bootstrap);
+      if (jobs.length === 0) {
+        const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
+          (printer) => printer.enabled && printer.role === "receipt",
+        );
+        setToast({
+          tone: "error",
+          message: hasReceiptPrinter
+            ? "找不到可用的收據打印機，請檢查設備設置。"
+            : "未配置收據打印機，請到設備設置添加。",
+        });
+        return;
+      }
+      enqueuePrintJobs(jobs);
+      setToast({ tone: "success", message: "已打印收據。" });
+    } catch {
+      setToast({ tone: "error", message: "加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。" });
+    } finally {
+      setReceiptPrintSubmitting(false);
+    }
+  }
+
+  /** 「自動打印」開關：即刻寫入本機設定並更新 state（切換後即時生效）。 */
+  function setAutoPrint(next: boolean) {
+    const nextSettings = { ...localSettings, autoPrint: next };
+    // savePosLocalSettings 會 dispatch "pos-local-settings-changed"，
+    // 本頁 useEffect 收到會 setLocalSettings；下面再樂觀更新一次等掣即刻有反應。
+    savePosLocalSettings(nextSettings);
+    setLocalSettings(nextSettings);
+    setToast({
+      tone: next ? "success" : "info",
+      message: next
+        ? "自動打印已開啟：落單會自動出廚房單，結帳會自動出收據。"
+        : "自動打印已關閉：落單／結帳不會自動打印任何單據（手動掣仍可使用）。",
+    });
+  }
+
+  /**
+   * 「自動打印」開關嘅即時值（`PosLocalSettings.autoPrint`，預設 true）。
+   *
+   * 由 `localSettings` state 推導而唔係每次 `loadPosLocalSettings()`：state 喺
+   * `savePosLocalSettings()` dispatch 嘅 "pos-local-settings-changed" 之後即刻更新，
+   * 所以開關一撳，`sendToKitchen()` / `printReceipt()` 下一刻就用新值（即時生效）。
+   */
+  const autoPrintEnabled = localSettings.autoPrint ?? true;
 
   async function sendToKitchen(options?: { silent?: boolean; forceNewOrder?: boolean }) {
     if (isReadOnlySettled) return null;
@@ -2236,24 +2421,29 @@ export function PosApp() {
 
     const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
     const ticketType: "normal" | "addon" = treatAsAddOn ? "addon" : "normal";
-    const nextPrintJobs = [
-      ...buildKitchenPrintJobs(order, {
-        ticketType,
-        storeName: bootstrap.storeName ?? "門店",
-        itemsOverride: printTargetItems,
-      }),
-      ...buildLabelPrintJobs(order, {
-        ticketType,
-        storeName: bootstrap.storeName ?? "門店",
-        itemsOverride: printTargetItems,
-      }),
-    ];
+    // 「自動打印」開關（點餐介面 · 堂食／外賣模式）：關閉時落單／加單**一張都唔出**，
+    // 只落 ORDER_CREATED／ORDER_UPDATED 事件 —— 廚房單靠「打印廚房單」掣手動補打。
+    const nextPrintJobs = autoPrintEnabled
+      ? [
+          ...buildKitchenPrintJobs(order, {
+            ticketType,
+            storeName: bootstrap.storeName ?? "門店",
+            itemsOverride: printTargetItems,
+          }),
+          ...buildLabelPrintJobs(order, {
+            ticketType,
+            storeName: bootstrap.storeName ?? "門店",
+            itemsOverride: printTargetItems,
+          }),
+        ]
+      : [];
 
     persistPrintJobs([...nextPrintJobs, ...printJobs]);
 
       // A3（docs/56）：有啟用打印機但呢張單 0 張 job 入隊 → 單據唔會打印，彈警告提示。
       // 兩種成因：① 冇任何 zone/label 打印機；② 菜品 printerGroup 對唔中任何 printer.zoneId。
-      if (nextPrintJobs.length === 0 && !options?.silent) {
+      // 「自動打印」關閉時係**預期**唔出單，唔好彈警告騷擾收銀。
+      if (autoPrintEnabled && nextPrintJobs.length === 0 && !options?.silent) {
         const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
         setToast({
           tone: "warning",
@@ -2618,6 +2808,8 @@ export function PosApp() {
 
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
+    // 「自動打印」開關關閉：結帳唔自動出收據（要單據就撳「打印收據」手動出）。
+    if (!autoPrintEnabled) return;
     const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap);
     if (nextPrintJobs.length === 0) {
       if (process.env.NODE_ENV !== "production") {
@@ -2626,22 +2818,8 @@ export function PosApp() {
       return;
     }
 
-    const timestamp = nextPrintJobs[0]?.createdAt ?? new Date().toISOString();
-    persistPrintJobs([...nextPrintJobs, ...printJobs]);
-    // Dispatch event 令 Print Center UI 即時刷新（persistPrintJobs 本身唔 dispatch）
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
-    }
-    pushEvents(
-      nextPrintJobs.map<QueueEvent>((printJob) => ({
-        id: uid("evt"),
-        type: "PRINT_JOB_CREATED",
-        entityId: printJob.id,
-        payload: printJob,
-        status: "pending",
-        createdAt: timestamp,
-      })),
-    );
+    // persistPrintJobs 入面已經 dispatch "pos-print-jobs-changed"（令 Print Center 即時刷新）
+    enqueuePrintJobs(nextPrintJobs);
   }
 
   async function confirmPayment(method: string) {
@@ -3578,6 +3756,48 @@ export function PosApp() {
                 </div>
               ) : null}
 
+              {/* ── 打印操作（堂食／外賣模式）─────────────────────────────
+                  ・「自動打印」開關：關閉時落單／結帳完全唔出單，切換即時生效。
+                  ・兩個手動掣唔受開關影響（用戶確認「手動優先」）：
+                    「打印廚房單」＝ 打印中心「重打整單」；「打印收據」＝ 即時印當前所有已點項目。 */}
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2">
+                <div className="flex items-center justify-between px-1">
+                  <AutoAcceptPill
+                    enabled={autoPrintEnabled}
+                    label="自動打印"
+                    onChange={setAutoPrint}
+                    size="sm"
+                  />
+                  <span className="text-[11px] font-medium text-slate-400">
+                    {autoPrintEnabled ? "落單／結帳自動出單" : "已關閉 · 唔會自動出單"}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    aria-busy={kitchenPrintSubmitting}
+                    className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={kitchenPrintSubmitting || isReadOnlySettled}
+                    onClick={printKitchenTicketNow}
+                    type="button"
+                  >
+                    {kitchenPrintSubmitting ? "打印中…" : "打印廚房單"}
+                  </button>
+                  <button
+                    aria-busy={receiptPrintSubmitting}
+                    className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={receiptPrintSubmitting || isReadOnlySettled}
+                    onClick={printReceiptNow}
+                    type="button"
+                  >
+                    {receiptPrintSubmitting ? "打印中…" : "打印收據"}
+                  </button>
+                </div>
+                {!autoPrintEnabled ? (
+                  <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+                    落單／結帳不會自動打印任何單據；上面兩個掣係手動打印，仍然可以使用。
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto px-3 pb-3">

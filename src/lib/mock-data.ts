@@ -539,4 +539,6 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   },
   // 「自動接自助單」開關（取代 kioskKitchenMode）。true = 免確認直接出單（規格 5 嘅預設）。
   autoAcceptSelfOrder: true,
+  // 「自動打印」開關：預設開（落單出廚房單、結帳出收據）。見 PosLocalSettings.autoPrint。
+  autoPrint: true,
 };

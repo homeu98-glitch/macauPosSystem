@@ -315,6 +315,11 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         ? settings.autoAcceptSelfOrder
         : defaultPosLocalSettings.autoAcceptSelfOrder;
     })(),
+    // 「自動打印」開關（點餐介面 · 堂食／外賣模式，見 PosLocalSettings.autoPrint）。
+    // 舊 localStorage 冇呢欄 → 用預設 true（自動打印）：升級後唔可以靜默變成「唔打印」，
+    // 否則廚房會無啦啦收唔到單。
+    autoPrint:
+      typeof settings?.autoPrint === "boolean" ? settings.autoPrint : defaultPosLocalSettings.autoPrint,
   };
 }
 

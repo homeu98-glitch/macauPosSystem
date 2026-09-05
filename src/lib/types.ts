@@ -448,6 +448,23 @@ export interface PosLocalSettings {
    * 結果永遠係 `"auto"` → 開關係死 code。見 docs/87 §9 P0 #4。
    */
   autoAcceptSelfOrder: boolean;
+  /**
+   * 「自動打印」開關（點餐介面 · 堂食／外賣模式）。
+   *
+   * - `true`（**預設**）：落單自動出廚房單／飲品標籤單，結帳自動出收據。
+   * - `false`：收銀台落單／結帳**完全唔會自動**產生任何打印任務。
+   *
+   * 範圍（2026-09-05 用戶確認：只管收銀台點餐流程）：
+   * 只覆蓋 `sendToKitchen()`（廚房單 + 標籤單）同 `printReceipt()`（結帳收據）。
+   * 退菜單／返結單／退款單／線上單接單／自助點餐機小票**唔受影響**。
+   *
+   * 手動掣優於開關：點餐介面嘅「打印廚房單」/「打印收據」係用家當下嘅明確意圖，
+   * 就算開關關閉都照印（見 pos-app.tsx `printKitchenTicketNow` / `printReceiptNow`）。
+   *
+   * 真源喺本機 localStorage（`PosLocalSettings`，store scope）——呢個係「呢部收銀機」
+   * 嘅出單行為，同一間店可以前台出單、後台唔出單，唔可以擺落全店共用嘅 DB 設定。
+   */
+  autoPrint: boolean;
 }
 
 export interface OrderItem {
