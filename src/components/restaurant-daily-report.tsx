@@ -2086,91 +2086,78 @@ export function RestaurantDailyReport() {
                   <Empty />
                 ) : (
                   <>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <DurationBarChart
-                        title="堂食時長"
-                        steps={[
-                          {
-                            label: "下單 → 送廚",
-                            ...agg.dineInServing.orderToKitchen,
-                            colorClass: "bg-indigo-500",
-                          },
-                          {
-                            label: "送廚 → 結帳",
-                            ...agg.dineInServing.kitchenToSettle,
-                            colorClass: "bg-indigo-400",
-                          },
-                          {
-                            label: "下單 → 結帳",
-                            ...agg.dineInServing.total,
-                            colorClass: "bg-indigo-600",
-                            isTotal: true,
-                          },
-                        ]}
-                        maxAvg={Math.max(
-                          agg.dineInServing.orderToKitchen.avgMin,
-                          agg.dineInServing.kitchenToSettle.avgMin,
-                          agg.dineInServing.total.avgMin,
-                          agg.quickServing.orderToKitchen.avgMin,
-                          agg.quickServing.kitchenToServed.avgMin,
-                          agg.quickServing.servedToSettled.avgMin,
-                          agg.quickServing.total.avgMin,
-                          1,
-                        )}
-                      />
-                      <DurationBarChart
-                        title="快餐 / 外賣時長"
-                        steps={[
-                          {
-                            label: "下單 → 送廚",
-                            ...agg.quickServing.orderToKitchen,
-                            colorClass: "bg-amber-500",
-                          },
-                          {
-                            label: "送廚 → 出餐",
-                            ...agg.quickServing.kitchenToServed,
-                            colorClass: "bg-amber-400",
-                          },
-                          {
-                            label: "出餐 → 完成",
-                            ...agg.quickServing.servedToSettled,
-                            colorClass: "bg-amber-400",
-                          },
-                          {
-                            label: "下單 → 完成",
-                            ...agg.quickServing.total,
-                            colorClass: "bg-amber-600",
-                            isTotal: true,
-                          },
-                        ]}
-                        maxAvg={Math.max(
-                          agg.dineInServing.orderToKitchen.avgMin,
-                          agg.dineInServing.kitchenToSettle.avgMin,
-                          agg.dineInServing.total.avgMin,
-                          agg.quickServing.orderToKitchen.avgMin,
-                          agg.quickServing.kitchenToServed.avgMin,
-                          agg.quickServing.servedToSettled.avgMin,
-                          agg.quickServing.total.avgMin,
-                          1,
-                        )}
-                      />
-                    </div>
-
-                    <DurationStatsTable
-                      rows={[
-                        { label: "下單 → 送廚", type: "堂食", stats: agg.dineInServing.orderToKitchen },
-                        { label: "送廚 → 結帳", type: "堂食", stats: agg.dineInServing.kitchenToSettle },
-                        { label: "下單 → 結帳", type: "堂食", stats: agg.dineInServing.total, bold: true },
-                        { label: "下單 → 送廚", type: "快餐 / 外賣", stats: agg.quickServing.orderToKitchen },
-                        { label: "送廚 → 出餐", type: "快餐 / 外賣", stats: agg.quickServing.kitchenToServed },
-                        { label: "出餐 → 完成", type: "快餐 / 外賣", stats: agg.quickServing.servedToSettled },
-                        { label: "下單 → 完成", type: "快餐 / 外賣", stats: agg.quickServing.total, bold: true },
+                    <DurationBarChart
+                      steps={[
+                        {
+                          label: "堂食·下單→送廚",
+                          avgMin: agg.dineInServing.orderToKitchen.avgMin,
+                          count: agg.dineInServing.orderToKitchen.count,
+                          colorClass: "bg-indigo-500",
+                        },
+                        {
+                          label: "堂食·送廚→結帳",
+                          avgMin: agg.dineInServing.kitchenToSettle.avgMin,
+                          count: agg.dineInServing.kitchenToSettle.count,
+                          colorClass: "bg-indigo-500",
+                        },
+                        {
+                          label: "堂食·整體",
+                          avgMin: agg.dineInServing.total.avgMin,
+                          count: agg.dineInServing.total.count,
+                          colorClass: "bg-indigo-700",
+                        },
+                        {
+                          label: "外賣·下單→送廚",
+                          avgMin: agg.quickServing.orderToKitchen.avgMin,
+                          count: agg.quickServing.orderToKitchen.count,
+                          colorClass: "bg-amber-500",
+                        },
+                        {
+                          label: "外賣·送廚→出餐",
+                          avgMin: agg.quickServing.kitchenToServed.avgMin,
+                          count: agg.quickServing.kitchenToServed.count,
+                          colorClass: "bg-amber-500",
+                        },
+                        {
+                          label: "外賣·出餐→完成",
+                          avgMin: agg.quickServing.servedToSettled.avgMin,
+                          count: agg.quickServing.servedToSettled.count,
+                          colorClass: "bg-amber-500",
+                        },
+                        {
+                          label: "外賣·整體",
+                          avgMin: agg.quickServing.total.avgMin,
+                          count: agg.quickServing.total.count,
+                          colorClass: "bg-amber-700",
+                        },
                       ]}
+                      maxAvg={Math.max(
+                        agg.dineInServing.orderToKitchen.avgMin,
+                        agg.dineInServing.kitchenToSettle.avgMin,
+                        agg.dineInServing.total.avgMin,
+                        agg.quickServing.orderToKitchen.avgMin,
+                        agg.quickServing.kitchenToServed.avgMin,
+                        agg.quickServing.servedToSettled.avgMin,
+                        agg.quickServing.total.avgMin,
+                        1,
+                      )}
                     />
+                    {/* 圖例 */}
+                    <div className="mt-3 flex items-center gap-4 text-[11px] text-slate-500">
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-sm bg-indigo-500" />
+                        堂食
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-sm bg-amber-500" />
+                        快餐 / 外賣
+                      </span>
+                      <span>深色 = 整體時長</span>
+                    </div>
                   </>
                 )}
                 <div className="mt-2 text-[11px] text-slate-400">
-                  每步列出平均 / 中位數 / P95，樣本 0 嘅步驟顯示 —；堂食以「送廚 → 結帳」涵蓋製作同服務時間，外賣/快餐以「出餐 → 完成」反映等待取餐/外送嘅時間。Ledger 純線上單冇送廚／出餐時間戳，只以「下單 → 付款完成」估算整體時長（計入 estimated 樣本）。
+                  柱高與柱頂數值為該環節平均時長（分鐘），樣本 0 顯示 —；堂食以「送廚 → 結帳」涵蓋製作同服務時間，外賣以「出餐 → 完成」反映等待取餐/外送時間。Ledger 純線上單冇送廚／出餐時間戳，只以「下單 → 付款完成」估算整體（計入 estimated 樣本）。
                 </div>
               </Card>
             </div>
@@ -2401,108 +2388,50 @@ function Empty() {
 type DurationBarStep = {
   label: string;
   avgMin: number;
-  medianMin: number;
-  p95Min: number;
   count: number;
   colorClass: string;
-  isTotal?: boolean;
 };
 
-/** 水平柱狀圖：每個步驟一條 bar，右側顯示 avg 數值。 */
-function DurationBarChart({
-  title,
-  steps,
-  maxAvg,
-}: {
-  title: string;
-  steps: DurationBarStep[];
-  maxAvg: number;
-}) {
+/** 垂直柱狀圖：每個環節一根柱，柱頂顯示平均時長（分鐘），堂食／外賣以顏色區分。 */
+function DurationBarChart({ steps, maxAvg }: { steps: DurationBarStep[]; maxAvg: number }) {
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50/40 p-3">
-      <div className="mb-3 text-xs font-semibold text-slate-700">{title}</div>
-      <div className="space-y-2.5">
+      {/* 柱區：高度固定，柱高按 avg / maxAvg 比例（上限 85%，預留數值標籤空間） */}
+      <div className="flex h-44 items-end gap-1.5">
         {steps.map((s) => {
           const noData = s.count === 0;
-          const pct = maxAvg > 0 && !noData ? (s.avgMin / maxAvg) * 100 : 0;
+          const pct = !noData && maxAvg > 0 ? Math.min((s.avgMin / maxAvg) * 85, 85) : 2;
           return (
-            <div key={s.label} className="grid grid-cols-[72px_1fr] items-center gap-2">
-              <div className="truncate text-right text-[11px] text-slate-600" title={s.label}>
-                {s.label}
+            <div
+              key={s.label + s.colorClass}
+              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1"
+            >
+              <div
+                className={`text-[11px] font-semibold ${noData ? "text-slate-300" : "text-slate-800"}`}
+              >
+                {noData ? "—" : s.avgMin.toFixed(1)}
               </div>
-              <div className="flex items-center gap-2">
-                <div className="h-5 flex-1 overflow-hidden rounded-full bg-white">
-                  <div
-                    className={`h-5 rounded-full ${noData ? "bg-slate-200" : s.colorClass} ${
-                      s.isTotal && !noData ? "opacity-100" : !noData ? "opacity-80" : ""
-                    }`}
-                    style={{ width: `${Math.max(noData ? 3 : pct, 0)}%` }}
-                    title={`avg ${s.avgMin.toFixed(1)} 分 / med ${s.medianMin.toFixed(1)} / P95 ${s.p95Min.toFixed(1)} / 樣本 ${s.count}`}
-                  />
-                </div>
-                <div className="w-14 shrink-0 text-right text-xs font-semibold text-slate-800">
-                  {noData ? "—" : `${s.avgMin.toFixed(1)} 分`}
-                </div>
-              </div>
+              <div
+                className={`w-full max-w-[44px] rounded-t-md ${noData ? "bg-slate-200" : s.colorClass}`}
+                style={{ height: `${pct}%` }}
+                title={`${s.label}：平均 ${noData ? "—" : `${s.avgMin.toFixed(1)} 分`}（樣本 ${s.count}）`}
+              />
             </div>
           );
         })}
       </div>
-    </div>
-  );
-}
-
-function DurationStatsTable({
-  rows,
-}: {
-  rows: {
-    label: string;
-    type: string;
-    stats: StepStats;
-    bold?: boolean;
-  }[];
-}) {
-  return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-slate-100">
-      <table className="w-full text-[11px]">
-        <thead className="bg-slate-50 text-slate-500">
-          <tr>
-            <th className="px-2.5 py-1.5 text-left font-medium">流程</th>
-            <th className="px-2.5 py-1.5 text-left font-medium">類型</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">avg</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">med</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">P95</th>
-            <th className="px-2.5 py-1.5 text-right font-medium">樣本</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {rows.map((r, i) => {
-            const noData = r.stats.count === 0;
-            return (
-              <tr key={i} className={r.bold ? "bg-slate-50/60" : ""}>
-                <td className={`px-2.5 py-1.5 ${r.bold ? "font-semibold text-slate-800" : "text-slate-600"}`}>
-                  {r.label}
-                </td>
-                <td className="px-2.5 py-1.5 text-slate-500">{r.type}</td>
-                <td className="px-2.5 py-1.5 text-right font-semibold text-slate-800">
-                  {noData ? "—" : `${r.stats.avgMin.toFixed(1)} 分`}
-                </td>
-                <td className="px-2.5 py-1.5 text-right text-slate-600">
-                  {noData ? "—" : r.stats.medianMin.toFixed(1)}
-                </td>
-                <td
-                  className={`px-2.5 py-1.5 text-right font-semibold ${
-                    noData ? "text-slate-300" : r.stats.p95Min > 20 ? "text-rose-600" : "text-slate-800"
-                  }`}
-                >
-                  {noData ? "—" : r.stats.p95Min.toFixed(1)}
-                </td>
-                <td className="px-2.5 py-1.5 text-right text-slate-500">{r.stats.count}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {/* X 軸標籤 */}
+      <div className="mt-2 flex gap-1.5 border-t border-slate-200 pt-1.5">
+        {steps.map((s) => (
+          <div
+            key={s.label + s.colorClass}
+            className="min-w-0 flex-1 truncate text-center text-[10px] leading-tight text-slate-500"
+            title={s.label}
+          >
+            {s.label}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
