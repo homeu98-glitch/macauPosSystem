@@ -4074,40 +4074,33 @@ export function PosApp() {
                   return (
                   <button
                     key={item.id}
-                    className={`rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
+                    className={`flex h-36 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
                       soldOut ? "opacity-60" : "hover:-translate-y-0.5 hover:border-orange-300"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     disabled={isReadOnlySettled}
                     onClick={() => addMenuItem(item)}
                     type="button"
                   >
-                    <div className="flex min-h-[92px] flex-col justify-between">
-                      <div>
-                        <div className="line-clamp-2 text-sm font-semibold text-slate-900">{item.name}</div>
-                        <div className="mt-2 text-xs text-slate-500">
-                          {localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup}
-                        </div>
-                        {soldOut ? (
-                          <div className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                            售罄
-                          </div>
-                        ) : hasRemainingBadge ? (
-                          <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                            只剩 {remainingQty} 份
-                          </div>
-                        ) : null}
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-900" title={item.name}>
+                        {item.name}
                       </div>
-                      <div className="mt-4 flex items-center justify-between">
-                        <div className="text-base font-semibold text-slate-900">
-                          {item.isMarketPrice ? "時價菜" : formatMoney(item.price, bootstrap.currency)}
+                      {hasRemainingBadge ? (
+                        <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                          只剩 {remainingQty} 份
                         </div>
-                        <div
-                          className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                            soldOut ? "bg-slate-100 text-slate-500" : "bg-orange-50 text-orange-600"
-                          }`}
-                        >
-                          {soldOut ? "不可加" : "加入"}
-                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="text-base font-semibold text-slate-900">
+                        {item.isMarketPrice ? "時價菜" : formatMoney(item.price, bootstrap.currency)}
+                      </div>
+                      <div
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          soldOut ? "bg-amber-50 text-amber-700" : "bg-orange-50 text-orange-600"
+                        }`}
+                      >
+                        {soldOut ? "售罄" : "加入"}
                       </div>
                     </div>
                   </button>
