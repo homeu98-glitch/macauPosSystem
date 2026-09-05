@@ -34,6 +34,8 @@
   - 額外暴露 `rawAvos: Record<string, number>` + **一次性 module-level** `console.log` payload dump（每次 page load 只 dump 一次），用嚟搵 UI 未對應字段（例如「筆數」可能係 `topup_count` / `deduct_count`）。
   - 寫法：`normalizeAvosPayload()` 過濾出**數值**欄位（RPC 可能帶 `merchant_id` 等非數字），避免 console 噪音。
   - 注意 `console.table(label, record)` 撞 TS2769（`Record<string,number>` 唔合 overload），統一用 `console.log(label, rawAvos)`。
+  - 可選 count 欄位（缺字段時 undefined）：`topupCount`（probe `topup_count`/`topup_txn_count`/...）、`deductCount`（probe `deduct_count`/`deduct_txn_count`/...）、`newMemberCount`（probe `new_member_count`/`member_new_count`/...）。
+- **「會員充值 & 會員數」Card 版面（2026-09-05 redesign）**：由「單一大字 + pills」改為 **2×2 mini-block grid**（rounded-xl bg-slate-50），四格分別為「充值總額（含實際/贈送子項 + 充值筆數）」、「會員總數（含新增會員）」、「會員扣點（含已付/贈送子項 + 扣點筆數）」、「訂單餘額扣減 + 線上渠道佔比」。所有子項標籤均為中文，視覺風格與其他 Card 一致。
 - **`60000003` 舊 demo 店（根因）**：`60000003` 係真實 merchant UUID（**唔係** hardcode、唔係 `macau-store-a`）。落單 `storeId` 來源 = Kiosk `binding.storeId`（localStorage `macau-pos-kiosk-device`）或掃碼 `?store=`；若呢啲被綁成 60000003，訂單就寫落 60000003（合法 merchant，寫入防護唔會擋）。讀取端已嚴格按 `store_id` 隔離，無「跨店串資料」bug；要修正寫入端就喺 A 店後台重新綁 Kiosk device（覆寫 `macau-pos-kiosk-device` 成 A 店 merchantId）／重新生成 `?store=<A店merchantId>` 掃碼 QR／確認 `loadAuthSession().merchantId` 係 A 店 UUID。
 
 ## 執行環境判斷（原生殼 vs 純 website/PWA）

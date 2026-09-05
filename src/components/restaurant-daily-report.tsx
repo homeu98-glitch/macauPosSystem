@@ -1755,7 +1755,7 @@ export function RestaurantDailyReport() {
                 />
                 <Kpi label="覆蓋人數" value={String(agg.covers)} delta={pct(agg.covers, aggYest?.covers ?? null)} />
                 <Kpi label="會員充值" value={formatMoney(ledger.sel?.topupMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null} subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`} />
-                <Kpi label="會員扣點" value={formatMoney(ledger.sel?.deductMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null} subtitle={`paid ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · gift ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`} />
+                <Kpi label="會員扣點" value={formatMoney(ledger.sel?.deductMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null} subtitle={`已付 ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`} />
               </div>
             ) : (
               <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
@@ -1832,9 +1832,6 @@ export function RestaurantDailyReport() {
                   <Empty />
                 ) : (
                   <div className="grid gap-1">
-                    <div className="mb-1 rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-500">
-                      依訂單內快照名稱／價格聚合：快閃餐改名改價（菜品 ID 不變）時，唔同日期嘅名稱會各自一行（例如 A 餐、B 餐分開顯示），歷史訂單唔會因改名而對唔上當前餐牌。線上部分由 Ledger 訂單明細（get_order_detail）併入。
-                    </div>
                     {onlineDetailInfo.status === "loading" ? (
                       <div className="mb-1 text-[11px] text-slate-400">
                         正在抓取 Ledger 線上單明細（{onlineDetailInfo.total} 張）…
@@ -1944,28 +1941,70 @@ export function RestaurantDailyReport() {
               ) : null}
 
               <Card title="會員充值 & 會員數" tag="來源：Ledger" loading={!dataReady}>
-                <div className="flex items-baseline gap-2">
-                  <div className="text-3xl font-extrabold text-indigo-600">
-                    {formatMoney(ledger.sel?.topupMop ?? 0)}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* 充值總額 */}
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="text-xs text-slate-500">充值總額</div>
+                    <div className="mt-1 text-2xl font-bold text-indigo-600">{formatMoney(ledger.sel?.topupMop ?? 0)}</div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                      <div>
+                        <div className="text-slate-400">實際充值</div>
+                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupPaidMop ?? 0)}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400">贈送入帳</div>
+                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupGiftMop ?? 0)}</div>
+                      </div>
+                    </div>
+                    {ledger.sel?.topupCount != null ? (
+                      <div className="mt-2 text-[11px] text-slate-400">
+                        充值筆數 <span className="font-semibold text-slate-700">{ledger.sel.topupCount.toLocaleString()}</span>
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="text-xs text-slate-500">充值金額（{FILTERS.find((f) => f.key === range)?.label}）</div>
-                </div>
-                <div className="mt-1 grid gap-0.5 text-[11px] text-slate-500">
-                  <div>
-                    實際充值 <span className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupPaidMop ?? 0)}</span>
-                    {" · "}
-                    贈送入帳 <span className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupGiftMop ?? 0)}</span>
+
+                  {/* 會員總數 */}
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="text-xs text-slate-500">會員總數</div>
+                    <div className="mt-1 text-2xl font-bold text-amber-600">{(ledger.sel?.memberCount ?? 0).toLocaleString()}</div>
+                    {ledger.sel?.newMemberCount != null ? (
+                      <div className="mt-2 text-[11px] text-slate-400">
+                        新增會員 <span className="font-semibold text-slate-700">{ledger.sel.newMemberCount.toLocaleString()}</span>
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-[11px] text-slate-400">區間內暫無新增會員資料</div>
+                    )}
                   </div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {ledger.sel?.memberCount != null ? (
-                    <Pill kind="amber">會員數 {ledger.sel.memberCount}</Pill>
-                  ) : (
-                    <Pill kind="amber">會員數 —（未連線）</Pill>
-                  )}
-                  <Pill kind="green">線上渠道佔比 {Math.round(onlineShare * 100)}%</Pill>
-                  <Pill kind="slate">會員扣點 {formatMoney(ledger.sel?.deductMop ?? 0)}</Pill>
-                  <Pill kind="slate">訂單餘額扣減 {formatMoney(ledger.sel?.orderBalancePaidMop ?? 0)}</Pill>
+
+                  {/* 會員扣點 */}
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="text-xs text-slate-500">會員扣點</div>
+                    <div className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(ledger.sel?.deductMop ?? 0)}</div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                      <div>
+                        <div className="text-slate-400">已付扣點</div>
+                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.deductPaidMop ?? 0)}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400">贈送扣點</div>
+                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.deductGiftMop ?? 0)}</div>
+                      </div>
+                    </div>
+                    {ledger.sel?.deductCount != null ? (
+                      <div className="mt-2 text-[11px] text-slate-400">
+                        扣點筆數 <span className="font-semibold text-slate-700">{ledger.sel.deductCount.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* 訂單餘額扣減 & 線上渠道佔比 */}
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="text-xs text-slate-500">訂單餘額扣減</div>
+                    <div className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(ledger.sel?.orderBalancePaidMop ?? 0)}</div>
+                    <div className="mt-2 text-[11px] text-slate-400">
+                      線上渠道佔比 <span className="font-semibold text-slate-700">{Math.round(onlineShare * 100)}%</span>
+                    </div>
+                  </div>
                 </div>
               </Card>
             </div>
@@ -2161,9 +2200,6 @@ export function RestaurantDailyReport() {
                     </div>
                   </>
                 )}
-                <div className="mt-2 text-[11px] text-slate-400">
-                  柱高與柱頂數值為該環節平均時長（分鐘），樣本 0 顯示 —；堂食以「送廚 → 結帳」涵蓋製作同服務時間，外賣以「出餐 → 完成」反映等待取餐/外送時間。Ledger 純線上單冇送廚／出餐時間戳，只以「下單 → 付款完成」估算整體（計入 estimated 樣本）。
-                </div>
               </Card>
             </div>
 

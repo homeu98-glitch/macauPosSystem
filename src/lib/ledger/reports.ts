@@ -26,6 +26,15 @@ export type LedgerReportSummary = {
    *  （例如「筆數」可能係 topup_count / deduct_count / txn_count 之一）。Production 可以由 console.log 過濾。
    *  注意：呢個字段唔係穩定契約，RPC 改 schema 唔會視為 breaking change。 */
   rawAvos: Record<string, number>;
+  /** 會員充值筆數（Ledger UI「筆數」內 topup 部分）。RPC 字段名多變：topup_count / topup_txn_count / count_topup。
+   *  缺字段時 undefined，UI 唔 render。 */
+  topupCount?: number;
+  /** 會員扣點筆數（Ledger UI「筆數」內 deduct 部分）。RPC 字段名多變：deduct_count / deduct_txn_count / count_deduct。
+   *  缺字段時 undefined，UI 唔 render。 */
+  deductCount?: number;
+  /** 區間內新增會員數。RPC 字段名多變：new_member_count / member_new_count / wallet_new_count。
+   *  缺字段時 undefined，UI 唔 render。 */
+  newMemberCount?: number;
 };
 
 /** 一個 page load 只 dump 一次 RPC payload 嚟搵「筆數」等未對應欄位。避免 hot reload 重覆 dump。 */
@@ -48,6 +57,15 @@ function normalizeAvosPayload(payload: Record<string, unknown>): Record<string, 
     }
   }
   return out;
+}
+
+/** 喺 rawAvos 內 probe 多個可能嘅字段名，第一個命中的就用。全部唔中就返 undefined。 */
+function pickAvosField(raw: Record<string, number>, candidates: readonly string[]): number | undefined {
+  for (const key of candidates) {
+    const v = raw[key];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return undefined;
 }
 
 export async function getMerchantReportSummary(range: ReportRangeKey): Promise<LedgerReportSummary> {
@@ -93,6 +111,15 @@ export async function getMerchantReportSummary(range: ReportRangeKey): Promise<L
     deductPaidMop: avosToMop(rawAvos.deduct_paid_avos),
     deductGiftMop: avosToMop(rawAvos.deduct_gift_avos),
     memberCount: Number(rawAvos.member_count ?? 0),
+    topupCount: pickAvosField(rawAvos, ["topup_count", "topup_txn_count", "count_topup", "topups_count"]),
+    deductCount: pickAvosField(rawAvos, ["deduct_count", "deduct_txn_count", "count_deduct", "deducts_count"]),
+    newMemberCount: pickAvosField(rawAvos, [
+      "new_member_count",
+      "member_new_count",
+      "wallet_new_count",
+      "new_wallet_count",
+      "members_new_count",
+    ]),
     rawAvos,
   };
 }

@@ -2210,14 +2210,19 @@ export function PosApp() {
       setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
       return;
     }
+    // 只補打「工作台入面已提交嘅嗰張單」，語意同打印中心「重打整單」完全一致。
+    // 結完帳嘅單工作台會清空（confirmPayment → setActiveOrderId(null)），
+    // 嗰啲單要去訂單列撳「查看」→「重打整單」，提示要講清楚條路。
     const target = currentWorkspaceTargetOrder();
     if (!target) {
-      setToast({ tone: "info", message: "尚未落單，無法打印廚房單。請先落單。" });
+      setToast({
+        tone: "info",
+        message: "目前沒有待處理訂單。請先落單；已結帳嘅單請喺訂單列撳「查看」→「重打整單」。",
+      });
       return;
     }
     if (target.status === "draft") {
-      // 未提交（枱面「未下單」/ 工作枱未撳落單）：廚房根本未收到過單，
-      // 補打冇意義，要引導用家先落單。
+      // 未提交（枱面「未下單」）：廚房根本未收到過單，補打冇意義，要先落單。
       setToast({ tone: "info", message: "此單尚未落單，請先撳「下單」再補打廚房單。" });
       return;
     }
