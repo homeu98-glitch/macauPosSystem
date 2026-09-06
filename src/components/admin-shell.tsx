@@ -57,13 +57,22 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <nav className="flex items-center gap-1">
               {navItems.map((item) => {
                 const active = pathname === item.href;
+                // 問題 1（2026-09-06 修）：active 用 inline style 強制白字 + 加 ring 描邊，
+                // 避免 Tailwind v4 編譯嘅 `bg-slate-900 text-white` 在某些瀏覽器/快取
+                // 場景下出現「黑底黑字」（class 未生效，預設黑色文字 + 深色背景）
+                // 影響可訪問性嘅 bug。
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    style={
+                      active
+                        ? { backgroundColor: "#0f172a", color: "#ffffff", fontWeight: 600 }
+                        : undefined
+                    }
                     className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
                       active
-                        ? "bg-slate-900 font-medium text-white"
+                        ? "ring-2 ring-orange-400 ring-offset-1"
                         : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                     }`}
                   >

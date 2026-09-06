@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
 import { RestaurantDailyReport } from "@/components/restaurant-daily-report";
@@ -10,10 +10,11 @@ import type { PosOrder } from "@/lib/types";
 /**
  * Admin panel · 營業報表（view-only）。
  *
- * - 商家下拉篩選（含「全部」彙總選項）
+ * - 商家搜尋 + 即時下拉（取代舊版 <select>；輸入即時顯示匹配商家，例：輸入「表」→ 「表嫂美食」）
  * - 單店模式：RestaurantDailyReport + merchantIdOverride（POS 訂單經
  *   /api/pos/state?storeId= 拉取，Ledger 會員類模塊自動跳過）
  * - 全部模式：allStoresMode + adminOrderFetcher（GET /api/admin/orders 跨店拉單）
+ * - 支援 URL ?merchantId= 直接跳到指定商家（admin/dashboard 點擊導航入口）
  * - 無任何列印 / 匯出 / 操作按鈕
  */
 
@@ -21,8 +22,38 @@ type AdminMerchant = { id: string; name: string; status: string };
 
 export default function AdminReportsPage() {
   const [merchants, setMerchants] = useState<AdminMerchant[]>([]);
-  const [selected, setSelected] = useState<string>("all");
   const [error, setError] = useState<string | null>(null);
+
+  // 商家搜尋 + 選擇狀態（2026-09-06 修）：用 input + 即時下拉取代 <select>，
+  // 解決問題 7 嘅搜尋需求。
+  const [merchantSearch, setMerchantSearch] = useState("");
+  const [merchantDropdownOpen, setMerchantDropdownOpen] = useState(false);
+  // 當前選中嘅商家 ID（"all" = 全部商家彙總；其餘為商家 UUID）。
+  const [selected, setSelected] = useState<string>("all");
+
+  // 問題 3（2026-09-06 修）：從 URL ?merchantId= 讀取初始選中商家
+  // （admin/dashboard 點擊導航嘅入口約定），並雙向同步回 URL。
+  // 用 window.location.search 讀 query（同 pos-app.tsx 慣例一致），
+  // 避開 useSearchParams 喺 server page 靜態預渲染時嘅 Suspense 要求。
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("merchantId")?.trim() ?? "";
+    if (fromUrl) {
+      setSelected(fromUrl);
+    }
+  }, []);
+
+  // 同步 selected → URL（唔覆蓋其他 query）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (selected === "all") {
+      url.searchParams.delete("merchantId");
+    } else {
+      url.searchParams.set("merchantId", selected);
+    }
+    // 用 replace 避免每次點選都塞入 history
+    window.history.replaceState({}, "", url.toString());
+  }, [selected]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,27 +98,99 @@ export default function AdminReportsPage() {
 
   const selectedMerchant = merchants.find((m) => m.id === selected) ?? null;
 
+  // 問題 7（2026-09-06 修）：即時過濾商家清單（不區分大小寫、支援中英）。
+  // merchantSearch 唔只過濾下拉，亦用作 input 嘅顯示內容。
+  const filteredMerchants = useMemo(() => {
+    const q = merchantSearch.trim().toLowerCase();
+    if (!q) return merchants;
+    return merchants.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
+    );
+  }, [merchants, merchantSearch]);
+
+  // 顯示喺搜尋框嘅當前文字：未選店家時 = merchantSearch；選中後 = 該店名（保持 user-friendly）。
+  const inputValue = useMemo(() => {
+    if (selected === "all") return merchantSearch;
+    const m = merchants.find((x) => x.id === selected);
+    return m?.name ?? merchantSearch;
+  }, [selected, merchants, merchantSearch]);
+
+  function pickMerchant(id: string) {
+    setSelected(id);
+    setMerchantSearch("");
+    setMerchantDropdownOpen(false);
+  }
+
+  function pickAll() {
+    setSelected("all");
+    setMerchantSearch("");
+    setMerchantDropdownOpen(false);
+  }
+
   return (
     <AdminShell>
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
           <h2 className="mr-auto text-sm font-semibold text-slate-900">營業報表</h2>
-          <label className="flex items-center gap-2 text-xs text-slate-500">
-            商家
-            <select
-              value={selected}
-              onChange={(e) => setSelected(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900"
-            >
-              <option value="all">全部（彙總所有商家）</option>
-              {merchants.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                  {m.status === "suspended" ? "（已停用）" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          {/* 問題 7（2026-09-06 修）：商家搜尋 + 即時下拉。輸入「表」即時顯示「表嫂美食」
+              等名稱相關商家。下拉預設顯示全部商家，輸入後即時過濾。
+              點擊外部關閉 dropdown（用 blur + timeout）。 */}
+          <div className="relative w-72">
+            <input
+              type="search"
+              value={inputValue}
+              onChange={(e) => {
+                setMerchantSearch(e.target.value);
+                setMerchantDropdownOpen(true);
+                // 用戶開始輸入 → 自動清除「已選中單店」狀態，回歸「按輸入過濾」模式
+                if (selected !== "all") setSelected("all");
+              }}
+              onFocus={() => setMerchantDropdownOpen(true)}
+              onBlur={() => {
+                // 延遲關閉，畀 onClick 嘅 <button> 先觸發揀選
+                setTimeout(() => setMerchantDropdownOpen(false), 120);
+              }}
+              placeholder="搜尋商家名稱（例：輸入「表」）"
+              className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500"
+              aria-label="搜尋商家"
+            />
+            {merchantDropdownOpen ? (
+              <div className="absolute right-0 left-0 z-30 mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={pickAll}
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 ${
+                    selected === "all" ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700"
+                  }`}
+                >
+                  <span>全部商家（彙總所有商家）</span>
+                  <span className="text-xs text-slate-400">{merchants.length} 間</span>
+                </button>
+                <div className="border-t border-slate-100" />
+                {filteredMerchants.length === 0 ? (
+                  <p className="px-3 py-3 text-xs text-slate-400">搜尋「{merchantSearch}」沒有匹配商家。</p>
+                ) : (
+                  filteredMerchants.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => pickMerchant(m.id)}
+                      className={`flex w-full items-center justify-between gap-2 border-t border-slate-50 px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 first:border-t-0 ${
+                        selected === m.id ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700"
+                      }`}
+                    >
+                      <span className="truncate">{m.name}</span>
+                      <span className="text-xs text-slate-400">
+                        {m.status === "suspended" ? "已停用" : ""}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {error && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p>}

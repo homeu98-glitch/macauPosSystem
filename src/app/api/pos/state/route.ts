@@ -2,8 +2,16 @@ import { NextResponse } from "next/server";
 
 import { defaultPosLocalSettings } from "@/lib/mock-data";
 import { mapOrderRow } from "@/lib/pos-order-row";
+import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
+
+/** UTC ISO 轉換（lossless）：`2026-09-06T00:00:00+08:00` → `2026-09-05T16:00:00.000Z`。 */
+function toUtcIso(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toISOString();
+}
 
 export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
@@ -37,11 +45,18 @@ export async function GET(request: Request) {
   // 報表分頁時只需要訂單，跳過 queue/printJobs/deviceConfig 查詢，省時省流量。
   const ordersOnly = searchParams.get("ordersOnly") === "1";
 
-  // 報表區間過濾：只回傳 created_at 或 updated_at 落在 [start, end] 內嘅訂單。
-  // 用 created_at OR updated_at 可以同時覆蓋「區間內開單」同「區間內結帳/更新」兩種情況，
-  // 避免只篩 updated_at 時漏咗開咗單但尚未結帳嘅單。
-  const rangeStart = searchParams.get("start")?.trim() || null;
-  const rangeEnd = searchParams.get("end")?.trim() || null;
+  // 報表區間過濾：只回傳 created_at **或** updated_at 落在 [start, end] 內嘅訂單（OR 語義）。
+  // OR 係 client 端 orderMatchesReportRange（`updatedAt || createdAt` 計數口徑）嘅超集，
+  // 涵蓋「區間內開單」同「區間內結帳/更新」兩種情況，亦涵蓋 NULL updated_at 嘅 legacy row。
+  // 問題 6（2026-09-06 修）：
+  // - start / end 一律轉 UTC ISO（`...Z`）——避開 PostgREST 對 `+08:00` offset 值嘅解析歧義。
+  // - 過濾改用 fetchOrdersInRange() 兩腿合併（見 src/lib/pos-orders-range.ts），
+  //   唔再用 `.or()` nested 語法（2026-09-04 引入，無長期生產驗證），
+  //   亦唔會好似中間版本嘅 AND chain 咁漏「昨日開單、今日結帳」嘅單。
+  const rangeStartRaw = searchParams.get("start")?.trim() || null;
+  const rangeEndRaw = searchParams.get("end")?.trim() || null;
+  const rangeStart = rangeStartRaw ? toUtcIso(rangeStartRaw) : null;
+  const rangeEnd = rangeEndRaw ? toUtcIso(rangeEndRaw) : null;
 
   if (!supabase) {
     if (ordersOnly) {
@@ -58,30 +73,23 @@ export async function GET(request: Request) {
     });
   }
 
-  const ordersBase = storeId
-    ? supabase.from("pos_orders").select("*").eq("store_id", storeId)
-    : supabase.from("pos_orders").select("*");
-
-  const ordersQuery = ordersBase
-    .or(
-      rangeStart && rangeEnd
-        ? `and(created_at.gte.${rangeStart},created_at.lte.${rangeEnd}),and(updated_at.gte.${rangeStart},updated_at.lte.${rangeEnd})`
-        : rangeStart
-          ? `created_at.gte.${rangeStart},updated_at.gte.${rangeStart}`
-          : rangeEnd
-            ? `created_at.lte.${rangeEnd},updated_at.lte.${rangeEnd}`
-            : "created_at.not.is.null,updated_at.not.is.null",
-    )
-    .order("updated_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+  // 訂單兩腿查詢即刻啟動（唔等下面 queue/printJobs/deviceConfig），保持並行度。
+  const ordersInRangePromise = fetchOrdersInRange({
+    supabase,
+    storeId,
+    start: rangeStart,
+    end: rangeEnd,
+    limit,
+    offset,
+  });
 
   // 報表分頁只拉訂單，跳過其餘 table。
   if (ordersOnly) {
-    const { data: orders } = await ordersQuery;
+    const ordersInRange = await ordersInRangePromise;
     return NextResponse.json({
       ok: true,
       source: "supabase",
-      orders: orders?.map(mapOrderRow) ?? [],
+      orders: ordersInRange.error ? [] : ordersInRange.orders.map(mapOrderRow),
     });
   }
 
@@ -103,12 +111,14 @@ export async function GET(request: Request) {
     ? supabase.from("pos_device_configs").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(1)
     : supabase.from("pos_device_configs").select("*").limit(0);
 
-  const [{ data: orders }, { data: queue }, { data: printJobs }, { data: deviceConfigs }] = await Promise.all([
-    ordersQuery,
+  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }] = await Promise.all([
     queueQuery,
     printJobsQuery,
     deviceConfigQuery,
   ]);
+
+  const ordersInRange = await ordersInRangePromise;
+  const orders = ordersInRange.error ? [] : ordersInRange.orders;
 
   const deviceConfigRow = deviceConfigs?.[0] ?? null;
 

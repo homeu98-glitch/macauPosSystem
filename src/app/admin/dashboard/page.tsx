@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
@@ -76,11 +78,20 @@ function orderStatusBadge(status: string) {
 }
 
 export default function AdminDashboardPage() {
+  const router = useRouter();
   const [merchants, setMerchants] = useState<AdminMerchant[]>([]);
   const [ledgerConfigured, setLedgerConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyMerchantId, setBusyMerchantId] = useState<string | null>(null);
+
+  // 商家列表分頁（2026-09-06 修）：固定 30 筆/頁，避開超長列表溢出螢幕
+  const MERCHANTS_PAGE_SIZE = 30;
+  const [merchantPage, setMerchantPage] = useState(1);
+  // 搜尋關鍵字（即時過濾商家名稱）
+  const [merchantSearch, setMerchantSearch] = useState("");
+  // 跳轉營業報表時嘅 hover highlight merchantId（純視覺反饋，唔影響邏輯）
+  const [hoveredMerchantId, setHoveredMerchantId] = useState<string | null>(null);
 
   // 下單明細篩選
   const [filterStore, setFilterStore] = useState<string>("all");
@@ -120,7 +131,10 @@ export default function AdminDashboardPage() {
     void loadMerchants();
   }, [loadMerchants]);
 
-  async function toggleMerchant(m: AdminMerchant) {
+  async function toggleMerchant(m: AdminMerchant, e: React.MouseEvent) {
+    // 問題 3（2026-09-06 修）：啟用/停用按鈕點擊時要 stopPropagation，避免冒泡到
+    // <tr> 嘅「點擊跳轉營業報表」handler。
+    e.stopPropagation();
     const next = m.status === "suspended" ? "active" : "suspended";
     const verb = next === "suspended" ? "停用" : "啟用";
     if (!window.confirm(`確定要${verb}「${m.name}」嗎？\n\n${next === "suspended" ? "停用後該店全部賬號將無法登入 POS。" : "啟用後該店賬號可正常登入 POS。"}`)) {
@@ -145,6 +159,12 @@ export default function AdminDashboardPage() {
     } finally {
       setBusyMerchantId(null);
     }
+  }
+
+  // 問題 3（2026-09-06 修）：點擊商家列表某一行 → 直接跳轉該店嘅營業報表。
+  // 沿用 admin/reports 嘅 ?merchantId= URL 約定（避免 prop drilling）。
+  function goToMerchantReport(merchantId: string) {
+    router.push(`/admin/reports?merchantId=${encodeURIComponent(merchantId)}`);
   }
 
   const loadOrders = useCallback(async () => {
@@ -200,6 +220,33 @@ export default function AdminDashboardPage() {
     return map;
   }, [merchants]);
 
+  // 問題 2 + 7（2026-09-06 修）：商家列表分頁 + 名稱即時搜尋。
+  // - filteredMerchants：按搜尋關鍵字過濾（不區分大小寫、支援中英）。
+  // - paginatedMerchants：當前頁（MERCHANTS_PAGE_SIZE 筆）嘅子集。
+  // - totalMerchantPages：總頁數（搜尋結果為空時 = 0）。
+  // 商家變動／搜尋變動時自動重置 page=1，避免分頁錯位指向空白頁。
+  const filteredMerchants = useMemo(() => {
+    const q = merchantSearch.trim().toLowerCase();
+    if (!q) return merchants;
+    return merchants.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
+    );
+  }, [merchants, merchantSearch]);
+
+  useEffect(() => {
+    setMerchantPage(1);
+  }, [merchantSearch, merchants.length]);
+
+  const totalMerchantPages = Math.max(
+    1,
+    Math.ceil(filteredMerchants.length / MERCHANTS_PAGE_SIZE),
+  );
+  const safeMerchantPage = Math.min(Math.max(merchantPage, 1), totalMerchantPages);
+  const paginatedMerchants = useMemo(() => {
+    const start = (safeMerchantPage - 1) * MERCHANTS_PAGE_SIZE;
+    return filteredMerchants.slice(start, start + MERCHANTS_PAGE_SIZE);
+  }, [filteredMerchants, safeMerchantPage]);
+
   return (
     <AdminShell>
       <div className="space-y-6">
@@ -227,8 +274,19 @@ export default function AdminDashboardPage() {
 
         {/* 商家列表 */}
         <section className="rounded-xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-900">商家列表</h2>
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-3">
+            <h2 className="mr-auto text-sm font-semibold text-slate-900">商家列表</h2>
+            {/* 問題 7（2026-09-06 修）：商家名稱即時搜尋，例如輸入「表」即時顯示「表嫂美食」 */}
+            <label className="flex items-center gap-1 text-xs text-slate-500">
+              <span className="hidden sm:inline">搜尋</span>
+              <input
+                type="search"
+                value={merchantSearch}
+                onChange={(e) => setMerchantSearch(e.target.value)}
+                placeholder="商家名稱 / ID…"
+                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500"
+              />
+            </label>
             <button
               type="button"
               onClick={() => void loadMerchants()}
@@ -242,54 +300,107 @@ export default function AdminDashboardPage() {
             <p className="px-4 py-6 text-sm text-slate-500">載入中…</p>
           ) : merchants.length === 0 ? (
             <p className="px-4 py-6 text-sm text-slate-500">尚無商家資料。</p>
+          ) : filteredMerchants.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-slate-500">搜尋「{merchantSearch}」沒有匹配商家。</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
-                    <th className="px-4 py-2 font-medium">商家</th>
-                    <th className="px-4 py-2 font-medium">狀態</th>
-                    <th className="px-4 py-2 text-right font-medium">今日單數</th>
-                    <th className="px-4 py-2 text-right font-medium">今日營業額</th>
-                    <th className="px-4 py-2 text-right font-medium">7日單數</th>
-                    <th className="px-4 py-2 text-right font-medium">7日營業額</th>
-                    <th className="px-4 py-2 font-medium">最近落單</th>
-                    <th className="px-4 py-2 text-right font-medium">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {merchants.map((m) => (
-                    <tr key={m.id} className="border-b border-slate-100 last:border-0">
-                      <td className="px-4 py-2.5 font-medium text-slate-900">{m.name}</td>
-                      <td className="px-4 py-2.5">{statusBadge(m.status)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{m.stats.todayOrders}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtMop(m.stats.todayRevenue)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{m.stats.d7Orders}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtMop(m.stats.d7Revenue)}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{fmtTime(m.stats.lastOrderAt)}</td>
-                      <td className="px-4 py-2.5 text-right">
-                        {m.status === "active" || m.status === "suspended" ? (
-                          <button
-                            type="button"
-                            disabled={busyMerchantId === m.id}
-                            onClick={() => void toggleMerchant(m)}
-                            className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                              m.status === "active"
-                                ? "border border-red-200 text-red-600 hover:bg-red-50"
-                                : "border border-green-200 text-green-700 hover:bg-green-50"
-                            }`}
-                          >
-                            {busyMerchantId === m.id ? "處理中…" : m.status === "active" ? "停用" : "啟用"}
-                          </button>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </td>
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                      <th className="px-4 py-2 font-medium">商家</th>
+                      <th className="px-4 py-2 font-medium">狀態</th>
+                      <th className="px-4 py-2 text-right font-medium">今日單數</th>
+                      <th className="px-4 py-2 text-right font-medium">今日營業額</th>
+                      <th className="px-4 py-2 text-right font-medium">7日單數</th>
+                      <th className="px-4 py-2 text-right font-medium">7日營業額</th>
+                      <th className="px-4 py-2 font-medium">最近落單</th>
+                      <th className="px-4 py-2 text-right font-medium">操作</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {paginatedMerchants.map((m) => {
+                      const isHover = hoveredMerchantId === m.id;
+                      return (
+                        <tr
+                          key={m.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => goToMerchantReport(m.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              goToMerchantReport(m.id);
+                            }
+                          }}
+                          onMouseEnter={() => setHoveredMerchantId(m.id)}
+                          onMouseLeave={() => setHoveredMerchantId((prev) => (prev === m.id ? null : prev))}
+                          title="點擊查看「營業報表」"
+                          className={`cursor-pointer border-b border-slate-100 transition-colors last:border-0 hover:bg-blue-50/60 focus:bg-blue-50/60 focus:outline-none ${
+                            isHover ? "bg-blue-50/60" : ""
+                          }`}
+                        >
+                          <td className="px-4 py-2.5 font-medium text-slate-900">{m.name}</td>
+                          <td className="px-4 py-2.5">{statusBadge(m.status)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{m.stats.todayOrders}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{fmtMop(m.stats.todayRevenue)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{m.stats.d7Orders}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{fmtMop(m.stats.d7Revenue)}</td>
+                          <td className="px-4 py-2.5 text-slate-600">{fmtTime(m.stats.lastOrderAt)}</td>
+                          <td className="px-4 py-2.5 text-right">
+                            {m.status === "active" || m.status === "suspended" ? (
+                              <button
+                                type="button"
+                                disabled={busyMerchantId === m.id}
+                                onClick={(e) => void toggleMerchant(m, e)}
+                                className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                                  m.status === "active"
+                                    ? "border border-red-200 text-red-600 hover:bg-red-50"
+                                    : "border border-green-200 text-green-700 hover:bg-green-50"
+                                }`}
+                              >
+                                {busyMerchantId === m.id ? "處理中…" : m.status === "active" ? "停用" : "啟用"}
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* 問題 2（2026-09-06 修）：商家列表分頁控制（固定 30 筆/頁）。
+                  顯示「總筆數 / 當前頁 / 總頁數」 + 上一頁/下一頁按鈕，避免長列表溢出。 */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2 text-xs text-slate-500">
+                <span>
+                  共 <span className="font-semibold text-slate-700">{filteredMerchants.length}</span> 筆商家
+                  {filteredMerchants.length !== merchants.length ? (
+                    <span className="ml-1 text-slate-400">（已從 {merchants.length} 筆中過濾）</span>
+                  ) : null}
+                  · 第 <span className="font-semibold text-slate-700">{safeMerchantPage}</span> / {totalMerchantPages} 頁
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={safeMerchantPage <= 1}
+                    onClick={() => setMerchantPage((p) => Math.max(1, p - 1))}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    ‹ 上一頁
+                  </button>
+                  <button
+                    type="button"
+                    disabled={safeMerchantPage >= totalMerchantPages}
+                    onClick={() => setMerchantPage((p) => Math.min(totalMerchantPages, p + 1))}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    下一頁 ›
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </section>
 

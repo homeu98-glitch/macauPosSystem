@@ -229,7 +229,16 @@ export function PosApp() {
   const [openTablePartySize, setOpenTablePartySize] = useState<number>(1);
   const [seatedPartySizes, setSeatedPartySizes] = useState<Record<string, number>>(() => {
     const all = loadOrders();
-    return Object.fromEntries(all.filter((o) => o.partySize != null).map((o) => [o.tableId, o.partySize as number]));
+    // 只從進行中訂單初始化入座人數，避免已結帳/取消/退款嘅舊單殘留
+    return Object.fromEntries(
+      all
+        .filter(
+          (o) =>
+            o.partySize != null &&
+            (o.status === "draft" || o.status === "sent_to_kitchen" || o.status === "paid" || o.status === "reopened"),
+        )
+        .map((o) => [o.tableId, o.partySize as number]),
+    );
   });
   const [roModalOpen, setRoModalOpen] = useState(false);
   const [roSubmitting, setRoSubmitting] = useState(false);
@@ -1945,6 +1954,12 @@ export function PosApp() {
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === activeOrder.id ? updatedOrder : order)));
+    // 全部退菜後整單完結，清掉該枱入座人數，避免桌台總覽「空閒」狀態仍顯示舊人數
+    setSeatedPartySizes((current) => {
+      const next = { ...current };
+      delete next[activeOrder.tableId];
+      return next;
+    });
     setActiveOrderId(null);
     setCartItems(nextCartItems);
     setBaseOrderItems(nextBaseItems);
@@ -2567,6 +2582,12 @@ export function PosApp() {
     };
     persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
     removeReopenTempTable(orderId);
+    // 取消單後清掉該枱入座人數，避免桌台總覽「空閒」狀態仍顯示舊人數
+    setSeatedPartySizes((current) => {
+      const next = { ...current };
+      delete next[targetOrder.tableId];
+      return next;
+    });
     pushEvents([
       {
         id: uid("evt"),
@@ -2610,6 +2631,12 @@ export function PosApp() {
     };
     addDeletedOrderIds([orderId]);
     persistOrders(orders.filter((o) => o.id !== orderId));
+    // 真刪單後清掉該枱入座人數，避免桌台總覽「空閒」狀態仍顯示舊人數
+    setSeatedPartySizes((current) => {
+      const next = { ...current };
+      delete next[targetOrder.tableId];
+      return next;
+    });
     pushEvents([deleteEvent]);
     // 在線即 push 去伺服器真刪；離線則留 pending，重連後 syncNow 補傳（tombstone 已擋本地復活）
     if (!offlineMode) {
@@ -2926,6 +2953,13 @@ export function PosApp() {
           : [updatedOrder, ...baseline];
         saveOrders(nextOrders);
         return nextOrders;
+      });
+
+      // 該枱已結帳，清掉 seatedPartySizes 避免桌台總覽「空閒」狀態仍顯示舊人數
+      setSeatedPartySizes((current) => {
+        const next = { ...current };
+        delete next[updatedOrder.tableId];
+        return next;
       });
 
       // 返結 temp 枱重結完成：移除 temp 枱（訂單記錄唔新增，只改返結嗰條）
@@ -3422,7 +3456,8 @@ export function PosApp() {
                     const status = tableOrderMap.get(table.id)?.status ?? "idle";
                     const isReopenedTable = status === "reopened";
                     const isOccupied = status !== "idle";
-                    const seatedCount = seatedPartySizes[table.id] ?? 0;
+                    // 枱狀態為空閒時，唔應再顯示舊單嘅入座人數，否則會出現「空閒 / 已坐 1/—」
+                    const seatedCount = isOccupied ? (seatedPartySizes[table.id] ?? 0) : 0;
                     const total = table.capacity ?? 0;
                     const occupancy = total > 0 ? `${seatedCount}/${total}` : `${seatedCount}/—`;
                     const label =

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { mapOrderRow } from "@/lib/pos-order-row";
+import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 /**
@@ -9,12 +10,27 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
  *
  * Query params：
  * - storeId（可選）：不帶 = 全部店（「全部」彙總報表 / 總覽用）；帶 = 指定店
- * - start / end（可選）：ISO 區間，過濾 created_at（同 /api/pos/state 口徑一致）
+ * - start / end（可選）：ISO 區間；過濾口徑 = `created_at ∈ 區間 OR updated_at ∈ 區間`
+ *   （同 /api/pos/state 及報表 client 端 orderMatchesReportRange 一致）
  * - limit（默認 500，夾 [1, 5000]）、offset（分頁）
  *
  * 把關：admin session token（呢個 endpoint 可以跨店讀單，唔可以好似
  * /api/pos/state 咁開放——收銀工作台嗰個係店內信任環境，admin 呢個係全店視角）。
+ *
+ * 問題 6（2026-09-06 修）：
+ * - start / end 一律轉 UTC ISO（`...Z`）——同一 instant 嘅 lossless 表示，
+ *   徹底避開 PostgREST 對 `+08:00` offset 值嘅解析歧義。
+ * - 區間過濾改用 `fetchOrdersInRange()` 兩腿合併（見 src/lib/pos-orders-range.ts）：
+ *   OR 語義（超集），唔再用 `.or()` nested 語法，亦唔會好似中間版嘅 AND chain
+ *   咁漏「昨日開單、今日結帳」嘅單。
  */
+
+function toUtcIso(iso: string): string {
+  // 接受 "2026-09-06T00:00:00+08:00" / "2026-09-06T00:00:00Z" / "2026-09-06"，統一轉 UTC ISO。
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toISOString();
+}
 
 export async function GET(request: Request) {
   const claims = readAdminSessionFromRequest(request);
@@ -45,40 +61,25 @@ export async function GET(request: Request) {
     offset = parsed;
   }
 
-  const start = searchParams.get("start")?.trim() || null;
-  const end = searchParams.get("end")?.trim() || null;
+  // 問題 6（2026-09-06 修）：轉 UTC ISO 避開 `+08:00` 解析歧義。
+  const start = searchParams.get("start")?.trim() ? toUtcIso(searchParams.get("start")!.trim()) : null;
+  const end = searchParams.get("end")?.trim() ? toUtcIso(searchParams.get("end")!.trim()) : null;
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     return NextResponse.json({ ok: true, source: "mock", orders: [] });
   }
 
-  let query = supabase.from("pos_orders").select("*");
-  if (storeId) query = query.eq("store_id", storeId);
-  if (start && end) {
-    // 同 /api/pos/state 一致：created_at OR updated_at 落喺區間內都收，
-    // 覆蓋「區間內開單」同「區間內結帳」兩種情況。
-    query = query.or(
-      `and(created_at.gte.${start},created_at.lte.${end}),and(updated_at.gte.${start},updated_at.lte.${end})`,
-    );
-  } else if (start) {
-    query = query.gte("created_at", start);
-  } else if (end) {
-    query = query.lte("created_at", end);
-  }
-
-  const { data, error } = await query
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+  const { orders, error } = await fetchOrdersInRange({ supabase, storeId, start, end, limit, offset });
 
   if (error) {
-    return NextResponse.json({ ok: false, error: "讀取訂單失敗。", detail: error.message }, { status: 502 });
+    return NextResponse.json({ ok: false, error: "讀取訂單失敗。", detail: error }, { status: 502 });
   }
 
   return NextResponse.json({
     ok: true,
     scope: storeId ?? "all",
-    orders: (data ?? []).map((row) => mapOrderRow(row as Parameters<typeof mapOrderRow>[0])),
+    orders: orders.map((row) => mapOrderRow(row)),
     limit,
     offset,
   });

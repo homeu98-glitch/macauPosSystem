@@ -704,6 +704,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   const [backfillSeq, setBackfillSeq] = useState(0);
 
   // 切店 / 首次確認 merchantId 時立即清空舊店數據，杜絕閃現外店資料。
+  // 切店 / 切範圍 / 切帳號時重置，杜絕閃現舊店／舊範圍資料（2026-09-06 加 range）。
+  // 舊版只 merchantId 變化時重置 → 切「全部」→「今天」期間 orders 仍殘留「全部」嘅結果，
+  // 新一輪 fetch 尚未返回嘅空窗 UI 顯示舊資料；改為 merchantId / range / adminAllStoresMode
+  // 任一變化即清空 + backfillSeq++ 強制重跑 backfill effect。
   useEffect(() => {
     setOrders([]);
     setBackfillDone(false);
@@ -723,7 +727,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       lastError: null,
     });
     setBackfillSeq((n) => n + 1);
-  }, [merchantId]);
+  }, [merchantId, range, adminAllStoresMode]);
 
   // 菜品銷售排行「更多」彈窗
   const [dishModalOpen, setDishModalOpen] = useState(false);
@@ -1647,10 +1651,18 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   }
 
   return (
-    <div className="h-[100dvh] overflow-hidden bg-slate-100">
-      <AppSidebar />
-      <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
-        <main className="flex h-full flex-1 flex-col overflow-hidden">
+    // 問題 4 + 5（2026-09-06 修）：admin 模式唔需要 POS 收銀台側邊欄，身份綁定錯誤
+    // bug 同時消除（POS session 唔再喺 admin 報表頁渲染）。
+    // - admin 模式（merchantIdOverride 或 allStoresMode）：
+    //   - 唔渲染 <AppSidebar /> → 解決問題 5（移除側邊欄）+ 問題 4（唔再顯示「表嫂美食 65273599」）
+    //   - 唔加 md:pl-[72px] → admin 報表撐滿寬度，配合 AdminShell max-w-7xl
+    //   - 自然流式佈局（無 h-[100dvh] overflow-hidden）→ 整頁由 AdminShell 滾動，
+    //     避免同 sticky header / 上方搜尋列夾埋出現雙重滾動條
+    // - POS 模式：維持原樣
+    <div className={isAdminMode ? "bg-slate-100" : "h-[100dvh] overflow-hidden bg-slate-100"}>
+      {isAdminMode ? null : <AppSidebar />}
+      <div className={isAdminMode ? "" : "flex h-[100dvh] overflow-hidden md:pl-[72px]"}>
+        <main className={isAdminMode ? "flex flex-1 flex-col" : "flex h-full flex-1 flex-col overflow-hidden"}>
           {/* 標題 + 右上篩選 */}
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
