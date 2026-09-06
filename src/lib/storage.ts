@@ -324,9 +324,9 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     // 否則廚房會無啦啦收唔到單。
     autoPrint:
       typeof settings?.autoPrint === "boolean" ? settings.autoPrint : defaultPosLocalSettings.autoPrint,
-    // 毛利（估）手動覆寫：舊 localStorage 冇呢欄 → 用預設 null（系統估算）。
-    grossProfitOverrideMop:
-      typeof settings?.grossProfitOverrideMop === "number" ? settings.grossProfitOverrideMop : defaultPosLocalSettings.grossProfitOverrideMop,
+    // 毛利（估）手動設定毛利率 %：舊 localStorage 冇呢欄 → 用預設 null（系統估算）。
+    grossProfitMarginPct:
+      typeof settings?.grossProfitMarginPct === "number" ? settings.grossProfitMarginPct : defaultPosLocalSettings.grossProfitMarginPct,
   };
 }
 

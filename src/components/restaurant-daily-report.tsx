@@ -1440,31 +1440,34 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     return aggYest.revenue - cogs;
   }, [aggYest, purchase.yest]);
 
-  // 「毛利（估）」手動覆寫：商家可自行輸入估算毛利，存落本店 PosLocalSettings（store scope）。
-  const [gpOverride, setGpOverride] = useState<number | null>(null);
+  // 「毛利（估）」手動設定毛利率 %：商家填毛利率（例如 50 = 50%），
+  // 毛利估算 = 營業額 × 毛利率%，存落本店 PosLocalSettings（store scope）。
+  const [gpMarginPct, setGpMarginPct] = useState<number | null>(null);
   const [gpEditing, setGpEditing] = useState(false);
   const [gpDraft, setGpDraft] = useState("");
 
-  // 切店 / 首次確認 merchantId 時，讀取本店已存嘅毛利覆寫值。
+  // 切店 / 首次確認 merchantId 時，讀取本店已存嘅毛利率。
   useEffect(() => {
     try {
       const s = loadPosLocalSettings();
-      setGpOverride(typeof s.grossProfitOverrideMop === "number" ? s.grossProfitOverrideMop : null);
+      setGpMarginPct(typeof s.grossProfitMarginPct === "number" ? s.grossProfitMarginPct : null);
     } catch {
-      setGpOverride(null);
+      setGpMarginPct(null);
     }
   }, [merchantId]);
 
-  const displayGrossProfit = gpOverride != null ? gpOverride : grossProfit;
+  // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
+  // （displayGrossProfit 依賴 onlineOfflineSplit，喺該 useMemo 宣告後先計算，見下方）
 
   function saveGpOverride() {
     const num = Number(gpDraft);
-    const next = Number.isFinite(num) ? Math.round(num) : null;
-    setGpOverride(next);
+    // 空 / 非數 → 清走手動設定，返返系統估算；否則夾喺 0–100% 之間。
+    const next = Number.isFinite(num) && gpDraft.trim() !== "" ? Math.min(100, Math.max(0, Math.round(num))) : null;
+    setGpMarginPct(next);
     setGpEditing(false);
     try {
       const s = loadPosLocalSettings();
-      s.grossProfitOverrideMop = next;
+      s.grossProfitMarginPct = next;
       savePosLocalSettings(s);
     } catch {
       /* 儲存失敗唔影響當前顯示 */
@@ -1513,6 +1516,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       source: "pos" as const,
     };
   }, [orders, range, ledger.sel, agg.onlineRevenue, agg.revenue]);
+
+  // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
+  const displayGrossProfit =
+    gpMarginPct != null ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100 : grossProfit;
 
   const soldOut = useMemo(() => {
     const map = loadSoldOutState();
@@ -1763,7 +1770,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
                     value={
                       gpEditing ? (
                         <span className="flex items-center gap-1">
-                          <span className="text-sm font-medium text-slate-400">MOP</span>
+                          <span className="text-[11px] font-medium text-slate-400">毛利率</span>
                           <input
                             autoFocus
                             type="number"
@@ -1775,14 +1782,15 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
                             }}
                             className="w-full min-w-0 rounded-md border border-orange-300 px-1 py-0.5 text-2xl font-bold text-orange-600 outline-none focus:ring-1 focus:ring-orange-300"
                           />
+                          <span className="text-sm font-medium text-slate-400">%</span>
                         </span>
                       ) : (
                         <Money amount={displayGrossProfit} />
                       )
                     }
                     highlight
-                    delta={gpOverride != null ? null : grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
-                    subtitle={gpOverride != null ? "已手動設定（點 edit 可重設）" : "系統估算：營業額 − 進貨成本"}
+                    delta={gpMarginPct != null ? null : grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
+                    subtitle={gpMarginPct != null ? `毛利率 ${gpMarginPct}%（營業額 × ${gpMarginPct}%）` : "系統估算：營業額 − 進貨成本"}
                     action={
                       gpEditing ? (
                         <div className="flex items-center gap-1">
@@ -1802,7 +1810,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
                       ) : (
                         <button
                           onClick={() => {
-                            setGpDraft(gpOverride != null ? String(gpOverride) : String(Math.round(grossProfit)));
+                            setGpDraft(gpMarginPct != null ? String(gpMarginPct) : "50");
                             setGpEditing(true);
                           }}
                           className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
