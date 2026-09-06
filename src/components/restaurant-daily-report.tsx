@@ -325,8 +325,9 @@ function resolveMenuMetaItem(
 /** 判斷訂單是否應計入銷售統計（菜品 / 營業額 / 桌台 / 尖峰時段）。
  *  - 線下 POS 單：只統計 settled。
  *  - 帶 onlineOrderId 的單（不論單據嚟自 POS 定 Ledger 同步）：settled 或 paid 都計。
- *  - 退款狀態（refunded / partially_refunded）一律不計入銷售。 */
-function isSaleCountable(o: PosOrder): boolean {
+ *  - 退款狀態（refunded / partially_refunded）一律不計入銷售。
+ *  export：admin panel「全部商家」彙總報表（admin-all-report）沿用同一口徑。 */
+export function isSaleCountable(o: PosOrder): boolean {
   if (o.status === "refunded" || o.status === "partially_refunded") return false;
   if (o.status === "settled" || o.status === "paid") return true;
   return false;
@@ -610,7 +611,21 @@ function backfillRangeFor(range: ReportRangeKey, now = new Date()): { start: str
   return ledgerReportRangeForKey(range, now);
 }
 
-export function RestaurantDailyReport() {
+export type RestaurantDailyReportProps = {
+  /** admin panel 模式：覆寫 merchantId（唔經 auth session / POS 登入）。
+   *  傳入即視為「admin 模式」：Ledger 會員類 RPC（需要 merchant JWT）會跳過，
+   *  POS 訂單數據（/api/pos/state?storeId=）照常拉取——該 API 係 server service-role。 */
+  merchantIdOverride?: string;
+  /** admin 模式：顯示用店名（admin 裝置冇該店 bootstrap cache，fallback「本店」冇意義）。 */
+  storeNameOverride?: string;
+  /** admin「全部」模式：唔指定 merchantId，跨店彙總所有商家嘅 POS 訂單。
+   *  訂單由 adminOrderFetcher 提供；本機 fallback / 店鋪過濾全部停用。 */
+  allStoresMode?: boolean;
+  /** admin 模式訂單 fetcher（GET /api/admin/orders，需 admin token，由 admin 頁面注入）。 */
+  adminOrderFetcher?: (params: { start?: string; end?: string; limit: number; offset: number }) => Promise<PosOrder[]>;
+};
+
+export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   const [range, setRange] = useState<ReportRangeKey>("today");
   // 初始 orders 設為空：避免 hydration / 切店時短暫讀取錯誤 scope 嘅 localStorage。
   // 真正訂單由下方 backfill effect 喺確認 merchantId 後拉取。
@@ -671,7 +686,14 @@ export function RestaurantDailyReport() {
     lastError: null,
   });
 
-  const merchantId = useReportMerchantId();
+  // merchantId 解析：admin panel 傳入 merchantIdOverride 時以佢為準（admin 唔經
+  // POS auth session）；POS 報表頁維持原本 useReportMerchantId() 行為不變。
+  const sessionMerchantId = useReportMerchantId();
+  const isAdminMode = props.merchantIdOverride !== undefined || props.allStoresMode === true;
+  const merchantId = isAdminMode ? props.merchantIdOverride : sessionMerchantId;
+  // 解構成 primitive / 穩定引用，畀 useEffect 依賴陣列用（避免依賴成個 props 物件）。
+  const adminAllStoresMode = props.allStoresMode === true;
+  const adminOrderFetcher = props.adminOrderFetcher;
   const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
   const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date()).substring(0, 7);
   const bom: BomEntry[] = useMemo(() => loadBom(merchantId ?? ""), [merchantId]);
@@ -716,8 +738,8 @@ export function RestaurantDailyReport() {
   );
 
   const storeName = useMemo(
-    () => loadBootstrapCache(merchantId ?? undefined)?.storeName ?? "本店",
-    [merchantId],
+    () => props.storeNameOverride ?? loadBootstrapCache(merchantId ?? undefined)?.storeName ?? "本店",
+    [merchantId, props.storeNameOverride],
   );
   const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date());
 
@@ -789,7 +811,7 @@ export function RestaurantDailyReport() {
     unmatchedItemNames: Record<string, number>;
   }>({
     status: "idle",
-    merchantId,
+    merchantId: merchantId ?? null,
     currentRange: "today",
     fetchedCount: 0,
     localCount: 0,
@@ -829,7 +851,7 @@ export function RestaurantDailyReport() {
       setDebugInfo((prev) => ({
         ...prev,
         status: "loading",
-        merchantId,
+        merchantId: merchantId ?? null,
         currentRange: range,
         lastError: null,
         durationMs: null,
@@ -845,7 +867,9 @@ export function RestaurantDailyReport() {
       // 舊版呢度會 fetch /api/pos/state 唔帶 storeId → API 返**全部店**訂單，
       // 加上 belongsToStore 對 null merchantId 放行 → 報表顯示晒所有店嘅數據
       // （「同一個 local 就全部顯示」bug 嘅讀取端入口）。寧願空白，都唔跨店。
-      if (!merchantId) {
+      // 例外：admin「全部」模式（allStoresMode）——訂單經 adminOrderFetcher
+      // （GET /api/admin/orders，admin token 把關）跨店拉取，屬合法全店視角。
+      if (!merchantId && !adminAllStoresMode) {
         setOrders([]);
         setDebugInfo((prev) => ({
           ...prev,
@@ -880,7 +904,23 @@ export function RestaurantDailyReport() {
       let lastPayloadOk: boolean | undefined;
       let lastError: string | null = null;
       try {
-        for (let page = 0; page < MAX_PAGES; page++) {
+        if (adminOrderFetcher) {
+          // admin「全部」模式：訂單由注入 fetcher 提供（GET /api/admin/orders，
+          // admin session token 把關，唔帶 storeId = 跨店彙總）。分頁語意同下。
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const offset = page * PAGE;
+            lastUrl = "adminOrderFetcher(/api/admin/orders)";
+            const rows = await adminOrderFetcher({
+              start: period?.start,
+              end: period?.end,
+              limit: PAGE,
+              offset,
+            });
+            if (cancelled) return;
+            fetched.push(...rows);
+            if (rows.length < PAGE) break; // 最後一頁
+          }
+        } else for (let page = 0; page < MAX_PAGES; page++) {
           const offset = page * PAGE;
           const rangeQs = period
             ? `&start=${encodeURIComponent(period.start)}&end=${encodeURIComponent(period.end)}`
@@ -921,6 +961,8 @@ export function RestaurantDailyReport() {
       // 舊版 migration 遺留嘅 undefined storeId 單喺多店環境下無法判斷所屬店，
       // 寧願丟失都唔可以顯示喺錯誤店鋪（呢啲單通常係早期測試髒資料）。
       const belongsToStore = (o: PosOrder) => {
+        // admin「全部」模式：全店視角，放行全部（訂單已由 server 端 admin API 把關）。
+        if (adminAllStoresMode) return true;
         // 🛡️ 冇 merchantId 一律唔放行（舊版「dev 模式未登入：放行」係跨店後門，
         // 2026-09-06 收口；effect 頂部已對 null merchantId 提前 bail，呢度係第二道保險）。
         if (!merchantId) return false;
@@ -994,7 +1036,7 @@ export function RestaurantDailyReport() {
 
       setDebugInfo({
         status: cloudFailed && fetched.length === 0 ? "error" : "success",
-        merchantId,
+        merchantId: merchantId ?? null,
         currentRange: range,
         fetchedCount: fetched.length,
         localCount: localOrders.length,
@@ -1027,7 +1069,7 @@ export function RestaurantDailyReport() {
     return () => {
       cancelled = true;
     };
-  }, [merchantId, backfillSeq, range]);
+  }, [merchantId, backfillSeq, range, adminAllStoresMode, adminOrderFetcher]);
 
   // 訂閱 authSession 變更：切換帳號時重置 orders 並強制重跑 backfill。
   // root cause 修復（2026-09-04）：React 唔會自動訂閱 localStorage，冇呢個 listener
@@ -1054,6 +1096,22 @@ export function RestaurantDailyReport() {
     async function loadOnlineByHour() {
       // 切換範圍時即刻清走舊範圍嘅線上單，避免新數據 fetch 完成前顯示舊資料。
       setOnlineOrders([]);
+      if (isAdminMode) {
+        // admin 模式：listMerchantOrders RPC 需要商戶 JWT，admin 裝置冇（亦唔應該有），
+        // 跳過避免攞到殘留 session 嘅錯店數據。線上單統計由 POS 數據覆蓋部分代替。
+        setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
+        setOnlineFetchInfo({
+          fetched: 0,
+          counted: 0,
+          outOfRange: 0,
+          cancelled: 0,
+          unpaid: 0,
+          status: "skipped",
+          lastError: "admin 模式：線上單統計跳過",
+        });
+        return;
+      }
       if (!merchantId) {
         // 未登入 Ledger 商戶 → 唔抓線上單。
         setOnlineByHour(new Array<number>(24).fill(0));
@@ -1186,7 +1244,7 @@ export function RestaurantDailyReport() {
     return () => {
       cancelled = true;
     };
-  }, [merchantId, range]);
+  }, [merchantId, range, isAdminMode]);
 
   useEffect(() => {
     async function safeLedger(r: ReportRangeKey): Promise<LedgerReportSummary | null> {
@@ -1201,6 +1259,19 @@ export function RestaurantDailyReport() {
 
     let cancelled = false;
     async function load() {
+      if (isAdminMode) {
+        // admin 模式：getMerchantReportSummary / fetchPurchaseSummary 都係按
+        // 「當前登入商戶 JWT」取數，admin 裝置冇商戶身份 → 跳過（KPI 大數
+        // 改由 POS 訂單聚合提供）。低庫存 API 係 server service-role by store
+        // 參數，照常抓。會員充值 / 線上渠道等 Ledger 類模塊會顯示為零值。
+        if (cancelled) return;
+        setLedger({ sel: null, d7: null, yest: null });
+        setPurchase({ sel: null, yest: null });
+        setLedgerError(null);
+        setLoading(false);
+        setLedgerDone(true);
+        return;
+      }
       setLoading(true);
       setLedgerError(null);
       const [sel, d7, yest] = await Promise.all([
@@ -1254,7 +1325,7 @@ export function RestaurantDailyReport() {
     return () => {
       cancelled = true;
     };
-  }, [range, merchantId, merchantIdForQuery]);
+  }, [range, merchantId, merchantIdForQuery, isAdminMode]);
 
   // Ledger 純線上單入報表前，先剔除已經同步入 POS DB 嘅單（以 POS onlineOrderId ↔ Ledger id 對應），
   // 避免人流 / 時長統計雙重計算。剩低嘅就係「從未入 POS DB」嘅線上單。
@@ -1278,7 +1349,7 @@ export function RestaurantDailyReport() {
   useEffect(() => {
     let cancelled = false;
     async function loadOnlineDetails() {
-      if (!merchantId || countableOnlineOrders.length === 0) {
+      if (isAdminMode || !merchantId || countableOnlineOrders.length === 0) {
         setOnlineDishSource([]);
         setOnlineDetailInfo({ total: 0, ok: 0, failed: 0, status: "idle", lastError: null });
         return;

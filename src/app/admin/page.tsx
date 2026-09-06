@@ -10,8 +10,8 @@ import { UserPermissions, UserRole } from "@/lib/types";
  * /admin — 管理員登入入口（8 位帳號 + 4 位 PIN）。
  *
  * 登入成功後用 `/api/admin/session` 換一張 12h 短效 token，存入 auth session
- * （localStorage），再跳去 /admin/accounts（帳戶管理主頁）。所有帳戶管理操作都靠呢張 token 授權
- * （見 docs/89 §2）。只有 `manageAccounts` 權限嘅帳號（admin / manager）先攞到 token。
+ * （localStorage），再跳去 /admin/dashboard（店鋪總覽）。所有 admin API 調用都靠
+ * 呢張 token 授權（見 docs/89 §2）。
  *
  * 呢度係獨立於 POS 收銀登入嘅管理入口：即使部機未做 POS 收銀登入，都可以用
  * 管理員帳號直接登入後台。
@@ -33,7 +33,7 @@ export default function AdminLoginPage() {
   useEffect(() => {
     const session = loadAuthSession();
     if (session?.adminSessionToken) {
-      router.replace("/admin/accounts");
+      router.replace("/admin/dashboard");
     }
   }, [router]);
 
@@ -72,7 +72,7 @@ export default function AdminLoginPage() {
             adminSessionToken: payload.token,
           };
       saveAuthSession(next);
-      router.replace("/admin/accounts");
+      router.replace("/admin/dashboard");
     } catch {
       setError("網絡錯誤，請重試。");
     } finally {
