@@ -465,6 +465,13 @@ export interface PosLocalSettings {
    * 嘅出單行為，同一間店可以前台出單、後台唔出單，唔可以擺落全店共用嘅 DB 設定。
    */
   autoPrint: boolean;
+  /**
+   * 毛利（估）手動覆寫值（MOP）。報表「毛利（估）」格子嘅 edit 掣輸入。
+   * - `null`（預設）= 用系統估算（營業額 − 進貨成本）；
+   * - 設咗數值 = 直接用商家手動輸入嘅估算毛利。
+   * 按 store scope 存落 PosLocalSettings（呢部收銀機嘅本地設定，唔跨店）。
+   */
+  grossProfitOverrideMop?: number | null;
 }
 
 export interface OrderItem {

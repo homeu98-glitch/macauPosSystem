@@ -17,7 +17,9 @@ import {
   loadBootstrapCache,
   loadDeletedOrderIds,
   loadOrders,
+  loadPosLocalSettings,
   loadSoldOutState,
+  savePosLocalSettings,
 } from "@/lib/storage";
 import { orderMatchesReportRange, ledgerReportRangeForKey, type ReportRangeKey } from "@/lib/ledger/report-period";
 import {
@@ -30,7 +32,7 @@ import {
   computeFootfallFromOrders,
 } from "@/lib/restaurant-footfall";
 import { formatMoney } from "@/lib/format";
-import type { PosOrder } from "@/lib/types";
+import type { PosOrder, PosLocalSettings } from "@/lib/types";
 import Link from "next/link";
 
 // 篩選順序統一：今天 / 昨天 / 7天 / 30天 / 全部（置右上）
@@ -1438,6 +1440,37 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     return aggYest.revenue - cogs;
   }, [aggYest, purchase.yest]);
 
+  // 「毛利（估）」手動覆寫：商家可自行輸入估算毛利，存落本店 PosLocalSettings（store scope）。
+  const [gpOverride, setGpOverride] = useState<number | null>(null);
+  const [gpEditing, setGpEditing] = useState(false);
+  const [gpDraft, setGpDraft] = useState("");
+
+  // 切店 / 首次確認 merchantId 時，讀取本店已存嘅毛利覆寫值。
+  useEffect(() => {
+    try {
+      const s = loadPosLocalSettings();
+      setGpOverride(typeof s.grossProfitOverrideMop === "number" ? s.grossProfitOverrideMop : null);
+    } catch {
+      setGpOverride(null);
+    }
+  }, [merchantId]);
+
+  const displayGrossProfit = gpOverride != null ? gpOverride : grossProfit;
+
+  function saveGpOverride() {
+    const num = Number(gpDraft);
+    const next = Number.isFinite(num) ? Math.round(num) : null;
+    setGpOverride(next);
+    setGpEditing(false);
+    try {
+      const s = loadPosLocalSettings();
+      s.grossProfitOverrideMop = next;
+      savePosLocalSettings(s);
+    } catch {
+      /* 儲存失敗唔影響當前顯示 */
+    }
+  }
+
   const ticketMopYest = aggYest && aggYest.count > 0 ? aggYest.revenue / aggYest.count : 0;
 
   /** 「線下 vs 線上」分拆：
@@ -1656,68 +1689,156 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
             {/* DevTools debug panel：暫時由 UI 隱藏 */}
             {false}
 
-            {/* 核心 KPI 帶 */}
+            {/* 核心 KPI 帶 — 分兩行排列 */}
             {dataReady ? (
-              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
-                <Kpi
-                  label="營業額"
-                  value={formatMoney(onlineOfflineSplit.totalRevenueMop)}
-                  highlight
-                  delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
-                  subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
-                />
-                <Kpi
-                  label="毛利（估）"
-                  value={formatMoney(grossProfit)}
-                  highlight
-                  delta={grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
-                />
-                <Kpi
-                  label="訂單數"
-                  value={String(onlineOfflineSplit.totalCount)}
-                  delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
-                  subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
-                />
-                <Kpi
-                  label="客單價"
-                  value={formatMoney(
-                    onlineOfflineSplit.totalCount > 0
-                      ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
-                      : 0,
-                  )}
-                  delta={pct(
-                    onlineOfflineSplit.totalCount > 0
-                      ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
-                      : 0,
-                    ticketMopYest,
-                  )}
-                />
-                <Kpi label="餘額總額" value={ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"} delta={null} />
-                <Kpi label="會員充值" value={formatMoney(ledger.sel?.topupMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null} subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`} />
-                <Kpi label="會員扣點" value={formatMoney(ledger.sel?.deductMop ?? 0)} delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null} subtitle={`已付 ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`} />
-                <Kpi
-                  label="應收金額合計"
-                  value={formatMoney(agg.receivableTotal)}
-                  delta={null}
-                  subtitle={`原價合計 + 服務費 + 稅`}
-                />
-                <Kpi
-                  label="實收金額合計"
-                  value={formatMoney(agg.paidTotal)}
-                  delta={null}
-                  subtitle={`優惠後商家實際收到 = order.total`}
-                />
-              </div>
+              <>
+                {/* 第一行：營業額 / 應收金額合計 / 實收金額合計 / 訂單數 / 客單價 */}
+                <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                  <Kpi
+                    label="營業額"
+                    value={<Money amount={onlineOfflineSplit.totalRevenueMop} />}
+                    highlight
+                    delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
+                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                  />
+                  <Kpi
+                    label="應收金額合計"
+                    value={<Money amount={agg.receivableTotal} />}
+                    delta={null}
+                    subtitle="原價合計 + 服務費 + 稅"
+                  />
+                  <Kpi
+                    label="實收金額合計"
+                    value={<Money amount={agg.paidTotal} />}
+                    delta={null}
+                    subtitle="優惠後商家實際收到 = order.total"
+                  />
+                  <Kpi
+                    label="訂單數"
+                    value={String(onlineOfflineSplit.totalCount)}
+                    delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
+                    subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
+                  />
+                  <Kpi
+                    label="客單價"
+                    value={
+                      <Money
+                        amount={
+                          onlineOfflineSplit.totalCount > 0
+                            ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                            : 0
+                        }
+                      />
+                    }
+                    delta={pct(
+                      onlineOfflineSplit.totalCount > 0
+                        ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                        : 0,
+                      ticketMopYest,
+                    )}
+                  />
+                </div>
+
+                {/* 第二行：餘額總額 / 會員充值 / 會員扣點 / 毛利（估） */}
+                <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                  <Kpi
+                    label="餘額總額"
+                    value={ledger.sel?.balanceTotalMop != null ? <Money amount={ledger.sel.balanceTotalMop} /> : "—"}
+                    delta={null}
+                  />
+                  <Kpi
+                    label="會員充值"
+                    value={<Money amount={ledger.sel?.topupMop ?? 0} />}
+                    delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null}
+                    subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`}
+                  />
+                  <Kpi
+                    label="會員扣點"
+                    value={<Money amount={ledger.sel?.deductMop ?? 0} />}
+                    delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null}
+                    subtitle={`已付 ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`}
+                  />
+                  <Kpi
+                    label="毛利（估）"
+                    value={
+                      gpEditing ? (
+                        <span className="flex items-center gap-1">
+                          <span className="text-sm font-medium text-slate-400">MOP</span>
+                          <input
+                            autoFocus
+                            type="number"
+                            value={gpDraft}
+                            onChange={(e) => setGpDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveGpOverride();
+                              if (e.key === "Escape") setGpEditing(false);
+                            }}
+                            className="w-full min-w-0 rounded-md border border-orange-300 px-1 py-0.5 text-2xl font-bold text-orange-600 outline-none focus:ring-1 focus:ring-orange-300"
+                          />
+                        </span>
+                      ) : (
+                        <Money amount={displayGrossProfit} />
+                      )
+                    }
+                    highlight
+                    delta={gpOverride != null ? null : grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
+                    subtitle={gpOverride != null ? "已手動設定（點 edit 可重設）" : "系統估算：營業額 − 進貨成本"}
+                    action={
+                      gpEditing ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={saveGpOverride}
+                            className="text-[11px] font-semibold text-orange-600 hover:underline"
+                          >
+                            儲存
+                          </button>
+                          <button
+                            onClick={() => setGpEditing(false)}
+                            className="text-[11px] text-slate-400 hover:underline"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setGpDraft(gpOverride != null ? String(gpOverride) : String(Math.round(grossProfit)));
+                            setGpEditing(true);
+                          }}
+                          className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
+                          title="編輯毛利預估值"
+                        >
+                          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M11 2l3 3L6 13l-3.5.5L3 10z" strokeLinejoin="round" />
+                          </svg>
+                          edit
+                        </button>
+                      )
+                    }
+                  />
+                </div>
+              </>
             ) : (
-              <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
-                {Array.from({ length: 9 }).map((_, i) => (
-                  <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="flex h-16 items-center justify-center">
-                      <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+              <>
+                <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={`sk-1-${i}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="flex h-16 items-center justify-center">
+                        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+                <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={`sk-2-${i}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="flex h-16 items-center justify-center">
+                        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
 
             {/* 模塊 1 + 模塊 2：食材消耗（BOM 精確化） */}
@@ -2329,21 +2450,39 @@ function Kpi({
   highlight,
   delta,
   subtitle,
+  action,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   highlight?: boolean;
   delta: { arrow: string; cls: string } | null;
   /** 大數下方的小字（如「線下/線上」分拆）。 */
   subtitle?: string;
+  /** 右上角操作位（如「毛利（估）」嘅 edit 掣）。 */
+  action?: React.ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="text-xs text-slate-500">{label}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs text-slate-500">{label}</div>
+        {action}
+      </div>
       <div className={`mt-1 text-2xl font-bold ${highlight ? "text-orange-600" : "text-slate-900"}`}>{value}</div>
       {subtitle ? <div className="mt-0.5 text-[11px] text-slate-500">{subtitle}</div> : null}
       {delta ? <div className={`mt-1 text-[11px] ${delta.cls}`}>{delta.arrow}</div> : null}
     </div>
+  );
+}
+
+/** 金額渲染：貨幣前綴（MOP）縮細，數字保持大號字，避免「MOP 123,456」擠爆格子。 */
+function Money({ amount, currency = "MOP" }: { amount: number; currency?: string }) {
+  const rounded = Math.round(Number.isFinite(amount) ? amount : 0);
+  const grouped = rounded.toLocaleString("en-US");
+  return (
+    <span className="tabular-nums">
+      <span className="mr-1 align-baseline text-sm font-medium text-slate-400">{currency}</span>
+      <span>{grouped}</span>
+    </span>
   );
 }
 

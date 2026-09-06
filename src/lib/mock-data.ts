@@ -541,4 +541,6 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   autoAcceptSelfOrder: true,
   // 「自動打印」開關：預設開（落單出廚房單、結帳出收據）。見 PosLocalSettings.autoPrint。
   autoPrint: true,
+  // 毛利（估）手動覆寫：預設用系統估算（null）。見 PosLocalSettings.grossProfitOverrideMop。
+  grossProfitOverrideMop: null,
 };
