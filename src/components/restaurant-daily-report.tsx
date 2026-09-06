@@ -1105,6 +1105,9 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       if (isAdminMode) {
         // admin 模式：listMerchantOrders RPC 需要商戶 JWT，admin 裝置冇（亦唔應該有），
         // 跳過避免攞到殘留 session 嘅錯店數據。線上單統計由 POS 數據覆蓋部分代替。
+        // 🛡️ 2026-09-07 修：admin 模式 early return 入面必須 setLedgerDone(true)，否則
+        // `if (backfillDone && ledgerDone) setDataReady(true)` 永遠唔成立 → dataReady
+        // 永遠 false → 全部 Card 永久顯示 SectionSkeleton → 用戶睇唔到任何數據。
         setOnlineByHour(new Array<number>(24).fill(0));
         setOnlineOrders([]);
         setOnlineFetchInfo({
@@ -1116,6 +1119,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
           status: "skipped",
           lastError: "admin 模式：線上單統計跳過",
         });
+        setLedgerDone(true);
         return;
       }
       if (!merchantId) {
@@ -1656,13 +1660,15 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     // - admin 模式（merchantIdOverride 或 allStoresMode）：
     //   - 唔渲染 <AppSidebar /> → 解決問題 5（移除側邊欄）+ 問題 4（唔再顯示「表嫂美食 65273599」）
     //   - 唔加 md:pl-[72px] → admin 報表撐滿寬度，配合 AdminShell max-w-7xl
-    //   - 自然流式佈局（無 h-[100dvh] overflow-hidden）→ 整頁由 AdminShell 滾動，
-    //     避免同 sticky header / 上方搜尋列夾埋出現雙重滾動條
-    // - POS 模式：維持原樣
+    //   - 唔再 `flex-1 overflow-auto`（2026-09-07 修）：內部 scroll 喺冇固定高度嘅 flex
+    //     parent 入面係冇用嘅（flex-1 = 撐到內容高度，overflow-auto 唔會出現 scrollbar）。
+    //     而家改為普通 block layout，由 AdminShell 嘅 `h-[100dvh] overflow-y-auto`
+    //     容器負責頁面滾動（避開 globals.css `body { overflow: hidden }` 鎖死）。
+    // - POS 模式：維持原樣 h-[100dvh] + AppSidebar + md:pl-[72px]。
     <div className={isAdminMode ? "bg-slate-100" : "h-[100dvh] overflow-hidden bg-slate-100"}>
       {isAdminMode ? null : <AppSidebar />}
       <div className={isAdminMode ? "" : "flex h-[100dvh] overflow-hidden md:pl-[72px]"}>
-        <main className={isAdminMode ? "flex flex-1 flex-col" : "flex h-full flex-1 flex-col overflow-hidden"}>
+        <main className={isAdminMode ? "block" : "flex h-full flex-1 flex-col overflow-hidden"}>
           {/* 標題 + 右上篩選 */}
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1698,7 +1704,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
             </div>
           </div>
 
-          <div className="flex-1 overflow-auto p-4">
+          <div className="block p-4">
             {ledgerError ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {ledgerError}

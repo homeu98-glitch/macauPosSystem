@@ -59,3 +59,15 @@
 
 - Node 22.22.2-2（managed）、Python 3.13.12（managed）
 - 詳細工具說明見 `AGENTS.md`（Next.js 16.3.0 + Turbopack + Tailwind 4）
+
+## Admin Panel 全域滾動約定（2026-09-07 定案）
+
+- **`body { overflow: hidden }`（喺 `src/app/globals.css`）係全局鎖死滾動**，唔可以任意刪除——POS app 嘅內部 scroll container 依賴 body 不滾動避免雙滾動條。
+- Admin panel 用 **AdminShell 自己嘅 `h-[100dvh] overflow-y-auto` 做內部滾動容器**，sticky header 喺呢個容器內仍然 work（sticky 相對於最近嘅 overflow container）。POS app layout 完全唔受影響。
+- **唔好用 body scroll 做 admin panel 滾動**——會被全局 `body { overflow: hidden }` 鎖死。
+
+## Admin Panel dataReady 約定（2026-09-07 修）
+
+- `dataReady = backfillDone && ledgerDone`，兩個都必須 true 先 render 內容（否則永遠 skeleton）。
+- admin 模式 `loadOnlineByHour` effect 嘅 early return **必須 setLedgerDone(true)**，否則 ledgerDone 永遠 false → dataReady 永遠 false → 全部 Card 永遠顯示 skeleton。
+- POS 模式唔受影響（POS 嘅 `loadOnlineByHour` 早 return branch 已經 setLedgerDone）。
