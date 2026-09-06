@@ -7,7 +7,7 @@ import {
   buildLabelPrintJobs,
   buildReopenPrintJobs,
 } from "@/lib/print-jobs";
-import { notifyQueueChanged } from "@/lib/pos/sync-flush";
+import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { TEMP_REOPEN_ID_PREFIX } from "@/lib/pos/table-scope";
 import {
@@ -280,7 +280,8 @@ export function confirmSelfOrder(orderId: string): ConfirmSelfOrderResult {
     createdAt: now,
   };
   const queue = loadQueue();
-  saveQueue([event, ...queue]);
+  // 🛡️ 跨店隔離 L1：新事件 stamp 當前店；舊 queue 原封不動（唔可以改寫外店事件歸屬）。
+  saveQueue([...withStoreScope([event]), ...queue]);
   // 立刻觸發 sync flush（之前只 persistQueue，DB 永遠唔知本地寫咗 cancelled/sent_to_kitchen
   // → loadRuntimeState() pull server 嘅 draft 蓋返本地 → 「鬼」單又彈返嚟。見 sync-flush.ts 頂部說明。）
   notifyQueueChanged();
@@ -330,7 +331,8 @@ export function rejectSelfOrder(orderId: string, reason?: string): { ok: boolean
     createdAt: now,
   };
   const queue = loadQueue();
-  saveQueue([event, ...queue]);
+  // 🛡️ 跨店隔離 L1：同 confirmSelfOrder —— 只 stamp 新事件。
+  saveQueue([...withStoreScope([event]), ...queue]);
   notifyQueueChanged();
 
   if (typeof window !== "undefined") {

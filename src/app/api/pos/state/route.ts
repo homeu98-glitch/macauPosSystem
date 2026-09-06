@@ -146,7 +146,14 @@ export async function GET(request: Request) {
     });
   }
 
-  const queueQuery = supabase.from("pos_queue_events").select("*").order("created_at", { ascending: false }).limit(300);
+  // 🛡️ 跨店隔離 L2（0022 migration，2026-09-06 修）：queue 一律按 store 過濾。
+  // 以前呢度完全冇過濾 → 全店最新 300 條事件派發畀任何 client，loadRuntimeState()
+  // merge 入本地 queue 後，flush 用當前登入 merchantId 蓋章推上雲 —— 跨店串號嘅
+  // 源頭之一。冇 storeId（未登入又冇 kiosk 綁定）→ limit(0) 返空，寧願冇 queue
+  // 都唔好派發其他店嘅事件（fail-safe）。歷史行 store_id IS NULL 天然被 eq 排除。
+  const queueQuery = storeId
+    ? supabase.from("pos_queue_events").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(300)
+    : supabase.from("pos_queue_events").select("*").limit(0);
   const printJobsQuery = storeId
     ? supabase.from("pos_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(200)
     : supabase.from("pos_print_jobs").select("*").order("created_at", { ascending: false }).limit(200);
@@ -175,6 +182,8 @@ export async function GET(request: Request) {
         payload: event.payload,
         status: event.status,
         createdAt: event.created_at,
+        // 🛡️ 跨店隔離：client loadRuntimeState 靠呢個欄 skip 外店事件（L3 第二道閘）。
+        storeId: event.store_id ?? undefined,
       })) ?? [],
     printJobs:
       printJobs?.map((job) => ({

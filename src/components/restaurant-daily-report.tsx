@@ -841,6 +841,30 @@ export function RestaurantDailyReport() {
       }));
       const start = performance.now();
 
+      // 🛡️ 跨店隔離 fail-safe（2026-09-06 修）：冇 merchantId（未登入 / 切店中途）一律唔拉。
+      // 舊版呢度會 fetch /api/pos/state 唔帶 storeId → API 返**全部店**訂單，
+      // 加上 belongsToStore 對 null merchantId 放行 → 報表顯示晒所有店嘅數據
+      // （「同一個 local 就全部顯示」bug 嘅讀取端入口）。寧願空白，都唔跨店。
+      if (!merchantId) {
+        setOrders([]);
+        setDebugInfo((prev) => ({
+          ...prev,
+          status: "error",
+          fetchedCount: 0,
+          localCount: 0,
+          finalCount: 0,
+          lastUrl: "",
+          lastError: "未登入（merchantId 缺失）—— 已封鎖跨店讀取，請先登入店舖帳號",
+          durationMs: Math.round(performance.now() - start),
+          statusBreakdown: {},
+          storeIdBreakdown: {},
+          foreignStoreCount: 0,
+          sampleDates: [],
+        }));
+        setBackfillDone(true);
+        return;
+      }
+
       // 依所選範圍 [start, end] 喺 SQL layer 做日期過濾（`/api/pos/state` 已支援，
       // 同時 `eq("store_id", storeId)` 過濾本店；雙重保險：前端再加 `o.storeId === merchantId`）。
       // - today / yesterday / 7d / 30d → 拉對應 Macau 邊界內嘅單。
@@ -897,7 +921,9 @@ export function RestaurantDailyReport() {
       // 舊版 migration 遺留嘅 undefined storeId 單喺多店環境下無法判斷所屬店，
       // 寧願丟失都唔可以顯示喺錯誤店鋪（呢啲單通常係早期測試髒資料）。
       const belongsToStore = (o: PosOrder) => {
-        if (!merchantId) return true; // dev 模式未登入：放行
+        // 🛡️ 冇 merchantId 一律唔放行（舊版「dev 模式未登入：放行」係跨店後門，
+        // 2026-09-06 收口；effect 頂部已對 null merchantId 提前 bail，呢度係第二道保險）。
+        if (!merchantId) return false;
         return o.storeId === merchantId;
       };
 

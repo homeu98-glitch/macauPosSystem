@@ -126,7 +126,11 @@ function readLegacyBootstrapStoreId(): string | null {
 
 function legacyDataBelongsToMerchant(merchantId: string): boolean {
   const legacyStoreId = readLegacyBootstrapStoreId();
-  if (!legacyStoreId) return true;
+  // 🛡️ 跨店隔離 fail-safe（2026-09-06 修）：冇 legacy bootstrap 標記 = 無法證明
+  // legacy 全局數據（macau-pos/*）屬於呢間店。以前無條件返 true，會將「登出期間
+  // 寫落全局 key 嘅外店訂單 / queue」整套吸收入新登入店嘅 scope —— 跨店串號嘅
+  // 本地入口之一。寧願唔遷移（數據留喺 legacy key 唔會顯示喺任何店），都唔張冠李戴。
+  if (!legacyStoreId) return false;
   return legacyStoreId === merchantId;
 }
 

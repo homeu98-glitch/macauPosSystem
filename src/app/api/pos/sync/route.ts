@@ -17,6 +17,12 @@ import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
  *
  * 2026-09-01 comp_note / comped_at 上雲（見 docs/91）：免單備註要落 `pos_orders` 直欄，
  *   否則換機／清 cache 由 server state reload 之後會冇咗（本地有、雲端冇）。
+ *
+ * 2026-09-06 跨店隔離（0022 migration，見 docs/pos-cross-store-isolation-fix-plan.md）：
+ *   事件自帶 `storeId`（client `withStoreScope()` 於產生嗰刻 stamp）。本路由驗證
+ *   `event.storeId === 請求 storeId`，唔一致即拒收（跨店事件）—— 杜絕「flush 嗰刻
+ *   邊個登入，張單就歸邊間店」嘅舊行為（切帳號後外店訂單被請求級 storeId 蓋章
+ *   寫入 pos_orders 嘅 root cause）。`pos_queue_events` 同步落 `store_id` 欄。
  */
 
 // ─────────────────────────────────────────────────────────────
@@ -193,6 +199,21 @@ export async function POST(request: Request) {
       continue;
     }
 
+    // ── 3.5) 🛡️ 跨店隔離（0022 migration，2026-09-06 修）──
+    // 事件自帶 storeId（client withStoreScope() stamp）必須同請求級 storeId 一致，
+    // 唔一致 = 跨店事件（server state merge 殘留 / 偽造）→ 大聲拒收。
+    // 舊 client 唔帶 storeId（null）→ 溫和 fallback 請求級 storeId（legacy 相容；
+    // 舊 client 嘅 flush 本來就用當前登入店，行為不變）。
+    const rawEventStoreId = typeof event.storeId === "string" ? event.storeId.trim() : "";
+    const eventStoreId = rawEventStoreId.slice(0, MAX_STORE_ID_LEN) || null;
+    if (eventStoreId && eventStoreId !== storeId) {
+      console.warn(
+        `[pos/sync] 拒收跨店事件 ${eventId}（event.storeId=${eventStoreId} ≠ 請求 storeId=${storeId}）`,
+      );
+      errors.push(`事件 ${eventId} 的店舖標識與請求不一致（跨店事件），已拒絕`);
+      continue;
+    }
+
     const eventPayload = (typeof event.payload === "object" && event.payload !== null
       ? event.payload
       : {}) as Record<string, unknown>;
@@ -205,6 +226,9 @@ export async function POST(request: Request) {
         payload: eventPayload,
         status: text(event.status, 64),
         created_at: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
+        // 🛡️ 跨店隔離：queue 行記錄事件歸屬店（/api/pos/state 按呢欄過濾派發）。
+        // 上面已驗證 eventStoreId === storeId（或 null legacy）→ 直接落 eventStoreId。
+        store_id: eventStoreId,
       },
       { onConflict: "id" },
     );
@@ -226,6 +250,9 @@ export async function POST(request: Request) {
           {
             id: orderId,
             local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
+            // 🛡️ 跨店隔離不變量：呢度用請求級 storeId 係安全嘅 —— 上面 3.5 已驗證
+            // eventStoreId === storeId（事件自帶店）或 eventStoreId 為 null（legacy 舊 client）。
+            // 即係「呢張單嘅店 = flush 請求聲稱嘅店 = 事件自己嘅店」，三者一致先會行到呢度。
             store_id: storeId,
             table_id: text(order.tableId, MAX_ID_LEN),
             table_name: text(order.tableName, MAX_NAME_LEN),

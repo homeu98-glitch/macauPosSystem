@@ -307,6 +307,9 @@ export async function submitKioskOrder(
       payload: order,
       status: "synced",
       createdAt: now,
+      // 🛡️ 跨店隔離 L1：kiosk 落單事件帶自身綁定店（函數參數 storeId 即真源，
+      // 唔使再行 resolveStoreId() —— kiosk 未登入 POS 帳號，auth branch 會 miss）。
+      storeId,
     },
   ];
 

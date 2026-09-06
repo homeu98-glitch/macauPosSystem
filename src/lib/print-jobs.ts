@@ -410,6 +410,9 @@ export async function deletePrintJobsOnServer(ids: string[]): Promise<void> {
     payload: { id },
     status: "synced" as const,
     createdAt: new Date().toISOString(),
+    // 🛡️ 跨店隔離 L1：事件帶自身 store（呢度係即建即推，冇入本地 queue，
+    // 直接用請求同一個 storeId stamp 即可）。
+    storeId,
   }));
   try {
     await fetch("/api/pos/sync", {

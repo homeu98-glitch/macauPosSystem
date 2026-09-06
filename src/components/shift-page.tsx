@@ -25,7 +25,7 @@ import {
   saveShiftState,
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
-import { resolveStoreId } from "@/lib/pos/sync-flush";
+import { resolveStoreId, withStoreScope, filterEventsForCurrentStore } from "@/lib/pos/sync-flush";
 import { PrintJob, PosOrder, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
@@ -275,7 +275,7 @@ export function ShiftPage() {
       status: "pending",
       createdAt: now,
     };
-    const nextQueue = [...loadQueue(), event];
+    const nextQueue = [...loadQueue(), ...withStoreScope([event])];
     saveQueue(nextQueue);
     setStatus(`已把 ${row.closedAt.slice(0, 10)} 的交班單加入重打隊列。`);
     setReprintingShiftId(null);
@@ -292,7 +292,12 @@ export function ShiftPage() {
     // result.ok 就會 return false —— 交班就咁**永久閂唔到**（2026-09-03 發現嘅
     // regression：之前改呢度加 result.ok check 時，冇諗到 failed 都會被揀入 batch）。
     // failed 由落單畫面嘅「重試同步」掣處理（retryFailedSyncEvents），交班只專注 pending。
-    const retryable = loadQueue().filter((item) => item.status === "pending");
+    //
+    // 🛡️ 跨店隔離 L4（2026-09-06 修）：呢條係**獨立於 doFlush 嘅第二條 flush 路徑**，
+    // 以前只 filter pending、冇 store 過濾 → 交班嗰刻會將 queue 入面嘅外店 / legacy
+    // 事件用當前登入 merchantId 蓋章推上雲（跨店串號入口之一）。家陣必須過
+    // filterEventsForCurrentStore —— 只同步屬於當前店嘅事件。
+    const retryable = filterEventsForCurrentStore(loadQueue().filter((item) => item.status === "pending"));
     const failedCount = loadQueue().filter((item) => item.status === "failed").length;
     if (retryable.length === 0) {
       if (failedCount > 0) {
@@ -458,22 +463,31 @@ export function ShiftPage() {
       createdAt: now,
     };
 
-    const nextQueue = [...loadQueue(), event];
+    // 🛡️ 跨店隔離 L1：交班單打印事件 stamp 當前店。
+    const [stampedEvent] = withStoreScope([event]);
+
+    const nextQueue = [...loadQueue(), stampedEvent];
     saveQueue(nextQueue);
 
     if (readNetworkOnline()) {
-      try {
-        await fetch("/api/pos/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            events: nextQueue,
-            storeId: resolveStoreId(),
-          }),
-        });
-        saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
-      } catch {
-        // 保留待補傳
+      // 🛡️ 跨店隔離 L4：呢條係第三條直接 flush 路徑（獨立於 doFlush / forceSyncBeforeClose），
+      // 以前成條 nextQueue 照推 → 外店 / legacy 事件被當前 merchantId 蓋章上雲。必須過濾。
+      const scoped = filterEventsForCurrentStore(nextQueue);
+      if (scoped.length > 0) {
+        try {
+          await fetch("/api/pos/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              events: scoped,
+              storeId: resolveStoreId(),
+            }),
+          });
+          const scopedIds = new Set(scoped.map((item) => item.id));
+          saveQueue(nextQueue.map((item) => (scopedIds.has(item.id) ? { ...item, status: "synced" } : item)));
+        } catch {
+          // 保留待補傳
+        }
       }
     }
 

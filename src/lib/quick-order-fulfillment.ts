@@ -1,6 +1,7 @@
 import { loadOrders, loadQueue, saveOrders, saveQueue } from "@/lib/storage";
 import { PosOrder, QueueEvent } from "@/lib/types";
 import { readNetworkOnline } from "@/lib/use-network-online";
+import { withStoreScope } from "@/lib/pos/sync-flush";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -21,7 +22,8 @@ export function quickCompleteLabel(order: Pick<PosOrder, "tableName">) {
 function persistOrderUpdate(nextOrders: PosOrder[], event: QueueEvent) {
   saveOrders(nextOrders);
   const queue = loadQueue();
-  saveQueue([event, ...queue]);
+  // 🛡️ 跨店隔離 L1：只 stamp 新建事件，舊 queue 原封不動。
+  saveQueue([...withStoreScope([event]), ...queue]);
 }
 
 export function updateQuickFulfillmentInStore(orderId: string): PosOrder | null {

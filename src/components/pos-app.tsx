@@ -25,6 +25,8 @@ import {
   resolveStoreId,
   retryFailedSyncEvents,
   POS_SYNC_FAILED_EVENT,
+  filterEventsForCurrentStore,
+  withStoreScope,
 } from "@/lib/pos/sync-flush";
 import {
   isOrderNoteLocked,
@@ -719,10 +721,12 @@ export function PosApp() {
   // 以 localStorage 為底 merge，唔會 overwrite 本機即時狀態。component scope 定義俾 usePosRealtime onResubscribed 共用。
   async function loadRuntimeState() {
     try {
-      const merchantId = loadAuthSession()?.merchantId;
-      const stateUrl = merchantId
-        ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}`
-        : "/api/pos/state";
+      // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
+      // 無登入時 kiosk 綁定店）。冇 store 一律唔拉 —— 以前會 fetch /api/pos/state
+      // 唔帶 storeId，server 返**全店** orders + queue，merge 落本地就係跨店污染入口。
+      const storeId = resolveStoreId();
+      if (!storeId) return;
+      const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}`;
       const response = await fetch(stateUrl);
       const payload = (await response.json()) as {
         orders?: PosOrder[];
@@ -768,13 +772,18 @@ export function PosApp() {
       }
       if (Array.isArray(payload.queue)) {
         // 以 localStorage 為底 merge：保留本地（含未同步）事件，只補本機冇嘅 server 事件，
-        // 唔整份取代，避免清走本地 pending（R4）。pos_queue_events 無 store_id，server 列表含其他店，
-        // 但本地優先 + 去重已避免本地事件被覆寫（跨店 queue 污染另見 follow-up）。
+        // 唔整份取代，避免清走本地 pending（R4）。
+        // 🛡️ 跨店隔離 L3（2026-09-06 修，兌現呢度以前嘅 follow-up 承諾）：
+        // server 返嚟嘅事件若 storeId 唔等於當前店（外店事件 / null legacy）直接 skip，
+        // 唔 merge 入本地 queue —— 外店事件入咗本地 queue 後，flush 會用當前登入
+        // merchantId 蓋章推上雲，正正係「切帳號後串單」嘅源頭。server 端 /api/pos/state
+        // 已加 eq("store_id") 過濾（L2），呢度係第二道閘。
         const localQueue = loadQueue();
         const localById = new Map(localQueue.map((e) => [e.id, e]));
         const mergedQueue: QueueEvent[] = [];
         const seen = new Set<string>();
         for (const e of payload.queue) {
+          if (e.storeId !== storeId) continue; // 外店 / 無歸屬事件一律唔收（fail-safe）
           seen.add(e.id);
           mergedQueue.push(localById.get(e.id) ?? e); // 本機有就用本機（保留 pending 狀態）
         }
@@ -2088,12 +2097,23 @@ export function PosApp() {
       return;
     }
 
+    // 🛡️ 跨店隔離 L4：只推屬於當前店嘅事件。syncNow 係「成條 queue 一齊 push」，
+    // 以前冇過濾 → 外店 / legacy 事件跟埋一齊被推，server 用請求級 storeId 覆寫
+    // pos_orders → 切帳號後外店單被「蓋章」搬過嚟（2026-09-06 跨店串號 root cause 之一）。
+    const scoped = filterEventsForCurrentStore(nextQueue);
+    if (scoped.length === 0) {
+      if (!options?.silent) {
+        setToast({ tone: "info", message: "沒有屬於當前店舖的待同步資料。" });
+      }
+      return;
+    }
+
     try {
       await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          events: nextQueue,
+          events: scoped,
           // 🚨 必須用 canonical helper（以前係 bootstrap?.storeId ?? merchantId，優先序反咗）。
           // syncNow 係成條 queue 一齊 push + server upsert onConflict id 包埋 store_id
           // → last write wins：bootstrap.storeId 若係 mock 值 macau-store-a，
@@ -2102,10 +2122,12 @@ export function PosApp() {
         }),
       });
 
-      const synced = nextQueue.map((event) => ({ ...event, status: "synced" as const }));
-      persistQueue(synced);
+      // 只將真正推咗嗰批標 synced；外店 / legacy 事件保留原狀（等其所屬店處理），
+      // 唔可以照舊成條 queue 標 synced —— 咁會令未同步嘅外店事件永遠唔會再試。
+      const scopedIds = new Set(scoped.map((event) => event.id));
+      persistQueue(nextQueue.map((event) => (scopedIds.has(event.id) ? { ...event, status: "synced" as const } : event)));
       if (!options?.silent) {
-        setToast({ tone: "success", message: `已同步 ${synced.length} 筆待辦資料。` });
+        setToast({ tone: "success", message: `已同步 ${scoped.length} 筆待辦資料。` });
       }
     } catch {
       if (!options?.silent) {
@@ -2115,7 +2137,10 @@ export function PosApp() {
   }
 
   function pushEvents(events: QueueEvent[]) {
-    const nextQueue = [...queue, ...events];
+    // 🛡️ 跨店隔離 L1：新建事件 stamp 當前店（只 stamp 新事件，舊 queue 唔掂 ——
+    // 舊事件可能係 server merge 落嚟嘅外店事件，覆寫佢哋嘅 storeId 就係「改姓」）。
+    const stamped = withStoreScope(events);
+    const nextQueue = [...queue, ...stamped];
     persistQueue(nextQueue);
     // 觸發 sync flush worker（見 src/lib/pos/sync-flush.ts）。
     // 唔 await —— 唔阻 render / 唔阻下一個 handler；flush 係 fire-and-forget。

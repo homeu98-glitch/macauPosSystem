@@ -226,6 +226,41 @@ export function resolveStoreId(): string | undefined {
   return undefined;
 }
 
+/**
+ * 入隊前為**新建**事件 stamp 所屬店（= 事件產生嗰刻嘅 `resolveStoreId()`）。
+ *
+ * 🛡️ 跨店隔離（0022 migration）L1：事件一出世就帶住自己嘅 store，之後 flush /
+ * state / sync 全部以佢為準，唔可以再用「flush 當刻邊個登入」決定一張單屬於邊間店。
+ *
+ * ⚠️ 兩條鐵律：
+ *   1. **只可以餵新建事件**（啱啱 create 嗰啲）。舊 queue 事件（可能係 server merge
+ *      落嚟嘅外店事件）已經有 storeId 嘅唔會被覆寫；但 undefined 嘅 legacy 事件若
+ *      行過呢度會被 stamp 做當前店 —— 即係「改姓」，正正係要修嘅 bug。所以呼叫端
+ *      一定要 `[...withStoreScope(newEvents), ...oldQueue]`，唔好成條 queue 過。
+ *   2. resolveStoreId() 為 undefined（未登入又冇 kiosk 綁定）時原樣返回 —— 呢啲
+ *      事件冇店可歸，flush 閘口（filterEventsForCurrentStore）自然唔會推佢哋。
+ */
+export function withStoreScope<T extends QueueEvent>(events: T[]): T[] {
+  const store = resolveStoreId();
+  if (!store) return events;
+  return events.map((e) => (e.storeId ? e : { ...e, storeId: store }));
+}
+
+/**
+ * 🛡️ 跨店隔離 L4：任何直接 POST `/api/pos/sync` 嘅路徑（doFlush / syncNow /
+ * shift-page forceSyncBeforeClose / closeShift）推送前**必須**用呢個 filter。
+ *
+ * 只放行 `storeId === 當前店` 嘅事件：
+ *   - 外店事件（曾經由 server state merge 混入）留喺 queue，等其所屬店登入時先推；
+ *   - undefined storeId 嘅 legacy 事件一律唔推 —— 無法證明佢屬於當前店，
+ *     推咗就會被 server 用請求級 storeId 蓋章寫入 `pos_orders`（跨店污染）。
+ */
+export function filterEventsForCurrentStore<T extends QueueEvent>(events: T[]): T[] {
+  const store = resolveStoreId();
+  if (!store) return [];
+  return events.filter((e) => e.storeId === store);
+}
+
 async function doFlush(options: { silent?: boolean }): Promise<void> {
   if (typeof window === "undefined") return;
   if (!readNetworkOnline()) return;
@@ -242,11 +277,18 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   legacyHealed = true;
   if (unflushed.length === 0) return;
 
+  // 🛡️ 跨店隔離 L4（2026-09-06 修）：只推「storeId === 當前店」嘅事件。
+  // 外店事件留喺 queue（等其所屬店登入時先推）；undefined storeId 嘅 legacy 事件
+  // 一律唔推 —— 以前 legacy-heal 連 synced 事件都全量重推，配合 server 用請求級
+  // storeId 覆寫 pos_orders，就係「切帳號後外店單被搬過嚟」嘅 root cause。
+  const scoped = filterEventsForCurrentStore(unflushed);
+  if (scoped.length === 0) return;
+
   // Dedup by entityId + 過濾超 attempts：同一 entityId 只推最後一條（最後狀態為準），
   // 超 attempts 嘅自動淘汰（同 entityId 有新未超 attempts 嘅就推嗰條）。
   // 注意 ORDER_UPDATED / ORDER_CREATED 同 entity 會 dedup，PRINT_JOB_CREATED 唔會（唔同 entityId）。
   const candidateByEntity = new Map<string, ExtendedQueueEvent>();
-  for (const e of unflushed) {
+  for (const e of scoped) {
     if ((e.attempts ?? 0) >= MAX_SYNC_ATTEMPTS) continue;
     const prev = candidateByEntity.get(e.entityId);
     if (!prev || prev.createdAt < e.createdAt) {
@@ -271,6 +313,9 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
           payload: e.payload,
           status: e.status,
           createdAt: e.createdAt,
+          // 🛡️ 跨店隔離：事件自身嘅 store 一定要帶（上面 filter 已保證 === 當前店），
+          // server 會驗證佢同請求級 storeId 一致，唔一致即拒。
+          storeId: e.storeId,
         })),
       }),
     });

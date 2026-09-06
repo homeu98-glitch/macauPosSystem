@@ -11,7 +11,7 @@ import { retryFailedPrintJob } from "@/lib/print-bridge/dispatch";
 import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
-import { resolveStoreId } from "@/lib/pos/sync-flush";
+import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
@@ -415,7 +415,8 @@ export function PrintCenter() {
 
   function pushEvents(events: QueueEvent[]) {
     const currentQueue = loadQueue();
-    const nextQueue = [...currentQueue, ...events];
+    // 🛡️ 跨店隔離 L1：只 stamp 新建事件（舊 queue 唔掂，防止外店事件被改姓）。
+    const nextQueue = [...currentQueue, ...withStoreScope(events)];
     saveQueue(nextQueue);
     // 補：以前 saveQueue 後從來唔 trigger flush worker，events 永遠留喺 queue
     // （要等其他操作偶然觸發 syncNow 先被推送）。家陣同 pos-app.tsx 一致，

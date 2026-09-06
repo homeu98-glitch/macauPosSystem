@@ -613,6 +613,16 @@ export interface QueueEvent {
   payload: unknown;
   status: "pending" | "synced" | "failed";
   createdAt: string;
+  /**
+   * 事件所屬店舖（= 事件產生嗰刻 `resolveStoreId()`：登入 merchant 或 kiosk 綁定店）。
+   *
+   * 跨店隔離（0022 migration）嘅真源：flush 只推 `storeId === 當前店` 嘅事件、
+   * `/api/pos/state` 按 store 過濾 queue、`/api/pos/sync` 驗證 event.storeId 與
+   * 請求 storeId 一致。**入隊時由 `withStoreScope()` stamp，已有值絕對唔覆寫**
+   * （防止外店事件被「改姓」）。歷史 legacy 事件可能冇呢個欄（undefined）→
+   * flush 閘口會跳過佢哋（無法證明歸屬，推咗就係跨店污染）。
+   */
+  storeId?: string;
 }
 
 export interface PrintJob {
