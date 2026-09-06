@@ -12,14 +12,20 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, deviceConfig: null, localSettings: null });
   }
 
-  // 舊版冇 store_id 過濾，攞嘅係「全平台 updated_at 最新一行」——多店環境會撈錯店（見 docs/98 問題二）。
-  // 加咗選用 storeId 過濾：Hub 配對後帶自己嘅 storeId 嚟拎路由配置；web 端唔傳就維持舊行為。
-  let query = supabase
+  // 🛡️ 加固（db review §4.1 #2）：冇 storeId 唔可以拎「全平台 updated_at 最新一行」，
+  // 否則會把別店 terminal 配置（含打印機綁定 / local_settings）拉落嚟（見 docs/98 問題二）。
+  // 冇 storeId → 返 null，寧可本機 localStorage 配置生效，都唔好洩露別店 terminal 設定。
+  if (!storeId) {
+    return NextResponse.json({ ok: true, deviceConfig: null, localSettings: null });
+  }
+
+  const { data, error } = await supabase
     .from("pos_device_configs")
     .select("*")
-    .order("updated_at", { ascending: false });
-  if (storeId) query = query.eq("store_id", storeId);
-  const { data, error } = await query.limit(1).maybeSingle();
+    .eq("store_id", storeId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

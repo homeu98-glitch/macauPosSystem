@@ -131,7 +131,7 @@
 ## 6. 風險 / 注意
 
 - 改 `rounded-full` → `rounded-xl` 喺 badge 上係**視覺改動**（由「膠囊」變「圓角方」），若你喜歡保留膠囊樣，可改 `rounded-full` 但加 `whitespace-nowrap shrink-0` + 縮 font 已經夠——膠囊樣會保留但唔再大。
-- 品類容器由 `flex-wrap` 改 `flex-nowrap overflow-x-auto` → 多咗嘅分類**唔再換行**而係**橫向 scroll**。如果想保留換行 fallback（窄屏），可加 `min-[某寬]:flex-nowrap`。
+- 品類容器由 `flex-wrap` 改 `flex-nowrap overflow-x-auto` → 多咗嘅分類**唔再換行**而係**橫向 scroll**。如果想保留換行 fallback（窄屏），可加自訂斷點版本，例如 `min-[900px]:flex-nowrap`（900px 按實際需要調整；唔好寫「某寬」呢類佔位字，Tailwind v4 會掃描 docs 生成非法 media query）。
 - 搜尋列方向 ② 嘅 `xl:justify-between` 同 search 容器固定寬可能少少 conflict（justify-between 會把品類推左、search 推右），可保留 `justify-between` 唔變，因為 search 容器固定寬後 justify-between 仲 work。
 
 ---

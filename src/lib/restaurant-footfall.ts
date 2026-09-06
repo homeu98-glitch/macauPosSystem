@@ -6,15 +6,31 @@
 import type { PosOrder } from "@/lib/types";
 import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
 
-const FOOT_KEY = "macau-pos-footfall";
+// 🛡️ 加固（db review §4.2 #5）：人流記錄改為 per-store。
+// 舊 key `macau-pos-footfall` 係全局共用，多店環境會互相覆蓋。新寫入按
+// `macau-pos/stores/{merchantId}/footfall` 隔離；storeId 缺省時退回舊全局 key，
+// 保留歷史手動記錄唔會遺失。
+const FOOT_KEY_GLOBAL = "macau-pos-footfall";
+
+function footKey(storeId?: string | null): string {
+  return storeId ? `macau-pos/stores/${storeId}/footfall` : FOOT_KEY_GLOBAL;
+}
 
 function macauDateKey(d: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(d);
 }
 
-export function loadFootfallAll(): Record<string, number> {
+export function loadFootfallAll(storeId?: string | null): Record<string, number> {
   try {
-    const raw = localStorage.getItem(FOOT_KEY);
+    const raw = localStorage.getItem(footKey(storeId));
+    if (!raw && storeId) {
+      // 新店首次：退回舊全局 key 嘅資料（若曾經全局記過），唔強制隔離令舊數消失
+      const legacy = localStorage.getItem(FOOT_KEY_GLOBAL);
+      if (legacy) {
+        const v = JSON.parse(legacy);
+        return v && typeof v === "object" ? (v as Record<string, number>) : {};
+      }
+    }
     if (!raw) return {};
     const v = JSON.parse(raw);
     return v && typeof v === "object" ? (v as Record<string, number>) : {};
@@ -23,10 +39,10 @@ export function loadFootfallAll(): Record<string, number> {
   }
 }
 
-export function saveFootfallDay(dateKey: string, n: number): Record<string, number> {
-  const all = loadFootfallAll();
+export function saveFootfallDay(dateKey: string, n: number, storeId?: string | null): Record<string, number> {
+  const all = loadFootfallAll(storeId);
   all[dateKey] = Math.max(0, Math.round(n || 0));
-  localStorage.setItem(FOOT_KEY, JSON.stringify(all));
+  localStorage.setItem(footKey(storeId), JSON.stringify(all));
   return all;
 }
 

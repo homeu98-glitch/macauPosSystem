@@ -10,6 +10,7 @@ import { loadAuthSession } from "@/lib/storage";
 const navItems = [
   { href: "/backoffice/stores", label: "店舖總覽" },
   { href: "/backoffice/accounts", label: "帳戶總覽" },
+  { href: "/admin/accounts", label: "帳戶管理" },
   { href: "/backoffice/sync", label: "同步中心" },
 ];
 
@@ -70,9 +71,11 @@ export function BackofficeShell({ children }: PropsWithChildren) {
                     ? "店舖明細"
                     : pathname.startsWith("/backoffice/accounts")
                       ? "帳戶總覽"
-                      : pathname.startsWith("/backoffice/sync")
-                        ? "同步中心"
-                        : "店舖總覽"}
+                      : pathname.startsWith("/admin/accounts")
+                        ? "帳戶管理"
+                        : pathname.startsWith("/backoffice/sync")
+                          ? "同步中心"
+                          : "店舖總覽"}
                 </div>
                 <div className="mt-1 text-sm text-slate-500">登入入口仍然是同一個頁面，admin 會直接進入總部後台。</div>
               </div>
@@ -86,7 +89,7 @@ export function BackofficeShell({ children }: PropsWithChildren) {
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-2 py-2 backdrop-blur md:hidden">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           {navItems.map((item) => {
             const active = pathname.startsWith(item.href);
             return (

@@ -49,7 +49,7 @@ function enrichAccounts(
         : account.storeIds;
     return {
       ...account,
-      storeIds: storeIds?.length ? storeIds : account.storeIds ?? ["macau-store-a"],
+      storeIds: storeIds?.length ? storeIds : account.storeIds ?? [],
       permissions: mergePermissions(account.role, group, account),
     };
   });

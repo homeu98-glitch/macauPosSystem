@@ -15,6 +15,10 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const router = useRouter();
   const pathname = usePathname();
   const session = loadAuthSession();
+  // 2026-09-06：admin 管理入口（/admin 登入）產生嘅 session 只有 adminSessionToken，
+  // 冇 merchantId / ledgerAccessToken。舊邏輯 isLedgerSession 會即刻 clearAuthSession()
+  // 踢返去 /login，令 admin 登入永遠入唔到後台 —— 現在 admin token session 同樣放行。
+  const isAdminSession = Boolean(session?.adminSessionToken);
   const isLedgerSession = Boolean(session?.merchantId && session?.ledgerAccessToken);
   const roleBlocked = Boolean(session && allowedRoles && !allowedRoles.includes(session.role));
 
@@ -35,7 +39,7 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
       window.location.replace("/login");
       return;
     }
-    if (session && !isLedgerSession && pathname !== "/login") {
+    if (session && !isLedgerSession && !isAdminSession && pathname !== "/login") {
       clearAuthSession();
       window.location.replace("/login");
       return;
@@ -54,7 +58,7 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     return () => {
       window.removeEventListener("pos-auth-changed", onAuthChanged);
     };
-  }, [isLedgerSession, pathname, roleBlocked, router, session]);
+  }, [isAdminSession, isLedgerSession, pathname, roleBlocked, router, session]);
 
   if ((!session || roleBlocked) && pathname !== "/login") {
     return (

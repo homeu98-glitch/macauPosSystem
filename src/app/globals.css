@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Tailwind v4 預設掃描成個 project 提取 class 候選——連 docs 同 .workbuddy* 目錄
+   入面嘅示例文字、日誌，甚至本檔案嘅注釋都會被當成真 class，佔位字會被直接
+   塞入 @media 生成非法 media query，令 build 出 CSS parse warning。
+   呢啲目錄唔係樣式來源，全部排除掃描。
+   ⚠️ 注釋入面都唔可以寫出「min-[佔位]」呢類類樣 token（連注釋都會被掃描提取）。 */
+@source not "../../docs";
+@source not "../../.workbuddy";
+@source not "../../.workbuddy-ai";
+
 :root {
   --background: #f3f5f9;
   --surface: #ffffff;

@@ -154,12 +154,15 @@ export async function GET(request: Request) {
   const queueQuery = storeId
     ? supabase.from("pos_queue_events").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(300)
     : supabase.from("pos_queue_events").select("*").limit(0);
+  // 🛡️ 加固（db review §4.1 #3）：print jobs 同 device config 一律按 store 過濾。
+  // 冇 storeId（未登入又冇 kiosk 綁定）→ limit(0) 返空，寧可無 print job / 無遠端 config，
+  // 都唔好派發別店嘅打印任務或 terminal 設定（fail-safe；歷史行 store_id IS NULL 天然被 eq 排除）。
   const printJobsQuery = storeId
     ? supabase.from("pos_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(200)
-    : supabase.from("pos_print_jobs").select("*").order("created_at", { ascending: false }).limit(200);
+    : supabase.from("pos_print_jobs").select("*").limit(0);
   const deviceConfigQuery = storeId
     ? supabase.from("pos_device_configs").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(1)
-    : supabase.from("pos_device_configs").select("*").order("updated_at", { ascending: false }).limit(1);
+    : supabase.from("pos_device_configs").select("*").limit(0);
 
   const [{ data: orders }, { data: queue }, { data: printJobs }, { data: deviceConfigs }] = await Promise.all([
     ordersQuery,

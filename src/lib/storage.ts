@@ -397,7 +397,7 @@ function normalizeAccountUsers(accounts: AccountUser[] | null | undefined): Acco
       manualDeactivated: account.manualDeactivated ?? false,
       effectiveActive: account.effectiveActive ?? (account.active ?? true),
       lastSyncedAt: account.lastSyncedAt ?? account.updatedAt ?? account.createdAt ?? new Date().toISOString(),
-      storeIds: Array.isArray(account.storeIds) ? account.storeIds : ["macau-store-a"],
+      storeIds: Array.isArray(account.storeIds) ? account.storeIds : [],
       permissionGroupId: account.permissionGroupId ?? permissionGroup?.id,
       permissions: {
         ...defaultPermissionsForRole(role),
@@ -568,9 +568,9 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     role,
     storeIds: Array.isArray(session.storeIds)
       ? session.storeIds
-      : session.merchantId
+        : session.merchantId
         ? [session.merchantId]
-        : ["macau-store-a"],
+        : [],
     merchantId: session.merchantId,
     topUpShopId: session.topUpShopId,
     permissionGroupId: session.permissionGroupId,

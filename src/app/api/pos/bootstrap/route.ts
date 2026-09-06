@@ -21,7 +21,10 @@ export async function GET(request: Request) {
   if (storeId) {
     query = query.eq("store_id", storeId);
   } else {
-    query = query.order("updated_at", { ascending: false }).limit(1);
+    // 🛡️ 加固（db review §4.1 #1）：冇 storeId 唔可以 fallback 到「全库最新一条」，
+    // 否則多店環境 A 店會拎到 B 店餐牌 / 桌台 / 分類。宁可取默認 mock，
+    // 都唔好洩露別店配置（fail-safe）。
+    return NextResponse.json(normalizeBootstrapPayload(mockBootstrap));
   }
 
   const { data, error } = await query.maybeSingle();

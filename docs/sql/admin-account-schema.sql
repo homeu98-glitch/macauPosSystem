@@ -1,3 +1,7 @@
+-- ⚠️⚠️⚠️ 本文件已被 supabase/migrations/0025_admin_cleanup_and_seed.sql 取代 ⚠️⚠️⚠️
+-- 呢個舊 seed 會重新插入 macau-store-a / macau-store-b 死 store 同 63936541/63936542
+-- 測試賬號（2026-09-06 已喺生產 DB 清走）。唔好再喺生產環境重跑本文件，
+-- 否則死數據會返晒嚟。保留喺度只作歷史參考。
 create extension if not exists pgcrypto;
 
 create table if not exists admin_stores (
