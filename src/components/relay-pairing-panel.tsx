@@ -37,6 +37,9 @@ type CheckState =
 /** 未配對時嘅自動輪詢間隔（中繼機可能係 web 開咗之後先配對，唔通要人手撳）。 */
 const POLL_INTERVAL_MS = 10_000;
 
+/** 連續失敗時嘅輪詢上限：server 一路 500 都唔好密過呢個間隔，避免同一個錯誤洗版 console。 */
+const MAX_POLL_INTERVAL_MS = 60_000;
+
 export function RelayPairingPanel() {
   // 原生殼（Android APK WebView / PC Companion）入面唔使、亦唔應該顯示雲端中繼配對 UI：
   // 呢啲環境本身就係打印終端（PosNative bridge / CompanionShell），relay 係畀純 website / PWA
@@ -61,17 +64,22 @@ export function RelayPairingPanel() {
 
   const inFlight = useRef(false);
 
+  /**
+   * 查一次配對狀態。**回傳值 = 呢次探測係咪成功**（true=拎到明確結果，false=server 錯/網絡錯）。
+   * 輪詢用嚟做指數退避：server 一路 500 時唔好每 10s 硬打，否則 console 同 Vercel function
+   * 都會被同一個重複錯誤洗版（2026-09-07 實測：/pair-status 多行 bug 期間幾十次 500 排到滿）。
+   */
   const checkStatus = useCallback(
-    async (opts?: { silent?: boolean }) => {
+    async (opts?: { silent?: boolean }): Promise<boolean> => {
       const silent = opts?.silent ?? false;
       if (!storeId) {
         setState({
           kind: "failed",
           detail: "讀取唔到店舖識別：本機未登入 POS 帳號（自助點餐機亦未綁定店舖）。請重新登入 POS 帳號。",
         });
-        return;
+        return false;
       }
-      if (inFlight.current) return;
+      if (inFlight.current) return false;
       inFlight.current = true;
       if (!silent) setState({ kind: "checking" });
 
@@ -96,7 +104,7 @@ export function RelayPairingPanel() {
               detail: data.error ?? `伺服器回應異常（HTTP ${r.status}），請稍後再試。`,
             });
           }
-          return;
+          return false;
         }
 
         if (data.paired && data.agentId) {
@@ -108,19 +116,21 @@ export function RelayPairingPanel() {
           });
           setPairing(getRelayPairing());
           setState({ kind: "paired" });
-        } else {
-          // 本地以為配對咗、但雲端話冇（例如喺第二部機解除咗）→ 清本地，避免卡住
-          if (getRelayPairing()) {
-            clearRelayPairing();
-            setPairing(null);
-          }
-          setState({ kind: "unpaired" });
+          return true;
         }
+        // 本地以為配對咗、但雲端話冇（例如喺第二部機解除咗）→ 清本地，避免卡住
+        if (getRelayPairing()) {
+          clearRelayPairing();
+          setPairing(null);
+        }
+        setState({ kind: "unpaired" });
+        return true;
       } catch {
         // 同上：背景輪詢嘅網絡失敗唔好彈紅色。
         if (!silent) {
           setState({ kind: "failed", detail: "網絡連線失敗，無法連到雲端檢查配對狀態。" });
         }
+        return false;
       } finally {
         inFlight.current = false;
         setLastCheckedAt(new Date());
@@ -137,15 +147,19 @@ export function RelayPairingPanel() {
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let failures = 0;
 
     const tick = async () => {
       if (cancelled) return;
       const before = getRelayPairing();
-      await checkStatus({ silent: before === null });
+      const ok = await checkStatus({ silent: before === null });
       if (cancelled) return;
       // 配對成功後（localStorage 由 null 變有嘢）就唔好再 poll
       if (getRelayPairing()) return;
-      timer = setTimeout(tick, POLL_INTERVAL_MS);
+      // 指數退避：連續失敗 → 10s → 20s → 40s → 60s（cap）。
+      // server 正常但「尚未配對」唔算失敗，保持 10s 等中繼機現身。
+      failures = ok ? 0 : failures + 1;
+      timer = setTimeout(tick, Math.min(POLL_INTERVAL_MS * 2 ** failures, MAX_POLL_INTERVAL_MS));
     };
     void tick();
 
