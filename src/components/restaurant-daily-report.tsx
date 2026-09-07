@@ -8,7 +8,7 @@ import {
   type LedgerReportSummary,
 } from "@/lib/ledger/reports";
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import { getOrderDetail, listMerchantOrders, type LedgerOrderDetailItem } from "@/lib/ledger/orders";
+import { getOrderDetail, listMerchantOrders, fetchAdminLedgerOrders, type LedgerOrderDetailItem } from "@/lib/ledger/orders";
 import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { paymentModeLabel } from "@/lib/ledger/order-mapper";
 import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stats";
@@ -333,6 +333,22 @@ export function isSaleCountable(o: PosOrder): boolean {
   if (o.status === "refunded" || o.status === "partially_refunded") return false;
   if (o.status === "settled" || o.status === "paid") return true;
   return false;
+}
+
+/** 訂單狀態碼 → 中文標籤（報表提示文案同狀態分佈顯示用）。 */
+const POS_ORDER_STATUS_LABELS: Record<string, string> = {
+  draft: "未送單",
+  sent_to_kitchen: "已送廚房（未結帳）",
+  paid: "已付款",
+  settled: "已結帳",
+  reopened: "已重開",
+  cancelled: "已作廢",
+  partially_refunded: "部分退款",
+  refunded: "已退款",
+};
+
+function statusLabelOf(status: string): string {
+  return POS_ORDER_STATUS_LABELS[status] ?? status;
 }
 
 /** 掃描 localStorage 內 macau-pos/stores/&#123;storeId&#125;/orders 同 macau-pos/orders 嘅單數，
@@ -1102,23 +1118,82 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     async function loadOnlineByHour() {
       // 切換範圍時即刻清走舊範圍嘅線上單，避免新數據 fetch 完成前顯示舊資料。
       setOnlineOrders([]);
+      setOnlineByHour(new Array<number>(24).fill(0));
+      const period = backfillRangeFor(range);
+      const rangeStartMs = period ? Date.parse(period.start) : null;
+      const rangeEndMs = period ? Date.parse(period.end) : null;
+
+      // 🚀 2026-09-07 修（root cause）：admin 模式改用 service-role 跨店讀 Ledger 線上單，
+      // 唔使商戶 JWT（admin 裝置本來就冇商戶身份）。舊版直接 skip → onlineOrders 永遠空
+      // → 用戶「線上有好多單但完全睇唔到」。改為經 /api/admin/ledger/orders 讀取後，
+      // 沿用同非 admin 一樣嘅 range / cancel / unpaid 過濾邏輯計 byHour 同 kept。
       if (isAdminMode) {
-        // admin 模式：listMerchantOrders RPC 需要商戶 JWT，admin 裝置冇（亦唔應該有），
-        // 跳過避免攞到殘留 session 嘅錯店數據。線上單統計由 POS 數據覆蓋部分代替。
-        // 🛡️ 2026-09-07 修：admin 模式 early return 入面必須 setLedgerDone(true)，否則
-        // `if (backfillDone && ledgerDone) setDataReady(true)` 永遠唔成立 → dataReady
-        // 永遠 false → 全部 Card 永久顯示 SectionSkeleton → 用戶睇唔到任何數據。
-        setOnlineByHour(new Array<number>(24).fill(0));
-        setOnlineOrders([]);
-        setOnlineFetchInfo({
-          fetched: 0,
-          counted: 0,
-          outOfRange: 0,
-          cancelled: 0,
-          unpaid: 0,
-          status: "skipped",
-          lastError: "admin 模式：線上單統計跳過",
-        });
+        try {
+          setOnlineFetchInfo((prev) => ({ ...prev, status: "loading", lastError: null }));
+          const rows = await fetchAdminLedgerOrders({
+            merchantId: merchantId ?? null,
+            start: period?.start ?? null,
+            end: period?.end ?? null,
+          });
+          if (cancelled) return;
+          let outOfRange = 0;
+          let cancelledCount = 0;
+          let unpaidCount = 0;
+          let counted = 0;
+          const byHour = new Array<number>(24).fill(0);
+          const kept: LedgerOnlineOrder[] = [];
+          for (const o of rows) {
+            const ts = o.createdAt ?? o.updatedAt;
+            if (!ts) continue;
+            const t = Date.parse(ts);
+            if (!Number.isFinite(t)) continue;
+            if (rangeStartMs != null && t < rangeStartMs) {
+              outOfRange++;
+              continue;
+            }
+            if (rangeEndMs != null && t > rangeEndMs) {
+              outOfRange++;
+              continue;
+            }
+            if (String(o.status ?? "").toLowerCase().includes("cancel")) {
+              cancelledCount++;
+              continue;
+            }
+            if (o.paymentStatus !== "paid") {
+              unpaidCount++;
+              continue;
+            }
+            const hour = macauHour(ts);
+            byHour[hour] += 1;
+            counted++;
+            kept.push(o);
+          }
+          if (cancelled) return;
+          setOnlineByHour(byHour);
+          setOnlineOrders(kept);
+          setOnlineFetchInfo({
+            fetched: rows.length,
+            counted,
+            outOfRange,
+            cancelled: cancelledCount,
+            unpaid: unpaidCount,
+            status: "success",
+            lastError: null,
+          });
+        } catch (err) {
+          if (cancelled) return;
+          setOnlineByHour(new Array<number>(24).fill(0));
+          setOnlineOrders([]);
+          setOnlineFetchInfo({
+            fetched: 0,
+            counted: 0,
+            outOfRange: 0,
+            cancelled: 0,
+            unpaid: 0,
+            status: "error",
+            lastError: err instanceof Error ? err.message : String(err),
+          });
+        }
         setLedgerDone(true);
         return;
       }
@@ -1158,11 +1233,9 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
 
         // 用 cursor-based pagination 撈齊 [rangeStart, rangeEnd] 區間內嘅線上單。
         // RPC 預設 limit=50，呢度調大到 500／頁，並用 since+sinceId 行 cursor。
-        const period = backfillRangeFor(range);
+        // period / rangeStartMs / rangeEndMs 喺函數頂部已計過（admin / 非 admin 共用）。
         const PAGE = 500;
         const MAX_PAGES = 8; // 上限 4000 單，足以覆蓋繁忙餐廳 30 日滾動窗口
-        const rangeStartMs = period ? Date.parse(period.start) : null;
-        const rangeEndMs = period ? Date.parse(period.end) : null;
         const collected: LedgerOnlineOrder[] = [];
         let cursorSince: string | null = period?.start ?? null;
         let cursorSinceId: string | null = null;
@@ -1525,6 +1598,50 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     };
   }, [orders, range, ledger.sel, agg.onlineRevenue, agg.revenue]);
 
+  /**
+   * 未結帳訂單統計（2026-09-07 新增）。
+   *
+   * 背景：admin「營業報表」曾出現「API 成功回傳 N 筆訂單、但報表全空」嘅假象——
+   * 因為 `isSaleCountable()` 只計 `settled` / `paid`（正確嘅收入認列口徑），
+   * 而實際資料入面大量訂單停喺 `sent_to_kitchen`（已送廚房、未收款）。
+   * 呢啲單唔應該計入營業額，但亦唔可以靜默消失，否則使用者只會見到一片空白、
+   * 無從判斷係「今日冇單」定「有單但未結帳」。
+   *
+   * 用途：
+   * - KPI 帶顯示「未結帳訂單」筆數 + 金額，令資料可見；
+   * - 當區間內有單但 0 筆可計入銷售時，頂部顯示琥珀色提示條解釋原因。
+   *
+   * 排除：cancelled / refunded / partially_refunded（作廢或已退，唔屬於待收款）。
+   * 包含：draft / sent_to_kitchen / reopened。
+   */
+  const pendingSplit = useMemo(() => {
+    const inRange = orders.filter((o) => orderMatchesReportRange(o, range));
+    const pending = inRange.filter(
+      (o) =>
+        !isSaleCountable(o) &&
+        o.status !== "cancelled" &&
+        o.status !== "refunded" &&
+        o.status !== "partially_refunded",
+    );
+    const statusBreakdown: Record<string, number> = {};
+    for (const o of pending) statusBreakdown[o.status] = (statusBreakdown[o.status] ?? 0) + 1;
+    return {
+      totalInRange: inRange.length,
+      count: pending.length,
+      amountMop: pending.reduce((s, o) => s + o.total, 0),
+      statusBreakdown,
+    };
+  }, [orders, range]);
+
+  /** 區間內「有單但全部未結帳」→ 需要明確提示，避免使用者誤以為報表壞咗。 */
+  const showUnsettledNotice =
+    dataReady && pendingSplit.totalInRange > 0 && onlineOfflineSplit.totalCount === 0;
+
+  const unsettledStatusLabel =
+    Object.entries(pendingSplit.statusBreakdown)
+      .map(([status, n]) => `${statusLabelOf(status)} ${n} 張`)
+      .join("、") || "—";
+
   // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
   const displayGrossProfit =
     gpMarginPct != null ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100 : grossProfit;
@@ -1711,6 +1828,45 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
               </div>
             ) : null}
 
+            {/* 2026-09-07 新增：區間內有訂單但全部未結帳 → 明確解釋「點解營業額係 0」，
+                避免使用者見到一片空白以為報表壞咗（收入認列只計 settled / paid 係正確口徑）。 */}
+            {showUnsettledNotice ? (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                <div className="font-semibold">
+                  ⚠️ 本區間有 {pendingSplit.totalInRange} 張訂單，但尚未有任何一張結帳，故營業額顯示為 0
+                </div>
+                <div className="mt-1 text-[13px] text-amber-800">
+                  未結帳 {pendingSplit.count} 張 · 金額 {formatMoney(pendingSplit.amountMop)} · 狀態分佈：
+                  {unsettledStatusLabel}
+                </div>
+                <div className="mt-1 text-xs text-amber-700">
+                  營業額只統計「已結帳 / 已付款」的訂單（收入認列口徑）。訂單送廚房後需於收銀台結帳，
+                  結帳後即會計入本報表。
+                </div>
+              </div>
+            ) : null}
+
+            {/* 2026-09-07 修：admin 模式嘅 Ledger 數據可見性分兩層。
+                - 線上單（public.orders）：已經改用 service-role 跨店讀取（/api/admin/ledger/orders），
+                  人流 / 尖峰時段 / 線上單計數都會反映。
+                - 會員充值 / 扣點等彙總 KPI：來自 getMerchantReportSummary RPC，商戶由
+                  auth.uid() 推導、連 merchantId 參數都冇，admin 裝置冇商戶身份 → 仍顯示為空。 */}
+            {isAdminMode ? (
+              <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
+                <div className="font-semibold">ℹ️ 管理後台模式：線上單經 service-role 讀取已啟用</div>
+                <div className="mt-1 text-[13px] text-sky-800">
+                  人流、尖峰時段、線上單計數已包含 Ledger 線上單（跨店 / 指定商家均可）。
+                  但會員充值 / 扣點等彙總 KPI 來自需要商戶身份（JWT）的 RPC，管理後台帳號冇商戶身份，
+                  故此類數字暫時唔會顯示（並非冇數據）。
+                </div>
+                <div className="mt-1 text-xs text-sky-700">
+                  要睇完整會員類 KPI，請用該店商戶帳號登入 POS 後開啟報表；或為 Ledger 加上支援
+                  <code className="mx-1 rounded bg-sky-100 px-1">p_merchant_id</code>
+                  參數嘅 admin 版 RPC。
+                </div>
+              </div>
+            ) : null}
+
             {/* DevTools debug panel：暫時由 UI 隱藏 */}
             {false}
 
@@ -1764,8 +1920,20 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
                   />
                 </div>
 
-                {/* 第二行：餘額總額 / 會員充值 / 會員扣點 / 毛利（估） */}
-                <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                {/* 第二行：未結帳訂單 / 餘額總額 / 會員充值 / 會員扣點 / 毛利（估） */}
+                <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                  {/* 2026-09-07 新增：未結帳訂單（sent_to_kitchen 等）唔計入營業額，
+                      但要顯示出嚟，否則報表會出現「有單但全空」嘅假象。 */}
+                  <Kpi
+                    label="未結帳訂單"
+                    value={`${pendingSplit.count} 張`}
+                    delta={null}
+                    subtitle={
+                      pendingSplit.count > 0
+                        ? `${formatMoney(pendingSplit.amountMop)} · ${unsettledStatusLabel}`
+                        : "冇待收款訂單"
+                    }
+                  />
                   <Kpi
                     label="餘額總額"
                     value={ledger.sel?.balanceTotalMop != null ? <Money amount={ledger.sel.balanceTotalMop} /> : "—"}

@@ -1,5 +1,6 @@
 "use client";
 
+import { loadAuthSession } from "@/lib/storage";
 import { ensureLedgerSession } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { LedgerOrderRow, mapLedgerOrderRow, LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
@@ -41,6 +42,42 @@ export async function listMerchantOrders(params: ListMerchantOrdersParams): Prom
   }
 
   return parseRpcOrderRows(data).map(mapLedgerOrderRow);
+}
+
+/**
+ * admin panel 讀取 Ledger 線上單（service-role 通道，唔使商戶 JWT）。
+ *
+ * 對應 server route `GET /api/admin/ledger/orders`：用 admin session token 把關、
+ * 後端以 Ledger service-role 直接查 `public.orders`，跨店（merchantId 留空）或
+ * 指定商家（merchantId = Ledger merchant_id == POS store_id）都得。
+ *
+ * 呢個函式取代 admin 模式下原本會被 skip 嘅 `listMerchantOrders`，令管理後台
+ * 真係睇到線上單（root cause 修復 2026-09-07）。
+ */
+export async function fetchAdminLedgerOrders(params: {
+  merchantId: string | null;
+  start: string | null;
+  end: string | null;
+}): Promise<LedgerOnlineOrder[]> {
+  const token = loadAuthSession()?.adminSessionToken;
+  const qs = new URLSearchParams();
+  if (params.merchantId) qs.set("merchantId", params.merchantId);
+  if (params.start) qs.set("start", params.start);
+  if (params.end) qs.set("end", params.end);
+
+  const res = await fetch(`/api/admin/ledger/orders?${qs.toString()}`, {
+    headers: { Authorization: `Bearer ${token ?? ""}` },
+  });
+  const json = (await res.json()) as {
+    ok?: boolean;
+    orders?: LedgerOnlineOrder[];
+    error?: string;
+    code?: string;
+  };
+  if (!res.ok || !json.ok) {
+    throw new Error(json.error ?? `HTTP ${res.status}`);
+  }
+  return json.orders ?? [];
 }
 
 export type LedgerOrderDetailItem = {
