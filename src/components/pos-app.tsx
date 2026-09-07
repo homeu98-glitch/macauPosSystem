@@ -916,9 +916,18 @@ export function PosApp() {
         const fromStorage = loadPrintJobs();
         const existing = fromStorage.find((p) => p.id === job.id);
         if (existing) {
-          // 本地已有 → 保留本地版本（sent/failed），唔用後台 status 覆寫 → 防重印
-          savePrintJobs(fromStorage);
-          return fromStorage;
+          // 本地已有：默認保留本地版本（sent/failed），唔用後台 status 覆寫 → 防重印
+          // 2026-09-07 兩級狀態：容許「向上」覆寫到終態——
+          //   本地 sent → 伺服器 printed / failed（APK 真實出紙成功或印唔到）
+          // 唔容許向下（伺服器 pending / claimed 唔可以打回本地 sent，否則 flush 當佢未印 → 重印）。
+          const isTerminalUp =
+            existing.status === "sent" && (job.status === "printed" || job.status === "failed");
+          const merged = isTerminalUp
+            ? { ...existing, status: job.status, lastError: job.lastError ?? existing.lastError }
+            : existing;
+          const next = fromStorage.map((p) => (p.id === job.id ? merged : p));
+          savePrintJobs(next);
+          return next;
         }
         const next = [job, ...fromStorage];
         savePrintJobs(next);

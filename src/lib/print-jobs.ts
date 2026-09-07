@@ -452,14 +452,34 @@ export function pruneSentPrintJobs(olderThanDays = 7): number {
   return removed;
 }
 
-/** 手動「清除已發送」：移除所有 sent 單（保留 pending / failed 等用家跟進）。打印中心按鈕 call。
+/** 手動「清除已發送」：移除所有 sent 單（保留 printed / pending / failed 等用家跟進）。
+ * 2026-09-07 兩級狀態：sent 只代表「已交付打印通道、未確認出紙」，printed 係「真實出紙成功」，
+ * 兩者語義不同，分開清除（見 clearPrintedPrintJobs）。打印中心「清除已發送」鈕 call。
  * 真刪：記錄 clearedPrintJobIds tombstone + 推送伺服器 DELETE（見 docs/52）。 */
 export function clearSentPrintJobs(): number {
   const jobs = loadPrintJobs();
-  const kept = jobs.filter((j) => j.status !== "sent" && j.status !== "printed");
+  const kept = jobs.filter((j) => j.status !== "sent");
   const removed = jobs.length - kept.length;
   if (removed > 0) {
-    const removedIds = jobs.filter((j) => j.status === "sent" || j.status === "printed").map((j) => j.id);
+    const removedIds = jobs.filter((j) => j.status === "sent").map((j) => j.id);
+    savePrintJobs(kept);
+    addClearedPrintJobIds(removedIds);
+    void deletePrintJobsOnServer(removedIds);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: kept } }));
+    }
+  }
+  return removed;
+}
+
+/** 手動「清除已成功」：移除所有 printed 單（保留 sent / pending / failed）。打印中心「清除已成功」鈕 call。
+ * 真刪：記錄 clearedPrintJobIds tombstone + 推送伺服器 DELETE（見 docs/52）。 */
+export function clearPrintedPrintJobs(): number {
+  const jobs = loadPrintJobs();
+  const kept = jobs.filter((j) => j.status !== "printed");
+  const removed = jobs.length - kept.length;
+  if (removed > 0) {
+    const removedIds = jobs.filter((j) => j.status === "printed").map((j) => j.id);
     savePrintJobs(kept);
     addClearedPrintJobIds(removedIds);
     void deletePrintJobsOnServer(removedIds);

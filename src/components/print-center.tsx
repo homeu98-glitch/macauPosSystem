@@ -12,7 +12,7 @@ import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
-import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
+import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
   loadBootstrapCache,
@@ -155,7 +155,7 @@ export function PrintCenter() {
   // A1（docs/56）：打印通道健康自檢。三通道皆無 → 所有單據只排佇列唔出紙，出 banner 提示。
   const hasChannel = isNativeBridgeAvailable() || isCompanionConfigured() || isRelayConfigured();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "pending" | "sent" | "failed">("all");
+  const [filter, setFilter] = useState<"all" | "pending" | "sent" | "printed" | "failed">("all");
   // docs/任務：列印記錄加入時間篩選（今天 / 昨天 / 7天 / 30天 / 全部），預設「今天」。
   const [dateFilter, setDateFilter] = useState<ReportRangeKey>("today");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -219,7 +219,8 @@ export function PrintCenter() {
       .filter((job) => printJobMatchesDateRange(job.createdAt, dateFilter))
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (filter === "all") return base;
-    if (filter === "sent") return base.filter((job) => job.status === "sent" || job.status === "printed");
+    if (filter === "sent") return base.filter((job) => job.status === "sent");
+    if (filter === "printed") return base.filter((job) => job.status === "printed");
     return base.filter((job) => job.status === filter);
   }, [printJobs, filter, dateFilter]);
 
@@ -426,9 +427,9 @@ export function PrintCenter() {
 
   // §10（docs/98）：把雲端嘅打印結果回填本地 print job 狀態。
   // relay 年代，本地嘅 `sent` 只代表「入咗雲端隊列」，真正印到 / 印唔到喺雲端（Hub 回報）。
-  // 所以雲端 failed 必須覆寫本地（否則用家永遠見唔到失敗）；
-  // 但雲端結果只可以「向上」覆寫——絕對唔可以將本地 sent 打回 pending
-  // （呢個端點亦只返 sent / failed，根本唔會有 pending 漏出嚟）。
+  // 2026-09-07 兩級狀態：雲端 `printed`（真實出紙成功）同 `failed`（印唔到）都必須向上覆寫本地；
+  // 雲端 `sent` 只係「已交畀打印通道」，本地已經係 sent 就唔使動。
+  // 絕對唔可以將本地 sent 打回 pending（呢個端點亦只返 sent / printed / failed，根本唔會有 pending 漏出嚟）。
   async function syncCloudPrintOutcomes() {
     const storeId = resolveStoreId();
     if (!storeId) return;
@@ -440,7 +441,7 @@ export function PrintCenter() {
     }
     if (!res.ok) return;
     const data = (await res.json().catch(() => null)) as
-      | { ok?: boolean; jobs?: Array<{ id: string; status: "sent" | "failed"; lastError?: string }> }
+      | { ok?: boolean; jobs?: Array<{ id: string; status: "sent" | "printed" | "failed"; lastError?: string }> }
       | null;
     if (!data?.ok || !Array.isArray(data.jobs)) return;
 
@@ -450,16 +451,17 @@ export function PrintCenter() {
     const next = current.map((job) => {
       const cloud = cloudById.get(job.id);
       if (!cloud) return job;
+      // 終態向上覆寫：本地 sent / pending → 雲端 printed（真實出紙成功）
+      if (cloud.status === "printed" && (job.status === "pending" || job.status === "sent")) {
+        changed = true;
+        return { ...job, status: "printed" as const, lastError: cloud.lastError ?? job.lastError };
+      }
+      // 終態向上覆寫：本地任何非失敗 → 雲端 failed（印唔到）
       if (cloud.status === "failed" && job.status !== "failed") {
         changed = true;
         return { ...job, status: "failed" as const, lastError: cloud.lastError ?? job.lastError };
       }
-      if (cloud.status === "sent" && (job.status === "pending" || job.status === "sent")) {
-        if (job.status !== "sent") {
-          changed = true;
-          return { ...job, status: "sent" as const };
-        }
-      }
+      // 雲端 sent 只代表「已交畀通道」，本地已經係 sent 就唔使動（唔降級、唔升級）
       return job;
     });
     if (changed) persistPrintJobs(next);
@@ -770,6 +772,7 @@ export function PrintCenter() {
                   {[
                     ["all", "全部"],
                     ["sent", "已發送"],
+                    ["printed", "打印成功"],
                     ["pending", "待補傳"],
                     ["failed", "失敗"],
                   ].map(([key, label]) => (
@@ -814,6 +817,13 @@ export function PrintCenter() {
                     清除已發送
                   </button>
                   <button
+                    className="rounded-full bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-200"
+                    onClick={() => clearPrintedPrintJobs()}
+                    type="button"
+                  >
+                    清除已成功
+                  </button>
+                  <button
                     className="rounded-full bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-200"
                     onClick={() => clearFailedPrintJobs()}
                     type="button"
@@ -829,7 +839,7 @@ export function PrintCenter() {
                       <div className="mt-2 text-xs text-slate-400">
                         （已套用
                         {dateFilter !== "all" ? `時間：${dateFilter === "today" ? "今天" : dateFilter === "yesterday" ? "昨天" : dateFilter === "7d" ? "最近 7 天" : "最近 30 天"}` : ""}
-                        {filter !== "all" ? `${dateFilter !== "all" ? "・" : ""}狀態：${filter === "sent" ? "已發送" : filter === "pending" ? "待補傳" : "失敗"}` : ""}）
+                        {filter !== "all" ? `${dateFilter !== "all" ? "・" : ""}狀態：${filter === "sent" ? "已發送" : filter === "printed" ? "打印成功" : filter === "pending" ? "待補傳" : "失敗"}` : ""}）
                       </div>
                     ) : null}
                   </div>
@@ -846,20 +856,24 @@ export function PrintCenter() {
                           </div>
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                              job.status === "sent" || job.status === "printed"
-                                ? "bg-emerald-50 text-emerald-700"
-                                : job.status === "pending"
-                                  ? "bg-amber-50 text-amber-700"
-                                  : "bg-red-50 text-red-700"
+                              job.status === "printed"
+                                ? "bg-sky-50 text-sky-700"
+                                : job.status === "sent"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : job.status === "pending"
+                                    ? "bg-amber-50 text-amber-700"
+                                    : "bg-red-50 text-red-700"
                             }`}
                           >
-                            {job.status === "sent" || job.status === "printed"
-                              ? "已發送"
-                              : job.status === "pending"
-                                ? "待補傳"
-                                : job.status === "failed"
-                                  ? "失敗"
-                                  : "失敗（狀態異常）"}
+                            {job.status === "printed"
+                              ? "打印成功"
+                              : job.status === "sent"
+                                ? "已發送"
+                                : job.status === "pending"
+                                  ? "待補傳"
+                                  : job.status === "failed"
+                                    ? "失敗"
+                                    : "失敗（狀態異常）"}
                           </span>
                         </div>
 
@@ -954,11 +968,13 @@ export function PrintCenter() {
                 <div className="text-sm font-semibold text-slate-900">{activeJob.printerName}</div>
                 <div className="mt-1 text-xs text-slate-500">
                   {activeJob.printerGroup} · {ticketTypeLabel(activeJob.ticketType)} ·{" "}
-                  {activeJob.status === "sent" || activeJob.status === "printed"
-                    ? "已發送"
-                    : activeJob.status === "pending"
-                      ? "待補傳"
-                      : "失敗"}
+                  {activeJob.status === "printed"
+                    ? "打印成功"
+                    : activeJob.status === "sent"
+                      ? "已發送"
+                      : activeJob.status === "pending"
+                        ? "待補傳"
+                        : "失敗"}
                 </div>
               </div>
               <div className="text-right text-xs text-slate-500">{formatMacauDateTime(activeJob.createdAt)}</div>

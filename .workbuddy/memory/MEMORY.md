@@ -38,6 +38,15 @@
 - **「會員充值 & 會員數」Card 版面（2026-09-05 redesign）**：由「單一大字 + pills」改為 **2×2 mini-block grid**（rounded-xl bg-slate-50），四格分別為「充值總額（含實際/贈送子項 + 充值筆數）」、「會員總數（含新增會員）」、「會員扣點（含已付/贈送子項 + 扣點筆數）」、「訂單餘額扣減 + 線上渠道佔比」。所有子項標籤均為中文，視覺風格與其他 Card 一致。
 - **`60000003` 舊 demo 店（根因）**：`60000003` 係真實 merchant UUID（**唔係** hardcode、唔係 `macau-store-a`）。落單 `storeId` 來源 = Kiosk `binding.storeId`（localStorage `macau-pos-kiosk-device`）或掃碼 `?store=`；若呢啲被綁成 60000003，訂單就寫落 60000003（合法 merchant，寫入防護唔會擋）。讀取端已嚴格按 `store_id` 隔離，無「跨店串資料」bug；要修正寫入端就喺 A 店後台重新綁 Kiosk device（覆寫 `macau-pos-kiosk-device` 成 A 店 merchantId）／重新生成 `?store=<A店merchantId>` 掃碼 QR／確認 `loadAuthSession().merchantId` 係 A 店 UUID。
 
+## 打印任務狀態語義（2026-09-07 評估新增「打印成功」後確定）
+
+- `pending`：本地隊列等待派發。
+- `sent`：**POS 已將任務交付給打印通道**（native bridge / companion / relay）。對 relay 而言只代表入咗雲端隊列，未必已出紙。
+- `printed`：**打印通道回報真實出紙成功**。對 relay 係 APK/Agent 打印後回報；對 native/companion 若打印機單向通信則只能 best-effort。
+- `failed`：打印通道回報失敗，或本地派發失敗。
+
+**注意**：雲端 `pos_print_jobs.status` 已支援 `"printed"`，`/api/pos/print-agent/result` 亦已處理；但 `print-center.tsx` 嘅 `syncCloudPrintOutcomes()` 長期把 `"printed"` 降格為 `"sent"`，所以 UI 目前無法區分「已發送」同「打印成功」。要實現兩級狀態，關鍵修改係停止降格、新增「打印成功」filter/badge，而非改 schema 或 RPC。
+
 ## 執行環境判斷（原生殼 vs 純 website/PWA）
 
 - **判斷依據係原生殼注入嘅 bridge 標記，唔好用 userAgent sniff**：Android APK WebView → `window.PosNative.printJob`；PC Electron 殼 → `window.companionShell`（見 `pwa-install-button.tsx` 嘅 `isRunningInNativeShell()`）。
