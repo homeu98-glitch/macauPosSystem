@@ -23,7 +23,7 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
 import { newDiscountId } from "@/lib/pos/discount";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { filterReopenTempTables, isReopenTempTable, stripReopenTempTables } from "@/lib/pos/table-scope";
@@ -38,8 +38,14 @@ import { restoreLedgerSession } from "@/lib/ledger/session";
 import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
-import { isCompanionConfigured, sendJobToCompanion, tryAutoPairCompanion } from "@/lib/print-bridge/companion";
+import {
+  isCompanionConfigured,
+  sendJobToCompanion,
+  shouldKeepCompanionAlive,
+  tryAutoPairCompanion,
+} from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
+import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -519,18 +525,20 @@ export function DeviceSettings() {
             : printer.zoneId ?? "zone:test",
       printerId: printer.id,
       printerName: printer.name,
-      items: [{ name: "Macau POS 測試打印", quantity: 1, specs: [], note: "Printer Agent OK" }],
+      items: [{ name: "Macau POS 測試打印", quantity: 1, specs: [], note: "Printer Test OK" }],
       status: "pending",
       createdAt: new Date().toISOString(),
     };
 
     try {
-      // 1) Native Print Agent（Sunmi APK WebView）優先：經 PosNative 觸發 APK renderTestPage
+      const storeName = loadBootstrapCache()?.storeName;
+      const kind: PrintKind = "test";
+
+      // 1) Native Print Agent（Android APK WebView）優先：經 PosNative 觸發 APK renderTestPage
       if (isNativeBridgeAvailable()) {
-        const storeName = loadBootstrapCache()?.storeName;
         let lastErr = "";
         for (let i = 0; i < copies; i++) {
-          const res = await dispatchJobToNative(testJob, { printer, kind: "test", storeName });
+          const res = await dispatchJobToNative(testJob, { printer, kind, storeName });
           if (!res.ok) {
             lastErr = res.error || `未能送出 ${printer.name} 測試打印。`;
             break;
@@ -544,25 +552,12 @@ export function DeviceSettings() {
         return;
       }
 
-      // 2) Fallback：經 Companion 代理（loopback http://127.0.0.1:9311）直打
-      if (isCompanionConfigured()) {
-        const testJob: PrintJob = {
-          id: uid("test"),
-          orderId: "test",
-          orderNo: "TEST",
-          ticketType: "normal",
-          printerGroup:
-            printer.role === "receipt"
-              ? "receipt"
-              : printer.role === "label"
-                ? "label"
-                : printer.zoneId ?? "zone:test",
-          printerId: printer.id,
-          printerName: printer.name,
-          items: [{ name: "Macau POS 測試打印", quantity: 1, note: "Printer Companion OK" }],
-          status: "pending",
-          createdAt: new Date().toISOString(),
-        };
+      // 2) 桌面 Companion 代理（loopback http://127.0.0.1:9311）——
+      //    必須同時係「Companion 環境」（原生殼 / `?companion=` URL 參數）。
+      //    純 website / PWA 即便 localStorage 有 stale `macau-pos-companion-url` 都要 skip——
+      //    否則會無謂打 5s 連唔到嘅 loopback（companion-transport.ts 嘅 5s AbortController
+      //    超時先返），同 `dispatchOneJob` 嘅 companion 分支語義完全對齊。
+      if (shouldKeepCompanionAlive() && isCompanionConfigured()) {
         let lastErr = "";
         for (let i = 0; i < copies; i++) {
           const r = await sendJobToCompanion(testJob, printer);
@@ -578,7 +573,36 @@ export function DeviceSettings() {
         );
         return;
       }
-      setStatus("未配對 Companion 代理（請確認桌面 Companion 已啟動）。");
+
+      // 3) Cloud Print Relay（雲端中繼，互聯網備援）——
+      //    網頁 / PWA 嘅預設打印通道（companion 環境 gate 過唔到就落到呢度）。
+      //    走 `getRelayTransport().send()`，同 `dispatchOneJob` relay 分支一致：
+      //    relay 內部會 `flushPosSyncQueue` 確保 PRINT_JOB_CREATED 已上雲，
+      //    中繼 APK 隨後經 Realtime 訂閱 + claim RPC 拎走出紙。
+      if (isRelayConfigured()) {
+        const relay = getRelayTransport();
+        if (relay) {
+          let lastErr = "";
+          for (let i = 0; i < copies; i++) {
+            const res = await relay.send(testJob, printer, { kind, storeName });
+            if (!res.ok) {
+              lastErr = res.error || "relay 打印失敗";
+              break;
+            }
+          }
+          setStatus(
+            lastErr
+              ? `Print Relay 測試打印失敗：${lastErr}`
+              : `已透過 Print Relay 送出 ${printer.name} 測試單到雲端中繼（${copies} 份，店內中繼機會自動出紙）。`,
+          );
+          return;
+        }
+      }
+
+      // 4) 真係乜都冇 —— 唔再誤導「桌面 Companion 已啟動」（喺 web/PWA 開 desktop agent 根本無解）
+      setStatus(
+        "未配置任何打印通道：請到「打印中繼」分頁配對雲端備援（relay），或於桌面裝置啟動 Companion 代理後再測試。",
+      );
     } catch {
       setStatus(`未能送出 ${printer.name} 測試打印。`);
     } finally {
