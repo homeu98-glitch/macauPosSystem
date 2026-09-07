@@ -65,15 +65,54 @@ export async function GET(request: Request) {
   const start = searchParams.get("start")?.trim() ? toUtcIso(searchParams.get("start")!.trim()) : null;
   const end = searchParams.get("end")?.trim() ? toUtcIso(searchParams.get("end")!.trim()) : null;
 
+  // 🩺 可觀測性（2026-09-07 修）：每次請求都 log 入參，排查空數據時直接睇 server log。
+  // 對照前端 Network tab 嘅 query string，可以一眼睇出係「前端冇傳」定「後端查唔到」。
+  console.log("[admin/orders] request", {
+    account: claims.account,
+    storeId,
+    startRaw: searchParams.get("start"),
+    endRaw: searchParams.get("end"),
+    start,
+    end,
+    limit,
+    offset,
+  });
+
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    return NextResponse.json({ ok: true, source: "mock", orders: [] });
+    // 🩺 2026-09-07 修：**唔可以再 fail-open 返 `ok: true` + 空陣列**。
+    // 舊版喺 Supabase 未配置（缺 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）時靜默返空，
+    // 前端完全分唔到「今日真係冇單」定「資料庫未連到」，只會顯示一片空白——
+    // 呢個係「報表完全無數據」最常見嘅隱性根因。而家改成 fail-closed 出 503 + 明確 code。
+    const missing: string[] = [];
+    if (!process.env.SUPABASE_URL && !process.env.NEXT_PUBLIC_SUPABASE_URL) missing.push("SUPABASE_URL");
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_KEY && !process.env.SUPABASE_ANON_KEY) {
+      missing.push("SUPABASE_SERVICE_ROLE_KEY");
+    }
+    console.error("[admin/orders] supabase_not_configured", { missing });
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "supabase_not_configured",
+        error: `POS 資料庫未配置（缺少 ${missing.join(" / ")}），無法讀取訂單。`,
+      },
+      { status: 503 },
+    );
   }
 
   const { orders, error } = await fetchOrdersInRange({ supabase, storeId, start, end, limit, offset });
 
   if (error) {
+    console.error("[admin/orders] query_failed", { storeId, start, end, limit, offset, error });
     return NextResponse.json({ ok: false, error: "讀取訂單失敗。", detail: error }, { status: 502 });
+  }
+
+  // 🩺 可觀測性：記錄實際查到嘅筆數 + 區間，0 筆時用 warn 方便喺 log 度 grep。
+  const summary = { account: claims.account, storeId: storeId ?? "all", start, end, count: orders.length };
+  if (orders.length === 0) {
+    console.warn("[admin/orders] empty_result", summary);
+  } else {
+    console.log("[admin/orders] result", summary);
   }
 
   return NextResponse.json({
@@ -82,5 +121,7 @@ export async function GET(request: Request) {
     orders: orders.map((row) => mapOrderRow(row)),
     limit,
     offset,
+    // 🩺 畀前端／排查用：直接喺 response 帶住查詢條件，唔使再對照 log 推敲。
+    debug: { start, end, count: orders.length },
   });
 }

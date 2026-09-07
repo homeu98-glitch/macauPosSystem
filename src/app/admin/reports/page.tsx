@@ -23,6 +23,10 @@ type AdminMerchant = { id: string; name: string; status: string };
 export default function AdminReportsPage() {
   const [merchants, setMerchants] = useState<AdminMerchant[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // 🩺 2026-09-07 修：訂單讀取失敗時嘅具體原因（HTTP status + server code + 查詢區間）。
+  // 舊版報表「完全空白」但唔講點解；而家頂部會直接顯示失敗原因，一眼分到
+  // 「未授權 / 資料庫未配置 / 查詢失敗 / 真·冇單」。
+  const [orderFetchError, setOrderFetchError] = useState<string | null>(null);
 
   // 商家搜尋 + 選擇狀態（2026-09-06 修）：用 input + 即時下拉取代 <select>，
   // 解決問題 7 嘅搜尋需求。
@@ -89,8 +93,26 @@ export default function AdminReportsPage() {
       const res = await fetch(`/api/admin/orders?${qs.toString()}`, {
         headers: { Authorization: `Bearer ${token ?? ""}` },
       });
-      const json = (await res.json()) as { ok?: boolean; orders?: PosOrder[]; error?: string };
-      if (!res.ok || !json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      const json = (await res.json()) as {
+        ok?: boolean;
+        orders?: PosOrder[];
+        error?: string;
+        code?: string;
+        debug?: { start: string | null; end: string | null; count: number };
+      };
+      if (!res.ok || !json.ok) {
+        // 🩺 2026-09-07 修：舊版淨係 throw 一句短 message，前端 catch 咗就靜默當 0 筆，
+        // 用戶完全唔知係 401（token 冇 / 過期）、503（Supabase 未配置）定係真·冇單。
+        // 而家帶埋 HTTP status + server code + 查詢區間，等報表頁可以顯示具體原因。
+        const prefix = res.status === 401 ? "未授權（請重新登入管理後台）" : `HTTP ${res.status}`;
+        setOrderFetchError(
+          `${prefix}：${json.error ?? "讀取訂單失敗"}` +
+            (json.code ? ` [${json.code}]` : "") +
+            (json.debug ? `（區間 ${json.debug.start ?? "∞"} → ${json.debug.end ?? "∞"}）` : ""),
+        );
+        throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+      setOrderFetchError(null);
       return json.orders ?? [];
     },
     [],
@@ -194,6 +216,18 @@ export default function AdminReportsPage() {
         </div>
 
         {error && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p>}
+
+        {orderFetchError && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold">⚠️ 訂單數據讀取失敗，報表可能顯示為空</p>
+            <p className="mt-1 text-xs">{orderFetchError}</p>
+            <p className="mt-1 text-xs text-amber-700">
+              排查方向：① 管理後台 token 是否過期（重新登入）；② server 環境變數
+              SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 是否配置；③ server log 度 grep{" "}
+              <code>[admin/orders]</code> 睇實際查詢區間同筆數。
+            </p>
+          </div>
+        )}
 
         {selected === "all" ? (
           <RestaurantDailyReport
