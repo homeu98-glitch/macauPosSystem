@@ -74,6 +74,13 @@
 - **`body { overflow: hidden }`（喺 `src/app/globals.css`）係全局鎖死滾動**，唔可以任意刪除——POS app 嘅內部 scroll container 依賴 body 不滾動避免雙滾動條。
 - Admin panel 用 **AdminShell 自己嘅 `h-[100dvh] overflow-y-auto` 做內部滾動容器**，sticky header 喺呢個容器內仍然 work（sticky 相對於最近嘅 overflow container）。POS app layout 完全唔受影響。
 - **唔好用 body scroll 做 admin panel 滾動**——會被全局 `body { overflow: hidden }` 鎖死。
+- **Shared component（如 `restaurant-daily-report.tsx`）同時服務 admin 同 POS 兩個場景時，滾動策略必須按模式分流，唔可以一刀切**：
+  - admin 模式：main 係 `block`、冇固定高度 parent → 內容區用 `block`，由 AdminShell 滾動。
+  - POS 模式（`/reports`）：main 係 `h-[100dvh] flex flex-col overflow-hidden` → 內容 wrapper 必須
+    `min-h-0 flex-1 overflow-y-auto`（title bar 固定、內容區自己滾）；`min-h-0` 防 flex item 預設
+    `min-height:auto` 令 overflow 失效。
+  - 反面教材：`f1cc8ad`（2026-09-07）一刀切將內容 wrapper 改 `block`，令 POS /reports 內容超出視口被
+    裁切、成頁滾唔到（body overflow hidden 兜底唔到）——已於當日修返做模式分流。
 
 ## Admin Panel dataReady 約定（2026-09-07 修）
 

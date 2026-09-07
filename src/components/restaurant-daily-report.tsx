@@ -1777,11 +1777,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     // - admin 模式（merchantIdOverride 或 allStoresMode）：
     //   - 唔渲染 <AppSidebar /> → 解決問題 5（移除側邊欄）+ 問題 4（唔再顯示「表嫂美食 65273599」）
     //   - 唔加 md:pl-[72px] → admin 報表撐滿寬度，配合 AdminShell max-w-7xl
-    //   - 唔再 `flex-1 overflow-auto`（2026-09-07 修）：內部 scroll 喺冇固定高度嘅 flex
-    //     parent 入面係冇用嘅（flex-1 = 撐到內容高度，overflow-auto 唔會出現 scrollbar）。
-    //     而家改為普通 block layout，由 AdminShell 嘅 `h-[100dvh] overflow-y-auto`
+    //   - 內容區用 block（見下方），由 AdminShell 嘅 `h-[100dvh] overflow-y-auto`
     //     容器負責頁面滾動（避開 globals.css `body { overflow: hidden }` 鎖死）。
-    // - POS 模式：維持原樣 h-[100dvh] + AppSidebar + md:pl-[72px]。
+    // - POS 模式（/reports 商家報表）：維持 h-[100dvh] + AppSidebar + md:pl-[72px]，
+    //   內容區係 flex-1 + overflow-y-auto（main 高度固定），title bar 固定、內容獨立滾動。
     <div className={isAdminMode ? "bg-slate-100" : "h-[100dvh] overflow-hidden bg-slate-100"}>
       {isAdminMode ? null : <AppSidebar />}
       <div className={isAdminMode ? "" : "flex h-[100dvh] overflow-hidden md:pl-[72px]"}>
@@ -1821,7 +1820,14 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
             </div>
           </div>
 
-          <div className="block p-4">
+          {/* 內容區滾動策略（2026-09-07 第二修）：
+              - admin 模式：main 係 block、冇固定高度 parent → 內容自然展開，
+                由 AdminShell 嘅 `h-[100dvh] overflow-y-auto` 負責整頁滾動 → 用 block。
+              - POS 模式（/reports 商家報表）：main 係 `h-full flex-col overflow-hidden`，
+                內容 wrapper 必須係 flex-1 + overflow-y-auto 先有自己嘅滾動容器；
+                f1cc8ad 曾一刀切改成 block，令 POS 模式內容超出視口被裁切、成頁滾唔到。
+                加 min-h-0 防止 flex item 預設 min-height:auto 令 overflow 失效。 */}
+          <div className={isAdminMode ? "block p-4" : "min-h-0 flex-1 overflow-y-auto p-4"}>
             {ledgerError ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {ledgerError}
