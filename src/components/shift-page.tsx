@@ -26,6 +26,12 @@ import {
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
 import { resolveStoreId, withStoreScope, filterEventsForCurrentStore } from "@/lib/pos/sync-flush";
+import {
+  reconcileLocalShift,
+  serverActiveToLocal,
+  serverCloseShift,
+  serverOpenShift,
+} from "@/lib/shift-sync";
 import { PrintJob, PosOrder, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
@@ -110,6 +116,33 @@ export function ShiftPage() {
     refreshOrders();
     window.addEventListener("focus", refreshOrders);
     return () => window.removeEventListener("focus", refreshOrders);
+  }, []);
+
+  // 2026-09-07（問題一）：入頁即同 server active 班次 reconcile ——
+  // 若另一部機／另一個 browser 已開工而本地未開 → adopt server 開工狀態（時間以 server 為準），
+  // 唔再「每次都要重新開工」；若本地離線開工未上雲 → 自動補上雲。
+  useEffect(() => {
+    const storeId = resolveStoreId();
+    if (!storeId || !readNetworkOnline()) return;
+    let cancelled = false;
+    void reconcileLocalShift(storeId)
+      .then((result) => {
+        if (cancelled || !result.ok) return;
+        setShift(result.shift);
+        if (result.adoptedServer) {
+          setStatus(
+            result.shift.openedAt
+              ? `已同步雲端班次狀態（另一部裝置已開工：${formatMacauDateTime(result.shift.openedAt)}），可以直接交班。`
+              : "已同步雲端班次狀態。",
+          );
+        } else if (result.shift.serverSynced) {
+          setStatus("班次狀態已與雲端同步。");
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const todayLocalOrders = useMemo(
@@ -345,6 +378,59 @@ export function ShiftPage() {
     return true;
   }
 
+  // 2026-09-07（問題一）：開工 = 本地即時生效 + 上雲。server 已有 active（另一部機開咗）→ 以 server 為準。
+  async function openShiftNow() {
+    const session = loadAuthSession();
+    const next: typeof shift = {
+      ...shift,
+      openedAt: new Date().toISOString(),
+      closedAt: undefined,
+      openingNote: shiftNote,
+      employeeAccount: session?.account ?? shift.employeeAccount,
+      employeeName: session?.name ?? shift.employeeName,
+      overtimeAckedAt: undefined,
+      serverSynced: false,
+      lastCloseSummary: undefined, // 新班次唔好帶上一班嘅兜底統計
+    };
+    setShift(next);
+    saveShiftState(next);
+    window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
+    setStatus("已開工。");
+
+    const storeId = resolveStoreId();
+    if (!storeId) return;
+    if (!readNetworkOnline()) {
+      setStatus("已離線開工：恢復網絡後會自動同步到雲端（其他裝置會見到已開工）。");
+      return;
+    }
+    try {
+      const result = await serverOpenShift({
+        storeId,
+        openedAt: next.openedAt,
+        employeeAccount: next.employeeAccount,
+        employeeName: next.employeeName,
+        openingNote: next.openingNote,
+      });
+      if (result.conflict && result.active) {
+        // 另一部機已經開咗工 → 唔開新班次，直接採納 server 開工時間（解決「開工時間唔更新」）。
+        const merged = serverActiveToLocal(result.active, loadShiftState());
+        delete merged.closedAt;
+        delete merged.closingNote;
+        setShift(merged);
+        saveShiftState(merged);
+        window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
+        setStatus(
+          `本店已有班次進行中（另一部裝置已於 ${formatMacauDateTime(merged.openedAt)} 開工），已同步該開工狀態。`,
+        );
+        return;
+      }
+      saveShiftState({ ...loadShiftState(), serverSynced: true });
+      setStatus("已開工，並已同步到雲端（其他裝置會見到已開工）。");
+    } catch {
+      setStatus("已開工，但暫時未能同步伺服器；恢復網絡後會自動補同步。");
+    }
+  }
+
   async function closeShift() {
     if (closingShift) return;
     setClosingShift(true);
@@ -354,14 +440,6 @@ export function ShiftPage() {
       return;
     }
     const now = new Date().toISOString();
-    const next = {
-      ...shift,
-      openedAt: undefined,
-      closedAt: now,
-      closingNote: shiftNote,
-      actualCash: Number.isFinite(actualCashValue) ? actualCashValue : undefined,
-      cashDifference: Number.isFinite(actualCashValue) ? cashDifference : undefined,
-    };
     const historyRecord = {
       id: `shift-${now}`,
       employeeAccount: authSession?.account,
@@ -389,12 +467,49 @@ export function ShiftPage() {
       failedEvents: queueSummary.failedEvents,
       pendingPrints: queueSummary.pendingPrints,
     };
-    setShift(next);
-    saveShiftState(next);
+    const closeSummary = historyRecord as unknown as Record<string, unknown>;
+    const next = {
+      ...shift,
+      openedAt: undefined,
+      closedAt: now,
+      closingNote: shiftNote,
+      actualCash: Number.isFinite(actualCashValue) ? actualCashValue : undefined,
+      cashDifference: Number.isFinite(actualCashValue) ? cashDifference : undefined,
+      // 2026-09-07：收工統計本地兜底 —— server close 成功後會清走；失敗就留低，
+      // reconcile「補 close」時帶埋上 server，避免 server 班次永久缺統計。
+      lastCloseSummary: closeSummary,
+    };
+
+    // 2026-09-07（問題一）：收工狀態上雲 —— forceSyncBeforeClose 已保證 online。
+    // 失敗唔 block 收工/打印，但會喺狀態列提示；reconcile 會喺下次 online 自動補 close。
+    let serverCloseFailed = false;
+    const closingStoreId = resolveStoreId();
+    if (!closingStoreId) {
+      serverCloseFailed = true; // 冇店舖識別都當同步失敗處理（唔好誤報「雲端已同步」）
+    } else if (readNetworkOnline()) {
+      try {
+        serverCloseFailed = !(await serverCloseShift({
+          storeId: closingStoreId,
+          closingNote: shiftNote || undefined,
+          actualCash: Number.isFinite(actualCashValue) ? actualCashValue : undefined,
+          cashDifference: Number.isFinite(actualCashValue) ? cashDifference : undefined,
+          summary: historyRecord as unknown as Record<string, unknown>,
+        }));
+      } catch {
+        serverCloseFailed = true;
+      }
+    } else {
+      serverCloseFailed = true; // 收工瞬間斷線（極端）：留兜底，reconcile 補
+    }
+
+    // server close 成功 → 本地唔再需要留兜底統計；失敗就留低畀 reconcile 補帶。
+    const finalNext = serverCloseFailed ? next : { ...next, lastCloseSummary: undefined };
+    setShift(finalNext);
+    saveShiftState(finalNext);
     const nextHistory = [historyRecord, ...shiftHistory].slice(0, 60);
     setShiftHistory(nextHistory);
     saveShiftHistory(nextHistory);
-    window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
+    window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: finalNext } }));
 
     const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.role === "receipt");
     const printerName = receiptPrinter?.name ?? "收據打印機";
@@ -491,7 +606,10 @@ export function ShiftPage() {
       }
     }
 
-    setStatus("已交班，交班單已加入打印隊列，狀態已重置為待開工。");
+    setStatus(
+      "已交班，交班單已加入打印隊列，狀態已重置為待開工。" +
+        (serverCloseFailed ? "（⚠️ 收工狀態未能同步雲端，將自動重試，其他裝置可能仍顯示已開工。）" : "（雲端已同步，其他裝置會顯示已收工。）"),
+    );
     setConfirmOpen(false);
     setClosingShift(false);
   }
@@ -637,7 +755,11 @@ export function ShiftPage() {
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-base font-semibold text-slate-900">班次狀態</div>
             <div className="mt-3 space-y-2 text-sm text-slate-700">
-              <div>{shift.openedAt ? `已開工：${formatMacauDateTime(shift.openedAt)}` : "未開工"}</div>
+              <div>
+                {shift.openedAt
+                  ? `已開工：${shift.employeeName ?? shift.employeeAccount ?? ""}${shift.employeeName || shift.employeeAccount ? " · " : ""}${formatMacauDateTime(shift.openedAt)}`
+                  : "未開工"}
+              </div>
               {shift.closedAt ? (
                 <div className="text-slate-500">最近交班：{formatMacauDateTime(shift.closedAt)}</div>
               ) : null}
@@ -679,18 +801,7 @@ export function ShiftPage() {
               {!shift.openedAt ? (
                 <button
                   className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => {
-                    const next = {
-                      ...shift,
-                      openedAt: new Date().toISOString(),
-                      closedAt: undefined,
-                      openingNote: shiftNote,
-                    };
-                    setShift(next);
-                    saveShiftState(next);
-                    window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
-                    setStatus("已開工。");
-                  }}
+                  onClick={() => void openShiftNow()}
                   type="button"
                 >
                   開工

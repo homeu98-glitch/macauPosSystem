@@ -73,7 +73,15 @@ import {
   saveQuickCompletedMinutes,
   saveShiftState,
   saveSoldOutState,
+  type ShiftState,
 } from "@/lib/storage";
+import {
+  isShiftOvertimeDue,
+  reconcileLocalShift,
+  serverActiveToLocal,
+  serverAckOvertime,
+  serverOpenShift,
+} from "@/lib/shift-sync";
 import { executeLedgerMemberCheckout, LedgerMemberCheckoutError } from "@/lib/ledger/checkout-member";
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
@@ -93,7 +101,7 @@ import {
   quickCompleteLabel,
   quickCompletionLabel,
 } from "@/lib/quick-order-fulfillment";
-import { useNetworkOnline } from "@/lib/use-network-online";
+import { NETWORK_STATUS_EVENT, readNetworkOnline, useNetworkOnline } from "@/lib/use-network-online";
 import {
   compareOrderByLocalNo,
   filterQuickActionBarOrders,
@@ -442,6 +450,10 @@ export function PosApp() {
   const lastLoadedQueueRef = useRef<string>("");
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
+  // 2026-09-07：連續開工逾時提醒（>10h）彈窗開關；shiftSyncBusyRef 防 reconcile 重入。
+  const [shiftOvertimeDue, setShiftOvertimeDue] = useState(false);
+  const [shiftAcking, setShiftAcking] = useState(false);
+  const shiftSyncBusyRef = useRef(false);
   const [authSession] = useState(() => loadAuthSession());
   const [orderNote, setOrderNote] = useState("");
   const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
@@ -580,6 +592,67 @@ export function PosApp() {
     return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
   }, []);
 
+  // 2026-09-07：開工/收工狀態跨裝置同步 + 連續開工逾時提醒（問題一 + 問題二）。
+  // 每 60 秒、網絡恢復、window focus 時 reconcile server active 班次：
+  //   - server 已開工而本地未開 → adopt server（開工 gate 自動解鎖，唔使再撳開工）；
+  //   - server 冇而本地開工中 → 補上雲（離線開工事後同步）；
+  //   - 攞埋 server 時鐘計「連續開工 >10 小時」due 狀態（跨裝置一致，ack 以 server 為準）。
+  useEffect(() => {
+    const resolvedStoreId = resolveStoreId();
+    if (!resolvedStoreId) return;
+    const storeId: string = resolvedStoreId;
+    let cancelled = false;
+
+    async function syncOnce() {
+      if (shiftSyncBusyRef.current || !readNetworkOnline()) return;
+      shiftSyncBusyRef.current = true;
+      try {
+        const result = await reconcileLocalShift(storeId);
+        if (cancelled || !result.ok) return;
+        const current = loadShiftState();
+        // 內容有變（adopt server / 補 open 後 synced 旗標變化）先更新 React state。
+        if (
+          result.adoptedServer ||
+          result.shift.openedAt !== current.openedAt ||
+          result.shift.overtimeAckedAt !== current.overtimeAckedAt
+        ) {
+          setShift(result.shift);
+          window.dispatchEvent(
+            new CustomEvent("pos-shift-changed", { detail: { shift: result.shift } }),
+          );
+        }
+        // OT 提醒：只喺本機顯示開工中（openedAt 有、closedAt 冇）先計。
+        const openedIso = result.shift.openedAt;
+        const ackedIso = result.shift.overtimeAckedAt;
+        const serverNowIso = result.serverNow;
+        if (openedIso && !result.shift.closedAt && serverNowIso) {
+          setShiftOvertimeDue(isShiftOvertimeDue(openedIso, ackedIso, serverNowIso));
+        } else {
+          setShiftOvertimeDue(false);
+        }
+      } finally {
+        shiftSyncBusyRef.current = false;
+      }
+    }
+
+    void syncOnce();
+    const timer = window.setInterval(() => void syncOnce(), 60_000);
+    function onReconnect() {
+      void syncOnce();
+    }
+    function onFocus() {
+      void syncOnce();
+    }
+    window.addEventListener(NETWORK_STATUS_EVENT, onReconnect);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener(NETWORK_STATUS_EVENT, onReconnect);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
   useEffect(() => {
     if (!isQuickMode) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -648,15 +721,77 @@ export function PosApp() {
   }
 
   function startWork() {
-    const next = {
+    const session = loadAuthSession();
+    const next: ShiftState = {
       ...shift,
       openedAt: new Date().toISOString(),
       closedAt: undefined,
+      // 2026-09-07：開工帶員工身份（跨裝置顯示「邊個開咗工」）。
+      employeeAccount: session?.account ?? shift.employeeAccount,
+      employeeName: session?.name ?? shift.employeeName,
+      overtimeAckedAt: undefined,
+      serverSynced: false,
+      lastCloseSummary: undefined, // 新班次唔好帶上一班嘅兜底統計
     };
     setShift(next);
     saveShiftState(next);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
     setToast({ tone: "success", message: "已開工，開始今日營業。" });
+    setShiftOvertimeDue(false);
+
+    // 上雲（fire-and-forget）：撞到已有 active 班次 → 以 server 為準 merge，避免雙重班次。
+    const storeId = resolveStoreId();
+    if (storeId && readNetworkOnline()) {
+      void serverOpenShift({
+        storeId,
+        openedAt: next.openedAt,
+        employeeAccount: next.employeeAccount,
+        employeeName: next.employeeName,
+        openingNote: next.openingNote,
+      })
+        .then((result) => {
+          if (result.conflict && result.active) {
+            const merged = serverActiveToLocal(result.active, loadShiftState());
+            delete merged.closedAt;
+            delete merged.closingNote;
+            setShift(merged);
+            saveShiftState(merged);
+            window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
+            setToast({ tone: "info", message: "本店已有班次進行中，已同步該開工狀態。" });
+            return;
+          }
+          // 開工成功 → 標記已上雲。
+          saveShiftState({ ...loadShiftState(), serverSynced: true });
+        })
+        .catch(() => undefined); // 離線 / server 錯 → 留待 reconcile 自動補 open
+    }
+  }
+
+  // 2026-09-07：連續開工逾時提醒 → 撳「取消（繼續營業）」：server 記 ack，之後再滿 10h 先再彈。
+  async function acknowledgeShiftOvertime() {
+    if (shiftAcking) return;
+    const storeId = resolveStoreId();
+    if (!storeId || !readNetworkOnline()) {
+      setToast({ tone: "info", message: "目前離線，暫時無法處理。恢復網絡後會再次提醒。" });
+      return;
+    }
+    setShiftAcking(true);
+    try {
+      const active = await serverAckOvertime(storeId);
+      if (active) {
+        // 以 server 回傳嘅 overtimeAckedAt 為準（本地唔自己造時間，避免各機 clock 偏差）。
+        const merged = { ...loadShiftState(), overtimeAckedAt: active.overtimeAckedAt, serverSynced: true };
+        setShift(merged);
+        saveShiftState(merged);
+        window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
+      }
+      setShiftOvertimeDue(false);
+      setToast({ tone: "success", message: "已記錄。連續營業再滿 10 小時會再次提醒。" });
+    } catch {
+      setToast({ tone: "info", message: "未能連線伺服器，請稍後再試。" });
+    } finally {
+      setShiftAcking(false);
+    }
   }
 
   useEffect(() => {
@@ -5771,6 +5906,46 @@ export function PosApp() {
         >
           {toast.message}
         </div>
+      ) : null}
+
+      {/* 2026-09-07：連續開工超過 10 小時自動提醒（問題二）。
+          計時以 server 班次 openedAt / overtimeAckedAt + serverNow 為準（shift-sync.ts isShiftOvertimeDue），
+          sync effect 每 60s 更新 due 狀態，所以任何一部開住嘅機都會喺同一條件下彈窗。 */}
+      {shiftOvertimeDue && shift.openedAt ? (
+        <ResponsiveModal
+          zIndexClassName="z-[60]"
+          widthClassName="max-w-md"
+          panelClassName="p-6 sm:p-8 md:ml-[72px]"
+        >
+          <div className="text-center">
+            <div className="text-3xl">⏰</div>
+            <div className="mt-3 text-lg font-semibold text-slate-900">連續上班提醒</div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              你已經連續上班超過 10 個小時，需要交班嗎？
+            </p>
+            <div className="mt-6 grid gap-2.5">
+              <button
+                aria-busy={shiftAcking}
+                className="w-full rounded-3xl bg-slate-900 px-6 py-4 text-base font-semibold text-white disabled:opacity-60"
+                disabled={shiftAcking}
+                onClick={() => void acknowledgeShiftOvertime()}
+                type="button"
+              >
+                取消（繼續營業）
+              </button>
+              <button
+                className="w-full rounded-3xl bg-orange-500 px-6 py-4 text-base font-semibold text-white hover:bg-orange-600"
+                onClick={() => {
+                  setShiftOvertimeDue(false);
+                  router.push("/shift");
+                }}
+                type="button"
+              >
+                確認，去交班
+              </button>
+            </div>
+          </div>
+        </ResponsiveModal>
       ) : null}
 
       {!shift.openedAt ? (

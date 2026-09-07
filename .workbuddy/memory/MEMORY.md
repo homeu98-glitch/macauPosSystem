@@ -2,88 +2,43 @@
 
 > 對話日誌見 `.workbuddy/memory/YYYY-MM-DD.md`。
 
-## 報表模塊（`restaurant-daily-report.tsx`）嘅關鍵約定
+## 報表模塊（restaurant-daily-report.tsx）
+- **收入認列口徑**：`isSaleCountable(o)` 只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`；`refunded`/`partially_refunded`/`sent_to_kitchen` 一律唔計（未收款唔計營業額係啱）。有單但全未結帳 → 顯示琥珀提示條 +「未結帳訂單」KPI，**唔好**改口徑去包未結帳。
+- **菜品排行快照聚合**：key = `menuItemId|訂單內菜品名`，金額用 `it.price`（快照）。改名/改價後舊單各自成行。**唔好**改返大類聚合或強對當前餐牌。`buildMenuMeta()` 只供診斷。
+- **尖峰時段**：`combinedByHour = agg.byHour + onlineByHour`；線上單 cursor 分頁 `listMerchantOrders`（PAGE=500、MAX=8），拒 `paymentStatus!=="paid"` 同含 cancel。
+- **線上單防雙計**：`posOnlineIds`（POS `onlineOrderId` Set）；`footfallTotal = posFootfall + countableOnlineOrders.length`。線上菜品排行用 `onlineDishSource`；effect 觸發 key 用 `onlineDishKey`，且必須喺 `countableOnlineOrders` 之後宣告（TDZ）。
+- **營運指標**：只保留 4 行（營業額7日均/線上佔比7日均/會員充值7日均/售出份數），POS vs Ledger 對比已刪。
+- 數據來源：POS 單雲端 `/api/pos/state?storeId&ordersOnly=1&start&end` 分頁（MAX_PAGES=10）；雲端空+成功=空狀態，唔 fallback 本機。Ledger 總值以 `getMerchantReportSummary`（orderCount/orderPaidMop）為權威，POS 補差。日期一律 Macau 邊界 ISO（`ledger/report-period.ts`），禁用 UTC-naive 86400000 寫法。
 
-- **狀態篩選 helper**：用 `isSaleCountable(o)`（已落地）取代舊嘅 inline `o.status === "settled" || ...`，統一口徑：線下 POS 只計 `settled`；帶 `onlineOrderId` 嘅單 `settled` 或 `paid` 都計；`refunded` / `partially_refunded` 一律唔計。
-- **快照聚合（2026-09-04 定案）**：菜品銷售排行按「下單當時快照」聚合 —— key = `menuItemId|訂單內菜品名`，金額用訂單內快照價 `it.price`。快閃餐改名／改價（Ledger 菜品 ID 不變）時唔同名稱各自一行，歷史訂單唔會因改名對唔上當前餐牌。**唔好**改返用大類聚合或者強制對應當前餐牌名（已試過、用戶否決）。`buildMenuMeta()` / `resolveMenuMetaItem()` 而家只剩診斷面板用。
-- **診斷匹配統計**：診斷面板嘅菜品配對統計只計 `isSaleCountable` 嘅訂單 —— cancelled 測試單嘅孤兒菜品（舊 Ledger UUID）唔計入去，否則「未匹配名單」會出現髒資料假象。
-- **尖峰時段**：POS 線下單 `agg.byHour` + Ledger 線上單 `onlineByHour` 疊加成 `combinedByHour`。`onlineByHour` 由 `useEffect([merchantId, range])` 用 `listMerchantOrders` cursor pagination 抓，按「下單時間」createdAt 入帳。
-- **線上單明細併入菜品排行**：`onlineDishSource: {order, items}[]`（逐張 `getOrderDetail()`，MAX_DETAILS=200）；`aggregate()` 第三參數 `onlineWithItems`，明細以「線上」渠道併 dishMap + 時長估算。用 `onlineDishKey`（訂單 ID join）做 effect 穩定觸發；effect 必須放喺 `countableOnlineOrders` 宣告之後（否則 render TDZ ReferenceError）。防雙計：`posOnlineIds`（POS `onlineOrderId` Set）剔除已同步單。
-- **營運指標（2026-09-04 移除對比）**：「營運指標·同環比」已移除 POS vs Ledger 對比 row（`rev7dAvg`/`ledgerRev7dAvg`/`rev7dGap` 等變數已刪），只保留「營業額(7日均)/線上渠道佔比(7日均)/會員充值(7日均)/總售出份數」4 行，數據混亂無參考價值故移除。
-- **人流 / 時長同線上單**：`computeFootfallFromOrders()`（`src/lib/restaurant-footfall.ts`）計 settled/paid（同 `isSaleCountable` 一致）；`footfallTotal = posFootfall + countableOnlineOrders.length`，後者用 POS `onlineOrderId` Set 剔除已同步單避免雙計。時長統計：`aggregate(orders, range, onlineOrders?)` 對 Ledger 純線上單用「createdAt → updatedAt」估算整體（estimated），依 fulfillmentType 分堂食／快餐桶；只有主 `agg` 傳線上單，aggYest/agg7d 唔傳。
+## MerchantId / store 隔離（嚴）
+- `merchantId = staff_accounts.merchant_id`（UUID）；DB 用 `store_id`。報表用 `useReportMerchantId()` 訂閱 `pos-auth-changed`。
+- 讀取端 strict：`belongsToStore() = o.storeId === merchantId`；undefined legacy row 寧棄。初始 orders 空防 hydration 錯 scope。寫入端：Kiosk/QR 綁定錯店（`60000003` 係真實 merchant UUID，唔係 mock）先會寫錯店；讀取已隔離，要改寫入就重綁 `macau-pos-kiosk-device`／`?store=`。
+- **`dataReady = backfillDone && ledgerDone`**；admin 模式 `loadOnlineByHour` early return **必須 setLedgerDone(true)**（否則永遠 skeleton）。切店/切帳號即重置 dataReady。
+- `getMerchantReportSummary` 回傳強型別：topup{`topupMop`(=paid+gift)/`topupPaidMop`/`topupGiftMop`}、deduct{同構}、order{`orderCount`/`orderPaidMop`(=balance+in_store)/`orderBalancePaidMop`/`orderInStorePaidMop`}；加 `rawAvos` module-level 一次性 console.log（禁 `console.table` Record → TS2769）；可選 count 欄位 probe `*_count`。
+- Admin 模式 Ledger 讀取行 service-role 通道（`/api/admin/ledger/orders`，route 喺 `app/api/admin/ledger/orders`）；會員充值/扣點 RPC 需商戶 JWT → admin 仍空（已知限制）。
 
-## 報表數據來源嘅口徑
+## 打印任務兩級狀態（2026-09-07 已實作）
+- `pending`=待派發；`sent`=POS 已交付打印通道（relay 只代表入雲端隊列）；`printed`=通道回報真實出紙；`failed`。
+- 已改：`status` route 唔再降格 `printed`→`sent`；print-center 回填 printed +「打印成功」filter/badge +「清除已成功」；`clearSentPrintJobs` 只清 sent；pos-app `onPrintJobUpsert` 容許 sent→printed/failed 升級。DB 生命週期 `pending→printing→printed/failed`；claim RPC 只揀 pending/failed → 天然防重印。relay 團隊交接見 `docs/handoff-print-relay-printed-status.md`（agent 真實出紙先報 printed、失敗必報 failed）。
 
-- **POS 訂單**：雲端補載 `/api/pos/state?storeId=<merchantId>&limit=2000&offset=...&ordersOnly=1&start=...&end=...`，分頁拉齊（MAX_PAGES=10）；雲端失敗先 fallback 本機 `loadOrders()`；雲端空 + 成功 → 顯示空狀態（**唔可以** fallback 本機，可能係舊 store 殘留）。
-- **Ledger 線上單**：`listMerchantOrders` 用 cursor `since` + `sinceId` 分頁（PAGE=500、MAX_PAGES=8）。`paymentStatus !== "paid"` 或 status 含 "cancel" 一律跳過。
-- **Ledger 總值**：`getMerchantReportSummary(r)` 涵蓋全渠道，orderCount / orderPaidMop 為權威值；KPI 大數優先用 Ledger，POS DB 補差額算線上部分。
-- **日期邊界**：`macau{...}Range()`（`src/lib/ledger/report-period.ts`）統一用 Macau 邊界 ISO 字串，淘汰 `now.getTime() - 86400000` UTC-naive 寫法，消除凌晨跨午夜嘅 off-by-one。
+## 執行環境判斷（原生殼 vs web/PWA）
+- 唔用 UA sniff：Android APK → `window.PosNative.printJob`；PC 殼 → `window.companionShell`。
+- companion 三層 gate 由嚴到寬：`shouldUseCompanionChannel`（淨原生殼）/ `shouldKeepCompanionAlive`（原生殼 OR `?companion=`，純 website 零 /api/health）/ `shouldAutoDiscoverCompanion`（原生殼 OR localhost）；`shouldShowCompanionUi` = autoDiscover || urlParam（純 web/PWA 隱藏成張卡）。UI 一定要包 localhost。
+- client 讀 `window` 一律 mount-gated state（`null` 初始 + effect 設值），保 SSR=client 首 render。
 
-## MerchantId / storeId
+## 全域滾動（body overflow hidden 鎖死，勿刪）
+- `globals.css body{overflow:hidden}` 係 POS 內部 scroll 嘅前提。Admin 用 AdminShell `h-[100dvh] overflow-y-auto` 自做容器。**Shared 組件（restaurant-daily-report）要按模式分流**：admin → 內容 `block`（AdminShell 滾）；POS `/reports` → `min-h-0 flex-1 overflow-y-auto`（main 係 `h-[100dvh] flex flex-col overflow-hidden`）。反面教材：f1cc8ad 一刀切 block 令 POS /reports 滾唔到（已修返）。
 
-- `merchantId = staff_accounts.merchant_id`（UUID），唔係 `macau-store-a` mock。
-- POS DB 用 `store_id`（FK to Ledger merchants.id），前端對應 `PosOrder.storeId`。
-- 報表頁用 `useReportMerchantId()` 訂閱 `pos-auth-changed` event，切店即時更新；listener 觸發 `setOrders([]) + setBackfillSeq++` 強制重跑 backfill。
-- 雙重保險：API `eq("store_id", storeId)` SQL 過濾 + 前端 `o.storeId === merchantId` 再核一次。
-- **讀取端嚴格隔離（2026-09-04）**：`loadOrders(merchantId)` / `loadBootstrapCache(merchantId)` 按 store scope 精確讀；`belongsToStore()` 現為 **strict** `o.storeId === merchantId`（undefined storeId 嘅 legacy row 寧願丟棄，唔可以顯示喺錯店）。初始 orders 設空，避免 hydration 讀錯 scope。
-- **載入門檻 `dataReady`**：POS 補載（`backfillDone`）+ Ledger 彙總（`ledgerDone`）都完成過先 `setDataReady(true)`；全部 section（`Card` 11 個 + KPI 帶 **9 格**（2026-09-05 由 7 升 9：第 6 格「會員扣點」+ 第 8/9 格「應收金額合計」「實收金額合計」，grid 由 `xl:grid-cols-7` 改 `xl:grid-cols-9`）+ 模塊 9 自動化建議）套 `loading={!dataReady}` 顯示 `SectionSkeleton`（灰 block `animate-pulse` + 中間 `animate-spin` 轉圈）。切店 / 切帳號（`pos-auth-changed`）即時 `setDataReady(false)` 重置，避免閃現舊店資料。
-- **Ledger 欄位分類（2026-09-05 完整對齊）**：`getMerchantReportSummary` 返回 5 大類強型別欄位 ——
-  - topup：`topupMop` (= paid + gift) / `topupPaidMop` / `topupGiftMop`，對應 Ledger UI「實際充值 / 贈送入帳」
-  - deduct：`deductMop` (= paid + gift) / `deductPaidMop` / `deductGiftMop`，對應 Ledger UI「扣點」
-  - order：`orderCount` / `orderPaidMop` (= balance + in_store) / `orderBalancePaidMop` / `orderInStorePaidMop`，對應 Ledger UI「訂單數 / 訂單已收款 / 訂單餘額扣點 / 訂單到店付款」
-  - 額外暴露 `rawAvos: Record<string, number>` + **一次性 module-level** `console.log` payload dump（每次 page load 只 dump 一次），用嚟搵 UI 未對應字段（例如「筆數」可能係 `topup_count` / `deduct_count`）。
-  - 寫法：`normalizeAvosPayload()` 過濾出**數值**欄位（RPC 可能帶 `merchant_id` 等非數字），避免 console 噪音。
-  - 注意 `console.table(label, record)` 撞 TS2769（`Record<string,number>` 唔合 overload），統一用 `console.log(label, rawAvos)`。
-  - 可選 count 欄位（缺字段時 undefined）：`topupCount`（probe `topup_count`/`topup_txn_count`/...）、`deductCount`（probe `deduct_count`/`deduct_txn_count`/...）、`newMemberCount`（probe `new_member_count`/`member_new_count`/...）。
-- **「會員充值 & 會員數」Card 版面（2026-09-05 redesign）**：由「單一大字 + pills」改為 **2×2 mini-block grid**（rounded-xl bg-slate-50），四格分別為「充值總額（含實際/贈送子項 + 充值筆數）」、「會員總數（含新增會員）」、「會員扣點（含已付/贈送子項 + 扣點筆數）」、「訂單餘額扣減 + 線上渠道佔比」。所有子項標籤均為中文，視覺風格與其他 Card 一致。
-- **`60000003` 舊 demo 店（根因）**：`60000003` 係真實 merchant UUID（**唔係** hardcode、唔係 `macau-store-a`）。落單 `storeId` 來源 = Kiosk `binding.storeId`（localStorage `macau-pos-kiosk-device`）或掃碼 `?store=`；若呢啲被綁成 60000003，訂單就寫落 60000003（合法 merchant，寫入防護唔會擋）。讀取端已嚴格按 `store_id` 隔離，無「跨店串資料」bug；要修正寫入端就喺 A 店後台重新綁 Kiosk device（覆寫 `macau-pos-kiosk-device` 成 A 店 merchantId）／重新生成 `?store=<A店merchantId>` 掃碼 QR／確認 `loadAuthSession().merchantId` 係 A 店 UUID。
-
-## 打印任務狀態語義（2026-09-07 評估新增「打印成功」後確定）
-
-- `pending`：本地隊列等待派發。
-- `sent`：**POS 已將任務交付給打印通道**（native bridge / companion / relay）。對 relay 而言只代表入咗雲端隊列，未必已出紙。
-- `printed`：**打印通道回報真實出紙成功**。對 relay 係 APK/Agent 打印後回報；對 native/companion 若打印機單向通信則只能 best-effort。
-- `failed`：打印通道回報失敗，或本地派發失敗。
-
-**注意**：雲端 `pos_print_jobs.status` 已支援 `"printed"`，`/api/pos/print-agent/result` 亦已處理；但 `print-center.tsx` 嘅 `syncCloudPrintOutcomes()` 長期把 `"printed"` 降格為 `"sent"`，所以 UI 目前無法區分「已發送」同「打印成功」。要實現兩級狀態，關鍵修改係停止降格、新增「打印成功」filter/badge，而非改 schema 或 RPC。
-
-## 執行環境判斷（原生殼 vs 純 website/PWA）
-
-- **判斷依據係原生殼注入嘅 bridge 標記，唔好用 userAgent sniff**：Android APK WebView → `window.PosNative.printJob`；PC Electron 殼 → `window.companionShell`（見 `pwa-install-button.tsx` 嘅 `isRunningInNativeShell()`）。
-- `src/lib/print-bridge/companion.ts` 三層 gate，由嚴到寬，**唔好混淆**：
-  - `shouldUseCompanionChannel()` = 淨原生殼（gate print dispatch 通道）。
-  - `shouldKeepCompanionAlive()` = 原生殼 OR `?companion=` 參數（gate 輪詢 / 健康檢查，純 website 零 `/api/health` 請求）。
-  - `shouldAutoDiscoverCompanion()` = 原生殼 OR localhost（gate 值唔值得探一次 loopback）。
-  - `shouldShowCompanionUi()`（2026-09-05 新增）= `shouldAutoDiscoverCompanion() || hasCompanionUrlParam()`，gate 「桌面 Companion 代理」卡嘅顯示；純 website / Vercel HTTPS / PWA standalone 一律 false → 成張卡隱藏。UI 要包埋 localhost（輪詢唔使），否則本機 dev 測唔到。
-- client component 讀 `window` 做環境判斷，一律用 mount-gated state（`useState<boolean|null>(null)` + `useEffect` 設值 + `if (!x) return null`），初始 null 保證 SSR HTML 同 client 首次 render 一致，否則 hydration mismatch。
+## 開工/收工班次（2026-09-07 上雲，migration 0023）
+- **真源 = `pos_shifts`**（一表一班次；active=`closed_at IS NULL`；每店一 active 由 partial unique index 保證；service_role only）。API `/api/pos/shift`：GET→{active,serverNow}；POST open（已有 active→conflict 以現有為準）/close/ackOvertime。
+- 前端 `src/lib/shift-sync.ts reconcileLocalShift` 六場景（改前必讀）：①server active+本地無/時間唔同→adopt server；②server active+本地收工且 closedAt>=openedAt→補 close；③一致→只 sync ack；④server 無+本地開工中且 `serverSynced=false`→補 open（離線開工）；⑤**server 無+本地 serverSynced=true→人哋已收工，本地 reset（唔可以補 open，會死灰復燃）**；⑥其他 no-op。
+- OT 提醒 `isShiftOvertimeDue(openedAt,ackedAt,serverNow)`：`now-opened≥10h && (ack null || now-ack≥10h)`，全用 server 時鐘；取消=ackOvertime（server `overtime_acked_at`），確認→router.push('/shift')。POS app 每 60s+網絡恢復+focus reconcile。
+- `ShiftState` 已加 employeeAccount/employeeName/overtimeAckedAt/serverSynced。方案/驗證見 `docs/109-shift-sync-overtime-plan.md`。
 
 ## 開發注意事項
-
-- JSDoc 註解入面唔好直接寫 `macau-pos/stores/*/orders`，`*/` 會被 TypeScript parser 當成 comment 結尾導致後續 syntax errors；用 `macau-pos/stores/&#123;storeId&#125;/orders`（HTML entity）繞過。
-- `restaurant-daily-report.tsx` 入面 `agg` 由下方 `useMemo` 計算；喺 backfill effect 內唔可以引用（hooks 順序違規）。需要診斷菜品命中要直接用 `final` 訂單 + `buildMenuMeta()` 計算。
-- `PosOrder.storeId` 喺 migration 唔齊時可能係 undefined；現行 `belongsToStore()` 已改 strict（見上方「讀取端嚴格隔離」），legacy undefined row 唔顯示喺錯店。
-- `next build` 報 `LayoutProps` 錯誤通常係 `.next` 內 generated types 過期，刪掉 `rm -rf .next`（或 PowerShell `Remove-Item -Recurse -Force .next`）重 build 就得。
+- JSDoc 內唔好寫 `macau-pos/stores/*/orders`（`*/` 提早結束 comment）；用 `&#123;storeId&#125;`。
+- 報表組件 `agg` 喺 useMemo 下方；backfill effect 內唔可引用。
+- `next build` 報 LayoutProps = `.next` generated types 過期，`rm -rf .next` 重 build。
 
 ## 環境
-
-- Node 22.22.2-2（managed）、Python 3.13.12（managed）
-- 詳細工具說明見 `AGENTS.md`（Next.js 16.3.0 + Turbopack + Tailwind 4）
-
-## Admin Panel 全域滾動約定（2026-09-07 定案）
-
-- **`body { overflow: hidden }`（喺 `src/app/globals.css`）係全局鎖死滾動**，唔可以任意刪除——POS app 嘅內部 scroll container 依賴 body 不滾動避免雙滾動條。
-- Admin panel 用 **AdminShell 自己嘅 `h-[100dvh] overflow-y-auto` 做內部滾動容器**，sticky header 喺呢個容器內仍然 work（sticky 相對於最近嘅 overflow container）。POS app layout 完全唔受影響。
-- **唔好用 body scroll 做 admin panel 滾動**——會被全局 `body { overflow: hidden }` 鎖死。
-- **Shared component（如 `restaurant-daily-report.tsx`）同時服務 admin 同 POS 兩個場景時，滾動策略必須按模式分流，唔可以一刀切**：
-  - admin 模式：main 係 `block`、冇固定高度 parent → 內容區用 `block`，由 AdminShell 滾動。
-  - POS 模式（`/reports`）：main 係 `h-[100dvh] flex flex-col overflow-hidden` → 內容 wrapper 必須
-    `min-h-0 flex-1 overflow-y-auto`（title bar 固定、內容區自己滾）；`min-h-0` 防 flex item 預設
-    `min-height:auto` 令 overflow 失效。
-  - 反面教材：`f1cc8ad`（2026-09-07）一刀切將內容 wrapper 改 `block`，令 POS /reports 內容超出視口被
-    裁切、成頁滾唔到（body overflow hidden 兜底唔到）——已於當日修返做模式分流。
-
-## Admin Panel dataReady 約定（2026-09-07 修）
-
-- `dataReady = backfillDone && ledgerDone`，兩個都必須 true 先 render 內容（否則永遠 skeleton）。
-- admin 模式 `loadOnlineByHour` effect 嘅 early return **必須 setLedgerDone(true)**，否則 ledgerDone 永遠 false → dataReady 永遠 false → 全部 Card 永遠顯示 skeleton。
-- POS 模式唔受影響（POS 嘅 `loadOnlineByHour` 早 return branch 已經 setLedgerDone）。
+- Node 22.22.2-2（managed）、Python 3.13.12（managed）；Next.js 16.3.0 + Turbopack + Tailwind 4，詳見 AGENTS.md。

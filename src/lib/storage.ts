@@ -717,6 +717,16 @@ export type ShiftState = {
   closingNote?: string;
   actualCash?: number;
   cashDifference?: number;
+  /** 開工員工（2026-09-07 加：跨裝置班次同步要用員工身份顯示「邊個開咗工」）。 */
+  employeeAccount?: string;
+  employeeName?: string;
+  /** 最近一次「取消連續開工逾時提醒」時間（問題二權威 ack；server 同步）。 */
+  overtimeAckedAt?: string;
+  /** 班次狀態有冇成功上雲過（診斷 / reconcile 用）。 */
+  serverSynced?: boolean;
+  /** 最近一次收工嘅統計快照（本地兜底）：server close 失敗後，reconcile 補 close 會帶埋呢個，
+   *  令 server 班次唔會永久缺收工統計（2026-09-07）。 */
+  lastCloseSummary?: Record<string, unknown>;
 };
 
 export type ShiftHistoryRecord = {
