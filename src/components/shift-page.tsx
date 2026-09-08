@@ -25,7 +25,13 @@ import {
   saveShiftState,
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
-import { resolveStoreId, withStoreScope, filterEventsForCurrentStore } from "@/lib/pos/sync-flush";
+import {
+  resolveStoreId,
+  withStoreScope,
+  filterEventsForCurrentStore,
+  notifyQueueChanged,
+} from "@/lib/pos/sync-flush";
+import { enqueueEvents, isOutboxV2Enabled, summarizeQueueEvents } from "@/lib/pos/queue-outbox";
 import {
   reconcileLocalShift,
   serverActiveToLocal,
@@ -227,12 +233,19 @@ export function ShiftPage() {
   const queueSummary = (() => {
     const queue = loadQueue();
     const printJobs = loadPrintJobs();
+    const events = summarizeQueueEvents(queue, resolveStoreId());
     return {
-      // 只計真正「會 retry」嘅 pending；failed 係永久失敗（server 連續拒收 5 次），
+      // docs/111：「待同步」只計**真正會被推送**嘅事件 —— 剔走
+      //   ① 外店 / 無 storeId（跨店閘口永遠skip，一世推唔到）
+      //   ② 去重輸家（同 entityId 有更新事件喺度，v1 模式下永遠選唔中）
+      // 冇剔之前，呢個數會無限期累積，交班畫面彈「仲有 100 筆未同步」但其實
+      // 數據一早喺雲端。failed 係永久失敗（server 連續拒收 5 次），
       // 唔係「待同步」。如果當佢係待同步，交班記錄會講大話（話有 N 筆「待同步」
       // 但其實永遠上唔到 DB），同落單畫面嘅 amber 提示卡對唔住。
-      pendingEvents: queue.filter((item) => item.status === "pending").length,
-      failedEvents: queue.filter((item) => item.status === "failed").length,
+      pendingEvents: events.pendingEvents,
+      failedEvents: events.failedEvents,
+      // 推唔到但已有明確原因（外店 / 無歸屬），唔會阻住交班，但要畀用家知
+      skippedEvents: events.skippedEvents,
       pendingPrints: printJobs.filter((item) => item.status === "pending").length,
     };
   })();
@@ -278,7 +291,9 @@ export function ShiftPage() {
       `應收現金：${formatMoney(row.expectedCash)}`,
       typeof row.actualCash === "number" ? `實收現金：${formatMoney(row.actualCash)}` : "",
       typeof row.cashDifference === "number" ? `現金差額：${formatMoney(row.cashDifference)}` : "",
-      `待同步事件：${row.pendingEvents}` + (row.failedEvents ? ` · 永久失敗 ${row.failedEvents}` : ""),
+      `待同步事件：${row.pendingEvents}` +
+        (row.failedEvents ? ` · 永久失敗 ${row.failedEvents}` : "") +
+        (row.skippedEvents ? ` · 無歸屬（唔會上雲）${row.skippedEvents}` : ""),
       `待補傳打印：${row.pendingPrints}`,
       row.closingNote ? `備註：${row.closingNote}` : "",
     ];
@@ -340,8 +355,9 @@ export function ShiftPage() {
       status: "pending",
       createdAt: now,
     };
-    const nextQueue = [...loadQueue(), ...withStoreScope([event])];
-    saveQueue(nextQueue);
+    saveQueue(enqueueEvents(loadQueue(), withStoreScope([event])));
+    // 入隊即觸發 flush worker（以前要等 30s interval）
+    notifyQueueChanged();
     setStatus(`已把 ${row.closedAt.slice(0, 10)} 的交班單加入重打隊列。`);
     setReprintingShiftId(null);
   }
@@ -402,7 +418,18 @@ export function ShiftPage() {
       return false;
     }
 
-    saveQueue(retryable.map((item) => ({ ...item, status: "synced" as const })));
+    // ⚠️ 千祈唔好寫 `saveQueue(retryable.map(...))`：嗰個係**成條 queue 覆寫**，
+    // 交班成功一刻會靜默剷走晒 failed 事件、外店事件、同其他冇入今次 batch 嘅事件
+    // （2026-09-08 修）。一定要以「成條 queue」為底做 merge。
+    const ackedIds = new Set(retryable.map((item) => item.id));
+    if (isOutboxV2Enabled()) {
+      // outbox：上咗雲就剷走，queue 淨留未上雲嘅工作
+      saveQueue(loadQueue().filter((item) => !ackedIds.has(item.id)));
+    } else {
+      saveQueue(
+        loadQueue().map((item) => (ackedIds.has(item.id) ? { ...item, status: "synced" as const } : item)),
+      );
+    }
     setStatus(
       `已同步 ${retryable.length} 筆待辦資料，準備交班。` +
         (failedCount > 0 ? `（另有 ${failedCount} 筆永久失敗已跳過）` : ""),
@@ -511,6 +538,7 @@ export function ShiftPage() {
       paymentBreakdown: summary.paymentBreakdown,
       pendingEvents: queueSummary.pendingEvents,
       failedEvents: queueSummary.failedEvents,
+      skippedEvents: queueSummary.skippedEvents,
       pendingPrints: queueSummary.pendingPrints,
     };
     const closeSummary = historyRecord as unknown as Record<string, unknown>;
@@ -593,7 +621,9 @@ export function ShiftPage() {
       `應收現金：${formatMoney(expectedCash)}`,
       typeof actualValue === "number" ? `實收現金：${formatMoney(actualValue)}` : "",
       typeof diffValue === "number" ? `現金差額：${formatMoney(diffValue)}` : "",
-      `待同步事件：${queueSummary.pendingEvents}` + (queueSummary.failedEvents ? ` · 永久失敗 ${queueSummary.failedEvents}` : ""),
+      `待同步事件：${queueSummary.pendingEvents}` +
+        (queueSummary.failedEvents ? ` · 永久失敗 ${queueSummary.failedEvents}` : "") +
+        (queueSummary.skippedEvents ? ` · 無歸屬（唔會上雲）${queueSummary.skippedEvents}` : ""),
       `待補傳打印：${queueSummary.pendingPrints}`,
       closingNoteText ? `備註：${closingNoteText}` : "",
     ].filter(Boolean);
@@ -627,16 +657,18 @@ export function ShiftPage() {
     // 🛡️ 跨店隔離 L1：交班單打印事件 stamp 當前店。
     const [stampedEvent] = withStoreScope([event]);
 
-    const nextQueue = [...loadQueue(), stampedEvent];
+    const nextQueue = enqueueEvents(loadQueue(), [stampedEvent]);
     saveQueue(nextQueue);
 
     if (readNetworkOnline()) {
       // 🛡️ 跨店隔離 L4：呢條係第三條直接 flush 路徑（獨立於 doFlush / forceSyncBeforeClose），
       // 以前成條 nextQueue 照推 → 外店 / legacy 事件被當前 merchantId 蓋章上雲。必須過濾。
-      const scoped = filterEventsForCurrentStore(nextQueue);
+      // docs/111：淨推「呢一條」交班單事件 —— 以前成條 queue 照推，分分鐘超過 server
+      // 200 條上限（413 → 成批失敗，交班單反而上唔到雲），亦唔應該順便推晒其他人嘅事件。
+      const scoped = filterEventsForCurrentStore([stampedEvent]);
       if (scoped.length > 0) {
         try {
-          await fetch("/api/pos/sync", {
+          const res = await fetch("/api/pos/sync", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -644,8 +676,18 @@ export function ShiftPage() {
               storeId: resolveStoreId(),
             }),
           });
-          const scopedIds = new Set(scoped.map((item) => item.id));
-          saveQueue(nextQueue.map((item) => (scopedIds.has(item.id) ? { ...item, status: "synced" } : item)));
+          // 一定要 check res.ok：以前唔 check 就照標 synced，server 拒收（400/500）嗰陣
+          // 交班單其實上唔到雲，但因為變咗 synced 就永遠唔會再試。
+          if (res.ok) {
+            const scopedIds = new Set(scoped.map((item) => item.id));
+            if (isOutboxV2Enabled()) {
+              saveQueue(loadQueue().filter((item) => !scopedIds.has(item.id)));
+            } else {
+              saveQueue(
+                nextQueue.map((item) => (scopedIds.has(item.id) ? { ...item, status: "synced" } : item)),
+              );
+            }
+          }
         } catch {
           // 保留待補傳
         }
@@ -684,7 +726,7 @@ export function ShiftPage() {
       return;
     }
     const rows = [
-      ["交班時間", "員工", "營業額", "應收金額合計", "實收金額合計", "線上已付", "線上線下合計", "退款金額", "應收現金", "實收現金", "現金差額", "待同步事件", "待補傳打印", "備註"].join(","),
+      ["交班時間", "員工", "營業額", "應收金額合計", "實收金額合計", "線上已付", "線上線下合計", "退款金額", "應收現金", "實收現金", "現金差額", "待同步事件", "永久失敗", "無歸屬事件", "待補傳打印", "備註"].join(","),
       ...filteredShiftHistory.map((row) =>
         [
           formatMacauDateTime(row.closedAt),
@@ -699,6 +741,8 @@ export function ShiftPage() {
           row.actualCash ?? "",
           row.cashDifference ?? "",
           row.pendingEvents,
+          row.failedEvents ?? "",
+          row.skippedEvents ?? "",
           row.pendingPrints,
           row.closingNote ?? "",
         ]
@@ -894,9 +938,15 @@ export function ShiftPage() {
               <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">待同步事件</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingEvents}</div>
+                <div className="mt-1 text-xs text-slate-500">真正未上雲、會自動重試</div>
                 {queueSummary.failedEvents > 0 ? (
                   <div className="mt-1 text-xs font-semibold text-amber-600">
                     ⚠ {queueSummary.failedEvents} 筆永久失敗
+                  </div>
+                ) : null}
+                {queueSummary.skippedEvents > 0 ? (
+                  <div className="mt-1 text-xs text-slate-500">
+                    {queueSummary.skippedEvents} 筆無歸屬（外店／無主，唔會上雲）
                   </div>
                 ) : null}
               </article>
@@ -1122,6 +1172,9 @@ export function ShiftPage() {
                         </td>
                         <td className="px-3 py-3 text-slate-700">
                           {row.pendingEvents} 事件 / {row.pendingPrints} 打印{row.failedEvents ? ` · ${row.failedEvents} 失敗` : ""}
+                          {row.skippedEvents ? (
+                            <div className="mt-1 text-xs text-slate-500">無歸屬 {row.skippedEvents}</div>
+                          ) : null}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex min-w-[220px] items-center gap-2">
@@ -1298,14 +1351,23 @@ export function ShiftPage() {
                 />
               </label>
 
-              {queueSummary.pendingEvents > 0 || queueSummary.failedEvents > 0 || ledgerTodayError ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {queueSummary.pendingEvents > 0 ||
+              queueSummary.failedEvents > 0 ||
+              queueSummary.skippedEvents > 0 ||
+              ledgerTodayError ? (
+                <div className="grid gap-1 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   {queueSummary.pendingEvents > 0
                     ? `⚠ 仲有 ${queueSummary.pendingEvents} 筆資料未同步上雲，交班前會先強制同步。`
                     : null}
                   {queueSummary.failedEvents > 0
                     ? `⚠ ${queueSummary.failedEvents} 筆資料永久同步失敗（已跳過，唔會阻住交班）。`
                     : null}
+                  {queueSummary.skippedEvents > 0 ? (
+                    <span className="text-amber-700">
+                      {queueSummary.skippedEvents} 筆資料冇店舖歸屬（外店／未登入時產生），
+                      <strong>唔會上雲</strong>，亦唔會阻住交班。如需處理請聯絡技術支援。
+                    </span>
+                  ) : null}
                   {ledgerTodayError ? `⚠ ${ledgerTodayError}` : null}
                 </div>
               ) : null}
@@ -1374,10 +1436,16 @@ export function ShiftPage() {
                 </div>
               ) : null}
 
-              {queueSummary.pendingEvents > 0 || queueSummary.failedEvents > 0 || ledgerTodayError ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {queueSummary.pendingEvents > 0 ||
+              queueSummary.failedEvents > 0 ||
+              queueSummary.skippedEvents > 0 ||
+              ledgerTodayError ? (
+                <div className="grid gap-1 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   {queueSummary.pendingEvents > 0 ? `仲有 ${queueSummary.pendingEvents} 筆資料待同步（交班前會先強制同步）。` : null}
                   {queueSummary.failedEvents > 0 ? `${queueSummary.failedEvents} 筆永久失敗已跳過。` : null}
+                  {queueSummary.skippedEvents > 0
+                    ? `${queueSummary.skippedEvents} 筆無歸屬資料（外店／未登入時產生）唔會上雲，已跳過。`
+                    : null}
                   {ledgerTodayError ? ledgerTodayError : null}
                 </div>
               ) : null}

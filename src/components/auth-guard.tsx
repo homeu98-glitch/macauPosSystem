@@ -5,6 +5,7 @@ import { PropsWithChildren, useEffect } from "react";
 
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { clearAuthSession, loadAuthSession, prepareStoreStorage } from "@/lib/storage";
+import { reconcileQueueScope } from "@/lib/pos/queue-outbox";
 import { UserRole } from "@/lib/types";
 
 type AuthGuardProps = PropsWithChildren<{
@@ -25,6 +26,10 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   useEffect(() => {
     if (session?.merchantId) {
       prepareStoreStorage(session.merchantId);
+      // docs/111：切店 / 切帳號後重新對焦同步隊列歸屬 ——
+      // 屬於新店嘅 skipped 事件 reset 做 pending（重新排隊推送），
+      // 唔屬於新店嘅 pending 轉 skipped（唔好霸住交班畫面個「待同步」數）。
+      reconcileQueueScope(session.merchantId);
     }
   }, [session?.merchantId]);
 

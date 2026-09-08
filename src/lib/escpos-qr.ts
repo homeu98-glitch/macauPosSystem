@@ -1,5 +1,5 @@
 import { encodeQrMatrix } from "@/lib/qrcode";
-import type { QrPayload } from "@/lib/types";
+import type { EscPosSize, QrPayload } from "@/lib/types";
 
 /**
  * 收據二維碼：URL → 三個 repo 共用嘅點陣。
@@ -45,3 +45,22 @@ export function qrModuleScale(size: number): number {
   const total = size + QR_QUIET_MODULES * 2;
   return Math.max(2, Math.min(6, Math.floor(160 / total)));
 }
+
+/**
+ * 二維碼打印大小（`s` / `m` / `l`）→ 顯示比例（相對 80mm 紙可印闊度）。
+ *
+ * 收據/自助點餐機模板可以喺「打印 → 收據模板 / 自助點餐機」各自揀二維碼大小，
+ * 網頁即時預覽（EscPosPreview）用呢個比例畫二維碼圖像大細。值越大個二維碼越大。
+ *
+ * ⚠️ 真實出紙嗰陣 Companion / APK 各自用 `qrModuleScale()` 決定點陣倍率，呢度主要控制
+ * 「設計介面即時預覽」嘅顯示大小，並隨模板 (`qrSize`) 存落去，等設計 == 預覽一致。
+ */
+export const QR_SIZE_FRACTION: Record<EscPosSize, number> = {
+  // 細：約紙闊 40%；中：約紙闊 55%（貼近舊 default 60% 附近）；大：約紙闊 80%（逼紙邊）。
+  s: 0.4,
+  m: 0.55,
+  l: 0.8,
+};
+
+/** 二維碼大小嘅中文標籤。 */
+export const QR_SIZE_LABEL: Record<EscPosSize, string> = { s: "細", m: "中", l: "大" };

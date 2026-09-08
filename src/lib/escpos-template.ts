@@ -162,6 +162,8 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
   footerText: "多謝惠顧，歡迎再次光臨",
   // 二維碼預設留空：商家自己去「打印 → 收據模板」填網址先會印 QR。
   qrUrl: "",
+  // 二維碼打印大小預設「中」。
+  qrSize: "m",
 };
 
 /**
@@ -183,6 +185,7 @@ export const DEFAULT_KIOSK_TEMPLATE: ReceiptTemplate = {
   order: [...DEFAULT_RECEIPT_TEMPLATE.order],
   footerText: DEFAULT_RECEIPT_TEMPLATE.footerText,
   qrUrl: DEFAULT_RECEIPT_TEMPLATE.qrUrl ?? "",
+  qrSize: DEFAULT_RECEIPT_TEMPLATE.qrSize ?? "m",
 };
 export const DEFAULT_LABEL_TEMPLATE: LabelTemplate = {
   blocks: { ...LABEL_BLOCK_DEFAULTS },
@@ -240,11 +243,30 @@ export function ensureReceiptSections(template: ReceiptTemplate): ReceiptTemplat
   };
 }
 
+/**
+ * 標籤實體尺寸固定 → 將標籤模板每個區塊嘅字型檔位鎖死為預設嗰組（禁止動態變更）。
+ *
+ * 就算 localStorage 儲存咗唔同 size（舊版可改），讀取／出紙／預覽都會強制用
+ * `LABEL_BLOCK_DEFAULTS` 嗰組，保證文字排得落固定尺寸標籤紙。返回新對象，唔改入參。
+ */
+export function withLabelFixedSizes<T extends LabelTemplate>(template: T): T {
+  const blocks = { ...template.blocks };
+  for (const id of LABEL_SECTION_META.map((m) => m.id)) {
+    const def = LABEL_BLOCK_DEFAULTS[id];
+    if (blocks[id] && def) blocks[id] = { ...blocks[id], size: def.size };
+  }
+  return { ...template, blocks };
+}
+
 /** 將商家 template 解析成自包含快照（順序 + 開關 + 字型），拼接落 PrintJob.template */
 export function buildSnapshot(kind: PrintTemplateKind, template: ReceiptTemplate | LabelTemplate | KitchenTemplate): EscPosTemplateSnapshot {
   // 收據（含自助點餐機槽位，兩者都係 kind="receipt"）先補新區塊，
   // 等舊 localStorage 設定都可以用到後來加嘅 `qr_code`。
-  const source = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
+  const source = kind === "receipt"
+    ? ensureReceiptSections(template as ReceiptTemplate)
+    : kind === "label"
+      ? withLabelFixedSizes(template as LabelTemplate)   // 標籤字型鎖死
+      : template;
   return {
     kind,
     blocks: source.order.map((id) => ({ id, ...source.blocks[id as keyof typeof source.blocks] })),

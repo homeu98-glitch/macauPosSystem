@@ -1,7 +1,7 @@
 import { loadOrders, loadQueue, saveOrders, saveQueue } from "@/lib/storage";
 import { PosOrder, QueueEvent } from "@/lib/types";
-import { readNetworkOnline } from "@/lib/use-network-online";
-import { withStoreScope } from "@/lib/pos/sync-flush";
+import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
+import { enqueueEvents } from "@/lib/pos/queue-outbox";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -23,7 +23,11 @@ function persistOrderUpdate(nextOrders: PosOrder[], event: QueueEvent) {
   saveOrders(nextOrders);
   const queue = loadQueue();
   // 🛡️ 跨店隔離 L1：只 stamp 新建事件，舊 queue 原封不動。
-  saveQueue([...withStoreScope([event]), ...queue]);
+  // docs/111：入隊取代 flush 去重（順序改成 append，flush 會按 createdAt 升序推送）。
+  saveQueue(enqueueEvents(queue, withStoreScope([event])));
+  // 入隊即觸發 flush worker。以前完全冇 trigger，要等 30s interval 或者
+  // 別處嘅操作偶然 trigger 先上到雲。
+  notifyQueueChanged();
 }
 
 export function updateQuickFulfillmentInStore(orderId: string): PosOrder | null {
@@ -41,7 +45,9 @@ export function updateQuickFulfillmentInStore(orderId: string): PosOrder | null 
     type: "ORDER_UPDATED",
     entityId: updatedOrder.id,
     payload: { order: updatedOrder, action: "ready" },
-    status: readNetworkOnline() ? "synced" : "pending",
+    // docs/111：以前線上時寫 "synced" 但**從來冇 push**過（靠 legacyHealed 首次 flush
+    // 撞彩先上到雲）。一律 pending，交畀 outbox 推送 —— 上到雲先算數。
+    status: "pending",
     createdAt: updatedAt,
   });
   return updatedOrder;
@@ -69,7 +75,8 @@ export function markQuickOrderCompletedInStore(
     type: "ORDER_UPDATED",
     entityId: updatedOrder.id,
     payload: { order: updatedOrder, action: "completed", label: options?.label ?? "已完成" },
-    status: readNetworkOnline() ? "synced" : "pending",
+    // 同上（docs/111）：一律 pending，由 outbox 負責推送。
+    status: "pending",
     createdAt: updatedAt,
   });
   return updatedOrder;

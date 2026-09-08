@@ -2,6 +2,11 @@
 
 > 對話日誌見 `.workbuddy/memory/YYYY-MM-DD.md`。
 
+## 打印模板（print-center.tsx 設計頁）
+- **二維碼網址/大小**：`ReceiptTemplate.qrUrl?` + `qrSize?`（default "m"）收據/自助點餐機各自存。**`normalizePosLocalSettings` 一定要帶返 `qrUrl`/`qrSize`**（試過漏咗 → reload 剷走網址）。設計頁即時預覽 call `renderEscPosLines` 收據分支**必須傳 `{ qr, qrSize }`**，否則二維碼唔顯示。
+- **二維碼大小**：`EscPosLine.qr` 帶 `size`；預覽用 `QR_SIZE_FRACTION`（s/m/l=紙闊 40%/55%/80%）。⚠️ 真實出紙物理大細由 Companion/APK `qrModuleScale()` 決定（跨 repo），呢 repo 只做設計==預覽==存檔。
+- **標籤模板鎖定**：`LABEL_STANDARD_WIDTH_MM=62`（沿用本系統標籤卷，唔好隨意改 60）。Label 區塊字型 size 鎖死，用 `withLabelFixedSizes()` 強制返 `LABEL_BLOCK_DEFAULTS`（buildSnapshot("label") + readTemplate("label") 都用）→ 舊 localStorage 存咗唔同 size 都無效。UI 唔畀改 label 字型檔位（仍可調對齊/粗體/可見/順序）。
+
 ## 報表模塊（restaurant-daily-report.tsx）
 - **收入認列口徑**：`isSaleCountable(o)` 只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`；`refunded`/`partially_refunded`/`sent_to_kitchen` 一律唔計（未收款唔計營業額係啱）。有單但全未結帳 → 顯示琥珀提示條 +「未結帳訂單」KPI，**唔好**改口徑去包未結帳。
 - **菜品排行快照聚合**：key = `menuItemId|訂單內菜品名`，金額用 `it.price`（快照）。改名/改價後舊單各自成行。**唔好**改返大類聚合或強對當前餐牌。`buildMenuMeta()` 只供診斷。

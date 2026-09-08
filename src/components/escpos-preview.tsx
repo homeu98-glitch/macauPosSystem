@@ -1,8 +1,8 @@
 "use client";
 
 import { EscPosLine, SIZE_PX } from "@/lib/escpos-render";
-import { QR_QUIET_MODULES } from "@/lib/escpos-qr";
-import type { QrPayload } from "@/lib/types";
+import { QR_QUIET_MODULES, QR_SIZE_FRACTION } from "@/lib/escpos-qr";
+import type { EscPosSize, QrPayload } from "@/lib/types";
 
 // 相對行高（CSS）。因 SIZE_PX.l = 2× SIZE_PX.s（22 vs 11），l 行箱自然 = 2× s 行箱，
 // 同 Companion / Android ESC 3 n 表（s/m=30, l=60，比例 1:1:2）對齊 → 預覽 == 出紙（docs/74）。
@@ -71,11 +71,13 @@ function formatDiscountRate(rate: number): string {
  * 二維碼（#2）。同 `kiosk-qr-panel` 嘅 QR 用同一個 `encodeQrMatrix` 矩陣、同一個 quiet zone，
  * 而 Companion / APK 出紙亦係讀同一個 `QrPayload` → 預覽 == 出紙 100% 一致。
  *
- * 顯示大細跟紙闊：80mm 紙可印約 48mm 闊，取紙闊嘅 ~60% 做 QR 邊長（掃得到又唔逼爆）。
+ * 顯示大細跟紙闊同 `size`（`template.qrSize`）：80mm 紙可印約 48mm 闊，
+ * 按 QR_SIZE_FRACTION 取紙闊嘅比例做 QR 邊長（掃得到又唔逼爆）。
  */
-function QrBlock({ qr, paperInnerPx }: { qr: QrPayload; paperInnerPx: number }) {
+function QrBlock({ qr, paperInnerPx, size }: { qr: QrPayload; paperInnerPx: number; size: EscPosSize }) {
   const total = qr.size + QR_QUIET_MODULES * 2;
-  const px = Math.max(72, Math.round(paperInnerPx * 0.6));
+  // 保證起碼有 56px（QR v1 都睇得到），同時唔會大到甩出紙邊
+  const px = Math.max(56, Math.min(paperInnerPx - 8, Math.round(paperInnerPx * QR_SIZE_FRACTION[size])));
   const cell = px / total;
   const rects: React.ReactElement[] = [];
   for (let r = 0; r < qr.size; r++) {
@@ -141,7 +143,7 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                 className="my-1 flex"
                 style={{ justifyContent: line.align === "center" ? "center" : line.align === "right" ? "flex-end" : "flex-start" }}
               >
-                <QrBlock qr={line.qr} paperInnerPx={paperInnerPx} />
+                <QrBlock qr={line.qr} paperInnerPx={paperInnerPx} size={line.size} />
               </div>
             );
           }

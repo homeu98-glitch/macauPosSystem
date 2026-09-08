@@ -52,6 +52,7 @@ export function ReceiptTicketPreview({ order }: { order: PosOrder }) {
     // 二維碼：同真實打印 job 用同一個 encodeQrPayload() → 預覽 == 出紙
     return renderEscPosLines(buildSnapshot("receipt", template), content, items, {
       qr: encodeQrPayload(template.qrUrl),
+      qrSize: template.qrSize ?? "m",
     });
   }, [order, template, storeName, storeTel, currency]);
 

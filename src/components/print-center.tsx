@@ -27,7 +27,7 @@ import {
 } from "@/lib/storage";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
-import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_STANDARD_WIDTH_MM, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 import {
   ledgerReportRangeForKey,
   macauDateKey,
@@ -42,12 +42,14 @@ import {
   KITCHEN_SECTION_META,
   LABEL_SECTION_META,
   RECEIPT_SECTION_META,
+  withLabelFixedSizes,
 } from "@/lib/escpos-template";
 import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
-import { encodeQrPayload } from "@/lib/escpos-qr";
+import { encodeQrPayload, QR_QUIET_MODULES, QR_SIZE_FRACTION, QR_SIZE_LABEL } from "@/lib/escpos-qr";
 import { discountedUnitPrice } from "@/lib/pos/discount";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { notifyQueueChanged } from "@/lib/pos/sync-flush";
+import { enqueueEvents } from "@/lib/pos/queue-outbox";
 
 /**
  * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
@@ -129,6 +131,71 @@ function ticketTypeLabel(type: PrintJob["ticketType"]) {
   if (type === "addon") return "加單";
   if (type === "void") return "退菜";
   return "正常";
+}
+
+/**
+ * 二維碼網址欄位下嘅即時生成圖像預覽（按「生成」或網址/大小有變時即時重畫）。
+ *
+ * 用同 `EscPosPreview` 一致嘅 encodeQrPayload 點陣 → 簡單 SVG 方格，白底黑點。
+ * 網址空白 / 太長 → 顯示「未生成」佔位，唔會留空框。`size` 控制顯示大細（細/中/大）。
+ */
+function QrFieldPreview({ url, size }: { url: string; size: EscPosSize }) {
+  const payload = encodeQrPayload(url);
+  // 同 EscPosPreview 一致：QR v1 最少都要 ~90px 先睇到
+  const total = payload ? payload.size + QR_QUIET_MODULES * 2 : 0;
+  const px = payload ? Math.max(90, Math.round(180 * QR_SIZE_FRACTION[size])) : 0;
+  const rects: React.ReactElement[] = [];
+  if (payload) {
+    const cell = px / total;
+    for (let r = 0; r < payload.size; r++) {
+      for (let c = 0; c < payload.size; c++) {
+        if (payload.bits[r * payload.size + c] === "1") {
+          rects.push(
+            <rect
+              key={`${r}-${c}`}
+              x={(c + QR_QUIET_MODULES) * cell}
+              y={(r + QR_QUIET_MODULES) * cell}
+              width={cell + 0.5}
+              height={cell + 0.5}
+              fill="#0f172a"
+            />,
+          );
+        }
+      }
+    }
+  }
+  return (
+    <div className="mt-1 flex items-center gap-3">
+      <div className="shrink-0 rounded-xl border border-slate-200 bg-white p-2" style={{ width: px + 16, height: px + 16 }}>
+        {payload ? (
+          <svg width={px} height={px} viewBox={`0 0 ${px} ${px}`} role="img" aria-label="收據二維碼預覽" style={{ background: "#ffffff", display: "block" }}>
+            <rect width={px} height={px} fill="#ffffff" />
+            {rects}
+          </svg>
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-center text-[10px] leading-tight text-slate-400">
+            {url && url.trim() ? "網址過長\n無法生成" : "未生成"}
+          </div>
+        )}
+      </div>
+      <div className="text-[11px] font-normal leading-relaxed text-slate-500">
+        {payload ? (
+          <>
+            已生成 · {QR_SIZE_LABEL[size]}（點下方「即時預覽」亦可見）<br />
+            想調整位置？喺左側「區塊順序」揀「二維碼」可以移上移落 / 較對齊。
+          </>
+        ) : url && url.trim() ? (
+          "網址太長，無法生成二維碼（請改用短網址）。"
+        ) : (
+          <>
+            輸入網址後撳「生成」，二維碼圖像就會加入模板。
+            <br />
+            收據同自助點餐機係兩個獨立設定，各自填各自嘅網址。
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** 列印任務是否落在選定嘅時間範圍內（以 Asia/Macau 為準）。"all" 一律通過。 */
@@ -245,15 +312,26 @@ export function PrintCenter() {
     headerText?: string;
     /** 收據二維碼網址（收據 / 自助點餐機兩個槽位各自設定）；空白 = 唔印。 */
     qrUrl?: string;
+    /** 收據二維碼打印大小（s / m / l）；缺省 = "m"。收據 / 自助點餐機各自存。 */
+    qrSize?: EscPosSize;
   };
 
   function readTemplate(kind: TemplateKindState): AnyTemplate {
     const raw = localSettings.printTemplates[kind] as unknown as AnyTemplate;
     // 舊 localStorage 設定（存檔時仲未有 qr_code）→ 喺設計介面即刻補返，
     // 等「區塊順序」見到「二維碼」、選中時亦唔會因 blocks 缺 key 而炸。
-    return (kind === "receipt" || kind === "kiosk"
+    const t = (kind === "receipt" || kind === "kiosk"
       ? ensureReceiptSections(raw as never)
       : raw) as unknown as AnyTemplate;
+    if (kind === "label") {
+      // 標籤字型鎖死：舊設定可能存咗唔同 size，一律校正為固定檔位（設計同出紙一致）。
+      return withLabelFixedSizes(t as never) as unknown as AnyTemplate;
+    }
+    // 舊模板未存 qrSize → 補返預設「中」，揀大小時先唔會 undefined。
+    if (kind === "receipt" || kind === "kiosk") {
+      return { ...t, qrSize: t.qrSize ?? "m" };
+    }
+    return t;
   }
 
   function updateLocalTemplate(nextSettings: typeof localSettings, options?: { recordHistory?: boolean }) {
@@ -344,6 +422,39 @@ export function PrintCenter() {
     applyTemplate(kind, { ...t, qrUrl: text });
   }
 
+  /** 收據二維碼打印大小（細 / 中 / 大）。 */
+  function setQrSize(kind: TemplateKindState, size: EscPosSize) {
+    const t = readTemplate(kind);
+    applyTemplate(kind, { ...t, qrSize: size });
+  }
+
+  /**
+   * 「生成」掣：喺打印模板內**生成**二維碼圖像。
+   *
+   * 做兩件事：
+   * 1. 確保 `qr_code` 區塊可見（喺「區塊順序」揀得到、出紙會印）；
+   * 2. 重新套用 `qrUrl`（同 `qrSize`）→ 即時預覽會即刻畫出嚟（ESC/POS 點陣 → SVG）。
+   * 網址空白 / 太長而 encodeQrPayload 失敗 → 出 toast 提示，唔會生成到空框。
+   */
+  function generateQr(kind: TemplateKindState) {
+    const t = readTemplate(kind);
+    const url = (t.qrUrl ?? "").trim();
+    if (!url) {
+      setToast({ tone: "error", message: "請先輸入二維碼網址，再撳「生成」。" });
+      return;
+    }
+    if (!encodeQrPayload(url)) {
+      setToast({ tone: "error", message: "⚠️ 網址太長，無法生成二維碼（請用短網址）。" });
+      return;
+    }
+    // 保證 qr_code 區塊存在 + 可見
+    const qrStyle: EscPosBlockStyle = { visible: true, size: "s", bold: false, align: "center" };
+    const order = t.order.includes("qr_code") ? t.order : [...t.order, "qr_code"];
+    const blocks = t.blocks.qr_code ? t.blocks : { ...t.blocks, qr_code: qrStyle };
+    applyTemplate(kind, { ...t, order, blocks: { ...blocks, qr_code: { ...blocks.qr_code, visible: true } } });
+    setToast({ tone: "success", message: "✅ 已喺模板生成二維碼。" });
+  }
+
   function setHeader(kind: TemplateKindState, text: string) {
     const t = readTemplate(kind);
     applyTemplate(kind, { ...t, headerText: text });
@@ -375,7 +486,7 @@ export function PrintCenter() {
         specs: (it.selectedSpecs ?? []).map((s) => `${s.groupName}:${s.optionLabel}`),
         note: it.note,
       }));
-      return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl) });
+      return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl), qrSize: t.qrSize ?? "m" });
     }
     const content = buildReceiptContent(sampleOrder, {
       storeName: PREVIEW_STORE_NAME,
@@ -404,7 +515,8 @@ export function PrintCenter() {
         note: it.note,
       };
     });
-    return renderEscPosLines(snapshot, content, items);
+    // 收據 / 自助點餐機：必須帶埋 qr + qrSize，否則二維碼喺設計介面預覽永遠唔顯示（#模板 QR bug）。
+    return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl), qrSize: t.qrSize ?? "m" });
   }
 
   function persistPrintJobs(next: PrintJob[]) {
@@ -417,7 +529,8 @@ export function PrintCenter() {
   function pushEvents(events: QueueEvent[]) {
     const currentQueue = loadQueue();
     // 🛡️ 跨店隔離 L1：只 stamp 新建事件（舊 queue 唔掂，防止外店事件被改姓）。
-    const nextQueue = [...currentQueue, ...withStoreScope(events)];
+    // docs/111：入隊取代 flush 去重（同 type + 同目標嘅舊 pending 會被取代）。
+    const nextQueue = enqueueEvents(currentQueue, withStoreScope(events));
     saveQueue(nextQueue);
     // 補：以前 saveQueue 後從來唔 trigger flush worker，events 永遠留喺 queue
     // （要等其他操作偶然觸發 syncNow 先被推送）。家陣同 pos-app.tsx 一致，
@@ -618,19 +731,36 @@ export function PrintCenter() {
           <div className="text-sm font-semibold text-slate-900">
             選中區塊設定：{meta.find((x) => x.id === sel)?.label ?? sel}
           </div>
+          {isLabel ? (
+            <div className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-700">
+              🏷️ 標籤紙實體寬度固定為 <b>{LABEL_STANDARD_WIDTH_MM} mm</b>（標準飲品/杯貼標籤卷，系統鎖定）。
+              因此各區塊<b>字型大小已鎖定</b>為最適合嘅檔位，唔可以動態改大/改細——你仍然可以調「對齊 / 粗體 / 可見」同區塊順序。
+            </div>
+          ) : null}
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              <span>字型大小</span>
-              <select
-                className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
-                value={selStyle.size}
-                onChange={(e) => patchBlock(kind, sel, { size: e.target.value as EscPosSize })}
-              >
-                <option value="s">細</option>
-                <option value="m">中</option>
-                <option value="l">大</option>
-              </select>
-            </label>
+            {isLabel ? (
+              // 標籤實體寬度固定（62mm 標準標籤卷）→ 字型檔位鎖死，唔畀動態改。
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <span>字型大小</span>
+                <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                  <span>{selStyle.size === "l" ? "大" : selStyle.size === "m" ? "中" : "細"}</span>
+                  <span className="text-[10px] text-slate-400">🔒 鎖定</span>
+                </div>
+              </label>
+            ) : (
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <span>字型大小</span>
+                <select
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                  value={selStyle.size}
+                  onChange={(e) => patchBlock(kind, sel, { size: e.target.value as EscPosSize })}
+                >
+                  <option value="s">細</option>
+                  <option value="m">中</option>
+                  <option value="l">大</option>
+                </select>
+              </label>
+            )}
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
               <span>對齊</span>
               <select
@@ -693,21 +823,46 @@ export function PrintCenter() {
               />
             </label>
             {isReceiptLike ? (
-              <label className="grid gap-1 text-xs font-semibold text-slate-600 sm:col-span-2">
-                <span>二維碼網址（留空則不顯示二維碼）</span>
-                <input
-                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
-                  inputMode="url"
-                  placeholder="https://example.com"
-                  value={t.qrUrl ?? ""}
-                  onChange={(e) => setQrUrl(kind, e.target.value)}
-                />
-                <span className="text-[11px] font-normal leading-relaxed text-slate-500">
-                  {(t.qrUrl ?? "").trim() && !encodeQrPayload(t.qrUrl)
-                    ? "⚠️ 網址太長，無法生成二維碼（請用短網址）。"
-                    : "網址會喺收據底部印成二維碼；空白就唔會印。收據同自助點餐機係兩個獨立設定。"}
-                </span>
-              </label>
+              <div className="grid gap-1 text-xs font-semibold text-slate-600 sm:col-span-2">
+                <span>二維碼網址</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                    inputMode="url"
+                    placeholder="https://example.com"
+                    value={t.qrUrl ?? ""}
+                    onChange={(e) => setQrUrl(kind, e.target.value)}
+                  />
+                  <button
+                    className="shrink-0 rounded-xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+                    disabled={!(t.qrUrl ?? "").trim()}
+                    onClick={() => generateQr(kind)}
+                    type="button"
+                  >
+                    生成
+                  </button>
+                </div>
+                <div className="mt-1 flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                    <span>打印大小</span>
+                    <select
+                      className="rounded-xl border border-slate-200 bg-white px-2 py-1 text-sm"
+                      value={t.qrSize ?? "m"}
+                      onChange={(e) => setQrSize(kind, e.target.value as EscPosSize)}
+                    >
+                      <option value="s">細</option>
+                      <option value="m">中</option>
+                      <option value="l">大</option>
+                    </select>
+                  </label>
+                  <span className="text-[11px] font-normal leading-relaxed text-slate-500">
+                    {(t.qrUrl ?? "").trim() && !encodeQrPayload(t.qrUrl)
+                      ? "⚠️ 網址太長，無法生成二維碼（請用短網址）。"
+                      : "網址會喺收據底部印成二維碼；留空 / 太長都唔會印。收據同自助點餐機係兩個獨立設定。"}
+                  </span>
+                </div>
+                <QrFieldPreview url={t.qrUrl ?? ""} size={t.qrSize ?? "m"} />
+              </div>
             ) : null}
           </div>
           <div className="mt-4 text-sm font-semibold text-slate-900">即時預覽（真實熱敏樣式）</div>
@@ -717,7 +872,7 @@ export function PrintCenter() {
                 需要最少一個菜品嚟預覽標籤。
               </div>
             ) : (
-              <EscPosPreview lines={buildPreviewLines(kind)} paperWidthMm={kind === "label" ? 62 : 80} />
+              <EscPosPreview lines={buildPreviewLines(kind)} paperWidthMm={kind === "label" ? LABEL_STANDARD_WIDTH_MM : 80} />
             )}
           </div>
         </article>
@@ -985,7 +1140,7 @@ export function PrintCenter() {
                   lines={renderEscPosLines(activeJob.template, activeJob.content, activeJob.items ?? [], {
                     qr: activeJob.qr ?? null,
                   })}
-                  paperWidthMm={activeJob.template.kind === "label" ? 62 : 80}
+                  paperWidthMm={activeJob.template.kind === "label" ? LABEL_STANDARD_WIDTH_MM : 80}
                 />
               ) : (
                 <KitchenTicketPreview job={activeJob} />

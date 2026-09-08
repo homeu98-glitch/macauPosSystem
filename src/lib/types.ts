@@ -338,7 +338,28 @@ export interface ReceiptTemplate {
    * 咁先可以保證「設計介面 == 螢幕預覽 == 實際出紙」三者係同一個矩陣。
    */
   qrUrl?: string;
+  /**
+   * 收據二維碼嘅**打印大小**（`s` 細 / `m` 中 / `l` 大）。
+   *
+   * 同 `qrUrl` 一樣係模版層級設定：`receipt` / `kiosk` 各自獨立存一份。
+   * 控制打印模板內（即時預覽）二維碼圖像嘅尺寸；細 / 中 / 大對應逐步放大。
+   * 缺省 = `"m"`（中）。可選 — 舊模板未存有呢欄時設計介面會補返預設。
+   */
+  qrSize?: EscPosSize;
 }
+
+/**
+ * 飲品/廚房標籤嘅**固定紙寬**（毫米）。
+ *
+ * ⚠️ 標籤係印喺**固定實體尺寸**嘅熱敏標籤紙 / 標籤卷上（冇得喺系統度隨時加大縮細），
+ * 所以標籤模板**禁止動態尺寸**：紙寬鎖死用下面呢個標準值，字型檔位亦係預設配好、唔畀逐塊改。
+ *
+ * 調查市面上最常見嘅飲品/杯貼熱敏標籤（奶茶、咖啡杯貼）打印寬度，以 **62 mm**（或 58 mm）
+ * 呢類 ESC/POS 標籤卷最普及（本系統設備設定／ESC 渲染由嚟都係用 62mm 標籤紙），故此鎖定 62 mm。
+ * 標籤渲染（ESC/POS / 網頁預覽）一律用 `LABEL_STANDARD_WIDTH_MM` 做紙闊，
+ * 唔可以喺標籤模板 UI 度畀用戶動態揀紙寬。
+ */
+export const LABEL_STANDARD_WIDTH_MM = 62;
 export interface LabelTemplate {
   blocks: Record<LabelSectionId, EscPosBlockStyle>;
   order: LabelSectionId[];
@@ -613,13 +634,26 @@ export interface PosOrder {
 
 export type OnlinePaymentStatus = "paid" | "unpaid";
 
+/** 推唔到嘅事件點解推唔到（配合 status:"skipped"）。 */
+export type QueueSkipReason = "foreign-store" | "no-store";
+
 export interface QueueEvent {
   id: string;
   type: QueueEventType;
   entityId: string;
   payload: unknown;
-  status: "pending" | "synced" | "failed";
+  /**
+   * - `pending`：排隊等推（outbox 語義：queue 入面淨係未上雲嘅工作）
+   * - `synced`：已上雲（v1 墓碑；v2 outbox 模式成功後係直接剷走，唔會留呢個狀態）
+   * - `failed`：server 連續拒收 MAX_SYNC_ATTEMPTS 次，永久失敗，等人手處理
+   * - `skipped`：**終態**，推唔到但有明確原因（見 {@link QueueSkipReason}）。
+   *   冇呢個狀態之前，外店 / 無 storeId 嘅事件會一世留喺 pending，令交班畫面
+   *   永遠顯示「N 筆未同步」（假陽性）。見 docs/111。
+   */
+  status: "pending" | "synced" | "failed" | "skipped";
   createdAt: string;
+  /** 淨係 status === "skipped" 時有意義：點解呢條事件唔會被推送。 */
+  skipReason?: QueueSkipReason;
   /**
    * 事件所屬店舖（= 事件產生嗰刻 `resolveStoreId()`：登入 merchant 或 kiosk 綁定店）。
    *

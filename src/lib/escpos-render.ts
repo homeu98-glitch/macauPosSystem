@@ -72,12 +72,14 @@ export type EscPosLine =
   | { kind: "divider" }
   | { kind: "items"; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize: EscPosSize; items: PrintItemLine[]; layout: EscPosItemsLayout }
   /** 收據二維碼（`qr_code` 區塊）。冇 `job.qr` 時 renderer 唔會產生呢一行。 */
-  | { kind: "qr"; align: EscPosAlign; qr: QrPayload };
+  | { kind: "qr"; align: EscPosAlign; qr: QrPayload; size: EscPosSize };
 
 /** `renderEscPosLines` 嘅額外輸入。items 以外嘅非文字區塊（而家得二維碼）放呢度。 */
 export interface EscPosRenderExtras {
   /** 二維碼點陣（由 `encodeQrPayload(template.qrUrl)` 產生）；null = 唔印。 */
   qr?: QrPayload | null;
+  /** 二維碼打印大小（`s` / `m` / `l`），隨 `template.qrSize` 帶過嚟；缺省 = `"m"`。 */
+  qrSize?: EscPosSize;
 }
 
 /**
@@ -126,7 +128,7 @@ export function renderEscPosLines(
     if (b.id === "qr_code") {
       const qr = extras?.qr ?? null;
       if (!qr) continue;
-      lines.push({ kind: "qr", align: b.align, qr });
+      lines.push({ kind: "qr", align: b.align, qr, size: extras?.qrSize ?? "m" });
       continue;
     }
     const text = content?.[b.id];

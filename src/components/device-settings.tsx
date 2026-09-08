@@ -24,6 +24,8 @@ import {
   saveSoldOutState,
 } from "@/lib/storage";
 import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
+import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
+import { withStoreScope } from "@/lib/pos/sync-flush";
 import { newDiscountId } from "@/lib/pos/discount";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { filterReopenTempTables, isReopenTempTable, stripReopenTempTables } from "@/lib/pos/table-scope";
@@ -447,11 +449,13 @@ export function DeviceSettings() {
       createdAt: updatedConfig.updatedAt,
     };
 
-    const nextQueue = [...loadQueue(), event];
+    // docs/111：補 stamp storeId（以前完全冇 stamp → 呢啲事件永遠過唔到跨店閘口，
+    // 一世留喺 pending 計落「未同步」），同埋用 enqueueEvents 合併（淨留最新一條設定）。
+    const nextQueue = enqueueEvents(loadQueue(), withStoreScope([event]));
     saveQueue(nextQueue);
 
     try {
-      await fetch("/api/pos/device-config", {
+      const configRes = await fetch("/api/pos/device-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -459,7 +463,7 @@ export function DeviceSettings() {
           localSettings: serverSettings,
         }),
       });
-      await fetch("/api/online-order-settings", {
+      const onlineRes = await fetch("/api/online-order-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -467,7 +471,17 @@ export function DeviceSettings() {
           storeId: loadAuthSession()?.merchantId ?? null,
         }),
       });
-      saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
+      // ⚠️ 一定要 check res.ok：以前唔 check 就照標 synced，後台拒收嗰陣
+      // 事件其實未上雲，但又唔會再重試。
+      if (!configRes.ok || !onlineRes.ok) {
+        setStatus(`${label}時後台拒收（HTTP ${configRes.status}/${onlineRes.status}），已保留在本機待補傳。`);
+        return;
+      }
+      if (isOutboxV2Enabled()) {
+        saveQueue(loadQueue().filter((item) => item.id !== event.id));
+      } else {
+        saveQueue(nextQueue.map((item) => (item.id === event.id ? { ...item, status: "synced" } : item)));
+      }
       setStatus(`已${label}（本機 + 後台同步完成）。`);
     } catch {
       setStatus(`${label}失敗，已保留在本機待補傳。`);

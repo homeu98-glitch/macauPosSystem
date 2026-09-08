@@ -13,11 +13,9 @@
  *
  * 設計（向 salon `flushSalonSyncQueue` 致敬，序列化 + dedupe + 自動 retry）：
  *   1. **Chain lock**：所有 flush 排隊（`flushChain`），避免並發搶同一 queue 造成重複上推 / 寫競態。
- *   2. **Dedup**：用 `Map<entityId, latestEventId>` 去重，同一 entityId 只推最後一條事件。
- *      解決「confirmSelfOrder 連續推兩條 ORDER_UPDATED → 重複 upsert + 浪費 quota」嘅情況。
- *   3. **Attempts**：每個 event 加 attempts counter（默認 0），超過 MAX_SYNC_ATTEMPTS 標
+ *   2. **Attempts**：每個 event 加 attempts counter（默認 0），超過 MAX_SYNC_ATTEMPTS 標
  *      "failed" 保留喺 queue（唔好丟，數據仲喺 localStorage 嘅 orders 內），等 manual inspect。
- *   4. **Silent**：預設靜默，唔出 toast；manual call 可傳 silent:false（保留舊合約）。
+ *   3. **Silent**：預設靜默，唔出 toast；manual call 可傳 silent:false（保留舊合約）。
  *
  * Trigger 點（set by 任何 caller）：
  *   - pos-app.tsx pushEvents() 後（每個落單事件 / 結帳事件 / 退菜事件都會 trigger）
@@ -25,12 +23,28 @@
  *   - pos-app.tsx mount 時（ensure boot 後任何 stale pending 都會被 flush）
  *   - online / pos-network-status-changed 事件（reconnect 即推）
  *   - 30s 兜底 interval（兜任何遺漏）
+ *
+ * ## 2026-09-08 outbox 化（docs/111）—— 去重由 flush 搬到入隊
+ *
+ * 舊版第 2 點「同 entityId 淨推最新一條」有兩個禍：
+ *   a) 輸家永遠選唔中 → 永久 pending → 交班畫面假報「N 筆未同步」；
+ *   b) 去重**唔理 type**：離線時 `ORDER_SETTLED`（server `.update()` 命中 0 列唔報錯）
+ *      或 `ORDER_ITEM_VOIDED`（server 根本唔處理）可以贏過 `ORDER_CREATED` → 張單喺雲端消失。
+ *
+ * 家陣改為：**入隊時**按 `coalesceKey()`（同 type + 同目標，退菜再拆到 item 級）取代，
+ * flush 唔再做去重 → 所有 pending 都會被推送，推送順序按 createdAt 升序
+ * （保證 ORDER_CREATED 先過 ORDER_SETTLED）。
+ *
+ * 成功之後（v2）由「標 synced」改為**直接剷走**呢啲事件 —— queue 淨留未上雲嘅工作。
+ * 推唔到嘅（外店 / 無 storeId）喺 flush 前 classify 做 `skipped` 終態，唔再一世霸住 pending。
+ * 全部改動受 `isOutboxV2Enabled()` feature flag 保護（`localStorage` 設 "0" 即還原）。
  */
 
 import { readNetworkOnline } from "@/lib/use-network-online";
 import { loadAuthSession, loadQueue, saveQueue } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { QueueEvent } from "@/lib/types";
+import { classifyQueueEvent, gcSyncQueue, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 
 export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
 
@@ -48,7 +62,8 @@ export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
 export const POS_SYNC_FAILED_EVENT = "pos-sync-failed";
 
 const MAX_SYNC_ATTEMPTS = 5;
-const MAX_EVENTS_PER_FLUSH = 100; // 對齊 server-side `MAX_EVENTS_PER_REQUEST`
+/** 對齊 server-side `MAX_EVENTS_PER_REQUEST`（/api/pos/sync 上限 200）。 */
+const MAX_EVENTS_PER_FLUSH = 200;
 const FLUSH_INTERVAL_MS = 30_000;
 
 type ExtendedQueueEvent = QueueEvent & { attempts?: number };
@@ -111,7 +126,10 @@ export function installPosSyncQueueAutoFlush(): void {
 
   intervalHandle = setInterval(trigger, FLUSH_INTERVAL_MS);
 
-  // 啟動時一次性 flush：stale pending 唔會留過夜
+  // 啟動時一次性 GC + flush：stale pending 唔會留過夜。
+  // GC 清走 outbox 化之前積落嚟嘅 synced 墓碑 / 被取代嘅舊事件，
+  // 同埋畀外店 / 無主事件一個 skipped 終態（v2 先跑；v1 嘅墓碑係防 server merge 復活嘅唯一機制）。
+  gcSyncQueue(resolveStoreId());
   trigger();
 }
 
@@ -261,18 +279,70 @@ export function filterEventsForCurrentStore<T extends QueueEvent>(events: T[]): 
   return events.filter((e) => e.storeId === store);
 }
 
+/** 事件時間戳（用嚟排序推送次序）。非法時間當 0，排最前。 */
+function eventTime(event: QueueEvent): number {
+  const ms = Date.parse(event.createdAt ?? "");
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * 由「已通過跨店過濾」嘅事件度揀出今次要推嘅批次。
+ *
+ * - **v2（outbox）**：唔做去重（入隊時已經按 `coalesceKey()` 合併），
+ *   **全部 pending 都推**，而且按 `createdAt` 升序 —— 保證 `ORDER_CREATED`
+ *   先過 `ORDER_SETTLED`（server settle 用 `.update()`，順序錯咗會 0 列寫唔到）。
+ * - **v1（舊行為）**：同 entityId 淨推最新一條（保留舊語義，但會留低「去重輸家」）。
+ */
+function selectFlippable(scoped: ExtendedQueueEvent[]): ExtendedQueueEvent[] {
+  const retryable = scoped.filter((e) => (e.attempts ?? 0) < MAX_SYNC_ATTEMPTS);
+  if (retryable.length === 0) return [];
+
+  if (isOutboxV2Enabled()) {
+    return retryable.sort((a, b) => eventTime(a) - eventTime(b)).slice(0, MAX_EVENTS_PER_FLUSH);
+  }
+
+  const candidateByEntity = new Map<string, ExtendedQueueEvent>();
+  for (const e of retryable) {
+    const prev = candidateByEntity.get(e.entityId);
+    if (!prev || prev.createdAt < e.createdAt) {
+      candidateByEntity.set(e.entityId, e);
+    }
+  }
+  return Array.from(candidateByEntity.values()).slice(0, MAX_EVENTS_PER_FLUSH);
+}
+
 async function doFlush(options: { silent?: boolean }): Promise<void> {
   if (typeof window === "undefined") return;
   if (!readNetworkOnline()) return;
 
-  const allQueue = loadQueue() as ExtendedQueueEvent[];
+  const storeId = resolveStoreId();
+  let allQueue = loadQueue() as ExtendedQueueEvent[];
   if (allQueue.length === 0) return;
+
+  // ── 0) v2：畀「推唔到」嘅 pending 一個 skipped 終態（外店 / 無 storeId）──
+  // 冇呢一步，呢啲事件會一世霸住 pending，交班畫面永遠假報「N 筆未同步」。
+  if (isOutboxV2Enabled() && storeId) {
+    let classifiedCount = 0;
+    const classified = allQueue.map((e) => {
+      const next = classifyQueueEvent(e, storeId);
+      if (next) {
+        classifiedCount += 1;
+        return next as ExtendedQueueEvent;
+      }
+      return e;
+    });
+    if (classifiedCount > 0) {
+      saveQueue(classified);
+      allQueue = classified;
+    }
+  }
 
   // **Legacy heal（首次 flush）**：唔再 filter synced events（過往「寫 status:synced 但從未 fetch sync」
   // 嘅 legacy queue 會永遠卡住，要靠呢次重新推）。
   // 只 filter status:"failed" 且已超 attempts 嘅（嗰啲真係永久卡死，留低等人手 inspect）。
+  // v2：queue 入面唔應該再有 synced 墓碑（GC 已經剷晒），呢個 filter 係空轉。
   const unflushed = legacyHealed
-    ? allQueue.filter((e) => e.status !== "synced")
+    ? allQueue.filter((e) => e.status !== "synced" && e.status !== "skipped")
     : allQueue.filter((e) => !(e.status === "failed" && (e.attempts ?? 0) >= MAX_SYNC_ATTEMPTS));
   legacyHealed = true;
   if (unflushed.length === 0) return;
@@ -284,23 +354,11 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   const scoped = filterEventsForCurrentStore(unflushed);
   if (scoped.length === 0) return;
 
-  // Dedup by entityId + 過濾超 attempts：同一 entityId 只推最後一條（最後狀態為準），
-  // 超 attempts 嘅自動淘汰（同 entityId 有新未超 attempts 嘅就推嗰條）。
-  // 注意 ORDER_UPDATED / ORDER_CREATED 同 entity 會 dedup，PRINT_JOB_CREATED 唔會（唔同 entityId）。
-  const candidateByEntity = new Map<string, ExtendedQueueEvent>();
-  for (const e of scoped) {
-    if ((e.attempts ?? 0) >= MAX_SYNC_ATTEMPTS) continue;
-    const prev = candidateByEntity.get(e.entityId);
-    if (!prev || prev.createdAt < e.createdAt) {
-      candidateByEntity.set(e.entityId, e);
-    }
-  }
-  const flippable = Array.from(candidateByEntity.values()).slice(0, MAX_EVENTS_PER_FLUSH);
+  const flippable = selectFlippable(scoped);
   if (flippable.length === 0) return;
 
   let result: Response;
   try {
-    const storeId = resolveStoreId();
     result = await fetch("/api/pos/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -359,12 +417,19 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
     return;
   }
 
-  // 成功：flippable 全部標 synced（保留佢哋喺 queue，等下次 cleanup / 永遠保留都得）
+  // 成功：
+  // - v2（outbox）：上咗雲就**剷走**，queue 淨留未上雲嘅工作 → 隊列長度 = 真待辦量，
+  //   交班畫面嘅「待同步」唔會再有毒。前提係 server → client 嘅 queue merge 已經閂咗
+  //   （pos-app loadRuntimeState），否則會無限重推。
+  // - v1（舊行為）：保留喺 queue 做 synced 墓碑。
   const flippedIds = new Set(flippable.map((e) => e.id));
-  const nextQueue = allQueue.map((e) =>
-    flippedIds.has(e.id) ? { ...e, status: "synced" as const, attempts: 0 } : e,
-  );
-  saveQueue(nextQueue);
+  if (isOutboxV2Enabled()) {
+    saveQueue(allQueue.filter((e) => !flippedIds.has(e.id)));
+  } else {
+    saveQueue(
+      allQueue.map((e) => (flippedIds.has(e.id) ? { ...e, status: "synced" as const, attempts: 0 } : e)),
+    );
+  }
 
   if (!options.silent) {
     // eslint-disable-next-line no-console

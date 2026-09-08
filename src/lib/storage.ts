@@ -264,6 +264,10 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         blocks: mergeTemplateBlocks(DEFAULT_RECEIPT_TEMPLATE.blocks, settings?.printTemplates?.receipt?.blocks),
         order: mergeTemplateOrder(DEFAULT_RECEIPT_TEMPLATE.order, settings?.printTemplates?.receipt?.order),
         footerText: settings?.printTemplates?.receipt?.footerText ?? DEFAULT_RECEIPT_TEMPLATE.footerText,
+        // ⚠️ 之前淨 merge blocks/order/footerText，漏咗帶返 `qrUrl`（同 `qrSize`），
+        // 令商家填好嘅二維碼網址一經重新載入（normalize）就被剷走 → 「二維碼未能生成/顯示」。
+        qrUrl: settings?.printTemplates?.receipt?.qrUrl ?? DEFAULT_RECEIPT_TEMPLATE.qrUrl ?? "",
+        qrSize: settings?.printTemplates?.receipt?.qrSize ?? DEFAULT_RECEIPT_TEMPLATE.qrSize ?? "m",
       },
       label: {
         blocks: mergeTemplateBlocks(DEFAULT_LABEL_TEMPLATE.blocks, settings?.printTemplates?.label?.blocks),
@@ -284,6 +288,9 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         blocks: mergeTemplateBlocks(DEFAULT_KIOSK_TEMPLATE.blocks, settings?.printTemplates?.kiosk?.blocks),
         order: mergeTemplateOrder(DEFAULT_KIOSK_TEMPLATE.order, settings?.printTemplates?.kiosk?.order),
         footerText: settings?.printTemplates?.kiosk?.footerText ?? DEFAULT_KIOSK_TEMPLATE.footerText,
+        // 同上：kiosk 槽位嘅二維碼網址 / 大小都要帶返，唔可以喺 normalize 度丟失。
+        qrUrl: settings?.printTemplates?.kiosk?.qrUrl ?? DEFAULT_KIOSK_TEMPLATE.qrUrl ?? "",
+        qrSize: settings?.printTemplates?.kiosk?.qrSize ?? DEFAULT_KIOSK_TEMPLATE.qrSize ?? "m",
       },
     },
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
@@ -758,6 +765,15 @@ export type ShiftHistoryRecord = {
   // 舊嘅交班記錄冇呢個欄（undefined），顯示時當 0 處理，所以開 optional。
   // 唔好當佢係「待同步」—— 佢永遠上唔到 DB，落單畫面已經用 amber 提示卡叫人重試。
   failedEvents?: number;
+  /**
+   * 推唔到但已有明確原因嘅 event 數（外店事件 / 無 storeId 無主事件），
+   * status === "skipped"。由 2026-09-08 起記錄（docs/111）。
+   *
+   * 唔係「待同步」，亦唔係「失敗」：佢哋只係唔屬於當前店（或者根本無歸屬），
+   * 換句話講係**冇可能**上到雲，計落任何一欄都係講大話，所以要獨立記。
+   * 舊記錄冇呢個欄（undefined），顯示時當 0 處理，所以開 optional。
+   */
+  skippedEvents?: number;
   pendingPrints: number;
 };
 

@@ -322,15 +322,43 @@ export async function POST(request: Request) {
           patch.comped_at = isoOrNull(eventPayload.compedAt) ?? new Date().toISOString();
         }
 
-        const { error: sErr } = await supabase
+        const { data: settledRows, error: sErr } = await supabase
           .from("pos_orders")
           .update(patch)
           .eq("id", settledOrderId)
-          .eq("store_id", storeId);
+          .eq("store_id", storeId)
+          .select("id");
 
         if (sErr) {
           console.error("[pos/sync] pos_orders settle failed:", sErr.message);
           errors.push(`訂單結帳狀態寫入失敗`);
+        } else if (!settledRows || settledRows.length === 0) {
+          // 🛡️ 兜底（docs/111）：ORDER_SETTLED 早過 ORDER_CREATED 到（離線一輪操作、
+          // 或者 2026-09-08 之前嗰個「同 entityId 淨推最新一條」去重丟咗建立事件），
+          // 純 update 會命中 0 列、**唔報錯、靜默丟單** —— 張單永遠唔會出現喺
+          // pos_orders，報表同對賬都少咗佢。呢度 upsert 最小欄位救返條記錄，
+          // 等 ORDER_CREATED 之後推到時會用完整 snapshot 覆寫。
+          console.warn(
+            `[pos/sync] ORDER_SETTLED 命中 0 列（訂單 ${settledOrderId} 未存在），改 upsert 建立最小記錄`,
+          );
+          const { error: iErr } = await supabase.from("pos_orders").upsert(
+            {
+              id: settledOrderId,
+              store_id: storeId,
+              status: text(eventPayload.status, 64) ?? "settled",
+              total: money(eventPayload.total),
+              discount_amount: money(eventPayload.discountAmount),
+              payment_method: text(eventPayload.paymentMethod, MAX_NAME_LEN),
+              fulfillment_status: text(eventPayload.fulfillmentStatus, 64),
+              created_at: text(event.createdAt, 64) ?? new Date().toISOString(),
+              updated_at: text(event.createdAt, 64) ?? new Date().toISOString(),
+            },
+            { onConflict: "id" },
+          );
+          if (iErr) {
+            console.error("[pos/sync] pos_orders settle upsert fallback failed:", iErr.message);
+            errors.push(`訂單結帳狀態寫入失敗`);
+          }
         }
       }
     }

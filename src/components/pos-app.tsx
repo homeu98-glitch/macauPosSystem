@@ -33,6 +33,7 @@ import {
   ITEM_SPEC_LOCKED_MESSAGE,
   ORDER_NOTE_LOCKED_MESSAGE,
 } from "@/lib/pos/order-note-lock";
+import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import {
   appendPrintJobs,
   buildKitchenPrintJobs,
@@ -914,7 +915,17 @@ export function PosApp() {
           return cleaned;
         });
       }
-      if (Array.isArray(payload.queue)) {
+      if (Array.isArray(payload.queue) && !isOutboxV2Enabled()) {
+        // docs/111：v2（outbox）**唔再 merge server queue 返落本地**。
+        // queue 係本機 outbox，事件推上雲之後就係 server 嘅事；結果狀態由 orders /
+        // printJobs 兩條獨立 pull 攞返（下面已經有）。以前 merge 返落嚟會造成：
+        //   ① 外店事件流入本地 queue（server 依 store_id 過濾，但同一 store 下可能
+        //      有第二部機嘅事件）；② 其他收銀機嘅舊事件喺呢部機「復活」做 pending
+        //      —— server 嗰張 pos_queue_events.status 寫死係 "pending"（client 推送時
+        //      就寫 pending，server 從來冇更新過），所以每次 pull state 都會復活一批
+        //      「未同步」。呢個就係「100 筆」另一半來源。
+        // 要還原舊行為：localStorage 設 macau-pos/sync-outbox-v2 = "0" 再 reload。
+        //
         // 以 localStorage 為底 merge：保留本地（含未同步）事件，只補本機冇嘅 server 事件，
         // 唔整份取代，避免清走本地 pending（R4）。
         // 🛡️ 跨店隔離 L3（2026-09-06 修，兌現呢度以前嘅 follow-up 承諾）：
@@ -2259,7 +2270,11 @@ export function PosApp() {
     // 🛡️ 跨店隔離 L4：只推屬於當前店嘅事件。syncNow 係「成條 queue 一齊 push」，
     // 以前冇過濾 → 外店 / legacy 事件跟埋一齊被推，server 用請求級 storeId 覆寫
     // pos_orders → 切帳號後外店單被「蓋章」搬過嚟（2026-09-06 跨店串號 root cause 之一）。
-    const scoped = filterEventsForCurrentStore(nextQueue);
+    //
+    // docs/111：淨推「未上雲」嘅事件（pending）。以前係成條 nextQueue 照推，
+    // 即係每次手動同步都會將全部 synced 墓碑重推一次（浪费 quota，亦會撞 server
+    // 200 條上限 → 413 → 成批失敗）。
+    const scoped = filterEventsForCurrentStore(nextQueue.filter((event) => event.status === "pending"));
     if (scoped.length === 0) {
       if (!options?.silent) {
         setToast({ tone: "info", message: "沒有屬於當前店舖的待同步資料。" });
@@ -2268,7 +2283,7 @@ export function PosApp() {
     }
 
     try {
-      await fetch("/api/pos/sync", {
+      const res = await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2281,10 +2296,34 @@ export function PosApp() {
         }),
       });
 
-      // 只將真正推咗嗰批標 synced；外店 / legacy 事件保留原狀（等其所屬店處理），
+      // ⚠️ 一定要 check res.ok：以前完全冇 check 就將全部事件標 synced。
+      // server 拒收（400 缺 storeId / 413 事件過多 / 500 DB 寫入失敗）嗰陣，
+      // 資料其實留喺本機，但因為變咗 synced 就**永遠唔會再重試**，
+      // 畫面仲要彈「已同步 N 筆」—— 假成功（2026-09-08 修）。
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        // eslint-disable-next-line no-console
+        console.warn(`[syncNow] server 拒收 ${scoped.length} 筆事件（HTTP ${res.status}）：${detail.slice(0, 200)}`);
+        if (!options?.silent) {
+          setToast({
+            tone: "error",
+            message: `同步失敗（HTTP ${res.status}），${scoped.length} 筆資料仍在本機，稍後會自動重試。`,
+          });
+        }
+        return;
+      }
+
+      // 只處理真正推咗嗰批；外店 / legacy 事件保留原狀（等其所屬店處理），
       // 唔可以照舊成條 queue 標 synced —— 咁會令未同步嘅外店事件永遠唔會再試。
       const scopedIds = new Set(scoped.map((event) => event.id));
-      persistQueue(nextQueue.map((event) => (scopedIds.has(event.id) ? { ...event, status: "synced" as const } : event)));
+      if (isOutboxV2Enabled()) {
+        // outbox：上咗雲就剷走，queue 淨留未上雲嘅工作
+        persistQueue(nextQueue.filter((event) => !scopedIds.has(event.id)));
+      } else {
+        persistQueue(
+          nextQueue.map((event) => (scopedIds.has(event.id) ? { ...event, status: "synced" as const } : event)),
+        );
+      }
       if (!options?.silent) {
         setToast({ tone: "success", message: `已同步 ${scoped.length} 筆待辦資料。` });
       }
@@ -2299,7 +2338,10 @@ export function PosApp() {
     // 🛡️ 跨店隔離 L1：新建事件 stamp 當前店（只 stamp 新事件，舊 queue 唔掂 ——
     // 舊事件可能係 server merge 落嚟嘅外店事件，覆寫佢哋嘅 storeId 就係「改姓」）。
     const stamped = withStoreScope(events);
-    const nextQueue = [...queue, ...stamped];
+    // docs/111：入隊時按 coalesceKey 合併（同 type + 同目標嘅舊 pending 會被取代），
+    // 取代舊版「flush 時同 entityId 淨推最新一條」嘅去重（會留低永久 pending 嘅輸家，
+    // 仲可以令 ORDER_SETTLED 贏過 ORDER_CREATED → 離線單喺雲端消失）。
+    const nextQueue = enqueueEvents(queue, stamped);
     persistQueue(nextQueue);
     // 觸發 sync flush worker（見 src/lib/pos/sync-flush.ts）。
     // 唔 await —— 唔阻 render / 唔阻下一個 handler；flush 係 fire-and-forget。
