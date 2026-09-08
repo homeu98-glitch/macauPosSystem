@@ -907,66 +907,7 @@ export function ShiftPage() {
           <div className="text-base font-semibold text-slate-900">今日摘要</div>
             <div className="mt-1 text-xs text-slate-500">店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。</div>
 
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-              <div>
-                <div className="font-semibold text-slate-900">應收現金（系統自動計算）</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  現金箱核對改喺「結數交班並打印」彈窗進行：有落差先需要輸入差額。
-                </div>
-              </div>
-              <div className="text-3xl font-semibold text-slate-900">{formatMoney(expectedCash)}</div>
-            </div>
-
-            <div className="mt-4 text-sm font-semibold text-slate-700">店內（線下 POS）</div>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">已結帳訂單</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.count}</div>
-              </article>
-              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">營業額</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.revenue)}</div>
-              </article>
-              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">店內預付／線上已付</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.prepaid)}</div>
-              </article>
-              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">退款</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.refundCount}</div>
-                <div className="mt-1 text-xs text-slate-500">{formatMoney(summary.refundAmount)}</div>
-              </article>
-              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">待同步事件</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingEvents}</div>
-                <div className="mt-1 text-xs text-slate-500">真正未上雲、會自動重試</div>
-                {queueSummary.failedEvents > 0 ? (
-                  <div className="mt-1 text-xs font-semibold text-amber-600">
-                    ⚠ {queueSummary.failedEvents} 筆永久失敗
-                  </div>
-                ) : null}
-                {queueSummary.skippedEvents > 0 ? (
-                  <div className="mt-1 text-xs text-slate-500">
-                    {queueSummary.skippedEvents} 筆無歸屬（外店／無主，唔會上雲）
-                  </div>
-                ) : null}
-              </article>
-              <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">待補傳打印</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.pendingPrints}</div>
-              </article>
-              <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                <div className="text-sm text-emerald-700">今日買貨成本（已付）</div>
-                <div className="mt-2 text-2xl font-semibold text-emerald-700">
-                  {purchaseToday?.summary ? formatMoney(purchaseToday.summary.paid) : "--"}
-                </div>
-                {purchaseToday?.summary && purchaseToday.summary.unpaid > 0 ? (
-                  <div className="mt-1 text-xs text-amber-700">未付 {formatMoney(purchaseToday.summary.unpaid)} 不計入</div>
-                ) : null}
-              </article>
-            </div>
-
-            {/* 金額合計（線上 + 線下）：應收金額合計 / 實收金額合計 / 線上線下合計 */}
+            {/* 金額合計（線上 + 線下）第一行：對數先睇呢度，確認條數啱唔啱 */}
             <div className="mt-4">
               <div className="text-sm font-semibold text-slate-700">金額合計（線上 + 線下）</div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -996,6 +937,16 @@ export function ShiftPage() {
                   </div>
                 </article>
               </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              <div>
+                <div className="font-semibold text-slate-900">應收現金（系統自動計算）</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  現金箱核對改喺「結數交班並打印」彈窗進行：有落差先需要輸入差額。
+                </div>
+              </div>
+              <div className="text-3xl font-semibold text-slate-900">{formatMoney(expectedCash)}</div>
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
