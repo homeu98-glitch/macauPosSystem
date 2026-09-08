@@ -131,36 +131,57 @@ export function DeviceSettings() {
     [localSettings.specTemplates, selectedTemplateId],
   );
 
-  // 新 device 初始化（2026-09-08 修）：本地未建立 localSettings 時，唔好即刻用
-  // default 鎖死——先嘗試由 DB（該店最新 device config 嘅 local_settings）讀返
-  // 該帳號已保存嘅樓層桌台等設定；DB 空／離線／冇登入店先 fallback default。
-  // 舊行為直接 savePosLocalSettings(defaultPosLocalSettings)，令新 iPad 一開設定頁
-  // 就變成 default 枱面，同 DB 已保存數據不一致。
+  // 新 device 初始化（2026-09-08 修 localSettings；2026-09-09 修 deviceConfig/打印機）：
+  // 本地未有設定時，先由 DB（該店最新 device config）讀返已保存嘅打印機／樓層桌台等
+  // 設定；DB 空／離線／冇登入店 → 打印機列表留空（defaultDeviceConfig.printers 已改空），
+  // 樓層桌台維持 fallback defaultPosLocalSettings。
+  // 舊行為會即刻 saveDeviceConfig(defaultDeviceConfig)，令新 iPad 一開設定頁就出現
+  // 4 台 mock 打印機——呢個 pre-seed 已刪除，打印機設定只可以由 DB 或用家手動添加。
   useEffect(() => {
-    if (!cachedConfig) {
-      saveDeviceConfig(defaultDeviceConfig);
-    }
-    if (cachedLocalSettings) return;
     let cancelled = false;
+    const needDeviceConfig = !cachedConfig;
+    const needLocalSettings = !cachedLocalSettings;
     async function adoptSettingsFromDb() {
-      try {
-        const storeId = loadAuthSession()?.merchantId;
-        if (storeId) {
+      const storeId = loadAuthSession()?.merchantId;
+      let adoptedFromDb = false;
+      if (storeId && (needDeviceConfig || needLocalSettings)) {
+        try {
           const res = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`);
-          const payload = (await res.json()) as { ok?: boolean; localSettings?: PosLocalSettings | null };
-          if (!cancelled && payload.ok && payload.localSettings) {
-            savePosLocalSettings(payload.localSettings);
-            setLocalSettings(payload.localSettings);
-            setStatus("已從雲端載入本店已保存設定。");
-            return;
+          const payload = (await res.json()) as {
+            ok?: boolean;
+            deviceConfig?: DeviceConfig | null;
+            localSettings?: PosLocalSettings | null;
+          };
+          if (payload.ok && !cancelled) {
+            // 打印機等設備設定：本地未有 → 採用雲端（route 已 normalize）
+            if (needDeviceConfig && payload.deviceConfig) {
+              const remote = normalizeDeviceConfig(payload.deviceConfig);
+              if (remote) {
+                saveDeviceConfig(remote);
+                setConfig(remote);
+                adoptedFromDb = true;
+              }
+            }
+            // 樓層桌台：本地未有 → 採用雲端 local_settings
+            if (needLocalSettings && payload.localSettings) {
+              savePosLocalSettings(payload.localSettings);
+              setLocalSettings(payload.localSettings);
+              adoptedFromDb = true;
+            }
           }
+        } catch {
+          // 離線 / fetch 失敗 → 落到底下 fallback
         }
-      } catch {
-        // 離線 / fetch 失敗 → fallback default
       }
-      if (!cancelled) {
+      if (cancelled) return;
+      // localSettings 冇雲端數據先 fallback default（樓層桌台等，維持 2026-09-08 決定）；
+      // deviceConfig 冇雲端數據就唔會 save 任何嘢——列表留空，唔好填充 mock。
+      if (needLocalSettings && !loadPosLocalSettings()) {
         savePosLocalSettings(defaultPosLocalSettings);
         setLocalSettings(defaultPosLocalSettings);
+      }
+      if (adoptedFromDb) {
+        setStatus("已從雲端載入本店已保存設定。");
       }
     }
     void adoptSettingsFromDb();
@@ -342,7 +363,11 @@ export function DeviceSettings() {
   useEffect(() => {
     async function loadRemoteConfig() {
       try {
-        const response = await fetch("/api/pos/device-config");
+        // 2026-09-09 修：以前 fetch 冇帶 storeId，route 對無 storeId 一律返 null
+        // （防跨店洩露），變成新 terminal 永遠拉唔到本店已保存嘅打印機配置——同步通道係死嘅。
+        const storeId = loadAuthSession()?.merchantId;
+        if (!storeId) return; // 未登入：留空，登入後再同步
+        const response = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`);
         const payload = (await response.json()) as {
           deviceConfig?: DeviceConfig | null;
         };

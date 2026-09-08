@@ -301,56 +301,17 @@ export const mockBootstrap: PosBootstrap = {
   lastUpdatedAt: "2026-08-04T00:00:00.000Z",
 };
 
+// ⚠️ 2026-09-09 修：printers 改為空陣列。舊版呢度寫死 4 台 mock 打印機
+// （廚房/吧台/收據/標籤，IP 全係假），令全新 iPad 未 save 過任何設定、
+// DB pos_device_configs 完全無 row 嘅情況下，設置頁同打印流程都會見到
+// 4 台「幽靈打印機」。預期行為：無保存記錄 → 列表留空，由用家自己添加。
+// 所有 `loadDeviceConfig() ?? defaultDeviceConfig` fallback 點自動跟住變空。
 export const defaultDeviceConfig: DeviceConfig = {
   deviceId: "tablet-01",
   terminalName: "收銀機 01",
   storeId: "macau-store-a",
   updatedAt: "2026-08-04T00:00:00.000Z",
-  printers: [
-    {
-      id: "printer-kitchen-1",
-      role: "zone",
-      zoneId: "kitchen",
-      connectionType: "lan",
-      name: "廚房打印機",
-      model: "EPSON TM-U220",
-      paperSize: "80mm",
-      ipAddress: "192.168.1.110",
-      enabled: true,
-    },
-    {
-      id: "printer-drinks-1",
-      role: "zone",
-      zoneId: "drinks",
-      connectionType: "lan",
-      name: "吧台打印機",
-      model: "EPSON TM-T82X",
-      paperSize: "80mm",
-      ipAddress: "192.168.1.111",
-      enabled: true,
-    },
-    {
-      id: "printer-receipt-1",
-      role: "receipt",
-      connectionType: "lan",
-      name: "收據打印機",
-      model: "EPSON TM-T82X",
-      paperSize: "80mm",
-      ipAddress: "192.168.1.112",
-      enabled: true,
-    },
-    {
-      id: "printer-label-1",
-      role: "label",
-      zoneId: "drinks",
-      connectionType: "lan",
-      name: "杯貼標籤機",
-      model: "Brother QL-820NWB",
-      paperSize: "62mm",
-      ipAddress: "192.168.1.113",
-      enabled: false,
-    },
-  ],
+  printers: [],
 };
 
 export const defaultPosLocalSettings: PosLocalSettings = {
