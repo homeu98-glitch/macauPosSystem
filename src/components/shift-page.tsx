@@ -840,33 +840,14 @@ export function ShiftPage() {
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
       <div className="mx-auto h-[100dvh] max-w-[1600px] overflow-auto px-4 py-4 md:pl-[88px]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-lg font-semibold text-slate-900">交班</div>
-          <div className="mt-1 text-sm text-slate-500">
-            開工 → 營業 → 結數交班。交班後會打印一張今日營業摘要。
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-          {status}
-        </div>
-
-        <div className="mt-3 grid gap-3 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-base font-semibold text-slate-900">班次狀態</div>
-            <div className="mt-3 space-y-2 text-sm text-slate-700">
-              <div>
-                {shift.openedAt
-                  ? `已開工：${shift.employeeName ?? shift.employeeAccount ?? ""}${shift.employeeName || shift.employeeAccount ? " · " : ""}${formatMacauDateTime(shift.openedAt)}`
-                  : "未開工"}
-              </div>
-              {shift.closedAt ? (
-                <div className="text-slate-500">最近交班：{formatMacauDateTime(shift.closedAt)}</div>
-              ) : null}
+        <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="min-w-[240px] flex-1">
+            <div className="text-lg font-semibold text-slate-900">交班</div>
+            <div className="mt-1 text-sm text-slate-500">
+              開工 → 營業 → 結數交班。交班後會打印一張今日營業摘要。
             </div>
-
             {!shift.openedAt ? (
-              <label className="mt-4 grid gap-1">
+              <label className="mt-4 grid max-w-sm gap-1">
                 <span className="text-xs font-semibold text-slate-500">開工備註（選填）</span>
                 <input
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
@@ -876,17 +857,22 @@ export function ShiftPage() {
                 />
               </label>
             ) : null}
-            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-              <div className="flex items-center justify-between">
-                <span>應收現金（系統自動計算）</span>
-                <span className="font-semibold text-slate-900">{formatMoney(expectedCash)}</span>
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                現金箱核對改喺「結數交班並打印」彈窗進行：有落差先需要輸入差額。
-              </div>
-            </div>
+          </div>
 
-            <div className="mt-4 flex flex-wrap gap-2">
+          <div className="flex flex-col items-end gap-3">
+            <div className="text-right text-sm">
+              {shift.openedAt ? (
+                <div className="font-semibold text-slate-900">
+                  {`已開工：${shift.employeeName ?? shift.employeeAccount ?? ""}${shift.employeeName || shift.employeeAccount ? " · " : ""}${formatMacauDateTime(shift.openedAt)}`}
+                </div>
+              ) : (
+                <div className="font-semibold text-slate-500">未開工</div>
+              )}
+              {shift.openedAt && shift.closedAt ? (
+                <div className="mt-0.5 text-slate-500">最近交班：{formatMacauDateTime(shift.closedAt)}</div>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
               {!shift.openedAt ? (
                 <button
                   className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
@@ -910,11 +896,26 @@ export function ShiftPage() {
                 </button>
               )}
             </div>
-          </section>
+          </div>
+        </div>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-base font-semibold text-slate-900">今日摘要（澳門時間）</div>
+        <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+          {status}
+        </div>
+
+        <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-base font-semibold text-slate-900">今日摘要</div>
             <div className="mt-1 text-xs text-slate-500">店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。</div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              <div>
+                <div className="font-semibold text-slate-900">應收現金（系統自動計算）</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  現金箱核對改喺「結數交班並打印」彈窗進行：有落差先需要輸入差額。
+                </div>
+              </div>
+              <div className="text-3xl font-semibold text-slate-900">{formatMoney(expectedCash)}</div>
+            </div>
 
             <div className="mt-4 text-sm font-semibold text-slate-700">店內（線下 POS）</div>
             <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -1064,7 +1065,7 @@ export function ShiftPage() {
             ) : null}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 lg:col-span-2">
+          <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">交班歷史</div>
@@ -1225,7 +1226,7 @@ export function ShiftPage() {
               </table>
             </div>
           </section>
-        </div>
+
       </div>
 
       {confirmOpen ? (
