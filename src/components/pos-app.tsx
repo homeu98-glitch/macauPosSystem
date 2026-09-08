@@ -209,6 +209,8 @@ const ALL_FLOOR_ID = "__all__";
 
 const CART_PAYING_ID = "__cart__";
 const ALL_MENU_CATEGORY_ID = "__all__";
+// 分類 chips 折疊閾值：多於此數量時預設收起為兩行，提供「全部分類 ▾」展開
+const CATEGORY_COLLAPSE_THRESHOLD = 8;
 
 export function PosApp() {
   const router = useRouter();
@@ -231,6 +233,8 @@ export function PosApp() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => cachedBootstrap?.categories[0]?.id ?? "");
+  // ── 分類 chips：預設兩行，多於 8 個分類可展開／收起 ──
+  const [categoriesExpanded, setCategoriesExpanded] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
@@ -4333,31 +4337,48 @@ export function PosApp() {
           <main className="flex h-full flex-col overflow-hidden bg-slate-100">
             <div className="border-b border-slate-200 bg-white px-4 py-3">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden min-w-0">
-                  <button
-                    key="all"
-                    className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
-                      effectiveCategoryId === "" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                <div className="flex min-w-0 flex-1 items-start gap-2">
+                  <div
+                    className={`min-w-0 flex-1 ${
+                      categoriesExpanded ? "" : "max-h-[88px] overflow-hidden"
                     }`}
-                    onClick={() => setActiveCategoryId(ALL_MENU_CATEGORY_ID)}
-                    type="button"
                   >
-                    全部
-                  </button>
-                  {bootstrap.categories.map((category) => (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        key="all"
+                        className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
+                          effectiveCategoryId === "" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                        }`}
+                        onClick={() => setActiveCategoryId(ALL_MENU_CATEGORY_ID)}
+                        type="button"
+                      >
+                        全部
+                      </button>
+                      {bootstrap.categories.map((category) => (
+                        <button
+                          key={category.id}
+                          className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
+                            effectiveCategoryId === category.id
+                              ? "bg-orange-500 text-white"
+                              : "bg-slate-100 text-slate-700"
+                          }`}
+                          onClick={() => setActiveCategoryId(category.id)}
+                          type="button"
+                        >
+                          {category.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {bootstrap.categories.length > CATEGORY_COLLAPSE_THRESHOLD ? (
                     <button
-                      key={category.id}
-                      className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
-                        effectiveCategoryId === category.id
-                          ? "bg-orange-500 text-white"
-                          : "bg-slate-100 text-slate-700"
-                      }`}
-                      onClick={() => setActiveCategoryId(category.id)}
+                      className="h-10 shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-2 text-sm font-semibold text-orange-600 ring-1 ring-orange-200 transition-colors hover:bg-orange-50"
+                      onClick={() => setCategoriesExpanded((value) => !value)}
                       type="button"
                     >
-                      {category.name}
+                      {categoriesExpanded ? "收起 ▴" : "全部分類 ▾"}
                     </button>
-                  ))}
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 items-center gap-2 xl:w-28">
                   <input
