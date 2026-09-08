@@ -541,6 +541,17 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   autoAcceptSelfOrder: true,
   // 「自動打印」開關：預設開（落單出廚房單、結帳出收據）。見 PosLocalSettings.autoPrint。
   autoPrint: true,
+  // 細粒度打印開關：每個類型預設全開。商家可喺設備設置 → 打印開關設置逐項關閉。
+  // 見 PosLocalSettings.printContentToggles。
+  printContentToggles: {
+    kitchen: true,
+    label: true,
+    receipt: true,
+    void: true,
+    reopen: true,
+    kiosk: true,
+    shift: true,
+  },
   // 毛利（估）手動設定毛利率 %：預設 null = 用系統估算。見 PosLocalSettings.grossProfitMarginPct。
   grossProfitMarginPct: null,
 };

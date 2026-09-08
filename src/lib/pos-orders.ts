@@ -6,6 +6,7 @@ import {
   buildKitchenPrintJobs,
   buildLabelPrintJobs,
   buildReopenPrintJobs,
+  isPrintContentEnabled,
 } from "@/lib/print-jobs";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
@@ -203,8 +204,10 @@ export async function reopenPosOrder(params: {
   next[idx] = updated;
   saveOrders(next);
 
-  // ③ 印返結單
-  appendPrintJobs(buildReopenPrintJobs(updated, reason, params.operator));
+  // ③ 印返結單（受 reopen 細粒度開關控制，2026-09-08 引入）
+  if (isPrintContentEnabled("reopen")) {
+    appendPrintJobs(buildReopenPrintJobs(updated, reason, params.operator));
+  }
 
   // ④ 通知面板刷新
   if (typeof window !== "undefined") {

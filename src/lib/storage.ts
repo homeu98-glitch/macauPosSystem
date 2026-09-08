@@ -331,10 +331,30 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     // 否則廚房會無啦啦收唔到單。
     autoPrint:
       typeof settings?.autoPrint === "boolean" ? settings.autoPrint : defaultPosLocalSettings.autoPrint,
+    // 細粒度打印開關（2026-09-08 引入）。舊 localStorage 冇呢欄 → 全部預設 true，
+    // 確保已上線嘅機升級後唔會一夜之間唔出單。逐 kind fallback 同舊 autoPrint 嘅
+    // 「唔可以靜默關閉」原則一致。
+    printContentToggles: {
+      kitchen: readToggle(settings?.printContentToggles?.kitchen, defaultPosLocalSettings.printContentToggles.kitchen),
+      label: readToggle(settings?.printContentToggles?.label, defaultPosLocalSettings.printContentToggles.label),
+      receipt: readToggle(settings?.printContentToggles?.receipt, defaultPosLocalSettings.printContentToggles.receipt),
+      void: readToggle(settings?.printContentToggles?.void, defaultPosLocalSettings.printContentToggles.void),
+      reopen: readToggle(settings?.printContentToggles?.reopen, defaultPosLocalSettings.printContentToggles.reopen),
+      kiosk: readToggle(settings?.printContentToggles?.kiosk, defaultPosLocalSettings.printContentToggles.kiosk),
+      shift: readToggle(settings?.printContentToggles?.shift, defaultPosLocalSettings.printContentToggles.shift),
+    },
     // 毛利（估）手動設定毛利率 %：舊 localStorage 冇呢欄 → 用預設 null（系統估算）。
     grossProfitMarginPct:
       typeof settings?.grossProfitMarginPct === "number" ? settings.grossProfitMarginPct : defaultPosLocalSettings.grossProfitMarginPct,
   };
+}
+
+/**
+ * 細粒度開關嘅標準化 fallback：嚴格只接受 boolean；undefined / 任何其他型別都 fallback 預設。
+ * 避免「舊 localStorage 寫咗唔明嘢 → 商家被偷偷關閉打印」嘅災難（舊 autoPrint 教訓）。
+ */
+function readToggle(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function defaultPermissionsForRole(role: UserRole): UserPermissions {
@@ -506,6 +526,23 @@ export function addDeletedOrderIds(ids: string[]) {
 
 export function loadPosLocalSettings() {
   return normalizePosLocalSettings(readStoreJson(STORE_SUFFIX.localSettings, defaultPosLocalSettings, resolveSettingsStoreScope()));
+}
+
+/**
+ * raw 存在性探測：當前 store scope 嘅 localSettings key 是否真的存在於 localStorage。
+ * loadPosLocalSettings() 會把「key 唔存在」normalize 成 default（floors 永遠有 2 層），
+ * 無法區分「本地真係未建立設定（新 device）」同「本地存咗嘅就係 default」。
+ * 新 device 登入時要靠呢個 probe 判斷「本地無」→ 優先讀 DB 已保存數據，唔好即刻用 default 鎖死。
+ */
+export function hasPosLocalSettings(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return (
+      window.localStorage.getItem(storeScopedStorageKey(STORE_SUFFIX.localSettings, resolveSettingsStoreScope())) !== null
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function savePosLocalSettings(settings: PosLocalSettings): boolean {
@@ -746,6 +783,13 @@ export type ShiftHistoryRecord = {
   closingNote?: string;
   actualCash?: number;
   cashDifference?: number;
+  /**
+   * 交班單序號（2026-09-08）：`YYYY-MM-DD-NN`，NN = 當日第幾班。
+   * 交班時生成並寫入；重打交班單用返同一個單號（對數/稽核認單用）。
+   */
+  shiftNo?: string;
+  /** 交班當刻店名快照（重打印表頭用；舊記錄冇）。 */
+  storeName?: string;
   settledCount: number;
   revenue: number;
   /** 線下 POS 應收金額合計（菜品原價合計 + 服務費 + 稅）。 */
@@ -754,6 +798,8 @@ export type ShiftHistoryRecord = {
   paidTotal?: number;
   /** 線上 Ledger 已付營業額（MOP），交班時由 ledgerToday.orderPaidMop 寫入。 */
   onlinePaidMop?: number;
+  /** 今日買貨成本（已付）快照（2026-09-08 交班明細加印；舊記錄冇，重打時不印此行）。 */
+  purchasePaid?: number;
   prepaid: number;
   refundCount: number;
   refundAmount: number;

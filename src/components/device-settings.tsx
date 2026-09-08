@@ -23,7 +23,7 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintContentToggles, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { withStoreScope } from "@/lib/pos/sync-flush";
 import { newDiscountId } from "@/lib/pos/discount";
@@ -40,6 +40,7 @@ import { restoreLedgerSession } from "@/lib/ledger/session";
 import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
+import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import {
   isCompanionConfigured,
   sendJobToCompanion,
@@ -130,13 +131,42 @@ export function DeviceSettings() {
     [localSettings.specTemplates, selectedTemplateId],
   );
 
+  // 新 device 初始化（2026-09-08 修）：本地未建立 localSettings 時，唔好即刻用
+  // default 鎖死——先嘗試由 DB（該店最新 device config 嘅 local_settings）讀返
+  // 該帳號已保存嘅樓層桌台等設定；DB 空／離線／冇登入店先 fallback default。
+  // 舊行為直接 savePosLocalSettings(defaultPosLocalSettings)，令新 iPad 一開設定頁
+  // 就變成 default 枱面，同 DB 已保存數據不一致。
   useEffect(() => {
     if (!cachedConfig) {
       saveDeviceConfig(defaultDeviceConfig);
     }
-    if (!cachedLocalSettings) {
-      savePosLocalSettings(defaultPosLocalSettings);
+    if (cachedLocalSettings) return;
+    let cancelled = false;
+    async function adoptSettingsFromDb() {
+      try {
+        const storeId = loadAuthSession()?.merchantId;
+        if (storeId) {
+          const res = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`);
+          const payload = (await res.json()) as { ok?: boolean; localSettings?: PosLocalSettings | null };
+          if (!cancelled && payload.ok && payload.localSettings) {
+            savePosLocalSettings(payload.localSettings);
+            setLocalSettings(payload.localSettings);
+            setStatus("已從雲端載入本店已保存設定。");
+            return;
+          }
+        }
+      } catch {
+        // 離線 / fetch 失敗 → fallback default
+      }
+      if (!cancelled) {
+        savePosLocalSettings(defaultPosLocalSettings);
+        setLocalSettings(defaultPosLocalSettings);
+      }
     }
+    void adoptSettingsFromDb();
+    return () => {
+      cancelled = true;
+    };
   }, [cachedConfig, cachedLocalSettings]);
 
   // 登入後自動取得 storeId 並寫入 config（取代以前手動輸入「門店 ID」）
@@ -405,6 +435,18 @@ export function DeviceSettings() {
       updatedAt: new Date().toISOString(),
       printers: current.printers.filter((printer) => printer.id !== printerId),
     }));
+  }
+
+  // ── 交班單打印機指定（2026-09-08）──
+  // 走同 updatePrinter 一樣嘅「草稿 + 保存」模式：淨係改 config state，
+  // 由頁面「保存」掣統一 saveDeviceConfig（本地 + 同步後台）。
+  function updateShiftPrinterSetting(printerId: string) {
+    setConfig((current) => ({
+      ...current,
+      updatedAt: new Date().toISOString(),
+      shiftPrinterId: printerId || undefined,
+    }));
+    setStatus(printerId ? "交班單打印機已更改，請按「保存」生效。" : "交班單打印機已還原為跟隨收據打印機，請按「保存」生效。");
   }
 
   // ── saveAll：合併保存（本機 + 同步後台）──
@@ -832,6 +874,25 @@ export function DeviceSettings() {
                   <PrinterEmptyState onAdd={() => setPrinterWizardOpen(true)} />
                 ) : (
                   <div className="grid gap-3">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-sm font-semibold text-slate-900">交班單打印機</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        指定結數交班明細由邊台打印機出紙；唔揀 = 跟隨收據打印機。已停用嘅打印機唔會出紙。
+                      </div>
+                      <select
+                        className="mt-2 w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        onChange={(event) => updateShiftPrinterSetting(event.target.value)}
+                        value={config.shiftPrinterId ?? ""}
+                      >
+                        <option value="">跟隨收據打印機（預設）</option>
+                        {config.printers.map((printer) => (
+                          <option key={printer.id} value={printer.id} disabled={!printer.enabled}>
+                            {printer.name}
+                            {!printer.enabled ? "（已停用）" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     {config.printers.map((printer) => (
                       <PrinterCardV2
                         key={printer.id}
@@ -860,6 +921,20 @@ export function DeviceSettings() {
 
               </div>
             </section>
+
+          <PrintContentTogglesSection
+            toggles={localSettings.printContentToggles}
+            onChange={(next) => {
+              // 即時寫 localSettings（每粒掣一撳即刻生效，唔等「保存」）。
+              // 真源：本機 `PosLocalSettings.printContentToggles`（per-terminal 設定，
+              // 唔跨店，見 types.ts JSDoc）。syncConfig 會照樣上 server（per-terminal
+              // 細節都會帶過去），pos-app.tsx loadRuntimeState 嘅 merge 已經將
+              // `printContentToggles` 加入 local-priority 清單，跨設備唔會互蓋。
+              const updated = { ...localSettings, printContentToggles: next };
+              setLocalSettings(updated);
+              savePosLocalSettings(updated);
+            }}
+          />
 
           <CompanionStatusCard />
 
@@ -2634,3 +2709,120 @@ export function DeviceSettings() {
     </div>
   );
 }
+
+// ── 打印開關設置（2026-09-08）────────────────────────────────────────
+//
+// 細粒度總開關：商家可逐項關閉「自動流程」嘅打印類型。手動掣（點餐介面「打印廚房單」/
+//「打印收據」、訂單列「重打整單」、打印中心「重打整單」、交班頁「重打交班單」等）永遠
+// 唔受呢啲開關影響，係用戶當下意圖，唔可以偷偷食掉。
+//
+// 範圍：
+//   廚房單        — 收銀落單／加單 + 線上單接單（bridge → pos）+ 自助單補建
+//   飲品標籤單    — 收銀落單／加單 + 線上單接單（label role 機）
+//   結帳收據      — 收銀結帳 + 免單 + 線上單完成+已付 + 到店付款
+//   退菜單        — 收銀退菜／退桌 + 線上單取消
+//   返結單        — 已結單退回可編輯
+//   自助機小票    — 自助點餐機（kiosk）落單即時印
+//   交班單        — closeShift
+//
+// 真源：`PosLocalSettings.printContentToggles`，per-terminal，唔跨店（見 types.ts）。
+// 立即寫 `setLocalSettings + savePosLocalSettings`（同常用備註一致），唔等設備頁
+//「保存」掣。
+type PrintContentToggleRow = {
+  key: keyof PrintContentToggles;
+  label: string;
+  description: string;
+};
+
+const PRINT_CONTENT_TOGGLE_ROWS: ReadonlyArray<PrintContentToggleRow> = [
+  {
+    key: "kitchen",
+    label: "廚房單",
+    description: "收銀落單／加單、線上單接單、自助單補建。對應分區打印機（zone role）。",
+  },
+  {
+    key: "label",
+    label: "飲品標籤單",
+    description: "收銀落單／加單、線上單接單。對應標籤打印機（label role，62mm 標籤卷）。",
+  },
+  {
+    key: "receipt",
+    label: "結帳收據",
+    description: "收銀結帳、免單、線上單完成+已付、到店付款。對應收據打印機。",
+  },
+  {
+    key: "void",
+    label: "退菜／退桌單",
+    description: "收銀退單項／全單退、退桌、線上單取消。影響分區 + 標籤打印機。",
+  },
+  {
+    key: "reopen",
+    label: "返結單",
+    description: "已結帳單退回可編輯狀態時出嘅修正單（含原因 + 操作人）。",
+  },
+  {
+    key: "kiosk",
+    label: "自助機小票",
+    description: "自助點餐機（kiosk）落單後即時印嘅顧客小票（本機排隊、唔上雲）。",
+  },
+  {
+    key: "shift",
+    label: "交班單",
+    description: "收工時出嘅交班明細單（交班單打印機或收據打印機 fallback）。",
+  },
+] as const;
+
+function PrintContentTogglesSection({
+  toggles,
+  onChange,
+}: {
+  toggles: PrintContentToggles;
+  onChange: (next: PrintContentToggles) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-base font-semibold text-slate-900">打印開關設置</div>
+          <div className="mt-1 text-sm text-slate-500">
+            關閉後對應類型嘅自動打印唔會出單（例如唔想出退菜單就熄「退菜／退桌單」）。
+            手動掣（打印廚房單、打印收據、重打整單、重打交班單等）永遠不受呢啲開關影響。
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 flex-1 overflow-auto pr-1">
+        <div className="grid gap-2">
+          {PRINT_CONTENT_TOGGLE_ROWS.map((row) => {
+            // 嚴格只接受 boolean：normalizePosLocalSettings 已保證 default 填好；
+            // 呢度用 `!== false` 係雙重保險，避免任何 undefined 導致 UI 顯示成「關」。
+            const enabled = toggles[row.key] !== false;
+            return (
+              <div
+                key={row.key}
+                className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-slate-900">{row.label}</div>
+                  <div className="mt-0.5 text-xs leading-relaxed text-slate-500">
+                    {row.description}
+                  </div>
+                </div>
+                <div className="shrink-0 pt-0.5">
+                  <AutoAcceptPill
+                    ariaLabel={`${row.label}打印`}
+                    enabled={enabled}
+                    label={enabled ? "自動打印" : "已關閉"}
+                    onChange={(next) => onChange({ ...toggles, [row.key]: next })}
+                    size="sm"
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+

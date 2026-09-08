@@ -40,6 +40,11 @@ function nowText() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 細粒度開關判斷抽離到 `@/lib/print-toggles`（避免 print-jobs ↔ ledger-pos-bridge 循環）。
+// 保持本地 import + 對外 re-export，舊有 import site 唔使改。
+import { isPrintContentEnabled } from "@/lib/print-toggles";
+export { isPrintContentEnabled };
+
 /**
  * 列印任務狀態標準化。
  *
@@ -347,6 +352,8 @@ export function printKioskReceiptForOrder(order: PosOrder): number {
 }
 
 export function printVoidForLedgerOrder(ledgerOrderId: string, reason = "線上訂單已取消"): number {
+  // 退菜單總開關（2026-09-08）：線上單取消同樣跟 void toggle。手動重打唔會經呢度。
+  if (!isPrintContentEnabled("void")) return 0;
   const order = findPosOrderForLedger(ledgerOrderId);
   if (!order || order.items.length === 0) return 0;
   const jobs = buildVoidPrintJobsForOrder(order, reason);
@@ -358,6 +365,8 @@ export async function printReceiptForLedgerOrder(
   ledgerOrderId: string,
   options?: { paymentMethod?: string; networkOnline?: boolean },
 ): Promise<number> {
+  // 結帳收據總開關（2026-09-08）：線上單完成+已付 / 到店付款都跟 receipt toggle。
+  if (!isPrintContentEnabled("receipt")) return 0;
   let order = findPosOrderForLedger(ledgerOrderId);
   if (!order) return 0;
 

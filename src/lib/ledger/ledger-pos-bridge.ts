@@ -13,6 +13,7 @@ import {
   savePrintJobs,
 } from "@/lib/storage";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import { isPrintContentEnabled } from "@/lib/print-toggles";
 
 /**
  * 契約 M3 / M8：線上單**唔** mirror 入 POS DB（loadOrders / saveOrders）。
@@ -177,12 +178,22 @@ function buildPrintJobsForItems(options: {
   tableName: string;
   items: OrderItem[];
 }): PrintJob[] {
+  // 細粒度開關（2026-09-08）：商家可獨立關閉「廚房單」或「飲品標籤單」。
+  // 兩個都熄咗 → 直接返空（唔 throw，呢個係預期行為，唔可以當錯誤彈 toast）。
+  const kitchenOn = isPrintContentEnabled("kitchen");
+  const labelOn = isPrintContentEnabled("label");
+  if (!kitchenOn && !labelOn) return [];
+
   const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
   const timestamp = new Date().toISOString();
 
-  const kitchenTargets = configuredPrinters.filter(
-    (printer) => printer.role === "zone" || printer.role === "label",
-  );
+  // 根據 toggles 過濾：kitchen off → 跳過 zone role；label off → 跳過 label role。
+  // 兩者都係同一條「新單出單」路徑產出，所以共用一份 printer list，按 role 過濾。
+  const kitchenTargets = configuredPrinters.filter((printer) => {
+    if (printer.role === "zone") return kitchenOn;
+    if (printer.role === "label") return labelOn;
+    return false;
+  });
   if (kitchenTargets.length === 0) {
     if (options.items.length > 0) {
       // 唔再靜默：生產環境也要讓上層 catch 到、顯示 toast。

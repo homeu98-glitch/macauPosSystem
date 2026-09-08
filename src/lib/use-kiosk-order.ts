@@ -7,7 +7,7 @@ import { mockBootstrap } from "@/lib/mock-data";
 import { loadBootstrapCache, saveBootstrapCache } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { fetchKioskSettings } from "@/lib/pos/kiosk-settings";
-import { printKioskReceiptForOrder } from "@/lib/print-jobs";
+import { printKioskReceiptForOrder, isPrintContentEnabled } from "@/lib/print-jobs";
 import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
 import {
   buildKioskOrder,
@@ -391,7 +391,8 @@ export function useKioskOrder() {
 
       // 顧客小票：自助點餐機（kiosk）落單後即時印，本機排隊、唔上雲（同上，避免收銀端再印一次）。
       // 掃碼單（scan）唔喺度印 —— 由收銀台部機印（規格 4：掃碼單嘅小票由收銀端打印機出）。
-      if (!isScanLink) {
+      // 細粒度開關（2026-09-08）：kiosk toggle 關閉 → 唔出小票。訂單照樣落，唔可以偷偷食掉。
+      if (!isScanLink && isPrintContentEnabled("kiosk")) {
         try {
           printKioskReceiptForOrder(order);
         } catch {

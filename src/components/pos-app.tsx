@@ -41,6 +41,7 @@ import {
   buildLabelPrintJobs,
   buildReceiptPrintJobs,
   buildVoidPrintJobsForOrder,
+  isPrintContentEnabled,
   normalizePrintJobStatus,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
@@ -54,6 +55,7 @@ import {
   clearLegacyMembersCache,
   loadOperatingMode,
   saveOperatingMode,
+  hasPosLocalSettings,
   loadPosLocalSettings,
   loadQuickCompletedMinutes,
   loadOrders,
@@ -903,11 +905,18 @@ export function PosApp() {
           );
           for (const o of selfOrdersNeedKitchen) {
             const storeName = bootstrap?.storeName ?? "門店";
-            const jobs = [
-              ...buildKitchenPrintJobs(o, { ticketType: "normal", storeName }),
-              ...buildLabelPrintJobs(o, { ticketType: "normal", storeName }),
-            ];
-            if (o.source === "scan" && bootstrap) {
+            // 細粒度開關（2026-09-08）：kitchen + label + kiosk 各自獨立。
+            const kitchenOn = isPrintContentEnabled("kitchen");
+            const labelOn = isPrintContentEnabled("label");
+            const kioskOn = isPrintContentEnabled("kiosk");
+            const jobs: PrintJob[] = [];
+            if (kitchenOn) {
+              jobs.push(...buildKitchenPrintJobs(o, { ticketType: "normal", storeName }));
+            }
+            if (labelOn) {
+              jobs.push(...buildLabelPrintJobs(o, { ticketType: "normal", storeName }));
+            }
+            if (o.source === "scan" && bootstrap && kioskOn) {
               jobs.push(...buildKioskReceiptPrintJobs(o, bootstrap));
             }
             appendPrintJobs(jobs);
@@ -979,11 +988,24 @@ export function PosApp() {
         // 故同 floors 一樣：本地優先，唔畀 server 蓋走。
         // 其餘 field 用 server 版本（server 優先，確保後台改嘅全局設定生效）。
         const local = loadPosLocalSettings();
+        // 新 device 初始化（2026-09-08 修）：本地 store-scope key 未建立時，
+        // normalizePosLocalSettings 會把 floors 補成 default（永遠有 2 層），
+        // 舊判斷 `local.floors?.length ?` 因此永遠 truthy → DB 已保存嘅樓層桌台
+        // 被本地 default 蓋走（新 iPad 登入後枱面同 DB 唔一致嘅根因）。
+        // 改為：本地真係未建立設定（hasPosLocalSettings() === false）→ floors 優先
+        // 用 DB 該店最新 device config 已保存嘅 floors（server 無先係 default）；
+        // 本地有 key（曾經編輯／已採納）先本地優先，保留 per-terminal 編輯真源語義。
+        const localHasSettings = hasPosLocalSettings();
         const merged: PosLocalSettings = {
           ...payload.localSettings,
-          floors: local.floors?.length ? local.floors : payload.localSettings.floors,
+          floors:
+            localHasSettings && local.floors?.length ? local.floors : payload.localSettings.floors,
           printTemplates: local.printTemplates,
           onlineOrderSettings: local.onlineOrderSettings,
+          // 2026-09-08：細粒度打印開關同 `printTemplates` / `onlineOrderSettings` 一樣，
+          // 屬於 per-terminal 設定（呢部收銀機嘅出單行為），唔應該被 server 默認值蓋走。
+          // 見 PosLocalSettings.printContentToggles JSDoc。
+          printContentToggles: local.printContentToggles,
         };
         savePosLocalSettings(merged);
       }
@@ -1029,12 +1051,19 @@ export function PosApp() {
         );
         if (!hasKitchen) {
           const storeName = bootstrap?.storeName ?? "門店";
-          const jobs = [
-            ...buildKitchenPrintJobs(order, { ticketType: "normal", storeName }),
-            ...buildLabelPrintJobs(order, { ticketType: "normal", storeName }),
-          ];
+          // 細粒度開關（2026-09-08）：kitchen + label + kiosk 各自獨立。
+          const kitchenOn = isPrintContentEnabled("kitchen");
+          const labelOn = isPrintContentEnabled("label");
+          const kioskOn = isPrintContentEnabled("kiosk");
+          const jobs: PrintJob[] = [];
+          if (kitchenOn) {
+            jobs.push(...buildKitchenPrintJobs(order, { ticketType: "normal", storeName }));
+          }
+          if (labelOn) {
+            jobs.push(...buildLabelPrintJobs(order, { ticketType: "normal", storeName }));
+          }
           // 掃碼單冇本機打印機 → 收銀端補印顧客小票
-          if (order.source === "scan" && bootstrap) {
+          if (order.source === "scan" && bootstrap && kioskOn) {
             jobs.push(...buildKioskReceiptPrintJobs(order, bootstrap));
           }
           appendPrintJobs(jobs);
@@ -2015,9 +2044,14 @@ export function PosApp() {
       createdAt: updatedOrder.updatedAt,
     };
 
-    const voidPrintJobs = buildVoidPrintJobsForOrder(authoritativeOrder, reason, {
-      itemsOverride: [{ ...target, quantity: voidQty }],
-    });
+    // 退菜單總開關（2026-09-08）：設備設置 → 打印開關設置可獨立關閉。關閉後退菜唔出廚房
+    // 退菜單，只推事件（報表／庫存仍會記錄）。手動掣（重打整單）唔受影響。
+    const voidJobs = isPrintContentEnabled("void")
+      ? buildVoidPrintJobsForOrder(authoritativeOrder, reason, {
+          itemsOverride: [{ ...target, quantity: voidQty }],
+        })
+      : [];
+    const voidPrintJobs = voidJobs;
 
     persistPrintJobs([...voidPrintJobs, ...printJobs]);
     // A3（docs/56）：有啟用打印機但退菜 0 張 job 入隊 → 廚房退菜單唔會打印，提示用家。
@@ -2140,7 +2174,10 @@ export function PosApp() {
         createdAt: updatedAt,
       });
     });
-    const voidPrintJobs = buildVoidPrintJobsForOrder(activeOrder, reason);
+    // 退菜單總開關（2026-09-08）：同 voidItem，全單退菜亦跟同一粒掣。
+    const voidPrintJobs = isPrintContentEnabled("void")
+      ? buildVoidPrintJobsForOrder(activeOrder, reason)
+      : [];
     persistPrintJobs([...voidPrintJobs, ...printJobs]);
     pushEvents([
       {
@@ -2218,7 +2255,10 @@ export function PosApp() {
         createdAt: updatedAt,
       });
     });
-    const voidPrintJobs = buildVoidPrintJobsForOrder(order, reasonText, { itemsOverride: sentItems });
+    // 退菜單總開關（2026-09-08）：退桌同樣跟 void toggle。
+    const voidPrintJobs = isPrintContentEnabled("void")
+      ? buildVoidPrintJobsForOrder(order, reasonText, { itemsOverride: sentItems })
+      : [];
     // 推整單取消事件，server 標為已退/已取消；隨後由本地 orders 移除該單，枱位自動回落空閒
     const cancelEvent: QueueEvent = {
       id: uid("evt"),
@@ -2550,9 +2590,20 @@ export function PosApp() {
     }
   }
 
-  /** 「自動打印」開關：即刻寫入本機設定並更新 state（切換後即時生效）。 */
+  /** 「自動打印」開關：即刻寫入本機設定並更新 state（切換後即時生效）。
+   * 2026-09-08 改：呢個掣係結帳區一鍵全開／全關嘅快捷，會同時翻 kitchen + label + receipt
+   * 三個細粒度開關，唔再直接寫死 `autoPrint`（衍生值）。要逐項控制請去設備設置 →
+   * 打印開關設置。 */
   function setAutoPrint(next: boolean) {
-    const nextSettings = { ...localSettings, autoPrint: next };
+    const nextSettings = {
+      ...localSettings,
+      printContentToggles: {
+        ...localSettings.printContentToggles,
+        kitchen: next,
+        label: next,
+        receipt: next,
+      },
+    };
     // savePosLocalSettings 會 dispatch "pos-local-settings-changed"，
     // 本頁 useEffect 收到會 setLocalSettings；下面再樂觀更新一次等掣即刻有反應。
     savePosLocalSettings(nextSettings);
@@ -2568,11 +2619,18 @@ export function PosApp() {
   /**
    * 「自動打印」開關嘅即時值（`PosLocalSettings.autoPrint`，預設 true）。
    *
+   * 2026-09-08 改：**真正嘅閘門**已下沉到 `printContentToggles` 嘅逐 kind 細粒度開關，
+   * 呢個 `autoPrint` 變成「廚房單 + 標籤單 + 結帳收據」三種嘅**衍生聚合**，主要服務結帳區
+   * 嘅 `AutoAcceptPill`（一鍵全開／全關快捷）。細粒度開關由設備設置頁獨立控制。
+   *
    * 由 `localSettings` state 推導而唔係每次 `loadPosLocalSettings()`：state 喺
    * `savePosLocalSettings()` dispatch 嘅 "pos-local-settings-changed" 之後即刻更新，
    * 所以開關一撳，`sendToKitchen()` / `printReceipt()` 下一刻就用新值（即時生效）。
    */
-  const autoPrintEnabled = localSettings.autoPrint ?? true;
+  const autoPrintEnabled =
+    localSettings.printContentToggles.kitchen &&
+    localSettings.printContentToggles.label &&
+    localSettings.printContentToggles.receipt;
 
   async function sendToKitchen(options?: { silent?: boolean; forceNewOrder?: boolean }) {
     if (isReadOnlySettled) return null;
@@ -2654,18 +2712,26 @@ export function PosApp() {
     const ticketType: "normal" | "addon" = treatAsAddOn ? "addon" : "normal";
     // 「自動打印」開關（點餐介面 · 堂食／外賣模式）：關閉時落單／加單**一張都唔出**，
     // 只落 ORDER_CREATED／ORDER_UPDATED 事件 —— 廚房單靠「打印廚房單」掣手動補打。
-    const nextPrintJobs = autoPrintEnabled
+    // 2026-09-08 改：拆成 kitchen + label 兩個細粒度開關，由設備設置獨立控制。
+    // 任何一邊熄咗都唔出對應類型嘅單。
+    const kitchenOn = isPrintContentEnabled("kitchen");
+    const labelOn = isPrintContentEnabled("label");
+    const nextPrintJobs = kitchenOn || labelOn
       ? [
-          ...buildKitchenPrintJobs(order, {
-            ticketType,
-            storeName: bootstrap.storeName ?? "門店",
-            itemsOverride: printTargetItems,
-          }),
-          ...buildLabelPrintJobs(order, {
-            ticketType,
-            storeName: bootstrap.storeName ?? "門店",
-            itemsOverride: printTargetItems,
-          }),
+          ...(kitchenOn
+            ? buildKitchenPrintJobs(order, {
+                ticketType,
+                storeName: bootstrap.storeName ?? "門店",
+                itemsOverride: printTargetItems,
+              })
+            : []),
+          ...(labelOn
+            ? buildLabelPrintJobs(order, {
+                ticketType,
+                storeName: bootstrap.storeName ?? "門店",
+                itemsOverride: printTargetItems,
+              })
+            : []),
         ]
       : [];
 
@@ -2673,8 +2739,8 @@ export function PosApp() {
 
       // A3（docs/56）：有啟用打印機但呢張單 0 張 job 入隊 → 單據唔會打印，彈警告提示。
       // 兩種成因：① 冇任何 zone/label 打印機；② 菜品 printerGroup 對唔中任何 printer.zoneId。
-      // 「自動打印」關閉時係**預期**唔出單，唔好彈警告騷擾收銀。
-      if (autoPrintEnabled && nextPrintJobs.length === 0 && !options?.silent) {
+      // 細粒度開關關閉（kitchen && label 都熄咗）係**預期**唔出單，唔好彈警告騷擾收銀。
+      if ((kitchenOn || labelOn) && nextPrintJobs.length === 0 && !options?.silent) {
         const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
         setToast({
           tone: "warning",
@@ -3051,8 +3117,9 @@ export function PosApp() {
 
   function printReceipt(order: PosOrder) {
     if (!bootstrap) return;
-    // 「自動打印」開關關閉：結帳唔自動出收據（要單據就撳「打印收據」手動出）。
-    if (!autoPrintEnabled) return;
+    // 結帳收據總開關（2026-09-08）：設備設置 → 打印開關設置可獨立關閉。關閉後結帳唔出收據。
+    // 手動掣（點餐介面「打印收據」）唔受呢個影響，照樣可出單。
+    if (!isPrintContentEnabled("receipt")) return;
     const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap);
     if (nextPrintJobs.length === 0) {
       if (process.env.NODE_ENV !== "production") {
@@ -4320,7 +4387,7 @@ export function PosApp() {
                   return (
                   <button
                     key={item.id}
-                    className={`flex h-36 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
+                    className={`flex min-h-36 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
                       soldOut ? "opacity-60" : "hover:-translate-y-0.5 hover:border-orange-300"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     disabled={isReadOnlySettled}
@@ -4328,7 +4395,10 @@ export function PosApp() {
                     type="button"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-900" title={item.name}>
+                      <div
+                        className="line-clamp-3 whitespace-normal break-words text-sm font-semibold leading-snug text-slate-900"
+                        title={item.name}
+                      >
                         {item.name}
                       </div>
                       {hasRemainingBadge ? (

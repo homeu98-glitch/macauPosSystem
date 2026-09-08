@@ -6,6 +6,7 @@ import { formatMacauDateTime } from "@/lib/format";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
+import { isPrintContentEnabled } from "@/lib/print-toggles";
 import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
 import { orderMatchesReportRange } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
@@ -13,6 +14,7 @@ import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
 import {
   loadAuthSession,
+  loadBootstrapCache,
   loadDeviceConfig,
   loadOrders,
   loadPrintJobs,
@@ -38,7 +40,7 @@ import {
   serverCloseShift,
   serverOpenShift,
 } from "@/lib/shift-sync";
-import { PrintJob, PosOrder, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, PrintJob, PosOrder, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 
 function summarizeClosedOrders(orders: PosOrder[]) {
@@ -121,6 +123,101 @@ function interpretCashDiff(raw: string) {
   return { ok: true as const, filled: true, diff: n };
 }
 
+// ── 交班明細快照（2026-09-08）──
+// 結數交班 step3「打印預覽」與實際打印共用同一份快照：進入 step3 時固化，
+// 之後「打印／跳過 → 完成交班」都用地呢份數，保證 預覽 == 紙本 == 交班記錄。
+type ShiftDetailSnapshot = {
+  /** 交班時間（進入預覽一刻固化，交班記錄同紙本都用呢個）。 */
+  closedAt: string;
+  /** 單號序號：`YYYY-MM-DD-NN`（NN = 當日第幾班）。 */
+  shiftNo: string;
+  storeName: string;
+  employee: string;
+  openedAt?: string;
+  store: {
+    count: number;
+    revenue: number;
+    receivableTotal: number;
+    paidTotal: number;
+    prepaid: number;
+    refundCount: number;
+    refundAmount: number;
+  };
+  /** 會員通線上（Ledger）——未登入 / 冇資料時 null（紙本成組唔印）。 */
+  online: {
+    orderCount: number;
+    paidMop: number;
+    balancePaidMop: number;
+    inStorePaidMop: number;
+  } | null;
+  payments: { method: string; receivable: number; paid: number; count: number }[];
+  /** 今日買貨成本——冇做成本記錄時 null。 */
+  purchase: { paid: number; unpaid: number } | null;
+  cash: { expected: number; actual?: number; diff?: number };
+  // 冇 G 區（待同步/技術狀態唔上紙本），但歷史記錄仍要記，跟住快照走。
+  pendingEvents: number;
+  failedEvents: number;
+  skippedEvents: number;
+  pendingPrints: number;
+  note: string;
+};
+
+/** 快照 → ESC/POS 文本行（打印 job items）。預覽（結構化渲染）同呢度同源。 */
+function shiftDetailToLines(data: ShiftDetailSnapshot): string[] {
+  return [
+    `單號：交班單 ${data.shiftNo}`,
+    data.storeName ? `店舖：${data.storeName}` : "",
+    `班次員工：${data.employee}`,
+    `交班時間：${formatMacauDateTime(data.closedAt)}`,
+    data.openedAt ? `開工時間：${formatMacauDateTime(data.openedAt)}` : "",
+    "— 店內（今日）—",
+    `已結帳訂單：${data.store.count} 張`,
+    `營業額：${formatMoney(data.store.revenue)}`,
+    `應收金額合計（線下 POS）：${formatMoney(data.store.receivableTotal)}`,
+    `實收金額合計（線下 POS）：${formatMoney(data.store.paidTotal)}`,
+    `線上已支付（店內單）：${formatMoney(data.store.prepaid)}`,
+    `退款：${data.store.refundCount} 張 / ${formatMoney(data.store.refundAmount)}`,
+    ...(data.online
+      ? [
+          "— 會員通線上（今日）—",
+          `線上訂單：${data.online.orderCount} 張`,
+          `已付線上營業額：${formatMoney(data.online.paidMop)}`,
+          `餘額扣點：${formatMoney(data.online.balancePaidMop)}`,
+          `到店／貨到付款：${formatMoney(data.online.inStorePaidMop)}`,
+          `線上線下合計（實收金額合計）：${formatMoney(data.store.paidTotal + data.online.paidMop)}`,
+        ]
+      : []),
+    "— 支付方式分項（線下 POS）—",
+    ...(data.payments.length === 0
+      ? ["（今日暫無已結帳線下訂單）"]
+      : data.payments.map(
+          (bucket) =>
+            `${bucket.method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
+        )),
+    ...(data.purchase
+      ? [
+          `今日買貨成本（已付）：${formatMoney(data.purchase.paid)}`,
+          ...(data.purchase.unpaid > 0 ? [`（未付 ${formatMoney(data.purchase.unpaid)} 不計入）`] : []),
+        ]
+      : []),
+    "— 現金箱核對 —",
+    `應收現金：${formatMoney(data.cash.expected)}`,
+    typeof data.cash.actual === "number" ? `實收現金：${formatMoney(data.cash.actual)}` : "",
+    typeof data.cash.diff === "number" ? `現金差額：${formatMoney(data.cash.diff)}` : "",
+    data.note ? `備註：${data.note}` : "",
+  ].filter(Boolean);
+}
+
+/**
+ * 交班單打印機：DeviceConfig.shiftPrinterId 指定優先；
+ * 指定機被停用／刪除 → fallback 第一台啟用收據打印機 → 任何一台啟用打印機。
+ */
+function pickShiftPrinter(config: DeviceConfig): DevicePrinterConfig | null {
+  const enabled = config.printers.filter((printer) => printer.enabled);
+  const specified = config.shiftPrinterId ? enabled.find((printer) => printer.id === config.shiftPrinterId) : undefined;
+  return specified ?? enabled.find((printer) => printer.role === "receipt") ?? enabled[0] ?? null;
+}
+
 export function ShiftPage() {
   const [shift, setShift] = useState(() => loadShiftState());
   // 「開工備註」draft：只喺未開工時顯示，開工時寫入 openingNote 後清空；
@@ -128,8 +225,10 @@ export function ShiftPage() {
   const [shiftNote, setShiftNote] = useState("");
   const [status, setStatus] = useState("開工後可於下班時做結數交班並打印交班單。");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // 結數交班彈窗兩步：1 = 核對金額（填差額）→ 2 = 二次確認（交班後不可復原）
-  const [confirmStep, setConfirmStep] = useState<1 | 2>(1);
+  // 結數交班彈窗三步（2026-09-08）：1 = 核對金額（填差額）→ 2 = 二次確認 → 3 = 交班明細打印預覽（打印／跳過）。
+  // step3 先實際交班：打印 = 出紙並完成；跳過 = 唔打印直接完成。
+  const [confirmStep, setConfirmStep] = useState<1 | 2 | 3>(1);
+  const [previewData, setPreviewData] = useState<ShiftDetailSnapshot | null>(null);
   const [closingDiff, setClosingDiff] = useState("");
   const [closingNote, setClosingNote] = useState("");
   const [closingShift, setClosingShift] = useState(false);
@@ -276,69 +375,124 @@ export function ShiftPage() {
     [shiftHistory],
   );
 
+  /**
+   * 重打交班單（2026-09-08 改新「交班明細」格式）：
+   * 表頭（單號/店舖/員工/時間）+ 店內 + 線上 + 支付分項 + 買貨 + 現金箱核對 + 備註。
+   * 冇 G 區（待同步/技術狀態唔上紙本）。舊記錄缺 shiftNo/storeName/purchasePaid 時相關行自動唔印。
+   */
   function buildShiftPrintLines(row: (typeof shiftHistory)[number]) {
     const lines = [
+      row.shiftNo ? `單號：交班單 ${row.shiftNo}` : "",
+      row.storeName ? `店舖：${row.storeName}` : "",
+      `班次員工：${row.employeeName ?? row.employeeAccount ?? "未記錄"}`,
       `交班時間：${formatMacauDateTime(row.closedAt)}`,
       row.openedAt ? `開工時間：${formatMacauDateTime(row.openedAt)}` : "",
+      "— 店內（今日）—",
       `已結帳訂單：${row.settledCount} 張`,
       `營業額：${formatMoney(row.revenue)}`,
       `應收金額合計（線下 POS）：${formatMoney(row.receivableTotal ?? 0)}`,
       `實收金額合計（線下 POS）：${formatMoney(row.paidTotal ?? 0)}`,
-      `線上線下合計：${formatMoney((row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0))}`,
       `線上已支付：${formatMoney(row.prepaid)}`,
       `退款：${row.refundCount} 張 / ${formatMoney(row.refundAmount)}`,
-      ...purchaseLines(),
+      ...((row.onlinePaidMop ?? 0) > 0
+        ? [
+            "— 會員通線上（今日）—",
+            `已付線上營業額：${formatMoney(row.onlinePaidMop ?? 0)}`,
+            `線上線下合計：${formatMoney((row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0))}`,
+          ]
+        : []),
+      "— 支付方式分項 —",
+      ...(row.paymentBreakdown && Object.keys(row.paymentBreakdown).length > 0
+        ? Object.entries(row.paymentBreakdown)
+            .map(([method, value]) => ({
+              method,
+              receivable: typeof value === "number" ? value : value.receivable,
+              paid: typeof value === "number" ? value : value.paid,
+              count: typeof value === "number" ? 1 : value.count,
+            }))
+            .sort((a, b) => b.paid - a.paid)
+            .map(
+              (bucket) =>
+                `${bucket.method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
+            )
+        : ["（今日暫無已結帳線下訂單）"]),
+      ...(typeof row.purchasePaid === "number"
+        ? [`今日買貨成本（已付）：${formatMoney(row.purchasePaid)}`]
+        : []),
+      "— 現金箱核對 —",
       `應收現金：${formatMoney(row.expectedCash)}`,
       typeof row.actualCash === "number" ? `實收現金：${formatMoney(row.actualCash)}` : "",
       typeof row.cashDifference === "number" ? `現金差額：${formatMoney(row.cashDifference)}` : "",
-      `待同步事件：${row.pendingEvents}` +
-        (row.failedEvents ? ` · 永久失敗 ${row.failedEvents}` : "") +
-        (row.skippedEvents ? ` · 無歸屬（唔會上雲）${row.skippedEvents}` : ""),
-      `待補傳打印：${row.pendingPrints}`,
       row.closingNote ? `備註：${row.closingNote}` : "",
     ];
-    // 支付方式分項（每行寫「支付方式 應收 / 實收 / N 張」）。兼容舊版 value = number 嘅交班記錄。
-    if (row.paymentBreakdown && Object.keys(row.paymentBreakdown).length > 0) {
-      lines.push("— 支付方式分項 —");
-      Object.entries(row.paymentBreakdown)
-        .map(([method, value]) => ({
-          method,
-          receivable: typeof value === "number" ? value : value.receivable,
-          paid: typeof value === "number" ? value : value.paid,
-          count: typeof value === "number" ? 1 : value.count,
-        }))
-        .sort((a, b) => b.paid - a.paid)
-        .forEach((bucket) => {
-          lines.push(
-            `${bucket.method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
-          );
-        });
-    }
     return lines.filter(Boolean);
   }
 
-  function purchaseLines(): string[] {
-    if (!purchaseToday?.summary) return [];
-    return [
-      `今日買貨成本（已付）：${formatMoney(purchaseToday.summary.paid)}`,
-      `今日買貨成本（未付，不計入）：${formatMoney(purchaseToday.summary.unpaid)}`,
-    ];
+  /**
+   * 進入 step3 打印預覽時固化快照：closedAt 用當下時間、單號按當日班次序號生成。
+   * 之後「打印／跳過 → closeShift」都用同一份，保證 預覽 == 紙本 == 交班記錄。
+   */
+  function buildShiftDetailSnapshot(closedAt: string, diffInput: string, noteInput: string): ShiftDetailSnapshot {
+    const parsed = interpretCashDiff(diffInput);
+    const diffValue = parsed.ok && parsed.filled && parsed.diff !== 0 ? parsed.diff : undefined;
+    const actualValue =
+      typeof diffValue === "number" ? Math.round((expectedCash + diffValue) * 100) / 100 : undefined;
+    const day = closedAt.slice(0, 10);
+    const seq = shiftHistory.filter((row) => row.closedAt.slice(0, 10) === day).length + 1;
+    return {
+      closedAt,
+      shiftNo: `${day}-${String(seq).padStart(2, "0")}`,
+      storeName: loadBootstrapCache()?.storeName ?? "",
+      employee:
+        authSession?.name ?? authSession?.account ?? shift.employeeName ?? shift.employeeAccount ?? "未記錄",
+      openedAt: shift.openedAt,
+      store: {
+        count: summary.count,
+        revenue: summary.revenue,
+        receivableTotal: summary.receivableTotal,
+        paidTotal: summary.paidTotal,
+        prepaid: summary.prepaid,
+        refundCount: summary.refundCount,
+        refundAmount: summary.refundAmount,
+      },
+      online: ledgerToday
+        ? {
+            orderCount: ledgerToday.orderCount,
+            paidMop: ledgerToday.orderPaidMop,
+            balancePaidMop: ledgerToday.orderBalancePaidMop,
+            inStorePaidMop: ledgerToday.orderInStorePaidMop,
+          }
+        : null,
+      payments: Object.entries(summary.paymentBreakdown)
+        .map(([method, bucket]) => ({ method, receivable: bucket.receivable, paid: bucket.paid, count: bucket.count }))
+        .sort((a, b) => b.paid - a.paid),
+      purchase: purchaseToday?.summary
+        ? { paid: purchaseToday.summary.paid, unpaid: purchaseToday.summary.unpaid }
+        : null,
+      cash: { expected: expectedCash, actual: actualValue, diff: diffValue },
+      pendingEvents: queueSummary.pendingEvents,
+      failedEvents: queueSummary.failedEvents,
+      skippedEvents: queueSummary.skippedEvents,
+      pendingPrints: queueSummary.pendingPrints,
+      note: noteInput.trim(),
+    };
   }
 
   function reprintShiftRecord(row: (typeof shiftHistory)[number]) {
     if (reprintingShiftId) return;
     setReprintingShiftId(row.id);
-    const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.role === "receipt");
-    const printerName = receiptPrinter?.name ?? "收據打印機";
+    // 2026-09-08：重打都用「交班單打印機」指定；冇指定 fallback 收據打印機。
+    const shiftPrinter = pickShiftPrinter(deviceConfig);
+    const printerName = shiftPrinter?.name ?? "收據打印機";
     const now = new Date().toISOString();
     const printJob: PrintJob = {
       id: uid("print"),
       orderId: row.id,
-      orderNo: `交班單重打 ${row.closedAt.slice(0, 10)}`,
+      orderNo: row.shiftNo ? `交班單重打 ${row.shiftNo}` : `交班單重打 ${row.closedAt.slice(0, 10)}`,
       tableName: "",
       ticketType: "normal",
       printerGroup: "receipt",
-      printerId: receiptPrinter?.id,
+      printerId: shiftPrinter?.id,
       printerName,
       items: buildShiftPrintLines(row).map((line) => ({ name: line, quantity: 1 })),
       status: "pending",
@@ -491,28 +645,28 @@ export function ShiftPage() {
     }
   }
 
-  async function closeShift(diffInput: string, noteInput: string) {
+  /**
+   * 結數交班（2026-09-08 改）：由 step3「打印預覽」嘅「打印／跳過」觸發。
+   * @param detail  step3 固化嘅交班明細快照——預覽 == 紙本 == 交班記錄 同源；
+   *                冇傳（防禦路徑）就用當下 state 現場建一份。
+   * @param print   true = 交班並入打印隊列（由「交班單打印機」出紙）；false = 跳過打印直接完成交班。
+   */
+  async function closeShift(diffInput: string, noteInput: string, detail?: ShiftDetailSnapshot, print = true) {
     if (closingShift) return;
     setClosingShift(true);
-    const parsedDiff = interpretCashDiff(diffInput);
-    if (!parsedDiff.ok) {
-      setStatus("現金差額格式不正確，請返回上一步重新輸入。");
-      setClosingShift(false);
-      return;
-    }
+    const snapshot = detail ?? buildShiftDetailSnapshot(new Date().toISOString(), diffInput, noteInput);
+    const now = snapshot.closedAt;
     // 差額語義：留空／0 = 無落差（唔寫入實收現金）；非 0 = 有落差（負 = 少收、正 = 多收）。
     // 系統推算「實收現金 = 應收現金 + 差額」，但系統金額一概唔會因差額而改動——
     // 差額只作為記錄 + 打印用途（錯數不可經此「修正」系統數，只可備註說明）。
-    const diffValue = parsedDiff.filled && parsedDiff.diff !== 0 ? parsedDiff.diff : undefined;
-    const actualValue =
-      typeof diffValue === "number" ? Math.round((expectedCash + diffValue) * 100) / 100 : undefined;
-    const closingNoteText = noteInput.trim();
+    const diffValue = snapshot.cash.diff;
+    const actualValue = snapshot.cash.actual;
+    const closingNoteText = snapshot.note;
     const ok = await forceSyncBeforeClose();
     if (!ok) {
       setClosingShift(false);
       return;
     }
-    const now = new Date().toISOString();
     const historyRecord = {
       id: `shift-${now}`,
       employeeAccount: authSession?.account,
@@ -523,23 +677,34 @@ export function ShiftPage() {
       closingNote: closingNoteText,
       actualCash: actualValue,
       cashDifference: diffValue,
-      settledCount: summary.count,
-      revenue: summary.revenue,
+      /** 交班單序號（重打認單用）。 */
+      shiftNo: snapshot.shiftNo,
+      /** 交班當刻店名快照（重打印表頭用）。 */
+      storeName: snapshot.storeName || undefined,
+      settledCount: snapshot.store.count,
+      revenue: snapshot.store.revenue,
       /** 線下 POS 應收金額合計（菜品原價合計 + 服務費 + 稅）。 */
-      receivableTotal: summary.receivableTotal,
+      receivableTotal: snapshot.store.receivableTotal,
       /** 線下 POS 實收金額合計（order.total 合計）。 */
-      paidTotal: summary.paidTotal,
+      paidTotal: snapshot.store.paidTotal,
       /** 線上 Ledger 實收金額（orderPaidMop）。線上應收暫時未拉 listMerchantOrders，留 null。 */
-      onlinePaidMop: ledgerToday?.orderPaidMop ?? 0,
-      prepaid: summary.prepaid,
-      refundCount: summary.refundCount,
-      refundAmount: summary.refundAmount,
-      expectedCash,
-      paymentBreakdown: summary.paymentBreakdown,
-      pendingEvents: queueSummary.pendingEvents,
-      failedEvents: queueSummary.failedEvents,
-      skippedEvents: queueSummary.skippedEvents,
-      pendingPrints: queueSummary.pendingPrints,
+      onlinePaidMop: snapshot.online?.paidMop ?? 0,
+      prepaid: snapshot.store.prepaid,
+      refundCount: snapshot.store.refundCount,
+      refundAmount: snapshot.store.refundAmount,
+      /** 今日買貨成本（已付）快照（重打交班明細用）。 */
+      purchasePaid: snapshot.purchase?.paid,
+      expectedCash: snapshot.cash.expected,
+      paymentBreakdown: Object.fromEntries(
+        snapshot.payments.map((bucket) => [
+          bucket.method,
+          { receivable: bucket.receivable, paid: bucket.paid, count: bucket.count },
+        ]),
+      ),
+      pendingEvents: snapshot.pendingEvents,
+      failedEvents: snapshot.failedEvents,
+      skippedEvents: snapshot.skippedEvents,
+      pendingPrints: snapshot.pendingPrints,
     };
     const closeSummary = historyRecord as unknown as Record<string, unknown>;
     const next = {
@@ -585,120 +750,99 @@ export function ShiftPage() {
     saveShiftHistory(nextHistory);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: finalNext } }));
 
-    const receiptPrinter = deviceConfig.printers.find((printer) => printer.enabled && printer.role === "receipt");
-    const printerName = receiptPrinter?.name ?? "收據打印機";
+    // ── 打印（2026-09-08）──
+    // 打印機：DeviceConfig.shiftPrinterId 指定優先（設備設定 → 打印機 → 交班單打印機），
+    // 指定機不可用 → fallback 收據打印機。「跳過」時整段唔入隊列，直接完成交班。
+    const shiftPrinter = pickShiftPrinter(deviceConfig);
+    const printerName = shiftPrinter?.name ?? "收據打印機";
 
-    const lines = [
-      `交班時間：${formatMacauDateTime(now)}`,
-      shift.openedAt ? `開工時間：${formatMacauDateTime(shift.openedAt)}` : "",
-      "— 店內（今日）—",
-      `已結帳訂單：${summary.count} 張`,
-      `營業額：${formatMoney(summary.revenue)}`,
-      `應收金額合計（線下 POS）：${formatMoney(summary.receivableTotal)}`,
-      `實收金額合計（線下 POS）：${formatMoney(summary.paidTotal)}`,
-      `線上已支付（店內單）：${formatMoney(summary.prepaid)}`,
-      `退款：${summary.refundCount} 張 / ${formatMoney(summary.refundAmount)}`,
-      ...(ledgerToday
-        ? [
-            "— 會員通線上（今日）—",
-            `線上訂單：${ledgerToday.orderCount} 張`,
-            `已付線上營業額：${formatMoney(ledgerToday.orderPaidMop)}`,
-            `餘額扣點：${formatMoney(ledgerToday.orderBalancePaidMop)}`,
-            `到店／貨到付款：${formatMoney(ledgerToday.orderInStorePaidMop)}`,
-            `線上線下合計（實收金額合計）：${formatMoney(summary.paidTotal + ledgerToday.orderPaidMop)}`,
-          ]
-        : []),
-      "— 支付方式分項（線下 POS）—",
-      ...(Object.entries(summary.paymentBreakdown).length === 0
-        ? ["（今日暫無已結帳線下訂單）"]
-        : Object.entries(summary.paymentBreakdown)
-            .sort(([, a], [, b]) => b.paid - a.paid)
-            .map(
-              ([method, bucket]) =>
-                `${method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
-            )),
-      ...purchaseLines(),
-      `應收現金：${formatMoney(expectedCash)}`,
-      typeof actualValue === "number" ? `實收現金：${formatMoney(actualValue)}` : "",
-      typeof diffValue === "number" ? `現金差額：${formatMoney(diffValue)}` : "",
-      `待同步事件：${queueSummary.pendingEvents}` +
-        (queueSummary.failedEvents ? ` · 永久失敗 ${queueSummary.failedEvents}` : "") +
-        (queueSummary.skippedEvents ? ` · 無歸屬（唔會上雲）${queueSummary.skippedEvents}` : ""),
-      `待補傳打印：${queueSummary.pendingPrints}`,
-      closingNoteText ? `備註：${closingNoteText}` : "",
-    ].filter(Boolean);
+    // 紙本內容 = step3 預覽同一份快照（shiftDetailToLines）；冇 G 區（待同步/技術狀態唔上紙本）。
+    const lines = shiftDetailToLines(snapshot);
 
-    const printJob: PrintJob = {
-      id: uid("print"),
-      orderId: `shift-${now}`,
-      orderNo: "交班單",
-      tableName: "",
-      ticketType: "normal",
-      printerGroup: "receipt",
-      printerId: receiptPrinter?.id,
-      printerName,
-      items: lines.map((line) => ({ name: line, quantity: 1 })),
-      status: "pending",
-      createdAt: now,
-    };
+    if (print) {
+      // 交班單總開關（2026-09-08）：商家可關閉「交班單」自動打印。
+      // ⚠️ 重打交班單（reprintShiftRecord）係**手動**掣，唔受呢個影響，
+      // 即使熄咗都可以喺交班歷史撳「重打」補印。
+      if (!isPrintContentEnabled("shift")) {
+        setStatus("已交班（交班單打印已關閉，如需紙本請到交班歷史「重打」）。");
+        setClosingShift(false);
+        return;
+      }
+      const printJob: PrintJob = {
+        id: uid("print"),
+        orderId: `shift-${now}`,
+        orderNo: `交班單 ${snapshot.shiftNo}`,
+        tableName: "",
+        ticketType: "normal",
+        printerGroup: "receipt",
+        printerId: shiftPrinter?.id,
+        printerName,
+        items: lines.map((line) => ({ name: line, quantity: 1 })),
+        status: "pending",
+        createdAt: now,
+      };
 
-    const nextPrintJobs = [printJob, ...loadPrintJobs()];
-    savePrintJobs(nextPrintJobs);
+      const nextPrintJobs = [printJob, ...loadPrintJobs()];
+      savePrintJobs(nextPrintJobs);
 
-    const event: QueueEvent = {
-      id: uid("evt"),
-      type: "PRINT_JOB_CREATED",
-      entityId: printJob.id,
-      payload: printJob,
-      status: "pending",
-      createdAt: now,
-    };
+      const event: QueueEvent = {
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: printJob.id,
+        payload: printJob,
+        status: "pending",
+        createdAt: now,
+      };
 
-    // 🛡️ 跨店隔離 L1：交班單打印事件 stamp 當前店。
-    const [stampedEvent] = withStoreScope([event]);
+      // 🛡️ 跨店隔離 L1：交班單打印事件 stamp 當前店。
+      const [stampedEvent] = withStoreScope([event]);
 
-    const nextQueue = enqueueEvents(loadQueue(), [stampedEvent]);
-    saveQueue(nextQueue);
+      const nextQueue = enqueueEvents(loadQueue(), [stampedEvent]);
+      saveQueue(nextQueue);
 
-    if (readNetworkOnline()) {
-      // 🛡️ 跨店隔離 L4：呢條係第三條直接 flush 路徑（獨立於 doFlush / forceSyncBeforeClose），
-      // 以前成條 nextQueue 照推 → 外店 / legacy 事件被當前 merchantId 蓋章上雲。必須過濾。
-      // docs/111：淨推「呢一條」交班單事件 —— 以前成條 queue 照推，分分鐘超過 server
-      // 200 條上限（413 → 成批失敗，交班單反而上唔到雲），亦唔應該順便推晒其他人嘅事件。
-      const scoped = filterEventsForCurrentStore([stampedEvent]);
-      if (scoped.length > 0) {
-        try {
-          const res = await fetch("/api/pos/sync", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              events: scoped,
-              storeId: resolveStoreId(),
-            }),
-          });
-          // 一定要 check res.ok：以前唔 check 就照標 synced，server 拒收（400/500）嗰陣
-          // 交班單其實上唔到雲，但因為變咗 synced 就永遠唔會再試。
-          if (res.ok) {
-            const scopedIds = new Set(scoped.map((item) => item.id));
-            if (isOutboxV2Enabled()) {
-              saveQueue(loadQueue().filter((item) => !scopedIds.has(item.id)));
-            } else {
-              saveQueue(
-                nextQueue.map((item) => (scopedIds.has(item.id) ? { ...item, status: "synced" } : item)),
-              );
+      if (readNetworkOnline()) {
+        // 🛡️ 跨店隔離 L4：呢條係第三條直接 flush 路徑（獨立於 doFlush / forceSyncBeforeClose），
+        // 以前成條 nextQueue 照推 → 外店 / legacy 事件被當前 merchantId 蓋章上雲。必須過濾。
+        // docs/111：淨推「呢一條」交班單事件 —— 以前成條 queue 照推，分分鐘超過 server
+        // 200 條上限（413 → 成批失敗，交班單反而上唔到雲），亦唔應該順便推晒其他人嘅事件。
+        const scoped = filterEventsForCurrentStore([stampedEvent]);
+        if (scoped.length > 0) {
+          try {
+            const res = await fetch("/api/pos/sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                events: scoped,
+                storeId: resolveStoreId(),
+              }),
+            });
+            // 一定要 check res.ok：以前唔 check 就照標 synced，server 拒收（400/500）嗰陣
+            // 交班單其實上唔到雲，但因為變咗 synced 就永遠唔會再試。
+            if (res.ok) {
+              const scopedIds = new Set(scoped.map((item) => item.id));
+              if (isOutboxV2Enabled()) {
+                saveQueue(loadQueue().filter((item) => !scopedIds.has(item.id)));
+              } else {
+                saveQueue(
+                  nextQueue.map((item) => (scopedIds.has(item.id) ? { ...item, status: "synced" } : item)),
+                );
+              }
             }
+          } catch {
+            // 保留待補傳
           }
-        } catch {
-          // 保留待補傳
         }
       }
     }
 
     setStatus(
-      "已交班，交班單已加入打印隊列，狀態已重置為待開工。" +
+      (print
+        ? `已交班，交班明細（${snapshot.shiftNo}）已加入打印隊列，狀態已重置為待開工。`
+        : `已交班（跳過打印，單號 ${snapshot.shiftNo}），狀態已重置為待開工。`) +
         (serverCloseFailed ? "（⚠️ 收工狀態未能同步雲端，將自動重試，其他裝置可能仍顯示已開工。）" : "（雲端已同步，其他裝置會顯示已收工。）"),
     );
     setConfirmOpen(false);
+    setPreviewData(null);
     setClosingShift(false);
   }
 
@@ -828,6 +972,8 @@ export function ShiftPage() {
 
   // —— 結數交班彈窗派生值（step 1 填寫時即時推算；step 2 二次確認顯示同一批數）——
   const parsedClosingDiff = interpretCashDiff(closingDiff);
+  // 交班單打印機：設備設定 → 打印機 → 交班單打印機（shiftPrinterId）；冇指定 fallback 收據打印機。
+  const shiftPrinter = pickShiftPrinter(deviceConfig);
   const closingDiffInvalid = !parsedClosingDiff.ok;
   const closingDiffValue =
     parsedClosingDiff.ok && parsedClosingDiff.filled && parsedClosingDiff.diff !== 0
@@ -1182,11 +1328,19 @@ export function ShiftPage() {
 
       {confirmOpen ? (
         <ResponsiveModal
-          title={confirmStep === 1 ? "結數交班 · 核對金額" : "二次確認 · 交班後無法更改"}
+          title={
+            confirmStep === 1
+              ? "結數交班 · 核對金額"
+              : confirmStep === 2
+                ? "二次確認 · 交班後無法更改"
+                : "交班明細 · 打印預覽"
+          }
           description={
             confirmStep === 1
               ? "系統已自動彙總今日所有金額。請先點算現金箱：若與應收現金有落差，喺下面輸入差額；冇落差可直接進行下一步。"
-              : "交班後本班次會寫入歷史並切回「未開工」，金額與差額記錄即鎖定、不可再更改。請最後核對下列數字。"
+              : confirmStep === 2
+                ? "交班後本班次會寫入歷史並切回「未開工」，金額與差額記錄即鎖定、不可再更改。請最後核對下列數字。"
+                : "以下為固定格式交班明細（內容同版面不可編輯）。按「打印」由指定打印機出紙並完成交班；按「跳過」唔打印直接完成交班。"
           }
           actions={
             confirmStep === 1 ? (
@@ -1208,7 +1362,7 @@ export function ShiftPage() {
                   下一步：二次確認
                 </button>
               </>
-            ) : (
+            ) : confirmStep === 2 ? (
               <>
                 <button
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
@@ -1219,20 +1373,54 @@ export function ShiftPage() {
                   返回修改
                 </button>
                 <button
-                  aria-busy={closingShift}
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                   disabled={closingShift}
-                  onClick={() => void closeShift(closingDiff, closingNote)}
+                  onClick={() => {
+                    // 進入 step3 嗰刻固化快照：之後打印/跳過/交班記錄都用同一份。
+                    setPreviewData(buildShiftDetailSnapshot(new Date().toISOString(), closingDiff, closingNote));
+                    setConfirmStep(3);
+                  }}
                   type="button"
                 >
-                  {closingShift ? "交班中…" : "確認，交班並打印"}
+                  下一步：打印預覽
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  disabled={closingShift}
+                  onClick={() => setConfirmStep(2)}
+                  type="button"
+                >
+                  返回修改
+                </button>
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+                  disabled={closingShift}
+                  onClick={() => void closeShift(closingDiff, closingNote, previewData ?? undefined, false)}
+                  type="button"
+                >
+                  跳過
+                </button>
+                <button
+                  aria-busy={closingShift}
+                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  disabled={closingShift || !shiftPrinter}
+                  onClick={() => void closeShift(closingDiff, closingNote, previewData ?? undefined, true)}
+                  type="button"
+                >
+                  {closingShift ? "處理中…" : "打印"}
                 </button>
               </>
             )
           }
           bodyClassName="grid gap-4"
           onClose={() => {
-            if (!closingShift) setConfirmOpen(false);
+            if (!closingShift) {
+              setConfirmOpen(false);
+              setPreviewData(null);
+            }
           }}
           widthClassName="max-w-2xl"
         >
@@ -1324,7 +1512,7 @@ export function ShiftPage() {
                 </div>
               ) : null}
             </>
-          ) : (
+          ) : confirmStep === 2 ? (
             <>
               <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
                 <div className="font-semibold">此操作無法復原</div>
@@ -1399,6 +1587,180 @@ export function ShiftPage() {
                     ? `${queueSummary.skippedEvents} 筆無歸屬資料（外店／未登入時產生）唔會上雲，已跳過。`
                     : null}
                   {ledgerTodayError ? ledgerTodayError : null}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              {!shiftPrinter ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  未偵測到可用打印機：可到「設備設定 → 打印機」添加／啟用並指定「交班單打印機」，或者按「跳過」不打印直接完成交班。
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  將由「{shiftPrinter.name}」出紙（更改：設備設定 → 打印機 → 交班單打印機）。
+                </div>
+              )}
+
+              {queueSummary.pendingEvents > 0 || queueSummary.failedEvents > 0 ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {queueSummary.pendingEvents > 0
+                    ? `⚠ 仲有 ${queueSummary.pendingEvents} 筆資料未同步上雲，交班前會先強制同步。`
+                    : null}
+                  {queueSummary.failedEvents > 0
+                    ? `⚠ ${queueSummary.failedEvents} 筆資料永久同步失敗（已跳過，唔會阻住交班）。`
+                    : null}
+                </div>
+              ) : null}
+
+              {previewData ? (
+                <div className="mx-auto w-full max-w-[360px] rounded-2xl border-2 border-dashed border-slate-300 bg-white p-5 font-mono text-[13px] leading-relaxed text-slate-900">
+                  <div className="text-center">
+                    <div className="text-base font-semibold tracking-[0.3em]">交班明細</div>
+                    {previewData.storeName ? (
+                      <div className="mt-1 text-xs text-slate-500">{previewData.storeName}</div>
+                    ) : null}
+                    <div className="text-xs text-slate-500">單號：交班單 {previewData.shiftNo}</div>
+                  </div>
+
+                  <div className="mt-3 space-y-0.5 border-t border-dashed border-slate-300 pt-2">
+                    <div>班次員工：{previewData.employee}</div>
+                    {previewData.openedAt ? (
+                      <div>開工時間：{formatMacauDateTime(previewData.openedAt)}</div>
+                    ) : null}
+                    <div>交班時間：{formatMacauDateTime(previewData.closedAt)}</div>
+                  </div>
+
+                  <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
+                    <div className="font-semibold text-slate-700">— 店內（今日）—</div>
+                    <div className="mt-1 space-y-0.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>已結帳訂單</span>
+                        <span>{previewData.store.count} 張</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>營業額</span>
+                        <span>{formatMoney(previewData.store.revenue)}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>應收金額合計</span>
+                        <span>{formatMoney(previewData.store.receivableTotal)}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>實收金額合計</span>
+                        <span>{formatMoney(previewData.store.paidTotal)}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>線上已支付（店內單）</span>
+                        <span>{formatMoney(previewData.store.prepaid)}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>退款</span>
+                        <span>
+                          {previewData.store.refundCount} 張 / {formatMoney(previewData.store.refundAmount)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {previewData.online ? (
+                    <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
+                      <div className="font-semibold text-slate-700">— 會員通線上（今日）—</div>
+                      <div className="mt-1 space-y-0.5">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span>線上訂單</span>
+                          <span>{previewData.online.orderCount} 張</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span>已付線上營業額</span>
+                          <span>{formatMoney(previewData.online.paidMop)}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span>餘額扣點</span>
+                          <span>{formatMoney(previewData.online.balancePaidMop)}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span>到店／貨到付款</span>
+                          <span>{formatMoney(previewData.online.inStorePaidMop)}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 font-semibold">
+                          <span>線上線下合計</span>
+                          <span>{formatMoney(previewData.store.paidTotal + previewData.online.paidMop)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
+                    <div className="font-semibold text-slate-700">— 支付方式分項 —</div>
+                    {previewData.payments.length === 0 ? (
+                      <div className="mt-1 text-slate-500">（今日暫無已結帳線下訂單）</div>
+                    ) : (
+                      <div className="mt-1 space-y-0.5">
+                        {previewData.payments.map((bucket) => (
+                          <div key={bucket.method} className="flex items-baseline justify-between gap-2">
+                            <span>{bucket.method}</span>
+                            <span className="text-right">
+                              {formatMoney(bucket.receivable)} / {formatMoney(bucket.paid)}
+                              <span className="text-slate-400"> · {bucket.count} 張</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {previewData.purchase ? (
+                    <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>今日買貨成本（已付）</span>
+                        <span>{formatMoney(previewData.purchase.paid)}</span>
+                      </div>
+                      {previewData.purchase.unpaid > 0 ? (
+                        <div className="text-xs text-slate-500">
+                          （未付 {formatMoney(previewData.purchase.unpaid)} 不計入）
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3 border-t-2 border-slate-400 pt-2">
+                    <div className="font-semibold text-slate-700">— 現金箱核對 —</div>
+                    <div className="mt-1 flex items-baseline justify-between gap-2">
+                      <span>應收現金</span>
+                      <span className="text-base font-semibold">{formatMoney(previewData.cash.expected)}</span>
+                    </div>
+                    {typeof previewData.cash.actual === "number" ? (
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>實收現金（盤點）</span>
+                        <span>{formatMoney(previewData.cash.actual)}</span>
+                      </div>
+                    ) : null}
+                    {typeof previewData.cash.diff === "number" ? (
+                      <div
+                        className={`flex items-baseline justify-between gap-2 font-semibold ${
+                          previewData.cash.diff < 0 ? "text-red-700" : "text-emerald-700"
+                        }`}
+                      >
+                        <span>現金差額（{previewData.cash.diff < 0 ? "少收" : "多收"}）</span>
+                        <span>{formatMoney(previewData.cash.diff)}</span>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {previewData.note ? (
+                    <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
+                      <div className="font-semibold text-slate-700">備註</div>
+                      <div className="mt-0.5 whitespace-pre-wrap text-slate-700">{previewData.note}</div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 border-t border-dashed border-slate-300 pt-3 text-xs text-slate-500">
+                    <div>交班人簽名：＿＿＿＿＿＿</div>
+                    <div>接更人簽名：＿＿＿＿＿＿</div>
+                  </div>
+
+                  <div className="mt-3 text-center text-[11px] text-slate-400">固定格式 · 不可編輯</div>
                 </div>
               ) : null}
             </>

@@ -240,6 +240,11 @@ export interface DeviceConfig {
   terminalName: string;
   storeId: string;
   printers: DevicePrinterConfig[];
+  /**
+   * 交班單指定打印機（2026-09-08）：結數交班明細由邊台打印機出紙。
+   * 空缺 / 指定機被停用或刪除 = fallback 跟隨第一台啟用嘅收據打印機（role === "receipt"）。
+   */
+  shiftPrinterId?: string;
   updatedAt: string;
 }
 
@@ -487,12 +492,60 @@ export interface PosLocalSettings {
    */
   autoPrint: boolean;
   /**
+   * 「打印開關設置」section 用嘅細粒度總開關（2026-09-08 引入）。
+   *
+   * 每個 kind 對應一種打印**內容類型**，由商家喺設備設置頁按需關閉。覆蓋舊版單一
+   * `autoPrint` 開關（舊版只控制廚房單 + 標籤單 + 結帳收據，新版可逐項控制）。
+   *
+   * - `true`（**預設**）：自動流程（落單/加單/結帳/退菜/退桌/返結/線上單接單+取消+完成
+   *   / 自助機小票 / 交班單）照常產生對應打印任務。
+   * - `false`：對應自動流程**唔會**產生打印任務（廚房完全唔出單 / 客人收唔到收據等）。
+   *
+   * 手動掣永遠優於呢啲開關：點餐介面「打印廚房單」/「打印收據」、訂單列「重打整單」、
+   * 打印中心「重打整單」、交班頁「重打交班單」等**手動觸發**嘅入口唔受開關影響，
+   * 開關熄咗都要照印（手動 = 用戶當下意圖，唔可以偷偷食掉，見 pos-app.tsx
+   * `printKitchenTicketNow` / `printReceiptNow` / `reprintOrder`）。
+   *
+   * 真源同 `autoPrint` 一樣：本機 `PosLocalSettings`（store scope），唔跨店。
+   */
+  printContentToggles: PrintContentToggles;
+  /**
    * 毛利（估）手動設定嘅「毛利率 %」。報表「毛利（估）」格子嘅 edit 掣輸入。
    * - `null`（預設）= 用系統估算（營業額 − 進貨成本）；
    * - 設咗數值（例如 50 = 50%）= 毛利估算 = 營業額 × 毛利率%。
    * 按 store scope 存落 PosLocalSettings（呢部收銀機嘅本地設定，唔跨店）。
    */
   grossProfitMarginPct?: number | null;
+}
+
+/**
+ * 打印開關細粒度類型（按「**印咩內容**」分，而非「邊度觸發」分）。每個 kind 對應一個
+ * toggle，false = 自動流程唔出呢種單。
+ */
+export type PrintContentKind =
+  /** 廚房分區單（zone 機）：收銀落單／加單、線上單接單、自助單補建共用 */
+  | "kitchen"
+  /** 飲品標籤單（label 機）：收銀落單／加單 */
+  | "label"
+  /** 結帳收據（receipt 機）：收銀結帳、免單、線上單完成+已付、到店付款 */
+  | "receipt"
+  /** 退菜／退桌單：收銀退菜、退桌、線上單取消（廚房 + 標籤機） */
+  | "void"
+  /** 返結單：已結單退回可編輯時出到分區機 + 標籤機 */
+  | "reopen"
+  /** 自助點餐機顧客小票：kiosk 落單後本機即時印嘅 1 張小票 */
+  | "kiosk"
+  /** 交班單：closeShift 出嘅交班明細（指定打印機） */
+  | "shift";
+
+export interface PrintContentToggles {
+  kitchen: boolean;
+  label: boolean;
+  receipt: boolean;
+  void: boolean;
+  reopen: boolean;
+  kiosk: boolean;
+  shift: boolean;
 }
 
 export interface OrderItem {
