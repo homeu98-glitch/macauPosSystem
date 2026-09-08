@@ -24,6 +24,12 @@ export function mapRpcErrorMessage(message: string): string {
   if (lower.includes("invalid transition")) return "目前狀態不可執行此操作。";
   if (lower.includes("order already closed")) return "訂單已結束，無法再修改。";
   if (lower.includes("delivery dispatch active")) return "派送進行中，請先在 Ledger Web 處理。";
+  // merchant_resolve_order_change 常見錯誤（顯示友善文案，勿直接丟英文）
+  if (lower.includes("no pending change request"))
+    return "沒有待確認的申請（可能已被另一台核准，或客人已撤回）。";
+  if (lower.includes("not authorized")) return "無權限處理此申請。";
+  if (lower.includes("order not found")) return "找不到訂單。";
+  if (lower.includes("invalid action")) return "操作無效（只能同意或拒絕）。";
   return message;
 }
 
@@ -68,16 +74,28 @@ export async function setOrderPaidInStore(orderId: string) {
 }
 
 /**
- * 商家回應客人的取消申請：把 change_request_status 設為 declined，令訂單恢復正常流程。
+ * 商家回應客人的取消／改單申請（Ledger RPC `merchant_resolve_order_change`）。
  *
- * 注意：RPC 名稱 `update_change_request_status` 與參數 `p_status` 需與 Ledger 後端確認。
- * 若 Ledger 端實際命名不同（例如 `clear_change_request` / `respond_change_request`），
- * 只需改此函式的 fn 與 args 即可，其餘 UI 不用動。
+ * - 傳 "approve"：取消申請 → 訂單變 cancelled（餘額單會沖正）；改單申請 → 套用新明細。
+ * - 傳 "reject"：狀態不變，申請欄位清空，訂單恢復正常流程。
+ *
+ * ⚠️ 沒有 `update_change_request_status` 這支 RPC；也**不要**用
+ * `update_order_status(..., 'cancelled')` 來「同意客人取消」（那是商戶自己取消，
+ * 不會沖正）。店員 session（anon + JWT）即可，不要 service_role。
+ *
+ * 成功回傳 jsonb 大致為：`{ status, resolved: "approve"|"reject", print_kind: "cancel"|"modify"|null }`。
+ * 誰先按誰生效，後按會拿到 `no pending change request`。
  */
-export async function respondToCancelRequest(orderId: string, status: "declined" | "approved") {
-  return callRpc("update_change_request_status", {
+export type ResolveOrderChangeResult = {
+  status?: string;
+  resolved?: string;
+  print_kind?: string | null;
+};
+
+export async function resolveOrderChange(orderId: string, action: "approve" | "reject") {
+  return callRpc<ResolveOrderChangeResult>("merchant_resolve_order_change", {
     p_order_id: orderId,
-    p_status: status,
+    p_action: action,
   });
 }
 

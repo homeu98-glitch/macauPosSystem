@@ -13,6 +13,7 @@ import {
   loadAuthSession,
   loadBootstrapCache,
   loadDeviceConfig,
+  loadOrders,
   loadPosLocalSettings,
   loadQueue,
   loadSoldOutState,
@@ -103,6 +104,11 @@ export function DeviceSettings() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(cachedLocalSettings?.specTemplates?.[0]?.id ?? "");
   const [devicePrinterTab, setDevicePrinterTab] = useState<"zones" | "printers">("zones");
   const [printerWizardOpen, setPrinterWizardOpen] = useState(false);
+  // 桌台刪除 tombstone（2026-09-09）：session 級「已刪枱 id」清單。
+  // saveTablesLocal 嘅 merge 會保留「bootstrap 獨有」枱——被刪嘅枱喺按「保存」推上
+  // server（pos_bootstrap_config）＋更新本地 bootstrap cache 之前，仍然存在嗰兩處；
+  // 冇 tombstone 嘅話 merge 會即場將佢復活，刪除永遠無效（「桌台刪唔走」根因之一）。
+  const [deletedTableIds, setDeletedTableIds] = useState<Set<string>>(() => new Set());
   const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
   const [newCompNotePreset, setNewCompNotePreset] = useState("");
   const [newReopenReason, setNewReopenReason] = useState("");
@@ -211,6 +217,36 @@ export function DeviceSettings() {
     void tryAutoPairCompanion();
   }, []);
 
+  // ── 桌台刪除（2026-09-09）──
+  // 之前完全冇刪除入口；就算手動刪，saveTablesLocal 嘅「bootstrap 獨有枱保留」merge
+  // 都會令被刪嘅枱復活。所以刪除要做三件事：
+  // ① 關聯資料防護：有進行中訂單嘅枱唔畀刪（否則訂單懸空——枱面總覽 map 唔返、
+  //    結帳搵唔到枱）。已結帳／退款嘅歷史單唔阻刪除，訂單內 tableId 只係歷史快照。
+  // ② 本地 localSettings.floors 即時移除（draft，按「保存」先真正落 localStorage）。
+  // ③ 記入 tombstone，等 saveTablesLocal 嘅 merge 唔會由 bootstrap 復活。
+  const ACTIVE_TABLE_ORDER_STATUSES = new Set<string>(["draft", "sent_to_kitchen", "paid", "reopened"]);
+
+  function removeTable(floorId: string, tableId: string) {
+    const floor = localSettings.floors.find((item) => item.id === floorId);
+    const table = floor?.tables.find((item) => item.id === tableId);
+    if (!table) return;
+    const activeCount = loadOrders().filter(
+      (order) => order.tableId === tableId && ACTIVE_TABLE_ORDER_STATUSES.has(order.status),
+    ).length;
+    if (activeCount > 0) {
+      setStatus(`無法刪除「${table.name}」：這張桌有 ${activeCount} 張進行中訂單，請先結帳或取消訂單。`);
+      return;
+    }
+    setLocalSettings((current) => ({
+      ...current,
+      floors: current.floors.map((item) =>
+        item.id === floorId ? { ...item, tables: item.tables.filter((t) => t.id !== tableId) } : item,
+      ),
+    }));
+    setDeletedTableIds((current) => new Set(current).add(tableId));
+    setStatus(`已刪除桌子「${table.name}」。按「保存」後會同步刪走掃碼區與其他設備的共享桌台。`);
+  }
+
   async function saveTablesLocal() {
     // 同步「樓層與桌台」嘅枱去 bootstrap.tables（掃碼區 QR / 手機 / kiosk 讀嘅共享真源），
     // 唔好只留喺 localSettings.floors。用 merge（本地枱優先、bootstrap 獨有枱保留），
@@ -228,9 +264,13 @@ export function DeviceSettings() {
     const localIds = new Set(localTables.map((t) => t.id));
     const cached = loadBootstrapCache();
     if (cached) {
+      // tombstone（deletedTableIds）：被用戶刪除嘅枱喺 push 前仍在 bootstrap cache／
+      // server，merge 時必須扣走，否則「bootstrap 獨有枱保留」會令刪除即場復活。
       const mergedTables = [
         ...localTables,
-        ...filterReopenTempTables(cached.tables).filter((t) => !localIds.has(t.id)),
+        ...filterReopenTempTables(cached.tables).filter(
+          (t) => !localIds.has(t.id) && !deletedTableIds.has(t.id),
+        ),
       ];
       const mergedBootstrap: PosBootstrap = { ...cached, tables: mergedTables };
       saveBootstrapCache(mergedBootstrap);
@@ -2173,6 +2213,13 @@ export function DeviceSettings() {
                           placeholder="座位數"
                           value={table.capacity ?? ""}
                         />
+                        <button
+                          className="rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50"
+                          onClick={() => removeTable(floor.id, table.id)}
+                          type="button"
+                        >
+                          刪除
+                        </button>
                       </div>
                     ))}
                   </div>

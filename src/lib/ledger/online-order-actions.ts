@@ -1,4 +1,4 @@
-import { hasPendingCancelRequest, LedgerOnlineOrder, paymentModeLabel, rawLedgerStatus } from "@/lib/ledger/order-mapper";
+import { hasPendingChangeRequest, LedgerOnlineOrder, paymentModeLabel, rawLedgerStatus } from "@/lib/ledger/order-mapper";
 
 export type OnlineOrderActionKey =
   | "accept"
@@ -8,8 +8,8 @@ export type OnlineOrderActionKey =
   | "mark_delivering"
   | "complete"
   | "mark_paid_in_store"
-  | "confirm_cancel"
-  | "decline_cancel";
+  | "approve_change"
+  | "reject_change";
 
 export type OnlineOrderActionTone = "orange" | "slate" | "amber" | "emerald" | "violet" | "sky";
 
@@ -36,7 +36,8 @@ export function ledgerStatusBadgeLabel(status: string, fulfillmentType: string):
 }
 
 export function getPrimaryOnlineOrderAction(order: LedgerOnlineOrder): OnlineOrderAction | null {
-  if (hasPendingCancelRequest(order)) return null;
+  // 有待確認申請（取消／改單）時，先隱藏一般接單／推進狀態按鈕，避免同審核搶操作。
+  if (hasPendingChangeRequest(order)) return null;
 
   const raw = rawLedgerStatus(order.status);
 
@@ -110,7 +111,7 @@ export function getPrimaryOnlineOrderAction(order: LedgerOnlineOrder): OnlineOrd
 }
 
 export function getSecondaryOnlineOrderActions(order: LedgerOnlineOrder): OnlineOrderAction[] {
-  if (hasPendingCancelRequest(order)) return [];
+  if (hasPendingChangeRequest(order)) return [];
   if (rawLedgerStatus(order.status) === "pending") {
     return [{ key: "reject", label: "拒單", tone: "slate", nextStatus: "cancelled", successMessage: "已拒絕訂單。" }];
   }
@@ -118,27 +119,28 @@ export function getSecondaryOnlineOrderActions(order: LedgerOnlineOrder): Online
 }
 
 /**
- * 客人已發出取消請求（change_request_type=cancel + change_request_status=pending/requested）時，
- * POS 收銀需要能夠「同意取消」或「拒絕取消」。這組按鈕取代原本被隱藏的接受／拒絕。
+ * 客人已發出取消／改單申請（`change_request_type` = 'cancel' | 'modify'）時，
+ * POS 收銀需要能夠「同意」或「拒絕」。這組按鈕取代原本被隱藏的接單／推進狀態。
  *
- * - confirm_cancel：把訂單推進到 cancelled（與現有「拒單」走同一條 update_order_status 路徑）。
- * - decline_cancel：通知 Ledger 商家拒絕取消，清除 change_request，訂單恢復正常流程。
+ * - approve_change：打 Ledger RPC `merchant_resolve_order_change(p_action: "approve")`。
+ *   取消 → 訂單 cancelled（餘額沖正）；改單 → 套用新明細。
+ * - reject_change：打同一支 RPC 傳 "reject"，狀態不變、申請清空。
  */
-export function getCancelRequestActions(order: LedgerOnlineOrder): OnlineOrderAction[] {
-  if (!hasPendingCancelRequest(order)) return [];
+export function getChangeRequestActions(order: LedgerOnlineOrder): OnlineOrderAction[] {
+  if (!hasPendingChangeRequest(order)) return [];
+  const isCancel = String(order.changeRequestType ?? "").toLowerCase() === "cancel";
   return [
     {
-      key: "confirm_cancel",
-      label: "同意取消",
+      key: "approve_change",
+      label: isCancel ? "同意取消" : "同意修改",
       tone: "slate",
-      nextStatus: "cancelled",
-      successMessage: "已同意客人取消，訂單已取消。",
+      successMessage: isCancel ? "已同意客人取消，訂單已取消。" : "已同意客人修改，已套用新明細。",
     },
     {
-      key: "decline_cancel",
-      label: "拒絕取消",
+      key: "reject_change",
+      label: "拒絕",
       tone: "violet",
-      successMessage: "已拒絕取消申請，訂單繼續處理。",
+      successMessage: "已拒絕申請，訂單繼續處理。",
     },
   ];
 }

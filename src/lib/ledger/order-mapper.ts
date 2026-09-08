@@ -19,7 +19,10 @@ export type LedgerOrderRow = {
   first_item_name?: string | null;
   merchant_id?: string | null;
   change_request_type?: string | null;
-  change_request_status?: string | null;
+  change_request_at?: string | null;
+  // 注意：Ledger `orders` **沒有** `change_request_status` 欄位。
+  // 待確認申請嘅判斷只看 `change_request_type`（'cancel' | 'modify' | null）。
+  change_request_payload?: unknown;
   /**
    * 折扣欄位（defensive）：Ledger 後端未必有呢啲 key，但我哋先喺 type 預埋，
    * 等 Ledger 加咗對應 SQL view / column 時即刻可顯示。RPC 可能嘅常見命名：
@@ -58,7 +61,7 @@ export type LedgerOnlineOrder = {
   itemSummary?: string;
   itemCount?: number;
   changeRequestType?: string;
-  changeRequestStatus?: string;
+  changeRequestAt?: string;
 };
 
 export function mapFulfillmentToTab(fulfillmentType: string | null | undefined): Exclude<LedgerOrderTab, "all"> {
@@ -116,7 +119,7 @@ export function mapLedgerOrderRow(row: LedgerOrderRow): LedgerOnlineOrder {
     itemSummary: row.first_item_name ?? undefined,
     itemCount: itemCount > 0 ? itemCount : undefined,
     changeRequestType: row.change_request_type ?? undefined,
-    changeRequestStatus: row.change_request_status ?? undefined,
+    changeRequestAt: row.change_request_at ?? undefined,
   };
 }
 
@@ -202,15 +205,26 @@ export function paymentModeLabel(mode?: string): string {
   return mode ?? "--";
 }
 
-export function hasPendingCancelRequest(order: Pick<LedgerOnlineOrder, "changeRequestType" | "changeRequestStatus">): boolean {
-  const type = String(order.changeRequestType ?? "").toLowerCase();
-  const status = String(order.changeRequestStatus ?? "").toLowerCase();
-  if (!type || !status) return false;
-  if (status !== "pending" && status !== "requested") return false;
-  return type === "cancel" || type.includes("cancel");
+/**
+ * 客人待確認嘅**取消**申請。
+ *
+ * Ledger `orders` 只有 `change_request_type`（'cancel' | 'modify' | null），
+ * **沒有** `change_request_status` —— 申請存在即代表待商戶同意／拒絕；
+ * 拒絕／同意／撤回都係將 `change_request_type` 清返 null（經 Realtime UPDATE 推嚟）。
+ */
+export function hasPendingCancelRequest(order: Pick<LedgerOnlineOrder, "changeRequestType">): boolean {
+  return String(order.changeRequestType ?? "").toLowerCase() === "cancel";
 }
 
-export function changeRequestLabel(order: Pick<LedgerOnlineOrder, "changeRequestType" | "changeRequestStatus">): string | null {
-  if (!hasPendingCancelRequest(order)) return null;
-  return "客人申請取消";
+/** 客人待確認嘅取消**或**改單申請（有任何一種都算）。 */
+export function hasPendingChangeRequest(order: Pick<LedgerOnlineOrder, "changeRequestType">): boolean {
+  const type = String(order.changeRequestType ?? "").toLowerCase();
+  return type === "cancel" || type === "modify";
+}
+
+export function changeRequestLabel(order: Pick<LedgerOnlineOrder, "changeRequestType">): string | null {
+  const type = String(order.changeRequestType ?? "").toLowerCase();
+  if (type === "cancel") return "客人申請取消";
+  if (type === "modify") return "客人申請修改";
+  return null;
 }

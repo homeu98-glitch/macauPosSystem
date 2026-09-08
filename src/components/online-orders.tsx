@@ -15,14 +15,14 @@ import {
 import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
-  respondToCancelRequest,
+  resolveOrderChange,
   setOrderPaidInStore,
   updateOrderStatus as updateLedgerOrderStatus,
 } from "@/lib/ledger/order-actions";
 import {
   changeRequestLabel,
   computeSyncCursor,
-  hasPendingCancelRequest,
+  hasPendingChangeRequest,
   ledgerStatusLabel,
   LedgerOnlineOrder,
   LedgerOrderTab,
@@ -140,10 +140,10 @@ export function OnlineOrders({
   }, []);
 
   const playSound = useCallback(
-    (kind: "new_order" | "new_delivery" | "cancel_order") => {
+    (kind: "new_order" | "new_delivery" | "cancel_order" | "cancel_request" | "modify_request") => {
       if (!audioReady) return;
       const src =
-        kind === "cancel_order"
+        kind === "cancel_order" || kind === "cancel_request"
           ? "/sounds/cancel-order.mp3"
           : kind === "new_delivery"
             ? "/sounds/new-delivery-order.mp3"
@@ -304,6 +304,26 @@ export function OnlineOrders({
       const prev = ordersRef.current;
       const previous = prev.find((row) => row.id === order.id);
       applyOrders(mergeLedgerOrders(prev, [order]));
+
+      // 客人取消／改單申請：status 唔會變，只係 `change_request_type` 由 null 變成
+      // 'cancel' / 'modify'（含 auto_accept 自動接單後嘅申請，全部行呢條路）。
+      const prevRequestType = String(previous?.changeRequestType ?? "").toLowerCase();
+      const nextRequestType = String(order.changeRequestType ?? "").toLowerCase();
+
+      if (hasInitializedSnapshotRef.current) {
+        if (prevRequestType !== "cancel" && nextRequestType === "cancel") {
+          playSound("cancel_request");
+          setToast({ tone: "error", message: `客人申請取消：${orderCodeLabel(order)}` });
+        }
+        if (prevRequestType !== "modify" && nextRequestType === "modify") {
+          playSound("modify_request");
+          setToast({ tone: "error", message: `客人申請修改：${orderCodeLabel(order)}` });
+        }
+        // 拒絕／同意／客人撤回 → 申請欄位清空；若唔係因為取消成功，收起橫幅繼續做餐
+        if (prevRequestType && !nextRequestType && normalizeLedgerStatus(order.status) !== "cancelled") {
+          setToast({ tone: "success", message: "客人申請已處理，訂單繼續。" });
+        }
+      }
 
       if (
         hasInitializedSnapshotRef.current &&
@@ -564,22 +584,60 @@ export function OnlineOrders({
     setViewingOrderId(null);
   }
 
-  async function confirmCustomerCancel(order: LedgerOnlineOrder) {
-    const ok = window.confirm("確定同意客人取消這張訂單？取消後不可復原。");
-    if (!ok) return;
-    await pushStatus(order, "cancelled", "已同意客人取消，訂單已取消。");
-    setViewingOrderId(null);
-  }
-
-  async function declineCustomerCancel(order: LedgerOnlineOrder) {
-    const ok = window.confirm("確定拒絕客人的取消申請？訂單會繼續處理。");
-    if (!ok) return;
-    setActionLoadingKey(`${order.id}:decline_cancel`);
+  async function resolveChangeRequest(order: LedgerOnlineOrder, action: "approve" | "reject") {
+    const isCancel = String(order.changeRequestType ?? "").toLowerCase() === "cancel";
+    const confirmOk = window.confirm(
+      action === "approve"
+        ? isCancel
+          ? "確定同意客人取消這張訂單？取消後不可復原。"
+          : "確定同意客人的修改申請？套用後以新明細／新金額為準。"
+        : "確定拒絕客人的申請？訂單會繼續處理。",
+    );
+    if (!confirmOk) return;
+    setActionLoadingKey(`${order.id}:${action === "approve" ? "approve_change" : "reject_change"}`);
     try {
-      await respondToCancelRequest(order.id, "declined");
-      setToast({ tone: "success", message: "已拒絕取消申請，訂單繼續處理。" });
+      // ⚠️ 必須打 merchant_resolve_order_change（審核客人申請）。
+      // 取消唔可以用 update_order_status(..., 'cancelled') —— 嗰個係商戶自己取消，唔會沖正。
+      const result = await resolveOrderChange(order.id, action);
+      const nextStatus = result?.status ?? order.status;
+      if (action === "approve" && isCancel) {
+        // POS 直連 RPC 唔會觸發 Ledger 作廢單 MQTT → 同意取消後自行 LAN 印作廢單
+        //（realtime echo 嗰邊 printVoidForLedgerOrderOnce 有冪等保護，唔會重印）。
+        printVoidForLedgerOrderOnce(order.id);
+      }
+      if (action === "approve" && !isCancel) {
+        // 改單：套用新明細後補印廚房單（舊廚房單唔會自動更正）
+        try {
+          const detail = await getOrderDetail(order.id);
+          await printKitchenForLedgerOrder(order, detail);
+        } catch (printErr) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[online-orders] 改單後補印廚房單失敗:", printErr);
+          }
+        }
+      }
+      applyOrders(
+        mergeLedgerOrders(ordersRef.current, [
+          {
+            ...order,
+            changeRequestType: undefined,
+            status: nextStatus,
+            updatedAt: new Date().toISOString(),
+          },
+        ]),
+      );
+      setToast({
+        tone: "success",
+        message:
+          action === "approve"
+            ? isCancel
+              ? "已同意客人取消，訂單已取消。"
+              : "已同意客人修改，已套用新明細。"
+            : "已拒絕申請，訂單繼續處理。",
+      });
+      setViewingOrderId(null);
     } catch (err) {
-      setToast({ tone: "error", message: err instanceof Error ? err.message : "拒絕取消失敗" });
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "處理客人申請失敗" });
     } finally {
       setActionLoadingKey(null);
     }
@@ -588,11 +646,13 @@ export function OnlineOrders({
   function renderOrderActions(order: LedgerOnlineOrder, compact = false) {
     const raw = rawLedgerStatus(order.status);
     const orderLoading = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
+    // 有待確認申請（取消／改單）時，先隱藏一般接單／推進狀態按鈕，避免同審核搶操作。
+    const hasRequest = hasPendingChangeRequest(order);
     const btn = compact ? "rounded-2xl px-3 py-2 text-xs font-semibold" : "rounded-2xl px-3 py-2 text-sm font-semibold";
 
     return (
       <>
-        {raw === "pending" ? (
+        {!hasRequest && raw === "pending" ? (
           <>
             <button
               className={`${btn} bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60`}
@@ -612,7 +672,7 @@ export function OnlineOrders({
             </button>
           </>
         ) : null}
-        {hasPendingCancelRequest(order) ? (
+        {hasRequest ? (
           <>
             <span className={`${btn} bg-rose-50 text-rose-700 ring-1 ring-rose-200`}>
               {changeRequestLabel(order)}
@@ -620,22 +680,22 @@ export function OnlineOrders({
             <button
               className={`${btn} bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60`}
               disabled={orderLoading}
-              onClick={() => void confirmCustomerCancel(order)}
+              onClick={() => void resolveChangeRequest(order, "approve")}
               type="button"
             >
-              同意取消
+              {orderLoading ? "處理中…" : String(order.changeRequestType).toLowerCase() === "modify" ? "同意修改" : "同意取消"}
             </button>
             <button
               className={`${btn} bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60`}
               disabled={orderLoading}
-              onClick={() => void declineCustomerCancel(order)}
+              onClick={() => void resolveChangeRequest(order, "reject")}
               type="button"
             >
-              拒絕取消
+              拒絕
             </button>
           </>
         ) : null}
-        {raw === "accepted" ? (
+        {!hasRequest && raw === "accepted" ? (
           <button
             className={`${btn} bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60`}
             disabled={orderLoading}
@@ -645,7 +705,7 @@ export function OnlineOrders({
             開始製作
           </button>
         ) : null}
-        {raw === "preparing" ? (
+        {!hasRequest && raw === "preparing" ? (
           <button
             className={`${btn} bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60`}
             disabled={orderLoading}
@@ -655,7 +715,7 @@ export function OnlineOrders({
             {order.tabType === "pickup" ? "待取餐" : "待交付"}
           </button>
         ) : null}
-        {raw === "ready" && order.fulfillmentType === "merchant_delivery" ? (
+        {!hasRequest && raw === "ready" && order.fulfillmentType === "merchant_delivery" ? (
           <button
             className={`${btn} bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60`}
             disabled={orderLoading}
@@ -665,7 +725,7 @@ export function OnlineOrders({
             配送中
           </button>
         ) : null}
-        {(raw === "ready" || raw === "delivering") && (
+        {!hasRequest && (raw === "ready" || raw === "delivering") && (
           <button
             className={`${btn} bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60`}
             disabled={orderLoading}
@@ -675,7 +735,7 @@ export function OnlineOrders({
             完成
           </button>
         )}
-        {order.paymentMode === "in_store" && order.paymentStatus === "unpaid" && raw !== "pending" && raw !== "cancelled" && raw !== "completed" ? (
+        {!hasRequest && order.paymentMode === "in_store" && order.paymentStatus === "unpaid" && raw !== "pending" && raw !== "cancelled" && raw !== "completed" ? (
           <button
             className={`${btn} bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60`}
             disabled={orderLoading}

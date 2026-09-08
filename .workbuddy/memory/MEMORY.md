@@ -26,6 +26,12 @@
 - `pending`=待派發；`sent`=POS 已交付打印通道（relay 只代表入雲端隊列）；`printed`=通道回報真實出紙；`failed`。
 - 已改：`status` route 唔再降格 `printed`→`sent`；print-center 回填 printed +「打印成功」filter/badge +「清除已成功」；`clearSentPrintJobs` 只清 sent；pos-app `onPrintJobUpsert` 容許 sent→printed/failed 升級。DB 生命週期 `pending→printing→printed/failed`；claim RPC 只揀 pending/failed → 天然防重印。relay 團隊交接見 `docs/handoff-print-relay-printed-status.md`（agent 真實出紙先報 printed、失敗必報 failed）。
 
+## 線上單客人取消/改單審核（2026-09-09 契約）
+- Ledger `orders` **只有** `change_request_type`('cancel'|'modify'|null)/`change_request_at`/`change_request_by`/`change_request_payload`（cancel 時 payload=null）；**無 `change_request_status`**。申請存在=待審；拒絕/同意/客人撤回都係 type 清 null（Realtime UPDATE 推）。
+- 審核一律打 RPC **`merchant_resolve_order_change`**(p_order_id,p_action:'approve'|'reject')，店員 JWT 即可；**無** `update_change_request_status`。同意取消**唔可以**用 `update_order_status('cancelled')`（商戶自取消、唔沖正）。
+- 兩條取消路徑勿混：pending 取消→直接 status=cancelled；accepted/preparing 取消→只寫 type='cancel'（auto_accept 後全行呢條）。ready/delivering/completed/cancelled 唔可申請取消。
+- approve 成功後 POS 自行 LAN 印作廢單（直連 RPC 唔觸發 Ledger 作廢單 MQTT；`printVoidForLedgerOrderOnce` 冪等防 realtime echo 重印）；approve 改單→補印廚房單。無 MQTT/輪詢/webhook。
+
 ## 執行環境判斷（原生殼 vs web/PWA）
 - 唔用 UA sniff：Android APK → `window.PosNative.printJob`；PC 殼 → `window.companionShell`。
 - companion 三層 gate 由嚴到寬：`shouldUseCompanionChannel`（淨原生殼）/ `shouldKeepCompanionAlive`（原生殼 OR `?companion=`，純 website 零 /api/health）/ `shouldAutoDiscoverCompanion`（原生殼 OR localhost）；`shouldShowCompanionUi` = autoDiscover || urlParam（純 web/PWA 隱藏成張卡）。UI 一定要包 localhost。

@@ -12,14 +12,14 @@ import {
 import {
   acceptLedgerOrder,
   acceptLedgerOrderInStore,
-  respondToCancelRequest,
+  resolveOrderChange,
   setOrderPaidInStore,
   updateOrderStatus,
 } from "@/lib/ledger/order-actions";
 import {
   changeRequestLabel,
   computeSyncCursor,
-  hasPendingCancelRequest,
+  hasPendingChangeRequest,
   ledgerStatusLabel,
   LedgerOnlineOrder,
   mergeLedgerOrders,
@@ -31,7 +31,7 @@ import {
 } from "@/lib/ledger/order-mapper";
 import {
   getPrimaryOnlineOrderAction,
-  getCancelRequestActions,
+  getChangeRequestActions,
   isActiveOnlineOrder,
   ledgerStatusBadgeLabel,
   onlineOrderActionButtonClass,
@@ -106,10 +106,10 @@ export function QuickOnlineOrdersPanel({
   }, []);
 
   const playSound = useCallback(
-    (kind: "new_order" | "new_delivery" | "cancel_order") => {
+    (kind: "new_order" | "new_delivery" | "cancel_order" | "cancel_request" | "modify_request") => {
       if (!audioReady) return;
       const src =
-        kind === "cancel_order"
+        kind === "cancel_order" || kind === "cancel_request"
           ? "/sounds/cancel-order.mp3"
           : kind === "new_delivery"
             ? "/sounds/new-delivery-order.mp3"
@@ -206,6 +206,24 @@ export function QuickOnlineOrdersPanel({
       const previous = prev.find((row) => row.id === order.id);
       applyOrders(mergeLedgerOrders(prev, [order]));
 
+      // 客人取消／改單申請：status 唔變，只係 `change_request_type` 由 null 變 'cancel' / 'modify'。
+      const prevRequestType = String(previous?.changeRequestType ?? "").toLowerCase();
+      const nextRequestType = String(order.changeRequestType ?? "").toLowerCase();
+
+      if (hasInitializedSnapshotRef.current) {
+        if (prevRequestType !== "cancel" && nextRequestType === "cancel") {
+          playSound("cancel_request");
+          onToast({ tone: "error", message: `客人申請取消：${orderCodeLabel(order)}` });
+        }
+        if (prevRequestType !== "modify" && nextRequestType === "modify") {
+          playSound("modify_request");
+          onToast({ tone: "info", message: `客人申請修改：${orderCodeLabel(order)}` });
+        }
+        if (prevRequestType && !nextRequestType && normalizeLedgerStatus(order.status) !== "cancelled") {
+          onToast({ tone: "info", message: "客人申請已處理，訂單繼續。" });
+        }
+      }
+
       if (
         hasInitializedSnapshotRef.current &&
         previous &&
@@ -228,7 +246,7 @@ export function QuickOnlineOrdersPanel({
       }
       hasInitializedSnapshotRef.current = true;
     },
-    [applyOrders, playSound],
+    [applyOrders, onToast, playSound],
   );
 
   useLedgerOrdersRealtime(merchantId, Boolean(merchantId), {
@@ -373,8 +391,18 @@ export function QuickOnlineOrdersPanel({
         if (!ok) return;
       }
 
-      if (action.key === "confirm_cancel") {
-        const ok = window.confirm("確定同意客人取消這張訂單？取消後不可復原。");
+      if (action.key === "approve_change") {
+        const isCancel = String(order.changeRequestType ?? "").toLowerCase() === "cancel";
+        const ok = window.confirm(
+          isCancel
+            ? "確定同意客人取消這張訂單？取消後不可復原。"
+            : "確定同意客人的修改申請？套用後以新明細／新金額為準。",
+        );
+        if (!ok) return;
+      }
+
+      if (action.key === "reject_change") {
+        const ok = window.confirm("確定拒絕客人的申請？訂單會繼續處理。");
         if (!ok) return;
       }
 
@@ -387,9 +415,38 @@ export function QuickOnlineOrdersPanel({
           return;
         }
 
-        if (action.key === "decline_cancel") {
-          await respondToCancelRequest(order.id, "declined");
-          onToast({ tone: "success", message: action.successMessage ?? "已拒絕取消申請。" });
+        // 審核客人取消／改單申請：一律打 Ledger RPC merchant_resolve_order_change。
+        // ⚠️ 同意取消唔可以用 update_order_status(..., 'cancelled') —— 嗰個係商戶自己取消，唔會沖正。
+        if (action.key === "approve_change" || action.key === "reject_change") {
+          const approve = action.key === "approve_change";
+          const isCancel = String(order.changeRequestType ?? "").toLowerCase() === "cancel";
+          const result = await resolveOrderChange(order.id, approve ? "approve" : "reject");
+          if (approve && isCancel) {
+            // POS 直連 RPC 唔會觸發 Ledger 作廢單 MQTT → 自行 LAN 印作廢單
+            //（realtime echo 嗰邊 printVoidForLedgerOrderOnce 有冪等保護）。
+            printVoidForLedgerOrderOnce(order.id);
+          }
+          if (approve && !isCancel) {
+            // 改單：套用新明細後補印廚房單
+            try {
+              const detail = await getOrderDetail(order.id);
+              await printKitchenForLedgerOrder(order, detail);
+            } catch {
+              onToast({ tone: "info", message: "已同意修改，但廚房單補印失敗，可稍後重打。" });
+            }
+          }
+          applyOrders(
+            mergeLedgerOrders(ordersRef.current, [
+              {
+                ...order,
+                changeRequestType: undefined,
+                status: approve ? result?.status ?? order.status : order.status,
+                updatedAt: new Date().toISOString(),
+              },
+            ]),
+          );
+          onToast({ tone: "success", message: action.successMessage ?? "已處理客人申請。" });
+          if (approve && isCancel) setViewingOrderId(null);
           return;
         }
 
@@ -416,7 +473,7 @@ export function QuickOnlineOrdersPanel({
         setActionLoadingKey(null);
       }
     },
-    [onToast, patchOrder, runAccept, skipTableAssignment],
+    [applyOrders, onToast, patchOrder, runAccept, skipTableAssignment],
   );
 
   async function acceptInStoreFallback(order: LedgerOnlineOrder) {
@@ -442,7 +499,7 @@ export function QuickOnlineOrdersPanel({
 
   function renderCancelRequestActions(order: LedgerOnlineOrder) {
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
-    const cancelActions = getCancelRequestActions(order);
+    const cancelActions = getChangeRequestActions(order);
     if (cancelActions.length === 0) return null;
     return (
       <>
@@ -465,7 +522,7 @@ export function QuickOnlineOrdersPanel({
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
     const primary = getPrimaryOnlineOrderAction(order);
 
-    if (hasPendingCancelRequest(order)) {
+    if (hasPendingChangeRequest(order)) {
       return renderCancelRequestActions(order);
     }
 
@@ -545,7 +602,7 @@ export function QuickOnlineOrdersPanel({
             >
               查看
             </button>
-            {hasPendingCancelRequest(order) ? (
+            {hasPendingChangeRequest(order) ? (
               renderCancelRequestActions(order)
             ) : (
               <>
