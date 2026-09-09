@@ -97,6 +97,8 @@ export function DeviceSettings() {
   const [menuPrintPage, setMenuPrintPage] = useState(1);
   const menuPrintPageSize = 50;
   const [menuCategoryId, setMenuCategoryId] = useState<string>("all");
+  // 菜品即時搜尋（2026-09-09）：輸入即篩，唔使撳掣；子字串比對
+  const [menuSearch, setMenuSearch] = useState("");
   const [menuPage, setMenuPage] = useState(1);
   const menuPageSize = 50;
   const [newNotePreset, setNewNotePreset] = useState("");
@@ -116,8 +118,14 @@ export function DeviceSettings() {
   const [newDiscountRate, setNewDiscountRate] = useState("");
 
   const menuFilteredItems = useMemo(() => {
-    return menuDraft.menuItems.filter((item) => menuCategoryId === "all" || item.categoryId === menuCategoryId);
-  }, [menuDraft.menuItems, menuCategoryId]);
+    const keyword = menuSearch.trim().toLocaleLowerCase();
+    return menuDraft.menuItems.filter((item) => {
+      // 分類過濾 + 關鍵字子字串比對（大小寫不敏感，空白關鍵字 = 不過濾）
+      if (menuCategoryId !== "all" && item.categoryId !== menuCategoryId) return false;
+      if (keyword && !item.name.toLocaleLowerCase().includes(keyword)) return false;
+      return true;
+    });
+  }, [menuDraft.menuItems, menuCategoryId, menuSearch]);
 
   const menuTotalPages = useMemo(() => Math.max(1, Math.ceil(menuFilteredItems.length / menuPageSize)), [menuFilteredItems.length]);
 
@@ -1871,7 +1879,44 @@ export function DeviceSettings() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                {/* 即時搜尋：每打一個字即篩（子字串比對，唔使撳掣／撳 Enter） */}
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <div className="relative min-w-0 flex-1 basis-56">
+                    <input
+                      className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-3 pr-9 text-sm outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                      onChange={(event) => {
+                        setMenuSearch(event.target.value);
+                        setMenuPage(1);
+                      }}
+                      placeholder="搜尋菜品名稱，例如「雞」…"
+                      value={menuSearch}
+                    />
+                    {menuSearch ? (
+                      <button
+                        aria-label="清除搜尋"
+                        className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-slate-400 transition hover:text-slate-700"
+                        onClick={() => {
+                          setMenuSearch("");
+                          setMenuPage(1);
+                        }}
+                        type="button"
+                      >
+                        ✕
+                      </button>
+                    ) : (
+                      <span className="pointer-events-none absolute inset-y-0 right-0 flex w-9 items-center justify-center text-slate-400">
+                        🔍
+                      </span>
+                    )}
+                  </div>
+                  {menuSearch.trim() ? (
+                    <span className="text-xs text-orange-600">
+                      正在搜尋「{menuSearch.trim()}」…
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                   {(() => {
                     const filteredCount = menuFilteredItems.length;
                     const totalPages = menuTotalPages;
@@ -1903,6 +1948,22 @@ export function DeviceSettings() {
                   })()}
                 </div>
 
+                {menuPageItems.length === 0 ? (
+                  /* 空白狀態：冇符合結果時畀明確提示（代替空白表格） */
+                  <div className="mt-2 flex flex-1 min-h-0 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60">
+                    <div className="px-6 py-10 text-center text-sm text-slate-400">
+                      {menuSearch.trim() ? (
+                        <>
+                          沒有符合「<span className="font-semibold text-slate-600">{menuSearch.trim()}</span>」
+                          嘅菜品
+                          {menuCategoryId !== "all" ? "（喺目前分類內）" : ""}，請試其他關鍵字。
+                        </>
+                      ) : (
+                        <>呢個分類暫時冇菜品，可以撳「新增菜品」加入。</>
+                      )}
+                    </div>
+                  </div>
+                ) : (
                 <div className="mt-2 flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-200">
                   <table className="w-full border-collapse text-sm">
                     <thead className="sticky top-0 z-10 bg-white">
@@ -2080,6 +2141,7 @@ export function DeviceSettings() {
                     </tbody>
                   </table>
                 </div>
+                )}
               </div>
             ) : null}
           </section>
