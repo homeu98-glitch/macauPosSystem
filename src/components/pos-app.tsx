@@ -218,6 +218,9 @@ const CART_PAYING_ID = "__cart__";
 const ALL_MENU_CATEGORY_ID = "__all__";
 // 分類 chips 折疊閾值：多於此數量時預設收起為兩行，提供「全部分類 ▾」展開
 const CATEGORY_COLLAPSE_THRESHOLD = 8;
+// 開桌入座人數：桌台冇填座位數（capacity 缺失 / ≤0）時嘅按鈕數上限 fallback。
+// 正常情況按鈕數 = 該枱 capacity（1..capacity，一鍵設定，唔畀超過座位數）。
+const OPEN_TABLE_FALLBACK_MAX_SEATS = 12;
 
 export function PosApp() {
   const router = useRouter();
@@ -1348,6 +1351,15 @@ export function PosApp() {
     return floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [];
   }, [effectiveFloorId, floors]);
 
+  // 開桌彈窗：入座人數按鈕數 = 該枱座位數（capacity）；冇填座位數（缺失/≤0）→ fallback 12。
+  // 2026-09-09：由手動輸入改為數字按鈕（見開桌彈窗 render），商家只可以揀 1..座位數。
+  const openTableModalTable =
+    openTableModalTableId ? visibleTables.find((t) => t.id === openTableModalTableId) ?? null : null;
+  const openTableMaxSeats = (() => {
+    const capacity = openTableModalTable?.capacity;
+    return capacity && capacity > 0 ? Math.min(Math.floor(capacity), 99) : OPEN_TABLE_FALLBACK_MAX_SEATS;
+  })();
+
   const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
   const openOrders = useMemo(
     () =>
@@ -1669,10 +1681,14 @@ export function PosApp() {
     setPosMode("order");
   }
 
-  function confirmOpenTable() {
+  function confirmOpenTable(resolvedSize?: number) {
     const tableId = openTableModalTableId;
     if (!tableId) return;
-    const size = openTablePartySize > 0 ? openTablePartySize : 1;
+    // 按鈕本身已限制 1..座位數；呢度再 clamp 一次（座位數中途被改細 / fallback 枱）防超座。
+    // resolvedSize：數字按鈕點選嗰刻直接傳入（setState 係異步，唔可以靠 openTablePartySize 舊值）。
+    const capacity = visibleTables.find((t) => t.id === tableId)?.capacity;
+    const maxSeats = capacity && capacity > 0 ? capacity : OPEN_TABLE_FALLBACK_MAX_SEATS;
+    const size = Math.min(resolvedSize ?? (openTablePartySize > 0 ? openTablePartySize : 1), maxSeats);
     setSeatedPartySizes((current) => ({ ...current, [tableId]: size }));
     setOpenTableModalTableId(null);
     loadOrderIntoWorkspace(null, tableId);
@@ -3999,13 +4015,33 @@ export function PosApp() {
                   </div>
                   <div>
                     <label className="text-sm font-semibold text-slate-900">入座人數</label>
-                    <input
-                      type="number"
-                      min={1}
-                      className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
-                      onChange={(event) => setOpenTablePartySize(Number(event.target.value) || 1)}
-                      value={openTablePartySize}
-                    />
+                    {/* 2026-09-09：由手動輸入改為數字按鈕（1..座位數），點選即完成設定。
+                        冇填座位數嘅枱 fallback 12 個掣 + 提示去設置補填；唔會出現超座選項。 */}
+                    {openTableModalTable?.capacity && openTableModalTable.capacity > 0 ? null : (
+                      <div className="mt-1 text-xs text-slate-500">
+                        此桌未設座位數，暫以 12 個按鈕代替；請到「設置 → 桌台管理」補填座位數。
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {Array.from({ length: openTableMaxSeats }, (_, index) => index + 1).map((size) => {
+                        const selected = openTablePartySize === size;
+                        return (
+                          <button
+                            key={size}
+                            type="button"
+                            aria-pressed={selected}
+                            className={
+                              selected
+                                ? "h-11 w-11 rounded-2xl bg-orange-500 text-base font-bold text-white shadow-sm"
+                                : "h-11 w-11 rounded-2xl bg-white text-base font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50"
+                            }
+                            onClick={() => confirmOpenTable(size)}
+                          >
+                            {size}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </ResponsiveModal>
