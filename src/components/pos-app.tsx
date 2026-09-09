@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { tryAutoPairCompanion } from "@/lib/print-bridge/auto-pair-companion";
 
@@ -43,6 +43,7 @@ import {
   buildVoidPrintJobsForOrder,
   isPrintContentEnabled,
   normalizePrintJobStatus,
+  reprintReceiptForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset, orderItemDiscountTotal } from "@/lib/pos/discount";
@@ -98,7 +99,8 @@ import {
   sumMoneyVoucherAvos,
 } from "@/lib/ledger/member-types";
 import { listRedeemableGrantsForCustomer } from "@/lib/ledger/rewards";
-import { patchMenuFromRealtimeRecord } from "@/lib/ledger/menu-import";
+import { patchMenuFromRealtimeRecord, mergeLedgerMenuReference } from "@/lib/ledger/menu-import";
+import { fetchLedgerOrderMenu } from "@/lib/ledger/menu";
 import { useLedgerProductsRealtime } from "@/lib/ledger/use-ledger-products-realtime";
 import {
   quickCompleteLabel,
@@ -232,6 +234,7 @@ export function PosApp() {
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
   const [toast, setToast] = useState<Toast | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
+  const [manualSyncing, setManualSyncing] = useState(false);
   const [activeCategoryId, setActiveCategoryId] = useState<string>(() => cachedBootstrap?.categories[0]?.id ?? "");
   // ── 分類 chips：預設兩行，多於 8 個分類可展開／收起 ──
   const [categoriesExpanded, setCategoriesExpanded] = useState(false);
@@ -801,40 +804,46 @@ export function PosApp() {
     }
   }
 
-  useEffect(() => {
-    async function bootstrapApp() {
-      try {
-        const merchantId = loadAuthSession()?.merchantId;
-        const bootstrapUrl = merchantId
-          ? `/api/pos/bootstrap?storeId=${encodeURIComponent(merchantId)}`
-          : "/api/pos/bootstrap";
-        const response = await fetch(bootstrapUrl);
-        const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
-        const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
-        // merge：本地 cache 優先（枱 area / name 等 per-terminal 編輯唔應該被 server 舊數據覆蓋）；
-        // server 獨有枱（其他 terminal / kiosk 新加）保留；本地獨有枱亦保留。
-        // 咁 server bootstrap 每次啟動載到最新之餘，唔會清走本地嘅枱樓層編輯。
-        const localCache = loadBootstrapCache();
-        const localTableMap = new Map((localCache?.tables ?? []).map((t) => [t.id, t]));
-        const mergedTables: StoreTable[] = data.tables.map((st) => localTableMap.get(st.id) ?? st);
-        for (const lt of localCache?.tables ?? []) {
-          if (!mergedTables.some((t) => t.id === lt.id)) mergedTables.push(lt);
-        }
-        const merged: PosBootstrap = { ...data, tables: mergedTables };
-        saveBootstrapCache(merged);
-        setBootstrap(merged);
-        setActiveTableId((current) => current || merged.tables[0]?.id || "");
-      } catch {
-        if (!initialHasBootstrapRef.current) {
-          setToast({ tone: "info", message: "未能連到設定來源，請稍後再試。" });
-        }
-      } finally {
-        setIsBootstrapping(false);
+  // 開機 mount 同「手動更新」掣共用嘅 bootstrap 拉取：
+  // GET /api/pos/bootstrap → normalize → 併入 Ledger 店名 → 以 server 為準合併本地 cache
+  // （tables 保留本地 per-terminal 枱編輯，同 docs/54 一致），寫入 localStorage + React state。
+  // 2026-09-09：由原本淨係 mount effect 內部嘅 bootstrapApp() 抽出，畀「手動更新」重複調用。
+  const refreshBootstrapFromServer = useCallback(async (options?: { quiet?: boolean }) => {
+    try {
+      const merchantId = loadAuthSession()?.merchantId;
+      const bootstrapUrl = merchantId
+        ? `/api/pos/bootstrap?storeId=${encodeURIComponent(merchantId)}`
+        : "/api/pos/bootstrap";
+      const response = await fetch(bootstrapUrl);
+      const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
+      const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
+      // merge：本地 cache 優先（枱 area / name 等 per-terminal 編輯唔應該被 server 舊數據覆蓋）；
+      // server 獨有枱（其他 terminal / kiosk 新加）保留；本地獨有枱亦保留。
+      // 咁 server bootstrap 每次啟動載到最新之餘，唔會清走本地嘅枱樓層編輯。
+      const localCache = loadBootstrapCache();
+      const localTableMap = new Map((localCache?.tables ?? []).map((t) => [t.id, t]));
+      const mergedTables: StoreTable[] = data.tables.map((st) => localTableMap.get(st.id) ?? st);
+      for (const lt of localCache?.tables ?? []) {
+        if (!mergedTables.some((t) => t.id === lt.id)) mergedTables.push(lt);
       }
+      const merged: PosBootstrap = { ...data, tables: mergedTables };
+      saveBootstrapCache(merged);
+      setBootstrap(merged);
+      setActiveTableId((current) => current || merged.tables[0]?.id || "");
+      return { ok: true as const };
+    } catch {
+      if (!options?.quiet && !initialHasBootstrapRef.current) {
+        setToast({ tone: "info", message: "未能連到設定來源，請稍後再試。" });
+      }
+      return { ok: false as const };
+    } finally {
+      setIsBootstrapping(false);
     }
-
-    bootstrapApp();
   }, []);
+
+  useEffect(() => {
+    void refreshBootstrapFromServer();
+  }, [refreshBootstrapFromServer]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1018,6 +1027,75 @@ export function PosApp() {
       }
     } catch {
       // ignore
+    }
+  }
+
+  // ── 桌台總覽右上角「手動更新」（2026-09-09）────────────────────────────
+  // 背景：其他裝置經 macau-pos 改咗菜單／設定，server DB 已係最新，但店內 POS
+  // 嘅菜單淨係 mount 拉一次 + realtime 只補單筆 delta（斷線／未匯入過就直接漏），
+  // 所以一直停喺舊 cache。呢個掣係「強制全量拉取」：同 mount/realtime 機制唔同，
+  // 一撳就覆蓋三層嘢，套用完再 refresh 成個頁面，確保畫面 100% 係 server 最新。
+  async function handleManualUpdate() {
+    if (manualSyncing) return;
+    if (!readNetworkOnline()) {
+      setToast({ tone: "info", message: "目前離線，無法從伺服器更新。恢復網絡後再試。" });
+      return;
+    }
+    setManualSyncing(true);
+    const notes: string[] = [];
+    try {
+      // ① 菜單／分類／枱／rules：以 server 最新全量覆蓋本機 cache。
+      //    （tables merge 保留本地 per-terminal 枱編輯；menu/categories 直接採用 server 版。）
+      const bootstrapResult = await refreshBootstrapFromServer({ quiet: true });
+      notes.push(bootstrapResult.ok ? "菜單已更新" : "菜單拉取失敗");
+
+      // ② Ledger 線上菜單：全量 RPC 併合 —— 淨係當本機曾匯入過 Ledger 餐牌
+      //    （有 ledger- 前綴菜品）先行，避免意外塞入未用嘅線上菜單。realtime 漏咗嘅
+      //    改名／刪除／重排／改價由呢度一次過補返（docs/77：唔好亂全 re-fetch，但手動更新例外）。
+      try {
+        const current = loadBootstrapCache();
+        const hasLedgerMenu = (current?.menuItems ?? []).some((row) => row.id.startsWith("ledger-"));
+        if (current && hasLedgerMenu && getLedgerMerchantId()) {
+          const ledgerMenu = await fetchLedgerOrderMenu();
+          if (ledgerMenu.enabled && ledgerMenu.products.length > 0) {
+            const { bootstrap: mergedBootstrap, soldOut } = mergeLedgerMenuReference(
+              current,
+              ledgerMenu,
+              loadSoldOutState(),
+              { removeLocalMenu: false },
+            );
+            const normalized = normalizeBootstrapPayload(mergedBootstrap);
+            saveBootstrapCache(normalized);
+            saveSoldOutState(soldOut);
+            window.dispatchEvent(new CustomEvent("pos-bootstrap-changed"));
+            window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: soldOut } }));
+            notes.push("線上菜單已併合");
+          } else if (ledgerMenu.enabled) {
+            // 守衛：server 返回空菜單（後台未設定）時唔好攞空併合冚走本機已匯入嘅線上菜單。
+            notes.push("線上菜單略過（server 空）");
+          }
+        }
+      } catch {
+        notes.push("線上菜單略過");
+      }
+
+      // ③ 設備／打印／其他設置：沿用現行 loadRuntimeState() 嘅 merge 語義 ——
+      //    floors／printTemplates／onlineOrderSettings／printContentToggles 保留本機
+      //    （per-terminal 真源），其餘 server 優先；orders／printJobs 亦一併補返。
+      await loadRuntimeState();
+      notes.push("設定已同步");
+
+      // ④ 套用完成 → 強制 refresh 成個 web page：再 mount 一次以新 localStorage
+      //    為底，確保介面（含枱面／購物車 state）同 server 完全一致。
+      setManualSyncing(false);
+      setToast({
+        tone: bootstrapResult.ok ? "success" : "warning",
+        message: "手動更新完成，重新載入頁面…",
+      });
+      window.setTimeout(() => window.location.reload(), 1000);
+    } catch {
+      setToast({ tone: "error", message: "同步失敗，請檢查網絡後再試。" });
+      setManualSyncing(false);
     }
   }
 
@@ -2425,6 +2503,34 @@ export function PosApp() {
     setToast({ tone: "success", message: "已加入重打單打印隊列。" });
   }
 
+  /** 呢啲狀態先有收據可補打（未收款 / 已取消單冇原始單據）。 */
+  function canReprintBill(status: PosOrder["status"]): boolean {
+    return status === "settled" || status === "paid" || status === "partially_refunded" || status === "refunded";
+  }
+
+  /**
+   * 補打帳單（收據）：對已結帳／已付款訂單重新印返張帳單畀客人。
+   *
+   * 同「重打單」唔同：呢度係收據（`buildReceiptPrintJobs` 重建，內容同原單一致），
+   * 唔係廚房／標籤單。手動語義 → 唔受「自動打印」開關影響。
+   */
+  function reprintBillForOrder(order: PosOrder) {
+    const count = reprintReceiptForOrder(order);
+    if (count > 0) {
+      setToast({ tone: "success", message: "已加入補打帳單打印隊列。" });
+      return;
+    }
+    const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
+      (printer) => printer.enabled && printer.role === "receipt",
+    );
+    setToast({
+      tone: "error",
+      message: hasReceiptPrinter
+        ? "找不到可用的收據打印機，請檢查設備設置。"
+        : "未配置收據打印機，請到設備設置添加。",
+    });
+  }
+
   // ── 點餐介面 · 打印操作（堂食／外賣模式）──────────────────────────────
   //
   // 三件事（2026-09-05）：
@@ -3673,12 +3779,23 @@ export function PosApp() {
                       點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單
                     </div>
                   </div>
-                  <Link
-                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                    href="/orders"
-                  >
-                    查看線上訂單
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      title="從伺服器強制拉取最新菜單及所有設定，套用後會重新載入頁面"
+                      onClick={() => void handleManualUpdate()}
+                      disabled={manualSyncing || isBootstrapping}
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {manualSyncing ? "更新中…" : "手動更新"}
+                    </button>
+                    <Link
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                      href="/orders"
+                    >
+                      查看線上訂單
+                    </Link>
+                  </div>
                 </div>
               </div>
 
@@ -4841,6 +4958,15 @@ export function PosApp() {
               >
                 關閉
               </button>
+              {canReprintBill(viewingOrder.status) ? (
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={() => reprintBillForOrder(viewingOrder)}
+                  type="button"
+                >
+                  補打帳單
+                </button>
+              ) : null}
               <button
                 className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                 onClick={() => reprintOrder(viewingOrder)}

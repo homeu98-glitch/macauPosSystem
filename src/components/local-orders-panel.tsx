@@ -29,10 +29,13 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { confirmSelfOrder, isReopenable, rejectSelfOrder, reopenPosOrder } from "@/lib/pos-orders";
+import { reprintReceiptForOrder } from "@/lib/print-jobs";
+import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   addDeletedOrderIds,
   loadAuthSession,
   loadBootstrapCache,
+  loadDeviceConfig,
   loadOrders,
   loadPosLocalSettings,
   loadQueue,
@@ -166,6 +169,30 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
   function handleQuickAction() {
     refresh();
     setToast("已更新訂單狀態");
+  }
+
+  /** 呢啲狀態先有收據可補打（未收款 / 已取消單冇原始單據）。 */
+  function hasReceivableReceipt(order: PosOrder | null): boolean {
+    if (!order) return false;
+    return (
+      order.status === "settled" ||
+      order.status === "paid" ||
+      order.status === "partially_refunded" ||
+      order.status === "refunded"
+    );
+  }
+
+  /** 補打帳單（收據）：手動語義，唔受「自動打印」開關影響。 */
+  function reprintBillForOrder(order: PosOrder) {
+    const count = reprintReceiptForOrder(order);
+    if (count > 0) {
+      setToast(`已加入補打帳單打印隊列：${order.localOrderNo}`);
+      return;
+    }
+    const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
+      (printer) => printer.enabled && printer.role === "receipt",
+    );
+    setToast(hasReceiptPrinter ? "找不到可用的收據打印機，請檢查設備設置。" : "未配置收據打印機，請到設備設置添加。");
   }
 
   async function handleDeleteAllOrders() {
@@ -522,6 +549,17 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
                 />
               </div>
             ) : null}
+            {hasReceivableReceipt(viewingOrder) ? (
+              <div className="mt-1 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                  onClick={() => reprintBillForOrder(viewingOrder)}
+                >
+                  補打帳單
+                </button>
+              </div>
+            ) : null}
           </div>
         </ResponsiveModal>
       ) : null}
@@ -608,7 +646,18 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
           title={`收據預覽 · ${receiptPreviewOrder.localOrderNo}`}
           widthClassName="max-w-md"
         >
-          <ReceiptTicketPreview order={receiptPreviewOrder} />
+          <div className="grid gap-3">
+            <ReceiptTicketPreview order={receiptPreviewOrder} />
+            {hasReceivableReceipt(receiptPreviewOrder) ? (
+              <button
+                type="button"
+                className="w-full rounded-xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
+                onClick={() => reprintBillForOrder(receiptPreviewOrder)}
+              >
+                補打帳單（收據）
+              </button>
+            ) : null}
+          </div>
         </ResponsiveModal>
       ) : null}
 

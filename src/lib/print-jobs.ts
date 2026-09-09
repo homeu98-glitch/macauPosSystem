@@ -17,7 +17,6 @@ import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { PosBootstrap, PosOrder, PrintJob, ReceiptTemplate } from "@/lib/types";
 import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
-import { formatMoney } from "@/lib/format";
 import {
   buildKitchenContent,
   buildLabelContent,
@@ -336,6 +335,25 @@ export function printReceiptForPosOrder(order: PosOrder): number {
   const jobs = buildReceiptPrintJobs(order, bootstrap);
   appendPrintJobs(jobs);
   return jobs.length;
+}
+
+/**
+ * 補打帳單（收據）：針對已結帳／已付款訂單重新列印帳單。
+ *
+ * 收據唔係儲存列印時嘅 snapshot，而係每次由訂單資料即時重建 —— `PosOrder`
+ * 保留晒 items／折扣／加一／抹零／實收／找贖／付款方式／QR 等欄位，所以呢度
+ * 由 localStorage 重讀**權威版**訂單（同「重打單」B2/B3 一致，避免 in-memory
+ * order 同 storage 唔同步印錯），再行同結帳一樣嘅 `buildReceiptPrintJobs`，
+ * 還原到同原單一致嘅內容。
+ *
+ * 手動語義：**唔查**收據總開關（`isPrintContentEnabled("receipt")` 係畀自動
+ * 結帳路徑用，`printReceiptForLedgerOrder` 先查嗰個；呢度係用家當下明確意圖）。
+ *
+ * @returns 實際加入隊列嘅張數；0 = 冇收據機 / 冇 bootstrap cache（由 caller 出診斷 toast）。
+ */
+export function reprintReceiptForOrder(order: PosOrder): number {
+  const authoritative = loadOrders().find((row) => row.id === order.id) ?? order;
+  return printReceiptForPosOrder(authoritative);
 }
 
 /**
