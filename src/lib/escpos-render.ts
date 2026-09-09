@@ -69,8 +69,30 @@ export function unitBasePrice(it: { price: number; selectedSpecs?: Array<{ price
 
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }
-  | { kind: "divider" }
-  | { kind: "items"; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize: EscPosSize; items: PrintItemLine[]; layout: EscPosItemsLayout }
+  /**
+   * 分格線（實體係一行 `-` 字符，`"-".repeat(cols)`）。
+   *
+   * `size` 決定嗰行 dash 嘅放大倍數（s = 1×、m = 雙闊、l = 2×2），
+   * 同實機 `ESC ! n` / `GS ! n` 一致 —— m / l 雙闊會令 48 個 dash **wrap 成兩個物理行**。
+   *
+   * 來源：模板 `divider` 區塊嘅 `size`；舊模板冇嗰個區塊 → 用「繼承上一行 size」嘅舊行為
+   * （對齊 print-relay APK `renderTemplateTicket` 嘅 sticky style）。
+   */
+  | { kind: "divider"; size: EscPosSize }
+  | {
+      kind: "items";
+      size: EscPosSize;
+      bold: boolean;
+      align: EscPosAlign;
+      subSize: EscPosSize;
+      items: PrintItemLine[];
+      layout: EscPosItemsLayout;
+      /**
+       * card 排版「每件菜之間」嗰條分格線嘅字體大小；`null` = 唔印（模板 `divider` 區塊熄咗）。
+       * 舊模板冇 `divider` 區塊 → 落 `size`（即繼承菜品主行 size，同實機一致）。
+       */
+      dividerSize: EscPosSize | null;
+    }
   /** 收據二維碼（`qr_code` 區塊）。冇 `job.qr` 時 renderer 唔會產生呢一行。 */
   | { kind: "qr"; align: EscPosAlign; qr: QrPayload; size: EscPosSize };
 
@@ -113,14 +135,55 @@ export function renderEscPosLines(
 ): EscPosLine[] {
   const lines: EscPosLine[] = [];
   const title = TITLE[snapshot.kind] ?? "";
+  // 抬頭實機係 style("m", true) → line → reset()，所以抬頭之後 curSize 返落 "s"。
   if (title) lines.push({ kind: "text", text: title, size: "m", bold: true, align: "center" });
+
+  /**
+   * 模板 `divider` 區塊（設定型，自己唔 emit 行）。
+   * - `undefined` = 舊模板冇呢個區塊 → 沿用「繼承上一行 size」舊行為（實機 sticky style）
+   * - `EscPosSize` = 商家指定嘅分格線字體大小
+   * - `null` = 區塊 visible=false → 全張單唔印分格線
+   */
+  const dividerBlock = snapshot.blocks.find((b) => b.id === "divider");
+  const fixedDivider: EscPosSize | null | undefined = dividerBlock
+    ? dividerBlock.visible
+      ? dividerBlock.size
+      : null
+    : undefined;
+  /** 印表機嘅 sticky 字體狀態（`ESC ! n` 殘留），用嚟模擬舊模板「分格線跟上一行放大」。 */
+  let curSize: EscPosSize = "s";
+  /** fixedDivider === null（區塊熄）→ 唔 push；undefined（舊模板）→ 用 fallback。 */
+  const pushDivider = (fallback: EscPosSize) => {
+    const size = fixedDivider === undefined ? fallback : fixedDivider;
+    if (size === null) return;
+    lines.push({ kind: "divider", size });
+  };
 
   for (const b of snapshot.blocks) {
     if (!b.visible) continue;
+    // 分格線係設定型區塊：淨提供 size / 開關，唔會自己印一行（位置由 items 自動線決定）。
+    if (b.id === "divider") continue;
     if (b.id === "items") {
-      lines.push({ kind: "divider" });
-      lines.push({ kind: "items", size: b.size, bold: b.bold, align: b.align, subSize: b.subSize ?? "s", items, layout: b.layout ?? "card" });
-      lines.push({ kind: "divider" });
+      pushDivider(curSize); // 實機：印線前冇 style() → 繼承上一個區塊嘅 size
+      lines.push({
+        kind: "items",
+        size: b.size,
+        bold: b.bold,
+        align: b.align,
+        subSize: b.subSize ?? "s",
+        items,
+        layout: b.layout ?? "card",
+        // card 每件菜之間嗰條線：實機紧跟主行（`style(b.size)` 未 reset）→ 舊模板 fallback = b.size
+        dividerSize: fixedDivider === undefined ? b.size : fixedDivider,
+      });
+      // 實機：結尾嗰條線會繼承「最後 emit 嗰行」嘅 size。
+      // card 排版每件菜之間（最後一件除外）會 `style("s")` 印空行 → 變細字；
+      // 否則睇最後一件菜有冇規格 / 備註（`subSize`），冇就仲係主行嘅 `size`。
+      const isCard = (b.layout ?? "card") === "card";
+      const lastItem = items[items.length - 1];
+      const hasSubLine = !!lastItem && ((lastItem.specs?.length ?? 0) > 0 || !!lastItem.note);
+      curSize = isCard && items.length > 1 ? "s" : hasSubLine ? (b.subSize ?? "s") : b.size;
+      pushDivider(curSize);
       continue;
     }
     // 二維碼：內容唔喺 content（嗰度只放純文字），而係讀 extras.qr。
@@ -129,11 +192,14 @@ export function renderEscPosLines(
       const qr = extras?.qr ?? null;
       if (!qr) continue;
       lines.push({ kind: "qr", align: b.align, qr, size: extras?.qrSize ?? "m" });
+      // 實機 qrRaster 前會 resetMagnify() → 放大狀態清走，之後嘅線/字返落細
+      curSize = "s";
       continue;
     }
     const text = content?.[b.id];
     if (!text) continue;
     lines.push({ kind: "text", text, size: b.size, bold: b.bold, align: b.align });
+    curSize = b.size;
   }
   return lines;
 }

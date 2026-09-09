@@ -22,6 +22,8 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "order_time", label: "下單時間" },
   { id: "checkout_time", label: "結帳時間" },
   { id: "server", label: "服務員" },
+  /** 分格線：設定型區塊（唔會自己印一行），淨控制菜品明細前後 / 每件菜之間嗰啲 `----` 線嘅字體大小。 */
+  { id: "divider", label: "分格線" },
   { id: "items", label: "菜品明細" },
   { id: "discount_breakdown", label: "單品折扣明細" },
   { id: "subtotal_before_discount", label: "原價合計" },
@@ -60,6 +62,8 @@ export const KITCHEN_SECTION_META: { id: KitchenSectionId; label: string }[] = [
   { id: "order_type", label: "單據類型" },
   { id: "time", label: "時間" },
   { id: "server", label: "店員" },
+  /** 分格線：設定型區塊（唔會自己印一行），淨控制菜品明細前後 / 每件菜之間嗰啲 `----` 線嘅字體大小。 */
+  { id: "divider", label: "分格線" },
   { id: "items", label: "菜品明細" },
   { id: "customer_count", label: "人數" },
   { id: "order_note", label: "全單備註" },
@@ -89,6 +93,12 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   order_time: block(true, "s", false, "left"),
   checkout_time: block(false, "s", false, "left"),
   server: block(false, "s", false, "left"),
+  /**
+   * 分格線（設定型）。`size` = 分格線嘅字體大小；`visible=false` = 全張單唔印任何分格線。
+   * 預設 `m`：對齊而家大多數店嘅實際出紙（廚房/收據 items 預設都係 m，實體線本來就繼承呢個 size）。
+   * 想「一條幼線」就揀 `s`（48 個 dash 啱啱印一行；m/l 雙闊會 wrap 成兩行 —— 預覽同步模擬）。
+   */
+  divider: block(true, "m", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
   discount_breakdown: block(true, "s", false, "left"),
   subtotal_before_discount: block(true, "s", false, "right"),
@@ -127,6 +137,8 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
   order_type: block(true, "s", true, "left"),
   time: block(true, "s", false, "left"),
   server: block(false, "s", false, "left"),
+  /** 分格線（設定型）：`size` 控制 `----` 線嘅字體大小，`visible=false` = 全張單唔印分格線。 */
+  divider: block(true, "m", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
   customer_count: block(false, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
@@ -144,6 +156,7 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
     "order_time",
     "checkout_time",
     "server",
+    "divider",
     "items",
     "discount_breakdown",
     "subtotal_before_discount",
@@ -209,7 +222,7 @@ export const DEFAULT_LABEL_TEMPLATE: LabelTemplate = {
 };
 export const DEFAULT_KITCHEN_TEMPLATE: KitchenTemplate = {
   blocks: { ...KITCHEN_BLOCK_DEFAULTS },
-  order: ["store_name", "order_no", "table_name", "order_type", "time", "server", "items", "customer_count", "order_note", "footer"],
+  order: ["store_name", "order_no", "table_name", "order_type", "time", "server", "divider", "items", "customer_count", "order_note", "footer"],
   headerText: "",
   footerText: "廚房留底",
 };
@@ -243,6 +256,33 @@ export function ensureReceiptSections(template: ReceiptTemplate): ReceiptTemplat
   };
 }
 
+/** 分格線區塊嘅預設樣式（設定型區塊：`size` = `----` 線嘅字體大小，`visible` = 全張單出唔出線）。 */
+const DIVIDER_BLOCK_DEFAULT: EscPosBlockStyle = block(true, "m", false, "left");
+
+/**
+ * 舊模板補 `divider` 區塊（向前兼容）。
+ *
+ * 商家嘅 `printTemplates` 係 localStorage 快照，舊設定冇 `divider` 呢個 key。
+ * 缺就補返（插落 `items` 前，`size` 預設 `"m"`），等設計介面見到「分格線」、
+ * 出紙／預覽都行「明確 size」嘅新邏輯。已有就原封不動（唔改商家設定）。
+ *
+ * ⚠️ 標籤模板（62mm）**唔好**加：標籤冇分格線，加咗會污染固定紙寬嘅區塊列表。
+ */
+export function ensureDividerSection<T extends { blocks: Record<string, EscPosBlockStyle>; order: string[] }>(template: T): T {
+  if (template.blocks?.divider && template.order.includes("divider")) return template;
+  const blocks: Record<string, EscPosBlockStyle> = {
+    ...template.blocks,
+    divider: template.blocks?.divider ?? DIVIDER_BLOCK_DEFAULT,
+  };
+  const order = [...template.order];
+  if (!order.includes("divider")) {
+    const at = order.indexOf("items");
+    if (at >= 0) order.splice(at, 0, "divider");
+    else order.push("divider");
+  }
+  return { ...template, blocks, order } as T;
+}
+
 /**
  * 標籤實體尺寸固定 → 將標籤模板每個區塊嘅字型檔位鎖死為預設嗰組（禁止動態變更）。
  *
@@ -262,11 +302,13 @@ export function withLabelFixedSizes<T extends LabelTemplate>(template: T): T {
 export function buildSnapshot(kind: PrintTemplateKind, template: ReceiptTemplate | LabelTemplate | KitchenTemplate): EscPosTemplateSnapshot {
   // 收據（含自助點餐機槽位，兩者都係 kind="receipt"）先補新區塊，
   // 等舊 localStorage 設定都可以用到後來加嘅 `qr_code`。
-  const source = kind === "receipt"
-    ? ensureReceiptSections(template as ReceiptTemplate)
-    : kind === "label"
+  // 收據（含自助點餐機）先補 `qr_code`；收據 / 廚房再補 `divider`（分格線 size）。
+  // 標籤唔補 divider（標籤紙冇分格線，且字型鎖死）。
+  const withReceipt = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
+  const source =
+    kind === "label"
       ? withLabelFixedSizes(template as LabelTemplate)   // 標籤字型鎖死
-      : template;
+      : ensureDividerSection(withReceipt as unknown as { blocks: Record<string, EscPosBlockStyle>; order: string[] });
   return {
     kind,
     blocks: source.order.map((id) => ({ id, ...source.blocks[id as keyof typeof source.blocks] })),

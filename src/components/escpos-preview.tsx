@@ -68,6 +68,53 @@ function formatDiscountRate(rate: number): string {
 }
 
 /**
+ * 80mm 熱敏紙每行可印嘅 `-` 數量（font A：12 dots 闊 × 48 = 576 dots = 可印闊）。
+ * 同 `escpos-render.ts` 嘅 `RECEIPT_PAPER_COLUMNS` 同一個數 —— 實體分格線就係 `"-".repeat(48)`。
+ */
+const DASHES_PER_LINE = 48;
+/** 等寬字型入面 `-` 嘅字寬 ÷ font-size（用嚟由「紙闊」反推預覽 dash 嘅字體大細）。 */
+const DASH_WIDTH_RATIO = 0.6;
+
+/**
+ * 分格線（分格線 = 一行 `-` 字符，唔係 CSS border）。
+ *
+ * 實體打印（`print-relay` `EscPosRenderer.renderTemplateTicket`）嘅分格線係**文字行**：
+ * `s` = 1× 闊（48 個 dash 啱啱一行）；`m` = 雙闊；`l` = 2×2（`ESC ! n` / `GS ! n`）。
+ * 雙闊之後 48 個 dash 會 **wrap 成兩個物理行**（每行 24 個），呢度照樣模擬 ——
+ * 所以預覽見到嘅 dash 大細 / 行數同實紙 100% 一致（2026-09-09 修「預覽條線唔跟字體放大」）。
+ */
+function DividerRows({ size, paperInnerPx }: { size: EscPosSize; paperInnerPx: number }) {
+  // 基準（s）：48 個 dash 排滿紙闊 → 每個 dash 嘅 px，再反推 font-size。
+  const baseFontPx = paperInnerPx / DASHES_PER_LINE / DASH_WIDTH_RATIO;
+  const scaleX = size === "s" ? 1 : 2; // m / l 都係雙闊
+  const scaleY = size === "l" ? 2 : 1; // 得 l 係雙高
+  const rows = scaleX; // 48 個 dash ÷ 每行 24 個 = 2 個物理行
+  const perRow = DASHES_PER_LINE / rows;
+  const rowHeight = baseFontPx * PREVIEW_LINE_HEIGHT * scaleY;
+  return (
+    <div style={{ overflow: "hidden" }}>
+      {Array.from({ length: rows }, (_, row) => (
+        <div
+          key={row}
+          style={{
+            height: rowHeight,
+            fontSize: baseFontPx,
+            lineHeight: PREVIEW_LINE_HEIGHT,
+            whiteSpace: "pre",
+            // scaleX / scaleY 模擬 ESC/POS 嘅字符放大（唔影響 layout box，所以要自己俾 height）
+            transform: `scale(${scaleX}, ${scaleY})`,
+            transformOrigin: "left top",
+            ...CLEAN_TEXT,
+          }}
+        >
+          {"-".repeat(perRow)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * 二維碼（#2）。同 `kiosk-qr-panel` 嘅 QR 用同一個 `encodeQrMatrix` 矩陣、同一個 quiet zone，
  * 而 Companion / APK 出紙亦係讀同一個 `QrPayload` → 預覽 == 出紙 100% 一致。
  *
@@ -134,7 +181,7 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
       >
         {lines.map((line, index) => {
           if (line.kind === "divider") {
-            return <div key={index} className="my-1 border-t border-dashed border-slate-300" />;
+            return <DividerRows key={index} size={line.size} paperInnerPx={paperInnerPx} />;
           }
           if (line.kind === "qr") {
             return (
@@ -199,7 +246,10 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                             </span>
                           </div>
                         ) : null}
-                        {isCard ? <div className="my-1 border-t border-dashed border-slate-300" /> : null}
+                        {/* card 排版「每件菜之間」嘅分格線：實機紧跟菜品主行，size 由模板 divider 區塊決定 */}
+                        {isCard && line.dividerSize ? (
+                          <DividerRows size={line.dividerSize} paperInnerPx={paperInnerPx} />
+                        ) : null}
                         <div style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
                           {(item.specs ?? []).map((s, si) => {
                             const { label, price } = splitSpecLine(s);

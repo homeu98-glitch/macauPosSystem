@@ -278,6 +278,19 @@ export type ReceiptSectionId =
   | "checkout_time"
   /** 服務員（操作人顯示名）；可選。見 docs/88 §5.4 */
   | "server"
+  /**
+   * 分格線（`----` 分隔線）。
+   *
+   * ⚠️ 呢個係**設定型區塊**：佢自己唔會印一行文字，而係決定「自動分格線」（菜品明細前後、
+   * card 排版每件菜之間）嘅**字體大小**（`size`）同開關（`visible`）。
+   * 喺 `order` 入面嘅位置唔影響出紙位置（renderer 一律跳過佢，唔會 emit 行）。
+   *
+   * 由來：實體分格線係一行 `-` 字符（renderer 用 `"-".repeat(cols)`），會繼承印表機殘留嘅
+   * 放大狀態 → 出紙時會跟住上一行（廚房單係菜品主行）嘅字體大小放大，但網頁預覽係固定
+   * CSS 線 → 兩邊唔一致（2026-09-09）。而家改由模板明確控制 size，三邊同一口徑。
+   * **舊模板冇呢個區塊 → renderer 沿用「繼承上一行 size」嘅舊行為，零影響。**
+   */
+  | "divider"
   | "items"
   /** 單品折扣明細：每件菜如有 discountRate，打印「折扣率 X% / 折讓 $Y」一行（仿 57.doc 嘅 sub-line）。 */
   | "discount_breakdown"
@@ -323,6 +336,8 @@ export type KitchenSectionId =
   | "order_type"
   | "time"
   | "server"
+  /** 分格線（設定型區塊，語義同 ReceiptSectionId 嘅 `divider`）：控制自動分格線嘅字體大小 / 開關。 */
+  | "divider"
   | "items"
   | "customer_count"
   | "order_note"

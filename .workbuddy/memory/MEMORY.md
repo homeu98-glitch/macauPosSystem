@@ -5,6 +5,9 @@
 ## 打印模板（print-center.tsx 設計頁）
 - **二維碼網址/大小**：`ReceiptTemplate.qrUrl?` + `qrSize?`（default "m"）收據/自助點餐機各自存。**`normalizePosLocalSettings` 一定要帶返 `qrUrl`/`qrSize`**（試過漏咗 → reload 剷走網址）。設計頁即時預覽 call `renderEscPosLines` 收據分支**必須傳 `{ qr, qrSize }`**，否則二維碼唔顯示。
 - **二維碼大小**：`EscPosLine.qr` 帶 `size`；預覽用 `QR_SIZE_FRACTION`（s/m/l=紙闊 40%/55%/80%）。⚠️ 真實出紙物理大細由 Companion/APK `qrModuleScale()` 決定（跨 repo），呢 repo 只做設計==預覽==存檔。
+- **分格線 = 模板 `divider` 區塊（2026-09-09 方案 C）**：實體分格線係**文字行** `"-".repeat(cols)`，會繼承印表機 sticky 放大狀態 → 出紙跟上一行字體放大；預覽以前係固定 CSS border → 唔一致。而家 `ReceiptSectionId`/`KitchenSectionId` 加 `divider`（**設定型區塊：renderer 遇到要 `continue`，唔 emit 行**）：`visible=false` = 全單唔印線；`visible=true` = 用 `size`（s=48 個 dash 一行；m/l 雙闊 → **wrap 成 2 個物理行**，每行 24 個）。舊模板冇呢個區塊 → `fixedDividerSize==null` → **唔 call style，維持「繼承」舊行為**（零影響）。預覽 `escpos-preview.tsx` 嘅 `DividerRows` 用文字 dash + `scale(2,1)/(2,2)` 模擬放大同行數。
+  - 三邊同步：本 repo（render/preview/print-center/mock-data）+ `C:\dev\print-relay` 同 `C:\dev\print hub` 嘅 `EscPosRenderer.renderTemplateTicket()` 已改（`rule()` helper）；desktop-companion（而家 divider 強制 `setStyle("s")`）同 print-agent-android **未改**，改法見 `docs/handoff-print-divider-size.md`。
+  - 預設 `divider.size="m"`（對齊而家大部份店嘅出紙）；`normalizePosLocalSettings` 嘅 merge 會自動補區塊落舊設定。
 - **標籤模板鎖定**：`LABEL_STANDARD_WIDTH_MM=62`（沿用本系統標籤卷，唔好隨意改 60）。Label 區塊字型 size 鎖死，用 `withLabelFixedSizes()` 強制返 `LABEL_BLOCK_DEFAULTS`（buildSnapshot("label") + readTemplate("label") 都用）→ 舊 localStorage 存咗唔同 size 都無效。UI 唔畀改 label 字型檔位（仍可調對齊/粗體/可見/順序）。
 
 ## 報表模塊（restaurant-daily-report.tsx）
