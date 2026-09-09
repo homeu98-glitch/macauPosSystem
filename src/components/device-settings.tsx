@@ -115,6 +115,11 @@ export function DeviceSettings() {
   >(null);
   const [menuItemSaving, setMenuItemSaving] = useState(false);
   const [menuItemError, setMenuItemError] = useState<string | null>(null);
+  // 快捷新增規格（2026-09-09）：喺「新增菜品」彈窗內直接建立新規格組，唔使跳去「規格管理」。
+  // 保存時自動存入 localSettings.standaloneSpecGroups（= 規格管理 › 獨立規格）並推 server，
+  // 同時加入目前新增菜品嘅 specGroups —— 兩邊數據同步一致、日後其他菜品可復用。
+  const [quickSpecDraft, setQuickSpecDraft] = useState<MenuSpecGroup | null>(null);
+  const [quickSpecError, setQuickSpecError] = useState<string | null>(null);
   const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
   const [bulkPrinterGroup, setBulkPrinterGroup] = useState<string>(cachedLocalSettings?.printZones?.[0]?.id ?? "kitchen");
   const [menuPrintCategoryId, setMenuPrintCategoryId] = useState<string>("all");
@@ -746,6 +751,119 @@ export function DeviceSettings() {
       if (!group) return current;
       return { ...current, specGroups: [...current.specGroups, cloneSpecGroups([group])[0]] };
     });
+  }
+
+  // ── 快捷新增規格（2026-09-09）──
+  function openQuickSpecDraft() {
+    setQuickSpecDraft({
+      id: crypto.randomUUID(),
+      name: "",
+      selectionMode: "single",
+      required: true,
+      options: [{ id: crypto.randomUUID(), label: "", priceDelta: 0 }],
+    });
+    setQuickSpecError(null);
+  }
+
+  function closeQuickSpecDraft() {
+    setQuickSpecDraft(null);
+    setQuickSpecError(null);
+  }
+
+  function updateQuickSpecDraft(updater: (group: MenuSpecGroup) => MenuSpecGroup) {
+    setQuickSpecDraft((current) => (current ? updater(current) : current));
+  }
+
+  /**
+   * 保存快捷新增規格：
+   * 1. 驗證後 upsert 入 localSettings.standaloneSpecGroups（規格管理 › 獨立規格）＋ savePosLocalSettings；
+   * 2. 同步加入目前「新增菜品」嘅 specGroups（快照拷貝，同「編輯規格」剔選行為一致）；
+   * 3. 即時推 server（/api/pos/device-config，同「保存」掣同一通道），失敗就入 outbox 遲啲補傳，
+   *    確保其他設備／規格管理頁見到同一份獨立規格。
+   */
+  async function saveQuickSpecDraft() {
+    if (!quickSpecDraft) return;
+    const name = quickSpecDraft.name.trim();
+    if (!name) {
+      setQuickSpecError("請填寫規格名稱。");
+      return;
+    }
+    const options = quickSpecDraft.options
+      .map((opt) => ({ ...opt, label: opt.label.trim() }))
+      .filter((opt) => opt.label);
+    if (options.length === 0) {
+      setQuickSpecError("請至少填寫一個選項名稱。");
+      return;
+    }
+    const group: MenuSpecGroup = { ...quickSpecDraft, name, options };
+
+    // 1. 自動存入「規格管理 › 獨立規格」（本機 + 規格管理列表即時可見）
+    const next = {
+      ...localSettings,
+      standaloneSpecGroups: localSettings.standaloneSpecGroups.some((row) => row.id === group.id)
+        ? localSettings.standaloneSpecGroups.map((row) => (row.id === group.id ? group : row))
+        : [...localSettings.standaloneSpecGroups, group],
+    };
+    setLocalSettings(next);
+    savePosLocalSettings(next);
+
+    // 2. 加入目前新增菜品嘅規格（快照拷貝）
+    setMenuItemModal((current) =>
+      current
+        ? {
+            ...current,
+            specGroups: [...current.specGroups.filter((row) => row.id !== group.id), cloneSpecGroups([group])[0]],
+          }
+        : current,
+    );
+    closeQuickSpecDraft();
+
+    // 3. 即時推 server（同 saveAll「保存」一致嘅 serverSettings 副本 + DEVICE_CONFIG_UPDATED 事件；
+    //    離線時本地已存，事件入 outbox 網絡恢復自動補傳）
+    const updatedConfig = { ...config, updatedAt: new Date().toISOString() };
+    setConfig(updatedConfig);
+    const {
+      autoAcceptSelfOrder: _autoAccept,
+      notePresets: _notePresets,
+      cancelNotePresets: _cancelNotePresets,
+      compNotePresets: _compNotePresets,
+      ...localRest
+    } = next;
+    const serverSettings = { ...localRest, floors: stripReopenTempTables(next.floors) };
+    const event: QueueEvent = {
+      id: uid("evt"),
+      type: "DEVICE_CONFIG_UPDATED",
+      entityId: updatedConfig.deviceId,
+      payload: {
+        device: updatedConfig,
+        tables: serverSettings.floors,
+        paymentMethods: next.paymentMethods,
+        menuPrinterOverrides: next.menuPrinterOverrides,
+        printZones: next.printZones,
+        specTemplates: next.specTemplates,
+        standaloneSpecGroups: next.standaloneSpecGroups,
+        printTemplates: next.printTemplates,
+        onlineOrderSettings: next.onlineOrderSettings,
+      },
+      status: "pending",
+      createdAt: updatedConfig.updatedAt,
+    };
+    saveQueue(enqueueEvents(loadQueue(), withStoreScope([event])));
+    try {
+      const res = await fetch("/api/pos/device-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...updatedConfig, localSettings: serverSettings }),
+      });
+      const ok = res.ok;
+      setStatus(
+        ok
+          ? `已新增規格「${name}」：已加入菜品，並自動存入「規格管理 › 獨立規格」供日後復用。`
+          : `已新增規格「${name}」並加入菜品；同步 server 失敗，稍後會自動補傳。`,
+      );
+    } catch {
+      setStatus(`已新增規格「${name}」並加入菜品；目前離線，規格已存本機、稍後自動補傳。`);
+    }
   }
 
   async function saveMenuItemModal() {
@@ -3417,6 +3535,7 @@ export function DeviceSettings() {
               if (!menuItemSaving) {
                 setMenuItemModal(null);
                 setMenuItemError(null);
+                closeQuickSpecDraft();
               }
             }}
             title="新增菜品"
@@ -3575,17 +3694,29 @@ export function DeviceSettings() {
               <div className="rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-sm font-semibold text-slate-700">
-                    規格<span className="ml-1 text-xs font-normal text-slate-400">選填；新增後可喺列表「編輯規格」再改</span>
+                    規格<span className="ml-1 text-xs font-normal text-slate-400">選填；可套用模板、剔選獨立規格，或快捷新增</span>
                   </span>
-                  {menuItemModal.specGroups.length > 0 ? (
-                    <button
-                      className="rounded-xl px-3 py-1.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 transition hover:bg-red-50 active:scale-95"
-                      onClick={() => setMenuItemModal((current) => (current ? { ...current, specGroups: [] } : current))}
-                      type="button"
-                    >
-                      清空規格
-                    </button>
-                  ) : null}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {menuItemModal.specGroups.length > 0 ? (
+                      <button
+                        className="rounded-xl px-3 py-1.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 transition hover:bg-red-50 active:scale-95"
+                        onClick={() => setMenuItemModal((current) => (current ? { ...current, specGroups: [] } : current))}
+                        type="button"
+                      >
+                        清空規格
+                      </button>
+                    ) : null}
+                    {!quickSpecDraft ? (
+                      <button
+                        className="rounded-xl bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600 ring-1 ring-orange-100 transition hover:bg-orange-100 active:scale-95"
+                        onClick={openQuickSpecDraft}
+                        type="button"
+                        title="喺呢度直接建立新規格；會自動存入「規格管理 › 獨立規格」供日後復用"
+                      >
+                        ＋ 新增規格
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="mt-3 grid gap-3">
                   {menuItemModal.specGroups.length > 0 ? (
@@ -3602,6 +3733,127 @@ export function DeviceSettings() {
                   ) : (
                     <span className="text-xs text-slate-400">尚未加入規格。</span>
                   )}
+                  {/* 快捷新增規格（2026-09-09）：喺彈窗內直接建立，唔使跳去「規格管理」；
+                      保存後自動存入獨立規格（規格管理可見、其他菜品可復用）並推 server 同步 */}
+                  {quickSpecDraft ? (
+                    <div className="rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          autoFocus
+                          className="w-[180px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                          onChange={(event) => updateQuickSpecDraft((group) => ({ ...group, name: event.target.value }))}
+                          placeholder="規格名（例如：甜度）"
+                          value={quickSpecDraft.name}
+                        />
+                        <select
+                          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                          onChange={(event) =>
+                            updateQuickSpecDraft((group) => ({
+                              ...group,
+                              selectionMode: event.target.value as MenuSpecGroup["selectionMode"],
+                            }))
+                          }
+                          value={quickSpecDraft.selectionMode}
+                        >
+                          <option value="single">單選</option>
+                          <option value="multi">多選</option>
+                        </select>
+                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                          <input
+                            checked={quickSpecDraft.required}
+                            className="h-4 w-4 rounded border-slate-300"
+                            onChange={(event) => updateQuickSpecDraft((group) => ({ ...group, required: event.target.checked }))}
+                            type="checkbox"
+                          />
+                          必選
+                        </label>
+                      </div>
+                      <div className="mt-2 grid gap-2">
+                        {quickSpecDraft.options.map((opt) => (
+                          <div key={opt.id} className="grid gap-2 md:grid-cols-[minmax(0,1fr)_110px_70px]">
+                            <input
+                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              onChange={(event) =>
+                                updateQuickSpecDraft((group) => ({
+                                  ...group,
+                                  options: group.options.map((o) =>
+                                    o.id === opt.id ? { ...o, label: event.target.value } : o,
+                                  ),
+                                }))
+                              }
+                              placeholder="選項（例如：少冰）"
+                              value={opt.label}
+                            />
+                            <input
+                              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                              inputMode="decimal"
+                              onChange={(event) =>
+                                updateQuickSpecDraft((group) => ({
+                                  ...group,
+                                  options: group.options.map((o) =>
+                                    o.id === opt.id ? { ...o, priceDelta: Number(event.target.value) || 0 } : o,
+                                  ),
+                                }))
+                              }
+                              placeholder="加價"
+                              type="number"
+                              value={String(opt.priceDelta)}
+                            />
+                            <button
+                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                              onClick={() =>
+                                updateQuickSpecDraft((group) => ({
+                                  ...group,
+                                  options: group.options.filter((o) => o.id !== opt.id),
+                                }))
+                              }
+                              type="button"
+                            >
+                              刪除
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          className="justify-self-start rounded-2xl bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white"
+                          onClick={() =>
+                            updateQuickSpecDraft((group) => ({
+                              ...group,
+                              options: [...group.options, { id: crypto.randomUUID(), label: "", priceDelta: 0 }],
+                            }))
+                          }
+                          type="button"
+                        >
+                          ＋ 新增選項
+                        </button>
+                      </div>
+                      {quickSpecError ? (
+                        <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
+                          {quickSpecError}
+                        </div>
+                      ) : null}
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-slate-500">
+                          保存後自動存入「規格管理 › 獨立規格」，其他菜品可剔選復用。
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                            onClick={closeQuickSpecDraft}
+                            type="button"
+                          >
+                            取消
+                          </button>
+                          <button
+                            className="rounded-2xl bg-orange-500 px-4 py-2 text-xs font-semibold text-white"
+                            onClick={() => void saveQuickSpecDraft()}
+                            type="button"
+                          >
+                            保存並加入
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                   {localSettings.specTemplates.length > 0 ? (
                     <select
                       className="min-h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm"
@@ -3655,7 +3907,7 @@ export function DeviceSettings() {
                   ) : null}
                   {localSettings.specTemplates.length === 0 && localSettings.standaloneSpecGroups.length === 0 ? (
                     <span className="text-xs text-slate-400">
-                      未有規格模板／獨立規格組；可先去「規格管理」建立，或新增菜品後喺列表「編輯規格」。
+                      未有規格模板／獨立規格組；可直接按上方「＋ 新增規格」快捷新增（自動存入規格管理），或套用模板／到「規格管理」建立。
                     </span>
                   ) : null}
                 </div>
