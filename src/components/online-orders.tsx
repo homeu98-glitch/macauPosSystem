@@ -6,7 +6,8 @@ import { formatMacauDateTime } from "@/lib/format";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
+import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
+import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder, resolveLedgerPosOrderForReceipt } from "@/lib/ledger/ledger-pos-bridge";
 import {
   describeNoReceiptPrinterError,
   printReceiptForLedgerOrderOnce,
@@ -49,6 +50,7 @@ import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
 import { AuthSession, loadAuthSession, loadPosLocalSettings, loadPrintJobs } from "@/lib/storage";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
 import { formatMoney } from "@/lib/format";
+import { PosOrder } from "@/lib/types";
 
 const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -119,6 +121,9 @@ export function OnlineOrders({
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number }> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // 2026-09-09：線上單「查看」→ 收據預覽（同線下 settled 單「查看」一致）。
+  // 由 resolveLedgerPosOrderForReceipt 將 Ledger 單投影成 PosOrder，餵畀 ReceiptTicketPreview。
+  const [receiptPreviewOrder, setReceiptPreviewOrder] = useState<PosOrder | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
@@ -535,6 +540,7 @@ export function OnlineOrders({
     setViewingOrderId(orderId);
     setDetailItems(null);
     setDetailLoading(true);
+    setReceiptPreviewOrder(null);
     try {
       const detail = await getOrderDetail(orderId);
       setDetailItems(
@@ -545,6 +551,17 @@ export function OnlineOrders({
           discountAvos: item.discountAvos,
         })),
       );
+      // 投影成 PosOrder 供收據預覽（同線下 settled 單「查看」用同一個 ReceiptTicketPreview）
+      const viewing = orders.find((o) => o.id === orderId);
+      if (viewing) {
+        try {
+          const posOrder = await resolveLedgerPosOrderForReceipt(viewing, detail);
+          setReceiptPreviewOrder(posOrder);
+        } catch {
+          // 投影失敗唔影響明細顯示；收據預覽區塊留空
+          setReceiptPreviewOrder(null);
+        }
+      }
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "讀取明細失敗" });
     } finally {
@@ -1080,10 +1097,23 @@ export function OnlineOrders({
           onClose={() => {
             setViewingOrderId(null);
             setDetailItems(null);
+            setReceiptPreviewOrder(null);
           }}
           title="訂單詳情"
           widthClassName="max-w-2xl"
         >
+          {/* 收據預覽：同線下 settled 單「查看」一致，用同一個 ReceiptTicketPreview。
+              render 出嘅欄位/格式/排版 == 收銀機實際打印出嚟嘅收據。 */}
+          {receiptPreviewOrder ? (
+            <div className="mb-4">
+              <ReceiptTicketPreview order={receiptPreviewOrder} />
+            </div>
+          ) : detailLoading ? (
+            <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+              正在載入收據…
+            </div>
+          ) : null}
+
           <div className="grid gap-2 text-sm text-slate-700">
             <div>客戶：{viewingOrder.customerName ?? "--"}</div>
             <div>電話：{viewingOrder.phone ?? "--"}</div>
