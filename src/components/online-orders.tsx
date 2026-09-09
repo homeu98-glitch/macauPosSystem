@@ -5,12 +5,13 @@ import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
-import { OrderDiscountRow } from "@/components/order-discount-display";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
 import {
+  describeNoReceiptPrinterError,
   printReceiptForLedgerOrderOnce,
   printVoidForLedgerOrderOnce,
+  reprintReceiptForLedgerOrder,
 } from "@/lib/print-jobs";
 import {
   acceptLedgerOrder,
@@ -44,7 +45,7 @@ import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
 import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
-import { loadPosLocalSettings, loadPrintJobs } from "@/lib/storage";
+import { AuthSession, loadAuthSession, loadPosLocalSettings, loadPrintJobs } from "@/lib/storage";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
 import { formatMoney } from "@/lib/format";
 
@@ -54,6 +55,41 @@ const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
   { key: "pickup", label: "外賣自取" },
   { key: "self_delivery", label: "外送" },
 ];
+
+/**
+ * 線上單狀態藥丸視覺 token —— 與「店內線下訂單」卡片嘅 getOrderStatusBadge
+ * （pos-order-filters.ts）同一套配色／結構（label + bg + dot），令左右兩欄卡片
+ * 喺訂單介面視覺完全 align。label 仍用 ledgerStatusLabel 原有文案。
+ */
+function getLedgerStatusBadge(order: LedgerOnlineOrder): {
+  label: string;
+  bgClass: string;
+  textClass: string;
+  dotClass: string;
+} {
+  const label = ledgerStatusLabel(order.status, order.fulfillmentType);
+  const raw = rawLedgerStatus(order.status);
+  if (raw === "completed") {
+    return { label, bgClass: "bg-emerald-50", textClass: "text-emerald-700", dotClass: "bg-emerald-500" };
+  }
+  if (raw === "cancelled") {
+    return { label, bgClass: "bg-slate-200", textClass: "text-slate-600", dotClass: "bg-slate-400" };
+  }
+  if (raw === "ready") {
+    return { label, bgClass: "bg-sky-50", textClass: "text-sky-700", dotClass: "bg-sky-500" };
+  }
+  if (raw === "delivering") {
+    return { label, bgClass: "bg-violet-50", textClass: "text-violet-700", dotClass: "bg-violet-500" };
+  }
+  if (raw === "accepted") {
+    return { label, bgClass: "bg-blue-50", textClass: "text-blue-700", dotClass: "bg-blue-500" };
+  }
+  if (raw === "preparing") {
+    return { label, bgClass: "bg-amber-50", textClass: "text-amber-700", dotClass: "bg-amber-500" };
+  }
+  // pending 新單
+  return { label, bgClass: "bg-orange-50", textClass: "text-orange-700", dotClass: "bg-orange-500" };
+}
 
 export function OnlineOrders({
   embedded = false,
@@ -84,7 +120,10 @@ export function OnlineOrders({
   const [detailLoading, setDetailLoading] = useState(false);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
+  const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
   const [audioReady, setAudioReady] = useState(false);
+  // 權限：必須有已登入員工 session（client-only，mount 後先讀，保 SSR/CSR 一致）。
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
 
   const ordersRef = useRef<LedgerOnlineOrder[]>([]);
   const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
@@ -115,6 +154,10 @@ export function OnlineOrders({
     const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    setAuthSession(loadAuthSession());
+  }, []);
 
   useEffect(() => {
     function onLocalSettingsChanged(event: Event) {
@@ -508,6 +551,48 @@ export function OnlineOrders({
     }
   }
 
+  /**
+   * 呢啲先有收據可補打（對齊線下「已結帳／已付款」口徑）：
+   * 線上單必須已經收款；未付款（到店付款）／已取消未收款都冇原始單據。
+   */
+  function hasReceivableReceipt(order: LedgerOnlineOrder | null): boolean {
+    if (!order) return false;
+    if (order.paymentStatus !== "paid") return false;
+    return normalizeLedgerStatus(order.status) !== "cancelled";
+  }
+
+  /** 補打帳單（收據）權限：已登入員工 + 未被後台撤銷權位（缺省 = 有）。 */
+  function canReprintReceipt(): boolean {
+    if (!authSession) return false;
+    return authSession.permissions.reprintReceipt !== false;
+  }
+
+  /**
+   * 補打帳單（收據）：同線下訂單嗰粒掣完全一致 —— 行 `buildReceiptPrintJobs`
+   * （同一個收據模板槽位 / 同一批收據打印機 / 同一套內容），資料由 Ledger 重建。
+   * 手動語義：唔受「自動打印」開關影響，亦唔做 once 去重（撳幾次印幾次）。
+   */
+  async function reprintBillForOnlineOrder(order: LedgerOnlineOrder) {
+    if (!canReprintReceipt()) {
+      setToast({ tone: "error", message: "目前帳號沒有補打帳單權限，請使用店長帳號操作。" });
+      return;
+    }
+    if (reprintingOrderId) return;
+    setReprintingOrderId(order.id);
+    try {
+      const count = await reprintReceiptForLedgerOrder(order);
+      if (count > 0) {
+        setToast({ tone: "success", message: `已加入補打帳單打印隊列：${orderCodeLabel(order)}` });
+        return;
+      }
+      setToast({ tone: "error", message: describeNoReceiptPrinterError() });
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "補打帳單失敗" });
+    } finally {
+      setReprintingOrderId(null);
+    }
+  }
+
   function startAccept(order: LedgerOnlineOrder) {
     if (order.tabType === "dine_in") {
       setAssigningOrderId(order.id);
@@ -643,12 +728,13 @@ export function OnlineOrders({
     }
   }
 
-  function renderOrderActions(order: LedgerOnlineOrder, compact = false) {
+  function renderOrderActions(order: LedgerOnlineOrder) {
     const raw = rawLedgerStatus(order.status);
     const orderLoading = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
     // 有待確認申請（取消／改單）時，先隱藏一般接單／推進狀態按鈕，避免同審核搶操作。
     const hasRequest = hasPendingChangeRequest(order);
-    const btn = compact ? "rounded-2xl px-3 py-2 text-xs font-semibold" : "rounded-2xl px-3 py-2 text-sm font-semibold";
+    // 按鈕規格與「店內線下訂單」卡片一致：rounded-xl px-3 py-2 text-xs（卡片同彈窗共用）
+    const btn = "rounded-xl px-3 py-2 text-xs font-semibold";
 
     return (
       <>
@@ -830,75 +916,83 @@ export function OnlineOrders({
           </div>
         ) : null}
 
-        <div className={`grid gap-3 ${embedded ? "grid-cols-1" : "lg:grid-cols-2 2xl:grid-cols-3"}`}>
-          {filteredOrders.map((order) => (
-            <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
+        <div className={`grid gap-2 ${embedded ? "grid-cols-1" : "lg:grid-cols-2 2xl:grid-cols-3"}`}>
+          {filteredOrders.map((order) => {
+            const statusBadge = getLedgerStatusBadge(order);
+            return (
+              // 卡片規格與「店內線下訂單」（local-orders-panel）完全一致：
+              // p-3 容器 · 左欄三行（單號 / 類型·客戶 / 時間）· 右欄狀態藥丸+支付小標籤 ·
+              // 金額 → 優惠 → 菜品 → 按鈕列（mt-3 flex flex-wrap gap-1.5，rounded-xl text-xs）。
+              <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+                    <div className="mt-0.5 truncate text-xs text-slate-500">
+                      {tabLabel(order.tabType)} · 客戶：{order.customerName ?? "--"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${statusBadge.bgClass} ${statusBadge.textClass}`}
+                    >
+                      <span className={`h-4 w-4 rounded-full ${statusBadge.dotClass}`} />
+                      {statusBadge.label}
+                    </span>
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        order.paymentStatus === "paid"
+                          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                          : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                      }`}
+                    >
+                      {order.paymentStatus === "paid" ? "已支付" : "未支付"}
+                      {order.paymentMode ? `（${paymentModeLabel(order.paymentMode)}）` : ""}
+                    </span>
                   </div>
                 </div>
-                <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
-                  {ledgerStatusLabel(order.status, order.fulfillmentType)}
-                </span>
-              </div>
-              {rawLedgerStatus(order.status) === "accepted" ? (
-                <div className="mt-1 text-xs text-amber-600">此單已由外部接單，點擊「開始製作」送廚房</div>
-              ) : null}
-              <div className="mt-3 text-sm text-slate-700">
-                {order.customerName ? `客戶：${order.customerName}` : "客戶：--"}
-              </div>
-              <div className="mt-1 text-sm text-slate-700">
-                支付：{" "}
-                <span
-                  className={
-                    order.paymentStatus === "paid" ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"
-                  }
-                >
-                  {order.paymentStatus === "paid" ? "已支付" : "未支付"}
-                </span>
-                {order.paymentMode ? (
-                  <span className="text-slate-500">（{paymentModeLabel(order.paymentMode)}）</span>
+                {rawLedgerStatus(order.status) === "accepted" ? (
+                  <div className="mt-1 text-xs text-amber-600">此單已由外部接單，點擊「開始製作」送廚房</div>
                 ) : null}
-              </div>
-              <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
-              {order.discountAmount && order.discountAmount > 0 ? (
-                <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
-                  <span className="text-xs font-semibold text-amber-700 tabular-nums">
-                    已優惠 -{formatMoney(order.discountAmount)}
-                  </span>
-                  {order.subtotalBeforeDiscount != null ? (
-                    <span className="text-[11px] tabular-nums text-slate-400 line-through">
-                      原 {formatMoney(order.subtotalBeforeDiscount)}
+                <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
+                {order.discountAmount && order.discountAmount > 0 ? (
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+                    <span className="text-xs font-semibold text-amber-700 tabular-nums">
+                      已優惠 -{formatMoney(order.discountAmount)}
                     </span>
-                  ) : null}
+                    {order.subtotalBeforeDiscount != null ? (
+                      <span className="text-[11px] tabular-nums text-slate-400 line-through">
+                        原 {formatMoney(order.subtotalBeforeDiscount)}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {changeRequestLabel(order) ? (
+                  <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                    {changeRequestLabel(order)}
+                  </div>
+                ) : null}
+                {order.itemSummary ? (
+                  <div className="mt-1 truncate text-xs text-slate-500">
+                    {order.itemSummary}
+                    {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  <button
+                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                    onClick={() => void openOrderDetail(order.id)}
+                    type="button"
+                  >
+                    查看
+                  </button>
+                  {renderOrderActions(order)}
                 </div>
-              ) : null}
-              {changeRequestLabel(order) ? (
-                <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
-                  {changeRequestLabel(order)}
-                </div>
-              ) : null}
-              {order.itemSummary ? (
-                <div className="mt-3 text-xs text-slate-600">
-                  {order.itemSummary}
-                  {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
-                </div>
-              ) : null}
-              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <button
-                  className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                  onClick={() => void openOrderDetail(order.id)}
-                  type="button"
-                >
-                  查看
-                </button>
-                {renderOrderActions(order)}
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </div>
     </>
@@ -975,7 +1069,7 @@ export function OnlineOrders({
 
       {viewingOrder ? (
         <ResponsiveModal
-          actions={renderOrderActions(viewingOrder, true)}
+          actions={renderOrderActions(viewingOrder)}
           description={`${orderCodeLabel(viewingOrder)} · ${tabLabel(viewingOrder.tabType)}`}
           onClose={() => {
             setViewingOrderId(null);
@@ -1038,6 +1132,22 @@ export function OnlineOrders({
               <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total)}</span>
             </div>
           </div>
+
+          {/* 補打帳單（收據）：位置／樣式／互動對齊線下訂單「查看」彈窗嗰粒掣
+              （明細右下角、slate-900 實心、入隊後出 toast）。
+              只喺「已收款」+「有權限」時先顯示。 */}
+          {hasReceivableReceipt(viewingOrder) && canReprintReceipt() ? (
+            <div className="mt-3 flex justify-end">
+              <button
+                className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                disabled={reprintingOrderId === viewingOrder.id}
+                onClick={() => void reprintBillForOnlineOrder(viewingOrder)}
+                type="button"
+              >
+                {reprintingOrderId === viewingOrder.id ? "補打中…" : "補打帳單（收據）"}
+              </button>
+            </div>
+          ) : null}
         </ResponsiveModal>
       ) : null}
     </>

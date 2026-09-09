@@ -6,6 +6,11 @@ export interface UserPermissions {
   voidItem: boolean;
   /** 返結權位（保留，現階段唔做門控：任何員工可返結，只強制揀原因） */
   reopenOrder?: boolean;
+  /**
+   * 補打帳單（收據）權位。缺省 = 有（對齊線下：補打收據歷來無角色門控，
+   * 任何已登入收銀都做得到）。後台／權限組可個別設 `false` 收起粒掣。
+   */
+  reprintReceipt?: boolean;
   manageAccounts?: boolean;
 }
 

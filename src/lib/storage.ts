@@ -363,12 +363,12 @@ function readToggle(value: unknown, fallback: boolean): boolean {
 
 function defaultPermissionsForRole(role: UserRole): UserPermissions {
   if (role === "admin") {
-    return { refundOrder: true, voidItem: true, manageAccounts: true };
+    return { refundOrder: true, voidItem: true, manageAccounts: true, reprintReceipt: true };
   }
   if (role === "manager") {
-    return { refundOrder: true, voidItem: true, manageAccounts: false };
+    return { refundOrder: true, voidItem: true, manageAccounts: false, reprintReceipt: true };
   }
-  return { refundOrder: false, voidItem: false, manageAccounts: false };
+  return { refundOrder: false, voidItem: false, manageAccounts: false, reprintReceipt: true };
 }
 
 function normalizeAccountStores(stores: AccountStore[] | null | undefined): AccountStore[] {

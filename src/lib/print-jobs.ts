@@ -16,7 +16,12 @@ import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { PosBootstrap, PosOrder, PrintJob, ReceiptTemplate } from "@/lib/types";
-import { getBridgedPosOrder } from "@/lib/ledger/ledger-pos-bridge";
+import {
+  getBridgedPosOrder,
+  resolveLedgerPosOrderForReceipt,
+} from "@/lib/ledger/ledger-pos-bridge";
+import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
+import type { LedgerOrderDetail } from "@/lib/ledger/orders";
 import {
   buildKitchenContent,
   buildLabelContent,
@@ -358,6 +363,38 @@ export function printReceiptForPosOrder(order: PosOrder): number {
 export function reprintReceiptForOrder(order: PosOrder): number {
   const authoritative = loadOrders().find((row) => row.id === order.id) ?? order;
   return printReceiptForPosOrder(authoritative);
+}
+
+/**
+ * 0 張收據嘅診斷文案：分開「未配置收據機」同「機喺度但產生唔到 job」兩種成因，
+ * 否則用家無從入手（對齊 `describeNoKitchenPrinterError` 嘅做法）。
+ */
+export function describeNoReceiptPrinterError(): string {
+  const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
+    (printer) => printer.enabled && printer.role === "receipt",
+  );
+  return hasReceiptPrinter
+    ? "找不到可用的收據打印機，請檢查設備設置。"
+    : "未配置收據打印機，請到設備設置添加。";
+}
+
+/**
+ * 線上單補打帳單（收據）—— 同線下 `reprintReceiptForOrder` **完全一致**：
+ * 行同一個 `buildReceiptPrintJobs`（同一個 `printTemplates.receipt` 模板槽位、
+ * 同一批 `role === "receipt"` 打印機、同一套 ESC/POS 內容），只係資料來源由
+ * localStorage 換成 Ledger（`resolveLedgerPosOrderForReceipt` 轉成本地 PosOrder）。
+ *
+ * 手動語義（同線下掣一樣）：**唔查**收據總開關、亦**唔做** once 去重 ——
+ * 用家明確撳掣就印，撳幾次印幾次。
+ *
+ * @returns 實際加入隊列嘅張數；0 = 冇收據機 / 冇 bootstrap cache。
+ */
+export async function reprintReceiptForLedgerOrder(
+  ledgerOrder: LedgerOnlineOrder,
+  detail?: LedgerOrderDetail,
+): Promise<number> {
+  const order = await resolveLedgerPosOrderForReceipt(ledgerOrder, detail);
+  return printReceiptForPosOrder(order);
 }
 
 /**

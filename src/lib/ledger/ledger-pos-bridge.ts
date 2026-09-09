@@ -318,13 +318,24 @@ export type BridgeLedgerOrderOptions = {
   detail?: LedgerOrderDetail;
 };
 
-export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions): Promise<{
-  posOrder: PosOrder;
-  printJobs: PrintJob[];
-}> {
+/**
+ * Ledger 線上單 → 本地 `PosOrder`（純資料轉換）。
+ *
+ * 唔產生任何打印任務、唔寫 localStorage／POS DB（契約 M3/M8），只係俾
+ * 「廚房單」同「收據」呢啲本地 builder 用嘅共通輸入。
+ */
+function buildLedgerPosOrder(
+  ledgerOrder: LedgerOnlineOrder,
+  detail: LedgerOrderDetail,
+  tableId?: string,
+  tableName?: string,
+): PosOrder {
   const bootstrap = loadBootstrapCache();
-  const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
-  const { tableId, tableName } = resolveTableMeta(options.ledgerOrder, options.tableId, options.tableName);
+  const { tableId: resolvedTableId, tableName: resolvedTableName } = resolveTableMeta(
+    ledgerOrder,
+    tableId,
+    tableName,
+  );
   const items = mapDetailToOrderItems(detail, bootstrap);
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const taxRate = bootstrap?.rules.taxRate ?? 0;
@@ -332,39 +343,66 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   const taxAmount = subtotal * taxRate;
   const serviceChargeAmount = subtotal * serviceRate;
   const timestamp = new Date().toISOString();
-  const localOrderNo =
-    options.ledgerOrder.pickupCode ??
-    (options.ledgerOrder.tabType === "pickup"
-      ? `自取-${options.ledgerOrder.id.slice(0, 6)}`
-      : options.ledgerOrder.tabType === "self_delivery"
-        ? `外送-${options.ledgerOrder.id.slice(0, 6)}`
-        : `線上-${options.ledgerOrder.id.slice(0, 6)}`);
+  const localOrderNo = resolveLocalOrderNo(ledgerOrder);
 
-  const posOrder: PosOrder = {
-    id: `ledger-${options.ledgerOrder.id}`,
+  return {
+    id: `ledger-${ledgerOrder.id}`,
     localOrderNo,
-    tableId,
-    tableName,
+    tableId: resolvedTableId,
+    tableName: resolvedTableName,
     status: "sent_to_kitchen",
     fulfillmentStatus: "preparing",
     items,
-    orderNote: options.ledgerOrder.note,
+    orderNote: ledgerOrder.note,
     subtotal,
     taxAmount,
     serviceChargeAmount,
     // 訂單層全單折扣（defensive 從 Ledger 攞）：優先 detail.discountAvos，
-    // 退而求其次用 options.ledgerOrder.discountAmount（list view 已經 map 好）。
+    // 退而求其次用 ledgerOrder.discountAmount（list view 已經 map 好）。
     discountAmount:
-      (detail.discountAvos != null ? detail.discountAvos / 100 : 0) ||
-      options.ledgerOrder.discountAmount ||
-      0,
-    total: detail.total ?? options.ledgerOrder.total,
-    prepaidAmount: options.ledgerOrder.paymentStatus === "paid" ? options.ledgerOrder.total : 0,
-    onlineOrderId: options.ledgerOrder.id,
-    paymentMethod: options.ledgerOrder.paymentMode,
-    createdAt: options.ledgerOrder.createdAt ?? timestamp,
+      (detail.discountAvos != null ? detail.discountAvos / 100 : 0) || ledgerOrder.discountAmount || 0,
+    total: detail.total ?? ledgerOrder.total,
+    prepaidAmount: ledgerOrder.paymentStatus === "paid" ? ledgerOrder.total : 0,
+    onlineOrderId: ledgerOrder.id,
+    paymentMethod: ledgerOrder.paymentMode,
+    createdAt: ledgerOrder.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
+}
+
+/**
+ * 攞（必要時建立）一張線上單嘅本地 `PosOrder` 表示 —— 只為**收據**用途。
+ *
+ * 優先返 `bridgedOrders` 入面嗰份（自動補印／接單時已經建立，內容同原單一致）；
+ * 冇（例如從未喺本機接過單、或 reload 後 in-memory map 已清）就即時由 Ledger
+ * `get_order_detail` 重建一份並 cache 返入 map，等下一次補打唔使再打 API。
+ *
+ * 對應線下 `reprintReceiptForOrder` 嘅「由 storage 重讀權威版訂單」一步 ——
+ * 線上單嘅權威係 Ledger，本地只係打印用嘅投影。
+ */
+export async function resolveLedgerPosOrderForReceipt(
+  ledgerOrder: LedgerOnlineOrder,
+  detail?: LedgerOrderDetail,
+): Promise<PosOrder> {
+  const bridged = getBridgedPosOrder(ledgerOrder.id);
+  if (bridged) return bridged;
+  const resolvedDetail = detail ?? (await getOrderDetail(ledgerOrder.id));
+  const built = buildLedgerPosOrder(ledgerOrder, resolvedDetail);
+  bridgedOrders.set(ledgerOrder.id, built);
+  return built;
+}
+
+export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions): Promise<{
+  posOrder: PosOrder;
+  printJobs: PrintJob[];
+}> {
+  const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
+  const posOrder = buildLedgerPosOrder(
+    options.ledgerOrder,
+    detail,
+    options.tableId,
+    options.tableName,
+  );
 
   const printJobs = buildPrintJobs(posOrder);
 

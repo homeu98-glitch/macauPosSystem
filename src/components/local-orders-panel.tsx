@@ -29,13 +29,11 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { confirmSelfOrder, isReopenable, rejectSelfOrder, reopenPosOrder } from "@/lib/pos-orders";
-import { reprintReceiptForOrder } from "@/lib/print-jobs";
-import { defaultDeviceConfig } from "@/lib/mock-data";
+import { describeNoReceiptPrinterError, reprintReceiptForOrder } from "@/lib/print-jobs";
 import {
   addDeletedOrderIds,
   loadAuthSession,
   loadBootstrapCache,
-  loadDeviceConfig,
   loadOrders,
   loadPosLocalSettings,
   loadQueue,
@@ -189,10 +187,8 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
       setToast(`已加入補打帳單打印隊列：${order.localOrderNo}`);
       return;
     }
-    const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
-      (printer) => printer.enabled && printer.role === "receipt",
-    );
-    setToast(hasReceiptPrinter ? "找不到可用的收據打印機，請檢查設備設置。" : "未配置收據打印機，請到設備設置添加。");
+    // 診斷文案共用（線上單補打行同一個 helper，保證兩邊提示一致）。
+    setToast(describeNoReceiptPrinterError());
   }
 
   async function handleDeleteAllOrders() {

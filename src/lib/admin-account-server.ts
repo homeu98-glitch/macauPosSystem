@@ -6,9 +6,9 @@ import { AuthSession } from "@/lib/storage";
 import { AccountPermissionGroup, AccountStore, AccountUser, UserPermissions, UserRole } from "@/lib/types";
 
 function defaultPermissionsForRole(role: UserRole): UserPermissions {
-  if (role === "admin") return { refundOrder: true, voidItem: true, manageAccounts: true };
-  if (role === "manager") return { refundOrder: true, voidItem: true, manageAccounts: false };
-  return { refundOrder: false, voidItem: false, manageAccounts: false };
+  if (role === "admin") return { refundOrder: true, voidItem: true, manageAccounts: true, reprintReceipt: true };
+  if (role === "manager") return { refundOrder: true, voidItem: true, manageAccounts: false, reprintReceipt: true };
+  return { refundOrder: false, voidItem: false, manageAccounts: false, reprintReceipt: true };
 }
 
 /** 由 response 中清除所有 PIN（敏感資料保護）。 */
