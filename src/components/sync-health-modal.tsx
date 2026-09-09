@@ -9,15 +9,18 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { QueueEvent } from "@/lib/types";
+import { PosOrder, QueueEvent } from "@/lib/types";
 import { loadOrders } from "@/lib/storage";
 import { discardFailedSyncEvent, retryFailedSyncEvents, resolveStoreId } from "@/lib/pos/sync-flush";
 import {
+  computeMissingLocalOrders,
   computeReconcileDrift,
   computeServerRangeStart,
+  downloadMissingOrdersToLocal,
   fetchServerOrders,
   findLocalOrderById,
   loadFailedEvents,
+  MissingLocalRow,
   pushOrderSnapshotForReconcile,
   ReconcileDriftRow,
   retryAllFailedEvents,
@@ -70,6 +73,8 @@ export function SyncHealthModal({
 
   const [failedEvents, setFailedEvents] = useState<QueueEvent[]>([]);
   const [driftRows, setDriftRows] = useState<ReconcileDriftRow[]>([]);
+  const [missingRows, setMissingRows] = useState<MissingLocalRow[]>([]);
+  const [missingServerOrders, setMissingServerOrders] = useState<PosOrder[]>([]);
   const [scanState, setScanState] = useState<"idle" | "scanning" | "done" | "error">("idle");
   const [scanError, setScanError] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
@@ -89,9 +94,19 @@ export function SyncHealthModal({
         setScanError(error);
         setScanState("error");
         setDriftRows([]);
+        setMissingRows([]);
+        setMissingServerOrders([]);
         return;
       }
       setDriftRows(computeReconcileDrift(localOrders, orders));
+      const missing = computeMissingLocalOrders(localOrders, orders);
+      setMissingRows(missing);
+      // 留低 server 原始 row 一份，下載用（MissingLocalRow 只帶摘要，唔夠寫返 localStorage）
+      setMissingServerOrders(
+        missing
+          .map((m) => orders.find((o) => o.id === m.orderId))
+          .filter((o): o is PosOrder => !!o),
+      );
       setScanState("done");
     } finally {
       scanningRef.current = false;
@@ -170,6 +185,21 @@ export function SyncHealthModal({
     setStatusMsg(ok.length > 0 ? `已排入 ${ok.length} 張單補錄（${ok.slice(0, 3).join("、")}…）` : "全部補錄失敗");
     window.setTimeout(() => void refreshDrift(), 500);
     bumpQueue();
+  }
+
+  // 2026-09-09：L2 反向——雲端有、本機缺嘅終態單（常見於多機協作：另一部機結咗帳
+  // 但本機從未見過呢個 id，本機 orders 永遠冇，桌台總覽都唔 render）。一撳下載就
+  // 將雲端 row append 入本機 localStorage，並觸發 pos-orders-changed → UI 自動見到。
+  function handleDownloadAll() {
+    if (!storeId) return;
+    if (missingServerOrders.length === 0) {
+      setStatusMsg("冇需要下載嘅訂單。");
+      return;
+    }
+    const n = downloadMissingOrdersToLocal(missingServerOrders, storeId);
+    setStatusMsg(n > 0 ? `已下載 ${n} 張訂單到本機` : "下載失敗");
+    void refreshDrift();
+    onMutated(); // 觸發 pos-app 重新讀 orders
   }
 
   return (
@@ -335,6 +365,63 @@ export function SyncHealthModal({
                       className="mt-3 w-full rounded-xl bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
                     >
                       全部補錄上雲
+                    </button>
+                  </>
+                )}
+              </section>
+
+              {/* ── L2 反向：雲端有、本機缺（2026-09-09 加）。
+                  多機協作時另一部機結咗帳 → 雲端有 row → 本機 localStorage 冇（POS client
+                  mount/realtime 只入 react state，冇持久化），導致呢部機永遠睇唔到。
+                  下載 = append 雲端 row 入本機 + 廣播 pos-orders-changed → UI 即時 render。 */}
+              <section className="mt-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-slate-800">
+                    雲端有但本機缺
+                    <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                      {scanState === "done" ? `${missingRows.length} 張` : "…"}
+                    </span>
+                  </h2>
+                </div>
+
+                {scanState === "scanning" ? null : scanState === "error" ? null : missingRows.length === 0 ? (
+                  <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                    ✅ 冇發現「雲端已結帳、本機冇對應訂單」嘅情況。
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-2 rounded-xl bg-sky-50 px-3 py-2 text-[11px] leading-relaxed text-sky-800">
+                      雲端有呢啲訂單（多機協作時另一部機結咗帳），但本機 localStorage 冇對應記錄。
+                      撳「下載到本機」就會將雲端 row 加返入本機，桌台總覽同店內線下訂量即時見到。
+                    </div>
+                    <ul className="space-y-2">
+                      {missingRows.map((row) => (
+                        <li key={row.orderId} className="rounded-xl border border-sky-100 bg-white px-3 py-2.5 shadow-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-slate-800">
+                                {row.localOrderNo}
+                                {row.tableName ? <span className="ml-2 font-normal text-slate-400">{row.tableName}</span> : null}
+                                <span className="ml-2 font-normal text-slate-400">MOP {row.total.toFixed(2)}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                                雲端
+                                <StatusChip status={row.serverStatus} tone="ok" />
+                                <span className="text-slate-300">·</span>
+                                更新於 {new Date(row.serverUpdatedAt).toLocaleString("zh-HK")}
+                              </div>
+                            </div>
+                            <span className="shrink-0 text-[11px] font-semibold text-sky-700">將會下載</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={handleDownloadAll}
+                      className="mt-3 w-full rounded-xl bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-500"
+                    >
+                      全部下載到本機（{missingRows.length} 張）
                     </button>
                   </>
                 )}

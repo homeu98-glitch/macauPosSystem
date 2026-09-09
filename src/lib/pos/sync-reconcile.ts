@@ -24,7 +24,7 @@
  *   /api/pos/state?ordersOnly=1&storeId=…（雲端訂單真源）
  */
 
-import { loadDeletedOrderIds, loadOrders, loadQueue, saveQueue } from "@/lib/storage";
+import { loadDeletedOrderIds, loadOrders, loadQueue, saveOrders, saveQueue } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { isTerminalOrderStatus } from "@/lib/pos-order-filters";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
@@ -159,4 +159,79 @@ export function computeServerRangeStart(localOrders: PosOrder[]): string | null 
   }
   if (!Number.isFinite(min)) return null;
   return new Date(min - 12 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * 一行「雲端有、本機缺」嘅終態單（2026-09-09 補）。
+ *
+ * 場景：另一部機喺呢部機 mount 之後結咗帳，事件上咗雲端，但呢部機從未見過呢個 id
+ * （POS client 只喺 mount + realtime delta 拉雲端 order 落 react state，**冇寫入
+ * localStorage**，所以本機 orders 永遠缺對方結嘅單）。L2 對賬本來只揾「本機有、雲端錯」
+ * 嗰個方向，呢度加返反方向：雲端有、本機冇、雲端係終態 → 列為「待補入本機」。
+ *
+ * 重要：呢類單**唔係** sync 失敗，事件早已成功推上雲；亦唔會用補錄 ORDER_UPDATED
+ * （補錄只解決本機有 vs 雲端錯嘅 case）。要解決就係**下載雲端 row 寫入本機 localStorage**，
+ * 之後 UI render 自動見到。安全條件：
+ *   - 只處理雲端行 status 屬終態（settled / cancelled / refunded / partially_refunded）
+ *     ——open 單雲端 row 唔可以任意「下載」，否則覆蓋本地正在進行嘅單；
+ *   - 跳過本機 deletedIds（用戶手動刪過嘅唔好復活）；
+ *   - 太舊（>RECONCILE_MAX_AGE）唔做。
+ */
+export interface MissingLocalRow {
+  orderId: string;
+  localOrderNo: string;
+  tableName: string;
+  total: number;
+  serverStatus: string;
+  serverUpdatedAt: string;
+}
+
+export function computeMissingLocalOrders(localOrders: PosOrder[], serverOrders: PosOrder[]): MissingLocalRow[] {
+  const deleted = new Set(loadDeletedOrderIds());
+  const localIds = new Set(localOrders.map((o) => o.id));
+  const now = Date.now();
+  const rows: MissingLocalRow[] = [];
+  for (const o of serverOrders) {
+    if (localIds.has(o.id)) continue;
+    if (deleted.has(o.id)) continue;
+    if (!isTerminalOrderStatus(o.status)) continue; // 雲端係 open 單 → 唔准下載覆寫進行中
+    const t = orderTimeMs(o);
+    if (now - t > RECONCILE_MAX_AGE_MS) continue;
+    rows.push({
+      orderId: o.id,
+      localOrderNo: o.localOrderNo ?? "",
+      tableName: o.tableName ?? "",
+      total: o.total ?? 0,
+      serverStatus: o.status,
+      serverUpdatedAt: o.updatedAt,
+    });
+  }
+  // 最新排前面（同 L2 分叉一致排序）
+  return rows.sort((a, b) => Date.parse(b.serverUpdatedAt) - Date.parse(a.serverUpdatedAt));
+}
+
+/**
+ * 將一批雲端訂單「下載」入本機 localStorage：append（不覆寫本機已有 id）+ 廣播 pos-orders-changed。
+ *
+ * 用法：L2 Modal 顯示「雲端有、本機缺」清單 → 用戶一撳「全部下載」就將雲端 row 寫入本機。
+ * 寫入後 pos-app 嘅 pos-orders-changed listener 自動 reload、桌台總覽、店內線下訂量都會即時更新。
+ *
+ * @returns 成功寫入嘅 row 數（會跳過本機已有 id / deletedId）
+ */
+export function downloadMissingOrdersToLocal(serverOrders: PosOrder[], merchantId?: string | null): number {
+  if (typeof window === "undefined") return 0;
+  const local = loadOrders(merchantId);
+  const deleted = new Set(loadDeletedOrderIds());
+  const localIds = new Set(local.map((o) => o.id));
+  let appended = 0;
+  for (const o of serverOrders) {
+    if (localIds.has(o.id)) continue;
+    if (deleted.has(o.id)) continue;
+    if (!isTerminalOrderStatus(o.status)) continue; // 二次保險：UI 唔應該見到 open 單
+    local.push(o);
+    localIds.add(o.id);
+    appended += 1;
+  }
+  if (appended > 0) saveOrders(local);
+  return appended;
 }
