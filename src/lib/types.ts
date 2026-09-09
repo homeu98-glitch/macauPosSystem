@@ -444,6 +444,12 @@ export interface PosLocalSettings {
     name: string;
     specGroups: MenuSpecGroup[];
   }>;
+  /**
+   * 獨立規格組（2026-09-09）：喺「規格管理」直接建立嘅單一規格組（例如「辣度」「走蔥」），
+   * 唔屬於任何模板。菜品「編輯規格」可以獨立剔選加入／移除，同模板自由組合。
+   * 菜品上存嘅係 snapshot 拷貝（同模板一致）：之後改呢度唔會追溯已套用菜品。
+   */
+  standaloneSpecGroups: MenuSpecGroup[];
   printTemplates: PrintTemplates;
   /** 常用備註（點餐時快速選擇，多選）。 */
   notePresets: string[];

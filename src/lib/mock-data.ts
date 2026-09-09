@@ -388,6 +388,7 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       ],
     },
   ],
+  standaloneSpecGroups: [],
   printTemplates: {
     receipt: {
       blocks: {

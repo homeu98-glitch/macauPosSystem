@@ -259,6 +259,10 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         : defaultPosLocalSettings.menuPrinterOverrides,
     printZones: Array.isArray(settings?.printZones) ? settings.printZones : defaultPosLocalSettings.printZones,
     specTemplates: Array.isArray(settings?.specTemplates) ? settings.specTemplates : defaultPosLocalSettings.specTemplates,
+    // ⚠️ whitelist normalize：漏帶會喺 reload 時被剷走（同 receipt qrUrl 舊案一樣）。
+    standaloneSpecGroups: Array.isArray(settings?.standaloneSpecGroups)
+      ? settings.standaloneSpecGroups
+      : defaultPosLocalSettings.standaloneSpecGroups,
     printTemplates: {
       receipt: {
         blocks: mergeTemplateBlocks(DEFAULT_RECEIPT_TEMPLATE.blocks, settings?.printTemplates?.receipt?.blocks),
