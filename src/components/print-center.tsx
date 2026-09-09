@@ -15,19 +15,22 @@ import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
+  hasPosLocalSettings,
   loadBootstrapCache,
   loadDeviceConfig,
   loadOrders,
   loadPosLocalSettings,
   loadPrintJobs,
+  loadPrintTemplateSyncMeta,
   loadQueue,
   savePosLocalSettings,
   savePrintJobs,
+  savePrintTemplateSyncMeta,
   saveQueue,
 } from "@/lib/storage";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
-import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_STANDARD_WIDTH_MM, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_STANDARD_WIDTH_MM, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
 import {
   ledgerReportRangeForKey,
   macauDateKey,
@@ -51,6 +54,10 @@ import { discountedUnitPrice } from "@/lib/pos/discount";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { notifyQueueChanged } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
+import {
+  fetchStorePrintTemplates,
+  pushStorePrintTemplates,
+} from "@/lib/print-templates-sync";
 
 /**
  * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
@@ -244,6 +251,90 @@ export function PrintCenter() {
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const historyRef = useRef<{ past: unknown[]; future: unknown[] }>({ past: [], future: [] });
 
+  // ── 模板雲端同步（0027 pos_print_templates）──
+  // 「進入打印頁即拉 DB；改動節流上雲；儲存掣強制同步」。
+  // 本地永遠即時 auto-save（現有行為）；雲端用 debounce + LWW（server updated_at 基準），
+  // 離線就留待網絡恢復 / 再改動 / 撳儲存時補推 —— 唔會卡住設計介面。
+  const pendingPushRef = useRef<PosLocalSettings | null>(null);
+  const cloudPushTimerRef = useRef<number | null>(null);
+  // 有本地改動未成功推上雲（離線 / server 503）→ 網絡恢復後補推一次
+  const unsyncedRef = useRef(false);
+
+  function clearCloudPushTimer() {
+    if (cloudPushTimerRef.current !== null) {
+      window.clearTimeout(cloudPushTimerRef.current);
+      cloudPushTimerRef.current = null;
+    }
+  }
+
+  /** 模板改動後節流上雲（1.5s 靜止先推）；離線時淨係標記 unsynced，等網絡恢復補推。 */
+  function scheduleTemplateCloudPush(nextSettings: PosLocalSettings) {
+    pendingPushRef.current = nextSettings;
+    unsyncedRef.current = true;
+    clearCloudPushTimer();
+    if (!networkOnline) return; // 離線：唔開 timer，等 [networkOnline] effect 恢復時補推
+    cloudPushTimerRef.current = window.setTimeout(() => {
+      cloudPushTimerRef.current = null;
+      void pushTemplateToServer(pendingPushRef.current);
+    }, 1500);
+  }
+
+  /** 真正推上雲。成功 → 記低 server updated_at（LWW 基準）+ 清 unsynced；失敗靜默留待再試。 */
+  async function pushTemplateToServer(settings: PosLocalSettings | null) {
+    if (!settings) return;
+    const storeId = resolveStoreId();
+    if (!storeId) return; // 未登入 / 未綁定 kiosk → 冇店可歸，唔推
+    const result = await pushStorePrintTemplates(storeId, settings.printTemplates);
+    if (result) {
+      savePrintTemplateSyncMeta({ updatedAt: result.updatedAt });
+      unsyncedRef.current = false;
+    }
+    // 失敗 / 離線：靜默（唔彈 toast 騷擾設計過程），unsynced 保持 true 等補推
+  }
+
+  // 進入打印頁：拉 DB 模板。server 有記錄 → 採納；冇 → 保留本地（向後兼容）。
+  useEffect(() => {
+    const storeId = resolveStoreId();
+    if (!storeId) return;
+    let alive = true;
+    void (async () => {
+      const res = await fetchStorePrintTemplates(storeId);
+      if (!alive || !res) return;
+      if (!res.found || !res.templates) return; // server 未設定 → 用本地（新店 / 未上傳過）
+      const meta = loadPrintTemplateSyncMeta();
+      const serverTs = res.updatedAt ? Date.parse(res.updatedAt) || 0 : 0;
+      const localTs = meta?.updatedAt ? Date.parse(meta.updatedAt) || 0 : 0;
+      // 拉取未返前用戶已開改（有 pending / unsynced）→ 唔好採納蓋走佢啱啱打嘅嘢
+      if (pendingPushRef.current || unsyncedRef.current) return;
+      // 採納規則（LWW）：本機冇任何 server 版本紀錄 → 採納（全新機 / 舊版本地未對過版）；
+      // 已有紀錄但 server 更新（另一部機改咗）→ 採納；server 唔係更新 → 保留本地
+      // （避免「自己啱啱推完 → 重入頁面 → 用舊 server 蓋返自己新 edit」嘅迴圈）。
+      if (localTs > 0 && serverTs <= localTs) return;
+      const prev = loadPosLocalSettings();
+      const next: PosLocalSettings = { ...prev, printTemplates: res.templates };
+      savePosLocalSettings(next);
+      savePrintTemplateSyncMeta({ updatedAt: res.updatedAt });
+      if (alive) {
+        setLocalSettings(next);
+        setToast({ tone: "success", message: "已載入雲端模板設定（自動同步）。" });
+      }
+    })();
+    return () => {
+      alive = false;
+      // 離開頁面前補推最後一次 debounce（避免「改完 1.5s 內即走」漏上雲）
+      if (cloudPushTimerRef.current !== null && pendingPushRef.current) {
+        clearCloudPushTimer();
+        void pushTemplateToServer(pendingPushRef.current);
+      }
+    };
+  }, []);
+
+  // 網絡恢復：如果有未成功上雲嘅模板改動 → 即刻補推（離線期間設計完，一上線就同步）。
+  useEffect(() => {
+    if (!networkOnline || !unsyncedRef.current) return;
+    void pushTemplateToServer(pendingPushRef.current);
+  }, [networkOnline]);
+
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 2600);
@@ -348,6 +439,7 @@ export function PrintCenter() {
     }
     setLocalSettings(nextSettings);
     savePosLocalSettings(nextSettings);
+    scheduleTemplateCloudPush(nextSettings);
   }
 
   function applyTemplate(kind: TemplateKindState, next: AnyTemplate) {
@@ -368,6 +460,7 @@ export function PrintCenter() {
     const next = { ...localSettings, printTemplates: { ...localSettings.printTemplates, ...(prev as object) } } as typeof localSettings;
     setLocalSettings(next);
     savePosLocalSettings(next);
+    scheduleTemplateCloudPush(next);
   }
 
   function redoTemplate() {
@@ -379,10 +472,15 @@ export function PrintCenter() {
     const applied = { ...localSettings, printTemplates: { ...localSettings.printTemplates, ...(next as object) } } as typeof localSettings;
     setLocalSettings(applied);
     savePosLocalSettings(applied);
+    scheduleTemplateCloudPush(applied);
   }
 
-  /** docs/71：明確「儲存模板」動作 + read-back 驗證 + 成功/失敗 toast（auto-save 仍保留，但呢個鈕做權威確認）。 */
-  function saveTemplateNow() {
+  /**
+   * docs/71：明確「儲存模板」動作 + read-back 驗證 + 雲端同步（0027）。
+   * auto-save 仍保留（每次改動即存本機 + 節流上雲），但呢個掣做權威確認：
+   * 一撳即強制上雲，等 toast 明確話畀商家知「同步成功 / 淨係存咗本機」。
+   */
+  async function saveTemplateNow() {
     const ok = savePosLocalSettings(localSettings);
     if (!ok) {
       setToast({
@@ -393,10 +491,37 @@ export function PrintCenter() {
     }
     // read-back 驗證：確認剛寫入嘅 key 真係讀得返嘢
     const raw = typeof window !== "undefined" ? window.localStorage.getItem(getLocalSettingsKey()) : null;
-    setToast({
-      tone: raw ? "success" : "error",
-      message: raw ? "✅ 已儲存模板設定（並已寫入本機）" : "⚠️ 已寫入但讀回為空，請重試。",
-    });
+    if (!raw) {
+      setToast({ tone: "error", message: "⚠️ 已寫入但讀回為空，請重試。" });
+      return;
+    }
+
+    const storeId = resolveStoreId();
+    if (!storeId) {
+      setToast({ tone: "success", message: "✅ 已儲存模板設定（本機）；未偵測到店舖，未能同步雲端。" });
+      return;
+    }
+
+    // 離線：照樣標記 unsynced，網絡恢復 / 再改動時自動補推
+    if (!networkOnline) {
+      unsyncedRef.current = true;
+      pendingPushRef.current = localSettings;
+      setToast({ tone: "error", message: "⚠️ 已儲存本機；目前離線，恢復網絡後會自動同步雲端。" });
+      return;
+    }
+
+    const result = await pushStorePrintTemplates(storeId, localSettings.printTemplates);
+    if (result) {
+      savePrintTemplateSyncMeta({ updatedAt: result.updatedAt });
+      unsyncedRef.current = false;
+      setToast({ tone: "success", message: "✅ 已儲存模板並同步到雲端（全部收銀機可共用）。" });
+    } else {
+      // server 暫時推唔到：唔好嚇商家，講清楚「已存本機、稍後自動重試」
+      unsyncedRef.current = true;
+      pendingPushRef.current = localSettings;
+      clearCloudPushTimer();
+      setToast({ tone: "error", message: "⚠️ 已儲存本機；雲端同步失敗，網絡恢復或下次改動時會自動重試。" });
+    }
   }
 
   function patchBlock(kind: TemplateKindState, id: string, patch: Partial<EscPosBlockStyle>) {

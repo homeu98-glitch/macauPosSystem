@@ -8,6 +8,7 @@ import {
   PosLocalSettings,
   PosOrder,
   PrintJob,
+  PrintTemplates,
   QueueEvent,
   UserPermissions,
   UserRole,
@@ -53,6 +54,10 @@ const STORE_SUFFIX = {
   // 本地每日序號（offline / sequence API 失敗嗰陣做 fallback，取代隨機時戳）：
   // 按 日期+kind 各自遞增，保證 fallback 單號單調、不重複、易讀（見 docs/56）。
   localDailySeq: "local-daily-seq",
+  // 打印模板雲端同步 meta（見 docs/71 push seam / 0027 migration）：
+  // 記錄「本機已知嘅 server 模板版本（updated_at）」，做 LWW 基準 ——
+  // server 較新先採納，避免本地舊 default 每逢同步就蓋走 DB 已設計嘅模板。
+  printTemplateMeta: "print-template-meta",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -351,6 +356,47 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     grossProfitMarginPct:
       typeof settings?.grossProfitMarginPct === "number" ? settings.grossProfitMarginPct : defaultPosLocalSettings.grossProfitMarginPct,
   };
+}
+
+/**
+ * 只 normalize 打印模板四個槽位（收據 / 標籤 / 廚房 / 自助點餐機），回傳完整 PrintTemplates。
+ *
+ * 同 `normalizePosLocalSettings` 共用同一套 merge 邏輯（逐 id 併 block + 補新 section +
+ * 保留 qrUrl / qrSize / footerText 等），畀 server route（0027 `pos_print_templates` 表）
+ * 同 client 用同一個「真源 normalize」，避免 DB 存落嘅舊模板缺新 section 時被當成權威蓋走。
+ *
+ * @param raw  可以係 DB 一列嘅其中四個槽位（每個都係唔完整 JSON），或全空 → 全用 default。
+ */
+export function normalizePrintTemplateSet(raw: Partial<PrintTemplates> | null | undefined): PrintTemplates {
+  const partial: Partial<PosLocalSettings> | undefined =
+    raw && typeof raw === "object" ? { printTemplates: raw as PrintTemplates } : undefined;
+  return normalizePosLocalSettings(partial).printTemplates;
+}
+
+/**
+ * 打印模板雲端同步 meta（0027 migration 引入）。
+ *
+ * 得一個欄位：`updatedAt` = 本機已知嘅 server 模板版本。語義：
+ *  - 拉取成功（server 有記錄）→ 記低 server.updatedAt；
+ *  - POST 上傳成功 → 記低 server 回傳嘅新 updatedAt；
+ *  - 從未成功同 server 對過版 → null（首次拉取見 server 有記錄就採納）。
+ *
+ * 放 localStorage（store-scope，同 local-settings 同一把 key scope），唔入 PosLocalSettings：
+ * 一來唔想 normalizePosLocalSettings 每次重寫整份設定，二來 print-center / pos-app 同步時
+ * 只需快速讀呢個 meta 做「server 更新過未」判斷，唔使 load 成個 settings。
+ */
+export type PrintTemplateSyncMeta = { updatedAt: string | null };
+
+export function loadPrintTemplateSyncMeta(): PrintTemplateSyncMeta | null {
+  return readStoreJson<PrintTemplateSyncMeta | null>(
+    STORE_SUFFIX.printTemplateMeta,
+    null,
+    resolveSettingsStoreScope(),
+  );
+}
+
+export function savePrintTemplateSyncMeta(meta: PrintTemplateSyncMeta): boolean {
+  return writeStoreJson(STORE_SUFFIX.printTemplateMeta, meta, resolveSettingsStoreScope());
 }
 
 /**

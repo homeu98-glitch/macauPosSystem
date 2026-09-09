@@ -4,7 +4,7 @@ import { defaultPosLocalSettings } from "@/lib/mock-data";
 import { mapOrderRow } from "@/lib/pos-order-row";
 import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
-import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
+import { normalizeDeviceConfig, normalizePosLocalSettings, normalizePrintTemplateSet } from "@/lib/storage";
 
 /** UTC ISO 轉換（lossless）：`2026-09-06T00:00:00+08:00` → `2026-09-05T16:00:00.000Z`。 */
 function toUtcIso(iso: string): string {
@@ -70,6 +70,7 @@ export async function GET(request: Request) {
       printJobs: [],
       localSettings: defaultPosLocalSettings,
       deviceConfig: null,
+      printTemplatesServer: null,
     });
   }
 
@@ -110,12 +111,18 @@ export async function GET(request: Request) {
   const deviceConfigQuery = storeId
     ? supabase.from("pos_device_configs").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(1)
     : supabase.from("pos_device_configs").select("*").limit(0);
+  // 0027 pos_print_templates（店級模板新真源）：有記錄就夾落 payload，等收銀台 sync merge
+  // 喺「server 較新」時採納（LWW）；冇 storeId / 未設定 → null，client 保留本機模板。
+  const printTemplatesQuery = storeId
+    ? supabase
+        .from("pos_print_templates")
+        .select("receipt, label, kitchen, kiosk, updated_at")
+        .eq("store_id", storeId)
+        .maybeSingle()
+    : Promise.resolve({ data: null, error: null });
 
-  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }] = await Promise.all([
-    queueQuery,
-    printJobsQuery,
-    deviceConfigQuery,
-  ]);
+  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: printTemplatesRow }] =
+    await Promise.all([queueQuery, printJobsQuery, deviceConfigQuery, printTemplatesQuery]);
 
   const ordersInRange = await ordersInRangePromise;
   const orders = ordersInRange.error ? [] : ordersInRange.orders;
@@ -160,5 +167,16 @@ export async function GET(request: Request) {
         })
       : null,
     localSettings: normalizePosLocalSettings(deviceConfigRow?.local_settings ?? defaultPosLocalSettings),
+    printTemplatesServer: printTemplatesRow
+      ? {
+          templates: normalizePrintTemplateSet({
+            receipt: printTemplatesRow.receipt,
+            label: printTemplatesRow.label,
+            kitchen: printTemplatesRow.kitchen,
+            kiosk: printTemplatesRow.kiosk,
+          }),
+          updatedAt: printTemplatesRow.updated_at ?? null,
+        }
+      : null,
   });
 }

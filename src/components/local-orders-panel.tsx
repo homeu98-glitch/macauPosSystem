@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 import { useRouter } from "next/navigation";
 
@@ -21,6 +21,8 @@ import {
   LocalOrderPanelTab,
   matchesLocalOrderPanelTab,
   getOrderStatusBadge,
+  mergeOrderLists,
+  filterResurrectedOrders,
 } from "@/lib/pos-order-filters";
 import {
   markQuickOrderCompletedInStore,
@@ -34,6 +36,7 @@ import {
   addDeletedOrderIds,
   loadAuthSession,
   loadBootstrapCache,
+  loadDeletedOrderIds,
   loadOrders,
   loadPosLocalSettings,
   loadQueue,
@@ -43,6 +46,8 @@ import {
 import { PosOrder } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { orderItemDiscountTotal } from "@/lib/pos/discount";
+import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
+import { POS_SYNC_QUEUE_CHANGED_EVENT } from "@/lib/pos/sync-flush";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -131,6 +136,76 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
     window.addEventListener("pos-orders-changed", refresh);
     return () => window.removeEventListener("pos-orders-changed", refresh);
   }, []);
+
+  // ── 跨 iPad 線下單即時同步（2026-09-09 根治，見底部註解）────────────────
+  // 本 panel 以前淨讀 localStorage：只有 pos-orders-changed 先刷新；realtime 訂閱同
+  // /api/pos/state backfill 以前淨係 pos-app（工作台 "/"）有 → 新 iPad 直入訂單頁
+  // 永遠睇唔到另一部機啱啱落/確認嘅單。呢度補返同 pos-app loadRuntimeState 一樣嘅
+  // 兩條路：① usePosRealtime 訂閱 pos_orders（merge 落本機快取）；② mount /
+  // realtime resubscribed / 本機 queue 清空時拉 /api/pos/state 一次過 backfill。
+  // 兩條路都係 event-driven，**唔係 polling**（同 pos-app 設計一致）。
+  const [merchantId] = useState<string | null>(() => loadAuthSession()?.merchantId ?? null);
+
+  /** 將 server / realtime 單 merge 入本機快取（pos-app 同款：localStorage 為底 +
+   * tombstone 防復活，保留本機 localOrderNo），再廣播 pos-orders-changed 令本 panel
+   * 同 pos-app 刷新。函數只讀寫 localStorage，無 closure 狀態 → useCallback [] 穩定。 */
+  const commitOrdersFromServer = useCallback((incoming: PosOrder[]) => {
+    const base = loadOrders();
+    const merged = mergeOrderLists(base, base, incoming);
+    const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), base);
+    saveOrders(cleaned);
+    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+  }, []);
+
+  // 一次過 backfill（mount / realtime resubscribed / queue 清空時 call；event-driven）。
+  // 同 pos-app loadRuntimeState 一致：冇 merchant 唔拉（admin / kiosk 無店身份）；
+  // **方案 B**：本機 queue 有任一未同步（pending / 永久 failed / skipped）事件就唔拉，
+  // 避免冚走本機未上雲嘅單（成因 P4）；fetch 失敗靜默（等下次觸發）。
+  const pullServerOrders = useCallback(async () => {
+    if (!merchantId) return;
+    if (loadQueue().some((event) => event.status !== "synced")) return;
+    try {
+      const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(merchantId)}`);
+      if (!res.ok) return;
+      const payload = (await res.json().catch(() => null)) as { orders?: PosOrder[] } | null;
+      if (!payload || !Array.isArray(payload.orders)) return;
+      commitOrdersFromServer(payload.orders);
+    } catch {
+      // 離線／server 問題：realtime resubscribed / 網絡恢復 / 下次 queue 清空再試。
+    }
+  }, [merchantId, commitOrdersFromServer]);
+
+  // 觸發①：mount 一次過 backfill（realtime 唔 backfill 舊 row）。
+  useEffect(() => {
+    void pullServerOrders();
+  }, [pullServerOrders]);
+
+  // 觸發②：訂閱 pos_orders / pos_print_jobs / pos_soldout（store_id filter）。
+  // 訂單查詢頁淨需要收單嚟刷新列表；printJobs/soldout 由工作台（pos-app）處理。
+  usePosRealtime(merchantId, Boolean(merchantId), {
+    onOrderUpsert: (order) => {
+      if (loadDeletedOrderIds().includes(order.id)) return; // docs/52：已真刪唔可以經 realtime 復活
+      commitOrdersFromServer([order]);
+    },
+    // realtime (re)subscribe 成功 → 一次過 backfill 舊 row（pos-app onResubscribed 同款）
+    onResubscribed: () => {
+      void pullServerOrders();
+    },
+  });
+
+  // 觸發③：本機 queue 由「有未同步」變清空（flush 成功）或網絡恢復 → 再拉一次。
+  // 解決成因 P4：一旦部機自己嘅 pending/failed 清走，訂單頁就自動補返雲端單。
+  useEffect(() => {
+    const onTrigger = () => {
+      void pullServerOrders();
+    };
+    window.addEventListener(POS_SYNC_QUEUE_CHANGED_EVENT, onTrigger);
+    window.addEventListener("online", onTrigger);
+    return () => {
+      window.removeEventListener(POS_SYNC_QUEUE_CHANGED_EVENT, onTrigger);
+      window.removeEventListener("online", onTrigger);
+    };
+  }, [pullServerOrders]);
 
   useEffect(() => {
     if (!toast) return;

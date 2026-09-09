@@ -9,6 +9,7 @@
   - 三邊同步：本 repo（render/preview/print-center/mock-data）+ `C:\dev\print-relay` 同 `C:\dev\print hub` 嘅 `EscPosRenderer.renderTemplateTicket()` 已改（`rule()` helper）；desktop-companion（而家 divider 強制 `setStyle("s")`）同 print-agent-android **未改**，改法見 `docs/handoff-print-divider-size.md`。
   - 預設 `divider.size="m"`（對齊而家大部份店嘅出紙）；`normalizePosLocalSettings` 嘅 merge 會自動補區塊落舊設定。
 - **標籤模板鎖定**：`LABEL_STANDARD_WIDTH_MM=62`（沿用本系統標籤卷，唔好隨意改 60）。Label 區塊字型 size 鎖死，用 `withLabelFixedSizes()` 強制返 `LABEL_BLOCK_DEFAULTS`（buildSnapshot("label") + readTemplate("label") 都用）→ 舊 localStorage 存咗唔同 size 都無效。UI 唔畀改 label 字型檔位（仍可調對齊/粗體/可見/順序）。
+- **店級雲端同步（2026-09-09 實作，0027 `pos_print_templates`）**：store_id PK 一店一行存四槽 jsonb + updated_at；route `/api/pos/print-templates` GET/POST（POST 用 write client、`updated_at=now()` 做 LWW）。print-center 進入即拉（server 有→採納＋記 meta；冇→保留本地），改動 1.5s 節流上雲、離線標 unsynced 網絡恢復補推、unmount flush，「儲存模板」強制上雲。pos-app `loadRuntimeState` merge 改 LWW：`serverTs > 本機 meta.updatedAt` 先採納。`/api/pos/state` 已帶 `printTemplatesServer`。meta 存 store-scope `print-template-meta`（唔入 PosLocalSettings）；統一用 `normalizePrintTemplateSet()` normalize（保護 qrUrl/qrSize/divider 唔被剷走）。詳見 `docs/print-template-store-sync-2026-09-09.md`。
 
 ## 報表模塊（restaurant-daily-report.tsx）
 - **收入認列口徑**：`isSaleCountable(o)` 只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`；`refunded`/`partially_refunded`/`sent_to_kitchen` 一律唔計（未收款唔計營業額係啱）。有單但全未結帳 → 顯示琥珀提示條 +「未結帳訂單」KPI，**唔好**改口徑去包未結帳。

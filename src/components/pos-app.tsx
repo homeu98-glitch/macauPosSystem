@@ -77,6 +77,8 @@ import {
   saveQuickCompletedMinutes,
   saveShiftState,
   saveSoldOutState,
+  loadPrintTemplateSyncMeta,
+  savePrintTemplateSyncMeta,
   type ShiftState,
 } from "@/lib/storage";
 import {
@@ -116,7 +118,7 @@ import {
 } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
-import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, QueueEvent, StoreTable } from "@/lib/types";
+import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
@@ -894,6 +896,11 @@ export function PosApp() {
         printJobs?: PrintJob[];
         localSettings?: PosLocalSettings;
         deviceConfig?: DeviceConfig | null;
+        /** 0027 pos_print_templates 店級模板（新真源）；null = server 未設定過。 */
+        printTemplatesServer?: {
+          templates?: PrintTemplates | null;
+          updatedAt?: string | null;
+        } | null;
       };
 
       if (Array.isArray(payload.orders)) {
@@ -1009,11 +1016,29 @@ export function PosApp() {
         // 用 DB 該店最新 device config 已保存嘅 floors（server 無先係 default）；
         // 本地有 key（曾經編輯／已採納）先本地優先，保留 per-terminal 編輯真源語義。
         const localHasSettings = hasPosLocalSettings();
+        // 模板雲端同步（0027 pos_print_templates，docs/71 push seam）：
+        // server 嘅 printTemplatesServer 係「店級新真源」（獨立表，唔再係 device_configs
+        // 預設值）。合併規則（LWW，避免 docs/71 §8「server 預設蓋走設計」舊 bug 重演）：
+        //   - server 有記錄 && server.updatedAt 比本機已知版本新（另一部機改咗 / 本機
+        //     未對過版）→ 採納 server 模板，令全店終端同步到同一份；
+        //   - 其餘情況（本機啱啱推完 / server 未設定）→ 保留本地模板。
+        // meta 只記 server updated_at（輕量、唔入 PosLocalSettings），讀寫同 local-settings
+        // 同一把 store-scope key。
+        const serverTpl = payload.printTemplatesServer?.templates ?? null;
+        const serverTplUpdatedAt = payload.printTemplatesServer?.updatedAt ?? null;
+        const serverTplTs = serverTplUpdatedAt ? Date.parse(serverTplUpdatedAt) || 0 : 0;
+        const tplMeta = loadPrintTemplateSyncMeta();
+        const localTplTs = tplMeta?.updatedAt ? Date.parse(tplMeta.updatedAt) || 0 : 0;
+        const serverIsNewer = serverTplTs > 0 && serverTplTs > localTplTs;
+        const adoptServerTemplates = !!serverTpl && serverIsNewer;
+        if (adoptServerTemplates && serverTpl) {
+          savePrintTemplateSyncMeta({ updatedAt: serverTplUpdatedAt });
+        }
         const merged: PosLocalSettings = {
           ...payload.localSettings,
           floors:
             localHasSettings && local.floors?.length ? local.floors : payload.localSettings.floors,
-          printTemplates: local.printTemplates,
+          printTemplates: serverTpl && serverIsNewer ? serverTpl : local.printTemplates,
           onlineOrderSettings: local.onlineOrderSettings,
           // 2026-09-08：細粒度打印開關同 `printTemplates` / `onlineOrderSettings` 一樣，
           // 屬於 per-terminal 設定（呢部收銀機嘅出單行為），唔應該被 server 默認值蓋走。
