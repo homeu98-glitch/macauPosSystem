@@ -97,8 +97,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "缺少 storeId。" }, { status: 400 });
   }
 
-  const templates = normalizePrintTemplateSet(payload?.templates ?? null);
-
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
     return NextResponse.json(

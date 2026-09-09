@@ -56,6 +56,21 @@
    驗證：查 `/api/pos/sync` server log，睇呢啲 order id 有冇 200 但冇 update。
 4. **喺另一部機做結帳**（嗰部機 snapshot 冇呢張單，結帳事件唔生成／生成咗都打唔中）。
 
+## 五之二、現場核對結果（15:2x，用戶補圖）——「本機已完成、雲端未完成」
+
+用戶喺 iPad「訂單」頁（/orders）截圖，右欄「店內線下訂單 共17張」，可見 訂單15/16/17 全部標綠色「已完成」，每張附橙色「返結帳」掣。
+
+**程式碼佐證（呢個 combo 唔可能出錯）：**
+- `pos-order-filters.ts getOrderStatusBadge()`：`settled` → 綠色「已完成」；`sent_to_kitchen` → 琥珀「製作中」。
+- `local-orders-panel.tsx` L470：「返結帳」掣只喺 `order.status === "settled" && isReopenable(order)` 先 render。
+
+即係話：**喺嗰部 iPad 本機（localStorage）層面，員工真係結咗帳（status=settled）——員工冇講錯。**
+但雲端 `pos_orders`（15:07 匯出）對 訂單16/17（及其他 11 張）仍然係 `sent_to_kitchen`、`updated_at=created_at`、無付款方式、`served_at=NULL`。
+
+→ 結論：**結帳動作喺本機成功，但 ORDER_UPDATED(settled) 事件從未成功到達／套用喺雲端 DB。**「本機已完成」與「雲端未完成」並存，日報／後台以雲端 DB 為準，所以仍然顯示 13 張未結帳。
+
+**「在線」綠標代表乜：**`app-sidebar.tsx` L133-147 —— 綠「在線」= `networkOnline`（瀏覽器網絡已連接），**唔係**同步隊列健康度。部機在線 +「自動同步」開，但雲端冇收到嗰啲結帳更新，正正反證：**在線 ≠ 已同步**。`sync-flush.ts` 只會推 `attempts<5` 且屬當前店嘅 pending 事件；status=failed（attempts≥5）或 skipped（無 storeId／GC 分類）嘅事件**永久唔會再自動重試**（L209、L322-338），要人手「重試失敗同步」（`retryFailedSyncEvents`）先救得返。
+
 ## 五、建議修復動作
 
 1. **即刻對帳**（read-only SQL，唔好改嘢）：

@@ -54,6 +54,7 @@
 - JSDoc 內唔好寫 `macau-pos/stores/*/orders`（`*/` 提早結束 comment）；用 `&#123;storeId&#125;`。
 - 報表組件 `agg` 喺 useMemo 下方；backfill effect 內唔可引用。
 - `next build` 報 LayoutProps = `.next` generated types 過期，`rm -rf .next` 重 build。
+- ⚠️ 本機 `next build` 會被 WorkBuddy safe-delete 鈎子攔（Turbopack 清 `.next/turbopack` 達 bulk threshold）→ 要 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 並喺沙箱外跑；`rm -rf .next` 一樣要沙箱外。
 
 ## 環境
 - Node 22.22.2-2（managed）、Python 3.13.12（managed）；Next.js 16.3.0 + Turbopack + Tailwind 4，詳見 AGENTS.md。

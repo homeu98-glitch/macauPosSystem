@@ -15,7 +15,6 @@ import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
-  hasPosLocalSettings,
   loadBootstrapCache,
   loadDeviceConfig,
   loadOrders,
