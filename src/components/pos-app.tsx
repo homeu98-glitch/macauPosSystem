@@ -255,8 +255,6 @@ export function PosApp() {
   // ── 開桌彈窗（空閒枱 click → 揀入座人數）──
   const [openTableModalTableId, setOpenTableModalTableId] = useState<string | null>(null);
   const [openTablePartySize, setOpenTablePartySize] = useState<number>(1);
-  // ── 桌台總覽兩步流程（2026-09-09）：點卡片只「選取」（反白回饋），按「開桌／進入」掣先真正入枱 ──
-  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [seatedPartySizes, setSeatedPartySizes] = useState<Record<string, number>>(() => {
     const all = loadOrders();
     // 只從進行中訂單初始化入座人數，避免已結帳/取消/退款嘅舊單殘留
@@ -1672,9 +1670,7 @@ export function PosApp() {
   }
 
   /**
-   * 真正「入枱」動作（原邏輯不變）：空閒枱 → 彈開桌窗揀入座人數；有單枱 → 載入工作台。
-   * 2026-09-09 起只由 `confirmSelectedTable()`（「開桌／進入」確認掣）調用；
-   * 桌台卡片 click 改行 `toggleTableSelection()`，選取同確認拆開兩步。
+   * 桌台卡片 click 入口：空閒枱 → 彈開桌窗揀入座人數；有單枱 → 載入工作台。
    */
   function selectTable(tableId: string) {
     const existing = tableOrderMap.get(tableId);
@@ -1688,24 +1684,10 @@ export function PosApp() {
     setPosMode("order");
   }
 
-  /** 桌台卡片 click：只切換選取狀態（再撳同一張 = 取消選取），唔跳轉、唔入枱。 */
-  function toggleTableSelection(tableId: string) {
-    setSelectedTableId((current) => (current === tableId ? null : tableId));
-  }
-
-  /** 「開桌／進入」確認掣：對當前選取枱執行入枱動作；未選取時掣 disabled（唔會被 call）。 */
-  function confirmSelectedTable() {
-    const tableId = selectedTableId;
-    if (!tableId) return;
-    setSelectedTableId(null);
-    selectTable(tableId);
-  }
-
   function confirmOpenTable(resolvedSize?: number) {
     const tableId = openTableModalTableId;
     if (!tableId) return;
     // 按鈕本身已限制 1..座位數；呢度再 clamp 一次（座位數中途被改細 / fallback 枱）防超座。
-    // resolvedSize：數字按鈕點選嗰刻直接傳入（setState 係異步，唔可以靠 openTablePartySize 舊值）。
     const capacity = visibleTables.find((t) => t.id === tableId)?.capacity;
     const maxSeats = capacity && capacity > 0 ? capacity : OPEN_TABLE_FALLBACK_MAX_SEATS;
     const size = Math.min(resolvedSize ?? (openTablePartySize > 0 ? openTablePartySize : 1), maxSeats);
@@ -3886,32 +3868,10 @@ export function PosApp() {
                   <div>
                     <div className="text-lg font-semibold text-slate-900">桌台總覽</div>
                     <div className="mt-1 text-sm text-slate-500">
-                      點選桌台（反白）→ 按「開桌／進入」確認後先入點餐介面。狀態：空閒 / 未下單 / 已下單
+                      點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {(() => {
-                      const selectedTable = selectedTableId
-                        ? visibleTables.find((t) => t.id === selectedTableId) ?? null
-                        : null;
-                      const selectedOccupied = selectedTable
-                        ? tableOrderMap.has(selectedTable.id)
-                        : false;
-                      return (
-                        <button
-                          type="button"
-                          onClick={confirmSelectedTable}
-                          disabled={!selectedTable}
-                          className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {!selectedTable
-                            ? "開桌"
-                            : selectedOccupied
-                              ? `進入 ${selectedTable.name}`
-                              : `開桌 ${selectedTable.name}`}
-                        </button>
-                      );
-                    })()}
                     <button
                       type="button"
                       title="從伺服器強制拉取最新菜單及所有設定，套用後會重新載入頁面"
@@ -3946,10 +3906,7 @@ export function PosApp() {
                   className={`rounded-full px-4 py-2 text-sm font-semibold ${
                     effectiveFloorId === ALL_FLOOR_ID ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
                   }`}
-                  onClick={() => {
-                    setActiveFloorId(ALL_FLOOR_ID);
-                    setSelectedTableId(null);
-                  }}
+                  onClick={() => setActiveFloorId(ALL_FLOOR_ID)}
                   type="button"
                 >
                   全部
@@ -3960,10 +3917,7 @@ export function PosApp() {
                     className={`rounded-full px-4 py-2 text-sm font-semibold ${
                       effectiveFloorId === floor.id ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
                     }`}
-                    onClick={() => {
-                      setActiveFloorId(floor.id);
-                      setSelectedTableId(null);
-                    }}
+                    onClick={() => setActiveFloorId(floor.id)}
                     type="button"
                   >
                     {floor.name}
@@ -3998,15 +3952,13 @@ export function PosApp() {
                         : "border-slate-200 bg-white text-slate-900";
                     const areaTone = isOccupied ? "text-white/85" : "text-slate-500";
                     const badgeTone = isOccupied ? "bg-white/25 text-white" : "bg-orange-50 text-orange-700";
-                    const isSelected = selectedTableId === table.id;
                     return (
                       <button
                         key={table.id}
-                        aria-pressed={isSelected}
                         className={`rounded-2xl border p-4 text-left shadow-sm transition-colors ${cardTone} ${
                           isOccupied ? "" : "hover:border-orange-300"
-                        } ${isSelected ? "ring-2 ring-orange-600 ring-offset-2 ring-offset-slate-100" : ""}`}
-                        onClick={() => toggleTableSelection(table.id)}
+                        }`}
+                        onClick={() => selectTable(table.id)}
                         type="button"
                       >
                         <div className="text-base font-semibold text-inherit">
@@ -4063,10 +4015,11 @@ export function PosApp() {
                       ? `（${visibleTables.find((t) => t.id === openTableModalTableId)?.capacity} 座位）`
                       : ""}
                   </div>
-                  <div>
+                    <div>
                     <label className="text-sm font-semibold text-slate-900">入座人數</label>
-                    {/* 2026-09-09：由手動輸入改為數字按鈕（1..座位數），點選即完成設定。
-                        冇填座位數嘅枱 fallback 12 個掣 + 提示去設置補填；唔會出現超座選項。 */}
+                    {/* 2026-09-09：由手動輸入改為數字按鈕（1..座位數），點選只做選取（反白），
+                        撳右下角「開桌」掣先真正確認開桌。冇填座位數嘅枱 fallback 12 個掣 +
+                        提示去設置補填；唔會出現超座選項。 */}
                     {openTableModalTable?.capacity && openTableModalTable.capacity > 0 ? null : (
                       <div className="mt-1 text-xs text-slate-500">
                         此桌未設座位數，暫以 12 個按鈕代替；請到「設置 → 桌台管理」補填座位數。
@@ -4085,7 +4038,7 @@ export function PosApp() {
                                 ? "h-11 w-11 rounded-2xl bg-orange-500 text-base font-bold text-white shadow-sm"
                                 : "h-11 w-11 rounded-2xl bg-white text-base font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50"
                             }
-                            onClick={() => confirmOpenTable(size)}
+                            onClick={() => setOpenTablePartySize(size)}
                           >
                             {size}
                           </button>
