@@ -415,10 +415,11 @@ function onlineFulfillmentLabel(fulfillmentType?: string): string {
   return "線上";
 }
 
-/** PosOrder → 訂單明細行（餐台 / 應收 / 實收 / 收款類型 / 收銀員 / 結賬時間）。 */
+/** PosOrder → 訂單明細行（訂單號 / 餐台 / 應收 / 實收 / 收款類型 / 收銀員 / 結賬時間）。 */
 function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
   return {
     id: o.id,
+    orderNo: o.localOrderNo,
     table: o.tableName || o.tableId,
     receivable,
     paid: o.total,
@@ -533,6 +534,8 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
     // 訂單明細（逐筆）：Ledger 純線上單冇餐台號 → 用履約方式標籤；收銀員 = 下單客人
     orderDetails.push({
       id: onlineOrder.id,
+      // 線上單冇 localOrderNo → 第一列顯示「線上單」+ 取餐碼
+      pickupCode: onlineOrder.pickupCode,
       table: onlineFulfillmentLabel(onlineOrder.fulfillmentType),
       receivable: safeReceivable,
       paid: orderPaid,

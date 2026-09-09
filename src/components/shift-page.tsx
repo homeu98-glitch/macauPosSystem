@@ -359,6 +359,7 @@ export function ShiftPage() {
       todayLocalOrders
         .map((o) => ({
           id: o.id,
+          orderNo: o.localOrderNo,
           table: o.tableName || o.tableId,
           receivable:
             o.items.reduce((sum, it) => sum + it.price * it.quantity, 0) +
