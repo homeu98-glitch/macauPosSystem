@@ -58,6 +58,9 @@ const STORE_SUFFIX = {
   // 記錄「本機已知嘅 server 模板版本（updated_at）」，做 LWW 基準 ——
   // server 較新先採納，避免本地舊 default 每逢同步就蓋走 DB 已設計嘅模板。
   printTemplateMeta: "print-template-meta",
+  // 備註預設雲端同步 meta（0028 migration）：同 printTemplateMeta 一樣嘅 LWW 基準，
+  // 記錄「本機已知嘅 server 備註版本（updated_at）」，server 較新先採納。
+  notePresetMeta: "note-preset-meta",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -397,6 +400,31 @@ export function loadPrintTemplateSyncMeta(): PrintTemplateSyncMeta | null {
 
 export function savePrintTemplateSyncMeta(meta: PrintTemplateSyncMeta): boolean {
   return writeStoreJson(STORE_SUFFIX.printTemplateMeta, meta, resolveSettingsStoreScope());
+}
+
+/**
+ * 備註預設雲端同步 meta（0028 migration 引入）。
+ *
+ * 同 {@link PrintTemplateSyncMeta} 一樣，得一個欄位 `updatedAt` = 本機已知嘅 server 備註版本：
+ *  - 拉取成功（server 有記錄）→ 記低 server.updatedAt；
+ *  - POST 上傳成功 → 記低 server 回傳嘅新 updatedAt；
+ *  - 從未成功同 server 對過版 → null（首次拉取見 server 有記錄就採納）。
+ *
+ * 放 localStorage（store-scope），唔入 PosLocalSettings：備註係店級真源（pos_note_presets
+ * 表），同 per-terminal 嘅 PosLocalSettings 分開管理，避免 normalize 重寫整份設定。
+ */
+export type NotePresetSyncMeta = { updatedAt: string | null };
+
+export function loadNotePresetSyncMeta(): NotePresetSyncMeta | null {
+  return readStoreJson<NotePresetSyncMeta | null>(
+    STORE_SUFFIX.notePresetMeta,
+    null,
+    resolveSettingsStoreScope(),
+  );
+}
+
+export function saveNotePresetSyncMeta(meta: NotePresetSyncMeta): boolean {
+  return writeStoreJson(STORE_SUFFIX.notePresetMeta, meta, resolveSettingsStoreScope());
 }
 
 /**

@@ -80,6 +80,8 @@ import {
   saveSoldOutState,
   loadPrintTemplateSyncMeta,
   savePrintTemplateSyncMeta,
+  loadNotePresetSyncMeta,
+  saveNotePresetSyncMeta,
   type ShiftState,
 } from "@/lib/storage";
 import {
@@ -904,6 +906,15 @@ export function PosApp() {
           templates?: PrintTemplates | null;
           updatedAt?: string | null;
         } | null;
+        /** 0028 pos_note_presets 店級備註真源；null = server 未設定過。 */
+        notePresetsServer?: {
+          presets?: {
+            notePresets?: string[];
+            cancelNotePresets?: string[];
+            compNotePresets?: string[];
+          } | null;
+          updatedAt?: string | null;
+        } | null;
       };
 
       if (Array.isArray(payload.orders)) {
@@ -1037,11 +1048,32 @@ export function PosApp() {
         if (adoptServerTemplates && serverTpl) {
           savePrintTemplateSyncMeta({ updatedAt: serverTplUpdatedAt });
         }
+        // 備註預設雲端同步（0028 pos_note_presets，店級備註真源）：同 printTemplates 一樣，
+        // server 較新先採納。備註以前混喺 device_configs.local_settings（每台終端一行、
+        // 多機覆蓋），而家獨立表一店一行。呢度覆蓋 payload.localSettings 入面嘅舊殘留備註，
+        // 確保以 note-presets 真源為準（唔再被 device_configs 舊值回水）。
+        const serverNote = payload.notePresetsServer?.presets ?? null;
+        const serverNoteUpdatedAt = payload.notePresetsServer?.updatedAt ?? null;
+        const serverNoteTs = serverNoteUpdatedAt ? Date.parse(serverNoteUpdatedAt) || 0 : 0;
+        const noteMeta = loadNotePresetSyncMeta();
+        const localNoteTs = noteMeta?.updatedAt ? Date.parse(noteMeta.updatedAt) || 0 : 0;
+        const adoptServerNotes = !!serverNote && serverNoteTs > 0 && serverNoteTs > localNoteTs;
+        if (adoptServerNotes) {
+          saveNotePresetSyncMeta({ updatedAt: serverNoteUpdatedAt });
+        }
         const merged: PosLocalSettings = {
           ...payload.localSettings,
           floors:
             localHasSettings && local.floors?.length ? local.floors : payload.localSettings.floors,
           printTemplates: serverTpl && serverIsNewer ? serverTpl : local.printTemplates,
+          // 備註預設：server 較新採納 server（店級真源）；否則保留本機備註。
+          notePresets: adoptServerNotes ? (serverNote!.notePresets ?? local.notePresets) : local.notePresets,
+          cancelNotePresets: adoptServerNotes
+            ? (serverNote!.cancelNotePresets ?? local.cancelNotePresets)
+            : local.cancelNotePresets,
+          compNotePresets: adoptServerNotes
+            ? (serverNote!.compNotePresets ?? local.compNotePresets)
+            : local.compNotePresets,
           onlineOrderSettings: local.onlineOrderSettings,
           // 2026-09-08：細粒度打印開關同 `printTemplates` / `onlineOrderSettings` 一樣，
           // 屬於 per-terminal 設定（呢部收銀機嘅出單行為），唔應該被 server 默認值蓋走。

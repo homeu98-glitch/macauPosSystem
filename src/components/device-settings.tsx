@@ -16,10 +16,12 @@ import {
   loadOrders,
   loadPosLocalSettings,
   loadQueue,
+  loadNotePresetSyncMeta,
   loadSoldOutState,
   normalizeDeviceConfig,
   saveBootstrapCache,
   saveDeviceConfig,
+  saveNotePresetSyncMeta,
   savePosLocalSettings,
   saveQueue,
   saveSoldOutState,
@@ -534,8 +536,16 @@ export function DeviceSettings() {
     saveDeviceConfig(updatedConfig);
     setConfig(updatedConfig);
 
-    // 推上 server 嘅副本剝走 temp 枱同 autoAcceptSelfOrder（同原 syncConfig 邏輯一致）
-    const { autoAcceptSelfOrder: _, ...localRest } = localSettings;
+    // 推上 server 嘅副本剝走 temp 枱、autoAcceptSelfOrder，同備註 preset（同原 syncConfig
+    // 邏輯一致；備註 preset 已抽離做店級真源 pos_note_presets，唔再寫入 device_configs，
+    // 避免殘留舊值同新真源打架）。
+    const {
+      autoAcceptSelfOrder: _,
+      notePresets: _notePresets,
+      cancelNotePresets: _cancelNotePresets,
+      compNotePresets: _compNotePresets,
+      ...localRest
+    } = localSettings;
     const serverSettings = { ...localRest, floors: stripReopenTempTables(localSettings.floors) };
 
     const event: QueueEvent = {
@@ -551,9 +561,6 @@ export function DeviceSettings() {
         specTemplates: localSettings.specTemplates,
         standaloneSpecGroups: localSettings.standaloneSpecGroups,
         printTemplates: localSettings.printTemplates,
-        notePresets: localSettings.notePresets,
-        cancelNotePresets: localSettings.cancelNotePresets,
-        compNotePresets: localSettings.compNotePresets,
         onlineOrderSettings: localSettings.onlineOrderSettings,
       },
       status: "pending",
@@ -588,6 +595,36 @@ export function DeviceSettings() {
         setStatus(`${label}時後台拒收（HTTP ${configRes.status}/${onlineRes.status}），已保留在本機待補傳。`);
         return;
       }
+      // 備註預設（0028 pos_note_presets，店級真源）：淨係喺「備註」tab 先推，避免每次
+      // 其他 tab 保存都多一次 POST。成功後記低 server updated_at 做 LWW 基準。
+      if (activeTab === "notes") {
+        const storeId = loadAuthSession()?.merchantId;
+        if (storeId) {
+          try {
+            const noteRes = await fetch("/api/pos/note-presets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                storeId,
+                presets: {
+                  notePresets: localSettings.notePresets,
+                  cancelNotePresets: localSettings.cancelNotePresets,
+                  compNotePresets: localSettings.compNotePresets,
+                },
+              }),
+            });
+            const notePayload = (await noteRes.json().catch(() => null)) as {
+              ok?: boolean;
+              updatedAt?: string;
+            } | null;
+            if (noteRes.ok && notePayload?.ok && notePayload.updatedAt) {
+              saveNotePresetSyncMeta({ updatedAt: notePayload.updatedAt });
+            }
+          } catch {
+            // note-presets POST 失敗：備註仍保留本機，唔阻塞整次保存（device-config 已成功）
+          }
+        }
+      }
       if (isOutboxV2Enabled()) {
         saveQueue(loadQueue().filter((item) => item.id !== event.id));
       } else {
@@ -600,6 +637,47 @@ export function DeviceSettings() {
       setSyncingConfig(false);
     }
   }
+
+  // ── 備註預設拉取（0028 pos_note_presets，店級真源）────────────────────
+  // 進入備註 tab 即拉店級真源，做 LWW：server 較新（比本機已知版本新）→ 採納 server
+  // 備註，覆蓋 localSettings 三個 preset 欄；否則保留本機（離線 / server 無記錄時）。
+  useEffect(() => {
+    if (activeTab !== "notes") return;
+    let cancelled = false;
+    const storeId = loadAuthSession()?.merchantId;
+    if (!storeId) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/pos/note-presets?storeId=${encodeURIComponent(storeId)}`);
+        const payload = (await res.json()) as {
+          ok?: boolean;
+          found?: boolean;
+          presets?: { notePresets?: string[]; cancelNotePresets?: string[]; compNotePresets?: string[] } | null;
+          updatedAt?: string | null;
+        };
+        if (cancelled || !payload.ok || !payload.found || !payload.presets) return;
+        const serverTs = payload.updatedAt ? Date.parse(payload.updatedAt) || 0 : 0;
+        const localMeta = loadNotePresetSyncMeta();
+        const localTs = localMeta?.updatedAt ? Date.parse(localMeta.updatedAt) || 0 : 0;
+        // server 較新先採納（LWW）：避免本機啱啱推完 / server 較舊時被回水。
+        if (serverTs > 0 && serverTs > localTs) {
+          setLocalSettings((current) => ({
+            ...current,
+            notePresets: payload.presets?.notePresets ?? current.notePresets,
+            cancelNotePresets: payload.presets?.cancelNotePresets ?? current.cancelNotePresets,
+            compNotePresets: payload.presets?.compNotePresets ?? current.compNotePresets,
+          }));
+          saveNotePresetSyncMeta({ updatedAt: payload.updatedAt ?? null });
+          setStatus("已從雲端載入本店備註。");
+        }
+      } catch {
+        // 離線 / fetch 失敗 → 保留本機備註
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   function openSpecEditorForItem(itemId: string, specGroups?: MenuSpecGroup[]) {
     setSpecEditor({

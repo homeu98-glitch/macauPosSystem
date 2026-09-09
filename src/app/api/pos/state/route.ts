@@ -120,9 +120,18 @@ export async function GET(request: Request) {
         .eq("store_id", storeId)
         .maybeSingle()
     : Promise.resolve({ data: null, error: null });
+  // 0028 pos_note_presets（店級備註真源）：同 printTemplates 一樣，有記錄就夾落 payload，
+  // client 喺「server 較新」時採納；冇 storeId / 未設定 → null，client 保留本機備註。
+  const notePresetsQuery = storeId
+    ? supabase
+        .from("pos_note_presets")
+        .select("note_presets, cancel_note_presets, comp_note_presets, updated_at")
+        .eq("store_id", storeId)
+        .maybeSingle()
+    : Promise.resolve({ data: null, error: null });
 
-  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: printTemplatesRow }] =
-    await Promise.all([queueQuery, printJobsQuery, deviceConfigQuery, printTemplatesQuery]);
+  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: printTemplatesRow }, { data: notePresetsRow }] =
+    await Promise.all([queueQuery, printJobsQuery, deviceConfigQuery, printTemplatesQuery, notePresetsQuery]);
 
   const ordersInRange = await ordersInRangePromise;
   const orders = ordersInRange.error ? [] : ordersInRange.orders;
@@ -176,6 +185,22 @@ export async function GET(request: Request) {
             kiosk: printTemplatesRow.kiosk,
           }),
           updatedAt: printTemplatesRow.updated_at ?? null,
+        }
+      : null,
+    notePresetsServer: notePresetsRow
+      ? {
+          presets: {
+            notePresets: Array.isArray(notePresetsRow.note_presets)
+              ? notePresetsRow.note_presets.filter((v: unknown) => typeof v === "string")
+              : [],
+            cancelNotePresets: Array.isArray(notePresetsRow.cancel_note_presets)
+              ? notePresetsRow.cancel_note_presets.filter((v: unknown) => typeof v === "string")
+              : [],
+            compNotePresets: Array.isArray(notePresetsRow.comp_note_presets)
+              ? notePresetsRow.comp_note_presets.filter((v: unknown) => typeof v === "string")
+              : [],
+          },
+          updatedAt: notePresetsRow.updated_at ?? null,
         }
       : null,
   });
