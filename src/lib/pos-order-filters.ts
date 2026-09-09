@@ -74,15 +74,59 @@ export function compareOrderByLocalNo(a: PosOrder, b: PosOrder): number {
  * `row.id` fallback、本機用緊真正序號），唔可以讓 server 版覆寫本機版，否則 UI 同打印單會對唔上
  * （見「訂單8 vs 訂單84」bug）。所以當以 server 版取代本機版時，優先保留本機 `localOrderNo`。
  */
+/**
+ * 合併多份訂單列表，同 id 保留較新 / 較終局嘅版本。
+ *
+ * B4（docs/56）：`localOrderNo` 係單號嘅本地真源（下單嗰陣由 server 序號或本地每日序號 stamped）。
+ * realtime / backfill 合併時，若 server 版嘅 `localOrderNo` 同本機版唔同（例如 server 用緊
+ * `row.id` fallback、本機用緊真正序號），唔可以讓 server 版覆寫本機版，否則 UI 同打印單會對唔上
+ * （見「訂單8 vs 訂單84」bug）。所以當以 server 版取代本機版時，優先保留本機 `localOrderNo`。
+ *
+ * 2026-09-09 終態優先（docs/桌台回退根因）：
+ * 純粹用 updatedAt 做 LWW 唔夠——若某部裝置時鐘落後，佢發出嘅 ORDER_SETTLED 會帶舊
+ * updatedAt，server 寫入後，另一部機 manual update 合併時會以本地「未結帳」snapshot（較新
+ * timestamp）覆蓋 server「已結帳」版本，枱就會「回退」做未結。而家加入：
+ *   - 終態單（settled / cancelled / refunded / partially_refunded）永遠贏過非終態單；
+ *   - 除非本地已經係明確返結 reopened（終態 → reopened 係合法 reversal，由 timestamp 決定）。
+ * 呢個改動唔影響正常 LWW，只係防時鐘偏移 / 離線重排導致終態被非終態覆蓋。
+ */
 export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
   const byId = new Map<string, PosOrder>();
   for (const list of sources) {
     for (const order of list) {
       const existing = byId.get(order.id);
-      if (!existing || orderTimestamp(order) >= orderTimestamp(existing)) {
-        // 以 server 版（較新）取代本機版時，保留本機 localOrderNo（B4）。
+      if (!existing) {
+        byId.set(order.id, order);
+        continue;
+      }
+
+      const incomingTerminal = isTerminalOrderStatus(order.status);
+      const existingTerminal = isTerminalOrderStatus(existing.status);
+      const incomingReopened = order.status === "reopened";
+      const existingReopened = existing.status === "reopened";
+
+      // 終態優先：任何來源話「已結帳／取消／退款」都應該贏過本地「未結」snapshot。
+      // 唯一例外：本地已經明確返結 reopened（reopened 係終態 → open 嘅合法 reverse）。
+      if (incomingTerminal && !existingTerminal && !existingReopened) {
         const merged =
-          existing && existing.localOrderNo && existing.localOrderNo !== order.localOrderNo
+          existing.localOrderNo && existing.localOrderNo !== order.localOrderNo
+            ? { ...order, localOrderNo: existing.localOrderNo }
+            : order;
+        byId.set(order.id, merged);
+        continue;
+      }
+
+      // 本地已終態，incoming 非終態又唔係 reopened → 舊非終態 snapshot 唔可以降級終態。
+      if (existingTerminal && !incomingTerminal && !incomingReopened) {
+        continue;
+      }
+
+      // 其他情況維持 LWW：updatedAt 較新者勝出（包括 reopened 合法 reverse、同一單多次更新）。
+      const incomingTs = orderTimestamp(order);
+      const existingTs = orderTimestamp(existing);
+      if (incomingTs > existingTs || (incomingTs === existingTs && incomingReopened && !existingReopened)) {
+        const merged =
+          existing.localOrderNo && existing.localOrderNo !== order.localOrderNo
             ? { ...order, localOrderNo: existing.localOrderNo }
             : order;
         byId.set(order.id, merged);
