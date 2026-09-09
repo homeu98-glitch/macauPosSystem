@@ -479,6 +479,9 @@ export function PrintCenter() {
         footerText: t.footerText,
         typeLabel: "落單",
         time: "12:00",
+        // 唔帶 orderNote → 就算抽中嘅 sample order 有全單備註，設計頁預覽都唔會顯示
+        //（與 print-jobs.ts buildKitchenPrintJobs 同一 bug，一齊修）。
+        orderNote: sampleOrder.orderNote,
       });
       const items: PrintItemLine[] = sampleOrder.items.map((it) => ({
         name: it.name,

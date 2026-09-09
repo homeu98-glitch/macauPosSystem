@@ -205,6 +205,10 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
       footerText: kitchenTemplate.footerText,
       typeLabel,
       time,
+      // ⚠️ 全單備註一定要帶：唔傳 → content.order_note 空字串 → renderEscPosLines
+      // `if (!text) continue` 直接跳過 → 廚房單永久冇全單備註（收據有、廚房冇嘅 bug）。
+      // 見 docs：buildKitchenContent 嘅 orderNote 係 optional，漏傳唔會 compile error。
+      orderNote: order.orderNote,
     });
     const orderNo = `${order.localOrderNo}${opts.orderNoSuffix ?? ""}`;
     content.order_no = orderNo;

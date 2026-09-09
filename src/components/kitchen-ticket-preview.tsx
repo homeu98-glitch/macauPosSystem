@@ -22,6 +22,7 @@ export function KitchenTicketPreview({ job }: { job: PrintJob }) {
       order_no: job.orderNo ?? job.orderId,
       table_name: job.tableName ?? "",
       order_type: ticketTypeLabel(job.ticketType),
+      order_note: job.content?.order_note ?? "",
       footer: "",
     };
     return renderEscPosLines(buildSnapshot("kitchen", DEFAULT_KITCHEN_TEMPLATE), content, job.items ?? []);
