@@ -8,7 +8,7 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
 import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
-import { orderMatchesReportRange } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, macauTodayRange } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
@@ -248,13 +248,66 @@ export function ShiftPage() {
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
 
+  // 2026-09-09：交班摘要數據源由「純本機 localStorage」改為「本機 + 雲端 merge」。
+  // 根因：多機協作時，另一部機結帳嘅單只上咗雲端（pos_orders），唔會落呢部機嘅 localStorage，
+  // 令交班少計（案例：本機 13 張=762 vs 雲端 17 張=903，漏咗 4 張今日正常結帳單）。
+  // 做法：入頁 + focus + 網絡恢復時，拉 `/api/pos/state?ordersOnly=1&start&end` 今日單，
+  //       按 id 同本機 merge（雲端較新 wins），令交班數 = 報表數。離線 / 失敗 → 維持本機 fallback。
   useEffect(() => {
-    function refreshOrders() {
-      setOrders(loadOrders());
+    let cancelled = false;
+
+    function mergeByUpdatedAt(local: PosOrder[], cloud: PosOrder[]): PosOrder[] {
+      const map = new Map<string, PosOrder>();
+      for (const o of local) map.set(o.id, o);
+      for (const o of cloud) {
+        const existing = map.get(o.id);
+        if (!existing) {
+          map.set(o.id, o);
+          continue;
+        }
+        const localTs = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+        const cloudTs = o.updatedAt ? Date.parse(o.updatedAt) : 0;
+        if (cloudTs >= localTs) map.set(o.id, o); // 雲端較新（或同刻）→ 採雲端
+      }
+      return [...map.values()];
     }
+
+    async function refreshOrders() {
+      setOrders(loadOrders());
+      const storeId = resolveStoreId();
+      if (!storeId || !readNetworkOnline()) return;
+
+      try {
+        const range = macauTodayRange();
+        const url = `/api/pos/state?storeId=${encodeURIComponent(storeId)}&ordersOnly=1&limit=5000&start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
+        const res = await fetch(url);
+        if (cancelled) return;
+        if (!res.ok) return;
+        const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
+        if (!payload.ok || !Array.isArray(payload.orders)) return;
+        // 只採今日、本店、可計數（settled/refunded 等）嘅單，避免將 open 單嘅金額計入交班。
+        const cloudSettled = payload.orders.filter(
+          (o) =>
+            o.storeId === storeId &&
+            (o.status === "settled" ||
+              o.status === "partially_refunded" ||
+              o.status === "refunded"),
+        );
+        if (cloudSettled.length === 0) return;
+        setOrders((prev) => mergeByUpdatedAt(prev, cloudSettled));
+      } catch {
+        // 拉雲端失敗 → 維持本機（fallback），唔影響離線交班。
+      }
+    }
+
     refreshOrders();
     window.addEventListener("focus", refreshOrders);
-    return () => window.removeEventListener("focus", refreshOrders);
+    window.addEventListener("online", refreshOrders);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshOrders);
+      window.removeEventListener("online", refreshOrders);
+    };
   }, []);
 
   // 2026-09-07（問題一）：入頁即同 server active 班次 reconcile ——
