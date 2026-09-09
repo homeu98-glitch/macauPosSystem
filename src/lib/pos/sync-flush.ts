@@ -186,7 +186,7 @@ export function markQueueEventFailed(eventId: string, reason?: string): void {
       : e,
   );
   saveQueue(next);
-  // eslint-disable-next-line no-console
+   
   if (reason) console.warn(`[pos-sync-flush] event ${eventId} 標 failed：${reason}`);
 }
 
@@ -416,24 +416,73 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
     });
   } catch (err) {
     // 離線 / 網絡錯誤：保留 pending，唔加 attempts（避免純網絡抖動快速 burn 掉 quota）
-    // eslint-disable-next-line no-console
+     
     console.warn("[pos-sync-flush] fetch 失敗（保留 pending 等待下次 flush）：", err);
     return;
   }
 
   if (!result.ok) {
-    // Server-side error：加 attempts。連續 MAX 次都失敗就標 failed。
-    // 順手記低 lastError（HTTP status + server body 節錄）同 lastFailedAt，畀「同步健康」
-    // 檢查逐筆顯示原因（之前只記 attempts 數，收銀冇辦法知道點解推唔到）。
+    // Server-side error。方案 C（2026-09-09）：server 會喺 body 帶按事件 `results`
+    // —— ok 嘅事件照樣剷走（v2）/ 標 synced（v1），唔 ok 嘅先 attempts+1。
+    // 舊 server 冇 results → 維持舊行為（成批保留 pending）。
     let lastError = `HTTP ${result.status}`;
+    let perEvent: { id: string; ok: boolean; error?: string }[] | null = null;
     try {
       const body = await result.text();
-      if (body) lastError = `${body.slice(0, 160)} (HTTP ${result.status})`;
+      if (body) {
+        lastError = `${body.slice(0, 160)} (HTTP ${result.status})`;
+        const parsed = JSON.parse(body) as { results?: { id: string; ok: boolean; error?: string }[] };
+        if (Array.isArray(parsed?.results)) perEvent = parsed.results;
+      }
     } catch {
-      // 讀 body 失敗唔影響主流程（lastError 已至少帶 HTTP status）
+      // 讀 body / JSON 失敗唔影響主流程（lastError 已至少帶 HTTP status）
     }
     const failedAt = new Date().toISOString();
     const flippedIds = new Set(flippable.map((e) => e.id));
+    const outboxV2 = isOutboxV2Enabled();
+
+    if (perEvent) {
+      const okIds = new Set(perEvent.filter((r) => r.ok).map((r) => r.id));
+      const errorById = new Map(perEvent.filter((r) => !r.ok).map((r) => [r.id, r.error ?? lastError]));
+      const next = allQueue.flatMap((e) => {
+        if (!flippedIds.has(e.id)) return [e];
+        if (okIds.has(e.id)) {
+          // ok：上咗雲 —— v2 剷走（queue 淨留未上雲工作）；v1 標 synced 墓碑
+          return outboxV2 ? [] : [{ ...e, status: "synced" as const, attempts: 0 }];
+        }
+        // 唔 ok：留低重試，attempts 到頂轉 failed
+        const attempts = (e.attempts ?? 0) + 1;
+        return [
+          {
+            ...e,
+            attempts,
+            lastError: errorById.get(e.id) ?? lastError,
+            lastFailedAt: failedAt,
+            status: (attempts >= MAX_SYNC_ATTEMPTS ? "failed" : "pending") as "failed" | "pending",
+          },
+        ];
+      });
+      saveQueue(next);
+      const justFailed = next.filter(
+        (e) => flippedIds.has(e.id) && !okIds.has(e.id) && e.status === "failed",
+      );
+      if (justFailed.length > 0) {
+        window.dispatchEvent(
+          new CustomEvent(POS_SYNC_FAILED_EVENT, {
+            detail: { count: justFailed.length, status: result.status },
+          }),
+        );
+      }
+      if (!options.silent) {
+         
+        console.warn(
+          `[pos-sync-flush] 部分同步失敗（HTTP ${result.status}）：ok ${okIds.size}/${flippable.length} 筆`,
+        );
+      }
+      return;
+    }
+
+    // 舊 server（冇按事件 results）：成批保留，attempts+1。
     const next = allQueue.map((e) => {
       if (!flippedIds.has(e.id)) return e;
       const attempts = (e.attempts ?? 0) + 1;
@@ -460,7 +509,7 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
     }
 
     if (!options.silent) {
-      // eslint-disable-next-line no-console
+       
       console.warn(`[pos-sync-flush] server 拒收 ${flippable.length} 筆同步事件（status ${result.status}）`);
     }
     return;
@@ -481,7 +530,7 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   }
 
   if (!options.silent) {
-    // eslint-disable-next-line no-console
+     
     console.log(`[pos-sync-flush] 已同步 ${flippable.length} 筆事件`);
   }
 }

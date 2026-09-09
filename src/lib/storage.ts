@@ -61,6 +61,9 @@ const STORE_SUFFIX = {
   // 備註預設雲端同步 meta（0028 migration）：同 printTemplateMeta 一樣嘅 LWW 基準，
   // 記錄「本機已知嘅 server 備註版本（updated_at）」，server 較新先採納。
   notePresetMeta: "note-preset-meta",
+  // 孤兒單隔離區（2026-09-09 方案 A）：雲端冇、本機又冇 pending 事件支持嘅非終態單。
+  // 隔離 = 由 orders 移出入呢個 store-scope list（唔刪除，可還原），防 merge 復活。
+  quarantinedOrders: "quarantined-orders",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -600,6 +603,32 @@ export function addDeletedOrderIds(ids: string[]) {
   if (ids.length === 0) return;
   const next = Array.from(new Set([...loadDeletedOrderIds(), ...ids]));
   saveDeletedOrderIds(next);
+}
+
+/** 一行隔離記錄：被隔離嘅完整訂單快照 + 隔離時間 / 原因。 */
+export interface QuarantinedOrderRow {
+  order: PosOrder;
+  quarantinedAt: string;
+  /** "auto-full-pull"（全量拉取自動隔離）| "manual-health-check"（同步健康手動隔離） */
+  reason: string;
+}
+
+/** 隔離區上限：超過就由最舊開始剷（隔離區係救生艇，唔係檔案庫）。 */
+export const MAX_QUARANTINED_ORDERS = 200;
+
+export function loadQuarantinedOrders(): QuarantinedOrderRow[] {
+  return readStoreJson(STORE_SUFFIX.quarantinedOrders, [] as QuarantinedOrderRow[]);
+}
+
+export function saveQuarantinedOrders(rows: QuarantinedOrderRow[]) {
+  writeStoreJson(
+    STORE_SUFFIX.quarantinedOrders,
+    rows.length > MAX_QUARANTINED_ORDERS
+      ? rows
+          .sort((a, b) => Date.parse(b.quarantinedAt) - Date.parse(a.quarantinedAt))
+          .slice(0, MAX_QUARANTINED_ORDERS)
+      : rows,
+  );
 }
 
 export function loadPosLocalSettings() {

@@ -24,8 +24,18 @@
  *   /api/pos/state?ordersOnly=1&storeId=…（雲端訂單真源）
  */
 
-import { loadDeletedOrderIds, loadOrders, loadQueue, saveOrders, saveQueue } from "@/lib/storage";
-import { PosOrder } from "@/lib/types";
+import {
+  addDeletedOrderIds,
+  loadDeletedOrderIds,
+  loadOrders,
+  loadQuarantinedOrders,
+  loadQueue,
+  QuarantinedOrderRow,
+  saveOrders,
+  saveQueue,
+  saveQuarantinedOrders,
+} from "@/lib/storage";
+import { PosOrder, QueueEvent } from "@/lib/types";
 import { isTerminalOrderStatus } from "@/lib/pos-order-filters";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, retryFailedSyncEvents, resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
@@ -234,4 +244,141 @@ export function downloadMissingOrdersToLocal(serverOrders: PosOrder[], merchantI
   }
   if (appended > 0) saveOrders(local);
   return appended;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// L3：孤兒單對賬 + 隔離區（2026-09-09 方案 A，docs/桌台回退根治方案）
+//
+// 根因：merge 係「合併」唔係「取代」——雲端冇嘅本機單會永遠保留，冇任何機制清走。
+// 實例：iPad B 手動更新不斷拉返 6 張「未結帳」枱，但 server pos_orders 對嗰啲
+// table_id 係零筆記錄（SQL 已證實）→ 嗰啲係本機孤兒單，時間源改動都救唔到。
+//
+// 孤兒定義（三個條件同時成立）：
+//   1. 本機非終態（draft / sent_to_kitchen / paid / reopened）——終態單由 L2 對賬管；
+//   2. 雲端全量 pull 冇呢個 id；
+//   3. outbox 冇任何 pending / failed 嘅 ORDER_* 事件支持佢（有 = 仲未放棄上雲，
+//     唔好郁佢；ORDER_DELETED 唔算支持——佢係刪除意圖）。
+//
+// 安全閥：
+//   - 單齡 < ORPHAN_MIN_AGE_MS 唔隔離（避開「事件啱啱 flush 完、pull response
+//     用舊 snapshot」嘅競態窗口）；
+//   - 隔離 = 移入 quarantine store（唔刪除），同步健康 Modal 可還原 / 永久刪除；
+//   - filterResurrectedOrders 會剔走隔離 id，merge / realtime 唔會令佢復活。
+// ═══════════════════════════════════════════════════════════════
+
+/** 孤兒判定嘅最小單齡：避開 flush / pull 競態（見上）。 */
+export const ORPHAN_MIN_AGE_MS = 10 * 60 * 1000;
+
+/** 一行「本機非終態、雲端冇、無事件支持」嘅孤兒記錄。 */
+export interface OrphanLocalRow {
+  orderId: string;
+  localOrderNo: string;
+  tableName: string;
+  total: number;
+  status: string;
+  updatedAt: string;
+}
+
+/**
+ * 由「本機訂單 + 雲端全量訂單 + outbox 隊列」計出孤兒單（純函數，方便測試）。
+ *
+ * @param localOrders 本機 orders（已 merge 嘅完整清單）
+ * @param serverOrders 雲端**全量**訂單（fetchServerOrders(storeId, null)，唔可以帶 range）
+ * @param queue outbox 隊列（loadQueue()）
+ */
+export function computeOrphanLocalOrders(
+  localOrders: PosOrder[],
+  serverOrders: PosOrder[],
+  queue: QueueEvent[],
+): OrphanLocalRow[] {
+  const quarantined = new Set(loadQuarantinedOrders().map((r) => r.order.id));
+  const serverIds = new Set(serverOrders.map((o) => o.id));
+  // 有 pending / failed ORDER_* 事件（唔計 ORDER_DELETED）嘅單 = 仲有上雲希望，唔算孤兒
+  const supported = new Set<string>();
+  for (const e of queue) {
+    if (e.status !== "pending" && e.status !== "failed") continue;
+    if (!e.type.startsWith("ORDER_") || e.type === "ORDER_DELETED") continue;
+    supported.add(e.entityId);
+  }
+  const now = Date.now();
+  const rows: OrphanLocalRow[] = [];
+  for (const o of localOrders) {
+    if (quarantined.has(o.id)) continue; // 已隔離嘅唔會再出現（但 react state 可能殘留）
+    if (isTerminalOrderStatus(o.status)) continue;
+    if (serverIds.has(o.id)) continue;
+    if (supported.has(o.id)) continue;
+    const t = orderTimeMs(o);
+    if (t > 0 && now - t < ORPHAN_MIN_AGE_MS) continue; // 競態保護：太新唔好郁
+    rows.push({
+      orderId: o.id,
+      localOrderNo: o.localOrderNo ?? "",
+      tableName: o.tableName ?? "",
+      total: o.total ?? 0,
+      status: o.status,
+      updatedAt: o.updatedAt,
+    });
+  }
+  // 最舊排先（孤兒越舊越可疑）
+  return rows.sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+}
+
+/**
+ * 將指定訂單隔離：由 orders localStorage 移出、寫入隔離區（含快照，可還原）。
+ *
+ * @returns 實際隔離咗幾多張（已隔離 / 已終態嘅會跳過）
+ */
+export function quarantineOrders(orderIds: string[], reason: string): number {
+  if (typeof window === "undefined" || orderIds.length === 0) return 0;
+  const idSet = new Set(orderIds);
+  const local = loadOrders();
+  const victims = local.filter((o) => idSet.has(o.id) && !isTerminalOrderStatus(o.status));
+  if (victims.length === 0) return 0;
+  const remaining = local.filter((o) => !idSet.has(o.id));
+  const now = new Date().toISOString();
+  const rows: QuarantinedOrderRow[] = [
+    ...loadQuarantinedOrders(),
+    ...victims.map((order) => ({ order, quarantinedAt: now, reason })),
+  ];
+  saveQuarantinedOrders(rows);
+  saveOrders(remaining); // 觸發 pos-orders-changed → UI 即時甩走隔離單
+   
+  console.log(
+    `[sync-reconcile] 孤兒單隔離：${victims.length} 張（${victims
+      .map((o) => o.localOrderNo ?? o.id.slice(-8))
+      .join("、")}），原因=${reason}`,
+  );
+  return victims.length;
+}
+
+/** 由隔離區還原一張單返 orders localStorage（放返最尾，merge 語義唔變）。 */
+export function restoreQuarantinedOrder(orderId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const rows = loadQuarantinedOrders();
+  const idx = rows.findIndex((r) => r.order.id === orderId);
+  if (idx < 0) return false;
+  const [row] = rows.splice(idx, 1);
+  saveQuarantinedOrders(rows);
+  const deleted = new Set(loadDeletedOrderIds());
+  if (deleted.has(orderId)) return true; // 已 tombstone，唔還原訂單本身，淨剷隔離記錄
+  const local = loadOrders();
+  if (!local.some((o) => o.id === orderId)) {
+    local.push(row.order);
+    saveOrders(local);
+  }
+  return true;
+}
+
+/** 永久刪除隔離區一張單（加 tombstone 防 realtime / backfill 復活）。 */
+export function discardQuarantinedOrder(orderId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const rows = loadQuarantinedOrders();
+  const next = rows.filter((r) => r.order.id !== orderId);
+  if (next.length === rows.length) return false;
+  saveQuarantinedOrders(next);
+  addDeletedOrderIds([orderId]);
+  // 同步斬草除根：orders localStorage 若仲有殘留（理論上隔離時已移走）都一併剷
+  const local = loadOrders();
+  const filtered = local.filter((o) => o.id !== orderId);
+  if (filtered.length !== local.length) saveOrders(filtered);
+  return true;
 }

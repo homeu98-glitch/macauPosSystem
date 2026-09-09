@@ -36,6 +36,10 @@ import {
 } from "@/lib/pos/order-note-lock";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import {
+  computeOrphanLocalOrders,
+  quarantineOrders,
+} from "@/lib/pos/sync-reconcile";
+import {
   appendPrintJobs,
   buildKitchenPrintJobs,
   buildKioskReceiptPrintJobs,
@@ -67,6 +71,7 @@ import {
   loadSoldOutState,
   loadClearedPrintJobIds,
   loadDeletedOrderIds,
+  loadQuarantinedOrders,
   addDeletedOrderIds,
   nextLocalDailyOrderNo,
   saveBootstrapCache,
@@ -889,13 +894,15 @@ export function PosApp() {
 
   // 一次過 backfill 現有 state（realtime 唔 backfill 舊 row；realtime (re)subscribe 時 call）。
   // 以 localStorage 為底 merge，唔會 overwrite 本機即時狀態。component scope 定義俾 usePosRealtime onResubscribed 共用。
-  async function loadRuntimeState() {
+  // @returns 本次全量拉取自動隔離咗幾多張孤兒單（2026-09-09 方案 A；0 = 冇／冇拉取）。
+  async function loadRuntimeState(): Promise<number> {
+    let quarantinedCount = 0;
     try {
       // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
       // 無登入時 kiosk 綁定店）。冇 store 一律唔拉 —— 以前會 fetch /api/pos/state
       // 唔帶 storeId，server 返**全店** orders + queue，merge 落本地就係跨店污染入口。
       const storeId = resolveStoreId();
-      if (!storeId) return;
+      if (!storeId) return 0;
       const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}`;
       const response = await fetch(stateUrl);
       const payload = (await response.json()) as {
@@ -923,9 +930,26 @@ export function PosApp() {
       if (Array.isArray(payload.orders)) {
         // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
         // docs/52：合併後過濾本機已真刪（tombstone）+ 伺服器單邊終態單，防 backfill 復活。
+        // 2026-09-09 方案 A：隔離區 id 一併剔除（孤兒單唔可以經 merge / backfill 復活）。
         setOrders((current) => {
           const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
-          const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders());
+          const quarantineIds = loadQuarantinedOrders().map((r) => r.order.id);
+          let cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders(), quarantineIds);
+          // 🧹 孤兒單對賬（方案 A）：雲端冇 + outbox 冇 pending/failed ORDER_* 事件支持
+          // + 單齡 ≥ 10 分鐘嘅非終態本機單 → 移入隔離區（可喺「同步健康」還原）。
+          // 根治「手動更新不斷拉返雲端根本冇嘅未結帳枱」（2026-09-09 實案：6 張孤兒單）。
+          const orphanRows = computeOrphanLocalOrders(cleaned, payload.orders!, loadQueue());
+          if (orphanRows.length > 0) {
+            const n = quarantineOrders(
+              orphanRows.map((r) => r.orderId),
+              "auto-full-pull",
+            );
+            if (n > 0) {
+              quarantinedCount = n;
+              const qIds = new Set(loadQuarantinedOrders().map((r) => r.order.id));
+              cleaned = cleaned.filter((o) => !qIds.has(o.id));
+            }
+          }
           saveOrders(cleaned);
           // backfill 補建：收銀端恢復在線時，檢查有冇未出廚房單嘅自助單（docs/87 §11）
           const selfOrdersNeedKitchen = cleaned.filter(
@@ -1091,6 +1115,7 @@ export function PosApp() {
     } catch {
       // ignore
     }
+    return quarantinedCount;
   }
 
   // ── 桌台總覽右上角「手動更新」（2026-09-09）────────────────────────────
@@ -1145,8 +1170,12 @@ export function PosApp() {
       // ③ 設備／打印／其他設置：沿用現行 loadRuntimeState() 嘅 merge 語義 ——
       //    floors／printTemplates／onlineOrderSettings／printContentToggles 保留本機
       //    （per-terminal 真源），其餘 server 優先；orders／printJobs 亦一併補返。
-      await loadRuntimeState();
+      //    2026-09-09 方案 A：全量拉取成功後自動隔離孤兒單（雲端冇、無 pending 事件支持）。
+      const quarantined = await loadRuntimeState();
       notes.push("設定已同步");
+      if (quarantined > 0) {
+        notes.push(`已隔離 ${quarantined} 張孤兒單，詳情喺「同步健康」`);
+      }
 
       // ④ 套用完成 → 強制 refresh 成個 web page：再 mount 一次以新 localStorage
       //    為底，確保介面（含枱面／購物車 state）同 server 完全一致。
@@ -1172,6 +1201,9 @@ export function PosApp() {
     onOrderUpsert: (order) => {
       // docs/52：本機已真刪除（tombstone）嘅訂單唔可以經 realtime 復活
       if (loadDeletedOrderIds().includes(order.id)) return;
+      // 2026-09-09 方案 A：已隔離嘅孤兒單同樣唔可以經 realtime 復活
+      //（除非用戶喺「同步健康」明確還原）。
+      if (loadQuarantinedOrders().some((r) => r.order.id === order.id)) return;
 
       // 判斷是否新收到嘅自助單（realtime push 時本機未有）
       const existing = loadOrders().find((o) => o.id === order.id);
@@ -1179,7 +1211,8 @@ export function PosApp() {
 
       setOrders((current) => {
         const merged = mergeOrderLists(loadOrders(), current, [order]);
-        const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders());
+        const quarantineIds = loadQuarantinedOrders().map((r) => r.order.id);
+        const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders(), quarantineIds);
         saveOrders(cleaned);
         return cleaned;
       });
@@ -2504,12 +2537,31 @@ export function PosApp() {
       // 畫面仲要彈「已同步 N 筆」—— 假成功（2026-09-08 修）。
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
-        // eslint-disable-next-line no-console
-        console.warn(`[syncNow] server 拒收 ${scoped.length} 筆事件（HTTP ${res.status}）：${detail.slice(0, 200)}`);
+        // 方案 C（2026-09-09）：server body 帶按事件 results —— ok 嘅照樣上雲成功，
+        // 淨係剷走 ok 嗰啲；唔 ok 嘅留 pending 等重試。冇 results（舊 server）就成批保留。
+        let okIds: Set<string> | null = null;
+        try {
+          const parsed = JSON.parse(detail) as { results?: { id: string; ok: boolean }[] };
+          if (Array.isArray(parsed?.results)) {
+            okIds = new Set(parsed.results.filter((r) => r.ok).map((r) => r.id));
+          }
+        } catch {
+          // 冇 JSON body / 舊 server → 成批保留
+        }
+        if (okIds && okIds.size > 0 && isOutboxV2Enabled()) {
+          persistQueue(nextQueue.filter((e) => !okIds!.has(e.id)));
+        }
+        const okCount = okIds?.size ?? 0;
+        console.warn(
+          `[syncNow] server 拒收（HTTP ${res.status}）：ok ${okCount}/${scoped.length} 筆，${detail.slice(0, 200)}`,
+        );
         if (!options?.silent) {
           setToast({
             tone: "error",
-            message: `同步失敗（HTTP ${res.status}），${scoped.length} 筆資料仍在本機，稍後會自動重試。`,
+            message:
+              okCount > 0
+                ? `部分同步失敗（HTTP ${res.status}），已同步 ${okCount} 筆、其餘留喺本機稍後重試。`
+                : `同步失敗（HTTP ${res.status}），${scoped.length} 筆資料仍在本機，稍後會自動重試。`,
           });
         }
         return;
@@ -3952,6 +4004,12 @@ export function PosApp() {
                         : "border-slate-200 bg-white text-slate-900";
                     const areaTone = isOccupied ? "text-white/85" : "text-slate-500";
                     const badgeTone = isOccupied ? "bg-white/25 text-white" : "bg-orange-50 text-orange-700";
+                    // 應收金額（桌台總覽）：該枱最新一張未結帳單嘅 total 扣返已預付（prepaid）。
+                    // 未結帳單 total = subtotal + 服務費 + 稅（結帳嗰刻先扣折扣/抹零重寫），同結帳頁 paymentBase 口徑一致。
+                    const tableOrder = tableOrderMap.get(table.id);
+                    const tableDueAmount = tableOrder
+                      ? Math.max(0, round2(tableOrder.total - (tableOrder.prepaidAmount ?? 0)))
+                      : 0;
                     return (
                       <button
                         key={table.id}
@@ -3972,6 +4030,11 @@ export function PosApp() {
                         >
                           已坐 {occupancy}
                         </div>
+                        {isOccupied && tableDueAmount > 0 ? (
+                          <div className="mt-1 truncate text-sm font-bold text-white" title={`應收 ${formatMoney(tableDueAmount, bootstrap.currency)}`}>
+                            應收 {formatMoney(tableDueAmount, bootstrap.currency)}
+                          </div>
+                        ) : null}
                         <div
                           className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${badgeTone}`}
                         >

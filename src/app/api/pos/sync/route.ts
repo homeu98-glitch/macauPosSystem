@@ -131,8 +131,23 @@ function parseIsoMs(value: string | null | undefined): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-/** 已有 row 記錄（LWW 比較用）。 */
-type ExistingOrderRow = { id: string; status: string | null; updated_at: string | null };
+/** 已有 row 記錄（LWW / 終態守門比較用）。 */
+type ExistingOrderRow = {
+  id: string;
+  status: string | null;
+  updated_at: string | null;
+  /**
+   * 方案 B（2026-09-09）：client 生成嘅時間戳（裝置時鐘）。
+   * `updated_at` 改為 server 蓋章（Vercel/DB 時鐘）之後，LWW 比較必須用同鐘域嘅
+   * client 時間先有意義 —— 否則「Vercel 收件時間」永遠新過「任何 client 時間」，
+   * 守門會拒絕晒所有正常更新。呢欄由 client updatedAt 寫入；migration 0029 已將
+   * 舊行 backfill 做 updated_at（舊 row 本來就係 client 蓋章）。
+   */
+  client_updated_at: string | null;
+};
+
+/** 按事件回執（方案 C）：client 淨剷 ok 嘅事件，唔 ok 嘅留 pending 重試。 */
+type EventAck = { id: string; ok: boolean; error?: string };
 
 export async function POST(request: Request) {
   // ── 0) body 大小閘：超大 body 直接拒，唔好入 JSON.parse ──
@@ -227,9 +242,19 @@ export async function POST(request: Request) {
     if (typeof rawEvent !== "object" || rawEvent === null) continue;
     const ev = rawEvent as Record<string, unknown>;
     const t = typeof ev.type === "string" ? ev.type : "";
-    if (t !== "ORDER_CREATED" && t !== "ORDER_UPDATED") continue;
     const p = (typeof ev.payload === "object" && ev.payload !== null ? ev.payload : {}) as Record<string, unknown>;
-    const candidate = (t === "ORDER_UPDATED" ? p.order : p) as Record<string, unknown> | undefined;
+    let candidate: Record<string, unknown> | undefined;
+    if (t === "ORDER_CREATED" || t === "ORDER_UPDATED") {
+      candidate = (t === "ORDER_UPDATED" ? p.order : p) as Record<string, unknown> | undefined;
+    } else if (t === "ORDER_SETTLED") {
+      // 方案 C：settle 都要預取 —— 防止離線重排嘅舊 settled 事件把「已返結」單
+      // 打回 settled（reopened 係唯一合法終態→open 轉移，唔可以被告 settle 覆蓋）。
+      const oid = typeof p.orderId === "string" ? p.orderId.slice(0, MAX_ID_LEN) : "";
+      if (oid) {
+        orderIds.add(oid);
+        continue;
+      }
+    }
     const id = candidate && typeof candidate.id === "string" ? candidate.id.slice(0, MAX_ID_LEN) : "";
     if (id) orderIds.add(id);
   }
@@ -238,7 +263,7 @@ export async function POST(request: Request) {
     const idArr = [...orderIds].slice(0, MAX_EVENTS_PER_REQUEST);
     const { data: existingRows, error: existingErr } = await supabase
       .from("pos_orders")
-      .select("id,status,updated_at")
+      .select("id,status,updated_at,client_updated_at")
       .eq("store_id", storeId)
       .in("id", idArr);
     if (existingErr) {
@@ -249,6 +274,8 @@ export async function POST(request: Request) {
   }
 
   const errors: string[] = [];
+  /** 按事件回執（方案 C）：正常路徑喺每次 iteration 尾 push。 */
+  const results: EventAck[] = [];
 
   for (const rawEvent of events) {
     if (typeof rawEvent !== "object" || rawEvent === null) {
@@ -263,9 +290,18 @@ export async function POST(request: Request) {
       errors.push("事件缺少 id");
       continue;
     }
+    // ── 按事件回執（方案 C）：每個事件一個下場，client 淨剷 ok 嘅 ──
+    let evAcked = false;
+    const ack = (ok: boolean, error?: string) => {
+      if (evAcked) return;
+      evAcked = true;
+      results.push({ id: eventId, ok, ...(error ? { error } : {}) });
+    };
+
     // ── 3) 事件類型白名單：唔喺名單內嘅一律跳過（防未知 type 走進寫入分支）──
     if (!VALID_EVENT_TYPES.has(eventType)) {
       errors.push(`未知事件類型：${eventType.slice(0, 40)}`);
+      ack(false, `未知事件類型：${eventType.slice(0, 40)}`);
       continue;
     }
 
@@ -281,6 +317,7 @@ export async function POST(request: Request) {
         `[pos/sync] 拒收跨店事件 ${eventId}（event.storeId=${eventStoreId} ≠ 請求 storeId=${storeId}）`,
       );
       errors.push(`事件 ${eventId} 的店舖標識與請求不一致（跨店事件），已拒絕`);
+      ack(false, "店舖標識與請求不一致（跨店事件）");
       continue;
     }
 
@@ -316,18 +353,21 @@ export async function POST(request: Request) {
       // 唔加會令下面 23 處 `order.xxx` 全部報 TS18048「possibly undefined」。
       if (order && orderId) {
         const incomingStatus = text(order.status, 64) ?? "draft";
-        const incomingUpdatedAt = text(order.updatedAt, 64) ?? new Date().toISOString();
+        // 方案 B（2026-09-09）：呢個係 **client 裝置時鐘**時間戳，之後寫入 `client_updated_at`
+        // 同做 LWW 比較（同鐘域）。`pos_orders.updated_at` 一律由 server 蓋章（下面）。
+        const incomingUpdatedAt = isoOrNull(order.updatedAt) ?? new Date().toISOString();
         const existing = existingById.get(orderId);
 
         if (existing) {
           const incomingTs = parseIsoMs(incomingUpdatedAt);
-          const existingTs = parseIsoMs(existing.updated_at);
+          // 同鐘域比較：優先用 client_updated_at（client 時鐘）；舊 row backfill 後唔會係 null
+          const existingTs = parseIsoMs(existing.client_updated_at ?? existing.updated_at);
           const existingStatus = existing.status ?? "";
           // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫（唔報錯 —— client 收到 200
           //     會當成功剷走呢條過期事件，唔會 burn attempts，亦唔會反覆將單打回舊狀態）；
           // (b) 終態守門：settled/cancelled/refunded/partially_refunded 唔可以被 open snapshot
           //     降級。唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳）。
-          const isStale = incomingTs < existingTs;
+          const isStale = incomingTs > 0 && incomingTs < existingTs;
           const isDowngrade =
             TERMINAL_ORDER_STATUSES.has(existingStatus) &&
             !TERMINAL_ORDER_STATUSES.has(incomingStatus) &&
@@ -338,6 +378,8 @@ export async function POST(request: Request) {
                 `incoming=${incomingStatus}@${incomingUpdatedAt}，` +
                 `${isStale ? "stale（incoming 較舊）" : "終態降級"}）`,
             );
+            // 有意嘅 skip：client 應該剷走呢條過期事件（唔好重試）
+            ack(true);
             continue;
           }
         }
@@ -379,7 +421,12 @@ export async function POST(request: Request) {
           //    非免單單一律 undefined → 寫 NULL。
           comp_note: text(order.compNote, MAX_TEXT_LEN),
           comped_at: isoOrNull(order.compedAt),
-          updated_at: incomingUpdatedAt,
+          // 方案 B（2026-09-09）：`updated_at` 一律 server 蓋章（收件時間，單一鐘域）；
+          // client 裝置時鐘時間戳另存 `client_updated_at`，專供 LWW 守門同鐘域比較。
+          // 注意：`created_at` 維持 client 時間（首次建立）—— 訂單排序（compareOrderByLocalNo）
+          // 同報表「下單時間」口徑都靠佢，唔可以俾補傳時間蓋走。
+          updated_at: new Date().toISOString(),
+          client_updated_at: incomingUpdatedAt,
         };
         const { error: oErr } = existing
           ? await supabase
@@ -397,14 +444,31 @@ export async function POST(request: Request) {
         if (oErr) {
           console.error("[pos/sync] pos_orders upsert/update failed:", oErr.message);
           errors.push(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 寫入失敗`);
+          ack(false, "訂單寫入失敗");
+          continue;
         }
+        ack(true);
+      } else {
+        // 帶咗 ORDER_CREATED/UPDATED 但 payload 冇 order.id → 冇嘢可寫。
+        // 當失敗處理：留喺 client 重試 / 同步健康可見，唔好靜默吞（資料流失風險）。
+        ack(false, "事件 payload 缺少訂單 id");
       }
     }
-
-    if (eventType === "ORDER_SETTLED") {
+    if (eventType === "ORDER_SETTLED" && !evAcked) {
       const settledOrderId =
         typeof eventPayload.orderId === "string" ? eventPayload.orderId.slice(0, MAX_ID_LEN) : "";
-      if (settledOrderId) {
+      if (!settledOrderId) {
+        ack(false, "事件 payload 缺少訂單 id");
+      } else {
+        // 方案 C：終態→open 唯一合法轉移係 reopened（返結）。若雲端已係 reopened，
+        // 離線重排嘅舊 settled 事件唔可以把它打回 settled（要等重新結帳嘅新事件）。
+        const settleExisting = existingById.get(settledOrderId);
+        if (settleExisting?.status === "reopened") {
+          console.warn(
+            `[pos/sync] 跳過 ORDER_SETTLED ${settledOrderId}（雲端已 reopened，唔好打回 settled）`,
+          );
+          ack(true);
+        } else {
         const patch: Record<string, unknown> = {
           status: text(eventPayload.status, 64) ?? "settled",
           fulfillment_status: text(eventPayload.fulfillmentStatus, 64),
@@ -413,7 +477,9 @@ export async function POST(request: Request) {
           payment_method: text(eventPayload.paymentMethod, MAX_NAME_LEN),
           discount_amount: money(eventPayload.discountAmount),
           total: money(eventPayload.total),
-          updated_at: text(event.createdAt, 64) ?? new Date().toISOString(),
+          // 方案 B：updated_at server 蓋章；client 時間另存 client_updated_at（LWW 同鐘域用）
+          updated_at: new Date().toISOString(),
+          client_updated_at: isoOrNull(event.createdAt) ?? new Date().toISOString(),
         };
         // 入座人數：**唯有** payload 有帶先寫。舊版 client / 排隊中嘅舊事件冇呢個欄，
         // 若無條件寫 null 會抹走之前 ORDER_UPDATED 寫入嘅值。
@@ -440,6 +506,7 @@ export async function POST(request: Request) {
         if (sErr) {
           console.error("[pos/sync] pos_orders settle failed:", sErr.message);
           errors.push(`訂單結帳狀態寫入失敗`);
+          ack(false, "訂單結帳狀態寫入失敗");
         } else if (!settledRows || settledRows.length === 0) {
           // 🛡️ 兜底（docs/111）：ORDER_SETTLED 早過 ORDER_CREATED 到（離線一輪操作、
           // 或者 2026-09-08 之前嗰個「同 entityId 淨推最新一條」去重丟咗建立事件），
@@ -458,15 +525,23 @@ export async function POST(request: Request) {
               discount_amount: money(eventPayload.discountAmount),
               payment_method: text(eventPayload.paymentMethod, MAX_NAME_LEN),
               fulfillment_status: text(eventPayload.fulfillmentStatus, 64),
+              // created_at 維持 client 事件時間（報表「下單日」口徑）；updated_at server 蓋章
               created_at: text(event.createdAt, 64) ?? new Date().toISOString(),
-              updated_at: text(event.createdAt, 64) ?? new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              client_updated_at: isoOrNull(event.createdAt) ?? new Date().toISOString(),
             },
             { onConflict: "id" },
           );
           if (iErr) {
             console.error("[pos/sync] pos_orders settle upsert fallback failed:", iErr.message);
             errors.push(`訂單結帳狀態寫入失敗`);
+            ack(false, "訂單結帳狀態寫入失敗");
+          } else {
+            ack(true);
           }
+        } else {
+          ack(true);
+        }
         }
       }
     }
@@ -513,6 +588,8 @@ export async function POST(request: Request) {
         if (uErr) {
           console.error("[pos/sync] pos_print_jobs update failed:", uErr.message);
           errors.push(`列印工作寫入失敗`);
+          ack(false, "列印工作寫入失敗");
+          continue;
         } else if (!upd || upd.length === 0) {
           // 2) 冇命中 → 首次建立，呢刻先寫 status（用 payload 嘅，通常 pending）
           const { error: iErr } = await supabase.from("pos_print_jobs").insert({
@@ -525,7 +602,10 @@ export async function POST(request: Request) {
           if (iErr) {
             console.error("[pos/sync] pos_print_jobs insert failed:", iErr.message);
             errors.push(`列印工作寫入失敗`);
+            ack(false, "列印工作寫入失敗");
+            continue;
           }
+          ack(true);
         }
       }
     }
@@ -542,7 +622,10 @@ export async function POST(request: Request) {
         if (dErr) {
           console.error("[pos/sync] pos_print_jobs delete failed:", dErr.message);
           errors.push(`列印工作刪除失敗`);
+          ack(false, "列印工作刪除失敗");
+          continue;
         }
+        ack(true);
       }
     }
 
@@ -558,18 +641,28 @@ export async function POST(request: Request) {
         if (dErr) {
           console.error("[pos/sync] pos_orders delete failed:", dErr.message);
           errors.push(`訂單刪除失敗`);
+          ack(false, "訂單刪除失敗");
+          continue;
         }
       }
     }
+
+    // 冇明確下場嘅事件（ORDER_ITEM_VOIDED no-op、DEVICE_CONFIG_UPDATED、
+    // TEST_PRINT_REQUESTED、缺 id 嘅 print job 等）：事件已記入 pos_queue_events，當 ok。
+    ack(true);
   }
 
-  if (errors.length > 0) {
+  // ── 回應（方案 C）：永遠帶按事件 results。部分失敗用 500（舊 client 會當成批
+  // 未同步保留 pending 重試，冇結果欄位都安全；新 client 讀 results 只剷 ok 嗰啲）。
+  const okCount = results.filter((r) => r.ok).length;
+  if (errors.length > 0 || okCount < results.length) {
     return NextResponse.json(
       {
         ok: false,
         // 對外只返第一條通用訊息；詳細 DB 錯誤只落 server log，唔外洩 schema / 欄位名
-        error: errors[0],
-        syncedCount: Math.max(0, events.length - errors.length),
+        error: errors[0] ?? "部分事件寫入失敗",
+        syncedCount: okCount,
+        results,
       },
       { status: 500 },
     );
@@ -578,6 +671,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     syncedCount: events.length,
+    results,
     receivedAt: new Date().toISOString(),
   });
 }

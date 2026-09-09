@@ -10,18 +10,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { PosOrder, QueueEvent } from "@/lib/types";
-import { loadOrders } from "@/lib/storage";
+import { loadOrders, loadQueue, loadQuarantinedOrders, QuarantinedOrderRow } from "@/lib/storage";
 import { discardFailedSyncEvent, retryFailedSyncEvents, resolveStoreId } from "@/lib/pos/sync-flush";
 import {
   computeMissingLocalOrders,
+  computeOrphanLocalOrders,
   computeReconcileDrift,
   computeServerRangeStart,
+  discardQuarantinedOrder,
   downloadMissingOrdersToLocal,
   fetchServerOrders,
   findLocalOrderById,
   loadFailedEvents,
   MissingLocalRow,
+  OrphanLocalRow,
   pushOrderSnapshotForReconcile,
+  quarantineOrders,
+  restoreQuarantinedOrder,
   ReconcileDriftRow,
   retryAllFailedEvents,
 } from "@/lib/pos/sync-reconcile";
@@ -74,6 +79,8 @@ export function SyncHealthModal({
   const [failedEvents, setFailedEvents] = useState<QueueEvent[]>([]);
   const [driftRows, setDriftRows] = useState<ReconcileDriftRow[]>([]);
   const [missingRows, setMissingRows] = useState<MissingLocalRow[]>([]);
+  const [orphanRows, setOrphanRows] = useState<OrphanLocalRow[]>([]);
+  const [quarantinedRows, setQuarantinedRows] = useState<QuarantinedOrderRow[]>([]);
   const [missingServerOrders, setMissingServerOrders] = useState<PosOrder[]>([]);
   const [scanState, setScanState] = useState<"idle" | "scanning" | "done" | "error">("idle");
   const [scanError, setScanError] = useState("");
@@ -107,6 +114,16 @@ export function SyncHealthModal({
           .map((m) => orders.find((o) => o.id === m.orderId))
           .filter((o): o is PosOrder => !!o),
       );
+      // ── L3：孤兒單掃描（2026-09-09 方案 A）──
+      // 孤兒 = 本機非終態 + 雲端**全量**冇 + outbox 冇 pending/failed ORDER_* 事件支持。
+      // 必須用全量 fetch（唔帶 range）：孤兒單唔喺 computeServerRangeStart 嘅終態窗口入面。
+      const full = await fetchServerOrders(storeId, null);
+      if (full.error) {
+        setOrphanRows([]);
+      } else {
+        setOrphanRows(computeOrphanLocalOrders(localOrders, full.orders, loadQueue()));
+      }
+      setQuarantinedRows(loadQuarantinedOrders());
       setScanState("done");
     } finally {
       scanningRef.current = false;
@@ -117,6 +134,7 @@ export function SyncHealthModal({
   useEffect(() => {
     if (!open) return;
     setFailedEvents(loadFailedEvents());
+    setQuarantinedRows(loadQuarantinedOrders());
     setStatusMsg("");
     setBusyIds(new Set());
     void refreshDrift();
@@ -200,6 +218,31 @@ export function SyncHealthModal({
     setStatusMsg(n > 0 ? `已下載 ${n} 張訂單到本機` : "下載失敗");
     void refreshDrift();
     onMutated(); // 觸發 pos-app 重新讀 orders
+  }
+
+  // ── L3 / L4：孤兒單隔離區（2026-09-09 方案 A）──
+  function handleQuarantine(orderId: string) {
+    const n = quarantineOrders([orderId], "manual-health-check");
+    setStatusMsg(n > 0 ? "已隔離 1 張孤兒單（下方可還原／永久刪除）。" : "隔離失敗（訂單可能已唔喺本機）。");
+    setQuarantinedRows(loadQuarantinedOrders());
+    void refreshDrift();
+    onMutated();
+  }
+
+  function handleRestoreQuarantined(orderId: string) {
+    const ok = restoreQuarantinedOrder(orderId);
+    setStatusMsg(ok ? "已還原到本機訂單。" : "還原失敗。");
+    setQuarantinedRows(loadQuarantinedOrders());
+    void refreshDrift();
+    onMutated();
+  }
+
+  function handleDiscardQuarantined(orderId: string) {
+    if (!window.confirm("確定永久刪除呢張孤兒單？會同時加入 tombstone，唔會再復活。")) return;
+    const ok = discardQuarantinedOrder(orderId);
+    setStatusMsg(ok ? "已永久刪除。" : "刪除失敗。");
+    setQuarantinedRows(loadQuarantinedOrders());
+    onMutated();
   }
 
   return (
@@ -423,6 +466,124 @@ export function SyncHealthModal({
                     >
                       全部下載到本機（{missingRows.length} 張）
                     </button>
+                  </>
+                )}
+              </section>
+
+              {/* ── L3：孤兒單（2026-09-09 方案 A）──
+                  本機非終態 + 雲端全量冇 + outbox 冇 pending/failed ORDER_* 事件支持。
+                  即係「手動更新不斷拉返嚟嘅幽靈枱」—— 雲端根本冇呢張單，merge 永遠唔會清走佢。
+                  隔離 = 由桌台移出、保留快照喺下方隔離區，可還原。 */}
+              <section className="mt-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-slate-800">
+                    孤兒單（雲端冇、無法同步）
+                    <span className="ml-2 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-700">
+                      {scanState === "done" ? `${orphanRows.length} 張` : "…"}
+                    </span>
+                  </h2>
+                </div>
+
+                {scanState === "scanning" ? null : scanState === "error" ? null : orphanRows.length === 0 ? (
+                  <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                    ✅ 冇發現孤兒單（本機進行中嘅訂單全部喺雲端有記錄）。
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-2 rounded-xl bg-orange-50 px-3 py-2 text-[11px] leading-relaxed text-orange-800">
+                      以下訂單喺本機仲係「進行中」，但雲端完全冇記錄、亦冇任何待同步事件支持
+                      —— 即係永遠同步唔上雲嘅孤兒單（會令桌台「復活」、報表對唔上）。
+                      撳「隔離」將佢由桌台移出（快照保留喺下方，可還原）。
+                    </div>
+                    <ul className="space-y-2">
+                      {orphanRows.map((row) => (
+                        <li key={row.orderId} className="rounded-xl border border-orange-100 bg-white px-3 py-2.5 shadow-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-slate-800">
+                                {row.localOrderNo || "(無單號)"}
+                                {row.tableName ? <span className="ml-2 font-normal text-slate-400">{row.tableName}</span> : null}
+                                <span className="ml-2 font-normal text-slate-400">MOP {row.total.toFixed(2)}</span>
+                              </div>
+                              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+                                本機
+                                <StatusChip status={row.status} tone="warn" />
+                                <span className="text-slate-300">·</span>
+                                雲端
+                                <StatusChip status={null} tone="muted" />
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleQuarantine(row.orderId)}
+                              className="shrink-0 rounded-xl bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-500"
+                            >
+                              隔離
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </section>
+
+              {/* ── L4：已隔離訂單（快照保留，可還原 / 永久刪除）── */}
+              <section className="mt-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-slate-800">
+                    已隔離訂單
+                    <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                      {quarantinedRows.length} 張
+                    </span>
+                  </h2>
+                </div>
+
+                {quarantinedRows.length === 0 ? (
+                  <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                    隔離區係空嘅。
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-2 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+                      呢啲訂單已被移出桌台（雲端冇記錄，無法同步）。如果確認係真實消費，
+                      可以「還原」返入本機再手動處理；確認係廢單就「永久刪除」。
+                    </div>
+                    <ul className="space-y-2">
+                      {quarantinedRows.map((row) => (
+                        <li key={row.order.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-slate-800">
+                                {row.order.localOrderNo || "(無單號)"}
+                                {row.order.tableName ? <span className="ml-2 font-normal text-slate-400">{row.order.tableName}</span> : null}
+                                <span className="ml-2 font-normal text-slate-400">MOP {(row.order.total ?? 0).toFixed(2)}</span>
+                              </div>
+                              <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                                {row.reason === "auto-full-pull" ? "自動隔離（手動更新）" : "手動隔離"} ·{" "}
+                                {new Date(row.quarantinedAt).toLocaleString("zh-HK")}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleRestoreQuarantined(row.order.id)}
+                                className="rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
+                              >
+                                還原
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDiscardQuarantined(row.order.id)}
+                                className="rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50"
+                              >
+                                永久刪除
+                              </button>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
                   </>
                 )}
               </section>

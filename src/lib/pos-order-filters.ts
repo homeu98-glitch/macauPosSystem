@@ -184,12 +184,16 @@ export function filterResurrectedOrders(
   orders: PosOrder[],
   deletedOrderIds: string[],
   localOrders: PosOrder[],
+  /** 額外要剔除嘅 id（2026-09-09 方案 A：隔離區孤兒單，merge / realtime 唔准復活）。 */
+  excludedOrderIds: string[] = [],
 ): PosOrder[] {
   const deleted = new Set(deletedOrderIds);
+  const excluded = new Set(excludedOrderIds);
   const localIds = new Set(localOrders.map((o) => o.id));
   const now = Date.now();
   return orders.filter((o) => {
     if (deleted.has(o.id)) return false;
+    if (excluded.has(o.id)) return false;
     // 終態單：server 單邊唔可以復活（docs/52）
     if (isTerminalOrderStatus(o.status) && !localIds.has(o.id)) return false;
     // 舊 open 單：server 單邊 + 本機無 + 超過 1 日 → 唔復活（docs/68）
