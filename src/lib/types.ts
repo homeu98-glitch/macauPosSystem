@@ -714,7 +714,7 @@ export interface PosOrder {
 export type OnlinePaymentStatus = "paid" | "unpaid";
 
 /** 推唔到嘅事件點解推唔到（配合 status:"skipped"）。 */
-export type QueueSkipReason = "foreign-store" | "no-store";
+export type QueueSkipReason = "foreign-store" | "no-store" | "user-discarded";
 
 export interface QueueEvent {
   id: string;
@@ -731,6 +731,12 @@ export interface QueueEvent {
    */
   status: "pending" | "synced" | "failed" | "skipped";
   createdAt: string;
+  /** 已嘗試推送次數（sync-flush 用；超過 MAX_SYNC_ATTEMPTS 標 failed）。 */
+  attempts?: number;
+  /** 最近一次推送失敗嘅原因（server HTTP status / body 節錄）。failed 事件診斷用。 */
+  lastError?: string;
+  /** 最近一次被標 failed 嘅時間（ISO）。同步健康檢查排序用。 */
+  lastFailedAt?: string;
   /** 淨係 status === "skipped" 時有意義：點解呢條事件唔會被推送。 */
   skipReason?: QueueSkipReason;
   /**

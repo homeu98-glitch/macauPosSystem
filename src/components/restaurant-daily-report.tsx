@@ -1557,13 +1557,17 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
 
   const ticketMopYest = aggYest && aggYest.count > 0 ? aggYest.revenue / aggYest.count : 0;
 
-  /** 「線下 vs 線上」分拆：
+  /** 「線下 vs 線上」分拆（2026-09-09 修正口徑）：
    *  - 線下 = POS 收銀單且 *無* onlineOrderId（純現場收銀），由 POS DB 算；
-   *  - 線上 = Ledger 總（`orderCount` / `orderPaidMop`）減去線下，涵蓋：
-   *      · POS 接單的線上單（帶 onlineOrderId）
+   *  - 線上 = Ledger RPC（`orderCount` / `orderPaidMop`），涵蓋：
+   *      · POS 接單的線上單（帶 onlineOrderId —— 呢啲唔會喺上面 offline 重複計）
    *      · 其他渠道的單（kiosk / 外賣平台 / 微信小程序等不經過 POS DB 的）
-   *  - 總值優先用 Ledger RPC（覆蓋整店全渠道，較 POS DB 權威）；
-   *    若 Ledger 連不上則 fallback POS DB（離線模式仍可用）。
+   *  - 總值 = **線下 + 線上相加**。舊實作直接以 Ledger 為總值並「減線下」計線上，
+   *    前提假設「Ledger 覆蓋整店全渠道」——但實際 Ledger 只收線上渠道，
+   *    POS 現場收銀（現金/卡）永遠唔入 Ledger → 營業額長期只顯示線上部分、
+   *    線下收入被隱形（用戶案例：POS 線下 903 vs Ledger 線上 139，營業額錯顯 139）。
+   *    修正後雙計風險為零：offline 已排除 onlineOrderId 行，線上全部經 Ledger 計一次。
+   *  - Ledger 連不上則 fallback POS DB（離線模式仍可用，線上改用 POS 內帶 onlineOrderId 嘅單）。
    */
   const onlineOfflineSplit = useMemo(() => {
     const inRange = orders.filter((o) => isSaleCountable(o)).filter((o) => orderMatchesReportRange(o, range));
@@ -1579,10 +1583,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       return {
         offlineCount,
         offlineRevenueMop,
-        onlineCount: Math.max(0, ledgerCount - offlineCount),
-        onlineRevenueMop: Math.max(0, ledgerRevenueMop - offlineRevenueMop),
-        totalCount: ledgerCount,
-        totalRevenueMop: ledgerRevenueMop,
+        onlineCount: ledgerCount,
+        onlineRevenueMop: ledgerRevenueMop,
+        totalCount: offlineCount + ledgerCount,
+        totalRevenueMop: offlineRevenueMop + ledgerRevenueMop,
         source: "ledger" as const,
       };
     }

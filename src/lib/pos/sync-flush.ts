@@ -173,9 +173,16 @@ export function notifyQueueChanged(): void {
  */
 export function markQueueEventFailed(eventId: string, reason?: string): void {
   const queue = loadQueue() as ExtendedQueueEvent[];
+  const now = new Date().toISOString();
   const next = queue.map((e) =>
     e.id === eventId
-      ? { ...e, status: "failed" as const, attempts: (e.attempts ?? 0) + 1 }
+      ? {
+          ...e,
+          status: "failed" as const,
+          attempts: (e.attempts ?? 0) + 1,
+          lastError: reason ?? e.lastError,
+          lastFailedAt: now,
+        }
       : e,
   );
   saveQueue(next);
@@ -184,31 +191,61 @@ export function markQueueEventFailed(eventId: string, reason?: string): void {
 }
 
 /**
- * 手動重試「永久失敗」嘅同步 event：attempts 歸零 + status 轉返 pending，
+ * 手動重試「永久失敗」嘅同步 event：attempts 歸零 + status 轉返 pending + 清走失敗紀錄，
  * 等 doFlush 上面第 209 行（`attempts >= MAX_SYNC_ATTEMPTS` 就 continue）唔再 skip 佢哋，
  * 然後觸發一次 flush。
  *
  * 冇咗呢個入口，永久 failed 嘅 event 係死嘅：doFlush 唔會再揀佢，UI 又冇辦法救返，
  * 資料就咁永遠留喺本機、上唔到 DB。
  *
+ * @param ids 只重試指定 event id；冇傳 = 全部 failed（保留舊「全部重試」語義）。
  * 呢度 dispatch `POS_SYNC_QUEUE_CHANGED_EVENT` 係**安全**嘅（會即刻 flush 一次）：
  * doFlush 失敗時 dispatch 嘅係另一個 `POS_SYNC_FAILED_EVENT`，唔會自觸發，唔會迴圈。
  *
  * @returns 重新排入嘅 event 數
  */
-export function retryFailedSyncEvents(): number {
+export function retryFailedSyncEvents(ids?: string[]): number {
   if (typeof window === "undefined") return 0;
   const queue = loadQueue() as ExtendedQueueEvent[];
-  const failed = queue.filter((e) => e.status === "failed");
+  const target = ids && ids.length > 0 ? new Set(ids) : null;
+  const failed = queue.filter((e) => e.status === "failed" && (!target || target.has(e.id)));
   if (failed.length === 0) return 0;
 
   const next = queue.map((e) =>
-    e.status === "failed" ? { ...e, status: "pending" as const, attempts: 0 } : e,
+    e.status === "failed" && (!target || target.has(e.id))
+      ? { ...e, status: "pending" as const, attempts: 0, lastError: undefined, lastFailedAt: undefined }
+      : e,
   );
   saveQueue(next);
   window.dispatchEvent(new CustomEvent(POS_SYNC_QUEUE_CHANGED_EVENT, { detail: { queue: next } }));
   console.log(`[pos-sync-flush] 手動重試 ${failed.length} 筆永久失敗嘅同步 event`);
   return failed.length;
+}
+
+/**
+ * 放棄一條永久失敗嘅 event（用戶決定唔再推）：由 failed 轉 skipped 終態 + skipReason
+ * "user-discarded"。skipped 唔會被 doFlush 推送，亦唔再計入「未同步」琥珀卡；
+ * GC 喺 queue 超上限時會最先清理 skipped（唔會佔位一世）。
+ */
+export function discardFailedSyncEvent(eventId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const queue = loadQueue() as ExtendedQueueEvent[];
+  const found = queue.some((e) => e.id === eventId && e.status === "failed");
+  if (!found) return false;
+  const next = queue.map((e) =>
+    e.id === eventId && e.status === "failed"
+      ? {
+          ...e,
+          status: "skipped" as const,
+          skipReason: "user-discarded" as const,
+          lastError: undefined,
+          lastFailedAt: undefined,
+        }
+      : e,
+  );
+  saveQueue(next);
+  console.log(`[pos-sync-flush] 用戶放棄同步 event ${eventId}`);
+  return true;
 }
 
 /**
@@ -386,6 +423,16 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
 
   if (!result.ok) {
     // Server-side error：加 attempts。連續 MAX 次都失敗就標 failed。
+    // 順手記低 lastError（HTTP status + server body 節錄）同 lastFailedAt，畀「同步健康」
+    // 檢查逐筆顯示原因（之前只記 attempts 數，收銀冇辦法知道點解推唔到）。
+    let lastError = `HTTP ${result.status}`;
+    try {
+      const body = await result.text();
+      if (body) lastError = `${body.slice(0, 160)} (HTTP ${result.status})`;
+    } catch {
+      // 讀 body 失敗唔影響主流程（lastError 已至少帶 HTTP status）
+    }
+    const failedAt = new Date().toISOString();
     const flippedIds = new Set(flippable.map((e) => e.id));
     const next = allQueue.map((e) => {
       if (!flippedIds.has(e.id)) return e;
@@ -393,6 +440,8 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
       return {
         ...e,
         attempts,
+        lastError,
+        lastFailedAt: failedAt,
         status: (attempts >= MAX_SYNC_ATTEMPTS ? "failed" : "pending") as "failed" | "pending",
       };
     });

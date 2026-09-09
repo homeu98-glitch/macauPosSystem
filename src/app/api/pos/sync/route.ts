@@ -97,6 +97,23 @@ function isoOrNull(value: unknown): string | null {
   return new Date(ms).toISOString();
 }
 
+/**
+ * 終態訂單狀態（2026-09-09 LWW / 終態守門，docs/桌台回退根因）：
+ * 呢啲狀態代表「單已經完結」，唔可以被一部離線機重推嘅「結帳前」open snapshot 降級。
+ * 唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳），唔喺呢個 set 內。
+ */
+const TERMINAL_ORDER_STATUSES = new Set(["settled", "cancelled", "refunded", "partially_refunded"]);
+
+/** 解析 ISO 時間戳做毫秒數；非法 → 0（當最舊）。 */
+function parseIsoMs(value: string | null | undefined): number {
+  if (!value) return 0;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/** 已有 row 記錄（LWW 比較用）。 */
+type ExistingOrderRow = { id: string; status: string | null; updated_at: string | null };
+
 export async function POST(request: Request) {
   // ── 0) body 大小閘：超大 body 直接拒，唔好入 JSON.parse ──
   const declaredLen = Number(request.headers.get("content-length") ?? 0);
@@ -178,6 +195,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, syncedCount: 0, receivedAt: new Date().toISOString() });
   }
 
+  // ── 2.5) LWW / 終態守門（2026-09-09）：一次過預取今批事件會撞到嘅 pos_orders 行 ──
+  // 舊實作對 ORDER_CREATED/ORDER_UPDATED 係無條件 upsert（onConflict:id）→ 任何一部裝置
+  // 重推一條「結帳前」嘅舊 snapshot（離線排隊 / v1 去重輸家）都會將雲端已 settled 嘅單
+  // 打返做 sent_to_kitchen ——「收銀機手動更新後 8 枱回退做未結帳」嘅根因。家陣：
+  //   a) incoming updated_at < 現有 row updated_at → stale，跳過唔寫（LWW）；
+  //   b) 現有 row 係終態（settled/cancelled/refunded/partially_refunded）而 incoming 唔係
+  //      終態、又唔係明確 reopened → 唔准降級。
+  const orderIds = new Set<string>();
+  for (const rawEvent of events) {
+    if (typeof rawEvent !== "object" || rawEvent === null) continue;
+    const ev = rawEvent as Record<string, unknown>;
+    const t = typeof ev.type === "string" ? ev.type : "";
+    if (t !== "ORDER_CREATED" && t !== "ORDER_UPDATED") continue;
+    const p = (typeof ev.payload === "object" && ev.payload !== null ? ev.payload : {}) as Record<string, unknown>;
+    const candidate = (t === "ORDER_UPDATED" ? p.order : p) as Record<string, unknown> | undefined;
+    const id = candidate && typeof candidate.id === "string" ? candidate.id.slice(0, MAX_ID_LEN) : "";
+    if (id) orderIds.add(id);
+  }
+  const existingById = new Map<string, ExistingOrderRow>();
+  if (orderIds.size > 0) {
+    const idArr = [...orderIds].slice(0, MAX_EVENTS_PER_REQUEST);
+    const { data: existingRows, error: existingErr } = await supabase
+      .from("pos_orders")
+      .select("id,status,updated_at")
+      .eq("store_id", storeId)
+      .in("id", idArr);
+    if (existingErr) {
+      console.error("[pos/sync] 預取現有訂單失敗（LWW 守門降級為無條件寫入）:", existingErr.message);
+    } else {
+      for (const row of (existingRows ?? []) as ExistingOrderRow[]) existingById.set(row.id, row);
+    }
+  }
+
   const errors: string[] = [];
 
   for (const rawEvent of events) {
@@ -245,49 +295,87 @@ export async function POST(request: Request) {
       // `order &&` 要再寫多次：TS 唔會由 `orderId` 嘅 truthiness 反推 `order` 已經 narrowing 咗，
       // 唔加會令下面 23 處 `order.xxx` 全部報 TS18048「possibly undefined」。
       if (order && orderId) {
+        const incomingStatus = text(order.status, 64) ?? "draft";
+        const incomingUpdatedAt = text(order.updatedAt, 64) ?? new Date().toISOString();
+        const existing = existingById.get(orderId);
+
+        if (existing) {
+          const incomingTs = parseIsoMs(incomingUpdatedAt);
+          const existingTs = parseIsoMs(existing.updated_at);
+          const existingStatus = existing.status ?? "";
+          // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫（唔報錯 —— client 收到 200
+          //     會當成功剷走呢條過期事件，唔會 burn attempts，亦唔會反覆將單打回舊狀態）；
+          // (b) 終態守門：settled/cancelled/refunded/partially_refunded 唔可以被 open snapshot
+          //     降級。唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳）。
+          const isStale = incomingTs < existingTs;
+          const isDowngrade =
+            TERMINAL_ORDER_STATUSES.has(existingStatus) &&
+            !TERMINAL_ORDER_STATUSES.has(incomingStatus) &&
+            incomingStatus !== "reopened";
+          if (isStale || isDowngrade) {
+            console.warn(
+              `[pos/sync] 拒絕覆寫訂單 ${orderId}（現有=${existingStatus}@${existing.updated_at ?? "?"}，` +
+                `incoming=${incomingStatus}@${incomingUpdatedAt}，` +
+                `${isStale ? "stale（incoming 較舊）" : "終態降級"}）`,
+            );
+            continue;
+          }
+        }
+
         const items = Array.isArray(order.items) ? order.items.slice(0, MAX_ORDER_ITEMS) : [];
-        const { error: oErr } = await supabase.from("pos_orders").upsert(
-          {
-            id: orderId,
-            local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
-            // 🛡️ 跨店隔離不變量：呢度用請求級 storeId 係安全嘅 —— 上面 3.5 已驗證
-            // eventStoreId === storeId（事件自帶店）或 eventStoreId 為 null（legacy 舊 client）。
-            // 即係「呢張單嘅店 = flush 請求聲稱嘅店 = 事件自己嘅店」，三者一致先會行到呢度。
-            store_id: storeId,
-            table_id: text(order.tableId, MAX_ID_LEN),
-            table_name: text(order.tableName, MAX_NAME_LEN),
-            status: text(order.status, 64) ?? "draft",
-            fulfillment_status: text(order.fulfillmentStatus, 64),
-            sent_to_kitchen_at: text(order.sentToKitchenAt, 64),
-            served_at: text(order.servedAt, 64),
-            items,
-            order_note: text(order.orderNote, MAX_TEXT_LEN),
-            subtotal: money(order.subtotal),
-            tax_amount: money(order.taxAmount),
-            service_charge_amount: money(order.serviceChargeAmount),
-            discount_amount: money(order.discountAmount),
-            total: money(order.total),
-            prepaid_amount: money(order.prepaidAmount),
-            online_order_id: text(order.onlineOrderId, MAX_ID_LEN),
-            // 訂單來源（docs/87 §5.2）："pos" 收銀台 / "kiosk" 自助點餐機 / "scan" 掃碼自點。
-            // 舊 client 冇呢個欄 → fallback "pos"。
-            source: text(order.source, 32) ?? "pos",
-            payment_method: text(order.paymentMethod, MAX_NAME_LEN),
-            // ── 入座人數上雲（docs/89 §3）：報表「覆蓋人數 / 人均消費」嘅唯一雲端來源。
-            //    快餐／外賣／自取單係 undefined → 寫 NULL（唔好填 1，會污染人均消費分母）。
-            party_size: partySizeOrNull(order.partySize),
-            // ── 免單備註上雲（docs/91）：獨立審計欄，唔寫落 order_note
-            //    （廚房備註受 docs/84 鎖定，sent_to_kitchen 起鎖死）。
-            //    非免單單一律 undefined → 寫 NULL。
-            comp_note: text(order.compNote, MAX_TEXT_LEN),
-            comped_at: isoOrNull(order.compedAt),
-            created_at: text(order.createdAt, 64) ?? new Date().toISOString(),
-            updated_at: text(order.updatedAt, 64) ?? new Date().toISOString(),
-          },
-          { onConflict: "id" },
-        );
+        // created_at 唔喺 baseRecord：已存在行只 update 內容、唔郁建立時間（防 replay 倒退）；
+        // 首次建立（upsert）先補 created_at。
+        const baseRecord: Record<string, unknown> = {
+          id: orderId,
+          local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
+          // 🛡️ 跨店隔離不變量：呢度用請求級 storeId 係安全嘅 —— 上面 3.5 已驗證
+          // eventStoreId === storeId（事件自帶店）或 eventStoreId 為 null（legacy 舊 client）。
+          // 即係「呢張單嘅店 = flush 請求聲稱嘅店 = 事件自己嘅店」，三者一致先會行到呢度。
+          store_id: storeId,
+          table_id: text(order.tableId, MAX_ID_LEN),
+          table_name: text(order.tableName, MAX_NAME_LEN),
+          status: incomingStatus,
+          fulfillment_status: text(order.fulfillmentStatus, 64),
+          sent_to_kitchen_at: text(order.sentToKitchenAt, 64),
+          served_at: text(order.servedAt, 64),
+          items,
+          order_note: text(order.orderNote, MAX_TEXT_LEN),
+          subtotal: money(order.subtotal),
+          tax_amount: money(order.taxAmount),
+          service_charge_amount: money(order.serviceChargeAmount),
+          discount_amount: money(order.discountAmount),
+          total: money(order.total),
+          prepaid_amount: money(order.prepaidAmount),
+          online_order_id: text(order.onlineOrderId, MAX_ID_LEN),
+          // 訂單來源（docs/87 §5.2）："pos" 收銀台 / "kiosk" 自助點餐機 / "scan" 掃碼自點。
+          // 舊 client 冇呢個欄 → fallback "pos"。
+          source: text(order.source, 32) ?? "pos",
+          payment_method: text(order.paymentMethod, MAX_NAME_LEN),
+          // ── 入座人數上雲（docs/89 §3）：報表「覆蓋人數 / 人均消費」嘅唯一雲端來源。
+          //    快餐／外賣／自取單係 undefined → 寫 NULL（唔好填 1，會污染人均消費分母）。
+          party_size: partySizeOrNull(order.partySize),
+          // ── 免單備註上雲（docs/91）：獨立審計欄，唔寫落 order_note
+          //    （廚房備註受 docs/84 鎖定，sent_to_kitchen 起鎖死）。
+          //    非免單單一律 undefined → 寫 NULL。
+          comp_note: text(order.compNote, MAX_TEXT_LEN),
+          comped_at: isoOrNull(order.compedAt),
+          updated_at: incomingUpdatedAt,
+        };
+        const { error: oErr } = existing
+          ? await supabase
+              .from("pos_orders")
+              .update(baseRecord)
+              .eq("id", orderId)
+              .eq("store_id", storeId)
+          : await supabase.from("pos_orders").upsert(
+              {
+                ...baseRecord,
+                created_at: text(order.createdAt, 64) ?? new Date().toISOString(),
+              },
+              { onConflict: "id" },
+            );
         if (oErr) {
-          console.error("[pos/sync] pos_orders upsert failed:", oErr.message);
+          console.error("[pos/sync] pos_orders upsert/update failed:", oErr.message);
           errors.push(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 寫入失敗`);
         }
       }

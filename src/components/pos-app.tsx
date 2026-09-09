@@ -16,6 +16,7 @@ import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-disc
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
+import { SyncHealthModal } from "@/components/sync-health-modal";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
@@ -234,6 +235,8 @@ export function PosApp() {
   const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
+  // 同步健康檢查（L1 失敗事件重試 / L2 已結帳未上雲補錄）彈窗開關。
+  const [showSyncHealth, setShowSyncHealth] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
   const [manualSyncing, setManualSyncing] = useState(false);
@@ -3814,6 +3817,14 @@ export function PosApp() {
                     >
                       {manualSyncing ? "更新中…" : "手動更新"}
                     </button>
+                    <button
+                      type="button"
+                      title="檢查有冇「已結帳但未上到雲」嘅訂單，失敗事件重試或補錄上雲"
+                      onClick={() => setShowSyncHealth(true)}
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                    >
+                      同步健康
+                    </button>
                     <Link
                       className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                       href="/orders"
@@ -6137,6 +6148,15 @@ export function PosApp() {
         </ResponsiveModal>
       ) : null}
 
+      {/* 同步健康檢查彈窗：失敗事件重試 / 已結帳未上雲補錄（2026-09-09） */}
+      {showSyncHealth ? (
+        <SyncHealthModal
+          open={showSyncHealth}
+          onClose={() => setShowSyncHealth(false)}
+          onMutated={() => setQueue(loadQueue())}
+        />
+      ) : null}
+
       {/* 左下角問題提示區（垂直 stack）：避開右下角嘅 toast；md:left-[88px] 避開 72px 側欄。
           兩種問題可以同時出現，所以要 stack 而唔係兩嚿 fixed 互相冚住。 */}
       {failedSyncCount > 0 || showPrintFailureToast ? (
@@ -6146,21 +6166,30 @@ export function PosApp() {
           {failedSyncCount > 0 ? (
             <div className="rounded-xl bg-amber-500 px-2.5 py-1.5 text-left text-[11px] font-semibold text-white shadow-md">
               <div>⚠ {failedSyncCount} 筆未同步</div>
-              <button
-                className="mt-1 rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
-                onClick={() => {
-                  const revived = retryFailedSyncEvents();
-                  setQueue(loadQueue());
-                  setToast(
-                    revived > 0
-                      ? { tone: "success", message: `已重新排入 ${revived} 筆同步資料` }
-                      : { tone: "error", message: "搵唔到失敗嘅同步資料" },
-                  );
-                }}
-                type="button"
-              >
-                撳呢度重試同步
-              </button>
+              <div className="mt-1 flex gap-1">
+                <button
+                  className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
+                  onClick={() => {
+                    const revived = retryFailedSyncEvents();
+                    setQueue(loadQueue());
+                    setToast(
+                      revived > 0
+                        ? { tone: "success", message: `已重新排入 ${revived} 筆同步資料` }
+                        : { tone: "error", message: "搵唔到失敗嘅同步資料" },
+                    );
+                  }}
+                  type="button"
+                >
+                  重試
+                </button>
+                <button
+                  className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
+                  onClick={() => setShowSyncHealth(true)}
+                  type="button"
+                >
+                  詳細與補錄
+                </button>
+              </div>
             </div>
           ) : null}
 
