@@ -688,6 +688,11 @@ export interface PosOrder {
   reopenCount?: number;
   /** 首次結帳（settled）時間，重結後保留以便對帳 */
   originalSettledAt?: string;
+  // ── 結帳審計（訂單明細「收銀員」欄位用）──
+  /** 結帳操作人帳號（confirmPayment / settleCompOrder / completeOnlinePaidOrder / markOrderCompleted 寫入；舊單冇 → 顯示「未記錄」） */
+  settledBy?: string;
+  /** 結帳操作人顯示名（優先顯示；同 settledBy 一齊寫入） */
+  settledByName?: string;
   /** 返結時原枱 id（temp 枱結帳後還原用） */
   reopenOriginalTableId?: string;
   /** 返結時原枱名（temp 枱結帳後還原用） */

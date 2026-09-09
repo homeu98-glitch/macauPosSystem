@@ -42,6 +42,7 @@ import {
 } from "@/lib/shift-sync";
 import { DeviceConfig, DevicePrinterConfig, PrintJob, PosOrder, QueueEvent } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
+import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 
 function summarizeClosedOrders(orders: PosOrder[]) {
   const closedOrders = orders.filter(
@@ -351,6 +352,30 @@ export function ShiftPage() {
   );
 
   const summary = useMemo(() => summarizeClosedOrders(todayLocalOrders), [todayLocalOrders]);
+
+  // 訂單明細（逐筆）：同 summary（支付方式分項）同一批今日已結帳訂單，按結賬時間倒序。
+  const orderDetailRows = useMemo<OrderDetailRow[]>(
+    () =>
+      todayLocalOrders
+        .map((o) => ({
+          id: o.id,
+          table: o.tableName || o.tableId,
+          receivable:
+            o.items.reduce((sum, it) => sum + it.price * it.quantity, 0) +
+            (o.serviceChargeAmount ?? 0) +
+            (o.taxAmount ?? 0),
+          paid: o.total,
+          method: o.paymentMethod ?? "未記錄",
+          cashier: o.settledByName ?? o.settledBy ?? "未記錄",
+          settledAt: o.originalSettledAt ?? o.updatedAt,
+        }))
+        .sort((a, b) => {
+          const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
+          const tb = b.settledAt ? Date.parse(b.settledAt) : 0;
+          return tb - ta;
+        }),
+    [todayLocalOrders],
+  );
 
   useEffect(() => {
     async function loadLedgerToday() {
@@ -1183,6 +1208,14 @@ export function ShiftPage() {
                     </table>
                   </div>
                 )}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">訂單明細（今日已結帳）</div>
+              <div className="mt-1 text-xs text-slate-500">同支付方式分項同一批訂單，按結賬時間倒序。</div>
+              <div className="mt-3 max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
+                <OrderDetailList rows={orderDetailRows} emptyText="今天暫無已結帳訂單。" />
               </div>
             </div>
 

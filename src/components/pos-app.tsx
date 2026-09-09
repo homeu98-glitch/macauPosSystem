@@ -1463,12 +1463,14 @@ export function PosApp() {
     () => orders.find((order) => order.status === "sent_to_kitchen") ?? null,
     [orders],
   );
+  // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單 —— 所有結帳入口（桌台圖／快餐／線上面板）
+  // 都會先 setPayingOrderId(target.id)，所以淨限 payingOrderId 或**當前枱自己**嘅未結單。
+  // ⚠️ 唔可以 fallback 全域 unsettledOrder（全店第一張 sent_to_kitchen 單）：
+  // 咁樣進入一張空枱時，收銀面板會鬼祟帶入第張枱嘅小計（bug：空枱小計 112）。
+  // 結帳 handler（confirmPayment/comp/onlinePaid）自己保有 unsettledOrder fallback，唔受影響。
   const currentSettlementOrder =
     (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-    (!isQuickMode && (activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened") ? activeOrder : null) ??
-    (!isQuickMode ? unsettledOrder : null);
-  // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單（currentSettlementOrder），
-  // 唔可以跟 activeOrder（當前選中枱嘅單）——否則喺 dine-in 模式從 counterKioskOrders 面板結帳會金額變 0。
+    (!isQuickMode && (activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened") ? activeOrder : null);
   // docs/95 §14：base 總額必須 = subtotal + 服務費 + 稅，同 orderTotals() / 落單寫入（upsertCurrentOrder）一致。
   // 之前呢度硬寫 `serviceChargeAmount: 0` 兼 `total = subtotal + taxAmount`，
   // 只要 rules.serviceChargeRate > 0，結帳嗰刻服務費會靜默消失（落單收據有、結帳冇 → 收少咗錢）。
@@ -2973,6 +2975,9 @@ export function PosApp() {
       status: "settled",
       fulfillmentStatus: targetOrder.tableId === "counter" ? "ready" : targetOrder.fulfillmentStatus,
       servedAt: targetOrder.servedAt ?? new Date().toISOString(),
+      // ── 結帳審計：快餐標記完成（= 結帳）都記錄操作人 ──
+      settledBy: authSession?.account ?? targetOrder.settledBy,
+      settledByName: authSession?.name ?? targetOrder.settledByName,
       updatedAt: new Date().toISOString(),
     };
     const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
@@ -3362,6 +3367,9 @@ export function PosApp() {
         memberDeductionAvos: deductAvos > 0 ? deductAvos : 0,
         // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
         originalSettledAt: targetOrder.originalSettledAt ?? now,
+        // ── 結帳審計：記錄收銀員（訂單明細「收銀員」欄位）──
+        settledBy: authSession?.account ?? targetOrder.settledBy,
+        settledByName: authSession?.name ?? targetOrder.settledByName,
         reopenCount: targetOrder.reopenCount ?? 0,
         reopenedAt: targetOrder.reopenedAt,
         reopenedBy: targetOrder.reopenedBy,
@@ -3566,6 +3574,9 @@ export function PosApp() {
       memberDeductionAvos: 0,
       // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
       originalSettledAt: targetOrder.originalSettledAt ?? now,
+      // ── 結帳審計：免單都記錄操作人 ──
+      settledBy: authSession?.account ?? targetOrder.settledBy,
+      settledByName: authSession?.name ?? targetOrder.settledByName,
       reopenCount: targetOrder.reopenCount ?? 0,
       reopenedAt: targetOrder.reopenedAt,
       reopenedBy: targetOrder.reopenedBy,
@@ -3707,6 +3718,9 @@ export function PosApp() {
       cashTendered: 0,
       changeAmount: 0,
       total: settledGrandTotal,
+      // ── 結帳審計：線上已支付都記錄操作人 ──
+      settledBy: authSession?.account ?? targetOrder.settledBy,
+      settledByName: authSession?.name ?? targetOrder.settledByName,
       updatedAt: new Date().toISOString(),
     };
 

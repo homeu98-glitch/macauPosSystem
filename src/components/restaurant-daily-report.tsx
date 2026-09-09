@@ -32,6 +32,7 @@ import {
   computeFootfallFromOrders,
 } from "@/lib/restaurant-footfall";
 import { formatMoney } from "@/lib/format";
+import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 import type { PosOrder, PosLocalSettings } from "@/lib/types";
 import Link from "next/link";
 
@@ -238,6 +239,11 @@ interface Agg {
    * value = { receivable, paid, count }。
    */
   paymentBreakdown: PaymentBreakdown;
+  /**
+   * 訂單明細（逐筆）：與支付方式分項同一批訂單（線下 in-range 已結帳 + Ledger 純線上單），
+   * 按結賬時間倒序。欄位見 {@link OrderDetailRow}。
+   */
+  orderDetails: OrderDetailRow[];
 }
 
 /** 一行支付方式統計：應收 / 實收 / 訂單數。 */
@@ -400,6 +406,28 @@ function scanStorageOrders(): {
 /** Ledger 線上單明細（訂單 + 菜品快照），畀菜品銷售排行 / 時長統計用。 */
 type OnlineDishSource = { order: LedgerOnlineOrder; items: LedgerOrderDetailItem[] };
 
+/** 線上單 fulfillmentType → 餐台欄顯示標籤（線上單冇實體餐台號）。 */
+function onlineFulfillmentLabel(fulfillmentType?: string): string {
+  const t = String(fulfillmentType ?? "").toLowerCase();
+  if (t === "dine_in") return "線上·堂食";
+  if (t === "takeaway" || t === "delivery") return "線上·外賣";
+  if (t === "pickup" || t === "self_pickup") return "線上·自取";
+  return "線上";
+}
+
+/** PosOrder → 訂單明細行（餐台 / 應收 / 實收 / 收款類型 / 收銀員 / 結賬時間）。 */
+function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
+  return {
+    id: o.id,
+    table: o.tableName || o.tableId,
+    receivable,
+    paid: o.total,
+    method: o.paymentMethod ?? "未記錄",
+    cashier: o.settledByName ?? o.settledBy ?? "未記錄",
+    settledAt: o.originalSettledAt ?? o.updatedAt,
+  };
+}
+
 function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: OnlineDishSource[]): Agg {
   const counted = orders.filter((o) => isSaleCountable(o));
   const inRange = counted.filter((o) => orderMatchesReportRange(o, range));
@@ -419,6 +447,7 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
   const tableMap = new Map<string, TableRow>();
   const byHour = new Array<number>(24).fill(0);
   const paymentBreakdown: PaymentBreakdown = {};
+  const orderDetails: OrderDetailRow[] = [];
 
   for (const o of inRange) {
     revenue += o.total;
@@ -445,6 +474,9 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
     bucket.paid += o.total;
     bucket.count += 1;
     paymentBreakdown[method] = bucket;
+
+    // 訂單明細（逐筆）：同支付方式分項同一口徑
+    orderDetails.push(posOrderToDetailRow(o, orderReceivable));
 
     byHour[macauHour(o.createdAt)] += 1;
 
@@ -497,6 +529,17 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
     bucket.paid += orderPaid;
     bucket.count += 1;
     paymentBreakdown[method] = bucket;
+
+    // 訂單明細（逐筆）：Ledger 純線上單冇餐台號 → 用履約方式標籤；收銀員 = 下單客人
+    orderDetails.push({
+      id: onlineOrder.id,
+      table: onlineFulfillmentLabel(onlineOrder.fulfillmentType),
+      receivable: safeReceivable,
+      paid: orderPaid,
+      method,
+      cashier: onlineOrder.customerName ?? "線上客人",
+      settledAt: onlineOrder.updatedAt ?? onlineOrder.createdAt ?? "",
+    });
 
     for (const it of items) {
       const name = it.name || "(未知菜品)";
@@ -599,6 +642,12 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
     receivableTotal,
     paidTotal,
     paymentBreakdown,
+    // 結賬時間倒序（最新單喺最上）；缺時間戳嘅排尾
+    orderDetails: orderDetails.sort((a, b) => {
+      const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
+      const tb = b.settledAt ? Date.parse(b.settledAt) : 0;
+      return tb - ta;
+    }),
   };
 }
 
@@ -2284,6 +2333,21 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
                 </div>
               </Card>
             </div>
+
+            {/* 訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項 */}
+            <Card
+              title="訂單明細"
+              tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}
+              loading={!dataReady}
+            >
+              {agg.orderDetails.length === 0 ? (
+                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+              ) : (
+                <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
+                  <OrderDetailList rows={agg.orderDetails} />
+                </div>
+              )}
+            </Card>
 
             {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數 */}
             <Card title="支付方式分項" tag="應收 = 原價合計 + 服務費 + 稅 · 實收 = order.total" loading={!dataReady}>

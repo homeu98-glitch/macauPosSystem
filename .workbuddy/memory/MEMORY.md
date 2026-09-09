@@ -16,6 +16,7 @@
 - **菜品排行快照聚合**：key = `menuItemId|訂單內菜品名`，金額用 `it.price`（快照）。改名/改價後舊單各自成行。**唔好**改返大類聚合或強對當前餐牌。`buildMenuMeta()` 只供診斷。
 - **尖峰時段**：`combinedByHour = agg.byHour + onlineByHour`；線上單 cursor 分頁 `listMerchantOrders`（PAGE=500、MAX=8），拒 `paymentStatus!=="paid"` 同含 cancel。
 - **線上單防雙計**：`posOnlineIds`（POS `onlineOrderId` Set）；`footfallTotal = posFootfall + countableOnlineOrders.length`。線上菜品排行用 `onlineDishSource`；effect 觸發 key 用 `onlineDishKey`，且必須喺 `countableOnlineOrders` 之後宣告（TDZ）。
+- **訂單明細列表**：`OrderDetailList`（order-detail-list.tsx）共用組件，報表頁喺支付方式分項上方、交班頁喺 Ledger 區塊上方。收銀員靠新審計欄位 `settledBy`/`settledByName`（結帳路徑寫入；舊單「未記錄」）；結賬時間 = `originalSettledAt ?? updatedAt`。
 - **營運指標**：只保留 4 行（營業額7日均/線上佔比7日均/會員充值7日均/售出份數），POS vs Ledger 對比已刪。
 - 數據來源：POS 單雲端 `/api/pos/state?storeId&ordersOnly=1&start&end` 分頁（MAX_PAGES=10）；雲端空+成功=空狀態，唔 fallback 本機。Ledger 總值以 `getMerchantReportSummary`（orderCount/orderPaidMop）為權威，POS 補差。日期一律 Macau 邊界 ISO（`ledger/report-period.ts`），禁用 UTC-naive 86400000 寫法。
 

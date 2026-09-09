@@ -1,4 +1,4 @@
-import { loadOrders, loadQueue, saveOrders, saveQueue } from "@/lib/storage";
+import { loadAuthSession, loadOrders, loadQueue, saveOrders, saveQueue } from "@/lib/storage";
 import { PosOrder, QueueEvent } from "@/lib/types";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
@@ -62,11 +62,15 @@ export function markQuickOrderCompletedInStore(
   if (!target || target.tableId !== "counter") return null;
 
   const updatedAt = new Date().toISOString();
+  // 結帳審計：快餐標記完成（= 結帳）都記錄操作人（訂單明細「收銀員」欄位）。
+  const session = loadAuthSession();
   const updatedOrder: PosOrder = {
     ...target,
     status: "settled",
     fulfillmentStatus: "ready",
     servedAt: target.servedAt ?? updatedAt,
+    settledBy: session?.account ?? target.settledBy,
+    settledByName: session?.name ?? target.settledByName,
     updatedAt,
   };
   const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
