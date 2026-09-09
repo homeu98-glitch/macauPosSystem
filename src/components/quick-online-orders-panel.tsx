@@ -14,6 +14,7 @@ import {
   acceptLedgerOrderInStore,
   resolveOrderChange,
   setOrderPaidInStore,
+  markPaidIfInStoreUnpaid,
   updateOrderStatus,
 } from "@/lib/ledger/order-actions";
 import {
@@ -452,15 +453,21 @@ export function QuickOnlineOrdersPanel({
 
         if (!action.nextStatus) return;
 
+        // 到店付款單：完成前先收錢，避免「已完成但未付、唔入帳」
+        const justPaid =
+          action.nextStatus === "completed"
+            ? await markPaidIfInStoreUnpaid(order.id, order.paymentMode, order.paymentStatus)
+            : false;
+
         await updateOrderStatus(order.id, action.nextStatus);
 
         if (action.nextStatus === "cancelled") {
           printVoidForLedgerOrderOnce(order.id);
           setViewingOrderId(null);
         }
-        if (action.nextStatus === "completed" && order.paymentStatus === "paid") {
+        if (action.nextStatus === "completed" && (justPaid || order.paymentStatus === "paid")) {
           await printReceiptForLedgerOrderOnce(order.id, {
-            paymentMethod: paymentModeLabel(order.paymentMode) || "線上已支付",
+            paymentMethod: justPaid ? "到店付款" : paymentModeLabel(order.paymentMode) || "線上已支付",
           });
           setViewingOrderId(null);
         }

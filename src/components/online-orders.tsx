@@ -18,6 +18,7 @@ import {
   acceptLedgerOrderInStore,
   resolveOrderChange,
   setOrderPaidInStore,
+  markPaidIfInStoreUnpaid,
   updateOrderStatus as updateLedgerOrderStatus,
 } from "@/lib/ledger/order-actions";
 import {
@@ -644,13 +645,18 @@ export function OnlineOrders({
   async function pushStatus(order: LedgerOnlineOrder, nextStatus: string, successMessage: string) {
     setActionLoadingKey(`${order.id}:${nextStatus}`);
     try {
+      // 到店付款單：完成前先收錢，避免「已完成但未付、唔入帳」
+      const justPaid =
+        nextStatus === "completed"
+          ? await markPaidIfInStoreUnpaid(order.id, order.paymentMode, order.paymentStatus)
+          : false;
       await updateLedgerOrderStatus(order.id, nextStatus);
       if (nextStatus === "cancelled") {
         printVoidForLedgerOrderOnce(order.id);
       }
-      if (nextStatus === "completed" && order.paymentStatus === "paid") {
+      if (nextStatus === "completed" && (justPaid || order.paymentStatus === "paid")) {
         await printReceiptForLedgerOrderOnce(order.id, {
-          paymentMethod: paymentModeLabel(order.paymentMode) || "線上已支付",
+          paymentMethod: justPaid ? "到店付款" : paymentModeLabel(order.paymentMode) || "線上已支付",
         });
       }
       setToast({ tone: "success", message: successMessage });
@@ -1137,7 +1143,7 @@ export function OnlineOrders({
               （明細右下角、slate-900 實心、入隊後出 toast）。
               只喺「已收款」+「有權限」時先顯示。 */}
           {hasReceivableReceipt(viewingOrder) && canReprintReceipt() ? (
-            <div className="mt-3 flex justify-end">
+            <div className="mt-1 flex justify-end">
               <button
                 className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                 disabled={reprintingOrderId === viewingOrder.id}

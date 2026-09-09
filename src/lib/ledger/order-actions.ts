@@ -74,6 +74,27 @@ export async function setOrderPaidInStore(orderId: string) {
 }
 
 /**
+ * 到店付款單「完成」前先收錢：當 `payment_mode='in_store'` 且仍未付款時，
+ * 先打 `set_order_paid_in_store`（此時訂單仍處 ready/delivering，只受「須 in_store」守衛），
+ * 再推進 completed。避開「已完成但未付、唔入帳」嘅收益漏單。
+ *
+ * - 已係 `paid` / 非 `in_store` → 直接 return false，唔做多餘 RPC（順便做咗冪等）。
+ * - 返回 true = 今次有真係標記已收；UI 據此決定印「到店付款」收據
+ *   （唔可以靠 `order.paymentStatus`，因為傳入嘅 order 係 call 之前嘅快照）。
+ */
+export async function markPaidIfInStoreUnpaid(
+  orderId: string,
+  paymentMode?: string,
+  paymentStatus?: string,
+): Promise<boolean> {
+  if (String(paymentMode ?? "").toLowerCase() === "in_store" && paymentStatus !== "paid") {
+    await setOrderPaidInStore(orderId);
+    return true;
+  }
+  return false;
+}
+
+/**
  * 商家回應客人的取消／改單申請（Ledger RPC `merchant_resolve_order_change`）。
  *
  * - 傳 "approve"：取消申請 → 訂單變 cancelled（餘額單會沖正）；改單申請 → 套用新明細。
