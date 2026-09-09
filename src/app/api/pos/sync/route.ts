@@ -82,6 +82,26 @@ function partySizeOrNull(value: unknown): number | null {
 }
 
 /**
+ * 收據二維碼點陣（0020 `pos_print_jobs.qr` jsonb，`{ size, bits }`）。
+ *
+ * ⚠️ 呢欄係 print-relay APK 出紙二維碼嘅**唯一來源**：APK `fromRow` 讀 row 嘅 `qr`
+ * → `qrRaster()` 用 `GS v 0` 點陣圖指令出紙。舊版呢個 route 淨係冇寫 `qr`／`qr_url`
+ * → 雲端行永遠 NULL → APK 靜默跳過 `qr_code` 區塊 → 實體收據永遠冇二維碼
+ * （網頁預覽讀 localStorage 嘅 job 有 qr，所以「設計==預覽==出紙」斷喺最後一環）。
+ * 結構唔對（唔係 `{size,bits}` / bits 唔夠長）→ 返 null 留空，唔好寫壞數據落 DB。
+ */
+function qrPayloadOrNull(value: unknown): { size: number; bits: string } | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as { size?: unknown; bits?: unknown };
+  const size = typeof raw.size === "number" ? Math.trunc(raw.size) : 0;
+  if (size < 21 || size > 177) return null; // QR version 1..40 嘅合法 module 邊長
+  if (typeof raw.bits !== "string") return null;
+  const bits = raw.bits.replace(/[^01]/g, "");
+  if (bits.length < size * size) return null;
+  return { size, bits: bits.slice(0, size * size) };
+}
+
+/**
  * ISO 時間戳：非字串 / 空 / 唔係合法時間 → null。
  *
  * 同 `text()` 唔同：`comped_at` 呢類 `timestamptz` 欄位，Postgres 收到非法字串會**直接報錯**，
@@ -475,6 +495,10 @@ export async function POST(request: Request) {
           // 頁尾，亦唔理商家設嘅字型大小）→ 兩部機印出嚟唔一致。見 docs/87 §7。
           template: eventPayload.template ?? null,
           content: eventPayload.content ?? null,
+          // 0020：二維碼點陣 + 網址。冇呢兩欄，print-relay APK 出紙嘅收據永遠冇 QR
+          //（APK `fromRow().qr` 讀到 NULL → `qr_code` 區塊被靜默跳過；2026-09-09 修復）。
+          qr: qrPayloadOrNull(eventPayload.qr),
+          qr_url: text(eventPayload.qrUrl, 512),
           printer_id: text(eventPayload.printerId, MAX_ID_LEN),
           // 0020 新增：Hub fallback renderer 用 store_name 印抬頭；寫入端一直漏填導致印出 "null"。
           store_name: contentStoreName,
