@@ -12,7 +12,7 @@ import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
-import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, normalizePrintJobStatus } from "@/lib/print-jobs";
+import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, findPosOrderForLedger, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
   loadBootstrapCache,
@@ -388,6 +388,28 @@ export function PrintCenter() {
   );
 
   const orderMap = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders]);
+
+  /**
+   * 按打印 job 反查原始訂單（「重打整單」用）。
+   *
+   * 三層 fallback（2026-09-09 修「找不到原始訂單，無法重打」誤報）：
+   *   1) `orderMap`：mount 時 loadOrders() 嘅一次性快照 —— 線下單通常夠用；
+   *   2) 即時再 `loadOrders()`：補返「本頁 mount 之後先結帳/同步入嚟」嘅線下單
+   *      （orders state 係一次性 snapshot，唔會自己更新）；
+   *   3) `ledger-` 前綴 → `findPosOrderForLedger()`：線上單**從來唔 mirror 入
+   *      localStorage**（契約 M3/M8），只存在於 in-memory bridge registry
+   *      （接單/補打收據嗰刻 cache）或 legacy persisted row —— 唔加呢層，
+   *      線上單打印 job 撳「重打整單」永遠報「找不到原始訂單」。
+   */
+  function findJobSourceOrder(job: PrintJob): PosOrder | null {
+    const local = orderMap.get(job.orderId) ?? loadOrders().find((row) => row.id === job.orderId);
+    if (local) return local;
+    if (job.orderId.startsWith("ledger-")) {
+      return findPosOrderForLedger(job.orderId.slice("ledger-".length));
+    }
+    return null;
+  }
+
   // 聯合設置模組：有啟用打印機就應出到預覽，唔好等真實訂單。無訂單時退用示例訂單。
   const usingSampleOrder = orders.length === 0;
   const sampleOrder = useMemo<PosOrder>(() => orders[0] ?? SYNTHETIC_SAMPLE_ORDER, [orders]);
@@ -1215,15 +1237,20 @@ export function PrintCenter() {
                           ) : (
                             <button
                               aria-busy={(() => {
-                                const order = orderMap.get(job.orderId);
+                                const order = findJobSourceOrder(job);
                                 return order ? reprintingOrderId === order.id : false;
                               })()}
                               className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                               disabled={Boolean(reprintingOrderId)}
                               onClick={() => {
-                                const order = orderMap.get(job.orderId);
+                                const order = findJobSourceOrder(job);
                                 if (!order) {
-                                  setToast({ tone: "error", message: "找不到原始訂單，無法重打。" });
+                                  setToast({
+                                    tone: "error",
+                                    message: job.orderId.startsWith("ledger-")
+                                      ? "線上訂單資料已不在本機快取（例如剛重新載入頁面），無法重打整單；請到訂單頁「查看」→「補打帳單（收據）」。"
+                                      : "找不到原始訂單，無法重打。",
+                                  });
                                   return;
                                 }
                                 reprintOrder(order);
@@ -1231,7 +1258,7 @@ export function PrintCenter() {
                               type="button"
                             >
                               {(() => {
-                                const order = orderMap.get(job.orderId);
+                                const order = findJobSourceOrder(job);
                                 return order && reprintingOrderId === order.id ? "打印中…" : "重打整單";
                               })()}
                             </button>

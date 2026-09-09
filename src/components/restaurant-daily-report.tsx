@@ -537,7 +537,7 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
       receivable: safeReceivable,
       paid: orderPaid,
       method,
-      cashier: onlineOrder.customerName ?? "線上客人",
+      cashier: "客人",
       settledAt: onlineOrder.updatedAt ?? onlineOrder.createdAt ?? "",
     });
 

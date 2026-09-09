@@ -26,7 +26,7 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintContentToggles, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuItem, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintContentToggles, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { withStoreScope } from "@/lib/pos/sync-flush";
 import { newDiscountId } from "@/lib/pos/discount";
@@ -93,6 +93,28 @@ export function DeviceSettings() {
     templateName: string;
     draft: MenuSpecGroup[];
   }>({ open: false, mode: "item", itemId: null, templateId: null, templateName: "", draft: [] });
+  // 新增菜品彈窗（2026-09-09）：之前「新增菜品」掣只係默默 append「新菜品」落 draft，
+  // 分類過濾器開住時新筆 categoryId 用 categories[0]、同過濾器唔符 → 列表睇唔到，
+  // 兼要再手動撳「保存菜單」先落 server → 對用戶嚟講等於「冇反應」。
+  // 而家改為彈窗填全欄位（觸控大控件）＋驗證＋保存即寫 server＋列表即時跳去新筆。
+  const [menuItemModal, setMenuItemModal] = useState<
+    | ({
+
+        name: string;
+        categoryId: string;
+        price: string;
+        printerGroup: string;
+        isMarketPrice: boolean;
+        customerOrderable: boolean;
+        discountRate: string;
+        originalPrice: string;
+        image: string;
+        specGroups: MenuSpecGroup[];
+      } & { open: boolean })
+    | null
+  >(null);
+  const [menuItemSaving, setMenuItemSaving] = useState(false);
+  const [menuItemError, setMenuItemError] = useState<string | null>(null);
   const [bulkSelectedMenuIds, setBulkSelectedMenuIds] = useState<string[]>([]);
   const [bulkPrinterGroup, setBulkPrinterGroup] = useState<string>(cachedLocalSettings?.printZones?.[0]?.id ?? "kitchen");
   const [menuPrintCategoryId, setMenuPrintCategoryId] = useState<string>("all");
@@ -688,6 +710,120 @@ export function DeviceSettings() {
       templateName: "",
       draft: cloneSpecGroups(specGroups),
     });
+  }
+
+  // ── 新增菜品彈窗（2026-09-09）──
+  function openMenuItemModal() {
+    // 分類預設跟現時過濾器：過濾器揀住某分類 → 新筆即刻喺列表可見（唔會「新增咗但搵唔到」）
+    const fallbackCategoryId =
+      menuCategoryId !== "all"
+        ? menuCategoryId
+        : menuDraft.categories[0]?.id ?? "cat";
+    setMenuItemModal({
+      open: true,
+      name: "",
+      categoryId: fallbackCategoryId,
+      price: "",
+      printerGroup: localSettings.printZones[0]?.id ?? "kitchen",
+      isMarketPrice: false,
+      customerOrderable: true,
+      discountRate: "",
+      originalPrice: "",
+      image: "",
+      specGroups: [],
+    });
+    setMenuItemError(null);
+  }
+
+  function toggleMenuItemModalStandaloneSpec(groupId: string) {
+    setMenuItemModal((current) => {
+      if (!current) return current;
+      const has = current.specGroups.some((group) => group.id === groupId);
+      if (has) {
+        return { ...current, specGroups: current.specGroups.filter((group) => group.id !== groupId) };
+      }
+      const group = localSettings.standaloneSpecGroups.find((row) => row.id === groupId);
+      if (!group) return current;
+      return { ...current, specGroups: [...current.specGroups, cloneSpecGroups([group])[0]] };
+    });
+  }
+
+  async function saveMenuItemModal() {
+    if (!menuItemModal || menuItemSaving) return;
+    const name = menuItemModal.name.trim();
+    if (!name) {
+      setMenuItemError("請填寫菜品名稱。");
+      return;
+    }
+    if (!menuItemModal.categoryId) {
+      setMenuItemError("請揀選分類（可先喺「菜品分類」新增）。");
+      return;
+    }
+    const trimmedPrice = menuItemModal.price.trim();
+    let price = 0;
+    if (!menuItemModal.isMarketPrice) {
+      if (!trimmedPrice) {
+        setMenuItemError("請填寫價格（時價菜可留空價格）。");
+        return;
+      }
+      price = Number(trimmedPrice);
+      if (!Number.isFinite(price) || price < 0) {
+        setMenuItemError("價格格式唔正確，請填 0 或以上嘅數字。");
+        return;
+      }
+    }
+    const rateRaw = menuItemModal.discountRate.trim();
+    let discountRate: number | undefined;
+    if (rateRaw) {
+      const rate = Number(rateRaw);
+      if (!Number.isFinite(rate) || rate <= 0 || rate >= 100) {
+        setMenuItemError("折扣要係 1-99 之間嘅數字（例如 80 = 8折），或留空表示冇折扣。");
+        return;
+      }
+      discountRate = rate;
+    }
+    const originalRaw = menuItemModal.originalPrice.trim();
+    let originalPrice: number | undefined;
+    if (originalRaw) {
+      const original = Number(originalRaw);
+      if (!Number.isFinite(original) || original < 0) {
+        setMenuItemError("原價格式唔正確，請填 0 或以上嘅數字。");
+        return;
+      }
+      originalPrice = original;
+    }
+    const image = menuItemModal.image.trim();
+    const newItem: MenuItem = {
+      id: crypto.randomUUID(),
+      categoryId: menuItemModal.categoryId,
+      name,
+      price,
+      printerGroup: menuItemModal.printerGroup || localSettings.printZones[0]?.id || "kitchen",
+      ...(menuItemModal.specGroups.length ? { specGroups: cloneSpecGroups(menuItemModal.specGroups) } : {}),
+      ...(menuItemModal.isMarketPrice ? { isMarketPrice: true } : {}),
+      ...(menuItemModal.customerOrderable ? {} : { customerOrderable: false }),
+      ...(discountRate !== undefined ? { discountRate } : {}),
+      ...(originalPrice !== undefined ? { originalPrice } : {}),
+      ...(image ? { image } : {}),
+    };
+    const nextDraft = { ...menuDraft, menuItems: [...menuDraft.menuItems, newItem] };
+    setMenuDraft(nextDraft);
+    setMenuItemSaving(true);
+    const ok = await saveMenuToBackend(nextDraft);
+    setMenuItemSaving(false);
+    // 列表即時更新：清搜尋 → 跳去新菜品分類 → 跳到包含佢嗰頁
+    setMenuSearch("");
+    setMenuCategoryId(newItem.categoryId);
+    const inCategory = nextDraft.menuItems.filter((row) => row.categoryId === newItem.categoryId);
+    const index = inCategory.findIndex((row) => row.id === newItem.id);
+    setMenuPage(Math.floor(index / menuPageSize) + 1);
+    setMenuItemModal(null);
+    setMenuItemError(null);
+    setStatus(
+      ok
+        ? `已新增菜品「${name}」並保存到後台。`
+        : `已新增菜品「${name}」（本機）；保存到 server 失敗，請稍後按「保存菜單」補傳。`,
+    );
   }
 
   function openSpecEditorForTemplate(templateId?: string) {
@@ -2100,22 +2236,8 @@ export function DeviceSettings() {
                       ))}
                     </select>
                     <button
-                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
-                      onClick={() =>
-                        setMenuDraft((current) => ({
-                          ...current,
-                          menuItems: [
-                            ...current.menuItems,
-                            {
-                              id: crypto.randomUUID(),
-                              categoryId: current.categories[0]?.id ?? "cat",
-                              name: "新菜品",
-                              price: 0,
-                              printerGroup: localSettings.printZones[0]?.id ?? "kitchen",
-                            },
-                          ],
-                        }))
-                      }
+                      className="rounded-2xl bg-orange-500 px-6 py-3 text-base font-semibold text-white transition active:scale-95"
+                      onClick={openMenuItemModal}
                       type="button"
                     >
                       新增菜品
@@ -3257,6 +3379,288 @@ export function DeviceSettings() {
                   </div>
                 </>
               )}
+          </ResponsiveModal>
+        ) : null}
+
+        {menuItemModal ? (
+          <ResponsiveModal
+            actions={
+              <div className="flex w-full flex-wrap items-center justify-end gap-3">
+                {menuItemError ? (
+                  <div className="mr-auto min-w-0 flex-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                    {menuItemError}
+                  </div>
+                ) : null}
+                <button
+                  className="min-h-12 rounded-2xl bg-white px-6 py-3 text-base font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 transition active:scale-95 disabled:opacity-60"
+                  disabled={menuItemSaving}
+                  onClick={() => {
+                    setMenuItemModal(null);
+                    setMenuItemError(null);
+                  }}
+                  type="button"
+                >
+                  取消
+                </button>
+                <button
+                  className="min-h-12 rounded-2xl bg-orange-500 px-8 py-3 text-base font-semibold text-white transition active:scale-95 disabled:opacity-60"
+                  disabled={menuItemSaving}
+                  onClick={() => void saveMenuItemModal()}
+                  type="button"
+                >
+                  {menuItemSaving ? "保存中…" : "保存菜品"}
+                </button>
+              </div>
+            }
+            description="填寫菜品資料；保存後即時寫入後台並更新菜單列表。"
+            onClose={() => {
+              if (!menuItemSaving) {
+                setMenuItemModal(null);
+                setMenuItemError(null);
+              }
+            }}
+            title="新增菜品"
+            widthClassName="max-w-2xl"
+          >
+            <div className="grid content-start gap-4">
+              {/* 菜品名稱 */}
+              <label className="grid gap-1.5">
+                <span className="text-sm font-semibold text-slate-700">
+                  菜品名稱 <span className="text-red-500">*</span>
+                </span>
+                <input
+                  autoFocus
+                  className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                  onChange={(event) =>
+                    setMenuItemModal((current) => (current ? { ...current, name: event.target.value } : current))
+                  }
+                  placeholder="例如：表嫂雞飯"
+                  value={menuItemModal.name}
+                />
+              </label>
+
+              {/* 分類 + 打印分區 */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="grid gap-1.5">
+                  <span className="text-sm font-semibold text-slate-700">
+                    分類 <span className="text-red-500">*</span>
+                  </span>
+                  <select
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, categoryId: event.target.value } : current))
+                    }
+                    value={menuItemModal.categoryId}
+                  >
+                    {menuDraft.categories.length === 0 ? <option value="">（未有分類）</option> : null}
+                    {menuDraft.categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1.5">
+                  <span className="text-sm font-semibold text-slate-700">打印位置（分區）</span>
+                  <select
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, printerGroup: event.target.value } : current))
+                    }
+                    value={menuItemModal.printerGroup}
+                  >
+                    {localSettings.printZones.map((zone) => (
+                      <option key={zone.id} value={zone.id}>
+                        {zone.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-slate-400">廚房單會按分區派印；分區喺「打印設置」維護。</span>
+                </label>
+              </div>
+
+              {/* 價格 + 原價 */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="grid gap-1.5">
+                  <span className="text-sm font-semibold text-slate-700">
+                    價格（MOP）
+                    {menuItemModal.isMarketPrice ? <span className="ml-1 text-xs text-slate-400">（時價菜可留空）</span> : <span className="text-red-500">*</span>}
+                  </span>
+                  <input
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, price: event.target.value } : current))
+                    }
+                    placeholder="0"
+                    value={menuItemModal.price}
+                  />
+                </label>
+                <label className="grid gap-1.5">
+                  <span className="text-sm font-semibold text-slate-700">
+                    原價（MOP）<span className="ml-1 text-xs font-normal text-slate-400">選填，配合折扣用</span>
+                  </span>
+                  <input
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, originalPrice: event.target.value } : current))
+                    }
+                    placeholder="留空 = 價格即原價"
+                    value={menuItemModal.originalPrice}
+                  />
+                </label>
+              </div>
+
+              {/* 折扣 + 圖片 */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="grid gap-1.5">
+                  <span className="text-sm font-semibold text-slate-700">
+                    折扣（%）<span className="ml-1 text-xs font-normal text-slate-400">選填</span>
+                  </span>
+                  <input
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                    inputMode="numeric"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, discountRate: event.target.value } : current))
+                    }
+                    placeholder="80 = 8折"
+                    value={menuItemModal.discountRate}
+                  />
+                </label>
+                <label className="grid gap-1.5">
+                  <span className="text-sm font-semibold text-slate-700">
+                    圖片 URL<span className="ml-1 text-xs font-normal text-slate-400">選填</span>
+                  </span>
+                  <input
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, image: event.target.value } : current))
+                    }
+                    placeholder="https://…"
+                    value={menuItemModal.image}
+                  />
+                </label>
+              </div>
+
+              {/* 開關 */}
+              <div className="flex flex-wrap gap-x-8 gap-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <label className="flex min-h-11 items-center gap-2.5 text-base text-slate-700" title="時價菜：落單時改價">
+                  <input
+                    checked={menuItemModal.isMarketPrice}
+                    className="h-5 w-5 rounded border-slate-300"
+                    onChange={(event) =>
+                      setMenuItemModal((current) => (current ? { ...current, isMarketPrice: event.target.checked } : current))
+                    }
+                    type="checkbox"
+                  />
+                  時價菜（落單時輸入當次價錢）
+                </label>
+                <label className="flex min-h-11 items-center gap-2.5 text-base text-slate-700" title="掃碼點餐 / Kiosk 可見">
+                  <input
+                    checked={menuItemModal.customerOrderable}
+                    className="h-5 w-5 rounded border-slate-300"
+                    onChange={(event) =>
+                      setMenuItemModal((current) =>
+                        current ? { ...current, customerOrderable: event.target.checked } : current,
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  客人可點（掃碼點餐可見）
+                </label>
+              </div>
+
+              {/* 規格 */}
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-slate-700">
+                    規格<span className="ml-1 text-xs font-normal text-slate-400">選填；新增後可喺列表「編輯規格」再改</span>
+                  </span>
+                  {menuItemModal.specGroups.length > 0 ? (
+                    <button
+                      className="rounded-xl px-3 py-1.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 transition hover:bg-red-50 active:scale-95"
+                      onClick={() => setMenuItemModal((current) => (current ? { ...current, specGroups: [] } : current))}
+                      type="button"
+                    >
+                      清空規格
+                    </button>
+                  ) : null}
+                </div>
+                <div className="mt-3 grid gap-3">
+                  {menuItemModal.specGroups.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {menuItemModal.specGroups.map((group) => (
+                        <span
+                          className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"
+                          key={group.id}
+                        >
+                          {group.name}·{group.options.length}項{group.required ? "·必選" : ""}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">尚未加入規格。</span>
+                  )}
+                  {localSettings.specTemplates.length > 0 ? (
+                    <select
+                      className="min-h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm"
+                      onChange={(event) => {
+                        const templateId = event.target.value;
+                        if (!templateId) return;
+                        const template = localSettings.specTemplates.find((row) => row.id === templateId);
+                        if (!template) return;
+                        setMenuItemModal((current) =>
+                          current ? { ...current, specGroups: cloneSpecGroups(template.specGroups) } : current,
+                        );
+                        event.target.value = "";
+                      }}
+                      value=""
+                    >
+                      <option value="">套用規格模板…（模板喺「規格管理」維護）</option>
+                      {localSettings.specTemplates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name}（{template.specGroups.length} 個規格組）
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {localSettings.standaloneSpecGroups.length > 0 ? (
+                    <div className="grid gap-1">
+                      <span className="text-xs font-medium text-slate-500">獨立規格組（剔選加入）</span>
+                      {localSettings.standaloneSpecGroups.map((group) => {
+                        const checked = menuItemModal.specGroups.some((row) => row.id === group.id);
+                        return (
+                          <label
+                            className="flex min-h-11 items-center gap-2.5 rounded-xl px-2 text-sm text-slate-700 transition hover:bg-slate-50"
+                            key={group.id}
+                          >
+                            <input
+                              checked={checked}
+                              className="h-5 w-5 rounded border-slate-300"
+                              onChange={() => toggleMenuItemModalStandaloneSpec(group.id)}
+                              type="checkbox"
+                            />
+                            <span className="min-w-0 truncate">
+                              {group.name}
+                              <span className="ml-1.5 text-xs text-slate-400">
+                                {group.selectionMode === "single" ? "單選" : "多選"}
+                                {group.required ? "·必選" : ""}·{group.options.length}項
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {localSettings.specTemplates.length === 0 && localSettings.standaloneSpecGroups.length === 0 ? (
+                    <span className="text-xs text-slate-400">
+                      未有規格模板／獨立規格組；可先去「規格管理」建立，或新增菜品後喺列表「編輯規格」。
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </div>
           </ResponsiveModal>
         ) : null}
         </div>
