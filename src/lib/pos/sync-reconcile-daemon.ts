@@ -27,6 +27,15 @@
  * 冇待確認訂單時**完全唔打網絡**（只讀 localStorage）→ 穩定狀態下零成本。
  * 只有真正出現分叉先會 pull 雲端，而且每輪上限 100 張 + 每單獨立指數退避。
  *
+ * ## 回執有效期（2026-09-10 補丁，唔可以拆）
+ *
+ * 回執帳本 `syncAcks` 原本係「寫過就永久有效」，形成死鎖：雲端被回水之後，
+ * 本機因為「已有回執」而永遠唔會再核實嗰張單 → 燈一直綠、後台一直錯。
+ *
+ * 所以守護揀工作集時帶 `RECONCILE_ACK_TTL_MS`（10 分鐘）：回執過期即重新入返
+ * 工作集，pull 一次核實、一致就寫返新回執。即每個 TTL 週期最多多打一次 pull。
+ * 健康燈**唔帶** TTL（永久有效），所以燈號唔會週期性閃。
+ *
  * ## 開關
  * `localStorage["macau-pos/sync-reconcile-daemon"] = "0"` 即關閉（唔影響 flush）。
  */
@@ -44,6 +53,7 @@ import {
   listUnackedTerminalOrders,
   markOrderBlocked,
   putSyncAcks,
+  RECONCILE_ACK_TTL_MS,
 } from "@/lib/pos/sync-acks";
 
 export const RECONCILE_DAEMON_FLAG_KEY = "macau-pos/sync-reconcile-daemon";
@@ -158,9 +168,13 @@ function clearCooldown(orderId: string): void {
 /**
  * 跑一輪對賬（可重入保護）。
  * @param reason 診斷用標籤（log 用）
+ * @param options.ignoreAcks 無視回執帳本，強制核實全部近期終態單（人手「立即重試」用）。
  * @returns 今輪實際處理咗幾多張單
  */
-export async function runReconcileRound(reason = "manual"): Promise<number> {
+export async function runReconcileRound(
+  reason = "manual",
+  options?: { ignoreAcks?: boolean },
+): Promise<number> {
   if (typeof window === "undefined") return 0;
   if (!isEnabled()) return 0;
   if (running) return 0;
@@ -170,7 +184,16 @@ export async function runReconcileRound(reason = "manual"): Promise<number> {
   if (!storeId) return 0;
 
   // ① 本地先篩（純 localStorage，零網絡）—— 穩定狀態下喺呢度就結束。
-  const all = listUnackedTerminalOrders();
+  //
+  // ⚠️ 必須傳 `RECONCILE_ACK_TTL_MS`：回執只係「嗰一刻對得上」嘅快照，
+  // 唔可以當永久有效。雲端之後被另一部機 / 舊 snapshot 回水，本機唔會知，
+  // 除非回執會過期、令呢張單重新入返工作集被核實一次。
+  // （健康燈用預設 0＝永久有效，所以燈號唔會每 10 分鐘閃一次。）
+  //
+  // 人手重試（ignoreAcks）就更加要無視回執 —— 用戶撳得落去，就係佢覺得後台
+  // 唔對，唔應該再被「我之前核實過」擋住。
+  const ackTtl = options?.ignoreAcks ? Number.POSITIVE_INFINITY : RECONCILE_ACK_TTL_MS;
+  const all = listUnackedTerminalOrders(Date.now(), ackTtl);
   if (all.length === 0) return 0;
   const batch = all.filter((o) => waitBefore(o.id) === 0).slice(0, MAX_ORDERS_PER_ROUND);
   if (batch.length === 0) return 0;
@@ -333,9 +356,14 @@ export function uninstallSyncReconcileDaemon(): void {
   cooldown.clear();
 }
 
-/** UI「立即重試」：清走冷卻同 blocked 標記，然後即刻跑一輪。 */
+/**
+ * UI「立即重試」：清走冷卻同 blocked 標記，然後**無視回執**即刻跑一輪完整核實。
+ *
+ * 無視回執係刻意嘅：用戶撳得落去就係佢覺得後台數字唔對，唔應該再被
+ * 「我 3 分鐘前先核實過」擋住。成本係一次 pull，人手觸發可以接受。
+ */
 export async function retryReconcileNow(): Promise<number> {
   cooldown.clear();
   for (const row of loadSyncBlocked()) clearOrderBlocked(row.orderId);
-  return runReconcileRound("manual-retry");
+  return runReconcileRound("manual-retry", { ignoreAcks: true });
 }

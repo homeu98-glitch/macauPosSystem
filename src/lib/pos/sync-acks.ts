@@ -123,17 +123,67 @@ export function buildAckIndex(): Map<string, SyncAckRow> {
   return new Map(loadSyncAcks().map((r) => [r.orderId, r]));
 }
 
-/** 可驗證式：回執係喺本地最後一次改動之後取得，而且狀態一致。 */
-export function isOrderAcked(order: PosOrder, index?: Map<string, SyncAckRow>): boolean {
+/**
+ * 對賬守護用嘅回執有效期（docs/112 L2 補丁，2026-09-10）。
+ *
+ * ## 點解一定要有
+ *
+ * 守護每一輪嘅第一件事係 `listUnackedTerminalOrders()` —— 空即收工、完全唔打網絡。
+ * 而「已回執」係一個**寫落去就永久有效**嘅狀態。結果係一條死鎖：
+ *   1. 雲端之後被另一部機 / 部署前嘅舊 snapshot 回水成 `sent_to_kitchen`；
+ *   2. 本機回執仍然「一致」→ 呢張單永遠唔會再入工作集、永遠唔會被核實；
+ *   3. → 健康燈一直綠、後台一直錯，而且**冇任何機制會發現**。
+ *
+ * 2026-09-10 生產實例：三張殭屍單之所以救得返，係因為**重開 APP 令回執帳本歸零**，
+ * 全部終態單重新被核實一次 —— 即係靠一次偶然重啟，唔係靠機制本身。
+ *
+ * ## 點解係 10 分鐘
+ *
+ * 回執過期 → 重新入工作集 → 守護 pull 一次雲端核實 → 一致就即刻寫返新回執。
+ * 即係每個 TTL 週期最多多打**一次** pull（成本 ≈ 開一次報表），換嚟
+ * 「雲端被回水最多 10 分鐘內被發現並自動補推」。
+ *
+ * ⚠️ **只可以餵守護**。健康燈要傳預設（0 = 永久有效）——否則每 10 分鐘就會閃一次
+ * 「N 張待傳」，商家會以為系統壞咗。
+ */
+export const RECONCILE_ACK_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 可驗證式：回執係喺本地最後一次改動之後取得，而且狀態一致。
+ *
+ * @param maxAckAgeMs > 0 時，回執「太舊」亦算作未回執（守護傳 `RECONCILE_ACK_TTL_MS`）。
+ *        0（預設）= 永久有效 —— UI 燈號用，避免週期性閃爍。
+ * @param nowMs 時間基準（同 `listUnackedTerminalOrders` 共用一個，避免同一輪內漂移）。
+ */
+export function isOrderAcked(
+  order: PosOrder,
+  index?: Map<string, SyncAckRow>,
+  maxAckAgeMs = 0,
+  nowMs = Date.now(),
+): boolean {
   const ack = (index ?? buildAckIndex()).get(order.id);
   if (!ack) return false;
-  return ack.status === order.status && ack.orderUpdatedAt === order.updatedAt;
+  if (ack.status !== order.status || ack.orderUpdatedAt !== order.updatedAt) return false;
+  if (maxAckAgeMs > 0) {
+    const at = Date.parse(ack.ackedAt);
+    // 冇 ackedAt / 解析失敗 = 證明唔到新鮮 → 當過期，重新核實（fail-safe）。
+    if (!Number.isFinite(at) || nowMs - at > maxAckAgeMs) return false;
+  }
+  return true;
 }
 
-/** 本地已終態但雲端未確認嘅單（＝要對賬嘅工作集）。 */
-export function listUnackedTerminalOrders(nowMs = Date.now()): PosOrder[] {
+/**
+ * 本地已終態但雲端未確認嘅單（＝要對賬嘅工作集）。
+ *
+ * @param nowMs 時間基準（同時用喺 7 日窗口同回執 TTL）。
+ * @param maxAckAgeMs 見 `isOrderAcked`。守護傳 `RECONCILE_ACK_TTL_MS`；
+ *        健康燈唔傳（0）→ 只計「真正未回執」，燈號唔會週期性閃。
+ */
+export function listUnackedTerminalOrders(nowMs = Date.now(), maxAckAgeMs = 0): PosOrder[] {
   const index = buildAckIndex();
-  return loadOrders().filter((o) => shouldTrackAck(o, nowMs) && !isOrderAcked(o, index));
+  return loadOrders().filter(
+    (o) => shouldTrackAck(o, nowMs) && !isOrderAcked(o, index, maxAckAgeMs, nowMs),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
