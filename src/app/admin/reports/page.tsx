@@ -1,11 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
 import { RestaurantDailyReport } from "@/components/restaurant-daily-report";
+import type { ReportRangeKey } from "@/lib/ledger/report-period";
 import { loadAuthSession } from "@/lib/storage";
 import type { PosOrder } from "@/lib/types";
+
+/** 2026-09-10：右上角「重新載入」用到的循環箭頭 icon。
+ *  inline SVG —— 唔想為一個 icon 引入整套圖標庫，線條粗細/尺寸對齊頁面既有 xs 按鈕。 */
+function RefreshIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={14}
+      height={14}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01" />
+      <polyline points="20.5 3.5 20.5 9.5 14.5 9.5" />
+    </svg>
+  );
+}
 
 /**
  * Admin panel · 營業報表（view-only）。
@@ -15,7 +39,9 @@ import type { PosOrder } from "@/lib/types";
  *   /api/pos/state?storeId= 拉取，Ledger 會員類模塊自動跳過）
  * - 全部模式：allStoresMode + adminOrderFetcher（GET /api/admin/orders 跨店拉單）
  * - 支援 URL ?merchantId= 直接跳到指定商家（admin/dashboard 點擊導航入口）
- * - 無任何列印 / 匯出 / 操作按鈕
+ * - 無任何列印 / 匯出按鈕
+ * - 右上角「重新載入」（2026-09-10）：換 key 令 RestaurantDailyReport remount，
+ *   商家下拉 + 報表數據 / 圖表 / 統計數字全部重拉；進行中 disabled，失敗有錯誤提示
  */
 
 type AdminMerchant = { id: string; name: string; status: string };
@@ -59,30 +85,41 @@ export default function AdminReportsPage() {
     window.history.replaceState({}, "", url.toString());
   }, [selected]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const token = loadAuthSession()?.adminSessionToken;
-        const res = await fetch("/api/admin/merchants", {
-          headers: { Authorization: `Bearer ${token ?? ""}` },
-        });
-        const json = (await res.json()) as { ok?: boolean; merchants?: AdminMerchant[]; error?: string };
-        if (cancelled) return;
-        if (!res.ok || !json.ok) {
-          setError(json.error ?? `載入商家列表失敗（HTTP ${res.status}）`);
-          return;
-        }
-        setMerchants(json.merchants ?? []);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+  // 2026-09-10：報表重新載入狀態。
+  // 「重新載入」嘅做法係幫 RestaurantDailyReport 換 key → React remount 一個全新 instance，
+  // 全部 state（訂單 / Ledger 彙總 / 線上單 / 明細 / useMemo）由零重新拉過，
+  // 係最徹底、唔會漏任何一個數據源嘅刷新方式。
+  const [refreshSeq, setRefreshSeq] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  /** 由報表組件回報：true = 有數據源喺載入中（用嚟 disable 按鈕，防重複點擊）。 */
+  const [reportBusy, setReportBusy] = useState(true);
+  const busyRef = useRef(true);
+  /** 由報表組件回報嘅載入錯誤摘要（冇錯 = null）。 */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** 用戶喺報表入面揀嘅範圍：remount 後用 initialRange 還原，唔會彈返「今日」。 */
+  const [reportRange, setReportRange] = useState<ReportRangeKey>("today");
+
+  const loadMerchants = useCallback(async () => {
+    try {
+      const token = loadAuthSession()?.adminSessionToken;
+      const res = await fetch("/api/admin/merchants", {
+        headers: { Authorization: `Bearer ${token ?? ""}` },
+      });
+      const json = (await res.json()) as { ok?: boolean; merchants?: AdminMerchant[]; error?: string };
+      if (!res.ok || !json.ok) {
+        setError(json.error ?? `載入商家列表失敗（HTTP ${res.status}）`);
+        return;
       }
+      setError(null);
+      setMerchants(json.merchants ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
-    void load();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    void loadMerchants();
+  }, [loadMerchants]);
 
   const adminOrderFetcher = useCallback(
     async (params: { start?: string; end?: string; limit: number; offset: number }) => {
@@ -119,6 +156,52 @@ export default function AdminReportsPage() {
   );
 
   const selectedMerchant = merchants.find((m) => m.id === selected) ?? null;
+
+  // 報表組件回調（用 useCallback 保持引用穩定，避免子組件 effect 無限重跑）。
+  const handleBusyChange = useCallback((busy: boolean) => {
+    busyRef.current = busy;
+    setReportBusy(busy);
+  }, []);
+  const handleLoadError = useCallback((message: string | null) => {
+    setLoadError(message);
+  }, []);
+  const handleRangeChange = useCallback((next: ReportRangeKey) => {
+    setReportRange(next);
+  }, []);
+
+  /** 業務/NFR：點擊「重新載入」→ 商家列表 + 報表全部數據重新拉取。
+   *  進行中禁用按鈕；完成後資料自動同步更新（remount 會重跑所有 effect）。 */
+  function handleRefresh() {
+    if (refreshing || reportBusy) return;
+    setRefreshing(true);
+    setLoadError(null);
+    setOrderFetchError(null);
+    void loadMerchants();
+    setRefreshSeq((n) => n + 1);
+  }
+
+  /** 報表區（子組件）係咪掛載緊：冇掛載時唔可以留低舊嘅 busy=true，否則按鈕會永久 disabled。 */
+  const reportMounted = selected === "all" || Boolean(selectedMerchant);
+  useEffect(() => {
+    if (reportMounted) return;
+    busyRef.current = false;
+    setReportBusy(false);
+  }, [reportMounted]);
+
+  // 完成偵測：remount 後報表 busy 會 true → false，busy 落返 false 即本輪刷新完成。
+  // 用 polling 而唔係單純 transition effect，係因為極端情況（請求快到同一個 render batch
+  // 內完成）effect 捕捉唔到 busy 由 true→false 嘅跳變，會令按鈕永久卡喺 loading。
+  // 600ms 下限同時避免秒回時按鈕瘋狂閃爍。
+  useEffect(() => {
+    if (!refreshing) return;
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      if (busyRef.current) return;
+      if (Date.now() - startedAt < 600) return;
+      setRefreshing(false);
+    }, 300);
+    return () => clearInterval(id);
+  }, [refreshing]);
 
   // 問題 7（2026-09-06 修）：即時過濾商家清單（不區分大小寫、支援中英）。
   // merchantSearch 唔只過濾下拉，亦用作 input 嘅顯示內容。
@@ -213,34 +296,61 @@ export default function AdminReportsPage() {
               </div>
             ) : null}
           </div>
+          {/* 2026-09-10：重新載入 —— 重新拉商家下拉 + 成個報表（數據 / 圖表 / 統計數字）。
+              載入中 disabled 防重複點擊；icon 旋轉 + 文案切換做 loading 反饋。 */}
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refreshing || reportBusy}
+            aria-busy={refreshing}
+            title={refreshing ? "正在重新載入報表數據…" : "重新載入報表數據"}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent"
+          >
+            <RefreshIcon className={refreshing ? "animate-spin" : ""} />
+            {refreshing ? "載入中…" : "重新載入"}
+          </button>
         </div>
 
         {error && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p>}
 
-        {orderFetchError && (
+        {/* orderFetchError 由 adminOrderFetcher（/api/admin/orders）寫入；
+            loadError 由報表組件統一回報其他數據源（線上單 / 明細 / Ledger 彙總）嘅失敗。
+            兩者去同一張提示卡，避免同一個原因彈兩次。 */}
+        {(orderFetchError || loadError) && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <p className="font-semibold">⚠️ 訂單數據讀取失敗，報表可能顯示為空</p>
-            <p className="mt-1 text-xs">{orderFetchError}</p>
+            <p className="font-semibold">⚠️ 數據載入失敗，報表可能顯示為空</p>
+            {orderFetchError ? <p className="mt-1 text-xs">{orderFetchError}</p> : null}
+            {loadError && loadError !== orderFetchError ? <p className="mt-1 text-xs">{loadError}</p> : null}
             <p className="mt-1 text-xs text-amber-700">
               排查方向：① 管理後台 token 是否過期（重新登入）；② server 環境變數
               SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 是否配置；③ server log 度 grep{" "}
-              <code>[admin/orders]</code> 睇實際查詢區間同筆數。
+              <code>[admin/orders]</code> 睇實際查詢區間同筆數；④ 點右上角「重新載入」再試一次。
             </p>
           </div>
         )}
 
         {selected === "all" ? (
+          // key 帶 refreshSeq：點「重新載入」即 remount，所有數據由零重拉；
+          // initialRange / onRangeChange 負責保留用戶已揀嘅日期範圍。
           <RestaurantDailyReport
-            key="admin-all"
+            key={`admin-all-${refreshSeq}`}
             allStoresMode
             storeNameOverride="全部商家"
             adminOrderFetcher={adminOrderFetcher}
+            initialRange={reportRange}
+            onRangeChange={handleRangeChange}
+            onBusyChange={handleBusyChange}
+            onLoadError={handleLoadError}
           />
         ) : selectedMerchant ? (
           <RestaurantDailyReport
-            key={selectedMerchant.id}
+            key={`${selectedMerchant.id}-${refreshSeq}`}
             merchantIdOverride={selectedMerchant.id}
             storeNameOverride={selectedMerchant.name}
+            initialRange={reportRange}
+            onRangeChange={handleRangeChange}
+            onBusyChange={handleBusyChange}
+            onLoadError={handleLoadError}
           />
         ) : (
           <p className="px-1 py-6 text-sm text-slate-500">載入商家列表中…</p>

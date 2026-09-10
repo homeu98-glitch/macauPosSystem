@@ -693,10 +693,23 @@ export type RestaurantDailyReportProps = {
   allStoresMode?: boolean;
   /** admin 模式訂單 fetcher（GET /api/admin/orders，需 admin token，由 admin 頁面注入）。 */
   adminOrderFetcher?: (params: { start?: string; end?: string; limit: number; offset: number }) => Promise<PosOrder[]>;
+  /** 初始報表範圍（唔傳 = "today"）。
+   *  admin 報表頁嘅「重新載入」用 remount（key 帶 refreshSeq）重置本組件全部 state，
+   *  靠呢個 prop 喺 remount 後還原用戶已選嘅範圍（今日/昨日/7天/30天/全部），
+   *  否則刷新完會彈返「今日」。 */
+  initialRange?: ReportRangeKey;
+  /** 範圍變更通知上一層 —— 畀 admin 頁面記住用戶選擇，remount 後用 initialRange 還原。 */
+  onRangeChange?: (range: ReportRangeKey) => void;
+  /** 載入狀態通知：true = 至少有個數據源仲載入緊（初次 mount 亦為 true）。 */
+  onBusyChange?: (busy: boolean) => void;
+  /** 載入錯誤摘要（POS 訂單 / Ledger 線上單 / 線上單明細 / Ledger 彙總），冇錯傳 null。 */
+  onLoadError?: (message: string | null) => void;
 };
 
 export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
-  const [range, setRange] = useState<ReportRangeKey>("today");
+  // initialRange 只用作初始值；之後由用戶喺 UI 切。admin 頁面重新載入（remount）
+  // 時會把上次嘅範圍傳返入嚟，避免刷新後彈返「今日」。
+  const [range, setRange] = useState<ReportRangeKey>(props.initialRange ?? "today");
   // 初始 orders 設為空：避免 hydration / 切店時短暫讀取錯誤 scope 嘅 localStorage。
   // 真正訂單由下方 backfill effect 喺確認 merchantId 後拉取。
   const [orders, setOrders] = useState<PosOrder[]>([]);
@@ -918,6 +931,54 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     dishMatchBreakdown: {},
     unmatchedItemNames: {},
   });
+
+  // ── 向上一層回報：範圍 / 載入狀態 / 載入錯誤 ────────────────────────────
+  // admin「營業報表」頁右上角嘅「重新載入」係靠 remount（key 帶 refreshSeq）重跑本組件
+  // 全部 effect —— 最徹底嘅刷新，但會連用戶已選範圍一齊重置，所以用呢一組 callback
+  // 畀上一層記住 + 還原狀態，同埋知道幾時載入完成 / 失敗。
+  // 三個 callback 都係 optional：POS /reports 唔傳，行為同舊版完全一致。
+  const notifyRange = props.onRangeChange;
+  useEffect(() => {
+    notifyRange?.(range);
+  }, [range, notifyRange]);
+
+  /** 載入中：POS 訂單補載、Ledger 彙總未完成，或任一線上單抓取仲 loading。
+   *  初次 mount 兩個 done flag 都係 false → busy = true（上一層可按佢 disable 按鈕）。 */
+  const loadBusy =
+    !backfillDone ||
+    !ledgerDone ||
+    onlineFetchInfo.status === "loading" ||
+    onlineDetailInfo.status === "loading";
+  const notifyBusy = props.onBusyChange;
+  useEffect(() => {
+    notifyBusy?.(loadBusy);
+  }, [loadBusy, notifyBusy]);
+
+  /** 錯誤摘要：任一個數據源報錯就整段文章畀上一層統一顯示。 */
+  const notifyError = props.onLoadError;
+  useEffect(() => {
+    if (!notifyError) return;
+    const parts: string[] = [];
+    // admin「全部商家」模式嘅 POS 訂單錯誤已經由上一層嘅 adminOrderFetcher 直接 set state，
+    // 呢度唔再重複推上去，避免同一個原因喺提示卡彈兩行。
+    if (debugInfo.status === "error" && debugInfo.lastError && !adminOrderFetcher) {
+      parts.push(`POS 訂單：${debugInfo.lastError}`);
+    }
+    if (onlineFetchInfo.status === "error" && onlineFetchInfo.lastError) parts.push(`Ledger 線上單：${onlineFetchInfo.lastError}`);
+    if (onlineDetailInfo.status === "error" && onlineDetailInfo.lastError) parts.push(`線上單明細：${onlineDetailInfo.lastError}`);
+    if (ledgerError) parts.push(ledgerError);
+    notifyError(parts.length > 0 ? parts.join("；") : null);
+  }, [
+    debugInfo.status,
+    debugInfo.lastError,
+    onlineFetchInfo.status,
+    onlineFetchInfo.lastError,
+    onlineDetailInfo.status,
+    onlineDetailInfo.lastError,
+    ledgerError,
+    adminOrderFetcher,
+    notifyError,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
