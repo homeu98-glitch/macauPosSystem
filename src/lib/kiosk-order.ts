@@ -322,6 +322,29 @@ export class KioskOrderTransientError extends Error {
   }
 }
 
+/**
+ * `/api/pos/sync` 嘅按事件回執（方案 C）。
+ *
+ * `applied:false` = server **有意冇寫入**（stale / 終態降級 / 未授權），
+ * 同「寫入失敗」係兩回事 —— 前者重推冇用，後者可以重試。
+ */
+type KioskEventAck = {
+  id: string;
+  ok: boolean;
+  applied?: boolean;
+  reason?: string;
+  error?: string;
+};
+
+/** `/api/pos/sync` 嘅回應（方案 C：永遠帶按事件 results）。 */
+type KioskSyncResponse = {
+  ok?: boolean;
+  error?: string;
+  /** true = 基建失敗可重試；false = 業務拒絕（永久）。舊 server 冇呢欄。 */
+  retryable?: boolean;
+  results?: KioskEventAck[];
+};
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -335,16 +358,27 @@ function sleep(ms: number): Promise<void> {
  * localStorage，然後嗰部機嘅 `PrintFlushWorker` 會照印 → Kiosk 已經印咗一張，收銀台再印多張。
  * Kiosk 嘅顧客小票屬於「本機打印」，由 `appendPrintJobs()` 寫本機就夠，唔好上雲。
  *
- * 2026-09-10 審查 P1-4 / P0-3：
- *   - **有限度重試**（最多 3 次，指數退避）：餐飲現場 Wi-Fi 抖動係常態，單次 fetch 太脆。
- *     重試用同一個 `order.id`，所以 server 端 upsert 係 idempotent，唔會整多張單。
- *   - 帶 `Authorization: Bearer <posDeviceToken>`（kiosk 機有登入 session 就有；掃碼客人冇
- *     → 行匿名通道，server 只准 ORDER_CREATED / ORDER_UPDATED）。
+ * ## payload 形狀（2026-09-10 加單事故修復 —— 呢度就係根因所在）
+ *
+ * `ORDER_UPDATED` 嘅 payload **必須**係 `{ order, addedItems }`，唔可以係裸 `order`。
+ * `/api/pos/sync` 對 ORDER_UPDATED 係讀 `eventPayload.order`（同收銀台 `submitOrder()`
+ * 一致）；舊版呢度寫 `payload: order`（照抄 ORDER_CREATED 嘅形狀）→ server 攞到
+ * `eventPayload.order === undefined` → `orderId` 為空 → 回 `ok:false` + **HTTP 500**
+ * → client 當網絡抖動重試 3 次 → 入本地待同步隊列 → 顯示「落單成功，正在同步…」。
+ * 結果：**掃碼 / kiosk 加單 100% 必定失敗，而客人以為成功、收銀端完全冇反應**
+ * （冇新單、冇補印廚房單、冇介面更新）。
+ * `addedItems` 亦係 server 端「只驗新增菜品有冇售罄」同收銀端補印嘅依據。
+ *
+ * ## 失敗分類（2026-09-10）
+ *   429 / 5xx / 網絡錯誤 → `KioskOrderTransientError`（入本地隊列，稍後補推）
+ *   其他 4xx（業務拒絕：售罄、未授權、payload 有問題）→ `KioskOrderRejectedError`
+ *     **即刻拋，唔重試、唔入隊列** —— 重試唔會改變結果，只會燒額度同延遲錯誤曝光。
  */
 export async function submitKioskOrder(
   storeId: string,
   order: PosOrder,
   eventType: "ORDER_CREATED" | "ORDER_UPDATED" = "ORDER_CREATED",
+  addedItems?: OrderItem[],
 ): Promise<void> {
   const now = new Date().toISOString();
   const events: QueueEvent[] = [
@@ -352,7 +386,9 @@ export async function submitKioskOrder(
       id: uid("evt"),
       type: eventType,
       entityId: order.id,
-      payload: order,
+      // ⚠️ ORDER_UPDATED 一定用 `{ order, addedItems }`（同收銀台一致）；
+      // ORDER_CREATED 保持裸 order（兩種 server 版本都食）。
+      payload: eventType === "ORDER_UPDATED" ? { order, addedItems: addedItems ?? [] } : order,
       status: "synced",
       createdAt: now,
       // 🛡️ 跨店隔離 L1：kiosk 落單事件帶自身綁定店（函數參數 storeId 即真源，
@@ -361,35 +397,62 @@ export async function submitKioskOrder(
     },
   ];
   const body = JSON.stringify({ storeId, events });
+  const eventId = events[0].id;
 
   const MAX_ATTEMPTS = 3;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
     try {
-      const res = await fetch("/api/pos/sync", {
+      res = await fetch("/api/pos/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
         body,
       });
-      let payload: { ok?: boolean; error?: string } | null = null;
-      try {
-        payload = (await res.json()) as { ok?: boolean; error?: string };
-      } catch {
-        // 回應非 JSON（例如 503 HTML），下面靠 status 判斷
-      }
-      if (res.ok && payload?.ok !== false) return;
-
-      const msg = payload?.error ?? `落單失敗（${res.status}）`;
-      // 4xx（除 429）＝ 請求本身有問題，重試都係同一結果 → 即刻拋，唔好燒 quota。
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        throw new KioskOrderRejectedError(msg);
-      }
-      lastError = new KioskOrderTransientError(msg);
     } catch (e) {
-      if (e instanceof KioskOrderRejectedError) throw e;
+      // 網絡層失敗（離線 / DNS / TLS）→ 可重試
       lastError = new KioskOrderTransientError(e instanceof Error ? e.message : String(e));
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(300 * (attempt + 1));
+      continue;
     }
+
+    // ⚠️ 一定要用具名型別做斷言。寫 `as typeof payload` 會中招：`payload` 啱啱初始化為
+    // `null`，TS 會用**收窄後**嘅型別（`null`）→ 之後所有 `payload.results` 都變 `never`。
+    let payload: KioskSyncResponse | null = null;
+    try {
+      payload = (await res.json()) as KioskSyncResponse;
+    } catch {
+      // 回應非 JSON（例如 503 HTML），下面靠 status 判斷
+    }
+
+    // 讀本事件嘅回執：`applied:false` 代表 server **有意冇寫入**（stale / 終態降級）。
+    const myAck = payload?.results?.find((r) => r?.id === eventId) ?? null;
+
+    if (res.ok && payload?.ok !== false) {
+      if (myAck && myAck.applied === false && eventType === "ORDER_UPDATED") {
+        // 加單特別處理：`applied:false` = 收銀端已經有更新版本／雲端已有較新狀態，
+        // 今次加單**冇生效**。唔可以當成功（否則又係「客人以為落咗、收銀端冇反應」）。
+        throw new KioskOrderRejectedError(
+          "加單未被接受（雲端已有較新版本），請返回重新載入本枱訂單後再試。",
+        );
+      }
+      return;
+    }
+
+    const msg = myAck?.error ?? payload?.error ?? `落單失敗（${res.status}）`;
+
+    // 429（限流）：喺度硬重試只會令情況更差 → 即刻交本地隊列，等稍後慢慢補推。
+    if (res.status === 429) throw new KioskOrderTransientError(msg);
+
+    // 4xx（非 429）＝ **業務拒絕**（售罄 / 未授權 / payload 有問題）：重試同一個請求
+    // 結果一樣，所以即刻拋永久錯誤，由 UI 直接告知客人（唔好靜默入隊造假成功）。
+    if (res.status >= 400 && res.status < 500) {
+      throw new KioskOrderRejectedError(msg);
+    }
+
+    // 5xx / 其他：基建失敗，真係可以重試
+    lastError = new KioskOrderTransientError(msg);
     if (attempt < MAX_ATTEMPTS - 1) await sleep(300 * (attempt + 1));
   }
 

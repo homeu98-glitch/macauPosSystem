@@ -8,6 +8,8 @@ import {
 } from "@/lib/pos/pos-device-token";
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
+import { totalItemQuantity } from "@/lib/pos/order-item-diff";
+import type { OrderItem } from "@/lib/types";
 
 /**
  * POST /api/pos/sync — 收銀 / Kiosk 離線優先同步入口。
@@ -143,6 +145,12 @@ type ExistingOrderRow = {
   status: string | null;
   /** 2026-09-10 P2-2：客人加單（匿名）時要保留收銀端已標記嘅出餐狀態。 */
   fulfillment_status: string | null;
+  /**
+   * 2026-09-10 加單修復：現有單嘅菜品快照（jsonb）。
+   * 用嚟判斷「客人今次係**加菜**（項目變多）」——加菜係**加法**，唔應該被
+   * 時間戳 LWW 判 stale 而靜默丟棄（見下面 isAdditiveUpdate 註解）。
+   */
+  items: unknown;
   updated_at: string | null;
   /**
    * 方案 B（2026-09-09）：client 生成嘅時間戳（裝置時鐘）。
@@ -237,13 +245,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── 2.1) Rate limit（2026-09-10 資安加固 P0-3 / P3-5）──
-  // 匿名通道（掃碼）冇任何憑證，所以至少要有頻率上限，否則知道 storeId 就可以無限打。
-  const ip = clientIp(request);
-  if (!rateLimit(`pos-sync:${ip}`, 120, 60_000)) {
-    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
-  }
-
   // ── 2.2) 通道授權（2026-09-10 審查 P0-3）──
   // 背景：`/api/pos/sync` 用 service_role 寫入，而枱 QR 已經公開 storeId
   //（`/menu?tableId=…&store=<merchantId>`），全 repo 又冇 middleware →
@@ -257,6 +258,7 @@ export async function POST(request: Request) {
   // 應急回滾：設定 `POS_REQUIRE_DEVICE_AUTH=0` 可以暫時關閉（會寫 warning log）。
   const deviceClaims = readPosDeviceTokenFromRequest(request);
   const adminClaims = readAdminSessionFromRequest(request);
+  const ip = clientIp(request);
   const authEnforced = isPosDeviceAuthRequired();
   const authorized =
     !authEnforced ||
@@ -269,6 +271,23 @@ export async function POST(request: Request) {
   } else if (!authorized) {
     // 匿名通道：唔算錯誤（客人掃碼正常行），只落 debug 級提示
     console.info(`[pos/sync] 匿名通道請求（store=${storeId}, ip=${ip}）`);
+  }
+
+  // ── 2.1) Rate limit（2026-09-10 資安加固 P0-3 / P3-5）──
+  //
+  // ⚠️ 2026-09-10 修正（加單「冇反應」事故）：原本**一律用 client IP** 做 key，
+  // 但餐飲現場全部裝置（收銀機、自助機、客人手機、廚房平板）都係經**同一個 NAT
+  // 公網 IP** 出街 → 收銀機自己嘅同步流量會同客人爭同一個額度，busy 時段會
+  // 自我 DoS：`sync` 被 429 擋 → client 當網絡抖動重試 → 最後靜默入隊。
+  // 家陣分流：
+  //   - **已授權**（收銀機 / 自助機，帶憑證）→ 按 **storeId** 計，額度拉高（600/min）。
+  //     同一間店所有機共用一個池，唔會因為場內 IP 被外人拉低。
+  //   - **匿名**（掃碼客）→ 按 IP 計，額度放寬到 300/min（一家人同一個 Wi-Fi / CGNAT
+  //     之下多部手機共用一個 IP，120 太窄）。
+  const rlKey = authorized ? `pos-sync:store:${storeId}` : `pos-sync:ip:${ip}`;
+  const rlMax = authorized ? 600 : 300;
+  if (!rateLimit(rlKey, rlMax, 60_000)) {
+    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。", retryable: true }, { status: 429 });
   }
 
   /** 匿名通道只准嘅事件類型。 */
@@ -356,7 +375,7 @@ export async function POST(request: Request) {
     const idArr = [...orderIds].slice(0, MAX_EVENTS_PER_REQUEST);
     const { data: existingRows, error: existingErr } = await supabase
       .from("pos_orders")
-      .select("id,status,fulfillment_status,updated_at,client_updated_at")
+      .select("id,status,fulfillment_status,items,updated_at,client_updated_at")
       .eq("store_id", storeId)
       .in("id", idArr);
     if (existingErr) {
@@ -366,13 +385,39 @@ export async function POST(request: Request) {
     }
   }
 
-  const errors: string[] = [];
+  /**
+   * 錯誤分類（2026-09-10 加單「冇反應」事故修復）。
+   *
+   * 【事故根因】舊版任何 `ack(false)`（業務拒絕）同 DB 失敗都一律回 **HTTP 500**。
+   * 而 kiosk client 嘅規矩係「4xx（非 429）＝永久拒絕，其餘＝網絡抖動」→ 業務拒絕
+   * 被當成抖動 → 重試 3 次 → 最後**入本地待同步隊列 + 顯示「落單成功，正在同步…」**。
+   * 客人以為落咗單，收銀端永遠收唔到（冇單、冇打印、冇介面更新）——最壞嘅一種靜默。
+   *
+   * 家陣分三類，決定回應狀態碼：
+   *   - `businessRejections` → 4xx（`unauthorized` → 401；其餘 → 400），`retryable:false`
+   *     → client 應該**即刻報錯畀客人**，唔重試、唔入隊列。`results[].reason` 帶機器可讀原因
+   *     （`soldout` / `forbidden` / `unauthorized` / `bad-payload`）。
+   *   - `infraErrors` → 500，`retryable:true` → 真係可以重試（DB 抖動 / 超時）。
+   *   - `warnings` → 唔影響事件成敗（例如審計表 `pos_queue_events` 寫入失敗）。
+   *     ⚠️ 舊版審計寫入失敗都會令**整批回 500**，即使訂單其實已經成功寫入；
+   *     咁樣 client 會重推已成功嘅事件，係一種假失敗。審計表唔係業務真源
+   *     （`/api/pos/state` 直接讀 `pos_orders`），所以降級做 warning。
+   */
+  const businessRejections: string[] = [];
+  const infraErrors: string[] = [];
+  const warnings: string[] = [];
+  const rejectBusiness = (msg: string) => {
+    businessRejections.push(msg);
+  };
+  const failInfra = (msg: string) => {
+    infraErrors.push(msg);
+  };
   /** 按事件回執（方案 C）：正常路徑喺每次 iteration 尾 push。 */
   const results: EventAck[] = [];
 
   for (const rawEvent of events) {
     if (typeof rawEvent !== "object" || rawEvent === null) {
-      errors.push("事件格式錯誤");
+      rejectBusiness("事件格式錯誤");
       continue;
     }
     const event = rawEvent as Record<string, unknown>;
@@ -380,7 +425,7 @@ export async function POST(request: Request) {
     const eventType = typeof event.type === "string" ? event.type : "";
 
     if (!eventId) {
-      errors.push("事件缺少 id");
+      rejectBusiness("事件缺少 id");
       continue;
     }
     // ── 按事件回執（方案 C + docs/112 L1）：每個事件一個下場，client 淨剷 applied 嘅 ──
@@ -406,7 +451,7 @@ export async function POST(request: Request) {
 
     // ── 3) 事件類型白名單：唔喺名單內嘅一律跳過（防未知 type 走進寫入分支）──
     if (!VALID_EVENT_TYPES.has(eventType)) {
-      errors.push(`未知事件類型：${eventType.slice(0, 40)}`);
+      rejectBusiness(`未知事件類型：${eventType.slice(0, 40)}`);
       ack(false, `未知事件類型：${eventType.slice(0, 40)}`);
       continue;
     }
@@ -415,7 +460,7 @@ export async function POST(request: Request) {
     // 匿名通道只准建單 / 加單；結帳、刪單、打印任務、裝置設定一律需要 POS 憑證。
     if (!authorized && !ANONYMOUS_ALLOWED_EVENTS.has(eventType)) {
       console.warn(`[pos/sync] 拒收匿名事件 ${eventId}（type=${eventType}，需要 POS 憑證）`);
-      errors.push(`事件 ${eventId} 未經授權（匿名通道唔接受 ${eventType}）`);
+      rejectBusiness(`事件 ${eventId} 未經授權（匿名通道唔接受 ${eventType}）`);
       // reason:unauthorized → client 知道要**先續期憑證**再重試（而唔係盲目退避）。
       ack(false, "未經授權：匿名通道只接受落單 / 加單事件", { reason: "unauthorized" });
       continue;
@@ -432,7 +477,7 @@ export async function POST(request: Request) {
       console.warn(
         `[pos/sync] 拒收跨店事件 ${eventId}（event.storeId=${eventStoreId} ≠ 請求 storeId=${storeId}）`,
       );
-      errors.push(`事件 ${eventId} 的店舖標識與請求不一致（跨店事件），已拒絕`);
+      rejectBusiness(`事件 ${eventId} 的店舖標識與請求不一致（跨店事件），已拒絕`);
       ack(false, "店舖標識與請求不一致（跨店事件）");
       continue;
     }
@@ -456,14 +501,42 @@ export async function POST(request: Request) {
       { onConflict: "id" },
     );
     if (qErr) {
-      console.error("[pos/sync] queue_events upsert failed:", qErr.message);
-      errors.push(`queue_events 寫入失敗`);
+      // ⚠️ 只記 warning，**唔**令成批回 500：審計表寫入失敗唔代表訂單冇寫入成功。
+      // 舊版呢度 push 入 errors → 回應 500 → client 當失敗重推已成功嘅事件（假失敗）。
+      // `pos_queue_events` 唔係業務真源（`/api/pos/state` 直接讀 `pos_orders`），
+      // 所以降級 + 留 server log 排查就夠。
+      console.error("[pos/sync] queue_events upsert failed（降級為 warning）:", qErr.message);
+      warnings.push(`queue_events 寫入失敗：${qErr.message}`);
     }
 
     if (eventType === "ORDER_CREATED" || eventType === "ORDER_UPDATED") {
-      const order = (eventType === "ORDER_UPDATED" ? eventPayload.order : eventPayload) as
+      /**
+       * ⚠️⚠️ 加單事故根因（2026-09-10 修）：兩種 client 嘅 `ORDER_UPDATED` payload **形狀唔同**。
+       *
+       *   - 收銀台（`pos-app.tsx` `submitOrder()`）：`{ order, addedItems }`
+       *   - kiosk / 掃碼（`kiosk-order.ts` `submitKioskOrder()`）：**裸 order**（同 ORDER_CREATED 一樣）
+       *
+       * 舊版呢度寫死 `eventPayload.order` → 掃碼加單時攞到 `undefined` → `orderId` 為空 →
+       * 落去下面 `ack(false, "事件 payload 缺少訂單 id")` → HTTP 500 →
+       * client 當「網絡抖動」重試 3 次 → 入本地待同步隊列 → 顯示「落單成功，正在同步…」。
+       * 結果：**掃碼 / kiosk 加單 100% 必定失敗，而且客人以為成功、收銀端完全冇反應**
+       * （冇單、冇打印、冇介面更新）。
+       *
+       * 修正：兩種形狀都收 —— 有 `.order` 就用（收銀台），冇就當成 payload 本身就係張單
+       * （kiosk / 掃碼）。呢個順序唔會誤判：`PosOrder` 自己冇 `order` 呢個欄位。
+       * 同時抽出 `addedItems`（收銀台有帶）畀下面售罄校驗用「只驗新增菜品」。
+       */
+      const nestedOrder =
+        typeof eventPayload.order === "object" && eventPayload.order !== null
+          ? (eventPayload.order as Record<string, unknown>)
+          : null;
+      const order = (eventType === "ORDER_UPDATED" ? nestedOrder ?? eventPayload : eventPayload) as
         | Record<string, unknown>
         | undefined;
+      /** 收銀台帶嘅「本次新增菜品」（kiosk / 舊 client 冇）。 */
+      const addedItems = Array.isArray(eventPayload.addedItems)
+        ? (eventPayload.addedItems as Record<string, unknown>[])
+        : null;
       const orderId = order && typeof order.id === "string" ? order.id.slice(0, MAX_ID_LEN) : "";
       // `order &&` 要再寫多次：TS 唔會由 `orderId` 嘅 truthiness 反推 `order` 已經 narrowing 咗，
       // 唔加會令下面 23 處 `order.xxx` 全部報 TS18048「possibly undefined」。
@@ -479,22 +552,43 @@ export async function POST(request: Request) {
         // 收銀台落單一定會帶 POS 憑證；匿名而自稱 `source="pos"` = 偽造。
         if (!authorized && !ANONYMOUS_ALLOWED_SOURCES.has(orderSource)) {
           console.warn(`[pos/sync] 拒收匿名訂單 ${orderId}（source=${orderSource}）`);
-          errors.push(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 未經授權`);
-          ack(false, "未經授權：匿名通道唔接受此訂單來源");
+          rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 未經授權`);
+          ack(false, "未經授權：匿名通道唔接受此訂單來源", { reason: "forbidden" });
           continue;
         }
 
         // ── P1-2：server 端售罄校驗（匿名通道）──
+        //
+        // ⚠️ 2026-09-10 修正語義：只驗**今次新增**嘅菜品。
+        // 舊版對整張單嘅 items 逐個驗 —— 加單（ORDER_UPDATED）時會把**一早已經被收銀端
+        // 接受**嘅菜都攞去驗，只要其中一款之後賣完，客人**之後所有加單都會被永久拒絕**
+        // （而且因為下面嘅錯誤分類舊問題，客人仲會見到「落單成功」）。正確語義：
+        //   ① ORDER_CREATED → 全部菜品都係新嘅，要驗；
+        //   ② ORDER_UPDATED 帶 `addedItems`（收銀台 / 新版 kiosk）→ 只驗新增嗰批；
+        //   ③ ORDER_UPDATED 冇 `addedItems`（舊 client）→ **跳過**（唔知邊啲係新，
+        //      寧願 fail-open，都唔好誤鎖客人加單）。
+        //
+        // ⚠️ 另外注意：呢個校驗目前係**無效**嘅 —— repo 內冇任何地方寫入 `pos_soldout`
+        // （POS 嘅沽清係本機 localStorage + `/api/inventory/soldout` stub），生產專案亦
+        // 冇呢張表 → 查詢失敗 → fail-open。保留呢段係為咗將來接上真正嘅店級售罄來源時
+        // 即刻生效；詳見 docs/reviews/qr-self-order-audit-2026-09-10.md 附錄 B。
         if (soldoutSet && soldoutSet.size > 0) {
-          const rawItems = Array.isArray(order.items) ? order.items : [];
-          const soldOutHit = rawItems.some((it) => {
-            if (!it || typeof it !== "object") return false;
-            const mid = (it as Record<string, unknown>).menuItemId;
-            return typeof mid === "string" && soldoutSet!.has(mid);
-          });
+          const itemsToCheck =
+            eventType === "ORDER_CREATED"
+              ? Array.isArray(order.items)
+                ? order.items
+                : []
+              : addedItems ?? null;
+          const soldOutHit =
+            itemsToCheck?.some((it) => {
+              if (!it || typeof it !== "object") return false;
+              const mid = (it as Record<string, unknown>).menuItemId;
+              return typeof mid === "string" && soldoutSet!.has(mid);
+            }) ?? false;
           if (soldOutHit) {
-            console.warn(`[pos/sync] 拒收售罄訂單 ${orderId}`);
-            ack(false, "菜品已售罄，請重新選擇");
+            console.warn(`[pos/sync] 拒收售罄訂單 ${orderId}（只驗新增菜品）`);
+            rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 含售罄菜品`);
+            ack(false, "菜品已售罄，請重新選擇", { reason: "soldout" });
             continue;
           }
         }
@@ -512,10 +606,35 @@ export async function POST(request: Request) {
           // 同鐘域比較：優先用 client_updated_at（client 時鐘）；舊 row backfill 後唔會係 null
           const existingTs = parseIsoMs(existing.client_updated_at ?? existing.updated_at);
           const existingStatus = existing.status ?? "";
+          /**
+           * (a0) 🛡️ 「加菜」豁免（2026-09-10 加單修復）：
+           *
+           * 客人加單係**純加法**（items 只會變多），但收銀端任何動作（確認 / 製作中 /
+           * 出餐 / 退菜 …）都會寫一條 ORDER_UPDATED 上去，把 `client_updated_at` 更新成
+           * **收銀機嘅裝置時鐘**。若收銀機時鐘快過客人手機（iPad 冇 NTP 好常見，
+           * 同 docs/112 M4 講嘅同一個病），之後客人加單就會被判 stale → 靜默 skip →
+           * 「加單又冇反應」，而且今次連錯誤都冇（`ack(true, applied:false)`）。
+           *
+           * 語義上豁免係安全嘅：① 下面 `writeStatus` 已經強制沿用 DB 現有狀態
+           * （匿名加單改唔到狀態機）；② 「items 變多」唔可能覆蓋任何嘢，只會新增。
+           * 所以「incoming 項目數 > 現有項目數」時唔應該因為時間戳就丟棄。
+           */
+          const incomingQty = totalItemQuantity(
+            Array.isArray(order.items) ? (order.items as OrderItem[]) : undefined,
+          );
+          const existingQty = totalItemQuantity(
+            Array.isArray(existing.items) ? (existing.items as OrderItem[]) : undefined,
+          );
+          const isAdditiveUpdate = eventType === "ORDER_UPDATED" && incomingQty > existingQty;
           // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫；
           // (b) 終態守門：settled/cancelled/refunded/partially_refunded 唔可以被 open snapshot
           //     降級。唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳）。
-          const isStale = incomingTs > 0 && incomingTs < existingTs;
+          const isStale = incomingTs > 0 && incomingTs < existingTs && !isAdditiveUpdate;
+          if (isAdditiveUpdate && incomingTs > 0 && incomingTs < existingTs) {
+            console.info(
+              `[pos/sync] 加菜豁免：接受較舊時間戳嘅加單 ${orderId}（項目 ${existingQty} → ${incomingQty}）`,
+            );
+          }
           const isDowngrade =
             TERMINAL_ORDER_STATUSES.has(existingStatus) &&
             !TERMINAL_ORDER_STATUSES.has(incomingStatus) &&
@@ -616,15 +735,22 @@ export async function POST(request: Request) {
             );
         if (oErr) {
           console.error("[pos/sync] pos_orders upsert/update failed:", oErr.message);
-          errors.push(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 寫入失敗`);
-          ack(false, "訂單寫入失敗");
+          failInfra(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 寫入失敗`);
+          ack(false, "訂單寫入失敗", { reason: "db-error" });
           continue;
         }
         ack(true);
       } else {
         // 帶咗 ORDER_CREATED/UPDATED 但 payload 冇 order.id → 冇嘢可寫。
         // 當失敗處理：留喺 client 重試 / 同步健康可見，唔好靜默吞（資料流失風險）。
-        ack(false, "事件 payload 缺少訂單 id");
+        //
+        // ⚠️ 2026-09-10：呢個分支就係掃碼「加單完全冇反應」嘅現場（舊 client 嘅
+        // ORDER_UPDATED payload 形狀唔夾）。上面已做形狀相容，正常唔會再落到嚟；
+        // 落得嚟即代表 client 送咗真係冇 id 嘅 payload → 屬**永久**問題，
+        // 唔應該回 500 令客人見到「落單成功，同步中」。
+        console.error("[pos/sync] 訂單事件 payload 缺少訂單 id（type=%s）", eventType);
+        rejectBusiness("事件 payload 缺少訂單 id");
+        ack(false, "事件 payload 缺少訂單 id", { reason: "bad-payload" });
       }
     }
     if (eventType === "ORDER_SETTLED" && !evAcked) {
@@ -679,7 +805,7 @@ export async function POST(request: Request) {
 
         if (sErr) {
           console.error("[pos/sync] pos_orders settle failed:", sErr.message);
-          errors.push(`訂單結帳狀態寫入失敗`);
+          failInfra(`訂單結帳狀態寫入失敗`);
           ack(false, "訂單結帳狀態寫入失敗");
         } else if (!settledRows || settledRows.length === 0) {
           // 🛡️ 兜底（docs/111）：ORDER_SETTLED 早過 ORDER_CREATED 到（離線一輪操作、
@@ -708,7 +834,7 @@ export async function POST(request: Request) {
           );
           if (iErr) {
             console.error("[pos/sync] pos_orders settle upsert fallback failed:", iErr.message);
-            errors.push(`訂單結帳狀態寫入失敗`);
+            failInfra(`訂單結帳狀態寫入失敗`);
             ack(false, "訂單結帳狀態寫入失敗");
           } else {
             ack(true);
@@ -761,7 +887,7 @@ export async function POST(request: Request) {
           .select("id");
         if (uErr) {
           console.error("[pos/sync] pos_print_jobs update failed:", uErr.message);
-          errors.push(`列印工作寫入失敗`);
+          failInfra(`列印工作寫入失敗`);
           ack(false, "列印工作寫入失敗");
           continue;
         } else if (!upd || upd.length === 0) {
@@ -775,7 +901,7 @@ export async function POST(request: Request) {
           });
           if (iErr) {
             console.error("[pos/sync] pos_print_jobs insert failed:", iErr.message);
-            errors.push(`列印工作寫入失敗`);
+            failInfra(`列印工作寫入失敗`);
             ack(false, "列印工作寫入失敗");
             continue;
           }
@@ -795,7 +921,7 @@ export async function POST(request: Request) {
           .eq("store_id", storeId);
         if (dErr) {
           console.error("[pos/sync] pos_print_jobs delete failed:", dErr.message);
-          errors.push(`列印工作刪除失敗`);
+          failInfra(`列印工作刪除失敗`);
           ack(false, "列印工作刪除失敗");
           continue;
         }
@@ -814,7 +940,7 @@ export async function POST(request: Request) {
           .eq("store_id", storeId);
         if (dErr) {
           console.error("[pos/sync] pos_orders delete failed:", dErr.message);
-          errors.push(`訂單刪除失敗`);
+          failInfra(`訂單刪除失敗`);
           ack(false, "訂單刪除失敗");
           continue;
         }
@@ -826,26 +952,62 @@ export async function POST(request: Request) {
     ack(true);
   }
 
-  // ── 回應（方案 C）：永遠帶按事件 results。部分失敗用 500（舊 client 會當成批
-  // 未同步保留 pending 重試，冇結果欄位都安全；新 client 讀 results 只剷 ok 嗰啲）。
+  // ── 回應（方案 C）：永遠帶按事件 results。狀態碼按**失敗性質**分流 ──
+  //
+  // 2026-09-10 加單「冇反應」事故修復（核心）：舊版任何失敗都回 500，令
+  // kiosk client 把「業務拒絕」（永久）誤判成「網絡抖動」（可重試）→ 重試 →
+  // 入本地隊列 → 顯示「落單成功，正在同步…」假成功。家陣：
+  //   - 全部成功            → 200 `{ok:true}`
+  //   - 有基建 / DB 失敗     → 500 `{ok:false, retryable:true}`（真係可以重試）
+  //   - 只有業務拒絕         → 400 `{ok:false, retryable:false}`（永久；client 應即刻報錯）
+  //   - 只有未授權           → 401 `{ok:false, retryable:false, reason:"unauthorized"}`
+  //                            （client 見到會強制續期憑證一次，見 sync-flush M1）
+  //
+  // 舊 POS client（`sync-flush.ts`）本來就會讀 `results` 逐條處理，唔靠頂層狀態碼，
+  // 所以改狀態碼唔會令佢丟事件。
   const okCount = results.filter((r) => r.ok).length;
-  if (errors.length > 0 || okCount < results.length) {
+  const unauthorizedOnly =
+    businessRejections.length > 0 &&
+    infraErrors.length === 0 &&
+    results.length > 0 &&
+    results.every((r) => r.ok || r.reason === "unauthorized");
+  const warningsField = warnings.length > 0 ? { warnings } : {};
+
+  if (infraErrors.length > 0) {
     return NextResponse.json(
       {
         ok: false,
+        retryable: true,
         // 對外只返第一條通用訊息；詳細 DB 錯誤只落 server log，唔外洩 schema / 欄位名
-        error: errors[0] ?? "部分事件寫入失敗",
+        error: infraErrors[0] ?? "部分事件寫入失敗",
         syncedCount: okCount,
         results,
+        ...warningsField,
       },
       { status: 500 },
     );
   }
 
+  if (businessRejections.length > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        retryable: false,
+        error: businessRejections[0] ?? "部分事件被拒絕",
+        syncedCount: okCount,
+        results,
+        ...warningsField,
+      },
+      { status: unauthorizedOnly ? 401 : 400 },
+    );
+  }
+
   return NextResponse.json({
     ok: true,
+    retryable: false,
     syncedCount: events.length,
     results,
+    ...warningsField,
     receivedAt: new Date().toISOString(),
   });
 }

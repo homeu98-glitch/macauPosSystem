@@ -8,6 +8,7 @@ import { loadBootstrapCache, saveBootstrapCache, nextLocalDailyOrderNo } from "@
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { fetchKioskSettings } from "@/lib/pos/kiosk-settings";
 import { fetchStoreSoldoutIds } from "@/lib/pos/soldout";
+import { diffAddedItems } from "@/lib/pos/order-item-diff";
 import {
   enqueuePendingKioskOrder,
   flushPendingKioskOrders,
@@ -467,6 +468,7 @@ export function useKioskOrder() {
         note: line.note,
       }));
 
+      // 今次事件類型：單已存在（resume / 加單）→ ORDER_UPDATED，否則 ORDER_CREATED。
       const eventType: "ORDER_CREATED" | "ORDER_UPDATED" = resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED";
       const orderId = resumedOrder?.id ?? draftOrderIdRef.current ?? (draftOrderIdRef.current = newKioskOrderId());
 
@@ -517,14 +519,19 @@ export function useKioskOrder() {
         localOrderNo,
       });
 
+      // ⚠️ 2026-09-10 加單修復：算出今次**新增**嘅菜品（舊單 items → 新單 items 嘅差額）。
+      // 用途：① server 端「只驗新增菜品有冇售罄」（唔會因為舊菜賣完而鎖死加單）；
+      //       ② 上送 payload 一定要用 `{ order, addedItems }` 形狀（見 submitKioskOrder 註解）。
+      const addedItems = eventType === "ORDER_UPDATED" ? diffAddedItems(resumedOrder?.items, order.items) : undefined;
+
       let queuedForSync = false;
       try {
-        await submitKioskOrder(storeId, order, eventType);
+        await submitKioskOrder(storeId, order, eventType, addedItems);
       } catch (e) {
         if (e instanceof KioskOrderRejectedError) throw e;
         if (e instanceof KioskOrderTransientError) {
-          // 網絡抖動 / 5xx：收單入本地隊列，UI 當「已收到，同步中」（P1-4）
-          const count = enqueuePendingKioskOrder(storeId, order, eventType);
+          // 網絡抖動 / 5xx / 429：收單入本地隊列，UI 當「已收到，同步中」（P1-4）
+          const count = enqueuePendingKioskOrder(storeId, order, eventType, addedItems);
           setPendingSyncCount(count);
           queuedForSync = true;
         } else {

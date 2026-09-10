@@ -1,7 +1,7 @@
 "use client";
 
-import { submitKioskOrder } from "@/lib/kiosk-order";
-import { PosOrder } from "@/lib/types";
+import { KioskOrderRejectedError, submitKioskOrder } from "@/lib/kiosk-order";
+import { OrderItem, PosOrder } from "@/lib/types";
 
 /**
  * Kiosk / 掃碼落單嘅「待同步」本地隊列（2026-09-10 掃碼點餐審查 P1-4）。
@@ -30,6 +30,12 @@ export type PendingKioskOrder = {
   storeId: string;
   queuedAt: string;
   attempts: number;
+  /**
+   * 今次事件嘅「新增菜品」（只有 ORDER_UPDATED 加單先有意義）。
+   * 一定要一齊存：補推時要原樣上送，否則 server 端「只驗新增菜品售罄」同收銀端
+   * 補印廚房單都會失去判斷依據。舊記錄冇呢個欄 → undefined（視為未知）。
+   */
+  addedItems?: OrderItem[];
 };
 
 function storageKey(storeId: string): string {
@@ -70,13 +76,14 @@ export function enqueuePendingKioskOrder(
   storeId: string,
   order: PosOrder,
   eventType: "ORDER_CREATED" | "ORDER_UPDATED",
+  addedItems?: OrderItem[],
 ): number {
   const rows = loadPendingKioskOrders(storeId).filter((row) => row.order?.id !== order.id);
   if (rows.length >= MAX_PENDING_KIOSK_ORDERS) {
     // 隊列滿：丟最舊一條（唔係丟最新 —— 最新一條先係客人啱啱落嘅單）
     rows.shift();
   }
-  rows.push({ order, eventType, storeId, queuedAt: new Date().toISOString(), attempts: 0 });
+  rows.push({ order, eventType, storeId, queuedAt: new Date().toISOString(), attempts: 0, addedItems });
   savePendingKioskOrders(storeId, rows);
   return rows.length;
 }
@@ -102,8 +109,16 @@ export async function flushPendingKioskOrders(storeId: string): Promise<number> 
   const remaining: PendingKioskOrder[] = [];
   for (const row of rows) {
     try {
-      await submitKioskOrder(row.storeId, row.order, row.eventType);
-    } catch {
+      await submitKioskOrder(row.storeId, row.order, row.eventType, row.addedItems);
+    } catch (e) {
+      // 永久拒絕（售罄 / 未授權 / payload 有問題）→ 重試都冇用，直接放棄並大聲記錄，
+      // 唔好霸住隊列令客人每次入頁都見到「N 張待傳」。
+      if (e instanceof KioskOrderRejectedError) {
+        console.error(
+          `[kiosk-outbox] 訂單 ${row.order.localOrderNo ?? row.order.id} 被伺服器永久拒絕，已由隊列移除：${e.message}`,
+        );
+        continue;
+      }
       const attempts = row.attempts + 1;
       if (attempts <= 10) remaining.push({ ...row, attempts });
     }

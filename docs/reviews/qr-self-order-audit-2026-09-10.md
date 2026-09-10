@@ -15,6 +15,8 @@
 > 新增檔案 **11 個**、新增 API 端點 **2 支**。逐項落地細節見文末 **「附錄 A · 修復落地摘要」**。
 >
 > ⚠️ **部署前必讀**：本次為 `/api/pos/sync`、`/api/pos/state`、`/api/pos/bootstrap`、`/api/pos/kiosk-settings` 加了**憑證閘（fail-closed）**。若生產環境尚未由 `/api/ledger/login` 取得 `posDeviceToken`，端點會回 401。應急回滾開關：`POS_REQUIRE_DEVICE_AUTH=0`。
+>
+> 🔥 **同日事故跟進（掃碼「加單」完全冇反應）見文末「附錄 B」** —— 根因係 `ORDER_UPDATED` payload 形狀唔夾 ＋ 業務拒絕錯誤回 500 令 client 誤判成「網絡抖動」而造假成功。已修，並補上 POS 端「加單補印廚房單」。
 
 ---
 
@@ -373,3 +375,136 @@
 2. 圖片未接 CDN resize（僅補 `width/height/decoding`）。
 3. 生產部署前需確認：`POS_REQUIRE_DEVICE_AUTH`（預設 fail-closed）與 `POS_DEVICE_TOKEN_SECRET`（未設則回退 `ADMIN_SESSION_SECRET`）；若 POS 前端未升級至會取 `session.posDeviceToken` 的版本，需先設 `POS_REQUIRE_DEVICE_AUTH=0` 灰度。
 4. 功能缺口（**不在本次 23 項內**）：訂單狀態追蹤、線上支付/會員抵扣（docs/110）、單品備註 UI。
+
+---
+
+## 附錄 B · 事故跟進：掃碼「加單」完全冇反應（2026-09-10 當日修復）
+
+> 用戶實測回報：掃碼落單成功（POS 見到訂單），但之後按「加單」→ **完全冇反應**：
+> 冇新單、冇打印、冇介面更新。手機卻顯示「落單成功」＋「訂單已收到，正在同步…」。
+
+### B.1 加單**應該**觸發嘅流程（設計口徑）
+
+`ORDER_UPDATED` 成功寫入 `pos_orders` 之後，完整鏈路應該係：
+
+| # | 環節 | 內容 |
+|---|---|---|
+| 1 | 雲端 `pos_orders` | 同一 `id` 更新 `items`／`order_note`／金額；**沿用收銀端現有 `status` / `fulfillment_status`**（客人無權改狀態機，P2-2）；`client_updated_at` 用 client 時間、`updated_at` 由 server 蓋章 |
+| 2 | 雲端 `pos_queue_events` | 記一條 `ORDER_UPDATED` 審計事件（帶 `store_id`） |
+| 3 | Realtime → 收銀端 `onOrderUpsert` | ① `mergeOrderLists()` 合併入本機 → **訂單列表／桌台明細即時多出新增菜品**；② 出**加單廚房單**（`ticketType:"addon"`，只印新增菜品）＋對應**標籤單**；③ **唔重印**顧客小票（小票只喺新單出一次） |
+| 4 | 打印通道 | 廚房／標籤機（PosNative `window.PosNative.printJob` / Companion `window.companionShell` / 雲端 relay）claim → 出紙；「打印」頁多出呢批 job |
+| 5 | 客人端 | `/menu`「本枱已落單」明細更新為加單後內容 |
+
+設計依據：`print-toggles.ts` 明寫「加單」屬**自動**流程、受 `kitchen` / `label` 開關管；
+`types.ts` 亦寫「廚房分區單（zone 機）：收銀落單／**加單**、線上單接單、自助單補建共用」。
+即係**加單要補出廚房單係已定設計**，唔係新需求。
+
+### B.2 根因（兩個缺陷疊加，缺一不可）
+
+**根因 1（致命，既有缺陷）：`ORDER_UPDATED` 嘅 payload 形狀唔夾 → 加單 100% 必定失敗。**
+
+- 收銀台（`pos-app.tsx` `submitOrder()`）送：`payload: { order, addedItems }`
+- kiosk／掃碼（`kiosk-order.ts` `submitKioskOrder()`）送：`payload: order`（**裸 order**，照抄 ORDER_CREATED 形狀）
+- 但 `/api/pos/sync` 對 ORDER_UPDATED 係讀 `eventPayload.order`：
+
+  `const order = (eventType === "ORDER_UPDATED" ? eventPayload.order : eventPayload)`
+
+→ 掃碼加單時 `eventPayload.order === undefined` → `orderId` 為空 → 落到
+`ack(false, "事件 payload 缺少訂單 id")`。**必然發生、同資料無關**（所以第一次落單正常、之後每次加單都死）。
+
+> 呢個缺陷喺本次審查**之前**就存在（`git show HEAD~1` 三個檔案嘅行都一樣），
+> 唔係今次改動引入。
+
+**根因 2（令失敗變成「靜默」）：業務拒絕回 HTTP 500 → client 誤判成網絡抖動 → 假成功。**
+
+- `/api/pos/sync` 舊版：任何 `ack(false)`（業務拒絕）同 DB 失敗都一律回 **HTTP 500**。
+  （已在生產實測確認：POST 一條未知事件類型 → `HTTP 500` + `{"ok":false}`。）
+- `submitKioskOrder()` 舊版規矩：**4xx（非 429）＝永久，其餘＝可重試** → 500 被當成抖動
+  → 重試 3 次 → 全失敗 → `enqueuePendingKioskOrder()` 入本地隊列
+  → `placeOrder()` 照樣 `setSubmittedOrder(order)` + `orderSyncPending = true`
+  → 客人見到「落單成功」「訂單已收到，正在同步…」（= 截圖上嘅琥珀提示）。
+
+**兩者疊加 = 客人以為成功、收銀端完全冇反應。** 呢個正是回報嘅症狀。
+
+> 註：根因 2 嘅「入隊 + 假成功」係本次審查 P1-4 新增嘅兜底行為（之前係單次 fetch，
+> 失敗會直接顯示錯誤）。即係話 P1-4 **把一個睇得見嘅失敗變成睇唔見嘅失敗** ——
+> 呢點係本次事故最重要嘅教訓：**分類錯誤比冇兜底更危險**。
+
+### B.3 本次修復
+
+| # | 檔案 | 改動 |
+|---|---|---|
+| 1 | `src/app/api/pos/sync/route.ts` | **payload 形狀相容**：`nestedOrder ?? eventPayload` —— 兩種 client 嘅 ORDER_UPDATED 形狀都收（唔會誤判：`PosOrder` 本身冇 `order` 欄）。順帶抽 `addedItems` |
+| 2 | 同上 | **錯誤分類 + 正確狀態碼**：`businessRejections` → `400`（`unauthorized` → `401`）＋`retryable:false`；`infraErrors` → `500`＋`retryable:true`；`pos_queue_events` 寫入失敗降級為 `warnings`（唔再令已成功嘅訂單回 500 → 假失敗） |
+| 3 | 同上 | **售罄校驗改語義**：只驗「新增菜品」（`ORDER_CREATED` 驗全部；`ORDER_UPDATED` 有 `addedItems` 驗嗰批；冇就跳過 → fail-open）。舊版驗整張單 → 舊菜賣完會**永久鎖死**之後所有加單 |
+| 4 | 同上 | **加菜豁免**：`incoming 項目數 > 現有項目數` 時唔受時間戳 LWW 判 stale（收銀機時鐘快過客人手機時，加單唔會再被靜默 skip） |
+| 5 | 同上 | **Rate limit 分流**：已授權按 `storeId`（600/min）、匿名按 IP（300/min）。原本一律按 IP → 場內所有機（收銀／自助機／客人／廚房平板）共用同一個 NAT 公網 IP，busy 時段會**自我 DoS** |
+| 6 | `src/lib/kiosk-order.ts` | `ORDER_UPDATED` 改送 `{ order, addedItems }`（同收銀台一致）；**失敗分類改正**：429／5xx／網絡 → 可重試入隊；**其他 4xx → `KioskOrderRejectedError`（唔重試、唔入隊，即刻報錯）**；429 唔再喺呼叫內硬重試；`applied:false` 嘅加單唔再當成功 |
+| 7 | `src/lib/use-kiosk-order.ts` | 落單前用 `diffAddedItems()` 算出新增菜品，一齊上送 |
+| 8 | `src/lib/pos/kiosk-outbox.ts` | 隊列記住 `addedItems`；補推時原樣上送；永久拒絕嘅條目即刻由隊列移除（唔再霸住「N 張待傳」） |
+| 9 | `src/components/pos-app.tsx` | **加單補印（新建功能）**：自助單收到更新且菜品變多 → 出 `ticketType:"addon"` 廚房／標籤單（只印新增菜品，`itemsOverride`），並以簽名去重防重印 |
+| 10 | `src/lib/pos/soldout.ts` | 讀取失敗唔再靜默，加 `console.warn` |
+| 11 | 新增 `src/lib/pos/order-item-diff.ts` ＋ `.test.ts` | 新增菜品差額純函式（同 `pos-app.itemIdentity()` 同口徑）＋ 8 個單測 |
+
+### B.4 驗證步驟
+
+**離線（已做）**
+
+1. `npm run typecheck` → exit 0 ✅
+2. `npm run test` → **18 tests / 18 pass** ✅（新增 8 個差額計算單測）
+3. `npx eslint <改動檔案>` → 0 error ✅（`pos-app.tsx` 只有既有 unused-var warning）
+4. `npm run build` → exit 0 ✅（完整路由表產出）
+
+**部署後（真機驗收，必須做）**
+
+1. **前置**：先在「設備設定 → 打印機」配置至少一台 `zone`（廚房）打印機，並確認打印通道
+   （Android 需 PosNative APK／桌面需 Companion URL／或雲端 relay）。未配置時所有單只會
+   入隊，會誤判成「加單冇出紙」。
+2. 手機掃枱 QR → 落單（1 項）→ 確認收銀端「訂單」頁出現新單、「打印」頁出現廚房單 job。
+3. **按「加單」→ 加 1～2 個菜 → 落單**。驗收點：
+   - 手機：成功頁**冇**「正在同步…」琥珀提示（有 = 仍然入咗隊列）；
+   - 收銀端：訂單明細**即時**多出新增菜品（唔使 refresh）；
+   - 收銀端「打印」頁：多出一張票種 =「**加單**」嘅廚房單，內容**只有新增菜品**；
+   - 該 job 經打印通道出紙。
+4. **反面案例**：把某菜設為售罄（若店級售罄來源已接通）→ 客人加該菜 → 應該**即時見到**
+   錯誤提示「菜品已售罄，請重新選擇」，而唔係「落單成功」。
+5. **網絡測試**：落單時開飛航模式 → 應該入本地隊列並顯示「已收到，同步中…」；
+   恢復網絡（重入 `/menu` 或觸發 online）→ 隊列清空、收銀端收到單。
+
+### B.5 排查結論：同「售罄」無關
+
+POS 截圖上「酸白菜牛肉麵」顯示售罄，一度懷疑係新增嘅 server 端售罄校驗拒單。已排除：
+
+- `pos_soldout` 喺 **兩個 Supabase 專案都查唔到**（PGRST205），
+- 而且全 repo **冇任何地方寫入呢張表** —— POS 嘅沽清係本機 `localStorage`
+  （`pos-soldout-changed` 事件）＋ `/api/inventory/soldout`（**TODO stub**）。
+- 所以 server 端售罄校驗實際永遠 fail-open（無害），亦唔會拒單。
+
+→ 附帶結論：**客人端「售罄」目前架構上未接通**（`fetchStoreSoldoutIds()` 永遠回 `null`，
+   客人菜單永遠唔會灰化售罄菜、亦擋唔到落單）。要真正做到「店級售罄同步到客人手機」，
+   需要先有一個**店級售罄來源**（把 POS 嘅沽清上雲，例如經 `/api/pos/sync` 新增
+   `SOLD_OUT_CHANGED` 事件寫 `pos_soldout`），屬獨立工作項。
+
+### B.6 ⚠️ 遺留待確認（基建疑點，唔影響本次修復）
+
+由部署包抽取嘅客戶端金鑰顯示：`NEXT_PUBLIC_SUPABASE_URL` 指向嘅專案
+（`zymdemjflsckicwcinxl`）**冇任何 `pos_*` 表**（有 `merchants` / `orders` / `transactions`
+= Ledger 專案）。但 `getPosSupabaseClient()`（瀏覽器端 Realtime + 售罄快照）用嘅
+**正是** `NEXT_PUBLIC_SUPABASE_URL`。
+
+若呢個係配置實況，代表**瀏覽器端所有 POS Realtime 訂閱（`pos_orders` / `pos_print_jobs` /
+`pos_soldout`）都訂緊一個冇呢啲表嘅專案 → 永遠收唔到推送**；POS 端「秒級見單」實際上
+只靠 mount / 重連時嘅 `/api/pos/state` backfill（server 用 `SUPABASE_URL`，係另一個專案）。
+
+請確認（一行即可）：
+
+```bash
+# 用部署環境實際嘅 NEXT_PUBLIC_SUPABASE_URL 查 pos_orders 是否存在
+curl -s "<NEXT_PUBLIC_SUPABASE_URL>/rest/v1/pos_orders?select=id&limit=1" \
+  -H "apikey: <NEXT_PUBLIC_SUPABASE_ANON_KEY>"
+# 回 PGRST205 = 表唔存在 = 配置有問題
+```
+
+若確認指錯專案，修法是為客戶端 POS 連線另開 `NEXT_PUBLIC_POS_SUPABASE_URL` /
+`NEXT_PUBLIC_POS_SUPABASE_ANON_KEY`（POS 專案，**只開 anon select + realtime**），
+`getPosSupabaseClient()` 改讀嗰兩個。呢個改動牽涉環境變數同 RLS 政策，**未動**。

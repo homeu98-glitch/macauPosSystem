@@ -129,6 +129,16 @@ import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, ShiftTemplateVariant, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
+import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
+
+/**
+ * 已補印嘅「加單」簽名（`orderId` → 已出過嘅新增菜品簽名集合）。
+ *
+ * 用途：`onOrderUpsert` 收到同一張單嘅**同一個更新版本**兩次（realtime 重送 / 同一個
+ * tick 兩條事件）時，唔好出兩張「加單」廚房單。只係 in-memory（reload 後重設），
+ * 但 reload 後 `existing.items` 已經係最新版 → 差額為 0 → 自然唔會重印。
+ */
+const printedAddonSignatures = new Map<string, Set<string>>();
 
 type Toast = {
   tone: "info" | "success" | "warning" | "error";
@@ -1271,11 +1281,60 @@ export function PosApp() {
         }
       }
 
+      /**
+       * 加單補印（2026-09-10 掃碼加單修復）。
+       *
+       * 【問題】上面嘅新單出單分支用 `isNewSelfOrder`（本機**未見過**呢張單）做守門，
+       * 客人掃碼**加單**係對一張**已存在**嘅單發 ORDER_UPDATED → 永遠唔會行到 →
+       * 廚房由頭到尾收唔到新增嘅菜（客人以為落咗、廚房冇單）。
+       *
+       * 【設計】自助單（kiosk / 掃碼）收到更新、而且**菜品數量變多** → 攞差額出
+       * 一張 `ticketType: "addon"`（票種「加單」）嘅廚房／標籤單，只印新增嗰批。
+       * 同收銀台自己加單（`submitOrder()` 內 `treatAsAddOn` + `itemsOverride`）同一口徑，
+       * 亦對應 `print-toggles.ts`「加單屬自動流程，受 kitchen / label 開關管」嘅設計。
+       *
+       * 【唔會做嘅事】
+       *   - 唔重印整張單嘅顧客小票（小票只喺新單時出一次，避免重複收費感）。
+       *   - 唔喺 `loadRuntimeState()` 嘅 backfill 路徑觸發（同既有 new-order 邏輯一致；
+       *     收銀機關機期間嘅加單會經介面合併見到，需要手動「重印」）。
+       */
+      if (existing && isSelfOrder(order) && !isTerminalOrderStatus(order.status)) {
+        const addedItems = diffAddedItems(existing.items, order.items);
+        if (addedItems.length > 0) {
+          const signature = addedItemsSignature(addedItems);
+          const seen = printedAddonSignatures.get(order.id) ?? new Set<string>();
+          if (!seen.has(signature)) {
+            const storeName = bootstrap?.storeName ?? "門店";
+            const kitchenOn = isPrintContentEnabled("kitchen");
+            const labelOn = isPrintContentEnabled("label");
+            const jobs: PrintJob[] = [];
+            if (kitchenOn) {
+              jobs.push(
+                ...buildKitchenPrintJobs(order, { ticketType: "addon", storeName, itemsOverride: addedItems }),
+              );
+            }
+            if (labelOn) {
+              jobs.push(
+                ...buildLabelPrintJobs(order, { ticketType: "addon", storeName, itemsOverride: addedItems }),
+              );
+            }
+            seen.add(signature);
+            printedAddonSignatures.set(order.id, seen);
+            if (jobs.length > 0) {
+              appendPrintJobs(jobs);
+              setToast({
+                tone: "info",
+                message: `${order.tableName || order.localOrderNo} 加單 ${addedItems.length} 項，已補出廚房單。`,
+              });
+            }
+          }
+        }
+      }
+
       // 自助單 draft → 彈 toast 提示待確認（規格 6：開關熄咗時）
       if (order.status === "draft" && isSelfOrder(order)) {
         setToast({ tone: "info", message: `自助單 ${order.localOrderNo} 待確認` });
       }
-
       // 堂食 dine_in_confirm 單落 draft：彈「X 枱已落單請確認」，等員工確認才落廚房
       if (order.status === "draft" && order.tableId && order.tableId !== "counter" && !isSelfOrder(order)) {
         setToast({ tone: "info", message: `${order.tableName} 已落單，請確認` });

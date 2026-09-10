@@ -37,7 +37,7 @@
 - Kiosk 離線隊列 = `pos/kiosk-outbox.ts`（store-scoped，上限 20）；**唔可以重用 `pos/queue-outbox`**（其 flush 靠 `resolveStoreId()`，掃碼客冇 → 永遠推唔出）。
 - 客人 resume 用 `GET /api/pos/order-lookup`（單張 + 欄位白名單 + 60/min），**唔好**拉全店 `state`。
 - 售罄 `pos_soldout` 只 realtime 增量 → **必須** `fetchStoreSoldoutIds()` 拉初始集合；`soldoutRealtimeRef` 防舊快照蓋新；server 落單校驗**刻意 fail-open**。
-- 金額真源 = `lib/kiosk-cart.ts`（純函式可單測）；`computeOrderTotals` 唔四捨五入，用 `money2()`/`toFixed(2)` 收口。`npm run test`（`node --test`，自動探索 `**/*.test.ts`）；`npm run typecheck`。
+- 金額真源 = `lib/kiosk-cart.ts`（純函式可單測）；`computeOrderTotals` 唔四捨五入，用 `money2()`/`toFixed(2)` 收口。`npm run test`（`node --test`，自動探索 `**/*.test.ts`；**測試檔內 import 一定要相對路徑 + `.ts` 副檔名**，`@/` alias 會 `ERR_MODULE_NOT_FOUND`）；`npm run typecheck`。
 
 ## 同步一致性：本地終態 → 雲端（P0 已落地；設計 `docs/112-*.md`）
 - 症狀：本地 iPad `settled`、雲端仍 `sent_to_kitchen`（`updated_at = created_at`）。七機制：①`ORDER_SETTLED` 要憑證但 `syncNow()` 冇先續期 ②attempts≥5 → 永久放棄 ③stale/降級回 `ack(true)` = **假成功** ④LWW 用 **client 牆鐘** → NTP 回撥就中（**唔關網絡事**）⑤對賬只在手動開 modal 先跑 ⑥終態只存單機 localStorage ⑦`syncNow([...queue, ev])` 用 stale state + 新事件未 stamp → 被 store filter 剔走。
@@ -46,6 +46,15 @@
   - 改 `sync-flush.ts`（`isRetryableEvent` 取代永久放棄，15min 慢速重試；`ok && !applied` → `skipped`/`server-newer`，唔剷、唔燒 attempts）、`api/pos/sync/route.ts`（`EventAck` 加 `applied`/`reason`；**終態升級豁免** `isTerminalUpgrade` 令結帳無視時間戳可寫，根治 M4）、`pos-app.tsx`（`syncNow` 收斂為單一路徑）、`storage.ts`/`types.ts`（store-scope `sync-acks`/`sync-blocked`；`QueueSkipReason` 加 `"server-newer"`）、`app-sidebar.tsx`（**「在線」徽章 = 網絡 + 同步健康合併**：底色最壞優先 blocked紅 / pending琥珀 / offline琥珀80 / 正常才用網絡色；文案一切正常時仍係「在線／離線」，有嘢未上雲則變「N 張待傳」「同步受阻」；`level==="ok"` 時 `disabled` 兼 `cursor-default`＝純狀態徽章，異常才可按即時重試並顯示「重試中…」）。
 - 待做 P1：`clientRev` 單調修訂號 + `pos_orders.client_rev`(0031) + `/api/pos/orders/verify`。P2：IndexedDB、`/api/pos/sync-heartbeat`(0032)、後台「設備同步健康」/「同步告警」頁、雲端巡檢 job。
 - 🚫 邊界：自動化**只推商家已做嘅事**，唔會自動把雲端 open 單改成 `settled`；兩邊終態唔一致 → 標 `conflict` 交人。
+
+## 加單（ORDER_UPDATED）鐵律（2026-09-10 事故後）
+- **payload 形狀**：`ORDER_UPDATED` **必須**送 `{ order, addedItems }`（`ORDER_CREATED` 才送裸 order）。`sync/route.ts` 對 UPDATED 讀 `eventPayload.order`；送裸 order → server 攞唔到 id → 拒單。舊版掃碼加單就係咁 100% 必敗（客人見「落單成功／同步中」，收銀端零反應）。現已做形狀相容（`nestedOrder ?? eventPayload`），**但新 code 一律照送 `{order, addedItems}`**。`addedItems` = 新增菜品差額（`pos/order-item-diff.ts` 純函式，同 `pos-app.itemIdentity()` 同口徑）。
+- **失敗分類**：`/api/pos/sync` 只可以用「業務拒絕 → 4xx + `retryable:false`」／「基建失敗 → 500 + `retryable:true`」。**唔可以**再「任何 `ack(false)` 都回 500」—— client 嘅規矩係「4xx（非429）= 永久，其餘 = 可重試」，回 500 會令永久拒絕被當網絡抖動 → 重試 → 入本地隊列 → **假成功**（比唔兜底更差）。`pos_queue_events` 寫入失敗只可降級 warning（唔係業務真源，`/api/pos/state` 直接讀 `pos_orders`）。
+- **LWW 加菜豁免**：`incoming 項目數 > 現有項目數` 時唔受時間戳判 stale —— 收銀端任何動作都會用**收銀機時鐘**更新 `client_updated_at`，時鐘快過客人手機時加單會靜默 skip。匿名寫入一律沿用 DB 現有 `status`/`fulfillment_status`（狀態機 owner 係收銀端）。
+- **收銀端出單守門**：`pos-app.tsx onOrderUpsert` 嘅「新單出廚房／標籤／小票」用 `isNewSelfOrder`（本機未見過）守門 → **加單唔會出單**。加單要另出 `ticketType:"addon"` + `itemsOverride`（只印新增菜品），並用差額簽名去重（`printedAddonSignatures`）。**唔重印**顧客小票。
+- **rate limit 唔可以淨靠 IP**：場內所有機（收銀／自助機／客人／廚房平板）共用同一個 NAT 公網 IP → 一律按 IP 會自我 DoS。已授權按 `storeId`（600/min）、匿名按 IP（300/min）。
+- ⚠️ **客人端售罄架構未接通**：`pos_soldout` 喺生產兩個 Supabase 專案都唔存在，且**全 repo 冇寫入點**（POS 沽清 = 本機 localStorage + `/api/inventory/soldout` TODO stub）→ `fetchStoreSoldoutIds()` 永遠回 null、server 端售罄校驗永遠 fail-open。要接通需先做「店級售罄上雲」。
+- ⚠️ **待確認**：部署包顯示 `NEXT_PUBLIC_SUPABASE_URL` 指向 **Ledger 專案**（冇任何 `pos_*` 表），而 `getPosSupabaseClient()`（瀏覽器端 Realtime + 售罄）用嘅正是佢 → 若屬實，瀏覽器端 POS Realtime 全部訂錯專案。詳見 `docs/reviews/qr-self-order-audit-2026-09-10.md` 附錄 B.6。
 
 ## 執行環境（原生殼 vs web/PWA）
 - 唔用 UA sniff：APK → `window.PosNative.printJob`；PC 殼 → `window.companionShell`。gate：`shouldUseCompanionChannel`／`shouldKeepCompanionAlive`(+`?companion=`)／`shouldAutoDiscoverCompanion`(+localhost)；`shouldShowCompanionUi` = autoDiscover || urlParam。client 讀 `window` 一律 mount-gated state（保 SSR hydration）。
