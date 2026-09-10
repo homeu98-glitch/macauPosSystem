@@ -221,6 +221,10 @@ function printJobMatchesDateRange(createdAt: string, range: ReportRangeKey, now 
   return ts >= Date.parse(period.start) && ts <= Date.parse(period.end);
 }
 
+// 打印記錄列表（2026-09-10）：表頭 / 儲存格樣式，同訂單頁（local-orders-panel / online-orders）一致。
+const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
+const TD_CELL = "px-3 py-2 align-middle";
+
 export function PrintCenter() {
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs().map(normalizePrintJobStatus));
   const [orders] = useState<PosOrder[]>(() => loadOrders());
@@ -1161,111 +1165,164 @@ export function PrintCenter() {
                     ) : null}
                   </div>
                 ) : (
-                  <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-                    {filteredJobs.map((job) => (
-                      <article key={job.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900">{job.orderNo ?? job.orderId}</div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {job.tableName ?? "--"} · {job.printerName} · {ticketTypeLabel(job.ticketType)}
-                            </div>
-                          </div>
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                              job.status === "printed"
-                                ? "bg-sky-50 text-sky-700"
-                                : job.status === "sent"
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : job.status === "pending"
-                                    ? "bg-amber-50 text-amber-700"
-                                    : "bg-red-50 text-red-700"
-                            }`}
-                          >
-                            {job.status === "printed"
-                              ? "打印成功"
-                              : job.status === "sent"
-                                ? "已發送"
-                                : job.status === "pending"
-                                  ? "待補傳"
-                                  : job.status === "failed"
-                                    ? "失敗"
-                                    : "失敗（狀態異常）"}
-                          </span>
-                        </div>
-
-                        {job.status === "failed" && job.lastError ? (
-                          <div className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">
-                            <span className="font-semibold">失敗原因：</span>
-                            {job.lastError}
-                          </div>
-                        ) : null}
-
-                        <div className="mt-3 text-xs text-slate-500">{formatMacauDateTime(job.createdAt)}</div>
-
-                        <div className="mt-4 grid grid-cols-2 gap-2">
-                          <button
-                            className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                            onClick={() => setActiveJobId(job.id)}
-                            type="button"
-                          >
-                            查看
-                          </button>
-                          {job.status === "failed" || job.status === "pending" ? (
-                            <button
-                              className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                              disabled={Boolean(retryingJobId)}
-                              onClick={() => {
-                                setRetryingJobId(job.id);
-                                void retryFailedPrintJob(job.id)
-                                  .then((next) => {
-                                    setPrintJobs(next);
-                                    setToast({
-                                      tone: "success",
-                                      message:
-                                        next.find((row) => row.id === job.id)?.status === "sent"
-                                          ? "已重新送出打印。"
-                                          : "重試失敗，請檢查橋接服務與打印機。",
-                                    });
-                                  })
-                                  .finally(() => setRetryingJobId(null));
-                              }}
-                              type="button"
-                            >
-                              {retryingJobId === job.id ? "重試中…" : "重試打印"}
-                            </button>
-                          ) : (
-                            <button
-                              aria-busy={(() => {
-                                const order = findJobSourceOrder(job);
-                                return order ? reprintingOrderId === order.id : false;
-                              })()}
-                              className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                              disabled={Boolean(reprintingOrderId)}
-                              onClick={() => {
-                                const order = findJobSourceOrder(job);
-                                if (!order) {
-                                  setToast({
-                                    tone: "error",
-                                    message: job.orderId.startsWith("ledger-")
-                                      ? "線上訂單資料已不在本機快取（例如剛重新載入頁面），無法重打整單；請到訂單頁「查看」→「補打帳單（收據）」。"
-                                      : "找不到原始訂單，無法重打。",
-                                  });
-                                  return;
-                                }
-                                reprintOrder(order);
-                              }}
-                              type="button"
-                            >
+                  /*
+                    列表（2026-09-10）：每筆打印記錄一行。欄位同原本卡片完全一致（訂單號／餐台／
+                    打印機／票種／時間／失敗原因／狀態／操作），操作統一釘最右。窄屏橫向滾動保留全部欄位。
+                  */
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+                      <thead>
+                        <tr>
+                          <th className={`${TH_CELL} w-[124px]`}>訂單號</th>
+                          <th className={`${TH_CELL} w-[104px]`}>餐台</th>
+                          <th className={`${TH_CELL} w-[132px]`}>打印機</th>
+                          <th className={`${TH_CELL} w-[112px]`}>票種</th>
+                          <th className={`${TH_CELL} w-[140px]`}>時間</th>
+                          <th className={TH_CELL}>失敗原因</th>
+                          <th className={`${TH_CELL} w-[112px]`}>狀態</th>
+                          <th className={`${TH_CELL} w-[196px] text-right`}>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredJobs.map((job) => (
+                          <tr key={job.id} className="border-t border-slate-100 even:bg-slate-50/60">
+                            <td className={TD_CELL}>
+                              <div className="truncate text-sm font-semibold text-slate-900">
+                                {job.orderNo ?? job.orderId}
+                              </div>
+                            </td>
+                            <td className={TD_CELL}>
+                              <div className="truncate text-xs text-slate-500">{job.tableName ?? "--"}</div>
+                            </td>
+                            <td className={TD_CELL}>
+                              <div className="truncate text-xs text-slate-500">{job.printerName}</div>
+                            </td>
+                            <td className={TD_CELL}>
+                              <div className="truncate text-xs text-slate-500">
+                                {ticketTypeLabel(job.ticketType)}
+                              </div>
+                            </td>
+                            <td className={TD_CELL}>
+                              <div className="text-xs tabular-nums text-slate-400">
+                                {formatMacauDateTime(job.createdAt)}
+                              </div>
+                            </td>
+                            <td className={TD_CELL}>
+                              {job.status === "failed" && job.lastError ? (
+                                <div className="line-clamp-2 text-xs leading-relaxed text-red-700" title={job.lastError}>
+                                  {job.lastError}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-slate-300">—</span>
+                              )}
+                            </td>
+                            <td className={TD_CELL}>
+                              {/* 狀態藥丸：顏色／文字沿用原本卡片，縮到表格尺寸 */}
                               {(() => {
-                                const order = findJobSourceOrder(job);
-                                return order && reprintingOrderId === order.id ? "打印中…" : "重打整單";
+                                const s = job.status;
+                                const dot =
+                                  s === "printed"
+                                    ? "bg-sky-500"
+                                    : s === "sent"
+                                      ? "bg-emerald-500"
+                                      : s === "pending"
+                                        ? "bg-amber-500"
+                                        : "bg-red-500";
+                                const cls =
+                                  s === "printed"
+                                    ? "bg-sky-50 text-sky-700"
+                                    : s === "sent"
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : s === "pending"
+                                        ? "bg-amber-50 text-amber-700"
+                                        : "bg-red-50 text-red-700";
+                                const label =
+                                  s === "printed"
+                                    ? "打印成功"
+                                    : s === "sent"
+                                      ? "已發送"
+                                      : s === "pending"
+                                        ? "待補傳"
+                                        : s === "failed"
+                                          ? "失敗"
+                                          : "失敗（狀態異常）";
+                                return (
+                                  <span
+                                    className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}`}
+                                  >
+                                    <span className={`h-2 w-2 rounded-full ${dot}`} />
+                                    {label}
+                                  </span>
+                                );
                               })()}
-                            </button>
-                          )}
-                        </div>
-                      </article>
-                    ))}
+                            </td>
+                            <td className={`${TD_CELL} text-right`}>
+                              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                <button
+                                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                                  onClick={() => setActiveJobId(job.id)}
+                                  type="button"
+                                >
+                                  查看
+                                </button>
+                                {job.status === "failed" || job.status === "pending" ? (
+                                  <button
+                                    className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                                    disabled={Boolean(retryingJobId)}
+                                    onClick={() => {
+                                      setRetryingJobId(job.id);
+                                      void retryFailedPrintJob(job.id)
+                                        .then((next) => {
+                                          setPrintJobs(next);
+                                          setToast({
+                                            tone: "success",
+                                            message:
+                                              next.find((row) => row.id === job.id)?.status === "sent"
+                                                ? "已重新送出打印。"
+                                                : "重試失敗，請檢查橋接服務與打印機。",
+                                          });
+                                        })
+                                        .finally(() => setRetryingJobId(null));
+                                    }}
+                                    type="button"
+                                  >
+                                    {retryingJobId === job.id ? "重試中…" : "重試打印"}
+                                  </button>
+                                ) : (
+                                  <button
+                                    aria-busy={(() => {
+                                      const order = findJobSourceOrder(job);
+                                      return order ? reprintingOrderId === order.id : false;
+                                    })()}
+                                    className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-60"
+                                    disabled={Boolean(reprintingOrderId)}
+                                    onClick={() => {
+                                      const order = findJobSourceOrder(job);
+                                      if (!order) {
+                                        setToast({
+                                          tone: "error",
+                                          message: job.orderId.startsWith("ledger-")
+                                            ? "線上訂單資料已不在本機快取（例如剛重新載入頁面），無法重打整單；請到訂單頁「查看」→「補打帳單（收據）」。"
+                                            : "找不到原始訂單，無法重打。",
+                                        });
+                                        return;
+                                      }
+                                      reprintOrder(order);
+                                    }}
+                                    type="button"
+                                  >
+                                    {(() => {
+                                      const order = findJobSourceOrder(job);
+                                      return order && reprintingOrderId === order.id ? "打印中…" : "重打整單";
+                                    })()}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </>
