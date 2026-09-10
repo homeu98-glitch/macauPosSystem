@@ -776,10 +776,14 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       bump();
     };
     document.addEventListener("visibilitychange", onVisibility);
+    // 網絡由斷變通：即刻補一次（唔使等最多 3 分鐘嘅 interval）。
+    const onOnline = () => bump();
+    window.addEventListener("online", onOnline);
 
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
     };
   }, [bump]);
 

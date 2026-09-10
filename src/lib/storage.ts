@@ -22,6 +22,7 @@ import {
   defaultPosLocalSettings,
 } from "@/lib/mock-data";
 import { macauDateKey } from "@/lib/ledger/report-period";
+import { computeNextDailySeq, maxDailySeqFromOrders, padDailySeq } from "@/lib/pos/daily-order-seq";
 import {
   DEFAULT_KIOSK_TEMPLATE,
   DEFAULT_KITCHEN_TEMPLATE,
@@ -1117,20 +1118,14 @@ export function saveQuickCompletedMinutes(minutes: number) {
 type LocalDailySeqState = Record<string, number>; // key = `${bizDate}:${kind}` → 已用到嘅最大序號
 
 function pad2Seq(value: number): string {
-  return String(value).padStart(2, "0");
+  return padDailySeq(value);
 }
 
 /**
  * 由現有訂單推導「今日、同一單號抬頭已用過嘅最大序號」。
  *
- * ## 點解需要（2026-09-10 修：同一單號出現兩次）
- *
- * 單號有**兩個獨立計數器**：server 嘅 `next_daily_sequence`（按 store/kind/Macau 日原子遞增）
- * 同本機 fallback `localDailySeq`。兩者互不知情 —— 只要連線取得序號失敗（或本機
- * localStorage 被 iOS 清過、計數器歸零），fallback 就會由細號重新數起，撞返
- * 早已由 server 派出去嘅號（實例：`訂單03` 出現兩條 row，一 cancelled 一 settled）。
- *
- * 呢個閘用「眼前睇得到嘅訂單」做下限，令 fallback 永遠唔會重用已經出現過嘅號。
+ * 邏輯本體在 `pos/daily-order-seq.ts`（零依賴純函式，有 `node --test` 回歸測試 ——
+ * 單號重複係沉默 bug，見該檔說明）。呢度只負責注入 `macauDateKey`。
  *
  * @param orders 任何來源嘅訂單（本機 state + localStorage 一齊餵最穩）
  * @param prefix 單號抬頭（訂單 / 自取 / 外賣 / 堂食）
@@ -1138,20 +1133,7 @@ function pad2Seq(value: number): string {
  */
 export function maxUsedDailyOrderSeq(orders: PosOrder[], prefix: string, bizDate?: string): number {
   const day = bizDate ?? macauDateKey(new Date());
-  const re = new RegExp(`^${prefix}(\\d+)$`);
-  let max = 0;
-  for (const order of orders) {
-    const no = order.localOrderNo;
-    if (!no) continue;
-    const m = re.exec(no);
-    if (!m) continue;
-    // 只計「今日」嘅單：單號按日歸零，尋日嘅 訂單12 唔應該推高今日嘅下限。
-    const ts = Date.parse(order.createdAt ?? order.updatedAt ?? "");
-    if (Number.isFinite(ts) && macauDateKey(new Date(ts)) !== day) continue;
-    const n = Number(m[1]);
-    if (Number.isFinite(n) && n > max) max = n;
-  }
-  return max;
+  return maxDailySeqFromOrders(orders, prefix, day, macauDateKey);
 }
 
 /**
@@ -1177,7 +1159,7 @@ export function nextLocalDailyOrderNo(
   const bizDate = macauDateKey(new Date());
   const stateKey = `${bizDate}:${kind}`;
   const state = readStoreJson<LocalDailySeqState>(STORE_SUFFIX.localDailySeq, {});
-  const next = Math.max(state[stateKey] ?? 0, Math.max(0, alreadyUsedMax)) + 1;
+  const next = computeNextDailySeq(state[stateKey] ?? 0, alreadyUsedMax);
   state[stateKey] = next;
   writeStoreJson(STORE_SUFFIX.localDailySeq, state);
   return `${prefix}${pad2Seq(next)}`;

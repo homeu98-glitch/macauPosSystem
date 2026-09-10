@@ -22,6 +22,7 @@
 | 部署、Vercel、PWA | [08-deployment-and-env.md](./08-deployment-and-env.md) |
 | 與主系統 / Ledger 對接 | [integration/](./integration/) |
 | 功能成熟度審查 | [reviews/functional-review.md](./reviews/functional-review.md) |
+| **專案「坑」總表（改動前必讀）** | [113-agent-gotchas.md](./113-agent-gotchas.md) |
 | Admin 帳戶 SQL | [sql/admin-account-schema.sql](./sql/admin-account-schema.sql) |
 
 ---
