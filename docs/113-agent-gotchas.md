@@ -80,3 +80,24 @@
 - `next build` 報 LayoutProps 錯 = `.next` types 過期 → `rm -rf .next`。
 - ⚠️ 本機 `next build` 會被 safe-delete 鈎子攔 → 要 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 並喺沙箱外跑。
 - Node 22.22.2-2、Python 3.13.12（managed）；Next.js 16.3.0 + Turbopack + Tailwind 4（見 AGENTS.md）。
+
+## 列表表格版面（2026-09-10 iPad 事故）
+- 🔴 **`overflow-hidden` + `min-w-[1080px]` + `table-fixed` + 固定 px 欄寬 = 最右「操作」欄被剪走**。症狀：iPad 上「查看／返結帳／重打整單」等掣只剩半粒或全消失，用戶以為係權限／功能問題。
+  - **成因**：`table-fixed` 下表格闊度 = `max(容器闊, 各欄指定闊相加)` → 8 欄指定闊相加 ≈ 1080px 必然大過 iPad 內容區（iPad 10.2" 橫向 1080 − 側欄 72 − padding ≈ 976）。上層再係 `overflow-hidden`（本來只想剪圓角）→ 溢出部分**直接消失**，唔會出滾動條。中間嗰層 `overflow-auto` 睇唔到溢出（子 div 闊度＝容器闊），所以冇 scrollbar 可以救。
+  - **修法（4 個檔，2026-09-10）**：`local-orders-panel.tsx` / `online-orders.tsx` / `print-center.tsx` / `order-detail-list.tsx`：
+    1. 外層 `overflow-hidden` → **`overflow-x-auto`**（保證永遠唔剪，窄到爆都只係滾動）。
+    2. `<table>` 固定 px 欄寬 → **百分比**（保持 `table-fixed`；**只留一個欄唔指定**，例如「菜品／失敗原因」自動食剩餘，令百分比唔使加夠 100%）。
+    3. `min-w-[1080px]` → **`min-w-[860px]`**（實測下限：可用闊 <844px 就開始有 cell 溢位；860 保證零溢位，只喺 <860 先滾動）。
+    4. 操作掣加 `whitespace-nowrap`（配 `flex flex-wrap justify-end` 換行，唔會爆出格）。
+  - **驗收口徑**：`table.scrollWidth == wrapper.clientWidth` 且每格 `cell.scrollWidth <= cell.clientWidth`。實測（headless Chrome）1400/1180/1024/976px 全部 PASS、溢出 cell = 0；舊寫法喺 976px 就 `table=1080 vs wrapper=960` FAIL。
+  - ⚠️ **12 欄嘅「交班歷史」表唔可以用同一招**（`shift-page.tsx`）：6 個金額欄就算各 12% 都已經 72%，12 欄一定裝唔落。呢張表**保留橫向滾動**（本身係 `overflow-auto`，冇剪到嘢），只把「備註」欄 `min-w-[220px]` 收窄到 `150px`。
+  - ⚠️ 已知限制：wrapper 一旦有 `overflow-*`（包括 `overflow-x-auto`，因另一軸 `visible` 會計算成 `auto`）就成為 scroll container → 表頭 `sticky top-0` 相對「唔會滾嘅嗰層」定位，等同失效。要 sticky 生效就要將 overflow 交返畀外層 `overflow-auto`（但會冇圓角裁剪）。現階段選「保住圓角 + 唔剪走操作欄」。
+  - 驗證工具：`.workbuddy/tmp/table-responsive-check.html`（量測）+ `before-after.html`（前後對照截圖），headless Chrome `--dump-dom` / `--screenshot` 可重跑。
+
+## 列印：分格線「一條變兩條」＋菜品名字體異常（2026-09-10 實紙事故，詳見 docs/114）
+- 🔴 **分格線係純 ASCII 行，會繼承上一行嘅中文放大狀態**。`ESC/POS` 嘅 `GS ! n` / `FS ! n`（中文放大）係**打印機常駐狀態**，喺 Gprinter / 商頌系機器上 `ESC ! n` **清唔走**佢、兩者仲係**相乘**（docs/80 B2、docs/99 §1）。
+  - 病徵：`items.size = 中/大` 嘅菜品名行發過 `GS ! 0x01` → 緊接嗰條 `"-".repeat(cols)` 跟住變雙闊 → 一行只裝 24 格 → 打印機**自動折行** → **一條邏輯線變兩條實體線**。菜品清單**之前**嗰條線前面係細字標頭（`GS ! 0x00`）→ 仍然一條 → 所以係「上有一條、每件菜下面兩條」嘅不對稱樣。
+  - **修法契約（四個 repo 一樣）**：① 印線前**先清放大殘留**（`GS ! 0x00` + `ESC ! 0x00` + `FS ! 0x00`），唔好靠上一行；② dash 數量 = `dividerDashCount(size, cols)`（`m`/`l` 減半）→ **任何 size 都只佔一行**，`size` 淨係控制粗細。
+  - POS 側唯一真源：`src/lib/escpos-render.ts` `dividerDashCount()`；`divider` 預設 size 已由 `m` 改為 **`s`**（一條幼線）。⚠️ 改完要**重 build APK 並裝機**，iPad 端仲要**強制 reload**。
+- ⚠️ **「廚房單正常、收據唔正常」唔代表兩個 renderer 唔同**——佢哋係同一份算法。分別淨係「上一行嘅放大倍數」／模板 size。診斷同類問題要先問「呢條線前面嗰行係乜 size」。
+- ⚠️ 預覽（`escpos-preview.tsx`）**冇模擬 CJK 放大**：`fontSize = SIZE_PX[size]`（`m` = 14px = 1.27×），實機 `GS ! 0x01` 係 2×2 → 「後台睇落大少少、出紙大一倍」係預期會再出現嘅落差，唔好淨靠預覽斷症。

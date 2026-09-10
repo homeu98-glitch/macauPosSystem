@@ -945,21 +945,23 @@ export function OnlineOrders({
 
         {/*
           列表（2026-09-10）：每張單一行。欄位同原本卡片完全一致（單號／類型·客戶／時間／
-          菜品／金額／狀態／支付／操作），操作統一釘最右。窄屏橫向滾動保留全部欄位。
+          菜品／金額／狀態／支付／操作），操作統一釘最右。
+          響應式（2026-09-10 修）：欄寬百分比化 + `table-fixed`，表格永遠等於容器闊度；
+          原本 `overflow-hidden` + `min-w-[1080px]` 會剪走最右「操作」欄（iPad 只見半個掣）。
         */}
         {filteredOrders.length > 0 ? (
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+          <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
             <thead>
               <tr>
-                <th className={`${TH_CELL} w-[118px]`}>訂單號</th>
-                <th className={`${TH_CELL} w-[150px]`}>類型 · 客戶</th>
-                <th className={`${TH_CELL} w-[116px]`}>時間</th>
+                <th className={`${TH_CELL} w-[11%]`}>訂單號</th>
+                <th className={`${TH_CELL} w-[11%]`}>類型 · 客戶</th>
+                <th className={`${TH_CELL} w-[11%]`}>時間</th>
                 <th className={TH_CELL}>菜品</th>
-                <th className={`${TH_CELL} w-[150px] text-right`}>金額</th>
-                <th className={`${TH_CELL} w-[108px]`}>狀態</th>
-                <th className={`${TH_CELL} w-[132px]`}>支付</th>
-                <th className={`${TH_CELL} w-[224px] text-right`}>操作</th>
+                <th className={`${TH_CELL} w-[12%] text-right`}>金額</th>
+                <th className={`${TH_CELL} w-[10%]`}>狀態</th>
+                <th className={`${TH_CELL} w-[15%]`}>支付</th>
+                <th className={`${TH_CELL} w-[18%] text-right`}>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -1028,7 +1030,7 @@ export function OnlineOrders({
                     <td className={`${TD_CELL} text-right`}>
                       <div className="flex flex-wrap items-center justify-end gap-1.5">
                         <button
-                          className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                          className="whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
                           onClick={() => void openOrderDetail(order.id)}
                           type="button"
                         >

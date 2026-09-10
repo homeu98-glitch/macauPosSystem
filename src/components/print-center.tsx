@@ -1379,9 +1379,9 @@ export function PrintCenter() {
           {sel === "divider" ? (
             <div className="mt-3 rounded-xl bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-700">
               「分格線」係<b>設定型區塊</b>：佢自己唔會印文字，而係控制單據入面<b>所有</b>自動分格線
-              （菜品明細前後、card 排版每件菜之間）嘅<b>字體大小</b>。
-              實體打印嘅分格線係一串 <code>-</code> 字符，會跟呢個字體大小一齊放大 ——
-              揀「中 / 大」（雙闊）嗰陣 48 個 dash 會排成兩行，<b>預覽同出紙完全一致</b>。
+              （菜品明細前後、card 排版每件菜之間）嘅<b>粗細</b>。
+              實體打印嘅分格線係一串 <code>-</code> 字符，揀「中 / 大」會用雙闊字印同一條線（睇落粗啲）；
+              dash 數量會相應減半，所以<b>任何大小都只會佔一行</b>。
               左邊剔走個剔 = 全張單唔印分格線。（粗體 / 對齊對分格線無效。）
             </div>
           ) : null}
@@ -1596,20 +1596,22 @@ export function PrintCenter() {
                 ) : (
                   /*
                     列表（2026-09-10）：每筆打印記錄一行。欄位同原本卡片完全一致（訂單號／餐台／
-                    打印機／票種／時間／失敗原因／狀態／操作），操作統一釘最右。窄屏橫向滾動保留全部欄位。
+                    打印機／票種／時間／失敗原因／狀態／操作），操作統一釘最右。
+                    響應式（2026-09-10 修）：欄寬百分比化 + `table-fixed`，表格永遠等於容器闊度；
+                    原本 `overflow-hidden` + `min-w-[1080px]` 會剪走最右「操作」欄（iPad 只見半個掣）。
                   */
-                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                    <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
                       <thead>
                         <tr>
-                          <th className={`${TH_CELL} w-[124px]`}>訂單號</th>
-                          <th className={`${TH_CELL} w-[104px]`}>餐台</th>
-                          <th className={`${TH_CELL} w-[132px]`}>打印機</th>
-                          <th className={`${TH_CELL} w-[112px]`}>票種</th>
-                          <th className={`${TH_CELL} w-[140px]`}>時間</th>
+                          <th className={`${TH_CELL} w-[11%]`}>訂單號</th>
+                          <th className={`${TH_CELL} w-[10%]`}>餐台</th>
+                          <th className={`${TH_CELL} w-[13%]`}>打印機</th>
+                          <th className={`${TH_CELL} w-[10%]`}>票種</th>
+                          <th className={`${TH_CELL} w-[12%]`}>時間</th>
                           <th className={TH_CELL}>失敗原因</th>
-                          <th className={`${TH_CELL} w-[112px]`}>狀態</th>
-                          <th className={`${TH_CELL} w-[196px] text-right`}>操作</th>
+                          <th className={`${TH_CELL} w-[11%]`}>狀態</th>
+                          <th className={`${TH_CELL} w-[19%] text-right`}>操作</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1696,7 +1698,7 @@ export function PrintCenter() {
                                 </button>
                                 {job.status === "failed" || job.status === "pending" ? (
                                   <button
-                                    className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                                    className="whitespace-nowrap rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
                                     disabled={Boolean(retryingJobId)}
                                     onClick={() => {
                                       setRetryingJobId(job.id);
@@ -1723,7 +1725,7 @@ export function PrintCenter() {
                                       const order = findJobSourceOrder(job);
                                       return order ? reprintingOrderId === order.id : false;
                                     })()}
-                                    className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-60"
+                                    className="whitespace-nowrap rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-60"
                                     disabled={Boolean(reprintingOrderId)}
                                     onClick={() => {
                                       const order = findJobSourceOrder(job);

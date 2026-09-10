@@ -1,5 +1,11 @@
 # 交接：分格線（divider）字體大小契約（2026-09-09）
 
+> ⚠️ **2026-09-10 更新（重要）**：本文 §「新契約」講「`m` / `l` 會 wrap 成兩行係正常」**已經作廢**。
+> 實紙證明嗰個「兩行」就係門店投訴嘅 bug（一條線變兩條，見 **docs/114**）。
+> 最新契約：**① 印線前一定要清 `GS !` / `ESC !` / `FS !` 放大殘留；② dash 數量 =
+> `dividerDashCount(size, cols)`（`m`/`l` 減半）→ 任何 size 都只佔一行，`size` 淨係控制粗細。**
+> 下面 §「新契約」嘅 `"-".repeat(cols)` 寫法同 §「已知取捨」嘅「m/l 必然兩行」請以 docs/114 為準。
+
 ## 背景：點解要改
 
 實體分格線唔係圖形線，而係**一行 `-` 字符**（各 renderer 都係 `"-".repeat(cols)`）。
@@ -49,14 +55,19 @@ POS 端（本 repo）`normalizePosLocalSettings` 會自動將新區塊 merge 落
 ## Renderer 改法（Kotlin，print-relay 已落地嘅版本）
 
 ```kotlin
-val divider = "-".repeat(cols)
+// ⚠️ 2026-09-10 修正版（見 docs/114）：
+//   ① 印線前清放大殘留（GS! / ESC! / FS!）——唔清就會繼承上一行（菜品名）嘅放大 → 折行變兩條
+//   ② dash 數量放大就減半 → 永遠一行
 val dividerBlock = template.blocks.firstOrNull { it.id == "divider" }
 val dividerOff = dividerBlock != null && !dividerBlock.visible
 val fixedDividerSize = dividerBlock?.takeIf { it.visible }?.size
 fun rule() {
     if (dividerOff) return
-    fixedDividerSize?.let { buf.style(it, false) }   // 有 divider 區塊 → 明確 size
-    buf.line(divider)                                 // 舊模板 → 唔 call style()，沿用繼承
+    buf.clearMagnify()                                   // GS! 0 / ESC! 0 / FS! 0
+    val size = fixedDividerSize ?: buf.currentSize()      // 舊模板 → 沿用繼承語義
+    val dashes = if (size == "s") cols else (cols + 1) / 2
+    buf.style(size, false)
+    buf.line("-".repeat(dashes))                          // 永遠一行
 }
 for (b in template.blocks) {
     if (!b.visible) continue
@@ -71,7 +82,7 @@ for (b in template.blocks) {
 }
 ```
 
-desktop-companion（`companion-server.mjs`）等價改法：
+desktop-companion（`companion-server.mjs`）等價改法（2026-09-10 修正版）：
 
 ```js
 const dividerBlock = (snap.blocks || []).find((b) => b.id === "divider");
@@ -79,25 +90,31 @@ const dividerOff = !!dividerBlock && !dividerBlock.visible;
 const fixedDividerSize = dividerBlock && dividerBlock.visible ? (dividerBlock.size || "s") : null;
 const rule = () => {
   if (dividerOff) return;
-  if (fixedDividerSize) setStyle(fixedDividerSize, false, false);
-  // 舊模板（fixedDividerSize == null）→ 唔好 call setStyle，維持繼承
-  push(encodeText(RULE, charset));
+  push(Buffer.from([0x1d, 0x21, 0x00]));   // GS ! 0 ← 清中文放大殘留（關鍵）
+  push(Buffer.from([0x1b, 0x21, 0x00]));   // ESC ! 0
+  push(Buffer.from([0x1c, 0x21, 0x00]));   // FS ! 0
+  const size = fixedDividerSize || "s";
+  setStyle(size, false, false);
+  const dashes = size === "s" ? paperCols : Math.ceil(paperCols / 2);  // 永遠一行
+  push(encodeText("-".repeat(dashes), charset));
   push(Buffer.from([0x0a]));
 };
 ```
 
 ## 預覽點樣模擬（本 repo `escpos-preview.tsx`）
 
-`DividerRows` 用**文字 dash** 而唔係 CSS border，並按實體放大倍數模擬：
+`DividerRows` 用**文字 dash** 而唔係 CSS border，並按實體放大倍數模擬（2026-09-10 修正版）：
 
-- 基準（`s`）：48 個 dash 排滿紙闊 → `baseFontPx = paperInnerPx / 48 / 0.6`
-- `m`：雙闊 → **48 個 dash 會 wrap 成 2 個物理行**（每行 24 個），用 `scale(2, 1)`
-- `l`：2×2 → 2 行 + `scale(2, 2)`（行距實機係 `ESC 3 60`，呢度用 row height ×2 表達）
+- 基準（`s`）：`cols` 個 dash 排滿紙闊 → `baseFontPx = paperInnerPx / cols / 0.6`
+- `m`：雙闊 → dash **數量減半**（`dividerDashCount()`），用 `scale(2, 1)` → **仍然一行**（線粗一倍）
+- `l`：2×2 → dash 數量減半 + `scale(2, 2)` → 仍然一行
 
-所以預覽見到嘅 dash 大細 / 行數，同出紙係同一套計算。
+所以預覽見到嘅 dash 大細 / 粗細 / 行數，同出紙係同一套計算（`dividerDashCount` 係跨 repo 契約）。
 
 ## 已知取捨
 
 - 升級後，`items` size 唔係 `m` 嘅舊店（例如自訂咗 `l`），分格線會由「繼承 items size」
-  變成模板嘅 `divider.size`（預設 `m`） —— 一次性改變，之後可以由設計頁自己揀。
-- `m` / `l` 喺 80mm 紙上必然係**兩行** dash（48 格 ÷ 雙闊）。想要單行幼線就揀 `s`。
+  變成模板嘅 `divider.size` —— 一次性改變，之後可以由設計頁自己揀。
+- `size` 由「字體大小」改為理解成「粗細」：`m` / `l` 印同一條線但用雙闊字（睇落粗一倍），
+  **任何 size 都只佔一行**。想最幼就揀 `s`（預設）。
+

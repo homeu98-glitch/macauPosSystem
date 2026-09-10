@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>table responsive check</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#f1f5f9; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .case { margin: 14px auto; background:#fff; padding:6px; border:1px dashed #94a3b8; }
+  .lbl { font: 600 12px system-ui; color:#334155; padding:4px 6px; }
+  #report { font: 12px ui-monospace, monospace; padding:12px; background:#0f172a; color:#e2e8f0; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<pre id="report">pending</pre>
+<script>
+const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
+const TD_CELL = "px-3 py-2 align-middle";
+const money = (v) => "MOP " + v.toLocaleString("en-US");
+const dt = (s) => s;
+
+/* ── 共用 cell 內容 ───────────────────────────────────── */
+const cellOrderNo  = (v) => `<td class="${TD_CELL}"><div class="truncate text-sm font-semibold text-slate-900">${v}</div></td>`;
+const cellMuted    = (v) => `<td class="${TD_CELL}"><div class="truncate text-xs text-slate-500">${v}</div></td>`;
+const cellTime     = (v) => `<td class="${TD_CELL}"><div class="text-xs tabular-nums text-slate-400">${v}</div></td>`;
+const cellMoney    = (v) => `<td class="${TD_CELL} text-right"><div class="text-sm font-semibold tabular-nums text-slate-900">${v}</div></td>`;
+const cellStatus   = (t, cls, dot) => `<td class="${TD_CELL}"><span class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}"><span class="h-2 w-2 rounded-full ${dot}"></span>${t}</span></td>`;
+const cellSource   = (t) => `<td class="${TD_CELL}"><span class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 ring-1 ring-slate-200"><span aria-hidden="true">&#128100;</span>${t}</span></td>`;
+const cellActions  = (btns) => `<td class="${TD_CELL} text-right"><div class="flex flex-wrap items-center justify-end gap-1.5">${
+  btns.map((b,i) => `<button class="whitespace-nowrap rounded-xl ${i===0?"bg-slate-900 text-white":"bg-amber-600 text-white"} px-3 py-2 text-xs font-semibold">${b}</button>`).join("")
+}</div></td>`;
+
+/* ── Case A：店內線下訂單（w-[11%] 10% 11% auto 14% 10% 10% 19%）── */
+function tableLocalOrders() {
+  const rows = [
+    ["訂單22","A02","10/09/2026 20:12","表嫂雞飯×1 · 表嫂肉餅×1 · 凍檸茶×1","已完成","bg-emerald-50 text-emerald-700","bg-emerald-500","商家下單",["查看","返結帳"]],
+    ["訂單21","MFOOD4","10/09/2026 20:04","梅菜肉餅飯×1 · 盒×5 · 例湯×1","製作中","bg-amber-50 text-amber-700","bg-amber-500","商家下單",["查看","可取餐"]],
+    ["訂單20","A01","10/09/2026 20:01","表嫂雞飯×1","製作中","bg-amber-50 text-amber-700","bg-amber-500","商家下單",["查看","可取餐"]],
+    ["訂單19","外賣自取2","10/09/2026 20:18","晚市快閃菜（南乳豬手）","已完成","bg-emerald-50 text-emerald-700","bg-emerald-500","商家下單",["查看","返結帳"]],
+  ];
+  return `<table class="w-full min-w-[0px] table-fixed border-collapse text-left">
+    <thead><tr>
+      <th class="${TH_CELL} w-[11%]">訂單號</th>
+      <th class="${TH_CELL} w-[10%]">餐台</th>
+      <th class="${TH_CELL} w-[11%]">時間</th>
+      <th class="${TH_CELL}">菜品</th>
+      <th class="${TH_CELL} w-[14%] text-right">金額</th>
+      <th class="${TH_CELL} w-[10%]">狀態</th>
+      <th class="${TH_CELL} w-[10%]">來源</th>
+      <th class="${TH_CELL} w-[19%] text-right">操作</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `<tr class="border-t border-slate-100 even:bg-slate-50/60">
+      ${cellOrderNo(r[0])}${cellMuted(r[1])}${cellTime(r[2])}${cellMuted(r[3])}${cellMoney("MOP 1,234")}${cellStatus(r[4],r[5],r[6])}${cellSource(r[7])}${cellActions(r[8])}
+    </tr>`).join("")}</tbody></table>`;
+}
+
+/* ── Case B：打印記錄（w-[11%] 10% 13% 10% 12% auto 11% 19%）── */
+function tablePrintJobs() {
+  const rows = [
+    ["訂單21（重打）","MFOOD4","小票機 · 適用 80mm 熱敏","正常","10/09/2026 20:21","打印成功","bg-sky-50 text-sky-700","bg-sky-500",["查看","重打整單"]],
+    ["訂單19","外賣自取2","小票機 · 適用 80mm 熱敏","正常","10/09/2026 20:18","已發送","bg-emerald-50 text-emerald-700","bg-emerald-500",["查看","重打整單"]],
+    ["訂單22（重打）","A02","printer","補印","10/09/2026 20:15","失敗","bg-red-50 text-red-700","bg-red-500",["查看","重試打印"]],
+  ];
+  return `<table class="w-full min-w-[0px] table-fixed border-collapse text-left">
+    <thead><tr>
+      <th class="${TH_CELL} w-[11%]">訂單號</th>
+      <th class="${TH_CELL} w-[10%]">餐台</th>
+      <th class="${TH_CELL} w-[13%]">打印機</th>
+      <th class="${TH_CELL} w-[10%]">票種</th>
+      <th class="${TH_CELL} w-[12%]">時間</th>
+      <th class="${TH_CELL}">失敗原因</th>
+      <th class="${TH_CELL} w-[11%]">狀態</th>
+      <th class="${TH_CELL} w-[19%] text-right">操作</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `<tr class="border-t border-slate-100 even:bg-slate-50/60">
+      ${cellOrderNo(r[0])}${cellMuted(r[1])}${cellMuted(r[2])}${cellMuted(r[3])}${cellTime(r[4])}
+      <td class="${TD_CELL}"><div class="line-clamp-2 text-xs leading-relaxed text-red-700">打印機無回應：該裝置離線或橋接服務未啟動，請檢查網絡與打印機電源後重試。</div></td>
+      ${cellStatus(r[5],r[6],r[7])}${cellActions(r[8])}
+    </tr>`).join("")}</tbody></table>`;
+}
+
+/* ── Case C：訂單明細 OrderDetailList（12% 13% auto 13% 11% 16% 12% 12%，時間/金額 nowrap）── */
+function tableOrderDetail() {
+  const rows = [
+    ["訂單22","","A02","現金","阿明","10/09/2026 20:12",1234,1200],
+    ["訂單21","005","外賣自取2","餘額扣點","阿明","10/09/2026 20:04",99,99],
+    ["訂單20","","A01","澳門通","未記錄","10/09/2026 20:01",12345,12345],
+  ];
+  const nowrap = (v, cls) => `<div class="whitespace-nowrap ${cls}">${v}</div>`;
+  return `<table class="w-full min-w-[0px] table-fixed border-collapse text-left">
+    <thead><tr>
+      <th class="${TH_CELL} w-[12%]">訂單號</th>
+      <th class="${TH_CELL} w-[13%]">狀態</th>
+      <th class="${TH_CELL}">餐台</th>
+      <th class="${TH_CELL} w-[13%]">收款類型</th>
+      <th class="${TH_CELL} w-[11%]">收銀員</th>
+      <th class="${TH_CELL} w-[16%]">結賬時間</th>
+      <th class="${TH_CELL} w-[12%] text-right">應收</th>
+      <th class="${TH_CELL} w-[12%] text-right">實收</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `<tr class="border-t border-slate-100 even:bg-slate-50/60">
+      ${cellOrderNo(r[0])}
+      <td class="${TD_CELL}">${r[1] ? `<span class="inline-flex whitespace-nowrap rounded-full bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700">取餐碼 ${r[1]}</span>` : `<span class="text-xs text-slate-400">—</span>`}</td>
+      ${cellMuted(r[2])}${cellMuted(r[3])}${cellMuted(r[4])}
+      <td class="${TD_CELL}">${nowrap(dt(r[5]), "text-xs tabular-nums text-slate-400")}</td>
+      <td class="${TD_CELL} text-right">${nowrap(money(r[6]), "text-sm font-medium tabular-nums text-slate-700")}</td>
+      <td class="${TD_CELL} text-right">${nowrap(money(r[7]), "text-sm font-semibold tabular-nums text-emerald-700")}</td>
+    </tr>`).join("")}</tbody>
+    <tfoot><tr class="border-t border-slate-200 bg-slate-50">
+      <td class="${TD_CELL} text-sm font-semibold text-slate-900" colspan="6">合計（3 張）</td>
+      <td class="${TD_CELL} text-right text-sm font-semibold tabular-nums text-slate-900">MOP 13,678</td>
+      <td class="${TD_CELL} text-right text-sm font-semibold tabular-nums text-emerald-700">MOP 13,644</td>
+    </tr></tfoot></table>`;
+}
+
+const CASES = [
+  ["A 店內線下訂單", tableLocalOrders],
+  ["B 打印記錄", tablePrintJobs],
+  ["C 訂單明細（交班/報表）", tableOrderDetail],
+];
+const WIDTHS = [860, 840, 820, 800, 780, 760, 720, 700];
+
+/* 舊寫法（回歸對照）：overflow-hidden + min-w-[1080px] + 固定 px 欄寬 */
+function legacyLocalOrders() {
+  const rows = [["訂單22","A02","10/09/2026 20:12","表嫂雞飯×1","已完成","bg-emerald-50 text-emerald-700","bg-emerald-500","商家下單",["查看","返結帳"]]];
+  return `<table class="w-full min-w-[1080px] table-fixed border-collapse text-left">
+    <thead><tr>
+      <th class="${TH_CELL} w-[118px]">訂單號</th><th class="${TH_CELL} w-[104px]">餐台</th>
+      <th class="${TH_CELL} w-[116px]">時間</th><th class="${TH_CELL}">菜品</th>
+      <th class="${TH_CELL} w-[150px] text-right">金額</th><th class="${TH_CELL} w-[108px]">狀態</th>
+      <th class="${TH_CELL} w-[96px]">來源</th><th class="${TH_CELL} w-[232px] text-right">操作</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `<tr class="border-t border-slate-100">
+      ${cellOrderNo(r[0])}${cellMuted(r[1])}${cellTime(r[2])}${cellMuted(r[3])}${cellMoney("MOP 94")}${cellStatus(r[4],r[5],r[6])}${cellSource(r[7])}${cellActions(r[8])}
+    </tr>`).join("")}</tbody></table>`;
+}
+
+/* ── 建構畫面 ─────────────────────────────────────────── */
+const app = document.getElementById("app");
+const cases = [];
+WIDTHS.forEach((w) => {
+  CASES.forEach(([name, gen]) => {
+    const wrap = document.createElement("div");
+    wrap.className = "case";
+    wrap.style.width = w + "px";
+    wrap.style.maxWidth = "100%";
+    wrap.innerHTML = `<div class="lbl">${name} · 容器 ${w}px</div>
+      <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white" data-probe>${gen()}</div>`;
+    app.appendChild(wrap);
+    cases.push({ name: name + "@" + w, w, wrap });
+  });
+});
+/* 回歸對照組：舊寫法 */
+const legacyWrap = document.createElement("div");
+legacyWrap.className = "case";
+legacyWrap.style.width = "976px";
+legacyWrap.style.maxWidth = "100%";
+legacyWrap.innerHTML = `<div class="lbl">Legacy（舊寫法）· 容器 976px</div>
+  <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white" data-probe>${legacyLocalOrders()}</div>`;
+app.appendChild(legacyWrap);
+
+/* ── 量測 ─────────────────────────────────────────────── */
+setTimeout(function run() {
+  const lines = ["=== 表格溢出檢查（table.scrollWidth vs wrapper.clientWidth） ==="];
+  function measure(label, wrap, probe) {
+    const table = probe.querySelector("table");
+    const wrapW = probe.clientWidth;
+    const tblW = table.scrollWidth;
+    const overflowX = tblW > wrapW + 0.5;
+    // cell 內容是否溢出儲存格
+    let cellOverflow = 0;
+    probe.querySelectorAll("td, th").forEach((c) => {
+      if (c.scrollWidth > c.clientWidth + 1) cellOverflow++;
+    });
+    // 最右「操作」欄是否仍在可視範圍內（未滾動時）
+    const last = table.querySelector("tbody tr:last-child td:last-child");
+    const lastRight = last ? last.getBoundingClientRect().right - probe.getBoundingClientRect().left : 0;
+    lines.push(
+      `${overflowX || cellOverflow ? "FAIL" : "PASS"}  ${label.padEnd(34)} wrapper=${String(wrapW).padStart(4)}  table=${String(tblW).padStart(4)}  溢出cell=${cellOverflow}  操作欄右緣=${Math.round(lastRight)}${lastRight > wrapW + 0.5 ? " (超出!)" : ""}`
+    );
+  }
+  WIDTHS.forEach((w) => {
+    CASES.forEach(([name, gen]) => {
+      // 由 cases 陣列取對應節點
+    });
+  });
+  const probes = app.querySelectorAll(".case");
+  probes.forEach((c) => {
+    const probe = c.querySelector("[data-probe]");
+    const label = c.querySelector(".lbl").textContent;
+    measure(label, c, probe);
+  });
+  const report = document.getElementById("report");
+  report.textContent = lines.join("\n");
+  report.setAttribute("data-done", "1");
+}, 600);
+</script>
+</body>
+</html>

@@ -39,8 +39,10 @@ export function OrdersHub() {
         {/*
           列表版面（2026-09-10）：由左右分欄改為上下分區、每區全寬。
           原因：訂單列表每個 8 欄（單號／餐台／時間／菜品／金額／狀態／來源·支付／操作），
-          半欄寬度會逼爆欄位；全寬先可以做到固定欄寬 + 金額右對齊 + 操作釘右。
-          窄屏（不足 1080px）由各表自己橫向滾動，唔會壓縮欄位。
+          半欄寬度會逼爆欄位；全寬先可以做到金額右對齊 + 操作釘右。
+          響應式（2026-09-10 修）：兩個表都改用「`table-fixed` + 百分比欄寬」自適應容器闊度，
+          所以正常 iPad／桌面闊度下唔會再出現橫向滾動，亦唔會剪走「操作」欄；
+          只有容器窄過表格下限（<860px，例如手機）先由各表自己橫向滾動。
         */}
         <div className="grid min-h-0 flex-1 grid-rows-2 divide-y divide-slate-200">
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-slate-50">

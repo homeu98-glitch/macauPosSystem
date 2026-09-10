@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#e2e8f0; font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; margin:0; padding:18px; }
+  .cap { font: 700 13px system-ui; color:#0f172a; margin:0 0 6px; }
+  .cap.bad { color:#b91c1c; }
+  .cap.good { color:#047857; }
+  .shell { width:978px; }
+  .legacy { overflow:hidden; }
+  .card { border-radius:16px; border:1px solid #e2e8f0; background:#fff; }
+  .blk { margin-bottom:22px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="blk">
+    <p class="cap bad">修復前 — 容器 978px，wrapper <code>overflow-hidden</code> + table <code>min-w-[1080px]</code>：表格 1080px &gt; 容器，最右「操作」欄被剪走（紅框＝被切斷位置）</p>
+    <div id="legacy" class="card legacy relative"></div>
+  </div>
+  <div class="blk">
+    <p class="cap good">修復後 — 同一容器 978px，百分比欄寬 + <code>table-fixed</code>：表格＝容器寬度，8 欄（含「操作」）全部完整顯示於表格內</p>
+    <div id="fixed" class="card overflow-x-auto"></div>
+  </div>
+</div>
+<div id="clipmark"></div>
+<script>
+const TH = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
+const TD = "px-3 py-2 align-middle";
+const ROWS = [
+  ["訂單22","A02","10/09/2026 20:12","表嫂雞飯×1 · 表嫂肉餅×1 · 凍檸茶×1","已完成","bg-emerald-50 text-emerald-700","bg-emerald-500","商家下單",["查看","返結帳"]],
+  ["訂單21","MFOOD4","10/09/2026 20:04","梅菜肉餅飯×1 · 盒×5 · 例湯×1","製作中","bg-amber-50 text-amber-700","bg-amber-500","商家下單",["查看","可取餐"]],
+  ["訂單20","A01","10/09/2026 20:01","表嫂雞飯×1","製作中","bg-amber-50 text-amber-700","bg-amber-500","商家下單",["查看","可取餐"]],
+  ["訂單19","外賣自取2","10/09/2026 20:18","晚市快閃菜（南乳豬手）","已完成","bg-emerald-50 text-emerald-700","bg-emerald-500","商家下單",["查看","返結帳"]],
+];
+const body = (r) => `<tr class="border-t border-slate-100 even:bg-slate-50/60">
+  <td class="${TD}"><div class="truncate text-sm font-semibold text-slate-900">${r[0]}</div></td>
+  <td class="${TD}"><div class="truncate text-xs text-slate-500">${r[1]}</div></td>
+  <td class="${TD}"><div class="text-xs tabular-nums text-slate-400">${r[2]}</div></td>
+  <td class="${TD}"><div class="truncate text-xs text-slate-500">${r[3]}</div></td>
+  <td class="${TD} text-right"><div class="text-sm font-semibold tabular-nums text-slate-900">MOP 1,234</div></td>
+  <td class="${TD}"><span class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${r[5]}"><span class="h-2 w-2 rounded-full ${r[6]}"></span>${r[4]}</span></td>
+  <td class="${TD}"><span class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 ring-1 ring-slate-200">👤 ${r[7]}</span></td>
+  <td class="${TD} text-right"><div class="flex flex-wrap items-center justify-end gap-1.5">${r[8].map((b,i)=>`<button class="whitespace-nowrap rounded-xl px-3 py-2 text-xs font-semibold ${i===0?"bg-slate-900 text-white":"bg-amber-600 text-white"}">${b}</button>`).join("")}</div></td>
+</tr>`;
+
+document.getElementById("legacy").innerHTML =
+ `<table class="w-full min-w-[1080px] table-fixed border-collapse text-left">
+   <thead><tr>
+     <th class="${TH} w-[118px]">訂單號</th><th class="${TH} w-[104px]">餐台</th><th class="${TH} w-[116px]">時間</th>
+     <th class="${TH}">菜品</th><th class="${TH} w-[150px] text-right">金額</th><th class="${TH} w-[108px]">狀態</th>
+     <th class="${TH} w-[96px]">來源</th><th class="${TH} w-[232px] text-right">操作</th>
+   </tr></thead><tbody>${ROWS.map(body).join("")}</tbody></table>`;
+
+document.getElementById("fixed").innerHTML =
+ `<table class="w-full min-w-[860px] table-fixed border-collapse text-left">
+   <thead><tr>
+     <th class="${TH} w-[11%]">訂單號</th><th class="${TH} w-[10%]">餐台</th><th class="${TH} w-[11%]">時間</th>
+     <th class="${TH}">菜品</th><th class="${TH} w-[14%] text-right">金額</th><th class="${TH} w-[10%]">狀態</th>
+     <th class="${TH} w-[10%]">來源</th><th class="${TH} w-[19%] text-right">操作</th>
+   </tr></thead><tbody>${ROWS.map(body).join("")}</tbody></table>`;
+
+setTimeout(() => {
+  const shell = document.querySelector(".shell").getBoundingClientRect();
+  const mark = document.getElementById("clipmark");
+  mark.style.cssText = `position:absolute;left:${shell.left+978}px;top:${shell.top}px;width:3px;height:${shell.height*0.42}px;background:#dc2626;`;
+  const line = document.createElement("div");
+  line.style.cssText = `position:absolute;left:${shell.left+978}px;top:${shell.top}px;width:0;height:0;`;
+}, 400);
+</script>
+</body>
+</html>

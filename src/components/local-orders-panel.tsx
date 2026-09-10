@@ -89,7 +89,7 @@ function QuickOrderActions({
   if (canBeReady) {
     return (
       <button
-        className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+        className="whitespace-nowrap rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
         onClick={() => {
           updateQuickFulfillmentInStore(order.id);
           onChanged();
@@ -104,7 +104,7 @@ function QuickOrderActions({
   if (order.status === "paid" && order.fulfillmentStatus === "ready") {
     return (
       <button
-        className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
+        className="whitespace-nowrap rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
         onClick={() => {
           markQuickOrderCompletedInStore(order.id, { label: completeText });
           onChanged();
@@ -394,20 +394,24 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
         ) : (
           /*
             列表（2026-09-10）：每張單一行。欄位同原本卡片完全一致（單號／餐台／時間／菜品／
-            金額／狀態／來源／操作），操作統一釘最右。窄屏橫向滾動保留全部欄位，表頭 sticky。
+            金額／狀態／來源／操作），操作統一釘最右。
+            響應式（2026-09-10 修）：欄寬由固定 px 改為百分比 + `table-fixed`，令表格闊度
+            **永遠等於容器闊度**（iPad 橫向／直向都唔會再撐爆）；只有容器窄過 `min-w-[860px]`
+            嗰陣，先由 `overflow-x-auto` 提供橫向滾動。原本 `overflow-hidden` + `min-w-[1080px]`
+            會令「操作」欄直接被剪走（見 docs/113）。
           */
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+            <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
               <thead>
                 <tr>
-                  <th className={`${TH_CELL} w-[118px]`}>訂單號</th>
-                  <th className={`${TH_CELL} w-[104px]`}>餐台</th>
-                  <th className={`${TH_CELL} w-[116px]`}>時間</th>
+                  <th className={`${TH_CELL} w-[11%]`}>訂單號</th>
+                  <th className={`${TH_CELL} w-[10%]`}>餐台</th>
+                  <th className={`${TH_CELL} w-[11%]`}>時間</th>
                   <th className={TH_CELL}>菜品</th>
-                  <th className={`${TH_CELL} w-[150px] text-right`}>金額</th>
-                  <th className={`${TH_CELL} w-[108px]`}>狀態</th>
-                  <th className={`${TH_CELL} w-[96px]`}>來源</th>
-                  <th className={`${TH_CELL} w-[232px] text-right`}>操作</th>
+                  <th className={`${TH_CELL} w-[14%] text-right`}>金額</th>
+                  <th className={`${TH_CELL} w-[10%]`}>狀態</th>
+                  <th className={`${TH_CELL} w-[10%]`}>來源</th>
+                  <th className={`${TH_CELL} w-[19%] text-right`}>操作</th>
                 </tr>
               </thead>
               <tbody>

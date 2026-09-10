@@ -102,20 +102,41 @@ export function toPrintItemLines(items: PosOrder["items"]): PrintItemLine[] {
   });
 }
 
+/**
+ * 分格線要印幾多個 `-`。
+ *
+ * **跨 repo 契約（4 個 renderer 必須一模一樣）**：
+ * 放大倍數 `scaleX` = 1（s）／2（m、l 都係雙闊）→ `count = ceil(cols / scaleX)`。
+ *
+ * 由來（2026-09-10 實紙 bug）：分格線係一行 ASCII 字符，打印機嘅行緩衝固定 `cols` 格。
+ * 一旦呢行被放大（不論係模板刻意，定係 `GS !` 放大狀態殘留，見下），
+ * `cols` 個 dash 就放唔落一行 → 打印機自動折行 → **一條邏輯分格線變兩條實體線**
+ * （實紙：菜品名下面多咗一條線、模板預覽只有一條）。
+ *
+ * 所以：`s` 保持 `cols` 個細 dash；`m` / `l` 減半，變成「同一條線、但粗一倍」
+ * （喺 80mm 紙上 24 個雙闊 dash 啱啱仍然排滿一行，唔會折行）。
+ */
+export function dividerDashCount(size: EscPosSize, cols: number): number {
+  const scaleX = size === "s" ? 1 : 2; // m / l 都係雙闊（同 ESC ! / GS ! / FS ! 一致）
+  return Math.ceil(cols / scaleX);
+}
+
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }
   /**
-   * 分格線（實體係一行 `-` 字符，`"-".repeat(cols)`）。
+   * 分格線（實體係一行 `-` 字符，`"-".repeat(count)`）。
    *
-   * `size` 決定嗰行 dash 嘅放大倍數（s = 1×、m = 雙闊、l = 2×2），
-   * 同實機 `ESC ! n` / `GS ! n` 一致 —— m / l 雙闊會令 48 個 dash **wrap 成兩個物理行**。
+   * ⚠️ **一定只可以佔一個物理行**（2026-09-10 修「一條線變兩條」）。
+   * `cols` 係「1× 字型一行印得落幾多個 dash」（`EscPosTemplateSnapshot.cols`）；
+   * 放大之後每個 dash 佔 2 格，所以 `count` 要減半（`dividerDashCount()`），
+   * 否則打印機行緩衝只有 `cols` 格 → 48 個雙闊 dash 會 **自動折行成兩條實體線**
+   * （實紙所見「每件菜下面多咗一條線」）。`size` 只影響**粗細**，唔再影響行數。
    *
-   * `cols` = 呢行要有幾多個 `-`（由 `EscPosTemplateSnapshot.cols` 帶入）；缺省 48。
-   *
+   * `size` = 嗰行 dash 嘅放大倍數（s = 1×、m = 雙闊、l = 2×2）。
    * 來源：模板 `divider` 區塊嘅 `size`；舊模板冇嗰個區塊 → 用「繼承上一行 size」嘅舊行為
-   * （對齊 print-relay APK `renderTemplateTicket` 嘅 sticky style）。
+   * （對齊三個 APK / Companion renderer 嘅 sticky style）。
    */
-  | { kind: "divider"; size: EscPosSize; cols: number }
+  | { kind: "divider"; size: EscPosSize; cols: number; count: number }
   | {
       kind: "items";
       size: EscPosSize;
@@ -127,8 +148,12 @@ export type EscPosLine =
       /**
        * card 排版「每件菜之間」嗰條分格線嘅字體大小；`null` = 唔印（模板 `divider` 區塊熄咗）。
        * 舊模板冇 `divider` 區塊 → 落 `size`（即繼承菜品主行 size，同實機一致）。
+       *
+       * ⚠️ dash 數量一樣要跟 `dividerDashCount(dividerSize, cols)`（永遠一行）。
        */
       dividerSize: EscPosSize | null;
+      /** 1× 字型一行印得落幾多個 dash（同 `snapshot.cols`）；預覽計 card 分格線用。 */
+      cols: number;
     }
   /** 收據二維碼（`qr_code` 區塊）。冇 `job.qr` 時 renderer 唔會產生呢一行。 */
   | { kind: "qr"; align: EscPosAlign; qr: QrPayload; size: EscPosSize };
@@ -211,11 +236,27 @@ export function renderEscPosLines(
    * 分格線同網頁預覽嘅換行都靠佢，等三個 repo 出紙闊度一致。
    */
   const cols = snapshot.cols ?? RECEIPT_PAPER_COLUMNS;
+  /**
+   * ⚠️⚠️ **實機 renderer 契約（2026-09-10，實紙 bug「一條線變兩條」）**：
+   *
+   * 分格線係一行**純 ASCII** 字符。ESC/POS 嘅中文放大指令（`GS ! n` / `FS ! n`）
+   * 係**打印機嘅常駐狀態（sticky）**，而且喺 Gprinter / 商頌系機器上同 `ESC ! n`
+   * **相乘而唔係後者蓋前者**（docs/80 B2、docs/99 §1）。所以印分格線之前：
+   *
+   * 1. **一定要清走放大殘留**（`GS ! 0x00` + `ESC ! 0x00` + `FS ! 0x00`），
+   *    否則上一行係 CJK 菜品名（`items.size = m/l` → 發過 `GS ! 0x01`）時，
+   *    呢行 dash 會跟住放大成雙闊 → `cols` 個 dash 放唔落一行 → 自動折行 → **兩條線**；
+   * 2. 再按 `divider` 區塊嘅 size 明確發一次放大指令；
+   * 3. dash 數量用 `dividerDashCount(size, cols)`（放大之後減半，永遠一行）。
+   *
+   * 冇呢個 reset，收據會出現「菜品清單之前一條線（前面係細字標頭）、
+   * 每件菜下面兩條線（前面係放大咗嘅菜品名）」嘅不對稱現象。
+   */
   /** fixedDivider === null（區塊熄）→ 唔 push；undefined（舊模板）→ 用 fallback。 */
   const pushDivider = (fallback: EscPosSize) => {
     const size = fixedDivider === undefined ? fallback : fixedDivider;
     if (size === null) return;
-    lines.push({ kind: "divider", size, cols });
+    lines.push({ kind: "divider", size, cols, count: dividerDashCount(size, cols) });
   };
 
   for (const b of snapshot.blocks) {
@@ -234,6 +275,7 @@ export function renderEscPosLines(
         layout: b.layout ?? "card",
         // card 每件菜之間嗰條線：實機紧跟主行（`style(b.size)` 未 reset）→ 舊模板 fallback = b.size
         dividerSize: fixedDivider === undefined ? b.size : fixedDivider,
+        cols,
       });
       // 實機：結尾嗰條線會繼承「最後 emit 嗰行」嘅 size。
       // card 排版每件菜之間（最後一件除外）會 `style("s")` 印空行 → 變細字；

@@ -1,6 +1,6 @@
 "use client";
 
-import { EscPosLine, RECEIPT_PAPER_COLUMNS, SIZE_PX } from "@/lib/escpos-render";
+import { EscPosLine, RECEIPT_PAPER_COLUMNS, SIZE_PX, dividerDashCount } from "@/lib/escpos-render";
 import { QR_QUIET_MODULES, QR_SIZE_FRACTION } from "@/lib/escpos-qr";
 import type { EscPosSize, QrPayload } from "@/lib/types";
 
@@ -91,46 +91,51 @@ const PAPER_PADDING_PX = 16;
  * 分格線（分格線 = 一行 `-` 字符，唔係 CSS border）。
  *
  * 實體打印（`print-relay` `EscPosRenderer.renderTemplateTicket`）嘅分格線係**文字行**：
- * `s` = 1× 闊（48 個 dash 啱啱一行）；`m` = 雙闊；`l` = 2×2（`ESC ! n` / `GS ! n`）。
- * 雙闊之後 48 個 dash 會 **wrap 成兩個物理行**（每行 24 個），呢度照樣模擬 ——
- * 所以預覽見到嘅 dash 大細 / 行數同實紙 100% 一致（2026-09-09 修「預覽條線唔跟字體放大」）。
+ * `s` = 1× 闊；`m` / `l` = 雙闊（`ESC ! n` / `GS ! n`）。
+ *
+ * ⚠️ **永遠只畫一行**（2026-09-10 修）：放大之後每行只放得落 `cols / 2` 個 dash，
+ * 所以 dash 數量由 `dividerDashCount()` 計（`m` / `l` → 減半），
+ * 用 `scale(scaleX, scaleY)` 表達「同一條線但粗咗」。
+ *
+ * 以前係「48 個 dash 照樣放大 → 當成 wrap 成兩個物理行」去模擬，結果預覽同實紙都變兩條線；
+ * 而家兩邊都保證一行（`dividerDashCount` 係跨 repo 契約）。
  */
 function DividerRows({
   size,
+  count,
   paperInnerPx,
   cols = DASHES_PER_LINE,
 }: {
   size: EscPosSize;
+  /** 呢行實際要畫幾多個 `-`（由 `renderEscPosLines` 嘅 `dividerDashCount()` 帶落嚟）。 */
+  count?: number;
   paperInnerPx: number;
-  /** 呢行要有幾多個 `-`（由 `EscPosTemplateSnapshot.cols` 帶落嚟）。 */
+  /** 1× 字型一行印得落幾多個 dash（由 `EscPosTemplateSnapshot.cols` 帶落嚟）。 */
   cols?: number;
 }) {
   // 基準（s）：`cols` 個 dash 排滿紙闊 → 每個 dash 嘅 px，再反推 font-size。
   const baseFontPx = paperInnerPx / cols / DASH_WIDTH_RATIO;
   const scaleX = size === "s" ? 1 : 2; // m / l 都係雙闊
   const scaleY = size === "l" ? 2 : 1; // 得 l 係雙高
-  const rows = scaleX; // cols 個 dash ÷ 每行一半 = 2 個物理行
-  const perRow = cols / rows;
-  const rowHeight = baseFontPx * PREVIEW_LINE_HEIGHT * scaleY;
+  // 放大唔影響 layout box：內層俾「1× 行高」再做 scale()，外層按 scaleY 預留高度
+  // （對齊實機 `ESC 3 60`：l 雙高 → 行距加倍）。dash 數量用契約值（缺省 = s 嘅一行）。
+  const dashes = count ?? cols;
+  const lineHeightPx = baseFontPx * PREVIEW_LINE_HEIGHT;
   return (
-    <div style={{ overflow: "hidden" }}>
-      {Array.from({ length: rows }, (_, row) => (
-        <div
-          key={row}
-          style={{
-            height: rowHeight,
-            fontSize: baseFontPx,
-            lineHeight: PREVIEW_LINE_HEIGHT,
-            whiteSpace: "pre",
-            // scaleX / scaleY 模擬 ESC/POS 嘅字符放大（唔影響 layout box，所以要自己俾 height）
-            transform: `scale(${scaleX}, ${scaleY})`,
-            transformOrigin: "left top",
-            ...CLEAN_TEXT,
-          }}
-        >
-          {"-".repeat(perRow)}
-        </div>
-      ))}
+    <div style={{ overflow: "hidden", height: lineHeightPx * scaleY }}>
+      <div
+        style={{
+          height: lineHeightPx,
+          fontSize: baseFontPx,
+          lineHeight: PREVIEW_LINE_HEIGHT,
+          whiteSpace: "pre",
+          transform: `scale(${scaleX}, ${scaleY})`,
+          transformOrigin: "left top",
+          ...CLEAN_TEXT,
+        }}
+      >
+        {"-".repeat(dashes)}
+      </div>
     </div>
   );
 }
@@ -212,7 +217,9 @@ export function EscPosPreview({
       >
         {lines.map((line, index) => {
           if (line.kind === "divider") {
-            return <DividerRows key={index} size={line.size} paperInnerPx={paperInnerPx} />;
+            return (
+              <DividerRows key={index} size={line.size} count={line.count} cols={line.cols} paperInnerPx={paperInnerPx} />
+            );
           }
           if (line.kind === "qr") {
             return (
@@ -283,9 +290,15 @@ export function EscPosPreview({
                             </span>
                           </div>
                         ) : null}
-                        {/* card 排版「每件菜之間」嘅分格線：實機紧跟菜品主行，size 由模板 divider 區塊決定 */}
+                        {/* card 排版「每件菜之間」嘅分格線：實機紧跟菜品主行，size 由模板 divider 區塊決定。
+                            dash 數量一樣用 `dividerDashCount()`（放大 → 減半）→ 永遠一行。 */}
                         {isCard && line.dividerSize ? (
-                          <DividerRows size={line.dividerSize} paperInnerPx={paperInnerPx} cols={columns} />
+                          <DividerRows
+                            size={line.dividerSize}
+                            count={dividerDashCount(line.dividerSize, line.cols ?? columns)}
+                            cols={line.cols ?? columns}
+                            paperInnerPx={paperInnerPx}
+                          />
                         ) : null}
                         <div style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
                           {(item.specs ?? []).map((s, si) => {

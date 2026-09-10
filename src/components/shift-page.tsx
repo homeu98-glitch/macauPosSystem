@@ -1286,7 +1286,7 @@ export function ShiftPage() {
                           ) : null}
                         </td>
                         <td className="px-3 py-3">
-                          <div className="flex min-w-[220px] items-center gap-2">
+                          <div className="flex min-w-[150px] items-center gap-2">
                             <input
                               className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
                               onChange={(event) =>
@@ -1319,7 +1319,7 @@ export function ShiftPage() {
                               {reprintingShiftId === row.id ? "打印中…" : "重打交班單"}
                             </button>
                             <button
-                              className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
+                              className="whitespace-nowrap rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
                               onClick={() => deleteHistoryRecord(row.id)}
                               type="button"
                             >

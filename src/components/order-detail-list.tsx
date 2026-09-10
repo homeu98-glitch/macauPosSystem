@@ -53,18 +53,23 @@ export function OrderDetailList({
   // ⚠️ 邊框同滾動容器由呼叫方提供（同「支付方式分項」一致，例如
   // `max-h-[420px] overflow-auto rounded-xl border border-slate-200`），
   // 呢度只出 <table>，避免雙重邊框；表頭 sticky 亦要靠呼叫方嘅滾動容器。
+  //
+  // 響應式（2026-09-10 修）：欄寬由固定 px 改為百分比 + `table-fixed`，表格闊度永遠等於
+  // 容器闊度（iPad 橫向／直向都唔會撐爆）。原本 `min-w-[1080px]` 令表格必然闊過 iPad 內容區，
+  // 最後兩欄（應收／實收）會走出可視範圍，要人手橫向拖先睇得到。
+  // `min-w-[860px]` 只係下限：容器窄過佢（例如手機）先出現橫向滾動。
   return (
-    <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+    <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
       <thead>
         <tr>
-          <th className={`${TH_CELL} w-[118px]`}>訂單號</th>
-          <th className={`${TH_CELL} w-[120px]`}>狀態</th>
+          <th className={`${TH_CELL} w-[12%]`}>訂單號</th>
+          <th className={`${TH_CELL} w-[13%]`}>狀態</th>
           <th className={TH_CELL}>餐台</th>
-          <th className={`${TH_CELL} w-[128px]`}>收款類型</th>
-          <th className={`${TH_CELL} w-[132px]`}>收銀員</th>
-          <th className={`${TH_CELL} w-[168px]`}>結賬時間</th>
-          <th className={`${TH_CELL} w-[130px] text-right`}>應收</th>
-          <th className={`${TH_CELL} w-[130px] text-right`}>實收</th>
+          <th className={`${TH_CELL} w-[13%]`}>收款類型</th>
+          <th className={`${TH_CELL} w-[11%]`}>收銀員</th>
+          <th className={`${TH_CELL} w-[16%]`}>結賬時間</th>
+          <th className={`${TH_CELL} w-[12%] text-right`}>應收</th>
+          <th className={`${TH_CELL} w-[12%] text-right`}>實收</th>
         </tr>
       </thead>
       <tbody>

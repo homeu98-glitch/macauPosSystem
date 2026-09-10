@@ -296,13 +296,16 @@ export type ReceiptSectionId =
    * 分格線（`----` 分隔線）。
    *
    * ⚠️ 呢個係**設定型區塊**：佢自己唔會印一行文字，而係決定「自動分格線」（菜品明細前後、
-   * card 排版每件菜之間）嘅**字體大小**（`size`）同開關（`visible`）。
+   * card 排版每件菜之間）嘅**粗細**（`size`）同開關（`visible`）。
    * 喺 `order` 入面嘅位置唔影響出紙位置（renderer 一律跳過佢，唔會 emit 行）。
    *
-   * 由來：實體分格線係一行 `-` 字符（renderer 用 `"-".repeat(cols)`），會繼承印表機殘留嘅
-   * 放大狀態 → 出紙時會跟住上一行（廚房單係菜品主行）嘅字體大小放大，但網頁預覽係固定
-   * CSS 線 → 兩邊唔一致（2026-09-09）。而家改由模板明確控制 size，三邊同一口徑。
-   * **舊模板冇呢個區塊 → renderer 沿用「繼承上一行 size」嘅舊行為，零影響。**
+   * 由來：實體分格線係一行 `-` 字符，而打印機嘅中文放大狀態（`GS !` / `FS !`）係**常駐**嘅，
+   * `ESC !` 清唔走 → 出紙時會跟住上一行（收據 = 菜品主名）嘅放大狀態變成雙闊，
+   * `cols` 個 dash 一行放唔落 → 打印機**自動折行** → 一條線變兩條（2026-09-10 實紙 bug）。
+   * 而家三邊（POS 預覽 / Companion / APK）同一口徑：
+   * ① 印線前先清放大殘留；② dash 數量 = `dividerDashCount(size, cols)`（放大就減半）；
+   * ③ `size` 淨係控制條線幾粗，**任何 size 都只佔一行**。
+   * **舊模板冇呢個區塊 → renderer 沿用「繼承上一行 size」嘅舊行為（dash 數量照樣減半以免折行）。**
    */
   | "divider"
   | "items"
@@ -350,7 +353,8 @@ export type KitchenSectionId =
   | "order_type"
   | "time"
   /**
-   * 分格線（設定型區塊，語義同 ReceiptSectionId 嘅 `divider`）：控制自動分格線嘅字體大小 / 開關。
+   * 分格線（設定型區塊，語義同 ReceiptSectionId 嘅 `divider`）：控制自動分格線嘅粗細 / 開關。
+   * 同收據一樣：**任何 size 都只佔一行**（dash 數量 = `dividerDashCount()`）。
    */
   | "divider"
   | "items"

@@ -139,11 +139,15 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   checkout_time: block(false, "s", false, "left"),
   server: block(false, "s", false, "left"),
   /**
-   * 分格線（設定型）。`size` = 分格線嘅字體大小；`visible=false` = 全張單唔印任何分格線。
-   * 預設 `m`：對齊而家大多數店嘅實際出紙（廚房/收據 items 預設都係 m，實體線本來就繼承呢個 size）。
-   * 想「一條幼線」就揀 `s`（48 個 dash 啱啱印一行；m/l 雙闊會 wrap 成兩行 —— 預覽同步模擬）。
+   * 分格線（設定型）。`size` = 分格線嘅**粗細**；`visible=false` = 全張單唔印任何分格線。
+   *
+   * 預設 `s`（一條幼線）＝商家同設計預覽見到嘅樣。
+   * ⚠️ 2026-09-10 修：以前預設 `m`，出紙時嗰行 dash 會跟上一行（CJK 菜品名）嘅放大狀態
+   * 變成雙闊 → 一行放唔落 → 打印機自動折行 → **一條線變兩條**（實紙 bug）。
+   * 而家無論揀 s / m / l 都**一定只佔一行**（dash 數量 = `dividerDashCount()`，放大就減半），
+   * `size` 淨係影響條線嘅粗細。
    */
-  divider: block(true, "m", false, "left"),
+  divider: block(true, "s", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
   discount_breakdown: block(true, "s", false, "left"),
   subtotal_before_discount: block(true, "s", false, "right"),
@@ -181,8 +185,8 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
   table_name: block(true, "s", false, "left"),
   order_type: block(true, "s", true, "left"),
   time: block(true, "s", false, "left"),
-  /** 分格線（設定型）：`size` 控制 `----` 線嘅字體大小，`visible=false` = 全張單唔印分格線。 */
-  divider: block(true, "m", false, "left"),
+  /** 分格線（設定型）：`size` 控制 `----` 線嘅**粗細**（永遠一行），`visible=false` = 全張單唔印分格線。 */
+  divider: block(true, "s", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
   order_note: block(true, "s", false, "left"),
   footer: block(true, "s", false, "center"),
@@ -414,14 +418,14 @@ export function ensureReceiptSections(template: ReceiptTemplate): ReceiptTemplat
   };
 }
 
-/** 分格線區塊嘅預設樣式（設定型區塊：`size` = `----` 線嘅字體大小，`visible` = 全張單出唔出線）。 */
-const DIVIDER_BLOCK_DEFAULT: EscPosBlockStyle = block(true, "m", false, "left");
+/** 分格線區塊嘅預設樣式（設定型區塊：`size` = `----` 線嘅粗細（永遠一行），`visible` = 全張單出唔出線）。 */
+const DIVIDER_BLOCK_DEFAULT: EscPosBlockStyle = block(true, "s", false, "left");
 
 /**
  * 舊模板補 `divider` 區塊（向前兼容）。
  *
  * 商家嘅 `printTemplates` 係 localStorage 快照，舊設定冇 `divider` 呢個 key。
- * 缺就補返（插落 `items` 前，`size` 預設 `"m"`），等設計介面見到「分格線」、
+ * 缺就補返（插落 `items` 前，`size` 預設 `"s"`），等設計介面見到「分格線」、
  * 出紙／預覽都行「明確 size」嘅新邏輯。已有就原封不動（唔改商家設定）。
  *
  * ⚠️ 標籤模板（62mm）**唔好**加：標籤冇分格線，加咗會污染固定紙寬嘅區塊列表。
