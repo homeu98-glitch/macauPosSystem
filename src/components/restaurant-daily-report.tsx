@@ -2346,7 +2346,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
               {agg.orderDetails.length === 0 ? (
                 <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
               ) : (
-                <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
+                <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
                   <OrderDetailList rows={agg.orderDetails} />
                 </div>
               )}
