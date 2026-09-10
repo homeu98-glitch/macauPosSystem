@@ -55,7 +55,7 @@ export function useSelfOrderAutoAccept() {
       setEnabled(next); // 樂觀更新：掣即刻有反應，失敗先 rollback
       setSaving(true);
       setError(null);
-      saveKioskSettings(storeId, next)
+      saveKioskSettings(storeId, { selfOrderAutoAccept: next })
         .catch((e: unknown) => {
           setEnabled(previous);
           setError(e instanceof Error ? e.message : "儲存失敗");

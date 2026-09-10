@@ -1,14 +1,36 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { LocalOrdersPanel } from "@/components/local-orders-panel";
 import { OnlineOrders } from "@/components/online-orders";
 import { LEDGER_ORDER_DATE_FILTERS, LedgerOrderDateFilter } from "@/lib/ledger/order-date-filter";
 
+/**
+ * 訂單頁（`/orders`）：上＝會員通線上訂單，下＝店內線下訂單。
+ *
+ * ## Deep link（2026-09-10，docs/115 G5）
+ *
+ * `/orders?orderId=<id>` 會即刻開該張單嘅「查看」彈窗。來源：收銀機右上角嘅
+ * 自助單提示（`pos-app.openSelfOrderNotice` —— 自助點餐機 / 快餐掃碼單冇枱可跳，
+ * 所以要跳嚟呢度睇單）。
+ *
+ * ⚠️ 用 `window.location.search` 而**唔用** `useSearchParams()`：後者喺 App Router 下
+ * 需要 `<Suspense>` 包住，否則靜態生成階段會報錯；而呢個 deep link 只係一次性入頁動作，
+ * 唔需要參與 hydration / 訂閱。讀完即刻 `replaceState` 清走 query，
+ * 免得用戶刷新 / 撳返回時又彈一次。
+ */
 export function OrdersHub() {
   const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilter>("today");
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const orderId = new URLSearchParams(window.location.search).get("orderId");
+    if (!orderId) return;
+    setFocusOrderId(orderId);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
 
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
@@ -49,7 +71,7 @@ export function OrdersHub() {
             <OnlineOrders dateFilter={dateFilter} embedded onDateFilterChange={setDateFilter} />
           </section>
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
-            <LocalOrdersPanel dateFilter={dateFilter} />
+            <LocalOrdersPanel dateFilter={dateFilter} focusOrderId={focusOrderId} />
           </section>
         </div>
       </div>

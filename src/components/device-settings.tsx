@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
-import { KioskQrPanel } from "@/components/kiosk-qr-panel";
+import { ScanModePanel } from "@/components/scan-mode-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { RelayPairingPanel } from "@/components/relay-pairing-panel";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
@@ -1158,7 +1158,8 @@ export function DeviceSettings() {
   {activeTab === "kiosk" ? (
     <div className="grid gap-3">
       <KioskModePanel />
-      <KioskQrPanel />
+      {/* 掃碼點餐：模式選擇（堂食 / 快餐互斥）+ 對應嘅 QR 面板（docs/115） */}
+      <ScanModePanel />
     </div>
   ) : null}
 

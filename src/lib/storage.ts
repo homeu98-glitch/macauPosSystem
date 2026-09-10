@@ -16,6 +16,10 @@ import {
   UserRole,
 } from "@/lib/types";
 import {
+  MAX_SELF_ORDER_NOTICES,
+  type SelfOrderNotice,
+} from "@/lib/pos/self-order-notice";
+import {
   defaultAccountStores,
   defaultAccountUsers,
   defaultPermissionGroups,
@@ -78,6 +82,9 @@ const STORE_SUFFIX = {
   // 對賬守護連續多輪都對唔上、已停止自動重試嘅單（docs/112 L2/L3）。
   // 有呢個先可以「大聲示警」而唔係靜默失敗；UI 顯示「同步受阻」。
   syncBlocked: "sync-blocked",
+  // 掃碼自助單「新訂單提示」（2026-09-10）：提示喺商家處理之前**唔會消失**，
+  // 而且要跨頁面 reload 保留 → 一定要落 localStorage，唔可以只放 React state。
+  selfOrderNotices: "self-order-notices",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -729,6 +736,35 @@ export function saveQuarantinedOrders(rows: QuarantinedOrderRow[]) {
       ? rows
           .sort((a, b) => Date.parse(b.quarantinedAt) - Date.parse(a.quarantinedAt))
           .slice(0, MAX_QUARANTINED_ORDERS)
+      : rows,
+  );
+}
+
+/**
+ * 掃碼自助單「新訂單提示」嘅持久化（2026-09-10 需求）。
+ *
+ * 型別 / 上限 / 去重規則喺 `@/lib/pos/self-order-notice`（純函式，有單元測試）；
+ * 呢度只負責 store-scope localStorage 讀寫。
+ *
+ * 行為規格（詳見嗰個模組）：
+ *   1. 唔會自動消失 —— 只有「撳（跳去桌台）」或「向右滑（略過）」先會移除；
+ *   2. 撳 → 跳去對應桌台頁面；
+ *   3. 向右滑 → 略過；
+ *   4. 多張單 = 多個獨立彈窗；
+ *   5. 等到訂單已結帳先撳 → 顯示「已結帳」訊息（仍然保留，等用戶滑走）；
+ *   6. 文案：第一行「{台號} 已下單」，第二行「請查看」。
+ *
+ * 因為「唔會自動消失」＋「跨 reload 保留」，必須落 localStorage。
+ */
+export function loadSelfOrderNotices(): SelfOrderNotice[] {
+  return readStoreJson(STORE_SUFFIX.selfOrderNotices, [] as SelfOrderNotice[]);
+}
+
+export function saveSelfOrderNotices(rows: SelfOrderNotice[]) {
+  writeStoreJson(
+    STORE_SUFFIX.selfOrderNotices,
+    rows.length > MAX_SELF_ORDER_NOTICES
+      ? rows.slice(rows.length - MAX_SELF_ORDER_NOTICES)
       : rows,
   );
 }

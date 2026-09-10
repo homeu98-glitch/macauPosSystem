@@ -18,8 +18,9 @@ import { useOrderingCore } from "@/lib/use-kiosk-order";
  * | 顧客小票 | 落單後本機即印 | 唔印（由收銀台出單） |
  * | 成功頁 | 5 秒倒數自動返主頁 | 顯示本枱訂單，可加單，**冇「完成」** |
  *
- * 呢個 hook 只暴露掃碼需要嘅介面（例如**冇** `returnToHome` —— 掃碼端冇「完成」
- * 呢個概念），避免 `/menu` 意外用到 kiosk 專屬行為。
+ * 呢個 hook 只暴露掃碼需要嘅介面（堂食掃碼**冇**「完成 / 返主頁」呢個概念 ——
+ * `returnToHome` 只係畀**快餐掃碼**（`/quick`）落單成功頁開新單用，見檔尾註解），
+ * 避免 `/menu` 意外用到 kiosk 專屬行為。
  *
  * 底層共用 `useOrderingCore("scan")` 嘅**中性基礎設施**（menu bootstrap、售罄、
  * realtime、購物車、金額計算、落單重試 / 本地待同步隊列）—— 呢啲係兩套流程真正
@@ -74,6 +75,14 @@ export function useScanOrder() {
     started: core.started,
     startOrdering: core.startOrdering,
     ordering: core.ordering,
+    /**
+     * 清走落單成功頁、返去 landing（下一位 / 下一單重新「開始點餐」）。
+     *
+     * ⚠️ 只有**快餐掃碼**（`/quick`）會用到：快餐一單一單獨立，客人落完單要可以再開
+     * 新單，所以成功頁必須有出口。堂食掃碼唔用（成功頁 = 「本枱訂單」，
+     * 客人嘅出口係「加單」，冇「完成」概念 —— 見 docs/115）。
+     */
+    returnToHome: core.returnToHome,
   };
 }
 

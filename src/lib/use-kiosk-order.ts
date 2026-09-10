@@ -36,6 +36,7 @@ import {
   KioskOrderTransientError,
   loadKioskDeviceBinding,
   newKioskOrderId,
+  quickScanOfflineOrderNo,
   saveKioskDeviceBinding,
   submitKioskOrder,
 } from "@/lib/kiosk-order";
@@ -336,6 +337,18 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     if (resumedOrder) return;
     // 冇真實 storeId 就唔好去 server 查未結單（會查落假店 / 空店）
     if (!storeId) return;
+    /**
+     * ⚠️ 快餐掃碼（`/quick`，`variant === "scan"` 但**冇台號**）**完全唔 resume**（docs/115 G2/G3）。
+     *
+     * 快餐係「一單一單獨立」—— 冇「本枱現有單」呢個概念。舊版會用 sessionStorage
+     * 嘅 `kiosk-last-order` 撈返客人自己上一張快餐單（`source === "scan"` 且未結），
+     * 於是客人再點餐會變成「加單」落到舊單度；而 `activeTableOrder` 對快餐又永遠係
+     * `null`（quick 模式唔保留本枱單）→ 兩邊唔一致，行為同 kiosk 快餐唔同。
+     *
+     * 所以快餐掃碼一律當新單：唔查 DB、唔 resume。（kiosk 唔受影響：`isScanLink` false，
+     * 而且 `fetchScanOrderById()` 只認 `source === "scan"`，kiosk 單本身撈唔到。）
+     */
+    if (variant === "scan" && !tableId) return;
     void (async () => {
       // 同一部手機重複掃碼 → sessionStorage 仲有上次單 id（快路）；
       // 換手機 / 清過 session / 第一次掃呢張枱 → 由 `tableId` 依台號查 DB（DB 為準）。
@@ -502,19 +515,25 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       const eventType: "ORDER_CREATED" | "ORDER_UPDATED" = resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED";
       const orderId = resumedOrder?.id ?? draftOrderIdRef.current ?? (draftOrderIdRef.current = newKioskOrderId());
 
-      // 落單號碼（需求 2：呢度就係「兩套流程」嘅分水嶺）。
+      // 落單號碼（需求 2 / docs/115：呢度就係「兩套流程」嘅分水嶺）。
       //
-      // ── 客人掃碼（isScanLink）──
+      // ── 堂食掃碼（/menu?tableId=，isScanLink && dine_in）──
       // **完全唔產生單號**：唔打 /api/pos/sequence、唔叫 nextLocalDailyOrderNo()、
       // 唔燒店內序號資源。訂單標識就係台號（由 buildKioskOrder 嘅 orderNoSource:"table"
       // 直接寫台名）。客人端亦唔會顯示任何單號。
       //
-      // ── 自助點餐機（kiosk）──
-      // 維持原狀：跟店內線下同日序號（/api/pos/sequence），kind 對齊店內
-      // （堂食→pos、自取→pickup），攞唔到先 fallback 本地每日序號。
+      // ── 自助點餐機（kiosk）／快餐掃碼（/quick）──
+      // 跟店內線下同日序號（/api/pos/sequence），kind 對齊店內
+      // （堂食→pos、自取→pickup），攞唔到先 fallback。
+      //
+      // ⚠️ 2026-09-10 docs/115 G2：**快餐掃碼必須行呢條路**。快餐冇台號
+      // （tableId="counter"、tableName="自取"），如果照堂食咁拎台名做單號，
+      // 全店快餐單會統統叫「自取」→ 廚房單／標籤／收據／POS 列表分唔清邊張打邊張。
+      // 快餐同 kiosk 共用同一條 `pickup` 序號 → 兩邊號碼天然唔會撞（in sync）。
       const seqKind = mode === "dine_in" ? "pos" : "pickup";
+      const needsSequence = !isScanLink || mode === "quick";
       let localOrderNo: string | undefined;
-      if (!isScanLink) {
+      if (needsSequence) {
         try {
           const seqRes = await fetch("/api/pos/sequence", {
             method: "POST",
@@ -531,7 +550,14 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         if (!localOrderNo) {
           // P1-4：fallback 改用**本地每日序號**（同店內同日遞增），
           // 唔再用 `堂食${時戳後4位}` 呢類同店內序號唔同源嘅亂號。
-          localOrderNo = nextLocalDailyOrderNo(seqKind, mode === "dine_in" ? "堂食" : "自取");
+          //
+          // ⚠️ 例外：**快餐掃碼離線**唔可以用本地每日序號（docs/115 R2）。
+          // 客人手機同收銀機係兩部唔同裝置，兩邊各自由「自取01」開始數 → 必撞。
+          // 改用明顯非序號嘅短後綴（`自取-K7Q2`），收銀一眼睇得出未對號。
+          localOrderNo =
+            isScanLink && mode === "quick"
+              ? quickScanOfflineOrderNo()
+              : nextLocalDailyOrderNo(seqKind, mode === "dine_in" ? "堂食" : "自取");
         }
       }
 
@@ -557,8 +583,9 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         // 狀態機 owner 係收銀端；客人加單只應該提交 items / 備註。舊版重寫整張單，
         // 會把收銀已標記嘅 `sent_to_kitchen→preparing` 打返轉頭（非終態降級 server 唔擋）。
         localOrderNo,
-        // 需求 2：掃碼單唔行「單號」邏輯，直接以台號作為訂單標識。
-        orderNoSource: isScanLink ? "table" : "sequence",
+        // 需求 2 / docs/115：只有**堂食**掃碼唔行「單號」邏輯（以台號作訂單標識）；
+        // kiosk 同快餐掃碼一律用店內序號。
+        orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
       });
 
       // ⚠️ 2026-09-10 加單修復：算出今次**新增**嘅菜品（舊單 items → 新單 items 嘅差額）。

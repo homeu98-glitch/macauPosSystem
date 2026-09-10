@@ -1,5 +1,11 @@
 # 114 · 收據「分隔線變兩條 + 菜品名字體異常」根因與修法（2026-09-10）
 
+> **狀態（2026-09-10 收尾）**：**五個通道全部改完**——
+> POS 預覽（§3.2）、`print-relay`（§3.3）、`print hub` + `print-agent-android`（§3.4）、
+> `desktop-companion`（§3.5）。三個 Kotlin repo `:app:compileDebugKotlin` 全部 BUILD SUCCESSFUL、
+> `companion-server.mjs` `node --check` 通過、`verify-escpos-bytes.mjs` 契約全過。
+> **仲未做**：實紙驗收 + 重 build APK 裝落機（見 §4）。
+
 > **症狀**（實紙照片，表嫂美食 訂單 MF0004）：
 > ① 菜品清單**之前**嗰條分隔線正常（一條幼線）；
 > ② **每件菜名下面都變兩條線**（上面一條、下面一條，而且 dash 明顯粗一倍）；
@@ -122,9 +128,12 @@ fun rule() {
 | `src/lib/escpos-template.ts` | `divider` 預設 `m` → **`s`**（一條幼線，同商家預期 / 預覽一致）；舊模板補 `divider` 亦用 `s` |
 | `src/lib/mock-data.ts`、`src/lib/types.ts`、`src/components/print-center.tsx` | 文案 / 註釋由「字體大小、中大全會變兩行」改為「粗細、永遠一行」 |
 
-### 3.3 print-relay APK（正式出紙通道）— ⬜ 待改
+### 3.3 print-relay APK（正式出紙通道）— ✅ 已完成
 
-`app/src/main/java/com/macau/printhub/net/EscPosRenderer.kt`
+`app/src/main/java/com/macau/printhub/net/EscPosRenderer.kt` — `:app:compileDebugKotlin` **BUILD SUCCESSFUL**
+
+**實際做法比原方案更徹底**：清殘留唔係只做喺 `rule()`，而係**每一行**都做——
+`emitLine()` 開頭統一 call `clearMagnify()`，所以任何行（唔止分格線）都唔會繼承上一行嘅放大狀態。
 
 ```kotlin
 // Buf 內新增：只清放大，不動行距
@@ -134,63 +143,103 @@ fun clearMagnify() = apply {
     cmd(FS, 0x21, 0x00)
 }
 
-// rule() 改為：
+// emitLine() 第一句：val cjk = hasCJK(s) 之後即刻 clearMagnify()
+
+// rule()：清殘留交畀 emitLine（唔重複），只需決定 size 同 dash 數
 fun rule() {
     if (dividerOff) return
-    buf.clearMagnify()                                  // ① 清殘留（關鍵）
-    val size = fixedDividerSize ?: buf.currentSize()     // ② 舊模板：沿用「繼承」語義
-    val dashes = if (size == "s") cols else (cols + 1) / 2  // ③ 永遠一行
+    val size = fixedDividerSize ?: buf.currentSize()   // 舊模板：沿用「繼承」語義
     buf.style(size, false)
-    buf.line("-".repeat(dashes))
+    buf.line(dashLine(size))                            // s → cols；m / l → ceil(cols/2)
 }
 ```
 
-同時 `renderKitchenTicket()` / `renderReceiptTicket()` 嘅 `separator(width, cs)`
-（`"-".repeat(width)`）亦要喺前面 `buf.clearMagnify()`。
+**另外改動**：`renderKitchenTicket()` / `renderReceiptTicket()` / `renderTestPage()` 原本用
+top-level `separator(width, cs)` 直出 raw bytes（**繞過 `emitLine`，所以冇自動清殘留**）。
+已收斂成 `Buf.sep(width)`，入面自己清一次殘留再印 `-`，`separator()` 已刪除。
 
-### 3.4 print hub（舊副本）/ print-agent-android — ⬜ 待改
+> ⚠️ 唔可以只喺 `rule()` 清：`separator()` 嗰類 raw-byte 行繞過 `emitLine`，係第二條漏網路徑。
 
-同 §3.3 一樣嘅三點；print hub 若仍係 docs/99 之前嘅版本（`style()` 每次帶 `ESC !` 放大位 +
-`KANJI_SIZE_BYTE` 用咗 `ESC !` 嘅值），**必須先套 docs/99**，否則菜品名會 2×3 變形（「字體異常」嘅元兇之一）。
+### 3.4 print hub（舊副本）/ print-agent-android — ✅ 已完成
 
-### 3.5 desktop-companion — ⬜ 待改
+兩個都係 docs/99 之前嘅版本（`.kt` 內 `KANJI_SIZE_BYTE` 用咗 `ESC !` 嘅位元值 `0x20 / 0x30`）。
+**已先套 docs/99**（`GS_SIZE_BYTE` = `m 0x01 / l 0x11`、`FS_SIZE_BYTE` = `m 0x04 / l 0x0C`、
+`emitLine()` 每行決定 `ESC !` 放大位），**再套 docs/114**（`clearMagnify()` + `dashLine()` + `sep()`）。
+`:app:compileDebugKotlin` 兩邊都 **BUILD SUCCESSFUL**。
 
-`companion-server.mjs`：
+| repo | 額外修正 |
+|---|---|
+| `print hub` | 本身已有 `divider` 區塊處理（`rule()` 只發 `ESC !`、清唔走 `GS !`）→ 補 `clearMagnify()`；`KANJI_SIZE_BYTE` → `GS_SIZE_BYTE` + `FS_SIZE_BYTE` |
+| `print-agent-android` | **完全冇讀 `divider` 區塊**（`dividerOff` / `fixedDividerSize` 都冇）→ 一併補上，同 POS / print hub 三邊一致；另加 `if (b.id == "divider") continue` |
+
+> 💡 `print hub` 同 `print-relay` 係**同一個 App 嘅兩份檢出**（`rootProject.name` 都係 `print-hub`；
+> `print hub` 冇 git remote、只有 2 個 commit，最後更新 2026-09-03）。兩邊都已同步修正，
+> 但**門店究竟跑邊份 build 要人手確認**（見 §5）。
+
+### 3.5 desktop-companion — ✅ 已完成
+
+`desktop-companion/companion-server.mjs`（`node --check` 通過）
 
 ```js
+// 新增：清三套放大殘留（唔動行距；next textLine 會自己重設 ESC 3）
+const clearMagnify = () => {
+  push(Buffer.from([0x1d, 0x21, 0x00])); // GS ! 0  ← 關鍵：清中文放大殘留
+  push(Buffer.from([0x1b, 0x21, 0x00])); // ESC ! 0
+  push(Buffer.from([0x1c, 0x21, 0x00])); // FS ! 0
+};
+
 const divider = () => {
-  setAlign("center");
-  push(Buffer.from([0x1d, 0x21, 0x00]));   // GS ! 0  ← 清中文放大殘留（關鍵）
-  push(Buffer.from([0x1b, 0x21, 0x00]));   // ESC ! 0
-  push(Buffer.from([0x1c, 0x21, 0x00]));   // FS ! 0
-  const size = dividerSize || "s";
+  if (dividerOff) return;                 // ① 模板 divider 區塊 visible=false → 唔印
+  clearMagnify();                         // ② 清殘留（關鍵）
+  const size = dividerSize || stickySize || "s";
   setStyle(size, false, false);
-  const dashes = size === "s" ? paperCols : Math.ceil(paperCols / 2);
+  const dashes = size === "s" ? paperCols : Math.ceil(paperCols / 2); // ③ 永遠一行
   push(encodeText("-".repeat(dashes), charset));
   push(Buffer.from([0x0a]));
 };
 ```
 
+順帶補齊兩個同 POS 唔一致嘅位（以前只硬編 `s` + 全 `cols`）：
+
+- `dividerSize` / `dividerOff`：由模板 `divider` 區塊讀（區塊熄咗就唔印線），同 POS 一致；
+- `stickySize`：`textLine()` 記錄最後用過嘅 size，舊模板（冇 `divider` 區塊）嘅線「繼承上一行」，
+  同 print-relay `buf.currentSize()` 一致；抬頭之後亦照 POS 重置做 `s`。
+
 ---
 
 ## §4 · 驗收
 
-1. **Byte 級**：`C:\dev\print-relay\verify-escpos-bytes.mjs` 加案例——
-   分隔線前**必須**見到 `1D 21 00`；揀「中」時 dash 數量 = `cols/2`。
-2. **實紙**：收據模板分格線揀 細 / 中 / 大 各印一次，**每次都只可以有一行線**；
+1. ✅ **Byte 級**：`C:\dev\print-relay\verify-escpos-bytes.mjs` 已加兩組契約檢查，`node verify-escpos-bytes.mjs`
+   全部通過（任何一項唔過 → `exit code 1`）：
+   - 分格線：`cols=48/32` × `size=s/m/l` 每個情形都見到 `1D 21 00`，而且
+     `dash 數 × 放大倍數 = cols`（48/24/24、32/16）→ 永遠只佔一個物理行；
+   - `GS_SIZE_BYTE` = `{ s:0x00, m:0x01, l:0x11 }`（nibble 語意，冇用 `ESC !` 嘅 `0x20 / 0x30`）；
+   - 原有「相乘地雷」8 個情形全部仍然安全。
+2. ⬜ **實紙**：收據模板分格線揀 細 / 中 / 大 各印一次，**每次都只可以有一行線**；
    菜品名下面唔會再多一條。
-3. **廚房單對照**：同一張單同時印收據 + 廚房單，兩邊每個位置線數一致。
-4. **預覽對照**：設計頁（`/prints`）嘅分格線行數 / 粗細同實紙一致。
-5. ⚠️ 改完要**重新 build APK 並裝落機**；iPad / POS 端要**強制 reload** 先會帶新模板（見 docs/113）。
+3. ⬜ **廚房單對照**：同一張單同時印收據 + 廚房單，兩邊每個位置線數一致。
+4. ⬜ **預覽對照**：設計頁（`/prints`）嘅分格線行數 / 粗細同實紙一致。
+5. ⬜ ⚠️ 改完要**重新 build APK 並裝落機**（`print-relay` / `print hub` / `print-agent-android`；
+   桌面版要重新出 `desktop-companion` 安裝檔）；iPad / POS 端要**強制 reload** 先會帶新模板（見 docs/113）。
+
+> ⚠️ **`print hub` 同 `print-agent-android` 嘅 APK 一定要重 build 並裝落機**——
+> 代碼改咗但唔重裝 APK，門店行為**完全唔會變**（APK 唔會自己更新）。
+> 呢個係本項目反覆中過嘅坑（docs/101、docs/102、docs/103）。
 
 ---
 
 ## §5 · 待跟進
 
+- ⬜ **確認門店實際跑邊個通道 / 邊個 build**（擰 version 或印測試頁睇行為），
+  避免「改咗 print-relay 但門店其實用 desktop-companion」。
+  `print hub` 同 `print-relay` 係同名 App（`print-hub`）嘅兩份檢出，兩邊都已修，但**要確認邊份係現役**。
 - **預覽 CJK 字寬唔準**：預覽用等寬字型模擬（CJK ≈ 1em、ASCII ≈ 0.6em，比例 1.67），
   實機係 CJK 2 格 / ASCII 1 格（比例 2）→ 中文長句換行位差 ~17%，
   亦係「菜品名字體睇落唔同」嘅次要來源。要精準要換一只 CJK 闊度 = 2× ASCII 嘅等寬字型。
 - **`ESC !` × `GS !` 相乘**：長期正解係「GS! 路線下所有行都用 `ESC ! 0x00` + `GS !`」，
-  而家只係喺分隔線前清狀態（最小改動、零回歸）。
-- 確認門店實際跑邊個通道 / 邊個 build（擰 version 或印測試頁睇行為），
-  避免「改咗 print-relay 但門店其實用 desktop-companion」。
+  而家 `emitLine()` 已做到呢點（GS! 路線 + CJK 行 `ESC !` 歸零）；剩低嘅係
+  **`ESC !` 對純 ASCII 行仍然有用放大 bit**（正確，因為嗰行唔會發 `GS !`）。
+- ⚠️ **窄邊界（已知、影響極細）**：舊模板（快照**冇** `divider` 區塊）+ `layout=card` + 2 件菜以上 時，
+  結尾嗰條線嘅**粗細**：POS 預覽用 `"s"`，而四個 renderer 用「最後一行嘅 sticky size」。
+  只影響粗細（**都係一行，唔會變兩條**），而且 `ensureDividerSection` 會為舊快照補 `divider` 區塊 →
+  實際上幾乎唔會觸發。若要 100% 對齊，POS `renderEscPosLines` 條式要同 renderer 夾一次。

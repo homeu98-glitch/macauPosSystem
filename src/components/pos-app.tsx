@@ -16,6 +16,7 @@ import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-disc
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
+import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
 import { SyncHealthModal } from "@/components/sync-health-modal";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
@@ -52,6 +53,15 @@ import {
   reprintReceiptForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
+import {
+  addSelfOrderNotice,
+  dismissSelfOrderNotice,
+  markSelfOrderNoticeSettled,
+  toSelfOrderNoticeItems,
+  MAX_SELF_ORDER_NOTICES,
+  type SelfOrderNotice,
+  type SelfOrderNoticeItem,
+} from "@/lib/pos/self-order-notice";
 import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset, orderItemDiscountTotal } from "@/lib/pos/discount";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
@@ -76,6 +86,8 @@ import {
   addDeletedOrderIds,
   maxUsedDailyOrderSeq,
   nextLocalDailyOrderNo,
+  loadSelfOrderNotices,
+  saveSelfOrderNotices,
   saveBootstrapCache,
   saveDeviceConfig,
   saveOrders,
@@ -256,6 +268,17 @@ export function PosApp() {
   const offlineMode = !networkOnline;
   const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
+  /**
+   * 掃碼自助單「新訂單提示」（2026-09-10 需求）：右上角一個提示對應一張桌台。
+   *
+   * 為何係 localStorage 而唔係純 state：需求明確要「唔會自動消失，直到用戶處理」，
+   * 而且要跨 reload 保留（收銀機中途 reload / 部署都唔應該丟失未處理提示）。
+   * 生命週期只得兩個出口：
+   *   - 撳 → 跳去該桌台（`openSelfOrderNotice`）
+   *   - 向右滑 → 略過（`dismissSelfOrderNotice`）
+   * 冇任何 timer、冇任何狀態變化會令佢自動消失（包括訂單已結帳 —— 嗰陣會轉文案示警）。
+   */
+  const [selfOrderNotices, setSelfOrderNotices] = useState<SelfOrderNotice[]>(() => loadSelfOrderNotices());
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
   // 同步健康檢查（L1 失敗事件重試 / L2 已結帳未上雲補錄）彈窗開關。
   const [showSyncHealth, setShowSyncHealth] = useState(false);
@@ -1225,6 +1248,105 @@ export function PosApp() {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // 掃碼自助單「新訂單提示」—— 右上角持續提示（2026-09-10 需求）
+  // ─────────────────────────────────────────────────────────────
+  //
+  // 為何要有（而唔係只靠現有嘅 3 秒 toast）：掃碼單係客人自己落，收銀員可能正喺
+  // 處理別的事；3 秒 toast 一閃即逝 = 客人落咗單但冇人知（同 docs/87 §3.1 打印
+  // 失敗一樣嘅「靜默」病）。所以改為**持續提示**：唔撳唔走，一個台一個。
+
+  /** 收到掃碼新單 → 加一個提示（去重 / 上限規則喺 `addSelfOrderNotice()`，有單元測試）。 */
+  function pushSelfOrderNotice(order: PosOrder) {
+    setSelfOrderNotices((prev) => {
+      const next = addSelfOrderNotice(prev, order, new Date().toISOString());
+      if (next === prev) return prev; // 已有同一張單 → 唔重複、唔寫 localStorage
+      if (next.length === MAX_SELF_ORDER_NOTICES) {
+        console.warn(
+          `[pos-app] 掃碼新單提示已達上限 ${MAX_SELF_ORDER_NOTICES} 個（商家長期未處理），最舊嘅會被丟棄。`,
+        );
+      }
+      saveSelfOrderNotices(next);
+      return next;
+    });
+  }
+
+  /** 用戶處理完（撳去桌台）或向右滑 → 移除該提示。 */
+  function handleSelfOrderNoticeDismiss(orderId: string) {
+    setSelfOrderNotices((prev) => {
+      const next = dismissSelfOrderNotice(prev, orderId);
+      if (next === prev) return prev;
+      saveSelfOrderNotices(next);
+      return next;
+    });
+  }
+
+  /** 需求 5：撳嗰陣發現訂單已經結帳 → 標記為「已結帳」（提示本身仍然保留，由用戶滑走）。 */
+  function handleSelfOrderNoticeSettled(orderId: string) {
+    setSelfOrderNotices((prev) => {
+      const next = markSelfOrderNoticeSettled(prev, orderId, new Date().toISOString());
+      saveSelfOrderNotices(next);
+      return next;
+    });
+  }
+
+  /**
+   * 需求 2 / 5（docs/115 G5）：撳提示。
+   *   - **有真枱**（堂食掃碼單）→ 直接跳去該桌台頁面（載入工作台 + 切返 dine-in +
+   *     鎖定樓層），並移除提示（已處理）。收銀喺枱面就係最直接就手嘅「睇單」位置。
+   *   - **冇枱**（`counter`：自助點餐機 / 快餐掃碼）→ 跳去**訂單頁** `/orders`，
+   *     並用 deep link 直接開該張單嘅「查看」彈窗。呢類單喺枱面根本冇位，
+   *     跳去桌台只會彈「開桌」，所以一定要行訂單列表（用戶 2026-09-10 明確要求）。
+   *   - 訂單已結帳 / 已經冇咗 → 唔跳頁，改為顯示「已結帳」訊息，提示轉為灰底等用戶滑走。
+   */
+  function openSelfOrderNotice(orderId: string) {
+    const notice = selfOrderNotices.find((n) => n.orderId === orderId);
+    const order = orders.find((o) => o.id === orderId) ?? null;
+    const label = order?.tableName || notice?.tableName || "本枱";
+
+    if (!order || isTerminalOrderStatus(order.status)) {
+      console.info(`[pos-app] 撳自助單提示但訂單已結帳／已失效（${orderId}）→ 只顯示訊息`);
+      handleSelfOrderNoticeSettled(orderId);
+      setToast({ tone: "info", message: `${label} 嘅訂單已經結帳，呢個提示可以向右滑走。` });
+      return;
+    }
+
+    // 有真枱先算「枱面單」；`counter`（自助機 / 快餐）唔係任何一張枱。
+    const hasRealTable = Boolean(order.tableId) && order.tableId !== "counter";
+
+    // ── 冇枱：跳去訂單頁 + deep link 開「查看」──
+    if (!hasRealTable) {
+      handleSelfOrderNoticeDismiss(orderId); // 撳 = 已處理
+      // `?orderId=` 由 `OrdersHub` 讀取，傳落 `LocalOrdersPanel` 直接開該張單嘅查看彈窗。
+      router.push(`/orders?orderId=${encodeURIComponent(order.id)}`);
+      return;
+    }
+
+    // 堂食單但機仲喺「快餐模式」→ 切返 dine-in，否則真枱載入唔到（同 deep-link 一致）。
+    if (operatingMode === "quick" && order.tableId) {
+      setOperatingModeState("dinein");
+      saveOperatingMode("dinein");
+    }
+    // 鎖定枱所屬樓層，之後返枱面部都直接見到該枱
+    const targetFloor = floors.find((floor) => floor.tables.some((table) => table.id === order.tableId));
+    if (targetFloor) setActiveFloorId(targetFloor.id);
+
+    // `selectTable()` = 桌台卡片 click 同一個入口（有單 → 載入工作台 + setPosMode("order")）。
+    // 萬一枱面 map 未及更新（race），退而開訂單詳情彈窗，總之唔會撳完冇反應。
+    if (tableOrderMap.has(order.tableId)) {
+      selectTable(order.tableId);
+    } else {
+      setViewingOrderId(order.id);
+    }
+    handleSelfOrderNoticeDismiss(orderId);
+  }
+
+  /** 渲染用：把提示併上「最新訂單狀態」（台名可能被改、訂單可能已結帳）。 */
+  const selfOrderNoticeItems: SelfOrderNoticeItem[] = useMemo(
+    () => toSelfOrderNoticeItems(selfOrderNotices, orders, (o) => isTerminalOrderStatus(o.status)),
+    [selfOrderNotices, orders],
+  );
+
   // Kiosk 客人自點：即時訂閱 pos_orders / pos_print_jobs（Realtime，禁 polling）。
   // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 只喺 mount / (re)subscribe 一次過 backfill（event-driven，非週期）。
   const kioskStoreId = useMemo(
@@ -1242,6 +1364,30 @@ export function PosApp() {
       // 判斷是否新收到嘅自助單（realtime push 時本機未有）
       const existing = loadOrders().find((o) => o.id === order.id);
       const isNewSelfOrder = !existing && isSelfOrder(order);
+
+      /*
+       * 自助單新單 → 右上角「持續提示」（2026-09-10 需求；docs/115 擴充至 kiosk）。
+       *
+       * `isNewSelfOrder` = `!existing && isSelfOrder(order)`，而 `isSelfOrder` 已經涵蓋
+       * `source ∈ {kiosk, scan}` 三種入口：
+       *   - `scan`  客人掃碼（堂食 `/menu` 逐枱一碼、快餐 `/quick` 全店一碼）；
+       *   - `kiosk` 自助點餐機（平板 `/order`，堂食或快餐）。
+       * 2026-09-10 之前呢度額外寫死 `order.source === "scan"` —— 結果自助點餐機落單
+       * **完全冇提示**，收銀要自己掃列表（docs/115 G4）。而家一律出。
+       *
+       * 守門用 `isNewSelfOrder`（本機**未見過**呢張單）：
+       *   - realtime 重送同一張單 → 第二次 `existing` 已經有 → 唔會再 push；
+       *   - 客人**加單**（ORDER_UPDATED，本機已有）→ 唔會 push（加單會自動補印廚房單，
+       *     唔需要人為介入；亦避免「加幾次就彈幾個提示」）。
+       *   加上 `pushSelfOrderNotice()` 內部再按 orderId 去重，雙重保險。
+       *
+       * ⚠️ 刻意**唔喺** backfill / 手動更新路徑 push：嗰啲會喺每次載入時把全店所有
+       * 未結自助單當「新單」彈一次，包括用戶頭先已經滑走嘅（滑走 = 略過，唔應該復活）。
+       * 真實場景（收銀機開住）由 realtime 覆蓋。
+       */
+      if (isNewSelfOrder) {
+        pushSelfOrderNotice(order);
+      }
 
       setOrders((current) => {
         const merged = mergeOrderLists(loadOrders(), current, [order]);
@@ -6398,6 +6544,14 @@ export function PosApp() {
           ) : null}
         </div>
       ) : null}
+
+      {/* 右上角「掃碼新單」提示堆疊（2026-09-10 需求）：每張掃碼單一個獨立提示，
+          唔會自動消失；撳 = 跳去該桌台，向右滑 = 略過。 */}
+      <SelfOrderNoticeStack
+        items={selfOrderNoticeItems}
+        onDismiss={handleSelfOrderNoticeDismiss}
+        onOpen={openSelfOrderNotice}
+      />
 
       {toast ? (
         <div

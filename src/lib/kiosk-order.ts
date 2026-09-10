@@ -21,6 +21,36 @@ export function newKioskOrderId(): string {
   return uid("kiosk");
 }
 
+/**
+ * 快餐掃碼（`/quick`）**離線**時嘅落單號碼 fallback（docs/115 §5 R2）。
+ *
+ * 為何唔可以照用 `nextLocalDailyOrderNo("pickup", "自取")`：
+ *   快餐掃碼同 kiosk 共用同一條店內 `pickup` 序號（`/api/pos/sequence`）。
+ *   離線時本機自己數，但客人手機同收銀機**係兩部唔同裝置** ——
+ *   客人手機嘅本地序號同店內序號係兩條獨立數列，必然撞號
+ *   （客人手機永遠由「自取01」開始 → 撞死收銀機已經派咗嘅 01）。
+ *
+ * 所以離線一律用一個**明顯唔係序號**嘅短後綴（例：`自取-K7Q2`）：
+ *   - 收銀／廚房一眼睇得出「呢張係離線落嘅、未對號」，唔會誤當正規序號；
+ *   - 4 個字元 base32（去掉 0/O/1/I 等易混淆字）≈ 100 萬組合，
+ *     同一日同店碰撞機率極低；
+ *   - 上雲之後**唔會重寫**號碼（號碼一經落單就係客人手上／收銀見到嘅嗰個，
+ *     中途改號只會令追單更加混亂）。
+ */
+export function quickScanOfflineOrderNo(): string {
+  // 去掉 0/O/1/I/L 等易讀錯嘅字元（收銀要口頭／肉眼對號）。
+  const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+  const bytes = new Uint8Array(4);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  let suffix = "";
+  for (const b of bytes) suffix += alphabet[b % alphabet.length];
+  return `自取-${suffix}`;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Kiosk 設備綁店（存部機 localStorage，唔使客人 login）
 // ─────────────────────────────────────────────────────────────
@@ -165,17 +195,24 @@ export type BuildKioskOrderInput = {
   /** 落單號碼：優先用店內線下同日序號（/api/pos/sequence 嘅 display）；無值就 fallback 去 timestamp 後綴 */
   localOrderNo?: string;
   /**
-   * 落單號碼策略（2026-09-10 需求 2）：
-   * - `"sequence"`（**預設**，自助點餐機 /order）：行既有邏輯 —— 店內同日序號，
-   *   攞唔到就本地每日序號 / 時戳後綴。
-   * - `"table"`（**客人掃碼 /menu**）：**完全唔產生單號**。掃碼端嘅訂單標識就係
-   *   **台號**，所以 `localOrderNo` 直接寫台名（例如 `A01`）—— 唔燒店內序號資源、
+   * 落單號碼策略（2026-09-10 需求 2 / docs/115）。
+   *
+   * - `"table"`（**堂食掃碼** `/menu?tableId=`）：**完全唔產生單號**。掃碼端嘅訂單標識
+   *   就係 **台號**，所以 `localOrderNo` 直接寫台名（例如 `A01`）—— 唔燒店內序號資源、
    *   唔會每次落單 / 加單就跳出一個新號碼，DB 亦冇任何唯一性約束
    *   （`pos_orders.local_order_no` 係 nullable text，見 0011 / 0012 migration）。
    *
+   * - `"sequence"`（**預設**）：行既有邏輯 —— 店內同日序號，攞唔到就本地每日序號 /
+   *   時戳後綴。適用於：自助點餐機（kiosk）、**快餐掃碼** `/quick`。
+   *
+   * ⚠️ **快餐掃碼一定要用 `"sequence"`**（2026-09-10 docs/115 G2 修復）：
+   *   快餐冇台號（`tableId = "counter"`、`tableName = "自取"`），如果照堂食咁用台名做
+   *   單號，全店幾十張快餐單會**統統叫「自取」** → 廚房單 / 標籤 / 收據 / POS 列表
+   *   完全分辨唔到邊張打邊張。快餐每張單獨立，所以必須有自己嘅號碼。
+   *
    * ⚠️ 注意 `PosOrder.localOrderNo` 係必填 string —— 而且收銀端嘅收據 / 廚房單
    * 模板都會顯示呢個值。所以掃碼單**唔可以**留空字串（`text("")` 會被 server
-   * 收窄成 NULL → 收銀端顯示 `#null`），一律填台名。
+   * 收窄成 NULL → 收銀端顯示 `#null`），一律填台名 / 序號。
    */
   orderNoSource?: "sequence" | "table";
 };

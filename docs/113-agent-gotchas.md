@@ -63,10 +63,12 @@
 - ⚠️ 場內所有機共用同一 NAT 公網 IP → **rate limit 唔可以淨靠 IP**（會自我 DoS）。已授權按 `storeId`（600/min）、匿名按 IP（300/min）。
 - ⚠️ **待確認**：部署包 `NEXT_PUBLIC_SUPABASE_URL` 疑似指向 **Ledger 專案**（冇任何 `pos_*` 表），而 `getPosSupabaseClient()`（瀏覽器 Realtime + 售罄）用嘅正是佢 → 若屬實，POS Realtime 全部訂錯專案。見 `docs/reviews/qr-self-order-audit-2026-09-10.md` 附錄 B.6。
 
-## 掃碼 vs Kiosk 分家（詳見 `docs/reviews/qr-self-order-audit-2026-09-10.md` 附錄 C）
-- **入口**：`/order`（店內平板）→ `useKioskOrder()`；`/menu`（客人掃 QR）→ **`useScanOrder()`**。共用內核 `useOrderingCore(variant)`；`useScanOrder()` 刻意唔暴露 `returnToHome`。
-- **掃碼冇單號**：掃碼路徑**唔打 `/api/pos/sequence`、唔叫 `nextLocalDailyOrderNo()`**，直接寫**台名**落 `local_order_no`（唔可以留空：必填 string、收銀端要印，server `text("")` 會變 NULL → 顯示 `#null`）。查詢鍵 = 台號：`fetchUnsettledKioskOrder()` = orderId 快路（sessionStorage）→ `GET /api/pos/order-lookup?storeId=&tableId=`。
-- **⚠️ 台號查詢只認 `source="scan"`**：收銀端「自助單確認/拒絕」同「**加單補印廚房單**」全靠 `isSelfOrder()`（`source ∈ {kiosk,scan}`）分流。客人改到 `source="pos"` 嘅單 → 收銀端唔補印 → **廚房靜默漏單**。放寬前須先改收銀端補印閘。
+## 掃碼 vs Kiosk 分家（詳見 `docs/reviews/qr-self-order-audit-2026-09-10.md` 附錄 C、`docs/115`）
+- **入口**：`/order`（店內平板）→ `useKioskOrder()`；`/menu`（客人掃枱 QR，堂食）同 `/quick`（客人掃櫃檯 QR，**快餐**）→ **`useScanOrder()`**（兩條 link 共用同一個 `ScanOrderPage`）。共用內核 `useOrderingCore(variant)`；`useScanOrder()` 只額外暴露 `returnToHome`（**只畀快餐成功頁「再點一單」用**，堂食掃碼冇「完成」概念）。
+- **單號**（2026-09-10 docs/115 G2 起分兩種）：
+  - **堂食掃碼**：**唔打 `/api/pos/sequence`、唔叫 `nextLocalDailyOrderNo()`**，直接寫**台名**落 `local_order_no`（唔可以留空：必填 string、收銀端要印，server `text("")` 會變 NULL → 顯示 `#null`）。查詢鍵 = 台號：`fetchUnsettledKioskOrder()` = orderId 快路（sessionStorage）→ `GET /api/pos/order-lookup?storeId=&tableId=`。
+  - **快餐掃碼 / kiosk**：一定要攞店內序號（`kind: "pickup"`）→ `自取NN`。**唔可以**用台名做號，否則全店快餐單都叫「自取」，廚房單／標籤／收據／列表全部分唔清。
+- ⚠️ **台號查詢只認 `source="scan"`**：收銀端「自助單確認/拒絕」同「**加單補印廚房單**」全靠 `isSelfOrder()`（`source ∈ {kiosk,scan}`）分流。客人改到 `source="pos"` 嘅單 → 收銀端唔補印 → **廚房靜默漏單**。放寬前須先改收銀端補印閘。
 - **落單成功要回讀 DB**：掃碼 ack 成功後即 `fetchScanOrderById(order.id)` → fallback `fetchScanTableOrder()`（離線入隊時**唔回讀**）。**狀態文案**用 `customerOrderStatusLabel()`，**唔好**用收銀端 `pos-order-filters.ts` 嗰套。
 
 ## 執行環境 / 版面 / 班次
@@ -101,3 +103,39 @@
   - POS 側唯一真源：`src/lib/escpos-render.ts` `dividerDashCount()`；`divider` 預設 size 已由 `m` 改為 **`s`**（一條幼線）。⚠️ 改完要**重 build APK 並裝機**，iPad 端仲要**強制 reload**。
 - ⚠️ **「廚房單正常、收據唔正常」唔代表兩個 renderer 唔同**——佢哋係同一份算法。分別淨係「上一行嘅放大倍數」／模板 size。診斷同類問題要先問「呢條線前面嗰行係乜 size」。
 - ⚠️ 預覽（`escpos-preview.tsx`）**冇模擬 CJK 放大**：`fontSize = SIZE_PX[size]`（`m` = 14px = 1.27×），實機 `GS ! 0x01` 係 2×2 → 「後台睇落大少少、出紙大一倍」係預期會再出現嘅落差，唔好淨靠預覽斷症。
+- 🔴 **清殘留一定要放喺「每行」層（`emitLine()` 開頭），唔可以只放喺分格線嗰個 `rule()`**。原因：仲有**繞過 `emitLine` 嘅 raw-byte 路徑**——`print-relay` / `print hub` / `print-agent-android` 原本嘅 top-level `separator(width, cs)`（直出 `"-".repeat(width)`）就係漏網嘅第二條路。已收斂成 `Buf.sep(width)`（自己清一次）；以後加任何「直接 `out.write()` 嘅行」都要記得清。`desktop-companion` 同款（`divider()` 自己 `clearMagnify()`）。
+- 📌 **受影響範圍（2026-09-10 全部已修）**：`src/lib/escpos-render.ts` + `escpos-preview.tsx`（POS 預覽 / 真源）、`print-relay`、`print hub`、`print-agent-android` 三者嘅 `EscPosRenderer.kt`、`desktop-companion/companion-server.mjs`。其中 **`print hub` / `print-agent-android` 係 docs/99 之前嘅版本**，仲有第三個坑：`KANJI_SIZE_BYTE` 用咗 `ESC !` 嘅位元值（`m=0x20 / l=0x30`）→ `GS !` 係 nibble 語意 → 變 **2 闊 3 高 = 菜品名「拉長變形」**；必須用 `GS_SIZE_BYTE = { m:0x01, l:0x11 }` / `FS_SIZE_BYTE = { m:0x04, l:0x0C }`。
+- ⚠️ **三個 Android repo 都要重 build APK 並裝落機**，代碼改咗唔重裝 = 門店零變化（中過：docs/101 / 102 / 103）。`print hub` 同 `print-relay` 係**同名 App（`print-hub`）嘅兩份檢出**（`print hub` 冇 remote、最後更新 2026-09-03），落手改之前先確認邊份係現役。
+- ✅ 驗收唔使靠實機：`C:\dev\print-relay\verify-escpos-bytes.mjs` 純 Node 跑，會驗「分格線前有 `1D 21 00`」「dash 數 × 倍數 = `cols`」「`GS!` 用 nibble 值」，**唔過就 exit 1**。
+
+## 右上角「持續型」提示（掃碼新單，2026-09-10）
+- 🔴 **「唔會自動消失」嘅提示唔可以照抄 existing toast 機制**。`pos-app` 嘅 `setToast` 係 2.6s 自動清（`setTimeout(() => setToast(null), 2600)`），用佢做「客人落單通知」= 一閃即逝，收銀員行開一步就永遠唔知有單（同 docs/87 §3.1 打印失敗同一個「靜默」病）。持續型提示要獨立 state + **store-scope localStorage**（`STORE_SUFFIX.selfOrderNotices`），否則 reload 就冇。
+- 🔴 **觸發守門一定要用 `isNewSelfOrder`（本機未見過）**（`isNewSelfOrder = !existing && isSelfOrder(order)`，已涵蓋 `source ∈ {kiosk, scan}`），而且**只可以喺 realtime `onOrderUpsert` 觸發**：
+  - ⚠️ 舊版額外寫死 `order.source === "scan"` → **自助點餐機（kiosk）落單完全冇提示**。2026-09-10 docs/115 G4 已放寬為一律出（唔需要再加 `&& isSelfOrder(order)`，`isNewSelfOrder` 本身就係）。
+  - 唔可以喺 backfill / `loadRuntimeState` / 手動更新路徑觸發 → 每次載入會把**全店所有未結自助單**當新單彈一次，包括用戶頭先已經滑走嘅（滑走 = 略過，復活 = 用戶想略過都略過唔到）。
+  - 冇 `isNewSelfOrder` 嘅話，客人**加單**（`ORDER_UPDATED`，本機已有）都會彈 → 加三次彈三個。
+  - 內層再按 `orderId` 去重（realtime 重送 / 重訂閱）。
+  - 🔴 **卡片標識唔可以一律用 `tableName`**：快餐 / 自助機單嘅 `tableName` 全部係「自取」→ 幾個提示一模一樣，收銀分唔清邊張打邊張（甚至以為係重複）。`toSelfOrderNoticeItems()` 已改為：**有真枱 → 台名；冇枱（`tableId === "counter"`）→ 單號**（`localOrderNo`，例：`自取01`）。
+- ⚠️ **位置唔可以用 `top-4`**：桌台總覽嘅工具列（手動更新 / 同步健康 / 查看線上訂單）就喺 `top-4 right-4`，疊上去會令嗰三粒掣撳唔到。用 `top-20`（≈80px）落喺工具列下面。
+- ⚠️ 容器要 `pointer-events-none`（只有卡片 `pointer-events-auto`），否則一條 160px 闊嘅透明帶會靜靜哋食走右邊所有 click（訂單右欄喺 order mode 就係右邊）。只在**明確會超出視窗**（>5 個）時才轉 `pointer-events-auto` 令容器可滾動。
+- 📌 **手寫右滑（Pointer Events）四點必做**：① `touchAction: "pan-y"`（水平我哋食、垂直交返瀏覽器，否則 iPad 上鎖死頁面滾動）；② `setPointerCapture`（手指移出卡都仲收到 move/up）；③ 只 `Math.max(0, dx)`（唔准向左飛出側欄）；④ release 距離 < 門檻時要**彈返原位**，而 drag 過（>8px）之後嘅 `click` 一定要吞（否則「拖完又跳頁」）。閾值：`SWIPE_DISMISS_PX = 64`、`DRAG_SLOP_PX = 8`。
+- ⚠️ **「訂單已結帳先撳提示」唔可以跳頁**：枱已經空咗，`selectTable()` 會行去「空閒枱」分支彈**開桌窗**（收銀會以為自己想開枱）。正確做法：標 `settledAt` 令卡片轉灰底「已結帳」＋ toast，**唔移除卡片**（需求要「顯示訊息」，留住先唔會一閃即逝，由用戶自己滑走）。
+- 📌 跳頁真源（2026-09-10 docs/115 G5 起分兩種）：
+  - **有真枱（堂食）**：`selectTable(order.tableId)`（同枱面卡片 click 同一入口：載入工作台 + `setPosMode("order")`）＋ 機喺 quick mode 要先 `setOperatingModeState("dinein")`（否則真枱載入唔到）＋ 鎖 `activeFloorId`。枱面 map 未及更新時 fallback `setViewingOrderId()`（保證唔會撳完冇反應）。
+  - **冇枱（`tableId === "counter"`：自助機 / 快餐掃碼）**：`router.push("/orders?orderId=<id>")` → `OrdersHub` 讀 query → `LocalOrdersPanel` 開「查看」彈窗（仲要先切「全部」tab）。**唔可以**跳桌台，枱面根本冇位，只會彈「開桌」。
+- 📌 邏輯放純函式模組（`src/lib/pos/self-order-notice.ts`，零 `@/` 依賴）→ 可 `npm run test` 覆蓋去重 / 上限 / 已結帳標記 / 台名優先；UI（`self-order-notice-stack.tsx`）同持久化（`storage.ts`）分開。
+
+## 掃碼下單雙模式：堂食 / 快餐（2026-09-10 · 詳見 `docs/115-scan-dine-in-vs-quick-plan.md`）
+- 📌 **兩條 link 完全區隔**：堂食 `/menu?tableId=<枱UUID>&store=<店>`（每枱一碼）；快餐 **`/quick?store=<店>`**（全店一碼）。兩者都渲染同一個 `ScanOrderPage`（`link: "dine_in" | "quick"`），落單差異收喺 `useOrderingCore()` 嘅 `mode` 分支。
+  - ⚠️ **`/menu` 冇 `tableId` 唔可以再當快餐落單**（舊版會，因為 `mode = tableId ? "dine_in" : "quick"` 嘅隱含推導）→ 已經喺 `ScanOrderPage` 加閘：顯示「請掃描枱上 QR 點餐」。唔係咁做，兩條 link 就係撈埋一齊，日後改堂食一定誤傷快餐。
+- 🔴 **店級模式真源 = `pos_kiosk_settings.scan_mode`**（migration `0031`，`dine_in`（預設）/ `quick` + CHECK 約束）。經 `/api/pos/kiosk-settings` 讀寫。**唔好用 `pos_device_configs`**（讀取冇 store filter = 全店最新一條，會串店）。正常化一律 `normalizeScanMode()` → 未知值 / 欄位未存在 = `dine_in`（向後兼容；當 `quick` 會令所有枱碼靜靜失效）。
+- 🔴 **`/api/pos/kiosk-settings` POST 係「部分更新」（read-then-merge）**：只覆寫 payload **有帶**嘅欄位（`undefined` = 唔改）。舊版無腦寫死 `self_order_auto_accept`（缺欄位當 `true`）→ 加第二個欄位之後，「只改 `scan_mode`」會順手把「自動接自助單」洗返 `true`。`saveKioskSettings(storeId, patch)` 簽名已改（**唔可以**再傳 `(storeId, boolean)`）。
+- 🔴 **`scan_mode` 係 0031 新欄位：code 先上、migration 後跑會 Postgres `42703`** → GET/POST 兩邊都要**降級**（只讀寫舊欄位 + 回 `dine_in`），唔可以令整條 route 500，否則連「自動接自助單」都改唔到。
+- 🔴 **快餐掃碼唔可以 resume**：快餐係「一單一單獨立」。resume effect 一定要 `if (variant === "scan" && !tableId) return;`，否則會用 sessionStorage 嘅 `kiosk-last-order` 撈返客人上一張快餐單 → 再點餐變成「加單」，同 kiosk 快餐行為唔一致。
+- 🔴 **快餐成功頁唔可以靠 `activeTableOrder` 入閘**（quick 永遠係 `null`）→ 舊版落單成功直接跌返餐牌，客人以為冇落到單、再落一次 = 兩張單。要用 `submittedOrder && mode === "quick"` 開專屬成功頁（取餐號 + 「再點一單」）。
+- 🔴 **快餐掃碼離線唔可以用 `nextLocalDailyOrderNo()`**：客人手機同收銀機係兩部唔同裝置，兩邊各自由「自取01」開始數 → **必撞**。用 `quickScanOfflineOrderNo()` = `自取-` + 4 位 base32（去掉 `0/O/1/I/L`），明顯非序號；**上雲後唔重寫號碼**（號碼已經喺客人手上同廚房單上）。
+- ⚠️ **出廚房單 / 可取餐流程唔需要改**：快餐單 `tableId === "counter"`、`tableName === "自取"`、`source === "scan"` → `isQuickCounterOrder()` 認得，「可取餐 / 完成」沿用；`isLocalOrTransferredDineIn()` 對冇 `onlineOrderId` 嘅單一律當本地單 → 一定落喺「店內線下訂單」列表（所以 deep link 只需傳 `LocalOrdersPanel`）。
+- ⚠️ **`/orders?orderId=<id>` deep link 用 `window.location.search`，唔用 `useSearchParams()`**：後者喺 App Router 要 `<Suspense>` 包住，否則靜態生成階段報錯；而 deep link 只係一次性入頁動作，唔需要參與 hydration。讀完即刻 `history.replaceState` 清 query（免得刷新 / 返回又彈）。
+- ⚠️ **`LocalOrdersPanel` 開 deep link 彈窗之前要先 `setStatusTab("all")`**：否則可能停在「已完成」，彈窗後面嘅列表睇唔到張單，令人以為跳錯頁。（彈窗本身讀 `orders` 全量，唔受日期篩選影響。）
+- 📌 **QR 列印**：`src/lib/pos/qr-print.ts` = `buildQrSvgMarkup()`（由 `encodeQrMatrix()` 直接砌 SVG 字串，唔靠 canvas）+ `openQrPrintWindow()`（開獨立列印視窗、載入後自動 `print()`、印完自動關窗）。**唔可以**直接用 `window.print()` 印設定頁（會連整個表單印出嚟、QR 太細）。`window.open` 被攔 → 回 `false`，要提示用家允許彈窗或改用複製網址。
+- 📌 **驗收**：`/quick` 落單 → DB `source=scan` / `table_id=counter` / `table_name=自取` / `local_order_no=自取NN`；POS 右上角彈「自取NN 已下單」→ 撳 → 跳 `/orders?orderId=` 自動開「查看」；堂食回歸：`/menu` 行為完全不變、撳提示仍然跳桌台。

@@ -119,7 +119,17 @@ function QuickOrderActions({
   return null;
 }
 
-export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: LedgerOrderDateFilter }) {
+export function LocalOrdersPanel({
+  dateFilter = "today",
+  focusOrderId = null,
+}: {
+  dateFilter?: LedgerOrderDateFilter;
+  /**
+   * Deep link（`/orders?orderId=<id>`）：入頁即刻開該張單嘅「查看」彈窗。
+   * 由收銀機右上角自助單提示撳入嚟（`pos-app.openSelfOrderNotice`，docs/115 G5）。
+   */
+  focusOrderId?: string | null;
+}) {
   const currency = loadBootstrapCache()?.currency ?? "MOP";
   const router = useRouter();
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalOrTransferredDineIn));
@@ -141,6 +151,21 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
     window.addEventListener("pos-orders-changed", refresh);
     return () => window.removeEventListener("pos-orders-changed", refresh);
   }, []);
+
+  /**
+   * Deep link 開單（`/orders?orderId=<id>`）—— 收銀機右上角自助單提示撳入嚟（docs/115 G5）。
+   *
+   * 兩個細節：
+   *   ① 一定要切去「全部」tab 先開彈窗：否則客人/收銀可能停在「已完成」，而張新單係
+   *      「製作中」，彈窗後面嘅列表睇唔到張單，令人以為跳錯頁。
+   *   ② 睇單本身唔靠 `filteredOrders`（彈窗讀 `orders` 全量），所以就算張單唔喺當前
+   *      日期篩選範圍都開得到。
+   */
+  useEffect(() => {
+    if (!focusOrderId) return;
+    setStatusTab("all");
+    setViewingOrderId(focusOrderId);
+  }, [focusOrderId]);
 
   // ── 跨 iPad 線下單即時同步（2026-09-09 根治，見底部註解）────────────────
   // 本 panel 以前淨讀 localStorage：只有 pos-orders-changed 先刷新；realtime 訂閱同

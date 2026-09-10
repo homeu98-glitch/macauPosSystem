@@ -7,8 +7,10 @@ import { loadAuthSession, loadBootstrapCache, loadPosLocalSettings } from "@/lib
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { filterReopenTempTables } from "@/lib/pos/table-scope";
 import { encodeQrMatrix } from "@/lib/qrcode";
+import { openQrPrintWindow } from "@/lib/pos/qr-print";
 
-function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
+/** QR 圖形（SVG）。**export** 出去畀快餐 QR 面板（`scan-mode-panel.tsx`）共用，避免兩份實作走樣。 */
+export function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
   const matrix = useMemo(() => (text ? encodeQrMatrix(text) : null), [text]);
   if (!matrix) {
     return (
@@ -58,6 +60,8 @@ function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
  */
 export function KioskQrPanel() {
   const [host, setHost] = useState("");
+  /** 一次性操作提示（複製成功 / 列印被攔截）。 */
+  const [hint, setHint] = useState<string | null>(null);
   // 監聽本地設定 / bootstrap / device-config 變動，保存枱位後即時刷新，唔使人手 reload。
   // 設定係 render body 讀 localStorage，所以用一個 bump state 強制 re-render 重新讀。
   const [, setTick] = useState(0);
@@ -115,6 +119,12 @@ export function KioskQrPanel() {
         className="mb-6 w-full rounded-lg border border-slate-200 p-2 text-sm"
       />
 
+      {hint ? (
+        <div className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800" role="status">
+          {hint}
+        </div>
+      ) : null}
+
       {tables.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-400">
           尚未設定桌台，請先到「樓層與桌台」新增。
@@ -133,12 +143,32 @@ export function KioskQrPanel() {
                   <QrSvg text={url} size={140} />
                 </div>
                 <div className="mt-2 break-all text-[10px] text-slate-400">{url}</div>
-                <button
-                  onClick={() => navigator.clipboard?.writeText(url)}
-                  className="mt-2 w-full rounded-lg bg-orange-500 py-1.5 text-xs font-semibold text-white"
-                >
-                  複製網址
-                </button>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(url);
+                      setHint(`已複製「${table.name || "桌台"}」嘅點餐網址。`);
+                    }}
+                    className="rounded-lg bg-slate-100 py-1.5 text-xs font-semibold text-slate-700"
+                  >
+                    複製網址
+                  </button>
+                  <button
+                    onClick={() => {
+                      const ok = openQrPrintWindow({
+                        title: table.name || "桌台",
+                        subtitle: bootstrap.storeName || undefined,
+                        footer: "掃碼點餐",
+                        url,
+                        size: 320,
+                      });
+                      if (!ok) setHint("無法開啟列印視窗，請允許彈出視窗或改用「複製網址」。");
+                    }}
+                    className="rounded-lg bg-orange-500 py-1.5 text-xs font-semibold text-white"
+                  >
+                    列印
+                  </button>
+                </div>
               </div>
             );
           })}
