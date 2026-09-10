@@ -25,6 +25,7 @@ import {
   saveQueue,
   saveShiftHistory,
   saveShiftState,
+  type ShiftHistoryRecord,
 } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
 import {
@@ -40,7 +41,8 @@ import {
   serverCloseShift,
   serverOpenShift,
 } from "@/lib/shift-sync";
-import { DeviceConfig, DevicePrinterConfig, PrintJob, PosOrder, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, PosOrder, QueueEvent, ShiftSettlementSnapshot } from "@/lib/types";
+import { buildShiftPrintJobs } from "@/lib/print-jobs";
 import { formatMoney } from "@/lib/format";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 
@@ -127,86 +129,55 @@ function interpretCashDiff(raw: string) {
 // ── 交班明細快照（2026-09-08）──
 // 結數交班 step3「打印預覽」與實際打印共用同一份快照：進入 step3 時固化，
 // 之後「打印／跳過 → 完成交班」都用地呢份數，保證 預覽 == 紙本 == 交班記錄。
-type ShiftDetailSnapshot = {
-  /** 交班時間（進入預覽一刻固化，交班記錄同紙本都用呢個）。 */
-  closedAt: string;
-  /** 單號序號：`YYYY-MM-DD-NN`（NN = 當日第幾班）。 */
-  shiftNo: string;
-  storeName: string;
-  employee: string;
-  openedAt?: string;
-  store: {
-    count: number;
-    revenue: number;
-    receivableTotal: number;
-    paidTotal: number;
-    prepaid: number;
-    refundCount: number;
-    refundAmount: number;
-  };
-  /** 會員通線上（Ledger）——未登入 / 冇資料時 null（紙本成組唔印）。 */
-  online: {
-    orderCount: number;
-    paidMop: number;
-    balancePaidMop: number;
-    inStorePaidMop: number;
-  } | null;
-  payments: { method: string; receivable: number; paid: number; count: number }[];
-  /** 今日買貨成本——冇做成本記錄時 null。 */
-  purchase: { paid: number; unpaid: number } | null;
-  cash: { expected: number; actual?: number; diff?: number };
-  // 冇 G 區（待同步/技術狀態唔上紙本），但歷史記錄仍要記，跟住快照走。
-  pendingEvents: number;
-  failedEvents: number;
-  skippedEvents: number;
-  pendingPrints: number;
-  note: string;
-};
+//
+// 2026-09-10：類型搬去 `types.ts`（正名 `ShiftSettlementSnapshot`）——
+// `escpos-template.ts` 嘅 `buildShiftContent()` 要讀同一份形狀，而 lib 唔應該
+// 反向 import component（會成 circular dependency）。呢度保留舊名做 alias，
+// 令本檔既有引用（`previewData` / `ShiftHistoryRecord.detail` …）零改動。
+type ShiftDetailSnapshot = ShiftSettlementSnapshot;
 
-/** 快照 → ESC/POS 文本行（打印 job items）。預覽（結構化渲染）同呢度同源。 */
-function shiftDetailToLines(data: ShiftDetailSnapshot): string[] {
-  return [
-    `單號：交班單 ${data.shiftNo}`,
-    data.storeName ? `店舖：${data.storeName}` : "",
-    `班次員工：${data.employee}`,
-    `交班時間：${formatMacauDateTime(data.closedAt)}`,
-    data.openedAt ? `開工時間：${formatMacauDateTime(data.openedAt)}` : "",
-    "— 店內（今日）—",
-    `已結帳訂單：${data.store.count} 張`,
-    `營業額：${formatMoney(data.store.revenue)}`,
-    `應收金額合計（線下 POS）：${formatMoney(data.store.receivableTotal)}`,
-    `實收金額合計（線下 POS）：${formatMoney(data.store.paidTotal)}`,
-    `線上已支付（店內單）：${formatMoney(data.store.prepaid)}`,
-    `退款：${data.store.refundCount} 張 / ${formatMoney(data.store.refundAmount)}`,
-    ...(data.online
-      ? [
-          "— 會員通線上（今日）—",
-          `線上訂單：${data.online.orderCount} 張`,
-          `已付線上營業額：${formatMoney(data.online.paidMop)}`,
-          `餘額扣點：${formatMoney(data.online.balancePaidMop)}`,
-          `到店／貨到付款：${formatMoney(data.online.inStorePaidMop)}`,
-          `線上線下合計（實收金額合計）：${formatMoney(data.store.paidTotal + data.online.paidMop)}`,
-        ]
-      : []),
-    "— 支付方式分項（線下 POS）—",
-    ...(data.payments.length === 0
-      ? ["（今日暫無已結帳線下訂單）"]
-      : data.payments.map(
-          (bucket) =>
-            `${bucket.method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
-        )),
-    ...(data.purchase
-      ? [
-          `今日買貨成本（已付）：${formatMoney(data.purchase.paid)}`,
-          ...(data.purchase.unpaid > 0 ? [`（未付 ${formatMoney(data.purchase.unpaid)} 不計入）`] : []),
-        ]
-      : []),
-    "— 現金箱核對 —",
-    `應收現金：${formatMoney(data.cash.expected)}`,
-    typeof data.cash.actual === "number" ? `實收現金：${formatMoney(data.cash.actual)}` : "",
-    typeof data.cash.diff === "number" ? `現金差額：${formatMoney(data.cash.diff)}` : "",
-    data.note ? `備註：${data.note}` : "",
-  ].filter(Boolean);
+/** 交班歷史記錄 → 結算快照（重打用）。 */
+function shiftRowToSettlement(row: ShiftHistoryRecord): ShiftSettlementSnapshot {
+  // 2026-09-10 之後交班嘅記錄直接存咗完整快照 → 原封還原（連線上區塊都準）。
+  if (row.detail) return row.detail;
+  // 舊記錄（冇 detail）：由扁平欄位盡量還原。
+  // ⚠️ 舊記錄只存咗 `onlinePaidMop`，冇「線上訂單張數 / 餘額扣點 / 到店貨到付款」。
+  // 唯一誠實嘅做法：`onlinePaidMop <= 0` 當冇線上資料（成組唔印）；
+  // > 0 就只印「已付線上營業額」（其餘細項補 0 會誤導對數），見 buildShiftContent 註釋。
+  const onlinePaid = row.onlinePaidMop ?? 0;
+  return {
+    closedAt: row.closedAt,
+    shiftNo: row.shiftNo ?? "",
+    storeName: row.storeName ?? "",
+    employee: row.employeeName ?? row.employeeAccount ?? "未記錄",
+    openedAt: row.openedAt,
+    store: {
+      count: row.settledCount,
+      revenue: row.revenue,
+      receivableTotal: row.receivableTotal ?? 0,
+      paidTotal: row.paidTotal ?? 0,
+      prepaid: row.prepaid,
+      refundCount: row.refundCount,
+      refundAmount: row.refundAmount,
+    },
+    online:
+      onlinePaid > 0
+        ? { orderCount: 0, paidMop: onlinePaid, balancePaidMop: 0, inStorePaidMop: 0 }
+        : null,
+    payments: Object.entries(row.paymentBreakdown).map(([method, value]) => ({
+      method,
+      receivable: typeof value === "number" ? value : value.receivable,
+      paid: typeof value === "number" ? value : value.paid,
+      count: typeof value === "number" ? 1 : value.count,
+    })),
+    purchase: typeof row.purchasePaid === "number" ? { paid: row.purchasePaid, unpaid: 0 } : null,
+    cash: { expected: row.expectedCash, actual: row.actualCash, diff: row.cashDifference },
+    pendingEvents: row.pendingEvents,
+    failedEvents: row.failedEvents ?? 0,
+    skippedEvents: row.skippedEvents ?? 0,
+    pendingPrints: row.pendingPrints,
+    note: row.closingNote ?? "",
+  };
 }
 
 /**
@@ -455,59 +426,6 @@ export function ShiftPage() {
   );
 
   /**
-   * 重打交班單（2026-09-08 改新「交班明細」格式）：
-   * 表頭（單號/店舖/員工/時間）+ 店內 + 線上 + 支付分項 + 買貨 + 現金箱核對 + 備註。
-   * 冇 G 區（待同步/技術狀態唔上紙本）。舊記錄缺 shiftNo/storeName/purchasePaid 時相關行自動唔印。
-   */
-  function buildShiftPrintLines(row: (typeof shiftHistory)[number]) {
-    const lines = [
-      row.shiftNo ? `單號：交班單 ${row.shiftNo}` : "",
-      row.storeName ? `店舖：${row.storeName}` : "",
-      `班次員工：${row.employeeName ?? row.employeeAccount ?? "未記錄"}`,
-      `交班時間：${formatMacauDateTime(row.closedAt)}`,
-      row.openedAt ? `開工時間：${formatMacauDateTime(row.openedAt)}` : "",
-      "— 店內（今日）—",
-      `已結帳訂單：${row.settledCount} 張`,
-      `營業額：${formatMoney(row.revenue)}`,
-      `應收金額合計（線下 POS）：${formatMoney(row.receivableTotal ?? 0)}`,
-      `實收金額合計（線下 POS）：${formatMoney(row.paidTotal ?? 0)}`,
-      `線上已支付：${formatMoney(row.prepaid)}`,
-      `退款：${row.refundCount} 張 / ${formatMoney(row.refundAmount)}`,
-      ...((row.onlinePaidMop ?? 0) > 0
-        ? [
-            "— 會員通線上（今日）—",
-            `已付線上營業額：${formatMoney(row.onlinePaidMop ?? 0)}`,
-            `線上線下合計：${formatMoney((row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0))}`,
-          ]
-        : []),
-      "— 支付方式分項 —",
-      ...(row.paymentBreakdown && Object.keys(row.paymentBreakdown).length > 0
-        ? Object.entries(row.paymentBreakdown)
-            .map(([method, value]) => ({
-              method,
-              receivable: typeof value === "number" ? value : value.receivable,
-              paid: typeof value === "number" ? value : value.paid,
-              count: typeof value === "number" ? 1 : value.count,
-            }))
-            .sort((a, b) => b.paid - a.paid)
-            .map(
-              (bucket) =>
-                `${bucket.method}：應收 ${formatMoney(bucket.receivable)} / 實收 ${formatMoney(bucket.paid)} · ${bucket.count} 張`,
-            )
-        : ["（今日暫無已結帳線下訂單）"]),
-      ...(typeof row.purchasePaid === "number"
-        ? [`今日買貨成本（已付）：${formatMoney(row.purchasePaid)}`]
-        : []),
-      "— 現金箱核對 —",
-      `應收現金：${formatMoney(row.expectedCash)}`,
-      typeof row.actualCash === "number" ? `實收現金：${formatMoney(row.actualCash)}` : "",
-      typeof row.cashDifference === "number" ? `現金差額：${formatMoney(row.cashDifference)}` : "",
-      row.closingNote ? `備註：${row.closingNote}` : "",
-    ];
-    return lines.filter(Boolean);
-  }
-
-  /**
    * 進入 step3 打印預覽時固化快照：closedAt 用當下時間、單號按當日班次序號生成。
    * 之後「打印／跳過 → closeShift」都用同一份，保證 預覽 == 紙本 == 交班記錄。
    */
@@ -557,6 +475,17 @@ export function ShiftPage() {
     };
   }
 
+  /**
+   * 重打交班單（2026-09-10 改走「交班模板」管線）。
+   *
+   * 以前呢度有第二份硬編行文（`buildShiftPrintLines`），同交班即印嗰份
+   * （`shiftDetailToLines`）**內容唔一致**：重打冇「線上訂單張數 / 餘額扣點 /
+   * 到店貨到付款」，分節標題亦少咗「（線下 POS）」→ 同一張單「即印」同「重打」對唔上。
+   *
+   * 而家兩條路徑都收斂成 `buildShiftPrintJobs()`（同一個 builder、同一份
+   * `buildShiftContent()`、同一個商家設計嘅 `printTemplates.shift` 模板）：
+   * 舊記錄冇完整快照時，`shiftRowToSettlement()` 會由扁平欄位盡量還原。
+   */
   function reprintShiftRecord(row: (typeof shiftHistory)[number]) {
     if (reprintingShiftId) return;
     setReprintingShiftId(row.id);
@@ -564,19 +493,13 @@ export function ShiftPage() {
     const shiftPrinter = pickShiftPrinter(deviceConfig);
     const printerName = shiftPrinter?.name ?? "收據打印機";
     const now = new Date().toISOString();
-    const printJob: PrintJob = {
-      id: uid("print"),
+    const [printJob] = buildShiftPrintJobs({
+      data: shiftRowToSettlement(row),
       orderId: row.id,
       orderNo: row.shiftNo ? `交班單重打 ${row.shiftNo}` : `交班單重打 ${row.closedAt.slice(0, 10)}`,
-      tableName: "",
-      ticketType: "normal",
-      printerGroup: "receipt",
       printerId: shiftPrinter?.id,
       printerName,
-      items: buildShiftPrintLines(row).map((line) => ({ name: line, quantity: 1 })),
-      status: "pending",
-      createdAt: now,
-    };
+    });
     const nextPrintJobs = [printJob, ...loadPrintJobs()];
     savePrintJobs(nextPrintJobs);
     window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
@@ -784,6 +707,11 @@ export function ShiftPage() {
       failedEvents: snapshot.failedEvents,
       skippedEvents: snapshot.skippedEvents,
       pendingPrints: snapshot.pendingPrints,
+      /**
+       * 完整結算快照（2026-09-10）：重打交班單時原封還原同一份內容。
+       * 上面啲扁平欄位係畀列表 / CSV / server close 用；呢個係「紙本真源」。
+       */
+      detail: snapshot,
     };
     const closeSummary = historyRecord as unknown as Record<string, unknown>;
     const next = {
@@ -835,9 +763,8 @@ export function ShiftPage() {
     const shiftPrinter = pickShiftPrinter(deviceConfig);
     const printerName = shiftPrinter?.name ?? "收據打印機";
 
-    // 紙本內容 = step3 預覽同一份快照（shiftDetailToLines）；冇 G 區（待同步/技術狀態唔上紙本）。
-    const lines = shiftDetailToLines(snapshot);
-
+    // 紙本內容 = 商家設計嘅「交班模板」+ 呢份快照（`buildShiftContent`）。
+    // 冇 G 區（待同步/技術狀態唔上紙本）；預覽（step3 結構化 UI）同紙本同源。
     if (print) {
       // 交班單總開關（2026-09-08）：商家可關閉「交班單」自動打印。
       // ⚠️ 重打交班單（reprintShiftRecord）係**手動**掣，唔受呢個影響，
@@ -847,19 +774,13 @@ export function ShiftPage() {
         setClosingShift(false);
         return;
       }
-      const printJob: PrintJob = {
-        id: uid("print"),
+      const [printJob] = buildShiftPrintJobs({
+        data: snapshot,
         orderId: `shift-${now}`,
         orderNo: `交班單 ${snapshot.shiftNo}`,
-        tableName: "",
-        ticketType: "normal",
-        printerGroup: "receipt",
         printerId: shiftPrinter?.id,
         printerName,
-        items: lines.map((line) => ({ name: line, quantity: 1 })),
-        status: "pending",
-        createdAt: now,
-      };
+      });
 
       const nextPrintJobs = [printJob, ...loadPrintJobs()];
       savePrintJobs(nextPrintJobs);

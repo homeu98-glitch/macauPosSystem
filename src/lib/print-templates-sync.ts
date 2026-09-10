@@ -1,4 +1,4 @@
-import { PrintTemplates } from "@/lib/types";
+import { PrintTemplates, ShiftTemplateVariant } from "@/lib/types";
 
 /**
  * 打印模板雲端同步 helper（0027 `pos_print_templates` 表）。
@@ -10,11 +10,23 @@ import { PrintTemplates } from "@/lib/types";
  * 同成個 POS 嘅「離線優先」一致（落唔到雲端就停喺本機，唔好彈 error 卡住收銀）。
  */
 
+/**
+ * 交班模板範本庫（2026-09-10，0030 migration）。
+ *
+ * `activeId` = 上次「套用」嘅範本 id（純介面提示，唔參與出紙）。
+ */
+export type ShiftPresetsPayload = {
+  presets: ShiftTemplateVariant[];
+  activeId: string;
+};
+
 export type StorePrintTemplatesResult = {
   /** server 有冇存過呢間店嘅模板（false = 未設定 → 保留本地）。 */
   found: boolean;
   /** normalize 後嘅完整模板（found=false 時為 null）。 */
   templates: PrintTemplates | null;
+  /** 交班模板範本庫（舊 server row / 未升級 → null，caller 保留本地）。 */
+  shiftPresets: ShiftPresetsPayload | null;
   /** server 版本時間戳（LWW 基準；未設定過 / fallback 時為 null）。 */
   updatedAt: string | null;
 };
@@ -31,12 +43,19 @@ export async function fetchStorePrintTemplates(storeId: string): Promise<StorePr
   }
   if (!res.ok) return null;
   const data = (await res.json().catch(() => null)) as
-    | { ok?: boolean; found?: boolean; templates?: PrintTemplates | null; updatedAt?: string | null }
+    | {
+        ok?: boolean;
+        found?: boolean;
+        templates?: PrintTemplates | null;
+        shiftPresets?: ShiftPresetsPayload | null;
+        updatedAt?: string | null;
+      }
     | null;
   if (!data?.ok) return null;
   return {
     found: Boolean(data.found),
     templates: data.templates ?? null,
+    shiftPresets: data.shiftPresets ?? null,
     updatedAt: data.updatedAt ?? null,
   };
 }
@@ -45,13 +64,15 @@ export async function fetchStorePrintTemplates(storeId: string): Promise<StorePr
 export async function pushStorePrintTemplates(
   storeId: string,
   templates: PrintTemplates,
+  shiftPresets?: ShiftPresetsPayload,
 ): Promise<{ updatedAt: string } | null> {
   let res: Response;
   try {
     res = await fetch(`/api/pos/print-templates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storeId, templates }),
+      // shiftPresets 唔傳 = server 保留 DB 舊值（唔會清空範本庫）。
+      body: JSON.stringify({ storeId, templates, shiftPresets }),
     });
   } catch {
     return null; // 離線 / 網絡錯

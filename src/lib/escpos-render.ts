@@ -116,6 +116,14 @@ export interface EscPosRenderExtras {
 export const RECEIPT_PAPER_COLUMNS = 48;
 
 // 單據抬頭（label 唔印抬頭，62mm 標籤紙太細）
+//
+// ⚠️ 刻意**冇** `shift`：交班結算單嘅抬頭由模板嘅 `header` 區塊自己帶
+// （`ShiftTemplate.headerText`，商家可改）。原因：呢個表要同三個 repo
+// （POS / desktop-companion / print-agent-android）逐字一致，而下游兩個 repo
+// 嘅 `TITLE` 表只認 receipt / label / kitchen —— 如果呢度加咗 `shift`，
+// 就會出現「POS 預覽有抬頭、實紙冇」嘅不一致（違反「設計 == 預覽 == 出紙」）。
+// 交班單亦唔應該借用 kitchen 嘅「＊＊＊ 廚房 ＊＊＊」。
+// 要加就要三個 repo 同步加；目前用 header 區塊係零跨 repo 改動嘅做法。
 const TITLE: Record<string, string> = {
   receipt: "＊＊＊ 收據 ＊＊＊",
   label: "",

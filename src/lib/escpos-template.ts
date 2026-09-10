@@ -11,6 +11,10 @@ import {
   KitchenSectionId,
   LabelSectionId,
   ReceiptSectionId,
+  ShiftSectionId,
+  ShiftSettlementSnapshot,
+  ShiftTemplate,
+  ShiftTemplateVariant,
 } from "@/lib/types";
 
 // ── 區塊中繼資料（id + 中文標籤），設計介面 / 預覽共用 ──
@@ -67,6 +71,45 @@ export const KITCHEN_SECTION_META: { id: KitchenSectionId; label: string }[] = [
   { id: "items", label: "菜品明細" },
   { id: "customer_count", label: "人數" },
   { id: "order_note", label: "全單備註" },
+  { id: "footer", label: "頁尾文案" },
+];
+
+/**
+ * 交班結算單嘅區塊清單（2026-09-10「交班模板」）。
+ *
+ * 順序同呢度一致 = 預設出紙順序；`section_*` 係分節標題，可以獨立改名 / 熄掉。
+ * 標籤文案刻意寫得白啲（例如「應收金額合計（線下 POS）」），方便商家喺設計介面
+ * 一眼認得邊個區塊對應紙本邊一行。
+ */
+export const SHIFT_SECTION_META: { id: ShiftSectionId; label: string }[] = [
+  { id: "header", label: "抬頭" },
+  { id: "store_name", label: "門店名" },
+  { id: "shift_no", label: "交班單號" },
+  { id: "employee", label: "班次員工" },
+  { id: "close_time", label: "交班時間" },
+  { id: "open_time", label: "開工時間" },
+  { id: "section_store", label: "分節標題：店內（今日）" },
+  { id: "settled_count", label: "已結帳訂單" },
+  { id: "revenue", label: "營業額" },
+  { id: "receivable_total", label: "應收金額合計（線下 POS）" },
+  { id: "paid_total", label: "實收金額合計（線下 POS）" },
+  { id: "prepaid", label: "線上已支付（店內單）" },
+  { id: "refund", label: "退款" },
+  { id: "section_online", label: "分節標題：會員通線上（今日）" },
+  { id: "online_order_count", label: "線上訂單" },
+  { id: "online_paid", label: "已付線上營業額" },
+  { id: "online_balance", label: "餘額扣點" },
+  { id: "online_in_store", label: "到店／貨到付款" },
+  { id: "online_total", label: "線上線下合計" },
+  { id: "section_payment", label: "分節標題：支付方式分項" },
+  { id: "payment_breakdown", label: "支付方式明細" },
+  { id: "section_purchase", label: "分節標題：買貨成本（今日）" },
+  { id: "purchase_paid", label: "今日買貨成本（已付）" },
+  { id: "section_cash", label: "分節標題：現金箱核對" },
+  { id: "expected_cash", label: "應收現金" },
+  { id: "actual_cash", label: "實收現金" },
+  { id: "cash_diff", label: "現金差額" },
+  { id: "note", label: "備註" },
   { id: "footer", label: "頁尾文案" },
 ];
 
@@ -227,6 +270,119 @@ export const DEFAULT_KITCHEN_TEMPLATE: KitchenTemplate = {
   footerText: "廚房留底",
 };
 
+const SHIFT_BLOCK_DEFAULTS: Record<ShiftSectionId, EscPosBlockStyle> = {
+  header: block(true, "m", true, "center"),
+  store_name: block(true, "s", false, "left"),
+  shift_no: block(true, "s", false, "left"),
+  employee: block(true, "s", false, "left"),
+  close_time: block(true, "s", false, "left"),
+  open_time: block(true, "s", false, "left"),
+  section_store: block(true, "s", true, "left"),
+  settled_count: block(true, "s", false, "left"),
+  revenue: block(true, "s", true, "left"),
+  receivable_total: block(true, "s", false, "left"),
+  paid_total: block(true, "s", true, "left"),
+  prepaid: block(true, "s", false, "left"),
+  refund: block(true, "s", false, "left"),
+  section_online: block(true, "s", true, "left"),
+  online_order_count: block(true, "s", false, "left"),
+  online_paid: block(true, "s", false, "left"),
+  online_balance: block(true, "s", false, "left"),
+  online_in_store: block(true, "s", false, "left"),
+  online_total: block(true, "s", true, "left"),
+  section_payment: block(true, "s", true, "left"),
+  payment_breakdown: block(true, "s", false, "left"),
+  section_purchase: block(true, "s", true, "left"),
+  purchase_paid: block(true, "s", false, "left"),
+  section_cash: block(true, "s", true, "left"),
+  expected_cash: block(true, "s", true, "left"),
+  actual_cash: block(true, "s", false, "left"),
+  cash_diff: block(true, "s", false, "left"),
+  note: block(true, "s", false, "left"),
+  footer: block(true, "s", false, "center"),
+};
+
+/**
+ * 分節標題嘅出廠文字。商家可以喺設計介面逐個改（存喺 `ShiftTemplate.sectionTitles`），
+ * 呢度只係缺省值。改成空字串 = 該區塊唔印（`buildShiftContent` 會回空字串，
+ * renderer `if (!text) continue` 直接跳過）。
+ */
+export const SHIFT_SECTION_TITLES: Record<
+  Extract<ShiftSectionId, `section_${string}`>,
+  string
+> = {
+  section_store: "— 店內（今日）—",
+  section_online: "— 會員通線上（今日）—",
+  section_payment: "— 支付方式分項（線下 POS）—",
+  section_purchase: "— 買貨成本（今日）—",
+  section_cash: "— 現金箱核對 —",
+};
+
+/**
+ * 交班結算單模板嘅預設內容。
+ *
+ * 順序 = 舊硬編 `shiftDetailToLines()` 嘅出紙順序（原封保留，令升級後出紙唔會突變），
+ * 只係多咗一個 `header` 抬頭（舊版冇標題，令紙本唔知係咩單）。
+ */
+export const DEFAULT_SHIFT_TEMPLATE: ShiftTemplate = {
+  blocks: { ...SHIFT_BLOCK_DEFAULTS },
+  order: [
+    "header",
+    "store_name",
+    "shift_no",
+    "employee",
+    "close_time",
+    "open_time",
+    "section_store",
+    "settled_count",
+    "revenue",
+    "receivable_total",
+    "paid_total",
+    "prepaid",
+    "refund",
+    "section_online",
+    "online_order_count",
+    "online_paid",
+    "online_balance",
+    "online_in_store",
+    "online_total",
+    "section_payment",
+    "payment_breakdown",
+    "section_purchase",
+    "purchase_paid",
+    "section_cash",
+    "expected_cash",
+    "actual_cash",
+    "cash_diff",
+    "note",
+    "footer",
+  ],
+  headerText: "＊＊＊ 交班結算單 ＊＊＊",
+  footerText: "交班人簽名：＿＿＿＿＿＿＿＿",
+  sectionTitles: { ...SHIFT_SECTION_TITLES },
+};
+
+/**
+ * 範本庫嘅出廠內容：一套「標準交班單」（= 預設排版）。
+ *
+ * 刻意唔留空 —— 商家一入「交班模板」頁就見到「範本」係咩概念，
+ * 亦即刻有得試「套用」。範本係**可刪**嘅（刪光都唔影響出紙，因為出紙讀
+ * `printTemplates.shift` 呢個工作中模板，唔係讀範本庫）。
+ */
+export const DEFAULT_SHIFT_TEMPLATE_PRESETS: ShiftTemplateVariant[] = [
+  {
+    id: "shift-preset-standard",
+    name: "標準交班單",
+    template: DEFAULT_SHIFT_TEMPLATE,
+  },
+];
+
+/**
+ * 範本庫嘅「預設 id」：新店 / 舊 localStorage 冇 `activeShiftTemplateId` 時用呢個。
+ * 同 `DEFAULT_SHIFT_TEMPLATE_PRESETS[0].id` 對應。
+ */
+export const DEFAULT_SHIFT_TEMPLATE_PRESET_ID = DEFAULT_SHIFT_TEMPLATE_PRESETS[0].id;
+
 /**
  * 舊模版補新區塊（向前兼容）。
  *
@@ -298,21 +454,156 @@ export function withLabelFixedSizes<T extends LabelTemplate>(template: T): T {
   return { ...template, blocks };
 }
 
-/** 將商家 template 解析成自包含快照（順序 + 開關 + 字型），拼接落 PrintJob.template */
-export function buildSnapshot(kind: PrintTemplateKind, template: ReceiptTemplate | LabelTemplate | KitchenTemplate): EscPosTemplateSnapshot {
+/**
+ * 將商家 template 解析成自包含快照（順序 + 開關 + 字型），拼接落 PrintJob.template。
+ *
+ * `kind` 會原封寫入快照：`receipt | label | kitchen | shift`。
+ * 三個下游 repo（POS / desktop-companion / print-agent-android）嘅 TITLE 表只認
+ * receipt / label / kitchen —— 傳 `"shift"` 會 fall through 去空字串，
+ * 即係**唔會印錯標題**，交班單嘅抬頭由 `header` 區塊自己帶（商家可改）。
+ * 呢個係刻意設計：唔加跨 repo 改動都可以做到「零錯標題 + 可自訂抬頭」。
+ */
+export function buildSnapshot(
+  kind: PrintTemplateKind,
+  template: ReceiptTemplate | LabelTemplate | KitchenTemplate | ShiftTemplate,
+): EscPosTemplateSnapshot {
   // 收據（含自助點餐機槽位，兩者都係 kind="receipt"）先補新區塊，
   // 等舊 localStorage 設定都可以用到後來加嘅 `qr_code`。
   // 收據（含自助點餐機）先補 `qr_code`；收據 / 廚房再補 `divider`（分格線 size）。
-  // 標籤唔補 divider（標籤紙冇分格線，且字型鎖死）。
+  // ⚠️ 交班模板**唔補 divider**：交班單冇 `items` 區塊，而三個 repo 嘅分格線都係
+  // 跟 items 自動生成 → 補咗只會多個撳咗冇反應嘅死開關（見 ShiftSectionId 註釋）。
+  // 標籤同樣唔補 divider（標籤紙冇分格線，且字型鎖死）。
   const withReceipt = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
   const source =
     kind === "label"
       ? withLabelFixedSizes(template as LabelTemplate)   // 標籤字型鎖死
-      : ensureDividerSection(withReceipt as unknown as { blocks: Record<string, EscPosBlockStyle>; order: string[] });
+      : kind === "shift"
+        ? normalizeShiftTemplate(withReceipt as Partial<ShiftTemplate>)  // 交班：補齊區塊、唔補 divider
+        : ensureDividerSection(withReceipt as unknown as { blocks: Record<string, EscPosBlockStyle>; order: string[] });
   return {
     kind,
     blocks: source.order.map((id) => ({ id, ...source.blocks[id as keyof typeof source.blocks] })),
   };
+}
+
+/**
+ * 交班模板補齊區塊（向前兼容 + 防呆）。
+ *
+ * 交班模板係新功能，理論上唔會有「舊設定缺區塊」；但雲端 DB 可能存咗
+ * 由舊版本 / 手改過嘅殘缺 JSON，所以讀取時一律補齊：
+ * - `order` 過濾無效 id、去重，再按 `SHIFT_SECTION_META` 補回缺失嘅區塊（插喺原位置之後）；
+ * - `blocks` 逐 id merge 預設，保證每個 id 都有完整 style（唔會 undefined 炸預覽）。
+ *
+ * 唔會改動商家任何既有設定（有嘅值一律保留）。
+ */
+export function normalizeShiftTemplate(input: Partial<ShiftTemplate> | null | undefined): ShiftTemplate {
+  const storedBlocks = (input?.blocks ?? {}) as Partial<Record<ShiftSectionId, EscPosBlockStyle>>;
+  const blocks = {} as Record<ShiftSectionId, EscPosBlockStyle>;
+  for (const { id } of SHIFT_SECTION_META) {
+    blocks[id] = { ...SHIFT_BLOCK_DEFAULTS[id], ...(storedBlocks[id] ?? {}) };
+  }
+  const canonical = SHIFT_SECTION_META.map((m) => m.id);
+  const stored = Array.isArray(input?.order) ? input.order : [];
+  const seen = new Set<ShiftSectionId>();
+  const order: ShiftSectionId[] = [];
+  for (const id of stored) {
+    // 過濾未知 id（舊版 / 手改）同重複項，否則 renderer 會 emit 一行 `undefined`
+    if (canonical.includes(id) && !seen.has(id)) {
+      seen.add(id);
+      order.push(id);
+    }
+  }
+  // 缺失區塊補喺「同 META 順序一致」嘅位置：逐個 canonical 檢查，未出現就插入。
+  for (const id of canonical) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    // 插喺「canonical 入面排喺佢後面、而 order 已存在」嗰個之前；冇就補落尾
+    const nextExisting = canonical
+      .slice(canonical.indexOf(id) + 1)
+      .find((later) => order.includes(later));
+    const at = nextExisting ? order.indexOf(nextExisting) : -1;
+    if (at >= 0) order.splice(at, 0, id);
+    else order.push(id);
+  }
+  return {
+    blocks,
+    order,
+    headerText: typeof input?.headerText === "string" ? input.headerText : DEFAULT_SHIFT_TEMPLATE.headerText,
+    footerText: typeof input?.footerText === "string" ? input.footerText : DEFAULT_SHIFT_TEMPLATE.footerText,
+    sectionTitles: normalizeShiftSectionTitles(input?.sectionTitles),
+  };
+}
+
+/**
+ * 分節標題 normalize：只保留「合法 section id + 字串值」，缺 key 一律補出廠文字。
+ *
+ * 刻意**唔**用 `?? 出廠值` 逐個硬寫 —— 咁樣商家改成空字串（想唔印）時就會被
+ * 誤判成「未設定」而還原返出廠文字。改用「key 存在（即使係空字串）→ 尊重商家」。
+ */
+function normalizeShiftSectionTitles(
+  input: Partial<Record<ShiftSectionId, string>> | null | undefined,
+): Partial<Record<ShiftSectionId, string>> {
+  const out: Partial<Record<ShiftSectionId, string>> = {};
+  for (const id of Object.keys(SHIFT_SECTION_TITLES) as (keyof typeof SHIFT_SECTION_TITLES)[]) {
+    const stored = input?.[id];
+    out[id] = typeof stored === "string" ? stored : SHIFT_SECTION_TITLES[id];
+  }
+  return out;
+}
+
+/**
+ * 範本庫 normalize：過濾壞項（缺 id / name / template）、補齊每個範本嘅模板結構。
+ *
+ * 回傳**保證非空**：input 係空陣列 / 全部壞項 → 回傳出廠預設範本，
+ * 令「範本庫」永遠有嘢揀（商家之後可以再刪）。
+ */
+export function normalizeShiftTemplatePresets(input: unknown): ShiftTemplateVariant[] {
+  if (!Array.isArray(input)) return DEFAULT_SHIFT_TEMPLATE_PRESETS.map(cloneVariant);
+  const seen = new Set<string>();
+  const out: ShiftTemplateVariant[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Partial<ShiftTemplateVariant>;
+    const id = typeof v.id === "string" ? v.id.trim() : "";
+    const name = typeof v.name === "string" ? v.name.trim() : "";
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name, template: normalizeShiftTemplate(v.template) });
+  }
+  return out.length > 0 ? out : DEFAULT_SHIFT_TEMPLATE_PRESETS.map(cloneVariant);
+}
+
+/** 深拷貝一個範本（避免範本庫同工作中模板不小心共用同一個物件參照）。 */
+export function cloneShiftTemplate(template: ShiftTemplate): ShiftTemplate {
+  const blocks = {} as Record<ShiftSectionId, EscPosBlockStyle>;
+  for (const { id } of SHIFT_SECTION_META) {
+    blocks[id] = { ...template.blocks[id] };
+  }
+  return {
+    blocks,
+    order: [...template.order],
+    headerText: template.headerText,
+    footerText: template.footerText,
+    sectionTitles: { ...(template.sectionTitles ?? SHIFT_SECTION_TITLES) },
+  };
+}
+
+function cloneVariant(v: ShiftTemplateVariant): ShiftTemplateVariant {
+  return { id: v.id, name: v.name, template: cloneShiftTemplate(v.template) };
+}
+
+/**
+ * 由 active id 揾返範本名（純介面提示用）。
+ *
+ * 對唔上（範本已被刪 / 從未套用）→ 回傳 null，介面就唔顯示「基於範本：XXX」。
+ * **唔會 throw、唔會影響出紙** —— 出紙一律讀 `printTemplates.shift`。
+ */
+export function resolveActiveShiftPresetName(
+  presets: ShiftTemplateVariant[],
+  activeId: string | null | undefined,
+): string | null {
+  if (!activeId) return null;
+  return presets.find((p) => p.id === activeId)?.name ?? null;
 }
 
 // ── 標籤規格解析（飲品溫度 / 杯型 / 甜度 / 冰量 / 加料）──
@@ -562,6 +853,124 @@ export function buildKitchenContent(order: PosOrder, opts: KitchenContentOpts): 
     footer: opts.footerText,
   };
 }
+
+export interface ShiftContentOpts {
+  storeName: string;
+  /** 抬頭文字（模板 `headerText`）。 */
+  headerText: string;
+  footerText: string;
+  /** 分節標題（模板 `sectionTitles`）；缺省用 `SHIFT_SECTION_TITLES`。 */
+  sectionTitles?: Partial<Record<ShiftSectionId, string>>;
+  currency?: string;
+}
+
+/**
+ * 交班結算單：資料快照 → content map（`ShiftSectionId` → 文字）。
+ *
+ * 呢個係交班單內容嘅**唯一真源**：交班即印、歷史重打、設計頁預覽三條路徑都行呢度。
+ * （以前有兩份近似但唔一致嘅 builder —— `shiftDetailToLines()` 同 `buildShiftPrintLines()`，
+ * 令「交班即印」同「歷史重打」出紙內容唔同；今次一併收斂成一份。）
+ *
+ * 缺失 / 唔適用嘅區塊一律回**空字串**：`renderEscPosLines()` 同三個通道嘅 renderer
+ * 見到空字串都會直接跳過，唔會留空行。所以商家唔需要為「當日冇線上單」特登熄區塊。
+ *
+ * @param data 交班快照（見 `ShiftSettlementSnapshot`）。
+ * @param opts 模板層級設定（抬頭 / 頁尾 / 分節標題 / 幣別）。
+ */
+export function buildShiftContent(data: ShiftSettlementSnapshot, opts: ShiftContentOpts): Record<string, string> {
+  const currency = opts.currency ?? "MOP";
+  const money = (value: number) => formatMoney(Number.isFinite(value) ? value : 0, currency);
+  const titles = { ...SHIFT_SECTION_TITLES, ...(opts.sectionTitles ?? {}) };
+  const online = data.online;
+  const purchase = data.purchase;
+  const cash = data.cash ?? { expected: 0 };
+  // 支付方式明細：一個方式一行，用 `\n` 串埋（同收據 discount_breakdown 同一手法）。
+  // 預覽用 `whitespace-pre-wrap`、出紙 `buf.line()` 兩邊都照印成多行。
+  const breakdown =
+    data.payments.length === 0
+      ? "（今日暫無已結帳線下訂單）"
+      : data.payments
+          .map((b) => `${b.method}：應收 ${money(b.receivable)} / 實收 ${money(b.paid)} · ${b.count} 張`)
+          .join("\n");
+
+  return {
+    header: opts.headerText,
+    store_name: data.storeName,
+    shift_no: data.shiftNo ? `單號：交班單 ${data.shiftNo}` : "",
+    employee: data.employee ? `班次員工：${data.employee}` : "",
+    close_time: data.closedAt ? `交班時間：${formatMacauDateTime(data.closedAt)}` : "",
+    open_time: data.openedAt ? `開工時間：${formatMacauDateTime(data.openedAt)}` : "",
+    section_store: titles.section_store ?? "",
+    settled_count: `已結帳訂單：${data.store.count} 張`,
+    revenue: `營業額：${money(data.store.revenue)}`,
+    receivable_total: `應收金額合計（線下 POS）：${money(data.store.receivableTotal)}`,
+    paid_total: `實收金額合計（線下 POS）：${money(data.store.paidTotal)}`,
+    prepaid: `線上已支付（店內單）：${money(data.store.prepaid)}`,
+    refund: `退款：${data.store.refundCount} 張 / ${money(data.store.refundAmount)}`,
+    // 線上區塊整組跟 `online` 有冇值：未登入會員通 / 冇 Ledger 資料 → 全部空字串（唔印）。
+    section_online: online ? (titles.section_online ?? "") : "",
+    online_order_count: online ? `線上訂單：${online.orderCount} 張` : "",
+    online_paid: online ? `已付線上營業額：${money(online.paidMop)}` : "",
+    online_balance: online ? `餘額扣點：${money(online.balancePaidMop)}` : "",
+    online_in_store: online ? `到店／貨到付款：${money(online.inStorePaidMop)}` : "",
+    online_total: online ? `線上線下合計（實收金額合計）：${money(data.store.paidTotal + online.paidMop)}` : "",
+    section_payment: titles.section_payment ?? "",
+    payment_breakdown: breakdown,
+    section_purchase: purchase ? (titles.section_purchase ?? "") : "",
+    purchase_paid: purchase
+      ? // 未付成本唔計入，但一定要講清楚，否則商家會以為買貨成本漏咗（原硬編行為，保留）
+        `今日買貨成本（已付）：${money(purchase.paid)}` +
+        (purchase.unpaid > 0 ? `\n（未付 ${money(purchase.unpaid)} 不計入）` : "")
+      : "",
+    section_cash: titles.section_cash ?? "",
+    expected_cash: `應收現金：${money(cash.expected)}`,
+    actual_cash: typeof cash.actual === "number" ? `實收現金：${money(cash.actual)}` : "",
+    cash_diff: typeof cash.diff === "number" ? `現金差額：${money(cash.diff)}` : "",
+    note: data.note ? `備註：${data.note}` : "",
+    footer: opts.footerText,
+  };
+}
+
+/**
+ * 交班模板設計頁嘅**示例快照**（唔依賴任何真實交班記錄）。
+ *
+ * 刻意用一個「乜都有值」嘅例子（有線上單、有買貨成本、有現金差額、有多個支付方式），
+ * 咁商家喺設計頁就一眼睇齊所有區塊嘅實際效果；唔會因為店未有交班記錄而見到空白預覽。
+ */
+export const SHIFT_PREVIEW_SAMPLE: ShiftSettlementSnapshot = {
+  closedAt: "2026-09-09T21:32:00+08:00",
+  shiftNo: "2026-09-09-02",
+  storeName: "澳門示範店",
+  employee: "陳大文",
+  openedAt: "2026-09-09T09:05:00+08:00",
+  store: {
+    count: 30,
+    revenue: 1967,
+    receivableTotal: 1971,
+    paidTotal: 1967,
+    prepaid: 0,
+    refundCount: 0,
+    refundAmount: 0,
+  },
+  online: {
+    orderCount: 5,
+    paidMop: 233,
+    balancePaidMop: 121,
+    inStorePaidMop: 112,
+  },
+  payments: [
+    { method: "Mpay", receivable: 1229, paid: 1228, count: 16 },
+    { method: "未記錄", receivable: 606, paid: 606, count: 12 },
+    { method: "現金", receivable: 138, paid: 133, count: 2 },
+  ],
+  purchase: { paid: 0, unpaid: 0 },
+  cash: { expected: 133, actual: 133, diff: 0 },
+  pendingEvents: 0,
+  failedEvents: 0,
+  skippedEvents: 0,
+  pendingPrints: 0,
+  note: "",
+};
 
 export interface LabelContentOpts {
   storeName: string;

@@ -7,6 +7,11 @@ import {
   DeviceConfig,
   PosLocalSettings,
 } from "@/lib/types";
+import {
+  DEFAULT_SHIFT_TEMPLATE,
+  DEFAULT_SHIFT_TEMPLATE_PRESETS,
+  DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
+} from "@/lib/escpos-template";
 
 export const defaultAccountStores: AccountStore[] = [
   {
@@ -486,7 +491,14 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       order: ["store_name", "store_tel", "order_no", "table_name", "order_time", "checkout_time", "server", "divider", "items", "discount_breakdown", "subtotal_before_discount", "service_charge_amount", "tax_amount", "rounding_amount", "discount_amount", "total", "cash_tendered", "change_amount", "payment_method", "order_note", "qr_code", "footer"],
       footerText: "多謝惠顧，歡迎再次光臨",
     },
+    // 交班結算單模板（第五個槽位，2026-09-10）。直接引用 escpos-template 嘅出廠預設，
+    // 唔喺度再抄一次 30 個區塊 —— 兩邊各寫一份必然會走樣（storage normalize 亦用同一份）。
+    shift: DEFAULT_SHIFT_TEMPLATE,
   },
+  // 交班模板範本庫（商家可新增 / 改名 / 刪除 / 套用）+ 上次套用嘅範本 id。
+  // 出廠有一套「標準交班單」，令商家一入頁就見到「範本」係咩概念。
+  shiftTemplatePresets: DEFAULT_SHIFT_TEMPLATE_PRESETS,
+  activeShiftTemplateId: DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
   notePresets: ["多飯", "少飯", "小冰", "少冰", "走冰", "少甜", "走甜", "走蔥", "走辣"],
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
   // 免單備註：結帳頁撳「免單」時要揀嘅原因（設置 → 備註 → 免單備註 可增刪）

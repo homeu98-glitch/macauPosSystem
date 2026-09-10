@@ -5,6 +5,10 @@ import { mapOrderRow } from "@/lib/pos-order-row";
 import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings, normalizePrintTemplateSet } from "@/lib/storage";
+import {
+  DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
+  normalizeShiftTemplatePresets,
+} from "@/lib/escpos-template";
 
 /** UTC ISO 轉換（lossless）：`2026-09-06T00:00:00+08:00` → `2026-09-05T16:00:00.000Z`。 */
 function toUtcIso(iso: string): string {
@@ -116,7 +120,7 @@ export async function GET(request: Request) {
   const printTemplatesQuery = storeId
     ? supabase
         .from("pos_print_templates")
-        .select("receipt, label, kitchen, kiosk, updated_at")
+        .select("receipt, label, kitchen, kiosk, shift, shift_presets, updated_at")
         .eq("store_id", storeId)
         .maybeSingle()
     : Promise.resolve({ data: null, error: null });
@@ -183,7 +187,23 @@ export async function GET(request: Request) {
             label: printTemplatesRow.label,
             kitchen: printTemplatesRow.kitchen,
             kiosk: printTemplatesRow.kiosk,
+            // 交班模板（2026-09-10，0030 migration）：舊 row 冇呢欄 → undefined →
+            // normalize 會補出廠預設，唔會令 client 收到殘缺結構。
+            shift: printTemplatesRow.shift,
           }),
+          // 交班模板範本庫 + 上次套用 id。舊 row / 未跑 0030 → undefined → null，
+          // client 見到 null 就保留本地範本（唔會清空）。
+          shiftPresets: printTemplatesRow.shift_presets
+            ? {
+                presets: normalizeShiftTemplatePresets(
+                  (printTemplatesRow.shift_presets as { presets?: unknown })?.presets,
+                ),
+                activeId:
+                  typeof (printTemplatesRow.shift_presets as { activeId?: unknown })?.activeId === "string"
+                    ? (printTemplatesRow.shift_presets as { activeId: string }).activeId
+                    : DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
+              }
+            : null,
           updatedAt: printTemplatesRow.updated_at ?? null,
         }
       : null,

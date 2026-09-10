@@ -19,7 +19,7 @@ import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
-import { PosBootstrap, PosOrder, PrintJob, QueueEvent, ReceiptTemplate } from "@/lib/types";
+import { PosBootstrap, PosOrder, PrintJob, QueueEvent, ReceiptTemplate, ShiftSettlementSnapshot, ShiftTemplate } from "@/lib/types";
 import {
   getBridgedPosOrder,
   resolveLedgerPosOrderForReceipt,
@@ -30,7 +30,9 @@ import {
   buildKitchenContent,
   buildLabelContent,
   buildReceiptContent,
+  buildShiftContent,
   buildSnapshot,
+  normalizeShiftTemplate,
   ticketTypeLabel,
 } from "@/lib/escpos-template";
 import { PrintItemLine } from "@/lib/escpos-render";
@@ -365,6 +367,70 @@ export function buildReopenPrintJobs(order: PosOrder, reason: string, operator: 
   });
   const labelJobs = buildLabelPrintJobs(order, { ticketType: "void", storeName, itemNamePrefix: "【返結】" });
   return [...kitchenJobs, ...labelJobs];
+}
+
+export interface ShiftPrintOpts {
+  /** 交班結算資料快照（內容真源，見 `ShiftSettlementSnapshot`）。 */
+  data: ShiftSettlementSnapshot;
+  /** job 嘅 orderId（即印 = `shift-${now}`；重打 = 記錄 id），用嚟追溯係邊一次交班。 */
+  orderId: string;
+  /** job 嘅顯示單號（列表 / 打印記錄見到嘅名）。 */
+  orderNo: string;
+  printerId?: string;
+  printerName?: string;
+  /** 指定模板（缺省 = 本機 `printTemplates.shift`，即商家設計嘅版本）。 */
+  template?: ShiftTemplate;
+}
+
+/**
+ * 交班結算單打印任務（2026-09-10 由硬編文字改為「模板 + content」）。
+ *
+ * ## 為何要改
+ * 舊做法：`shift-page.tsx` 把整張結算單壓成一串文字，再
+ * `items: lines.map(line => ({ name: line, quantity: 1 }))` 塞入 job ——
+ * job **冇 `template` 快照、冇 `content`**，於是打印通道（Hub / Companion / APK）
+ * 行「冇模板」分支 → `renderKitchenTicket()`：
+ * 抬頭變「【廚房單】」、每個「區塊」後面都多一個 `x1`（因為當咗佢係菜品）、
+ * 亦完全唔理商家設嘅字型 / 對齊 / 分格線。見 `docs/103` 同交班單根因分析。
+ *
+ * 新做法：同收據 / 廚房單**完全同構** —— `buildSnapshot("shift", template)` 出模板快照、
+ * `buildShiftContent()` 出內容 map、`items` 一律空陣列。三個通道行
+ * `renderTemplateTicket()`，出紙 = 設計介面 = 螢幕預覽。
+ *
+ * ⚠️ `items` 一定要係 `[]`（唔係 `undefined`）：`[]` 令舊版通道都唔會誤入 items 分支，
+ * 而 `undefined` 喺部分實作會 fallback 去硬編渲染。
+ *
+ * ⚠️ 交班單只出一張（唔似廚房單按分區一機一張），所以回傳 0 或 1 個 job；
+ * 交班單打印機由 caller 用 `pickShiftPrinter()` 揀（設備設定 → 交班單打印機）。
+ */
+export function buildShiftPrintJobs(opts: ShiftPrintOpts): PrintJob[] {
+  const template = normalizeShiftTemplate(opts.template ?? loadPosLocalSettings().printTemplates.shift);
+  const snapshot = buildSnapshot("shift", template);
+  const content = buildShiftContent(opts.data, {
+    storeName: opts.data.storeName,
+    headerText: template.headerText,
+    footerText: template.footerText,
+    sectionTitles: template.sectionTitles,
+  });
+  // 防呆：抬頭空字串 → header 區塊唔會印（renderer 跳過空字串），
+  // 但整張單唔會因此壞掉（其餘區塊照印），所以唔當錯誤處理。
+  return [
+    {
+      id: uid("print"),
+      orderId: opts.orderId,
+      orderNo: opts.orderNo,
+      tableName: "",
+      ticketType: "normal",
+      printerGroup: "receipt",
+      printerId: opts.printerId,
+      printerName: opts.printerName ?? "收據打印機",
+      items: [],
+      content,
+      template: snapshot,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    },
+  ];
 }
 
 export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {

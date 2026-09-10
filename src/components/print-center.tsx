@@ -29,7 +29,7 @@ import {
 } from "@/lib/storage";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
-import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_STANDARD_WIDTH_MM, PosLocalSettings, PosOrder, PrintJob, QueueEvent } from "@/lib/types";
+import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_STANDARD_WIDTH_MM, PosLocalSettings, PosOrder, PrintJob, PrintTemplateKind, QueueEvent, ShiftSectionId, ShiftTemplate, ShiftTemplateVariant } from "@/lib/types";
 import {
   ledgerReportRangeForKey,
   macauDateKey,
@@ -39,12 +39,18 @@ import {
   buildKitchenContent,
   buildLabelContent,
   buildReceiptContent,
+  buildShiftContent,
   buildSnapshot,
+  cloneShiftTemplate,
   ensureDividerSection,
   ensureReceiptSections,
   KITCHEN_SECTION_META,
   LABEL_SECTION_META,
+  normalizeShiftTemplate,
   RECEIPT_SECTION_META,
+  resolveActiveShiftPresetName,
+  SHIFT_PREVIEW_SAMPLE,
+  SHIFT_SECTION_META,
   withLabelFixedSizes,
 } from "@/lib/escpos-template";
 import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
@@ -59,10 +65,14 @@ import {
 } from "@/lib/print-templates-sync";
 
 /**
- * 模板設計介面嘅四個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
+ * 模板設計介面嘅五個槽位。注意 `"kiosk"` 係**模版內容**嘅槽位，唔係 ESC/POS `kind`：
  * 渲染嗰陣一律用 `kind = "receipt"`（見 `KioskPreviewKind`），三個 repo 先唔使改。
+ *
+ * `"shift"`（2026-09-10「交班模板」）係真正嘅第五個槽位，渲染用 `kind = "shift"`：
+ * 下游唔識呢個 kind → 抬頭 fall through 去空字串（唔會印錯），交班單抬頭由模板
+ * `header` 區塊自己帶，所以三個 repo 零改動都用得。
  */
-type TemplateKindState = "receipt" | "label" | "kitchen" | "kiosk";
+type TemplateKindState = "receipt" | "label" | "kitchen" | "kiosk" | "shift";
 
 const SECTION_META: Record<TemplateKindState, { id: string; label: string }[]> = {
   receipt: RECEIPT_SECTION_META as unknown as { id: string; label: string }[],
@@ -70,14 +80,19 @@ const SECTION_META: Record<TemplateKindState, { id: string; label: string }[]> =
   kitchen: KITCHEN_SECTION_META as unknown as { id: string; label: string }[],
   // 自助點餐機模版同收據係同一組區塊（規格 8：格式完全一致）
   kiosk: RECEIPT_SECTION_META as unknown as { id: string; label: string }[],
+  // 交班結算單：冇菜品明細，一項一個區塊（見 ShiftSectionId）
+  shift: SHIFT_SECTION_META as unknown as { id: string; label: string }[],
 };
 
 /**
  * docs/87 §2.3：自助點餐機模版係獨立槽位，但渲染時嘅 ESC/POS `kind` 必須係 `"receipt"`。
  * 三個下游 repo（POS / desktop-companion / print-agent-android）嘅標題表只認
  * `receipt | label | kitchen`，傳 `"kiosk"` 會 fallthrough 到空標題。
+ *
+ * 交班單（`"shift"`）唔需要映射 —— 佢**本來就係** fallthrough 到空標題，
+ * 頭由模板 `header` 區塊帶，見 `ShiftTemplate` 註釋。
  */
-function snapshotKindOf(kind: TemplateKindState): "receipt" | "label" | "kitchen" {
+function snapshotKindOf(kind: TemplateKindState): PrintTemplateKind {
   return kind === "kiosk" ? "receipt" : kind;
 }
 
@@ -238,7 +253,7 @@ export function PrintCenter() {
   const [dateFilter, setDateFilter] = useState<ReportRangeKey>("today");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [activeTab, setActiveTab] = useState<
-    "records" | "receipt-template" | "label-template" | "kitchen-template" | "kiosk-template"
+    "records" | "receipt-template" | "label-template" | "kitchen-template" | "kiosk-template" | "shift-template"
   >("records");
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings() ?? defaultPosLocalSettings);
   const [deviceConfig, setDeviceConfig] = useState<DeviceConfig>(() => loadDeviceConfig() ?? defaultDeviceConfig);
@@ -247,7 +262,14 @@ export function PrintCenter() {
     label: "header",
     kitchen: "store_name",
     kiosk: "store_name",
+    // 交班模板第一格係抬頭（header），揀佢商家即刻見到「改標題文字」輸入框。
+    shift: "header",
   });
+  // ── 交班模板範本庫（2026-09-10）：新增 / 改名 / 刪除 / 套用 ──
+  // `newPresetName` = 「儲存為新範本」輸入框；`renamingId`/`renameDraft` = 就地改名。
+  const [newPresetName, setNewPresetName] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
@@ -287,7 +309,10 @@ export function PrintCenter() {
     if (!settings) return;
     const storeId = resolveStoreId();
     if (!storeId) return; // 未登入 / 未綁定 kiosk → 冇店可歸，唔推
-    const result = await pushStorePrintTemplates(storeId, settings.printTemplates);
+    const result = await pushStorePrintTemplates(storeId, settings.printTemplates, {
+      presets: settings.shiftTemplatePresets,
+      activeId: settings.activeShiftTemplateId,
+    });
     if (result) {
       savePrintTemplateSyncMeta({ updatedAt: result.updatedAt });
       unsyncedRef.current = false;
@@ -314,7 +339,18 @@ export function PrintCenter() {
       // （避免「自己啱啱推完 → 重入頁面 → 用舊 server 蓋返自己新 edit」嘅迴圈）。
       if (localTs > 0 && serverTs <= localTs) return;
       const prev = loadPosLocalSettings();
-      const next: PosLocalSettings = { ...prev, printTemplates: res.templates };
+      // 交班模板範本庫：server 有帶就跟住採納（同模板同一個 LWW 版本）——
+      // 令另一部機新增嘅範本喺呢部機都見到。舊 server row 冇呢欄（null）→ 保留本地。
+      const next: PosLocalSettings = {
+        ...prev,
+        printTemplates: res.templates,
+        ...(res.shiftPresets
+          ? {
+              shiftTemplatePresets: res.shiftPresets.presets,
+              activeShiftTemplateId: res.shiftPresets.activeId,
+            }
+          : {}),
+      };
       savePosLocalSettings(next);
       savePrintTemplateSyncMeta({ updatedAt: res.updatedAt });
       if (alive) {
@@ -431,10 +467,17 @@ export function PrintCenter() {
     qrUrl?: string;
     /** 收據二維碼打印大小（s / m / l）；缺省 = "m"。收據 / 自助點餐機各自存。 */
     qrSize?: EscPosSize;
+    /** 交班模板專屬：分節標題文字（例如「— 店內（今日）—」），商家可自改。 */
+    sectionTitles?: Partial<Record<ShiftSectionId, string>>;
   };
 
   function readTemplate(kind: TemplateKindState): AnyTemplate {
     const raw = localSettings.printTemplates[kind] as unknown as AnyTemplate;
+    // 交班模板：用專屬 normalize 補齊區塊（缺嘅補預設、未知 id 剔走）同分節標題。
+    // 唔行下面 ensureDividerSection —— 交班單冇 items，分格線區塊會變成死開關。
+    if (kind === "shift") {
+      return normalizeShiftTemplate(raw as unknown as Partial<ShiftTemplate>) as unknown as AnyTemplate;
+    }
     // 舊 localStorage 設定（存檔時仲未有 qr_code）→ 喺設計介面即刻補返，
     // 等「區塊順序」見到「二維碼」、選中時亦唔會因 blocks 缺 key 而炸。
     const base = (kind === "receipt" || kind === "kiosk"
@@ -454,8 +497,24 @@ export function PrintCenter() {
     return t;
   }
 
-  function updateLocalTemplate(nextSettings: typeof localSettings, options?: { recordHistory?: boolean }) {
-    if (options?.recordHistory !== false) {
+  /**
+   * 寫入整份本機設定。
+   *
+   * `recordHistory`（預設 `true`）= 呢次改動要唔要入撤銷 / 重做歷史。
+   * 只有**改動排版**（`printTemplates`）先應該入歷史；純範本庫操作（新增 / 改名 /
+   * 覆蓋 / 刪除範本）一律 `false` —— 否則商家撳「撤銷」會莫名其妙噉還原咗排版，
+   * 但佢啱啱只係改咗個範本名。
+   *
+   * 用 simple boolean 而唔係 `options?: { recordHistory?: boolean }`：改動前全部
+   * caller 都係傳 `false`（冇人傳 true），個 options 物件只係多餘包袱。
+   *
+   * 註：`react-hooks/refs`（React Compiler）會對「喺 JSX 度呼叫呢條函數」報
+   * 「Cannot access refs during render」。呢個係本檔案既有嘅誤報類別
+   * （`patchBlock` 等早就有，見 `npx eslint src/components/print-center.tsx`），
+   * 唔影響 `next build`，亦唔係今次新增。真正嘅 ref 讀取只發生喺事件處理器入面。
+   */
+  function updateLocalTemplate(nextSettings: typeof localSettings, recordHistory = true) {
+    if (recordHistory) {
       historyRef.current.past.push(localSettings.printTemplates);
       if (historyRef.current.past.length > 60) historyRef.current.past.shift();
       historyRef.current.future = [];
@@ -535,7 +594,10 @@ export function PrintCenter() {
       return;
     }
 
-    const result = await pushStorePrintTemplates(storeId, localSettings.printTemplates);
+    const result = await pushStorePrintTemplates(storeId, localSettings.printTemplates, {
+      presets: localSettings.shiftTemplatePresets,
+      activeId: localSettings.activeShiftTemplateId,
+    });
     if (result) {
       savePrintTemplateSyncMeta({ updatedAt: result.updatedAt });
       unsyncedRef.current = false;
@@ -547,6 +609,143 @@ export function PrintCenter() {
       clearCloudPushTimer();
       setToast({ tone: "error", message: "⚠️ 已儲存本機；雲端同步失敗，網絡恢復或下次改動時會自動重試。" });
     }
+  }
+
+  // ── 交班模板範本庫：新增 / 改名 / 覆蓋 / 刪除 / 套用（2026-09-10）──
+  //
+  // 語義同「菜品規格模板」（`specTemplates`）一致：範本庫只係**來源**，
+  // 真正生效嘅係 `printTemplates.shift`（工作中模板）。
+  //   - 儲存為範本 = 把目前排版存成一個具名範本（唔會改變目前排版）
+  //   - 套用        = 把範本**拷貝**落工作中模板（之後嘅編輯唔會回寫範本）
+  //   - 刪除        = 只由庫移除（唔會動到目前生效中嘅排版 —— 防誤刪）
+  // 所有破壞性操作之前都先驗證，失敗一律出 toast 講清楚原因（唔靜默失敗）。
+
+  /** 範本名稱上限（太長會令介面上嘅 chip 爆版，亦冇實際需要）。 */
+  const SHIFT_PRESET_NAME_MAX = 20;
+  /** 範本庫數量上限：防止無限增長塞爆 localStorage（每個範本都係一整份模板）。 */
+  const SHIFT_PRESET_LIMIT = 20;
+
+  /** 驗證範本名稱：回傳錯誤訊息，或 null = 通過。 */
+  function validatePresetName(name: string, exceptId?: string): string | null {
+    const trimmed = name.trim();
+    if (!trimmed) return "請先輸入範本名稱。";
+    if (trimmed.length > SHIFT_PRESET_NAME_MAX) return `範本名稱最多 ${SHIFT_PRESET_NAME_MAX} 個字。`;
+    const dup = localSettings.shiftTemplatePresets.some(
+      (p) => p.id !== exceptId && p.name.trim() === trimmed,
+    );
+    if (dup) return `已經有同名範本「${trimmed}」，請改個名。`;
+    return null;
+  }
+
+  /**
+   * 寫入範本庫（新增 / 改名 / 覆蓋 / 刪除）。
+   *
+   * 一律 `recordHistory = false`：撤銷 / 重做歷史只記錄 `printTemplates`（即「設計」），
+   * 唔記錄範本庫。否則商家撳「撤銷」會還原咗排版，但佢啱啱只係改咗個範本名。
+   *
+   * ⚠️ 「套用」**唔行呢條路**：佢真係改咗排版（要入歷史），而且必須同
+   * `activeShiftTemplateId` 一次過原子寫入 —— 見 `applyShiftPreset()`。
+   * 所以呢條函數冇 `recordHistory` 參數（唯一值就係 false，唔需要做成選項）。
+   */
+  function updateShiftPresets(next: ShiftTemplateVariant[], activeId?: string) {
+    updateLocalTemplate(
+      {
+        ...localSettings,
+        shiftTemplatePresets: next,
+        activeShiftTemplateId: activeId ?? localSettings.activeShiftTemplateId,
+      },
+      false,
+    );
+  }
+
+  /** 「儲存為新範本」：把目前工作中嘅排版存成一個具名範本。 */
+  function createShiftPreset() {
+    const err = validatePresetName(newPresetName);
+    if (err) {
+      setToast({ tone: "error", message: `❌ ${err}` });
+      return;
+    }
+    if (localSettings.shiftTemplatePresets.length >= SHIFT_PRESET_LIMIT) {
+      setToast({ tone: "error", message: `❌ 範本數量已達上限（${SHIFT_PRESET_LIMIT} 個），請先刪除唔用嘅範本。` });
+      return;
+    }
+    const name = newPresetName.trim();
+    // id 用 randomUUID：唔可以用 `shift-preset-${count}`（刪完再新增會撞 id）。
+    const id = `shift-preset-${crypto.randomUUID().slice(0, 8)}`;
+    updateShiftPresets(
+      [...localSettings.shiftTemplatePresets, { id, name, template: cloneShiftTemplate(readTemplate("shift") as unknown as ShiftTemplate) }],
+      id,
+    );
+    setNewPresetName("");
+    setToast({ tone: "success", message: `✅ 已儲存範本「${name}」。` });
+  }
+
+  /**
+   * 「套用」：把範本內容拷貝落工作中模板（唔會再同範本連動）。
+   *
+   * ⚠️ 一定要**一次過**寫入（`activeShiftTemplateId` + `printTemplates.shift` 同一個
+   * setState）。初期版本係 `updateShiftPresets(...)` 之後再 `applyTemplate(...)`，
+   * 兩者都由同一個 stale `localSettings` closure 砌新 state → 第二次 `setLocalSettings`
+   * 會把第一次覆蓋走，「使用中」標籤永遠唔會更新，而且會 push 兩格撤銷歷史。
+   */
+  function applyShiftPreset(id: string) {
+    const preset = localSettings.shiftTemplatePresets.find((p) => p.id === id);
+    if (!preset) {
+      setToast({ tone: "error", message: "❌ 找不到此範本（可能已被其他裝置刪除），請重新載入頁面。" });
+      return;
+    }
+    updateLocalTemplate({
+      ...localSettings,
+      activeShiftTemplateId: id,
+      printTemplates: {
+        ...localSettings.printTemplates,
+        shift: cloneShiftTemplate(preset.template),
+      },
+    });
+    setToast({ tone: "success", message: `✅ 已套用範本「${preset.name}」；記得撳「儲存模板」同步到其他收銀機。` });
+  }
+
+  /** 「用目前設定覆蓋」：把目前排版寫返入範本（等同「更新此範本」）。 */
+  function overwriteShiftPreset(id: string) {
+    const preset = localSettings.shiftTemplatePresets.find((p) => p.id === id);
+    if (!preset) {
+      setToast({ tone: "error", message: "❌ 找不到此範本。" });
+      return;
+    }
+    updateShiftPresets(
+      localSettings.shiftTemplatePresets.map((p) =>
+        p.id === id ? { ...p, template: cloneShiftTemplate(readTemplate("shift") as unknown as ShiftTemplate) } : p,
+      ),
+      id,
+    );
+    setToast({ tone: "success", message: `✅ 已用目前排版更新範本「${preset.name}」。` });
+  }
+
+  function commitRenameShiftPreset(id: string) {
+    const err = validatePresetName(renameDraft, id);
+    if (err) {
+      setToast({ tone: "error", message: `❌ ${err}` });
+      return;
+    }
+    const name = renameDraft.trim();
+    updateShiftPresets(localSettings.shiftTemplatePresets.map((p) => (p.id === id ? { ...p, name } : p)));
+    setRenamingId(null);
+    setRenameDraft("");
+  }
+
+  /**
+   * 刪除範本。**唔會**動到目前生效中嘅排版 —— 商家可能只係唔要呢個存檔，
+   * 但想保留而家印緊嘅版本。若刪嘅正好係「上次套用」嗰個，順手清空
+   * `activeShiftTemplateId`（避免介面顯示一個唔存在嘅範本名）。
+   */
+  function deleteShiftPreset(id: string) {
+    const preset = localSettings.shiftTemplatePresets.find((p) => p.id === id);
+    if (!preset) return;
+    if (!window.confirm(`確定刪除範本「${preset.name}」？\n\n目前生效中嘅排版唔會受影響。`)) return;
+    const next = localSettings.shiftTemplatePresets.filter((p) => p.id !== id);
+    // 刪光都冇問題（`normalizeShiftTemplatePresets` 只保證載入時非空，唔會阻止商家刪）。
+    updateShiftPresets(next, localSettings.activeShiftTemplateId === id ? "" : undefined);
+    setToast({ tone: "success", message: `✅ 已刪除範本「${preset.name}」。` });
   }
 
   function patchBlock(kind: TemplateKindState, id: string, patch: Partial<EscPosBlockStyle>) {
@@ -614,6 +813,15 @@ export function PrintCenter() {
     applyTemplate(kind, { ...t, headerText: text });
   }
 
+  /**
+   * 交班模板：改分節標題文字（例如「— 店內（今日）—」→「— 堂食（今日）—」）。
+   * 清空 = 該標題唔印（`buildShiftContent` 會回空字串，renderer 直接跳過該行）。
+   */
+  function setSectionTitle(id: ShiftSectionId, text: string) {
+    const t = readTemplate("shift");
+    applyTemplate("shift", { ...t, sectionTitles: { ...(t.sectionTitles ?? {}), [id]: text } });
+  }
+
   function buildPreviewLines(kind: TemplateKindState): EscPosLine[] {
     const t = readTemplate(kind);
     const snapshot = buildSnapshot(snapshotKindOf(kind), t as unknown as Parameters<typeof buildSnapshot>[1]);
@@ -644,6 +852,17 @@ export function PrintCenter() {
         note: it.note,
       }));
       return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl), qrSize: t.qrSize ?? "m" });
+    }
+    if (kind === "shift") {
+      // 交班模板：用同交班出紙一模一樣嘅 builder（`buildShiftContent`）餵示例快照，
+      // 所以設計介面見到嘅嘢 == 交班時真正印出嚟嘅嘢。items 一律空陣列（交班單冇菜品明細）。
+      const content = buildShiftContent(SHIFT_PREVIEW_SAMPLE, {
+        storeName: SHIFT_PREVIEW_SAMPLE.storeName,
+        headerText: t.headerText ?? "",
+        footerText: t.footerText,
+        sectionTitles: t.sectionTitles,
+      });
+      return renderEscPosLines(snapshot, content, []);
     }
     const content = buildReceiptContent(sampleOrder, {
       storeName: PREVIEW_STORE_NAME,
@@ -791,6 +1010,11 @@ export function PrintCenter() {
     const selStyle = t.blocks[sel];
     const isLabel = kind === "label";
     const isKitchen = kind === "kitchen";
+    const isShift = kind === "shift";
+    // 目前排版係基於邊個範本（純提示；對唔上就顯示「自訂排版」）。
+    const activePresetName = isShift
+      ? resolveActiveShiftPresetName(localSettings.shiftTemplatePresets, localSettings.activeShiftTemplateId)
+      : null;
     // 自助點餐機模版同收據共用同一組區塊（含 items.subSize），所以提示邏輯跟收據
     const isReceiptLike = kind === "receipt" || kind === "kiosk";
     const title =
@@ -800,7 +1024,9 @@ export function PrintCenter() {
           ? "飲品標籤模板（ESC/POS）"
           : kind === "kitchen"
             ? "廚房單模板（ESC/POS）"
-            : "自助點餐機模板（ESC/POS）";
+            : kind === "shift"
+              ? "交班模板（ESC/POS）"
+              : "自助點餐機模板（ESC/POS）";
     return (
       <div className="grid gap-3 lg:grid-cols-[360px_minmax(0,1fr)]">
         <article className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -813,6 +1039,139 @@ export function PrintCenter() {
               呢個模版只影響自助點餐機 / 客人掃碼落單時印畀客人嘅小票，<b>唔會</b>影響收銀台收據（兩者係獨立槽位）。
               預設內容同收據完全一致；出紙格式亦固定用收據格式，所以三個打印端唔使改。
             </div>
+          )}
+          {isShift && (
+            <>
+              <div className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-700">
+                交班模板決定「交班結算單」（收工 / 換班時印嘅匯總單）實際出紙：
+                逐個統計項決定印唔印（例如唔想印線上分項就熄佢）、調字型大小 / 粗體 / 對齊、
+                改區塊順序，抬頭同頁尾都可以自己寫。
+                <b>唔會</b>影響收據 / 廚房單 / 標籤。
+              </div>
+              <div className="mt-3 rounded-xl border border-slate-200 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-slate-600">範本（唔同班別可以用唔同排版）</div>
+                  {activePresetName ? (
+                    <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                      基於：{activePresetName}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-[10px] text-slate-400">自訂排版</span>
+                  )}
+                </div>
+                <div className="mt-2 space-y-1">
+                  {localSettings.shiftTemplatePresets.map((preset) => (
+                    <div
+                      key={preset.id}
+                      className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5"
+                    >
+                      {renamingId === preset.id ? (
+                        <>
+                          <input
+                            autoFocus
+                            className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                            maxLength={SHIFT_PRESET_NAME_MAX}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") commitRenameShiftPreset(preset.id);
+                              if (e.key === "Escape") {
+                                setRenamingId(null);
+                                setRenameDraft("");
+                              }
+                            }}
+                            placeholder="範本名稱"
+                            value={renameDraft}
+                          />
+                          <button
+                            className="shrink-0 rounded bg-slate-900 px-2 py-1 text-[10px] font-semibold text-white"
+                            onClick={() => commitRenameShiftPreset(preset.id)}
+                            type="button"
+                          >
+                            確定
+                          </button>
+                          <button
+                            className="shrink-0 rounded px-1.5 py-1 text-[10px] text-slate-500"
+                            onClick={() => {
+                              setRenamingId(null);
+                              setRenameDraft("");
+                            }}
+                            type="button"
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="min-w-0 flex-1 truncate text-xs text-slate-700">{preset.name}</span>
+                          {localSettings.activeShiftTemplateId === preset.id ? (
+                            <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                              使用中
+                            </span>
+                          ) : null}
+                          <button
+                            className="shrink-0 rounded bg-orange-500 px-2 py-1 text-[10px] font-semibold text-white hover:bg-orange-600"
+                            onClick={() => applyShiftPreset(preset.id)}
+                            title="把此範本套用成目前排版"
+                            type="button"
+                          >
+                            套用
+                          </button>
+                          <button
+                            className="shrink-0 rounded bg-white px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                            onClick={() => overwriteShiftPreset(preset.id)}
+                            title="用目前排版覆蓋此範本"
+                            type="button"
+                          >
+                            覆蓋
+                          </button>
+                          <button
+                            className="shrink-0 rounded px-1.5 py-1 text-[10px] text-slate-500 hover:bg-slate-50"
+                            onClick={() => {
+                              setRenamingId(preset.id);
+                              setRenameDraft(preset.name);
+                            }}
+                            type="button"
+                          >
+                            改名
+                          </button>
+                          <button
+                            className="shrink-0 rounded px-1.5 py-1 text-[10px] text-rose-600 hover:bg-rose-50"
+                            onClick={() => deleteShiftPreset(preset.id)}
+                            type="button"
+                          >
+                            刪除
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-2 py-2 text-sm"
+                    maxLength={SHIFT_PRESET_NAME_MAX}
+                    onChange={(e) => setNewPresetName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") createShiftPreset();
+                    }}
+                    placeholder="輸入範本名稱，例如「日結單」"
+                    value={newPresetName}
+                  />
+                  <button
+                    className="shrink-0 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-40"
+                    disabled={!newPresetName.trim()}
+                    onClick={createShiftPreset}
+                    type="button"
+                  >
+                    儲存為新範本
+                  </button>
+                </div>
+                <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                  「儲存為新範本」= 把目前排版存落嚟；「套用」= 把範本拷貝成目前排版（之後嘅修改<b>唔會</b>影響範本）；
+                  「覆蓋」= 反過來用目前排版更新範本；「刪除」只係由範本庫移除，唔會動到目前生效中嘅排版。
+                </div>
+              </div>
+            </>
           )}
           <div className="mt-3 flex items-center gap-2">
             <button
@@ -970,9 +1329,9 @@ export function PrintCenter() {
             </div>
           ) : null}
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {(isLabel || isKitchen) && (
+            {(isLabel || isKitchen || isShift) && (
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                <span>標題文字</span>
+                <span>{isShift ? "標題文字（抬頭）" : "標題文字"}</span>
                 <input
                   className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
                   value={t.headerText ?? ""}
@@ -980,7 +1339,7 @@ export function PrintCenter() {
                 />
               </label>
             )}
-            <label className={`grid gap-1 text-xs font-semibold text-slate-600 ${isLabel || isKitchen ? "" : "sm:col-span-2"}`}>
+            <label className={`grid gap-1 text-xs font-semibold text-slate-600 ${isLabel || isKitchen || isShift ? "" : "sm:col-span-2"}`}>
               <span>頁尾文字</span>
               <input
                 className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
@@ -988,6 +1347,17 @@ export function PrintCenter() {
                 onChange={(e) => setFooter(kind, e.target.value)}
               />
             </label>
+            {isShift && sel.startsWith("section_") ? (
+              <label className="grid gap-1 text-xs font-semibold text-slate-600 sm:col-span-2">
+                <span>分節標題文字（清空 = 唔印呢個標題）</span>
+                <input
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                  onChange={(e) => setSectionTitle(sel as ShiftSectionId, e.target.value)}
+                  placeholder="例如：— 店內（今日）—"
+                  value={t.sectionTitles?.[sel as ShiftSectionId] ?? ""}
+                />
+              </label>
+            ) : null}
             {isReceiptLike ? (
               <div className="grid gap-1 text-xs font-semibold text-slate-600 sm:col-span-2">
                 <span>二維碼網址</span>
@@ -1063,6 +1433,7 @@ export function PrintCenter() {
                   ["receipt-template", "收據模板"],
                   ["label-template", "標籤模板"],
                   ["kitchen-template", "廚房模板"],
+                  ["shift-template", "交班模板"],
                   ["kiosk-template", "自助點餐機"],
                 ].map(([key, label]) => (
                   <button
@@ -1331,6 +1702,7 @@ export function PrintCenter() {
             {activeTab === "receipt-template" ? renderDesigner("receipt") : null}
             {activeTab === "label-template" ? renderDesigner("label") : null}
             {activeTab === "kitchen-template" ? renderDesigner("kitchen") : null}
+            {activeTab === "shift-template" ? renderDesigner("shift") : null}
             {activeTab === "kiosk-template" ? renderDesigner("kiosk") : null}
           </div>
         </main>

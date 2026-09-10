@@ -347,6 +347,63 @@ export type KitchenSectionId =
   | "customer_count"
   | "order_note"
   | "footer";
+/**
+ * 交班結算單模板嘅區塊 id（2026-09-10 新增「交班模板」）。
+ *
+ * 交班單同其他單據最大分別：**冇菜品明細（items）**，內容全部係匯總數字。
+ * 所以呢度冇 `items` 區塊，而係一項一個區塊（營業額 / 應收 / 實收 …），
+ * 商家可以逐項決定印唔印、字型大細、順序。
+ *
+ * `section_*` 係**分節標題**區塊（例如「— 店內（今日）—」）。呢啲標題同一般區塊一樣
+ * 由 `content[id]` 帶文字，所以商家可以自己改字（例如改成「堂食（今日）」），
+ * 亦可以整項熄咗。原本硬編成 `"— 店內（今日）—"` 一行嘅寫法已由模板取代。
+ *
+ * `payment_breakdown` 係**動態多行**區塊：實際有幾個支付方式就有幾行，
+ * 內容用 `\n` 串埋一個字串（同收據 `discount_breakdown` 同一手法），
+ * 預覽 `whitespace-pre-wrap`、出紙 `buf.line()` 兩邊都會照印成多行。
+ *
+ * ⚠️ **刻意冇 `divider` 區塊**：三個 repo 嘅 renderer 都係「分格線跟住 `items` 區塊
+ * 自動生成」（`pushDivider()` / `rule()` 只喺 items 分支被 call）。交班單冇菜品明細，
+ * 加咗 `divider` 落去會變成一個**撳咗冇反應**嘅死開關，只會令商家困惑。
+ * 交班單嘅視覺分段由 `section_*` 標題行（例如「— 店內（今日）—」）負責。
+ */
+export type ShiftSectionId =
+  /** 抬頭（交班單標題）；文字 = 模板 `headerText`，商家可自改（例如「＊＊＊ 日結單 ＊＊＊」）。 */
+  | "header"
+  | "store_name"
+  | "shift_no"
+  | "employee"
+  | "close_time"
+  | "open_time"
+  /** 分節標題：店內（今日）。 */
+  | "section_store"
+  | "settled_count"
+  | "revenue"
+  | "receivable_total"
+  | "paid_total"
+  | "prepaid"
+  | "refund"
+  /** 分節標題：會員通線上（今日）。 */
+  | "section_online"
+  | "online_order_count"
+  | "online_paid"
+  | "online_balance"
+  | "online_in_store"
+  | "online_total"
+  /** 分節標題：支付方式分項（線下 POS）。 */
+  | "section_payment"
+  /** 動態多行：每個支付方式一行（`method：應收 X / 實收 Y · N 張`）。 */
+  | "payment_breakdown"
+  /** 分節標題：買貨成本（今日）。 */
+  | "section_purchase"
+  | "purchase_paid"
+  /** 分節標題：現金箱核對。 */
+  | "section_cash"
+  | "expected_cash"
+  | "actual_cash"
+  | "cash_diff"
+  | "note"
+  | "footer";
 
 export interface ReceiptTemplate {
   blocks: Record<ReceiptSectionId, EscPosBlockStyle>;
@@ -398,6 +455,98 @@ export interface KitchenTemplate {
   footerText: string;
 }
 
+/**
+ * 交班結算單模板（2026-09-10 新增，第五個槽位）。
+ *
+ * 結構對齊 `KitchenTemplate`（`blocks` + `order` + `headerText` + `footerText`），
+ * 所以設計介面、`buildSnapshot()`、雲端同步、normalize 全部行返同一套既有機制，
+ * 唔使為交班單另建一套。
+ *
+ * ⚠️ `headerText` 係**經 `header` 區塊出紙**，唔係靠 `PrintTemplateKind` 嘅標題表：
+ * 三個 repo（POS / desktop-companion / print-agent-android）嘅 `TITLE` 表只認
+ * `receipt | label | kitchen`，傳 `"shift"` 會 fall through 去空字串（唔會印錯標題，
+ * 但亦唔會自動印「交班單」）。所以標題一定要靠 `header` 區塊自己帶，
+ * 好處係**商家可以自己改標題文字**，而且三個 repo 零改動。
+ */
+export interface ShiftTemplate {
+  blocks: Record<ShiftSectionId, EscPosBlockStyle>;
+  order: ShiftSectionId[];
+  headerText: string;
+  footerText: string;
+  /**
+   * 分節標題文字（商家可自訂，例如把「— 店內（今日）—」改成「— 堂食（今日）—」）。
+   *
+   * 只對 `section_*` 區塊有意義；缺省（key 唔存在 / 空字串）時由
+   * `SHIFT_SECTION_TITLES` 補返出廠文字。呢個係**模板層級**欄位而唔係 content，
+   * 因為佢係「設計」而唔係「當日數據」——同一套排版每次交班都應該印同一句標題。
+   */
+  sectionTitles: Partial<Record<ShiftSectionId, string>>;
+}
+
+/**
+ * 交班模板**範本**（商家自建、可命名嘅一整套排版）。
+ *
+ * 語義同 `PosLocalSettings.specTemplates` 一致 —— 係一個「範本庫」：
+ * 商家可以新增 / 改名 / 刪除 / 套用。**庫入面嘅範本唔係即時生效嘅**，
+ * 生效嘅係 `PrintTemplates.shift` 呢個「工作中」模板：
+ * - 「儲存為範本」= 把目前工作中嘅排版存成一個具名範本；
+ * - 「套用」      = 把範本內容**拷貝**落 `PrintTemplates.shift`（之後嘅編輯唔會影響範本）；
+ * - 「刪除」      = 只由庫移除，唔會動到目前生效中嘅排版（防止誤刪令出紙返去預設）。
+ *
+ * 咁做係刻意嘅：如果範本同生效模板係同一份物件，任何一次微調都會改到範本本身，
+ * 商家就再冇「還原返上一個版本」嘅機會。
+ */
+export interface ShiftTemplateVariant {
+  id: string;
+  name: string;
+  template: ShiftTemplate;
+}
+
+/**
+ * 交班結算單嘅**資料快照**（出紙內容嘅唯一真源）。
+ *
+ * 由 `shift-page.tsx` 喺進入結數預覽（step3）時固化，之後「預覽 / 打印 / 跳過」都用同一份，
+ * 保證「預覽 == 紙本 == 交班記錄」。同時亦係交班記錄（`shiftHistory`）嘅持久化形狀。
+ *
+ * 放喺 `types.ts` 而唔係 `shift-page.tsx`：`escpos-template.ts` 嘅 `buildShiftContent()`
+ * 要讀佢，而 component 唔應該被 lib 反向 import（會成 circular dependency）。
+ */
+export type ShiftSettlementSnapshot = {
+  /** 交班時間（進入預覽一刻固化，交班記錄同紙本都用呢個）。 */
+  closedAt: string;
+  /** 單號序號：`YYYY-MM-DD-NN`（NN = 當日第幾班）。 */
+  shiftNo: string;
+  storeName: string;
+  employee: string;
+  openedAt?: string;
+  store: {
+    count: number;
+    revenue: number;
+    receivableTotal: number;
+    paidTotal: number;
+    prepaid: number;
+    refundCount: number;
+    refundAmount: number;
+  };
+  /** 會員通線上（Ledger）——未登入 / 冇資料時 null（紙本成組唔印）。 */
+  online: {
+    orderCount: number;
+    paidMop: number;
+    balancePaidMop: number;
+    inStorePaidMop: number;
+  } | null;
+  payments: { method: string; receivable: number; paid: number; count: number }[];
+  /** 今日買貨成本——冇做成本記錄時 null。 */
+  purchase: { paid: number; unpaid: number } | null;
+  cash: { expected: number; actual?: number; diff?: number };
+  // 冇 G 區（待同步/技術狀態唔上紙本），但歷史記錄仍要記，跟住快照走。
+  pendingEvents: number;
+  failedEvents: number;
+  skippedEvents: number;
+  pendingPrints: number;
+  note: string;
+};
+
 export interface PrintTemplates {
   receipt: ReceiptTemplate;
   label: LabelTemplate;
@@ -415,9 +564,19 @@ export interface PrintTemplates {
    * 用 `"receipt"` 嘅話三個 repo 全部原封不動，零跨 repo 改動。見 docs/87 §2.3。
    */
   kiosk: ReceiptTemplate;
+  /**
+   * 交班結算單模板（第五個槽位，2026-09-10）。
+   *
+   * 未加呢個槽位之前，交班單係由 `shift-page.tsx` 硬編成一串文字、塞入 `PrintJob.items`
+   * （每行 `quantity: 1`）—— job 冇 `template` 快照 → 打印通道退回硬編廚房渲染器 →
+   * 出紙變成「【廚房單】標題 + 每行 x1 + 冇字型對齊」（見 docs/103）。
+   * 而家有模板快照之後，交班單同收據一樣走 `renderEscPosLines()`，
+   * 「設計介面 == 螢幕預覽 == 實際出紙」。
+   */
+  shift: ShiftTemplate;
 }
 
-export type PrintTemplateKind = "receipt" | "label" | "kitchen";
+export type PrintTemplateKind = "receipt" | "label" | "kitchen" | "shift";
 
 /**
  * 二維碼點陣（三個 repo 共用嘅序列化格式）。
@@ -471,6 +630,26 @@ export interface PosLocalSettings {
    */
   standaloneSpecGroups: MenuSpecGroup[];
   printTemplates: PrintTemplates;
+  /**
+   * 交班模板範本庫（2026-09-10「交班模板」功能）。
+   *
+   * 商家可以建立多套交班結算單排版並命名（例如「日結單」「現金班」「外賣班」），
+   * 隨時套用其中一套。**庫入面嘅範本唔係即時生效嘅**——生效嘅係
+   * `printTemplates.shift`（工作中模板）；「套用」= 把範本拷貝入去。
+   *
+   * ⚠️ 唔可以喺 `normalizePosLocalSettings` 漏咗 whitelist：漏咗就會 reload 時被剷光
+   * （同 `receipt.qrUrl` / `standaloneSpecGroups` 嘅歷史教訓一樣）。
+   */
+  shiftTemplatePresets: ShiftTemplateVariant[];
+  /**
+   * 上次「套用」嘅範本 id（對應 `shiftTemplatePresets[].id`）。
+   *
+   * 純粹係介面提示用（顯示「目前排版基於範本：XXX」），**唔參與出紙邏輯**。
+   * 因為出紙一律讀 `printTemplates.shift`，呢個 id 對唔上唔會影響任何嘢；
+   * 範本被刪除後殘留一個孤兒 id 亦只會令提示消失（見 `resolveActiveShiftPresetName`）。
+   * 空字串 = 未曾套用過任何範本（例如商家由預設直接開始改）。
+   */
+  activeShiftTemplateId: string;
   /** 常用備註（點餐時快速選擇，多選）。 */
   notePresets: string[];
   /** 取消備註（退菜 / 取消時快速選擇）。 */
@@ -832,7 +1011,15 @@ export interface PrintJob {
 // POS 網頁只靠呢個介面溝通，唔使知底層 OS 差異。見 docs/43。
 
 /** 派發通道用嘅票種。label 原本長期缺位，搞到杯標籤被當 kitchen 出單（印咗「＊＊＊ 廚房 ＊＊＊」抬頭）。 */
-export type PrintKind = "receipt" | "kitchen" | "label" | "test";
+/**
+ * 經打印通道（Companion / relay）發送時嘅單據類型。
+ *
+ * `"shift"`（2026-09-10 加）：交班結算單。三個通道嘅渲染器一律「有
+ * `job.template` 快照就行模板路徑、`kind` 淨係用嚟決定抬頭」——
+ * 下游唔識 `"shift"` 嘅話抬頭會 fall through 去空字串（唔會印錯），
+ * 交班單嘅抬頭由模板 `header` 區塊自己帶。所以呢個值加落嚟係安全嘅。
+ */
+export type PrintKind = "receipt" | "kitchen" | "label" | "shift" | "test";
 
 export interface PrintSendOptions {
   kind: PrintKind;

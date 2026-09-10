@@ -126,7 +126,7 @@ import {
 } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
-import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, StoreTable } from "@/lib/types";
+import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, ShiftTemplateVariant, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 
 type Toast = {
@@ -914,6 +914,8 @@ export function PosApp() {
         /** 0027 pos_print_templates 店級模板（新真源）；null = server 未設定過。 */
         printTemplatesServer?: {
           templates?: PrintTemplates | null;
+          /** 交班模板範本庫（0030，2026-09-10）；舊 server / 未跑 migration → undefined。 */
+          shiftPresets?: { presets?: ShiftTemplateVariant[]; activeId?: string } | null;
           updatedAt?: string | null;
         } | null;
         /** 0028 pos_note_presets 店級備註真源；null = server 未設定過。 */
@@ -1093,6 +1095,22 @@ export function PosApp() {
           floors:
             localHasSettings && local.floors?.length ? local.floors : payload.localSettings.floors,
           printTemplates: serverTpl && serverIsNewer ? serverTpl : local.printTemplates,
+          // 交班模板範本庫（2026-09-10，0030）：server 較新就跟 server（另一部機新增／套用咗範本），
+          // 否則保留本機。
+          // ⚠️ 一定要明寫呢兩行 —— `payload.localSettings` 係 server `device_configs` 嘅值，
+          // 根本冇呢兩個新 key；唔寫嘅話 `merged` 入面會變 undefined，`savePosLocalSettings()`
+          // 嘅 normalize 就會當「未設定」而重置成出廠預設 → **商家建立嘅範本每次同步都會消失**
+          // （同 `qrUrl` / `standaloneSpecGroups` 一樣嘅歷史陷阱）。
+          ...(adoptServerTemplates && payload.printTemplatesServer?.shiftPresets
+            ? {
+                shiftTemplatePresets: payload.printTemplatesServer.shiftPresets.presets ?? local.shiftTemplatePresets,
+                activeShiftTemplateId:
+                  payload.printTemplatesServer.shiftPresets.activeId ?? local.activeShiftTemplateId,
+              }
+            : {
+                shiftTemplatePresets: local.shiftTemplatePresets,
+                activeShiftTemplateId: local.activeShiftTemplateId,
+              }),
           // 備註預設：server 較新採納 server（店級真源）；否則保留本機備註。
           notePresets: adoptServerNotes ? (serverNote!.notePresets ?? local.notePresets) : local.notePresets,
           cancelNotePresets: adoptServerNotes

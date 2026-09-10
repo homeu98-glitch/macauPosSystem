@@ -10,6 +10,7 @@ import {
   PrintJob,
   PrintTemplates,
   QueueEvent,
+  ShiftSettlementSnapshot,
   UserPermissions,
   UserRole,
 } from "@/lib/types";
@@ -24,6 +25,10 @@ import {
   DEFAULT_KITCHEN_TEMPLATE,
   DEFAULT_LABEL_TEMPLATE,
   DEFAULT_RECEIPT_TEMPLATE,
+  DEFAULT_SHIFT_TEMPLATE,
+  DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
+  normalizeShiftTemplate,
+  normalizeShiftTemplatePresets,
 } from "@/lib/escpos-template";
 
 const KEYS = {
@@ -307,7 +312,21 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         qrUrl: settings?.printTemplates?.kiosk?.qrUrl ?? DEFAULT_KIOSK_TEMPLATE.qrUrl ?? "",
         qrSize: settings?.printTemplates?.kiosk?.qrSize ?? DEFAULT_KIOSK_TEMPLATE.qrSize ?? "m",
       },
+      // 交班結算單模板（第五個槽位，2026-09-10）。結構同 kitchen，但區塊係匯總數字。
+      // 用 normalizeShiftTemplate 而唔用 mergeTemplateBlocks + mergeTemplateOrder：
+      // 交班模板多咗 `sectionTitles`，而且 order 補位要按 META 順序插（唔係一律補落尾），
+      // 所以自己一套 normalize（同一個檔兩個地方一齊維護太易走樣）。
+      // 舊 localStorage 冇呢個 key → 全套用 DEFAULT_SHIFT_TEMPLATE，安全向後兼容。
+      shift: normalizeShiftTemplate(settings?.printTemplates?.shift ?? DEFAULT_SHIFT_TEMPLATE),
     },
+    // 交班模板範本庫 + 上次套用嘅範本 id。
+    // ⚠️ 呢兩欄一定要喺 whitelist 出現，否則 reload 時會被 normalize 剷光 ——
+    // 同 `receipt.qrUrl` / `standaloneSpecGroups` 嘅歷史教訓一樣（見 MEMORY.md）。
+    shiftTemplatePresets: normalizeShiftTemplatePresets(settings?.shiftTemplatePresets),
+    activeShiftTemplateId:
+      typeof settings?.activeShiftTemplateId === "string"
+        ? settings.activeShiftTemplateId
+        : DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
     notePresets: Array.isArray(settings?.notePresets) ? settings.notePresets : defaultPosLocalSettings.notePresets,
     cancelNotePresets: Array.isArray(settings?.cancelNotePresets)
       ? settings?.cancelNotePresets
@@ -928,6 +947,21 @@ export type ShiftHistoryRecord = {
    */
   skippedEvents?: number;
   pendingPrints: number;
+  /**
+   * 交班當刻嘅**完整結算快照**（2026-09-10 新增，配合「交班模板」）。
+   *
+   * 上面啲扁平欄位（settledCount / revenue / paymentBreakdown …）係設計畀
+   * 列表同 CSV 匯出用嘅；但「重打交班單」要還原到同原本一模一樣嘅紙本，
+   * 扁平欄位唔夠 —— 例如線上區塊只得 `onlinePaidMop`，還原唔到
+   * 「線上訂單張數 / 餘額扣點 / 到店貨到付款」。
+   *
+   * 所以交班時連埋整份 `ShiftSettlementSnapshot` 一齊存；重打直接用返佢
+   * → 「重打 == 原本出紙」（連 `buildShiftContent()` 都係同一個輸入）。
+   *
+   * 舊記錄（2026-09-10 之前交班）冇呢個欄 → 重打會走
+   * `shiftRowToSettlement()` 由扁平欄位盡量還原（線上區塊退化，見該函數註釋）。
+   */
+  detail?: ShiftSettlementSnapshot;
 };
 
 export function loadShiftState(): ShiftState {
