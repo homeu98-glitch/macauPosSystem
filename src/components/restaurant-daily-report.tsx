@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import {
@@ -34,6 +34,7 @@ import {
 import { formatMoney } from "@/lib/format";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+import { readNetworkOnline } from "@/lib/use-network-online";
 import type { PosOrder, PosLocalSettings } from "@/lib/types";
 import Link from "next/link";
 
@@ -701,13 +702,106 @@ export type RestaurantDailyReportProps = {
   initialRange?: ReportRangeKey;
   /** 範圍變更通知上一層 —— 畀 admin 頁面記住用戶選擇，remount 後用 initialRange 還原。 */
   onRangeChange?: (range: ReportRangeKey) => void;
+  /** 軟刷新信號（自動刷新用）：值一變即重跑 POS 訂單 / Ledger 線上單 / Ledger 彙總三條
+   *  fetch effect，**唔 remount、唔清舊數據** → 畫面上一直有數字，新數據返嚟先換。
+   *  由外殼 `RestaurantDailyReport` 注入；直接使用本組件（唔經外殼）時唔傳即可。 */
+  refreshToken?: number;
   /** 載入狀態通知：true = 至少有個數據源仲載入緊（初次 mount 亦為 true）。 */
   onBusyChange?: (busy: boolean) => void;
   /** 載入錯誤摘要（POS 訂單 / Ledger 線上單 / 線上單明細 / Ledger 彙總），冇錯傳 null。 */
   onLoadError?: (message: string | null) => void;
 };
 
+/** 報表自動刷新間隔（只喺分頁可見時執行）。 */
+const AUTO_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
+/** 兩次刷新之間嘅最短間隔 —— 去抖（避免 interval 同 visibilitychange 撞埋一齊）。 */
+const MIN_REFRESH_GAP_MS = 20 * 1000;
+
+/**
+ * 自動刷新外殼（2026-09-10）。
+ *
+ * ## 點解要有
+ *
+ * 報表只在 mount 時拉一次數據，**補推／結帳之後畫面唔會自己更新**。
+ * 2026-09-10 生產實例：對賬守護 17:51 已經把 3 張殭屍單補推上雲、DB 只剩 1 張未結帳，
+ * 但商家 18:02 睇住嘅報表仍然寫「未結帳 3 張」—— 商家就係憑住一個過期畫面
+ * 嚟問「點解 iPad 同步唔到」，白白浪費一輪排查。
+ *
+ * ## 做法：軟刷新（唔 remount）
+ *
+ * 原本想用 admin「重新載入」嗰套 `key` remount —— 但**唔得**：remount 會令
+ * `dataReady` 由 false 重新嚟過，全頁 11 張卡一齊變 skeleton，每 3 分鐘閃一次；
+ * 而且會丟失滾動位置同正在編輯嘅欄位（毛利率 inline edit）。自動刷新係背景行為，
+ * 唔應該搶走用戶手上嘅畫面。
+ *
+ * 所以改為傳 `refreshToken` 落主體，由主體**加落三條數據 effect 嘅依賴陣列**
+ * （POS 訂單 backfill / Ledger 線上單 / Ledger 彙總）。舊數據一直留在畫面上，
+ * 直到新數據返嚟先換 —— 同大部分 dashboard 嘅行為一致。
+ * 範圍經 `initialRange` / `onRangeChange` 保住（其實唔 remount 都唔會丟）。
+ *
+ * ## 幾時刷
+ *
+ * - 每 `AUTO_REFRESH_INTERVAL_MS`（3 分鐘）一次，**只喺分頁可見時**；
+ * - 分頁由隱藏變可見（商戶切返嚟）→ 即刻刷（`MIN_REFRESH_GAP_MS` 去抖）。
+ *
+ * ⚠️ **離線時唔刷**：離線下報表會 fallback 讀本機暫存訂單，把一個正常嘅雲端畫面
+ * 刷成「本機版」係降級唔係更新。等 `online` 事件 + 下一個 interval 自然會追上。
+ */
 export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
+  // 每次 +1 = 要求主體軟刷新一次（見上方「做法」）。
+  const [refreshToken, setRefreshToken] = useState(0);
+  // 範圍提升到外殼：主體唔再 remount，但 keep 住呢個提升冇壞處
+  // （admin 頁面自己 remount 我哋時，`initialRange` 仍然要有人記住）。
+  const [range, setRange] = useState<ReportRangeKey>(props.initialRange ?? "today");
+  const lastRefreshRef = useRef(0);
+  const onRangeChange = props.onRangeChange;
+
+  const bump = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRefreshRef.current < MIN_REFRESH_GAP_MS) return;
+    lastRefreshRef.current = now;
+    setRefreshToken((t) => t + 1);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (!readNetworkOnline()) return;
+      bump();
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!readNetworkOnline()) return;
+      bump();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [bump]);
+
+  const handleRange = useCallback(
+    (next: ReportRangeKey) => {
+      setRange(next);
+      onRangeChange?.(next);
+    },
+    [onRangeChange],
+  );
+
+  return (
+    <RestaurantDailyReportBody
+      {...props}
+      refreshToken={refreshToken}
+      initialRange={range}
+      onRangeChange={handleRange}
+    />
+  );
+}
+
+function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // initialRange 只用作初始值；之後由用戶喺 UI 切。admin 頁面重新載入（remount）
   // 時會把上次嘅範圍傳返入嚟，避免刷新後彈返「今日」。
   const [range, setRange] = useState<ReportRangeKey>(props.initialRange ?? "today");
@@ -778,6 +872,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   // 解構成 primitive / 穩定引用，畀 useEffect 依賴陣列用（避免依賴成個 props 物件）。
   const adminAllStoresMode = props.allStoresMode === true;
   const adminOrderFetcher = props.adminOrderFetcher;
+  /** 軟刷新信號（外殼自動刷新注入，見 `refreshToken` prop 說明）。加落下面三條
+   *  fetch effect 嘅依賴陣列；**唔可以**加落「切店/切範圍重置」effect，
+   *  否則會清空 orders → 全頁 skeleton 閃一下（正正就係要避免嘅嘢）。 */
+  const refreshToken = props.refreshToken ?? 0;
   const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
   const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date()).substring(0, 7);
   const bom: BomEntry[] = useMemo(() => loadBom(merchantId ?? ""), [merchantId]);
@@ -853,6 +951,20 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{
     status: "idle" | "loading" | "success" | "error";
+    /**
+     * 呢一版數字嘅**來源**（2026-09-10 加）。
+     *
+     * 以前只有 `fetched.length > 0 ? 雲端 : (cloudFailed ? 本機 : 空)` 一行分流，
+     * 但**冇任何地方顯示用咗邊個來源** —— 同一個「未結帳 N 張」KPI，
+     * 可能係 DB 嘅數，亦可能係某台機 localStorage 嘅數，畫面上一模一樣。
+     * 商家無從分辨，排查亦無從入手。
+     *
+     * - `cloud`：雲端為真源（正常）
+     * - `cloud-partial`：雲端中途失敗，只拉到部分訂單 → **數字偏少、唔可信**
+     * - `local-fallback`：雲端完全讀唔到，改用本機 localStorage 訂單 → **唔係 DB 數字**
+     * - `empty`：雲端成功，但該店該區間真係冇單
+     */
+    dataSource: "idle" | "cloud" | "cloud-partial" | "local-fallback" | "empty";
     merchantId: string | null;
     currentRange: ReportRangeKey;
     fetchedCount: number;
@@ -899,6 +1011,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     unmatchedItemNames: Record<string, number>;
   }>({
     status: "idle",
+    dataSource: "idle",
     merchantId: merchantId ?? null,
     currentRange: "today",
     fetchedCount: 0,
@@ -1112,12 +1225,21 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
       // 雲端空 + 成功 → 該店確實冇單，顯示空狀態（**唔可以用本機 orders 覆蓋**——可能係舊 store 殘留）。
       let final: PosOrder[];
+      let dataSource: "cloud" | "cloud-partial" | "local-fallback" | "empty";
       if (fetched.length > 0) {
         final = fetched.filter((o) => !deletedIds.has(o.id) && belongsToStore(o));
+        // 拉到嘢、但中途有頁失敗（例如第 2 頁 500）→ 只有部分訂單，數字偏少。
+        // 以前呢種情況完全靜默（status 仍然 "success"），係一個靜默失真源。
+        dataSource = cloudFailed ? "cloud-partial" : "cloud";
       } else if (cloudFailed) {
+        // ⚠️ 雲端完全讀唔到 → 改用本機 localStorage 訂單（離線模式仍可用）。
+        // 但呢啲**唔係 DB 數字**，必須喺畫面明確講清楚，否則商家會拿住
+        // 某台機嘅暫存數字去同人對數。
         final = localOrders.filter((o) => !deletedIds.has(o.id) && belongsToStore(o));
+        dataSource = "local-fallback";
       } else {
         final = [];
+        dataSource = "empty";
       }
       setOrders(final);
 
@@ -1174,7 +1296,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
       const { storageOrdersByStore, legacyOrdersCount } = scanStorageOrders();
 
       setDebugInfo({
-        status: cloudFailed && fetched.length === 0 ? "error" : "success",
+        // 只要有任何一個雲端請求失敗就算 "error" —— 以前只有「完全失敗且零筆」
+        // 才當錯誤，令「部分失敗」靜默出一個偏少嘅數字（2026-09-10 修）。
+        status: cloudFailed ? "error" : "success",
+        dataSource,
         merchantId: merchantId ?? null,
         currentRange: range,
         fetchedCount: fetched.length,
@@ -1208,7 +1333,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [merchantId, backfillSeq, range, adminAllStoresMode, adminOrderFetcher]);
+  }, [merchantId, backfillSeq, range, adminAllStoresMode, adminOrderFetcher, refreshToken]);
 
   // 訂閱 authSession 變更：切換帳號時重置 orders 並強制重跑 backfill。
   // root cause 修復（2026-09-04）：React 唔會自動訂閱 localStorage，冇呢個 listener
@@ -1444,7 +1569,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [merchantId, range, isAdminMode]);
+  }, [merchantId, range, isAdminMode, refreshToken]);
 
   useEffect(() => {
     async function safeLedger(r: ReportRangeKey): Promise<LedgerReportSummary | null> {
@@ -1525,7 +1650,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [range, merchantId, merchantIdForQuery, isAdminMode]);
+  }, [range, merchantId, merchantIdForQuery, isAdminMode, refreshToken]);
 
   // Ledger 純線上單入報表前，先剔除已經同步入 POS DB 嘅單（以 POS onlineOrderId ↔ Ledger id 對應），
   // 避免人流 / 時長統計雙重計算。剩低嘅就係「從未入 POS DB」嘅線上單。
@@ -1913,6 +2038,8 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
                 <div className="text-lg font-semibold text-slate-900">店鋪每日營運總結</div>
                 <div className="mt-1 text-sm text-slate-500">
                   {storeName} · {todayKey}（澳門）· 篩選影響全部模塊
+                  {/* 自動刷新提示（2026-09-10）：唔講明嘅話，商家見到數字自己變咗會以為壞咗。 */}
+                  <span className="text-slate-400"> · 每 3 分鐘自動更新</span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1952,6 +2079,32 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
             {ledgerError ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {ledgerError}
+              </div>
+            ) : null}
+
+            {/* 2026-09-10 新增：數據來源可見性。
+                同一個「未結帳 N 張」KPI，雲端 / 本機 fallback 兩種來源嘅可信度差天共地，
+                但以前畫面**一模一樣** —— 商家會拿住某台機嘅暫存數字去同人對數，
+                或者把一個偏少嘅數字當成事實嚟追問「點解同步唔到」。
+                - cloud-partial：拉到單但中途有頁失敗 → 數字偏少，係靜默失真源。
+                - local-fallback：雲端完全讀唔到 → 全部係本機 localStorage 訂單，唔係 DB 數字。 */}
+            {debugInfo.dataSource === "cloud-partial" ? (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                <div className="font-semibold">⚠️ 雲端數據只讀到一部分，以下數字未能作準</div>
+                <div className="mt-1 text-[13px] text-amber-800">
+                  部分分頁讀取失敗（{debugInfo.lastError ?? "網絡不穩"}），未結帳筆數與營業額都會偏少。
+                  系統會自動重試，亦可稍後自行重新載入。
+                </div>
+              </div>
+            ) : null}
+
+            {debugInfo.dataSource === "local-fallback" ? (
+              <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-900">
+                <div className="font-semibold">⚠️ 雲端讀取失敗，以下為本機暫存資料，並非資料庫實際數字</div>
+                <div className="mt-1 text-[13px] text-rose-800">
+                  目前顯示的是本機快取的訂單，只反映本機畫面，可能與後台或其他裝置不一致。
+                  請檢查網絡後重新載入；確認資料是否已上雲，可到 POS 設定頁的「同步健康」。
+                </div>
               </div>
             ) : null}
 

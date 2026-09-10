@@ -21,6 +21,7 @@ import {
   defaultPermissionGroups,
   defaultPosLocalSettings,
 } from "@/lib/mock-data";
+import { macauDateKey } from "@/lib/ledger/report-period";
 import {
   DEFAULT_KIOSK_TEMPLATE,
   DEFAULT_KITCHEN_TEMPLATE,
@@ -1120,16 +1121,63 @@ function pad2Seq(value: number): string {
 }
 
 /**
+ * 由現有訂單推導「今日、同一單號抬頭已用過嘅最大序號」。
+ *
+ * ## 點解需要（2026-09-10 修：同一單號出現兩次）
+ *
+ * 單號有**兩個獨立計數器**：server 嘅 `next_daily_sequence`（按 store/kind/Macau 日原子遞增）
+ * 同本機 fallback `localDailySeq`。兩者互不知情 —— 只要連線取得序號失敗（或本機
+ * localStorage 被 iOS 清過、計數器歸零），fallback 就會由細號重新數起，撞返
+ * 早已由 server 派出去嘅號（實例：`訂單03` 出現兩條 row，一 cancelled 一 settled）。
+ *
+ * 呢個閘用「眼前睇得到嘅訂單」做下限，令 fallback 永遠唔會重用已經出現過嘅號。
+ *
+ * @param orders 任何來源嘅訂單（本機 state + localStorage 一齊餵最穩）
+ * @param prefix 單號抬頭（訂單 / 自取 / 外賣 / 堂食）
+ * @param bizDate Macau 日期 key（預設今日）
+ */
+export function maxUsedDailyOrderSeq(orders: PosOrder[], prefix: string, bizDate?: string): number {
+  const day = bizDate ?? macauDateKey(new Date());
+  const re = new RegExp(`^${prefix}(\\d+)$`);
+  let max = 0;
+  for (const order of orders) {
+    const no = order.localOrderNo;
+    if (!no) continue;
+    const m = re.exec(no);
+    if (!m) continue;
+    // 只計「今日」嘅單：單號按日歸零，尋日嘅 訂單12 唔應該推高今日嘅下限。
+    const ts = Date.parse(order.createdAt ?? order.updatedAt ?? "");
+    if (Number.isFinite(ts) && macauDateKey(new Date(ts)) !== day) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max;
+}
+
+/**
  * 取下一個本地每日序號並寫回 localStorage。
+ *
+ * ⚠️ **只應該喺真正要派一個新號嘅時候呼叫**。以前喺 `upsertCurrentOrder()` 每次
+ * upsert（包括改單）都叫一次，白白燒號碼 —— 令本機計數器遠遠跑贏 server 計數器，
+ * 之後任何 fallback 都容易撞號。
+ *
  * @param kind  同 /api/pos/sequence 嘅 kind（pos / pickup / delivery / counter）
  * @param prefix 單號抬頭（訂單 / 自取 / 外賣 / 堂食），由 caller 按 quick mode 決定
+ * @param alreadyUsedMax 眼前已用過嘅最大序號（見 `maxUsedDailyOrderSeq`）；防撞下限
  * @returns 完整單號，例如 `訂單08` / `自取12`
  */
-export function nextLocalDailyOrderNo(kind: string, prefix: string): string {
-  const bizDate = new Date().toISOString().slice(0, 10);
+export function nextLocalDailyOrderNo(
+  kind: string,
+  prefix: string,
+  alreadyUsedMax = 0,
+): string {
+  // ⚠️ 一定要用 Macau 日期，唔可以用 `toISOString().slice(0,10)`（= UTC）。
+  // 用 UTC 嘅話，00:00–08:00 Macau 會當成「尋日」，本機序號唔會跨日歸零，
+  // 而 server `next_daily_sequence` 用 Asia/Macau 已經歸零 → 兩邊即刻爆撞號。
+  const bizDate = macauDateKey(new Date());
   const stateKey = `${bizDate}:${kind}`;
   const state = readStoreJson<LocalDailySeqState>(STORE_SUFFIX.localDailySeq, {});
-  const next = (state[stateKey] ?? 0) + 1;
+  const next = Math.max(state[stateKey] ?? 0, Math.max(0, alreadyUsedMax)) + 1;
   state[stateKey] = next;
   writeStoreJson(STORE_SUFFIX.localDailySeq, state);
   return `${prefix}${pad2Seq(next)}`;

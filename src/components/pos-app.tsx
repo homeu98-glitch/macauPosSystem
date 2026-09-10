@@ -74,6 +74,7 @@ import {
   loadDeletedOrderIds,
   loadQuarantinedOrders,
   addDeletedOrderIds,
+  maxUsedDailyOrderSeq,
   nextLocalDailyOrderNo,
   saveBootstrapCache,
   saveDeviceConfig,
@@ -1861,7 +1862,19 @@ export function PosApp() {
     const sequencePrefix = isQuickMode ? quickTypeTableName() : "訂單";
     // B1（docs/56）：fallback 唔再用隨機時戳末兩位（會出「訂單84」呢類非順序號），
     // 改用本地按 日期+kind 遞增嘅每日序號，保證 fallback 都單調易讀、同 server 序號對齊。
-    const fallbackNo = nextLocalDailyOrderNo(sequenceKind, sequencePrefix);
+    //
+    // 2026-09-10 修（同一單號出現兩次，實例 `訂單03` 一 cancelled 一 settled）：
+    //   1. **只喺真正要派新號時才消耗本地序號** —— 以前每次 upsert（包括改單）都燒一個，
+    //      令本機計數器跑贏 server 計數器，之後任何 fallback 都容易撞號。
+    //   2. 傳入「眼前已用過嘅最大序號」做下限（連 server 派嘅號一齊計）——
+    //      即使 localStorage 被 iOS 清走、計數器歸零，fallback 都唔會重用已出現過嘅號。
+    const fallbackNo = existingOrder
+      ? ""
+      : nextLocalDailyOrderNo(
+          sequenceKind,
+          sequencePrefix,
+          maxUsedDailyOrderSeq([...loadOrders(), ...orders], sequencePrefix),
+        );
 
     const order: PosOrder = existingOrder
       ? {
