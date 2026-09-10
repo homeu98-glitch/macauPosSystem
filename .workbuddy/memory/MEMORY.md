@@ -14,6 +14,7 @@
 - **台號查詢只認 `source="scan"`** → 放寬前先改收銀端「加單補印廚房單」閘，否則**廚房靜默漏單**。
 - **`isOrderAcked` 有 TTL**：守護傳 10 分鐘、健康燈**唔可以**傳（會每 10 分鐘閃「N 張待傳」）。
 - **iPad 分頁唔會自動換 JS** → 「明明修好但仲唔同步」第一步叫用戶**強制 reload**。
+- **admin 面板唔可以行 `/api/pos/state`**（要 POS 終端憑證 → 選商家即 401）；單店都要傳 `adminOrderFetcher({ storeId })` 走 `/api/admin/orders`。
 
 ## 硬性口徑（唔可以改）
 - 收入認列 `isSaleCountable(o)`：只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`。

@@ -693,8 +693,15 @@ export type RestaurantDailyReportProps = {
   /** admin「全部」模式：唔指定 merchantId，跨店彙總所有商家嘅 POS 訂單。
    *  訂單由 adminOrderFetcher 提供；本機 fallback / 店鋪過濾全部停用。 */
   allStoresMode?: boolean;
-  /** admin 模式訂單 fetcher（GET /api/admin/orders，需 admin token，由 admin 頁面注入）。 */
-  adminOrderFetcher?: (params: { start?: string; end?: string; limit: number; offset: number }) => Promise<PosOrder[]>;
+  /** admin 模式訂單 fetcher（GET /api/admin/orders，需 admin token，由 admin 頁面注入）。
+   *  帶 `storeId` = 單店；唔帶 = 跨店彙總（「全部商家」模式）。 */
+  adminOrderFetcher?: (params: {
+    storeId?: string;
+    start?: string;
+    end?: string;
+    limit: number;
+    offset: number;
+  }) => Promise<PosOrder[]>;
   /** 初始報表範圍（唔傳 = "today"）。
    *  admin 報表頁嘅「重新載入」用 remount（key 帶 refreshSeq）重置本組件全部 state，
    *  靠呢個 prop 喺 remount 後還原用戶已選嘅範圍（今日/昨日/7天/30天/全部），
@@ -1158,12 +1165,19 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       let lastError: string | null = null;
       try {
         if (adminOrderFetcher) {
-          // admin「全部」模式：訂單由注入 fetcher 提供（GET /api/admin/orders，
-          // admin session token 把關，唔帶 storeId = 跨店彙總）。分頁語意同下。
+          // admin 模式：訂單由注入 fetcher 提供（GET /api/admin/orders，admin session token
+          // 把關）。**帶 storeId = 單店；唔帶 = 跨店彙總**（「全部商家」模式）。分頁語意同下。
+          //
+          // ⚠️ 2026-09-10 修（admin 選商家後報「POS 訂單：HTTP 401」）：
+          // 單店 admin 模式**唔可以**行下面 `/api/pos/state?storeId=` 嗰條路。該 API 自
+          // P0-4 起要求 POS 終端憑證（或 admin token），但 admin 裝置冇 POS 登入 →
+          // `posDeviceAuthHeaders()` 係空 → server 一律 401。admin 面板一律行 admin 通道。
+          const storeIdParam = adminAllStoresMode ? undefined : merchantId ?? undefined;
           for (let page = 0; page < MAX_PAGES; page++) {
             const offset = page * PAGE;
-            lastUrl = "adminOrderFetcher(/api/admin/orders)";
+            lastUrl = `adminOrderFetcher(/api/admin/orders${storeIdParam ? "?storeId=" : ""})`;
             const rows = await adminOrderFetcher({
+              storeId: storeIdParam,
               start: period?.start,
               end: period?.end,
               limit: PAGE,
@@ -1189,7 +1203,17 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
           lastHttpStatus = res.status;
           if (!res.ok) {
             cloudFailed = true;
-            lastError = `HTTP ${res.status} ${res.statusText}`;
+            // 讀 server 嘅 `error` 文字，唔好只顯示 `HTTP 401` ——
+            // 淨睇 status 分唔出「憑證過期 / 未授權 / 區間參數錯 / 資料庫未配置」，
+            // 2026-09-10 admin 單店模式嘅 401 就係因為只見到一句 HTTP 401 而排查咗一輪。
+            let detail = "";
+            try {
+              const body = (await res.json()) as { error?: string };
+              if (body?.error) detail = `：${body.error}`;
+            } catch {
+              /* 非 JSON（例如 gateway 502 嘅 HTML）→ 維持純 status */
+            }
+            lastError = `HTTP ${res.status} ${res.statusText}${detail}`;
             break;
           }
           const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };

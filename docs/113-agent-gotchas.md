@@ -12,6 +12,10 @@
 - **數據來源可見**：`debugInfo.dataSource` ∈ `idle|cloud|cloud-partial|local-fallback|empty` → UI 警示條。任何一頁失敗即 `cloudFailed` → `status:"error"`（「部分成功」以前**靜默出偏少數字**）。
 - **自動刷新**：外殼每 3 分鐘 + 回前景即刷（去抖），離線唔刷。⚠️ **唔可以用 `key` remount**（admin「重新載入」嗰套）：remount 令 `dataReady` 歸 false → 11 張卡每 3 分鐘一齊閃 skeleton，兼丟滾動位置／inline edit。改用 `refreshToken` 加落**三條 fetch effect**（backfill / 線上單 / Ledger 彙總）；**唔可以**加落「切店／切範圍重置」effect（會清 orders → 閃）。
 - **`dataReady = backfillDone && ledgerDone`**；admin `loadOnlineByHour` early return **必須 setLedgerDone(true)**；切店/切帳號重置。
+- ⚠️ **admin 面板一律唔可以行 `/api/pos/state`（2026-09-10 修）**：該 API 自 P0-4 起要求 POS 終端憑證（或 admin token），但 admin 裝置冇 POS 登入 → `posDeviceAuthHeaders()` 係空 → **401**。症狀：admin「營業報表」**一選商家**（單店模式）就彈「POS 訂單：HTTP 401」，而「全部商家」正常。
+  - 修法：`admin/reports/page.tsx` 單店分支**都要**傳 `adminOrderFetcher`，`adminOrderFetcher({ storeId })` 帶 `storeId` → 走 `GET /api/admin/orders?storeId=`（service-role + admin token，本身已支援單店）。`allStoresMode` 則**唔帶** `storeId` = 跨店彙總。
+  - `/api/pos/state` 嘅 401 係「可以接受 `readAdminSessionFromRequest`」嘅，所以理論上帶 admin token 都通；但 admin 面板走 admin 通道係更一致嘅做法（同「全部商家」同一條 code path）。
+  - 順手改善：`!res.ok` 時**讀 response body 嘅 `error`** 再拼落 `lastError`，唔好只出 `HTTP 401`（今次就係因為只見到一句 HTTP 401，白排查一輪，仲誤導去查 admin token／Supabase env）。
 
 ## store 隔離（嚴）
 - `merchantId = staff_accounts.merchant_id`；DB 用 `store_id`；`useReportMerchantId()` 訂 `pos-auth-changed`。讀 strict `o.storeId === merchantId`，undefined legacy 寧棄；初始 orders 空防 hydration 錯 scope。錯店靠重綁 `macau-pos-kiosk-device`／`?store=`（`60000003` 係真 UUID）。

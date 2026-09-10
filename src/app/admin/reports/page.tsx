@@ -122,9 +122,11 @@ export default function AdminReportsPage() {
   }, [loadMerchants]);
 
   const adminOrderFetcher = useCallback(
-    async (params: { start?: string; end?: string; limit: number; offset: number }) => {
+    async (params: { storeId?: string; start?: string; end?: string; limit: number; offset: number }) => {
       const token = loadAuthSession()?.adminSessionToken;
       const qs = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) });
+      // 帶 storeId = 單店；唔帶 = 全部店（跨店彙總）。
+      if (params.storeId) qs.set("storeId", params.storeId);
       if (params.start) qs.set("start", params.start);
       if (params.end) qs.set("end", params.end);
       const res = await fetch(`/api/admin/orders?${qs.toString()}`, {
@@ -347,6 +349,10 @@ export default function AdminReportsPage() {
             key={`${selectedMerchant.id}-${refreshSeq}`}
             merchantIdOverride={selectedMerchant.id}
             storeNameOverride={selectedMerchant.name}
+            // 2026-09-10 修：單店**都要**行 admin 通道（/api/admin/orders?storeId=）。
+            // 之前唔傳 fetcher → 報表會行 `/api/pos/state?storeId=`，但嗰支 API 自 P0-4 起
+            // 要求 POS 終端憑證，admin 裝置冇 → 一選商家就「POS 訂單：HTTP 401」。
+            adminOrderFetcher={adminOrderFetcher}
             initialRange={reportRange}
             onRangeChange={handleRangeChange}
             onBusyChange={handleBusyChange}
