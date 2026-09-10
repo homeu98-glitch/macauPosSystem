@@ -3,9 +3,22 @@
 import { defaultPosLocalSettings } from "@/lib/mock-data";
 import { OrderItem, PosOrder, PrintJob, PrinterGroup, QueueEvent } from "@/lib/types";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
+import { computeOrderTotals } from "@/lib/kiosk-cart";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * 產生一個「落單草稿」用嘅穩定 order id（2026-09-10 P2-5 idempotency）。
+ *
+ * `placeOrder()` 每次重試都會傳同一個 id 落 `buildKioskOrder()`，所以
+ * 「按兩下 / 網絡重試」唔會建立兩張單（server upsert 同一個 id）。
+ * 直到落單成功先重新產生下一個。
+ */
+export function newKioskOrderId(): string {
+  return uid("kiosk");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -153,14 +166,23 @@ export type BuildKioskOrderInput = {
   localOrderNo?: string;
 };
 
+/**
+ * 落單金額嘅**單一真源**（2026-09-10 掃碼點餐審查 P1-3）。
+ *
+ * 實作已抽去 `@/lib/kiosk-cart`（純函式，可單元測試）。
+ * 呢度 re-export 係為咗保持 `buildKioskOrder` 一帶嘅 import 路徑穩定。
+ */
+export { computeOrderTotals };
+export type { KioskOrderTotals } from "@/lib/kiosk-cart";
+
 /** 建構 Kiosk 落單嘅 `PosOrder`（唔落本地 localStorage，推去 Supabase）。 */
 export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
   const timestamp = new Date().toISOString();
   const slice = new Date().getTime().toString().slice(-4);
-  const subtotal = input.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
-  const taxAmount = subtotal * input.taxRate;
-  const serviceChargeAmount = subtotal * input.serviceRate;
-  const total = subtotal + taxAmount + serviceChargeAmount;
+  const { subtotal, taxAmount, serviceChargeAmount, total } = computeOrderTotals(input.items, {
+    taxRate: input.taxRate,
+    serviceChargeRate: input.serviceRate,
+  });
 
   const orderItems: OrderItem[] = input.items.map((it) => ({
     menuItemId: it.menuItemId,
@@ -284,6 +306,26 @@ export function defaultZoneNames(): Record<string, string> {
   return Object.fromEntries(defaultPosLocalSettings.printZones.map((zone) => [zone.id, zone.name]));
 }
 
+/** 落單失敗（永久性，例如 400 / 403 —— 重試唔會好）。 */
+export class KioskOrderRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KioskOrderRejectedError";
+  }
+}
+
+/** 落單失敗（可重試：網絡抖動 / 5xx / 429）。 */
+export class KioskOrderTransientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KioskOrderTransientError";
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * 推 Kiosk 落單去 Supabase（經 `/api/pos/sync`，server 用 service role 寫入）。禁寫本地 localStorage。
  * `eventType` 預設 ORDER_CREATED；resume 重用現有單時傳 ORDER_UPDATED（同一 order.id upsert）。
@@ -292,6 +334,12 @@ export function defaultZoneNames(): Record<string, string> {
  * 原因：任何同步咗上 server 嘅 pending job，收銀端 `onPrintJobUpsert` 會 merge 落自己嘅
  * localStorage，然後嗰部機嘅 `PrintFlushWorker` 會照印 → Kiosk 已經印咗一張，收銀台再印多張。
  * Kiosk 嘅顧客小票屬於「本機打印」，由 `appendPrintJobs()` 寫本機就夠，唔好上雲。
+ *
+ * 2026-09-10 審查 P1-4 / P0-3：
+ *   - **有限度重試**（最多 3 次，指數退避）：餐飲現場 Wi-Fi 抖動係常態，單次 fetch 太脆。
+ *     重試用同一個 `order.id`，所以 server 端 upsert 係 idempotent，唔會整多張單。
+ *   - 帶 `Authorization: Bearer <posDeviceToken>`（kiosk 機有登入 session 就有；掃碼客人冇
+ *     → 行匿名通道，server 只准 ORDER_CREATED / ORDER_UPDATED）。
  */
 export async function submitKioskOrder(
   storeId: string,
@@ -312,22 +360,40 @@ export async function submitKioskOrder(
       storeId,
     },
   ];
+  const body = JSON.stringify({ storeId, events });
 
-  const res = await fetch("/api/pos/sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ storeId, events }),
-  });
-  let body: { ok?: boolean; error?: string } | null = null;
-  try {
-    body = (await res.json()) as { ok?: boolean; error?: string };
-  } catch {
-    // 回應非 JSON（例如 503 HTML），下面靠 status 判斷
+  const MAX_ATTEMPTS = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch("/api/pos/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
+        body,
+      });
+      let payload: { ok?: boolean; error?: string } | null = null;
+      try {
+        payload = (await res.json()) as { ok?: boolean; error?: string };
+      } catch {
+        // 回應非 JSON（例如 503 HTML），下面靠 status 判斷
+      }
+      if (res.ok && payload?.ok !== false) return;
+
+      const msg = payload?.error ?? `落單失敗（${res.status}）`;
+      // 4xx（除 429）＝ 請求本身有問題，重試都係同一結果 → 即刻拋，唔好燒 quota。
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        throw new KioskOrderRejectedError(msg);
+      }
+      lastError = new KioskOrderTransientError(msg);
+    } catch (e) {
+      if (e instanceof KioskOrderRejectedError) throw e;
+      lastError = new KioskOrderTransientError(e instanceof Error ? e.message : String(e));
+    }
+    if (attempt < MAX_ATTEMPTS - 1) await sleep(300 * (attempt + 1));
   }
-  if (!res.ok || body?.ok === false) {
-    const msg = body?.error ?? `落單失敗（${res.status}）`;
-    throw new Error(msg);
-  }
+
+  throw lastError ?? new KioskOrderTransientError("落單失敗");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -363,27 +429,28 @@ export async function fetchUnsettledKioskOrder(
   tableId: string | null,
   lastOrderId?: string,
 ): Promise<PosOrder | null> {
-  try {
-    const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(storeId)}`);
-    if (!res.ok) return null;
-    const data = (await res.json()) as { orders?: PosOrder[] };
-    const orders = Array.isArray(data.orders) ? data.orders : [];
-
-    // 主路徑：客人自己嘅 scan 單（sessionStorage 記住嘅 orderId）。
-    // 呢個就係 resume 嘅單一真源——唔再靠 tableId 推斷「有冇人坐」。
-    if (lastOrderId) {
-      const candidate = orders.find(
-        (o) => o.id === lastOrderId && isCustomerScanOrder(o) && !TERMINAL_STATUSES.has(o.status),
-      );
-      return candidate ?? null;
-    }
-
-    // Fallback：tableId 有但 sessionStorage 冇 lastOrderId（例如 sessionStorage 被清），
-    // 仍然唔可以用「該枱最新單」—— 會被商戶 / stale state 誤擋。
-    // 唔再做 server-side 推斷；return null 等客人正常落新單。
-    // 注意：客人第一次掃枱（sessionStorage 空）想落單就係呢條 path，必須 return null。
+  // 冇 lastOrderId 就冇嘢好 resume（見下面註釋：唔可以靠 tableId 推斷）。
+  if (!lastOrderId) {
     void tableId; // 保留參數以維持 call site 簽名穩定，但唔再用佢做判定
     return null;
+  }
+  try {
+    // 2026-09-10 審查 P0-4 / P2-4：改用**專用輕量端點**。
+    // 舊版打 `/api/pos/state?storeId=`（無鑑權）→ 客人手機為咗查一張單，
+    // 會拉走全店 200 單 + 300 queue + 200 printJobs + 模板 + 設定（幾百 KB，仲要洩露）。
+    // 新端點只回**一張**白名單欄位嘅單，且要求精確 orderId（UUID 不可枚舉）。
+    const res = await fetch(
+      `/api/pos/order-lookup?storeId=${encodeURIComponent(storeId)}&orderId=${encodeURIComponent(lastOrderId)}`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; order?: PosOrder | null };
+    const order = data?.order ?? null;
+    if (!order || !order.id) return null;
+
+    // 單一真源：只認客人自己嘅 scan 單，且唔可以係終態。
+    if (!isCustomerScanOrder(order) || TERMINAL_STATUSES.has(order.status)) return null;
+    return order;
   } catch {
     return null;
   }

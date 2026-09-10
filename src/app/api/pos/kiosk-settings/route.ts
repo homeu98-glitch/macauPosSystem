@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 
 import { KioskSettings } from "@/lib/pos/kiosk-settings";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
+import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 
 /**
  * 自助點餐設定（按店）。`pos_kiosk_settings` 表，0015 migration。
@@ -20,6 +23,11 @@ const DEFAULT_STORE_ID = "macau-store-a";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get("storeId")?.trim() || DEFAULT_STORE_ID;
+
+  // GET 保持開放（kiosk / 掃碼落單時讀一次，只暴露一個 boolean），但加基本限流。
+  if (!rateLimit(`pos-kiosk-settings-get:${clientIp(request)}`, 120, 60_000)) {
+    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
+  }
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -53,9 +61,27 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const payload = (await request.json()) as Partial<KioskSettings>;
+  // 2026-09-10 審查 P3-5：舊版 POST **完全無鑑權** —— 任何人都可以改全店接單行為
+  // （例如偷偷關掉「自動接自助單」，令客人落單全部變待確認）。家陣要求 POS 終端憑證。
+  const ip = clientIp(request);
+  if (!rateLimit(`pos-kiosk-settings-post:${ip}`, 30, 60_000)) {
+    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
+  }
+
+  const payload = (await request.json().catch(() => null)) as Partial<KioskSettings> | null;
+  if (!payload || typeof payload !== "object") {
+    return NextResponse.json({ ok: false, error: "請求格式錯誤。" }, { status: 400 });
+  }
   const storeId = String(payload?.storeId ?? "").trim() || DEFAULT_STORE_ID;
   const selfOrderAutoAccept = Boolean(payload?.selfOrderAutoAccept ?? true);
+
+  const authEnforced = isPosDeviceAuthRequired();
+  const deviceClaims = readPosDeviceTokenFromRequest(request);
+  const adminClaims = readAdminSessionFromRequest(request);
+  const authorized = !authEnforced || Boolean(adminClaims) || Boolean(deviceClaims && deviceClaims.storeId === storeId);
+  if (!authorized) {
+    return NextResponse.json({ ok: false, error: "未經授權：需要 POS 終端憑證。" }, { status: 401 });
+  }
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {

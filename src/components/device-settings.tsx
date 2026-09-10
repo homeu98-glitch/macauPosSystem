@@ -52,6 +52,7 @@ import {
 } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -312,7 +313,8 @@ export function DeviceSettings() {
       try {
         await fetch("/api/pos/bootstrap", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          // 2026-09-10 P3-5：上傳餐牌需要 POS 終端憑證
+          headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
           body: JSON.stringify({
             storeId: mergedBootstrap.storeId,
             storeName: mergedBootstrap.storeName,
@@ -401,7 +403,7 @@ export function DeviceSettings() {
     try {
       await fetch("/api/pos/bootstrap", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
         body: JSON.stringify({
           storeId: draft.storeId,
           storeName: draft.storeName,

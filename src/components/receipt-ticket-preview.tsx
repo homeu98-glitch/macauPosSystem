@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { loadBootstrapCache, loadPosLocalSettings } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { buildReceiptContent, buildSnapshot } from "@/lib/escpos-template";
-import { renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { RECEIPT_PAPER_COLUMNS, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
 import { encodeQrPayload } from "@/lib/escpos-qr";
 import { discountedUnitPrice } from "@/lib/pos/discount";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
@@ -56,5 +56,5 @@ export function ReceiptTicketPreview({ order }: { order: PosOrder }) {
     });
   }, [order, template, storeName, storeTel, currency]);
 
-  return <EscPosPreview lines={lines} paperWidthMm={80} />;
+  return <EscPosPreview lines={lines} columns={RECEIPT_PAPER_COLUMNS} />;
 }

@@ -4,7 +4,7 @@ import { useMemo } from "react";
 
 import { PrintJob } from "@/lib/types";
 import { buildSnapshot, DEFAULT_KITCHEN_TEMPLATE, ticketTypeLabel } from "@/lib/escpos-template";
-import { renderEscPosLines } from "@/lib/escpos-render";
+import { RECEIPT_PAPER_COLUMNS, renderEscPosLines } from "@/lib/escpos-render";
 import { EscPosPreview } from "@/components/escpos-preview";
 
 /**
@@ -28,5 +28,5 @@ export function KitchenTicketPreview({ job }: { job: PrintJob }) {
     return renderEscPosLines(buildSnapshot("kitchen", DEFAULT_KITCHEN_TEMPLATE), content, job.items ?? []);
   }, [job]);
 
-  return <EscPosPreview lines={lines} paperWidthMm={80} />;
+  return <EscPosPreview lines={lines} columns={RECEIPT_PAPER_COLUMNS} />;
 }

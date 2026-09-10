@@ -2,6 +2,7 @@ import {
   AccountPermissionGroup,
   AccountStore,
   AccountUser,
+  DEFAULT_LABEL_PAPER_ID,
   DeviceConfig,
   EscPosBlockStyle,
   PosBootstrap,
@@ -294,6 +295,11 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         order: mergeTemplateOrder(DEFAULT_LABEL_TEMPLATE.order, settings?.printTemplates?.label?.order),
         headerText: settings?.printTemplates?.label?.headerText ?? DEFAULT_LABEL_TEMPLATE.headerText,
         footerText: settings?.printTemplates?.label?.footerText ?? DEFAULT_LABEL_TEMPLATE.footerText,
+        // ⚠️ 同 `receipt.qrUrl` 同一個坑：呢度係**逐欄重建**（唔係展開合併），
+        // 漏帶就會喺 reload / 雲端同步 normalize 嗰陣被靜靜剷走。
+        // 標籤紙尺寸係 2026-09-10 新增，一定要喺呢度手動白名單。
+        paperSize:
+          settings?.printTemplates?.label?.paperSize ?? DEFAULT_LABEL_TEMPLATE.paperSize ?? DEFAULT_LABEL_PAPER_ID,
       },
       kitchen: {
         blocks: mergeTemplateBlocks(DEFAULT_KITCHEN_TEMPLATE.blocks, settings?.printTemplates?.kitchen?.blocks),
@@ -546,7 +552,22 @@ export function loadBootstrapCache(merchantId?: string | null) {
   return readStoreJson(STORE_SUFFIX.bootstrap, null as PosBootstrap | null, merchantId);
 }
 
-export function saveBootstrapCache(data: PosBootstrap) {
+/**
+ * 寫 bootstrap cache。
+ *
+ * 2026-09-10 掃碼點餐審查 P1-6：客人手機冇 POS auth session，舊版冇傳 merchantId，
+ * `storeScopedStorageKey()` 會退化成**全局 key** `macau-pos/bootstrap` ——
+ * 結果客人手機把「A 店餐牌」寫入全局，下次掃 B 店而 fetch 失敗（離線 / 500）時，
+ * 會顯示 A 店（甚至任何店）嘅餐牌並且可以落單。
+ *
+ * @param merchantId 明確 scope。有值就寫入 `macau-pos/stores/{merchantId}/bootstrap`，
+ *                   **唔會**再污染全局 key。收銀 / kiosk 舊 caller 唔傳 → 行為不變。
+ */
+export function saveBootstrapCache(data: PosBootstrap, merchantId?: string | null) {
+  if (merchantId) {
+    writeStoreJson(STORE_SUFFIX.bootstrap, data, merchantId);
+    return;
+  }
   writeStoreJson(STORE_SUFFIX.bootstrap, data);
 }
 
@@ -727,6 +748,17 @@ export type AuthSession = {
    * 見 docs/89 §2。
    */
   adminSessionToken?: string;
+  /**
+   * POS 終端憑證（HMAC-signed，12h TTL）。由 `/api/ledger/login` 登入成功時簽發。
+   *
+   * 2026-09-10 掃碼點餐審查 P0-3：`/api/pos/sync`（寫入）、`/api/pos/state`（讀取）、
+   * `/api/pos/bootstrap` POST、`/api/pos/kiosk-settings` POST 要靠呢張 token 證明
+   * 「我係店內終端」。掃碼客人（匿名）冇 session → 冇 token → 只可以行匿名通道。
+   *
+   * ⚠️ `normalizeAuthSession()` 一定要帶返呢個欄位，否則 reload 之後就會被剷走
+   * （同 `receipt.qrUrl` / `standaloneSpecGroups` 嘅歷史教訓一模一樣）。
+   */
+  posDeviceToken?: string;
 };
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
@@ -755,6 +787,7 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     ledgerAccessToken: session.ledgerAccessToken,
     ledgerRefreshToken: session.ledgerRefreshToken,
     adminSessionToken: session.adminSessionToken,
+    posDeviceToken: session.posDeviceToken,
   };
 }
 

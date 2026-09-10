@@ -21,6 +21,7 @@ import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveSto
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import {
   notifyQueueChanged,
   resolveStoreId,
@@ -903,8 +904,12 @@ export function PosApp() {
       // 唔帶 storeId，server 返**全店** orders + queue，merge 落本地就係跨店污染入口。
       const storeId = resolveStoreId();
       if (!storeId) return 0;
+      // 2026-09-10 P0-3：先確保 POS 終端憑證仍然有效（TTL 12h，收銀機全日開住）。
+      // 呢個係 fail-soft：拎唔到憑證都照行，之後 server 回 401 就當拉唔到（唔會爆）。
+      await refreshPosDeviceTokenIfNeeded();
       const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}`;
-      const response = await fetch(stateUrl);
+      // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（否則 401 未經授權）。
+      const response = await fetch(stateUrl, { headers: { ...posDeviceAuthHeaders() } });
       const payload = (await response.json()) as {
         orders?: PosOrder[];
         queue?: QueueEvent[];
@@ -2538,7 +2543,7 @@ export function PosApp() {
     try {
       const res = await fetch("/api/pos/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
         body: JSON.stringify({
           events: scoped,
           // 🚨 必須用 canonical helper（以前係 bootstrap?.storeId ?? merchantId，優先序反咗）。

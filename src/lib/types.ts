@@ -193,6 +193,15 @@ export interface PosBootstrap {
   rules: PosRules;
   printerGroups: PrinterGroup[];
   lastUpdatedAt: string;
+  /**
+   * 呢間店「未有餐牌」（pos_bootstrap_config 冇 row）。
+   *
+   * 2026-09-10 掃碼點餐審查 P1-5：舊版未知店會回 `mockBootstrap`（示範店菜式），
+   * 客人掃碼會見到 demo 餐牌並且**可以真金白銀落單入真店** → 錯菜錯價。
+   * 改為回 `menuUnavailable: true` + 空餐牌，前端顯示「餐牌準備中，請聯絡職員」並停用落單。
+   * demo 餐牌只保留俾開發環境（`NODE_ENV !== "production"`）。
+   */
+  menuUnavailable?: boolean;
 }
 
 export interface DevicePrinterConfig {
@@ -340,13 +349,19 @@ export type KitchenSectionId =
   | "table_name"
   | "order_type"
   | "time"
-  | "server"
-  /** 分格線（設定型區塊，語義同 ReceiptSectionId 嘅 `divider`）：控制自動分格線嘅字體大小 / 開關。 */
+  /**
+   * 分格線（設定型區塊，語義同 ReceiptSectionId 嘅 `divider`）：控制自動分格線嘅字體大小 / 開關。
+   */
   | "divider"
   | "items"
-  | "customer_count"
   | "order_note"
   | "footer";
+// ⚠️ 已剷走 `server`（店員）同 `customer_count`（人數）兩個區塊（2026-09-10）：
+// `buildKitchenContent()` 對呢兩個 key 一路回硬編空字串 `""`，`print-jobs.ts` 亦
+// 從來冇傳過資料 → 就算商家喺設計頁撳「顯示」都係印唔到（死開關，只會報錯案）。
+// 三個下游 repo 只 loop `snapshot.blocks`，所以剷 id **唔使改佢哋**。
+// 舊 localStorage / 雲端 record 殘留呢兩個 id 嘅話，`normalizeKitchenTemplate()`
+// 會靠「只認 `KITCHEN_SECTION_META` 入面嘅 id」自動清走。
 /**
  * 交班結算單模板嘅區塊 id（2026-09-10 新增「交班模板」）。
  *
@@ -431,22 +446,65 @@ export interface ReceiptTemplate {
 }
 
 /**
- * 飲品/廚房標籤嘅**固定紙寬**（毫米）。
+ * 標籤紙嘅**舊預設紙寬**（毫米）。
  *
- * ⚠️ 標籤係印喺**固定實體尺寸**嘅熱敏標籤紙 / 標籤卷上（冇得喺系統度隨時加大縮細），
- * 所以標籤模板**禁止動態尺寸**：紙寬鎖死用下面呢個標準值，字型檔位亦係預設配好、唔畀逐塊改。
+ * ⚠️ 2026-09-10 查證：62mm **唔係**熱感標籤嘅業界標準闊度。
+ * 佢只出現喺(1) 收銀熱敏紙卷闊度列表（37/50/57/58/60/62/70/80mm）同
+ * (2) Brother DK 62×100mm 呢類 niche 標籤。真正餐飲標籤主流係 50 / 58 / 60 / 70 / 80 / 100mm。
+ * 所以而家改由商家喺 `LABEL_PAPER_PRESETS` 度揀；62mm 降為「舊系統預設」保留項
+ * （直接剷走會踢爛手上真係有 62mm 卷嘅商戶）。
  *
- * 調查市面上最常見嘅飲品/杯貼熱敏標籤（奶茶、咖啡杯貼）打印寬度，以 **62 mm**（或 58 mm）
- * 呢類 ESC/POS 標籤卷最普及（本系統設備設定／ESC 渲染由嚟都係用 62mm 標籤紙），故此鎖定 62 mm。
- * 標籤渲染（ESC/POS / 網頁預覽）一律用 `LABEL_STANDARD_WIDTH_MM` 做紙闊，
- * 唔可以喺標籤模板 UI 度畀用戶動態揀紙寬。
+ * 而家呢個常數**淨係當 fallback 用**，新增邏輯一律讀 `labelPaperPreset()`。
  */
 export const LABEL_STANDARD_WIDTH_MM = 62;
+
+/**
+ * 標籤紙尺寸選項（2026-09-10）。
+ *
+ * `columns` = font A / 203dpi 每行可印字符數：`floor((紙闊 − 8mm 導軌) ÷ 1.5mm)`。
+ * 58mm→32 / 80mm→48 兩點同 `print hub` `EscPosRenderer.kt` 既有的
+ * `PAPER_COLUMNS_58MM` / `RECEIPT_PAPER_COLUMNS` 對齊。
+ */
+export interface LabelPaperPreset {
+  id: string;
+  /** UI 顯示用（「50 × 30」）。 */
+  label: string;
+  widthMm: number;
+  heightMm: number;
+  /** font A（s 檔）每行字符數；m / l 雙闊 → 一半。 */
+  columns: number;
+  /** 典型用途，畀商家對號入座。 */
+  hint: string;
+}
+export const LABEL_PAPER_PRESETS: LabelPaperPreset[] = [
+  { id: "40x30", label: "40 × 30", widthMm: 40, heightMm: 30, columns: 21, hint: "細標籤 / 條碼" },
+  { id: "50x30", label: "50 × 30", widthMm: 50, heightMm: 30, columns: 28, hint: "零售價籤、商品標示" },
+  { id: "58x40", label: "58 × 40", widthMm: 58, heightMm: 40, columns: 32, hint: "收銀機標準價籤" },
+  { id: "60x40", label: "60 × 40", widthMm: 60, heightMm: 40, columns: 34, hint: "飲品杯貼、成份表" },
+  { id: "70x50", label: "70 × 50", widthMm: 70, heightMm: 50, columns: 41, hint: "外帶袋、備料標籤" },
+  { id: "80x50", label: "80 × 50", widthMm: 80, heightMm: 50, columns: 48, hint: "後廚叫號、大標籤" },
+  { id: "100x75", label: "100 × 75", widthMm: 100, heightMm: 75, columns: 61, hint: "外送箱、物流面單" },
+  { id: "62mm", label: "62 mm", widthMm: 62, heightMm: 40, columns: 36, hint: "舊系統預設（非業界標準，僅供沿用）" },
+];
+/** 缺省：保留 62mm，唔改動任何現有商戶嘅版面。 */
+export const DEFAULT_LABEL_PAPER_ID = "62mm";
+
 export interface LabelTemplate {
   blocks: Record<LabelSectionId, EscPosBlockStyle>;
   order: LabelSectionId[];
   headerText: string;
   footerText: string;
+  /**
+   * 標籤紙尺寸（`LABEL_PAPER_PRESETS` 嘅 id）。缺省 = `DEFAULT_LABEL_PAPER_ID`。
+   *
+   * ⚠️ `normalizePosLocalSettings()` 係**逐欄重建** `label`（唔係展開合併），
+   * 所以呢個欄一定要喺嗰度手動帶返，否則一 reload 就被剷走
+   * —— 同當年 `receipt.qrUrl` 被靜靜剷走係同一個坑。
+   *
+   * 只影響**網頁預覽同分格線闊度**：標籤本來就冇 items / 價錢，全部係純文字行，
+   * 三個通道照印同一串 bytes，所以改呢個值唔使改跨 repo。
+   */
+  paperSize?: string;
 }
 export interface KitchenTemplate {
   blocks: Record<KitchenSectionId, EscPosBlockStyle>;
@@ -598,6 +656,17 @@ export interface QrPayload {
 export interface EscPosTemplateSnapshot {
   kind: PrintTemplateKind;
   blocks: Array<{ id: string; visible: boolean; size: EscPosSize; bold: boolean; align: EscPosAlign; subSize?: EscPosSize; layout?: EscPosItemsLayout }>;
+  /**
+   * 每行可印字符數（font A / 203dpi）。58mm → 32，80mm → 48，標籤跟紙尺寸 preset。
+   *
+   * 2026-09-10 加嚟**統一三個 repo**：以前 `print hub` 自己按 `printer.paperSize`
+   * 判斷 58mm→32，`desktop-companion` 同 POS 預覽就硬編 48 —— 同一張單喺
+   * APK / PC / 網頁會出三種唔同闊度嘅排版。
+   * 而家由 POS 計一次寫入快照，下游**直接讀**，唔好再各自判斷（見 `buildSnapshot`）。
+   *
+   * 舊快照冇呢欄 → 下游 fallback 去自己嘅預設（48 / 依 paperSize），行為不變。
+   */
+  cols?: number;
 }
 
 /** 折扣預設（設置 → 折扣 tab）。rate = 百分比數字，例如 8 折填 80（介面唔顯示 %）。 */

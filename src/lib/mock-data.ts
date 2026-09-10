@@ -4,6 +4,7 @@ import {
   AccountStore,
   AccountUser,
   PosBootstrap,
+  DEFAULT_LABEL_PAPER_ID,
   DeviceConfig,
   PosLocalSettings,
 } from "@/lib/types";
@@ -442,6 +443,7 @@ export const defaultPosLocalSettings: PosLocalSettings = {
       order: ["header", "item_name", "temperature", "cup_type", "sugar", "ice", "sugar_tag", "ice_tag", "addons", "specs", "item_note", "order_no", "footer"],
       headerText: "飲品標籤",
       footerText: "請盡快出品",
+      paperSize: DEFAULT_LABEL_PAPER_ID,
     },
     kitchen: {
       blocks: {
@@ -450,14 +452,12 @@ export const defaultPosLocalSettings: PosLocalSettings = {
         table_name: { visible: true, size: "s", bold: false, align: "left" },
         order_type: { visible: true, size: "s", bold: true, align: "left" },
         time: { visible: true, size: "s", bold: false, align: "left" },
-        server: { visible: false, size: "s", bold: false, align: "left" },
         divider: { visible: true, size: "m", bold: false, align: "left" },
         items: { visible: true, size: "m", bold: true, align: "left" },
-        customer_count: { visible: false, size: "s", bold: false, align: "left" },
         order_note: { visible: true, size: "s", bold: false, align: "left" },
         footer: { visible: true, size: "s", bold: false, align: "center" },
       },
-      order: ["store_name", "order_no", "table_name", "order_type", "time", "server", "divider", "items", "customer_count", "order_note", "footer"],
+      order: ["store_name", "order_no", "table_name", "order_type", "time", "divider", "items", "order_note", "footer"],
       headerText: "",
       footerText: "廚房留底",
     },

@@ -33,6 +33,7 @@ import {
 } from "@/lib/restaurant-footfall";
 import { formatMoney } from "@/lib/format";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import type { PosOrder, PosLocalSettings } from "@/lib/types";
 import Link from "next/link";
 
@@ -1064,7 +1065,10 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
             ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1${rangeQs}`
             : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1${rangeQs}`;
           lastUrl = url;
-          const res = await fetch(url);
+          // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（先續期，否則 401）。admin 模式
+          // （adminOrderFetcher 分支）行另一條 service-role 通道，唔受影響。
+          await refreshPosDeviceTokenIfNeeded();
+          const res = await fetch(url, { headers: { ...posDeviceAuthHeaders() } });
           lastHttpStatus = res.status;
           if (!res.ok) {
             cloudFailed = true;

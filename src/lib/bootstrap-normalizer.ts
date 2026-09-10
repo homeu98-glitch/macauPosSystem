@@ -180,5 +180,8 @@ export function normalizeBootstrapPayload(raw: PosBootstrap | UnknownRecord): Po
       ? ((record.printerGroups ?? record.printer_groups) as PosBootstrap["printerGroups"])
       : ["kitchen", "drinks", "receipt"],
     lastUpdatedAt: String(record.lastUpdatedAt ?? record.last_updated_at ?? new Date().toISOString()),
+    // 2026-09-10 P1-5：未知店 / 未同步餐牌時 server 會回 menuUnavailable=true。
+    // 一定要原樣帶返，否則 normalize 之後前端當「正常餐牌（但空）」處理。
+    menuUnavailable: record.menuUnavailable === true || record.menu_unavailable === true ? true : undefined,
   };
 }

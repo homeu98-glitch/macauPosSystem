@@ -1,13 +1,17 @@
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
+import { RECEIPT_PAPER_COLUMNS, RECEIPT_PAPER_COLUMNS_58MM } from "@/lib/escpos-render";
 import {
+  DEFAULT_LABEL_PAPER_ID,
   EscPosBlockStyle,
   EscPosItemsLayout,
   EscPosTemplateSnapshot,
   KitchenTemplate,
+  LabelPaperPreset,
   LabelTemplate,
   PosOrder,
   PrintTemplateKind,
   ReceiptTemplate,
+  LABEL_PAPER_PRESETS,
   KitchenSectionId,
   LabelSectionId,
   ReceiptSectionId,
@@ -65,11 +69,9 @@ export const KITCHEN_SECTION_META: { id: KitchenSectionId; label: string }[] = [
   { id: "table_name", label: "桌台" },
   { id: "order_type", label: "單據類型" },
   { id: "time", label: "時間" },
-  { id: "server", label: "店員" },
   /** 分格線：設定型區塊（唔會自己印一行），淨控制菜品明細前後 / 每件菜之間嗰啲 `----` 線嘅字體大小。 */
   { id: "divider", label: "分格線" },
   { id: "items", label: "菜品明細" },
-  { id: "customer_count", label: "人數" },
   { id: "order_note", label: "全單備註" },
   { id: "footer", label: "頁尾文案" },
 ];
@@ -179,11 +181,9 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
   table_name: block(true, "s", false, "left"),
   order_type: block(true, "s", true, "left"),
   time: block(true, "s", false, "left"),
-  server: block(false, "s", false, "left"),
   /** 分格線（設定型）：`size` 控制 `----` 線嘅字體大小，`visible=false` = 全張單唔印分格線。 */
   divider: block(true, "m", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
-  customer_count: block(false, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
   footer: block(true, "s", false, "center"),
 };
@@ -262,10 +262,12 @@ export const DEFAULT_LABEL_TEMPLATE: LabelTemplate = {
   ],
   headerText: "飲品標籤",
   footerText: "請盡快出品",
+  // 缺省 62mm：舊商戶手上可能真係有 62mm 卷，唔改佢哋嘅版面。
+  paperSize: DEFAULT_LABEL_PAPER_ID,
 };
 export const DEFAULT_KITCHEN_TEMPLATE: KitchenTemplate = {
   blocks: { ...KITCHEN_BLOCK_DEFAULTS },
-  order: ["store_name", "order_no", "table_name", "order_type", "time", "server", "divider", "items", "customer_count", "order_note", "footer"],
+  order: ["store_name", "order_no", "table_name", "order_type", "time", "divider", "items", "order_note", "footer"],
   headerText: "",
   footerText: "廚房留底",
 };
@@ -466,6 +468,12 @@ export function withLabelFixedSizes<T extends LabelTemplate>(template: T): T {
 export function buildSnapshot(
   kind: PrintTemplateKind,
   template: ReceiptTemplate | LabelTemplate | KitchenTemplate | ShiftTemplate,
+  /**
+   * 每行可印字符數。缺省：標籤用模板嘅 `paperSize`，其餘用 48（80mm）。
+   * 出紙路徑請由**打印機**嘅 `paperSize` 推算（`paperColumnsFromSize`），
+   * 預覽路徑用商家喺設計頁揀嘅紙闊。
+   */
+  cols?: number,
 ): EscPosTemplateSnapshot {
   // 收據（含自助點餐機槽位，兩者都係 kind="receipt"）先補新區塊，
   // 等舊 localStorage 設定都可以用到後來加嘅 `qr_code`。
@@ -483,7 +491,31 @@ export function buildSnapshot(
   return {
     kind,
     blocks: source.order.map((id) => ({ id, ...source.blocks[id as keyof typeof source.blocks] })),
+    cols: cols ?? (kind === "label" ? labelPaperPreset((template as LabelTemplate).paperSize).columns : RECEIPT_PAPER_COLUMNS),
   };
+}
+
+/**
+ * 由標籤紙尺寸 id 攞 preset；未知 / 缺省一律回 62mm（舊預設），
+ * 保證舊 localStorage 設定唔會因為多咗呢欄而變形。
+ */
+export function labelPaperPreset(id: string | undefined | null): LabelPaperPreset {
+  return (
+    LABEL_PAPER_PRESETS.find((p) => p.id === id) ??
+    LABEL_PAPER_PRESETS.find((p) => p.id === DEFAULT_LABEL_PAPER_ID) ??
+    LABEL_PAPER_PRESETS[0]!
+  );
+}
+
+/**
+ * 由打印機 `paperSize` 字串推每行字符數（收據 / 廚房 / 交班用）。
+ *
+ * 同 `print hub` `EscPosRenderer.kt` 既有的 `paperColumns()` 同一套規則
+ * （`contains("58")` → 32，否則 48），只係搬到 POS 計一次寫入快照，
+ * 等三個 repo 唔使各自判斷（2026-09-10）。
+ */
+export function paperColumnsFromSize(paperSize: string | undefined | null): number {
+  return (paperSize ?? "").includes("58") ? RECEIPT_PAPER_COLUMNS_58MM : RECEIPT_PAPER_COLUMNS;
 }
 
 /**
@@ -847,8 +879,6 @@ export function buildKitchenContent(order: PosOrder, opts: KitchenContentOpts): 
     table_name: order.tableName,
     order_type: opts.typeLabel,
     time: opts.time,
-    server: "",
-    customer_count: "",
     order_note: opts.orderNote ?? "",
     footer: opts.footerText,
   };
@@ -937,40 +967,8 @@ export function buildShiftContent(data: ShiftSettlementSnapshot, opts: ShiftCont
  * 刻意用一個「乜都有值」嘅例子（有線上單、有買貨成本、有現金差額、有多個支付方式），
  * 咁商家喺設計頁就一眼睇齊所有區塊嘅實際效果；唔會因為店未有交班記錄而見到空白預覽。
  */
-export const SHIFT_PREVIEW_SAMPLE: ShiftSettlementSnapshot = {
-  closedAt: "2026-09-09T21:32:00+08:00",
-  shiftNo: "2026-09-09-02",
-  storeName: "澳門示範店",
-  employee: "陳大文",
-  openedAt: "2026-09-09T09:05:00+08:00",
-  store: {
-    count: 30,
-    revenue: 1967,
-    receivableTotal: 1971,
-    paidTotal: 1967,
-    prepaid: 0,
-    refundCount: 0,
-    refundAmount: 0,
-  },
-  online: {
-    orderCount: 5,
-    paidMop: 233,
-    balancePaidMop: 121,
-    inStorePaidMop: 112,
-  },
-  payments: [
-    { method: "Mpay", receivable: 1229, paid: 1228, count: 16 },
-    { method: "未記錄", receivable: 606, paid: 606, count: 12 },
-    { method: "現金", receivable: 138, paid: 133, count: 2 },
-  ],
-  purchase: { paid: 0, unpaid: 0 },
-  cash: { expected: 133, actual: 133, diff: 0 },
-  pendingEvents: 0,
-  failedEvents: 0,
-  skippedEvents: 0,
-  pendingPrints: 0,
-  note: "",
-};
+// ⚠️ 交班示例快照已搬到 `src/lib/preview-fixtures.ts`（`SHIFT_PREVIEW_SAMPLE`）。
+// 呢度係 lib（server 都會 import），唔應該夾住一份純 UI 用嘅假資料。
 
 export interface LabelContentOpts {
   storeName: string;

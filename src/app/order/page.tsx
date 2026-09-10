@@ -3,73 +3,32 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { KIOSK_I18N, useKioskOrder } from "@/lib/use-kiosk-order";
+import { kioskT, useKioskOrder } from "@/lib/use-kiosk-order";
 import { loadKioskMode, saveKioskMode } from "@/lib/kiosk-order";
-import { OrderItem } from "@/lib/types";
+import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
+import { SpecSheet } from "@/components/kiosk/spec-sheet";
 
 // kiosk 平板介面：3 欄佈局完全不變，邏輯抽去 useKioskOrder（與手機 /menu 共用）
-const I18N = KIOSK_I18N;
-
-// 本枱已落單 / 落單成功 共用嘅明細卡：菜式 + 數量 + 小計 + 總計 + 備註
-function OrderSummaryCard({ order, title }: { order: import("@/lib/types").PosOrder; title: string }) {
-  return (
-    <div className="rounded-xl bg-amber-50 p-3 text-left">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-semibold text-amber-800">{title}</span>
-        <span className="text-xs text-amber-600">#{order.localOrderNo}</span>
-      </div>
-      <div className="space-y-1.5">
-        {order.items.map((it, i) => (
-          <div key={i} className="flex items-center justify-between text-sm">
-            <span className="min-w-0 flex-1 truncate text-slate-800">
-              {it.name}
-              {it.selectedSpecs && it.selectedSpecs.length > 0 && (
-                <span className="ml-1 text-xs text-slate-400">
-                  ({it.selectedSpecs.map((s) => s.optionLabel).join(" / ")})
-                </span>
-              )}
-            </span>
-            <span className="ml-2 shrink-0 text-slate-500">x{it.quantity}</span>
-            <span className="ml-2 w-16 shrink-0 text-right text-slate-700">
-              MOP {(it.price * it.quantity).toFixed(2)}
-            </span>
-          </div>
-        ))}
-      </div>
-      {order.orderNote ? (
-        <div className="mt-2 text-xs text-slate-500">備註：{order.orderNote}</div>
-      ) : null}
-      <div className="mt-2 flex items-center justify-between border-t border-amber-200 pt-2 text-sm">
-        <span className="font-medium text-amber-800">{KIOSK_I18N["zh-HK"].currentTotal}</span>
-        <span className="font-bold text-amber-900">MOP {order.total.toFixed(2)}</span>
-      </div>
-    </div>
-  );
-}
 
 export default function OrderPage() {
   const router = useRouter();
-  const t = (key: string) => I18N[language][key] ?? key;
 
   const {
     hydrated,
     menuLoading,
+    menuUnavailable,
     bootstrap,
-    language,
-    setLanguage,
-    persistLanguage,
     displayStoreName,
+    language,
     mode,
     tableName,
     needsBinding,
     activeCategory,
     setActiveCategory,
     cart,
-    cartTotal,
+    totals,
     orderNote,
     setOrderNote,
-    quickType,
-    setQuickType,
     soldoutIds,
     categoryItems,
     specDraft,
@@ -82,12 +41,16 @@ export default function OrderPage() {
     addToOrder,
     submitting,
     error,
+    orderSyncPending,
+    pendingSyncCount,
     placeOrder,
     rebindStore,
     started,
     startOrdering,
     returnToHome,
   } = useKioskOrder();
+
+  const t = (key: string) => kioskT(language, key);
 
   // kiosk 專屬 UI state：設定（綁店）彈窗開關
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -107,9 +70,12 @@ export default function OrderPage() {
 
   // kiosk 落單成功：5 秒倒數自動返回主頁（loading 狀態）
   const submittedRef = useRef(submittedOrder);
-  submittedRef.current = submittedOrder;
   const returnHomeRef = useRef(returnToHome);
-  returnHomeRef.current = returnToHome;
+  // ⚠️ 唔可以喺 render 期間寫 ref（react-hooks/refs）。用 effect 同步。
+  useEffect(() => {
+    submittedRef.current = submittedOrder;
+    returnHomeRef.current = returnToHome;
+  }, [submittedOrder, returnToHome]);
   const [returnIn, setReturnIn] = useState(0);
   useEffect(() => {
     if (!submittedOrder) {
@@ -128,7 +94,6 @@ export default function OrderPage() {
       });
     }, 1000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [submittedOrder]);
 
   // kiosk 閒置 1 分鐘自動返回 landing（任何操作重置計時）
@@ -146,7 +111,6 @@ export default function OrderPage() {
       clearTimeout(timer);
       events.forEach((e) => window.removeEventListener(e, reset));
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
 
   // ── 載入中 / 未綁店閘門 ──
@@ -166,6 +130,33 @@ export default function OrderPage() {
         <p className="mb-6 max-w-sm text-sm text-slate-500">
           掃碼點餐機需要先以商戶帳號登入，綁定所屬店鋪後先可以使用。
         </p>
+        <button
+          onClick={rebindStore}
+          className="w-full max-w-xs rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white"
+        >
+          前往登入綁店
+        </button>
+      </main>
+    );
+  }
+
+  // ── 所屬店餐牌載入中（kiosk 綁店 / 手機掃碼都會去 backend 攞真 menu）──
+  // 未攞到前唔畀入餐牌，避免 flash demo store（macau-store-a）嘅餐牌。
+  if (menuLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+        載入中…
+      </main>
+    );
+  }
+
+  // ── 餐牌未開放（P1-5）：未知店 / 未同步 / 離線無 cache 一律唔露示範餐牌 ──
+  if (menuUnavailable) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-4 text-6xl">🧾</div>
+        <h1 className="mb-2 text-xl font-bold text-slate-900">{t("menuUnavailableTitle")}</h1>
+        <p className="mb-6 max-w-sm text-sm text-slate-500">{t("menuUnavailableBody")}</p>
         <button
           onClick={rebindStore}
           className="w-full max-w-xs rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white"
@@ -200,6 +191,12 @@ export default function OrderPage() {
       <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
         <div className="mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 text-7xl">✅</div>
         <h1 className="mb-3 text-4xl font-bold text-slate-900">{t("thanks")}</h1>
+        {/* P1-4：訂單入咗本地待同步隊列就唔可以講「已完成同步」 */}
+        {orderSyncPending && (
+          <p className="mb-4 rounded-xl bg-amber-100 px-4 py-2 text-sm font-medium text-amber-800" role="status">
+            {t("syncPending")}
+          </p>
+        )}
         <div className="w-full rounded-3xl bg-white p-8 shadow-sm">
           <div className="mb-2 text-base text-slate-500">{t("orderNo")}</div>
           <div className="mb-4 text-5xl font-bold text-slate-900">{submittedOrder.localOrderNo}</div>
@@ -241,16 +238,6 @@ export default function OrderPage() {
     );
   }
 
-  // ── 所屬店餐牌載入中（kiosk 綁店 / 手機掃碼都會去 backend 攞真 menu）──
-  // 未攞到前唔畀入餐牌，避免 flash demo store（macau-store-a）嘅餐牌。
-  if (menuLoading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
-        載入中…
-      </main>
-    );
-  }
-
   return (
     <main className="mx-auto flex min-h-[100dvh] w-full max-w-7xl flex-col bg-slate-50">
       {/* 頂欄 */}
@@ -272,6 +259,13 @@ export default function OrderPage() {
           </button>
         </div>
       </header>
+
+      {/* 待同步提示（P1-4） */}
+      {pendingSyncCount > 0 && (
+        <div className="bg-amber-100 px-4 py-2 text-xs font-medium text-amber-800" role="status">
+          {t("syncPending")}（{pendingSyncCount}）
+        </div>
+      )}
 
       {activeTableOrder && (
         <div className="bg-amber-50 px-4 py-2">
@@ -301,13 +295,17 @@ export default function OrderPage() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {categoryItems.map((item) => {
               const sold = soldoutIds.has(item.id);
+              // P1-3b：時價菜唔可以提供一個可以係 0 元嘅價 → 客人端停用
+              const marketPrice = Boolean(item.isMarketPrice);
+              const blocked = sold || marketPrice;
               return (
                 <button
                   key={item.id}
-                  disabled={sold}
+                  disabled={blocked}
                   onClick={() => addItem(item)}
+                  aria-label={blocked ? `${item.name}（${sold ? t("soldout") : t("marketPrice")}）` : item.name}
                   className={`flex flex-col rounded-2xl bg-white p-4 text-left shadow-sm ${
-                    sold ? "opacity-50" : "active:scale-95"
+                    blocked ? "opacity-50" : "active:scale-95"
                   }`}
                 >
                   {item.image ? (
@@ -315,13 +313,22 @@ export default function OrderPage() {
                     <img
                       src={item.image}
                       alt={item.name}
+                      width={320}
+                      height={80}
+                      decoding="async"
                       className="mb-2 h-20 w-full rounded-xl object-cover"
                       loading="lazy"
                     />
                   ) : null}
                   <span className="text-base font-semibold text-slate-900">{item.name}</span>
-                  <span className="mt-1 text-sm text-orange-600">MOP {item.price}</span>
-                  {sold && <span className="mt-1 text-xs text-red-500">{t("soldout")}</span>}
+                  <span className="mt-1 text-sm text-orange-600">
+                    {marketPrice ? t("marketPrice") : `MOP ${money2(item.price)}`}
+                  </span>
+                  {/* P2-1：售罄項保留 + 灰化標籤（舊版 filter 走售罄項 → 呢個分支係死碼） */}
+                  {sold && <span className="mt-1 text-xs font-medium text-red-500">{t("soldout")}</span>}
+                  {!sold && marketPrice && (
+                    <span className="mt-1 text-xs font-medium text-slate-400">{t("marketPriceHint")}</span>
+                  )}
                 </button>
               );
             })}
@@ -346,7 +353,8 @@ export default function OrderPage() {
               <div key={line.lineId} className="rounded-lg bg-slate-50 p-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-900">{line.name}</span>
-                  <span className="text-sm text-slate-600">MOP {line.price * line.quantity}</span>
+                  {/* P2-3：統一 2 位小數 */}
+                  <span className="text-sm text-slate-600">MOP {money2(line.price * line.quantity)}</span>
                 </div>
                 {(line.selectedSpecs?.length ?? 0) > 0 && (
                   <div className="text-xs text-slate-400">
@@ -354,11 +362,19 @@ export default function OrderPage() {
                   </div>
                 )}
                 <div className="mt-1 flex items-center gap-2">
-                  <button onClick={() => changeQty(line.lineId, -1)} className="h-7 w-7 rounded bg-slate-200 text-slate-700">
+                  <button
+                    onClick={() => changeQty(line.lineId, -1)}
+                    aria-label={`${line.name} 減少一件`}
+                    className="h-7 w-7 rounded bg-slate-200 text-slate-700"
+                  >
                     −
                   </button>
                   <span className="text-sm">{line.quantity}</span>
-                  <button onClick={() => changeQty(line.lineId, 1)} className="h-7 w-7 rounded bg-slate-200 text-slate-700">
+                  <button
+                    onClick={() => changeQty(line.lineId, 1)}
+                    aria-label={`${line.name} 增加一件`}
+                    className="h-7 w-7 rounded bg-slate-200 text-slate-700"
+                  >
                     +
                   </button>
                 </div>
@@ -370,114 +386,84 @@ export default function OrderPage() {
             value={orderNote}
             onChange={(e) => setOrderNote(e.target.value)}
             placeholder={t("notePlaceholder")}
+            aria-label={t("note")}
             className="mt-2 h-14 w-full resize-none rounded-lg border border-slate-200 p-2 text-xs text-slate-700"
           />
 
+          {/* P1-3：金額真源同寫入訂單一致（含稅 / 服務費） */}
           <div className="mt-2 space-y-1 text-sm">
             <div className="flex justify-between text-slate-600">
               <span>{t("subtotal")}</span>
-              <span>MOP {cartTotal.toFixed(2)}</span>
+              <span>MOP {money2(totals.subtotal)}</span>
             </div>
+            {totals.serviceChargeAmount > 0 && (
+              <div className="flex justify-between text-slate-600">
+                <span>{t("service")}</span>
+                <span>MOP {money2(totals.serviceChargeAmount)}</span>
+              </div>
+            )}
+            {totals.taxAmount > 0 && (
+              <div className="flex justify-between text-slate-600">
+                <span>{t("tax")}</span>
+                <span>MOP {money2(totals.taxAmount)}</span>
+              </div>
+            )}
             <div className="flex justify-between font-bold text-slate-900">
               <span>{t("total")}</span>
-              <span>MOP {cartTotal.toFixed(2)}</span>
+              <span>MOP {money2(totals.total)}</span>
             </div>
           </div>
 
-          {error && <div className="mt-2 text-xs text-red-500">{error}</div>}
+          <div aria-live="assertive" role="alert">
+            {error && <div className="mt-2 rounded-lg bg-red-50 px-2 py-1.5 text-xs text-red-600">{error}</div>}
+          </div>
 
           <button
-            onClick={placeOrder}
+            onClick={() => void placeOrder()}
             disabled={cart.length === 0 || submitting}
             className="mt-3 w-full rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white disabled:opacity-50"
           >
-            {submitting ? t("submitting") : t("place")}
+            {submitting ? t("submitting") : error ? t("retryPlace") : t("place")}
           </button>
         </aside>
       </div>
 
-      {/* 規格彈窗 */}
+      {/* 規格彈窗（共用元件，P2-6） */}
       {specDraft && (
-        <div className="fixed inset-0 z-20 flex items-end justify-center bg-black/40" onClick={() => setSpecDraft(null)}>
-          <div className="w-full max-w-md rounded-t-2xl bg-white p-4" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 text-base font-semibold text-slate-900">{specDraft.item.name}</div>
-            {specDraft.item.specGroups?.map((group) => (
-              <div key={group.id} className="mb-3">
-                <div className="mb-1 text-sm font-medium text-slate-700">
-                  {group.name}
-                  {group.required && <span className="ml-1 text-xs text-red-400">*</span>}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {group.options.map((opt) => {
-                    const selected = specDraft.specs.find((s) => s.groupId === group.id && s.optionId === opt.id);
-                    return (
-                      <button
-                        key={opt.id}
-                        onClick={() => {
-                          const others = specDraft.specs.filter((s) => s.groupId !== group.id);
-                          const nextSpecs: NonNullable<OrderItem["selectedSpecs"]> =
-                            group.selectionMode === "single"
-                              ? [
-                                  ...others,
-                                  {
-                                    groupId: group.id,
-                                    groupName: group.name,
-                                    optionId: opt.id,
-                                    optionLabel: opt.label,
-                                    priceDelta: opt.priceDelta,
-                                  },
-                                ]
-                              : selected
-                                ? others
-                                : [
-                                    ...others,
-                                    {
-                                      groupId: group.id,
-                                      groupName: group.name,
-                                      optionId: opt.id,
-                                      optionLabel: opt.label,
-                                      priceDelta: opt.priceDelta,
-                                    },
-                                  ];
-                          const priceDelta = nextSpecs.reduce((s, x) => s + x.priceDelta, 0);
-                          setSpecDraft({ ...specDraft, specs: nextSpecs, priceDelta });
-                        }}
-                        className={`rounded-lg border px-3 py-1 text-sm ${
-                          selected ? "border-orange-500 bg-orange-50 text-orange-600" : "border-slate-200 text-slate-600"
-                        }`}
-                      >
-                        {opt.label}
-                        {opt.priceDelta ? ` +${opt.priceDelta}` : ""}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            <button
-              disabled={(specDraft.item.specGroups ?? []).filter((g) => g.required).some((g) => !specDraft.specs.find((s) => s.groupId === g.id))}
-              onClick={() => {
-                pushLine({
-                  menuItemId: specDraft.item.id,
-                  name: specDraft.item.name,
-                  price: specDraft.item.price + specDraft.priceDelta,
-                  printerGroup: specDraft.item.printerGroup,
-                  selectedSpecs: specDraft.specs,
-                });
-                setSpecDraft(null);
-              }}
-              className="mt-2 w-full rounded-xl bg-orange-500 py-3 font-semibold text-white disabled:opacity-50"
-            >
-              {t("add")}
-            </button>
-          </div>
-        </div>
+        <SpecSheet
+          draft={specDraft}
+          t={t}
+          variant="kiosk"
+          onClose={() => setSpecDraft(null)}
+          onChangeSpecs={(specs, priceDelta) => setSpecDraft({ ...specDraft, specs, priceDelta })}
+          onConfirm={() => {
+            if (!soldoutIds.has(specDraft.item.id) && !specDraft.item.isMarketPrice) {
+              pushLine({
+                menuItemId: specDraft.item.id,
+                name: specDraft.item.name,
+                price: specDraft.item.price + specDraft.priceDelta,
+                printerGroup: specDraft.item.printerGroup,
+                selectedSpecs: specDraft.specs,
+              });
+            }
+            setSpecDraft(null);
+          }}
+        />
       )}
 
       {/* 設定（綁店）彈窗 */}
       {settingsOpen && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40" onClick={() => setSettingsOpen(false)}>
-          <div className="w-full max-w-sm rounded-2xl bg-white p-4" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/40"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="裝置設定"
+            className="w-full max-w-sm rounded-2xl bg-white p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-3 text-base font-semibold text-slate-900">裝置設定</div>
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
               已綁定店鋪：<span className="font-semibold text-slate-900">{displayStoreName}</span>

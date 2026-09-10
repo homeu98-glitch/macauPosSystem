@@ -9,6 +9,9 @@ import {
   DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
   normalizeShiftTemplatePresets,
 } from "@/lib/escpos-template";
+import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
+import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 
 /** UTC ISO 轉換（lossless）：`2026-09-06T00:00:00+08:00` → `2026-09-05T16:00:00.000Z`。 */
 function toUtcIso(iso: string): string {
@@ -21,6 +24,30 @@ export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get("storeId")?.trim() || null;
+
+  // ── 授權閘（2026-09-10 掃碼點餐審查 P0-4）──
+  // 之前呢支 API **完全無鑑權**：知道 storeId（枱 QR 內容已公開）就可以 GET 走
+  // 全店訂單（枱號、菜品、備註、金額、時間）+ 打印任務 + 店級設定。
+  // 家陣要求 POS 終端憑證（`/api/ledger/login` 簽發）或 admin session token。
+  // 應急回滾：設定 `POS_REQUIRE_DEVICE_AUTH=0`。
+  const ip = clientIp(request);
+  if (!rateLimit(`pos-state:${ip}`, 240, 60_000)) {
+    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
+  }
+  const authEnforced = isPosDeviceAuthRequired();
+  const deviceClaims = readPosDeviceTokenFromRequest(request);
+  const adminClaims = readAdminSessionFromRequest(request);
+  const authorized = !authEnforced || Boolean(adminClaims) || Boolean(deviceClaims && deviceClaims.storeId === storeId);
+  if (!authorized) {
+    console.warn(`[pos/state] 拒絕未授權讀取（store=${storeId ?? "?"}, ip=${ip}）`);
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "未經授權：讀取店舖資料需要 POS 終端憑證，請重新登入 POS 帳號。",
+      },
+      { status: 401 },
+    );
+  }
 
   // 訂單回傳上限：收銀工作台用預設 200（最新 200 單已足夠），
   // 報表頁需要更完整嘅歷史（今天/7天/30天/全部），可傳 `limit` 拉多啲。

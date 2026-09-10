@@ -19,6 +19,7 @@ import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
 import { PosBootstrap, PosOrder, PrintJob, QueueEvent, ReceiptTemplate, ShiftSettlementSnapshot, ShiftTemplate } from "@/lib/types";
 import {
   getBridgedPosOrder,
@@ -32,13 +33,14 @@ import {
   buildReceiptContent,
   buildShiftContent,
   buildSnapshot,
+  labelPaperPreset,
   normalizeShiftTemplate,
+  paperColumnsFromSize,
   ticketTypeLabel,
 } from "@/lib/escpos-template";
 import { PrintItemLine } from "@/lib/escpos-render";
-import { formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { toPrintItemLines } from "@/lib/escpos-render";
 import { encodeQrPayload } from "@/lib/escpos-qr";
-import { discountedUnitPrice } from "@/lib/pos/discount";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -140,25 +142,10 @@ function buildTemplateReceiptJobs(
 
   const timestamp = new Date().toISOString();
   const serverName = loadAuthSession()?.name;
-  const items: PrintItemLine[] = order.items.map((it) => {
-    const base = unitBasePrice(it);
-    const rate = it.discountRate;
-    const hasDiscount = typeof rate === "number" && rate > 0 && rate < 100;
-    const discounted = hasDiscount ? discountedUnitPrice(base, rate) : base;
-    const saving = hasDiscount ? Math.round((base - discounted) * it.quantity * 100) / 100 : 0;
-    return {
-      name: it.name,
-      quantity: it.quantity,
-      // 主行價：冇折扣 → 基價 × quantity；有折扣 → 折後價 × quantity（renderer 加印原價）。
-      price: it.price > 0 ? Math.round(discounted * it.quantity) : undefined,
-      discountRate: hasDiscount ? rate : undefined,
-      originalUnitPrice: hasDiscount ? Math.round(base) : undefined,
-      discountedUnitPrice: hasDiscount ? Math.round(discounted) : undefined,
-      savingAmount: saving > 0 ? saving : undefined,
-      specs: (it.selectedSpecs ?? []).map((spec) => formatSpecLine(spec)),
-      note: it.note,
-    };
-  });
+  // 共用 `toPrintItemLines()`：預覽（print-center）同出紙（呢度）行同一份映射，
+  // 唔會再出現「設計見到、印出嚟唔同」。主行價：冇折扣 → 基價 × quantity；
+  // 有折扣 → 折後價 × quantity（renderer 再加印原價 / 折讓）。
+  const items = toPrintItemLines(order.items);
   const content = buildReceiptContent(order, {
     storeName: bootstrap.storeName,
     // 收據電話：門店設定 → 商家登入號碼 fallback。見 src/lib/pos/store-tel.ts。
@@ -167,12 +154,14 @@ function buildTemplateReceiptJobs(
     footerText: template.footerText,
     serverName,
   });
-  const snapshot = buildSnapshot("receipt", template);
   // 二維碼：喺 POS 端 encode 一次，三個 repo 共用同一個點陣（設計 == 預覽 == 出紙）。
   // 網址空白 / 太長編唔到 → 回傳 null → 唔帶 qr 欄位 → renderer 同預覽都自動略過。
   const qr = encodeQrPayload(template.qrUrl);
 
   return receiptPrinters.map<PrintJob>((printer) => ({
+    // ⚠️ snapshot 一定要喺 loop 入面砌：`cols`（每行字數）係跟**呢一部機**嘅紙闊，
+    // 以前係 loop 外面砌一次，搞到收據機 80mm / 廚房機 58mm 共用同一個欄寬。
+    template: buildSnapshot("receipt", template, paperColumnsFromSize(printer.paperSize)),
     id: uid("print"),
     orderId: order.id,
     orderNo: order.localOrderNo,
@@ -183,7 +172,6 @@ function buildTemplateReceiptJobs(
     printerName: printer.name,
     items,
     content,
-    template: snapshot,
     qrUrl: template.qrUrl?.trim() ? template.qrUrl.trim() : undefined,
     qr: qr ?? undefined,
     status: "pending",
@@ -232,7 +220,6 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
   const timestamp = new Date().toISOString();
   const typeLabel = ticketTypeLabel(opts.ticketType);
   const time = opts.time ?? nowText();
-  const template = buildSnapshot("kitchen", kitchenTemplate);
   const sourceItems = opts.itemsOverride ?? order.items;
 
   const jobs: PrintJob[] = [];
@@ -268,7 +255,8 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
       printerName: printer.name,
       items,
       content,
-      template,
+      // 逐機計欄寬（58mm 機 32 字、80mm 機 48 字），三個 repo 直接讀快照，唔使各自判斷。
+      template: buildSnapshot("kitchen", kitchenTemplate, paperColumnsFromSize(printer.paperSize)),
       status: "pending",
       createdAt: timestamp,
     });
@@ -293,7 +281,8 @@ export function buildLabelPrintJobs(order: PosOrder, opts: LabelPrintOpts): Prin
   );
   if (labelPrinters.length === 0) return [];
   const timestamp = new Date().toISOString();
-  const template = buildSnapshot("label", labelTemplate);
+  /** 標籤紙尺寸 preset 決定嘅欄寬（例如 60×40 → 34 字）。 */
+  const presetColumns = labelPaperPreset(labelTemplate.paperSize).columns;
   const sourceItems = opts.itemsOverride ?? order.items;
   const orderNo = `${order.localOrderNo}${opts.orderNoSuffix ?? ""}`;
 
@@ -318,7 +307,13 @@ export function buildLabelPrintJobs(order: PosOrder, opts: LabelPrintOpts): Prin
         printerName: printer.name,
         items: [],
         content,
-        template,
+        // 實際可印闊度 = min(標籤紙闊度, 打印機機頭闊度)：
+        // 80mm 機裝 70mm 標籤 → 得 41 字；58mm 機裝唔落 100mm 卷，min() 會自動截頂。
+        template: buildSnapshot(
+          "label",
+          labelTemplate,
+          Math.min(presetColumns, paperColumnsFromSize(printer.paperSize)),
+        ),
         status: "pending",
         createdAt: timestamp,
       });
@@ -405,7 +400,9 @@ export interface ShiftPrintOpts {
  */
 export function buildShiftPrintJobs(opts: ShiftPrintOpts): PrintJob[] {
   const template = normalizeShiftTemplate(opts.template ?? loadPosLocalSettings().printTemplates.shift);
-  const snapshot = buildSnapshot("shift", template);
+  // 欄寬跟交班單打印機嘅紙闊（58mm → 32 字 / 80mm → 48 字），同收據 / 廚房同一套計法。
+  const shiftPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.find((p) => p.id === opts.printerId);
+  const snapshot = buildSnapshot("shift", template, paperColumnsFromSize(shiftPrinter?.paperSize));
   const content = buildShiftContent(opts.data, {
     storeName: opts.data.storeName,
     headerText: template.headerText,
@@ -592,7 +589,8 @@ export async function deletePrintJobsOnServer(ids: string[]): Promise<void> {
   try {
     await fetch("/api/pos/sync", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // 2026-09-10 P0-3：PRINT_JOB_DELETED 屬敏感事件，要帶 POS 終端憑證。
+      headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
       body: JSON.stringify({ events, storeId }),
     });
   } catch {

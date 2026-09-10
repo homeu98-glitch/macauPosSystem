@@ -39,6 +39,7 @@ import { PosOrder, QueueEvent } from "@/lib/types";
 import { isTerminalOrderStatus } from "@/lib/pos-order-filters";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, retryFailedSyncEvents, resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
 
 /** 對賬考慮嘅最大單齡（超過就唔再建議補錄 —— 太舊嘅單唔值得冒險推）。 */
 export const RECONCILE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
@@ -145,7 +146,10 @@ export async function fetchServerOrders(
   const params = new URLSearchParams({ storeId, ordersOnly: "1", limit: "5000" });
   if (startIso) params.set("start", startIso);
   try {
-    const res = await fetch(`/api/pos/state?${params.toString()}`);
+    const res = await fetch(`/api/pos/state?${params.toString()}`, {
+      // 2026-09-10 P0-4：需要 POS 終端憑證
+      headers: { ...posDeviceAuthHeaders() },
+    });
     if (!res.ok) return { orders: [], error: `HTTP ${res.status}` };
     const json = (await res.json()) as { ok?: boolean; orders?: PosOrder[]; error?: string };
     if (!json?.ok) return { orders: [], error: json?.error ?? "伺服器回傳失敗" };

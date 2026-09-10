@@ -1,14 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { mockBootstrap } from "@/lib/mock-data";
-import { loadBootstrapCache, saveBootstrapCache } from "@/lib/storage";
+import { loadBootstrapCache, saveBootstrapCache, nextLocalDailyOrderNo } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { fetchKioskSettings } from "@/lib/pos/kiosk-settings";
+import { fetchStoreSoldoutIds } from "@/lib/pos/soldout";
+import {
+  enqueuePendingKioskOrder,
+  flushPendingKioskOrders,
+  KIOSK_PENDING_CHANGED_EVENT,
+  pendingKioskOrderCount,
+} from "@/lib/pos/kiosk-outbox";
 import { printKioskReceiptForOrder, isPrintContentEnabled } from "@/lib/print-jobs";
 import { PosSoldoutRow } from "@/lib/pos/pos-order-mapper";
+import {
+  changeCartQty,
+  computeOrderTotals,
+  mergeCartLine,
+  type CartLine,
+} from "@/lib/kiosk-cart";
 import {
   buildKioskOrder,
   clearKioskDeviceBinding,
@@ -16,27 +29,21 @@ import {
   KioskCartItem,
   KioskDeviceBinding,
   KioskLanguage,
-  KioskQuickType,
+  KioskOrderRejectedError,
+  KioskOrderTransientError,
   loadKioskDeviceBinding,
+  newKioskOrderId,
   saveKioskDeviceBinding,
   submitKioskOrder,
 } from "@/lib/kiosk-order";
-import { MenuItem, OrderItem, PosBootstrap, PosOrder, PrinterGroup } from "@/lib/types";
+import { MenuItem, OrderItem, PosBootstrap, PosOrder } from "@/lib/types";
+
+// 購物車行型別而家喺 `@/lib/kiosk-cart`（純函式，可單元測試）；呢度 re-export 保持介面穩定。
+export type { CartLine } from "@/lib/kiosk-cart";
 
 // ─────────────────────────────────────────────────────────────
-// 共用型別：購物車一行 + 規格草稿（kiosk 平板 / 手機介面共用）
+// 共用型別：規格草稿（kiosk 平板 / 手機介面共用）
 // ─────────────────────────────────────────────────────────────
-export type CartLine = {
-  lineId: string;
-  menuItemId: string;
-  name: string;
-  price: number;
-  quantity: number;
-  printerGroup: PrinterGroup;
-  selectedSpecs?: OrderItem["selectedSpecs"];
-  note?: string;
-};
-
 export type SpecDraft = {
   item: MenuItem;
   specs: NonNullable<OrderItem["selectedSpecs"]>;
@@ -77,6 +84,8 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     save: "保存",
     newOrder: "再點一單",
     soldout: "售罄",
+    marketPrice: "時價",
+    marketPriceHint: "請聯絡職員",
     needSpec: "請選規格",
     specConfirm: "確定",
     submitting: "落單中…",
@@ -91,15 +100,22 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     selectOptions: "請選規格",
     clearCart: "清空購物車",
     addToCart: "加入購物車",
+    placeFailed: "落單失敗，請重試。",
+    retryPlace: "重試落單",
+    syncPending: "訂單已收到，正在同步…",
+    menuUnavailableTitle: "餐牌準備中",
+    menuUnavailableBody: "本店餐牌尚未開放線上點餐，請聯絡職員協助。",
+    closeSheet: "關閉",
   },
 };
 
-function lineSignature(line: Omit<CartLine, "lineId" | "quantity">): string {
-  const specs = (line.selectedSpecs ?? [])
-    .map((s) => `${s.groupId}:${s.optionId}`)
-    .sort()
-    .join(",");
-  return `${line.menuItemId}|${specs}|${line.note ?? ""}`;
+/**
+ * 安全取詞：`language` 一旦出現未知值（例如將來加語言但漏填詞庫），
+ * 舊寫法 `I18N[language][key]` 會直接 throw 令成頁崩（審查 P3-4）。
+ */
+export function kioskT(language: KioskLanguage | string, key: string): string {
+  const dict = KIOSK_I18N[language as KioskLanguage] ?? KIOSK_I18N["zh-HK"];
+  return dict[key] ?? KIOSK_I18N["zh-HK"][key] ?? key;
 }
 
 /**
@@ -116,7 +132,6 @@ export function useKioskOrder() {
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [orderNote, setOrderNote] = useState("");
-  const [quickType, setQuickType] = useState<KioskQuickType>("pickup");
   const [soldoutIds, setSoldoutIds] = useState<Set<string>>(new Set());
   const [specDraft, setSpecDraft] = useState<SpecDraft | null>(null);
   const [submittedOrder, setSubmittedOrder] = useState<PosOrder | null>(null);
@@ -137,28 +152,70 @@ export function useKioskOrder() {
   );
   // 手機掃碼「已落單枱」鎖定：未按加單前唔開餐牌，只顯示本枱明細
   const [ordering, setOrdering] = useState(false);
+  // bootstrap cache 嘅 store scope（2026-09-10 P1-6）：由 init effect 設定，
+  // 確保讀 cache 一定係「呢間店」而唔會 fallback 去全局 key（上一間店嘅餐牌）。
+  const [cacheScope, setCacheScope] = useState<string | null>(null);
+  // 落單草稿 id（P2-5）：同一輪重試重用同一個 id → server upsert idempotent。
+  const draftOrderIdRef = useRef<string | null>(null);
+  // 落單同步鎖（P2-5）：React state 非同步，撳得太快會兩個 request 都過閘。
+  const submittingRef = useRef(false);
+  // 有冇收過 realtime 售罄事件（P1-2）：收過就唔用初始快照覆蓋（避免舊快照蓋走新變更）。
+  const soldoutRealtimeRef = useRef(false);
+  // 落單成功但係「排隊等同步」（P1-4）：UI 顯示「已收到，同步中…」。
+  const [orderSyncPending, setOrderSyncPending] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+
+  // ── 店舖真源（P1-1 統一優先級）──
+  // ⚠️ 2026-09-02 舊註釋：**移除 `?? DEFAULT_KIOSK_STORE_ID`**（示範店代碼）。
+  // ⚠️ 2026-09-10（審查 P1-1）：舊版三處優先級唔一致 —— `storeId` 用 binding 優先，
+  // 但 menu fetch 用掃碼優先 → 「曾綁過店」嘅瀏覽器掃另一間店嘅 QR 會
+  // 「睇 B 店餐牌、落單入 A 店」（跨店串單）。一律改為：
+  //   **有掃碼參數（?tableId= / ?store=）→ 掃碼 URL 為真源；冇先 fallback 去綁店。**
+  const isScanLink = Boolean(tableId) || Boolean(scanStoreId);
+  const storeId = isScanLink ? scanStoreId ?? "" : binding?.storeId ?? "";
+  const needsBinding = !storeId;
+
+  // 按 storeId 讀**自己店**嘅 bootstrap cache：
+  //   - 有 scope 就用 scoped key 讀；
+  //   - 讀到嘅 cache 若 `storeId` 同 scope 唔一致 → 唔採用（防污染）。
+  const scopedCache = useMemo(() => {
+    if (!cacheScope) return null;
+    const cached = loadBootstrapCache(cacheScope);
+    if (!cached) return null;
+    if (cached.storeId && cached.storeId !== cacheScope) return null;
+    return cached;
+  }, [cacheScope]);
 
   // 手機掃碼（scanStoreId）同 kiosk 綁店（binding.storeId）都會去 backend 攞所屬店嘅真 menu
-  // （pos_bootstrap_config，與商家點餐機同一份）；fallback 先本地 cache 再 mockBootstrap。
+  // （pos_bootstrap_config，與商家點餐機同一份）。
   const bootstrap = useMemo(
-    () => fetchedBootstrap ?? loadBootstrapCache() ?? mockBootstrap,
-    [fetchedBootstrap],
+    () => fetchedBootstrap ?? scopedCache ?? mockBootstrap,
+    [fetchedBootstrap, scopedCache],
   );
+
   // 手機掃碼 / kiosk 綁店：攞緊所屬店 menu 時嘅 loading 狀態（確保唔會 flash demo 餐牌）。
-  // 用 menuFetchDone（成功或失敗都設 true）判斷，離線 / 失敗就 fallback 去 cache / mock，唔會卡死。
-  const menuLoading =
-    (Boolean(scanStoreId) || Boolean(binding?.storeId)) && !menuFetchDone;
-  // 綁店 device（登入寫入）優先；掃碼連結 ?store= 次之。
-  // ⚠️ 2026-09-02：**移除 `?? DEFAULT_KIOSK_STORE_ID`**。
-  // `macau-store-a` 係示範店代碼（唔係 merchants.id）。以前喺「有 ?tableId= 但冇 ?store=」
-  // 嘅 QR 情況下會 fall 落去，落單會寫落假店 —— 收銀永遠見唔到張單。
-  // 缺 storeId 就係缺，交畀下面 needsBinding 閘住，寧願唔畀落單都唔好寫錯店。
-  const storeId = binding?.storeId ?? scanStoreId ?? "";
-  // 顯示店名：綁店名 > 掃碼連結 ?storeName= > 本地 mock 店名
-  const displayStoreName = useMemo(
-    () => binding?.storeName ?? scanStoreName ?? bootstrap.storeName,
-    [binding, scanStoreName, bootstrap],
-  );
+  const menuLoading = Boolean(storeId) && !menuFetchDone;
+
+  /**
+   * 「呢間店未開放線上點餐」閘（P1-5）：
+   *   - server 明確回 `menuUnavailable`（pos_bootstrap_config 冇 row → 未知店 / 未同步）；或
+   *   - fetch 失敗 / 離線，而且冇**自己店**嘅 cache（剩返 mockBootstrap 示範餐牌）。
+   * 舊版喺呢兩種情況都會露出示範店（macau-store-a）餐牌，而且客人可以真金白銀落單入真店。
+   */
+  const menuUnavailable = useMemo(() => {
+    if (fetchedBootstrap) return Boolean(fetchedBootstrap.menuUnavailable);
+    if (scopedCache) return Boolean(scopedCache.menuUnavailable);
+    return Boolean(storeId) && menuFetchDone;
+  }, [fetchedBootstrap, scopedCache, storeId, menuFetchDone]);
+
+  // 顯示店名：掃碼情境以 server 回嘅真店名為準；kiosk 用綁店名。
+  const displayStoreName = useMemo(() => {
+    if (isScanLink) {
+      return fetchedBootstrap?.storeName || scanStoreName || binding?.storeName || bootstrap.storeName;
+    }
+    return binding?.storeName ?? bootstrap.storeName;
+  }, [isScanLink, fetchedBootstrap, scanStoreName, binding, bootstrap]);
+
   // 初始化：讀 URL ?tableId= / ?store=、綁店、語言
   useEffect(() => {
     const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -173,42 +230,24 @@ export function useKioskOrder() {
     setBinding(b);
     if (b?.language) setLanguage(b.language);
 
+    // 掃碼為真源；冇掃碼參數先用綁店（同上面 storeId 一致）
+    setCacheScope(sid ?? b?.storeId ?? null);
+
     setActiveCategory(bootstrap.categories[0]?.id ?? "");
     setHydrated(true);
   }, [bootstrap.categories]);
 
-  // ── 綁店閘門：必須拎到**真實** storeId 先畀落單 ──
-  // ⚠️ 2026-09-02：以前係 `!binding && !isScanLink`，即係「有 ?tableId= 就放行」。
-  // 但一張淨帶 ?tableId= 而冇 ?store= 嘅 QR，上面 storeId 會 fall 落 DEFAULT_KIOSK_STORE_ID
-  // （macau-store-a 示範店）→ 落單寫落假店、收銀永遠見唔到。
-  // 改為直接判 storeId 係咪非空：冇真店就閘住，唔理你係掃碼定綁店。
-  const isScanLink = Boolean(tableId) || Boolean(scanStoreId);
-  const needsBinding = !storeId;
-
-  // 售罄即時（Realtime，禁 polling）
-  usePosRealtime(storeId, true, {
-    onSoldoutUpsert: (row: PosSoldoutRow) => {
-      setSoldoutIds((prev) => {
-        const next = new Set(prev);
-        if (row.sold_out) next.add(row.menu_item_id);
-        else next.delete(row.menu_item_id);
-        return next;
-      });
-    },
-  });
-
-  // 按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu：
-  // 手機掃碼用 scanStoreId；kiosk 綁店用 binding.storeId（避免 fallback 去 demo store macau-store-a）。
+  // 按 storeId 去 backend 攞商家點餐機同步落 pos_bootstrap_config 嘅真 menu。
   useEffect(() => {
-    const targetStoreId = scanStoreId ?? binding?.storeId ?? null;
-    if (!targetStoreId) return;
+    if (!storeId) return;
+    const targetStoreId = storeId;
     let cancelled = false;
     void (async () => {
       try {
         const res = await fetch(`/api/pos/bootstrap?storeId=${encodeURIComponent(targetStoreId)}`);
         if (cancelled) return;
         if (!res.ok) {
-          // 後端回非 200（例如 500）：唔卡 loading，fallback 去 cache / mock
+          // 後端回非 200（例如 500）：唔卡 loading，fallback 去 cache（冇 cache 就顯示「餐牌準備中」）
           setMenuFetchDone(true);
           return;
         }
@@ -217,21 +256,51 @@ export function useKioskOrder() {
         setFetchedBootstrap(data);
         setActiveCategory(data.categories?.[0]?.id ?? "");
         setMenuFetchDone(true);
-        // 寫入 cache：離線時 fallback 會係所屬店餐牌而唔係 demo
-        try {
-          saveBootstrapCache(data);
-        } catch {
-          // 寫 cache 失敗唔影響今次攞餐牌
+        // 寫入 cache：明確按 store scope（P1-6），避免污染全局 key。
+        if (!data.menuUnavailable) {
+          try {
+            saveBootstrapCache(data, targetStoreId);
+          } catch {
+            // 寫 cache 失敗唔影響今次攞餐牌
+          }
         }
       } catch {
-        // 失敗就保留本地 cache / mockBootstrap fallback
+        // 失敗就保留本地 cache fallback（冇 cache → menuUnavailable，唔露 demo）
         setMenuFetchDone(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [scanStoreId, binding?.storeId]);
+  }, [storeId]);
+
+  // 售罄初始快照（P1-2）：Realtime 只係增量，客人掃碼嗰刻已售罄嘅菜唔會推送。
+  useEffect(() => {
+    if (!storeId) return;
+    let cancelled = false;
+    void (async () => {
+      const ids = await fetchStoreSoldoutIds(storeId);
+      // 已經收過 realtime 事件就唔用快照覆蓋（免得舊快照蓋走新變更）
+      if (cancelled || !ids || soldoutRealtimeRef.current) return;
+      setSoldoutIds(ids);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [storeId]);
+
+  // 售罄即時（Realtime，禁 polling）
+  usePosRealtime(storeId, true, {
+    onSoldoutUpsert: (row: PosSoldoutRow) => {
+      soldoutRealtimeRef.current = true;
+      setSoldoutIds((prev) => {
+        const next = new Set(prev);
+        if (row.sold_out) next.add(row.menu_item_id);
+        else next.delete(row.menu_item_id);
+        return next;
+      });
+    },
+  });
 
   // resume：重複掃碼載入該枱 / 上次單嘅未結單
   useEffect(() => {
@@ -257,6 +326,9 @@ export function useKioskOrder() {
       }));
       setCart(lines);
       setResumedOrder(existing);
+      // ⚠️ P0-2：resume 一定要同步 `tableOrder`。舊版只 setResumedOrder，
+      // 而 `addToOrder()` 只讀 tableOrder → 客人撳「加單」完全冇反應（硬死鎖）。
+      setTableOrder(existing);
       if (existing.orderNote) setOrderNote(existing.orderNote);
     })();
     return () => {
@@ -265,14 +337,57 @@ export function useKioskOrder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tableId, storeId]);
 
+  // 待同步隊列（P1-4）：入頁 / 網絡恢復時補推上次落單失敗嘅單。
+  useEffect(() => {
+    if (!storeId) return;
+    setPendingSyncCount(pendingKioskOrderCount(storeId));
+    const sync = () => {
+      void flushPendingKioskOrders(storeId).then(setPendingSyncCount);
+    };
+    sync();
+    const onOnline = () => sync();
+    const onChanged = () => setPendingSyncCount(pendingKioskOrderCount(storeId));
+    window.addEventListener("online", onOnline);
+    window.addEventListener(KIOSK_PENDING_CHANGED_EVENT, onChanged);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener(KIOSK_PENDING_CHANGED_EVENT, onChanged);
+    };
+  }, [storeId]);
+
+  // 手機掃碼閒置自動返回（P3-6）：共用裝置 / 客人放低手機時唔好殘留購物車。
+  useEffect(() => {
+    if (!isScanLink || !started) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      // 20 分鐘：足夠長，唔會打斷正常點餐；又唔會令 cart 無限殘留。
+      timer = setTimeout(() => {
+        setCart([]);
+        setSubmittedOrder(null);
+        setStarted(false);
+        setOrdering(false);
+        if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
+      }, 20 * 60_000);
+    };
+    const events = ["mousemove", "mousedown", "touchstart", "keydown", "scroll"];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, [isScanLink, started]);
+
   const mode: "dine_in" | "quick" = tableId ? "dine_in" : "quick";
 
   const tableName = useMemo(() => {
     if (mode === "dine_in" && tableId) {
       return bootstrap.tables.find((tb) => tb.id === tableId)?.name ?? tableId;
     }
-    return quickType === "delivery" ? KIOSK_I18N[language].delivery : KIOSK_I18N[language].pickup;
-  }, [mode, tableId, quickType, bootstrap.tables, language]);
+    // 自助點餐機 / 掃碼無枱號 = 自取（docs/87 §5.1：唔提供外賣）
+    return KIOSK_I18N["zh-HK"].pickup;
+  }, [mode, tableId, bootstrap.tables]);
 
   // 本枱現有單（用嚟顯示已落單明細 + 加單）：resume 載入嘅單 或 剛落嘅單（dine_in 先保留）
   const activeTableOrder = useMemo(
@@ -280,12 +395,15 @@ export function useKioskOrder() {
     [mode, resumedOrder, tableOrder],
   );
 
+  /**
+   * 客人可見菜單（P2-1）：
+   * 舊版 `visibleItems` 直接 filter 走售罄項 → 兩頁嘅「售罄」分支永遠行唔到（死碼），
+   * 而客人亦分唔清「售罄」同「菜單根本冇呢個菜」。
+   * 改為**保留售罄項**，由 UI 灰化 + 標籤（客人理解為暫時缺貨，可轉點其他菜）。
+   */
   const visibleItems = useMemo(
-    () =>
-      bootstrap.menuItems.filter(
-        (item) => item.customerOrderable !== false && !soldoutIds.has(item.id),
-      ),
-    [bootstrap.menuItems, soldoutIds],
+    () => bootstrap.menuItems.filter((item) => item.customerOrderable !== false),
+    [bootstrap.menuItems],
   );
 
   const categoryItems = useMemo(
@@ -293,13 +411,23 @@ export function useKioskOrder() {
     [visibleItems, activeCategory],
   );
 
-  const cartTotal = useMemo(
-    () => cart.reduce((sum, line) => sum + line.price * line.quantity, 0),
-    [cart],
-  );
+  /**
+   * 金額真源（P1-3）：同 `buildKioskOrder()` 共用 `computeOrderTotals()`，
+   * 保證客人所見 == 寫入訂單（含稅 / 服務費）。
+   */
+  const totals = useMemo(() => computeOrderTotals(cart, bootstrap.rules), [cart, bootstrap.rules]);
+  const cartTotal = totals.subtotal;
 
+  function pushLine(base: Omit<CartLine, "lineId" | "quantity">) {
+    // 實作喺 `@/lib/kiosk-cart`（純函式，有單元測試）；呢度只負責產生 lineId。
+    const newLineId = `line-${crypto.randomUUID().slice(0, 8)}`;
+    setCart((prev) => mergeCartLine(prev, base, newLineId));
+  }
+
+  /** 加入購物車：售罄 / 時價菜一律唔准（P1-2 / P1-3b）。 */
   function addItem(item: MenuItem) {
     if (soldoutIds.has(item.id)) return;
+    if (item.isMarketPrice) return;
     const required = (item.specGroups ?? []).filter((g) => g.required);
     if (required.length > 0) {
       setSpecDraft({ item, specs: [], priceDelta: 0 });
@@ -308,32 +436,26 @@ export function useKioskOrder() {
     pushLine({ menuItemId: item.id, name: item.name, price: item.price, printerGroup: item.printerGroup });
   }
 
-  function pushLine(base: Omit<CartLine, "lineId" | "quantity">) {
-    const sig = lineSignature(base);
-    setCart((prev) => {
-      const existing = prev.find((line) => lineSignature(line) === sig);
-      if (existing) {
-        return prev.map((line) =>
-          line.lineId === existing.lineId ? { ...line, quantity: line.quantity + 1 } : line,
-        );
-      }
-      const line: CartLine = { ...base, lineId: `line-${crypto.randomUUID().slice(0, 8)}`, quantity: 1 };
-      return [...prev, line];
-    });
-  }
-
   function changeQty(lineId: string, delta: number) {
-    setCart((prev) =>
-      prev
-        .map((line) => (line.lineId === lineId ? { ...line, quantity: line.quantity + delta } : line))
-        .filter((line) => line.quantity > 0),
-    );
+    setCart((prev) => changeCartQty(prev, lineId, delta));
   }
 
-  async function placeOrder() {
-    if (cart.length === 0) return;
+  /**
+   * 落單。
+   * @returns `true` = 已落單（可能係「已收到，同步中」）；`false` = 失敗，UI 必須保留購物車並提示重試。
+   *
+   * 審查對應：
+   *   P0-1 —— 回傳 boolean，避免 UI 未等結果就閂 sheet 造成「靜默丟單」。
+   *   P1-4 —— 明確重試（`submitKioskOrder` 內部）＋失敗入本地待同步隊列。
+   *   P2-5 —— `submittingRef` 同步鎖 + 重用 `draftOrderIdRef` 做 idempotency key。
+   */
+  async function placeOrder(): Promise<boolean> {
+    if (cart.length === 0) return false;
+    if (submittingRef.current) return false;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
+
     try {
       const items: KioskCartItem[] = cart.map((line) => ({
         menuItemId: line.menuItemId,
@@ -344,11 +466,15 @@ export function useKioskOrder() {
         selectedSpecs: line.selectedSpecs,
         note: line.note,
       }));
+
+      const eventType: "ORDER_CREATED" | "ORDER_UPDATED" = resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED";
+      const orderId = resumedOrder?.id ?? draftOrderIdRef.current ?? (draftOrderIdRef.current = newKioskOrderId());
+
       // 落單號碼：跟店內線下同日序號（/api/pos/sequence），kiosk/掃碼與店內共用同一日序列表。
-      // kind 對齊店內：堂食→pos、自取→pickup、外賣→delivery；storeId 用所屬店。
+      // kind 對齊店內：堂食→pos、自取→pickup；storeId 用所屬店。
+      const seqKind = mode === "dine_in" ? "pos" : "pickup";
       let localOrderNo: string | undefined;
       try {
-        const seqKind = mode === "dine_in" ? "pos" : quickType === "delivery" ? "delivery" : "pickup";
         const seqRes = await fetch("/api/pos/sequence", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -359,7 +485,12 @@ export function useKioskOrder() {
           if (seqPayload.display) localOrderNo = seqPayload.display;
         }
       } catch {
-        // 失敗（離線 / 序列函數未佈署）就 fallback 去 buildKioskOrder 內嘅 timestamp 後綴
+        // 失敗（離線 / 序列函數未佈署）就 fallback
+      }
+      if (!localOrderNo) {
+        // P1-4：fallback 改用**本地每日序號**（同店內同日遞增），
+        // 唔再用 `堂食${時戳後4位}` 呢類同店內序號唔同源嘅亂號。
+        localOrderNo = nextLocalDailyOrderNo(seqKind, mode === "dine_in" ? "堂食" : "自取");
       }
 
       // 「自動接自助單」開關嘅真源喺 DB（`pos_kiosk_settings`），落單當刻先攞一次（禁 polling）。
@@ -371,7 +502,6 @@ export function useKioskOrder() {
         tableId,
         tableName,
         mode,
-        quickType: mode === "quick" ? quickType : undefined,
         autoAcceptSelfOrder: kioskSettings.selfOrderAutoAccept,
         // 自助點餐機（綁定設備）vs 客人掃碼（URL 帶 tableId 或 ?store=）：
         // kiosk 機本身唔會帶呢兩個參數，所以有就當掃碼落單。
@@ -380,18 +510,32 @@ export function useKioskOrder() {
         taxRate: bootstrap.rules.taxRate,
         serviceRate: bootstrap.rules.serviceChargeRate,
         orderNote: orderNote || undefined,
-        id: resumedOrder?.id,
-        status: resumedOrder?.status,
-        fulfillmentStatus: resumedOrder?.fulfillmentStatus,
+        id: orderId,
+        // ⚠️ P2-2：**唔再**把現有 status / fulfillmentStatus 塞返入 payload。
+        // 狀態機 owner 係收銀端；客人加單只應該提交 items / 備註。舊版重寫整張單，
+        // 會把收銀已標記嘅 `sent_to_kitchen→preparing` 打返轉頭（非終態降級 server 唔擋）。
         localOrderNo,
       });
+
+      let queuedForSync = false;
+      try {
+        await submitKioskOrder(storeId, order, eventType);
+      } catch (e) {
+        if (e instanceof KioskOrderRejectedError) throw e;
+        if (e instanceof KioskOrderTransientError) {
+          // 網絡抖動 / 5xx：收單入本地隊列，UI 當「已收到，同步中」（P1-4）
+          const count = enqueuePendingKioskOrder(storeId, order, eventType);
+          setPendingSyncCount(count);
+          queuedForSync = true;
+        } else {
+          throw e;
+        }
+      }
+
       // ⚠️ 唔建廚房單、唔推 PRINT_JOB_CREATED（docs/87 §3.1）：
       // 廚房單一律由收銀端收到單之後先建，否則會雙重打印。
-      await submitKioskOrder(storeId, order, resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED");
-
-      // 顧客小票：自助點餐機（kiosk）落單後即時印，本機排隊、唔上雲（同上，避免收銀端再印一次）。
-      // 掃碼單（scan）唔喺度印 —— 由收銀台部機印（規格 4：掃碼單嘅小票由收銀端打印機出）。
-      // 細粒度開關（2026-09-08）：kiosk toggle 關閉 → 唔出小票。訂單照樣落，唔可以偷偷食掉。
+      // 顧客小票：自助點餐機（kiosk）落單後即時印，本機排隊、唔上雲。
+      // 掃碼單（scan）唔喺度印 —— 由收銀台部機印（規格 4）。
       if (!isScanLink && isPrintContentEnabled("kiosk")) {
         try {
           printKioskReceiptForOrder(order);
@@ -401,6 +545,7 @@ export function useKioskOrder() {
       }
 
       if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-last-order", order.id);
+      setOrderSyncPending(queuedForSync);
       setSubmittedOrder(order);
       setCart([]);
       setResumedOrder(null);
@@ -408,9 +553,13 @@ export function useKioskOrder() {
       setTableOrder(mode === "dine_in" ? order : null);
       setOrderNote("");
       setOrdering(false); // 落完單返去「明細」介面（鎖定餐牌）
+      draftOrderIdRef.current = null; // 落單成功：下張單用新 id
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -420,11 +569,18 @@ export function useKioskOrder() {
     if (binding) saveKioskDeviceBinding({ ...binding, language: lng });
   }
 
-  // 加單（堂食先准）：把本枱現有單嘅項目載返入購物車，重用同一 order.id（下一次落單 → ORDER_UPDATED）
-  // 快餐模式（quick）唔准加單，落單後就要再下一張新單。
+  /**
+   * 加單（堂食先准）：把本枱現有單嘅項目載返入購物車，重用同一 order.id（下一次落單 → ORDER_UPDATED）。
+   *
+   * ⚠️ P0-2 修復：舊版條件係 `!tableOrder`，但 resume 路徑只寫 `resumedOrder`
+   * （而畫面 gate 用 `activeTableOrder = resumedOrder ?? tableOrder`）→
+   * 客人重複掃碼入到「已落單」畫面，撳「加單」完全冇反應，按「完成」再開始點餐仍然回到同一畫面（硬死鎖）。
+   * 改為兩個 state 一齊睇。
+   */
   function addToOrder() {
-    if (mode !== "dine_in" || !tableOrder) return;
-    const lines: CartLine[] = tableOrder.items.map((it, idx) => ({
+    const source = resumedOrder ?? tableOrder;
+    if (mode !== "dine_in" || !source) return;
+    const lines: CartLine[] = source.items.map((it, idx) => ({
       lineId: `resume-${idx}-${it.menuItemId}`,
       menuItemId: it.menuItemId,
       name: it.name,
@@ -435,8 +591,9 @@ export function useKioskOrder() {
       note: it.note,
     }));
     setCart(lines);
-    if (tableOrder.orderNote) setOrderNote(tableOrder.orderNote);
-    setResumedOrder(tableOrder); // 下次 placeOrder 重用同一 id → ORDER_UPDATED
+    if (source.orderNote) setOrderNote(source.orderNote);
+    setResumedOrder(source); // 下次 placeOrder 重用同一 id → ORDER_UPDATED
+    setTableOrder(source);
     setSubmittedOrder(null); // 返去 menu 繼續加菜
     setOrdering(true); // 解鎖餐牌（進入點餐介面）
   }
@@ -457,6 +614,7 @@ export function useKioskOrder() {
   // kiosk 落單成功 5 秒倒數後自動返回：清走成功頁 + 重置 landing（等下一個客人重新「開始點餐」）
   function returnToHome() {
     setSubmittedOrder(null);
+    setOrderSyncPending(false);
     setStarted(false);
     setOrdering(false);
     if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
@@ -465,6 +623,7 @@ export function useKioskOrder() {
   return {
     hydrated,
     menuLoading,
+    menuUnavailable,
     bootstrap,
     language,
     setLanguage,
@@ -483,10 +642,9 @@ export function useKioskOrder() {
     cart,
     setCart,
     cartTotal,
+    totals,
     orderNote,
     setOrderNote,
-    quickType,
-    setQuickType,
     soldoutIds,
     visibleItems,
     categoryItems,
@@ -506,6 +664,8 @@ export function useKioskOrder() {
     ordering,
     submitting,
     error,
+    orderSyncPending,
+    pendingSyncCount,
     placeOrder,
     rebindStore,
   };

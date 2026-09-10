@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
 import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
+import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
 
@@ -146,6 +147,23 @@ export async function POST(request: Request) {
       ? { refundOrder: true, voidItem: true, manageAccounts: true }
       : { refundOrder: false, voidItem: false, manageAccounts: false };
 
+  // 2026-09-10 掃碼點餐審查 P0-3：簽發 POS 終端憑證。
+  // 呢個係 server 端**唯一權威知道 merchantId** 嘅地方，喺度簽一張 12h HMAC token，
+  // 之後 `/api/pos/sync`（寫入）/ `/api/pos/state`（讀取）/ bootstrap POST /
+  // kiosk-settings POST 就靠佢證明「我係店內終端」。冇設定 secret 時係 null
+  // （fail closed：client 冇 token → 只可以行匿名通道）。
+  const posDeviceToken = issuePosDeviceToken({
+    storeId: staffRow.merchant_id,
+    account: phone,
+    role,
+  });
+  if (!posDeviceToken) {
+    console.error(
+      "[ledger/login] 未能簽發 POS 終端憑證（未設定 ADMIN_SESSION_SECRET / POS_DEVICE_TOKEN_SECRET / SUPABASE_SERVICE_ROLE_KEY）。" +
+        "落單會走匿名通道（只准建單 / 加單），收銀端讀取 /api/pos/state 會被拒。",
+    );
+  }
+
   return NextResponse.json({
     ok: true,
     source: "ledger",
@@ -160,6 +178,7 @@ export async function POST(request: Request) {
       loggedInAt: new Date().toISOString(),
       ledgerAccessToken: authData.session.access_token,
       ledgerRefreshToken: authData.session.refresh_token,
+      posDeviceToken: posDeviceToken ?? undefined,
     },
     accessToken: authData.session.access_token,
     refreshToken: authData.session.refresh_token,

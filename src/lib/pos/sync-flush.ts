@@ -45,6 +45,7 @@ import { loadAuthSession, loadQueue, saveQueue } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { QueueEvent } from "@/lib/types";
 import { classifyQueueEvent, gcSyncQueue, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 
 export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
 
@@ -356,6 +357,10 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   let allQueue = loadQueue() as ExtendedQueueEvent[];
   if (allQueue.length === 0) return;
 
+  // 2026-09-10 P0-3：收銀端事件（結帳 / 刪單 / 打印任務）需要 POS 終端憑證，
+  // 而憑證 TTL 12h —— flush 前先確保仍然有效，否則全日開住嘅機會突然推唔到單。
+  await refreshPosDeviceTokenIfNeeded();
+
   // ── 0) v2：畀「推唔到」嘅 pending 一個 skipped 終態（外店 / 無 storeId）──
   // 冇呢一步，呢啲事件會一世霸住 pending，交班畫面永遠假報「N 筆未同步」。
   if (isOutboxV2Enabled() && storeId) {
@@ -398,7 +403,10 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   try {
     result = await fetch("/api/pos/sync", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // 2026-09-10 P0-3：帶 POS 終端憑證（/api/ledger/login 簽發）。
+      // 冇憑證 → server 只接受匿名通道（ORDER_CREATED / ORDER_UPDATED），
+      // 收銀端嘅結帳 / 刪單 / 打印任務會被拒。
+      headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
       body: JSON.stringify({
         ...(storeId ? { storeId } : {}),
         events: flippable.map((e) => ({

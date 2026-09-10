@@ -35,6 +35,7 @@ import {
   notifyQueueChanged,
 } from "@/lib/pos/sync-flush";
 import { enqueueEvents, isOutboxV2Enabled, summarizeQueueEvents } from "@/lib/pos/queue-outbox";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import {
   reconcileLocalShift,
   serverActiveToLocal,
@@ -252,7 +253,9 @@ export function ShiftPage() {
       try {
         const range = macauTodayRange();
         const url = `/api/pos/state?storeId=${encodeURIComponent(storeId)}&ordersOnly=1&limit=5000&start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
-        const res = await fetch(url);
+        // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（先續期，否則 401）。
+        await refreshPosDeviceTokenIfNeeded();
+        const res = await fetch(url, { headers: { ...posDeviceAuthHeaders() } });
         if (cancelled) return;
         if (!res.ok) return;
         const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
@@ -549,7 +552,7 @@ export function ShiftPage() {
     try {
       res = await fetch("/api/pos/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
         body: JSON.stringify({
           events: retryable,
           storeId: resolveStoreId(),
@@ -810,7 +813,7 @@ export function ShiftPage() {
           try {
             const res = await fetch("/api/pos/sync", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
               body: JSON.stringify({
                 events: scoped,
                 storeId: resolveStoreId(),

@@ -48,6 +48,7 @@ import { formatMoney } from "@/lib/format";
 import { orderItemDiscountTotal } from "@/lib/pos/discount";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { POS_SYNC_QUEUE_CHANGED_EVENT } from "@/lib/pos/sync-flush";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -169,7 +170,12 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
     if (!merchantId) return;
     if (loadQueue().some((event) => event.status !== "synced")) return;
     try {
-      const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(merchantId)}`);
+      // 先確保 POS 終端憑證有效（TTL 12h）
+      await refreshPosDeviceTokenIfNeeded();
+      const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(merchantId)}`, {
+        // 2026-09-10 P0-4：需要 POS 終端憑證
+        headers: { ...posDeviceAuthHeaders() },
+      });
       if (!res.ok) return;
       const payload = (await res.json().catch(() => null)) as { orders?: PosOrder[] } | null;
       if (!payload || !Array.isArray(payload.orders)) return;

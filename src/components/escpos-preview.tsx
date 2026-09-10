@@ -1,6 +1,6 @@
 "use client";
 
-import { EscPosLine, SIZE_PX } from "@/lib/escpos-render";
+import { EscPosLine, RECEIPT_PAPER_COLUMNS, SIZE_PX } from "@/lib/escpos-render";
 import { QR_QUIET_MODULES, QR_SIZE_FRACTION } from "@/lib/escpos-qr";
 import type { EscPosSize, QrPayload } from "@/lib/types";
 
@@ -71,9 +71,21 @@ function formatDiscountRate(rate: number): string {
  * 80mm 熱敏紙每行可印嘅 `-` 數量（font A：12 dots 闊 × 48 = 576 dots = 可印闊）。
  * 同 `escpos-render.ts` 嘅 `RECEIPT_PAPER_COLUMNS` 同一個數 —— 實體分格線就係 `"-".repeat(48)`。
  */
+/** 舊版 fallback（冇 `cols` 嘅快照）；新邏輯一律用 `EscPosLine.cols`。 */
 const DASHES_PER_LINE = 48;
 /** 等寬字型入面 `-` 嘅字寬 ÷ font-size（用嚟由「紙闊」反推預覽 dash 嘅字體大細）。 */
 const DASH_WIDTH_RATIO = 0.6;
+/**
+ * 一個 s 檔字符喺預覽入面佔幾多 px。
+ *
+ * 紙闊由**每行字符數**反推出嚟（`columns × CHAR_PX`），而唔係由 mm 直接乘一個係數：
+ * 咁樣先可以保證「預覽每行排到幾多個字」同實體打印機一致（80mm→48 字、58mm→32 字）。
+ * 以前係 `mm × 3.2`，結果 80mm 紙只得 ~36 字位、但實機印到 48 字 —— 預覽會提早換行，
+ * 排版對唔上出紙（2026-09-10 修）。
+ */
+const CHAR_PX = SIZE_PX.s * DASH_WIDTH_RATIO;
+/** 左右 padding（px-2 = 8px × 2）。 */
+const PAPER_PADDING_PX = 16;
 
 /**
  * 分格線（分格線 = 一行 `-` 字符，唔係 CSS border）。
@@ -83,13 +95,22 @@ const DASH_WIDTH_RATIO = 0.6;
  * 雙闊之後 48 個 dash 會 **wrap 成兩個物理行**（每行 24 個），呢度照樣模擬 ——
  * 所以預覽見到嘅 dash 大細 / 行數同實紙 100% 一致（2026-09-09 修「預覽條線唔跟字體放大」）。
  */
-function DividerRows({ size, paperInnerPx }: { size: EscPosSize; paperInnerPx: number }) {
-  // 基準（s）：48 個 dash 排滿紙闊 → 每個 dash 嘅 px，再反推 font-size。
-  const baseFontPx = paperInnerPx / DASHES_PER_LINE / DASH_WIDTH_RATIO;
+function DividerRows({
+  size,
+  paperInnerPx,
+  cols = DASHES_PER_LINE,
+}: {
+  size: EscPosSize;
+  paperInnerPx: number;
+  /** 呢行要有幾多個 `-`（由 `EscPosTemplateSnapshot.cols` 帶落嚟）。 */
+  cols?: number;
+}) {
+  // 基準（s）：`cols` 個 dash 排滿紙闊 → 每個 dash 嘅 px，再反推 font-size。
+  const baseFontPx = paperInnerPx / cols / DASH_WIDTH_RATIO;
   const scaleX = size === "s" ? 1 : 2; // m / l 都係雙闊
   const scaleY = size === "l" ? 2 : 1; // 得 l 係雙高
-  const rows = scaleX; // 48 個 dash ÷ 每行 24 個 = 2 個物理行
-  const perRow = DASHES_PER_LINE / rows;
+  const rows = scaleX; // cols 個 dash ÷ 每行一半 = 2 個物理行
+  const perRow = cols / rows;
   const rowHeight = baseFontPx * PREVIEW_LINE_HEIGHT * scaleY;
   return (
     <div style={{ overflow: "hidden" }}>
@@ -169,8 +190,18 @@ function QrBlock({ qr, paperInnerPx, size }: { qr: QrPayload; paperInnerPx: numb
  * 係靠 renderer 出**反白（黑底白字）**表達（見 companion-server.mjs / EscPosRenderer.kt）。
  * 呢度保留顏色係為咗設計介面同瀏覽器列印（PDF / 彩色機）睇得到層次。
  */
-export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[]; paperWidthMm?: number }) {
-  const paperPx = Math.round(paperWidthMm * 3.2);
+export function EscPosPreview({
+  lines,
+  columns = RECEIPT_PAPER_COLUMNS,
+}: {
+  lines: EscPosLine[];
+  /**
+   * 每行可印字符數（80mm→48、58mm→32、標籤跟紙尺寸 preset）。
+   * 紙闊由呢個數反推出嚟，保證預覽換行位同實體機一致。
+   */
+  columns?: number;
+}) {
+  const paperPx = Math.round(columns * CHAR_PX) + PAPER_PADDING_PX;
   // 減返左右 padding（px-2 = 8px × 2），QR 先唔會迫出紙邊
   const paperInnerPx = paperPx - 16;
   return (
@@ -248,7 +279,7 @@ export function EscPosPreview({ lines, paperWidthMm = 80 }: { lines: EscPosLine[
                         ) : null}
                         {/* card 排版「每件菜之間」嘅分格線：實機紧跟菜品主行，size 由模板 divider 區塊決定 */}
                         {isCard && line.dividerSize ? (
-                          <DividerRows size={line.dividerSize} paperInnerPx={paperInnerPx} />
+                          <DividerRows size={line.dividerSize} paperInnerPx={paperInnerPx} cols={columns} />
                         ) : null}
                         <div style={{ fontSize: SIZE_PX[line.subSize ?? "s"] }}>
                           {(item.specs ?? []).map((s, si) => {

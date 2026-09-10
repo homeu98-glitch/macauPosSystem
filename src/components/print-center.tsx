@@ -29,7 +29,7 @@ import {
 } from "@/lib/storage";
 import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
-import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_STANDARD_WIDTH_MM, PosLocalSettings, PosOrder, PrintJob, PrintTemplateKind, QueueEvent, ShiftSectionId, ShiftTemplate, ShiftTemplateVariant } from "@/lib/types";
+import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_PAPER_PRESETS, PosLocalSettings, PosOrder, PrintJob, PrintTemplateKind, QueueEvent, ShiftSectionId, ShiftTemplate, ShiftTemplateVariant } from "@/lib/types";
 import {
   ledgerReportRangeForKey,
   macauDateKey,
@@ -46,16 +46,25 @@ import {
   ensureReceiptSections,
   KITCHEN_SECTION_META,
   LABEL_SECTION_META,
+  labelPaperPreset,
   normalizeShiftTemplate,
   RECEIPT_SECTION_META,
   resolveActiveShiftPresetName,
-  SHIFT_PREVIEW_SAMPLE,
   SHIFT_SECTION_META,
   withLabelFixedSizes,
 } from "@/lib/escpos-template";
-import { EscPosLine, PrintItemLine, renderEscPosLines, formatSpecLine, unitBasePrice } from "@/lib/escpos-render";
+import { EscPosLine, RECEIPT_PAPER_COLUMNS, RECEIPT_PAPER_COLUMNS_58MM, renderEscPosLines, toPrintItemLines } from "@/lib/escpos-render";
 import { encodeQrPayload, QR_QUIET_MODULES, QR_SIZE_FRACTION, QR_SIZE_LABEL } from "@/lib/escpos-qr";
-import { discountedUnitPrice } from "@/lib/pos/discount";
+import {
+  PREVIEW_KITCHEN_ORDER,
+  PREVIEW_LABEL_ITEM,
+  PREVIEW_QR_URL,
+  PREVIEW_RECEIPT_ORDER,
+  PREVIEW_SERVER_NAME,
+  PREVIEW_STORE_NAME,
+  PREVIEW_STORE_TEL,
+  SHIFT_PREVIEW_SAMPLE,
+} from "@/lib/preview-fixtures";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { notifyQueueChanged } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
@@ -96,54 +105,10 @@ function snapshotKindOf(kind: TemplateKindState): PrintTemplateKind {
   return kind === "kiosk" ? "receipt" : kind;
 }
 
-const PREVIEW_STORE_NAME = "澳門示範店";
-
-/**
- * 示例訂單：當店內仲未有任何真實訂單時，模板預覽改用呢個，
- * 令設計介面喺有啟用打印機嘅情況下一定出到嘢。
- */
-const SYNTHETIC_SAMPLE_ORDER: PosOrder = {
-  id: "__preview_sample__",
-  localOrderNo: "A1001",
-  tableId: "table-a01",
-  tableName: "A01",
-  status: "paid",
-  items: [
-    {
-      menuItemId: "item-pearl-milk-tea",
-      name: "珍珠奶茶",
-      quantity: 1,
-      price: 28,
-      printerGroup: "drinks",
-      selectedSpecs: [
-        { groupId: "sugar", groupName: "甜度", optionId: "half", optionLabel: "半糖", priceDelta: 0 },
-        { groupId: "ice", groupName: "冰量", optionId: "less", optionLabel: "少冰", priceDelta: 0 },
-        { groupId: "cup", groupName: "杯型", optionId: "large", optionLabel: "大杯", priceDelta: 0 },
-      ],
-      note: "",
-    },
-    {
-      menuItemId: "item-lemon-tea",
-      name: "檸檬茶",
-      quantity: 2,
-      price: 22,
-      printerGroup: "drinks",
-      selectedSpecs: [
-        { groupId: "sugar", groupName: "甜度", optionId: "normal", optionLabel: "全糖", priceDelta: 0 },
-        { groupId: "ice", groupName: "冰量", optionId: "none", optionLabel: "走冰", priceDelta: 0 },
-      ],
-      note: "加珍珠",
-    },
-  ],
-  subtotal: 72,
-  taxAmount: 0,
-  serviceChargeAmount: 0,
-  discountAmount: 0,
-  total: 72,
-  paymentMethod: "現金",
-  createdAt: "2026-08-24T12:00:00.000Z",
-  updatedAt: "2026-08-24T12:00:00.000Z",
-};
+// ⚠️ 預覽資料一律嚟自 `src/lib/preview-fixtures.ts` 嘅**固定範例單**（2026-09-10）。
+// 以前係「抽商家最新一張真實訂單（`orders[0]`），抽唔到先用假單」——
+// 真單通常無折扣 / 無服務費 / 無稅 / 無抹零，呢啲區塊會全部隱形，
+// 商家永遠睇唔到完整版面；而且唔同時段開設計頁見到唔同嘢，報 bug 都對唔上。
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -274,6 +239,14 @@ export function PrintCenter() {
   const [canRedo, setCanRedo] = useState(false);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  /**
+   * 設計頁預覽嘅紙闊（收據 / 廚房 / 交班；標籤另有 `LabelTemplate.paperSize`）。
+   *
+   * 而家係**手動切**（58 / 80mm）：`DevicePrinterConfig.paperSize` 係逐機設定，
+   * 而同一個模板會同時派去唔同機（收據機 80mm、廚房機 58mm），
+   * 自動跟機嘅話預覽會隨「揀中邊部機」跳來跳去，商家對唔上。
+   */
+  const [previewPaperMm, setPreviewPaperMm] = useState<58 | 80>(80);
   const historyRef = useRef<{ past: unknown[]; future: unknown[] }>({ past: [], future: [] });
 
   // ── 模板雲端同步（0027 pos_print_templates）──
@@ -450,10 +423,6 @@ export function PrintCenter() {
     return null;
   }
 
-  // 聯合設置模組：有啟用打印機就應出到預覽，唔好等真實訂單。無訂單時退用示例訂單。
-  const usingSampleOrder = orders.length === 0;
-  const sampleOrder = useMemo<PosOrder>(() => orders[0] ?? SYNTHETIC_SAMPLE_ORDER, [orders]);
-
   // 聯合設置模組：由 deviceConfig 解析預覽用打印機（設置新增/啟用即時反映）
   const enabledPrinters = useMemo(() => deviceConfig.printers.filter((item) => item.enabled), [deviceConfig]);
 
@@ -469,6 +438,8 @@ export function PrintCenter() {
     qrSize?: EscPosSize;
     /** 交班模板專屬：分節標題文字（例如「— 店內（今日）—」），商家可自改。 */
     sectionTitles?: Partial<Record<ShiftSectionId, string>>;
+    /** 標籤模板專屬：標籤紙尺寸（`LABEL_PAPER_PRESETS` 嘅 id）。 */
+    paperSize?: string;
   };
 
   function readTemplate(kind: TemplateKindState): AnyTemplate {
@@ -822,36 +793,101 @@ export function PrintCenter() {
     applyTemplate("shift", { ...t, sectionTitles: { ...(t.sectionTitles ?? {}), [id]: text } });
   }
 
+  /**
+   * 改標籤紙尺寸（`LabelTemplate.paperSize`）。
+   * 只影響預覽紙闊同分格線闊度；標籤本身冇 items / 價錢，出紙 bytes 一樣。
+   */
+  function setLabelPaperSize(id: string) {
+    const t = readTemplate("label");
+    applyTemplate("label", { ...t, paperSize: id });
+  }
+
+  /**
+   * 預覽欄寬（每行字符數）。
+   * - 標籤：跟模板 `paperSize`（`LABEL_PAPER_PRESETS`）。
+   * - 收據 / 廚房 / 交班：跟設計頁手動切嘅 58 / 80mm。
+   *
+   * 出紙路徑唔用呢個 —— 出紙係由**打印機**嘅 `paperSize` 推算（`paperColumnsFromSize`），
+   * 再由 `buildSnapshot` 寫入快照，三個 repo 直接讀。預覽同出紙各自計，但計法同一套。
+   */
+  function previewColumns(kind: TemplateKindState): number {
+    if (kind === "label") return labelPaperPreset(readTemplate(kind).paperSize).columns;
+    return previewPaperMm === 58 ? RECEIPT_PAPER_COLUMNS_58MM : RECEIPT_PAPER_COLUMNS;
+  }
+
+  /**
+   * dev-only 覆蓋檢查：每個區塊喺預覽 content 都要有非空值。
+   *
+   * 目的：日後有人加咗新區塊但漏咗喺 `preview-fixtures.ts` 填範例值，
+   * 就會喺 console 即刻報 —— 唔會再出現「加咗區塊，但商家喺設計頁永遠睇唔到」。
+   * production 直接 return（零成本）。
+   */
+  function assertPreviewCoverage(kind: TemplateKindState, content: Record<string, string>) {
+    if (process.env.NODE_ENV === "production") return;
+    // 呢三個唔係純文字區塊：`divider` 係設定型、`items` 行 PrintItemLine、
+    // `qr_code` 靠 extras.qr 帶，所以唔使喺 content 入面有值。
+    const skip = new Set(["divider", "items", "qr_code"]);
+    const missing = (SECTION_META[kind] ?? [])
+      .filter((m) => !skip.has(m.id) && !(content[m.id] ?? "").trim())
+      .map((m) => m.id);
+    if (missing.length > 0) {
+      console.warn(
+        `[print-center] 預覽範例資料缺內容：${missing.join("、")}（模板：${kind}）。` +
+          "請喺 src/lib/preview-fixtures.ts 補返範例值，否則商家喺設計頁睇唔到呢啲區塊。",
+      );
+    }
+  }
+
   function buildPreviewLines(kind: TemplateKindState): EscPosLine[] {
     const t = readTemplate(kind);
-    const snapshot = buildSnapshot(snapshotKindOf(kind), t as unknown as Parameters<typeof buildSnapshot>[1]);
+    const snapshot = buildSnapshot(
+      snapshotKindOf(kind),
+      t as unknown as Parameters<typeof buildSnapshot>[1],
+      previewColumns(kind),
+    );
+    /**
+     * 預覽一律「全部區塊顯示」。
+     *
+     * 真實出紙靠 `if (!text) continue` 隱藏空值區塊（POS / companion / APK 三邊都有同一條），
+     * 但設計頁要畀商家一眼見到**完整版面**，否則佢會以為「我個模板少咗嘢」。
+     * 所以 clone 一份 `visible` 全 true 嘅快照 —— **只影響預覽**，唔會寫入 `localSettings`，
+     * 真實出紙行為一件都冇改。
+     *
+     * `divider` 例外：佢嘅「熄」係有即時可見效果嘅商家選擇（全張單唔印分格線），要尊重。
+     */
+    const previewSnapshot: typeof snapshot = {
+      ...snapshot,
+      blocks: snapshot.blocks.map((b) => (b.id === "divider" ? b : { ...b, visible: true })),
+    };
+
     if (kind === "label") {
-      const item = sampleOrder.items[0];
-      if (!item) return [];
-      const content = buildLabelContent(sampleOrder, item, {
+      const content = buildLabelContent(PREVIEW_RECEIPT_ORDER, PREVIEW_LABEL_ITEM, {
         storeName: PREVIEW_STORE_NAME,
         headerText: t.headerText ?? "",
         footerText: t.footerText,
       });
-      return renderEscPosLines(snapshot, content, []);
+      assertPreviewCoverage(kind, content);
+      return renderEscPosLines(previewSnapshot, content, []);
     }
     if (kind === "kitchen") {
-      const content = buildKitchenContent(sampleOrder, {
+      const content = buildKitchenContent(PREVIEW_KITCHEN_ORDER, {
         storeName: PREVIEW_STORE_NAME,
         footerText: t.footerText,
         typeLabel: "落單",
         time: "12:00",
-        // 唔帶 orderNote → 就算抽中嘅 sample order 有全單備註，設計頁預覽都唔會顯示
-        //（與 print-jobs.ts buildKitchenPrintJobs 同一 bug，一齊修）。
-        orderNote: sampleOrder.orderNote,
+        // ⚠️ 全單備註一定要帶：唔傳 → content.order_note 空字串 → renderer 直接跳過
+        // → 廚房單永久冇全單備註（收據有、廚房冇嘅舊 bug）。
+        orderNote: PREVIEW_KITCHEN_ORDER.orderNote,
       });
-      const items: PrintItemLine[] = sampleOrder.items.map((it) => ({
+      // 廚房單唔印價錢 / 折扣（同 `print-jobs.ts buildKitchenPrintJobs` 一致）。
+      const items = PREVIEW_KITCHEN_ORDER.items.map((it) => ({
         name: it.name,
         quantity: it.quantity,
         specs: (it.selectedSpecs ?? []).map((s) => `${s.groupName}:${s.optionLabel}`),
         note: it.note,
       }));
-      return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl), qrSize: t.qrSize ?? "m" });
+      assertPreviewCoverage(kind, content);
+      return renderEscPosLines(previewSnapshot, content, items);
     }
     if (kind === "shift") {
       // 交班模板：用同交班出紙一模一樣嘅 builder（`buildShiftContent`）餵示例快照，
@@ -862,37 +898,28 @@ export function PrintCenter() {
         footerText: t.footerText,
         sectionTitles: t.sectionTitles,
       });
-      return renderEscPosLines(snapshot, content, []);
+      assertPreviewCoverage(kind, content);
+      return renderEscPosLines(previewSnapshot, content, []);
     }
-    const content = buildReceiptContent(sampleOrder, {
+    const content = buildReceiptContent(PREVIEW_RECEIPT_ORDER, {
       storeName: PREVIEW_STORE_NAME,
-      // 以前硬編 `(853) 2888-0000`，令「列印中心」預覽永遠顯示一個唔存在嘅假電話。
-      // 改用同一個 resolver：門店設定 → 商家登入號碼。見 src/lib/pos/store-tel.ts。
-      storeTel: resolveStoreTel(loadBootstrapCache()?.storeTel),
+      // 門店設定 → 商家登入號碼；兩邊都冇就用示例電話，等「店家電話」區塊唔會隱形。
+      storeTel: resolveStoreTel(loadBootstrapCache()?.storeTel) || PREVIEW_STORE_TEL,
       currency: "MOP",
       footerText: t.footerText,
-      serverName: "示範收銀員",
+      serverName: PREVIEW_SERVER_NAME,
     });
-    const items: PrintItemLine[] = sampleOrder.items.map((it) => {
-      const base = unitBasePrice(it);
-      const rate = it.discountRate;
-      const hasDiscount = typeof rate === "number" && rate > 0 && rate < 100;
-      const discounted = hasDiscount ? discountedUnitPrice(base, rate) : base;
-      const saving = hasDiscount ? Math.round((base - discounted) * it.quantity * 100) / 100 : 0;
-      return {
-        name: it.name,
-        quantity: it.quantity,
-        price: it.price > 0 ? Math.round(discounted * it.quantity) : undefined,
-        discountRate: hasDiscount ? rate : undefined,
-        originalUnitPrice: hasDiscount ? Math.round(base) : undefined,
-        discountedUnitPrice: hasDiscount ? Math.round(discounted) : undefined,
-        savingAmount: saving > 0 ? saving : undefined,
-        specs: (it.selectedSpecs ?? []).map((s) => formatSpecLine(s)),
-        note: it.note,
-      };
-    });
+    // 共用 `toPrintItemLines()`：同收據出紙（`print-jobs.ts`）行同一份映射。
+    const items = toPrintItemLines(PREVIEW_RECEIPT_ORDER.items);
+    assertPreviewCoverage(kind, content);
     // 收據 / 自助點餐機：必須帶埋 qr + qrSize，否則二維碼喺設計介面預覽永遠唔顯示（#模板 QR bug）。
-    return renderEscPosLines(snapshot, content, items, { qr: encodeQrPayload(t.qrUrl), qrSize: t.qrSize ?? "m" });
+    // 商家未填網址 → 用示例網址，等佢見到呢個區塊嘅位置同大細；
+    // 真實出紙網址空白係「唔印」，所以呢個 fallback **淨用於預覽**。
+    const qrUrl = t.qrUrl?.trim() ? t.qrUrl.trim() : PREVIEW_QR_URL;
+    return renderEscPosLines(previewSnapshot, content, items, {
+      qr: encodeQrPayload(qrUrl),
+      qrSize: t.qrSize ?? "m",
+    });
   }
 
   function persistPrintJobs(next: PrintJob[]) {
@@ -1247,12 +1274,47 @@ export function PrintCenter() {
           <div className="text-sm font-semibold text-slate-900">
             選中區塊設定：{meta.find((x) => x.id === sel)?.label ?? sel}
           </div>
-          {isLabel ? (
-            <div className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-700">
-              🏷️ 標籤紙實體寬度固定為 <b>{LABEL_STANDARD_WIDTH_MM} mm</b>（標準飲品/杯貼標籤卷，系統鎖定）。
-              因此各區塊<b>字型大小已鎖定</b>為最適合嘅檔位，唔可以動態改大/改細——你仍然可以調「對齊 / 粗體 / 可見」同區塊順序。
-            </div>
-          ) : null}
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              <span>預覽紙寬</span>
+              {isLabel ? (
+                <select
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                  value={labelPaperPreset(t.paperSize).id}
+                  onChange={(e) => setLabelPaperSize(e.target.value)}
+                >
+                  {LABEL_PAPER_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label} mm · {preset.columns} 字／行
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+                  value={previewPaperMm}
+                  onChange={(e) => setPreviewPaperMm(Number(e.target.value) === 58 ? 58 : 80)}
+                >
+                  <option value={80}>80 mm · {RECEIPT_PAPER_COLUMNS} 字／行</option>
+                  <option value={58}>58 mm · {RECEIPT_PAPER_COLUMNS_58MM} 字／行</option>
+                </select>
+              )}
+            </label>
+            {isLabel ? (
+              <div className="max-w-[280px] text-[11px] leading-snug text-slate-500">
+                {labelPaperPreset(t.paperSize).hint}。字型檔位已鎖定喺最適合嘅大小，
+                你仍然可以調「對齊 / 粗體 / 可見」同區塊順序。
+              </div>
+            ) : (
+              <div className="max-w-[280px] text-[11px] leading-snug text-slate-500">
+                同一個模板會派去唔同機，所以預覽紙寬係手動切（出紙會跟番每部機自己嘅設定）。
+              </div>
+            )}
+          </div>
+          <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+            預覽<b>一律顯示全部欄位</b>（包括你喺左邊熄咗嘅區塊），等你可以一次過睇到完整版面；
+            內容全部係<b>固定示例資料</b>，唔係真實訂單。實際出紙只會印有資料嘅區塊。
+          </div>
           <div className="mt-3 grid grid-cols-3 gap-2">
             {isLabel ? (
               // 標籤實體寬度固定（62mm 標準標籤卷）→ 字型檔位鎖死，唔畀動態改。
@@ -1402,14 +1464,10 @@ export function PrintCenter() {
             ) : null}
           </div>
           <div className="mt-4 text-sm font-semibold text-slate-900">即時預覽（真實熱敏樣式）</div>
-          <div className="mt-2">
-            {kind === "label" && sampleOrder.items.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                需要最少一個菜品嚟預覽標籤。
-              </div>
-            ) : (
-              <EscPosPreview lines={buildPreviewLines(kind)} paperWidthMm={kind === "label" ? LABEL_STANDARD_WIDTH_MM : 80} />
-            )}
+          {/* overflow-x-auto：紙闊由「每行字數」反推出嚟（80mm 比舊版闊），
+              窄螢幕嗰陣可以橫向捲，唔會迫爆右邊欄。 */}
+          <div className="mt-2 overflow-x-auto">
+            <EscPosPreview lines={buildPreviewLines(kind)} columns={previewColumns(kind)} />
           </div>
         </article>
       </div>
@@ -1736,7 +1794,12 @@ export function PrintCenter() {
                   lines={renderEscPosLines(activeJob.template, activeJob.content, activeJob.items ?? [], {
                     qr: activeJob.qr ?? null,
                   })}
-                  paperWidthMm={activeJob.template.kind === "label" ? LABEL_STANDARD_WIDTH_MM : 80}
+                  columns={
+                    activeJob.template.cols ??
+                    (activeJob.template.kind === "label"
+                      ? labelPaperPreset(localSettings.printTemplates.label.paperSize).columns
+                      : RECEIPT_PAPER_COLUMNS)
+                  }
                 />
               ) : (
                 <KitchenTicketPreview job={activeJob} />

@@ -1,4 +1,5 @@
-import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout, QrPayload } from "@/lib/types";
+import { EscPosSize, EscPosAlign, EscPosTemplateSnapshot, EscPosItemsLayout, PosOrder, QrPayload } from "@/lib/types";
+import { discountedUnitPrice } from "@/lib/pos/discount";
 
 /**
  * `PrintItemLine`：每件菜品打印時用嘅扁平資料。
@@ -67,6 +68,40 @@ export function unitBasePrice(it: { price: number; selectedSpecs?: Array<{ price
   return Math.max(0, it.price - deltaSum);
 }
 
+/**
+ * `PosOrder.items` → `PrintItemLine[]` 嘅**唯一真源**（2026-09-10）。
+ *
+ * 以前 `print-jobs.ts`（出紙）同 `print-center.tsx`（預覽）各自抄咗一份，
+ * 兩份一旦唔同步就會出現「預覽 OK 但出紙唔同」（同當年交班單
+ * `shiftDetailToLines` / `buildShiftPrintLines` 兩份 builder 分歧同一個死法）。
+ * 而家兩邊都 call 呢條，保證「設計 == 預覽 == 出紙」。
+ *
+ * 價錢語義（同收據主行規則一致）：
+ * - 冇折扣 → `price` = 基價 × quantity（加購 spec delta 由 spec row 個別加印，唔入主行）
+ * - 有折扣 → `price` = 折後價 × quantity，另帶 `discountRate` / `originalUnitPrice` /
+ *   `discountedUnitPrice` / `savingAmount`，等 renderer 加印「折扣率 X% 折讓 Y」反白行。
+ */
+export function toPrintItemLines(items: PosOrder["items"]): PrintItemLine[] {
+  return items.map((it) => {
+    const base = unitBasePrice(it);
+    const rate = it.discountRate;
+    const hasDiscount = typeof rate === "number" && rate > 0 && rate < 100;
+    const discounted = hasDiscount ? discountedUnitPrice(base, rate) : base;
+    const saving = hasDiscount ? Math.round((base - discounted) * it.quantity * 100) / 100 : 0;
+    return {
+      name: it.name,
+      quantity: it.quantity,
+      price: it.price > 0 ? Math.round(discounted * it.quantity) : undefined,
+      discountRate: hasDiscount ? rate : undefined,
+      originalUnitPrice: hasDiscount ? Math.round(base) : undefined,
+      discountedUnitPrice: hasDiscount ? Math.round(discounted) : undefined,
+      savingAmount: saving > 0 ? saving : undefined,
+      specs: (it.selectedSpecs ?? []).map((spec) => formatSpecLine(spec)),
+      note: it.note,
+    };
+  });
+}
+
 export type EscPosLine =
   | { kind: "text"; text: string; size: EscPosSize; bold: boolean; align: EscPosAlign }
   /**
@@ -75,10 +110,12 @@ export type EscPosLine =
    * `size` 決定嗰行 dash 嘅放大倍數（s = 1×、m = 雙闊、l = 2×2），
    * 同實機 `ESC ! n` / `GS ! n` 一致 —— m / l 雙闊會令 48 個 dash **wrap 成兩個物理行**。
    *
+   * `cols` = 呢行要有幾多個 `-`（由 `EscPosTemplateSnapshot.cols` 帶入）；缺省 48。
+   *
    * 來源：模板 `divider` 區塊嘅 `size`；舊模板冇嗰個區塊 → 用「繼承上一行 size」嘅舊行為
    * （對齊 print-relay APK `renderTemplateTicket` 嘅 sticky style）。
    */
-  | { kind: "divider"; size: EscPosSize }
+  | { kind: "divider"; size: EscPosSize; cols: number }
   | {
       kind: "items";
       size: EscPosSize;
@@ -114,6 +151,15 @@ export interface EscPosRenderExtras {
  * 否則同一張單喺唔同通道出紙會對唔齊。
  */
 export const RECEIPT_PAPER_COLUMNS = 48;
+/**
+ * 58mm 機嘅每行字符數（可印闊約 48mm ÷ 1.5mm/char = 32）。
+ * 同 `print hub` `EscPosRenderer.kt` 嘅 `PAPER_COLUMNS_58MM` 同一個數。
+ *
+ * ⚠️ 2026-09-10：呢個數以前**淨得 print hub 認**（`desktop-companion` 同 POS 預覽
+ * 硬編 48），同一張 58mm 單喺三個通道會出三種闊度。而家由 POS 計一次寫入
+ * `EscPosTemplateSnapshot.cols`，三個 repo 直接讀，唔好再各自判斷。
+ */
+export const RECEIPT_PAPER_COLUMNS_58MM = 32;
 
 // 單據抬頭（label 唔印抬頭，62mm 標籤紙太細）
 //
@@ -160,11 +206,16 @@ export function renderEscPosLines(
     : undefined;
   /** 印表機嘅 sticky 字體狀態（`ESC ! n` 殘留），用嚟模擬舊模板「分格線跟上一行放大」。 */
   let curSize: EscPosSize = "s";
+  /**
+   * 每行字符數：由快照帶入（`buildSnapshot` 計好），舊快照冇 → 48。
+   * 分格線同網頁預覽嘅換行都靠佢，等三個 repo 出紙闊度一致。
+   */
+  const cols = snapshot.cols ?? RECEIPT_PAPER_COLUMNS;
   /** fixedDivider === null（區塊熄）→ 唔 push；undefined（舊模板）→ 用 fallback。 */
   const pushDivider = (fallback: EscPosSize) => {
     const size = fixedDivider === undefined ? fallback : fixedDivider;
     if (size === null) return;
-    lines.push({ kind: "divider", size });
+    lines.push({ kind: "divider", size, cols });
   };
 
   for (const b of snapshot.blocks) {

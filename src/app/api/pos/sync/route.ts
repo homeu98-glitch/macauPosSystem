@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
+import {
+  isPosDeviceAuthRequired,
+  readPosDeviceTokenFromRequest,
+} from "@/lib/pos/pos-device-token";
+import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 
 /**
  * POST /api/pos/sync — 收銀 / Kiosk 離線優先同步入口。
@@ -135,6 +141,8 @@ function parseIsoMs(value: string | null | undefined): number {
 type ExistingOrderRow = {
   id: string;
   status: string | null;
+  /** 2026-09-10 P2-2：客人加單（匿名）時要保留收銀端已標記嘅出餐狀態。 */
+  fulfillment_status: string | null;
   updated_at: string | null;
   /**
    * 方案 B（2026-09-09）：client 生成嘅時間戳（裝置時鐘）。
@@ -212,6 +220,45 @@ export async function POST(request: Request) {
     );
   }
 
+  // ── 2.1) Rate limit（2026-09-10 資安加固 P0-3 / P3-5）──
+  // 匿名通道（掃碼）冇任何憑證，所以至少要有頻率上限，否則知道 storeId 就可以無限打。
+  const ip = clientIp(request);
+  if (!rateLimit(`pos-sync:${ip}`, 120, 60_000)) {
+    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
+  }
+
+  // ── 2.2) 通道授權（2026-09-10 審查 P0-3）──
+  // 背景：`/api/pos/sync` 用 service_role 寫入，而枱 QR 已經公開 storeId
+  //（`/menu?tableId=…&store=<merchantId>`），全 repo 又冇 middleware →
+  // 掃過碼嘅人可以直接偽造 / 刪除訂單。家陣分兩條通道：
+  //
+  //   A. **已授權**（帶有效 POS 終端憑證，或 admin session token）→ 全部事件類型放行。
+  //      憑證由 `/api/ledger/login` 登入時簽發（server 端唯一權威知道 merchantId 嘅地方）。
+  //   B. **匿名**（客人掃碼 / kiosk 未登入）→ **只准** `ORDER_CREATED` / `ORDER_UPDATED`，
+  //      而且 payload `source` 必須係 `scan` / `kiosk`。結帳、刪單、打印任務、設定一律拒。
+  //
+  // 應急回滾：設定 `POS_REQUIRE_DEVICE_AUTH=0` 可以暫時關閉（會寫 warning log）。
+  const deviceClaims = readPosDeviceTokenFromRequest(request);
+  const adminClaims = readAdminSessionFromRequest(request);
+  const authEnforced = isPosDeviceAuthRequired();
+  const authorized =
+    !authEnforced ||
+    Boolean(adminClaims) ||
+    Boolean(deviceClaims && deviceClaims.storeId === storeId);
+  if (!authEnforced) {
+    console.warn(
+      "[pos/sync] ⚠️ POS_REQUIRE_DEVICE_AUTH=0：跳過通道授權（應急模式，請盡快恢復）。",
+    );
+  } else if (!authorized) {
+    // 匿名通道：唔算錯誤（客人掃碼正常行），只落 debug 級提示
+    console.info(`[pos/sync] 匿名通道請求（store=${storeId}, ip=${ip}）`);
+  }
+
+  /** 匿名通道只准嘅事件類型。 */
+  const ANONYMOUS_ALLOWED_EVENTS = new Set(["ORDER_CREATED", "ORDER_UPDATED"]);
+  /** 匿名通道只准嘅訂單來源（客人掃碼 / 自助點餐機未登入）。 */
+  const ANONYMOUS_ALLOWED_SOURCES = new Set(["scan", "kiosk"]);
+
   // 寫入一律 service_role（0016 之後 anon 已經寫唔入，留 fallback 只會靜默失敗）
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
@@ -228,6 +275,35 @@ export async function POST(request: Request) {
 
   if (events.length === 0) {
     return NextResponse.json({ ok: true, syncedCount: 0, receivedAt: new Date().toISOString() });
+  }
+
+  // ── 2.6) 售罄校驗（2026-09-10 審查 P1-2）：匿名落單時服務端把關 ──
+  // 客人端只靠 Realtime 增量，掃碼嗰刻已售罄嘅菜照樣落得到單。呢度喺 server 端
+  // 對「匿名 + 有 order 事件」嘅請求預取本店售罄集合，命中即拒（收銀端有憑證，唔受影響）。
+  let soldoutSet: Set<string> | null = null;
+  const anonymousOrderEvents = !authorized
+    ? events.filter((rawEvent) => {
+        if (typeof rawEvent !== "object" || rawEvent === null) return false;
+        const t = (rawEvent as Record<string, unknown>).type;
+        return t === "ORDER_CREATED" || t === "ORDER_UPDATED";
+      })
+    : [];
+  if (anonymousOrderEvents.length > 0) {
+    const { data: soldoutRows, error: soldoutErr } = await supabase
+      .from("pos_soldout")
+      .select("menu_item_id")
+      .eq("store_id", storeId)
+      .eq("sold_out", true);
+    if (soldoutErr) {
+      // 查唔到唔好當「全部售罄」：放行（客人端 UI 仲有守門，收銀端都會再確認）
+      console.warn("[pos/sync] 售罄校驗查詢失敗，本次跳過:", soldoutErr.message);
+    } else {
+      soldoutSet = new Set(
+        (soldoutRows ?? [])
+          .map((row) => (typeof row.menu_item_id === "string" ? row.menu_item_id : null))
+          .filter((id): id is string => Boolean(id)),
+      );
+    }
   }
 
   // ── 2.5) LWW / 終態守門（2026-09-09）：一次過預取今批事件會撞到嘅 pos_orders 行 ──
@@ -263,7 +339,7 @@ export async function POST(request: Request) {
     const idArr = [...orderIds].slice(0, MAX_EVENTS_PER_REQUEST);
     const { data: existingRows, error: existingErr } = await supabase
       .from("pos_orders")
-      .select("id,status,updated_at,client_updated_at")
+      .select("id,status,fulfillment_status,updated_at,client_updated_at")
       .eq("store_id", storeId)
       .in("id", idArr);
     if (existingErr) {
@@ -302,6 +378,15 @@ export async function POST(request: Request) {
     if (!VALID_EVENT_TYPES.has(eventType)) {
       errors.push(`未知事件類型：${eventType.slice(0, 40)}`);
       ack(false, `未知事件類型：${eventType.slice(0, 40)}`);
+      continue;
+    }
+
+    // ── 3.2) 通道授權閘（2026-09-10 P0-3）──
+    // 匿名通道只准建單 / 加單；結帳、刪單、打印任務、裝置設定一律需要 POS 憑證。
+    if (!authorized && !ANONYMOUS_ALLOWED_EVENTS.has(eventType)) {
+      console.warn(`[pos/sync] 拒收匿名事件 ${eventId}（type=${eventType}，需要 POS 憑證）`);
+      errors.push(`事件 ${eventId} 未經授權（匿名通道唔接受 ${eventType}）`);
+      ack(false, "未經授權：匿名通道只接受落單 / 加單事件");
       continue;
     }
 
@@ -357,6 +442,39 @@ export async function POST(request: Request) {
         // 同做 LWW 比較（同鐘域）。`pos_orders.updated_at` 一律由 server 蓋章（下面）。
         const incomingUpdatedAt = isoOrNull(order.updatedAt) ?? new Date().toISOString();
         const existing = existingById.get(orderId);
+        const orderSource = text(order.source, 32) ?? "pos";
+
+        // ── P0-3：匿名通道只准客人 / kiosk 來源嘅單 ──
+        // 收銀台落單一定會帶 POS 憑證；匿名而自稱 `source="pos"` = 偽造。
+        if (!authorized && !ANONYMOUS_ALLOWED_SOURCES.has(orderSource)) {
+          console.warn(`[pos/sync] 拒收匿名訂單 ${orderId}（source=${orderSource}）`);
+          errors.push(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 未經授權`);
+          ack(false, "未經授權：匿名通道唔接受此訂單來源");
+          continue;
+        }
+
+        // ── P1-2：server 端售罄校驗（匿名通道）──
+        if (soldoutSet && soldoutSet.size > 0) {
+          const rawItems = Array.isArray(order.items) ? order.items : [];
+          const soldOutHit = rawItems.some((it) => {
+            if (!it || typeof it !== "object") return false;
+            const mid = (it as Record<string, unknown>).menuItemId;
+            return typeof mid === "string" && soldoutSet!.has(mid);
+          });
+          if (soldOutHit) {
+            console.warn(`[pos/sync] 拒收售罄訂單 ${orderId}`);
+            ack(false, "菜品已售罄，請重新選擇");
+            continue;
+          }
+        }
+
+        // ── P2-2：客人（匿名）加單唔可以改動狀態機 ──
+        // 狀態機 owner 係收銀端。舊版客人加單會重寫整張單，把收銀已標記嘅
+        // `sent_to_kitchen → preparing` 打返轉頭（非終態降級 server 唔擋）。
+        // 家陣匿名寫入一律沿用 DB 現有狀態 / 出餐狀態，只更新 items / 備註。
+        const writeStatus = existing && !authorized ? existing.status ?? incomingStatus : incomingStatus;
+        const writeFulfillment =
+          existing && !authorized ? existing.fulfillment_status : text(order.fulfillmentStatus, 64);
 
         if (existing) {
           const incomingTs = parseIsoMs(incomingUpdatedAt);
@@ -396,8 +514,8 @@ export async function POST(request: Request) {
           store_id: storeId,
           table_id: text(order.tableId, MAX_ID_LEN),
           table_name: text(order.tableName, MAX_NAME_LEN),
-          status: incomingStatus,
-          fulfillment_status: text(order.fulfillmentStatus, 64),
+          status: writeStatus,
+          fulfillment_status: writeFulfillment,
           sent_to_kitchen_at: text(order.sentToKitchenAt, 64),
           served_at: text(order.servedAt, 64),
           items,
