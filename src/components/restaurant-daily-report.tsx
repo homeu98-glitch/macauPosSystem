@@ -923,6 +923,15 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // 菜品銷售排行「更多」彈窗
   const [dishModalOpen, setDishModalOpen] = useState(false);
   const [dishModalPage, setDishModalPage] = useState(1);
+  /**
+   * 訂單明細預設收合（2026-09-10）。
+   *
+   * 訂單明細已移到 KPI 帶**正下方**（用戶要求），而佢係逐筆列表 —— 一間旺場餐廳
+   * 一日幾百張單，全部展開會令下面所有區塊被推到很遠。所以預設只出頭
+   * `ORDER_DETAIL_PREVIEW` 行，按「顯示全部」才展開。
+   */
+  const [orderDetailExpanded, setOrderDetailExpanded] = useState(false);
+  const ORDER_DETAIL_PREVIEW = 10;
   const DISHES_PER_PAGE = 20;
 
   const consRange = useMemo(
@@ -2178,11 +2187,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {/* DevTools debug panel：暫時由 UI 隱藏 */}
             {false}
 
-            {/* 核心 KPI 帶 — 分兩行排列 */}
+            {/* 核心 KPI 帶 — 一律一行 5 格（10 格 → 5-5） */}
             {dataReady ? (
               <>
-                {/* 第一行：營業額 / 應收金額合計 / 實收金額合計 / 訂單數 / 客單價 */}
-                <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                {/*
+                  核心 KPI：**一律一行 5 格**（10 格 → 5-5），iPad 與電腦版排法一致。
+                  ⚠️ 原先寫 `md:grid-cols-3 xl:grid-cols-5`，iPad 橫向內容區約 976px
+                  落 `md`（3 格）→ 殘成 3-3-3-1；電腦 ≥1280 落 `xl`（5 格）。
+                  家陣固定 5 欄，兩邊都係 5-5（2026-09-10 iPad 版面對齊）。
+                */}
+                <div className="mb-4 grid grid-cols-5 gap-3">
                   <Kpi
                     label="營業額"
                     value={<Money amount={onlineOfflineSplit.totalRevenueMop} />}
@@ -2228,8 +2242,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   />
                 </div>
 
-                {/* 第二行：未結帳訂單 / 餘額總額 / 會員充值 / 會員扣點 / 毛利（估） */}
-                <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                {/*
+                  以下 KPI 同上面係**同一個 grid**（刻意唔再開第二個 div）：
+                  10 格一次過排才會穩定 5-5；拆兩個 5 格 grid 喺窄螢幕會各自斷行。
+                  未結帳訂單 / 餘額總額 / 會員充值 / 會員扣點 / 毛利（估）
+                */}
                   {/* 2026-09-07 新增：未結帳訂單（sent_to_kitchen 等）唔計入營業額，
                       但要顯示出嚟，否則報表會出現「有單但全空」嘅假象。 */}
                   <Kpi
@@ -2318,22 +2335,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       )
                     }
                   />
-                </div>
               </>
             ) : (
               <>
-                <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={`sk-1-${i}`} className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="flex h-16 items-center justify-center">
-                        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={`sk-2-${i}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                {/* Skeleton 都要同真身一樣：一個 grid、5 欄、10 格（5-5），否則載入完會「跳版」 */}
+                <div className="mb-4 grid grid-cols-5 gap-3">
+                  {Array.from({ length: 10 }).map((_, i) => (
+                    <div key={`sk-${i}`} className="rounded-2xl border border-slate-200 bg-white p-4">
                       <div className="flex h-16 items-center justify-center">
                         <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
                       </div>
@@ -2343,64 +2351,49 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               </>
             )}
 
-            {/* 模塊 1 + 模塊 2：食材消耗（BOM 精確化） */}
-            <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="食材消耗（本月）" tag="BOM × 已售份數" loading={!dataReady}>
-                {!consMonth.hasRecipes ? (
-                  <div>
-                    <div className="text-xs text-slate-400">尚未設定菜品配方，模塊顯示空白。</div>
-                    <Link
-                      href="/reports/bom"
-                      className="mt-2 inline-block rounded-lg border border-dashed border-orange-300 px-3 py-1.5 text-xs font-semibold text-orange-600 hover:bg-orange-50"
+            {/*
+              訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。
+              ⚠️ 位置：緊貼 KPI 帶之下（2026-09-10 用戶要求「訂單明細要顯示在格仔下方」）。
+              預設只出頭 ORDER_DETAIL_PREVIEW 行 + 「顯示全部」，否則逐筆列表會佔滿首屏，
+              把下面所有區塊（菜品排行、食材消耗…）推到很遠。
+            */}
+            <Card
+              title="訂單明細"
+              tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}
+              loading={!dataReady}
+            >
+              {agg.orderDetails.length === 0 ? (
+                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+              ) : (
+                <>
+                  <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
+                    <OrderDetailList
+                      rows={
+                        orderDetailExpanded
+                          ? agg.orderDetails
+                          : agg.orderDetails.slice(0, ORDER_DETAIL_PREVIEW)
+                      }
+                    />
+                  </div>
+                  {agg.orderDetails.length > ORDER_DETAIL_PREVIEW ? (
+                    <button
+                      type="button"
+                      onClick={() => setOrderDetailExpanded((v) => !v)}
+                      className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100"
                     >
-                      前往「配方管理」填寫 →
-                    </Link>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="text-3xl font-extrabold text-orange-600">{formatMoney(consMonth.totalAmount)}</div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      本月食材成本（至今日）· {consMonth.kinds} 款食材
-                    </div>
-                    <div className="mt-2 text-xs text-slate-400">
-                      選取範圍（{FILTERS.find((f) => f.key === range)?.label}）：{formatMoney(consRange.totalAmount)} ·{" "}
-                      {consRange.kinds} 款
-                    </div>
-                  </div>
-                )}
-              </Card>
+                      {orderDetailExpanded ? "收起" : `顯示全部 ${agg.orderDetails.length} 張`}
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </Card>
 
-              <Card title="食材使用量排行" tag="本月 · 按成本" loading={!dataReady}>
-                {!consMonth.hasRecipes ? (
-                  <Empty />
-                ) : consMonth.rows.length === 0 ? (
-                  <div className="text-xs text-slate-400">本月暫無已售菜品配對到配方。</div>
-                ) : (
-                  <div className="grid gap-1">
-                    {consMonth.rows.slice(0, 8).map((r, i) => (
-                      <div
-                        key={r.name}
-                        className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0"
-                      >
-                        <div className="text-sm font-semibold text-slate-900">
-                          <span className="mr-2 text-xs text-slate-400">{i + 1}.</span>
-                          {r.name}
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-semibold text-slate-900">
-                            {r.qty} {r.unit}
-                          </div>
-                          <div className="text-xs text-slate-400">{formatMoney(r.amount)}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            </div>
-
-            {/* 模塊 3 + 模塊 6 */}
-            <div className="mb-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+            {/*
+              菜品銷售排行：緊接訂單明細之下（2026-09-10 用戶要求）。
+              原本同「會員充值 & 會員數」併排喺 `lg:grid-cols-[1.4fr_1fr]`；
+              該卡已整張移除 → 呢邊改為全寬單欄。
+            */}
+            <div className="mb-4">
               <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下" loading={!dataReady}>
                 {agg.dishes.length === 0 ? (
                   <Empty />
@@ -2514,89 +2507,65 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 </div>
               ) : null}
 
-              <Card title="會員充值 & 會員數" tag="來源：Ledger" loading={!dataReady}>
-                <div className="grid grid-cols-2 gap-3">
-                  {/* 充值總額 */}
-                  <div className="rounded-xl bg-slate-50 p-3">
-                    <div className="text-xs text-slate-500">充值總額</div>
-                    <div className="mt-1 text-2xl font-bold text-indigo-600">{formatMoney(ledger.sel?.topupMop ?? 0)}</div>
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                      <div>
-                        <div className="text-slate-400">實際充值</div>
-                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupPaidMop ?? 0)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-400">贈送入帳</div>
-                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.topupGiftMop ?? 0)}</div>
-                      </div>
-                    </div>
-                    {ledger.sel?.topupCount != null ? (
-                      <div className="mt-2 text-[11px] text-slate-400">
-                        充值筆數 <span className="font-semibold text-slate-700">{ledger.sel.topupCount.toLocaleString()}</span>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {/* 會員總數 */}
-                  <div className="rounded-xl bg-slate-50 p-3">
-                    <div className="text-xs text-slate-500">會員總數</div>
-                    <div className="mt-1 text-2xl font-bold text-amber-600">{(ledger.sel?.memberCount ?? 0).toLocaleString()}</div>
-                    {ledger.sel?.newMemberCount != null ? (
-                      <div className="mt-2 text-[11px] text-slate-400">
-                        新增會員 <span className="font-semibold text-slate-700">{ledger.sel.newMemberCount.toLocaleString()}</span>
-                      </div>
-                    ) : (
-                      <div className="mt-2 text-[11px] text-slate-400">區間內暫無新增會員資料</div>
-                    )}
-                  </div>
-
-                  {/* 會員扣點 */}
-                  <div className="rounded-xl bg-slate-50 p-3">
-                    <div className="text-xs text-slate-500">會員扣點</div>
-                    <div className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(ledger.sel?.deductMop ?? 0)}</div>
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                      <div>
-                        <div className="text-slate-400">已付扣點</div>
-                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.deductPaidMop ?? 0)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-400">贈送扣點</div>
-                        <div className="font-semibold text-slate-700">{formatMoney(ledger.sel?.deductGiftMop ?? 0)}</div>
-                      </div>
-                    </div>
-                    {ledger.sel?.deductCount != null ? (
-                      <div className="mt-2 text-[11px] text-slate-400">
-                        扣點筆數 <span className="font-semibold text-slate-700">{ledger.sel.deductCount.toLocaleString()}</span>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {/* 訂單餘額扣減 & 線上渠道佔比 */}
-                  <div className="rounded-xl bg-slate-50 p-3">
-                    <div className="text-xs text-slate-500">訂單餘額扣減</div>
-                    <div className="mt-1 text-2xl font-bold text-slate-900">{formatMoney(ledger.sel?.orderBalancePaidMop ?? 0)}</div>
-                    <div className="mt-2 text-[11px] text-slate-400">
-                      線上渠道佔比 <span className="font-semibold text-slate-700">{Math.round(onlineShare * 100)}%</span>
-                    </div>
-                  </div>
-                </div>
-              </Card>
             </div>
 
-            {/* 訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項 */}
-            <Card
-              title="訂單明細"
-              tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}
-              loading={!dataReady}
-            >
-              {agg.orderDetails.length === 0 ? (
-                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
-              ) : (
-                <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
-                  <OrderDetailList rows={agg.orderDetails} />
-                </div>
-              )}
-            </Card>
+            {/* 模塊 1 + 模塊 2：食材消耗（BOM 精確化）
+                ⚠️ 位置：由 KPI 帶下方移到呢度（2026-09-10）。KPI 下面嘅第一、二個區塊
+                要係「訂單明細 → 菜品銷售排行」（用戶指定順序），所以食材消耗讓位。 */}
+            <div className="mb-4 grid gap-4 lg:grid-cols-2">
+              <Card title="食材消耗（本月）" tag="BOM × 已售份數" loading={!dataReady}>
+                {!consMonth.hasRecipes ? (
+                  <div>
+                    <div className="text-xs text-slate-400">尚未設定菜品配方，模塊顯示空白。</div>
+                    <Link
+                      href="/reports/bom"
+                      className="mt-2 inline-block rounded-lg border border-dashed border-orange-300 px-3 py-1.5 text-xs font-semibold text-orange-600 hover:bg-orange-50"
+                    >
+                      前往「配方管理」填寫 →
+                    </Link>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-3xl font-extrabold text-orange-600">{formatMoney(consMonth.totalAmount)}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      本月食材成本（至今日）· {consMonth.kinds} 款食材
+                    </div>
+                    <div className="mt-2 text-xs text-slate-400">
+                      選取範圍（{FILTERS.find((f) => f.key === range)?.label}）：{formatMoney(consRange.totalAmount)} ·{" "}
+                      {consRange.kinds} 款
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              <Card title="食材使用量排行" tag="本月 · 按成本" loading={!dataReady}>
+                {!consMonth.hasRecipes ? (
+                  <Empty />
+                ) : consMonth.rows.length === 0 ? (
+                  <div className="text-xs text-slate-400">本月暫無已售菜品配對到配方。</div>
+                ) : (
+                  <div className="grid gap-1">
+                    {consMonth.rows.slice(0, 8).map((r, i) => (
+                      <div
+                        key={r.name}
+                        className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">
+                          <span className="mr-2 text-xs text-slate-400">{i + 1}.</span>
+                          {r.name}
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold text-slate-900">
+                            {r.qty} {r.unit}
+                          </div>
+                          <div className="text-xs text-slate-400">{formatMoney(r.amount)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </div>
 
             {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數 */}
             <Card title="支付方式分項" tag="應收 = 原價合計 + 服務費 + 稅 · 實收 = order.total" loading={!dataReady}>
@@ -2952,7 +2921,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
               說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
               人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
-              毛利為「營業額 − 買貨成本（已付）」估算；會員數來自 Ledger `get_merchant_report_summary` 的 member_count（未連線時顯示 —）。
+              毛利為「營業額 − 買貨成本（已付）」估算。
             </div>
           </div>
         </main>
