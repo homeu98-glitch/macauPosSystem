@@ -13,6 +13,7 @@ import {
   type ScanMode,
 } from "@/lib/pos/kiosk-settings";
 import { openQrPrintWindow } from "@/lib/pos/qr-print";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 
 /**
  * 設定頁「掃碼點餐」面板（docs/115）—— 取代舊版直接嵌 `KioskQrPanel`。
@@ -192,8 +193,13 @@ export function ScanModePanel() {
     setScanMode(next); // 樂觀更新：掣即刻有反應，失敗先 rollback
     setSaving(true);
     setError(null);
+    // ⚠️ 一定要先續期再取 header（token TTL 12h，過夜必爆），
+    // 否則 server 回 401「未經授權：需要 POS 終端憑證。」。
     // ⚠️ 只傳 scanMode：server 係 read-then-merge，唔會順手洗走「自動接自助單」。
-    saveKioskSettings(storeId, { scanMode: next })
+    void (async () => {
+      const headers = await posDeviceAuthHeadersFresh();
+      return saveKioskSettings(storeId, { scanMode: next }, headers);
+    })()
       .catch((e: unknown) => {
         setScanMode(previous);
         setError(e instanceof Error ? e.message : "儲存失敗");

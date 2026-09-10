@@ -139,3 +139,16 @@
 - ⚠️ **`LocalOrdersPanel` 開 deep link 彈窗之前要先 `setStatusTab("all")`**：否則可能停在「已完成」，彈窗後面嘅列表睇唔到張單，令人以為跳錯頁。（彈窗本身讀 `orders` 全量，唔受日期篩選影響。）
 - 📌 **QR 列印**：`src/lib/pos/qr-print.ts` = `buildQrSvgMarkup()`（由 `encodeQrMatrix()` 直接砌 SVG 字串，唔靠 canvas）+ `openQrPrintWindow()`（開獨立列印視窗、載入後自動 `print()`、印完自動關窗）。**唔可以**直接用 `window.print()` 印設定頁（會連整個表單印出嚟、QR 太細）。`window.open` 被攔 → 回 `false`，要提示用家允許彈窗或改用複製網址。
 - 📌 **驗收**：`/quick` 落單 → DB `source=scan` / `table_id=counter` / `table_name=自取` / `local_order_no=自取NN`；POS 右上角彈「自取NN 已下單」→ 撳 → 跳 `/orders?orderId=` 自動開「查看」；堂食回歸：`/menu` 行為完全不變、撳提示仍然跳桌台。
+
+## 「未經授權：需要 POS 終端憑證。」（401）排查（2026-09-10 補）
+- 📌 **出處**：3 條 route 嘅 **401**，文案一致 —— `/api/pos/bootstrap` **POST**、`/api/pos/kiosk-settings` **POST**、`/api/pos/sync`（事件被拒時 `reason:"unauthorized"` + 頂層 401）。`/api/pos/state` 文案唔同（「…請重新登入 POS 帳號。」）。
+- 📌 **鑑權句式（三處一致）**：`authorized = !isPosDeviceAuthRequired() || Boolean(adminClaims) || Boolean(deviceClaims && deviceClaims.storeId === storeId)`。
+  - `posDeviceToken`：HMAC stateless，**TTL 12 小時**，payload 有 `storeId`，由 `/api/ledger/login` 簽發、存 `authSession.posDeviceToken`，client 續期行 `/api/pos/device-token`（提前量 10 分鐘）。
+  - `adminSessionToken`：**冇 `storeId`** → 只放行「admin 已經過關」嘅路徑，唔可以當終端憑證用。
+- 🔴 **最常見真因（唔係權限問題）＝ 寫入端冇帶 `Authorization`**。`posDeviceAuthHeaders()` **只讀唔續期**，而 token 12 小時就死，收銀機開過夜必爆。而且呢啲 route 嘅 **GET 通常係開放**嘅 → 症狀係「**讀得到、存唔到**」，好易誤判成帳號權限。
+  - 中過：`saveKioskSettings()`（掃碼模式 / 自動接自助單）、`/api/pos/bootstrap` POST（上傳菜單 / 桌台）。
+  - 正解：client 一律用 **`await posDeviceAuthHeadersFresh()`**（先 `refreshPosDeviceTokenIfNeeded()` 再取 header），唔好直接用 `posDeviceAuthHeaders()`。
+  - ⚠️ `kiosk-settings.ts` 係 **client / server 共用**（route 會 import `normalizeScanMode`），所以**唔可以**喺嗰個 module import `pos-sync-auth`（依賴 `window`）→ 用「caller 傳 headers 入嚟」嘅方式。
+- ⚠️ **Kiosk 綁店登入（`/login?mode=kiosk`）會照寫 `authSession`**（因為要做 Ledger 會員扣款）→ 佢係有 `posDeviceToken` 嘅，唔屬匿名通道。
+- ⚠️ **匿名（客人掃碼）冇 token 唔算錯誤**：`/api/pos/sync` 只放行 `ORDER_CREATED` / `ORDER_UPDATED` 且 payload `source ∈ {scan, kiosk}`；其他事件一律 `reason:"unauthorized"`（client 見到會強制續期一次）。
+- ⚠️ `POS_REQUIRE_DEVICE_AUTH` 未設／空字串 = **強制**（fail closed）；secret 解析次序 `POS_DEVICE_TOKEN_SECRET` → `ADMIN_SESSION_SECRET` → `SUPABASE_SERVICE_ROLE_KEY`；冇 secret 就簽唔到／驗唔到，一樣係 401。

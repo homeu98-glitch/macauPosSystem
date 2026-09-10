@@ -52,7 +52,7 @@ import {
 } from "@/lib/print-bridge/companion";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
-import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -311,10 +311,13 @@ export function DeviceSettings() {
       // 推去 server bootstrap（pos_bootstrap_config）：確保每次啟動 fetch 到最新枱樓層，唔會永遠舊版；
       // kiosk / 掃碼落單讀 server bootstrap 亦見到正確樓層。離線就本地先存，下次有網再 push。
       try {
+        // 2026-09-10 P3-5：上傳餐牌 / 桌台需要 POS 終端憑證。
+        // ⚠️ 用 Fresh 版先續期：token TTL 12h，過夜之後舊 token 會被 server 判 401
+        // （POST /api/pos/bootstrap 係「未經授權：需要 POS 終端憑證。」）。
+        const authHeaders = await posDeviceAuthHeadersFresh();
         await fetch("/api/pos/bootstrap", {
           method: "POST",
-          // 2026-09-10 P3-5：上傳餐牌需要 POS 終端憑證
-          headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({
             storeId: mergedBootstrap.storeId,
             storeName: mergedBootstrap.storeName,
@@ -401,9 +404,10 @@ export function DeviceSettings() {
     setMenuSaving(true);
     setStatus("正在保存菜單到後台…");
     try {
+      const authHeaders = await posDeviceAuthHeadersFresh();
       await fetch("/api/pos/bootstrap", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           storeId: draft.storeId,
           storeName: draft.storeName,

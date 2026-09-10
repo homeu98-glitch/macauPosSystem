@@ -28,6 +28,25 @@ export function posDeviceAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * 「先續期、後取 header」一次搞掂 —— 需要授權嘅 POS 端點**一律用呢個**。
+ *
+ * ⚠️ 點解要有呢個 helper（2026-09-10 補）：
+ * `posDeviceAuthHeaders()` 只係讀 `authSession.posDeviceToken`，**唔會續期**。
+ * Token TTL 12 小時，收銀機／設定頁開住過夜就一定過期，於是
+ * 「掣撳得落、但 server 回 401 未經授權」——最易被誤判成「帳號權限問題」嘅一種 bug。
+ * `/api/pos/bootstrap` POST（上傳菜單 / 桌台）、`/api/pos/kiosk-settings` POST
+ * （掃碼模式 / 自動接單）都係咁樣中過。
+ *
+ * 用法：`fetch(url, { headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) } })`
+ * 續期失敗（冇 authSession / 離線）唔會 throw，只會回空 object ——
+ * 之後嘅 401 由 caller 自己按業務需要提示。
+ */
+export async function posDeviceAuthHeadersFresh(): Promise<Record<string, string>> {
+  await refreshPosDeviceTokenIfNeeded();
+  return posDeviceAuthHeaders();
+}
+
 /** 讀 token payload 嘅 `exp`（epoch ms）。解唔到回 `null`。 */
 function readTokenExp(token: string): number | null {
   const dot = token.indexOf(".");

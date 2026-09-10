@@ -40,6 +40,10 @@ import {
   saveKioskDeviceBinding,
   submitKioskOrder,
 } from "@/lib/kiosk-order";
+import {
+  clearQuickScanLastOrder,
+  saveQuickScanLastOrder,
+} from "@/lib/pos/quick-scan-remembered-order";
 import { MenuItem, OrderItem, PosBootstrap, PosOrder } from "@/lib/types";
 
 // 購物車行型別而家喺 `@/lib/kiosk-cart`（純函式，可單元測試）；呢度 re-export 保持介面穩定。
@@ -640,6 +644,10 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       }
 
       if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-last-order", settledOrder.id);
+      // 快餐掃碼（手機端）：記住今次嗰張單，令 reload / 誤關分頁之後仍然睇得返取餐號。
+      // （手機端成功頁刻意唔用倒數，取餐號就係客人去櫃檯唯一嘅憑據；快餐又唔 resume，
+      //  所以唔可以單靠 state —— 見 kiosk-order.ts 該段長註解。）
+      if (isScanLink && mode === "quick") saveQuickScanLastOrder(settledOrder);
       setOrderSyncPending(queuedForSync);
       setSubmittedOrder(settledOrder);
       setCart([]);
@@ -712,6 +720,9 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     setOrderSyncPending(false);
     setStarted(false);
     setOrdering(false);
+    // 快餐掃碼嘅「記住嗰張單」都要清：唔清就會喺下一次 reload 又跳返成功頁
+    //（客人撳「再點一單」= 明確表示唔再需要睇舊號）。
+    clearQuickScanLastOrder();
     if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
   }
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { fetchKioskSettings, saveKioskSettings } from "@/lib/pos/kiosk-settings";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { loadAuthSession } from "@/lib/storage";
 
 /**
@@ -55,7 +56,12 @@ export function useSelfOrderAutoAccept() {
       setEnabled(next); // 樂觀更新：掣即刻有反應，失敗先 rollback
       setSaving(true);
       setError(null);
-      saveKioskSettings(storeId, { selfOrderAutoAccept: next })
+      // ⚠️ POST 要 POS 終端憑證（P3-5）。先續期再取 header，否則過夜之後
+      // 一撳就 401「未經授權：需要 POS 終端憑證。」（GET 開放，所以讀得到、存唔到）。
+      void (async () => {
+        const headers = await posDeviceAuthHeadersFresh();
+        return saveKioskSettings(storeId, { selfOrderAutoAccept: next }, headers);
+      })()
         .catch((e: unknown) => {
           setEnabled(previous);
           setError(e instanceof Error ? e.message : "儲存失敗");

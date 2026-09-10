@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { kioskT } from "@/lib/use-kiosk-order";
 import { useScanOrder } from "@/lib/use-scan-order";
 import { customerOrderStatusLabel } from "@/lib/pos/order-status-label";
-import { MenuItem } from "@/lib/types";
+import { loadQuickScanLastOrder } from "@/lib/pos/quick-scan-remembered-order";
+import { MenuItem, PosOrder } from "@/lib/types";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
 
@@ -81,6 +82,23 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   // 手機專屬 UI state
   const [cartOpen, setCartOpen] = useState(false);
   const cartSheetRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 快餐專屬：reload / 誤關分頁之後由 sessionStorage 讀返「我今次嗰張快餐單」。
+   *
+   * 為何要咁做（用戶 2026-09-10 確認「手機端要留住取餐號」）：
+   *   快餐成功頁刻意唔用 5 秒倒數（號碼係客人去櫃檯唯一憑據），但快餐又刻意
+   *   **唔 resume**（每單獨立），所以 `submittedOrder` 呢個 React state 一 reload 就冇
+   *   → 取餐號一樣會唔見。用 session 記憶補住：只有**今次 session 落過**嘅快餐單先會讀到，
+   *   而且有 6 小時有效期（見 `kiosk-order.ts`）。
+   *   客人撳「再點一單」時 core 會清走記憶 → 唔會再跳返成功頁。
+   */
+  const [rememberedQuickOrder, setRememberedQuickOrder] = useState<PosOrder | null>(null);
+  useEffect(() => {
+    if (!quick || submittedOrder) return;
+    setRememberedQuickOrder(loadQuickScanLastOrder());
+  }, [quick, submittedOrder]);
+  /** 快餐成功頁用嘅單：即時落單 > 今次 session 記住嗰張。 */
+  const quickPickupOrder = quick ? submittedOrder ?? rememberedQuickOrder : null;
 
   const totalCount = cart.reduce((s, l) => s + l.quantity, 0);
   const cartCountByItem = (id: string) => cart.filter((l) => l.menuItemId === id).reduce((s, l) => s + l.quantity, 0);
@@ -162,7 +180,11 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   // 會直接跌返餐牌頁 —— 客人以為冇落到單、又或者再落一次（變兩張單）。
   // 快餐成功頁必須：① 明確講「已收到」；② 顯示**取餐號**（= 落單號碼）；
   // ③ 提示去櫃檯付款；④ 有出口可以再點一單。同 kiosk 快餐一致。
-  if (quick && submittedOrder) {
+  //
+  // ⚠️ **手機端唔用倒數**（用戶 2026-09-10 確認）：取餐號要**留住**，等客人去到櫃檯
+  // show。kiosk（店內共用平板，落單已印小票）先有 5 秒倒數。
+  // 所以呢頁冇任何 timer；`quickPickupOrder` 連 reload 都仲讀得返（session memory）。
+  if (quick && quickPickupOrder) {
     return (
       <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
         <div className="flex-1 overflow-y-auto">
@@ -182,16 +204,16 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
             <div className="w-full rounded-3xl bg-white p-6 shadow-sm">
               <div className="mb-1 text-xs text-stone-400">{t("pickupNo")}</div>
               <div className="text-3xl font-extrabold tracking-tight text-stone-900">
-                {submittedOrder.localOrderNo}
+                {quickPickupOrder.localOrderNo}
               </div>
               <div className="mt-3 inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
-                {customerOrderStatusLabel(submittedOrder)}
+                {customerOrderStatusLabel(quickPickupOrder)}
               </div>
             </div>
 
-            {/* 已落單內容（DB 回讀版本為準）*/}
+            {/* 已落單內容（剛落單 = DB 回讀版本；reload 後 = 今次 session 記憶版本）*/}
             <div className="mt-5 w-full text-left">
-              <OrderSummaryCard order={submittedOrder} title={t("cart")} hideOrderNo />
+              <OrderSummaryCard order={quickPickupOrder} title={t("cart")} hideOrderNo />
             </div>
 
             <button

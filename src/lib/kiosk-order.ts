@@ -226,6 +226,12 @@ export type BuildKioskOrderInput = {
 export { computeOrderTotals };
 export type { KioskOrderTotals } from "@/lib/kiosk-cart";
 
+// ─────────────────────────────────────────────────────────────
+// 快餐掃碼：手機端「留住取餐號」
+// ─────────────────────────────────────────────────────────────
+// 實作喺 `@/lib/pos/quick-scan-remembered-order`（零 runtime 依賴 → 可以 `node --test`）。
+// 呢度唔 re-export，避免又多一條 import 路徑：call site 直接由該模組 import。
+
 /** 建構 Kiosk 落單嘅 `PosOrder`（唔落本地 localStorage，推去 Supabase）。 */
 export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
   const timestamp = new Date().toISOString();

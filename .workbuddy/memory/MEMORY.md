@@ -9,7 +9,8 @@
 - **`normalizePosLocalSettings` 係白名單重建** → 加欄唔加白名單 = 靜靜剷走（中過：`qrUrl`/`qrSize`/`paperSize`/`shiftPresets`）。
 - **掃碼雙模式（docs/115）**：`/menu?tableId=`（堂食，每枱一碼）同 `/quick?store=`（快餐，全店一碼）**兩條 link 完全區隔**；`/menu` 冇 tableId **唔可以**當快餐落單。模式真源 `pos_kiosk_settings.scan_mode`（店級互斥），正規化一律 `normalizeScanMode()` → 未知值 = `dine_in`。
 - **快餐掃碼一定要攞店內 `pickup` 序號**（寫台名「自取」做單號 = 全店同號，廚房/收銀分唔清），而且**唔 resume**（每單獨立）；離線用 `quickScanOfflineOrderNo()`（`自取-K7Q2`），**唔可以**用 `nextLocalDailyOrderNo()`（客人手機同收銀機必撞）。
-- **`saveKioskSettings(storeId, patch)`**（唔再係 boolean）；`/api/pos/kiosk-settings` POST 係 **read-then-merge**（只覆寫有帶嘅欄位，否則會洗走另一個），並對 42703 降級。
+- **`saveKioskSettings(storeId, patch, headers?)`**（唔再係 boolean；**headers 要 caller 傳 `await posDeviceAuthHeadersFresh()`**）；`/api/pos/kiosk-settings` POST 係 **read-then-merge**（只覆寫有帶嘅欄位，否則會洗走另一個），並對 42703 降級。
+- **「未經授權：需要 POS 終端憑證。」多數係 client 冇帶／冇續期 token，唔係權限問題**：`posDeviceAuthHeaders()` **只讀唔續期**（TTL 12h，過夜必爆），一律用 **`posDeviceAuthHeadersFresh()`**；而呢類 route **GET 通常開放** → 「讀得到、存唔到」。出處：`/api/pos/bootstrap` POST、`/api/pos/kiosk-settings` POST、`/api/pos/sync`。（docs/113）
 - **`EscPosTemplateSnapshot.cols` 係跨 repo 唯一真源** → 唔好再各自判 `paperSize`。
 - **`ORDER_UPDATED` 必須送 `{ order, addedItems }`**（唔係裸 order），否則 server 拒單、收銀端零反應。
 - **`/api/pos/sync` 失敗分類**：業務拒絕 → 4xx + `retryable:false`；基建失敗 → 500 + `retryable:true`。**唔可以**任何 `ack(false)` 都回 500（會變**假成功**）。
@@ -20,7 +21,7 @@
 - **admin 面板唔可以行 `/api/pos/state`**（要 POS 終端憑證 → 選商家即 401）；單店都要傳 `adminOrderFetcher({ storeId })` 走 `/api/admin/orders`。
 - **分格線唔可以靠「繼承上一行」**：印線前必須清 `GS !`/`ESC !`/`FS !` 放大殘留，dash 數量 = `dividerDashCount(size, cols)`（`m`/`l` 減半）→ 永遠一行；`divider` 預設 `s`。（docs/114）
 - **「廚房單正常、收據唔正常」多數唔係兩個 renderer 唔同** → 睇「線前面嗰行係乜 size」。
-- **持續型提示唔可以照抄 `setToast`**（2.6s 自動清）；要 store-scope localStorage + 只喺 realtime `onOrderUpsert` 由 `isNewSelfOrder && source==="scan"` 觸發（backfill 會令已滑走嘅提示復活）。位置要 `top-20`（`top-4` 撞桌台總覽工具列）、容器 `pointer-events-none`。（docs/113）
+- **持續型提示唔可以照抄 `setToast`**（2.6s 自動清）；要 store-scope localStorage + 只喺 realtime `onOrderUpsert` 由 `isNewSelfOrder` 觸發（**唔好再寫死 `source==="scan"`**，kiosk 都要彈；backfill 會令已滑走嘅提示復活）。位置要 `top-20`（`top-4` 撞桌台總覽工具列）、容器 `pointer-events-none`；卡片標識「有真枱 → 台名；冇枱（counter）→ 單號」。（docs/113）
 
 ## 硬性口徑（唔可以改）
 - 收入認列 `isSaleCountable(o)`：只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`。

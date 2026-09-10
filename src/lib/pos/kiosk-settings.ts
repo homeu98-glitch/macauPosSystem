@@ -120,16 +120,36 @@ export async function fetchKioskSettings(storeId: string): Promise<KioskSettings
  * 只傳想改嘅欄位；server 會 read-then-merge 之後再 upsert，
  * 所以改一個欄位**唔會**洗走另一個（舊版無腦寫死兩個值，加欄位就會出事）。
  *
+ * ## ⚠️ 一定要帶 POS 終端憑證（2026-09-10 修）
+ *
+ * `/api/pos/kiosk-settings` POST 由 P3-5 起要鑑權（`storeId` 必須同憑證一致），
+ * 但呢個 function 舊版**完全冇帶 `Authorization`** → 任何正式店鋪一撳就 401
+ * 「未經授權：需要 POS 終端憑證。」（GET 係開放嘅，所以「讀得到但存唔到」呢個
+ * 組合最令人誤判成權限問題）。
+ *
+ * 所以 `headers` 係 **caller 嘅責任**，而且要用 `posDeviceAuthHeadersFresh()`
+ * 先續期再取 header（token TTL 12h，過夜必爆）：
+ *
+ * ```ts
+ * await saveKioskSettings(storeId, { scanMode: next }, await posDeviceAuthHeadersFresh());
+ * ```
+ *
+ * 點解唔喺呢個 module 直接 import `pos-sync-auth`：`kiosk-settings.ts` 係
+ * client / server **共用**（`/api/pos/kiosk-settings/route.ts` 會 import 佢嘅
+ * `normalizeScanMode`），而 `pos-sync-auth` 依賴 `window` / `localStorage`。
+ * 拉埋入 server bundle 係無必要嘅風險。
+ *
  * 失敗會 throw，等 UI 可以提示用家（同 `/api/pos/device-config` 嗰邊唔同 ——
  * 呢個係開關，靜默失敗會令用家以為改咗其實冇改）。
  */
 export async function saveKioskSettings(
   storeId: string,
   patch: KioskSettingsPatch,
+  headers: Record<string, string> = {},
 ): Promise<KioskSettings> {
   const res = await fetch("/api/pos/kiosk-settings", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({ storeId, ...patch }),
   });
   const payload = (await res.json().catch(() => null)) as KioskSettingsPayload | null;
