@@ -5,9 +5,12 @@ import { KeyboardEvent, useState } from "react";
 
 import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
+import { saveKioskSettings } from "@/lib/pos/kiosk-settings";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
+import { scanModeForLoginMode, type LoginMode } from "@/lib/pos/scan-mode-from-login";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
-import { saveKioskDeviceBinding } from "@/lib/kiosk-order";
+import { saveKioskDeviceBinding, saveKioskMode } from "@/lib/kiosk-order";
 import { setTerminalIndustry } from "@/lib/salon/industry-config";
 import { saveActiveSalonStore } from "@/lib/salon/storage";
 
@@ -19,7 +22,7 @@ export function LoginScreen() {
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mode") === "kiosk"
       ? "kiosk"
       : "dinein";
-  const [mode, setMode] = useState<"quick" | "dinein" | "salon" | "kiosk">(initialMode);
+  const [mode, setMode] = useState<LoginMode>(initialMode);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // 原生殼（Android APK / PC Electron）入面唔使顯示 PWA 安裝入口
@@ -62,6 +65,8 @@ export function LoginScreen() {
           };
           ledgerAccessToken?: string;
           ledgerRefreshToken?: string;
+          /** POS 終端憑證（12h HMAC）—— 由 `/api/ledger/login` 簽發，見 docs/113。 */
+          posDeviceToken?: string;
         };
         accessToken?: string;
         refreshToken?: string;
@@ -104,6 +109,14 @@ export function LoginScreen() {
             "[login] kiosk 模式但 session 冇 merchantId —— 唔寫綁定。呢部機嘅 sync 會 400 住，重新登入拎到 merchantId 先正常。",
           );
         }
+        // 「狀態同模式保持一致」（2026-09-10 補）：揀咗「自助點餐機」就順手開埋
+        // 本機 kiosk 旗標，否則登入完跳一次 `/order`，**下次重開呢部機又變返收銀台**
+        // ——商家會覺得「明明揀咗自助點餐機，點解冇生效」。
+        //
+        // ⚠️ 刻意**唔**反向做（其他模式唔 `saveKioskMode(false)`）：kiosk 旗標係
+        // 裝置設定，要停用有明確入口（`/order` 右上角「設定」→「退出自助點餐模式」）。
+        // 如果每次登入都覆寫，喺同一部平板補做收銀就會靜靜熄咗 kiosk。
+        saveKioskMode(true);
       }
 
       const previousAuth = loadAuthSession();
@@ -127,6 +140,34 @@ export function LoginScreen() {
           access_token: session.ledgerAccessToken,
           refresh_token: session.ledgerRefreshToken,
         });
+      }
+
+      // ── 掃碼點餐模式：由登入模式決定（docs/115 §12）──
+      // 快餐登入 → 店級 quick（全店一碼）；堂食登入 → dine_in（每枱一碼）。
+      // 設定頁唔再提供模式選擇器，所以呢一步係**唯一**嘅寫入點。
+      //
+      // ⚠️ 必須喺 `saveAuthSession()` **之後**做：POST `/api/pos/kiosk-settings`
+      // 要帶 POS 終端憑證，而憑證就喺 `authSession.posDeviceToken`（登入 API 已簽發）。
+      //
+      // ⚠️ `scanMode` 係 `null` 時（kiosk / salon 登入）**一定要跳過**：
+      // 自助點餐機同收銀機可以同時存在，kiosk 寫 `quick` 會同收銀台嘅堂食登入
+      // 互相覆蓋 → 設定頁每次登入顯示嘅碼都唔同。詳見 `scan-mode-from-login.ts`。
+      //
+      // 離線 / 失敗都**唔可以阻住登入**：呢個只係「順手對齊設定」，
+      // 失敗就保留 DB 舊值（設定頁仍然會顯示舊值，唔會出現假狀態）。
+      // 用 `Promise.race` 加 2.5 秒上限，避免離線時卡住登入畫面。
+      const loginScanMode = scanModeForLoginMode(mode);
+      if (loginScanMode && session.merchantId) {
+        await Promise.race([
+          saveKioskSettings(
+            session.merchantId,
+            { scanMode: loginScanMode },
+            posDeviceAuthHeaders(),
+          ).catch(() => undefined),
+          new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), 2500);
+          }),
+        ]);
       }
 
       // 自助點餐機只做快餐（規格 5），同「快餐」模式一樣用 quick
@@ -180,6 +221,21 @@ export function LoginScreen() {
     event.preventDefault();
     void submit();
   }
+
+  /**
+   * 四個登入模式各自會套用到嘅「掃碼點餐」口徑（docs/115 §12）。
+   *
+   * 呢段文案就係需求講嘅「依所選模式呈現對應設定」——所以每個模式都要講出
+   * **客人會攞到咩碼**，唔可以只講收銀台行為（商家關注嘅係貼紙印幾張）。
+   * `kiosk` / `salon` 要明確寫「不適用 / 唔會改動」，否則商家會以為登入完
+   * 全店嘅掃碼設定會冇咗。
+   */
+  const scanOrderHint: Record<LoginMode, string> = {
+    quick: "全店只有一個碼（印出貼喺櫃檯／快餐區），客人掃碼自助落單，每張單獨立、冇枱號。",
+    dinein: "每張桌台各自一個碼，客人掃碼落單會綁定枱號；同一枱再加單會加入同一張單。",
+    kiosk: "不適用 —— 客人喺呢部機直接落單，唔使用掃碼貼紙；亦唔會改動店鋪現有嘅掃碼設定。",
+    salon: "不適用 —— 美容係預約制，唔涉及掃碼點餐。",
+  };
 
   return (
     <div className="relative min-h-screen overflow-hidden login-animated-bg">
@@ -236,15 +292,16 @@ export function LoginScreen() {
                   onClick={() => setMode("kiosk")}
                   type="button"
                 >
-                  掃碼點餐
+                  自助點餐機
                 </button>
               </div>
-              <div className="text-xs text-white/40">
-                {mode === "kiosk"
-                  ? "掃碼點餐：將呢台機綁定所屬店鋪，之後開 /order 即客人點餐介面。"
-                  : mode === "salon"
-                    ? "美容：預約制，服務執行與結帳。"
-                    : "快餐：無桌台，直接結帳；堂食：使用樓層與桌台。"}
+              {/*
+                掃碼點餐模式唔再喺設定頁揀（docs/115 §12）—— 佢跟登入模式走。
+                所以呢度要**講清楚會套用咩**，否則商家登入完去設定頁見到 QR 變咗會一頭霧水。
+              */}
+              <div className="mt-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs leading-relaxed text-white/55">
+                <span className="font-semibold text-orange-200/90">掃碼點餐：</span>
+                {scanOrderHint[mode]}
               </div>
             </div>
 

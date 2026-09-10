@@ -140,7 +140,21 @@
 - 📌 **QR 列印**：`src/lib/pos/qr-print.ts` = `buildQrSvgMarkup()`（由 `encodeQrMatrix()` 直接砌 SVG 字串，唔靠 canvas）+ `openQrPrintWindow()`（開獨立列印視窗、載入後自動 `print()`、印完自動關窗）。**唔可以**直接用 `window.print()` 印設定頁（會連整個表單印出嚟、QR 太細）。`window.open` 被攔 → 回 `false`，要提示用家允許彈窗或改用複製網址。
 - 📌 **驗收**：`/quick` 落單 → DB `source=scan` / `table_id=counter` / `table_name=自取` / `local_order_no=自取NN`；POS 右上角彈「自取NN 已下單」→ 撳 → 跳 `/orders?orderId=` 自動開「查看」；堂食回歸：`/menu` 行為完全不變、撳提示仍然跳桌台。
 
+## 掃碼模式由「登入模式」驅動（2026-09-10 改 · 詳見 docs/115 §12）
+- 🔴 **設定頁唔可以再加「掃碼模式」選擇器**：登入模式係**唯一入口**，設定頁（`scan-mode-panel.tsx`）**唯讀**。有兩個真源就會「登入揀快餐、設定揀堂食」→ 出嚟嘅碼同商家預期唔同，而且兩邊互相覆蓋。
+- 🔴 **`scanModeForLoginMode()` 嘅 `null` 一定要當「唔關事」，唔可以當預設值**：`quick` → `quick`、`dinein` → `dine_in`、**`kiosk` / `salon` → `null`（唔寫）**。
+  - 為什麼 kiosk 一定要 `null`：自助機係**一部機**（呢部機開機做乜），唔係全店客人點樣落單。堂食店可以同時有「收銀台（堂食登入）」＋「自助機（kiosk 登入）」；kiosk 若寫 `quick`，就會同收銀台嘅 `dine_in` **互相覆蓋 → 設定頁每次登入顯示嘅碼都唔同**。
+  - 若把 `null` 當 `dine_in` 處理，kiosk / salon 登入會靜靜把全店掃碼模式洗返堂食。
+- 🔴 **寫入必須喺 `saveAuthSession()` 之後、導航之前，而且要 `await`**：
+  - 憑證喺 `authSession.posDeviceToken`（`/api/ledger/login` 已簽發，唔使再續期）→ 順序錯就 401。
+  - 帳號 / 店鋪切換行 `window.location.replace()` → **fire-and-forget 會被整頁 reload 殺死**，設定寫唔入。
+  - 用 `Promise.race([..., 2.5s])` + `.catch(() => undefined)`：**離線 / 失敗唔可以阻住登入**，保留 DB 舊值（設定頁照樣顯示舊值，唔會出現「假已套用」）。
+  - 只傳 `scanMode`（POST 係 read-then-merge，唔會洗走「自動接自助單」）。
+- ⚠️ **顯示仍然讀店級真源**（`pos_kiosk_settings.scan_mode`），唔係讀登入模式：一間店可以有多部機，QR 貼紙係全店共用嘅實物，唔應該跟住某部機嘅登入狀態走。
+- ⚠️ **登入畫面第 4 粒掣改名「掃碼點餐」→「自助點餐機」**：嗰粒掣其實係 `kiosk`（店內自助平板），舊名同「掃碼點餐模式」**撞名**，商家會以為佢就係揀掃碼模式。
+- ⚠️ **揀「自助點餐機」登入要 `saveKioskMode(true)`**：否則只跳一次 `/order`，**下次重開呢部機又變返收銀台**（商家：「明明揀咗，點解冇生效」）。⚠️ **刻意唔反向做**（其他模式唔 `saveKioskMode(false)`）—— kiosk 旗標係裝置設定，停用有明確入口（`/order` 右上角「設定」→「退出自助點餐模式」），每次登入覆寫會令「喺同一部平板補做收銀」靜靜熄咗 kiosk。
 ## 「未經授權：需要 POS 終端憑證。」（401）排查（2026-09-10 補）
+
 - 📌 **出處**：3 條 route 嘅 **401**，文案一致 —— `/api/pos/bootstrap` **POST**、`/api/pos/kiosk-settings` **POST**、`/api/pos/sync`（事件被拒時 `reason:"unauthorized"` + 頂層 401）。`/api/pos/state` 文案唔同（「…請重新登入 POS 帳號。」）。
 - 📌 **鑑權句式（三處一致）**：`authorized = !isPosDeviceAuthRequired() || Boolean(adminClaims) || Boolean(deviceClaims && deviceClaims.storeId === storeId)`。
   - `posDeviceToken`：HMAC stateless，**TTL 12 小時**，payload 有 `storeId`，由 `/api/ledger/login` 簽發、存 `authSession.posDeviceToken`，client 續期行 `/api/pos/device-token`（提前量 10 分鐘）。

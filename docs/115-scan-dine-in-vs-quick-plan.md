@@ -188,7 +188,10 @@ orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
 | `src/app/quick/page.tsx` | 新增 | thin wrapper：`<ScanOrderPage link="quick" />` |
 | `src/lib/pos/qr-print.ts` | 新增 | `buildQrSvgMarkup()` + `openQrPrintWindow()`（獨立列印視窗，A4 正中大 QR，印完自動關窗） |
 | `src/components/kiosk-qr-panel.tsx` | 改 | `QrSvg` 改為 export（共用）；每枱加「列印」掣；加操作提示 |
-| `src/components/scan-mode-panel.tsx` | 新增 | 模式選擇器（堂食 / 快餐，二選一）+ `QuickScanQrPanel`（單一碼 + 複製/列印） |
+| `src/components/scan-mode-panel.tsx` | 新增 | `QuickScanQrPanel`（單一碼 + 複製/列印）；`ScanModePanel` **唯讀**（見 §12，2026-09-10 移除模式選擇器） |
+| `src/lib/pos/scan-mode-from-login.ts` | 新增 | `LoginMode`、`scanModeForLoginMode()`（登入模式 → 店級掃碼模式；`kiosk`/`salon` 回 `null`） |
+| `src/lib/pos/scan-mode-from-login.test.ts` | 新增 | 映射規則 4 個測試（含「唔可以漏 branch 回 `dine_in`」） |
+| `src/components/login-screen.tsx` | 改 | 登入成功後寫店級 `scan_mode`（唯一寫入點，見 §12.3）；模式文案改為講「客人攞到咩碼」；第 4 粒掣改名「自助點餐機」+ `saveKioskMode(true)` |
 | `src/components/device-settings.tsx` | 改 | 「掃碼點餐」tab 由 `<KioskQrPanel />` 改為 `<ScanModePanel />` |
 | `src/components/self-order-auto-accept-toggle.tsx` | 改 | 配合 `saveKioskSettings` 新簽名 |
 | `src/lib/pos/self-order-notice.ts` | 改 | 顯示標識：有枱 → 台名；冇枱 → **單號** |
@@ -203,7 +206,8 @@ orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
 > **偏差 D2**：原計劃打算新增 `use-quick-scan-order.ts` + `quick-scan-qr-panel.tsx` 兩個檔。
 > 實作改為 **唔新增**：兩條 link 嘅落單差異全部收喺 core 嘅 `mode` 分支（`placeOrder` /
 > resume effect），對外介面（`useScanOrder()`）完全一樣，所以唔需要第二個 hook；
-> QR 面板只有一個碼，直接同模式選擇器放埋一個檔（`scan-mode-panel.tsx`）更易睇。
+> QR 面板同模式顯示放埋一個檔（`scan-mode-panel.tsx`）更易睇。
+> （2026-09-10 再改：模式選擇器已移除，該檔變唯讀 —— 見 §12.2。）
 > 符合計劃本身嘅原則：「只分家入口 / 對外介面 / 設定 / QR 面板，core 保持單一」。
 
 ---
@@ -275,6 +279,29 @@ orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
 > 若 D1 要用返倒數，改動點只有一個：`scan-order-page.tsx` 快餐成功頁分支
 > （加返 `useEffect` + `setInterval` 倒數，參考 `app/order/page.tsx` 嘅 `returnIn`）。
 
+### 11.4 D1 定案後補：快餐取餐號要「記住」（`lib/pos/quick-scan-remembered-order.ts`）
+
+用戶定案：「應該要留，如果是手機端的話。」→ 快餐成功頁保留取餐號、**唔加倒數**。
+
+但快餐刻意**唔 resume**（每單獨立，見 §5），所以取餐號只存在 React state →
+客人誤關分頁 / 手機自動 reload 之後**號碼就消失**，而佢正要去櫃檯 show 個號。
+所以加一層 `sessionStorage` 記憶：
+
+- `saveQuickScanLastOrder(order)`：落單成功後寫（`kiosk-order.ts` 內 `settledOrder` 之後）。
+- `loadQuickScanLastOrder(nowMs)`：快餐頁 mount 讀；**過期即 `removeItem`**，唔會殘留。
+- `clearQuickScanLastOrder()`：`returnToHome()`（「再點一單」）時清。
+
+**有效性規則**（`quickScanRememberedOrderIsFresh()`，有測試覆蓋）：
+必須同時滿足 ①有 `id` ②`tableId === "counter"` ③`createdAt` 可解析 ④未超過
+`QUICK_SCAN_LAST_ORDER_MAX_AGE_MS`（6 小時）。
+
+- 驗 ②「counter」：唔驗就會喺快餐 link 上顯示一張**枱單**嘅號；
+- 驗 ④ 時間：唔驗就會隔夜 reload 仲見到舊號（客人以為係今張單）。
+
+⚠️ 用 `sessionStorage` 唔用 `localStorage`：號碼係「呢次開機嘅事」，唔應該跨日殘留。
+⚠️ 呢個檔案只 `import type { PosOrder }`（零 runtime 依賴）→ 可以 `node --test` 直接跑
+（`@/` alias 喺測試會 `ERR_MODULE_NOT_FOUND`，見 docs/113）。
+
 ### 11.2 順帶修好嘅既有問題（非本次需求，但同源）
 
 - `saveKioskSettings(storeId, boolean)` 簽名變更 → **舊 POST 會無腦寫死另一個欄位**
@@ -309,7 +336,7 @@ orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
 
 ---
 
-## 12. 二維碼顯示條件：登入模式 vs 店級掃碼模式（2026-09-10，設計說明）
+## 12. 掃碼點餐模式：由**登入模式**驅動（2026-09-10，已實作）
 
 ### 12.1 三個獨立嘅「模式」，唔可以混為一談
 
@@ -328,32 +355,79 @@ orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
 - `dinein` 同 **`salon` 都 map 成 `dinein`** → 亦分唔出；
 - `operatingMode` **會被程式自動改**（見上表）→ **唔可以**當「登入模式」嘅代理去決定顯示。
 
-### 12.2 建議口徑：登入模式做「入口」，店級 `scan_mode` 做「真源」
+### 12.2 決定（用戶 2026-09-10 拍板）：唔喺設定頁揀，跟登入模式走
 
-**唔建議**直接用登入模式決定顯示 QR，因為：
-1. 登入模式冇保存，要新加 storage；而且同一部機換人／換班就會變。
-2. 一間店可以同時有幾部機（收銀機 2 部 + 老闆手機）。各自登入模式唔一致 →
-   A 機印快餐碼、B 機印枱碼，貼紙互相矛盾。
-3. 客人掃到咩碼係**店級既定事實**（貼紙印咗就係印咗），唔應該跟住某部機嘅登入狀態走。
+用戶原話：「掃碼點餐模式應該在登入時根據所選模式自動出現，不需要讓商家在目前這個頁面內
+再次選擇……移除頁面內的掃碼點餐模式選擇項，改為在登入流程中依所選模式呈現對應設定，
+並確保登入後的狀態與模式保持一致。」
 
-**建議規則（顯示 = 讀店級真源，登入模式只做預設入口）**：
+理由（同一個問題唔應該問兩次）：商家嘅心智模型係「我開嘅係快餐店定堂食店」，佢喺**登入
+嗰刻已經揀咗**。之前要佢登入完再入設定頁揀多次 → 兩邊可以唔一致（登入揀快餐、設定揀堂食）
+→ 出嚟嘅 QR 同佢預期唔同。所以：
 
-| 登入模式 | 收銀台角色 | 設定頁顯示 | 客人落單 link |
+- **登入模式 = 唯一入口**（`login-screen.tsx`）。
+- **設定頁 = 唯讀**：只顯示目前生效嘅 QR，冇選擇器。
+
+**映射規則**（`src/lib/pos/scan-mode-from-login.ts` → `scanModeForLoginMode()`）：
+
+| 登入模式 | 店級 `scan_mode` | 設定頁顯示 | 客人落單 link |
 |---|---|---|---|
-| `dinein` | 枱面／堂食 | **桌台碼，逐枱一個**（`KioskQrPanel`） | `/menu?tableId=<枱UUID>&store=<店>` |
-| `quick` | 快餐櫃檯 | **快餐碼，全店一個**（`QuickScanQrPanel`） | `/quick?store=<店>` |
-| `kiosk` | 自助點餐機（唔做收銀） | **唔顯示掃碼貼紙**；改為顯示「本機為自助點餐機」＋綁店資訊 | 客人直接喺呢部機落單，唔經 QR |
-| `salon` | 美容／沙龍 | **唔顯示**（掃碼點餐唔關事） | — |
+| `quick`（快餐） | 寫 `quick` | **快餐碼，全店一個**（`QuickScanQrPanel`） | `/quick?store=<店>` |
+| `dinein`（堂食） | 寫 `dine_in` | **桌台碼，逐枱一個**（`KioskQrPanel`） | `/menu?tableId=<枱UUID>&store=<店>` |
+| `kiosk`（自助點餐機） | 🔴 **不寫**（回 `null`） | 唔關事（該機客人直接落單） | — |
+| `salon`（美容） | 🔴 **不寫**（回 `null`） | 唔關事 | — |
 
-落地步驟（若要實作）：
-1. 新增 `lastLoginMode`（store-scoped localStorage，例如 `pos-last-login-mode`），
-   喺 `login-screen.tsx` 登入成功時寫入（四種模式都寫，唔經 `operatingMode` 轉手）。
-2. `ScanModePanel` 顯示層：**依然以 `scan_mode` 為準**；當 `lastLoginMode` 同
-   `scan_mode` 唔一致時，出一行提示（例：「本店現時為**快餐**模式；你以**堂食**模式登入」）
-   ＋「一鍵改成我嘅登入模式」掣（打 `saveKioskSettings(..., { scanMode }, await posDeviceAuthHeadersFresh())`）。
-3. 首次設定體驗（可選）：店級設定**從未寫過**時，登入模式做初值寫一次
-   （`quick` → `quick`，`dinein` → `dine_in`），令新店唔使登入完再入設定頁揀多次。
-4. `kiosk` / `salon` 登入 → `ScanModePanel` 唔 render（`kiosk` 另顯示綁店資訊）。
+🔴 **`kiosk` / `salon` 一定要回 `null`，唔可以當 `dine_in` 或 `quick` 處理。**
+自助點餐機係**一部機**（「呢部機開機做乜」），唔係「全店客人點樣落單」——
+一間堂食店完全可以同時有「收銀台（堂食登入）」＋「自助點餐機（kiosk 登入）」。
+如果 kiosk 登入都寫 `quick`：
 
-> 一句總結：**登入模式決定「你係邊種店、預設睇邊個碼」；店級 `scan_mode` 決定「客人實際掃到咩」。
-> 兩者唔一致時要提示，唔可以靜靜跟其中一邊走。**
+```
+kiosk 機綁店 → 寫 quick
+        ↓
+店家喺收銀台用「堂食」登入 → 寫返 dine_in
+        ↓
+兩部機互相覆蓋 → 設定頁每次登入顯示嘅碼都唔同
+```
+
+### 12.3 實作要點
+
+**寫入點只有一個**：`login-screen.tsx` `submit()` 內，`saveAuthSession(session)` **之後**、
+所有導航**之前**。
+
+1. ⚠️ **必須喺 `saveAuthSession()` 之後**：POST `/api/pos/kiosk-settings` 要 POS 終端憑證，
+   憑證就喺 `authSession.posDeviceToken`（`/api/ledger/login` 已經簽發，所以唔使再續期，
+   直接 `posDeviceAuthHeaders()` 就夠）。
+2. ⚠️ **必須喺導航之前 `await`**：成功切換帳號 / 店鋪嘅路徑行 `window.location.replace()`
+   —— fire-and-forget 嘅 fetch 會**被整頁 reload 殺死**，設定就寫唔入。
+3. ⚠️ **失敗唔可以阻住登入**：用 `Promise.race([..., 2.5 秒 timeout])`，`.catch(() => undefined)`。
+   失敗就保留 DB 舊值（設定頁照樣顯示舊值，唔會出現「假已套用」狀態）。
+4. ⚠️ **只傳 `scanMode`**：`/api/pos/kiosk-settings` POST 係 read-then-merge，
+   唔會洗走「自動接自助單」。
+
+**顯示仍然讀店級真源**（唔係讀登入模式）：`ScanModePanel` → `fetchKioskSettings(storeId)`
+→ `scan_mode`。原因：一間店可以有多部機，QR 貼紙係全店共用嘅實物，唔應該跟住某部機嘅
+登入狀態走。離線 / 讀取失敗 fallback `dine_in`。
+
+**登入畫面文案**（需求「依所選模式呈現對應設定」）：模式選擇器下面加一段即時文案，
+講出每個模式**會套用咩掃碼設定**（重點講「客人會攞到咩碼」，唔係只講收銀台行為）：
+
+| 模式 | 登入畫面文案 |
+|---|---|
+| 快餐 | 全店只有一個碼（印出貼喺櫃檯／快餐區），客人掃碼自助落單，每張單獨立、冇枱號。 |
+| 堂食 | 每張桌台各自一個碼，客人掃碼落單會綁定枱號；同一枱再加單會加入同一張單。 |
+| 自助點餐機 | 不適用 —— 客人喺呢部機直接落單，唔使用掃碼貼紙；亦唔會改動店鋪現有嘅掃碼設定。 |
+| 美容 | 不適用 —— 美容係預約制，唔涉及掃碼點餐。 |
+
+**順帶修正：第 4 粒掣改名「掃碼點餐」→「自助點餐機」。**
+舊名同今次嘅「掃碼點餐模式」**撞名**（嗰粒掣其實係 `kiosk` = 店內自助平板，
+唔係「客人用手機掃 QR」），會令商家以為呢粒掣就係揀掃碼模式。
+
+**順帶修正：揀「自助點餐機」登入會 `saveKioskMode(true)`。**
+舊版只跳一次 `/order`，**下次重開呢部機又變返收銀台** → 商家會覺得「明明揀咗自助點餐機，
+點解冇生效」。⚠️ 刻意**唔**反向做（其他模式唔 `saveKioskMode(false)`）：kiosk 旗標係裝置
+設定，停用有明確入口（`/order` 右上角「設定」→「退出自助點餐模式」），每次登入都覆寫
+會令「喺同一部平板補做收銀」靜靜熄咗 kiosk。
+
+> 一句總結：**登入模式決定「你係邊種店、客人攞到咩碼」；店級 `scan_mode` 係寫入結果同
+> 顯示真源。`kiosk` / `salon` 唔參與 —— 佢哋係「呢部機」嘅角色，唔係全店嘅落單方式。**
