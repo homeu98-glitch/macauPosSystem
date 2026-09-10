@@ -44,6 +44,8 @@
 - 口徑：**「靠狀態收斂」唔係「靠事件送達」**。P0 驗證 tsc / eslint / test 10/10 / build 全過，**未真機實測**。
   - 新檔 `sync-acks.ts`（回執帳本 + 健康燈；**刻意唔 import `sync-flush`** 避循環）、`sync-reconcile-daemon.ts`（常駐；60s + flush 後 8s + 訂單變更後 20s；一致→寫 ack、兩邊終態唔同→`blocked` conflict、雲端冇且 >24h→`blocked` missing、其餘自動補推；裝喺 `pos-sync-flush-worker.tsx`）。
   - 改 `sync-flush.ts`（`isRetryableEvent` 取代永久放棄，15min 慢速重試；`ok && !applied` → `skipped`/`server-newer`，唔剷、唔燒 attempts）、`api/pos/sync/route.ts`（`EventAck` 加 `applied`/`reason`；**終態升級豁免** `isTerminalUpgrade` 令結帳無視時間戳可寫，根治 M4）、`pos-app.tsx`（`syncNow` 收斂為單一路徑）、`storage.ts`/`types.ts`（store-scope `sync-acks`/`sync-blocked`；`QueueSkipReason` 加 `"server-newer"`）、`app-sidebar.tsx`（**「在線」徽章 = 網絡 + 同步健康合併**：底色最壞優先 blocked紅 / pending琥珀 / offline琥珀80 / 正常才用網絡色；文案一切正常時仍係「在線／離線」，有嘢未上雲則變「N 張待傳」「同步受阻」；`level==="ok"` 時 `disabled` 兼 `cursor-default`＝純狀態徽章，異常才可按即時重試並顯示「重試中…」）。
+- ⚠️ **已知缺口（未修）：回執帳本冇有效期 → 死鎖**。`runReconcileRound` 首步 `listUnackedTerminalOrders()` 空即 return；`isOrderAcked` 一旦寫過回執，除非本地訂單再有改動就**永遠唔再 verify** → 雲端被回水（舊 snapshot／另一台機）時**燈仍然綠、後台仍然錯**。修法：`isOrderAcked` 加可選 `maxAckAgeMs`，守護用 10 分鐘 TTL、健康燈沿用永久（免燈閃）。
+- ⚠️ **iPad 分頁唔會自動換 JS**：部署後仍跑載入那一刻嘅 build → 診斷「明明修好但仲唔同步」第一步一定係叫用戶**強制 reload**。免 DevTools 入口：POS 設定頁「同步健康」掣（`pos-app.tsx:3910`）開 `SyncHealthModal`，五區清單（同步失敗事件／已結帳但雲端未同步／雲端有但本機缺／孤兒單／已隔離）。
 - 待做 P1：`clientRev` 單調修訂號 + `pos_orders.client_rev`(0031) + `/api/pos/orders/verify`。P2：IndexedDB、`/api/pos/sync-heartbeat`(0032)、後台「設備同步健康」/「同步告警」頁、雲端巡檢 job。
 - 🚫 邊界：自動化**只推商家已做嘅事**，唔會自動把雲端 open 單改成 `settled`；兩邊終態唔一致 → 標 `conflict` 交人。
 
@@ -55,6 +57,14 @@
 - **rate limit 唔可以淨靠 IP**：場內所有機（收銀／自助機／客人／廚房平板）共用同一個 NAT 公網 IP → 一律按 IP 會自我 DoS。已授權按 `storeId`（600/min）、匿名按 IP（300/min）。
 - ⚠️ **客人端售罄架構未接通**：`pos_soldout` 喺生產兩個 Supabase 專案都唔存在，且**全 repo 冇寫入點**（POS 沽清 = 本機 localStorage + `/api/inventory/soldout` TODO stub）→ `fetchStoreSoldoutIds()` 永遠回 null、server 端售罄校驗永遠 fail-open。要接通需先做「店級售罄上雲」。
 - ⚠️ **待確認**：部署包顯示 `NEXT_PUBLIC_SUPABASE_URL` 指向 **Ledger 專案**（冇任何 `pos_*` 表），而 `getPosSupabaseClient()`（瀏覽器端 Realtime + 售罄）用嘅正是佢 → 若屬實，瀏覽器端 POS Realtime 全部訂錯專案。詳見 `docs/reviews/qr-self-order-audit-2026-09-10.md` 附錄 B.6。
+
+## 掃碼 vs Kiosk 分家（2026-09-10 需求；詳見附錄 C）
+- **入口唔同**：`/order`（店內平板）→ `useKioskOrder()`；`/menu`（客人手機掃 QR）→ **`useScanOrder()`**（`src/lib/use-scan-order.ts`）。兩者共用內核 `useOrderingCore(variant)`（`use-kiosk-order.ts`；`useKioskOrder()` 就係 `core("kiosk")`）。**`useScanOrder()` 刻意唔暴露 `returnToHome`** —— 掃碼端冇「完成」呢個概念。
+- **掃碼冇單號**：`placeOrder()` 掃碼路徑**完全唔打 `/api/pos/sequence`、唔叫 `nextLocalDailyOrderNo()`**；`buildKioskOrder({ orderNoSource:"table" })` 直接寫**台名**落 `local_order_no`。⚠️ 唔可以留空字串：`PosOrder.localOrderNo` 係必填 string、收銀端模板要印，而 server `text("")` 會變 NULL → 收銀端顯示 `#null`。
+- **查詢鍵 = 台號**：`GET /api/pos/order-lookup?storeId=&tableId=` 回該台所有非終態單（回應 `orders[]` + `order`=最新，向後兼容）。`fetchUnsettledKioskOrder()` 次序 = **orderId 快路（sessionStorage）→ 台號查 DB**。舊版冇 orderId 就 `return null` → 換手機掃同枱 QR 會顯示空白／當新單（本輪修嘅就係呢個）。
+- **⚠️ 台號查詢只認 `source="scan"`**：收銀端「自助單確認/拒絕」同「**加單補印廚房單**」全部靠 `isSelfOrder(order)`（`source ∈ {kiosk,scan}`）分流。若客人改到一張 `source="pos"` 嘅單 → 收銀端唔補印 → **廚房靜默漏單**；server 亦會覆寫 `source`/`local_order_no` 令報表走樣。要放寬須先改收銀端加單補印閘（獨立工作項）。
+- **落單成功要回讀 DB**：掃碼 ack 成功後即 `fetchScanOrderById(order.id)` → fallback `fetchScanTableOrder()`，用 DB 版本做畫面真源（離線入隊時**唔回讀**，否則會蓋走客人手上嗰張）。
+- **狀態文案**：客人端用 `pos/order-status-label.ts` 嘅 `customerOrderStatusLabel()`（`ready` 優先於單據狀態；未知值回「進行中」唔露枚舉）；**唔好**用收銀端 `pos-order-filters.ts` 嗰套（受眾唔同）。`OrderSummaryCard` 有 `statusLabel`／`hideOrderNo` props（`/order` 唔傳 = 行為不變）。
 
 ## 執行環境（原生殼 vs web/PWA）
 - 唔用 UA sniff：APK → `window.PosNative.printJob`；PC 殼 → `window.companionShell`。gate：`shouldUseCompanionChannel`／`shouldKeepCompanionAlive`(+`?companion=`)／`shouldAutoDiscoverCompanion`(+localhost)；`shouldShowCompanionUi` = autoDiscover || urlParam。client 讀 `window` 一律 mount-gated state（保 SSR hydration）。

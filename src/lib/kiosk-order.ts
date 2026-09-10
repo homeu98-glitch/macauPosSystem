@@ -164,6 +164,20 @@ export type BuildKioskOrderInput = {
   fulfillmentStatus?: PosOrder["fulfillmentStatus"];
   /** 落單號碼：優先用店內線下同日序號（/api/pos/sequence 嘅 display）；無值就 fallback 去 timestamp 後綴 */
   localOrderNo?: string;
+  /**
+   * 落單號碼策略（2026-09-10 需求 2）：
+   * - `"sequence"`（**預設**，自助點餐機 /order）：行既有邏輯 —— 店內同日序號，
+   *   攞唔到就本地每日序號 / 時戳後綴。
+   * - `"table"`（**客人掃碼 /menu**）：**完全唔產生單號**。掃碼端嘅訂單標識就係
+   *   **台號**，所以 `localOrderNo` 直接寫台名（例如 `A01`）—— 唔燒店內序號資源、
+   *   唔會每次落單 / 加單就跳出一個新號碼，DB 亦冇任何唯一性約束
+   *   （`pos_orders.local_order_no` 係 nullable text，見 0011 / 0012 migration）。
+   *
+   * ⚠️ 注意 `PosOrder.localOrderNo` 係必填 string —— 而且收銀端嘅收據 / 廚房單
+   * 模板都會顯示呢個值。所以掃碼單**唔可以**留空字串（`text("")` 會被 server
+   * 收窄成 NULL → 收銀端顯示 `#null`），一律填台名。
+   */
+  orderNoSource?: "sequence" | "table";
 };
 
 /**
@@ -228,9 +242,16 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     }
   }
 
-  // 落單號碼：優先用店內線下同日序號（/api/pos/sequence 嘅 display），kiosk/掃碼同店內共用同一日序列表；
-  // 無序號（fetch 失敗 / 離線）先 fallback 去 timestamp 後綴，確保一定有號。
-  if (input.localOrderNo) {
+  // 落單號碼。
+  //
+  // ── 掃碼（"table"）：**唔產生單號**，直接用台號做訂單標識（需求 2）──
+  // 客人端唔會見到任何單號；呢個值只係落 DB 用嚟畀收銀端辨識「邊張枱」。
+  // 唔會呼叫 /api/pos/sequence，亦唔會叫 nextLocalDailyOrderNo()。
+  if (input.orderNoSource === "table") {
+    localOrderNo = input.tableName || input.tableId || "掃碼";
+  } else if (input.localOrderNo) {
+    // ── Kiosk（"sequence"）：優先用店內線下同日序號（/api/pos/sequence 嘅 display），
+    //    kiosk 同店內共用同一日序列表。
     localOrderNo = input.localOrderNo;
   } else if (input.mode === "dine_in") {
     localOrderNo = `堂食${slice}`;
@@ -460,7 +481,7 @@ export async function submitKioskOrder(
 }
 
 // ─────────────────────────────────────────────────────────────
-// 重複掃碼 resume：查上次單有冇未結單，有就 resume（點 9）
+// 重複掃碼 resume：以**台號**查該台未結單（DB 真源）
 // ─────────────────────────────────────────────────────────────
 //
 // ⚠️ root-cause（2026-08-31 · 用戶掃 A01 見「已落單」但枱面「空間 / 已坐 0/10」）：
@@ -469,9 +490,19 @@ export async function submitKioskOrder(
 //   - 其他 terminal 嘅 draft / sent_to_kitchen 單 sync 落 server，枱 ID 撞咗
 //   - 商戶嘅 paid counter 單（quick）殘留喺 /api/pos/state 配對到枱 ID
 //
-// 修正：resume 嘅單一真源改為「客人自己嘅單」—— 用 sessionStorage `kiosk-last-order`
-// 配 server-side 對應 ID，且只認 `source === "scan"`（客人掃碼落嘅）。其他來源一律唔擋客人。
+// 修正：resume 嘅單一真源改為「客人自己嘅單」——只認 `source === "scan"`。
 // 商戶 / kiosk 落嘅單唔會被當客人 resume 對象（佢哋有自己嘅 round-trip，不需 resume）。
+//
+// ⚠️ 2026-09-10（需求 1「資料以 DB 為準」）嘅**進一步修正**：
+// 舊版 resume 嘅唯一入口係 `sessionStorage("kiosk-last-order")` 嘅 orderId；
+// **客人第一次掃呢張枱**（換手機 / 清過 session / 用另一部機）→ orderId 係 undefined
+// → `fetchUnsettledKioskOrder()` 直接 `return null` → 畫面當「新枱」顯示空白餐牌，
+// 但 DB 明明已經有 A01 嘅已下單菜品。
+//
+// 掃碼下單嘅查詢鍵本來就係**台號**（需求 2：客人端唔需要、亦唔會見到單號），
+// 所以而家改為：
+//   ① 有 orderId（同一部手機）→ 精確查（最快、最準，亦係最細嘅資料面）；
+//   ② 冇 orderId 但有台號 → **依台號查該台未結嘅掃碼單**（DB 為準）。
 const TERMINAL_STATUSES = new Set<PosOrder["status"]>([
   "settled",
   "cancelled",
@@ -487,34 +518,93 @@ function isCustomerScanOrder(order: Pick<PosOrder, "source">): boolean {
   return order.source === "scan";
 }
 
-export async function fetchUnsettledKioskOrder(
-  storeId: string,
-  tableId: string | null,
-  lastOrderId?: string,
-): Promise<PosOrder | null> {
-  // 冇 lastOrderId 就冇嘢好 resume（見下面註釋：唔可以靠 tableId 推斷）。
-  if (!lastOrderId) {
-    void tableId; // 保留參數以維持 call site 簽名穩定，但唔再用佢做判定
+/** 非終態 + 係客人自己嘅掃碼單 = 可以 resume 加單。 */
+function isResumableScanOrder(order: PosOrder | null | undefined): order is PosOrder {
+  if (!order?.id) return false;
+  if (!isCustomerScanOrder(order)) return false;
+  return !TERMINAL_STATUSES.has(order.status);
+}
+
+/** 排序用時間戳：優先 `createdAt`（落單時間），同值再用 `updatedAt`。 */
+function orderRecency(order: PosOrder): number {
+  const created = Date.parse(order.createdAt ?? "");
+  const updated = Date.parse(order.updatedAt ?? "");
+  return (Number.isFinite(created) ? created : 0) * 1000 + (Number.isFinite(updated) ? updated : 0);
+}
+
+/**
+ * 依**台號**查該台未結嘅客人掃碼單（DB 真源）。
+ *
+ * 呢個係掃碼流程嘅主查詢路徑 —— 客人掃 A01 QR 嗰刻，DB 有咩就顯示咩，
+ * 唔會因為本機 session 冇紀錄而顯示空白 / 當新單。
+ *
+ * @returns 最新一張可 resume 嘅單（台上有多過一張未結掃碼單屬異常，取最新一張），
+ *          冇（或查詢失敗 / 未配置）一律回 `null` → 客人正常落新單。
+ */
+export async function fetchScanTableOrder(storeId: string, tableId: string): Promise<PosOrder | null> {
+  if (!storeId || !tableId) return null;
+  try {
+    const res = await fetch(
+      `/api/pos/order-lookup?storeId=${encodeURIComponent(storeId)}&tableId=${encodeURIComponent(tableId)}`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; order?: PosOrder | null; orders?: PosOrder[] };
+    const list = Array.isArray(data?.orders) ? data.orders : data?.order ? [data.order] : [];
+    const resumable = list.filter(isResumableScanOrder);
+    if (resumable.length === 0) return null;
+    if (resumable.length > 1) {
+      console.warn(
+        `[kiosk-order] 台號 ${tableId} 有 ${resumable.length} 張未結掃碼單（異常），resume 最新一張。`,
+      );
+    }
+    return resumable.reduce((acc, cur) => (orderRecency(cur) >= orderRecency(acc) ? cur : acc));
+  } catch {
     return null;
   }
+}
+
+/** 精確查一張客人掃碼單（同一部手機重複掃碼時行呢條快路）。 */
+export async function fetchScanOrderById(storeId: string, orderId: string): Promise<PosOrder | null> {
+  if (!storeId || !orderId) return null;
   try {
-    // 2026-09-10 審查 P0-4 / P2-4：改用**專用輕量端點**。
-    // 舊版打 `/api/pos/state?storeId=`（無鑑權）→ 客人手機為咗查一張單，
-    // 會拉走全店 200 單 + 300 queue + 200 printJobs + 模板 + 設定（幾百 KB，仲要洩露）。
-    // 新端點只回**一張**白名單欄位嘅單，且要求精確 orderId（UUID 不可枚舉）。
     const res = await fetch(
-      `/api/pos/order-lookup?storeId=${encodeURIComponent(storeId)}&orderId=${encodeURIComponent(lastOrderId)}`,
+      `/api/pos/order-lookup?storeId=${encodeURIComponent(storeId)}&orderId=${encodeURIComponent(orderId)}`,
       { cache: "no-store" },
     );
     if (!res.ok) return null;
     const data = (await res.json()) as { ok?: boolean; order?: PosOrder | null };
     const order = data?.order ?? null;
-    if (!order || !order.id) return null;
-
-    // 單一真源：只認客人自己嘅 scan 單，且唔可以係終態。
-    if (!isCustomerScanOrder(order) || TERMINAL_STATUSES.has(order.status)) return null;
-    return order;
+    return isResumableScanOrder(order) ? order : null;
   } catch {
     return null;
   }
 }
+
+/**
+ * resume：要唔要載入「本枱現有訂單」。
+ *
+ * 兩段查詢（見上面長註釋）：
+ *   ① `lastOrderId`（sessionStorage）→ 精確查；
+ *   ② 失敗 / 冇 → 用 `tableId` 依台號查（**DB 為準**，唔再因為冇 session 就當新枱）。
+ */
+export async function fetchUnsettledKioskOrder(
+  storeId: string,
+  tableId: string | null,
+  lastOrderId?: string,
+): Promise<PosOrder | null> {
+  if (lastOrderId) {
+    const byId = await fetchScanOrderById(storeId, lastOrderId);
+    if (byId) return byId;
+  }
+  if (tableId) return fetchScanTableOrder(storeId, tableId);
+  return null;
+}
+
+/**
+ * 客人端訂單狀態文案（掃碼「本枱訂單」頁顯示「下單狀態」用）。
+ *
+ * 實作已抽去 `@/lib/pos/order-status-label`（純函式，可單元測試）。
+ * 呢度 re-export 係為咗保持 `kiosk-order` 一帶嘅 import 路徑穩定。
+ */
+export { customerOrderStatusLabel } from "@/lib/pos/order-status-label";

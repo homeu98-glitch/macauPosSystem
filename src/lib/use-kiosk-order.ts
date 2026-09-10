@@ -26,6 +26,8 @@ import {
 import {
   buildKioskOrder,
   clearKioskDeviceBinding,
+  fetchScanOrderById,
+  fetchScanTableOrder,
   fetchUnsettledKioskOrder,
   KioskCartItem,
   KioskDeviceBinding,
@@ -94,6 +96,7 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     scanAgain: "如需重開新單，請向職員查詢",
     tableOrderTitle: "本枱已落單",
     addOrder: "加單",
+    addToOrderHint: "如需加點，請按「加單」進入點餐",
     currentTotal: "枱上總計",
     done: "完成",
     viewCart: "查看購物車",
@@ -120,11 +123,29 @@ export function kioskT(language: KioskLanguage | string, key: string): string {
 }
 
 /**
- * Kiosk 落單共用邏輯（kiosk 平板 /order 與手機介面 /menu 共用）。
- * 抽出嚟避免兩套介面各自維護 cart / realtime / resume / 落單重複碼。
- * 介面（UI）各自實現，互不影響。
+ * 落單流程變體（2026-09-10 需求 2：兩套流程邏輯與介面完全拆分）。
+ *
+ * - `"kiosk"`：店內自助點餐機（平板 `/order`）。有**單號**（店內同日序號）、
+ *   落單後本機印顧客小票、成功頁 5 秒倒數返主頁。
+ * - `"scan"`：**客人掃枱 QR**（手機 `/menu`）。**冇單號**（以台號為查詢／呈現依據）、
+ *   唔印小票（由收銀台部機出單）、本枱已有單就由 DB 載入並鎖定「已落單」頁。
+ *
+ * 兩者嘅介面入口已經完全分開：`/order` 用 `useKioskOrder()`、`/menu` 用
+ * `useScanOrder()`（`src/lib/use-scan-order.ts`）。呢個 core 只係兩者共用嘅
+ * **中性基礎設施**（menu bootstrap、售罄、realtime、購物車、金額、落單重試／隊列），
+ * 所有「以單號為導向」嘅行為都已經用 `variant` 分流，唔會漏落掃碼路徑。
  */
-export function useKioskOrder() {
+export type OrderingVariant = "kiosk" | "scan";
+
+/**
+ * 落單共用邏輯 core（kiosk 平板 /order 與手機 /menu 共用嘅中性部分）。
+ * 抽出嚟避免兩套介面各自維護 cart / realtime / resume / 落單重試重複碼。
+ * 介面（UI）各自實現，互不影響。
+ *
+ * ⚠️ **新 code 唔應該直接叫呢個 core**：請用 `useKioskOrder()`（自助機）或
+ * `useScanOrder()`（客人掃碼）——咁樣 call site 一眼睇得出係邊套流程。
+ */
+export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   const router = useRouter();
 
   const [language, setLanguage] = useState<KioskLanguage>("zh-HK");
@@ -172,7 +193,9 @@ export function useKioskOrder() {
   // 但 menu fetch 用掃碼優先 → 「曾綁過店」嘅瀏覽器掃另一間店嘅 QR 會
   // 「睇 B 店餐牌、落單入 A 店」（跨店串單）。一律改為：
   //   **有掃碼參數（?tableId= / ?store=）→ 掃碼 URL 為真源；冇先 fallback 去綁店。**
-  const isScanLink = Boolean(tableId) || Boolean(scanStoreId);
+  // 掃碼變體一律當掃碼（即使 URL 參數未解析完 / 客人用 ?store= 開）；
+  // 另外保留 URL 參數推導，令 `/order` 萬一被帶 ?tableId= 開都唔會當成 kiosk 落單。
+  const isScanLink = variant === "scan" || Boolean(tableId) || Boolean(scanStoreId);
   const storeId = isScanLink ? scanStoreId ?? "" : binding?.storeId ?? "";
   const needsBinding = !storeId;
 
@@ -303,7 +326,10 @@ export function useKioskOrder() {
     },
   });
 
-  // resume：重複掃碼載入該枱 / 上次單嘅未結單
+  // resume：載入本枱未結單（DB 為準）。
+  //
+  // 掃碼流程（variant="scan"）嘅次序是關鍵：客人掃 QR 之後**先查 DB**，有單就直接
+  // 顯示「本枱訂單」而唔會停喺 landing / 顯示空白餐牌（需求 1、3）。
   useEffect(() => {
     let cancelled = false;
     if (!tableId && submittedOrder) return;
@@ -311,6 +337,8 @@ export function useKioskOrder() {
     // 冇真實 storeId 就唔好去 server 查未結單（會查落假店 / 空店）
     if (!storeId) return;
     void (async () => {
+      // 同一部手機重複掃碼 → sessionStorage 仲有上次單 id（快路）；
+      // 換手機 / 清過 session / 第一次掃呢張枱 → 由 `tableId` 依台號查 DB（DB 為準）。
       const lastOrderId =
         typeof window !== "undefined" ? window.sessionStorage.getItem("kiosk-last-order") ?? undefined : undefined;
       const existing = await fetchUnsettledKioskOrder(storeId, tableId, lastOrderId);
@@ -331,6 +359,8 @@ export function useKioskOrder() {
       // 而 `addToOrder()` 只讀 tableOrder → 客人撳「加單」完全冇反應（硬死鎖）。
       setTableOrder(existing);
       if (existing.orderNote) setOrderNote(existing.orderNote);
+      // 掃碼：本枱已有單 → 跳過 landing（「開始點餐」），直接入「本枱訂單」頁。
+      if (variant === "scan") setStarted(true);
     })();
     return () => {
       cancelled = true;
@@ -472,27 +502,37 @@ export function useKioskOrder() {
       const eventType: "ORDER_CREATED" | "ORDER_UPDATED" = resumedOrder ? "ORDER_UPDATED" : "ORDER_CREATED";
       const orderId = resumedOrder?.id ?? draftOrderIdRef.current ?? (draftOrderIdRef.current = newKioskOrderId());
 
-      // 落單號碼：跟店內線下同日序號（/api/pos/sequence），kiosk/掃碼與店內共用同一日序列表。
-      // kind 對齊店內：堂食→pos、自取→pickup；storeId 用所屬店。
+      // 落單號碼（需求 2：呢度就係「兩套流程」嘅分水嶺）。
+      //
+      // ── 客人掃碼（isScanLink）──
+      // **完全唔產生單號**：唔打 /api/pos/sequence、唔叫 nextLocalDailyOrderNo()、
+      // 唔燒店內序號資源。訂單標識就係台號（由 buildKioskOrder 嘅 orderNoSource:"table"
+      // 直接寫台名）。客人端亦唔會顯示任何單號。
+      //
+      // ── 自助點餐機（kiosk）──
+      // 維持原狀：跟店內線下同日序號（/api/pos/sequence），kind 對齊店內
+      // （堂食→pos、自取→pickup），攞唔到先 fallback 本地每日序號。
       const seqKind = mode === "dine_in" ? "pos" : "pickup";
       let localOrderNo: string | undefined;
-      try {
-        const seqRes = await fetch("/api/pos/sequence", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: seqKind, storeId }),
-        });
-        if (seqRes.ok) {
-          const seqPayload = (await seqRes.json()) as { display?: string };
-          if (seqPayload.display) localOrderNo = seqPayload.display;
+      if (!isScanLink) {
+        try {
+          const seqRes = await fetch("/api/pos/sequence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: seqKind, storeId }),
+          });
+          if (seqRes.ok) {
+            const seqPayload = (await seqRes.json()) as { display?: string };
+            if (seqPayload.display) localOrderNo = seqPayload.display;
+          }
+        } catch {
+          // 失敗（離線 / 序列函數未佈署）就 fallback
         }
-      } catch {
-        // 失敗（離線 / 序列函數未佈署）就 fallback
-      }
-      if (!localOrderNo) {
-        // P1-4：fallback 改用**本地每日序號**（同店內同日遞增），
-        // 唔再用 `堂食${時戳後4位}` 呢類同店內序號唔同源嘅亂號。
-        localOrderNo = nextLocalDailyOrderNo(seqKind, mode === "dine_in" ? "堂食" : "自取");
+        if (!localOrderNo) {
+          // P1-4：fallback 改用**本地每日序號**（同店內同日遞增），
+          // 唔再用 `堂食${時戳後4位}` 呢類同店內序號唔同源嘅亂號。
+          localOrderNo = nextLocalDailyOrderNo(seqKind, mode === "dine_in" ? "堂食" : "自取");
+        }
       }
 
       // 「自動接自助單」開關嘅真源喺 DB（`pos_kiosk_settings`），落單當刻先攞一次（禁 polling）。
@@ -517,6 +557,8 @@ export function useKioskOrder() {
         // 狀態機 owner 係收銀端；客人加單只應該提交 items / 備註。舊版重寫整張單，
         // 會把收銀已標記嘅 `sent_to_kitchen→preparing` 打返轉頭（非終態降級 server 唔擋）。
         localOrderNo,
+        // 需求 2：掃碼單唔行「單號」邏輯，直接以台號作為訂單標識。
+        orderNoSource: isScanLink ? "table" : "sequence",
       });
 
       // ⚠️ 2026-09-10 加單修復：算出今次**新增**嘅菜品（舊單 items → 新單 items 嘅差額）。
@@ -551,13 +593,32 @@ export function useKioskOrder() {
         }
       }
 
-      if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-last-order", order.id);
+      // 📌 需求 1 後半（「確認掃碼下單成功後，資料即時且正確寫入 DB」）：
+      // 掃碼單喺 server 回 `ok` 之後，**即刻由 DB 回讀一次**該台訂單，並用 DB 版本
+      // 做畫面真源。咁樣：
+      //   ① 客人見到嘅一定係 DB 真正落咗嘅內容（唔會「畫面有、DB 冇」）；
+      //   ② 收銀端可能同時改過單（例如已經標記製作中）→ 客人即刻見到最新狀態；
+      //   ③ 一旦 DB 寫入有問題，呢一步回唔到單 → 唔會被「假成功」蒙混（配合上面嘅
+      //      ack 分類，業務拒絕已經會 throw）。
+      // ⚠️ 只在**真正寫入成功**（非入隊）先回讀 —— 離線入隊時 DB 當然冇，回讀會
+      // 反而蓋走客人手上嗰張單。回讀失敗（網絡 / 未配置）保留本地版本，唔影響落單。
+      let settledOrder = order;
+      if (isScanLink && !queuedForSync) {
+        // 優先精確回讀自己嗰張單（同台有第二張未結單嘅異常情況下唔會攞錯單）；
+        // 攞唔到（例如 server 未及回讀）先退而用台號查。
+        const confirmed =
+          (await fetchScanOrderById(storeId, order.id)) ??
+          (tableId ? await fetchScanTableOrder(storeId, tableId) : null);
+        if (confirmed) settledOrder = confirmed;
+      }
+
+      if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-last-order", settledOrder.id);
       setOrderSyncPending(queuedForSync);
-      setSubmittedOrder(order);
+      setSubmittedOrder(settledOrder);
       setCart([]);
       setResumedOrder(null);
       // dine_in 保留本枱單（顯示已落單明細 + 加單）；quick 模式落單後清走，唔畀加單
-      setTableOrder(mode === "dine_in" ? order : null);
+      setTableOrder(mode === "dine_in" ? settledOrder : null);
       setOrderNote("");
       setOrdering(false); // 落完單返去「明細」介面（鎖定餐牌）
       draftOrderIdRef.current = null; // 落單成功：下張單用新 id
@@ -676,4 +737,18 @@ export function useKioskOrder() {
     placeOrder,
     rebindStore,
   };
+}
+
+/** `useOrderingCore()` 嘅完整回傳型別（即 `useKioskOrder()` 嘅介面）。 */
+export type OrderingApi = ReturnType<typeof useOrderingCore>;
+
+/**
+ * **自助點餐機**（店內平板 `/order`）嘅落單 hook。
+ *
+ * 有單號（店內同日序號）、落單後本機印顧客小票、成功頁 5 秒倒數返主頁。
+ * 客人掃碼請用 `useScanOrder()`（`src/lib/use-scan-order.ts`）—— 兩套流程
+ * 喺 call site 層面已經分開，唔會互相撈錯行為。
+ */
+export function useKioskOrder(): OrderingApi {
+  return useOrderingCore("kiosk");
 }

@@ -8,7 +8,11 @@ import { loadKioskMode, saveKioskMode } from "@/lib/kiosk-order";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
 
-// kiosk 平板介面：3 欄佈局完全不變，邏輯抽去 useKioskOrder（與手機 /menu 共用）
+// 自助點餐機（店內平板）介面：3 欄佈局完全不變。
+//
+// ⚠️ 2026-09-10（需求 2）：手機 /menu（客人掃碼）**已經同呢頁完全分家** ——
+// 嗰邊用 `useScanOrder()`（台號為本、冇單號、冇「完成」），呢邊用 `useKioskOrder()`
+// （有單號、落單後本機印小票、成功頁倒數返主頁）。兩者只共用中性基礎設施（core）。
 
 export default function OrderPage() {
   const router = useRouter();

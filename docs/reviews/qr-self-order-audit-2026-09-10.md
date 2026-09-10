@@ -508,3 +508,149 @@ curl -s "<NEXT_PUBLIC_SUPABASE_URL>/rest/v1/pos_orders?select=id&limit=1" \
 若確認指錯專案，修法是為客戶端 POS 連線另開 `NEXT_PUBLIC_POS_SUPABASE_URL` /
 `NEXT_PUBLIC_POS_SUPABASE_ANON_KEY`（POS 專案，**只開 anon select + realtime**），
 `getPosSupabaseClient()` 改讀嗰兩個。呢個改動牽涉環境變數同 RLS 政策，**未動**。
+
+---
+
+# 附錄 C · 第三輪：掃碼下單與 Kiosk **完全分離**（2026-09-10）
+
+用戶指令原文：
+
+> 1. 資料以 DB 為準：當某台號（例如 A01）在 DB 中已存在已下單的菜品時，掃描該台的 QR code 後，
+>    畫面必須從 DB 讀取並顯示該台現有的訂單內容（菜品、數量、下單狀態等），不可顯示為空白或新單。
+>    同時確認掃碼下單成功後，資料即時且正確地寫入 DB。
+> 2. 移除掃碼下單的「單號」機制：掃碼下單不應每次下單就產生或顯示新的單號，單號屬於 Kiosk 流程。
+>    掃碼下單應完全以「台號」作為查詢與呈現的依據，客人端不需要看到單號。
+>    請將掃碼下單與 Kiosk 兩套流程的邏輯與介面完全拆分，不要共用同一套以單號為導向的實作。
+> 3. 簡化已落單後的介面：當該台號已有菜品時，僅顯示「已落單」狀態與既有訂單內容，移除「完成」按鈕。
+
+## C.0 需求 → 落地對照
+
+| # | 需求 | 落地做法 |
+|---|---|---|
+| 1a | 掃 QR 後由 DB 讀取該台現有訂單 | **新增台號查詢模式** `GET /api/pos/order-lookup?storeId=&tableId=`；`fetchUnsettledKioskOrder()` 冇 `lastOrderId` 時改用台號查 |
+| 1b | 不可顯示空白 / 當新單 | resume 命中 → `setStarted(true)` 跳過 landing，直接入「本枱訂單」頁；landing gate 加 `&& !activeTableOrder` 雙保險 |
+| 1c | 確認落單即時正確寫入 DB | 落單 ack 成功後**即刻由 DB 回讀**同一張單（`fetchScanOrderById` → fallback 台號），用 DB 版本做畫面真源 |
+| 1d | 顯示下單狀態 | `customerOrderStatusLabel()`（新純函式模組）＋ 台號卡狀態 chip ＋ `OrderSummaryCard` 新增 `statusLabel` |
+| 2a | 掃碼冇單號 | 掃碼路徑**完全唔呼叫** `/api/pos/sequence` 同 `nextLocalDailyOrderNo()`；`buildKioskOrder({ orderNoSource:"table" })` 直接寫台名 |
+| 2b | 以台號為查詢／呈現依據 | 台號 = 查詢鍵（API）；「本枱訂單」頁主標題由「單號大數字」改成「**台號**大數字」 |
+| 2c | 客人端睇唔到單號 | `/menu` 全部移除單號顯示；`OrderSummaryCard` 新增 `hideOrderNo` |
+| 2d | 兩套流程邏輯／介面完全拆分 | 介面：`/order` → `useKioskOrder()`、`/menu` → **`useScanOrder()`**（新檔）；邏輯：共用 core 用 `variant` 分流所有「單號導向」行為 |
+| 3 | 移除「完成」按鈕 | `/menu` 兩處 `returnToHome` 按鈕刪除；兩個重複頁面合併成一頁 |
+
+## C.1 修改檔案與邏輯範圍
+
+| 檔案 | 改動 |
+|---|---|
+| `src/app/api/pos/order-lookup/route.ts` | **新增 `tableId` 模式**：回該台所有非終態、`source="scan"` 嘅單（升序，上限 20）。回應加 `orders[]`（`order` = 最新一張，**向後兼容**舊 client）。白名單欄位 / per-IP 60·min⁻¹ 限流不變 |
+| `src/lib/kiosk-order.ts` | ① `BuildKioskOrderInput.orderNoSource: "sequence" \| "table"`；② 新增 `fetchScanTableOrder()`（台號查）＋ 導出 `fetchScanOrderById()`；③ `fetchUnsettledKioskOrder()` 改成「orderId 快路 → 台號查 DB」兩段；④ `isResumableScanOrder()` / `orderRecency()` 抽出共用判定；⑤ re-export `customerOrderStatusLabel` |
+| `src/lib/pos/order-status-label.ts` | **新檔**：客人端狀態文案純函式（可單元測試，零依賴） |
+| `src/lib/pos/order-status-label.test.ts` | **新檔**：6 個 test（覆蓋 draft / preparing / ready 優先級 / 各終態 / 未知值唔露枚舉） |
+| `src/lib/use-kiosk-order.ts` | ① `useKioskOrder()` 內核抽出成 `useOrderingCore(variant)`，尾加 `useKioskOrder()` = `core("kiosk")`；② `isScanLink` 加 `variant === "scan"`；③ resume effect 掃碼命中即 `setStarted(true)`；④ `placeOrder()` 掃碼**跳過序號**；⑤ 落單成功後掃碼回讀 DB；⑥ i18n 加 `addToOrderHint` |
+| `src/lib/use-scan-order.ts` | **新檔**：`useScanOrder()` = `useOrderingCore("scan")`，只暴露掃碼需要嘅介面（**冇** `returnToHome`） |
+| `src/components/kiosk/order-summary-card.tsx` | 新增可選 props `statusLabel` / `hideOrderNo`（`/order` 唔傳 = 行為不變） |
+| `src/app/menu/page.tsx` | 改用 `useScanOrder()`；兩個重複分支合併成單一「本枱訂單」頁；移除全部單號顯示；移除「完成」按鈕；加狀態 chip |
+
+> `/order/page.tsx`（kiosk 平板）**一行都冇改** —— `useKioskOrder()` 簽名同回傳完全不變。
+
+## C.2 三個關鍵設計決定（同為何係咁）
+
+### C.2.1 為何「台號查詢」只認 `source = "scan"`
+
+同一張枱嘅 open 單可能係職員用收銀台落（`source="pos"`）或自助機落（`"kiosk"`）。
+呢啲單**唔可以**被掃碼端 resume 加菜：
+
+1. 收銀端「自助單確認 / 拒絕」同「**加單補印廚房單**」全部以 `isSelfOrder(order)`
+   （`src/lib/pos/order-source.ts`，`source ∈ {kiosk, scan}`）分流。客人改咗一張
+   `source="pos"` 嘅單 → 收銀端**唔會**補印廚房單 → **廚房收唔到加嘅菜**（靜默漏單，
+   正是附錄 B 同一類病）。
+2. server 寫入會把 `source` / `local_order_no` 由職員單嘅值改成掃碼單嘅值 →
+   報表 / 對單 / 打印模板全部走樣。
+
+所以掃碼端只 resume「客人自己嘅掃碼單」。若某枱嘅 open 單係職員落嘅，客人會見到**正常
+點餐介面**（唔會顯示空白），加點由職員處理 —— 呢個係**刻意邊界**，唔係漏做。
+
+要放寬到「客人可以 append 職員單」，前提係先改收銀端嘅加單補印閘（`isSelfOrder` →
+「任何來源嘅 items 增加都補印」），屬**獨立工作項**。
+
+### C.2.2 為何掃碼單 `localOrderNo` 寫「台名」而唔係留空
+
+- `pos_orders.local_order_no` 係 nullable text（0011 / 0012），**冇 NOT NULL、冇 unique** →
+  技術上可以留空；
+- 但 `PosOrder.localOrderNo` 係必填 `string`，而且收銀端收據 / 廚房單模板都會印呢個值；
+- server 嘅 `text("")` 會收窄成 `null` → 收銀端會顯示 `#null`。
+
+所以掃碼單直接寫**台名**（`A01`）：唔產生新號碼、唔燒店內序號資源、收銀端睇到嘅係
+「邊張枱」（堂食場景本來就係用枱號對單），而客人端**完全唔顯示**。
+
+### C.2.3 為何「拆分」係拆介面 + 用 `variant` 分流，而唔係抄兩份 hook
+
+`useOrderingCore` 內真正**相同**嘅部分係中性基礎設施：menu bootstrap、售罄快照 / realtime、
+購物車、金額計算、落單重試、本地待同步隊列。呢啲抄兩份 = 以後修 bug 要改兩個地方
+（附錄 B 嘅事故正正係「一處改咗另一處漏」嘅同類問題）。
+
+而真正**不同**嘅部分（單號、resume 策略、印小票、成功頁行為）已經全部由 `variant` 分流，
+call site 亦一眼睇得出係邊套流程：
+
+```
+/order（平板）  → useKioskOrder() → useOrderingCore("kiosk")
+/menu （手機）  → useScanOrder()  → useOrderingCore("scan")
+```
+
+`useScanOrder()` 亦**刻意唔暴露** `returnToHome`，令 `/menu` 冇得「不小心」用到
+kiosk 專屬行為。
+
+## C.3 掃碼落單／加單資料流（改動後）
+
+```
+客人掃 A01 QR（/menu?tableId=<uuid>&store=<merchantId>）
+   │
+   ├─① useScanOrder() → resume effect
+   │     ├─ sessionStorage("kiosk-last-order") 有 → GET ?storeId&orderId   （快路）
+   │     └─ 冇（換機／清 session／第一次掃）→ GET ?storeId&tableId        （DB 為準）★新
+   │           └─ 命中 → setCart / setResumedOrder / setTableOrder / setStarted(true)
+   │                    → 直接顯示「本枱訂單」（台號 + 狀態 + 菜品 + 加單）
+   │
+   └─② 落單 / 加單 → placeOrder()
+         ├─ eventType = resumedOrder ? ORDER_UPDATED : ORDER_CREATED
+         ├─ 單號：掃碼**唔產生**（orderNoSource:"table" → 寫台名）★新
+         ├─ submitKioskOrder(payload { order, addedItems }) → POST /api/pos/sync
+         ├─ ack ok  → 回讀 DB（?orderId → fallback ?tableId）→ 用 DB 版本做畫面真源 ★新
+         │     ack 4xx → 業務拒絕，即時報錯（唔重試、唔入隊）
+         │     ack 5xx/429/網絡 → 入本地待同步隊列，UI 顯示「正在同步…」
+         └─ 收銀端 realtime 收到 → 建廚房單 / 加單補印（isSelfOrder 分流）→ 介面更新
+```
+
+## C.4 驗證步驟（建議實測）
+
+1. **DB 為準（新枱）**：清空手機瀏覽器 sessionStorage → 掃 A01 QR → 應見「開始點餐」
+   （該台 DB 冇單）。
+2. **落單寫入 DB**：落 2 個菜 → 成功頁應顯示「台號 A01 + 狀態（已送廚房 / 待店員確認）+
+   菜品明細」，**冇任何單號**、**冇「完成」**。查 DB：
+   ```sql
+   select id, local_order_no, table_id, source, status, items
+     from pos_orders where table_id = '<A01 嘅 uuid>' order by created_at desc limit 3;
+   ```
+   → `local_order_no = 'A01'`、`source = 'scan'`、`items` 係頭先落嘅菜。
+3. **換機 resume（本輪核心）**：用**另一部**手機（或清 sessionStorage）掃同一張 A01 QR →
+   **唔應該**見到空白餐牌／landing，而係即刻見到「本枱訂單」＋頭先落嘅菜 ＋ 狀態。
+4. **加單**：撳「加單」→ 加 1 個菜 → 落單 → 收銀端應即時見到（新單／items 增加）
+   並補印廚房單；**冇「完成」按鈕**可撳。
+5. **單號消失**：全流程（landing / 菜單 / 本枱訂單 / 購物車 / 成功頁）**任何位置都唔應該
+   出現單號**；`/order`（kiosk 平板）**仍然**有單號，行為不變。
+6. **回歸**：`./node_modules/.bin/tsc --noEmit`、`npm run test`、`npx eslint <改動檔>`、
+   `CODEBUDDY_SAFE_DELETE_ENABLED=0 npm run build`。
+
+## C.5 本輪驗證結果（本機）
+
+- `tsc --noEmit` ✅ exit 0
+- `npm run test` ✅ **24 tests / 24 pass**（原 18 + 新增 6 個 `customerOrderStatusLabel`）
+- `eslint <8 個改動檔>` ✅ exit 0
+- 未做真機實測（同上兩輪：本機 `next build` 會被 safe-delete 鈎子攔，需沙箱外跑）。
+
+## C.6 遺留 / 未做
+
+- **跨來源加單**（客人 append 職員落嘅單）—— 需先改收銀端 `isSelfOrder` 加單補印閘（見 C.2.1）。
+- **售罄架構未接通**（附錄 B.5）—— 與本輪無關。
+- **`NEXT_PUBLIC_SUPABASE_URL` 可能指錯專案**（附錄 B.6）—— 與本輪無關，但會令「收銀端
+  秒級見單」失效；本輪嘅 DB 回讀用 server 連線，唔受影響。
+

@@ -18,16 +18,33 @@ export function OrderSummaryCard({
   order,
   title,
   className = "",
+  statusLabel,
+  hideOrderNo = false,
 }: {
   order: PosOrder;
   title: string;
   className?: string;
+  /** 客人端「下單狀態」文案（見 `customerOrderStatusLabel()`）。 */
+  statusLabel?: string;
+  /**
+   * 隱藏右上角 `#單號`。
+   *
+   * 掃碼（`/menu`）**一律 true** —— 需求 2：掃碼下單冇「單號」概念，客人端唔應該見到。
+   * 自助點餐機（`/order`）保持顯示。
+   */
+  hideOrderNo?: boolean;
 }) {
   return (
     <div className={`rounded-xl bg-amber-50 p-3 text-left ${className}`}>
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-sm font-semibold text-amber-800">{title}</span>
-        <span className="text-xs text-amber-600">#{order.localOrderNo}</span>
+        {statusLabel ? (
+          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-amber-700">
+            {statusLabel}
+          </span>
+        ) : hideOrderNo ? null : (
+          <span className="text-xs text-amber-600">#{order.localOrderNo}</span>
+        )}
       </div>
       <div className="space-y-1.5">
         {order.items.map((it, i) => (

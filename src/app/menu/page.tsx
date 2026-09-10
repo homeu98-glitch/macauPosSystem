@@ -2,12 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { kioskT, useKioskOrder } from "@/lib/use-kiosk-order";
+import { kioskT } from "@/lib/use-kiosk-order";
+import { useScanOrder } from "@/lib/use-scan-order";
+import { customerOrderStatusLabel } from "@/lib/pos/order-status-label";
 import { MenuItem } from "@/lib/types";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
 
 // 手機介面（客掃枱 QR 開 /menu）：外賣 App 風，與 kiosk 平板 /order 完全分家
+//
+// ⚠️ 2026-09-10（需求 1 / 2 / 3）：
+//   ① 落單流程用 `useScanOrder()`（**唔係** `useKioskOrder()`）—— 掃碼以「台號」為
+//      查詢與呈現依據、冇單號、冇「完成」按鈕；
+//   ② 本枱已有單一律由 DB 載入（`activeTableOrder`），唔會顯示空白或當新單；
+//   ③ 客人端睇唔到任何單號。
 
 export default function MenuPage() {
   const {
@@ -43,9 +51,8 @@ export default function MenuPage() {
     placeOrder,
     started,
     startOrdering,
-    returnToHome,
     ordering,
-  } = useKioskOrder();
+  } = useScanOrder();
 
   const t = (key: string) => kioskT(language, key);
 
@@ -121,8 +128,11 @@ export default function MenuPage() {
     );
   }
 
-  // ── Landing：未「開始點餐」先顯示 landing page（唔用點餐介面做主頁）──
-  if (!started) {
+  // ── Landing：未「開始點餐」先顯示 landing page ──
+  // ⚠️ 但本枱已經有單（DB 為準）就**唔應該**停喺 landing —— 客人掃 QR 嘅預期係即刻
+  // 見到「呢張枱點咗咩」（需求 1）。呢個 gate 由 resume effect 設 `started=true`
+  // 之外，喺呢度再加一重保險。
+  if (!started && !activeTableOrder) {
     return (
       <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
         <div className="mb-6 text-7xl">🍽️</div>
@@ -138,90 +148,69 @@ export default function MenuPage() {
     );
   }
 
-  // ── 落單成功確認頁：顯示下完單內容 + 加單（返回/完成唔會再顯示完整餐牌）──
-  if (submittedOrder) {
-    const isDineIn = mode === "dine_in";
-    return (
-      <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
-        <div className="flex-1 overflow-y-auto">
-        <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
-        <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-5xl">✅</div>
-        <h1 className="mb-1 text-2xl font-bold text-stone-900">{t("thanks")}</h1>
-        <p className="mb-6 text-sm text-stone-500">{t("payAtCounter")}</p>
-        {/* P1-4：網絡抖動時訂單入咗本地待同步隊列，唔可以講「已同步」講大話 */}
-        {orderSyncPending && (
-          <p className="mb-6 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-800" role="status">
-            {t("syncPending")}
-          </p>
-        )}
-        <div className="w-full rounded-3xl bg-white p-6 shadow-sm">
-          <div className="mb-1 text-xs text-stone-400">{t("orderNo")}</div>
-          <div className="mb-4 text-4xl font-extrabold tracking-tight text-stone-900">{submittedOrder.localOrderNo}</div>
-          <div className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
-            {isDineIn ? `${t("dineIn")} · ${t("table")} ${tableName}` : tableName}
-          </div>
-        </div>
-
-        {/* 落單內容（本單明細）：所有模式都顯示，按返回只會見到呢個 + 加單 */}
-        <div className="mt-5 w-full text-left">
-          <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
-        </div>
-
-        {/* 加單：堂食先准（手機掃碼 = 枱號 → dine_in，故一定顯示）；快餐模式唔准加單 */}
-        {isDineIn && (
-          <button
-            onClick={addToOrder}
-            className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
-          >
-            {t("addOrder")}
-          </button>
-        )}
-
-        {/* 完成：返回 landing（唔會再顯示完整餐牌，下次落單先「開始點餐」） */}
-        <button
-          onClick={returnToHome}
-          className="mt-2 w-full py-2.5 text-sm text-stone-400"
-        >
-          {t("done")}
-        </button>
-        </div>
-        </div>
-      </main>
-    );
-  }
-
-  // ── 已落單枱「明細」介面（鎖定餐牌，必須按加單先入點餐）──
+  // ── 本枱訂單（**單一頁**：剛落單成功 + 重複掃碼載入既有訂單，兩者共用）──
+  //
+  // 需求 2：以**台號**為呈現依據，客人端完全冇「單號」。
+  // 需求 3：只有「已落單」狀態 + 既有訂單內容 + 「加單」，**冇「完成」按鈕**。
+  //
+  // 舊版係兩個幾乎一樣嘅分支（`submittedOrder` 成功頁 / `activeTableOrder` 已落單頁），
+  // 兩邊各自顯示單號同「完成」；而家合併成一頁，靠 `submittedOrder` 區分「即時成功」
+  // 同「DB 載入」兩種文案，唔會再出現兩套走樣。
   if (activeTableOrder && !ordering) {
+    const justPlaced = Boolean(submittedOrder);
+    const statusLabel = customerOrderStatusLabel(activeTableOrder);
     return (
       <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
         <div className="flex-1 overflow-y-auto">
-        <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
-        <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 text-5xl">🧾</div>
-        <h1 className="mb-1 text-2xl font-bold text-stone-900">已落單</h1>
-        <p className="mb-6 text-sm text-stone-500">如需加點，請按「加單」進入點餐</p>
-        <div className="w-full rounded-3xl bg-white p-6 shadow-sm">
-          <div className="mb-1 text-xs text-stone-400">{t("orderNo")}</div>
-          <div className="mb-4 text-4xl font-extrabold tracking-tight text-stone-900">{activeTableOrder.localOrderNo}</div>
-          <div className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
-            {t("dineIn")} · {t("table")} {tableName}
+          <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
+            <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-5xl">
+              {justPlaced ? "✅" : "🧾"}
+            </div>
+            <h1 className="mb-1 text-2xl font-bold text-stone-900">
+              {justPlaced ? t("thanks") : t("tableOrderTitle")}
+            </h1>
+            <p className="mb-6 text-sm text-stone-500">
+              {justPlaced ? t("payAtCounter") : t("addToOrderHint")}
+            </p>
+            {/* P1-4：網絡抖動時訂單入咗本地待同步隊列，唔可以講「已同步」講大話 */}
+            {orderSyncPending && (
+              <p className="mb-6 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-800" role="status">
+                {t("syncPending")}
+              </p>
+            )}
+
+            <div className="w-full rounded-3xl bg-white p-6 shadow-sm">
+              <div className="mb-1 text-xs text-stone-400">{t("table")}</div>
+              <div className="text-3xl font-extrabold tracking-tight text-stone-900">{tableName}</div>
+              <div className="mt-3 inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
+                {statusLabel}
+              </div>
+            </div>
+
+            {/* 本枱訂單內容（DB 為準）：菜品 / 數量 / 金額 */}
+            <div className="mt-5 w-full text-left">
+              <OrderSummaryCard
+                order={activeTableOrder}
+                title={t("tableOrderTitle")}
+                statusLabel={statusLabel}
+                hideOrderNo
+              />
+            </div>
+
+            {/* 加單：掃碼 = 枱號 → dine_in，故一定顯示 */}
+            <button
+              onClick={addToOrder}
+              className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
+            >
+              {t("addOrder")}
+            </button>
+
+            {pendingSyncCount > 0 && (
+              <p className="mt-3 text-xs text-amber-700" role="status">
+                {t("syncPending")}（{pendingSyncCount}）
+              </p>
+            )}
           </div>
-        </div>
-        <div className="mt-5 w-full text-left">
-          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
-        </div>
-        <button
-          onClick={addToOrder}
-          className="mt-4 w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white active:scale-[0.98]"
-        >
-          {t("addOrder")}
-        </button>
-        <button
-          onClick={returnToHome}
-          className="mt-2 w-full py-2.5 text-sm text-stone-400"
-        >
-          {t("done")}
-        </button>
-        </div>
         </div>
       </main>
     );
@@ -267,9 +256,15 @@ export default function MenuPage() {
         </div>
       )}
 
+      {/* 本枱現有訂單（加單模式下置頂提醒）—— 客人端一律唔顯示單號 */}
       {activeTableOrder && (
         <div className="mx-4 mt-2">
-          <OrderSummaryCard order={activeTableOrder} title={t("tableOrderTitle")} />
+          <OrderSummaryCard
+            order={activeTableOrder}
+            title={t("tableOrderTitle")}
+            statusLabel={customerOrderStatusLabel(activeTableOrder)}
+            hideOrderNo
+          />
         </div>
       )}
 
