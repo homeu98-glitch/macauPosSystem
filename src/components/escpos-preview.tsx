@@ -260,9 +260,15 @@ export function EscPosPreview({
                         {/* 有單品折扣時喺菜名下附加一行「折扣率 X%  折讓 $Z」—— 仿 57.doc sub-line */}
                         {hasDiscount ? (
                           <div
-                            // 琥珀底 + 深色字 = 設計介面同瀏覽器列印見到「呢行係折扣」；
-                            // 熱敏紙印唔到色，renderer 改用反白（黑底白字）表達同一個層次。
-                            className={isCard ? "flex items-baseline justify-between gap-2 rounded bg-amber-100 px-1 pl-4 text-amber-800" : "flex items-baseline justify-between gap-2 rounded bg-amber-100 px-1 pl-3 text-amber-800"}
+                            // 黑底白字（反白）= 熱敏紙實際出紙嘅樣（Companion / APK 用 `ESC { 1`
+                            // inverse 印呢行，見 companion-server.mjs `textLine(..., inverse=true)`）。
+                            // 以前係琥珀底 + 深色字，但實體列印根本印唔出黃色，預覽同出紙對唔上；
+                            // 依家用反白之後，螢幕所見 == 熱敏紙所見，而且係純黑白、對比度最高。
+                            className={
+                              isCard
+                                ? "flex items-baseline justify-between gap-2 rounded bg-slate-900 px-1 pl-4 text-white"
+                                : "flex items-baseline justify-between gap-2 rounded bg-slate-900 px-1 pl-3 text-white"
+                            }
                             style={{ fontSize: SIZE_PX[line.subSize ?? "s"], ...KEEP_PRINT_COLOR }}
                           >
                             <span>
@@ -272,7 +278,7 @@ export function EscPosPreview({
                                   呢度 round 咗會令 30.5 顯示成 31、出紙卻係 30.5（「預覽 == 出紙」就斷咗）。 */}
                               {originalShown ? `（原價 $${item.originalUnitPrice}）` : ""}
                             </span>
-                            <span className="shrink-0 font-semibold tabular-nums opacity-90">
+                            <span className="shrink-0 font-semibold tabular-nums opacity-80">
                               折讓 ${Math.round(item.savingAmount as number)}
                             </span>
                           </div>

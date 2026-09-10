@@ -41,11 +41,12 @@
  */
 
 import { readNetworkOnline } from "@/lib/use-network-online";
-import { loadAuthSession, loadQueue, saveQueue } from "@/lib/storage";
+import { loadAuthSession, loadOrders, loadQueue, saveQueue, type SyncAckRow } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { QueueEvent } from "@/lib/types";
 import { classifyQueueEvent, gcSyncQueue, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+import { broadcastSyncHealth, putSyncAcks, shouldTrackAck } from "@/lib/pos/sync-acks";
 
 export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
 
@@ -66,6 +67,18 @@ const MAX_SYNC_ATTEMPTS = 5;
 /** 對齊 server-side `MAX_EVENTS_PER_REQUEST`（/api/pos/sync 上限 200）。 */
 const MAX_EVENTS_PER_FLUSH = 200;
 const FLUSH_INTERVAL_MS = 30_000;
+
+/**
+ * `attempts` 到頂之後嘅**慢速重試**間隔（docs/112 M2，2026-09-10）。
+ *
+ * 舊行為：attempts ≥ MAX_SYNC_ATTEMPTS → `failed` → `selectFlippable` 永遠唔揀
+ * → **永久放棄**。若撞啱「憑證過期 / server 短暫 5xx / payload 一時寫唔入」，
+ * 一次連續 5 次失敗就等於嗰張單永遠上唔到雲，而本地 UI 仲顯示「已完成」。
+ *
+ * 新行為：`failed` 只係「退避狀態」，過咗呢個間隔就會自動再試一次；
+ * 真正需要人介入嘅係對賬守護標出嘅 `blocked`（連續多輪都對唔上）。
+ */
+const FAILED_RETRY_BACKOFF_MS = 15 * 60 * 1000;
 
 type ExtendedQueueEvent = QueueEvent & { attempts?: number };
 
@@ -324,6 +337,22 @@ function eventTime(event: QueueEvent): number {
 }
 
 /**
+ * 一條事件而家係咪值得推。
+ *
+ * - `attempts < MAX_SYNC_ATTEMPTS`：正常重試。
+ * - `attempts >= MAX_SYNC_ATTEMPTS`（status:failed）：**唔係永久放棄**，而係
+ *   要等 `FAILED_RETRY_BACKOFF_MS` 過去之後慢速重試一次（docs/112 M2）。
+ *   `lastFailedAt` 缺失（legacy）就當即刻可以試。
+ */
+function isRetryableEvent(event: ExtendedQueueEvent): boolean {
+  const attempts = event.attempts ?? 0;
+  if (attempts < MAX_SYNC_ATTEMPTS) return true;
+  const last = Date.parse(event.lastFailedAt ?? event.createdAt ?? "");
+  if (!Number.isFinite(last)) return true;
+  return Date.now() - last >= FAILED_RETRY_BACKOFF_MS;
+}
+
+/**
  * 由「已通過跨店過濾」嘅事件度揀出今次要推嘅批次。
  *
  * - **v2（outbox）**：唔做去重（入隊時已經按 `coalesceKey()` 合併），
@@ -332,7 +361,7 @@ function eventTime(event: QueueEvent): number {
  * - **v1（舊行為）**：同 entityId 淨推最新一條（保留舊語義，但會留低「去重輸家」）。
  */
 function selectFlippable(scoped: ExtendedQueueEvent[]): ExtendedQueueEvent[] {
-  const retryable = scoped.filter((e) => (e.attempts ?? 0) < MAX_SYNC_ATTEMPTS);
+  const retryable = scoped.filter(isRetryableEvent);
   if (retryable.length === 0) return [];
 
   if (isOutboxV2Enabled()) {
@@ -347,6 +376,131 @@ function selectFlippable(scoped: ExtendedQueueEvent[]): ExtendedQueueEvent[] {
     }
   }
   return Array.from(candidateByEntity.values()).slice(0, MAX_EVENTS_PER_FLUSH);
+}
+
+/** server 按事件回執（方案 C 擴充，docs/112 L1）。 */
+interface EventAckResult {
+  id: string;
+  ok: boolean;
+  /** 係咪**真係**寫入咗 `pos_orders`。舊 server 冇呢個欄 → undefined 當 true。 */
+  applied?: boolean;
+  /** 為何冇 applied：`stale` / `downgrade` / `unauthorized` / `not-found` / `db-error`。 */
+  reason?: string;
+  error?: string;
+}
+
+/** 由事件推算出「今次推送嘅訂單狀態」（用嚟寫上傳回執）。null = 唔關訂單事。 */
+function pushedOrderStatus(event: QueueEvent): string | null {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  if (event.type === "ORDER_SETTLED") {
+    return typeof payload.status === "string" && payload.status ? payload.status : "settled";
+  }
+  if (event.type === "ORDER_CREATED" || event.type === "ORDER_UPDATED") {
+    const order = (event.type === "ORDER_UPDATED" ? payload.order : payload) as
+      | Record<string, unknown>
+      | undefined;
+    return order && typeof order.status === "string" && order.status ? order.status : null;
+  }
+  return null;
+}
+
+/**
+ * 為「確認已上雲」嘅訂單事件寫上傳回執（docs/112 L3）。
+ *
+ * 只記「本地現況同今次推送內容一致」嘅單：若推送期間本地又改過（status 對唔上），
+ * 寧願唔記 —— 稍後嘅 flush / 對賬守護會再處理，唔好留低假回執。
+ */
+function recordPushAcks(events: ExtendedQueueEvent[]): void {
+  if (events.length === 0) return;
+  const byId = new Map(loadOrders().map((o) => [o.id, o]));
+  const now = new Date().toISOString();
+  const rows: SyncAckRow[] = [];
+  for (const event of events) {
+    if (!event.type.startsWith("ORDER_") || event.type === "ORDER_DELETED") continue;
+    const status = pushedOrderStatus(event);
+    if (!status) continue;
+    const order = byId.get(event.entityId);
+    if (!order || order.status !== status) continue;
+    if (!shouldTrackAck(order)) continue;
+    rows.push({
+      orderId: order.id,
+      orderUpdatedAt: order.updatedAt,
+      status: order.status,
+      ackedAt: now,
+      via: "push",
+    });
+  }
+  putSyncAcks(rows);
+}
+
+/**
+ * 依 server 按事件回執更新 queue（方案 C + docs/112 L1 語義收緊）。
+ *
+ * ⚠️ **核心改變**：只有 `ok && applied !== false` 先當「真係上咗雲」。
+ * server 對「incoming 較舊（stale）」同「終態降級」兩種情況會回
+ * `ok:true, applied:false`（保留 `ok:true` 係為咗向後兼容舊 client）——
+ * 新 client **唔可以照剷**，因為咁樣就係「假成功」：雲端停留舊狀態，
+ * 而本地連副本都冇咗（2026-09-09 診斷：13 張單就係咁樣上唔到雲）。
+ * 呢啲事件一律落 `skipped / server-newer` —— 重推同一條冇意義，
+ * 補救由對賬守護用「本機終態完整快照」重新入隊一條新事件。
+ */
+function applyEventResults(params: {
+  allQueue: ExtendedQueueEvent[];
+  flippable: ExtendedQueueEvent[];
+  perEvent: EventAckResult[] | null;
+  failedAt: string;
+  fallbackError: string;
+}): { next: ExtendedQueueEvent[]; acked: ExtendedQueueEvent[]; justFailed: number; superseded: number } {
+  const { allQueue, flippable, perEvent, failedAt, fallbackError } = params;
+  const outboxV2 = isOutboxV2Enabled();
+  const flippedIds = new Set(flippable.map((e) => e.id));
+  const resultById = perEvent ? new Map(perEvent.map((r) => [r.id, r])) : null;
+
+  const acked: ExtendedQueueEvent[] = [];
+  let justFailed = 0;
+  let superseded = 0;
+
+  const next = allQueue.flatMap((event): ExtendedQueueEvent[] => {
+    if (!flippedIds.has(event.id)) return [event];
+    const r = resultById ? resultById.get(event.id) : null;
+
+    // 冇回執資訊（舊 server / 空 body）→ 維持舊行為：當成功。
+    const ok = resultById ? Boolean(r?.ok) : true;
+    const applied = resultById ? r?.applied !== false : true;
+
+    if (ok && applied) {
+      acked.push(event);
+      return outboxV2 ? [] : [{ ...event, status: "synced" as const, attempts: 0 }];
+    }
+
+    if (ok && !applied) {
+      superseded += 1;
+      return [
+        {
+          ...event,
+          status: "skipped" as const,
+          skipReason: "server-newer" as const,
+          lastError: `雲端已有較新版本（${r?.reason ?? "stale"}），改由對賬守護補推`,
+        },
+      ];
+    }
+
+    const attempts = (event.attempts ?? 0) + 1;
+    const goesFailed = attempts >= MAX_SYNC_ATTEMPTS;
+    // 只喺「第一次跌落 failed」時通知 UI：之後仲會慢速重試，唔應該每次彈一次。
+    if (goesFailed && event.status !== "failed") justFailed += 1;
+    return [
+      {
+        ...event,
+        attempts,
+        lastError: r?.error ?? fallbackError,
+        lastFailedAt: failedAt,
+        status: (goesFailed ? "failed" : "pending") as "failed" | "pending",
+      },
+    ];
+  });
+
+  return { next, acked, justFailed, superseded };
 }
 
 async function doFlush(options: { silent?: boolean }): Promise<void> {
@@ -429,116 +583,96 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
     return;
   }
 
+  const failedAt = new Date().toISOString();
+
   if (!result.ok) {
-    // Server-side error。方案 C（2026-09-09）：server 會喺 body 帶按事件 `results`
-    // —— ok 嘅事件照樣剷走（v2）/ 標 synced（v1），唔 ok 嘅先 attempts+1。
-    // 舊 server 冇 results → 維持舊行為（成批保留 pending）。
+    // Server-side error。方案 C（2026-09-09）+ docs/112 L1：server 會喺 body 帶按事件
+    // `results` —— 真正寫入嘅照樣剷走（v2）/ 標 synced（v1），寫唔入嘅先 attempts+1。
+    // 舊 server 冇 results → 成批保留 pending。
     let lastError = `HTTP ${result.status}`;
-    let perEvent: { id: string; ok: boolean; error?: string }[] | null = null;
+    let perEvent: EventAckResult[] | null = null;
     try {
       const body = await result.text();
       if (body) {
         lastError = `${body.slice(0, 160)} (HTTP ${result.status})`;
-        const parsed = JSON.parse(body) as { results?: { id: string; ok: boolean; error?: string }[] };
+        const parsed = JSON.parse(body) as { results?: EventAckResult[] };
         if (Array.isArray(parsed?.results)) perEvent = parsed.results;
       }
     } catch {
       // 讀 body / JSON 失敗唔影響主流程（lastError 已至少帶 HTTP status）
     }
-    const failedAt = new Date().toISOString();
-    const flippedIds = new Set(flippable.map((e) => e.id));
-    const outboxV2 = isOutboxV2Enabled();
 
-    if (perEvent) {
-      const okIds = new Set(perEvent.filter((r) => r.ok).map((r) => r.id));
-      const errorById = new Map(perEvent.filter((r) => !r.ok).map((r) => [r.id, r.error ?? lastError]));
-      const next = allQueue.flatMap((e) => {
-        if (!flippedIds.has(e.id)) return [e];
-        if (okIds.has(e.id)) {
-          // ok：上咗雲 —— v2 剷走（queue 淨留未上雲工作）；v1 標 synced 墓碑
-          return outboxV2 ? [] : [{ ...e, status: "synced" as const, attempts: 0 }];
-        }
-        // 唔 ok：留低重試，attempts 到頂轉 failed
-        const attempts = (e.attempts ?? 0) + 1;
-        return [
-          {
-            ...e,
-            attempts,
-            lastError: errorById.get(e.id) ?? lastError,
-            lastFailedAt: failedAt,
-            status: (attempts >= MAX_SYNC_ATTEMPTS ? "failed" : "pending") as "failed" | "pending",
-          },
-        ];
-      });
-      saveQueue(next);
-      const justFailed = next.filter(
-        (e) => flippedIds.has(e.id) && !okIds.has(e.id) && e.status === "failed",
-      );
-      if (justFailed.length > 0) {
-        window.dispatchEvent(
-          new CustomEvent(POS_SYNC_FAILED_EVENT, {
-            detail: { count: justFailed.length, status: result.status },
-          }),
-        );
-      }
-      if (!options.silent) {
-         
-        console.warn(
-          `[pos-sync-flush] 部分同步失敗（HTTP ${result.status}）：ok ${okIds.size}/${flippable.length} 筆`,
-        );
-      }
-      return;
+    // docs/112 M1：憑證出事（reason:unauthorized）→ **強制續期一次**，
+    // 令下一次 flush 帶住新憑證；否則結帳事件會被反覆拒收（舊版更會一路燒到 failed）。
+    if (perEvent?.some((r) => r.reason === "unauthorized")) {
+      console.warn("[pos-sync-flush] 收到 unauthorized，強制續期 POS 終端憑證…");
+      void refreshPosDeviceTokenIfNeeded(true);
     }
 
-    // 舊 server（冇按事件 results）：成批保留，attempts+1。
-    const next = allQueue.map((e) => {
-      if (!flippedIds.has(e.id)) return e;
-      const attempts = (e.attempts ?? 0) + 1;
-      return {
-        ...e,
-        attempts,
-        lastError,
-        lastFailedAt: failedAt,
-        status: (attempts >= MAX_SYNC_ATTEMPTS ? "failed" : "pending") as "failed" | "pending",
-      };
+    const { next, acked, justFailed, superseded } = applyEventResults({
+      allQueue,
+      flippable,
+      perEvent,
+      failedAt,
+      fallbackError: lastError,
     });
     saveQueue(next);
+    recordPushAcks(acked);
 
-    // 永久失敗（attempts 到頂）一定要話畀 UI 知：呢啲 event 之後會俾上面第 209 行
-    // `continue` 跳過，**永遠唔會再重試**，資料淨係留喺本機。以前完全冇人講，
-    // 收銀以為單已經上咗 DB。
-    const justFailed = next.filter((e) => flippedIds.has(e.id) && e.status === "failed");
-    if (justFailed.length > 0) {
+    if (justFailed > 0) {
       window.dispatchEvent(
         new CustomEvent(POS_SYNC_FAILED_EVENT, {
-          detail: { count: justFailed.length, status: result.status },
+          detail: { count: justFailed, status: result.status },
         }),
       );
     }
+    if (superseded > 0) {
+      console.warn(
+        `[pos-sync-flush] ${superseded} 筆事件雲端已有較新版本（已交對賬守護補推，唔會重複推送）`,
+      );
+    }
+    broadcastSyncHealth();
 
     if (!options.silent) {
-       
-      console.warn(`[pos-sync-flush] server 拒收 ${flippable.length} 筆同步事件（status ${result.status}）`);
+      console.warn(
+        `[pos-sync-flush] 部分同步失敗（HTTP ${result.status}）：成功 ${acked.length}/${flippable.length} 筆`,
+      );
     }
     return;
   }
 
-  // 成功：
-  // - v2（outbox）：上咗雲就**剷走**，queue 淨留未上雲嘅工作 → 隊列長度 = 真待辦量，
-  //   交班畫面嘅「待同步」唔會再有毒。前提係 server → client 嘅 queue merge 已經閂咗
-  //   （pos-app loadRuntimeState），否則會無限重推。
-  // - v1（舊行為）：保留喺 queue 做 synced 墓碑。
-  const flippedIds = new Set(flippable.map((e) => e.id));
-  if (isOutboxV2Enabled()) {
-    saveQueue(allQueue.filter((e) => !flippedIds.has(e.id)));
-  } else {
-    saveQueue(
-      allQueue.map((e) => (flippedIds.has(e.id) ? { ...e, status: "synced" as const, attempts: 0 } : e)),
-    );
+  // ── 成功（HTTP 200）──
+  // ⚠️ 一定要讀 body 嘅 `results`：server 對「incoming 較舊（stale）」同「終態降級」
+  // 會回 `ok:true, applied:false`，呢啲事件**唔算上雲**（見 applyEventResults 註解）。
+  // 舊 server 冇 results（空 body / 非 JSON）→ 當全部成功，維持舊行為。
+  let okPerEvent: EventAckResult[] | null = null;
+  try {
+    const body = await result.text();
+    if (body) {
+      const parsed = JSON.parse(body) as { results?: EventAckResult[] };
+      if (Array.isArray(parsed?.results)) okPerEvent = parsed.results;
+    }
+  } catch {
+    // 空 body / 非 JSON（舊 server）→ 保持 null
   }
 
+  const appliedRes = applyEventResults({
+    allQueue,
+    flippable,
+    perEvent: okPerEvent,
+    failedAt,
+    fallbackError: "HTTP 200 但未確認套用",
+  });
+  saveQueue(appliedRes.next);
+  recordPushAcks(appliedRes.acked);
+  if (appliedRes.superseded > 0) {
+    console.warn(
+      `[pos-sync-flush] ${appliedRes.superseded} 筆事件雲端已有較新版本（已交對賬守護補推）`,
+    );
+  }
+  broadcastSyncHealth();
+
   if (!options.silent) {
-     
-    console.log(`[pos-sync-flush] 已同步 ${flippable.length} 筆事件`);
+    console.log(`[pos-sync-flush] 已同步 ${appliedRes.acked.length} 筆事件`);
   }
 }

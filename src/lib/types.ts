@@ -966,8 +966,17 @@ export interface PosOrder {
 
 export type OnlinePaymentStatus = "paid" | "unpaid";
 
-/** 推唔到嘅事件點解推唔到（配合 status:"skipped"）。 */
-export type QueueSkipReason = "foreign-store" | "no-store" | "user-discarded";
+/**
+ * 推唔到嘅事件點解推唔到（配合 status:"skipped"）。
+ *
+ * - `foreign-store` / `no-store`：無法證明歸屬當前店（見 docs/111 §D）。
+ * - `user-discarded`：用戶喺同步健康面板主動放棄。
+ * - `server-newer`（2026-09-10 docs/112）：server 回執明講「我手上有更新版本」
+ *   （`applied:false, reason:"stale"|"downgrade"`）。**重推同一條事件係冇意義**，
+ *   所以唔可以當 pending 一直燒 attempts，要落 skipped 終態；補救由對賬守護
+ *   用「本機終態完整快照」重新入隊一條新事件（見 sync-reconcile-daemon.ts）。
+ */
+export type QueueSkipReason = "foreign-store" | "no-store" | "user-discarded" | "server-newer";
 
 export interface QueueEvent {
   id: string;

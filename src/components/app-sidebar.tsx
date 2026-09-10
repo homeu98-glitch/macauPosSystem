@@ -19,6 +19,8 @@ import { signOutLedgerSession } from "@/lib/ledger/session";
 import { loadAuthSession } from "@/lib/storage";
 
 import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
+import { useSyncHealth } from "@/lib/pos/sync-acks";
+import { retryReconcileNow } from "@/lib/pos/sync-reconcile-daemon";
 
 
 
@@ -49,6 +51,32 @@ export function AppSidebar() {
   const pathname = usePathname();
 
   const networkOnline = useNetworkOnline();
+  /**
+   * 同步健康燈（docs/112 L3，2026-09-10）。
+   *
+   * 舊版側欄只有「在線 / 離線」= 瀏覽器網絡狀態，**唔等於資料已上雲** ——
+   * 2026-09-09 實案就係「部機在線、綠燈亮住，但 13 張結帳單雲端一張都冇」。
+   * 所以呢度補一個以「本地終態 vs 雲端確認」為準嘅燈：有嘢未確認就唔會再係一片綠。
+   * 撳一下 = 立即補推（清冷卻 + 清受阻標記 + 跑一輪對賬）。
+   */
+  const syncHealth = useSyncHealth();
+  const syncHealthLabel =
+    syncHealth.level === "blocked"
+      ? "同步受阻"
+      : syncHealth.level === "pending"
+        ? `${syncHealth.waitingAck || syncHealth.pending || syncHealth.failed} 張待傳`
+        : syncHealth.level === "offline"
+          ? "離線待傳"
+          : "同步正常";
+  const syncHealthTitle =
+    syncHealth.level === "blocked"
+      ? `有 ${syncHealth.blocked} 張訂單連續多次補推都對唔上雲端，撳一下即刻再試。`
+      : syncHealth.level === "pending"
+        ? `待上傳：${syncHealth.waitingAck} 張終態訂單未確認、${syncHealth.pending} 條事件排隊、${syncHealth.failed} 條退避重試。撳一下即刻再試。`
+        : syncHealth.level === "offline"
+          ? "而家離線，恢復網絡後會自動補傳（資料已保留喺本機）。"
+          : "所有已結帳／已取消訂單都已確認上雲。";
+
 
   const [loggedIn, setLoggedIn] = useState(() => Boolean(loadAuthSession()));
 
@@ -145,6 +173,26 @@ export function AppSidebar() {
             {networkOnline ? "在線" : "離線"}
 
           </div>
+
+          {loggedIn ? (
+            <button
+              type="button"
+              disabled={syncHealth.level === "ok"}
+              onClick={() => void retryReconcileNow()}
+              className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
+                syncHealth.level === "blocked"
+                  ? "bg-red-600 text-white hover:brightness-110"
+                  : syncHealth.level === "pending"
+                    ? "bg-amber-500 text-white hover:brightness-110"
+                    : syncHealth.level === "offline"
+                      ? "bg-amber-500/80 text-white hover:brightness-110"
+                      : "bg-emerald-600/90 text-white"
+              }`}
+              title={syncHealthTitle}
+            >
+              {syncHealthLabel}
+            </button>
+          ) : null}
 
 
 

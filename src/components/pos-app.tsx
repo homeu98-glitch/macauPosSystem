@@ -23,11 +23,11 @@ import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import {
+  flushPosSyncQueue,
   notifyQueueChanged,
   resolveStoreId,
   retryFailedSyncEvents,
   POS_SYNC_FAILED_EVENT,
-  filterEventsForCurrentStore,
   withStoreScope,
 } from "@/lib/pos/sync-flush";
 import {
@@ -2520,95 +2520,40 @@ export function PosApp() {
     setToast({ tone: "success", message: `${order.tableName ?? tableId} 已退桌，枱位已釋放。` });
   }
 
-  async function syncNow(nextQueue: QueueEvent[], options?: { silent?: boolean }) {
-    if (offlineMode || nextQueue.length === 0) {
-      return;
-    }
-
-    // 🛡️ 跨店隔離 L4：只推屬於當前店嘅事件。syncNow 係「成條 queue 一齊 push」，
-    // 以前冇過濾 → 外店 / legacy 事件跟埋一齊被推，server 用請求級 storeId 覆寫
-    // pos_orders → 切帳號後外店單被「蓋章」搬過嚟（2026-09-06 跨店串號 root cause 之一）。
-    //
-    // docs/111：淨推「未上雲」嘅事件（pending）。以前係成條 nextQueue 照推，
-    // 即係每次手動同步都會將全部 synced 墓碑重推一次（浪费 quota，亦會撞 server
-    // 200 條上限 → 413 → 成批失敗）。
-    const scoped = filterEventsForCurrentStore(nextQueue.filter((event) => event.status === "pending"));
-    if (scoped.length === 0) {
-      if (!options?.silent) {
-        setToast({ tone: "info", message: "沒有屬於當前店舖的待同步資料。" });
-      }
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/pos/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
-        body: JSON.stringify({
-          events: scoped,
-          // 🚨 必須用 canonical helper（以前係 bootstrap?.storeId ?? merchantId，優先序反咗）。
-          // syncNow 係成條 queue 一齊 push + server upsert onConflict id 包埋 store_id
-          // → last write wins：bootstrap.storeId 若係 mock 值 macau-store-a，
-          //   會將啱嘅 merchantId 全體覆寫 → 雲端中繼 claim 唔到單、印唔出紙。
-          storeId: resolveStoreId(),
-        }),
-      });
-
-      // ⚠️ 一定要 check res.ok：以前完全冇 check 就將全部事件標 synced。
-      // server 拒收（400 缺 storeId / 413 事件過多 / 500 DB 寫入失敗）嗰陣，
-      // 資料其實留喺本機，但因為變咗 synced 就**永遠唔會再重試**，
-      // 畫面仲要彈「已同步 N 筆」—— 假成功（2026-09-08 修）。
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        // 方案 C（2026-09-09）：server body 帶按事件 results —— ok 嘅照樣上雲成功，
-        // 淨係剷走 ok 嗰啲；唔 ok 嘅留 pending 等重試。冇 results（舊 server）就成批保留。
-        let okIds: Set<string> | null = null;
-        try {
-          const parsed = JSON.parse(detail) as { results?: { id: string; ok: boolean }[] };
-          if (Array.isArray(parsed?.results)) {
-            okIds = new Set(parsed.results.filter((r) => r.ok).map((r) => r.id));
-          }
-        } catch {
-          // 冇 JSON body / 舊 server → 成批保留
-        }
-        if (okIds && okIds.size > 0 && isOutboxV2Enabled()) {
-          persistQueue(nextQueue.filter((e) => !okIds!.has(e.id)));
-        }
-        const okCount = okIds?.size ?? 0;
-        console.warn(
-          `[syncNow] server 拒收（HTTP ${res.status}）：ok ${okCount}/${scoped.length} 筆，${detail.slice(0, 200)}`,
-        );
-        if (!options?.silent) {
-          setToast({
-            tone: "error",
-            message:
-              okCount > 0
-                ? `部分同步失敗（HTTP ${res.status}），已同步 ${okCount} 筆、其餘留喺本機稍後重試。`
-                : `同步失敗（HTTP ${res.status}），${scoped.length} 筆資料仍在本機，稍後會自動重試。`,
-          });
-        }
-        return;
-      }
-
-      // 只處理真正推咗嗰批；外店 / legacy 事件保留原狀（等其所屬店處理），
-      // 唔可以照舊成條 queue 標 synced —— 咁會令未同步嘅外店事件永遠唔會再試。
-      const scopedIds = new Set(scoped.map((event) => event.id));
-      if (isOutboxV2Enabled()) {
-        // outbox：上咗雲就剷走，queue 淨留未上雲嘅工作
-        persistQueue(nextQueue.filter((event) => !scopedIds.has(event.id)));
-      } else {
-        persistQueue(
-          nextQueue.map((event) => (scopedIds.has(event.id) ? { ...event, status: "synced" as const } : event)),
-        );
-      }
-      if (!options?.silent) {
-        setToast({ tone: "success", message: `已同步 ${scoped.length} 筆待辦資料。` });
-      }
-    } catch {
-      if (!options?.silent) {
-        setToast({ tone: "info", message: "同步暫時失敗，資料已保留在本機。" });
+  /**
+   * 觸發同步（結帳 / 刪單 / 落單 / 30s 兜底）。
+   *
+   * ## 2026-09-10 重寫（docs/112 M7）——由「第二條推送路徑」改為「叫 flush worker 跑」
+   *
+   * 舊版本質上係一條**同 flush worker 並行嘅第二推送路徑**，而且係壞嘅：
+   *   1. 用 React state 嘅 `queue`（同一 handler 內係 stale 快照）；
+   *   2. 傳入嘅**新事件未經 `withStoreScope()` stamp storeId** → 一入到
+   *      `filterEventsForCurrentStore()` 就被剔走；
+   *   3. 冇先 `refreshPosDeviceTokenIfNeeded()`（憑證 TTL 12h，過期即全部結帳事件被拒）。
+   *
+   * 結果：**註解寫「即時同步結帳狀態」，實際上永遠推唔到啱啱嗰單** —— 真正推上去嘅
+   * 係 `pushEvents()` 觸發嘅 flush worker。更差嘅係兩條路徑都用自己嗰份 stale
+   * queue 快照去 `persistQueue()`，可以將對方啱啱成功剷走嘅事件「復活」再推一次。
+   *
+   * 而家改為：**只負責叫 flush worker 即刻跑**。佢會由 localStorage 讀最新 queue、
+   * 先續期憑證、帶 storeId、處理 per-event 回執（`applied` 語義）、失敗退避。
+   * 單一推送路徑 = 單一事實，亦順手消滅 M7。
+   *
+   * @param nextQueue 可選：caller 啱啱產生嘅事件。若佢哋仲未入隊（例如新加嘅呼叫點
+   *   忘記先 `pushEvents()`），呢度會補做 stamp + 入隊，確保唔會「叫咗同步但冇嘢推」。
+   *   經正常 `pushEvents()` 流程嘅話呢個參數係 no-op。
+   */
+  function syncNow(nextQueue?: QueueEvent[], options?: { silent?: boolean }): Promise<void> {
+    if (nextQueue && nextQueue.length > 0) {
+      const stored = loadQueue();
+      const storedIds = new Set(stored.map((e) => e.id));
+      const missing = nextQueue.filter((e) => !storedIds.has(e.id));
+      if (missing.length > 0) {
+        // 只補未入隊嘅（唔可以成條 queue reset，否則會令 flush 啱啱剷走嘅事件復活）。
+        persistQueue(enqueueEvents(stored, withStoreScope(missing)));
       }
     }
+    return flushPosSyncQueue({ silent: options?.silent ?? true });
   }
 
   function pushEvents(events: QueueEvent[]) {

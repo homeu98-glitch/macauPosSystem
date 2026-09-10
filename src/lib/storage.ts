@@ -70,6 +70,12 @@ const STORE_SUFFIX = {
   // 孤兒單隔離區（2026-09-09 方案 A）：雲端冇、本機又冇 pending 事件支持嘅非終態單。
   // 隔離 = 由 orders 移出入呢個 store-scope list（唔刪除，可還原），防 merge 復活。
   quarantinedOrders: "quarantined-orders",
+  // 訂單級上傳回執帳本（2026-09-10 docs/112 L3）：每張單記「雲端已確認嘅狀態 + rev + 時間」。
+  // 呢個係「資料係咪真係上咗雲」嘅**可驗證證據**——唔再靠「request 有冇回 200」。
+  syncAcks: "sync-acks",
+  // 對賬守護連續多輪都對唔上、已停止自動重試嘅單（docs/112 L2/L3）。
+  // 有呢個先可以「大聲示警」而唔係靜默失敗；UI 顯示「同步受阻」。
+  syncBlocked: "sync-blocked",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -643,6 +649,60 @@ export function addDeletedOrderIds(ids: string[]) {
   if (ids.length === 0) return;
   const next = Array.from(new Set([...loadDeletedOrderIds(), ...ids]));
   saveDeletedOrderIds(next);
+}
+
+/**
+ * 一張訂單嘅「雲端已確認」回執（docs/112 L3）。
+ *
+ * 語義：server 明確回報佢手上呢張單 **已經係** `status`（即本地推送嘅狀態），
+ * 而且係喺 `ackedAt` 呢一刻確認嘅。唔係「request 成功」，係「狀態一致」。
+ */
+export interface SyncAckRow {
+  orderId: string;
+  /** 回執時本地訂單嘅 `updatedAt`（做「有冇再改過」嘅比對基準）。 */
+  orderUpdatedAt: string;
+  /** 雲端確認嘅狀態（settled / cancelled / …）。 */
+  status: string;
+  /** 確認時間（本地時鐘 ISO）。 */
+  ackedAt: string;
+  /** 來源：`push`（推送回執）| `verify`（對賬守護查返嚟）。診斷用。 */
+  via: "push" | "verify";
+}
+
+/** 全部上傳回執（store-scope）。 */
+export function loadSyncAcks(): SyncAckRow[] {
+  return readStoreJson(STORE_SUFFIX.syncAcks, [] as SyncAckRow[]);
+}
+
+export function saveSyncAcks(rows: SyncAckRow[]) {
+  writeStoreJson(STORE_SUFFIX.syncAcks, rows);
+}
+
+/**
+ * 一張「同步受阻」記錄（docs/112）：對賬守護連續失敗到上限，停止自動重試並示警。
+ * 收起呢條記錄 = 重新入隊再試（UI「立即重試」）。
+ */
+export interface SyncBlockedRow {
+  orderId: string;
+  localOrderNo: string;
+  /** 本地終態（應該上雲嘅狀態）。 */
+  localStatus: string;
+  /** 雲端現況（null = 雲端根本冇呢張單）。 */
+  serverStatus: string | null;
+  /** 已自動嘗試次數。 */
+  attempts: number;
+  lastError: string;
+  /** 首次受阻時間（ISO）。 */
+  blockedAt: string;
+  lastTriedAt: string;
+}
+
+export function loadSyncBlocked(): SyncBlockedRow[] {
+  return readStoreJson(STORE_SUFFIX.syncBlocked, [] as SyncBlockedRow[]);
+}
+
+export function saveSyncBlocked(rows: SyncBlockedRow[]) {
+  writeStoreJson(STORE_SUFFIX.syncBlocked, rows);
 }
 
 /** 一行隔離記錄：被隔離嘅完整訂單快照 + 隔離時間 / 原因。 */

@@ -154,8 +154,25 @@ type ExistingOrderRow = {
   client_updated_at: string | null;
 };
 
-/** 按事件回執（方案 C）：client 淨剷 ok 嘅事件，唔 ok 嘅留 pending 重試。 */
-type EventAck = { id: string; ok: boolean; error?: string };
+/**
+ * 按事件回執（方案 C + docs/112 L1）。
+ *
+ * ⚠️ `ok` 同 `applied` 係**兩個唔同嘅問題**，新舊 client 靠唔同欄位分流：
+ *   - `ok`：呢條事件 server 受理咗（舊 client 靠佢決定剷唔剷事件）。為了向後兼容，
+ *     「stale / 終態降級」呢類**有意跳過**嘅情況仍然係 `ok:true`。
+ *   - `applied`：呢條事件**真係有寫入 `pos_orders`**。新 client 只認呢個欄位。
+ *     舊 client 唔識 `applied`，會照 `ok` 剷走事件 —— 所以客戶端仲需要
+ *     「常駐對賬守護」做第二道保險（見 src/lib/pos/sync-reconcile-daemon.ts）。
+ *
+ * `reason`（applied=false 時）：stale / downgrade / unauthorized / not-found / db-error / ack-skip。
+ */
+type EventAck = {
+  id: string;
+  ok: boolean;
+  applied?: boolean;
+  reason?: string;
+  error?: string;
+};
 
 export async function POST(request: Request) {
   // ── 0) body 大小閘：超大 body 直接拒，唔好入 JSON.parse ──
@@ -366,12 +383,25 @@ export async function POST(request: Request) {
       errors.push("事件缺少 id");
       continue;
     }
-    // ── 按事件回執（方案 C）：每個事件一個下場，client 淨剷 ok 嘅 ──
+    // ── 按事件回執（方案 C + docs/112 L1）：每個事件一個下場，client 淨剷 applied 嘅 ──
     let evAcked = false;
-    const ack = (ok: boolean, error?: string) => {
+    /**
+     * 落回執。
+     *
+     * `applied` 省略 = 同 `ok` 一致（真係有寫入）。**有意跳過**（stale / 終態降級 /
+     * reopened 保護）要明確傳 `applied:false` —— 新 client 見到就唔會剷走事件、
+     * 亦唔會以為已經上雲，改由對賬守護用完整快照補推。
+     */
+    const ack = (ok: boolean, error?: string, extra?: { applied?: boolean; reason?: string }) => {
       if (evAcked) return;
       evAcked = true;
-      results.push({ id: eventId, ok, ...(error ? { error } : {}) });
+      results.push({
+        id: eventId,
+        ok,
+        applied: extra?.applied ?? ok,
+        ...(extra?.reason ? { reason: extra.reason } : {}),
+        ...(error ? { error } : {}),
+      });
     };
 
     // ── 3) 事件類型白名單：唔喺名單內嘅一律跳過（防未知 type 走進寫入分支）──
@@ -386,7 +416,8 @@ export async function POST(request: Request) {
     if (!authorized && !ANONYMOUS_ALLOWED_EVENTS.has(eventType)) {
       console.warn(`[pos/sync] 拒收匿名事件 ${eventId}（type=${eventType}，需要 POS 憑證）`);
       errors.push(`事件 ${eventId} 未經授權（匿名通道唔接受 ${eventType}）`);
-      ack(false, "未經授權：匿名通道只接受落單 / 加單事件");
+      // reason:unauthorized → client 知道要**先續期憑證**再重試（而唔係盲目退避）。
+      ack(false, "未經授權：匿名通道只接受落單 / 加單事件", { reason: "unauthorized" });
       continue;
     }
 
@@ -481,8 +512,7 @@ export async function POST(request: Request) {
           // 同鐘域比較：優先用 client_updated_at（client 時鐘）；舊 row backfill 後唔會係 null
           const existingTs = parseIsoMs(existing.client_updated_at ?? existing.updated_at);
           const existingStatus = existing.status ?? "";
-          // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫（唔報錯 —— client 收到 200
-          //     會當成功剷走呢條過期事件，唔會 burn attempts，亦唔會反覆將單打回舊狀態）；
+          // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫；
           // (b) 終態守門：settled/cancelled/refunded/partially_refunded 唔可以被 open snapshot
           //     降級。唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳）。
           const isStale = incomingTs > 0 && incomingTs < existingTs;
@@ -490,15 +520,40 @@ export async function POST(request: Request) {
             TERMINAL_ORDER_STATUSES.has(existingStatus) &&
             !TERMINAL_ORDER_STATUSES.has(incomingStatus) &&
             incomingStatus !== "reopened";
-          if (isStale || isDowngrade) {
+          /**
+           * (c) 🛡️ 終態升級豁免（docs/112 M4，2026-09-10）：
+           * 「incoming 係終態、雲端仲係 open、而雲端唔係明確 reopened」→ **准寫**，
+           * 唔理時間戳。
+           *
+           * 點解必須有：收銀機（iPad）嘅牆鐘可能冇 NTP、或者中途被 NTP 回撥，令結帳事件
+           * 嘅 `updatedAt` 比建單時更舊 → 舊邏輯判 stale → 拒絕寫入 + `applied:false`。
+           * 客戶端雖然唔會再剷走事件（L1），但要靠對賬守護反覆撞、最後標 blocked ——
+           * 「本地已完成、後台未結帳」就會一直存在。
+           *
+           * 語義上呢個豁免係安全嘅：終態（已收錢 / 已作廢）本來就係最強證據，
+           * 同 client 端 `mergeOrderLists()` 嘅「終態優先」口徑完全一致。
+           * 仍然排除 `reopened`：返結係終態 → open 嘅**合法反轉**，唔可以被一條舊 settled 事件打回。
+           */
+          const isTerminalUpgrade =
+            TERMINAL_ORDER_STATUSES.has(incomingStatus) &&
+            !TERMINAL_ORDER_STATUSES.has(existingStatus) &&
+            existingStatus !== "reopened";
+          if ((isStale && !isTerminalUpgrade) || isDowngrade) {
             console.warn(
               `[pos/sync] 拒絕覆寫訂單 ${orderId}（現有=${existingStatus}@${existing.updated_at ?? "?"}，` +
                 `incoming=${incomingStatus}@${incomingUpdatedAt}，` +
                 `${isStale ? "stale（incoming 較舊）" : "終態降級"}）`,
             );
-            // 有意嘅 skip：client 應該剷走呢條過期事件（唔好重試）
-            ack(true);
+            // 有意嘅 skip：**`applied:false`** —— 新 client 見到就唔會剷走呢條事件
+            // （剷咗 = 本地冇副本、雲端停留舊狀態，就係 docs/112 M3「假成功」）。
+            // `ok:true` 保留係為咗向後兼容舊 client（佢哋只讀 ok）。
+            ack(true, undefined, { applied: false, reason: isStale ? "stale" : "downgrade" });
             continue;
+          }
+          if (isStale && isTerminalUpgrade) {
+            console.warn(
+              `[pos/sync] 終態升級豁免：接受較舊時間戳嘅終態 ${orderId}（${existingStatus} → ${incomingStatus}）`,
+            );
           }
         }
 
@@ -585,7 +640,8 @@ export async function POST(request: Request) {
           console.warn(
             `[pos/sync] 跳過 ORDER_SETTLED ${settledOrderId}（雲端已 reopened，唔好打回 settled）`,
           );
-          ack(true);
+          // 同樣係「有意跳過」：雲端狀態更終局，唔可以盲剷事件（docs/112 L1）。
+          ack(true, undefined, { applied: false, reason: "reopened-guard" });
         } else {
         const patch: Record<string, unknown> = {
           status: text(eventPayload.status, 64) ?? "settled",
