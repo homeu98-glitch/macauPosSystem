@@ -63,6 +63,10 @@ function orderMatchesLocalDateFilter(order: PosOrder, filter: LedgerOrderDateFil
   return orderMatchesDateFilter(pseudo, filter);
 }
 
+// 訂單列表（2026-09-10）：表頭 / 儲存格共用樣式。表頭 sticky，窄屏由外層 overflow 橫向滾動。
+const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
+const TD_CELL = "px-3 py-2 align-middle";
+
 function QuickOrderActions({
   order,
   onChanged,
@@ -382,133 +386,148 @@ export function LocalOrdersPanel({ dateFilter = "today" }: { dateFilter?: Ledger
             {dateFilter === "today" ? "今天暫無線下訂單" : `${dateFilterLabel(dateFilter)}暫無線下訂單`}
           </div>
         ) : (
-          <div className="grid gap-2">
-            {filteredOrders.map((order) => (
-              <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    {/* 顯示位 ①：訂單頁（規格 7）。來源標記統一放到狀態藥丸下面、右對齊（規格 7 約定） */}
-                    <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
-                    <div className="mt-0.5 truncate text-xs text-slate-500">{order.tableName}</div>
-                    <div className="mt-1 text-xs text-slate-400">
-                      {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5">
-                    <span
-                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
-                        (() => {
-                          const b = getOrderStatusBadge(order);
-                          return `${b.bgClass} ${b.textClass}`;
-                        })()
-                      }`}
-                    >
-                      <span
-                        className={`h-4 w-4 rounded-full ${
-                          (() => {
-                            const b = getOrderStatusBadge(order);
-                            return b.dotClass;
-                          })()
-                        }`}
-                      />
-                      {(() => {
-                        const b = getOrderStatusBadge(order);
-                        return b.label;
-                      })()}
-                    </span>
-                    <OrderSourceBadge order={order} />
-                  </div>
-                </div>
-                <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total, currency)}</div>
-                {(() => {
-                  // 折扣指示：原價（line-through）+ 折後價（amber）+ 折扣分項
+          /*
+            列表（2026-09-10）：每張單一行。欄位同原本卡片完全一致（單號／餐台／時間／菜品／
+            金額／狀態／來源／操作），操作統一釘最右。窄屏橫向滾動保留全部欄位，表頭 sticky。
+          */
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+              <thead>
+                <tr>
+                  <th className={`${TH_CELL} w-[118px]`}>訂單號</th>
+                  <th className={`${TH_CELL} w-[104px]`}>餐台</th>
+                  <th className={`${TH_CELL} w-[116px]`}>時間</th>
+                  <th className={TH_CELL}>菜品</th>
+                  <th className={`${TH_CELL} w-[150px] text-right`}>金額</th>
+                  <th className={`${TH_CELL} w-[108px]`}>狀態</th>
+                  <th className={`${TH_CELL} w-[96px]`}>來源</th>
+                  <th className={`${TH_CELL} w-[232px] text-right`}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOrders.map((order) => {
+                  const badge = getOrderStatusBadge(order);
+                  // 折扣指示：原價（line-through）+ 折後價（amber），收埋喺金額欄第二行
                   const itemSaving = orderItemDiscountTotal(order.items);
                   const wholeSaving = Math.max(0, order.discountAmount ?? 0);
-                  if (itemSaving + wholeSaving <= 0) return null;
                   const original = Math.round((order.total + itemSaving + wholeSaving) * 100) / 100;
                   return (
-                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
-                      <span className="text-xs font-semibold text-amber-700 tabular-nums">
-                        已優惠 -{formatMoney(itemSaving + wholeSaving, currency)}
-                      </span>
-                      <span className="text-[11px] tabular-nums text-slate-400 line-through">
-                        原 {formatMoney(original, currency)}
-                      </span>
-                    </div>
+                    <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
+                      <td className={TD_CELL}>
+                        <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                      </td>
+                      <td className={TD_CELL}>
+                        <div className="truncate text-xs text-slate-500">{order.tableName}</div>
+                      </td>
+                      <td className={TD_CELL}>
+                        <div className="text-xs tabular-nums text-slate-400">
+                          {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
+                        </div>
+                      </td>
+                      <td className={TD_CELL}>
+                        <div className="truncate text-xs text-slate-500">
+                          {order.items
+                            .slice(0, 3)
+                            .map((item) => `${item.name}×${item.quantity}`)
+                            .join(" · ")}
+                        </div>
+                      </td>
+                      <td className={`${TD_CELL} text-right`}>
+                        <div className="text-sm font-semibold tabular-nums text-slate-900">
+                          {formatMoney(order.total, currency)}
+                        </div>
+                        {itemSaving + wholeSaving > 0 ? (
+                          <div className="mt-0.5 text-[11px] tabular-nums text-amber-700">
+                            已優惠 -{formatMoney(itemSaving + wholeSaving, currency)}
+                            <span className="ml-1 text-slate-400 line-through">
+                              原 {formatMoney(original, currency)}
+                            </span>
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className={TD_CELL}>
+                        {/* 狀態藥丸：顏色／文字沿用原本卡片，縮到表格尺寸 */}
+                        <span
+                          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge.bgClass} ${badge.textClass}`}
+                        >
+                          <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className={TD_CELL}>
+                        <OrderSourceBadge order={order} />
+                      </td>
+                      <td className={`${TD_CELL} text-right`}>
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          <button
+                            className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                            onClick={() => {
+                              if (order.status === "settled") {
+                                // 完成狀態：堂食 + 外賣都彈收據預覽（按打印模板樣式），唔跳點餐介面
+                                setReceiptPreviewOrderId(order.id);
+                                return;
+                              }
+                              if (!order.tableId || order.tableId === "counter") {
+                                // 快餐/外賣/無枱（未結）→ 保留小窗唯讀
+                                setReopenReason("");
+                                setViewingOrderId(order.id);
+                              } else {
+                                // 未結堂食單（本地枱單 + 已轉枱線上堂食單）→ 直接跳枱面編輯
+                                router.push(
+                                  `/?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
+                                );
+                              }
+                            }}
+                            type="button"
+                          >
+                            查看
+                          </button>
+                          {order.status === "settled" && isReopenable(order) ? (
+                            <button
+                              className="rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
+                              onClick={() => {
+                                setReopenReason("");
+                                setReopenTargetOrderId(order.id);
+                              }}
+                              type="button"
+                            >
+                              返結帳
+                            </button>
+                          ) : null}
+                          <QuickOrderActions onChanged={handleQuickAction} order={order} />
+                          {/* 自助單 draft → 顯示「確認 / 拒絕」掣（規格 6：開關熄咗時需手動確認，統一用 SelfOrderActionButtons 避免走樣） */}
+                          {order.status === "draft" && isSelfOrder(order) ? (
+                            <SelfOrderActionButtons
+                              orderLabel={order.localOrderNo}
+                              onConfirm={() => {
+                                const result = confirmSelfOrder(order.id);
+                                if (result.ok) {
+                                  setToast(`已確認自助單 ${order.localOrderNo}`);
+                                  refresh();
+                                } else {
+                                  setToast(result.error ?? "確認失敗");
+                                }
+                                return result;
+                              }}
+                              onReject={() => {
+                                const result = rejectSelfOrder(order.id);
+                                if (result.ok) {
+                                  setToast(`已拒絕自助單 ${order.localOrderNo}`);
+                                  refresh();
+                                } else {
+                                  setToast(result.error ?? "拒絕失敗");
+                                }
+                                return result;
+                              }}
+                            />
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
                   );
-                })()}
-                <div className="mt-1 truncate text-xs text-slate-500">
-                  {order.items
-                    .slice(0, 3)
-                    .map((item) => `${item.name}×${item.quantity}`)
-                    .join(" · ")}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  <button
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                    onClick={() => {
-                      if (order.status === "settled") {
-                        // 完成狀態：堂食 + 外賣都彈收據預覽（按打印模板樣式），唔跳點餐介面
-                        setReceiptPreviewOrderId(order.id);
-                        return;
-                      }
-                      if (!order.tableId || order.tableId === "counter") {
-                        // 快餐/外賣/無枱（未結）→ 保留小窗唯讀
-                        setReopenReason("");
-                        setViewingOrderId(order.id);
-                      } else {
-                        // 未結堂食單（本地枱單 + 已轉枱線上堂食單）→ 直接跳枱面編輯
-                        router.push(
-                          `/?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
-                        );
-                      }
-                    }}
-                    type="button"
-                  >
-                    查看
-                  </button>
-                  {order.status === "settled" && isReopenable(order) ? (
-                    <button
-                      className="rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
-                      onClick={() => {
-                        setReopenReason("");
-                        setReopenTargetOrderId(order.id);
-                      }}
-                      type="button"
-                    >
-                      返結帳
-                    </button>
-                  ) : null}
-                  <QuickOrderActions onChanged={handleQuickAction} order={order} />
-                  {/* 自助單 draft → 顯示「確認 / 拒絕」掣（規格 6：開關熄咗時需手動確認，統一用 SelfOrderActionButtons 避免走樣） */}
-                  {order.status === "draft" && isSelfOrder(order) ? (
-                    <SelfOrderActionButtons
-                      orderLabel={order.localOrderNo}
-                      onConfirm={() => {
-                        const result = confirmSelfOrder(order.id);
-                        if (result.ok) {
-                          setToast(`已確認自助單 ${order.localOrderNo}`);
-                          refresh();
-                        } else {
-                          setToast(result.error ?? "確認失敗");
-                        }
-                        return result;
-                      }}
-                      onReject={() => {
-                        const result = rejectSelfOrder(order.id);
-                        if (result.ok) {
-                          setToast(`已拒絕自助單 ${order.localOrderNo}`);
-                          refresh();
-                        } else {
-                          setToast(result.error ?? "拒絕失敗");
-                        }
-                        return result;
-                      }}
-                    />
-                  ) : null}
-                </div>
-              </article>
-            ))}
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

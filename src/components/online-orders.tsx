@@ -94,6 +94,10 @@ function getLedgerStatusBadge(order: LedgerOnlineOrder): {
   return { label, bgClass: "bg-orange-50", textClass: "text-orange-700", dotClass: "bg-orange-500" };
 }
 
+// 訂單列表（2026-09-10）：表頭 / 儲存格共用樣式。表頭 sticky，窄屏由外層 overflow 橫向滾動。
+const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
+const TD_CELL = "px-3 py-2 align-middle";
+
 export function OnlineOrders({
   embedded = false,
   dateFilter: dateFilterProp,
@@ -939,84 +943,107 @@ export function OnlineOrders({
           </div>
         ) : null}
 
-        <div className={`grid gap-2 ${embedded ? "grid-cols-1" : "lg:grid-cols-2 2xl:grid-cols-3"}`}>
-          {filteredOrders.map((order) => {
-            const statusBadge = getLedgerStatusBadge(order);
-            return (
-              // 卡片規格與「店內線下訂單」（local-orders-panel）完全一致：
-              // p-3 容器 · 左欄三行（單號 / 類型·客戶 / 時間）· 右欄狀態藥丸+支付小標籤 ·
-              // 金額 → 優惠 → 菜品 → 按鈕列（mt-3 flex flex-wrap gap-1.5，rounded-xl text-xs）。
-              <article key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
-                    <div className="mt-0.5 truncate text-xs text-slate-500">
-                      {tabLabel(order.tabType)} · 客戶：{order.customerName ?? "--"}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-400">
-                      {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5">
-                    <span
-                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${statusBadge.bgClass} ${statusBadge.textClass}`}
-                    >
-                      <span className={`h-4 w-4 rounded-full ${statusBadge.dotClass}`} />
-                      {statusBadge.label}
-                    </span>
-                    <span
-                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                        order.paymentStatus === "paid"
-                          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                          : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
-                      }`}
-                    >
-                      {order.paymentStatus === "paid" ? "已支付" : "未支付"}
-                      {order.paymentMode ? `（${paymentModeLabel(order.paymentMode)}）` : ""}
-                    </span>
-                  </div>
-                </div>
-                {rawLedgerStatus(order.status) === "accepted" ? (
-                  <div className="mt-1 text-xs text-amber-600">此單已由外部接單，點擊「開始製作」送廚房</div>
-                ) : null}
-                <div className="mt-2 text-sm font-semibold text-slate-900">{formatMoney(order.total)}</div>
-                {order.discountAmount && order.discountAmount > 0 ? (
-                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
-                    <span className="text-xs font-semibold text-amber-700 tabular-nums">
-                      已優惠 -{formatMoney(order.discountAmount)}
-                    </span>
-                    {order.subtotalBeforeDiscount != null ? (
-                      <span className="text-[11px] tabular-nums text-slate-400 line-through">
-                        原 {formatMoney(order.subtotalBeforeDiscount)}
+        {/*
+          列表（2026-09-10）：每張單一行。欄位同原本卡片完全一致（單號／類型·客戶／時間／
+          菜品／金額／狀態／支付／操作），操作統一釘最右。窄屏橫向滾動保留全部欄位。
+        */}
+        {filteredOrders.length > 0 ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <table className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+            <thead>
+              <tr>
+                <th className={`${TH_CELL} w-[118px]`}>訂單號</th>
+                <th className={`${TH_CELL} w-[150px]`}>類型 · 客戶</th>
+                <th className={`${TH_CELL} w-[116px]`}>時間</th>
+                <th className={TH_CELL}>菜品</th>
+                <th className={`${TH_CELL} w-[150px] text-right`}>金額</th>
+                <th className={`${TH_CELL} w-[108px]`}>狀態</th>
+                <th className={`${TH_CELL} w-[132px]`}>支付</th>
+                <th className={`${TH_CELL} w-[224px] text-right`}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOrders.map((order) => {
+                const statusBadge = getLedgerStatusBadge(order);
+                const externalAccepted = rawLedgerStatus(order.status) === "accepted";
+                return (
+                  <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
+                    <td className={TD_CELL}>
+                      <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+                    </td>
+                    <td className={TD_CELL}>
+                      <div className="truncate text-xs text-slate-500">
+                        {tabLabel(order.tabType)} · 客戶：{order.customerName ?? "--"}
+                      </div>
+                    </td>
+                    <td className={TD_CELL}>
+                      <div className="text-xs tabular-nums text-slate-400">
+                        {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
+                      </div>
+                    </td>
+                    <td className={TD_CELL}>
+                      <div className="truncate text-xs text-slate-500">
+                        {order.itemSummary ?? "--"}
+                        {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
+                      </div>
+                    </td>
+                    <td className={`${TD_CELL} text-right`}>
+                      <div className="text-sm font-semibold tabular-nums text-slate-900">
+                        {formatMoney(order.total)}
+                      </div>
+                      {order.discountAmount && order.discountAmount > 0 ? (
+                        <div className="mt-0.5 text-[11px] tabular-nums text-amber-700">
+                          已優惠 -{formatMoney(order.discountAmount)}
+                          {order.subtotalBeforeDiscount != null ? (
+                            <span className="ml-1 text-slate-400 line-through">
+                              原 {formatMoney(order.subtotalBeforeDiscount)}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className={TD_CELL}>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusBadge.bgClass} ${statusBadge.textClass}`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${statusBadge.dotClass}`} />
+                        {statusBadge.label}
                       </span>
-                    ) : null}
-                  </div>
-                ) : null}
-                {changeRequestLabel(order) ? (
-                  <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
-                    {changeRequestLabel(order)}
-                  </div>
-                ) : null}
-                {order.itemSummary ? (
-                  <div className="mt-1 truncate text-xs text-slate-500">
-                    {order.itemSummary}
-                    {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
-                  </div>
-                ) : null}
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  <button
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
-                    onClick={() => void openOrderDetail(order.id)}
-                    type="button"
-                  >
-                    查看
-                  </button>
-                  {renderOrderActions(order)}
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                      {externalAccepted ? (
+                        <div className="mt-1 text-[11px] text-amber-600">已由外部接單</div>
+                      ) : null}
+                    </td>
+                    <td className={TD_CELL}>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          order.paymentStatus === "paid"
+                            ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                            : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                        }`}
+                      >
+                        {order.paymentStatus === "paid" ? "已支付" : "未支付"}
+                        {order.paymentMode ? `（${paymentModeLabel(order.paymentMode)}）` : ""}
+                      </span>
+                    </td>
+                    <td className={`${TD_CELL} text-right`}>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <button
+                          className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                          onClick={() => void openOrderDetail(order.id)}
+                          type="button"
+                        >
+                          查看
+                        </button>
+                        {renderOrderActions(order)}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          </div>
+        ) : null}
       </div>
     </>
   );

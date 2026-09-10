@@ -18,7 +18,7 @@ export function OrdersHub() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-lg font-semibold text-slate-900">訂單</div>
-              <div className="mt-0.5 text-sm text-slate-500">左：會員通線上訂單 · 右：店內線下訂單</div>
+              <div className="mt-0.5 text-sm text-slate-500">上：會員通線上訂單 · 下：店內線下訂單</div>
             </div>
             <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
               {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
@@ -36,7 +36,13 @@ export function OrdersHub() {
             </div>
           </div>
         </header>
-        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-slate-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+        {/*
+          列表版面（2026-09-10）：由左右分欄改為上下分區、每區全寬。
+          原因：訂單列表每個 8 欄（單號／餐台／時間／菜品／金額／狀態／來源·支付／操作），
+          半欄寬度會逼爆欄位；全寬先可以做到固定欄寬 + 金額右對齊 + 操作釘右。
+          窄屏（不足 1080px）由各表自己橫向滾動，唔會壓縮欄位。
+        */}
+        <div className="grid min-h-0 flex-1 grid-rows-2 divide-y divide-slate-200">
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-slate-50">
             <OnlineOrders dateFilter={dateFilter} embedded onDateFilterChange={setDateFilter} />
           </section>
