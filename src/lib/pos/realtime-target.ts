@@ -70,7 +70,14 @@ export type PosRealtimeProbeStatus =
   | "unconfigured"
   /** PGRST205 / 404：專案冇 pos_orders → **訂錯專案**（頭號病因）。 */
   | "table_missing"
-  /** 401 / 403 / 42501：key 錯、或者 anon 冇 select 權（RLS 收得太緊）。 */
+  /**
+   * 401「Invalid API key」/「No API key found」：**key 本身唔啱**。
+   *
+   * ⚠️ 呢個一定要同 `unauthorized` 分開：PostgREST 未認證之前**唔會**查表，
+   * 所以錯 key 時**判斷唔到**表存在與否 —— 唔可以講成「表存在但被拒」（會誤導排查方向）。
+   */
+  | "bad_key"
+  /** 401 / 403 / 42501（key 有效）：anon 冇 select 權 → RLS 收得太緊或漏 grant。 */
   | "unauthorized"
   /** 網絡 / 其他 4xx-5xx。 */
   | "error";
@@ -92,8 +99,10 @@ export function describePosRealtimeProbe(probe: PosRealtimeProbe): string {
       return "未設定即時連線，訂單要重新載入先會出現";
     case "table_missing":
       return "即時連線指向嘅資料庫冇訂單表（設定指錯專案），訂單要重新載入先會出現";
+    case "bad_key":
+      return "即時連線嘅金鑰唔正確，訂單要重新載入先會出現";
     case "unauthorized":
-      return "即時連線被資料庫拒絕（金鑰或讀取權限），訂單要重新載入先會出現";
+      return "即時連線被資料庫拒絕（讀取權限不足），訂單要重新載入先會出現";
     default:
       return "即時連線連唔上，訂單要重新載入先會出現";
   }
@@ -102,6 +111,17 @@ export function describePosRealtimeProbe(probe: PosRealtimeProbe): string {
 /** 探測結果係咪代表「即時推送可用」。 */
 export function isPosRealtimeHealthy(probe: PosRealtimeProbe | null): boolean {
   return probe?.status === "ok";
+}
+
+/**
+ * PostgREST 回應係咪「key 唔啱」（未認證 → 查唔到表，唔可以推論表存在與否）。
+ *
+ * 實測（2026-09-11）：錯 anon key → 401 `{"message":"Invalid API key", ...}`；
+ * 完全冇 key → 401 `{"message":"No API key found in request", ...}`。
+ * 而「key 有效但 anon 冇 select」→ 400/401 帶 `42501` / `permission denied`。
+ */
+export function isBadApiKeyBody(body: string): boolean {
+  return /invalid api key|no api key|invalid jwt|jwt expired|invalid signature/i.test(body);
 }
 
 /** 探測用嘅 REST URL（PostgREST 打一張表最輕嘅查詢：`select=id&limit=1`）。 */
@@ -137,6 +157,11 @@ export async function probePosRealtimeTarget(
     const detail = body.slice(0, 180);
     if (response.status === 404 || body.includes("PGRST205")) {
       return { status: "table_missing", source: config.source, host, detail };
+    }
+    // ⚠️ 次序要緊：錯 key 時 PostgREST 未認證就回 401，**唔會**查到表 →
+    // 一定要先判 bad_key，否則會誤報「表存在但被拒」，帶錯排查方向。
+    if (isBadApiKeyBody(body)) {
+      return { status: "bad_key", source: config.source, host, detail };
     }
     if (response.status === 401 || response.status === 403 || body.includes("42501")) {
       return { status: "unauthorized", source: config.source, host, detail };

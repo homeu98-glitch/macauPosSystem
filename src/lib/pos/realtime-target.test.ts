@@ -4,6 +4,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   buildPosOrdersProbeUrl,
   describePosRealtimeProbe,
+  isBadApiKeyBody,
   isPosRealtimeHealthy,
   probePosRealtimeTarget,
   resolvePosRealtimeConfig,
@@ -129,6 +130,7 @@ describe("describePosRealtimeProbe / isPosRealtimeHealthy", () => {
     "ok",
     "unconfigured",
     "table_missing",
+    "bad_key",
     "unauthorized",
     "error",
   ];
@@ -145,6 +147,19 @@ describe("describePosRealtimeProbe / isPosRealtimeHealthy", () => {
       assert.equal(isPosRealtimeHealthy({ status, source: null, host: null }), status === "ok");
     }
     assert.equal(isPosRealtimeHealthy(null), false);
+  });
+});
+
+describe("isBadApiKeyBody", () => {
+  it("認得 PostgREST 嘅錯 key 文案", () => {
+    assert.equal(isBadApiKeyBody('{"message":"Invalid API key"}'), true);
+    assert.equal(isBadApiKeyBody('{"message":"No API key found in request"}'), true);
+    assert.equal(isBadApiKeyBody('{"message":"JWT expired"}'), true);
+  });
+
+  it("唔會誤認 RLS 拒絕", () => {
+    assert.equal(isBadApiKeyBody('{"code":"42501","message":"permission denied for table pos_orders"}'), false);
+    assert.equal(isBadApiKeyBody(""), false);
   });
 });
 
@@ -189,10 +204,42 @@ describe("probePosRealtimeTarget", () => {
     assert.equal(probe.status, "table_missing");
   });
 
-  it("401 → unauthorized（key 錯 / anon 冇 select）", async () => {
-    stubFetch(() => new Response(JSON.stringify({ message: "Invalid API key" }), { status: 401 }));
+  it("401 Invalid API key → bad_key（唔可以報成 unauthorized/表存在）", async () => {
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            message: "Invalid API key",
+            hint: "Double check your Supabase `anon` or `service_role` API key.",
+          }),
+          { status: 401 },
+        ),
+    );
+    const probe = await probePosRealtimeTarget(POS_CONFIG);
+    assert.equal(probe.status, "bad_key");
+  });
+
+  it("401 No API key found → bad_key", async () => {
+    stubFetch(() => new Response(JSON.stringify({ message: "No API key found in request" }), { status: 401 }));
+    const probe = await probePosRealtimeTarget(POS_CONFIG);
+    assert.equal(probe.status, "bad_key");
+  });
+
+  it("401 permission denied（key 有效但 anon 冇 select）→ unauthorized", async () => {
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: "42501", message: "permission denied for table pos_orders" }), {
+          status: 401,
+        }),
+    );
     const probe = await probePosRealtimeTarget(POS_CONFIG);
     assert.equal(probe.status, "unauthorized");
+  });
+
+  it("bad_key 唔會被誤判成 table_missing（404 以外的狀態碼）", async () => {
+    stubFetch(() => new Response(JSON.stringify({ message: "Invalid API key" }), { status: 401 }));
+    const probe = await probePosRealtimeTarget(POS_CONFIG);
+    assert.notEqual(probe.status, "table_missing");
   });
 
   it("42501 → unauthorized（RLS 擋 anon）", async () => {

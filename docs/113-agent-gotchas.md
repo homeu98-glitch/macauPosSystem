@@ -184,3 +184,5 @@
 - ⚠️ **安全前提**：POS 專案對 anon **只可以 grant SELECT**（0016 §3a `pos_orders` 近 14 日、0021 `pos_print_jobs` 近 24 小時），**唔可以** grant insert/update/delete。落單一律 `/api/pos/sync`（server service_role）。
 - ⚠️ **同類錯仲有第二處**：`useOnlineOrderSettings()` 亦係用 `getPosSupabaseClient()` 訂 `pos_online_order_settings` → 同一個病（docs/92 §1.3 已記錄），改 `getPosSupabaseClient()` 一次過修好。
 - ⚠️ **排查口訣**：「某樣嘢 reload 先出現」→ 先分「backfill 路徑（server / service_role，正常）」同「realtime 路徑（瀏覽器 anon，可能訂錯專案）」，唔好一開始就懷疑 UI 合併邏輯。
+- 🔴 **錯 anon key 唔可以報成「表存在但被拒」**（2026-09-11 實測撞到）：PostgREST **未認證就回 401，根本冇查表** → 錯 key 時**判斷唔到表存在與否**。實測文案：錯 key → `{"message":"Invalid API key"}`；冇 key → `{"message":"No API key found in request"}`；而「key 有效但 anon 冇 select」係 `42501` / `permission denied`。→ 判序**必須**先 `bad_key` 再 `unauthorized`（`isBadApiKeyBody()`），否則會令人去查 RLS/grant（查錯方向）。同理：**`SUBSCRIBED` 唔可以當推送健康證明**。
+- 🛠️ **自檢工具**：`tools/2026-09-11-check-pos-realtime.mjs`（`npx vercel env pull .env.local` 後 `node --env-file=.env.local tools/2026-09-11-check-pos-realtime.mjs --watch 20`）→ 探測三個 pos_* 表存在/anon 可讀 + 訂 `pos_orders` + 邊聽邊試。`--watch` 期間落一張測試單收到事件 = 唯一可信嘅 end-to-end 驗證。
