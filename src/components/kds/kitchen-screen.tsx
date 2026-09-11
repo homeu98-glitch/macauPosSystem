@@ -11,7 +11,7 @@ import {
   saveKdsDeviceBinding,
 } from "@/lib/kds/device-binding";
 import { remainingQtyOf } from "@/lib/kds/kds-board";
-import { isStationAvailable, needsStationPicker, stationLabel } from "@/lib/kds/stations";
+import { isStationAvailable, needsStationPicker } from "@/lib/kds/stations";
 import type { KdsBoardOrder, KdsDeviceBinding } from "@/lib/kds/types";
 import { useKdsBoard } from "@/lib/kds/use-kds-board";
 import { loadAuthSession, type AuthSession } from "@/lib/storage";
@@ -367,8 +367,9 @@ export function KitchenScreen() {
     [api.orders],
   );
 
-  const stationLabelText =
-    api.stations.find((item) => item.id === station)?.label ?? (station ? stationLabel(station) : "");
+  // 分區名**一律由商家設定提供**（api.stations = printZones）。
+  // 只喺「榜單未載入 / 分區已被刪」時才 fallback 落 raw id —— 誠實過亂譯一個名。
+  const stationLabelText = api.stations.find((item) => item.id === station)?.name ?? station ?? "";
   const stationMissing = Boolean(station && api.stations.length > 0 && !isStationAvailable(api.stations, station));
 
   // ───────────────────────── 未載入完 ─────────────────────────

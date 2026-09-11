@@ -4,7 +4,7 @@
 > 維護：新「坑」先寫 docs/113，**只有最高頻**才摘要上嚟；本檔 ≤ 3k 字元。
 
 ## 改動前必查
-- **後廚屏 KDS（2026-09-11 P0 完成）**：見 `docs/116` §10.1。三條鐵律 —— ① **唔行 outbox**、② 屏**唔碰** `pos_orders.status`（只寫 `fulfillment_status`），③ 崗位鎖喺設備綁定、屏內冇切換掣。單品完成表用 `done_qty`（份數）**唔係** boolean，否則加單會靜默漏單。屏嘅卡片格一定要 `auto-rows-max`（漏咗 = 卡片靜默重疊）。
+- **後廚屏 KDS（2026-09-11 P0 完成）**：見 `docs/116` §10.1 / §10.2。四條鐵律 —— ① **唔行 outbox**、② 屏**唔碰** `pos_orders.status`（只寫 `fulfillment_status`），③ 崗位鎖喺設備綁定、屏內冇切換掣，④ **分區清單真源 = 商家 `localSettings.printZones`**（`pos_device_configs.local_settings`）——**唔可以**讀 `printer_groups`（legacy demo 值）、**唔可以**硬編碼「廚房/水吧」（後廚1/2/3 要各自獨立；只可顯示 `name`、唔可顯示帶時間戳嘅 `id`）。單品完成用 `done_qty`（份數）**唔係** boolean，否則加單會靜默漏單。屏嘅卡片格一定要 `auto-rows-max`。
 - **報表頁**：KPI 帶**固定 `grid-cols-5`**（10 格同一個 grid）；**唔可以** `md:grid-cols-3 xl:grid-cols-5`。⚠️ 合併 grid **必須刪中間 `</div>`**，否則尾 N 格全寬堆疊（JSX 仍平衡 → build 全綠捉唔到）。`:key` remount ≠ 刷新，要用 `refreshToken`。
 - **`normalizePosLocalSettings` 係白名單重建** → 加欄唔加白名單 = 靜靜剷走（中過 `qrUrl`/`paperSize`/`shiftPresets`）。
 - **掃碼雙模式（docs/115）**：`/menu?tableId=`（堂食每枱一碼）/ `/quick?store=`（快餐全店一碼）完全區隔；`/menu` 冇 tableId **唔可以**當快餐。`scan_mode` **由登入驅動**：設定頁唯讀，唯一寫入點 `login-screen.tsx`；`kiosk`/`salon` **唔寫**。
@@ -26,6 +26,10 @@
 - **`printContentToggles` 加欄要同步 5 處**（`types.ts` Kind+Toggles / `storage.ts` 白名單 / `mock-data.ts` / `device-settings.tsx` ROWS / 註釋）。`online`（線上訂單）＝同 `kitchen`/`label` **乘積**；**唔可以**納入 `setAutoPrint()` 一鍵全關；熄咗要**靜默** `return []`，唔可以彈 toast。
 - **🔴「reload 先見到」＝ Realtime 冇推送**：server 寫單用 `SUPABASE_URL`（POS 專案），瀏覽器訂閱用 `NEXT_PUBLIC_SUPABASE_URL`（**Ledger 專案，冇 `pos_*` 表**）→ 訂唔存在嘅表 Supabase **唔會報錯**（照 `SUBSCRIBED`）。修：加 `NEXT_PUBLIC_POS_SUPABASE_URL`/`_ANON_KEY`（**必須 redeploy**）。健康只可靠一次性 REST 探測 `pos_orders`（`PGRST205`）；**唔可以**靠 channel status；錯 key（401）**唔可以**報成「表存在但被拒」（未認證根本冇查表，先 `bad_key` 後 `unauthorized`）。自檢 `tools/2026-09-11-check-pos-realtime.mjs --watch 20`。
 - **持續型提示唔可以照抄 `setToast`**；要 store-scope localStorage + 只喺 realtime `onOrderUpsert` 由 `isNewSelfOrder` 觸發（**唔可以寫死 `source==="scan"`**）；位置 `top-20`。**撳提示一律留在點餐頁面**（`tableId==="counter"` → 高亮卡片，唔跳頁）；`focusKey` 必須用**遞增序號**（`Object.is` → boolean 連撳兩次唔重跑 effect）。
+- **🔴 顧客端 Ledger（掃碼／Kiosk，契約 v3.4 §4.5／§5.11）**：**扣費／核銷只看「呢次操作有無店員 Ledger session」，同「掃碼抑或 Kiosk」無關。** 掃碼（客人手機）**冇** → 只可「顧客揀、**收銀台店員代扣**」（= docs/121 嘅 S3）；Kiosk 綁機時已用**店員帳號**登入 → 走既有 §5.7。**S2（顧客自助扣款 RPC）／S1（掃碼場景託管店員 token）Phase 1 都唔做**。顧客 JWT 打 §5.6／§5.7 會被 RLS 拒。Kiosk 必須**兩個** Ledger supabase client（顧客 `setSession` **唔可以**打店員單例，§7.3）。
+- **🔴 `pos_orders` 只可存 Ledger `customer_id`（uuid），禁存電話／PIN**（§5.11 開頭＋§7.2）→ docs/110 §6.2 嘅 `member_phone` **作廢**，改 `member_customer_id`。`display_name` 只可**當次畫面**。
+- **🔴 平台會員掃「別店」碼仍可登入** → 該店餘額顯示 0、卡包可能空，**唔應該 403「尚未成為本店會員」**（docs/110 §7.7 嘅反向檢查作廢）。
+- **契約本地真源**：`docs/integration/ledger-client-api.md`（**已更新至 v3.4，1271 行，含 §4.5／§5.11**；舊 9/1 版只到 §4.4／§5.9）。配套短清單 `docs/integration/pos-v3.4-partner-handover-customer-login.md`（§5 = 對 docs/121 嘅逐條回覆）。分析見 `docs/120`／需求單 `docs/121`。
 
 ## 硬性口徑（唔可以改）
 - 收入認列 `isSaleCountable(o)`：只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`。

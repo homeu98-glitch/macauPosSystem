@@ -25,7 +25,7 @@
  */
 
 import type { OrderItem } from "@/lib/types";
-import { deriveKdsStations, isKdsStation } from "./stations.ts";
+import { deriveKdsStations, isLegacyNonStation, type PrintZone } from "./stations.ts";
 import type {
   KdsBoardItem,
   KdsBoardOrder,
@@ -118,7 +118,12 @@ export interface BuildKdsBoardInput {
   /** 由 server 傳入；冇提供就用第二個參數 `nowMs`。 */
   serverTime?: string;
   serverNowMs?: number;
-  /** 店嘅 printerGroups（jsonb），用嚟砌工位清單。 */
+  /**
+   * 商家設定嘅**打印分區**（`localSettings.printZones`）—— 分區清單嘅**唯一權威來源**。
+   * 一間店可以有「後廚1/2/3、水吧1/2/3」六個獨立分區，**唔可以合併**。
+   */
+  printZones?: PrintZone[] | null;
+  /** 舊 `printer_groups`（jsonb）—— 只做 fallback，唔係分區真源。 */
   printerGroups?: Array<string | null | undefined> | null;
   /** 菜單用過嘅 printerGroup，用嚟砌工位清單。 */
   menuItemGroups?: Array<string | null | undefined> | null;
@@ -164,8 +169,11 @@ export function buildKdsBoard(input: BuildKdsBoardInput): BuildKdsBoardResult {
 
     for (const [itemKey, { item, quantity }] of aggregated) {
       const station = (item.printerGroup ?? "").trim();
-      // 非工位（receipt / label）唔上後廚屏 —— 佢哋唔係「要做嘅菜」。
-      if (!isKdsStation(station)) continue;
+      // 冇分區 = 唔知送去邊 → 唔上屏。
+      // `receipt` / `label` 係**打印機 role** 而唔係分區（正常唔會出現喺 printerGroup），
+      // 但舊資料 / mock 真係有，唔擋就會喺屏上出「收據」呢一行。
+      // ⚠️ 除此之外**唔可以**再過濾：自訂分區（後廚3、EricTest…）一律要上屏。
+      if (!station || isLegacyNonStation(station)) continue;
 
       const rawDone = doneMap.get(kdsStateKey(order.id, itemKey)) ?? 0;
       // clamp：減件之後舊嘅 done_qty 可能大過新 quantity
@@ -224,6 +232,7 @@ export function buildKdsBoard(input: BuildKdsBoardInput): BuildKdsBoardResult {
   });
 
   const stations = deriveKdsStations({
+    printZones: input.printZones,
     printerGroups: input.printerGroups,
     menuItemGroups: input.menuItemGroups,
     observedStationIds: [...observedStations],

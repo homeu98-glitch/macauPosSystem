@@ -13,6 +13,7 @@ import {
 } from "@/lib/pos/realtime-target";
 import type { PosOrder } from "@/lib/types";
 import { buildKdsBoard, kdsStateKey } from "./kds-board.ts";
+import type { PrintZone } from "./stations.ts";
 import type { KdsBoardOrder, KdsBoardOrderInput, KdsItemStateRow, KdsStationOption } from "./types.ts";
 import { useKdsRealtime, type KdsRealtimeItemStateRow } from "./use-kds-realtime.ts";
 
@@ -74,10 +75,11 @@ export function useKdsBoard(options: {
 
   const [bundles, setBundles] = useState<KdsBoardOrderInput[]>([]);
   const [stateMap, setStateMap] = useState<Map<string, KdsItemStateRow>>(() => new Map());
-  const [sources, setSources] = useState<{ printerGroups: string[]; menuItemGroups: string[] }>({
-    printerGroups: [],
-    menuItemGroups: [],
-  });
+  const [sources, setSources] = useState<{
+    printZones: PrintZone[];
+    printerGroups: string[];
+    menuItemGroups: string[];
+  }>({ printZones: [], printerGroups: [], menuItemGroups: [] });
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -132,6 +134,9 @@ export function useKdsBoard(options: {
             serverTime?: string;
             orders?: KdsBoardOrderInput[];
             states?: KdsItemStateRow[];
+            /** 🔴 分區真源（商家自己設定嘅打印分區）。 */
+            printZones?: PrintZone[];
+            /** 舊來源，只做 fallback。 */
             printerGroups?: string[];
             menuItemGroups?: string[];
             degraded?: string;
@@ -144,6 +149,8 @@ export function useKdsBoard(options: {
 
       setBundles(Array.isArray(payload.orders) ? payload.orders : []);
       setSources({
+        // 分區真源：商家自己設定嘅打印分區
+        printZones: Array.isArray(payload.printZones) ? payload.printZones : [],
         printerGroups: Array.isArray(payload.printerGroups) ? payload.printerGroups : [],
         menuItemGroups: Array.isArray(payload.menuItemGroups) ? payload.menuItemGroups : [],
       });
@@ -377,6 +384,7 @@ export function useKdsBoard(options: {
         // ⚠️ 唔傳 allowAllStations：產品上唔存在「全部」模式。
         //    station 係 null 時 buildKdsBoard 會回空 orders（只回 stations 畀「揀崗位」用）。
         station,
+        printZones: sources.printZones,
         printerGroups: sources.printerGroups,
         menuItemGroups: sources.menuItemGroups,
       }),

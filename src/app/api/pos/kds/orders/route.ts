@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 import { readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
-import { isKdsStation } from "@/lib/kds/stations";
+import { isLegacyNonStation } from "@/lib/kds/stations";
 import {
   authorizeKdsRequest,
   isMissingKdsTable,
@@ -54,7 +54,8 @@ function aggregateOrderItems(order: PosOrder, itemKeys: string[]): AggregatedIte
     const quantity = Math.trunc(Number(item.quantity ?? 0));
     if (!Number.isFinite(quantity) || quantity <= 0) return;
     const station = String(item.printerGroup ?? "").trim();
-    if (!isKdsStation(station)) return;
+    // 冇分區 / 舊資料排除項唔算出品（同 kds-board.ts 完全同口徑）
+    if (!station || isLegacyNonStation(station)) return;
 
     const existing = map.get(key);
     if (existing) {

@@ -197,22 +197,23 @@ body.offline .donebtn,body.offline .bigbtn{opacity:.3;pointer-events:none}
 .psub{font-size:14px;line-height:1.75;color:var(--slate-500);text-align:center;margin-top:12px;
   max-width:660px}
 .psub strong{color:var(--slate-900);font-weight:600}
-.pgrid{display:grid;grid-template-columns:repeat(2,400px);gap:20px;margin-top:28px}
-.pcard{display:grid;grid-template-columns:minmax(0,1fr);justify-items:center;gap:0;
-  background:#fff;border:1px solid var(--slate-200);border-radius:22px;padding:26px 24px 22px;
+.pzones-note{font-size:12.5px;color:var(--slate-400);margin-top:10px;text-align:center}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:16px;margin-top:28px;width:100%;max-width:840px}
+.pcard{display:grid;grid-template-columns:minmax(0,1fr);justify-items:center;gap:0;min-width:0;
+  background:#fff;border:1px solid var(--slate-200);border-radius:20px;padding:18px 16px 16px;
   cursor:pointer;font:inherit;text-align:center;transition:.14s;
   box-shadow:0 1px 2px rgba(15,23,42,.04)}
 .pcard:hover{border-color:var(--orange-400);box-shadow:0 10px 30px -12px rgba(234,88,12,.35);
   transform:translateY(-2px)}
 .pcard:active{transform:translateY(0)}
-.pcard .pic{font-size:56px;line-height:1}
-.pcard .pnm{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:14px;color:var(--slate-900)}
-.pcard .pds{font-size:13px;color:var(--slate-500);margin-top:7px;white-space:nowrap}
-.pcard .pq{font-size:13px;font-weight:600;color:var(--orange-700);background:var(--orange-50);
-  border-radius:999px;padding:6px 14px;margin-top:15px;white-space:nowrap}
+.pcard .pic{font-size:40px;line-height:1}
+.pcard .pnm{font-size:23px;font-weight:700;letter-spacing:-.02em;margin-top:10px;color:var(--slate-900);max-width:100%;overflow-wrap:anywhere}
+.pcard .pds{font-size:12px;color:var(--slate-500);margin-top:6px;white-space:nowrap}
+.pcard .pq{font-size:12.5px;font-weight:600;color:var(--orange-700);background:var(--orange-50);
+  border-radius:999px;padding:5px 12px;margin-top:11px;white-space:nowrap}
 .pcard .pq b{font-family:var(--mono);font-size:15px}
-.pcard .pcta{font-size:13.5px;font-weight:700;color:#fff;background:var(--slate-900);
-  border-radius:12px;padding:12px 20px;margin-top:16px;white-space:nowrap}
+.pcard .pcta{font-size:12.5px;font-weight:700;color:#fff;background:var(--slate-900);
+  border-radius:11px;padding:10px 16px;margin-top:13px;white-space:nowrap}
 .pfoot{font-size:12.5px;color:var(--slate-400);text-align:center;margin-top:26px;line-height:1.7}
 
 /* ══════════ 設定卡（切換崗位嘅唯一入口）══════════ */
@@ -439,22 +440,9 @@ body.offline .donebtn,body.offline .bigbtn{opacity:.3;pointer-events:none}
     <div class="pbody" data-page-node-id="vS1bX4wEsAn8Rc3DgU7xif">
       <div class="pask" data-page-node-id="wT2cY5xFtBo9Sd4EhV8yjg">呢部機係邊個崗位？</div>
       <div class="psub" data-page-node-id="xU3dZ6yGuCp1Te5FiW9zkh">揀咗之後，呢部屏<strong>只會顯示該崗位嘅出品</strong>，唔會見到其他崗位。<br>綁定之後，下次開機自動入返呢個崗位，唔使再揀。</div>
-      <div class="pgrid" id="pickGrid" data-page-node-id="yV4eA7zHvDq2Uf6GjX1alm">
-        <button class="pcard" data-st="kitchen" data-page-node-id="zW5fB8aIwEr3Vg7HkY2bmn">
-          <span class="pic" data-page-node-id="aX6gC9bJxFs4Wh8IlZ3cno">🍳</span>
-          <span class="pnm" data-page-node-id="bY7hD1cKyGt5Xi9Jm04dqp">廚房</span>
-          <span class="pds" data-page-node-id="cZ8iE2dLzHu6Yj1Kn15ers">熱菜 · 炒鍋 · 燒味 · 粉麵飯</span>
-          <span class="pq" data-page-node-id="dA9jF3eMaIv7Zk2Lo26fst">而家有 <b id="pqKitchen" data-page-node-id="eB1kG4fNbJw8Al3Mp37gtu">—</b> 項未完成</span>
-          <span class="pcta" data-page-node-id="fC2lH5gOcKx9Bm4Nq48huv">揀呢個崗位 →</span>
-        </button>
-        <button class="pcard" data-st="drinks" data-page-node-id="gD3mI6hPdLy1Cn5Or59iwx">
-          <span class="pic" data-page-node-id="hE4nJ7iQeMz2Do6Ps6ajxy">🥤</span>
-          <span class="pnm" data-page-node-id="iF5oK8jRfNa3Ep7Qt7bkz">水吧</span>
-          <span class="pds" data-page-node-id="jG6pL9kSgOb4Fq8Ru8claa">凍飲 · 咖啡茶 · 甜品 · 沙冰</span>
-          <span class="pq" data-page-node-id="kH7qM1lThPc5Gr9Sv9dmbb">而家有 <b id="pqDrinks" data-page-node-id="lI8rN2mUiQd6Hs1Tw1enc">—</b> 項未完成</span>
-          <span class="pcta" data-page-node-id="mJ9sO3nVjRe7It2Ux2fodd">揀呢個崗位 →</span>
-        </button>
-      </div>
+      <div class="pzones-note">↓ 以下分區由本店「設定 → 打印機綁定 → 打印分區」自己設定（每間店唔同）</div>
+      <!-- 分區卡由 JS 按商家設定嘅 printZones 生成（唔可以寫死！） -->
+      <div class="pgrid" id="pickGrid"></div>
       <div class="pfoot" data-page-node-id="nK1tP4oWkSf8Ju3Vy3gpee">
         ⚠ 揀錯咗唔緊要 —— 屏內「⚙ 設定」→「切換崗位」可以改（要重新登入，防止誤撳）
       </div>
@@ -853,15 +841,18 @@ function renderExpo(){
 }
 
 /* ══════════ 總渲染 ══════════ */
+/* 未完成統計：`all` = 未完成**行數**（畀出餐台用）；`byStation` = 各分區未完成**份數**。
+   ⚠️ 唔可以再用 `kitchen` / `drinks` 兩個硬編碼 key —— 分區係商家自訂嘅。 */
 function counts(){
-  var all=0,k=0,d=0;
+  var all=0, byStation={};
   activeOrders().forEach(function(o){
     o.items.forEach(function(i){
       if(i.done>=i.qty) return;
-      all++; if(i.station==="kitchen") k++; if(i.station==="drinks") d++;
+      all++;
+      byStation[i.station]=(byStation[i.station]||0)+(i.qty-i.done);
     });
   });
-  return { all:all, kitchen:k, drinks:d, orders:activeOrders().length };
+  return { all:all, byStation:byStation, orders:activeOrders().length };
 }
 function currentTab(){ return document.querySelector(".review .tabs button.on").getAttribute("data-tab"); }
 
@@ -869,22 +860,59 @@ function currentTab(){ return document.querySelector(".review .tabs button.on").
    廚房屏唔應該見到水吧仲有幾多杯未做（見到就會以為係自己做漏）。 */
 function paintCounts(){
   var c=counts();
-  document.getElementById("kCount").textContent = station==="drinks" ? c.drinks : c.kitchen;
-  /* 揀崗位畫面順便顯示各崗位而家有幾多嘢做，幫同事揀得快啲 */
-  var pqk=document.getElementById("pqKitchen"), pqd=document.getElementById("pqDrinks");
-  if(pqk) pqk.textContent = c.kitchen;
-  if(pqd) pqd.textContent = c.drinks;
+  document.getElementById("kCount").textContent = c.byStation[station] || 0;
+  /* 揀崗位畫面順便顯示各分區而家有幾多嘢做，幫同事揀得快啲 */
+  Array.prototype.forEach.call(document.querySelectorAll("#pickGrid [data-pq]"), function(el){
+    el.textContent = c.byStation[el.getAttribute("data-pq")] || 0;
+  });
   document.getElementById("eCount").textContent=c.orders;
   document.getElementById("qCnt").textContent=c.orders;
 }
 
-/* 崗位 = 設備屬性。呢度係全份稿唯一嘅崗位真源。
-   color 用嚟做頂欄鎖定徽章嘅色點（細尺寸下 emoji 會睇成「放大鏡」，所以徽章唔用 emoji）。 */
-var STATIONS={
-  kitchen:{ icon:"🍳", name:"廚房", role:"廚房屏", color:"var(--orange-500)" },
-  drinks: { icon:"🥤", name:"水吧", role:"水吧屏", color:"var(--sky-500)" }
-};
+/* ─────────────────────────────────────────────────────────────
+   🔴 分區（崗位）真源 = 商家自己喺「設定 → 打印機綁定 → 打印分區」設定嘅分區。
+   一間店可以有後廚1/2/3、水吧1/2/3 六個**獨立**分區，各有各嘅師傅 ——
+   **唔會**合併成「廚房」「水吧」，**亦唔會**由系統改個名。
+
+   ⚠️ 注意 id 同 name 係兩件事：`kitchen` / `drinks` 係舊資料留落嚟嘅 id，
+   商家可以將佢改名做「後廚1」「水吧1」。所以**顯示一律用 name，唔可以用 id 查表**。
+   （呢個就係舊版硬編碼 STATION_LABELS 中招嘅地方。）
+   真代碼由 `GET /api/pos/kds/board` 回傳 `printZones`，呢度只係示範資料。
+   ───────────────────────────────────────────────────────────── */
+var PRINT_ZONES=[
+  { id:"kitchen", name:"後廚1", desc:"炒鍋 · 粉麵飯", icon:"🍳", color:"var(--orange-500)" },
+  { id:"drinks",  name:"水吧1", desc:"凍飲 · 沙冰",   icon:"🥤", color:"var(--sky-500)" },
+  { id:"後廚2",   name:"後廚2", desc:"燒味 · 蒸櫃",   icon:"🍖", color:"var(--rose-500)" },
+  { id:"後廚3",   name:"後廚3", desc:"炸爐 · 小食",   icon:"🍟", color:"var(--amber-700)" },
+  { id:"水吧2",   name:"水吧2", desc:"咖啡 · 奶茶",   icon:"☕", color:"var(--indigo-700)" },
+  { id:"水吧3",   name:"水吧3", desc:"甜品 · 燉品",   icon:"🍮", color:"var(--emerald-600)" }
+];
+var STATIONS={};
+PRINT_ZONES.forEach(function(z){
+  STATIONS[z.id]={ icon:z.icon, name:z.name, role:z.name+"屏", color:z.color };
+});
 function curStation(){ return STATIONS[station] || null; }
+
+/** 分區卡由 printZones 生成 —— 加減分區唔使改 HTML。 */
+function renderPicker(){
+  var grid=document.getElementById("pickGrid");
+  if(!grid) return;
+  grid.innerHTML=PRINT_ZONES.map(function(z){
+    return '<button class="pcard" data-st="'+z.id+'">'
+      +'<span class="pic">'+z.icon+'</span>'
+      +'<span class="pnm">'+z.name+'</span>'
+      +'<span class="pds">'+z.desc+'</span>'
+      +'<span class="pq">而家有 <b data-pq="'+z.id+'">—</b> 份未完成</span>'
+      +'<span class="pcta">揀呢個崗位 →</span>'
+      +'</button>';
+  }).join("");
+  /* ⚠️ 動態生成嘅元素**一定要喺呢度自己綁 handler** ——
+     出面再 querySelectorAll 一次會喺 DOM stub（無瀏覽器煙霧測試）捉唔到，
+     而且真實瀏覽器都係「生成完即刻綁」最穩。 */
+  Array.prototype.forEach.call(grid.querySelectorAll(".pcard"), function(c){
+    c.onclick=function(){ chooseStation(c.getAttribute("data-st")); };
+  });
+}
 
 /* 把崗位資訊畫落頂欄徽章同設定卡 */
 function paintStationChrome(){
@@ -950,10 +978,8 @@ Array.prototype.forEach.call(document.querySelectorAll(".review .tabs button"), 
     b.classList.add("on"); hideUndo(); render();
   };
 });
-/* ── 揀崗位（審稿用：撳②再揀，就可以睇另一個崗位嘅屏） ── */
-Array.prototype.forEach.call(document.querySelectorAll("#pickGrid .pcard"), function(c){
-  c.onclick=function(){ chooseStation(c.getAttribute("data-st")); };
-});
+/* ── 揀崗位（審稿用：撳②再揀，就可以睇另一個崗位嘅屏）── */
+renderPicker();   /* 由 PRINT_ZONES 生成分區卡（handler 喺 renderPicker 內部綁） */
 
 /* ── 設定卡 = 屏內切換崗位嘅**唯一**入口（逃生門） ── */
 document.getElementById("kSetBtn").onclick=function(){

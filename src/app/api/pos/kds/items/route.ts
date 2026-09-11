@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 import { readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
-import { isKdsStation } from "@/lib/kds/stations";
+import { isLegacyNonStation } from "@/lib/kds/stations";
 import { authorizeKdsRequest, isMissingKdsTable, loadKdsOrderForWrite } from "@/lib/kds/kds-server";
 import type { PosOrder } from "@/lib/types";
 
@@ -109,10 +109,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // 非工位（receipt / label）唔應該有後廚屏狀態 —— 擋住唔畀寫垃圾行
-  if (!isKdsStation(resolved.station)) {
+  // 冇分區 / 舊資料排除項（receipt / label）唔應該有後廚屏狀態 —— 擋住唔畀寫垃圾行。
+  // ⚠️ 自訂分區（後廚3、EricTest…）**一律要放行**，唔可以再收窄。
+  if (!resolved.station || isLegacyNonStation(resolved.station)) {
     return NextResponse.json(
-      { ok: false, code: "not_a_station", error: "呢個菜品唔屬於任何工位。" },
+      { ok: false, code: "not_a_station", error: "呢個菜品唔屬於任何打印分區。" },
       { status: 400 },
     );
   }

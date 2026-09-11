@@ -332,8 +332,29 @@ describe("buildKdsBoard · 排序與統計", () => {
     assert.equal(byId.kitchen, 0);
   });
 
-  it("stations 由 printerGroups 推導（剔走 receipt）", () => {
-    const res = build([], [], { printerGroups: ["kitchen", "drinks", "receipt"] });
+  it("🔴 stations 主來源係商家 printZones（後廚1/2/3、水吧1/2/3 各自獨立）", () => {
+    const res = build([], [], {
+      printZones: [
+        { id: "後廚1", name: "後廚1" },
+        { id: "後廚2", name: "後廚2" },
+        { id: "後廚3", name: "後廚3" },
+        { id: "水吧1", name: "水吧1" },
+        { id: "水吧2", name: "水吧2" },
+        { id: "水吧3", name: "水吧3" },
+      ],
+    });
+    assert.deepEqual(res.stations.map((s) => s.name), [
+      "後廚1",
+      "後廚2",
+      "後廚3",
+      "水吧1",
+      "水吧2",
+      "水吧3",
+    ]);
+  });
+
+  it("舊 printerGroups 只做 fallback（剔走 receipt / label）", () => {
+    const res = build([], [], { printerGroups: ["kitchen", "drinks", "receipt", "label"] });
     assert.deepEqual(res.stations.map((s) => s.id), ["kitchen", "drinks"]);
   });
 
@@ -343,19 +364,20 @@ describe("buildKdsBoard · 排序與統計", () => {
     assert.deepEqual(res.stations.map((s) => s.id), ["drinks"]);
   });
 
-  it("stations 唔會夾硬塞入綁定嘅工位（要反映真實清單）", () => {
-    // 綁定咗「炸爐」但店根本冇呢個工位（菜單 / printer_groups 都冇，亦冇單）→
-    // 清單應該係 fallback 嘅 kitchen，唔應該出現「炸爐」。
-    // 客戶端**唔會**因為咁而自動彈返揀崗位（見 kitchen-screen.tsx）——
-    // 掛喺牆上嘅屏唔應該無啦啦跳去揀崗位，要改就人手入設定。
+  it("stations 唔會夾硬塞入綁定嘅分區（要反映真實清單）", () => {
+    // 綁定咗「炸爐」但店根本冇呢個分區（printZones / 菜單 / 單都冇）→
+    // 清單唔應該出現「炸爐」。客戶端**唔會**因為咁而自動彈返揀崗位
+    // （見 kitchen-screen.tsx）—— 掛喺牆上嘅屏唔應該無啦啦跳去揀崗位。
     const res = build([], [], { station: "炸爐", printerGroups: [], menuItemGroups: [] });
     assert.ok(!res.stations.some((s) => s.id === "炸爐"));
-    assert.deepEqual(res.stations.map((s) => s.id), ["kitchen"]);
+    assert.deepEqual(res.stations, []);
   });
 
-  it("冇任何 printerGroups / 菜單 → fallback 單一廚房", () => {
+  it("冇 printZones、冇單、冇菜單 → 回空清單（UI 顯示「未設定打印分區」）", () => {
+    // ⚠️ 刻意**唔**造假 fallback（以前係硬編碼「廚房」）：屏上顯示一個商家冇設定過
+    // 嘅分區，比顯示「請去設定分區」更差 —— 師傅會揀咗一個永遠冇出品嘅崗位。
     const res = build([], [], { printerGroups: [], menuItemGroups: [] });
-    assert.deepEqual(res.stations.map((s) => s.id), ["kitchen"]);
+    assert.deepEqual(res.stations, []);
   });
 });
 

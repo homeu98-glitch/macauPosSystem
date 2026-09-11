@@ -30,9 +30,13 @@ export interface KdsDeviceBinding {
 
 /** 「揀崗位」畫面用嘅候選項。 */
 export interface KdsStationOption {
+  /** 分區 id（= `OrderItem.printerGroup`）。⚠️ 唔應該直接顯示畀用戶睇 —— 自訂分區嘅 id 帶時間戳。 */
   id: string;
+  /** 商家設定嘅分區名。 */
+  name: string;
+  /** 顯示用（同 `name` 一樣；保留 `label` 係為咗同舊 call site 相容）。 */
   label: string;
-  /** 而家未完成嘅項數（跨全店、唔扣站，畀同事一眼睇邊個工位忙）。 */
+  /** 而家未完成嘅**份數**（跨全店、唔扣站，畀同事一眼睇邊個分區忙）。 */
   pending: number;
 }
 

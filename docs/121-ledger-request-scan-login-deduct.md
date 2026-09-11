@@ -10,6 +10,29 @@
 
 ---
 
+## 0.1 ✅ 已回覆（2026-09-11 17:28）
+
+Ledger 已提供 v3.4 契約正本（`docs/integration/ledger-client-api.md`，1271 行），並在交接文檔
+`docs/integration/pos-v3.4-partner-handover-customer-login.md` **§5「對 docs/121 的回覆」**逐條作答。
+以下為摘要（權威仍以契約為準）：
+
+| 本單項 | Ledger 回覆 |
+|--------|------------|
+| **§3 扣費路徑** | **S3**：掃碼 = 顧客揀、**收銀台店員代扣**（顧客 JWT 不可自助扣）。**Kiosk** = 用裝置現成**店員 session** 走既有 §5.7（**唔係**新 RPC）。**S2** Phase 1 不做；**S1**（掃碼場景託管店員 token）Phase 1 不認可 |
+| **L1–L2 規格** | ✅ §4.5／§5.11 已提供；請整份覆蓋本地 9/1 過期副本（**已完成**） |
+| **L3–L7 授權** | ✅ 共用 `@phone.macau-ledger.app` + 同一 pepper；**未設 PIN 無獨立錯誤碼**（Auth 無法穩定區分，統一「密碼錯誤」，靠文案引導）；access token ~1h + refresh；`wallets` 顧客只能 SELECT 本人列，**必帶** `customer_id` 與 `merchant_id`；**無列 = 餘額 0**（**唔應該 403「非本店會員」**）；店員用掃碼頁登入**合法** |
+| **L8–L11 金鑰** | ✅ 沿用已提供之 UAT／正式三件套，不可混；S2 不做故**無新冪等規格**；店員扣款沿用既有 `p_idempotency_key` |
+| **L12–L15 綁定** | ✅ `customer_id = auth.uid()`；**`?store=` = `merchants.id`（確認）**；`display_name` = `profiles.display_name`（登入後 select 本人 profiles）；跨店**可登入**，該店餘額 0／卡包可能空 |
+| **L16–L21 扣費** | ✅ 掃碼自助**不開放**；錯扣補救 = 店員／Admin 走 Ledger Web 沖正（POS 禁 `p_type=add`）；**不加部分扣款**；**Webhook Phase 1 不做**（L22 同意同步 RPC 即可） |
+| **L25–L27 合規** | ✅ `pos_orders` **只許落 Ledger `customer_id`（uuid）**，**禁止落電話／PIN**；顯示名僅當次畫面；條款已涵蓋掃碼頁登入自讀（**無需改條文**） |
+| **L28–L29 聯測** | 店主 `60000001`／`1111`；會員 `60000003`（已註冊）。餘額／未設 PIN 樣本用 UAT 自備號 |
+
+**由此產生嘅設計修正**：① 唔應該 403「非本店會員」；② `pos_orders` 欄位由 `member_phone` 改為 **`member_customer_id`**；
+③ 未設 PIN 只能靠文案引導；④ Kiosk 雙 client 係硬性（§7.3）。
+（詳見 `docs/120` §6.1。）
+
+---
+
 ## 0. 背景
 
 掃碼點餐（`/menu?tableId=&store=<merchantId>`、`/quick?store=<merchantId>`）目前**完全沒有會員概念**：客人只能落單，一律「請往收銀付款」。

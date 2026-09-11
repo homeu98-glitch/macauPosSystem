@@ -360,3 +360,41 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
   呢兩個腳本已抽出成可重用 skill：`~/.workbuddy/skills/pixel-stable-ui-mockup/`。
 - **取捨**：`align-items:stretch` 令同一 row 卡片等高、兩邊按鈕橫向對齊，代價係項目少嘅卡底部有空白（實測最多 ~133px）。
   想要密排就要改「兩欄獨立堆疊（masonry）」，但會失去跨卡橫向對齊。
+
+## 🔴 商家自訂詞彙唔可以寫死成系統枚舉（2026-09-11 · KDS 分區中過）
+
+**病症**：後廚屏「揀崗位」只顯示「廚房 / 水吧」兩個選項，但商家明明喺
+「設定 → 打印機綁定 → 打印分區」加咗「後廚1/2/3、水吧1/2/3」（甚至「EricTest」）。
+屏上完全見唔到，師傅揀唔到自己嘅崗位。
+
+**根因（兩個獨立錯誤疊埋）**：
+
+1. **讀錯來源**：KDS 讀 `pos_bootstrap_config.printer_groups` —— 呢個係 **legacy / demo 值**
+   （`src/lib/mock-data.ts` 寫死 `["kitchen","drinks","receipt"]`），同商家分區完全無關。
+   真源係 `localSettings.printZones: { id, name }[]`（`src/lib/types.ts`），
+   經 `/api/pos/device-config` 存喺 `pos_device_configs.local_settings.printZones`。
+2. **硬編碼對照表**：`STATION_LABELS = { kitchen:"廚房", drinks:"水吧", … }`。
+   商家改名 → 屏上照顯示代碼嗰個名；自訂分區 → 顯示 raw id。
+
+**通則（唔止 KDS）**：
+
+> 只要一個概念係**商家可以自由命名**嘅（打印分區、樓層、枱區、折扣名、備註預設、
+> 規格組…），就**一定唔可以**喺 code 寫死成 union / enum / 對照表。
+> 一定要由設定資料推導，名**原樣**用商家嗰個。
+
+**連帶陷阱**：
+
+- **id 同 name 係兩件事**。分區 id 生成方式係 `` `${name.toLowerCase()}-${Date.now()}` ``
+  → **帶時間戳**。所以 id **唔可以顯示畀用戶睇**、唔可以攞嚟查表、改名 / 刪除再加就會變。
+  屏上一律用 `name`。
+- **空清單唔可以造假 fallback**。以前 fallback 去硬編碼「廚房」→ 師傅揀到一個永遠冇出品
+  嘅崗位，比顯示「請去設定分區」更差。
+- **但要有「舊資料」補救**：舊單 / 未同步嘅值可能唔喺新清單入面，
+  完全唔認就會令嗰啲單**上唔到屏**。做法：新來源做**主**，觀察到嘅舊值做**補**（名用 id）。
+- **「打印機 role」唔等於「分區」**：`receipt` / `label` 係 `printer.role`，
+  唔係分區（role === "receipt" 嘅機根本冇 `zoneId`）。排除項只應該套用到舊值，
+  **唔可以**套用到商家自己開嘅分區（佢真係可以開一個叫「收銀」嘅分區）。
+
+**清單類資料嘅擺放**：呢類「店級、purpose-built」嘅設定唔應該屈喺
+`pos_device_configs.local_settings`（per-device，讀法係「最新一條」）——
+最後保存嗰部機會蓋走全店。應該開專用嘅店級欄位（例如 `pos_bootstrap_config.print_zones jsonb`）。

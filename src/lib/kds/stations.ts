@@ -1,122 +1,108 @@
 /**
- * KDS 工位（崗位）推導（docs/116 §4.4）。
+ * KDS 工位（崗位）推導（docs/116 §4.4 · 2026-09-11 修正）。
  *
- * ## 為什麼唔可以寫死工位清單
+ * ## 🔴 工位清單嘅唯一權威來源 = 商家自己設定嘅「打印分區」
  *
- * `type PrinterGroup = string` —— 係**自由字串**，唔係 union。
- * 店家可以自己加「炸爐」「蒸櫃」「刺身」任何值。所以工位清單一定要
- * **由實際資料推導**，唔可以喺 code 寫死 `["kitchen","drinks"]`。
+ * 商家喺「設定 → 打印機綁定 → 打印分區」自由新增分區（UI 文案都寫「分區可自由新增」），
+ * 存喺 `localSettings.printZones: { id, name }[]`，同步上
+ * `pos_device_configs.local_settings.printZones`。
  *
- * ## 為什麼一定要剔走 `receipt` / `label`
+ * 典型：一間店可以有 **後廚1 / 後廚2 / 後廚3 / 水吧1 / 水吧2 / 水吧3** 六個分區。
+ * 佢哋係**六個獨立工作崗位**（各有各嘅師傅、各有各嘅出餐節奏），
+ * **唔可以**合併成「廚房」同「水吧」兩個。
  *
- * `receipt` 係**收銀機嘅出單打印機**，`label` 係標籤機 —— 兩者都唔係「一個工作崗位」。
- * 如果佢哋出現喺「揀崗位」畫面，師傅會揀到一個永遠冇出品嘅工位。
- * 呢個係最重要嘅過濾，唔可以漏。
+ * ## 為什麼唔可以喺 code 寫死分區名（舊版嘅錯）
+ *
+ * 舊版有一個 `STATION_LABELS = { kitchen:"廚房", drinks:"水吧", … }` 嘅對照表，
+ * 結果係：① 商家改咗分區名，屏上仍然顯示我寫死嗰個；
+ * ② 自訂分區（例如「EricTest」「後廚3」）會顯示成 raw id（甚至帶時間戳）。
+ * 呢個係**產品概念錯誤** —— 分區係商家嘅商業詞彙，唔係系統嘅固定枚舉。
+ *
+ * ## 為什麼仍然要保留一個「舊資料」補救來源
+ *
+ * 舊店 / 未同步嘅環境，訂單上嘅 `printerGroup` 可能係 `kitchen` / `drinks` 之類
+ * 唔喺 `printZones` 入面嘅值（歷史資料、或者 mock）。若果完全唔認佢，
+ * 嗰啲單會**完全上唔到屏**（師傅見唔到要做嘅菜）—— 比顯示一個怪名嚴重得多。
+ * 所以：`printZones` 做**主**，訂單實際觀察到嘅 id 做**補**（名就係 id 本身）。
  *
  * 純函式、零執行期 import → 可 `node --test`（見 `stations.test.ts`）。
  */
 
 import type { KdsStationOption } from "./types.ts";
 
+/** 商家設定嘅一個打印分區。同 `PosLocalSettings["printZones"][number]` 同形狀。 */
+export interface PrintZone {
+  id: string;
+  name: string;
+}
+
 /**
- * 唔係工位嘅 printerGroup。
- * - `receipt`：收銀機出單（`PrinterGroup` 預設值之一，全店都用）
- * - `label`：標籤機（杯貼 / 包裝貼）
+ * ⚠️ **只**用嚟過濾「舊資料 / 未同步」嘅 fallback 值，**唔會**套用到商家嘅
+ * `printZones`。呢兩個字係打印機 **role**（`printer.role`），唔係分區 ——
+ * 正常情況下 `printZones` 根本唔會包含佢哋（`printer-wizard-modal` 入面
+ * role === "receipt" 嘅機係**冇** `zoneId` 嘅）。
+ * 舊 `printer_groups` / `mock-data` 真係有 `receipt` 呢個值，唔擋就會喺屏上出「收據」。
  */
-export const NON_STATION_PRINTER_GROUPS: ReadonlySet<string> = new Set(["receipt", "label"]);
+export const LEGACY_NON_STATION_VALUES: ReadonlySet<string> = new Set(["receipt", "label"]);
 
-/** 常見工位嘅中文顯示名。冇對應就用返原字串（店家自訂工位唔會被迫改名）。 */
-const STATION_LABELS: Record<string, string> = {
-  kitchen: "廚房",
-  hot: "熱廚",
-  wok: "炒鍋",
-  grill: "燒味",
-  cold: "冷盤",
-  drinks: "水吧",
-  bar: "水吧",
-  beverage: "飲品",
-  dessert: "甜品",
-};
-
-/** 冇任何可用工位時嘅唯一 fallback（細店 / 菜單未設 printerGroup）。 */
-export const FALLBACK_STATION_ID = "kitchen";
-
-/** 排序權重：廚房類行先、水吧其後，未知工位排最後（按字母）。 */
-const STATION_ORDER: Record<string, number> = {
-  kitchen: 0,
-  hot: 1,
-  wok: 2,
-  grill: 3,
-  cold: 4,
-  drinks: 10,
-  bar: 11,
-  beverage: 12,
-  dessert: 13,
-};
-
-export function stationLabel(id: string): string {
-  return STATION_LABELS[id] ?? id;
+function cleanId(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-/** 呢個 printerGroup 係唔係一個「工作崗位」。 */
-export function isKdsStation(printerGroup: string | null | undefined): boolean {
-  if (typeof printerGroup !== "string") return false;
-  const trimmed = printerGroup.trim();
-  if (!trimmed) return false;
-  return !NON_STATION_PRINTER_GROUPS.has(trimmed.toLowerCase());
+/** 呢個值係唔係「舊資料專用」嘅排除項（唔係分區）。 */
+export function isLegacyNonStation(value: string | null | undefined): boolean {
+  const id = cleanId(value);
+  return Boolean(id) && LEGACY_NON_STATION_VALUES.has(id.toLowerCase());
 }
 
 /**
- * 由菜單、打印機群同**實際訂單出現過嘅工位**推導工位清單。
+ * 工位清單。
  *
- * 三個來源係**聯集**：
- *   1. `observedStationIds` —— 現時板上訂單真正出現過嘅工位（最權威）
- *   2. `menuItems[].printerGroup` —— 菜單有出品嘅工位
- *   3. `printerGroups[]` —— 店已配置嘅打印機群
- *
- * 點解要第 1 個來源：如果只靠 `printer_groups`，一旦店家未同步餐牌就會**冇工位可揀**；
- * 而且「店員落單夾咗一個新工位」嘅單出現時，屏亦要即時見得到。
- * 反過來只靠第 1 個來源唔得：板上冇單（清晨 / 落場）就會冇工位清單 → 部機開唔到。
- *
- * @param pending 各工位未完成項數（`{ kitchen: 7, drinks: 3 }`）。冇提供就全部 0。
+ * @param printZones 商家設定嘅打印分區（**主來源**，名由商家話事）
+ * @param observedStationIds 板上訂單實際出現過嘅 `printerGroup`（補舊資料 / 未同步）
+ * @param menuItemGroups 菜單 `menuItem.printerGroup`（再兜一層；舊菜單可能仍係 `kitchen`）
+ * @param printerGroups 舊 `pos_bootstrap_config.printer_groups`（最後兜底）
+ * @param pending 各工位未完成**份數**（`{ "後廚1": 3 }`）。冇提供就全部 0。
  */
 export function deriveKdsStations(input: {
-  printerGroups?: Array<string | null | undefined> | null;
-  menuItemGroups?: Array<string | null | undefined> | null;
+  printZones?: PrintZone[] | null;
   observedStationIds?: Array<string | null | undefined> | null;
+  menuItemGroups?: Array<string | null | undefined> | null;
+  printerGroups?: Array<string | null | undefined> | null;
   pending?: Record<string, number> | null;
 }): KdsStationOption[] {
-  const ids = new Set<string>();
-  const add = (group: string | null | undefined) => {
-    if (isKdsStation(group)) ids.add(String(group).trim());
-  };
-  for (const group of input.observedStationIds ?? []) add(group);
-  for (const group of input.menuItemGroups ?? []) add(group);
-  for (const group of input.printerGroups ?? []) add(group);
-
-  // 一個工位都冇 → fallback 單一「廚房」。
-  // 唔回空陣列：空陣列會令「揀崗位」畫面冇嘢揀 = 部機卡死。
-  if (ids.size === 0) ids.add(FALLBACK_STATION_ID);
-
   const pending = input.pending ?? {};
-  return [...ids]
-    .sort((a, b) => {
-      const wa = STATION_ORDER[a] ?? 900;
-      const wb = STATION_ORDER[b] ?? 900;
-      if (wa !== wb) return wa - wb;
-      return a.localeCompare(b);
-    })
-    .map((id) => ({
-      id,
-      label: stationLabel(id),
-      pending: Math.max(0, Math.trunc(pending[id] ?? 0)),
-    }));
+  const out: KdsStationOption[] = [];
+  const seen = new Set<string>();
+
+  // ① 主來源：商家設定嘅分區。名 = 商家打嘅名，**一個都唔合併、一個都唔改名**。
+  for (const zone of input.printZones ?? []) {
+    const id = cleanId(zone?.id);
+    if (!id || seen.has(id)) continue;
+    const name = cleanId(zone?.name) || id;
+    seen.add(id);
+    out.push({ id, name, label: name, pending: Math.max(0, Math.trunc(pending[id] ?? 0)) });
+  }
+
+  // ② 補救：舊資料 / 未同步嘅 id（只加唔喺 printZones 入面嘅）。
+  const addFallback = (raw: string | null | undefined) => {
+    const id = cleanId(raw);
+    if (!id || seen.has(id) || isLegacyNonStation(id)) return;
+    seen.add(id);
+    // 冇名可以提供 → 用 id 做名（誠實過亂譯）
+    out.push({ id, name: id, label: id, pending: Math.max(0, Math.trunc(pending[id] ?? 0)) });
+  };
+  for (const id of input.observedStationIds ?? []) addFallback(id);
+  for (const id of input.menuItemGroups ?? []) addFallback(id);
+  for (const id of input.printerGroups ?? []) addFallback(id);
+
+  return out;
 }
 
 /**
  * 揀崗位畫面要唔要顯示選擇步驟。
  *
- * 只有一個工位 → **唔應該出選擇步驟**，直接鎖定（docs/116 §4.4 邊界情況）。
+ * 只有一個分區 → **唔應該出選擇步驟**，直接鎖定（docs/116 §4.4 邊界情況）。
  * 多餘嘅一步只會增加誤按機會，同我哋嘅目標相反。
  */
 export function needsStationPicker(stations: KdsStationOption[]): boolean {
@@ -124,15 +110,16 @@ export function needsStationPicker(stations: KdsStationOption[]): boolean {
 }
 
 /**
- * 校驗一個「已綁定嘅 station」仲係唔係有效工位。
+ * 校驗一個「已綁定嘅 station」仲係唔係有效分區。
  *
- * 用途：店家改咗菜單 / 換咗打印機之後，綁定嘅工位可能已經唔存在。
- * 呢個時候**唔可以**靜靜當佢係「全部」——要彈返去重揀。
+ * 用途：店家改咗分區之後，綁定嘅分區可能已經唔存在 → 設定卡要出提示。
+ * ⚠️ **唔會**自動彈返去揀崗位 —— 掛喺牆上嘅屏無啦啦跳去揀崗位係災難。
  */
 export function isStationAvailable(
   stations: KdsStationOption[],
   station: string | null | undefined,
 ): boolean {
-  if (typeof station !== "string" || !station.trim()) return false;
-  return stations.some((s) => s.id === station);
+  const id = cleanId(station);
+  if (!id) return false;
+  return stations.some((s) => s.id === id);
 }

@@ -661,6 +661,73 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 
 ---
 
+### 10.2 🔴 分區（崗位）真源修正（2026-09-11，用戶指出）
+
+#### 問題
+
+KDS「揀崗位」畫面顯示嘅係**系統硬編碼**嘅「廚房 / 水吧」，而唔係商家自己設定嘅打印分區。
+
+商家喺「設定 → 打印機綁定 → 打印分區」可以自由新增（例如 **後廚1 / 後廚2 / 後廚3 /
+水吧1 / 水吧2 / 水吧3**，或者「EricTest」），但屏上完全見唔到。
+
+#### 根因（兩個獨立錯誤疊埋）
+
+| # | 錯誤 | 後果 |
+|---|---|---|
+| 1 | KDS 讀 `pos_bootstrap_config.printer_groups` 當成分區清單 | 呢個欄位係 **legacy / demo 值**（`["kitchen","drinks","receipt"]`，見 `mock-data.ts`），同商家分區完全無關 |
+| 2 | `STATION_LABELS` 硬編碼 `kitchen→廚房`、`drinks→水吧` | 商家改咗分區名，屏上仍然顯示代碼寫死嗰個；自訂分區（`後廚3`、`erictest-1757…`）就會顯示 raw id |
+
+**分區嘅真正來源**係 `localSettings.printZones: { id, name }[]`
+（`src/lib/types.ts` `PosLocalSettings`），由設定頁「保存」經
+`/api/pos/device-config` 推上 `pos_device_configs.local_settings.printZones`。
+KDS 從來冇讀過佢。
+
+#### 為什麼用戶嘅邏輯係正確嘅
+
+1. **分區係商家嘅商業詞彙，唔係系統嘅固定枚舉。** 設定頁本身就寫「分區可自由新增」。
+2. **後廚1/2/3 係三個獨立工作崗位**（各有各嘅師傅、各有各嘅出餐節奏）。合併成「廚房」之後：
+   - 每個崗位都要睇晒其他崗位嘅嘢 → 誤撳；
+   - 三個崗位嘅 ✓ 混埋一張單 → 冇人知邊個未做；
+   - 「未完成 N」對唔上任何一個人嘅工作量。
+3. **系統內部本身已經係「各自獨立」**：`OrderItem.printerGroup` 存嘅就係
+   `menuPrinterOverrides[itemId] ?? item.printerGroup`，即係**分區 id**。
+   「統一合併」純粹係 KDS 顯示層硬加嘅一層對照表。
+
+#### 修正
+
+| 位置 | 改動 |
+|---|---|
+| `src/lib/kds/stations.ts` | **刪除** `STATION_LABELS` / `isKdsStation`；改為 `deriveKdsStations({ printZones, … })`，名**一律由商家提供**。分區次序亦跟商家設定 |
+| `src/lib/kds/kds-server.ts` | 新增讀 `pos_device_configs.local_settings.printZones`（逐個元素白名單化） |
+| `GET /api/pos/kds/board` | 回 `printZones` |
+| `use-kds-board.ts` / `kitchen-screen.tsx` | 帶落 `buildKdsBoard()` |
+| `station-picker.tsx` | 顯示商家分區名（**唔再顯示 raw id** —— 自訂 id 帶時間戳）；圖示改為用**名**做關鍵字比對；加「未收到分區」空狀態 |
+| `items` / `orders` 端點 | `isKdsStation` → `isLegacyNonStation`（只擋 `receipt`/`label`，自訂分區一律放行） |
+| 確認稿 `docs/121` | 分區卡改為由 `PRINT_ZONES` 生成，示範 6 個獨立分區 |
+
+#### 保留嘅兩個「補救」，唔可以當成真源
+
+1. **`observedStationIds`**（板上訂單實際出現過嘅 `printerGroup`）：舊資料 / 未同步時，
+   訂單可能仲係 `kitchen` 呢類唔喺 `printZones` 嘅值。**唔認佢，嗰啲單會完全上唔到屏**
+   （比顯示一個怪名嚴重得多）。名就用 id 本身（誠實過亂譯）。
+2. **`receipt` / `label` 排除項**：呢兩個係**打印機 role**（`printer.role`），唔係分區 ——
+   正常情況下 `printZones` 根本冇佢哋（`printer-wizard-modal` 入面 role === "receipt"
+   嘅機係**冇** `zoneId` 嘅）。呢個排除**只**套用到 fallback 值；
+   如果商家真係開咗一個叫 `receipt` 嘅分區，會照樣尊重（顯示商家畀嘅名）。
+
+#### 例外情況（要記住）
+
+| 情況 | 處理 |
+|---|---|
+| 分區 **id 唔穩定**（新增時 `` `${name.toLowerCase()}-${Date.now()}` ``） | ⚠️ **絕對唔可以**顯示 / 依賴 id。改名或刪除再加，id 就變。屏上一律用 `name` |
+| 舊訂單嘅 `printerGroup` 係已刪除嘅分區 id | 用 id 做名顯示（唔會 crash、唔會消失） |
+| `printZones` 一個都冇（未同步 / 未設定） | 顯示「未收到本店嘅打印分區，請去收銀台設定並撳一次保存」+ 重試掣。**唔會**造假 fallback（以前係硬編碼「廚房」，會令師傅揀到一個永遠冇出品嘅崗位） |
+| 分區冇任何菜 / 冇任何單（後廚3 今晚未開） | **仍然要出現**喺清單（要由 `printZones` 推導，唔可以只靠「有單 / 有菜」） |
+| 一個師傅要睇兩個分區（後廚1 + 後廚2） | ⚠️ **未支援**。P0 一部機 = 一個分區（「降低誤按」同「多人共用一屏」係相反方向）。若真要做，應該做**明確嘅多選**，唔好偷偷合併 |
+| 多部終端各自保存設定 | ⚠️ `printZones` 屈喺 `pos_device_configs.local_settings`（per-device，讀「最新一條」）—— **最後保存嗰部機會蓋走全店分區**。長遠要搬去 `pos_bootstrap_config.print_zones jsonb`（店級，purpose-built）。**屬 P1，未做** |
+
+---
+
 ## 11. 需要你拍板嘅事
 
 1. **Q1/Q2/Q3**（§2）——尤其屏係替代打印定並存。 ✅ 已拍板（§0）

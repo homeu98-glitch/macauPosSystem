@@ -91,6 +91,7 @@ export async function GET(request: Request) {
     orders: toBoardInputs(ordersRes.bundles),
     states: statesRes.states,
     station: station || null,
+    printZones: sources.printZones,
     printerGroups: sources.printerGroups,
     menuItemGroups: sources.menuItemGroups,
   }).stations;
@@ -101,6 +102,9 @@ export async function GET(request: Request) {
     /** `{ order: PosOrder, itemKeys: string[] }` —— 直接餵得落 `buildKdsBoard()`。 */
     orders: toBoardInputs(ordersRes.bundles),
     states: statesRes.states,
+    /** 🔴 分區真源：商家自己設定嘅打印分區（後廚1/2/3、水吧1/2/3…，各自獨立）。 */
+    printZones: sources.printZones,
+    /** 舊來源，只做 fallback。 */
     printerGroups: sources.printerGroups,
     menuItemGroups: sources.menuItemGroups,
     /** 由 server 預算一次（同 client 演算法一致），主要用嚟對帳 / 非 React 消費者。 */

@@ -6,6 +6,7 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { mapPosOrderRow, type PosOrderRow } from "@/lib/pos/pos-order-mapper";
 import { orderItemKey } from "@/lib/pos/order-item-diff";
 import { KDS_BOARD_MAX_AGE_MS } from "@/lib/kds/kds-board";
+import type { PrintZone } from "@/lib/kds/stations";
 import type { KdsBoardOrderInput, KdsItemStateRow } from "@/lib/kds/types";
 import type { PosOrder } from "@/lib/types";
 
@@ -147,27 +148,85 @@ export async function loadKdsItemStates(
   return { states, error: null, tableMissing: false };
 }
 
+/** 店嘅工位來源。 */
+export interface KdsStationSources {
+  /** 🔴 **商家設定嘅打印分區** = 分區清單嘅唯一權威來源。 */
+  printZones: PrintZone[];
+  /** 舊欄位，只做 fallback。 */
+  printerGroups: string[];
+  /** 菜單用過嘅 printerGroup，只做 fallback。 */
+  menuItemGroups: string[];
+}
+
+/** 逐個元素白名單化 `printZones`（唔可以信 DB 任意 JSON）。 */
+function normalizePrintZones(raw: unknown): PrintZone[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PrintZone[] = [];
+  for (const entry of raw) {
+    const id = typeof (entry as PrintZone)?.id === "string" ? (entry as PrintZone).id.trim() : "";
+    if (!id) continue;
+    const name =
+      typeof (entry as PrintZone)?.name === "string" && (entry as PrintZone).name.trim()
+        ? (entry as PrintZone).name.trim()
+        : id;
+    out.push({ id, name });
+  }
+  return out;
+}
+
 /**
- * 讀工位來源：`pos_bootstrap_config` 嘅 `printer_groups` 同 `menu_items[].printerGroup`。
+ * 讀「分區來源」。
  *
- * 讀唔到（未同步餐牌）唔算錯 —— `deriveKdsStations()` 會退到 fallback。
+ * ## 🔴 分區嘅真源係 `pos_device_configs.local_settings.printZones`
+ *
+ * 商家喺「設定 → 打印機綁定 → 打印分區」自由新增（後廚1/2/3、水吧1/2/3…）。
+ * 呢個 value 由設定頁嘅「保存」經 `/api/pos/device-config` 推上雲，
+ * 存在該店**最新一條** device config 嘅 `local_settings` 入面。
+ *
+ * ⚠️ `pos_device_configs` 以 `device_id` 做主鍵，呢度用
+ * 「`store_id` + `updated_at desc limit 1`」讀 —— 同專案既有慣例一致
+ * （`/api/pos/state` 都係咁讀 `local_settings`）。呢個寫法對「per-device」設定係錯嘅，
+ * 但 `printZones` 本質係**店級**設定（唔同 terminal 應該一致），所以可以接受。
+ * **唔可以**為咗呢個去讀 `pos_bootstrap_config.printer_groups` ——
+ * 嗰個係 legacy demo 值（`["kitchen","drinks","receipt"]`），同商家分區完全無關。
+ *
+ * ## ⚠️ 唯一權威來源應該係「專用嘅店級欄位」
+ *
+ * `printZones` 目前屈喺 device config 度，係歷史原因。長遠應該搬去
+ * `pos_bootstrap_config.print_zones jsonb`（店級、purpose-built）——
+ * 咁就唔會出現「最後保存嗰部機嘅分區蓋走全店」。**屬 P1，未做。**
  */
 export async function loadKdsStationSources(
   supabase: SupabaseLike,
   storeId: string,
-): Promise<{ printerGroups: string[]; menuItemGroups: string[] }> {
+): Promise<KdsStationSources> {
+  const empty: KdsStationSources = { printZones: [], printerGroups: [], menuItemGroups: [] };
+
+  // ① 商家分區（真源）
+  const deviceRes = await supabase
+    .from("pos_device_configs")
+    .select("local_settings")
+    .eq("store_id", storeId)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  const deviceRow = (deviceRes.data ?? [])[0] as { local_settings?: unknown } | undefined;
+  const printZones = normalizePrintZones(
+    (deviceRow?.local_settings as { printZones?: unknown } | undefined)?.printZones,
+  );
+
+  // ② 舊來源（只做 fallback，唔可以當真源）
   const { data, error } = await supabase
     .from("pos_bootstrap_config")
     .select("printer_groups, menu_items")
     .eq("store_id", storeId)
     .maybeSingle();
 
-  if (error || !data) return { printerGroups: [], menuItemGroups: [] };
+  if (error || !data) return { ...empty, printZones };
 
   const printerGroups = Array.isArray((data as { printer_groups?: unknown }).printer_groups)
-    ? ((data as { printer_groups: unknown[] }).printer_groups.filter(
+    ? (data as { printer_groups: unknown[] }).printer_groups.filter(
         (g): g is string => typeof g === "string",
-      ))
+      )
     : [];
 
   const menu = (data as { menu_items?: unknown }).menu_items;
@@ -179,7 +238,7 @@ export async function loadKdsStationSources(
     }
   }
 
-  return { printerGroups, menuItemGroups };
+  return { printZones, printerGroups, menuItemGroups };
 }
 
 /**
