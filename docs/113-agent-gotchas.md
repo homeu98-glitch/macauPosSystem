@@ -187,6 +187,9 @@
 - 📌 **卡片側（`quick-local-orders-strip.tsx`）**：draft 自助單之前**只剩「查看」**——`OrderCard` 內兩個掣都被 `order.status !== "draft"` 擋住。加 `isDraftSelfOrder` 分支出「接受 / 拒絕」，同時把狀態藥丸由硬寫死嘅「製作中」改為「**點單中**」（slate）—— draft 單從未送去廚房，顯示「製作中」會令收銀誤判。
 - ⚠️ **唔需要傳 `selfOrderAutoAccept` 入 strip**：**draft 自助單本身就等於「自動接單關掉、等人手接受」**——開關開住嘅話掃碼單一落就變 `sent_to_kitchen`，根本唔會停留喺 draft。用 `status === "draft" && isSelfOrder(order)` 做判準最準。
 - 📌 **改標籤要連 toast 文案一齊改**：`已確認自助單` → `已接受自助單`（`pos-app.tsx`、`local-orders-panel.tsx` 共 4 處），否則掣寫「接受」、提示寫「已確認」，商家會懷疑係兩個唔同動作。
+- 🔴 **彈窗一定要同卡片一齊補，唔可以只改 strip**：`pos-app.tsx`「訂單詳情」彈窗嘅 `actions` IIFE（約 L5486 起）本身就係專門用嚟 **mirror strip** 嘅，但 draft 自助單喺嗰度三個掣全部被 `v.status !== "draft"` 擋走 → 撳「查看」之後彈窗**完全冇接單入口**，收銀只可以關窗再返出去撳卡。凡改 strip 嘅掣，一定要喺同一個 IIFE 補對應分支（`v.status === "draft" && isSelf`）。
+- ⚠️ **`SelfOrderActionButtons` 喺 `justify-end` 容器要傳 `fill={false}`**：`ResponsiveModal` 嘅 action 列係 `flex flex-wrap justify-end gap-2`，唔傳 `fill={false}` 嘅話 `flex-1` 會令兩粒掣拉長霸滿整行，隔離嘅「關閉 / 重打單」就被推到最左。
+- 📌 **尺寸分三級（同一個元件出，語意一致）**：`sm` = 快餐卡片（`px-2 py-1.5 text-[11px] rounded-xl`）、`md` = 訂單列表 / 訂單頁彈窗（`px-3 py-2 text-xs rounded-xl`）、`lg` = POS 訂單詳情彈窗（`px-4 py-2 text-sm rounded-2xl`，同隔離「關閉 / 重打單」同尺寸）。彈窗用 `lg` 先唔會喺同一行出現 11px / 14px 兩級字。
 
 ## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
 - **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。

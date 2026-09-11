@@ -5493,6 +5493,41 @@ export function PosApp() {
                 const isBothDone = isPaid && isReady;
                 const completeText = quickCompleteLabel(v);
 
+                // draft 自助單：外面 strip 出「接受 / 拒絕」，彈窗要 mirror（2026-09-11 補）。
+                // ⚠️ 舊版呢個 case 三個掣都被 `v.status !== "draft"` 擋走 → 撳「查看」之後
+                // 彈窗完全冇接單入口，收銀只可以關窗再返出去撳卡。而家同外面完全一致：
+                // 文字（接受 / 拒絕）、顏色（emerald / rose）、尺寸（lg：px-4 py-2 text-sm，
+                // 同隔離嘅關閉 / 重打單一樣）、間距（外層 flex gap-2）、對齊（justify-end）。
+                if (v.status === "draft" && isSelf) {
+                  return (
+                    <SelfOrderActionButtons
+                      fill={false}
+                      orderLabel={v.localOrderNo}
+                      size="lg"
+                      onConfirm={() => {
+                        const result = confirmSelfOrder(v.id);
+                        if (result.ok) {
+                          setToast({ tone: "success", message: `已接受自助單 ${v.localOrderNo}` });
+                          setViewingOrderId(null);
+                        } else {
+                          setToast({ tone: "error", message: result.error ?? "接受失敗" });
+                        }
+                        return result;
+                      }}
+                      onReject={() => {
+                        const result = rejectSelfOrder(v.id);
+                        if (result.ok) {
+                          setToast({ tone: "success", message: `已拒絕自助單 ${v.localOrderNo}` });
+                          setViewingOrderId(null);
+                        } else {
+                          setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                        }
+                        return result;
+                      }}
+                    />
+                  );
+                }
+
                 if (showSplit) {
                   // 自助單：mirror strip 嘅 split 雙掣邏輯
                   return (
