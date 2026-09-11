@@ -189,7 +189,9 @@
 - 📌 **改標籤要連 toast 文案一齊改**：`已確認自助單` → `已接受自助單`（`pos-app.tsx`、`local-orders-panel.tsx` 共 4 處），否則掣寫「接受」、提示寫「已確認」，商家會懷疑係兩個唔同動作。
 - 🔴 **彈窗一定要同卡片一齊補，唔可以只改 strip**：`pos-app.tsx`「訂單詳情」彈窗嘅 `actions` IIFE（約 L5486 起）本身就係專門用嚟 **mirror strip** 嘅，但 draft 自助單喺嗰度三個掣全部被 `v.status !== "draft"` 擋走 → 撳「查看」之後彈窗**完全冇接單入口**，收銀只可以關窗再返出去撳卡。凡改 strip 嘅掣，一定要喺同一個 IIFE 補對應分支（`v.status === "draft" && isSelf`）。
 - ⚠️ **`SelfOrderActionButtons` 喺 `justify-end` 容器要傳 `fill={false}`**：`ResponsiveModal` 嘅 action 列係 `flex flex-wrap justify-end gap-2`，唔傳 `fill={false}` 嘅話 `flex-1` 會令兩粒掣拉長霸滿整行，隔離嘅「關閉 / 重打單」就被推到最左。
-- 📌 **尺寸分三級（同一個元件出，語意一致）**：`sm` = 快餐卡片（`px-2 py-1.5 text-[11px] rounded-xl`）、`md` = 訂單列表 / 訂單頁彈窗（`px-3 py-2 text-xs rounded-xl`）、`lg` = POS 訂單詳情彈窗（`px-4 py-2 text-sm rounded-2xl`，同隔離「關閉 / 重打單」同尺寸）。彈窗用 `lg` 先唔會喺同一行出現 11px / 14px 兩級字。
+- 📌 **尺寸全局一種，唔可以再分級**（2026-09-11 用戶要求「統一」）：`SelfOrderActionButtons` 已經刪除 `size="sm" | "md" | "lg"`，寫死 `rounded-xl px-3 py-2 text-xs`。全 app 只剩呢一個尺寸，四個 call site（`quick-local-orders-strip`、`pos-app` 快餐條、`local-orders-panel` 列表 + 查看彈窗、`pos-app` 訂單詳情彈窗）完全一致。要改就改元件頂嗰一行 `sizeClass`。
+  - ⚠️ **為何揀 `px-3 py-2 text-xs` 而唔係細一級**：`local-orders-panel` 嘅「操作」欄係最窄嘅容器（`**w-[22%]**` + `min-w-[860px]` → ~189px，扣 `px-3` 內距剩 ~165px），三粒掣（查看／接受／拒絕）每粒 min-content **48px** → 48×3 + gap 12 = **156px**，**啱啱好放得落**。再大一級（`text-sm` / `px-4`，min-content 60px）會即刻逼出換行；而 `sm`（11px）雖然都放得落，但會同列表「查看」掣嘅字級唔一致。
+  - ⚠️ **彈窗會出現 12px vs 14px 並存**（「接受 / 拒絕」12px、「關閉 / 重打單」14px）：呢個係**刻意接受**嘅代價 —— 用戶反饋明確要求「彈窗內嘅掣要同外面一致」，而外面（卡片 / 列表）全部係細尺寸。`ResponsiveModal` 嘅 action 列係 `flex flex-wrap justify-end`（**預設 `align-items: stretch`**），所以兩級字嘅掣**高度會自動拉齊**、只係字級同圓角唔同，唔會對唔齊行。如果日後想連「關閉 / 重打單」都縮到 12px，先再統一一次。
 
 ## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
 - **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。

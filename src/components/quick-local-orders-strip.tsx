@@ -202,7 +202,6 @@ function OrderCard({
             orderLabel={order.localOrderNo}
             onConfirm={() => onConfirmSelfOrder(order)}
             onReject={() => onRejectSelfOrder(order)}
-            size="sm"
           />
         ) : null}
         {showSplitActions ? (

@@ -4497,7 +4497,6 @@ export function PosApp() {
                             {order.status === "draft" && isSelfOrder(order) ? (
                               <SelfOrderActionButtons
                                 orderLabel={order.localOrderNo}
-                                size="sm"
                                 onConfirm={() => {
                                   const result = confirmSelfOrder(order.id);
                                   if (result.ok) {
@@ -5496,14 +5495,14 @@ export function PosApp() {
                 // draft 自助單：外面 strip 出「接受 / 拒絕」，彈窗要 mirror（2026-09-11 補）。
                 // ⚠️ 舊版呢個 case 三個掣都被 `v.status !== "draft"` 擋走 → 撳「查看」之後
                 // 彈窗完全冇接單入口，收銀只可以關窗再返出去撳卡。而家同外面完全一致：
-                // 文字（接受 / 拒絕）、顏色（emerald / rose）、尺寸（lg：px-4 py-2 text-sm，
-                // 同隔離嘅關閉 / 重打單一樣）、間距（外層 flex gap-2）、對齊（justify-end）。
+                // 文字（接受 / 拒絕）、顏色（emerald / rose）、尺寸（全局統一，同卡片 /
+                // 訂單列表用同一粒元件同一個 size，唔再喺彈窗特別放大）、
+                // 間距（外層 flex gap-2）、對齊（justify-end）。
                 if (v.status === "draft" && isSelf) {
                   return (
                     <SelfOrderActionButtons
                       fill={false}
                       orderLabel={v.localOrderNo}
-                      size="lg"
                       onConfirm={() => {
                         const result = confirmSelfOrder(v.id);
                         if (result.ok) {

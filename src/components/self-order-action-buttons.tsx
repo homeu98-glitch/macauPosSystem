@@ -9,6 +9,13 @@
  * 統一規則：
  *   - 接受 = emerald-600 實心（廚房單過單嘅主操作）
  *   - 拒絕 = rose-600 實心（取消訂單係破壞性，要紅色警示）
+ *   - **視覺尺寸全局一種，唔再按場景分級**（2026-09-11 用戶要求「統一」）：
+ *     舊版有 `size="sm" | "md" | "lg"` 三個值（11px / 12px / 14px），令同一粒「接受」
+ *     喺卡片、訂單列表、POS 詳情彈窗三個地方大細都唔同。而家寫死
+ *     `rounded-xl px-3 py-2 text-xs`，四個 call site 完全一樣。
+ *     揀呢個尺寸唔係隨意：`local-orders-panel` 嘅「操作」欄係最窄嘅容器（~163px），
+ *     三粒掣（查看／接受／拒絕）每粒 min-content 48px → 48×3 + gap 12 = 156px，
+ *     係唯一唔會逼成兩行嘅尺寸；其餘三處容器都比佢闊，跟住佢一定放得落。
  *   - **純文字、冇 icon、`whitespace-nowrap`**（2026-09-11 修）：
  *     舊版標籤係「確認出單」（4 字）＋ Check/X icon ＋ `gap-1.5`，令每粒掣嘅 min-content
  *     闊到 ~58px；訂單列表「操作」欄喺窄容器下只有 ~163px，三粒掣（查看／確認出單／拒絕）
@@ -30,18 +37,11 @@ export function SelfOrderActionButtons({
   orderLabel,
   onConfirm,
   onReject,
-  size = "md",
   fill = true,
 }: {
   orderLabel: string;
   onConfirm: () => { ok: boolean; error?: string };
   onReject: () => { ok: boolean; error?: string };
-  /**
-   * "sm" = 快餐卡片 / 收銀端 strip（px-2 py-1.5 text-[11px]）；
-   * "md" = 訂單列表 / 訂單頁彈窗（px-3 py-2 text-xs）；
-   * "lg" = POS「訂單詳情」彈窗（px-4 py-2 text-sm，同隔離嘅關閉 / 重打單同一尺寸）。
-   */
-  size?: "sm" | "md" | "lg";
   /**
    * 是否用 `flex-1` 填滿同層剩餘闊度。預設 `true`（卡片 / 表格操作欄都係平分）。
    * ⚠️ 彈窗 action 列係 `flex justify-end`，傳 `false` 先唔會被拉長成整行。
@@ -50,13 +50,9 @@ export function SelfOrderActionButtons({
 }) {
   const [pending, setPending] = useState<Action | null>(null);
 
-  // 三種 size 都必須「一行過」→ 一齊加 whitespace-nowrap；size 只影響字級 / 內距 / 圓角。
-  const sizeClass =
-    size === "sm"
-      ? "rounded-xl px-2 py-1.5 text-[11px]"
-      : size === "lg"
-        ? "rounded-2xl px-4 py-2 text-sm"
-        : "rounded-xl px-3 py-2 text-xs";
+  // 只有一種尺寸（2026-09-11 統一）：`rounded-xl px-3 py-2 text-xs`。
+  // 想改就改呢一行 —— 唔好再引入 per-call-site 嘅 size prop，就係佢令啲掣走樣。
+  const sizeClass = "rounded-xl px-3 py-2 text-xs";
   const growClass = fill ? "flex-1" : "";
   const buttonClass = `flex items-center justify-center font-semibold text-white whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60 ${growClass} ${sizeClass}`;
 
