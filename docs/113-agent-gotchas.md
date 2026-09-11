@@ -248,7 +248,46 @@
 - **修法**：刪走 override，直接用 `buildSnapshot()` 出嚟嘅快照 → 預覽 == 真實出紙（同樣兩條跳過規則：`!b.visible`、`!text`）。「唔知有咩區塊可揀」交由左邊清單解決（**永遠列齊全部區塊**，打勾即返嚟），並喺清單加一句「打勾 = 會印，熄 = 唔會印（預覽亦會即刻消失）」。
 - ⚠️ **注意**：收據模板有 8 個區塊**預設熄**（`checkout_time` / `server` / `service_charge_amount` / `tax_amount` / `rounding_amount` / `discount_amount` / `cash_tendered` / `change_amount`），改完之後佢哋唔會再自動出現喺預覽（要打勾先見）。廚房 / 標籤 / 交班模板全部預設開，無影響。
 
+## 🔴🔴 遠端（origin）＝ 唯一權威源：想「重建歷史」之前，**一定先試 `git fetch`**（2026-09-11 血淚教訓）
+- 事發後我**先做咗重建歷史**（見下面附錄），事後才發現 **GitHub 上面一直有完整歷史** —— 白白丟失 09-01→09-11 之間嘅逐次 commit 記錄，本來完全可避免。
+- **點解當時會以為「遠端都冇」**：`git fetch` 跑完**冇報錯、亦冇下載任何物件**（`git fetch` 輸出只有 ref 更新，無 `remote: Counting objects`）。原因係 git 協商時**本機所有 ref 都會當成 `have` 上報伺服器** —— 當時 `pre-incident-20260911`（以及 `origin/main`）**仍然指向 `797c5c9`**，伺服器就認為客戶端「已經有 `797c5c9` 連全套祖先」→ **一個物件都唔使送**。
+- ✅ **正確做法（實測一次就補齊全部缺失物件）**：
+  1. 先清走**所有**指向目標 commit 嘅本機 ref：`git update-ref -d refs/heads/<marker>`；`origin/main` 亦暫時 `git update-ref` 指返「最後一次確認存在嘅 commit」。
+  2. 再 `git fetch --no-tags --negotiation-tip=<最後確認存在嘅 commit> origin main` —— 只報嗰個 commit 為 have，伺服器就會補送其餘全部。
+  3. 逐個 `git cat-file -t <缺失 SHA>` 確認；`git fsck --connectivity-only` 要**冇 `missing`**。
+- 🔴 **順序鐵律**：`git fetch` 還原 → 真係唔得先「重建歷史」。**唔好一開始就 rebuild**：rebuild 會令本機同遠端分岔（`ahead N, behind M`），之後 push 被拒，要用 force 反而更危險。
+- 💡 **判斷遠端有咩**：唔使靠猜，睇 `.git/FETCH_HEAD`（最後一次成功 fetch 嘅內容，帶時間戳）或用戶嗰邊 GitHub Desktop 嘅自動 fetch；亦可以 `git ls-remote origin refs/heads/main` 直接問伺服器。
+
+## 🔴 GitHub Desktop「Unable to locate the Git repository」＝ 帶 `--branch` 嘅 `git status` exit 128（2026-09-11 解）
+- **症狀**：GitHub Desktop 開唔到 repo（「Unable to locate the Git repository at …」並提供 Locate… / Check again），但 CLI 睇 `.git` **完全健康**：`git rev-parse --show-toplevel` / `git log` / `git branch` / `git for-each-ref` 全部正常。
+- **關鍵**：GitHub Desktop 驗證 repo 用嘅係**帶 `--branch` 嘅 status**（要計 ahead/behind，會遍歷兩邊祖先）：
+  | 指令 | 結果 |
+  |---|---|
+  | `git status --porcelain=v2`（**無** `--branch`） | ✅ exit 0 |
+  | `git status --porcelain`（v1，無 `--branch`） | ✅ exit 0 |
+  | `git status --porcelain=v1 --branch` | ❌ exit 128 `error: Could not read <SHA>` |
+  | `git status --short --branch` | ❌ 同上 |
+  | `git rev-list --count origin/main` | ❌ 同上 |
+- **根因**：`origin/main` 指向一個**本機物件鏈斷咗**嘅 commit（`797c5c9`，其 parent `322231b` 缺失）→ 任何要遍歷 origin 側祖先嘅指令都會 128 → GitHub Desktop 判定「呢個唔係有效 repo」。
+- ⚠️ **唔好只驗 `git status`（無 `--branch`）**！佢唔會遍歷 origin 側，會畀你「一切正常」嘅假象，然後你會去錯方向（我一度以為係 GitHub Desktop 快取，叫用戶撳 Check again —— 無效）。
+- ⚠️ 另一個引誘：GitHub Desktop 每次「Check again」都會 **fetch**，而 fetch 會更新 `origin/main` → 可能**令情況變差**（把原本指向完好的 `366260d` 改成斷鏈嘅 `797c5c9`）。
+
+## 🔴 呢個環境連 `refs/remotes/origin/` 目錄都會搬走（2026-09-11 實測 2 次）
+- **症狀**：`git fetch` / `git push` 之後，`.git/refs/remotes/origin/` **成個目錄**唔見咗 → `origin/main` 靜靜跌返去 `packed-refs` 嘅**過期值** → `git branch -vv` 顯示「ahead 134」呢類離譜數字（明明已同步）。
+- **成因**：git 更新 remote-tracking ref 用「lockfile + rename 覆蓋舊檔」，環境嘅安全刪除層將被覆蓋嘅檔案（連目錄）移入回收筒。（`refs/heads/*` 同一操作唔會中，只有 `refs/remotes/**` 中。）
+- ✅ **修法**：
+  ```bash
+  mkdir -p .git/refs/remotes/origin
+  head -c 40 .git/refs/heads/main > .git/refs/remotes/origin/main   # 40 = SHA 長度（唔要有換行）
+  printf 'ref: refs/remotes/origin/main\n' > .git/refs/remotes/origin/HEAD
+  git branch -vv                          # 應顯示 [origin/main] 無 ahead/behind
+  git status --porcelain=v1 --branch      # 應 exit 0
+  ```
+  或者叫用戶喺 GitHub Desktop 撳一次 fetch（佢自己嗰個 git 唔受影響，會寫返正確值）。
+- ✅ **預防**：`git config --local gc.auto 0` —— 停用自動 gc / pack-refs，減少「舊 pack 被搬走」嘅機會。
+
 ### 附：`.git` 損毀後嘅「重建歷史」做法（2026-09-11 實測）
+> ⚠️ **最後手段**。先睇上面「遠端 = 唯一權威源」：**先 `git fetch`**，確認遠端真係冇先好 rebuild（09-11 就係冇做呢步而白做一次）。
 無法還原嘅物件多過幾個時，最乾淨嘅做法係**保留完好嘅舊歷史做底，再將目前工作區壓成 1 個新 commit**：
 ```bash
 export CODEBUDDY_SAFE_DELETE_ENABLED=0            # 必須！否則會再中
@@ -262,4 +301,6 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
 ```
 - ⚠️ **`rm .git/index` 係關鍵**：`git add` 對 stat 未變嘅檔案會直接跳過 hash，**唔會**補寫已遺失嘅 blob（會留低一個引用唔存在物件嘅 index）。冇 `rm` 就要用 `git hash-object -w --path=<p> <p>` 逐個補。
 - ⚠️ **唔可以**用 `git checkout -B main <舊commit>`：佢會**用舊版本覆蓋工作區檔案**，然後你就 commit 咗舊狀態。一定要 `reset --soft`。
+- ⚠️ **標記分支（`pre-incident-*`）係雙面刃**：保留舊 SHA 嘅代價係 (a) `git fsck` 永遠報 missing、(b) **`git fetch` 拉唔到嘢**（被當成 `have`，見上） 、(c) 帶 `--branch` 嘅 `git status` 可能 128 → **GitHub Desktop 開唔到 repo**。舊 SHA 記落文檔／memory 之後就應該 `git branch -D` 咗佢，唔好長留。
+- ⚠️ 順序：**先 `git fetch` 由遠端還原**（見上節）；`reset --soft` 只係遠端真係冇料嘅時候用。
 - 驗證：`git log --oneline | wc -l`、`git status --porcelain` 要空、上面條 `missing` 要 **0**（0 = 可以正常 push）。

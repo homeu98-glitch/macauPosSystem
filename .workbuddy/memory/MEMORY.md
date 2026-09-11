@@ -36,5 +36,6 @@
 ## 命令
 - `npm run typecheck` / `npm run test`（`node --test` **無參數** → 會將 `**/test-*`、`**/*-test`、`*.test.*` 當測試檔；**utility 模組唔好用 `test-` 前綴**；測試 import 一律相對路徑 + `.ts`，`@/` 會 `ERR_MODULE_NOT_FOUND`）。
 - 本機 `next build` 要 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 並喺沙箱外跑。
-- 🔴 **所有 `git` 指令一律 `CODEBUDDY_SAFE_DELETE_ENABLED=0 git …`**：環境嘅「安全刪除」層會將 `unlink()` 變成移入回收筒，git 跑 `gc --auto` / `pack-refs` 時就會被搬走 → `fatal: not a git repository`（已第三次：09-01、09-09、09-11）。修法見 docs/113（回收筒 `$I*` 可解出原路徑還原；**唔好 `git init` / 唔好 re-clone**，本機領先 origin 好多 commit）。
+- 🔴 **所有 `git` 指令一律 `CODEBUDDY_SAFE_DELETE_ENABLED=0 git …`**：環境嘅「安全刪除」層會將 `unlink()` 變成移入回收筒，git 跑 `gc --auto` / `pack-refs` 時就會被搬走 → `fatal: not a git repository`（已第三次：09-01、09-09、09-11）。已 `git config --local gc.auto 0` 減風險。修法見 docs/113（回收筒 `$I*` 可解出原路徑還原；**唔好 `git init`**）。
+- 🔴 **`.git` 散咗／GitHub Desktop 認唔到 repo → 一定「先 `git fetch` 由 origin 還原」，唔好即刻 rebuild**（09-11 白做一次：遠端一直有完整歷史，只因本機有 ref（連 `pre-incident-*` 標記分支）指向目標 commit → 被當成 `have` → **fetch 一個物件都唔拿、亦唔報錯**）。做法：`git update-ref -d` 清走指向該 commit 嘅 ref → `git fetch --negotiation-tip=<完好 commit> origin main` → `git fsck` 要零 missing。（**GitHub Desktop 認唔到 repo = 帶 `--branch` 嘅 `git status` exit 128**；無 `--branch` 版本照 OK，別被騙。`refs/remotes/origin/` 會被環境搬走 → 要 `mkdir + head -c 40`/`printf` 重建。）
 - 環境見 AGENTS.md（Node 22.22.2-2、Next.js 16.3.0 + Turbopack + Tailwind 4）。
