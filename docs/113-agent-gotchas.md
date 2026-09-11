@@ -174,3 +174,13 @@
 - 📌 **自查法**：搬 / 合併 grid 之後，**數返 `<div>` 同 `</div>` 嘅配對層數**；或喺 DevTools 揀個 grid 容器睇 `children.length`（應該 = 10，唔係 5）。
 - 📌 **鐵證**：① 行內縮排多咗一層；② 註解寫住「同上面係同一個 grid（刻意唔再開第二個 div）」但實際唔係 —— **註解講嘅意圖同 code 相反**就係最強信號。
 - 📌 **同類症狀速查**：凡見「頭 N 個正常、之後嘅變全寬」＝ grid 提早收。另外 skeleton 寫「一個 grid、10 格」係**正確**嘅 → 所以係「**載入完成先變樣**」，更易被誤判成「載入後才壞」。
+
+## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
+- **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。
+- **根因**：env 兩邊指唔同專案。server 寫 `pos_orders` 用 `SUPABASE_URL`（`src/lib/supabase-server.ts:5`，POS 自有專案）；瀏覽器 `getPosSupabaseClient()` 用 `NEXT_PUBLIC_SUPABASE_URL`（`.env.example` A 段 = **Ledger 專案，冇任何 `pos_*` 表**，實案 ref `zymdemjflsckicwcinxl`）。
+- 🔴 **為何完全冇 alert**：Supabase `postgres_changes` 訂一張**唔存在**嘅表**唔會報錯** —— channel 照樣 `SUBSCRIBED`。所以 `onStatusChange` 係綠燈、console 零 error，但永遠唔會有事件。**唔可以**用 channel status 判斷 Realtime 健唔健康。
+- ✅ **唯一可靠判斷**：直接問 PostgREST `GET <NEXT_PUBLIC 專案>/rest/v1/pos_orders?select=id&limit=1` + `apikey`。回 `PGRST205` / 404 = **表唔存在 = 訂錯專案**（`probePosRealtimeTarget()`，一次性、非 polling，見 `src/lib/pos/realtime-target.ts`）。
+- ✅ **修法**：加 `NEXT_PUBLIC_POS_SUPABASE_URL` / `NEXT_PUBLIC_POS_SUPABASE_ANON_KEY`（同一個 POS 專案），`getPosSupabaseClient()` 優先讀、未設時 fallback 舊變數。⚠️ `NEXT_PUBLIC_*` 係 **build-time inline** → 加完**必須重新部署**，只改 Vercel env 唔 redeploy 等於冇改。
+- ⚠️ **安全前提**：POS 專案對 anon **只可以 grant SELECT**（0016 §3a `pos_orders` 近 14 日、0021 `pos_print_jobs` 近 24 小時），**唔可以** grant insert/update/delete。落單一律 `/api/pos/sync`（server service_role）。
+- ⚠️ **同類錯仲有第二處**：`useOnlineOrderSettings()` 亦係用 `getPosSupabaseClient()` 訂 `pos_online_order_settings` → 同一個病（docs/92 §1.3 已記錄），改 `getPosSupabaseClient()` 一次過修好。
+- ⚠️ **排查口訣**：「某樣嘢 reload 先出現」→ 先分「backfill 路徑（server / service_role，正常）」同「realtime 路徑（瀏覽器 anon，可能訂錯專案）」，唔好一開始就懷疑 UI 合併邏輯。

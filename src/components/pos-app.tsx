@@ -139,6 +139,14 @@ import {
   mergeOrderLists,
 } from "@/lib/pos-order-filters";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
+import {
+  describePosRealtimeProbe,
+  isPosRealtimeHealthy,
+  probePosRealtimeTarget,
+  safeHost,
+  type PosRealtimeProbe,
+} from "@/lib/pos/realtime-target";
+import { getPosRealtimeConfig } from "@/lib/pos/supabase-client";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, ShiftTemplateVariant, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
@@ -282,6 +290,17 @@ export function PosApp() {
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
   // 同步健康檢查（L1 失敗事件重試 / L2 已結帳未上雲補錄）彈窗開關。
   const [showSyncHealth, setShowSyncHealth] = useState(false);
+  /**
+   * 即時連線（Realtime）健康狀態（2026-09-10 P0）。
+   *
+   * 為何要有：Supabase 訂一張**唔存在**嘅表**唔會**報錯（channel 一樣 SUBSCRIBED），
+   * 所以「設定指錯專案」係靜默失效 —— 收銀台完全冇提示，只有 reload 先見到新單。
+   * `probe` = mount 時一次性問 PostgREST「呢個專案有冇 pos_orders」（唔係 polling）；
+   * `status` = realtime channel 嘅 SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT。
+   */
+  const [realtimeProbe, setRealtimeProbe] = useState<PosRealtimeProbe | null>(null);
+  const [realtimeStatus, setRealtimeStatus] = useState<string | null>(null);
+  const [realtimeBannerDismissed, setRealtimeBannerDismissed] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
   const [manualSyncing, setManualSyncing] = useState(false);
@@ -918,6 +937,34 @@ export function PosApp() {
     clearLegacyMembersCache();
   }, []);
 
+  /**
+   * 一次性探測「客戶端 Realtime 目標專案有冇 pos_orders」（2026-09-10 P0）。
+   *
+   * 為何要（而唔係只靠 channel status）：Supabase 訂一張唔存在嘅表**唔會**報錯，
+   * channel 照樣 `SUBSCRIBED` → 收銀台會以為「連線正常」但永遠收唔到單（只有 reload 見到）。
+   * 呢個探測係唯一可以偵測到「訂錯專案」嘅方法，而且**只發一次請求**（唔係 polling）。
+   *
+   * 失敗時：① console.warn 出 host + 診斷；② 右上角顯示可摺嘅警示條，明確講
+   * 「訂單要重新載入先會出現」，避免收銀員以為系統正常而漏單。
+   */
+  useEffect(() => {
+    if (offlineMode) return;
+    let cancelled = false;
+    void probePosRealtimeTarget(getPosRealtimeConfig()).then((probe) => {
+      if (cancelled) return;
+      setRealtimeProbe(probe);
+      if (!isPosRealtimeHealthy(probe)) {
+        console.warn(
+          `[pos-realtime] 即時通知無法生效（probe=${probe.status}, host=${probe.host ?? "?"}, source=${probe.source ?? "?"}）：${describePosRealtimeProbe(probe)}`,
+          probe.detail ?? "",
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [offlineMode]);
+
   // 收銀 mount / 重連 / queue 清空時一次過 pull 現有 state（event-driven，非 polling）
   useEffect(() => {
     if (offlineMode) return;
@@ -1523,6 +1570,19 @@ export function PosApp() {
       if (offlineMode) return;
       if (queue.some((event) => event.status !== "synced")) return;
       void loadRuntimeState();
+    },
+    /**
+     * Realtime 渠道狀態（2026-09-10 P0）：記落 state 俾警示條用，同時出 console。
+     *
+     * ⚠️ 注意 `SUBSCRIBED` **唔代表**真係收得到單 —— 訂錯專案時一樣係 SUBSCRIBED，
+     * 所以健康判斷以 mount 時嘅 `probePosRealtimeTarget()` 為準，唔可以單靠呢個 status。
+     * 只有 `CHANNEL_ERROR` / `TIMED_OUT` 係真正「連唔上」，呢兩種情況一定出警示。
+     */
+    onStatusChange: (status) => {
+      setRealtimeStatus(status);
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(`[pos-realtime] 渠道狀態 ${status}（host=${safeHost(getPosRealtimeConfig()?.url ?? null) ?? "?"}）`);
+      }
     },
   });
 
@@ -6542,6 +6602,40 @@ export function PosApp() {
               <div>列印失敗 {failedPrintJobs.length} 張 · 去打印中心</div>
             </button>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* ⚠ 即時通知未生效警示（2026-09-10 P0）。
+          為何要有：Realtime 訂錯專案時 Supabase 唔會報錯（channel 一樣 SUBSCRIBED），
+          收銀台會「以為正常」但新單永遠唔彈 → 只有手動 reload 先見到（＝靜默漏單）。
+          呢條警示把靜默失效變成看得見，並清楚講明補救（reload）。
+          可摺走（session 內有效），唔會阻住日常操作。 */}
+      {!offlineMode &&
+      !realtimeBannerDismissed &&
+      realtimeProbe !== null &&
+      (!isPosRealtimeHealthy(realtimeProbe) ||
+        realtimeStatus === "CHANNEL_ERROR" ||
+        realtimeStatus === "TIMED_OUT") ? (
+        <div className="fixed bottom-4 left-1/2 z-40 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 shadow-lg">
+          <span aria-hidden className="text-base leading-5">
+            ⚠
+          </span>
+          <div className="text-[11px] leading-snug">
+            <div className="font-semibold">即時通知未生效，新單唔會自動彈出</div>
+            <div className="mt-0.5">{describePosRealtimeProbe(realtimeProbe)}</div>
+            <div className="mt-0.5 text-amber-800/80">
+              連線目標：{realtimeProbe.host ?? "未設定"}（{realtimeProbe.source ?? "none"}）
+              {realtimeStatus && realtimeStatus !== "SUBSCRIBED" ? ` · 渠道：${realtimeStatus}` : ""}
+            </div>
+            <div className="mt-1">請先手動重新載入；若持續，通知技術人員檢查部署環境變數。</div>
+          </div>
+          <button
+            className="ml-1 shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+            onClick={() => setRealtimeBannerDismissed(true)}
+            type="button"
+          >
+            知道了
+          </button>
         </div>
       ) : null}
 
