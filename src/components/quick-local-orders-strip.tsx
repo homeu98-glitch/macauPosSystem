@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 
 import { PosOrder } from "@/lib/types";
 import { formatMoney, formatMacauTime } from "@/lib/format";
-import { compareOrderByLocalNo, isQuickCounterOrder } from "@/lib/pos-order-filters";
+import { compareOrderByLocalNo, getPaymentBadge, isQuickCounterOrder, isQuickOrderReady } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
@@ -54,6 +54,12 @@ function OrderCard({
 }: {
   order: PosOrder;
   currency: string;
+  /**
+   * 出餐階段（父層分組結果）。2026-09-12 起**等同** `order.fulfillmentStatus === "ready"`：
+   * 父層 `quickPreparingOrders` / `quickWaitingOrders` 一律按 `isQuickOrderReady()` 分組，
+   * 唔再夾雜 `status === "paid"` 條件（否則未收款先出餐嘅單會卡死喺「製作中」）。
+   * 藥丸配色／文字用 `mode`，按鈕則一律直接讀單自己嘅 `isQuickOrderReady()`。
+   */
   mode: "preparing" | "waiting";
   completionLabel: (order: PosOrder) => string;
   completeLabel: (order: PosOrder) => string;
@@ -68,14 +74,18 @@ function OrderCard({
 }) {
   const completeText = completeLabel(order);
   const orderTime = formatMacauTime(order.createdAt);
+  /**
+   * 付款／出餐雙標籤（2026-09-12 用戶要求）：卡片要同時睇到「已結帳／未結帳」同
+   * 「製作中／待取餐／已完成」兩個獨立維度，唔可以壓成一粒藥丸。
+   */
+  const paymentBadge = getPaymentBadge(order);
   const articleRef = useRef<HTMLElement | null>(null);
   /**
    * draft 自助單 = 等收銀人手「接受 / 拒絕」（自動接單關掉）。
    * ⚠️ 呢個狀態下卡片**唔係**「製作中」—— 下面狀態藥丸要出「點單中」，
    * 否則收銀見到「製作中」會以為廚房已經做緊，但其實張單從未送出。
    */
-  const isDraftSelfOrder = order.status === "draft" && isSelfOrder(order);
-  const showSelfOrderActions =
+  const isDraftSelfOrder = order.status === "draft" && isSelfOrder(order);  const showSelfOrderActions =
     isDraftSelfOrder && Boolean(onConfirmSelfOrder) && Boolean(onRejectSelfOrder);
 
   // 被提示指向 → 捲入視線（橫向 strip 用 inline:center；已可見時 block:nearest 唔會亂跳）
@@ -98,7 +108,7 @@ function OrderCard({
   // 所以 `isPaid` / `isReady` 一變 true 就永久 true，掣一消失就永久唔再 render。
   const showSplitActions = onCheckout && isQuickCounterOrder(order) && isSelfOrder(order);
   const isPaid = order.status === "paid";
-  const isReady = order.fulfillmentStatus === "ready";
+  const isReady = isQuickOrderReady(order);
   const isBothDone = isPaid && isReady;
 
   return (
@@ -112,7 +122,17 @@ function OrderCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold leading-tight text-slate-900">{order.localOrderNo}</div>
-          <div className="mt-1 truncate text-xs text-slate-500">{order.tableName}</div>
+          {/* 第二行：枱別 + 付款狀態標籤（已結帳／未結帳，見 getPaymentBadge）。
+              放左欄而唔放右欄：右欄淨係狀態藥丸 + 時間 + 來源已經佔滿 240px 卡片闊度，
+              再加一粒標籤會逼到訂單號被截斷。 */}
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-xs text-slate-500">{order.tableName}</span>
+            <span
+              className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${paymentBadge.bgClass} ${paymentBadge.textClass}`}
+            >
+              {paymentBadge.label}
+            </span>
+          </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <span
@@ -246,9 +266,13 @@ function OrderCard({
           </>
         ) : (
           <>
-            {/* 收銀台落單舊邏輯（可取餐 → 已取餐 單鏈）。 */}
-            {mode === "preparing" &&
-            (order.status === "sent_to_kitchen" || order.status === "paid") ? (
+            {/* 收銀台落單（pos）快餐單：單鏈 可取餐 → 完成。
+                🔴 2026-09-12 修：唔可以再靠父層 `mode` 判斷 —— `mode` 係由
+                「status=paid 且 ready」推導，令「未收款先出餐」（status=sent_to_kitchen
+                但已寫 ready，docs/87 §6.3 放寬閘門）嘅單撳完「可取餐」仍然留喺 preparing
+                區 → 狀態唔變、掣唔消失。而家一律以 **單自己嘅出餐階段**（isQuickOrderReady）
+                為準：未 ready → 只剩「可取餐」；ready → 只剩「完成」（用戶預期行為）。 */}
+            {!isReady && (order.status === "sent_to_kitchen" || order.status === "paid") ? (
               <button
                 className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white"
                 onClick={() => onMarkReady(order.id)}
@@ -257,7 +281,7 @@ function OrderCard({
                 可取餐
               </button>
             ) : null}
-            {mode === "waiting" ? (
+            {isReady ? (
               <button
                 className="shrink-0 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
                 onClick={() => onMarkCompleted(order.id, completeText)}

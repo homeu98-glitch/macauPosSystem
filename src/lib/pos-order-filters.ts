@@ -21,6 +21,47 @@ export function isQuickCounterOrder(order: PosOrder): boolean {
   return isLocalPosOrder(order) && order.tableId === "counter";
 }
 
+/**
+ * 快餐 counter 單：出餐階段（2026-09-12 修）。
+ *
+ * 🔴 呢個係「出餐階段」嘅**唯一真源** —— 判斷張單係「製作中」抑或「待取餐」只看
+ * `fulfillmentStatus === "ready"`，**唔可以**用 `status === "paid"` 做前提。
+ *
+ * 歷史 bug（用戶 2026-09-12 反映：「撳咗『可取餐』狀態冇變、掣唔消失」）：
+ * 舊寫法要求 `status === "paid" && fulfillmentStatus === "ready"` 才算待取餐，
+ * 但快餐單有兩條合法路徑都會停在 `sent_to_kitchen`：
+ *   ① 收銀台快餐單（source="pos"）落單後**未收款**就直接出餐（docs/87 §6.3 放寬閘門）；
+ *   ② 自助單「先出餐後付款」。
+ * 呢啲單撳「可取餐」之後 `fulfillmentStatus` 已經寫成 `ready`（本機 + 雲端都寫咗），
+ * 但因為 `status` 仲係 `sent_to_kitchen`，UI 仍然歸類做「製作中」→ 表面睇完全冇反應，
+ * 而 `updateQuickFulfillmentInStore()` 又係 idempotent（永遠寫 ready），所以撳幾多次都一樣。
+ *
+ * `ready` 係單向閘：`updateQuickFulfillmentInStore` / `markQuickOrderCompletedInStore` /
+ * 餐飲 join 都只會寫入或保留 `ready`，冇任何地方會 reset 落 `preparing`。
+ */
+export function isQuickOrderReady(order: PosOrder): boolean {
+  return order.fulfillmentStatus === "ready";
+}
+
+/**
+ * 快餐單嘅「付款階段」標籤（2026-09-12 用戶要求：卡片 / 列表要同時顯示兩個狀態）。
+ *
+ * 快餐單有**兩個獨立維度**，唔可以壓成一粒藥丸：
+ *   - 付款：`已結帳` / `未結帳`  ← 本函式
+ *   - 出餐：`製作中` / `待取餐` / `已完成`  ← `getOrderStatusBadge()` / `quickCompletionLabel()`
+ * 兩者可以任意組合（例如「未結帳 + 待取餐」＝先出餐後付款；「已結帳 + 製作中」＝正常快餐流程）。
+ */
+export function getPaymentBadge(order: PosOrder): OrderStatusBadge {
+  const paid =
+    order.status === "paid" ||
+    order.status === "settled" ||
+    order.status === "refunded" ||
+    order.status === "partially_refunded";
+  return paid
+    ? { label: "已結帳", bgClass: "bg-emerald-50", textClass: "text-emerald-700", dotClass: "bg-emerald-500" }
+    : { label: "未結帳", bgClass: "bg-slate-100", textClass: "text-slate-500", dotClass: "bg-slate-400" };
+}
+
 export function orderTimestamp(order: PosOrder): number {
   return Date.parse(order.updatedAt || order.createdAt || "") || 0;
 }
@@ -221,10 +262,13 @@ export function filterQuickActionBarOrders(orders: PosOrder[]): PosOrder[] {
 
 export function localOrderStatusLabel(order: PosOrder): string {
   if (isQuickCounterOrder(order)) {
-    if (order.status === "paid" && order.fulfillmentStatus === "ready") {
-      return quickCompletionLabel(order);
-    }
-    if (order.status === "paid" || order.status === "sent_to_kitchen") return "製作中";
+    // 出餐階段只看 fulfillmentStatus（見 isQuickOrderReady 註解）：唔可以再要求 status=paid。
+    // ⚠️ 但只限「進行中」嘅快餐單（sent_to_kitchen / paid）—— 已取消 / 已退款 / 已返結
+    // 呢啲終態單，就算 DB 殘留 fulfillment_status='ready' 都唔可以被講成「待取餐」，
+    // 一律落下面 switch 保持原有口徑（堂食單行唔到呢個分支，完全唔受影響）。
+    const isOpenQuick = order.status === "sent_to_kitchen" || order.status === "paid";
+    if (isOpenQuick && isQuickOrderReady(order)) return quickCompletionLabel(order);
+    if (isOpenQuick) return "製作中";
   }
   if (order.status === "draft") return "點單中";
   if (order.status === "sent_to_kitchen") return "製作中";
@@ -253,15 +297,18 @@ export interface OrderStatusBadge {
 }
 
 export function getOrderStatusBadge(order: PosOrder): OrderStatusBadge {
-  // 快餐 counter：paid+ready=待取餐；paid 期間=製作中（待廚出餐）
+  // 快餐 counter：settled=已完成；進行中（sent_to_kitchen / paid）+ ready = 待取餐／待出餐／待交付
+  // （唔理付咗款未）；其餘 draft / 終態落下面 switch，保持原本口徑。
+  // ⚠️ 只改快餐分支 —— 堂食單（真枱號）行唔到入嚟，狀態口徑完全不變。
   if (isQuickCounterOrder(order)) {
     if (order.status === "settled") {
       return { label: "已完成", bgClass: "bg-emerald-50", textClass: "text-emerald-700", dotClass: "bg-emerald-500" };
     }
-    if (order.status === "paid" && order.fulfillmentStatus === "ready") {
+    const isOpenQuick = order.status === "sent_to_kitchen" || order.status === "paid";
+    if (isOpenQuick && isQuickOrderReady(order)) {
       return { label: quickCompletionLabel(order), bgClass: "bg-sky-50", textClass: "text-sky-700", dotClass: "bg-sky-500" };
     }
-    if (order.status === "paid" || order.status === "sent_to_kitchen") {
+    if (isOpenQuick) {
       return { label: "製作中", bgClass: "bg-amber-50", textClass: "text-amber-700", dotClass: "bg-amber-500" };
     }
   }
@@ -300,14 +347,22 @@ export function matchesLocalOrderPanelTab(order: PosOrder, tab: LocalOrderPanelT
     return order.status === "cancelled" || order.status === "refunded" || order.status === "partially_refunded";
   }
   if (tab === "ready") {
-    return isQuickCounterOrder(order) && order.status === "paid" && order.fulfillmentStatus === "ready";
+    // 2026-09-12：只看出餐階段（ready），唔再要求 status=paid ——
+    // 否則「先出餐後付款 / 未收款先出餐」嘅快餐單撳完可取餐仍然停留喺「製作中」分頁。
+    // ⚠️ 只認進行中嘅快餐單：已取消 / 已退款 / 已返結就算殘留 fulfillment_status='ready'
+    // 都唔可以入「待取餐」分頁（終態優先）。非快餐（堂食）單完全唔受影響。
+    return (
+      isQuickCounterOrder(order) &&
+      (order.status === "sent_to_kitchen" || order.status === "paid") &&
+      isQuickOrderReady(order)
+    );
   }
   if (tab === "preparing") {
     if (isQuickCounterOrder(order)) {
+      // 草稿單永遠留喺「製作中」分頁（未落單，就算殘留 ready 都唔應該消失）。
+      if (order.status === "draft") return true;
       return (
-        order.status === "draft" ||
-        order.status === "sent_to_kitchen" ||
-        (order.status === "paid" && order.fulfillmentStatus !== "ready")
+        (order.status === "sent_to_kitchen" || order.status === "paid") && !isQuickOrderReady(order)
       );
     }
     return order.status === "draft" || order.status === "sent_to_kitchen";

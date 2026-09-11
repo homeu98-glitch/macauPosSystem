@@ -440,3 +440,45 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
 **清單類資料嘅擺放**：呢類「店級、purpose-built」嘅設定唔應該屈喺
 `pos_device_configs.local_settings`（per-device，讀法係「最新一條」）——
 最後保存嗰部機會蓋走全店。應該開專用嘅店級欄位（例如 `pos_bootstrap_config.print_zones jsonb`）。
+
+## 🔴 快餐（counter）出餐狀態：撳「可取餐」睇落零變化（2026-09-12 · 用戶實案）
+
+**病症**：快餐點餐頁底部「線下訂單」卡片（例：`取餐01 / 堂食 / 製作中`）撳「可取餐」→
+出咗 toast「取餐01 已標記可取餐。」，但卡片狀態**仍然係「製作中」**、按鈕**仍然係「可取餐」**；
+訂單頁列表狀態欄亦一樣。睇落好似「狀態更新邏輯壞咗」，其實 `fulfillmentStatus` **已經寫入**
+（本機 localStorage + 雲端 `pos_orders.fulfillment_status` 都寫咗，`updatedAt` 都更新咗）。
+
+**根因**：UI 用「`status === "paid"` 且 `fulfillmentStatus === "ready"`」推導「待取餐」，
+但快餐單有**兩條合法路徑**都會停在 `sent_to_kitchen`：
+
+1. 收銀台快餐單（`source="pos"`）落單後**未收款先出餐**（docs/87 §6.3 放寬閘門）；
+2. 自助單（kiosk / scan）「先出餐後付款」。
+
+呢啲單 `status` 永遠唔會變 `paid`，所以就算 ready 寫咗，分組仍然當佢「製作中」；
+
+而且 `updateQuickFulfillmentInStore()` **永遠寫 ready**（idempotent），所以撳幾多次結果一樣，
+形成「撳完冇反應」嘅觀感。連帶 bug：pos-app「訂單詳情」彈窗嘅快餐分支
+`inWaiting = isBothDone || (paid && ready)` 兩個分支都唔中 → **跌落「堂食單」分支**，
+彈窗出「取消結帳 / 去結帳」而完全冇「可取餐」掣。
+
+**鐵律**：
+
+- **出餐階段唯一真源 = `isQuickOrderReady(order)`（`@/lib/pos-order-filters`）**
+  ＝ `fulfillmentStatus === "ready"`。**唔可以**再夾 `status === "paid"` 做前提。
+- 分組口徑要一致：pos-app `quickPreparingOrders` / `quickWaitingOrders`、訂單頁
+  `matchesLocalOrderPanelTab()`、`getOrderStatusBadge()`、`localOrderStatusLabel()` 全部按 ready 分。
+- **終態優先**：只有 draft / sent_to_kitchen / paid 先可以用 ready 改寫標籤；
+  已取消 / 已退款 / 已返結就算 DB 殘留 `fulfillment_status='ready'` 都唔可以顯示成「待取餐」。
+- **狀態唔可以靜默無反應**：`updateQuickFulfillment()` 對「已經 ready」同「唔准標記」兩種
+  情況都要出 toast，唔可以靜默 `return`。
+- **兩個維度要同時顯示**：快餐單係「付款」（`getPaymentBadge()` → 已結帳 / 未結帳）＋
+  「出餐」（製作中 / 待取餐／待出餐／待交付 / 已完成）兩個獨立狀態，唔可以壓成一粒藥丸。
+  （用戶 2026-09-12：「我剛剛下單並結帳，此頁面應顯示兩個狀態：已結帳與製作中」。）
+- **各介面要同步**：卡片／訂單列表／訂單詳情彈窗（點餐頁）／查看彈窗（訂單頁）
+  一律共用同一組判定 + 同一組按鈕語義（可取餐 → 完成）。訂單頁嘅
+  `QuickOrderActions` 就係列表同行同彈窗共用嘅唯一出處。
+
+**影響範圍（改動時要守住嘅界線）**：以上全部收喺
+`isQuickCounterOrder(order)`（＝ `!onlineOrderId && tableId === "counter"`）分支內。
+**堂食單（真枱號）完全行唔到呢啲分支** —— 快餐模式揀「堂食」類型嘅單 `tableId` 都係 `counter`，
+枱面落嘅堂食單一定有真 `tableId`，兩者唔會混淆。

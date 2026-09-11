@@ -19,6 +19,8 @@ import {
 import {
   isLocalOrTransferredDineIn,
   isQuickCounterOrder,
+  isQuickOrderReady,
+  getPaymentBadge,
   LocalOrderPanelTab,
   matchesLocalOrderPanelTab,
   getOrderStatusBadge,
@@ -69,31 +71,46 @@ function orderMatchesLocalDateFilter(order: PosOrder, filter: LedgerOrderDateFil
 const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
 const TD_CELL = "px-3 py-2 align-middle";
 
+/**
+ * 快餐 counter 單嘅出餐動作（可取餐 → 完成），列表一行同「查看」彈窗共用同一個邏輯，
+ * 保證兩個介面永遠同步（用戶 2026-09-12 要求）。
+ *
+ * 🔴 出餐階段一律讀 `isQuickOrderReady()`（fulfillmentStatus === "ready"），
+ * **唔可以**再夾 `status === "paid"` —— 收銀台快餐單／自助單都可以「未收款先出餐」，
+ * 舊寫法會令呢類單撳完「可取餐」之後仍然冇變（ready 已寫入，但 UI 唔認）。
+ */
 function QuickOrderActions({
   order,
   onChanged,
+  variant = "row",
 }: {
   order: PosOrder;
-  onChanged: () => void;
+  /** 動作成功後通知父層（刷列表 / 出 toast / 需要時關彈窗）。 */
+  onChanged: (message: string, options?: { closeModal?: boolean }) => void;
+  /** `row` = 列表一行嘅細掣；`modal` = 彈窗底部（尺寸同點餐頁彈窗一致）。 */
+  variant?: "row" | "modal";
 }) {
   if (!isQuickCounterOrder(order)) return null;
   // draft 自助單唔顯示「可取餐」——要等撳「接受」先變 sent_to_kitchen（docs/87 §6）
   if (order.status === "draft" && isSelfOrder(order)) return null;
 
+  const ready = isQuickOrderReady(order);
+  const isOpen = order.status === "sent_to_kitchen" || order.status === "paid";
+  if (!isOpen) return null;
+
   const completeText = quickCompleteLabel(order);
+  const className =
+    variant === "modal"
+      ? "rounded-2xl px-4 py-2 text-sm font-semibold text-white"
+      : "whitespace-nowrap rounded-xl px-3 py-2 text-xs font-semibold text-white";
 
-  // docs/87 §6.3：放寬「可取餐」閘門，容許 sent_to_kitchen / paid 標記 ready（先出餐後付款）
-  const canBeReady =
-    (order.status === "sent_to_kitchen" || order.status === "paid") &&
-    order.fulfillmentStatus !== "ready";
-
-  if (canBeReady) {
+  if (!ready) {
     return (
       <button
-        className="whitespace-nowrap rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
+        className={`${className} bg-orange-500 hover:bg-orange-600`}
         onClick={() => {
           updateQuickFulfillmentInStore(order.id);
-          onChanged();
+          onChanged(`${order.localOrderNo} 已標記可取餐。`);
         }}
         type="button"
       >
@@ -102,22 +119,18 @@ function QuickOrderActions({
     );
   }
 
-  if (order.status === "paid" && order.fulfillmentStatus === "ready") {
-    return (
-      <button
-        className="whitespace-nowrap rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
-        onClick={() => {
-          markQuickOrderCompletedInStore(order.id, { label: completeText });
-          onChanged();
-        }}
-        type="button"
-      >
-        {completeText}
-      </button>
-    );
-  }
-
-  return null;
+  return (
+    <button
+      className={`${className} bg-emerald-600 hover:bg-emerald-700`}
+      onClick={() => {
+        markQuickOrderCompletedInStore(order.id, { label: completeText });
+        onChanged(`${order.localOrderNo} ${completeText}。`, { closeModal: true });
+      }}
+      type="button"
+    >
+      {completeText}
+    </button>
+  );
 }
 
 export function LocalOrdersPanel({
@@ -280,9 +293,14 @@ export function LocalOrdersPanel({
   const reopenTarget = reopenTargetOrderId ? orders.find((row) => row.id === reopenTargetOrderId) ?? null : null;
   const receiptPreviewOrder = receiptPreviewOrderId ? orders.find((row) => row.id === receiptPreviewOrderId) ?? null : null;
 
-  function handleQuickAction() {
+  /**
+   * 快餐出餐動作嘅統一入口（列表 / 彈窗共用）：刷列表 + 出 toast；
+   * `closeModal` 為 true 時順手關「查看」彈窗（「完成」＝張單離開活躍列表，要收窗）。
+   */
+  function handleQuickAction(message?: string, options?: { closeModal?: boolean }) {
     refresh();
-    setToast("已更新訂單狀態");
+    if (message) setToast(message);
+    if (options?.closeModal) setViewingOrderId(null);
   }
 
   /** 呢啲狀態先有收據可補打（未收款 / 已取消單冇原始單據）。 */
@@ -453,6 +471,8 @@ export function LocalOrdersPanel({
               <tbody>
                 {filteredOrders.map((order) => {
                   const badge = getOrderStatusBadge(order);
+                  // 付款狀態（已結帳 / 未結帳）——快餐單先顯示（見 getPaymentBadge）。
+                  const paymentBadge = getPaymentBadge(order);
                   // 折扣指示：原價（line-through）+ 折後價（amber），收埋喺金額欄第二行
                   const itemSaving = orderItemDiscountTotal(order.items);
                   const wholeSaving = Math.max(0, order.discountAmount ?? 0);
@@ -492,13 +512,24 @@ export function LocalOrdersPanel({
                         ) : null}
                       </td>
                       <td className={TD_CELL}>
-                        {/* 狀態藥丸：顏色／文字沿用原本卡片，縮到表格尺寸 */}
-                        <span
-                          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge.bgClass} ${badge.textClass}`}
-                        >
-                          <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
-                          {badge.label}
-                        </span>
+                        {/* 快餐單雙標籤（2026-09-12 用戶要求）：出餐狀態 ＋ 付款狀態
+                            （已結帳 / 未結帳）兩個獨立維度同時顯示。
+                            欄位窄（10%），所以上下堆疊 + 縮到 11px，避免撐爆表格。 */}
+                        <div className="flex flex-col items-start gap-1">
+                          <span
+                            className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge.bgClass} ${badge.textClass}`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
+                            {badge.label}
+                          </span>
+                          {isQuickCounterOrder(order) ? (
+                            <span
+                              className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${paymentBadge.bgClass} ${paymentBadge.textClass}`}
+                            >
+                              {paymentBadge.label}
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className={TD_CELL}>
                         <OrderSourceBadge order={order} />
@@ -582,106 +613,35 @@ export function LocalOrdersPanel({
       </div>
 
       {viewingOrder ? (
+        /**
+         * 「查看」彈窗（2026-09-12 用戶要求 #3）：**同點餐介面嘅「訂單詳情」彈窗完全對齊** ——
+         * 同一個 header（標題 + 單號·枱別 + 狀態標籤）、同一個品項卡（名稱／規格／備註／折扣 +
+         * 右邊數量／金額）、同一個總計框、同一行底部動作掣（關閉／補打帳單／可取餐→完成）。
+         * 以前呢度係「標題＝單號、內容逐行文字、冇底部動作」，同點餐頁兩個樣。
+         */
         <ResponsiveModal
-          description={`${viewingOrder.tableName} · ${(() => { const b = getOrderStatusBadge(viewingOrder); return b.label; })()}`}
-          onClose={() => setViewingOrderId(null)}
-          title={viewingOrder.localOrderNo}
-          widthClassName="max-w-md"
-        >
-          <div className="grid gap-2 text-sm text-slate-700">
-            {isQuickCounterOrder(viewingOrder) ? (
-              <div
-                className={`inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
-                  (() => { const b = getOrderStatusBadge(viewingOrder); return `${b.bgClass} ${b.textClass}`; })()
-                }`}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setViewingOrderId(null)}
+                type="button"
               >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    (() => { const b = getOrderStatusBadge(viewingOrder); return b.dotClass; })()
-                  }`}
-                />
-                {(() => { const b = getOrderStatusBadge(viewingOrder); return b.label; })()}
-              </div>
-            ) : null}
-            {viewingOrder.orderNote ? <div>備註：{viewingOrder.orderNote}</div> : null}
-            {/* 免單審計：獨立欄位（唔係 orderNote，後者受 docs/84 鎖定） */}
-            {viewingOrder.compNote ? (
-              <div className="whitespace-pre-wrap break-words">
-                免單備註：<span className="font-semibold text-slate-900">{viewingOrder.compNote}</span>
-              </div>
-            ) : null}
-            {viewingOrder.items.map((item) => {
-              const itemHasDiscount = item.discountRate != null && Number.isFinite(item.discountRate) && item.discountRate < 100;
-              return (
-                <div key={`${item.menuItemId}-${item.name}`} className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span>
-                    {item.name}
-                    {itemHasDiscount ? (
-                      <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                        {item.discountRate}% off
-                      </span>
-                    ) : null}
-                    {/* 單品折扣原因（2026-09-11 需求 #2）：逐件顯示 */}
-                    {itemHasDiscount && item.discountNote ? (
-                      <span className="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                        {item.discountNote}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="font-semibold tabular-nums">×{item.quantity}</span>
-                </div>
-              );
-            })}
-            {(viewingOrder.voidedItems ?? []).map((item, idx) => (
-              <div key={`voided-${item.menuItemId}-${idx}`} className="flex justify-between gap-2 text-red-600 line-through">
-                <span>
-                  {item.name}
-                  <span className="ml-1 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white">已退菜</span>
-                </span>
-                <span className="font-semibold">×{item.quantity}</span>
-              </div>
-            ))}
-            {/* 折扣分項（用戶要求所有訂單明細位都要見到） */}
-            <OrderDiscountRow
-              currency={currency}
-              items={viewingOrder.items}
-              variant="compact"
-              wholeOrderDiscountAmount={viewingOrder.discountAmount}
-            />
-            {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
-            {viewingOrderDiscountNotes.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1">
-                <span>折扣備註：</span>
-                {viewingOrderDiscountNotes.map((note, index) => (
-                  <span
-                    key={`${note.kind}-${note.text}-${index}`}
-                    className="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800"
-                  >
-                    {note.text}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            <div className="mt-2 flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
-              <span>總計</span>
-              <span>{formatMoney(viewingOrder.total, currency)}</span>
-            </div>
-            {isQuickCounterOrder(viewingOrder) && viewingOrder.status !== "settled" ? (
-              <div className="mt-2">
-                <QuickOrderActions
-                  onChanged={() => {
-                    handleQuickAction();
-                    refresh();
-                    setViewingOrderId(null);
-                  }}
-                  order={viewingOrder}
-                />
-              </div>
-            ) : null}
-            {/* 查看彈窗：自助單 draft 亦顯示接受 / 拒絕（統一用 SelfOrderActionButtons 避免走樣） */}
-            {viewingOrder.status === "draft" && isSelfOrder(viewingOrder) ? (
-              <div className="mt-2 flex gap-2">
+                關閉
+              </button>
+              {hasReceivableReceipt(viewingOrder) ? (
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={() => reprintBillForOrder(viewingOrder)}
+                  type="button"
+                >
+                  補打帳單
+                </button>
+              ) : null}
+              {/* 自助單 draft：接受 / 拒絕（同點餐頁彈窗同一個元件，唔會走樣） */}
+              {viewingOrder.status === "draft" && isSelfOrder(viewingOrder) ? (
                 <SelfOrderActionButtons
+                  fill={false}
                   orderLabel={viewingOrder.localOrderNo}
                   onConfirm={() => {
                     const result = confirmSelfOrder(viewingOrder.id);
@@ -706,17 +666,159 @@ export function LocalOrdersPanel({
                     return result;
                   }}
                 />
+              ) : null}
+              {/* 快餐出餐：可取餐 → 完成（同列表一行嘅掣共用 QuickOrderActions，行為一定同步） */}
+              <QuickOrderActions onChanged={handleQuickAction} order={viewingOrder} variant="modal" />
+            </>
+          }
+          header={
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xl font-semibold text-slate-900">訂單詳情</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {viewingOrder.localOrderNo} · {viewingOrder.tableName}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+                    (() => { const b = getOrderStatusBadge(viewingOrder); return `${b.bgClass} ${b.textClass}`; })()
+                  }`}
+                >
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      (() => { const b = getOrderStatusBadge(viewingOrder); return b.dotClass; })()
+                    }`}
+                  />
+                  {(() => { const b = getOrderStatusBadge(viewingOrder); return b.label; })()}
+                </div>
+                {/* 快餐單：付款狀態（已結帳 / 未結帳）同出餐狀態係兩個獨立維度 */}
+                {isQuickCounterOrder(viewingOrder) ? (
+                  <div
+                    className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                      (() => { const p = getPaymentBadge(viewingOrder); return `${p.bgClass} ${p.textClass}`; })()
+                    }`}
+                  >
+                    {(() => { const p = getPaymentBadge(viewingOrder); return p.label; })()}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          }
+          onClose={() => setViewingOrderId(null)}
+          showCloseButton={false}
+          widthClassName="max-w-2xl"
+        >
+          <div className="grid gap-2">
+            {viewingOrder.items.map((item) => {
+              const itemHasDiscount = item.discountRate != null && Number.isFinite(item.discountRate) && item.discountRate < 100;
+              return (
+                <div key={`${item.menuItemId}-${item.name}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
+                      {item.selectedSpecs?.length ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                        </div>
+                      ) : null}
+                      {item.note ? (
+                        <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">
+                          備註：{item.note}
+                        </div>
+                      ) : null}
+                      {itemHasDiscount ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                            {item.discountRate}% off
+                          </span>
+                          {/* 單品折扣原因（2026-09-11 需求 #2）：逐件顯示 */}
+                          {item.discountNote ? (
+                            <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                              {item.discountNote}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
+                      <div className="mt-0.5 text-xs tabular-nums text-slate-500">
+                        {formatMoney(item.price * item.quantity, currency)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {(viewingOrder.voidedItems ?? []).map((item, idx) => (
+              <div
+                key={`voided-${item.menuItemId}-${idx}`}
+                className="rounded-2xl border border-red-200 bg-red-50/60 p-3 opacity-80"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-900 line-through">
+                      {item.name}
+                      <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
+                        已退菜
+                      </span>
+                    </div>
+                    {item.selectedSpecs?.length ? (
+                      <div className="mt-1 text-xs text-slate-500">
+                        {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                      </div>
+                    ) : null}
+                    {item.voidedReason ? (
+                      <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                    ) : null}
+                  </div>
+                  <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
+                    已退 x{item.quantity}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* 總計框（同點餐頁「訂單詳情」彈窗同一個結構）：折扣分項 + 折扣備註 + 總計 + 備註 */}
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            {/* 折扣分項（用戶要求所有訂單明細位都要見到） */}
+            <OrderDiscountRow
+              currency={currency}
+              items={viewingOrder.items}
+              wholeOrderDiscountAmount={viewingOrder.discountAmount}
+            />
+            {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
+            {viewingOrderDiscountNotes.length > 0 ? (
+              <div className="mt-2 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-slate-500">
+                折扣備註：
+                <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+                  {viewingOrderDiscountNotes.map((note, index) => (
+                    <span
+                      key={`${note.kind}-${note.text}-${index}`}
+                      className="inline-flex whitespace-nowrap rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800"
+                    >
+                      {note.text}
+                    </span>
+                  ))}
+                </span>
               </div>
             ) : null}
-            {hasReceivableReceipt(viewingOrder) ? (
-              <div className="mt-1 flex justify-end">
-                <button
-                  type="button"
-                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
-                  onClick={() => reprintBillForOrder(viewingOrder)}
-                >
-                  補打帳單
-                </button>
+            <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
+              <span>總計</span>
+              <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</span>
+            </div>
+            {viewingOrder.orderNote ? (
+              <div className="mt-2 text-sm text-slate-500">
+                全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
+              </div>
+            ) : null}
+            {/* 免單審計：獨立欄位（唔係 orderNote，後者受 docs/84 鎖定） */}
+            {viewingOrder.compNote ? (
+              <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                免單備註：
+                <span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
               </div>
             ) : null}
           </div>

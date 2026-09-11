@@ -137,7 +137,9 @@ import { NETWORK_STATUS_EVENT, readNetworkOnline, useNetworkOnline } from "@/lib
 import {
   compareOrderByLocalNo,
   filterQuickActionBarOrders,
+  getPaymentBadge,
   isQuickCounterOrder,
+  isQuickOrderReady,
   localOrderStatusLabel,
   mergeOrderLists,
 } from "@/lib/pos-order-filters";
@@ -1801,20 +1803,17 @@ export function PosApp() {
     [openOrders],
   );
   const quickPreparingOrders = useMemo(
-    () =>
-      actionBarLocalOrders.filter(
-        (order) =>
-          // 自助單（kiosk / scan）嘅快餐 counter 單：可取餐 + 結帳 兩動作獨立並存，
-          // 所以無論 sent_to_kitchen + ready 定 paid + preparing 都要留喺「製作中」區，
-          // 用戶先睇得到掣同「去結帳」入口。
-          order.status === "draft" ||
-          order.status === "sent_to_kitchen" ||
-          (order.status === "paid" && order.fulfillmentStatus !== "ready"),
-      ),
+    // 🔴 2026-09-12 修（用戶反映「撳可取餐狀態冇變、掣唔消失」）：
+    // 舊寫法將 `(paid && !ready) → 製作中`、`(paid && ready) → 待取餐`，令
+    // **未收款先出餐**（status 仲係 sent_to_kitchen、但 fulfillmentStatus 已寫 ready，
+    // docs/87 §6.3 放寬閘門嘅合法路徑）嘅單永遠卡死喺「製作中」區：撳完可取餐個掣照舊喺度，
+    // 睇落好似「狀態冇更新」（其實 ready 已經寫入本機 + 雲端）。
+    // 出餐階段嘅唯一真源係 `isQuickOrderReady()`，同訂單頁分頁口徑完全一致。
+    () => actionBarLocalOrders.filter((order) => !isQuickOrderReady(order)),
     [actionBarLocalOrders],
   );
   const quickWaitingOrders = useMemo(
-    () => actionBarLocalOrders.filter((order) => order.status === "paid" && order.fulfillmentStatus === "ready"),
+    () => actionBarLocalOrders.filter((order) => isQuickOrderReady(order)),
     [actionBarLocalOrders],
   );
 
@@ -2728,9 +2727,22 @@ export function PosApp() {
   function updateQuickFulfillment(orderId: string) {
     const target = orders.find((order) => order.id === orderId) ?? null;
     if (!target) return;
+    if (target.tableId !== "counter") return;
+    // 幂等防呆（2026-09-12）：`ready` 係單向閘，重複撳唔應該再推事件落 outbox；
+    // 但**一定要出提示**，唔可以靜默 return —— 靜默就係用戶口中「撳完冇反應」。
+    if (isQuickOrderReady(target)) {
+      setToast({ tone: "info", message: `${target.localOrderNo} 已經標記可取餐。` });
+      return;
+    }
     // docs/87 §6.3：放寬閘門，容許 sent_to_kitchen（自助單先出餐後付款）標記 ready
     const allowed = new Set<PosOrder["status"]>(["paid", "sent_to_kitchen"]);
-    if (target.tableId !== "counter" || !allowed.has(target.status)) return;
+    if (!allowed.has(target.status)) {
+      setToast({
+        tone: "info",
+        message: `${target.localOrderNo}（${localOrderStatusLabel(target)}）唔可以標記可取餐。`,
+      });
+      return;
+    }
     const updatedAt = new Date().toISOString();
     const updatedOrder: PosOrder = {
       ...target,
@@ -4633,10 +4645,27 @@ export function PosApp() {
                                   </>
                                 );
                               })()}
-                              <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-700">
-                                <span className="h-4 w-4 rounded-full bg-orange-500" />
-                                {localOrderStatusLabel(order)}
-                              </div>
+                              {(() => {
+                                // 狀態藥丸：改用 getOrderStatusBadge（同卡片 / 訂單頁同一套顏色 token），
+                                // 唔再全部硬編碼橙色 —— 待取餐要出天藍、已完成要出綠色。
+                                const badge = getOrderStatusBadge(order);
+                                const pay = getPaymentBadge(order);
+                                return (
+                                  <>
+                                    <div
+                                      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-sm font-semibold ${badge.bgClass} ${badge.textClass}`}
+                                    >
+                                      <span className={`h-4 w-4 rounded-full ${badge.dotClass}`} />
+                                      {badge.label}
+                                    </div>
+                                    <div
+                                      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${pay.bgClass} ${pay.textClass}`}
+                                    >
+                                      {pay.label}
+                                    </div>
+                                  </>
+                                );
+                              })()}
                               <OrderSourceBadge order={order} />
                             </div>
                           </div>
@@ -4673,15 +4702,27 @@ export function PosApp() {
                               />
                             ) : (
                               <>
-                                {/* docs/87 §6.3：放寬可取餐閘門 */}
-                                {(order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") &&
-                                order.fulfillmentStatus !== "ready" ? (
+                                {/* docs/87 §6.3：放寬可取餐閘門。
+                                    2026-09-12：出餐階段一律看 fulfillmentStatus（ready 單向閘），
+                                    唔可以再夾 status=paid —— 否則未收款先出餐嘅單撳完冇反應。 */}
+                                {!isQuickOrderReady(order) &&
+                                (order.status === "sent_to_kitchen" || order.status === "paid") ? (
                                   <button
                                     className="flex-[1.6] whitespace-nowrap rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
                                     onClick={() => updateQuickFulfillment(order.id)}
                                     type="button"
                                   >
-                                    標記可取
+                                    可取餐
+                                  </button>
+                                ) : null}
+                                {/* 已標記可取餐 → 只剩「完成」（同快餐卡片一致：可取餐 → 完成 單鏈）。 */}
+                                {isQuickOrderReady(order) ? (
+                                  <button
+                                    className="flex-[1.6] whitespace-nowrap rounded-xl bg-emerald-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                                    onClick={() => markOrderCompleted(order.id, { label: quickCompleteLabel(order) })}
+                                    type="button"
+                                  >
+                                    {quickCompleteLabel(order)}
                                   </button>
                                 ) : null}
                                 <button
@@ -5716,10 +5757,14 @@ export function PosApp() {
                   );
                 }
                 if (isQuick) {
-                  // 收銀台快餐單：mirror strip 舊單鏈（可取餐 → 已取餐）
-                  const inPreparing = v.status === "sent_to_kitchen" || v.status === "paid";
-                  const inWaiting = isBothDone || (v.status === "paid" && isReady);
-                  if (inPreparing && !isReady) {
+                  // 收銀台快餐單（source="pos"）：mirror 卡片單鏈（可取餐 → 完成），
+                  // **一律以出餐階段 `isQuickOrderReady()` 為準**。
+                  // 舊寫法 `inWaiting = isBothDone || (paid && ready)` 會令「未收款先出餐」
+                  // （status=sent_to_kitchen + fulfillmentStatus=ready，docs/87 §6.3 合法路徑）
+                  // 嘅單兩個分支都唔中 → 跌落下面「堂食單」分支，彈窗變成
+                  // 「取消結帳 / 去結帳」而且冇可取餐／完成，同卡片完全唔一致。
+                  const isOpen = v.status === "sent_to_kitchen" || v.status === "paid";
+                  if (isOpen && !isReady) {
                     return (
                       <button
                         className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
@@ -5730,7 +5775,7 @@ export function PosApp() {
                       </button>
                     );
                   }
-                  if (inWaiting) {
+                  if (isOpen && isReady) {
                     return (
                       <button
                         className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
@@ -5836,7 +5881,23 @@ export function PosApp() {
                         <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
                         {badge.label}
                       </div>
-                      {prepaidFull && viewingOrder.status !== "settled" && viewingOrder.status !== "refunded" && viewingOrder.status !== "partially_refunded" ? (
+                      {/* 快餐單（2026-09-12）：付款狀態同出餐狀態係兩個獨立維度，
+                          要同時顯示（例：已結帳 · 製作中）。此時「待完成」多餘 → 唔再出。 */}
+                      {isQuickCounterOrder(viewingOrder) ? (
+                        (() => {
+                          const pay = getPaymentBadge(viewingOrder);
+                          return (
+                            <div
+                              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${pay.bgClass} ${pay.textClass}`}
+                            >
+                              {pay.label}
+                            </div>
+                          );
+                        })()
+                      ) : prepaidFull &&
+                        viewingOrder.status !== "settled" &&
+                        viewingOrder.status !== "refunded" &&
+                        viewingOrder.status !== "partially_refunded" ? (
                         <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
                           待完成
                         </div>
