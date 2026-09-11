@@ -1,10 +1,10 @@
 {
-  "version": "0.1.3",
-  "pubDate": "2026-08-23T13:20:50.046Z",
-  "releaseNotes": "v0.1.3 更新",
-  "fileName": "Macau POS Desktop Setup 0.1.3.exe",
-  "sha512": "0ba90152b735379fc0ad56dfb2dadf9f03f004a60b972ab1ecb653038da479fb48bd0ab47cecde578a8c20c7baf1037962af6e089d352af317444dba9c74869c",
-  "path": "/releases/Macau POS Desktop Setup 0.1.3.exe",
+  "version": "0.1.17",
+  "pubDate": "2026-09-11T13:28:33.563Z",
+  "releaseNotes": "v0.1.17：修「分格線一條變兩條」（docs/114）——出紙前清 GS!/ESC!/FS! 放大殘留、dash 數量跟 size 減半，任何大小都只佔一行；並讀模板 divider 區塊。",
+  "fileName": "Macau POS Desktop Setup 0.1.17.exe",
+  "sha512": "e3a826f8dc3bd0f33c50c55871f2b77144db890a9746577d844ea6976be2c5d64965c2f5790ef9fdc962041ded657da63812e969e72a873990425822d434d6d7",
+  "path": "/releases/Macau POS Desktop Setup 0.1.17.exe",
   "url": "",
-  "fileSize": 78769171
+  "fileSize": 81193351
 }

@@ -16,6 +16,28 @@
 > - ⬜ 仲要：裝 v1.1.4 落門店部機、確認門店跑邊個通道（§5）、其餘三通道照同一份修正重出。
 > - 教訓：**「代碼改好」≠「行為改變」**。呢個坑 docs/101/102/103 已中過，今次係第 N 次；
 >   下次改 renderer 之後，`git log -1` 日期、APK mtime、`git status` 三個一齊睇。
+>
+> 🔴 **2026-09-11 續查（用戶：我用 website 版本，唔係 Android）**：
+> **網站版本身冇任何本機出紙能力** —— `dispatch.ts` / `printer-test-print.ts` 寫死：
+> 純 website / PWA（唔係原生殼、冇 `?companion=`）**會 skip 桌面 Companion 分支**，
+> 只剩「雲端中繼 → 店內出紙機」；`qr-print.ts` 之外全 repo 冇 `window.print()` 出單路徑。
+> 所以「用網站落單」**唔等於**「唔關出紙程式事」——實紙一定由店內某件程式出，兩個可能：
+>
+> | 候選出紙機 | 修正狀態（09-11 實測） |
+> |---|---|
+> | 中繼 APK（`print-relay`） | code 有 fix，**APK = 09-04 14:16**（見上）；已重 build **v1.1.4 / code 6** |
+> | **Macau POS Desktop**（Electron 載 Vercel 網頁，內部 companion :9311） | `companion-server.mjs` 09-10 21:48 有 fix；**最後安裝檔 = `dist/` 0.1.16 @ 09-01 23:21**，而**網站 `public/releases/` 仲係 0.1.3 @ 08-23**（feed = `https://macau-pos-system.vercel.app/releases/`）→ 兩者都冇 fix |
+>
+> **09-11 已做（桌面通道）**：`desktop-companion` bump **0.1.16 → 0.1.17** → `electron-builder --win nsis` BUILD OK
+> （`dist/Macau POS Desktop Setup 0.1.17.exe`，81.2 MB；已驗 asar 內真帶 `clearMagnify`）；
+> 產物已發佈到 `public/releases/`（exe + `latest.yml` + `manifest.json` 更新，刪走 0.1.3 exe）。
+> ⚠️ `scripts/release.mjs` 嘅 `PROJECT_ROOT = desktop-companion/..` 假設「companion 同 public 同一個 repo」，
+> 但實際 `desktop-companion` 喺 `C:\dev\desktop-companion`、`public/releases` 喺 `C:\dev\macauPos\macauPosSystem` →
+> **腳本會寫去唔存在嘅 `C:\dev\public\releases`**，所以今次係人手複製（呢個就係 0.1.16 冇上到網站嘅原因）。
+> 未 commit／未 push；push 之後門店 PC 撳「檢查更新」就會拉到 0.1.17。
+>
+> **30 秒判定門店實際跑邊個通道**：睇**打印機係插住邊部機** —— 插 Windows PC（USB）＝桌面版；
+> 接住 Android 盒仔／平板＝中繼 APK；或者喺網站「打印中繼」分頁睇有冇已配對中繼機同最後心跳。
 
 > **狀態（2026-09-10 收尾）**：**五個通道全部改完**——
 > POS 預覽（§3.2）、`print-relay`（§3.3）、`print hub` + `print-agent-android`（§3.4）、
