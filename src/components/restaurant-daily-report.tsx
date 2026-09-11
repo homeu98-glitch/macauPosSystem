@@ -2240,11 +2240,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       ticketMopYest,
                     )}
                   />
-                </div>
 
                 {/*
-                  以下 KPI 同上面係**同一個 grid**（刻意唔再開第二個 div）：
+                  以下 5 格同上面 5 格係**同一個 grid** —— ⚠️ 中間**絕對唔可以有 `</div>`**。
                   10 格一次過排才會穩定 5-5；拆兩個 5 格 grid 喺窄螢幕會各自斷行。
+                  ⚠️ 2026-09-11 中過：合併時漏刪咗第一個 grid 嘅 `</div>`，令尾 5 格掉出 grid、
+                  各自佔滿一行且緊貼無 gap；而 JSX 仍然平衡 → typecheck / eslint / build 全綠捉唔到。
                   未結帳訂單 / 餘額總額 / 會員充值 / 會員扣點 / 毛利（估）
                 */}
                   {/* 2026-09-07 新增：未結帳訂單（sent_to_kitchen 等）唔計入營業額，
@@ -2335,6 +2336,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       )
                     }
                   />
+                </div>
               </>
             ) : (
               <>

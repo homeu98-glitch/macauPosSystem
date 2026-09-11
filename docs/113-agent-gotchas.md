@@ -166,3 +166,11 @@
 - ⚠️ **Kiosk 綁店登入（`/login?mode=kiosk`）會照寫 `authSession`**（因為要做 Ledger 會員扣款）→ 佢係有 `posDeviceToken` 嘅，唔屬匿名通道。
 - ⚠️ **匿名（客人掃碼）冇 token 唔算錯誤**：`/api/pos/sync` 只放行 `ORDER_CREATED` / `ORDER_UPDATED` 且 payload `source ∈ {scan, kiosk}`；其他事件一律 `reason:"unauthorized"`（client 見到會強制續期一次）。
 - ⚠️ `POS_REQUIRE_DEVICE_AUTH` 未設／空字串 = **強制**（fail closed）；secret 解析次序 `POS_DEVICE_TOKEN_SECRET` → `ADMIN_SESSION_SECRET` → `SUPABASE_SERVICE_ROLE_KEY`；冇 secret 就簽唔到／驗唔到，一樣係 401。
+
+## JSX 合併 grid 漏刪 `</div>`：build 全綠但版面散（2026-09-11 · 中過 KPI 帶）
+- 🔴 **症狀**：10 格 KPI 應該 5-5，實際變「**頭 5 格一行 + 尾 5 格各自佔滿一行、緊貼無 gap**」。原因：grid 提早閂咗，尾 5 格變成外層 `div.block.p-4`（`restaurant-daily-report.tsx` L2115）嘅**直接子元素** —— `gap-3` / `mb-4` 隨住個 grid 一齊消失，所以係「緊貼堆疊」而唔係「有空隙堆疊」。
+- 🔴 **元兇寫法**：合併「兩個 5 格 grid」成「一個 10 格 grid」時，刪走咗第二個 grid 嘅 `<div>` 開頭**同**結尾，但**冇刪走第一個 grid 嘅 `</div>`** → `<div className="mb-4 grid grid-cols-5 gap-3">` 喺第 5 格之後就閂咗，L2243 嗰個 `</div>` 就係佢。
+- 🔴 **點解驗證捉唔到**：JSX 仍然**完全平衡**（`<div>` 有閂、`</>` fragment 有閂）→ `npm run typecheck` / `eslint` / `next build` **全部 0 error**；`npm run test` 亦冇 DOM 結構測試。**呢類錯只能肉眼睇畫面**（或加 DOM 測試）才捉到 —— 唔可以只憑 build 綠燈就報「已完成」。
+- 📌 **自查法**：搬 / 合併 grid 之後，**數返 `<div>` 同 `</div>` 嘅配對層數**；或喺 DevTools 揀個 grid 容器睇 `children.length`（應該 = 10，唔係 5）。
+- 📌 **鐵證**：① 行內縮排多咗一層；② 註解寫住「同上面係同一個 grid（刻意唔再開第二個 div）」但實際唔係 —— **註解講嘅意圖同 code 相反**就係最強信號。
+- 📌 **同類症狀速查**：凡見「頭 N 個正常、之後嘅變全寬」＝ grid 提早收。另外 skeleton 寫「一個 grid、10 格」係**正確**嘅 → 所以係「**載入完成先變樣**」，更易被誤判成「載入後才壞」。
