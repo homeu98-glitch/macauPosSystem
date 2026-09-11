@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { kioskT, useKioskOrder } from "@/lib/use-kiosk-order";
 import { loadKioskMode, saveKioskMode } from "@/lib/kiosk-order";
+import { KioskPrinterPanel } from "@/components/kiosk-printer-panel";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
 
@@ -25,6 +26,7 @@ export default function OrderPage() {
     displayStoreName,
     language,
     mode,
+    storeId,
     tableName,
     needsBinding,
     activeCategory,
@@ -465,7 +467,7 @@ export default function OrderPage() {
             role="dialog"
             aria-modal="true"
             aria-label="裝置設定"
-            className="w-full max-w-sm rounded-2xl bg-white p-4"
+            className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 text-base font-semibold text-slate-900">裝置設定</div>
@@ -486,6 +488,11 @@ export default function OrderPage() {
                 退出自助點餐模式（返回收銀台）
               </button>
             )}
+
+            {/* 自助點餐機專屬打印機（docs/87 §6.2）：客人落單後由呢部機出小票。
+                真源喺 DB（per-store，改一次全店即時生效），本機有快取做離線 fallback。 */}
+            <KioskPrinterPanel storeId={storeId} />
+
             <button
               onClick={() => setSettingsOpen(false)}
               className="mt-2 w-full rounded-xl border border-slate-200 py-3 font-semibold text-slate-600"

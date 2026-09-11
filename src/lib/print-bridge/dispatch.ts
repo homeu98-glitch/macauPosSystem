@@ -133,8 +133,13 @@ async function dispatchOneJob(
   // 新版 APK 請改讀 `job.template.kind`（已隨 payload 轉發，見 docs/55 §2.1），嗰個先係權威。
   const nativeKind: NativePrintKind = printer.role === "receipt" ? "receipt" : "kitchen";
   const storeName = loadBootstrapCache()?.storeName;
-  // 每次打單打印份數：未設定 / ≤1 / 非正整數 → 1 份（見 docs/54）
-  const copies = Math.max(1, Math.floor(printer.copies ?? 1));
+  // 每次打單打印份數：**job 層級優先**，其次打印機層級；未設定 / ≤1 / 非正整數 → 1 份。
+  //
+  // ⚠️ 2026-09-11 修：舊版只讀 `printer.copies`，令 `PrintJob.copies`（types.ts L1086
+  // 明文寫「落單端寫死，優先於打印機層級」）**完全冇作用**。後果：自助點餐機小票
+  // 明明帶住 `copies: 1`（規格 8：固定 1 張），但只要嗰部機嘅 `DevicePrinterConfig.copies`
+  // 設咗 2，就會出兩張。改為 job 優先即解決（其他 job 唔帶 `copies` → 行為不變）。
+  const copies = Math.max(1, Math.floor(job.copies ?? printer.copies ?? 1));
 
   // 1) Native bridge（Android APK WebView）：native 側自己決定 LAN 直打 or relay
   if (isNativeBridgeAvailable()) {

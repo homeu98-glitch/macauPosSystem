@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
 
-import { KioskSettings, normalizeScanMode } from "@/lib/pos/kiosk-settings";
+import {
+  KioskSettings,
+  normalizeKioskPrinters,
+  normalizeScanMode,
+} from "@/lib/pos/kiosk-settings";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
+import type { DevicePrinterConfig } from "@/lib/types";
 
 /**
- * 自助點餐設定（按店）。`pos_kiosk_settings` 表，0015 migration；`scan_mode` 為 0031。
+ * 自助點餐設定（按店）。`pos_kiosk_settings` 表，0015 migration；
+ * `scan_mode` 為 0031；`printers`（kiosk 專屬打印機）為 0032。
  *
  * 點解唔用 `pos_device_configs`：
  *   嗰張表嘅讀取係 `.order("updated_at", { ascending: false }).limit(1)` **冇 store filter**
@@ -15,7 +21,7 @@ import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
  *   同 `onlineOrderSettings.autoAccept` 嗰個 bug 同一個坑（見 docs/52）。
  * 所以呢條 route 嘅 GET **一定要帶 storeId filter**。
  *
- * 見 docs/87 §4.3、docs/115（掃碼模式）。
+ * 見 docs/87 §4.3、§6.2、docs/115（掃碼模式）、0032 migration（kiosk 打印機）。
  *
  * ## POST 係「部分更新」語意（2026-09-10）
  *
@@ -23,11 +29,18 @@ import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
  * 「只改 scan_mode」會順手把「自動接自助單」洗返 `true`。所以改為
  * **read-then-merge**：只覆寫 payload 有帶嘅欄位，其餘沿用 DB 現值。
  *
- * ## 未跑 migration 嘅容錯
+ * ## 未跑 migration 嘅容錯（多級降級）
  *
- * `scan_mode` 係 0031 新加欄位。若 code 先上、migration 後跑，select / upsert 會
- * 「column does not exist」（Postgres 42703）。呢種情況**降級**為只讀寫舊欄位
- * （`scanMode` 回 `dine_in`），唔可以令整條 route 500 —— 否則連「自動接自助單」都改唔到。
+ * `scan_mode` 係 0031、`printers` 係 0032 新加欄位。若 code 先上、migration 後跑，
+ * select / upsert 會「column does not exist」（Postgres 42703）。呢種情況**逐級降級**：
+ *   1. 全欄位 → 2. 冇 `printers` → 3. 連 `scan_mode` 都冇（最舊 schema）
+ * 唔可以令整條 route 500 —— 否則連「自動接自助單」都改唔到。
+ *
+ * ⚠️ 42703 本身**唔會講係邊一個欄位**，所以唔可以「見到 42703 就假設係 printers」，
+ * 一定要逐級試（下面 `selectKioskRow()` / `upsertKioskRow()`）。
+ *
+ * ⚠️ 讀唔到嘅欄位要 **omit**（唔好回 `[]`）：client 端用「key 唔存在」區分
+ * 「server 未有呢個欄位（保留本機快取）」同「server 真係冇設定（清空快取）」。
  */
 
 const DEFAULT_STORE_ID = "macau-store-a";
@@ -35,24 +48,84 @@ const DEFAULT_STORE_ID = "macau-store-a";
 /** Postgres：undefined_column。 */
 const PG_UNDEFINED_COLUMN = "42703";
 
-function isMissingScanModeColumn(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === PG_UNDEFINED_COLUMN) return true;
-  return typeof error.message === "string" && error.message.includes("scan_mode");
+interface PgError {
+  code?: string;
+  message?: string;
+}
+
+function isUndefinedColumn(error: PgError | null | undefined): boolean {
+  return Boolean(error && error.code === PG_UNDEFINED_COLUMN);
+}
+
+interface KioskRow {
+  store_id?: string;
+  self_order_auto_accept?: boolean;
+  scan_mode?: string;
+  printers?: unknown;
+  updated_at?: string | null;
+}
+
+interface SelectResult {
+  data: KioskRow | null;
+  error: PgError | null;
+  /** 欄位唔存在（migration 未跑）→ 回值要 omit，等 client 保留本機快取。 */
+  scanModeMissing: boolean;
+  printersMissing: boolean;
+}
+
+type SupabaseLike = NonNullable<ReturnType<typeof getSupabaseServerClient>>;
+
+const COLUMNS_FULL = "store_id, self_order_auto_accept, scan_mode, printers, updated_at";
+const COLUMNS_NO_PRINTERS = "store_id, self_order_auto_accept, scan_mode, updated_at";
+const COLUMNS_LEGACY = "store_id, self_order_auto_accept, updated_at";
+
+/**
+ * 逐級降級讀取。42703 唔會指出邊個欄位，所以係「由最豐富嘅 select 試到最舊」。
+ */
+async function selectKioskRow(supabase: SupabaseLike, storeId: string): Promise<SelectResult> {
+  const attempts: { columns: string; scanModeMissing: boolean; printersMissing: boolean }[] = [
+    { columns: COLUMNS_FULL, scanModeMissing: false, printersMissing: false },
+    { columns: COLUMNS_NO_PRINTERS, scanModeMissing: false, printersMissing: true },
+    { columns: COLUMNS_LEGACY, scanModeMissing: true, printersMissing: true },
+  ];
+
+  let lastError: PgError | null = null;
+  for (const attempt of attempts) {
+    const res = await supabase
+      .from("pos_kiosk_settings")
+      .select(attempt.columns)
+      .eq("store_id", storeId)
+      .maybeSingle();
+    if (!res.error) {
+      return {
+        data: res.data as KioskRow | null,
+        error: null,
+        scanModeMissing: attempt.scanModeMissing,
+        printersMissing: attempt.printersMissing,
+      };
+    }
+    lastError = res.error as PgError;
+    // 只有「欄位唔存在」先值得再試舊 schema；其餘（權限 / 網絡 / RLS）即刻回報。
+    if (!isUndefinedColumn(lastError)) break;
+  }
+
+  return { data: null, error: lastError, scanModeMissing: false, printersMissing: false };
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get("storeId")?.trim() || DEFAULT_STORE_ID;
 
-  // GET 保持開放（kiosk / 掃碼落單時讀一次，只暴露兩個非敏感設定），但加基本限流。
+  // GET 保持開放（kiosk / 掃碼落單時讀一次，只暴露非敏感設定），但加基本限流。
   if (!rateLimit(`pos-kiosk-settings-get:${clientIp(request)}`, 120, 60_000)) {
     return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
   }
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    // 未配 Supabase：唔好當錯誤，返預設（免確認 + 堂食），等客端照樣落得到單（離線優先）
+    // 未配 Supabase：唔好當錯誤，返預設（免確認 + 堂食 + 冇 kiosk 打印機），
+    // 等客端照樣落得到單（離線優先）。
+    // ⚠️ 刻意**唔回** `printers`：client 見到 key 唔存在 → 保留本機快取。
     return NextResponse.json({
       ok: true,
       fallback: true,
@@ -60,48 +133,70 @@ export async function GET(request: Request) {
     });
   }
 
-  const withScanMode = await supabase
-    .from("pos_kiosk_settings")
-    .select("store_id, self_order_auto_accept, scan_mode, updated_at")
-    .eq("store_id", storeId)
-    .maybeSingle();
-
-  let data: { store_id?: string; self_order_auto_accept?: boolean; updated_at?: string | null } | null =
-    withScanMode.data as typeof data;
-  let error = withScanMode.error;
-  let scanModeColumnMissing = false;
-
-  // 降級：0031 migration 未跑 → 唔揀 scan_mode，回預設堂食模式。
-  if (isMissingScanModeColumn(error)) {
-    scanModeColumnMissing = true;
-    const legacy = await supabase
-      .from("pos_kiosk_settings")
-      .select("store_id, self_order_auto_accept, updated_at")
-      .eq("store_id", storeId)
-      .maybeSingle();
-    data = legacy.data as typeof data;
-    error = legacy.error;
+  const row = await selectKioskRow(supabase, storeId);
+  if (row.error) {
+    return NextResponse.json({ ok: false, error: row.error.message }, { status: 500 });
   }
 
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  const settings: {
+    storeId: string;
+    selfOrderAutoAccept: boolean;
+    scanMode: string;
+    updatedAt: string | null;
+    printers?: DevicePrinterConfig[];
+  } = {
+    storeId,
+    // 未設定過 → 用表嘅 default（true = 免確認直接出單，規格 5）
+    selfOrderAutoAccept: row.data?.self_order_auto_accept ?? true,
+    // 未設定過 / 欄位未存在 → 堂食（向後兼容：現存店鋪行為不變）
+    scanMode: row.scanModeMissing ? "dine_in" : normalizeScanMode(row.data?.scan_mode),
+    updatedAt: row.data?.updated_at ?? null,
+  };
+  // 欄位唔存在 → **omit**（唔好回 []），client 靠「key 唔存在」保留本機快取。
+  if (!row.printersMissing) {
+    settings.printers = normalizeKioskPrinters(row.data?.printers);
   }
 
-  const rawScanMode = scanModeColumnMissing
-    ? undefined
-    : (withScanMode.data as { scan_mode?: string } | null)?.scan_mode;
+  return NextResponse.json({ ok: true, settings });
+}
 
-  return NextResponse.json({
-    ok: true,
-    settings: {
-      storeId,
-      // 未設定過 → 用表嘅 default（true = 免確認直接出單，規格 5）
-      selfOrderAutoAccept: data?.self_order_auto_accept ?? true,
-      // 未設定過 / 欄位未存在 → 堂食（向後兼容：現存店鋪行為不變）
-      scanMode: normalizeScanMode(rawScanMode),
-      updatedAt: data?.updated_at ?? null,
-    },
-  });
+/** upsert 用嘅 payload（同 select 一樣要逐級降級）。 */
+interface UpsertFields {
+  selfOrderAutoAccept: boolean;
+  scanMode: string;
+  printers: DevicePrinterConfig[];
+}
+
+async function upsertKioskRow(
+  supabase: SupabaseLike,
+  storeId: string,
+  fields: UpsertFields,
+  nowIso: string,
+): Promise<PgError | null> {
+  // 逐級降級：全欄位 → 冇 printers → 連 scan_mode 都冇。
+  const attempts: { includePrinters: boolean; includeScanMode: boolean }[] = [
+    { includePrinters: true, includeScanMode: true },
+    { includePrinters: false, includeScanMode: true },
+    { includePrinters: false, includeScanMode: false },
+  ];
+
+  let lastError: PgError | null = null;
+  for (const attempt of attempts) {
+    const row: Record<string, unknown> = {
+      store_id: storeId,
+      self_order_auto_accept: fields.selfOrderAutoAccept,
+      updated_at: nowIso,
+    };
+    if (attempt.includeScanMode) row.scan_mode = fields.scanMode;
+    if (attempt.includePrinters) row.printers = fields.printers;
+
+    const { error } = await supabase.from("pos_kiosk_settings").upsert(row, { onConflict: "store_id" });
+    if (!error) return null;
+    lastError = error as PgError;
+    if (!isUndefinedColumn(lastError)) break;
+  }
+
+  return lastError;
 }
 
 export async function POST(request: Request) {
@@ -112,7 +207,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
   }
 
-  const payload = (await request.json().catch(() => null)) as Partial<KioskSettings> | null;
+  const payload = (await request.json().catch(() => null)) as
+    | (Partial<KioskSettings> & { printers?: unknown })
+    | null;
   if (!payload || typeof payload !== "object") {
     return NextResponse.json({ ok: false, error: "請求格式錯誤。" }, { status: 400 });
   }
@@ -121,7 +218,8 @@ export async function POST(request: Request) {
   // 部分更新：只認 payload **有帶** 嘅欄位（`undefined` = 唔改）。
   const hasAutoAccept = typeof payload.selfOrderAutoAccept === "boolean";
   const hasScanMode = payload.scanMode !== undefined;
-  if (!hasAutoAccept && !hasScanMode) {
+  const hasPrinters = payload.printers !== undefined;
+  if (!hasAutoAccept && !hasScanMode && !hasPrinters) {
     return NextResponse.json({ ok: false, error: "冇任何可更新欄位。" }, { status: 400 });
   }
   if (hasScanMode && payload.scanMode !== "dine_in" && payload.scanMode !== "quick") {
@@ -129,6 +227,10 @@ export async function POST(request: Request) {
       { ok: false, error: "scanMode 只可以係 dine_in 或 quick。" },
       { status: 400 },
     );
+  }
+  // 打印機清單一定要係 array；元素由 normalizeKioskPrinters() 逐個白名單過濾。
+  if (hasPrinters && !Array.isArray(payload.printers)) {
+    return NextResponse.json({ ok: false, error: "printers 只可以係陣列。" }, { status: 400 });
   }
 
   const authEnforced = isPosDeviceAuthRequired();
@@ -148,46 +250,32 @@ export async function POST(request: Request) {
   }
 
   // read-then-merge：攞現值做底，再覆寫 payload 有帶嘅欄位。
-  const read = await supabase
-    .from("pos_kiosk_settings")
-    .select("self_order_auto_accept, scan_mode")
-    .eq("store_id", storeId)
-    .maybeSingle();
-
-  // 降級：0031 未跑 → 只讀寫舊欄位。
-  const scanModeColumnMissing = isMissingScanModeColumn(read.error);
-  if (read.error && !scanModeColumnMissing) {
-    return NextResponse.json({ ok: false, error: read.error.message }, { status: 500 });
+  const current = await selectKioskRow(supabase, storeId);
+  if (current.error) {
+    return NextResponse.json({ ok: false, error: current.error.message }, { status: 500 });
   }
-
-  const existing = (scanModeColumnMissing ? null : read.data) as
-    | { self_order_auto_accept?: boolean; scan_mode?: string }
-    | null;
 
   const selfOrderAutoAccept = hasAutoAccept
     ? Boolean(payload.selfOrderAutoAccept)
-    : existing?.self_order_auto_accept ?? true;
+    : current.data?.self_order_auto_accept ?? true;
   const scanMode = hasScanMode
     ? normalizeScanMode(payload.scanMode)
-    : normalizeScanMode(existing?.scan_mode);
+    : normalizeScanMode(current.data?.scan_mode);
+  // 只改一個欄位唔可以洗走另一個：printers 亦要 read-then-merge。
+  // ⚠️ 若 `printers` 欄位未存在（migration 未跑），`current.data?.printers` 係 undefined
+  // → 當空陣列；upsert 嘅降級邏輯亦會自動剝走呢個欄位。
+  const printers = hasPrinters
+    ? normalizeKioskPrinters(payload.printers)
+    : normalizeKioskPrinters(current.data?.printers);
 
   const nowIso = new Date().toISOString();
-  const row: Record<string, unknown> = {
-    store_id: storeId,
-    self_order_auto_accept: selfOrderAutoAccept,
-    updated_at: nowIso,
-  };
-  // 0031 未跑就唔寫 scan_mode（寫咗會 42703 令整條失敗）。
-  if (!scanModeColumnMissing) row.scan_mode = scanMode;
-
-  const { error } = await supabase.from("pos_kiosk_settings").upsert(row, { onConflict: "store_id" });
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  const writeError = await upsertKioskRow(supabase, storeId, { selfOrderAutoAccept, scanMode, printers }, nowIso);
+  if (writeError) {
+    return NextResponse.json({ ok: false, error: writeError.message }, { status: 500 });
   }
 
   return NextResponse.json({
     ok: true,
-    settings: { storeId, selfOrderAutoAccept, scanMode, updatedAt: nowIso },
+    settings: { storeId, selfOrderAutoAccept, scanMode, printers, updatedAt: nowIso },
   });
 }

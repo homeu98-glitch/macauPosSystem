@@ -15,7 +15,14 @@
  *
  * `scanMode`（2026-09-10 新增，見 docs/115）：掃碼點餐嘅**店級互斥**模式 ——
  * 堂食（逐枱一個碼）同快餐（全店一個碼）**唔可以同時開啟**。
+ *
+ * `printers`（2026-09-11 新增，見 docs/87 §6.2）：自助點餐機**專屬打印機**清單。
+ * 自助機要另外一台打印機出顧客小票畀客人；存喺呢張表（per-store）而唔係本機
+ * localStorage，令「改一次全店即時生效」同「換機唔使重設」成立。
+ * 平板會寫入本機快取（`macau-pos/stores/{storeId}/kiosk-printers`）做離線 fallback。
  */
+
+import type { DevicePrinterConfig } from "@/lib/types";
 
 /**
  * 掃碼點餐模式（店級互斥，見 docs/115）。
@@ -28,6 +35,51 @@
 export type ScanMode = "dine_in" | "quick";
 
 export const DEFAULT_SCAN_MODE: ScanMode = "dine_in";
+
+/**
+ * 自助點餐機專屬打印機嘅合法 role / 連線方式白名單。
+ *
+ * ⚠️ 一定要白名單驗證（同 `normalizeDeviceConfig` 唔同 —— 嗰邊係讀自己寫嘅本機設定，
+ * 呢邊係商家人手輸入 + 跨裝置讀寫，垃圾值會直接令 `resolveJobPrinter` 揀錯機）。
+ */
+const KIOSK_PRINTER_ROLES = new Set(["receipt", "label", "zone"]);
+const KIOSK_PRINTER_CONNECTIONS = new Set(["lan", "usb", "bluetooth"]);
+
+/**
+ * 正常化自助點餐機打印機清單（client / server 共用，server 寫入前同 client 讀取後都行一次）。
+ *
+ * 規則：只接受「有 id + 有 name + role / connectionType 合法」嘅項目；
+ * 其餘（`undefined` / 非 array / 缺欄位 / role 打錯）一律剔走。
+ * 缺少 `enabled` → 當 `true`（同 `resolveJobPrinter` 只認 enabled 一致）。
+ *
+ * 點解唔似 `normalizeDeviceConfig` 咁「補預設值」：呢度係**遠端輸入**，
+ * 補一個假 IP / 假 role 落去會令 kiosk 靜靜地印去一部唔存在嘅機，
+ * 比直接剔走更難 debug。剔走 = kiosk 唔出小票（另有一層 fallback 去 deviceConfig）。
+ */
+export function normalizeKioskPrinters(value: unknown): DevicePrinterConfig[] {
+  if (!Array.isArray(value)) return [];
+  const out: DevicePrinterConfig[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const printer = raw as Partial<DevicePrinterConfig>;
+    const id = typeof printer.id === "string" ? printer.id.trim() : "";
+    const name = typeof printer.name === "string" ? printer.name.trim() : "";
+    const role = typeof printer.role === "string" ? printer.role : "";
+    const connectionType = typeof printer.connectionType === "string" ? printer.connectionType : "";
+    if (!id || !name) continue;
+    if (!KIOSK_PRINTER_ROLES.has(role)) continue;
+    if (!KIOSK_PRINTER_CONNECTIONS.has(connectionType)) continue;
+    out.push({
+      ...printer,
+      id,
+      name,
+      role: role as DevicePrinterConfig["role"],
+      connectionType: connectionType as DevicePrinterConfig["connectionType"],
+      enabled: printer.enabled !== false,
+    });
+  }
+  return out;
+}
 
 /** 正常化讀取：DB 可能冇值（migration 未跑）或回未知值 → 一律當 `"dine_in"`（向後兼容）。 */
 export function normalizeScanMode(value: unknown): ScanMode {
@@ -44,6 +96,20 @@ export interface KioskSettings {
   selfOrderAutoAccept: boolean;
   /** 掃碼點餐模式（店級互斥）。 */
   scanMode: ScanMode;
+  /**
+   * 自助點餐機**專屬**打印機清單（per-store，已過 `normalizeKioskPrinters()`）。
+   * 空陣列 = 未設定 → `resolveJobPrinter` 行為同以往完全一樣（只有 deviceConfig 嘅機）。
+   */
+  printers: DevicePrinterConfig[];
+  /**
+   * 呢份設定係咪**真係由 server 攞到**（唔係 fallback / 離線預設）。
+   *
+   * ⚠️ 用途：`printers` 為空有兩個完全唔同嘅意思 ——
+   *   ① server 真係話「冇設定」→ 應該清走本機快取；
+   *   ② 離線 / 攞唔到 → **絕對唔可以**清快取（會令斷網時反而印唔到）。
+   * 冇呢個旗標就分唔清，就會出現「網絡抖一下，kiosk 打印機設定全部消失」。
+   */
+  fromServer: boolean;
   updatedAt?: string | null;
 }
 
@@ -51,11 +117,15 @@ export interface KioskSettings {
 export const DEFAULT_KIOSK_SETTINGS_FALLBACK: Omit<KioskSettings, "storeId"> = {
   selfOrderAutoAccept: true,
   scanMode: DEFAULT_SCAN_MODE,
+  printers: [],
+  fromServer: false,
   updatedAt: null,
 };
 
 /** POST 可以只帶想改嘅欄位（server 會 read-then-merge，唔會洗走另一個）。 */
-export type KioskSettingsPatch = Partial<Pick<KioskSettings, "selfOrderAutoAccept" | "scanMode">>;
+export type KioskSettingsPatch = Partial<
+  Pick<KioskSettings, "selfOrderAutoAccept" | "scanMode" | "printers">
+>;
 
 interface KioskSettingsPayload {
   ok?: boolean;
@@ -65,6 +135,7 @@ interface KioskSettingsPayload {
     storeId?: string;
     selfOrderAutoAccept?: boolean;
     scanMode?: string;
+    printers?: unknown;
     updatedAt?: string | null;
   };
 }
@@ -84,6 +155,13 @@ function readSettings(
         : DEFAULT_KIOSK_SETTINGS_FALLBACK.selfOrderAutoAccept,
     scanMode:
       s.scanMode === undefined ? DEFAULT_SCAN_MODE : normalizeScanMode(s.scanMode),
+    // ⚠️ `s.printers === undefined` = server 未有呢個欄位（0032 migration 未跑）
+    // → 保留 fallback（即本機快取），唔可以當「空清單」而清走快取。
+    printers:
+      s.printers === undefined
+        ? fallback.printers
+        : normalizeKioskPrinters(s.printers),
+    fromServer: true,
     updatedAt: s.updatedAt ?? null,
   };
 }
@@ -94,9 +172,20 @@ function readSettings(
  * 設計上**只喺落單時 call 一次**，唔做 polling（全專案禁 polling，見 docs/52）。
  * 離線 / 失敗一律 fallback 去 `DEFAULT_KIOSK_SETTINGS_FALLBACK`，
  * 確保客端唔會因為拎唔到設定而落唔到單（離線優先）。
+ *
+ * @param opts.fallbackPrinters 本機快取嘅 kiosk 打印機清單（由 caller 讀 localStorage 傳入，
+ *   因為本 module 係 client / server 共用，唔可以 import localStorage 層）。
+ *   離線時照樣用得返，唔會一斷網就冇紙。
  */
-export async function fetchKioskSettings(storeId: string): Promise<KioskSettings> {
-  const fallback: KioskSettings = { storeId, ...DEFAULT_KIOSK_SETTINGS_FALLBACK };
+export async function fetchKioskSettings(
+  storeId: string,
+  opts?: { fallbackPrinters?: DevicePrinterConfig[] },
+): Promise<KioskSettings> {
+  const fallback: KioskSettings = {
+    storeId,
+    ...DEFAULT_KIOSK_SETTINGS_FALLBACK,
+    printers: opts?.fallbackPrinters ?? [],
+  };
   if (!storeId) return fallback;
 
   try {
@@ -161,6 +250,8 @@ export async function saveKioskSettings(
     selfOrderAutoAccept:
       patch.selfOrderAutoAccept ?? DEFAULT_KIOSK_SETTINGS_FALLBACK.selfOrderAutoAccept,
     scanMode: patch.scanMode ?? DEFAULT_SCAN_MODE,
+    printers: patch.printers ?? [],
+    fromServer: true,
     updatedAt: null,
   };
   return readSettings(payload, storeId, fallback);

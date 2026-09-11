@@ -26,7 +26,7 @@ import {
   saveQueue,
   saveSoldOutState,
 } from "@/lib/storage";
-import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuItem, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintContentToggles, PrintJob, PrintKind, QueueEvent } from "@/lib/types";
+import { DeviceConfig, DevicePrinterConfig, DiscountPreset, MenuItem, MenuSpecGroup, PosBootstrap, PosLocalSettings, PrintContentToggles, QueueEvent } from "@/lib/types";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { withStoreScope } from "@/lib/pos/sync-flush";
 import { newDiscountId } from "@/lib/pos/discount";
@@ -45,13 +45,9 @@ import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import {
-  isCompanionConfigured,
-  sendJobToCompanion,
-  shouldKeepCompanionAlive,
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
-import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
-import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
+import { sendTestPrint } from "@/lib/print-bridge/printer-test-print";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 
 function uid(prefix: string) {
@@ -996,103 +992,11 @@ export function DeviceSettings() {
   async function testPrint(printer: DevicePrinterConfig) {
     if (testingPrinterId) return;
     setTestingPrinterId(printer.id);
-
-    const copies = Math.max(1, Math.floor(printer.copies ?? 1));
-
-    const testJob: PrintJob = {
-      id: uid("print"),
-      orderId: "",
-      orderNo: "TEST",
-      tableName: "",
-      ticketType: "normal",
-      printerGroup:
-        printer.role === "receipt"
-          ? "receipt"
-          : printer.role === "label"
-            ? "label"
-            : printer.zoneId ?? "zone:test",
-      printerId: printer.id,
-      printerName: printer.name,
-      items: [{ name: "Macau POS 測試打印", quantity: 1, specs: [], note: "Printer Test OK" }],
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    };
-
     try {
-      const storeName = loadBootstrapCache()?.storeName;
-      const kind: PrintKind = "test";
-
-      // 1) Native Print Agent（Android APK WebView）優先：經 PosNative 觸發 APK renderTestPage
-      if (isNativeBridgeAvailable()) {
-        let lastErr = "";
-        for (let i = 0; i < copies; i++) {
-          const res = await dispatchJobToNative(testJob, { printer, kind, storeName });
-          if (!res.ok) {
-            lastErr = res.error || `未能送出 ${printer.name} 測試打印。`;
-            break;
-          }
-        }
-        setStatus(
-          lastErr
-            ? lastErr
-            : `已透過 Native Print Agent 送出 ${printer.name} 測試打印（${copies} 份）。`,
-        );
-        return;
-      }
-
-      // 2) 桌面 Companion 代理（loopback http://127.0.0.1:9311）——
-      //    必須同時係「Companion 環境」（原生殼 / `?companion=` URL 參數）。
-      //    純 website / PWA 即便 localStorage 有 stale `macau-pos-companion-url` 都要 skip——
-      //    否則會無謂打 5s 連唔到嘅 loopback（companion-transport.ts 嘅 5s AbortController
-      //    超時先返），同 `dispatchOneJob` 嘅 companion 分支語義完全對齊。
-      if (shouldKeepCompanionAlive() && isCompanionConfigured()) {
-        let lastErr = "";
-        for (let i = 0; i < copies; i++) {
-          const r = await sendJobToCompanion(testJob, printer);
-          if (!r.ok) {
-            lastErr = r.error ?? "";
-            break;
-          }
-        }
-        setStatus(
-          lastErr
-            ? `Companion 測試打印失敗：${lastErr}`
-            : `已透過 Companion 送出 ${printer.name} 測試打印（${copies} 份）。`,
-        );
-        return;
-      }
-
-      // 3) Cloud Print Relay（雲端中繼，互聯網備援）——
-      //    網頁 / PWA 嘅預設打印通道（companion 環境 gate 過唔到就落到呢度）。
-      //    走 `getRelayTransport().send()`，同 `dispatchOneJob` relay 分支一致：
-      //    relay 內部會 `flushPosSyncQueue` 確保 PRINT_JOB_CREATED 已上雲，
-      //    中繼 APK 隨後經 Realtime 訂閱 + claim RPC 拎走出紙。
-      if (isRelayConfigured()) {
-        const relay = getRelayTransport();
-        if (relay) {
-          let lastErr = "";
-          for (let i = 0; i < copies; i++) {
-            const res = await relay.send(testJob, printer, { kind, storeName });
-            if (!res.ok) {
-              lastErr = res.error || "relay 打印失敗";
-              break;
-            }
-          }
-          setStatus(
-            lastErr
-              ? `Print Relay 測試打印失敗：${lastErr}`
-              : `已透過 Print Relay 送出 ${printer.name} 測試單到雲端中繼（${copies} 份，店內中繼機會自動出紙）。`,
-          );
-          return;
-        }
-      }
-
-      // 4) 真係乜都冇 —— 唔再誤導「桌面 Companion 已啟動」（喺 web/PWA 開 desktop agent 根本無解）
-      setStatus(
-        "未配置任何打印通道：請到「打印中繼」分頁配對雲端備援（relay），或於桌面裝置啟動 Companion 代理後再測試。",
-      );
-    } catch {
-      setStatus(`未能送出 ${printer.name} 測試打印。`);
+      // 邏輯已抽去 `@/lib/print-bridge/printer-test-print`（2026-09-11）：
+      // 自助點餐機打印機設定都要用同一段「三條通道逐條試」，唔可以各自一份。
+      const result = await sendTestPrint(printer);
+      setStatus(result.message);
     } finally {
       setTestingPrinterId(null);
     }

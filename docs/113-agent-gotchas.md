@@ -41,7 +41,7 @@
 - repo **無 `middleware.ts`** → **分通道**：有 POS device token / admin token 放行全部事件；**匿名只准** `ORDER_CREATED`/`ORDER_UPDATED` 且 `source ∈ {scan,kiosk}`。QR 已公開 `store=<merchantId>`，驗證 ≠ 授權。
 - 憑證 = HMAC-SHA256 無狀態（`pos/pos-device-token.ts`），**TTL 12h**；密鑰 `POS_DEVICE_TOKEN_SECRET` → `ADMIN_SESSION_SECRET` → `SUPABASE_SERVICE_ROLE_KEY`；**fail-closed**，`POS_REQUIRE_DEVICE_AUTH=0` 係應急回滾。
 - 續期 `refreshPosDeviceTokenIfNeeded()`（剩 <10min、`inflight` 去重、永不 throw）；`AuthSession.posDeviceToken` **必須**經 `normalizeAuthSession` 帶返。**所有** `/api/pos/state`、`/api/pos/sync` 呼叫點都要先續期再帶 `posDeviceAuthHeaders()`。
-- Kiosk 離線隊列 = `pos/kiosk-outbox.ts`（store-scoped，上限 20）；**唔可以重用 `pos/queue-outbox`**（其 flush 靠 `resolveStoreId()`，掃碼客冇 → 永遠推唔出）。客人 resume 用 `GET /api/pos/order-lookup`（單張 + 60/min），**唔好**拉全店 `state`。
+- Kiosk 離線隊列 = `pos/kiosk-outbox.ts`（store-scoped，上限 **50**，2026-09-11 由 20 提高）；**唔可以重用 `pos/queue-outbox`**（其 flush 靠 `resolveStoreId()`，掃碼客冇 → 永遠推唔出）。⚠️ 隊列滿**絕對唔可以靜靜丟單**：舊版 `rows.shift()` 丟最舊再當成功 → 客人見「已收到」但張單永遠上唔到雲（廚房漏單）。`enqueuePendingKioskOrder()` 已改回 `{ count, enqueued }`，滿咗 `enqueued:false` → caller 必須報錯（`use-kiosk-order.ts` placeOrder 內）。客人 resume 用 `GET /api/pos/order-lookup`（單張 + 60/min），**唔好**拉全店 `state`。
 - 售罄 `pos_soldout` 只 realtime 增量 → **必須** `fetchStoreSoldoutIds()` 拉初始集合；server 校驗**刻意 fail-open**。⚠️ 但 `pos_soldout` 喺生產兩個 Supabase 專案都唔存在、**全 repo 冇寫入點**（POS 沽清 = 本機 localStorage + `/api/inventory/soldout` TODO stub）→ 客人端售罄**未接通**，要先做「店級售罄上雲」。
 - 金額真源 = `lib/kiosk-cart.ts`（純函式）；`computeOrderTotals` 唔四捨五入，用 `money2()`/`toFixed(2)` 收口。`npm run test`（`node --test` 自動探索 `**/*.test.ts`；**測試檔內 import 一定要相對路徑 + `.ts`**，`@/` alias 會 `ERR_MODULE_NOT_FOUND`）；`npm run typecheck`。
 
@@ -202,3 +202,27 @@
 - ⚠️ **排查口訣**：「某樣嘢 reload 先出現」→ 先分「backfill 路徑（server / service_role，正常）」同「realtime 路徑（瀏覽器 anon，可能訂錯專案）」，唔好一開始就懷疑 UI 合併邏輯。
 - 🔴 **錯 anon key 唔可以報成「表存在但被拒」**（2026-09-11 實測撞到）：PostgREST **未認證就回 401，根本冇查表** → 錯 key 時**判斷唔到表存在與否**。實測文案：錯 key → `{"message":"Invalid API key"}`；冇 key → `{"message":"No API key found in request"}`；而「key 有效但 anon 冇 select」係 `42501` / `permission denied`。→ 判序**必須**先 `bad_key` 再 `unauthorized`（`isBadApiKeyBody()`），否則會令人去查 RLS/grant（查錯方向）。同理：**`SUBSCRIBED` 唔可以當推送健康證明**。
 - 🛠️ **自檢工具**：`tools/2026-09-11-check-pos-realtime.mjs`（`npx vercel env pull .env.local` 後 `node --env-file=.env.local tools/2026-09-11-check-pos-realtime.mjs --watch 20`）→ 探測三個 pos_* 表存在/anon 可讀 + 訂 `pos_orders` + 邊聽邊試。`--watch` 期間落一張測試單收到事件 = 唯一可信嘅 end-to-end 驗證。
+
+## Kiosk 專屬打印機（2026-09-11 · 見 `docs/87` §6.2 · migration 0032）
+- **問題**：kiosk 要**另一台**打印機出顧客小票。但 `resolveJobPrinter()` 只讀 `loadDeviceConfig()`（收銀端本機裝置設定）→ 一部專用 kiosk 平板從來冇配置過 → `buildTemplateReceiptJobs()` `return []`（`print-jobs.ts`）→ **靜默唔出紙**（冇 error、冇紙）。`use-kiosk-order.ts` 出紙嗰段仲要係 `try/catch` 吞咗。
+- **真源 = DB**（`pos_kiosk_settings.printers` jsonb，per-store，0032）+ **本機快取**（`macau-pos/stores/{storeId}/kiosk-printers`，`loadKioskPrinters()` / `saveKioskPrinters()`）。理由：`resolveJobPrinter()` 係**同步**函數，出紙嗰刻唔可以等 HTTP；同時要「改一次全店即時生效、換機唔使重設」（唔可以重演 `kioskKitchenMode` 死 code）。
+- **三個必須一齊改嘅地方**（漏一個就靜靜印錯機）：
+  1. `print-bridge/hub.ts` `resolveJobPrinter()` → `[...deviceConfig.printers, ...loadKioskPrinters()]`。唔合併嘅話：step 1（by `printerId`）搵唔到 kiosk 機 → **跌落 step 2（by role）→ 印去收銀台部收據機**（最陰險）。
+  2. `print-jobs.ts` `buildKioskReceiptPrintJobs()` → 有 kiosk 打印機就用佢哋，**空清單先** fallback 去 `deviceConfig` 收據機（單機部署行為不變）。
+  3. `api/pos/kiosk-settings` GET/POST → 加 `printers` 欄位。
+- ⚠️ **`printers` 為空有兩個意思，一定要分**：「server 真係冇設定（要清本機快取）」vs「攞唔到（離線 / migration 未跑，**唔可以**清快取）」。`KioskSettings.fromServer` 就係呢個旗標；route 端 42703 降級時要 **omit** 個 key（唔好回 `[]`），client 靠「key 唔存在」保留快取。
+- ⚠️ **`normalizeKioskPrinters()` 係白名單過濾（唔似 `normalizeDeviceConfig` 補預設）**：缺 id/name、role / connectionType 唔喺白名單 → **剔走**。遠端輸入補假 IP / 假 role 比剔走更難 debug。**client（`loadKioskPrinters`）同 server（route 寫入前）都要行**。
+- ⚠️ **42703 唔會講係邊個欄位** → 唔可以「見到 42703 就當係新欄位」。route 要**逐級試**：全欄位 → 冇 `printers` → 連 `scan_mode` 都冇。
+- ⚠️ **POST 必須 read-then-merge `printers`**：`login-screen`（寫 `scanMode`）、`scan-mode-panel`、`self-order-auto-accept-toggle` 都唔帶 `printers`，merge 寫錯就會每次登入清空商家設定。
+- ⚠️ 設定 UI 必須 `PrinterWizardModal` **`lockRole="receipt"`**：`buildKioskReceiptPrintJobs()` 只認 `role === "receipt"`，畀商家揀「廚房機」會加完之後靜靜唔出紙。
+- ⚠️ IP 輸入係**逐個字** onChange → 唔可以每次打一次 POST（打到一半 `192.168.` 就上雲）。本機即時寫、雲端防抖 800ms（`kiosk-printer-panel.tsx`）。
+
+## `PrintJob.copies` 曾經係死欄位（2026-09-11 修）
+- `types.ts` 明文寫「落單端寫死，**優先於**打印機層級 `DevicePrinterConfig.copies`」，但 `print-bridge/dispatch.ts` 舊版只讀 `printer.copies` → `job.copies` **完全冇作用**。
+- 後果：自助點餐機小票帶住 `copies: 1`（規格 8：固定 1 張），但只要嗰部機 `copies` 設咗 2，就會出兩張。
+- 已改 `const copies = Math.max(1, Math.floor(job.copies ?? printer.copies ?? 1));`（其他 job 唔帶 `copies` → 行為不變）。
+
+## `node --test` 檔名陷阱（2026-09-11 中過）
+- `npm run test` = `node --test`（**無參數**）→ 自動探索 `**/test-*`、`**/*-test`、`**/*.test.*` 等 pattern。**任何**符合嘅 `.ts` 都會被當成測試檔執行並要求佢自己 pass。
+- 中過：新模組叫 `src/lib/print-bridge/test-print.ts` → 被當成測試檔 → `ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'`（因為原始碼用 `@/` alias，`node` 解析唔到）。
+- 對策：**utility 模組唔好用 `test-` 前綴**（已改名 `printer-test-print.ts`）；測試檔本身嘅 import 一律相對路徑 + `.ts`。

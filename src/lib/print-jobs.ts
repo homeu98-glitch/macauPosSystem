@@ -7,6 +7,7 @@ import {
   loadBootstrapCache,
   loadClearedPrintJobIds,
   loadDeviceConfig,
+  loadKioskPrinters,
   loadOrders,
   loadPosLocalSettings,
   loadPrintJobs,
@@ -20,7 +21,7 @@ import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
-import { PosBootstrap, PosOrder, PrintJob, QueueEvent, ReceiptTemplate, ShiftSettlementSnapshot, ShiftTemplate } from "@/lib/types";
+import { DevicePrinterConfig, PosBootstrap, PosOrder, PrintJob, QueueEvent, ReceiptTemplate, ShiftSettlementSnapshot, ShiftTemplate } from "@/lib/types";
 import {
   getBridgedPosOrder,
   resolveLedgerPosOrderForReceipt,
@@ -134,10 +135,11 @@ function buildTemplateReceiptJobs(
   order: PosOrder,
   bootstrap: PosBootstrap,
   template: ReceiptTemplate,
+  receiptPrintersOverride?: DevicePrinterConfig[],
 ): PrintJob[] {
-  const receiptPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
-    (printer) => printer.enabled && printer.role === "receipt",
-  );
+  const receiptPrinters = (
+    receiptPrintersOverride ?? (loadDeviceConfig() ?? defaultDeviceConfig).printers
+  ).filter((printer) => printer.enabled && printer.role === "receipt");
   if (receiptPrinters.length === 0) return [];
 
   const timestamp = new Date().toISOString();
@@ -193,9 +195,22 @@ export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap):
  * 打印機沿用 `role === "receipt"`：kiosk mode 係同一部機嘅裝置模式，
  * 「kiosk 隔籬嗰部打印機」就係呢部機自己 deviceConfig 入面嘅收據機，
  * 唔使新增 PrinterRole，亦唔使改 APK / Companion（規格 1、2）。
+ *
+ * ⚠️ 2026-09-11（docs/87 §6.2）**更新**：上面嗰個「同一部機」假設只在單機部署成立。
+ * 一部**專用 kiosk 平板**冇（亦唔應該）配置收銀台嘅 printer 清單。所以改為：
+ *   ① 有設定過「自助點餐機專屬打印機」（server 側 `pos_kiosk_settings.printers`，
+ *      本機有快取）→ 就印去嗰啲機（呢個就係「另外一台打印機出紙畀客人」）；
+ *   ② 完全冇設定過（空清單）→ fallback 去本機 deviceConfig 嘅收據機，
+ *      令舊有單機部署行為**完全不變**。
  */
 export function buildKioskReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap): PrintJob[] {
-  const jobs = buildTemplateReceiptJobs(order, bootstrap, loadPosLocalSettings().printTemplates.kiosk);
+  const kioskPrinters = loadKioskPrinters();
+  const jobs = buildTemplateReceiptJobs(
+    order,
+    bootstrap,
+    loadPosLocalSettings().printTemplates.kiosk,
+    kioskPrinters.length > 0 ? kioskPrinters : undefined,
+  );
   // 規格 8：job 層級寫死 1 份，優先於打印機層級嘅 `DevicePrinterConfig.copies`
   return jobs.map((job) => ({ ...job, copies: 1 }));
 }

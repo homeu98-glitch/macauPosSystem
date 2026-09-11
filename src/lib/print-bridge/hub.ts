@@ -2,7 +2,8 @@
  * Print bridge 共用工具（舊 Printer Hub adapter 已於 2026-08 移除，見 docs/50）。
  *
  * 本檔現只保留三個被多個 transport 共用嘅函數：
- *   - resolveJobPrinter：按 PrintJob.printerGroup 由 config.printers 搵目標打印機（單一真源，dispatch.ts 用）
+ *   - resolveJobPrinter：按 PrintJob.printerGroup 由 config.printers ＋ kiosk 打印機搵目標打印機
+ *     （單一真源，dispatch.ts 用；2026-09-11 起合併 `loadKioskPrinters()`，見 docs/87 §6.2）
  *   - applyPairText：解析 QR / 手動輸入嘅配對地址（Companion QR 掃描用）
  *   - loadJsQr：動態載入 jsQR（Companion QR 掃描用）
  *
@@ -10,7 +11,7 @@
  */
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
-import { loadDeviceConfig } from "@/lib/storage";
+import { loadDeviceConfig, loadKioskPrinters } from "@/lib/storage";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 
 declare global {
@@ -48,9 +49,22 @@ export function applyPairText(raw: string): { ip: string; port: string } | null 
   return ip ? { ip, port } : null;
 }
 
-/** 按 PrintJob.printerGroup 由 config.printers 搵出目標打印機（單一真源）。 */
+/**
+ * 按 PrintJob.printerGroup 由 config.printers 搵出目標打印機（單一真源）。
+ *
+ * ⚠️ 2026-09-11（docs/87 §6.2）：**要連 kiosk 專屬打印機一齊搵**。
+ * 自助點餐機嘅小票 job 帶住 `printerId` = 一部**唔喺 `deviceConfig.printers`** 嘅機
+ * （商家喺 `/order` 裝置設定加嘅「自助點餐機打印機」）。若果唔合併，
+ * 就會出現最陰險嘅情況：step 1（by printerId）搵唔到 → 跌落 step 2（by role）
+ * → **靜靜地印去收銀台嗰部收據機**，商家以為 kiosk 打印機冇反應。
+ *
+ * 非 kiosk 環境 `loadKioskPrinters()` 回 `[]` → 行為同以前 100% 一樣。
+ */
 export function resolveJobPrinter(job: PrintJob): DevicePrinterConfig | undefined {
-  const printers = (loadDeviceConfig() ?? defaultDeviceConfig).printers;
+  const printers = [
+    ...(loadDeviceConfig() ?? defaultDeviceConfig).printers,
+    ...loadKioskPrinters(),
+  ];
   // 1) 直接用 job 記錄嘅 printerId（建 job 時已對應到某部 config.printers）
   if (job.printerId) {
     const byId = printers.find((p) => p.id === job.printerId && p.enabled);

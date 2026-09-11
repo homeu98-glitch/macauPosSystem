@@ -34,9 +34,18 @@ interface PrinterWizardModalProps {
   onClose: () => void;
   onAdd: (printer: DevicePrinterConfig) => void;
   printZones: { id: string; name: string }[];
+  /**
+   * 鎖定用途（2026-09-11）。
+   *
+   * 自助點餐機打印機**一定係小票機**（`role: "receipt"`）—— `buildKioskReceiptPrintJobs()`
+   * 只認 `role === "receipt"`。若果畀商家喺 kiosk 設定入面揀到「廚房機 / 標籤機」，
+   * 佢加完會**靜靜地唔出紙**（job 建唔到，冇 error）。所以喺 kiosk 場景鎖死用途，
+   * 略過第 1 步嘅用途選擇，直接入連線方式。
+   */
+  lockRole?: PrinterRole;
 }
 
-export function PrinterWizardModal({ open, onClose, onAdd, printZones }: PrinterWizardModalProps) {
+export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole }: PrinterWizardModalProps) {
   const [state, setState] = useState<WizardState>({
     step: 1,
     role: null,
@@ -58,7 +67,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones }: Printer
     if (open) {
       setState({
         step: 1,
-        role: null,
+        role: lockRole ?? null,
         connectionType: null,
         model: null,
         resolvedMeta: null,
@@ -70,7 +79,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones }: Printer
         usbScanning: false,
       });
     }
-  }, [open, printZones]);
+  }, [open, printZones, lockRole]);
 
   // Scan USB when entering step 2 with USB
   useEffect(() => {
@@ -228,8 +237,9 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones }: Printer
       {/* Step 1: 用途 + 連接方式 */}
       {state.step === 1 ? (
         <div className="grid gap-6">
-          <div>
-            <div className="text-sm font-semibold text-slate-900">1. 選擇打印機用途</div>
+          {lockRole ? null : (
+            <div>
+              <div className="text-sm font-semibold text-slate-900">1. 選擇打印機用途</div>
             <div className="mt-3 grid gap-2">
               {roleOptions.map((opt) => (
                 <button
@@ -252,10 +262,13 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones }: Printer
               ))}
             </div>
           </div>
+          )}
 
           {state.role ? (
             <div>
-              <div className="text-sm font-semibold text-slate-900">2. 選擇連接方式</div>
+              <div className="text-sm font-semibold text-slate-900">
+                {lockRole ? "選擇連接方式" : "2. 選擇連接方式"}
+              </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 {connOptions.map((opt) => (
                   <button

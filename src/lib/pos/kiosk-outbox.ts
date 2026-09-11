@@ -20,8 +20,13 @@ import { OrderItem, PosOrder } from "@/lib/types";
  */
 
 const KEY_PREFIX = "macau-pos/kiosk-pending-orders/";
-/** 隊列上限：呢個係「救生艇」唔係檔案庫，滿咗就唔再收（避免打爆 localStorage quota）。 */
-export const MAX_PENDING_KIOSK_ORDERS = 20;
+/**
+ * 隊列上限：呢個係「救生艇」唔係檔案庫，滿咗就唔再收（避免打爆 localStorage quota）。
+ *
+ * ⚠️ 2026-09-11 由 20 提高到 50：餐飲現場 Wi-Fi 斷一段時間可以積落十幾張單，
+ * 20 太快滿。但**真正嘅修正係「滿咗唔再靜靜丟單」**（見 `enqueuePendingKioskOrder`）。
+ */
+export const MAX_PENDING_KIOSK_ORDERS = 50;
 export const KIOSK_PENDING_CHANGED_EVENT = "pos-kiosk-pending-changed";
 
 export type PendingKioskOrder = {
@@ -69,23 +74,40 @@ export function pendingKioskOrderCount(storeId: string): number {
 }
 
 /**
+ * 入隊結果。
+ *
+ * ⚠️ 為何要 `enqueued`（2026-09-11 修）：舊版隊列滿會 `rows.shift()` **丟最舊一張**
+ * 然後照樣 return 長度，caller 一律當「已收到，同步中」→ 客人見到成功頁，
+ * 但嗰張單**永遠上唔到雲**（廚房由頭到尾收唔到），而客人仲企喺度等。
+ * 呢個係「假成功」，比直接報錯更差。所以滿咗**唔入隊、唔丟單**，
+ * 由 caller 明確告知客人（`enqueued: false`）。
+ */
+export interface EnqueueKioskOrderResult {
+  /** 入隊後嘅隊列長度。 */
+  count: number;
+  /** `false` = 隊列已滿，**冇**入隊（訂單未暫存，UI 必須提示客人）。 */
+  enqueued: boolean;
+}
+
+/**
  * 入隊（同一個 order.id 只保留一條，重試唔會疊單）。
- * @returns 入隊後嘅隊列長度
+ *
+ * 隊列滿 → **唔入隊、唔丟任何現有單**，回 `enqueued: false`（見上面註解）。
  */
 export function enqueuePendingKioskOrder(
   storeId: string,
   order: PosOrder,
   eventType: "ORDER_CREATED" | "ORDER_UPDATED",
   addedItems?: OrderItem[],
-): number {
+): EnqueueKioskOrderResult {
   const rows = loadPendingKioskOrders(storeId).filter((row) => row.order?.id !== order.id);
   if (rows.length >= MAX_PENDING_KIOSK_ORDERS) {
-    // 隊列滿：丟最舊一條（唔係丟最新 —— 最新一條先係客人啱啱落嘅單）
-    rows.shift();
+    // 滿咗：唔入隊、亦唔丟走任何現有單。由 caller 提示客人（見 EnqueueKioskOrderResult）。
+    return { count: rows.length, enqueued: false };
   }
   rows.push({ order, eventType, storeId, queuedAt: new Date().toISOString(), attempts: 0, addedItems });
   savePendingKioskOrders(storeId, rows);
-  return rows.length;
+  return { count: rows.length, enqueued: true };
 }
 
 export function clearPendingKioskOrder(storeId: string, orderId: string): number {

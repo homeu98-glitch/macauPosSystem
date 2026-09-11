@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { mockBootstrap } from "@/lib/mock-data";
-import { loadBootstrapCache, saveBootstrapCache, nextLocalDailyOrderNo } from "@/lib/storage";
+import { loadBootstrapCache, saveBootstrapCache, nextLocalDailyOrderNo, loadKioskPrinters, saveKioskPrinters } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { fetchKioskSettings } from "@/lib/pos/kiosk-settings";
 import { fetchStoreSoldoutIds } from "@/lib/pos/soldout";
@@ -427,7 +427,21 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     };
   }, [isScanLink, started]);
 
-  const mode: "dine_in" | "quick" = tableId ? "dine_in" : "quick";
+  /**
+   * 落單模式（規格 5：**自助點餐機只做快餐**）。
+   *
+   * ⚠️ 2026-09-11 修：舊版係 `tableId ? "dine_in" : "quick"` —— 即係只要 URL 帶到
+   * `?tableId=` 就會變堂食。`/order`（kiosk 裝置）正常唔會帶台號，但呢個寫法令
+   * 「kiosk 只做快餐」**只係隱含**（靠冇 UI 產生台號），唔係規則。
+   * 一旦有 QR / 舊連結 / 人手打 `/order?tableId=A01`，自助機就會落一張堂食單。
+   *
+   * 改為**以 `variant` 為準**：只有「客人掃枱 QR」（`variant === "scan"` 且真係帶台號）
+   * 才係堂食；其餘一律快餐。
+   *   - `/order`（variant="kiosk"）→ 永遠 quick，唔理 URL 有咩參數 ✅
+   *   - `/menu?tableId=A01`（variant="scan"）→ dine_in ✅ 堂食掃碼照舊
+   *   - `/quick?store=x`（variant="scan"、冇台號）→ quick ✅
+   */
+  const mode: "dine_in" | "quick" = variant === "scan" && tableId ? "dine_in" : "quick";
 
   const tableName = useMemo(() => {
     if (mode === "dine_in" && tableId) {
@@ -565,9 +579,22 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         }
       }
 
-      // 「自動接自助單」開關嘅真源喺 DB（`pos_kiosk_settings`），落單當刻先攞一次（禁 polling）。
+      // 「自動接自助單」開關 ＋「自助點餐機專屬打印機」嘅真源都喺 DB（`pos_kiosk_settings`），
+      // 落單當刻先攞一次（禁 polling）。
       // 離線 / 後端失敗 → fallback 自動接單（規格 5：免確認直接出單係開關嘅預設值）。
-      const kioskSettings = await fetchKioskSettings(storeId);
+      //
+      // ⚠️ 打印機清單要傳入本機快取做底：`resolveJobPrinter()` 係**同步**函數，
+      // 出紙嗰刻唔可以等 HTTP。server 攞唔到時照用快取，令斷網都印得到。
+      const kioskSettings = await fetchKioskSettings(storeId, {
+        fallbackPrinters: loadKioskPrinters(),
+      });
+      // 只有**真係 server 回嘅值**先寫快取（`fromServer`）。
+      // 離線時 `printers` 係本機快取原值，寫返落去無害；但若 server 明確清空設定
+      // （空陣列）就一定要跟住清 —— 分唔清「server 話冇」同「攞唔到」就會兩邊都錯。
+      // 必須喺下面 `printKioskReceiptForOrder()` **之前**寫，因為 builder 會即刻讀快取。
+      if (kioskSettings.fromServer) {
+        saveKioskPrinters(kioskSettings.printers);
+      }
 
       const order = buildKioskOrder({
         storeId,
@@ -604,8 +631,15 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         if (e instanceof KioskOrderRejectedError) throw e;
         if (e instanceof KioskOrderTransientError) {
           // 網絡抖動 / 5xx / 429：收單入本地隊列，UI 當「已收到，同步中」（P1-4）
-          const count = enqueuePendingKioskOrder(storeId, order, eventType, addedItems);
-          setPendingSyncCount(count);
+          //
+          // ⚠️ 2026-09-11 修：舊版隊列滿會**丟走最舊一張單**再照樣當成功 ——
+          // 客人見到「已收到，同步中」，但嗰張單永遠上唔到雲（廚房漏單）。
+          // 所以滿咗就直接報錯，唔扮成功；購物車保留，客人可以再試。
+          const enqueueResult = enqueuePendingKioskOrder(storeId, order, eventType, addedItems);
+          setPendingSyncCount(enqueueResult.count);
+          if (!enqueueResult.enqueued) {
+            throw new Error("訂單暫時未能送出（待同步額滿），請通知職員協助落單。");
+          }
           queuedForSync = true;
         } else {
           throw e;

@@ -4,6 +4,7 @@ import {
   AccountUser,
   DEFAULT_LABEL_PAPER_ID,
   DeviceConfig,
+  DevicePrinterConfig,
   EscPosBlockStyle,
   PosBootstrap,
   PosLocalSettings,
@@ -19,6 +20,7 @@ import {
   MAX_SELF_ORDER_NOTICES,
   type SelfOrderNotice,
 } from "@/lib/pos/self-order-notice";
+import { normalizeKioskPrinters } from "@/lib/pos/kiosk-settings";
 import {
   defaultAccountStores,
   defaultAccountUsers,
@@ -85,6 +87,11 @@ const STORE_SUFFIX = {
   // 掃碼自助單「新訂單提示」（2026-09-10）：提示喺商家處理之前**唔會消失**，
   // 而且要跨頁面 reload 保留 → 一定要落 localStorage，唔可以只放 React state。
   selfOrderNotices: "self-order-notices",
+  // 自助點餐機專屬打印機清單嘅**本機快取**（2026-09-11，docs/87 §6.2 修訂版）。
+  // ⚠️ 真源係 DB `pos_kiosk_settings.printers`（per-store），呢個 key 只係**快取**：
+  // 落單時由 server 讀一次寫入，斷網時 `resolveJobPrinter` 靠佢搵得到 kiosk 打印機。
+  // 唔可以當真源 —— 換機 / 清 cache 會冇，但 server 一讀即返。
+  kioskPrinters: "kiosk-printers",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -595,6 +602,28 @@ export function saveDeviceConfig(data: DeviceConfig) {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-device-config-changed", { detail: { deviceConfig: data } }));
   }
+}
+
+/**
+ * 自助點餐機專屬打印機清單 —— **本機快取**（真源係 DB `pos_kiosk_settings.printers`）。
+ *
+ * 為何要有呢個快取：真源喺 server（改一次全店即時生效、換機唔使重設），
+ * 但落單 / 出紙嗰刻可能斷網，`resolveJobPrinter()` 係**同步**函數，
+ * 唔可以即場等 HTTP，所以一定要有一份本機 copy。
+ *
+ * ⚠️ 讀寫一律經 `normalizeKioskPrinters()`：快取可能係舊版本寫落嘅 / 被人手改過，
+ * 唔過濾就會將垃圾（缺 id、role 打錯）餵入 `resolveJobPrinter` → 揀錯機。
+ */
+export function loadKioskPrinters(): DevicePrinterConfig[] {
+  return normalizeKioskPrinters(readStoreJson(STORE_SUFFIX.kioskPrinters, [] as DevicePrinterConfig[]));
+}
+
+export function saveKioskPrinters(printers: DevicePrinterConfig[]): boolean {
+  const ok = writeStoreJson(STORE_SUFFIX.kioskPrinters, normalizeKioskPrinters(printers));
+  if (ok && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-kiosk-printers-changed"));
+  }
+  return ok;
 }
 
 export function loadQueue() {
