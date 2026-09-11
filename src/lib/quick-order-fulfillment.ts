@@ -7,17 +7,12 @@ function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function quickCompletionLabel(order: Pick<PosOrder, "tableName">) {
-  if (order.tableName === "自取") return "待取餐";
-  if (order.tableName === "外賣") return "待交付";
-  return "待出餐";
-}
-
-export function quickCompleteLabel(order: Pick<PosOrder, "tableName">) {
-  if (order.tableName === "外賣") return "已交付";
-  if (order.tableName === "自取") return "已取餐";
-  return "已完成";
-}
+/**
+ * 出餐階段文案 —— 已搬到零依賴嘅 `@/lib/pos/quick-labels`（2026-09-12），
+ * 令 `pos-order-filters.ts` 唔使拖住呢個 client 模組、可以單元測試。
+ * 喺呢度 re-export 保持既有 call site（`@/lib/quick-order-fulfillment`）唔變。
+ */
+export { quickCompleteLabel, quickCompletionLabel } from "@/lib/pos/quick-labels";
 
 function persistOrderUpdate(nextOrders: PosOrder[], event: QueueEvent) {
   saveOrders(nextOrders);

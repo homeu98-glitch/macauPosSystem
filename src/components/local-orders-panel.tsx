@@ -33,7 +33,7 @@ import {
   updateQuickFulfillmentInStore,
 } from "@/lib/quick-order-fulfillment";
 import { isSelfOrder } from "@/lib/pos/order-source";
-import { confirmSelfOrder, isReopenable, rejectSelfOrder, reopenPosOrder } from "@/lib/pos-orders";
+import { confirmSelfOrder, isReopenable, cancelLocalOrder, rejectSelfOrder, reopenPosOrder } from "@/lib/pos-orders";
 import { describeNoReceiptPrinterError, reprintReceiptForOrder } from "@/lib/print-jobs";
 import {
   addDeletedOrderIds,
@@ -156,6 +156,10 @@ export function LocalOrdersPanel({
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
   const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
+  /** 「取消結帳」（2026-09-12 補回）：客人落單後幾秒內反悔嘅逃生口，唔可以冇。 */
+  const [cancelTargetOrderId, setCancelTargetOrderId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("");
+  const [cancelSubmitting, setCancelSubmitting] = useState(false);
 
   function refresh() {
     setOrders(loadOrders().filter(isLocalOrTransferredDineIn));
@@ -292,6 +296,47 @@ export function LocalOrdersPanel({
     : [];
   const reopenTarget = reopenTargetOrderId ? orders.find((row) => row.id === reopenTargetOrderId) ?? null : null;
   const receiptPreviewOrder = receiptPreviewOrderId ? orders.find((row) => row.id === receiptPreviewOrderId) ?? null : null;
+  const cancelTarget = cancelTargetOrderId ? orders.find((row) => row.id === cancelTargetOrderId) ?? null : null;
+
+  /**
+   * 「取消結帳」可唔可以撳（2026-09-12 補回）。
+   *
+   * 只限**未收款**狀態（`draft` / `sent_to_kitchen`）—— 正正係「客人落單後幾秒內反悔」
+   * 嘅窗口。`paid` / `settled` 已經收咗錢，作廢要走返結／退款，唔可以當「取消」靜靜抹走
+   * （口徑同收銀台結帳彈窗一致：`status !== "paid"` 先顯示取消結帳）。
+   * `draft` 自助單唔出 —— 佢已經有「拒絕」掣，同一件事唔重複。
+   */
+  function canCancelSettle(order: PosOrder | null): boolean {
+    if (!order) return false;
+    if (order.status !== "draft" && order.status !== "sent_to_kitchen") return false;
+    if (order.status === "draft" && isSelfOrder(order)) return false;
+    return true;
+  }
+
+  /** 開「取消結帳原因」彈窗（列表同「查看」彈窗共用）。 */
+  function openCancelSettle(order: PosOrder) {
+    setCancelReason("");
+    setCancelTargetOrderId(order.id);
+  }
+
+  async function handleCancelSettle() {
+    if (!cancelTarget) return;
+    setCancelSubmitting(true);
+    try {
+      const result = cancelLocalOrder(cancelTarget.id, cancelReason.trim() || undefined);
+      if (!result.ok) {
+        setToast(result.error ?? "取消失敗");
+        return;
+      }
+      setToast(`已取消 ${cancelTarget.localOrderNo}`);
+      setCancelTargetOrderId(null);
+      setCancelReason("");
+      setViewingOrderId(null);
+      refresh();
+    } finally {
+      setCancelSubmitting(false);
+    }
+  }
 
   /**
    * 快餐出餐動作嘅統一入口（列表 / 彈窗共用）：刷列表 + 出 toast；
@@ -575,6 +620,17 @@ export function LocalOrdersPanel({
                             </button>
                           ) : null}
                           <QuickOrderActions onChanged={handleQuickAction} order={order} />
+                          {/* 「取消結帳」（2026-09-12）：客人落單後幾秒內反悔嘅逃生口。
+                              只喺未收款單（draft / sent_to_kitchen）出現，收費單唔會混淆。 */}
+                          {canCancelSettle(order) ? (
+                            <button
+                              className="whitespace-nowrap rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200"
+                              onClick={() => openCancelSettle(order)}
+                              type="button"
+                            >
+                              取消
+                            </button>
+                          ) : null}
                           {/* 自助單 draft → 顯示「接受 / 拒絕」掣（規格 6：開關熄咗時需人手接受，統一用 SelfOrderActionButtons 避免走樣） */}
                           {order.status === "draft" && isSelfOrder(order) ? (
                             <SelfOrderActionButtons
@@ -669,6 +725,17 @@ export function LocalOrdersPanel({
               ) : null}
               {/* 快餐出餐：可取餐 → 完成（同列表一行嘅掣共用 QuickOrderActions，行為一定同步） */}
               <QuickOrderActions onChanged={handleQuickAction} order={viewingOrder} variant="modal" />
+              {/* 「取消結帳」（2026-09-12 補回，同點餐頁「訂單詳情」彈窗一致）：
+                  客人落單後約 2 秒內仍可能反悔，必須保留逃生口，否則訂單會卡死冇得取消。 */}
+              {canCancelSettle(viewingOrder) ? (
+                <button
+                  className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                  onClick={() => openCancelSettle(viewingOrder)}
+                  type="button"
+                >
+                  取消結帳
+                </button>
+              ) : null}
             </>
           }
           header={
@@ -861,6 +928,60 @@ export function LocalOrdersPanel({
             >
               {reopenSubmitting ? "處理中…" : "返結帳"}
             </button>
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {cancelTarget ? (
+        <ResponsiveModal
+          description="作廢此單（未收款），原因會記錄在訂單紀錄"
+          onClose={() => {
+            setCancelTargetOrderId(null);
+            setCancelReason("");
+          }}
+          title="取消結帳"
+          widthClassName="max-w-md"
+        >
+          <div className="grid gap-3">
+            <p className="text-xs text-slate-500">
+              訂單 <span className="font-semibold text-slate-900">{cancelTarget.localOrderNo}</span>
+              （{cancelTarget.tableName}）會被標記為「已取消」，唔會計入營業額。
+            </p>
+            {/* 原因可選（同收銀台「取消結帳」一致：唔填 → 記「收銀取消結帳」）。
+                用 datalist 令收銀可以一撳揀常用原因，亦可以自由輸入。 */}
+            <input
+              className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+              list="local-order-cancel-reasons"
+              placeholder="（可選）取消原因"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+            <datalist id="local-order-cancel-reasons">
+              {(loadPosLocalSettings()?.cancelNotePresets ?? []).map((r) => (
+                <option key={r} value={r} />
+              ))}
+            </datalist>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                onClick={() => {
+                  setCancelTargetOrderId(null);
+                  setCancelReason("");
+                }}
+                disabled={cancelSubmitting}
+              >
+                返回
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                onClick={handleCancelSettle}
+                disabled={cancelSubmitting}
+              >
+                {cancelSubmitting ? "處理中…" : "確認取消"}
+              </button>
+            </div>
           </div>
         </ResponsiveModal>
       ) : null}

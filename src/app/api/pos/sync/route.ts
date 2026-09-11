@@ -133,6 +133,21 @@ function isoOrNull(value: unknown): string | null {
  */
 const TERMINAL_ORDER_STATUSES = new Set(["settled", "cancelled", "refunded", "partially_refunded"]);
 
+/**
+ * 已收款狀態（2026-09-12 付款階段單向閘）。
+ *
+ * 快餐 counter 單結帳後係 `paid`（唔係 `settled` —— 佢要等出餐「完成」先 terminal），
+ * 所以 `TERMINAL_ORDER_STATUSES` **擋唔到**佢被 open snapshot 降級。
+ *
+ * 實案（用戶反映）：快餐單撳完結帳顯示「已結帳」，跟住一條時序亂咗嘅
+ * `ORDER_UPDATED`（帶 `status: "sent_to_kitchen"`、但 `client_updated_at` 較新）上到雲，
+ * 就把 `paid` 打返做「未結帳」。同 client 端 `mergeOrderLists()` 嘅付款階段單向閘口徑一致。
+ */
+const PAID_ORDER_STATUSES = new Set(["paid", "settled", "refunded", "partially_refunded"]);
+
+/** 未收款嘅 open 狀態 —— 唯一兩種可以（錯誤地）覆蓋已收款單嘅狀態。 */
+const OPEN_ORDER_STATUSES = new Set(["draft", "sent_to_kitchen"]);
+
 /** 解析 ISO 時間戳做毫秒數；非法 → 0（當最舊）。 */
 function parseIsoMs(value: string | null | undefined): number {
   if (!value) return 0;
@@ -658,16 +673,48 @@ export async function POST(request: Request) {
             TERMINAL_ORDER_STATUSES.has(incomingStatus) &&
             !TERMINAL_ORDER_STATUSES.has(existingStatus) &&
             existingStatus !== "reopened";
-          if ((isStale && !isTerminalUpgrade) || isDowngrade) {
+          /**
+           * (d) 🛡️ 付款階段單向閘（2026-09-12）：
+           * 「雲端已收款（paid）、incoming 係未收款 open snapshot」→ **一律拒寫**，唔理時間戳。
+           *
+           * 點解一定要有：快餐 counter 單結帳只寫 `paid`（唔係 terminal），所以上面嘅
+           * 終態守門擋唔到 —— 一條時序亂咗嘅 ORDER_UPDATED（例如離線重推、或另一部機
+           * 時鐘快過而帶住 `status: "sent_to_kitchen"` 但較新嘅 `client_updated_at`）
+           * 就會把雲端嘅「已結帳」打返做「未結帳」，收銀端見到嘅就係狀態閃一下又彈返。
+           *
+           * 語義安全：已收到錢係事實，同 client 端「終態優先」/「付款階段單向閘」一致。
+           * 合法嘅「已收款 → 另一結局」唔受影響：
+           *   - `cancelled` / `refunded` / `partially_refunded` / `settled` 係終態 → 上面已放行；
+           *   - `reopened`（返結）唔喺 OPEN_ORDER_STATUSES 內 → 照行 LWW。
+           * 收銀端「取消結帳」走嘅係 `cancelled`（終態），唔會因此卡住。
+           *
+           * ⚠️ 判斷用 `writeStatus`（實際會寫入嘅狀態）而唔係 raw `incomingStatus`：
+           * 匿名通道（kiosk / 掃碼）上面已經強制 `writeStatus = existing.status`，
+           * 用 raw 值會令「kiosk 向已收款單加菜」成條事件被拒 → items 上唔到雲。
+           */
+          const isPaidDowngrade =
+            PAID_ORDER_STATUSES.has(existingStatus) && OPEN_ORDER_STATUSES.has(writeStatus);
+          const isPaidUpgrade =
+            OPEN_ORDER_STATUSES.has(existingStatus) && PAID_ORDER_STATUSES.has(writeStatus);
+          if ((isStale && !isTerminalUpgrade && !isPaidUpgrade) || isDowngrade || isPaidDowngrade) {
             console.warn(
               `[pos/sync] 拒絕覆寫訂單 ${orderId}（現有=${existingStatus}@${existing.updated_at ?? "?"}，` +
                 `incoming=${incomingStatus}@${incomingUpdatedAt}，` +
-                `${isStale ? "stale（incoming 較舊）" : "終態降級"}）`,
+                `${
+                  isPaidDowngrade
+                    ? "付款階段降級（已收款唔可以被未收款 snapshot 覆蓋）"
+                    : isStale
+                      ? "stale（incoming 較舊）"
+                      : "終態降級"
+                }）`,
             );
             // 有意嘅 skip：**`applied:false`** —— 新 client 見到就唔會剷走呢條事件
             // （剷咗 = 本地冇副本、雲端停留舊狀態，就係 docs/112 M3「假成功」）。
             // `ok:true` 保留係為咗向後兼容舊 client（佢哋只讀 ok）。
-            ack(true, undefined, { applied: false, reason: isStale ? "stale" : "downgrade" });
+            ack(true, undefined, {
+              applied: false,
+              reason: isPaidDowngrade ? "paid-downgrade" : isStale ? "stale" : "downgrade",
+            });
             continue;
           }
           if (isStale && isTerminalUpgrade) {

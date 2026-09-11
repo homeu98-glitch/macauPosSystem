@@ -1,5 +1,7 @@
-import { PosOrder } from "@/lib/types";
-import { quickCompletionLabel } from "@/lib/quick-order-fulfillment";
+import type { PosOrder } from "@/lib/types";
+// ⚠️ 一定要 `./pos/quick-labels.ts`（相對 + 顯式 `.ts`）：
+// 呢個模組要可以被 `node --test` 直接載入做單元測試，`@/` 別名喺 Node ESM 解析唔到。
+import { quickCompletionLabel } from "./pos/quick-labels.ts";
 
 export function isLocalPosOrder(order: PosOrder): boolean {
   return !order.onlineOrderId;
@@ -67,6 +69,50 @@ export function orderTimestamp(order: PosOrder): number {
 }
 
 /**
+ * 🔴 **LWW 專用時間戳（2026-09-12）** —— 合併／比新舊**只可以用呢個**，唔可以用
+ * `orderTimestamp()`。
+ *
+ * 點解：由雲端返嚟嘅單（`/api/pos/state` backfill 或 realtime push）嘅 `updatedAt` 係
+ * **server 蓋章**嘅 `pos_orders.updated_at`（收件時間）；但本機寫入嘅 `updatedAt` 係
+ * **iPad 自己嘅鐘**。兩個鐘域唔可以直接比 —— 一條「舊狀態、但 server 蓋章時間較新」
+ * 嘅 snapshot 就會被當成「較新」而覆蓋本機啱寫入嘅狀態。
+ *
+ * 實案（2026-09-12 用戶反映）：快餐單結帳後（`status: "paid"` →「已結帳」）閃一下變返
+ * 「未結帳」—— 本機寫入跟住 backfill / realtime echo 帶住舊狀態 + 較新 server 時間返嚟，
+ * 合併就判舊 snapshot 贏。
+ *
+ * 雲端 row 一律帶 `client_updated_at`（= 寫入嗰部機嘅鐘），map 過嚟就係
+ * `clientUpdatedAt`；Server 端 LWW（`/api/pos/sync`）一直都用同一把尺，
+ * 所以 client 端必須對齊。冇 `clientUpdatedAt`（本機新建未上雲 / 舊 row）→ 退回
+ * `updatedAt`（此時兩邊都係 client 鐘，仍然同域）。
+ */
+export function mergeTimestamp(order: PosOrder): number {
+  const client = Date.parse(order.clientUpdatedAt || "");
+  if (Number.isFinite(client) && client > 0) return client;
+  return orderTimestamp(order);
+}
+
+/**
+ * 付款階段已確實收到錢嘅狀態（快餐 counter 單嘅付款維度；亦覆蓋終態嘅收款結果）。
+ *
+ * ⚠️ 唔包括 `cancelled` / `reopened` —— 佢哋係「付款之後嘅另一種結局」，
+ * 由 `isTerminalOrderStatus()` 同 LWW 處理（見 `mergeOrderLists()`）。
+ */
+export function isPaidOrderStatus(status: string | undefined): boolean {
+  return (
+    status === "paid" ||
+    status === "settled" ||
+    status === "refunded" ||
+    status === "partially_refunded"
+  );
+}
+
+/** 未收款嘅「活躍」狀態 —— 唯一兩種可以（錯誤地）覆蓋已收款單嘅 open 狀態。 */
+function isOpenOrderStatus(status: string | undefined): boolean {
+  return status === "draft" || status === "sent_to_kitchen";
+}
+
+/**
  * 由單號抽出排序 key：`(prefix, numeric)`。
  *
  * ⚠️ 2026-09-01 第二輪：原本呢個 helper 係畀 `compareOrderByLocalNo` 用嚟做
@@ -130,6 +176,18 @@ export function compareOrderByLocalNo(a: PosOrder, b: PosOrder): number {
  *   - 終態單（settled / cancelled / refunded / partially_refunded）永遠贏過非終態單；
  *   - 除非本地已經係明確返結 reopened（終態 → reopened 係合法 reversal，由 timestamp 決定）。
  * 呢個改動唔影響正常 LWW，只係防時鐘偏移 / 離線重排導致終態被非終態覆蓋。
+ *
+ * 2026-09-12 兩項加固（用戶實案：快餐單「已結帳」閃一下變返「未結帳」）：
+ *   (A) **同一鐘域**：LWW 比較改用 `mergeTimestamp()`（優先 `clientUpdatedAt`）。
+ *       以前用 `orderTimestamp()`（即 `updatedAt`）—— 但雲端 row 嘅 `updatedAt` 係
+ *       **server 蓋章**時間，同本機 iPad 嘅鐘唔同域，所以一條舊狀態 snapshot 只要
+ *       server 收件時間較新就會「扮新」贏出，蓋走本機啱寫入嘅狀態。
+ *   (B) **付款階段單向閘**：快餐 counter 單一旦 `paid`（或終態），唔可以再被
+ *       `draft` / `sent_to_kitchen` 呢兩種**未收款** open 狀態覆蓋。
+ *       同「`ready` 係單向閘」（見 `isQuickOrderReady()`）同一哲學 —— 已收到錢係事實，
+ *       唔會因為一條時序亂咗 / 另一部機時鐘快咗嘅舊 snapshot 而「退返未收款」。
+ *       ⚠️ 例外照舊：`reopened`（合法返結）同終態（`cancelled` / `refunded`）唔受此限 ——
+ *       「取消結帳」（`cancelOrder`）走嘅係 `cancelled`（終態），唔係打返 open。
  */
 export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
   const byId = new Map<string, PosOrder>();
@@ -162,9 +220,28 @@ export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
         continue;
       }
 
-      // 其他情況維持 LWW：updatedAt 較新者勝出（包括 reopened 合法 reverse、同一單多次更新）。
-      const incomingTs = orderTimestamp(order);
-      const existingTs = orderTimestamp(existing);
+      // (B) 付款階段單向閘：本地已收款（paid），incoming 係未收款 open snapshot →
+      // 一律唔准降級（唔理 timestamp）。合法嘅「已收款 → 另一結局」只有：
+      //   - 終態 cancelled / refunded（上面已處理，incoming 係終態會贏）；
+      //   - reopened（返結，唔喺呢個分支，落 LWW 由 timestamp 決定）。
+      if (isPaidOrderStatus(existing.status) && isOpenOrderStatus(order.status)) {
+        continue;
+      }
+      // 反向：incoming 已收款、本地仲係 open → 收款係前進，唔准被本地舊 open 拖返（即使
+      // incoming 時戳較舊，例如 iPad 鐘偏慢）。同樣保留本機 localOrderNo（B4）。
+      if (isOpenOrderStatus(existing.status) && isPaidOrderStatus(order.status)) {
+        const merged =
+          existing.localOrderNo && existing.localOrderNo !== order.localOrderNo
+            ? { ...order, localOrderNo: existing.localOrderNo }
+            : order;
+        byId.set(order.id, merged);
+        continue;
+      }
+
+      // 其他情況維持 LWW：時間戳較新者勝出（包括 reopened 合法 reverse、同一單多次更新）。
+      // (A) 用 mergeTimestamp()（client 鐘域）—— 唔可以用 orderTimestamp()（混了 server 蓋章時間）。
+      const incomingTs = mergeTimestamp(order);
+      const existingTs = mergeTimestamp(existing);
       if (incomingTs > existingTs || (incomingTs === existingTs && incomingReopened && !existingReopened)) {
         const merged =
           existing.localOrderNo && existing.localOrderNo !== order.localOrderNo
@@ -174,7 +251,7 @@ export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
       }
     }
   }
-  return Array.from(byId.values()).sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
+  return Array.from(byId.values()).sort((a, b) => mergeTimestamp(b) - mergeTimestamp(a));
 }
 
 export function isWithinLastMinutes(order: PosOrder, minutes: number, nowMs = Date.now()): boolean {

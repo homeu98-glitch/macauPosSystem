@@ -34,6 +34,12 @@ export type PosOrderDbRow = {
   payment_method: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * 寫入嗰部裝置嘅鐘（方案 B，2026-09-09）。`updated_at` 係 server 蓋章（收件時間）
+   * —— 兩者鐘域唔同，client 端 LWW 一定要用呢個（見 `PosOrder.clientUpdatedAt`）。
+   * 舊 row / 未跑 migration 嘅環境會係 null / undefined。
+   */
+  client_updated_at?: string | null;
 };
 
 /** `pos_orders` row → 領域物件。與 `/api/pos/state` 既有映射保持一致。 */
@@ -69,5 +75,10 @@ export function mapOrderRow(order: PosOrderDbRow) {
     paymentMethod: order.payment_method ?? undefined,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
+    // 🔴 LWW 同鐘域（2026-09-12）：`updated_at` 係 server 蓋章，唔可以用嚟同本機
+    // （client 鐘）嘅 `updatedAt` 比新舊 —— 一定要帶埋 `client_updated_at` 出去，
+    // 否則一條「舊狀態 + server 時間較新」嘅 snapshot 會蓋走本機啱寫入嘅狀態
+    // （實案：快餐單已結帳閃回未結帳）。睇 `mergeTimestamp()`。
+    clientUpdatedAt: order.client_updated_at ?? undefined,
   };
 }

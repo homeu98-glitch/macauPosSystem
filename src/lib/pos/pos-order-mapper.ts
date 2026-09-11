@@ -46,6 +46,12 @@ export interface PosOrderRow {
   payment_method: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * 寫入嗰部裝置嘅鐘（方案 B，2026-09-09）。`updated_at` 係 server 蓋章（收件時間）
+   * —— 兩者鐘域唔同，client 端 Realtime merge 一定要用呢個（見
+   * `PosOrder.clientUpdatedAt` + `mergeTimestamp()`）。舊 row / 未跑 migration → null。
+   */
+  client_updated_at?: string | null;
 }
 
 export function mapPosOrderRow(row: PosOrderRow): PosOrder {
@@ -79,6 +85,9 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     paymentMethod: (row.payment_method as PosOrder["paymentMethod"]) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // 🔴 LWW 同鐘域（2026-09-12）：帶埋 client 鐘出去，令 realtime merge 唔會用
+    // server 蓋章嘅 `updated_at` 去同本機（client 鐘）嘅 `updatedAt` 比新舊。
+    clientUpdatedAt: row.client_updated_at ?? undefined,
   };
 }
 

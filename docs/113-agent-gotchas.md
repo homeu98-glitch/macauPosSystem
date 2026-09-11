@@ -482,3 +482,85 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
 `isQuickCounterOrder(order)`（＝ `!onlineOrderId && tableId === "counter"`）分支內。
 **堂食單（真枱號）完全行唔到呢啲分支** —— 快餐模式揀「堂食」類型嘅單 `tableId` 都係 `counter`，
 枱面落嘅堂食單一定有真 `tableId`，兩者唔會混淆。
+
+## 🔴 快餐（counter）付款狀態：撳完結帳「已結帳」閃一下變返「未結帳」（2026-09-12 · 用戶實案）
+
+**病症**：快餐單結帳後（訂單頁顯示「待出餐 ＋ 已結帳」）**閃一下變返「未結帳」**；
+訂單實際上已經收咗錢，但狀態顯示得唔穩定。
+
+**呢個係一個 bug 家族，三條路都可以整出嚟**，所以三處都要守：
+
+### (1) 客戶端合併用錯鐘域（主因）
+
+`mergeOrderLists()` 以前用 `orderTimestamp()`（＝ `updatedAt`）做 LWW。但：
+
+- **本機寫入**嘅 `updatedAt` = **iPad 自己嘅鐘**；
+- **雲端返嚟**（`/api/pos/state` backfill、realtime push）嘅 `updatedAt` =
+  `mapOrderRow()` / `mapPosOrderRow()` 映射嘅 **`pos_orders.updated_at` = server 蓋章（收件時間）**；
+- 而 server 端 LWW（`/api/pos/sync`）一直用 **`client_updated_at`**（client 鐘）比較。
+
+→ 兩邊唔同尺，一條**舊狀態、但 server 收件時間較新**嘅 snapshot 就會「扮新」贏出，
+蓋走本機啱寫入嘅「已結帳」。**修法**：
+`PosOrder.clientUpdatedAt`（由 `client_updated_at` / `pos_order-mapper` 帶出）＋
+**`mergeTimestamp()`（`@/lib/pos-order-filters`）＝ 有 `clientUpdatedAt` 就用佢**。
+🔴 **LWW 只可以用 `mergeTimestamp()`，唔可以用 `orderTimestamp()`**（後者混咗 server 蓋章時間，
+淨係啱做「顯示 / 陳舊度」判斷）。
+
+### (2) `paid` 冇守門（兩邊都冇）
+
+快餐 counter 單結帳寫嘅係 **`paid`（唔係 `settled`）** —— 佢要等出餐「完成」先 terminal。
+所以 `TERMINAL_ORDER_STATUSES` 同 `mergeOrderLists()` 嘅「終態優先」**都擋唔到**佢被
+`draft` / `sent_to_kitchen` 降級。**修法（付款階段單向閘，兩邊口徑一致）**：
+
+- client：`mergeOrderLists()` —— `existing` 已收款 ＋ `incoming` 係 open → **一律唔降級**；
+- server：`/api/pos/sync` —— `PAID_ORDER_STATUSES.has(existingStatus) && OPEN_ORDER_STATUSES.has(writeStatus)`
+  → `ack(true, …, {applied:false, reason:"paid-downgrade"})`（client 會標 `skipped/server-newer`，
+  交 `sync-reconcile-daemon` 用本機完整快照補推，自動收斂）。
+- ⚠️ server 判斷要用 **`writeStatus`**（實際會寫入嘅狀態）而**唔係** raw `incomingStatus`：
+  匿名通道（kiosk／掃碼）上面已強制 `writeStatus = existing.status`，用 raw 值會令
+  「kiosk 向已收款單加菜」成條事件被拒 → **items 上唔到雲**。
+- 例外照舊：`cancelled` / `refunded` / `settled`（終態）同 `reopened`（返結）唔受限 ——
+  「取消結帳」走嘅係 `cancelled`，所以唔會卡住。
+
+### (3) 收銀台「下單」會將已收款單打返 `sent_to_kitchen`
+
+快餐流程可以：落單 → 結帳（`paid`）→ 喺 strip 撳返張卡載入點餐頁 → 再撳「下單」。
+`resolveExistingOrderForUpsert()` 嘅 `activeOrderId` 分支會**回饋嗰張 paid 單**，
+`upsertCurrentOrder()` 就寫 `status: "sent_to_kitchen"` → 付款維度整個倒退。
+**修法**：`isQuickMode && activeTable.id === "counter" && byId.status === "paid"` → **`return null`**
+（開新單，口徑同堂食 `mapped?.status === "paid" → null`）。
+⚠️ 一定要 `return null`，**唔可以**放行落下面「快餐 counter 可並存多張已收款單」分支 ——
+嗰個分支會搵任意一張未送廚嘅 counter 單嚟合併 →「加菜落咗隔籬張單」。
+
+### 鐵律總結
+
+- **`paid` 只可能係快餐 counter 單**：三個寫入點（`confirmPayment` / `settleCompOrder` /
+  線上已支付）一律 `quickPaidFlow ? "paid" : "settled"`，而 `quickPaidFlow = isQuickMode && tableId === "counter"`。
+  → 上述所有守門**只影響快餐，堂食 100% 唔受影響**（用戶明確要求）。
+- **同上：`ready`、`paid` 都係單向閘**（已發生嘅事實唔可以由舊 snapshot 抹走）。
+- **改 LWW 前先問**：呢個時間戳係邊個嘅鐘？server 蓋章 vs 裝置鐘**唔可以**直接比。
+- 回歸測試：`src/lib/pos-order-filters.test.ts`（`npm run test`）鎖住以上全部行為 ——
+  改 `mergeOrderLists()` / `match*` 之前先跑。
+- 為咗令 `pos-order-filters.ts` 可以被 `node --test` 直接載入，出餐文案已搬到
+  **零依賴**嘅 `@/lib/pos/quick-labels`（`quick-order-fulfillment` 原處 re-export，call site 不變），
+  而 `pos-order-filters.ts` 內部用 **相對 + 顯式 `.ts`** import（`./pos/quick-labels.ts`）。
+
+## 🔴 「取消結帳」掣唔可以喺重構中消失（2026-09-12 · 用戶實案）
+
+**病症**：快餐單落單後幾秒內想取消 → **搵唔到「取消結帳」掣**，張單卡死冇得取消。
+
+**成因**：改用 `isQuickCounterOrder` 分支 early-return 之後，原本喺**通用（堂食）分支**嘅
+「取消結帳」被跳過；訂單頁「查看」彈窗重寫時亦冇補返。
+
+**鐵律**：
+
+- 「取消結帳」＝ **未收款**逃生口，只喺 `status === "draft" || "sent_to_kitchen"` 出
+  （`paid` / `settled` 已收錢 → 作廢要走返結／退款，唔可以靜靜當取消）。
+- 出現位置**最少要齊三處**：收銀台結帳彈窗 header、pos-app「訂單詳情」彈窗
+  （**包括 `isQuick` 同 self-`showSplit` 兩個分支**）、訂單頁列表 + 「查看」彈窗。
+- `draft` 自助單唔出（佢已經有「拒絕」＝同一件事）。
+- 訂單頁呢類**冇 `orders` state 嘅面板**要自己有一條寫入函式：
+  `cancelLocalOrder(orderId, reason?)`（`@/lib/pos-orders`，同 `rejectSelfOrder()` 同一模式：
+  本機寫 `cancelled` → `enqueueEvents` → `notifyQueueChanged()` → 廣播 `pos-orders-changed`）。
+  `cancelled` 係終態，兩邊 LWW 都會放行，唔會被舊 open snapshot 復活。
+

@@ -2110,7 +2110,28 @@ export function PosApp() {
           order.status !== "partially_refunded" &&
           order.status !== "refunded",
       );
-      if (byId) return byId;
+      if (byId) {
+        /**
+         * 🛡️ 快餐 counter：**已收款單唔可以做 upsert 目標**（2026-09-12）。
+         *
+         * 實案（用戶反映「已結帳」閃一下變返「未結帳」）：快餐流程可以
+         *   落單 → 結帳（`status: "paid"`）→ 喺 strip 撳返張卡載入點餐頁 → 再撳「下單」。
+         * 此時 `activeOrderId` 指向嗰張 paid 單，`upsertCurrentOrder()` 會寫
+         * `status: "sent_to_kitchen"` —— **整個付款維度被打返未收款**，UI 就由「已結帳」
+         * 跳返「未結帳」，雲端 `paid` 亦被覆蓋。
+         *
+         * 口徑同堂食單一致（下面 `mapped?.status === "paid" → return null`，即開新單）：
+         * 已收款單再加菜 = 另一張要再收錢嘅單，唔可以偷改原本嗰張。
+         *
+         * ⚠️ 一定要 `return null`，**唔可以**就咁放行落下面嘅「快餐 counter 可並存多張
+         * 已收款單」分支 —— 嗰個分支會搵任意一張未送廚嘅 counter 單嚟合併，
+         * 結果就係「加菜落咗隔籬張單」。
+         */
+        const quickCounterPaid =
+          isQuickMode && activeTable.id === "counter" && byId.status === "paid";
+        if (quickCounterPaid) return null;
+        return byId;
+      }
     }
     // 快餐 counter 可並存多張已收款單；僅合併未送廚的 draft / sent_to_kitchen
     if (isQuickMode && activeTable.id === "counter") {
@@ -5753,6 +5774,20 @@ export function PosApp() {
                           {completeText}
                         </button>
                       ) : null}
+                      {/* 「取消結帳」（2026-09-12 補回）：客人落單後幾秒內反悔嘅逃生口。
+                          只喺未收款（sent_to_kitchen）出現 —— draft 已經有「接受／拒絕」。 */}
+                      {v.status === "sent_to_kitchen" ? (
+                        <button
+                          className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                          onClick={() => {
+                            setOrderActionRequest({ type: "cancel_order", orderId: v.id });
+                            setOrderActionReason("");
+                          }}
+                          type="button"
+                        >
+                          取消結帳
+                        </button>
+                      ) : null}
                     </>
                   );
                 }
@@ -5764,28 +5799,52 @@ export function PosApp() {
                   // 嘅單兩個分支都唔中 → 跌落下面「堂食單」分支，彈窗變成
                   // 「取消結帳 / 去結帳」而且冇可取餐／完成，同卡片完全唔一致。
                   const isOpen = v.status === "sent_to_kitchen" || v.status === "paid";
+                  // 「取消結帳」掣（2026-09-12 補回）：**唔可以**因為上面兩個 early return
+                  // 而消失 —— 客人落單後約 2 秒內仍可能反悔，冇咗呢粒掣張單就卡死冇得取消。
+                  // 只喺未收款（`sent_to_kitchen` / `draft`）出現：`paid` 已經收咗錢，
+                  // 作廢要走返結／退款，唔應該用「取消結帳」靜靜抹走。
+                  const cancelButton = isPaid ? null : (
+                    <button
+                      className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                      onClick={() => {
+                        setOrderActionRequest({ type: "cancel_order", orderId: v.id });
+                        setOrderActionReason("");
+                      }}
+                      type="button"
+                    >
+                      取消結帳
+                    </button>
+                  );
                   if (isOpen && !isReady) {
                     return (
-                      <button
-                        className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
-                        onClick={() => updateQuickFulfillment(v.id)}
-                        type="button"
-                      >
-                        可取餐
-                      </button>
+                      <>
+                        {cancelButton}
+                        <button
+                          className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                          onClick={() => updateQuickFulfillment(v.id)}
+                          type="button"
+                        >
+                          可取餐
+                        </button>
+                      </>
                     );
                   }
                   if (isOpen && isReady) {
                     return (
-                      <button
-                        className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-                        onClick={() => markOrderCompleted(v.id, { label: completeText })}
-                        type="button"
-                      >
-                        {completeText}
-                      </button>
+                      <>
+                        {cancelButton}
+                        <button
+                          className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                          onClick={() => markOrderCompleted(v.id, { label: completeText })}
+                          type="button"
+                        >
+                          {completeText}
+                        </button>
+                      </>
                     );
                   }
+                  // 唔係 open（draft / 終態 / 已返結）→ **唔 return**，落下面通用分支，
+                  // 保持原本「取消結帳 / 去結帳 / 退款」口徑完全唔變。
                 }
                 // 堂食單 / 其他：保留舊管理員導向掣
                 return (

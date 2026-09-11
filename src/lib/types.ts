@@ -1007,6 +1007,21 @@ export interface PosOrder {
 
   createdAt: string;
   updatedAt: string;
+  /**
+   * 🔴 **LWW 專用時間戳（2026-09-12 加）** —— 由雲端 row 嘅 `client_updated_at` 映射過嚟，
+   * 值係**寫入嗰部裝置嘅鐘**。
+   *
+   * 點解要有：`updatedAt` 由雲端返嚟嗰陣，係 **server 蓋章嘅 `pos_orders.updated_at`**
+   * （收件時間）；但本機寫入嘅 `updatedAt` 係 **iPad 自己嘅鐘**。兩個鐘域唔同 →
+   * 一條「舊狀態、但 server 蓋章時間較新」嘅 snapshot（backfill / realtime echo）
+   * 會被 `mergeOrderLists()` 誤判成「較新」而覆蓋本機啱啱寫入嘅狀態
+   * （實案：快餐單結帳後「已結帳」閃一下變返「未結帳」）。
+   * Server 端 LWW（`/api/pos/sync`）一直用 `client_updated_at` 比較，所以 client 端
+   * 合併必須用同一把尺 —— 睇 `mergeTimestamp()`（`@/lib/pos-order-filters`）。
+   *
+   * `undefined` = 本機新建、未上過雲嘅單（冇得比，照用 `updatedAt`）。
+   */
+  clientUpdatedAt?: string;
   /** 已退菜明細（保留記錄，不計費；結帳 / 退菜後仍留在單上以便追蹤） */
   voidedItems?: OrderItem[];
 }

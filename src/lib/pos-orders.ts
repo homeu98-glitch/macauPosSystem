@@ -299,6 +299,69 @@ export function confirmSelfOrder(orderId: string): ConfirmSelfOrderResult {
 }
 
 /**
+ * 取消未結帳嘅本地單（「取消結帳」，2026-09-12 補回）。
+ *
+ * 用途：客人落單後幾秒內反悔、或收銀落錯單 → 需要即刻作廢，唔可以卡住冇入口。
+ *
+ * ⚠️ 只准「未收款」狀態（`draft` / `sent_to_kitchen`）：
+ *   - `paid` / `settled` 已經收咗錢，作廢屬退款／返結流程（`reopenPosOrder` / 退款），
+ *     唔可以喺呢度靜靜當「取消」—— 口徑同收銀台結帳彈窗一致（paid 唔顯示取消結帳）。
+ *   - 終態重複取消 → 直接回錯誤，唔重複寫事件。
+ *
+ * 寫入 = 本機 `status: "cancelled"` + 推一條 `ORDER_UPDATED`（同 `rejectSelfOrder()`
+ * 完全同一模式：本機先改 → `enqueueEvents` 入 outbox → `notifyQueueChanged()` 觸發 flush
+ * → 廣播 `pos-orders-changed` 令 pos-app / 訂單頁同時刷新）。
+ * `cancelled` 係終態，所以兩邊嘅 LWW 守門都會放行（唔會被舊 open snapshot 復活）。
+ */
+export function cancelLocalOrder(orderId: string, reason?: string): { ok: boolean; error?: string } {
+  const orders = loadOrders();
+  const idx = orders.findIndex((o) => o.id === orderId);
+  if (idx < 0) return { ok: false, error: "找不到訂單" };
+
+  const order = orders[idx];
+  if (order.status === "cancelled") return { ok: false, error: "訂單已經取消" };
+  if (order.status === "settled" || order.status === "paid") {
+    return { ok: false, error: "訂單已收款，請用返結／退款處理" };
+  }
+  if (order.status === "refunded" || order.status === "partially_refunded") {
+    return { ok: false, error: "訂單已退款" };
+  }
+
+  const now = new Date().toISOString();
+  const updated: PosOrder = {
+    ...order,
+    status: "cancelled",
+    cancelledAt: now,
+    cancelledReason: reason || "收銀取消結帳",
+    updatedAt: now,
+  };
+
+  const next = [...orders];
+  next[idx] = updated;
+  saveOrders(next);
+  removeReopenTempTable(order.id);
+
+  const event: QueueEvent = {
+    id: `evt-${crypto.randomUUID().slice(0, 8)}`,
+    type: "ORDER_UPDATED",
+    entityId: updated.id,
+    payload: { order: updated, action: "cancelled", reason: updated.cancelledReason },
+    status: "pending",
+    createdAt: now,
+  };
+  const queue = loadQueue();
+  // 🛡️ 跨店隔離 L1：只 stamp 新事件（同 confirmSelfOrder / rejectSelfOrder）。
+  saveQueue(enqueueEvents(queue, withStoreScope([event])));
+  notifyQueueChanged();
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pos-orders-changed"));
+  }
+
+  return { ok: true };
+}
+
+/**
  * 拒絕自助單：把 draft 單標記為 cancelled。
  */
 export function rejectSelfOrder(orderId: string, reason?: string): { ok: boolean; error?: string } {
