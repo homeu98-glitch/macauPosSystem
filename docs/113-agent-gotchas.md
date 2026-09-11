@@ -193,6 +193,48 @@
   - ⚠️ **為何揀 `px-3 py-2 text-xs` 而唔係細一級**：`local-orders-panel` 嘅「操作」欄係最窄嘅容器（`**w-[22%]**` + `min-w-[860px]` → ~189px，扣 `px-3` 內距剩 ~165px），三粒掣（查看／接受／拒絕）每粒 min-content **48px** → 48×3 + gap 12 = **156px**，**啱啱好放得落**。再大一級（`text-sm` / `px-4`，min-content 60px）會即刻逼出換行；而 `sm`（11px）雖然都放得落，但會同列表「查看」掣嘅字級唔一致。
   - ⚠️ **彈窗會出現 12px vs 14px 並存**（「接受 / 拒絕」12px、「關閉 / 重打單」14px）：呢個係**刻意接受**嘅代價 —— 用戶反饋明確要求「彈窗內嘅掣要同外面一致」，而外面（卡片 / 列表）全部係細尺寸。`ResponsiveModal` 嘅 action 列係 `flex flex-wrap justify-end`（**預設 `align-items: stretch`**），所以兩級字嘅掣**高度會自動拉齊**、只係字級同圓角唔同，唔會對唔齊行。如果日後想連「關閉 / 重打單」都縮到 12px，先再統一一次。
 
+- 📌 **卡片內「三粒等闊掣」都會中（2026-09-11 同日再中一次 · 堂食快捷操作面板）**：`flex gap-2` + 三粒都 `flex-1`（＝`flex:1 1 0%`，**basis 0 可以縮到細過內容**）→ 窄欄（lg 折點下右欄只有 280px，扣掉 `px-4`＋卡片 `p-3`＋`gap-2` 後每粒只有 ~57px）連「標記可取」4 個 CJK 字（12px×4=**48px**，可視文字寬只有 41px）都裝唔落 → **逐字斷成兩行**。修法：
+  1. 全部掣加 **`whitespace-nowrap`**（唔加就一定再中）；
+  2. 長標籤嗰粒唔可以用 `flex-1`，要**加大 grow**：中間改 `flex-[1.6]`（grow 1:1.6:1 → 長掣佔 44%，實測 92px ≥ 64px 需求），兩粒 2 字掣留 `flex-1`（58px ≥ 40px）。
+  - ⚠️ 唔可以只靠「縮字級 / 減 padding」：48px 係硬需求，縮 font 會同列表掣唔一致。
+  - 📌 **口徑**：窄欄（<320px）內嘅掣標籤盡量 ≤2 個 CJK 字；**4 字標籤一定要獨立佔更多闊度**。
+
+## 🔴 堂食「快捷操作」面板：線上訂單唔可以只靠「訂單 → 線上訂單」（2026-09-11）
+- **症狀**：堂食（非快餐）模式右欄「快捷操作」只有「自取 / 掃碼訂單」（＝ `tableId === "counter" && !onlineOrderId` 嘅本地單），**會員通／掃碼落嘅線上單一張都睇唔到**，收銀要跳去另一個頁面先接得到單 → 漏接、漏拒。
+- **修法**：直接內嵌**同一個** `QuickOnlineOrdersPanel layout="stack"`（快餐模式嗰個），唔好另寫一個列表。
+  只喺 `!isQuickMode && ledgerMerchantId` 時 render（否則未連結會員通會多一個「請重新登入」錯誤框）。
+  面板內部自己處理：載入 / realtime / 接單 / 拒單 / 審核客人取消改單 / 查看 / 新單提示音 → 兩邊行為天然一致。
+  - ⚠️ 快餐條同堂食面板係 `isQuickMode ? … : …` 兩個互斥分支，所以**唔會**雙重訂閱 realtime。
+- 🔴 **`skipTableAssignment` 一定要開（＝true）**：`acceptLedgerOrder()` **唔收桌台參數**，
+  `runAccept(order, { tableId, tableName })` 嗰兩個 option **由頭到尾冇用過** → 面板嗰個「安排桌台」彈窗
+  係**死碼**：揀完枱照接單，但**枱號永遠唔會寫落單**。開咗反而令收銀以為安排咗枱。
+  要真正支援「線上堂食單安排桌台」，要先喺 Ledger 側／bridge 落枱號，唔係改個 prop 就得。
+
+## 折扣備註（2026-09-11 · migration `0034_pos_discount_note.sql`）
+- **需求口徑**：凡影響實收嘅調整（折扣／免單／抹零）都要有**原因**，並喺 報表／交班明細／訂單紀錄 三處一致顯示。
+- 🔴 **推導邏輯只可以有一份**：`src/lib/pos/order-notes.ts`（`buildOrderDetailNotes` / `buildOnlineOrderDetailNotes`）。
+  三處（`restaurant-daily-report`、`shift-page`、`pos-app`／`local-orders-panel` 查看彈窗）一律叫呢度。
+  同 `types.ts ↔ storage.ts` 白名單同源嘅漂移坑：分開寫三套就一定有一處漏。
+- **原因存放位置**（唔好搞亂）：全單＝`PosOrder.discountNote`；**單品＝`OrderItem.discountNote`（逐件存 items JSONB，唔另開欄）**；
+  免單＝`PosOrder.compNote`（**免單時清空 `discountNote`**，原因唔可以雙頭）；抹零＝冇人揀，固定文案「系統抹零」；
+  Ledger 線上單只有金額冇原因文字 → 固定「線上優惠」。顯示時 **compNote 優先過 discountNote**。
+- 🔴 **「優惠金額」欄 = 應收 − 實收**（涵蓋單品折扣／全單折扣／免單／抹零），放喺實收**左邊**；
+  `OrderDetailList` 由 8 欄變 9 欄，表尾 `colSpan` 6→7，`min-w-[860px]`→`[900px]`，欄寬百分比要重新加總到 100%。
+- 🔴 **移除「狀態」欄 = 取餐碼冇咗容身之所** → 併入「訂單號」欄第二行。⚠️ **`PosOrder` 冇 `pickupCode` 欄**，
+  只有 Ledger 純線上單（report 另一條 builder，`onlineOrder.pickupCode`）先有；交班頁只有 `PosOrder` → **唔可以加**。
+- 🔴 **`/api/pos/sync` ORDER_SETTLED 嘅 `discountNote` 改用「payload 有冇帶呢個 key」判斷**（原本係 `if (value)`）：
+  帶字串＝寫入、**帶 `null`＝明確清空**（免單場景要清走之前打折寫落嘅原因）、完全冇帶＝唔關事（唔可以無條件寫 null）。
+  → 改咗之後，任何新加嘅 ORDER_SETTLED 生產者（`confirmPayment` / `settleCompOrder` / `completeOnlinePaidOrder`）
+  都要**明確帶住 `discountNote`**，否則會殘留舊值。
+- **結帳硬閘要兩層**：① 下拉／單品「保存」先彈原因彈窗（未確認唔落實折扣）；② `confirmPayment` 開頭再守一次
+  `discountAmount > 0 && !discountNote.trim()` → 彈原因彈窗 + `return`。第②層係為**返結舊單**而設
+  （`matchDiscountId` 反推到折扣預設，但舊單冇 `discountNote`，收銀直撳結帳就會漏原因）。
+- 🔴 **`normalizePosLocalSettings` 係白名單重建** → 加 `discountNotePresets` **唔加白名單 = 靜靜剷走**（舊坑重演）。
+  同理：`pos_note_presets` 讀寫集中喺 `src/lib/note-presets-server.ts`；讀 42703 降級時 `discountNotePresets` 回
+  `[]`＋`hasDiscountColumn:false`，**client LWW 見到 `discountNoteSynced === false` 必須保留本機**，唔可以照採納空陣列。
+  寫降級時要 **omit 新欄**（唔可以傳 `null` / `[]`）。
+- ⚠️ 新欄位落地前後都要能跑：0034 未跑 → 讀寫全部 42703 降級，功能靜默停用（唔可以連帶令既有三個備註清單死）。
+
 ## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
 - **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。
 - **根因**：env 兩邊指唔同專案。server 寫 `pos_orders` 用 `SUPABASE_URL`（`src/lib/supabase-server.ts:5`，POS 自有專案）；瀏覽器 `getPosSupabaseClient()` 用 `NEXT_PUBLIC_SUPABASE_URL`（`.env.example` A 段 = **Ledger 專案，冇任何 `pos_*` 表**，實案 ref `zymdemjflsckicwcinxl`）。

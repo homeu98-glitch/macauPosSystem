@@ -4,6 +4,7 @@
 > 維護：新「坑」先寫 docs/113，**只有最高頻**才摘要上嚟；本檔 ≤ 3k 字元。
 
 ## 改動前必查
+- **折扣備註（2026-09-11 完成 · migration `0034`）**：見 `docs/113` §「折扣備註」。① 原因推導**唯一入口** `src/lib/pos/order-notes.ts`（報表／交班／訂單紀錄三處都要叫佢，唔可以各自寫）；② 全單＝`PosOrder.discountNote`、**單品＝`OrderItem.discountNote`（逐件存 items）**、免單＝`compNote`（免單時清空 `discountNote`）、抹零＝固定文案；③ `OrderDetailList` 由 8 欄→**9 欄**（移除「狀態」→「折扣備註」，新增「優惠金額」＝應收−實收，喺實收左邊；`colSpan` 6→7、`min-w-[900px]`）；④ `ORDER_SETTLED` 嘅 `discountNote` 用**「有冇帶 key」**判斷（帶 `null`＝明確清空，免單要帶）；⑤ `PosOrder` **冇** `pickupCode`（只有 Ledger 純線上單先有）；⑥ 結帳硬閘兩層（下拉彈窗 + `confirmPayment` 開頭再守，為返結舊單）。
 - **後廚屏 KDS（2026-09-11 P0 完成）**：見 `docs/116` §10.1 / §10.2。四條鐵律 —— ① **唔行 outbox**、② 屏**唔碰** `pos_orders.status`（只寫 `fulfillment_status`），③ 崗位鎖喺設備綁定、屏內冇切換掣，④ **分區清單真源 = 商家 `localSettings.printZones`**（`pos_device_configs.local_settings`）——**唔可以**讀 `printer_groups`（legacy demo 值）、**唔可以**硬編碼「廚房/水吧」（後廚1/2/3 要各自獨立；只可顯示 `name`、唔可顯示帶時間戳嘅 `id`）。單品完成用 `done_qty`（份數）**唔係** boolean，否則加單會靜默漏單。屏嘅卡片格一定要 `auto-rows-max`。
 - **報表頁**：KPI 帶**固定 `grid-cols-5`**（10 格同一個 grid）；**唔可以** `md:grid-cols-3 xl:grid-cols-5`。⚠️ 合併 grid **必須刪中間 `</div>`**，否則尾 N 格全寬堆疊（JSX 仍平衡 → build 全綠捉唔到）。`:key` remount ≠ 刷新，要用 `refreshToken`。
 - **`normalizePosLocalSettings` 係白名單重建** → 加欄唔加白名單 = 靜靜剷走（中過 `qrUrl`/`paperSize`/`shiftPresets`）。

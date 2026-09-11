@@ -16,6 +16,7 @@ import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
+import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
@@ -4540,6 +4541,35 @@ export function PosApp() {
                 <div className="mt-1 text-xs text-slate-500">桌台流程、收銀入口與營運操作集中在這裡</div>
               </div>
               <div className="flex-1 overflow-auto px-4 py-4">
+                {/* 線上訂單（2026-09-11 用戶要求）：堂食模式之前只有「自取 / 掃碼訂單」（線下 counter 單），
+                    會員通／掃碼落嘅線上單完全喺呢塊面板睇唔到，收銀要跳去「訂單 → 線上訂單」先接得到單。
+                    呢度直接內嵌同一個 `QuickOnlineOrdersPanel`（快餐模式嗰個），
+                    接單 / 拒單 / 審核客人取消改單 / 查看 全部照舊，兩邊行為一致。
+                    只喺有 Ledger 商戶（已連結會員通）時才 render，否則會多一個「請重新登入」錯誤框。
+                    註：要傳 `skipTableAssignment`（＝跳過「安排桌台」彈窗）—— 線上堂食單嗰個彈窗目前揀完
+                    **唔會寫落單**（`acceptLedgerOrder()` 唔收桌台參數，嗰兩個 option 由頭到尾冇用過），
+                    開咗反而令收銀以為安排咗枱。要真正支援，要先喺 Ledger 側／bridge 落枱號。 */}
+                {!isQuickMode && ledgerMerchantId ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                    <div className="text-xs font-semibold text-slate-700">線上訂單</div>
+                    <div className="mt-3">
+                      <QuickOnlineOrdersPanel
+                        autoAccept={autoAcceptOnlineOrders}
+                        currency={bootstrap.currency}
+                        layout="stack"
+                        onAutoAcceptChange={(next) => void setAutoAcceptOnlineOrders(next)}
+                        onToast={(payload) =>
+                          setToast({
+                            tone: payload.tone === "success" ? "success" : "info",
+                            message: payload.message,
+                          })
+                        }
+                        skipTableAssignment
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
                 {!isQuickMode && counterKioskOrders.length > 0 ? (
                   <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
                     <div className="flex items-center justify-between">
@@ -4612,7 +4642,7 @@ export function PosApp() {
                           </div>
                           <div className="mt-2 flex gap-2">
                             <button
-                              className="flex-1 rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                              className="flex-1 whitespace-nowrap rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
                               onClick={() => setViewingOrderId(order.id)}
                               type="button"
                             >
@@ -4647,7 +4677,7 @@ export function PosApp() {
                                 {(order.status === "draft" || order.status === "sent_to_kitchen" || order.status === "paid") &&
                                 order.fulfillmentStatus !== "ready" ? (
                                   <button
-                                    className="flex-1 rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
+                                    className="flex-[1.6] whitespace-nowrap rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
                                     onClick={() => updateQuickFulfillment(order.id)}
                                     type="button"
                                   >
@@ -4655,7 +4685,7 @@ export function PosApp() {
                                   </button>
                                 ) : null}
                                 <button
-                                  className="flex-1 rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                                  className="flex-1 whitespace-nowrap rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
                                   onClick={() => setPayingOrderId(order.id)}
                                   type="button"
                                 >
