@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
+import { isMissingColumnError } from "@/lib/supabase-errors";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 import {
   isPosDeviceAuthRequired,
@@ -713,6 +714,12 @@ export async function POST(request: Request) {
           //    非免單單一律 undefined → 寫 NULL。
           comp_note: text(order.compNote, MAX_TEXT_LEN),
           comped_at: isoOrNull(order.compedAt),
+          // ── 全單折扣備註上雲（0034 migration）：同 comp_note 一樣係結帳期獨立審計欄
+          //    （唔寫落 order_note —— 後者受 docs/84 鎖定）。
+          //    冇折扣 / 功能上線前嘅舊單 → undefined → 寫 NULL。
+          //    單品折扣原因唔喺呢度：佢逐件存喺 `items` JSONB 內（OrderItem.discountNote），
+          //    會跟 `items` 一齊上雲，唔需要另開欄。
+          discount_note: text(order.discountNote, MAX_TEXT_LEN),
           // 方案 B（2026-09-09）：`updated_at` 一律 server 蓋章（收件時間，單一鐘域）；
           // client 裝置時鐘時間戳另存 `client_updated_at`，專供 LWW 守門同鐘域比較。
           // 注意：`created_at` 維持 client 時間（首次建立）—— 訂單排序（compareOrderByLocalNo）
@@ -720,19 +727,30 @@ export async function POST(request: Request) {
           updated_at: new Date().toISOString(),
           client_updated_at: incomingUpdatedAt,
         };
-        const { error: oErr } = existing
-          ? await supabase
-              .from("pos_orders")
-              .update(baseRecord)
-              .eq("id", orderId)
-              .eq("store_id", storeId)
-          : await supabase.from("pos_orders").upsert(
-              {
-                ...baseRecord,
-                created_at: text(order.createdAt, 64) ?? new Date().toISOString(),
-              },
-              { onConflict: "id" },
-            );
+        const writeOrder = async (record: Record<string, unknown>) =>
+          existing
+            ? await supabase.from("pos_orders").update(record).eq("id", orderId).eq("store_id", storeId)
+            : await supabase.from("pos_orders").upsert(
+                {
+                  ...record,
+                  created_at: text(order.createdAt, 64) ?? new Date().toISOString(),
+                },
+                { onConflict: "id" },
+              );
+
+        let { error: oErr } = await writeOrder(baseRecord);
+        if (oErr && isMissingColumnError(oErr)) {
+          // 🔻 0034 migration 未跑：`discount_note` 呢條新欄唔存在（42703）。
+          // 一定要拔走新欄重寫一次 —— 唔係「折扣備註同步唔到」咁小事，而係
+          // **整張單都上唔到雲**（落單主流程被新功能拖冧）。
+          // 呢個降級係一次過嘅：migration 跑完之後寫入自然帶返新欄。
+          console.warn(
+            `[pos/sync] pos_orders.discount_note 欄唔存在（0034 未跑），降級寫入訂單 ${orderId}`,
+          );
+          const legacyRecord = { ...baseRecord };
+          delete legacyRecord.discount_note;
+          ({ error: oErr } = await writeOrder(legacyRecord));
+        }
         if (oErr) {
           console.error("[pos/sync] pos_orders upsert/update failed:", oErr.message);
           failInfra(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 寫入失敗`);
@@ -796,12 +814,27 @@ export async function POST(request: Request) {
           patch.comped_at = isoOrNull(eventPayload.compedAt) ?? new Date().toISOString();
         }
 
-        const { data: settledRows, error: sErr } = await supabase
-          .from("pos_orders")
-          .update(patch)
-          .eq("id", settledOrderId)
-          .eq("store_id", storeId)
-          .select("id");
+        // 全單折扣備註（0034）：折扣同結帳同一刻發生，所以呢度都係一個寫入點。
+        // 判斷方式睇「payload 有冇帶呢個 key」而**唔係**值真假：
+        //   - 帶字串 → 寫入原因（例如「員工優惠」）
+        //   - 帶 null → 明確清空（例：原先打折，後來改成免單 → 原因改由 comp_note 承載）
+        //   - 完全冇帶 → 唔關事，唔好無條件寫 null 抹走 ORDER_UPDATED 寫落嘅值
+        //     （離線重推時事件次序唔保證，保守寫法比較穩）。
+        if ("discountNote" in eventPayload) {
+          patch.discount_note = text(eventPayload.discountNote, MAX_TEXT_LEN);
+        }
+
+        const writeSettlePatch = async (record: Record<string, unknown>) =>
+          await supabase.from("pos_orders").update(record).eq("id", settledOrderId).eq("store_id", storeId).select("id");
+
+        let { data: settledRows, error: sErr } = await writeSettlePatch(patch);
+        if (sErr && isMissingColumnError(sErr)) {
+          // 🔻 0034 未跑：拔走 `discount_note` 再寫，唔可以因為新欄令結帳狀態上唔到雲。
+          console.warn(`[pos/sync] pos_orders.discount_note 欄唔存在（0034 未跑），降級寫入結帳 ${settledOrderId}`);
+          const legacyPatch = { ...patch };
+          delete legacyPatch.discount_note;
+          ({ data: settledRows, error: sErr } = await writeSettlePatch(legacyPatch));
+        }
 
         if (sErr) {
           console.error("[pos/sync] pos_orders settle failed:", sErr.message);

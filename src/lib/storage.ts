@@ -363,6 +363,11 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     compNotePresets: Array.isArray(settings?.compNotePresets)
       ? settings.compNotePresets
       : defaultPosLocalSettings.compNotePresets,
+    // 折扣備註（2026-09-11 新增）：同 compNotePresets 一樣係 whitelist 逐欄重建，
+    // ⚠️ 漏帶就會喺 reload / 雲端同步 normalize 時被靜靜剷走（同 compNotePresets 同一個坑）。
+    discountNotePresets: Array.isArray(settings?.discountNotePresets)
+      ? settings.discountNotePresets
+      : defaultPosLocalSettings.discountNotePresets,
     discounts: Array.isArray(settings?.discounts)
       ? settings.discounts.filter(
           (d) => d && typeof d.id === "string" && typeof d.label === "string" && typeof d.rate === "number",

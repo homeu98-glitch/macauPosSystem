@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-page-node-id="OLvQmwUTZMyx7oOYFxwBcD">
+<head data-page-node-id="jiSwgv6ABzlNNX9GmJqhxc">
+<meta charset="utf-8" data-page-node-id="ky1wRtYEw7mfC9bXaMDTMq" />
+<title>折扣備註功能 · UI 確認稿（docs/124）</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;--slate-500:#64748b;
+  --slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;--slate-100:#f1f5f9;--slate-50:#f8fafc;
+  --orange-700:#c2410c;--orange-600:#ea580c;--orange-500:#f97316;--orange-300:#fdba74;--orange-100:#ffedd5;--orange-50:#fff7ed;
+  --indigo-600:#4f46e5;
+  --emerald-700:#047857;--emerald-50:#ecfdf5;
+  --amber-800:#92400e;--amber-100:#fde68a;--amber-50:#fffbeb;
+  --rose-700:#be123c;--rose-100:#ffe4e6;--rose-50:#fff1f2;
+  --red-600:#dc2626;--red-50:#fef2f2;--red-700:#b91c1c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#e9eef5;color:var(--slate-900);
+  font-family:"PingFang TC","PingFang SC","Microsoft JhengHei","Noto Sans TC",-apple-system,"Segoe UI",system-ui,sans-serif;
+  font-size:13px;line-height:1.45;
+}
+button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
+input{font:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:999px;border:2px solid transparent;background-clip:content-box}
+
+/* ===== 評審工具列（深色，明確標示唔屬產品介面） ===== */
+.review{background:#0f172a;color:#e2e8f0;padding:12px 18px 0}
+.review-top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.review-title{font-size:15px;font-weight:700;color:#fff}
+.review-title .tag{margin-left:8px;display:inline-flex;align-items:center;border-radius:999px;background:#f97316;color:#1f2937;font-size:11px;font-weight:800;padding:2px 9px;vertical-align:2px}
+.review-sub{margin-top:4px;font-size:12px;color:#94a3b8}
+.review-tabs{display:flex;gap:6px;margin-top:12px;overflow-x:auto}
+.review-tabs button{white-space:nowrap;border-radius:10px 10px 0 0;padding:9px 14px;font-size:12.5px;font-weight:600;background:#1e293b;color:#cbd5e1}
+.review-tabs button.on{background:#f1f5f9;color:#0f172a}
+
+/* ===== 固定畫布 + 等比縮放（原型唔可以有 @media 斷點） ===== */
+.stage{max-width:1360px;margin:0 auto;position:relative;overflow:hidden}
+.canvas{width:1360px;height:880px;position:absolute;top:0;left:0;transform-origin:top left;background:#e9eef5;display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;padding:14px 18px 16px;gap:12px}
+.screenwrap.on{display:flex}
+
+/* ===== 頁面／卡片通用 ===== */
+.phead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;flex:0 0 auto}
+.ptitle{font-size:17px;font-weight:700}
+.psub{margin-top:3px;font-size:12px;color:var(--slate-500)}
+.btn-indigo{background:var(--indigo-600);color:#fff;border-radius:999px;padding:8px 14px;font-size:12.5px;font-weight:600}
+.btn-dark{background:var(--slate-900);color:#fff;border-radius:14px;padding:8px 16px;font-size:12.5px;font-weight:600}
+.btn-ghost{background:#fff;color:var(--slate-700);border-radius:999px;padding:8px 14px;font-size:12.5px;font-weight:600;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.btn-del{background:#fff;color:var(--slate-900);border-radius:12px;padding:5px 10px;font-size:11.5px;font-weight:600;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.pills{display:flex;flex-wrap:wrap;gap:8px;flex:0 0 auto}
+.pills button{border-radius:999px;padding:8px 14px;font-size:12.5px;font-weight:600;background:#fff;color:var(--slate-700);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.pills button.on{background:var(--orange-500);color:#fff;box-shadow:none}
+.statusbar{background:#fff;border-radius:16px;padding:10px 14px;font-size:12.5px;color:var(--slate-600);box-shadow:inset 0 0 0 1px var(--slate-200);flex:0 0 auto}
+.card{background:#fff;border-radius:16px;box-shadow:inset 0 0 0 1px var(--slate-200);padding:14px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.cardhead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex:0 0 auto}
+.cardtitle{font-size:14px;font-weight:700}
+.cardsub{margin-top:3px;font-size:11.5px;color:var(--slate-500)}
+.count{flex:0 0 auto;background:var(--slate-100);color:var(--slate-600);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700}
+.cbody{flex:1;min-height:0;overflow-y:auto;margin-top:10px;padding-right:2px}
+.setgrid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:max-content max-content;align-content:start;gap:12px}
+.list{display:grid;grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;gap:6px}
+.item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;background:#fff;border-radius:14px;padding:5px 10px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.itemname{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.addr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:6px}
+.addr input{border-radius:14px;padding:6px 12px;font-size:12.5px;box-shadow:inset 0 0 0 1px var(--slate-200);width:100%}
+.empty{border-radius:14px;padding:12px;font-size:12px;color:var(--slate-500);background:var(--slate-50);border:1px dashed var(--slate-200)}
+.savebar{flex:0 0 auto;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--slate-200);padding-top:12px}
+.card.new{box-shadow:inset 0 0 0 2px var(--orange-300)}
+.badge-new{background:var(--orange-500);color:#fff;border-radius:999px;padding:2px 8px;font-size:10.5px;font-weight:800;margin-left:6px}
+.badge-req{background:var(--red-50);color:var(--red-600);border-radius:999px;padding:2px 7px;font-size:10.5px;font-weight:800;margin-left:6px;box-shadow:inset 0 0 0 1px #fecaca}
+
+/* ===== 表格 ===== */
+.tablecard{flex:1;min-height:0;overflow:auto;background:#fff;border-radius:14px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+table{width:100%;table-layout:fixed;border-collapse:collapse;text-align:left;font-size:12.5px}
+th{position:sticky;top:0;z-index:10;background:var(--slate-50);padding:9px 10px;font-size:11.5px;font-weight:600;color:var(--slate-500);white-space:nowrap}
+td{padding:9px 10px;vertical-align:middle}
+tbody tr{border-top:1px solid var(--slate-100)}
+tbody tr:nth-child(even){background:rgba(248,250,252,.6)}
+tfoot tr{border-top:1px solid var(--slate-200);background:var(--slate-50)}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.orderno{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pickup{margin-top:3px;display:inline-flex;white-space:nowrap;border-radius:999px;background:var(--orange-50);color:var(--orange-700);padding:1px 7px;font-size:10.5px;font-weight:700}
+.dim{font-size:11.5px;color:var(--slate-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.time{font-size:11.5px;color:var(--slate-400);font-variant-numeric:tabular-nums;white-space:nowrap}
+.money{font-size:12.5px;font-weight:600;color:var(--slate-700);font-variant-numeric:tabular-nums;white-space:nowrap}
+.money-paid{font-size:12.5px;font-weight:700;color:var(--emerald-700);font-variant-numeric:tabular-nums;white-space:nowrap}
+.money-save{display:inline-flex;align-items:center;gap:4px;background:var(--amber-50);color:var(--amber-800);border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.money-save.zero{background:transparent;color:var(--slate-400);font-weight:600}
+.ncell{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.nchip{display:inline-flex;align-items:center;gap:4px;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;white-space:nowrap}
+.nchip.discount{background:var(--amber-100);color:var(--amber-800)}
+.nchip.comp{background:var(--rose-100);color:var(--rose-700)}
+.nchip.round{background:var(--slate-100);color:var(--slate-600)}
+.tnote{flex:0 0 auto;border-radius:12px;padding:9px 12px;font-size:11.5px;background:#fff;box-shadow:inset 0 0 0 1px var(--slate-200);color:var(--slate-600)}
+.tnote b{color:var(--slate-900)}
+.mig{display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:0 0 auto;background:#fff;border-radius:12px;padding:9px 12px;font-size:11.5px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.mig .old{color:var(--slate-400);text-decoration:line-through}
+.mig .arrow{color:var(--slate-300);font-weight:800}
+.mig .new{color:var(--orange-700);font-weight:800}
+
+/* ===== 真實彈窗（ResponsiveModal）還原 ===== */
+.page{position:relative;flex:1;min-height:0;overflow:hidden;border-radius:14px;background:#f1f5f9}
+.appbg{position:absolute;inset:0;padding:12px;display:flex;flex-direction:column;gap:10px}
+.appbar{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fff;border-radius:12px;padding:10px 14px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.apptitle{font-size:14px;font-weight:700}
+.tabgrid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:max-content;gap:10px;align-content:start}
+.tcard{background:#fff;border-radius:14px;padding:10px 12px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.tcard .no{font-size:12px;font-weight:700}
+.tcard .st{margin-top:4px;font-size:11px;color:var(--slate-400)}
+.overlay{position:absolute;inset:0;background:rgba(15,23,42,.45);display:grid;place-items:center;padding:8px}
+.overlay.top{z-index:40}
+.modal{width:100%;max-height:100%;background:#fff;border-radius:24px;box-shadow:0 25px 50px -12px rgba(15,23,42,.45);display:flex;flex-direction:column;overflow:hidden}
+.modal.lg{max-width:1024px}
+.modal.md{max-width:448px}
+.mhead{flex:0 0 auto;border-bottom:1px solid var(--slate-100);padding:16px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.mtitle{font-size:19px;font-weight:700}
+.modal.md .mtitle{font-size:17px}
+.mdesc{margin-top:4px;font-size:13px;color:var(--slate-500)}
+.mclose{flex:0 0 auto;border-radius:999px;background:var(--slate-100);padding:8px 12px;font-size:13px;font-weight:600;color:var(--slate-700)}
+.mcancel{flex:0 0 auto;border-radius:999px;background:var(--red-50);padding:8px 12px;font-size:13px;font-weight:600;color:var(--red-700)}
+.mbody{flex:1;min-height:0;overflow-y:auto;padding:16px 20px}
+.mfoot{flex:0 0 auto;border-top:1px solid var(--slate-200);padding:12px 20px;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+.btn-white{background:#fff;color:var(--slate-900);border-radius:14px;padding:8px 16px;font-size:13px;font-weight:600;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.btn-black{background:var(--slate-900);color:#fff;border-radius:14px;padding:8px 16px;font-size:13px;font-weight:600}
+.btn-black[disabled]{opacity:.45;cursor:not-allowed}
+.cogrid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
+.coinner{display:grid;grid-template-columns:1.1fr .9fr;gap:16px;align-items:start}
+.panel{border-radius:16px;box-shadow:inset 0 0 0 1px var(--slate-200);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.panel.grey{background:var(--slate-50);padding:16px}
+.panel.white{background:#fff}
+.panelhead{border-bottom:1px solid var(--slate-100);padding:16px}
+.panelbody{min-height:0;flex:1;overflow:auto;padding:16px}
+.panelfoot{border-top:1px solid var(--slate-200);padding:16px}
+.paneltitle{font-size:13px;font-weight:700}
+.panelsub{margin-top:4px;font-size:11.5px;color:var(--slate-500)}
+.rline{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:baseline;font-size:13px;padding:3px 0}
+.rline .k{color:var(--slate-500)}
+.rline .v{font-weight:600;font-variant-numeric:tabular-nums}
+.rline.big .k{font-weight:700;color:var(--slate-700)}
+.rline.big .v{font-size:23px;font-weight:800;color:var(--orange-600)}
+.rline.disc .v{color:var(--emerald-700);font-weight:700}
+.fieldlab{font-size:11.5px;font-weight:700;color:var(--slate-500)}
+.fld{margin-top:5px;border-radius:14px;padding:8px 12px;font-size:13px;font-weight:600;background:#fff;box-shadow:inset 0 0 0 1px var(--slate-200);width:100%}
+select.fld{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#94a3b8 50%),linear-gradient(135deg,#94a3b8 50%,transparent 50%);background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.paybtn{width:100%;border-radius:16px;padding:12px 14px;text-align:left;font-size:13px;font-weight:600;background:var(--slate-50);color:var(--slate-900);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.paybtn.on{background:var(--orange-50);color:var(--orange-700);box-shadow:inset 0 0 0 1px var(--orange-300)}
+.paybtn.off{background:var(--slate-100);color:var(--slate-400);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.paybtn .sub{margin-top:4px;font-size:11px;font-weight:400;opacity:.85}
+.paygap{display:grid;gap:8px;margin-top:12px}
+.btn-pay{width:100%;border-radius:16px;background:var(--orange-500);color:#fff;padding:12px;font-size:15px;font-weight:700}
+.btn-comp{width:100%;margin-top:8px;border-radius:16px;background:#fff;color:var(--slate-700);padding:12px;font-size:13px;font-weight:700;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.keypad{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.key{border-radius:12px;background:#fff;padding:12px 0;text-align:center;font-size:16px;font-weight:600;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.key.fn{font-size:13px;font-weight:700;color:var(--slate-600)}
+.hintbox{margin-top:12px;border-radius:14px;background:var(--slate-50);padding:10px 12px;font-size:11.5px;color:var(--slate-500);line-height:1.5}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.chip{border-radius:999px;padding:7px 12px;font-size:11.5px;font-weight:700;background:var(--slate-100);color:var(--slate-700)}
+.chip.on{background:var(--slate-900);color:#fff}
+.warnline{margin-top:10px;border-radius:12px;padding:8px 10px;font-size:11.5px;font-weight:600;background:var(--red-50);color:var(--red-600);box-shadow:inset 0 0 0 1px #fecaca}
+.stepnote{display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:0 0 auto;background:#fff;border-radius:12px;padding:9px 12px;font-size:11.5px;box-shadow:inset 0 0 0 1px var(--slate-200);color:var(--slate-600)}
+.stepnum{display:inline-flex;width:18px;height:18px;border-radius:999px;background:var(--orange-500);color:#fff;font-size:11px;font-weight:800;align-items:center;justify-content:center}
+.stepnum.grey{background:var(--slate-300)}
+.dishline{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:12px;align-items:baseline;padding:8px 0;border-top:1px dashed var(--slate-100)}
+.dishline.first{border-top:0}
+.dishname{font-size:12.5px;font-weight:600}
+.dishprice{font-size:12.5px;font-weight:700;color:var(--amber-800);font-variant-numeric:tabular-nums;text-align:right}
+.dishorig{font-size:11px;color:var(--slate-400);text-decoration:line-through;text-align:right}
+.sum{background:#fff;border-radius:14px;padding:10px 12px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.sumv{margin-top:4px;font-size:16px;font-weight:800;font-variant-numeric:tabular-nums}
+.kvrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:7px 0;border-top:1px dashed var(--slate-100);font-size:12px}
+.kvrow.first{border-top:0}
+.twoPane{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.pane{position:relative;min-height:0;display:flex;flex-direction:column;background:#f1f5f9;border-radius:14px;overflow:hidden;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.panehead{flex:0 0 auto;background:#fff;border-bottom:1px solid var(--slate-200);padding:10px 14px;display:flex;align-items:center;gap:8px}
+.panetitle{font-size:13px;font-weight:700}
+.panesub{font-size:11.5px;color:var(--slate-500)}
+.panebody{flex:1;min-height:0;overflow:auto;display:grid;place-items:center;padding:16px;background:rgba(15,23,42,.18)}
+.amt{font-weight:700;color:var(--amber-800);font-variant-numeric:tabular-nums}
+
+/* ===== 評審註記 ===== */
+.legend{max-width:1360px;margin:18px auto 40px;background:#fff;border-radius:16px;padding:16px 18px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.legend h3{margin:0 0 4px;font-size:14px}
+.legend .sub{font-size:11.5px;color:var(--slate-500);margin-bottom:10px}
+.legend ol{margin:0;padding-left:20px;display:grid;gap:8px;font-size:12.5px;color:var(--slate-700)}
+.legend code{background:var(--slate-100);border-radius:5px;padding:1px 5px;font-size:11.5px}
+.legend .rec{color:var(--emerald-700);font-weight:700}
+</style>
+</head>
+<body data-page-node-id="QaYlhCCzLx4dywtJBSOyze">
+
+<div class="review" data-page-node-id="7KM48azpyLBc8rbGQlc3yO">
+  <div class="review-top" data-page-node-id="0wz4AjLHRvgHwAL2vr0ZVc">
+    <div data-page-node-id="WxIHkCwnl8j3Roij3kQi7b">
+      <div class="review-title" data-page-node-id="rx2Kncy3F7F9uV5EQhZ1G3">折扣備註功能 · UI 確認稿<span class="tag" data-page-node-id="tv3CKHGS2XOjM0hvvN8o85">評審介面，唔屬產品介面</span></div>
+      <div class="review-sub" data-page-node-id="J3Z5VjrXLGcmmorHkHMP9Z">結帳彈窗／單品折扣彈窗版面照舊唔改，只喺揀完折扣之後加一層「為何打折」彈窗（樣式照抄現有「免單備註」彈窗）</div>
+    </div>
+    <div class="review-sub" data-page-node-id="blF7dW8hoVkn7HggrFgtUT">固定畫布 1360×880 · 等比縮放 · 零 @media 斷點</div>
+  </div>
+  <div class="review-tabs" id="rtabs" data-page-node-id="aXfFu7f6dAiryhO4Ih1uVR">
+    <button type="button" data-tab="settings" data-page-node-id="1dcURW56yrcX0t7GH4a9GM"></button>
+    <button type="button" data-tab="checkout" data-page-node-id="hmjGTlYJtFVAYLzMPSH52V"></button>
+    <button type="button" data-tab="item" data-page-node-id="gpqFCNQP7xNZARgDdqx2Kp"></button>
+    <button type="button" data-tab="report" data-page-node-id="7krymnv7LXHt2amATzERY1"></button>
+    <button type="button" data-tab="shift" data-page-node-id="vu9XzQ2lgefJeVJtIEBwcA"></button>
+    <button type="button" data-tab="detail" data-page-node-id="TxttU1cyus8ZJysGBke96l"></button>
+  </div>
+</div>
+
+<div class="stage" id="stage" data-page-node-id="MnpwlY0GF0DQy3EjIfeJiT">
+  <div class="canvas" id="canvas" data-page-node-id="lFXMUlKLusv8nfJCAYD9i7">
+    <div class="screenwrap" id="scr-settings" data-page-node-id="vefAvN1KhvGTbBOMLcseRq"></div>
+    <div class="screenwrap" id="scr-checkout" data-page-node-id="ETkNU7hSPdocyB8TvcF02V"></div>
+    <div class="screenwrap" id="scr-item" data-page-node-id="9VjTzl0LAQIFFEdRLECAzS"></div>
+    <div class="screenwrap" id="scr-report" data-page-node-id="O8SffIMficRgDZnkBgbmBW"></div>
+    <div class="screenwrap" id="scr-shift" data-page-node-id="3oJqjow682syAf9btcHIS6"></div>
+    <div class="screenwrap" id="scr-detail" data-page-node-id="6YpZKq59jMPWVcT0fm0cOk"></div>
+  </div>
+</div>
+
+<div class="legend" data-page-node-id="u2V1TKlYcxROA8gALcd90K">
+  <h3 data-page-node-id="Md8F4wqmCKveYe3wBY9SIy">待你確認的 5 個決策點</h3>
+  <div class="sub" data-page-node-id="0lgwuCvzG2hUGZotegyJp2">以下係需求未寫死、實作時一定要揀嘅位。原型已按「建議」畫，你話改我即刻改。</div>
+  <ol data-page-node-id="mrHaAPSDRohTXEcR3EZAuH">
+    <li data-page-node-id="PMsyTtO4aSfHKuhp9mQ5bh"><b data-page-node-id="hRpeO9xLC1IfKK3c2OkLls">彈窗撳「取消」點算？</b><span class="rec" data-page-node-id="Fy6v2LfeLCvgefNrthNyyh">建議：當作「冇折過」—— 折扣復原（select 回到上一個值／揀「冇折扣」），唔會留一個冇原因嘅折扣喺單上。</span>
+        另一選擇係「保留折扣，但擋住『去結帳』直到補填原因」。</li>
+    <li data-page-node-id="41oLCXLw54Wq5AjZksPe1v"><b data-page-node-id="7ubHCpBq8wbS4NMGWJzPud">「狀態」欄移除後，線上單嘅取餐碼去邊？</b>該欄其實只裝取餐碼（線下單顯示「—」），唔係訂單狀態。<span class="rec" data-page-node-id="TFK9EYPsBPj0q5eRHOsWYs">建議：併入「訂單號」欄第二行做細 badge</span>（見 ④ 表第 2 行）。</li>
+    <li data-page-node-id="hCDhEP0bAqMdAOW0JgnFDo"><b data-page-node-id="lZozQFUZRkaXrTW43eQ6PS">系統抹零要唔要人手揀原因？</b>抹零係系統自動計（<code data-page-node-id="rWVQoi0rdYqICYlKiGvKKu">roundingAmount</code>），強制揀會阻住收銀。<span class="rec" data-page-node-id="ElfsQo6DVXAnE83ogtUOBQ">建議：自動標「系統抹零」，原因選填（唔阻塞結帳）</span>；折扣同免單則強制。</li>
+    <li data-page-node-id="gENffC0ymKzQQRtF8XRCRd"><b data-page-node-id="lWQnoMIn50rnmzHSAK2C2a">單品折扣嘅原因存喺邊？</b>全單折扣存喺訂單（<code data-page-node-id="LnZT7vB53Rs3B6FrOEmky8">PosOrder.discountNote</code>）；單品折扣逐件存（<code data-page-node-id="u4bDba4pYjJVrXflsf8Hrb">OrderItem.discountNote</code>），報表「折扣備註」欄自動去重列出。
+        <span class="rec" data-page-node-id="UUChbA2KPvsrFmrq18jvNE">建議：菜單自帶折扣沿用菜品設定（唔強制原因），店員喺彈窗人手改折扣時才強制。</span></li>
+    <li data-page-node-id="pJIJEGaEcawegYKjIsk8QB"><b data-page-node-id="mz4EADzWM3Pm2FX0bBodCe">收據要唔要印折扣備註？</b>需求只提到報表／訂單紀錄／交班明細。<span class="rec" data-page-node-id="Ib4gvDIhLK7aXWDOCAzWLB">建議：一併喺收據印（第日最想知「邊個批嘅折」），亦可之後再補。</span></li>
+  </ol>
+</div>
+
+<script>
+/* ================= 固定畫布等比縮放 ================= */
+var CW = 1360, CH = 880, MIN_SCALE = 0.5;
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || CW;
+  var s = Math.min(1, Math.max(w / CW, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(CH * s) + "px";
+  stage.style.overflowX = (CW * s > w) ? "auto" : "hidden";
+}
+window.addEventListener("resize", fit);
+
+/* ================= 資料（商家可自訂 → 一律由 array 生成） ================= */
+var NOTE_PRESETS = ["少冰", "走甜", "加大", "唔要蔥"];
+var CANCEL_PRESETS = ["客人取消", "售罄", "下錯單", "重開一單"];
+var COMP_PRESETS = ["老闆請客", "員工餐", "客人投訴補償", "試食推廣", "熟客優惠"];
+/* 設定 → 備註 → 折扣備註（本次新增） */
+var DISCOUNT_PRESETS = ["員工優惠", "會員折扣", "熟客優惠", "假日推廣", "補償客人"];
+
+/* 訂單明細示範資料：報表 / 交班共用同一組（證明「同一元件、格式一致」） */
+var DETAIL_ROWS = [
+  { id:"o31", orderNo:"訂單31", pickup:"", table:"A3", method:"現金", cashier:"陳小明", settledAt:"2026-09-11 12:04",
+    receivable:288.00, paid:246.24,
+    notes:[{kind:"discount", text:"員工優惠 9折"}] },
+  { id:"o30", orderNo:"線上單", pickup:"005", table:"外賣", method:"線上支付", cashier:"未記錄", settledAt:"2026-09-11 13:12",
+    receivable:96.00, paid:0,
+    notes:[{kind:"comp", text:"客人投訴補償"}] },
+  { id:"o28", orderNo:"訂單28", pickup:"", table:"A1", method:"澳門通", cashier:"陳小明", settledAt:"2026-09-11 12:41",
+    receivable:155.50, paid:155.00,
+    notes:[{kind:"round", text:"系統抹零"}] },
+  { id:"o27", orderNo:"訂單27", pickup:"", table:"B2", method:"現金", cashier:"李美儀", settledAt:"2026-09-11 12:20",
+    receivable:412.00, paid:370.80,
+    notes:[{kind:"discount", text:"會員折扣 9折"}] },
+  { id:"o26", orderNo:"訂單26", pickup:"", table:"自取", method:"現金", cashier:"李美儀", settledAt:"2026-09-11 11:58",
+    receivable:88.00, paid:88.00, notes:[] },
+  { id:"o25", orderNo:"訂單25", pickup:"", table:"A2", method:"信用卡", cashier:"陳小明", settledAt:"2026-09-11 11:30",
+    receivable:268.00, paid:191.60,
+    notes:[{kind:"discount", text:"員工優惠（單品 85 折）"},{kind:"round", text:"系統抹零"}] }
+];
+
+/* ================= 工具 ================= */
+function fm(n){ return "MOP " + Math.round(n).toLocaleString("en-US"); }
+function avgSaving(r){ return r.receivable - r.paid; }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function head(title, sub, right){
+  return '<div class="phead"><div><div class="ptitle">' + esc(title) + '</div>' +
+         '<div class="psub">' + esc(sub) + '</div></div><div>' + (right || "") + '</div></div>';
+}
+function cardList(title, sub, items, extraClass, addPlaceholder, badge){
+  var body;
+  if (items.length === 0){
+    body = '<div class="empty">暫時沒有' + esc(title) + '</div>';
+  } else {
+    body = '<div class="list">' + items.map(function(it){
+      return '<div class="item"><div class="itemname">' + esc(it) + '</div>' +
+             '<button class="btn-del" type="button">刪除</button></div>';
+    }).join("") + '</div>';
+  }
+  return '<section class="card ' + (extraClass || "") + '">' +
+    '<div class="cardhead"><div><div class="cardtitle">' + esc(title) + (badge || "") + '</div>' +
+    '<div class="cardsub">' + esc(sub) + '</div></div>' +
+    '<span class="count">' + items.length + ' 項</span></div>' +
+    '<div class="cbody">' + body +
+    '<div class="addr"><input placeholder="' + esc(addPlaceholder) + '" value="" />' +
+    '<button class="btn-dark" type="button">加入</button></div>' +
+    '</div></section>';
+}
+
+/* ================= ① 設定 → 備註 ================= */
+function renderSettings(){
+  var tabs = ["打印機","菜品打印設置","菜單","樓層與桌台","支付方式","備註","折扣","掃碼點餐"];
+  var pills = tabs.map(function(t){
+    return '<button type="button" class="' + (t === "備註" ? "on" : "") + '">' + esc(t) + '</button>';
+  }).join("");
+  document.getElementById("scr-settings").innerHTML =
+    head("設置", "打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。",
+         '<button class="btn-indigo" type="button">返回收銀台</button>') +
+    '<div class="pills">' + pills + '</div>' +
+    '<div class="statusbar">已新增折扣備註草稿，請先保存。</div>' +
+    '<div class="setgrid">' +
+      cardList("常用備註", "用於點餐時快速選擇（多選）。", NOTE_PRESETS, "", "新增常用備註...") +
+      cardList("免單備註", "結帳頁按「免單」時要選擇的原因（必填）。", COMP_PRESETS, "", "新增免單備註...") +
+      cardList("取消備註", "用於退菜/取消時快速選擇。", CANCEL_PRESETS, "", "新增取消備註...") +
+      cardList("折扣備註", "結帳頁套用折扣時必選的原因（必填）。會顯示在報表、訂單紀錄、交班明細。",
+               DISCOUNT_PRESETS, "new", "新增折扣備註...", '<span class="badge-new">新增</span>') +
+    '</div>' +
+    '<div class="savebar"><button class="btn-indigo" type="button">保存備註</button></div>';
+}
+
+/* ================= 收銀台背景（彈窗後面嘅頁面，示意用） ================= */
+function appBackground(){
+  var cells = [
+    { no:"A1", st:"已下單 · 2 位" }, { no:"A2", st:"已下單 · 4 位" },
+    { no:"A3", st:"結帳中 · 3 位" }, { no:"B1", st:"空枱" },
+    { no:"B2", st:"已結帳 · 2 位" }, { no:"C1", st:"空枱" },
+    { no:"C2", st:"未下單 · 6 位" }, { no:"外賣", st:"待取餐" }
+  ];
+  return '<div class="appbg">' +
+    '<div class="appbar"><div><div class="apptitle">收銀台 · 大堂</div>' +
+    '<div class="psub">2026-09-11 12:04 · 陳小明</div></div>' +
+    '<div class="dim">用餐中 4 · 待結帳 2</div></div>' +
+    '<div class="tabgrid">' + cells.map(function(c){
+      return '<div class="tcard"><div class="no">' + esc(c.no) + '</div>' +
+             '<div class="st">' + esc(c.st) + '</div></div>';
+    }).join("") + '</div></div>';
+}
+
+/* ================= 折扣備註彈窗（新增；樣式照「免單備註」彈窗） ================= */
+function discountNoteModal(opts){
+  var note = opts.note || "";
+  var confirmLabel = opts.confirmLabel || "確認折扣";
+  var chips = DISCOUNT_PRESETS.map(function(p){
+    return '<button class="chip ' + (note === p ? "on" : "") + '" type="button">' + esc(p) + '</button>';
+  }).join("");
+  return '<div class="overlay top"><div class="modal md">' +
+    '<div class="mhead"><div><div class="mtitle">折扣備註</div>' +
+      '<div class="mdesc">' + esc(opts.context) + '</div></div>' +
+      '<button class="mclose" type="button">關閉</button></div>' +
+    '<div class="mbody">' +
+      '<div class="fieldlab">折扣原因<span class="badge-req">必填</span></div>' +
+      '<div class="chips">' + chips + '</div>' +
+      '<input class="fld" style="margin-top:16px" placeholder="可自由輸入折扣原因，例如：員工優惠" value="' + esc(note) + '" />' +
+      '<div class="hintbox">清單由 <b>設置 → 備註 → 折扣備註</b> 維護；未選原因就撳「' + esc(confirmLabel) + '」會被攔住。</div>' +
+      (note ? "" : '<div class="warnline">尚未選擇原因 — 確認掣已停用。</div>') +
+    '</div>' +
+    '<div class="mfoot">' +
+      '<button class="btn-white" type="button">取消</button>' +
+      '<button class="btn-black" type="button" ' + (note ? "" : "disabled") + '>' + esc(confirmLabel) + '</button>' +
+    '</div></div></div>';
+}
+
+/* ================= 結帳彈窗（原有版面，完全唔改） ================= */
+function checkoutModal(){
+  var rows =
+    '<div class="rline"><span class="k">小計</span><span class="v">MOP 171</span></div>' +
+    '<div class="rline disc"><span class="k">全單折扣</span><span class="v">- MOP 17</span></div>' +
+    '<div class="rline big"><span class="k">應收</span><span class="v">MOP 154</span></div>' +
+    '<div class="rline"><span class="k">會員扣款</span><span class="v">MOP 0</span></div>' +
+    '<div class="rline"><span class="k">找續</span><span class="v">MOP 0</span></div>';
+  var keys = ["7","8","9","4","5","6","1","2","3"];
+  return '<div class="modal lg">' +
+    '<div class="mhead">' +
+      '<div><div class="mtitle">結帳</div>' +
+        '<div class="mdesc" style="display:flex;align-items:center;gap:8px">' +
+          '<span>訂單 訂單05</span>' +
+          '<span class="nchip" style="background:#ecfeff;color:#0e7490">掃碼下單</span>' +
+        '</div></div>' +
+      '<div style="display:flex;gap:8px">' +
+        '<button class="mcancel" type="button">取消結帳</button>' +
+        '<button class="mclose" type="button">關閉</button></div>' +
+    '</div>' +
+    '<div class="mbody">' +
+      '<div class="cogrid">' +
+        '<div class="coinner">' +
+
+          '<div class="panel grey">' +
+            '<div class="paneltitle">本次支付內容</div>' +
+            '<div style="margin-top:12px">' + rows + '</div>' +
+            '<div style="margin-top:14px"><div class="fieldlab">全單折扣 <span class="badge-req">需備註原因</span></div>' +
+              '<select class="fld"><option>9折</option><option>冇折扣</option></select></div>' +
+            '<div style="margin-top:12px"><div class="fieldlab">系統抹零</div>' +
+              '<input class="fld" value="0.00" /></div>' +
+            '<div style="margin-top:12px"><div class="fieldlab">實收金額</div>' +
+              '<input class="fld" value="" /></div>' +
+            '<div class="hintbox"><b>會員優惠 / 餘額</b><br/>輸入會員手機號碼後，可在右側「支付方式」選「會員餘額」扣款，並核銷獎賞券（須連線）。</div>' +
+          '</div>' +
+
+          '<div class="panel white" style="padding:16px">' +
+            '<div class="paneltitle">支付方式</div>' +
+            '<div class="panelsub">可選「會員餘額」搭配一種其他支付方式；餘額不足時剩餘金額以所選方式收取。</div>' +
+            '<div class="paygap">' +
+              '<button class="paybtn off" type="button">會員餘額<div class="sub">請先在右側輸入會員手機號碼</div></button>' +
+              '<button class="paybtn on" type="button">現金</button>' +
+              '<button class="paybtn" type="button">Mpay</button>' +
+              '<button class="paybtn" type="button">中銀</button>' +
+            '</div>' +
+            '<button class="btn-pay" style="margin-top:16px" type="button">去結帳</button>' +
+            '<button class="btn-comp" type="button">免單</button>' +
+          '</div>' +
+
+        '</div>' +
+
+        '<div class="panel white">' +
+          '<div class="panelhead"><div class="paneltitle">會員</div><div class="panelsub">輸入 8 位手機號碼後會自動查詢</div></div>' +
+          '<div class="panelbody"><div class="fieldlab">會員號碼（8 位）</div>' +
+            '<input class="fld" style="letter-spacing:3px" placeholder="例如：63936542" value="" /></div>' +
+          '<div class="panelfoot"><div class="keypad">' +
+            keys.map(function(k){ return '<button class="key" type="button">' + esc(k) + '</button>'; }).join("") +
+            '<button class="key fn" type="button">清空</button>' +
+            '<button class="key fn" type="button">刪除</button>' +
+            '<button class="key" type="button">0</button>' +
+          '</div></div>' +
+        '</div>' +
+
+      '</div>' +
+    '</div></div>';
+}
+
+/* ================= ② 結帳彈窗 + 折扣備註彈窗（全單折扣觸發） ================= */
+function renderCheckout(){
+  document.getElementById("scr-checkout").innerHTML =
+    '<div class="page">' + appBackground() +
+      '<div class="overlay">' + checkoutModal() + '</div>' +
+      discountNoteModal({
+        context: "全單 9折 · 小計 MOP 171 → 應收 MOP 154（- MOP 17）",
+        note: ""
+      }) +
+    '</div>';
+}
+
+/* ================= ③ 單品折扣：兩步對照（原有彈窗唔改 + 新增原因彈窗） ================= */
+function pane(step, title, sub, inner){
+  return '<div class="pane">' +
+    '<div class="panehead"><span class="stepnum">' + esc(step) + '</span>' +
+    '<span class="panetitle">' + esc(title) + '</span>' +
+    '<span class="panesub">' + esc(sub) + '</span></div>' +
+    '<div class="panebody">' + inner + '</div></div>';
+}
+
+function renderItem(){
+  /* 步驟 1：原有「單品折扣」彈窗，版面完全唔改 */
+  var itemModal =
+    '<div class="modal md" style="box-shadow:0 12px 28px -12px rgba(15,23,42,.35)">' +
+      '<div class="mhead"><div><div class="mtitle">單品折扣</div>' +
+        '<div class="mdesc">此折扣只套用於該單品，不影響全單。</div></div>' +
+        '<button class="mclose" type="button">關閉</button></div>' +
+      '<div class="mbody">' +
+        '<div class="fieldlab">選擇折扣</div>' +
+        '<select class="fld" style="margin-top:5px"><option>9折</option><option>冇折扣</option></select>' +
+      '</div>' +
+      '<div class="mfoot"><button class="btn-white" type="button">移除折扣</button>' +
+        '<button class="btn-black" type="button">保存</button></div>' +
+    '</div>';
+
+  document.getElementById("scr-item").innerHTML =
+    '<div class="twoPane">' +
+      pane("1", "單品折扣", "撳保存之後 →", itemModal) +
+      pane("2", "折扣備註", "揀原因（必填）→ 確認", discountNoteModal({
+        context: "凍檸茶 ×2 · 9折 · MOP 56 → MOP 50（- MOP 6）",
+        note: "員工優惠"
+      })) +
+    '</div>' +
+    '<div class="stepnote">' +
+      '<span class="stepnum">1</span>點該單品「折扣」→ 揀 9折 → <b>保存</b>' +
+      '<span class="stepnum">2</span>即彈「折扣備註」→ 揀原因 → <b>確認折扣</b>' +
+      '<span class="stepnum grey">3</span>折扣落實，原因記落<b>該單品</b>（唔影響全單）' +
+      '<span class="dim">· 撳「移除折扣」唔需要原因 · 全單折扣嘅流程完全一樣（見 ②）</span>' +
+    '</div>';
+}
+
+/* ================= 訂單明細表（報表 / 交班共用） ================= */
+function noteChip(n){
+  var cls = n.kind === "discount" ? "nchip discount" : n.kind === "comp" ? "nchip comp" : "nchip round";
+  return '<span class="' + cls + '">' + esc(n.text) + '</span>';
+}
+function detailTable(rows){
+  var trs = rows.map(function(r){
+    var saving = avgSaving(r);
+    var noteCell = (r.notes && r.notes.length)
+      ? '<div class="ncell">' + r.notes.map(noteChip).join("") + '</div>'
+      : '<span class="time">—</span>';
+    var pickup = r.pickup ? '<div><span class="pickup">取餐碼 ' + esc(r.pickup) + '</span></div>' : "";
+    return '<tr>' +
+      '<td><div class="orderno">' + esc(r.orderNo) + '</div>' + pickup + '</td>' +
+      '<td>' + noteCell + '</td>' +
+      '<td><div class="dim">' + esc(r.table) + '</div></td>' +
+      '<td><div class="dim">' + esc(r.method) + '</div></td>' +
+      '<td><div class="dim">' + esc(r.cashier) + '</div></td>' +
+      '<td><div class="time">' + esc(r.settledAt) + '</div></td>' +
+      '<td class="num"><span class="money">' + fm(r.receivable) + '</span></td>' +
+      '<td class="num"><span class="money-save' + (saving > 0 ? "" : " zero") + '">' +
+        (saving > 0 ? "− " + fm(saving) : "MOP 0") + '</span></td>' +
+      '<td class="num"><span class="money-paid">' + fm(r.paid) + '</span></td>' +
+    '</tr>';
+  }).join("");
+  var tRecv = rows.reduce(function(s, r){ return s + r.receivable; }, 0);
+  var tSave = rows.reduce(function(s, r){ return s + avgSaving(r); }, 0);
+  var tPaid = rows.reduce(function(s, r){ return s + r.paid; }, 0);
+  return '<table>' +
+    '<thead><tr>' +
+      '<th style="width:13%">訂單號</th>' +
+      '<th style="width:16%">折扣備註</th>' +
+      '<th style="width:8%">餐台</th>' +
+      '<th style="width:10%">收款類型</th>' +
+      '<th style="width:9%">收銀員</th>' +
+      '<th style="width:13%">結賬時間</th>' +
+      '<th style="width:9%" class="num">應收</th>' +
+      '<th style="width:11%" class="num">優惠金額</th>' +
+      '<th style="width:11%" class="num">實收</th>' +
+    '</tr></thead>' +
+    '<tbody>' + trs + '</tbody>' +
+    '<tfoot><tr>' +
+      '<td colspan="6" style="font-weight:700">合計（' + rows.length + ' 張）</td>' +
+      '<td class="num" style="font-weight:700">' + fm(tRecv) + '</td>' +
+      '<td class="num" style="font-weight:700;color:#92400e">− ' + fm(tSave) + '</td>' +
+      '<td class="num" style="font-weight:700;color:#047857">' + fm(tPaid) + '</td>' +
+    '</tr></tfoot></table>';
+}
+function migBar(){
+  return '<div class="mig"><span class="dim">欄位對照：</span>' +
+    '<span class="old">狀態（取餐碼）</span><span class="arrow">→</span><span class="new">折扣備註</span>' +
+    '<span class="dim">｜</span><span class="new">＋ 優惠金額</span><span class="dim">（放喺實收左邊）</span>' +
+    '<span class="dim">｜</span><span class="dim">9 欄</span></div>';
+}
+
+/* ================= ④ 報表 · 訂單明細 ================= */
+function renderReport(){
+  document.getElementById("scr-report").innerHTML =
+    head("餐飲日報 · 訂單明細", "2026-09-11（週五）· 全部支付方式 · 按結賬時間倒序",
+         '<button class="btn-ghost" type="button">匯出</button>') +
+    migBar() +
+    '<div class="tablecard">' + detailTable(DETAIL_ROWS) + '</div>' +
+    '<div class="tnote"><b>與交班明細共用同一元件</b>（<code>OrderDetailList</code>）→ 表頭、欄序、金額格式、合計列三處完全一致。</div>';
+}
+
+/* ================= ⑤ 交班 · 訂單明細 ================= */
+function renderShift(){
+  var tRecv = DETAIL_ROWS.reduce(function(s, r){ return s + r.receivable; }, 0);
+  var tSave = DETAIL_ROWS.reduce(function(s, r){ return s + avgSaving(r); }, 0);
+  var tPaid = DETAIL_ROWS.reduce(function(s, r){ return s + r.paid; }, 0);
+  document.getElementById("scr-shift").innerHTML =
+    head("交班 · 陳小明", "2026-09-11 08:00 – 14:00 · 今日已結帳 6 張", '<button class="btn-ghost" type="button">列印交班單</button>') +
+    '<div style="flex:0 0 auto;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">' +
+      '<div class="sum"><div class="dim">應收</div><div class="sumv">' + fm(tRecv) + '</div></div>' +
+      '<div class="sum"><div class="dim">優惠金額</div><div class="sumv" style="color:#92400e">− ' + fm(tSave) + '</div></div>' +
+      '<div class="sum"><div class="dim">實收</div><div class="sumv" style="color:#047857">' + fm(tPaid) + '</div></div>' +
+      '<div class="sum"><div class="dim">訂單數</div><div class="sumv">' + DETAIL_ROWS.length + '</div></div>' +
+    '</div>' +
+    migBar() +
+    '<div class="tablecard">' + detailTable(DETAIL_ROWS) + '</div>';
+}
+
+/* ================= ⑥ 訂單紀錄（查看內） ================= */
+function renderDetail(){
+  var adj = [
+    { kind:"折扣 · 全單 9 折", note:"員工優惠", who:"陳小明 · 12:04", amt:"− MOP 17" },
+    { kind:"折扣 · 單品 85 折", note:"員工優惠", who:"陳小明 · 12:04", amt:"− MOP 14" },
+    { kind:"抹零", note:"系統抹零", who:"系統自動 · 12:04", amt:"− MOP 1" }
+  ];
+  var adjHtml = adj.map(function(a, i){
+    return '<div class="kvrow' + (i === 0 ? " first" : "") + '">' +
+      '<span class="nchip discount">' + esc(a.kind) + '</span>' +
+      '<span>' + esc(a.note) + '</span>' +
+      '<span class="dim">' + esc(a.who) + '</span>' +
+      '<span class="amt">' + esc(a.amt) + '</span></div>';
+  }).join("");
+
+  document.getElementById("scr-detail").innerHTML =
+    head("訂單紀錄 · 訂單31", "堂食 · 餐台 A3 · 3 位 · 已結帳 2026-09-11 12:04",
+         '<button class="btn-ghost" type="button">返回列表</button>') +
+    '<div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 470px;gap:12px">' +
+      '<section class="card"><div class="cardhead"><div>' +
+        '<div class="cardtitle">菜品明細</div><div class="cardsub">單品折扣顯示原價（刪除線）＋ 折後價 ＋ 該件嘅折扣原因。</div>' +
+      '</div><span class="count">4 項</span></div><div class="cbody">' +
+        '<div class="dishline first"><div>' +
+          '<div class="dishname">葡式焗豬扒飯 <span class="dim">×1</span></div>' +
+          '<div class="ncell" style="margin-top:4px"><span class="nchip discount">員工優惠 · 85 折</span><span class="dim">優惠 MOP 14</span></div>' +
+        '</div><div><div class="dishprice">MOP 82</div><div class="dishorig">原 MOP 96</div></div></div>' +
+        '<div class="dishline"><div>' +
+          '<div class="dishname">凍檸茶 <span class="dim">×2</span></div>' +
+          '<div class="dim" style="margin-top:2px">備註：少冰</div>' +
+        '</div><div><div class="dishprice">MOP 56</div></div></div>' +
+        '<div class="dishline"><div>' +
+          '<div class="dishname">非洲雞 <span class="dim">×1</span></div>' +
+        '</div><div><div class="dishprice">MOP 128</div></div></div>' +
+        '<div class="dishline"><div>' +
+          '<div class="dishname">木糠布甸 <span class="dim">×1</span></div>' +
+        '</div><div><div class="dishprice">MOP 8</div></div></div>' +
+      '</div></section>' +
+
+      '<div style="display:flex;flex-direction:column;gap:10px;min-height:0;overflow-y:auto">' +
+        '<section class="card" style="flex:0 0 auto"><div class="cardhead"><div><div class="cardtitle">金額結算</div>' +
+        '<div class="cardsub">同報表 / 交班明細同口徑。</div></div></div><div style="margin-top:10px">' +
+          '<div class="rline"><span class="k">原價合計</span><span class="v">MOP 288</span></div>' +
+          '<div class="rline"><span class="k">服務費 / 稅金</span><span class="v">MOP 0</span></div>' +
+          '<div class="rline"><span class="k">全單折扣（9 折）</span><span class="v">− MOP 27</span></div>' +
+          '<div class="rline"><span class="k">單品折扣（85 折）</span><span class="v">− MOP 14</span></div>' +
+          '<div class="rline"><span class="k">系統抹零</span><span class="v">− MOP 1</span></div>' +
+          '<div class="rline" style="background:#fffbeb;border-radius:10px;padding:6px 8px"><span class="k" style="color:#92400e;font-weight:700">優惠金額</span><span class="v" style="color:#92400e;font-weight:800">− MOP 42</span></div>' +
+          '<div class="rline"><span class="k" style="color:#047857;font-weight:700">實收</span><span class="v" style="color:#047857;font-weight:800;font-size:14px">MOP 246</span></div>' +
+        '</div></section>' +
+
+        '<section class="card" style="flex:0 0 auto"><div class="cardhead"><div>' +
+        '<div class="cardtitle">價格調整來源（可追溯）</div>' +
+        '<div class="cardsub">任何影響實收嘅調整都要有備註原因。</div></div></div>' +
+        '<div style="margin-top:10px">' + adjHtml + '</div>' +
+        '<div style="border-top:1px dashed var(--slate-100);margin:8px 0"></div>' +
+        '<div class="ncell"><span class="dim">折扣備註：</span><span class="nchip discount">員工優惠</span>' +
+        '<span class="dim">免單備註：</span><span class="time">—</span></div>' +
+        '</section>' +
+      '</div>' +
+    '</div>';
+}
+
+/* ================= 頁籤 ================= */
+var SCREENS = [
+  { id:"settings", label:"① 設定 → 備註（新增折扣備註）" },
+  { id:"checkout", label:"② 結帳彈窗＋折扣備註彈窗（全單）" },
+  { id:"item",     label:"③ 單品折扣＋折扣備註彈窗" },
+  { id:"report",   label:"④ 報表 · 訂單明細" },
+  { id:"shift",    label:"⑤ 交班 · 訂單明細" },
+  { id:"detail",   label:"⑥ 訂單紀錄（查看內）" }
+];
+var RENDERERS = {
+  settings: renderSettings, checkout: renderCheckout, item: renderItem,
+  report: renderReport, shift: renderShift, detail: renderDetail
+};
+
+function show(id){
+  SCREENS.forEach(function(s){
+    var el = document.getElementById("scr-" + s.id);
+    if (el) el.className = "screenwrap" + (s.id === id ? " on" : "");
+  });
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    btns[i].classList.toggle("on", btns[i].getAttribute("data-tab") === id);
+  }
+  if (RENDERERS[id]) RENDERERS[id]();
+  fit();
+}
+
+function boot(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    var key = btns[i].getAttribute("data-tab");
+    var meta = SCREENS.filter(function(s){ return s.id === key; })[0];
+    if (meta) btns[i].textContent = meta.label;
+    btns[i].onclick = function(){ show(this.getAttribute("data-tab")); };
+  }
+  show("settings");
+  fit();
+}
+
+boot();
+</script>
+</body>
+</html>

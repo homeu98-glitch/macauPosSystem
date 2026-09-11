@@ -32,6 +32,7 @@ import {
   computeFootfallFromOrders,
 } from "@/lib/restaurant-footfall";
 import { formatMoney } from "@/lib/format";
+import { buildOnlineOrderDetailNotes, buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import { readNetworkOnline } from "@/lib/use-network-online";
@@ -417,7 +418,7 @@ function onlineFulfillmentLabel(fulfillmentType?: string): string {
   return "線上";
 }
 
-/** PosOrder → 訂單明細行（訂單號 / 餐台 / 應收 / 實收 / 收款類型 / 收銀員 / 結賬時間）。 */
+/** PosOrder → 訂單明細行（訂單號 / 折扣備註 / 餐台 / 應收 / 優惠金額 / 實收 / 收款類型 / 收銀員 / 結賬時間）。 */
 function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
   return {
     id: o.id,
@@ -428,6 +429,9 @@ function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
     method: o.paymentMethod ?? "未記錄",
     cashier: o.settledByName ?? o.settledBy ?? "未記錄",
     settledAt: o.originalSettledAt ?? o.updatedAt,
+    // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
+    // 同交班明細、訂單紀錄用同一套，確保三處完全一致。
+    notes: buildOrderDetailNotes(o),
   };
 }
 
@@ -544,6 +548,8 @@ function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: 
       method,
       cashier: "客人",
       settledAt: onlineOrder.updatedAt ?? onlineOrder.createdAt ?? "",
+      // 線上單折扣：Ledger 側只有金額冇原因文字 → 統一顯示「線上優惠」chip。
+      notes: buildOnlineOrderDetailNotes(onlineOrder.discountAmount),
     });
 
     for (const it of items) {

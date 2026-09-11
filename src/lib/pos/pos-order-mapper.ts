@@ -37,6 +37,12 @@ export interface PosOrderRow {
   comp_note?: string | null;
   /** 免單操作時間。0018 migration 新增；非免單單一律 NULL。見 docs/91。 */
   comped_at?: string | null;
+  /**
+   * 全單折扣備註（原因）。0034 migration 新增；未跑 migration 嘅環境會冇呢欄 → undefined。
+   * 有 `discount_amount > 0` 就有值；舊單（功能上線前）NULL。
+   * 單品折扣原因唔喺呢度 —— 佢逐件存喺 `items` 內（`OrderItem.discountNote`）。
+   */
+  discount_note?: string | null;
   payment_method: string | null;
   created_at: string;
   updated_at: string;
@@ -68,6 +74,8 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     // 免單備註 / 免單時間：冇欄 / NULL → undefined。見 docs/91。
     compNote: row.comp_note ?? undefined,
     compedAt: row.comped_at ?? undefined,
+    // 全單折扣備註：冇欄 / NULL → undefined。見 0034 migration。
+    discountNote: row.discount_note ?? undefined,
     paymentMethod: (row.payment_method as PosOrder["paymentMethod"]) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

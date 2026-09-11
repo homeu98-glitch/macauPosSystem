@@ -733,6 +733,17 @@ export interface PosLocalSettings {
    * 對帳口徑亦唔同（免單單會照出收據、計入營業額但實收 0）。
    */
   compNotePresets: string[];
+  /**
+   * 折扣備註：結帳套用「全單折扣」或改「單品折扣」時必選嘅原因（設置 → 備註 → 折扣備註）。
+   *
+   * 同 compNotePresets 一樣係結帳期審計欄位，但語意唔同：免單係「全額減免」，
+   * 折扣係「收少啲但照收錢」。任何影響實收價格嘅調整都要有原因先做得，
+   * 原因會顯示喺報表 / 訂單紀錄 / 交班明細（見 `OrderDetailRow.notes`，
+   * 推導邏輯集中喺 `src/lib/pos/order-notes.ts`）。
+   *
+   * 舊 localStorage 冇呢欄 → fallback 預設清單（唔會令結帳頁「全單折扣」無嘢揀）。
+   */
+  discountNotePresets: string[];
   /** 返結（反結賬）可選原因清單，設置 → 備註 可增刪 */
   reopenReasons: string[];
   fullVoidBehavior: "cancelled" | "refunded";
@@ -858,6 +869,14 @@ export interface OrderItem {
   note?: string;
   /** 單品折扣：折扣百分比（0-100）。80 = 收 80 元 / 原價 100；undefined = 冇折扣。 */
   discountRate?: number;
+  /**
+   * 單品折扣備註（店員喺結帳頁改動該件折扣時必選嘅原因）。
+   *
+   * 逐件存（同 discountRate 同層），因為「邊件菜減價、為咩減」係兩件獨立嘅事：
+   * 一張單可以同時有「員工優惠 85 折」嘅豬扒飯同「補償客人」嘅凍檸茶。
+   * 菜單自帶折扣（MenuItem.discountRate 自動帶落嚟）冇經人手 → 唔強制填原因。
+   */
+  discountNote?: string;
   /** 已退菜標記（訂單明細保留記錄用，不計費、不可再操作） */
   voided?: boolean;
   /** 退菜時間（ISO） */
@@ -925,6 +944,14 @@ export interface PosOrder {
   compNote?: string;
   /** 免單操作時間（ISO） */
   compedAt?: string;
+  /**
+   * 全單折扣備註（結帳頁揀「全單折扣」後必選嘅原因，來自設置 → 備註 → 折扣備註，可自由輸入）。
+   *
+   * 同 compNote 一樣係**結帳期審計欄位**（唔可以塞落 orderNote —— 後者受 docs/84 鎖定）。
+   * 有 `discountAmount > 0` 就一定有值（結帳頁彈窗係硬閘）；舊單（功能上線前）冇 → undefined。
+   * 顯示：報表 / 交班明細「折扣備註」欄、訂單紀錄「價格調整來源」。
+   */
+  discountNote?: string;
   cancelledAt?: string;
   cancelledReason?: string;
   refundedAt?: string;

@@ -139,6 +139,8 @@ export function DeviceSettings() {
   const [deletedTableIds, setDeletedTableIds] = useState<Set<string>>(() => new Set());
   const [newCancelNotePreset, setNewCancelNotePreset] = useState("");
   const [newCompNotePreset, setNewCompNotePreset] = useState("");
+  /** 設定 → 備註 → 折扣備註（2026-09-11）：結帳套折扣時必選原因嘅清單。 */
+  const [newDiscountNotePreset, setNewDiscountNotePreset] = useState("");
   const [newReopenReason, setNewReopenReason] = useState("");
   const [newDiscountLabel, setNewDiscountLabel] = useState("");
   const [newDiscountRate, setNewDiscountRate] = useState("");
@@ -573,6 +575,7 @@ export function DeviceSettings() {
       notePresets: _notePresets,
       cancelNotePresets: _cancelNotePresets,
       compNotePresets: _compNotePresets,
+      discountNotePresets: _discountNotePresets,
       ...localRest
     } = localSettings;
     const serverSettings = { ...localRest, floors: stripReopenTempTables(localSettings.floors) };
@@ -639,6 +642,7 @@ export function DeviceSettings() {
                   notePresets: localSettings.notePresets,
                   cancelNotePresets: localSettings.cancelNotePresets,
                   compNotePresets: localSettings.compNotePresets,
+                  discountNotePresets: localSettings.discountNotePresets,
                 },
               }),
             });
@@ -681,8 +685,15 @@ export function DeviceSettings() {
         const payload = (await res.json()) as {
           ok?: boolean;
           found?: boolean;
-          presets?: { notePresets?: string[]; cancelNotePresets?: string[]; compNotePresets?: string[] } | null;
+          presets?: {
+            notePresets?: string[];
+            cancelNotePresets?: string[];
+            compNotePresets?: string[];
+            discountNotePresets?: string[];
+          } | null;
           updatedAt?: string | null;
+          /** 0034 未跑 → false，表示 server 未有折扣備註欄（唔可以用空陣列覆蓋本機）。 */
+          discountNoteSynced?: boolean;
         };
         if (cancelled || !payload.ok || !payload.found || !payload.presets) return;
         const serverTs = payload.updatedAt ? Date.parse(payload.updatedAt) || 0 : 0;
@@ -695,6 +706,12 @@ export function DeviceSettings() {
             notePresets: payload.presets?.notePresets ?? current.notePresets,
             cancelNotePresets: payload.presets?.cancelNotePresets ?? current.cancelNotePresets,
             compNotePresets: payload.presets?.compNotePresets ?? current.compNotePresets,
+            // ⚠️ 折扣備註（0034）：只喺 server 真有呢條欄（discountNoteSynced !== false）時才採納。
+            // 未跑 migration 時 server 會回空陣列，照採納 = 靜靜剷走商家本機已設嘅折扣備註。
+            discountNotePresets:
+              payload.discountNoteSynced === false
+                ? current.discountNotePresets
+                : payload.presets?.discountNotePresets ?? current.discountNotePresets,
           }));
           saveNotePresetSyncMeta({ updatedAt: payload.updatedAt ?? null });
           setStatus("已從雲端載入本店備註。");
@@ -829,6 +846,7 @@ export function DeviceSettings() {
       notePresets: _notePresets,
       cancelNotePresets: _cancelNotePresets,
       compNotePresets: _compNotePresets,
+      discountNotePresets: _discountNotePresets,
       ...localRest
     } = next;
     const serverSettings = { ...localRest, floors: stripReopenTempTables(next.floors) };
@@ -1509,6 +1527,75 @@ export function DeviceSettings() {
                       <span>已退完</span>
                     </label>
                   </div>
+                </div>
+              </div>
+            </section>
+
+            {/* 折扣備註（2026-09-11）：結帳套用「全單折扣」或改「單品折扣」時必選嘅原因。
+                同免單備註分開係因為語意唔同：免單 = 全額減免（實收 0），折扣 = 收少啲但照收錢，
+                對帳口徑亦唔同（折扣金額要落報表/交班「優惠金額」欄逐筆追溯）。 */}
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
+              <div className="text-base font-semibold text-slate-900">折扣備註</div>
+              <div className="mt-1 text-sm text-slate-500">
+                結帳套用折扣時要選擇的原因（必填）。會顯示在報表、訂單紀錄及交班明細。
+              </div>
+
+              <div className="mt-4 flex-1 overflow-auto pr-1">
+                <div className="grid gap-2">
+                  {localSettings.discountNotePresets.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      暫時沒有折扣備註
+                    </div>
+                  ) : (
+                    localSettings.discountNotePresets.map((note) => (
+                      <div
+                        key={note}
+                        className="flex items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{note}</div>
+                        <button
+                          className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                          onClick={() => {
+                            const next = {
+                              ...localSettings,
+                              discountNotePresets: localSettings.discountNotePresets.filter((item) => item !== note),
+                            };
+                            setLocalSettings(next);
+                            setStatus("已更新折扣備註草稿，請先保存。");
+                          }}
+                          type="button"
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
+                    onChange={(event) => setNewDiscountNotePreset(event.target.value)}
+                    placeholder="新增折扣備註..."
+                    value={newDiscountNotePreset}
+                  />
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                    onClick={() => {
+                      const text = newDiscountNotePreset.trim();
+                      if (!text) return;
+                      const next = {
+                        ...localSettings,
+                        discountNotePresets: Array.from(new Set([...localSettings.discountNotePresets, text])),
+                      };
+                      setLocalSettings(next);
+                      setNewDiscountNotePreset("");
+                      setStatus("已新增折扣備註草稿，請先保存。");
+                    }}
+                    type="button"
+                  >
+                    加入
+                  </button>
                 </div>
               </div>
             </section>

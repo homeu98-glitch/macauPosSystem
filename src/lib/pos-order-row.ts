@@ -29,6 +29,8 @@ export type PosOrderDbRow = {
   party_size?: number | null;
   comp_note?: string | null;
   comped_at?: string | null;
+  /** 全單折扣備註（0034 migration）。未跑 migration 嘅環境會係 undefined。 */
+  discount_note?: string | null;
   payment_method: string | null;
   created_at: string;
   updated_at: string;
@@ -61,6 +63,9 @@ export function mapOrderRow(order: PosOrderDbRow) {
     // 免單審計（docs/91 · 0018 migration）。未跑 migration 嘅環境會冇呢兩欄 → undefined。
     compNote: order.comp_note ?? undefined,
     compedAt: order.comped_at ?? undefined,
+    // 全單折扣備註（0034 migration）。同 comp_note 一樣係結帳期審計欄位，
+    // 唔落 items（單品折扣原因喺 items 內逐件存）。
+    discountNote: order.discount_note ?? undefined,
     paymentMethod: order.payment_method ?? undefined,
     createdAt: order.created_at,
     updatedAt: order.updated_at,

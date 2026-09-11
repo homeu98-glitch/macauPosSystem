@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { defaultPosLocalSettings } from "@/lib/mock-data";
+import { readNotePresets, type NotePresetsReadResult } from "@/lib/note-presets-server";
 import { mapOrderRow } from "@/lib/pos-order-row";
 import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
@@ -153,16 +154,14 @@ export async function GET(request: Request) {
     : Promise.resolve({ data: null, error: null });
   // 0028 pos_note_presets（店級備註真源）：同 printTemplates 一樣，有記錄就夾落 payload，
   // client 喺「server 較新」時採納；冇 storeId / 未設定 → null，client 保留本機備註。
-  const notePresetsQuery = storeId
-    ? supabase
-        .from("pos_note_presets")
-        .select("note_presets, cancel_note_presets, comp_note_presets, updated_at")
-        .eq("store_id", storeId)
-        .maybeSingle()
-    : Promise.resolve({ data: null, error: null });
+  // 讀取集中喺 `@/lib/note-presets-server`：0034 未跑（42703）會自動降級讀舊欄位，
+  // 唔會因為「折扣備註」呢條新欄拖冧既有三個備註清單。
+  const notePresetsPromise: Promise<NotePresetsReadResult | null> = storeId
+    ? readNotePresets(supabase, storeId)
+    : Promise.resolve(null);
 
-  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: printTemplatesRow }, { data: notePresetsRow }] =
-    await Promise.all([queueQuery, printJobsQuery, deviceConfigQuery, printTemplatesQuery, notePresetsQuery]);
+  const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: printTemplatesRow }, notePresetsResult] =
+    await Promise.all([queueQuery, printJobsQuery, deviceConfigQuery, printTemplatesQuery, notePresetsPromise]);
 
   const ordersInRange = await ordersInRangePromise;
   const orders = ordersInRange.error ? [] : ordersInRange.orders;
@@ -234,21 +233,15 @@ export async function GET(request: Request) {
           updatedAt: printTemplatesRow.updated_at ?? null,
         }
       : null,
-    notePresetsServer: notePresetsRow
-      ? {
-          presets: {
-            notePresets: Array.isArray(notePresetsRow.note_presets)
-              ? notePresetsRow.note_presets.filter((v: unknown) => typeof v === "string")
-              : [],
-            cancelNotePresets: Array.isArray(notePresetsRow.cancel_note_presets)
-              ? notePresetsRow.cancel_note_presets.filter((v: unknown) => typeof v === "string")
-              : [],
-            compNotePresets: Array.isArray(notePresetsRow.comp_note_presets)
-              ? notePresetsRow.comp_note_presets.filter((v: unknown) => typeof v === "string")
-              : [],
-          },
-          updatedAt: notePresetsRow.updated_at ?? null,
-        }
-      : null,
+    notePresetsServer:
+      notePresetsResult && notePresetsResult.ok && notePresetsResult.found
+        ? {
+            presets: notePresetsResult.presets,
+            updatedAt: notePresetsResult.updatedAt,
+            // 0034 未跑 → false：client 見到就知「server 未有折扣備註欄」，
+            // 只採納舊三個槽位，唔可以用空陣列覆蓋本機折扣備註。
+            hasDiscountNoteColumn: notePresetsResult.hasDiscountColumn,
+          }
+        : null,
   });
 }

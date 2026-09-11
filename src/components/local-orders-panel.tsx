@@ -10,6 +10,7 @@ import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
+import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import {
   dateFilterLabel,
   LedgerOrderDateFilter,
@@ -271,6 +272,11 @@ export function LocalOrdersPanel({
   );
 
   const viewingOrder = viewingOrderId ? orders.find((row) => row.id === viewingOrderId) ?? null : null;
+  // 訂單紀錄（查看）嘅折扣備註（2026-09-11 需求 #2）：免單另有「免單備註」區塊，唔重複顯示；
+  // 其餘（全單折扣 / 單品折扣 / 系統抹零）一律列出。推導邏輯同報表 / 交班明細共用。
+  const viewingOrderDiscountNotes = viewingOrder
+    ? buildOrderDetailNotes(viewingOrder).filter((note) => note.kind !== "comp")
+    : [];
   const reopenTarget = reopenTargetOrderId ? orders.find((row) => row.id === reopenTargetOrderId) ?? null : null;
   const receiptPreviewOrder = receiptPreviewOrderId ? orders.find((row) => row.id === receiptPreviewOrderId) ?? null : null;
 
@@ -615,6 +621,12 @@ export function LocalOrdersPanel({
                         {item.discountRate}% off
                       </span>
                     ) : null}
+                    {/* 單品折扣原因（2026-09-11 需求 #2）：逐件顯示 */}
+                    {itemHasDiscount && item.discountNote ? (
+                      <span className="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                        {item.discountNote}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="font-semibold tabular-nums">×{item.quantity}</span>
                 </div>
@@ -636,6 +648,20 @@ export function LocalOrdersPanel({
               variant="compact"
               wholeOrderDiscountAmount={viewingOrder.discountAmount}
             />
+            {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
+            {viewingOrderDiscountNotes.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1">
+                <span>折扣備註：</span>
+                {viewingOrderDiscountNotes.map((note, index) => (
+                  <span
+                    key={`${note.kind}-${note.text}-${index}`}
+                    className="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800"
+                  >
+                    {note.text}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <div className="mt-2 flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
               <span>總計</span>
               <span>{formatMoney(viewingOrder.total, currency)}</span>

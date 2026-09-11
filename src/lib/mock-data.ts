@@ -503,6 +503,9 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   cancelNotePresets: ["客人取消", "售罄", "下錯單", "重開一單"],
   // 免單備註：結帳頁撳「免單」時要揀嘅原因（設置 → 備註 → 免單備註 可增刪）
   compNotePresets: ["老闆請客", "員工餐", "客人投訴補償", "試食推廣", "熟客優惠"],
+  // 折扣備註：結帳頁揀「全單折扣」或改「單品折扣」時要揀嘅原因（設置 → 備註 → 折扣備註 可增刪）。
+  // 有別於免單備註：折扣係「收少啲但照收錢」，原因要落報表 / 交班明細。
+  discountNotePresets: ["員工優惠", "會員折扣", "熟客優惠", "假日推廣", "補償客人"],
   discounts: [
     { id: "disc-90", label: "9折", rate: 90 },
     { id: "disc-85", label: "85折", rate: 85 },

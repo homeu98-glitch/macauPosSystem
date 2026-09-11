@@ -14,6 +14,7 @@ import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { NoticeFocusCard } from "@/components/notice-focus-card";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
+import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
@@ -355,6 +356,20 @@ export function PosApp() {
   const [itemDiscountEditor, setItemDiscountEditor] = useState<string | null>(null);
   // 單品折扣彈窗內暫選嘅 preset id。
   const [itemDiscountDraft, setItemDiscountDraft] = useState("");
+  // ── 折扣備註（2026-09-11）──
+  // 全單折扣嘅原因。有折扣就一定有原因（結帳頁彈窗係硬閘），落 PosOrder.discountNote。
+  const [discountNote, setDiscountNote] = useState("");
+  /**
+   * 折扣備註彈窗請求：`whole` = 剛揀完全單折扣下拉；`item` = 剛撳單品折扣彈窗嘅保存。
+   *
+   * ⚠️ 請求期間折扣**未落實** —— 撳「取消」就等於冇折過（下拉／單品都維持原值），
+   * 唔會出現「折扣已套用但冇原因」嘅中間狀態（就係需求講嘅「未選原因唔可以完成折扣」）。
+   */
+  const [discountNoteRequest, setDiscountNoteRequest] = useState<
+    { kind: "whole"; presetId: string } | { kind: "item"; itemKey: string; rate: number } | null
+  >(null);
+  // 彈窗內暫選／輸入嘅原因。
+  const [discountNoteDraft, setDiscountNoteDraft] = useState("");
   const [receivedAmount, setReceivedAmount] = useState("");
   // 系統抹零（結帳頁 input，寫 PosOrder.roundingAmount；見 docs/88 §5.1）。空 = 0。
   const [roundingInput, setRoundingInput] = useState("");
@@ -1806,6 +1821,15 @@ export function PosApp() {
     if (!viewingOrderId) return null;
     return orders.find((order) => order.id === viewingOrderId) ?? null;
   }, [orders, viewingOrderId]);
+  /**
+   * 訂單紀錄（查看）嘅折扣備註（2026-09-11 需求 #2）。
+   * 免單喺下面有自己嘅「免單備註」區塊 → 呢度唔重複；其餘（全單折扣 / 單品折扣 / 系統抹零）
+   * 一律列出，令「點解收少咗」可追溯。推導邏輯同報表 / 交班明細共用 `buildOrderDetailNotes`。
+   */
+  const viewingOrderDiscountNotes = useMemo(
+    () => (viewingOrder ? buildOrderDetailNotes(viewingOrder).filter((note) => note.kind !== "comp") : []),
+    [viewingOrder],
+  );
   const tableOrderMap = useMemo(
     () =>
       new Map(
@@ -2032,6 +2056,9 @@ export function PosApp() {
     setDiscountValue(
       matchDiscountId(localSettings.discounts, order?.total ?? 0, order?.discountAmount ?? 0),
     );
+    // 折扣備註跟住訂單還原：返結 / 重開舊單時，之前填嘅原因要跟返嚟（唔使重新揀）。
+    // 舊單（功能上線前）冇呢個值 → ""，重新結帳時會被結帳閘要求補填。
+    setDiscountNote(order?.discountNote ?? "");
     setReceivedAmount("");
     setRoundingInput("");
     setVoidedItems(order?.voidedItems ?? []);
@@ -2199,6 +2226,7 @@ export function PosApp() {
     setCartItems([]);
     setSelectedItemId("");
     setDiscountValue("0");
+    setDiscountNote("");
     setReceivedAmount("");
     setRoundingInput("");
     setPayingOrderId(null);
@@ -2434,15 +2462,87 @@ export function PosApp() {
     return true;
   }
 
-  /** 單品折扣：rate = 百分比（80 = 8 折）；undefined = 移除折扣。discountRate 唔係 itemIdentity 一部分，已下單菜品都改得。 */
-  function applyItemDiscount(itemKey: string, rate: number | undefined) {
+  /**
+   * 單品折扣：rate = 百分比（80 = 8 折）；undefined = 移除折扣。
+   * discountRate 唔係 itemIdentity 一部分，已下單菜品都改得。
+   *
+   * `note` = 折扣備註原因（2026-09-11）。移除折扣時**必須**連原因一齊清，
+   * 否則會留低一個「冇折扣但有原因」嘅孤兒備註，報表會顯示錯誤嘅折扣來源。
+   */
+  function applyItemDiscount(itemKey: string, rate: number | undefined, note?: string) {
     setCartItems((current) =>
       current.map((item) =>
         itemIdentity(item) === itemKey
-          ? { ...item, discountRate: rate == null || !Number.isFinite(rate) ? undefined : rate }
+          ? {
+              ...item,
+              discountRate: rate == null || !Number.isFinite(rate) ? undefined : rate,
+              discountNote:
+                rate == null || !Number.isFinite(rate)
+                  ? undefined
+                  : note?.trim() || item.discountNote,
+            }
           : item,
       ),
     );
+  }
+
+  /** 開「折扣備註」彈窗（未落實折扣；確認之後才真正套用）。 */
+  function requestDiscountNote(
+    request: { kind: "whole"; presetId: string } | { kind: "item"; itemKey: string; rate: number },
+    initialNote: string,
+  ) {
+    setDiscountNoteDraft(initialNote);
+    setDiscountNoteRequest(request);
+  }
+
+  /** 確認折扣備註 → 真正落實折扣（全單 / 單品）。原因必填，空白掣係 disabled，呢度再守一次。 */
+  function confirmDiscountNote() {
+    const reason = discountNoteDraft.trim();
+    if (!reason || !discountNoteRequest) return;
+    if (discountNoteRequest.kind === "whole") {
+      setDiscountValue(discountNoteRequest.presetId);
+      setDiscountNote(reason);
+    } else {
+      applyItemDiscount(discountNoteRequest.itemKey, discountNoteRequest.rate, reason);
+    }
+    setDiscountNoteRequest(null);
+    setDiscountNoteDraft("");
+  }
+
+  /** 取消折扣備註 = 當作冇折過（折扣復原，維持原值）。 */
+  function cancelDiscountNote() {
+    setDiscountNoteRequest(null);
+    setDiscountNoteDraft("");
+  }
+
+  /**
+   * 揀「全單折扣」下拉：有折扣就一定要原因 → 開彈窗（呢一刻**唔落實**折扣）。
+   * 揀「冇折扣」/ 100%（冇折扣）→ 直接清折扣同原因，唔使彈窗。
+   */
+  function selectWholeOrderDiscount(nextId: string) {
+    const preset = findDiscountPreset(localSettings.discounts, nextId);
+    if (!preset || !Number.isFinite(preset.rate) || preset.rate >= 100) {
+      setDiscountValue("");
+      setDiscountNote("");
+      return;
+    }
+    requestDiscountNote({ kind: "whole", presetId: nextId }, discountNote);
+  }
+
+  /**
+   * 單品折扣彈窗「保存」：有折扣 → 先關編輯器再彈原因彈窗（取消 = 唔改）。
+   * 揀「冇折扣」→ 直接移除（唔需要原因）。
+   */
+  function saveItemDiscount(itemKey: string, draftId: string) {
+    const preset = findDiscountPreset(localSettings.discounts, draftId);
+    const existingNote = cartItems.find((item) => itemIdentity(item) === itemKey)?.discountNote ?? "";
+    if (!preset || !Number.isFinite(preset.rate) || preset.rate >= 100) {
+      applyItemDiscount(itemKey, undefined, undefined);
+      setItemDiscountEditor(null);
+      return;
+    }
+    setItemDiscountEditor(null);
+    requestDiscountNote({ kind: "item", itemKey, rate: preset.rate }, existingNote);
   }
 
   function addMenuItem(item: MenuItem) {
@@ -3397,6 +3497,7 @@ export function PosApp() {
       setBaseOrderItems([]);
       setOrderNote("");
       setDiscountValue("0");
+      setDiscountNote("");
       setReceivedAmount("");
     setRoundingInput("");
     }
@@ -3441,8 +3542,9 @@ export function PosApp() {
       setBaseOrderItems([]);
       setOrderNote("");
       setDiscountValue("0");
+      setDiscountNote("");
       setReceivedAmount("");
-    setRoundingInput("");
+      setRoundingInput("");
     }
     setViewingOrderId(null);
     setToast({ tone: "success", message: `${targetOrder.localOrderNo} 已刪除。` });
@@ -3693,6 +3795,16 @@ export function PosApp() {
       return;
     }
 
+    // 🔒 折扣備註硬閘（2026-09-11 需求 #1）：凡有折扣金額就一定要有原因。
+    // 正常路徑由「全單折扣」下拉嘅彈窗守住（揀完折扣先彈原因）；呢度兜住**程式化設值**嘅情況 ——
+    // 例如返結舊單時 `matchDiscountId` 反配到折扣預設，但舊單冇 `discountNote`，
+    // 收銀直接撳結帳就會漏咗原因。缺原因時唔結帳，改為彈原因彈窗（原因填好再撳一次即可）。
+    if (discountAmount > 0 && !discountNote.trim()) {
+      requestDiscountNote({ kind: "whole", presetId: discountValue }, "");
+      setToast({ tone: "info", message: "此單有折扣，請先選擇折扣原因。" });
+      return;
+    }
+
     const applyPaymentToOrder = (targetOrder: PosOrder) => {
       const now = new Date().toISOString();
       // 系統抹零（docs/88 §5.1）：total = base - discount - rounding。roundingInput 空 = 0。
@@ -3721,6 +3833,10 @@ export function PosApp() {
               ? `會員券 + ${method}`
               : method,
         discountAmount,
+        // ── 折扣備註（2026-09-11）：凡 discountAmount > 0 必然有原因（結帳頁彈窗係硬閘）。
+        //    免單唔行呢條路（佢有自己嘅 compNote 審計欄），所以呢度只跟 discountAmount。
+        //    清折扣時一併清原因，避免留低「冇折扣但有原因」嘅孤兒備註污糟報表。
+        discountNote: discountAmount > 0 ? discountNote.trim() || undefined : undefined,
         // 系統抹零（docs/88 §5.1）：由結帳頁 input 寫入；total = subtotal - discount - rounding。
         roundingAmount: rounding,
         // 顧客付現金 + 找零（docs/88 §5.2）：receivedAmount 為空時當 = total（冇找零）。
@@ -3786,6 +3902,9 @@ export function PosApp() {
           servedAt: updatedOrder.servedAt ?? null,
           // 入座人數上雲（docs/89 §3）：結帳時補傳 partySize，確保報表「覆蓋人數」有數。
           partySize: updatedOrder.partySize ?? null,
+          // 全單折扣備註（0034）：結帳頁揀折扣時必填嘅原因，落 pos_orders.discount_note。
+          // 單品折扣原因唔使喺呢度帶 —— 佢藏喺 ORDER_UPDATED 嘅 items 內（逐件 OrderItem）。
+          discountNote: updatedOrder.discountNote ?? null,
         },
         status: "pending",
         createdAt: updatedOrder.updatedAt,
@@ -3799,8 +3918,8 @@ export function PosApp() {
       setActiveOrderId(null);
       setCartItems([]);
       setDiscountValue("0");
+      setDiscountNote("");
       setReceivedAmount("");
-    setRoundingInput("");
       setRoundingInput("");
       setSelectedItemId("");
       setBaseOrderItems([]);
@@ -3935,6 +4054,9 @@ export function PosApp() {
       // ── 免單審計：備註 + 時間（結帳期欄位，唔入 orderNote） ──
       compNote: reason,
       compedAt: now,
+      // 免單原因由 compNote 承載；清走之前可能套過嘅折扣備註，唔好留個對唔上嘅原因
+      // （報表「折扣備註」欄會 fallback 去 compNote，見 order-detail-list）。
+      discountNote: undefined,
       // 免單唔扣會員錢
       ledgerMemberPhone: undefined,
       memberDeductionAvos: 0,
@@ -4008,6 +4130,7 @@ export function PosApp() {
     setActiveOrderId(null);
     setCartItems([]);
     setDiscountValue("0");
+    setDiscountNote("");
     setReceivedAmount("");
     setRoundingInput("");
     setSelectedItemId("");
@@ -4110,6 +4233,8 @@ export function PosApp() {
         couponIds: [],
         prepaidAmount,
         status: updatedOrder.status,
+        // 折扣備註（0034）：線上已支付都可能套過折扣，一齊上雲。
+        discountNote: updatedOrder.discountNote ?? null,
         // 入座人數上雲（docs/89 §3）：線上支付結帳都要補傳。
         partySize: updatedOrder.partySize ?? null,
       },
@@ -5368,11 +5493,7 @@ export function PosApp() {
               </button>
               <button
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-                onClick={() => {
-                  const preset = findDiscountPreset(localSettings.discounts, itemDiscountDraft);
-                  applyItemDiscount(itemDiscountEditor, preset?.rate);
-                  setItemDiscountEditor(null);
-                }}
+                onClick={() => saveItemDiscount(itemDiscountEditor, itemDiscountDraft)}
                 type="button"
               >
                 保存
@@ -5718,6 +5839,12 @@ export function PosApp() {
                       <div className="mt-1">
                         <OrderItemDiscountLine currency={bootstrap.currency} item={item} />
                       </div>
+                      {/* 單品折扣原因（2026-09-11）：逐件顯示，令「邊件菜、點解折」一眼睇到 */}
+                      {item.discountNote ? (
+                        <div className="mt-1 whitespace-pre-wrap break-words text-xs font-semibold text-amber-700">
+                          折扣原因：{item.discountNote}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="shrink-0 text-right">
                       <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
@@ -5765,6 +5892,22 @@ export function PosApp() {
                 items={viewingOrder.items}
                 wholeOrderDiscountAmount={viewingOrder.discountAmount}
               />
+              {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
+              {viewingOrderDiscountNotes.length > 0 ? (
+                <div className="mt-2 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-slate-500">
+                  折扣備註：
+                  <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+                    {viewingOrderDiscountNotes.map((note, index) => (
+                      <span
+                        key={`${note.kind}-${note.text}-${index}`}
+                        className="inline-flex whitespace-nowrap rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800"
+                      >
+                        {note.text}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              ) : null}
               <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
                 <span>總計</span>
                 <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>
@@ -6519,6 +6662,82 @@ export function PosApp() {
             value={compNote}
           />
         </ResponsiveModal>
+      ) : null}
+
+      {/* 折扣備註彈窗（2026-09-11 需求 #1）：凡套用折扣（全單 / 單品）都必須揀原因，
+          未揀就確認唔到 → 折扣唔會落實。原因清單嚟自 設置 → 備註 → 折扣備註。
+          注意：呢個彈窗唔落實折扣，要撳「確認折扣」先真正生效（取消 = 當冇折過）。 */}
+      {discountNoteRequest ? (
+        (() => {
+          const req = discountNoteRequest;
+          const targetLabel =
+            req.kind === "whole"
+              ? `全單折扣 · ${findDiscountPreset(localSettings.discounts, req.presetId)?.label ?? ""}`
+              : `${cartItems.find((item) => itemIdentity(item) === req.itemKey)?.name ?? "單品"} · ${
+                  localSettings.discounts.find((disc) => disc.rate === req.rate)?.label ?? `${req.rate}%`
+                }`;
+          return (
+            <ResponsiveModal
+              onClose={cancelDiscountNote}
+              actions={
+                <>
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={cancelDiscountNote}
+                    type="button"
+                  >
+                    取消
+                  </button>
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!discountNoteDraft.trim()}
+                    onClick={confirmDiscountNote}
+                    type="button"
+                  >
+                    確認折扣
+                  </button>
+                </>
+              }
+              description={`${targetLabel} · 必須選擇打折原因`}
+              title="折扣備註"
+              widthClassName="max-w-md"
+              zIndexClassName="z-[70]"
+            >
+              <div>
+                <div className="text-xs font-semibold text-slate-500">折扣原因</div>
+                {localSettings.discountNotePresets.length === 0 ? (
+                  <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                    尚未設定折扣備註（可到 設置 → 備註 → 折扣備註 新增），暫時請直接自由輸入。
+                  </div>
+                ) : (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {localSettings.discountNotePresets.map((preset) => (
+                      <button
+                        key={preset}
+                        className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                          discountNoteDraft === preset
+                            ? "bg-slate-900 text-white"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        }`}
+                        onClick={() => setDiscountNoteDraft(preset)}
+                        type="button"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <input
+                  autoFocus
+                  className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+                  onChange={(event) => setDiscountNoteDraft(event.target.value)}
+                  placeholder="可自由輸入打折原因，例如：熟客介紹"
+                  value={discountNoteDraft}
+                />
+              </div>
+            </ResponsiveModal>
+          );
+        })()
       ) : null}
 
       {voidRequest ? (

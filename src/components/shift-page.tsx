@@ -45,6 +45,7 @@ import {
 import { DeviceConfig, DevicePrinterConfig, PosOrder, QueueEvent, ShiftSettlementSnapshot } from "@/lib/types";
 import { buildShiftPrintJobs } from "@/lib/print-jobs";
 import { formatMoney } from "@/lib/format";
+import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 
 function summarizeClosedOrders(orders: PosOrder[]) {
@@ -343,6 +344,9 @@ export function ShiftPage() {
           method: o.paymentMethod ?? "未記錄",
           cashier: o.settledByName ?? o.settledBy ?? "未記錄",
           settledAt: o.originalSettledAt ?? o.updatedAt,
+          // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
+          // 同報表明細、訂單紀錄用同一套，確保三處完全一致。
+          notes: buildOrderDetailNotes(o),
         }))
         .sort((a, b) => {
           const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
