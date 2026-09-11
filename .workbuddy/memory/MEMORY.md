@@ -36,4 +36,5 @@
 ## 命令
 - `npm run typecheck` / `npm run test`（`node --test` **無參數** → 會將 `**/test-*`、`**/*-test`、`*.test.*` 當測試檔；**utility 模組唔好用 `test-` 前綴**；測試 import 一律相對路徑 + `.ts`，`@/` 會 `ERR_MODULE_NOT_FOUND`）。
 - 本機 `next build` 要 `CODEBUDDY_SAFE_DELETE_ENABLED=0` 並喺沙箱外跑。
+- 🔴 **所有 `git` 指令一律 `CODEBUDDY_SAFE_DELETE_ENABLED=0 git …`**：環境嘅「安全刪除」層會將 `unlink()` 變成移入回收筒，git 跑 `gc --auto` / `pack-refs` 時就會被搬走 → `fatal: not a git repository`（已第三次：09-01、09-09、09-11）。修法見 docs/113（回收筒 `$I*` 可解出原路徑還原；**唔好 `git init` / 唔好 re-clone**，本機領先 origin 好多 commit）。
 - 環境見 AGENTS.md（Node 22.22.2-2、Next.js 16.3.0 + Turbopack + Tailwind 4）。

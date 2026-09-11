@@ -846,20 +846,19 @@ export function PrintCenter() {
       previewColumns(kind),
     );
     /**
-     * 預覽一律「全部區塊顯示」。
+     * 預覽**完全照跟**商家嘅設定，唔做任何 override。
      *
-     * 真實出紙靠 `if (!text) continue` 隱藏空值區塊（POS / companion / APK 三邊都有同一條），
-     * 但設計頁要畀商家一眼見到**完整版面**，否則佢會以為「我個模板少咗嘢」。
-     * 所以 clone 一份 `visible` 全 true 嘅快照 —— **只影響預覽**，唔會寫入 `localSettings`，
-     * 真實出紙行為一件都冇改。
+     * ⚠️ 2026-09-11 改（用戶反饋：「我熄咗門店名，但即時預覽冇變」）：
+     * 舊版喺度 clone 一份 `visible` 全 `true` 嘅快照（`divider` 除外），理由係
+     * 「設計頁要畀商家一眼見到完整版面，否則佢會以為模板少咗嘢」。但咁做令
+     * 左邊「區塊順序」嘅 checkbox 對預覽**完全冇效應** —— 商家熄完見唔到變化，
+     * 而個預覽叫「**即時**預覽（**真實**熱敏樣式）」，字面同一行為直接矛盾。
      *
-     * `divider` 例外：佢嘅「熄」係有即時可見效果嘅商家選擇（全張單唔印分格線），要尊重。
+     * 而家：`renderEscPosLines()` 內 `if (!b.visible) continue`（`escpos-render.ts:263`）
+     * 直接生效，**預覽 == 真實出紙**（同樣兩條跳過規則：`!b.visible`、`!text`）。
+     * 「唔知有咩區塊可揀」嘅問題交由左邊「區塊順序」清單解決 —— 嗰度**永遠列齊全部
+     * 區塊**（連熄咗嘅）、checkbox 一打勾即返嚟，比叫商家睇一個講大話嘅預覽好。
      */
-    const previewSnapshot: typeof snapshot = {
-      ...snapshot,
-      blocks: snapshot.blocks.map((b) => (b.id === "divider" ? b : { ...b, visible: true })),
-    };
-
     if (kind === "label") {
       const content = buildLabelContent(PREVIEW_RECEIPT_ORDER, PREVIEW_LABEL_ITEM, {
         storeName: PREVIEW_STORE_NAME,
@@ -867,7 +866,7 @@ export function PrintCenter() {
         footerText: t.footerText,
       });
       assertPreviewCoverage(kind, content);
-      return renderEscPosLines(previewSnapshot, content, []);
+      return renderEscPosLines(snapshot, content, []);
     }
     if (kind === "kitchen") {
       const content = buildKitchenContent(PREVIEW_KITCHEN_ORDER, {
@@ -887,7 +886,7 @@ export function PrintCenter() {
         note: it.note,
       }));
       assertPreviewCoverage(kind, content);
-      return renderEscPosLines(previewSnapshot, content, items);
+      return renderEscPosLines(snapshot, content, items);
     }
     if (kind === "shift") {
       // 交班模板：用同交班出紙一模一樣嘅 builder（`buildShiftContent`）餵示例快照，
@@ -899,7 +898,7 @@ export function PrintCenter() {
         sectionTitles: t.sectionTitles,
       });
       assertPreviewCoverage(kind, content);
-      return renderEscPosLines(previewSnapshot, content, []);
+      return renderEscPosLines(snapshot, content, []);
     }
     const content = buildReceiptContent(PREVIEW_RECEIPT_ORDER, {
       storeName: PREVIEW_STORE_NAME,
@@ -916,7 +915,7 @@ export function PrintCenter() {
     // 商家未填網址 → 用示例網址，等佢見到呢個區塊嘅位置同大細；
     // 真實出紙網址空白係「唔印」，所以呢個 fallback **淨用於預覽**。
     const qrUrl = t.qrUrl?.trim() ? t.qrUrl.trim() : PREVIEW_QR_URL;
-    return renderEscPosLines(previewSnapshot, content, items, {
+    return renderEscPosLines(snapshot, content, items, {
       qr: encodeQrPayload(qrUrl),
       qrSize: t.qrSize ?? "m",
     });
@@ -1226,6 +1225,11 @@ export function PrintCenter() {
             </button>
           </div>
           <div className="mt-4 text-xs font-semibold text-slate-500">區塊順序（↑ / ↓ 調整）</div>
+          {/* 2026-09-11：加一句講清楚 checkbox 嘅作用 —— 因為預覽既然「跟實際設定」，
+              商家要一眼知「打勾 = 會印、熄 = 唔會印兼預覽消失」，唔使靠估。 */}
+          <div className="mt-1 text-[11px] leading-snug text-slate-400">
+            打勾 = 會印，熄 = 唔會印（預覽亦會即刻消失）
+          </div>
           <div className="mt-2 space-y-1">
             {t.order.map((id, index) => {
               const m = meta.find((x) => x.id === id);
@@ -1311,10 +1315,10 @@ export function PrintCenter() {
               </div>
             )}
           </div>
-          <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-            預覽<b>一律顯示全部欄位</b>（包括你喺左邊熄咗嘅區塊），等你可以一次過睇到完整版面；
-            內容全部係<b>固定示例資料</b>，唔係真實訂單。實際出紙只會印有資料嘅區塊。
-          </div>
+            <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+              預覽<b>同實際出紙一致</b>：左邊冇打勾嘅區塊，呢度唔會顯示（想返嚟就打勾）。
+              內容全部係<b>固定示例資料</b>，唔係真實訂單。實際出紙亦只會印有資料嘅區塊。
+            </div>
           <div className="mt-3 grid grid-cols-3 gap-2">
             {isLabel ? (
               // 標籤實體寬度固定（62mm 標準標籤卷）→ 字型檔位鎖死，唔畀動態改。

@@ -228,3 +228,38 @@
 - `npm run test` = `node --test`（**無參數**）→ 自動探索 `**/test-*`、`**/*-test`、`**/*.test.*` 等 pattern。**任何**符合嘅 `.ts` 都會被當成測試檔執行並要求佢自己 pass。
 - 中過：新模組叫 `src/lib/print-bridge/test-print.ts` → 被當成測試檔 → `ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'`（因為原始碼用 `@/` alias，`node` 解析唔到）。
 - 對策：**utility 模組唔好用 `test-` 前綴**（已改名 `printer-test-print.ts`）；測試檔本身嘅 import 一律相對路徑 + `.ts`。
+
+## 🔴🔴 環境會將 `.git` 內部檔案移入回收筒 → `fatal: not a git repository`（2026-09-11 第三次中）
+- **症狀**：所有 `git` 指令報 `fatal: not a git repository (or any of the parent directories): .git`（連 `git status` 都唔得），但 `.git/` 明明存在、`.git/HEAD` 內容正常。
+- **實測缺失**：`.git/refs/**` 整個目錄唔見咗、`.git/objects/pack/*.pack` 全部唔見（只剩 `.idx` 同 `multi-pack-index`）、大量 loose objects 唔見。`git` 認唔到 repo 係因為 `is_git_directory()` **要求 `refs/` 同 `objects/` 都存在** —— 冇 `refs/` 就直接當你唔係 repo（唔會提示「refs 唔見」）。
+- **根因（高度可疑，已兩次以上復發）**：環境有一層「安全刪除」機制會將 **`unlink()` 改為移入回收筒**（同一徵狀：`CODEBUDDY_SAFE_DELETE_ENABLED=0` 先跑得到 `next build`；回收筒亦塞滿 `.git/index.lock`、`.git/index.stash.<pid>` —— 全部係 git 正常會即刪即棄嘅檔）。當 git 執行 **`gc --auto` / `pack-refs`**（會刪舊 pack、刪 loose ref）時，檔案被搬去回收筒而 git 以為已刪 → repo 即刻散。
+- 🔴 **對策（最重要）**：**所有 `git` 指令都要 `CODEBUDDY_SAFE_DELETE_ENABLED=0 git …`**。出事嗰次 `git stash push` **冇**設呢個變數；而同日 `next build`（有設）完全無事。
+- ✅ **修復步驟（實測可行，2026-09-11 1064 檔 0 失敗）**：
+  1. **唔好 `git init` / 唔好重新 clone**（本機領先 origin 好多個 commit，re-clone 會即刻失去）。
+  2. 確認工作區檔案完好（`ls`）—— **原始碼唔會有事**，`.git` 散咗唔等於 code 冇咗。
+  3. 去 `C:/$Recycle.Bin/<SID>/` 搵 `$R*.pack` / `$R*.rev`，同逐個 `$I*` 檔（UTF-16LE，v2 格式：offset 0=ver、8=size、16=FILETIME、24=nlen、28=路徑）解出**原始完整路徑**。
+  4. 用腳本把「原路徑前綴 = 本 repo `.git`」嘅項目複製返原位；**只複製目標唔存在嘅**、**跳過 `*.lock` / `index.stash.*`**（還原 stale lock 會令 git 之後完全用唔到）。
+  5. `git status` / `git log -1` / `git branch -a` 驗證；`git fsck --connectivity-only` 睇物件齊唔齊。
+- ⚠️ **回收筒 `find` / `ls -la` 會被 sandbox 中途 kill（SIGTERM）**：回收筒有 **59,000+** 項目，`ls -la`（逐個 stat）必定被殺。要 `ls`（唔加 `-la`）匯出去檔案先分析。
+
+## 模版設計頁「即時預覽」唔跟開關（2026-09-11 修）
+- **症狀**：商家喺 `print-center.tsx` 左邊「區塊順序」熄咗某個區塊（例如「門店名」），但右邊「**即時**預覽（**真實**熱敏樣式）」完全冇變 —— 字面同行為直接矛盾。
+- **根因**：`buildPreviewLines()` 舊版刻意 clone 一份 `visible` 全 `true` 嘅快照（只有 `divider` 例外），理由係「等商家一眼見到完整版面」，但代價係**開關對預覽零效應**（`escpos-render.ts:263` 嘅 `if (!b.visible) continue` 永遠唔會觸發）。
+- **修法**：刪走 override，直接用 `buildSnapshot()` 出嚟嘅快照 → 預覽 == 真實出紙（同樣兩條跳過規則：`!b.visible`、`!text`）。「唔知有咩區塊可揀」交由左邊清單解決（**永遠列齊全部區塊**，打勾即返嚟），並喺清單加一句「打勾 = 會印，熄 = 唔會印（預覽亦會即刻消失）」。
+- ⚠️ **注意**：收據模板有 8 個區塊**預設熄**（`checkout_time` / `server` / `service_charge_amount` / `tax_amount` / `rounding_amount` / `discount_amount` / `cash_tendered` / `change_amount`），改完之後佢哋唔會再自動出現喺預覽（要打勾先見）。廚房 / 標籤 / 交班模板全部預設開，無影響。
+
+### 附：`.git` 損毀後嘅「重建歷史」做法（2026-09-11 實測）
+無法還原嘅物件多過幾個時，最乾淨嘅做法係**保留完好嘅舊歷史做底，再將目前工作區壓成 1 個新 commit**：
+```bash
+export CODEBUDDY_SAFE_DELETE_ENABLED=0            # 必須！否則會再中
+cp -r .git ../<repo>-git-damaged-YYYYMMDD        # 先備份整個 .git
+git branch pre-incident-YYYYMMDD <舊 tip SHA>     # 保留舊 SHA 參照
+git reset --soft <最後一個完好嘅 commit>          # HEAD 移動，index / 工作區不動
+rm .git/index                                     # ⚠️ 關鍵
+git add -A                                        # 由工作區重建 index，強制補寫所有 blob
+git commit -F -                                   # 新 tip
+git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | grep -c missing   # 要 0
+```
+- ⚠️ **`rm .git/index` 係關鍵**：`git add` 對 stat 未變嘅檔案會直接跳過 hash，**唔會**補寫已遺失嘅 blob（會留低一個引用唔存在物件嘅 index）。冇 `rm` 就要用 `git hash-object -w --path=<p> <p>` 逐個補。
+- ⚠️ **唔可以**用 `git checkout -B main <舊commit>`：佢會**用舊版本覆蓋工作區檔案**，然後你就 commit 咗舊狀態。一定要 `reset --soft`。
+- 驗證：`git log --oneline | wc -l`、`git status --porcelain` 要空、上面條 `missing` 要 **0**（0 = 可以正常 push）。

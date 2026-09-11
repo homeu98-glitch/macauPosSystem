@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>後廚屏 / 出餐台屏 · 介面原型（docs/116）</title>
+<style>
+  :root{
+    --bg:#f4f4f5; --panel:#fff; --line:#e4e4e7; --line2:#d4d4d8;
+    --text:#18181b; --muted:#71717a; --faint:#a1a1aa;
+    --amber:#b45309; --amberbg:#fef3c7;
+    --red:#b91c1c;   --redbg:#fee2e2;
+    --green:#15803d; --greenbg:#dcfce7;
+    --blue:#1d4ed8;  --bluebg:#dbeafe;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang HK","Microsoft JhengHei",sans-serif;
+    background:var(--bg); color:var(--text);
+    -webkit-font-smoothing:antialiased; padding:16px 16px 40px;
+  }
+
+  /* ── 外層工具列（唔屬產品介面） ── */
+  .tools{
+    max-width:1180px; margin:0 auto 14px; display:flex; flex-wrap:wrap;
+    align-items:center; gap:10px; padding:10px 14px;
+    background:#18181b; border-radius:12px; color:#fafafa;
+  }
+  .tools .ttl{font-size:13px;font-weight:600;letter-spacing:.02em;margin-right:auto}
+  .tools .ttl small{display:block;font-weight:400;color:#a1a1aa;font-size:11px;margin-top:2px}
+  .tabs{display:flex;gap:4px;background:#27272a;padding:4px;border-radius:10px}
+  .tabs button{
+    border:0;background:transparent;color:#a1a1aa;font:inherit;font-size:13px;font-weight:600;
+    padding:7px 16px;border-radius:7px;cursor:pointer;transition:.15s;
+  }
+  .tabs button.on{background:#fafafa;color:#18181b}
+  .tools .act{
+    border:1px solid #3f3f46;background:#27272a;color:#e4e4e7;font:inherit;font-size:12px;
+    font-weight:600;padding:7px 12px;border-radius:8px;cursor:pointer;
+  }
+  .tools .act:hover{background:#3f3f46}
+  .tools .act.danger{border-color:#7f1d1d;color:#fca5a5}
+
+  /* ── 裝置外框 ── */
+  .device{
+    max-width:1180px;margin:0 auto;background:var(--panel);border:1px solid var(--line2);
+    border-radius:20px;overflow:hidden;
+    box-shadow:0 1px 2px rgba(0,0,0,.05),0 12px 32px -12px rgba(0,0,0,.18);
+  }
+  .bar{
+    display:flex;align-items:center;gap:14px;padding:0 18px;height:58px;
+    border-bottom:1px solid var(--line);background:#fafafa;
+  }
+  .bar .brand{font-size:15px;font-weight:600}
+  .bar .brand span{color:var(--faint);font-weight:400;font-size:12px;margin-left:8px}
+  .bar .spacer{margin-left:auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;
+    padding:5px 11px;border-radius:999px;border:1px solid var(--line2);background:#fff;color:var(--muted);
+  }
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
+  .pill.off{color:var(--red);border-color:#fecaca;background:var(--redbg)}
+  .pill.off .dot{background:var(--red)}
+  select.pill{font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:5px 8px}
+
+  .offline-banner{
+    display:none;background:var(--red);color:#fff;font-size:14px;font-weight:600;
+    text-align:center;padding:9px;letter-spacing:.01em;
+  }
+  body.offline .offline-banner{display:block}
+  body.offline .chk,body.offline .bigbtn{opacity:.35;pointer-events:none}
+
+  /* ── 後廚屏 ── */
+  .grid{
+    display:grid;grid-template-columns:repeat(2,1fr);gap:14px;
+    padding:16px;background:#fbfbfa;min-height:520px;align-content:start;
+  }
+  .card{
+    border:1px solid var(--line);border-radius:var(--radius);background:#fff;
+    overflow:hidden;transition:.2s;
+  }
+  .card.fresh{animation:pop .5s ease-out}
+  @keyframes pop{from{transform:translateY(-10px) scale(.97);opacity:0}to{transform:none;opacity:1}}
+  .card.flash{animation:flash 1.1s ease-out}
+  @keyframes flash{0%,100%{box-shadow:none}30%{box-shadow:0 0 0 3px var(--bluebg)}}
+  .card.all-done{background:var(--greenbg);border-color:#86efac}
+  .card.leaving{opacity:0;transform:translateX(28px)}
+  .card.voided-card{opacity:.5}
+
+  .card header{
+    display:flex;align-items:center;gap:10px;padding:11px 14px;
+    border-bottom:1px solid var(--line);background:#fafafa;
+  }
+  .card.all-done header{background:transparent;border-color:#bbf7d0}
+  .tag{font-size:17px;font-weight:700;letter-spacing:.01em}
+  .tag em{font-style:normal;font-size:12px;font-weight:500;color:var(--muted);margin-left:7px;
+    border:1px solid var(--line2);border-radius:5px;padding:1px 6px;background:#fff}
+  .timer{
+    margin-left:auto;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;
+    padding:3px 10px;border-radius:8px;background:#f4f4f5;color:var(--muted);
+  }
+  .timer.warn{background:var(--amberbg);color:var(--amber)}
+  .timer.late{background:var(--redbg);color:var(--red);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+  .lines{padding:8px 8px 10px}
+  .line{
+    display:flex;align-items:center;gap:12px;padding:8px 8px 8px 12px;
+    border-radius:10px;min-height:60px;
+  }
+  .line.done{background:#fafafa}
+  .line.done .lname{color:var(--faint);text-decoration:line-through}
+  .line.voided .lname{color:var(--faint);text-decoration:line-through}
+  .lname{font-size:20px;font-weight:600;line-height:1.25}
+  .lname .qty{font-size:15px;color:var(--muted);font-weight:500;margin-left:4px}
+  .lmeta{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+  .chip{font-size:11px;font-weight:600;padding:2px 7px;border-radius:5px;background:#f4f4f5;color:var(--muted)}
+  .chip.note{background:var(--amberbg);color:var(--amber)}
+  .chip.prog{background:var(--bluebg);color:var(--blue)}
+  .chip.void{background:var(--redbg);color:var(--red)}
+  .chk{
+    margin-left:auto;flex:0 0 auto;width:62px;height:52px;border-radius:11px;cursor:pointer;
+    border:1.5px solid var(--line2);background:#fff;color:var(--muted);
+    font-size:24px;font-weight:700;line-height:1;transition:.12s;
+    display:flex;align-items:center;justify-content:center;touch-action:manipulation;
+  }
+  .chk:hover{border-color:var(--green);color:var(--green)}
+  .chk:active{transform:scale(.94)}
+  .chk.full{border-color:#bbf7d0;background:var(--greenbg);color:var(--green)}
+  .chk.part{border-color:#fde68a;background:var(--amberbg);color:var(--amber)}
+
+  /* ── 出餐台屏 ── */
+  .expo{display:grid;grid-template-columns:230px 1fr 250px;min-height:520px;background:#fbfbfa}
+  .queue{border-right:1px solid var(--line);padding:12px;overflow:auto;background:#fff}
+  .queue h3{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.04em;margin-bottom:9px}
+  .qitem{
+    display:flex;align-items:center;gap:8px;padding:11px 12px;border-radius:10px;
+    border:1px solid var(--line);background:#fff;margin-bottom:7px;cursor:pointer;transition:.12s;
+  }
+  .qitem:hover{border-color:var(--line2);background:#fafafa}
+  .qitem.on{border-color:var(--blue);background:var(--bluebg);box-shadow:0 0 0 1px var(--blue)}
+  .qitem .qno{font-size:16px;font-weight:700}
+  .qitem .qsub{font-size:11px;color:var(--muted);margin-top:1px}
+  .qitem .qt{margin-left:auto;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--muted)}
+  .qitem .qt.late{color:var(--red)}
+  .qitem .qt.warn{color:var(--amber)}
+
+  .review{padding:16px 20px;overflow:auto}
+  .review h2{font-size:22px;font-weight:700;margin-bottom:3px}
+  .review .sub{font-size:12px;color:var(--muted);margin-bottom:14px}
+  .rline{
+    display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;
+    border:1px solid var(--line);background:#fff;margin-bottom:8px;
+  }
+  .rline.ok{border-color:#bbf7d0;background:#f0fdf4}
+  .rline.short{border-color:#fecaca;background:var(--redbg)}
+  .rline.voided{opacity:.5}
+  .ricon{width:24px;font-size:16px;font-weight:700;text-align:center}
+  .rline.ok .ricon{color:var(--green)}
+  .rline.short .ricon{color:var(--red)}
+  .rname{font-size:17px;font-weight:600}
+  .rline.ok .rname{color:#166534}
+  .rline.voided .rname{color:var(--faint);text-decoration:line-through}
+  .rright{margin-left:auto;font-size:13px;font-weight:700}
+  .rline.ok .rright{color:var(--green)}
+  .rline.short .rright{color:var(--red)}
+  .note-box{
+    margin-top:14px;padding:11px 14px;border-radius:10px;background:var(--amberbg);
+    border:1px solid #fde68a;font-size:13px;color:var(--amber);font-weight:600;
+  }
+
+  .action{
+    border-left:1px solid var(--line);background:#fff;padding:16px;
+    display:flex;flex-direction:column;gap:12px;
+  }
+  .action .lbl{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.04em}
+  .bigno{
+    font-size:44px;font-weight:800;letter-spacing:-.02em;text-align:center;
+    padding:16px 8px;border-radius:14px;background:#f4f4f5;line-height:1.1;
+  }
+  .bigno small{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-top:6px;letter-spacing:.02em}
+  .bigbtn{
+    border:0;border-radius:14px;padding:22px 16px;font:inherit;font-size:19px;font-weight:700;
+    cursor:pointer;background:var(--green);color:#fff;transition:.14s;line-height:1.3;
+  }
+  .bigbtn:hover{filter:brightness(1.08)}
+  .bigbtn:active{transform:scale(.98)}
+  .bigbtn:disabled{background:#e4e4e7;color:var(--faint);cursor:not-allowed}
+  .bigbtn small{display:block;font-size:12px;font-weight:600;opacity:.85;margin-top:4px}
+  .ghost{
+    border:1px solid var(--line2);background:#fff;color:var(--muted);border-radius:11px;
+    padding:12px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  }
+  .ghost:hover{background:#fafafa;color:var(--text)}
+  .expo-stats{margin-top:auto;font-size:12px;color:var(--muted);line-height:1.9}
+  .expo-stats b{color:var(--text)}
+
+  /* ── 全域 toast / undo ── */
+  .toasts{position:fixed;top:18px;right:18px;display:flex;flex-direction:column;gap:8px;z-index:50}
+  .toast{
+    background:#18181b;color:#fafafa;font-size:13px;font-weight:600;padding:11px 16px;
+    border-radius:10px;box-shadow:0 8px 24px -8px rgba(0,0,0,.4);animation:slide .25s ease-out;
+    display:flex;align-items:center;gap:10px;
+  }
+  .toast .k{font-size:11px;font-weight:600;padding:2px 7px;border-radius:5px;background:#3f3f46;color:#a1a1aa}
+  @keyframes slide{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+
+  .undo{
+    position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:60;
+    background:#18181b;color:#fafafa;border-radius:12px;padding:12px 14px 12px 18px;
+    display:flex;align-items:center;gap:16px;font-size:13px;font-weight:600;
+    box-shadow:0 12px 32px -10px rgba(0,0,0,.5);animation:slide .22s ease-out;
+  }
+  .undo button{
+    border:0;background:#fafafa;color:#18181b;font:inherit;font-size:13px;font-weight:700;
+    padding:7px 14px;border-radius:8px;cursor:pointer;
+  }
+  .undo .cd{font-size:11px;color:#a1a1aa;font-weight:500}
+
+  .empty{padding:60px 20px;text-align:center;color:var(--faint);font-size:14px}
+  .empty b{display:block;font-size:16px;color:var(--muted);margin-bottom:6px}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="tools">
+  <div class="ttl">後廚屏 / 出餐台屏 · 介面原型
+    <small>docs/116 方案配套 · 撳一下就係「標記完成」，長按卡片＝整單完成</small>
+  </div>
+  <div class="tabs">
+    <button class="on" data-tab="kitchen">後廚屏</button>
+    <button data-tab="expo">出餐台屏</button>
+  </div>
+  <button class="act" id="addOrder">模擬新單</button>
+  <button class="act" id="toggleNet">模擬斷網</button>
+</div>
+
+<div class="device">
+  <div class="bar">
+    <div class="brand">澳門茶餐廳 <span id="roleLabel">後廚</span></div>
+    <div class="spacer"></div>
+    <select class="pill" id="stationFilter">
+      <option value="">工位：全部</option>
+      <option value="hot">工位：熱廚</option>
+      <option value="cold">工位：水吧</option>
+    </select>
+    <div class="pill" id="netPill"><span class="dot"></span>已連線</div>
+    <div class="pill" id="countPill">未完成 0</div>
+  </div>
+  <div class="offline-banner">網絡斷線 · 唔可以確認出餐</div>
+
+  <!-- 後廚屏 -->
+  <div id="view-kitchen">
+    <div class="grid" id="grid"></div>
+    <div class="empty hidden" id="gridEmpty"><b>全部出完</b>暫時冇未完成嘅單</div>
+  </div>
+
+  <!-- 出餐台屏 -->
+  <div id="view-expo" class="hidden">
+    <div class="expo">
+      <div class="queue">
+        <h3>待出餐</h3>
+        <div id="queueList"></div>
+      </div>
+      <div class="review" id="review"></div>
+      <div class="action" id="action"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ── 模擬資料（口徑對齊 PosOrder） ──
+  var SEQ = 0;
+  function mkOrder(no, table, tableId, source, ageSec, items){
+    SEQ++;
+    return {
+      id:"ord-"+SEQ, no:no, table:table, tableId:tableId, source:source,
+      sentAt:Date.now()-ageSec*1000, items:items, doneAt:null, undo:null
+    };
+  }
+  function it(key,name,qty,station,done,note,specs,voided){
+    return {key:key,name:name,qty:qty,station:station,done:done||0,
+            note:note||"",specs:specs||[],voided:!!voided};
+  }
+
+  var orders = [
+    mkOrder("A012","自取","counter","kiosk",134,[
+      it("i1","叉燒飯",3,"hot",1,"少飯",["大"]),
+      it("i2","凍檸茶",2,"cold",2,"",["少冰"])
+    ]),
+    mkOrder("5","枱 5","t5","pos",41,[
+      it("i3","乾炒牛河",1,"hot",0,"",["加辣"])
+    ]),
+    mkOrder("A009","自取","counter","scan",242,[
+      it("i4","揚州炒飯",2,"hot",2),
+      it("i5","例湯",1,"hot",0),
+      it("i6","凍奶茶",2,"cold",1,"少甜")
+    ]),
+    mkOrder("7","枱 7","t7","pos",88,[
+      it("i7","椒鹽鮮魷",1,"hot",0,"走青"),
+      it("i8","白飯",2,"hot",1),
+      it("i9","可樂",1,"cold",1)
+    ]),
+    mkOrder("3","枱 3","t3","kiosk",31,[
+      it("i10","星洲炒米",1,"hot",0,"",[],false)
+    ])
+  ];
+  var servedToday = 12;
+  var selectedId = orders[0].id;
+
+  var GENERIC = [
+    ["干炒牛河","hot"],["西多士","hot"],["凍咖啡","cold"],["楊枝甘露","cold"],
+    ["咖喱魚蛋","hot"],["豬扒包","hot"],["檸水","cold"],["炒麵","hot"]
+  ];
+
+  var NOW = function(){ return Date.now(); };
+
+  function ageMin(o){ return Math.floor((NOW()-o.sentAt)/60000); }
+  function ageText(o){
+    var s = Math.floor((NOW()-o.sentAt)/1000);
+    var m = Math.floor(s/60), r = s%60;
+    return (m<10?"0":"")+m+":"+(r<10?"0":"")+r;
+  }
+  function timerCls(o){ var m = ageMin(o); return m>=8?"late":(m>=3?"warn":""); }
+
+  function doneQty(o){ return o.items.reduce(function(a,i){ return a + (i.voided?0:Math.min(i.done,i.qty)); },0); }
+  function totalQty(o){ return o.items.reduce(function(a,i){ return a + (i.voided?0:i.qty); },0); }
+  function isFull(o){
+    return o.items.filter(function(i){ return !i.voided; })
+                  .every(function(i){ return i.done >= i.qty; });
+  }
+  function pending(o){ return totalQty(o) - doneQty(o); }
+
+  function activeOrders(){
+    return orders.filter(function(o){ return !o.doneAt; });
+  }
+
+  // ── toast ──
+  function toast(text, kind){
+    var el = document.createElement("div");
+    el.className = "toast";
+    el.innerHTML = (kind?'<span class="k">'+kind+'</span>':'') + "<span>"+text+"</span>";
+    document.getElementById("toasts").appendChild(el);
+    setTimeout(function(){
+      el.style.transition="opacity .3s"; el.style.opacity="0";
+      setTimeout(function(){ el.remove(); }, 320);
+    }, 2600);
+  }
+
+  // ── undo 條（2 秒） ──
+  var undoEl = null, undoTimer = null;
+  function showUndo(text, fn){
+    if(undoEl) undoEl.remove();
+    if(undoTimer) clearTimeout(undoTimer);
+    undoEl = document.createElement("div");
+    undoEl.className = "undo";
+    undoEl.innerHTML = "<span>"+text+"</span><span class='cd'>2s</span><button>撤銷</button>";
+    undoEl.querySelector("button").onclick = function(){
+      hideUndo(); fn();
+    };
+    document.body.appendChild(undoEl);
+    var n = 2;
+    undoTimer = setInterval(function(){
+      n--;
+      if(!undoEl) return;
+      undoEl.querySelector(".cd").textContent = n+"s";
+      if(n<=0) hideUndo();
+    }, 1000);
+  }
+  function hideUndo(){
+    if(undoTimer) clearInterval(undoTimer);
+    undoTimer = null;
+    if(undoEl){ undoEl.remove(); undoEl = null; }
+  }
+
+  // ── 動作 ──
+  // ⚠️ 卡片「全部完成 → 8 秒後滑走」一定要有 token 守門：
+  //    冇 token 嘅話，用戶撳「撤銷」之後嗰個舊 timeout 照樣會將張單剷走 → 靜默漏單。
+  function bumpToken(o){ o.removeToken = (o.removeToken||0) + 1; return o.removeToken; }
+  function scheduleRemove(o, delay){
+    var t = bumpToken(o);
+    setTimeout(function(){
+      if(o.removeToken !== t) return;   // 期間被人撤銷過 → 放棄
+      if(!o.doneAt) return;
+      var el = document.querySelector('[data-card="'+o.id+'"]');
+      if(el) el.classList.add("leaving");
+      setTimeout(function(){
+        if(o.removeToken !== t) return;
+        orders = orders.filter(function(x){ return x.id!==o.id; });
+        servedToday++;
+        render();
+      }, 300);
+    }, delay);
+  }
+
+  function markLine(orderId, key, delta){
+    var o = orders.find(function(x){ return x.id===orderId; });
+    if(!o) return;
+    var line = o.items.find(function(x){ return x.key===key; });
+    if(!line || line.voided) return;
+    var before = line.done;
+    line.done = Math.max(0, Math.min(line.qty, line.done + delta));
+    if(line.done === before) return;
+
+    if(delta > 0 && line.done >= line.qty){
+      toast(o.no+" · "+line.name+" 已完成", "單品");
+    }
+    if(isFull(o)){
+      if(!o.doneAt){
+        o.doneAt = NOW();
+        toast(o.no+" 全部完成，等待出餐", "整單");
+        scheduleRemove(o, 8000);
+      }
+    } else {
+      o.doneAt = null;
+      bumpToken(o);          // 未齊 → 取消任何待執行嘅移除
+    }
+    render();
+  }
+
+  function markAll(orderId){
+    var o = orders.find(function(x){ return x.id===orderId; });
+    if(!o || o.doneAt) return;
+    var snapshot = o.items.map(function(i){ return i.done; });
+    o.items.forEach(function(i){ if(!i.voided) i.done = i.qty; });
+    o.doneAt = NOW();
+    toast(o.no+" 整單標記完成", "長按");
+    scheduleRemove(o, 8000);
+    render();
+    showUndo("已標記 "+o.no+" 全部完成", function(){
+      o.items.forEach(function(i,k){ i.done = snapshot[k]; });
+      o.doneAt = null;
+      bumpToken(o);
+      render();
+    });
+  }
+
+  function confirmReady(orderId){
+    var o = orders.find(function(x){ return x.id===orderId; });
+    if(!o || !isFull(o)) return;
+    orders = orders.filter(function(x){ return x.id!==orderId; });
+    servedToday++;
+    if(selectedId === orderId){
+      selectedId = activeOrders().length ? activeOrders()[0].id : null;
+    }
+    toast(o.no+" 已出餐", "出餐台");
+    render();
+  }
+
+  function recall(orderId){
+    var o = orders.find(function(x){ return x.id===orderId; });
+    if(!o) return;
+    var snapshot = o.items.map(function(i){ return i.done; });
+    o.items.forEach(function(i){ i.done = 0; });
+    o.doneAt = null;
+    bumpToken(o);                     // 取消任何待執行嘅移除
+    toast(o.no+" 已召回後廚", "撤回");
+    render();
+    showUndo("已召回 "+o.no+"（清空完成狀態）", function(){
+      o.items.forEach(function(i,k){ i.done = snapshot[k]; });
+      if(isFull(o)){ o.doneAt = NOW(); scheduleRemove(o, 8000); }
+      render();
+    });
+  }
+
+  // ── 渲染：後廚屏 ──
+  function renderKitchen(){
+    var grid = document.getElementById("grid");
+    var filter = document.getElementById("stationFilter").value;
+    var list = activeOrders().filter(function(o){
+      if(!filter) return true;
+      return o.items.some(function(i){ return !i.voided && i.station===filter && i.done<i.qty; });
+    });
+
+    grid.innerHTML = "";
+    list.forEach(function(o){
+      var card = document.createElement("article");
+      card.className = "card" + (isFull(o)?" all-done":"") + (o.fresh?" fresh":"");
+      card.setAttribute("data-card", o.id);
+      o.fresh = false;
+
+      var shown = o.items.filter(function(i){ return !filter || i.station===filter; });
+      var full = isFull(o);
+
+      var head = document.createElement("header");
+      head.innerHTML =
+        '<div class="tag">'+(o.tableId==="counter" ? "自取 "+o.no : "枱 "+o.no) +
+        '<em>'+(o.source==="pos"?"收銀":o.source==="kiosk"?"自助":"掃碼")+'</em></div>' +
+        '<div class="timer '+timerCls(o)+'">'+ageText(o)+'</div>';
+      card.appendChild(head);
+
+      var lines = document.createElement("div");
+      lines.className = "lines";
+      shown.forEach(function(i){
+        var row = document.createElement("div");
+        row.className = "line" + (i.done>=i.qty?" done":"") + (i.voided?" voided":"");
+        var pctCls = i.done>=i.qty ? "full" : (i.done>0 ? "part" : "");
+
+        var info = document.createElement("div");
+        var meta = "";
+        if(i.specs.length) meta += '<span class="chip">'+i.specs.join(" · ")+'</span>';
+        if(i.note) meta += '<span class="chip note">'+i.note+'</span>';
+        if(i.voided) meta += '<span class="chip void">已退菜</span>';
+        else if(i.qty>1 && i.done<i.qty) meta += '<span class="chip prog">已出 '+i.done+' / '+i.qty+'</span>';
+        info.innerHTML = '<div class="lname">'+i.name+'<span class="qty">x'+i.qty+'</span></div>' +
+                         (meta ? '<div class="lmeta">'+meta+'</div>' : "");
+        row.appendChild(info);
+
+        var btn = document.createElement("button");
+        btn.className = "chk "+pctCls;
+        btn.textContent = "✓";
+        btn.title = i.done>0 ? "撳一下 +1；右鍵 / 長按 = 撤銷" : "撳一下標記完成";
+        btn.onclick = function(ev){
+          ev.stopPropagation();
+          if(i.done >= i.qty){
+            markLine(o.id, i.key, -1);
+            return;
+          }
+          markLine(o.id, i.key, 1);
+          showUndo("已標記「"+i.name+"」完成", function(){ markLine(o.id, i.key, -1); });
+        };
+        btn.oncontextmenu = function(ev){
+          ev.preventDefault(); ev.stopPropagation(); markLine(o.id, i.key, -1);
+        };
+        // 長按 = 撤銷
+        var lp = null;
+        btn.addEventListener("touchstart", function(){ lp = setTimeout(function(){ markLine(o.id,i.key,-1); lp=null; }, 550); });
+        btn.addEventListener("touchend", function(){ if(lp){clearTimeout(lp);lp=null;} });
+        row.appendChild(btn);
+        lines.appendChild(row);
+      });
+      card.appendChild(lines);
+      grid.appendChild(card);
+    });
+
+    document.getElementById("gridEmpty").classList.toggle("hidden", list.length>0);
+
+    // 長按卡片 = 整單完成
+    Array.prototype.forEach.call(grid.querySelectorAll(".card"), function(card){
+      var timer = null;
+      card.addEventListener("mousedown", function(){
+        timer = setTimeout(function(){ markAll(card.getAttribute("data-card")); timer=null; }, 650);
+      });
+      card.addEventListener("mouseup", function(){ if(timer){clearTimeout(timer);timer=null;} });
+      card.addEventListener("mouseleave", function(){ if(timer){clearTimeout(timer);timer=null;} });
+    });
+  }
+
+  // ── 渲染：出餐台屏 ──
+  function renderExpo(){
+    var act = activeOrders();
+    if(!act.some(function(o){ return o.id===selectedId; })) selectedId = act.length ? act[0].id : null;
+
+    var ql = document.getElementById("queueList");
+    ql.innerHTML = "";
+    if(!act.length){
+      ql.innerHTML = '<div class="empty" style="padding:30px 8px;font-size:13px">暫無待出餐</div>';
+    }
+    act.slice().sort(function(a,b){ return a.sentAt-b.sentAt; }).forEach(function(o){
+      var el = document.createElement("div");
+      el.className = "qitem" + (o.id===selectedId ? " on" : "");
+      el.innerHTML =
+        '<div><div class="qno">'+(o.tableId==="counter" ? "自取 "+o.no : "枱 "+o.no)+'</div>'+
+        '<div class="qsub">'+(isFull(o) ? "全部齊 · 可出餐" : "仲欠 "+pending(o)+" 項")+'</div></div>'+
+        '<div class="qt '+timerCls(o)+'">'+ageText(o)+'</div>';
+      el.onclick = function(){ selectedId = o.id; render(); };
+      ql.appendChild(el);
+    });
+
+    var rev = document.getElementById("review");
+    var actBox = document.getElementById("action");
+    var o = orders.find(function(x){ return x.id===selectedId; }) || null;
+
+    if(!o){
+      rev.innerHTML = '<div class="empty"><b>冇待出餐嘅單</b>所有單都出完啦</div>';
+      actBox.innerHTML = '<div class="expo-stats">今日已出餐 <b>'+servedToday+'</b> 單</div>';
+      return;
+    }
+
+    rev.innerHTML =
+      '<h2>'+(o.tableId==="counter" ? "自取 "+o.no : "枱 "+o.no)+'</h2>' +
+      '<div class="sub">'+(o.source==="pos"?"收銀台落單":o.source==="kiosk"?"自助點餐機":"客人掃碼")+
+      ' · 落單 '+ageText(o)+' · 共 '+totalQty(o)+' 件</div>';
+
+    o.items.forEach(function(i){
+      var full = i.done >= i.qty;
+      var row = document.createElement("div");
+      row.className = "rline " + (i.voided?"voided":(full?"ok":"short"));
+      var right = i.voided ? "已退菜" : (full ? "完成" : "仲欠 "+(i.qty-i.done));
+      row.innerHTML =
+        '<div class="ricon">'+(i.voided?"—":full?"✓":"!")+'</div>' +
+        '<div><div class="rname">'+i.name+' <span style="font-size:13px;color:#71717a">x'+i.qty+'</span></div>' +
+        ((i.specs.length||i.note) ? '<div class="lmeta">'+
+          (i.specs.length?'<span class="chip">'+i.specs.join(" · ")+'</span>':'')+
+          (i.note?'<span class="chip note">'+i.note+'</span>':'')+'</div>' : "") +
+        '</div>' +
+        '<div class="rright">'+right+'</div>';
+      rev.appendChild(row);
+    });
+
+    if(o.items.some(function(i){ return i.note; })){
+      var notes = o.items.filter(function(i){ return i.note; })
+        .map(function(i){ return i.name+"："+i.note; }).join("　·　");
+      var nb = document.createElement("div");
+      nb.className = "note-box";
+      nb.textContent = "備註：" + notes;
+      rev.appendChild(nb);
+    }
+
+    var full = isFull(o);
+    actBox.innerHTML =
+      '<div class="lbl">出餐確認</div>' +
+      '<div class="bigno">'+(o.tableId==="counter" ? o.no : "枱 "+o.no)+
+      '<small>'+(full ? "全部齊，可以出餐" : "仲欠 "+pending(o)+" 項")+'</small></div>' +
+      '<button class="bigbtn" id="btnReady" '+(full?"":"disabled")+'>'+
+        (full ? "確認出餐" : "仲欠 "+pending(o)+" 項")+
+        '<small>'+(full ? "寫入 servedAt · 通知叫號" : "後廚未標記完成")+'</small></button>' +
+      '<button class="ghost" id="btnRecall">↺ 召回後廚</button>' +
+      '<div class="expo-stats">今日已出餐 <b>'+servedToday+'</b> 單<br>屏上待出餐 <b>'+act.length+'</b> 單</div>';
+
+    var br = document.getElementById("btnReady");
+    if(br) br.onclick = function(){ confirmReady(o.id); };
+    var rc = document.getElementById("btnRecall");
+    if(rc) rc.onclick = function(){ recall(o.id); };
+  }
+
+  function render(){
+    var kitchen = !document.getElementById("view-kitchen").classList.contains("hidden");
+    var role = kitchen ? "後廚" : "出餐台";
+    document.getElementById("roleLabel").textContent = role;
+    document.getElementById("stationFilter").classList.toggle("hidden", !kitchen);
+
+    var n = 0;
+    activeOrders().forEach(function(o){ n += pending(o); });
+    document.getElementById("countPill").textContent = "未完成 " + n;
+
+    if(kitchen) renderKitchen(); else renderExpo();
+    document.getElementById("view-expo").classList.toggle("hidden", kitchen);
+  }
+
+  // ── 事件 ──
+  Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function(b){
+    b.onclick = function(){
+      Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      var t = b.getAttribute("data-tab");
+      document.getElementById("view-kitchen").classList.toggle("hidden", t!=="kitchen");
+      render();
+    };
+  });
+
+  document.getElementById("stationFilter").onchange = render;
+
+  document.getElementById("addOrder").onclick = function(){
+    var g = GENERIC[Math.floor(Math.random()*GENERIC.length)];
+    var n = 20 + Math.floor(Math.random()*40);
+    var isCounter = Math.random() > 0.45;
+    var count = 1 + Math.floor(Math.random()*3);
+    var items = [];
+    for(var i=0;i<count;i++){
+      var g2 = GENERIC[Math.floor(Math.random()*GENERIC.length)];
+      items.push(it("n"+Math.random().toString(36).slice(2,8), g2[0], 1+Math.floor(Math.random()*2), g2[1], 0, Math.random()>0.7?"少甜":""));
+    }
+    var o = mkOrder(String(n), isCounter?"自取":String(1+Math.floor(Math.random()*12)),
+                    isCounter?"counter":"t"+n, Math.random()>0.5?"kiosk":"scan", 0, items);
+    o.fresh = true;
+    orders.push(o);
+    toast((isCounter ? "自取 "+o.no : "枱 "+o.no)+" 新單（"+count+" 項）", "新單");
+    render();
+  };
+
+  document.getElementById("toggleNet").onclick = function(){
+    var off = document.body.classList.toggle("offline");
+    var pill = document.getElementById("netPill");
+    pill.className = "pill" + (off ? " off" : "");
+    pill.innerHTML = '<span class="dot"></span>' + (off ? "已斷線" : "已連線");
+    this.textContent = off ? "恢復連線" : "模擬斷網";
+    this.className = "act" + (off ? "" : "");
+    if(off) toast("網絡斷線 · 確認出餐已停用", "警示");
+  };
+
+  setInterval(function(){
+    var kitchen = !document.getElementById("view-kitchen").classList.contains("hidden");
+    if(kitchen) renderKitchen();
+    else renderExpo();
+    var n = 0;
+    activeOrders().forEach(function(o){ n += pending(o); });
+    document.getElementById("countPill").textContent = "未完成 " + n;
+  }, 1000);
+
+  render();
+})();
+</script>
+</body>
+</html>
