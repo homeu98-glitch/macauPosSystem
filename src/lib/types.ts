@@ -805,6 +805,20 @@ export type PrintContentKind =
   | "kitchen"
   /** 飲品標籤單（label 機）：收銀落單／加單 */
   | "label"
+  /**
+   * **線上訂單（Ledger／會員通）專屬閘門**：接單時出嘅廚房單／標籤單。
+   *
+   * 2026-09-11 新增。與 `kitchen` / `label` 係**乘積**關係：
+   * 線上單出廚房單需要 `kitchen`（或 `label`）**同** `online` 同時為 true。
+   *
+   * 用途：Sunmi 系統本身會印線上訂單，部分店鋪唔想廚房再印一次（重複出紙）
+   * → 熄呢個掣即可，唔使連累本地堂食／掃碼單嘅廚房單。
+   *
+   * **只**影響自動流程嘅「線上單接單」一刻（`bridgeLedgerOrderToPos` /
+   * `printKitchenForLedgerOrder`）；唔影響線上單取消嘅退菜單（跟 `void`）、
+   * 亦唔影響任何手動重打。
+   */
+  | "online"
   /** 結帳收據（receipt 機）：收銀結帳、免單、線上單完成+已付、到店付款 */
   | "receipt"
   /** 退菜／退桌單：收銀退菜、退桌、線上單取消（廚房 + 標籤機） */
@@ -819,6 +833,8 @@ export type PrintContentKind =
 export interface PrintContentToggles {
   kitchen: boolean;
   label: boolean;
+  /** 線上訂單（Ledger／會員通）接單時出廚房單／標籤單（2026-09-11 新增，預設 true）。 */
+  online: boolean;
   receipt: boolean;
   void: boolean;
   reopen: boolean;

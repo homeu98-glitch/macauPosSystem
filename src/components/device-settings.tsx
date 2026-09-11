@@ -3841,11 +3841,18 @@ export function DeviceSettings() {
 // 範圍：
 //   廚房單        — 收銀落單／加單 + 線上單接單（bridge → pos）+ 自助單補建
 //   飲品標籤單    — 收銀落單／加單 + 線上單接單（label role 機）
+//   線上訂單      — **只**管線上（Ledger／會員通）訂單接單時出嘅廚房單／標籤單
+//                   （2026-09-11 新增；Sunmi 系統本身已印線上單，可熄咗避免重複出紙）
 //   結帳收據      — 收銀結帳 + 免單 + 線上單完成+已付 + 到店付款
 //   退菜單        — 收銀退菜／退桌 + 線上單取消
 //   返結單        — 已結單退回可編輯
 //   自助機小票    — 自助點餐機（kiosk）落單即時印
 //   交班單        — closeShift
+//
+// ⚠️「線上訂單」唔會連累本地單：佢係 `ledger-pos-bridge.ts` 嘅
+// `buildPrintJobsForItems()` 專屬閘門，同「廚房單／飲品標籤單」係乘積關係。
+// 亦**刻意唔**納入結帳區「自動打印」掣（`setAutoPrint`）嘅一鍵開關範圍 ——
+// 一鍵全關會靜默連累線上單，正正係 docs/113 記錄過嘅坑。
 //
 // 真源：`PosLocalSettings.printContentToggles`，per-terminal，唔跨店（見 types.ts）。
 // 立即寫 `setLocalSettings + savePosLocalSettings`（同常用備註一致），唔等設備頁
@@ -3866,6 +3873,12 @@ const PRINT_CONTENT_TOGGLE_ROWS: ReadonlyArray<PrintContentToggleRow> = [
     key: "label",
     label: "飲品標籤單",
     description: "收銀落單／加單、線上單接單。對應標籤打印機（label role，62mm 標籤卷）。",
+  },
+  {
+    key: "online",
+    label: "線上訂單",
+    description:
+      "線上（Ledger／會員通）訂單接單時，喺廚房出單。若 Sunmi 系統本身已經會印線上單，可熄呢個掣避免重複出紙。唔影響本地堂食／掃碼單。",
   },
   {
     key: "receipt",

@@ -236,9 +236,16 @@ export function OnlineOrders({
       if (hasJob) return;
       autoBridgeRef.current.add(ledgerId);
       try {
-        await printKitchenForLedgerOrder(order);
-        // 成功產生 PrintJob → 提示收銀（非靜默）
-        setToast({ tone: "success", message: `已補印廚房單：${orderCodeLabel(order)}` });
+        const jobs = await printKitchenForLedgerOrder(order);
+        // ⚠️ 只喺**真係**產生咗 PrintJob 先提示。以下情況 `jobs.length === 0`：
+        //   - 「線上訂單」開關熄咗（2026-09-11 新增，店主刻意唔想廚房重複出紙）；
+        //   - 「廚房單」+「飲品標籤單」兩個都熄咗；
+        //   - 菜品全部對唔到本地餐牌 / 訂單冇項目。
+        // 若照彈「已補印廚房單」，店主會以為印咗，但廚房其實收唔到單 = **假成功**
+        // （同 `runAcceptAndBridge` 唔可以假裝成功係同一個原則）。
+        if (jobs.length > 0) {
+          setToast({ tone: "success", message: `已補印廚房單：${orderCodeLabel(order)}` });
+        }
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
           console.warn(`[online-orders] 補印廚房單失敗 ${ledgerId}:`, err instanceof Error ? err.message : err);
@@ -450,14 +457,16 @@ export function OnlineOrders({
           return false;
         }
 
+        let kitchenJobCount = 0;
         try {
           const detail = await getOrderDetail(order.id);
-          await bridgeLedgerOrderToPos({
+          const bridged = await bridgeLedgerOrderToPos({
             ledgerOrder: order,
             tableId: options?.tableId,
             tableName: options?.tableName,
             detail,
           });
+          kitchenJobCount = bridged.printJobs.length;
         } catch (bridgeErr) {
           // 唔再假裝成功：舊寫法 return true → auto-accept effect 彈「已自動接單」success toast，
           // 但廚房單其實已丟。改為 return false + error toast，令問題可見且唔誤導。
@@ -483,7 +492,16 @@ export function OnlineOrders({
           mergeLedgerOrders(ordersRef.current, [{ ...order, status: "accepted", updatedAt: new Date().toISOString() }]),
         );
         if (!options?.silent) {
-          setToast({ tone: "success", message: options?.tableId ? `已接單並安排到 ${options.tableName}。` : "已接單並已送廚。" });
+          setToast({
+            tone: "success",
+            message: options?.tableId
+              ? `已接單並安排到 ${options.tableName}。`
+              : kitchenJobCount > 0
+                ? "已接單並已送廚。"
+                : // 冇出廚房單係店主設定（「線上訂單」/「廚房單」開關熄咗）或菜品對唔到餐牌。
+                  // 唔可以照講「已送廚」——廚房收唔到單，講咗就係假成功。
+                  "已接單（按打印設定未出廚房單）。",
+          });
         }
         return true;
       } finally {

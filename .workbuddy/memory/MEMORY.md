@@ -21,6 +21,8 @@
 - **iPad 分頁唔會自動換 JS** → 「修好但仲唔同步」第一步叫用戶**強制 reload**。
 - **admin 面板唔可以行 `/api/pos/state`**（要終端憑證）；單店都要 `adminOrderFetcher({ storeId })` 走 `/api/admin/orders`。
 - **分格線唔可以靠「繼承上一行」**：印線前必須清 `GS !`/`ESC !`/`FS !` 殘留，dash = `dividerDashCount(size, cols)`；`divider` 預設 `s`。（docs/114）
+- **🔴 建單後必須 `appendPrintJobsWithSync()`**（`@/lib/pos/print-job-enqueue`）：出紙真通道係「雲端 `pos_print_jobs` → 中繼 APK claim」，而 `RelayTransport.send()` 係 **no-op**。淨 `savePrintJobs()`／`appendPrintJobs()` = job 永留本機、樂觀標「已發送」、**零出紙 + 零紅標**（09-09 補打、09-11 Ledger 線上單接單都中過）。`ledger-pos-bridge` **唔可以**直接 import `print-jobs`（循環）→ 走 `print-job-enqueue`。只有 Kiosk 小票刻意本機。
+- **`printContentToggles` 加欄要同步 5 處**（`types.ts` Kind+Toggles / `storage.ts` 白名單 / `mock-data.ts` / `device-settings.tsx` ROWS / 註釋）。`online`（線上訂單）＝同 `kitchen`/`label` **乘積**；**唔可以**納入 `setAutoPrint()` 一鍵全關；熄咗要**靜默** `return []`，唔可以彈 toast。
 - **🔴「reload 先見到」＝ Realtime 冇推送**：server 寫單用 `SUPABASE_URL`（POS 專案），瀏覽器訂閱用 `NEXT_PUBLIC_SUPABASE_URL`（**Ledger 專案，冇 `pos_*` 表**）→ 訂唔存在嘅表 Supabase **唔會報錯**（照 `SUBSCRIBED`）。修：加 `NEXT_PUBLIC_POS_SUPABASE_URL`/`_ANON_KEY`（**必須 redeploy**）。健康只可靠一次性 REST 探測 `pos_orders`（`PGRST205`）；**唔可以**靠 channel status；錯 key（401）**唔可以**報成「表存在但被拒」（未認證根本冇查表，先 `bad_key` 後 `unauthorized`）。自檢 `tools/2026-09-11-check-pos-realtime.mjs --watch 20`。
 - **持續型提示唔可以照抄 `setToast`**；要 store-scope localStorage + 只喺 realtime `onOrderUpsert` 由 `isNewSelfOrder` 觸發（**唔可以寫死 `source==="scan"`**）；位置 `top-20`。**撳提示一律留在點餐頁面**（`tableId==="counter"` → 高亮卡片，唔跳頁）；`focusKey` 必須用**遞增序號**（`Object.is` → boolean 連撳兩次唔重跑 effect）。
 

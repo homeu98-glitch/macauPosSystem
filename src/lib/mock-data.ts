@@ -523,6 +523,9 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   printContentToggles: {
     kitchen: true,
     label: true,
+    // 線上訂單接單時出廚房單／標籤單。預設 true：Sunmi 系統會自己印線上單，
+    // 唔想廚房重複出紙嘅店鋪可去設備設置 → 打印開關設置熄佢。
+    online: true,
     receipt: true,
     void: true,
     reopen: true,

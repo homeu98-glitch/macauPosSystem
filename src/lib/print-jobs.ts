@@ -5,23 +5,20 @@ import {
   addClearedPrintJobIds,
   loadAuthSession,
   loadBootstrapCache,
-  loadClearedPrintJobIds,
   loadDeviceConfig,
   loadKioskPrinters,
   loadOrders,
   loadPosLocalSettings,
   loadPrintJobs,
-  loadQueue,
   savePrintJobs,
-  saveQueue,
 } from "@/lib/storage";
-import { enqueueEvents } from "@/lib/pos/queue-outbox";
-import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
-import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+// 落本機 + 推上雲嘅共用實作抽離到 `@/lib/pos/print-job-enqueue`
+// （避免 print-jobs ↔ ledger-pos-bridge 循環依賴；見該檔頭註釋）。
+import { appendPrintJobsWithSync, persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
-import { DevicePrinterConfig, PosBootstrap, PosOrder, PrintJob, QueueEvent, ReceiptTemplate, ShiftSettlementSnapshot, ShiftTemplate } from "@/lib/types";
+import { DevicePrinterConfig, PosBootstrap, PosOrder, PrintJob, ReceiptTemplate, ShiftSettlementSnapshot, ShiftTemplate } from "@/lib/types";
 import {
   getBridgedPosOrder,
   resolveLedgerPosOrderForReceipt,
@@ -79,47 +76,20 @@ export function normalizePrintJobStatus(job: PrintJob): PrintJob {
   };
 }
 
-export function appendPrintJobs(jobs: PrintJob[]) {
-  if (jobs.length === 0 || typeof window === "undefined") return;
-  const existing = loadPrintJobs();
-  const cleared = loadClearedPrintJobIds();
-  const merged = mergePrintJobs(existing, [...jobs, ...existing], cleared);
-  savePrintJobs(merged);
-  window.dispatchEvent(new CustomEvent("pos-print-jobs-changed", { detail: { count: jobs.length } }));
-}
-
 /**
- * 同 `appendPrintJobs`，但**同步會將 PRINT_JOB_CREATED 事件推入 sync queue**（上雲）。
+ * 落本機：合併去重 + tombstone 過濾 + 保留本機派發狀態，並 dispatch
+ * `pos-print-jobs-changed` 令打印中心即時刷新。
  *
- * ⚠️ 呢一步唔係可選嘅：店內實際出紙通道係「雲端 `pos_print_jobs` → print-relay APK
- * claim 出紙」，而雲端嗰行只有 PRINT_JOB_CREATED 事件經 `/api/pos/sync` 先會寫。
- * `RelayTransport.send()` 本身係 no-op（只 flush sync queue，見 relay-transport.ts
- * 頂部註釋「PRINT_JOB_CREATED 事件喺建單嗰陣已經入咗 sync queue」）—— 所以任何
- * **淨行 `appendPrintJobs`** 嘅建單路徑，張 job 會永遠留喺本機 localStorage：本地
- * flush 仲會經 relay 通道樂觀標「sent」，但雲端根本冇呢張單 → APK 永遠收唔到、
- * 一張紙都唔會出（2026-09-09 補打帳單印唔出嘅根因）。
+ * ⚠️ **只寫本機、唔會上雲** —— 淨用佢嘅自動出紙路徑會靜默唔出紙（店內實際出紙
+ * 通道係「雲端 `pos_print_jobs` → 中繼 APK claim 出紙」，見
+ * `@/lib/pos/print-job-enqueue` 檔頭）。只有 Kiosk 本機小票
+ * （`printKioskReceiptForOrder`，docs/87 §3.1）等刻意本機限定嘅場景先用佢。
  *
- * 用法對齊 pos-app `enqueuePrintJobs` / shift-page `reprintShiftRecord` /
- * print-center `reprintOrder` 嘅現行模式：saveQueue(enqueueEvents(...)) +
- * withStoreScope + notifyQueueChanged（入隊即觸發 flush，唔使等 30s interval）。
- *
- * 適用：收據補打（線下/線上）、自動結帳收據等要上雲中繼嘅 job。
- * 唔適用：Kiosk 本機小票（`printKioskReceiptForOrder`，docs/87 §3.1 明言唔好上雲）。
+ * 自動出紙（落單、加單、結帳、退菜、返結、線上單接單／取消、補打）一律用
+ * `appendPrintJobsWithSync`（由 `@/lib/pos/print-job-enqueue` 匯入）。
  */
-function appendPrintJobsWithSync(jobs: PrintJob[]) {
-  if (jobs.length === 0 || typeof window === "undefined") return;
-  appendPrintJobs(jobs);
-  const timestamp = new Date().toISOString();
-  const events = jobs.map<QueueEvent>((job) => ({
-    id: uid("evt"),
-    type: "PRINT_JOB_CREATED",
-    entityId: job.id,
-    payload: job,
-    status: "pending",
-    createdAt: timestamp,
-  }));
-  saveQueue(enqueueEvents(loadQueue(), withStoreScope(events)));
-  notifyQueueChanged();
+export function appendPrintJobs(jobs: PrintJob[]) {
+  persistMergedPrintJobs(jobs);
 }
 
 // ── 收據：每台 receipt 打印機一張，附商家收據模板快照 + 靜態內容 ──
@@ -535,7 +505,9 @@ export function printVoidForLedgerOrder(ledgerOrderId: string, reason = "線上�
   const order = findPosOrderForLedger(ledgerOrderId);
   if (!order || order.items.length === 0) return 0;
   const jobs = buildVoidPrintJobsForOrder(order, reason);
-  appendPrintJobs(jobs);
+  // 2026-09-11 修：原本用 `appendPrintJobs`（只寫本機）→ 退菜單永遠上唔到雲端
+  // `pos_print_jobs`，中繼 APK claim 唔到 → 靜默唔出紙（同線上單接單漏出廚房單同一根因）。
+  appendPrintJobsWithSync(jobs);
   return jobs.length;
 }
 

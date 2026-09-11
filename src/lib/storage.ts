@@ -399,6 +399,9 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     printContentToggles: {
       kitchen: readToggle(settings?.printContentToggles?.kitchen, defaultPosLocalSettings.printContentToggles.kitchen),
       label: readToggle(settings?.printContentToggles?.label, defaultPosLocalSettings.printContentToggles.label),
+      // 線上訂單（2026-09-11 新增）：⚠️ 呢度係白名單重建，加咗欄但漏咗呢行 = 舊機升級後
+      // 呢個掣嘅值會被靜默剷走（中過 qrUrl / paperSize / shiftPresets 同一款坑，見 docs/113）。
+      online: readToggle(settings?.printContentToggles?.online, defaultPosLocalSettings.printContentToggles.online),
       receipt: readToggle(settings?.printContentToggles?.receipt, defaultPosLocalSettings.printContentToggles.receipt),
       void: readToggle(settings?.printContentToggles?.void, defaultPosLocalSettings.printContentToggles.void),
       reopen: readToggle(settings?.printContentToggles?.reopen, defaultPosLocalSettings.printContentToggles.reopen),

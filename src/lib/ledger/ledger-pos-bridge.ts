@@ -7,12 +7,11 @@ import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   loadBootstrapCache,
-  loadClearedPrintJobIds,
   loadDeviceConfig,
-  loadPrintJobs,
-  savePrintJobs,
 } from "@/lib/storage";
-import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+// ⚠️ 唔可以 import `@/lib/print-jobs`（佢反過來 import 咗呢個檔 → 循環依賴）。
+// 出紙入隊邏輯走獨立嘅 `@/lib/pos/print-job-enqueue`。
+import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
 
 /**
@@ -178,6 +177,14 @@ function buildPrintJobsForItems(options: {
   tableName: string;
   items: OrderItem[];
 }): PrintJob[] {
+  // 「線上訂單」總開關（2026-09-11 新增）：呢個 builder **只**服務 Ledger 線上單
+  // （`bridgeLedgerOrderToPos` / `printKitchenForLedgerOrder`）。
+  //
+  // Sunmi 系統本身會印線上訂單，部分店鋪唔想廚房重複出紙 → 熄咗呢個掣就完全唔出
+  // 廚房單／標籤單。同「廚房 + 標籤兩個都熄」一樣：**靜默 `return []`**（店主自己
+  // 決定唔印，係預期行為，唔可以當錯誤彈 toast 嚇佢）。
+  if (!isPrintContentEnabled("online")) return [];
+
   // 細粒度開關（2026-09-08）：商家可獨立關閉「廚房單」或「飲品標籤單」。
   // 兩個都熄咗 → 直接返空（唔 throw，呢個係預期行為，唔可以當錯誤彈 toast）。
   const kitchenOn = isPrintContentEnabled("kitchen");
@@ -298,15 +305,14 @@ export async function printKitchenForLedgerOrder(
     items,
   });
 
-  if (printJobs.length > 0) {
-    const existing = loadPrintJobs();
-    const cleared = loadClearedPrintJobIds();
-    const merged = mergePrintJobs(existing, [...printJobs, ...existing], cleared);
-    savePrintJobs(merged);
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
-    }
-  }
+  // ⚠️ 必須用 `appendPrintJobsWithSync`：落本機 **＋** 推 `PRINT_JOB_CREATED` 上雲。
+  //
+  // 舊寫法只 `savePrintJobs()` + dispatch DOM event，令張 job 永遠只留喺本機
+  // localStorage：本地 flush 行 relay 分支時 `RelayTransport.send()` 係 no-op、
+  // 樂觀回 ok → 本機標「已發送」，但雲端 `pos_print_jobs` 根本冇呢行 → 中繼 APK
+  // claim 唔到 → **一張紙都唔出，而且冇任何紅色失敗提示**。
+  // （2026-09-11「線上訂單接單後冇出廚房單」的根因；同 2026-09-09 補打帳單印唔出同源。）
+  appendPrintJobsWithSync(printJobs);
 
   return printJobs;
 }
@@ -410,19 +416,11 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   // 唔 call saveOrders，唔 dispatch pos-orders-changed（POS 本機單唔含線上單）。
   bridgedOrders.set(options.ledgerOrder.id, posOrder);
 
-  if (printJobs.length > 0) {
-    // 用 mergePrintJobs 統一合併邏輯（同 pos-app.persistPrintJobs 一致），
-    // 避免 spread 合併唔做去重 / tombstone 過濾。
-    const existing = loadPrintJobs();
-    const cleared = loadClearedPrintJobIds();
-    const merged = mergePrintJobs(existing, [...printJobs, ...existing], cleared);
-    savePrintJobs(merged);
-    // 同 printKitchenForLedgerOrder 一致：dispatch event 令 PrintFlushWorker 即時 flush，
-    // 以及 Print Center UI 即時刷新（唔靠 2.5s poll 兜底）。
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
-    }
-  }
+  // 同 `printKitchenForLedgerOrder` 一致：**一定要上雲**，否則中繼 APK 永遠 claim 唔到
+  // （見該函式嘅同源註釋）。`appendPrintJobsWithSync` 內部已處理去重 / tombstone 過濾 /
+  // 保留本機 sent·failed 派發狀態，並即時 dispatch `pos-print-jobs-changed` 令
+  // Print Center UI 刷新（唔靠 2.5s poll 兜底）。
+  appendPrintJobsWithSync(printJobs);
 
   return { posOrder, printJobs };
 }

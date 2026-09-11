@@ -224,6 +224,25 @@
 - 後果：自助點餐機小票帶住 `copies: 1`（規格 8：固定 1 張），但只要嗰部機 `copies` 設咗 2，就會出兩張。
 - 已改 `const copies = Math.max(1, Math.floor(job.copies ?? printer.copies ?? 1));`（其他 job 唔帶 `copies` → 行為不變）。
 
+## 🔴🔴 建單後淨寫本機、唔推 `PRINT_JOB_CREATED` = 靜默零出紙（2026-09-11 修 · 中過兩次）
+- 店內實際出紙通道係「**雲端 `pos_print_jobs` → 中繼 APK claim 出紙**」（`print-bridge/relay-transport.ts` 檔頭）。而雲端嗰一行**只有** `PRINT_JOB_CREATED` 事件經 `/api/pos/sync` 先會寫。
+- `RelayTransport.send()` 本身係 **no-op**（只 flush sync queue）。所以任何「淨 `savePrintJobs()` / `appendPrintJobs()`」嘅建單路徑：本機 flush 樂觀標 `sent` → 打印中心綠色「**已發送**」、底部**冇**紅色「列印失敗」→ 但 APK 永遠 claim 唔到 → **一張紙都唔出**。最惡嘅係完全冇症狀。
+- 中過：2026-09-09 補打帳單（`printReceiptForPosOrder` 舊版淨 `appendPrintJobs`）；2026-09-11 **Ledger 線上單接單**（`ledger-pos-bridge.ts` 兩處淨 `savePrintJobs()`）+ 線上單取消退菜單（`printVoidForLedgerOrder`）。
+- ✅ 標準做法：`appendPrintJobsWithSync(jobs)`（`@/lib/pos/print-job-enqueue`）= 落本機 ＋ 入 `PRINT_JOB_CREATED` 隊列 ＋ `notifyQueueChanged()`。
+- ⚠️ **唔可以**由 `ledger-pos-bridge.ts` 直接 import `print-jobs.ts`：`print-jobs.ts` 反過來 import 咗佢（`getBridgedPosOrder`）→ **循環依賴**。所以呢批邏輯獨立成 `@/lib/pos/print-job-enqueue`（同當年抽 `print-toggles` 同一個理由）。
+- 只有**刻意本機限定**嘅場景先用 `appendPrintJobs`：Kiosk 顧客小票（`printKioskReceiptForOrder`，docs/87 §3.1）。
+- 旁證：`print-center.tsx` 嘅 `syncCloudPrintOutcomes()` 靠雲端狀態覆寫本地，雲端冇行 → `cloudById.get(id)` = undefined → 永遠升唔到 `printed`。所以「已發送」會**卡死**，唔會自我修正。
+- 🔎 30 秒自檢：打印中心見到 job 係**綠色「已發送」但冇紙**、底部又冇紅標 → 九成係呢條。去 Supabase `pos_print_jobs` 查個 job id 有冇行。
+
+## 「線上訂單」打印開關（2026-09-11 新增 · `printContentToggles.online`）
+- 需求：Sunmi 系統本身會印線上訂單，部分店鋪唔想廚房再印一次。
+- 語義：**訂單來源**維度，同「廚房單／飲品標籤單」（內容維度）係**乘積** —— 線上單出廚房單要 `kitchen`（或 `label`）**同** `online` 都 true。
+- 閘門位置：`ledger-pos-bridge.ts` 嘅 `buildPrintJobsForItems()` **最頂**，`return []`（靜默，唔可以 throw、唔可以彈 toast）。
+- ⚠️ 呢個 builder **只**服務 Ledger 線上單，唔影響本地堂食／掃碼單，亦唔影響線上單取消嘅退菜單（跟 `void`）、唔影響任何手動重打。
+- ⚠️ **唔可以**納入結帳區「自動打印」掣（`pos-app.tsx setAutoPrint`）嘅一鍵全關範圍 —— 一鍵全關會靜默連累線上單。
+- ⚠️ 加欄必須同步 5 處：`types.ts`（`PrintContentKind` + `PrintContentToggles`）、`storage.ts normalizePosLocalSettings` **白名單**（漏咗 = 靜默剷走）、`mock-data.ts` 預設、`device-settings.tsx` 嘅 `PRINT_CONTENT_TOGGLE_ROWS`、`print-toggles.ts` 註釋。
+- ⚠️ 「冇出廚房單」時**唔可以**照彈「已送廚／已補印廚房單」—— 咁樣就係**假成功**。要按回傳 `PrintJob[]` 長度判斷（`online-orders.tsx` / `quick-online-orders-panel.tsx` 已改）。
+
 ## `node --test` 檔名陷阱（2026-09-11 中過）
 - `npm run test` = `node --test`（**無參數**）→ 自動探索 `**/test-*`、`**/*-test`、`**/*.test.*` 等 pattern。**任何**符合嘅 `.ts` 都會被當成測試檔執行並要求佢自己 pass。
 - 中過：新模組叫 `src/lib/print-bridge/test-print.ts` → 被當成測試檔 → `ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'`（因為原始碼用 `@/` alias，`node` 解析唔到）。

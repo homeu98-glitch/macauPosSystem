@@ -318,8 +318,9 @@ export function QuickOnlineOrdersPanel({
         }
 
         const detail = await getOrderDetail(order.id);
+        let kitchenJobCount = 0;
         try {
-          await printKitchenForLedgerOrder(order, detail);
+          kitchenJobCount = (await printKitchenForLedgerOrder(order, detail)).length;
         } catch {
           if (!options?.silent) {
             onToast({ tone: "info", message: "已接單，但廚房單送出失敗，可稍後重打。" });
@@ -338,7 +339,11 @@ export function QuickOnlineOrdersPanel({
             tone: "success",
             message: options?.autoStartPreparing
               ? `已接單並開始製作：${orderCodeLabel(order)}`
-              : `已接單並已送廚：${orderCodeLabel(order)}`,
+              : kitchenJobCount > 0
+                ? `已接單並已送廚：${orderCodeLabel(order)}`
+                : // 冇出廚房單係店主設定（「線上訂單」開關熄咗，例如 Sunmi 系統已自己印）。
+                  // 唔可以照講「已送廚」——廚房收唔到單，講咗就係假成功。
+                  `已接單（按打印設定未出廚房單）：${orderCodeLabel(order)}`,
           });
         }
         return true;
