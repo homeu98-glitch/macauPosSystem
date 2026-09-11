@@ -19,7 +19,7 @@
 - **admin 面板唔可以行 `/api/pos/state`**（要終端憑證 → 選商家即 401）；單店都要 `adminOrderFetcher({ storeId })` 走 `/api/admin/orders`。
 - **分格線唔可以靠「繼承上一行」**：印線前必須清 `GS !`/`ESC !`/`FS !` 放大殘留，dash = `dividerDashCount(size, cols)`（`m`/`l` 減半）→ 永遠一行；`divider` 預設 `s`。「廚房單正常、收據唔正常」多數唔係兩個 renderer 唔同 → 睇「線前面嗰行係乜 size」。（docs/114）
 - **🔴「reload 先見到」＝ Realtime 冇推送**（唔好查 UI 合併）：server 寫單用 `SUPABASE_URL`（POS 專案），瀏覽器訂閱用 `NEXT_PUBLIC_SUPABASE_URL`（＝**Ledger 專案，冇 `pos_*` 表**）→ 訂一張唔存在嘅表 **Supabase 唔會報錯**（channel 照樣 `SUBSCRIBED`）。修法：加 `NEXT_PUBLIC_POS_SUPABASE_URL` / `_ANON_KEY`（同 POS 專案；**加完必須 redeploy**，build-time inline）；健康判斷只可以靠一次性 REST 探測 `pos_orders`（`PGRST205` = 訂錯專案），**唔可以**靠 channel status；⚠️ 錯 key（401 `Invalid API key`）**唔可以**報成「表存在但被拒」—— 未認證根本冇查表，判序要先 `bad_key` 後 `unauthorized`。自檢：`npx vercel env pull .env.local` → `node --env-file=.env.local tools/2026-09-11-check-pos-realtime.mjs --watch 20`。（docs/113）
-- **持續型提示唔可以照抄 `setToast`**（2.6s 自動清）；要 store-scope localStorage + 只喺 realtime `onOrderUpsert` 由 `isNewSelfOrder` 觸發（**唔可以寫死 `source==="scan"`**）；位置 `top-20`、容器 `pointer-events-none`。
+- **持續型提示唔可以照抄 `setToast`**（2.6s 自動清）；要 store-scope localStorage + 只喺 realtime `onOrderUpsert` 由 `isNewSelfOrder` 觸發（**唔可以寫死 `source==="scan"`**）；位置 `top-20`、容器 `pointer-events-none`。**撳提示一律留在點餐頁面**（`tableId==="counter"` → 高亮該訂單卡 `NoticeFocusCard`，**唔可以**跳 `/orders` 或開詳情 modal）；`focusKey` 必須用**遞增序號**唔可以用 boolean（`Object.is` → 連撳兩次唔重跑 effect）。
 
 ## 硬性口徑（唔可以改）
 - 收入認列 `isSaleCountable(o)`：只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`。

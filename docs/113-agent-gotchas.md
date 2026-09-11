@@ -120,9 +120,11 @@
 - ⚠️ 容器要 `pointer-events-none`（只有卡片 `pointer-events-auto`），否則一條 160px 闊嘅透明帶會靜靜哋食走右邊所有 click（訂單右欄喺 order mode 就係右邊）。只在**明確會超出視窗**（>5 個）時才轉 `pointer-events-auto` 令容器可滾動。
 - 📌 **手寫右滑（Pointer Events）四點必做**：① `touchAction: "pan-y"`（水平我哋食、垂直交返瀏覽器，否則 iPad 上鎖死頁面滾動）；② `setPointerCapture`（手指移出卡都仲收到 move/up）；③ 只 `Math.max(0, dx)`（唔准向左飛出側欄）；④ release 距離 < 門檻時要**彈返原位**，而 drag 過（>8px）之後嘅 `click` 一定要吞（否則「拖完又跳頁」）。閾值：`SWIPE_DISMISS_PX = 64`、`DRAG_SLOP_PX = 8`。
 - ⚠️ **「訂單已結帳先撳提示」唔可以跳頁**：枱已經空咗，`selectTable()` 會行去「空閒枱」分支彈**開桌窗**（收銀會以為自己想開枱）。正確做法：標 `settledAt` 令卡片轉灰底「已結帳」＋ toast，**唔移除卡片**（需求要「顯示訊息」，留住先唔會一閃即逝，由用戶自己滑走）。
-- 📌 跳頁真源（2026-09-10 docs/115 G5 起分兩種）：
-  - **有真枱（堂食）**：`selectTable(order.tableId)`（同枱面卡片 click 同一入口：載入工作台 + `setPosMode("order")`）＋ 機喺 quick mode 要先 `setOperatingModeState("dinein")`（否則真枱載入唔到）＋ 鎖 `activeFloorId`。枱面 map 未及更新時 fallback `setViewingOrderId()`（保證唔會撳完冇反應）。
-  - **冇枱（`tableId === "counter"`：自助機 / 快餐掃碼）**：`router.push("/orders?orderId=<id>")` → `OrdersHub` 讀 query → `LocalOrdersPanel` 開「查看」彈窗（仲要先切「全部」tab）。**唔可以**跳桌台，枱面根本冇位，只會彈「開桌」。
+- 📌 撳提示之後去邊（2026-09-11 用戶修訂：**一律留在點餐頁面**，唔再跳訂單頁）：
+  - **有真枱（堂食）**：`selectTable(order.tableId)`（同枱面卡片 click 同一入口：載入工作台 + `setPosMode("order")`）＋ 機喺 quick mode 要先 `setOperatingModeState("dinein")`（否則真枱載入唔到）＋ 鎖 `activeFloorId`。枱面 map 未及更新時**唔可以**再 fallback `setViewingOrderId()`（會彈「訂單詳情」modal，用戶明確唔要）→ 改為 `setActiveTableId()` + toast 指引。
+  - **冇枱（`tableId === "counter"`：自助機 / 快餐掃碼）**：**唔跳頁、唔開 modal**，只 `setNoticeFocus({ orderId, seq: Date.now() })` → 喺**當前點餐頁面**把該張訂單卡圈住 + `scrollIntoView`，`NOTICE_FOCUS_MS = 2400` 之後自動熄。快餐模式 = 底部「線下訂單」strip（`QuickLocalOrdersStrip`）；堂食模式 = 右欄「自取 / 掃碼訂單」面板。
+    - ⚠️ **`focusKey` 一定要用「會變嘅序號」而唔係 boolean**：`useEffect` 依賴比較係 `Object.is`，同一張卡連撳兩次 `true → true` **唔會**重跑 → 第二次「撳完冇反應」。傳 `seq: Date.now()` 解決。
+    - ⚠️ **要有「唔喺任何列表」嘅兜底**：唔係所有狀態都落 strip（`quickPreparingOrders` 只收 `draft` / `sent_to_kitchen` / `paid && !ready`）→ 用 `quickListOrderIdSet` 判斷，唔中就出 toast 指引，唔會撳完零反應。
 - 📌 邏輯放純函式模組（`src/lib/pos/self-order-notice.ts`，零 `@/` 依賴）→ 可 `npm run test` 覆蓋去重 / 上限 / 已結帳標記 / 台名優先；UI（`self-order-notice-stack.tsx`）同持久化（`storage.ts`）分開。
 
 ## 掃碼下單雙模式：堂食 / 快餐（2026-09-10 · 詳見 `docs/115-scan-dine-in-vs-quick-plan.md`）
@@ -174,6 +176,17 @@
 - 📌 **自查法**：搬 / 合併 grid 之後，**數返 `<div>` 同 `</div>` 嘅配對層數**；或喺 DevTools 揀個 grid 容器睇 `children.length`（應該 = 10，唔係 5）。
 - 📌 **鐵證**：① 行內縮排多咗一層；② 註解寫住「同上面係同一個 grid（刻意唔再開第二個 div）」但實際唔係 —— **註解講嘅意圖同 code 相反**就係最強信號。
 - 📌 **同類症狀速查**：凡見「頭 N 個正常、之後嘅變全寬」＝ grid 提早收。另外 skeleton 寫「一個 grid、10 格」係**正確**嘅 → 所以係「**載入完成先變樣**」，更易被誤判成「載入後才壞」。
+
+## 訂單操作欄「按鈕換行」：icon + 長標籤 × 百分比欄寬（2026-09-11）
+- 🔴 **症狀**：`/orders` 線下訂單列表「操作」欄嘅掣被拆成兩行（「確認出單」→「確認／出單」、「拒絕」→「拒／絕」）；而點餐頁「線下訂單」卡片則**完全冇**接受／拒絕掣。
+- 🔴 **換行真因**：每粒掣嘅 **min-content** = 最闊嗰個字 + 內距 + icon + gap。舊版標籤「確認出單」（4 字）＋ `Check` icon（16px）＋ `gap-1.5` → min-content ~**58px**；而「操作」欄係 `w-[19%]` + 表格 `min-w-[860px]` → 最窄情況只有 ~163px（扣 `px-3` 內距剩 ~139px）。三粒掣（查看 48 + 58 + 58 + gap 12 ≈ **176px**）放唔落 → `flex-wrap` 換行；而 `flex-1` 又會把留喺同一行嘅掣拉闊、文字**逐字斷行**。
+- 📌 **修法要兩邊一齊做，缺一都會復發**：
+  1. **縮 min-content**：標籤改 2 字（`確認出單` → `接受`）、**移除 icon**、加 `whitespace-nowrap` → 每粒降到 48px。
+  2. **擴可用闊度**：操作欄 `w-[19%]` → `w-[22%]`（`min-w-[860px]` 下 ~189px，扣內距 ~165px > 需求 156px）。多出嘅 3% 由「菜品」欄吸收（該欄冇固定闊度且本身已 `truncate`）。
+- ⚠️ **pending 期間唔可以換文字**：`接受中…`（4 字）會令掣闊多 24px，喺「剛剛好放得落」嘅欄位會**即時逼出換行**——正正係要修嘅症狀。只用 `disabled` + `opacity-60`（＋ `aria-busy`）。
+- 📌 **卡片側（`quick-local-orders-strip.tsx`）**：draft 自助單之前**只剩「查看」**——`OrderCard` 內兩個掣都被 `order.status !== "draft"` 擋住。加 `isDraftSelfOrder` 分支出「接受 / 拒絕」，同時把狀態藥丸由硬寫死嘅「製作中」改為「**點單中**」（slate）—— draft 單從未送去廚房，顯示「製作中」會令收銀誤判。
+- ⚠️ **唔需要傳 `selfOrderAutoAccept` 入 strip**：**draft 自助單本身就等於「自動接單關掉、等人手接受」**——開關開住嘅話掃碼單一落就變 `sent_to_kitchen`，根本唔會停留喺 draft。用 `status === "draft" && isSelfOrder(order)` 做判準最準。
+- 📌 **改標籤要連 toast 文案一齊改**：`已確認自助單` → `已接受自助單`（`pos-app.tsx`、`local-orders-panel.tsx` 共 4 處），否則掣寫「接受」、提示寫「已確認」，商家會懷疑係兩個唔同動作。
 
 ## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
 - **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。

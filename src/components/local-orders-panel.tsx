@@ -76,7 +76,7 @@ function QuickOrderActions({
   onChanged: () => void;
 }) {
   if (!isQuickCounterOrder(order)) return null;
-  // draft 自助單唔顯示「可取餐」——要等「確認出單」先變 sent_to_kitchen（docs/87 §6）
+  // draft 自助單唔顯示「可取餐」——要等撳「接受」先變 sent_to_kitchen（docs/87 §6）
   if (order.status === "draft" && isSelfOrder(order)) return null;
 
   const completeText = quickCompleteLabel(order);
@@ -424,6 +424,11 @@ export function LocalOrdersPanel({
             **永遠等於容器闊度**（iPad 橫向／直向都唔會再撐爆）；只有容器窄過 `min-w-[860px]`
             嗰陣，先由 `overflow-x-auto` 提供橫向滾動。原本 `overflow-hidden` + `min-w-[1080px]`
             會令「操作」欄直接被剪走（見 docs/113）。
+            「操作」欄 19% → **22%**（2026-09-11 修）：draft 自助單一行要放
+            「查看／接受／拒絕」三粒掣（純文字各約 48px，連 gap 合計 ~156px）；
+            19% 喺 `min-w-[860px]` 下只有 ~163px（扣內距剩 ~139px）→ 逼出兩行。
+            22% 喺最窄情況下有 ~189px（扣內距 ~165px）→ 穩定一行。多出嘅 3% 由
+            「菜品」欄吸收（該欄冇固定闊度，內容本身已 `truncate`）。
           */
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
@@ -436,7 +441,7 @@ export function LocalOrdersPanel({
                   <th className={`${TH_CELL} w-[14%] text-right`}>金額</th>
                   <th className={`${TH_CELL} w-[10%]`}>狀態</th>
                   <th className={`${TH_CELL} w-[10%]`}>來源</th>
-                  <th className={`${TH_CELL} w-[19%] text-right`}>操作</th>
+                  <th className={`${TH_CELL} w-[22%] text-right`}>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -493,9 +498,12 @@ export function LocalOrdersPanel({
                         <OrderSourceBadge order={order} />
                       </td>
                       <td className={`${TD_CELL} text-right`}>
+                        {/* 一行過（2026-09-11）：每粒掣都要 `whitespace-nowrap`，
+                            否則 2 字掣（查看／接受／拒絕）喺窄欄會被逐字拆成兩行
+                            （「拒／絕」），正正係用戶反映嘅症狀。 */}
                         <div className="flex flex-wrap items-center justify-end gap-1.5">
                           <button
-                            className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                            className="whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
                             onClick={() => {
                               if (order.status === "settled") {
                                 // 完成狀態：堂食 + 外賣都彈收據預覽（按打印模板樣式），唔跳點餐介面
@@ -519,7 +527,7 @@ export function LocalOrdersPanel({
                           </button>
                           {order.status === "settled" && isReopenable(order) ? (
                             <button
-                              className="rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
+                              className="whitespace-nowrap rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
                               onClick={() => {
                                 setReopenReason("");
                                 setReopenTargetOrderId(order.id);
@@ -530,17 +538,17 @@ export function LocalOrdersPanel({
                             </button>
                           ) : null}
                           <QuickOrderActions onChanged={handleQuickAction} order={order} />
-                          {/* 自助單 draft → 顯示「確認 / 拒絕」掣（規格 6：開關熄咗時需手動確認，統一用 SelfOrderActionButtons 避免走樣） */}
+                          {/* 自助單 draft → 顯示「接受 / 拒絕」掣（規格 6：開關熄咗時需人手接受，統一用 SelfOrderActionButtons 避免走樣） */}
                           {order.status === "draft" && isSelfOrder(order) ? (
                             <SelfOrderActionButtons
                               orderLabel={order.localOrderNo}
                               onConfirm={() => {
                                 const result = confirmSelfOrder(order.id);
                                 if (result.ok) {
-                                  setToast(`已確認自助單 ${order.localOrderNo}`);
+                                  setToast(`已接受自助單 ${order.localOrderNo}`);
                                   refresh();
                                 } else {
-                                  setToast(result.error ?? "確認失敗");
+                                  setToast(result.error ?? "接受失敗");
                                 }
                                 return result;
                               }}
@@ -644,7 +652,7 @@ export function LocalOrdersPanel({
                 />
               </div>
             ) : null}
-            {/* 查看彈窗：自助單 draft 亦顯示確認 / 拒絕（統一用 SelfOrderActionButtons 避免走樣） */}
+            {/* 查看彈窗：自助單 draft 亦顯示接受 / 拒絕（統一用 SelfOrderActionButtons 避免走樣） */}
             {viewingOrder.status === "draft" && isSelfOrder(viewingOrder) ? (
               <div className="mt-2 flex gap-2">
                 <SelfOrderActionButtons
@@ -652,11 +660,11 @@ export function LocalOrdersPanel({
                   onConfirm={() => {
                     const result = confirmSelfOrder(viewingOrder.id);
                     if (result.ok) {
-                      setToast(`已確認自助單 ${viewingOrder.localOrderNo}`);
+                      setToast(`已接受自助單 ${viewingOrder.localOrderNo}`);
                       refresh();
                       setViewingOrderId(null);
                     } else {
-                      setToast(result.error ?? "確認失敗");
+                      setToast(result.error ?? "接受失敗");
                     }
                     return result;
                   }}

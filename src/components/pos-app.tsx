@@ -11,6 +11,7 @@ import { ItemSpecModal } from "@/components/item-spec-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { NumericKeypad } from "@/components/numeric-keypad";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { NoticeFocusCard } from "@/components/notice-focus-card";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
@@ -161,6 +162,12 @@ import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
  */
 const printedAddonSignatures = new Map<string, Set<string>>();
 
+/**
+ * 撳「掃碼新單」提示之後，訂單卡高亮維持幾耐（2026-09-11 用戶要求）。
+ * 2.4 秒 ≈ 一眼掃到「就係呢張」而唔會長期干擾；期間收銀可以直接撳卡上嘅動作掣。
+ */
+const NOTICE_FOCUS_MS = 2400;
+
 type Toast = {
   tone: "info" | "success" | "warning" | "error";
   message: string;
@@ -282,11 +289,23 @@ export function PosApp() {
    * 為何係 localStorage 而唔係純 state：需求明確要「唔會自動消失，直到用戶處理」，
    * 而且要跨 reload 保留（收銀機中途 reload / 部署都唔應該丟失未處理提示）。
    * 生命週期只得兩個出口：
-   *   - 撳 → 跳去該桌台（`openSelfOrderNotice`）
+   *   - 撳 → 留在點餐頁面顯示該張單（`openSelfOrderNotice`；有枱 → 該枱工作台，
+   *     冇枱 → 高亮該張訂單卡。**唔會**跳去訂單頁）
    *   - 向右滑 → 略過（`dismissSelfOrderNotice`）
    * 冇任何 timer、冇任何狀態變化會令佢自動消失（包括訂單已結帳 —— 嗰陣會轉文案示警）。
    */
   const [selfOrderNotices, setSelfOrderNotices] = useState<SelfOrderNotice[]>(() => loadSelfOrderNotices());
+  /**
+   * 撳「掃碼新單」提示之後，喺**當前點餐頁面**要閃一下／捲到嘅訂單（2026-09-11 用戶要求）。
+   *
+   * 舊行為：撳提示 → 冇枱嘅訂單（快餐／自助機自取）會 `router.push("/orders?orderId=")`，
+   * 跳去訂單頁再開「訂單詳情」彈窗 —— 收銀只是想知「邊張單新到」，唔想離開點餐頁面。
+   * 新行為：**留在點餐頁面**，把該張訂單卡（快餐 = 線下訂單 strip；堂食 = 右欄「自取 /
+   * 掃碼訂單」面板）圈住 + 捲入視線，`NOTICE_FOCUS_MS` 之後自動熄。
+   *
+   * `seq` 每次撳都遞增：同一張卡連撳兩次都要重新捲動（純 boolean 第二下唔會觸發 effect）。
+   */
+  const [noticeFocus, setNoticeFocus] = useState<{ orderId: string; seq: number } | null>(null);
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
   // 同步健康檢查（L1 失敗事件重試 / L2 已結帳未上雲補錄）彈窗開關。
   const [showSyncHealth, setShowSyncHealth] = useState(false);
@@ -933,6 +952,14 @@ export function PosApp() {
     return () => window.clearTimeout(timer);
   }, [settlementFlash]);
 
+  // 撳「掃碼新單」提示之後嘅訂單卡高亮：時間到自動熄（唔會長期圈住）。
+  // 依賴 `noticeFocus` 嘅 seq → 連撳同一張會重新計時。
+  useEffect(() => {
+    if (!noticeFocus) return;
+    const timer = window.setTimeout(() => setNoticeFocus(null), NOTICE_FOCUS_MS);
+    return () => window.clearTimeout(timer);
+  }, [noticeFocus]);
+
   useEffect(() => {
     clearLegacyMembersCache();
   }, []);
@@ -1338,12 +1365,15 @@ export function PosApp() {
   }
 
   /**
-   * 需求 2 / 5（docs/115 G5）：撳提示。
-   *   - **有真枱**（堂食掃碼單）→ 直接跳去該桌台頁面（載入工作台 + 切返 dine-in +
-   *     鎖定樓層），並移除提示（已處理）。收銀喺枱面就係最直接就手嘅「睇單」位置。
-   *   - **冇枱**（`counter`：自助點餐機 / 快餐掃碼）→ 跳去**訂單頁** `/orders`，
-   *     並用 deep link 直接開該張單嘅「查看」彈窗。呢類單喺枱面根本冇位，
-   *     跳去桌台只會彈「開桌」，所以一定要行訂單列表（用戶 2026-09-10 明確要求）。
+   * 需求 2 / 5（docs/115 G5；2026-09-11 用戶修訂）：撳提示 —— **一律留在點餐頁面**。
+   *
+   * 用戶原文：「我想改一下彈窗按後，在點餐頁面內顯示即可，不需要去到訂單的頁面內顯示查看。」
+   *
+   *   - **有真枱**（堂食掃碼單）→ 載入該枱工作台（切返 dine-in + 鎖定樓層）。
+   *     呢個本身就係「點餐頁面」，收銀即刻見到該枱嘅菜同金額，唔使去訂單頁。
+   *   - **冇枱**（`counter`：自助點餐機 / 快餐掃碼）→ **唔再跳 `/orders`**，改為喺當前
+   *     點餐頁面把該張訂單卡圈住 + 捲入視線（快餐 = 底部「線下訂單」strip；
+   *     堂食模式 = 右欄「自取 / 掃碼訂單」面板）。
    *   - 訂單已結帳 / 已經冇咗 → 唔跳頁，改為顯示「已結帳」訊息，提示轉為灰底等用戶滑走。
    */
   function openSelfOrderNotice(orderId: string) {
@@ -1361,11 +1391,18 @@ export function PosApp() {
     // 有真枱先算「枱面單」；`counter`（自助機 / 快餐）唔係任何一張枱。
     const hasRealTable = Boolean(order.tableId) && order.tableId !== "counter";
 
-    // ── 冇枱：跳去訂單頁 + deep link 開「查看」──
+    // ── 冇枱：留在點餐頁面，閃該張訂單卡（唔跳訂單頁、唔開詳情彈窗）──
     if (!hasRealTable) {
+      setNoticeFocus({ orderId: order.id, seq: Date.now() });
       handleSelfOrderNoticeDismiss(orderId); // 撳 = 已處理
-      // `?orderId=` 由 `OrdersHub` 讀取，傳落 `LocalOrdersPanel` 直接開該張單嘅查看彈窗。
-      router.push(`/orders?orderId=${encodeURIComponent(order.id)}`);
+      // 保險：萬一該張單唔喺任何一個訂單列表（例如狀態唔屬 strip 兩個區段），
+      // 撳完會「冇反應」→ 至少出個文字指引，講明去邊度睇。
+      if (!quickListOrderIdSet.has(order.id)) {
+        setToast({
+          tone: "info",
+          message: `${label} 已下單，請喺「${isQuickMode ? "線下訂單" : "自取 / 掃碼訂單"}」查看。`,
+        });
+      }
       return;
     }
 
@@ -1378,12 +1415,15 @@ export function PosApp() {
     const targetFloor = floors.find((floor) => floor.tables.some((table) => table.id === order.tableId));
     if (targetFloor) setActiveFloorId(targetFloor.id);
 
-    // `selectTable()` = 桌台卡片 click 同一個入口（有單 → 載入工作台 + setPosMode("order")）。
-    // 萬一枱面 map 未及更新（race），退而開訂單詳情彈窗，總之唔會撳完冇反應。
+    // `selectTable()` = 桌台卡片 click 同一個入口（有單 → 載入工作台 + setPosMode("order")），
+    // 即係「喺點餐頁面顯示該枱嘅單」。
+    // 萬一枱面 map 未及更新（race）→ 2026-09-11 起**唔再**開訂單詳情彈窗（用戶明確唔想），
+    // 改為高亮枱面 + 出訊息；枱面一更新就自然見到該枱有單。
     if (tableOrderMap.has(order.tableId)) {
       selectTable(order.tableId);
     } else {
-      setViewingOrderId(order.id);
+      setActiveTableId(order.tableId);
+      setToast({ tone: "info", message: `${label} 已下單，請喺枱面查看。` });
     }
     handleSelfOrderNoticeDismiss(orderId);
   }
@@ -1723,11 +1763,21 @@ export function PosApp() {
     () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter" && !order.onlineOrderId),
     [openOrders],
   );
+  /**
+   * 快餐「線下訂單」strip 入面嘅訂單 id 集合。
+   *
+   * 用嚟回答：「撳掃碼提示之後，張單係咪真係會喺點餐頁面見到？」
+   * 唔喺集合（例如狀態唔屬 strip 兩個區段）→ 出 toast 指引，唔會撳完冇反應。
+   */
+  const quickListOrderIdSet = useMemo(
+    () => new Set(actionBarLocalOrders.map((order) => order.id)),
+    [actionBarLocalOrders],
+  );
   // 桌台總覽（dine-in）模式：kiosk / 掃碼落嘅自取、外賣單（table_id=counter）唔喺枱 grid 入面，
   // 必須有專屬面板先會見到，否則收銀喺預設 dine-in 模式永遠睇唔到呢啲單（之前只喺 quick mode bar 出）。
   const counterKioskOrders = useMemo(
     // 單號由小到大（compareOrderByLocalNo）：openOrders 本身係 updatedAt 新→舊，
-    // 一改狀態張單就移位；呢個面板有「確認出單 / 拒絕」掣，移位會令收銀撳錯單。
+    // 一改狀態張單就移位；呢個面板有「接受 / 拒絕」掣，移位會令收銀撳錯單。
     () =>
       openOrders
         .filter((order) => order.tableId === "counter" && !order.onlineOrderId)
@@ -4373,7 +4423,11 @@ export function PosApp() {
                     </div>
                     <div className="mt-3 space-y-2">
                       {counterKioskOrders.map((order) => (
-                        <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                        <NoticeFocusCard
+                          key={order.id}
+                          focusKey={noticeFocus && noticeFocus.orderId === order.id ? noticeFocus.seq : null}
+                          className="rounded-2xl border border-slate-200 bg-white p-3"
+                        >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
@@ -4439,7 +4493,7 @@ export function PosApp() {
                             >
                               查看
                             </button>
-                            {/* 自助單 draft → 顯示確認 / 拒絕（規格 6，統一用 SelfOrderActionButtons 避免走樣） */}
+                            {/* 自助單 draft → 顯示接受 / 拒絕（規格 6，統一用 SelfOrderActionButtons 避免走樣） */}
                             {order.status === "draft" && isSelfOrder(order) ? (
                               <SelfOrderActionButtons
                                 orderLabel={order.localOrderNo}
@@ -4447,9 +4501,9 @@ export function PosApp() {
                                 onConfirm={() => {
                                   const result = confirmSelfOrder(order.id);
                                   if (result.ok) {
-                                    setToast({ tone: "success", message: `已確認自助單 ${order.localOrderNo}` });
+                                    setToast({ tone: "success", message: `已接受自助單 ${order.localOrderNo}` });
                                   } else {
-                                    setToast({ tone: "error", message: result.error ?? "確認失敗" });
+                                    setToast({ tone: "error", message: result.error ?? "接受失敗" });
                                   }
                                   return result;
                                 }}
@@ -4486,7 +4540,7 @@ export function PosApp() {
                               </>
                             )}
                           </div>
-                        </div>
+                        </NoticeFocusCard>
                       ))}
                     </div>
                   </div>
@@ -5133,7 +5187,26 @@ export function PosApp() {
               setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
             }
             onCheckout={(orderId) => setPayingOrderId(orderId)}
+            onConfirmSelfOrder={(order) => {
+              const result = confirmSelfOrder(order.id);
+              setToast(
+                result.ok
+                  ? { tone: "success", message: `已接受自助單 ${order.localOrderNo}` }
+                  : { tone: "error", message: result.error ?? "接受失敗" },
+              );
+              return result;
+            }}
+            onRejectSelfOrder={(order) => {
+              const result = rejectSelfOrder(order.id);
+              setToast(
+                result.ok
+                  ? { tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` }
+                  : { tone: "error", message: result.error ?? "拒絕失敗" },
+              );
+              return result;
+            }}
             onViewOrder={(orderId) => setViewingOrderId(orderId)}
+            noticeFocus={noticeFocus}
             preparingOrders={quickPreparingOrders}
             waitingOrders={quickWaitingOrders}
           />

@@ -20,6 +20,11 @@ type QuickModeOrdersBarProps = {
   onMarkCompleted: (orderId: string, label: string) => void;
   /** 自助單獨立結帳入口（kiosk / scan）：開啟付款 modal。 */
   onCheckout?: (orderId: string) => void;
+  /** 撳「掃碼新單」提示之後要閃一下嘅訂單（2026-09-11：留在點餐頁面顯示）。 */
+  noticeFocus?: { orderId: string; seq: number } | null;
+  /** draft 自助單（自動接單關掉）→ 卡片上嘅人手「接受 / 拒絕」。 */
+  onConfirmSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
+  onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
 };
 
 /**
@@ -63,6 +68,9 @@ export function QuickModeOrdersBar({
   onMarkReady,
   onMarkCompleted,
   onCheckout,
+  noticeFocus,
+  onConfirmSelfOrder,
+  onRejectSelfOrder,
 }: QuickModeOrdersBarProps) {
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
@@ -96,9 +104,12 @@ export function QuickModeOrdersBar({
             completeLabel={completeLabel}
             completionLabel={completionLabel}
             currency={currency}
+            noticeFocus={noticeFocus}
             onCheckout={onCheckout}
+            onConfirmSelfOrder={onConfirmSelfOrder}
             onMarkCompleted={onMarkCompleted}
             onMarkReady={onMarkReady}
+            onRejectSelfOrder={onRejectSelfOrder}
             onViewOrder={onViewOrder}
             preparingOrders={preparingOrders}
             waitingOrders={waitingOrders}

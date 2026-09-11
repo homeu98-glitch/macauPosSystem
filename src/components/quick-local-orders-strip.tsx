@@ -1,11 +1,14 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+
 import { PosOrder } from "@/lib/types";
 import { formatMoney, formatMacauTime } from "@/lib/format";
 import { compareOrderByLocalNo, isQuickCounterOrder } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
+import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { orderItemDiscountTotal } from "@/lib/pos/discount";
 
 type QuickLocalOrdersStripProps = {
@@ -19,6 +22,20 @@ type QuickLocalOrdersStripProps = {
   onMarkCompleted: (orderId: string, label: string) => void;
   /** 自助單獨立結帳入口（kiosk / scan），開啟付款 modal。 */
   onCheckout?: (orderId: string) => void;
+  /**
+   * 撳「掃碼新單」提示之後要閃一下嘅訂單（2026-09-11 用戶要求：留在點餐頁面顯示）。
+   * `null` = 冇；`seq` 每次撳都遞增 → 同一張卡連撳兩次都會重新捲動。
+   */
+  noticeFocus?: { orderId: string; seq: number } | null;
+  /**
+   * 自助單 draft → 人手「接受 / 拒絕」（2026-09-11 新增）。
+   *
+   * 唔需要另外傳「自動接單」開關：**draft 自助單本身就係「自動接單關掉、等人手接受」**
+   * —— 開關開住嘅話，掃碼單一落就直接變 `sent_to_kitchen`，根本唔會停留喺 draft。
+   * 回呼自己負責出 toast，回傳 `{ ok, error }` 俾按鈕組顯示失敗狀態。
+   */
+  onConfirmSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
+  onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
 };
 
 function OrderCard({
@@ -31,6 +48,9 @@ function OrderCard({
   onMarkReady,
   onMarkCompleted,
   onCheckout,
+  focusKey,
+  onConfirmSelfOrder,
+  onRejectSelfOrder,
 }: {
   order: PosOrder;
   currency: string;
@@ -41,9 +61,28 @@ function OrderCard({
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
   onCheckout?: (orderId: string) => void;
+  /** 數字 = 被「掃碼新單」提示指向（高亮 + 捲入視線）；`null` = 正常。 */
+  focusKey: number | null;
+  onConfirmSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
+  onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
 }) {
   const completeText = completeLabel(order);
   const orderTime = formatMacauTime(order.createdAt);
+  const articleRef = useRef<HTMLElement | null>(null);
+  /**
+   * draft 自助單 = 等收銀人手「接受 / 拒絕」（自動接單關掉）。
+   * ⚠️ 呢個狀態下卡片**唔係**「製作中」—— 下面狀態藥丸要出「點單中」，
+   * 否則收銀見到「製作中」會以為廚房已經做緊，但其實張單從未送出。
+   */
+  const isDraftSelfOrder = order.status === "draft" && isSelfOrder(order);
+  const showSelfOrderActions =
+    isDraftSelfOrder && Boolean(onConfirmSelfOrder) && Boolean(onRejectSelfOrder);
+
+  // 被提示指向 → 捲入視線（橫向 strip 用 inline:center；已可見時 block:nearest 唔會亂跳）
+  useEffect(() => {
+    if (focusKey === null) return;
+    articleRef.current?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+  }, [focusKey]);
 
   // 自助單（kiosk / scan）嘅快餐 counter 單：可取餐 + 結帳 兩個動作獨立並存，
   // 對應狀態一旦觸發，掣就從介面消失（唔係灰掉）；兩個都做齊先出現「已取餐」（settled）。
@@ -63,7 +102,12 @@ function OrderCard({
   const isBothDone = isPaid && isReady;
 
   return (
-    <article className="flex h-[180px] w-[240px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+    <article
+      ref={articleRef}
+      className={`flex h-[180px] w-[240px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm${
+        focusKey !== null ? " ring-2 ring-orange-500 ring-offset-2 ring-offset-white" : ""
+      }`}
+    >
       {/* 頂部：訂單號 + 枱號（左）vs 狀態藥丸（右） */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
@@ -73,15 +117,19 @@ function OrderCard({
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
-              mode === "waiting" ? "bg-sky-50 text-sky-700" : "bg-amber-50 text-amber-700"
+              isDraftSelfOrder
+                ? "bg-slate-100 text-slate-600"
+                : mode === "waiting"
+                  ? "bg-sky-50 text-sky-700"
+                  : "bg-amber-50 text-amber-700"
             }`}
           >
             <span
               className={`h-4 w-4 rounded-full ${
-                mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
+                isDraftSelfOrder ? "bg-slate-400" : mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
               }`}
             />
-            {mode === "waiting" ? completionLabel(order) : "製作中"}
+            {isDraftSelfOrder ? "點單中" : mode === "waiting" ? completionLabel(order) : "製作中"}
           </span>
           {/* 時間（HH:MM，下單時間）+ 來源 chip 並排，貼右下（齊平 OrderSourceBadge 高度）。 */}
           <div className="flex items-center gap-1.5">
@@ -141,17 +189,27 @@ function OrderCard({
           自助單用 2 獨立按鈕 + 觸發後消失機制；收銀單維持舊單鏈。 */}
       <div className="mt-2 flex shrink-0 flex-wrap gap-1.5 border-t border-slate-100 pt-2">
         <button
-          className="shrink-0 rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+          className={`${showSelfOrderActions ? "flex-1" : "shrink-0"} whitespace-nowrap rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white`}
           onClick={() => onViewOrder(order.id)}
           type="button"
         >
           查看
         </button>
+        {/* draft 自助單 → 人手「接受 / 拒絕」（2026-09-11 新增）。
+            呢個 case 之下三粒掣（查看／接受／拒絕）等闊平分整行；非 draft 單維持「查看」貼左。 */}
+        {showSelfOrderActions && onConfirmSelfOrder && onRejectSelfOrder ? (
+          <SelfOrderActionButtons
+            orderLabel={order.localOrderNo}
+            onConfirm={() => onConfirmSelfOrder(order)}
+            onReject={() => onRejectSelfOrder(order)}
+            size="sm"
+          />
+        ) : null}
         {showSplitActions ? (
           <>
             {/* 去結帳：未 paid 先 active；已 paid → 唔再 render（用戶要求「消失」而唔係灰掉）。
                 單向閘：`status` 由 paid → settled / cancelled / refunded 都唔會回退 paid，
-                所以呢個掣一消失就永久唔會再出現。draft 自助單唔顯示，要等確認出單。 */}
+                所以呢個掣一消失就永久唔會再出現。draft 自助單唔顯示，要等撳「接受」。 */}
             {!isPaid && order.status !== "draft" ? (
               <button
                 aria-label={`去結帳 ${order.localOrderNo}`}
@@ -226,6 +284,9 @@ export function QuickLocalOrdersStrip({
   onMarkReady,
   onMarkCompleted,
   onCheckout,
+  noticeFocus,
+  onConfirmSelfOrder,
+  onRejectSelfOrder,
 }: QuickLocalOrdersStripProps) {
   // 單一列、全部按單號由小到大：**唔分「製作中 / 待取餐」兩段**。
   // 分段的話，張單一撳「可取餐」就由左面彈去右面一段（即係「按狀態排」——
@@ -254,10 +315,13 @@ export function QuickLocalOrdersStrip({
           completeLabel={completeLabel}
           completionLabel={completionLabel}
           currency={currency}
+          focusKey={noticeFocus && noticeFocus.orderId === order.id ? noticeFocus.seq : null}
           mode={mode}
           onCheckout={onCheckout}
+          onConfirmSelfOrder={onConfirmSelfOrder}
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
+          onRejectSelfOrder={onRejectSelfOrder}
           onViewOrder={onViewOrder}
           order={order}
         />
