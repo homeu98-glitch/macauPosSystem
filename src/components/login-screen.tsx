@@ -11,7 +11,11 @@ import { scanModeForLoginMode, type LoginMode } from "@/lib/pos/scan-mode-from-l
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
 import { saveKioskDeviceBinding, saveKioskMode } from "@/lib/kiosk-order";
-import { clearKdsDeviceBinding, loadKdsDeviceBinding } from "@/lib/kds/device-binding";
+import {
+  clearKdsDeviceBinding,
+  loadKdsDeviceBinding,
+  saveKdsDeviceBinding,
+} from "@/lib/kds/device-binding";
 import { setTerminalIndustry } from "@/lib/salon/industry-config";
 import { saveActiveSalonStore } from "@/lib/salon/storage";
 
@@ -23,7 +27,9 @@ export function LoginScreen() {
   const initialMode: LoginMode = (() => {
     if (typeof window === "undefined") return "dinein";
     const requested = new URLSearchParams(window.location.search).get("mode");
-    return requested === "kiosk" || requested === "kitchen" ? requested : "dinein";
+    return requested === "kiosk" || requested === "kitchen" || requested === "expo"
+      ? requested
+      : "dinein";
   })();
   const [mode, setMode] = useState<LoginMode>(initialMode);
   const [error, setError] = useState("");
@@ -185,9 +191,23 @@ export function LoginScreen() {
       //    揀完先寫入完整綁定（見 docs/116 §4.4）。所以呢度唔寫半截綁定。
       if (mode === "kitchen" || mode === "expo") {
         const existingBinding = loadKdsDeviceBinding();
-        // 換咗店 → 舊綁定（連工位）一定要清，否則會顯示上一間店嘅崗位
-        if (existingBinding && existingBinding.storeId !== session.merchantId) {
+        // 換咗店 **或者換咗角色** → 舊綁定一定要清。
+        // 唔清就會出現「呢部機上一個角色係廚房屏、今次揀出餐台屏，但仲留住個崗位」。
+        if (
+          existingBinding &&
+          (existingBinding.storeId !== session.merchantId || existingBinding.role !== mode)
+        ) {
           clearKdsDeviceBinding();
+        }
+        // 出餐台屏**唔需要崗位**（佢要睇整單核對），所以即刻寫得。
+        // 廚房屏相反：要入到 `/kitchen` 揀完崗位先寫完整綁定。
+        if (mode === "expo" && session.merchantId) {
+          saveKdsDeviceBinding({
+            storeId: session.merchantId,
+            storeName: session.name,
+            role: "expo",
+            boundAt: new Date().toISOString(),
+          });
         }
       }
 
@@ -215,8 +235,9 @@ export function LoginScreen() {
         return;
       }
 
-      // kiosk 綁店登入 → 去自助點餐介面；後廚屏 → 去揀崗位 / 入屏；其他模式 → 收銀台
-      const homePath = mode === "kiosk" ? "/order" : mode === "kitchen" ? "/kitchen" : "/";
+      // kiosk → 自助點餐介面；後廚屏 → 揀崗位 / 入屏；出餐台屏 → /expo；其他 → 收銀台
+      const homePath =
+        mode === "kiosk" ? "/order" : mode === "kitchen" ? "/kitchen" : mode === "expo" ? "/expo" : "/";
 
       // 任何帳號切換（即使同一個 merchantId）→ 整頁 reload。
       // 原因：SPA 切換會殘留舊 store scope 嘅 React state（orders / bootstrap / deviceConfig 等），
@@ -316,19 +337,30 @@ export function LoginScreen() {
                   自助點餐機
                 </button>
                 {/*
-                  後廚屏（KDS）—— 見 docs/116 §4.1 / §4.4。
-                  ⚠️ 揀咗呢個只係「呢部機做後廚屏」；**崗位**（廚房／水吧）要入到
-                  `/kitchen` 先揀，而且揀完會鎖死，唔可以喺屏內即場切換（防誤按）。
-                  出餐台屏（`expo`）屬 P2，暫時唔出掣。
+                  後廚屏 / 出餐台屏（KDS）—— 見 docs/116 §4.1 / §4.4 / §7.2。
+                  ⚠️ 揀「後廚屏」只係「呢部機做後廚屏」；**分區**（後廚1/2/3、水吧1/2/3…）
+                  要入到 `/kitchen` 先揀，揀完會鎖死，唔可以喺屏內即場切換（防誤按）。
+                  「出餐台屏」唔需要分區（佢要睇整單核對齊唔齊）。
                 */}
                 <button
-                  className={`col-span-2 rounded-2xl px-3 py-2 text-sm font-semibold transition ${
+                  className={`rounded-2xl px-3 py-2.5 text-[13px] font-semibold leading-tight transition ${
                     mode === "kitchen" ? "bg-emerald-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
                   }`}
                   onClick={() => setMode("kitchen")}
                   type="button"
                 >
-                  後廚屏（廚房／水吧）
+                  後廚屏
+                  <span className="block text-[11px] font-normal opacity-70">逐件菜撳 ✓</span>
+                </button>
+                <button
+                  className={`rounded-2xl px-3 py-2.5 text-[13px] font-semibold leading-tight transition ${
+                    mode === "expo" ? "bg-sky-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                  onClick={() => setMode("expo")}
+                  type="button"
+                >
+                  出餐台屏
+                  <span className="block text-[11px] font-normal opacity-70">核對整單出餐</span>
                 </button>
               </div>
               {/*

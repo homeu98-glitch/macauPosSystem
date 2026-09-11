@@ -1,5 +1,22 @@
 # 114 · 收據「分隔線變兩條 + 菜品名字體異常」根因與修法（2026-09-10）
 
+> 🔴 **2026-09-11 更新（重要，實紙再次投訴）**：門店 09-11 19:01 嘅**廚房單**實紙，
+> 菜品之間仍然係**兩條線**（菜品清單之前一條）——症狀同 §1 一模一樣。
+> **根因唔係代碼，係部署**：上面五個通道嘅修正**全部只停留喺源碼，冇 build 過新 APK、冇裝落機**。
+>
+> - `print-relay`：`git log -1` = **09-04 14:26**，三個檔一直 `M`（未 commit）；
+>   唯一 APK = `app/build/outputs/apk/debug/app-debug.apk` **2026-09-04 14:16** → 部機跑緊嘅就係呢個。
+>   `git show HEAD:…EscPosRenderer.kt` 仍然係舊版 `val divider = "-".repeat(cols)`（冇清殘留）→ 必然折行。
+> - 同模式：`print hub` APK 09-03、`print-agent-android` APK 09-02、`desktop-companion` 未出安裝檔。
+> - **反證 POS 側係新嘅**：設計頁文案已係「dash 數量會相應減半，所以任何大小都只會佔一行」→
+>   **網頁會自動更新、APK 唔會** → 所以出現「預覽一條線、實紙兩條線」。
+> - **已做（09-11）**：`print-relay` `versionCode 5→6` / `versionName 1.1.3→1.1.4`（**擰版本號係驗收前提**），
+>   `JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug` → **BUILD SUCCESSFUL**，
+>   新 APK 2026-09-11 21:04（3,616,860 bytes）；`verify-escpos-bytes.mjs` **全部契約通過**。
+> - ⬜ 仲要：裝 v1.1.4 落門店部機、確認門店跑邊個通道（§5）、其餘三通道照同一份修正重出。
+> - 教訓：**「代碼改好」≠「行為改變」**。呢個坑 docs/101/102/103 已中過，今次係第 N 次；
+>   下次改 renderer 之後，`git log -1` 日期、APK mtime、`git status` 三個一齊睇。
+
 > **狀態（2026-09-10 收尾）**：**五個通道全部改完**——
 > POS 預覽（§3.2）、`print-relay`（§3.3）、`print hub` + `print-agent-android`（§3.4）、
 > `desktop-companion`（§3.5）。三個 Kotlin repo `:app:compileDebugKotlin` 全部 BUILD SUCCESSFUL、

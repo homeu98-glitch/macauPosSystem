@@ -39,6 +39,10 @@ const VIEWS = [
   let bad = 0;
 
   for (const v of VIEWS) {
+    // ⚠️ 每個 view 都要**重新載入**再操作 —— 個原型有 modal（設定卡）等狀態，
+    //    上一個 view 開咗唔會自動閂，會蓋住下一個 view 嘅截圖（實測中過）。
+    await page.goto("file:///" + abs.split("\\").join("/"), { waitUntil: "load" });
+    await new Promise((r) => setTimeout(r, 250));
     await page.evaluate((v) => {
       const tb = document.querySelector('.review .tabs button[data-tab="' + v.tab + '"]');
       if (tb) tb.click();

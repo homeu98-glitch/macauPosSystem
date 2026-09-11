@@ -3,10 +3,11 @@
 > 目標：iPad 一部掛後廚、一部擺出餐台，**同一個登入入口**揀「後廚屏」／「出餐台屏」，
 > 屏上睇單、點掉單品、確認出餐，**唔經打印機**。
 >
-> 狀態：**P0 已實作（2026-09-11）** —— 後廚屏＋崗位鎖定＋3 條端點＋1 張表。
+> 狀態：**後廚屏 `/kitchen` ＋ 出餐台屏 `/expo` 都已實作（2026-09-11）** ——
+> 分區鎖定（真源 = 商家 `printZones`）＋ 3 條端點 ＋ 1 張表。
 > 上線前**必做**：① 跑 migration `0033_pos_kds.sql`；② 確認 `NEXT_PUBLIC_POS_SUPABASE_URL`
-> 指向 POS 專案（R1）。詳見 **§10.1 實作記錄**。
-> 出餐台屏 `/expo` 屬 P2，未做。
+> 指向 POS 專案（R1）。詳見 **§10.1 / §10.2 / §10.3 實作記錄**。
+> 未做：叫號屏、多分區合併、分區搬到店級欄位（全部屬 P1/P3）。
 
 ---
 
@@ -571,7 +572,7 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 
 ## 10. 分階段落地
 
-### P0 · 後廚屏（單工位、並存模式）— 最小可用
+### P0 · 後廚屏（單工位、並存模式）— 最小可用 ✅ 2026-09-11 完成
 1. `supabase/migrations/0033_pos_kds.sql`（1 表 + RLS + Realtime publication）
 2. 純函式：`lib/kds/kds-board.ts`（由 order + state 砌出屏上模型，**可 `node --test`**）
 3. API：`/api/pos/kds/board`（帶 `?station=`）、`/api/pos/kds/items`
@@ -592,8 +593,9 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 - 設定頁三選一（`print` / `both` / `screen`）
 
 ### P2 · 出餐台屏 + 閉環
-- `/expo`（`action: "ready" | "recall"`）
-- 叫號屏、售罄聯動、平均製作時間統計（進日報）
+- ✅ `/expo`（`action: "ready" | "recall"`）—— 2026-09-11 完成，見 §10.3
+- ⬜ 叫號屏（§0 決定 3 暫時唔做）
+- ⬜ 售罄聯動、平均製作時間統計（進日報）
 
 ### P3 · 可選
 - 自助點餐機／掃碼單直接落屏（唔經收銀台確認）
@@ -725,6 +727,43 @@ KDS 從來冇讀過佢。
 | 分區冇任何菜 / 冇任何單（後廚3 今晚未開） | **仍然要出現**喺清單（要由 `printZones` 推導，唔可以只靠「有單 / 有菜」） |
 | 一個師傅要睇兩個分區（後廚1 + 後廚2） | ⚠️ **未支援**。P0 一部機 = 一個分區（「降低誤按」同「多人共用一屏」係相反方向）。若真要做，應該做**明確嘅多選**，唔好偷偷合併 |
 | 多部終端各自保存設定 | ⚠️ `printZones` 屈喺 `pos_device_configs.local_settings`（per-device，讀「最新一條」）—— **最後保存嗰部機會蓋走全店分區**。長遠要搬去 `pos_bootstrap_config.print_zones jsonb`（店級，purpose-built）。**屬 P1，未做** |
+
+---
+
+### 10.3 ✅ 出餐台屏 `/expo` 實作（2026-09-11，補回 P2 缺口）
+
+> 用戶問：「出餐台屏為什麼沒有看到有選項？」
+> 答：因為 P0 只做後廚屏，我**刻意冇出登入掣**、`/expo` 頁亦未建。
+> 但咁樣令出餐流程**斷咗一半** —— 後廚撳完 ✓ 之後，冇人確認出餐，
+> `fulfillment_status` 永遠唔會變 `ready`，收銀台／客人端亦見唔到「可取餐」。
+> 所以補上。
+
+#### 新增
+
+| 檔案 | 作用 |
+|---|---|
+| `src/app/expo/page.tsx` | `"use client"` 薄殼 |
+| `src/components/kds/expo-screen.tsx` | 出餐台屏本體（三欄：隊列 / 整單核對 / 大掣） |
+| `useKdsBoard({ allStations, includeCompleted })` | 出餐台要**整單、唔分工位**，亦要見到「已齊但未確認」嘅單 |
+
+改動：`login-screen.tsx` 加「出餐台屏」掣 + 導向 `/expo`；
+`expo` 登入即刻寫 `KdsDeviceBinding{role:"expo"}`（唔需要崗位）；
+換店**或換角色**一律清舊綁定（否則廚房屏轉出餐台屏會殘留個崗位）。
+
+#### 兩條唔可以改嘅口徑
+
+1. **`includeCompleted: true` 對出餐台係必要**：唔開嘅話，最後一件菜一出完，
+   `buildKdsBoard` 就會將成張單剔走 → 出餐台**永遠撳唔到「確認出餐」**。
+   （後廚屏相反：唔應該回已完成嘅單，否則 reload 之後綠卡永遠唔走。）
+2. **唔齊唔可以出餐**：掣事先 disable，就算繞過都仲有 server 409 前置檢查
+   （回「欠邊幾項」，屏上直接列出）。呢層係防止「客人返嚟話少咗一碟，但系統顯示已出餐」。
+
+#### 仍然唔做（§0 決定 3）
+
+- **叫號屏**：出餐後唔會廣播叫號，客人靠收銀台 / 客人端狀態（`fulfillmentStatus = "ready"` →
+  `customerOrderStatusLabel()` 顯示「可取餐」）。
+- **唔會順手幫訂單結帳**：屏上只寫 `fulfillment_status` / `served_at`。
+  結帳涉及會員扣款 / Ledger RPC，係收銀台嘅事（§7.3）。
 
 ---
 

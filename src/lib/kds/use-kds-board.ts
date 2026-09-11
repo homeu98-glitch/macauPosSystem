@@ -70,8 +70,18 @@ export function useKdsBoard(options: {
   storeId: string | null;
   station: string | null;
   enabled: boolean;
+  /**
+   * 出餐台屏用：睇**整單、唔分工位**（出餐台嘅職責就係核對「齊唔齊」）。
+   * ⚠️ 只可以喺 `/expo` 開 —— 後廚屏開咗就等於回到「全部」模式（docs/116 §4.4）。
+   */
+  allStations?: boolean;
+  /**
+   * 出餐台屏用：連「全部完成」嘅單都要回。
+   * 唔開嘅話，最後一件一出完張卡就即刻消失，出餐台**永遠撳唔到「確認出餐」**。
+   */
+  includeCompleted?: boolean;
 }): KdsBoardApi {
-  const { storeId, station, enabled } = options;
+  const { storeId, station, enabled, allStations = false, includeCompleted = false } = options;
 
   const [bundles, setBundles] = useState<KdsBoardOrderInput[]>([]);
   const [stateMap, setStateMap] = useState<Map<string, KdsItemStateRow>>(() => new Map());
@@ -383,12 +393,15 @@ export function useKdsBoard(options: {
         states: statesArray,
         // ⚠️ 唔傳 allowAllStations：產品上唔存在「全部」模式。
         //    station 係 null 時 buildKdsBoard 會回空 orders（只回 stations 畀「揀崗位」用）。
-        station,
+        // 出餐台屏：station = null + allowAllStations（睇整單）＋ includeCompleted
+        station: allStations ? null : station,
+        allowAllStations: allStations,
+        includeCompleted: allStations && includeCompleted,
         printZones: sources.printZones,
         printerGroups: sources.printerGroups,
         menuItemGroups: sources.menuItemGroups,
       }),
-    [bundles, statesArray, station, sources],
+    [bundles, statesArray, station, sources, allStations, includeCompleted],
   );
 
   useEffect(() => {
