@@ -2,7 +2,11 @@
 
 > 目標：iPad 一部掛後廚、一部擺出餐台，**同一個登入入口**揀「後廚屏」／「出餐台屏」，
 > 屏上睇單、點掉單品、確認出餐，**唔經打印機**。
-> 狀態：**方案（未實作）**。實作前請先睇 §9 風險，尤其 R1 / R2 / R5。
+>
+> 狀態：**P0 已實作（2026-09-11）** —— 後廚屏＋崗位鎖定＋3 條端點＋1 張表。
+> 上線前**必做**：① 跑 migration `0033_pos_kds.sql`；② 確認 `NEXT_PUBLIC_POS_SUPABASE_URL`
+> 指向 POS 專案（R1）。詳見 **§10.1 實作記錄**。
+> 出餐台屏 `/expo` 屬 P2，未做。
 
 ---
 
@@ -14,6 +18,11 @@
 | 2 | 工位點劃分 | **用菜單嘅 `printerGroup`** | 唔另設「後廚屏工位」概念。實際值：`kitchen` / `drinks`（`receipt` 係收銀機、`label` 係標籤，**唔做為工位**）。顯示名要一層 fallback map（`{kitchen:"廚房", drinks:"水吧"}`）＋ 有配打印機就用打印機 `name`。 |
 | 3 | 出號（叫號）屏 | **暫時唔做** | `POST /api/pos/kds/orders` 只做 `ready` / `recall`，唔需要 `call` 相關欄位。P2 再議。 |
 | 4 | 後廚屏帳號 | **同 kiosk 一致** | 用店長／經理嘅 8 位電話帳號登入一次 → 寫 `KdsDeviceBinding` → 之後開機直接入後廚。**唔**為廚房師傅另開 PIN（唔改 Ledger 帳號體系）。 |
+| 5 | 工位要唔要可以即場切換 | **唔可以 —— 登入後先揀崗位，揀完鎖死** | 屏內**冇「全部 / 廚房 / 水吧」切換掣**，只剩一個唯讀崗位徽章。切換要走「⚙ 設定」→ 重新登入。目的係降低誤按。**詳見 §§4.4** |
+
+決定 5 有一個連帶項：**必須留逃生門**（設定 → 切換崗位 → 清綁定 → 回登入）。
+冇逃生門就會出現「揀錯咗 = 呢部機廢咗」；但要做到**深兩層 + 要重新登入**，
+先算真正防誤按。另外「店只有一個工位」時**唔應該出選擇步驟**，直接鎖定。
 
 ⚠️ 決定 2 有一個連帶項：`printerGroup` 係**自由字串**（`type PrinterGroup = string`），
 所以「工位清單」唔可以寫死。要由 `bootstrap.printerGroups` 動態產生，
@@ -147,6 +156,131 @@ type KdsDeviceBinding = {
 
 理由：綁定 = 呢部 iPad 以後自動入後廚模式。如果任何收銀員都可以綁，
 就會出現「收銀台被人綁成後廚屏」——同 kiosk 一樣嘅設備劫持問題。
+
+### 4.4 🔴 崗位（工位）鎖定 —— 登入後先揀，屏內零切換掣（2026-09-11 新增）
+
+**決策**：一部 iPad 開機 = 一個崗位。登入後**強制**揀「廚房」或「水吧」，
+揀完就鎖死；屏內**冇「全部 / 廚房 / 水吧」切換掣**，要改只能經「⚙ 設定」→ 重新登入。
+
+#### 為什麼唔係「加兩個登入入口」而係「一個入口 + 揀崗位」
+
+`LOGIN_MODES` 已經有 6 個（快餐／堂食／美容／自助機／後廚屏／出餐台屏）。
+再加「後廚屏·廚房」「後廚屏·水吧」會變 8 個，而且撈亂咗兩件事：
+
+| 維度 | 屬於邊個 | 例子 |
+|---|---|---|
+| **登入模式** | 「呢間店／呢個角色係做乜」 | 快餐定堂食、收銀定後廚 |
+| **崗位** | 「**呢一部機**擺喺邊」 | 呢部 iPad 擺喺炒鍋邊 → 廚房 |
+
+同一間店可以同時開「廚房屏」＋「水吧屏」兩部 iPad，兩部機嘅登入模式一樣、
+只係崗位唔同 → 崗位係**設備屬性**，自然應該跟設備綁定一齊存。
+
+#### 可行性：地基已經有，唔使新機制
+
+| 需要嘅嘢 | 現成 | 位置 |
+|---|---|---|
+| 設備綁定（登入一次、之後開機即入） | ✔ 照抄 kiosk | `saveKioskDeviceBinding` / `src/lib/kiosk-order.ts` |
+| 工位分類 | ✔ **已經分好** | `OrderItem.printerGroup`（`kitchen` / `drinks`） |
+| 屏按工位過濾 | ✔ 原型已驗證 | `renderKitchen()` 嘅 `i.station===station` |
+| 跨店隔離 | ✔ | Realtime `store_id=eq.` ＋ 端點用終端憑證 |
+
+**唔需要**新表、新 RPC、新權限模型。`KdsDeviceBinding.station` 一個欄位就夠。
+
+#### 影響範圍
+
+| 檔案 | 改動 | 風險 |
+|---|---|---|
+| `src/lib/pos/scan-mode-from-login.ts` | `LoginMode` 加 `"kitchen" \| "expo"`；兩者一律回 `null` | **低**。同 docs/115 §12 完全同理 |
+| `src/lib/pos/scan-mode-from-login.test.ts` | ⚠️ **必改**：測試 enumerate 全部 mode，加咗值就會 fail（呢個係好事，係安全網） | 低 |
+| `src/components/login-screen.tsx` | 加「後廚屏 / 出餐台屏」兩粒掣；`scanOrderHint: Record<LoginMode,string>` 會 **typecheck 強制**補 key（漏咗 build 就紅，捉得到） | 中。`kitchen` 分支唔可以即刻跳頁，要跳去揀崗位 |
+| `src/lib/kds/device-binding.ts`（新） | `KdsDeviceBinding` | 低（照抄 kiosk，必帶 `isPlaceholderStoreId()` 硬閘） |
+| `src/lib/kds/stations.ts`（新） | 由 `bootstrap.printerGroups` 衍生崗位清單 | 低。**必須排除 `receipt`** |
+| `src/app/kitchen/page.tsx`（新） | 入頁先檢查綁定；冇崗位 → 顯示揀崗位 | — |
+| `GET /api/pos/kds/board` | 加 `?station=` | 低 |
+| `POST /api/pos/kds/items` | **唔使改**（item 本身帶 station） | — |
+
+⚠️ **`printerGroup` 係自由字串**（唔係 union），所以崗位清單**唔可以寫死**，
+要由菜單實際用過嘅值動態生成，並且一定要**剔走 `receipt`** ——
+收銀機打印機唔係一個工位，畀佢出現喺崗位清單係 bug。
+
+#### 實作方式
+
+```ts
+// ① 開機 / 入 /kitchen
+const b = loadKdsDeviceBinding();          // localStorage
+if (!b)                      → 顯示「揀崗位」
+else if (b.role === "kitchen") → 直接入屏，鎖 b.station
+
+// ② 揀崗位
+chooseStation(st) →
+  saveKdsDeviceBinding({ storeId, storeName, role: "kitchen", station: st, boundAt })
+  clearKdsLocalCache()        // ⚠️ 唔清就會殘留上一個崗位嘅狀態
+  router.replace("/kitchen")
+
+// ③ 屏內：**冇** station state，只有常數
+const station = binding.station;   // 由頭到尾唔會變
+```
+
+**必須留逃生門**：屏內「⚙ 設定」→「切換崗位」→ 清綁定 → 回登入。
+冇逃生門就會出現「揀錯咗 = 呢部機廢咗」。但要**深兩層 + 要重新登入**，
+先達到「降低誤按」而唔係「一刀切死」。
+
+#### 邊界情況（唔處理就會出 bug）
+
+| 情況 | 正確做法 |
+|---|---|
+| 店只有一個工位（細店只有厨房） | **唔出**選擇步驟，直接鎖定 —— 唔好多餘一步 |
+| 菜單完全未設 `printerGroup` | 清單空 → fallback 單一「廚房」，並喺設定頁提示去菜單補 |
+| 有人直接打 `/kitchen` 但未綁定 | **強制**去揀崗位。**絕對唔可以**顯示「全部」—— 咁就返返去用戶想消滅嘅嘢 |
+| 換崗位（廚房 → 水吧） | 清本機 KDS 快取（`doneQty` 係雲端嘅，但本地 optimistic 層要清） |
+| 剩返一個工位但綁定已存在 | 唔變更綁定（避免「設定頁改咗菜單」就靜靜重置部機） |
+| 出餐台屏 | **唔需要**崗位（佢要睇全單核對）—— 唔好照抄 |
+
+### 4.5 即時性（Realtime）—— 用戶要求「唔可以有 delay」
+
+**結論：設計係推送式，唔用 polling。但「零延遲」唔可以只靠推送，
+一定要補三樣嘢，否則會出現「好似做到，但永遠要 reload 先見到」。**
+
+現成嘅 `usePosRealtime()`（`src/lib/pos/use-pos-realtime.ts`）已經係收銀側用緊嘅實現，
+KDS 直接複用，唔使新寫：
+
+| 已經做咗 | 細節 |
+|---|---|
+| 推送而非輪詢 | `postgres_changes` 訂 `pos_orders` / `pos_print_jobs` / `pos_soldout` |
+| 店級隔離 | filter `store_id=eq.<storeId>` |
+| 自動重連 | `CHANNEL_ERROR` / `TIMED_OUT` → 3 秒後重訂 |
+| 回到前景重訂 | `visibilitychange` → `visible` 就重訂 |
+
+**但仲欠三樣，缺一就會有「delay 感」或者「靜默漏單」：**
+
+1. **重連後補拉（最重要）** —— hook 有 `onResubscribed`（debounce 3s）但**唔會自動補資料**。
+   iPad 休眠、轉 Wi-Fi、鎖屏之後，Realtime 會重新 `SUBSCRIBED`，
+   但**唔會補發睡著期間嘅事件** → 唔補拉就會永遠少幾張單，直到有人手動 reload。
+   **做法**：`onResubscribed` → 立即 `GET /api/pos/kds/board` 覆蓋全屏狀態。
+
+2. **樂觀 UI** —— 撳 ✓ 要**即刻**本地 `doneQty+1`（唔等 server 回應），
+   POST 失敗才回滾 + 出紅橫幅。否則每次撳都有 100~300ms 延遲感，
+   廚房同事會以為「撳唔到」然後再撳一次 → 變重複確認。
+
+3. **看門狗** —— ① `visibilityState` 變 `visible` 補拉一次；
+   ② Realtime 靜咗超過 60 秒而屏上仲有未完成 → **單發**補拉（唔係 loop 輪詢）。
+   呢個唔算 polling，係「懷疑脫線就對一次數」。
+
+**🔴 R1 陷阱（必須先解決）**：`getPosSupabaseClient()` 讀嘅
+`NEXT_PUBLIC_POS_SUPABASE_URL` / `_ANON_KEY` 一定要指向 **POS 專案**。
+錯嘅話 Supabase **唔會報錯**（訂唔存在嘅表照回 `SUBSCRIBED`）→
+屏顯示「已連線」但**永遠唔更新**。呢個係 docs/113 已記錄嘅坑，KDS 一定要有
+一次過嘅 REST 探測做健康檢查（`PGRST205` 判表唔存在）。
+
+**崗位鎖定 vs Realtime**：**冇衝突，亦唔需要重新訂閱**。
+`pos_orders.items` 係 JSONB，Realtime filter 冇得按 station 過濾 →
+屏仍然收全店事件，只係本地唔顯示唔屬於自己崗位嘅行。
+好處：切崗位唔使斷線重訂。代價：payload 略大（可接受）。
+
+**預期延遲**：DB commit → Realtime 廣播 → client，同店 Wi-Fi 下通常 **< 500ms**。
+P0 驗收線：**收銀落單 → 屏上出現 ≤ 2 秒**。
+
+⚠️ 同打印路徑完全無關：KDS **唔經** print relay，亦**唔行** outbox（見 §3.1）。
 
 ---
 
@@ -287,13 +421,37 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 
 ## 7. 介面規格
 
-（可互動原型：`docs/117-kds-mockup.html`，直接開嚟睇）
+（可互動原型：**`docs/121-kds-ui-mockup-v4.html`** ← 最新，2026-09-11，
+已加「登入後揀崗位 + 屏內鎖定（冇『全部』）」；
+舊版 `docs/117` / `docs/118` / `docs/119` / `docs/120` 已被取代，唔好用。）
+
+### 7.0 ⚠️ 審稿稿／原型嘅版面硬規則（v1~v3 中過嘅坑）
+
+`docs/117` / `docs/118` 出過「大量元素錯位」，根因唔係個設計，而係**原型本身加咗響應式斷點**：
+
+| 坑 | 後果 | 正確做法 |
+|---|---|---|
+| 原型加 `@media (max-width: 900px)` 把三欄塌成一欄 | 預覽面板一窄 → 出餐台屏三欄變一欄、完全睇唔明 | **審稿稿一律唔可以有 `@media` 斷點** |
+| 用 `aspect-ratio` + `min-height` 做 iPad 外框 | 面板窄過 min-height 換算值 → 比例失真、內容被壓 | 改用**固定畫布 1180×820 + `transform: scale()`** 等比縮放 |
+| 單行藥丸用 `display:grid`，再靠 `margin-left:auto` 推右 | grid 單元格由內容決定闊度 → `auto` 邊距失效 → 左右唔對齊 | 單行元素用 `inline-flex`；要左右分開就用 `grid-template-columns: 1fr auto` |
+| 用 `display:contents` 做頁面切換包裝 | 跨瀏覽器行為唔一致，flex 子項計算易出錯 | 用真實 `flex:1; min-height:0; display:flex; flex-direction:column` 包裝 |
+| 🔴 **捲動區用 `display:grid` 但唔寫 `grid-auto-rows`** | 容器有明確高度（`flex:1` + 固定畫布）→ Chrome 將隱式 `auto` row 壓到 **min-content**（實測 232px），但卡片係 max-content（293~372px）→ **卡片撐爆自己個 row、直接疊落下一個 row 上面**。`overflow-y:auto` 會令佢唔報錯、唔 overflow，只係**靜靜咁重疊** —— console / build log 完全捉唔到 | **`grid-auto-rows:max-content`**（＋ `align-items:stretch` 令同一 row 卡片等高，格線齊） |
+| 卡片內列左右內距唔對稱（`.lines{padding:6px 8px}`） | ✓ 掣貼實卡片右邊界，睇落好似被切咗 | `.lines` 左右都要有內距，`✓` 同卡片邊界至少留 14px |
+| 靠肉眼判斷「有冇重疊／走位」 | 四輪來回都仲係「錯位」 | **用真實 Chromium 量度**：`tools/2026-09-11-measure-kds-layout.js`（逐卡 bounding box + 兩兩重疊檢測）／`tools/2026-09-11-verify-kds-screens.js`（全畫面掃） |
+
+**已知取捨（v3）**：`align-items:stretch` 令同一 row 兩張卡等高，好處係格線永遠齊、
+兩邊嘅 ✓ 掣橫向對齊（廚房同事可以盲撳）；代價係項目少嘅卡底部會有空白（實測最多 ~133px）。
+如果將來嫌空白多，可以改為「兩欄獨立堆疊（masonry）」，但就會失去跨卡橫向對齊 —— 二選一。
+
+**落落真代碼（React/Tailwind）時同理**：後廚屏／出餐台屏係**固定角色嘅裝置頁**，
+唔應該跟手機斷點重排。iPad 橫向係唯一目標形狀；窄過就橫向滾，唔好塌欄。
+對應 Tailwind：`grid auto-rows-max items-stretch`（**唔可以**只寫 `grid`）。
 
 ### 7.1 後廚屏 `/kitchen`（橫向 iPad 1024×768 起）
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 澳門茶餐廳 · 後廚      工位[全部▾]   ⬤ 已連線   未完成 7     │ ← 頂欄 56px
+│ 澳門茶餐廳 · 廚房屏   ● 廚房 已鎖定    ⬤ 已連線   未完成 7  ⚙│ ← 頂欄 56px
 ├──────────────────────────────────────────────────────────────┤
 │ ┌────────────────┐ ┌────────────────┐                        │
 │ │ 自取 A012  02:14│ │ 枱 5     00:41 │                       │
@@ -305,12 +463,16 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 │ │   [2/2] 已完成  │ │                │                       │
 │ └────────────────┘ └────────────────┘                        │
 │  ↑ 卡頭：取餐號/枱號 + 計時器    ↑ 卡身只顯示本站工位嘅行      │
+│  ↑ 頂欄**冇** 全部/廚房/水吧 切換掣 —— 崗位係鎖喺設備度（§4.4）│
 └──────────────────────────────────────────────────────────────┘
 ```
 
 **規格**
 
-- 卡片**兩欄瀑布流**（唔係表格）。一屏至少見 6 張卡。
+- 卡片**兩欄等高格**（同一 row 兩張卡等高 → 格線齊、兩邊 ✓ 掣橫向對齊）。
+  一屏至少見 6 張卡。
+  ⚠️ 落 Tailwind 要寫 `grid auto-rows-max items-stretch`（**唔可以**只寫 `grid`），
+  否則捲動容器會將 row 壓到 min-content → 卡片互相重疊。見 §7.0。
 - 卡頭左：取餐號（快餐）或枱號（堂食）；卡頭右：**計時器**，由 `sentToKitchenAt` 起算。
 - 計時器顏色：`< 3min` 灰 · `3–8min` 橙 · `> 8min` 紅 + 慢脈動。
   閾值**每店可配**（快餐同酒樓差好遠）。
@@ -325,6 +487,7 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
   加單 → 「枱 5 加單 2 項」+ 卡片整體閃一次邊框。
 - 離線 → 頂欄燈變紅 + 大字橫幅「**網絡斷線 · 唔可以確認出餐**」，
   所有 ✓ 掣 disabled（見 §3.3）。
+- **頂欄只有一個崗位徽章（唯讀）**，唔可以一撳即切；切換走「⚙ 設定」→ 需重新登入。
 
 ### 7.2 出餐台屏 `/expo`（橫向 iPad）
 
@@ -411,14 +574,19 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 ### P0 · 後廚屏（單工位、並存模式）— 最小可用
 1. `supabase/migrations/0033_pos_kds.sql`（1 表 + RLS + Realtime publication）
 2. 純函式：`lib/kds/kds-board.ts`（由 order + state 砌出屏上模型，**可 `node --test`**）
-3. API：`/api/pos/kds/board`、`/api/pos/kds/items`
-4. `login-screen.tsx` 加兩個模式 + `lib/kds/device-binding.ts`
-5. `/kitchen` 頁（全部工位、無音效、無 undo 條）
+3. API：`/api/pos/kds/board`（帶 `?station=`）、`/api/pos/kds/items`
+4. `login-screen.tsx` 加「後廚屏」模式 + `lib/kds/device-binding.ts`
+   + `lib/kds/stations.ts`（由 `printerGroups` 衍生、排除 `receipt`）
+5. `/kitchen` 頁：**入頁先檢查綁定 → 冇崗位就顯示揀崗位 → 有就直接鎖定入屏**
+6. ⚠️ **同步改 `scan-mode-from-login.test.ts`**（加咗 `LoginMode` 值，唔改就 fail）
+7. Realtime 三件套：`onResubscribed` 補拉 ＋ 樂觀 UI ＋ `visibilitychange` 看門狗（§4.5）
 
-**驗收**：收銀台落單 → 後廚屏 2 秒內出現 → 撳 ✓ → 另一部機 reload 見到 `done_qty` 落咗 DB。
+**驗收**：收銀台落單 → 後廚屏 **2 秒內**出現 → 撳 ✓ → 另一部機 reload 見到 `done_qty` 落咗 DB。
+**另驗**：① 未揀崗位入 `/kitchen` 會被彈去揀崗位；
+② 廚房屏唔會見到水吧項目，反之亦然；③ 頂欄「未完成」係本崗位數字。
 
 ### P1 · 多工位 + 營運手感
-- `station` 由 `printerGroup` 映射、頂欄工位切換
+- `station` 由 `printerGroup` 映射、**設定頁切換崗位（要重新登入）**
 - 計時器閾值可配、新單音效、undo 條、長按操作
 - 離線唯讀閘 + 心跳對賬（R3/R5）
 - 設定頁三選一（`print` / `both` / `screen`）
@@ -433,13 +601,75 @@ POST  /api/pos/kds/orders     { storeId, orderId, action: "ready" | "recall" }
 
 ---
 
+### 10.1 ✅ P0 實作記錄（2026-09-11 完成）
+
+#### 新增檔案
+
+| 檔案 | 作用 |
+|---|---|
+| `supabase/migrations/0033_pos_kds.sql` | `pos_kds_item_state` 表 + RLS + Realtime publication（全部 idempotent） |
+| `src/lib/kds/types.ts` | 型別（**只有 `import type`** → 可被 `node --test` 載入） |
+| `src/lib/kds/stations.ts` | 工位推導（剔走 `receipt`/`label`、fallback、`needsStationPicker`） |
+| `src/lib/kds/device-binding.ts` | `KdsDeviceBinding`（localStorage + 假店硬閘） |
+| `src/lib/kds/kds-board.ts` | **純函式**砌板（client 同 server 共用同一份） |
+| `src/lib/kds/kds-server.ts` | 端點共用：授權、讀訂單、讀狀態、讀工位來源 |
+| `src/lib/kds/use-kds-realtime.ts` | KDS 專用 Realtime 訂閱（多訂 `pos_kds_item_state`） |
+| `src/lib/kds/use-kds-board.ts` | 資料層：即時性三件套（補拉 / 樂觀 UI / 看門狗） |
+| `src/app/api/pos/kds/board/route.ts` | `GET` 一次過拉原料 |
+| `src/app/api/pos/kds/items/route.ts` | `POST` 單品完成份數 |
+| `src/app/api/pos/kds/orders/route.ts` | `POST` `ready` / `recall` |
+| `src/app/kitchen/page.tsx` + `src/components/kds/*` | 後廚屏（揀崗位 / 屏 / 設定卡） |
+| `src/lib/kds/stations.test.ts`、`kds-board.test.ts` | 47 個單元測試 |
+
+改動：`scan-mode-from-login.ts`（`LoginMode` +2）、`scan-mode-from-login.test.ts`、
+`login-screen.tsx`（加「後廚屏」掣 + 導向 `/kitchen` + 唔改營運模式）。
+
+#### 上線步驟（ops）
+
+1. **跑 migration**：Supabase SQL Editor 執行 `supabase/migrations/0033_pos_kds.sql`。
+   ⚠️ 未跑都可以部署（屏會顯示「後廚狀態表未建立」大字警示，唔會扮成功），但撳 ✓ 唔會保存。
+2. **確認環境變數**（R1，最重要）：
+   - `NEXT_PUBLIC_POS_SUPABASE_URL` / `NEXT_PUBLIC_POS_SUPABASE_ANON_KEY` → **POS 專案**（唔係 Ledger）
+   - `SUPABASE_SERVICE_ROLE_KEY` → 寫入用（缺咗 `POST` 會 503，唔會扮成功）
+3. 平板開 `/login?mode=kitchen` → 登入 → 揀崗位 → 完成。
+
+#### 驗收清單
+
+- [ ] 收銀落單 → 後廚屏 **≤ 2 秒**出現（唔使 reload）
+- [ ] 撳 ✓ → 立即變灰（樂觀），另一部機 reload 見到 `done_qty` 落咗 DB
+- [ ] 未揀崗位直接打 `/kitchen` → **彈去揀崗位**，唔會顯示「全部」
+- [ ] 廚房屏見唔到水吧出品，反之亦然
+- [ ] 頂欄「未完成」= **本工位**未完成**份數**
+- [ ] 只有一個工位嘅店 → 自動跳過揀崗位
+- [ ] 熄 Wi-Fi → 撳 ✓ 回滾 + 紅橫幅（唔可以扮成功）
+- [ ] 平板休眠 10 分鐘再開 → 補拉返齊（唔會少單）
+
+#### 同方案有出入嘅地方（連理由）
+
+| 方案原文 | 實作 | 理由 |
+|---|---|---|
+| board 回「砌好、按工位篩過」嘅板 | 回**原始輸入**（訂單 + 狀態 + 工位來源），客戶端用**同一份**純函式砌 | 客戶端要本地即時重算（樂觀 UI + Realtime 增量），否則每個事件都要再打 REST = 變相 polling，而且會出現兩套砌板邏輯 |
+| 「全部完成」判定 | **按本工位**計，唔係跨工位 | 修 bug：一張單同時有廚房／水吧出品時，廚房做完自己嗰碟但水吧未做 → 廚房屏會永遠留住一張已冇嘢做嘅卡 |
+| 12 小時窗口用 `sentToKitchenAt` | 改用 `updated_at` | 酒樓長時間嘅單加菜時，`sentToKitchenAt` 已經 13 小時前 → 成張單消失、加嗰兩碟永遠冇人做 |
+| `cooking_at` | P0 **唔寫**（留 NULL） | 呢條係全屏最熱路徑（一秒撳幾下），唔想為咗一個 P3 統計欄多打一次 DB |
+| `recall` 清走狀態行 | 用 **upsert `done_qty=0`** 而唔係 `delete` | DELETE 事件嘅 `payload.old` 冇 `REPLICA IDENTITY FULL` 就只剩 PK；UPDATE 一定帶完整新行，客戶端唔使特別處理 |
+| 綁定失效 → 彈返揀崗位 | **唔自動彈** | 掛喺牆上嘅屏無啦啦跳去揀崗位係災難。改為喺設定卡顯示提示，要改就人手入 |
+| 「完成卡留 8 秒」 | **純 client 本地效果**；server 唔會回已完成嘅單 | 否則 reload 之後一班綠色卡會永遠唔走 |
+
+⚠️ **已知未做**：出餐台屏 `/expo` 屬 P2，所以登入畫面暫時只出「後廚屏」一粒掣
+（`expo` 已經喺 `LoginMode` 同 `scanOrderHint` 入面，加掣 + 開頁就得）。
+
+---
+
 ## 11. 需要你拍板嘅事
 
-1. **Q1/Q2/Q3**（§2）——尤其屏係替代打印定並存。
-2. 工位劃分：直接用菜單嘅 `printerGroup`（例如「廚房」「水吧」），定要另開一套「後廚屏工位」？
-3. 出餐台屏要唔要同一部 iPad 兼做**叫號屏**？
+1. **Q1/Q2/Q3**（§2）——尤其屏係替代打印定並存。 ✅ 已拍板（§0）
+2. 工位劃分：直接用菜單嘅 `printerGroup`（例如「廚房」「水吧」），定要另開一套「後廚屏工位」？ ✅ 已拍板（§0 決定 2 + 5）
+3. 出餐台屏要唔要同一部 iPad 兼做**叫號屏**？ ✅ 已拍板：暫時唔做（§0 決定 3）
 4. 後廚屏嘅帳號：用店長／經理的 8 位電話帳號綁定（同 kiosk 一致），定係想廚房師傅各有自己嘅 PIN？
-   （後者要改 Ledger 帳號體系，成本高很多，**建議唔做**。）
+   （後者要改 Ledger 帳號體系，成本高很多，**建議唔做**。） ✅ 已拍板（§0 決定 4）
+5. **（新）** 崗位徽章嘅顯示方式：淨係文字（`● 廚房 已鎖定`）定要埋 emoji？
+   → 原型用**色點**（橙=廚房、藍=水吧），因為 emoji 縮到 19px 會睇成「放大鏡」。
 
 ---
 

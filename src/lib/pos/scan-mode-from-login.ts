@@ -20,28 +20,34 @@ import type { ScanMode } from "./kiosk-settings";
  * | `dinein`（堂食） | `dine_in` | 每枱一碼 `/menu?tableId=` |
  * | `kiosk`（自助點餐機） | **唔改**（`null`） | 唔適用（客人在該機直接落單） |
  * | `salon`（美容） | **唔改**（`null`） | 唔適用 |
+ * | `kitchen`（後廚屏） | **唔改**（`null`） | 唔適用 |
+ * | `expo`（出餐台屏） | **唔改**（`null`） | 唔適用 |
  *
- * ## ⚠️ 為什麼 `kiosk` / `salon` 一定要回 `null`
+ * ## ⚠️ 為什麼 `kiosk` / `salon` / `kitchen` / `expo` 一定要回 `null`
  *
- * 自助點餐機係**一部機**（「呢部機開機做乜」），唔係「全店客人點樣落單」。
- * 一間堂食店完全可以同時有「收銀台（堂食登入）」＋「自助點餐機（kiosk 登入）」。
- * 如果 kiosk 登入都寫 `quick`，就會出現：
+ * 呢四個都係**裝置角色**（「呢部機開機做乜」），唔係「全店客人點樣落單」。
+ * 一間堂食店完全可以同時有「收銀台（堂食登入）」＋「自助點餐機（kiosk 登入）」
+ * ＋「廚房屏（kitchen 登入）」＋「水吧屏（kitchen 登入，另一個工位）」。
+ * 如果佢哋任何一個都寫 `quick`，就會出現：
  *
  *   kiosk 機綁店 → 寫 `quick` → 店家喺收銀台用堂食登入 → 寫返 `dine_in`
- *   → 兩部機互相覆蓋，設定頁顯示嘅碼**每次登入都唔同**。
+ *   → 四部機互相覆蓋，設定頁顯示嘅碼**每次登入都唔同**。
  *
- * 呢個正是 docs/115 §12.2 講嘅「兩部機打架」，所以呢兩個模式一律**不寫**。
+ * 呢個正是 docs/115 §12.2 講嘅「兩部機打架」，所以呢四個模式一律**不寫**。
  * 需要區分時，`scanModeForLoginMode()` 回 `null` 就係「唔關店級設定事」嘅信號。
+ *
+ * ⚠️ 後廚屏（`kitchen`）**唔需要**工位資訊 —— 工位係**設備屬性**，
+ * 由 `KdsDeviceBinding.station` 決定（docs/116 §4.4），同店級設定完全無關。
  *
  * 純函式、零 runtime 依賴（只 `import type`）→ 可以直接被 `node --test` 覆蓋。
  */
-export type LoginMode = "quick" | "dinein" | "salon" | "kiosk";
+export type LoginMode = "quick" | "dinein" | "salon" | "kiosk" | "kitchen" | "expo";
 
 /**
  * 回傳要寫入店級設定嘅 `ScanMode`；回 `null` = **唔應該改店級設定**。
  *
  * 呼叫方（`login-screen.tsx`）見到 `null` 就要跳過 POST，唔可以當 `dine_in` 處理
- * ——否則 kiosk / salon 登入會靜靜把全店掃碼模式洗返堂食。
+ * ——否則 kiosk / salon / kitchen / expo 登入會靜靜把全店掃碼模式洗返堂食。
  */
 export function scanModeForLoginMode(mode: LoginMode): ScanMode | null {
   if (mode === "quick") return "quick";

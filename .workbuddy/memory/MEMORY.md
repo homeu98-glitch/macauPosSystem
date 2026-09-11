@@ -4,6 +4,7 @@
 > 維護：新「坑」先寫 docs/113，**只有最高頻**才摘要上嚟；本檔 ≤ 3k 字元。
 
 ## 改動前必查
+- **後廚屏 KDS（2026-09-11 P0 完成）**：見 `docs/116` §10.1。三條鐵律 —— ① **唔行 outbox**、② 屏**唔碰** `pos_orders.status`（只寫 `fulfillment_status`），③ 崗位鎖喺設備綁定、屏內冇切換掣。單品完成表用 `done_qty`（份數）**唔係** boolean，否則加單會靜默漏單。屏嘅卡片格一定要 `auto-rows-max`（漏咗 = 卡片靜默重疊）。
 - **報表頁**：KPI 帶**固定 `grid-cols-5`**（10 格同一個 grid）；**唔可以** `md:grid-cols-3 xl:grid-cols-5`。⚠️ 合併 grid **必須刪中間 `</div>`**，否則尾 N 格全寬堆疊（JSX 仍平衡 → build 全綠捉唔到）。`:key` remount ≠ 刷新，要用 `refreshToken`。
 - **`normalizePosLocalSettings` 係白名單重建** → 加欄唔加白名單 = 靜靜剷走（中過 `qrUrl`/`paperSize`/`shiftPresets`）。
 - **掃碼雙模式（docs/115）**：`/menu?tableId=`（堂食每枱一碼）/ `/quick?store=`（快餐全店一碼）完全區隔；`/menu` 冇 tableId **唔可以**當快餐。`scan_mode` **由登入驅動**：設定頁唯讀，唯一寫入點 `login-screen.tsx`；`kiosk`/`salon` **唔寫**。

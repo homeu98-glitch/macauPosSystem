@@ -333,3 +333,30 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
 - ⚠️ **標記分支（`pre-incident-*`）係雙面刃**：保留舊 SHA 嘅代價係 (a) `git fsck` 永遠報 missing、(b) **`git fetch` 拉唔到嘢**（被當成 `have`，見上） 、(c) 帶 `--branch` 嘅 `git status` 可能 128 → **GitHub Desktop 開唔到 repo**。舊 SHA 記落文檔／memory 之後就應該 `git branch -D` 咗佢，唔好長留。
 - ⚠️ 順序：**先 `git fetch` 由遠端還原**（見上節）；`reset --soft` 只係遠端真係冇料嘅時候用。
 - 驗證：`git log --oneline | wc -l`、`git status --porcelain` 要空、上面條 `missing` 要 **0**（0 = 可以正常 push）。
+
+## 🔴 grid 捲動容器漏寫 `grid-auto-rows` = 卡片靜默重疊（2026-09-11 · 中過 KDS 原型 v2）
+
+樣板：`flex:1` + 固定高度嘅容器（`h-screen` / `h-[100dvh]` / 固定畫布）**同時**係 `display:grid` ＋ `overflow-y-auto`。
+
+```css
+/* ✗ 錯：卡片會疊落下一個 row 上面 */
+.kbody{flex:1;min-height:0;overflow-y:auto;display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-content:start;align-items:start}
+
+/* ✓ 對 */
+.kbody{...;grid-auto-rows:max-content;align-items:stretch}
+```
+
+- **機制**：容器有明確高度 → Chrome 將隱式 `auto` row 壓到 **min-content**。實測 `.kbody` 752px 高、
+  3 行各 232px（= 696/3，剛好填滿），但卡片本身 max-content 係 293~372px → **每張卡撐爆自己個 row**。
+- **為何難捉**：`overflow-y:auto` 令佢**唔報錯、唔 overflow、唔出 scrollbar 異常**，只係靜靜咁重疊；
+  console / `next build` / typecheck 全部綠燈。肉眼睇仲會誤判成「padding 問題」。
+- **點解 min-content < max-content**：卡內每行有 `min-height:74px`，但內容實際 90~118px。
+  （純文字列嘅話 min-content 反而 ≥ max-content，所以**唔係**所有 grid 捲動區都會中。）
+- **Tailwind 對應**：`grid auto-rows-max items-stretch` —— **唔可以**只寫 `grid`。
+- **驗證**：`getComputedStyle(el).gridTemplateRows` 每行值必須 **≥** 該行卡片 `offsetHeight`。
+  唔好用肉眼判斷「有冇錯位」—— 用真瀏覽器量 bounding box：`tools/2026-09-11-measure-kds-layout.js`
+  （逐卡 x/y/高 + 兩兩交集）、`tools/2026-09-11-verify-kds-screens.js`（全 tab × 全篩選掃）。
+  呢兩個腳本已抽出成可重用 skill：`~/.workbuddy/skills/pixel-stable-ui-mockup/`。
+- **取捨**：`align-items:stretch` 令同一 row 卡片等高、兩邊按鈕橫向對齊，代價係項目少嘅卡底部有空白（實測最多 ~133px）。
+  想要密排就要改「兩欄獨立堆疊（masonry）」，但會失去跨卡橫向對齊。

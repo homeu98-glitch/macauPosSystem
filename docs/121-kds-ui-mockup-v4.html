@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-page-node-id="1PKOwJUvfb5YLcuv9KiiB6">
+<head data-page-node-id="RdbxRehYom8n2VmKLn3jgk">
+<meta charset="utf-8" data-page-node-id="6VrdJsSTceMhFAPlsrPyih">
+<meta name="viewport" content="width=device-width,initial-scale=1" data-page-node-id="YWlXQtybFL0HobECv4AXYv">
+<title>後廚屏 / 出餐台屏 · 介面確認稿 v4（docs/121）· 崗位鎖定</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   v4 = v3 版面 ＋ 新增「登入後先揀崗位，屏內唔再有『全部』」
+   ─────────────────────────────────────────────────────────────────────
+   0. 🔴 崗位係「設備屬性」唔係「訂單屬性」：一部 iPad 開機做「廚房屏」，
+      就永遠只顯示廚房出品。所以崗位要鎖喺設備綁定度，屏內**唔提供**切換掣
+      （頂欄只顯示已鎖定嘅崗位），切換要走「⚙ 設定」→ 需重新登入。
+      咁先真正降低誤按 —— 但一定要留逃生門，唔係錯配就卡死。
+   1. 固定畫布 1180×820，用 transform:scale() 等比縮放。
+      **完全冇 @media 斷點**。
+   2. 所有橫向排列用 CSS Grid + 明確欄寬；單行藥丸用 inline-flex。
+   3. 每個捲動區 = flex column + min-height:0，header 永不被推走。
+   4. 卡片／列一律 grid 固定欄，唔靠內容撐闊。
+   5. 🔴 捲動區如果係 grid，**一定要寫 `grid-auto-rows:max-content`**。
+      唔寫（即用預設 `auto`）嘅話：容器有明確高度（flex:1 + 820px 畫布），
+      Chrome 會將隱式 `auto` row 壓到 **min-content**（實測 232px），
+      但卡片本身係 max-content（293~372px）→ 卡片撐爆自己嘅 row，
+      **直接疊落下一個 row 上面**。而 `overflow-y:auto` 會令佢唔報錯、
+      唔 overflow、只係靜靜咁重疊 —— 睇 console / build log 永遠捉唔到。
+      配合 `align-items:stretch`，同一 row 嘅卡片自動等高 → 格線永遠齊。
+   驗證工具：tools/2026-09-11-measure-kds-layout.js（真實 Chromium 量度）
+   配色對齊專案實際 Tailwind：slate / orange / amber / emerald / rose / sky。
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  --slate-50:#f8fafc; --slate-100:#f1f5f9; --slate-200:#e2e8f0; --slate-300:#cbd5e1;
+  --slate-400:#94a3b8; --slate-500:#64748b; --slate-600:#475569; --slate-700:#334155;
+  --slate-800:#1e293b; --slate-900:#0f172a;
+  --orange-50:#fff7ed; --orange-200:#fed7aa; --orange-400:#fb923c; --orange-500:#f97316; --orange-600:#ea580c;
+  --orange-700:#c2410c;
+  --amber-50:#fffbeb; --amber-100:#fef3c7; --amber-200:#fde68a; --amber-700:#b45309;
+  --emerald-50:#ecfdf5; --emerald-100:#d1fae5; --emerald-200:#a7f3d0; --emerald-500:#10b981;
+  --emerald-600:#059669; --emerald-700:#047857;
+  --rose-50:#fff1f2; --rose-100:#ffe4e6; --rose-200:#fecdd3; --rose-500:#f43f5e;
+  --rose-600:#e11d48; --rose-700:#be123c;
+  --sky-50:#f0f9ff; --sky-200:#bae6fd; --sky-500:#0ea5e9; --sky-700:#0369a1;
+  --indigo-50:#eef2ff; --indigo-200:#c7d2fe; --indigo-700:#4338ca;
+  --cyan-50:#ecfeff; --cyan-200:#a5f3fc; --cyan-700:#0e7490;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang HK","Microsoft JhengHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:#e6eaf0;color:var(--slate-900);-webkit-font-smoothing:antialiased;padding:16px 16px 40px}
+
+/* ══════════ 評審外框（唔屬產品介面） ══════════ */
+.review{max-width:1180px;margin:0 auto 12px;background:var(--slate-900);border-radius:16px;padding:14px 18px;color:#fff}
+.review .row1{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+.review .ttl{font-size:14px;font-weight:600;line-height:1.5}
+.review .ttl small{display:block;font-weight:400;color:var(--slate-400);font-size:11.5px;margin-top:3px}
+.review .tabs{display:grid;grid-auto-flow:column;gap:4px;background:var(--slate-800);padding:4px;border-radius:12px}
+.review .tabs button{border:0;background:transparent;color:var(--slate-400);font:inherit;font-size:13px;font-weight:600;padding:9px 20px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.review .tabs button.on{background:#fff;color:var(--slate-900)}
+.review .row2{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--slate-700)}
+.scen{display:grid;grid-auto-flow:column;gap:7px;align-items:center;justify-content:start}
+.scen .lb{font-size:11.5px;font-weight:600;color:var(--slate-400);margin-right:2px;white-space:nowrap}
+.scen button{border:1px solid #3f3f46;background:var(--slate-800);color:var(--slate-100);font:inherit;font-size:12px;font-weight:600;padding:9px 13px;border-radius:10px;cursor:pointer;white-space:nowrap}
+.scen button:hover{background:#334155}
+.flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:12px;padding-top:12px;border-top:1px solid var(--slate-700)}
+.flow .st{display:grid;grid-template-columns:26px minmax(0,1fr);gap:9px;align-items:center;padding-right:16px;position:relative}
+.flow .st:not(:last-child)::after{content:"";position:absolute;right:5px;top:50%;width:8px;height:1.5px;background:#52525b}
+.flow .st .no{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--slate-800);color:var(--slate-500);box-shadow:inset 0 0 0 1px #3f3f46}
+.flow .st .tx{font-size:12px;font-weight:600;color:var(--slate-500);line-height:1.4}
+.flow .st .tx small{display:block;font-size:10.5px;font-weight:400;color:var(--slate-600);margin-top:2px}
+.flow .st.on .no{background:var(--orange-500);color:#fff;box-shadow:none}
+.flow .st.on .tx{color:#fff}
+.flow .st.on .tx small{color:var(--slate-400)}
+
+/* ══════════ 固定畫布 ══════════ */
+.stage{max-width:1180px;margin:0 auto;position:relative;overflow:hidden;border-radius:22px}
+.canvas{width:1180px;height:820px;transform-origin:top left;position:absolute;top:0;left:0;
+  background:var(--slate-50);display:flex;flex-direction:column;overflow:hidden;
+  border:1px solid var(--slate-300);border-radius:22px;box-shadow:0 1px 3px rgba(15,23,42,.08)}
+.screenwrap{flex:1;min-height:0;display:flex;flex-direction:column}
+
+/* ══════════ 頂欄 ══════════ */
+.topbar{flex:0 0 66px;height:66px;display:grid;gap:14px;align-items:center;padding:0 18px;
+  background:#fff;border-bottom:1px solid var(--slate-200)}
+.topbar.k{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
+.topbar.e{grid-template-columns:minmax(0,1fr) auto}
+.topbar>.right{display:grid;grid-auto-flow:column;gap:10px;align-items:center;justify-self:end}
+.topbar.k>.left{justify-self:start}
+.topbar.k>.mid{justify-self:center}
+.store{font-size:16px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.store em{font-style:normal;color:var(--slate-400);font-weight:500;margin-left:8px;font-size:13px}
+
+.pills{display:grid;grid-auto-flow:column;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:9px 18px;border-radius:999px;
+  font-size:14px;font-weight:600;background:#fff;color:var(--slate-700);
+  box-shadow:inset 0 0 0 1px var(--slate-200);cursor:pointer;white-space:nowrap}
+.pill:hover{background:var(--slate-50)}
+.pill.on{background:var(--orange-500);color:#fff;box-shadow:none}
+.pill .n{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;
+  border-radius:999px;font-size:12px;font-weight:700;background:var(--slate-100);color:var(--slate-600);font-family:var(--mono)}
+.pill.on .n{background:rgba(255,255,255,.3);color:#fff}
+
+.net{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:999px;
+  font-size:13px;font-weight:600;background:var(--emerald-50);color:var(--emerald-700);
+  box-shadow:inset 0 0 0 1px var(--emerald-100);white-space:nowrap}
+.net i{width:9px;height:9px;border-radius:50%;background:var(--emerald-500);flex:0 0 9px}
+.net.off{background:var(--rose-50);color:var(--rose-700);box-shadow:inset 0 0 0 1px var(--rose-100)}
+.net.off i{background:var(--rose-500)}
+.stat{display:inline-flex;align-items:baseline;gap:8px;padding:9px 16px;border-radius:999px;
+  background:var(--slate-900);color:#fff;font-size:13px;font-weight:600;white-space:nowrap}
+.stat b{font-size:17px;font-family:var(--mono)}
+.ghost{display:inline-flex;align-items:center;gap:7px;padding:9px 15px;border-radius:999px;
+  background:#fff;color:var(--slate-900);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer;
+  box-shadow:0 1px 2px rgba(15,23,42,.05),inset 0 0 0 1px var(--slate-200)}
+.ghost:hover{background:var(--slate-50)}
+.banner{display:none;flex:0 0 44px;height:44px;align-items:center;gap:10px;padding:0 20px;
+  background:var(--rose-600);color:#fff;font-size:14px;font-weight:700}
+body.offline .banner{display:flex}
+body.offline .donebtn,body.offline .bigbtn{opacity:.3;pointer-events:none}
+
+/* ══════════ 後廚屏 ══════════ */
+/* `grid-auto-rows:max-content` = 呢個畫面嘅命門，理由見檔頭第 5 條。
+   `align-items:stretch` = 同一 row 兩張卡自動等高，格線齊。 */
+.kbody{flex:1;min-height:0;overflow-y:auto;background:var(--slate-50);padding:14px 14px 22px;
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:max-content;
+  gap:14px;align-content:start;align-items:stretch}
+.card{background:#fff;border:1px solid var(--slate-200);border-radius:16px;overflow:hidden;
+  box-shadow:0 1px 2px rgba(15,23,42,.04);display:flex;flex-direction:column}
+.card.push{animation:push .45s cubic-bezier(.2,.8,.3,1)}
+@keyframes push{from{transform:translateY(-14px) scale(.975);opacity:0}to{transform:none;opacity:1}}
+.card.urgent{border-color:var(--rose-200)}
+.card.cleared{background:var(--emerald-50);border-color:var(--emerald-200)}
+.card.leaving{opacity:0;transform:translateX(34px);transition:.3s}
+.chead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;
+  padding:12px 14px;border-bottom:1px solid var(--slate-100)}
+.card.cleared .chead{border-color:var(--emerald-200)}
+.ono{font-size:28px;font-weight:600;line-height:1.1;letter-spacing:-.02em;font-family:var(--mono)}
+.oname{font-size:12px;color:var(--slate-500);font-weight:500;margin-top:5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.chead-right{display:grid;justify-items:end;gap:7px}
+.badge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 9px;
+  font-size:11px;font-weight:600;white-space:nowrap}
+.badge.pos{background:var(--slate-100);color:var(--slate-600);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.badge.kiosk{background:var(--indigo-50);color:var(--indigo-700);box-shadow:inset 0 0 0 1px var(--indigo-200)}
+.badge.scan{background:var(--cyan-50);color:var(--cyan-700);box-shadow:inset 0 0 0 1px var(--cyan-200)}
+.timer{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:10px;
+  font-size:19px;font-weight:700;font-family:var(--mono);background:var(--slate-100);color:var(--slate-500)}
+.timer.warn{background:var(--amber-100);color:var(--amber-700)}
+.timer.late{background:var(--rose-100);color:var(--rose-700);animation:blink 1.8s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+/* 左右各留 14px 內距 —— 之前只有左邊有 padding，✓ 掣貼實卡片右邊界，睇落好似被切。 */
+.lines{padding:6px 14px 14px;flex:1}
+.line{display:grid;grid-template-columns:minmax(0,1fr) 84px;gap:16px;align-items:center;
+  padding:11px 0;min-height:76px}
+.line+.line{border-top:1px solid var(--slate-100)}
+.line.done .lname{color:var(--slate-400);text-decoration:line-through;text-decoration-thickness:2px}
+.lname{font-size:22px;font-weight:600;line-height:1.2;letter-spacing:-.01em}
+.lqty{font-size:16px;color:var(--slate-500);font-weight:500;font-family:var(--mono);margin-left:6px}
+.lmeta{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:12px;font-weight:600;padding:3px 9px;border-radius:7px;background:var(--slate-100);color:var(--slate-600);white-space:nowrap}
+.chip.note{background:var(--amber-100);color:var(--amber-700)}
+.chip.prog{background:var(--sky-50);color:var(--sky-700);box-shadow:inset 0 0 0 1px var(--sky-200)}
+.chip.void{background:var(--rose-100);color:var(--rose-700)}
+.donebtn{width:84px;height:60px;border-radius:14px;cursor:pointer;border:0;background:#fff;
+  box-shadow:inset 0 0 0 1.5px var(--slate-200);color:var(--slate-400);
+  font-size:27px;font-weight:700;line-height:1;font-family:var(--sans);
+  display:grid;place-items:center;transition:.12s;touch-action:manipulation}
+.donebtn:hover{background:var(--emerald-50);color:var(--emerald-600);box-shadow:inset 0 0 0 1.5px var(--emerald-500)}
+.donebtn:active{transform:scale(.95)}
+.donebtn.part{background:var(--amber-50);color:var(--amber-700);box-shadow:inset 0 0 0 1.5px var(--amber-500)}
+.donebtn.part:hover{background:var(--rose-50);color:var(--rose-600);box-shadow:inset 0 0 0 1.5px var(--rose-500)}
+.donebtn.full{background:var(--emerald-50);color:var(--emerald-600);box-shadow:inset 0 0 0 1.5px var(--emerald-500)}
+.donebtn.full:hover{background:var(--rose-50);color:var(--rose-600);box-shadow:inset 0 0 0 1.5px var(--rose-500)}
+.kempty{grid-column:1 / -1;padding:80px 20px;text-align:center;color:var(--slate-400);font-size:14px;line-height:2}
+
+/* ══════════ 頂欄「已鎖定崗位」徽章（取代舊嘅 全部/廚房/水吧 藥丸）══════════
+   刻意做成**唔似按鈕**：冇 hover、冇 cursor:pointer、冇邊框陰影，
+   只係一個狀態顯示。切換要走「⚙ 設定」，唔可以一撳即切。 */
+.lock{display:inline-flex;align-items:center;gap:10px;padding:8px 16px 8px 14px;border-radius:999px;
+  background:var(--slate-100);box-shadow:inset 0 0 0 1px var(--slate-200);white-space:nowrap}
+.lock .lk-ic{font-size:19px;line-height:1}
+.lock .lk-dot{width:12px;height:12px;border-radius:50%;flex:0 0 12px;background:var(--orange-500)}
+.lock .lk-nm{font-size:17px;font-weight:700;letter-spacing:-.01em;color:var(--slate-900)}
+.lock .lk-tag{font-size:11px;font-weight:700;color:var(--slate-500);background:#fff;
+  border-radius:999px;padding:3px 9px;box-shadow:inset 0 0 0 1px var(--slate-200)}
+
+/* ══════════ 揀崗位（登入之後）══════════ */
+.phead{flex:0 0 66px;height:66px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;
+  align-items:center;padding:0 18px;background:#fff;border-bottom:1px solid var(--slate-200)}
+.pstore{font-size:16px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.pstore em{font-style:normal;color:var(--emerald-600);font-weight:600;margin-left:8px;font-size:13px}
+.pnet{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--slate-500);
+  background:var(--slate-100);border-radius:999px;padding:7px 14px;white-space:nowrap}
+.pnet i{width:9px;height:9px;border-radius:50%;background:var(--emerald-500);flex:0 0 9px}
+.pbody{flex:1;min-height:0;overflow-y:auto;background:var(--slate-50);
+  display:grid;grid-auto-rows:max-content;justify-items:center;align-content:start;
+  gap:0;padding:34px 24px 22px}
+.pask{font-size:34px;font-weight:600;letter-spacing:-.025em;line-height:1.2;text-align:center;color:var(--slate-900)}
+.psub{font-size:14px;line-height:1.75;color:var(--slate-500);text-align:center;margin-top:12px;
+  max-width:660px}
+.psub strong{color:var(--slate-900);font-weight:600}
+.pgrid{display:grid;grid-template-columns:repeat(2,400px);gap:20px;margin-top:28px}
+.pcard{display:grid;grid-template-columns:minmax(0,1fr);justify-items:center;gap:0;
+  background:#fff;border:1px solid var(--slate-200);border-radius:22px;padding:26px 24px 22px;
+  cursor:pointer;font:inherit;text-align:center;transition:.14s;
+  box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.pcard:hover{border-color:var(--orange-400);box-shadow:0 10px 30px -12px rgba(234,88,12,.35);
+  transform:translateY(-2px)}
+.pcard:active{transform:translateY(0)}
+.pcard .pic{font-size:56px;line-height:1}
+.pcard .pnm{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:14px;color:var(--slate-900)}
+.pcard .pds{font-size:13px;color:var(--slate-500);margin-top:7px;white-space:nowrap}
+.pcard .pq{font-size:13px;font-weight:600;color:var(--orange-700);background:var(--orange-50);
+  border-radius:999px;padding:6px 14px;margin-top:15px;white-space:nowrap}
+.pcard .pq b{font-family:var(--mono);font-size:15px}
+.pcard .pcta{font-size:13.5px;font-weight:700;color:#fff;background:var(--slate-900);
+  border-radius:12px;padding:12px 20px;margin-top:16px;white-space:nowrap}
+.pfoot{font-size:12.5px;color:var(--slate-400);text-align:center;margin-top:26px;line-height:1.7}
+
+/* ══════════ 設定卡（切換崗位嘅唯一入口）══════════ */
+.sheet{position:absolute;inset:0;z-index:60;background:rgba(15,23,42,.42);
+  display:grid;place-items:center;padding:24px}
+.sheetbox{width:520px;background:#fff;border-radius:22px;padding:24px 26px 22px;
+  box-shadow:0 28px 70px -20px rgba(15,23,42,.6)}
+.sh-h{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.sh-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;
+  padding:13px 0;border-bottom:1px solid var(--slate-100);font-size:14px;color:var(--slate-500)}
+.sh-row b{font-size:14.5px;color:var(--slate-900);font-weight:600}
+.sh-note{margin-top:14px;font-size:12.5px;line-height:1.8;color:var(--slate-500);
+  background:var(--slate-50);border-radius:14px;padding:13px 15px}
+.sh-note strong{color:var(--slate-900);font-weight:600}
+.sh-btns{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;margin-top:18px}
+.sh-ghost,.sh-warn{border:0;font:inherit;font-weight:700;border-radius:13px;padding:13px 20px;
+  cursor:pointer;white-space:nowrap}
+.sh-ghost{background:var(--slate-100);color:var(--slate-600);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.sh-ghost:hover{background:var(--slate-200)}
+.sh-warn{background:var(--rose-600);color:#fff}
+.sh-warn:hover{background:var(--rose-700)}
+.pcard.picked{border-color:var(--orange-500);box-shadow:0 0 0 3px var(--orange-200)}
+
+/* ══════════ 出餐台屏 ══════════ */
+.ebody{flex:1;min-height:0;display:grid;grid-template-columns:296px minmax(0,1fr) 336px;background:var(--slate-50)}
+.qcol{background:#fff;border-right:1px solid var(--slate-200);display:flex;flex-direction:column;min-height:0}
+.qhead{flex:0 0 46px;height:46px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;
+  padding:0 16px;font-size:12px;font-weight:700;color:var(--slate-500);letter-spacing:.06em;
+  border-bottom:1px solid var(--slate-100)}
+.qhead .cnt{font-family:var(--mono);font-size:13px;color:var(--slate-900);justify-self:end}
+.qlist{flex:1;min-height:0;overflow-y:auto;padding:10px;display:grid;gap:8px;align-content:start}
+.qi{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;
+  padding:12px 13px;border-radius:14px;background:#fff;border:1px solid var(--slate-200);cursor:pointer}
+.qi:hover{background:var(--slate-50)}
+.qi.on{background:var(--orange-50);border-color:var(--orange-200);box-shadow:0 0 0 1px var(--orange-200)}
+.qi .qno{font-size:18px;font-weight:600;font-family:var(--mono);letter-spacing:-.01em;line-height:1.2}
+.qi .qsub{font-size:11.5px;color:var(--slate-500);font-weight:500;margin-top:3px}
+.qi .qsub.short{color:var(--rose-600)}
+.qi .qsub.full{color:var(--emerald-600)}
+.qi .qt{font-size:13px;font-weight:700;font-family:var(--mono);color:var(--slate-500)}
+.qi .qt.warn{color:var(--amber-700)} .qi .qt.late{color:var(--rose-600)}
+.qempty{padding:44px 14px;text-align:center;color:var(--slate-400);font-size:13px;line-height:2}
+
+.mcol{min-height:0;overflow-y:auto;padding:18px 20px 22px}
+.mtitle{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:baseline;
+  padding-bottom:13px;border-bottom:1px solid var(--slate-200)}
+.mtitle .t{font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
+.mtitle .t small{font-size:13px;font-weight:500;color:var(--slate-500);margin-left:10px;letter-spacing:0}
+.mtitle .meta{display:flex;flex-wrap:wrap;gap:9px;align-items:center;justify-content:flex-end;
+  font-size:12.5px;color:var(--slate-500);font-weight:500}
+.progress{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;margin:14px 0 2px}
+.pbar{height:10px;border-radius:999px;background:var(--slate-200);overflow:hidden}
+.pbar i{display:block;height:100%;border-radius:999px;background:var(--emerald-500);transition:width .3s}
+.plabel{font-size:12.5px;font-weight:600;color:var(--slate-500);white-space:nowrap}
+.plabel b{font-family:var(--mono);font-size:14px;color:var(--slate-900)}
+.plabel.all b{color:var(--emerald-700)}
+.rline{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:14px;align-items:center;
+  padding:13px 16px;border-radius:14px;background:#fff;border:1px solid var(--slate-200);margin-top:9px;min-height:74px}
+.rline.ok{background:var(--emerald-50);border-color:var(--emerald-200)}
+.rline.short{background:var(--rose-50);border-color:var(--rose-200)}
+.rline.void{opacity:.5}
+.rmark{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:16px;font-weight:700;
+  background:var(--slate-200);color:var(--slate-500)}
+.rline.ok .rmark{background:var(--emerald-500);color:#fff}
+.rline.short .rmark{background:var(--rose-500);color:#fff}
+.rname{font-size:19px;font-weight:600;line-height:1.25}
+.rline.ok .rname{color:var(--emerald-700)}
+.rtag{font-size:14px;font-weight:700;white-space:nowrap}
+.rline.ok .rtag{color:var(--emerald-600)}
+.rline.short .rtag{color:var(--rose-600)}
+.note{margin-top:14px;padding:12px 16px;border-radius:14px;background:var(--amber-50);
+  border:1px solid var(--amber-200);font-size:13.5px;color:var(--amber-700);font-weight:600;line-height:1.65}
+.rdone{margin-top:16px;padding:14px 16px;border-radius:14px;background:var(--emerald-50);
+  border:1px solid var(--emerald-200);font-size:13.5px;color:var(--emerald-700);font-weight:600;line-height:1.65}
+
+.acol{background:#fff;border-left:1px solid var(--slate-200);display:flex;flex-direction:column;min-height:0;padding:18px;gap:14px}
+.albl{font-size:12px;font-weight:700;color:var(--slate-500);letter-spacing:.06em}
+.bigno{background:var(--slate-100);border-radius:18px;padding:18px 12px;text-align:center}
+.bigno .v{font-size:52px;font-weight:600;font-family:var(--mono);letter-spacing:-.03em;line-height:1.1}
+.bigno .s{font-size:13px;font-weight:600;color:var(--slate-500);margin-top:10px}
+.bigno.ready{background:var(--emerald-50)}
+.bigno.ready .s{color:var(--emerald-700)}
+.bigno.none .v{color:var(--slate-300)}
+.bigbtn{border:0;border-radius:18px;padding:22px 16px;font:inherit;font-size:21px;font-weight:700;cursor:pointer;
+  background:var(--emerald-600);color:#fff;line-height:1.3;font-family:var(--sans);transition:.14s}
+.bigbtn:hover{background:var(--emerald-700)}
+.bigbtn:active{transform:scale(.985)}
+.bigbtn:disabled{background:var(--slate-200);color:var(--slate-400);cursor:not-allowed}
+.bigbtn small{display:block;font-size:12.5px;font-weight:600;opacity:.9;margin-top:6px}
+.acol .ghost{width:100%;justify-content:center;padding:14px;font-size:14.5px;border-radius:14px}
+.afoot{margin-top:auto;border-top:1px solid var(--slate-100);padding-top:14px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px 12px;font-size:12.5px;color:var(--slate-500)}
+.afoot b{font-family:var(--mono);font-size:14px;color:var(--slate-900);justify-self:end}
+
+/* ══════════ 登入畫面 ══════════ */
+.login{flex:1;min-height:0;position:relative;overflow:hidden;background:#020617;display:grid;place-items:center}
+.login .blob{position:absolute;border-radius:50%;filter:blur(64px);opacity:.5}
+.login .b1{width:300px;height:300px;background:#d946ef;left:-50px;top:20px}
+.login .b2{width:340px;height:340px;background:#22d3ee;right:-60px;top:70px}
+.login .b3{width:380px;height:380px;background:#fbbf24;left:32%;bottom:-150px}
+.login .veil{position:absolute;inset:0;background:rgba(2,6,23,.44)}
+.lwrap{position:relative;width:600px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.15);
+  border-radius:26px;padding:26px 28px;backdrop-filter:blur(14px)}
+.lwrap .brand{text-align:center;font-size:12.5px;font-weight:600;letter-spacing:.22em;color:#fde6be}
+.lwrap h1{text-align:center;font-size:25px;font-weight:600;color:#fff;margin-top:7px}
+.lwrap .sub{text-align:center;font-size:12.5px;color:rgba(255,255,255,.7);margin-top:7px}
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;background:rgba(0,0,0,.22);
+  border:1px solid rgba(255,255,255,.1);border-radius:18px;padding:9px;margin-top:20px}
+.modes button{border:0;border-radius:14px;padding:14px 8px;font:inherit;font-size:14px;font-weight:600;
+  cursor:pointer;background:rgba(255,255,255,.05);color:rgba(255,255,255,.72);line-height:1.3;transition:.12s}
+.modes button:hover{background:rgba(255,255,255,.13)}
+.modes button.on{background:var(--orange-500);color:#fff}
+.modes button.on.k{background:var(--emerald-500)}
+.modes button.on.e{background:var(--sky-500)}
+.hint{margin-top:10px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.22);
+  padding:11px 13px;font-size:12px;line-height:1.7;color:rgba(255,255,255,.6)}
+.hint b{color:#fde6be;font-weight:600}
+.lrow{display:grid;gap:6px;margin-top:16px}
+.lrow span{font-size:12px;font-weight:600;color:rgba(255,255,255,.7)}
+.lrow input{width:100%;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.2);
+  padding:14px 16px;font:inherit;font-size:14px;color:#fff;outline:none}
+.lbtn{width:100%;margin-top:18px;border:0;border-radius:14px;background:var(--orange-500);color:#fff;
+  font:inherit;font-size:15px;font-weight:600;padding:15px;cursor:pointer}
+.lbtn:hover{background:var(--orange-600)}
+.ldev{margin-top:13px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.25);
+  padding:12px 14px;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:12px;align-items:center}
+.ldev .ic{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-size:17px;
+  background:var(--emerald-500);color:#fff}
+.ldev .t{font-size:13px;font-weight:600;color:#fff}
+.ldev .d{font-size:11px;color:rgba(255,255,255,.55);margin-top:3px}
+.ldev .sw{font-size:11px;font-weight:700;color:rgba(255,255,255,.45);white-space:nowrap}
+.lfoot{margin-top:15px;text-align:center;font-size:11.5px;color:rgba(255,255,255,.4)}
+
+.hidden{display:none!important}
+
+/* ══════════ toast / undo（產品內元件） ══════════ */
+.toasts{position:fixed;top:18px;right:18px;display:grid;gap:9px;z-index:60}
+.toast{background:var(--slate-900);color:#fff;font-size:13.5px;font-weight:600;padding:12px 17px;border-radius:14px;
+  display:grid;grid-auto-flow:column;gap:11px;align-items:center;
+  box-shadow:0 14px 34px -12px rgba(15,23,42,.6);animation:tin .25s ease-out}
+@keyframes tin{from{transform:translateX(22px);opacity:0}to{transform:none;opacity:1}}
+.toast .k{font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;background:var(--slate-700);color:var(--slate-300)}
+.undo{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:70;background:var(--slate-900);color:#fff;
+  border-radius:16px;padding:13px 15px 13px 19px;display:grid;grid-auto-flow:column;gap:18px;align-items:center;
+  font-size:13.5px;font-weight:600;box-shadow:0 18px 44px -14px rgba(15,23,42,.7);animation:tin .22s ease-out}
+.undo button{border:0;background:#fff;color:var(--slate-900);font:inherit;font-size:13px;font-weight:700;
+  padding:9px 16px;border-radius:11px;cursor:pointer}
+.undo .cd{font-size:11px;color:var(--slate-400);font-weight:500}
+</style>
+</head>
+<body data-page-node-id="GiGGLKd97qjWQcEBgSLsp4">
+
+<!-- ══════════ 評審外框 ══════════ -->
+<div class="review" data-page-node-id="MFUXLaFB9NmbhvkGDMFnfL">
+  <div class="row1" data-page-node-id="awTJhowu7wqVO7y2D6HrAO">
+    <div class="ttl" data-page-node-id="KceFnZC0q6y4B6rjuXWzeP">後廚屏 / 出餐台屏 · 介面確認稿 v4
+      <small data-page-node-id="4asxqtvrBjDosuSK5RlPSf">新增：登入後先揀崗位（廚房／水吧）→ 屏內鎖定，冇「全部」掣 · 固定 1180×820 等比縮放</small>
+    </div>
+    <div class="tabs" data-page-node-id="XvZZ1IPYAqV8Wofahz9D82">
+      <button data-tab="login" data-page-node-id="sOFa0H6QuJnFUqBQGMSfb6">① 登入</button>
+      <button class="on" data-tab="pick" data-page-node-id="a5SwORrXT6G8CbHSF8VRnE">② 揀崗位</button>
+      <button data-tab="kitchen" data-page-node-id="a5SwORrXT6G8CbHSF8VRnF">③ 後廚屏</button>
+      <button data-tab="expo" data-page-node-id="34EGsUtmscy2CEpP6gEMga">④ 出餐台屏</button>
+    </div>
+  </div>
+  <div class="row2" data-page-node-id="Frm3DE158lgbF2h2bJXDnA">
+    <div class="scen" data-page-node-id="Wxk23tXHMcbaZ6zR8ExxDS">
+      <span class="lb" data-page-node-id="bwnSr9XG48W9fQfjIW7FWj">模擬落單：</span>
+      <button data-src="pos" data-page-node-id="oH6Cc6aE8JDuFDTwsgMAFv">👤 店員落單</button>
+      <button data-src="kiosk" data-page-node-id="jyUTJKoevDgRvMktIPMlG5">🖥️ 自助點餐機</button>
+      <button data-src="scan" data-page-node-id="hFSNOjpxJKfDj0dHWkA4Xn">📱 客人掃碼</button>
+      <button id="reset" data-page-node-id="VsN1G0rOWiBTGNkmjUrj5v">↺ 重設示範</button>
+    </div>
+    <div class="scen" data-page-node-id="7BfTt2G2bWuYYndHVOj4gL"><button id="netToggle" data-page-node-id="hIAi6PxgAI4m75jSjKjpCp">模擬斷網</button></div>
+  </div>
+  <div class="flow" id="flow" data-page-node-id="HcQ98MFM2Qd1GNm2kwq2D8">
+    <div class="st" data-page-node-id="AxKCXBkRXP9oc4NkXPZOO7"><span class="no" data-page-node-id="0le6imUJWqWLCcDnMe5qep">1</span><span class="tx" data-page-node-id="DvSOKJaLdBKhy1gj4687xs">落單<small data-page-node-id="btEjcvoiGshDCjHMD8ku1g">店員 / 自助機 / 掃碼</small></span></div>
+    <div class="st" data-page-node-id="3FkdMNKb0cNU1KfFR8mxQL"><span class="no" data-page-node-id="iBrRZSaoNSJS8yHxsiTukC">2</span><span class="tx" data-page-node-id="9akGMREcGxDtEyLNatsGIW">揀崗位<small data-page-node-id="kCCIGXa5pWGDW6tL5cCmwl">呢部機做廚房定水吧</small></span></div>
+    <div class="st" data-page-node-id="8NwwVi5t3vomM07SfgThxu"><span class="no" data-page-node-id="yIyL4eaq8TOAb3AlkdEIFV">3</span><span class="tx" data-page-node-id="Uhw49BfXR8CavibaJjHOmJ">後廚屏 · 逐項完成<small data-page-node-id="kgFDMs7OFeJxRxkTnXg2jX">撳 ✓ 做一件，長按整單</small></span></div>
+    <div class="st" data-page-node-id="vRi6G3DeiOe78Seqz6vNgF"><span class="no" data-page-node-id="E00bgCSJCAxkOI4xj9xZPg">4</span><span class="tx" data-page-node-id="21lftKMPR0j0JQOSwkplvE">出餐台屏 · 核對整單<small data-page-node-id="1FSMFpLHMzJsRrnJRRQxoc">睇後廚進度，仲欠幾件</small></span></div>
+    <div class="st" data-page-node-id="dQ2mBh8XkLp3Wn7ZtVrY1a"><span class="no" data-page-node-id="eR4nJc6PqSd9Kx2UyFg7tb">5</span><span class="tx" data-page-node-id="fT8kWz3LmNb5Qv1HjXp4ce">確認出餐<small data-page-node-id="gY6rDn9PzVb2Mx4JqLh5sw">寫入出餐時間，收銀台即見</small></span></div>
+  </div>
+</div>
+
+<div class="stage" id="stage" data-page-node-id="N2aTanwyF4ql8Q7lN16HPc">
+<div class="canvas" id="canvas" data-page-node-id="lDxrDlH1kSxusiRc6jC6MT">
+
+  <!-- ══════ ① 登入 ══════ -->
+  <div class="login hidden" id="v-login" data-page-node-id="3kdORFGwhrFAXpx5Pnq8vT">
+    <div class="blob b1" data-page-node-id="F5Ur2nKwcb8kHFbTuHEeMM"></div><div class="blob b2" data-page-node-id="Ecv8wB6SM0JDGmgYTcWE2p"></div><div class="blob b3" data-page-node-id="sZ1pSGECu146yCWhvDx6JP"></div>
+    <div class="veil" data-page-node-id="bCjb5tRyWbSvRF9qRPfTnz"></div>
+    <div class="lwrap" data-page-node-id="xTyffPv6gdaw8zHNMAHFoV">
+      <div class="brand" data-page-node-id="yc89XisioEvnutLQ6LUAEG">澳門會員通POS系統</div>
+      <h1 data-page-node-id="WPezeYxnqJHPFAAAY3KP4X">登入</h1>
+      <div class="sub" data-page-node-id="B79BiTdHBsONR8GclcX0a3">請使用 Ledger 商戶 8 位電話及 4 位 PIN。</div>
+      <div class="modes" id="loginModes" data-page-node-id="bPeb1iPEtKUBpQBCn8LWiM">
+        <button data-mode="quick" data-page-node-id="EZK1IQ8EU4LW7GWxFh9lfz">快餐</button>
+        <button data-mode="dinein" data-page-node-id="I4Lbe5hpZgHMF9Z4kIObtf">堂食</button>
+        <button data-mode="salon" data-page-node-id="PFiId0wOcbiPM5QI3Ro5rj">美容</button>
+        <button data-mode="kiosk" data-page-node-id="JKNQAZCHrXMx8IpyhGpNYT">自助點餐機</button>
+        <button data-mode="kitchen" class="on k" data-page-node-id="vYH3YsLitEKycOQ3SYa2Uf">後廚屏</button>
+        <button data-mode="expo" data-page-node-id="jVOGHWZyk8mvfk9siHbwPl">出餐台屏</button>
+      </div>
+      <div class="hint" id="loginHint" data-page-node-id="B1LBMkTpzJs8kzlr5uYoSz"><b data-page-node-id="HqGDqLlPGUtGDT1ELtvXr1">掃碼點餐：</b>不適用 —— 後廚屏係一部機嘅角色，唔會改動店鋪現有嘅掃碼設定。</div>
+      <div class="lrow" data-page-node-id="c1BZaFaBZKOsUjAvbqaYoL"><span data-page-node-id="kAn2lhQD7ynIADDHeyIb3T">帳號（8 位數字）</span><input value="65273599" readonly data-page-node-id="jHOdWRHs2N4gqL18NHXgoK"></div>
+      <div class="lrow" data-page-node-id="B7NMB62mGoN0xEk1pqleTB"><span data-page-node-id="b4onbDFqhucE2z9NBFUdZO">密碼（4 位 PIN）</span><input type="password" value="0000" readonly data-page-node-id="98wyYzh5h8mSUqGhpe6zoU"></div>
+      <button class="lbtn" id="loginBtn" data-page-node-id="Bjxj77JUFmcIilUmmHQZc7">登入</button>
+      <div class="ldev" data-page-node-id="MMUHiy7TeQjeNwqHt9hC6Q">
+        <div class="ic" data-page-node-id="aIZ1zSlqqOQcD7IET7yE61">▤</div>
+        <div data-page-node-id="MKnGNdZvohP8yrAHHo5on2"><div class="t" data-page-node-id="iTO7sQkzqhf8XMuk2sXuGC">綁定呢部機做「後廚屏 / 出餐台屏」</div>
+             <div class="d" data-page-node-id="WyWVCIc6JTXART7LgTUEqY">登入之後會問你係邊個<strong>崗位</strong>（廚房／水吧）；綁定後開機直接入，唔使再登入</div></div>
+        <div class="sw" data-page-node-id="Q7RBVpLCZqinNZHxsYPNrx">與自助點餐機一致</div>
+      </div>
+      <div class="lfoot" data-page-node-id="uFI0GW0bI9WHyb9cHPWJR8">使用會員通商戶帳號登入（與 Ledger Web / Android 相同）</div>
+    </div>
+  </div>
+
+  <!-- ══════ ①B 揀崗位（登入之後、入屏之前）══════ -->
+  <div class="screenwrap hidden" id="v-pick" data-page-node-id="pK3nR7wZqLm2Vx9YtBs4dc">
+    <div class="phead" data-page-node-id="qM5wT8rZnKv3Lx7YbP2sfa">
+      <div class="pstore" data-page-node-id="rN6xU9sAoWm4My8ZcQ3teb">澳門茶餐廳<em data-page-node-id="sP7yV1tBpXk5Nz9AdR4ufc">登入成功</em></div>
+      <div class="pnet" data-page-node-id="tQ8zW2uCqYl6Pa1BeS5vgd"><i data-page-node-id="uR9aW3vDrZm7Qb2CfT6whe"></i>已連線</div>
+    </div>
+    <div class="pbody" data-page-node-id="vS1bX4wEsAn8Rc3DgU7xif">
+      <div class="pask" data-page-node-id="wT2cY5xFtBo9Sd4EhV8yjg">呢部機係邊個崗位？</div>
+      <div class="psub" data-page-node-id="xU3dZ6yGuCp1Te5FiW9zkh">揀咗之後，呢部屏<strong>只會顯示該崗位嘅出品</strong>，唔會見到其他崗位。<br>綁定之後，下次開機自動入返呢個崗位，唔使再揀。</div>
+      <div class="pgrid" id="pickGrid" data-page-node-id="yV4eA7zHvDq2Uf6GjX1alm">
+        <button class="pcard" data-st="kitchen" data-page-node-id="zW5fB8aIwEr3Vg7HkY2bmn">
+          <span class="pic" data-page-node-id="aX6gC9bJxFs4Wh8IlZ3cno">🍳</span>
+          <span class="pnm" data-page-node-id="bY7hD1cKyGt5Xi9Jm04dqp">廚房</span>
+          <span class="pds" data-page-node-id="cZ8iE2dLzHu6Yj1Kn15ers">熱菜 · 炒鍋 · 燒味 · 粉麵飯</span>
+          <span class="pq" data-page-node-id="dA9jF3eMaIv7Zk2Lo26fst">而家有 <b id="pqKitchen" data-page-node-id="eB1kG4fNbJw8Al3Mp37gtu">—</b> 項未完成</span>
+          <span class="pcta" data-page-node-id="fC2lH5gOcKx9Bm4Nq48huv">揀呢個崗位 →</span>
+        </button>
+        <button class="pcard" data-st="drinks" data-page-node-id="gD3mI6hPdLy1Cn5Or59iwx">
+          <span class="pic" data-page-node-id="hE4nJ7iQeMz2Do6Ps6ajxy">🥤</span>
+          <span class="pnm" data-page-node-id="iF5oK8jRfNa3Ep7Qt7bkz">水吧</span>
+          <span class="pds" data-page-node-id="jG6pL9kSgOb4Fq8Ru8claa">凍飲 · 咖啡茶 · 甜品 · 沙冰</span>
+          <span class="pq" data-page-node-id="kH7qM1lThPc5Gr9Sv9dmbb">而家有 <b id="pqDrinks" data-page-node-id="lI8rN2mUiQd6Hs1Tw1enc">—</b> 項未完成</span>
+          <span class="pcta" data-page-node-id="mJ9sO3nVjRe7It2Ux2fodd">揀呢個崗位 →</span>
+        </button>
+      </div>
+      <div class="pfoot" data-page-node-id="nK1tP4oWkSf8Ju3Vy3gpee">
+        ⚠ 揀錯咗唔緊要 —— 屏內「⚙ 設定」→「切換崗位」可以改（要重新登入，防止誤撳）
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════ ② 後廚屏（已鎖定崗位）══════ -->
+  <div class="screenwrap" id="v-kitchen" data-page-node-id="dW3kUNWtdJ7COixwGN9xXG">
+    <div class="topbar k" data-page-node-id="KrbmhjIbIJCvwfYtpBw8nu">
+      <div class="left store" data-page-node-id="hD6Oy4EixFyo3LnOJvceLD">澳門茶餐廳<em id="kRole" data-page-node-id="GpuxQIJLLP0AF7uTqV7sYK">後廚屏</em></div>
+      <div class="mid" data-page-node-id="gTD0EljqcVBGGHt1Od6Rl8">
+        <span class="lock" id="kLock" data-page-node-id="oM2uQ5pXlTg9Kv4Wz5hqff">
+          <span class="lk-dot" id="kLockDot" data-page-node-id="pN3vR6qYmUh1Lw5Xa6irgg"></span>
+          <span class="lk-nm" id="kLockNm" data-page-node-id="qO4wS7rZnVi2Mx6Yb7jshh">廚房</span>
+          <span class="lk-tag" data-page-node-id="rP5xT8sAoWj3Ny7Zc8ktii">已鎖定</span>
+        </span>
+      </div>
+      <div class="right" data-page-node-id="8ebkor7fjZTBNzCd8ybcU5">
+        <span class="net" id="net1" data-page-node-id="GF4xLChmPCHnHFxhdawdVd"><i data-page-node-id="7cKPYy6odN7tKJBHeSB2TR"></i>已連線</span>
+        <span class="stat" data-page-node-id="wLXZzD2CN7C5F2I9cYuWWt">未完成 <b id="kCount" data-page-node-id="iWnkXFV5waZ8kGFNJilKzt">0</b></span>
+        <button class="ghost" id="kSetBtn" data-page-node-id="OnbFaz9tFuKZth2XZEnUsT">⚙ 設定</button>
+      </div>
+    </div>
+    <div class="banner" data-page-node-id="ADu8uPYOanAieBSzTTIyRQ">⚠ 網絡斷線 · 唔可以確認出餐，請通知收銀台</div>
+    <div class="kbody" id="kbody" data-page-node-id="6DCtn3H4qr09x6VZd7mr4m"></div>
+  </div>
+
+  <!-- ══════ ③ 出餐台屏 ══════ -->
+  <div class="screenwrap" id="v-expo" style="display:none" data-page-node-id="GDLsnSuGQUAZjcyAM5upnf">
+    <div class="topbar e" data-page-node-id="jXxXwxs3ePf2EAIjPPBDdN">
+      <div class="left store" data-page-node-id="zdyJRILQm8GbWhwg89pE1m">澳門茶餐廳<em data-page-node-id="n0fDRGlYdmf99LZVo1Z1JA">出餐台</em></div>
+      <div class="right" data-page-node-id="FbNaICgCM1EmJlBBBPPlI8">
+        <span class="net" id="net2" data-page-node-id="Z0s3wteTG2KEeKvDDrGKW4"><i data-page-node-id="ogW6nLClxErpRR79SxHE3y"></i>已連線</span>
+        <span class="stat" data-page-node-id="F3L6jBkC2SOfXQoNx73y1P">待出餐 <b id="eCount" data-page-node-id="ecBoPKefUvqWjbE6YfiYKu">0</b></span>
+        <button class="ghost" data-page-node-id="fG28D4irhuCFF4q0Cu16jO">⚙ 設定</button>
+      </div>
+    </div>
+    <div class="banner" data-page-node-id="uhKv33nTt5rDy5igQVqedN">⚠ 網絡斷線 · 唔可以確認出餐，請通知收銀台</div>
+    <div class="ebody" data-page-node-id="2BnRoKD7gHZVtkUUIPRrKM">
+      <div class="qcol" data-page-node-id="6uYyMNp1JRc3Ht9VJz0aia">
+        <div class="qhead" data-page-node-id="T6w3aZWRH8PMDVP805Kfqm"><span data-page-node-id="0IvCUWfPDhRlQl8NGUsH8I">待出餐</span><span class="cnt" id="qCnt" data-page-node-id="WQmavH0s1xVqyoaaanfumF">0</span></div>
+        <div class="qlist" id="qlist" data-page-node-id="FpP8dcqYCpUrCVns3Ll9zL"></div>
+      </div>
+      <div class="mcol" id="mcol" data-page-node-id="0jjsHaUiwLG2fmbi8IdIoe"></div>
+      <div class="acol" id="acol" data-page-node-id="hEYktGYw1jnyPM2RUXgCUj"></div>
+    </div>
+  </div>
+
+  <!-- ══════ 設定（逃生門：切換崗位一定要經呢度）══════ -->
+  <div class="sheet hidden" id="kSheet" data-page-node-id="sQ1uV4wXnYk8Lz3Mb2ajff">
+    <div class="sheetbox" data-page-node-id="tR2vW5xYoZl9Ma4Nc3bkgg">
+      <div class="sh-h" data-page-node-id="uS3wX6yZpAm1Nb5Od4clhh">⚙ 後廚屏設定</div>
+      <div class="sh-row" data-page-node-id="vT4xY7zAqBn2Oc6Pe5dmii"><span data-page-node-id="wU5yZ8aBrCo3Pd7Qf6enjj">本機角色</span><b data-page-node-id="xV6zA9bCsDp4Qe8Rg7fokk">後廚屏</b></div>
+      <div class="sh-row" data-page-node-id="yW7aB1cDtEq5Rf9Sh8gpll"><span data-page-node-id="zX8bC2dEuFr6Sg1Ti9hqmm">本機崗位</span><b id="shStation" data-page-node-id="aY9cD3eFvGs7Th2Uj0irnn">🍳 廚房（已鎖定）</b></div>
+      <div class="sh-note" data-page-node-id="bZ1dE4fGwHt8Ui3Vk1jsoo">
+        呢部機已經鎖定做單一崗位，屏內<strong>冇「全部 / 廚房 / 水吧」切換掣</strong>，
+        就係為咗防止廚房同事誤撳。<br>
+        要改崗位，必須重新登入（下面個掣）。
+      </div>
+      <div class="sh-btns" data-page-node-id="cA2eF5gHxIu9Vj4Wl2ktpp">
+        <button class="sh-ghost" id="shClose" data-page-node-id="dB3fG6hIyJv1Wk5Xm3luqq">關閉</button>
+        <button class="sh-warn" id="shSwitch" data-page-node-id="eC4gH7iJzKw2Xl6Yn4mvrr">切換崗位（重新登入）</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="toasts" id="toasts" data-page-node-id="N7XMNmFBLoLAIGTM97R0Ma"></div>
+
+<script>
+(function(){
+"use strict";
+
+var SRC = {
+  pos:   { cls:"pos",   name:"店員落單",   badge:"👤 商家下單" },
+  kiosk: { cls:"kiosk", name:"自助點餐機", badge:"🖥️ 自助點餐機" },
+  scan:  { cls:"scan",  name:"客人掃碼",   badge:"📱 掃碼下單" }
+};
+
+var SEQ = 0, orders = [], clearedToday = 12, selectedId = null, station = "";
+
+function it(name, qty, sta, done, specs, note){
+  return { name:name, qty:qty, station:sta, done:done||0, specs:specs||[], note:note||"", voided:false };
+}
+/* no = 屏上顯示嘅主要識別（快餐=取餐號 / 堂食=枱號）；dine 判斷係咪堂食 */
+function mk(no, dine, source, sec, items){
+  SEQ++;
+  return { id:"o"+SEQ, no:no, dine:dine, source:source,
+           sentAt:Date.now()-sec*1000, items:items, clearedAt:null, tok:0, push:false };
+}
+
+/* ── 示範資料 ──
+   注意：自助點餐機只做快餐（冇枱號），所以 kiosk 單一定係「自取」。
+   掃碼單可以係自取（快餐）或者枱號（堂食）。 */
+function seed(){
+  SEQ = 0;
+  orders = [
+    /* ★ 店員落單 · 堂食（收銀台落單，兩個工位，有規格同備註） */
+    mk("枱 5", true, "pos", 118, [
+      it("乾炒牛河",1,"kitchen",0,["加辣"]),
+      it("白飯",2,"kitchen",1),
+      it("凍檸茶",2,"drinks",2,["少冰"])
+    ]),
+    /* ★ 店員落單 · 自取（快餐櫃檯落單） */
+    mk("A106", false, "pos", 46, [
+      it("豬扒包",2,"kitchen",0),
+      it("凍咖啡",1,"drinks",0,[],"少甜")
+    ]),
+    /* 自助點餐機（一定係快餐／自取） */
+    mk("A107", false, "kiosk", 212, [
+      it("叉燒飯",3,"kitchen",1,["大"],"少飯"),
+      it("凍檸茶",2,"drinks",2)
+    ]),
+    /* 掃碼 · 自取（已超時 8 分鐘以上） */
+    mk("A108", false, "scan", 531, [
+      it("揚州炒飯",2,"kitchen",2),
+      it("例湯",1,"kitchen",0),
+      it("凍奶茶",2,"drinks",1,[],"少甜")
+    ]),
+    /* 店員落單 · 堂食 */
+    mk("枱 7", true, "pos", 163, [
+      it("椒鹽鮮魷",1,"kitchen",0,[],"走青"),
+      it("可樂",1,"drinks",1)
+    ]),
+    /* 掃碼 · 堂食 */
+    mk("枱 3", true, "scan", 29, [
+      it("西多士",2,"kitchen",0),
+      it("檸水",2,"drinks",0)
+    ])
+  ];
+  clearedToday = 12;
+  var s = orders.slice().sort(function(a,b){ return a.sentAt-b.sentAt; });
+  selectedId = s[0].id;
+}
+
+/* 模擬落單池：kiosk 一律快餐；pos / scan 可堂食可自取 */
+var POOL = [
+  { src:"pos",   dine:true,  items:[["干炒牛河","kitchen"],["凍檸茶","drinks"]] },
+  { src:"pos",   dine:false, items:[["豬扒包","kitchen"],["檸水","drinks"]] },
+  { src:"pos",   dine:true,  items:[["咖喱牛腩飯","kitchen"],["例湯","kitchen"],["凍咖啡","drinks"]] },
+  { src:"kiosk", dine:false, items:[["咖喱魚蛋","kitchen"],["楊枝甘露","drinks"]] },
+  { src:"kiosk", dine:false, items:[["叉燒飯","kitchen"],["凍檸茶","drinks"]] },
+  { src:"scan",  dine:true,  items:[["炒麵","kitchen"],["凍咖啡","drinks"]] },
+  { src:"scan",  dine:false, items:[["星洲炒米","kitchen"],["檸水","drinks"]] }
+];
+var TABLE_POOL = ["枱 2","枱 4","枱 6","枱 8","枱 9","枱 11","枱 12"];
+
+function now(){ return Date.now(); }
+function secs(o){ return Math.floor((now()-o.sentAt)/1000); }
+function ttext(o){ var s=secs(o), m=Math.floor(s/60), r=s%60;
+  return (m<10?"0":"")+m+":"+(r<10?"0":"")+r; }
+function tcls(o){ var m=Math.floor(secs(o)/60); return m>=8?"late":(m>=3?"warn":""); }
+function hhmm(o){ var d=new Date(o.sentAt);
+  return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2); }
+function pend(o){ return o.items.reduce(function(a,i){ return a+(i.voided?0:i.qty-i.done); },0); }
+function totalQ(o){ return o.items.reduce(function(a,i){ return a+(i.voided?0:i.qty); },0); }
+function doneQ(o){ return o.items.reduce(function(a,i){ return a+(i.voided?0:Math.min(i.done,i.qty)); },0); }
+function doneAll(o){ return o.items.every(function(i){ return i.done>=i.qty; }); }
+function activeOrders(){ return orders.filter(function(o){ return !o.clearedAt; }); }
+function byId(id){ return orders.filter(function(o){ return o.id===id; })[0] || null; }
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
+  return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]; }); }
+function badge(o){ var s=SRC[o.source]||SRC.pos; return '<span class="badge '+s.cls+'">'+s.badge+'</span>'; }
+function sub(o){ return (o.dine?"堂食":"自取")+" · 落單 "+hhmm(o)+" · 共 "+totalQ(o)+" 件"; }
+
+function toast(text, kind){
+  var el=document.createElement("div"); el.className="toast";
+  el.innerHTML=(kind?'<span class="k">'+esc(kind)+'</span>':"")+"<span>"+esc(text)+"</span>";
+  document.getElementById("toasts").appendChild(el);
+  setTimeout(function(){ el.style.transition="opacity .3s"; el.style.opacity="0";
+    setTimeout(function(){ el.remove(); },320); },2800);
+}
+var undoEl=null, undoT=null;
+function hideUndo(){ if(undoT){clearInterval(undoT);undoT=null;} if(undoEl){undoEl.remove();undoEl=null;} }
+function showUndo(text, fn){
+  hideUndo();
+  undoEl=document.createElement("div"); undoEl.className="undo";
+  undoEl.innerHTML="<span>"+esc(text)+"</span><span class='cd'>2s</span><button>撤銷</button>";
+  undoEl.querySelector("button").onclick=function(){ hideUndo(); fn(); };
+  document.body.appendChild(undoEl);
+  var n=2; undoT=setInterval(function(){ n--; if(!undoEl) return;
+    undoEl.querySelector(".cd").textContent=n+"s"; if(n<=0) hideUndo(); },1000);
+}
+
+/* 完成後淡出：token 守門，撤銷後唔可以被舊 timer 剷走 */
+function bump(o){ o.tok++; return o.tok; }
+function scheduleClear(o){
+  var t=bump(o);
+  setTimeout(function(){
+    if(o.tok!==t||!o.clearedAt) return;
+    var el=document.querySelector('[data-card="'+o.id+'"]');
+    if(el) el.classList.add("leaving");
+    setTimeout(function(){
+      if(o.tok!==t) return;
+      orders=orders.filter(function(x){ return x.id!==o.id; });
+      clearedToday++; render();
+    },320);
+  },9000);
+}
+
+function step(orderId, idx, delta){
+  var o=byId(orderId); if(!o) return;
+  var i=o.items[idx]; if(!i) return;
+  var before=i.done;
+  i.done=Math.max(0,Math.min(i.qty,i.done+delta));
+  if(i.done===before) return;
+  if(delta>0&&i.done>=i.qty) toast(o.no+" · "+i.name+" 已完成","單品");
+  if(doneAll(o)){
+    if(!o.clearedAt){ o.clearedAt=now(); toast(o.no+" 後廚全部完成，等出餐台","整單"); scheduleClear(o); }
+  } else { o.clearedAt=null; bump(o); }
+  render();
+}
+function completeAll(orderId){
+  var o=byId(orderId); if(!o||o.clearedAt) return;
+  var snap=o.items.map(function(i){ return i.done; });
+  o.items.forEach(function(i){ i.done=i.qty; });
+  o.clearedAt=now(); toast(o.no+" 整單標記完成","長按");
+  scheduleClear(o); render();
+  showUndo("已標記 "+o.no+" 全部完成", function(){
+    o.items.forEach(function(i,k){ i.done=snap[k]; }); o.clearedAt=null; bump(o); render(); });
+}
+function confirmReady(orderId){
+  var o=byId(orderId); if(!o||!doneAll(o)) return;
+  orders=orders.filter(function(x){ return x.id!==orderId; });
+  clearedToday++; selectedId=null; toast(o.no+" 已出餐","出餐台"); render();
+}
+function recall(orderId){
+  var o=byId(orderId); if(!o) return;
+  var snap=o.items.map(function(i){ return i.done; });
+  o.items.forEach(function(i){ i.done=0; });
+  o.clearedAt=null; bump(o); toast(o.no+" 已召回後廚","撤回"); render();
+  showUndo("已召回 "+o.no+"（清空完成狀態）", function(){
+    o.items.forEach(function(i,k){ i.done=snap[k]; });
+    if(doneAll(o)){ o.clearedAt=now(); scheduleClear(o); } render(); });
+}
+
+/* ══════════ 後廚屏 ══════════ */
+function renderKitchen(){
+  var board=document.getElementById("kbody");
+  var list=activeOrders().filter(function(o){
+    if(!station) return true;
+    return o.items.some(function(i){ return i.station===station && i.done<i.qty; });
+  }).sort(function(a,b){ return a.sentAt-b.sentAt; });
+
+  if(!list.length){
+    board.innerHTML='<div class="kempty">暫時冇未完成嘅單<br>'
+      +'<span style="font-size:12px;color:var(--slate-300)">'
+      +(station?"呢個工位冇嘢做，試下切去「全部」":"新單一落就會自動出現")+'</span></div>';
+    return;
+  }
+
+  board.innerHTML=list.map(function(o){
+    var full=doneAll(o);
+    var urgent=Math.floor(secs(o)/60)>=8;
+    var rows=o.items.filter(function(i){ return !station||i.station===station; }).map(function(i){
+      var idx=o.items.indexOf(i);
+      var d=i.done>=i.qty;
+      var bc=d?"full":(i.done>0?"part":"");
+      var chips="";
+      if(i.specs.length) chips+='<span class="chip">'+esc(i.specs.join(" · "))+'</span>';
+      if(i.note) chips+='<span class="chip note">'+esc(i.note)+'</span>';
+      if(i.qty>1) chips+='<span class="chip prog">'+(d?"完成 ":"已出 ")+i.done+" / "+i.qty+'</span>';
+      return '<div class="line'+(d?" done":"")+'">'
+        +'<div><div class="lname">'+esc(i.name)+'<span class="lqty">×'+i.qty+'</span></div>'
+        +(chips?'<div class="lmeta">'+chips+'</div>':"")+'</div>'
+        +'<button class="donebtn '+bc+'" data-o="'+o.id+'" data-i="'+idx+'" title="撳一下完成一件 · 右鍵或長按撤銷">✓</button>'
+        +'</div>';
+    }).join("");
+
+    return '<article class="card'+(full?" cleared":"")+(urgent&&!full?" urgent":"")+(o.push?" push":"")+'" data-card="'+o.id+'">'
+      +'<div class="chead">'
+      +  '<div><div class="ono">'+esc(o.no)+'</div><div class="oname">'+esc(sub(o))+'</div></div>'
+      +  '<div class="chead-right">'+badge(o)+'<span class="timer '+tcls(o)+'">'+ttext(o)+'</span></div>'
+      +'</div>'
+      +'<div class="lines">'+rows+'</div>'
+      +'</article>';
+  }).join("");
+
+  list.forEach(function(o){ o.push=false; });
+
+  Array.prototype.forEach.call(board.querySelectorAll(".card"), function(card){
+    var t=null;
+    function start(){ t=setTimeout(function(){ completeAll(card.getAttribute("data-card")); t=null; },700); }
+    function stop(){ if(t){ clearTimeout(t); t=null; } }
+    card.addEventListener("mousedown", start);
+    card.addEventListener("mouseup", stop);
+    card.addEventListener("mouseleave", stop);
+  });
+  Array.prototype.forEach.call(board.querySelectorAll(".donebtn"), function(btn){
+    var oid=btn.getAttribute("data-o"), idx=Number(btn.getAttribute("data-i"));
+    btn.onclick=function(ev){
+      ev.stopPropagation();
+      var o=byId(oid), i=o.items[idx];
+      if(i.done>=i.qty){ step(oid,idx,-1); return; }
+      step(oid,idx,1);
+      showUndo("已標記「"+i.name+"」完成", function(){ step(oid,idx,-1); });
+    };
+    btn.oncontextmenu=function(ev){ ev.preventDefault(); ev.stopPropagation(); step(oid,idx,-1); };
+    var lp=null;
+    btn.addEventListener("touchstart", function(){ lp=setTimeout(function(){ step(oid,idx,-1); lp=null; },550); });
+    btn.addEventListener("touchend", function(){ if(lp){ clearTimeout(lp); lp=null; } });
+  });
+}
+
+/* ══════════ 出餐台屏 ══════════ */
+function renderExpo(){
+  var act=activeOrders();
+  if(!act.some(function(o){ return o.id===selectedId; })){
+    var s=act.slice().sort(function(a,b){ return a.sentAt-b.sentAt; });
+    selectedId=s.length?s[0].id:null;
+  }
+
+  var sorted=act.slice().sort(function(a,b){ return a.sentAt-b.sentAt; });
+  var q=document.getElementById("qlist");
+  q.innerHTML=sorted.length
+    ? sorted.map(function(o){
+        var full=doneAll(o), p=pend(o);
+        return '<div class="qi'+(o.id===selectedId?" on":"")+'" data-pick="'+o.id+'">'
+          +'<div><div class="qno">'+esc(o.no)+'</div>'
+          +'<div class="qsub '+(full?"full":"short")+'">'
+          +(full?"後廚全部完成 · 可以出餐":"後廚仲欠 "+p+" 件")+'</div></div>'
+          +'<div class="qt '+tcls(o)+'">'+ttext(o)+'</div></div>';
+      }).join("")
+    : '<div class="qempty">暫無待出餐<br>所有單都出完啦</div>';
+  Array.prototype.forEach.call(q.querySelectorAll(".qi"), function(el){
+    el.onclick=function(){ selectedId=el.getAttribute("data-pick"); render(); };
+  });
+
+  var o=byId(selectedId);
+  var m=document.getElementById("mcol"), a=document.getElementById("acol");
+
+  if(!o){
+    m.innerHTML='<div style="display:grid;place-items:center;height:100%;color:var(--slate-400);'
+      +'font-size:14px;line-height:2.2;text-align:center">冇待出餐嘅單<br>'
+      +'<span style="font-size:12px;color:var(--slate-300)">先喺左邊隊列揀一張單</span></div>';
+    a.innerHTML='<div class="albl">出餐確認</div>'
+      +'<div class="bigno none"><div class="v">— —</div><div class="s">未揀單</div></div>'
+      +'<button class="bigbtn" disabled>確認出餐<small>請先揀單</small></button>'
+      +'<div class="afoot"><span>今日已出餐</span><b>'+clearedToday+' 單</b></div>';
+    return;
+  }
+
+  var full=doneAll(o), p=pend(o), dq=doneQ(o), tq=totalQ(o);
+  var pct=tq?Math.round(dq/tq*100):0;
+  var notes=o.items.filter(function(i){ return i.note; })
+                   .map(function(i){ return i.name+"："+i.note; });
+
+  m.innerHTML =
+    '<div class="mtitle">'
+    +  '<div class="t">'+esc(o.no)+'<small>'+(o.dine?"堂食":"自取")+'</small></div>'
+    +  '<div class="meta">'+badge(o)+'<span>落單 '+hhmm(o)+'</span><span>共 '+tq+' 件</span></div>'
+    +'</div>'
+    +'<div class="progress">'
+    +  '<div class="pbar"><i style="width:'+pct+'%"></i></div>'
+    +  '<div class="plabel'+(full?" all":"")+'">後廚進度 <b>'+dq+' / '+tq+'</b>'
+    +  (full?" · 全部完成":" · 仲欠 "+p+" 件")+'</div>'
+    +'</div>'
+    + o.items.map(function(i){
+        var d=i.done>=i.qty;
+        var cls=d?"ok":"short";
+        var tag=d?"後廚已完成":"後廚仲欠 "+(i.qty-i.done)+" 件";
+        var mark=d?"✓":"!";
+        var chips=i.specs.map(function(sp){ return '<span class="chip">'+esc(sp)+'</span>'; }).join("")
+                +(i.note?'<span class="chip note">'+esc(i.note)+'</span>':"");
+        return '<div class="rline '+cls+'">'
+          +'<div class="rmark">'+mark+'</div>'
+          +'<div><div class="rname">'+esc(i.name)+'<span class="lqty">×'+i.qty+'</span></div>'
+          +(chips?'<div class="lmeta">'+chips+'</div>':"")+'</div>'
+          +'<div class="rtag">'+tag+'</div></div>';
+      }).join("")
+    + (notes.length?'<div class="note">備註：'+esc(notes.join("　·　"))+'</div>':"")
+    + (full?'<div class="rdone">後廚已做完呢張單全部 '+tq+' 件，可以交畀客人。</div>':"");
+
+  a.innerHTML =
+    '<div class="albl">出餐確認</div>'
+    +'<div class="bigno'+(full?" ready":"")+'">'
+    +  '<div class="v">'+esc(o.no)+'</div>'
+    +  '<div class="s">'+(full?"後廚全部完成":"後廚仲欠 "+p+" 件")+'</div>'
+    +'</div>'
+    +'<button class="bigbtn" id="btnReady" '+(full?"":"disabled")+'>'
+    +  (full?"確認出餐":"仲未可以出餐")
+    +  '<small>'+(full?"寫入出餐時間 · 收銀台即時見到":"要等後廚做完先出得")+'</small></button>'
+    +'<button class="ghost" id="btnRecall">↺ 召回後廚（清空完成狀態）</button>'
+    +'<div class="afoot">'
+    +  '<span>今日已出餐</span><b>'+clearedToday+' 單</b>'
+    +  '<span>屏上待出餐</span><b>'+act.length+' 單</b>'
+    +  '<span>本單落單時間</span><b>'+hhmm(o)+'</b>'
+    +'</div>';
+
+  var br=document.getElementById("btnReady");
+  if(br) br.onclick=function(){ confirmReady(o.id); };
+  var rc=document.getElementById("btnRecall");
+  if(rc) rc.onclick=function(){ recall(o.id); };
+}
+
+/* ══════════ 總渲染 ══════════ */
+function counts(){
+  var all=0,k=0,d=0;
+  activeOrders().forEach(function(o){
+    o.items.forEach(function(i){
+      if(i.done>=i.qty) return;
+      all++; if(i.station==="kitchen") k++; if(i.station==="drinks") d++;
+    });
+  });
+  return { all:all, kitchen:k, drinks:d, orders:activeOrders().length };
+}
+function currentTab(){ return document.querySelector(".review .tabs button.on").getAttribute("data-tab"); }
+
+/* 頂欄「未完成 N」= **本崗位**嘅未完成項數，唔係全店 ——
+   廚房屏唔應該見到水吧仲有幾多杯未做（見到就會以為係自己做漏）。 */
+function paintCounts(){
+  var c=counts();
+  document.getElementById("kCount").textContent = station==="drinks" ? c.drinks : c.kitchen;
+  /* 揀崗位畫面順便顯示各崗位而家有幾多嘢做，幫同事揀得快啲 */
+  var pqk=document.getElementById("pqKitchen"), pqd=document.getElementById("pqDrinks");
+  if(pqk) pqk.textContent = c.kitchen;
+  if(pqd) pqd.textContent = c.drinks;
+  document.getElementById("eCount").textContent=c.orders;
+  document.getElementById("qCnt").textContent=c.orders;
+}
+
+/* 崗位 = 設備屬性。呢度係全份稿唯一嘅崗位真源。
+   color 用嚟做頂欄鎖定徽章嘅色點（細尺寸下 emoji 會睇成「放大鏡」，所以徽章唔用 emoji）。 */
+var STATIONS={
+  kitchen:{ icon:"🍳", name:"廚房", role:"廚房屏", color:"var(--orange-500)" },
+  drinks: { icon:"🥤", name:"水吧", role:"水吧屏", color:"var(--sky-500)" }
+};
+function curStation(){ return STATIONS[station] || null; }
+
+/* 把崗位資訊畫落頂欄徽章同設定卡 */
+function paintStationChrome(){
+  var s=curStation(); if(!s) return;
+  document.getElementById("kLockDot").style.background=s.color;
+  document.getElementById("kLockNm").textContent=s.name;
+  document.getElementById("kRole").textContent=s.role;
+  document.getElementById("shStation").textContent=s.name+"（已鎖定）";
+}
+
+function setActiveTab(t){
+  Array.prototype.forEach.call(document.querySelectorAll(".review .tabs button"), function(x){
+    x.classList.toggle("on", x.getAttribute("data-tab")===t); });
+}
+
+/* 揀崗位 → 鎖定 → 入屏。之後屏內冇任何方法切換，只可以經「⚙ 設定」。 */
+function chooseStation(st){
+  station=st;
+  Array.prototype.forEach.call(document.querySelectorAll("#pickGrid .pcard"), function(x){
+    x.classList.toggle("picked", x.getAttribute("data-st")===st); });
+  setActiveTab("kitchen"); hideUndo(); render();
+}
+function render(){
+  var t=currentTab();
+
+  /* 🔴 未揀崗位唔可以入後廚屏 —— 否則會出現「冇鎖定、顯示晒所有出品」嘅狀態，
+     即係回到用戶想消滅嘅嗰個「全部」模式。 */
+  if(t==="kitchen" && !station){ t="pick"; setActiveTab("pick"); }
+
+  document.getElementById("v-login").classList.toggle("hidden", t!=="login");
+  document.getElementById("v-pick").classList.toggle("hidden", t!=="pick");
+  document.getElementById("v-kitchen").style.display = t==="kitchen" ? "flex" : "none";
+  document.getElementById("v-expo").style.display    = t==="expo" ? "flex" : "none";
+
+  Array.prototype.forEach.call(document.querySelectorAll("#flow .st"), function(st,i){
+    st.classList.toggle("on", i===({login:0,pick:1,kitchen:2,expo:3}[t]) || (t==="expo"&&i===4));
+  });
+
+  paintStationChrome();
+  paintCounts();
+  if(t==="kitchen") renderKitchen();
+  if(t==="expo") renderExpo();
+  fit();
+}
+
+/* ══════════ 等比縮放（關鍵：無斷點，版面永遠唔會重排） ══════════
+   下限 0.55：再窄就唔縮，改為橫向滾動 —— 寧願要滾，都唔好縮到睇唔到字。
+   上限 1：放大會模糊，所以最大就係原尺寸。 */
+var MIN_SCALE = 0.55;
+function fit(){
+  var stage=document.getElementById("stage"), canvas=document.getElementById("canvas");
+  var w=stage.clientWidth||1180;
+  var s=Math.min(1, Math.max(w/1180, MIN_SCALE));
+  canvas.style.transform="scale("+s+")";
+  stage.style.height=Math.round(820*s)+"px";
+  stage.style.overflowX = (1180*s > w) ? "auto" : "hidden";
+}
+
+/* ══════════ 事件 ══════════ */
+Array.prototype.forEach.call(document.querySelectorAll(".review .tabs button"), function(b){
+  b.onclick=function(){
+    Array.prototype.forEach.call(document.querySelectorAll(".review .tabs button"), function(x){ x.classList.remove("on"); });
+    b.classList.add("on"); hideUndo(); render();
+  };
+});
+/* ── 揀崗位（審稿用：撳②再揀，就可以睇另一個崗位嘅屏） ── */
+Array.prototype.forEach.call(document.querySelectorAll("#pickGrid .pcard"), function(c){
+  c.onclick=function(){ chooseStation(c.getAttribute("data-st")); };
+});
+
+/* ── 設定卡 = 屏內切換崗位嘅**唯一**入口（逃生門） ── */
+document.getElementById("kSetBtn").onclick=function(){
+  document.getElementById("kSheet").classList.remove("hidden");
+};
+document.getElementById("shClose").onclick=function(){
+  document.getElementById("kSheet").classList.add("hidden");
+};
+document.getElementById("shSwitch").onclick=function(){
+  document.getElementById("kSheet").classList.add("hidden");
+  station="";
+  Array.prototype.forEach.call(document.querySelectorAll("#pickGrid .pcard"), function(x){
+    x.classList.remove("picked"); });
+  setActiveTab("pick");
+  toast("請重新揀呢部機嘅崗位","崗位");
+  render();
+};
+
+/* ── 登入：揀「後廚屏」→ 入嚟先去揀崗位；揀「出餐台屏」→ 直接入 ── */
+document.getElementById("loginBtn").onclick=function(){
+  var on=document.querySelector("#loginModes button.on");
+  var md=on?on.getAttribute("data-mode"):"";
+  if(md==="kitchen"){
+    if(!station){
+      setActiveTab("pick");
+      toast("登入成功 · 請揀呢部機係廚房定水吧","登入");
+    } else {
+      setActiveTab("kitchen");
+      toast("登入成功 · "+curStation().role,"登入");
+    }
+  } else if(md==="expo"){
+    setActiveTab("expo"); toast("登入成功 · 出餐台屏","登入");
+  } else {
+    toast("登入成功（本稿示範後廚屏／出餐台屏）","登入");
+    return;
+  }
+  render();
+};
+var HINT={
+  quick:"<b>掃碼點餐：</b>全店只有一個碼（印出貼喺櫃檯／快餐區），客人掃碼自助落單，每張單獨立、冇枱號。",
+  dinein:"<b>掃碼點餐：</b>每張桌台各自一個碼，客人掃碼落單會綁定枱號；同一枱再加單會加入同一張單。",
+  kiosk:"<b>掃碼點餐：</b>不適用 —— 客人喺呢部機直接落單，唔使用掃碼貼紙；亦唔會改動店鋪現有嘅掃碼設定。",
+  salon:"<b>掃碼點餐：</b>不適用 —— 美容係預約制，唔涉及掃碼點餐。",
+  kitchen:"<b>掃碼點餐：</b>不適用 —— 後廚屏係一部機嘅角色，唔會改動店鋪現有嘅掃碼設定。",
+  expo:"<b>掃碼點餐：</b>不適用 —— 出餐台屏係一部機嘅角色，唔會改動店鋪現有嘅掃碼設定。"
+};
+Array.prototype.forEach.call(document.querySelectorAll("#loginModes button"), function(b){
+  b.onclick=function(){
+    Array.prototype.forEach.call(document.querySelectorAll("#loginModes button"), function(x){
+      x.classList.remove("on","k","e"); });
+    var md=b.getAttribute("data-mode"); b.classList.add("on");
+    if(md==="kitchen") b.classList.add("k");
+    if(md==="expo") b.classList.add("e");
+    document.getElementById("loginHint").innerHTML=HINT[md];
+  };
+});
+
+Array.prototype.forEach.call(document.querySelectorAll(".scen button[data-src]"), function(b){
+  b.onclick=function(){
+    var want=b.getAttribute("data-src");
+    var cands=POOL.filter(function(x){ return x.src===want; });
+    var pick=cands[Math.floor(Math.random()*cands.length)];
+    var items=pick.items.map(function(p){
+      return it(p[0], 1+Math.floor(Math.random()*2), p[1], 0, [], Math.random()>0.75?"少甜":"");
+    });
+    var no=pick.dine
+      ? TABLE_POOL[Math.floor(Math.random()*TABLE_POOL.length)]
+      : "A"+(100+Math.floor(Math.random()*899));
+    var o=mk(no, pick.dine, pick.src, 0, items);
+    o.push=true; orders.push(o);
+    toast(SRC[want].name+"："+no+"（"+items.length+" 項）","新單");
+    if(currentTab()!=="kitchen" && station) setActiveTab("kitchen");
+    render();
+  };
+});
+
+document.getElementById("reset").onclick=function(){
+  seed(); hideUndo(); station="";
+  Array.prototype.forEach.call(document.querySelectorAll("#pickGrid .pcard"), function(x){
+    x.classList.remove("picked"); });
+  setActiveTab("pick");
+  toast("已重設為示範資料 · 請重新揀崗位","示範"); render();
+};
+
+document.getElementById("netToggle").onclick=function(){
+  var off=document.body.classList.toggle("offline");
+  ["net1","net2"].forEach(function(id){
+    var el=document.getElementById(id);
+    el.className="net"+(off?" off":"");
+    el.innerHTML="<i></i>"+(off?"已斷線":"已連線");
+  });
+  this.textContent=off?"恢復連線":"模擬斷網";
+  if(off) toast("網絡斷線 · 確認出餐已停用","警示");
+};
+
+window.addEventListener("resize", fit);
+
+setInterval(function(){
+  var t=currentTab();
+  if(t==="kitchen") renderKitchen();
+  else if(t==="expo") renderExpo();
+  paintCounts();
+},1000);
+
+seed();
+render();
+})();
+</script>
+</body>
+</html>

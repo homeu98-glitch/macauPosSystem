@@ -11,6 +11,7 @@ import { scanModeForLoginMode, type LoginMode } from "@/lib/pos/scan-mode-from-l
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import { loadBootstrapCache, loadAuthSession, saveAuthSession, saveBootstrapCache, saveOperatingMode } from "@/lib/storage";
 import { saveKioskDeviceBinding, saveKioskMode } from "@/lib/kiosk-order";
+import { clearKdsDeviceBinding, loadKdsDeviceBinding } from "@/lib/kds/device-binding";
 import { setTerminalIndustry } from "@/lib/salon/industry-config";
 import { saveActiveSalonStore } from "@/lib/salon/storage";
 
@@ -18,10 +19,12 @@ export function LoginScreen() {
   const router = useRouter();
   const [account, setAccount] = useState("");
   const [pin, setPin] = useState("");
-  const initialMode =
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mode") === "kiosk"
-      ? "kiosk"
-      : "dinein";
+  // 深連結：`/login?mode=kiosk` / `?mode=kitchen` 可以直接預選裝置角色。
+  const initialMode: LoginMode = (() => {
+    if (typeof window === "undefined") return "dinein";
+    const requested = new URLSearchParams(window.location.search).get("mode");
+    return requested === "kiosk" || requested === "kitchen" ? requested : "dinein";
+  })();
   const [mode, setMode] = useState<LoginMode>(initialMode);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -170,8 +173,23 @@ export function LoginScreen() {
         ]);
       }
 
-      // 自助點餐機只做快餐（規格 5），同「快餐」模式一樣用 quick
-      saveOperatingMode(mode === "kiosk" || mode === "quick" ? "quick" : "dinein");
+      // 自助點餐機只做快餐（規格 5），同「快餐」模式一樣用 quick。
+      // ⚠️ 後廚屏 / 出餐台屏係**裝置角色**，唔應該改店級「營運模式」——
+      // 同一部機之後補做收銀，就會靜靜變咗快餐／堂食。所以呢兩個模式跳過。
+      if (mode !== "kitchen" && mode !== "expo") {
+        saveOperatingMode(mode === "kiosk" || mode === "quick" ? "quick" : "dinein");
+      }
+
+      // ── 後廚屏 / 出餐台屏：唔寫店級設定，只確保綁定唔會跨店殘留 ──
+      // ⚠️ 崗位（廚房／水吧）**唔喺呢度揀** —— 要入到 `/kitchen` 先揀，
+      //    揀完先寫入完整綁定（見 docs/116 §4.4）。所以呢度唔寫半截綁定。
+      if (mode === "kitchen" || mode === "expo") {
+        const existingBinding = loadKdsDeviceBinding();
+        // 換咗店 → 舊綁定（連工位）一定要清，否則會顯示上一間店嘅崗位
+        if (existingBinding && existingBinding.storeId !== session.merchantId) {
+          clearKdsDeviceBinding();
+        }
+      }
 
       // 統一用「帳號」比對而唔係「merchantId」比對：
       // - 60000002 → 65273599（同店換人）→ SPA 切換會殘留舊 store scope 嘅 React state；
@@ -197,8 +215,8 @@ export function LoginScreen() {
         return;
       }
 
-      // kiosk 綁店登入 → 去自助點餐介面；其他模式 → 收銀台
-      const homePath = mode === "kiosk" ? "/order" : "/";
+      // kiosk 綁店登入 → 去自助點餐介面；後廚屏 → 去揀崗位 / 入屏；其他模式 → 收銀台
+      const homePath = mode === "kiosk" ? "/order" : mode === "kitchen" ? "/kitchen" : "/";
 
       // 任何帳號切換（即使同一個 merchantId）→ 整頁 reload。
       // 原因：SPA 切換會殘留舊 store scope 嘅 React state（orders / bootstrap / deviceConfig 等），
@@ -223,18 +241,21 @@ export function LoginScreen() {
   }
 
   /**
-   * 四個登入模式各自會套用到嘅「掃碼點餐」口徑（docs/115 §12）。
+   * 各登入模式各自會套用到嘅「掃碼點餐」口徑（docs/115 §12）。
    *
    * 呢段文案就係需求講嘅「依所選模式呈現對應設定」——所以每個模式都要講出
    * **客人會攞到咩碼**，唔可以只講收銀台行為（商家關注嘅係貼紙印幾張）。
-   * `kiosk` / `salon` 要明確寫「不適用 / 唔會改動」，否則商家會以為登入完
-   * 全店嘅掃碼設定會冇咗。
+   * `kiosk` / `salon` / `kitchen` / `expo` 要明確寫「不適用 / 唔會改動」，否則商家會以為
+   * 登入完全店嘅掃碼設定會冇咗。
    */
   const scanOrderHint: Record<LoginMode, string> = {
     quick: "全店只有一個碼（印出貼喺櫃檯／快餐區），客人掃碼自助落單，每張單獨立、冇枱號。",
     dinein: "每張桌台各自一個碼，客人掃碼落單會綁定枱號；同一枱再加單會加入同一張單。",
     kiosk: "不適用 —— 客人喺呢部機直接落單，唔使用掃碼貼紙；亦唔會改動店鋪現有嘅掃碼設定。",
     salon: "不適用 —— 美容係預約制，唔涉及掃碼點餐。",
+    kitchen:
+      "不適用 —— 後廚屏係一部機嘅角色，唔會改動店鋪現有嘅掃碼設定。登入之後要先揀呢部機嘅崗位（廚房／水吧），揀完會鎖定，唔可以即場切換。",
+    expo: "不適用 —— 出餐台屏係一部機嘅角色，唔會改動店鋪現有嘅掃碼設定。",
   };
 
   return (
@@ -293,6 +314,21 @@ export function LoginScreen() {
                   type="button"
                 >
                   自助點餐機
+                </button>
+                {/*
+                  後廚屏（KDS）—— 見 docs/116 §4.1 / §4.4。
+                  ⚠️ 揀咗呢個只係「呢部機做後廚屏」；**崗位**（廚房／水吧）要入到
+                  `/kitchen` 先揀，而且揀完會鎖死，唔可以喺屏內即場切換（防誤按）。
+                  出餐台屏（`expo`）屬 P2，暫時唔出掣。
+                */}
+                <button
+                  className={`col-span-2 rounded-2xl px-3 py-2 text-sm font-semibold transition ${
+                    mode === "kitchen" ? "bg-emerald-500 text-white" : "bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                  onClick={() => setMode("kitchen")}
+                  type="button"
+                >
+                  後廚屏（廚房／水吧）
                 </button>
               </div>
               {/*
