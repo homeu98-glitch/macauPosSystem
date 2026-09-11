@@ -286,6 +286,16 @@
   或者叫用戶喺 GitHub Desktop 撳一次 fetch（佢自己嗰個 git 唔受影響，會寫返正確值）。
 - ✅ **預防**：`git config --local gc.auto 0` —— 停用自動 gc / pack-refs，減少「舊 pack 被搬走」嘅機會。
 
+## 🔴 沙箱內 `git push` 卡死唔動（>150s 被 kill）＝ Git Credential Manager 等互動憑證（2026-09-11）
+- **症狀**：`git fetch` / `git ls-remote` **正常**（公開 repo 匿名讀取，唔使憑證），但 `git push` 每次跑到 90s / 150s **完全冇輸出**就被 SIGTERM。`GIT_TERMINAL_PROMPT=0` **唔夠** —— 佢只封鎖 git 自己嘅終端提示，唔會阻止 `credential.helper` 拉 UI。
+- **診斷**：`GIT_CURL_VERBOSE=1` 見到經本機 proxy（`127.0.0.1:<port>`）`CONNECT github.com:443` → `HTTP/1.1 200 Connection Established` **隧道正常**，即係唔係網絡問題 → 卡喺憑證階段。
+- ✅ **修法**：加 `GCM_INTERACTIVE=never`：
+  ```bash
+  CODEBUDDY_SAFE_DELETE_ENABLED=0 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git push origin main
+  ```
+  憑證有快取就用快取（正常即刻完成），冇就**快速失敗**而唔係無限等。
+- ⚠️ 判斷 exit code 唔好寫成 `cmd | tail; echo $?`（`$?` 會係 `tail` 嘅）。用 `${PIPESTATUS[0]}` 或者唔好 pipe。
+
 ### 附：`.git` 損毀後嘅「重建歷史」做法（2026-09-11 實測）
 > ⚠️ **最後手段**。先睇上面「遠端 = 唯一權威源」：**先 `git fetch`**，確認遠端真係冇先好 rebuild（09-11 就係冇做呢步而白做一次）。
 無法還原嘅物件多過幾個時，最乾淨嘅做法係**保留完好嘅舊歷史做底，再將目前工作區壓成 1 個新 commit**：
