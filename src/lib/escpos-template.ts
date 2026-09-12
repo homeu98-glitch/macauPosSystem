@@ -1,5 +1,6 @@
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
 import { RECEIPT_PAPER_COLUMNS, RECEIPT_PAPER_COLUMNS_58MM } from "@/lib/escpos-render";
+import { buildRetailReceiptBlocks } from "@/lib/retail/receipt-retail-blocks";
 import {
   DEFAULT_LABEL_PAPER_ID,
   EscPosBlockStyle,
@@ -43,6 +44,11 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "cash_tendered", label: "实收" },
   { id: "change_amount", label: "找零" },
   { id: "payment_method", label: "付款方式" },
+  // ── 零售新增（2026-09-13）── 全部係靜態文字區塊，加咗唔使改下游三端（見 ReceiptSectionId 註釋）
+  { id: "split_payment", label: "拆分付款明細" },
+  { id: "points_earned", label: "會員積分" },
+  { id: "exchange_of", label: "換貨原單號" },
+  { id: "return_policy", label: "退換貨條款" },
   { id: "order_note", label: "全單備註" },
   /** 收據二維碼：網址喺「二維碼網址」輸入框設定；空白 = 唔印（連區塊都唔會出現）。 */
   { id: "qr_code", label: "二維碼" },
@@ -159,6 +165,15 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   cash_tendered: block(false, "s", false, "right"),
   change_amount: block(false, "s", false, "right"),
   payment_method: block(true, "s", false, "left"),
+  // ── 零售新增（2026-09-13）────────────────────────────────────
+  // ⚠️ 四個都預設 `visible: true`，**唔會影響任何現有商戶** ——
+  // 因為內容空白嘅區塊 renderer 一律略過（同 `qr_code` 冇網址時一樣），
+  // 餐飲單冇 splitPayments / pointsEarned / exchangeOf / returnPolicyText → 全部自動唔出。
+  // 反而若預設 `false`，零售商戶要自己去設計頁逐個撳開，容易以為「功能冇做」。
+  split_payment: block(true, "s", false, "left"),
+  points_earned: block(true, "s", false, "left"),
+  exchange_of: block(true, "s", false, "left"),
+  return_policy: block(true, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
   // 二維碼：只有 align 有意義（size / bold 對點陣圖無效）。網址空白就唔會出現。
   qr_code: block(true, "s", false, "center"),
@@ -199,6 +214,8 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
     "store_name",
     "store_tel",
     "order_no",
+    // 換貨單：緊跟單號（「換貨單: 原單 R-000127」）—— 非換貨單內容空白，自動略過
+    "exchange_of",
     "table_name",
     "order_time",
     "checkout_time",
@@ -215,7 +232,12 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
     "cash_tendered",
     "change_amount",
     "payment_method",
+    // 零售：多筆付款逐行印（1 筆時 `payment_method` 已經講晒，所以零售多數會熄 `payment_method`）
+    "split_payment",
+    "points_earned",
     "order_note",
+    // 退換貨條款擺喺二維碼之前（收尾條款，睇完金額先睇條款）
+    "return_policy",
     "qr_code",
     "footer",
   ],
@@ -224,6 +246,9 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
   qrUrl: "",
   // 二維碼打印大小預設「中」。
   qrSize: "m",
+  // 退換貨條款預設留空：餐飲單唔需要，零售商戶自己去設計頁填先會印。
+  // ⚠️ 一定要同時加落 `normalizePosLocalSettings()` 白名單，否則填好一 reload 就被剷走。
+  returnPolicyText: "",
 };
 
 /**
@@ -672,6 +697,11 @@ export interface ReceiptContentOpts {
   currency: string;
   footerText: string;
   serverName?: string;
+  /**
+   * 退換貨條款（模板層級自由文字；2026-09-13 零售新增）。
+   * 空白 / 缺省 = `return_policy` 區塊唔會出（亦唔會留空行）。
+   */
+  returnPolicyText?: string;
 }
 export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): Record<string, string> {
   const subtotalBefore = roundMoney(computeSubtotalBeforeDiscount(order));
@@ -752,6 +782,14 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     // 其他金額區塊一律係「標題: 值」（原價合計: / 結帳時間: / 服務員: …），
     // 得呢一格以前淨印值（「現金」），顧客睇唔出嗰個係乜。補返「支付方式: 」前綴保持一致。
     payment_method: `支付方式: ${order.paymentMethod ?? "現金"}`,
+    // ── 零售新增（2026-09-13）──────────────────────────────────────
+    // 邏輯**唔喺呢度**：抽出 `@/lib/retail/receipt-retail-blocks`（純函式、有單測），
+    // 因為本檔有 runtime import → `node --test` 載入唔到，寫喺呢度就冇測試覆蓋。
+    // 全部係純文字（多行用 `\n` 串），空白 = 區塊自動略過 → 舊單 / 餐飲單零影響。
+    ...buildRetailReceiptBlocks(order, {
+      formatAmount: (amount) => formatMoney(amount, opts.currency),
+      returnPolicyText: opts.returnPolicyText,
+    }),
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
   };

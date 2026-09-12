@@ -369,6 +369,23 @@ export type ReceiptSectionId =
   | "change_amount"
   | "payment_method"
   | "order_note"
+  // ── 零售新增（2026-09-13）──────────────────────────────────────
+  // 🔑 **呢四個都係「靜態文字區塊」→ 加佢哋唔需要改下游三端！**
+  // 下游（Companion / APK / print-hub）只 loop `snapshot.blocks` 再印 `content[id]`，
+  // 而 `content` 係 POS 端 `buildReceiptContent()` 預先砌好嘅字串 —— **自描述**，
+  // 客戶端唔識個新 id 都照樣印得出。
+  // 內容空白 → renderer 自動略過（同 `qr_code` 一樣）→ 舊單 / 餐飲單零影響。
+  //
+  // ⚠️ 對比：`item_barcode` 呢類**逐項**資料要入 `PrintJob.items[]`，客戶端各自 render
+  //     → 嗰種才真正需要改四端 + 擰 `versionCode`。兩者風險差好遠，唔可以混為一談。
+  /** 拆分付款逐筆明細（多行，用 `\n` 串；同 `discount_breakdown` 同一手法） */
+  | "split_payment"
+  /** 會員積分（本單賺取 / 結餘） */
+  | "points_earned"
+  /** 換貨單：標示原單號 */
+  | "exchange_of"
+  /** 退換貨條款（模板層級自由文字 `ReceiptTemplate.returnPolicyText`；空白 = 唔印） */
+  | "return_policy"
   /**
    * 收據二維碼（商家自訂網址 → QR）。同 `items` 一樣係**特殊區塊**：
    * 內容唔喺 `PrintJob.content`（嗰度只放純文字），而係讀 `PrintJob.qr`。
@@ -491,6 +508,17 @@ export interface ReceiptTemplate {
    * 缺省 = `"m"`（中）。可選 — 舊模板未存有呢欄時設計介面會補返預設。
    */
   qrSize?: EscPosSize;
+  /**
+   * 退換貨條款（**模板層級**自由文字，唔跟區塊；2026-09-13 零售新增）。
+   *
+   * 藥房可以寫「處方藥一經售出恕不退換」、便利店寫「退換貨請於 7 日內憑此單辦理」。
+   * 空白 = 唔印（`return_policy` 區塊唔會出，亦唔會留空行）。
+   *
+   * ⚠️ 同 `qrUrl` / `label.paperSize` **同一個坑**：`normalizePosLocalSettings()`
+   * 係逐欄重建 `receipt`（唔係展開合併），所以呢個欄**一定要**加落白名單，
+   * 否則商家填好之後一 reload / 雲端同步就被靜靜剷走（見 docs/113）。
+   */
+  returnPolicyText?: string;
 }
 
 /**

@@ -956,13 +956,32 @@ returnOrder?: boolean;
 ### 9.4 三個刻意嘅技術決定（同原計劃唔同）
 
 **① 收據 / 標籤區塊**（`ReceiptSectionId` +5、`RetailLabelSectionId`）**延後到打印子階段。**
+（2026-09-13 已完成收據部分 → 見 §11。）
 
-原因：加區塊要**同時**改四處先唔會出事 —— `RECEIPT_SECTION_META`（設計介面顯示）、
-`RECEIPT_BLOCK_DEFAULTS`（`Record<>` 必填）、`buildReceiptContent`（內容），
-**加上四端 renderer**（POS 預覽 / Companion / APK / print-hub）。
-若只加前三處，商家就會喺設計頁見到一個「撳咗冇反應」嘅開關
-—— 而 `docs/113` 明文禁止製造死開關（前科：`kitchen` 嘅 `server` / `customer_count`）。
-所以呢部分同「四端同步 + 擰 `versionCode`」一次過做，唔可以拆。
+原因：加區塊要**同時**改三處先唔會出事 —— `RECEIPT_SECTION_META`（設計介面顯示）、
+`RECEIPT_BLOCK_DEFAULTS`（`Record<>` 必填）、`buildReceiptContent`（內容）。
+若漏咗 `BLOCK_DEFAULTS`，`ensureReceiptSections()` 補唔到 → 商家喺設計頁見到一個
+「撳咗冇反應」嘅開關 —— 而 `docs/113` 明文禁止製造死開關
+（前科：`kitchen` 嘅 `server` / `customer_count`）。
+
+> 🔴 **【重要修正 2026-09-13】原本喺度寫「必須四端 renderer 同步 + 擰 `versionCode`」，係過度保守。**
+> 實際睇過五個 renderer（POS `escpos-render.ts` ＋ 四端）之後確認：
+> **加「靜態文字區塊」完全唔需要改下游**，因為 `PrintJob.content` 係
+> `Record<sectionId, string>` —— **自描述**，renderer 一律做同一件事：
+> ```
+> content[block.id] ?: continue    // 有值就照印，冇值就跳過
+> ```
+> 五個 renderer 都係呢個形狀（已逐一核對：`escpos-render.ts:301`、
+> `companion-server.mjs:594`、`print hub / print-agent-android / print-relay` 嘅 `EscPosRenderer.kt`）。
+> **所以「加區塊」同「四端同步」係兩件事，唔應該混為一談：**
+>
+> | 加嘅嘢 | 要改下游？ | 要擰 `versionCode`？ |
+> | --- | --- | --- |
+> | **靜態文字區塊**（`content[id]` 有值就印） | ❌ 唔使 | ❌ 唔使 |
+> | **逐項資料**（`PrintJob.items[]` 加欄位，例如逐項條碼） | ✅ 四端都要改 | ✅ 要 |
+> | **改區塊語義**（例如新 `divider` 行為） | ✅ 四端都要改 | ✅ 要 |
+>
+> 呢個修正令零售收據由「要開一輪跨 repo 工程」變成「一個 repo 內嘅小改動」。
 
 **② `types.ts` 一律用「加選填欄位」而唔改既有欄位型別。**
 
@@ -1074,6 +1093,100 @@ union / `Record<>` 嘅風險（一改就四端出紙要跟）。**需要改既�
 3. PIN 權限閘接上 `retailApprovalRules`
 4. 掛單 / 取單、退換貨
 5. 庫存 / 報表 / 交班頁加入側欄
+
+---
+
+## 11. 打印子階段（2026-09-13 · 零售收據可以真正出紙）
+
+### 11.1 關鍵發現（先講，因為佢改變咗整個工作量評估）
+
+**五個 renderer 全部都係「查表式」**：`content[block.id]` 有值就照印、冇值就跳過。
+逐一核對結果：
+
+| Renderer | 位置 | 寫法 |
+| --- | --- | --- |
+| POS 預覽 / 出紙 | `src/lib/escpos-render.ts:263-301` | `if (!b.visible) continue` → `divider`/`items`/`qr_code` 特例 → `if (!text) continue` |
+| Companion | `desktop-companion/companion-server.mjs:594` | `const text = content[b.id]; if (!text) continue;` |
+| print hub | `app/.../EscPosRenderer.kt:457` | `val text = content[b.id] ?: continue` |
+| print-agent-android | `app/.../EscPosRenderer.kt:546` | `val text = content[b.id] ?: continue` |
+| print-relay | `app/.../EscPosRenderer.kt:458` | `val text = content[b.id] ?: continue` |
+
+→ **加「靜態文字區塊」零跨 repo 改動、零 `versionCode`**。只有
+`items[]` 逐項資料 / 改區塊語義才需要四端同步（見 §9.4 ① 嘅修正表）。
+
+### 11.2 完成內容
+
+| 檔案 | 改動 |
+| --- | --- |
+| `src/lib/types.ts` | `ReceiptSectionId` += `split_payment` / `points_earned` / `exchange_of` / `return_policy`；`ReceiptTemplate.returnPolicyText?` |
+| `src/lib/escpos-template.ts` | 4 個 `RECEIPT_SECTION_META` 項目、4 個 `RECEIPT_BLOCK_DEFAULTS`、`DEFAULT_RECEIPT_TEMPLATE.order` 插入 4 個 id、`buildReceiptContent` 接上新 builder |
+| `src/lib/retail/receipt-retail-blocks.ts`（**新**，18 測） | 四個區塊嘅格式化（多行 / 空值抑制 / 金額格式）—— 純函式，可測 |
+| `src/lib/storage.ts` | `normalizePosLocalSettings` 白名單加 `receipt.returnPolicyText`（🔴 同 `qrUrl` 同一個坑） |
+| `src/lib/mock-data.ts` | 兩個模板 literal 補 4 個區塊 + `order` 陣列 |
+| `src/lib/print-jobs.ts` | 傳 `returnPolicyText` 落 `buildReceiptContent` |
+| `src/lib/preview-fixtures.ts` | 預覽範例單補 `splitPayments` / `pointsEarned` / `pointsBalanceAfter` / `exchangeOf`（令設計頁睇得到） |
+| `src/components/print-center.tsx` | 「退換貨條款」textarea（模板層級，收據 / 自助機各自設定） |
+| `src/lib/retail/retail-orders.ts` | **接上出票**：`appendPrintJobsWithSync(buildReceiptPrintJobs(order, bootstrap))` |
+
+### 11.3 三個要點
+
+**① 出票一定要用 `appendPrintJobsWithSync()`。**
+佢一次過做「持久化 + 入 outbox（產生 `PRINT_JOB_CREATED`）」。淨叫 `savePrintJobs()`
+＝ 零出紙 ＋ 零紅標（docs/113 明文列出嘅坑）。
+
+**② 出票失敗唔可以影響落單。**
+錢已經收咗、單已經入 outbox，所以出票全部包 `try/catch`，出錯只大聲報。
+`SettleRetailOrderResult` 回 `printJobCount` / `printWarning`，收銀台 toast 會講明
+「收據 1 張」或者「⚠️ 未出票：冇啟用嘅收據機（role=receipt）」——
+**歷史上出票靜默失敗就係咁被掩住咗**，所以一定要出聲。
+
+**③ 空內容 = 區塊自動消失（加區塊唔會影響現有商戶）。**
+四個區塊預設 `visible: true`，但餐飲單冇 `splitPayments` / `pointsEarned` /
+`exchangeOf` / `returnPolicyText` → content 空 → renderer 跳過。
+**唔可以**預設 `false`，否則零售商戶要自己去設計頁逐個撳開，容易以為功能冇做。
+
+### 11.4 設計介面嘅一個實務細節
+
+`print-center.tsx` 內建 dev 守衛 `assertPreviewCoverage()`：逐個區塊檢查預覽 content
+有冇非空值，冇就喺 console 警告「請喺 `preview-fixtures.ts` 補返範例值，
+否則商家喺設計頁永遠睇唔到呢啲區塊」。**呢個守衛正好指引咗我該改邊度** ——
+所以 `preview-fixtures.ts` 補咗零售範例值。
+
+但 `return_policy` 例外：佢係**商家自己打嘅文字**，刻意**唔用示例 fallback**
+（同 `storeTel` / `qrUrl` 唔同 —— 嗰兩個係系統提供嘅值，用示例無害）。
+若清空之後預覽仲顯示一句範例，商家會以為「清唔走」，同「預覽 == 出紙」嘅契約矛盾。
+所以照傳真實值 + 加入 `assertPreviewCoverage` 嘅 `skip` 集（連原因註釋）。
+
+### 11.5 驗證
+
+| 項 | 結果 |
+| --- | --- |
+| `tsc --noEmit` | **0 error** |
+| `node --test` | **452 pass / 0 fail**（§10 完結時 434 → 新增 18） |
+| `eslint`（新檔 + 改動檔） | 0 error（`print-center.tsx` 嘅 16 個 error 係**既有基線**，喺我未改動嘅行號） |
+| 五個 renderer 逐一核對 | ✅ 全部 `content[block.id]` 查表式 |
+| `next build` | ✅ **成功**（Compiled 36.8s、TypeScript 54s、**73/73 靜態頁**） |
+
+⚠️ **仍未做 runtime / 實紙驗證**：`/retail` 喺 `AuthGuard` 後面（要登入），
+而「真實出紙」需要接上 Companion / APK 同實體打印機。
+**建議商家實測一次**：登入 → `/retail` → 落一單 → 確認收據印出四個新區塊
+（拆分付款明細 / 會員積分 / 換貨原單號 / 退換貨條款）。
+出票若靜默失敗，收銀台 toast 會顯示「⚠️ 未出票：<原因>」，唔會靜靜食咗。
+
+### 11.6 ⚠️ 未做：零售專屬標籤（價籤 / 商品標籤）
+
+呢個**真正**需要四端同步，原因唔係「加區塊」，而係：
+
+1. `PrintTemplateKind = "receipt" | "label" | "kitchen" | "shift"`（`types.ts`）——
+   零售標籤要用新 `kind`（或共用 `label`），而 **renderer 有 `when (kind)` 分支**。
+2. 零售標籤嘅內容（售價大字 / 原價刪除線 / 條碼圖）唔係純文字行，
+   而 `label` 通道嘅內容係 per-item 由 `buildLabelContent()` 出 —— 需要新嘅
+   `RetailLabelSectionId` + `buildRetailLabelContent()` + 四端 label 分支。
+3. 底層仲要決定：價籤係按**商品**印（唔係按訂單行），即 `PrintJob` 要接受
+   「唔屬於任何訂單」嘅 job（目前 `orderId` 係必填）→ 呢個係**合約改動**，要三思。
+
+**下一步建議**：先做「由商品批量印價籤」嘅 POS 側（含 `orderId` 放寬為可選嘅合約決定），
+確認四端都認得先擰 `versionCode`。
 
 ---
 

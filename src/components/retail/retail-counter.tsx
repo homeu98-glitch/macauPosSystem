@@ -301,13 +301,18 @@ export function RetailCounter() {
       return;
     }
 
-    // 超賣要出聲（唔可以靜默）
+    // 🔴 出票結果一定要講出嚟 —— 「冇收據」同「冇出紙」係兩件唔同嘅事，
+    // 靜默唔講會令收銀以為已經印咗（歷史上出票靜默失敗就係咁掩住咗）。
     const oversold = (result.stockChanges ?? []).filter((c) => c.shortfall > 0);
+    const printed = result.printJobCount ?? 0;
+    const bits = [`已結帳 ${result.order.localOrderNo}`];
+    if (printed > 0) bits.push(`收據 ${printed} 張`);
+    else if (result.printWarning) bits.push(`⚠️ 未出票：${result.printWarning}`);
     if (oversold.length > 0) {
-      flash("info", `已落單 ${result.order.localOrderNo}（注意超賣：${oversold.map((c) => c.label).join("、")}）`);
-    } else {
-      flash("ok", `已結帳 ${result.order.localOrderNo} · 應收 ${money(totals.total)}`);
+      bits.push(`超賣：${oversold.map((c) => c.label).join("、")}`);
     }
+    const tone: "ok" | "info" = printed > 0 && oversold.length === 0 && !result.printWarning ? "ok" : "info";
+    flash(tone, bits.join(" · "));
 
     // 商品庫存改咗 → 重新讀，避免畫面同實際唔一致
     setProducts(loadRetailProducts());

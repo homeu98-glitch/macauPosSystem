@@ -485,6 +485,12 @@ export function PrintCenter() {
     sectionTitles?: Partial<Record<ShiftSectionId, string>>;
     /** 標籤模板專屬：標籤紙尺寸（`LABEL_PAPER_PRESETS` 嘅 id）。 */
     paperSize?: string;
+    /**
+     * 退換貨條款（模板層級自由文字；2026-09-13 零售新增，收據 / 自助點餐機各自設定）。
+     * 空白 = `return_policy` 區塊唔會出（亦唔會留空行）。
+     * ⚠️ 一定要喺 `normalizePosLocalSettings()` 白名單帶返，否則一 reload 就被剷走。
+     */
+    returnPolicyText?: string;
   };
 
   function readTemplate(kind: TemplateKindState): AnyTemplate {
@@ -798,6 +804,17 @@ export function PrintCenter() {
   }
 
   /**
+   * 退換貨條款（模板層級自由文字；2026-09-13 零售新增）。
+   *
+   * 清空 = `return_policy` 區塊自動消失（`buildReturnPolicyText()` 會 trim 走空白 →
+   * 回空字串 → renderer 跳過）。藥房 / 便利店可以各自寫自己嘅條款。
+   */
+  function setReturnPolicyText(kind: TemplateKindState, text: string) {
+    const t = readTemplate(kind);
+    applyTemplate(kind, { ...t, returnPolicyText: text });
+  }
+
+  /**
    * 「生成」掣：喺打印模板內**生成**二維碼圖像。
    *
    * 做兩件事：
@@ -869,9 +886,11 @@ export function PrintCenter() {
    */
   function assertPreviewCoverage(kind: TemplateKindState, content: Record<string, string>) {
     if (process.env.NODE_ENV === "production") return;
-    // 呢三個唔係純文字區塊：`divider` 係設定型、`items` 行 PrintItemLine、
+    // 呢幾個唔係純文字區塊：`divider` 係設定型、`items` 行 PrintItemLine、
     // `qr_code` 靠 extras.qr 帶，所以唔使喺 content 入面有值。
-    const skip = new Set(["divider", "items", "qr_code"]);
+    // `return_policy` 同上面一樣係**模板層級**（商家自己打嘅字），唔喺 preview-fixtures：
+    // 空白 = 唔印（同出紙一致），所以唔應該當成「漏咗範例值」而報警。
+    const skip = new Set(["divider", "items", "qr_code", "return_policy"]);
     const missing = (SECTION_META[kind] ?? [])
       .filter((m) => !skip.has(m.id) && !(content[m.id] ?? "").trim())
       .map((m) => m.id);
@@ -952,6 +971,15 @@ export function PrintCenter() {
       currency: "MOP",
       footerText: t.footerText,
       serverName: PREVIEW_SERVER_NAME,
+      /**
+       * 退換貨條款（2026-09-13 零售新增）。
+       *
+       * ⚠️ **刻意唔用示例 fallback**（同 `storeTel` / `qrUrl` 唔同）：嗰兩個係「系統提供嘅值」，
+       * 用示例無害；但呢個係**商家自己打嘅文字** —— 佢清空咗之後預覽若仲顯示一句範例，
+       * 就會以為「清唔走」，同「預覽 == 出紙」嘅契約直接矛盾。
+       * 所以照傳真實值：空白 = 區塊唔出（同出紙一致）。
+       */
+      returnPolicyText: t.returnPolicyText,
     });
     // 共用 `toPrintItemLines()`：同收據出紙（`print-jobs.ts`）行同一份映射。
     const items = toPrintItemLines(PREVIEW_RECEIPT_ORDER.items);
@@ -1529,6 +1557,21 @@ export function PrintCenter() {
                   </span>
                 </div>
                 <QrFieldPreview url={t.qrUrl ?? ""} size={t.qrSize ?? "m"} />
+              </div>
+            ) : null}
+            {isReceiptLike ? (
+              <div className="grid gap-1 text-xs font-semibold text-slate-600 sm:col-span-2">
+                <span>退換貨條款</span>
+                <textarea
+                  className="min-h-[64px] w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm font-normal outline-none focus:border-orange-400"
+                  onChange={(e) => setReturnPolicyText(kind, e.target.value)}
+                  placeholder="例：退換貨請於 7 日內憑此單及原包裝辦理"
+                  value={t.returnPolicyText ?? ""}
+                />
+                <span className="text-[11px] font-normal leading-relaxed text-slate-500">
+                  會印喺收據底部（「退換貨條款」區塊）。可以寫兩行，換行會照印。
+                  留空 / 只有空白 = 唔會印，亦唔會留空行。收據同自助點餐機係兩個獨立設定。
+                </span>
               </div>
             ) : null}
           </div>

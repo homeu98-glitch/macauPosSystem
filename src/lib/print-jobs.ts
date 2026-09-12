@@ -126,6 +126,8 @@ function buildTemplateReceiptJobs(
     currency: bootstrap.currency,
     footerText: template.footerText,
     serverName,
+    // 退換貨條款（模板層級自由文字；2026-09-13 零售新增）。空白 = `return_policy` 區塊自動略過。
+    returnPolicyText: template.returnPolicyText,
   });
   // 二維碼：喺 POS 端 encode 一次，三個 repo 共用同一個點陣（設計 == 預覽 == 出紙）。
   // 網址空白 / 太長編唔到 → 回傳 null → 唔帶 qr 欄位 → renderer 同預覽都自動略過。

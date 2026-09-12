@@ -12,17 +12,20 @@
  *   `paid` 係快餐 counter 專用（單向閘，見 docs/113）。零售係「一手交錢一手交貨」，
  *   同堂食一樣即時完成 → 必須 `settled`，否則 `isSaleCountable()` 唔會計入營業額。
  *
- * ⚠️ **未做嘅嘢（刻意留下，下一階段）**：出票（收據 / 標籤）。
- *   原因：零售收據需要新嘅 `ReceiptSectionId` 區塊（品項條碼 / 拆分付款明細 / 會員積分 /
- *   退換貨條款），而加區塊一定要四端 renderer 同步 —— 只加一半會變成「撳咗冇反應」嘅死開關
- *   （docs/113 明文禁止）。所以出票同「四端同步 + 擰 versionCode」一次過做。
- *   目前會用**現有收據模板**出一張基本小票（見 `settleRetailOrder` 尾段 TODO）。
+ * ⚠️ **出票範圍**：目前會出**收據**（用 `printTemplates.receipt` 槽位，含新增嘅
+ * 拆分付款明細 / 會員積分 / 換貨原單號 / 退換貨條款四個區塊）。
+ * **未做**：零售專屬標籤（價籤 / 商品標籤）—— 嗰個要新嘅 `RetailLabelSectionId` +
+ * 四端 renderer 同步，屬下一個子階段。
  */
 
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
+import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
+import { buildReceiptPrintJobs } from "@/lib/print-jobs";
+import { isPrintContentEnabled } from "@/lib/print-toggles";
 import {
   getActiveStoreId,
+  loadBootstrapCache,
   loadOrders,
   loadQueue,
   loadRetailProducts,
@@ -67,6 +70,10 @@ export interface SettleRetailOrderResult {
   totals?: RetailOrderTotals;
   /** 扣庫存結果（含超賣 shortfall —— UI 要提示） */
   stockChanges?: StockChange[];
+  /** 已入佇列嘅收據打印 job 張數（0 = 未出票，睇 `printWarning`） */
+  printJobCount?: number;
+  /** 未出票 / 只出一部分嘅原因（`undefined` = 正常出票） */
+  printWarning?: string;
   error?: string;
 }
 
@@ -211,11 +218,39 @@ export function settleRetailOrder(params: SettleRetailOrderParams): SettleRetail
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
   }
 
-  // TODO（打印子階段）：喺呢度 `appendPrintJobsWithSync(buildReceiptPrintJobs(order))`。
-  // 依家**刻意唔叫** —— 零售收據要新區塊（品項條碼 / 拆分付款明細 / 會員積分 / 退換條款），
-  // 而加區塊必須四端 renderer 同步，唔可以只加一半（會變死開關）。見檔頭說明。
+  // ── ④ 出票（收據）────────────────────────────────────────────
+  // 🔴 **一定要用 `appendPrintJobsWithSync()`**：佢一次過做「持久化 + 入 outbox」
+  // （產生 `PRINT_JOB_CREATED` 事件）。淨係 `savePrintJobs()` ＝ 零出紙＋零紅標
+  // —— 呢個係 docs/113 明文列出嘅坑，唔可以走捷徑。
+  //
+  // ⚠️ 出票**唔可以影響落單**：錢已經收咗、單已經入 outbox，所以全部包 try/catch，
+  // 出錯只大聲報，唔會令 settleRetailOrder 回 ok:false（否則收銀會以為冇收到錢）。
+  let printJobCount = 0;
+  let printWarning: string | undefined;
+  try {
+    if (!isPrintContentEnabled("receipt")) {
+      printWarning = "「收據」打印開關已關 → 未出票";
+    } else {
+      const bootstrap = loadBootstrapCache();
+      if (!bootstrap) {
+        printWarning = "冇門店資料快取（bootstrap）→ 未出票";
+        console.warn("[retail] 冇 bootstrap 快取 → 收據未出紙（店名 / 幣別缺失）");
+      } else {
+        const jobs = buildReceiptPrintJobs(order, bootstrap);
+        printJobCount = appendPrintJobsWithSync(jobs);
+        if (printJobCount === 0) {
+          // 冇啟用嘅 `role === "receipt"` 打印機 → 出票會靜默失敗（歷史常見坑）→ 要出聲
+          printWarning = "冇啟用嘅收據機（role=receipt）→ 未出票";
+          console.warn("[retail] 冇啟用嘅收據機 → 收據未出紙");
+        }
+      }
+    }
+  } catch (e) {
+    printWarning = "出票失敗（詳見 console）";
+    console.error("[retail] 收據出票失敗", e);
+  }
 
-  return { ok: true, order, totals, stockChanges };
+  return { ok: true, order, totals, stockChanges, printJobCount, printWarning };
 }
 
 /** 購物車有冇任何「人手調整」（需要原因 / 權限閘） */

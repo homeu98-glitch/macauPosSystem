@@ -101,6 +101,18 @@ export const PREVIEW_RECEIPT_ORDER: PosOrder = {
   cashTendered: 200,
   changeAmount: 52,
   orderNote: "唔要香菜，麵條硬身（示例）",
+  // ── 零售區塊範例（2026-09-13）────────────────────────────────
+  // 呢幾項**淨係為咗令設計頁嘅即時預覽見到對應區塊**（餐飲真單唔會有）。
+  // 冇填 → content 空 → renderer 自動略過 → 商家喺設計頁永遠睇唔到嗰幾行
+  // （`assertPreviewCoverage()` 就係捉呢種情況）。
+  // 金額刻意同 `total` 對齊（100 + 48 = 148），唔可以亂填令預覽自相矛盾。
+  splitPayments: [
+    { methodId: "preview-cash", label: "現金", amount: 100, tendered: 100, change: 0 },
+    { methodId: "preview-mpay", label: "澳門通", amount: 48 },
+  ],
+  pointsEarned: 148,
+  pointsBalanceAfter: 520,
+  exchangeOf: "PREVIEW-0888",
   // 有 originalSettledAt → 「結帳時間」區塊有嘢印（未結帳單呢格係空、會隱形）。
   originalSettledAt: "2026-09-10T12:34:00+08:00",
   createdAt: "2026-09-10T12:05:00+08:00",

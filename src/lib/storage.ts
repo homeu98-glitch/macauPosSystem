@@ -359,6 +359,12 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         // 令商家填好嘅二維碼網址一經重新載入（normalize）就被剷走 → 「二維碼未能生成/顯示」。
         qrUrl: settings?.printTemplates?.receipt?.qrUrl ?? DEFAULT_RECEIPT_TEMPLATE.qrUrl ?? "",
         qrSize: settings?.printTemplates?.receipt?.qrSize ?? DEFAULT_RECEIPT_TEMPLATE.qrSize ?? "m",
+        // ⚠️ 2026-09-13 零售新增：同 `qrUrl` **一模一樣嘅坑** —— 呢度係逐欄重建，
+        // 漏咗就會令商家填好嘅退換貨條款一 reload / 雲端同步就被靜靜剷走。
+        returnPolicyText:
+          settings?.printTemplates?.receipt?.returnPolicyText ??
+          DEFAULT_RECEIPT_TEMPLATE.returnPolicyText ??
+          "",
       },
       label: {
         blocks: mergeTemplateBlocks(DEFAULT_LABEL_TEMPLATE.blocks, settings?.printTemplates?.label?.blocks),
