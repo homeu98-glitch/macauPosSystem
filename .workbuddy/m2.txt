@@ -1,0 +1,13 @@
+﻿瀹瑰櫒 appframe
+  display            : block
+  grid-template-rows : none
+  align-content/items: normal / normal
+  楂?client/scroll   : 436px / 434 / 434
+
+鍗＄墖       x     y     闂?   楂?  鍏у婧㈠嚭
+鏀粯鏂瑰紡
+        107   183  1022   171       OK
+
+閲嶇枈      : 鍐?鉁?琚鍒囧槄琛? 鍐?鉁?
+鎴湒: C:\Users\surface\AppData\Local\Temp\ui-mockup-shots\settings-header-online-order-toggle-2026-09-12--after-canvas.png
+

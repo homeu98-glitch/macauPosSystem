@@ -25,6 +25,11 @@ type MerchantOpenPillProps = {
   /** `null` = 未讀到，唔可以亂猜。 */
   merchantEnabled: boolean | null;
   onChange: (next: boolean) => void;
+  /**
+   * 掣面左邊嘅細字標籤。預設「接單」（訂單頁／快餐標題列上下文已經好清楚）；
+   * 設置頁 header 嗰粒要寫明「線上訂單」（隔籬就係「返回收銀台」，唔寫清楚會唔知係邊個掣）。
+   */
+  label?: string;
   /** 讀取中 / 儲存中：掣停用，並喺 label 後面加細字提示。 */
   busy?: boolean;
   busyHint?: string;
@@ -49,6 +54,7 @@ const CONFIRM_CLOSE_MESSAGE =
 export function MerchantOpenPill({
   merchantEnabled,
   onChange,
+  label = "接單",
   busy = false,
   busyHint,
   disabled = false,
@@ -83,7 +89,7 @@ export function MerchantOpenPill({
   const inner = (
     <>
       <span className={labelClass}>
-        接單
+        {label}
         {busy && busyHint ? (
           <span className="ml-1 font-normal text-slate-400">{busyHint}</span>
         ) : null}

@@ -784,10 +784,13 @@ and j.status in ('pending', 'failed')
   開店唔阻手。關店時**唔可以**順手寫 `auto_accept=false`，只係把嗰粒掣灰掉（開返店保留原設定）。
 - 開店最常見失敗：`at least one payment method required`（餘額扣點／到店付款兩種都關）
   → 已在 `mapRpcErrorMessage()` 出繁中文案。
-- 📌 **一個 module store 三個 UI 落點**（`useMerchantOrderConfig`，**唔可以**各自 `useState`，
+- 📌 **一個 module store 四個 UI 落點**（`useMerchantOrderConfig`，**唔可以**各自 `useState`，
   否則會開幾條 channel、幾邊 state 唔同步）：`online-orders.tsx` 標題列、
-  `quick-mode-orders-bar.tsx` 標題列、設備設定新 tab「線上接單」
-  （`activeTab === "online-orders"` 本來就喺 union type 但一直空置）。
+  `quick-mode-orders-bar.tsx` 標題列、設備設定新 tab「線上訂單」
+  （`activeTab === "online-orders"` 本來就喺 union type 但一直空置）、
+  同**設置頁 header**「返回收銀台」左邊嘅 `MerchantOrderHeaderToggle`
+  （2026-09-12 用戶拍板加：一入設置頁即見鋪頭開咗未，可就地開返店）。
+  ⚠️ 命名已統一叫「線上訂單」（原本 tab 叫「線上接單」→ 已改名，避免同 header 兩個叫法）。
 - ⚠️ 上游契約 v3.4（`docs/integration/ledger-client-api.md` §5.5）**未收錄**呢兩支
   → DB 已 `GRANT EXECUTE` 畀 `authenticated`，技術上打得到，但**要請 Ledger 補 v3.5 白名單**。
 

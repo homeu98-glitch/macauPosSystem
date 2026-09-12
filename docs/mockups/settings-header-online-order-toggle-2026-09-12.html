@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>設置頁 header —「線上訂單」狀態 toggle（UI 確認稿）</title>
+<style>
+:root{
+  --orange-500:#f97316; --orange-600:#ea580c;
+  --indigo-600:#4f46e5;
+  --slate-50:#f8fafc;  --slate-100:#f1f5f9; --slate-200:#e2e8f0;
+  --slate-300:#cbd5e1; --slate-400:#94a3b8; --slate-500:#64748b;
+  --slate-600:#475569; --slate-700:#334155; --slate-900:#0f172a;
+  --emerald-600:#059669;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e8edf4;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─────────── 審稿工具列（唔屬產品介面） ─────────── */
+.chrome{max-width:1180px;margin:0 auto;padding:20px 20px 10px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:15px;font-weight:700}
+.chrome-note{font-size:11px;font-weight:600;color:#64748b;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:3px 10px}
+.tabs{display:flex;gap:8px;margin-top:12px}
+.tabs button{
+  border:1px solid #cbd5e1;background:#fff;border-radius:12px;padding:9px 14px;
+  font-family:inherit;font-size:13px;font-weight:600;color:#475569;cursor:pointer;
+  display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+}
+.tabs button small{font-weight:500;font-size:11px;color:#94a3b8}
+.tabs button.on{background:#0f172a;border-color:#0f172a;color:#fff}
+.tabs button.on small{color:#94a3b8}
+
+/* ─────────── 固定畫布 + 等比縮放（無 @media） ─────────── */
+.stage{max-width:1180px;margin:0 auto 40px;position:relative;overflow:hidden;border-radius:22px;
+  box-shadow:0 18px 44px rgba(15,23,42,.18);background:#fff}
+.canvas{width:1180px;height:760px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden;background:#f1f5f9}
+.screenwrap{display:none;width:100%;height:100%;flex-direction:column;padding:16px}
+.screenwrap.on{display:flex}
+
+/* ─────────── 產品畫面：左側欄 + 內容 ─────────── */
+.appframe{position:relative;flex:0 0 auto;height:436px;background:#f1f5f9;
+  border:1px solid var(--slate-300);border-radius:16px;overflow:hidden}
+.rail{position:absolute;left:0;top:0;bottom:0;width:88px;background:#fff;
+  border-right:1px solid var(--slate-200);padding:12px 10px;display:flex;flex-direction:column;gap:8px}
+.raillogo{height:34px;border-radius:10px;background:var(--slate-900);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.railrow{height:32px;border-radius:10px;background:var(--slate-50);
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--slate-400)}
+.railrow.on{background:#eef2ff;color:var(--indigo-600)}
+
+.main{position:absolute;left:88px;right:0;top:0;bottom:0;display:flex;flex-direction:column;min-height:0}
+
+/* header —— 對齊真實實作 device-settings.tsx：
+   `flex items-center justify-between gap-4 px-4 py-3 md:pl-[88px]`（左標題 / 右控件） */
+.phead{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;
+  align-items:center;background:#fff;border-bottom:1px solid var(--slate-200);padding:12px 18px}
+.phead-title{font-size:18px;font-weight:700}
+.phead-sub{margin-top:4px;font-size:14px;color:var(--slate-500)}
+.pheadright{display:inline-flex;align-items:center;gap:8px}
+
+/* 真值抄自實作：`rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white`（高 36px） */
+.backbtn{display:inline-flex;align-items:center;background:var(--indigo-600);color:#fff;
+  font-size:14px;font-weight:600;border-radius:9999px;padding:8px 12px;white-space:nowrap}
+
+/* 真值抄自 MerchantOpenPill（variant="contained"）：外層 `bg-slate-100 px-3 py-1.5`（高 44px）
+   ＋ 內層掣 `rounded-full px-4 py-2 text-xs font-semibold`（高 32px） */
+.pill{display:inline-flex;align-items:center;gap:8px;background:var(--slate-100);
+  border-radius:9999px;padding:6px 12px}
+.pilllabel{font-size:12px;font-weight:600;color:var(--slate-600);white-space:nowrap}
+.pillbtn{font-size:12px;font-weight:600;border-radius:9999px;padding:8px 16px;white-space:nowrap}
+.pillbtn.on{background:var(--emerald-600);color:#fff}
+.pillbtn.off{background:#fff;color:#b45309;box-shadow:inset 0 0 0 1px #fcd34d}
+.pillbtn.na{background:var(--slate-200);color:var(--slate-500)}
+
+/* ① 現狀：用紅虛線標出「將會插入」嘅位 */
+.ghost{border:1px dashed #ef4444;background:#fef2f2;color:#b91c1c;
+  border-radius:9999px;padding:8px 14px;font-size:12px;font-weight:600;white-space:nowrap}
+
+/* tab chips —— 對齊 `rounded-full px-4 py-2 text-sm font-semibold`（active = orange-500） */
+.chips{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:8px;padding:12px 18px 0}
+.chip{background:#fff;color:var(--slate-700);font-size:14px;font-weight:600;
+  border-radius:9999px;padding:8px 16px;white-space:nowrap;box-shadow:inset 0 0 0 1px var(--slate-200)}
+.chip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+.chip.new{box-shadow:inset 0 0 0 1px #fdba74;color:#c2410c}
+
+.statusbar{margin:12px 18px;background:#fff;border:1px solid var(--slate-200);
+  border-radius:16px;padding:9px 14px;font-size:14px;color:var(--slate-600)}
+.appbody{flex:1;min-height:0;overflow:hidden;padding:0 18px 18px}
+.card{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:14px}
+.cardhead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+.cardtitle{font-size:15px;font-weight:600}
+.cardsub{margin-top:4px;font-size:13px;color:var(--slate-500)}
+.cbtn-orange{display:inline-flex;align-items:center;background:var(--orange-500);color:#fff;
+  font-size:13px;font-weight:600;border-radius:16px;padding:8px 14px;white-space:nowrap}
+.paygrid{margin-top:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.pay{background:var(--slate-50);border:1px solid var(--slate-200);border-radius:16px;
+  padding:10px 12px;font-size:13px;font-weight:600}
+
+/* ─────────── 說明區 ─────────── */
+.notes{flex:1;min-height:0;margin-top:12px;background:#fff;border:1px solid var(--slate-200);
+  border-radius:16px;padding:14px;display:grid;gap:10px;align-content:start}
+.noteshead{font-size:14px;font-weight:600}
+.nrow{font-size:13px;color:var(--slate-600);line-height:1.7}
+.nrow b{color:var(--slate-900);font-weight:600}
+.states{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.statebox{border:1px solid var(--slate-200);background:var(--slate-50);border-radius:14px;
+  padding:12px;display:grid;gap:9px;justify-items:start;align-content:start}
+.statecap{font-size:12px;color:var(--slate-600);line-height:1.6}
+.optrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.opt{border:1px solid var(--slate-200);border-radius:14px;padding:11px 12px;display:grid;gap:7px;align-content:start}
+.opt.reco{border-color:#fdba74;background:#fff7ed}
+.opt-h{font-size:12px;font-weight:700}
+.opt-d{font-size:12px;color:var(--slate-600);line-height:1.6}
+.nums{display:flex;flex-wrap:wrap;gap:8px}
+.num{font-size:11px;font-weight:600;color:var(--slate-600);background:var(--slate-100);
+  border-radius:9999px;padding:4px 10px}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">設置頁 header —「線上訂單」狀態 toggle</span>
+    <span class="chrome-note">深色／此區為審稿工具列，唔屬產品介面</span>
+  </div>
+  <div class="tabs" id="rtabs">
+    <button type="button" data-tab="before" class="on">
+      ① 而家（改動前）
+      <small>header 右邊只有一粒「返回收銀台」</small>
+    </button>
+    <button type="button" data-tab="after">
+      ② 加咗 toggle
+      <small>「返回收銀台」左邊多一粒狀態掣</small>
+    </button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ══════════ ① 而家（改動前） ══════════ -->
+    <div class="screenwrap on" id="scr-before">
+      <div class="appframe">
+        <div class="rail">
+          <div class="raillogo">POS</div>
+          <div class="railrow">收銀</div>
+          <div class="railrow on">設置</div>
+          <div class="railrow">報表</div>
+          <div class="railrow">會員</div>
+        </div>
+        <div class="main">
+          <div class="phead">
+            <div>
+              <div class="phead-title">設置</div>
+              <div class="phead-sub">打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。</div>
+            </div>
+            <div class="pheadright">
+              <span class="ghost">新 toggle 插喺呢度</span>
+              <span class="backbtn">返回收銀台</span>
+            </div>
+          </div>
+          <div class="chips">
+            <span class="chip">打印機</span>
+            <span class="chip">菜品打印設置</span>
+            <span class="chip">菜單</span>
+            <span class="chip">樓層與桌台</span>
+            <span class="chip on">支付方式</span>
+            <span class="chip new">線上訂單</span>
+            <span class="chip">備註</span>
+            <span class="chip">折扣</span>
+            <span class="chip">掃碼點餐</span>
+          </div>
+          <div class="statusbar">已載入本機設定。</div>
+          <div class="appbody">
+            <div class="card">
+              <div class="cardhead">
+                <div>
+                  <div class="cardtitle">支付方式</div>
+                  <div class="cardsub">自由文字方式，會記錄到交易裡。預設：現金、Mpay、中銀。</div>
+                </div>
+                <span class="cbtn-orange">新增支付方式</span>
+              </div>
+              <div class="paygrid">
+                <div class="pay">現金</div>
+                <div class="pay">Mpay</div>
+                <div class="pay">中銀</div>
+                <div class="pay">信用卡</div>
+                <div class="pay">電子錢包</div>
+                <div class="pay">掛帳</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="noteshead">而家嘅情況</div>
+        <div class="nrow">
+          header 右邊<b>只有一粒「返回收銀台」</b>，左邊係空嘅。要睇／開關線上訂單，
+          一定要撳落面嘅 tab「線上訂單」，或者入返收銀台嘅訂單頁。
+        </div>
+        <div class="nrow">
+          收銀最常問嘅係「<b>而家客人落唔落到單？</b>」—— 呢個答案而家喺設置頁係睇唔到嘅，
+          要逐層入去先知。
+        </div>
+        <div class="nums">
+          <span class="num">header 高度：64px（不變）</span>
+          <span class="num">右側控件：1 粒掣</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ ② 加咗 toggle ══════════ -->
+    <div class="screenwrap" id="scr-after">
+      <div class="appframe">
+        <div class="rail">
+          <div class="raillogo">POS</div>
+          <div class="railrow">收銀</div>
+          <div class="railrow on">設置</div>
+          <div class="railrow">報表</div>
+          <div class="railrow">會員</div>
+        </div>
+        <div class="main">
+          <div class="phead">
+            <div>
+              <div class="phead-title">設置</div>
+              <div class="phead-sub">打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。</div>
+            </div>
+            <div class="pheadright">
+              <span class="pill">
+                <span class="pilllabel">線上訂單</span>
+                <span class="pillbtn on">營業中</span>
+              </span>
+              <span class="backbtn">返回收銀台</span>
+            </div>
+          </div>
+          <div class="chips">
+            <span class="chip">打印機</span>
+            <span class="chip">菜品打印設置</span>
+            <span class="chip">菜單</span>
+            <span class="chip">樓層與桌台</span>
+            <span class="chip on">支付方式</span>
+            <span class="chip new">線上訂單</span>
+            <span class="chip">備註</span>
+            <span class="chip">折扣</span>
+            <span class="chip">掃碼點餐</span>
+          </div>
+          <div class="statusbar">已載入本機設定。</div>
+          <div class="appbody">
+            <div class="card">
+              <div class="cardhead">
+                <div>
+                  <div class="cardtitle">支付方式</div>
+                  <div class="cardsub">自由文字方式，會記錄到交易裡。預設：現金、Mpay、中銀。</div>
+                </div>
+                <span class="cbtn-orange">新增支付方式</span>
+              </div>
+              <div class="paygrid">
+                <div class="pay">現金</div>
+                <div class="pay">Mpay</div>
+                <div class="pay">中銀</div>
+                <div class="pay">信用卡</div>
+                <div class="pay">電子錢包</div>
+                <div class="pay">掛帳</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="noteshead">三種狀態（就係同一粒掣，撳落去即時切換）</div>
+        <div class="states">
+          <div class="statebox">
+            <span class="pill">
+              <span class="pilllabel">線上訂單</span>
+              <span class="pillbtn on">營業中</span>
+            </span>
+            <div class="statecap">會員通接得到單。撳落去 → 彈確認 → 變「已暫停」。</div>
+          </div>
+          <div class="statebox">
+            <span class="pill">
+              <span class="pilllabel">線上訂單</span>
+              <span class="pillbtn off">已暫停</span>
+            </span>
+            <div class="statecap">客人落唔到新單（店內堂食／快餐唔受影響）。撳落去即時開返。</div>
+          </div>
+          <div class="statebox">
+            <span class="pill">
+              <span class="pilllabel">線上訂單</span>
+              <span class="pillbtn na">未接通</span>
+            </span>
+            <div class="statecap">讀唔到 Ledger（未登入／未接通）→ 掣停用。唔會亂顯示成營業或已暫停。</div>
+          </div>
+        </div>
+
+        <div class="optrow">
+          <div class="opt reco">
+            <div class="opt-h">標籤 A：線上訂單（已拍板 2026-09-12）</div>
+            <div class="opt-d">
+              header 同設置頁 tab 一齊用「線上訂單」，兩邊一致（tab 已由「線上接單」改名）。
+              兩個畫面嘅 tab 已經按此更新。
+            </div>
+          </div>
+          <div class="opt">
+            <div class="opt-h">標籤 B：線上接單（未採用）</div>
+            <div class="opt-d">
+              好處係同「線上」開頭嘅其他名詞一致；但 tab 同 header 會一個叫「線上接單」、
+              一個叫「線上訂單」，所以最終揀咗 A。
+            </div>
+          </div>
+        </div>
+
+        <div class="nrow">
+          <b>除 header 右邊多咗一粒掣，其餘畫面完全唔變</b>（tab、「線上訂單」分頁、下面卡片都一樣）。
+          確定尺寸：toggle 44px 高、返收銀台 36px，垂直居中對齊。
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var CANVAS_W = 1180;
+var CANVAS_H = 760;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || CANVAS_W;
+  var s = Math.min(1, Math.max(w / CANVAS_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(CANVAS_H * s) + "px";
+  stage.style.overflowX = (CANVAS_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var keys = ["before", "after"];
+  for (var i = 0; i < keys.length; i++){
+    var scr = document.getElementById("scr-" + keys[i]);
+    if (scr) scr.classList.toggle("on", keys[i] === id);
+  }
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < tabs.length; j++){
+    tabs[j].classList.toggle("on", tabs[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+function bindTabs(){
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < tabs.length; i++){
+    (function(btn){
+      btn.onclick = function(){ showTab(btn.getAttribute("data-tab")); };
+    })(tabs[i]);
+  }
+}
+
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("resize", fit);
+}
+bindTabs();
+fit();
+</script>
+</body>
+</html>

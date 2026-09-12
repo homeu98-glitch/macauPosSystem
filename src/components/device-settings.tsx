@@ -44,7 +44,7 @@ import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
-import { MerchantOrderConfigSection } from "@/components/merchant-order-config-section";
+import { MerchantOrderConfigSection, MerchantOrderHeaderToggle } from "@/components/merchant-order-config-section";
 import {
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
@@ -1042,15 +1042,20 @@ export function DeviceSettings() {
       <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
           <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 md:pl-[88px]">
-            <div>
+            <div className="min-w-0">
               <div className="text-lg font-semibold text-slate-900">設置</div>
               <div className="mt-1 text-sm text-slate-500">
                 打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。
               </div>
             </div>
-            <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
-              返回收銀台
-            </Link>
+            {/* 右側控件：「線上訂單」狀態 toggle（放喺「返回收銀台」左邊）＋ 返回收銀台。
+                收銀一入設置頁就見到鋪頭開咗未，而且就地可以開返店 —— 唔使撳入分頁。 */}
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <MerchantOrderHeaderToggle />
+              <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
+                返回收銀台
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -1062,7 +1067,7 @@ export function DeviceSettings() {
             ["menu", "菜單"],
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
-            ["online-orders", "線上接單"],
+            ["online-orders", "線上訂單"],
             ["notes", "備註"],
             ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],

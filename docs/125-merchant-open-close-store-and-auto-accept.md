@@ -96,10 +96,12 @@ merchant_set_auto_accept  (p_merchant_id uuid, p_auto_accept boolean)      → j
 | `src/lib/pos/use-merchant-order-config.ts` | 新增 —— module store：RPC 真源 ＋ 鏡像 ＋ Realtime ＋ 離線快取 |
 | `src/lib/pos/use-online-order-settings.ts` | 改 —— 降級做薄殼（舊 API 不變，內部轉新 store） |
 | `src/components/merchant-open-pill.tsx` | 新增 —— 共用主開關（內含**關店二次確認**） |
-| `src/components/merchant-order-config-section.tsx` | 新增 —— 設備設定 section（狀態 ＋ 阻礙原因 ＋ 重新整理） |
+| `src/components/merchant-order-config-section.tsx` | 新增 —— 設備設定 section（狀態 ＋ 阻礙原因 ＋ 重新整理）＋ **`MerchantOrderHeaderToggle`**（設置頁 header「返回收銀台」左邊嘅狀態 toggle） |
+| `src/components/merchant-open-pill.tsx` | 新增 —— 共用主開關（內含**關店二次確認**；`label` 可換，header 用「線上訂單」） |
 | `src/components/online-orders.tsx` | 改 —— 標題列加主開關；店關咗灰掉自動接單 |
 | `src/components/quick-mode-orders-bar.tsx` | 改 —— 同上（快餐標題列） |
-| `src/components/device-settings.tsx` | 改 —— 新增「線上接單」tab（`online-orders`） |
+| `src/components/device-settings.tsx` | 改 —— 新增「線上訂單」tab（`online-orders`）＋ **header 加狀態 toggle** |
+| `docs/mockups/settings-header-online-order-toggle-2026-09-12.html` | 新增 —— header toggle 確認稿（2026-09-12 拍板：標籤用「線上訂單」，tab 一齊改名） |
 | `src/app/api/online-order-settings/route.ts` | 改 —— **唔再出站推 Ledger**；接收部分欄位做鏡像；0036 未跑時降級 |
 | `src/lib/ledger/auto-accept-sync.ts` | 改 —— 標記**已退役**（冇 caller） |
 | `supabase/migrations/0036_pos_online_order_settings_merchant_enabled.sql` | 新增 |
@@ -122,6 +124,10 @@ merchant_set_auto_accept  (p_merchant_id uuid, p_auto_accept boolean)      → j
 8. **自動接單**：店關咗嘅時候掣灰掉；**唔會**寫 `auto_accept = false`；開返店原設定仍在。
 9. **`npm run typecheck` / `npm run test`** 全綠。
 10. **0036 未跑**：`pos_online_order_settings` 讀寫降級成功（唔 500），`auto_accept` 照樣可以讀寫。
+11. **設置頁 header**：一入設置頁就見到「線上訂單 · 營業中／已暫停／未接通」，
+    而且**就地可以開關**（唔使撳入分頁）；同 header 隔籬四粒掣（訂單頁、快餐、分頁）**即時一致**
+    —— 因為全部共用同一個 module store，唔會出現「header 營業中、分頁已暫停」。
+    ⚠️ 窄屏時該組控件 `flex-wrap` 掉行，唔可以撐爆 header。
 
 ---
 
