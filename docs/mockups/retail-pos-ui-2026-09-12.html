@@ -1,0 +1,1637 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>零售（Retail）POS — UI 確認稿</title>
+<style>
+:root{
+  --orange-500:#f97316; --orange-600:#ea580c; --orange-50:#fff7ed; --orange-100:#ffedd5;
+  --slate-50:#f8fafc;  --slate-100:#f1f5f9; --slate-200:#e2e8f0;
+  --slate-300:#cbd5e1; --slate-400:#94a3b8; --slate-500:#64748b;
+  --slate-600:#475569; --slate-700:#334155; --slate-800:#1e293b; --slate-900:#0f172a;
+  --emerald-600:#059669;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e8edf4;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─────────── 審稿工具列（唔屬產品介面） ─────────── */
+.chrome{max-width:1180px;margin:0 auto;padding:20px 20px 10px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:15px;font-weight:700}
+.chrome-note{font-size:11px;font-weight:600;color:#64748b;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:3px 10px}
+.tabs{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.tabs button{
+  border:1px solid #cbd5e1;background:#fff;border-radius:12px;padding:9px 14px;
+  font-family:inherit;font-size:13px;font-weight:600;color:#475569;cursor:pointer;
+  display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+}
+.tabs button small{font-weight:500;font-size:11px;color:#94a3b8}
+.tabs button.on{background:#0f172a;border-color:#0f172a;color:#fff}
+.tabs button.on small{color:#94a3b8}
+
+/* ─────────── 固定畫布 + 等比縮放（冇任何 @media） ─────────── */
+.stage{max-width:1180px;margin:0 auto 40px;position:relative;overflow:hidden;border-radius:22px;
+  box-shadow:0 18px 44px rgba(15,23,42,.18);background:#fff}
+.canvas{width:1180px;height:820px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden;background:#fff}
+.screenwrap{display:none;width:100%;height:100%;flex-direction:column;position:relative}
+.screenwrap.on{display:flex}
+
+/* ─────────── 共同：產品頂欄 ─────────── */
+.apphead{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;
+  padding:13px 20px;border-bottom:1px solid var(--slate-200);background:#fff}
+.apphead-l{display:flex;align-items:center;gap:11px;min-width:0}
+.branddot{width:30px;height:30px;border-radius:9px;background:var(--slate-900);color:#fff;flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.apptitle{font-size:15px;font-weight:700;white-space:nowrap}
+.appsub{font-size:11px;color:var(--slate-500);margin-top:2px;white-space:nowrap}
+.apphead-r{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.badge-net{display:inline-flex;align-items:center;gap:6px;border-radius:9999px;padding:5px 11px;
+  font-size:11px;font-weight:600;background:#ecfdf5;color:#047857;white-space:nowrap}
+.dotg{width:7px;height:7px;border-radius:50%;background:#10b981;flex:0 0 auto}
+.dotr{width:7px;height:7px;border-radius:50%;background:#ef4444;flex:0 0 auto}
+.badge-plain{display:inline-flex;align-items:center;border-radius:9999px;padding:5px 11px;
+  font-size:11px;font-weight:600;background:var(--slate-100);color:var(--slate-600);white-space:nowrap}
+.clock{font-size:12px;font-weight:600;color:var(--slate-600);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* ─────────── 三欄收銀台 ─────────── */
+.body3{flex:1;min-height:0;display:grid;grid-template-columns:302px minmax(0,1fr) 344px}
+.col{display:flex;flex-direction:column;min-height:0;background:#fff}
+.col + .col{border-left:1px solid var(--slate-200)}
+
+/* 左欄：商品識別 */
+.colhead{flex:0 0 auto;padding:14px 16px 0}
+.searchbox{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;
+  border:1px solid var(--slate-300);border-radius:12px;padding:10px 12px;background:#fff}
+.searchbox .ph{font-size:12.5px;color:var(--slate-400);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.kbdk{font-size:10px;font-weight:700;color:var(--slate-400);background:var(--slate-100);
+  border-radius:6px;padding:3px 6px;white-space:nowrap}
+.scanstate{margin-top:9px;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:#047857}
+.cats{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:6px;padding:11px 16px 11px;border-bottom:1px solid var(--slate-100)}
+.cat{border:0;border-radius:9999px;padding:6px 12px;font-family:inherit;font-size:12px;font-weight:600;
+  background:var(--slate-100);color:var(--slate-700);white-space:nowrap}
+.cat.on{background:var(--orange-500);color:#fff}
+.pgrid{flex:1;min-height:0;overflow-y:auto;padding:12px 16px 18px;display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-auto-rows:max-content;
+  gap:10px;align-content:start;align-items:stretch}
+.pcard{border:1px solid var(--slate-200);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px;background:#fff}
+.pcard .nm{font-size:12px;font-weight:600;line-height:1.35;min-height:32px}
+.pcard .pr{font-size:14px;font-weight:700;color:var(--orange-600);font-variant-numeric:tabular-nums}
+.pcard .st{font-size:10px;color:var(--slate-400);font-variant-numeric:tabular-nums}
+.pcard .tags{display:flex;flex-wrap:wrap;gap:4px}
+
+/* 中欄：購物車 */
+.chead2{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;
+  padding:14px 18px 12px;border-bottom:1px solid var(--slate-200)}
+.ctitle-main{font-size:14px;font-weight:700}
+.ctitle-sub{font-size:11px;color:var(--slate-500);margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.lnkbtn{border:0;background:transparent;font-family:inherit;font-size:12px;font-weight:600;
+  color:var(--slate-500);padding:6px 8px;white-space:nowrap;cursor:pointer}
+.cartlist{flex:1;min-height:0;overflow-y:auto;padding:12px 18px 16px;display:flex;flex-direction:column;gap:9px}
+.lrow{border:1px solid var(--slate-200);border-radius:12px;padding:11px 13px;background:#fff;
+  display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center}
+.lname{font-size:13px;font-weight:600}
+.lmeta{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.qtyctl{display:inline-flex;align-items:center;border:1px solid var(--slate-300);border-radius:10px;overflow:hidden;background:#fff}
+.qbtn{width:31px;height:30px;border:0;background:#fff;font-family:inherit;font-size:15px;
+  font-weight:600;color:var(--slate-700);cursor:pointer}
+.qval{min-width:40px;text-align:center;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;
+  border-left:1px solid var(--slate-200);border-right:1px solid var(--slate-200);line-height:30px}
+.lright{text-align:right}
+.lprice{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.lorig{font-size:11px;color:var(--slate-400);text-decoration:line-through;
+  font-variant-numeric:tabular-nums;margin-top:3px;white-space:nowrap}
+.tag{display:inline-flex;align-items:center;border-radius:9999px;padding:2px 8px;
+  font-size:10.5px;font-weight:600;white-space:nowrap}
+.tag-code{background:var(--slate-100);color:var(--slate-600);font-variant-numeric:tabular-nums}
+.tag-weight{background:#cffafe;color:#0e7490}
+.tag-variant{background:#ede9fe;color:#6d28d9}
+.tag-serial{background:#fef3c7;color:#a16207}
+.tag-age{background:#fee2e2;color:#b91c1c}
+.tag-rx{background:#dbeafe;color:#1d4ed8}
+.tag-disc{background:var(--orange-100);color:#c2410c}
+.tag-plain{background:var(--slate-100);color:var(--slate-500)}
+
+/* 右欄：結帳 */
+.sum{flex:0 0 auto;padding:16px 18px 0}
+.sum-lbl{font-size:11px;font-weight:600;color:var(--slate-500)}
+.sum-big{font-size:34px;font-weight:800;letter-spacing:-.6px;font-variant-numeric:tabular-nums;margin-top:2px}
+.sumrows{margin-top:13px;display:flex;flex-direction:column;gap:8px}
+.srow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;font-size:12.5px;color:var(--slate-600)}
+.srow .v{font-weight:600;font-variant-numeric:tabular-nums;color:var(--slate-800)}
+.srow.disc .v{color:#c2410c}
+.srow.total{border-top:1px dashed var(--slate-200);padding-top:11px;margin-top:2px;
+  font-size:14px;font-weight:700;color:var(--slate-900);align-items:baseline}
+.srow.total .v{font-size:18px;font-weight:800;color:var(--orange-600)}
+.payrow{flex:0 0 auto;padding:15px 18px 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.paybtn{border:1px solid var(--slate-200);border-radius:12px;background:#fff;padding:10px 4px;
+  font-family:inherit;font-size:12px;font-weight:600;color:var(--slate-700);text-align:center;cursor:pointer}
+.paybtn.on{border-color:var(--orange-500);background:var(--orange-50);color:#c2410c}
+.bigpay{display:block;width:calc(100% - 36px);margin:14px 18px 0;border:0;border-radius:14px;
+  background:var(--orange-600);color:#fff;font-family:inherit;font-size:17px;font-weight:700;
+  padding:17px;text-align:center;cursor:pointer}
+.holdrow{margin:10px 18px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.holdbtn{border:1px solid var(--slate-300);border-radius:12px;background:#fff;padding:11px;
+  font-family:inherit;font-size:12.5px;font-weight:600;color:var(--slate-700);cursor:pointer}
+.holdstrip{margin:13px 18px 0;border-top:1px solid var(--slate-200);padding-top:12px;flex:0 0 auto}
+.holdh{font-size:11px;font-weight:700;color:var(--slate-500)}
+.holdcards{margin-top:8px;display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+.hcard{flex:0 0 auto;border:1px solid var(--slate-200);border-radius:10px;padding:8px 10px;
+  background:var(--slate-50);min-width:100px}
+.hno{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+.hm{margin-top:4px;font-size:12px;font-weight:700;color:var(--orange-600);font-variant-numeric:tabular-nums}
+.kbdhint{margin-top:auto;padding:12px 18px 14px;font-size:10.5px;color:var(--slate-400);line-height:1.75}
+.kbdhint b{color:var(--slate-600);font-weight:600}
+
+/* ─────────── 彈窗（結帳） ─────────── */
+.scrim{position:absolute;inset:0;background:rgba(15,23,42,.42)}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:760px;max-height:736px;
+  background:#fff;border-radius:18px;box-shadow:0 26px 66px rgba(15,23,42,.32);
+  display:flex;flex-direction:column;overflow:hidden}
+.mhead{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:16px 20px;border-bottom:1px solid var(--slate-200)}
+.mtitle{font-size:16px;font-weight:700}
+.msub{font-size:11.5px;color:var(--slate-500);margin-top:3px;font-variant-numeric:tabular-nums}
+.mclose{width:32px;height:32px;border:0;border-radius:10px;background:var(--slate-100);
+  font-family:inherit;font-size:15px;font-weight:600;color:var(--slate-600);cursor:pointer}
+.mbody{flex:1;min-height:0;overflow-y:auto;padding:16px 20px 6px}
+.duebox{border:1px solid var(--orange-100);background:var(--orange-50);border-radius:14px;
+  padding:12px 16px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center}
+.duebox .lbl{font-size:12px;font-weight:600;color:#c2410c}
+.duebox .val{font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;color:#9a3412}
+.msec{margin-top:14px}
+.msec-h{font-size:12px;font-weight:700;color:var(--slate-700);margin-bottom:9px}
+.msec-h span{font-weight:500;font-size:11px;color:var(--slate-400);margin-left:6px}
+.paygrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.paybig{border:1px solid var(--slate-200);border-radius:13px;background:#fff;padding:12px 8px;
+  font-family:inherit;font-size:13px;font-weight:700;color:var(--slate-700);cursor:pointer;text-align:center}
+.paybig.on{border-color:var(--orange-500);background:var(--orange-50);color:#c2410c;
+  box-shadow:inset 0 0 0 1px var(--orange-500)}
+.splits{border:1px solid var(--slate-200);border-radius:13px;overflow:hidden}
+.spline{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;
+  padding:10px 14px;border-bottom:1px solid var(--slate-100)}
+.spline:last-child{border-bottom:0}
+.spline .sn{font-size:12.5px;font-weight:600}
+.spline .sm{margin-top:3px;font-size:10.5px;color:var(--slate-400);font-variant-numeric:tabular-nums}
+.spline .sv{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.sdel{border:0;background:transparent;font-family:inherit;font-size:11px;font-weight:600;
+  color:var(--slate-400);cursor:pointer;padding:4px 6px}
+.sumbox{margin-top:10px;border:1px solid var(--slate-200);border-radius:12px;padding:11px 14px;
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;background:var(--slate-50)}
+.sumbox .k{font-size:10.5px;font-weight:600;color:var(--slate-500)}
+.sumbox .n{margin-top:3px;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
+.sumbox .n.short{color:#b91c1c}
+.member{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;
+  border:1px solid var(--slate-200);border-radius:13px;padding:11px 15px}
+.member .mn{font-size:13px;font-weight:700}
+.member .md{margin-top:3px;font-size:11px;color:var(--slate-500);font-variant-numeric:tabular-nums}
+.member .mv{text-align:right;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--emerald-600)}
+.mfoot{flex:0 0 auto;display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;
+  padding:14px 20px;border-top:1px solid var(--slate-200);background:var(--slate-50)}
+.btn-ghost{border:1px solid var(--slate-300);border-radius:12px;background:#fff;padding:13px 22px;
+  font-family:inherit;font-size:13px;font-weight:600;color:var(--slate-600);cursor:pointer;white-space:nowrap}
+.btn-done{border:0;border-radius:12px;background:var(--orange-600);color:#fff;font-family:inherit;
+  font-size:14px;font-weight:700;padding:13px 22px;cursor:pointer}
+.btn-done.off{background:var(--slate-300);color:var(--slate-500);cursor:default}
+.hintline{margin-top:9px;font-size:11px;font-weight:600;color:#b91c1c}
+
+/* ─────────── 表單類（商品編輯 / 掃碼槍 / 稱重） ─────────── */
+.pagetitle{flex:0 0 auto;padding:15px 20px 13px;border-bottom:1px solid var(--slate-200);
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+.pt-main{font-size:15px;font-weight:700}
+.pt-sub{font-size:11.5px;color:var(--slate-500);margin-top:3px}
+.pt-right{display:flex;gap:8px;align-items:center}
+.btn-s{border:1px solid var(--slate-300);border-radius:10px;background:#fff;padding:9px 15px;
+  font-family:inherit;font-size:12px;font-weight:600;color:var(--slate-700);cursor:pointer;white-space:nowrap}
+.btn-s-dark{border:0;border-radius:10px;background:var(--slate-900);color:#fff;padding:9px 15px;
+  font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn-s-orange{border:0;border-radius:10px;background:var(--orange-600);color:#fff;padding:9px 15px;
+  font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;}
+
+.formbody{flex:1;min-height:0;display:grid;grid-template-columns:376px minmax(0,1fr) 366px;gap:0}
+.fsection{display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:16px 18px 20px}
+.fsection + .fsection{border-left:1px solid var(--slate-200)}
+.fsec-h{font-size:12.5px;font-weight:700;color:var(--slate-800);padding-bottom:9px;
+  border-bottom:1px solid var(--slate-200);margin-bottom:13px;display:flex;justify-content:space-between;align-items:baseline}
+.fsec-h span{font-size:10.5px;font-weight:500;color:var(--slate-400)}
+.frow{display:grid;grid-template-columns:92px minmax(0,1fr);gap:11px;align-items:center;margin-bottom:10px}
+.fl{font-size:11.5px;font-weight:600;color:var(--slate-500);text-align:right;line-height:1.35}
+.finput{border:1px solid var(--slate-300);border-radius:9px;padding:8px 11px;font-size:12.5px;
+  background:#fff;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+.finput.mono{font-variant-numeric:tabular-nums}
+.finput.ph{color:var(--slate-400)}
+.finput.strong{font-weight:700;color:var(--orange-600)}
+.fchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fchip{display:inline-flex;align-items:center;gap:6px;border-radius:9999px;padding:5px 11px;
+  font-size:11.5px;font-weight:600;background:var(--slate-100);color:var(--slate-600);font-variant-numeric:tabular-nums}
+.fchip-add{display:inline-flex;align-items:center;border-radius:9999px;padding:5px 11px;
+  font-size:11.5px;font-weight:600;background:#fff;color:var(--slate-500);border:1px dashed var(--slate-300)}
+.fhint{margin-top:7px;font-size:10.5px;color:var(--slate-400);line-height:1.6}
+.swrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:flex-start;
+  padding:11px 0;border-bottom:1px solid var(--slate-100)}
+.sn-title{font-size:12.5px;font-weight:600}
+.sn-desc{margin-top:4px;font-size:11px;color:var(--slate-500);line-height:1.5}
+.sw{width:44px;height:25px;border-radius:9999px;background:var(--slate-300);position:relative;flex:0 0 auto;margin-top:2px}
+.sw.on{background:var(--emerald-600)}
+.sw i{position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;background:#fff;display:block}
+.sw.on i{left:22px}
+.statgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:4px}
+.statbox{border:1px solid var(--slate-200);border-radius:11px;padding:11px 13px}
+.statbox .k{font-size:10.5px;font-weight:600;color:var(--slate-500)}
+.statbox .n{margin-top:5px;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
+.statbox .n.up{color:var(--emerald-600)}
+.statbox .n.down{color:#b91c1c}
+.vmatrix{width:100%;border-collapse:collapse;table-layout:fixed}
+.vmatrix th{font-size:11px;font-weight:600;color:var(--slate-500);padding:8px 6px;
+  border-bottom:1px solid var(--slate-200);text-align:center}
+.vmatrix th:first-child{text-align:left}
+.vmatrix td{padding:7px 6px;border-top:1px solid var(--slate-100);text-align:center;
+  font-size:12px;font-variant-numeric:tabular-nums}
+.vmatrix td:first-child{text-align:left;font-weight:600}
+.cellst{border-radius:8px;background:var(--slate-100);padding:5px 0;font-weight:600;color:var(--slate-700)}
+.cellst.low{background:#fef3c7;color:#a16207}
+.cellst.zero{background:#fee2e2;color:#b91c1c}
+
+/* 掃碼槍嚮導 */
+.steps{display:flex;flex-direction:column;gap:10px}
+.step{display:grid;grid-template-columns:26px minmax(0,1fr);gap:11px;align-items:flex-start}
+.step-n{width:26px;height:26px;border-radius:50%;background:var(--slate-100);color:var(--slate-500);
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:0 0 auto}
+.step-n.on{background:var(--orange-500);color:#fff}
+.step-n.ok{background:var(--emerald-600);color:#fff}
+.step-t{font-size:12.5px;font-weight:600}
+.step-d{margin-top:4px;font-size:11px;color:var(--slate-500);line-height:1.55}
+.mtable{width:100%;border-collapse:collapse;table-layout:fixed}
+.mtable th{font-size:10.5px;font-weight:600;color:var(--slate-500);padding:8px 8px;
+  border-bottom:1px solid var(--slate-200);text-align:left}
+.mtable th:last-child{text-align:right}
+.mtable td{padding:9px 8px;border-top:1px solid var(--slate-100);font-size:12px;vertical-align:middle}
+.mtable td:first-child{font-weight:600}
+.mtable td.mv{font-variant-numeric:tabular-nums;color:var(--slate-700)}
+.mtable td.inf{text-align:right;font-weight:700;color:#0f766e;font-variant-numeric:tabular-nums}
+.testbox{margin-top:11px;border:1px solid var(--slate-200);border-radius:12px;padding:12px 14px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--slate-50)}
+.testbox .tk{font-size:10.5px;font-weight:600;color:var(--slate-500)}
+.testbox .tv{margin-top:5px;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.testbox .tr{font-size:11.5px;font-weight:600;color:#047857;white-space:nowrap}
+
+/* 稱重 */
+.wgrid{flex:1;min-height:0;display:grid;grid-template-columns:400px minmax(0,1fr) 356px}
+.wpad{padding:16px 18px 18px;display:flex;flex-direction:column;min-height:0}
+.wbig{border:1px solid var(--slate-200);border-radius:13px;background:var(--slate-50);padding:13px 16px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline}
+.wbig .k{font-size:11px;font-weight:600;color:var(--slate-500)}
+.wbig .v{font-size:28px;font-weight:800;font-variant-numeric:tabular-nums}
+.keys{margin-top:13px;flex:1;min-height:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  grid-template-rows:repeat(5,minmax(64px,1fr));gap:9px}
+.key{border:1px solid var(--slate-300);border-radius:12px;background:#fff;padding:0;
+  font-family:inherit;font-size:19px;font-weight:700;color:var(--slate-800);cursor:pointer;text-align:center}
+.key.wide{grid-column:span 2}
+.key.act{background:var(--slate-900);color:#fff;border-color:var(--slate-900)}
+.calc{margin-top:13px;border:1px solid var(--slate-200);border-radius:12px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:9px}
+.crow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;font-size:12px;color:var(--slate-600)}
+.crow .v{font-weight:700;font-variant-numeric:tabular-nums;color:var(--slate-800)}
+.crow.big{border-top:1px dashed var(--slate-200);padding-top:9px;font-size:13.5px;
+  font-weight:700;color:var(--slate-900);align-items:baseline}
+.crow.big .v{font-size:20px;font-weight:800;color:var(--orange-600)}
+.rcpt{border:1px dashed var(--slate-300);border-radius:10px;padding:12px 14px;background:#fff;
+  display:flex;flex-direction:column;gap:8px}
+.rcpt-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;
+  font-size:11.5px;font-variant-numeric:tabular-nums}
+.rcpt-line.dim{color:var(--slate-400);font-size:10.5px}
+.tarechips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+
+/* ─────────── 打印機設定 ─────────── */
+.prow{border:1px solid var(--slate-200);border-radius:12px;padding:13px 15px;background:#fff;
+  display:flex;flex-direction:column;gap:10px;margin-bottom:11px}
+.prow-h{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:flex-start}
+.prow-n{font-size:13px;font-weight:700}
+.prow-m{margin-top:4px;font-size:11px;color:var(--slate-500);line-height:1.55;font-variant-numeric:tabular-nums}
+.prow-a{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.rolechips{display:flex;gap:6px;flex-wrap:wrap}
+.rolechip{border:1px solid var(--slate-200);border-radius:9999px;padding:5px 11px;font-family:inherit;
+  font-size:11px;font-weight:600;background:#fff;color:var(--slate-600);white-space:nowrap}
+.rolechip.on{border-color:var(--orange-500);background:var(--orange-50);color:#c2410c}
+.badge-on{display:inline-flex;align-items:center;gap:6px;border-radius:9999px;padding:4px 10px;
+  font-size:10.5px;font-weight:600;background:#ecfdf5;color:#047857;white-space:nowrap}
+.badge-off{display:inline-flex;align-items:center;gap:6px;border-radius:9999px;padding:4px 10px;
+  font-size:10.5px;font-weight:600;background:#fee2e2;color:#b91c1c;white-space:nowrap}
+.mtable2{width:100%;border-collapse:collapse;table-layout:fixed}
+.mtable2 th{font-size:10.5px;font-weight:600;color:var(--slate-500);padding:8px 9px;
+  border-bottom:1px solid var(--slate-200);text-align:left}
+.mtable2 td{padding:10px 9px;border-top:1px solid var(--slate-100);font-size:12px;vertical-align:middle}
+.mtable2 td:first-child{font-weight:600}
+
+/* ─────────── 打印機清單（多台 · 精簡卡） ─────────── */
+.prowc{border:1px solid var(--slate-200);border-radius:11px;padding:10px 12px;background:#fff;
+  display:flex;flex-direction:column;gap:7px;margin-bottom:9px}
+.prowc-h{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;align-items:center}
+.prowc-n{font-size:12.5px;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.prowc-m{font-size:10.5px;color:var(--slate-500);font-variant-numeric:tabular-nums;
+  overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.prowc-a{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rolechip.sm{padding:4px 9px;font-size:10.5px}
+.btn-xs{border:1px solid var(--slate-300);border-radius:8px;background:#fff;padding:4px 9px;
+  font-family:inherit;font-size:10.5px;font-weight:600;color:var(--slate-700);cursor:pointer;white-space:nowrap}
+.tag-plain2{display:inline-flex;align-items:center;border-radius:9999px;padding:3px 9px;
+  font-size:10px;font-weight:600;background:var(--slate-100);color:var(--slate-500);white-space:nowrap}
+.tag-warn{display:inline-flex;align-items:center;border-radius:9999px;padding:3px 9px;
+  font-size:10px;font-weight:600;background:#fef3c7;color:#a16207;white-space:nowrap}
+.presetchips{display:flex;flex-wrap:wrap;gap:6px}
+.preset2{display:inline-flex;flex-direction:column;gap:1px;border:1px solid var(--slate-200);
+  border-radius:9px;padding:5px 9px;background:#fff;min-width:80px}
+.preset2.on{border-color:var(--orange-500);background:var(--orange-50)}
+.preset2 .pn{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+.preset2 .ph2{font-size:9px;color:var(--slate-400)}
+
+/* ─────────── 模板區塊清單 ─────────── */
+.blkrow{display:grid;grid-template-columns:20px 20px minmax(0,1fr) auto;gap:9px;align-items:center;
+  border:1px solid var(--slate-200);border-radius:9px;padding:7px 10px;margin-bottom:6px;background:#fff}
+.blkrow.sel{border-color:var(--slate-900);box-shadow:inset 0 0 0 1px var(--slate-900)}
+.blkrow.isnew{border-color:var(--orange-500);background:var(--orange-50)}
+.grip{color:var(--slate-300);font-size:13px;text-align:center;line-height:1}
+.ckn{width:16px;height:16px;border-radius:5px;border:1px solid var(--slate-300);background:#fff}
+.ckn.on{background:var(--emerald-600);border-color:var(--emerald-600)}
+.blkn{font-size:12px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.newbadge{display:inline-flex;border-radius:9999px;padding:1px 7px;font-size:9.5px;font-weight:700;
+  background:var(--orange-500);color:#fff;white-space:nowrap}
+.blkhint{font-size:10.5px;color:var(--slate-500);text-align:center;padding:3px 0 9px}
+
+/* ─────────── 熱感小票預覽 ─────────── */
+.rcptprev{background:#fff;border:1px dashed var(--slate-300);border-radius:8px;padding:14px 15px;
+  color:#111827;font-variant-numeric:tabular-nums}
+.rc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;font-size:11.5px;line-height:1.5}
+.rc.ctr{grid-template-columns:minmax(0,1fr);text-align:center}
+.rc.b{font-weight:700}
+.rc.lg{font-size:14px;font-weight:800}
+.rc.sm{font-size:10.5px;color:var(--slate-500)}
+.rc.sub{padding-left:13px;font-size:10px;color:var(--slate-600)}
+.rc.newmark{background:var(--orange-50);border-radius:4px;margin:0 -6px;padding:0 6px}
+.rr{border-top:1px dashed #cbd5e1;margin:7px 0}
+.qrbox{width:60px;height:60px;margin:8px auto 0;border:1px solid var(--slate-400);border-radius:4px;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+  color:var(--slate-400);letter-spacing:1px}
+
+/* ─────────── 標籤預覽 ─────────── */
+.lblwrap{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}
+.lblcard{display:flex;flex-direction:column;gap:7px}
+.lblcap{font-size:10.5px;font-weight:600;color:var(--slate-500)}
+.lbl{background:#fff;border:1px solid var(--slate-400);border-radius:3px;padding:8px 9px;
+  display:flex;flex-direction:column;gap:3px;color:#111827}
+.lbl .ln{font-size:10.5px;font-weight:600;line-height:1.3}
+.lbl .lp{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+.lbl .lo{font-size:9.5px;color:var(--slate-400);text-decoration:line-through}
+.lbl .lm{font-size:9px;color:var(--slate-500);font-variant-numeric:tabular-nums;line-height:1.4}
+.lblbc{height:20px;border-radius:2px;
+  background-image:repeating-linear-gradient(90deg,#111827 0 1px,#fff 1px 3px);
+  background-clip:content-box;border-left:1px solid #111827;border-right:1px solid #111827}
+.lblbc-n{font-size:8.5px;font-weight:700;letter-spacing:.6px;text-align:center;
+  font-variant-numeric:tabular-nums;color:#111827}
+
+/* ─────────── 流程步進條（審稿用，屬審稿 chrome） ─────────── */
+.flowbar{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
+.fstep{font-size:11px;font-weight:600;color:#94a3b8;background:#fff;border:1px solid #e2e8f0;
+  border-radius:9999px;padding:4px 11px;white-space:nowrap}
+.fstep.on{background:#0f172a;border-color:#0f172a;color:#fff}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════ 審稿工具列（唔屬產品介面） ══════════════════ -->
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">零售（Retail）POS — UI 確認稿</span>
+    <span class="chrome-note">深色／此區為審稿工具列，唔屬產品介面</span>
+    <span class="chrome-note">固定畫布 1180 × 820（iPad 橫向）</span>
+    <span class="chrome-note">示範業態：便利店 · 藥房 · 生鮮</span>
+  </div>
+  <div class="flowbar">
+    <span class="fstep on" id="f-1">① 掃碼識別</span>
+    <span class="fstep" id="f-2">② 加入購物車</span>
+    <span class="fstep" id="f-3">③ 改量 / 折扣</span>
+    <span class="fstep" id="f-4">④ 結帳收款</span>
+    <span class="fstep" id="f-5">⑤ 出票</span>
+  </div>
+  <div class="tabs" id="rtabs">
+    <button type="button" data-tab="counter" class="on">
+      ① 零售收銀台
+      <small>三欄：識別 / 購物車 / 結帳</small>
+    </button>
+    <button type="button" data-tab="pay">
+      ② 結帳（拆分付款）
+      <small>現金 + 電子混合，餘額歸零才可完結</small>
+    </button>
+    <button type="button" data-tab="product">
+      ③ 商品編輯
+      <small>SKU / 多條碼 / 變體 / 稱重 / 序號</small>
+    </button>
+    <button type="button" data-tab="scanner">
+      ④ 掃碼槍自動學習
+      <small>唔靠型號庫都認得任何牌子</small>
+    </button>
+    <button type="button" data-tab="weigh">
+      ⑤ 稱重輸入
+      <small>USB 秤 / 手動 · 標籤由 POS 印</small>
+    </button>
+    <button type="button" data-tab="printer">
+      ⑥ 打印機 / 標籤機
+      <small>收據機 + 價籤機角色分配</small>
+    </button>
+    <button type="button" data-tab="receipt">
+      ⑦ 收據模板
+      <small>小票含條碼行 / 拆分付款 / 積分</small>
+    </button>
+    <button type="button" data-tab="label">
+      ⑧ 價籤 / 商品標籤
+      <small>貼商品上 + 批量打印</small>
+    </button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ══════════════════════ ① 零售收銀台 ══════════════════════ -->
+    <div class="screenwrap on" id="scr-counter">
+      <div class="apphead">
+        <div class="apphead-l">
+          <span class="branddot">零</span>
+          <div>
+            <div class="apptitle">零售收銀台</div>
+            <div class="appsub">澳寶便利店（黑沙環店）· 收銀台 1 · 收銀員 阿明</div>
+          </div>
+        </div>
+        <div class="apphead-r">
+          <span class="badge-net"><span class="dotg"></span>同步正常</span>
+          <span class="badge-net"><span class="dotg"></span>掃碼槍已連線</span>
+          <span class="badge-plain">離線可結帳</span>
+          <span class="clock">21:08</span>
+        </div>
+      </div>
+
+      <div class="body3">
+        <!-- 左：商品識別 -->
+        <div class="col">
+          <div class="colhead">
+            <div class="searchbox">
+              <span class="ph">掃碼 / 輸入條碼 · 商品名 / PLU</span>
+              <span class="kbdk">F1</span>
+            </div>
+            <div class="scanstate"><span class="dotg"></span>掃碼槍待命中 · 自動學習模式</div>
+          </div>
+          <div class="cats">
+            <button type="button" class="cat on">全部</button>
+            <button type="button" class="cat">飲品</button>
+            <button type="button" class="cat">零食</button>
+            <button type="button" class="cat">煙酒</button>
+            <button type="button" class="cat">藥品</button>
+            <button type="button" class="cat">日用</button>
+            <button type="button" class="cat">生鮮</button>
+            <button type="button" class="cat">服裝</button>
+          </div>
+          <div class="pgrid">
+            <div class="pcard"><div class="nm">維他檸檬茶 250ml</div><div class="pr">$9.50</div><div class="st">存 48</div></div>
+            <div class="pcard"><div class="nm">明治雪糕家庭裝</div><div class="pr">$12.00</div><div class="st">存 12</div></div>
+            <div class="pcard"><div class="nm">萬寶路紅（硬盒）</div><div class="pr">$58.00</div><div class="tags"><span class="tag tag-age">18+</span></div><div class="st">存 20</div></div>
+            <div class="pcard"><div class="nm">必理痛 20 粒裝</div><div class="pr">$42.00</div><div class="tags"><span class="tag tag-rx">藥品</span></div><div class="st">存 6</div></div>
+            <div class="pcard"><div class="nm">香蕉（散裝）</div><div class="pr">$28.00<span class="st"> /kg</span></div><div class="tags"><span class="tag tag-weight">稱重</span></div><div class="st">PLU 01234</div></div>
+            <div class="pcard"><div class="nm">純棉圓領 T 恤</div><div class="pr">$199.00</div><div class="tags"><span class="tag tag-variant">4 色 × 4 碼</span></div><div class="st">共存 86</div></div>
+            <div class="pcard"><div class="nm">小米行動電源 10000mAh</div><div class="pr">$149.00</div><div class="tags"><span class="tag tag-serial">序號</span></div><div class="st">存 9</div></div>
+            <div class="pcard"><div class="nm">益力多 5 支裝</div><div class="pr">$13.90</div><div class="st">存 24</div></div>
+          </div>
+        </div>
+
+        <!-- 中：購物車 -->
+        <div class="col">
+          <div class="chead2">
+            <div>
+              <div class="ctitle-main">購物車 · 單號 R-000128</div>
+              <div class="ctitle-sub">7 項 · 共 8 件 · 開始 21:04</div>
+            </div>
+            <div>
+              <button type="button" class="lnkbtn">改價 / 折扣 F3</button>
+              <button type="button" class="lnkbtn">清空</button>
+            </div>
+          </div>
+          <div class="cartlist">
+            <div class="lrow">
+              <div>
+                <div class="lname">維他檸檬茶 250ml</div>
+                <div class="lmeta"><span class="tag tag-code">4891028001234</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">2</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$19.00</div></div>
+            </div>
+
+            <div class="lrow">
+              <div>
+                <div class="lname">明治雪糕家庭裝</div>
+                <div class="lmeta"><span class="tag tag-code">4902720102113</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$12.00</div></div>
+            </div>
+
+            <div class="lrow">
+              <div>
+                <div class="lname">萬寶路紅（硬盒）</div>
+                <div class="lmeta"><span class="tag tag-code">4891028401113</span><span class="tag tag-age">已確認 18+</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$58.00</div></div>
+            </div>
+
+            <div class="lrow">
+              <div>
+                <div class="lname">必理痛 20 粒裝</div>
+                <div class="lmeta"><span class="tag tag-code">4891028302224</span><span class="tag tag-rx">藥品</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$42.00</div></div>
+            </div>
+
+            <div class="lrow">
+              <div>
+                <div class="lname">香蕉（散裝）· 淨重 0.35 kg</div>
+                <div class="lmeta"><span class="tag tag-weight">稱重 · 條碼秤 210123403505</span><span class="tag tag-plain">$28.00 / kg</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$9.80</div></div>
+            </div>
+
+            <div class="lrow">
+              <div>
+                <div class="lname">純棉圓領 T 恤</div>
+                <div class="lmeta"><span class="tag tag-variant">黑 / L</span><span class="tag tag-code">4891028700311</span><span class="tag tag-disc">8 折 · 員工優惠</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$159.20</div><div class="lorig">$199.00</div></div>
+            </div>
+
+            <div class="lrow">
+              <div>
+                <div class="lname">小米行動電源 10000mAh</div>
+                <div class="lmeta"><span class="tag tag-serial">SN 324500178882</span><span class="tag tag-code">6934177701234</span></div>
+              </div>
+              <div class="lright">
+                <div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div>
+              </div>
+              <div class="lright"><div class="lprice">$149.00</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右：結帳 -->
+        <div class="col">
+          <div class="sum">
+            <div class="sum-lbl">應收</div>
+            <div class="sum-big">$449.00</div>
+            <div class="sumrows">
+              <div class="srow"><span>小計（原價）</span><span class="v">$488.80</span></div>
+              <div class="srow disc"><span>單品折扣（1 項）</span><span class="v">−$39.80</span></div>
+              <div class="srow"><span>整單折扣</span><span class="v">$0.00</span></div>
+              <div class="srow total"><span>應收</span><span class="v">$449.00</span></div>
+            </div>
+          </div>
+          <div class="payrow">
+            <button type="button" class="paybtn on">現金</button>
+            <button type="button" class="paybtn">MPay</button>
+            <button type="button" class="paybtn">澳門通</button>
+            <button type="button" class="paybtn">中銀卡</button>
+            <button type="button" class="paybtn">支付寶</button>
+            <button type="button" class="paybtn">會員餘額</button>
+          </div>
+          <button type="button" class="bigpay">結帳　F10</button>
+          <div class="holdrow">
+            <button type="button" class="holdbtn">掛單　F8</button>
+            <button type="button" class="holdbtn">取單　F9</button>
+          </div>
+          <div class="holdstrip">
+            <div class="holdh">已掛單（2）</div>
+            <div class="holdcards">
+              <div class="hcard"><div class="hno">R-000126</div><div class="hm">$86.50</div></div>
+              <div class="hcard"><div class="hno">R-000124</div><div class="hm">$212.00</div></div>
+            </div>
+          </div>
+          <div class="kbdhint">
+            <b>F2</b> 改數量　<b>F3</b> 折扣 / 改價<br />
+            <b>Esc</b> 撤銷上一件　<b>Ctrl+Z</b> 撤銷 5 步<br />
+            <b>F10</b> 結帳　<b>F1</b> 搜尋
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ② 結帳（拆分付款） ══════════════════════ -->
+    <div class="screenwrap" id="scr-pay">
+      <div class="apphead">
+        <div class="apphead-l">
+          <span class="branddot">零</span>
+          <div>
+            <div class="apptitle">零售收銀台</div>
+            <div class="appsub">澳寶便利店（黑沙環店）· 收銀台 1 · 收銀員 阿明</div>
+          </div>
+        </div>
+        <div class="apphead-r">
+          <span class="badge-net"><span class="dotg"></span>同步正常</span>
+          <span class="clock">21:08</span>
+        </div>
+      </div>
+      <div class="body3">
+        <div class="col">
+          <div class="colhead">
+            <div class="searchbox"><span class="ph">掃碼 / 輸入條碼 · 商品名 / PLU</span><span class="kbdk">F1</span></div>
+          </div>
+          <div class="cats"><button type="button" class="cat on">全部</button><button type="button" class="cat">飲品</button><button type="button" class="cat">煙酒</button></div>
+          <div class="pgrid">
+            <div class="pcard"><div class="nm">維他檸檬茶 250ml</div><div class="pr">$9.50</div><div class="st">存 48</div></div>
+            <div class="pcard"><div class="nm">明治雪糕家庭裝</div><div class="pr">$12.00</div><div class="st">存 12</div></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="chead2">
+            <div><div class="ctitle-main">購物車 · 單號 R-000128</div><div class="ctitle-sub">7 項 · 共 8 件</div></div>
+          </div>
+          <div class="cartlist">
+            <div class="lrow"><div><div class="lname">維他檸檬茶 250ml</div><div class="lmeta"><span class="tag tag-code">4891028001234</span></div></div><div class="lright"><div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">2</span><button type="button" class="qbtn">+</button></div></div><div class="lright"><div class="lprice">$19.00</div></div></div>
+            <div class="lrow"><div><div class="lname">純棉圓領 T 恤</div><div class="lmeta"><span class="tag tag-variant">黑 / L</span><span class="tag tag-disc">8 折</span></div></div><div class="lright"><div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div></div><div class="lright"><div class="lprice">$159.20</div><div class="lorig">$199.00</div></div></div>
+            <div class="lrow"><div><div class="lname">小米行動電源 10000mAh</div><div class="lmeta"><span class="tag tag-serial">SN 324500178882</span></div></div><div class="lright"><div class="qtyctl"><button type="button" class="qbtn">−</button><span class="qval">1</span><button type="button" class="qbtn">+</button></div></div><div class="lright"><div class="lprice">$149.00</div></div></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="sum">
+            <div class="sum-lbl">應收</div>
+            <div class="sum-big">$449.00</div>
+            <div class="sumrows">
+              <div class="srow"><span>小計（原價）</span><span class="v">$488.80</span></div>
+              <div class="srow disc"><span>單品折扣</span><span class="v">−$39.80</span></div>
+              <div class="srow total"><span>應收</span><span class="v">$449.00</span></div>
+            </div>
+          </div>
+          <button type="button" class="bigpay" style="margin-top:16px">結帳</button>
+        </div>
+      </div>
+
+      <div class="scrim"></div>
+
+      <div class="modal">
+        <div class="mhead">
+          <div>
+            <div class="mtitle">結帳 · 拆分付款</div>
+            <div class="msub">單號 R-000128 · 7 項 共 8 件 · 21:04 開始</div>
+          </div>
+          <button type="button" class="mclose">✕</button>
+        </div>
+        <div class="mbody">
+          <div class="duebox">
+            <div>
+              <div class="lbl">應收總額</div>
+              <div style="margin-top:5px;font-size:11.5px;color:#c2410c">尚欠 $49.00 · 收款未完成</div>
+            </div>
+            <div class="val">$449.00</div>
+          </div>
+
+          <div class="msec">
+            <div class="msec-h">付款方式 <span>撳一下加入一筆</span></div>
+            <div class="paygrid">
+              <button type="button" class="paybig on">現金</button>
+              <button type="button" class="paybig">MPay</button>
+              <button type="button" class="paybig">澳門通</button>
+              <button type="button" class="paybig">中銀卡</button>
+              <button type="button" class="paybig">支付寶</button>
+              <button type="button" class="paybig">會員餘額</button>
+            </div>
+          </div>
+
+          <div class="msec">
+            <div class="msec-h">已收款項 <span>可混合多筆</span></div>
+            <div class="splits">
+              <div class="spline">
+                <div><div class="sn">現金</div><div class="sm">不設找零</div></div>
+                <div class="sv">$300.00</div>
+                <button type="button" class="sdel">移除</button>
+              </div>
+              <div class="spline">
+                <div><div class="sn">澳門通</div><div class="sm">卡號 ****6821</div></div>
+                <div class="sv">$100.00</div>
+                <button type="button" class="sdel">移除</button>
+              </div>
+            </div>
+            <div class="sumbox">
+              <div><div class="k">已收</div><div class="n">$400.00</div></div>
+              <div><div class="k">尚欠</div><div class="n short">$49.00</div></div>
+              <div><div class="k">找零</div><div class="n">$0.00</div></div>
+            </div>
+            <div class="hintline">尚欠 $49.00 — 餘額歸零後才可以完成結帳</div>
+          </div>
+
+          <div class="msec">
+            <div class="msec-h">會員 <span>可扣餘額 / 賺積分</span></div>
+            <div class="member">
+              <div>
+                <div class="mn">陳小姐 · 6688****</div>
+                <div class="md">可用餘額 $0.00 · 現有積分 1,280</div>
+              </div>
+              <div class="mv">本單賺 449 分</div>
+            </div>
+          </div>
+        </div>
+        <div class="mfoot">
+          <button type="button" class="btn-ghost">取消</button>
+          <button type="button" class="btn-done off">完成結帳（尚欠 $49.00）</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ③ 商品編輯 ══════════════════════ -->
+    <div class="screenwrap" id="scr-product">
+      <div class="pagetitle">
+        <div>
+          <div class="pt-main">編輯商品 · 純棉圓領 T 恤</div>
+          <div class="pt-sub">商品 ID 保留在系統內部，唔會顯示畀用戶（可能係 <b>name-時間戳</b> 形式）</div>
+        </div>
+        <div class="pt-right">
+          <button type="button" class="btn-s">取消</button>
+          <button type="button" class="btn-s-dark">儲存</button>
+        </div>
+      </div>
+      <div class="formbody">
+        <!-- 左：基本資料 -->
+        <div class="fsection">
+          <div class="fsec-h">基本資料 <span>條碼 · 價格 · 單位</span></div>
+          <div class="frow"><span class="fl">商品名</span><span class="finput">純棉圓領 T 恤</span></div>
+          <div class="frow"><span class="fl">分類</span><span class="finput">服裝</span></div>
+          <div class="frow"><span class="fl">SKU</span><span class="finput mono">TSH-COT-BLK-L</span></div>
+          <div class="frow"><span class="fl">主條碼</span><span class="finput mono">4891028700311</span></div>
+          <div class="frow" style="align-items:flex-start">
+            <span class="fl" style="padding-top:8px">額外條碼</span>
+            <span class="fchips">
+              <span class="fchip">4891028700312</span>
+              <span class="fchip">2000000003118</span>
+              <span class="fchip-add">+ 新增</span>
+            </span>
+          </div>
+          <div class="fhint" style="margin-left:103px">一件商品可以有多個條碼：廠碼 + 店內自編碼 + 舊包裝碼，掃到任何一個都認得。</div>
+          <div class="frow" style="margin-top:13px"><span class="fl">PLU</span><span class="finput ph">（非稱重商品可留空）</span></div>
+          <div class="frow"><span class="fl">售價</span><span class="finput strong mono">$199.00</span></div>
+          <div class="frow"><span class="fl">原價</span><span class="finput mono">$199.00</span></div>
+          <div class="frow"><span class="fl">成本</span><span class="finput mono">$78.00</span></div>
+          <div class="frow"><span class="fl">單位</span><span class="finput">件</span></div>
+          <div class="frow"><span class="fl">稅碼</span><span class="finput ph">（澳門免稅 · 可留空）</span></div>
+        </div>
+
+        <!-- 中：類型與庫存 -->
+        <div class="fsection">
+          <div class="fsec-h">商品類型與庫存 <span>決定要唔要掃碼 / 登記 / 提示</span></div>
+
+          <div class="swrow">
+            <div><div class="sn-title">追蹤庫存</div><div class="sn-desc">售出即扣減、退款自動回補，低於警戒線會提示</div></div>
+            <div class="sw on"><i></i></div>
+          </div>
+          <div class="swrow">
+            <div><div class="sn-title">稱重商品</div><div class="sn-desc">以重量計價（PLU 必填）；秤標籤上嘅變重條碼亦可以直接掃入</div></div>
+            <div class="sw"><i></i></div>
+          </div>
+          <div class="swrow">
+            <div><div class="sn-title">序號商品</div><div class="sn-desc">售出時要掃 / 輸入序號或 IMEI，退貨可反查</div></div>
+            <div class="sw"><i></i></div>
+          </div>
+          <div class="swrow">
+            <div><div class="sn-title">年齡限制</div><div class="sn-desc">掃到即彈出年齡確認，確認後才可入車（煙酒）</div></div>
+            <div class="sw"><i></i></div>
+          </div>
+          <div class="swrow" style="border-bottom:0">
+            <div><div class="sn-title">受管制 / 需登記</div><div class="sn-desc">藥房用：售出需記錄（簿冊 / 處方）</div></div>
+            <div class="sw"><i></i></div>
+          </div>
+
+          <div style="margin-top:18px">
+            <div class="fsec-h" style="margin-bottom:11px">本商品庫存 <span>即時扣減</span></div>
+            <div class="statgrid">
+              <div class="statbox"><div class="k">可售總數</div><div class="n">86</div></div>
+              <div class="statbox"><div class="k">警戒線</div><div class="n">20</div></div>
+              <div class="statbox"><div class="k">今日售出</div><div class="n up">7</div></div>
+              <div class="statbox"><div class="k">缺貨變體</div><div class="n down">1</div></div>
+            </div>
+          </div>
+
+          <div class="fhint" style="margin-top:14px">
+            稱重商品唔會行變體（秤端只認 PLU）；有變體嘅商品，售價同庫存以變體為準，母體數值只作參考。
+          </div>
+        </div>
+
+        <!-- 右：變體矩陣 -->
+        <div class="fsection">
+          <div class="fsec-h">變體 · 顏色 × 尺碼 <span>每個組合獨立條碼 / 庫存</span></div>
+          <table class="vmatrix">
+            <thead>
+              <tr><th style="width:74px">顏色</th><th>S</th><th>M</th><th>L</th><th>XL</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>黑</td>
+                <td><span class="cellst">12</span></td>
+                <td><span class="cellst">9</span></td>
+                <td><span class="cellst low">3</span></td>
+                <td><span class="cellst">8</span></td>
+              </tr>
+              <tr>
+                <td>白</td>
+                <td><span class="cellst">15</span></td>
+                <td><span class="cellst">11</span></td>
+                <td><span class="cellst">7</span></td>
+                <td><span class="cellst">6</span></td>
+              </tr>
+              <tr>
+                <td>藏青</td>
+                <td><span class="cellst">4</span></td>
+                <td><span class="cellst low">3</span></td>
+                <td><span class="cellst zero">0</span></td>
+                <td><span class="cellst">5</span></td>
+              </tr>
+              <tr>
+                <td>灰</td>
+                <td><span class="cellst">2</span></td>
+                <td><span class="cellst zero">0</span></td>
+                <td><span class="cellst">1</span></td>
+                <td><span class="cellst zero">0</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="fhint" style="margin-top:11px">
+            綠底 = 正常　黃底 = 低於警戒　紅底 = 缺貨。撳任何一格可以改該變體嘅條碼 / SKU / 售價。
+          </div>
+          <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn-s">+ 新增顏色</button>
+            <button type="button" class="btn-s">+ 新增尺碼</button>
+            <button type="button" class="btn-s-orange">批量生成條碼</button>
+          </div>
+
+          <div style="margin-top:20px">
+            <div class="fsec-h" style="margin-bottom:11px">序號登記 <span>售出時綁定</span></div>
+            <div class="finput ph" style="margin-bottom:8px">掃入或輸入 IMEI / 機身序號</div>
+            <div class="fchips">
+              <span class="fchip">324500178882</span>
+              <span class="fchip">324500178904</span>
+            </div>
+            <div class="fhint" style="margin-top:9px">已入庫 2 個序號；售出後綁定到訂單行，退貨時可反查原單。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ④ 掃碼槍自動學習 ══════════════════════ -->
+    <div class="screenwrap" id="scr-scanner">
+      <div class="pagetitle">
+        <div>
+          <div class="pt-main">掃碼槍設定</div>
+          <div class="pt-sub">HID 掃碼槍本質係鍵盤輸入，瀏覽器讀唔到型號 — 所以用「掃 3 次自動學習」認出任何牌子</div>
+        </div>
+        <div class="pt-right">
+          <span class="badge-plain">目前：自動學習模式</span>
+          <button type="button" class="btn-s-dark">儲存設定</button>
+        </div>
+      </div>
+
+      <div class="formbody">
+        <!-- 左：嚮導步驟 -->
+        <div class="fsection">
+          <div class="fsec-h">自動學習嚮導 <span>掃 3 次即可</span></div>
+          <div class="steps">
+            <div class="step">
+              <span class="step-n ok">1</span>
+              <div><div class="step-t">準備</div><div class="step-d">揀一件有條碼嘅商品（例如維他檸檬茶 4891028001234）。任何牌子嘅掃碼槍都得，唔需要先揀型號。</div></div>
+            </div>
+            <div class="step">
+              <span class="step-n ok">2</span>
+              <div><div class="step-t">掃同一條碼 3 次</div><div class="step-d">系統會量度你部槍嘅輸入特徵：速度、結尾字元、前綴、長度。</div></div>
+            </div>
+            <div class="step">
+              <span class="step-n on">3</span>
+              <div><div class="step-t">完成 · 測試</div><div class="step-d">推斷出設定後，喺下面測試框掃一件商品核對。</div></div>
+            </div>
+          </div>
+
+          <div style="margin-top:20px">
+            <div class="fsec-h" style="margin-bottom:11px">型號庫 <span>可選，命中就用預設值</span></div>
+            <div class="finput">未識別 — 用自動學習結果</div>
+            <div class="fhint" style="margin-top:8px">
+              如果部槍經桌面代理 / Android 代理連接，系統讀得到 VID/PID，可以直接配對型號（同打印機一樣）。
+              純瀏覽器 HID 連線就冇型號可讀，一律走自動學習。
+            </div>
+          </div>
+
+          <div style="margin-top:18px">
+            <div class="fsec-h" style="margin-bottom:11px">手動微調 <span>有問題才要改</span></div>
+            <div class="frow"><span class="fl">前綴</span><span class="finput ph">（無）</span></div>
+            <div class="frow"><span class="fl">結尾字元</span><span class="finput">Enter</span></div>
+            <div class="frow"><span class="fl">輸入超時</span><span class="finput mono">50 ms</span></div>
+            <div class="frow"><span class="fl">長度範圍</span><span class="finput mono">8 – 13 位</span></div>
+            <div class="frow"><span class="fl">字元集</span><span class="finput">數字</span></div>
+          </div>
+        </div>
+
+        <!-- 中：量測結果 -->
+        <div class="fsection">
+          <div class="fsec-h">現場量測結果 <span>3 次掃描的平均</span></div>
+          <table class="mtable">
+            <thead>
+              <tr><th style="width:34%">量測項</th><th style="width:30%">實測值</th><th>推斷</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>按鍵間隔中位數</td><td class="mv">8 ms</td><td class="inf">掃碼槍（人手約 150ms）</td></tr>
+              <tr><td>結尾字元</td><td class="mv">Enter (\r)</td><td class="inf">Enter 收尾</td></tr>
+              <tr><td>開頭固定字元</td><td class="mv">無</td><td class="inf">無前綴</td></tr>
+              <tr><td>字元集</td><td class="mv">0-9</td><td class="inf">純數字</td></tr>
+              <tr><td>長度</td><td class="mv">13 位（EAN-13）</td><td class="inf">固定 13 位</td></tr>
+              <tr><td>3 次一致性</td><td class="mv">3 / 3 完全一致</td><td class="inf">可信任</td></tr>
+            </tbody>
+          </table>
+
+          <div class="testbox">
+            <div>
+              <div class="tk">推斷出嘅設定 · 測試框</div>
+              <div class="tv">4891028001234</div>
+            </div>
+            <div class="tr">→ 維他檸檬茶 250ml · $9.50</div>
+          </div>
+
+          <div class="fhint" style="margin-top:12px">
+            推斷邏輯：用輸入速度區分「掃碼」同「人手打字」，唔可以靠輸入框焦點 ——
+            否則店員喺搜尋框打字會被當成掃碼。
+          </div>
+        </div>
+
+        <!-- 右：變重條碼規則 -->
+        <div class="fsection">
+          <div class="fsec-h">變重條碼規則 <span>如客人已貼秤標籤</span></div>
+          <div class="frow"><span class="fl">前綴</span><span class="finput mono">20 – 29</span></div>
+          <div class="frow"><span class="fl">PLU 位置</span><span class="finput mono">第 3 – 7 位（5 位）</span></div>
+          <div class="frow"><span class="fl">內容類型</span><span class="finput">重量（克）</span></div>
+          <div class="frow"><span class="fl">數值位置</span><span class="finput mono">第 8 – 12 位（5 位）</span></div>
+          <div class="frow"><span class="fl">倍率</span><span class="finput mono">÷ 1000 → kg</span></div>
+          <div class="frow"><span class="fl">校驗位</span><span class="finput">有（最後 1 位）</span></div>
+
+          <div style="margin-top:15px;border:1px solid var(--slate-200);border-radius:12px;padding:13px 14px;background:var(--slate-50)">
+            <div style="font-size:10.5px;font-weight:600;color:var(--slate-500)">解析示範</div>
+            <div style="margin-top:6px;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums">21 01234 00350 5</div>
+            <div style="margin-top:9px;display:flex;flex-direction:column;gap:6px">
+              <div class="crow"><span>PLU</span><span class="v">01234</span></div>
+              <div class="crow"><span>淨重</span><span class="v">350 g</span></div>
+              <div class="crow"><span>單價</span><span class="v">$28.00 / kg</span></div>
+              <div class="crow big"><span>小計</span><span class="v">$9.80</span></div>
+            </div>
+          </div>
+
+          <div class="fhint" style="margin-top:12px">
+            各牌子出廠規則唔同（前綴用 2 定 02、克定千克、有冇校驗位、位數點分）。
+            換秤時只需要改呢一頁，唔使改程式。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ⑤ 稱重輸入 ══════════════════════ -->
+    <div class="screenwrap" id="scr-weigh">
+      <div class="pagetitle">
+        <div>
+          <div class="pt-main">加入稱重商品 · 香蕉（散裝）</div>
+          <div class="pt-sub">秤只需要出重量，標籤統一由 POS 標籤機印。呢頁係秤壞 / 散賣 / 客人自備容器嘅兜底</div>
+        </div>
+        <div class="pt-right">
+          <span class="badge-plain">PLU 01234</span>
+          <button type="button" class="btn-s">取消</button>
+        </div>
+      </div>
+
+      <div class="wgrid">
+        <!-- 左：數字鍵盤 -->
+        <div class="wpad">
+          <div class="wbig">
+            <div>
+              <div class="k">輸入重量（kg）</div>
+            </div>
+            <div class="v">0.350</div>
+          </div>
+          <div class="keys">
+            <button type="button" class="key">1</button>
+            <button type="button" class="key">2</button>
+            <button type="button" class="key">3</button>
+            <button type="button" class="key">4</button>
+            <button type="button" class="key">5</button>
+            <button type="button" class="key">6</button>
+            <button type="button" class="key">7</button>
+            <button type="button" class="key">8</button>
+            <button type="button" class="key">9</button>
+            <button type="button" class="key">.</button>
+            <button type="button" class="key">0</button>
+            <button type="button" class="key">退格</button>
+            <button type="button" class="key wide act">確認加入購物車</button>
+            <button type="button" class="key">C</button>
+          </div>
+          <div class="tarechips">
+            <span class="fchip-add">皮重：無</span>
+            <span class="fchip">袋 5 g</span>
+            <span class="fchip">盒 30 g</span>
+            <span class="fchip-add">+ 自訂</span>
+          </div>
+        </div>
+
+        <!-- 中：即時計算 -->
+        <div class="fsection">
+          <div class="fsec-h">即時計算 <span>單價 × 重量</span></div>
+          <div class="calc">
+            <div class="crow"><span>商品</span><span class="v">香蕉（散裝）</span></div>
+            <div class="crow"><span>PLU</span><span class="v">01234</span></div>
+            <div class="crow"><span>單位價</span><span class="v">$28.00 / kg</span></div>
+            <div class="crow"><span>輸入重量</span><span class="v">0.350 kg</span></div>
+            <div class="crow"><span>皮重扣減</span><span class="v">− 0.000 kg</span></div>
+            <div class="crow"><span>淨重</span><span class="v">0.350 kg</span></div>
+            <div class="crow big"><span>小計</span><span class="v">$9.80</span></div>
+          </div>
+
+          <div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn-s-orange">加入購物車</button>
+            <button type="button" class="btn-s">取消</button>
+          </div>
+
+          <div style="margin-top:22px">
+            <div class="fsec-h" style="margin-bottom:11px">出票預覽 <span>小票會點樣印</span></div>
+            <div class="rcpt">
+              <div class="rcpt-line"><span>香蕉（散裝）</span><span>PLU 01234</span></div>
+              <div class="rcpt-line"><span>0.350 kg × $28.00/kg</span><span>$9.80</span></div>
+              <div class="rcpt-line dim"><span>秤標籤條碼</span><span>210123403505</span></div>
+            </div>
+            <div class="fhint" style="margin-top:10px">
+              購物車行會記住淨重同單位價 —— 退貨時按重量回補，唔會只退金額。
+            </div>
+          </div>
+        </div>
+
+        <!-- 右：重量來源與標籤 -->
+        <div class="fsection">
+          <div class="fsec-h">重量點入 POS <span>兩種</span></div>
+
+          <div style="border:1px solid #bbf7d0;background:#f0fdf4;border-radius:12px;padding:13px 15px">
+            <div style="font-size:12.5px;font-weight:700;color:#15803d">首選 · USB HID 收銀秤</div>
+            <div style="margin-top:6px;font-size:11.5px;color:#166534;line-height:1.6">
+              秤模擬鍵盤輸出重量，<b>插上就用、零驅動、零配對</b> —— 同掃碼槍完全一樣嘅原理。
+              重量自動填入上面嘅輸入框。
+            </div>
+          </div>
+
+          <div style="border:1px solid var(--slate-200);border-radius:12px;padding:13px 15px;margin-top:10px">
+            <div style="font-size:12.5px;font-weight:700;color:var(--slate-800)">兜底 · 手動輸入（本頁）</div>
+            <div style="margin-top:6px;font-size:11.5px;color:var(--slate-500);line-height:1.6">
+              睇秤嘅讀數，手動打重量。秤壞、客人自備容器、臨時散賣 ——
+              呢條路<b>永遠都要行得通，唔可以省</b>。
+            </div>
+          </div>
+
+          <div style="border:1px solid #bbf7d0;background:#f0fdf4;border-radius:12px;padding:13px 15px;margin-top:10px">
+            <div style="font-size:12.5px;font-weight:700;color:#15803d">標籤 · 統一由 POS 標籤機印</div>
+            <div style="margin-top:6px;font-size:11.5px;color:#166534;line-height:1.6">
+              重量入到 POS 之後，由標籤機印「稱重標籤」（含條碼）貼上商品，收銀掃返個條碼就得。
+            </div>
+            <div style="margin-top:9px;font-size:11.5px;color:#15803d">
+              <b>→ 唔需要買貴嘅「條碼標籤秤」</b>，一台普通電子秤就夠。
+            </div>
+          </div>
+
+          <div class="fhint" style="margin-top:10px">
+            藍牙秤要經桌面代理轉發（瀏覽器本身喺 iPad 上連唔到藍牙）→ Phase 3。有線 USB 秤唔受影響。
+          </div>
+
+          <div style="border:1px solid var(--slate-200);border-radius:12px;padding:13px 15px;margin-top:12px">
+            <div style="font-size:12.5px;font-weight:700;color:var(--slate-800)">PLU 同步</div>
+            <div style="margin-top:6px;font-size:11.5px;color:var(--slate-500);line-height:1.6">
+              秤只需要「重量」，價錢一律由 POS 算 —— 所以秤端唔使入商品庫、亦唔會出現「秤上價 ≠ POS 價」。
+              貼標籤用嘅 PLU 由 POS 統一分配。
+            </div>
+            <div style="margin-top:10px">
+              <button type="button" class="btn-s">匯出 PLU 清單（CSV）</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ⑥ 打印機 / 標籤機 ══════════════════════ -->
+    <div class="screenwrap" id="scr-printer">
+      <div class="pagetitle">
+        <div>
+          <div class="pt-main">打印設定 · 收據機 與 標籤機</div>
+          <div class="pt-sub">可以加多台，每台自己揀角色；部分國產機「標籤 + 小票」一機兩用。廚房機唔需要</div>
+        </div>
+        <div class="pt-right">
+          <span class="badge-plain">5 部在線 · 1 部未分配</span>
+          <button type="button" class="btn-s-dark">新增打印機</button>
+        </div>
+      </div>
+      <div class="formbody" style="grid-template-columns:minmax(0,1fr) 286px 296px">
+        <div class="fsection" style="padding-top:14px">
+          <div class="fsec-h">打印機清單 <span>可多台 · 撳角色切換用途</span></div>
+
+          <div class="prowc">
+            <div class="prowc-h">
+              <span class="prowc-n">收據機 · 收銀台 1</span>
+              <span class="badge-on"><span class="dotg"></span>在線</span>
+            </div>
+            <div class="prowc-m">佳博 Gprinter GP-U80300 · USB · 80mm · VID 0x0416 / PID 0xAE01</div>
+            <div class="prowc-a">
+              <button type="button" class="rolechip sm on">收據單</button>
+              <button type="button" class="rolechip sm">標籤單</button>
+              <button type="button" class="rolechip sm">收據＋標籤</button>
+              <button type="button" class="rolechip sm">停用</button>
+              <button type="button" class="btn-xs">測試列印</button>
+            </div>
+          </div>
+
+          <div class="prowc">
+            <div class="prowc-h">
+              <span class="prowc-n">標籤機 · 收銀台 1</span>
+              <span class="badge-on"><span class="dotg"></span>在線</span>
+            </div>
+            <div class="prowc-m">佳博 Gprinter GP-3120TU · USB · 50 × 30 · VID 0x0416 / PID 0x5011</div>
+            <div class="prowc-a">
+              <button type="button" class="rolechip sm">收據單</button>
+              <button type="button" class="rolechip sm on">標籤單</button>
+              <button type="button" class="rolechip sm">收據＋標籤</button>
+              <button type="button" class="rolechip sm">停用</button>
+              <button type="button" class="btn-xs">測試列印</button>
+            </div>
+          </div>
+
+          <div class="prowc">
+            <div class="prowc-h">
+              <span class="prowc-n">標籤機 · 藥房櫃檯</span>
+              <span class="badge-on"><span class="dotg"></span>在線</span>
+            </div>
+            <div class="prowc-m">漢印 HPRT N41 · USB · 58 × 40 · 型號庫命中</div>
+            <div class="prowc-a">
+              <button type="button" class="rolechip sm">收據單</button>
+              <button type="button" class="rolechip sm on">標籤單</button>
+              <button type="button" class="rolechip sm">收據＋標籤</button>
+              <button type="button" class="rolechip sm">停用</button>
+              <button type="button" class="btn-xs">測試列印</button>
+            </div>
+          </div>
+
+          <div class="prowc">
+            <div class="prowc-h">
+              <span class="prowc-n">一機兩用 · 收銀台 2</span>
+              <span class="badge-on"><span class="dotg"></span>在線</span>
+            </div>
+            <div class="prowc-m">佳博 Gprinter GP-2270T · USB · 標籤 / 58mm 小票 · 同時擔任兩個角色</div>
+            <div class="prowc-a">
+              <button type="button" class="rolechip sm">收據單</button>
+              <button type="button" class="rolechip sm">標籤單</button>
+              <button type="button" class="rolechip sm on">收據＋標籤</button>
+              <button type="button" class="rolechip sm">停用</button>
+              <button type="button" class="btn-xs">測試列印</button>
+            </div>
+          </div>
+
+          <div class="prowc">
+            <div class="prowc-h">
+              <span class="prowc-n">標籤機 · 貨架區（藍牙）</span>
+              <span class="badge-on"><span class="dotg"></span>在線</span>
+            </div>
+            <div class="prowc-m">快麥 KuaiMai KM-118 · 藍牙 · 40 × 30</div>
+            <div class="prowc-a">
+              <button type="button" class="rolechip sm">收據單</button>
+              <button type="button" class="rolechip sm on">標籤單</button>
+              <button type="button" class="rolechip sm">收據＋標籤</button>
+              <button type="button" class="rolechip sm">停用</button>
+              <span class="tag-warn">型號庫未收錄</span>
+              <button type="button" class="btn-xs">回報型號</button>
+            </div>
+          </div>
+
+          <div class="prowc">
+            <div class="prowc-h">
+              <span class="prowc-n">未命名打印機</span>
+              <span class="badge-off"><span class="dotr"></span>未連線</span>
+            </div>
+            <div class="prowc-m">通用 ESC/POS · USB · 未分配角色 · 等待配對</div>
+            <div class="prowc-a">
+              <button type="button" class="btn-xs">配對</button>
+              <span class="tag-plain2">未分配</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="fsection" style="padding-top:14px">
+          <div class="fsec-h">型號庫 <span>國產為主</span></div>
+          <table class="mtable2">
+            <thead><tr><th style="width:42%">品牌</th><th>常見型號</th></tr></thead>
+            <tbody>
+              <tr><td>佳博 Gprinter</td><td>GP-3120TU / GP-1324D / GP-2270T</td></tr>
+              <tr><td>漢印 HPRT</td><td>N41 / D35 / T260L</td></tr>
+              <tr><td>芯燁 Xprinter</td><td>XP-460B / XP-470B</td></tr>
+              <tr><td>得力 Deli</td><td>DL-888B / DL-888D</td></tr>
+              <tr><td>快麥 KuaiMai</td><td>KM-118 / KM-202</td></tr>
+              <tr><td>啟銳 Qirui</td><td>QR-488 / QR-588</td></tr>
+              <tr><td>容大 Rongta</td><td>RP410 / RP420</td></tr>
+              <tr><td>立象 Argox</td><td>CP-2140M / OS-214</td></tr>
+              <tr><td>台半 TSC</td><td>TTP-244 Pro</td></tr>
+              <tr><td>斑馬 Zebra</td><td>ZD410 / GK888t</td></tr>
+            </tbody>
+          </table>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:11px">
+            <button type="button" class="btn-s">＋ 自訂型號</button>
+          </div>
+          <div class="fhint" style="margin-top:11px">
+            型號庫只係幫你填預設值（字集 / 紙寬 / 中文倍大指令）。<b>揀唔中都照印得到</b> ——
+            一律行「通用 ESC/POS 預設」，回報之後就會收錄。
+          </div>
+        </div>
+
+        <div class="fsection" style="padding-top:14px">
+          <div class="fsec-h">邊個角色印邊樣 <span>零售對照</span></div>
+          <table class="mtable2">
+            <thead><tr><th style="width:46%">單據</th><th>由邊部機出</th></tr></thead>
+            <tbody>
+              <tr><td>顧客收據（小票）</td><td>「收據單」角色</td></tr>
+              <tr><td>價籤 / 商品標籤</td><td>「標籤單」角色</td></tr>
+              <tr><td>稱重標籤</td><td>統一由 POS 標籤機印</td></tr>
+              <tr><td>廚房單</td><td>停用（零售唔適用）</td></tr>
+            </tbody>
+          </table>
+
+          <div class="fsec-h" style="margin-top:18px">紙張 <span>可自訂寬 × 高</span></div>
+          <div class="presetchips">
+            <div class="preset2"><span class="pn">50 × 30</span><span class="ph2">價籤</span></div>
+            <div class="preset2"><span class="pn">58 × 40</span><span class="ph2">標準價籤</span></div>
+            <div class="preset2"><span class="pn">40 × 30</span><span class="ph2">細標籤</span></div>
+            <div class="preset2 on"><span class="pn">自訂</span><span class="ph2">寬 × 高 mm</span></div>
+          </div>
+          <div class="fhint" style="margin-top:10px">
+            除咗內建尺寸，可以自己填寬 × 高（mm），系統自動算每行字數同分格線長度 ——
+            同餐飲模板一樣，唔使改程式。
+          </div>
+
+          <div class="fsec-h" style="margin-top:18px">一機兩用 <span>細店慳一部機</span></div>
+          <div class="fhint">
+            部分國產機支援「標籤 + 小票」雙用（例：佳博 GP-2270T、GP-3120TUC）→
+            可以同時分配「收據單」＋「標籤單」兩個角色。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ⑦ 收據模板 ══════════════════════ -->
+    <div class="screenwrap" id="scr-receipt">
+      <div class="pagetitle">
+        <div>
+          <div class="pt-main">收據模板 · 零售</div>
+          <div class="pt-sub">橙色標示係零售新增區塊 —— 品項條碼、拆分付款明細、會員積分、退換貨條款</div>
+        </div>
+        <div class="pt-right">
+          <span class="badge-plain">紙寬 80mm · 48 字／行</span>
+          <button type="button" class="btn-s">測試列印</button>
+          <button type="button" class="btn-s-dark">儲存並同步</button>
+        </div>
+      </div>
+      <div class="formbody" style="grid-template-columns:286px minmax(0,1fr) 318px">
+        <div class="fsection">
+          <div class="fsec-h">區塊 <span>可拖動排序</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">門店名</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">店家電話</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">單號 / 交易類型</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">結帳時間</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">收銀員</span></div>
+          <div class="blkhint">— 分格線 —</div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">商品明細</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">品項條碼</span><span class="newbadge">新增</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">單品折扣明細</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">小計（折前）</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">應收</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">拆分付款明細</span><span class="newbadge">新增</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">找零</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">會員積分</span><span class="newbadge">新增</span></div>
+          <div class="blkrow isnew sel"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">退換貨條款</span><span class="newbadge">新增</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn"></span><span class="blkn">二維碼</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">頁腳</span></div>
+        </div>
+
+        <div class="fsection">
+          <div class="fsec-h">即時預覽 <span>同實際出紙同一份渲染</span></div>
+          <div class="rcptprev">
+            <div class="rc ctr b lg">澳寶便利店</div>
+            <div class="rc ctr sm">黑沙環店 · 電話 2888 1234</div>
+            <div class="rr"></div>
+            <div class="rc"><span>單號 R-000128</span><span>零售</span></div>
+            <div class="rc"><span>結帳</span><span>2026-09-12 21:08</span></div>
+            <div class="rc sm"><span>收銀員 阿明</span><span></span></div>
+            <div class="rr"></div>
+            <div class="rc b"><span>維他檸檬茶 250ml</span><span>$19.00</span></div>
+            <div class="rc sub newmark"><span>4891028001234</span><span>2 × $9.50</span></div>
+            <div class="rc b"><span>萬寶路紅（硬盒）</span><span>$58.00</span></div>
+            <div class="rc sub newmark"><span>4891028401113</span><span>1 × $58.00</span></div>
+            <div class="rc b"><span>香蕉（散裝）</span><span>$9.80</span></div>
+            <div class="rc sub newmark"><span>210123403505</span><span>0.350kg × $28.00/kg</span></div>
+            <div class="rc b"><span>純棉圓領 T 恤</span><span>$159.20</span></div>
+            <div class="rc sub newmark"><span>黑/L · 4891028700311</span><span>1 × $199.00</span></div>
+            <div class="rc sub"><span>└ 8 折（員工優惠）</span><span>−$39.80</span></div>
+            <div class="rc b"><span>小米行動電源 10000mAh</span><span>$149.00</span></div>
+            <div class="rc sub newmark"><span>6934177701234 · SN 324500178882</span><span>1 × $149.00</span></div>
+            <div class="rr"></div>
+            <div class="rc"><span>小計（折前）</span><span>$488.80</span></div>
+            <div class="rc"><span>單品折扣</span><span>−$39.80</span></div>
+            <div class="rc b lg"><span>應收</span><span>$449.00</span></div>
+            <div class="rr"></div>
+            <div class="rc newmark"><span>付款 · 現金</span><span>$300.00</span></div>
+            <div class="rc newmark"><span>付款 · 澳門通 ****6821</span><span>$149.00</span></div>
+            <div class="rc"><span>找零</span><span>$0.00</span></div>
+            <div class="rr"></div>
+            <div class="rc newmark"><span>會員 陳小姐 · 本單賺 449 分</span><span>結餘 1,729</span></div>
+            <div class="rc ctr sm newmark" style="margin-top:6px">退換貨請於 7 日內憑此單及原包裝辦理</div>
+            <div class="qrbox">QR</div>
+            <div class="rc ctr b" style="margin-top:9px">多謝惠顧！</div>
+          </div>
+        </div>
+
+        <div class="fsection">
+          <div class="fsec-h">選中區塊 <span>品項條碼（新增）</span></div>
+          <div class="frow"><span class="fl">顯示</span><span class="finput">開</span></div>
+          <div class="frow" style="align-items:flex-start">
+            <span class="fl" style="padding-top:8px">字型大小</span>
+            <span class="fchips">
+              <span class="fchip">細 s</span>
+              <span class="fchip" style="background:var(--orange-50);color:#c2410c">中 m</span>
+              <span class="fchip">大 l</span>
+            </span>
+          </div>
+          <div class="frow"><span class="fl">粗體</span><span class="finput">關</span></div>
+          <div class="frow"><span class="fl">對齊</span><span class="finput">左</span></div>
+          <div class="fhint" style="margin-left:103px">
+            每個商品明細下面印一行條碼 / SKU。退換貨時店員可以直接掃原單條碼，唔使逐個數字打。
+          </div>
+
+          <div class="fsec-h" style="margin-top:22px">模板層級 <span>唔跟區塊</span></div>
+          <div class="frow"><span class="fl">紙寬</span><span class="finput">80mm（48 字／行）</span></div>
+          <div class="frow"><span class="fl">二維碼網址</span><span class="finput mono">https://shop.example.mo</span></div>
+          <div class="frow" style="align-items:flex-start">
+            <span class="fl" style="padding-top:8px">二維碼大小</span>
+            <span class="fchips">
+              <span class="fchip">細</span>
+              <span class="fchip" style="background:var(--orange-50);color:#c2410c">中</span>
+              <span class="fchip">大</span>
+            </span>
+          </div>
+          <div class="frow"><span class="fl">頁腳文字</span><span class="finput">多謝惠顧！</span></div>
+          <div class="frow" style="align-items:flex-start">
+            <span class="fl" style="padding-top:8px">退換貨條款</span>
+            <span class="finput" style="white-space:normal;line-height:1.5">退換貨請於 7 日內憑此單及原包裝辦理</span>
+          </div>
+          <div class="fhint" style="margin-left:103px">
+            條款係自由文字，藥房可以加「處方藥一經售出恕不退換」之類，唔使改程式。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ ⑧ 價籤 / 商品標籤 ══════════════════════ -->
+    <div class="screenwrap" id="scr-label">
+      <div class="pagetitle">
+        <div>
+          <div class="pt-main">價籤 與 商品標籤 · 零售</div>
+          <div class="pt-sub">價籤放貨架、商品標籤貼商品上；無廠碼商品可以用店內自編碼標籤補一個可掃嘅條碼</div>
+        </div>
+        <div class="pt-right">
+          <span class="badge-plain">標籤機：佳博 GP-3120TU · 50 × 30</span>
+          <button type="button" class="btn-s">測試列印</button>
+          <button type="button" class="btn-s-dark">儲存並同步</button>
+        </div>
+      </div>
+      <div class="formbody" style="grid-template-columns:296px minmax(0,1fr) 322px">
+        <div class="fsection">
+          <div class="fsec-h">標籤類型 <span>決定用邊個模板</span></div>
+          <div class="tarechips" style="margin-bottom:16px">
+            <span class="fchip" style="background:var(--orange-50);color:#c2410c">價籤（貨架）</span>
+            <span class="fchip">商品標籤（貼商品）</span>
+            <span class="fchip">稱重標籤</span>
+            <span class="fchip">自編碼標籤</span>
+          </div>
+
+          <div class="fsec-h">紙張 <span>內建 + 自訂</span></div>
+          <div class="presetchips">
+            <div class="preset2 on"><span class="pn">50 × 30</span><span class="ph2">價籤</span></div>
+            <div class="preset2"><span class="pn">58 × 40</span><span class="ph2">標準價籤</span></div>
+            <div class="preset2"><span class="pn">40 × 30</span><span class="ph2">細標籤</span></div>
+            <div class="preset2"><span class="pn">60 × 40</span><span class="ph2">成份表</span></div>
+            <div class="preset2"><span class="pn">70 × 50</span><span class="ph2">大標籤</span></div>
+            <div class="preset2"><span class="pn">自訂</span><span class="ph2">寬 × 高 mm</span></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px">
+            <button type="button" class="btn-xs">＋ 新增自訂尺寸</button>
+          </div>
+
+          <div class="fsec-h">元素 <span>可排序 · 可改名 · 可自訂</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">商品名</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">變體（黑 / L）</span><span class="newbadge">新增</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">售價（大字）</span><span class="newbadge">新增</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">原價（刪除線）</span><span class="newbadge">新增</span></div>
+          <div class="blkrow"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">條碼</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn on"></span><span class="blkn">SKU / PLU</span><span class="newbadge">新增</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn"></span><span class="blkn">單位價（$ / kg）</span><span class="newbadge">新增</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn"></span><span class="blkn">淨重</span><span class="newbadge">新增</span></div>
+          <div class="blkrow isnew"><span class="grip">⋮⋮</span><span class="ckn"></span><span class="blkn">包裝 / 有效日期</span><span class="newbadge">新增</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+            <button type="button" class="btn-xs">＋ 新增自訂元素</button>
+          </div>
+          <div class="fhint" style="margin-top:4px">
+            元素名同文字都可以自己改名 / 新增（例：產地）。
+          </div>
+        </div>
+
+        <div class="fsection">
+          <div class="fsec-h">標籤預覽 <span>按實際比例</span></div>
+          <div class="lblwrap">
+            <div class="lblcard">
+              <span class="lblcap">價籤 · 50 × 30（貨架）</span>
+              <div class="lbl" style="width:168px;height:104px">
+                <div class="ln">維他檸檬茶 250ml</div>
+                <div class="lp">$9.50</div>
+                <div class="lo">$11.00</div>
+                <div class="lblbc" style="height:16px;margin-top:auto"></div>
+                <div class="lblbc-n">4891028001234</div>
+              </div>
+            </div>
+            <div class="lblcard">
+              <span class="lblcap">商品標籤 · 50 × 30（貼商品）</span>
+              <div class="lbl" style="width:168px;height:104px">
+                <div class="ln">純棉圓領 T 恤 · 黑 / L</div>
+                <div class="lp">$199.00</div>
+                <div class="lm">SKU TSH-COT-BLK-L</div>
+                <div class="lblbc" style="height:16px;margin-top:auto"></div>
+                <div class="lblbc-n">4891028700311</div>
+              </div>
+            </div>
+            <div class="lblcard">
+              <span class="lblcap">稱重標籤 · 40 × 30</span>
+              <div class="lbl" style="width:136px;height:104px">
+                <div class="ln">香蕉（散裝）</div>
+                <div class="lm">淨重 0.350 kg<br />$28.00 / kg</div>
+                <div class="lp" style="font-size:16px">$9.80</div>
+                <div class="lblbc" style="height:14px;margin-top:auto"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lblwrap" style="margin-top:20px">
+            <div class="lblcard">
+              <span class="lblcap">自編碼標籤 · 40 × 30 —— 無廠碼散裝商品用</span>
+              <div class="lbl" style="width:136px;height:104px">
+                <div class="ln">散裝腰果</div>
+                <div class="lm">店內自編碼</div>
+                <div class="lp" style="font-size:16px">$68.00</div>
+                <div class="lblbc" style="height:14px;margin-top:auto"></div>
+                <div class="lblbc-n">2000000001187</div>
+              </div>
+            </div>
+            <div style="flex:1;min-width:200px">
+              <div class="fhint">
+                無廠碼商品（散裝、店內分裝、轉售）用「2」開頭嘅店內自編碼，
+                印一張標籤貼上去之後就可以同正常商品一樣掃碼入車。
+              </div>
+              <div class="tarechips" style="margin-top:11px">
+                <span class="fchip">下一個可用編號 2000000001188</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="fhint" style="margin-top:20px">
+            稱重標籤<b>統一由 POS 標籤機印</b>（上面 ⑤ 稱重頁決定重量 → 呢度印標籤）。
+            秤只需要出重量，唔使買貴嘅條碼標籤秤。
+          </div>
+        </div>
+
+        <div class="fsection">
+          <div class="fsec-h">選中元素 <span>售價（大字）</span></div>
+          <div class="frow"><span class="fl">顯示</span><span class="finput">開</span></div>
+          <div class="frow" style="align-items:flex-start">
+            <span class="fl" style="padding-top:8px">字型大小</span>
+            <span class="fchips">
+              <span class="fchip">細</span>
+              <span class="fchip">中</span>
+              <span class="fchip" style="background:var(--orange-50);color:#c2410c">大</span>
+            </span>
+          </div>
+          <div class="frow"><span class="fl">粗體</span><span class="finput">開</span></div>
+          <div class="frow"><span class="fl">對齊</span><span class="finput">左</span></div>
+
+          <div class="fsec-h" style="margin-top:22px">批量打印 <span>由商品清單揀</span></div>
+          <div style="border:1px solid var(--slate-200);border-radius:12px;overflow:hidden">
+            <div class="spline" style="grid-template-columns:minmax(0,1fr) auto">
+              <div><div class="sn">維他檸檬茶 250ml</div><div class="sm">4891028001234</div></div>
+              <div class="sv">× 2 張</div>
+            </div>
+            <div class="spline" style="grid-template-columns:minmax(0,1fr) auto">
+              <div><div class="sn">明治雪糕家庭裝</div><div class="sm">4902720102113</div></div>
+              <div class="sv">× 1 張</div>
+            </div>
+            <div class="spline" style="grid-template-columns:minmax(0,1fr) auto">
+              <div><div class="sn">香蕉（散裝）</div><div class="sm">PLU 01234</div></div>
+              <div class="sv">× 1 張</div>
+            </div>
+          </div>
+          <div class="frow" style="margin-top:11px"><span class="fl">每件張數</span><span class="finput mono">1</span></div>
+          <div class="frow"><span class="fl">合計</span><span class="finput strong mono">4 張</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:5px">
+            <button type="button" class="btn-s-orange">開始打印</button>
+            <button type="button" class="btn-s">從商品清單揀</button>
+          </div>
+          <div class="fhint" style="margin-top:11px">
+            商品頁可以多選商品 → 直接加入打印佇列；改價之後亦可以一鍵重印受影響嘅價籤。
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var CANVAS_W = 1180;
+var CANVAS_H = 820;
+
+var TAB_KEYS = ["counter", "pay", "product", "scanner", "weigh", "printer", "receipt", "label"];
+
+var FLOW_BY_TAB = {
+  counter: 1,
+  pay: 4,
+  product: 1,
+  scanner: 1,
+  weigh: 2,
+  printer: 5,
+  receipt: 5,
+  label: 5
+};
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || CANVAS_W;
+  var s = Math.min(1, Math.max(w / CANVAS_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(CANVAS_H * s) + "px";
+  stage.style.overflowX = (CANVAS_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  for (var i = 0; i < TAB_KEYS.length; i++){
+    var scr = document.getElementById("scr-" + TAB_KEYS[i]);
+    if (scr) scr.classList.toggle("on", TAB_KEYS[i] === id);
+  }
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < tabs.length; j++){
+    tabs[j].classList.toggle("on", tabs[j].getAttribute("data-tab") === id);
+  }
+  var active = FLOW_BY_TAB[id] || 1;
+  for (var k = 1; k <= 5; k++){
+    var fs = document.getElementById("f-" + k);
+    if (fs) fs.classList.toggle("on", k === active);
+  }
+  fit();
+}
+
+function bindTabs(){
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < tabs.length; i++){
+    (function(btn){
+      btn.onclick = function(){ showTab(btn.getAttribute("data-tab")); };
+    })(tabs[i]);
+  }
+}
+
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("resize", fit);
+}
+bindTabs();
+fit();
+</script>
+</body>
+</html>

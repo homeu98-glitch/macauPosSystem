@@ -1,3 +1,13 @@
+// 零售（Retail）專屬型別放喺 `src/lib/retail/types.ts`（全新、無遺留依賴）。
+// 呢度只係借用佢嘅形狀，唔會令兩個檔互相 import 造成循環。
+import type {
+  CustomLabelPaper,
+  RetailPaymentMethod,
+  ScannerProfile,
+  SplitPaymentEntry,
+  WeighedBarcodeRule,
+} from "@/lib/retail/types";
+
 export type ConnectionType = "lan" | "usb" | "bluetooth";
 export type UserRole = "admin" | "manager" | "cashier";
 
@@ -12,6 +22,18 @@ export interface UserPermissions {
    */
   reprintReceipt?: boolean;
   manageAccounts?: boolean;
+  /**
+   * 零售：單品改價。**舞弊高風險位**，缺省 = 冇（要明文開）。
+   * 見 docs/124 §R3。
+   */
+  priceOverride?: boolean;
+  /**
+   * 零售：套用折扣。缺省 = 有；配合 `adjustmentRequiresApproval()` 嘅
+   * 閾值（低於某折扣率 / 超過某金額）再彈主管 PIN。
+   */
+  applyDiscount?: boolean;
+  /** 零售：退換貨（行級退貨 + 重新入庫） */
+  returnOrder?: boolean;
 }
 
 export interface AccountStore {
@@ -20,7 +42,11 @@ export interface AccountStore {
   active: boolean;
   code?: string;
   city?: string;
-  industry?: "restaurant" | "salon";
+  /**
+   * 業態。`"retail"` 係 2026-09-12 新增（店家已定案：**零售就係零售**，
+   * 唔同餐飲同機 → `/retail/*` 完全獨立分支，唔需要模式切換器）。
+   */
+  industry?: "restaurant" | "salon" | "retail";
   sourceStoreId?: string;
   sourceActive?: boolean;
   manualDeactivated?: boolean;
@@ -178,6 +204,14 @@ export interface PosRules {
   taxRate: number;
   serviceChargeRate: number;
   paymentMethods: PaymentMethod[];
+  /**
+   * 零售：**結構化**付款方式（選填；有值優先，否則 fallback 用 `paymentMethods` 字串）。
+   *
+   * 🔴 為何唔直接改 `paymentMethods` 嘅型別：佢有**存量門店設定**，
+   * 換咗就會令現有商戶嘅付款方式消失（同 `label.paperSize` 當年靜靜被剷走係同一個坑，見 docs/113）。
+   * 舊字串由 `normalizeRetailPaymentMethods()` 兼容轉換（id = `legacy:<label>`，穩定）。
+   */
+  retailPaymentMethods?: RetailPaymentMethod[];
 }
 
 export interface PosBootstrap {
@@ -207,6 +241,16 @@ export interface PosBootstrap {
 export interface DevicePrinterConfig {
   id: string;
   role: PrinterRole;
+  /**
+   * 零售：**角色集合**，支援「一機兩用」（標籤 + 小票）。
+   *
+   * 部分國產機（例：佳博 GP-2270T、GP-3120TUC）一部機可以同時做兩個角色 ——
+   * 細店一部機就夠，唔使買兩台。
+   *
+   * 缺省 = `[role]`（由 `printerRolesOf()` 兼容推導）→ **舊設定唔使遷移**。
+   * ⚠️ 有值時以 `roles` 為準；`role` 保留做向後兼容讀取（唔好刪，四端都可能讀）。
+   */
+  roles?: PrinterRole[];
   zoneId?: string;
   connectionType: ConnectionType;
   name: string;
@@ -805,6 +849,43 @@ export interface PosLocalSettings {
    * 按 store scope 存落 PosLocalSettings（呢部收銀機嘅本地設定，唔跨店）。
    */
   grossProfitMarginPct?: number | null;
+
+  // ── 零售專屬本地設定（2026-09-12）────────────────────────────────
+  // 🔴 **呢五欄一定要同時加落 `normalizePosLocalSettings()` 白名單**
+  // （`src/lib/storage.ts`）＋ `defaultPosLocalSettings`。
+  // 佢係**逐欄重建**，漏咗就會喺 reload / 雲端同步 normalize 嗰陣被**靜靜剷走**
+  // —— 同 `receipt.qrUrl`、`label.paperSize`、`shiftTemplatePresets` 一模一樣嘅坑
+  // （見 docs/113）。宣告做**必填**就係要 tsc 逼我補齊兩個地方，唔可以靠記性。
+
+  /**
+   * 掃碼槍設定檔（可多支：收銀台一支、貨架區一支）。
+   * 空 = 未設定 → 用 `defaultScannerProfile()`（Enter 結尾、50ms、純數字）。
+   */
+  scannerProfiles: ScannerProfile[];
+  /** 目前生效嘅掃碼槍設定 id（對唔中 → 用第一支 / 預設） */
+  activeScannerProfileId: string;
+  /**
+   * 變重條碼規則（條碼標籤秤 / price-embedded EAN-13）。
+   * 空 = 唔解析變重碼（POS 統一印標籤嘅商戶唔需要）。
+   */
+  weighedBarcodeRules: WeighedBarcodeRule[];
+  /**
+   * 結構化付款方式。空 = fallback 用 `paymentMethods` 字串（舊設定兼容）。
+   * 有值優先（可分辨「邊個要收錢找零 / 開錢箱」）。
+   */
+  retailPaymentMethods: RetailPaymentMethod[];
+  /** 自訂標籤紙（商家自己填寬 × 高 mm；`columns` 由系統算） */
+  customLabelPapers: CustomLabelPaper[];
+  /**
+   * 零售：改價 / 大額折扣需要主管授權嘅閾值。
+   * 純本地（每部收銀機可以唔同）；缺省見 `defaultPosLocalSettings`。
+   */
+  retailApprovalRules: {
+    /** 折扣率低於呢個數就要閘（90 = 低於 9 折） */
+    minDiscountRate: number;
+    /** 單品優惠金額超過呢個數就要閾 */
+    maxLineSaving: number;
+  };
 }
 
 /**
@@ -885,6 +966,28 @@ export interface OrderItem {
   voidedReason?: string;
   /** 操作人帳號 */
   voidedBy?: string;
+
+  // ── 零售專屬（2026-09-12；餐飲留空即完全不受影響）────────────────
+  /**
+   * 零售：SKU / 店內 PLU。
+   * 稱重商品必有 `plu`（秤只需要出重量，PLU 由 POS 統一分配）。
+   */
+  sku?: string;
+  plu?: string;
+  /** 實際掃入嘅條碼（出票要印，退換貨靠佢直接掃返原單） */
+  barcode?: string;
+  /** 變體 id / 顯示名（「黑 / L」）—— 服裝必需 */
+  variantId?: string;
+  variantLabel?: string;
+  /** 序號 / IMEI（序號商品售出時綁定，退貨可反查） */
+  serialNo?: string;
+  /** 稱重商品實際淨重（kg）；金額 = 單價 × 淨重 */
+  weightKg?: number;
+  /**
+   * 🔴 改價前嘅單價（牌價）。
+   * **舞弊審計必需**：只有單價改動過才寫入；對帳 / 報表用「牌價 − 實價」算改價差額。
+   */
+  unitPriceOriginal?: number;
 }
 
 export interface PosOrder {
@@ -1024,6 +1127,23 @@ export interface PosOrder {
   clientUpdatedAt?: string;
   /** 已退菜明細（保留記錄，不計費；結帳 / 退菜後仍留在單上以便追蹤） */
   voidedItems?: OrderItem[];
+
+  // ── 零售專屬（2026-09-12；餐飲留空即完全不受影響）────────────────
+  /**
+   * 零售：**拆分 / 混合付款**逐筆明細（現金 + 電子）。
+   *
+   * `paymentMethod`（單一，上面）照樣保留做「主標籤」，令舊報表 / 舊收據模板唔會壞；
+   * 有新值時收據應該印呢個逐筆明細（`ReceiptSectionId` 會加 `split_payment`）。
+   */
+  splitPayments?: SplitPaymentEntry[];
+  /** 零售：本單賺取嘅會員積分（Ledger 回傳） */
+  pointsEarned?: number;
+  /** 零售：本單完成後嘅積分結餘 */
+  pointsBalanceAfter?: number;
+  /** 零售：換貨單 → 原單 id（退換貨關聯） */
+  exchangeOf?: string;
+  /** 零售：本單涉及嘅序號（由 items 抽出，方便查詢 / 退貨反查） */
+  serialNos?: string[];
 }
 
 export type OnlinePaymentStatus = "paid" | "unpaid";

@@ -194,7 +194,63 @@ type PaymentMethod = {
 
 **唔需要嘅**：零售冇廚房單，所以 `printerGroup` 路由（`kitchen` / `label`）在零售場景等同關閉。但**架構唔拆** —— 因為混合業態店（餐飲 + 零售同一店）可能同一台機兩邊走。
 
-**三端一致性（紅線）**：`EscPosTemplateSnapshot`（`types.ts:660`）係自包含快照，模板一改要同步改 **POS 預覽（`receipt-ticket-preview.tsx`）、Companion、APK、print-hub** 四個出紙端嘅 renderer。只改一邊 = 「介面預覽同實紙唔一致」（已有 `docs/70`、`docs/74`、`docs/99` 前科）。
+**打印機角色（已有，但要擴）**：`PrinterRole = "zone" | "receipt" | "label"`（`types.ts:83`）。
+零售用 `receipt`（收據機）、`label`（標籤機），`zone` 停用。
+
+🔴 **零售要新增「一機兩用」角色** —— 部分國產機（佳博 GP-2270T、GP-3120TUC）支援「標籤 + 小票」雙用，
+一部機可以同時擔任兩個角色。`PrinterRole` 係**單值 union** → 要改成**角色集合**（`roles: PrinterRole[]`）
+或加 `"receipt+label"` 值。**這是零售專屬需求，餐飲側不受影響**（餐飲冇機同時做兩件事）。
+
+**多台打印機（商家確認要）**：完全沿用餐飲既有打印機設定機制（`docs/82` Meituan 式 Wizard）——
+可以加任意多台、每台獨立揀角色、獨立測試列印。零售**唔另做設定介面**。
+
+**型號庫（國產為主）**：國產品牌佔大多數（佳博 Gprinter、漢印 HPRT、芯燁 Xprinter、得力 Deli、
+快麥 KuaiMai、啟銳 Qirui、容大 Rongta、立象 Argox、台半 TSC…）。
+`USB_PRINTER_DB`（`printer-models.ts:35`）現時只有 Gprinter / Xprinter / Rongta / TSC / Zebra 等少數 →
+**要補齊國產型號**。
+⚠️ **VID/PID 必須由實機枚舉收集，唔可以靠猜** —— 國產品牌常見「同一品牌多個 VID」「白牌機共用 VID」。
+設計上要保住既有嘅三層 fallback：命中型號 → 精確配置；只認得品牌 → 品牌預設並標 `generic: true`；
+**全唔認得 → 通用 ESC/POS 預設（照印得到）** + 提供「回報型號」入口。
+
+**⚠️ 標籤模板：現有 `LabelSectionId` 係「飲品杯貼」，零售要新區塊集**
+
+`LabelSectionId`（`types.ts:335-348`）現時係 `header | item_name | temperature | cup_type | sugar | ice | sugar_tag | ice_tag | addons | specs | item_note | order_no | footer` —— **全部係奶茶／咖啡杯貼概念，零售一個都用唔到**（冇價錢、冇條碼、冇原價）。
+
+好消息：`LABEL_PAPER_PRESETS`（`types.ts:483-492`）**已經預留零售紙張**：
+`50x30` → 「零售價籤、商品標示」（28 字／行）、`58x40` → 「收銀機標準價籤」（32 字／行）、`40x30` → 「細標籤 / 條碼」。
+
+所以零售要新增 **`RetailLabelSectionId`**（獨立模板槽位，唔改動飲品標籤）：
+
+```ts
+// 零售標籤新區塊集（types.ts 新增）
+| "store_name"        // 門店名
+| "item_name"         // 商品名
+| "variant"           // 變體（黑 / L）      ← 服裝必需
+| "price"             // 售價（大字）        ← 零售核心
+| "original_price"    // 原價（刪除線）
+| "barcode"           // 條碼（含自編碼）    ← 零售核心
+| "sku"               // SKU
+| "plu"               // PLU（稱重商品）
+| "unit_price"        // 單位價（$ / kg）
+| "net_weight"        // 淨重
+| "packed_date"       // 包裝日期
+| "expiry_date"       // 有效日期（生鮮 / 藥房）
+| "batch_no"          // 批次（藥房）
+| "footer";
+```
+
+**四種零售標籤用途**（同一模板可切換，見確認稿 ⑧）：
+
+| 標籤 | 紙張 | 用途 |
+| --- | --- | --- |
+| **價籤** | 50×30 / 58×40 | 貼貨架，顯示商品名 + 售價 + 原價 + 條碼 |
+| **商品標籤** | 50×30 | 貼商品上，顯示變體 + SKU + 條碼 |
+| **稱重標籤** | 40×30 | 秤壞時嘅備用（正常由條碼標籤秤自己出） |
+| **自編碼標籤** | 40×30 | 無廠碼散裝商品補一個「2」開頭可掃條碼 |
+
+**批量打印（新能力）**：現有標籤打印係 `buildLabelPrintJobs(order)` —— **跟訂單逐件商品出**（`print-center.tsx:1062`）。零售需要**由商品清單反向批量打印**：商品頁多選 → 每件 N 張 → 入打印佇列；改價後一鍵重印受影響價籤。呢個係新增入口，唔影響現有訂單出標籤路徑。
+
+**三端一致性（紅線）**：`EscPosTemplateSnapshot`（`types.ts:660`）係自包含快照，模板一改要同步改 **POS 預覽（`receipt-ticket-preview.tsx`）、Companion、APK、print-hub** 四個出紙端嘅 renderer。只改一邊 = 「介面預覽同實紙唔一致」（已有 `docs/70`、`docs/74`、`docs/99` 前科）。加 `RetailLabelSectionId` = 四端都要加對應 renderer 分支。
 
 ### R6 — 退換貨（改動：中，Phase 2）
 
@@ -292,7 +348,12 @@ keydown 序列 → 緩衝字元
 
 #### 四層方案（由最實用到兜底）
 
-#### W1（首選）：條碼標籤秤 / Price-embedded EAN-13
+> ⚠️ **2026-09-12 商家已拍板：稱重標籤統一由 POS 標籤機印。**
+> 所以下面嘅 W1 由「首選」降為**兼容路徑**（客人已貼秤標籤時照樣掃得到），
+> 真正嘅首選變成 **W3（USB HID 收銀秤）＋ POS 印標籤**。
+> **好處：唔需要買貴嘅「條碼標籤秤」，一台普通電子秤就夠。** 秤只需要出重量，價錢一律由 POS 算。
+
+#### W1（兼容路徑）：條碼標籤秤 / Price-embedded EAN-13
 
 秤自己印一張不乾膠標籤，條碼內容就係 PLU + 重量或金額。POS 只當普通條碼掃 → **零整合、零驅動、iPad 直接可用**。
 
@@ -303,6 +364,9 @@ keydown 序列 → 緩衝字元
 │   └───────────────── PLU / 商品碼，5 位（＝我們商品的 plu）
 └───────────────────── 前綴 20-29 = 店內變重碼；21 = 重量碼、22 = 金額碼
 ```
+
+**仍然要支援嘅理由**：已經用開條碼標籤秤嘅商戶（超市、大型生鮮）唔應該因為升級 POS 而報廢設備；
+另外藥房／生鮮若有分店自行秤重，標籤照樣掃得到。
 
 - **重量碼**例：`21 01234 00350 X` → PLU=01234、淨重 350g → POS 用「單位價 × 0.35kg」算錢
 - **金額碼**例：`02 00123 01234 C` → PLU=00123、總額 $12.34 → POS 直接取金額（唔使再乘）
@@ -330,15 +394,22 @@ keydown 序列 → 緩衝字元
 - 秤壞、標籤爛、客人自備容器、臨時散賣 → 都要行得通
 - **唔可以省略** —— 同「狀態唔准靜默」係同一個原則
 
-#### 建議組合
+#### 建議組合（2026-09-12 拍板後）
 
 | 場景 | 建議方案 |
 | --- | --- |
-| 賣菜／生鮮：客人自揀、秤完貼標籤去收銀 | **W1 條碼標籤秤**（一台秤幾百至千餘 MOP，零整合，最穩） |
-| 收銀台現場稱重（散裝糖果、水果） | Phase 3 做 **W2 Companion 藍牙秤**；或先用 **W3 USB HID 秤** |
-| 任何情況 | **W4 手動輸入**，永遠保留 |
+| **重量點入 POS** | **W3 USB HID 收銀秤**（首選 —— 插上就用、零驅動、零配對） |
+| **標籤（所有情況）** | **統一由 POS 標籤機印** ← 商家拍板 |
+| 秤壞 / 客人自備容器 | **W4 手動輸入**，永遠保留 |
+| 客人已貼秤標籤 | W1 掃變重條碼照樣解析（兼容，非必需） |
+| 想無線 | W2 經 Companion 代理（Phase 3） |
 
-⚠️ **W1 配套注意**：秤端商品庫同 POS 商品庫要用**同一套 PLU**，並**禁止秤端隨意改價**，否則「秤上價 ≠ POS 價」→ 收銀爭議。建議做「PLU 同步」：由 POS 導出 PLU／品名／單價 CSV → 匯入秤端。
+**成本結論**：因為標籤由 POS 印，**唔需要買「條碼標籤秤」**（嗰種機貴，因為內建打印機）。
+一台普通電子秤（USB HID 即可）就夠 —— 秤只出重量，價錢一律由 POS 算。
+
+⚠️ **W1 兼容配套**：若商戶仍用條碼標籤秤，秤端商品庫同 POS 要用**同一套 PLU**，
+並禁止秤端隨意改價，否則「秤上價 ≠ POS 價」→ 收銀爭議。
+（採用「POS 統一印標籤」就**冇呢個問題** —— 秤端根本唔使入商品庫。）
 
 ---
 
@@ -462,6 +533,11 @@ keydown 序列 → 緩衝字元
 | `src/lib/types.ts:856 OrderItem` | 無 sku / barcode / originalUnitPrice / 定額折 / weight | 同上 |
 | `src/lib/types.ts:890 PosOrder` | 無 `splitPayments` / `pointsEarned` / `exchangeOf` / 掛單 | 同上 |
 | `src/lib/types.ts:285 ReceiptSectionId` | 無條碼 / 拆分付款 / 積分 / 退換條款 | 加 5 個區塊，**四端 renderer 同步** |
+| `src/lib/types.ts:335 LabelSectionId` | **係飲品杯貼**（temperature / cup_type / sugar / ice），零售一個都用唔到 | 新增 **`RetailLabelSectionId`** 獨立區塊集（價籤 / 商品標籤 / 稱重 / 自編碼）—— 見 §R5 |
+| `src/lib/types.ts:483 LABEL_PAPER_PRESETS` | ✅ **已預留零售紙張**（50×30 價籤、58×40 標準價籤、40×30 細標籤） | 加「**自訂寬 × 高**」選項（商家自己填 mm，系統自動算 columns） |
+| `PrinterRole`（`types.ts:83`） | 單值 `zone \| receipt \| label` | 擴成**角色集合**以支援「一機兩用」 |
+| `src/lib/types.ts:83 PrinterRole` | ✅ 已有 `zone \| receipt \| label` | 零售用 `receipt` + `label`，唔使改 |
+| `buildLabelPrintJobs()`（`print-center.tsx:1062`） | 只跟訂單逐件出標籤 | 新增「由商品清單批量打印價籤」入口 |
 | `src/lib/types.ts:180 PosRules.paymentMethods` | `string[]` | → `PaymentMethod[]`，**必寫 migration 兼容舊設定** |
 | `src/lib/types.ts:176 allowSplitBill` | 已宣告但**全 repo 未實作** | 補實作（或直接由 `splitPayments` 取代） |
 | `src/lib/types.ts:23 AccountStore.industry` | 只有 `restaurant` / `salon` | 加 `"retail"` |
@@ -575,7 +651,10 @@ keydown 序列 → 緩衝字元
 | D3 | 庫存 | **要即時扣減** | 庫存由「進貨成本追蹤」升級為「可售 SKU 庫存 + 銷售扣減」→ 拉到 Phase 1 |
 | D4 | 條碼 | **都有，要批量匯入** | Phase 0 要做 CSV 匯入 + 條碼欄位（含多條碼） |
 | D5 | 掃碼槍 | **冇現成，要支援大部分型號** | 型號庫 + 自動學習嚮導 → §2.6 |
-| D6 | 稱重 | 要，但擔心網頁版限制 | **用條碼標籤秤（W1）繞開**，唔靠藍牙 → §2.5 |
+| D6 | 稱重 | 要，但擔心網頁版限制 | 重量用 **USB HID 秤 / 手動輸入**；**標籤統一由 POS 印** → §2.5 |
+| D7 | 標籤機品牌 | **國產比較多** | 型號庫要補齊國產（佳博／漢印／芯燁／得力／快麥／啟銳…）+ 保住通用 ESC/POS fallback → §R5 |
+| D8 | 價籤尺寸 | **兩種都加，讓商家自己選，並可自訂** | 加 `CustomLabelPaper`（自訂寬 × 高）→ §8.1 |
+| D9 | 打印機數量 | **多台**，走跟餐飲一樣嘅設定 | 沿用既有打印機設定機制；另加「一機兩用」角色 → §R5 |
 
 ### 7.1 由決定衍生嘅需求（要寫入商品模型）
 
@@ -683,6 +762,36 @@ serialNos?: string[];         // 便於查詢
 | "exchange_of"       // 換貨單標示原單號
 ```
 
+**新增 `RetailLabelSectionId`**（零售標籤獨立區塊集，⚠️ 四端 renderer 同樣要同步）
+
+```ts
+| "store_name" | "item_name" | "variant" | "price" | "original_price"
+| "barcode" | "sku" | "plu" | "unit_price" | "net_weight"
+| "packed_date" | "expiry_date" | "batch_no" | "footer";
+```
+四種用途（同一模板可切換）：**價籤**（貨架）/ **商品標籤**（貼商品）/ **稱重標籤**（統一由 POS 印）/ **自編碼標籤**（無廠碼散裝商品補「2」開頭可掃條碼）。
+
+**自訂標籤紙 + 打印機角色集合（2026-09-12 商家要求「都可以自訂」）**
+
+```ts
+/** 自訂標籤紙：商家自己填 mm；columns 由系統算（唔畀手填，免出紙歪） */
+export interface CustomLabelPaper {
+  id: string;        // "custom-<時間戳>" ⚠️ 唔可以顯示畀用戶，一律顯示 label
+  label: string;     // 商家自己打嘅名，例如「自家價籤」
+  widthMm: number;
+  heightMm: number;
+  columns: number;   // floor((widthMm − 8) / 1.5) — 同 LABEL_PAPER_PRESETS 同一公式
+}
+
+/** 打印機角色：單值 → 集合，以支援「一機兩用」 */
+// PrinterConfig.role: PrinterRole   →   roles: PrinterRole[]
+export type PrinterRole = "zone" | "receipt" | "label";
+// 「標籤 + 小票」雙用 = roles: ["receipt", "label"]
+```
+
+⚠️ 舊設定係**單值** `role` → **必寫遷移**：`role: "receipt"` → `roles: ["receipt"]`。
+同 `paymentMethods` 一樣，唔可以硬換型別（存量門店設定會消失）。
+
 **付款方式結構化（⚠️ 必寫兼容）**
 
 ```ts
@@ -757,6 +866,7 @@ returnOrder?: boolean;
 | `src/lib/retail/stock.ts` | 售出扣減、退貨回補、低庫存判斷 | 🟢 純函式 |
 | `src/lib/retail/hold-orders.ts` | 掛單 / 取單（本地優先，唔上雲） | 純函式 + storage |
 | `src/lib/retail/csv-import.ts` | CSV 解析 + 欄位對照 + 差異預覽（**手寫 parser，唔加外部依賴**） | 🟢 純函式 |
+| `src/lib/retail/label-jobs.ts` | 由商品清單組裝標籤 PrintJob（批量、每件 N 張、重印） | 🟢 純函式 |
 | `src/lib/retail/use-barcode-scanner.ts` | 全域 `keydown` 緩衝 hook（由 `ScannerProfile` 參數化） | React hook |
 | `src/lib/retail/use-retail-cart.ts` | 購物車 hook + localStorage 持久化 | React hook |
 | `src/components/retail/retail-sidebar.tsx` | 零售側欄（仿 `salon/salon-sidebar.tsx`） | UI |
@@ -779,7 +889,8 @@ returnOrder?: boolean;
 | `src/components/device-settings.tsx` | 商品編輯加 SKU／條碼／額外條碼／PLU／單位／稱重／序號／變體 | 中 |
 | `src/components/app-sidebar.tsx` | 依 `industry` 條件渲染導航 | 溫和 |
 | `src/app/page.tsx` | `industry="retail"` → redirect `/retail` | 溫和 |
-| `src/lib/print-templates-sync.ts` + 四端 renderer | 新增 5 個收據區塊 | 🔴 四端要同步、要擰 `versionCode` |
+| `src/components/print-center.tsx` | 新增「零售標籤」模板槽位（`RetailLabelSectionId`）+ 批量價籤打印入口 | 🔴 四端要同步 |
+| `src/lib/print-templates-sync.ts` + 四端 renderer | 新增 5 個收據區塊 **＋ 整個零售標籤區塊集** | 🔴 四端要同步、要擰 `versionCode` |
 
 ### 8.4 Phase 0 出口標準
 
@@ -794,8 +905,179 @@ returnOrder?: boolean;
 
 ---
 
-## 附錄 A — 關鍵代碼事實（供實作時直接查）
+## 9. Phase 0 實作記錄（2026-09-12）
 
+### 9.1 完成狀態
+
+**全部 7 個純函式核心模組 + 型別層 + 設定白名單已完成並通過驗證。**
+
+| 驗證項 | 結果 |
+| --- | --- |
+| `npm run test`（= `node --test`） | **410 pass / 0 fail**（開工前基線 220 → 新增 **190** 個測試） |
+| `tsc --noEmit` | **0 error** |
+| `eslint`（新檔 + 改動檔） | **0 error / 0 warning** |
+| 餐飲側回歸 | ✅ 零影響（220 個既有測試全部照過） |
+
+⚠️ 本機 `npm` 經 git-bash 跑唔到（`/usr/bin/env: bash: No such file or directory`），
+要直接呼叫：`node_modules/typescript/bin/tsc`、`node --test`、`node_modules/eslint/bin/eslint.js`。
+另外 git-bash **冇 coreutils**（`ls` / `grep` / `sed` / `head` / `tail` 全部 command not found）→ 一律用 `node -e` 或專用工具。
+
+### 9.2 新增檔案（10 個模組 + 8 個測試）
+
+全部係**零 runtime 依賴純函式**（只有 `retail-cart.ts` 刻意重用 `../pos/discount.ts`，
+佢本身亦係零 runtime 依賴），所以全部可以 `node --test` 直接載入：
+
+| 模組 | 測試數 | 職責 |
+| --- | --- | --- |
+| `src/lib/retail/types.ts` | — | 零售型別（`RetailProduct` / `RetailVariant` / `ScannerProfile` / `WeighedBarcodeRule` / `RetailPaymentMethod` / `CustomLabelPaper` / `SplitPaymentEntry`）+ 純 helper |
+| `weighed-barcode.ts` | 16 | 變重碼解析（2/02 前綴、PLU 位、重量/金額、校驗位、長前綴優先） |
+| `barcode-index.ts` | 20 | 條碼索引（一商品多條碼、變體條碼、**撞碼要報衝突**）、掃碼解析（變重碼優先） |
+| `scanner-profiles.ts` | 29 | 型號庫（VID = 公司級；未確認嘅留空）+ `learnProfile()` 自動學習 |
+| `retail-cart.ts` | 28 | 購物車（改價 / 定額折 / 稱重 / 變體 / 序號）、金額單一真源、權限閘判斷 |
+| `split-payment.ts` | 22 | 付款方式兼容轉換、拆分付款餘額 / 找零 / 完成驗證 |
+| `stock.ts` | 19 | 即時扣減（**稱重扣 kg 唔係扣 1**）、退貨回補、低庫存 |
+| `printer-roles.ts` | 7 | 角色集合（「一機兩用」）+ 舊單值 `role` 兼容推導 |
+| `csv-import.ts` | 24 | 手寫 CSV parser、中文表頭對照、逐行驗證、差異預覽 |
+| `barcode-scanner-core.ts` | 17 | 鍵盤緩衝狀態機（用**時間**分辨掃碼 / 人手打字） |
+| `use-barcode-scanner.ts` | — | React hook（只做接線；判斷邏輯全部喺 core） |
+
+### 9.3 改動嘅現有檔案（全部「純新增」，零語義改動）
+
+| 檔案 | 改動 |
+| --- | --- |
+| `src/lib/types.ts` | `AccountStore.industry` 加 `"retail"`；`UserPermissions` 加 `priceOverride` / `applyDiscount` / `returnOrder`；`OrderItem` 加 8 個零售欄；`PosOrder` 加 5 個零售欄；`PosRules` 加選填 `retailPaymentMethods`；`DevicePrinterConfig` 加選填 `roles`；`PosLocalSettings` 加 6 個**必填**零售欄 |
+| `src/lib/storage.ts` | `normalizePosLocalSettings` 白名單加 6 欄（**紅線**：漏咗就 reload 被剷走） |
+| `src/lib/mock-data.ts` | `defaultPosLocalSettings` 補齊 6 個新欄嘅預設值 |
+
+🔴 **`PosLocalSettings` 嘅新欄刻意宣告做「必填」** —— 咁樣 tsc 會逼你同時改
+`normalizePosLocalSettings` 同 `defaultPosLocalSettings`，唔可以靠記性。
+實測有效：加完之後 tsc 即刻指出兩處要補（`mock-data.ts:323`、`storage.ts:302`）。
+
+### 9.4 三個刻意嘅技術決定（同原計劃唔同）
+
+**① 收據 / 標籤區塊**（`ReceiptSectionId` +5、`RetailLabelSectionId`）**延後到打印子階段。**
+
+原因：加區塊要**同時**改四處先唔會出事 —— `RECEIPT_SECTION_META`（設計介面顯示）、
+`RECEIPT_BLOCK_DEFAULTS`（`Record<>` 必填）、`buildReceiptContent`（內容），
+**加上四端 renderer**（POS 預覽 / Companion / APK / print-hub）。
+若只加前三處，商家就會喺設計頁見到一個「撳咗冇反應」嘅開關
+—— 而 `docs/113` 明文禁止製造死開關（前科：`kitchen` 嘅 `server` / `customer_count`）。
+所以呢部分同「四端同步 + 擰 `versionCode`」一次過做，唔可以拆。
+
+**② `types.ts` 一律用「加選填欄位」而唔改既有欄位型別。**
+
+- `PosRules.paymentMethods` **保持 `string[]` 唔動**，另加選填 `retailPaymentMethods?: RetailPaymentMethod[]`
+  （有值優先）。原本計劃係改成 `Array<string | RetailPaymentMethod>`，但咁樣會令
+  `pos-app.tsx:6412` 等既有 `paymentMethods.map(...)` 直接型別爆掉，風險唔值得。
+- `DevicePrinterConfig.role` 保持單值，另加選填 `roles?: PrinterRole[]`，
+  由 `printerRolesOf()` 兼容推導 → **舊設定完全唔使遷移**。
+- `PosLocalSettings.paymentMethods` 同理保留。
+
+**③ 零售型別獨立放 `src/lib/retail/types.ts`，唔塞入 `lib/types.ts`。**
+
+零售型別係全新、零遺留依賴；塞入 `types.ts`（已 1000+ 行）只會增加誤改既有
+union / `Record<>` 嘅風險（一改就四端出紙要跟）。**需要改既有結構**嘅欄位
+（`OrderItem` / `PosOrder` / `PosLocalSettings`）就仍然寫喺 `lib/types.ts`。
+
+### 9.5 實作過程捉到嘅 5 個真 bug（全部有回歸測試鎖住）
+
+| # | Bug | 後果 | 捉到方法 |
+| --- | --- | --- | --- |
+| 1 | `addRetailLine` 只檢查「新加入嘅行」可否合併，**冇檢查已存在嘅行** | 已綁序號嘅行被合併 → 一物一碼失效 | 單測 |
+| 2 | 同上，已存在嘅**稱重行**被同簽名新行合併 | 兩件實物變一行 | 單測（補測） |
+| 3 | 緩衝狀態機嘅間隔檢查用 `lastAt > 0` | 第一鍵時間戳係 0 時，之後每一鍵都跳過間隔檢查 → **人手打字被當成掃碼** | 單測 |
+| 4 | `maxLength` 用**含前綴**嘅長度比 | 有 `~` 前綴嘅槍永遠多一位 → 13 位條碼被誤判「太長」 | 單測 |
+| 5 | `use-barcode-scanner` 喺 render 期間寫 `cbRef.current` | React 19 `react-hooks/refs` 報 error | eslint |
+
+另外修咗 3 個**我自己寫錯嘅測試斷言**（唔係實作錯）：
+`weight_kg` + `divisor:1` 嘅語義（整數公斤）、`parseMoney("-$5")` 應回 `-5`（範圍驗證係 caller 責任）、
+`toHexId("0X0416")` 大小寫契約。**測試錯同實作錯要分清楚，唔可以為咗過測試而改實作。**
+
+### 9.6 下一步（Phase 1）
+
+1. **`/retail` 路由骨架** + 側欄（依 `industry === "retail"` 條件渲染）
+2. **商品編輯頁**（`device-settings.tsx`）：SKU / 多條碼 / PLU / 單位 / 稱重 / 序號 / 變體矩陣
+3. **收銀台三欄 UI**（`use-barcode-scanner` + `retail-cart` + `split-payment` 接上去）
+4. **零售商品持久化**：目前**未決定**存邊（localStorage 會令 `localSettings` 寫入膨脹，
+   而寫入失敗係已知靜默風險）→ 建議獨立 store key，唔好塞入 `PosLocalSettings`
+5. 打印子階段（收據 5 區塊 + 零售標籤區塊集 + 四端 renderer + 擰 `versionCode`）
+
+---
+
+## 10. Phase 1 實作記錄（2026-09-12 · 收銀台可跑）
+
+### 10.1 完成內容
+
+| 層 | 檔案 | 內容 |
+| --- | --- | --- |
+| 持久化 | `src/lib/storage.ts` | 新增 `retailProducts` store-scoped key（`macau-pos/stores/{storeId}/retail-products`）+ `loadRetailProducts` / `saveRetailProducts` / `getRetailProductsKey` |
+| 純函式 | `src/lib/retail/catalog-ops.ts`（24 測） | 商品查詢 / 新增 / 更新 / 停售 / 刪除 / 改庫存、搜尋（**完全匹配優先**）、排序、CSV 匯入套用、統計 |
+| 結帳 | `src/lib/retail/retail-orders.ts` | `settleRetailOrder()`：扣庫存 → 落單（`settled`）→ 入 outbox → 通知 flush |
+| 路由 | `src/app/retail/{layout,page}.tsx`、`products/page.tsx` | `/retail`（收銀台）、`/retail/products`（商品管理） |
+| 元件 | `src/components/retail/{retail-sidebar,retail-counter,retail-products}.tsx` | 側欄、三欄收銀台、商品管理 + CSV 匯入 |
+
+**驗證**：
+
+| 項 | 結果 |
+| --- | --- |
+| `tsc --noEmit` | **0 error** |
+| `eslint`（新檔 + 改動檔） | **0 error / 0 warning** |
+| `node --test` | **434 pass / 0 fail**（Phase 0 完結時 410 → 新增 24） |
+| `next build` | ✅ **成功**（Compiled 67s、TypeScript 64s、**73/73 靜態頁**；`/retail` 同 `/retail/products` 兩個新路由都出到） |
+
+⚠️ **未做 runtime 驗證**：`/retail` 喺 `AuthGuard` 後面，未登入會跳去 `/login`，
+所以自動截圖驗證需要先 seed 一個登入 session。**建議商家自己開一次**（`npm run dev` → 登入 → `/retail`）。
+
+### 10.2 三個關鍵實作決定
+
+**① 零售商品唔放 `PosLocalSettings`，用獨立 store key。**
+理由：商品可能幾千件，塞入設定會令 `savePosLocalSettings` 膨脹；而設定寫入失敗係已知靜默風險
+（docs/71 P1-A），唔應該同商品資料互相拖累。獨立 key = 同 orders / printJobs 同級待遇。
+
+**② 結帳狀態一律 `settled`，唔用 `paid`。**
+`paid` 係快餐 counter 專用（單向閘，docs/113）。零售係「一手交錢一手交貨」即時完成 →
+必須 `settled`，否則 `isSaleCountable()` 唔會計入營業額。
+
+**③ 結帳次序：先扣庫存並寫入商品主檔，再落單。**
+若庫存寫入失敗（quota / 私隱模式），**照樣落單但大聲 `console.error`** ——
+唔可以因為庫存寫唔入而食咗客人張單（錢已經收咗）。超賣（`shortfall > 0`）另外 `console.warn`
+並喺 toast 講明，唔靜默。
+
+### 10.3 秤標籤「金額碼」反推重量（新增細節）
+
+變重條碼有兩種：**重量碼**（有 kg）同**金額碼**（只有總額）。
+若係金額碼又唔知重量，庫存就扣唔到 kg。解法：**金額 ÷ 商品單價 = 重量**（`weightKg = price / unitPrice`），
+令兩種碼都扣得到 kg。單價係 0 時唔可以反推 → 退化成「改價成秤上金額」並用 toast 講明。
+
+### 10.4 ⚠️ 刻意未做：出票（打印）
+
+**零售單目前唔會自動出收據。** 原因同 §9.4 ①一樣：零售收據要新區塊
+（品項條碼 / 拆分付款明細 / 會員積分 / 退換貨條款），而加區塊必須**四端 renderer 同步** +
+擰 `versionCode`；只加一半會變「撳咗冇反應」嘅死開關（docs/113 明文禁止）。
+`settleRetailOrder()` 尾段已留 `TODO` 位置（`appendPrintJobsWithSync(buildReceiptPrintJobs(order))`）。
+
+**標籤打印**同理（`RetailLabelSectionId`）。
+
+### 10.5 已知限制（唔係 bug，係未做）
+
+- 側欄只有「收銀台 / 商品」——**刻意唔連去未起好嘅頁**（死連結比少個入口更差）
+- 冇「掛單 / 取單」（`hold-orders.ts` 仍係 Phase 2）
+- 冇退換貨（Phase 2）
+- 商品**未上雲**：目前只落本機 `retail-products` key；`pos_products` 表 + 跨裝置同步要另一輪工作
+  （**注意**：跨裝置餐牌同步失效係本專案已知問題，見 docs/92、docs/113）
+- `retailApprovalRules`（改價 / 折扣授權閾值）目前只**顯示**，未接 PIN 閘
+
+### 10.6 下一步
+
+1. **出票子階段**（最高優先，商家最關心）：收據 5 區塊 + 零售標籤區塊集 + 四端 renderer + 擰 `versionCode`
+2. 商品上雲（`pos_products`）+ 跨裝置同步
+3. PIN 權限閘接上 `retailApprovalRules`
+4. 掛單 / 取單、退換貨
+5. 庫存 / 報表 / 交班頁加入側欄
+
+---
+
+## 附錄 A — 關鍵代碼事實（供實作時直接查）
 | 事實 | 位置 |
 | --- | --- |
 | 純函式購物車（**最值錢的可重用資產**） | `src/lib/kiosk-cart.ts:13,28,40,50,73` + `kiosk-cart.test.ts` |

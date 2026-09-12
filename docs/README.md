@@ -1,6 +1,6 @@
 # Macau POS System — 文檔索引
 
-> **最後更新**：2026-08-12  
+> **最後更新**：2026-09-12  
 > **Repo**：[homeu98-glitch/macauPosSystem](https://github.com/homeu98-glitch/macauPosSystem)  
 > **部署**：[macau-pos-system.vercel.app](https://macau-pos-system.vercel.app)
 
@@ -24,6 +24,7 @@
 | 功能成熟度審查 | [reviews/functional-review.md](./reviews/functional-review.md) |
 | **專案「坑」總表（改動前必讀）** | [113-agent-gotchas.md](./113-agent-gotchas.md) |
 | **掃碼下單雙模式（堂食 / 快餐）方案** | [115-scan-dine-in-vs-quick-plan.md](./115-scan-dine-in-vs-quick-plan.md) |
+| **掃碼自助扣餘額 v3.5（對 Ledger 確認單）** | [126-scan-debit-questions-to-ledger.md](./126-scan-debit-questions-to-ledger.md) |
 | Admin 帳戶 SQL | [sql/admin-account-schema.sql](./sql/admin-account-schema.sql) |
 
 ---

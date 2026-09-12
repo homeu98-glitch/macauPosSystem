@@ -16,6 +16,7 @@ import {
   UserPermissions,
   UserRole,
 } from "@/lib/types";
+import type { RetailProduct } from "@/lib/retail/types";
 import {
   MAX_SELF_ORDER_NOTICES,
   type SelfOrderNotice,
@@ -104,6 +105,14 @@ const STORE_SUFFIX = {
    * 有上限、可被覆蓋、唔會參與收入計算（報表用 `onlineOrderId` 去重）。
    */
   ledgerOrderCache: "ledger-order-cache",
+  /**
+   * 零售商品主檔（2026-09-12）。
+   *
+   * 🔴 **刻意唔放 `PosLocalSettings`**：商品可能有幾千件，塞入去會令設定寫入
+   * （`savePosLocalSettings`）膨脹；而設定寫入失敗係已知靜默風險（docs/71 P1-A），
+   * 唔應該同商品資料互相拖累。所以獨立一個 store-scoped key，同 orders / printJobs 同級。
+   */
+  retailProducts: "retail-products",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -233,6 +242,33 @@ function resolveSettingsStoreScope(): string | null {
 /** 畀 UI read-back 驗證用：返回當前模板設定實際寫入嘅 localStorage key。 */
 export function getLocalSettingsKey(): string {
   return storeScopedStorageKey(STORE_SUFFIX.localSettings, resolveSettingsStoreScope());
+}
+
+/** 零售商品主檔實際寫入嘅 localStorage key（UI read-back 驗證用）。 */
+export function getRetailProductsKey(): string {
+  return storeScopedStorageKey(STORE_SUFFIX.retailProducts, resolveSettingsStoreScope());
+}
+
+/**
+ * 讀零售商品主檔。
+ *
+ * 只做 I/O；**驗證 / 修復邏輯唔喺呢度**（見 `@/lib/retail/catalog-ops`）。
+ * 讀到唔係陣列（殘缺 / 手改過）→ 回空陣列，唔會拋錯炸死成個 POS。
+ */
+export function loadRetailProducts(): RetailProduct[] {
+  const raw = readStoreJson<unknown>(STORE_SUFFIX.retailProducts, [], resolveSettingsStoreScope());
+  return Array.isArray(raw) ? (raw as RetailProduct[]) : [];
+}
+
+/**
+ * 寫零售商品主檔。
+ *
+ * ⚠️ 回傳 `false` = **寫入失敗**（quota 滿 / 私隱模式 / kiosk WebView 限制）。
+ * 呼叫端**必須**出聲，唔可以靜默當成功 —— 呢個係 docs/71 P1-A 嘅明確教訓
+ * （當年靜默失敗造成「撳完似開咗、reload 打回原形」）。
+ */
+export function saveRetailProducts(products: readonly RetailProduct[]): boolean {
+  return writeStoreJson(STORE_SUFFIX.retailProducts, products, resolveSettingsStoreScope());
 }
 
 export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): DeviceConfig | null {
@@ -428,6 +464,46 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     // 毛利（估）手動設定毛利率 %：舊 localStorage 冇呢欄 → 用預設 null（系統估算）。
     grossProfitMarginPct:
       typeof settings?.grossProfitMarginPct === "number" ? settings.grossProfitMarginPct : defaultPosLocalSettings.grossProfitMarginPct,
+
+    // ── 零售（2026-09-12）──────────────────────────────────────────
+    // 🔴 呢一段係**逐欄重建**嘅白名單。漏咗任何一欄，商家設定好之後一 reload /
+    // 雲端同步 normalize 就會**被靜靜剷走** —— 同 `receipt.qrUrl`、`label.paperSize`、
+    // `shiftTemplatePresets` 一模一樣嘅坑（見 docs/113）。
+    // 加欄時一定要同時改呢度 + `defaultPosLocalSettings`（型別係必填，tsc 會逼你）。
+    scannerProfiles: Array.isArray(settings?.scannerProfiles)
+      ? settings.scannerProfiles.filter(
+          (p) => p && typeof p.id === "string" && typeof p.name === "string",
+        )
+      : defaultPosLocalSettings.scannerProfiles,
+    activeScannerProfileId:
+      typeof settings?.activeScannerProfileId === "string"
+        ? settings.activeScannerProfileId
+        : defaultPosLocalSettings.activeScannerProfileId,
+    weighedBarcodeRules: Array.isArray(settings?.weighedBarcodeRules)
+      ? settings.weighedBarcodeRules.filter(
+          (r) => r && typeof r.id === "string" && Array.isArray(r.prefixes),
+        )
+      : defaultPosLocalSettings.weighedBarcodeRules,
+    retailPaymentMethods: Array.isArray(settings?.retailPaymentMethods)
+      ? settings.retailPaymentMethods.filter(
+          (m) => m && typeof m.id === "string" && typeof m.label === "string",
+        )
+      : defaultPosLocalSettings.retailPaymentMethods,
+    customLabelPapers: Array.isArray(settings?.customLabelPapers)
+      ? settings.customLabelPapers.filter(
+          (p) => p && typeof p.id === "string" && typeof p.widthMm === "number",
+        )
+      : defaultPosLocalSettings.customLabelPapers,
+    retailApprovalRules: {
+      minDiscountRate:
+        typeof settings?.retailApprovalRules?.minDiscountRate === "number"
+          ? settings.retailApprovalRules.minDiscountRate
+          : defaultPosLocalSettings.retailApprovalRules.minDiscountRate,
+      maxLineSaving:
+        typeof settings?.retailApprovalRules?.maxLineSaving === "number"
+          ? settings.retailApprovalRules.maxLineSaving
+          : defaultPosLocalSettings.retailApprovalRules.maxLineSaving,
+    },
   };
 }
 

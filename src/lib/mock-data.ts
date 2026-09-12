@@ -537,4 +537,15 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   },
   // 毛利（估）手動設定毛利率 %：預設 null = 用系統估算。見 PosLocalSettings.grossProfitMarginPct。
   grossProfitMarginPct: null,
+
+  // ── 零售（2026-09-12）──────────────────────────────────────────
+  // 全部預設空 → 零售商戶第一次入設定頁自己建。
+  // ⚠️ 餐飲 / 沙龍商戶永遠唔會見到（`/retail/*` 係獨立分支），所以空預設零影響。
+  scannerProfiles: [],
+  activeScannerProfileId: "",
+  weighedBarcodeRules: [],
+  retailPaymentMethods: [],
+  customLabelPapers: [],
+  // 改價一律要閘；低於 9 折或單品優惠 > $50 要主管授權。
+  retailApprovalRules: { minDiscountRate: 90, maxLineSaving: 50 },
 };
