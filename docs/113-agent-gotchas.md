@@ -756,3 +756,38 @@ and j.status in ('pending', 'failed')
   卡片加 `min-w-0 overflow-hidden`，藥丸列 `flex-wrap`；容器加 `min-w-0`。
 - 藥丸文案上限：**4 個中文字**（「已結帳」「未結帳」「待安排座位」剛剛好）。
 
+## 🔴 開關店（開啟／關閉接單）＋ 自動接單：Ledger RPC 做真源（2026-09-12 · 見 `docs/125`）
+
+- 三支 RPC（店員 JWT 直連，`src/lib/ledger/order-config.ts`）：
+  `get_merchant_order_config` / `merchant_set_order_enabled` / `merchant_set_auto_accept`，
+  三支都**回傳整份 order config** → 撳完直接用回傳更新 UI，**唔使**再 GET。
+  授權 = `is_merchant_staff`；顧客 JWT（掃碼）→ `not authorized`。
+- 🔴 **唔可以**為咗切一粒掣去叫 `merchant_update_order_config` / `merchant_update_order_basics`
+  —— 嗰兩支係**整包覆寫**，會靜靜剷走接單時段、盒費、折扣。開關店／自動接單一律只改自己一欄。
+- 🔴 **自動接單真源已由 POS DB 搬去 Ledger**。docs/92 嗰條出站 HTTP push
+  （`pushAutoAcceptToLedger`，`src/lib/ledger/auto-accept-sync.ts`）**已退役**，
+  **唔好兩條並存** —— 兩條路寫同一個 Ledger 欄位會互相覆寫。
+  `/api/online-order-settings` 由「真源 + 出站」降級做**純鏡像寫入**（唔再 call Ledger）。
+  `useOnlineOrderSettings()` 已成薄殼（API 保留，內部轉 `useMerchantOrderConfig`）。
+- 🔴 **`merchant_enabled` 缺欄一律 `null`，唔可以當 `true`／`false`**
+  （一個話你停業、一個話你營業，兩個方向都係講大話）→ UI 顯示「未接通」並停用。
+  解析收喺**零依賴純模組** `src/lib/ledger/order-config-parse.ts` ＋ `npm run test`。
+  ⚠️ 字串 `"false"` 係 truthy，一定要明確轉換（已處理 0/1 同 `"true"`/`"false"`）。
+- 🔴 **Ledger 冇 MQTT／webhook → 跨機同步要靠 POS 鏡像 ＋ Realtime**：
+  RPC 成功後把回傳值 POST 落 `pos_online_order_settings`（migration `0036` 加
+  `merchant_enabled`），借 0019 已有嘅 publication 廣播；另加 `visibilitychange` 補拉
+  （**禁 polling**）。Ledger Web／另一部 Android 改咗仍然要等 POS 下次讀 RPC。
+- ⚠️ **0036 未跑會 `42703`**：route GET/POST 兩邊都要降級（`isMissingMerchantEnabledColumn`
+  → 剝走該欄再試），**唔可以**令 500 連累既有 `auto_accept` 讀寫。
+- 🔴 **關店 = 會員通即刻落唔到新單**（`create_order` 擋，`auto_accept` 仍 true 都唔會自動接）
+  → **必須二次確認**（做喺共用元件 `MerchantOpenPill` 內，三個 call site 自動繼承）；
+  開店唔阻手。關店時**唔可以**順手寫 `auto_accept=false`，只係把嗰粒掣灰掉（開返店保留原設定）。
+- 開店最常見失敗：`at least one payment method required`（餘額扣點／到店付款兩種都關）
+  → 已在 `mapRpcErrorMessage()` 出繁中文案。
+- 📌 **一個 module store 三個 UI 落點**（`useMerchantOrderConfig`，**唔可以**各自 `useState`，
+  否則會開幾條 channel、幾邊 state 唔同步）：`online-orders.tsx` 標題列、
+  `quick-mode-orders-bar.tsx` 標題列、設備設定新 tab「線上接單」
+  （`activeTab === "online-orders"` 本來就喺 union type 但一直空置）。
+- ⚠️ 上游契約 v3.4（`docs/integration/ledger-client-api.md` §5.5）**未收錄**呢兩支
+  → DB 已 `GRANT EXECUTE` 畀 `authenticated`，技術上打得到，但**要請 Ledger 補 v3.5 白名單**。
+

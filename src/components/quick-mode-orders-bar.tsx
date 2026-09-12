@@ -1,9 +1,14 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { MerchantOpenPill } from "@/components/merchant-open-pill";
 import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { useSelfOrderAutoAccept } from "@/components/self-order-auto-accept-toggle";
+import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
+import { loadAuthSession } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 
 type QuickModeOrdersBarProps = {
@@ -55,6 +60,66 @@ function QuickSelfOrderAutoAcceptPill() {
   );
 }
 
+/**
+ * 快餐點餐介面 · 線上訂單嘅兩粒掣：「開啟接單（開關店）」＋「自動接單」。
+ *
+ * 兩粒都要同一個 module store（`useMerchantOrderConfig`）嘅值：
+ * 店關咗就要把「自動接單」灰掉，所以唔可以拆做兩個元件各自讀。
+ * 同訂單頁／設備設定亦係同一個 store → 三邊即時一致，唔會開多幾條 Realtime channel。
+ *
+ * ⚠️ 關店關嘅係**成間舖嘅線上單**（唔止快餐），所以一定要二次確認（喺 pill 內部做）。
+ */
+function QuickOnlineOrderControls({
+  autoAccept,
+  onAutoAcceptChange,
+}: {
+  autoAccept: boolean;
+  onAutoAcceptChange: (next: boolean) => void;
+}) {
+  const [storeId, setStoreId] = useState<string | null>(null);
+  useEffect(() => {
+    setStoreId(loadAuthSession()?.merchantId ?? null);
+  }, []);
+
+  const config = useMerchantOrderConfig(storeId, Boolean(storeId));
+
+  if (!storeId) return null; // 冇登入記錄 → 唔顯示，避免商家以為設定咗
+
+  const busy = config.loading || config.saving !== "none";
+  const busyHint = config.loading
+    ? "（讀取中…）"
+    : config.saving === "merchant"
+      ? "（切換中…）"
+      : config.saving === "auto"
+        ? "（儲存中…）"
+        : undefined;
+
+  return (
+    <>
+      <MerchantOpenPill
+        busy={busy}
+        busyHint={busyHint}
+        disabled={!config.available}
+        error={config.saving === "none" ? config.error : null}
+        merchantEnabled={config.merchantEnabled}
+        onChange={(next) => void config.setMerchantEnabled(next)}
+        unknownHint="未讀到 Ledger 接單狀態，請去「設置 › 線上接單」重新整理。"
+        variant="contained"
+      />
+      <AutoAcceptPill
+        busy={busy}
+        busyHint={busyHint}
+        disabled={config.merchantEnabled !== true}
+        enabled={autoAccept}
+        label="自動接單"
+        onChange={onAutoAcceptChange}
+        size="md"
+        variant="contained"
+      />
+    </>
+  );
+}
+
 export function QuickModeOrdersBar({
   currency,
   autoAcceptOnline,
@@ -78,12 +143,9 @@ export function QuickModeOrdersBar({
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線上訂單</div>
-            <AutoAcceptPill
-              enabled={autoAcceptOnline}
-              label="自動接單"
-              onChange={onAutoAcceptOnlineChange}
-              size="md"
-              variant="contained"
+            <QuickOnlineOrderControls
+              autoAccept={autoAcceptOnline}
+              onAutoAcceptChange={onAutoAcceptOnlineChange}
             />
           </div>
           <QuickOnlineOrdersPanel

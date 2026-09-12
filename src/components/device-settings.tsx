@@ -44,6 +44,7 @@ import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { MerchantOrderConfigSection } from "@/components/merchant-order-config-section";
 import {
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
@@ -432,9 +433,10 @@ export function DeviceSettings() {
   // 去「同步」自動接單設定，但**每個分支都 `return current`** —— server 返嚟嘅值從來冇被採用過，
   // 係死 code。更慘嘅係佢畀咗人錯覺「有做同步」，結果 Ledger 改咗 POS 完全唔會顯示。
   //
-  // 而家統一由 `useOnlineOrderSettings()`（src/lib/pos/use-online-order-settings.ts）負責：
-  // server 係真源、全店共用、Realtime 即時推送。呢度唔好再自己讀，
-  // 否則又會出現兩個真源互相打架。
+  // 而家統一由 `useMerchantOrderConfig()`（src/lib/pos/use-merchant-order-config.ts）負責：
+  // **Ledger RPC 係真源**（開關店 + 自動接單一次讀埋），POS DB 只做跨機 Realtime 鏡像，
+  // localStorage 係離線快取。設備設定嘅 UI 喺 `MerchantOrderConfigSection`。
+  // 呢度唔好再自己讀，否則又會出現兩個真源互相打架。
 
   useEffect(() => {
     async function loadRemoteConfig() {
@@ -1060,6 +1062,7 @@ export function DeviceSettings() {
             ["menu", "菜單"],
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
+            ["online-orders", "線上接單"],
             ["notes", "備註"],
             ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],
@@ -2808,6 +2811,9 @@ export function DeviceSettings() {
         ) : null  }
 
 
+
+        {/* 線上接單（會員通）：開關店 + 自動接單 —— Ledger 真源，POS 鏡像（見元件註釋） */}
+        {activeTab === "online-orders" ? <MerchantOrderConfigSection /> : null}
 
         {activeTab === "payments" ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">

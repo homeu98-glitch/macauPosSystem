@@ -1,0 +1,20 @@
+﻿
+C:\dev\macauPos\macauPosSystem\src\components\device-settings.tsx
+  246:6   warning  React Hook useEffect has a missing dependency: 'config'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  576:28  warning  '_' is assigned a value but never used                                                                     @typescript-eslint/no-unused-vars
+  577:20  warning  '_notePresets' is assigned a value but never used                                                          @typescript-eslint/no-unused-vars
+  578:26  warning  '_cancelNotePresets' is assigned a value but never used                                                    @typescript-eslint/no-unused-vars
+  579:24  warning  '_compNotePresets' is assigned a value but never used                                                      @typescript-eslint/no-unused-vars
+  580:28  warning  '_discountNotePresets' is assigned a value but never used                                                  @typescript-eslint/no-unused-vars
+  847:28  warning  '_autoAccept' is assigned a value but never used                                                           @typescript-eslint/no-unused-vars
+  848:20  warning  '_notePresets' is assigned a value but never used                                                          @typescript-eslint/no-unused-vars
+  849:26  warning  '_cancelNotePresets' is assigned a value but never used                                                    @typescript-eslint/no-unused-vars
+  850:24  warning  '_compNotePresets' is assigned a value but never used                                                      @typescript-eslint/no-unused-vars
+  851:28  warning  '_discountNotePresets' is assigned a value but never used                                                  @typescript-eslint/no-unused-vars
+
+C:\dev\macauPos\macauPosSystem\src\components\online-orders.tsx
+  362:6  warning  React Hook useEffect has a missing dependency: 'dateFilter'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+鉁?12 problems (0 errors, 12 warnings)
+
+

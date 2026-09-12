@@ -5,6 +5,7 @@ import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { MerchantOpenPill } from "@/components/merchant-open-pill";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import {
@@ -64,6 +65,7 @@ import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
 import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
+import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
 import { AuthSession, loadAuthSession, loadPosLocalSettings, loadPrintJobs } from "@/lib/storage";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
 import { formatMoney } from "@/lib/format";
@@ -138,9 +140,11 @@ export function OnlineOrders({
 }) {
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
-  // 自動接單：**server 係真源、全店共用**，localStorage 只係離線快取（docs/92）。
+  // 自動接單：**Ledger RPC 係真源、全店共用**，POS DB 只做跨機 Realtime 鏡像（docs/92 + 0036）。
   // 唔好再讀 `localSettings.onlineOrderSettings.autoAccept` —— 嗰個已經降級做快取。
   const { autoAccept, setAutoAccept } = useOnlineOrderSettings(merchantId, Boolean(merchantId));
+  // 開關店（`merchant_enabled`）：同一個 config、同一次讀取，所以喺同一個 store 度攞。
+  const merchantOrderConfig = useMerchantOrderConfig(merchantId, Boolean(merchantId));
 
   const [activeTab, setActiveTab] = useState<LedgerOrderTab>("all");
   const [internalDateFilter, setInternalDateFilter] = useState<LedgerOrderDateFilter>("today");
@@ -999,8 +1003,15 @@ export function OnlineOrders({
   const panel = (
     <>
       <div className={`shrink-0 border-b border-slate-200 bg-white px-4 ${embedded ? "py-3" : "py-4"}`}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
+        {/*
+          2026-09-12 商家需求（純 UI）：filter chips 併入標題同一排，慳返一行高度畀下面嘅訂單列表。
+          靠左排；唔夠位時 chips 自己 flex-wrap 掉第二行（唔會爆版）。
+          三欄：標題塊（shrink-0）／chips（flex-1 min-w-0）／右側控件（ml-auto shrink-0）。
+          ⚠️ chips 欄一定要 `min-w-0`，否則 flex 子項最小闊度＝內容闊度 → 窄屏撐爆外層。
+          ⚠️ 外層唔可以加 `justify-between`：chips 欄靠 `flex-1` 吃滿中間，右欄自然貼右。
+        */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="min-w-0 shrink-0">
             <div className={`font-semibold text-slate-900 ${embedded ? "text-sm" : "text-lg"}`}>
               {embedded ? "線上訂單" : "會員通線上訂單"}
             </div>
@@ -1008,8 +1019,60 @@ export function OnlineOrders({
               {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單 {stats.pending} 張
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            {TABS.map((tab) => (
+              <button
+                key={tab.key}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                }`}
+                onClick={() => setActiveTab(tab.key)}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
+            {!embedded ? (
+              <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
+                {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
+                  <button
+                    key={filter.key}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                      filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                    }`}
+                    onClick={() => changeDateFilter(filter.key)}
+                    type="button"
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {/*
+              開關店（`merchant_enabled`）：全店線上單總掣。關咗之後**唔會**順手寫
+              `auto_accept=false`，只係把下面嗰粒掣灰掉（開返店保留原設定）。
+            */}
+            <MerchantOpenPill
+              busy={merchantOrderConfig.loading || merchantOrderConfig.saving !== "none"}
+              busyHint={
+                merchantOrderConfig.loading
+                  ? "（讀取中…）"
+                  : merchantOrderConfig.saving === "merchant"
+                    ? "（切換中…）"
+                    : undefined
+              }
+              disabled={!merchantOrderConfig.available || !merchantId}
+              error={merchantOrderConfig.saving === "none" ? merchantOrderConfig.error : null}
+              merchantEnabled={merchantOrderConfig.merchantEnabled}
+              onChange={(next) => void merchantOrderConfig.setMerchantEnabled(next)}
+              unknownHint="未讀到 Ledger 接單狀態，請去「設置 › 線上接單」重新整理。"
+              variant="contained"
+            />
             <AutoAcceptPill
+              busy={merchantOrderConfig.loading || merchantOrderConfig.saving !== "none"}
+              disabled={merchantOrderConfig.merchantEnabled !== true}
               enabled={autoAccept}
               onChange={(next) => void setAutoAccept(next)}
               variant="contained"
@@ -1023,36 +1086,6 @@ export function OnlineOrders({
               {refreshing ? "刷新中…" : "手動刷新"}
             </button>
           </div>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {TABS.map((tab) => (
-            <button
-              key={tab.key}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-              }`}
-              onClick={() => setActiveTab(tab.key)}
-              type="button"
-            >
-              {tab.label}
-            </button>
-          ))}
-          {!embedded ? (
-            <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
-              {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
-                <button
-                  key={filter.key}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                    filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                  }`}
-                  onClick={() => changeDateFilter(filter.key)}
-                  type="button"
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
       </div>
 

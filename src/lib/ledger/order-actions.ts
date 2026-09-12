@@ -25,6 +25,10 @@ export function mapRpcErrorMessage(message: string): string {
   if (lower.includes("order already closed")) return "訂單已結束，無法再修改。";
   if (lower.includes("delivery dispatch active")) return "派送進行中，請先在 Ledger Web 處理。";
   // merchant_resolve_order_change 常見錯誤（顯示友善文案，勿直接丟英文）
+  // 開關店（merchant_set_order_enabled）：兩種線上付款都關住時開唔到店
+  if (lower.includes("at least one payment method required"))
+    return "請先開啟至少一種線上付款方式（餘額扣點或到店付款），然後再開店。";
+  if (lower.includes("merchant not found")) return "找不到商戶，請重新登入。";
   if (lower.includes("no pending change request"))
     return "沒有待確認的申請（可能已被另一台核准，或客人已撤回）。";
   if (lower.includes("not authorized")) return "無權限處理此申請。";

@@ -448,35 +448,44 @@ export function LocalOrdersPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
+        {/*
+          2026-09-12 商家需求（純 UI）：filter chips 併入標題同一排（同左卡「線上訂單」一致），
+          慳返一行高度畀下面嘅訂單列表。靠左排；唔夠位時 chips 自己 flex-wrap 掉第二行。
+          三欄：標題塊（shrink-0）／chips（flex-1 min-w-0）／右側控件（ml-auto shrink-0）。
+          ⚠️ chips 欄一定要 `min-w-0`，否則 flex 子項最小闊度＝內容闊度 → 窄屏撐爆外層。
+          ⚠️ 外層唔可以加 `justify-between`：chips 欄靠 `flex-1` 吃滿中間，右欄自然貼右。
+        */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="min-w-0 shrink-0">
             <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
             {/* 與左卡「線上訂單」header 同格式：dateFilter · tab · 共 X 張 · 新單 X 張。 */}
             <div className="mt-1 text-xs text-slate-500 sm:text-sm">
               {dateFilterLabel(dateFilter)} · {activeTabLabel} · 共 {filteredOrders.length} 張 · 新單 {draftCount} 張
             </div>
           </div>
-          {/*
-            規格 6：「自動接自助單」開關直接取代原「刪除全部訂單」掣位。
-            ⚠️ 「刪除全部訂單」嘅**邏輯保留**（handleDeleteAllOrders + 下方確認彈窗），只係
-            介面上唔再需要入口（用戶明確指示：logic 唔好刪、UI 唔再需要）。
-            要還原只要喺度加返一粒 onClick={() => setConfirmDeleteAllOpen(true)} 嘅掣就得。
-          */}
-          <SelfOrderAutoAcceptToggle />
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab.key}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                tab.key === statusTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
-              }`}
-              onClick={() => setStatusTab(tab.key)}
-              type="button"
-            >
-              {tab.label}
-            </button>
-          ))}
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            {STATUS_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  tab.key === statusTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                }`}
+                onClick={() => setStatusTab(tab.key)}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {/*
+              規格 6：「自動接自助單」開關直接取代原「刪除全部訂單」掣位。
+              ⚠️ 「刪除全部訂單」嘅**邏輯保留**（handleDeleteAllOrders + 下方確認彈窗），只係
+              介面上唔再需要入口（用戶明確指示：logic 唔好刪、UI 唔再需要）。
+              要還原只要喺度加返一粒 onClick={() => setConfirmDeleteAllOpen(true)} 嘅掣就得。
+            */}
+            <SelfOrderAutoAcceptToggle />
+          </div>
         </div>
       </div>
 

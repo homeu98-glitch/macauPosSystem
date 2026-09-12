@@ -1,6 +1,20 @@
 import "server-only";
 
 /**
+ * 🚫 **已退役（2026-09-12）—— 唔好再 call。**
+ *
+ * 原本係 POS → Ledger 嘅「自動接單」出站 HTTP 互推（docs/92 §4）。而家 Ledger 已經
+ * 開放店員 JWT 直連 RPC `merchant_set_auto_accept`（見 `src/lib/ledger/order-config.ts`），
+ * 兩條路會寫**同一個** Ledger 欄位、互相覆寫，所以 POS 統一改行 RPC，
+ * `/api/online-order-settings` 亦降級做純鏡像寫入（唔再出站）。
+ *
+ * 檔案暫時保留（`/api/integration/ledger/auto-accept` 嘅註釋仍引用呢個名），
+ * 但**冇任何 caller**。若確認 Ledger 側唔再需要呢條 HTTP 契約，可以連
+ * `LEDGER_INTEGRATION_BASE_URL` 一齊清走。
+ *
+ * ⚠️ 唔好因為「以前有」就翻用 —— 翻用 = 開關店／自動接單兩個真源打架。
+ *
+ * ── 以下為原設計說明（歷史）────────────────────────────────────────────
  * POS → Ledger：「線上訂單自動接單」出站同步（docs/92 §4）。
  *
  * 背景：POS 同 Ledger 各有一粒「自動接單」掣，舊 code 完全冇對接（docs/92 §1）。

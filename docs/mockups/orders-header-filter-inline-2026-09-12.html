@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>訂單頁 — filter 併入標題同一排（UI 確認稿）</title>
+<style>
+:root{
+  --orange-500:#f97316; --orange-600:#ea580c;
+  --slate-50:#f8fafc;  --slate-100:#f1f5f9; --slate-200:#e2e8f0;
+  --slate-300:#cbd5e1; --slate-400:#94a3b8; --slate-500:#64748b;
+  --slate-600:#475569; --slate-700:#334155; --slate-900:#0f172a;
+  --emerald-600:#059669;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e8edf4;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─────────── 審稿工具列（唔屬產品介面） ─────────── */
+.chrome{max-width:1180px;margin:0 auto;padding:20px 20px 10px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:15px;font-weight:700}
+.chrome-note{font-size:11px;font-weight:600;color:#64748b;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:3px 10px}
+.tabs{display:flex;gap:8px;margin-top:12px}
+.tabs button{
+  border:1px solid #cbd5e1;background:#fff;border-radius:12px;padding:9px 14px;
+  font-family:inherit;font-size:13px;font-weight:600;color:#475569;cursor:pointer;
+  display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+}
+.tabs button small{font-weight:500;font-size:11px;color:#94a3b8}
+.tabs button.on{background:#0f172a;border-color:#0f172a;color:#fff}
+.tabs button.on small{color:#94a3b8}
+
+/* ─────────── 固定畫布 + 等比縮放 ─────────── */
+.stage{max-width:1180px;margin:0 auto 40px;position:relative;overflow:hidden;border-radius:22px;
+  box-shadow:0 18px 44px rgba(15,23,42,.18);background:#fff}
+.canvas{width:1180px;height:700px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden;background:#fff}
+.screenwrap{display:none;width:100%;height:100%;flex-direction:column}
+.screenwrap.on{display:flex}
+
+/* ─────────── 產品畫面 ─────────── */
+.page{flex:1;min-height:0;display:flex;flex-direction:column;background:#fff}
+
+.phead{flex:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
+  padding:18px 22px 15px;border-bottom:1px solid var(--slate-200)}
+.phead-title{font-size:17px;font-weight:700;letter-spacing:.2px}
+.phead-sub{margin-top:5px;font-size:12px;color:var(--slate-500);white-space:nowrap}
+.datepills{display:flex;gap:2px;background:var(--slate-100);border-radius:9999px;padding:4px;flex:0 0 auto}
+.datepill{border:0;background:transparent;border-radius:9999px;padding:6px 14px;font-family:inherit;
+  font-size:12px;font-weight:600;color:var(--slate-600);white-space:nowrap}
+.datepill.on{background:#fff;color:var(--slate-900);box-shadow:0 1px 2px rgba(15,23,42,.12)}
+
+.panels{flex:1;min-height:0;display:flex;flex-direction:column}
+.panel{flex:1 1 0;min-height:0;display:flex;flex-direction:column;background:#fff;position:relative}
+.panel + .panel{border-top:1px solid var(--slate-200)}
+
+/* header：現狀 = 兩欄（標題 / 控件）；改動後 = 三欄 flex（標題 / filter / 控件）。
+   ⚠️ 三欄刻意用 flex 而唔係 grid —— 同真實實作完全一致
+   （Tailwind：`flex flex-wrap items-center gap-x-4 gap-y-2` + 中欄 `flex-1 min-w-0`
+   + 右欄 `ml-auto shrink-0`），窄屏時 chips 自己 flex-wrap 掉第二行，唔會爆版。 */
+.chead{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;column-gap:16px;row-gap:8px;padding:13px 22px 10px}
+.ctitle{flex:0 0 auto;min-width:0}
+
+.ctitle-main{font-size:14px;font-weight:700;white-space:nowrap}
+.ctitle-sub{margin-top:4px;font-size:12px;color:var(--slate-500);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+.chiprow{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:8px;padding:0 22px 13px}
+/* 併入 header 後＝中欄：靠 `flex:1` 吃滿中間（把右欄推去最右）；保留 `flex-wrap` 令窄屏時 chips 掉行。 */
+.chiprow.inline{padding:0;flex:1 1 0%;min-width:0}
+.chip{border:0;border-radius:9999px;padding:6px 14px;font-family:inherit;font-size:12px;font-weight:600;
+  background:var(--slate-100);color:var(--slate-700);white-space:nowrap}
+.chip.on{background:var(--orange-500);color:#fff}
+.chiprow.hl .chip{outline:2px dashed #16a34a;outline-offset:2px}
+
+.ctrls{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto;margin-left:auto}
+.pillwrap{display:flex;align-items:center;gap:8px;border-radius:9999px;background:var(--slate-100);padding:6px 12px}
+.pill-label{font-size:12px;font-weight:600;color:var(--slate-600);white-space:nowrap}
+.pillbtn{border:0;border-radius:9999px;padding:4px 13px;font-family:inherit;font-size:12px;font-weight:600;
+  background:var(--emerald-600);color:#fff}
+.pillbtn.off{background:#fff;color:var(--slate-700);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.darkbtn{border:0;border-radius:9999px;padding:7px 13px;font-family:inherit;font-size:12px;font-weight:600;
+  background:var(--slate-900);color:#fff;white-space:nowrap}
+
+.tbody{flex:1;min-height:0;padding:0 22px 18px;display:flex}
+.tcard{flex:1;min-height:0;border:1px solid var(--slate-200);border-radius:16px;overflow:hidden;display:flex;flex-direction:column}
+.tcard table{width:100%;border-collapse:collapse;table-layout:fixed}
+.tcard th{background:var(--slate-50);padding:10px;font-size:11px;font-weight:600;color:var(--slate-500);
+  text-align:left;border-bottom:1px solid var(--slate-200);white-space:nowrap}
+.tcard th.r{text-align:right}
+.tcard td{padding:11px 10px;height:42px;border-top:1px solid var(--slate-100);
+  font-size:12px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tcard tbody tr:nth-child(even){background:#fbfcfe}
+.cell-strong{font-weight:600;color:var(--slate-900)}
+.cell-dim{color:var(--slate-500);font-size:11.5px}
+.cell-time{color:var(--slate-400);font-variant-numeric:tabular-nums}
+.cell-money{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+
+.bdg{display:inline-flex;align-items:center;border-radius:9999px;padding:2px 9px;
+  font-size:11px;font-weight:600;white-space:nowrap}
+.bdg-orange{background:#ffedd5;color:#c2410c}
+.bdg-blue{background:#dbeafe;color:#1d4ed8}
+.bdg-green{background:#dcfce7;color:#15803d}
+.bdg-slate{background:var(--slate-100);color:var(--slate-600)}
+.bdg-red{background:#fee2e2;color:#b91c1c}
+
+.actwrap{display:flex;gap:6px;justify-content:flex-end}
+.act{border:0;border-radius:10px;padding:6px 10px;font-family:inherit;font-size:11px;font-weight:600;white-space:nowrap}
+.act-gray{background:var(--slate-100);color:var(--slate-700)}
+.act-dark{background:var(--slate-900);color:#fff}
+.act-orange{background:var(--orange-600);color:#fff}
+
+/* 改動後：表格下方嘅「多出嚟嘅空間」提示 */
+.gain{position:absolute;left:22px;right:22px;bottom:26px;display:flex;align-items:center;justify-content:center;
+  gap:8px;font-size:11px;font-weight:600;color:#15803d;pointer-events:none}
+.gain span{background:#f0fdf4;border:1px dashed #86efac;border-radius:9999px;padding:3px 12px}
+
+/* 改動後：header 高度標尺 */
+.ruler{position:absolute;right:10px;top:0;bottom:0;width:0}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">訂單頁 — filter 併入標題同一排</span>
+    <span class="chrome-note">深色／此區為審稿工具列，唔屬產品介面</span>
+  </div>
+  <div class="tabs" id="rtabs">
+    <button type="button" data-tab="before" class="on">
+      ① 現狀
+      <small>每張卡 header 佔 2 行（標題行 + filter 行）</small>
+    </button>
+    <button type="button" data-tab="after">
+      ② 改動後
+      <small>filter 併入標題同一排，每張卡慳約 40px</small>
+    </button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ══════════ ① 現狀 ══════════ -->
+    <div class="screenwrap on" id="scr-before">
+      <div class="page">
+        <div class="phead">
+          <div>
+            <div class="phead-title">訂單</div>
+            <div class="phead-sub">上：會員通線上訂單，下：店內線下訂單</div>
+          </div>
+          <div class="datepills">
+            <button type="button" class="datepill on">今天</button>
+            <button type="button" class="datepill">昨天</button>
+            <button type="button" class="datepill">7天內</button>
+            <button type="button" class="datepill">30天</button>
+            <button type="button" class="datepill">全部</button>
+          </div>
+        </div>
+
+        <div class="panels">
+          <!-- 線上訂單 -->
+          <section class="panel">
+            <div class="chead c2">
+              <div class="ctitle">
+                <div class="ctitle-main">線上訂單</div>
+                <div class="ctitle-sub">今天 · 全部 · 共 4 張 · 新單 0 張</div>
+              </div>
+              <div class="ctrls">
+                <div class="pillwrap"><span class="pill-label">自動接單</span><button type="button" class="pillbtn">開</button></div>
+                <button type="button" class="darkbtn">手動刷新</button>
+              </div>
+            </div>
+            <div class="chiprow">
+              <button type="button" class="chip on">全部</button>
+              <button type="button" class="chip">堂食</button>
+              <button type="button" class="chip">外賣自取</button>
+              <button type="button" class="chip">外送</button>
+            </div>
+            <div class="tbody">
+              <div class="tcard">
+                <table>
+                  <colgroup>
+                    <col style="width:11%" /><col style="width:15%" /><col style="width:11%" /><col />
+                    <col style="width:11%" /><col style="width:11%" /><col style="width:13%" /><col style="width:17%" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>訂單號</th><th>類型 · 客戶</th><th>時間</th><th>菜品</th>
+                      <th class="r">金額</th><th>狀態</th><th>支付</th><th class="r">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="cell-strong">#A1024</td>
+                      <td class="cell-dim">堂食 · 陳小姐</td>
+                      <td class="cell-time">12:31</td>
+                      <td class="cell-dim">葡撻 2、凍奶茶 1</td>
+                      <td class="cell-money">MOP 88.00</td>
+                      <td><span class="bdg bdg-orange">待接單</span></td>
+                      <td><span class="bdg bdg-slate">線上支付</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">接單</button><button type="button" class="act act-orange">排位</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">#A1025</td>
+                      <td class="cell-dim">外賣自取 · 李生</td>
+                      <td class="cell-time">12:35</td>
+                      <td class="cell-dim">豬扒包 1、可樂 1</td>
+                      <td class="cell-money">MOP 62.00</td>
+                      <td><span class="bdg bdg-blue">製作中</span></td>
+                      <td><span class="bdg bdg-slate">線上支付</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">完成</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">#A1026</td>
+                      <td class="cell-dim">外送 · 黃太</td>
+                      <td class="cell-time">12:41</td>
+                      <td class="cell-dim">免治牛肉飯 2</td>
+                      <td class="cell-money">MOP 96.00</td>
+                      <td><span class="bdg bdg-green">待取餐</span></td>
+                      <td><span class="bdg bdg-slate">線上支付</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">完成</button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- 店內線下訂單 -->
+          <section class="panel">
+            <div class="chead c2">
+              <div class="ctitle">
+                <div class="ctitle-main">店內線下訂單</div>
+                <div class="ctitle-sub">今天 · 全部 · 共 8 張 · 新單 2 張</div>
+              </div>
+              <div class="ctrls">
+                <div class="pillwrap"><span class="pill-label">自動接自助單</span><button type="button" class="pillbtn">開</button></div>
+              </div>
+            </div>
+            <div class="chiprow">
+              <button type="button" class="chip on">全部</button>
+              <button type="button" class="chip">製作中</button>
+              <button type="button" class="chip">待取餐</button>
+              <button type="button" class="chip">已完成</button>
+              <button type="button" class="chip">已返結</button>
+              <button type="button" class="chip">已取消</button>
+            </div>
+            <div class="tbody">
+              <div class="tcard">
+                <table>
+                  <colgroup>
+                    <col style="width:11%" /><col style="width:15%" /><col style="width:11%" /><col />
+                    <col style="width:11%" /><col style="width:11%" /><col style="width:13%" /><col style="width:17%" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>訂單號</th><th>桌台 · 客戶</th><th>時間</th><th>菜品</th>
+                      <th class="r">金額</th><th>狀態</th><th>支付</th><th class="r">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="cell-strong">L0031</td>
+                      <td class="cell-dim">A3 桌</td>
+                      <td class="cell-time">12:20</td>
+                      <td class="cell-dim">免治牛肉飯 2、凍檸茶 2</td>
+                      <td class="cell-money">MOP 152.00</td>
+                      <td><span class="bdg bdg-blue">製作中</span></td>
+                      <td><span class="bdg bdg-slate">未結帳</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">結帳</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">L0032</td>
+                      <td class="cell-dim">快餐</td>
+                      <td class="cell-time">12:28</td>
+                      <td class="cell-dim">豬扒包 1、可樂 1</td>
+                      <td class="cell-money">MOP 45.00</td>
+                      <td><span class="bdg bdg-green">待取餐</span></td>
+                      <td><span class="bdg bdg-slate">未結帳</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">完成</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">L0033</td>
+                      <td class="cell-dim">B1 桌</td>
+                      <td class="cell-time">12:33</td>
+                      <td class="cell-dim">葡國雞飯 3</td>
+                      <td class="cell-money">MOP 210.00</td>
+                      <td><span class="bdg bdg-slate">已完成</span></td>
+                      <td><span class="bdg bdg-green">已結帳</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-gray">詳情</button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ ② 改動後 ══════════ -->
+    <div class="screenwrap" id="scr-after">
+      <div class="page">
+        <div class="phead">
+          <div>
+            <div class="phead-title">訂單</div>
+            <div class="phead-sub">上：會員通線上訂單，下：店內線下訂單</div>
+          </div>
+          <div class="datepills">
+            <button type="button" class="datepill on">今天</button>
+            <button type="button" class="datepill">昨天</button>
+            <button type="button" class="datepill">7天內</button>
+            <button type="button" class="datepill">30天</button>
+            <button type="button" class="datepill">全部</button>
+          </div>
+        </div>
+
+        <div class="panels">
+          <!-- 線上訂單：filter 併入同一排 -->
+          <section class="panel">
+            <div class="chead c3">
+              <div class="ctitle">
+                <div class="ctitle-main">線上訂單</div>
+                <div class="ctitle-sub">今天 · 全部 · 共 4 張 · 新單 0 張</div>
+              </div>
+              <div class="chiprow inline hl">
+                <button type="button" class="chip on">全部</button>
+                <button type="button" class="chip">堂食</button>
+                <button type="button" class="chip">外賣自取</button>
+                <button type="button" class="chip">外送</button>
+              </div>
+              <div class="ctrls">
+                <div class="pillwrap"><span class="pill-label">自動接單</span><button type="button" class="pillbtn">開</button></div>
+                <button type="button" class="darkbtn">手動刷新</button>
+              </div>
+            </div>
+            <div class="tbody">
+              <div class="tcard">
+                <table>
+                  <colgroup>
+                    <col style="width:11%" /><col style="width:15%" /><col style="width:11%" /><col />
+                    <col style="width:11%" /><col style="width:11%" /><col style="width:13%" /><col style="width:17%" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>訂單號</th><th>類型 · 客戶</th><th>時間</th><th>菜品</th>
+                      <th class="r">金額</th><th>狀態</th><th>支付</th><th class="r">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="cell-strong">#A1024</td>
+                      <td class="cell-dim">堂食 · 陳小姐</td>
+                      <td class="cell-time">12:31</td>
+                      <td class="cell-dim">葡撻 2、凍奶茶 1</td>
+                      <td class="cell-money">MOP 88.00</td>
+                      <td><span class="bdg bdg-orange">待接單</span></td>
+                      <td><span class="bdg bdg-slate">線上支付</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">接單</button><button type="button" class="act act-orange">排位</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">#A1025</td>
+                      <td class="cell-dim">外賣自取 · 李生</td>
+                      <td class="cell-time">12:35</td>
+                      <td class="cell-dim">豬扒包 1、可樂 1</td>
+                      <td class="cell-money">MOP 62.00</td>
+                      <td><span class="bdg bdg-blue">製作中</span></td>
+                      <td><span class="bdg bdg-slate">線上支付</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">完成</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">#A1026</td>
+                      <td class="cell-dim">外送 · 黃太</td>
+                      <td class="cell-time">12:41</td>
+                      <td class="cell-dim">免治牛肉飯 2</td>
+                      <td class="cell-money">MOP 96.00</td>
+                      <td><span class="bdg bdg-green">待取餐</span></td>
+                      <td><span class="bdg bdg-slate">線上支付</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">完成</button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="gain"><span>▲ 呢格多出約 40px 高度</span></div>
+          </section>
+
+          <!-- 店內線下訂單：filter 併入同一排 -->
+          <section class="panel">
+            <div class="chead c3">
+              <div class="ctitle">
+                <div class="ctitle-main">店內線下訂單</div>
+                <div class="ctitle-sub">今天 · 全部 · 共 8 張 · 新單 2 張</div>
+              </div>
+              <div class="chiprow inline hl">
+                <button type="button" class="chip on">全部</button>
+                <button type="button" class="chip">製作中</button>
+                <button type="button" class="chip">待取餐</button>
+                <button type="button" class="chip">已完成</button>
+                <button type="button" class="chip">已返結</button>
+                <button type="button" class="chip">已取消</button>
+              </div>
+              <div class="ctrls">
+                <div class="pillwrap"><span class="pill-label">自動接自助單</span><button type="button" class="pillbtn">開</button></div>
+              </div>
+            </div>
+            <div class="tbody">
+              <div class="tcard">
+                <table>
+                  <colgroup>
+                    <col style="width:11%" /><col style="width:15%" /><col style="width:11%" /><col />
+                    <col style="width:11%" /><col style="width:11%" /><col style="width:13%" /><col style="width:17%" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>訂單號</th><th>桌台 · 客戶</th><th>時間</th><th>菜品</th>
+                      <th class="r">金額</th><th>狀態</th><th>支付</th><th class="r">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="cell-strong">L0031</td>
+                      <td class="cell-dim">A3 桌</td>
+                      <td class="cell-time">12:20</td>
+                      <td class="cell-dim">免治牛肉飯 2、凍檸茶 2</td>
+                      <td class="cell-money">MOP 152.00</td>
+                      <td><span class="bdg bdg-blue">製作中</span></td>
+                      <td><span class="bdg bdg-slate">未結帳</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">結帳</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">L0032</td>
+                      <td class="cell-dim">快餐</td>
+                      <td class="cell-time">12:28</td>
+                      <td class="cell-dim">豬扒包 1、可樂 1</td>
+                      <td class="cell-money">MOP 45.00</td>
+                      <td><span class="bdg bdg-green">待取餐</span></td>
+                      <td><span class="bdg bdg-slate">未結帳</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-dark">完成</button></div></td>
+                    </tr>
+                    <tr>
+                      <td class="cell-strong">L0033</td>
+                      <td class="cell-dim">B1 桌</td>
+                      <td class="cell-time">12:33</td>
+                      <td class="cell-dim">葡國雞飯 3</td>
+                      <td class="cell-money">MOP 210.00</td>
+                      <td><span class="bdg bdg-slate">已完成</span></td>
+                      <td><span class="bdg bdg-green">已結帳</span></td>
+                      <td><div class="actwrap"><button type="button" class="act act-gray">詳情</button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="gain"><span>▲ 呢格多出約 40px 高度</span></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var CANVAS_W = 1180;
+var CANVAS_H = 700;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || CANVAS_W;
+  var s = Math.min(1, Math.max(w / CANVAS_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(CANVAS_H * s) + "px";
+  stage.style.overflowX = (CANVAS_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var keys = ["before", "after"];
+  for (var i = 0; i < keys.length; i++){
+    var scr = document.getElementById("scr-" + keys[i]);
+    if (scr) scr.classList.toggle("on", keys[i] === id);
+  }
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < tabs.length; j++){
+    tabs[j].classList.toggle("on", tabs[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+function bindTabs(){
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < tabs.length; i++){
+    (function(btn){
+      btn.onclick = function(){ showTab(btn.getAttribute("data-tab")); };
+    })(tabs[i]);
+  }
+}
+
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("resize", fit);
+}
+bindTabs();
+fit();
+</script>
+</body>
+</html>

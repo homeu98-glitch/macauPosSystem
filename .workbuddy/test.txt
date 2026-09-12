@@ -1,0 +1,1486 @@
+﻿
+> macau-pos-system@0.1.0 test
+> node --test
+
+TAP version 13
+# (node:21208) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/kds/kds-board.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: buildKdsBoard 路 宸ヤ綅閬庢烤
+    # Subtest: 鍙洖鏈伐浣嶅槄琛?    ok 1 - 鍙洖鏈伐浣嶅槄琛?      ---
+      duration_ms: 6.5506
+      type: 'test'
+      ...
+    # Subtest: 鏈伐浣嶄竴琛岄兘鍐?鈫?鏁村嫉鍠敂涓婂睆
+    ok 2 - 鏈伐浣嶄竴琛岄兘鍐?鈫?鏁村嫉鍠敂涓婂睆
+      ---
+      duration_ms: 0.5445
+      type: 'test'
+      ...
+    # Subtest: 馃敶 鍞斿偝 station 鈫?涓€寰嬪洖绌猴紙闃叉銆屽叏閮ㄣ€嶆ā寮忓洖姝革級
+    ok 3 - 馃敶 鍞斿偝 station 鈫?涓€寰嬪洖绌猴紙闃叉銆屽叏閮ㄣ€嶆ā寮忓洖姝革級
+      ---
+      duration_ms: 3.953
+      type: 'test'
+      ...
+    # Subtest: 鏄庣⒑ allowAllStations 灏卞洖鍏ㄩ儴锛堝嚭椁愬彴灞忕敤锛?    ok 4 - 鏄庣⒑ allowAllStations 灏卞洖鍏ㄩ儴锛堝嚭椁愬彴灞忕敤锛?      ---
+      duration_ms: 0.4867
+      type: 'test'
+      ...
+    1..4
+ok 1 - buildKdsBoard 路 宸ヤ綅閬庢烤
+  ---
+  duration_ms: 15.8123
+  type: 'suite'
+  ...
+# Subtest: buildKdsBoard 路 done_qty 瑾炴剰
+    # Subtest: 閮ㄥ垎瀹屾垚锛歞one 1 / qty 3 鈫?浠嶇劧涓婂睆
+    ok 1 - 閮ㄥ垎瀹屾垚锛歞one 1 / qty 3 鈫?浠嶇劧涓婂睆
+      ---
+      duration_ms: 0.9697
+      type: 'test'
+      ...
+    # Subtest: 馃敶 鍔犲柈锛氬師鏈?x1 宸插畬鎴愶紝鍔犲埌 x3 鈫?涓€瀹氳閲嶆柊浜捣锛堝敂鍙互闈滈粯婕忓柈锛?    ok 2 - 馃敶 鍔犲柈锛氬師鏈?x1 宸插畬鎴愶紝鍔犲埌 x3 鈫?涓€瀹氳閲嶆柊浜捣锛堝敂鍙互闈滈粯婕忓柈锛?      ---
+      duration_ms: 0.5102
+      type: 'test'
+      ...
+    # Subtest: done_qty 澶ч亷 quantity锛堟笡浠讹級鈫?clamp 钀?quantity
+    ok 3 - done_qty 澶ч亷 quantity锛堟笡浠讹級鈫?clamp 钀?quantity
+      ---
+      duration_ms: 0.813
+      type: 'test'
+      ...
+    # Subtest: done_qty 璨犳暩 鈫?澶惧仛 0
+    ok 4 - done_qty 璨犳暩 鈫?澶惧仛 0
+      ---
+      duration_ms: 0.8328
+      type: 'test'
+      ...
+    # Subtest: 鍐囩媭鎱嬭 鈫?doneQty 0
+    ok 5 - 鍐囩媭鎱嬭 鈫?doneQty 0
+      ---
+      duration_ms: 0.7908
+      type: 'test'
+      ...
+    1..5
+ok 2 - buildKdsBoard 路 done_qty 瑾炴剰
+  ---
+  duration_ms: 4.961
+  type: 'suite'
+  ...
+# Subtest: buildKdsBoard 路 鍚堜降鑸囨帓闄?    # Subtest: 馃敶 鍚屼竴 itemKey 鍑虹従鍏╄锛堟檪鍍硅彍锛夆啋 鍚堜降鎴愪竴琛岋紝鏁搁噺鐩稿姞
+    ok 1 - 馃敶 鍚屼竴 itemKey 鍑虹従鍏╄锛堟檪鍍硅彍锛夆啋 鍚堜降鎴愪竴琛岋紝鏁搁噺鐩稿姞
+      ---
+      duration_ms: 0.7157
+      type: 'test'
+      ...
+    # Subtest: 鎾?key 鏅?done_qty 灏嶅槄淇傚悎浣靛緦鍢呯附鏁?    ok 2 - 鎾?key 鏅?done_qty 灏嶅槄淇傚悎浣靛緦鍢呯附鏁?      ---
+      duration_ms: 0.3752
+      type: 'test'
+      ...
+    # Subtest: 閫€鑿滐紙voided锛夊敂涓婂睆
+    ok 3 - 閫€鑿滐紙voided锛夊敂涓婂睆
+      ---
+      duration_ms: 0.3474
+      type: 'test'
+      ...
+    # Subtest: receipt / label 鍞斾總宸ヤ綅锛屽敂涓婂睆
+    ok 4 - receipt / label 鍞斾總宸ヤ綅锛屽敂涓婂睆
+      ---
+      duration_ms: 0.3137
+      type: 'test'
+      ...
+    # Subtest: quantity <= 0 鍢呰鍞斾笂灞?    ok 5 - quantity <= 0 鍢呰鍞斾笂灞?      ---
+      duration_ms: 1.4407
+      type: 'test'
+      ...
+    # Subtest: 瑕忔牸璀垚 optionLabel
+    ok 6 - 瑕忔牸璀垚 optionLabel
+      ---
+      duration_ms: 0.4841
+      type: 'test'
+      ...
+    1..6
+ok 3 - buildKdsBoard 路 鍚堜降鑸囨帓闄?  ---
+  duration_ms: 4.1776
+  type: 'suite'
+  ...
+# Subtest: buildKdsBoard 路 涓婂睆璩囨牸
+    # Subtest: 馃敶 鍐?sentToKitchenAt锛堜徊淇?draft锛夆啋 鍞斾笂灞?    ok 1 - 馃敶 鍐?sentToKitchenAt锛堜徊淇?draft锛夆啋 鍞斾笂灞?      ---
+      duration_ms: 0.4842
+      type: 'test'
+      ...
+    # Subtest: 宸茬祼甯筹紙settled锛夆啋 鍞斾笂灞?    ok 2 - 宸茬祼甯筹紙settled锛夆啋 鍞斾笂灞?      ---
+      duration_ms: 0.2648
+      type: 'test'
+      ...
+    # Subtest: 宸插彇娑?鈫?鍞斾笂灞?    ok 3 - 宸插彇娑?鈫?鍞斾笂灞?      ---
+      duration_ms: 0.2219
+      type: 'test'
+      ...
+    # Subtest: 宸蹭粯娆句絾鏈嚭椁愶紙paid锛夆啋 瑕佷笂灞忥紙閷㈡敹鍜椾絾椋湭鍋氾級
+    ok 4 - 宸蹭粯娆句絾鏈嚭椁愶紙paid锛夆啋 瑕佷笂灞忥紙閷㈡敹鍜椾絾椋湭鍋氾級
+      ---
+      duration_ms: 0.2513
+      type: 'test'
+      ...
+    # Subtest: 瓒呴亷 12 灏忔檪鍐囦汉鍕曢亷 鈫?鍞斾笂灞?    ok 5 - 瓒呴亷 12 灏忔檪鍐囦汉鍕曢亷 鈫?鍞斾笂灞?      ---
+      duration_ms: 3.0345
+      type: 'test'
+      ...
+    # Subtest: 钀藉柈瓒呴亷 12 灏忔檪銆佷絾鍟卞暠鍔犲挆鑿滐紙updated_at 鏂帮級鈫?浠嶇劧瑕佷笂灞?    ok 6 - 钀藉柈瓒呴亷 12 灏忔檪銆佷絾鍟卞暠鍔犲挆鑿滐紙updated_at 鏂帮級鈫?浠嶇劧瑕佷笂灞?      ---
+      duration_ms: 0.378
+      type: 'test'
+      ...
+    # Subtest: 鍏ㄩ儴瀹屾垚 鈫?闋愯ō鍞斿洖锛坮eload 涔嬪緦鍞旀噳瑭插啀瑕嬪埌缍犺壊鍗★級
+    ok 7 - 鍏ㄩ儴瀹屾垚 鈫?闋愯ō鍞斿洖锛坮eload 涔嬪緦鍞旀噳瑭插啀瑕嬪埌缍犺壊鍗★級
+      ---
+      duration_ms: 0.3993
+      type: 'test'
+      ...
+    # Subtest: includeCompleted 鈫?鍥烇紙鍑洪鍙板睆鏍稿皪鐢級
+    ok 8 - includeCompleted 鈫?鍥烇紙鍑洪鍙板睆鏍稿皪鐢級
+      ---
+      duration_ms: 0.2852
+      type: 'test'
+      ...
+    # Subtest: 馃敶 涓€寮靛柈鏈夊叐鍊嬪伐浣嶏細鏈伐浣嶅仛瀹屻€佸彟涓€鍊嬫湭鍋?鈫?鏈伐浣嶅敂鎳夎┎鍐嶈鍒板嫉鍗?    ok 9 - 馃敶 涓€寮靛柈鏈夊叐鍊嬪伐浣嶏細鏈伐浣嶅仛瀹屻€佸彟涓€鍊嬫湭鍋?鈫?鏈伐浣嶅敂鎳夎┎鍐嶈鍒板嫉鍗?      ---
+      duration_ms: 0.6613
+      type: 'test'
+      ...
+    1..9
+ok 4 - buildKdsBoard 路 涓婂睆璩囨牸
+  ---
+  duration_ms: 6.6608
+  type: 'suite'
+  ...
+# Subtest: buildKdsBoard 路 鎺掑簭鑸囩当瑷?    # Subtest: 鑸婂柈琛屽厛
+    ok 1 - 鑸婂柈琛屽厛
+      ---
+      duration_ms: 0.6331
+      type: 'test'
+      ...
+    # Subtest: pending 鐢?*鏈畬鎴愪唤鏁?*锛岃€屼笖璺ㄥ叏閮ㄥ伐浣嶏紙鍞旀墸 station 閬庢烤锛?    ok 2 - pending 鐢?*鏈畬鎴愪唤鏁?*锛岃€屼笖璺ㄥ叏閮ㄥ伐浣嶏紙鍞旀墸 station 閬庢烤锛?      ---
+      duration_ms: 0.3236
+      type: 'test'
+      ...
+    # Subtest: 宸插畬鎴愬槄琛屽敂瑷堝叆 pending
+    ok 3 - 宸插畬鎴愬槄琛屽敂瑷堝叆 pending
+      ---
+      duration_ms: 0.2927
+      type: 'test'
+      ...
+    # Subtest: 馃敶 stations 涓讳締婧愪總鍟嗗 printZones锛堝緦寤?/2/3銆佹按鍚?/2/3 鍚勮嚜鐛ㄧ珛锛?    ok 4 - 馃敶 stations 涓讳締婧愪總鍟嗗 printZones锛堝緦寤?/2/3銆佹按鍚?/2/3 鍚勮嚜鐛ㄧ珛锛?      ---
+      duration_ms: 0.528
+      type: 'test'
+      ...
+    # Subtest: 鑸?printerGroups 鍙仛 fallback锛堝墧璧?receipt / label锛?    ok 5 - 鑸?printerGroups 鍙仛 fallback锛堝墧璧?receipt / label锛?      ---
+      duration_ms: 9.9542
+      type: 'test'
+      ...
+    # Subtest: 瑷傚柈鍑虹従閬庡槄宸ヤ綅涓€瀹氭渻鍏ユ竻鍠紙鍗充娇 printerGroups 淇傜┖锛?    ok 6 - 瑷傚柈鍑虹従閬庡槄宸ヤ綅涓€瀹氭渻鍏ユ竻鍠紙鍗充娇 printerGroups 淇傜┖锛?      ---
+      duration_ms: 2.9555
+      type: 'test'
+      ...
+    # Subtest: stations 鍞旀渻澶剧‖濉炲叆缍佸畾鍢呭垎鍗€锛堣鍙嶆槧鐪熷娓呭柈锛?    ok 7 - stations 鍞旀渻澶剧‖濉炲叆缍佸畾鍢呭垎鍗€锛堣鍙嶆槧鐪熷娓呭柈锛?      ---
+      duration_ms: 3.7462
+      type: 'test'
+      ...
+    # Subtest: 鍐?printZones銆佸唶鍠€佸唶鑿滃柈 鈫?鍥炵┖娓呭柈锛圲I 椤ず銆屾湭瑷畾鎵撳嵃鍒嗗崁銆嶏級
+    ok 8 - 鍐?printZones銆佸唶鍠€佸唶鑿滃柈 鈫?鍥炵┖娓呭柈锛圲I 椤ず銆屾湭瑷畾鎵撳嵃鍒嗗崁銆嶏級
+      ---
+      duration_ms: 0.3158
+      type: 'test'
+      ...
+    1..8
+ok 5 - buildKdsBoard 路 鎺掑簭鑸囩当瑷?  ---
+  duration_ms: 19.3605
+  type: 'suite'
+  ...
+# Subtest: remainingQtyOf
+    # Subtest: 鍔犵附鎵€鏈夎鍢呮湭瀹屾垚浠芥暩
+    ok 1 - 鍔犵附鎵€鏈夎鍢呮湭瀹屾垚浠芥暩
+      ---
+      duration_ms: 0.2971
+      type: 'test'
+      ...
+    # Subtest: 绌洪櫍鍒?鈫?0
+    ok 2 - 绌洪櫍鍒?鈫?0
+      ---
+      duration_ms: 0.1663
+      type: 'test'
+      ...
+    1..2
+ok 6 - remainingQtyOf
+  ---
+  duration_ms: 0.6612
+  type: 'suite'
+  ...
+# (node:24872) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/kds/stations.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: deriveKdsStations 路 涓讳締婧?= 鍟嗗 printZones
+    # Subtest: 馃敶 鍏€嬪垎鍗€鍚勮嚜鐛ㄧ珛鍛堢従锛屼竴鍊嬮兘鍞斿悎浣点€佷竴鍊嬮兘鍞旀敼鍚?    ok 1 - 馃敶 鍏€嬪垎鍗€鍚勮嚜鐛ㄧ珛鍛堢従锛屼竴鍊嬮兘鍞斿悎浣点€佷竴鍊嬮兘鍞旀敼鍚?      ---
+      duration_ms: 6.0337
+      type: 'test'
+      ...
+    # Subtest: 馃敶 鍞旀渻灏囪嚜瑷傚垎鍗€璀垚銆屽粴鎴?/ 姘村惂銆嶏紙鑸婄増鍢呮牳蹇?bug锛?    ok 2 - 馃敶 鍞旀渻灏囪嚜瑷傚垎鍗€璀垚銆屽粴鎴?/ 姘村惂銆嶏紙鑸婄増鍢呮牳蹇?bug锛?      ---
+      duration_ms: 0.6777
+      type: 'test'
+      ...
+    # Subtest: 椤ず鍚嶇敤鍟嗗鎵撳槄鍚嶏紝鍞斾總 id
+    ok 3 - 椤ず鍚嶇敤鍟嗗鎵撳槄鍚嶏紝鍞斾總 id
+      ---
+      duration_ms: 0.3499
+      type: 'test'
+      ...
+    # Subtest: 鍟嗗鏀瑰悕 鈫?灞忎笂鍗冲埢璺熶綇璁婏紙鍥犵偤鍚嶄總鐢?printZones 鎻愪緵锛?    ok 4 - 鍟嗗鏀瑰悕 鈫?灞忎笂鍗冲埢璺熶綇璁婏紙鍥犵偤鍚嶄總鐢?printZones 鎻愪緵锛?      ---
+      duration_ms: 0.47
+      type: 'test'
+      ...
+    # Subtest: 鍚嶄總绌虹櫧 鈫?閫€杩?id锛堝敂鏈冮’绀虹┖鐧藉崱锛?    ok 5 - 鍚嶄總绌虹櫧 鈫?閫€杩?id锛堝敂鏈冮’绀虹┖鐧藉崱锛?      ---
+      duration_ms: 0.3082
+      type: 'test'
+      ...
+    # Subtest: 鍐囦换浣曡彍銆佸唶浠讳綍鍠槄鍒嗗崁閮借鍑虹従锛堝緦寤? 浠婃櫄鏈枊閮借鎻€寰楀埌锛?    ok 6 - 鍐囦换浣曡彍銆佸唶浠讳綍鍠槄鍒嗗崁閮借鍑虹従锛堝緦寤? 浠婃櫄鏈枊閮借鎻€寰楀埌锛?      ---
+      duration_ms: 0.3575
+      type: 'test'
+      ...
+    # Subtest: 淇濇寔鍟嗗瑷畾鍢呮搴忥紙鍞旀渻鑷繁鎺掑簭锛?    ok 7 - 淇濇寔鍟嗗瑷畾鍢呮搴忥紙鍞旀渻鑷繁鎺掑簭锛?      ---
+      duration_ms: 0.3104
+      type: 'test'
+      ...
+    # Subtest: 閲嶈 id 鏈冨幓閲?    ok 8 - 閲嶈 id 鏈冨幓閲?      ---
+      duration_ms: 0.4601
+      type: 'test'
+      ...
+    # Subtest: 澹炶硣鏂欙紙null / 绌?id锛変竴寰嬭烦閬庯紝鍞旀渻 crash
+    ok 9 - 澹炶硣鏂欙紙null / 绌?id锛変竴寰嬭烦閬庯紝鍞旀渻 crash
+      ---
+      duration_ms: 0.6522
+      type: 'test'
+      ...
+    1..9
+ok 7 - deriveKdsStations 路 涓讳締婧?= 鍟嗗 printZones
+  ---
+  duration_ms: 13.4553
+  type: 'suite'
+  ...
+# Subtest: deriveKdsStations 路 鑸婅硣鏂欒鏁?    # Subtest: 瑷傚柈鍑虹従閬庛€佷絾鍞斿柡 printZones 鍢?id 鈫?浠嶇劧瑕佸嚭鐝撅紙鍞斿彲浠ヤ护鍡板暡鍠笂鍞斿埌灞忥級
+    ok 1 - 瑷傚柈鍑虹従閬庛€佷絾鍞斿柡 printZones 鍢?id 鈫?浠嶇劧瑕佸嚭鐝撅紙鍞斿彲浠ヤ护鍡板暡鍠笂鍞斿埌灞忥級
+      ---
+      duration_ms: 0.6712
+      type: 'test'
+      ...
+    # Subtest: 鑸?printer_groups 鍙仛鏈€寰屽厹搴曪紝鑰屼笖鍞旀渻钃嬮亷 printZones
+    ok 2 - 鑸?printer_groups 鍙仛鏈€寰屽厹搴曪紝鑰屼笖鍞旀渻钃嬮亷 printZones
+      ---
+      duration_ms: 0.4026
+      type: 'test'
+      ...
+    # Subtest: receipt / label 淇傛墦鍗版 role 鍞斾總鍒嗗崁 鈫?鍞旀渻鍑虹従鍠哄礂浣嶆竻鍠?    ok 3 - receipt / label 淇傛墦鍗版 role 鍞斾總鍒嗗崁 鈫?鍞旀渻鍑虹従鍠哄礂浣嶆竻鍠?      ---
+      duration_ms: 0.2583
+      type: 'test'
+      ...
+    # Subtest: 浣嗗晢瀹剁湡淇傞枊鍜椾竴鍊嬪彨 receipt 鍢呭垎鍗€ 鈫?鐓фǎ灏婇噸锛堝敂鏈冨墧璧帮級
+    ok 4 - 浣嗗晢瀹剁湡淇傞枊鍜椾竴鍊嬪彨 receipt 鍢呭垎鍗€ 鈫?鐓фǎ灏婇噸锛堝敂鏈冨墧璧帮級
+      ---
+      duration_ms: 0.2057
+      type: 'test'
+      ...
+    1..4
+ok 8 - deriveKdsStations 路 鑸婅硣鏂欒鏁?  ---
+  duration_ms: 2.1053
+  type: 'suite'
+  ...
+# Subtest: isLegacyNonStation
+    # Subtest: receipt / label锛堝ぇ灏忓銆佺┖鐧斤級閮界畻鑸婅硣鏂欐帓闄ら爡
+    ok 1 - receipt / label锛堝ぇ灏忓銆佺┖鐧斤級閮界畻鑸婅硣鏂欐帓闄ら爡
+      ---
+      duration_ms: 0.2355
+      type: 'test'
+      ...
+    # Subtest: 姝ｅ父鍒嗗崁鍚嶅敂绠?    ok 2 - 姝ｅ父鍒嗗崁鍚嶅敂绠?      ---
+      duration_ms: 0.1856
+      type: 'test'
+      ...
+    1..2
+ok 9 - isLegacyNonStation
+  ---
+  duration_ms: 0.6159
+  type: 'suite'
+  ...
+# Subtest: needsStationPicker
+    # Subtest: 鍙湁涓€鍊嬪垎鍗€ 鈫?鍞旀噳瑭插嚭閬告搰姝ラ锛堝椁樹竴姝?= 澶氫竴娆¤鎸夋鏈冿級
+    ok 1 - 鍙湁涓€鍊嬪垎鍗€ 鈫?鍞旀噳瑭插嚭閬告搰姝ラ锛堝椁樹竴姝?= 澶氫竴娆¤鎸夋鏈冿級
+      ---
+      duration_ms: 0.5925
+      type: 'test'
+      ...
+    # Subtest: 澶氶亷涓€鍊嬪垎鍗€ 鈫?瑕佸嚭閬告搰姝ラ
+    ok 2 - 澶氶亷涓€鍊嬪垎鍗€ 鈫?瑕佸嚭閬告搰姝ラ
+      ---
+      duration_ms: 0.3279
+      type: 'test'
+      ...
+    # Subtest: 涓€鍊嬪垎鍗€閮藉唶 鈫?鍞旀渻鑷嫊閹栧畾锛堣椤ず銆屾湭瑷畾鍒嗗崁銆嶏級
+    ok 3 - 涓€鍊嬪垎鍗€閮藉唶 鈫?鍞旀渻鑷嫊閹栧畾锛堣椤ず銆屾湭瑷畾鍒嗗崁銆嶏級
+      ---
+      duration_ms: 0.2544
+      type: 'test'
+      ...
+    1..3
+ok 10 - needsStationPicker
+  ---
+  duration_ms: 1.7065
+  type: 'suite'
+  ...
+# Subtest: isStationAvailable
+    # Subtest: 缍佸畾鍢呭垎鍗€浠插柡娓呭柈搴?鈫?鏈夋晥
+    ok 1 - 缍佸畾鍢呭垎鍗€浠插柡娓呭柈搴?鈫?鏈夋晥
+      ---
+      duration_ms: 0.4466
+      type: 'test'
+      ...
+    # Subtest: 搴楀鍒挆鍊嬪垎鍗€ 鈫?鍞旀湁鏁堬紙瑷畾鍗¤鍑烘彁绀猴紱浣?*鍞旀渻**鑷嫊褰堣繑鎻€宕椾綅锛?    ok 2 - 搴楀鍒挆鍊嬪垎鍗€ 鈫?鍞旀湁鏁堬紙瑷畾鍗¤鍑烘彁绀猴紱浣?*鍞旀渻**鑷嫊褰堣繑鎻€宕椾綅锛?      ---
+      duration_ms: 0.2108
+      type: 'test'
+      ...
+    # Subtest: 绌哄€间竴寰嬪敂鏈夋晥
+    ok 3 - 绌哄€间竴寰嬪敂鏈夋晥
+      ---
+      duration_ms: 0.2395
+      type: 'test'
+      ...
+    1..3
+ok 11 - isStationAvailable
+  ---
+  duration_ms: 1.3587
+  type: 'suite'
+  ...
+# (node:29536) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/kiosk-cart.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: lineSignature锛氳鏍奸伕鎿囨搴忓敂褰遍熆绨藉悕锛堝厛 A 寰?B == 鍏?B 寰?A锛?ok 12 - lineSignature锛氳鏍奸伕鎿囨搴忓敂褰遍熆绨藉悕锛堝厛 A 寰?B == 鍏?B 寰?A锛?  ---
+  duration_ms: 7.8874
+  type: 'test'
+  ...
+# Subtest: lineSignature锛氳鏍?/ 鍌欒ɑ鍞斿悓灏卞敂鏈冨悎浣?ok 13 - lineSignature锛氳鏍?/ 鍌欒ɑ鍞斿悓灏卞敂鏈冨悎浣?  ---
+  duration_ms: 0.5792
+  type: 'test'
+  ...
+# Subtest: mergeCartLine锛氬悓鑿滃悓瑕忔牸鑷嫊鍚堜降鏁搁噺锛堝敂鏈冨嚭鍏╄锛?ok 14 - mergeCartLine锛氬悓鑿滃悓瑕忔牸鑷嫊鍚堜降鏁搁噺锛堝敂鏈冨嚭鍏╄锛?  ---
+  duration_ms: 0.7707
+  type: 'test'
+  ...
+# Subtest: changeCartQty锛氭笡鍒?0 灏辩Щ闄よ┎琛?ok 15 - changeCartQty锛氭笡鍒?0 灏辩Щ闄よ┎琛?  ---
+  duration_ms: 0.4502
+  type: 'test'
+  ...
+# Subtest: computeOrderTotals锛氱附瑷?= 灏忚▓ + 鏈嶅嫏璨?+ 绋咃紙鍚?buildKioskOrder 鍚屾簮锛?ok 16 - computeOrderTotals锛氱附瑷?= 灏忚▓ + 鏈嶅嫏璨?+ 绋咃紙鍚?buildKioskOrder 鍚屾簮锛?  ---
+  duration_ms: 0.9381
+  type: 'test'
+  ...
+# Subtest: computeOrderTotals锛氬唶瑷▍ / 鏈嶅嫏璨伙紙鎴?rules 鐐?null锛夆啋 绺借▓ == 灏忚▓
+ok 17 - computeOrderTotals锛氬唶瑷▍ / 鏈嶅嫏璨伙紙鎴?rules 鐐?null锛夆啋 绺借▓ == 灏忚▓
+  ---
+  duration_ms: 3.8222
+  type: 'test'
+  ...
+# (node:12904) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/ledger/order-config-parse.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: parseMerchantOrderConfig
+    # Subtest: 妯欐簴 snake_case 鍥炲偝 鈫?鍏ㄩ儴鐓ц畝
+    ok 1 - 妯欐簴 snake_case 鍥炲偝 鈫?鍏ㄩ儴鐓ц畝
+      ---
+      duration_ms: 5.3817
+      type: 'test'
+      ...
+    # Subtest: camelCase 鍥炲偝涓€妯ｈ畝寰楀埌
+    ok 2 - camelCase 鍥炲偝涓€妯ｈ畝寰楀埌
+      ---
+      duration_ms: 0.4457
+      type: 'test'
+      ...
+    # Subtest: 馃敶 缂?merchant_enabled 娆?鈫?null锛堝敂鍙互鐣?true锛廸alse锛?    ok 3 - 馃敶 缂?merchant_enabled 娆?鈫?null锛堝敂鍙互鐣?true锛廸alse锛?      ---
+      duration_ms: 0.5423
+      type: 'test'
+      ...
+    # Subtest: 馃敶 绌虹墿浠?/ null / 绱斿瓧涓?鈫?merchantEnabled 涓€寰?null
+    ok 4 - 馃敶 绌虹墿浠?/ null / 绱斿瓧涓?鈫?merchantEnabled 涓€寰?null
+      ---
+      duration_ms: 0.404
+      type: 'test'
+      ...
+    # Subtest: 瀛椾覆 "false" 鍞斿彲浠ョ暥 truthy锛堟渻鍙嶈綁鎴愩€岄枊銆嶏級
+    ok 5 - 瀛椾覆 "false" 鍞斿彲浠ョ暥 truthy锛堟渻鍙嶈綁鎴愩€岄枊銆嶏級
+      ---
+      duration_ms: 0.6545
+      type: 'test'
+      ...
+    # Subtest: 0 / 1 鏁稿瓧瀵硶涓€妯ｆ敮鎻?    ok 6 - 0 / 1 鏁稿瓧瀵硶涓€妯ｆ敮鎻?      ---
+      duration_ms: 0.34
+      type: 'test'
+      ...
+    # Subtest: 闄ｅ垪鍖呬綇涓€琛?鈫?鍙栫涓€琛?    ok 7 - 闄ｅ垪鍖呬綇涓€琛?鈫?鍙栫涓€琛?      ---
+      duration_ms: 12.9191
+      type: 'test'
+      ...
+    # Subtest: 鍖呬竴灞?{ config: {...} } 鈫?鎷嗛枊
+    ok 8 - 鍖呬竴灞?{ config: {...} } 鈫?鎷嗛枊
+      ---
+      duration_ms: 0.5839
+      type: 'test'
+      ...
+    # Subtest: auto_accept 缂烘瑒 鈫?false锛堝悓 POS 鏈湴 default 涓€鑷达級
+    ok 9 - auto_accept 缂烘瑒 鈫?false锛堝悓 POS 鏈湴 default 涓€鑷达級
+      ---
+      duration_ms: 0.6589
+      type: 'test'
+      ...
+    1..9
+ok 18 - parseMerchantOrderConfig
+  ---
+  duration_ms: 25.8689
+  type: 'suite'
+  ...
+# Subtest: isRpcMissingError
+    # Subtest: PostgREST 鎻惧敂鍒板嚱寮?鈫?true
+    ok 1 - PostgREST 鎻惧敂鍒板嚱寮?鈫?true
+      ---
+      duration_ms: 0.5574
+      type: 'test'
+      ...
+    # Subtest: 鏅€氭キ鍕欓尟瑾?鈫?false
+    ok 2 - 鏅€氭キ鍕欓尟瑾?鈫?false
+      ---
+      duration_ms: 0.2416
+      type: 'test'
+      ...
+    1..2
+ok 19 - isRpcMissingError
+  ---
+  duration_ms: 1.3043
+  type: 'suite'
+  ...
+# Subtest: describeOrderConfigBlockers
+    # Subtest: 姝ｅ父鐕熸キ涓?鈫?鍐?blocker
+    ok 1 - 姝ｅ父鐕熸キ涓?鈫?鍐?blocker
+      ---
+      duration_ms: 1.7314
+      type: 'test'
+      ...
+    # Subtest: admin_enabled=false 鈫?骞冲彴鏈牳鍙紙搴楀摗瑙ｅ敂鍒帮級
+    ok 2 - admin_enabled=false 鈫?骞冲彴鏈牳鍙紙搴楀摗瑙ｅ敂鍒帮級
+      ---
+      duration_ms: 0.2743
+      type: 'test'
+      ...
+    # Subtest: merchant_enabled=false 鈫?宸叉毇鍋滄帴鍠紙搴楀摗鑷繁闁嬪緱杩旓級
+    ok 3 - merchant_enabled=false 鈫?宸叉毇鍋滄帴鍠紙搴楀摗鑷繁闁嬪緱杩旓級
+      ---
+      duration_ms: 0.4382
+      type: 'test'
+      ...
+    # Subtest: suspended 鈫?鍒楀嚭甯宠櫉鐙€鎱?    ok 4 - suspended 鈫?鍒楀嚭甯宠櫉鐙€鎱?      ---
+      duration_ms: 0.448
+      type: 'test'
+      ...
+    # Subtest: 鏅傛澶栵紙hours_enabled=true 涓?open_now=false锛夆啋 浼戞伅涓?    ok 5 - 鏅傛澶栵紙hours_enabled=true 涓?open_now=false锛夆啋 浼戞伅涓?      ---
+      duration_ms: 0.26
+      type: 'test'
+      ...
+    # Subtest: 鍏ㄥぉ鎺ュ柈锛坔ours_enabled=false锛夊氨绠?open_now 缂烘瑒閮藉敂鏈冧簜鍫变紤鎭?    ok 6 - 鍏ㄥぉ鎺ュ柈锛坔ours_enabled=false锛夊氨绠?open_now 缂烘瑒閮藉敂鏈冧簜鍫变紤鎭?      ---
+      duration_ms: 0.2399
+      type: 'test'
+      ...
+    # Subtest: 鍏ㄧ己娆?鈫?鍞斾簜鍤囦汉锛屽敂鍒?blocker
+    ok 7 - 鍏ㄧ己娆?鈫?鍞斾簜鍤囦汉锛屽敂鍒?blocker
+      ---
+      duration_ms: 0.2239
+      type: 'test'
+      ...
+    1..7
+ok 20 - describeOrderConfigBlockers
+  ---
+  duration_ms: 4.0635
+  type: 'suite'
+  ...
+# Subtest: hasAnyOnlinePayment
+    # Subtest: 鍏╃ó閮介棞 鈫?false锛堥枊搴楁渻鐣€ RPC 鎷掞級
+    ok 1 - 鍏╃ó閮介棞 鈫?false锛堥枊搴楁渻鐣€ RPC 鎷掞級
+      ---
+      duration_ms: 0.3365
+      type: 'test'
+      ...
+    # Subtest: 鏈変竴閭婇枊 鈫?true
+    ok 2 - 鏈変竴閭婇枊 鈫?true
+      ---
+      duration_ms: 0.1857
+      type: 'test'
+      ...
+    # Subtest: 鍏╅倞閮界己娆?鈫?null锛堢劇寰炲垽鏂凤級
+    ok 3 - 鍏╅倞閮界己娆?鈫?null锛堢劇寰炲垽鏂凤級
+      ---
+      duration_ms: 0.1639
+      type: 'test'
+      ...
+    1..3
+ok 21 - hasAnyOnlinePayment
+  ---
+  duration_ms: 0.9179
+  type: 'suite'
+  ...
+# (node:12928) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos-order-filters.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: isQuickOrderReady锛堝揩椁愬嚭椁愰殠娈靛敮涓€鐪熸簮锛?    # Subtest: 鍙湅 fulfillmentStatus锛歴ent_to_kitchen + ready 閮界畻銆屽彲鍙栭銆?    ok 1 - 鍙湅 fulfillmentStatus锛歴ent_to_kitchen + ready 閮界畻銆屽彲鍙栭銆?      ---
+      duration_ms: 3.7424
+      type: 'test'
+      ...
+    # Subtest: preparing / 鏈ō瀹?鈫?鍞旂畻
+    ok 2 - preparing / 鏈ō瀹?鈫?鍞旂畻
+      ---
+      duration_ms: 0.3981
+      type: 'test'
+      ...
+    # Subtest: 绲傛厠娈樼暀 ready 鍞旀渻浠ゅ嫉鍠畩銆屽緟鍙栭銆嶏紙鍙湁閫茶涓柈鐫囧嚭椁愰殠娈碉級
+    ok 3 - 绲傛厠娈樼暀 ready 鍞旀渻浠ゅ嫉鍠畩銆屽緟鍙栭銆嶏紙鍙湁閫茶涓柈鐫囧嚭椁愰殠娈碉級
+      ---
+      duration_ms: 0.5777
+      type: 'test'
+      ...
+    1..3
+ok 22 - isQuickOrderReady锛堝揩椁愬嚭椁愰殠娈靛敮涓€鐪熸簮锛?  ---
+  duration_ms: 7.0932
+  type: 'suite'
+  ...
+# Subtest: getPaymentBadge锛堝揩椁愪粯娆剧董搴︼級
+    # Subtest: paid / settled 閮戒總銆屽凡绲愬赋銆?    ok 1 - paid / settled 閮戒總銆屽凡绲愬赋銆?      ---
+      duration_ms: 0.6389
+      type: 'test'
+      ...
+    # Subtest: draft / sent_to_kitchen 淇傘€屾湭绲愬赋銆?    ok 2 - draft / sent_to_kitchen 淇傘€屾湭绲愬赋銆?      ---
+      duration_ms: 0.3036
+      type: 'test'
+      ...
+    1..2
+ok 23 - getPaymentBadge锛堝揩椁愪粯娆剧董搴︼級
+  ---
+  duration_ms: 1.3369
+  type: 'suite'
+  ...
+# Subtest: mergeTimestamp锛堝悓涓€閻樺煙锛歝lient 閻樺劒鍏堬級
+    # Subtest: 鏈?clientUpdatedAt 灏辩敤浣紝鍞旂悊 server 钃嬬珷鍢?updatedAt
+    ok 1 - 鏈?clientUpdatedAt 灏辩敤浣紝鍞旂悊 server 钃嬬珷鍢?updatedAt
+      ---
+      duration_ms: 0.663
+      type: 'test'
+      ...
+    # Subtest: 鍐?clientUpdatedAt锛堟湰姗熸柊寤烘湭涓婇洸 / 鑸?row锛夆啋 閫€鍥?updatedAt
+    ok 2 - 鍐?clientUpdatedAt锛堟湰姗熸柊寤烘湭涓婇洸 / 鑸?row锛夆啋 閫€鍥?updatedAt
+      ---
+      duration_ms: 0.6926
+      type: 'test'
+      ...
+    1..2
+ok 24 - mergeTimestamp锛堝悓涓€閻樺煙锛歝lient 閻樺劒鍏堬級
+  ---
+  duration_ms: 2.0366
+  type: 'suite'
+  ...
+# Subtest: mergeOrderLists锛氫粯娆鹃殠娈靛柈鍚戦枠锛?026-09-12 瀵︽锛?    # Subtest: 宸茬祼甯筹紙paid锛夊敂鏈冭銆岄洸绔壆鏂般€嶅槄鏈祼甯?snapshot 钃嬭蛋 鈥斺€?灏辩畻 updatedAt 杓冩柊
+    ok 1 - 宸茬祼甯筹紙paid锛夊敂鏈冭銆岄洸绔壆鏂般€嶅槄鏈祼甯?snapshot 钃嬭蛋 鈥斺€?灏辩畻 updatedAt 杓冩柊
+      ---
+      duration_ms: 0.9464
+      type: 'test'
+      ...
+    # Subtest: 灏辩畻 incoming 甯跺煁杓冩柊鍢?client 閻橈紝宸叉敹娆剧媭鎱嬩粛鐒跺敂鏈冭闄嶇礆锛堥槻璺ㄦ鏅傞悩鍋忕Щ锛?    ok 2 - 灏辩畻 incoming 甯跺煁杓冩柊鍢?client 閻橈紝宸叉敹娆剧媭鎱嬩粛鐒跺敂鏈冭闄嶇礆锛堥槻璺ㄦ鏅傞悩鍋忕Щ锛?      ---
+      duration_ms: 0.5286
+      type: 'test'
+      ...
+    # Subtest: 鍙嶅悜锛氶洸绔凡鏀舵銆佹湰姗熶徊淇?open 鈫?鏀舵锛堝墠閫诧級涓€瀹氳磸锛屼甫淇濈暀鏈鍠櫉
+    ok 3 - 鍙嶅悜锛氶洸绔凡鏀舵銆佹湰姗熶徊淇?open 鈫?鏀舵锛堝墠閫诧級涓€瀹氳磸锛屼甫淇濈暀鏈鍠櫉
+      ---
+      duration_ms: 0.7836
+      type: 'test'
+      ...
+    # Subtest: 鍚堟硶闄嶇礆鐓ч€氾細鍙栨秷绲愬赋锛坈ancelled 淇傜祩鎱嬶級鍙互璐忛亷宸叉敹娆惧柈
+    ok 4 - 鍚堟硶闄嶇礆鐓ч€氾細鍙栨秷绲愬赋锛坈ancelled 淇傜祩鎱嬶級鍙互璐忛亷宸叉敹娆惧柈
+      ---
+      duration_ms: 0.3079
+      type: 'test'
+      ...
+    # Subtest: 鍚堟硶鍙嶈綁鐓ч€氾細杩旂祼锛坮eopened锛夊彲浠ュ弽杞夊凡绲愬赋鍠紙LWW 姹哄畾锛?    ok 5 - 鍚堟硶鍙嶈綁鐓ч€氾細杩旂祼锛坮eopened锛夊彲浠ュ弽杞夊凡绲愬赋鍠紙LWW 姹哄畾锛?      ---
+      duration_ms: 0.27
+      type: 'test'
+      ...
+    # Subtest: 绲傛厠鍎厛浠嶇劧鏈夋晥锛歴ettled 鍞旀渻琚?open snapshot 钃嬭蛋
+    ok 6 - 绲傛厠鍎厛浠嶇劧鏈夋晥锛歴ettled 鍞旀渻琚?open snapshot 钃嬭蛋
+      ---
+      duration_ms: 0.2778
+      type: 'test'
+      ...
+    # Subtest: 鍏╁€?open 鐗堟湰鐓ц LWW锛岃€屼笖鐢?client 閻橈紙鍞旀渻琚?server 钃嬬珷鏅傞枔楱欙級
+    ok 7 - 鍏╁€?open 鐗堟湰鐓ц LWW锛岃€屼笖鐢?client 閻橈紙鍞旀渻琚?server 钃嬬珷鏅傞枔楱欙級
+      ---
+      duration_ms: 0.2854
+      type: 'test'
+      ...
+    # Subtest: 澶氫締婧愶紙鏈 + React state + 闆茬 backfill锛夊敂鏈冧笩鍠?/ 鍞旀渻閲嶈
+    ok 8 - 澶氫締婧愶紙鏈 + React state + 闆茬 backfill锛夊敂鏈冧笩鍠?/ 鍞旀渻閲嶈
+      ---
+      duration_ms: 0.3281
+      type: 'test'
+      ...
+    1..8
+ok 25 - mergeOrderLists锛氫粯娆鹃殠娈靛柈鍚戦枠锛?026-09-12 瀵︽锛?  ---
+  duration_ms: 4.598
+  type: 'suite'
+  ...
+# Subtest: isPaidOrderStatus
+    # Subtest: 瑕嗚搵鎵€鏈夊凡鏀舵 / 鏀舵寰岀祼灞€锛屽敂鍖呮嫭 open 鍚?cancelled / reopened
+    ok 1 - 瑕嗚搵鎵€鏈夊凡鏀舵 / 鏀舵寰岀祼灞€锛屽敂鍖呮嫭 open 鍚?cancelled / reopened
+      ---
+      duration_ms: 1.6633
+      type: 'test'
+      ...
+    1..1
+ok 26 - isPaidOrderStatus
+  ---
+  duration_ms: 2.013
+  type: 'suite'
+  ...
+# Subtest: getPaymentBadge 鍨嬪垾濂戠磩
+    # Subtest: 鍥炲偝瀹屾暣 badge token锛坆g / text / dot锛夛紝UI 鍙互鐩存帴濂?className
+    ok 1 - 鍥炲偝瀹屾暣 badge token锛坆g / text / dot锛夛紝UI 鍙互鐩存帴濂?className
+      ---
+      duration_ms: 0.4055
+      type: 'test'
+      ...
+    1..1
+ok 27 - getPaymentBadge 鍨嬪垾濂戠磩
+  ---
+  duration_ms: 0.5597
+  type: 'suite'
+  ...
+# Subtest: 蹇妯″紡鎺＄磵绶氫笂鍠紙2026-09-12锛歩sQuickCounterOrder 鏀惧锛?    # Subtest: 绶氫笂鍠帯绱嶆垚 counter 鍠箣寰岀畻銆屽揩椁?counter 鍠€嶏紙瑕佸叆蹇 strip 琛屽彲鍙栭鈫掑畬鎴愶級
+    ok 1 - 绶氫笂鍠帯绱嶆垚 counter 鍠箣寰岀畻銆屽揩椁?counter 鍠€嶏紙瑕佸叆蹇 strip 琛屽彲鍙栭鈫掑畬鎴愶級
+      ---
+      duration_ms: 0.4716
+      type: 'test'
+      ...
+    # Subtest: 绶氫笂 counter 鍠敂鏈冨叆銆屽簵鍏х窔涓嬭▊鍠€嶏紙鍒嗗伐锛氬揩椁?strip 绠★級
+    ok 2 - 绶氫笂 counter 鍠敂鏈冨叆銆屽簵鍏х窔涓嬭▊鍠€嶏紙鍒嗗伐锛氬揩椁?strip 绠★級
+      ---
+      duration_ms: 0.456
+      type: 'test'
+      ...
+    # Subtest: 鏈湴 counter 鍠?/ 鐪熸灡鍫傞鍠鐐轰笉璁婏紙鏀惧鍞斿彲浠ヨ鍌凤級
+    ok 3 - 鏈湴 counter 鍠?/ 鐪熸灡鍫傞鍠鐐轰笉璁婏紙鏀惧鍞斿彲浠ヨ鍌凤級
+      ---
+      duration_ms: 0.2621
+      type: 'test'
+      ...
+    # Subtest: 绶氫笂宸蹭粯蹇鍠細銆屽凡绲愬赋銆? 鍑洪闅庢鐓ф甯告祦绋嬶紙瑁戒綔涓?鈫?寰呭彇椁愶級
+    ok 4 - 绶氫笂宸蹭粯蹇鍠細銆屽凡绲愬赋銆? 鍑洪闅庢鐓ф甯告祦绋嬶紙瑁戒綔涓?鈫?寰呭彇椁愶級
+      ---
+      duration_ms: 0.3208
+      type: 'test'
+      ...
+    # Subtest: 鏈敹娆撅紙鍒板簵浠樻锛夊槄绶氫笂蹇鍠總銆屾湭绲愬赋銆?    ok 5 - 鏈敹娆撅紙鍒板簵浠樻锛夊槄绶氫笂蹇鍠總銆屾湭绲愬赋銆?      ---
+      duration_ms: 0.2207
+      type: 'test'
+      ...
+    # Subtest: 绲傛厠锛坰ettled锛夊敂鏈冨啀鍑虹従鍠哄揩椁?strip
+    ok 6 - 绲傛厠锛坰ettled锛夊敂鏈冨啀鍑虹従鍠哄揩椁?strip
+      ---
+      duration_ms: 0.3561
+      type: 'test'
+      ...
+    1..6
+ok 28 - 蹇妯″紡鎺＄磵绶氫笂鍠紙2026-09-12锛歩sQuickCounterOrder 鏀惧锛?  ---
+  duration_ms: 2.5181
+  type: 'suite'
+  ...
+# Subtest: transferredLedgerOrderIds锛堟帓浣嶅緦鍞旀噳瑭插叐閭婂悓鏅傚嚭鐝撅級
+    # Subtest: 绶氫笂鍫傞鍠帓鍜椾綅锛堢湡鏋辫櫉锛夆啋 瑕佺敱绶氫笂鍒楄〃鍓旇蛋
+    ok 1 - 绶氫笂鍫傞鍠帓鍜椾綅锛堢湡鏋辫櫉锛夆啋 瑕佺敱绶氫笂鍒楄〃鍓旇蛋
+      ---
+      duration_ms: 0.385
+      type: 'test'
+      ...
+    # Subtest: 蹇鎺＄磵鍢?counter 鍠敂鏈冭鍓旇蛋锛堜舰鍠哄揩椁?strip 绠＄悊锛岀窔涓婂垪琛ㄤ粛鐒朵總渚嗘簮瑷橀寗锛?    ok 2 - 蹇鎺＄磵鍢?counter 鍠敂鏈冭鍓旇蛋锛堜舰鍠哄揩椁?strip 绠＄悊锛岀窔涓婂垪琛ㄤ粛鐒朵總渚嗘簮瑷橀寗锛?      ---
+      duration_ms: 0.3231
+      type: 'test'
+      ...
+    # Subtest: 鏈湴鍠紙鍐?onlineOrderId锛変竴寰嬪敂闂滀簨
+    ok 3 - 鏈湴鍠紙鍐?onlineOrderId锛変竴寰嬪敂闂滀簨
+      ---
+      duration_ms: 0.2239
+      type: 'test'
+      ...
+    # Subtest: 鍚屼竴鎵规贩鍚堬細鍙墧璧板凡鎺掍綅鍡板嫉
+    ok 4 - 鍚屼竴鎵规贩鍚堬細鍙墧璧板凡鎺掍綅鍡板嫉
+      ---
+      duration_ms: 1.8288
+      type: 'test'
+      ...
+    1..4
+ok 29 - transferredLedgerOrderIds锛堟帓浣嶅緦鍞旀噳瑭插叐閭婂悓鏅傚嚭鐝撅級
+  ---
+  duration_ms: 3.0923
+  type: 'suite'
+  ...
+# (node:19992) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/daily-order-seq.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 鍥炴锛?026-09-10 瑷傚柈03 閲嶈锛夛細鏈瑷堟暩鍣ㄦ闆舵檪锛岀敱鐪煎墠瑷傚柈鎺ㄥ皫涓嬮檺
+ok 30 - 鍥炴锛?026-09-10 瑷傚柈03 閲嶈锛夛細鏈瑷堟暩鍣ㄦ闆舵檪锛岀敱鐪煎墠瑷傚柈鎺ㄥ皫涓嬮檺
+  ---
+  duration_ms: 21.8486
+  type: 'test'
+  ...
+# Subtest: 涓嬮檺鍙栥€屾湰姗熻▓鏁稿櫒銆嶅悓銆岀溂鍓嶆渶澶ц櫉銆嶈純澶ц€?ok 31 - 涓嬮檺鍙栥€屾湰姗熻▓鏁稿櫒銆嶅悓銆岀溂鍓嶆渶澶ц櫉銆嶈純澶ц€?  ---
+  duration_ms: 0.4424
+  type: 'test'
+  ...
+# Subtest: 瑷堟暩鍣?/ 涓嬮檺淇傚瀮鍦惧€硷紙NaN / 璨犳暩锛夐兘鍞旀渻娲?0 铏熸垨璨犺櫉
+ok 32 - 瑷堟暩鍣?/ 涓嬮檺淇傚瀮鍦惧€硷紙NaN / 璨犳暩锛夐兘鍞旀渻娲?0 铏熸垨璨犺櫉
+  ---
+  duration_ms: 0.3672
+  type: 'test'
+  ...
+# Subtest: 璺ㄦ棩鍞旀渻浜掔浉鎺ㄩ珮锛氬皨鏃ュ槄 瑷傚柈12 鍞斿奖闊夸粖鏃ヤ笅闄?ok 33 - 璺ㄦ棩鍞旀渻浜掔浉鎺ㄩ珮锛氬皨鏃ュ槄 瑷傚柈12 鍞斿奖闊夸粖鏃ヤ笅闄?  ---
+  duration_ms: 0.4663
+  type: 'test'
+  ...
+# Subtest: 鍐囨檪闁撴埑鍢呭柈淇濆畧瑷堝叆锛堝鍙烦铏燂紝鍞斿彲鎾炶櫉锛?ok 34 - 鍐囨檪闁撴埑鍢呭柈淇濆畧瑷堝叆锛堝鍙烦铏燂紝鍞斿彲鎾炶櫉锛?  ---
+  duration_ms: 0.3301
+  type: 'test'
+  ...
+# Subtest: 鍓嶇洞鍞斿彲浠ヤ簰鐩告薄鏌擄細鑷彇12 鍞旀渻鎺ㄩ珮 瑷傚柈 鍢呬笅闄?ok 35 - 鍓嶇洞鍞斿彲浠ヤ簰鐩告薄鏌擄細鑷彇12 鍞旀渻鎺ㄩ珮 瑷傚柈 鍢呬笅闄?  ---
+  duration_ms: 0.685
+  type: 'test'
+  ...
+# Subtest: 鍓嶇洞淇傚瓙瀛椾覆閮借绮剧⒑鍖归厤锛堣▊鍠?vs 瑷傚柈A锛?ok 36 - 鍓嶇洞淇傚瓙瀛椾覆閮借绮剧⒑鍖归厤锛堣▊鍠?vs 瑷傚柈A锛?  ---
+  duration_ms: 0.2997
+  type: 'test'
+  ...
+# Subtest: 鍐?localOrderNo / 绌洪櫍鍒?/ 鍞斿尮閰嶆牸寮?鈫?鍏ㄩ儴鍥?0
+ok 37 - 鍐?localOrderNo / 绌洪櫍鍒?/ 鍞斿尮閰嶆牸寮?鈫?鍏ㄩ儴鍥?0
+  ---
+  duration_ms: 0.3644
+  type: 'test'
+  ...
+# Subtest: 瓒呴亷 99 鍞旀渻鎴柗锛堣▊鍠?00 鈫?101锛?ok 38 - 瓒呴亷 99 鍞旀渻鎴柗锛堣▊鍠?00 鈫?101锛?  ---
+  duration_ms: 0.886
+  type: 'test'
+  ...
+# (node:23112) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/kiosk-settings.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: normalizeScanMode
+    # Subtest: DB 鏈夋槑纰哄€?鈫?鐓х敤
+    ok 1 - DB 鏈夋槑纰哄€?鈫?鐓х敤
+      ---
+      duration_ms: 1.5495
+      type: 'test'
+      ...
+    # Subtest: undefined / null / 绌哄瓧涓诧紙娆勪綅鏈瓨鍦?/ 鏈ō瀹氾級鈫?dine_in锛堝悜寰屽吋瀹癸級
+    ok 2 - undefined / null / 绌哄瓧涓诧紙娆勪綅鏈瓨鍦?/ 鏈ō瀹氾級鈫?dine_in锛堝悜寰屽吋瀹癸級
+      ---
+      duration_ms: 0.32
+      type: 'test'
+      ...
+    # Subtest: 鏈煡鍊硷紙鎵撻尟瀛?/ 鑸婄増鏈畼鐣欙級鈫?涓€寰?dine_in锛屽敂鏈冭鐣跺揩椁?    ok 3 - 鏈煡鍊硷紙鎵撻尟瀛?/ 鑸婄増鏈畼鐣欙級鈫?涓€寰?dine_in锛屽敂鏈冭鐣跺揩椁?      ---
+      duration_ms: 0.2925
+      type: 'test'
+      ...
+    # Subtest: 闋愯ō妯″紡淇傚爞椋燂紙鐝惧瓨搴楅嫪琛岀偤涓嶈畩锛?    ok 4 - 闋愯ō妯″紡淇傚爞椋燂紙鐝惧瓨搴楅嫪琛岀偤涓嶈畩锛?      ---
+      duration_ms: 0.2669
+      type: 'test'
+      ...
+    1..4
+ok 39 - normalizeScanMode
+  ---
+  duration_ms: 5.0748
+  type: 'suite'
+  ...
+# Subtest: normalizeKioskPrinters
+    # Subtest: 鍚堟硶闋呯洰鐓х暀锛堥€?ipAddress 绛夋瑒浣嶄竴榻婁繚鐣欙級
+    ok 1 - 鍚堟硶闋呯洰鐓х暀锛堥€?ipAddress 绛夋瑒浣嶄竴榻婁繚鐣欙級
+      ---
+      duration_ms: 2.1966
+      type: 'test'
+      ...
+    # Subtest: 鍞斾總闄ｅ垪 / 绌哄€?鈫?绌洪櫍鍒楋紙鍞旀渻鐖嗭級
+    ok 2 - 鍞斾總闄ｅ垪 / 绌哄€?鈫?绌洪櫍鍒楋紙鍞旀渻鐖嗭級
+      ---
+      duration_ms: 1.5945
+      type: 'test'
+      ...
+    # Subtest: 缂?id 鎴?name 鈫?鍓旇蛋
+    ok 3 - 缂?id 鎴?name 鈫?鍓旇蛋
+      ---
+      duration_ms: 0.523
+      type: 'test'
+      ...
+    # Subtest: role / connectionType 鍞斿柡鐧藉悕鍠?鈫?鍓旇蛋锛堝敂鏈冮潨闈滃湴鐣舵垚 receipt锛?    ok 4 - role / connectionType 鍞斿柡鐧藉悕鍠?鈫?鍓旇蛋锛堝敂鏈冮潨闈滃湴鐣舵垚 receipt锛?      ---
+      duration_ms: 0.7816
+      type: 'test'
+      ...
+    # Subtest: 缂?enabled 鈫?鐣?true锛涙槑纰?false 灏辫淇濈暀锛堝晢瀹跺仠鐢ㄨ鐢熸晥锛?    ok 5 - 缂?enabled 鈫?鐣?true锛涙槑纰?false 灏辫淇濈暀锛堝晢瀹跺仠鐢ㄨ鐢熸晥锛?      ---
+      duration_ms: 0.6786
+      type: 'test'
+      ...
+    # Subtest: 娣峰悎娓呭柈 鈫?鍙暀鍚堟硶鍢咃紙鍞旀渻鍥犵偤涓€鍊嬪闋呯洰涓熸檼鍏ㄩ儴锛?    ok 6 - 娣峰悎娓呭柈 鈫?鍙暀鍚堟硶鍢咃紙鍞旀渻鍥犵偤涓€鍊嬪闋呯洰涓熸檼鍏ㄩ儴锛?      ---
+      duration_ms: 0.6632
+      type: 'test'
+      ...
+    1..6
+ok 40 - normalizeKioskPrinters
+  ---
+  duration_ms: 7.4252
+  type: 'suite'
+  ...
+# (node:17140) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/online-dinein-labels.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 绶氫笂鍠細鏋变綅缍害
+    # Subtest: 鍫傞妯″紡 + 绶氫笂鍫傞鍠?+ 鏈帓浣?鈫?寰呭畨鎺掑骇浣嶏紙姗欙級
+    ok 1 - 鍫傞妯″紡 + 绶氫笂鍫傞鍠?+ 鏈帓浣?鈫?寰呭畨鎺掑骇浣嶏紙姗欙級
+      ---
+      duration_ms: 2.2438
+      type: 'test'
+      ...
+    # Subtest: 宸叉帓浣?鈫?椤ず鏋卞悕锛堢稜锛夛紝涓︿笖鍞斿啀闇€瑕佹帓浣?    ok 2 - 宸叉帓浣?鈫?椤ず鏋卞悕锛堢稜锛夛紝涓︿笖鍞斿啀闇€瑕佹帓浣?      ---
+      duration_ms: 0.391
+      type: 'test'
+      ...
+    # Subtest: tableId = counter 鍞旂畻銆屽凡鎺掍綅銆嶏紙蹇锛忚嚜鍙栵紡澶栬常閮界敤 counter锛?    ok 3 - tableId = counter 鍞旂畻銆屽凡鎺掍綅銆嶏紙蹇锛忚嚜鍙栵紡澶栬常閮界敤 counter锛?      ---
+      duration_ms: 0.3308
+      type: 'test'
+      ...
+    # Subtest: 馃敶 蹇妯″紡锛歞ine_in 绶氫笂鍠敂鎺掍綅 鈫?鍑洪鍙ｈ嚜鍙栵紙鍞斿彲浠ラ’绀哄緟瀹夋帓搴т綅锛?    ok 4 - 馃敶 蹇妯″紡锛歞ine_in 绶氫笂鍠敂鎺掍綅 鈫?鍑洪鍙ｈ嚜鍙栵紙鍞斿彲浠ラ’绀哄緟瀹夋帓搴т綅锛?      ---
+      duration_ms: 0.486
+      type: 'test'
+      ...
+    # Subtest: 鑷彇 / 澶栬常鍠案閬犲敂闇€瑕佹帓浣?    ok 5 - 鑷彇 / 澶栬常鍠案閬犲敂闇€瑕佹帓浣?      ---
+      duration_ms: 0.3963
+      type: 'test'
+      ...
+    # Subtest: 鏋卞悕绌虹櫧鏅傞€€鍥炶惤銆屽凡鎺掍綅銆嶏紙鍞斿彲浠ラ’绀虹┖鐧借棩涓革級
+    ok 6 - 鏋卞悕绌虹櫧鏅傞€€鍥炶惤銆屽凡鎺掍綅銆嶏紙鍞斿彲浠ラ’绀虹┖鐧借棩涓革級
+      ---
+      duration_ms: 0.3641
+      type: 'test'
+      ...
+    # Subtest: 鎺掍綅鎺ｆ枃妗堬細鏈帓浣?= 鎺掍綅锛涘凡鎺掍綅 = 鏀规灡
+    ok 7 - 鎺掍綅鎺ｆ枃妗堬細鏈帓浣?= 鎺掍綅锛涘凡鎺掍綅 = 鏀规灡
+      ---
+      duration_ms: 0.491
+      type: 'test'
+      ...
+    1..7
+ok 41 - 绶氫笂鍠細鏋变綅缍害
+  ---
+  duration_ms: 9.6226
+  type: 'suite'
+  ...
+# Subtest: 绶氫笂鍠細浠樻缍害
+    # Subtest: 绶氫笂宸蹭粯锛堥椤嶆墸榛烇級鈫?宸茬祼甯筹紙缍狅級
+    ok 1 - 绶氫笂宸蹭粯锛堥椤嶆墸榛烇級鈫?宸茬祼甯筹紙缍狅級
+      ---
+      duration_ms: 0.7438
+      type: 'test'
+      ...
+    # Subtest: 鍒板簵浠樻鏈敹閷?鈫?鏈祼甯筹紙鏂囨瑕佺煭锛屽敂鍙互閫肩垎 280px 蹇嵎鎿嶄綔娆勶級
+    ok 2 - 鍒板簵浠樻鏈敹閷?鈫?鏈祼甯筹紙鏂囨瑕佺煭锛屽敂鍙互閫肩垎 280px 蹇嵎鎿嶄綔娆勶級
+      ---
+      duration_ms: 0.6853
+      type: 'test'
+      ...
+    # Subtest: 浠樻鐙€鎱嬪ぇ灏忓 / 缂哄け閮藉敂鏈冭鍒ゆ垚宸茬祼甯?    ok 3 - 浠樻鐙€鎱嬪ぇ灏忓 / 缂哄け閮藉敂鏈冭鍒ゆ垚宸茬祼甯?      ---
+      duration_ms: 0.7767
+      type: 'test'
+      ...
+    1..3
+ok 42 - 绶氫笂鍠細浠樻缍害
+  ---
+  duration_ms: 3.0916
+  type: 'suite'
+  ...
+# Subtest: 鏋卞彲閬告€э紙鍟嗗锛氬凡浣旂敤涓€寰嬪敂鍙互鎻€锛?    # Subtest: 宸茶浣旂敤 鈫?鍞斿彲浠ユ弨
+    ok 1 - 宸茶浣旂敤 鈫?鍞斿彲浠ユ弨
+      ---
+      duration_ms: 0.3557
+      type: 'test'
+      ...
+    # Subtest: 绌烘灡 鈫?鍙互鎻€
+    ok 2 - 绌烘灡 鈫?鍙互鎻€
+      ---
+      duration_ms: 0.1816
+      type: 'test'
+      ...
+    1..2
+ok 43 - 鏋卞彲閬告€э紙鍟嗗锛氬凡浣旂敤涓€寰嬪敂鍙互鎻€锛?  ---
+  duration_ms: 0.7474
+  type: 'suite'
+  ...
+# (node:17900) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/order-item-diff.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: orderItemKey锛氳鏍兼搴忓敂褰遍熆韬垎锛坰ort 寰岄€ｆ帴锛?ok 44 - orderItemKey锛氳鏍兼搴忓敂褰遍熆韬垎锛坰ort 寰岄€ｆ帴锛?  ---
+  duration_ms: 15.1801
+  type: 'test'
+  ...
+# Subtest: orderItemKey锛氬児閷?/ 鍌欒ɑ / 瑕忔牸鍞斿悓 鈫?韬垎鍞斿悓
+ok 45 - orderItemKey锛氬児閷?/ 鍌欒ɑ / 瑕忔牸鍞斿悓 鈫?韬垎鍞斿悓
+  ---
+  duration_ms: 0.6154
+  type: 'test'
+  ...
+# Subtest: diffAddedItems锛氬叏鏂板柈锛坆ase 绌猴級鈫?鍏ㄩ儴鐣舵柊澧?ok 46 - diffAddedItems锛氬叏鏂板柈锛坆ase 绌猴級鈫?鍏ㄩ儴鐣舵柊澧?  ---
+  duration_ms: 0.555
+  type: 'test'
+  ...
+# Subtest: diffAddedItems锛氬姞鍠紙鍘熸湰 1 闋咃紝鍔?2 闋咃級鈫?鍙洖鏂板鍢?2 闋?ok 47 - diffAddedItems锛氬姞鍠紙鍘熸湰 1 闋咃紝鍔?2 闋咃級鈫?鍙洖鏂板鍢?2 闋?  ---
+  duration_ms: 3.7248
+  type: 'test'
+  ...
+# Subtest: diffAddedItems锛氬悓涓€娆惧姞鏁搁噺 鈫?鍥炲樊椤嶏紙鍞斾總绺芥暩锛?ok 48 - diffAddedItems锛氬悓涓€娆惧姞鏁搁噺 鈫?鍥炲樊椤嶏紙鍞斾總绺芥暩锛?  ---
+  duration_ms: 0.5306
+  type: 'test'
+  ...
+# Subtest: diffAddedItems锛氭笡鑿?/ 鍐囪畩 鈫?鍥炵┖锛堝敂鏈冮€€鍠級
+ok 49 - diffAddedItems锛氭笡鑿?/ 鍐囪畩 鈫?鍥炵┖锛堝敂鏈冮€€鍠級
+  ---
+  duration_ms: 0.6101
+  type: 'test'
+  ...
+# Subtest: addedItemsSignature锛氭搴忕劇闂溿€佸収瀹规晱鎰燂紙鍘婚噸姣斿皪鐢級
+ok 50 - addedItemsSignature锛氭搴忕劇闂溿€佸収瀹规晱鎰燂紙鍘婚噸姣斿皪鐢級
+  ---
+  duration_ms: 0.5479
+  type: 'test'
+  ...
+# Subtest: totalItemQuantity锛氬姞绺戒欢鏁?ok 51 - totalItemQuantity锛氬姞绺戒欢鏁?  ---
+  duration_ms: 2.4459
+  type: 'test'
+  ...
+# (node:23024) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/order-notes.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 鍏ㄥ柈鎶樻墸鏈夊師鍥?鈫?鍑轰竴鍊?discount chip
+ok 52 - 鍏ㄥ柈鎶樻墸鏈夊師鍥?鈫?鍑轰竴鍊?discount chip
+  ---
+  duration_ms: 14.3808
+  type: 'test'
+  ...
+# Subtest: 鍐囦换浣曡鏁?鈫?绌洪櫍鍒楋紙鍞斿彲浠ョ劇涓敓鏈夛級
+ok 53 - 鍐囦换浣曡鏁?鈫?绌洪櫍鍒楋紙鍞斿彲浠ョ劇涓敓鏈夛級
+  ---
+  duration_ms: 0.6442
+  type: 'test'
+  ...
+# Subtest: 鏈夋姌鎵ｉ噾椤嶄絾鍐囧師鍥狅紙鑸婂柈 / 鍔熻兘涓婄窔鍓嶏級鈫?鍞旀渻閫犲亣鏂囧瓧
+ok 54 - 鏈夋姌鎵ｉ噾椤嶄絾鍐囧師鍥狅紙鑸婂柈 / 鍔熻兘涓婄窔鍓嶏級鈫?鍞旀渻閫犲亣鏂囧瓧
+  ---
+  duration_ms: 0.3638
+  type: 'test'
+  ...
+# Subtest: 鍏嶅柈锛氬師鍥犵敱 compNote 鎵胯級锛屽敂鏈冭畝 discountNote
+ok 55 - 鍏嶅柈锛氬師鍥犵敱 compNote 鎵胯級锛屽敂鏈冭畝 discountNote
+  ---
+  duration_ms: 0.3904
+  type: 'test'
+  ...
+# Subtest: 鍠搧鎶樻墸鍘熷洜閫愪欢璁€锛屽悓涓€鍘熷洜澶氫欢鍙嚭涓€娆?ok 56 - 鍠搧鎶樻墸鍘熷洜閫愪欢璁€锛屽悓涓€鍘熷洜澶氫欢鍙嚭涓€娆?  ---
+  duration_ms: 0.7972
+  type: 'test'
+  ...
+# Subtest: 鍏ㄥ柈鍚屽柈鍝佹弨鍜楀悓涓€鍘熷洜 鈫?鍙嚭涓€鍊?chip锛堝幓閲嶏級
+ok 57 - 鍏ㄥ柈鍚屽柈鍝佹弨鍜楀悓涓€鍘熷洜 鈫?鍙嚭涓€鍊?chip锛堝幓閲嶏級
+  ---
+  duration_ms: 0.4201
+  type: 'test'
+  ...
+# Subtest: 鍐囨姌鎵ｇ巼鍢呰彍锛坉iscountRate undefined 鎴?>= 100锛夊敂绠楁姌鎵?ok 58 - 鍐囨姌鎵ｇ巼鍢呰彍锛坉iscountRate undefined 鎴?>= 100锛夊敂绠楁姌鎵?  ---
+  duration_ms: 0.5212
+  type: 'test'
+  ...
+# Subtest: 绯荤当鎶归浂锛氭湁閲戦鍏堝嚭锛屽浐瀹氭枃妗堬紝鎺掑埌鏈€寰?ok 59 - 绯荤当鎶归浂锛氭湁閲戦鍏堝嚭锛屽浐瀹氭枃妗堬紝鎺掑埌鏈€寰?  ---
+  duration_ms: 0.3758
+  type: 'test'
+  ...
+# Subtest: 鎶归浂閲戦鐐?0 / undefined 鈫?鍞斿嚭鎶归浂 chip
+ok 60 - 鎶归浂閲戦鐐?0 / undefined 鈫?鍞斿嚭鎶归浂 chip
+  ---
+  duration_ms: 2.665
+  type: 'test'
+  ...
+# Subtest: 鍘熷洜闋熬绌虹櫧鏈?trim锛岀磾绌虹櫧鐣跺唶濉?ok 61 - 鍘熷洜闋熬绌虹櫧鏈?trim锛岀磾绌虹櫧鐣跺唶濉?  ---
+  duration_ms: 1.0709
+  type: 'test'
+  ...
+# Subtest: Ledger 绶氫笂鍠細鏈夋姌鎵ｉ噾椤?鈫?銆岀窔涓婂劒鎯犮€嶏紱鍐?鈫?绌洪櫍鍒?ok 62 - Ledger 绶氫笂鍠細鏈夋姌鎵ｉ噾椤?鈫?銆岀窔涓婂劒鎯犮€嶏紱鍐?鈫?绌洪櫍鍒?  ---
+  duration_ms: 0.4815
+  type: 'test'
+  ...
+# (node:16236) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/order-status-label.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: customerOrderStatusLabel
+    # Subtest: draft锛堟湭缍撳簵鍝＄⒑瑾嶏級鈫?鏄庣⒑璎涙竻妤氳绛夊簵鍝?    ok 1 - draft锛堟湭缍撳簵鍝＄⒑瑾嶏級鈫?鏄庣⒑璎涙竻妤氳绛夊簵鍝?      ---
+      duration_ms: 8.4637
+      type: 'test'
+      ...
+    # Subtest: 宸查€佸粴鎴?+ 鏈枊濮嬪仛 鈫?宸查€佸粴鎴?    ok 2 - 宸查€佸粴鎴?+ 鏈枊濮嬪仛 鈫?宸查€佸粴鎴?      ---
+      duration_ms: 1.3463
+      type: 'test'
+      ...
+    # Subtest: 瑁戒綔涓紙fulfillmentStatus=preparing锛夆啋 瑁戒綔涓?    ok 3 - 瑁戒綔涓紙fulfillmentStatus=preparing锛夆啋 瑁戒綔涓?      ---
+      duration_ms: 0.3666
+      type: 'test'
+      ...
+    # Subtest: 鍙彇椁愬劒鍏堥亷鍠摎鐙€鎱嬶紙鍗充娇鍠摎宸蹭粯娆撅級
+    ok 4 - 鍙彇椁愬劒鍏堥亷鍠摎鐙€鎱嬶紙鍗充娇鍠摎宸蹭粯娆撅級
+      ---
+      duration_ms: 0.8418
+      type: 'test'
+      ...
+    # Subtest: 浠樻 / 瀹屾垚 / 鍙栨秷 / 閫€娆惧悇鑷湁瀹汉鑱藉緱鏄庡槄璎涙硶
+    ok 5 - 浠樻 / 瀹屾垚 / 鍙栨秷 / 閫€娆惧悇鑷湁瀹汉鑱藉緱鏄庡槄璎涙硶
+      ---
+      duration_ms: 0.3736
+      type: 'test'
+      ...
+    # Subtest: reopened / 鏈煡鐙€鎱?鈫?涓€寰嬪洖銆岄€茶涓€嶏紝鍞旀渻闇插嚭鏋氳垑鍊兼垨绌虹櫧
+    ok 6 - reopened / 鏈煡鐙€鎱?鈫?涓€寰嬪洖銆岄€茶涓€嶏紝鍞旀渻闇插嚭鏋氳垑鍊兼垨绌虹櫧
+      ---
+      duration_ms: 0.2839
+      type: 'test'
+      ...
+    1..6
+ok 63 - customerOrderStatusLabel
+  ---
+  duration_ms: 28.5381
+  type: 'suite'
+  ...
+# (node:26036) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/print-job-merge.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 鏈湴 sent 鍞旇寰屽彴钀藉緦 pending 瑕嗗锛堥槻閲嶅嵃锛?ok 64 - 鏈湴 sent 鍞旇寰屽彴钀藉緦 pending 瑕嗗锛堥槻閲嶅嵃锛?  ---
+  duration_ms: 2.4452
+  type: 'test'
+  ...
+# Subtest: 鏈湴鏈夈€乻erver 鍐?鈫?鍘熸ǎ淇濈暀锛堥洟绶氭柊鍠敂琚?backfill 娓呰蛋锛?ok 65 - 鏈湴鏈夈€乻erver 鍐?鈫?鍘熸ǎ淇濈暀锛堥洟绶氭柊鍠敂琚?backfill 娓呰蛋锛?  ---
+  duration_ms: 2.0418
+  type: 'test'
+  ...
+# Subtest: server 鏈夈€佹湰鍦板唶 鈫?瑁滃叆锛堣法绲傜 / realtime 婕忓挆鍢呭柈鍠?backfill 瑕嬭繑锛?ok 66 - server 鏈夈€佹湰鍦板唶 鈫?瑁滃叆锛堣法绲傜 / realtime 婕忓挆鍢呭柈鍠?backfill 瑕嬭繑锛?  ---
+  duration_ms: 0.4274
+  type: 'test'
+  ...
+# Subtest: 闆㈢窔鈫掗噸閫ｆā鎿細鏈湴 3 寮甸洟绶氭柊鍠?+ server 宸茬煡鑸婂柈 鈫?鍞旀笡銆佸敂閲嶅嵃銆佸敂婕?ok 67 - 闆㈢窔鈫掗噸閫ｆā鎿細鏈湴 3 寮甸洟绶氭柊鍠?+ server 宸茬煡鑸婂柈 鈫?鍞旀笡銆佸敂閲嶅嵃銆佸敂婕?  ---
+  duration_ms: 0.8015
+  type: 'test'
+  ...
+# (node:11972) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/quick-scan-remembered-order.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: quickScanRememberedOrderIsFresh
+    # Subtest: 鍓涜惤鍢呭揩椁?counter 鍠?鈫?鏈夋晥
+    ok 1 - 鍓涜惤鍢呭揩椁?counter 鍠?鈫?鏈夋晥
+      ---
+      duration_ms: 3.2395
+      type: 'test'
+      ...
+    # Subtest: 鍐?id / null / undefined 鈫?鐒℃晥
+    ok 2 - 鍐?id / null / undefined 鈫?鐒℃晥
+      ---
+      duration_ms: 0.4379
+      type: 'test'
+      ...
+    # Subtest: 鏋卞柈锛堝敂淇?counter锛夆啋 鐒℃晥锛氬敂鍙互鍠哄揩椁?link 椤ず鏋卞柈铏熺⒓
+    ok 3 - 鏋卞柈锛堝敂淇?counter锛夆啋 鐒℃晥锛氬敂鍙互鍠哄揩椁?link 椤ず鏋卞柈铏熺⒓
+      ---
+      duration_ms: 0.3791
+      type: 'test'
+      ...
+    # Subtest: 瓒呴亷鏈夋晥鏈燂紙闋愯ō 6 灏忔檪锛夆啋 鐒℃晥锛涢倞鐣屽€间粛鐒舵湁鏁?    ok 4 - 瓒呴亷鏈夋晥鏈燂紙闋愯ō 6 灏忔檪锛夆啋 鐒℃晥锛涢倞鐣屽€间粛鐒舵湁鏁?      ---
+      duration_ms: 5.0315
+      type: 'test'
+      ...
+    # Subtest: createdAt 澹?/ 缂哄け 鈫?鐒℃晥锛堝鍙敂椤ず锛岄兘鍞斿ソ椤ず涓€鍊嬪敂鐭ュ咕鏅傚槄铏燂級
+    ok 5 - createdAt 澹?/ 缂哄け 鈫?鐒℃晥锛堝鍙敂椤ず锛岄兘鍞斿ソ椤ず涓€鍊嬪敂鐭ュ咕鏅傚槄铏燂級
+      ---
+      duration_ms: 0.4816
+      type: 'test'
+      ...
+    1..5
+ok 68 - quickScanRememberedOrderIsFresh
+  ---
+  duration_ms: 13.6967
+  type: 'suite'
+  ...
+# (node:26608) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/realtime-target.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: resolvePosRealtimeConfig
+    # Subtest: 鏈?POS 灏堢敤璁婃暩鏅傜敤 pos 渚嗘簮锛堝劒鍏堟柤鑸婅畩鏁革級
+    ok 1 - 鏈?POS 灏堢敤璁婃暩鏅傜敤 pos 渚嗘簮锛堝劒鍏堟柤鑸婅畩鏁革級
+      ---
+      duration_ms: 7.8908
+      type: 'test'
+      ...
+    # Subtest: 鍐?POS 璁婃暩鏅傞€€鍥炶垔璁婃暩涓︽瑷樼偤 ledger-fallback
+    ok 2 - 鍐?POS 璁婃暩鏅傞€€鍥炶垔璁婃暩涓︽瑷樼偤 ledger-fallback
+      ---
+      duration_ms: 0.6388
+      type: 'test'
+      ...
+    # Subtest: POS 璁婃暩鍙湁涓€鍗婏紙鍐?key锛夋檪鍞旀渻鎺＄敤锛岄€€鍥炶垔璁婃暩
+    ok 3 - POS 璁婃暩鍙湁涓€鍗婏紙鍐?key锛夋檪鍞旀渻鎺＄敤锛岄€€鍥炶垔璁婃暩
+      ---
+      duration_ms: 0.5586
+      type: 'test'
+      ...
+    # Subtest: 瀹屽叏鍐囬厤缃洖 null
+    ok 4 - 瀹屽叏鍐囬厤缃洖 null
+      ---
+      duration_ms: 2.1031
+      type: 'test'
+      ...
+    # Subtest: 绌哄瓧涓诧紡鍙湁绌虹櫧鐣朵綔鏈ō瀹?    ok 5 - 绌哄瓧涓诧紡鍙湁绌虹櫧鐣朵綔鏈ō瀹?      ---
+      duration_ms: 1.3825
+      type: 'test'
+      ...
+    # Subtest: 鍊煎墠寰屾湁绌虹櫧鏈?trim
+    ok 6 - 鍊煎墠寰屾湁绌虹櫧鏈?trim
+      ---
+      duration_ms: 0.9473
+      type: 'test'
+      ...
+    1..6
+ok 69 - resolvePosRealtimeConfig
+  ---
+  duration_ms: 19.2322
+  type: 'suite'
+  ...
+# Subtest: safeHost
+    # Subtest: 姝ｅ父 URL 鎶?host
+    ok 1 - 姝ｅ父 URL 鎶?host
+      ---
+      duration_ms: 0.5246
+      type: 'test'
+      ...
+    # Subtest: 鍞斿悎娉曞槄瀛椾覆鍘熸ǎ鍥炵煭鐗堬紙鍞旀渻鎷嬮尟锛?    ok 2 - 鍞斿悎娉曞槄瀛椾覆鍘熸ǎ鍥炵煭鐗堬紙鍞旀渻鎷嬮尟锛?      ---
+      duration_ms: 0.6668
+      type: 'test'
+      ...
+    # Subtest: null 鍥?null
+    ok 3 - null 鍥?null
+      ---
+      duration_ms: 0.4996
+      type: 'test'
+      ...
+    1..3
+ok 70 - safeHost
+  ---
+  duration_ms: 2.2868
+  type: 'suite'
+  ...
+# Subtest: buildPosOrdersProbeUrl
+    # Subtest: 鍩烘湰绲勫悎
+    ok 1 - 鍩烘湰绲勫悎
+      ---
+      duration_ms: 0.607
+      type: 'test'
+      ...
+    # Subtest: 灏鹃儴鏂滅窔鍞旀渻璁婇洐鏂滅窔
+    ok 2 - 灏鹃儴鏂滅窔鍞旀渻璁婇洐鏂滅窔
+      ---
+      duration_ms: 0.3526
+      type: 'test'
+      ...
+    1..2
+ok 71 - buildPosOrdersProbeUrl
+  ---
+  duration_ms: 1.1627
+  type: 'suite'
+  ...
+# Subtest: describePosRealtimeProbe / isPosRealtimeHealthy
+    # Subtest: 姣忓€嬬媭鎱嬮兘鏈夐潪绌烘弿杩?    ok 1 - 姣忓€嬬媭鎱嬮兘鏈夐潪绌烘弿杩?      ---
+      duration_ms: 0.6252
+      type: 'test'
+      ...
+    # Subtest: 鍙湁 ok 绠楀仴搴?    ok 2 - 鍙湁 ok 绠楀仴搴?      ---
+      duration_ms: 0.3393
+      type: 'test'
+      ...
+    1..2
+ok 72 - describePosRealtimeProbe / isPosRealtimeHealthy
+  ---
+  duration_ms: 1.1513
+  type: 'suite'
+  ...
+# Subtest: isBadApiKeyBody
+    # Subtest: 瑾嶅緱 PostgREST 鍢呴尟 key 鏂囨
+    ok 1 - 瑾嶅緱 PostgREST 鍢呴尟 key 鏂囨
+      ---
+      duration_ms: 0.749
+      type: 'test'
+      ...
+    # Subtest: 鍞旀渻瑾よ獚 RLS 鎷掔禃
+    ok 2 - 鍞旀渻瑾よ獚 RLS 鎷掔禃
+      ---
+      duration_ms: 0.2581
+      type: 'test'
+      ...
+    1..2
+ok 73 - isBadApiKeyBody
+  ---
+  duration_ms: 1.1809
+  type: 'suite'
+  ...
+# Subtest: probePosRealtimeTarget
+    # Subtest: 鍐囬厤缃?鈫?unconfigured锛屽敂鏈冪櫦璜嬫眰
+    ok 1 - 鍐囬厤缃?鈫?unconfigured锛屽敂鏈冪櫦璜嬫眰
+      ---
+      duration_ms: 2.6481
+      type: 'test'
+      ...
+    # Subtest: 200 鈫?ok锛屼甫甯?apikey / Authorization header 鍚屾纰?URL
+    ok 2 - 200 鈫?ok锛屼甫甯?apikey / Authorization header 鍚屾纰?URL
+      ---
+      duration_ms: 44.5314
+      type: 'test'
+      ...
+    # Subtest: 404 + PGRST205 鈫?table_missing锛堣▊閷皥妗堬級
+    ok 3 - 404 + PGRST205 鈫?table_missing锛堣▊閷皥妗堬級
+      ---
+      duration_ms: 3.2999
+      type: 'test'
+      ...
+    # Subtest: 404 浣?body 鍞斿惈 PGRST205 涓€寰嬬暥 table_missing
+    ok 4 - 404 浣?body 鍞斿惈 PGRST205 涓€寰嬬暥 table_missing
+      ---
+      duration_ms: 1.9287
+      type: 'test'
+      ...
+    # Subtest: 401 Invalid API key 鈫?bad_key锛堝敂鍙互鍫辨垚 unauthorized/琛ㄥ瓨鍦級
+    ok 5 - 401 Invalid API key 鈫?bad_key锛堝敂鍙互鍫辨垚 unauthorized/琛ㄥ瓨鍦級
+      ---
+      duration_ms: 4.9356
+      type: 'test'
+      ...
+    # Subtest: 401 No API key found 鈫?bad_key
+    ok 6 - 401 No API key found 鈫?bad_key
+      ---
+      duration_ms: 2.4326
+      type: 'test'
+      ...
+    # Subtest: 401 permission denied锛坘ey 鏈夋晥浣?anon 鍐?select锛夆啋 unauthorized
+    ok 7 - 401 permission denied锛坘ey 鏈夋晥浣?anon 鍐?select锛夆啋 unauthorized
+      ---
+      duration_ms: 2.0979
+      type: 'test'
+      ...
+    # Subtest: bad_key 鍞旀渻琚鍒ゆ垚 table_missing锛?04 浠ュ鐨勭媭鎱嬬⒓锛?    ok 8 - bad_key 鍞旀渻琚鍒ゆ垚 table_missing锛?04 浠ュ鐨勭媭鎱嬬⒓锛?      ---
+      duration_ms: 1.5968
+      type: 'test'
+      ...
+    # Subtest: 42501 鈫?unauthorized锛圧LS 鎿?anon锛?    ok 9 - 42501 鈫?unauthorized锛圧LS 鎿?anon锛?      ---
+      duration_ms: 3.0296
+      type: 'test'
+      ...
+    # Subtest: 500 鈫?error 涓﹀付鐙€鎱嬬⒓
+    ok 10 - 500 鈫?error 涓﹀付鐙€鎱嬬⒓
+      ---
+      duration_ms: 2.2983
+      type: 'test'
+      ...
+    # Subtest: fetch 鎷嬮尟锛堟柗缍?/ timeout锛夆啋 error锛屽敂鏈?throw
+    ok 11 - fetch 鎷嬮尟锛堟柗缍?/ timeout锛夆啋 error锛屽敂鏈?throw
+      ---
+      duration_ms: 1.007
+      type: 'test'
+      ...
+    # Subtest: 鎺㈡脯鍞旀渻鍌冲嚭 anon key 鍒?host 娆勪綅
+    ok 12 - 鎺㈡脯鍞旀渻鍌冲嚭 anon key 鍒?host 娆勪綅
+      ---
+      duration_ms: 1.1037
+      type: 'test'
+      ...
+    1..12
+ok 74 - probePosRealtimeTarget
+  ---
+  duration_ms: 71.9834
+  type: 'suite'
+  ...
+# (node:3040) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/scan-mode-from-login.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: scanModeForLoginMode
+    # Subtest: 蹇鐧诲叆 鈫?搴楃礆 quick锛堝叏搴椾竴纰硷級
+    ok 1 - 蹇鐧诲叆 鈫?搴楃礆 quick锛堝叏搴椾竴纰硷級
+      ---
+      duration_ms: 1.6452
+      type: 'test'
+      ...
+    # Subtest: 鍫傞鐧诲叆 鈫?搴楃礆 dine_in锛堟瘡鏋变竴纰硷級
+    ok 2 - 鍫傞鐧诲叆 鈫?搴楃礆 dine_in锛堟瘡鏋变竴纰硷級
+      ---
+      duration_ms: 0.3002
+      type: 'test'
+      ...
+    # Subtest: 鑷姪榛為姗?/ 缇庡 / 寰屽粴灞?/ 鍑洪鍙板睆鐧诲叆 鈫?null锛堝敂鍙互鏀瑰簵绱氳ō瀹氾級
+    ok 3 - 鑷姪榛為姗?/ 缇庡 / 寰屽粴灞?/ 鍑洪鍙板睆鐧诲叆 鈫?null锛堝敂鍙互鏀瑰簵绱氳ō瀹氾級
+      ---
+      duration_ms: 0.2753
+      type: 'test'
+      ...
+    # Subtest: 鍏€嬫ā寮忓槄鍥炲偝鍊煎叐鍏╁敂鍚岋紙鍐囨紡 branch銆佸唶 fallthrough锛?    ok 4 - 鍏€嬫ā寮忓槄鍥炲偝鍊煎叐鍏╁敂鍚岋紙鍐囨紡 branch銆佸唶 fallthrough锛?      ---
+      duration_ms: 1.8951
+      type: 'test'
+      ...
+    1..4
+ok 75 - scanModeForLoginMode
+  ---
+  duration_ms: 6.7598
+  type: 'suite'
+  ...
+# (node:4780) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/pos/self-order-notice.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: addSelfOrderNotice
+    # Subtest: 鏂板柈 鈫?鍔犲叆锛屼甫瑷樹綇鍙拌櫉锛堥渶姹?6 椤ず鐢級
+    ok 1 - 鏂板柈 鈫?鍔犲叆锛屼甫瑷樹綇鍙拌櫉锛堥渶姹?6 椤ず鐢級
+      ---
+      duration_ms: 1.1905
+      type: 'test'
+      ...
+    # Subtest: 鍚屼竴寮靛柈鍐?push锛坮ealtime 閲嶉€侊級鈫?鍘婚噸锛屽洖鍌冲悓涓€鍊?reference
+    ok 2 - 鍚屼竴寮靛柈鍐?push锛坮ealtime 閲嶉€侊級鈫?鍘婚噸锛屽洖鍌冲悓涓€鍊?reference
+      ---
+      duration_ms: 0.224
+      type: 'test'
+      ...
+    # Subtest: 5 寮靛柈 鈫?5 鍊嬬崹绔嬮爡鐩紙闇€姹?4锛?    ok 3 - 5 寮靛柈 鈫?5 鍊嬬崹绔嬮爡鐩紙闇€姹?4锛?      ---
+      duration_ms: 1.2214
+      type: 'test'
+      ...
+    # Subtest: 瓒呴亷涓婇檺 鈫?涓熸渶鑸婏紝淇濈暀鏈€鏂帮紙闃插彸涓婅鐒￠檺鑶ㄨ劰锛?    ok 4 - 瓒呴亷涓婇檺 鈫?涓熸渶鑸婏紝淇濈暀鏈€鏂帮紙闃插彸涓婅鐒￠檺鑶ㄨ劰锛?      ---
+      duration_ms: 1.4811
+      type: 'test'
+      ...
+    1..4
+ok 76 - addSelfOrderNotice
+  ---
+  duration_ms: 5.5861
+  type: 'suite'
+  ...
+# Subtest: dismissSelfOrderNotice
+    # Subtest: 绉婚櫎鎸囧畾鍠紝鍏朵粬淇濈暀锛堝悜鍙虫粦 = 鐣ラ亷锛?    ok 1 - 绉婚櫎鎸囧畾鍠紝鍏朵粬淇濈暀锛堝悜鍙虫粦 = 鐣ラ亷锛?      ---
+      duration_ms: 0.4312
+      type: 'test'
+      ...
+    # Subtest: 鎻惧敂鍒?鈫?鍥炲偝鍚屼竴鍊?reference锛堝敂鐢㈢敓澶氶瀵叆锛?    ok 2 - 鎻惧敂鍒?鈫?鍥炲偝鍚屼竴鍊?reference锛堝敂鐢㈢敓澶氶瀵叆锛?      ---
+      duration_ms: 0.1655
+      type: 'test'
+      ...
+    1..2
+ok 77 - dismissSelfOrderNotice
+  ---
+  duration_ms: 0.8124
+  type: 'suite'
+  ...
+# Subtest: markSelfOrderNoticeSettled
+    # Subtest: 妯欒宸茬祼甯筹紝浣?*鍞旀渻**绉婚櫎锛堥渶姹?5锛氳▕鎭鐣欎綇鐣€鐢ㄦ埗鐫囷級
+    ok 1 - 妯欒宸茬祼甯筹紝浣?*鍞旀渻**绉婚櫎锛堥渶姹?5锛氳▕鎭鐣欎綇鐣€鐢ㄦ埗鐫囷級
+      ---
+      duration_ms: 0.4289
+      type: 'test'
+      ...
+    # Subtest: 閲嶈妯欒鍞旀渻瑕嗗鍘熸湰鏅傞枔
+    ok 2 - 閲嶈妯欒鍞旀渻瑕嗗鍘熸湰鏅傞枔
+      ---
+      duration_ms: 0.2509
+      type: 'test'
+      ...
+    # Subtest: 鍙奖闊跨洰妯欏柈
+    ok 3 - 鍙奖闊跨洰妯欏柈
+      ---
+      duration_ms: 0.319
+      type: 'test'
+      ...
+    1..3
+ok 78 - markSelfOrderNoticeSettled
+  ---
+  duration_ms: 1.8242
+  type: 'suite'
+  ...
+# Subtest: toSelfOrderNoticeItems
+    # Subtest: 鏈祼鍠?鈫?settled=false锛堥’绀恒€孉02 宸蹭笅鍠?/ 璜嬫煡鐪嬨€嶏級
+    ok 1 - 鏈祼鍠?鈫?settled=false锛堥’绀恒€孉02 宸蹭笅鍠?/ 璜嬫煡鐪嬨€嶏級
+      ---
+      duration_ms: 0.5028
+      type: 'test'
+      ...
+    # Subtest: 瑷傚柈宸茬祼甯筹紙鏀堕妧鍙︿竴閮ㄦ鍩嬪挆鍠級鈫?settled=true锛屽嵆浣挎彁绀烘湭妯欒閬?    ok 2 - 瑷傚柈宸茬祼甯筹紙鏀堕妧鍙︿竴閮ㄦ鍩嬪挆鍠級鈫?settled=true锛屽嵆浣挎彁绀烘湭妯欒閬?      ---
+      duration_ms: 0.1531
+      type: 'test'
+      ...
+    # Subtest: 瑷傚柈宸茬稉鍞斿瓨鍦紙鍙︿竴閮ㄦ鍒挆 / 鏈湴娓呭挆锛夆啋 涓€寰嬬暥宸茬祼甯?    ok 3 - 瑷傚柈宸茬稉鍞斿瓨鍦紙鍙︿竴閮ㄦ鍒挆 / 鏈湴娓呭挆锛夆啋 涓€寰嬬暥宸茬祼甯?      ---
+      duration_ms: 0.118
+      type: 'test'
+      ...
+    # Subtest: 鍙板悕鍎厛璁€瑷傚柈鍗虫檪鍊硷紙鏋卞悕鏀归亷閮借窡寰楀ソ锛夛紝鍐囧柈鍏堢敤鎻愮ず瑷樹綇鍡板€?    ok 4 - 鍙板悕鍎厛璁€瑷傚柈鍗虫檪鍊硷紙鏋卞悕鏀归亷閮借窡寰楀ソ锛夛紝鍐囧柈鍏堢敤鎻愮ず瑷樹綇鍡板€?      ---
+      duration_ms: 0.1301
+      type: 'test'
+      ...
+    # Subtest: 鍐囨灡锛坈ounter锛夆啋 椤ず**鍠櫉**锛堝敂淇傚彴鍚嶏紝鍞斾總銆岃嚜鍙栥€嶏級
+    ok 5 - 鍐囨灡锛坈ounter锛夆啋 椤ず**鍠櫉**锛堝敂淇傚彴鍚嶏紝鍞斾總銆岃嚜鍙栥€嶏級
+      ---
+      duration_ms: 0.2194
+      type: 'test'
+      ...
+    # Subtest: counter 瑷傚柈浣嗘湭璁€鍒板柈铏?鈫?fallback 钀芥彁绀鸿浣忓棸鍊嬶紙鍞旀渻椤ず undefined锛?    ok 6 - counter 瑷傚柈浣嗘湭璁€鍒板柈铏?鈫?fallback 钀芥彁绀鸿浣忓棸鍊嬶紙鍞旀渻椤ず undefined锛?      ---
+      duration_ms: 0.1319
+      type: 'test'
+      ...
+    1..6
+ok 79 - toSelfOrderNoticeItems
+  ---
+  duration_ms: 1.4856
+  type: 'suite'
+  ...
+1..79
+# tests 220
+# suites 41
+# pass 220
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2127.4033
+
