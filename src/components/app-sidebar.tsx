@@ -21,28 +21,30 @@ import { loadAuthSession } from "@/lib/storage";
 import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useSyncHealth } from "@/lib/pos/sync-acks";
 import { retryReconcileNow } from "@/lib/pos/sync-reconcile-daemon";
+import { SIDEBAR_MODULES } from "@/lib/pos/module-catalog";
 
 
 
-const baseNavItems = [
-
-  { href: "/", label: "點餐", short: "點" },
-
-  { href: "/orders", label: "訂單", short: "單" },
-
-  { href: "/members", label: "會員", short: "會" },
-
-  { href: "/prints", label: "打印", short: "印" },
-
-  { href: "/reports", label: "報表", short: "報" },
-
-  { href: "/soldout", label: "沽清", short: "沽" },
-
-  { href: "/shift", label: "交班", short: "班" },
-
-  { href: "/inventory", label: "庫存", short: "庫" },
-
-] as const;
+/**
+ * 側欄模組清單 —— 由 `SIDEBAR_MODULES`（單一真源，`@/lib/pos/module-catalog`）生成。
+ *
+ * ⚠️ 唔好喺度再寫死一份清單：加模組時如果只改呢度、冇改 `module-catalog`，
+ * Admin 授權頁就唔會出現嗰個開關 = 永遠開唔到（唔會 throw，只會靜靜冇咗）。
+ *
+ * ## 2026-09-13：側欄改為**按商戶授權過濾**（migration 0037 / docs/127）
+ *
+ * Admin 後台冇開通嘅模組**直接唔顯示**（唔係灰住）—— 側欄得 72px 闊，
+ * 塞一堆撳唔到嘅灰按鈕只會令店員搵嘢更慢。
+ *
+ * ⚠️ `allowedModules` **缺失 = 全部開通**（同 server `loadMerchantGrants()` /
+ * 登入頁 `granted` 同一個口徑）。絕對唔可以當成「一個都冇」，
+ * 否則升級之後未重新登入嘅舊 session 一 reload，側欄就會變全空。
+ */
+function resolveNavItems(grantedSidebarModules: readonly string[] | undefined) {
+  if (!grantedSidebarModules) return [...SIDEBAR_MODULES];
+  const allowed = new Set(grantedSidebarModules);
+  return SIDEBAR_MODULES.filter((item) => allowed.has(item.id));
+}
 
 
 
@@ -111,7 +113,7 @@ export function AppSidebar() {
 
 
 
-  const navItems = baseNavItems;
+  const navItems = resolveNavItems(session?.allowedModules?.sidebarModules);
 
 
 
@@ -239,6 +241,27 @@ export function AppSidebar() {
 
 
 
+          {/* 切換工作台（逃生門）—— 2026-09-13 新增。
+              揀錯工作台之後唔應該逼人登出再登入（仲要重新打 8 位帳號 + PIN），
+              所以留一個直接返去「選擇工作台」頁嘅入口。 */}
+          <Link
+
+            className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
+
+              pathname === "/select-workbench" ? "bg-orange-500 text-white" : "bg-slate-800 text-slate-200 hover:bg-slate-700"
+
+            }`}
+
+            href="/select-workbench"
+
+            title="切換工作台（重新揀呢部機嘅崗位）"
+
+          >
+
+            工作台
+
+          </Link>
+
           <Link
 
             className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
@@ -265,7 +288,11 @@ export function AppSidebar() {
 
         <div className="flex gap-2 overflow-x-auto pb-1">
 
-          {[...navItems, { href: "/settings", label: "設置", short: "設" }].map((item) => {
+          {[
+            ...navItems,
+            { href: "/select-workbench", label: "工作台", short: "台" },
+            { href: "/settings", label: "設置", short: "設" },
+          ].map((item) => {
 
             const active = pathname === item.href || (item.href === "/members" && pathname.startsWith("/members"));
 

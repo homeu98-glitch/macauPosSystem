@@ -23,6 +23,10 @@ import {
 } from "@/lib/pos/self-order-notice";
 import { normalizeKioskPrinters } from "@/lib/pos/kiosk-settings";
 import {
+  normalizeMerchantGrants,
+  type MerchantModuleGrants,
+} from "@/lib/pos/module-catalog";
+import {
   defaultAccountStores,
   defaultAccountUsers,
   defaultPermissionGroups,
@@ -1024,6 +1028,17 @@ export type AuthSession = {
    * （同 `receipt.qrUrl` / `standaloneSpecGroups` 嘅歷史教訓一模一樣）。
    */
   posDeviceToken?: string;
+  /**
+   * 商戶模組授權（登入時由 server 帶落嚟，見 migration 0037 + docs/127）。
+   *
+   * 決定「選擇工作台」頁顯示邊幾張卡、側欄顯示邊幾個功能。
+   *
+   * ⚠️ **選填**，而且 **`undefined` 嘅語意係「全部開通」**，唔係「一個都冇」：
+   * 舊 session（升級前登入、未重新登入）冇呢個欄位，如果當成「全部閂」，
+   * 部機 reload 一次就揀唔到工作台 = 收銀台即刻廢咗。
+   * 呢個口徑要同 server 端 `loadMerchantGrants()` 完全一致。
+   */
+  allowedModules?: MerchantModuleGrants;
 };
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
@@ -1053,6 +1068,11 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     ledgerRefreshToken: session.ledgerRefreshToken,
     adminSessionToken: session.adminSessionToken,
     posDeviceToken: session.posDeviceToken,
+    // ⚠️ 一定要帶返呢個欄位，否則 reload 之後就會被剷走（同 posDeviceToken 嘅歷史教訓一樣）。
+    // 只有「本身有值」才 normalize；undefined 要保持 undefined（= 全部開通）。
+    allowedModules: session.allowedModules
+      ? normalizeMerchantGrants(session.allowedModules)
+      : undefined,
   };
 }
 

@@ -34,6 +34,13 @@
 - 取消線上單一律 RPC `merchant_resolve_order_change`。
 - 快餐／Kiosk 打印機真源 `pos_kiosk_settings`；`resolveJobPrinter()` 必須合併 kiosk 機，否則靜靜印去收銀台。
 
+## 登入 → 選工作台（2026-09-13）
+- 流程：`/login`（只帳號+PIN）→ `/select-workbench`（只列已開通）→ 首頁。詳見 [`docs/127`](../docs/127-login-workbench-permission-plan.md)。
+- 🔴 **`allowedModules` 缺失 = 全部開通**（唔係「全閂」）→ 口徑要四處一致：`merchant-modules-server.ts`／`AuthSession`／`login-screen`／`app-sidebar`。當成全閂 = 全線入唔到 POS。
+- 🔴 加新模組**一律先改 `src/lib/pos/module-catalog.ts`**（唯一真源）；只改一邊唔會 throw，只會靜靜冇咗個開關。
+- 🔴 商戶授權真源 `pos_merchant_modules`（migration 0037），per-store 一行；Admin PATCH 要**兩組一齊送**。
+- 🔴 工作台副作用只有一份：`src/lib/pos/apply-workbench.ts`。掃碼模式由**所選工作台**決定（`retail` 唔寫 `saveOperatingMode`）；終端行業每次明確寫 salon/restaurant。
+
 ## 命令／環境
 - ⚠️ `npm` 經 git-bash **跑唔到** → 直接 `node node_modules/typescript/bin/tsc --noEmit`、`node --test`、`node node_modules/eslint/bin/eslint.js`。git-bash **冇 coreutils**（ls/grep/sed/head/tail 全無）→ 用 `node -e`。
 - ⚠️ 已有 **~34 個既有 lint error**（唔係回歸）。

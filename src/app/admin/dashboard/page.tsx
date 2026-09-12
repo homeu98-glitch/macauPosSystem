@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
+import { AdminMerchantModulesDialog } from "@/components/admin-merchant-modules-dialog";
 import { loadAuthSession } from "@/lib/storage";
 import type { PosOrder } from "@/lib/types";
 
@@ -84,6 +84,11 @@ export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyMerchantId, setBusyMerchantId] = useState<string | null>(null);
+  /**
+   * 「模組授權」彈窗目前開喺邊個商戶（null = 關咗）。
+   * 2026-09-13 新增：決定該店 POS 登入後可揀嘅工作台 + 側欄模組（migration 0037）。
+   */
+  const [modulesMerchant, setModulesMerchant] = useState<AdminMerchant | null>(null);
 
   // 商家列表分頁（2026-09-06 修）：固定 30 筆/頁，避開超長列表溢出螢幕
   const MERCHANTS_PAGE_SIZE = 30;
@@ -348,22 +353,36 @@ export default function AdminDashboardPage() {
                           <td className="px-4 py-2.5 text-right tabular-nums">{fmtMop(m.stats.d7Revenue)}</td>
                           <td className="px-4 py-2.5 text-slate-600">{fmtTime(m.stats.lastOrderAt)}</td>
                           <td className="px-4 py-2.5 text-right">
-                            {m.status === "active" || m.status === "suspended" ? (
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* 模組授權 —— 決定呢間店 POS 登入後可揀嘅工作台 + 側欄模組。
+                                  ⚠️ 一定要 stopPropagation：<tr> 本身有「點擊跳去營業報表」。 */}
                               <button
                                 type="button"
-                                disabled={busyMerchantId === m.id}
-                                onClick={(e) => void toggleMerchant(m, e)}
-                                className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                                  m.status === "active"
-                                    ? "border border-red-200 text-red-600 hover:bg-red-50"
-                                    : "border border-green-200 text-green-700 hover:bg-green-50"
-                                }`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setModulesMerchant(m);
+                                }}
+                                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                               >
-                                {busyMerchantId === m.id ? "處理中…" : m.status === "active" ? "停用" : "啟用"}
+                                模組
                               </button>
-                            ) : (
-                              <span className="text-xs text-slate-400">—</span>
-                            )}
+                              {m.status === "active" || m.status === "suspended" ? (
+                                <button
+                                  type="button"
+                                  disabled={busyMerchantId === m.id}
+                                  onClick={(e) => void toggleMerchant(m, e)}
+                                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                                    m.status === "active"
+                                      ? "border border-red-200 text-red-600 hover:bg-red-50"
+                                      : "border border-green-200 text-green-700 hover:bg-green-50"
+                                  }`}
+                                >
+                                  {busyMerchantId === m.id ? "處理中…" : m.status === "active" ? "停用" : "啟用"}
+                                </button>
+                              ) : (
+                                <span className="text-xs text-slate-400">—</span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -491,6 +510,13 @@ export default function AdminDashboardPage() {
           狀態口徑：{ORDER_STATUSES.join(" / ")}。銷售統計只計 settled / paid（同單店報表一致），退款與取消不計入營業額。
         </p>
       </div>
+
+      {modulesMerchant ? (
+        <AdminMerchantModulesDialog
+          merchant={{ id: modulesMerchant.id, name: modulesMerchant.name }}
+          onClose={() => setModulesMerchant(null)}
+        />
+      ) : null}
     </AdminShell>
   );
 }

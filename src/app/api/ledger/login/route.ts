@@ -5,6 +5,7 @@ import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
 import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
 import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
+import { loadMerchantGrants } from "@/lib/pos/merchant-modules-server";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
 
@@ -136,6 +137,18 @@ export async function POST(request: Request) {
   }
 
   const role = mapLedgerStaffRole(staffRow.staff_role as string | undefined);
+
+  // ── 商戶模組授權（migration 0037）──
+  // 「登入後揀工作台」要知呢間店開通咗邊幾個模組，所以喺**簽發 session 嗰一刻**就帶落去，
+  // 唔另開一個 GET：終端登入時已經有 network round-trip，多一次只會拖慢登入，
+  // 而且離線時多一個失敗點。
+  //
+  // ⚠️ `loadMerchantGrants()` 讀唔到（未跑 migration / DB 打嗝）一律回「全部開通」，
+  //    唔會令商戶登入唔到。詳見該檔頂部嘅不變量註解。
+  // ⚠️ Admin 改完授權，終端要**重新登入**先見到（登入頁會寫死喺 session 入面）。
+  //    呢個係刻意取捨：比「每次開機都多一次 GET」可靠。
+  const allowedModules = await loadMerchantGrants(staffRow.merchant_id);
+
   const { shopId: topUpShopId } = await fetchTopupShopId(supabase, {
     merchantId: staffRow.merchant_id,
     staffRole: staffRow.staff_role as string | undefined,
@@ -175,6 +188,7 @@ export async function POST(request: Request) {
       topUpShopId: topUpShopId || undefined,
       storeIds: [staffRow.merchant_id],
       permissions,
+      allowedModules,
       loggedInAt: new Date().toISOString(),
       ledgerAccessToken: authData.session.access_token,
       ledgerRefreshToken: authData.session.refresh_token,
