@@ -11,6 +11,7 @@ import { describe, it } from "node:test";
 
 import {
   filterQuickActionBarOrders,
+  transferredLedgerOrderIds,
   getPaymentBadge,
   isLocalOrTransferredDineIn,
   isPaidOrderStatus,
@@ -224,5 +225,43 @@ describe("快餐模式採納線上單（2026-09-12：isQuickCounterOrder 放寬�
     const settled = order({ id: "ledger-d", tableId: "counter", onlineOrderId: "d", status: "settled" });
     assert.equal(filterQuickActionBarOrders([settled]).length, 0);
     assert.equal(filterQuickActionBarOrders([onlineCounter()]).length, 1);
+  });
+});
+
+describe("transferredLedgerOrderIds（排位後唔應該兩邊同時出現）", () => {
+  it("線上堂食單排咗位（真枱號）→ 要由線上列表剔走", () => {
+    const transferred = order({
+      id: "ledger-a",
+      tableId: "table-a01",
+      tableName: "A01",
+      onlineOrderId: "a",
+      status: "paid",
+    });
+    const ids = transferredLedgerOrderIds([transferred]);
+    assert.equal(ids.has("a"), true);
+  });
+
+  it("快餐採納嘅 counter 單唔會被剔走（佢喺快餐 strip 管理，線上列表仍然係來源記錄）", () => {
+    const adopted = order({
+      id: "ledger-b",
+      tableId: "counter",
+      tableName: "自取",
+      onlineOrderId: "b",
+      status: "paid",
+    });
+    assert.equal(transferredLedgerOrderIds([adopted]).has("b"), false);
+  });
+
+  it("本地單（冇 onlineOrderId）一律唔關事", () => {
+    assert.equal(transferredLedgerOrderIds([order({ id: "l1", tableId: "table-a02" })]).size, 0);
+  });
+
+  it("同一批混合：只剔走已排位嗰張", () => {
+    const ids = transferredLedgerOrderIds([
+      order({ id: "ledger-a", tableId: "table-a01", onlineOrderId: "a", status: "paid" }),
+      order({ id: "ledger-b", tableId: "counter", onlineOrderId: "b", status: "paid" }),
+      order({ id: "l1", tableId: "table-a03" }),
+    ]);
+    assert.deepEqual([...ids], ["a"]);
   });
 });

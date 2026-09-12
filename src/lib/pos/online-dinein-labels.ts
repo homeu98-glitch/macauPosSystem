@@ -120,8 +120,10 @@ export function onlineTableBadge(
 export function onlinePaymentBadge(order: OnlineTableInfo): OnlineBadge {
   const paid = String(order.paymentStatus ?? "").toLowerCase() === "paid";
   if (paid) return badge(BADGE_EMERALD, "已結帳");
-  const mode = String(order.paymentMode ?? "").toLowerCase();
-  return badge(BADGE_SLATE, mode === "in_store" ? "未結帳（到店付款）" : "未結帳");
+  // ⚠️ 文案一定要短：呢粒藥丸出現喺 280px 闊嘅「快捷操作」欄（卡片內淨 ~190px），
+  // 「未結帳（到店付款）」9 個字會逼爆卡片 → 出現橫向滾動、按鈕被切（2026-09-12 實案）。
+  // 「到店付款」嘅資訊喺列表嘅「支付」欄同查看彈窗已經有，唔使重複。
+  return badge(BADGE_SLATE, "未結帳");
 }
 
 /** 「排位」掣文案：未排位 = 排位；已排位 = 改枱。 */

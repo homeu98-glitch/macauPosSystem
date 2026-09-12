@@ -24,6 +24,7 @@ import {
 // ⚠️ 一定要 alias：呢個檔自己有一個 `loadOrders`（拉 Ledger 線上單嘅 async loader），
 // 撞名會令本機訂單讀取變成 Promise。
 import { loadOperatingMode, loadOrders as loadLocalOrders } from "@/lib/storage";
+import { transferredLedgerOrderIds } from "@/lib/pos-order-filters";
 import {
   describeNoReceiptPrinterError,
   printReceiptForLedgerOrderOnce,
@@ -114,6 +115,18 @@ function getLedgerStatusBadge(order: LedgerOnlineOrder): {
 const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
 const TD_CELL = "px-3 py-2 align-middle";
 
+/**
+ * 剔除「已排位轉成本地堂食單」嘅線上單（商家 2026-09-12：「唔應該兩邊同時存在」）。
+ *
+ * `tick` 係 cache-buster：本機單存喺 localStorage，本機單一變（`pos-orders-changed`）
+ * 就要重算呢個 filter，否則撳完「排位」張單仍然留喺線上列表。
+ */
+function withoutTransferredOrders(orders: LedgerOnlineOrder[], tick: number): LedgerOnlineOrder[] {
+  void tick;
+  const transferred = transferredLedgerOrderIds(loadLocalOrders());
+  return orders.filter((order) => !transferred.has(order.id));
+}
+
 export function OnlineOrders({
   embedded = false,
   dateFilter: dateFilterProp,
@@ -175,6 +188,25 @@ export function OnlineOrders({
   useEffect(() => {
     ordersRef.current = orders;
   }, [orders]);
+
+  /**
+   * 「排位」之後張線上單已變成本地堂食單 → 線上訂單列表要**即刻唔再顯示**佢
+   * （商家 2026-09-12：「轉成了堂食單…不應該兩邊同時存在」）。
+   * 本機單變更由 `pos-orders-changed` 廣播（`saveOrders()` 出），訂閱 tick 重算即時生效。
+   */
+  const [localOrdersTick, setLocalOrdersTick] = useState(0);
+  useEffect(() => {
+    function onLocalOrdersChanged() {
+      setLocalOrdersTick((count) => count + 1);
+    }
+    window.addEventListener("pos-orders-changed", onLocalOrdersChanged);
+    return () => window.removeEventListener("pos-orders-changed", onLocalOrdersChanged);
+  }, []);
+
+  const ledgerOrders = useMemo(
+    () => withoutTransferredOrders(orders, localOrdersTick),
+    [orders, localOrdersTick],
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -448,13 +480,13 @@ export function OnlineOrders({
   // （loadOrders 唔經 handleInsert/handleUpdate，要喺度掃一次）
   useEffect(() => {
     if (loading) return;
-    for (const order of orders) {
+    for (const order of ledgerOrders) {
       const raw = rawLedgerStatus(order.status);
       if (raw === "accepted" || raw === "preparing") {
         void ensureKitchenPrintForAccepted(order);
       }
     }
-  }, [orders, loading, ensureKitchenPrintForAccepted]);
+  }, [ledgerOrders, loading, ensureKitchenPrintForAccepted]);
 
   const runAcceptAndBridge = useCallback(
     async (
@@ -538,7 +570,7 @@ export function OnlineOrders({
   useEffect(() => {
     if (!autoAccept || loading) return;
 
-    const pending = orders.filter(
+    const pending = ledgerOrders.filter(
       (order) =>
         rawLedgerStatus(order.status) === "pending" &&
         order.tabType !== "dine_in" &&
@@ -557,13 +589,14 @@ export function OnlineOrders({
           autoAcceptProcessingRef.current.delete(order.id);
         });
     }
-  }, [autoAccept, loading, orders, runAcceptAndBridge]);
+  }, [autoAccept, ledgerOrders, loading, runAcceptAndBridge]);
 
   const filteredOrders = useMemo(() => {
-    const byDate = orders.filter((order) => orderMatchesDateFilter(order, dateFilter));
+    // ⚠️ 用 `ledgerOrders`：已「排位」轉成本地堂食單嘅唔應該再喺呢邊出現。
+    const byDate = ledgerOrders.filter((order) => orderMatchesDateFilter(order, dateFilter));
     if (activeTab === "all") return byDate;
     return byDate.filter((order) => order.tabType === activeTab);
-  }, [activeTab, dateFilter, orders]);
+  }, [activeTab, dateFilter, ledgerOrders]);
 
   const stats = useMemo(() => {
     const pending = filteredOrders.filter((order) => rawLedgerStatus(order.status) === "pending").length;

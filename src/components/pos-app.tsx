@@ -157,6 +157,9 @@ import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBo
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
 import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-fulfillment";
+// 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
+import { buildDisplayFloors } from "@/lib/pos/display-floors";
+import { isReopenTempTable } from "@/lib/pos/table-scope";
 
 /**
  * 已補印嘅「加單」簽名（`orderId` → 已出過嘅新增菜品簽名集合）。
@@ -209,55 +212,6 @@ function matchDiscountId(discounts: DiscountPreset[], orderTotal: number, stored
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-/**
- * 枱檯 view 嘅樓層來源：以 `bootstrap.tables`（DB 共享真源）為基，按 area 分組；
- * 再疊加本地獨有枱（唔喺 bootstrap，例如返結 temp 枱 / 本地新增）保留原 floor。
- * 目的：kiosk / 掃碼落單用嘅枱 ID 來自 bootstrap.tables，收銀枱檯 view 必須收佢哋，
- * 否則張單喺枱檯 view 無處可放（之前 localSettings.floors 唔包 bootstrap 枱 → 單 invisible）。
- */
-function buildDisplayFloors(
-  bootstrapTables: PosBootstrap["tables"],
-  localFloors: PosLocalSettings["floors"],
-): PosLocalSettings["floors"] {
-  const bootstrapIds = new Set(bootstrapTables.map((t) => t.id));
-  // 本地枱按 id 建索引：枱嘅 name / area / capacity 等以 localSettings 為準（per-terminal 編輯真源），
-  // bootstrap.tables 只負責補「枱 ID 存在性」呢層（kiosk / 掃碼落單共享真源），唔再話事 area。
-  const localTableById = new Map<string, StoreTable>();
-  for (const lf of localFloors) {
-    for (const t of lf.tables) localTableById.set(t.id, t);
-  }
-
-  // 統一按 area 名（trim）分組：bootstrap 枱 + 本地獨有枱都併入同一個 floor，
-  // floor id 固定用 `area:<名>`，確保「一個樓層名 = 一個 floor」，唔會重複（如兩個「1樓」）。
-  const byArea = new Map<string, StoreTable[]>();
-
-  const addTable = (table: StoreTable, area: string | undefined) => {
-    const key = area && area.trim() ? area.trim() : table.area && table.area.trim() ? table.area.trim() : "未分區";
-    if (!byArea.has(key)) byArea.set(key, []);
-    byArea.get(key)!.push(table);
-  };
-
-  // 1) 共享真源：bootstrap.tables 提供枱 ID；有對應本地枱就用本地版本（area 以本地編輯為準）
-  for (const t of bootstrapTables) {
-    const local = localTableById.get(t.id) ?? t;
-    addTable(local, local.area);
-  }
-
-  // 2) overlay：本地獨有枱（唔喺 bootstrap）按 area 併入同層，避免重複樓層名
-  for (const lf of localFloors) {
-    for (const t of lf.tables) {
-      if (bootstrapIds.has(t.id)) continue;
-      addTable(t, t.area || lf.name);
-    }
-  }
-
-  return Array.from(byArea.entries()).map(([area, tables]) => ({
-    id: `area:${area}`,
-    name: area,
-    tables,
-  }));
 }
 
 /** 樓層選擇器嘅「全部」特殊值：一掣顯示所有樓層嘅枱。 */
@@ -1693,7 +1647,7 @@ export function PosApp() {
     () =>
       floors.flatMap((floor) =>
         floor.tables
-          .filter((table) => !table.reopenOrderId)
+          .filter((table) => !isReopenTempTable(table))
           .map((table) => ({ id: table.id, name: table.name, floorName: floor.name })),
       ),
     [floors],
@@ -4603,7 +4557,7 @@ export function PosApp() {
                 <div className="text-base font-semibold text-slate-900">快捷操作</div>
                 <div className="mt-1 text-xs text-slate-500">桌台流程、收銀入口與營運操作集中在這裡</div>
               </div>
-              <div className="flex-1 overflow-auto px-4 py-4">
+              <div className="min-w-0 flex-1 overflow-auto px-4 py-4">
                 {/* 線上訂單（2026-09-11 用戶要求）：堂食模式之前只有「自取 / 掃碼訂單」（線下 counter 單），
                     會員通／掃碼落嘅線上單完全喺呢塊面板睇唔到，收銀要跳去「訂單 → 線上訂單」先接得到單。
                     呢度直接內嵌同一個 `QuickOnlineOrdersPanel`（快餐模式嗰個），
@@ -4613,7 +4567,10 @@ export function PosApp() {
                     **唔會寫落單**（`acceptLedgerOrder()` 唔收桌台參數，嗰兩個 option 由頭到尾冇用過），
                     開咗反而令收銀以為安排咗枱。要真正支援，要先喺 Ledger 側／bridge 落枱號。 */}
                 {!isQuickMode && ledgerMerchantId ? (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                  /* ⚠️ `min-w-0 overflow-hidden`：卡片內容（標籤／按鈕）萬一太闊，
+                     都唔可以撐到成頁橫向滾動（2026-09-12 實案：快捷操作欄被撐爆，
+                     連帶點餐頁三欄版面被推歪）。 */
+                  <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
                     <div className="text-xs font-semibold text-slate-700">線上訂單</div>
                     <div className="mt-3">
                       <QuickOnlineOrdersPanel

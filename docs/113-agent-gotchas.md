@@ -695,3 +695,64 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
 - 📌 訂單頁（`/orders`）接單亦要採納：`loadOperatingMode() === "quick"` 時改行
   `adoptLedgerOrderAsQuickCounter()`，否則「喺訂單頁接單」會漏咗採納。
 
+## 🔴🔴 打印任務「claim 咗冇回報」= 永久卡死（2026-09-12 實案 · migration 0035）
+
+**病症**：線上單落單後，打印記錄幾張 job **全部綠色「已發送」但一張紙都冇出**，
+而且狀態永遠唔變（冇紅標、唔會自我修正）。商家原話：「還是一樣沒有打印出來。」
+
+**但係**：打印中心**冇**出「未上雲」紅標 → 即係 `PRINT_JOB_CREATED` **已經上到雲**
+（outbox v2 上雲後會由 queue 移除）→ **雲端有行，但冇人印得出**。
+
+**根因（DB 層死鎖）**：`pos_claim_print_jobs`（`0020`）只揀
+
+```sql
+and j.status in ('pending', 'failed')
+```
+
+但 claim 成功會寫 `status = 'printing'`。⇒ 一旦中繼 APK claim 咗之後**冇成功回報**
+（render／出紙拋錯、APK 中途被殺、result POST 失敗），嗰行就**永遠停留 `printing`**：
+
+- `printing` 唔喺 filter 內 → **冇任何機可以再認領佢**；
+- `0020` 寫住「`claimed_at < now() - 60s` → 60s 後畀第啲機接手」，
+  但 status filter 已經排除 `printing` → **呢個 60 秒重排條件係死代碼**；
+- `attempts < 5` 亦永遠唔再增加 → 唔會退役、唔會報錯。
+
+**✅ 修法**：`supabase/migrations/0035_print_job_stale_claim_requeue.sql`
+（claim 條件加入 `printing` + 60 秒 stale 判斷；仍受 `attempts < 5` / `ttl` 保護）。
+⚠️ migration 要**人手**喺 Supabase SQL Editor 貼（本機冇 DB 連線，已踩過 0018/0019/0020）。
+
+**🔴 點解以前完全查唔到**：`GET /api/pos/print-jobs/status` 只回 `printed` / `failed`
+→ 「冇人認領」（`pending`）同「認領咗冇回報」（`printing`）喺 POS 端**零訊息**。
+已修：該端點新增 `unfinished[]`，打印中心會出紅框（未認領 N / 已認領未回報 N）
+＋ 中繼代理最後心跳（`/api/pos/print-agent/pair-status` 新增 `lastSeenAt`）。
+
+**排查口訣（唔使自己查 DB）**：打印中心見到
+- 「**未上雲**」紅標 → 事件根本冇上雲（睇 sync queue / 401）
+- 「**雲端未認領**」→ 中繼機離線／未配對（睇代理最後心跳）
+- 「**已認領未回報**」→ 中繼機攞咗單但冇回報（出紙／渲染失敗，APK 側）
+- 全部冇、但顯示「已發送」→ 正常已交畀通道，等雲端結果（8 秒輪詢）
+
+## 「排位」後唔應該兩邊同時出現（2026-09-12 商家要求）
+
+- 病症：線上單排位之後，**線上訂單列表 + 店內線下訂單同時見到同一張單**，睇落好似兩張。
+- 商家口徑：「如果轉成了堂食單，就直接把訂單換成線下單即可，**不應該兩邊同時存在**。」
+- ✅ 修法：`transferredLedgerOrderIds(localOrders)`（`pos-order-filters.ts`）——
+  凡有 `onlineOrderId` + 真枱號（≠ counter）就係「已轉枱」，兩個線上列表
+  （`online-orders.tsx`、`quick-online-orders-panel.tsx`）一律剔除。
+- ⚠️ **只剔真枱**：快餐模式採納嘅 counter 單**唔剔**（佢喺快餐 strip 管理，
+  線上列表仍然係佢嘅來源記錄）。
+- ⚠️ 剔除要**即時生效**：本機單變更唔會通知線上面板 → 要訂閱 `pos-orders-changed`
+  攞一個 tick 去重算（`saveOrders()` 會出呢個事件）。
+
+## 版面：快捷操作欄只有 280px（2026-09-12 實案）
+
+- 點餐頁/桌台總覽嘅「快捷操作」欄 = `lg:280px / xl:330px`（`pos-app.tsx:4401`），
+  扣內距後卡片淨返 **~190px**。
+- 🔴 我曾經喺線上單卡片加「未結帳（到店付款）」藥丸（9 字）＋大尺寸按鈕 →
+  卡片 min-content 超過 190px → 該欄橫向滾動、按鈕被切，
+  **連帶點餐頁三欄版面被推歪**（商家：「點餐內的介面也弄壞了」）。
+- 鐵律：呢個欄嘅卡片內容（藥丸文案／按鈕）一律**要短**；按鈕用 compact
+  （`onlineOrderActionButtonClass(tone, true)`，`text-[11px] px-2.5 py-1.5`），
+  卡片加 `min-w-0 overflow-hidden`，藥丸列 `flex-wrap`；容器加 `min-w-0`。
+- 藥丸文案上限：**4 個中文字**（「已結帳」「未結帳」「待安排座位」剛剛好）。
+

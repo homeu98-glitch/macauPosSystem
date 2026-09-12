@@ -85,9 +85,9 @@ describe("線上單：付款維度", () => {
     assert.equal(badge.bgClass, "bg-emerald-50");
   });
 
-  it("到店付款未收錢 → 未結帳，並且講清楚係到店付款", () => {
+  it("到店付款未收錢 → 未結帳（文案要短，唔可以逼爆 280px 快捷操作欄）", () => {
     const badge = onlinePaymentBadge(online({ paymentMode: "in_store", paymentStatus: "unpaid" }));
-    assert.equal(badge.label, "未結帳（到店付款）");
+    assert.equal(badge.label, "未結帳");
     assert.notEqual(badge.bgClass, "bg-emerald-50");
   });
 

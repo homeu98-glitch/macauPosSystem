@@ -55,5 +55,9 @@ export async function GET(request: Request) {
     agentId: data.agent_id,
     storeId: data.store_id,
     storeName: null, // agents 表冇 store_name；web 端由 auth session 攞店名
+    // 2026-09-12：回報最後心跳，等打印中心可以講「代理 X 分鐘前有心跳 / 已經 N 分鐘冇心跳」。
+    // 「已發送但印唔出」事故入面，呢個係最快分得清「代理離線（冇人認領）」
+    // 同「代理在線但認領咗冇回報」嘅一個數。
+    lastSeenAt: (data.last_seen_at as string | null) ?? null,
   });
 }

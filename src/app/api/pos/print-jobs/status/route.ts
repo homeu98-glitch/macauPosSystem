@@ -48,5 +48,40 @@ export async function GET(request: Request) {
     lastError: (row.last_error as string | null) ?? undefined,
   }));
 
-  return NextResponse.json({ ok: true, jobs });
+  /**
+   * 🔴 2026-09-12 新增：**未完成**嘅任務（`pending` / `printing`）。
+   *
+   * 為咩一定要回：舊寫法只回 `printed` / `failed`，所以「冇人認領」（`pending`）同
+   * 「認領咗但冇回報」（`printing`）**喺 POS 端零訊息** → 本地永遠顯示「已發送」、
+   * 冇紅標、唔會自我修正（商家 2026-09-12 實案：4 張 job 全部卡住，一張紙都冇出）。
+   *
+   * 前端見到：
+   *   `pending`  → 「雲端排隊（未認領）」＝中繼打印機代理離線／未配對
+   *   `printing` → 「已認領未回報」＝APK claim 咗之後死咗 / render 拋錯
+   *               （配合 migration 0035：超過 60 秒會自動重排）
+   */
+  const { data: unfinished, error: unfinishedError } = await supabase
+    .from("pos_print_jobs")
+    .select("id, status, claimed_at, attempts, created_at")
+    .eq("store_id", storeId)
+    .in("status", ["pending", "printing"])
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (unfinishedError) {
+    // ⚠️ 唔可以因為呢個查詢失敗連 printed/failed 都返唔到（向下兼容舊 DB）。
+    console.error("[pos/print-jobs/status] unfinished query failed:", unfinishedError.message);
+    return NextResponse.json({ ok: true, jobs });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    jobs,
+    unfinished: (unfinished ?? []).map((row) => ({
+      id: row.id as string,
+      status: row.status as "pending" | "printing",
+      claimedAt: (row.claimed_at as string | null) ?? null,
+      attempts: Number(row.attempts ?? 0),
+      createdAt: (row.created_at as string | null) ?? null,
+    })),
+  });
 }

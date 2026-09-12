@@ -207,6 +207,19 @@ const TD_CELL = "px-3 py-2 align-middle";
 
 export function PrintCenter() {
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs().map(normalizePrintJobStatus));
+  /**
+   * 雲端**未完成**嘅打印任務（`pending` / `printing`）——2026-09-12 新增。
+   *
+   * 在此之前，雲端只回報 printed / failed，所以「冇人認領」同「認領咗冇回報」
+   * 喺 POS 端係**完全隱形**（本地永遠「已發送」，冇紅標、唔會自我修正）。
+   *
+   * @see `/api/pos/print-jobs/status` 同 migration `0035`（stale printing 自動重排）
+   */
+  const [cloudUnfinished, setCloudUnfinished] = useState<
+    Record<string, { status: "pending" | "printing"; attempts: number; claimedAt: string | null }>
+  >({});
+  /** 中繼打印機代理狀態（心跳時間），用嚟分辨「代理離線」定「代理在線但印唔出」。 */
+  const [agentStatus, setAgentStatus] = useState<{ paired: boolean; lastSeenAt: string | null } | null>(null);
   const [orders] = useState<PosOrder[]>(() => loadOrders());
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
@@ -376,6 +389,18 @@ export function PrintCenter() {
     let alive = true;
     const tick = () => {
       if (alive) void syncCloudPrintOutcomes();
+      // 中繼代理心跳：分辨「代理離線（冇人認領）」定「代理在線但認領咗印唔出」。
+      const storeId = resolveStoreId();
+      if (alive && storeId) {
+        void fetch(`/api/pos/print-agent/pair-status?storeId=${encodeURIComponent(storeId)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((json: { paired?: boolean; lastSeenAt?: string | null } | null) => {
+            if (alive && json) {
+              setAgentStatus({ paired: Boolean(json.paired), lastSeenAt: json.lastSeenAt ?? null });
+            }
+          })
+          .catch(() => undefined);
+      }
     };
     tick(); // 一入頁面就拉一次，唔使等首個 8 秒
     const interval = window.setInterval(tick, 8000);
@@ -976,9 +1001,29 @@ export function PrintCenter() {
     }
     if (!res.ok) return;
     const data = (await res.json().catch(() => null)) as
-      | { ok?: boolean; jobs?: Array<{ id: string; status: "sent" | "printed" | "failed"; lastError?: string }> }
+      | {
+          ok?: boolean;
+          jobs?: Array<{ id: string; status: "sent" | "printed" | "failed"; lastError?: string }>;
+          unfinished?: Array<{
+            id: string;
+            status: "pending" | "printing";
+            attempts?: number;
+            claimedAt?: string | null;
+          }>;
+        }
       | null;
     if (!data?.ok || !Array.isArray(data.jobs)) return;
+
+    // 未完成狀態：令「冇人認領 / 認領咗冇回報」喺 UI 見得到（見上面 state 註釋）。
+    const unfinishedMap: Record<string, { status: "pending" | "printing"; attempts: number; claimedAt: string | null }> = {};
+    for (const row of data.unfinished ?? []) {
+      unfinishedMap[row.id] = {
+        status: row.status,
+        attempts: Number(row.attempts ?? 0),
+        claimedAt: row.claimedAt ?? null,
+      };
+    }
+    setCloudUnfinished(unfinishedMap);
 
     const cloudById = new Map(data.jobs.map((j) => [j.id, j]));
     const current = loadPrintJobs();
@@ -1606,6 +1651,44 @@ export function PrintCenter() {
                   </button>
                 </div>
 
+                {/* 🔴 雲端未完成任務警示（2026-09-12）：「已發送」係樂觀值，
+                    下面呢批就係「交咗出去但雲端仲未印完」嘅真相 —— 以前完全隱形。 */}
+                {(() => {
+                  const rows = Object.values(cloudUnfinished);
+                  if (rows.length === 0) return null;
+                  const pendingCount = rows.filter((row) => row.status === "pending").length;
+                  const printingCount = rows.length - pendingCount;
+                  const lastSeenMs = agentStatus?.lastSeenAt ? Date.parse(agentStatus.lastSeenAt) : NaN;
+                  const minutesAgo = Number.isFinite(lastSeenMs)
+                    ? Math.max(0, Math.round((Date.now() - lastSeenMs) / 60000))
+                    : null;
+                  const agentHint =
+                    agentStatus === null
+                      ? ""
+                      : !agentStatus.paired
+                        ? "中繼打印機：未配對。"
+                        : minutesAgo === null
+                          ? "中繼打印機：已配對（未有心跳紀錄）。"
+                          : `中繼打印機：最後心跳 ${minutesAgo} 分鐘前${minutesAgo >= 5 ? "（疑似離線）" : ""}。`;
+                  return (
+                    <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
+                      <div className="font-semibold">
+                        ⚠️ 有 {rows.length} 張打印任務雲端仲未完成：未認領 {pendingCount} 張、已認領未回報{" "}
+                        {printingCount} 張
+                      </div>
+                      <div className="mt-1 leading-relaxed">
+                        {agentHint}
+                        {pendingCount > 0
+                          ? "「未認領」＝冇中繼打印機拎單（開返中繼機／重新配對）。"
+                          : ""}
+                        {printingCount > 0
+                          ? "「已認領未回報」＝中繼機拎咗單但冇回報（出紙失敗／中途死）；超過 60 秒會自動重排（migration 0035）。"
+                          : ""}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {filteredJobs.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
                     目前沒有打印記錄
@@ -1715,6 +1798,20 @@ export function PrintCenter() {
                                       <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">
                                         <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                                         未上雲
+                                      </span>
+                                    ) : null}
+                                    {/* 雲端有行但未完成（2026-09-12）：
+                                          pending = 冇人認領（代理離線）／printing = 認領咗冇回報。 */}
+                                    {cloudUnfinished[job.id] ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+                                        {cloudUnfinished[job.id].status === "pending"
+                                          ? "雲端未認領"
+                                          : `已認領未回報${
+                                              cloudUnfinished[job.id].attempts > 1
+                                                ? `（試 ${cloudUnfinished[job.id].attempts} 次）`
+                                                : ""
+                                            }`}
                                       </span>
                                     ) : null}
                                   </span>

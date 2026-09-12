@@ -19,6 +19,26 @@ export function isLocalOrTransferredDineIn(order: PosOrder): boolean {
 }
 
 /**
+ * 已被「排位」轉成本地堂食單嘅 Ledger 單 id 集合（2026-09-12 商家要求）。
+ *
+ * 病症：線上單排位之後**兩邊都同時出現**（線上訂單列表 + 店內線下訂單），
+ * 同一張單睇落好似兩張。
+ * 商家口徑：「如果轉成了堂食單，就直接把訂單換成線下單即可，不應該兩邊同時存在。」
+ *
+ * ⇒ 線上訂單列表（`online-orders.tsx` 同快捷操作面板）要**剔除**呢批 id。
+ * 判準同 `isLocalOrTransferredDineIn()` 一致（有 `onlineOrderId` + 真枱號 ≠ counter），
+ * 所以快餐模式採納嘅 counter 單**唔會**被剔走 —— 佢哋喺快餐 strip 管理，
+ * 線上列表仍然係佢哋嘅來源記錄。
+ */
+export function transferredLedgerOrderIds(localOrders: PosOrder[]): Set<string> {
+  const ids = new Set<string>();
+  for (const order of localOrders) {
+    if (order.onlineOrderId && isLocalOrTransferredDineIn(order)) ids.add(order.onlineOrderId);
+  }
+  return ids;
+}
+
+/**
  * 快餐 counter 單（先收款、後出餐流程）。
  *
  * 🔴 2026-09-12：**唔再要求 `isLocalPosOrder()`**（即唔再排除帶 `onlineOrderId` 嘅單）。

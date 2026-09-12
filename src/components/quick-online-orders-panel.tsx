@@ -14,6 +14,7 @@ import {
   onlineTableBadge,
 } from "@/lib/pos/online-dinein-labels";
 import { loadOrders } from "@/lib/storage";
+import { transferredLedgerOrderIds } from "@/lib/pos-order-filters";
 import {
   printReceiptForLedgerOrderOnce,
   printVoidForLedgerOrderOnce,
@@ -81,6 +82,18 @@ type QuickOnlineOrdersPanelProps = {
   tableAssign?: boolean;
 };
 
+/**
+ * 剔除「已排位轉成本地堂食單」嘅線上單（商家 2026-09-12：「唔應該兩邊同時存在」）。
+ *
+ * `tick` 純粹係 cache-buster：本機單係喺 localStorage，本機單一變（`pos-orders-changed`）
+ * 我哋就要重算呢個 filter，唔係嘅話撳完「排位」張單仍然留喺線上列表。
+ */
+function withoutTransferredOrders(orders: LedgerOnlineOrder[], tick: number): LedgerOnlineOrder[] {
+  void tick;
+  const transferred = transferredLedgerOrderIds(loadOrders());
+  return orders.filter((order) => !transferred.has(order.id));
+}
+
 function optimisticPatch(order: LedgerOnlineOrder, status: string): LedgerOnlineOrder {
   return { ...order, status, updatedAt: new Date().toISOString() };
 }
@@ -118,6 +131,28 @@ export function QuickOnlineOrdersPanel({
   useEffect(() => {
     ordersRef.current = orders;
   }, [orders]);
+
+  /**
+   * 「排位」之後，張線上單已經係本地堂食單（`isLocalOrTransferredDineIn`）→
+   * 線上訂單列表要**即刻唔再顯示**佢（商家 2026-09-12：「不應該兩邊同時存在」）。
+   *
+   * 本機單變更係經 `pos-orders-changed` 廣播（`saveOrders()` / `local-orders-panel` 都會出），
+   * 所以訂閱一個 tick 去重算，唔使 reload。
+   */
+  const [localOrdersTick, setLocalOrdersTick] = useState(0);
+  useEffect(() => {
+    function onLocalOrdersChanged() {
+      setLocalOrdersTick((count) => count + 1);
+    }
+    window.addEventListener("pos-orders-changed", onLocalOrdersChanged);
+    return () => window.removeEventListener("pos-orders-changed", onLocalOrdersChanged);
+  }, []);
+
+  const ledgerOrders = useMemo(
+    () => withoutTransferredOrders(orders, localOrdersTick),
+    // `localOrdersTick` = 本機單變更；`orders` = Ledger 側刷新。
+    [orders, localOrdersTick],
+  );
 
   useEffect(() => {
     function unlock() {
@@ -323,8 +358,9 @@ export function QuickOnlineOrdersPanel({
   }, [viewingOrderId]);
 
   const visibleOrders = useMemo(() => {
-    return orders.filter(isActiveOnlineOrder).slice(0, layout === "strip" ? 24 : 16);
-  }, [orders, layout]);
+    // ⚠️ 用 `ledgerOrders`（已剔除「排位」後轉成本地堂食單嘅單），唔係 `orders`。
+    return ledgerOrders.filter(isActiveOnlineOrder).slice(0, layout === "strip" ? 24 : 16);
+  }, [ledgerOrders, layout]);
 
   const runAccept = useCallback(
     async (
@@ -401,7 +437,7 @@ export function QuickOnlineOrdersPanel({
   useEffect(() => {
     if (!autoAccept || loading) return;
 
-    const pending = orders.filter((order) => {
+    const pending = ledgerOrders.filter((order) => {
       if (rawLedgerStatus(order.status) !== "pending") return false;
       if (autoAcceptProcessingRef.current.has(order.id)) return false;
       if (!skipTableAssignment && order.tabType === "dine_in") return false;
@@ -420,7 +456,7 @@ export function QuickOnlineOrdersPanel({
           autoAcceptProcessingRef.current.delete(order.id);
         });
     }
-  }, [autoAccept, loading, onToast, orders, runAccept, skipTableAssignment]);
+  }, [autoAccept, ledgerOrders, loading, onToast, runAccept, skipTableAssignment]);
 
   const runAction = useCallback(
     async (order: LedgerOnlineOrder, action: OnlineOrderAction) => {
@@ -620,7 +656,7 @@ export function QuickOnlineOrdersPanel({
     );
   }
 
-  function renderModalActions(order: LedgerOnlineOrder) {
+  function renderModalActions(order: LedgerOnlineOrder, compact = false) {
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
     const primary = getPrimaryOnlineOrderAction(order);
 
@@ -632,7 +668,11 @@ export function QuickOnlineOrdersPanel({
       <>
         {tableAssign && isOnlineDineIn(order) ? (
           <button
-            className="rounded-2xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            className={
+              compact
+                ? onlineOrderActionButtonClass("orange", true)
+                : "rounded-2xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            }
             disabled={busy}
             onClick={() => setAssigningOrderId(order.id)}
             type="button"
@@ -642,7 +682,11 @@ export function QuickOnlineOrdersPanel({
         ) : null}
         {primary ? (
           <button
-            className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            className={
+              compact
+                ? onlineOrderActionButtonClass(primary.tone, true)
+                : "rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            }
             disabled={busy}
             onClick={() => void runAction(order, primary)}
             type="button"
@@ -652,7 +696,9 @@ export function QuickOnlineOrdersPanel({
         ) : null}
         {rawLedgerStatus(order.status) === "pending" ? (
           <button
-            className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+            className={compact
+              ? onlineOrderActionButtonClass("slate", true)
+              : "rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"}
             disabled={busy}
             onClick={() =>
               void runAction(order, {
@@ -673,7 +719,9 @@ export function QuickOnlineOrdersPanel({
   }
 
   function renderStackActions(order: LedgerOnlineOrder) {
-    return renderModalActions(order);
+    // ⚠️ `compact`：卡片住喺「快捷操作」欄（lg 得 280px、xl 330px），
+    // 彈窗先有闊度用大掣。用大掣會逼爆卡片 → 橫向滾動 + 按鈕被切（2026-09-12 實案）。
+    return renderModalActions(order, true);
   }
 
   function renderOrderCard(order: LedgerOnlineOrder) {
@@ -690,11 +738,11 @@ export function QuickOnlineOrdersPanel({
     const tableBadge = onlineTableBadge(order, { quickMode: quickCounter });
     // 雙標籤（同 docs/113 快餐做法一致）：付款維度「已結帳（綠）」＋枱位維度「待安排座位 / 枱名」。
     const dineInBadges = isOnlineDineIn(order) ? (
-      <div className="flex flex-wrap items-center gap-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
         {[onlinePaymentBadge(order), tableBadge].map((item) => (
           <span
             key={item.label}
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.bgClass} ${item.textClass}`}
+            className={`inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.bgClass} ${item.textClass}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${item.dotClass}`} />
             {item.label}
@@ -776,7 +824,10 @@ export function QuickOnlineOrdersPanel({
     }
 
     return (
-      <div key={order.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+      <div
+        key={order.id}
+        className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-3"
+      >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">
