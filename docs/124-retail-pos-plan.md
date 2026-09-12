@@ -1190,6 +1190,81 @@ union / `Record<>` 嘅風險（一改就四端出紙要跟）。**需要改既�
 
 ---
 
+## 12. 零售價籤 / 商品標籤（2026-09-13）
+
+### 12.1 🔑 核心決定：合成 `orderId`，唔改 `PrintJob` 合約
+
+價籤係**按商品**印、唔屬於任何訂單。直覺做法係將 `PrintJob.orderId` 改成可選 ——
+但嗰個係**合約改動**：四端 renderer、server `pos_print_jobs` 表、
+打印中心都假設佢有值，改咗要四端同步 + 擰 `versionCode` + 可能撞 DB 約束。
+
+**實際做法：合成 id `retail-label:<productId>`。**
+- 行返**完全既有**嘅管道（outbox → 雲端 → 中繼 APK claim 出紙）→ **零跨 repo 改動**
+- `orderNo` 放商品名 → 打印記錄列表照樣顯示「印咗邊件貨嘅價籤」
+- **代價（要知）**：打印中心嘅「重打整單」（按 order 反查）搵唔到價籤；
+  但打印記錄係按 job 顯示，**逐張重打完全正常** —— 對價籤嚟講足夠。
+- 同一件商品印多次 → 多個 job 共用同一個合成 orderId，但 job id 各自 `uid()` → 唔會互相覆蓋。
+
+### 12.2 完成內容
+
+| 檔案 | 改動 |
+| --- | --- |
+| `src/lib/types.ts` | `RetailLabelSectionId`（9 個 id）、`RetailLabelTemplate`、`PrintTemplates.retailLabel?`（**選填** → 舊商戶零遷移） |
+| `src/lib/escpos-template.ts` | `RETAIL_LABEL_SECTION_META`、`RETAIL_LABEL_BLOCK_DEFAULTS`、`DEFAULT_RETAIL_LABEL_TEMPLATE`、`normalizeRetailLabelTemplate()`；`buildSnapshot` / `withLabelFixedSizes` 放寬型別 |
+| 🆕 `src/lib/retail/retail-label-content.ts`（15 測） | 價籤內容建構 + **CJK 闊度摺行**（`wrapToWidth` / `displayWidth`） |
+| `src/lib/print-jobs.ts` | `buildRetailLabelPrintJobs(products, opts)` |
+| `src/lib/storage.ts` | 白名單加 `printTemplates.retailLabel` |
+| 🆕 `src/components/retail/retail-label-print.tsx` | 「印價籤」介面（揀商品 / 份數 / 即時預覽 / 出票） |
+| `src/components/retail/retail-products.tsx` | 商品頁加「印價籤」入口 |
+
+### 12.3 三個實作要點
+
+**① `buildSnapshot()` 嘅 kind 一定係 `"label"`，唔可以係 `"retailLabel"`。**
+三端 renderer 嘅 `when (kind)` 只認 `receipt` / `label` / `kitchen`，傳新 kind 會 fall through
+→ 冇咗標籤嘅走紙 / 字型處理。**同 `kiosk` 槽位要傳 `"receipt"` 係同一個道理**
+（`PrintTemplates.kiosk` 註釋已經寫過）。
+
+**② `withLabelFixedSizes()` 放寬做 `Record<string, …>` —— 而且安全。**
+佢內部係 `if (blocks[id] && def)`，只會鎖**已存在**嘅 id，**唔會注入**缺失嘅 id
+→ 傳零售模板入去唔會無啦啦多 13 個餐飲區塊。
+副作用（好嘅）：零售價籤嘅字型**唔會被鎖**，商家可以自己校大字 —— 價籤正需要呢個。
+
+**③ 摺行一定要用「顯示闊度」，唔可以用 `length`。**
+「維他檸檬茶 250ml」係 12 個 code point，但顯示闊度係 **18**（6 個中文字 ×2 + 6 個半角）。
+按 `length` 摺 → 一行塞爆 → 打印機再自動摺一次 → 版面走樣。
+`wrapToWidth()` 逐個 code point 累加闊度，超出上限就摺，並喺超出 `maxLines` 時補 `…`。
+
+### 12.4 ⚠️ 刻意未做
+
+**① 條碼圖（Code128 → 點陣）。**
+需要 POS 端寫 Code128 encoder ＋ 四端 raster 輸出（同 QR 嗰套 `job.qr` 一樣要 POS 預先編碼）。
+呢一輪**只印條碼數字 + PLU**：貨架價籤主要係畀人睇價，收銀係掃**商品本身**嘅條碼 ——
+所以數字對店員核對已經夠用，唔值得為咗靚而開一輪跨 repo 工程。
+
+**② 價籤模板嘅設計介面（print-center 第七個分頁）。**
+`RETAIL_LABEL_SECTION_META` 已經齊，但 `print-center.tsx` 係 1500+ 行、
+而且帶住 16 個**既有** lint error。加分頁要動 `snapshotKindOf` / `readTemplate` /
+`SECTION_META` / `assertPreviewCoverage` 幾處 —— 為咗唔喺同一輪混入高風險改動，
+刻意留返下一輪。**目前用 `DEFAULT_RETAIL_LABEL_TEMPLATE`（售價最大字、商品名次之）**，
+預設已經啱用；`footerText` 亦暫時只能由資料層改。
+
+### 12.5 驗證
+
+| 項 | 結果 |
+| --- | --- |
+| `tsc --noEmit` | **0 error** |
+| `node --test` | **477 pass / 0 fail**（§11 完結時 462 → 新增 15） |
+| `eslint`（新檔 + 改動檔） | **0 error / 0 warning** |
+| `next build` | ✅ **成功**（EXIT=0、Compiled 2.7s、TypeScript 2.5s、**75/75 靜態頁**；`/retail` 同 `/retail/products` 都出到） |
+
+⚠️ **仍未做 runtime / 實紙驗證**：價籤要接上 `role === "label"` 嘅實體標籤機。
+**建議商家實測**：商品頁 → 「印價籤」→ 揀商品 → 睇右邊即時預覽（應該見到
+店名 / 商品名 / 大字售價 / 單位 / 條碼數字）→ 撳「印價籤」。
+若一部標籤機都冇配置，介面頂部會**事先警告**，撳落去亦會明確講
+「冇啟用嘅標籤機（role=label）→ 未出紙」—— 唔會靜默。
+
+---
+
 ## 附錄 A — 關鍵代碼事實（供實作時直接查）
 | 事實 | 位置 |
 | --- | --- |

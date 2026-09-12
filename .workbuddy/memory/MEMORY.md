@@ -43,7 +43,9 @@
 
 ## 命令／環境
 - ⚠️ `npm` 經 git-bash **跑唔到** → 直接 `node node_modules/typescript/bin/tsc --noEmit`、`node --test`、`node node_modules/eslint/bin/eslint.js`。git-bash **冇 coreutils**（ls/grep/sed/head/tail 全無）→ 用 `node -e`。
-- ⚠️ 已有 **~34 個既有 lint error**（唔係回歸）。
+- ⚠️ 已有 **~34 個既有 lint error**（唔係回歸）。另有 **~8 個喺 `src/lib/pos/print-job-merge.test.ts`**（`no-explicit-any`，既有）。
+- ⚠️ 本機**冇** `.env.local`、冇 supabase CLI → migration 要人手喺 Supabase SQL Editor 跑。
+- ⚠️ 同一個 repo **可能有另一個 session 同時改嘢** → `tsc` 偶發語法錯誤（對方寫檔中途被讀到），**重跑再判斷**，唔好當成自己整壞。
 - `node --test` 無參數；import 用相對路徑＋`.ts`（`@/` 會 ERR_MODULE_NOT_FOUND，**同層 runtime import 亦一樣**）；純模組必須零 runtime 依賴。`next build` 要 `CODEBUDDY_SAFE_DELETE_ENABLED=0`。
 
 ## 加設定欄鐵律（2026-09-12）

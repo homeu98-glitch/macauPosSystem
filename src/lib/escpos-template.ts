@@ -13,6 +13,8 @@ import {
   PrintTemplateKind,
   ReceiptTemplate,
   LABEL_PAPER_PRESETS,
+  RetailLabelSectionId,
+  RetailLabelTemplate,
   KitchenSectionId,
   LabelSectionId,
   ReceiptSectionId,
@@ -192,6 +194,36 @@ const LABEL_BLOCK_DEFAULTS: Record<LabelSectionId, EscPosBlockStyle> = {
   specs: block(true, "s", false, "left"),
   item_note: block(true, "s", false, "left"),
   order_no: block(true, "s", false, "center"),
+  footer: block(true, "s", false, "center"),
+};
+/**
+ * 零售價籤區塊（2026-09-13）。
+ *
+ * 排版理由：價籤係**企喺貨架前面睇**嘅（唔似收據係手揸住睇）→ 售價一定要最大字，
+ * 商品名次要，其餘全部細字。所以 `price` 預設 `l` + 粗體，`product_name` 預設 `m`。
+ */
+export const RETAIL_LABEL_SECTION_META: { id: RetailLabelSectionId; label: string }[] = [
+  { id: "store_name", label: "門店名" },
+  { id: "product_name", label: "商品名" },
+  { id: "price", label: "售價" },
+  { id: "original_price", label: "原價" },
+  { id: "unit", label: "單位" },
+  { id: "barcode", label: "條碼數字" },
+  { id: "plu", label: "PLU" },
+  { id: "date", label: "印製日期" },
+  { id: "footer", label: "頁尾文案" },
+];
+const RETAIL_LABEL_BLOCK_DEFAULTS: Record<RetailLabelSectionId, EscPosBlockStyle> = {
+  store_name: block(true, "s", false, "center"),
+  product_name: block(true, "m", true, "left"),
+  // 售價最大字：貨架前面一眼睇到
+  price: block(true, "l", true, "center"),
+  // 原價預設收起：冇填 `originalPrice` 就唔會出；即使開咗，冇值都自動略過
+  original_price: block(false, "s", false, "center"),
+  unit: block(true, "s", false, "center"),
+  barcode: block(true, "s", false, "center"),
+  plu: block(true, "s", false, "center"),
+  date: block(false, "s", false, "center"),
   footer: block(true, "s", false, "center"),
 };
 const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
@@ -476,13 +508,98 @@ export function ensureDividerSection<T extends { blocks: Record<string, EscPosBl
  * 就算 localStorage 儲存咗唔同 size（舊版可改），讀取／出紙／預覽都會強制用
  * `LABEL_BLOCK_DEFAULTS` 嗰組，保證文字排得落固定尺寸標籤紙。返回新對象，唔改入參。
  */
-export function withLabelFixedSizes<T extends LabelTemplate>(template: T): T {
+export function withLabelFixedSizes<T extends { blocks: Record<string, EscPosBlockStyle> }>(
+  template: T,
+): T {
   const blocks = { ...template.blocks };
+  // ⚠️ 刻意用 `Record<string, …>` 而唔係 `LabelTemplate`：零售價籤模板（`RetailLabelTemplate`）
+  // 嘅 id 集合同餐飲標籤唔同，但一樣要行呢個 normalize。
+  // 呢度 `if (blocks[id] && def)` 只**鎖已存在嘅 id**，唔會注入缺失嘅 id
+  // → 傳零售模板入嚟完全安全（唔會無啦啦多 13 個餐飲區塊）。
   for (const id of LABEL_SECTION_META.map((m) => m.id)) {
     const def = LABEL_BLOCK_DEFAULTS[id];
     if (blocks[id] && def) blocks[id] = { ...blocks[id], size: def.size };
   }
   return { ...template, blocks };
+}
+
+/**
+ * 零售價籤預設模板（第六個槽位）。
+ *
+ * 🔑 **`buildSnapshot()` 一定要傳 kind `"label"`**（見 `RetailLabelTemplate` 註釋）——
+ * 三端 renderer 只認 receipt / label / kitchen，所以價籤同餐飲標籤共用 label 走紙邏輯。
+ *
+ * 順序：店名 → 商品名 → **售價** → 原價 → 單位 → PLU → 條碼數字 → 日期 → 頁尾。
+ * 售價刻意放喺商品名之後（視線落點），秤重商品嘅 PLU 擺喺條碼之前（店員對秤用）。
+ */
+export const DEFAULT_RETAIL_LABEL_TEMPLATE: RetailLabelTemplate = {
+  blocks: { ...RETAIL_LABEL_BLOCK_DEFAULTS },
+  order: [
+    "store_name",
+    "product_name",
+    "price",
+    "original_price",
+    "unit",
+    "plu",
+    "barcode",
+    "date",
+    "footer",
+  ],
+  paperSize: DEFAULT_LABEL_PAPER_ID,
+  footerText: "",
+};
+
+/**
+ * 零售價籤模板 normalize（同 `normalizeShiftTemplate` 同一個模式）。
+ *
+ * 為何要自己一套而唔用 `ensureReceiptSections`：
+ * ① 區塊集合唔同（`RETAIL_LABEL_SECTION_META`）；
+ * ② `order` 補位要按 META 順序插，唔係一律補落尾（同 shift 一樣）；
+ * ③ 舊 localStorage 冇呢個槽位 → 全套用預設，安全向後兼容。
+ */
+export function normalizeRetailLabelTemplate(
+  input: Partial<RetailLabelTemplate> | null | undefined,
+): RetailLabelTemplate {
+  const src = input ?? {};
+  const blocks = { ...RETAIL_LABEL_BLOCK_DEFAULTS };
+  // 只接受已知 id（未知 id 剔走：多數係舊版本殘留 / 手改過 localStorage）
+  for (const { id } of RETAIL_LABEL_SECTION_META) {
+    const incoming = src.blocks?.[id];
+    if (incoming && typeof incoming === "object") {
+      blocks[id] = { ...RETAIL_LABEL_BLOCK_DEFAULTS[id], ...incoming };
+    }
+  }
+
+  const canonical = RETAIL_LABEL_SECTION_META.map((m) => m.id);
+  const seen = new Set<RetailLabelSectionId>();
+  const order: RetailLabelSectionId[] = [];
+  for (const id of src.order ?? []) {
+    if (canonical.includes(id) && !seen.has(id)) {
+      order.push(id);
+      seen.add(id);
+    }
+  }
+  // 缺失嘅按 META 順序補原位（同 shift 模板一致），唔係一律補落尾
+  canonical.forEach((id, idx) => {
+    if (seen.has(id)) return;
+    let insertAt = order.length;
+    for (let i = idx + 1; i < canonical.length; i++) {
+      const nextIdx = order.indexOf(canonical[i]);
+      if (nextIdx >= 0) {
+        insertAt = nextIdx;
+        break;
+      }
+    }
+    order.splice(insertAt, 0, id);
+    seen.add(id);
+  });
+
+  return {
+    blocks,
+    order,
+    paperSize: src.paperSize ?? DEFAULT_LABEL_PAPER_ID,
+    footerText: typeof src.footerText === "string" ? src.footerText : "",
+  };
 }
 
 /**
@@ -496,7 +613,7 @@ export function withLabelFixedSizes<T extends LabelTemplate>(template: T): T {
  */
 export function buildSnapshot(
   kind: PrintTemplateKind,
-  template: ReceiptTemplate | LabelTemplate | KitchenTemplate | ShiftTemplate,
+  template: ReceiptTemplate | LabelTemplate | KitchenTemplate | ShiftTemplate | RetailLabelTemplate,
   /**
    * 每行可印字符數。缺省：標籤用模板嘅 `paperSize`，其餘用 48（80mm）。
    * 出紙路徑請由**打印機**嘅 `paperSize` 推算（`paperColumnsFromSize`），
@@ -504,23 +621,30 @@ export function buildSnapshot(
    */
   cols?: number,
 ): EscPosTemplateSnapshot {
-  // 收據（含自助點餐機槽位，兩者都係 kind="receipt"）先補新區塊，
-  // 等舊 localStorage 設定都可以用到後來加嘅 `qr_code`。
-  // 收據（含自助點餐機）先補 `qr_code`；收據 / 廚房再補 `divider`（分格線 size）。
+  // 內部一律用「id 係 string」嘅共同形狀 —— 五個模板型別嘅區塊 id 集合各自唔同，
+  // 但 buildSnapshot 只關心 `blocks[id]` 同 `order`，唔應該為咗型別整 5 個分支。
+  // （零售價籤 `RetailLabelTemplate` 就係靠呢個 alias 唔使改下面嘅邏輯。）
+  const t = template as unknown as {
+    blocks: Record<string, EscPosBlockStyle>;
+    order: string[];
+    paperSize?: string;
+  };
+
+  const withReceipt = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
   // ⚠️ 交班模板**唔補 divider**：交班單冇 `items` 區塊，而三個 repo 嘅分格線都係
   // 跟 items 自動生成 → 補咗只會多個撳咗冇反應嘅死開關（見 ShiftSectionId 註釋）。
-  // 標籤同樣唔補 divider（標籤紙冇分格線，且字型鎖死）。
-  const withReceipt = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
+  // 標籤同樣唔補 divider（標籤紙冇分格線）。
   const source =
     kind === "label"
-      ? withLabelFixedSizes(template as LabelTemplate)   // 標籤字型鎖死
+      ? // 標籤字型鎖死（只鎖已存在嘅 id；零售價籤嘅 id 唔喺 LABEL_BLOCK_DEFAULTS 入面 → 保留商家設定）
+        withLabelFixedSizes(t)
       : kind === "shift"
         ? normalizeShiftTemplate(withReceipt as Partial<ShiftTemplate>)  // 交班：補齊區塊、唔補 divider
         : ensureDividerSection(withReceipt as unknown as { blocks: Record<string, EscPosBlockStyle>; order: string[] });
   return {
     kind,
     blocks: source.order.map((id) => ({ id, ...source.blocks[id as keyof typeof source.blocks] })),
-    cols: cols ?? (kind === "label" ? labelPaperPreset((template as LabelTemplate).paperSize).columns : RECEIPT_PAPER_COLUMNS),
+    cols: cols ?? (kind === "label" ? labelPaperPreset(t.paperSize).columns : RECEIPT_PAPER_COLUMNS),
   };
 }
 

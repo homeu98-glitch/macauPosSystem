@@ -17,6 +17,7 @@ import {
 } from "@/lib/retail/catalog-ops";
 import { buildImportPlan, describeImportPlan, type ImportPlan } from "@/lib/retail/csv-import";
 import { createCatalog } from "@/lib/retail/barcode-index";
+import { RetailLabelPrint } from "@/components/retail/retail-label-print";
 
 const money = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
 
@@ -29,6 +30,7 @@ export function RetailProducts() {
   const [onlyLow, setOnlyLow] = useState(false);
   const [editing, setEditing] = useState<RetailProduct | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [labelOpen, setLabelOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
 
   useEffect(() => {
@@ -72,6 +74,13 @@ export function RetailProducts() {
           </div>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
+          <button
+            className="rounded-xl border border-slate-300 px-3 py-2 text-[12px] font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={() => setLabelOpen(true)}
+            type="button"
+          >
+            印價籤
+          </button>
           <button
             className="rounded-xl border border-slate-300 px-3 py-2 text-[12px] font-semibold text-slate-700 hover:bg-slate-50"
             onClick={() => setImportOpen(true)}
@@ -211,6 +220,10 @@ export function RetailProducts() {
           }}
           product={editing}
         />
+      ) : null}
+
+      {labelOpen ? (
+        <RetailLabelPrint onClose={() => setLabelOpen(false)} products={products} />
       ) : null}
 
       {importOpen ? (

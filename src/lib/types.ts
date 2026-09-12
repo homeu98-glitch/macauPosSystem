@@ -590,6 +590,60 @@ export interface KitchenTemplate {
 }
 
 /**
+ * 零售價籤 / 商品標籤嘅區塊 id（2026-09-13 新增，第六個模板槽位）。
+ *
+ * 🔑 **全部係「靜態文字區塊」** —— 同收據嘅新區塊一樣，下游三端只做
+ * `content[block.id] ?: continue` 查表，所以**加佢哋唔使改四端、唔使擰 `versionCode`**。
+ * 詳見 docs/124 §11.1。
+ *
+ * ⚠️ **刻意唔包括條碼圖**：條碼要 Code128 → 點陣 → 四端 raster 輸出，
+ * 屬另一輪跨 repo 工程（同 QR 嗰套 `job.qr` 一樣要 POS 預先編碼）。
+ * 呢一輪先出「條碼數字 + PLU」，店員可以肉眼核對 / 手動輸入。
+ */
+export type RetailLabelSectionId =
+  /** 門店名（抬頭） */
+  | "store_name"
+  /** 商品名（可以兩行） */
+  | "product_name"
+  /** 售價（通常用最大字型） */
+  | "price"
+  /** 原價 / 牌價（畫對比用；冇設就唔印） */
+  | "original_price"
+  /** 計價單位（每件 / 每 kg） */
+  | "unit"
+  /** 條碼數字（肉眼核對 / 手動輸入用；冇條碼就唔印） */
+  | "barcode"
+  /** PLU（秤重商品必印，方便店員對秤） */
+  | "plu"
+  /** 印製日期 */
+  | "date"
+  /** 頁尾文案（模板層級自由文字） */
+  | "footer";
+
+/**
+ * 零售價籤模板（`PrintTemplates.retailLabel` 槽位）。
+ *
+ * 結構刻意對齊 `LabelTemplate`（`blocks` + `order` + `paperSize` + `footerText`），
+ * 令 `buildSnapshot()` / 雲端同步 / normalize 全部行返同一套既有機制。
+ *
+ * ⚠️ **`buildSnapshot()` 嘅 kind 必須傳 `"label"`**（唔可以係 `"retailLabel"`）：
+ * 三端 renderer 嘅 `when (kind)` 只認 `receipt` / `label` / `kitchen`，
+ * 傳新 kind 會 fall through 去空字串 → 冇咗標籤嘅走紙 / 字型處理。
+ * 同 `kiosk` 槽位要傳 `"receipt"` 係同一個道理（見 `PrintTemplates.kiosk` 註釋）。
+ */
+export interface RetailLabelTemplate {
+  blocks: Record<RetailLabelSectionId, EscPosBlockStyle>;
+  order: RetailLabelSectionId[];
+  /** 標籤紙尺寸（`LABEL_PAPER_PRESETS` 嘅 id）。缺省 = `DEFAULT_LABEL_PAPER_ID`。 */
+  paperSize?: string;
+  /**
+   * 頁尾文案（例如「特價至 9 月 30 日」）。空白 = `footer` 區塊唔出。
+   * ⚠️ 同 `receipt.qrUrl` 同一個坑：一定要加落 `normalizePosLocalSettings()` 白名單。
+   */
+  footerText: string;
+}
+
+/**
  * 交班結算單模板（2026-09-10 新增，第五個槽位）。
  *
  * 結構對齊 `KitchenTemplate`（`blocks` + `order` + `headerText` + `footerText`），
@@ -708,6 +762,16 @@ export interface PrintTemplates {
    * 「設計介面 == 螢幕預覽 == 實際出紙」。
    */
   shift: ShiftTemplate;
+  /**
+   * 零售價籤模板（第六個槽位，2026-09-13）。
+   *
+   * **選填** → 舊商戶 / 餐飲商戶冇呢個 key 完全唔受影響；
+   * 零售商戶喺商品頁撳「印價籤」時若冇設定，就用 `DEFAULT_RETAIL_LABEL_TEMPLATE`。
+   *
+   * 🔴 **唔可以**改做必填 —— 咁樣會令所有既有 `PrintTemplates` literal 爆型別
+   * （包括 mock-data 兩個模板），亦令舊 localStorage 設定要遷移。
+   */
+  retailLabel?: RetailLabelTemplate;
 }
 
 export type PrintTemplateKind = "receipt" | "label" | "kitchen" | "shift";

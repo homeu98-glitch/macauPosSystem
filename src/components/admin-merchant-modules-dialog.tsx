@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { WorkbenchCardGroup } from "@/components/workbench-picker";
 
 import {
   SIDEBAR_MODULES,
@@ -143,6 +145,13 @@ export function AdminMerchantModulesDialog({
   const counterWorkbenches = WORKBENCHES.filter((w) => w.group === "counter");
   const deviceWorkbenches = WORKBENCHES.filter((w) => w.group === "device");
 
+  /** 預覽用：跟**未儲存**嘅開關即時變化，等管理員照住調到啱先撳儲存。 */
+  const previewGrantedSet = useMemo(() => new Set<WorkbenchId>(grants.workbenches), [grants]);
+  const lockedWorkbenches = useMemo(
+    () => WORKBENCHES.filter((w) => !grants.workbenches.includes(w.id)),
+    [grants],
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/45 p-4 sm:items-center"
@@ -150,7 +159,7 @@ export function AdminMerchantModulesDialog({
       role="presentation"
     >
       <div
-        className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl"
+        className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl"
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -244,7 +253,8 @@ export function AdminMerchantModulesDialog({
               <div className="mb-1 flex flex-wrap items-baseline gap-2">
                 <h3 className="text-sm font-bold text-slate-900">B. 側欄模組</h3>
                 <p className="text-xs text-slate-500">
-                  決定入到收銀台之後，左邊側欄顯示邊幾個。閂咗嘅**唔會出現**（唔係灰住）。
+                  決定入到收銀台之後，左邊側欄顯示邊幾個。閂咗嘅<b>直接唔顯示</b>（唔係灰住）——
+                  側欄得 72px 闊，塞一堆撳唔到嘅灰掣只會令店員搵嘢更慢。
                 </p>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -272,6 +282,60 @@ export function AdminMerchantModulesDialog({
                 })}
               </div>
             </section>
+
+            {/* C. 預覽：商家實際會見到咩 */}
+            <section>
+              <div className="mb-1 flex flex-wrap items-baseline gap-2">
+                <h3 className="text-sm font-bold text-slate-900">C. 預覽 · 商家登入後會見到咩</h3>
+                <p className="text-xs text-slate-500">
+                  跟上面開關<b>即時</b>變化（未儲存都會變），可以照住調到啱先撳「儲存」。
+                </p>
+              </div>
+
+              {/* ⚠️ 呢個框一定要深色：工作台卡係為 POS 登入系（深色玻璃底）設計嘅，
+                  擺入淺色卡片會變白底白字，完全睇唔到。 */}
+              <div className="mt-3 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-4">
+                <div className="w-[780px]">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/70">
+                      ② 選擇工作台
+                    </span>
+                    <span className="text-[11px] text-white/45">
+                      商家登入之後見到嘅畫面（示意，非實尺）
+                    </span>
+                  </div>
+
+                  <WorkbenchCardGroup
+                    columns={2}
+                    grantedSet={previewGrantedSet}
+                    readOnly
+                    title={WORKBENCH_GROUP_LABEL.counter}
+                    workbenches={counterWorkbenches}
+                  />
+                  <WorkbenchCardGroup
+                    columns={3}
+                    grantedSet={previewGrantedSet}
+                    readOnly
+                    title={WORKBENCH_GROUP_LABEL.device}
+                    workbenches={deviceWorkbenches}
+                  />
+
+                  {lockedWorkbenches.length > 0 ? (
+                    <p className="mt-4 text-[11.5px] leading-relaxed text-white/45">
+                      仲有{" "}
+                      <b className="text-orange-200">{lockedWorkbenches.length} 個模組未開通</b>
+                      （{lockedWorkbenches.map((w) => w.label).join("、")}）。商家會見到佢哋
+                      <b className="text-white/70">灰住 + 🔒</b>，撳落去會提示聯絡管理員 —— 呢個係刻意嘅，
+                      商家要睇得到「有得升級」先會問你。
+                    </p>
+                  ) : (
+                    <p className="mt-4 text-[11.5px] text-white/45">
+                      全部工作台已開通，商家會見到所有卡片都可以撳。
+                    </p>
+                  )}
+                </div>
+              </div>
+            </section>
           </div>
         )}
 
@@ -279,7 +343,7 @@ export function AdminMerchantModulesDialog({
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
           <p className="text-xs text-slate-500">
             {savedAt
-              ? "已儲存。終端**下次登入**就會跟新設定。"
+              ? "已儲存。終端「下次登入」就會跟新設定（已經開住機嘅終端唔會即時變）。"
               : "改完撳「儲存」即刻生效；終端下次登入就會跟新設定。"}
           </p>
           <div className="flex items-center gap-2">

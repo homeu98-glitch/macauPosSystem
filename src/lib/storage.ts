@@ -41,6 +41,7 @@ import {
   DEFAULT_RECEIPT_TEMPLATE,
   DEFAULT_SHIFT_TEMPLATE,
   DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
+  normalizeRetailLabelTemplate,
   normalizeShiftTemplate,
   normalizeShiftTemplatePresets,
 } from "@/lib/escpos-template";
@@ -404,6 +405,17 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       // 所以自己一套 normalize（同一個檔兩個地方一齊維護太易走樣）。
       // 舊 localStorage 冇呢個 key → 全套用 DEFAULT_SHIFT_TEMPLATE，安全向後兼容。
       shift: normalizeShiftTemplate(settings?.printTemplates?.shift ?? DEFAULT_SHIFT_TEMPLATE),
+      /**
+       * 零售價籤模板（第六個槽位，2026-09-13）。
+       *
+       * ⚠️ `retailLabel` 係**選填**（舊商戶冇呢個 key）→ 唔用 `defaultPosLocalSettings` 補，
+       * 一律行 `normalizeRetailLabelTemplate()`（冇設定就全套用 `DEFAULT_RETAIL_LABEL_TEMPLATE`）。
+       * 呢個做法同 `shift` 一致 —— 逐欄重建 + 專屬 normalize。
+       *
+       * 🔴 一定要喺呢度帶返：`normalizePosLocalSettings()` 係逐欄重建 `printTemplates`，
+       * 漏咗就會令商家設計好嘅價籤模板一 reload / 雲端同步就被靜靜剷走（見 docs/113）。
+       */
+      retailLabel: normalizeRetailLabelTemplate(settings?.printTemplates?.retailLabel),
     },
     // 交班模板範本庫 + 上次套用嘅範本 id。
     // ⚠️ 呢兩欄一定要喺 whitelist 出現，否則 reload 時會被 normalize 剷光 ——

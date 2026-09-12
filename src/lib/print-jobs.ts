@@ -33,10 +33,14 @@ import {
   buildShiftContent,
   buildSnapshot,
   labelPaperPreset,
+  normalizeRetailLabelTemplate,
   normalizeShiftTemplate,
   paperColumnsFromSize,
   ticketTypeLabel,
 } from "@/lib/escpos-template";
+import { formatMoney } from "@/lib/format";
+import type { RetailProduct } from "@/lib/retail/types";
+import { buildRetailLabelContent } from "@/lib/retail/retail-label-content";
 import { PrintItemLine } from "@/lib/escpos-render";
 import { toPrintItemLines } from "@/lib/escpos-render";
 import { encodeQrPayload } from "@/lib/escpos-qr";
@@ -311,6 +315,86 @@ export function buildLabelPrintJobs(order: PosOrder, opts: LabelPrintOpts): Prin
         ),
         status: "pending",
         createdAt: timestamp,
+      });
+    }
+  }
+  return jobs;
+}
+
+// ── 零售價籤 / 商品標籤（2026-09-13，第六個模板槽位）──
+
+export interface RetailLabelPrintOpts {
+  storeName: string;
+  currency: string;
+  /** 每件商品印幾張。缺省 1（同 `PrintJob.copies` 語義一致：job 層級優先於打印機層級）。 */
+  copies?: number;
+}
+
+/**
+ * 由**商品**砌價籤打印任務（唔屬於任何訂單）。
+ *
+ * 🔴 **關鍵決定：用合成 `orderId`（`retail-label:<productId>`），而唔將
+ * `PrintJob.orderId` 改成可選。**
+ * 原因：`orderId` 係必填，四端 renderer / server `pos_print_jobs` 表 / 打印中心
+ * 都假設佢有值。改成可選＝**合約改動**，要四端同步 + 擰 `versionCode` + 可能撞 DB 約束。
+ * 用合成 id 就完全行返既有管道（outbox → 雲端 → 中繼 APK claim 出紙），**零跨 repo 改動**。
+ *
+ * 代價（要知）：打印中心嘅「重打整單」（按 order 反查）搵唔到價籤；
+ * 但打印記錄列表係按 job 顯示，逐張重打完全正常 —— 對價籤嚟講足夠。
+ *
+ * ⚠️ 走 `role === "label"` 嘅標籤機（同飲品標籤共用）；若一部機都冇配置 → 回空陣列，
+ * 呼叫端**必須出聲**（唔可以靜默當印咗）。
+ */
+export function buildRetailLabelPrintJobs(
+  products: readonly RetailProduct[],
+  opts: RetailLabelPrintOpts,
+): PrintJob[] {
+  const labelPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
+    (printer) => printer.enabled && printer.role === "label",
+  );
+  if (labelPrinters.length === 0) return [];
+  if ((products ?? []).length === 0) return [];
+
+  const template = normalizeRetailLabelTemplate(loadPosLocalSettings().printTemplates.retailLabel);
+  /** 標籤紙尺寸決定嘅欄寬（例如 60×40 → 34 字）。 */
+  const presetColumns = labelPaperPreset(template.paperSize).columns;
+  const timestamp = new Date().toISOString();
+  /**
+   * 印製日期。用 `nowText()`（裝置本機時間）而唔用 `macauDateKey()` ——
+   * 價籤上嘅日期係「今日印嘅」呢個人類語意，唔係報表期間邊界；
+   * 而收銀機本身一定設喺 Macau 時區。
+   */
+  const printedDate = nowText().slice(0, 10);
+
+  const jobs: PrintJob[] = [];
+  for (const printer of labelPrinters) {
+    // 實際可印闊度 = min(標籤紙闊, 機頭闊) —— 同 `buildLabelPrintJobs` 同一口徑
+    const cols = Math.min(presetColumns, paperColumnsFromSize(printer.paperSize));
+    for (const product of products) {
+      const content = buildRetailLabelContent(product, {
+        storeName: opts.storeName,
+        formatAmount: (amount) => formatMoney(amount, opts.currency),
+        footerText: template.footerText,
+        printedDate,
+        columns: cols,
+      });
+      jobs.push({
+        id: uid("print"),
+        // 合成 orderId：價籤按商品印，冇對應訂單。見上面函數註釋。
+        orderId: `retail-label:${product.id}`,
+        // `orderNo` 用商品名：打印記錄列表顯示得到「印咗邊件貨嘅價籤」
+        orderNo: product.name,
+        ticketType: "normal",
+        printerGroup: printer.zoneId ?? "label",
+        printerId: printer.id,
+        printerName: printer.name,
+        // 標籤內容全部喺 `content`（純文字區塊）→ 唔需要 items
+        items: [],
+        content,
+        template: buildSnapshot("label", template, cols),
+        status: "pending",
+        createdAt: timestamp,
+        copies: opts.copies ?? 1,
       });
     }
   }

@@ -78,7 +78,8 @@ Admin 逐間收緊，收到邊間就邊間生效。
 | `src/components/app-sidebar.tsx` | 側欄按授權過濾 + 「工作台」逃生門 |
 | `src/app/api/ledger/login/route.ts` | session 加 `allowedModules` |
 | `src/app/api/admin/merchants/modules/route.ts` | Admin 讀寫 API |
-| `src/components/admin-merchant-modules-dialog.tsx` | Admin 授權彈窗 |
+| `src/components/workbench-picker.tsx` | **共用**工作台卡（真·選擇頁 + Admin 預覽都係呢一份） |
+| `src/components/admin-merchant-modules-dialog.tsx` | Admin 授權彈窗（A 工作台 / B 側欄 / C 預覽） |
 | `src/app/admin/dashboard/page.tsx` | 商家列表加「模組」按鈕 |
 | `src/lib/storage.ts` | `AuthSession.allowedModules`（選填） |
 
@@ -94,6 +95,13 @@ Admin 逐間收緊，收到邊間就邊間生效。
   漏咗 = reload 之後被剷走（同 `posDeviceToken` 嘅歷史教訓一模一樣）。
 - 🔴 **`applyWorkbenchSelection()` 只能有一份**，唔可以喺 `/select-workbench`
   再抄一份。抄 = 兩個地方各寫一半，日後必然走樣。
+- 🔴 **工作台卡（`workbench-picker.tsx`）只能有一份**。真·選擇頁同 Admin 彈窗嘅
+  「C. 預覽」共用同一個元件 —— 如果預覽自己抄一份，好快就會出現
+  「預覽見到 5 個、實際登入見到 4 個」呢種唔會 throw、但會令管理員唔信個預覽嘅落差。
+  ⚠️ 預覽一定要放喺**深色框**入面：卡片係為 POS 登入系（深色玻璃底）設計，
+  擺入淺色卡片會變白底白字，完全睇唔到。
+- ⚠️ **工作台卡嘅欄數唔可以自動推**（`columns` prop 要明寫）：收銀組 4 項要 2 欄（2×2）、
+  裝置角色 3 項要 3 欄。用 `length >= 3 ? 3 : 2` 會令收銀組變 3+1（吊一個落第二行）。
 - 🔴 **Admin PATCH 一定要兩組一齊送**。Server 用兩個值覆寫整行，
   只送一組 = 另一組被靜靜清空。
 - ⚠️ **`retail` 唔寫 `saveOperatingMode()`**：`OperatingMode` 只有
@@ -139,6 +147,12 @@ CODEBUDDY_SAFE_DELETE_ENABLED=0 node node_modules/next/dist/bin/next build
 - [ ] Admin 之後閂咗嗰個工作台 → 再登入 → **唔會**自動進入，返去 ②
 - [ ] `/login?mode=kiosk` → 登入後直接入自助點餐機
 - [ ] 舊 session（改動前登入、未重新登入）reload → 側欄**唔會**變空
+- [ ] Admin 彈窗「C. 預覽」跟開關即時變化（未儲存都變），灰／🔒 狀態同實際一致
+
+## 7.1 落 migration
+
+⚠️ 本機**冇** `.env.local`、冇 supabase CLI → 唔可以自動落庫。
+要喺 **Supabase Dashboard → SQL Editor** 貼 `supabase/migrations/0037_pos_merchant_modules.sql` 執行。
 
 ## 8. 相關文件
 

@@ -18,6 +18,7 @@ import {
 } from "@/lib/pos/workbench-preference";
 import { loadAuthSession, type AuthSession } from "@/lib/storage";
 
+import { WorkbenchCardGroup } from "@/components/workbench-picker";
 import { signOutLedgerSession } from "@/lib/ledger/session";
 
 /**
@@ -41,20 +42,6 @@ import { signOutLedgerSession } from "@/lib/ledger/session";
  * 標咗「上次使用」就唔使每次重新諗「我部機係邊個」。
  * 開埋「記住呢部機嘅選擇」就會連呢一頁都跳過（見 `workbench-preference`）。
  */
-
-const ACCENT_RING: Record<WorkbenchDef["accent"], string> = {
-  orange: "border-orange-500/60 bg-orange-500/15",
-  emerald: "border-emerald-500/55 bg-emerald-500/10",
-  sky: "border-sky-500/55 bg-sky-500/10",
-  rose: "border-rose-500/55 bg-rose-500/10",
-};
-
-const ACCENT_DOT: Record<WorkbenchDef["accent"], string> = {
-  orange: "bg-orange-400",
-  emerald: "bg-emerald-400",
-  sky: "bg-sky-400",
-  rose: "bg-rose-400",
-};
 
 function roleLabel(role: AuthSession["role"]): string {
   if (role === "admin") return "管理員";
@@ -194,8 +181,9 @@ export function SelectWorkbenchScreen() {
         ) : null}
 
         {/* 收銀工作台 */}
-        <WorkbenchGroup
+        <WorkbenchCardGroup
           busyId={busyId}
+          columns={2}
           grantedSet={grantedSet}
           lastWorkbench={lastWorkbench}
           onChoose={choose}
@@ -204,8 +192,9 @@ export function SelectWorkbenchScreen() {
         />
 
         {/* 裝置角色 */}
-        <WorkbenchGroup
+        <WorkbenchCardGroup
           busyId={busyId}
+          columns={3}
           grantedSet={grantedSet}
           lastWorkbench={lastWorkbench}
           onChoose={choose}
@@ -260,107 +249,5 @@ export function SelectWorkbenchScreen() {
         </div>
       </div>
     </div>
-  );
-}
-
-function WorkbenchGroup({
-  title,
-  workbenches,
-  grantedSet,
-  lastWorkbench,
-  busyId,
-  onChoose,
-}: {
-  title: string;
-  workbenches: WorkbenchDef[];
-  grantedSet: Set<WorkbenchId>;
-  lastWorkbench: WorkbenchId | null;
-  busyId: WorkbenchId | null;
-  onChoose: (workbench: WorkbenchDef) => void;
-}) {
-  if (workbenches.length === 0) return null;
-
-  const columns = workbenches.length >= 3 ? "sm:grid-cols-3" : "sm:grid-cols-2";
-
-  return (
-    <section className="mt-5">
-      <div className="mb-2.5 flex items-center gap-3">
-        <span className="text-xs font-extrabold tracking-wide text-white/70">{title}</span>
-        <span className="h-px flex-1 bg-white/10" />
-      </div>
-
-      <div className={`grid grid-cols-1 gap-3 ${columns}`}>
-        {workbenches.map((w) => {
-          const granted = grantedSet.has(w.id);
-          const isLast = lastWorkbench === w.id;
-          const busy = busyId === w.id;
-
-          return (
-            <button
-              key={w.id}
-              className={`relative grid min-h-[86px] grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-3.5 text-left transition ${
-                granted
-                  ? isLast
-                    ? `${ACCENT_RING[w.accent]} hover:brightness-110`
-                    : "border-white/15 bg-white/5 hover:border-white/25 hover:bg-white/10"
-                  : "border-white/10 bg-white/[0.03]"
-              } ${busy ? "opacity-60" : ""}`}
-              disabled={busy}
-              onClick={() => onChoose(w)}
-              type="button"
-            >
-              {isLast && granted ? (
-                <span className="absolute -top-2 right-3 rounded-full bg-orange-500 px-2.5 py-0.5 text-[10px] font-extrabold tracking-wide text-white">
-                  上次使用
-                </span>
-              ) : null}
-              {!granted ? (
-                <span className="absolute -top-2 right-3 rounded-full bg-slate-700 px-2.5 py-0.5 text-[10px] font-extrabold tracking-wide text-slate-300">
-                  未開通
-                </span>
-              ) : null}
-
-              <span
-                className={`grid h-11 w-11 place-items-center rounded-full text-sm font-bold ${
-                  granted ? "bg-white/10 text-white" : "bg-white/5 text-white/40"
-                }`}
-              >
-                {w.short}
-              </span>
-
-              <span className="min-w-0">
-                <span
-                  className={`block text-sm font-bold ${granted ? "text-white" : "text-white/45"}`}
-                >
-                  {w.label}
-                </span>
-                <span
-                  className={`mt-1 block text-[11.5px] leading-snug ${
-                    granted ? "text-white/55" : "text-white/30"
-                  }`}
-                >
-                  {w.desc}
-                </span>
-              </span>
-
-              <span
-                className={`whitespace-nowrap text-[11.5px] font-bold ${
-                  granted ? "text-white/45" : "text-white/25"
-                }`}
-              >
-                {busy ? "進入中…" : granted ? "進入 →" : "🔒"}
-              </span>
-
-              {granted ? (
-                <span
-                  aria-hidden
-                  className={`absolute right-3 top-3 h-1.5 w-1.5 rounded-full ${ACCENT_DOT[w.accent]}`}
-                />
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-    </section>
   );
 }
