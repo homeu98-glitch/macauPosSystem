@@ -2,6 +2,8 @@ import { loadAuthSession, loadOrders, loadQueue, saveOrders, saveQueue } from "@
 import { PosOrder, QueueEvent } from "@/lib/types";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
+// 快餐模式採納嘅線上單：本地出餐狀態要回寫 Ledger，否則雙狀態機（見該檔頭註釋）。
+import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-fulfillment";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -45,6 +47,8 @@ export function updateQuickFulfillmentInStore(orderId: string): PosOrder | null 
     status: "pending",
     createdAt: updatedAt,
   });
+  // 快餐模式採納嘅線上單：Ledger 同步推到 ready（`accepted → preparing → ready` 逐級爬）。
+  syncOnlineQuickFulfillmentInBackground(updatedOrder, "ready");
   return updatedOrder;
 }
 
@@ -78,5 +82,8 @@ export function markQuickOrderCompletedInStore(
     status: "pending",
     createdAt: updatedAt,
   });
+  // 快餐模式採納嘅線上單：Ledger 同步推到 completed（唔做就會出現
+  // 「本地已 settled、Ledger 仍 preparing」嘅雙狀態機）。
+  syncOnlineQuickFulfillmentInBackground(updatedOrder, "completed");
   return updatedOrder;
 }

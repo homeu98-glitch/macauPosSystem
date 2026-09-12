@@ -156,6 +156,7 @@ import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTabl
 import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, ShiftTemplateVariant, StoreTable } from "@/lib/types";
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
+import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-fulfillment";
 
 /**
  * 已補印嘅「加單」簽名（`orderId` → 已出過嘅新增菜品簽名集合）。
@@ -1681,6 +1682,22 @@ export function PosApp() {
     () => buildDisplayFloors(bootstrap?.tables ?? [], localSettings.floors),
     [bootstrap, localSettings],
   );
+
+  /**
+   * 「排位」彈窗可揀嘅枱（2026-09-12）。
+   *
+   * ⚠️ 一定要剔除**返結 temp 枱**（`reopenOrderId`）：嗰啲係返結流程臨時搬單用嘅假枱，
+   * 唔應該畀人排位揀中，否則會將線上單塞入一張唔存在嘅枱。
+   */
+  const assignableTables = useMemo(
+    () =>
+      floors.flatMap((floor) =>
+        floor.tables
+          .filter((table) => !table.reopenOrderId)
+          .map((table) => ({ id: table.id, name: table.name, floorName: floor.name })),
+      ),
+    [floors],
+  );
   const paymentMethods = localSettings.paymentMethods;
   // 自動接單：**server 係真源、全店共用**，localStorage 只係離線快取（docs/92）。
   // 唔好再讀 `localSettings.onlineOrderSettings.autoAccept` —— 嗰個已經降級做快取，
@@ -1778,7 +1795,9 @@ export function PosApp() {
       .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
   }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
   const actionBarLocalOrders = useMemo(
-    () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter" && !order.onlineOrderId),
+    // 2026-09-12：唔再排除 `onlineOrderId` —— 快餐模式採納嘅線上單（counter）
+    // 要入快餐 strip 行「可取餐 → 完成」（`isQuickCounterOrder` 已同步放寬）。
+    () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter"),
     [openOrders],
   );
   /**
@@ -1798,7 +1817,8 @@ export function PosApp() {
     // 一改狀態張單就移位；呢個面板有「接受 / 拒絕」掣，移位會令收銀撳錯單。
     () =>
       openOrders
-        .filter((order) => order.tableId === "counter" && !order.onlineOrderId)
+        // 2026-09-12：同上，唔再排除 `onlineOrderId`（快餐模式採納嘅線上單都要出喺呢個面板）。
+        .filter((order) => order.tableId === "counter")
         .sort(compareOrderByLocalNo),
     [openOrders],
   );
@@ -2789,6 +2809,11 @@ export function PosApp() {
       tone: "success",
       message: `${updatedOrder.localOrderNo} 已標記可取餐。`,
     });
+    // 快餐模式採納嘅線上單（帶 onlineOrderId）→ 回寫 Ledger ready，
+    // 否則線上訂單列表永遠停留「製作中」（雙狀態機）。
+    syncOnlineQuickFulfillmentInBackground(updatedOrder, "ready", (message) =>
+      setToast({ tone: "error", message: `已標記可取餐，但會員通狀態未同步：${message}` }),
+    );
   }
 
   function voidEntireOrder(reason: string) {
@@ -3494,6 +3519,11 @@ export function PosApp() {
     ]);
     setViewingOrderId(null);
     setToast({ tone: "success", message: `${updatedOrder.localOrderNo} ${options?.label ?? "已完成"}。` });
+    // 同上：帶 onlineOrderId 嘅快餐單要回寫 Ledger completed
+    //（客人端／線上訂單列表先會見到「已完成」，亦避免本地 settled 同 Ledger 脫節）。
+    syncOnlineQuickFulfillmentInBackground(updatedOrder, "completed", (message) =>
+      setToast({ tone: "error", message: `已標記完成，但會員通狀態未同步：${message}` }),
+    );
   }
 
   function cancelOrder(orderId: string, reason: string) {
@@ -4593,11 +4623,20 @@ export function PosApp() {
                         onAutoAcceptChange={(next) => void setAutoAcceptOnlineOrders(next)}
                         onToast={(payload) =>
                           setToast({
-                            tone: payload.tone === "success" ? "success" : "info",
+                            // ⚠️ 唔可以把 `error` 降級成 `info`（2026-09-12 修）：
+                            // 線上單出單／排位失敗係要即刻見到嘅事，降級會令人以為冇事。
+                            tone:
+                              payload.tone === "success"
+                                ? "success"
+                                : payload.tone === "error"
+                                  ? "error"
+                                  : "info",
                             message: payload.message,
                           })
                         }
                         skipTableAssignment
+                        tableAssign
+                        tables={assignableTables}
                       />
                     </div>
                   </div>
@@ -5633,6 +5672,20 @@ export function PosApp() {
                   <p className="text-[11px] text-amber-700">
                     必須揀返結原因。確認後此單退回可編輯，可改價／加餐後重新結帳。
                   </p>
+                  {/* 🔴 線上已付金額鎖死（商家 2026-09-12 定案：准返結但唔可以改 prepaidAmount）；
+                      嗰筆錢喺 Ledger，POS 冇 RPC 可以沖正 → 一定要當面講清楚，
+                      否則收銀會以為「返結 = 退錢」。同返結單上嘅文案係同一口徑。 */}
+                  {(() => {
+                    const target = orders.find((order) => order.id === activeOrderId);
+                    const prepaid = target?.onlineOrderId ? target.prepaidAmount ?? 0 : 0;
+                    if (prepaid <= 0) return null;
+                    return (
+                      <p className="rounded-xl bg-red-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-red-700">
+                        ⚠️ 此單線上已付 {bootstrap?.currency ?? "MOP"} {prepaid.toFixed(2)}
+                        ，返結唔會沖正／退款（款項喺會員通 Ledger）。
+                      </p>
+                    );
+                  })()}
                   <select
                     className="w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
                     value={roReason}

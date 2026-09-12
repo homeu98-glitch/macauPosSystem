@@ -91,6 +91,7 @@ export function QuickModeOrdersBar({
             currency={currency}
             layout="strip"
             onToast={onOnlineToast}
+            quickCounter
             showAutoAcceptControls={false}
             skipTableAssignment
           />

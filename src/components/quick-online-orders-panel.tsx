@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
+import { TableAssignModal, type AssignableTable } from "@/components/table-assign-modal";
+import { assignLedgerOrderToTable, adoptLedgerOrderAsQuickCounter, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
+import {
+  isOnlineDineIn,
+  needsTableAssignment,
+  onlinePaymentBadge,
+  onlineTableAssignLabel,
+  onlineTableBadge,
+} from "@/lib/pos/online-dinein-labels";
+import { loadOrders } from "@/lib/storage";
 import {
   printReceiptForLedgerOrderOnce,
   printVoidForLedgerOrderOnce,
@@ -55,6 +64,21 @@ type QuickOnlineOrdersPanelProps = {
   /** strip 模式由外層標題列控制自動接單 */
   showAutoAcceptControls?: boolean;
   tables?: Array<{ id: string; name: string; floorName: string }>;
+  /**
+   * 快餐模式：線上單一律當**本地快餐 counter 單**處理（出餐口自取、唔排位）。
+   *
+   * 同 `skipTableAssignment` 唔同：後者只係「唔彈安排桌台彈窗」，堂食模式一樣會傳 true。
+   * 呢個旗標直接決定「接單後要唔要採納成本地 counter 單 + 標籤顯示出餐口自取」，
+   * 只有 `QuickModeOrdersBar`（快餐模式）會傳。
+   */
+  quickCounter?: boolean;
+  /**
+   * 出「排位」掣（線上**堂食**單 assign 到桌台）。
+   *
+   * ⚠️ 堂食模式要開、**快餐模式要熄**：快餐店有枱但唔會安排座位
+   * （出餐口自取、客人自己搵位）→ 出咗掣只會誤導收銀。
+   */
+  tableAssign?: boolean;
 };
 
 function optimisticPatch(order: LedgerOnlineOrder, status: string): LedgerOnlineOrder {
@@ -70,6 +94,8 @@ export function QuickOnlineOrdersPanel({
   layout = "stack",
   showAutoAcceptControls = true,
   tables = [],
+  quickCounter = false,
+  tableAssign = false,
 }: QuickOnlineOrdersPanelProps) {
   const merchantId = getLedgerMerchantId();
   const [loading, setLoading] = useState(true);
@@ -78,6 +104,7 @@ export function QuickOnlineOrdersPanel({
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
+  const [assigningTableId, setAssigningTableId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number }> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -320,10 +347,23 @@ export function QuickOnlineOrdersPanel({
         const detail = await getOrderDetail(order.id);
         let kitchenJobCount = 0;
         try {
-          kitchenJobCount = (await printKitchenForLedgerOrder(order, detail)).length;
-        } catch {
+          if (quickCounter) {
+            // 快餐模式：採納成本地 counter 單（會一併出廚房單）。
+            // 之後快餐 strip 嘅「可取餐 → 完成」即刻管得到，本地狀態亦會回寫 Ledger。
+            const adopted = await adoptLedgerOrderAsQuickCounter({ ledgerOrder: order, detail });
+            kitchenJobCount = adopted.printJobs.length;
+          } else {
+            kitchenJobCount = (await printKitchenForLedgerOrder(order, detail)).length;
+          }
+        } catch (err) {
+          // 🔴 自動接單（silent）時呢個 catch 以前完全靜默 —— 出單失敗收銀零提示，
+          // 只會見到「已自動接單」＝假成功。至少要留一條 log 俾人追（2026-09-12）。
+          console.error(
+            `[quick-online-orders] 廚房單建立失敗 ${order.id}：`,
+            err instanceof Error ? err.message : err,
+          );
           if (!options?.silent) {
-            onToast({ tone: "info", message: "已接單，但廚房單送出失敗，可稍後重打。" });
+            onToast({ tone: "error", message: "已接單，但廚房單送出失敗，可稍後重打。" });
           }
         }
 
@@ -335,15 +375,15 @@ export function QuickOnlineOrdersPanel({
         }
 
         if (!options?.silent) {
+          // 🔴 自動接單（`autoStartPreparing`）以前寫死「已接單並開始製作」，
+          // **完全忽略 `kitchenJobCount`** → 明明 0 張廚房 job 都照講成功（假成功）。
+          // 2026-09-12 修：兩個分支一律帶出「有冇真係送咗廚」。
+          const kitchenHint = kitchenJobCount > 0 ? "並已送廚" : "（按打印設定未出廚房單）";
           onToast({
             tone: "success",
             message: options?.autoStartPreparing
-              ? `已接單並開始製作：${orderCodeLabel(order)}`
-              : kitchenJobCount > 0
-                ? `已接單並已送廚：${orderCodeLabel(order)}`
-                : // 冇出廚房單係店主設定（「線上訂單」開關熄咗，例如 Sunmi 系統已自己印）。
-                  // 唔可以照講「已送廚」——廚房收唔到單，講咗就係假成功。
-                  `已接單（按打印設定未出廚房單）：${orderCodeLabel(order)}`,
+              ? `已接單並開始製作${kitchenHint}：${orderCodeLabel(order)}`
+              : `已接單${kitchenHint}：${orderCodeLabel(order)}`,
           });
         }
         return true;
@@ -354,7 +394,8 @@ export function QuickOnlineOrdersPanel({
         setActionLoadingKey(null);
       }
     },
-    [onToast, patchOrder],
+    // `quickCounter` 要入 deps：快餐模式行「採納成本地 counter 單」，堂食模式行「只出廚房單」。
+    [onToast, patchOrder, quickCounter],
   );
 
   useEffect(() => {
@@ -384,10 +425,10 @@ export function QuickOnlineOrdersPanel({
   const runAction = useCallback(
     async (order: LedgerOnlineOrder, action: OnlineOrderAction) => {
       if (action.key === "accept") {
-        if (!skipTableAssignment && order.tabType === "dine_in") {
-          setAssigningOrderId(order.id);
-          return;
-        }
+        // 🔴 2026-09-12 商家定案：接單**唔會**再被「安排桌台」攔住。
+        // 自動接單／人手接單之後張單只係「待安排座位」，收銀得閒再按「排位」。
+        // （舊寫法 `if (!skipTableAssignment && order.tabType === "dine_in")` 會彈舊嘅
+        //  安排桌台彈窗並中止接單 → 同新 UI 嘅「排位」掣撞，而且嗰個彈窗從來冇真正落枱號。）
         await runAccept(order);
         return;
       }
@@ -485,7 +526,7 @@ export function QuickOnlineOrdersPanel({
         setActionLoadingKey(null);
       }
     },
-    [applyOrders, onToast, patchOrder, runAccept, skipTableAssignment],
+    [applyOrders, onToast, patchOrder, runAccept],
   );
 
   async function acceptInStoreFallback(order: LedgerOnlineOrder) {
@@ -506,6 +547,55 @@ export function QuickOnlineOrdersPanel({
   const balanceFallbackOrder = balanceFallbackOrderId
     ? orders.find((row) => row.id === balanceFallbackOrderId) ?? null
     : null;
+
+  /**
+   * 排位彈窗入面「唔可以揀」嘅枱：本機任何**進行中**（draft / 製作中 / 已收款未完成 / 返結）
+   * 而且有真枱號嘅單。**要剔除目標單自己**，否則改枱時原本張枱會變咗不可選。
+   */
+  const occupiedTableIds = useMemo(() => {
+    if (!assigningOrder) return [] as string[];
+    const openStatuses = new Set(["draft", "sent_to_kitchen", "paid", "reopened"]);
+    return loadOrders()
+      .filter(
+        (row) =>
+          row.id !== assigningOrder.id &&
+          !!row.tableId &&
+          row.tableId !== "counter" &&
+          openStatuses.has(row.status),
+      )
+      .map((row) => row.tableId as string);
+  }, [assigningOrder]);
+
+  const assignTable = useCallback(
+    async (order: LedgerOnlineOrder, table: AssignableTable): Promise<boolean> => {
+      setAssigningTableId(table.id);
+      try {
+        const detail = await getOrderDetail(order.id);
+        const result = await assignLedgerOrderToTable({
+          ledgerOrder: order,
+          tableId: table.id,
+          tableName: table.name,
+          detail,
+        });
+        onToast({
+          tone: "success",
+          message: result.created
+            ? `已排位 ${table.name}：${orderCodeLabel(order)}`
+            : `已改枱到 ${table.name}：${orderCodeLabel(order)}`,
+        });
+        // 枱位狀態存在本機投影（Ledger 側冇枱概念）→ 用新 ref 逼一次 re-render 更新標籤。
+        applyOrders(mergeLedgerOrders(ordersRef.current, [{ ...order }]));
+        setAssigningOrderId(null);
+        return true;
+      } catch (err) {
+        onToast({ tone: "error", message: err instanceof Error ? err.message : "排位失敗" });
+        return false;
+      } finally {
+        setAssigningTableId(null);
+      }
+    },
+    [applyOrders, onToast],
+  );
 
   const autoAcceptLabel = skipTableAssignment ? "自動接單" : "自動接單（非堂食）";
 
@@ -540,6 +630,16 @@ export function QuickOnlineOrdersPanel({
 
     return (
       <>
+        {tableAssign && isOnlineDineIn(order) ? (
+          <button
+            className="rounded-2xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            disabled={busy}
+            onClick={() => setAssigningOrderId(order.id)}
+            type="button"
+          >
+            {onlineTableAssignLabel(order)}
+          </button>
+        ) : null}
         {primary ? (
           <button
             className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
@@ -583,6 +683,25 @@ export function QuickOnlineOrdersPanel({
     const typeLabel = tabLabel(order.tabType);
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
     const primary = getPrimaryOnlineOrderAction(order);
+    // 「排位」只喺堂食模式、而且係線上**堂食**單才出（快餐模式 → 出餐口自取，唔排位）。
+    const showTableAssign = tableAssign && isOnlineDineIn(order);
+    // ⚠️ 一定要用 `quickCounter`（唔係 `skipTableAssignment`）：堂食模式一樣傳 skipTableAssignment=true，
+    // 用錯會令堂食單嘅枱位標籤變成「出餐口自取」，睇落好似唔需要排位。
+    const tableBadge = onlineTableBadge(order, { quickMode: quickCounter });
+    // 雙標籤（同 docs/113 快餐做法一致）：付款維度「已結帳（綠）」＋枱位維度「待安排座位 / 枱名」。
+    const dineInBadges = isOnlineDineIn(order) ? (
+      <div className="flex flex-wrap items-center gap-1">
+        {[onlinePaymentBadge(order), tableBadge].map((item) => (
+          <span
+            key={item.label}
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.bgClass} ${item.textClass}`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${item.dotClass}`} />
+            {item.label}
+          </span>
+        ))}
+      </div>
+    ) : null;
 
     if (layout === "strip") {
       return (
@@ -606,6 +725,7 @@ export function QuickOnlineOrdersPanel({
             <div className="mt-1 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">{cancelRequest}</div>
           ) : null}
           {order.itemSummary ? <div className="mt-1 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
+          {dineInBadges ? <div className="mt-1">{dineInBadges}</div> : null}
           <div className="mt-3 flex flex-wrap gap-1.5">
             <button
               className="rounded-xl bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white"
@@ -614,6 +734,16 @@ export function QuickOnlineOrdersPanel({
             >
               查看
             </button>
+            {showTableAssign ? (
+              <button
+                className={onlineOrderActionButtonClass("orange", true)}
+                disabled={busy}
+                onClick={() => setAssigningOrderId(order.id)}
+                type="button"
+              >
+                {onlineTableAssignLabel(order)}
+              </button>
+            ) : null}
             {hasPendingChangeRequest(order) ? (
               renderCancelRequestActions(order)
             ) : (
@@ -662,6 +792,7 @@ export function QuickOnlineOrdersPanel({
             ) : null}
             {cancelRequest ? <div className="mt-1 text-xs font-semibold text-rose-600">{cancelRequest}</div> : null}
             {order.itemSummary ? <div className="mt-2 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
+            {dineInBadges ? <div className="mt-2">{dineInBadges}</div> : null}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
             <button
@@ -671,6 +802,10 @@ export function QuickOnlineOrdersPanel({
             >
               查看
             </button>
+            {/* ⚠️ stack 版面嘅「排位」掣由 `renderStackActions() → renderModalActions()` 出，
+                呢度唔可以再加，否則會出現兩粒（strip 版面唔行 renderModalActions，所以要自己出）。 */}
+            {/* ⚠️ stack 版面嘅「排位」掣由 `renderStackActions() → renderModalActions()` 出，
+                呢度唔可以再加，否則會出現兩粒。 */}
             {renderStackActions(order)}
           </div>
         </div>
@@ -735,35 +870,20 @@ export function QuickOnlineOrdersPanel({
         <div className="grid gap-2">{visibleOrders.map(renderOrderCard)}</div>
       )}
 
-      {!skipTableAssignment && assigningOrder ? (
-        <ResponsiveModal
-          description="選擇堂食桌台後接單並送廚。"
+      {assigningOrder ? (
+        <TableAssignModal
+          busyTableId={assigningTableId}
+          description={
+            needsTableAssignment(assigningOrder, { quickMode: quickCounter })
+              ? "選擇桌台後會將線上單轉到該枱，並補印一張帶枱名嘅廚房單。"
+              : `現時：${onlineTableBadge(assigningOrder, { quickMode: quickCounter }).label}。選擇新桌台即改枱。`
+          }
+          occupiedTableIds={occupiedTableIds}
           onClose={() => setAssigningOrderId(null)}
-          title={`安排桌台 · ${orderCodeLabel(assigningOrder)}`}
-          widthClassName="max-w-md"
-        >
-          <div className="grid max-h-64 gap-2 overflow-auto">
-            {tables.length === 0 ? (
-              <div className="text-sm text-slate-500">尚未設定桌台，請至設置頁新增。</div>
-            ) : (
-              tables.map((table) => (
-                <button
-                  key={table.id}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                  onClick={() => {
-                    void runAccept(assigningOrder, { tableId: table.id, tableName: table.name }).then((ok) => {
-                      if (ok) setAssigningOrderId(null);
-                    });
-                  }}
-                  type="button"
-                >
-                  {table.name}
-                  <span className="ml-2 text-xs font-normal text-slate-500">{table.floorName}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </ResponsiveModal>
+          onSelect={(table) => void assignTable(assigningOrder, table)}
+          tables={tables}
+          title={`${onlineTableAssignLabel(assigningOrder)} · ${orderCodeLabel(assigningOrder)}`}
+        />
       ) : null}
 
       {balanceFallbackOrder ? (

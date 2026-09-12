@@ -7,7 +7,23 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
-import { bridgeLedgerOrderToPos, printKitchenForLedgerOrder, resolveLedgerPosOrderForReceipt } from "@/lib/ledger/ledger-pos-bridge";
+import {
+  adoptLedgerOrderAsQuickCounter,
+  assignLedgerOrderToTable,
+  bridgeLedgerOrderToPos,
+  printKitchenForLedgerOrder,
+  resolveLedgerPosOrderForReceipt,
+} from "@/lib/ledger/ledger-pos-bridge";
+import { TableAssignModal } from "@/components/table-assign-modal";
+import {
+  isOnlineDineIn,
+  onlinePaymentBadge,
+  onlineTableAssignLabel,
+  onlineTableBadge,
+} from "@/lib/pos/online-dinein-labels";
+// ⚠️ 一定要 alias：呢個檔自己有一個 `loadOrders`（拉 Ledger 線上單嘅 async loader），
+// 撞名會令本機訂單讀取變成 Promise。
+import { loadOperatingMode, loadOrders as loadLocalOrders } from "@/lib/storage";
 import {
   describeNoReceiptPrinterError,
   printReceiptForLedgerOrderOnce,
@@ -129,6 +145,7 @@ export function OnlineOrders({
   // 由 resolveLedgerPosOrderForReceipt 將 Ledger 單投影成 PosOrder，餵畀 ReceiptTicketPreview。
   const [receiptPreviewOrder, setReceiptPreviewOrder] = useState<PosOrder | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
+  const [assigningTableId, setAssigningTableId] = useState<string | null>(null);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
   const [audioReady, setAudioReady] = useState(false);
@@ -460,12 +477,19 @@ export function OnlineOrders({
         let kitchenJobCount = 0;
         try {
           const detail = await getOrderDetail(order.id);
-          const bridged = await bridgeLedgerOrderToPos({
-            ledgerOrder: order,
-            tableId: options?.tableId,
-            tableName: options?.tableName,
-            detail,
-          });
+          // 快餐模式（`operatingMode = quick`）：呢批線上單一律當**本地快餐 counter 單**
+          // 採納（出餐口自取、唔排位），令快餐 strip 嘅「可取餐 → 完成」管得到
+          // —— 同 POS 主介面（quick-online-orders-panel）同一口徑，唔會因為收銀
+          // 喺「訂單頁」接單而漏咗採納。
+          const bridged =
+            loadOperatingMode() === "quick"
+              ? await adoptLedgerOrderAsQuickCounter({ ledgerOrder: order, detail })
+              : await bridgeLedgerOrderToPos({
+                  ledgerOrder: order,
+                  tableId: options?.tableId,
+                  tableName: options?.tableName,
+                  detail,
+                });
           kitchenJobCount = bridged.printJobs.length;
         } catch (bridgeErr) {
           // 唔再假裝成功：舊寫法 return true → auto-accept effect 彈「已自動接單」success toast，
@@ -634,18 +658,41 @@ export function OnlineOrders({
   }
 
   function startAccept(order: LedgerOnlineOrder) {
-    if (order.tabType === "dine_in") {
-      setAssigningOrderId(order.id);
-      return;
-    }
+    // 🔴 2026-09-12 商家定案：接單**唔再**被「安排桌台」攔住。
+    // 堂食線上單接完之後只係「待安排座位」，收銀可以隨時按「排位」補上
+    // （自動接單情境亦一樣 → 滿足「自動接單仍會接單並打印，狀態顯示待安排座位」）。
     void runAcceptAndBridge(order);
   }
 
+  /**
+   * 「排位」：將線上單 assign 到桌台（獨立於接單）。
+   *
+   * 舊寫法 `assignDineInTable = runAcceptAndBridge(order, {tableId})` 有兩個問題：
+   *   ① 綁死接單 —— 已接單／自動接單之後就冇得排位；
+   *   ② 枱號只寫入 in-memory 投影，reload 即失、桌台總覽永遠唔會見到。
+   * 新做法走 `assignLedgerOrderToTable()`：**upsert 本地單**（`ledger-<id>`，
+   * 帶 `prepaidAmount`）→ 桌台佔用 / 店內線下訂單 / 報表全部即刻生效。
+   */
   async function assignDineInTable(order: LedgerOnlineOrder, tableId: string, tableName: string) {
-    const ok = await runAcceptAndBridge(order, { tableId, tableName });
-    if (ok) {
+    setAssigningTableId(tableId);
+    setActionLoadingKey(`${order.id}:assign`);
+    try {
+      const detail = await getOrderDetail(order.id);
+      const result = await assignLedgerOrderToTable({ ledgerOrder: order, tableId, tableName, detail });
+      setToast({
+        tone: "success",
+        message: result.created
+          ? `已排位 ${tableName}：${orderCodeLabel(order)}`
+          : `已改枱到 ${tableName}：${orderCodeLabel(order)}`,
+      });
       setAssigningOrderId(null);
       setViewingOrderId(null);
+      applyOrders(mergeLedgerOrders(ordersRef.current, [{ ...order }]));
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "排位失敗" });
+    } finally {
+      setAssigningTableId(null);
+      setActionLoadingKey(null);
     }
   }
 
@@ -783,6 +830,18 @@ export function OnlineOrders({
 
     return (
       <>
+        {/* 「排位」（2026-09-12 商家需求）：線上堂食單 assign 到桌台。
+            獨立於接單 —— 未接單、已接單、自動接單之後都可以按。 */}
+        {!hasRequest && isOnlineDineIn(order) ? (
+          <button
+            className={`${btn} bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-60`}
+            disabled={orderLoading}
+            onClick={() => setAssigningOrderId(order.id)}
+            type="button"
+          >
+            {onlineTableAssignLabel(order)}
+          </button>
+        ) : null}
         {!hasRequest && raw === "pending" ? (
           <>
             <button
@@ -791,7 +850,7 @@ export function OnlineOrders({
               onClick={() => startAccept(order)}
               type="button"
             >
-              {orderLoading ? "提交中…" : order.tabType === "dine_in" ? "接單並安排桌台" : "接單"}
+              {orderLoading ? "提交中…" : "接單"}
             </button>
             <button
               className={`${btn} bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60`}
@@ -885,6 +944,24 @@ export function OnlineOrders({
     ? orders.find((item) => item.id === balanceFallbackOrderId) ?? null
     : null;
   const assigningOrder = assigningOrderId ? orders.find((item) => item.id === assigningOrderId) ?? null : null;
+
+  /**
+   * 排位彈窗「唔可以揀」嘅枱：本機進行中（draft / 製作中 / 已收款未完成 / 返結）而有真枱號嘅單。
+   * 剔除目標單自己，令「改枱」時原本張枱仍然可揀。
+   */
+  const occupiedTableIds = useMemo(() => {
+    if (!assigningOrder) return [] as string[];
+    const openStatuses = new Set(["draft", "sent_to_kitchen", "paid", "reopened"]);
+    return loadLocalOrders()
+      .filter(
+        (row) =>
+          row.id !== assigningOrder.id &&
+          !!row.tableId &&
+          row.tableId !== "counter" &&
+          openStatuses.has(row.status),
+      )
+      .map((row) => row.tableId as string);
+  }, [assigningOrder]);
 
   const panel = (
     <>
@@ -1071,30 +1148,19 @@ export function OnlineOrders({
   const modals = (
     <>
       {assigningOrder ? (
-        <ResponsiveModal
-          description="選擇桌台後會接單、送廚，並在收銀台建立堂食單。"
+        <TableAssignModal
+          busyTableId={assigningTableId}
+          description={
+            onlineTableBadge(assigningOrder, { quickMode: false }).label === "待安排座位"
+              ? "選擇桌台後會將線上單轉到該枱（建立本地堂食單）並補印一張帶枱名嘅廚房單。"
+              : `現時：${onlineTableBadge(assigningOrder, { quickMode: false }).label}。選擇新桌台即改枱。`
+          }
+          occupiedTableIds={occupiedTableIds}
           onClose={() => setAssigningOrderId(null)}
-          title="安排堂食桌台"
-          widthClassName="max-w-2xl"
-        >
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            {tables.map((table) => (
-              <button
-                key={table.id}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left text-sm font-semibold text-slate-900 hover:border-orange-300 hover:bg-orange-50 disabled:opacity-60"
-                disabled={Boolean(actionLoadingKey?.startsWith(`${assigningOrder.id}:`))}
-                onClick={() => {
-                  const tableName = `${table.floorName} · ${table.name}`;
-                  void assignDineInTable(assigningOrder, table.id, tableName);
-                }}
-                type="button"
-              >
-                <div>{table.name}</div>
-                <div className="mt-1 text-xs font-normal text-slate-500">{table.floorName}</div>
-              </button>
-            ))}
-          </div>
-        </ResponsiveModal>
+          onSelect={(table) => void assignDineInTable(assigningOrder, table.id, table.name)}
+          tables={tables}
+          title={`${onlineTableAssignLabel(assigningOrder)} · ${orderCodeLabel(assigningOrder)}`}
+        />
       ) : null}
 
       {balanceFallbackOrder ? (
@@ -1170,6 +1236,26 @@ export function OnlineOrders({
               支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}
               {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
             </div>
+            {/* 派生標籤（唔新增 status 值）：付款維度「已結帳」＋枱位維度「待安排座位」。 */}
+            {isOnlineDineIn(viewingOrder) ? (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {(() => {
+                  const badges = [
+                    onlinePaymentBadge(viewingOrder),
+                    onlineTableBadge(viewingOrder, { quickMode: false }),
+                  ];
+                  return badges.map((badge) => (
+                    <span
+                      key={badge.label}
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge.bgClass} ${badge.textClass}`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
+                      {badge.label}
+                    </span>
+                  ));
+                })()}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">

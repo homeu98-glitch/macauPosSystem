@@ -7,6 +7,7 @@ import {
   loadBootstrapCache,
   loadDeviceConfig,
   loadKioskPrinters,
+  loadLedgerOrderCache,
   loadOrders,
   loadPosLocalSettings,
   loadPrintJobs,
@@ -193,6 +194,13 @@ export interface KitchenPrintOpts {
   itemNoteOverride?: string;
   itemsOverride?: PosOrder["items"];
   orderNoSuffix?: string;
+  /**
+   * 覆寫廚房單「全單備註」區塊（缺省 = `order.orderNote`）。
+   *
+   * 用途：返結單要標明「線上已付金額不會沖正」——呢筆錢喺 Ledger，
+   * POS 冇 RPC 可以沖正（見 `reopenPosOrder` 註釋、docs/113）。
+   */
+  orderNoteOverride?: string;
 }
 
 // ── 廚房 / 分區單：每台 zone 打印機一張（只印該分區嘅菜品），附廚房模板快照 ──
@@ -225,7 +233,7 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
       // ⚠️ 全單備註一定要帶：唔傳 → content.order_note 空字串 → renderEscPosLines
       // `if (!text) continue` 直接跳過 → 廚房單永久冇全單備註（收據有、廚房冇嘅 bug）。
       // 見 docs：buildKitchenContent 嘅 orderNote 係 optional，漏傳唔會 compile error。
-      orderNote: order.orderNote,
+      orderNote: opts.orderNoteOverride ?? order.orderNote,
     });
     const orderNo = `${order.localOrderNo}${opts.orderNoSuffix ?? ""}`;
     content.order_no = orderNo;
@@ -335,15 +343,28 @@ export function buildVoidPrintJobsForOrder(
 /**
  * 返結（反結賬）列印：把已結單退回可編輯狀態時，印一張「返結單」到所有啟用中
  * 分區 / 標籤打印機，記錄原單號、原因、操作人。ticketType 沿用 "void"（修正單）。
+ *
+ * 🔴 線上已付金額（`prepaidAmount`，商家 2026-09-12 定案「乙」）：
+ * 嗰筆錢喺 Ledger，POS **冇任何 RPC 可以沖正**（只有客人取消／改單走
+ * `merchant_resolve_order_change`）→ 所以返結單一定要**大字標明**該金額不會沖正，
+ * 否則收銀會以為「返結 = 錢退返」，帳面同 Ledger 就對唔上。
+ * （文案放「全單備註」區塊；想更大字可以喺「打印中心 → 廚房模板 → 全單備註」調字型。）
  */
 export function buildReopenPrintJobs(order: PosOrder, reason: string, operator: string): PrintJob[] {
-  const storeName = loadBootstrapCache()?.storeName ?? "門店";
+  const bootstrap = loadBootstrapCache();
+  const storeName = bootstrap?.storeName ?? "門店";
   const voidReason = `原因：${reason || "結帳錯誤"}｜操作人：${operator}`;
+  const prepaid = order.prepaidAmount ?? 0;
+  const onlinePrepaidWarning =
+    prepaid > 0 && order.onlineOrderId
+      ? `※ 線上已付 ${bootstrap?.currency ?? "MOP"} ${prepaid.toFixed(2)} 不會沖正（款項於會員通／Ledger，本機返結唔會退款）`
+      : undefined;
   const kitchenJobs = buildKitchenPrintJobs(order, {
     ticketType: "void",
     storeName,
     itemNamePrefix: "【返結】",
     itemNoteOverride: voidReason,
+    orderNoteOverride: onlinePrepaidWarning,
   });
   const labelJobs = buildLabelPrintJobs(order, { ticketType: "void", storeName, itemNamePrefix: "【返結】" });
   return [...kitchenJobs, ...labelJobs];
@@ -416,10 +437,16 @@ export function buildShiftPrintJobs(opts: ShiftPrintOpts): PrintJob[] {
 }
 
 export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {
-  // 線上單唔 mirror 入 POS DB（契約 M3/M8），先查 in-memory bridge registry；
-  // 舊 persisted 線上單（legacy）仍會喺 loadOrders() 搵到。
+  // 線上單唔 mirror 入 POS DB（契約 M3/M8），所以反查要分三層（次序＝由新到舊）：
+  //   1) in-memory bridge registry —— 今次 session 接單／補打收據時建立，內容一定最新；
+  //   2) store-scope 投影快取 —— **reload 之後仍然搵得返**（2026-09-12 修：
+  //      以前只做第 1 層，令線上單打印 job 一 reload 就永遠「重打整單」失敗，
+  //      錯誤文案仲誤導用戶去「補打帳單」）；
+  //   3) legacy persisted row（歷史上曾經 mirror 入 orders 嘅舊資料）。
   const bridged = getBridgedPosOrder(ledgerOrderId);
   if (bridged) return bridged;
+  const cached = loadLedgerOrderCache()[ledgerOrderId];
+  if (cached) return cached;
   const posOrderId = `ledger-${ledgerOrderId}`;
   return loadOrders().find((row) => row.id === posOrderId || row.onlineOrderId === ledgerOrderId) ?? null;
 }

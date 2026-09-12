@@ -400,6 +400,26 @@ export function PrintCenter() {
     [activeJobId, filteredJobs],
   );
 
+  /**
+   * 🔴「**已發送**」係**樂觀值** —— `RelayTransport.send()` 唔理 `flushPosSyncQueue()`
+   * 成唔成功都 `return { ok: true }`（`print-bridge/relay-transport.ts`），dispatch 見 ok
+   * 就標 `"sent"`。而 `syncCloudPrintOutcomes()` 只會**向上**覆寫（雲端 printed/failed → 本地），
+   * 本地有、雲端冇 → 永遠停留「已發送」，**零紅標、唔會自我修正**（2026-09-12 實案）。
+   *
+   * 所以呢度主動查 sync queue：只要該 job 嘅 `PRINT_JOB_CREATED` 仲未 synced，
+   * 就喺狀態欄大聲標「未上雲」（原因多數係離線／401／事件被判 foreign-store）。
+   */
+  // 刻意唔用 useMemo：`loadQueue()` 係非響應式外部讀取（唔會觸發 re-render），
+  // 掛 deps 會被 exhaustive-deps 當成假依賴，掛 `[]` 又會永遠唔更新 → 索性每次 render 直接算
+  // （一次 render 只讀一次 localStorage，唔係逐行讀）。
+  const unsyncedPrintJobIds = (() => {
+    const ids = new Set<string>();
+    for (const event of loadQueue()) {
+      if (event.type === "PRINT_JOB_CREATED" && event.status !== "synced") ids.add(event.entityId);
+    }
+    return ids;
+  })();
+
   const orderMap = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders]);
 
   /**
@@ -1682,11 +1702,21 @@ export function PrintCenter() {
                                           ? "失敗"
                                           : "失敗（狀態異常）";
                                 return (
-                                  <span
-                                    className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}`}
-                                  >
-                                    <span className={`h-2 w-2 rounded-full ${dot}`} />
-                                    {label}
+                                  <span className="inline-flex flex-wrap items-center gap-1">
+                                    <span
+                                      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}`}
+                                    >
+                                      <span className={`h-2 w-2 rounded-full ${dot}`} />
+                                      {label}
+                                    </span>
+                                    {/* 「已發送」＋ queue 仲有未上雲事件 → 其實 APK claim 唔到。
+                                        唔標出嚟嘅話，用戶會以為印咗（同 2026-09-11「靜默零出紙」同一課）。 */}
+                                    {s === "sent" && unsyncedPrintJobIds.has(job.id) ? (
+                                      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                                        未上雲
+                                      </span>
+                                    ) : null}
                                   </span>
                                 );
                               })()}

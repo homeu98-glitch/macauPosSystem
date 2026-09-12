@@ -10,8 +10,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  filterQuickActionBarOrders,
   getPaymentBadge,
+  isLocalOrTransferredDineIn,
   isPaidOrderStatus,
+  isQuickCounterOrder,
   isQuickOrderReady,
   localOrderStatusLabel,
   matchesLocalOrderPanelTab,
@@ -174,5 +177,52 @@ describe("getPaymentBadge 型別契約", () => {
   it("回傳完整 badge token（bg / text / dot），UI 可以直接套 className", () => {
     const badge: OrderStatusBadge = getPaymentBadge(order({ id: "z1", status: "paid" }));
     assert.ok(badge.bgClass && badge.textClass && badge.dotClass);
+  });
+});
+
+describe("快餐模式採納線上單（2026-09-12：isQuickCounterOrder 放寬）", () => {
+  const onlineCounter = () =>
+    order({ id: "ledger-a", tableId: "counter", tableName: "自取", onlineOrderId: "a", status: "paid" });
+
+  it("線上單採納成 counter 單之後算「快餐 counter 單」（要入快餐 strip 行可取餐→完成）", () => {
+    // 舊寫法 `isLocalPosOrder(order) && tableId === "counter"` 會令呢批單冇可取餐掣
+    assert.equal(isQuickCounterOrder(onlineCounter()), true);
+  });
+
+  it("線上 counter 單唔會入「店內線下訂單」（分工：快餐 strip 管）", () => {
+    assert.equal(isLocalOrTransferredDineIn(onlineCounter()), false);
+    // 反例：已排到真枱嘅線上堂食單 → 當本地單管理（「排位」之後）
+    assert.equal(
+      isLocalOrTransferredDineIn(order({ id: "ledger-b", tableId: "table-a01", onlineOrderId: "b" })),
+      true,
+    );
+  });
+
+  it("本地 counter 單 / 真枱堂食單行為不變（放寬唔可以誤傷）", () => {
+    assert.equal(isQuickCounterOrder(order({ id: "l1" })), true);
+    assert.equal(isQuickCounterOrder(order({ id: "l2", tableId: "table-a01" })), false);
+  });
+
+  it("線上已付快餐單：「已結帳」+ 出餐階段照正常流程（製作中 → 待取餐）", () => {
+    const o = onlineCounter();
+    assert.equal(getPaymentBadge(o).label, "已結帳");
+    assert.equal(localOrderStatusLabel(o), "製作中");
+    assert.equal(localOrderStatusLabel({ ...o, fulfillmentStatus: "ready" }), "待取餐");
+    assert.equal(matchesLocalOrderPanelTab({ ...o, fulfillmentStatus: "ready" }, "ready"), true);
+  });
+
+  it("未收款（到店付款）嘅線上快餐單係「未結帳」", () => {
+    assert.equal(
+      getPaymentBadge(
+        order({ id: "ledger-c", tableId: "counter", onlineOrderId: "c", status: "sent_to_kitchen" }),
+      ).label,
+      "未結帳",
+    );
+  });
+
+  it("終態（settled）唔會再出現喺快餐 strip", () => {
+    const settled = order({ id: "ledger-d", tableId: "counter", onlineOrderId: "d", status: "settled" });
+    assert.equal(filterQuickActionBarOrders([settled]).length, 0);
+    assert.equal(filterQuickActionBarOrders([onlineCounter()]).length, 1);
   });
 });

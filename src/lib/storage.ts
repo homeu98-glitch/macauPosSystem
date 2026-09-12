@@ -92,6 +92,18 @@ const STORE_SUFFIX = {
   // 落單時由 server 讀一次寫入，斷網時 `resolveJobPrinter` 靠佢搵得到 kiosk 打印機。
   // 唔可以當真源 —— 換機 / 清 cache 會冇，但 server 一讀即返。
   kioskPrinters: "kiosk-printers",
+  /**
+   * 線上單 → 本地 `PosOrder` 投影嘅**輕量快取**（2026-09-12）。
+   *
+   * 為咩要落 localStorage：線上單**唔 mirror 入 POS DB**（契約 M3/M8），
+   * 打印中心「重打整單」靠 `findPosOrderForLedger()` 反查來源單，
+   * 而嗰個只查 in-memory `bridgedOrders` → **一 reload 就永遠搵唔到**，
+   * 令線上單嘅打印 job 由建立一刻起就冇得重打（用戶 2026-09-12 實案）。
+   *
+   * 呢度只係**打印用嘅投影**（唔係權威源，權威永遠係 Ledger）：
+   * 有上限、可被覆蓋、唔會參與收入計算（報表用 `onlineOrderId` 去重）。
+   */
+  ledgerOrderCache: "ledger-order-cache",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -651,6 +663,42 @@ export function saveOrders(orders: PosOrder[]) {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
   }
+}
+
+/** 線上單投影快取上限（只服務「重打整單」；權威源永遠係 Ledger）。 */
+export const LEDGER_ORDER_CACHE_MAX = 50;
+
+/**
+ * 線上單（Ledger）→ 本地 `PosOrder` 投影嘅輕量快取（key = Ledger order id）。
+ *
+ * 用途：**令「重打整單」喺 reload 之後仍然搵得返來源單**。
+ * 線上單唔 mirror 入 POS DB（契約 M3/M8），所以唔可以靠 `loadOrders()` 反查。
+ *
+ * @see `@/lib/ledger/ledger-pos-bridge` 嘅 `cacheLedgerPosOrder()`
+ * @see `@/lib/print-jobs` 嘅 `findPosOrderForLedger()`
+ */
+export function loadLedgerOrderCache(): Record<string, PosOrder> {
+  return readStoreJson(STORE_SUFFIX.ledgerOrderCache, {} as Record<string, PosOrder>);
+}
+
+/** 寫入 / 更新一張線上單投影（超過上限就淘汰最舊）。回傳實際保留數量。 */
+export function cacheLedgerPosOrder(order: PosOrder): number {
+  if (!order.onlineOrderId) return 0;
+  const cache = loadLedgerOrderCache();
+  const next: Record<string, PosOrder> = { ...cache, [order.onlineOrderId]: order };
+  const entries = Object.entries(next);
+  if (entries.length > LEDGER_ORDER_CACHE_MAX) {
+    entries
+      .sort(
+        (a, b) =>
+          Date.parse(a[1].updatedAt || a[1].createdAt || "") -
+          Date.parse(b[1].updatedAt || b[1].createdAt || ""),
+      )
+      .slice(0, entries.length - LEDGER_ORDER_CACHE_MAX)
+      .forEach(([key]) => delete next[key]);
+  }
+  writeStoreJson(STORE_SUFFIX.ledgerOrderCache, next);
+  return Object.keys(next).length;
 }
 
 export function loadPrintJobs() {

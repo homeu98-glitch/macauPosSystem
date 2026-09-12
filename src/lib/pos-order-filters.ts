@@ -18,9 +18,22 @@ export function isLocalOrTransferredDineIn(order: PosOrder): boolean {
   return !!order.tableId && order.tableId !== "counter";
 }
 
-/** 快餐 counter 單（先收款、後出餐流程） */
+/**
+ * 快餐 counter 單（先收款、後出餐流程）。
+ *
+ * 🔴 2026-09-12：**唔再要求 `isLocalPosOrder()`**（即唔再排除帶 `onlineOrderId` 嘅單）。
+ *
+ * 原因：快餐模式收到線上 `dine_in` 單會**採納成本地 counter 單**
+ * （`adoptLedgerOrderAsQuickCounter()`，商家口徑「快餐店有枱但唔安排座位，出餐口自取」），
+ * 之後要行同本地快餐單一模一樣嘅「可取餐 → 完成」流程。舊寫法
+ * `isLocalPosOrder(order) && tableId === "counter"` 會令呢批單**唔入快餐 strip、
+ * 冇可取餐掣**，收銀完全管唔到（只有線上訂單面板先見到）。
+ *
+ * ⚠️ 「本地／線上」嘅分工由 `isLocalOrTransferredDineIn()` 負責：
+ * 線上 counter 單一律返 false → 唔會入「店內線下訂單」面板，唔會同枱面/返結流程撈埋。
+ */
 export function isQuickCounterOrder(order: PosOrder): boolean {
-  return isLocalPosOrder(order) && order.tableId === "counter";
+  return order.tableId === "counter";
 }
 
 /**

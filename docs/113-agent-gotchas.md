@@ -564,3 +564,134 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
   本機寫 `cancelled` → `enqueueEvents` → `notifyQueueChanged()` → 廣播 `pos-orders-changed`）。
   `cancelled` 係終態，兩邊 LWW 都會放行，唔會被舊 open snapshot 復活。
 
+## 🔴🔴 線上單廚房單：唯一可以「靜默由有變冇」嘅閘門 = `printContentToggles.online`（2026-09-12 · 用戶實案）
+
+**病症**：線上單**自動接單成功**，但廚房乜都收唔到，打印中心／打印紀錄**連一張 job 都冇**；
+完全冇紅標、冇 error toast。用戶：「之前版本印得到，現在唔得。」
+
+**排查口訣（可重用）**：
+
+1. 打印中心見到**收據 job 打印成功** → **relay / APK / 雲端通道正常**，唔好再查通道。
+   故障一定在**上游「廚房 PrintJob 冇被建立」**（`pos_print_jobs` 冇 `printer_group <> 'receipt'` 嘅行）。
+2. 用 `git log -S '<閘門表達式>' --oneline -- <檔案>` 找出「唯一可以改變行為」嘅提交。
+   2026-09-12 實測：`buildPrintJobsForItems()` 內**除咗** `isPrintContentEnabled("online")` 之外，
+   其餘（打印機解析、分區兜底、無機 throw）由 `f1fd4d4` 之後**從未改動** → 回歸只可能來自呢個閘門。
+3. `readToggle(v, true)`（`storage.ts:492`）：**只有顯式 `false` 才關**，舊 localStorage 缺欄＝開。
+   所以呢個掣一旦係 `false`，就係**人手熄過**（設備設置 → 打印開關設置 → 「線上訂單」）。
+
+**為何完全冇提示（三層靜默，缺一都唔會「鬼」）**：
+
+- `ledger-pos-bridge.ts:186` `if (!isPrintContentEnabled("online")) return [];` —— 設計上靜默（店主刻意熄）。
+- 自動接單傳 `silent: true`（`quick-online-orders-panel.tsx:372`）→
+  出單拋錯喺 `catch { if (!options?.silent) … }`（`:324-328`）**被吞**。
+- **自動接單嘅成功 toast 完全忽略 `kitchenJobCount`**：`autoStartPreparing` 分支寫死
+  「已接單並開始製作」（`:340-341`）→ 明明 0 張 job 都照講成功。⚠️「按打印設定未出廚房單」
+  嗰句只在**人手接單**（無 `autoStartPreparing`）才出得嚟。
+- 第四層：`pos-app.tsx:4594-4599` 嘅 `onToast` 把 `error` **降級成 `info`** → 連失敗提示都被淡化。
+
+**鐵律**：
+
+- POS 主介面（快餐模式快捷 bar、堂食模式「快捷操作」）**兩處**都用
+  `quick-online-orders-panel.tsx` 做自動接單 → **佢冇** `ensureKitchenPrintForAccepted` 補印兜底
+  （`online-orders.tsx:357/:411` 有）→ 「接單唔係由呢部機做」＝呢部機永遠冇廚房單。
+- 自動接單路徑**唔可以**靜默：0 job 都要有可見信號（toast／log），否則「假成功」。
+- 判斷分類唔靠猜：**人手**接一張新 pending 線上單（非 silent）會即時分辨
+  「開關熄（回空）」vs「冇 zone/label 機（throw）」vs「正常送廚」。
+- 兜底窗口唔可以只認 `accepted`/`preparing`（`online-orders.tsx:229-230`）——
+  POS 離線／Realtime 斷線期間單由 `pending` 直跳 `completed` 就永遠唔補印。
+  詳見 `docs/reviews/online-order-kitchen-print-audit-2026-09-12.md`。
+
+## 🔴 線上單三個「必然發生」嘅陷阱（2026-09-12 現場實測複查）
+
+**(1) 堂食線上單永遠唔會自動接單（＝零 print job）**
+`online-orders.tsx:517-521`（訂單頁）嘅自動接單**明文排除 `order.tabType !== "dine_in"`**；
+`quick-online-orders-panel.tsx:363-368`（POS 主介面）**冇**排除。
+⇒ 「堂食線上單有冇自動接單」取決於**當時開住邊一頁**。
+- 判別法（免查 log）：**「拒單」只喺 `pending` 出現**（`online-order-actions.ts:113-118`），
+  `accepted` 之後**冇任何取消掣**。所以一張線上單若最終係 `cancelled` 而且係人手撳嘅，
+  佢**一定停留過喺 `pending`（從未被接單）** → 唔會有廚房 job。
+- 唔可以亂改：堂食要揀桌台，而 `acceptLedgerOrder()` **唔收桌台參數**
+  （`pos-app.tsx:4582-4584`）→ 要改先要喺 Ledger／bridge 真正落枱號。
+
+**(2) 快餐面板建立嘅線上單廚房 job「由建立一刻起」就冇得重打**
+`bridgedOrders`（in-memory）**只有** `resolveLedgerPosOrderForReceipt()`（`:397`）同
+`bridgeLedgerOrderToPos()`（`:417`）會寫；**`printKitchenForLedgerOrder()`（`:294-318`）冇寫**，
+而快餐面板／自動接單正正係叫佢（`quick-online-orders-panel.tsx:323`）。
+加上線上單**唔 mirror 入本機**（契約 M3/M8）→ `findPosOrderForLedger()`（`print-jobs.ts:416-425`）
+第二層 fallback 永遠搵唔到 → 打印中心「重打整單」**必然**彈
+「線上訂單資料已不在本機快取」（`print-center.tsx:417-424`）。reload 更會清空 `/orders` 頁寫嗰份。
+
+**(3) 打印中心「已發送」＝樂觀值，唔代表雲端有行**
+`relay-transport.ts:25-34`：`flushPosSyncQueue({silent:true})` 失敗都照 `return {ok:true}`；
+`dispatch.ts:66-72` 見 `ok` 就標 `"sent"`。而 `print-center.tsx:966-981` 只會**向上**覆寫
+（雲端 printed/failed → 本地）→ **本地有、雲端冇 = 永遠卡「已發送」，零紅標，唔會自我修正**。
+- 排查：查雲端 `pos_print_jobs` 有冇該行；睇 queue 有冇 `skipped`（`no-store`／`foreign-store`，
+  `queue-outbox.ts:111-124`）或 401（`posDeviceToken` TTL 12h）。
+- ⚠️ 旁證：線上單廚房 job **冇 `content` / `template` 快照**（`ledger-pos-bridge.ts:216-228`），
+  同所有印得出嘅本地 job（`print-jobs.ts:232-247`）唯一分別 → 若 APK 已模板驅動，可能渲染唔到而唔 ack。
+
+**順帶**：桌台總覽「**手動更新**」＝ `pos-app.tsx:1275-1341`，最後**強制 `window.location.reload()`**
+（`:1336`）；reload 前會 `loadRuntimeState()` → `savePosLocalSettings(merged)`，
+而 `merged` **以 server `device_configs.local_settings` 為底**、靠白名單逐項 override（`:1224-1258`）。
+`setAutoPrint()`（`:3269-3289`）**唔檢查 `savePosLocalSettings()` 回傳值**（`writeJson` 失敗只 console.error）
+→ 「設定撳完似開咗、reload 後打回原形」係預期內嘅症狀。
+且「自動打印」係衍生值 `kitchen && label && receipt`（`:3302-3305`），唔係單一欄位。
+
+## 線上單「排位」＋「未上雲」紅標（2026-09-12 實作 · 見 `docs/online-dinein-table-assign-plan-2026-09-12.md`）
+
+**排位（線上堂食單 assign 到枱）嘅鐵律**：
+
+- 「排位」**獨立於接單**：唔可以再用 `assignDineInTable = runAcceptAndBridge(order,{tableId})`
+  （綁死接單、已接單後無法補排、枱號只入 in-memory → reload 即失）。
+  一律行 `assignLedgerOrderToTable()`（`ledger-pos-bridge.ts`）。
+- **枱號只可能係 POS 側**：`acceptLedgerOrder()` 唔收枱參數、Ledger `orders` 冇枱欄位。
+- 所以寫入要 **upsert 本地單**（`id = ledger-<ledgerId>`、帶 `onlineOrderId`、`tableId`）：
+  `pos_orders.id` 係 `text primary key`（0011）→ 前綴 id 合法；`online_order_id` 欄已存在（sync route:751）。
+  ⚠️ **同一張 Ledger 單永遠只可以有一張本地單**，append 會收入雙計。
+- 桌台佔用**零改動**：`openOrders`（含 `paid`）→ `tableOrderMap` 已經認得。
+- 錢嘅口徑：已付 → `status:"paid"` ＋ `prepaidAmount = total` → 結帳只收加菜差額（`pos-app.tsx:1908`）。
+- **枱衝突**：已佔用嘅枱**唔可以揀**（商家要求，唔係「提示後仍可強制」）；
+  但**改枱時要剔除目標單自己**，否則原本張枱變咗不可選。
+- 枱位／付款狀態一律用**派生標籤**（`src/lib/pos/online-dinein-labels.ts`，零依賴可測）——
+  **唔可以**為咗顯示而新增 `PosOrder.status` 值（會拖累 LWW 單向閘、收入認列、返結、快餐雙標籤）。
+- 快餐模式**唔出排位掣**（`needsTableAssignment()` 對 quickMode 永遠 false）：嗰邊出餐口自取。
+
+**「已發送」唔可以信（同 docs/113 §建單後淨寫本機同一課）**：
+
+- `RelayTransport.send()` 唔理 `flushPosSyncQueue()` 結果都 `return {ok:true}` →
+  dispatch 標 `sent`；而 `syncCloudPrintOutcomes()` **只向上覆寫** → 本地有、雲端冇
+  ＝ **永遠卡「已發送」、零紅標、唔會自我修正**。
+- ⇒ 打印中心狀態欄加「**未上雲**」紅標：`status === "sent"` 而且 queue 仲有未 synced
+  `PRINT_JOB_CREATED`（`print-center.tsx`）。呢個係唯一唔使查 DB 就睇得出嘅訊號。
+- ⚠️ 唔可以改用「返回 ok:false」：咁會標 `failed`，而 failed **唔會**被雲端 `printed` 覆寫
+  （只覆寫 pending/sent）→ 印成功都會一直顯示失敗。
+
+## 快餐模式採納線上單（2026-09-12 · counter 化 + 回寫 Ledger）
+
+商家口徑：**快餐店有枱但唔安排座位**（出餐口自取、客人自己搵位）→
+快餐模式收到線上 `dine_in` 單一律**當本地快餐 counter 單**，唔行「排位」。
+
+- 🔴 **`isQuickCounterOrder()` 唔可以再寫 `isLocalPosOrder(order) && tableId === "counter"`**
+  （`pos-order-filters.ts`）。舊寫法會令採納咗嘅線上 counter 單**唔入快餐 strip、冇可取餐掣**
+  → 收銀完全管唔到，只有線上訂單面板見到。放寬為 `tableId === "counter"` 之後，
+  8 個使用點（strip / 標籤 / 分頁 / 詳情彈窗 / showSplitActions）全部自動正確。
+  「本地／線上」分工仍然由 `isLocalOrTransferredDineIn()` 把關（線上 counter 單返 false
+  → 唔入店內線下訂單，唔會同枱面／返結流程撈埋）。
+- 🔴 **採納 = upsert 本地單 + 回寫 Ledger**，兩者缺一都會出事：
+  - 只採納唔回寫 → 「本地已 settled、Ledger 仍 accepted」**雙狀態機**
+    （線上訂單列表永遠停留「製作中」、客人端睇唔到進度）。
+  - 回寫用 `syncOnlineQuickFulfillment()`（`@/lib/pos/online-quick-fulfillment`）：
+    Ledger 只接受逐級轉換，而 POS **冇存** Ledger 當前狀態 → **由頭爬梯**
+    `preparing → ready → completed`，「狀態唔啱」＝已經過咗嗰級就繼續，其餘錯誤即回報；
+    冪等（重複撳／已 completed 都只會回 invalid transition → 照樣 ok）。
+  - ⚠️ 取消／退款**唔可以**行 `update_order_status`，要繼續走 `merchant_resolve_order_change`。
+- ⚠️ **`skipTableAssignment` 唔等於「快餐模式」**：堂食模式一樣傳 true（只係唔想彈舊嘅安排桌台彈窗）。
+  任何「要唔要當快餐單／枱位標籤顯示乜」嘅判斷一定要用獨立旗標（`quickCounter`）——
+  用錯會令**堂食單標籤變成「出餐口自取」**，睇落好似唔需要排位（今次自查捉到）。
+- ⚠️ 採納單 `source` 一律係 `pos`：`pos_orders_source_check` 只准 `pos/kiosk/scan`，
+  加新值要 migration（避免「code 先上、migration 後跑」）。副作用：快餐 strip 對非自助單
+  **唔出「結帳」掣**（`showSplitActions` 要求 `isSelfOrder()`）→ 到店付款未收錢嘅線上快餐單
+  要喺點餐介面結帳區收錢（同本地快餐單一致）。
+- 📌 訂單頁（`/orders`）接單亦要採納：`loadOperatingMode() === "quick"` 時改行
+  `adoptLedgerOrderAsQuickCounter()`，否則「喺訂單頁接單」會漏咗採納。
+

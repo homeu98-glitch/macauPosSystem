@@ -6,13 +6,27 @@ import { getOrderDetail, LedgerOrderDetail, LedgerOrderDetailItem } from "@/lib/
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
+  cacheLedgerPosOrder,
   loadBootstrapCache,
   loadDeviceConfig,
+  loadOrders,
+  loadPosLocalSettings,
+  loadQueue,
+  saveOrders,
+  saveQueue,
 } from "@/lib/storage";
 // ⚠️ 唔可以 import `@/lib/print-jobs`（佢反過來 import 咗呢個檔 → 循環依賴）。
 // 出紙入隊邏輯走獨立嘅 `@/lib/pos/print-job-enqueue`。
 import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
+import { enqueueEvents } from "@/lib/pos/queue-outbox";
+import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
+import {
+  buildKitchenContent,
+  buildSnapshot,
+  paperColumnsFromSize,
+  ticketTypeLabel,
+} from "@/lib/escpos-template";
 
 /**
  * 契約 M3 / M8：線上單**唔** mirror 入 POS DB（loadOrders / saveOrders）。
@@ -33,10 +47,18 @@ import {
   PosBootstrap,
   PosOrder,
   PrintJob,
+  QueueEvent,
 } from "@/lib/types";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/** 廚房單上嘅時間文字（同 `print-jobs.ts:nowText()` 一致格式）。 */
+function kitchenTimeText() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function resolveTableMeta(order: LedgerOnlineOrder, tableId?: string, tableName?: string) {
@@ -176,6 +198,16 @@ function buildPrintJobsForItems(options: {
   orderNo: string;
   tableName: string;
   items: OrderItem[];
+  /**
+   * 用嚟產生 **模板快照 + content** 嘅來源單（＝同一張單嘅 `PosOrder` 投影）。
+   *
+   * 🔴 唔可以唔傳：本地落單嘅廚房 job（`print-jobs.ts:buildKitchenPrintJobs`）一定帶
+   * `content` + `template`（doc/60「設計 == 預覽 == 出紙」），而線上單舊寫法兩者都冇
+   * → `dispatch.ts` 要 warn「冇 template 快照，將用通道 fallback 渲染」，
+   * 中繼 APK 要靠 fallback 硬編渲染（字型 / 58·80mm 欄寬唔跟商家設定）。
+   * 2026-09-12 實案：唯一印唔出嘅 job 正好就係唯一冇快照嗰張。
+   */
+  sourceOrder?: PosOrder;
 }): PrintJob[] {
   // 「線上訂單」總開關（2026-09-11 新增）：呢個 builder **只**服務 Ledger 線上單
   // （`bridgeLedgerOrderToPos` / `printKitchenForLedgerOrder`）。
@@ -213,19 +245,43 @@ function buildPrintJobsForItems(options: {
   }
   if (options.items.length === 0) return [];
 
-  const makeJob = (printer: DevicePrinterConfig, items: OrderItem[]): PrintJob => ({
-    id: uid("print"),
-    orderId: options.orderId,
-    orderNo: options.orderNo,
-    tableName: options.tableName,
-    ticketType: "normal",
-    printerGroup: printer.zoneId ?? "",
-    printerId: printer.id,
-    printerName: printer.name,
-    items: items.map(toPrintItemLine),
-    status: resolvePrintJobStatus(true),
-    createdAt: timestamp,
-  });
+  const makeJob = (printer: DevicePrinterConfig, items: OrderItem[]): PrintJob => {
+    const source = options.sourceOrder;
+    // 模板快照 + content 只在有來源單時產生（同 `print-jobs.ts:buildKitchenPrintJobs` 對齊）。
+    // 冇來源單（理論上唔會發生）→ 保持舊行為（交畀通道 fallback），唔會 throw。
+    let content: Record<string, string> | undefined;
+    let template: PrintJob["template"];
+    if (source) {
+      const kitchenTemplate = loadPosLocalSettings().printTemplates.kitchen;
+      const storeName = loadBootstrapCache()?.storeName ?? "門店";
+      content = buildKitchenContent(source, {
+        storeName,
+        footerText: kitchenTemplate.footerText,
+        typeLabel: ticketTypeLabel("normal"),
+        time: kitchenTimeText(),
+        // ⚠️ 全單備註一定要帶（唔傳 → 廚房單永久冇全單備註，見 print-jobs.ts 同源註釋）。
+        orderNote: source.orderNote,
+      });
+      // 逐機計欄寬（58mm 機 32 字 / 80mm 機 48 字），三個出紙 repo 直接讀快照。
+      template = buildSnapshot("kitchen", kitchenTemplate, paperColumnsFromSize(printer.paperSize));
+    }
+    content = content ? { ...content, order_no: options.orderNo } : undefined;
+    return {
+      id: uid("print"),
+      orderId: options.orderId,
+      orderNo: options.orderNo,
+      tableName: options.tableName,
+      ticketType: "normal",
+      printerGroup: printer.zoneId ?? "",
+      printerId: printer.id,
+      printerName: printer.name,
+      items: items.map(toPrintItemLine),
+      ...(content ? { content } : {}),
+      ...(template ? { template } : {}),
+      status: resolvePrintJobStatus(true),
+      createdAt: timestamp,
+    };
+  };
 
   const jobs: PrintJob[] = [];
   const covered = new Set<number>();
@@ -270,13 +326,8 @@ function buildPrintJobs(order: PosOrder): PrintJob[] {
     orderNo: order.localOrderNo,
     tableName: order.tableName,
     items: order.items,
+    sourceOrder: order,
   });
-}
-
-function resolveQuickPickupTableName(order: LedgerOnlineOrder): string {
-  if (order.tabType === "pickup") return "自取";
-  if (order.tabType === "self_delivery") return "外賣";
-  return "堂食取餐";
 }
 
 function resolveLocalOrderNo(order: LedgerOnlineOrder): string {
@@ -290,20 +341,75 @@ function resolveLocalOrderNo(order: LedgerOnlineOrder): string {
   );
 }
 
-/** 接單後只送廚房打印，不建立本地 PosOrder。 */
+/**
+ * 註冊／更新一張線上單嘅本地投影 —— **兩個地方都要寫**：
+ *   1) in-memory `bridgedOrders`（今次 session 內最快，接單／補打／重打都用佢）；
+ *   2) store-scope 投影快取（`cacheLedgerPosOrder`）—— **reload 之後仍然搵得返**。
+ *
+ * 🔴 2026-09-12 修：舊寫法只有 (1)，而且**只有** `bridgeLedgerOrderToPos` /
+ * `resolveLedgerPosOrderForReceipt` 會寫；快餐面板／自動接單走嘅
+ * `printKitchenForLedgerOrder()` **完全冇寫** → 嗰批線上單嘅 print job
+ * 由建立一刻起就冇得「重打整單」（`findPosOrderForLedger()` 兩層都搵唔到，
+ * 而線上單又唔 mirror 入 POS DB）→ 用戶撳「重打整單」必彈
+ * 「線上訂單資料已不在本機快取」。所以統一收喺呢個函式，所有建立投影嘅路徑都要叫。
+ */
+function registerLedgerProjection(order: PosOrder): void {
+  if (!order.onlineOrderId) return;
+  bridgedOrders.set(order.onlineOrderId, order);
+  cacheLedgerPosOrder(order);
+}
+
+/** 線上單 → 落 sync queue（`ORDER_CREATED` / `ORDER_UPDATED`）＋ 即時 flush。 */
+function enqueueOrderEvent(order: PosOrder, isUpdate: boolean, action?: string): void {
+  if (typeof window === "undefined") return;
+  const event: QueueEvent = {
+    id: uid("evt"),
+    type: isUpdate ? "ORDER_UPDATED" : "ORDER_CREATED",
+    entityId: order.id,
+    payload: isUpdate ? { order, action: action ?? "table_assigned" } : { order },
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+  saveQueue(enqueueEvents(loadQueue(), withStoreScope([event])));
+  notifyQueueChanged();
+}
+
+/** 反查呢張線上單**本機已知**嘅枱（排位用；冇就 null）。 */
+function resolveAssignedTable(ledgerOrderId: string): { tableId: string; tableName: string } | null {
+  const row =
+    bridgedOrders.get(ledgerOrderId) ??
+    loadOrders().find((order) => order.id === `ledger-${ledgerOrderId}`);
+  if (row && row.tableId && row.tableId !== "counter") {
+    return { tableId: row.tableId, tableName: row.tableName };
+  }
+  return null;
+}
+
+/** 接單後只送廚房打印（**唔**建立本地 PosOrder；要入枱請用 `assignLedgerOrderToTable()`）。 */
 export async function printKitchenForLedgerOrder(
   ledgerOrder: LedgerOnlineOrder,
   detail?: LedgerOrderDetail,
 ): Promise<PrintJob[]> {
-  const bootstrap = loadBootstrapCache();
   const resolvedDetail = detail ?? (await getOrderDetail(ledgerOrder.id));
-  const items = mapDetailToOrderItems(resolvedDetail, bootstrap);
+  // 已排位嘅單再出單（例如改枱後補印）要沿用枱名，唔可以打返「堂食取餐」。
+  const assigned = resolveAssignedTable(ledgerOrder.id);
+  const projection = buildLedgerPosOrder(
+    ledgerOrder,
+    resolvedDetail,
+    assigned?.tableId,
+    assigned?.tableName,
+  );
   const printJobs = buildPrintJobsForItems({
-    orderId: `ledger-${ledgerOrder.id}`,
-    orderNo: resolveLocalOrderNo(ledgerOrder),
-    tableName: resolveQuickPickupTableName(ledgerOrder),
-    items,
+    orderId: projection.id,
+    orderNo: projection.localOrderNo,
+    tableName: projection.tableName,
+    items: projection.items,
+    sourceOrder: projection,
   });
+
+  // 🔴 一定要註冊投影（見 `registerLedgerProjection` 註釋）：唔做嘅話打印中心
+  // 「重打整單」永遠搵唔到來源單。
+  registerLedgerProjection(projection);
 
   // ⚠️ 必須用 `appendPrintJobsWithSync`：落本機 **＋** 推 `PRINT_JOB_CREATED` 上雲。
   //
@@ -327,8 +433,8 @@ export type BridgeLedgerOrderOptions = {
 /**
  * Ledger 線上單 → 本地 `PosOrder`（純資料轉換）。
  *
- * 唔產生任何打印任務、唔寫 localStorage／POS DB（契約 M3/M8），只係俾
- * 「廚房單」同「收據」呢啲本地 builder 用嘅共通輸入。
+ * 唔產生任何打印任務、唔寫 localStorage／POS DB，只係俾「廚房單」「收據」
+ * 同「排位」寫入 orders 呢幾條路徑用嘅共通輸入。
  */
 function buildLedgerPosOrder(
   ledgerOrder: LedgerOnlineOrder,
@@ -381,7 +487,7 @@ function buildLedgerPosOrder(
  *
  * 優先返 `bridgedOrders` 入面嗰份（自動補印／接單時已經建立，內容同原單一致）；
  * 冇（例如從未喺本機接過單、或 reload 後 in-memory map 已清）就即時由 Ledger
- * `get_order_detail` 重建一份並 cache 返入 map，等下一次補打唔使再打 API。
+ * `get_order_detail` 重建一份並註冊（map + 持久快取），等下一次補打唔使再打 API。
  *
  * 對應線下 `reprintReceiptForOrder` 嘅「由 storage 重讀權威版訂單」一步 ——
  * 線上單嘅權威係 Ledger，本地只係打印用嘅投影。
@@ -393,8 +499,9 @@ export async function resolveLedgerPosOrderForReceipt(
   const bridged = getBridgedPosOrder(ledgerOrder.id);
   if (bridged) return bridged;
   const resolvedDetail = detail ?? (await getOrderDetail(ledgerOrder.id));
-  const built = buildLedgerPosOrder(ledgerOrder, resolvedDetail);
-  bridgedOrders.set(ledgerOrder.id, built);
+  const assigned = resolveAssignedTable(ledgerOrder.id);
+  const built = buildLedgerPosOrder(ledgerOrder, resolvedDetail, assigned?.tableId, assigned?.tableName);
+  registerLedgerProjection(built);
   return built;
 }
 
@@ -412,9 +519,9 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
 
   const printJobs = buildPrintJobs(posOrder);
 
-  // 契約 M3 / M8：線上單唔 mirror 入 POS DB。只留 in-memory 表示（見檔頭 bridgedOrders），
-  // 唔 call saveOrders，唔 dispatch pos-orders-changed（POS 本機單唔含線上單）。
-  bridgedOrders.set(options.ledgerOrder.id, posOrder);
+  // 契約 M3 / M8：接單本身唔 mirror 入 POS DB（見檔頭 bridgedOrders），
+  // 所以要入枱／落本地單，只可以行 `assignLedgerOrderToTable()`（商家人手排位）。
+  registerLedgerProjection(posOrder);
 
   // 同 `printKitchenForLedgerOrder` 一致：**一定要上雲**，否則中繼 APK 永遠 claim 唔到
   // （見該函式嘅同源註釋）。`appendPrintJobsWithSync` 內部已處理去重 / tombstone 過濾 /
@@ -423,4 +530,123 @@ export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions):
   appendPrintJobsWithSync(printJobs);
 
   return { posOrder, printJobs };
+}
+
+export type AssignLedgerOrderTableOptions = {
+  ledgerOrder: LedgerOnlineOrder;
+  tableId: string;
+  tableName: string;
+  detail?: LedgerOrderDetail;
+};
+
+/**
+ * **「排位」**：將一張線上堂食單 assign 到桌台（2026-09-12 商家需求）。
+ *
+ * ## 為咩要寫入 `orders`（本地 + 雲端 `pos_orders.online_order_id`）
+ *
+ * 合約 M3/M8 原本「線上單唔 mirror 入 POS DB」，但系統其餘部分**早就預期**呢件事會發生：
+ *   - `isLocalOrTransferredDineIn()`（pos-order-filters）：「線上堂食單已轉到枱 → 當本地單管理」；
+ *   - 桌台佔用 `openOrders`（含 `paid`）→ `tableOrderMap` → 排位後枱面自動有單；
+ *   - 報表 `restaurant-daily-report` 已經用 `onlineOrderId` 去重（唔會雙計）；
+ *   - `api/pos/orders` 清除線下單已經 `.is("online_order_id", null)`（唔會誤刪）。
+ *
+ * ⇒ 只差「真正寫入」呢一步。**必須係 upsert（同一 Ledger 單永遠只有一張本地單）**，
+ * append 會令收入雙計。
+ *
+ * ## 錢嘅口徑（商家 2026-09-12 定案：全單轉本地管理）
+ *
+ *   - 線上已付 → `status: "paid"` ＋ `prepaidAmount = total`（＝已收足）。
+ *     結帳時 `payableBeforeMember = max(0, total − prepaid)`（pos-app:1908）
+ *     → **只收加菜差額**，收入仍然只認一次。
+ *   - 到店付款未收 → `status: "sent_to_kitchen"` ＋ `prepaidAmount = 0`（照正常堂食流程）。
+ *   - ⚠️ `prepaidAmount` 係**鎖死**嘅（見 pos-orders.ts `reopenPosOrder`）：
+ *     嗰筆錢喺 Ledger，POS 冇 RPC 可以沖正。
+ *
+ * @returns `created` = true 代表今次係新建立（之前未排過位／未入過本地單）
+ */
+export async function assignLedgerOrderToTable(options: AssignLedgerOrderTableOptions): Promise<{
+  posOrder: PosOrder;
+  printJobs: PrintJob[];
+  created: boolean;
+}> {
+  const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
+  const projection = buildLedgerPosOrder(
+    options.ledgerOrder,
+    detail,
+    options.tableId,
+    options.tableName,
+  );
+  return upsertLedgerLocalOrder(options.ledgerOrder, projection, "table_assigned");
+}
+
+export type AdoptLedgerOrderAsQuickCounterOptions = {
+  ledgerOrder: LedgerOnlineOrder;
+  detail?: LedgerOrderDetail;
+};
+
+/**
+ * **快餐模式專用**：將線上單採納成**本地快餐 counter 單**（2026-09-12 商家口徑）。
+ *
+ * 「快餐店有枱但唔會安排座位」——客人自己出餐口攞餐再搵位坐，所以：
+ *   - `tableId = "counter"`、`tableName` 依 `tabType`（自取 / 外賣 / 堂食）
+ *     —— 同收銀台自己落快餐單完全一樣（`quickTypeTableName()` 同一套命名）；
+ *   - 唔出「排位」掣；
+ *   - 入本地 `orders` 之後，快餐 strip 嘅「可取餐 → 完成」直接生效
+ *     （`updateQuickFulfillmentInStore()` 只查 `tableId === "counter"` + 狀態，冇 `onlineOrderId` 守門）。
+ *
+ * ⚠️ 本地「可取餐 / 完成」要**回寫 Ledger**（`syncOnlineQuickFulfillment()`），
+ * 否則會出現「本地已 settled、Ledger 仍 accepted」嘅雙狀態機。
+ *
+ * ⚠️ `isLocalOrTransferredDineIn()` 對 counter 單一律返 false → 呢啲單**唔會**入
+ * 「店內線下訂單」面板（快餐單由快餐 strip 管理，分工同本地快餐單一致）。
+ */
+export async function adoptLedgerOrderAsQuickCounter(
+  options: AdoptLedgerOrderAsQuickCounterOptions,
+): Promise<{ posOrder: PosOrder; printJobs: PrintJob[]; created: boolean }> {
+  const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
+  // 唔傳 tableId → resolveTableMeta 會落 counter + 自取／外賣／堂食。
+  const projection = buildLedgerPosOrder(options.ledgerOrder, detail);
+  return upsertLedgerLocalOrder(options.ledgerOrder, projection, "quick_counter_adopted");
+}
+
+/**
+ * 線上單 → 本地單嘅**唯一 upsert 入口**（排位 / 快餐採納共用）。
+ *
+ * 🔴 一定要 upsert：同一張 Ledger 單只可以有一張本地單，append 會令收入雙計
+ * （報表靠 `onlineOrderId` 去重，重複 id 就冇得去重）。
+ */
+async function upsertLedgerLocalOrder(
+  ledgerOrder: LedgerOnlineOrder,
+  projection: PosOrder,
+  action: string,
+): Promise<{ posOrder: PosOrder; printJobs: PrintJob[]; created: boolean }> {
+  const paid = String(ledgerOrder.paymentStatus ?? "").toLowerCase() === "paid";
+  const nowIso = new Date().toISOString();
+
+  const existing = loadOrders();
+  const index = existing.findIndex((row) => row.id === projection.id);
+  const localOrder: PosOrder = {
+    ...projection,
+    status: paid ? "paid" : "sent_to_kitchen",
+    prepaidAmount: paid ? (projection.total ?? 0) : 0,
+    clientUpdatedAt: nowIso,
+    updatedAt: nowIso,
+    // 改枱 / 重複採納要保留原本建立時間（單據／排序都靠佢）。
+    ...(index >= 0 ? { createdAt: existing[index].createdAt } : {}),
+  };
+
+  const nextOrders =
+    index >= 0
+      ? existing.map((row, i) => (i === index ? localOrder : row))
+      : [localOrder, ...existing];
+  // saveOrders() 會 dispatch `pos-orders-changed` → pos-app / 線下訂單面板 / 桌台總覽即時刷新。
+  saveOrders(nextOrders);
+  registerLedgerProjection(localOrder);
+  enqueueOrderEvent(localOrder, index >= 0, action);
+
+  // 補印廚房單（帶枱名）：唔做嘅話廚房只知有單、唔知送去邊張枱。
+  const printJobs = buildPrintJobs(localOrder);
+  appendPrintJobsWithSync(printJobs);
+
+  return { posOrder: localOrder, printJobs, created: index < 0 };
 }
