@@ -7,6 +7,11 @@
 - 🔴 實例：`orders-hub.tsx` `dateSelection = {key,custom}` inline（已改 `useMemo`）；子元件（`local-orders-panel`／`online-orders`）已加**內容簽名**守衛（`length|id 序列`）做第二道防線。
 - ⚠️ 呢類 bug **tsc／eslint／build／node --test 全綠**（冇 React component 測試環境）→ 只能 code review 或實機。
 
+## 枱位真源（2026-09-13，同一坑中過兩次）
+- 🔴 **任何「列枱／選枱」UI 一律用 `buildDisplayFloors(bootstrapTables, localSettings.floors)`**，**唔可以**只讀 `localSettings.floors`（本機可能淨係出廠預設 `1樓 A01-A03 / 2樓 B01-B02`）。
+- 🔴 中過兩次：2026-09-12 `pos-app.tsx`、2026-09-13 `online-orders.tsx`（`/orders` 頁）。
+- 🔴 加新列枱 UI 前**一定要 grep `localSettings.floors`** 確認冇漏。模組：`src/lib/pos/display-floors.ts`（含 `loadAssignableTables()`）。
+
 ## 快餐（counter）單：兩維狀態
 - 出餐階段唯一真源 `isQuickOrderReady(o)`（＝`fulfillmentStatus==="ready"`），**唔可以**夾 `status==="paid"`（有路徑停在 `sent_to_kitchen`）。付款 `getPaymentBadge()` ＋出餐狀態**雙標籤並列**。
 - 按鈕：可取餐 → 完成（`markOrderCompleted` → `settled`）；列表／彈窗共用 `QuickOrderActions`。狀態唔准靜默。

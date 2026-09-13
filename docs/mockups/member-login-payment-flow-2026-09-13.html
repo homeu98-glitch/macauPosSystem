@@ -1,9 +1,9 @@
-<!doctype html>
-<html lang="zh-Hant">
+<!DOCTYPE html>
+<html lang="zh-HK">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>確認稿 · Kiosk／掃碼下單流程（含會員登入與付款）2026-09-13</title>
+<title>確認稿 v2 · 會員登入與付款流程（Kiosk 平板 + 掃碼手機 · 堂食 + 快餐）</title>
 <style>
   :root{
     --orange-500:#f97316; --orange-600:#ea580c; --orange-200:#fed7aa; --orange-50:#fff7ed;
@@ -25,7 +25,7 @@
   }
 
   /* ══ 評審工具列（唔屬產品介面）════════════════════ */
-  .review{max-width:1180px;margin:0 auto;padding:18px 16px 0}
+  .review{max-width:1220px;margin:0 auto;padding:18px 16px 0}
   .rtitle{font-size:13px;font-weight:700;letter-spacing:.08em;color:#94a3b8}
   .rsub{font-size:13px;color:#cbd5e1;margin-top:6px;line-height:1.65}
   .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
@@ -44,15 +44,15 @@
   .rnote code{background:#0f172a;padding:1px 5px;border-radius:4px;font-size:12px;color:#93c5fd}
 
   /* ══ 固定畫布（像素穩定，唔隨視窗走位）════════════ */
-  .stage{max-width:1180px;margin:14px auto 8px;position:relative;overflow:hidden;border-radius:20px}
+  .stage{max-width:1220px;margin:14px auto 8px;position:relative;overflow:hidden;border-radius:20px}
   .canvas{
-    width:1180px;height:900px;position:absolute;top:0;left:0;
+    width:1220px;height:940px;position:absolute;top:0;left:0;
     transform-origin:top left;overflow:hidden;background:#0b1220;display:block;
   }
-  .screenwrap{display:none;width:1180px;height:900px;position:absolute;top:0;left:0}
+  .screenwrap{display:none;width:1220px;height:940px;position:absolute;top:0;left:0}
   .screenwrap.on{display:block}
 
-  /* ══ 手機框（掃碼／kiosk 共用外觀）════════════════ */
+  /* ══ 手機框 ════════════════════════════════════ */
   .phone{
     position:absolute;width:390px;height:790px;border-radius:34px;
     background:#0b1220;border:1px solid #24334d;overflow:hidden;
@@ -69,7 +69,21 @@
   .pbody{flex:1;min-height:0;overflow-y:auto;padding:0 18px 18px}
   .pbody::-webkit-scrollbar{width:0}
 
-  /* 深色底（沿用真實掃碼／登入系風格） */
+  /* ══ 平板框（Kiosk 實體）════════════════════════ */
+  .tablet{
+    position:absolute;width:1080px;height:700px;border-radius:20px;
+    background:#f8fafc;border:11px solid #0b1220;overflow:hidden;
+    display:flex;flex-direction:column;
+    box-shadow:0 22px 60px rgba(0,0,0,.55);
+  }
+  .tablet.dark{background:#0b1220;border-color:#24334d}
+  .tstatus{
+    flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 18px;font-size:11px;font-weight:700;background:#0f172a;color:#cbd5e1;
+  }
+  .tstatus .r{display:flex;align-items:center;gap:14px}
+
+  /* ══ 深色全屏底（Landing / 登入）════════════════ */
   .darkbg{position:relative;flex:1;min-height:0;overflow:hidden;background:#0b1220;display:flex;flex-direction:column}
   .blob{position:absolute;border-radius:999px;filter:blur(64px);pointer-events:none}
   .b1{width:340px;height:340px;left:-110px;top:-40px;background:rgba(168,85,247,.60)}
@@ -77,21 +91,27 @@
   .b3{width:360px;height:360px;left:25%;bottom:-160px;background:rgba(251,191,36,.40)}
   .veil{position:absolute;inset:0;background:rgba(2,6,23,.20);pointer-events:none}
   .layer{position:relative;z-index:2;flex:1;min-height:0;display:flex;flex-direction:column;padding:0 18px 18px}
+  .layer.land{justify-content:center;align-items:center;padding:0 44px 30px}
+  .landgrid{display:grid;grid-template-columns:1fr 1fr;gap:34px;width:100%;max-width:820px;margin-top:6px}
 
-  /* 淺色底（下單頁沿用真實 scan-order-page 風格） */
+  /* ══ 淺色底（下單頁）════════════════════════════ */
   .lightbg{flex:1;min-height:0;display:flex;flex-direction:column;background:#f8fafc}
 
   /* ══ 通用元件 ═══════════════════════════════════ */
   .hero{text-align:center;padding:54px 6px 0}
+  .hero.tab{padding:6px 6px 0}
   .logo{
     width:74px;height:74px;margin:0 auto 20px;border-radius:22px;
     background:linear-gradient(135deg,var(--orange-500),#fbbf24);
     display:flex;align-items:center;justify-content:center;font-size:34px;
     box-shadow:0 10px 30px rgba(249,115,22,.35);
   }
+  .hero.tab .logo{width:64px;height:64px;font-size:29px;margin-bottom:15px}
   .h1{font-size:23px;font-weight:800;color:#fff;line-height:1.42;letter-spacing:.01em}
+  .hero.tab .h1{font-size:34px;letter-spacing:.02em}
   .h1 .em{color:#fdba74}
   .sub{font-size:13px;color:#94a3b8;margin-top:10px;line-height:1.65}
+  .hero.tab .sub{font-size:15px;margin-top:12px}
   .store{
     display:inline-flex;align-items:center;gap:7px;margin-top:18px;
     padding:7px 14px;border-radius:999px;background:rgba(148,163,184,.14);
@@ -99,27 +119,25 @@
   }
   .dot{width:7px;height:7px;border-radius:50%;background:var(--emerald-500)}
 
-  /* 大按鈕（觸控 ≥ 56px） */
   .btnBig{
     display:flex;align-items:center;justify-content:center;gap:9px;
     min-height:58px;border-radius:16px;font-size:16.5px;font-weight:800;
     border:1px solid transparent;cursor:pointer;text-align:center;
     padding:0 16px;width:100%;line-height:1.3;
   }
+  .btnTab{min-height:76px;font-size:21px;border-radius:18px;gap:12px}
   .btnPrimary{background:var(--orange-500);color:#fff;border-color:var(--orange-500);
     box-shadow:0 8px 22px rgba(249,115,22,.32)}
   .btnGhost{background:rgba(148,163,184,.12);color:#e2e8f0;border-color:rgba(148,163,184,.35)}
   .btnGhostLight{background:#fff;color:#0f172a;border-color:#cbd5e1}
   .btnGreen{background:var(--emerald-500);color:#fff;border-color:var(--emerald-500);
     box-shadow:0 8px 22px rgba(16,185,129,.30)}
-  .btnSlate{background:#0f172a;color:#fff;border-color:#0f172a}
   .btnDisabled{background:#e2e8f0;color:#94a3b8;border-color:#e2e8f0;box-shadow:none;cursor:not-allowed}
   .btnSm{min-height:44px;border-radius:12px;font-size:14px;font-weight:700}
 
   .stack{display:flex;flex-direction:column;gap:11px;margin-top:26px}
   .hint{margin-top:14px;font-size:11.5px;color:#94a3b8;text-align:center;line-height:1.6}
 
-  /* 表單 */
   .field{margin-top:16px}
   .label{font-size:12.5px;font-weight:700;color:#cbd5e1;margin-bottom:7px;display:block}
   .input{
@@ -127,23 +145,22 @@
     font:inherit;font-size:17px;font-weight:700;letter-spacing:.06em;
     background:rgba(15,23,42,.72);border:1.5px solid #334155;color:#f1f5f9;
   }
+  .input.tab{min-height:64px;font-size:21px;border-radius:16px}
   .input.light{background:#fff;border-color:#cbd5e1;color:#0f172a}
   .input::placeholder{color:#64748b;font-weight:600;letter-spacing:0}
   .inputErr{border-color:var(--rose-500) !important}
   .err{display:flex;gap:6px;margin-top:8px;font-size:12px;color:#fda4af;line-height:1.6}
 
-  /* 卡片 */
   .card{background:#fff;border:1px solid var(--slate-200);border-radius:15px;padding:14px}
   .cardDark{background:rgba(15,23,42,.72);border:1px solid #334155;border-radius:15px;padding:14px}
 
-  /* 付款方式選項 */
   .opt{
     display:flex;align-items:flex-start;gap:12px;
     border-radius:15px;padding:15px 14px;border:2px solid var(--slate-200);
     background:#fff;cursor:pointer;text-align:left;width:100%;
   }
   .opt.on{border-color:var(--orange-500);background:var(--orange-50)}
-  .opt.dis{opacity:.5;cursor:not-allowed}
+  .opt.dis{opacity:.55;cursor:not-allowed}
   .opt .ic{
     flex:none;width:42px;height:42px;border-radius:12px;
     display:flex;align-items:center;justify-content:center;font-size:20px;
@@ -159,7 +176,6 @@
   .opt.on .radio{border-color:var(--orange-500);background:
     radial-gradient(circle,var(--orange-500) 0 5px,transparent 5px)}
 
-  /* 金額列 */
   .amtRow{display:flex;align-items:center;justify-content:space-between;font-size:13.5px;padding:8px 0}
   .amtRow .k{color:var(--slate-500)}
   .amtRow .v{font-weight:700;color:#0f172a}
@@ -167,7 +183,6 @@
   .amtTotal .v{font-size:20px;font-weight:900;color:var(--orange-600)}
   .divider{height:1px;background:var(--slate-200);margin:6px 0}
 
-  /* 標籤 */
   .pill{
     display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;
     font-size:11px;font-weight:800;line-height:1.5;
@@ -177,49 +192,91 @@
   .pillSlate{background:var(--slate-100);color:var(--slate-600)}
   .pillRose{background:var(--rose-50);color:#e11d48}
   .pillOrange{background:var(--orange-50);color:var(--orange-600)}
+  .pillSky{background:var(--sky-50);color:#0284c7}
 
-  /* 步驟指示 */
-  .steps{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px}
-  .sd{width:7px;height:7px;border-radius:50%;background:rgba(148,163,184,.30)}
-  .sd.on{background:var(--orange-500);width:22px;border-radius:4px}
-
-  /* 頂欄（下單頁） */
   .topbar{
     flex:none;background:#fff;border-bottom:1px solid var(--slate-200);
     padding:12px 16px;display:flex;align-items:center;gap:10px;
   }
+  .topbar.tab{padding:14px 22px}
   .tbtitle{font-size:15px;font-weight:800;color:#0f172a;line-height:1.3}
+  .topbar.tab .tbtitle{font-size:20px}
   .tbmeta{font-size:11.5px;color:var(--slate-500);margin-top:2px}
+  .topbar.tab .tbmeta{font-size:13.5px}
   .avatar{
     flex:none;width:34px;height:34px;border-radius:50%;background:var(--emerald-50);
     color:var(--emerald-600);display:flex;align-items:center;justify-content:center;
     font-size:14px;font-weight:800;margin-left:auto;border:1px solid #a7f3d0;
   }
+  .avatar.tab{width:46px;height:46px;font-size:18px}
 
-  /* 菜單項 */
+  .countdown{
+    display:inline-flex;align-items:center;gap:7px;flex:none;
+    padding:7px 13px;border-radius:999px;font-size:12px;font-weight:800;
+    background:var(--amber-50);border:1px solid #fde68a;color:var(--amber-600);
+  }
+  .countdown.tab{padding:9px 16px;font-size:14.5px}
+  .countdown.warn{background:var(--rose-50);border-color:#fecdd3;color:#e11d48}
+  .countdown .ring{
+    width:15px;height:15px;border-radius:50%;
+    border:2.5px solid currentColor;border-top-color:transparent;
+  }
+  .countdown.tab .ring{width:18px;height:18px}
+
   .dish{
     display:flex;gap:11px;padding:12px;background:#fff;border:1px solid var(--slate-200);
     border-radius:14px;margin-bottom:9px;
   }
+  .dish.tab{padding:15px;border-radius:16px;margin-bottom:12px;gap:14px}
   .thumb{
     flex:none;width:56px;height:56px;border-radius:11px;background:var(--slate-100);
     display:flex;align-items:center;justify-content:center;font-size:24px;
   }
+  .thumb.tab{width:74px;height:74px;font-size:33px;border-radius:14px}
   .dishName{font-size:14.5px;font-weight:800;color:#0f172a;line-height:1.35}
+  .dish.tab .dishName{font-size:18.5px}
   .dishSub{font-size:11.5px;color:var(--slate-500);margin-top:3px}
+  .dish.tab .dishSub{font-size:13.5px}
   .dishPrice{font-size:14.5px;font-weight:900;color:var(--orange-600);margin-top:5px}
+  .dish.tab .dishPrice{font-size:18px}
 
-  /* 底部結帳條 */
   .bottombar{
     flex:none;background:#fff;border-top:1px solid var(--slate-200);
     padding:12px 16px calc(12px + env(safe-area-inset-bottom));
   }
+  .bottombar.tab{padding:16px 22px}
 
-  /* ══ 標註（唔屬產品介面）════════════════════════ */
+  /* ══ 平板 3 欄點餐佈局 ═══════════════════════════ */
+  .kcols{flex:1;min-height:0;display:flex}
+  .knav{
+    width:170px;flex:none;background:#fff;border-right:1px solid var(--slate-200);
+    padding:14px 12px;overflow-y:auto;
+  }
+  .knav button{
+    width:100%;text-align:left;font:inherit;font-size:15px;font-weight:700;cursor:pointer;
+    padding:14px 14px;border-radius:12px;border:1px solid transparent;
+    background:var(--slate-100);color:var(--slate-700);margin-bottom:9px;
+  }
+  .knav button.on{background:var(--orange-500);color:#fff;border-color:var(--orange-500)}
+  .kmenu{flex:1;min-width:0;overflow-y:auto;padding:16px 20px}
+  .kmenu .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .kmenu .grid2 .dish{margin-bottom:0}
+  .kcart{
+    width:330px;flex:none;background:#fff;border-left:1px solid var(--slate-200);
+    display:flex;flex-direction:column;
+  }
+  .kcart .ch{padding:15px 18px;border-bottom:1px solid var(--slate-200);font-size:16px;font-weight:800;color:#0f172a}
+  .kcart .cb{flex:1;min-height:0;overflow-y:auto;padding:12px 18px}
+  .kcart .cf{padding:15px 18px;border-top:1px solid var(--slate-200);background:#f8fafc}
+  .cline{display:flex;gap:10px;padding:11px 0;border-bottom:1px dashed var(--slate-200)}
+  .cline .n{font-size:13.5px;font-weight:700;color:#0f172a;flex:1;min-width:0}
+  .cline .q{font-size:13px;color:var(--slate-500);font-weight:700}
+  .cline .p{font-size:13.5px;font-weight:800;color:var(--orange-600);white-space:nowrap}
+
   .anno{
     position:absolute;z-index:9;border-radius:12px;padding:11px 13px;
-    background:rgba(15,23,42,.90);border:1px dashed rgba(245,158,11,.75);
-    font-size:11.5px;line-height:1.65;color:#e2e8f0;max-width:270px;
+    background:rgba(15,23,42,.92);border:1px dashed rgba(245,158,11,.75);
+    font-size:11.5px;line-height:1.65;color:#e2e8f0;max-width:280px;
   }
   .anno b{color:#fdba74}
   .anno .no{display:inline-flex;width:17px;height:17px;border-radius:5px;background:var(--amber-500);
@@ -229,16 +286,23 @@
     letter-spacing:.02em;
   }
   .cap .sn{color:#94a3b8;font-weight:700;font-size:11.5px;display:block;margin-top:3px}
+  .cap.tag{
+    display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:8px;
+    background:rgba(249,115,22,.14);border:1px solid rgba(249,115,22,.45);
+  }
+  .cap.tag .tg{
+    font-size:10.5px;font-weight:900;padding:2px 7px;border-radius:5px;
+    background:var(--orange-500);color:#fff;letter-spacing:.03em;
+  }
+  .cap.tag .tg.sky{background:var(--sky-500)}
 
-  /* ══ 流程圖（SVG 容器）═════════════════════════ */
-  .flowwrap{max-width:1180px;margin:8px auto 40px;padding:0 16px}
+  .flowwrap{max-width:1220px;margin:8px auto 40px;padding:0 16px}
   .flowcard{background:#0f172a;border:1px solid #24334d;border-radius:18px;padding:18px;overflow-x:auto}
-  .flowcard svg{display:block;min-width:1140px}
+  .flowcard svg{display:block;min-width:1180px}
   .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:12px;color:#94a3b8}
   .legend i{display:inline-block;width:12px;height:12px;border-radius:4px;margin-right:6px;vertical-align:-2px}
 
-  /* ══ Wireframe 文字描述區 ══════════════════════ */
-  .doc{max-width:1180px;margin:0 auto 60px;padding:0 16px}
+  .doc{max-width:1220px;margin:0 auto 60px;padding:0 16px}
   .doc h2{font-size:16px;font-weight:800;color:#fdba74;margin:34px 0 12px;
     padding-bottom:9px;border-bottom:1px solid #24334d}
   .doc h3{font-size:14px;font-weight:800;color:#e2e8f0;margin:20px 0 9px}
@@ -256,29 +320,32 @@
   .okbox{background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.38);
     border-radius:12px;padding:13px 15px;margin:14px 0}
   .okbox .wt{font-size:13px;font-weight:800;color:#6ee7b7;margin-bottom:7px}
+  .newbox{background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.38);
+    border-radius:12px;padding:13px 15px;margin:14px 0}
+  .newbox .wt{font-size:13px;font-weight:800;color:#7dd3fc;margin-bottom:7px}
 </style>
 </head>
 <body>
 
-<!-- ═══════════ 評審工具列 ═══════════ -->
 <div class="review">
-  <div class="rtitle">確認稿 · Kiosk／掃碼下單流程（含會員登入與付款）</div>
+  <div class="rtitle">確認稿 v2 · 會員登入與付款流程</div>
   <div class="rsub">
-    2026-09-13 · 需求：① Landing 問「你是會員嗎？」② 非會員 → 只能到前台支付
-    ③ 會員 → 帳號 + PIN 登入 ④ 會員可選「扣餘額」或「到前台支付」
-    <br>⚠️ <b>本稿只係確認稿，未寫任何程式碼。</b>
+    2026-09-13 · <b>v2 新增</b>：① 快餐（quick）分支全線 ② Kiosk 平板版型（實體係平板，唔係手機）
+    ③ 右上角 60 秒閒置倒數<br>
+    <b>已拍板</b>：① 非會員直接隱藏餘額 ② S1 兩掣同等份量 ③ Kiosk 60s 清空（右上角倒數，任何動作重置）
+    ④ 堂食不倒數 · Kiosk 快餐 15s ⑤ 綠「已結帳」需店員清枱<br>
+    ⚠️ <b>本稿只係確認稿，未寫任何程式碼。</b>
   </div>
   <div class="tabs" id="tabs"></div>
   <div class="rnote" id="rnote"></div>
 </div>
 
-<!-- ═══════════ 畫布 ═══════════ -->
 <div class="stage" id="stage">
   <div class="canvas" id="canvas">
 
-    <!-- ─────────── S1 Landing：你是會員嗎？ ─────────── -->
+    <!-- ══════════════ S1 · Landing（掃碼手機） ══════════════ -->
     <div class="screenwrap on" id="S1">
-      <div class="phone" style="left:395px;top:52px">
+      <div class="phone" style="left:410px;top:60px">
         <div class="pstatus"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="darkbg">
           <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
@@ -298,306 +365,407 @@
           </div>
         </div>
       </div>
-      <div class="anno" style="left:60px;top:120px">
+      <div class="anno" style="left:60px;top:130px">
         <span class="no">1</span><b>Landing 唯一入口</b><br>
-        全部落單流程都由呢一頁開始。兩個選項<b>同等份量</b>（皆 58px 高），
-        避免「非會員」被當成次要路徑。
+        全部落單流程都由呢一頁開始。兩個選項<b>同等份量</b>（皆 58px 高）—
+        已拍板 ✅，避免「非會員」被當成次要路徑。
       </div>
-      <div class="anno" style="left:60px;top:330px">
-        <span class="no">2</span><b>店名 + 枱號</b><br>
-        掃碼：由 URL <code>?store=</code> / <code>?tableId=</code> 取得。<br>
-        Kiosk：由裝置綁定取得（無枱號則顯示「快餐」）。
+      <div class="anno" style="left:60px;top:350px">
+        <span class="no">2</span><b>枱號 / 快餐一眼分清</b><br>
+        堂食：<code>?tableId=A01</code> → 顯示「堂食 A01」<br>
+        快餐：<code>/quick</code> → 顯示「快餐 · 自取」
       </div>
-      <div class="anno" style="left:60px;top:520px">
+      <div class="anno" style="left:60px;top:556px">
         <span class="no">3</span><b>「是」→ S2 登入</b><br>
-        「不是」→ <b>直接跳 S4</b>（跳過登入，<b>沒有</b>扣餘額選項）。
+        「不是」→ <b>直接跳 S4</b>（跳過登入，<b>冇</b>扣餘額選項）。
       </div>
-      <div class="anno" style="left:835px;top:120px">
+      <div class="anno" style="left:855px;top:130px">
         <span class="no">4</span><b>唔會預先探測</b><br>
         唔會問電話號碼再查註冊狀態 —— 契約 §4.5.3 明文禁止
         「先查電話再註冊」嘅枚舉行為。
       </div>
-      <div class="cap" style="left:395px;top:24px">S1 · Landing<span class="sn">你是會員嗎？</span></div>
+      <div class="cap" style="left:410px;top:30px">S1 · Landing<span class="sn">你是會員嗎？（掃碼手機）</span></div>
     </div>
 
-    <!-- ─────────── S2 會員登入 ─────────── -->
+    <!-- ══════════════ S1T · Landing（Kiosk 平板） ══════════════ -->
+    <div class="screenwrap" id="S1T">
+      <div class="tablet dark" style="left:60px;top:112px">
+        <div class="tstatus">
+          <span>澳門茶餐廳 · 自助點餐機</span>
+          <span class="r">
+            <span>9:41</span>
+            <span class="countdown"><span class="ring"></span>59s</span>
+          </span>
+        </div>
+        <div class="darkbg">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+          <div class="veil"></div>
+          <div class="layer land">
+            <div class="hero tab" style="text-align:center">
+              <div class="logo">🍽</div>
+              <div class="h1">你是會員嗎？</div>
+              <div class="sub">使用會員儲值餘額付款，結帳更快；非會員亦可直接點餐，到櫃檯付款</div>
+              <div class="store"><span class="dot"></span>自助點餐機 · 快餐（自取）</div>
+            </div>
+            <div class="landgrid">
+              <button class="btnBig btnTab btnPrimary">👤　是，我是會員</button>
+              <button class="btnBig btnTab btnGhost">🙋　不是，直接點餐</button>
+            </div>
+            <div class="hint" style="margin-top:26px;font-size:13px">
+              會員登入後可查看儲值餘額並直接扣款　·　忘記 PIN？請到櫃檯由店員協助
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:20px">
+        <span class="no">1</span><b>平板係橫向（Landscape）</b><br>
+        實體為 10.1″～15″ 平板，唔係手機。內容置中、雙欄並排，
+        觸控目標全部加大（58px → <b>76px</b>）。
+      </div>
+      <div class="anno" style="left:60px;top:846px">
+        <span class="no">2</span><b>🔴 右上角 60 秒倒數</b><br>
+        已拍板 ✅。任何動作（觸控 / 捲動 / 落單）立即重置；
+        歸零 → <b>清空會員狀態並彈回本頁</b>。
+      </div>
+      <div class="anno" style="left:890px;top:20px">
+        <span class="no">3</span><b>Kiosk 只做快餐</b><br>
+        現行程式 <code>mode = variant==="scan" &amp;&amp; tableId ? "dine_in" : "quick"</code>
+        → <code>/order</code> <b>永遠 quick</b>。所以 Kiosk 唔會問枱號。
+      </div>
+      <div class="cap tag" style="left:60px;top:74px">
+        <span class="tg">平板</span>S1T · Landing<span class="sn">Kiosk 自助點餐機（橫向）</span>
+      </div>
+    </div>
+
+    <!-- ══════════════ S2 · 會員登入（掃碼手機） ══════════════ -->
     <div class="screenwrap" id="S2">
-      <div class="phone" style="left:395px;top:52px">
+      <div class="phone" style="left:410px;top:60px">
         <div class="pstatus"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="darkbg">
           <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
           <div class="veil"></div>
           <div class="layer">
-            <div style="padding-top:14px">
-              <button class="btnBig btnGhost btnSm" style="width:auto;padding:0 14px">← 返回</button>
-            </div>
-            <div class="hero" style="padding-top:26px">
-              <div class="logo" style="width:60px;height:60px;font-size:27px;border-radius:18px">🔐</div>
-              <div class="h1" style="font-size:20px">會員登入</div>
-              <div class="sub">請輸入會員帳號與 PIN 碼</div>
+            <div class="hero" style="padding-top:34px">
+              <div class="logo">🔐</div>
+              <div class="h1">會員登入</div>
+              <div class="sub">請輸入會員帳號及 PIN 碼</div>
             </div>
             <div class="field">
               <label class="label">會員帳號（手機號碼）</label>
-              <input class="input" placeholder="8 位手機號碼" value="6000 0003" readonly>
+              <input class="input" value="61234567" readonly>
             </div>
             <div class="field">
-              <label class="label">PIN 碼</label>
-              <input class="input" placeholder="••••" value="••••" readonly>
+              <label class="label">PIN 碼（4 位數字）</label>
+              <input class="input" value="••••" readonly>
             </div>
-            <div class="stack" style="margin-top:20px;gap:10px">
+            <div class="stack" style="margin-top:22px">
               <button class="btnBig btnPrimary">登入並繼續點餐</button>
-              <button class="btnBig btnGhost btnSm">忘記 PIN？到前台處理</button>
+              <button class="btnBig btnGhost" style="min-height:46px;font-size:14px">跳過，直接點餐</button>
             </div>
-            <div class="hint">登入後 3 分鐘內再次付款可免 PIN 再確認<br>（詳見流程圖註 A）</div>
+            <div class="hint">PIN 碼由店員發出，如需協助請到前台<br>連續 5 次錯誤將鎖定 15 分鐘</div>
           </div>
         </div>
       </div>
       <div class="anno" style="left:60px;top:150px">
-        <span class="no">5</span><b>帳號 = 8 位手機號碼</b><br>
-        契約 §4.5.1：正規化後 <code>/^\d{8}$/</code>，<b>不加 +853</b>。
-        純數字鍵盤（<code>inputMode=numeric</code>）。
+        <span class="no">1</span><b>帳號格式</b><br>
+        契約 §4.5.1：normalize 後 <code>/^\d{8}$/</code>（澳門 8 位手機，<b>不加 +853</b>）。
       </div>
-      <div class="anno" style="left:60px;top:330px">
-        <span class="no">6</span><b>PIN = 4 位數字</b><br>
-        <b>唔會</b>經過手機端運算 —— PIN 只傳去 POS 伺服器，
-        由伺服器用 <code>AUTH_PIN_PEPPER</code> 派生 Auth 密碼（§4.5.1）。
+      <div class="anno" style="left:60px;top:352px">
+        <span class="no">2</span><b>🔴 PIN 唔經前端運算</b><br>
+        只原樣傳去 POS 伺服器派生，前端唔 hash、唔比對、唔存。
       </div>
-      <div class="anno" style="left:835px;top:150px">
-        <span class="no">7</span><b>錯誤處理（重要）</b><br>
-        「帳號不存在／未設 PIN／PIN 錯」<b>統一顯示「帳號或 PIN 不正確」</b>
-        —— 避免帳號枚舉（§4.5.2）。<br>
-        連續失敗 5 次鎖 15 分鐘（電話維度，跨 IP）。
+      <div class="anno" style="left:60px;top:556px">
+        <span class="no">3</span><b>一定要有逃生門</b><br>
+        「跳過，直接點餐」＝ 回落非會員路徑。唔可以令人卡死喺登入頁。
       </div>
-      <div class="anno" style="left:835px;top:430px">
-        <span class="no">8</span><b>失敗 3 種畫面態</b><br>
-        ① 一般錯誤 → 紅框 + 錯誤訊息<br>
-        ② 鎖定中 → 掣變灰 + 倒數<br>
-        ③ 網絡失敗 → 底部橫幅 + 可重試
+      <div class="anno" style="left:855px;top:150px">
+        <span class="no">4</span><b>錯誤一律統一文案</b><br>
+        「帳號或 PIN 不正確」—— 唔可以講「冇此帳號」/「PIN 錯」，
+        否則可枚舉會員。
       </div>
-      <div class="cap" style="left:395px;top:24px">S2 · 會員登入<span class="sn">帳號 + PIN</span></div>
+      <div class="cap" style="left:410px;top:30px">S2 · 會員登入<span class="sn">帳號 + PIN</span></div>
     </div>
 
-    <!-- ─────────── S3 登入失敗／鎖定（態） ─────────── -->
+    <!-- ══════════════ S2T · 會員登入（Kiosk 平板） ══════════════ -->
+    <div class="screenwrap" id="S2T">
+      <div class="tablet dark" style="left:60px;top:112px">
+        <div class="tstatus">
+          <span>澳門茶餐廳 · 自助點餐機</span>
+          <span class="r">
+            <span>9:41</span>
+            <span class="countdown"><span class="ring"></span>48s</span>
+          </span>
+        </div>
+        <div class="darkbg">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+          <div class="veil"></div>
+          <div class="layer land">
+            <div style="width:100%;max-width:560px">
+              <div class="hero tab" style="text-align:center;padding-top:0">
+                <div class="logo">🔐</div>
+                <div class="h1" style="font-size:30px">會員登入</div>
+                <div class="sub">請輸入會員帳號及 PIN 碼</div>
+              </div>
+              <div class="field" style="margin-top:26px">
+                <label class="label" style="font-size:14.5px">會員帳號（手機號碼）</label>
+                <input class="input tab" value="61234567" readonly>
+              </div>
+              <div class="field" style="margin-top:20px">
+                <label class="label" style="font-size:14.5px">PIN 碼（4 位數字）</label>
+                <input class="input tab" value="••••" readonly>
+              </div>
+              <div style="display:flex;gap:16px;margin-top:30px">
+                <button class="btnBig btnTab btnGhost" style="flex:1;font-size:17px">跳過，直接點餐</button>
+                <button class="btnBig btnTab btnPrimary" style="flex:1.6">登入並繼續點餐</button>
+              </div>
+              <div class="hint" style="margin-top:18px;font-size:13px">
+                平板會彈出 <b>螢幕數字鍵盤</b>（唔用系統鍵盤）· 連續 5 次錯誤鎖定 15 分鐘
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:20px">
+        <span class="no">1</span><b>平板專屬：螢幕數字鍵盤</b><br>
+        自助機唔用系統鍵盤 —— 客人用完唔會有鍵盤殘留、亦唔怕被切換輸入法。
+        帳號鍵盤同 PIN 鍵盤分開。
+      </div>
+      <div class="anno" style="left:60px;top:846px">
+        <span class="no">2</span><b>倒數繼續行</b><br>
+        輸入期間每撳一下都重置 60s。呢度顯示 48s（輸入中）。
+      </div>
+      <div class="cap tag" style="left:60px;top:74px">
+        <span class="tg">平板</span>S2T · 會員登入<span class="sn">Kiosk 平板（螢幕鍵盤）</span>
+      </div>
+    </div>
+
+    <!-- ══════════════ S3 · 登入失敗 / 鎖定 ══════════════ -->
     <div class="screenwrap" id="S3">
-      <div class="phone" style="left:250px;top:52px">
+      <div class="phone" style="left:230px;top:60px">
         <div class="pstatus"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="darkbg">
           <div class="blob b1"></div><div class="blob b2"></div>
           <div class="veil"></div>
           <div class="layer">
-            <div style="padding-top:14px">
-              <button class="btnBig btnGhost btnSm" style="width:auto;padding:0 14px">← 返回</button>
-            </div>
-            <div class="hero" style="padding-top:26px">
-              <div class="logo" style="width:60px;height:60px;font-size:27px;border-radius:18px">🔐</div>
-              <div class="h1" style="font-size:20px">會員登入</div>
+            <div class="hero" style="padding-top:34px">
+              <div class="logo" style="background:linear-gradient(135deg,#f43f5e,#fb7185)">⚠</div>
+              <div class="h1">登入失敗</div>
             </div>
             <div class="field">
               <label class="label">會員帳號（手機號碼）</label>
-              <input class="input" value="6000 0003" readonly>
+              <input class="input" value="61234567" readonly>
             </div>
             <div class="field">
-              <label class="label">PIN 碼</label>
+              <label class="label">PIN 碼（4 位數字）</label>
               <input class="input inputErr" value="••••" readonly>
-              <div class="err"><span>⚠</span><span><b>帳號或 PIN 不正確</b>（剩餘 2 次機會）</span></div>
+              <div class="err">⛔ 帳號或 PIN 不正確　·　剩餘 3 次機會</div>
             </div>
-            <div class="stack" style="margin-top:14px;gap:10px">
-              <button class="btnBig btnPrimary">重新登入</button>
-              <button class="btnBig btnGhost btnSm">忘記 PIN？到前台處理</button>
+            <div class="stack" style="margin-top:20px">
+              <button class="btnBig btnPrimary">重新輸入</button>
+              <button class="btnBig btnGhost" style="min-height:46px;font-size:14px">跳過，直接點餐</button>
             </div>
-            <div class="hint">為保障帳戶安全，連續錯誤將暫時鎖定</div>
+            <div class="hint">統一文案係刻意嘅 —— 唔可以令人分得出「帳號唔存在」定「PIN 錯」</div>
           </div>
         </div>
       </div>
-      <div class="phone" style="left:670px;top:52px">
+      <div class="phone" style="left:660px;top:60px">
         <div class="pstatus"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="darkbg">
-          <div class="blob b1"></div><div class="blob b2"></div>
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
           <div class="veil"></div>
           <div class="layer">
-            <div class="hero" style="padding-top:150px">
-              <div class="logo" style="width:64px;height:64px;font-size:28px;border-radius:18px;
-                background:linear-gradient(135deg,#f43f5e,#fb7185);box-shadow:none">🔒</div>
-              <div class="h1" style="font-size:19px">登入已暫時鎖定</div>
-              <div class="sub">連續輸入錯誤次數過多<br>請 <b style="color:#fdba74">14:52</b> 後再試，或到前台由店員協助</div>
+            <div class="hero" style="padding-top:44px">
+              <div class="logo" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)">🔒</div>
+              <div class="h1">帳號已暫時鎖定</div>
+              <div class="sub">連續 5 次輸入錯誤<br>請於 <b style="color:#fdba74">14:37</b> 後再試</div>
             </div>
-            <div class="stack" style="margin-top:28px;gap:10px">
-              <button class="btnBig btnDisabled">請稍後再試（14:52）</button>
-              <button class="btnBig btnGhost">🙋　改用「非會員」直接點餐</button>
+            <div class="cardDark" style="margin-top:24px">
+              <div style="font-size:12.5px;font-weight:800;color:#fda4af;margin-bottom:7px">仍然可以點餐</div>
+              <div style="font-size:12px;color:#cbd5e1;line-height:1.7">
+                鎖定只影響「扣餘額」。你仍然可以直接點餐，
+                完成後<b>到前台付款</b>即可 —— 唔會妨礙做生意。
+              </div>
             </div>
-            <div class="hint">鎖定以「電話號碼」為維度，跨 IP 生效</div>
+            <div class="stack" style="margin-top:22px">
+              <button class="btnBig btnPrimary">改用非會員，直接點餐</button>
+            </div>
+            <div class="hint">限流：15 分鐘內 5 次失敗（契約 §4.5.1）</div>
           </div>
         </div>
       </div>
-      <div class="cap" style="left:250px;top:24px">S3a · 登入失敗<span class="sn">帳號或 PIN 不正確</span></div>
-      <div class="cap" style="left:670px;top:24px">S3b · 鎖定中<span class="sn">5 次失敗 → 鎖 15 分鐘</span></div>
-      <div class="anno" style="left:60px;top:700px">
-        <span class="no">9</span><b>鎖定頁一定要有出口</b><br>
-        客人被鎖住唔可以變死局 —— 提供「改用非會員直接點餐」，
-        唔會妨礙做生意。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>失敗態</b><br>
+        紅框 + 剩餘次數。<b>唔顯示</b>已錯幾多個字元。
       </div>
+      <div class="anno" style="left:60px;top:600px">
+        <span class="no">2</span><b>🔴 鎖定頁一定要有出口</b><br>
+        「改用非會員，直接點餐」＝ 唯一出路。冇嘅話客人喺繁忙時段就係死局。
+      </div>
+      <div class="cap" style="left:230px;top:30px">S3a · 登入失敗<span class="sn">剩餘次數</span></div>
+      <div class="cap" style="left:660px;top:30px">S3b · 鎖定中<span class="sn">15 分鐘 + 逃生門</span></div>
     </div>
 
-    <!-- ─────────── S4 下單頁（非會員） ─────────── -->
+    <!-- ══════════════ S4 · 下單頁（非會員 · 堂食手機） ══════════════ -->
     <div class="screenwrap" id="S4">
-      <div class="phone light" style="left:395px;top:52px">
+      <div class="phone light" style="left:410px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
           <div class="topbar">
-            <div>
-              <div class="tbtitle">堂食 A01</div>
-              <div class="tbmeta">澳門茶餐廳 · 非會員</div>
+            <div style="flex:1;min-width:0">
+              <div class="tbtitle">澳門茶餐廳</div>
+              <div class="tbmeta">堂食 · 枱 A01</div>
             </div>
             <div class="avatar" style="background:#f1f5f9;color:#64748b;border-color:#e2e8f0">?</div>
           </div>
-          <div class="pbody" style="background:#f8fafc;padding-top:12px">
+          <div class="pbody" style="padding-top:12px">
+            <div style="display:flex;gap:7px;overflow:hidden;margin-bottom:12px">
+              <span class="pill pillOrange">全部</span>
+              <span class="pill pillSlate">小食</span>
+              <span class="pill pillSlate">粉麵</span>
+              <span class="pill pillSlate">飲品</span>
+            </div>
             <div class="dish">
               <div class="thumb">🍜</div>
               <div style="flex:1;min-width:0">
-                <div class="dishName">招牌豬扒麵</div>
-                <div class="dishSub">湯麵 · 可選辣度</div>
-                <div class="dishPrice">MOP 48.00</div>
+                <div class="dishName">雲吞麵</div>
+                <div class="dishSub">鮮蝦雲吞 · 幼麵</div>
+                <div class="dishPrice">MOP 42.00</div>
               </div>
+              <div style="align-self:center;font-size:24px;color:#f97316;font-weight:900">＋</div>
             </div>
             <div class="dish">
               <div class="thumb">🥟</div>
               <div style="flex:1;min-width:0">
-                <div class="dishName">鮮蝦雲吞（6 件）</div>
-                <div class="dishSub">點心</div>
-                <div class="dishPrice">MOP 32.00</div>
+                <div class="dishName">蝦餃（4 件）</div>
+                <div class="dishSub">即叫即蒸</div>
+                <div class="dishPrice">MOP 28.00</div>
               </div>
+              <div style="align-self:center;font-size:24px;color:#f97316;font-weight:900">＋</div>
             </div>
-            <div class="dish">
-              <div class="thumb">🧋</div>
+            <div class="dish" style="opacity:.5">
+              <div class="thumb">🥤</div>
               <div style="flex:1;min-width:0">
                 <div class="dishName">凍檸茶</div>
-                <div class="dishSub">飲品 · 少甜</div>
+                <div class="dishSub" style="color:#e11d48;font-weight:800">今日售罄</div>
                 <div class="dishPrice">MOP 22.00</div>
               </div>
+              <div style="align-self:center;font-size:12px;color:#94a3b8;font-weight:800">售罄</div>
             </div>
           </div>
           <div class="bottombar">
-            <div class="amtRow amtTotal" style="padding-top:2px">
-              <span class="k">應付合計（3 件）</span>
-              <span class="v">MOP 102.00</span>
-            </div>
-            <button class="btnBig btnSlate" style="margin-top:10px">確認下單　·　到前台支付</button>
-            <div class="hint" style="color:#94a3b8">非會員只可到前台付款</div>
+            <button class="btnBig btnPrimary">查看購物車 · 2 件 · MOP 70.00</button>
           </div>
         </div>
       </div>
-      <div class="anno" style="left:60px;top:120px">
-        <span class="no">10</span><b>非會員唯一分別</b><br>
-        右上角係「?」灰色頭像；<b>冇</b>會員徽章。<br>
-        付款選項<b>只有一個</b> → 直接寫在按鈕上，唔開選擇頁。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>非會員唯一分別</b><br>
+        灰色「?」頭像、<b>冇</b>會員徽章、<b>冇</b>餘額氣泡。
+        已拍板 ✅：<b>唔顯示</b>灰掉嘅「扣餘額」—— 根本冇呢個能力。
       </div>
-      <div class="anno" style="left:60px;top:400px">
-        <span class="no">11</span><b>為何唔顯示「扣餘額」</b><br>
-        契約 §4.5.0：扣款 RPC 需 <code>is_merchant_staff</code>。
-        非會員根本冇錢包 → 顯示只會誤導。<b>直接隱藏，唔係灰掉。</b>
+      <div class="anno" style="left:60px;top:430px">
+        <span class="no">2</span><b>售罄項保留可見</b><br>
+        P2-1：唔可以 filter 走（會變死碼），灰化 + 標「售罄」，
+        客人理解為暫時缺貨、可轉點其他菜。
       </div>
-      <div class="anno" style="left:835px;top:120px">
-        <span class="no">12</span><b>「到前台支付」＝落單即完成</b><br>
-        單落到 POS 為 <code>draft</code>（待確認）或
-        <code>sent_to_kitchen</code>（自動接單開關開）—— 見流程圖註 B。
+      <div class="anno" style="left:855px;top:150px">
+        <span class="no">3</span><b>唔顯示「請登入以扣餘額」</b><br>
+        已拍板 ✅。非會員路徑乾淨 —— 唔引導、唔推銷、唔留欄位。
       </div>
-      <div class="cap" style="left:395px;top:24px">S4 · 下單頁（非會員）<span class="sn">唯一付款方式：到前台支付</span></div>
+      <div class="cap" style="left:410px;top:30px">S4 · 下單（非會員）<span class="sn">堂食手機</span></div>
     </div>
 
-    <!-- ─────────── S5 下單頁（會員，已登入） ─────────── -->
+    <!-- ══════════════ S5 · 下單頁（會員 · 堂食手機） ══════════════ -->
     <div class="screenwrap" id="S5">
-      <div class="phone light" style="left:395px;top:52px">
+      <div class="phone light" style="left:410px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
           <div class="topbar">
-            <div>
-              <div class="tbtitle">堂食 A01</div>
-              <div class="tbmeta">澳門茶餐廳</div>
+            <div style="flex:1;min-width:0">
+              <div class="tbtitle">澳門茶餐廳</div>
+              <div class="tbmeta">堂食 · 枱 A01</div>
             </div>
             <div class="avatar">陳</div>
           </div>
-          <div class="pbody" style="background:#f8fafc;padding-top:10px">
-            <div class="cardDark" style="background:linear-gradient(135deg,#0f172a,#1e293b);border-color:#334155;margin-bottom:12px">
-              <div style="display:flex;align-items:center;gap:10px">
-                <div class="avatar" style="margin-left:0;background:rgba(16,185,129,.18);
-                  color:#6ee7b7;border-color:rgba(16,185,129,.4)">陳</div>
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:14px;font-weight:800;color:#f1f5f9">陳大文</div>
-                  <div style="font-size:11px;color:#94a3b8;margin-top:2px">本店會員</div>
-                </div>
+          <div style="flex:none;margin:0 16px;margin-top:12px;padding:13px 15px;border-radius:14px;
+            background:linear-gradient(135deg,#ecfdf5,#f0fdfa);border:1px solid #a7f3d0">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="font-size:22px">👤</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:800;color:#065f46">陳大文 <span class="pill pillGreen" style="margin-left:4px">會員</span></div>
+                <div style="font-size:11.5px;color:#047857;margin-top:2px">儲值餘額 MOP 128.50</div>
               </div>
-              <div class="divider" style="background:#334155;margin:12px 0 8px"></div>
-              <div style="display:flex;align-items:center;justify-content:space-between">
-                <span style="font-size:12px;color:#94a3b8">儲值餘額</span>
-                <span style="font-size:19px;font-weight:900;color:#6ee7b7">MOP 258.00</span>
-              </div>
+            </div>
+          </div>
+          <div class="pbody" style="padding-top:12px">
+            <div style="display:flex;gap:7px;overflow:hidden;margin-bottom:12px">
+              <span class="pill pillOrange">全部</span>
+              <span class="pill pillSlate">小食</span>
+              <span class="pill pillSlate">粉麵</span>
+              <span class="pill pillSlate">飲品</span>
             </div>
             <div class="dish">
               <div class="thumb">🍜</div>
               <div style="flex:1;min-width:0">
-                <div class="dishName">招牌豬扒麵</div>
-                <div class="dishSub">湯麵 · 可選辣度</div>
-                <div class="dishPrice">MOP 48.00</div>
+                <div class="dishName">雲吞麵</div>
+                <div class="dishSub">鮮蝦雲吞 · 幼麵</div>
+                <div class="dishPrice">MOP 42.00</div>
               </div>
+              <div style="align-self:center;font-size:24px;color:#f97316;font-weight:900">＋</div>
             </div>
             <div class="dish">
-              <div class="thumb">🧋</div>
+              <div class="thumb">🥟</div>
               <div style="flex:1;min-width:0">
-                <div class="dishName">凍檸茶</div>
-                <div class="dishSub">飲品 · 少甜</div>
-                <div class="dishPrice">MOP 22.00</div>
+                <div class="dishName">蝦餃（4 件）</div>
+                <div class="dishSub">即叫即蒸</div>
+                <div class="dishPrice">MOP 28.00</div>
               </div>
+              <div style="align-self:center;font-size:24px;color:#f97316;font-weight:900">＋</div>
             </div>
           </div>
           <div class="bottombar">
-            <div class="amtRow amtTotal" style="padding-top:2px">
-              <span class="k">應付合計（2 件）</span>
-              <span class="v">MOP 70.00</span>
-            </div>
-            <button class="btnBig btnPrimary" style="margin-top:10px">確認下單　並選擇付款</button>
+            <button class="btnBig btnPrimary">查看購物車 · 2 件 · MOP 70.00</button>
           </div>
         </div>
       </div>
-      <div class="anno" style="left:60px;top:120px">
-        <span class="no">13</span><b>會員氣泡（已登入）</b><br>
-        顯示 <b>顯示名</b> + <b>本店餘額</b>。名字來自
-        <code>profiles.display_name</code>；餘額來自
-        <code>wallets</code>（§5.11.1）。<br>
-        ⚠️ <b>兩者都只准「當次畫面」</b>，唔可以落 localStorage／POS DB（§7.2）。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>會員氣泡</b><br>
+        顯示名（<code>profiles.display_name</code>）+ 本店餘額（<code>wallets</code> §5.11.1）。
       </div>
-      <div class="anno" style="left:60px;top:520px">
-        <span class="no">14</span><b>餘額顯示口徑</b><br>
-        <code>balance_avos</code> <b>已經係</b> paid + gift 合計 →
-        <b>唔可以</b>再加 gift 一次（§5.7 明文告誡）。
+      <div class="anno" style="left:60px;top:400px">
+        <span class="no">2</span><b>🔴 §7.2 個資紅線</b><br>
+        顯示名同餘額<b>只准當次畫面渲染</b>。禁止落
+        localStorage／POS DB／analytics／console。<br>
+        落庫只可用 <code>customer_id</code>（uuid）。
       </div>
-      <div class="anno" style="left:835px;top:120px">
-        <span class="no">15</span><b>積分唔喺呢度</b><br>
-        積分係 avos 但<b>唔係錢</b>，唔可折現／唔可當現金扣
-        （§5.10.2）→ 唔喺付款頁出現。
+      <div class="anno" style="left:855px;top:150px">
+        <span class="no">3</span><b>餘額係「本店」</b><br>
+        同一會員喺唔同店有唔同錢包 → 一定要帶 <code>merchantId</code>，
+        唔可以顯示跨店總額。
       </div>
-      <div class="cap" style="left:395px;top:24px">S5 · 下單頁（會員）<span class="sn">已登入 · 顯示餘額</span></div>
+      <div class="cap" style="left:410px;top:30px">S5 · 下單（會員）<span class="sn">堂食手機 · 顯示名 + 餘額</span></div>
     </div>
 
-    <!-- ─────────── S6 付款方式選擇 ─────────── -->
+    <!-- ══════════════ S6 · 付款方式（堂食手機） ══════════════ -->
     <div class="screenwrap" id="S6">
-      <div class="phone light" style="left:250px;top:52px">
+      <div class="phone light" style="left:230px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
-          <div class="topbar"><div><div class="tbtitle">選擇付款方式</div>
-            <div class="tbmeta">堂食 A01 · 2 件</div></div></div>
-          <div class="pbody" style="background:#f8fafc;padding-top:14px">
-            <div class="card" style="margin-bottom:12px">
-              <div class="amtRow"><span class="k">招牌豬扒麵 ×1</span><span class="v">MOP 48.00</span></div>
-              <div class="amtRow"><span class="k">凍檸茶 ×1</span><span class="v">MOP 22.00</span></div>
+          <div class="topbar">
+            <div class="tbtitle">選擇付款方式</div>
+          </div>
+          <div class="pbody" style="padding-top:16px">
+            <div class="card" style="margin-bottom:14px">
+              <div class="amtRow"><span class="k">雲吞麵 × 1</span><span class="v">42.00</span></div>
+              <div class="amtRow"><span class="k">蝦餃 × 1</span><span class="v">28.00</span></div>
               <div class="divider"></div>
-              <div class="amtRow amtTotal"><span class="k">應付合計</span><span class="v">MOP 70.00</span></div>
+              <div class="amtRow amtTotal"><span class="k">應付總額</span><span class="v">MOP 70.00</span></div>
             </div>
-            <div style="font-size:12.5px;font-weight:800;color:#475569;margin:16px 0 9px">請選擇付款方式</div>
-            <button class="opt on" style="margin-bottom:10px">
-              <div class="ic icGreen">💳</div>
+            <div style="font-size:12.5px;font-weight:800;color:#64748b;margin:4px 0 9px">付款方式</div>
+            <button class="opt on" style="margin-bottom:11px">
+              <div class="ic icOrange">💳</div>
               <div style="flex:1;min-width:0">
                 <div class="tt">扣會員儲值餘額</div>
-                <div class="ds">餘額 MOP 258.00 → 扣款後 MOP 188.00</div>
+                <div class="ds">餘額 MOP 128.50 → 扣後剩 MOP 58.50</div>
               </div>
               <div class="radio"></div>
             </button>
@@ -605,206 +773,231 @@
               <div class="ic icSlate">🏪</div>
               <div style="flex:1;min-width:0">
                 <div class="tt">到前台支付</div>
-                <div class="ds">到收銀台以現金／電子支付結帳</div>
+                <div class="ds">落單後去櫃檯付款（現金 / 電子支付）</div>
               </div>
               <div class="radio"></div>
             </button>
           </div>
           <div class="bottombar">
-            <button class="btnBig btnPrimary">確認付款　·　MOP 70.00</button>
+            <button class="btnBig btnPrimary">確認付款 · MOP 70.00</button>
           </div>
         </div>
       </div>
-      <div class="phone light" style="left:670px;top:52px">
+      <div class="phone light" style="left:660px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
-          <div class="topbar"><div><div class="tbtitle">選擇付款方式</div>
-            <div class="tbmeta">堂食 A01 · 2 件</div></div></div>
-          <div class="pbody" style="background:#f8fafc;padding-top:14px">
-            <div class="card" style="margin-bottom:12px">
-              <div class="amtRow"><span class="k">招牌豬扒麵 ×1</span><span class="v">MOP 48.00</span></div>
-              <div class="amtRow"><span class="k">凍檸茶 ×1</span><span class="v">MOP 22.00</span></div>
+          <div class="topbar">
+            <div class="tbtitle">選擇付款方式</div>
+          </div>
+          <div class="pbody" style="padding-top:16px">
+            <div class="card" style="margin-bottom:14px">
+              <div class="amtRow"><span class="k">燒腩仔飯 × 1</span><span class="v">58.00</span></div>
+              <div class="amtRow"><span class="k">例湯 × 1</span><span class="v">20.00</span></div>
               <div class="divider"></div>
-              <div class="amtRow amtTotal"><span class="k">應付合計</span><span class="v">MOP 70.00</span></div>
+              <div class="amtRow amtTotal"><span class="k">應付總額</span><span class="v">MOP 78.00</span></div>
             </div>
-            <div class="card" style="background:#fff1f2;border-color:#fecdd3">
-              <div style="display:flex;gap:9px">
-                <span style="font-size:15px">⚠️</span>
-                <div style="font-size:12px;color:#9f1239;line-height:1.65">
-                  <b>儲值餘額不足</b><br>
-                  餘額 MOP 45.00，應付 MOP 70.00（差 MOP 25.00）
-                </div>
-              </div>
-            </div>
-            <div style="font-size:12.5px;font-weight:800;color:#475569;margin:16px 0 9px">請選擇付款方式</div>
-            <button class="opt dis" style="margin-bottom:10px">
-              <div class="ic icGreen" style="filter:grayscale(1)">💳</div>
+            <div style="font-size:12.5px;font-weight:800;color:#64748b;margin:4px 0 9px">付款方式</div>
+            <button class="opt dis" style="margin-bottom:11px" disabled>
+              <div class="ic icSlate">💳</div>
               <div style="flex:1;min-width:0">
-                <div class="tt">扣會員儲值餘額</div>
-                <div class="ds">餘額不足（MOP 45.00 / 70.00）</div>
+                <div class="tt" style="color:#94a3b8">扣會員儲值餘額</div>
+                <div class="ds" style="color:#e11d48;font-weight:700">餘額不足 · 尚欠 MOP 33.50</div>
               </div>
-              <div class="radio"></div>
+              <div class="radio" style="border-color:#e2e8f0"></div>
             </button>
             <button class="opt on">
               <div class="ic icSlate">🏪</div>
               <div style="flex:1;min-width:0">
                 <div class="tt">到前台支付</div>
-                <div class="ds">到收銀台以現金／電子支付結帳</div>
+                <div class="ds">落單後去櫃檯付款（現金 / 電子支付）</div>
               </div>
               <div class="radio"></div>
             </button>
+            <div class="card" style="margin-top:12px;background:#f0f9ff;border-color:#bae6fd">
+              <div style="font-size:11.5px;color:#0c4a6e;line-height:1.65">
+                💡 可以「先扣餘額，差額到前台補」嗎？——
+                <b>暫不支援</b>（會產生兩筆對帳），請改用「到前台支付」。
+              </div>
+            </div>
           </div>
           <div class="bottombar">
-            <button class="btnBig btnPrimary">確認付款　·　MOP 70.00</button>
+            <button class="btnBig btnPrimary" style="background:#64748b;border-color:#64748b;box-shadow:none">確認付款 · 到前台支付</button>
           </div>
         </div>
       </div>
-      <div class="cap" style="left:250px;top:24px">S6a · 付款方式（餘額足夠）<span class="sn">兩個選項皆可選</span></div>
-      <div class="cap" style="left:670px;top:24px">S6b · 付款方式（餘額不足）<span class="sn">扣餘額自動變不可選</span></div>
-      <div class="anno" style="left:60px;top:790px">
-        <span class="no">16</span><b>餘額不足＝硬失效</b><br>
-        「扣餘額」變灰 <b>但唔可以消失</b> —— 客人要見到「點解唔得」。
-        同 S4 唔同（S4 係<b>根本冇錢包</b> → 直接隱藏）。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>餘額足夠（S6a）</b><br>
+        兩個選項皆可選。預設<b>選中</b>「扣餘額」（會員登入嘅意圖就係想扣）。
       </div>
+      <div class="anno" style="left:60px;top:520px">
+        <span class="no">2</span><b>🔴 S4 vs S6b 兩種唔同處理</b><br>
+        非會員 = <b>根本冇能力</b> → 直接隱藏（S4）<br>
+        會員餘額不足 = <b>有能力但唔夠</b> → 變灰<b>但保留可見</b>，
+        要見到「點解唔得」+ 差幾多。
+      </div>
+      <div class="cap" style="left:230px;top:30px">S6a · 付款方式（足夠）<span class="sn">兩選項皆可選</span></div>
+      <div class="cap" style="left:660px;top:30px">S6b · 付款方式（不足）<span class="sn">扣餘額變灰但可見</span></div>
     </div>
 
-    <!-- ─────────── S7 確認付款（PIN 再確認／免 PIN） ─────────── -->
+    <!-- ══════════════ S7 · 確認扣款（需 PIN / 免 PIN） ══════════════ -->
     <div class="screenwrap" id="S7">
-      <div class="phone" style="left:250px;top:52px">
-        <div class="pstatus"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
-        <div class="darkbg">
-          <div class="blob b1"></div><div class="blob b2"></div>
-          <div class="veil"></div>
-          <div class="layer">
-            <div class="hero" style="padding-top:40px">
-              <div class="logo" style="width:62px;height:62px;font-size:27px;border-radius:18px">🔐</div>
-              <div class="h1" style="font-size:19px">確認扣款</div>
-              <div class="sub">請再輸入 PIN 碼以確認本次扣款</div>
+      <div class="phone light" style="left:230px;top:60px">
+        <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
+        <div class="lightbg">
+          <div class="topbar">
+            <div class="tbtitle">確認扣款</div>
+          </div>
+          <div class="pbody" style="padding-top:16px">
+            <div class="card" style="margin-bottom:14px;background:#fff7ed;border-color:#fed7aa">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="font-size:26px">💳</div>
+                <div>
+                  <div style="font-size:12px;color:#9a3412;font-weight:700">扣款金額</div>
+                  <div style="font-size:25px;font-weight:900;color:#ea580c">MOP 70.00</div>
+                </div>
+              </div>
             </div>
-            <div class="cardDark" style="margin-top:22px;text-align:center">
-              <div style="font-size:11.5px;color:#94a3b8">將從會員儲值扣除</div>
-              <div style="font-size:27px;font-weight:900;color:#fdba74;margin-top:6px">MOP 70.00</div>
-              <div style="font-size:11.5px;color:#94a3b8;margin-top:8px">扣款後餘額 MOP 188.00</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="amtRow"><span class="k">會員</span><span class="v">陳大文</span></div>
+              <div class="amtRow"><span class="k">扣款前餘額</span><span class="v">128.50</span></div>
+              <div class="amtRow"><span class="k">扣款後餘額</span><span class="v">58.50</span></div>
             </div>
-            <div class="field">
-              <label class="label">PIN 碼</label>
-              <input class="input" value="••••" readonly>
-            </div>
-            <div class="stack" style="margin-top:18px;gap:10px">
-              <button class="btnBig btnPrimary">確認扣款</button>
-              <button class="btnBig btnGhost btnSm">取消，改為到前台支付</button>
-            </div>
+            <div style="font-size:12.5px;font-weight:800;color:#64748b;margin:4px 0 9px">請再次輸入 PIN 碼確認</div>
+            <input class="input light" value="••••" readonly style="text-align:center;letter-spacing:.4em">
+          </div>
+          <div class="bottombar">
+            <button class="btnBig btnPrimary" style="margin-bottom:9px">確認扣款</button>
+            <button class="btnBig btnGhostLight">取消，改為到前台支付</button>
           </div>
         </div>
       </div>
-      <div class="phone" style="left:670px;top:52px">
-        <div class="pstatus"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
-        <div class="darkbg">
-          <div class="blob b1"></div><div class="blob b2"></div>
-          <div class="veil"></div>
-          <div class="layer">
-            <div class="hero" style="padding-top:110px">
-              <div class="logo" style="width:64px;height:64px;font-size:28px;border-radius:18px">✅</div>
-              <div class="h1" style="font-size:19px">無需再輸入 PIN</div>
-              <div class="sub">你剛於 <b style="color:#fdba74">3 分鐘內</b>登入<br>直接確認扣款即可</div>
+      <div class="phone light" style="left:660px;top:60px">
+        <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
+        <div class="lightbg">
+          <div class="topbar">
+            <div class="tbtitle">確認扣款</div>
+            <div class="pill pillGreen" style="margin-left:auto">已驗證</div>
+          </div>
+          <div class="pbody" style="padding-top:16px">
+            <div class="card" style="margin-bottom:14px;background:#fff7ed;border-color:#fed7aa">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="font-size:26px">💳</div>
+                <div>
+                  <div style="font-size:12px;color:#9a3412;font-weight:700">扣款金額</div>
+                  <div style="font-size:25px;font-weight:900;color:#ea580c">MOP 70.00</div>
+                </div>
+              </div>
             </div>
-            <div class="cardDark" style="margin-top:24px;text-align:center">
-              <div style="font-size:11.5px;color:#94a3b8">將從會員儲值扣除</div>
-              <div style="font-size:27px;font-weight:900;color:#fdba74;margin-top:6px">MOP 70.00</div>
-              <div style="font-size:11.5px;color:#94a3b8;margin-top:8px">扣款後餘額 MOP 188.00</div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="amtRow"><span class="k">會員</span><span class="v">陳大文</span></div>
+              <div class="amtRow"><span class="k">扣款前餘額</span><span class="v">128.50</span></div>
+              <div class="amtRow"><span class="k">扣款後餘額</span><span class="v">58.50</span></div>
             </div>
-            <div class="stack" style="margin-top:22px;gap:10px">
-              <button class="btnBig btnPrimary">確認扣款</button>
-              <button class="btnBig btnGhost btnSm">取消，改為到前台支付</button>
+            <div class="card" style="background:#ecfdf5;border-color:#a7f3d0">
+              <div style="font-size:12.5px;font-weight:800;color:#065f46;margin-bottom:5px">✓ 免 PIN（登入後 180 秒內）</div>
+              <div style="font-size:11.5px;color:#047857;line-height:1.65">
+                你已於 <b>2 分 12 秒</b>前完成登入，可直接確認。<br>
+                保障：登入後 3 分鐘內才免 PIN。
+              </div>
             </div>
+          </div>
+          <div class="bottombar">
+            <button class="btnBig btnPrimary" style="margin-bottom:9px">確認扣款</button>
+            <button class="btnBig btnGhostLight">取消，改為到前台支付</button>
           </div>
         </div>
       </div>
-      <div class="cap" style="left:250px;top:24px">S7a · 需 PIN 再確認<span class="sn">已過 180 秒窗口</span></div>
-      <div class="cap" style="left:670px;top:24px">S7b · 免 PIN<span class="sn">登入後 180 秒內</span></div>
-      <div class="anno" style="left:60px;top:700px">
-        <span class="no">17</span><b>180 秒窗口（Ledger Q5 拍板）</b><br>
-        起計點＝<b>登入成功</b>（唔係上次 PIN 確認）；
-        範圍＝時間內<b>全部免</b>；<b>refresh token 唔可以</b>延長。<br>
-        ⚠️ Ledger 端<b>完全唔會</b>再驗 PIN → 呢個閘係<b>唯一</b>防線。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>需 PIN 再確認（逾 180s）</b><br>
+        顯示扣前／扣後餘額，令客人清楚自己剩幾多錢。
       </div>
-      <div class="anno" style="left:835px;top:560px">
-        <span class="no">18</span><b>一定要有逃生門</b><br>
-        「取消，改為到前台支付」—— 客人改變主意、
-        或者餘額在扣款一刻唔夠，都要行得通（Ledger Q7）。
+      <div class="anno" style="left:60px;top:520px">
+        <span class="no">2</span><b>🔴 180s 窗口係唯一防線</b><br>
+        Ledger 端<b>完全唔驗 PIN</b>（Q5）→ 呢個閘判錯 = 等於冇二次確認。<br>
+        起計點 = <b>登入成功</b>；refresh <b>唔可</b>延長；範圍 = 時間內<b>全部免</b>。
       </div>
+      <div class="anno" style="left:855px;top:150px">
+        <span class="no">3</span><b>一定有逃生門</b><br>
+        「取消，改為到前台支付」—— 兩個狀態都要有，唔可以令人卡死。
+      </div>
+      <div class="cap" style="left:230px;top:30px">S7a · 需 PIN 再確認<span class="sn">逾 180 秒</span></div>
+      <div class="cap" style="left:660px;top:30px">S7b · 免 PIN<span class="sn">180 秒內</span></div>
     </div>
 
-    <!-- ─────────── S8 結果頁 ─────────── -->
+    <!-- ══════════════ S8 · 結果頁（堂食手機） ══════════════ -->
     <div class="screenwrap" id="S8">
-      <div class="phone light" style="left:250px;top:52px">
+      <div class="phone light" style="left:230px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
-          <div class="pbody" style="padding-top:60px;text-align:center">
-            <div style="width:78px;height:78px;margin:0 auto 20px;border-radius:50%;
+          <div class="pbody" style="padding-top:46px;text-align:center">
+            <div style="width:82px;height:82px;margin:0 auto 20px;border-radius:50%;
               background:var(--emerald-50);display:flex;align-items:center;
-              justify-content:center;font-size:38px;border:2px solid #a7f3d0">✅</div>
-            <div style="font-size:21px;font-weight:800;color:#0f172a">扣款成功</div>
-            <div style="font-size:13px;color:#64748b;margin-top:9px;line-height:1.7">
-              已從會員儲值扣款 MOP 70.00<br>餘額 MOP 188.00
+              justify-content:center;font-size:40px;border:2px solid #a7f3d0">✅</div>
+            <div style="font-size:21px;font-weight:900;color:#0f172a">扣款成功</div>
+            <div style="font-size:13px;color:#64748b;margin-top:8px">
+              已從會員儲值餘額扣款
             </div>
-            <div class="card" style="margin-top:22px;text-align:left">
-              <div style="font-size:12.5px;font-weight:800;color:#475569;margin-bottom:9px">訂單已送廚房</div>
-              <div class="amtRow"><span class="k">招牌豬扒麵 ×1</span><span class="v">MOP 48.00</span></div>
-              <div class="amtRow"><span class="k">凍檸茶 ×1</span><span class="v">MOP 22.00</span></div>
+            <div class="card" style="margin-top:20px;text-align:left">
+              <div class="amtRow"><span class="k">扣款金額</span><span class="v" style="color:#ea580c;font-size:17px">MOP 70.00</span></div>
               <div class="divider"></div>
-              <div class="amtRow"><span class="k">交易編號</span><span class="v" style="font-size:12px">a3f8c2d1…</span></div>
+              <div class="amtRow"><span class="k">剩餘餘額</span><span class="v">MOP 58.50</span></div>
+              <div class="amtRow"><span class="k">交易編號</span><span class="v" style="font-family:monospace;font-size:11.5px">txn_8821f9</span></div>
+              <div class="amtRow"><span class="k">枱號</span><span class="v">A01</span></div>
             </div>
-          </div>
-          <div class="bottombar">
-            <button class="btnBig btnGhostLight" style="margin-bottom:9px">➕　再加點</button>
-            <button class="btnBig btnSlate">完成</button>
+            <div class="card" style="margin-top:12px;background:#ecfdf5;border-color:#a7f3d0">
+              <div style="font-size:12px;color:#047857;line-height:1.7">
+                🔥 訂單已<b>直接送往廚房</b>，無需等候確認。<br>
+                桌台狀態已更新為<b>「已結帳」</b>。
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      <div class="phone light" style="left:670px;top:52px">
+      <div class="phone light" style="left:660px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
-          <div class="pbody" style="padding-top:60px;text-align:center">
-            <div style="width:78px;height:78px;margin:0 auto 20px;border-radius:50%;
+          <div class="pbody" style="padding-top:46px;text-align:center">
+            <div style="width:82px;height:82px;margin:0 auto 20px;border-radius:50%;
               background:var(--amber-50);display:flex;align-items:center;
-              justify-content:center;font-size:38px;border:2px solid #fde68a">🧾</div>
-            <div style="font-size:21px;font-weight:800;color:#0f172a">下單成功</div>
-            <div style="font-size:13px;color:#64748b;margin-top:9px;line-height:1.7">
-              請到前台付款<br>訂單已送廚房
+              justify-content:center;font-size:40px;border:2px solid #fde68a">🏪</div>
+            <div style="font-size:21px;font-weight:900;color:#0f172a">落單成功</div>
+            <div style="font-size:13px;color:#64748b;margin-top:8px">
+              請到前台付款
             </div>
-            <div class="card" style="margin-top:22px;text-align:left">
-              <div style="font-size:12.5px;font-weight:800;color:#475569;margin-bottom:9px">待付金額</div>
-              <div class="amtRow amtTotal"><span class="k">應付合計</span><span class="v">MOP 70.00</span></div>
+            <div class="card" style="margin-top:20px;text-align:left">
+              <div class="amtRow"><span class="k">待付金額</span><span class="v" style="color:#ea580c;font-size:17px">MOP 70.00</span></div>
               <div class="divider"></div>
-              <div class="amtRow"><span class="k">枱號</span><span class="v">堂食 A01</span></div>
+              <div class="amtRow"><span class="k">枱號</span><span class="v">A01</span></div>
+              <div class="amtRow"><span class="k">訂單狀態</span><span class="v"><span class="pill pillAmber">待付款</span></span></div>
             </div>
-            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;
-              padding:12px;margin-top:14px;font-size:12px;color:#92400e;text-align:left;line-height:1.65">
-              <b>溫馨提示</b><br>請記住枱號，到收銀台報上枱號即可結帳。
+            <div class="card" style="margin-top:12px;background:#fffbeb;border-color:#fde68a">
+              <div style="font-size:12px;color:#92400e;line-height:1.7">
+                🔥 訂單已送往廚房。付款完成後，桌台會顯示為「已結帳」。
+              </div>
             </div>
-          </div>
-          <div class="bottombar">
-            <button class="btnBig btnGhostLight" style="margin-bottom:9px">➕　再加點</button>
-            <button class="btnBig btnSlate">完成</button>
           </div>
         </div>
       </div>
-      <div class="cap" style="left:250px;top:24px">S8a · 扣款成功（會員）<span class="sn">已付款 · 已出廚</span></div>
-      <div class="cap" style="left:670px;top:24px">S8b · 下單成功（到前台付款）<span class="sn">未付款 · 已出廚</span></div>
-      <div class="anno" style="left:60px;top:790px">
-        <span class="no">19</span><b>兩個結果頁嘅分野</b><br>
-        左：錢已收（餘額扣咗）→ 顯示交易編號。<br>
-        右：錢未收 → 強調「請到前台付款」+ 枱號。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>兩頁必須一眼分得出「錢收咗未」</b><br>
+        左：綠勾 + 「扣款成功」+ 交易編號 → <b>錢已收</b><br>
+        右：橙舖 + 「落單成功」+ 「待付款」→ <b>錢未收</b>
       </div>
+      <div class="anno" style="left:60px;top:600px">
+        <span class="no">2</span><b>堂食不倒數</b><br>
+        已拍板 ✅ —— 客可以慢慢睇、可以加單。
+        <b>冇</b>自動返回計時器。
+      </div>
+      <div class="cap" style="left:230px;top:30px">S8a · 扣款成功<span class="sn">錢已收 · 已送廚房</span></div>
+      <div class="cap" style="left:660px;top:30px">S8b · 待前台付款<span class="sn">錢未收</span></div>
     </div>
 
-    <!-- ─────────── S9 失敗態 ─────────── -->
+    <!-- ══════════════ S9 · 異常態（堂食手機） ══════════════ -->
     <div class="screenwrap" id="S9">
-      <div class="phone light" style="left:250px;top:52px">
+      <div class="phone light" style="left:230px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
-          <div class="pbody" style="padding-top:60px;text-align:center">
+          <div class="pbody" style="padding-top:56px;text-align:center">
             <div style="width:78px;height:78px;margin:0 auto 20px;border-radius:50%;
               background:var(--rose-50);display:flex;align-items:center;
               justify-content:center;font-size:38px;border:2px solid #fecdd3">💳</div>
@@ -826,526 +1019,1095 @@
           </div>
         </div>
       </div>
-      <div class="phone light" style="left:670px;top:52px">
+      <div class="phone light" style="left:660px;top:60px">
         <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
         <div class="lightbg">
-          <div class="pbody" style="padding-top:60px;text-align:center">
+          <div class="pbody" style="padding-top:56px;text-align:center">
             <div style="width:78px;height:78px;margin:0 auto 20px;border-radius:50%;
               background:var(--amber-50);display:flex;align-items:center;
               justify-content:center;font-size:38px;border:2px solid #fde68a">📡</div>
-            <div style="font-size:20px;font-weight:800;color:#0f172a">網絡連線失敗</div>
+            <div style="font-size:20px;font-weight:800;color:#0f172a">連線中斷</div>
             <div style="font-size:13px;color:#64748b;margin-top:9px;line-height:1.7">
-              扣款結果未能確認<br>請勿重複操作
+              未能確認扣款結果<br>請勿關閉此頁
             </div>
             <div class="card" style="margin-top:22px;text-align:left;background:#fffbeb;border-color:#fde68a">
-              <div style="font-size:12.5px;font-weight:800;color:#92400e;margin-bottom:7px">請到前台確認</div>
+              <div style="font-size:12.5px;font-weight:800;color:#92400e;margin-bottom:7px">⚠️ 結果未知</div>
               <div style="font-size:12px;color:#78350f;line-height:1.65">
-                系統會自動核對，<b>唔會重複扣款</b>。<br>
-                如已扣款成功，訂單會正常送廚房。
+                系統<b>無法查詢</b>呢筆扣款到底成功咗未。
+                撳「重試」會用<b>同一筆交易</b>再送一次（唔會重複扣）。
+                如多次失敗，請到前台由店員處理。
               </div>
             </div>
           </div>
           <div class="bottombar">
-            <button class="btnBig btnPrimary" style="margin-bottom:9px">重試</button>
-            <button class="btnBig btnGhostLight">改為到前台支付</button>
+            <button class="btnBig btnPrimary" style="margin-bottom:9px">重試（不會重複扣款）</button>
+            <button class="btnBig btnGhostLight">到前台處理</button>
           </div>
         </div>
       </div>
-      <div class="cap" style="left:250px;top:24px">S9a · 餘額不足<span class="sn">單保留 · 轉前台付款</span></div>
-      <div class="cap" style="left:670px;top:24px">S9b · 網絡失敗<span class="sn">不明結果 · 交前台核對</span></div>
-      <div class="anno" style="left:60px;top:790px">
-        <span class="no">20</span><b>「結果不明」係最危險嘅態</b><br>
-        因為 Ledger <b>冇 lookup 接口</b>（Q6），POS 無法查「到底扣咗未」。
-        唯一靠冪等鍵重試 → 回同一 <code>txnId</code>。
-        <b>唔可以</b>當「查唔到」＝「未扣款」。
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>餘額不足（Ledger Q7）</b><br>
+        <b>訂單保留唔取消</b>，可直接轉「到前台付款」——
+        客人唔需要重新點餐。
+      </div>
+      <div class="anno" style="left:60px;top:570px">
+        <span class="no">2</span><b>🔴 「結果不明」唔可以當「未扣款」</b><br>
+        Ledger <b>冇 lookup API</b>（Q6）→ 查唔到 ≠ 冇扣。
+        唯一手段 = 同一冪等鍵重試（回同一 <code>txnId</code>）。
+        不確定就<b>紅標交人</b>，唔可以靜默當成功。
+      </div>
+      <div class="cap" style="left:230px;top:30px">S9a · 餘額不足<span class="sn">訂單保留</span></div>
+      <div class="cap" style="left:660px;top:30px">S9b · 網絡失敗<span class="sn">結果不明 · 可重試</span></div>
+    </div>
+
+    <!-- ══════════════ S10 · 快餐下單（掃碼手機） ══════════════ -->
+    <div class="screenwrap" id="S10">
+      <div class="phone light" style="left:410px;top:60px">
+        <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
+        <div class="lightbg">
+          <div class="topbar">
+            <div style="flex:1;min-width:0">
+              <div class="tbtitle">澳門茶餐廳</div>
+              <div class="tbmeta">🥡 快餐 · 自取（無枱號）</div>
+            </div>
+            <div class="avatar">陳</div>
+          </div>
+          <div style="flex:none;margin:0 16px;margin-top:12px;padding:13px 15px;border-radius:14px;
+            background:linear-gradient(135deg,#ecfdf5,#f0fdfa);border:1px solid #a7f3d0">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="font-size:22px">👤</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:800;color:#065f46">陳大文 <span class="pill pillGreen" style="margin-left:4px">會員</span></div>
+                <div style="font-size:11.5px;color:#047857;margin-top:2px">儲值餘額 MOP 128.50</div>
+              </div>
+            </div>
+          </div>
+          <div style="flex:none;margin:12px 16px 0;padding:11px 14px;border-radius:12px;
+            background:#fff7ed;border:1px solid #fed7aa">
+            <div style="font-size:11.5px;color:#9a3412;line-height:1.65">
+              🥡 <b>快餐每一單獨立</b> —— 唔會同上一單合併，
+              亦<b>唔可以加單</b>。落單後憑取餐號到櫃檯取餐。
+            </div>
+          </div>
+          <div class="pbody" style="padding-top:12px">
+            <div style="display:flex;gap:7px;overflow:hidden;margin-bottom:12px">
+              <span class="pill pillOrange">全部</span>
+              <span class="pill pillSlate">小食</span>
+              <span class="pill pillSlate">粉麵</span>
+            </div>
+            <div class="dish">
+              <div class="thumb">🍚</div>
+              <div style="flex:1;min-width:0">
+                <div class="dishName">叉燒飯</div>
+                <div class="dishSub">配例湯</div>
+                <div class="dishPrice">MOP 48.00</div>
+              </div>
+              <div style="align-self:center;font-size:24px;color:#f97316;font-weight:900">＋</div>
+            </div>
+            <div class="dish">
+              <div class="thumb">🥤</div>
+              <div style="flex:1;min-width:0">
+                <div class="dishName">凍奶茶</div>
+                <div class="dishSub">少甜</div>
+                <div class="dishPrice">MOP 22.00</div>
+              </div>
+              <div style="align-self:center;font-size:24px;color:#f97316;font-weight:900">＋</div>
+            </div>
+          </div>
+          <div class="bottombar">
+            <button class="btnBig btnPrimary">查看購物車 · 2 件 · MOP 70.00</button>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:130px">
+        <span class="no">1</span><b>快餐頂欄寫「快餐 · 自取」</b><br>
+        唔顯示枱號（<code>tableId="counter"</code>、<code>tableName="自取"</code>）。
+        客人一眼知道自己係快餐而唔係堂食。
+      </div>
+      <div class="anno" style="left:60px;top:400px">
+        <span class="no">2</span><b>🔴 快餐三大唔同（logic 真係唔一樣）</b><br>
+        ① <b>每單獨立</b> —— 唔 resume、唔加單（堂食會 resume 同枱單）<br>
+        ② <b>有取餐號</b> —— 用店內 <code>pickup</code> 序號（同 kiosk 共用 → 唔撞號）<br>
+        ③ <b>成功頁留住號碼</b> —— 唔倒數、reload 都仲讀得返（sessionStorage 6 小時）
+      </div>
+      <div class="anno" style="left:855px;top:130px">
+        <span class="no">3</span><b>會員付款完全共用</b><br>
+        快餐同堂食<b>共用</b>同一套：Landing → 登入 → 下單 → 付款方式。
+        唯一分別係落單號碼 / resume / 成功頁。
+      </div>
+      <div class="cap tag" style="left:410px;top:30px">
+        <span class="tg sky">快餐</span>S10 · 快餐下單<span class="sn">掃碼手機 · /quick</span>
       </div>
     </div>
 
-  </div><!-- /canvas -->
-</div><!-- /stage -->
+    <!-- ══════════════ S11 · 快餐成功頁（掃碼手機） ══════════════ -->
+    <div class="screenwrap" id="S11">
+      <div class="phone light" style="left:410px;top:60px">
+        <div class="pstatus" style="background:#fff"><span>9:41</span><span>▲▲▲ ⌁ ▮</span></div>
+        <div class="lightbg">
+          <div class="pbody" style="padding-top:40px;text-align:center">
+            <div style="width:74px;height:74px;margin:0 auto 18px;border-radius:50%;
+              background:var(--emerald-50);display:flex;align-items:center;
+              justify-content:center;font-size:36px;border:2px solid #a7f3d0">✅</div>
+            <div style="font-size:20px;font-weight:900;color:#0f172a">扣款成功 · 已收到</div>
+            <div style="font-size:12.5px;color:#64748b;margin-top:7px">請憑取餐號到櫃檯取餐</div>
+            <div class="card" style="margin-top:18px;background:#fff7ed;border-color:#fed7aa">
+              <div style="font-size:12px;color:#9a3412;font-weight:700">取餐號</div>
+              <div style="font-size:44px;font-weight:900;color:#ea580c;line-height:1.2;margin-top:4px">自取07</div>
+              <div style="font-size:11.5px;color:#c2410c;margin-top:5px">快餐 · 不設外賣</div>
+            </div>
+            <div class="card" style="margin-top:12px;text-align:left">
+              <div class="amtRow"><span class="k">扣款金額</span><span class="v" style="color:#ea580c">MOP 70.00</span></div>
+              <div class="divider"></div>
+              <div class="amtRow"><span class="k">剩餘餘額</span><span class="v">MOP 58.50</span></div>
+              <div class="amtRow"><span class="k">交易編號</span><span class="v" style="font-family:monospace;font-size:11.5px">txn_8821f9</span></div>
+            </div>
+            <div class="card" style="margin-top:12px;background:#ecfdf5;border-color:#a7f3d0">
+              <div style="font-size:12px;color:#047857;line-height:1.7">
+                🔥 訂單已<b>直接送往廚房</b>，無需等候確認。
+              </div>
+            </div>
+          </div>
+          <div class="bottombar">
+            <button class="btnBig btnPrimary">再點一單</button>
+            <div class="hint" style="margin-top:9px">號碼會保留 —— 關咗分頁再開都仲睇得返</div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:150px">
+        <span class="no">1</span><b>🔴 手機端快餐：冇倒數</b><br>
+        取餐號係客人去櫃檯唯一憑據 → <b>唔可以</b>自動返回。
+        （Kiosk 快餐先有 15 秒倒數 —— 見 S11T）
+      </div>
+      <div class="anno" style="left:60px;top:560px">
+        <span class="no">2</span><b>「再點一單」唔係「加單」</b><br>
+        撳落去 = 新單（新號碼）。同時清走 session 記憶 → 唔會再跳返呢頁。
+      </div>
+      <div class="cap tag" style="left:410px;top:30px">
+        <span class="tg sky">快餐</span>S11 · 快餐成功頁<span class="sn">取餐號 · 唔倒數</span>
+      </div>
+    </div>
 
-<!-- ═══════════ 流程圖 ═══════════ -->
-<div class="flowwrap">
-  <div class="rtitle" style="margin-bottom:10px">完整流程圖 · 由 Landing 到完成付款</div>
-  <div class="flowcard">
-    <svg viewBox="0 0 1140 1060" width="1140" height="1060" xmlns="http://www.w3.org/2000/svg"
-         font-family="PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif">
-      <defs>
-        <marker id="ar" markerWidth="9" markerHeight="9" refX="7.5" refY="3.2" orient="auto">
-          <path d="M0,0 L7.5,3.2 L0,6.4 z" fill="#94a3b8"/>
-        </marker>
-        <marker id="arG" markerWidth="9" markerHeight="9" refX="7.5" refY="3.2" orient="auto">
-          <path d="M0,0 L7.5,3.2 L0,6.4 z" fill="#10b981"/>
-        </marker>
-        <marker id="arO" markerWidth="9" markerHeight="9" refX="7.5" refY="3.2" orient="auto">
-          <path d="M0,0 L7.5,3.2 L0,6.4 z" fill="#f97316"/>
-        </marker>
-        <marker id="arR" markerWidth="9" markerHeight="9" refX="7.5" refY="3.2" orient="auto">
-          <path d="M0,0 L7.5,3.2 L0,6.4 z" fill="#f43f5e"/>
-        </marker>
-      </defs>
+    <!-- ══════════════ S10T · 快餐下單（Kiosk 平板 · 3 欄） ══════════════ -->
+    <div class="screenwrap" id="S10T">
+      <div class="tablet" style="left:60px;top:112px">
+        <div class="tstatus">
+          <span>澳門茶餐廳 · 自助點餐機</span>
+          <span class="r">
+            <span>9:41</span>
+            <span class="countdown"><span class="ring"></span>42s</span>
+          </span>
+        </div>
+        <div class="lightbg">
+          <div class="topbar tab">
+            <div style="flex:1;min-width:0">
+              <div class="tbtitle">澳門茶餐廳</div>
+              <div class="tbmeta">🥡 快餐 · 自取</div>
+            </div>
+            <div class="avatar tab">陳</div>
+          </div>
+          <div class="kcols">
+            <nav class="knav">
+              <button class="on">全部</button>
+              <button>小食</button>
+              <button>粉麵</button>
+              <button>飲品</button>
+            </nav>
+            <section class="kmenu">
+              <div style="font-size:15px;font-weight:800;color:#64748b;margin-bottom:12px">請選擇餐點</div>
+              <div class="grid2">
+                <div class="dish tab">
+                  <div class="thumb tab">🍚</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="dishName">叉燒飯</div>
+                    <div class="dishSub">配例湯</div>
+                    <div class="dishPrice">MOP 48.00</div>
+                  </div>
+                </div>
+                <div class="dish tab">
+                  <div class="thumb tab">🥤</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="dishName">凍奶茶</div>
+                    <div class="dishSub">少甜</div>
+                    <div class="dishPrice">MOP 22.00</div>
+                  </div>
+                </div>
+                <div class="dish tab">
+                  <div class="thumb tab">🥟</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="dishName">蝦餃</div>
+                    <div class="dishSub">4 件 · 即叫即蒸</div>
+                    <div class="dishPrice">MOP 28.00</div>
+                  </div>
+                </div>
+                <div class="dish tab" style="opacity:.5">
+                  <div class="thumb tab">🍜</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="dishName">雲吞麵</div>
+                    <div class="dishSub" style="color:#e11d48;font-weight:800">今日售罄</div>
+                    <div class="dishPrice">MOP 42.00</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <aside class="kcart">
+              <div class="ch">購物車 · 2 件</div>
+              <div class="cb">
+                <div class="cline"><span class="n">叉燒飯</span><span class="q">×1</span><span class="p">48.00</span></div>
+                <div class="cline"><span class="n">凍奶茶</span><span class="q">×1</span><span class="p">22.00</span></div>
+                <div style="margin-top:14px;padding:12px;border-radius:12px;background:#ecfdf5;border:1px solid #a7f3d0">
+                  <div style="font-size:12px;font-weight:800;color:#065f46">👤 陳大文</div>
+                  <div style="font-size:11.5px;color:#047857;margin-top:3px">餘額 MOP 128.50</div>
+                </div>
+              </div>
+              <div class="cf">
+                <div class="amtRow amtTotal" style="padding-bottom:10px"><span class="k">合計</span><span class="v">MOP 70.00</span></div>
+                <button class="btnBig btnPrimary" style="min-height:62px;font-size:18px">去結帳</button>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:20px">
+        <span class="no">1</span><b>Kiosk 平板 3 欄佈局</b><br>
+        左：分類 170px　中：餐牌（2 欄格）　右：購物車 330px。
+        <b>唔會</b>用手機嘅「底部購物車彈窗」。
+      </div>
+      <div class="anno" style="left:60px;top:846px">
+        <span class="no">2</span><b>購物車側欄顯示會員</b><br>
+        Kiosk 螢幕大 → 會員姓名 + 餘額直接放購物車側欄，
+        客人隨時睇到自己剩幾多錢。
+      </div>
+      <div class="anno" style="left:900px;top:20px">
+        <span class="no">3</span><b>倒數喺平板頂欄</b><br>
+        42s = 客人點餐中。每撳一下（加菜 / 換分類 / 捲動）都重置。
+      </div>
+      <div class="cap tag" style="left:60px;top:74px">
+        <span class="tg">平板</span>S10T · 快餐下單<span class="sn">Kiosk 3 欄佈局</span>
+      </div>
+    </div>
 
-      <!-- A. Landing -->
-      <rect x="430" y="16" width="280" height="62" rx="14" fill="#1e293b" stroke="#f97316" stroke-width="2"/>
-      <text x="570" y="42" fill="#fdba74" font-size="14" font-weight="800" text-anchor="middle">【入口】Landing Page</text>
-      <text x="570" y="62" fill="#cbd5e1" font-size="12" text-anchor="middle">「你是會員嗎？」</text>
-      <path d="M570,78 L570,96" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
+    <!-- ══════════════ S6T · 付款方式（Kiosk 平板） ══════════════ -->
+    <div class="screenwrap" id="S6T">
+      <div class="tablet" style="left:60px;top:112px">
+        <div class="tstatus">
+          <span>澳門茶餐廳 · 自助點餐機</span>
+          <span class="r">
+            <span>9:41</span>
+            <span class="countdown"><span class="ring"></span>55s</span>
+          </span>
+        </div>
+        <div class="lightbg">
+          <div class="topbar tab">
+            <div class="tbtitle">選擇付款方式</div>
+          </div>
+          <div style="flex:1;min-height:0;display:flex;gap:26px;padding:26px 30px;overflow-y:auto">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:15.5px;font-weight:800;color:#64748b;margin-bottom:14px">付款方式</div>
+              <button class="opt on" style="padding:24px 22px;margin-bottom:16px;border-radius:18px">
+                <div class="ic icOrange" style="width:58px;height:58px;font-size:27px;border-radius:15px">💳</div>
+                <div style="flex:1;min-width:0">
+                  <div class="tt" style="font-size:21px">扣會員儲值餘額</div>
+                  <div class="ds" style="font-size:14px;margin-top:6px">餘額 MOP 128.50 → 扣後剩 MOP 58.50</div>
+                </div>
+                <div class="radio" style="width:26px;height:26px"></div>
+              </button>
+              <button class="opt" style="padding:24px 22px;border-radius:18px">
+                <div class="ic icSlate" style="width:58px;height:58px;font-size:27px;border-radius:15px">🏪</div>
+                <div style="flex:1;min-width:0">
+                  <div class="tt" style="font-size:21px">到櫃檯支付</div>
+                  <div class="ds" style="font-size:14px;margin-top:6px">落單後去櫃檯付款（現金 / 電子支付）</div>
+                </div>
+                <div class="radio" style="width:26px;height:26px"></div>
+              </button>
+              <div class="card" style="margin-top:18px;background:#f0f9ff;border-color:#bae6fd">
+                <div style="font-size:13px;color:#0c4a6e;line-height:1.7">
+                  💡 Kiosk 唔支援「先扣餘額、差額到櫃檯補」——
+                  會產生兩筆對帳。餘額不足請改用「到櫃檯支付」。
+                </div>
+              </div>
+            </div>
+            <aside style="width:340px;flex:none">
+              <div class="card" style="padding:20px">
+                <div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:12px">訂單摘要</div>
+                <div class="amtRow"><span class="k">叉燒飯 × 1</span><span class="v">48.00</span></div>
+                <div class="amtRow"><span class="k">凍奶茶 × 1</span><span class="v">22.00</span></div>
+                <div class="divider"></div>
+                <div class="amtRow amtTotal"><span class="k">應付總額</span><span class="v">MOP 70.00</span></div>
+                <div style="margin-top:14px;padding:12px;border-radius:12px;background:#ecfdf5;border:1px solid #a7f3d0">
+                  <div style="font-size:12.5px;font-weight:800;color:#065f46">👤 陳大文</div>
+                  <div style="font-size:12px;color:#047857;margin-top:3px">餘額 MOP 128.50</div>
+                </div>
+                <button class="btnBig btnPrimary" style="margin-top:18px;min-height:66px;font-size:19px">確認付款 · MOP 70.00</button>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:20px">
+        <span class="no">1</span><b>平板：左選項 + 右摘要</b><br>
+        唔似手機會垂直堆疊 —— 平板上「付款方式」同「金額」<b>並排</b>，
+        客人一望就對得上。
+      </div>
+      <div class="anno" style="left:60px;top:846px">
+        <span class="no">2</span><b>倒數 55s</b><br>
+        呢頁係「等待決定」嘅位 —— 客人企喺度諗，時間會照行。
+        任何觸控即刻重置。
+      </div>
+      <div class="cap tag" style="left:60px;top:74px">
+        <span class="tg">平板</span>S6T · 付款方式<span class="sn">Kiosk 平板</span>
+      </div>
+    </div>
 
-      <!-- 分叉決策 -->
-      <path d="M570,96 L570,110" stroke="#94a3b8" stroke-width="1.8"/>
-      <path d="M240,110 L900,110" stroke="#94a3b8" stroke-width="1.8"/>
-      <path d="M240,110 L240,140" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-      <path d="M900,110 L900,140" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-      <text x="255" y="132" fill="#94a3b8" font-size="11.5" font-weight="700">「不是」</text>
-      <text x="915" y="132" fill="#94a3b8" font-size="11.5" font-weight="700">「是」</text>
+    <!-- ══════════════ S11T · 快餐成功頁（Kiosk 平板 · 15s 倒數） ══════════════ -->
+    <div class="screenwrap" id="S11T">
+      <div class="tablet" style="left:60px;top:112px">
+        <div class="tstatus">
+          <span>澳門茶餐廳 · 自助點餐機</span>
+          <span class="r">
+            <span>9:41</span>
+            <span class="countdown warn"><span class="ring"></span>13s</span>
+          </span>
+        </div>
+        <div class="lightbg">
+          <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:20px">
+            <div style="display:flex;gap:44px;align-items:center;max-width:900px;width:100%">
+              <div style="flex:1;min-width:0;text-align:center">
+                <div style="width:96px;height:96px;margin:0 auto 22px;border-radius:50%;
+                  background:var(--emerald-50);display:flex;align-items:center;
+                  justify-content:center;font-size:48px;border:2px solid #a7f3d0">✅</div>
+                <div style="font-size:29px;font-weight:900;color:#0f172a">扣款成功 · 已收到</div>
+                <div style="font-size:15px;color:#64748b;margin-top:10px">訂單已直接送往廚房</div>
+                <div style="margin-top:22px;padding:13px 18px;border-radius:14px;
+                  background:#ecfdf5;border:1px solid #a7f3d0;display:inline-block">
+                  <div style="font-size:13px;color:#047857;font-weight:700">
+                    本機小票已印出，請取走小票
+                  </div>
+                </div>
+              </div>
+              <div style="flex:none;width:340px">
+                <div class="card" style="background:#fff7ed;border-color:#fed7aa;text-align:center;padding:24px">
+                  <div style="font-size:14px;color:#9a3412;font-weight:800">取餐號</div>
+                  <div style="font-size:66px;font-weight:900;color:#ea580c;line-height:1.15;margin-top:6px">自取07</div>
+                  <div style="font-size:13px;color:#c2410c;margin-top:8px">請到櫃檯取餐</div>
+                </div>
+                <div class="card" style="margin-top:14px">
+                  <div class="amtRow"><span class="k">扣款金額</span><span class="v" style="color:#ea580c">MOP 70.00</span></div>
+                  <div class="divider"></div>
+                  <div class="amtRow"><span class="k">剩餘餘額</span><span class="v">MOP 58.50</span></div>
+                </div>
+                <button class="btnBig btnTab btnGhostLight" style="margin-top:14px;min-height:62px;font-size:17px">完成 · 立即重新開始</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:20px">
+        <span class="no">1</span><b>🔴 Kiosk 快餐有 15 秒倒數</b><br>
+        已拍板 ✅。理由：平板係<b>共用</b>嘅 —— 客人唔走，下一位用唔到。
+        15 秒後自動清空 + 彈回 Landing。
+      </div>
+      <div class="anno" style="left:60px;top:846px">
+        <span class="no">2</span><b>倒數歸零前有「完成」掣</b><br>
+        客人撳「完成」即刻走（唔使等）。倒數係防止「唔撳就霸住部機」。
+      </div>
+      <div class="anno" style="left:900px;top:20px">
+        <span class="no">3</span><b>打印提示一定要有</b><br>
+        Kiosk 落單本機會印顧客小票（<code>receipt</code> role）——
+        唔提客人會唔記得攞。
+      </div>
+      <div class="cap tag" style="left:60px;top:74px">
+        <span class="tg">平板</span>S11T · 快餐成功頁<span class="sn">Kiosk · 15s 倒數</span>
+      </div>
+    </div>
 
-      <!-- B. 非會員路徑 -->
-      <rect x="100" y="146" width="280" height="74" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
-      <text x="240" y="172" fill="#e2e8f0" font-size="13.5" font-weight="800" text-anchor="middle">B1 直接進入下單頁</text>
-      <text x="240" y="192" fill="#94a3b8" font-size="11.5" text-anchor="middle">無需登入 · 無會員氣泡</text>
-      <text x="240" y="209" fill="#94a3b8" font-size="11.5" text-anchor="middle">（S4）</text>
-      <path d="M240,220 L240,250" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
+    <!-- ══════════════ S12T · 倒數歸零 → 彈回 Landing ══════════════ -->
+    <div class="screenwrap" id="S12T">
+      <div class="tablet dark" style="left:60px;top:112px">
+        <div class="tstatus">
+          <span>澳門茶餐廳 · 自助點餐機</span>
+          <span class="r">
+            <span>9:41</span>
+            <span class="countdown warn"><span class="ring"></span>0s</span>
+          </span>
+        </div>
+        <div class="darkbg">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+          <div class="veil"></div>
+          <div class="layer land">
+            <div class="hero tab" style="text-align:center">
+              <div class="logo">🍽</div>
+              <div class="h1">你是會員嗎？</div>
+              <div class="sub">使用會員儲值餘額付款，結帳更快；非會員亦可直接點餐，到櫃檯付款</div>
+              <div class="store"><span class="dot"></span>自助點餐機 · 快餐（自取）</div>
+            </div>
+            <div class="landgrid">
+              <button class="btnBig btnTab btnPrimary">👤　是，我是會員</button>
+              <button class="btnBig btnTab btnGhost">🙋　不是，直接點餐</button>
+            </div>
+            <div class="hint" style="margin-top:26px;font-size:13px">倒數已歸零 · 已清空上一位客人嘅會員狀態</div>
+          </div>
+        </div>
+      </div>
+      <div class="anno" style="left:60px;top:20px">
+        <span class="no">1</span><b>🔴 歸零 = 硬重置</b><br>
+        一定要同時做三件事：① 清空會員 session（登入狀態）
+        ② 清空購物車 ③ 彈回 Landing。<b>唔可以</b>只係跳頁。
+      </div>
+      <div class="anno" style="left:60px;top:846px">
+        <span class="no">2</span><b>為何係 60 秒</b><br>
+        已拍板 ✅。太短 → 客人睇餐牌睇到一半被踢走；
+        太長 → 下一位客人要等。<br>
+        <b>任何動作重置</b>：mousemove / mousedown / touchstart / keydown / scroll。
+      </div>
+      <div class="anno" style="left:900px;top:20px">
+        <span class="no">3</span><b>⚠️ 落單中唔可以歸零</b><br>
+        如果客人正喺度落單（submitting），倒數要<b>暫停</b> ——
+        否則會出現「請求已送出、但畫面被清空」嘅災難。
+      </div>
+      <div class="cap tag" style="left:60px;top:74px">
+        <span class="tg">平板</span>S12T · 倒數歸零<span class="sn">清空 → 彈回 Landing</span>
+      </div>
+    </div>
 
-      <rect x="100" y="256" width="280" height="60" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
-      <text x="240" y="282" fill="#e2e8f0" font-size="13.5" font-weight="800" text-anchor="middle">B2 選餐 → 確認下單</text>
-      <text x="240" y="301" fill="#94a3b8" font-size="11.5" text-anchor="middle">付款方式固定：到前台支付</text>
-      <path d="M240,316 L240,346" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-
-      <rect x="100" y="352" width="280" height="64" rx="14" fill="#0f172a" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="5 3"/>
-      <text x="240" y="377" fill="#fdba74" font-size="13" font-weight="800" text-anchor="middle">B3 落單寫入 POS</text>
-      <text x="240" y="396" fill="#94a3b8" font-size="11" text-anchor="middle">status = draft 或 sent_to_kitchen</text>
-      <text x="240" y="411" fill="#64748b" font-size="10.5" text-anchor="middle">（見註 B：自動接單開關）</text>
-      <path d="M240,416 L240,446" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-
-      <rect x="100" y="452" width="280" height="58" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
-      <text x="240" y="477" fill="#e2e8f0" font-size="13" font-weight="800" text-anchor="middle">B4 客人往收銀台付款</text>
-      <text x="240" y="496" fill="#94a3b8" font-size="11" text-anchor="middle">店員 cash／電子支付結帳</text>
-      <path d="M240,510 L240,540" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-
-      <!-- C. 會員路徑 -->
-      <rect x="760" y="146" width="280" height="70" rx="14" fill="#1e293b" stroke="#8b5cf6" stroke-width="2"/>
-      <text x="900" y="172" fill="#c4b5fd" font-size="13.5" font-weight="800" text-anchor="middle">C1 會員登入頁（S2）</text>
-      <text x="900" y="191" fill="#94a3b8" font-size="11.5" text-anchor="middle">帳號（8 位手機）+ PIN（4 位）</text>
-      <text x="900" y="207" fill="#64748b" font-size="10.5" text-anchor="middle">PIN 只送 POS 伺服器，唔經前端運算</text>
-      <path d="M900,216 L900,246" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-
-      <!-- 菱形決策：驗證 -->
-      <polygon points="900,252 1010,292 900,332 790,292" fill="#1e293b" stroke="#8b5cf6" stroke-width="2"/>
-      <text x="900" y="288" fill="#e2e8f0" font-size="12.5" font-weight="800" text-anchor="middle">驗證結果？</text>
-      <text x="900" y="305" fill="#94a3b8" font-size="10.5" text-anchor="middle">Ledger Auth</text>
-
-      <!-- 失敗分支（向左） -->
-      <path d="M790,292 L600,292" stroke="#f43f5e" stroke-width="1.8" marker-end="url(#arR)"/>
-      <text x="625" y="283" fill="#fda4af" font-size="11" font-weight="700">失敗</text>
-      <text x="625" y="308" fill="#94a3b8" font-size="10.5">統一「帳號或 PIN 不正確」</text>
-      <rect x="380" y="252" width="216" height="80" rx="14" fill="#1e293b" stroke="#f43f5e" stroke-width="1.6"/>
-      <text x="488" y="277" fill="#fda4af" font-size="12.5" font-weight="800" text-anchor="middle">C2 失敗態（S3a／S3b）</text>
-      <text x="488" y="296" fill="#94a3b8" font-size="10.5" text-anchor="middle">紅框提示（剩餘次數）</text>
-      <text x="488" y="312" fill="#94a3b8" font-size="10.5" text-anchor="middle">或 鎖定 15 分鐘（倒數）</text>
-      <text x="488" y="326" fill="#64748b" font-size="10" text-anchor="middle">⚠ 鎖定頁必設「改非會員」出口</text>
-      <path d="M380,300 L300,300 L300,410" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="5 3"/>
-      <text x="316" y="352" fill="#fda4af" font-size="10.5">改為非會員</text>
-
-      <!-- 成功分支（向下） -->
-      <path d="M900,332 L900,362" stroke="#10b981" stroke-width="2" marker-end="url(#arG)"/>
-      <text x="915" y="352" fill="#6ee7b7" font-size="11" font-weight="700">成功</text>
-
-      <rect x="760" y="368" width="280" height="76" rx="14" fill="#0f172a" stroke="#10b981" stroke-width="2"/>
-      <text x="900" y="393" fill="#6ee7b7" font-size="13.5" font-weight="800" text-anchor="middle">C3 進入下單頁（S5）</text>
-      <text x="900" y="412" fill="#94a3b8" font-size="11" text-anchor="middle">顯示顯示名 + 本店儲值餘額</text>
-      <text x="900" y="430" fill="#64748b" font-size="10.5" text-anchor="middle">⚠ 只准當次畫面，唔可以落地（§7.2）</text>
-      <path d="M900,444 L900,474" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-
-      <rect x="760" y="480" width="280" height="58" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
-      <text x="900" y="505" fill="#e2e8f0" font-size="13" font-weight="800" text-anchor="middle">C4 選餐 → 選擇付款方式</text>
-      <text x="900" y="524" fill="#94a3b8" font-size="11" text-anchor="middle">（S6a／S6b）</text>
-      <path d="M900,538 L900,566" stroke="#94a3b8" stroke-width="1.8"/>
-
-      <!-- 付款方式兩分支 -->
-      <path d="M760,594 L680,594" stroke="#94a3b8" stroke-width="1.8"/>
-      <path d="M1020,594 L918,594" stroke="#10b981" stroke-width="2"/>
-      <text x="930" y="586" fill="#6ee7b7" font-size="11" font-weight="700">扣餘額</text>
-      <text x="600" y="586" fill="#94a3b8" font-size="11" font-weight="700">到前台支付</text>
-
-      <!-- 菱形：餘額檢查 -->
-      <polygon points="900,566 990,594 900,622 810,594" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
-      <text x="900" y="591" fill="#e2e8f0" font-size="11.5" font-weight="800" text-anchor="middle">餘額足夠？</text>
-      <text x="900" y="607" fill="#94a3b8" font-size="10" text-anchor="middle">balance ≥ total</text>
-
-      <!-- 餘額不足 → 向下 -->
-      <path d="M900,622 L900,660" stroke="#f43f5e" stroke-width="1.6" marker-end="url(#arR)"/>
-      <text x="915" y="646" fill="#fda4af" font-size="11" font-weight="700">不足</text>
-      <rect x="760" y="666" width="280" height="70" rx="14" fill="#1e293b" stroke="#f43f5e" stroke-width="1.6"/>
-      <text x="900" y="690" fill="#fda4af" font-size="12.5" font-weight="800" text-anchor="middle">C5 餘額不足（S9a）</text>
-      <text x="900" y="708" fill="#94a3b8" font-size="10.5" text-anchor="middle">訂單保留（唔取消）</text>
-      <text x="900" y="725" fill="#94a3b8" font-size="10.5" text-anchor="middle">→ 即可轉「到前台支付」（Ledger Q7）</text>
-      <path d="M760,701 L690,701 L690,600 L600,600 L600,566" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="5 3"/>
-      <path d="M600,566 L600,540 L760,540" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arR)"/>
-
-      <!-- 左：到前台支付 -->
-      <rect x="380" y="540" width="220" height="66" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5" transform="translate(0,0)"/>
-      <text x="490" y="565" fill="#e2e8f0" font-size="13" font-weight="800" text-anchor="middle">C6 到前台支付</text>
-      <text x="490" y="584" fill="#94a3b8" font-size="10.5" text-anchor="middle">落單 → status draft／sent_to_kitchen</text>
-      <text x="490" y="599" fill="#64748b" font-size="10" text-anchor="middle">會員身份仍記錄（可享積分）</text>
-      <path d="M490,606 L490,700" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#ar)"/>
-
-      <!-- 右：扣餘額成功 -->
-      <path d="M900,660 L900,690" stroke="#10b981" stroke-width="2" opacity="0"/>
-      <rect x="760" y="760" width="280" height="76" rx="14" fill="#0f172a" stroke="#10b981" stroke-width="2"/>
-      <text x="900" y="785" fill="#6ee7b7" font-size="13" font-weight="800" text-anchor="middle">C7 PIN 再確認（S7a／S7b）</text>
-      <text x="900" y="803" fill="#94a3b8" font-size="10.5" text-anchor="middle">登入後 180 秒內 → 免 PIN（Ledger Q5）</text>
-      <text x="900" y="820" fill="#64748b" font-size="10" text-anchor="middle">⚠ Ledger 端唔會再驗 → 呢個閘係唯一防線</text>
-      <path d="M900,836 L900,864" stroke="#10b981" stroke-width="2" marker-end="url(#arG)"/>
-
-      <rect x="760" y="870" width="280" height="76" rx="14" fill="#0f172a" stroke="#f97316" stroke-width="2"/>
-      <text x="900" y="895" fill="#fdba74" font-size="13" font-weight="800" text-anchor="middle">C8 打 Ledger quote → commit</text>
-      <text x="900" y="913" fill="#94a3b8" font-size="10.5" text-anchor="middle">POS 伺服器 HMAC 簽名 · 帶顧客 token</text>
-      <text x="900" y="930" fill="#64748b" font-size="10" text-anchor="middle">quoteSig 180s · 重試重用同一 key</text>
-      <path d="M900,946 L900,972" stroke="#f97316" stroke-width="2" marker-end="url(#arO)"/>
-
-      <!-- 匯合：完成 -->
-      <rect x="330" y="700" width="320" height="58" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
-      <text x="490" y="725" fill="#e2e8f0" font-size="13" font-weight="800" text-anchor="middle">D1 落單寫入 POS DB</text>
-      <text x="490" y="744" fill="#94a3b8" font-size="10.5" text-anchor="middle">收銀端 Realtime 收到 → 出廚單</text>
-
-      <rect x="330" y="778" width="320" height="62" rx="14" fill="#0f172a" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 3"/>
-      <text x="490" y="802" fill="#fdba74" font-size="12.5" font-weight="800" text-anchor="middle">D2 出廚單（自動，免店員確認）</text>
-      <text x="490" y="820" fill="#94a3b8" font-size="10.5" text-anchor="middle">⚠ 必須用 appendPrintJobsWithSync()</text>
-      <text x="490" y="834" fill="#64748b" font-size="10" text-anchor="middle">（現時 4 處用 appendPrintJobs = 零出紙）</text>
-
-      <rect x="330" y="976" width="680" height="62" rx="14" fill="#0f172a" stroke="#10b981" stroke-width="2.4"/>
-      <text x="670" y="1002" fill="#6ee7b7" font-size="14" font-weight="800" text-anchor="middle">【完成】E1 桌台即時顯示「已結帳」</text>
-      <text x="670" y="1022" fill="#94a3b8" font-size="11" text-anchor="middle">扣餘額成功 → 枱轉綠「已結帳」｜到前台支付 → 枱維持「已下單」</text>
-
-      <path d="M490,840 L490,900 L670,900 L670,972" stroke="#f97316" stroke-width="1.8" marker-end="url(#arO)"/>
-      <path d="M900,946 L900,960 L670,960 L670,972" stroke="#f97316" stroke-width="2" marker-end="url(#arO)"/>
-
-      <!-- 註解 -->
-      <text x="20" y="580" fill="#fdba74" font-size="11.5" font-weight="800">註 A · 免 PIN 窗口</text>
-      <text x="20" y="598" fill="#94a3b8" font-size="10.5">起計點＝登入成功（非上次 PIN）</text>
-      <text x="20" y="614" fill="#94a3b8" font-size="10.5">180 秒內全部免 · refresh 唔可延長</text>
-      <text x="20" y="630" fill="#fda4af" font-size="10.5">Ledger 端完全唔驗 → POS 唯一防線</text>
-
-      <text x="20" y="720" fill="#fdba74" font-size="11.5" font-weight="800">註 B · 自動接單開關</text>
-      <text x="20" y="738" fill="#94a3b8" font-size="10.5">開（預設）＝ sent_to_kitchen 即出廚</text>
-      <text x="20" y="754" fill="#94a3b8" font-size="10.5">關＝ draft，等收銀撳「接受」</text>
-      <text x="20" y="770" fill="#64748b" font-size="10.5">真源 @ pos_kiosk_settings</text>
-
-      <text x="20" y="880" fill="#fdba74" font-size="11.5" font-weight="800">註 C · 手機端無返結</text>
-      <text x="20" y="898" fill="#94a3b8" font-size="10.5">掃碼頁全無返結入口（已符合）</text>
-      <text x="20" y="914" fill="#94a3b8" font-size="10.5">返結只在 POS 機端 · 需店員 PIN 權限</text>
-
-      <text x="20" y="960" fill="#fdba74" font-size="11.5" font-weight="800">註 D · 結果不明</text>
-      <text x="20" y="978" fill="#94a3b8" font-size="10.5">Ledger 無 lookup API（Q6）→</text>
-      <text x="20" y="994" fill="#fda4af" font-size="10.5">唔可當「查唔到＝未扣款」</text>
-    </svg>
-  </div>
-  <div class="legend">
-    <span><i style="background:#1e293b;border:1px solid #334155"></i>一般步驟</span>
-    <span><i style="background:#0f172a;border:1px solid #10b981"></i>成功／關鍵步驟</span>
-    <span><i style="background:#0f172a;border:1px dashed #f59e0b"></i>需注意嘅實作細節</span>
-    <span><i style="background:#1e293b;border:1px solid #f43f5e"></i>失敗／異常分支</span>
-    <span><i style="background:#1e293b;border:1px solid #8b5cf6"></i>登入相關</span>
   </div>
 </div>
 
-<!-- ═══════════ Wireframe 文字描述 ═══════════ -->
+<!-- ═══════════ 流程圖 ═══════════ -->
+<div class="flowwrap">
+  <div class="flowcard">
+    <svg viewBox="0 0 1180 1190" width="1180" height="1190" xmlns="http://www.w3.org/2000/svg" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">
+      <defs>
+        <marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <path d="M0,0 L10,4 L0,8 z" fill="#94a3b8"/>
+        </marker>
+        <marker id="arO" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <path d="M0,0 L10,4 L0,8 z" fill="#f97316"/>
+        </marker>
+        <marker id="arS" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <path d="M0,0 L10,4 L0,8 z" fill="#0ea5e9"/>
+        </marker>
+        <marker id="arG" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <path d="M0,0 L10,4 L0,8 z" fill="#10b981"/>
+        </marker>
+      </defs>
+
+      <text x="20" y="28" fill="#fdba74" font-size="17" font-weight="800">完整路徑 · 進入 Landing → 完成付款（會員 / 非會員 × 堂食 / 快餐 × 手機 / 平板）</text>
+
+      <!-- 起點 -->
+      <rect x="440" y="52" width="300" height="84" rx="14" fill="#1e293b" stroke="#f97316" stroke-width="2.5"/>
+      <text x="590" y="82" fill="#fdba74" font-size="15" font-weight="800" text-anchor="middle">S1 / S1T · Landing</text>
+      <text x="590" y="104" fill="#cbd5e1" font-size="12.5" text-anchor="middle">「你是會員嗎？」</text>
+      <text x="590" y="123" fill="#94a3b8" font-size="11.5" text-anchor="middle">掃碼手機 / Kiosk 平板（60s 倒數）</text>
+
+      <path d="M590,136 L590,168" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M250,180 L930,180" stroke="#94a3b8" stroke-width="2"/>
+      <path d="M250,180 L250,214" stroke="#0ea5e9" stroke-width="2.5" marker-end="url(#arS)"/>
+      <path d="M930,180 L930,214" stroke="#f97316" stroke-width="2.5" marker-end="url(#arO)"/>
+      <path d="M590,180 L590,214" stroke="#94a3b8" stroke-width="2"/>
+
+      <!-- 左：非會員 -->
+      <text x="250" y="172" fill="#7dd3fc" font-size="12.5" font-weight="800" text-anchor="middle">「不是」</text>
+      <rect x="70" y="214" width="360" height="70" rx="12" fill="#0b1220" stroke="#0ea5e9" stroke-width="2"/>
+      <text x="250" y="241" fill="#7dd3fc" font-size="14" font-weight="800" text-anchor="middle">B1 · 直接入下單頁（免登入）</text>
+      <text x="250" y="262" fill="#94a3b8" font-size="11.5" text-anchor="middle">S4 堂食手機 / S10T Kiosk 平板</text>
+      <text x="250" y="277" fill="#64748b" font-size="11" text-anchor="middle">灰色「?」頭像 · 冇餘額氣泡</text>
+      <path d="M250,284 L250,320" stroke="#0ea5e9" stroke-width="2.5" marker-end="url(#arS)"/>
+
+      <rect x="70" y="320" width="360" height="66" rx="12" fill="#0b1220" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="250" y="346" fill="#cbd5e1" font-size="13" font-weight="700" text-anchor="middle">B2 · 下單（選餐 / 購物車）</text>
+      <text x="250" y="366" fill="#94a3b8" font-size="11.5" text-anchor="middle">堂食：可加單 · 快餐：每單獨立</text>
+      <path d="M250,386 L250,422" stroke="#0ea5e9" stroke-width="2.5" marker-end="url(#arS)"/>
+
+      <rect x="70" y="422" width="360" height="62" rx="12" fill="#0b1220" stroke="#0ea5e9" stroke-width="1.5"/>
+      <text x="250" y="448" fill="#cbd5e1" font-size="13" font-weight="700" text-anchor="middle">B3 · 付款頁：只有「到前台支付」</text>
+      <text x="250" y="468" fill="#64748b" font-size="11.5" text-anchor="middle">唔顯示灰掉嘅「扣餘額」（根本冇能力）</text>
+      <path d="M250,484 L250,530" stroke="#0ea5e9" stroke-width="2.5" marker-end="url(#arS)"/>
+
+      <!-- 右：會員 -->
+      <text x="930" y="172" fill="#fdba74" font-size="12.5" font-weight="800" text-anchor="middle">「是」</text>
+      <rect x="750" y="214" width="360" height="70" rx="12" fill="#0b1220" stroke="#f97316" stroke-width="2"/>
+      <text x="930" y="241" fill="#fdba74" font-size="14" font-weight="800" text-anchor="middle">C1 · 會員登入（S2 / S2T）</text>
+      <text x="930" y="262" fill="#94a3b8" font-size="11.5" text-anchor="middle">帳號 8 位手機 + PIN 4 位</text>
+      <text x="930" y="277" fill="#64748b" font-size="11" text-anchor="middle">平板用螢幕數字鍵盤 · 逃生門「跳過」</text>
+
+      <path d="M930,284 L930,316" stroke="#94a3b8" stroke-width="2"/>
+      <path d="M780,316 L1080,316" stroke="#94a3b8" stroke-width="2"/>
+      <path d="M780,316 L780,352" stroke="#f43f5e" stroke-width="2.5" marker-end="url(#ar)"/>
+      <path d="M1080,316 L1080,352" stroke="#10b981" stroke-width="2.5" marker-end="url(#arG)"/>
+      <text x="780" y="340" fill="#fda4af" font-size="11.5" font-weight="800" text-anchor="middle">失敗</text>
+      <text x="1080" y="340" fill="#6ee7b7" font-size="11.5" font-weight="800" text-anchor="middle">成功</text>
+
+      <rect x="620" y="352" width="320" height="92" rx="12" fill="#0b1220" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="780" y="376" fill="#fda4af" font-size="13" font-weight="700" text-anchor="middle">C2 · 失敗 / 鎖定（S3a / S3b）</text>
+      <text x="780" y="396" fill="#94a3b8" font-size="11.5" text-anchor="middle">統一文案「帳號或 PIN 不正確」</text>
+      <text x="780" y="414" fill="#94a3b8" font-size="11.5" text-anchor="middle">5 次 → 鎖 15 分鐘（限流）</text>
+      <text x="780" y="432" fill="#fbbf24" font-size="11.5" font-weight="700" text-anchor="middle">⚠ 一定要有「改用非會員」出口</text>
+      <path d="M620,398 L400,398" stroke="#0ea5e9" stroke-width="2" stroke-dasharray="4,3" marker-end="url(#arS)"/>
+      <text x="510" y="390" fill="#7dd3fc" font-size="11" font-weight="700" text-anchor="middle">改非會員 → 接 B1</text>
+
+      <rect x="900" y="352" width="270" height="80" rx="12" fill="#0b1220" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1035" y="378" fill="#6ee7b7" font-size="13" font-weight="700" text-anchor="middle">C3 · 下單頁（S5 / S10T）</text>
+      <text x="1035" y="398" fill="#94a3b8" font-size="11.5" text-anchor="middle">顯示名 + 本店餘額</text>
+      <text x="1035" y="416" fill="#fda4af" font-size="11" text-anchor="middle">🔴 §7.2：只准當次畫面渲染</text>
+      <path d="M1035,432 L1035,468" stroke="#10b981" stroke-width="2.5" marker-end="url(#arG)"/>
+
+      <rect x="900" y="468" width="270" height="62" rx="12" fill="#0b1220" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1035" y="494" fill="#cbd5e1" font-size="13" font-weight="700" text-anchor="middle">C4 · 下單（選餐 / 購物車）</text>
+      <text x="1035" y="514" fill="#94a3b8" font-size="11.5" text-anchor="middle">同 B2 完全一樣</text>
+      <path d="M1035,530 L1035,568" stroke="#10b981" stroke-width="2.5" marker-end="url(#arG)"/>
+
+      <!-- 匯合 -->
+      <path d="M250,530 L250,568" stroke="#0ea5e9" stroke-width="2.5"/>
+      <path d="M250,568 L590,568" stroke="#94a3b8" stroke-width="2"/>
+      <path d="M590,568 L590,600" stroke="#94a3b8" stroke-width="2.5" marker-end="url(#ar)"/>
+      <path d="M1035,568 L1035,600" stroke="#10b981" stroke-width="2.5"/>
+
+      <rect x="900" y="600" width="270" height="104" rx="12" fill="#0b1220" stroke="#f97316" stroke-width="2"/>
+      <text x="1035" y="626" fill="#fdba74" font-size="13" font-weight="800" text-anchor="middle">C5 · 付款方式（S6 / S6T）</text>
+      <text x="1035" y="647" fill="#94a3b8" font-size="11.5" text-anchor="middle">① 扣會員儲值餘額</text>
+      <text x="1035" y="665" fill="#94a3b8" font-size="11.5" text-anchor="middle">② 到前台 / 到櫃檯支付</text>
+      <text x="1035" y="685" fill="#64748b" font-size="11" text-anchor="middle">餘額不足 → ① 變灰但保留可見</text>
+
+      <rect x="440" y="600" width="300" height="104" rx="12" fill="#0b1220" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="590" y="628" fill="#7dd3fc" font-size="13" font-weight="800" text-anchor="middle">B4 · 直接確認付款</text>
+      <text x="590" y="650" fill="#94a3b8" font-size="11.5" text-anchor="middle">非會員無付款方式選擇頁</text>
+      <text x="590" y="669" fill="#94a3b8" font-size="11.5" text-anchor="middle">只有「到前台支付」一條路</text>
+      <text x="590" y="688" fill="#64748b" font-size="11" text-anchor="middle">→ 直接跳 D2</text>
+
+      <path d="M590,704 L590,742" stroke="#0ea5e9" stroke-width="2.5" marker-end="url(#arS)"/>
+      <path d="M900,660 L860,660" stroke="#f97316" stroke-width="2.5"/>
+      <path d="M860,660 L860,742" stroke="#f97316" stroke-width="2.5" marker-end="url(#arO)"/>
+
+      <rect x="700" y="742" width="340" height="118" rx="12" fill="#0b1220" stroke="#f97316" stroke-width="2"/>
+      <text x="870" y="768" fill="#fdba74" font-size="13" font-weight="800" text-anchor="middle">C6 · 確認扣款（S7a / S7b）</text>
+      <text x="870" y="789" fill="#94a3b8" font-size="11.5" text-anchor="middle">逾 180s → 需 PIN 再確認</text>
+      <text x="870" y="807" fill="#94a3b8" font-size="11.5" text-anchor="middle">180s 內 → 免 PIN 直接確認</text>
+      <text x="870" y="826" fill="#fda4af" font-size="11" font-weight="700" text-anchor="middle">🔴 呢個閘係唯一防線（Ledger 唔驗 PIN）</text>
+      <text x="870" y="845" fill="#94a3b8" font-size="11" text-anchor="middle">逃生門：取消 → 改為到前台支付</text>
+      <path d="M870,860 L870,896" stroke="#f97316" stroke-width="2.5" marker-end="url(#arO)"/>
+
+      <rect x="700" y="896" width="340" height="104" rx="12" fill="#0b1220" stroke="#f97316" stroke-width="2"/>
+      <text x="870" y="922" fill="#fdba74" font-size="13" font-weight="800" text-anchor="middle">D1 · 扣款成功（S8a / S11 / S11T）</text>
+      <text x="870" y="943" fill="#6ee7b7" font-size="11.5" font-weight="700" text-anchor="middle">✓ 錢已收 · 出交易編號</text>
+      <text x="870" y="962" fill="#94a3b8" font-size="11.5" text-anchor="middle">→ 直接出廚單（無需人工確認）</text>
+      <text x="870" y="981" fill="#94a3b8" font-size="11.5" text-anchor="middle">→ 桌台綠「已結帳」（堂食）</text>
+
+      <rect x="440" y="742" width="230" height="118" rx="12" fill="#0b1220" stroke="#0ea5e9" stroke-width="1.5"/>
+      <text x="555" y="768" fill="#7dd3fc" font-size="13" font-weight="800" text-anchor="middle">D2 · 待付款成功頁</text>
+      <text x="555" y="789" fill="#94a3b8" font-size="11.5" text-anchor="middle">S8b（堂食）/ S11（快餐）</text>
+      <text x="555" y="808" fill="#fbbf24" font-size="11.5" font-weight="700" text-anchor="middle">⚠ 錢未收</text>
+      <text x="555" y="828" fill="#94a3b8" font-size="11" text-anchor="middle">快餐 → 出取餐號</text>
+      <text x="555" y="846" fill="#94a3b8" font-size="11" text-anchor="middle">堂食 → 顯示枱號</text>
+
+      <path d="M440,801 L400,801" stroke="#94a3b8" stroke-width="2"/>
+      <path d="M400,801 L400,940" stroke="#94a3b8" stroke-width="2"/>
+      <path d="M400,940 L440,940" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar)"/>
+
+      <rect x="60" y="1058" width="1060" height="112" rx="12" fill="#0f172a" stroke="#24334d" stroke-width="1.5"/>
+      <text x="80" y="1084" fill="#fdba74" font-size="13" font-weight="800">共用 / 差異一覽</text>
+      <text x="80" y="1108" fill="#cbd5e1" font-size="11.5">堂食（/menu?tableId=）：可加單（同枱 resume）· 唔產生單號（用台名）· 成功頁唔倒數 · 桌台轉綠「已結帳」</text>
+      <text x="80" y="1130" fill="#cbd5e1" font-size="11.5">快餐（/quick 及 Kiosk）：每單獨立（唔加單）· 有取餐號（pickup 序號，同 kiosk 共用）· 手機唔倒數、Kiosk 倒 15s</text>
+      <text x="80" y="1152" fill="#cbd5e1" font-size="11.5">會員付款：堂食 / 快餐 / 手機 / 平板 <tspan fill="#fdba74" font-weight="800">完全共用</tspan>同一套 Landing → 登入 → 下單 → 付款方式</text>
+
+      <rect x="60" y="600" width="340" height="130" rx="12" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="78" y="626" fill="#fbbf24" font-size="12.5" font-weight="800">註 A · 免 PIN 180s 窗口</text>
+      <text x="78" y="648" fill="#cbd5e1" font-size="11.5">起計 = 登入成功那一刻</text>
+      <text x="78" y="667" fill="#cbd5e1" font-size="11.5">範圍 = 窗口內全部免（非只第一筆）</text>
+      <text x="78" y="686" fill="#cbd5e1" font-size="11.5">refresh 唔可延長</text>
+      <text x="78" y="705" fill="#fda4af" font-size="11.5" font-weight="700">Ledger 端完全唔驗 → 唯一防線</text>
+      <text x="78" y="722" fill="#94a3b8" font-size="11">逾時 → 回落 S7a 需 PIN</text>
+
+      <rect x="60" y="742" width="340" height="118" rx="12" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="78" y="768" fill="#fbbf24" font-size="12.5" font-weight="800">註 B · 自動接單開關</text>
+      <text x="78" y="790" fill="#cbd5e1" font-size="11.5">開（預設）→ 落單即 sent_to_kitchen</text>
+      <text x="78" y="809" fill="#cbd5e1" font-size="11.5">　→ 收銀端自動出廚單 ✅</text>
+      <text x="78" y="828" fill="#cbd5e1" font-size="11.5">關 → 落 draft，等店員確認</text>
+      <text x="78" y="849" fill="#94a3b8" font-size="11">客人有無扣餘額 = 獨立維度</text>
+
+      <rect x="60" y="896" width="340" height="140" rx="12" fill="#0f172a" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="78" y="922" fill="#fda4af" font-size="12.5" font-weight="800">註 C · 手機端一律冇返結</text>
+      <text x="78" y="944" fill="#cbd5e1" font-size="11.5">掃碼頁（/menu /quick）全無返結入口</text>
+      <text x="78" y="963" fill="#cbd5e1" font-size="11.5">返結只在 POS 機端 + 需店員權限</text>
+      <text x="78" y="982" fill="#fda4af" font-size="11.5" font-weight="800">註 D · 「結果不明」態</text>
+      <text x="78" y="1002" fill="#cbd5e1" font-size="11.5">Ledger 無 lookup API → 查唔到 ≠ 未扣</text>
+      <text x="78" y="1021" fill="#cbd5e1" font-size="11.5">唯一手段 = 同一冪等鍵重試（同 txnId）</text>
+    </svg>
+  </div>
+  <div class="legend">
+    <span><i style="background:#f97316"></i>會員路徑</span>
+    <span><i style="background:#0ea5e9"></i>非會員路徑</span>
+    <span><i style="background:#10b981"></i>登入成功後</span>
+    <span><i style="background:#f43f5e"></i>失敗 / 紅線</span>
+    <span><i style="background:#f59e0b"></i>註解框（唔屬流程）</span>
+  </div>
+</div>
+
+<!-- ═══════════ 文字流程圖 ═══════════ -->
 <div class="doc">
+  <h2>一、文字流程圖（完整路徑）</h2>
+  <pre style="background:#0f172a;border:1px solid #24334d;border-radius:12px;padding:16px;
+  font-size:11.5px;line-height:1.85;color:#cbd5e1;overflow-x:auto;font-family:Consolas,Monaco,monospace">
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 【入口】Landing Page —「你是會員嗎？」                                   │
+│   掃碼手機 S1   ：390×790 直向 · 兩選項上下排列（各 58px）               │
+│   Kiosk 平板 S1T：1080×700 橫向 · 兩選項並排（各 76px）                  │
+│   🔴 Kiosk 右上角：60 秒倒數（任何動作重置 → 歸零清空並彈回本頁）        │
+│   顯示：店名 · 枱號（堂食）/「快餐 · 自取」（快餐）                      │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │
+          ┌─────────────────────┴─────────────────────┐
+          │                                           │
+     「不是」(非會員)                              「是」(會員)
+          │                                           │
+          ▼                                           ▼
+┌───────────────────────┐            ┌────────────────────────────────────┐
+│ B1 直接入下單頁        │            │ C1 會員登入（S2 手機 / S2T 平板）  │
+│  · 免登入              │            │  · 帳號(8位手機) + PIN(4位)        │
+│  · 灰色「?」頭像       │            │  · 平板用螢幕數字鍵盤               │
+│  · 冇會員徽章          │            │  · [登入並繼續點餐]                │
+│  · 冇餘額氣泡          │            │  · [跳過，直接點餐] ← 逃生門        │
+│  · 冇扣餘額選項        │            │  · 統一文案「帳號或 PIN 不正確」    │
+└───────────┬───────────┘            └────────────────┬───────────────────┘
+            │                                         │
+            │                            ┌────────────┴────────────┐
+            │                            │                         │
+            │                        驗證失敗                  驗證成功
+            │                            │                         │
+            │                            ▼                         ▼
+            │              ┌──────────────────────────┐  ┌───────────────────────┐
+            │              │ C2 失敗 / 鎖定            │  │ C3 下單頁（會員）      │
+            │              │  S3a 紅框 + 剩餘次數      │  │  S5 手機 / S10T 平板   │
+            │              │  S3b 鎖 15 分 + 倒數      │  │  顯示名 + 本店餘額     │
+            │              │  ⚠ 必設「改用非會員」     │  │  🔴 §7.2 只准當次畫面  │
+            │              └────────────┬─────────────┘  └───────────┬───────────┘
+            │                           │                            │
+            │              改為非會員 ───┘                            │
+            │                           │                            ▼
+            │                           │              ┌───────────────────────┐
+            │                           │              │ C4 下單（選餐 / 購物車）│
+            │                           │              │  堂食：可加單           │
+            │                           │              │  快餐：每單獨立         │
+            │                           │              └───────────┬───────────┘
+            │                           │                          │
+            └───────────┬───────────────┘                          │
+                        │                                          │
+                        ▼                                          ▼
+        ┌────────────────────────────┐              ┌────────────────────────────┐
+        │ B2 下單（選餐 / 購物車）   │              │ C5 選擇付款方式             │
+        │  · 堂食：同枱 resume       │              │  S6 手機 / S6T 平板         │
+        │  · 快餐：每單獨立          │              │  ① 扣會員儲值餘額           │
+        └────────────┬───────────────┘              │     （餘額足夠）            │
+                     │                              │  ② 到前台 / 到櫃檯支付      │
+                     ▼                              │  ⚠ 餘額不足 → ① 變灰但可見  │
+        ┌────────────────────────────┐              └──────────┬─────────────────┘
+        │ B3 付款頁：只有一個選項     │                         │
+        │  「到前台支付」             │            ┌────────────┴────────────┐
+        │  （唔顯示扣餘額，因為根本   │            │                         │
+        │    冇呢個能力 —— 乾淨）     │       選「扣餘額」              選「到前台」
+        └────────────┬───────────────┘            │                         │
+                     │                            ▼                         │
+                     │              ┌────────────────────────────┐          │
+                     │              │ C6 確認扣款                 │          │
+                     │              │  S7a 逾 180s → 需 PIN 再確認│          │
+                     │              │  S7b 180s 內 → 免 PIN       │          │
+                     │              │  🔴 唯一防線（Ledger 唔驗） │          │
+                     │              │  逃生門：取消 → 到前台支付  │          │
+                     │              └──────────┬─────────────────┘          │
+                     │                         │                            │
+                     │                    ┌────┴─────┐                      │
+                     │                    │          │                      │
+                     │                扣款成功    餘額不足 / 網絡失敗        │
+                     │                    │          │                      │
+                     │                    ▼          ▼                      │
+                     │      ┌──────────────────┐  ┌──────────────────┐      │
+                     │      │ D1 扣款成功       │  │ S9a 餘額不足      │      │
+                     │      │  S8a 堂食         │  │  訂單保留唔取消   │      │
+                     │      │  S11 快餐（手機）  │  │  → 轉到前台付款   │      │
+                     │      │  S11T 快餐（平板） │  ├──────────────────┤      │
+                     │      │  ✓ 錢已收         │  │ S9b 網絡失敗       │      │
+                     │      │  → 直接出廚單      │  │  結果不明 · 重試   │      │
+                     │      │  → 桌台綠「已結帳」│  │  同一冪等鍵        │      │
+                     │      └──────────────────┘  └──────────────────┘      │
+                     │                                                       │
+                     └───────────────────┬───────────────────────────────────┘
+                                         ▼
+                       ┌────────────────────────────────────┐
+                       │ D2 待付款成功頁（錢未收）           │
+                       │  堂食 S8b：顯示枱號                 │
+                       │  快餐 S11：顯示取餐號               │
+                       │  快餐 → 出取餐號（pickup 序號）     │
+                       └────────────────────────────────────┘
 
-  <h2>一、畫面清單總覽</h2>
-  <table>
-    <tr><th>編號</th><th>畫面</th><th>適用入口</th><th>關鍵欄位 / 按鈕</th></tr>
-    <tr><td>S1</td><td>Landing —「你是會員嗎？」</td><td>Kiosk + 掃碼</td><td>店名 · 枱號 · 「是，我是會員」·「不是，直接點餐」</td></tr>
-    <tr><td>S2</td><td>會員登入</td><td>Kiosk + 掃碼</td><td>帳號（8 位手機）· PIN（4 位）·「登入並繼續點餐」·「忘記 PIN」</td></tr>
-    <tr><td>S3a</td><td>登入失敗</td><td>Kiosk + 掃碼</td><td>紅框 · 錯誤訊息 · 剩餘次數 ·「重新登入」</td></tr>
-    <tr><td>S3b</td><td>登入鎖定</td><td>Kiosk + 掃碼</td><td>倒數時間 ·「請稍後再試」（灰）·「改用非會員」</td></tr>
-    <tr><td>S4</td><td>下單頁（非會員）</td><td>Kiosk + 掃碼</td><td>菜單 · 應付合計 ·「確認下單 · 到前台支付」（單一選項）</td></tr>
-    <tr><td>S5</td><td>下單頁（會員）</td><td>Kiosk + 掃碼</td><td>會員氣泡（顯示名 + 餘額）· 菜單 ·「確認下單 並選擇付款」</td></tr>
-    <tr><td>S6a</td><td>付款方式（餘額足夠）</td><td>Kiosk + 掃碼</td><td>兩選項皆可選 ·「確認付款」</td></tr>
-    <tr><td>S6b</td><td>付款方式（餘額不足）</td><td>Kiosk + 掃碼</td><td>扣餘額變灰（唔消失）· 自動選「到前台支付」</td></tr>
-    <tr><td>S7a</td><td>確認扣款（需 PIN）</td><td>Kiosk + 掃碼</td><td>金額 · 扣後餘額 · PIN 輸入 ·「取消，改為到前台支付」</td></tr>
-    <tr><td>S7b</td><td>確認扣款（免 PIN）</td><td>Kiosk + 掃碼</td><td>同上，但無 PIN 欄（登入後 180 秒內）</td></tr>
-    <tr><td>S8a</td><td>結果 —— 扣款成功</td><td>Kiosk + 掃碼</td><td>扣款金額 · 扣後餘額 · 交易編號 ·「再加點」·「完成」</td></tr>
-    <tr><td>S8b</td><td>結果 —— 下單成功（待前台付款）</td><td>Kiosk + 掃碼</td><td>待付金額 · 枱號 · 提示卡 ·「再加點」·「完成」</td></tr>
-    <tr><td>S9a</td><td>餘額不足（扣款時）</td><td>Kiosk + 掃碼</td><td>「訂單已保留」·「改為到前台支付」·「重新選擇付款方式」</td></tr>
-    <tr><td>S9b</td><td>網絡失敗（結果不明）</td><td>Kiosk + 掃碼</td><td>「請勿重複操作」·「重試」·「改為到前台支付」</td></tr>
-  </table>
-
-  <h2>二、逐頁 Wireframe 描述</h2>
-
-  <h3>S1 · Landing Page —「你是會員嗎？」</h3>
-  <table>
-    <tr><th>區塊</th><th>內容</th><th>規格</th></tr>
-    <tr><td>品牌區</td><td>Logo + 主標「你是會員嗎？」+ 副標說明</td><td>主標 23px / 800；副標 13px 灰</td></tr>
-    <tr><td>店舖標識</td><td>綠點 + 店名 · 枱號（或「快餐」）</td><td>掃碼取 <code>?store=</code> / <code>?tableId=</code>；Kiosk 取裝置綁定</td></tr>
-    <tr><td>主按鈕 ①</td><td>👤 是，我是會員</td><td>橙色實心 · 高 58px</td></tr>
-    <tr><td>主按鈕 ②</td><td>🙋 不是，直接點餐</td><td>半透明描邊 · 高 58px（**同等份量**，唔可以做得細）</td></tr>
-    <tr><td>輔助說明</td><td>會員好處 + 忘記 PIN 指引</td><td>11.5px 灰 · 置中</td></tr>
-  </table>
-  <p><b>狀態：</b>本頁無錯誤態、無載入態（資料已由 bootstrap 提供）。若 store 參數無效 → 顯示「此 QR 碼無效」並隱藏兩個按鈕。</p>
-
-  <h3>S2 · 會員登入</h3>
-  <table>
-    <tr><th>欄位 / 按鈕</th><th>規格</th><th>驗證規則</th></tr>
-    <tr><td>會員帳號</td><td><code>inputMode="numeric"</code> · 高 54px · 17px 粗體</td><td>正規化後 <code>/^\d{8}$/</code>（不加 +853）</td></tr>
-    <tr><td>PIN 碼</td><td><code>type="password"</code> · 同上尺寸</td><td><code>/^\d{4}$/</code></td></tr>
-    <tr><td>登入並繼續點餐</td><td>橙色 · 高 58px</td><td>兩欄皆合法才可用（否則灰）</td></tr>
-    <tr><td>忘記 PIN？到前台處理</td><td>描邊 · 高 44px</td><td>顯示指引，唔做任何 API 呼叫</td></tr>
-  </table>
-  <div class="warnbox">
-    <div class="wt">🔴 錯誤訊息必須統一</div>
-    「帳號不存在」、「未設 PIN」、「PIN 錯誤」三者**一律**顯示同一句
-    「帳號或 PIN 不正確」—— 否則可被用來枚舉邊個電話號碼係會員（契約 §4.5.2）。
-  </div>
-  <p><b>PIN 唔會經過前端運算：</b>只原樣傳去 POS 伺服器，由伺服器用 <code>AUTH_PIN_PEPPER</code> 派生 Auth 密碼。前端 bundle 唔可以出現 pepper。</p>
-
-  <h3>S3a / S3b · 登入失敗與鎖定</h3>
-  <table>
-    <tr><th>態</th><th>觸發</th><th>畫面</th></tr>
-    <tr><td>S3a 失敗</td><td>驗證失敗（1–4 次）</td><td>PIN 欄轉紅框 + 「帳號或 PIN 不正確（剩餘 N 次機會）」+「重新登入」</td></tr>
-    <tr><td>S3b 鎖定</td><td>連續 5 次失敗</td><td>鎖圖示 + 「請 14:52 後再試」+ 主按鈕變灰顯示倒數 + <b>「改用非會員直接點餐」</b></td></tr>
-    <tr><td>網絡失敗</td><td>請求逾時</td><td>底部橫幅「網絡連線失敗，請重試」+ 按鈕保持可用</td></tr>
-  </table>
-  <p>鎖定維度＝「電話號碼」跨 IP 生效（唔可以只靠 IP，例如店內共用 NAT 會誤傷全店）。</p>
-
-  <h3>S4 · 下單頁（非會員）</h3>
-  <table>
-    <tr><th>區塊</th><th>內容</th></tr>
-    <tr><td>頂欄</td><td>「堂食 A01」+「店名 · 非會員」+ 灰色「?」頭像</td></tr>
-    <tr><td>菜單</td><td>菜品卡（圖 · 名 · 規格 · 價）· 可加減數量</td></tr>
-    <tr><td>底部結帳條</td><td>「應付合計（N 件）MOP xx」+ 按鈕「確認下單 · 到前台支付」</td></tr>
-  </table>
-  <p><b>付款方式：</b>只有一個 —— 直接寫在按鈕上，<b>唔開選擇頁</b>（開一個只有一個選項嘅選擇頁係無意義嘅一步）。</p>
-  <p><b>為何唔顯示「扣餘額」：</b>非會員根本冇錢包，「顯示但灰掉」只會令客人以為自己可以做啲嘢。<b>直接隱藏。</b></p>
-
-  <h3>S5 · 下單頁（會員，已登入）</h3>
-  <table>
-    <tr><th>區塊</th><th>內容</th><th>注意</th></tr>
-    <tr><td>頂欄</td><td>「堂食 A01」+ 綠色「陳」頭像（顯示名首字）</td><td>顯示名來自 <code>profiles.display_name</code></td></tr>
-    <tr><td>會員氣泡</td><td>頭像 + 顯示名 + 「本店會員」+ <b>儲值餘額 MOP xxx</b></td><td>餘額來自 <code>wallets.balance_avos</code></td></tr>
-    <tr><td>菜單</td><td>同 S4</td><td>—</td></tr>
-    <tr><td>底部結帳條</td><td>「應付合計」+ 按鈕「確認下單 並選擇付款」</td><td>會員按鈕文案唔同（要入付款選擇）</td></tr>
-  </table>
-  <div class="warnbox">
-    <div class="wt">🔴 個資紅線（契約 §7.2）</div>
-    顯示名同餘額<b>只准「當次畫面渲染」</b>。禁止寫入 POS DB／<code>localStorage</code>／
-    <code>IndexedDB</code>／analytics／<code>console.log</code>。
-    會員身份落到 POS 單上只可以用 <b><code>customer_id</code>（uuid）</b>。
-  </div>
-  <p><b>餘額口徑：</b><code>balance_avos</code> <b>已經係</b> paid + gift 合計，唔可以再加 <code>gift_balance_avos</code> 一次。</p>
-  <p><b>積分唔喺呢度：</b>積分係 avos 但唔係錢，唔可折現、唔可當現金扣 —— 唔會出現喺付款頁。</p>
-
-  <h3>S6a / S6b · 付款方式選擇</h3>
-  <table>
-    <tr><th>選項</th><th>標題</th><th>副標</th></tr>
-    <tr><td>①</td><td>💳 扣會員儲值餘額</td><td>「餘額 MOP 258.00 → 扣款後 MOP 188.00」（即時算埋扣後值）</td></tr>
-    <tr><td>②</td><td>🏪 到前台支付</td><td>「到收銀台以現金／電子支付結帳」</td></tr>
-  </table>
-  <table>
-    <tr><th>態</th><th>行為</th></tr>
-    <tr><td>S6a 餘額足夠</td><td>兩個選項皆可選；預設選「扣餘額」</td></tr>
-    <tr><td>S6b 餘額不足</td><td>頂部紅色提示卡顯示差額；「扣餘額」變灰<b>但保留可見</b>；自動改選「到前台支付」</td></tr>
-  </table>
-  <p><b>為何 S6b 唔可以似 S4 咁直接隱藏：</b>S4 係「根本冇呢個能力」，S6b 係「有但今次用唔到」。客人要見到「點解唔得」同「差幾多」。</p>
-
-  <h3>S7a / S7b · 確認扣款（PIN 再確認）</h3>
-  <table>
-    <tr><th>態</th><th>條件</th><th>畫面</th></tr>
-    <tr><td>S7a 需 PIN</td><td>距登入成功 &gt; 180 秒</td><td>顯示金額 + 扣後餘額 + PIN 輸入框 + 「確認扣款」+「取消，改為到前台支付」</td></tr>
-    <tr><td>S7b 免 PIN</td><td>距登入成功 ≤ 180 秒</td><td>同上但<b>無 PIN 欄</b>，加一句「你剛於 3 分鐘內登入」</td></tr>
-  </table>
-  <div class="warnbox">
-    <div class="wt">🔴 180 秒窗口係唯一防線（Ledger Q5 拍板）</div>
-    <ul>
-      <li>3 分鐘係「<b>建議</b>」唔係強制 —— 由 POS 自己實作。</li>
-      <li>起計點＝<b>登入成功</b>（唔係上次 PIN 確認）。</li>
-      <li>範圍＝時間內<b>全部免</b>（唔係「每張單一次」）。</li>
-      <li><b>refresh token 唔可以</b>延長呢個窗口。</li>
-      <li>Ledger 端<b>完全唔會</b>再驗 PIN。</li>
-    </ul>
-    手機被盜 = 180 秒內可扣錢，所以呢個閘寫錯 = 等於冇二次確認。
-  </div>
-
-  <h3>S8a / S8b · 結果頁</h3>
-  <table>
-    <tr><th>態</th><th>主標</th><th>內容</th><th>按鈕</th></tr>
-    <tr><td>S8a 扣款成功</td><td>✅ 扣款成功</td><td>扣款金額 · 扣後餘額 · 品項 · <b>交易編號</b></td><td>「➕ 再加點」·「完成」</td></tr>
-    <tr><td>S8b 待前台付款</td><td>🧾 下單成功</td><td>「請到前台付款」· 待付金額 · <b>枱號</b> · 提示卡</td><td>「➕ 再加點」·「完成」</td></tr>
-  </table>
-  <p>兩個結果頁<b>必須一眼分得出「錢收咗未」</b> —— 左邊顯示交易編號，右邊顯示「待付金額 + 枱號」。</p>
-
-  <h3>S9a / S9b · 異常態</h3>
-  <table>
-    <tr><th>態</th><th>觸發</th><th>文案重點</th><th>按鈕</th></tr>
-    <tr><td>S9a 餘額不足</td><td>扣款一刻 <code>insufficient_balance</code></td><td><b>「訂單已保留，唔會取消」</b>（Ledger Q7）</td><td>「改為到前台支付」·「重新選擇付款方式」</td></tr>
-    <tr><td>S9b 網絡失敗</td><td>逾時／結果不明</td><td><b>「請勿重複操作」</b>+「系統會自動核對，唔會重複扣款」</td><td>「重試」·「改為到前台支付」</td></tr>
-  </table>
-  <div class="warnbox">
-    <div class="wt">🔴 「結果不明」係最危險嘅態</div>
-    Ledger <b>唔提供 lookup 接口</b>（Q6）→ POS 無法查「到底扣咗未」。
-    唯一手段係<b>用同一冪等鍵重試</b>（會回同一 <code>txnId</code>）。
-    <b>絕對唔可以</b>把「查唔到」當成「未扣款」→ 會導致重複扣錢。
-    唔確定就引導去前台由店員核對。
-  </div>
-
-  <h2>三、文字流程圖（完整路徑）</h2>
-<pre style="background:#0f172a;border:1px solid #24334d;border-radius:12px;padding:16px;
-  font-size:12px;line-height:1.75;color:#cbd5e1;overflow-x:auto;font-family:Consolas,Monaco,monospace">
-┌──────────────────────────────────────────────────────────────┐
-│ 【入口】Landing Page —「你是會員嗎？」                        │
-│  顯示：店名 · 枱號 · [是，我是會員] [不是，直接點餐]          │
-└───────────────────────────┬──────────────────────────────────┘
-                            │
-        ┌───────────────────┴───────────────────┐
-        │                                       │
-   「不是」                                  「是」
-        │                                       │
-        ▼                                       ▼
-┌──────────────────┐              ┌────────────────────────────┐
-│ B1 直接入下單頁  │              │ C1 會員登入頁              │
-│  （無需登入）    │              │  帳號(8位手機) + PIN(4位)  │
-└────────┬─────────┘              │  [登入並繼續點餐]          │
-         │                        │  [忘記PIN? 到前台]         │
-         │                        └─────────────┬──────────────┘
-         │                                      │
-         │                          ┌───────────┴───────────┐
-         │                          │                       │
-         │                      驗證失敗                 驗證成功
-         │                          │                       │
-         │                          ▼                       ▼
-         │            ┌──────────────────────┐  ┌──────────────────────┐
-         │            │ C2 失敗態             │  │ C3 下單頁（會員）    │
-         │            │  S3a 紅框+剩餘次數    │  │  顯示名 + 本店餘額   │
-         │            │  S3b 鎖15分+倒數      │  │  （只准當次畫面）    │
-         │            │  ⚠ 必設「改非會員」   │  └──────────┬───────────┘
-         │            └──────────┬───────────┘             │
-         │                       │                         │
-         │          改為非會員 ───┘                         │
-         │                       │                         │
-         └───────────┬───────────┘                         │
-                     │                                     │
-                     ▼                                     ▼
-        ┌────────────────────────┐        ┌──────────────────────────────┐
-        │ B2 選餐 → 確認下單      │        │ C4 選餐 → 選擇付款方式        │
-        │  付款方式：只有到前台   │        │  ① 扣會員儲值餘額             │
-        └───────────┬────────────┘        │  ② 到前台支付                 │
-                    │                     └──────────────┬───────────────┘
-                    │                                    │
-                    │                    ┌───────────────┴────────────────┐
-                    │                    │                                │
-                    │               選「到前台支付」              選「扣餘額」
-                    │                    │                                │
-                    │                    │                                ▼
-                    │                    │               ┌────────────────────────────┐
-                    │                    │               │ 餘額 ≥ 應付？               │
-                    │                    │               └───────┬────────────┬───────┘
-                    │                    │                  足夠 │            │ 不足
-                    │                    │                       ▼            ▼
-                    │                    │    ┌────────────────────┐  ┌────────────────────┐
-                    │                    │    │ C7 PIN 再確認       │  │ C5 餘額不足（S9a）  │
-                    │                    │    │  距登入≤180s → 免PIN│  │  訂單保留(唔取消)   │
-                    │                    │    │  ⚠ Ledger 端唔驗   │  │  → 即可轉到前台支付 │
-                    │                    │    └─────────┬──────────┘  └──────────┬─────────┘
-                    │                    │              │                       │
-                    │                    │              ▼                       │
-                    │                    │    ┌────────────────────┐            │
-                    │                    │    │ C8 POS伺服器 HMAC   │            │
-                    │                    │    │  quote → commit     │            │
-                    │                    │    │  帶顧客 access_token│            │
-                    │                    │    └─────────┬──────────┘            │
-                    │                    │              │                       │
-                    └──────────┬─────────┘              │                       │
-                               │                        │                       │
-                               ▼                        ▼                       │
-                    ┌──────────────────────┐  ┌──────────────────────┐          │
-                    │ D1 落單寫入 POS DB    │  │ D1 落單 + 已扣款      │          │
-                    │  status = draft 或    │  │  status = paid        │          │
-                    │  sent_to_kitchen      │  │  (線上已付)           │          │
-                    └──────────┬───────────┘  └──────────┬───────────┘          │
-                               │                         │                      │
-                               └────────────┬────────────┘                      │
-                                            ▼                                   │
-                              ┌──────────────────────────────┐                  │
-                              │ D2 收銀端 Realtime 收到       │◄─────────────────┘
-                              │  → 自動出廚單（免店員確認）   │
-                              │  ⚠ 必須 appendPrintJobsWithSync│
-                              └──────────────┬───────────────┘
-                                             │
-                                             ▼
-                              ┌──────────────────────────────┐
-                              │ 【完成】E1 桌台狀態更新       │
-                              │  扣餘額成功 → 綠「已結帳」    │
-                              │  到前台支付 → 橙「已下單」    │
-                              └──────────────────────────────┘
-
-┌─ 註 A · 免 PIN 窗口 ────────────────────────────────────────┐
-│ 起計點＝登入成功（唔係上次 PIN 確認）· 180 秒內全部免        │
-│ refresh token 唔可以延長 · Ledger 端完全唔會再驗 PIN        │
-│ → 呢個閘係唯一防線，寫錯 = 等於冇二次確認                    │
-└──────────────────────────────────────────────────────────────┘
+┌─ 註 A · 免 PIN 180 秒窗口 ─────────────────────────────────┐
+│ 起計點 = 登入成功那一刻（唔係落單、唔係開付款頁）           │
+│ 範圍   = 窗口內「全部」免 PIN（唔係只第一筆）               │
+│ refresh 唔可以延長窗口｜逾時 → 回落 S7a 需 PIN             │
+│ 🔴 Ledger 端完全唔驗 PIN → 呢個閘係唯一防線                 │
+└────────────────────────────────────────────────────────────┘
 
 ┌─ 註 B · 自動接單開關（真源 pos_kiosk_settings）─────────────┐
 │ 開（預設）→ 落單即 sent_to_kitchen → 收銀端自動出廚單        │
 │ 關       → 落 draft → 收銀端彈「自助單待確認」→ 店員撳接受   │
 │ ⚠ 客人有無扣餘額，同呢個開關係兩個獨立維度                   │
-└──────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────┘
 
 ┌─ 註 C · 手機端一律冇返結 ──────────────────────────────────┐
 │ 掃碼頁（/menu /quick）全無返結入口 —— 返結只在 POS 機端     │
 │ 返結只在 POS 機端執行 + 需店員權限（refundOrder／reopenOrder）│
-└──────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────┘
 
 ┌─ 註 D · 「結果不明」態 ────────────────────────────────────┐
 │ Ledger 無 lookup API → 無法查「扣咗未」                      │
 │ 唯一手段＝同一冪等鍵重試（回同一 txnId）                     │
 │ ⚠ 唔可以當「查唔到」＝「未扣款」                             │
-└──────────────────────────────────────────────────────────────┘
-</pre>
+└────────────────────────────────────────────────────────────┘
 
-  <h2>四、需你確認嘅 5 個決策點</h2>
+┌─ 註 E · 快餐 vs 堂食（logic 真係唔一樣）───────────────────┐
+│                 │ 堂食（/menu?tableId=） │ 快餐（/quick + Kiosk）│
+│ 枱號             │ 有（A01）              │ 冇（tableId=counter）  │
+│ 落單號碼         │ 唔產生（用台名）        │ pickup 序號（自取01） │
+│ 加單 / resume    │ 可以（同枱改同一張單）  │ 唔可以（每單獨立）     │
+│ 成功頁           │ 顯示枱號 · 唔倒數       │ 顯示取餐號             │
+│                  │                        │ 手機唔倒數 · Kiosk 15s │
+│ 會員付款         │ ←─── 完全共用同一套 ───→                       │
+└────────────────────────────────────────────────────────────┘
+
+┌─ 註 F · Kiosk 60 秒閒置倒數 ───────────────────────────────┐
+│ 位置：平板頂欄右上角（ring + 秒數）                          │
+│ 重置：mousemove / mousedown / touchstart / keydown / scroll  │
+│ 歸零：① 清空會員 session ② 清空購物車 ③ 彈回 Landing        │
+│ ⚠ 落單中（submitting）要暫停倒數 —— 否則會「送緊單被清空」  │
+└────────────────────────────────────────────────────────────┘</pre>
+
+  <h2>二、形態對照（手機 vs 平板 × 堂食 vs 快餐）</h2>
   <table>
-    <tr><th>#</th><th>決策</th><th>我建議</th><th>替代</th></tr>
     <tr>
-      <td>1</td>
-      <td>非會員喺 S4 要唔要<b>先見到</b>「唔可以用餘額」嘅說明？</td>
-      <td>唔使，直接隱藏（乾淨）</td>
-      <td>顯示一行灰字「非會員請到前台付款」</td>
+      <th>維度</th><th>掃碼手機（客人自己部手機）</th><th>Kiosk 平板（店內共用）</th>
     </tr>
     <tr>
-      <td>2</td>
-      <td>S1 兩個按鈕嘅<b>視覺份量</b></td>
-      <td>同等份量（避免非會員覺得低人一等）</td>
-      <td>「是」用橙色實心、「不是」用文字連結（較輕）</td>
+      <td><b>實體</b></td>
+      <td>390×790 直向（iPhone 尺寸）</td>
+      <td><b>1080×700 橫向</b>（10.1″～15″ 平板）</td>
     </tr>
     <tr>
-      <td>3</td>
-      <td>公司／Kiosk 可用嘅記憶體方式</td>
-      <td>Kiosk 閒置 60 秒自動清空會員狀態（共用平板）</td>
-      <td>唔自動清，由下一位客人撳「不是」為主</td>
+      <td><b>入口</b></td>
+      <td>掃 QR → <code>/menu?tableId=</code> 或 <code>/quick</code></td>
+      <td>裝置已綁店 → 開機即 <code>/order</code></td>
     </tr>
     <tr>
-      <td>4</td>
-      <td>S8 結果頁要唔要<b>自動倒數返回</b>？</td>
-      <td>堂食唔倒數（客可慢慢加點）· Kiosk 快餐倒數 15 秒</td>
-      <td>一律要手動撳「完成」</td>
+      <td><b>可做堂食？</b></td>
+      <td>✅ 可以（<code>/menu?tableId=</code>）</td>
+      <td>❌ <b>永遠快餐</b>（程式寫死，見下）</td>
     </tr>
     <tr>
-      <td>5</td>
-      <td>扣餘額成功後，桌台綠「已結帳」<b>幾時轉「空閒」</b>？</td>
-      <td>需店員撳「清枱」（自動化會令人分唔清邊張真係未清）</td>
-      <td>結帳即轉空閒（同現時行為一致）</td>
+      <td><b>點餐佈局</b></td>
+      <td>單欄 + 底部購物車彈窗</td>
+      <td><b>3 欄</b>：分類 170px ／ 餐牌 2 欄格 ／ 購物車 330px</td>
+    </tr>
+    <tr>
+      <td><b>觸控目標</b></td>
+      <td>≥ 58px</td>
+      <td>≥ <b>76px</b>（手指粗、站立操作、可能有油）</td>
+    </tr>
+    <tr>
+      <td><b>登入鍵盤</b></td>
+      <td>系統鍵盤</td>
+      <td><b>螢幕數字鍵盤</b>（唔用系統鍵盤）</td>
+    </tr>
+    <tr>
+      <td><b>60s 閒置倒數</b></td>
+      <td>唔需要（客人自己部機）</td>
+      <td><b>必須</b>（右上角，歸零清空 + 彈回 Landing）</td>
+    </tr>
+    <tr>
+      <td><b>成功頁</b></td>
+      <td>堂食不倒數 ／ 快餐不倒數（留住取餐號）</td>
+      <td><b>快餐 15 秒倒數</b> + 「完成」掣</td>
+    </tr>
+    <tr>
+      <td><b>打印</b></td>
+      <td>唔印（客人手機）</td>
+      <td>本機印顧客小票（<code>receipt</code> role）</td>
+    </tr>
+  </table>
+
+  <div class="warnbox">
+    <div class="wt">🔴 重要發現：Kiosk 現時「只做快餐」係寫死嘅</div>
+    <p style="margin-top:0">
+      <code>src/lib/use-kiosk-order.ts:444</code>：
+      <code>const mode = variant === "scan" &amp;&amp; tableId ? "dine_in" : "quick";</code>
+    </p>
+    <p style="margin-bottom:0">
+      程式註解明寫「<b>規格 5：自助點餐機只做快餐</b>」（2026-09-11 修）。所以
+      <code>/order</code> 永遠係 <code>quick</code>，<b>冇</b>枱號、<b>冇</b>加單。
+      我上稿用手機框畫 Kiosk 係錯嘅 —— 已在本稿修正為平板橫向 + 3 欄。
+    </p>
+  </div>
+
+  <h2>三、快餐 vs 堂食：logical 差異（已全部反映在畫面）</h2>
+  <table>
+    <tr><th></th><th>堂食（dine_in）</th><th>快餐（quick）</th></tr>
+    <tr>
+      <td><b>路由</b></td>
+      <td><code>/menu?tableId=A01&amp;store=x</code>（每枱一個 QR）</td>
+      <td><code>/quick?store=x</code>（全店一個 QR）＋ <code>/order</code>（Kiosk）</td>
+    </tr>
+    <tr>
+      <td><b>枱綁定</b></td>
+      <td>枱號 = 訂單標識；同一枱再加單 = <b>改同一張單</b></td>
+      <td><code>tableId="counter"</code>、<code>tableName="自取"</code>；<b>每單獨立</b></td>
+    </tr>
+    <tr>
+      <td><b>落單號碼</b></td>
+      <td><b>唔產生</b>（<code>orderNoSource="table"</code>，用台名）</td>
+      <td>店內 <code>pickup</code> 序號（如「自取01」），同 Kiosk <b>共用同一條</b> → 唔撞號</td>
+    </tr>
+    <tr>
+      <td><b>離線 fallback</b></td>
+      <td>唔需要</td>
+      <td>明顯非序號短後綴（如 <code>自取-K7Q2</code>）—— 唔會撞店內序號</td>
+    </tr>
+    <tr>
+      <td><b>加單 / resume</b></td>
+      <td>✅ 可以（重掃 QR 會載入本枱未結單）</td>
+      <td>❌ <b>唔可以</b>（新單 = 新號碼）</td>
+    </tr>
+    <tr>
+      <td><b>成功頁</b></td>
+      <td>顯示枱號 · 顯示本枱明細 · <b>唔倒數</b>（手機）</td>
+      <td>顯示取餐號 · 唔顯示明細 · 手機唔倒數 / <b>Kiosk 倒 15s</b></td>
+    </tr>
+    <tr>
+      <td><b>重掃 QR</b></td>
+      <td>見到本枱現有訂單（<code>activeTableOrder</code>）</td>
+      <td>見到「今次 session 落過嘅單」（sessionStorage 6 小時）</td>
+    </tr>
+    <tr>
+      <td><b>桌台影響</b></td>
+      <td>扣款成功 → 桌台綠「已結帳 / 待收尾」</td>
+      <td><b>唔關事</b>（快餐冇枱）</td>
     </tr>
   </table>
 
   <div class="okbox">
+    <div class="wt">✅ 但會員付款完全共用同一套</div>
+    <ul>
+      <li>Landing 問「你是會員嗎？」→ 兩邊<b>一模一樣</b></li>
+      <li>會員登入（帳號 8 位 + PIN 4 位）→ <b>一模一樣</b></li>
+      <li>付款方式選擇（扣餘額 / 到前台）→ <b>一模一樣</b></li>
+      <li>180s 免 PIN 窗口 → <b>一模一樣</b></li>
+      <li>差異<b>只在</b>「落單號碼 / resume / 成功頁」—— 全部收喺 <code>useKioskOrder()</code> 同 <code>scan-order-page.tsx</code> 嘅 <code>quick</code> 分支</li>
+    </ul>
+  </div>
+
+  <h2>四、逐頁 Wireframe 描述（欄位 · 按鈕 · 狀態）</h2>
+
+  <h3>S1 / S1T · Landing（你是會員嗎？）</h3>
+  <table>
+    <tr><th>項目</th><th>掃碼手機 S1</th><th>Kiosk 平板 S1T</th></tr>
+    <tr><td><b>欄位</b></td><td colspan="2">店名（<code>displayStoreName</code>）· 場景標籤（「堂食 A01」／「快餐 · 自取」／「自助點餐機 · 快餐」）</td></tr>
+    <tr><td><b>按鈕</b></td><td colspan="2"><b>① 是，我是會員</b>（主色橙，58px／平板 76px）<br><b>② 不是，直接點餐</b>（次要，同等高度 ← 已拍板）</td></tr>
+    <tr><td><b>狀態</b></td><td>靜態</td><td>+ 右上角 <b>60s 倒數</b>（歸零 → 清空並彈回本頁）</td></tr>
+    <tr><td><b>資料來源</b></td><td colspan="2">枱號由 URL <code>?tableId=</code>；店由 <code>?store=</code>；Kiosk 由裝置綁定（<code>loadKioskDeviceBinding()</code>）</td></tr>
+    <tr><td><b>唔做</b></td><td colspan="2">❌ 唔問電話號碼再查註冊（§4.5.3 禁枚舉）</td></tr>
+  </table>
+
+  <h3>S2 / S2T · 會員登入</h3>
+  <table>
+    <tr><th>項目</th><th>規格</th></tr>
+    <tr><td><b>欄位 1</b></td><td>會員帳號（手機號碼）· 8 位數字 · 正規化後 <code>/^\d{8}$/</code> · <b>不加 +853</b></td></tr>
+    <tr><td><b>欄位 2</b></td><td>PIN 碼 · 4 位數字 · <code>/^\d{4}$/</code> · 輸入後顯示 <code>••••</code></td></tr>
+    <tr><td><b>按鈕</b></td><td><b>登入並繼續點餐</b>（主）· <b>跳過，直接點餐</b>（逃生門，回落非會員）</td></tr>
+    <tr><td><b>狀態</b></td><td>idle → submitting → 成功（S5/S10T）／失敗（S3a）／鎖定（S3b）</td></tr>
+    <tr><td><b>驗證</b></td><td>錯誤一律<b>統一文案</b>「帳號或 PIN 不正確」；限流 15 分鐘 5 次；PIN 只傳伺服器派生，前端唔算</td></tr>
+    <tr><td><b>平板專屬</b></td><td>螢幕數字鍵盤（帳號鍵盤 / PIN 鍵盤分開）；倒數持續運行</td></tr>
+  </table>
+
+  <h3>S3 · 登入失敗 / 鎖定</h3>
+  <table>
+    <tr><th>狀態</th><th>欄位／按鈕</th></tr>
+    <tr><td><b>S3a 失敗</b></td><td>帳號 + PIN 輸入框（<b>紅框</b>）· 錯誤行「帳號或 PIN 不正確 · 剩餘 N 次機會」<br>按鈕：<b>重新輸入</b> · <b>跳過，直接點餐</b></td></tr>
+    <tr><td><b>S3b 鎖定</b></td><td>解鎖時間（「請於 14:37 後再試」）· 說明卡（「仍然可以點餐，到前台付款」）<br>按鈕：<b>改用非會員，直接點餐</b> ← <b>唯一出口</b></td></tr>
+  </table>
+  <div class="warnbox">
+    <div class="wt">🔴 鎖定頁冇出口 = 繁忙時段死局</div>
+    <p style="margin:0">客人忘記 PIN 又連續錯 5 次 → 如果鎖定頁冇「改用非會員」，佢就<b>點唔到餐</b>。呢個掣唔可以省。</p>
+  </div>
+
+  <h3>S4 / S5 / S10 · 下單頁</h3>
+  <table>
+    <tr><th>項目</th><th>S4 非會員（堂食手機）</th><th>S5 會員（堂食手機）</th><th>S10 會員（快餐手機）</th></tr>
+    <tr>
+      <td><b>頂欄</b></td>
+      <td>店名 + 「堂食 · 枱 A01」<br>灰「?」頭像</td>
+      <td>店名 + 「堂食 · 枱 A01」<br>綠「陳」頭像</td>
+      <td>店名 + 「🥡 快餐 · 自取」<br>綠「陳」頭像</td>
+    </tr>
+    <tr>
+      <td><b>會員氣泡</b></td>
+      <td>❌ 完全冇</td>
+      <td>✅ 顯示名 + 本店餘額</td>
+      <td>✅ 顯示名 + 本店餘額</td>
+    </tr>
+    <tr>
+      <td><b>提示卡</b></td>
+      <td>—</td>
+      <td>—</td>
+      <td>「快餐每一單獨立 · 唔可以加單」</td>
+    </tr>
+    <tr>
+      <td><b>分類 chips</b></td>
+      <td colspan="3">橫向滾動 · 當前項橙色</td>
+    </tr>
+    <tr>
+      <td><b>菜單項</b></td>
+      <td colspan="3">縮圖 · 名稱 · 副標 · 價格 · 「＋」；<b>售罄項保留但灰化 + 標「售罄」</b></td>
+    </tr>
+    <tr>
+      <td><b>底部</b></td>
+      <td colspan="3">購物車條（件數 + 金額）</td>
+    </tr>
+    <tr>
+      <td><b>Kiosk 版</b></td>
+      <td colspan="3">改 3 欄（S10T）：左分類 ／ 中餐牌 2 欄格 ／ 右購物車側欄（顯示會員 + 合計 + 去結帳）</td>
+    </tr>
+  </table>
+
+  <h3>S6 / S6T · 付款方式</h3>
+  <table>
+    <tr><th>狀態</th><th>選項 ①</th><th>選項 ②</th><th>底部</th></tr>
+    <tr>
+      <td><b>S6a 餘額足夠</b></td>
+      <td>💳 扣會員儲值餘額<br><b>可選 · 預設選中</b><br>「餘額 MOP 128.50 → 扣後剩 MOP 58.50」</td>
+      <td>🏪 到前台支付（可選）</td>
+      <td>確認付款 · MOP 70.00（橙）</td>
+    </tr>
+    <tr>
+      <td><b>S6b 餘額不足</b></td>
+      <td>💳 扣會員儲值餘額<br><b>變灰但保留可見</b><br>「餘額不足 · 尚欠 MOP 33.50」</td>
+      <td>🏪 到前台支付<br><b>自動選中</b></td>
+      <td>確認付款 · 到前台支付（灰）</td>
+    </tr>
+    <tr>
+      <td><b>S6T Kiosk</b></td>
+      <td colspan="2">左欄選項（加大到 24px padding）</td>
+      <td>右欄訂單摘要 + 會員 + 確認掣</td>
+    </tr>
+  </table>
+  <div class="newbox">
+    <div class="wt">ℹ️ 「先扣餘額、差額到前台補」暫不支援</div>
+    <p style="margin:0">會產生兩筆對帳（部分扣款 + 部分現金），對帳困難。畫面已明確引導客人改用「到前台支付」。</p>
+  </div>
+
+  <h3>S7 · 確認扣款</h3>
+  <table>
+    <tr><th>項目</th><th>S7a 需 PIN 再確認</th><th>S7b 免 PIN</th></tr>
+    <tr><td><b>觸發</b></td><td>距登入成功 <b>&gt; 180 秒</b></td><td>距登入成功 <b>≤ 180 秒</b></td></tr>
+    <tr><td><b>顯示</b></td><td>扣款金額（大字）· 會員 · 扣前餘額 · 扣後餘額 · PIN 輸入框（置中、字距 .4em）</td><td>同上，但 PIN 框換成綠卡「✓ 免 PIN（你已於 2 分 12 秒前登入）」</td></tr>
+    <tr><td><b>按鈕</b></td><td><b>確認扣款</b> · <b>取消，改為到前台支付</b></td><td>同左</td></tr>
+    <tr><td><b>狀態</b></td><td>idle → submitting → D1/S9</td><td>同左</td></tr>
+  </table>
+
+  <h3>S8 / S11 / S11T · 結果頁</h3>
+  <table>
+    <tr><th>頁</th><th>狀態</th><th>顯示</th><th>按鈕 / 行為</th></tr>
+    <tr>
+      <td><b>S8a</b> 堂食手機</td><td>扣款成功<br><b>錢已收</b></td>
+      <td>綠勾 · 扣款金額 · 剩餘餘額 · <b>交易編號</b> · 枱號<br>「🔥 已直接送往廚房 · 桌台已更新為『已結帳』」</td>
+      <td><b>冇倒數</b>（客可慢慢睇、可加單）</td>
+    </tr>
+    <tr>
+      <td><b>S8b</b> 堂食手機</td><td>待前台付款<br><b>錢未收</b></td>
+      <td>橙舖 · 待付金額 · 枱號 · <span class="pill pillAmber">待付款</span><br>「付款完成後桌台會顯示『已結帳』」</td>
+      <td><b>冇倒數</b></td>
+    </tr>
+    <tr>
+      <td><b>S11</b> 快餐手機</td><td>扣款成功<br><b>錢已收</b></td>
+      <td><b>取餐號（超大 44px）</b>「自取07」· 扣款金額 · 剩餘餘額 · 交易編號<br>「快餐 · 不設外賣」</td>
+      <td><b>再點一單</b>（新單新號碼）<br><b>冇倒數</b>（號碼要留住）+ sessionStorage 6 小時</td>
+    </tr>
+    <tr>
+      <td><b>S11T</b> 快餐平板</td><td>扣款成功<br><b>錢已收</b></td>
+      <td>左：綠勾 + 「扣款成功 · 已收到」+ <b>「本機小票已印出」</b><br>右：取餐號「自取07」（66px）· 扣款金額 · 剩餘餘額</td>
+      <td><b>完成 · 立即重新開始</b><br>🔴 <b>15 秒倒數</b> → 清空 + 彈回 Landing</td>
+    </tr>
+  </table>
+
+  <h3>S9 · 異常態</h3>
+  <table>
+    <tr><th>狀態</th><th>顯示</th><th>按鈕</th><th>關鍵規則</th></tr>
+    <tr>
+      <td><b>S9a 餘額不足</b></td>
+      <td>紅圈 💳 · 「餘額不足」· 儲值餘額 vs 應付<br>藍卡「訂單已保留：唔會取消，可直接改為到前台付款」</td>
+      <td><b>改為到前台支付</b> · <b>重新選擇付款方式</b></td>
+      <td>Ledger Q7：<b>訂單保留唔取消</b>，客人唔需要重新點餐</td>
+    </tr>
+    <tr>
+      <td><b>S9b 網絡失敗</b></td>
+      <td>琥珀圈 📡 · 「連線中斷」· 「未能確認扣款結果，請勿關閉此頁」<br>黃卡「⚠️ 結果未知：系統無法查詢扣款成功咗未」</td>
+      <td><b>重試（不會重複扣款）</b> · <b>到前台處理</b></td>
+      <td>🔴 Ledger <b>冇 lookup API</b>；查唔到 ≠ 未扣；唯一手段 = 同一冪等鍵重試</td>
+    </tr>
+  </table>
+
+  <h3>S12T · 倒數歸零（Kiosk 專屬）</h3>
+  <table>
+    <tr><th>項目</th><th>規格</th></tr>
+    <tr><td><b>觸發</b></td><td>Kiosk 60 秒無任何操作（任何動作都會重置）</td></tr>
+    <tr><td><b>畫面</b></td><td>彈回 Landing（S1T），頂欄倒數顯示 <code>0s</code>（紅色）</td></tr>
+    <tr><td><b>硬重置三件事</b></td><td>① 清空會員 session（登入狀態）② 清空購物車 ③ 彈回 Landing<br><b>唔可以只係跳頁</b> —— 下一位客人會見到上一位嘅姓名同餘額</td></tr>
+    <tr><td><b>豁免</b></td><td>⚠️ 落單中（<code>submitting</code>）要<b>暫停</b>倒數，否則會「請求已送出但畫面被清空」</td></tr>
+    <tr><td><b>重置事件</b></td><td><code>mousemove</code> / <code>mousedown</code> / <code>touchstart</code> / <code>keydown</code> / <code>scroll</code></td></tr>
+  </table>
+
+  <h2>五、需你確認嘅 5 個決策點</h2>
+  <table>
+    <tr><th>#</th><th>決策</th><th>狀態</th></tr>
+    <tr><td>1</td><td>非會員 S4 要唔要顯示「唔可以用餘額」說明？</td><td>✅ <b>已拍板：直接隱藏</b></td></tr>
+    <tr><td>2</td><td>S1 兩個按鈕嘅視覺份量</td><td>✅ <b>已拍板：同等份量</b></td></tr>
+    <tr><td>3</td><td>Kiosk 閒置清空</td><td>✅ <b>已拍板：60 秒 · 右上角倒數 · 任何動作重置 · 歸零彈回 Landing</b></td></tr>
+    <tr><td>4</td><td>結果頁倒數</td><td>✅ <b>已拍板：堂食不倒數 · Kiosk 快餐 15 秒</b></td></tr>
+    <tr><td>5</td><td>扣款成功後桌台綠「已結帳」幾時轉「空閒」</td><td>✅ <b>已拍板：需店員撳「清枱」</b></td></tr>
+  </table>
+
+  <div class="newbox">
+    <div class="wt">🆕 本稿新增，需你順便過目（唔係新決策，係補畫漏咗嘅嘢）</div>
+    <ul>
+      <li><b>快餐全條線</b>（S10 / S11 / S10T / S11T）—— 你指出嘅缺口</li>
+      <li><b>Kiosk 平板橫向</b>（S1T / S2T / S6T / S10T / S11T / S12T）—— 你指出嘅缺口</li>
+      <li><b>60 秒倒數嘅三個細節</b>：位置（頂欄右上）· 重置事件 · 落單中暫停</li>
+      <li><b>登入失敗 / 鎖定頁</b>（S3a / S3b）—— v1 已有，本稿保留</li>
+    </ul>
+  </div>
+
+  <div class="warnbox">
+    <div class="wt">⚠️ 仍然要提你（未拍板，但影響實作）</div>
+    <ul>
+      <li>
+        <b>Kiosk 只做快餐係寫死嘅</b>（<code>use-kiosk-order.ts:444</code>）。若你其實想
+        Kiosk 都做堂食（例如放喺枱邊嘅平板），要<b>改呢行</b> + 諗點令客人輸入枱號 ——
+        呢個係新需求，唔喺本稿範圍，但請你知。
+      </li>
+      <li>
+        <b>快餐掃碼「唔可以有枱號」</b> 已由 <code>/quick</code> 同 <code>/menu</code> 兩條 link
+        分開守住。如果日後想統一入口，會令兩條流程互相污染。
+      </li>
+    </ul>
+  </div>
+
+  <div class="okbox">
     <div class="wt">✅ 本稿已包含你要求嘅全部內容</div>
     <ul>
-      <li>✅ S1 Landing 問「你是會員嗎？」，兩個選項（是 / 不是）</li>
-      <li>✅ 非會員：直接入下單頁 → 只能「到前台支付」</li>
+      <li>✅ Landing 問「你是會員嗎？」，兩個選項（是 / 不是）—— 手機版 + 平板版</li>
+      <li>✅ 非會員：直接入下單頁 → 只能「到前台支付」（餘額選項完全隱藏）</li>
       <li>✅ 會員：帳號 + PIN 登入 → 驗證成功入下單頁</li>
       <li>✅ 下單後會員可選：扣儲值餘額 / 到前台支付</li>
+      <li>✅ <b>快餐分支全套</b>（掃碼手機 S10/S11 + Kiosk 平板 S10T/S11T）</li>
+      <li>✅ <b>Kiosk 平板橫向版型</b>（實體係平板，唔係手機）</li>
+      <li>✅ <b>60 秒閒置倒數</b>（右上角 · 任何動作重置 · 歸零清空彈回）</li>
       <li>✅ 所有畫面 wireframe 描述（欄位 · 按鈕 · 狀態）</li>
-      <li>✅ 文字流程圖（會員 / 非會員分支 · 登入驗證 · 付款選擇）</li>
+      <li>✅ SVG 流程圖 + 文字流程圖（會員/非會員分支 · 登入驗證 · 付款選擇）</li>
     </ul>
   </div>
 
@@ -1357,59 +2119,82 @@
 
 <script>
   var TABS = [
-    { id:"S1", label:"S1 Landing" },
-    { id:"S2", label:"S2 會員登入" },
-    { id:"S3", label:"S3 失敗／鎖定" },
-    { id:"S4", label:"S4 下單（非會員）" },
-    { id:"S5", label:"S5 下單（會員）" },
-    { id:"S6", label:"S6 付款方式" },
-    { id:"S7", label:"S7 確認扣款" },
-    { id:"S8", label:"S8 結果頁" },
-    { id:"S9", label:"S9 異常態" }
+    { id:"S1",   label:"S1 Landing" },
+    { id:"S1T",  label:"S1T Landing（平板）" },
+    { id:"S2",   label:"S2 會員登入" },
+    { id:"S2T",  label:"S2T 登入（平板）" },
+    { id:"S3",   label:"S3 失敗／鎖定" },
+    { id:"S4",   label:"S4 下單（非會員）" },
+    { id:"S5",   label:"S5 下單（會員）" },
+    { id:"S6",   label:"S6 付款方式" },
+    { id:"S6T",  label:"S6T 付款（平板）" },
+    { id:"S7",   label:"S7 確認扣款" },
+    { id:"S8",   label:"S8 結果頁（堂食）" },
+    { id:"S9",   label:"S9 異常態" },
+    { id:"S10",  label:"S10 快餐下單（手機）" },
+    { id:"S11",  label:"S11 快餐成功頁" },
+    { id:"S10T", label:"S10T 快餐（平板 3 欄）" },
+    { id:"S11T", label:"S11T 快餐成功（平板 15s）" },
+    { id:"S12T", label:"S12T 倒數歸零" }
   ];
   var NOTES = {
-    S1:"<b>S1</b> 全部落單流程嘅唯一入口。兩個選項<b>同等份量</b>（皆 58px 高）。「是」→ S2 登入；「不是」→ <b>直接跳 S4</b>（跳過登入，冇扣餘額選項）。",
+    S1:"<b>S1</b> 掃碼手機版 Landing。兩個選項<b>同等份量</b>（已拍板）。「是」→ S2；「不是」→ <b>直接跳 S4</b>（跳過登入，冇扣餘額選項）。",
+    S1T:"<b>S1T</b> Kiosk 平板版（<b>橫向 1080×700</b>）—— 實體係平板唔係手機。內容置中、雙欄並排、觸控目標加大到 76px。🔴 右上角 <b>60 秒倒數</b>：任何動作重置，歸零清空並彈回本頁。",
     S2:"<b>S2</b> 帳號 = 8 位手機（正規化後 <code>/^\\d{8}$/</code>，不加 +853）；PIN = 4 位。PIN <b>唔會</b>經前端運算 —— 只傳去 POS 伺服器派生（§4.5.1）。三種失敗<b>統一顯示</b>「帳號或 PIN 不正確」避免枚舉。",
+    S2T:"<b>S2T</b> Kiosk 平板登入 —— 用<b>螢幕數字鍵盤</b>（唔用系統鍵盤，避免殘留 / 切換輸入法）。倒數持續運行（48s = 輸入中）。",
     S3:"<b>S3</b> 左：失敗態（紅框 + 剩餘次數）。右：鎖定態（5 次失敗 → 鎖 15 分鐘，倒數）。⚠️ 鎖定頁<b>一定要有出口</b> ——「改用非會員直接點餐」，唔可以變死局妨礙做生意。",
-    S4:"<b>S4</b> 非會員唯一分別：灰色「?」頭像、無會員徽章、付款方式<b>只有一個</b>（直接寫在按鈕上，唔開選擇頁，亦<b>唔顯示</b>灰掉嘅「扣餘額」—— 因為根本冇呢個能力）。",
+    S4:"<b>S4</b> 非會員唯一分別：灰色「?」頭像、無會員徽章、付款方式<b>只有一個</b>（直接寫在按鈕上，唔開選擇頁，亦<b>唔顯示</b>灰掉嘅「扣餘額」—— 已拍板）。售罄項保留但灰化（P2-1）。",
     S5:"<b>S5</b> 會員氣泡顯示 <b>顯示名</b>（<code>profiles.display_name</code>）+ <b>本店餘額</b>（<code>wallets</code> §5.11.1）。⚠️ 兩者<b>只准當次畫面</b>，禁止落 localStorage／POS DB／analytics／console（§7.2）。落庫只可用 <code>customer_id</code>（uuid）。",
-    S6:"<b>S6</b> 左：餘額足夠（兩選項皆可選）。右：餘額不足 →「扣餘額」變灰<b>但保留可見</b>（客人要見到「點解唔得」+ 差幾多），同 S4「根本冇能力 → 直接隱藏」係兩種唔同處理。",
+    S6:"<b>S6</b> 左：餘額足夠（兩選項皆可選，預設選中「扣餘額」）。右：餘額不足 →「扣餘額」變灰<b>但保留可見</b>（客人要見到「點解唔得」+ 差幾多），同 S4「根本冇能力 → 直接隱藏」係兩種唔同處理。",
+    S6T:"<b>S6T</b> Kiosk 平板付款頁 —— <b>左選項 + 右摘要並排</b>（唔似手機垂直堆疊）。餘額不足請改用「到櫃檯支付」（唔支援部分扣款）。",
     S7:"<b>S7</b> 左：需 PIN 再確認（逾 180 秒）。右：免 PIN（登入後 180 秒內）。⚠️ 起計點 = <b>登入成功</b>、範圍 = 時間內<b>全部免</b>、refresh <b>唔可</b>延長、Ledger 端 <b>唔會</b>再驗 → 呢個閘係唯一防線。一定要有「取消，改為到前台支付」逃生門。",
-    S8:"<b>S8</b> 左：扣款成功（顯示交易編號 → 錢已收）。右：下單成功待付款（顯示待付金額 + 枱號 → 錢未收）。兩頁<b>必須一眼分得出「錢收咗未」</b>。",
-    S9:"<b>S9</b> 左：餘額不足 —— <b>訂單保留唔取消</b>，可直接轉到前台付款（Ledger Q7）。右：網絡失敗（<b>結果不明</b>）—— Ledger <b>冇 lookup API</b>，只能靠冪等鍵重試；<b>絕對唔可以</b>把「查唔到」當「未扣款」。"
+    S8:"<b>S8</b> 左：扣款成功（顯示交易編號 → 錢已收）。右：下單成功待付款（顯示待付金額 + 枱號 → 錢未收）。兩頁<b>必須一眼分得出「錢收咗未」</b>。已拍板：<b>堂食唔倒數</b>。",
+    S9:"<b>S9</b> 左：餘額不足 —— <b>訂單保留唔取消</b>，可直接轉到前台付款（Ledger Q7）。右：網絡失敗（<b>結果不明</b>）—— Ledger <b>冇 lookup API</b>，只能靠冪等鍵重試；<b>絕對唔可以</b>把「查唔到」當「未扣款」。",
+    S10:"<b>S10</b> 🆕 <b>快餐下單（掃碼手機 /quick）</b> —— 頂欄寫「快餐 · 自取」（<code>tableId="counter"</code>、<code>tableName="自取"</code>）。🔴 快餐三大唔同：① 每單獨立（唔 resume、唔加單）② 有取餐號（<code>pickup</code> 序號，同 kiosk 共用）③ 成功頁留住號碼。會員付款同堂食<b>完全共用</b>。",
+    S11:"<b>S11</b> 🆕 <b>快餐成功頁（掃碼手機）</b> —— 取餐號「自取07」超大顯示。🔴 <b>手機端唔倒數</b>（取餐號係客人去櫃檯唯一憑據），reload 都仲讀得返（sessionStorage 6 小時）。「再點一單」= 新單新號碼（唔係加單）。",
+    S10T:"<b>S10T</b> 🆕 <b>Kiosk 平板 3 欄佈局</b> —— 左分類 170px ／ 中餐牌 2 欄格 ／ 右購物車 330px（顯示會員 + 合計 + 去結帳）。平板螢幕大 → 會員姓名同餘額直接放側欄，客人隨時睇到自己剩幾多錢。倒數 42s（點餐中）。",
+    S11T:"<b>S11T</b> 🆕 <b>Kiosk 快餐成功頁 —— 15 秒倒數</b>（已拍板）。左：綠勾 + 「本機小票已印出」；右：取餐號 66px + 扣款金額 + 剩餘餘額。有「完成 · 立即重新開始」掣（唔使等倒數）。",
+    S12T:"<b>S12T</b> 🆕 <b>倒數歸零 → 彈回 Landing</b>。歸零係<b>硬重置</b>，一定要做齊三件事：① 清空會員 session ② 清空購物車 ③ 彈回 Landing。<b>唔可以只係跳頁</b> —— 否則下一位客人見到上一位嘅姓名同餘額。⚠️ 落單中（submitting）要<b>暫停</b>倒數。"
   };
 
   function fit(){
     var c = document.getElementById("canvas");
     var s = document.getElementById("stage");
-    var k = Math.min(1, (s.clientWidth || 1180) / 1180);
-    c.style.transform = "scale(" + k + ")";
-    s.style.height = (900 * k) + "px";
+    if(!c || !s) return;
+    var w = s.clientWidth || 1220;
+    var sc = Math.min(1, w / 1220);
+    c.style.transform = "scale(" + sc + ")";
+    s.style.height = (940 * sc) + "px";
   }
-  window.addEventListener("resize", fit);
 
   function show(id){
-    TABS.forEach(function(t){
-      document.getElementById(t.id).classList.toggle("on", t.id === id);
-    });
-    Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function(b){
-      b.classList.toggle("on", b.dataset.id === id);
-    });
-    document.getElementById("rnote").innerHTML = NOTES[id] || "";
+    var wraps = document.querySelectorAll(".screenwrap");
+    for (var i = 0; i < wraps.length; i++) wraps[i].classList.remove("on");
+    var el = document.getElementById(id);
+    if (el) el.classList.add("on");
+    var btns = document.querySelectorAll("#tabs button");
+    for (var j = 0; j < btns.length; j++) {
+      btns[j].classList.toggle("on", btns[j].getAttribute("data-id") === id);
+    }
+    var rn = document.getElementById("rnote");
+    if (rn) rn.innerHTML = NOTES[id] || "";
   }
 
   (function init(){
-    var tabs = document.getElementById("tabs");
-    TABS.forEach(function(t){
+    var box = document.getElementById("tabs");
+    TABS.forEach(function(t, i){
       var b = document.createElement("button");
       b.textContent = t.label;
-      b.dataset.id = t.id;
+      b.setAttribute("data-id", t.id);
       b.onclick = function(){ show(t.id); };
-      tabs.appendChild(b);
+      if (i === 0) b.classList.add("on");
+      box.appendChild(b);
     });
-    show("S1");
+    window.addEventListener("resize", fit);
     fit();
+    show("S1");
   })();
 </script>
+
 </body>
 </html>

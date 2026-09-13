@@ -69,8 +69,15 @@ import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session"
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
 import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
 import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
-import { AuthSession, loadAuthSession, loadPosLocalSettings, loadPrintJobs } from "@/lib/storage";
+import {
+  AuthSession,
+  loadAuthSession,
+  loadBootstrapCache,
+  loadPosLocalSettings,
+  loadPrintJobs,
+} from "@/lib/storage";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
+import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { formatMoney } from "@/lib/format";
 import { PosOrder } from "@/lib/types";
 
@@ -228,6 +235,19 @@ export function OnlineOrders({
 }) {
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
+  /**
+   * 🔴 2026-09-13（商家實案：「排位後出來的又不是店內的桌台」）——
+   * 排位彈窗嘅枱**一定要 `bootstrap.tables`（共享真源）＋ 本地 overlay 合併**，
+   * 唔可以只讀 `localSettings.floors`。
+   *
+   * 本機 `floors` 可能淨係出廠預設（`1樓 A01-A03`、`2樓 B01-B02`，見 `mock-data.ts`
+   * `defaultPosLocalSettings`），但商家嘅真枱係喺**伺服器 bootstrap**（後台／另一部機
+   * 建立）→ 只讀本地 = 彈窗顯示 default 桌台。呢個坑 2026-09-12 已喺 `pos-app.tsx`
+   * 修過一次（改用 `buildDisplayFloors`），但 `/orders` 頁呢邊漏咗。
+   */
+  const [bootstrapTables, setBootstrapTables] = useState(
+    () => loadBootstrapCache()?.tables ?? [],
+  );
   // 自動接單：**Ledger RPC 係真源、全店共用**，POS DB 只做跨機 Realtime 鏡像（docs/92 + 0036）。
   // 唔好再讀 `localSettings.onlineOrderSettings.autoAccept` —— 嗰個已經降級做快取。
   const { autoAccept, setAutoAccept } = useOnlineOrderSettings(merchantId, Boolean(merchantId));
@@ -267,16 +287,21 @@ export function OnlineOrders({
   const embeddedDateFilterRef = useRef(dateFilterSignature(dateFilterProp ?? "today"));
 
   const tables = useMemo(
-    // ⚠️ 必須剝走返結 temp 枱（`isReopenTemp`）：temp 枱只喺「返結單編輯期間」存在，
+    // 🔴 真源 = `buildDisplayFloors(bootstrap.tables, localSettings.floors)`（雲端 ＋ 本地 overlay），
+    // **唔可以**只讀 `localSettings.floors` —— 本機 floors 可能淨係出廠預設
+    // （`1樓 A01-A03` / `2樓 B01-B02`），商家真枱喺 bootstrap → 彈窗會顯示錯嘅桌台
+    // （2026-09-13 商家實案）。同桌台總覽 / POS 主頁排位彈窗**共用同一口徑**。
+    //
+    // ⚠️ 另外必須剝走返結 temp 枱（`isReopenTempTable`）：temp 枱只喺「返結單編輯期間」存在，
     // 若職員將線上單派去一張 temp 枱，張枱會喺結帳後消失 → 線上單無處可放、
     // 收銀枱面搵唔到。見 pos/table-scope.ts。
     () =>
-      localSettings.floors.flatMap((floor) =>
+      buildDisplayFloors(bootstrapTables, localSettings.floors).flatMap((floor) =>
         floor.tables
           .filter((table) => !isReopenTempTable(table))
           .map((table) => ({ ...table, floorName: floor.name })),
       ),
-    [localSettings.floors],
+    [bootstrapTables, localSettings.floors],
   );
 
   useEffect(() => {
@@ -319,6 +344,16 @@ export function OnlineOrders({
     }
     window.addEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
     return () => window.removeEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+  }, []);
+
+  // 🔴 2026-09-13：枱位真源係 bootstrap（後台／另一部機建立）→ 佢一變（`pos-bootstrap-changed`）
+  // 就要重讀，否則排位彈窗仍然顯示舊枱（同 `kiosk-qr-panel.tsx` 同一做法）。
+  useEffect(() => {
+    function onBootstrapChanged() {
+      setBootstrapTables(loadBootstrapCache()?.tables ?? []);
+    }
+    window.addEventListener("pos-bootstrap-changed", onBootstrapChanged);
+    return () => window.removeEventListener("pos-bootstrap-changed", onBootstrapChanged);
   }, []);
 
   useEffect(() => {

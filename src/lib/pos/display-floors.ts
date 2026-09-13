@@ -17,6 +17,18 @@ import type { PosBootstrap, PosLocalSettings } from "@/lib/types";
  *
  * ⇒ 任何要列枱嘅地方（桌台總覽、排位彈窗、開桌）一律用呢個模組，唔可以自己讀
  * `localSettings.floors`。
+ *
+ * ## ⚠️ 2026-09-13 補記：同一個坑中咗第二次
+ *
+ * 2026-09-12 只改咗 `pos-app.tsx`（POS 主頁），但 **`online-orders.tsx`（`/orders` 頁）
+ * 冇跟住改**，仍然自己讀 `localSettings.floors` → 商家再次實案投訴
+ * 「**排位後出來的又不是店內的桌台**」（彈窗顯示 `1樓 A01-A03 / 2樓 B01-B02` 出廠預設，
+ * 而店內真枱係 `A01/A03/A04/外賣自取1`）。已於 2026-09-13 改用
+ * `buildDisplayFloors(bootstrapTables, localSettings.floors)` ＋ 訂閱
+ * `pos-bootstrap-changed`。
+ *
+ * ⇒ **新增任何「列枱／選枱」UI 時，一定要搜一次 `localSettings.floors`，
+ *    確認冇漏（呢個坑已經中過兩次）。**
  */
 
 /** 一個可揀嘅枱（排位彈窗用）。 */
