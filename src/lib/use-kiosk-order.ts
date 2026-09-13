@@ -1311,6 +1311,16 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   async function runMemberDeduct(order: PosOrder): Promise<boolean> {
     if (!member) return false;
 
+    // 🔴 防禦：呢條路**只准 Kiosk 行**（店員 session 走 RPC）。
+    //    掃碼頁（客人手機）冇店員 session，行到呢度一定係分流失效（例如部署版本新舊夾雜）。
+    //    與其讓佢彈一句客人睇唔明嘅「Ledger 登入已過期」再當成「結果未知」，
+    //    不如直接講清楚 —— 而且**確定冇發過 request**，即係一定冇扣到錢。
+    if (variant === "scan") {
+      setPayError("系統版本需要更新，請重新載入頁面後再試。");
+      setPayStage("unknown");
+      return false;
+    }
+
     const amountAvos = mopToAvos(order.total);
     if (amountAvos <= 0) {
       setPayError(null);
@@ -1372,7 +1382,14 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         setPayStage("insufficient");
         return false;
       }
-      // 其餘（網絡 / 5xx / 店員 Ledger session 過期）→ **結果未知**（確認稿 S9b）。
+      // 店員 Ledger session 過期 / 未登入：呢個係**本地**檢查，request 根本冇發出去
+      // → **確定未扣款**。唔應該畀客人睇「Ledger」呢個字，亦唔應該扮「結果未知」嚇佢。
+      if (/登入已過期|尚未設定/.test(message)) {
+        setPayError("店員帳號未登入或已過期，請通知店員協助。");
+        setPayStage("unknown");
+        return false;
+      }
+      // 其餘（網絡 / 5xx）→ **結果未知**（確認稿 S9b）。
       setPayError(message);
       setPayStage("unknown");
       return false;
