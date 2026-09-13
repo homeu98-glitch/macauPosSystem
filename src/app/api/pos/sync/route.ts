@@ -85,6 +85,34 @@ function money(value: unknown): number {
   return Math.max(-1_000_000_000, Math.min(1_000_000_000, n));
 }
 
+/**
+ * UUID 或 null（`member_customer_id` 用）。
+ *
+ * ⚠️ 唔可以只用 `text()`：`pos_orders.member_customer_id` 係 **`uuid`** 型別，
+ * Postgres 收到唔合法嘅字串會**直接報錯**，令成個 upsert 失敗（張單寫唔入雲），
+ * 而唔係靜靜截斷。所以要驗過形狀先寫。
+ */
+function uuidOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * avos 金額：非數字 / ≤0 → 0。
+ *
+ * `member_deduction_avos` 係 `bigint not null default 0` —— 寫 `NULL` 會 violate
+ * not-null constraint，令整張單上唔到雲。所以一定要落 0 而唔係 null。
+ */
+function avosOrZero(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(Math.trunc(n), 1_000_000_000);
+}
+
 /** 入座人數：只接受 1..999 嘅整數，其餘一律 null（對齊 DB CHECK，避免 upsert 成單成批失敗）。 */
 function partySizeOrNull(value: unknown): number | null {
   return intOrNull(value, MAX_PARTY_SIZE);
@@ -760,6 +788,30 @@ export async function POST(request: Request) {
         const items = Array.isArray(order.items) ? order.items.slice(0, MAX_ORDER_ITEMS) : [];
         // created_at 唔喺 baseRecord：已存在行只 update 內容、唔郁建立時間（防 replay 倒退）；
         // 首次建立（upsert）先補 created_at。
+        // ── 會員扣款（0038 migration，docs/130 §7.1）──
+        //
+        // 🔴 為咩一定要上雲：唔寫 = 收銀機睇唔到客人已經用會員餘額付款 →
+        //    店員見單「未付款」→ **可能再收一次錢**。呢三欄唔係「順手同步」，
+        //    而係防止重複收費嘅必要欄位。
+        //
+        // 🔴 為咩要「有值才寫」：舊 client（唔識呢三欄）payload 完全冇呢啲 key。
+        //    如果照樣寫 `0` / `NULL`，就會**無條件覆蓋**另一部機已經寫入嘅扣款紀錄
+        //    （呢個 update 唔經 LWW 守門，係直接覆寫）→ 收銀機又變返「未付款」。
+        //
+        // 🔴 個資紅線（契約 §7.2）：只寫 `customer_id`(uuid)。
+        //    **唔准**寫電話 / 顯示名 / 餘額 —— 嗰啲只准當次 UI 渲染。
+        const writesMemberFields =
+          order.memberCustomerId !== undefined ||
+          order.memberDeductionAvos !== undefined ||
+          order.memberDeductTxnId !== undefined;
+        const memberRecord: Record<string, unknown> = writesMemberFields
+          ? {
+              member_customer_id: uuidOrNull(order.memberCustomerId),
+              member_deduction_avos: avosOrZero(order.memberDeductionAvos),
+              member_deduct_txn_id: text(order.memberDeductTxnId, MAX_ID_LEN),
+            }
+          : {};
+
         const baseRecord: Record<string, unknown> = {
           id: orderId,
           local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
@@ -806,6 +858,7 @@ export async function POST(request: Request) {
           // 同報表「下單時間」口徑都靠佢，唔可以俾補傳時間蓋走。
           updated_at: new Date().toISOString(),
           client_updated_at: incomingUpdatedAt,
+          ...memberRecord,
         };
         const writeOrder = async (record: Record<string, unknown>) =>
           existing
@@ -820,15 +873,20 @@ export async function POST(request: Request) {
 
         let { error: oErr } = await writeOrder(baseRecord);
         if (oErr && isMissingColumnError(oErr)) {
-          // 🔻 0034 migration 未跑：`discount_note` 呢條新欄唔存在（42703）。
-          // 一定要拔走新欄重寫一次 —— 唔係「折扣備註同步唔到」咁小事，而係
-          // **整張單都上唔到雲**（落單主流程被新功能拖冧）。
+          // 🔻 新欄未跑 migration（42703）→ 一定要拔走重寫一次。
+          // 唔係「新功能同步唔到」咁小事，而係**整張單都上唔到雲**
+          //（落單主流程被新功能拖冧）。
+          // 一次過拔走 0034（discount_note）+ 0038（member_*）呢兩批新欄 ——
+          // 兩個 migration 邊個未跑都修得返；呢啲欄本身值係 NULL / 0，拔走無損。
           // 呢個降級係一次過嘅：migration 跑完之後寫入自然帶返新欄。
           console.warn(
-            `[pos/sync] pos_orders.discount_note 欄唔存在（0034 未跑），降級寫入訂單 ${orderId}`,
+            `[pos/sync] pos_orders 新欄唔存在（0034 / 0038 未跑），降級寫入訂單 ${orderId}`,
           );
           const legacyRecord = { ...baseRecord };
           delete legacyRecord.discount_note;
+          delete legacyRecord.member_customer_id;
+          delete legacyRecord.member_deduction_avos;
+          delete legacyRecord.member_deduct_txn_id;
           ({ error: oErr } = await writeOrder(legacyRecord));
         }
         if (oErr) {

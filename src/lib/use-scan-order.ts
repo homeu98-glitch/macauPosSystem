@@ -83,6 +83,25 @@ export function useScanOrder() {
      * 客人嘅出口係「加單」，冇「完成」概念 —— 見 docs/115）。
      */
     returnToHome: core.returnToHome,
+
+    // ── 會員登入（2026-09-13，確認稿 S1/S2/S3）──
+    //
+    // ⚠️ 掃碼端**刻意只暴露登入相關**，唔暴露付款 sheet（`paySheetOpen` / `confirmPay` …）：
+    //    Ledger 契約 §4.5.0 明文 —— 掃碼（客人手機）只有**顧客** JWT，而扣費 RPC
+    //    （`merchant_apply_pos_txn`）檢查 `is_merchant_staff` → 顧客 JWT 一定被拒。
+    //    掃碼場景 v1 係「顧客揀、**收銀台店員**代扣」，唔係客人自助扣。
+    //    所以手機端只提供「登入 + 睇餘額」，付款一律到前台（由店員操作）。
+    //    詳見 docs/130 §2。
+    member: core.member,
+    memberLoginOpen: core.memberLoginOpen,
+    memberLoginSubmitting: core.memberLoginSubmitting,
+    memberLoginError: core.memberLoginError,
+    memberLoginRemaining: core.memberLoginRemaining,
+    memberLoginLockedRetryAt: core.memberLoginLockedRetryAt,
+    openMemberLogin: core.openMemberLogin,
+    closeMemberLogin: core.closeMemberLogin,
+    skipMemberLogin: core.skipMemberLogin,
+    submitMemberCredentials: core.submitMemberCredentials,
   };
 }
 

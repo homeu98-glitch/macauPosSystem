@@ -1,6 +1,10 @@
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
-import { RECEIPT_PAPER_COLUMNS, RECEIPT_PAPER_COLUMNS_58MM } from "@/lib/escpos-render";
+import { RECEIPT_PAPER_COLUMNS } from "@/lib/escpos-render";
 import { buildRetailReceiptBlocks } from "@/lib/retail/receipt-retail-blocks";
+import {
+  findLabelPaperPreset,
+  paperColumnsFromSize as paperColumnsFromSizeImpl,
+} from "@/lib/paper-columns";
 import {
   DEFAULT_LABEL_PAPER_ID,
   EscPosBlockStyle,
@@ -651,24 +655,34 @@ export function buildSnapshot(
 /**
  * 由標籤紙尺寸 id 攞 preset；未知 / 缺省一律回 62mm（舊預設），
  * 保證舊 localStorage 設定唔會因為多咗呢欄而變形。
+ *
+ * ✅ 容忍 `"60x40mm"` ↔ `"60x40"` 兩種寫法。
+ *
+ * ⚠️ 實作已搬去 `paper-columns.ts`（純模組，可被測試直接載入）——
+ * 呢度只係保留既有公開 API，唔好喺呢度再加邏輯。
  */
 export function labelPaperPreset(id: string | undefined | null): LabelPaperPreset {
   return (
-    LABEL_PAPER_PRESETS.find((p) => p.id === id) ??
+    findLabelPaperPreset(id) ??
     LABEL_PAPER_PRESETS.find((p) => p.id === DEFAULT_LABEL_PAPER_ID) ??
     LABEL_PAPER_PRESETS[0]!
   );
 }
 
 /**
- * 由打印機 `paperSize` 字串推每行字符數（收據 / 廚房 / 交班用）。
+ * 由打印機 `paperSize` 字串推每行字符數（收據 / 廚房 / 交班 / 標籤共用）。
  *
- * 同 `print hub` `EscPosRenderer.kt` 既有的 `paperColumns()` 同一套規則
- * （`contains("58")` → 32，否則 48），只係搬到 POS 計一次寫入快照，
- * 等三個 repo 唔使各自判斷（2026-09-10）。
+ * 🔴 **2026-09-13 修**：舊實作只做 `contains("58") ? 32 : 48`，
+ * 對所有標籤紙尺寸（`"60x40mm"` / `"100x75mm"` …）一律回 **48**
+ * （= 80mm 票據機欄數）→ `print-jobs.ts` 嘅
+ * `Math.min(模板欄數, paperColumnsFromSize(printer.paperSize))` 截頂失效
+ * → 標籤機紙寬設定完全冇生效 → 出紙亂版。
+ *
+ * ⚠️ 實作在 `paper-columns.ts`（純模組，可測試）。呢度只做轉發 + 保留公開 API。
+ * **唔好喺呢度再寫邏輯** —— 寫咗就會再次變成測試唔到嘅死角。
  */
 export function paperColumnsFromSize(paperSize: string | undefined | null): number {
-  return (paperSize ?? "").includes("58") ? RECEIPT_PAPER_COLUMNS_58MM : RECEIPT_PAPER_COLUMNS;
+  return paperColumnsFromSizeImpl(paperSize);
 }
 
 /**

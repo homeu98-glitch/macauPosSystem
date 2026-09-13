@@ -174,17 +174,19 @@ export interface EscPosRenderExtras {
  *
  * ⚠️ 呢個常數三個 repo 要一致（`companion-server.mjs` / `EscPosRenderer.kt`），
  * 否則同一張單喺唔同通道出紙會對唔齊。
- */
-export const RECEIPT_PAPER_COLUMNS = 48;
-/**
- * 58mm 機嘅每行字符數（可印闊約 48mm ÷ 1.5mm/char = 32）。
- * 同 `print hub` `EscPosRenderer.kt` 嘅 `PAPER_COLUMNS_58MM` 同一個數。
  *
- * ⚠️ 2026-09-10：呢個數以前**淨得 print hub 認**（`desktop-companion` 同 POS 預覽
- * 硬編 48），同一張 58mm 單喺三個通道會出三種闊度。而家由 POS 計一次寫入
- * `EscPosTemplateSnapshot.cols`，三個 repo 直接讀，唔好再各自判斷。
+ * 🔴 2026-09-13：**真源已搬去 `paper-columns.ts`**（純模組，可被測試載入）。
+ * 呢度 import + re-export 保持既有 import 路徑唔變 —— `paper-columns.ts` 係
+ * 「紙張尺寸 → 欄數」嘅單一真源（收據 + 標籤共用），唔好喺呢度再定義多次。
+ * ⚠️ 一定要 `import` 而唔止 `export … from`：本檔內部（`renderEscPosLines`）
+ * 都要用個值。
  */
-export const RECEIPT_PAPER_COLUMNS_58MM = 32;
+import {
+  RECEIPT_PAPER_COLUMNS,
+  RECEIPT_PAPER_COLUMNS_58MM,
+} from "@/lib/paper-columns";
+
+export { RECEIPT_PAPER_COLUMNS, RECEIPT_PAPER_COLUMNS_58MM };
 
 // 單據抬頭（label 唔印抬頭，62mm 標籤紙太細）
 //

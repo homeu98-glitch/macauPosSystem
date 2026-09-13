@@ -27,6 +27,7 @@ export type PaperSizeValue =
   | "40x30mm"
   | "50x30mm"
   | "50x40mm"
+  | "58x40mm"
   | "60x40mm"
   | "70x50mm"
   | "100x75mm";
@@ -953,6 +954,7 @@ export const LABEL_MODEL_PAPER_SIZES: LabelPaperOption[] = [
   { value: "40x30mm", label: "40 × 30 mm", widthMm: 40, heightMm: 30, hint: "細標籤 / 條碼" },
   { value: "50x30mm", label: "50 × 30 mm", widthMm: 50, heightMm: 30, hint: "零售價籤、商品標示" },
   { value: "50x40mm", label: "50 × 40 mm", widthMm: 50, heightMm: 40, hint: "商品標示（較高）" },
+  { value: "58x40mm", label: "58 × 40 mm", widthMm: 58, heightMm: 40, hint: "收銀機標準價籤" },
   { value: "60x40mm", label: "60 × 40 mm", widthMm: 60, heightMm: 40, hint: "飲品杯貼、成份表" },
   { value: "70x50mm", label: "70 × 50 mm", widthMm: 70, heightMm: 50, hint: "外帶袋、備料標籤" },
   { value: "100x75mm", label: "100 × 75 mm", widthMm: 100, heightMm: 75, hint: "物流面單、大標籤" },

@@ -44,6 +44,16 @@ import {
   clearQuickScanLastOrder,
   saveQuickScanLastOrder,
 } from "@/lib/pos/quick-scan-remembered-order";
+import { applyPosDeduct } from "@/lib/ledger/members";
+import {
+  buildDeductIdempotencyKey,
+  formatElapsed,
+  formatRetryClock,
+  isPinFree,
+  mopToAvos,
+  type MemberPayMethod,
+  type MemberPayStage,
+} from "@/lib/ledger/member-pay";
 import { MenuItem, OrderItem, PosBootstrap, PosOrder } from "@/lib/types";
 
 // 購物車行型別而家喺 `@/lib/kiosk-cart`（純函式，可單元測試）；呢度 re-export 保持介面穩定。
@@ -56,6 +66,39 @@ export type SpecDraft = {
   item: MenuItem;
   specs: NonNullable<OrderItem["selectedSpecs"]>;
   priceDelta: number;
+};
+
+/**
+ * 已登入嘅會員會話（**只存在記憶體，禁止持久化**）。
+ *
+ * 🔴 個資紅線（Ledger 契約 §7.2）：`displayName` / 餘額**只准當次 UI 渲染** ——
+ *    禁寫入 `localStorage` / POS Supabase / analytics / console。
+ *    落 POS 訂單只准落 `customerId`（uuid），**唔准落電話**。
+ *
+ * 🔴 亦**唔會**持有任何 Ledger token：顧客憑證留喺 server 側
+ *    （見 `member-login.server.ts` — Kiosk 係共用平板，唔應該留低顧客憑證）。
+ */
+export type OrderingMember = {
+  customerId: string;
+  /**
+   * 登入用嘅電話號碼。
+   *
+   * ⚠️ **唯一用途**：呼叫 Ledger 扣款 RPC（`merchant_apply_pos_txn` 需要 `p_phone`，
+   *    §5.7）。Ledger 端係按電話搵錢包，冇第二條路。
+   *
+   * 🔴 界線（契約 §7.2 嘅立法原意 = 防止個資被**持久化 / 外洩**）：
+   *    - ✅ 准：存在 React state（記憶體），喺同一次請求內做參數。
+   *    - ❌ 禁：渲染成畫面上嘅文字（UI 只顯示 `displayName`，唔顯示電話）、
+   *      寫 `localStorage` / `sessionStorage` / POS Supabase / analytics / `console.*`。
+   *    - ❌ 禁：落 POS 訂單 —— 訂單只准 `customerId`（uuid）。
+   *    即係話：呢個欄位**唔可以**傳落 `placeOrder()` 之外嘅地方。
+   */
+  phone: string;
+  displayName: string | null;
+  balanceAvos: number;
+  giftBalanceAvos: number;
+  /** 登入成功時間戳 —— 免 PIN 180 秒窗口嘅**唯一**起計點（refresh 唔可延長）。 */
+  loggedInAt: number;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -115,6 +158,83 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     menuUnavailableTitle: "餐牌準備中",
     menuUnavailableBody: "本店餐牌尚未開放線上點餐，請聯絡職員協助。",
     closeSheet: "關閉",
+
+    // ── 會員登入 + 付款（2026-09-13，確認稿 member-login-payment-flow）──
+    // 🔴 呢批文案同確認稿逐字對齊。改文案要同步改確認稿，否則下次對稿又會漂移。
+    memberAskTitle: "你是會員嗎？",
+    memberAskSubtitle: "使用會員儲值餘額付款，結帳更快",
+    memberAskSubtitleKiosk: "使用會員儲值餘額付款，結帳更快；非會員亦可直接點餐，到櫃檯付款",
+    memberNonMemberHint: "非會員亦可直接點餐，到前台付款",
+    memberYes: "是，我是會員",
+    memberNo: "不是，直接點餐",
+    memberLoginHint: "會員登入後可查看儲值餘額並直接扣款",
+    memberForgotPin: "忘記 PIN？請到前台由店員協助",
+    memberLoginTitle: "會員登入",
+    memberLoginSubtitle: "請輸入會員帳號及 PIN 碼",
+    memberPhoneLabel: "會員帳號（手機號碼）",
+    memberPinLabel: "PIN 碼（4 位數字）",
+    memberLoginSubmit: "登入並繼續點餐",
+    memberLoginSkip: "跳過，直接點餐",
+    memberPinIssuedHint: "PIN 碼由店員發出，如需協助請到前台",
+    memberLockWarning: "連續 5 次錯誤將鎖定 15 分鐘",
+    memberLoginFailed: "帳號或 PIN 不正確",
+    memberRemainingAttempts: "剩餘 {n} 次機會",
+    memberRetryInput: "重新輸入",
+    memberLockedTitle: "帳號已暫時鎖定",
+    memberLockedReason: "連續 5 次輸入錯誤",
+    memberLockedRetryAt: "請於 {time} 後再試",
+    memberStillCanOrder: "仍然可以點餐",
+    memberLockedExplain: "鎖定只影響「扣餘額」。你仍然可以直接點餐，完成後到前台付款即可。",
+    memberSwitchToGuest: "改用非會員，直接點餐",
+    memberBalanceLabel: "儲值餘額",
+    // 付款方式（S6）
+    payTitle: "選擇付款方式",
+    payAmountLabel: "應付總額",
+    payOptionBalance: "扣會員儲值餘額",
+    payBalanceAfter: "餘額 {balance} → 扣後剩 {after}",
+    payInsufficientShort: "餘額不足 · 尚欠 {short}",
+    payInsufficientTitle: "餘額不足",
+    payOptionCounter: "到前台支付",
+    payOptionCounterHint: "落單後去櫃檯付款（現金 / 電子支付）",
+    payNoPartialHint: "暫不支援「先扣餘額、差額到前台補」（會產生兩筆對帳），請改用「到前台支付」。",
+    payConfirm: "確認付款",
+    // 扣款確認（S7）
+    deductTitle: "確認扣款",
+    deductAmountLabel: "扣款金額",
+    deductMemberLabel: "會員",
+    deductBalanceBefore: "扣款前餘額",
+    deductBalanceAfter: "扣款後餘額",
+    deductNeedPin: "請再次輸入 PIN 碼確認",
+    deductPinFree: "免 PIN（登入後 180 秒內）",
+    deductPinFreeHint: "你已於 {ago} 前完成登入，可直接確認。",
+    deductPinFreeGuard: "保障：登入後 3 分鐘內才免 PIN。",
+    deductConfirm: "確認扣款",
+    deductCancelToCounter: "取消，改為到前台支付",
+    // 結果（S8）
+    deductSuccess: "扣款成功",
+    deductSuccessBody: "已從會員儲值餘額扣款",
+    deductRemainingBalance: "剩餘餘額",
+    deductTxnId: "交易編號",
+    resultPlacedTitle: "落單成功",
+    resultPayAtCounter: "請到前台付款",
+    resultPendingAmount: "待付金額",
+    resultOrderStatus: "訂單狀態",
+    resultPendingPayment: "待付款",
+    resultKitchenSent: "訂單已直接送往廚房，無需等候確認。",
+    resultKitchenSentAfterPay: "訂單已送往廚房。付款完成後，桌台會顯示為「已結帳」。",
+    // 異常（S9）
+    payInsufficientKept: "訂單已保留",
+    payInsufficientKeptBody: "你嘅訂單唔會取消，可以直接改為到前台付款，唔需要重新點餐。",
+    payBackToCounter: "改為到前台支付",
+    payChooseAgain: "重新選擇付款方式",
+    deductUnknownTitle: "連線中斷",
+    deductUnknownSub: "未能確認扣款結果",
+    deductUnknownKeep: "請勿關閉此頁",
+    deductUnknownBadge: "結果未知",
+    deductUnknownBody: "系統無法查詢呢筆扣款到底成功咗未。撳「重試」會用同一筆交易再送一次（唔會重複扣）。",
+    deductUnknownHint: "如多次失敗，請到前台由店員處理。",
+    deductRetry: "重試（不會重複扣款）",
+    deductGoCounter: "到前台處理",
   },
 };
 
@@ -191,6 +311,31 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   // 落單成功但係「排隊等同步」（P1-4）：UI 顯示「已收到，同步中…」。
   const [orderSyncPending, setOrderSyncPending] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+
+  // ── 會員登入 + 付款（2026-09-13，確認稿 member-login-payment-flow）──
+  // 🔴 全部只係**記憶體** state —— 唔入 localStorage / sessionStorage（個資紅線 §7.2），
+  //    亦刻意唔會因為 reload 而復原：Kiosk 係共用平板，上一位客人嘅會員狀態
+  //    一定要喺「倒數歸零 / 返回主頁」時徹底清走（見 `returnToHome()` 嘅硬重置）。
+  const [member, setMember] = useState<OrderingMember | null>(null);
+  const [memberLoginOpen, setMemberLoginOpen] = useState(false);
+  const [memberLoginSubmitting, setMemberLoginSubmitting] = useState(false);
+  const [memberLoginError, setMemberLoginError] = useState<string | null>(null);
+  const [memberLoginRemaining, setMemberLoginRemaining] = useState<number | null>(null);
+  /** 已鎖定時嘅解鎖時間戳（ms）；null = 未鎖。 */
+  const [memberLoginLockedUntil, setMemberLoginLockedUntil] = useState<number | null>(null);
+  // 付款 sheet
+  const [paySheetOpen, setPaySheetOpen] = useState(false);
+  const [payStage, setPayStage] = useState<MemberPayStage>("choose");
+  const [payMethod, setPayMethod] = useState<MemberPayMethod | null>(null);
+  const [payBusy, setPayBusy] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  /** 免 PIN 倒數用嘅 tick —— 只有喺 `deduct` 階段先會跑（避免無謂 render）。 */
+  const [payTick, setPayTick] = useState(() => Date.now());
+  /** 扣款成功收據（成功頁顯示 `txn_*` + 剩餘餘額）。 */
+  const [deductReceipt, setDeductReceipt] = useState<{
+    txnId: string;
+    balanceAfterAvos: number;
+  } | null>(null);
 
   // ── 店舖真源（P1-1 統一優先級）──
   // ⚠️ 2026-09-02 舊註釋：**移除 `?? DEFAULT_KIOSK_STORE_ID`**（示範店代碼）。
@@ -691,6 +836,25 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       setOrderNote("");
       setOrdering(false); // 落完單返去「明細」介面（鎖定餐牌）
       draftOrderIdRef.current = null; // 落單成功：下張單用新 id
+
+      // ── 會員扣款（確認稿 S7 / S8 / S9）──
+      //
+      // ⚠️ 順序刻意係「**先落單、後扣款**」：
+      //    反過來（先扣後落單）一旦落單失敗就係「錢扣咗但冇單」，要人手去 Ledger 沖正。
+      //    而先落單後扣款最壞情況只係「單喺度、錢未收」→ 客人到前台付即可
+      //    （確認稿 S9a「訂單已保留」正是此意）。
+      //
+      // ⚠️ 扣款失敗**唔可以** `return false` —— `placeOrder` 回 false 嘅語義係
+      //    「落單失敗，保留購物車重試」，但呢度單已經落咗。回 false 會令 UI 顯示
+      //    落單失敗、購物車仲喺度 → 客人再落一次 = 兩張單。所以照回 true，
+      //    由 `payStage` 去表達「扣款未成功」。
+      if (member && payMethod === "balance") {
+        const deducted = await runMemberDeduct(settledOrder);
+        if (!deducted) return true;
+      }
+
+      setPaySheetOpen(false);
+      setPayStage("choose");
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -704,6 +868,286 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   function persistLanguage(lng: KioskLanguage) {
     setLanguage(lng);
     if (binding) saveKioskDeviceBinding({ ...binding, language: lng });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 會員登入（確認稿 S1–S3）
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * 打 `POST /api/ledger/member-login`（顧客登入，契約 §4.5）。
+   *
+   * @param mode `"login"` = Landing 撳「是，我是會員」→ 成功後開始點餐；
+   *             `"verify"` = S7a 需要 PIN 再確認 → 成功後即刻扣款，**唔會**重新開始點餐。
+   * @returns 驗證成功 = `true`。
+   */
+  async function submitMemberCredentials(
+    phone: string,
+    pin: string,
+    mode: "login" | "verify",
+  ): Promise<boolean> {
+    if (memberLoginSubmitting) return false;
+    setMemberLoginSubmitting(true);
+    setMemberLoginError(null);
+    try {
+      const res = await fetch("/api/ledger/member-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, pin, storeId }),
+      });
+      const payload = (await res.json()) as {
+        ok?: boolean;
+        code?: string;
+        message?: string;
+        remainingAttempts?: number;
+        retryAfterSec?: number;
+        member?: {
+          customerId: string;
+          displayName: string | null;
+          balanceAvos: number;
+          giftBalanceAvos: number;
+        };
+      };
+
+      if (!res.ok || !payload.ok || !payload.member) {
+        const code = payload.code ?? "upstream";
+        // 鎖定（該電話）／限流（該 IP）：顯示解鎖時間，客人仍可改用非會員。
+        if (code === "locked" || code === "rate_limited") {
+          setMemberLoginLockedUntil(Date.now() + (payload.retryAfterSec ?? 900) * 1000);
+          setMemberLoginRemaining(0);
+          setMemberLoginError(null);
+          return false;
+        }
+        // 🔴 帳號唔存在 / 未設 PIN / PIN 錯 —— server 已統一文案（防枚舉）。直接用佢嗰句。
+        if (code === "bad_credential") {
+          setMemberLoginError(payload.message ?? kioskT(language, "memberLoginFailed"));
+          setMemberLoginRemaining(payload.remainingAttempts ?? null);
+          return false;
+        }
+        setMemberLoginError(payload.message ?? kioskT(language, "placeFailed"));
+        return false;
+      }
+
+      // 🔴 只存記憶體。**唔可以**寫落 localStorage / sessionStorage / console（§7.2）。
+      setMember({
+        customerId: payload.member.customerId,
+        phone,
+        displayName: payload.member.displayName,
+        balanceAvos: payload.member.balanceAvos,
+        giftBalanceAvos: payload.member.giftBalanceAvos,
+        loggedInAt: Date.now(),
+      });
+      setMemberLoginRemaining(null);
+      setMemberLoginLockedUntil(null);
+      setMemberLoginError(null);
+
+      if (mode === "login") {
+        setMemberLoginOpen(false);
+        // S6：預設揀「扣餘額」—— 會員登入嘅意圖就係想扣（確認稿已拍板）。
+        setPayMethod("balance");
+        startOrdering();
+      }
+      return true;
+    } catch {
+      setMemberLoginError(kioskT(language, "placeFailed"));
+      return false;
+    } finally {
+      setMemberLoginSubmitting(false);
+    }
+  }
+
+  /** S1「是，我是會員」→ 開登入 sheet。 */
+  function openMemberLogin() {
+    setMemberLoginError(null);
+    setMemberLoginRemaining(null);
+    setMemberLoginOpen(true);
+  }
+
+  /**
+   * S1「不是，直接點餐」／S2「跳過，直接點餐」／S3b「改用非會員，直接點餐」。
+   *
+   * ⚠️ 一定要清走殘留會員態：Kiosk 係共用平板，上一位客人登入過就直接沿用 = 幫人扣錯錢。
+   * ⚠️ **唔清** `memberLoginLockedUntil` —— 嗰個係 server 側鎖，客人再撳「我是會員」應該照見到鎖定。
+   */
+  function skipMemberLogin() {
+    setMemberLoginOpen(false);
+    setMemberLoginError(null);
+    setMemberLoginRemaining(null);
+    setMember(null);
+    setPayMethod(null);
+    setDeductReceipt(null);
+    startOrdering();
+  }
+
+  /** 關閉登入 sheet（未登入狀態）。 */
+  function closeMemberLogin() {
+    setMemberLoginOpen(false);
+    setMemberLoginError(null);
+    setMemberLoginRemaining(null);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 付款（確認稿 S6 / S7 / S9）
+  // ─────────────────────────────────────────────────────────────
+
+  /** 開付款 sheet（S6）。只有會員先開得到 —— 非會員直接落單（S4 冇扣餘額能力）。 */
+  function openPaySheet() {
+    if (!member) return;
+    setPayMethod("balance");
+    setPayStage("choose");
+    setPayError(null);
+    setPaySheetOpen(true);
+  }
+
+  function selectPayMethod(method: MemberPayMethod) {
+    setPayMethod(method);
+    setPayError(null);
+  }
+
+  /** S6「確認付款」：前台付 = 直接落單；扣餘額 = 先去 S7 確認扣款。 */
+  function confirmPay() {
+    if (!member || payBusy) return;
+    if (payMethod === "counter") {
+      void placeOrder();
+      return;
+    }
+    setPayStage("deduct");
+    setPayTick(Date.now());
+  }
+
+  /** S7「確認扣款」：免 PIN 直接扣；需 PIN 就先驗 PIN 再扣。 */
+  async function confirmDeduct(pin: string | null) {
+    if (!member || payBusy) return;
+    if (pin !== null) {
+      // ⚠️ 一定要傳 `member.phone`（唔係 `customerId`）—— 驗證係用電話 + PIN 派生密碼。
+      const verified = await submitMemberCredentials(member.phone, pin, "verify");
+      if (!verified) return;
+    }
+    await placeOrder();
+  }
+
+  /** S9a「改為到前台支付」／S7「取消，改為到前台支付」：關 sheet，訂單保留。 */
+  function switchPayToCounter() {
+    setPaySheetOpen(false);
+    setPayStage("choose");
+    setPayError(null);
+  }
+
+  /** S9a「重新選擇付款方式」：返去 S6。 */
+  function backToMethodChoice() {
+    setPayStage("choose");
+    setPayError(null);
+  }
+
+  /**
+   * S9b「重試（不會重複扣款）」。
+   *
+   * 🔴 **唔可以**重用 `placeOrder()` —— 佢會重新落一張**新單**（新 `order.id`），
+   *    即係新冪等鍵 → Ledger 唔會擋 → 客人真·被扣兩次。
+   *    呢度只可以對**已落嘅同一張單**重打扣款（同一 `order.id` → 同一 key → 回同一 `txnId`）。
+   */
+  async function retryDeduct() {
+    if (!member || payBusy) return;
+    const target = submittedOrder;
+    if (!target) return;
+    await runMemberDeduct(target);
+  }
+
+  function closePaySheet() {
+    if (payBusy) return;
+    setPaySheetOpen(false);
+    setPayStage("choose");
+    setPayError(null);
+  }
+
+  /**
+   * 走 Ledger `merchant_apply_pos_txn`（`p_type: "deduct"`）扣會員儲值餘額。
+   *
+   * 成功之後：
+   *   ① 發 `ORDER_UPDATED` 把訂單轉 `paid` + `prepaidAmount = total` + 三個 member 欄；
+   *   ② 記 `deductReceipt`（成功頁顯示 `txn_*` + 剩餘餘額）。
+   *
+   * @returns `true` = 錢已扣（訂單已更新）；`false` = 未扣（已設好對應 stage 畀 UI 顯示）。
+   *
+   * 🔴 三條唔可以錯嘅：
+   *   1. **冪等鍵**必須係 `scan-debit:{storeId}:{orderId}`（docs/129 P1）——
+   *      換咗格式，Ledger 端 `apply_transaction` 就唔會擋重複扣款（真·雙扣）。
+   *   2. 扣款成功**一定要**即刻轉 `paid` + 寫 `prepaidAmount`（J 2026-09-13 拍板）：
+   *      唔寫，收銀機仲當「未付款」→ 會再收一次錢。
+   *   3. 失敗**唔可以**當「未扣款」：Ledger 冇 lookup API（Q6），
+   *      網絡失敗 = **結果未知** → 只可以同鍵重試，唔可以靜默當成功或當失敗。
+   */
+  async function runMemberDeduct(order: PosOrder): Promise<boolean> {
+    if (!member) return false;
+
+    const amountAvos = mopToAvos(order.total);
+    if (amountAvos <= 0) {
+      setPayError(null);
+      setPayStage("insufficient");
+      return false;
+    }
+
+    setPayBusy(true);
+    setPayError(null);
+    const idempotencyKey = buildDeductIdempotencyKey(storeId, order.id);
+
+    try {
+      const result = await applyPosDeduct({
+        merchantId: storeId,
+        // ⚠️ `member.phone` 只喺呢度用一次（RPC 參數），唔會落單、唔會 log（§7.2）。
+        phone: member.phone,
+        amountAvos,
+        idempotencyKey,
+      });
+
+      const paidOrder: PosOrder = {
+        ...order,
+        status: "paid",
+        // 全額已預付：收銀機見到呢個值就唔會再收錢。
+        prepaidAmount: order.total,
+        memberCustomerId: member.customerId,
+        memberDeductionAvos: result.amountAvos,
+        memberDeductTxnId: result.txnId,
+        updatedAt: new Date().toISOString(),
+      };
+
+      try {
+        await submitKioskOrder(storeId, paidOrder, "ORDER_UPDATED");
+      } catch (e) {
+        // ⚠️ **錢已經扣咗**，只係「轉 paid」未上到雲。呢個情況唔可以當扣款失敗
+        //    （客人明明畀咗錢）→ 入本地待同步隊列等 flush，UI 照當扣款成功，
+        //    只係 `orderSyncPending` 會照出（唔可以講「已同步」講大話）。
+        if (!(e instanceof KioskOrderRejectedError)) {
+          enqueuePendingKioskOrder(storeId, paidOrder, "ORDER_UPDATED");
+          setPendingSyncCount(pendingKioskOrderCount(storeId));
+          setOrderSyncPending(true);
+        }
+        console.warn(
+          "[kiosk] 會員扣款成功但轉 paid 未上雲，已入待同步隊列:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+
+      setDeductReceipt({ txnId: result.txnId, balanceAfterAvos: result.balanceAfterAvos });
+      setSubmittedOrder(paidOrder);
+      setTableOrder(mode === "dine_in" ? paidOrder : null);
+      setPaySheetOpen(false);
+      setPayStage("choose");
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // 餘額不足：訂單**保留**唔取消，客人可以直接轉「到前台付款」（確認稿 S9a）。
+      if (/insufficient/i.test(message)) {
+        setPayStage("insufficient");
+        return false;
+      }
+      // 其餘（網絡 / 5xx / 店員 Ledger session 過期）→ **結果未知**（確認稿 S9b）。
+      setPayError(message);
+      setPayStage("unknown");
+      return false;
+    } finally {
+      setPayBusy(false);
+    }
   }
 
   /**
@@ -745,10 +1189,12 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   function startOrdering() {
     setStarted(true);
     setOrdering(false); // 入餐牌前重置鎖定（無已落單枱 → 直接點餐；有 → 見明細）
+    // 上一輪嘅扣款收據唔應該帶落新一輪（會員身分本身保留 —— 登入後就係用呢條路入餐牌）。
+    setDeductReceipt(null);
     if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-started", "1");
   }
 
-  // kiosk 落單成功 5 秒倒數後自動返回：清走成功頁 + 重置 landing（等下一個客人重新「開始點餐」）
+  // kiosk 落單成功倒數後自動返回：清走成功頁 + 重置 landing（等下一個客人重新「開始點餐」）
   function returnToHome() {
     setSubmittedOrder(null);
     setOrderSyncPending(false);
@@ -757,8 +1203,34 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     // 快餐掃碼嘅「記住嗰張單」都要清：唔清就會喺下一次 reload 又跳返成功頁
     //（客人撳「再點一單」= 明確表示唔再需要睇舊號）。
     clearQuickScanLastOrder();
+
+    // ── 🔴 歸零硬重置三件事（確認稿 S12T）──
+    // 清會員 session / 清付款選擇 / 清扣款收據。
+    // ⚠️ 呢個係**安全必要**而唔係清潔：Kiosk 係**共用平板**，唔清就走下一張單嘅話，
+    //    下一位客人一坐低就已經「登入咗上一位客人嘅會員」→ 直接扣錯人錢。
+    // ⚠️ 唯一**唔清**嘅係 `memberLoginLockedUntil` —— 嗰個係 server 側「連續 5 次錯 PIN」
+    //    嘅鎖定，本來就要跨客人有效（換個客人打同一個電話號碼都應該照鎖）。
+    setMember(null);
+    setMemberLoginOpen(false);
+    setMemberLoginError(null);
+    setMemberLoginRemaining(null);
+    setPaySheetOpen(false);
+    setPayStage("choose");
+    setPayMethod(null);
+    setPayError(null);
+    setPayBusy(false);
+    setDeductReceipt(null);
+
     if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
   }
+
+  // 免 PIN 倒數：只有喺「確認扣款」畫面先需要每秒重算。
+  // 唔想全頁每秒 render —— 所以 tick 條件式啟動（`payStage` 一離開 `deduct` 就停）。
+  useEffect(() => {
+    if (!paySheetOpen || payStage !== "deduct") return;
+    const timer = setInterval(() => setPayTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [paySheetOpen, payStage]);
 
   return {
     hydrated,
@@ -808,6 +1280,50 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     pendingSyncCount,
     placeOrder,
     rebindStore,
+
+    // ── 會員登入（確認稿 S1–S3）──
+    member,
+    memberLoginOpen,
+    memberLoginSubmitting,
+    memberLoginError,
+    memberLoginRemaining,
+    /** 已鎖定時嘅解鎖時間（例 `14:37`）；未鎖 = null。UI 直接顯示，唔使再格式化。 */
+    memberLoginLockedRetryAt:
+      memberLoginLockedUntil === null
+        ? null
+        : formatRetryClock(
+            Math.max(0, Math.ceil((memberLoginLockedUntil - Date.now()) / 1000)),
+            Date.now(),
+          ),
+    openMemberLogin,
+    closeMemberLogin,
+    skipMemberLogin,
+    submitMemberCredentials,
+
+    // ── 付款（確認稿 S6 / S7 / S9）──
+    paySheetOpen,
+    payStage,
+    payMethod,
+    payBusy,
+    payError,
+    /** 扣款成功收據（`txn_*` + 剩餘餘額）；null = 未扣款成功。 */
+    deductReceipt,
+    /**
+     * 免 PIN 時嘅「已登入多久」（例 `2 分 12 秒`）。
+     * `null` = 已逾 180 秒（或未登入）→ UI 要顯示 PIN 輸入。
+     */
+    pinFreeAgoLabel:
+      member === null || !isPinFree(member.loggedInAt, payTick)
+        ? null
+        : formatElapsed(payTick - member.loggedInAt),
+    openPaySheet,
+    closePaySheet,
+    selectPayMethod,
+    confirmPay,
+    confirmDeduct,
+    switchPayToCounter,
+    backToMethodChoice,
+    retryDeduct,
   };
 }
 

@@ -8,6 +8,8 @@ import { loadKioskMode, saveKioskMode } from "@/lib/kiosk-order";
 import { KioskPrinterPanel } from "@/components/kiosk-printer-panel";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
+import { MemberLoginSheet } from "@/components/kiosk/member-login-sheet";
+import { MemberPaySheet } from "@/components/kiosk/member-pay-sheet";
 
 // 自助點餐機（店內平板）介面：3 欄佈局完全不變。
 //
@@ -54,6 +56,32 @@ export default function OrderPage() {
     started,
     startOrdering,
     returnToHome,
+    // 會員登入 + 付款（2026-09-13）
+    member,
+    memberLoginOpen,
+    memberLoginSubmitting,
+    memberLoginError,
+    memberLoginRemaining,
+    memberLoginLockedRetryAt,
+    openMemberLogin,
+    closeMemberLogin,
+    skipMemberLogin,
+    submitMemberCredentials,
+    paySheetOpen,
+    payStage,
+    payMethod,
+    payBusy,
+    payError,
+    deductReceipt,
+    pinFreeAgoLabel,
+    openPaySheet,
+    closePaySheet,
+    selectPayMethod,
+    confirmPay,
+    confirmDeduct,
+    switchPayToCounter,
+    backToMethodChoice,
+    retryDeduct,
   } = useKioskOrder();
 
   const t = (key: string) => kioskT(language, key);
@@ -74,7 +102,11 @@ export default function OrderPage() {
     router.replace("/");
   }
 
-  // kiosk 落單成功：5 秒倒數自動返回主頁（loading 狀態）
+  // kiosk 落單成功：3 秒倒數自動返回主頁（等下一位客人）
+  //
+  // ⚠️ 秒數由 5 → **3**（J 2026-09-13 拍板：「5 秒、15 秒太長」）。
+  //    平板上客人主要係睇取餐號大字，3 秒足夠；再長就會令下一位客人等。
+  // ⚠️ 呢頁係 **Kiosk 快餐**（`/order` 只做 quick）—— 堂食手機端**唔倒數**（見 scan-order-page）。
   const submittedRef = useRef(submittedOrder);
   const returnHomeRef = useRef(returnToHome);
   // ⚠️ 唔可以喺 render 期間寫 ref（react-hooks/refs）。用 effect 同步。
@@ -88,7 +120,14 @@ export default function OrderPage() {
       setReturnIn(0);
       return;
     }
-    setReturnIn(5);
+    // 🔴 付款 sheet 仲開住（未揀付款方式 / S9 扣款結果未確認）→ **唔可以**倒數。
+    //    否則客人未睇完、未撳「重試」就自動返主頁，嗰筆扣款結果就永遠冇人知
+    //   （而 Ledger 冇 lookup API，事後查唔返）。
+    if (paySheetOpen) {
+      setReturnIn(0);
+      return;
+    }
+    setReturnIn(3);
     const id = setInterval(() => {
       setReturnIn((n) => {
         if (n <= 1) {
@@ -100,7 +139,7 @@ export default function OrderPage() {
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [submittedOrder]);
+  }, [submittedOrder, paySheetOpen]);
 
   // kiosk 閒置 1 分鐘自動返回 landing（任何操作重置計時）
   useEffect(() => {
@@ -118,6 +157,44 @@ export default function OrderPage() {
       events.forEach((e) => window.removeEventListener(e, reset));
     };
   }, [started]);
+
+  // ── 付款 sheet（共用 JSX）──
+  //
+  // 定義喺 early return 之前，因為「3 欄點餐介面」同「成功頁」兩個分支都要掛。
+  // 唔可以只掛一邊：扣款失敗嗰陣 `submittedOrder` 已經有值（單已落），
+  // 畫面會跳去成功頁分支 —— 只掛點餐介面就會令 S9 提示消失、連「重試」都撳唔到。
+  const memberPaySheet =
+    paySheetOpen && member ? (
+      <MemberPaySheet
+        t={t}
+        variant="kiosk"
+        stage={payStage}
+        lines={
+          submittedOrder
+            ? submittedOrder.items.map((it) => ({
+                name: it.name,
+                quantity: it.quantity,
+                amountMop: it.price * it.quantity,
+              }))
+            : cart.map((l) => ({ name: l.name, quantity: l.quantity, amountMop: l.price * l.quantity }))
+        }
+        totalMop={submittedOrder?.total ?? totals.total}
+        // ⚠️ 只顯示 `displayName`（若冇就顯示「會員」）—— **唔可以**顯示電話號碼（§7.2）。
+        memberDisplayName={member.displayName ?? "會員"}
+        balanceMop={member.balanceAvos / 100}
+        payMethod={payMethod}
+        busy={payBusy || submitting}
+        pinFreeAgoLabel={pinFreeAgoLabel}
+        networkError={payError}
+        onSelectMethod={selectPayMethod}
+        onConfirm={confirmPay}
+        onConfirmWithPin={(pin) => void confirmDeduct(pin)}
+        onCancelToCounter={switchPayToCounter}
+        onBackToChoose={backToMethodChoice}
+        onRetry={() => void retryDeduct()}
+        onGoCounter={switchPayToCounter}
+      />
+    ) : null;
 
   // ── 載入中 / 未綁店閘門 ──
   if (!hydrated) {
@@ -174,29 +251,73 @@ export default function OrderPage() {
   }
 
   // ── Landing：未「開始點餐」先顯示 landing page（唔用點餐介面做主頁）──
+  //
+  // 2026-09-13 會員流程改版（確認稿 S1T）：變成一頁問「你是會員嗎？」+ 兩顆**同等份量**掣。
+  // ⚠️ 兩顆掣刻意一樣大：避免「非會員」被當成次要路徑（已拍板）。
+  // ⚠️ 唔會預先探測電話再查註冊狀態 —— 契約 §4.5.3 明文禁止嗰種枚舉行為。
   if (!started) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
-        <div className="mb-6 text-8xl">🍽️</div>
-        <h1 className="mb-2 text-3xl font-bold text-slate-900">{displayStoreName}</h1>
-        <p className="mb-10 text-base text-slate-500">歡迎光臨，點擊開始為您點餐</p>
-        <button
-          onClick={startOrdering}
-          className="w-full max-w-xs rounded-2xl bg-orange-500 py-5 text-2xl font-semibold text-white active:scale-[0.98]"
-        >
-          開始點餐
-        </button>
-      </main>
+      <>
+        <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
+          <div className="mb-5 text-7xl">🍽️</div>
+          <h1 className="mb-2 text-3xl font-bold text-slate-900">{t("memberAskTitle")}</h1>
+          <p className="mb-3 max-w-md text-base text-slate-500">{t("memberAskSubtitleKiosk")}</p>
+
+          {/* 店名 + 快餐（自取）—— 一眼分清掃嘅係邊間店、邊種單 */}
+          <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-sm text-slate-600 ring-1 ring-slate-200">
+            <span className="font-semibold">{displayStoreName}</span>
+            <span className="text-slate-300">·</span>
+            <span>{t("pickup")}</span>
+          </div>
+
+          <button
+            onClick={openMemberLogin}
+            className="mb-3 w-full max-w-sm rounded-2xl bg-orange-500 py-5 text-2xl font-semibold text-white active:scale-[0.98]"
+          >
+            👤 {t("memberYes")}
+          </button>
+          <button
+            onClick={skipMemberLogin}
+            className="w-full max-w-sm rounded-2xl bg-white py-5 text-2xl font-semibold text-slate-700 ring-2 ring-slate-200 active:scale-[0.98]"
+          >
+            🙋 {t("memberNo")}
+          </button>
+
+          <p className="mt-6 text-sm text-slate-400">{t("memberLoginHint")}</p>
+          <p className="mt-1 text-xs text-slate-400">{t("memberForgotPin")}</p>
+        </main>
+
+        <MemberLoginSheet
+          t={t}
+          variant="kiosk"
+          submitting={memberLoginSubmitting}
+          errorMessage={memberLoginError}
+          remainingAttempts={memberLoginRemaining}
+          lockedRetryAt={memberLoginLockedRetryAt}
+          onClose={closeMemberLogin}
+          onSkip={skipMemberLogin}
+          onSubmit={(phone, pin) => void submitMemberCredentials(phone, pin, "login")}
+        />
+      </>
     );
   }
 
-  // ── 確認頁：落單成功後顯示 loading + 5 秒倒數，自動返回主頁 ──
+  // ── 確認頁（確認稿 S8 / S11T）：扣款成功 vs 待前台付款，一眼分得出「錢收咗未」 ──
   if (submittedOrder) {
     const isDineIn = mode === "dine_in";
+    const paidByMember = Boolean(deductReceipt);
     return (
+      <>
       <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center bg-slate-50 p-6 text-center">
-        <div className="mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 text-7xl">✅</div>
-        <h1 className="mb-3 text-4xl font-bold text-slate-900">{t("thanks")}</h1>
+        <div className="mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 text-7xl">
+          {paidByMember ? "✅" : "🏪"}
+        </div>
+        <h1 className="mb-2 text-4xl font-bold text-slate-900">
+          {paidByMember ? t("deductSuccess") : t("resultPlacedTitle")}
+        </h1>
+        <p className="mb-4 text-base text-slate-500">
+          {paidByMember ? t("deductSuccessBody") : t("resultPayAtCounter")}
+        </p>
         {/* P1-4：訂單入咗本地待同步隊列就唔可以講「已完成同步」 */}
         {orderSyncPending && (
           <p className="mb-4 rounded-xl bg-amber-100 px-4 py-2 text-sm font-medium text-amber-800" role="status">
@@ -210,37 +331,79 @@ export default function OrderPage() {
             {isDineIn ? t("table") : t("pickupNo")}
           </div>
           <div className="text-2xl font-semibold text-slate-900">{submittedOrder.tableName}</div>
-        </div>
-        <p className="mt-5 text-lg text-slate-600">{t("payAtCounter")}</p>
 
-        {/* 堂食：顯示本枱已落單明細（5 秒內可加單，否則自動返回主頁） */}
+          {/* 錢收咗（S8a）：扣款金額 + 剩餘餘額 + 交易編號 ／ 錢未收（S8b）：待付金額 + 待付款 */}
+          {paidByMember && deductReceipt ? (
+            <div className="mt-6 border-t border-slate-100 pt-4 text-left">
+              <div className="mb-1.5 flex items-center justify-between text-sm text-slate-500">
+                <span>{t("deductAmountLabel")}</span>
+                <span className="font-semibold text-slate-900">MOP {money2(submittedOrder.total)}</span>
+              </div>
+              <div className="mb-1.5 flex items-center justify-between text-sm text-slate-500">
+                <span>{t("deductRemainingBalance")}</span>
+                <span className="font-semibold text-slate-900">
+                  MOP {money2(deductReceipt.balanceAfterAvos / 100)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span>{t("deductTxnId")}</span>
+                <span className="font-mono">{deductReceipt.txnId}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 border-t border-slate-100 pt-4 text-left">
+              <div className="mb-1.5 flex items-center justify-between text-sm text-slate-500">
+                <span>{t("resultPendingAmount")}</span>
+                <span className="font-semibold text-slate-900">MOP {money2(submittedOrder.total)}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm text-slate-500">
+                <span>{t("resultOrderStatus")}</span>
+                <span className="font-semibold text-orange-600">{t("resultPendingPayment")}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 送廚提示：扣款成功 = 即時出廚（Ledger Q13）；未付款 = 付款後才轉「已結帳」 */}
+        <p className="mt-5 max-w-md text-sm text-slate-500">
+          {paidByMember ? t("resultKitchenSent") : t("resultKitchenSentAfterPay")}
+        </p>
+
+        {/* 堂食：顯示本枱已落單明細（倒數期間可加單） */}
         {isDineIn && (
           <div className="mt-5 w-full text-left">
             <OrderSummaryCard order={submittedOrder} title={t("tableOrderTitle")} />
           </div>
         )}
 
-        {/* 5 秒倒數自動返回主頁（loading 狀態） */}
-        <div className="mt-6 flex w-full flex-col items-center">
-          <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-slate-200">
-            <div
-              className="h-full bg-orange-500 transition-[width] duration-1000 ease-linear"
-              style={{ width: `${((5 - returnIn) / 5) * 100}%` }}
-            />
+        {/* 3 秒倒數自動返回主頁。
+            ⚠️ 付款 sheet 開住（S9 扣款未確認）→ **唔顯示**亦唔倒數：
+               否則客人未撳「重試」就自動返主頁，嗰筆扣款結果永遠冇人知。 */}
+        {!paySheetOpen && (
+          <div className="mt-6 flex w-full flex-col items-center">
+            <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-slate-200">
+              <div
+                className="h-full bg-orange-500 transition-[width] duration-1000 ease-linear"
+                style={{ width: `${((3 - returnIn) / 3) * 100}%` }}
+              />
+            </div>
+            <div className="mt-3 text-sm text-slate-500">
+              {returnIn > 0 ? `${returnIn} 秒後自動返回主頁…` : t("submitting")}
+            </div>
+            {isDineIn && (
+              <button
+                onClick={addToOrder}
+                className="mt-4 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
+              >
+                {t("addOrder")}
+              </button>
+            )}
           </div>
-          <div className="mt-3 text-sm text-slate-500">
-            {returnIn > 0 ? `${returnIn} 秒後自動返回主頁…` : t("submitting")}
-          </div>
-          {isDineIn && (
-            <button
-              onClick={addToOrder}
-              className="mt-4 w-full rounded-2xl bg-orange-500 py-4 text-xl font-semibold text-white"
-            >
-              {t("addOrder")}
-            </button>
-          )}
-        </div>
+        )}
       </main>
+
+      {memberPaySheet}
+      </>
     );
   }
 
@@ -425,7 +588,7 @@ export default function OrderPage() {
           </div>
 
           <button
-            onClick={() => void placeOrder()}
+            onClick={() => (member ? openPaySheet() : void placeOrder())}
             disabled={cart.length === 0 || submitting}
             className="mt-3 w-full rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white disabled:opacity-50"
           >
@@ -456,6 +619,9 @@ export default function OrderPage() {
           }}
         />
       )}
+
+      {/* 會員付款（確認稿 S6 / S7 / S9）—— 由購物車「落單」撳出嚟（只限已登入會員） */}
+      {memberPaySheet}
 
       {/* 設定（綁店）彈窗 */}
       {settingsOpen && (

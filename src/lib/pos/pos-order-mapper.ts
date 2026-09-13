@@ -52,6 +52,19 @@ export interface PosOrderRow {
    * `PosOrder.clientUpdatedAt` + `mergeTimestamp()`）。舊 row / 未跑 migration → null。
    */
   client_updated_at?: string | null;
+  /**
+   * 會員扣款（0038 migration 新增；未跑 migration 嘅環境會冇呢幾欄 → undefined）。
+   *
+   * 🔴 個資紅線（Ledger 契約 §7.2）：只有 `customer_id`(uuid)。
+   *    DB 亦**刻意冇** member_phone / member_display_name / member_balance_avos ——
+   *    嗰啲只准「當次 UI 渲染」。呢度唔好加。
+   *
+   * ⚠️ 為咩一定要 map 返出嚟：寫入路徑有做、讀取路徑冇做 = 收銀機永遠睇唔到
+   *    「客人已經用會員餘額付款」→ 店員有可能再收一次錢（docs/130 §7.1）。
+   */
+  member_customer_id?: string | null;
+  member_deduction_avos?: number | null;
+  member_deduct_txn_id?: string | null;
 }
 
 export function mapPosOrderRow(row: PosOrderRow): PosOrder {
@@ -88,6 +101,10 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     // 🔴 LWW 同鐘域（2026-09-12）：帶埋 client 鐘出去，令 realtime merge 唔會用
     // server 蓋章嘅 `updated_at` 去同本機（client 鐘）嘅 `updatedAt` 比新舊。
     clientUpdatedAt: row.client_updated_at ?? undefined,
+    // 會員扣款（0038）：0 / NULL 一律當「冇用會員餘額」→ undefined。
+    memberCustomerId: row.member_customer_id ?? undefined,
+    memberDeductionAvos: row.member_deduction_avos ? Number(row.member_deduction_avos) : undefined,
+    memberDeductTxnId: row.member_deduct_txn_id ?? undefined,
   };
 }
 

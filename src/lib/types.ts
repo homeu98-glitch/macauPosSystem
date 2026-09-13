@@ -1224,6 +1224,24 @@ export interface PosOrder {
   /** 上次結帳扣款的會員電話（Ledger phone），供返結反向回滾 */
   ledgerMemberPhone?: string;
 
+  // ── 自助點餐（Kiosk / 掃碼）會員扣款（2026-09-13，migration 0038）──
+  /**
+   * 會員扣款所屬之 Ledger 顧客 uuid。
+   *
+   * 🔴 個資紅線（Ledger 契約 §7.2）：**只准存 uuid**。禁存電話 / 顯示名 / 餘額。
+   *    所以呢度**刻意冇** memberPhone 呢類欄位 —— 唔好加。
+   *
+   * ⚠️ 同上面 `ledgerMemberPhone` 嘅關係：後者係收銀台結帳期寫入嘅（舊有行為），
+   *    自助點餐路徑**一律唔寫**。因為冇 telephone 就冇得「反向回滾」，
+   *    所以自助會員扣款單**必須鎖單**（唔准返結 / 改金額）—— 見 docs/129 §3。
+   */
+  memberCustomerId?: string;
+  /**
+   * Ledger `merchant_apply_pos_txn` 回傳嘅 `txn_id` —— POS ↔ Ledger 對帳同重試冪等憑證。
+   * 有值 = 錢真係由會員餘額扣咗，收銀台據此判「唔可以再收錢」。
+   */
+  memberDeductTxnId?: string;
+
   // ── 出餐時間儀器化（Phase B，模塊 4）──
   /** 首次送入廚房時間（ISO）。出餐時間 = servedAt − sentToKitchenAt。 */
   sentToKitchenAt?: string;

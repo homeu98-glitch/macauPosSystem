@@ -9,6 +9,7 @@ import { loadQuickScanLastOrder } from "@/lib/pos/quick-scan-remembered-order";
 import { MenuItem, PosOrder } from "@/lib/types";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
+import { MemberLoginSheet } from "@/components/kiosk/member-login-sheet";
 
 /**
  * 客人掃碼點餐（手機）共用介面 —— **堂食**同**快餐**兩條 link 都用呢個元件（docs/115）。
@@ -69,9 +70,25 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
     pendingSyncCount,
     placeOrder,
     started,
-    startOrdering,
     ordering,
     returnToHome,
+    // 會員登入（2026-09-13，確認稿 S1/S2/S3）
+    //
+    // ⚠️ 掃碼端**刻意唔掛付款 sheet**：Ledger 契約 §4.5.0 明文 —— 掃碼（客人手機）
+    //    只有**顧客** JWT，扣費 RPC（`merchant_apply_pos_txn`）檢查 `is_merchant_staff`
+    //    → 一定會被拒。掃碼場景 v1 係「顧客揀、**收銀台店員**代扣」。
+    //    所以手機端只提供「登入 + 睇餘額」，付款一律到前台（要店員操作）。
+    //    詳見 docs/130 §2。
+    member,
+    memberLoginOpen,
+    memberLoginSubmitting,
+    memberLoginError,
+    memberLoginRemaining,
+    memberLoginLockedRetryAt,
+    openMemberLogin,
+    closeMemberLogin,
+    skipMemberLogin,
+    submitMemberCredentials,
   } = useScanOrder();
 
   const t = (key: string) => kioskT(language, key);
@@ -240,19 +257,48 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   // 之外，喺呢度再加一重保險。
   if (!started && !activeTableOrder) {
     return (
-      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
-        <div className="mb-6 text-7xl">{quick ? "🥡" : "🍽️"}</div>
-        <h1 className="mb-2 text-2xl font-bold text-stone-900">{displayStoreName}</h1>
-        <p className="mb-8 text-sm text-stone-500">
-          {quick ? "掃碼點餐 · 點完請到櫃檯付款" : "掃描枱上 QR，手機輕鬆點餐"}
-        </p>
-        <button
-          onClick={startOrdering}
-          className="w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
-        >
-          開始點餐
-        </button>
-      </main>
+      <>
+        <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+          <div className="mb-5 text-7xl">{quick ? "🥡" : "🍽️"}</div>
+          <h1 className="mb-2 text-2xl font-bold text-stone-900">{t("memberAskTitle")}</h1>
+          <p className="mb-3 text-sm text-stone-500">{t("memberAskSubtitle")}</p>
+
+          {/* 一眼分清「邊間店 + 堂食枱號 / 快餐自取」（確認稿 S1 要求） */}
+          <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-1.5 text-xs text-stone-600 ring-1 ring-stone-200">
+            <span className="font-semibold">{displayStoreName}</span>
+            <span className="text-stone-300">·</span>
+            <span>{quick ? t("pickup") : `${t("dineIn")} ${tableName}`}</span>
+          </div>
+
+          {/* ⚠️ 兩顆掣**同等份量**（確認稿已拍板）：避免「非會員」被當成次要路徑。 */}
+          <button
+            onClick={openMemberLogin}
+            className="mb-3 w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
+          >
+            👤 {t("memberYes")}
+          </button>
+          <button
+            onClick={skipMemberLogin}
+            className="w-full rounded-2xl bg-white py-4 text-lg font-semibold text-stone-700 ring-2 ring-stone-200 active:scale-[0.98]"
+          >
+            🙋 {t("memberNo")}
+          </button>
+
+          <p className="mt-5 text-xs text-stone-400">{t("memberForgotPin")}</p>
+        </main>
+
+        <MemberLoginSheet
+          t={t}
+          variant="mobile"
+          submitting={memberLoginSubmitting}
+          errorMessage={memberLoginError}
+          remainingAttempts={memberLoginRemaining}
+          lockedRetryAt={memberLoginLockedRetryAt}
+          onClose={closeMemberLogin}
+          onSkip={skipMemberLogin}
+          onSubmit={(phone, pin) => void submitMemberCredentials(phone, pin, "login")}
+        />
+      </>
     );
   }
 
@@ -328,7 +374,7 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
     <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
       {/* 頂欄：店名 + 枱號 + 語言 */}
       <header className="sticky top-0 z-10 shrink-0 bg-white/95 px-4 pb-3 pt-4 backdrop-blur">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="truncate text-lg font-bold text-stone-900">{displayStoreName}</div>
             <div className="mt-0.5 flex items-center gap-1.5 text-xs text-stone-500">
@@ -337,6 +383,18 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
               </span>
             </div>
           </div>
+          {/* 會員氣泡（確認稿 S5）：登入後顯示名 + 儲值餘額。
+              🔴 **唔顯示電話號碼**（個資紅線 §7.2：電話唔可以渲染成 UI 文字）。 */}
+          {member && (
+            <div className="shrink-0 rounded-xl bg-emerald-50 px-2.5 py-1.5 text-right">
+              <div className="max-w-[7rem] truncate text-xs font-semibold text-emerald-800">
+                {member.displayName ?? "會員"}
+              </div>
+              <div className="text-[11px] text-emerald-600">
+                {t("memberBalanceLabel")} MOP {money2(member.balanceAvos / 100)}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 分類橫向 chips */}

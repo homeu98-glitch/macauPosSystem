@@ -351,6 +351,110 @@ XP-235B **同時支援標籤模式同票據模式**。項目已經有 `roles?: P
 （`retail/printer-roles.ts`）支援一機兩用，但 wizard 目前只寫單一 `role`。
 需要嘅話要另外喺打印機列表改角色 —— **未做，唔喺本輪範圍**。
 
+### 2.11 🔴 埋藏更深嘅 bug：`paperColumnsFromSize()` 唔識標籤紙
+
+> 追問「商家要選什麼」時挖出嚟嘅 —— **2.10 嘅紙寬限制其實一直冇生效**。
+
+#### 症狀
+
+`print-jobs.ts` 嘅標籤 job 係咁計每行字數嘅：
+
+```ts
+// print-jobs.ts:284
+const presetColumns = labelPaperPreset(labelTemplate.paperSize).columns;
+// print-jobs.ts:314
+template: buildSnapshot(
+  "label",
+  labelTemplate,
+  Math.min(presetColumns, paperColumnsFromSize(printer.paperSize)),   // ← 呢度
+),
+```
+
+註釋寫得好清楚（設計意圖正確）：
+
+```
+// 實際可印闊度 = min(標籤紙闊度, 打印機機頭闊度)：
+// 80mm 機裝 70mm 標籤 → 得 41 字；58mm 機裝唔落 100mm 卷，min() 會自動截頂。
+```
+
+**但 `paperColumnsFromSize()` 嘅實作係**：
+
+```ts
+export function paperColumnsFromSize(paperSize: string | undefined | null): number {
+  return (paperSize ?? "").includes("58") ? RECEIPT_PAPER_COLUMNS_58MM : RECEIPT_PAPER_COLUMNS;
+}
+```
+
+`"60x40mm".includes("58")` → `false` → 回 **48**（= 80mm 票據機欄數）。
+
+**所以標籤機側永遠回 48 → `Math.min()` 形同虛設。**
+
+#### 為害實例
+
+| 模板紙寬 | 模板欄數 | 打印機紙寬 | `paperColumnsFromSize` | `min()` 結果 | 實際紙寬 | 結果 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100×75 | 61 | 60×40（XP-235B） | ~~48~~ | ~~48~~ | 34 | 🔴 **印刷 48 字落 34 字紙 → 嚴重溢出** |
+| 62mm | 36 | 60×40 | ~~48~~ | ~~36~~ | 34 | 🔴 超 2 字 |
+| 60×40 | 34 | 60×40 | ~~48~~ | 34 | 34 | ✅ 啱（靠好彩） |
+| 40×30 | 21 | 60×40 | ~~48~~ | 21 | 34 | ✅（模板更窄） |
+
+> 修好之後：`paperColumnsFromSize("60x40mm")` = 34 → `min(61, 34)` = 34 ✅
+
+#### 第二個相關坑：同一尺寸有**兩種 id 寫法**
+
+| 來源 | 寫法 | 用途 |
+| --- | --- | --- |
+| `types.ts` `LABEL_PAPER_PRESETS` | **`"60x40"`** | 設計頁 / 標籤模板 |
+| `print-bridge/printer-models.ts` | **`"60x40mm"`** | 打印機型號表 |
+
+字串唔相等 → `labelPaperPreset("60x40mm")` 搵唔到 → **靜靜跌去 62mm 預設**
+→ 欄數由 34 變 36（多 2 字，超出 60mm 紙）。呢個係「唔會 throw、只會靜靜出錯」類。
+
+另外 `LABEL_PAPER_PRESETS` 本身**缺咗** `30x20` / `50x40`（2.10 新增嘅選項）
+→ 揀咗都會跌去預設。已補齊（同時補 `58x40` 入型號表）。
+
+#### 修正
+
+**1. 新增純模組 `src/lib/paper-columns.ts`** —— 單一真源：
+
+| 匯出 | 作用 |
+| --- | --- |
+| `RECEIPT_PAPER_COLUMNS` / `_58MM` | 收據常數（48 / 32）—— 由 `escpos-render.ts` **re-export**，唔再各自定義 |
+| `labelPaperPresetId()` | `"60x40mm"` → `"60x40"`；**`"62mm"`/`"58mm"`/`"80mm"` 唔剝** |
+| `isLabelPaperSize()` | 收據 58/80mm **唔算**標籤 |
+| `findLabelPaperPreset()` | 容忍兩種寫法 |
+| `labelPaperColumns()` | 尺寸 → 欄數（未知 → 62mm 預設，向後兼容） |
+| `paperColumnsFromSize()` | **統一入口**（收據 + 標籤） |
+
+**為何要另開檔**：原本呢段邏輯住喺 `escpos-template.ts`，但嗰邊 import
+`@/lib/format` 等 runtime 依賴 → `node --experimental-strip-types` 載入唔到
+→ **冇任何自動化測試守住** → 就係咁養出咗呢個 bug。
+
+新模組**只 import `./types.ts`**（佢只有 `import type`，會被 type-strip 抹掉）
+→ 測試可以直接載入。**如果日後有人喺呢個檔加 `@/lib/...` runtime import，
+測試會即刻爆** —— 呢個係刻意嘅護欄。
+
+**2. 分支次序**：標籤判斷一定要**行先**，因為 `"58x40"`（標籤，32 字）同
+`"58mm"`（收據，32 字）都含 `"58"` 但係唔同嘢。次序反咗會令 58×40 標籤走錯分支。
+
+**3. `escpos-render.ts` / `escpos-template.ts` 改成 re-export** ——
+保留既有公開 API（5 個地方 import `RECEIPT_PAPER_COLUMNS`），但實作單一化。
+
+#### ⚠️ 行為改變（要知）
+
+修好之後，**現有標籤機配置嘅欄數會變**：
+
+| 打印機 `paperSize` | 修前 | 修後 |
+| --- | --- | --- |
+| `"100x75mm"`（Zebra / TSC / 漢印 型號表預設） | 48 | **61** |
+| `"62mm"` | 36 | 36（不變） |
+| `"58x40mm"` | 32（靠含 "58"） | 32（不變） |
+
+`"100x75mm"` 由 48 → 61 係**修正**（之前白白浪費一半紙闊），
+但若果商家實際載嘅係窄標籤而型號表寫 100×75，就會溢出。
+配合 2.10 嘅 wizard 紙寬限制（防止揀超過實機上限嘅尺寸）＋
+`Math.min(模板, 打印機)`，正常設定下兩邊都會收斂到正確值。
+
 ---
 
 ## 3. 未做 / 待辦
@@ -402,6 +506,7 @@ Android / print hub）都認得先有意義。而**四個 renderer 目前全部�
 | 型號分流 | `node --experimental-strip-types tools/verify-label-model-split.cjs` | **9 / 9** |
 | **品牌分組** | `node --experimental-strip-types tools/verify-brand-grouping.cjs` | **9 / 9** |
 | **紙寬限制** | `node --experimental-strip-types tools/verify-label-paper-width.cjs` | **10 / 10** |
+| **紙張欄數** | `node --experimental-strip-types tools/verify-label-paper-columns.cjs` | **10 / 10** |
 | 兩表同步 | `node tools/verify-printer-db-parity.cjs` | **5 / 5** |
 | Companion e2e | `cd C:/dev/desktop-companion && node test-print-e2e.mjs` | **8 / 8** |
 | 跨 repo 硬編字串 | `cd C:/dev/desktop-companion && node test-crossrepo-parity.mjs` | **0 問題** |
@@ -474,12 +579,16 @@ Android / print hub）都認得先有意義。而**四個 renderer 目前全部�
 | `src/lib/print-bridge/printer-models.ts` | ＋`PrinterFamily`、`resolveFamily`、`familyForRole`；`getLanModelOptions(family)`；＋7 VID / 23 型號；＋`alsoKnownAs`；＋`LABEL_MODEL_PAPER_SIZES`、`LABEL_COMMAND_SETS`、`suggestLabelCommandSet`；`PaperSizeValue` 擴充；`ResolvedUsbMeta` 加 `family` / `alsoKnownAs`；**＋品牌分組層**（`OTHER_BRAND`、`brandGroupOfModel`、`groupByBrand`、`groupModelsByBrand`、`brandGroupOfCandidate`、`brandChipsOf`、`brandChipLabel`、`BRAND_FILTER_ALL`）；**＋紙寬層**（`LAN_ONLY_MODELS`、`labelPaperFitsModel`、`LabelPaperOption`、`labelPaperOptionOf`、`labelPaperWidthMm`、`defaultLabelPaperFor`、`FALLBACK_LABEL_PAPER`） |
 | `src/components/printer-wizard-modal.tsx` | `lanModels` 按角色過濾（`useMemo`）；分區只給 `zone`；＋標籤機專屬 Step 3 設定區；`selectRole` 切換時清空 model；`complete()` 嘅 `zoneId` 只給 `zone`；`paperSize` 標籤機用商家選嘅值；USB 分支信 Companion `family`；標題動態（「添加標籤機」）；**＋品牌 chip 篩選列 ＋ 分組標題 ＋ USB 自動識別提示 ＋ 三處 reset `brandFilter` ＋ 紙寬限制提示 ＋ 超範圍尺寸刪除線/警告 ＋ `complete()` 寫入 `maxLabelWidthMm`** |
 | `src/components/printer-card-v2.tsx` | 分區只給 `zone`；＋標籤機紙張尺寸下拉 ＋ 紙張/指令集顯示；＋ `TSPL` 徽章；測試打印按鈕文案分標籤機；**＋紙寬範圍顯示 ＋ 超範圍 `<option disabled>` ＋ 當前尺寸超範圍紅字警告 ＋ 改用共享 `LABEL_MODEL_PAPER_SIZES`** |
-| `src/lib/types.ts` | **`DevicePrinterConfig` ＋`maxLabelWidthMm?` / `minLabelWidthMm?`**（選填，兩個 normalizer 都係 spread → 唔使遷移） |
+| `src/lib/types.ts` | **`DevicePrinterConfig` ＋`maxLabelWidthMm?` / `minLabelWidthMm?`**（選填，兩個 normalizer 都係 spread → 唔使遷移）；**`LABEL_PAPER_PRESETS` ＋`30x20` / `50x40`**（原本缺，揀咗會跌去預設） |
+| **`src/lib/paper-columns.ts`（新增）** | **紙張尺寸 → 欄數嘅單一真源**。收據常數 48/32 ＋ `labelPaperPresetId()` / `isLabelPaperSize()` / `findLabelPaperPreset()` / `labelPaperColumns()` / `paperColumnsFromSize()`。**純模組**（只 import `./types.ts`）→ 測試可載入 |
+| `src/lib/escpos-render.ts` | 收據常數由本地定義改為**從 `paper-columns.ts` import + re-export**（單一真源，5 個既有 import 路徑不變） |
+| `src/lib/escpos-template.ts` | `labelPaperPreset()` / `paperColumnsFromSize()` 改為**轉發去 `paper-columns.ts`**（保留公開 API，唔再自己寫邏輯） |
 | `src/lib/print-bridge/companion.ts` | `PrinterCandidate` ＋`family` / `maxLabelWidthMm` / `minLabelWidthMm`；`UsbPrinterRow` 同步；兩處映射帶落去 |
 | `C:/dev/desktop-companion/companion-server.mjs` | `USB_PRINTER_DB` 同步 21 VID / 50 型號；＋`resolveFamily()`；`resolveUsbMeta()` ＋`family` / 紙寬；`enumerateUsbPrinters()` 帶落去 |
 | `tools/verify-label-model-split.cjs` | 新增 |
 | `tools/verify-brand-grouping.cjs` | 新增 |
 | `tools/verify-label-paper-width.cjs` | 新增 |
+| `tools/verify-label-paper-columns.cjs` | 新增 |
 | `tools/verify-printer-db-parity.cjs` | 新增 |
 
 ---
@@ -515,3 +624,13 @@ Android / print hub）都認得先有意義。而**四個 renderer 目前全部�
     比「認唔到」更差。
 12. **超範圍選項用 `disabled` 而唔係 filter 走** —— 商家見到「點解冇咗」
     比見到「被禁用」更難 debug。
+13. 🔴 **「有註釋講明意圖」≠「實作真係咁做」** —— `print-jobs.ts` 嗰段
+    「min() 會自動截頂」註釋寫得好清楚，但被呼叫嘅 `paperColumnsFromSize()`
+    根本唔識標籤紙 → **意圖同實作脫節，而且冇測試守**。
+    教訓：跨函式嘅「契約」一定要有測試釘住實際回傳值，唔可以靠註釋。
+14. 🔴 **測試載入唔到嘅模組 = 冇測試守嘅死角** —— 呢個 bug 存在咁耐，
+    根本原因係 `escpos-template.ts` 有 `@/lib/...` runtime import
+    → `node --experimental-strip-types` 載入唔到 → 冇得寫測試。
+    **解法定係「抽純模組」**（只 import `import type` 嘅檔），唔係「唔寫測試」。
+15. **同一概念兩種 id 寫法 = 定時炸彈** —— `"60x40"` vs `"60x40mm"`。
+    無法檢查嘅「兩邊要一致」註釋唔算保障，要有 normalize 函式 + 一致性測試。
