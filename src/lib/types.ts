@@ -570,8 +570,21 @@ export interface LabelPaperPreset {
   hint: string;
 }
 export const LABEL_PAPER_PRESETS: LabelPaperPreset[] = [
+  /**
+   * ⚠️ 2026-09-13 補 30x20 / 58x40 / 50x40 —— 因為 `printer-models.ts` 嘅
+   * `LABEL_MODEL_PAPER_SIZES` 會俾商家揀呢幾個尺寸。**兩邊必須對得上**，
+   * 否則 `labelPaperPreset()` 搵唔到 → 跌去 62mm 預設 → 欄數算錯（出紙亂版）。
+   *
+   * 🔴 呢個坑真實中過：`printer-models` 用 `"60x40mm"`（帶 mm），
+   * 呢張表用 `"60x40"`（唔帶）—— 字串唔相等 → 靜靜跌去預設。
+   * 而家 `labelPaperPreset()` 已經做咗容忍（兩者都食），但**新增尺寸仍然要兩邊都加**。
+   *
+   * `columns` 公式：`floor((widthMm − 8) / 1.5)`（203dpi font A）。
+   */
+  { id: "30x20", label: "30 × 20", widthMm: 30, heightMm: 20, columns: 14, hint: "迷你標籤 / 試管貼" },
   { id: "40x30", label: "40 × 30", widthMm: 40, heightMm: 30, columns: 21, hint: "細標籤 / 條碼" },
   { id: "50x30", label: "50 × 30", widthMm: 50, heightMm: 30, columns: 28, hint: "零售價籤、商品標示" },
+  { id: "50x40", label: "50 × 40", widthMm: 50, heightMm: 40, columns: 28, hint: "商品標示（較高）" },
   { id: "58x40", label: "58 × 40", widthMm: 58, heightMm: 40, columns: 32, hint: "收銀機標準價籤" },
   { id: "60x40", label: "60 × 40", widthMm: 60, heightMm: 40, columns: 34, hint: "飲品杯貼、成份表" },
   { id: "70x50", label: "70 × 50", widthMm: 70, heightMm: 50, columns: 41, hint: "外帶袋、備料標籤" },
@@ -1348,6 +1361,22 @@ export interface PrintJob {
   ttl?: number;
   /** 商家 ESC/POS 模板快照（自包含、可序列化）；renderer 強制套用，缺位 fallback 舊格式 */
   template?: EscPosTemplateSnapshot;
+  /**
+   * 呢張任務嘅單據類型 —— **權威值**，唔應該再靠 `template.kind ?? printer.role` 去猜。
+   *
+   * 🔴 2026-09-13 加（同日交班單實案）：
+   *   - 打印中心「查看」冇 `template` 時會回退去**廚房單兜底渲染**
+   *     → 交班單硬印「＊＊＊ 廚房 ＊＊＊」＋完全讀唔到交班數據（`content`）
+   *     → 用戶睇落似「打印出嚟空白」；
+   *   - 派發層（`dispatch.ts`）亦只能靠 printer.role 猜，交班單會被當 `receipt`。
+   *
+   * ⚠️ 同 2026-09-10「杯標籤被當 kitchen 印錯抬頭」係**同一個病**（見下面
+   * `PrintKind` 註釋）—— 兩次都係「任務自己冇講清楚係咩單」。
+   *
+   * 選填（向後兼容）：舊 job 冇呢欄 → 消費端一律 fallback 去 `template.kind`，
+   * 再 fallback 按 printer.role。新 job 應該一律帶埋。
+   */
+  kind?: PrintKind;
   /** 靜態區塊文字（key = section id），renderer 按 block.style 印；items / qr_code 區塊除外 */
   content?: Record<string, string>;
   /**

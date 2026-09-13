@@ -146,6 +146,9 @@ function buildTemplateReceiptJobs(
     orderNo: order.localOrderNo,
     tableName: order.tableName,
     ticketType: "normal",
+    // 收銀收據 / 自助點餐機小票共用（兩者都係 `buildSnapshot("receipt", …)` 格式）。
+    // 帶 `kind` 令派發層唔使靠 `printer.role` 猜（見 types.ts PrintJob.kind 註釋）。
+    kind: "receipt",
     printerGroup: "receipt",
     printerId: printer.id,
     printerName: printer.name,
@@ -249,6 +252,7 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
       orderNo,
       tableName: order.tableName,
       ticketType: opts.ticketType,
+      kind: "kitchen",
       printerGroup: printer.zoneId ?? "",
       printerId: printer.id,
       printerName: printer.name,
@@ -301,6 +305,7 @@ export function buildLabelPrintJobs(order: PosOrder, opts: LabelPrintOpts): Prin
         orderNo,
         tableName: order.tableName,
         ticketType: opts.ticketType,
+        kind: "label",
         printerGroup: printer.zoneId ?? item.printerGroup,
         printerId: printer.id,
         printerName: printer.name,
@@ -510,6 +515,11 @@ export function buildShiftPrintJobs(opts: ShiftPrintOpts): PrintJob[] {
       orderNo: opts.orderNo,
       tableName: "",
       ticketType: "normal",
+      // 🔴 一定要寫 `kind`：`template.kind` 只喺**快照仍在**時有效；一旦快照丟失
+      // （舊 job / 跨端 backfill），`kind` 就係唯一能分辨「交班單」嘅線索。
+      // 冇佢 → 打印中心會用廚房單兜底 → 印「＊＊＊ 廚房 ＊＊＊」而且讀唔到 `content`
+      // → 睇落似「空白」（2026-09-13 商家實案）。
+      kind: "shift",
       printerGroup: "receipt",
       printerId: opts.printerId,
       printerName: opts.printerName ?? "收據打印機",

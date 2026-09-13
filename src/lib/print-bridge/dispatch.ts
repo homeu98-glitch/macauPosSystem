@@ -127,8 +127,14 @@ async function dispatchOneJob(
   }
   // docs/60：票種以「模板快照」為權威。之前一律 `receipt ? receipt : kitchen`，
   // 搞到 label（杯標籤）機被當 kitchen → 標籤頂頭硬印「＊＊＊ 廚房 ＊＊＊」，版面錯晒。
+  //
+  // 🔴 2026-09-13：加埋 `job.kind` 排最前 —— job 自己講嘅類型最準。
+  // 冇咗佢，交班單（`template` 一丟失）只能靠 `printer.role` 猜，會被當成 `receipt`
+  // → 出紙同預覽兩邊表現唔一致（預覽當廚房、出紙當收據）。
   const kind: PrintKind =
-    job.template?.kind ?? (printer.role === "receipt" ? "receipt" : printer.role === "label" ? "label" : "kitchen");
+    job.kind ??
+    job.template?.kind ??
+    (printer.role === "receipt" ? "receipt" : printer.role === "label" ? "label" : "kitchen");
   // 舊版 APK 只認 receipt / kitchen / test，所以 native 通道繼續發 legacy 值（避免舊 APK 收唔識嘅 kind）。
   // 新版 APK 請改讀 `job.template.kind`（已隨 payload 轉發，見 docs/55 §2.1），嗰個先係權威。
   const nativeKind: NativePrintKind = printer.role === "receipt" ? "receipt" : "kitchen";

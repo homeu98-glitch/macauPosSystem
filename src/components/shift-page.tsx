@@ -21,7 +21,6 @@ import {
   loadQueue,
   loadShiftHistory,
   loadShiftState,
-  savePrintJobs,
   saveQueue,
   saveShiftHistory,
   saveShiftState,
@@ -44,6 +43,17 @@ import {
 } from "@/lib/shift-sync";
 import { DeviceConfig, DevicePrinterConfig, PosOrder, QueueEvent, ShiftSettlementSnapshot } from "@/lib/types";
 import { buildShiftPrintJobs } from "@/lib/print-jobs";
+// 🔴 落本機一律行 `persistMergedPrintJobs()`（統一入口：merge 去重 + tombstone 過濾 +
+// dispatch `pos-print-jobs-changed` 令打印中心即時刷新）。
+//
+// 以前呢個檔自己 `[printJob, ...loadPrintJobs()]` + `savePrintJobs()` 直寫，
+// **繞過咗去重同 tombstone 過濾** —— 將來統一入口再加嘢（PII 過濾、欄位白名單等）
+// 都會靜靜漏咗呢兩處，變成「改咗一處、另一處唔跟」嘅經典死角。
+//
+// ⚠️ 點解唔用 `appendPrintJobsWithSync()`：交班單要保留「**只推呢一條** PRINT_JOB_CREATED」
+// 嘅自訂 flush（docs/111 —— 整條 queue 照推會撞 server 200 條上限 → 413 → 交班單反而上唔到雲）。
+// 所以呢度只換「落本機」嗰半步，入隊 / flush 照舊由下面自己控制。
+import { persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
 import { formatMoney } from "@/lib/format";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
@@ -507,9 +517,7 @@ export function ShiftPage() {
       printerId: shiftPrinter?.id,
       printerName,
     });
-    const nextPrintJobs = [printJob, ...loadPrintJobs()];
-    savePrintJobs(nextPrintJobs);
-    window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    persistMergedPrintJobs([printJob]);
     const event: QueueEvent = {
       id: uid("evt"),
       type: "PRINT_JOB_CREATED",
@@ -789,8 +797,7 @@ export function ShiftPage() {
         printerName,
       });
 
-      const nextPrintJobs = [printJob, ...loadPrintJobs()];
-      savePrintJobs(nextPrintJobs);
+      persistMergedPrintJobs([printJob]);
 
       const event: QueueEvent = {
         id: uid("evt"),
