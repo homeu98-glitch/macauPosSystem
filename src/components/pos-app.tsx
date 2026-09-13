@@ -1981,6 +1981,21 @@ export function PosApp() {
     memberDeduction,
     total: Math.max(0, payableBeforeMember - memberDeduction),
   };
+  /**
+   * 「線上已付齊、收銀台只需完成」—— 即 `completeOnlinePaidOrder()` 適用嘅場景
+   * （客人喺 Ledger／掃碼端已經付咗**全款**，`paymentMethod: "線上已支付"`，唔再扣款）。
+   *
+   * 🔴🔴 必須排除「用會員餘額付清全單」嘅情況（2026-09-14 走數實案）：
+   *    `paymentSummary.total` 已經**減咗** `memberDeduction`（店員填嘅**計劃**扣款），
+   *    所以「小計 160、已預付 75、會員扣 85」時 `total` 一樣係 0 →
+   *    舊寫法誤判成「客人已付齊」→ 直接 `completeOnlinePaidOrder()`、**完全冇扣會員餘額**。
+   *    ⇒ 只要 `memberDeduction > 0`，就一定要落 `confirmPayment()` 行真扣款。
+   */
+  const isOnlinePaidComplete =
+    !(useMemberBalance && memberDeduction > 0) &&
+    paymentSummary.total <= 0 &&
+    paymentSummary.prepaidAmount > 0;
+
   const changeDue = useMemo(() => {
     const received = Number(receivedAmount);
     const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
@@ -6446,7 +6461,9 @@ export function PosApp() {
                       (useMemberBalance && memberDeduction > 0 && paymentSummary.total > 0 && !selectedPaymentMethod)
                     }
                     onClick={() => {
-                      if (paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0) {
+                      // 🔴 用 `isOnlinePaidComplete`（已排除「用會員餘額付清」）——
+                      //    直接寫 `total <= 0` 會走數（見該變數註解）。
+                      if (isOnlinePaidComplete) {
                         completeOnlinePaidOrder();
                         return;
                       }
@@ -6469,9 +6486,9 @@ export function PosApp() {
                   >
                     {memberCheckoutSubmitting
                       ? "處理會員扣款中…"
-                      : paymentSummary.total <= 0 && paymentSummary.prepaidAmount > 0
+                      : isOnlinePaidComplete
                         ? "客人已支付，完成訂單"
-                          : memberCheckoutRedeemDone
+                        : memberCheckoutRedeemDone
                           ? "重試扣款"
                           : "去結帳"}
                   </button>
