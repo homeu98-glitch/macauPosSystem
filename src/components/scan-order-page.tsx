@@ -10,6 +10,7 @@ import { MenuItem, PosOrder } from "@/lib/types";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
 import { SpecSheet } from "@/components/kiosk/spec-sheet";
 import { MemberLoginSheet } from "@/components/kiosk/member-login-sheet";
+import { MemberPaySheet } from "@/components/kiosk/member-pay-sheet";
 
 /**
  * 客人掃碼點餐（手機）共用介面 —— **堂食**同**快餐**兩條 link 都用呢個元件（docs/115）。
@@ -89,6 +90,22 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
     closeMemberLogin,
     skipMemberLogin,
     submitMemberCredentials,
+    // 付款（v3.5 掃碼自助扣餘額）
+    paySheetOpen,
+    payStage,
+    payMethod,
+    payBusy,
+    payError,
+    deductReceipt,
+    pinFreeAgoLabel,
+    openPaySheet,
+    closePaySheet,
+    selectPayMethod,
+    confirmPay,
+    confirmDeduct,
+    switchPayToCounter,
+    backToMethodChoice,
+    retryDeduct,
   } = useScanOrder();
 
   const t = (key: string) => kioskT(language, key);
@@ -99,6 +116,44 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   // 手機專屬 UI state
   const [cartOpen, setCartOpen] = useState(false);
   const cartSheetRef = useRef<HTMLDivElement | null>(null);
+
+  // ── 付款 sheet（共用 JSX）──
+  //
+  // 定義喺 early return 之前：三個分支（快餐成功頁 / 本枱訂單 / 點餐介面）都要掛。
+  // ⚠️ 唔可以只掛點餐介面：扣款失敗嗰陣 `submittedOrder` 已經有值（單已落），
+  //    畫面會跳去成功頁分支 —— 只掛一邊就會令 S9 提示消失、連「重試」都撳唔到。
+  const memberPaySheet =
+    paySheetOpen && member ? (
+      <MemberPaySheet
+        t={t}
+        variant="mobile"
+        stage={payStage}
+        lines={
+          submittedOrder
+            ? submittedOrder.items.map((it) => ({
+                name: it.name,
+                quantity: it.quantity,
+                amountMop: it.price * it.quantity,
+              }))
+            : cart.map((l) => ({ name: l.name, quantity: l.quantity, amountMop: l.price * l.quantity }))
+        }
+        totalMop={submittedOrder?.total ?? totals.total}
+        // ⚠️ 只顯示 `displayName`（冇就「會員」）—— **唔可以**顯示電話號碼（§7.2）。
+        memberDisplayName={member.displayName ?? "會員"}
+        balanceMop={member.balanceAvos / 100}
+        payMethod={payMethod}
+        busy={payBusy || submitting}
+        pinFreeAgoLabel={pinFreeAgoLabel}
+        networkError={payError}
+        onSelectMethod={selectPayMethod}
+        onConfirm={confirmPay}
+        onConfirmWithPin={(pin) => void confirmDeduct(pin)}
+        onCancelToCounter={switchPayToCounter}
+        onBackToChoose={backToMethodChoice}
+        onRetry={() => void retryDeduct()}
+        onGoCounter={switchPayToCounter}
+      />
+    ) : null;
   /**
    * 快餐專屬：reload / 誤關分頁之後由 sessionStorage 讀返「我今次嗰張快餐單」。
    *
@@ -148,6 +203,13 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
    * 而錯誤訊息只喺已關閉嘅 sheet 內部渲染 → 客人以為落咗單，實際上冇（靜默丟單）。
    */
   async function handlePlaceOrder() {
+    // 會員（S5/S6）：唔直接落單 —— 先開付款 sheet 揀「扣會員餘額 / 到前台支付」。
+    //   非會員（S4）：**根本冇扣餘額能力** → 唔引導、唔推銷，直接落單（確認稿已拍板）。
+    if (member) {
+      setCartOpen(false);
+      openPaySheet();
+      return;
+    }
     const ok = await placeOrder();
     if (ok) setCartOpen(false);
   }
@@ -209,8 +271,8 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
             <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-5xl">
               ✅
             </div>
-            <h1 className="mb-1 text-2xl font-bold text-stone-900">{t("thanks")}</h1>
-            <p className="mb-6 text-sm text-stone-500">{t("payAtCounter")}</p>
+            <h1 className="mb-1 text-2xl font-bold text-stone-900">{deductReceipt ? t("deductSuccess") : t("thanks")}</h1>
+            <p className="mb-6 text-sm text-stone-500">{deductReceipt ? t("deductSuccessBody") : t("payAtCounter")}</p>
             {/* P1-4：網絡抖動時訂單入咗本地待同步隊列，唔可以講「已同步」講大話 */}
             {orderSyncPending && (
               <p className="mb-6 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-800" role="status">
@@ -247,7 +309,9 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
             )}
           </div>
         </div>
-      </main>
+            {/* 會員付款（v3.5 掃碼自助扣餘額）—— 三個分支都要掛 */}
+      {memberPaySheet}
+    </main>
     );
   }
 
@@ -339,6 +403,14 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
               <div className="mt-3 inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600">
                 {statusLabel}
               </div>
+
+              {/* 扣款成功徽章（v3.5 掃碼扣餘額）：顯示交易編號，令客人一眼知「錢收咗」 */}
+              {deductReceipt && (
+                <div className="mt-2.5 flex items-center justify-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  <span className="font-semibold">{t("deductSuccess")}</span>
+                  <span className="font-mono">{deductReceipt.txnId}</span>
+                </div>
+              )}
             </div>
 
             {/* 本枱訂單內容（DB 為準）：菜品 / 數量 / 金額 */}
@@ -366,7 +438,9 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
             )}
           </div>
         </div>
-      </main>
+            {/* 會員付款（v3.5 掃碼自助扣餘額）—— 三個分支都要掛 */}
+      {memberPaySheet}
+    </main>
     );
   }
 
@@ -663,6 +737,8 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
           }}
         />
       )}
+          {/* 會員付款（v3.5 掃碼自助扣餘額）—— 三個分支都要掛 */}
+      {memberPaySheet}
     </main>
   );
 }

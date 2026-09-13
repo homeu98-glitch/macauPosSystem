@@ -99,6 +99,21 @@ export type OrderingMember = {
   giftBalanceAvos: number;
   /** 登入成功時間戳 —— 免 PIN 180 秒窗口嘅**唯一**起計點（refresh 唔可延長）。 */
   loggedInAt: number;
+  /**
+   * 顧客 Ledger access token —— **只掃碼（客人自己手機）有**。
+   *
+   * v3.5 `scan-debit/quote|commit` 嘅 `Authorization: Bearer` 需要它。
+   * ⚠️ Kiosk 一律 `undefined`（共用平板唔應該留顧客憑證；Kiosk 走店員 RPC 唔需要）。
+   * 🔴 只准存在記憶體 —— 禁 sessionStorage / localStorage / console。
+   */
+  customerAccessToken?: string;
+  /**
+   * 免 PIN 窗口票（server 簽發，綁 customerId + 到期時間，TTL 180s）。
+   *
+   * 🔴 Ledger **完全唔驗 PIN**（Q5）→ 呢張票係唯一二次確認防線。
+   *    過期／缺失 → server 回 `pin_required`，要客人重新入 PIN。
+   */
+  pinWindowToken?: string;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -294,8 +309,24 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   const [menuFetchDone, setMenuFetchDone] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   // 落單介面前嘅 landing gate：未「開始點餐」就顯示 landing page（唔用點餐介面做主頁）
+  //
+  // 🔴🔴 2026-09-13 J 實案修正：**掃碼（手機）唔可以讀 `kiosk-started`**。
+  //
+  // 舊寫法無論 kiosk 定掃碼都讀同一個 sessionStorage key，於是：
+  //   客人撳過一次「開始點餐」（舊版 Landing 嘅唯一掣）→ key 記住 1 →
+  //   之後**任何 reload / 重新開 link 都直接跳過 Landing**。
+  // 結果：新加嘅「你是會員嗎？」同會員登入**永遠冇機會出現** —— 客人只會直接落入餐牌。
+  // （J 2026-09-13 堂食掃碼實案：「見唔到會員登入」。）
+  //
+  // 口徑：只有 **Kiosk**（店內平板）需要記 —— 同一部機、同一 session，
+  // 落完單返 Landing 再開新單，但中途網絡抖動 reload 時唔想彈返 Landing 重新撳。
+  // 客人手機掃碼每次都要由 Landing 開始（會員問句就係 Landing 嘅一部分）。
+  const persistStarted = variant !== "scan";
   const [started, setStarted] = useState(
-    () => typeof window !== "undefined" && window.sessionStorage.getItem("kiosk-started") === "1",
+    () =>
+      persistStarted &&
+      typeof window !== "undefined" &&
+      window.sessionStorage.getItem("kiosk-started") === "1",
   );
   // 手機掃碼「已落單枱」鎖定：未按加單前唔開餐牌，只顯示本枱明細
   const [ordering, setOrdering] = useState(false);
@@ -335,7 +366,25 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   const [deductReceipt, setDeductReceipt] = useState<{
     txnId: string;
     balanceAfterAvos: number;
+    pointsEarnedAvos?: number;
   } | null>(null);
+  /**
+   * 掃碼扣款嘅「未完成報價」（v3.5 quote）。
+   *
+   * 🔴 為咩要留住：commit 網絡失敗 = **結果未知**（Ledger 冇 lookup API，Q6）。
+   *    重試時**一定要**重用同一個 `quoteId` / `quoteSig` —— Ledger 會回**同一** `txnId`
+   *    （唔會雙扣）。如果重新 quote 就會變成一筆新交易 → 客人被扣兩次。
+   */
+  const [pendingQuote, setPendingQuote] = useState<{ quoteId: string; quoteSig: string } | null>(null);
+  /**
+   * `member` 嘅**同步鏡像**。
+   *
+   * 🔴 為咗咩要呢個：`confirmDeduct` 驗 PIN 成功之後會 `setMember({... pinWindowToken: 新票})`，
+   *    但同一輪嘅 closure 仍然係**舊** `member` → 跟住即刻呼叫嘅 `runScanDebit` 會讀到**舊票**
+   *    → server 回 `pin_required` → 客人再入 PIN → 又舊票 → **死循環**。
+   *    React state 非同步，所以要用 ref 讀「啱啱寫入」嘅值。
+   */
+  const memberRef = useRef<OrderingMember | null>(null);
 
   // ── 店舖真源（P1-1 統一優先級）──
   // ⚠️ 2026-09-02 舊註釋：**移除 `?? DEFAULT_KIOSK_STORE_ID`**（示範店代碼）。
@@ -849,7 +898,13 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       //    落單失敗、購物車仲喺度 → 客人再落一次 = 兩張單。所以照回 true，
       //    由 `payStage` 去表達「扣款未成功」。
       if (member && payMethod === "balance") {
-        const deducted = await runMemberDeduct(settledOrder);
+        // 兩條**完全唔同**嘅扣款路（契約 §4.5.0 / v3.5 交接文檔）：
+        //   掃碼（客人手機）→ POS **伺服器**簽名代打 Ledger `scan-debit/quote|commit`
+        //                    （客人只有顧客 JWT，冇店員 session）
+        //   Kiosk（店內平板）→ 店員 session 走既有 RPC `merchant_apply_pos_txn`（§5.7）
+        // ⚠️ 唔可以混用：掃碼冇店員 session、Kiosk 冇顧客 JWT。
+        const deducted =
+          variant === "scan" ? await runScanDebit(settledOrder) : await runMemberDeduct(settledOrder);
         if (!deducted) return true;
       }
 
@@ -893,7 +948,10 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       const res = await fetch("/api/ledger/member-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, pin, storeId }),
+        // ⚠️ `channel` 決定 server 會唔會回顧客 JWT：
+        //    scan（客人自己手機）→ 回，v3.5 掃碼扣款要用；
+        //    kiosk（店內共用平板）→ **唔回**（避免下一位客人扣上一位嘅錢）。
+        body: JSON.stringify({ phone, pin, storeId, channel: variant === "scan" ? "scan" : "kiosk" }),
       });
       const payload = (await res.json()) as {
         ok?: boolean;
@@ -901,6 +959,8 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         message?: string;
         remainingAttempts?: number;
         retryAfterSec?: number;
+        pinWindowToken?: string | null;
+        customerAccessToken?: string;
         member?: {
           customerId: string;
           displayName: string | null;
@@ -929,14 +989,22 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       }
 
       // 🔴 只存記憶體。**唔可以**寫落 localStorage / sessionStorage / console（§7.2）。
-      setMember({
+      const nextMember: OrderingMember = {
         customerId: payload.member.customerId,
         phone,
         displayName: payload.member.displayName,
         balanceAvos: payload.member.balanceAvos,
         giftBalanceAvos: payload.member.giftBalanceAvos,
         loggedInAt: Date.now(),
-      });
+        // 憑證：唔入 storage，唔 log。
+        customerAccessToken: payload.customerAccessToken,
+        pinWindowToken: payload.pinWindowToken ?? undefined,
+      };
+      // ⚠️ 一定要**同步**寫 ref：同一輪 closure 嘅 `member` 仲係舊值（見 `memberRef` 註解）。
+      memberRef.current = nextMember;
+      setMember(nextMember);
+      // 驗 PIN 成功 → 舊報價作廢（票換咗，但報價本身未用過；保險起見清走）。
+      setPendingQuote(null);
       setMemberLoginRemaining(null);
       setMemberLoginLockedUntil(null);
       setMemberLoginError(null);
@@ -1023,6 +1091,19 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       const verified = await submitMemberCredentials(member.phone, pin, "verify");
       if (!verified) return;
     }
+    // 🔴 如果訂單**已經落咗**（S9 `pin_required` 或「結果未知」之後客人補 PIN／重試），
+    //    就**唔可以**再 `placeOrder()` —— 會落多一張新單：新 `order.id` → 新冪等鍵 →
+    //    Ledger 唔會擋 → **客人真·被扣兩次**。
+    //    呢種情況只可以對**已落嘅同一張單**重打扣款。
+    const settled = submittedOrder;
+    if (settled) {
+      if (variant === "scan") {
+        await runScanDebit(settled);
+        return;
+      }
+      await runMemberDeduct(settled);
+      return;
+    }
     await placeOrder();
   }
 
@@ -1050,6 +1131,11 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     if (!member || payBusy) return;
     const target = submittedOrder;
     if (!target) return;
+    // 掃碼：`runScanDebit` 會重用 `pendingQuote`（同一 quoteId → Ledger 回同一 txnId，唔會雙扣）。
+    if (variant === "scan") {
+      await runScanDebit(target);
+      return;
+    }
     await runMemberDeduct(target);
   }
 
@@ -1058,6 +1144,151 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     setPaySheetOpen(false);
     setPayStage("choose");
     setPayError(null);
+  }
+
+  /**
+   * 掃碼自助扣款（v3.5 `scan-debit/quote` → `commit`）—— **只掃碼用**。
+   *
+   * 流程：報價（唔扣錢，180s 有效）→ commit（真正扣）→ server 已寫 `pos_orders`（`status: paid`）。
+   *
+   * 🔴 四條唔可以錯：
+   *   1. **金額由 server 核價** —— route 由 `pos_orders.total` 讀，client 完全唔傳金額
+   *      （Ledger 唔核價，POS server 係唯一防線，即 P2）。
+   *   2. **commit 網絡失敗 = 結果未知** → 留住 `quoteId` / `quoteSig`，重試**重用同一對**，
+   *      Ledger 會回**同一** `txnId`（唔會雙扣）。重新 quote = 新交易 = **真·雙扣**。
+   *   3. **`pin_required` 唔係扣款失敗** —— 只係免 PIN 票過期，要客人重新入 PIN。
+   *   4. 成功之後**唔再**發 `ORDER_UPDATED` —— server 已經用 write client 寫咗 DB，
+   *      再經匿名通道寫一次只會多一個覆蓋風險。
+   */
+  async function runScanDebit(order: PosOrder): Promise<boolean> {
+    // ⚠️ 用 ref 而唔係 closure 嘅 member —— 驗 PIN 之後嘅新票／新 token 都喺 ref 度（見 memberRef 註解）。
+    const m = memberRef.current ?? member;
+    if (!m) return false;
+    if (!m.customerAccessToken) {
+      // 掃碼登入一定應該有 token；冇 = 舊 client 或 channel 判斷出錯 → 唔可以靜默當成功。
+      setPayError(kioskT(language, "placeFailed"));
+      setPayStage("unknown");
+      return false;
+    }
+
+    setPayBusy(true);
+    setPayError(null);
+
+    try {
+      // ── 1) 報價（有未完成報價就重用，見上面第 2 條）──
+      let quote = pendingQuote;
+      if (!quote) {
+        const quoteRes = await fetch("/api/ledger/scan-debit/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId,
+            posOrderId: order.id,
+            customerAccessToken: m.customerAccessToken,
+          }),
+        });
+        const quotePayload = (await quoteRes.json()) as {
+          ok?: boolean;
+          code?: string;
+          message?: string;
+          quoteId?: string;
+          quoteSig?: string;
+        };
+
+        if (!quoteRes.ok || !quotePayload.ok || !quotePayload.quoteId || !quotePayload.quoteSig) {
+          const code = quotePayload.code ?? "upstream";
+          if (code === "insufficient_balance") {
+            setPayStage("insufficient");
+            return false;
+          }
+          if (code === "already_debited") {
+            // 呢張單已經扣過（可能係客人重試）→ 當「同步中」交返成功頁，唔好再扣。
+            setOrderSyncPending(true);
+            setPaySheetOpen(false);
+            setPayStage("choose");
+            return true;
+          }
+          setPayError(quotePayload.message ?? kioskT(language, "placeFailed"));
+          setPayStage("unknown");
+          return false;
+        }
+        quote = { quoteId: quotePayload.quoteId, quoteSig: quotePayload.quoteSig };
+        setPendingQuote(quote);
+      }
+
+      // ── 2) commit（真正扣錢）──
+      const commitRes = await fetch("/api/ledger/scan-debit/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId,
+          posOrderId: order.id,
+          quoteId: quote.quoteId,
+          quoteSig: quote.quoteSig,
+          customerAccessToken: m.customerAccessToken,
+          pinWindowToken: m.pinWindowToken,
+        }),
+      });
+      const commitPayload = (await commitRes.json()) as {
+        ok?: boolean;
+        code?: string;
+        message?: string;
+        txnId?: string;
+        balanceAfterAvos?: number | null;
+        pointsEarnedAvos?: number;
+        syncPending?: boolean;
+      };
+
+      if (!commitRes.ok || !commitPayload.ok) {
+        const code = commitPayload.code ?? "upstream";
+        // 免 PIN 票過期（>180s）→ 交返 S7 要客人再入 PIN。票係 server 簽，client 造唔到。
+        if (code === "pin_required") {
+          setPayStage("deduct");
+          setPayError(null);
+          return false;
+        }
+        if (code === "insufficient_balance") {
+          setPayStage("insufficient");
+          return false;
+        }
+        // 報價過期（~180s）→ 清走，客人撳重試時會重新 quote（未 commit 唔佔冪等鍵，安全）。
+        if (code === "quote_invalid") setPendingQuote(null);
+        setPayError(commitPayload.message ?? kioskT(language, "placeFailed"));
+        setPayStage("unknown");
+        return false;
+      }
+
+      // ── 3) 成功 ──
+      const paidOrder: PosOrder = {
+        ...order,
+        status: "paid",
+        prepaidAmount: order.total,
+        memberCustomerId: m.customerId,
+        memberDeductionAvos: mopToAvos(order.total),
+        memberDeductTxnId: commitPayload.txnId || undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      setDeductReceipt({
+        txnId: commitPayload.txnId ?? "",
+        // 掃碼 route 唔會回餘額（commit 只回 txnId/balanceAfter；冇值就當 0 顯示）
+        balanceAfterAvos: Number(commitPayload.balanceAfterAvos ?? 0),
+        pointsEarnedAvos: Number(commitPayload.pointsEarnedAvos ?? 0),
+      });
+      setSubmittedOrder(paidOrder);
+      setTableOrder(mode === "dine_in" ? paidOrder : null);
+      if (commitPayload.syncPending) setOrderSyncPending(true);
+      setPendingQuote(null);
+      setPaySheetOpen(false);
+      setPayStage("choose");
+      return true;
+    } catch (e) {
+      // 網絡 / 非預期 → **結果未知**（唔可以當未扣）。
+      setPayError(e instanceof Error ? e.message : String(e));
+      setPayStage("unknown");
+      return false;
+    } finally {
+      setPayBusy(false);
+    }
   }
 
   /**
@@ -1191,7 +1422,11 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     setOrdering(false); // 入餐牌前重置鎖定（無已落單枱 → 直接點餐；有 → 見明細）
     // 上一輪嘅扣款收據唔應該帶落新一輪（會員身分本身保留 —— 登入後就係用呢條路入餐牌）。
     setDeductReceipt(null);
-    if (typeof window !== "undefined") window.sessionStorage.setItem("kiosk-started", "1");
+    // ⚠️ 只有 Kiosk 記落 sessionStorage（見 `persistStarted` 長註解）；
+    //    掃碼記住就會令下次掃碼跳過 Landing（連會員登入都見唔到）。
+    if (persistStarted && typeof window !== "undefined") {
+      window.sessionStorage.setItem("kiosk-started", "1");
+    }
   }
 
   // kiosk 落單成功倒數後自動返回：清走成功頁 + 重置 landing（等下一個客人重新「開始點餐」）
@@ -1220,7 +1455,11 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     setPayError(null);
     setPayBusy(false);
     setDeductReceipt(null);
+    // 未完成嘅報價都要清（換客人 = 唔應該帶住上一單嘅 quote）。
+    setPendingQuote(null);
 
+    // ⚠️ 換機 / 清 cache 之前殘留嘅 key 一定要清（就算呢次係掃碼，都順手清走
+    //    上一位客人喺同一部機留低嘅 kiosk key）。
     if (typeof window !== "undefined") window.sessionStorage.removeItem("kiosk-started");
   }
 

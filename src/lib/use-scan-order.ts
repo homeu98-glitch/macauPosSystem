@@ -102,6 +102,28 @@ export function useScanOrder() {
     closeMemberLogin: core.closeMemberLogin,
     skipMemberLogin: core.skipMemberLogin,
     submitMemberCredentials: core.submitMemberCredentials,
+
+    // ── 付款（v3.5 掃碼自助扣餘額，2026-09-13）──
+    //
+    // 掃碼走**完全唔同**嘅扣款路：客人只有顧客 JWT，冇店員 session，
+    // 所以唔可以打 `merchant_apply_pos_txn`（會被 `is_merchant_staff` 拒）。
+    // 改為由 **POS 伺服器**簽名代打 Ledger `scan-debit/quote|commit`（HMAC + 顧客 bearer）。
+    // 詳見 `docs/integration/pos-v3.5-partner-handover-scan-debit.md`。
+    paySheetOpen: core.paySheetOpen,
+    payStage: core.payStage,
+    payMethod: core.payMethod,
+    payBusy: core.payBusy,
+    payError: core.payError,
+    deductReceipt: core.deductReceipt,
+    pinFreeAgoLabel: core.pinFreeAgoLabel,
+    openPaySheet: core.openPaySheet,
+    closePaySheet: core.closePaySheet,
+    selectPayMethod: core.selectPayMethod,
+    confirmPay: core.confirmPay,
+    confirmDeduct: core.confirmDeduct,
+    switchPayToCounter: core.switchPayToCounter,
+    backToMethodChoice: core.backToMethodChoice,
+    retryDeduct: core.retryDeduct,
   };
 }
 

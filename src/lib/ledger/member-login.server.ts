@@ -45,6 +45,21 @@ export type CustomerLoginResult = {
   /** 會員顯示名。**只准即時渲染**。 */
   displayName: string | null;
   wallet: CustomerWalletSnapshot;
+  /**
+   * 顧客 Ledger access token（JWT）。
+   *
+   * ⚠️ **只用於 v3.5 掃碼自助扣款**（`scan-debit/quote|commit` 嘅 `Authorization: Bearer`）。
+   * 契約 §4.5.2 步驟 4 明文要求「將 `access_token` 回前端」——所以呢個係預期行為，
+   * **唔係**洩漏。
+   *
+   * 🔴 但係**唔可以**無條件回：
+   *    - **Kiosk（店內共用平板）** → route 層**唔可以**把 token 交出去。
+   *      共用裝置留低顧客憑證 = 下一位客人可以扣上一位嘅錢（零收益、純風險）。
+   *    - **掃碼（客人自己手機）** → 回，但前端只准存**記憶體**（唔准 localStorage）。
+   *
+   * `refresh_token` 一律**唔回** —— 扣款流程只需要短短幾分鐘內有效嘅 access token。
+   */
+  customerAccessToken: string;
 };
 
 export type CustomerLoginFailureReason = "bad_credential" | "not_configured" | "upstream";
@@ -111,9 +126,11 @@ export async function loginCustomer(params: {
     password,
   });
 
-  if (authError || !authData.user) {
+  if (authError || !authData.user || !authData.session) {
     throw new CustomerLoginError("bad_credential");
   }
+  // 🔴 一定要攞住呢個 token 先 signOut（下面 signOut 只清 local session，唔會 invalidate token）。
+  const customerAccessToken = authData.session.access_token;
 
   // ── 契約 §4.5.2 步驟 5：**跳過** `merchant_staff` 檢查 ──
   // 一般會員冇 staff 列；喺呢度查 merchant_staff 會令所有正常會員登入失敗。
@@ -160,6 +177,7 @@ export async function loginCustomer(params: {
   return {
     customerId: String(authData.user.id),
     displayName,
+    customerAccessToken,
     wallet: {
       walletId: row?.id ? String(row.id) : null,
       balanceAvos: Number.isFinite(balanceAvos) ? balanceAvos : 0,

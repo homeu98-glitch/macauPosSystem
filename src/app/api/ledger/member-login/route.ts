@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { memberLoginLimiter } from "@/lib/ledger/member-login-limit";
 import { CustomerLoginError, loginCustomer } from "@/lib/ledger/member-login.server";
+import { PIN_WINDOW_MS, buildPinWindowToken } from "@/lib/ledger/scan-debit-crypto";
 import { isValidMacauPhone, normalizePhone } from "@/lib/ledger/phone";
 import { clientIp } from "@/lib/pos/rate-limit";
 
@@ -30,6 +31,8 @@ type Body = {
   account?: unknown;
   pin?: unknown;
   storeId?: unknown;
+  /** `scan` = 客人自己手機（可回顧客 JWT）／`kiosk` = 店內共用平板（**唔回**）。 */
+  channel?: unknown;
 };
 
 function fail(
@@ -93,6 +96,22 @@ export async function POST(request: Request) {
     // 成功即清掉失敗紀錄（唔可以跨成功保留，否則客人偶爾打錯一次會累積到鎖）。
     memberLoginLimiter.clear(phoneKey);
 
+    // ── 免 PIN 窗口令牌（P3）──
+    // 🔴 Ledger **完全唔驗 PIN**（Q5）→ 「登入後 3 分鐘免再 PIN」係唯一二次確認防線。
+    //    所以窗口一定由 **server 簽發**，client 只係持票人 ——
+    //    如果信 client 自己講「我 30 秒前登入」，改個數字就永遠免 PIN。
+    const pepper = process.env.AUTH_PIN_PEPPER?.trim() ?? "";
+    const pinWindowToken = pepper
+      ? buildPinWindowToken(result.customerId, Date.now() + PIN_WINDOW_MS, pepper)
+      : null;
+
+    // 🔴 只有**掃碼**（客人自己手機）才回顧客 JWT —— v3.5 `scan-debit/quote|commit`
+    //    嘅 `Authorization: Bearer` 需要它。
+    //    掃碼頁唔會用 Kiosk 專屬 logic，而 client 報 `channel` 唔係安全邊界
+    //    （佢已經用正確 PIN 登入成功，本來就有資格持有自己嘅 token）；
+    //    但**默認唔回**係保守做法 —— 舊 client 唔帶 `channel` 就當 kiosk。
+    const channel = payload.channel === "scan" ? "scan" : "kiosk";
+
     return NextResponse.json({
       ok: true,
       member: {
@@ -102,6 +121,8 @@ export async function POST(request: Request) {
         paidBalanceAvos: result.wallet.paidBalanceAvos,
         giftBalanceAvos: result.wallet.giftBalanceAvos,
       },
+      pinWindowToken,
+      customerAccessToken: channel === "scan" ? result.customerAccessToken : undefined,
     });
   } catch (err) {
     if (err instanceof CustomerLoginError) {
