@@ -1,8 +1,8 @@
-version: 0.1.17
+version: 0.1.18
 files:
-  - url: Macau POS Desktop Setup 0.1.17.exe
-    sha512: 46gm+Nw70PM8UMVYcfK3cUTbiQqXRld9hE6ml2vixdZJZcL1eQ75/cliBB3tZX2mOBLpaecqhzmQQlgi1DTW1w==
-    size: 81193351
-path: Macau POS Desktop Setup 0.1.17.exe
-sha512: 46gm+Nw70PM8UMVYcfK3cUTbiQqXRld9hE6ml2vixdZJZcL1eQ75/cliBB3tZX2mOBLpaecqhzmQQlgi1DTW1w==
-releaseDate: '2026-09-11T13:27:38.429Z'
+  - url: Macau POS Desktop Setup 0.1.18.exe
+    sha512: U08++2IZ2mzRkycO8P5pLz8qKxaKnxRjui0XkEgCZa2DNrV49CJFC7lkPUCzTwNgr87DWBZOhUjmiUu74APwvg==
+    size: 81183301
+path: Macau POS Desktop Setup 0.1.18.exe
+sha512: U08++2IZ2mzRkycO8P5pLz8qKxaKnxRjui0XkEgCZa2DNrV49CJFC7lkPUCzTwNgr87DWBZOhUjmiUu74APwvg==
+releaseDate: '2026-09-13T08:34:00.758Z'

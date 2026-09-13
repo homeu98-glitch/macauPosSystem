@@ -1,10 +1,10 @@
 {
-  "version": "0.1.17",
-  "pubDate": "2026-09-11T13:28:33.563Z",
-  "releaseNotes": "v0.1.17：修「分格線一條變兩條」（docs/114）——出紙前清 GS!/ESC!/FS! 放大殘留、dash 數量跟 size 減半，任何大小都只佔一行；並讀模板 divider 區塊。",
-  "fileName": "Macau POS Desktop Setup 0.1.17.exe",
-  "sha512": "e3a826f8dc3bd0f33c50c55871f2b77144db890a9746577d844ea6976be2c5d64965c2f5790ef9fdc962041ded657da63812e969e72a873990425822d434d6d7",
-  "path": "/releases/Macau POS Desktop Setup 0.1.17.exe",
+  "version": "0.1.18",
+  "pubDate": "2026-09-13T08:35:03.727Z",
+  "releaseNotes": "v0.1.18：修「標籤單多印抬頭」。Desktop legacy 分支（舊 job 無模板快照）原本用 printer.role 判斷，令標籤機多印一行「＊＊＊ 標籤 ＊＊＊」；改為同 POS 網頁 / Android 共用 TITLE 表（label 刻意唔印抬頭，62mm 紙太細）。三端「設計 == 預覽 == 出紙」回復一致。",
+  "fileName": "Macau POS Desktop Setup 0.1.18.exe",
+  "sha512": "534f3efb6219da6cd193270ef0fe692f3f2a2b168a9f1463ba2d1790480265ad8336b578f422450bb9643d40b34f0360afcec358164e8548e6894bbbe003f0be",
+  "path": "/releases/Macau POS Desktop Setup 0.1.18.exe",
   "url": "",
-  "fileSize": 81193351
+  "fileSize": 81183301
 }

@@ -2,6 +2,27 @@
 
 > ⚠️ 注入上限 3k 字元，超咗**靜默截斷**。只放最高頻紅線；坑總表 → [`docs/113-agent-gotchas.md`](../docs/113-agent-gotchas.md)（改動前必讀）。
 
+## 🔴 三版架構（2026-09-13）——「desktop/Android 要唔要同步」嘅答案
+- **desktop / Android 冇自己嘅 UI**：Electron `loadURL(Vercel)`、Android WebView 載同一網址
+  → **網頁功能更新唔使重打包**。真正要同步嘅只有**列印通道**（三端各自 ESC/POS 手寫）。
+- 三端真源：網頁 `src/lib/escpos-render.ts`（`TITLE`）／Desktop
+  `C:/dev/desktop-companion/companion-server.mjs`（`TITLE`+`titleOf()`）／Android
+  `C:/dev/print-agent-android/.../net/EscPosRenderer.kt`。
+- 🔴 抬頭口徑：`receipt`=「＊＊＊ 收據 ＊＊＊」；**`label`=空（刻意唔印，62mm 紙太細）**；
+  `kitchen`=「＊＊＊ 廚房 ＊＊＊」；`shift`=空（靠模板 `header` 區塊）。**改一個要三個都改**。
+- 🔴 desktop-companion 改源碼後**必須 bump `package.json` version + 重打包 exe**
+  （否則用戶 app 內「檢查更新」唔會拎到新版）。Android 同樣要擰 `versionCode`。
+- ⚠️ 現況落差：Desktop exe 0.1.17（9/11）／Android APK 1.1.3 code 8（9/02，但源碼有 9/10 改動 = 未 build）。
+- 測試：`cd C:/dev/desktop-companion && node test-print-e2e.mjs`（假打印機收 bytes，驗真實出紙）；
+  `node test-crossrepo-parity.mjs`（三端字串掃描）。⚠️ companion port **硬編 9311**。
+- 🔴 **Desktop 打包三大坑**（2026-09-13 實測）：
+  ① 必須 `--config.win.signAndEditExecutable=false`，否則喺 `signAndEditResources`
+     **靜默掛起**（卡 12 分鐘零輸出）；停用後 1分38秒完成。
+  ② 唔可以用 `npx`／`npm run` → 直接 `node node_modules/electron-builder/out/cli/cli.js`。
+  ③ 發佈揀 exe 要用 `f.includes(newVersion)`（`dist/` 殘留舊版，`endsWith('.exe')` 會拎到最舊）。
+- sha512 兩編碼唔好統一：`latest.yml`=**base64**（electron-updater）／`manifest.json`=**hex**（POS UI）。
+- ⚠️ 打好包要 **git push `public/releases/`** 先上到 Vercel，用戶 APP 內「檢查更新」先拎到。
+
 ## React 依賴紅線（2026-09-13 實案：整個 tab 卡死）
 - 🔴 **子元件上報 → 父層 `setState` → 又傳返落子元件** 嘅 prop **一定要穩定 identity**（物件／陣列 `useMemo`、函式 `useCallback`）。否則 = 無限 re-render，**`useEffect` 內 setState 唔會 throw，只會靜靜燒 CPU 到整個 tab 撳唔到**（易誤報成「導航壞咗」）。
 - 🔴 實例：`orders-hub.tsx` `dateSelection = {key,custom}` inline（已改 `useMemo`）；子元件（`local-orders-panel`／`online-orders`）已加**內容簽名**守衛（`length|id 序列`）做第二道防線。
