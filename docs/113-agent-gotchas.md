@@ -356,6 +356,13 @@
   ```
   憑證有快取就用快取（正常即刻完成），冇就**快速失敗**而唔係無限等。
 - ⚠️ 判斷 exit code 唔好寫成 `cmd | tail; echo $?`（`$?` 會係 `tail` 嘅）。用 `${PIPESTATUS[0]}` 或者唔好 pipe。
+- 🔁 **2026-09-13 又中一次**：push 三次、每次掛 2-3 分鐘零輸出被 kill，加返
+  `GCM_INTERACTIVE=never` **即刻成功**（`0369c60..6aa9b9d main -> main`）。
+  ⚠️ **教訓（比 bug 本身重要）**：呢條坑 09-11 已經寫喺**呢個檔**，
+  但**注入層（`.workbuddy/memory/MEMORY.md`）冇** → 所以我照樣中。
+  ⇒ **凡係「每次交付都要做」嘅操作（git push、build、test 命令），一定要寫入
+  `MEMORY.md`（會被自動注入），唔可以只留喺 docs/113（要被動查）。**
+  當日已將 `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never` 提升上 MEMORY.md「改動前必查」。
 
 ### 附：`.git` 損毀後嘅「重建歷史」做法（2026-09-11 實測）
 > ⚠️ **最後手段**。先睇上面「遠端 = 唯一權威源」：**先 `git fetch`**，確認遠端真係冇先好 rebuild（09-11 就係冇做呢步而白做一次）。
@@ -1144,6 +1151,76 @@ Ledger 回覆 Q8／Q12 都寫「見契約 §5.12」，但本地
 - 🔴 商戶授權真源 `pos_merchant_modules`（migration 0037），per-store 一行；Admin PATCH 要**兩組一齊送**。
 - 🔴 工作台副作用只有一份：`src/lib/pos/apply-workbench.ts`。掃碼模式由**所選工作台**決定
   （`retail` 唔寫 `saveOperatingMode`）；終端行業每次明確寫 salon/restaurant。
+
+---
+
+## 🔴🔴 `PrintJob` 冇講清楚係咩單 → 兜底渲染一律套廚房（2026-09-13 · 同一個病中過兩次）
+
+**症狀（商家原話）**：「查看交班單嘅打印功能，打印出嚟嘅內容係空白」。
+實際預覽見到 `＊＊＊ 廚房 ＊＊＊` / `門店` / `交班單 2026-09-13-01`，其餘全空。
+
+### 兩次都係同一個根因：**任務冇講清楚自己係咩單，下游只能猜**
+
+| 日期 | 受害者 | 症狀 |
+|---|---|---|
+| 2026-09-10 | `label`（杯標籤） | 被當 kitchen → 標籤頂硬印「＊＊＊ 廚房 ＊＊＊」，版面錯晒 |
+| 2026-09-13 | `shift`（交班單） | 冇 `template` 時回退廚房兜底 → 印錯抬頭 **＋** 讀唔到 `content` → 似「空白單」 |
+
+### 指紋（點樣一眼認出係呢個 bug）
+
+`escpos-render.ts` 嘅 `TITLE` 表**刻意冇 `shift`**（fallback 去空字串，交班單靠 `header` 區塊自帶抬頭）。
+⇒ **只要見到一張「唔應該有廚房抬頭」嘅單印住「＊＊＊ 廚房 ＊＊＊」，就一定係兜底分支拎錯模板。**
+
+### 成因鏈（`print-center.tsx:1960`）
+
+```tsx
+{activeJob.template
+  ? <EscPosPreview lines={renderEscPosLines(activeJob.template, activeJob.content, …)} />
+  : <KitchenTicketPreview job={activeJob} />}   // ← 兜底：以前無腦套 kitchen
+```
+
+舊兜底只餵 6 個廚房欄位，**完全冇讀 `job.content`** —— 而交班單嘅營業額／現金／單數
+**全部喺 `content`**，加上 `items: []` → 出紙剩返「門店 + 單號」。
+
+### ✅ 修法（2026-09-13）
+
+1. **`types.ts`**：`PrintJob` 加 `kind?: PrintKind`（權威值；選填向後兼容）。
+2. **`print-jobs.ts`**：四個 builder 全部帶 `kind`（`shift` / `receipt` / `kitchen` / `label`）。
+3. **`kitchen-ticket-preview.tsx`**：冇 `template` 時**按 kind 分流**
+   —— 交班單用 `buildSnapshot("shift", DEFAULT_SHIFT_TEMPLATE)` ＋ **讀返 `job.content`**
+   → **可以完整還原結算單**；其餘保持廚房兜底。
+4. **`dispatch.ts`**：`job.kind ?? job.template?.kind ?? 按 printer.role`
+   （以前交班單會被 `printer.role === "receipt"` 判成 `receipt`，**出紙同預覽講唔同嘅嘢**）。
+5. 防回歸：`node tools/verify-print-job-kind.cjs`（11 項）。
+
+### 🔴 鐵律
+
+- 🔴 **加任何新單據類型（kind）之前**：先睇 `PrintKind` ＋ `escpos-render.ts` 嘅 `TITLE` 表，
+  再確認**每個** builder 都有帶 `kind`。漏一個 = 佢會靜靜用廚房模板出紙。
+- 🔴 **任何「兜底 / fallback 渲染」都唔可以預設某一種單** —— 兜底一定要按 job 自己講嘅類型揀，
+  否則「缺資料」會靜靜變成「印錯單」。
+- 🔴 交班單（shift）**冇 `items`**，所有數字喺 `job.content`：任何渲染路徑都必須讀 `content`，
+  唔可以只餵 `items`。
+- ⚠️ 舊（2026-09-10 前）交班 job 連 `content` 都冇 → 冇嘢可還原，要撳「重打」重新產生。
+- ⚠️ 雲端 `pos_print_jobs` 未加 `kind` 欄（要 migration）；跨端 backfill 返嚟嘅 job 靠
+  `template.kind`，新 job 一定有 `template`，所以實際無影響。
+
+---
+
+## 🔴 交班單落本機：唔可以繞過統一入口（2026-09-13 修）
+
+`shift-page.tsx` 兩處（`reprintShiftRecord` ＋ 正式交班）以前係：
+```ts
+const nextPrintJobs = [printJob, ...loadPrintJobs()];
+savePrintJobs(nextPrintJobs);            // ← 繞過 mergePrintJobs（冇去重 / 冇 tombstone 過濾）
+```
+⇒ 改用 **`persistMergedPrintJobs([printJob])`**（`@/lib/pos/print-job-enqueue`）。
+
+⚠️ **但唔可以**改成 `appendPrintJobsWithSync()`：交班單要保留「**只推呢一條**
+`PRINT_JOB_CREATED`」嘅自訂 flush（docs/111 —— 整條 queue 照推會撞 server 200 條上限 → 413
+→ 交班單反而上唔到雲）。**只換「落本機」嗰半步**，入隊 / flush 照舊自己控制。
+
+🔴 教訓：凡「落本機 print job」都應該行統一入口；繞過就會喺未來某次統一入口加嘢時靜靜漏更新。
 
 
 

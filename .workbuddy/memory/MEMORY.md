@@ -5,11 +5,12 @@
 
 ## 一、改動前必查
 - 🔴 建單／接單後必須 `appendPrintJobsWithSync()`；`RelayTransport.send()` 係 no-op → 淨 `savePrintJobs()` ＝零出紙＋零紅標。
-- 🔴 出紙「改咗代碼但行為唔變」＝出紙程式冇 re-build／冇擰 `versionCode`（4 份：print-relay APK／print hub／print-agent-android／desktop-companion）。
+- 🔴 出紙「改咗代碼但行為唔變」＝出紙程式冇 re-build／冇擰 `versionCode`（4 份：print-relay／hub／android／desktop-companion）。
 - 🔴 **列枱／選枱**一律用 `buildDisplayFloors(bootstrapTables, localSettings.floors)`，唔可以只讀 `localSettings.floors`（同坑中過兩次）。
-- 🔴 **Ledger 線上單**真欄名：`selected_specs`／`product_id`／`line_note`（2026-09-13 確認）；仍用「防禦式多欄名」解析。建 `OrderItem` 唯一入口 = `mapDetailToOrderItems()`。
-- 🔴 投影快取 `resolveLedgerPosOrderForReceipt()` **唔可以無條件短路**：有 `detail` 一定重建，但要保留本機 `status`／`prepaidAmount`。
-- 🔴 `git` 唔喺 PATH → 全路徑 `…/PortableGit/versions/1.2.0/cmd/git.exe`，前置 `CODEBUDDY_SAFE_DELETE_ENABLED=0`；`.git` 散咗**先 fetch、唔好 rebuild**。
+- 🔴 **Ledger 線上單**真欄名：`selected_specs`／`product_id`／`line_note`；仍用「防禦式多欄名」解析。建 `OrderItem` 唯一入口 = `mapDetailToOrderItems()`。
+- 🔴 投影快取 `resolveLedgerPosOrderForReceipt()` 唔可以無條件短路：有 `detail` 一定重建，但要保留本機 `status`／`prepaidAmount`。
+- 🔴 `PrintJob` 必帶 `kind`；冇 `template` 時兜底渲染要按 kind 分流（**唔可以一律套廚房**）。驗證 `tools/verify-print-job-kind.cjs`。
+- 🔴 `git` 唔喺 PATH → 全路徑 `…/PortableGit/versions/1.2.0/cmd/git.exe`，前置 `CODEBUDDY_SAFE_DELETE_ENABLED=0`；**push 加 `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never`**（唔加＝無聲掛住等憑證 GUI 窗）。
 - 🔴 加 `PosLocalSettings` 新欄**必填** → tsc 逼你補 `normalizePosLocalSettings`＋`defaultPosLocalSettings`。漏白名單 = reload 靜靜剷走。
 
 ## 二、環境（呢部機）
@@ -35,10 +36,8 @@
 |---|---|
 | 三端架構／打包 | desktop/Android 載**同一 Vercel 網址**；只有列印通道要三端同步。打包必加 `--config.win.signAndEditExecutable=false` |
 | React 依賴 | 父傳子嘅物件／函式 prop **一定** stable identity，否則無限 re-render、整個 tab 撳唔到（tsc/eslint/test 全綠，捉唔到） |
-| 打印區塊 | 加「靜態文字區塊」＝零跨 repo 改動；改區塊語義才要四端同步＋擰 `versionCode` |
 | 標籤機 | 型號按族過濾 `getLanModelOptions(family)`；用肯定式 `role === "zone"`；`USB_PRINTER_DB` 兩份硬編要同步 |
 | 打印機設定 UI | 品牌分組 `groupModelsByBrand()`。🔴 篩選狀態三入口必 reset：`selectRole`／`selectConnectionType`／`scanUsb`（漏＝清單空白但無 error） |
-| 標籤紙寬 | 紙寬落 `DevicePrinterConfig.maxLabelWidthMm`（反規範化，每次查表會漂移）。「未知」≠「無限制」→ 預設保守 60×40mm。未確認 PID 入 `LAN_ONLY_MODELS`，**唔准作 PID**。驗證 `tools/verify-label-paper-width.cjs` |
-| 登入／工作台 | `allowedModules` **缺失＝全部開通**（唔係全閂）；新模組先改 `module-catalog.ts`；副作用只有 `apply-workbench.ts` |
-| Realtime | 「reload 先見到」＝訂錯 Supabase 專案（要 `NEXT_PUBLIC_POS_SUPABASE_URL/_ANON_KEY` ＋ redeploy） |
+| 登入／工作台 | `allowedModules` **缺失＝全部開通**（唔係全閂）；新模組先改 `module-catalog.ts` |
+| Realtime | 「reload 先見到」＝訂錯 Supabase 專案（要 `NEXT_PUBLIC_POS_SUPABASE_URL/_ANON_KEY`） |
 | Ledger 契約 | `docs/integration/ledger-client-api.md` §5.4（欄名要防禦式解析） |
