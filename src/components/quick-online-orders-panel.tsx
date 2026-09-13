@@ -53,6 +53,8 @@ import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
 import { formatMoney } from "@/lib/format";
+import { formatSpecLine } from "@/lib/escpos-render";
+import { toResolvedSpecs } from "@/lib/ledger/order-item-specs";
 
 type QuickOnlineOrdersPanelProps = {
   currency: string;
@@ -119,7 +121,10 @@ export function QuickOnlineOrdersPanel({
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [assigningTableId, setAssigningTableId] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
-  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number }> | null>(null);
+  const [detailItems, setDetailItems] = useState<
+    | Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number; specs?: string[]; note?: string }>
+    | null
+  >(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
 
@@ -342,6 +347,9 @@ export function QuickOnlineOrdersPanel({
                 qty: item.qty,
                 discountRate: item.discountRate,
                 discountAvos: item.discountAvos,
+                // 規格／備註：同廚房單口徑一致（同一支 `formatSpecLine`）。
+                specs: toResolvedSpecs(item.specs ?? []).map((spec) => formatSpecLine(spec)),
+                note: item.note,
               })),
             );
         }
@@ -1004,23 +1012,32 @@ export function QuickOnlineOrdersPanel({
             ) : null}
             <div className="font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</div>
             {detailLoading ? <div className="text-slate-500">載入品項…</div> : null}
-            {detailItems?.map((item) => {
+            {detailItems?.map((item, index) => {
               const itemHasDiscount =
                 item.discountRate != null ||
                 (item.discountAvos != null && item.discountAvos > 0);
+              const specs = item.specs ?? [];
               return (
-                <div
-                  key={`${item.name}-${item.qty}`}
-                  className="flex items-baseline justify-between gap-2"
-                >
-                  <span>
-                    {item.name} × {item.qty}
-                    {itemHasDiscount ? (
-                      <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                        {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
-                      </span>
-                    ) : null}
-                  </span>
+                <div key={`${item.name}-${item.qty}-${index}`}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span>
+                      {item.name} × {item.qty}
+                      {itemHasDiscount ? (
+                        <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                          {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                  {/* 規格／備註（舊版冇顯示 → 店家睇唔到客人揀咗咩）。 */}
+                  {specs.length > 0 || item.note ? (
+                    <div className="mt-0.5 grid gap-0.5 pl-3 text-xs text-slate-500">
+                      {specs.map((line, specIndex) => (
+                        <div key={`${line}-${specIndex}`}>· {line}</div>
+                      ))}
+                      {item.note ? <div>備註：{item.note}</div> : null}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

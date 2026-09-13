@@ -79,6 +79,8 @@ import {
 import { isReopenTempTable } from "@/lib/pos/table-scope";
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { formatMoney } from "@/lib/format";
+import { formatSpecLine } from "@/lib/escpos-render";
+import { toResolvedSpecs } from "@/lib/ledger/order-item-specs";
 import { PosOrder } from "@/lib/types";
 
 const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
@@ -266,7 +268,10 @@ export function OnlineOrders({
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
-  const [detailItems, setDetailItems] = useState<Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number }> | null>(null);
+  const [detailItems, setDetailItems] = useState<
+    | Array<{ name: string; qty: number; discountRate?: number; discountAvos?: number; specs?: string[]; note?: string }>
+    | null
+  >(null);
   const [detailLoading, setDetailLoading] = useState(false);
   // 2026-09-09：線上單「查看」→ 收據預覽（同線下 settled 單「查看」一致）。
   // 由 resolveLedgerPosOrderForReceipt 將 Ledger 單投影成 PosOrder，餵畀 ReceiptTicketPreview。
@@ -802,6 +807,9 @@ export function OnlineOrders({
           qty: item.qty,
           discountRate: item.discountRate,
           discountAvos: item.discountAvos,
+          // 規格／備註：同廚房單／收據睇到嘅完全一致（同一支 `formatSpecLine`）。
+          specs: toResolvedSpecs(item.specs ?? []).map((spec) => formatSpecLine(spec)),
+          note: item.note,
         })),
       );
       // 投影成 PosOrder 供收據預覽（同線下 settled 單「查看」用同一個 ReceiptTicketPreview）
@@ -1496,24 +1504,34 @@ export function OnlineOrders({
             <div className="mt-3 grid gap-2">
               {detailLoading ? <div className="text-sm text-slate-500">正在載入明細…</div> : null}
               {!detailLoading && detailItems?.length
-                ? detailItems.map((item) => {
+                ? detailItems.map((item, index) => {
                     const itemHasDiscount =
                       item.discountRate != null ||
                       (item.discountAvos != null && item.discountAvos > 0);
+                    const specs = item.specs ?? [];
                     return (
-                      <div
-                        key={`${item.name}-${item.qty}`}
-                        className="flex flex-wrap items-baseline justify-between gap-2 text-sm text-slate-700"
-                      >
-                        <span>
-                          {item.name}
-                          {itemHasDiscount ? (
-                            <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                              {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="font-semibold tabular-nums">x{item.qty}</span>
+                      <div key={`${item.name}-${item.qty}-${index}`} className="text-sm text-slate-700">
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <span>
+                            {item.name}
+                            {itemHasDiscount ? (
+                              <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="font-semibold tabular-nums">x{item.qty}</span>
+                        </div>
+                        {/* 規格／備註：舊版完全冇顯示 → 店家喺 POS 睇唔到客人揀咗咩
+                            （同廚房單同一支 `formatSpecLine`，口徑一致）。 */}
+                        {specs.length > 0 || item.note ? (
+                          <div className="mt-0.5 grid gap-0.5 pl-3 text-xs text-slate-500">
+                            {specs.map((line, specIndex) => (
+                              <div key={`${line}-${specIndex}`}>· {line}</div>
+                            ))}
+                            {item.note ? <div>備註：{item.note}</div> : null}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })

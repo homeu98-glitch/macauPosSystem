@@ -508,6 +508,15 @@ export interface PrinterCandidate {
   /** 中文（Kanji）倍大指令：商頌 POS-80 等機要用 GS ! n；標準 ESC/POS 機用 FS ! n。
    *  Companion 由 VID/PID 對照型號表或 USB Printer Class 通用 fallback 回傳；web 直接採用。 */
   kanjiEnlarge?: "FS!" | "GS!";
+  /**
+   * 硬件族（2026-09-13）。
+   *
+   * 🔴 由 Companion 嘅 `/api/usb` 回傳（`resolveUsbMeta().family`）。
+   * POS 側嘅 wizard 靠佢喺「用 USB 自動偵測」路徑都分得出標籤機
+   * （漢印 SL42 = label vs 漢印 TP805 = receipt）。
+   * 空缺 = 舊版 Companion → POS 側按所選用途 fallback。
+   */
+  family?: "receipt" | "label" | "portable";
 }
 
 interface DiscoveredLanPrinter {
@@ -525,6 +534,7 @@ interface UsbPrinterRow {
   charset?: string;
   paperSize?: string;
   kanjiEnlarge?: "FS!" | "GS!";
+  family?: "receipt" | "label" | "portable";
   recognized?: boolean;
 }
 
@@ -572,6 +582,8 @@ export async function enumerateCompanionUsbPrinters(): Promise<PrinterCandidate[
         charset: p.charset,
         paperSize: p.paperSize,
         kanjiEnlarge: p.kanjiEnlarge,
+        // Companion 已由 VID/PID 判斷好硬件族 → 直接帶落去，唔好喺 UI 再猜。
+        family: p.family,
       } as PrinterCandidate;
     });
   } catch {
@@ -609,6 +621,7 @@ export async function listCompanionPrinters(): Promise<PrinterCandidate[]> {
         charset: p.charset,
         paperSize: p.paperSize,
         kanjiEnlarge: p.kanjiEnlarge,
+        family: p.family,
       } as PrinterCandidate;
     });
     return [...lan, ...usb];

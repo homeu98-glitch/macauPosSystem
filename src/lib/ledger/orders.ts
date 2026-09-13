@@ -4,6 +4,7 @@ import { loadAuthSession } from "@/lib/storage";
 import { ensureLedgerSession } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { LedgerOrderRow, mapLedgerOrderRow, LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
+import { parseOrderItemSpecs, type ParsedOrderSpec } from "@/lib/ledger/order-item-specs";
 
 export type ListMerchantOrdersParams = {
   merchantId: string;
@@ -90,7 +91,63 @@ export type LedgerOrderDetailItem = {
   discountAvos?: number;
   /** 單品折扣百分比（0-100），如果有就比金額優先。defensive。 */
   discountRate?: number;
+  /**
+   * 已選規格（揀咗咩規格／加購）。
+   *
+   * 🔴 2026-09-13 修：舊寫法**完全冇解析規格欄位**，令所有線上單嘅廚房單／
+   * 飲品標籤單／收據一條規格都冇（Ledger 自己印嘅單有）。
+   * 解析交 `parseOrderItemSpecs()`（防禦式多欄名，Ledger 欄名未確認）。
+   */
+  specs?: ParsedOrderSpec[];
 };
+
+/**
+ * 品項備註嘅候選欄名 —— Ledger 欄名未確認，逐個試。
+ *
+ * 備註鏈路本身係通嘅（`item.note` → `OrderItem.note` → `toPrintItemLine().note`
+ * → 廚房單／收據；`pos-app.tsx` 本地落單亦係寫 `note`），
+ * **唯一風險**就係 Ledger 用咗另一個欄名 → 呢度兜住。
+ */
+const ITEM_NOTE_KEYS = [
+  "note",
+  "item_note",
+  "itemNote",
+  "remark",
+  "remarks",
+  "comment",
+  "comments",
+  "memo",
+  "special_request",
+  "specialRequest",
+  "request",
+] as const;
+
+function pickItemNote(record: unknown): string | undefined {
+  if (!record || typeof record !== "object") return undefined;
+  const rec = record as Record<string, unknown>;
+  for (const key of ITEM_NOTE_KEYS) {
+    const value = rec[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** 認得嘅 `get_order_detail` item 欄位（其餘欄位喺 dev 會 log 一次，方便對返 Ledger 真欄名）。 */
+const KNOWN_ITEM_KEYS = new Set<string>([
+  "product_name",
+  "name",
+  "qty",
+  "quantity",
+  "unit_price_avos",
+  "price_avos",
+  "menu_item_id",
+  "discount_avos",
+  "discount_rate",
+  "line_discount_avos",
+  ...ITEM_NOTE_KEYS,
+]);
+
+let didReportUnknownItemKeys = false;
 
 export type LedgerOrderDetail = {
   items: LedgerOrderDetailItem[];
@@ -135,6 +192,11 @@ export async function getOrderDetail(orderId: string): Promise<LedgerOrderDetail
       discount_avos?: number;
       discount_rate?: number;
       line_discount_avos?: number;
+      /**
+       * 規格／選項欄位**唔喺度逐個列名**（Ledger 欄名未確認）：
+       * 由 `parseOrderItemSpecs()` 逐個候選欄名試，命中就用。
+       */
+      [key: string]: unknown;
     }>;
     total_avos?: number;
     note?: string;
@@ -156,11 +218,15 @@ export async function getOrderDetail(orderId: string): Promise<LedgerOrderDetail
               ? Math.round(Number(item.price_avos)) / 100
               : undefined,
         menuItemId: item.menu_item_id,
-        note: item.note ?? undefined,
+        // 🔴 唔可以直接讀 `item.note`：Ledger 可能用 `remark` / `comment` 等別名。
+        note: pickItemNote(item),
         discountAvos: mapDiscountAvos(item.discount_avos ?? item.line_discount_avos),
         discountRate: typeof item.discount_rate === "number" ? item.discount_rate : undefined,
+        specs: parseOrderItemSpecs(item),
       }))
     : [];
+
+  reportUnknownItemKeysOnce(payload?.items);
 
   return {
     items,
@@ -175,4 +241,30 @@ function mapDiscountAvos(value: number | null | undefined): number | undefined {
   if (value == null) return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? Math.round(n) : undefined;
+}
+
+/**
+ * dev-only：第一次見到「未識別欄位」就 log 一次。
+ *
+ * Ledger `get_order_detail` 嘅規格欄名從未被確認（本機冇 Ledger 源碼），
+ * 所以 `parseOrderItemSpecs()` 只可以逐個候選欄名盲試。呢個 log 令萬一盲試
+ * 唔中都可以由 DevTools Console 一眼睇到真欄名，唔使再猜。
+ * 每個 session 只報一次，唔會洗版。
+ */
+function reportUnknownItemKeysOnce(rawItems: unknown): void {
+  if (didReportUnknownItemKeys || process.env.NODE_ENV === "production") return;
+  if (!Array.isArray(rawItems) || rawItems.length === 0) return;
+  const sample = rawItems[0];
+  if (!sample || typeof sample !== "object" || Array.isArray(sample)) return;
+
+  const unknownKeys = Object.keys(sample as Record<string, unknown>).filter(
+    (key) => !KNOWN_ITEM_KEYS.has(key),
+  );
+  if (unknownKeys.length === 0) return;
+
+  didReportUnknownItemKeys = true;
+  console.info(
+    "[ledger→pos] get_order_detail item 有未識別欄位（可能就係規格／選項）：" +
+      `${unknownKeys.join(", ")}。若廚房單仍然冇規格，請回報呢行。`,
+  );
 }

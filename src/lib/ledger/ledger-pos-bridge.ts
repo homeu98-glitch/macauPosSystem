@@ -3,6 +3,7 @@
 import { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { toLedgerMenuItemId } from "@/lib/ledger/menu-import";
 import { getOrderDetail, LedgerOrderDetail, LedgerOrderDetailItem } from "@/lib/ledger/orders";
+import { enrichSpecsFromMenu, toResolvedSpecs } from "@/lib/ledger/order-item-specs";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -156,6 +157,18 @@ function mapDetailToOrderItems(
         discountRate = Math.round(((1 - savingPerUnit / unitOriginal) * 100) * 100) / 100;
       }
     }
+    /**
+     * 🔴 已選規格（2026-09-13 修）。
+     *
+     * 舊寫法呢度**冇 `selectedSpecs`** → 所有由 Ledger 投影出嚟嘅單（廚房單／
+     * 飲品標籤單／收據／`/orders` 查看）一條規格都冇，而 Ledger 自己印嘅單有。
+     * 下游（`toPrintItemLine` / `print-jobs.ts` / `buildLabelContent` /
+     * `escpos-render.ts`）**一早已經支援**規格 → 缺口只喺呢一格。
+     *
+     * `item.specs` 由 `getOrderDetail()` 用防禦式解析抽出；再用**本地同步餐牌**
+     * 補齊文字（商家口徑：菜單同 Ledger in sync，所以 group/option 定義我們有齊）。
+     */
+    const selectedSpecs = toResolvedSpecs(enrichSpecsFromMenu(item.specs ?? [], menu?.specGroups));
     return {
       menuItemId: menu?.id ?? item.menuItemId ?? `ext-${item.name}`,
       name: item.name,
@@ -163,6 +176,7 @@ function mapDetailToOrderItems(
       price: item.unitPrice ?? menu?.price ?? 0,
       printerGroup: menu?.printerGroup ?? "kitchen",
       note: item.note,
+      ...(selectedSpecs.length > 0 ? { selectedSpecs } : {}),
       ...(discountRate != null && discountRate > 0 && discountRate < 100 ? { discountRate } : {}),
     };
   });

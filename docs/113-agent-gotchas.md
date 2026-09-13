@@ -1017,3 +1017,103 @@ Ledger 回覆 Q8／Q12 都寫「見契約 §5.12」，但本地
 | 契約 §1.2／§5.5.3 | 「禁呼叫非白名單 HTTP」→ 新增 §5.12 兩支 |
 
 
+---
+
+## 🔴🔴 Ledger 線上單 → POS 投影：規格（`selectedSpecs`）＋ 備註欄位缺漏（2026-09-13 商家實紙）
+
+**病症**：線上單出咗，POS 廚房單**一條規格都冇**（實紙：`1. 南乳雞中亦 x1`），
+但 Ledger 自己印嘅單有齊 `*要唔要袋:唔要`／`*飲料:湯`／`*熱定凍:熱`／`*加購:蒸蛋 +10`
+／`*加購:油菜 +1`／`*要唔要膠袋?:要`。
+
+**根因**：Ledger → POS 嘅投影路徑**從來冇建立 `OrderItem.selectedSpecs`**。
+- 斷點 ① `getOrderDetail()`（`src/lib/ledger/orders.ts`）：解析 `get_order_detail` RPC 時
+  只讀 `product_name`/`qty`/`unit_price_avos`/`menu_item_id`/`note`/折扣 → **冇任何規格欄位**。
+- 斷點 ② `mapDetailToOrderItems()`（`src/lib/ledger/ledger-pos-bridge.ts`）：建 `OrderItem` 時**冇 `selectedSpecs`**。
+- **下游一早已經全部支援**規格：`toPrintItemLine`（bridge L191）／`toPrintItemLines`（`escpos-render.ts`）／
+  `print-jobs.ts:231`／`buildLabelContent`（`escpos-template.ts` L1145）／`escpos-render.ts:285` `hasSubLine`。
+  ⇒ **只需補上游一格，唔使改渲染層**。
+
+**修法**（2026-09-13）：
+1. 新增零依賴純函式模組 `src/lib/ledger/order-item-specs.ts`：
+   `parseOrderItemSpecs()`（防禦式多欄名）＋ `enrichSpecsFromMenu()`（用本地同步餐牌補文字）＋ `toResolvedSpecs()`。
+2. `getOrderDetail()` 每個 item 加 `specs`（＋ dev-only 未知欄位 log）。
+3. `mapDetailToOrderItems()` 加 `selectedSpecs`（parse → enrich → toResolved）。
+4. `/orders` 查看彈窗（`online-orders.tsx`）＋快餐面板（`quick-online-orders-panel.tsx`）補顯示規格／備註。
+
+**紅線**：
+- 🔴 Ledger RPC **欄位名從未確認**（本機冇 Ledger repo；契約 §5.4 只寫「含 `items[]` 明細」）。
+  ⇒ 一律用「**防禦式多欄名**」手法（同餐牌側 `menu-spec.ts:collectSpecSources` 同一套路），
+  **唔可以**寫死單一欄名。保險：`getOrderDetail()` dev 會 log item 未識別欄位（每 session 一次）。
+- 🔴 **avos vs MOP**：規格加價欄名**含 `avos`** → 除 100；其餘（`price_delta`/`delta`/`extra_price`）
+  當**已經係 MOP**（實紙 `+10`/`+5`/`+1` 都係 MOP）。
+- 🔴 **唔可以**把「全部可選項」當成「已選」。選取語義：任何 child 帶 `selected`/`is_selected`/`checked`
+  旗標 → **只認 `=== true`**；完全冇旗標 → 當列出嘅就係已選。冇文字嘅 id-only 規格只喺
+  「欄名寫明 `selected*`」或有 `selected:true` 時先收（之後靠本地餐牌補文字）。
+- 🟡 **備註鏈路本來就通**：品項備註 `item.note` → `OrderItem.note`（bridge）→
+  `toPrintItemLine().note` → 廚房單；全單備註 `ledgerOrder.note` → `orderNote` → `content.order_note`
+  （廚房模板預設開）。**唯一風險**同樣係 Ledger 用別名（`remark`/`comment`）→ 已加 `pickItemNote()` 兜住。
+- 由 Ledger 資料建 `OrderItem` 嘅**唯一入口** = `mapDetailToOrderItems()`。加新欄位只需改呢一個。
+- 測試：`node --test src/lib/ledger/order-item-specs.test.ts`（20 項，含商家實紙端到端）。
+
+---
+
+## 🔴 枱位（列枱／選枱）真源（2026-09-13 · 同一坑中過兩次）
+
+- 🔴 **任何「列枱／選枱」UI 一律用 `buildDisplayFloors(bootstrapTables, localSettings.floors)`**
+  （`src/lib/pos/display-floors.ts`，另含 `loadAssignableTables()`）。
+  **唔可以**只讀 `localSettings.floors` —— 本機可能淨係出廠預設（`1樓 A01-A03 / 2樓 B01-B02`），
+  令排位彈窗出到唔存在嘅枱。
+- 中過兩次：2026-09-12 `pos-app.tsx`、2026-09-13 `online-orders.tsx`（`/orders` 頁）。
+- 🔴 加新列枱 UI 前**一定先 grep `localSettings.floors`** 確認冇漏。
+
+---
+
+## 🔴 三端架構（Web / Desktop / Android）＋ Electron 打包三坑（2026-09-13）
+
+- **desktop / Android 冇自己嘅 UI**：Electron `loadURL(Vercel)`、Android WebView 載**同一網址**
+  → 網頁功能更新**唔使重打包**。真正要同步嘅只有**列印通道**（三端各自手寫 ESC/POS）。
+- 三端真源：網頁 `src/lib/escpos-render.ts`（`TITLE`）／Desktop
+  `C:/dev/desktop-companion/companion-server.mjs`（`TITLE` + `titleOf()`）／Android
+  `C:/dev/print-agent-android/.../net/EscPosRenderer.kt`。
+- 🔴 抬頭口徑：`receipt`＝「＊＊＊ 收據 ＊＊＊」；**`label`＝空（刻意唔印，62mm 紙太細）**；
+  `kitchen`＝「＊＊＊ 廚房 ＊＊＊」；`shift`＝空（靠模板 `header` 區塊）。**改一個要三個都改**。
+- 🔴 改 desktop-companion 源碼後**必須 bump `package.json` version ＋ 重打包 exe**
+  （否則用戶 app 內「檢查更新」唔會拎到新版）；Android 同樣要擰 `versionCode`。
+- 🔴 **Electron 打包三坑**：
+  ① 必須加 `--config.win.signAndEditExecutable=false`，否則喺 `signAndEditResources`
+     **靜默掛起**（實測卡 12 分鐘零輸出）；停用後 1 分 38 秒完成。
+  ② 唔可以用 `npx`／`npm run` → 直接 `node node_modules/electron-builder/out/cli/cli.js`。
+  ③ 發佈揀 exe 要用 `f.includes(newVersion)`（`dist/` 有舊版殘留，`endsWith('.exe')` 會拎到最舊）。
+- sha512 兩編碼唔好統一：`latest.yml`＝**base64**（electron-updater）／`manifest.json`＝**hex**（POS UI）。
+- ⚠️ 打好包要 **git push `public/releases/`** 先上到 Vercel，用戶 APP 內「檢查更新」先拎到。
+- 測試：`cd C:/dev/desktop-companion && node test-print-e2e.mjs`（假打印機收 bytes，驗真實出紙）；
+  `node test-crossrepo-parity.mjs`（三端字串掃描）。⚠️ companion port **硬編 9311**。
+
+---
+
+## 🔴 標籤機 vs 票據機 ＋ 工作台開關（索引，詳見 `docs/144`、`docs/127`）
+
+- 🔴 **型號清單一定要按族過濾**：`getLanModelOptions(family)`。舊碼無參數 → 標籤機同廚房機
+  拿到同一份清單 → 揀完 `paperSize=80mm` 配 100×75 標籤卷 → **出紙亂版**。
+- 🔴 **`role !== "receipt"` 係危險否定式** —— 加第三個角色（`label`）後會靜靜擴大命中範圍。
+  要用**肯定式**（`role === "zone"`）。中過兩處：`printer-wizard-modal.tsx`／`printer-card-v2.tsx`。
+- 🔴 硬件族要**三層解析** `resolveFamily()`（型號級 → 品牌級 → `"receipt"`）；品牌層唔夠
+  （佳博／漢印／得力／容大 **都同時出票據機同標籤機**）。
+- 🔴 標籤機真正要問嘅係**紙張尺寸**（`LABEL_MODEL_PAPER_SIZES`）＋**指令集**
+  （TSPL / ZPL / ESC/POS / EPL / CPCL）。國內標籤機行 **TSPL，唔食 ESC/POS**；
+  標籤機一律**冇 `zoneId`**（分區係廚房概念）。
+- 🔴 **`USB_PRINTER_DB` 有兩份硬編**（POS `printer-models.ts` ＋ Companion `companion-server.mjs`）
+  → 改一邊要改兩邊。防線：`node tools/verify-printer-db-parity.cjs`（21 VID / 50 型號）。
+- 🔴 `labelCommandSet` **刻意未入 config**：四個 renderer 目前全部只出 ESC/POS，
+  加欄位唔改 renderer ＝**假同步**。Phase 2 連 TSPL 渲染器一齊做。
+- 驗證：`node --experimental-strip-types tools/verify-label-model-split.cjs`（型號分流 9 項）。
+- 🔴 加新模組**一律先改 `src/lib/pos/module-catalog.ts`**（唯一真源）；
+  只改一邊唔會 throw，只會靜靜冇咗個開關。
+- 🔴 **`allowedModules` 缺失 ＝ 全部開通**（唔係「全閂」）→ 口徑要四處一致：
+  `merchant-modules-server.ts`／`AuthSession`／`login-screen`／`app-sidebar`。當成全閂 ＝ 全線入唔到 POS。
+- 🔴 商戶授權真源 `pos_merchant_modules`（migration 0037），per-store 一行；Admin PATCH 要**兩組一齊送**。
+- 🔴 工作台副作用只有一份：`src/lib/pos/apply-workbench.ts`。掃碼模式由**所選工作台**決定
+  （`retail` 唔寫 `saveOperatingMode`）；終端行業每次明確寫 salon/restaurant。
+
+
+
