@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 /**
  * 會員登入 bottom sheet —— **Kiosk 平板同手機掃碼共用**（同 `SpecSheet` 一樣嘅共用模式）。
@@ -162,34 +163,77 @@ export function MemberLoginSheet({
             </h2>
             <p className="mb-5 text-sm text-stone-500">{t("memberLoginSubtitle")}</p>
 
+            {/* ── 會員帳號（手機號碼）──
+                🔴 手機版一定要用**真 `<input>`** —— 之前兩個 variant 都用 `<button>` 顯示，
+                   結果手機完全冇輸入方式（撳極都唔會彈系統鍵盤），客人無法輸入。
+                   Kiosk 才用 `<button>` + 自繪螢幕鍵盤（自助機唔用系統鍵盤）。 */}
             <div className="mb-3">
               <div className="mb-1.5 text-sm font-medium text-stone-600">{t("memberPhoneLabel")}</div>
-              <button
-                type="button"
-                onClick={() => setField("phone")}
-                className={fieldClass("phone")}
-                aria-label={t("memberPhoneLabel")}
-              >
-                <span className={`tracking-[0.2em] ${isKiosk ? "text-2xl" : "text-xl"}`}>
-                  {phone || "\u00A0"}
-                </span>
-                <span className="text-xs text-stone-400">{phone.length}/8</span>
-              </button>
+              {isKiosk ? (
+                <button
+                  type="button"
+                  onClick={() => setField("phone")}
+                  className={fieldClass("phone")}
+                  aria-label={t("memberPhoneLabel")}
+                >
+                  <span className="text-2xl tracking-[0.2em]">{phone || "\u00A0"}</span>
+                  <span className="text-xs text-stone-400">{phone.length}/8</span>
+                </button>
+              ) : (
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="tel"
+                  maxLength={8}
+                  value={phone}
+                  // 只准數字：`replace(/\D/g,"")` 處理貼上 / 非數字鍵盤輸入；
+                  // 裁到 8 位即係「後 8 位」語義（契約 §4.5.1 `/^\d{8}$/`）。
+                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                  placeholder="8 位數字"
+                  aria-label={t("memberPhoneLabel")}
+                  className="h-14 w-full rounded-xl border-2 border-stone-200 bg-white px-4 text-xl tracking-[0.2em] text-stone-900 outline-none focus:border-orange-500"
+                />
+              )}
             </div>
 
+            {/* ── PIN（4 位數字）── */}
             <div className="mb-4">
               <div className="mb-1.5 text-sm font-medium text-stone-600">{t("memberPinLabel")}</div>
-              <button
-                type="button"
-                onClick={() => setField("pin")}
-                className={fieldClass("pin")}
-                aria-label={t("memberPinLabel")}
-              >
-                <span className={`tracking-[0.3em] ${isKiosk ? "text-2xl" : "text-xl"}`}>
-                  {pin.length > 0 ? "•".repeat(pin.length) : "\u00A0"}
-                </span>
-                <span className="text-xs text-stone-400">{pin.length}/4</span>
-              </button>
+              {isKiosk ? (
+                <button
+                  type="button"
+                  onClick={() => setField("pin")}
+                  className={fieldClass("pin")}
+                  aria-label={t("memberPinLabel")}
+                >
+                  <span className="text-2xl tracking-[0.3em]">
+                    {pin.length > 0 ? "•".repeat(pin.length) : "\u00A0"}
+                  </span>
+                  <span className="text-xs text-stone-400">{pin.length}/4</span>
+                </button>
+              ) : (
+                <input
+                  // 🔴 唔可以用 `type="password"`：**iOS Safari 會無視 `inputMode`** 直接彈字母鍵盤
+                  //    → 客人打唔到 PIN。改用 `type="text"` + `inputMode="numeric"`，
+                  //    再用 `-webkit-text-security: disc` 做遮蔽（iOS / Android 都支援）。
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="off"
+                  maxLength={4}
+                  value={pin}
+                  style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  // 手機用系統鍵盤 → 畀客人撳「完成 / 前往」直接送出（唔使特登搵落單掣）。
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && ready && !submitting) onSubmit(phone, pin);
+                  }}
+                  placeholder="4 位數字"
+                  aria-label={t("memberPinLabel")}
+                  className="h-14 w-full rounded-xl border-2 border-stone-200 bg-white px-4 text-xl tracking-[0.3em] text-stone-900 outline-none focus:border-orange-500"
+                />
+              )}
             </div>
 
             {/* 失敗態（S3a）：紅框 + 剩餘次數。⚠️ 唔顯示「已錯幾個字元」—— 嗰個係枚舉線索。 */}

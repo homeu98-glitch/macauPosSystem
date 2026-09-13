@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 import { money2 } from "@/components/kiosk/order-summary-card";
 import type { MemberPayMethod, MemberPayStage } from "@/lib/ledger/member-pay";
@@ -280,11 +281,19 @@ export function MemberPaySheet({
                   </>
                 ) : (
                   <input
-                    type="password"
+                    // 🔴 同 `member-login-sheet` 一樣：`type="password"` 會令 **iOS 無視
+                    //    `inputMode`** 彈字母鍵盤 → 客人打唔到 PIN。用 text + inputMode + 遮蔽。
+                    type="text"
                     inputMode="numeric"
+                    pattern="[0-9]*"
                     autoComplete="off"
+                    maxLength={4}
                     value={pin}
+                    style={{ WebkitTextSecurity: "disc" } as CSSProperties}
                     onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && pin.length === 4 && !busy) onConfirmWithPin(pin);
+                    }}
                     aria-label={t("deductNeedPin")}
                     className="h-14 w-full rounded-xl border-2 border-orange-500 px-4 text-center text-xl tracking-[0.3em] outline-none"
                   />
