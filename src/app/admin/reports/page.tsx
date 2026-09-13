@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
 import { RestaurantDailyReport } from "@/components/restaurant-daily-report";
-import type { ReportRangeKey } from "@/lib/ledger/report-period";
+import type { ReportRangeArg } from "@/lib/ledger/report-period";
 import { loadAuthSession } from "@/lib/storage";
 import type { PosOrder } from "@/lib/types";
 
@@ -96,8 +96,9 @@ export default function AdminReportsPage() {
   const busyRef = useRef(true);
   /** 由報表組件回報嘅載入錯誤摘要（冇錯 = null）。 */
   const [loadError, setLoadError] = useState<string | null>(null);
-  /** 用戶喺報表入面揀嘅範圍：remount 後用 initialRange 還原，唔會彈返「今日」。 */
-  const [reportRange, setReportRange] = useState<ReportRangeKey>("today");
+  /** 用戶喺報表入面揀嘅範圍：remount 後用 initialRange 還原，唔會彈返「今日」。
+   *  2026-09-13 加「自訂」後型別升級為 `ReportRangeArg`（可攜 `{key, custom}`）。 */
+  const [reportRange, setReportRange] = useState<ReportRangeArg>("today");
 
   const loadMerchants = useCallback(async () => {
     try {
@@ -167,7 +168,7 @@ export default function AdminReportsPage() {
   const handleLoadError = useCallback((message: string | null) => {
     setLoadError(message);
   }, []);
-  const handleRangeChange = useCallback((next: ReportRangeKey) => {
+  const handleRangeChange = useCallback((next: ReportRangeArg) => {
     setReportRange(next);
   }, []);
 

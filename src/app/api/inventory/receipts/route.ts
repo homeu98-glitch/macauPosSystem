@@ -11,7 +11,8 @@ import {
   receiptDateMatchesRange,
   type StatReceipt,
 } from "@/lib/inventory-stats";
-import type { ReportRangeKey } from "@/lib/ledger/report-period";
+import type { ReportRangeArg, ReportRangeKey } from "@/lib/ledger/report-period";
+import { normalizeCustomRange } from "@/lib/ledger/date-range";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,14 +24,16 @@ function isMissingTable(err: DbError): boolean {
   return /relation .* does not exist/i.test(err.message ?? "");
 }
 
-const VALID_RANGES: ReportRangeKey[] = ["today", "yesterday", "7d", "30d", "all"];
+const VALID_RANGES: ReportRangeKey[] = ["today", "yesterday", "7d", "30d", "all", "custom"];
 
 /**
  * 唯讀：依 8 位帳號顯示 expenseRecorder 的收據，並回傳買貨統計。
  * 關聯：account → shop_users.login_id → shop_users.id
  *       收據經 user_id = shop_users.id 或 merchant_id ∈ (merchants WHERE user_id = shop_users.id)
  * 不寫入、不加表，直接沿用 expenseRecorder 原始 receipts / receipt_items 結構。
- * 支援 range（today/yesterday/7d/30d/all，澳門時區依 receipt_date 過濾）。
+ * 支援 range（today/yesterday/7d/30d/all/custom，澳門時區依 receipt_date 過濾）。
+ *
+ * `range=custom` 時必須同時帶 `start` / `end`（`YYYY-MM-DD`）；缺失或顛倒 → 降級 `all`。
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -38,7 +41,15 @@ export async function GET(request: Request) {
   if (!account) return NextResponse.json({ ok: false, error: "缺少 account" }, { status: 400 });
 
   const rawRange = searchParams.get("range") as ReportRangeKey | null;
-  const range: ReportRangeKey = rawRange && VALID_RANGES.includes(rawRange) ? rawRange : "all";
+  let range: ReportRangeKey = rawRange && VALID_RANGES.includes(rawRange) ? rawRange : "all";
+
+  // 自訂區間（server 端無法 derive，必須由 client 傳）
+  const custom = normalizeCustomRange({
+    start: searchParams.get("start") ?? "",
+    end: searchParams.get("end") ?? "",
+  });
+  if (range === "custom" && !custom) range = "all";
+  const rangeArg: ReportRangeArg = range === "custom" && custom ? { key: "custom", custom } : range;
 
   const client = getExpenseSupabaseClient();
   if (!client) return NextResponse.json({ ok: false, error: "expense client 未設定" }, { status: 503 });
@@ -144,7 +155,7 @@ export async function GET(request: Request) {
 
   // 4) 依 range 過濾（澳門時區，in-memory）
   const statReceipts: StatReceipt[] = (receipts ?? [])
-    .filter((r) => receiptDateMatchesRange(String(r.receipt_date ?? ""), range))
+    .filter((r) => receiptDateMatchesRange(String(r.receipt_date ?? ""), rangeArg))
     .map(toStatReceipt);
 
   const enriched = statReceipts.map((sr) => ({

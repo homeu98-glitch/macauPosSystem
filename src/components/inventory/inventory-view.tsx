@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadAuthSession } from "@/lib/storage";
-import { REPORT_RANGE_OPTIONS, reportRangeLabel, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { REPORT_RANGE_OPTIONS, reportRangeLabel, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import { PAYMENT_METHOD_LABEL, type PurchaseSummary } from "@/lib/inventory-stats";
 import { AreaChart } from "./charts/AreaChart";
 import { DonutChart } from "./charts/DonutChart";
@@ -396,7 +397,8 @@ export function InventoryView() {
   const [account, setAccount] = useState<string | null>(null);
   const [storeName, setStoreName] = useState<string>("");
   const [merchantId, setMerchantId] = useState<string | null>(null);
-  const [range, setRange] = useState<ReportRangeKey>("today");
+  /** 時間範圍（2026-09-13 加「自訂」後升級為 ReportRangeArg）。 */
+  const [range, setRange] = useState<ReportRangeArg>("today");
   const [data, setData] = useState<ReceiptsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -422,7 +424,13 @@ export function InventoryView() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/inventory/receipts?account=${encodeURIComponent(account)}&range=${range}`);
+      const { key, custom } = splitReportRangeArg(range);
+      const qs = new URLSearchParams({ account, range: key });
+      if (key === "custom" && custom) {
+        qs.set("start", custom.start);
+        qs.set("end", custom.end);
+      }
+      const res = await fetch(`/api/inventory/receipts?${qs.toString()}`);
       const json = (await res.json()) as ReceiptsResponse;
       setData(json);
       if (!json.ok && json.error) setError(json.error);
@@ -537,20 +545,14 @@ export function InventoryView() {
           </div>
         </header>
 
-        {/* 時間篩選 */}
+        {/* 時間篩選（2026-09-13：改用共用元件，加「自訂」） */}
         <div className="mb-4 flex flex-wrap gap-2">
-          {REPORT_RANGE_OPTIONS.map((opt) => (
-            <button
-              key={opt.key}
-              onClick={() => setRange(opt.key)}
-              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                range === opt.key ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
-              }`}
-              type="button"
-            >
-              {opt.label}
-            </button>
-          ))}
+          <DateRangeFilterChips
+            options={REPORT_RANGE_OPTIONS}
+            value={splitReportRangeArg(range).key}
+            custom={splitReportRangeArg(range).custom}
+            onChange={(key, custom) => setRange(custom ? { key, custom } : key)}
+          />
         </div>
 
         {data && data.schemaReady === false && (

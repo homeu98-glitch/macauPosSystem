@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { loadPosLocalSettings, loadRetailProducts } from "@/lib/storage";
+import { loadPosLocalSettings, loadRetailHolds, loadRetailProducts, saveRetailHolds } from "@/lib/storage";
 import type { PosLocalSettings } from "@/lib/types";
 import type { RetailProduct, RetailVariant, ScannerProfile } from "@/lib/retail/types";
 import {
@@ -13,6 +14,21 @@ import {
 } from "@/lib/retail/barcode-index";
 import { needsVariantChoice, priceOf } from "@/lib/retail/types";
 import { defaultScannerProfile } from "@/lib/retail/scanner-profiles";
+import {
+  computeWeigh,
+  DEFAULT_TARE_PRESETS,
+  formatKg,
+  type TarePreset,
+} from "@/lib/retail/manual-scale";
+import {
+  createHoldOrder,
+  describeHold,
+  pruneStaleHolds,
+  removeHoldOrder,
+  sortHolds,
+  takeHoldOrder,
+  type RetailHoldOrder,
+} from "@/lib/retail/hold-orders";
 import { useBarcodeScanner } from "@/lib/retail/use-barcode-scanner";
 import {
   addRetailLine,
@@ -60,6 +76,8 @@ export function RetailCounter() {
   const [products, setProducts] = useState<RetailProduct[]>([]);
   const [settings, setSettings] = useState<PosLocalSettings | null>(null);
   const [ready, setReady] = useState(false);
+  /** 掛單（本機暫存；唔入 orders、唔算營業額） */
+  const [holds, setHolds] = useState<RetailHoldOrder[]>([]);
 
   const [cart, setCart] = useState<RetailCartLine[]>([]);
   const [query, setQuery] = useState("");
@@ -84,7 +102,25 @@ export function RetailCounter() {
   useEffect(() => {
     setProducts(loadRetailProducts());
     setSettings(loadPosLocalSettings());
+    // 掛單係本機暫存：隔日殘留會令店員誤取昨日嘅車 → 開機先清走過期嘅
+    const loaded = loadRetailHolds();
+    const pruned = pruneStaleHolds(loaded);
+    if (pruned.removed.length > 0) {
+      saveRetailHolds(pruned.holds);
+    }
+    setHolds(sortHolds(pruned.holds));
     setReady(true);
+  }, []);
+
+  /**
+   * 設定頁改完（掃碼槍 / 付款方式 / 授權門檻）會 dispatch `pos-local-settings-changed`。
+   * 🔴 一定要聽：否則商家學完掃碼槍返到收銀台仍然用**舊 profile** 收尾，
+   * 會出現「設定頁話成功、實際掃唔到」嘅假成功。
+   */
+  useEffect(() => {
+    const onChanged = () => setSettings(loadPosLocalSettings());
+    window.addEventListener("pos-local-settings-changed", onChanged);
+    return () => window.removeEventListener("pos-local-settings-changed", onChanged);
   }, []);
 
   const flash = useCallback((tone: Toast["tone"], text: string) => {
@@ -228,6 +264,84 @@ export function RetailCounter() {
     // 人手打字 / 雜訊：**唔可以當錯誤提示**，否則店員打搜尋字會見到一大堆紅字
   }, []);
 
+  // ── 掛單 / 取單（F8 / F9）────────────────────────────────────
+  /** 寫入掛單並同步 state；寫入失敗要出聲（唔可以靜默） */
+  const persistHolds = useCallback(
+    (next: RetailHoldOrder[], okText: string) => {
+      const sorted = sortHolds(next);
+      setHolds(sorted);
+      if (!saveRetailHolds(sorted)) {
+        flash("err", "掛單寫入失敗（儲存空間不足 / 私隱模式）");
+        return false;
+      }
+      flash("ok", okText);
+      return true;
+    },
+    [flash],
+  );
+
+  const holdCurrent = useCallback(() => {
+    const r = createHoldOrder(holds, { lines: cart });
+    if (!r.ok) {
+      flash("err", r.reason);
+      return;
+    }
+    if (persistHolds(r.holds, `已掛單 ${r.hold.label}（${describeHold(r.hold)}）`)) {
+      setCart([]);
+      setExpandedLine(null);
+    }
+  }, [holds, cart, persistHolds, flash]);
+
+  const takeHold = useCallback(
+    (id: string) => {
+      if (cart.length > 0) {
+        // 唔可以靜默蓋走現有購物車 —— 店員會以為「撳完就換咗」
+        flash("err", "購物車有嘢 → 請先掛單或者結帳，再取單");
+        return;
+      }
+      const { hold, holds: rest } = takeHoldOrder(holds, id);
+      if (!hold) {
+        flash("err", "搵唔到呢張掛單");
+        return;
+      }
+      if (persistHolds(rest, `已取單 ${hold.label}`)) {
+        // 原樣還原（含折扣 / 改價 / 序號），並重新派 lineId 避免同新加嘅行撞
+        setCart(hold.lines.map((l) => ({ ...l, lineId: `l-${++lineSeq.current}` })));
+      }
+    },
+    [cart.length, holds, persistHolds, flash],
+  );
+
+  const dropHold = useCallback(
+    (id: string) => {
+      const target = holds.find((h) => h.id === id);
+      if (!target) return;
+      if (!window.confirm(`刪除掛單「${target.label}」？（${describeHold(target)}）`)) return;
+      persistHolds(removeHoldOrder(holds, id), "已刪除掛單");
+    },
+    [holds, persistHolds],
+  );
+
+  /** F8 掛單 / F9 取最新一張 */
+  useEffect(() => {
+    if (!ready) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "F8" && e.key !== "F9") return;
+      // 有彈窗開住唔搶鍵（避免喺結帳 / 稱重期間誤掛單）
+      if (payOpen || variantPick || weightPick || serialPick) return;
+      e.preventDefault();
+      if (e.key === "F8") {
+        holdCurrent();
+      } else {
+        const latest = sortHolds(holds)[0];
+        if (latest) takeHold(latest.id);
+        else flash("info", "冇掛單可以取");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [ready, payOpen, variantPick, weightPick, serialPick, holdCurrent, takeHold, holds, flash]);
+
   useBarcodeScanner({
     enabled: ready && !payOpen && !variantPick && !weightPick && !serialPick,
     profile: scannerProfile,
@@ -354,6 +468,22 @@ export function RetailCounter() {
           >
             取店內自編碼
           </button>
+          {/*
+            退換貨入口：收銀現場最常喺「啱啱賣完」就想退 → 唔應該逼店員去側欄搵頁。
+            ⚠️ 一定要**先確認購物車唔係空**：直接跳走會靜靜丟失未結帳嘅車
+            （零售冇自動保存購物車，同掛單係兩件事）。
+          */}
+          <Link
+            className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-1.5 text-[12px] font-semibold text-rose-700 hover:bg-rose-100"
+            href="/retail/returns"
+            onClick={(e) => {
+              if (cart.length > 0 && !window.confirm("購物車仲有嘢，去退換貨會清空佢。繼續？")) {
+                e.preventDefault();
+              }
+            }}
+          >
+            退換貨
+          </Link>
         </div>
       </header>
 
@@ -446,13 +576,65 @@ export function RetailCounter() {
               </div>
             </div>
             <button
-              className="ml-auto rounded-lg px-3 py-1.5 text-[12px] font-semibold text-slate-500 hover:bg-slate-100"
+              className="ml-auto rounded-lg bg-slate-100 px-3 py-2.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+              disabled={cart.length === 0}
+              onClick={holdCurrent}
+              title="掛單（F8）"
+              type="button"
+            >
+              掛單 F8
+            </button>
+            <button
+              className="rounded-lg px-3 py-2.5 text-[12px] font-semibold text-slate-500 hover:bg-slate-100"
               onClick={() => setCart([])}
               type="button"
             >
               清空
             </button>
           </div>
+
+          {/* 掛單列 strip：橫向卡片，最新掛嘅最前 */}
+          {holds.length > 0 ? (
+            <div className="border-b border-slate-200 bg-white px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-slate-500">
+                  已掛單（{holds.length}）
+                </span>
+                <span className="text-[10.5px] text-slate-400">F9 取最新一張</span>
+              </div>
+              <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1">
+                {holds.map((h) => (
+                  <div
+                    key={h.id}
+                    className="flex min-w-[132px] shrink-0 flex-col rounded-xl border border-amber-200 bg-amber-50 p-2"
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="text-[12px] font-bold text-amber-900">{h.label}</span>
+                      <button
+                        className="ml-auto grid h-6 w-6 place-items-center rounded-md text-[11px] text-amber-700 hover:bg-amber-100"
+                        onClick={() => dropHold(h.id)}
+                        title="刪除掛單"
+                        type="button"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="text-[11px] text-amber-800">{describeHold(h)}</div>
+                    {h.note ? (
+                      <div className="truncate text-[10.5px] text-amber-700">📝 {h.note}</div>
+                    ) : null}
+                    <button
+                      className="mt-1.5 min-h-[36px] rounded-lg bg-amber-600 text-[11.5px] font-semibold text-white hover:bg-amber-700"
+                      onClick={() => takeHold(h.id)}
+                      type="button"
+                    >
+                      取單
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {cart.length === 0 ? (
@@ -853,6 +1035,15 @@ function VariantPicker({
   );
 }
 
+/**
+ * 手動秤重輸入面板（docs/124 §2.5 W4 兜底路徑）。
+ *
+ * 冇 USB 秤 / 藍牙秤 / 條碼標籤秤嘅商戶，就係靠呢個面板：**人手讀秤 → 打數字**。
+ * 所以一定要有：皮重預設（膠袋 / 膠盒）、即時金額、觸控鍵盤。
+ *
+ * 🔴 皮重 > 毛重、或者淨重太輕 → **一定要講出來**，唔可以靜默當 0
+ * （否則店員見到「加入購物車」灰咗都唔知點解）。
+ */
 function WeightPad({
   product,
   onConfirm,
@@ -863,44 +1054,143 @@ function WeightPad({
   onClose: () => void;
 }) {
   const [value, setValue] = useState("");
-  const kg = Number(value);
-  const valid = Number.isFinite(kg) && kg > 0;
+  const [tare, setTare] = useState<TarePreset>(DEFAULT_TARE_PRESETS[0]);
+  /** 自訂皮重（輸入後優先於預設） */
+  const [customTare, setCustomTare] = useState("");
+  const [showCustom, setShowCustom] = useState(false);
+
   const unit = priceOf(product);
+  const gross = Number(value);
+  const hasGross = Number.isFinite(gross) && gross > 0;
+  const tareKg = showCustom ? Math.max(0, Number(customTare) || 0) : tare.kg;
+
+  const w = useMemo(
+    () => computeWeigh({ grossKg: hasGross ? gross : 0, tareKg, unitPrice: unit }),
+    [hasGross, gross, tareKg, unit],
+  );
+
+  const press = (k: string) =>
+    setValue((v) => {
+      if (k === "⌫") return v.slice(0, -1);
+      if (k === "C") return "";
+      // 唔准兩個小數點
+      if (k === "." && v.includes(".")) return v;
+      // 小數最多 3 位（克級精度）
+      const dot = v.indexOf(".");
+      if (dot >= 0 && v.length - dot > 3 && k !== ".") return v;
+      return `${v}${k}`;
+    });
 
   return (
     <Modal onClose={onClose} title={`稱重 · ${product.name}`}>
       <div className="rounded-xl bg-slate-50 p-3">
-        <div className="text-[11px] font-semibold text-slate-500">輸入重量（kg）</div>
-        <div className="mt-1 text-[26px] font-extrabold tabular-nums">{value || "0"}</div>
+        <div className="flex items-baseline gap-2">
+          <div className="text-[11px] font-semibold text-slate-500">秤上毛重（kg）</div>
+          {tareKg > 0 ? (
+            <div className="ml-auto text-[11px] font-semibold text-orange-700">
+              已扣皮 {formatKg(tareKg)} kg → 淨重 {formatKg(w.netKg)} kg
+            </div>
+          ) : null}
+        </div>
+        <div className="mt-1 text-[30px] font-extrabold tabular-nums">{value || "0"}</div>
       </div>
+
+      {/* 皮重預設（生鮮必用：膠袋 / 膠盒本身有重量） */}
+      <div className="mt-3">
+        <div className="text-[11.5px] font-semibold text-slate-600">皮重（容器重量）</div>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {DEFAULT_TARE_PRESETS.map((t) => (
+            <button
+              key={t.id}
+              className={`min-h-[40px] rounded-xl px-3 text-[12px] font-semibold ${
+                !showCustom && tare.id === t.id
+                  ? "bg-orange-500 text-white"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+              }`}
+              onClick={() => {
+                setTare(t);
+                setShowCustom(false);
+              }}
+              type="button"
+            >
+              {t.label}
+              {t.kg > 0 ? <span className="ml-1 font-normal opacity-70">{formatKg(t.kg)}</span> : null}
+            </button>
+          ))}
+          <button
+            className={`min-h-[40px] rounded-xl px-3 text-[12px] font-semibold ${
+              showCustom ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+            }`}
+            onClick={() => setShowCustom(true)}
+            type="button"
+          >
+            自訂…
+          </button>
+        </div>
+        {showCustom ? (
+          <input
+            className="mt-2 min-h-[44px] w-full rounded-xl border border-slate-300 px-3 text-[14px] tabular-nums outline-none focus:border-orange-400"
+            inputMode="decimal"
+            onChange={(e) => setCustomTare(e.target.value)}
+            placeholder="自訂皮重（kg），例如 0.02"
+            value={customTare}
+          />
+        ) : null}
+      </div>
+
       <div className="mt-3 grid grid-cols-3 gap-2">
         {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫"].map((k) => (
           <button
             key={k}
             className="min-h-[52px] rounded-xl border border-slate-300 text-[18px] font-bold text-slate-800 hover:bg-slate-50"
-            onClick={() => setValue((v) => (k === "⌫" ? v.slice(0, -1) : `${v}${k}`))}
+            onClick={() => press(k)}
             type="button"
           >
             {k}
           </button>
         ))}
+        <button
+          className="col-span-3 min-h-[44px] rounded-xl border border-slate-300 text-[13px] font-semibold text-slate-600 hover:bg-slate-50"
+          onClick={() => press("C")}
+          type="button"
+        >
+          清除
+        </button>
       </div>
-      <div className="mt-3 flex items-center justify-between text-[13px] font-semibold">
-        <span className="text-slate-500">
-          單價 {money(unit)} / {product.unit}
-        </span>
-        <span className="text-[17px] font-extrabold text-orange-600">
-          {valid ? money(round2(kg * unit)) : "$0.00"}
-        </span>
+
+      <div className="mt-3 rounded-xl bg-slate-50 p-3">
+        <div className="flex items-center justify-between text-[12.5px] font-semibold">
+          <span className="text-slate-500">
+            單價 {money(unit)} / kg{product.plu ? ` · PLU ${product.plu}` : ""}
+          </span>
+          <span className="text-[20px] font-extrabold text-orange-600">{money(w.amount)}</span>
+        </div>
+        {/* ⚠️ 唔可以靜默：唔講清楚點解入唔到車，店員只會反覆撳 */}
+        {w.tareExceedsGross ? (
+          <p className="mt-1.5 text-[11.5px] font-semibold text-rose-600">
+            皮重（{formatKg(tareKg)} kg）大過毛重 → 請確認秤已歸零，或者改細皮重
+          </p>
+        ) : w.tooLight && hasGross ? (
+          <p className="mt-1.5 text-[11.5px] font-semibold text-amber-700">
+            淨重太輕（{formatKg(w.netKg)} kg）→ 請重新磅重
+          </p>
+        ) : null}
       </div>
+
       <button
         className="mt-3 w-full rounded-2xl bg-orange-600 py-3.5 text-[15px] font-bold text-white disabled:bg-slate-300"
-        disabled={!valid}
-        onClick={() => onConfirm(Math.round(kg * 1000) / 1000)}
+        disabled={!w.ok}
+        onClick={() => onConfirm(w.netKg)}
         type="button"
       >
-        加入購物車
+        {w.ok ? `加入購物車 · ${money(w.amount)}` : "加入購物車"}
       </button>
+
+      <p className="mt-2 text-center text-[10.5px] leading-relaxed text-slate-400">
+        價錢一律由 POS 計（秤端唔入商品庫）→ 唔會出現「秤上價 ≠ POS 價」。
+        <br />
+        有 USB 秤 / 藍牙秤可以喺設備設置接上，之後免手動輸入。
+      </p>
     </Modal>
   );
 }

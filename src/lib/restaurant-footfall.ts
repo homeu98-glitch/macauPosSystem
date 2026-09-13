@@ -4,7 +4,8 @@
 // 真門口計數器到位後，只要將 loadFootfallAll 換做讀取硬件 / Ledger RPC 即可。
 
 import type { PosOrder } from "@/lib/types";
-import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, splitReportRangeArg, type ReportRangeArg } from "@/lib/ledger/report-period";
+import { macauDateKeyOf } from "@/lib/ledger/date-range";
 
 // 🛡️ 加固（db review §4.2 #5）：人流記錄改為 per-store。
 // 舊 key `macau-pos-footfall` 係全局共用，多店環境會互相覆蓋。新寫入按
@@ -46,17 +47,37 @@ export function saveFootfallDay(dateKey: string, n: number, storeId?: string | n
   return all;
 }
 
-/** 選取範圍涵蓋嘅澳門日 key；"all" 返回 null（＝所有已記錄日子）。 */
-export function macauDateKeysInRange(range: ReportRangeKey): string[] | null {
-  if (range === "all") return null;
+/** 選取範圍涵蓋嘅澳門日 key；"all" 或未套用嘅 "custom" 返回 null（＝所有已記錄日子）。
+ *
+ * ⚠️ 2026-09-13：加「自訂」支援。自訂區間會展開成逐日 key（含頭含尾），
+ * 安全上限 366 日，避免用戶揀咗 10 年區間時產生巨大陣列。
+ */
+export function macauDateKeysInRange(range: ReportRangeArg): string[] | null {
+  const { key, custom } = splitReportRangeArg(range);
+  if (key === "all") return null;
+
+  if (key === "custom") {
+    if (!custom) return null;
+    const keys: string[] = [];
+    const start = new Date(`${custom.start}T00:00:00+08:00`);
+    const end = new Date(`${custom.end}T00:00:00+08:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+    for (let d = start, i = 0; d.getTime() <= end.getTime() && i < 366; i++) {
+      const k = macauDateKeyOf(d);
+      if (k) keys.push(k);
+      d = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+    }
+    return keys;
+  }
+
   const now = new Date();
-  if (range === "today") return [macauDateKey(now)];
-  if (range === "yesterday") {
+  if (key === "today") return [macauDateKey(now)];
+  if (key === "yesterday") {
     const y = new Date(now);
     y.setDate(y.getDate() - 1);
     return [macauDateKey(y)];
   }
-  const days = range === "7d" ? 7 : 30;
+  const days = key === "7d" ? 7 : 30;
   const keys: string[] = [];
   for (let i = 0; i < days; i++) {
     const d = new Date(now);
@@ -67,19 +88,21 @@ export function macauDateKeysInRange(range: ReportRangeKey): string[] | null {
 }
 
 /** 選取範圍內累計入店人次。 */
-export function footfallTotalInRange(map: Record<string, number>, range: ReportRangeKey): number {
+export function footfallTotalInRange(map: Record<string, number>, range: ReportRangeArg): number {
   const keys = macauDateKeysInRange(range);
   if (keys === null) return Object.values(map).reduce((s, v) => s + v, 0);
   return keys.reduce((s, k) => s + (map[k] || 0), 0);
 }
 
-/** 可編輯嘅焦點日：昨天範圍記昨天，否則記今天。 */
-export function footfallFocusKey(range: ReportRangeKey): string {
-  if (range === "yesterday") {
+/** 可編輯嘅焦點日：昨天範圍記昨天、自訂記結束日，否則記今天。 */
+export function footfallFocusKey(range: ReportRangeArg): string {
+  const { key, custom } = splitReportRangeArg(range);
+  if (key === "yesterday") {
     const y = new Date();
     y.setDate(y.getDate() - 1);
     return macauDateKey(y);
   }
+  if (key === "custom" && custom) return custom.end;
   return macauDateKey(new Date());
 }
 
@@ -92,7 +115,7 @@ export function footfallFocusKey(range: ReportRangeKey): string {
  * refunded / partially_refunded 一律唔計，cancelled / 進行中單（open / sent_to_kitchen）唔計。
  * 純參考數字，唔再由使用者手動輸入；如要重啟手動人流可保留舊 localStorage key 但不再依賴。
  */
-export function computeFootfallFromOrders(orders: PosOrder[], range: ReportRangeKey): number {
+export function computeFootfallFromOrders(orders: PosOrder[], range: ReportRangeArg): number {
   const countable = orders.filter((o) => o.status === "settled" || o.status === "paid");
   const inRange = countable.filter((o) => orderMatchesReportRange(o, range));
   let total = 0;

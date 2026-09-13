@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
+import type { CustomDateRange } from "@/lib/ledger/date-range";
 import {
   getMerchantReportSummary,
   type LedgerReportSummary,
@@ -21,7 +23,7 @@ import {
   loadSoldOutState,
   savePosLocalSettings,
 } from "@/lib/storage";
-import { orderMatchesReportRange, ledgerReportRangeForKey, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, reportRangeLabel, resolveReportRange, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
 import {
   computeIngredientConsumption,
   inMacauMonth,
@@ -39,14 +41,25 @@ import { readNetworkOnline } from "@/lib/use-network-online";
 import type { PosOrder, PosLocalSettings } from "@/lib/types";
 import Link from "next/link";
 
-// 篩選順序統一：今天 / 昨天 / 7天 / 30天 / 全部（置右上）
+// 篩選順序統一：今天 / 昨天 / 7天 / 30天 / 全部 / 自訂（置右上）
 const FILTERS: Array<{ key: ReportRangeKey; label: string }> = [
   { key: "today", label: "今天" },
   { key: "yesterday", label: "昨天" },
   { key: "7d", label: "7天" },
   { key: "30d", label: "30天" },
   { key: "all", label: "全部" },
+  { key: "custom", label: "自訂" },
 ];
+
+/** 由 selection 取 UI chip 用嘅 key。 */
+function reportRangeKeyOf(range: ReportRangeArg): ReportRangeKey {
+  return splitReportRangeArg(range).key;
+}
+
+/** 由 selection 取已套用嘅自訂區間（冇 → null）。 */
+function reportRangeCustomOf(range: ReportRangeArg): CustomDateRange | null {
+  return splitReportRangeArg(range).custom;
+}
 
 function macauHour(iso: string): number {
   try {
@@ -435,7 +448,7 @@ function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
   };
 }
 
-function aggregate(orders: PosOrder[], range: ReportRangeKey, onlineWithItems?: OnlineDishSource[]): Agg {
+function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: OnlineDishSource[]): Agg {
   const counted = orders.filter((o) => isSaleCountable(o));
   const inRange = counted.filter((o) => orderMatchesReportRange(o, range));
 
@@ -682,11 +695,10 @@ function useReportMerchantId(): string | null {
 }
 
 /** 報表 backfill 需要嘅最大時間區間：
- *  - today / yesterday / 7d / 30d：按實際區間拉，減少 payload 同確保唔會被分頁截斷。
+ *  - today / yesterday / 7d / 30d / custom：按實際區間拉，減少 payload 同確保唔會被分頁截斷。
  *  - all：用 365 日滾動窗口（同 Ledger RPC 一致；足夠覆蓋絕大多數餐廳營運週期）。 */
-function backfillRangeFor(range: ReportRangeKey, now = new Date()): { start: string; end: string } | null {
-  if (range === "all") return ledgerReportRangeForKey("all", now);
-  return ledgerReportRangeForKey(range, now);
+function backfillRangeFor(range: ReportRangeArg, now = new Date()): { start: string; end: string } | null {
+  return resolveReportRange(range, now);
 }
 
 export type RestaurantDailyReportProps = {
@@ -712,9 +724,9 @@ export type RestaurantDailyReportProps = {
    *  admin 報表頁嘅「重新載入」用 remount（key 帶 refreshSeq）重置本組件全部 state，
    *  靠呢個 prop 喺 remount 後還原用戶已選嘅範圍（今日/昨日/7天/30天/全部），
    *  否則刷新完會彈返「今日」。 */
-  initialRange?: ReportRangeKey;
+  initialRange?: ReportRangeArg;
   /** 範圍變更通知上一層 —— 畀 admin 頁面記住用戶選擇，remount 後用 initialRange 還原。 */
-  onRangeChange?: (range: ReportRangeKey) => void;
+  onRangeChange?: (range: ReportRangeArg) => void;
   /** 軟刷新信號（自動刷新用）：值一變即重跑 POS 訂單 / Ledger 線上單 / Ledger 彙總三條
    *  fetch effect，**唔 remount、唔清舊數據** → 畫面上一直有數字，新數據返嚟先換。
    *  由外殼 `RestaurantDailyReport` 注入；直接使用本組件（唔經外殼）時唔傳即可。 */
@@ -765,7 +777,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   const [refreshToken, setRefreshToken] = useState(0);
   // 範圍提升到外殼：主體唔再 remount，但 keep 住呢個提升冇壞處
   // （admin 頁面自己 remount 我哋時，`initialRange` 仍然要有人記住）。
-  const [range, setRange] = useState<ReportRangeKey>(props.initialRange ?? "today");
+  const [range, setRange] = useState<ReportRangeArg>(props.initialRange ?? "today");
   const lastRefreshRef = useRef(0);
   const onRangeChange = props.onRangeChange;
 
@@ -801,7 +813,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
   }, [bump]);
 
   const handleRange = useCallback(
-    (next: ReportRangeKey) => {
+    (next: ReportRangeArg) => {
       setRange(next);
       onRangeChange?.(next);
     },
@@ -821,7 +833,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
 function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // initialRange 只用作初始值；之後由用戶喺 UI 切。admin 頁面重新載入（remount）
   // 時會把上次嘅範圍傳返入嚟，避免刷新後彈返「今日」。
-  const [range, setRange] = useState<ReportRangeKey>(props.initialRange ?? "today");
+  const [range, setRange] = useState<ReportRangeArg>(props.initialRange ?? "today");
   // 初始 orders 設為空：避免 hydration / 切店時短暫讀取錯誤 scope 嘅 localStorage。
   // 真正訂單由下方 backfill effect 喺確認 merchantId 後拉取。
   const [orders, setOrders] = useState<PosOrder[]>([]);
@@ -992,7 +1004,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
      */
     dataSource: "idle" | "cloud" | "cloud-partial" | "local-fallback" | "empty";
     merchantId: string | null;
-    currentRange: ReportRangeKey;
+    currentRange: ReportRangeArg;
     fetchedCount: number;
     localCount: number;
     finalCount: number;
@@ -1081,6 +1093,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   useEffect(() => {
     notifyRange?.(range);
   }, [range, notifyRange]);
+
+  /** chips 變更：更新本體 state；回報上一層由上方 effect 統一處理（唔喺度重複 call）。 */
+  const handleRangeChangeInBody = useCallback((key: ReportRangeKey, custom: CustomDateRange | null) => {
+    setRange(custom ? { key, custom } : key);
+  }, []);
 
   /** 載入中：POS 訂單補載、Ledger 彙總未完成，或任一線上單抓取仲 loading。
    *  初次 mount 兩個 done flag 都係 false → busy = true（上一層可按佢 disable 按鈕）。 */
@@ -1615,7 +1632,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   }, [merchantId, range, isAdminMode, refreshToken]);
 
   useEffect(() => {
-    async function safeLedger(r: ReportRangeKey): Promise<LedgerReportSummary | null> {
+    async function safeLedger(r: ReportRangeArg): Promise<LedgerReportSummary | null> {
       try {
         const restored = await restoreLedgerSession();
         if (!restored) return null;
@@ -2055,7 +2072,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `每日總結_${range}_${todayKey}.csv`;
+    link.download = `每日總結_${reportRangeLabel(range).replace(/[\\/:*?"<>|]/g, "-")}_${todayKey}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -2093,20 +2110,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 >
                   導出 CSV
                 </button>
-                <div className="flex gap-1.5">
-                  {FILTERS.map((f) => (
-                    <button
-                      key={f.key}
-                      type="button"
-                      onClick={() => setRange(f.key)}
-                      className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${
-                        range === f.key ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
+                <DateRangeFilterChips
+                  options={FILTERS}
+                  value={reportRangeKeyOf(range)}
+                  custom={reportRangeCustomOf(range)}
+                  onChange={handleRangeChangeInBody}
+                  size="sm"
+                />
               </div>
             </div>
           </div>

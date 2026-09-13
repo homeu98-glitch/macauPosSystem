@@ -160,6 +160,7 @@ import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-f
 // 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
+import { isOnlineDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
 
 /**
  * 已補印嘅「加單」簽名（`orderId` → 已出過嘅新增菜品簽名集合）。
@@ -1841,18 +1842,19 @@ export function PosApp() {
   // 全單備註鎖定（docs/84）：一送出（sent_to_kitchen）即固定。
   // draft（未送出）同 reopened（返結帳）先改得；結完帳 setActiveOrderId(null) → 自動解鎖，唔影響下一張單。
   const orderNoteLocked = isOrderNoteLocked(workspaceOrder);
-  const unsettledOrder = useMemo(
-    () => orders.find((order) => order.status === "sent_to_kitchen") ?? null,
-    [orders],
-  );
   // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單 —— 所有結帳入口（桌台圖／快餐／線上面板）
   // 都會先 setPayingOrderId(target.id)，所以淨限 payingOrderId 或**當前枱自己**嘅未結單。
-  // ⚠️ 唔可以 fallback 全域 unsettledOrder（全店第一張 sent_to_kitchen 單）：
+  // ⚠️ 唔可以 fallback 全域「全店第一張待結單」：
   // 咁樣進入一張空枱時，收銀面板會鬼祟帶入第張枱嘅小計（bug：空枱小計 112）。
-  // 結帳 handler（confirmPayment/comp/onlinePaid）自己保有 unsettledOrder fallback，唔受影響。
+  // 結帳 handler（confirmPayment/comp/onlinePaid）自己保有全域 fallback，唔受影響。
+  //
+  // 🔴 2026-09-13：除咗 `sent_to_kitchen` / `reopened`，仲要認「已付款嘅線上堂食單」
+  // （`paid` + 帶 `onlineOrderId` + 真枱）。呢批單係「排位」寫入嘅（`assignLedgerOrderToTable`），
+  // 錢已經喺 Ledger 收咗，結帳只收加菜差額（`prepaidAmount`）→ 舊寫法認唔到 → 張單卡死。
+  // 判準收喺 `isSettleableOrder()`（純函式，有測試），本地堂食單完全唔會行到呢條路。
   const currentSettlementOrder =
     (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-    (!isQuickMode && (activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened") ? activeOrder : null);
+    (!isQuickMode && activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null);
   // docs/95 §14：base 總額必須 = subtotal + 服務費 + 稅，同 orderTotals() / 落單寫入（upsertCurrentOrder）一致。
   // 之前呢度硬寫 `serviceChargeAmount: 0` 兼 `total = subtotal + taxAmount`，
   // 只要 rules.serviceChargeRate > 0，結帳嗰刻服務費會靜默消失（落單收據有、結帳冇 → 收少咗錢）。
@@ -4023,12 +4025,13 @@ export function PosApp() {
       return;
     }
 
+    // 🔴 2026-09-13：最後一重 fallback 由「全店第一張 sent_to_kitchen」改為
+    // 「全店第一張可結帳單」（`isSettleableOrder`）。同樣係令排位後已付款嘅線上堂食單行到結帳。
     const targetOrder =
       (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder && (activeOrder.status === "sent_to_kitchen" || activeOrder.status === "reopened")
-        ? activeOrder
-        : null) ??
-      unsettledOrder;
+      (activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null) ??
+      orders.find((order) => isSettleableOrder(order)) ??
+      null;
     if (!targetOrder) return;
 
     await runCheckout(targetOrder);
@@ -4193,10 +4196,9 @@ export function PosApp() {
 
     const targetOrder =
       (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder && (activeOrder.status === "sent_to_kitchen" || activeOrder.status === "reopened")
-        ? activeOrder
-        : null) ??
-      unsettledOrder;
+      (activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null) ??
+      orders.find((order) => isSettleableOrder(order)) ??
+      null;
     if (!targetOrder) {
       setToast({ tone: "error", message: "搵唔到要免單嘅訂單。" });
       return;
@@ -4209,8 +4211,9 @@ export function PosApp() {
     if (!bootstrap) return;
     const targetOrder =
       (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder?.status === "sent_to_kitchen" ? activeOrder : null) ??
-      unsettledOrder;
+      (activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null) ??
+      orders.find((order) => isSettleableOrder(order)) ??
+      null;
     if (!targetOrder) return;
 
     const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
@@ -4291,10 +4294,10 @@ export function PosApp() {
       return;
     }
 
+    // 🔴 2026-09-13：判準收喺 `isSettleableOrder()`。舊寫法只認 `sent_to_kitchen` / `reopened`，
+    // 令「排位後已付款嘅線上堂食單」（`paid` + `onlineOrderId` + 真枱）永遠撳唔到結帳。
     const targetOrder =
-      activeOrder?.status === "sent_to_kitchen" || activeOrder?.status === "reopened"
-        ? activeOrder
-        : orders.find((order) => order.status === "sent_to_kitchen" || order.status === "reopened");
+      activeOrder && isSettleableOrder(activeOrder) ? activeOrder : orders.find((order) => isSettleableOrder(order));
     if (!targetOrder) {
       setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
       return;
@@ -4418,34 +4421,45 @@ export function PosApp() {
 
                 <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
                   {visibleTables.map((table) => {
-                    const status = tableOrderMap.get(table.id)?.status ?? "idle";
+                    const tableOrder = tableOrderMap.get(table.id);
+                    const status = tableOrder?.status ?? "idle";
                     const isReopenedTable = status === "reopened";
                     const isOccupied = status !== "idle";
+                    // 🔴 2026-09-13 商家口徑：線上已付款嘅堂食單排位入枱後，本地寫 `paid`
+                    // （錢喺 Ledger 收咗，只等收尾／加菜）→ 桌台卡要**綠色**「已結帳 / 待收尾」，
+                    // 唔可以同一般「已下單」嘅橙色混在一起（收銀一眼分唔到邊張已經收咗錢）。
+                    // 判準用 `isOnlineDineInOrder()`（帶 Ledger 單 id ＋ 真枱號），
+                    // 同結帳入口放寬、排位自動推進 Ledger 係**同一份**邊界條件。
+                    const isPaidOnlineDineInTable =
+                      !!tableOrder && status === "paid" && isOnlineDineInOrder(tableOrder);
                     // 枱狀態為空閒時，唔應再顯示舊單嘅入座人數，否則會出現「空閒 / 已坐 1/—」
                     const seatedCount = isOccupied ? (seatedPartySizes[table.id] ?? 0) : 0;
                     const total = table.capacity ?? 0;
                     const occupancy = total > 0 ? `${seatedCount}/${total}` : `${seatedCount}/—`;
                     const label =
-                      isReopenedTable
-                        ? "待重結"
-                        : status === "sent_to_kitchen"
-                          ? "已下單"
-                          : status === "draft"
-                            ? "未下單"
-                            : "空閒";
+                      isPaidOnlineDineInTable
+                        ? "已結帳 / 待收尾"
+                        : isReopenedTable
+                          ? "待重結"
+                          : status === "sent_to_kitchen"
+                            ? "已下單"
+                            : status === "draft"
+                              ? "未下單"
+                              : "空閒";
                     const labelFull = label;
                     // 開桌（非空閒）枱：整張格子實底高對比配色，方便一眼分開「有單」vs「空閒」
-                    // —— 待重結用琥珀、已下單/未下單用橙；空閒維持白底。
-                    const cardTone = isReopenedTable
-                      ? "border-amber-600 bg-amber-500 text-white"
-                      : isOccupied
-                        ? "border-orange-600 bg-orange-500 text-white"
-                        : "border-slate-200 bg-white text-slate-900";
+                    // —— 已結帳待收尾用綠、待重結用琥珀、已下單/未下單用橙；空閒維持白底。
+                    const cardTone = isPaidOnlineDineInTable
+                      ? "border-emerald-600 bg-emerald-500 text-white"
+                      : isReopenedTable
+                        ? "border-amber-600 bg-amber-500 text-white"
+                        : isOccupied
+                          ? "border-orange-600 bg-orange-500 text-white"
+                          : "border-slate-200 bg-white text-slate-900";
                     const areaTone = isOccupied ? "text-white/85" : "text-slate-500";
                     const badgeTone = isOccupied ? "bg-white/25 text-white" : "bg-orange-50 text-orange-700";
                     // 應收金額（桌台總覽）：該枱最新一張未結帳單嘅 total 扣返已預付（prepaid）。
                     // 未結帳單 total = subtotal + 服務費 + 稅（結帳嗰刻先扣折扣/抹零重寫），同結帳頁 paymentBase 口徑一致。
-                    const tableOrder = tableOrderMap.get(table.id);
                     const tableDueAmount = tableOrder
                       ? Math.max(0, round2(tableOrder.total - (tableOrder.prepaidAmount ?? 0)))
                       : 0;

@@ -241,26 +241,11 @@ export function AppSidebar() {
 
 
 
-          {/* 切換工作台（逃生門）—— 2026-09-13 新增。
-              揀錯工作台之後唔應該逼人登出再登入（仲要重新打 8 位帳號 + PIN），
-              所以留一個直接返去「選擇工作台」頁嘅入口。 */}
-          <Link
-
-            className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
-
-              pathname === "/select-workbench" ? "bg-orange-500 text-white" : "bg-slate-800 text-slate-200 hover:bg-slate-700"
-
-            }`}
-
-            href="/select-workbench"
-
-            title="切換工作台（重新揀呢部機嘅崗位）"
-
-          >
-
-            工作台
-
-          </Link>
+          {/* 切換工作台嘅入口**已經搬去「設置」頁 header**（2026-09-13）。
+              原因：側欄 72px 闊，每行都係稀缺資源；「工作台」係一次性設定，
+              擺喺日常動線（點餐／訂單／會員）隔籬會令人以為同樣常用。
+              入口而家喺 `device-settings.tsx` 嘅 `.hctrl`（「線上訂單 · 營業中」左邊），
+              仍然係 `href="/select-workbench"` 直接跳 —— 逃生門冇消失，只係深一層。 */}
 
           <Link
 
@@ -290,7 +275,6 @@ export function AppSidebar() {
 
           {[
             ...navItems,
-            { href: "/select-workbench", label: "工作台", short: "台" },
             { href: "/settings", label: "設置", short: "設" },
           ].map((item) => {
 

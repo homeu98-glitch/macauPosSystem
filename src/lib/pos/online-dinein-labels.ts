@@ -41,6 +41,71 @@ export type OnlineTableInfo = {
   paymentStatus?: string | null;
 };
 
+/**
+ * 已排位嘅線上堂食單（＝已被 POS「已結帳、待收尾」管理）。
+ *
+ * 🔴 判準同 `isLocalOrTransferredDineIn()`（`pos-order-filters.ts`）一致：
+ * **有 `onlineOrderId` ＋ 真枱號（≠ counter）**。快餐模式採納嘅 counter 單唔算。
+ *
+ * ⚠️ 呢個係「結帳入口放寬」同「排位自動推 Ledger 狀態」**兩者共用**嘅唯一邊界 ——
+ * 本地堂食單（冇 `onlineOrderId`）完全唔會行到呢兩條路，所以舊口徑零改動。
+ */
+export type SettleableOrderInfo = OnlineTableInfo & {
+  status?: string | null;
+  onlineOrderId?: string | null;
+};
+
+/**
+ * 線上單係唔係「堂食流程」（2026-09-13）。
+ *
+ * 🔴 兩個功能嘅**共同隔離閘**，一定要收埋一份：
+ *   1. 結帳入口放寬（`isSettleableOrder()` 第 2 條）；
+ *   2. 排位時自動推 Ledger 狀態（`syncOnlineDineInCompletion()`）。
+ *
+ * 條件：**有 Ledger 單 id**（`onlineOrderId`）＋ **真枱號**（`tableId` 非空且 ≠ `"counter"`）。
+ * 唔符合嘅一律唔關事：本地堂食單、快餐 counter 單、自取 / 外賣單。
+ *
+ * ⚠️ 純欄位判定，同 `tabType` 無關 —— 排位之後本地單嘅 `tabType` 未必仍係 `dine_in`。
+ */
+export function isOnlineDineInOrder(order: {
+  onlineOrderId?: string | null;
+  tableId?: string | null;
+}): boolean {
+  return Boolean(order.onlineOrderId) && hasTableAssigned(order);
+}
+
+/** 未收款、待收尾嘅狀態（一向可以結帳）。 */
+function isOpenSettleableStatus(status: string | undefined | null): boolean {
+  return status === "sent_to_kitchen" || status === "reopened";
+}
+
+/**
+ * 呢張單可唔可以入結帳流程（2026-09-13）。
+ *
+ * 兩條路：
+ *   1. 未收款嘅活躍單：`sent_to_kitchen` / `reopened`（本地堂食 + 快餐都係咁，口徑不變）；
+ *   2. 🔴 **已付款嘅線上堂食單**（已排位）：`onlineOrderId` ＋ 真枱號 ＋ `status === "paid"`。
+ *
+ * ## 為何要第 2 條（實案 bug）
+ *
+ * `assignLedgerOrderToTable()` 對「線上已付」單寫入 `status: "paid"` +
+ * `prepaidAmount = 全額`（`ledger-pos-bridge.ts`）。但結帳入口舊寫法只認
+ * `sent_to_kitchen` / `reopened` → 撳「去結帳」彈「目前沒有待結帳訂單」，
+ * 而枱面因為 `openOrders` 包含 `paid` 而永遠被佔用 → **張單卡死冇出路**。
+ *
+ * `prepaidAmount` 本來就係為呢個場景設計（`payableBeforeMember = max(0, total − prepaid)`
+ * ＝只收加菜差額），所以放寬入口係補返設計缺口，唔係新加能力。
+ *
+ * ⚠️ 只認「真枱」：快餐模式嘅線上 counter 單（`tableId === "counter"`）唔屬堂食流程，
+ * 佢行快餐 strip 嘅「可取餐 → 完成」，唔應該經呢度結帳。
+ */
+export function isSettleableOrder(order: SettleableOrderInfo): boolean {
+  if (isOpenSettleableStatus(order.status)) return true;
+  return (
+    Boolean(order.onlineOrderId) && hasTableAssigned(order) && order.status === "paid"
+  );
+}
+
 const BADGE_EMERALD: OnlineBadge = {
   label: "",
   bgClass: "bg-emerald-50",

@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>確認稿 · 側欄移除「工作台」＋ 設置頁加入口（2026-09-13）</title>
+<style>
+  :root{
+    --orange-500:#f97316; --orange-600:#ea580c; --orange-200:#fed7aa;
+    --slate-950:#020617; --slate-900:#0f172a; --slate-800:#1e293b; --slate-700:#334155;
+    --slate-600:#475569; --slate-500:#64748b; --slate-400:#94a3b8;
+    --slate-200:#e2e8f0; --slate-100:#f1f5f9; --slate-50:#f8fafc;
+    --emerald-600:#059669; --emerald-500:#10b981;
+    --amber-500:#f59e0b; --indigo-600:#4f46e5; --rose-500:#f43f5e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:#111827;color:#e5e7eb;
+    font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Noto Sans CJK SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ── 評審工具列（唔屬產品介面）────────────────── */
+  .review{max-width:1180px;margin:0 auto;padding:18px 16px 0}
+  .rtitle{font-size:13px;font-weight:700;letter-spacing:.08em;color:#94a3b8;text-transform:uppercase}
+  .rsub{font-size:13px;color:#cbd5e1;margin-top:6px;line-height:1.6}
+  .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .tabs button{
+    font:inherit;font-size:13px;font-weight:700;cursor:pointer;
+    padding:9px 14px;border-radius:11px;border:1px solid #334155;
+    background:#1e293b;color:#cbd5e1;
+  }
+  .tabs button.on{background:var(--orange-500);border-color:var(--orange-500);color:#fff}
+  .rnote{
+    margin-top:12px;padding:11px 14px;border-radius:11px;
+    background:#1e293b;border:1px solid #334155;
+    font-size:12.5px;line-height:1.65;color:#cbd5e1;
+  }
+  .rnote b{color:#fdba74}
+
+  /* ── 固定畫布 ────────────────────────────────── */
+  .stage{max-width:1180px;margin:14px auto 40px;position:relative;overflow:hidden;border-radius:20px}
+  .canvas{
+    width:1180px;height:960px;position:absolute;top:0;left:0;
+    transform-origin:top left;overflow:hidden;background:#e2e8f0;
+    display:block;
+  }
+  .screenwrap{display:none;width:1180px;height:960px;position:absolute;top:0;left:0}
+  .screenwrap.on{display:flex;flex-direction:column}
+  .stack{position:relative;z-index:2;flex:1;min-height:0;display:flex;flex-direction:column}
+
+  /* 確認稿標註（唔屬產品介面） */
+  .anno{position:absolute;z-index:9;border-radius:12px;padding:10px 12px;
+    background:rgba(15,23,42,.90);border:1px dashed rgba(245,158,11,.85);
+    font-size:11.5px;line-height:1.6;color:#e2e8f0}
+  .anno-t{font-size:10.5px;font-weight:800;letter-spacing:.1em;color:#fcd34d;margin-bottom:5px}
+  .anno b{color:#fdba74}
+  .anno-line{position:absolute;z-index:8;height:0;border-top:1px dashed rgba(245,158,11,.9)}
+  .anno-dot{position:absolute;z-index:8;width:7px;height:7px;border-radius:999px;background:#f59e0b}
+  .badge-x{position:absolute;z-index:10;display:grid;place-items:center;width:22px;height:22px;border-radius:999px;
+    background:var(--rose-500);color:#fff;font-size:13px;font-weight:900;line-height:1}
+  .badge-plus{position:absolute;z-index:10;display:grid;place-items:center;width:22px;height:22px;border-radius:999px;
+    background:var(--emerald-500);color:#fff;font-size:15px;font-weight:900;line-height:1}
+
+  /* ══════ 產品介面（淺色，沿用真實 POS Tailwind 色）══════ */
+  .app{flex:1;min-height:0;display:flex;background:#e2e8f0;position:relative;overflow:hidden}
+  .sidebar{
+    width:72px;flex:none;align-self:stretch;height:100%;background:#0f172a;color:#fff;padding:10px 7px;
+    display:flex;flex-direction:column;gap:6px;overflow:hidden;
+  }
+  .sb-scroll{flex:1;min-height:0;overflow-y:auto;display:grid;gap:5px;align-content:start}
+  .sb-nav{
+    display:flex;flex-direction:column;align-items:center;gap:3px;
+    border-radius:13px;padding:5px 4px;font-size:10.5px;font-weight:600;
+    background:#1e293b;color:#e2e8f0;
+  }
+  .sb-nav.on{background:var(--orange-500);color:#fff}
+  .sb-nav .ic{display:grid;place-items:center;width:20px;height:20px;border-radius:999px;background:rgba(255,255,255,.10);font-size:10px}
+  .sb-nav.on .ic{background:rgba(255,255,255,.22)}
+  .sb-nav .lb{white-space:pre-line;text-align:center;line-height:1.1}
+  .sb-more{text-align:center;font-size:9.5px;color:#64748b;padding:1px 0;line-height:1.25}
+  .sb-foot{margin-top:6px;display:grid;gap:5px;border-top:1px solid #334155;padding-top:6px;flex:none}
+  .sb-who{border-radius:12px;background:#1e293b;padding:5px;text-align:center;font-size:10px;font-weight:600;color:#e2e8f0}
+  .sb-who .rl{color:#94a3b8;margin-top:3px}
+  .sb-badge{border-radius:12px;padding:5px;text-align:center;font-size:11px;font-weight:600;background:rgba(5,150,105,.9);color:#fff}
+  .sb-btn{border-radius:12px;padding:5px;text-align:center;font-size:11px;font-weight:600;background:#1e293b;color:#e2e8f0}
+  .sb-btn.on{background:var(--orange-500);color:#fff}
+  .sb-btn.sel{background:var(--orange-500);color:#fff}
+
+  .mainarea{flex:1;min-width:0;display:flex;flex-direction:column;background:#f1f5f9}
+
+  /* 設置頁 header */
+  .sethead{background:#fff;border-bottom:1px solid var(--slate-200);padding:12px 16px;flex:none}
+  .sethead-in{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+  .sethead .h{font-size:18px;font-weight:600;color:#0f172a}
+  .sethead .s{font-size:14px;color:var(--slate-500);margin-top:4px}
+  .hctrl{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+  .linkbtn{border-radius:999px;background:var(--indigo-600);color:#fff;padding:8px 12px;font-size:14px;font-weight:600}
+
+  /* workbench entry button（新增） */
+  .wbtn{
+    display:flex;flex:none;align-items:center;gap:8px;border-radius:999px;
+    background:var(--orange-500);color:#fff;padding:8px 12px;font-size:14px;font-weight:600;
+  }
+  .wbtn .wi{display:grid;place-items:center;width:20px;height:20px;border-radius:999px;background:rgba(255,255,255,.22);font-size:11px}
+  .wbtn.ghost{background:#fff;color:#0f172a;box-shadow:inset 0 0 0 1px var(--slate-200)}
+  .wbtn.ghost .wi{background:var(--slate-100);color:var(--slate-600)}
+
+  /* 線上訂單標題列（online-orders.tsx embedded 版） */
+  .tabsrow{background:#fff;border-bottom:1px solid var(--slate-200);padding:12px 16px;flex:none}
+  .trow{display:flex;flex-wrap:wrap;align-items:center;gap:16px 16px}
+  .tblock{min-width:0;flex:none}
+  .tblock .tt{font-size:14px;font-weight:600;color:#0f172a}
+  .tblock .ts{font-size:12px;color:var(--slate-500);margin-top:4px}
+  .tchips{display:flex;min-width:0;flex:1;flex-wrap:wrap;align-items:center;gap:8px}
+  .chip{border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;background:var(--slate-100);color:var(--slate-700)}
+  .chip.on{background:var(--orange-500);color:#fff}
+  .trctl{margin-left:auto;display:flex;flex:none;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+  .pill-open{display:flex;flex:none;align-items:center;gap:8px;border-radius:999px;background:var(--slate-100);padding:6px 12px}
+  .pill-open .pl{font-size:12px;font-weight:600;color:var(--slate-600)}
+  .pill-open .pv{border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;background:var(--emerald-600);color:#fff}
+  .pill-auto{display:flex;flex:none;align-items:center;gap:8px;border-radius:999px;background:var(--slate-100);padding:6px 12px}
+  .pill-auto .pl{font-size:12px;font-weight:600;color:var(--slate-600)}
+  .pill-auto .pv{border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;background:var(--emerald-600);color:#fff}
+  .btn-refresh{border-radius:999px;background:#0f172a;color:#fff;padding:8px 12px;font-size:12px;font-weight:600}
+
+  /* 訂單卡 */
+  .listarea{flex:1;min-height:0;overflow:hidden;padding:12px}
+  .ocards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-content:start}
+  .ocard{border-radius:16px;border:1px solid var(--slate-200);background:#fff;padding:12px}
+  .ocard .top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start}
+  .ocard .code{font-size:13px;font-weight:600;color:#0f172a}
+  .ocard .ty{font-size:11px;color:var(--slate-500);margin-top:2px}
+  .ocard .st{flex:none;border-radius:999px;background:#fff7ed;padding:3px 8px;font-size:10px;font-weight:600;color:#c2410c}
+  .ocard .it{font-size:11px;color:var(--slate-500);margin-top:6px;line-height:1.5}
+  .ocard .acts{display:flex;gap:6px;margin-top:10px}
+  .ocard .b1{border-radius:12px;background:#0f172a;color:#fff;padding:6px 10px;font-size:11px;font-weight:600}
+  .ocard .b2{border-radius:12px;background:var(--orange-500);color:#fff;padding:6px 10px;font-size:11px;font-weight:600}
+
+  /* 快餐 bar */
+  .qbar{flex:none;border-top:1px solid var(--slate-200);background:#fff;padding:10px 12px}
+  .qbar .hrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;margin-bottom:8px}
+  .qbar .ht{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--slate-500)}
+
+  /* 手機 nav */
+  .mob{flex:1;min-height:0;background:#f8fafc;display:flex;flex-direction:column;justify-content:flex-end}
+  .mobnav{border-top:1px solid var(--slate-200);background:rgba(255,255,255,.95);padding:8px}
+  .mobrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(46px,1fr));gap:6px;padding-bottom:2px}
+  .mitem{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    border-radius:14px;padding:7px 4px;font-size:10px;font-weight:600;background:var(--slate-100);color:var(--slate-700);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mitem.on{background:var(--orange-500);color:#fff}
+  .mitem .mi{font-size:12px}
+
+  /* 對照頁 */
+  .flow{flex:1;min-height:0;background:#0b1220;padding:22px 26px;display:flex;flex-direction:column;gap:16px;overflow:hidden;justify-content:center}
+  .fbox{border-radius:18px;border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.05);padding:16px 18px}
+  .fbox.bad{border-color:rgba(244,63,94,.45);background:rgba(244,63,94,.08)}
+  .fbox.good{border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.08)}
+  .fhead{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .fhead h3{margin:0;font-size:14.5px;font-weight:800;color:#fff}
+  .fhead em{font-style:normal;font-size:11.5px;font-weight:800;border-radius:999px;padding:3px 10px}
+  .fhead em.b{background:rgba(244,63,94,.25);color:#fda4af}
+  .fhead em.g{background:rgba(16,185,129,.25);color:#6ee7b7}
+  .frow{display:grid;grid-template-columns:230px 34px minmax(0,1fr);gap:12px;align-items:center}
+  .fnode{border-radius:14px;padding:12px 14px;background:rgba(2,6,23,.5);border:1px solid rgba(255,255,255,.14)}
+  .fnode .t{font-size:12.5px;font-weight:800;color:#fff}
+  .fnode .d{font-size:11px;color:rgba(255,255,255,.55);margin-top:3px;line-height:1.5}
+  .farrow{text-align:center;font-size:16px;color:rgba(255,255,255,.45)}
+  .fchips{display:flex;flex-wrap:wrap;gap:7px}
+  .fchip{border-radius:10px;padding:7px 11px;font-size:11.5px;font-weight:700;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.16);color:#e2e8f0}
+  .fchip.hot{background:rgba(249,115,22,.22);border-color:rgba(249,115,22,.5);color:#fed7aa}
+  .fchip.dead{background:rgba(244,63,94,.18);border-color:rgba(244,63,94,.4);color:#fda4af;text-decoration:line-through}
+  .fchip.good{background:rgba(16,185,129,.2);border-color:rgba(16,185,129,.45);color:#6ee7b7}
+  .fnote{font-size:12px;color:rgba(255,255,255,.62);margin-top:12px;line-height:1.7}
+  .fnote b{color:#fdba74}
+</style>
+</head>
+<body>
+
+<!-- ══════════ 評審工具列（唔屬產品介面） ══════════ -->
+<div class="review">
+  <div class="rtitle">確認稿 · 工作台入口搬家</div>
+  <div class="rsub">
+    需求：左側導航欄<b>移除「工作台」</b>；登入後要切換就<b>由「設置」頁右上角入</b>。以下 5 格，撳上面掣切換。
+  </div>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="scr1">① 側欄（改前／改後）</button>
+    <button data-tab="scr2">② 設置頁 header ＋ 入口</button>
+    <button data-tab="scr3">③ 線上訂單標題列 ＋ 入口</button>
+    <button data-tab="scr4">④ 手機版導航</button>
+    <button data-tab="scr5">⑤ 流程對照</button>
+  </div>
+  <div class="rnote" id="rnote"></div>
+</div>
+
+<!-- ══════════ 產品畫面 ══════════ -->
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ─────── ① 側欄 改前 / 改後 ─────── -->
+  <section class="screenwrap on" id="scr1">
+    <div class="app">
+
+      <!-- 改前 -->
+      <div class="sidebar" id="sb-before">
+        <div class="sb-scroll">
+          <div class="sb-nav on"><span class="ic">點</span><span class="lb">點餐</span></div>
+          <div class="sb-nav"><span class="ic">單</span><span class="lb">訂單</span></div>
+          <div class="sb-nav"><span class="ic">會</span><span class="lb">會員</span></div>
+          <div class="sb-nav"><span class="ic">印</span><span class="lb">打印</span></div>
+          <div class="sb-more">… 其餘 4 個模組</div>
+        </div>
+        <div class="sb-foot">
+          <div class="sb-who"><div>陳小明</div><div class="rl">收銀</div></div>
+          <div class="sb-badge">在線</div>
+          <div class="sb-btn">登出</div>
+          <div class="sb-btn" id="sb-old-wb">工作台</div>
+          <div class="sb-btn">設置</div>
+        </div>
+      </div>
+
+      <div class="mainarea">
+        <div class="tabsrow">
+          <div class="trow">
+            <div class="tblock">
+              <div class="tt">線上訂單</div>
+              <div class="ts">今日 · 全部 · 共 12 張 · 新單 3 張</div>
+            </div>
+            <div class="tchips">
+              <span class="chip on">新單</span><span class="chip">已接單</span>
+              <span class="chip">製作中</span><span class="chip">可取餐</span>
+            </div>
+            <div class="trctl">
+              <div class="pill-open"><span class="pl">接單</span><span class="pv">營業中</span></div>
+              <div class="pill-auto"><span class="pl">自動接單</span><span class="pv">開</span></div>
+              <button class="btn-refresh">手動刷新</button>
+            </div>
+          </div>
+        </div>
+        <div class="listarea">
+          <div class="ocards">
+            <div class="ocard"><div class="top"><div><div class="code">#A014</div><div class="ty">外賣 · 自取</div></div><span class="st">新單</span></div><div class="it">乾炒牛河 x1 · 凍檸茶 x2</div><div class="acts"><span class="b1">查看</span><span class="b2">接單</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A013</div><div class="ty">堂食 · 12 號枱</div></div><span class="st">製作中</span></div><div class="it">叉燒飯 x2 · 例湯 x2</div><div class="acts"><span class="b1">查看</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A011</div><div class="ty">外賣</div></div><span class="st">可取餐</span></div><div class="it">雲吞麵 x1</div><div class="acts"><span class="b1">查看</span></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar" style="background:#0f172a">
+        <div class="sb-scroll">
+          <div class="sb-nav on"><span class="ic">點</span><span class="lb">點餐</span></div>
+          <div class="sb-nav"><span class="ic">單</span><span class="lb">訂單</span></div>
+          <div class="sb-nav"><span class="ic">會</span><span class="lb">會員</span></div>
+          <div class="sb-nav"><span class="ic">印</span><span class="lb">打印</span></div>
+          <div class="sb-more">… 其餘 4 個模組</div>
+        </div>
+        <div class="sb-foot" id="sb-after-foot">
+          <div class="sb-who"><div>陳小明</div><div class="rl">收銀</div></div>
+          <div class="sb-badge">在線</div>
+          <div class="sb-btn">登出</div>
+          <div class="sb-btn">設置</div>
+        </div>
+      </div>
+
+      <div class="mainarea">
+        <div class="tabsrow">
+          <div class="trow">
+            <div class="tblock">
+              <div class="tt">線上訂單</div>
+              <div class="ts">今日 · 全部 · 共 12 張 · 新單 3 張</div>
+            </div>
+            <div class="tchips">
+              <span class="chip on">新單</span><span class="chip">已接單</span>
+              <span class="chip">製作中</span><span class="chip">可取餐</span>
+            </div>
+            <div class="trctl">
+              <div class="pill-open"><span class="pl">接單</span><span class="pv">營業中</span></div>
+              <div class="pill-auto"><span class="pl">自動接單</span><span class="pv">開</span></div>
+              <button class="btn-refresh">手動刷新</button>
+            </div>
+          </div>
+        </div>
+        <div class="listarea">
+          <div class="ocards">
+            <div class="ocard"><div class="top"><div><div class="code">#A014</div><div class="ty">外賣 · 自取</div></div><span class="st">新單</span></div><div class="it">乾炒牛河 x1 · 凍檸茶 x2</div><div class="acts"><span class="b1">查看</span><span class="b2">接單</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A013</div><div class="ty">堂食 · 12 號枱</div></div><span class="st">製作中</span></div><div class="it">叉燒飯 x2 · 例湯 x2</div><div class="acts"><span class="b1">查看</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A011</div><div class="ty">外賣</div></div><span class="st">可取餐</span></div><div class="it">雲吞麵 x1</div><div class="acts"><span class="b1">查看</span></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="anno" style="left:14px;top:8px;width:252px">
+        <div class="anno-t">✎ 改前（現況）</div>
+        側欄底部由下至上：設置 / <b>工作台</b> / 登出 / 在線徽章 / 名牌。<br>
+        「工作台」就係 2026-09-13 加嘅<b>逃生門</b>。
+      </div>
+      <div style="position:absolute;left:84px;top:880px;z-index:11;border-radius:8px;padding:4px 9px;background:rgba(244,63,94,.95);color:#fff;font-size:11px;font-weight:800;white-space:nowrap">← 拆走呢粒</div>
+
+      <div class="anno" style="left:600px;top:8px;width:262px">
+        <div class="anno-t">✎ 改後（要嘅樣）</div>
+        側欄底部<b>只剩</b>：設置 / 登出 / 在線徽章 / 名牌 ——
+        「工作台」<b>整粒拆走</b>（桌面 + 手機兩處）。<br>
+        入口搬去 <b>設置頁 header 右上角</b>（見 ②）。
+      </div>
+      <div style="position:absolute;left:674px;top:864px;z-index:11;border-radius:8px;padding:4px 9px;background:rgba(16,185,129,.95);color:#fff;font-size:11px;font-weight:800;white-space:nowrap">← 整粒消失</div>
+
+      <div style="position:absolute;left:110px;top:436px;z-index:11;border-radius:10px;padding:6px 12px;background:rgba(244,63,94,.95);color:#fff;font-size:12px;font-weight:800">左：底部多一粒「工作台」</div>
+      <div style="position:absolute;left:700px;top:436px;z-index:11;border-radius:10px;padding:6px 12px;background:rgba(16,185,129,.95);color:#fff;font-size:12px;font-weight:800">右：只剩返 4 粒，冇咗「工作台」</div>
+
+      <div class="anno-line" style="left:560px;top:170px;width:40px"></div>
+      <div class="anno-dot" style="left:554px;top:167px"></div>
+
+    </div>
+  </section>
+
+  <!-- ─────── ② 設置頁 header ＋ 工作台入口 ─────── -->
+  <section class="screenwrap" id="scr2">
+    <div class="app">
+      <div class="sidebar">
+        <div class="sb-scroll">
+          <div class="sb-nav"><span class="ic">點</span><span class="lb">點餐</span></div>
+          <div class="sb-nav"><span class="ic">單</span><span class="lb">訂單</span></div>
+          <div class="sb-nav"><span class="ic">會</span><span class="lb">會員</span></div>
+          <div class="sb-nav"><span class="ic">印</span><span class="lb">打印</span></div>
+          <div class="sb-more">… 其餘 4 個模組（報表／沽清／交更／庫存）</div>
+        </div>
+        <div class="sb-foot">
+          <div class="sb-who"><div>陳小明</div><div class="rl">收銀</div></div>
+          <div class="sb-badge">在線</div>
+          <div class="sb-btn">登出</div>
+          <div class="sb-btn on">設置</div>
+        </div>
+      </div>
+
+      <div class="mainarea">
+        <div class="sethead">
+          <div class="sethead-in">
+            <div>
+              <div class="h">設置</div>
+              <div class="s">打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。</div>
+            </div>
+            <div class="hctrl" id="setctrl">
+              <div class="wbtn"><span class="wi">台</span>工作台</div>
+              <div class="pill-open"><span class="pl">線上訂單</span><span class="pv">營業中</span></div>
+              <div class="linkbtn">返回收銀台</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:12px 16px">
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <span class="chip on">打印機</span><span class="chip">菜品打印設置</span><span class="chip">菜單</span>
+            <span class="chip">樓層與桌台</span><span class="chip">支付方式</span><span class="chip">線上訂單</span>
+            <span class="chip">備註</span><span class="chip">折扣</span><span class="chip">掃碼點餐</span>
+          </div>
+          <div style="margin-top:12px;border-radius:16px;border:1px solid var(--slate-200);background:#fff;padding:12px 16px;font-size:14px;color:var(--slate-600)">
+            已載入 3 部打印機設定。
+          </div>
+        </div>
+      </div>
+
+      <div class="anno" style="left:560px;top:150px;width:310px">
+        <div class="anno-t">✎ 「工作台」入口掣（新增）</div>
+        位置：設置頁 header 右上控件組<b>最左</b> ——
+        即喺「線上訂單 · 營業中」同「返回收銀台」嘅<b>左邊</b>。<br>
+        外觀：橙色實心藥丸 + 圓形「台」icon（同側欄原本嗰粒同一視覺語言）。<br>
+        行為：<b>直接跳去 /select-workbench</b>，冇二次確認。
+      </div>
+      <div class="anno-line" style="left:1000px;top:118px;width:0"></div>
+      <div class="anno-dot" style="left:996px;top:115px"></div>
+
+      <div style="position:absolute;left:392px;top:322px;z-index:11;border-radius:999px;background:var(--emerald-500);color:#fff;padding:6px 14px;font-size:12.5px;font-weight:800">↑ 加入呢粒（綠色＝新增）</div>
+
+      <div class="anno" style="left:560px;top:392px;width:310px">
+        <div class="anno-t">✎ 只係搬位，唔係新增功能</div>
+        原本側欄嗰粒 Link（<code>href="/select-workbench"</code>）<b>原封不動搬過嚟</b>：同樣係 Next <code>Link</code>、同樣直接跳。<br>
+        分別只在：位置由側欄底部 → 設置頁 header；冇咗「當前頁高亮」（唔再需要，因為唔會停喺呢頁）。
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ─────── ③ 線上訂單標題列 ＋ 入口 ─────── -->
+  <section class="screenwrap" id="scr3">
+    <div class="app">
+      <div class="sidebar">
+        <div class="sb-scroll">
+          <div class="sb-nav"><span class="ic">點</span><span class="lb">點餐</span></div>
+          <div class="sb-nav on"><span class="ic">單</span><span class="lb">訂單</span></div>
+          <div class="sb-nav"><span class="ic">會</span><span class="lb">會員</span></div>
+          <div class="sb-nav"><span class="ic">印</span><span class="lb">打印</span></div>
+          <div class="sb-more">… 其餘 4 個模組</div>
+        </div>
+        <div class="sb-foot">
+          <div class="sb-who"><div>陳小明</div><div class="rl">收銀</div></div>
+          <div class="sb-badge">在線</div>
+          <div class="sb-btn">登出</div>
+          <div class="sb-btn">設置</div>
+        </div>
+      </div>
+
+      <div class="mainarea">
+        <div class="sethead">
+          <div class="sethead-in">
+            <div>
+              <div class="h" style="font-size:18px">訂單</div>
+              <div class="s">上：會員通線上訂單 · 下：店內線下訂單</div>
+            </div>
+            <div class="hctrl">
+              <div class="wbtn" style="outline:2px dashed rgba(15,23,42,.5);outline-offset:2px"><span class="wi">台</span>工作台</div>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;border-radius:999px;background:var(--slate-100);padding:4px">
+                <span style="border-radius:999px;background:#fff;padding:6px 12px;font-size:12px;font-weight:600;color:#0f172a;box-shadow:0 1px 2px rgba(15,23,42,.08)">今日</span>
+                <span style="border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;color:var(--slate-600)">本週</span>
+                <span style="border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;color:var(--slate-600)">本月</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabsrow">
+          <div class="trow">
+            <div class="wbtn" style="outline:2px dashed rgba(249,115,22,.7);outline-offset:2px"><span class="wi">台</span>工作台</div>
+            <div class="tblock">
+              <div class="tt">線上訂單</div>
+              <div class="ts">今日 · 全部 · 共 12 張 · 新單 3 張</div>
+            </div>
+            <div class="tchips">
+              <span class="chip on">新單</span><span class="chip">已接單</span>
+              <span class="chip">製作中</span><span class="chip">可取餐</span>
+            </div>
+            <div class="trctl">
+              <div class="pill-open"><span class="pl">接單</span><span class="pv">營業中</span></div>
+              <div class="pill-auto"><span class="pl">自動接單</span><span class="pv">開</span></div>
+              <button class="btn-refresh">手動刷新</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="listarea">
+          <div class="ocards">
+            <div class="ocard"><div class="top"><div><div class="code">#A014</div><div class="ty">外賣 · 自取</div></div><span class="st">新單</span></div><div class="it">乾炒牛河 x1 · 凍檸茶 x2</div><div class="acts"><span class="b1">查看</span><span class="b2">接單</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A013</div><div class="ty">堂食 · 12 號枱</div></div><span class="st">製作中</span></div><div class="it">叉燒飯 x2 · 例湯 x2</div><div class="acts"><span class="b1">查看</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A011</div><div class="ty">外賣</div></div><span class="st">可取餐</span></div><div class="it">雲吞麵 x1</div><div class="acts"><span class="b1">查看</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A009</div><div class="ty">外賣 · 自取</div></div><span class="st">已接單</span></div><div class="it">免治牛肉飯 x1</div><div class="acts"><span class="b1">查看</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A008</div><div class="ty">堂食 · 3 號枱</div></div><span class="st">製作中</span></div><div class="it">時菜牛腩麵 x2</div><div class="acts"><span class="b1">查看</span></div></div>
+            <div class="ocard"><div class="top"><div><div class="code">#A006</div><div class="ty">外賣</div></div><span class="st">可取餐</span></div><div class="it">奶茶 x3 · 西多 x1</div><div class="acts"><span class="b1">查看</span></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="anno" style="left:352px;top:396px;width:400px">
+        <div class="anno-t">✎ 呢頁有兩個「header」，入口只可以揀一個放</div>
+        <b>上格</b>（訂單頁 header）：大標題「訂單」+ 右邊日期 chips（今日／本週／本月）——
+        本身<b>冇</b>「營業中」藥丸。<br>
+        <b>下格</b>（線上訂單標題列）：左「線上訂單」+ 統計、中分頁 chips、右「接單 · <b>營業中</b>」——
+        <b>「營業中」真正喺呢度</b>。
+      </div>
+
+      <div style="position:absolute;left:606px;top:52px;z-index:11;border-radius:9px;background:var(--slate-900);color:#fff;padding:5px 12px;font-size:12px;font-weight:800">位置 A ↑（冇「營業中」）</div>
+      <div style="position:absolute;left:352px;top:150px;z-index:11;border-radius:9px;background:var(--orange-500);color:#fff;padding:5px 12px;font-size:12px;font-weight:800">位置 B ↑（「營業中」就喺呢條）</div>
+
+      <div class="anno-line" style="left:1090px;top:214px;width:0"></div>
+      <div class="anno-dot" style="left:1086px;top:211px"></div>
+
+      <div class="anno" style="left:352px;top:636px;width:400px">
+        <div class="anno-t">✎ 我嘅理解</div>
+        你原話「設置嘅右上角、線上訂單嘅左邊」+ 後來「只需要在設置內」→
+        我理解為 <b>②（設置頁 header，位置 A 嘅另一條 bar）</b>。
+        但如果你其實指呢頁嘅<b>位置 B</b>，一句話我就改。
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ─────── ④ 手機版導航 ─────── -->
+  <section class="screenwrap" id="scr4">
+    <div class="app">
+      <div class="sidebar">
+        <div class="sb-scroll">
+          <div class="sb-nav"><span class="ic">點</span><span class="lb">點餐</span></div>
+          <div class="sb-nav"><span class="ic">單</span><span class="lb">訂單</span></div>
+          <div class="sb-nav"><span class="ic">會</span><span class="lb">會員</span></div>
+        </div>
+        <div class="sb-foot">
+          <div class="sb-who"><div>陳小明</div><div class="rl">收銀</div></div>
+          <div class="sb-badge">在線</div>
+          <div class="sb-btn">登出</div>
+          <div class="sb-btn">設置</div>
+        </div>
+      </div>
+      <div class="mainarea">
+        <div class="anno" style="left:100px;top:340px;width:250px">
+          <div class="anno-t">✎ 桌面側欄（示意）</div>
+          呢格主要演示<b>手機版底部導航</b>；桌面側欄改動見 ①。
+        </div>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:420px;top:150px;width:470px;height:700px;border-radius:28px;border:10px solid #0f172a;background:#f8fafc;overflow:hidden;display:flex;flex-direction:column">
+      <div class="mob">
+        <div style="flex:1;padding:14px">
+          <div style="border-radius:16px;border:1px solid var(--slate-200);background:#fff;padding:12px">
+            <div style="font-size:14px;font-weight:600;color:#0f172a">線上訂單</div>
+            <div style="font-size:12px;color:var(--slate-500);margin-top:4px">今日 · 共 12 張 · 新單 3 張</div>
+          </div>
+        </div>
+        <div class="mobnav" id="mobnav-before">
+          <div class="mobrow">
+            <div class="mitem on"><span class="mi">點</span>點餐</div>
+            <div class="mitem"><span class="mi">單</span>訂單</div>
+            <div class="mitem"><span class="mi">會</span>會員</div>
+            <div class="mitem"><span class="mi">印</span>打印</div>
+            <div class="mitem" id="mob-old-wb" style="background:#fecdd3;color:#9f1239"><span class="mi">台</span>工作台</div>
+            <div class="mitem"><span class="mi">設</span>設置</div>
+          </div>
+        </div>
+      </div>
+      <div style="position:absolute;left:8px;bottom:8px;z-index:12;border-radius:999px;background:var(--rose-500);color:#fff;padding:5px 11px;font-size:11.5px;font-weight:800">✕ 拆走呢粒</div>
+    </div>
+
+    <div style="position:absolute;left:920px;top:150px;width:250px;height:700px;border-radius:28px;border:10px solid #0f172a;background:#f8fafc;overflow:hidden;display:flex;flex-direction:column">
+      <div class="mob">
+        <div style="flex:1;padding:14px">
+          <div style="border-radius:16px;border:1px solid var(--slate-200);background:#fff;padding:12px">
+            <div style="font-size:14px;font-weight:600;color:#0f172a">設置</div>
+            <div style="font-size:12px;color:var(--slate-500);margin-top:4px">工作台入口喺右上角。</div>
+          </div>
+          <div style="margin-top:10px;display:flex;justify-content:flex-end">
+            <div class="wbtn" style="font-size:12px;padding:7px 11px"><span class="wi">台</span>工作台</div>
+          </div>
+        </div>
+        <div class="mobnav">
+          <div class="mobrow">
+            <div class="mitem"><span class="mi">點</span>點餐</div>
+            <div class="mitem"><span class="mi">單</span>訂單</div>
+            <div class="mitem"><span class="mi">會</span>會員</div>
+            <div class="mitem"><span class="mi">印</span>打印</div>
+            <div class="mitem"><span class="mi">設</span>設置</div>
+          </div>
+        </div>
+      </div>
+      <div style="position:absolute;left:8px;bottom:8px;z-index:12;border-radius:999px;background:var(--emerald-500);color:#fff;padding:5px 11px;font-size:11.5px;font-weight:800">＋ 冇咗，5 格</div>
+    </div>
+
+    <div class="anno" style="left:420px;top:20px;width:470px">
+      <div class="anno-t">✎ 手機版底部導航（md 以下）</div>
+      現況：<code>[...navItems, 工作台, 設置]</code> —— 硬編碼插喺設置<b>前面</b>（6 格）。<br>
+      改後：淨返 <code>[...navItems, 設置]</code>（5 格），同桌面側欄一致。
+    </div>
+  </section>
+
+  <!-- ─────── ⑤ 流程對照 ─────── -->
+  <section class="screenwrap" id="scr5">
+    <div class="flow">
+      <div class="fbox bad">
+        <div class="fhead"><h3>現在（要改）</h3><em class="b">入口喺側欄底部</em></div>
+        <div class="frow">
+          <div class="fnode"><div class="t">① 側欄底部</div><div class="d">設置 / 工作台 / 登出 / 在線徽章 / 名牌</div></div>
+          <div class="farrow">→</div>
+          <div class="fchips">
+            <span class="fchip warn">工作台（橙色逃生門）</span>
+            <span class="fchip">佔 1 行 ~36px</span>
+          </div>
+        </div>
+        <div class="frow" style="margin-top:12px">
+          <div class="fnode"><div class="t">② 撳落去</div><div class="d">直接跳 /select-workbench</div></div>
+          <div class="farrow">→</div>
+          <div class="fchips"><span class="fchip">重新揀呢部機嘅崗位</span></div>
+        </div>
+        <div class="fnote">
+          ⚠️ 問題：側欄 72px 闊，每一行都係稀缺資源。而且「工作台」同「設置」性質唔同層級 ——
+          一個係一次性設定，一個係日常入嘅頁，擺埋一齊會令店員以為兩個同樣常用。
+        </div>
+      </div>
+
+      <div class="fbox good">
+        <div class="fhead"><h3>改成之後</h3><em class="g">入口搬去設置頁 header</em></div>
+        <div class="frow">
+          <div class="fnode"><div class="t">① 設置頁 header 右上角</div><div class="d">工作台 / 線上訂單 · 營業中 / 返回收銀台</div></div>
+          <div class="farrow">→</div>
+          <div class="fchips">
+            <span class="fchip good">最左、標題之前</span>
+            <span class="fchip dead">側欄「工作台」</span>
+          </div>
+        </div>
+        <div class="frow" style="margin-top:12px">
+          <div class="fnode"><div class="t">② 撳落去</div><div class="d">行為完全不變：直接跳 /select-workbench</div></div>
+          <div class="farrow">→</div>
+          <div class="fchips"><span class="fchip hot">揀完 → applyWorkbenchSelection → 返首頁</span></div>
+        </div>
+        <div class="fnote">
+          ✓ 逃生門<b>仍然存在</b>，只係深一層（要先入設置）—— 正好符合「設定類嘢唔應該擺日常動線」嘅慣例。<br>
+          ✓ 桌面 + 手機兩處側欄同步移除，唔會一邊有一邊冇。
+        </div>
+      </div>
+
+      <div class="fbox">
+        <div class="fhead"><h3>要改嘅檔案（3 個）</h3><em class="g">確認稿通過後才動手</em></div>
+        <div class="fchips" style="margin-bottom:10px">
+          <span class="fchip">app-sidebar.tsx<br>桌面版 Link（約 244–263）</span>
+          <span class="fchip">app-sidebar.tsx<br>手機版陣列（約 293）</span>
+          <span class="fchip hot">device-settings.tsx<br>header 加入口（約 1053）</span>
+        </div>
+        <div class="fnote">
+          純前端改動：<b>唔需要 migration、唔需要 API、唔需要改路由</b>（<code>/select-workbench</code> 已經存在）。
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</div>
+
+<script>
+  var MIN_SCALE = 0.55;
+  var NOTE = {
+    scr1: "<b>① 側欄（改前／改後）</b>：左邊係現況（底部有「工作台」），右邊係改後（整粒拆走）。桌面版 <code>app-sidebar.tsx</code> 嗰個 <code>&lt;Link href=\"/select-workbench\"&gt;</code> 整段刪走 —— 註解（「切換工作台（逃生門）」嗰段）都要一齊刪，唔好留低死代碼。",
+    scr2: "<b>② 設置頁 header ＋ 入口（本稿重點）</b>：「工作台」橙色藥丸插喺 <code>MerchantOrderHeaderToggle</code>（線上訂單 · 營業中）<b>左邊</b> —— 即係你講嘅「設置嘅右上角、線上訂單嘅左邊」。行為：直接 <code>href=\"/select-workbench\"</code>，冇二次確認。",
+    scr3: "<b>③ 另一個候選位置（要你拍板）</b>：如果你講嘅「線上訂單 營業中」其實係指<b>訂單頁（/orders）</b> 或者快餐模式底部 bar 嗰條「線上訂單」標題列，入口就要放喺嗰條 bar 最左。兩者係唔同嘅 <code>&lt;div&gt;</code>，只能揀一個放。請睇完 ② 同 ③ 話我知邊個。",
+    scr4: "<b>④ 手機版底部導航</b>：桌面側欄同手機底部導航係<b>兩段獨立代碼</b>（桌面係逐個 <code>&lt;Link&gt;</code> 寫，手機係一個陣列 <code>[...navItems, 工作台, 設置]</code>）。兩處都要改，否則手機會照樣見到「工作台」。",
+    scr5: "<b>⑤ 流程對照</b>：逃生門保留、只係深一層（入設置頁先撳到）。總共改 3 處代碼，純前端 —— 冇 migration、冇新 API、冇新路由。"
+  };
+
+  function fit() {
+    var stage = document.getElementById("stage");
+    var canvas = document.getElementById("canvas");
+    var w = stage.clientWidth || 1180;
+    var s = Math.min(1, Math.max(w / 1180, MIN_SCALE));
+    canvas.style.transform = "scale(" + s + ")";
+    stage.style.height = Math.round(960 * s) + "px";
+    stage.style.overflowX = (1180 * s > w) ? "auto" : "hidden";
+  }
+
+  function show(id) {
+    var wraps = document.querySelectorAll(".screenwrap");
+    for (var i = 0; i < wraps.length; i++) {
+      wraps[i].classList.toggle("on", wraps[i].id === id);
+    }
+    var tb = document.querySelectorAll("#rtabs button");
+    for (var j = 0; j < tb.length; j++) {
+      tb[j].classList.toggle("on", tb[j].getAttribute("data-tab") === id);
+    }
+    document.getElementById("rnote").innerHTML = NOTE[id] || "";
+    fit();
+  }
+
+  (function () {
+    var tb = document.querySelectorAll("#rtabs button");
+    for (var i = 0; i < tb.length; i++) {
+      (function (btn) {
+        btn.onclick = function () { show(btn.getAttribute("data-tab")); };
+      })(tb[i]);
+    }
+    document.getElementById("rnote").innerHTML = NOTE.scr1;
+    window.addEventListener("resize", fit);
+    fit();
+  })();
+</script>
+</body>
+</html>

@@ -1,14 +1,42 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import { LocalOrdersPanel } from "@/components/local-orders-panel";
 import { OnlineOrders } from "@/components/online-orders";
-import { LEDGER_ORDER_DATE_FILTERS, LedgerOrderDateFilter } from "@/lib/ledger/order-date-filter";
+import { downloadCsv } from "@/lib/csv-export";
+import {
+  dateFilterLabel,
+  LEDGER_ORDER_DATE_FILTERS,
+  type LedgerOrderDateFilterKey,
+} from "@/lib/ledger/order-date-filter";
+import { customRangeLabel, type CustomDateRange } from "@/lib/ledger/date-range";
+import { formatMacauDateTime } from "@/lib/format";
+import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
+import {
+  getOrderStatusBadge,
+  getPaymentBadge,
+} from "@/lib/pos-order-filters";
+import type { PosOrder } from "@/lib/types";
+
+/** 今日嘅 Macau 日曆日（`YYYY-MM-DD`），用於匯出檔名。 */
+function todayKey(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date());
+}
 
 /**
  * 訂單頁（`/orders`）：上＝會員通線上訂單，下＝店內線下訂單。
+ *
+ * ## 時間篩選（2026-09-13 加「自訂」）
+ *
+ * 由原本純 key 字串升級為 **`{ key, custom }` selection**：
+ * - key 負責 chip 高亮同快速區間；
+ * - `custom` 只在 `key === "custom"` 時有意義（`YYYY-MM-DD` 起訖，Macau 日曆）。
+ *
+ * 呢個 state 由兩張表共用（`OnlineOrders` 同 `LocalOrdersPanel` 都吃同一個 prop），
+ * 所以撳一次 chips，上面線上單同下面線下單會**同時**跟隨。
  *
  * ## Deep link（2026-09-10，docs/115 G5）
  *
@@ -22,8 +50,117 @@ import { LEDGER_ORDER_DATE_FILTERS, LedgerOrderDateFilter } from "@/lib/ledger/o
  * 免得用戶刷新 / 撳返回時又彈一次。
  */
 export function OrdersHub() {
-  const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilter>("today");
+  const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilterKey>("today");
+  const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
+
+  /**
+   * 兩張表當前篩選後嘅資料（由子元件上報）。
+   *
+   * 匯出必須以「商家當前所選時間範圍」為準 —— 而 tab / 狀態篩選亦同樣影響列表顯示，
+   * 所以直接複用子元件已算好嘅 `filteredOrders`，而**唔喺呢度另計一次**
+   * （另計 = 兩套 predicate，遲早漂移；呢個係專案既有教訓）。
+   */
+  const [onlineRows, setOnlineRows] = useState<LedgerOnlineOrder[]>([]);
+  const [localRows, setLocalRows] = useState<PosOrder[]>([]);
+
+  /** 傳落兩張表嘅 selection（key + 已套用嘅自訂區間）。 */
+  const dateSelection = { key: dateFilter, custom: customRange };
+
+  const handleDateChange = useCallback((key: LedgerOrderDateFilterKey, custom: CustomDateRange | null) => {
+    setDateFilter(key);
+    setCustomRange(custom);
+  }, []);
+
+  /** 當前範圍嘅人話標籤（用於檔名）。 */
+  const rangeLabel = customRange && dateFilter === "custom" ? customRangeLabel(customRange) : dateFilterLabel(dateFilter);
+
+  /**
+   * 匯出**線上訂單** CSV。
+   *
+   * ⚠️ 客人電話（`order.phone`）：
+   * - 來源係 Ledger RPC `list_merchant_orders` 回傳嘅 `customer_phone`，只存在記憶體。
+   * - **唔會**寫入 POS DB / localStorage / console（Ledger 契約 §7.2 個資紅線）。
+   * - 呢度直接落 CSV ＝ 超出「當次 UI 渲染」嘅範圍，已記錄待與 Ledger 確認
+   *   （見 docs/113）。Ledger 未回覆前如要收緊，只需移除 `客人電話` 一欄。
+   */
+  function exportOnlineCsv() {
+    const rows = onlineRows.map((o) => ({
+      單號: o.pickupCode ? `取餐碼 ${o.pickupCode}` : o.id.slice(0, 8),
+      客人: o.customerName ?? "",
+      客人電話: o.phone ?? "",
+      類型: o.tabType === "dine_in" ? "堂食" : o.tabType === "pickup" ? "外賣自取" : "外送",
+      菜品: o.itemSummary ?? "",
+      數量: o.itemCount ?? "",
+      金額: o.total,
+      折扣: o.discountAmount ?? "",
+      狀態: o.status,
+      付款狀態: o.paymentStatus === "paid" ? "已付款" : "未付款",
+      付款方式: o.paymentMode ?? "",
+      下單時間: o.createdAt ? formatMacauDateTime(o.createdAt) : "",
+      更新時間: o.updatedAt ? formatMacauDateTime(o.updatedAt) : "",
+      備註: o.note ?? "",
+      外送地址: o.deliveryAddress ?? "",
+    }));
+    downloadCsv(rows, `線上訂單_${rangeLabel}_${todayKey()}`, {
+      columns: [
+        { key: "單號", label: "單號" },
+        { key: "客人", label: "客人" },
+        { key: "客人電話", label: "客人電話" },
+        { key: "類型", label: "類型" },
+        { key: "菜品", label: "菜品" },
+        { key: "數量", label: "數量" },
+        { key: "金額", label: "金額(MOP)" },
+        { key: "折扣", label: "折扣(MOP)" },
+        { key: "狀態", label: "狀態" },
+        { key: "付款狀態", label: "付款狀態" },
+        { key: "付款方式", label: "付款方式" },
+        { key: "下單時間", label: "下單時間" },
+        { key: "更新時間", label: "更新時間" },
+        { key: "備註", label: "備註" },
+        { key: "外送地址", label: "外送地址" },
+      ],
+    });
+  }
+
+  /** 匯出**線下訂單** CSV（店內落單，冇客人電話欄位 —— PosOrder 本身唔存）。 */
+  function exportLocalCsv() {
+    const rows = localRows.map((o) => ({
+      單號: o.localOrderNo,
+      餐台: o.tableName ?? "",
+      渠道: o.onlineOrderId ? "線上" : "線下",
+      來源: o.status === "draft" ? "未送廚房" : "",
+      菜品: o.items
+        .filter((it) => !it.voided)
+        .map((it) => `${it.name}×${it.quantity}`)
+        .join(" / "),
+      入座人數: o.partySize ?? "",
+      金額: o.total,
+      折扣: o.discountAmount ?? "",
+      狀態: getOrderStatusBadge(o).label,
+      付款: getPaymentBadge(o).label,
+      支付方式: o.paymentMethod ?? "",
+      下單時間: o.createdAt ? formatMacauDateTime(o.createdAt) : "",
+      結帳時間: o.updatedAt ? formatMacauDateTime(o.updatedAt) : "",
+    }));
+    downloadCsv(rows, `線下訂單_${rangeLabel}_${todayKey()}`, {
+      columns: [
+        { key: "單號", label: "單號" },
+        { key: "餐台", label: "餐台" },
+        { key: "渠道", label: "渠道" },
+        { key: "來源", label: "來源" },
+        { key: "菜品", label: "菜品" },
+        { key: "入座人數", label: "入座人數" },
+        { key: "金額", label: "金額(MOP)" },
+        { key: "折扣", label: "折扣(MOP)" },
+        { key: "狀態", label: "狀態" },
+        { key: "付款", label: "付款" },
+        { key: "支付方式", label: "支付方式" },
+        { key: "下單時間", label: "下單時間" },
+        { key: "結帳時間", label: "結帳時間" },
+      ],
+    });
+  }
 
   useEffect(() => {
     const orderId = new URLSearchParams(window.location.search).get("orderId");
@@ -42,19 +179,34 @@ export function OrdersHub() {
               <div className="text-lg font-semibold text-slate-900">訂單</div>
               <div className="mt-0.5 text-sm text-slate-500">上：會員通線上訂單 · 下：店內線下訂單</div>
             </div>
-            <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
-              {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
+            <div className="flex flex-wrap items-center gap-2">
+              <DateRangeFilterChips
+                options={LEDGER_ORDER_DATE_FILTERS}
+                value={dateFilter}
+                custom={customRange}
+                onChange={handleDateChange}
+              />
+              {/* 匯出：分兩檔（線上／線下欄位差異大，混一個檔會大量空格） */}
+              <div className="flex items-center gap-1.5">
                 <button
-                  key={filter.key}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                    filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                  }`}
-                  onClick={() => setDateFilter(filter.key)}
+                  className="inline-flex min-h-[36px] items-center rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                  disabled={onlineRows.length === 0}
+                  onClick={exportOnlineCsv}
+                  title="匯出當前時間範圍內嘅線上訂單（含客人電話）"
                   type="button"
                 >
-                  {filter.label}
+                  匯出線上單（{onlineRows.length}）
                 </button>
-              ))}
+                <button
+                  className="inline-flex min-h-[36px] items-center rounded-full bg-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-300 disabled:opacity-50"
+                  disabled={localRows.length === 0}
+                  onClick={exportLocalCsv}
+                  title="匯出當前時間範圍內嘅線下訂單"
+                  type="button"
+                >
+                  匯出線下單（{localRows.length}）
+                </button>
+              </div>
             </div>
           </div>
         </header>
@@ -68,10 +220,19 @@ export function OrdersHub() {
         */}
         <div className="grid min-h-0 flex-1 grid-rows-2 divide-y divide-slate-200">
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-slate-50">
-            <OnlineOrders dateFilter={dateFilter} embedded onDateFilterChange={setDateFilter} />
+            <OnlineOrders
+              dateFilter={dateSelection}
+              embedded
+              onDateFilterChange={handleDateChange}
+              onFilteredOrdersChange={setOnlineRows}
+            />
           </section>
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
-            <LocalOrdersPanel dateFilter={dateFilter} focusOrderId={focusOrderId} />
+            <LocalOrdersPanel
+              dateFilter={dateSelection}
+              focusOrderId={focusOrderId}
+              onFilteredOrdersChange={setLocalRows}
+            />
           </section>
         </div>
       </div>

@@ -237,6 +237,36 @@ export function mergeOrderLists(...sources: PosOrder[][]): PosOrder[] {
       const incomingReopened = order.status === "reopened";
       const existingReopened = existing.status === "reopened";
 
+      // 🔴 (B2) 返結守門（2026-09-13 實案：「撳完返結，掣轉頭消失」）—— **一定要排最前**。
+      //
+      // 本地已經返結（`reopened`），incoming 係一條**未返結**嘅「已收款」snapshot
+      // （`paid` / `settled`）→ 拒收，唔理時間戳。
+      //
+      // 為咩要排喺「終態優先」前面：`settled` 係終態，會觸發下面嘅終態優先分支直接贏出；
+      // 而 `paid` 唔係終態（按設計要佔枱、可加菜），會跌落 LWW —— 雲端 row 嘅
+      // `updatedAt` 係 **server 蓋章時間**（同本機 iPad 時鐘唔同域），一條舊 `paid`
+      // snapshot 只要 server 收件時間較新就會「扮新」贏出。兩種情況結果一樣：收銀
+      // 撳完返結、掣轉頭消失、張單又變返已結帳（`isReopenable()` 對 `reopened` 返 false）。
+      //
+      // 🔑 點分辨「舊已收款 echo」同「合法重結」：兩者狀態可能一樣（都係 `settled`），
+      //   所以**唔可以**單靠狀態判斷。用嘅係**返結審計欄**：
+      //     - incoming **冇** `reopenedAt` / `reopenCount` → 佢係返結之前嘅 snapshot
+      //       （返結會 `saveOrders()` 寫齊呢兩欄）→ 拒收；
+      //     - incoming **有** `reopenedAt` 而且同本機一致 → 佢已經過咗返結呢一步，
+      //       即係「重結 / 作廢」等後續事件 → 放行（佢係前進，唔可以擋）。
+      //
+      //   用 `mergeTimestamp` 比時間做唔到呢件事：雲端 row 嘅 client 鐘可能來自另一部
+      //   機（合法地較新），一條舊 snapshot 都會「扮新」；反之重結事件亦可能因時鐘偏移
+      //   而較舊。返結審計欄係**單調**嘅 —— 寫咗就唔會冇，所以係可靠嘅分界。
+      if (
+        existingReopened &&
+        isPaidOrderStatus(order.status) &&
+        !incomingReopened &&
+        !(order.reopenedAt && order.reopenedAt === existing.reopenedAt)
+      ) {
+        continue;
+      }
+
       // 終態優先：任何來源話「已結帳／取消／退款」都應該贏過本地「未結」snapshot。
       // 唯一例外：本地已經明確返結 reopened（reopened 係終態 → open 嘅合法 reverse）。
       if (incomingTerminal && !existingTerminal && !existingReopened) {

@@ -18,6 +18,10 @@ import {
 // ⚠️ 唔可以 import `@/lib/print-jobs`（佢反過來 import 咗呢個檔 → 循環依賴）。
 // 出紙入隊邏輯走獨立嘅 `@/lib/pos/print-job-enqueue`。
 import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
+import {
+  syncOnlineDineInCompletion,
+  type OnlineDineInProgress,
+} from "@/lib/pos/online-dinein-fulfillment";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
@@ -568,6 +572,7 @@ export async function assignLedgerOrderToTable(options: AssignLedgerOrderTableOp
   posOrder: PosOrder;
   printJobs: PrintJob[];
   created: boolean;
+  ledgerProgress: OnlineDineInProgress;
 }> {
   const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
   const projection = buildLedgerPosOrder(
@@ -576,7 +581,14 @@ export async function assignLedgerOrderToTable(options: AssignLedgerOrderTableOp
     options.tableId,
     options.tableName,
   );
-  return upsertLedgerLocalOrder(options.ledgerOrder, projection, "table_assigned");
+  const result = await upsertLedgerLocalOrder(options.ledgerOrder, projection, "table_assigned");
+
+  // 🔴 2026-09-13 商家需求：「排位完成即代表訂單已開始製作」→ 一次過將 Ledger
+  // 由 `accepted` 推上 `completed`（逐級爬梯，跳級會 invalid transition）。
+  // 只認帶 Ledger 單 id ＋ 真枱號嘅單；本地單／快餐 counter 單直接跳過。
+  const ledgerProgress = await syncOnlineDineInCompletion(result.posOrder);
+
+  return { ...result, ledgerProgress };
 }
 
 export type AdoptLedgerOrderAsQuickCounterOptions = {

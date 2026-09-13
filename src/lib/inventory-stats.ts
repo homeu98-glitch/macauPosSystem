@@ -3,7 +3,8 @@
  * 月份計算改用原生 Date，避免引入 date-fns 依賴。
  * 僅做唯讀聚合，不寫入任何表。
  */
-import { macauDateKey, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { macauDateKey, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { customRangeToISO, instantInRange } from "@/lib/ledger/date-range";
 
 export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   on_delivery: "貨到付款",
@@ -73,15 +74,41 @@ function normalizeNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
-/** 以澳門日曆判斷收據日期是否落在選取區間（receipt_date 為 YYYY-MM-DD）。 */
-export function receiptDateMatchesRange(receiptDate: string, range: ReportRangeKey, now = new Date()): boolean {
-  if (range === "all") return true;
-  const key = macauDateKey(new Date(receiptDate));
-  if (range === "today") return key === macauDateKey(now);
-  if (range === "yesterday") return key === macauDateKey(new Date(now.getTime() - 24 * 60 * 60 * 1000));
-  const days = range === "7d" ? 6 : 29; // 含今日共 7 / 30 天
-  const startKey = macauDateKey(new Date(now.getTime() - days * 24 * 60 * 60 * 1000));
-  return key >= startKey && key <= macauDateKey(now);
+/**
+ * 以澳門日曆判斷收據日期是否落在選取區間（receipt_date 為 YYYY-MM-DD）。
+ *
+ * ⚠️ 2026-09-13：加「自訂」後改走 `date-range.ts` 統一入口（毫秒比較），
+ * 同時修正原本 `7d→6` / `30d→29` 嘅「含今日」硬編碼 —— 因為 `macauRollingRange(7)`
+ * 本身就已經係「含今日共 7 天」，兩者口徑重複且唔一致（原本 7d 實際只覆蓋 6 天區間）。
+ */
+export function receiptDateMatchesRange(receiptDate: string, range: ReportRangeArg, now = new Date()): boolean {
+  const { key, custom } = splitReportRangeArg(range);
+  if (key === "all") return true;
+  if (key === "custom" && !custom) return true;
+
+  const instant = new Date(`${String(receiptDate).slice(0, 10)}T12:00:00+08:00`);
+  if (Number.isNaN(instant.getTime())) return false;
+
+  // today / yesterday 仍然用日曆日 key 比對（收據本身只有日期，冇時刻）
+  if (key === "today") return macauDateKey(instant) === macauDateKey(now);
+  if (key === "yesterday") {
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    return macauDateKey(instant) === macauDateKey(y);
+  }
+
+  // 7d / 30d / custom → 統一用 Macau 起訖 ISO 做毫秒比較
+  const period = key === "custom" ? customRangeToISO(custom!) : rollingPeriodForKey(key, now);
+  return instantInRange(instant, period);
+}
+
+function rollingPeriodForKey(key: ReportRangeKey, now: Date): { start: string; end: string } {
+  const days = key === "7d" ? 7 : 30;
+  const endKey = macauDateKey(now);
+  const startDate = new Date(now);
+  startDate.setDate(startDate.getDate() - (days - 1));
+  const startKey = macauDateKey(startDate);
+  return { start: `${startKey}T00:00:00+08:00`, end: `${endKey}T23:59:59.999+08:00` };
 }
 
 export function buildPurchaseSummary(receipts: StatReceipt[]): PurchaseSummary {
@@ -251,10 +278,18 @@ export function buildTrendSummary(receipts: StatReceipt[]): TrendSummary {
   return { up, down };
 }
 
-/** 客戶端封裝：呼叫庫存收據 API 並取回買貨統計（含 schemaReady/matched 降級）。 */
-export async function fetchPurchaseSummary(account: string, range: ReportRangeKey): Promise<PurchaseApiResponse | null> {
+/** 客戶端封裝：呼叫庫存收據 API 並取回買貨統計（含 schemaReady/matched 降級）。
+ *
+ * 「自訂」區間經 `start` / `end` query 傳（server 端唔識 derive，只有 key 冇用）。 */
+export async function fetchPurchaseSummary(account: string, range: ReportRangeArg): Promise<PurchaseApiResponse | null> {
+  const { key, custom } = splitReportRangeArg(range);
   try {
-    const res = await fetch(`/api/inventory/receipts?account=${encodeURIComponent(account)}&range=${range}`);
+    const qs = new URLSearchParams({ account, range: key });
+    if (key === "custom" && custom) {
+      qs.set("start", custom.start);
+      qs.set("end", custom.end);
+    }
+    const res = await fetch(`/api/inventory/receipts?${qs.toString()}`);
     if (!res.ok) return null;
     const json = (await res.json()) as PurchaseApiResponse;
     return json.ok ? json : null;

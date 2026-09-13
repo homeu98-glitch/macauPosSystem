@@ -743,6 +743,77 @@ and j.status in ('pending', 'failed')
   線上列表仍然係佢嘅來源記錄）。
 - ⚠️ 剔除要**即時生效**：本機單變更唔會通知線上面板 → 要訂閱 `pos-orders-changed`
   攞一個 tick 去重算（`saveOrders()` 會出呢個事件）。
+- 📌 **2026-09-13 補**：呢個過濾同時係「排位後冇『開始製作 / 待取餐 / 完成』掣」嘅**唯一機制**
+  —— `LedgerOnlineOrder` **冇 `tableId`**（枱係 POS 本機概念），所以冇可能喺
+  `getPrimaryOnlineOrderAction()` 層面做守門。
+
+## 🔴🔴 線上已付款堂食單：4 個結帳入口 + 2 個合併守門（2026-09-13 · 用戶實案）
+
+商家口徑：**「排位完成即代表訂單已開始製作」** → 排位一次過做齊
+（Ledger 推 4 級到 `completed` ＋ 本地寫 `paid` ＋ 桌台綠卡「已結帳 / 待收尾」）。
+
+### (1) 病症：「排位之後無法結帳，訂單一直卡在桌台」
+
+**根因**：`assignLedgerOrderToTable()` 對線上已付單寫 `status: "paid"`，
+但**全店結帳入口只認 `sent_to_kitchen` / `reopened`** → 撳「去結帳」彈
+「目前沒有待結帳訂單」；而枱面（`openOrders` **包含 `paid`**）永遠被佔用。
+
+其他出口亦全部封死 → **完全冇出路**：
+返結掣只喺 `settled` 出、退桌 `findVoidableTableOrder()` 有 `!order.onlineOrderId`、
+`canCancelSettle()` 只認 `draft` / `sent_to_kitchen`。
+
+**⇒ 鐵律：`sent_to_kitchen` / `reopened` / `paid`（帶 `onlineOrderId` + 真枱）
+三者都係「可結帳」。判準一律用 `isSettleableOrder()`，唔准再手寫狀態比對。**
+
+四個入口（全部都要改，漏一個就會喺嗰條路徑卡死）：
+
+| 入口 | 位置 |
+|---|---|
+| `currentSettlementOrder`（小計面板） | `pos-app.tsx` |
+| `openSettlementModal()`（「去結帳」掣） | `pos-app.tsx` |
+| `confirmPayment()` / `confirmComp()` / `completeOnlinePaidOrder()` | `pos-app.tsx` |
+
+⚠️ 「最後一重 fallback」原本係 `unsettledOrder`（全店第一張 `sent_to_kitchen`）——
+改用 `isSettleableOrder()` 之後**冇人再用 → 要連變數一齊刪**（`no-unused-vars` 會捉）。
+
+⚠️ `canCancelSettle()` **唔可以**跟住放寬：`paid` 已經收咗錢，
+作廢屬返結／退款流程（口徑同結帳彈窗一致）。
+
+### (2) 病症：「撳完返結，掣轉頭消失 / 張單又變返已結帳」
+
+**根因**：`isTerminalOrderStatus()` **唔包 `paid`**（`paid` 要佔枱、可加菜 → 唔算終態）
+→ `mergeOrderLists()` 嘅「終態優先」分支唔處理「本地 `reopened` vs 雲端 `paid`」呢個組合，
+直接跌落 LWW；而雲端 row 嘅 `updatedAt` 係 **server 蓋章時間**（同本機 iPad 時鐘唔同域）
+→ 一條舊 `paid` snapshot 只要 server 收件時間較新就會「扮新」贏出。
+
+**✅ 修法**：`mergeOrderLists()` 加「返結守門」，**一定要排在「終態優先」之前**
+（否則 `settled` 會喺終態分支直接贏出）。伺服器端 `/api/pos/sync` 要有對等守門
+（`isReopenRegression` → reason `reopen-guard`）。
+
+🔴 **分界一定要用「返結審計欄」（`reopenedAt`），唔可以用時間或狀態**：
+
+| 候選做法 | 為何唔可以 |
+|---|---|
+| 比 `updatedAt` | 混咗 server 蓋章時間，唔同域 |
+| 比 `mergeTimestamp` | 雲端 client 鐘可能來自另一部機（**合法地**較新）→ 舊 snapshot 都「扮新」 |
+| 「`settled` 一律拒」 | 返結之後收銀**重結**都會寫 `settled` → 會擋死合法前進 |
+| ✅ 睇 `reopenedAt` | 返結會 `saveOrders()` 寫呢欄，**單調唔會冇** → 冇呢欄嘅已收款 snapshot 一定係返結之前 |
+
+⚠️ 守門一定要排除**終態**（`settled` 本身就喺 `PAID_ORDER_STATUSES`）：
+返結之後「重結 → `settled`」「作廢 → `cancelled`」兩條都係前進，要放行。
+
+### (3) Ledger 爬梯：為咩唔可以跳級、唔可以靜默
+
+- Ledger 只接受逐級轉換（`pending → accepted → preparing → ready → completed`），
+  跳級報 `invalid transition`；而 POS **冇存住** Ledger 當前狀態 →
+  一律由目標梯底逐級試，「狀態唔啱」＝已過咗嗰級就 `continue`，其餘錯誤即刻停手。
+- 堂食梯 = `["accepted", "preparing", "ready", "completed"]`
+  （`syncOnlineDineInCompletion()`）；快餐梯 = `["preparing", "ready", "completed"]`
+  （`syncOnlineQuickFulfillment()`）—— **兩條梯唔可以混用**。
+- 🔴 **本地成功、Ledger 失敗唔可以靜默**：`console.error` ＋ error toast。
+  否則客人端／對賬永遠停留舊狀態，冇人知。
+- ⚠️ **隔離閘只有一個**：`isOnlineDineInOrder()`（帶 `onlineOrderId` ＋ 真枱號 ≠ counter）。
+  結帳放寬同排位自動推進**共用同一份** —— 改一邊等於改兩邊，唔准各寫一份。
 
 ## 版面：快捷操作欄只有 280px（2026-09-12 實案）
 
@@ -793,4 +864,112 @@ and j.status in ('pending', 'failed')
   ⚠️ 命名已統一叫「線上訂單」（原本 tab 叫「線上接單」→ 已改名，避免同 header 兩個叫法）。
 - ⚠️ 上游契約 v3.4（`docs/integration/ledger-client-api.md` §5.5）**未收錄**呢兩支
   → DB 已 `GRANT EXECUTE` 畀 `authenticated`，技術上打得到，但**要請 Ledger 補 v3.5 白名單**。
+
+## 🔴 時間篩選「自訂」＋ 統一收口（2026-09-13 · 見 `docs/128`）
+
+- **唯一收口點 = `src/lib/ledger/date-range.ts`**：`CustomDateRange`（`YYYY-MM-DD` 起訖）、
+  `normalizeCustomRange`（擋 `2026-02-30`／`start > end`，**唔自動對調**）、
+  `instantInRange`（毫秒比較，兩端皆含）、`dateKeyTo{Start,End}ISO`（Macau `+08:00` 邊界）。
+- **兩套 key 型別並存，唔可以合併**（語義邊界唔同）：
+  `LedgerOrderDateFilter`（訂單頁，`7d/30d` 用 `now - days*24h` 毫秒截止）
+  vs `ReportRangeKey`（報表系，用 Macau 日曆起訖 ISO）。兩者都已加 `"custom"`。
+- 🔴 **predicate 第二參數一律接受 `Either`：舊字串 `"today"` 或新 `{key, custom}`**。
+  用 `splitReportRangeArg()` / `splitArg()` 拆解。**加新 predicate 必須走呢個口徑**，
+  唔好自己 `if (range === "all")` —— 原本 6 個 predicate 各寫一套，`inventory-stats`
+  用字串比較、`print-center` 用毫秒比較，邊界早就唔一致（順手已修：
+  `inventory-stats` 原本 `7d→6` 硬編碼，實際只覆蓋 6 天）。
+- 🔴 **`custom` 未揀區間（`custom == null`）＝ 當「全部」**（`return true`），
+  唔係「乜都唔顯示」。因為 chips 撳「自訂」只開彈窗，**確認後才寫 `custom`**，
+  所以唔會出現「custom 但冇區間」嘅殭屍狀態。
+- 🔴 **UI 一定要用共用元件 `DateRangeFilterChips`**（`src/components/date-range-filter-chips.tsx`）。
+  原本同一組 chips 喺 5 個檔各自 hardcode，加一個範圍要改 5 處。`options` 最後一項必須係
+  `key: "custom"`。`size="sm"` 用於報表／打印等窄位。
+- ⚠️ **唔可以用物件 identity 比較 selection**（`orders-hub` 每次 render 都砌新物件）
+  → 會無限重載。用簽名：`online-orders.tsx` 嘅 `dateFilterSignature()`。
+- ⚠️ **`range === f.key` 喺 range 變成物件後會永遠 false**（chip 高亮全滅，build 捉唔到）
+  → 一律 `splitReportRangeArg(range).key`。
+
+## 🔴 線上單匯出 CSV ＋ 分頁抓齊（2026-09-13）
+
+- 🔴 **`list_merchant_orders` 冇 `start`/`end`**，只有 `p_limit`（**硬上限 100**）＋
+  `p_since`/`p_since_id` 游標 ⇒ 自訂長區間（如一個月）**會靜靜截斷**。
+  解法 = `listMerchantOrdersPaged()`（`online-orders.tsx`）：逐頁以
+  `computeSyncCursor(batch)` 續抓，**安全上限 10 頁／1000 張**，達上限 `setTruncated(true)`
+  → 標題列出琥珀警告。**唔可以**靜默截斷。
+  ⚠️ 分頁必須**順序**（下一頁游標依賴上一頁），唔可以 `Promise.all`。
+- 🔴 **CSV 工具 = `src/lib/csv-export.ts`**（`buildCsv` / `downloadCsv` / `csvCell`）。
+  三件一定要做：**BOM `\uFEFF`**（Excel 中文否則亂碼）、**引號逃逸**（`"` → `""`）、
+  **公式注入防護**（值以 `= + - @` 開頭補 `'` —— 客人名／備註係用戶可控輸入）。
+- **匯出分兩檔**（線上／線下欄位差異大）：`線上訂單_…csv`、`線下訂單_…csv`。
+  資料來源 = 子元件已算好嘅 `filteredOrders`（經 `onFilteredOrdersChange` 上報），
+  **唔喺頁面層另計一次**（兩套 predicate 遲早漂移）。
+- 🔴 **客人電話（`order.phone`）＝ 個資紅線張力點**：Ledger 契約
+  （`docs/integration/ledger-client-api.md` §7.2）只准「當次 UI 渲染」，
+  **明文禁止**寫 POS DB／localStorage／analytics，而 **CSV 匯出係落成檔案**（超出範圍）。
+  現行做法（2026-09-13 用戶拍板）：**照放，但只存在記憶體 → 直接落檔，零落地**；
+  拿唔到電話就留空（唔強求）。📌 **仍待與 Ledger 確認** —— 要收緊只需移除
+  `orders-hub.tsx` 匯出欄位中嘅 `客人電話` 一欄。
+  `PosOrder`（線下單）本身**冇**電話欄位，所以線下 CSV 無此問題。
+
+## 🔴🔴 v3.5 掃碼自助扣餘額：Ledger 回覆後嘅 4 個攔截點（2026-09-13 · 見 `docs/129`）
+
+Ledger 已回覆 `docs/126` Q1–Q15，方向上**可以開工**，但**唔係「照做」**：
+
+- 🔴 **P1 防雙扣係「我方要改」唔係 Ledger 改**：Q2 答「POS 自己負責」＋
+  「店員 `merchant_apply_pos_txn` 若用**同一** `p_idempotency_key`
+  （`scan-debit:{merchantId}:{posOrderId}`），現有 `apply_transaction` 就會擋」。
+  ⚠️ 即 **Ledger 端零改動**，守衛成立**全靠 POS 主動對齊冪等鍵**。
+  我發現狀：`merchant_apply_pos_txn` 嘅 key 由 `checkout-member.ts` 自產，
+  **格式唔同** → **照現狀實作 = 真·雙扣**。呢條係開工前必改。
+- 🔴 **P2 伺服器端核價由「應該做」升級為「必須做」**：Q3 明講
+  「金額由 POS 話事」＋「單筆上限：**無**、單日上限：**無**」→
+  **Ledger 完全唔核價，POS 係唯一防線**。而 `/api/pos/sync` 現時
+  **直接信 client `total`**（`sync/route.ts` L745–749）→ 改一行 JS 就可扣 $0.01。
+- 🔴 **P3 免 PIN 窗口 Ledger 完全唔管**：Q5 答「Ledger 端再驗 PIN：☑ 不會」、
+  「3 分鐘 = **建議**」、「起計點 = **登入成功**」、「範圍 = **時間內全部免**」、
+  「refresh token **不可**延長」。→ POS 判錯 = **等於冇二次確認**（手機被盜 180s 內可扣錢）。
+- ⚠️ **P4 `/api/pos/sync` 白名單未收會員欄**：`baseRecord`（L735–776）冇任何
+  `member_*`；`pos_orders` 亦未有 `member_customer_id` 欄。要 migration ＋
+  白名單 ＋ mapper **三處同步改**（漏一邊 = 靜靜唔同步）。
+
+### 其他 Q 嘅落地要點
+
+- **Q4**：未 commit 可同 `posOrderId` 重 quote 新金額；**已 commit 必須新 `posOrderId`**。
+  未 commit 嘅 quote **唔佔冪等鍵**；`quoteSig` **180s** 失效。
+- ⚠️ **Q10 陷阱**：取消後**不可重用同一 `posOrderId`**，而 `buildKioskOrder` 係
+  `id: input.id ?? uid("kiosk")` → **resume 會重用同一 id**（`kiosk-order.ts` L314）。
+  掃碼單一旦 commit 過又被取消，再加單**會撞冪等鍵**。
+  ⚠️「落單成功」≠「扣款成功」，`newKioskOrderId()` 嘅重生時機要分清。
+- **Q14**：`posOrderId` 限 `[A-Za-z0-9._:-]+`、**用內部 `order.id`，唔可以傳
+  `local_order_no`**（「堂食01」「A01」全部唔合法）。✅ 我方 `kiosk-xxxxxxxx` 已合規。
+- **Q6 冇 lookup**：**絕對唔可以**把「查唔到」當「未扣款」→ 只能靠重試回同一 `txnId`；
+  對帳口徑 = `pos_orders.member_deduct_txn_id`。不確定就**紅標交人**，唔好猜。
+- 🔴 **Q15 沖正只可以走會員通 Web（人手）**，POS **禁** `p_type=add` →
+  **掃碼預付單必須鎖單**：commit 後唔准返結／改金額／退單。
+  ⚠️ 呢個同我方既有「返結 = 反向回滾 `memberDeductionAvos`」**直接衝突**
+  （`types.ts` L1191–1195）—— 本地回滾對 Ledger 冇用，只係自欺。
+- **Q13**：扣款成功**可以**直接出廚（唔使店員再確認）——
+  ⚠️ 但同 `docs/122 §4.4` 原建議（維持 draft 待確認）衝突，**要拍板**
+  （影響 `isSaleCountable` 收入認列）。
+- **Q9**：`POS_SCAN_DEBIT_SECRET` UAT／正式各一，**唔可以用 `AUTH_PIN_PEPPER` 簽**；
+  `X-Pos-Timestamp` 用 **unix 秒** → 現有 `webhook-signature.ts` 邏輯**可沿用**。
+- 🔴 **簽名要簽原始 body 字串**，**唔可以**先 parse 再 `stringify`（key 順序會變）。
+
+### ⚠️ 本地缺口：§5.12 未入庫
+
+Ledger 回覆 Q8／Q12 都寫「見契約 §5.12」，但本地
+`docs/integration/ledger-client-api.md` **仍然係 v3.4（1272 行，mtime 09-11）**，
+搜 `5.12` / `scan-debit` / `quoteSig` **零命中** → **權威規格缺席，Q8 實際未答**。
+現時唯一 v3.5 規格係 103 行嘅 `pos-v3.5-partner-handover-scan-debit.md`，
+而佢自己第一句就寫「以 §5.12 為準」。**要追。**
+
+### 過時結論（v3.5 後作廢）
+
+| 文件 | 舊講法 |
+|------|--------|
+| `docs/120` §3.3／§9 | 掃碼扣費 ❌ 不可行 → ✅ **可行** |
+| `docs/121` §3 | S3 降級 → **S3.5**（掃碼自助；店員 session 只留 Kiosk） |
+| `docs/122` | 「唯一出路 = Ledger 開 S2 RPC」→ ⚠️ **作廢**：Ledger 用**兩支 HTTP endpoint**（quote／commit）＋ HMAC 實現 |
+| 契約 §1.2／§5.5.3 | 「禁呼叫非白名單 HTTP」→ 新增 §5.12 兩支 |
+
 

@@ -13,12 +13,14 @@ import { describe, it } from "node:test";
 import {
   hasTableAssigned,
   isOnlineDineIn,
+  isSettleableOrder,
   isTableSelectable,
   needsTableAssignment,
   onlinePaymentBadge,
   onlineTableAssignLabel,
   onlineTableBadge,
   type OnlineTableInfo,
+  type SettleableOrderInfo,
 } from "./online-dinein-labels.ts";
 
 function online(patch: Partial<OnlineTableInfo>): OnlineTableInfo {
@@ -110,5 +112,51 @@ describe("枱可選性（商家：已佔用一律唔可以揀）", () => {
   it("空枱 → 可以揀", () => {
     assert.equal(isTableSelectable("table-a03", occupied), true);
     assert.equal(isTableSelectable("table-a03", []), true);
+  });
+});
+
+describe("可結帳判定（2026-09-13 · 修「排位後卡住」）", () => {
+  function settle(patch: Partial<SettleableOrderInfo>): SettleableOrderInfo {
+    return { tabType: "dine_in", tableId: "table-a02", ...patch };
+  }
+
+  it("未收款活躍單（sent_to_kitchen / reopened）→ 可結帳（本地堂食口徑不變）", () => {
+    assert.equal(isSettleableOrder(settle({ status: "sent_to_kitchen", onlineOrderId: null })), true);
+    assert.equal(isSettleableOrder(settle({ status: "reopened", onlineOrderId: "L1" })), true);
+  });
+
+  it("🔴 已付款線上堂食單（排位後 paid + 真枱）→ 可結帳", () => {
+    assert.equal(
+      isSettleableOrder(settle({ status: "paid", onlineOrderId: "L1", tableId: "table-a02" })),
+      true,
+    );
+  });
+
+  it("🔴 本地堂食 paid 單（冇 onlineOrderId）→ 唔可結帳（快餐 counter 口徑不受影響）", () => {
+    assert.equal(isSettleableOrder(settle({ status: "paid", onlineOrderId: null })), false);
+    assert.equal(isSettleableOrder(settle({ status: "paid", onlineOrderId: undefined })), false);
+  });
+
+  it("🔴 線上 counter 單（快餐／自取／外賣）paid → 唔可結帳", () => {
+    assert.equal(
+      isSettleableOrder(settle({ status: "paid", onlineOrderId: "L2", tableId: "counter" })),
+      false,
+    );
+    assert.equal(
+      isSettleableOrder(
+        settle({ status: "paid", onlineOrderId: "L2", tableId: null, tabType: "pickup" }),
+      ),
+      false,
+    );
+  });
+
+  it("draft / 終態 → 唔可結帳", () => {
+    for (const status of ["draft", "settled", "cancelled", "refunded", "partially_refunded"]) {
+      assert.equal(isSettleableOrder(settle({ status, onlineOrderId: "L1" })), false, status);
+    }
+  });
+
+  it("status 缺失 → 唔可結帳", () => {
+    assert.equal(isSettleableOrder(settle({ status: null, onlineOrderId: "L1" })), false);
   });
 });

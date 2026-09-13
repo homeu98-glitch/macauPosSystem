@@ -619,6 +619,16 @@ export function QuickOnlineOrdersPanel({
             ? `已排位 ${table.name}：${orderCodeLabel(order)}`
             : `已改枱到 ${table.name}：${orderCodeLabel(order)}`,
         });
+        // 🔴 2026-09-13：排位同時已將 Ledger 推去已完成（商家口徑：排位＝開始製作）。
+        // 失敗唔可以靜默 —— 本地排位成功但 Ledger 停留舊狀態，客人端／對賬會對唔上。
+        if (!result.ledgerProgress.ok) {
+          onToast({
+            tone: "error",
+            message: `排位已成功，但同步線上訂單狀態失敗：${
+              result.ledgerProgress.error ?? "未知錯誤"
+            }`,
+          });
+        }
         // 枱位狀態存在本機投影（Ledger 側冇枱概念）→ 用新 ref 逼一次 re-render 更新標籤。
         applyOrders(mergeLedgerOrders(ordersRef.current, [{ ...order }]));
         setAssigningOrderId(null);

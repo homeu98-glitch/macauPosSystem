@@ -11,6 +11,15 @@
 - 🔴 **「取消結帳」唔可以消失**：只喺 draft/sent_to_kitchen 出；齊結帳彈窗 header＋pos-app 詳情彈窗兩分支＋訂單頁列表／查看彈窗。
 - 🔴 全部收喺 `isQuickCounterOrder`（`!onlineOrderId && tableId==="counter"`）→ 堂食完全唔受影響。詳見 docs/113。
 
+## 線上堂食單「排位」（2026-09-13）
+- 🔴 隔離閘只有一個：`isOnlineDineInOrder(o)`（帶 `onlineOrderId` ＋真枱 ≠ counter）。**結帳放寬同排位自動推 Ledger 共用同一份**。
+- 🔴 可結帳＝`isSettleableOrder(o)`：`sent_to_kitchen`／`reopened`／（`onlineOrderId`＋真枱＋`paid`）。**四個入口全要改**（`currentSettlementOrder`／`openSettlementModal`／`confirmPayment`／`confirmComp`／`completeOnlinePaidOrder`），漏一個就卡死嗰條路。
+- 🔴 排位＝一次過做齊：Ledger 爬梯到 `completed`（`syncOnlineDineInCompletion`，梯底 `accepted`）＋本地寫 `paid`＋桌台**綠卡**「已結帳 / 待收尾」。本地成功、Ledger 失敗**唔准靜默**。
+- 🔴 返結守門：`mergeOrderLists()` **排喺「終態優先」之前**＋server `/api/pos/sync` `isReopenRegression`。分界用**返結審計欄 `reopenedAt`**（唔可以用時間／狀態：`settled` 一律拒會擋死合法重結）。一定要排除終態。
+- 🔴 返結掣守門＝`isReopenable(o)`（本身已接受 `paid`），**唔可以**多夾 `status==="settled"`。
+- `canCancelSettle()` **唔跟住放寬**（`paid` 已收錢 → 走返結／退款）。`paid` 唔係終態（要佔枱、可加菜）。
+- ⚠️ 沖正 RPC `revert_transaction` 仍 Phase 2 未開放 → 返結彈窗照標「線上已付唔會沖正」。
+
 ## 打印區塊
 - 🔴 加「靜態文字區塊」＝**零跨 repo 改動**（五個 renderer 全部係 `content[block.id] ?: continue` 查表式）。**只有**「逐項資料」（`PrintJob.items[]` 加欄）或改區塊語義才要四端同步 + 擰 `versionCode`。
 - 加區塊必改：`SECTION_META` ＋ `BLOCK_DEFAULTS`（`Record<>` 逼 tsc）＋ `buildReceiptContent`。出票一律 `appendPrintJobsWithSync()`。

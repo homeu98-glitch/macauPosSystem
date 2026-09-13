@@ -1265,7 +1265,83 @@ union / `Record<>` 嘅風險（一改就四端出紙要跟）。**需要改既�
 
 ---
 
-## 附錄 A — 關鍵代碼事實（供實作時直接查）
+## 13. Phase 2 主線（2026-09-13 · 退換貨 + 掛單/取單 + 精靈 + 秤重 + 庫存頁）
+
+商家指令：「1 2 3 全部做」→ 一次過清空上輪列嘅三個選項。
+
+### 13.1 完成內容
+
+| 子項 | 新增檔案 | 規模 |
+| --- | --- | --- |
+| ④ 掃碼槍自動學習精靈 | `components/retail/scanner-wizard.tsx`、`components/retail/retail-settings.tsx`、`app/retail/settings/page.tsx` | 兩步嚮導（收 3 個樣本 → 驗證）+ 設定頁（現用 profile / 付款方式 / 授權門檻） |
+| ⑤ 手動秤重面板 | `lib/retail/manual-scale.ts`（+測試 26）、改 `retail-counter.tsx` `WeightPad` | 皮重預設 chips、實時金額、皮重 > 毛重 / 太輕出聲 |
+| ⑨ 庫存頁 | `lib/retail/inventory-ops.ts`（+測試 32）、`components/retail/retail-inventory.tsx`、`app/retail/inventory/page.tsx` | 雙 Tab（要補貨 / 全部）、盤點草稿、一鍵補貨、匯出盤點表 |
+| ⑩ 退換貨 | `lib/retail/returns.ts`（+測試 54）、`lib/retail/return-service.ts`、`components/retail/retail-returns.tsx`、`app/retail/returns/page.tsx` | 單號/序號/條碼反查 → 行級退 → 退款 + 回補庫存 + 出退款單 |
+| ⑪ 掛單/取單 | `lib/retail/hold-orders.ts`（+測試 23）、改 `storage.ts`、`retail-counter.tsx` | F8 掛單 / F9 取最新、掛單 strip、隔日自動清過期 |
+
+側欄由 2 項 → **5 項**（收銀台 / 商品 / 庫存 / 退換 / 設定）。
+
+### 13.2 五個關鍵實作決定
+
+**① 退換貨另立模組，唔重用餐飲退菜。**
+餐飲退菜係「整項退、唔退款流程、唔回補庫存」（出咗廚房就係成本）；零售相反 ——
+要真金白銀退款、要回補庫存、要按拆分付款比例分攤。硬塞入同一套會兩邊都壞。
+
+**② 退款金額一律用「原單實收」口徑，唔可以用牌價。**
+`lineNetOfItem()` 重算當時實際計價（改價 `price` 已係實際價 → 再乘 `discountRate`）。
+**打過折 / 改過價嘅單唔會退多錢**（有專門單測鎖住：$199 打 8 折 → 只退 $159.20）。
+
+**③ 全退判定用「剩餘可退金額」，唔用「剩餘件數」。**
+稱重行嘅「剩餘」係 kg（1.5kg 退 0.5kg → 剩 1kg ≠ 0），但按件數睇
+「soldQty 1 − returnedQty 1 = 0」會被誤判成全退 → 單被標成 `refunded`、
+之後客人再退嗰 1kg 就冇得退。金額口徑天然處理「按比例退」，亦同客人實付對得上。
+
+**④ 退款單走「收據通道」，用「全單備註」承載金額。**
+收據模板嘅 `refund` 區塊係**交班單專用**；零售又冇 zone 打印機（`buildKitchenPrintJobs()`
+會零出紙）。所以砌一個「退款視圖 order」（items = 退貨行、`orderNote` = 退款方式逐筆 + 合計 +
+原單號）餵 `buildReceiptPrintJobs()` → **零模板改動、零四端改動**。
+單號用 `原單號-退N`（同一單退兩次唔會印出兩個一樣嘅單號）。
+
+**⑤ 掛單序號由 label 反推，唔用 `length + 1`。**
+`nextHoldSeq()` 由現有 label 反推 max + 1 —— 用 `length + 1` 嘅話，刪咗中間一張
+（例如刪咗「掛-02」剩「掛-01」「掛-03」）再掛新單就會**重號**。
+
+### 13.3 實作過程捉到嘅 3 個真 bug（全部有回歸測試鎖住）
+
+| # | 症狀 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 冇 id 嘅兩行會撞同一個 key → 退 A 行當成退咗 B 行 | `["","","","0.00"].join("::")` = `"::::::0.00"`（**唔係空字串**），靠「拼出嚟係唔係空」判斷兜底會失效 | `returnItemKey()` 改為**逐個識別欄位檢查**，三個全空才用 `idx-${index}` |
+| 2 | 稱重行退一半，單被標成 `refunded` | 全退判定用「剩餘件數」（稱重行 1 − 1 = 0） | 改用「剩餘可退金額」累加比對 |
+| 3 | 部分退貨 + 拆分付款，各筆退款加總 ≠ 總退款 | 逐筆 `round2` 會產生 $0.01 尾差 | `splitRefundByMethod()` **尾差補落最後一筆** |
+
+### 13.4 唔應該回補庫存嘅情形
+
+現實：客人退嘅貨**未必入得返貨架**（過期 / 破損 / 已拆封 / 生鮮）。
+`shouldRestock(reason)` 用關鍵字寬鬆比對（過期 / 破損 / 已開封 / 報廢 / 生鮮…）→
+**照退款但唔回補庫存**，並喺介面明確講「貨品唔會回補庫存」。
+唔做嘅話庫存會虛高，之後盤點又要再改一次。
+
+### 13.5 ⚠️ 刻意未做
+
+- **換貨唔係一頁搞掂**：換貨 = 退貨 + 開新單。新單要經 `settleRetailOrder()`
+  行正常結帳路徑（扣庫存 / 落單 / outbox / 出票一步都唔可以少），
+  所以只提供 `planExchange()` 計差額，實際操作係「退貨 → 返收銀台開新單」。
+- **退款冇接支付終端**：`refundByMethod` 只係**記帳**（邊個方式退幾多），
+  冇呼叫任何刷卡機 / 掃碼退款 API（澳門多數零售走人手退款，要接就要逐間支付商傾）。
+- **序號退貨唔會自動解綁**：退完 `serialNos` 仍留喺原單（做歷史紀錄），
+  冇另立「已退序號」黑名單 —— 同一序號可以再開新單賣（現實：維修後再售）。
+
+### 13.6 驗證
+
+| 項 | 結果 |
+| --- | --- |
+| `tsc --noEmit` | **0 error**（本檔相關；同 repo 另有平行 session 改緊 `local-orders-panel.tsx` / `orders-hub.tsx`，與零售無關） |
+| `node --test src/lib/retail/*.test.ts` | **382 pass / 0 fail**（上輪 328 → 新增 54：`returns.test.ts`） |
+| `eslint`（新檔 + 改動檔） | **0 error / 0 warning** |
+| `next build` | 見下方 |
+
+---
+
 | 事實 | 位置 |
 | --- | --- |
 | 純函式購物車（**最值錢的可重用資產**） | `src/lib/kiosk-cart.ts:13,28,40,50,73` + `kiosk-cart.test.ts` |

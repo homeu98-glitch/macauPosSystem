@@ -1,6 +1,6 @@
 "use client";
 
-import { ledgerReportRangeForKey, ReportRangeKey } from "@/lib/ledger/report-period";
+import { resolveReportRange, type ReportRangeArg } from "@/lib/ledger/report-period";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 
 export type LedgerReportSummary = {
@@ -71,13 +71,13 @@ function pickAvosField(raw: Record<string, number>, candidates: readonly string[
   return undefined;
 }
 
-export async function getMerchantReportSummary(range: ReportRangeKey): Promise<LedgerReportSummary> {
+export async function getMerchantReportSummary(range: ReportRangeArg): Promise<LedgerReportSummary> {
   const client = getLedgerSupabaseClient();
   if (!client) {
     throw new Error("Ledger Supabase 尚未設定。");
   }
 
-  const period = ledgerReportRangeForKey(range);
+  const period = resolveReportRange(range);
   if (!period) {
     throw new Error("無法計算報表區間。");
   }

@@ -41,6 +41,16 @@ export function getPrimaryOnlineOrderAction(order: LedgerOnlineOrder): OnlineOrd
 
   const raw = rawLedgerStatus(order.status);
 
+  // 📌 2026-09-13 商家口徑：線上堂食單**排位之後就冇「開始製作 / 待取餐 / 完成」呢批掣** ——
+  // 「排位完成＝已開始製作」，排位嗰刻已自動將 Ledger 推去 `completed`
+  //（`assignLedgerOrderToTable()` → `syncOnlineDineInCompletion()`）。
+  //
+  // ⚠️ 呢個守門**唔喺呢度做**，因為 `LedgerOnlineOrder` 冇 `tableId`（枱係 POS 本機概念，
+  // Ledger 側唔知）。實際做法係 `quick-online-orders-panel` 嘅 `visibleOrders` 用
+  // `transferredLedgerOrderIds(loadOrders())` 過濾 —— 排位後（本地單帶真枱號）嗰張線上單
+  // 即刻由線上列表剔走，改由本地堂食單面板管理，所以呢批掣自然唔會出現。
+  // 詳見 `docs/online-dinein-table-assign-plan-2026-09-12.md` §11。
+
   if (raw === "pending") {
     return {
       key: "accept",

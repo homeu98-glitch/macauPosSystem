@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 import { useRouter } from "next/navigation";
 
@@ -13,8 +13,8 @@ import { OrderDiscountRow } from "@/components/order-discount-display";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import {
   dateFilterLabel,
-  LedgerOrderDateFilter,
   orderMatchesDateFilter,
+  type DateFilterArg,
 } from "@/lib/ledger/order-date-filter";
 import {
   isLocalOrTransferredDineIn,
@@ -62,7 +62,7 @@ const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "cancelled", label: "已取消" },
 ];
 
-function orderMatchesLocalDateFilter(order: PosOrder, filter: LedgerOrderDateFilter): boolean {
+function orderMatchesLocalDateFilter(order: PosOrder, filter: DateFilterArg): boolean {
   const pseudo = { createdAt: order.createdAt, updatedAt: order.updatedAt };
   return orderMatchesDateFilter(pseudo, filter);
 }
@@ -136,13 +136,17 @@ function QuickOrderActions({
 export function LocalOrdersPanel({
   dateFilter = "today",
   focusOrderId = null,
+  onFilteredOrdersChange,
 }: {
-  dateFilter?: LedgerOrderDateFilter;
+  /** 時間篩選：key 字串或 `{ key, custom }`（2026-09-13 加「自訂」）。 */
+  dateFilter?: DateFilterArg;
   /**
    * Deep link（`/orders?orderId=<id>`）：入頁即刻開該張單嘅「查看」彈窗。
    * 由收銀機右上角自助單提示撳入嚟（`pos-app.openSelfOrderNotice`，docs/115 G5）。
    */
   focusOrderId?: string | null;
+  /** 當前 tab + 時間範圍篩選後嘅線下單（供 `/orders` 頁匯出 CSV）。 */
+  onFilteredOrdersChange?: (orders: PosOrder[]) => void;
 }) {
   const currency = loadBootstrapCache()?.currency ?? "MOP";
   const router = useRouter();
@@ -282,6 +286,16 @@ export function LocalOrdersPanel({
         return String(b.id).localeCompare(String(a.id));
       });
   }, [dateFilter, orders, statusTab]);
+
+  // 匯出 CSV（2026-09-13）：把「當前 tab + 時間範圍」篩選後嘅線下單上報畀 `/orders` 頁。
+  // ⚠️ ref 存 callback，避免 inline 函式每次 render identity 都變 → 無限 loop。
+  const onFilteredOrdersChangeRef = useRef(onFilteredOrdersChange);
+  useEffect(() => {
+    onFilteredOrdersChangeRef.current = onFilteredOrdersChange;
+  }, [onFilteredOrdersChange]);
+  useEffect(() => {
+    onFilteredOrdersChangeRef.current?.(filteredOrders);
+  }, [filteredOrders]);
   // 與線上訂單頁「stats.pending」對齊：當前 tab + dateFilter 範圍內，狀態仲係 draft（未送廚房）嘅訂單。
   const draftCount = useMemo(
     () => filteredOrders.filter((order) => order.status === "draft").length,
@@ -616,7 +630,12 @@ export function LocalOrdersPanel({
                           >
                             查看
                           </button>
-                          {order.status === "settled" && isReopenable(order) ? (
+                          {/* 🔴 2026-09-13：守門由 `status === "settled"` 放寬成 `isReopenable(order)`。
+                              `isReopenable()` 本身就**已經接受 `paid`**（見 pos-orders.ts），
+                              但呢度舊寫法多夾一個 `settled` 條件 → 排位後已付款嘅線上堂食單
+                              （本地寫 `paid`）撳唔到返結，同被放寬嘅結帳入口唔一致。
+                              口徑：`paid`（已結帳待收尾）同 `settled` 都要出返結掣。 */}
+                          {isReopenable(order) ? (
                             <button
                               className="whitespace-nowrap rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
                               onClick={() => {

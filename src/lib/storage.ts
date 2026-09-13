@@ -17,6 +17,7 @@ import {
   UserRole,
 } from "@/lib/types";
 import type { RetailProduct } from "@/lib/retail/types";
+import type { RetailHoldOrder } from "@/lib/retail/hold-orders";
 import {
   MAX_SELF_ORDER_NOTICES,
   type SelfOrderNotice,
@@ -118,6 +119,13 @@ const STORE_SUFFIX = {
    * 唔應該同商品資料互相拖累。所以獨立一個 store-scoped key，同 orders / printJobs 同級。
    */
   retailProducts: "retail-products",
+  /**
+   * 零售掛單（2026-09-13）。**本機暫存，唔入 `orders`、唔上雲、唔算營業額。**
+   *
+   * 為咩獨立一個 key：掛單係「客人行開一陣」嘅臨時車，混入 orders 會令
+   * `isSaleCountable()` 見到幽靈單 → 日結多數。同 `retail-products` 同級待遇。
+   */
+  retailHolds: "retail-holds",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -274,6 +282,27 @@ export function loadRetailProducts(): RetailProduct[] {
  */
 export function saveRetailProducts(products: readonly RetailProduct[]): boolean {
   return writeStoreJson(STORE_SUFFIX.retailProducts, products, resolveSettingsStoreScope());
+}
+
+/** 零售掛單實際寫入嘅 localStorage key（UI read-back 驗證用）。 */
+export function getRetailHoldsKey(): string {
+  return storeScopedStorageKey(STORE_SUFFIX.retailHolds, resolveSettingsStoreScope());
+}
+
+/**
+ * 讀零售掛單（`/retail` 收銀台暫存）。
+ *
+ * 🔴 **掛單唔入 `orders`** —— 佢係本機暫存、唔算營業額、唔上雲、唔出票。
+ * 混入 orders 會令報表多出一堆「幽靈單」（`isSaleCountable()` 會計到）。
+ */
+export function loadRetailHolds(): RetailHoldOrder[] {
+  const raw = readStoreJson<unknown>(STORE_SUFFIX.retailHolds, [], resolveSettingsStoreScope());
+  return Array.isArray(raw) ? (raw as RetailHoldOrder[]) : [];
+}
+
+/** 寫零售掛單。回傳 `false` = 寫入失敗（呼叫端必須出聲，唔可以靜默）。 */
+export function saveRetailHolds(holds: readonly RetailHoldOrder[]): boolean {
+  return writeStoreJson(STORE_SUFFIX.retailHolds, holds, resolveSettingsStoreScope());
 }
 
 export function normalizeDeviceConfig(config: DeviceConfig | null | undefined): DeviceConfig | null {

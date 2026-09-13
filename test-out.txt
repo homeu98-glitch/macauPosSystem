@@ -1,0 +1,243 @@
+﻿TAP version 13
+# (node:19784) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/ledger/date-range.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: isValidDateKey锛氬悎娉曟棩鏈?ok 1 - isValidDateKey锛氬悎娉曟棩鏈?  ---
+  duration_ms: 20.0074
+  type: 'test'
+  ...
+# Subtest: isValidDateKey锛氭牸寮忛尟
+ok 2 - isValidDateKey锛氭牸寮忛尟
+  ---
+  duration_ms: 0.209
+  type: 'test'
+  ...
+# Subtest: isValidDateKey锛氬敂瀛樺湪鍢呮棩瀛愯鎿嬶紙闃?Date 鑷嫊婊炬湀锛?ok 3 - isValidDateKey锛氬敂瀛樺湪鍢呮棩瀛愯鎿嬶紙闃?Date 鑷嫊婊炬湀锛?  ---
+  duration_ms: 0.4759
+  type: 'test'
+  ...
+# Subtest: normalizeCustomRange锛氭甯?ok 4 - normalizeCustomRange锛氭甯?  ---
+  duration_ms: 1.0198
+  type: 'test'
+  ...
+# Subtest: normalizeCustomRange锛氬柈鏃ュ崁闁?ok 5 - normalizeCustomRange锛氬柈鏃ュ崁闁?  ---
+  duration_ms: 0.474
+  type: 'test'
+  ...
+# Subtest: normalizeCustomRange锛歴tart > end 瑕栫偤鐒℃晥锛堝敂鑷嫊灏嶈锛?ok 6 - normalizeCustomRange锛歴tart > end 瑕栫偤鐒℃晥锛堝敂鑷嫊灏嶈锛?  ---
+  duration_ms: 0.3115
+  type: 'test'
+  ...
+# Subtest: normalizeCustomRange锛氫换涓€绔潪娉?鈫?null
+ok 7 - normalizeCustomRange锛氫换涓€绔潪娉?鈫?null
+  ---
+  duration_ms: 0.4629
+  type: 'test'
+  ...
+# Subtest: dateKeyToStartISO / dateKeyToEndISO锛歁acau 閭婄晫
+ok 8 - dateKeyToStartISO / dateKeyToEndISO锛歁acau 閭婄晫
+  ---
+  duration_ms: 0.1402
+  type: 'test'
+  ...
+# Subtest: customRangeToISO锛氶牠灏鹃兘淇?Macau 鐣舵棩閭婄晫
+ok 9 - customRangeToISO锛氶牠灏鹃兘淇?Macau 鐣舵棩閭婄晫
+  ---
+  duration_ms: 0.318
+  type: 'test'
+  ...
+# Subtest: instantInRange锛氬叐绔殕鍚?ok 10 - instantInRange锛氬叐绔殕鍚?  ---
+  duration_ms: 0.4052
+  type: 'test'
+  ...
+# Subtest: instantInRange锛氭帴鍙?Date / number / ISO string
+ok 11 - instantInRange锛氭帴鍙?Date / number / ISO string
+  ---
+  duration_ms: 0.3243
+  type: 'test'
+  ...
+# Subtest: instantInRange锛氶潪娉曡几鍏ヤ竴寰?false
+ok 12 - instantInRange锛氶潪娉曡几鍏ヤ竴寰?false
+  ---
+  duration_ms: 0.1093
+  type: 'test'
+  ...
+# Subtest: instantInRange锛氳法鏈堝崁闁擄紙8 鏈堝熬 鈫?9 鏈堥牠锛?ok 13 - instantInRange锛氳法鏈堝崁闁擄紙8 鏈堝熬 鈫?9 鏈堥牠锛?  ---
+  duration_ms: 0.0926
+  type: 'test'
+  ...
+# Subtest: macauDateKeyOf锛歎TC 娣卞瑕佹鍏ユ境闁€鐣舵棩
+ok 14 - macauDateKeyOf锛歎TC 娣卞瑕佹鍏ユ境闁€鐣舵棩
+  ---
+  duration_ms: 0.6007
+  type: 'test'
+  ...
+# Subtest: macauDateKeyOf锛氶潪娉?鈫?null
+ok 15 - macauDateKeyOf锛氶潪娉?鈫?null
+  ---
+  duration_ms: 0.0969
+  type: 'test'
+  ...
+# Subtest: customRangeLabel
+ok 16 - customRangeLabel
+  ---
+  duration_ms: 0.0812
+  type: 'test'
+  ...
+# (node:18856) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/dev/macauPos/macauPosSystem/src/lib/ledger/order-config-parse.test.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to C:\\dev\\macauPos\\macauPosSystem\\package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: parseMerchantOrderConfig
+    # Subtest: 妯欐簴 snake_case 鍥炲偝 鈫?鍏ㄩ儴鐓ц畝
+    ok 1 - 妯欐簴 snake_case 鍥炲偝 鈫?鍏ㄩ儴鐓ц畝
+      ---
+      duration_ms: 1.7698
+      type: 'test'
+      ...
+    # Subtest: camelCase 鍥炲偝涓€妯ｈ畝寰楀埌
+    ok 2 - camelCase 鍥炲偝涓€妯ｈ畝寰楀埌
+      ---
+      duration_ms: 0.1555
+      type: 'test'
+      ...
+    # Subtest: 馃敶 缂?merchant_enabled 娆?鈫?null锛堝敂鍙互鐣?true锛廸alse锛?    ok 3 - 馃敶 缂?merchant_enabled 娆?鈫?null锛堝敂鍙互鐣?true锛廸alse锛?      ---
+      duration_ms: 0.5217
+      type: 'test'
+      ...
+    # Subtest: 馃敶 绌虹墿浠?/ null / 绱斿瓧涓?鈫?merchantEnabled 涓€寰?null
+    ok 4 - 馃敶 绌虹墿浠?/ null / 绱斿瓧涓?鈫?merchantEnabled 涓€寰?null
+      ---
+      duration_ms: 0.2435
+      type: 'test'
+      ...
+    # Subtest: 瀛椾覆 "false" 鍞斿彲浠ョ暥 truthy锛堟渻鍙嶈綁鎴愩€岄枊銆嶏級
+    ok 5 - 瀛椾覆 "false" 鍞斿彲浠ョ暥 truthy锛堟渻鍙嶈綁鎴愩€岄枊銆嶏級
+      ---
+      duration_ms: 0.2065
+      type: 'test'
+      ...
+    # Subtest: 0 / 1 鏁稿瓧瀵硶涓€妯ｆ敮鎻?    ok 6 - 0 / 1 鏁稿瓧瀵硶涓€妯ｆ敮鎻?      ---
+      duration_ms: 0.1072
+      type: 'test'
+      ...
+    # Subtest: 闄ｅ垪鍖呬綇涓€琛?鈫?鍙栫涓€琛?    ok 7 - 闄ｅ垪鍖呬綇涓€琛?鈫?鍙栫涓€琛?      ---
+      duration_ms: 0.1423
+      type: 'test'
+      ...
+    # Subtest: 鍖呬竴灞?{ config: {...} } 鈫?鎷嗛枊
+    ok 8 - 鍖呬竴灞?{ config: {...} } 鈫?鎷嗛枊
+      ---
+      duration_ms: 0.185
+      type: 'test'
+      ...
+    # Subtest: auto_accept 缂烘瑒 鈫?false锛堝悓 POS 鏈湴 default 涓€鑷达級
+    ok 9 - auto_accept 缂烘瑒 鈫?false锛堝悓 POS 鏈湴 default 涓€鑷达級
+      ---
+      duration_ms: 0.4518
+      type: 'test'
+      ...
+    1..9
+ok 17 - parseMerchantOrderConfig
+  ---
+  duration_ms: 5.1253
+  type: 'suite'
+  ...
+# Subtest: isRpcMissingError
+    # Subtest: PostgREST 鎻惧敂鍒板嚱寮?鈫?true
+    ok 1 - PostgREST 鎻惧敂鍒板嚱寮?鈫?true
+      ---
+      duration_ms: 0.2613
+      type: 'test'
+      ...
+    # Subtest: 鏅€氭キ鍕欓尟瑾?鈫?false
+    ok 2 - 鏅€氭キ鍕欓尟瑾?鈫?false
+      ---
+      duration_ms: 0.0944
+      type: 'test'
+      ...
+    1..2
+ok 18 - isRpcMissingError
+  ---
+  duration_ms: 0.6191
+  type: 'suite'
+  ...
+# Subtest: describeOrderConfigBlockers
+    # Subtest: 姝ｅ父鐕熸キ涓?鈫?鍐?blocker
+    ok 1 - 姝ｅ父鐕熸キ涓?鈫?鍐?blocker
+      ---
+      duration_ms: 0.7763
+      type: 'test'
+      ...
+    # Subtest: admin_enabled=false 鈫?骞冲彴鏈牳鍙紙搴楀摗瑙ｅ敂鍒帮級
+    ok 2 - admin_enabled=false 鈫?骞冲彴鏈牳鍙紙搴楀摗瑙ｅ敂鍒帮級
+      ---
+      duration_ms: 0.1099
+      type: 'test'
+      ...
+    # Subtest: merchant_enabled=false 鈫?宸叉毇鍋滄帴鍠紙搴楀摗鑷繁闁嬪緱杩旓級
+    ok 3 - merchant_enabled=false 鈫?宸叉毇鍋滄帴鍠紙搴楀摗鑷繁闁嬪緱杩旓級
+      ---
+      duration_ms: 0.173
+      type: 'test'
+      ...
+    # Subtest: suspended 鈫?鍒楀嚭甯宠櫉鐙€鎱?    ok 4 - suspended 鈫?鍒楀嚭甯宠櫉鐙€鎱?      ---
+      duration_ms: 0.1648
+      type: 'test'
+      ...
+    # Subtest: 鏅傛澶栵紙hours_enabled=true 涓?open_now=false锛夆啋 浼戞伅涓?    ok 5 - 鏅傛澶栵紙hours_enabled=true 涓?open_now=false锛夆啋 浼戞伅涓?      ---
+      duration_ms: 0.0831
+      type: 'test'
+      ...
+    # Subtest: 鍏ㄥぉ鎺ュ柈锛坔ours_enabled=false锛夊氨绠?open_now 缂烘瑒閮藉敂鏈冧簜鍫变紤鎭?    ok 6 - 鍏ㄥぉ鎺ュ柈锛坔ours_enabled=false锛夊氨绠?open_now 缂烘瑒閮藉敂鏈冧簜鍫变紤鎭?      ---
+      duration_ms: 0.0732
+      type: 'test'
+      ...
+    # Subtest: 鍏ㄧ己娆?鈫?鍞斾簜鍤囦汉锛屽敂鍒?blocker
+    ok 7 - 鍏ㄧ己娆?鈫?鍞斾簜鍤囦汉锛屽敂鍒?blocker
+      ---
+      duration_ms: 0.0724
+      type: 'test'
+      ...
+    1..7
+ok 19 - describeOrderConfigBlockers
+  ---
+  duration_ms: 1.6022
+  type: 'suite'
+  ...
+# Subtest: hasAnyOnlinePayment
+    # Subtest: 鍏╃ó閮介棞 鈫?false锛堥枊搴楁渻鐣€ RPC 鎷掞級
+    ok 1 - 鍏╃ó閮介棞 鈫?false锛堥枊搴楁渻鐣€ RPC 鎷掞級
+      ---
+      duration_ms: 0.1119
+      type: 'test'
+      ...
+    # Subtest: 鏈変竴閭婇枊 鈫?true
+    ok 2 - 鏈変竴閭婇枊 鈫?true
+      ---
+      duration_ms: 0.0787
+      type: 'test'
+      ...
+    # Subtest: 鍏╅倞閮界己娆?鈫?null锛堢劇寰炲垽鏂凤級
+    ok 3 - 鍏╅倞閮界己娆?鈫?null锛堢劇寰炲垽鏂凤級
+      ---
+      duration_ms: 0.0654
+      type: 'test'
+      ...
+    1..3
+ok 20 - hasAnyOnlinePayment
+  ---
+  duration_ms: 0.3485
+  type: 'suite'
+  ...
+1..20
+# tests 37
+# suites 4
+# pass 37
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 263.9772
+

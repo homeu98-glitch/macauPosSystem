@@ -13,12 +13,15 @@ import { useNetworkOnline } from "@/lib/use-network-online";
  * 但**獨立實現、唔改既有** —— 同 salon 當年嘅做法一致）。
  *
  * ⚠️ 只放**已經起好嘅頁面**：連去唔存在嘅路由會變成死連結（比少一個入口更差）。
- * 庫存 / 報表 / 交班 / 打印會隨對應畫面逐步加返（見 docs/124 §9.6）。
+ * 報表 / 交班會隨對應畫面逐步加返（見 docs/124 §9.6）。
  */
 
 const retailNavItems = [
   { href: "/retail", label: "收銀台", short: "收" },
   { href: "/retail/products", label: "商品", short: "品" },
+  { href: "/retail/inventory", label: "庫存", short: "庫" },
+  { href: "/retail/returns", label: "退換", short: "退" },
+  { href: "/retail/settings", label: "設定", short: "設" },
 ] as const;
 
 export function RetailSidebar() {

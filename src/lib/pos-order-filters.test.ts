@@ -146,6 +146,97 @@ describe("mergeOrderLists：付款階段單向閘（2026-09-12 實案）", () =>
     assert.equal(merged[0].status, "settled");
   });
 
+  // ── (B2) 返結守門（2026-09-13 實案：「撳完返結，掣轉頭消失」）──────────────
+  // 根因：`isTerminalOrderStatus()` **唔包 `paid`**（paid 要佔枱、可加菜 → 唔算終態），
+  // 所以「本地 reopened vs 雲端 paid」呢個組合唔會行「終態優先」分支，直接跌落 LWW。
+  // 而雲端 row 嘅 `updatedAt` 係 server 蓋章時間 → 一條舊 `paid` snapshot 只要
+  // server 收件時間較新就會「扮新」贏出，把返結打返做已結帳。
+  //
+  // 🔑 分界用**返結審計欄**（`reopenedAt`）：返結會寫呢欄，所以冇呢欄嘅已收款 snapshot
+  // 一定係返結之前嘅 → 拒收。比時間唔可靠（雲端 client 鐘可能來自另一部機）。
+  const REOPENED_AT = "2026-09-13T10:00:00.000Z";
+
+  it("🔴 返結（reopened）唔會被「雲端扮新」嘅 paid snapshot 蓋返做已結帳", () => {
+    const local = order({
+      id: "r1",
+      status: "reopened",
+      clientUpdatedAt: T1,
+      updatedAt: T1,
+      reopenedAt: REOPENED_AT,
+    });
+    // 雲端 echo：返結之前嘅舊 snapshot（paid），冇返結審計欄，但 updated_at 係 server 蓋章（較「新」）
+    const cloudEcho = order({ id: "r1", status: "paid", updatedAt: T2 });
+
+    const merged = mergeOrderLists([local], [cloudEcho]);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].status, "reopened", "返結唔可以被舊已收款 snapshot 蓋走");
+  });
+
+  it("🔴 就算 incoming 帶埋較新嘅 client 鐘，返結狀態仍然守得住（防跨機時鐘偏移）", () => {
+    const local = order({
+      id: "r2",
+      status: "reopened",
+      clientUpdatedAt: T1,
+      updatedAt: T1,
+      reopenedAt: REOPENED_AT,
+    });
+    const staleButFastClock = order({ id: "r2", status: "paid", clientUpdatedAt: T2, updatedAt: T2 });
+
+    const merged = mergeOrderLists([local], [staleButFastClock]);
+    assert.equal(merged[0].status, "reopened");
+  });
+
+  it("🔴 返結唔會被舊 settled snapshot 蓋走（同一守門）", () => {
+    const local = order({
+      id: "r3",
+      status: "reopened",
+      clientUpdatedAt: T1,
+      updatedAt: T1,
+      reopenedAt: REOPENED_AT,
+    });
+    const cloudEcho = order({ id: "r3", status: "settled", updatedAt: T2 });
+
+    const merged = mergeOrderLists([local], [cloudEcho]);
+    assert.equal(merged[0].status, "reopened");
+  });
+
+  it("返結之後嘅合法前進照通：重結寫 settled（帶同一返結審計欄）要贏", () => {
+    const reopened = order({
+      id: "r4",
+      status: "reopened",
+      clientUpdatedAt: T1,
+      updatedAt: T1,
+      reopenedAt: REOPENED_AT,
+      reopenedBy: "cashier",
+    });
+    // 重結事件係返結之後發生 → 一定承襲同一個 reopenedAt（返結審計欄單調、唔會清）
+    const resettled = order({
+      id: "r4",
+      status: "settled",
+      clientUpdatedAt: T2,
+      updatedAt: T2,
+      reopenedAt: REOPENED_AT,
+      reopenedBy: "cashier",
+    });
+
+    const merged = mergeOrderLists([reopened], [resettled]);
+    assert.equal(merged[0].status, "settled", "重結係前進，唔可以被返結守門擋住");
+  });
+
+  it("返結之後嘅合法作廢照通：取消寫 cancelled（終態）要贏", () => {
+    const reopened = order({
+      id: "r5",
+      status: "reopened",
+      clientUpdatedAt: T1,
+      updatedAt: T1,
+      reopenedAt: REOPENED_AT,
+    });
+    const cancelled = order({ id: "r5", status: "cancelled", clientUpdatedAt: T2, updatedAt: T2 });
+
+    const merged = mergeOrderLists([reopened], [cancelled]);
+    assert.equal(merged[0].status, "cancelled");
+  });
+
   it("兩個 open 版本照行 LWW，而且用 client 鐘（唔會被 server 蓋章時間騙）", () => {
     const older = order({ id: "a7", status: "sent_to_kitchen", clientUpdatedAt: T1, updatedAt: T2 });
     const newer = order({ id: "a7", status: "sent_to_kitchen", orderNote: "加咗辣", clientUpdatedAt: T2, updatedAt: T1 });

@@ -25,6 +25,8 @@
 | **專案「坑」總表（改動前必讀）** | [113-agent-gotchas.md](./113-agent-gotchas.md) |
 | **掃碼下單雙模式（堂食 / 快餐）方案** | [115-scan-dine-in-vs-quick-plan.md](./115-scan-dine-in-vs-quick-plan.md) |
 | **掃碼自助扣餘額 v3.5（對 Ledger 確認單）** | [126-scan-debit-questions-to-ledger.md](./126-scan-debit-questions-to-ledger.md) |
+| **時間篩選「自訂」＋ 訂單匯出 CSV** | [128-date-range-custom-and-csv-export.md](./128-date-range-custom-and-csv-export.md) |
+| **v3.5 掃碼扣餘額 — Ledger 回覆解讀與落地計劃** | [129-scan-debit-v35-ledger-reply-analysis.md](./129-scan-debit-v35-ledger-reply-analysis.md) |
 | Admin 帳戶 SQL | [sql/admin-account-schema.sql](./sql/admin-account-schema.sql) |
 
 ---

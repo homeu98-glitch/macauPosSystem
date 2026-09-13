@@ -31,10 +31,13 @@ import { useNetworkOnline } from "@/lib/use-network-online";
 import { defaultDeviceConfig, defaultPosLocalSettings } from "@/lib/mock-data";
 import { DeviceConfig, EscPosAlign, EscPosBlockStyle, EscPosSize, LABEL_PAPER_PRESETS, PosLocalSettings, PosOrder, PrintJob, PrintTemplateKind, QueueEvent, ShiftSectionId, ShiftTemplate, ShiftTemplateVariant } from "@/lib/types";
 import {
-  ledgerReportRangeForKey,
-  macauDateKey,
-  type ReportRangeKey,
+  REPORT_RANGE_OPTIONS,
+  resolveReportRange,
+  splitReportRangeArg,
+  type ReportRangeArg,
 } from "@/lib/ledger/report-period";
+import { instantInRange } from "@/lib/ledger/date-range";
+import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import {
   buildKitchenContent,
   buildLabelContent,
@@ -185,20 +188,18 @@ function QrFieldPreview({ url, size }: { url: string; size: EscPosSize }) {
   );
 }
 
-/** 列印任務是否落在選定嘅時間範圍內（以 Asia/Macau 為準）。"all" 一律通過。 */
-function printJobMatchesDateRange(createdAt: string, range: ReportRangeKey, now = new Date()): boolean {
-  if (range === "all") return true;
-  const ts = Date.parse(createdAt);
-  if (!Number.isFinite(ts)) return false;
-  const instant = new Date(ts);
-  if (range === "today") return macauDateKey(instant) === macauDateKey(now);
-  if (range === "yesterday") {
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    return macauDateKey(instant) === macauDateKey(yesterday);
-  }
-  const period = ledgerReportRangeForKey(range, now);
+/** 列印任務是否落在選定嘅時間範圍內（以 Asia/Macau 為準）。"all" 一律通過。
+ *
+ * ⚠️ 2026-09-13：加「自訂」後改走 `report-period.ts` 嘅 `resolveReportRange` 統一入口，
+ * 唔再自己寫一套 today/yesterday/其餘 三分支（原本同 `orderMatchesReportRange` 口徑有微差）。
+ */
+function printJobMatchesDateRange(createdAt: string, range: ReportRangeArg, now = new Date()): boolean {
+  const { key, custom } = splitReportRangeArg(range);
+  if (key === "all") return true;
+  if (key === "custom" && !custom) return true;
+  const period = resolveReportRange(range, now);
   if (!period) return true;
-  return ts >= Date.parse(period.start) && ts <= Date.parse(period.end);
+  return instantInRange(createdAt, period);
 }
 
 // 打印記錄列表（2026-09-10）：表頭 / 儲存格樣式，同訂單頁（local-orders-panel / online-orders）一致。
@@ -227,8 +228,9 @@ export function PrintCenter() {
   const hasChannel = isNativeBridgeAvailable() || isCompanionConfigured() || isRelayConfigured();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "sent" | "printed" | "failed">("all");
-  // docs/任務：列印記錄加入時間篩選（今天 / 昨天 / 7天 / 30天 / 全部），預設「今天」。
-  const [dateFilter, setDateFilter] = useState<ReportRangeKey>("today");
+  // docs/任務：列印記錄加入時間篩選（今天 / 昨天 / 7天 / 30天 / 全部 / 自訂），預設「今天」。
+  // 2026-09-13 加「自訂」：型別升級為 ReportRangeArg（可攜 {key, custom}）。
+  const [dateFilter, setDateFilter] = useState<ReportRangeArg>("today");
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [activeTab, setActiveTab] = useState<
     "records" | "receipt-template" | "label-template" | "kitchen-template" | "kiosk-template" | "shift-template"
@@ -1649,27 +1651,17 @@ export function PrintCenter() {
                       {label}
                     </button>
                   ))}
-                  {/* 時間篩選：今天 / 昨天 / 7天 / 30天 / 全部，預設「今天」。
-                      docs/任務：時間篩選與狀態篩選係 AND 關係。 */}
-                  <div className="ml-3 flex flex-wrap items-center gap-1 rounded-full bg-slate-100 p-1 text-xs font-semibold">
-                    {[
-                      ["today", "今天"],
-                      ["yesterday", "昨天"],
-                      ["7d", "7天"],
-                      ["30d", "30天"],
-                      ["all", "全部"],
-                    ].map(([key, label]) => (
-                      <button
-                        key={key}
-                        className={`rounded-full px-3 py-1.5 ${
-                          dateFilter === key ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                        }`}
-                        onClick={() => setDateFilter(key as ReportRangeKey)}
-                        type="button"
-                      >
-                        {label}
-                      </button>
-                    ))}
+                  {/* 時間篩選：今天 / 昨天 / 7天 / 30天 / 全部 / 自訂，預設「今天」。
+                      docs/任務：時間篩選與狀態篩選係 AND 關係。
+                      2026-09-13：改用共用元件（原本 hardcode 5 顆 chips 陣列）。 */}
+                  <div className="ml-3">
+                    <DateRangeFilterChips
+                      options={REPORT_RANGE_OPTIONS}
+                      value={splitReportRangeArg(dateFilter).key}
+                      custom={splitReportRangeArg(dateFilter).custom}
+                      onChange={(key, custom) => setDateFilter(custom ? { key, custom } : key)}
+                      size="sm"
+                    />
                   </div>
                   <button
                     className="ml-auto rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300"

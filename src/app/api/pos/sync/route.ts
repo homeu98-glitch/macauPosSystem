@@ -696,16 +696,43 @@ export async function POST(request: Request) {
             PAID_ORDER_STATUSES.has(existingStatus) && OPEN_ORDER_STATUSES.has(writeStatus);
           const isPaidUpgrade =
             OPEN_ORDER_STATUSES.has(existingStatus) && PAID_ORDER_STATUSES.has(writeStatus);
-          if ((isStale && !isTerminalUpgrade && !isPaidUpgrade) || isDowngrade || isPaidDowngrade) {
+          /**
+           * (e) 🔴 返結守門（2026-09-13 實案）：雲端已經返結（`reopened`），incoming 係
+           * 一條較新嘅 `paid` / `settled` snapshot → **一律拒寫**。
+           *
+           * 點解上面擋唔到：`reopened` **唔喺** OPEN_ORDER_STATUSES（`draft` / `sent_to_kitchen`）
+           * 亦唔喺 PAID_ORDER_STATUSES（`paid` / `settled` / `refunded` / `partially_refunded`）
+           * 之內，所以 `isPaidUpgrade` / `isPaidDowngrade` 兩個都係 false。
+           * 而 `isDowngrade` 只認「雲端係**終態**」——`paid` 按設計唔算終態（要佔枱、可加菜）
+           * → 呢個組合完全冇守門，只要那條舊 `paid` 事件嘅 `client_updated_at` 較新就會贏出，
+           * 把雲端已返結嘅單打返做已結帳（收銀撳完返結、掣轉頭消失）。
+           *
+           * 合法路徑唔受影響：返結之後收銀重結會寫 `settled`（終態 → 上面 `isTerminalUpgrade`
+           * 已豁免）或作廢寫 `cancelled`，兩者都放行。呢個守門只擋「打返做**非終態**已收款」。
+           * ⚠️ 一定要排除終態：`settled` 本身就喺 PAID_ORDER_STATUSES 內，唔排除就會
+           * 令「返結 → 重結」呢條合法前進被擋死。
+           */
+          const isReopenRegression =
+            existingStatus === "reopened" &&
+            PAID_ORDER_STATUSES.has(writeStatus) &&
+            !TERMINAL_ORDER_STATUSES.has(writeStatus);
+          if (
+            (isStale && !isTerminalUpgrade && !isPaidUpgrade) ||
+            isDowngrade ||
+            isPaidDowngrade ||
+            isReopenRegression
+          ) {
             console.warn(
               `[pos/sync] 拒絕覆寫訂單 ${orderId}（現有=${existingStatus}@${existing.updated_at ?? "?"}，` +
                 `incoming=${incomingStatus}@${incomingUpdatedAt}，` +
-                `${
-                  isPaidDowngrade
-                    ? "付款階段降級（已收款唔可以被未收款 snapshot 覆蓋）"
-                    : isStale
-                      ? "stale（incoming 較舊）"
-                      : "終態降級"
+                `                ${
+                  isReopenRegression
+                    ? "返結回退（雲端已 reopened，唔可以被舊已收款 snapshot 打返）"
+                    : isPaidDowngrade
+                      ? "付款階段降級（已收款唔可以被未收款 snapshot 覆蓋）"
+                      : isStale
+                        ? "stale（incoming 較舊）"
+                        : "終態降級"
                 }）`,
             );
             // 有意嘅 skip：**`applied:false`** —— 新 client 見到就唔會剷走呢條事件
@@ -713,7 +740,13 @@ export async function POST(request: Request) {
             // `ok:true` 保留係為咗向後兼容舊 client（佢哋只讀 ok）。
             ack(true, undefined, {
               applied: false,
-              reason: isPaidDowngrade ? "paid-downgrade" : isStale ? "stale" : "downgrade",
+              reason: isReopenRegression
+                ? "reopen-guard"
+                : isPaidDowngrade
+                  ? "paid-downgrade"
+                  : isStale
+                    ? "stale"
+                    : "downgrade",
             });
             continue;
           }

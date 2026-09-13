@@ -5,6 +5,7 @@ import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import { MerchantOpenPill } from "@/components/merchant-open-pill";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
@@ -56,11 +57,13 @@ import {
 } from "@/lib/ledger/order-mapper";
 import {
   dateFilterLabel,
-  LedgerOrderDateFilter,
   LEDGER_ORDER_DATE_FILTERS,
   limitForDateFilter,
   orderMatchesDateFilter,
+  type DateFilterArg,
+  type LedgerOrderDateFilterKey,
 } from "@/lib/ledger/order-date-filter";
+import type { CustomDateRange } from "@/lib/ledger/date-range";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
@@ -123,20 +126,105 @@ const TD_CELL = "px-3 py-2 align-middle";
  * `tick` 係 cache-buster：本機單存喺 localStorage，本機單一變（`pos-orders-changed`）
  * 就要重算呢個 filter，否則撳完「排位」張單仍然留喺線上列表。
  */
+/**
+ * 時間篩選嘅「簽名」字串，用嚟比較兩個 selection 係唔係等價。
+ *
+ * ⚠️ 唔可以比較物件 identity：`orders-hub` 每次 render 都砌一個新 `{key, custom}`，
+ * identity 比對會令 embedded 同步 effect 每次都判定「有變」→ 無限重載。
+ */
+function dateFilterSignature(filter: DateFilterArg): string {
+  if (typeof filter === "string") return filter;
+  const { key, custom } = filter;
+  return custom ? `${key}:${custom.start}:${custom.end}` : key;
+}
+
 function withoutTransferredOrders(orders: LedgerOnlineOrder[], tick: number): LedgerOnlineOrder[] {
   void tick;
   const transferred = transferredLedgerOrderIds(loadLocalOrders());
   return orders.filter((order) => !transferred.has(order.id));
 }
 
+/**
+ * 自動分頁抓齊線上單（2026-09-13 新增）。
+ *
+ * ## 為什麼需要
+ *
+ * Ledger RPC `list_merchant_orders` **冇 start / end 參數**，只有：
+ * - `p_limit`（**上限 100**）
+ * - `p_since` + `p_since_id`（增量游標，語義係「updated_at >= since」排序後嘅位置）
+ *
+ * 所以商家揀「自訂 2026-08-01 ~ 08-31」（一個月）時，單次 100 張會**靜靜截斷**，
+ * 匯出唔齊而用戶唔知。
+ *
+ * ## 做法
+ *
+ * 以「最後一行」嘅 `(updatedAt, id)` 做下一頁游標，逐頁往後抓，直到：
+ * - 回傳行數 < 每頁上限（＝已到尾），或
+ * - 達到 `maxPages`（安全上限），此時 `truncated = true`。
+ *
+ * ⚠️ 游標用 `computeSyncCursor`（同增量同步同一個口徑），唔可以自己砌 ——
+ * 排序鍵係 `updated_at DESC, id`，兩者要一致否則會跳行／重複。
+ *
+ * ⚠️ 分頁係**逐頁順序**（唔可以 Promise.all 並行）—— 下一頁嘅游標依賴上一頁結果。
+ */
+async function listMerchantOrdersPaged({
+  merchantId,
+  limit,
+  maxPages,
+}: {
+  merchantId: string;
+  limit: number;
+  maxPages: number;
+}): Promise<{ rows: LedgerOnlineOrder[]; truncated: boolean }> {
+  const pageSize = Math.min(Math.max(1, limit), 100); // RPC 硬上限 100
+  const all: LedgerOnlineOrder[] = [];
+  const seen = new Set<string>();
+  let since: string | null = null;
+  let sinceId: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    const batch = await listMerchantOrders({
+      merchantId,
+      limit: pageSize,
+      since,
+      sinceId,
+    });
+
+    for (const row of batch) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      all.push(row);
+    }
+
+    // 未滿一頁 ＝ 已經冇下一頁
+    if (batch.length < pageSize) {
+      return { rows: all, truncated: false };
+    }
+
+    const next = computeSyncCursor(batch);
+    // 游標冇推進（理論上唔會）→ 停，避免無限迴圈
+    if (!next.since || (next.since === since && next.sinceId === sinceId)) {
+      return { rows: all, truncated: false };
+    }
+    since = next.since;
+    sinceId = next.sinceId;
+  }
+
+  return { rows: all, truncated: true };
+}
+
 export function OnlineOrders({
   embedded = false,
   dateFilter: dateFilterProp,
   onDateFilterChange,
+  onFilteredOrdersChange,
 }: {
   embedded?: boolean;
-  dateFilter?: LedgerOrderDateFilter;
-  onDateFilterChange?: (filter: LedgerOrderDateFilter) => void;
+  /** 時間篩選：key 字串或 `{ key, custom }`（2026-09-13 加「自訂」）。 */
+  dateFilter?: DateFilterArg;
+  onDateFilterChange?: (key: LedgerOrderDateFilterKey, custom: CustomDateRange | null) => void;
+  /** 當前 tab + 時間範圍篩選後嘅線上單（供 `/orders` 頁匯出 CSV）。 */
+  onFilteredOrdersChange?: (orders: LedgerOnlineOrder[]) => void;
 }) {
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
@@ -147,11 +235,13 @@ export function OnlineOrders({
   const merchantOrderConfig = useMerchantOrderConfig(merchantId, Boolean(merchantId));
 
   const [activeTab, setActiveTab] = useState<LedgerOrderTab>("all");
-  const [internalDateFilter, setInternalDateFilter] = useState<LedgerOrderDateFilter>("today");
+  const [internalDateFilter, setInternalDateFilter] = useState<DateFilterArg>("today");
   const dateFilter = dateFilterProp ?? internalDateFilter;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [orders, setOrders] = useState<LedgerOnlineOrder[]>([]);
+  /** 分頁抓齊時達到 10 頁安全上限 → 列表可能唔齊，UI 要明確提示（唔可以靜默）。 */
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
@@ -174,7 +264,7 @@ export function OnlineOrders({
   const hasInitializedSnapshotRef = useRef(false);
   const autoAcceptProcessingRef = useRef<Set<string>>(new Set());
   const autoBridgeRef = useRef<Set<string>>(new Set());
-  const embeddedDateFilterRef = useRef(dateFilter);
+  const embeddedDateFilterRef = useRef(dateFilterSignature(dateFilterProp ?? "today"));
 
   const tables = useMemo(
     // ⚠️ 必須剝走返結 temp 枱（`isReopenTemp`）：temp 枱只喺「返結單編輯期間」存在，
@@ -312,7 +402,7 @@ export function OnlineOrders({
   );
 
   const loadOrders = useCallback(
-    async (mode: "full" | "incremental" = "full", filter: LedgerOrderDateFilter = dateFilter) => {
+    async (mode: "full" | "incremental" = "full", filter: DateFilterArg) => {
       if (!merchantId) {
         setError("尚未取得商戶資料，請重新登入。");
         setLoading(false);
@@ -320,20 +410,31 @@ export function OnlineOrders({
       }
 
       const cursor = syncCursorRef.current;
-      const rows = await listMerchantOrders({
-        merchantId,
-        limit: mode === "incremental" ? 50 : limitForDateFilter(filter),
-        since: mode === "incremental" ? cursor.since : null,
-        sinceId: mode === "incremental" ? cursor.sinceId : null,
-      });
 
+      // 增量：只拉游標之後嘅變更（單次，唔需要分頁）
       if (mode === "incremental" && cursor.since) {
+        const rows = await listMerchantOrders({
+          merchantId,
+          limit: 50,
+          since: cursor.since,
+          sinceId: cursor.sinceId,
+        });
         applyOrders(mergeLedgerOrders(ordersRef.current, rows));
-      } else {
-        applyOrders(rows);
+        return;
       }
+
+      // 全量：自動分頁抓齊（2026-09-13 加「自訂」後必需 —— RPC 冇 start/end，
+      // 只有 `p_limit ≤ 100` + `p_since` 游標，長區間會靜靜截斷）。
+      // 安全上限 10 頁（1000 張），達上限時出提示，唔會無限循環。
+      const { rows, truncated } = await listMerchantOrdersPaged({
+        merchantId,
+        limit: limitForDateFilter(filter),
+        maxPages: 10,
+      });
+      setTruncated(truncated);
+      applyOrders(rows);
     },
-    [applyOrders, dateFilter, merchantId],
+    [applyOrders, merchantId],
   );
 
   useEffect(() => {
@@ -359,18 +460,29 @@ export function OnlineOrders({
     return () => {
       cancelled = true;
     };
+    // ⚠️ 刻意**唔**加 `dateFilter` 落依賴：呢個 effect 只負責「入頁首次載入」。
+    // 之後嘅 filter 變更由 `changeDateFilter()`（非 embedded）或下面嘅 embedded
+    // 同步 effect 處理 —— 若加咗 `dateFilter`，撳一次 chip 會載入兩次（重複打 RPC）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadOrders]);
 
-  function changeDateFilter(next: LedgerOrderDateFilter) {
-    if (next === dateFilter) return;
+  function changeDateFilter(next: LedgerOrderDateFilterKey, custom: CustomDateRange | null = null) {
+    const currentKey = typeof dateFilter === "string" ? dateFilter : dateFilter.key;
+    const currentCustom = typeof dateFilter === "string" ? null : dateFilter.custom ?? null;
+    const sameCustom =
+      (custom?.start ?? null) === (currentCustom?.start ?? null) &&
+      (custom?.end ?? null) === (currentCustom?.end ?? null);
+    if (next === currentKey && sameCustom) return;
+
+    const selection: DateFilterArg = custom ? { key: next, custom } : next;
     if (onDateFilterChange) {
-      onDateFilterChange(next);
+      onDateFilterChange(next, custom);
     } else {
-      setInternalDateFilter(next);
+      setInternalDateFilter(selection);
     }
     setRefreshing(true);
     setError(null);
-    void loadOrders("full", next)
+    void loadOrders("full", selection)
       .catch((err) => {
         setError(err instanceof Error ? err.message : "讀取訂單失敗");
       })
@@ -381,8 +493,10 @@ export function OnlineOrders({
 
   useEffect(() => {
     if (!onDateFilterChange) return;
-    if (embeddedDateFilterRef.current === dateFilter) return;
-    embeddedDateFilterRef.current = dateFilter;
+    // ⚠️ 比較「selection 簽名」而唔係物件 identity：`dateSelection` 喺 orders-hub
+    // 每次 render 都係新物件，用 identity 比會無限重載。
+    if (embeddedDateFilterRef.current === dateFilterSignature(dateFilter)) return;
+    embeddedDateFilterRef.current = dateFilterSignature(dateFilter);
     setRefreshing(true);
     setError(null);
     void loadOrders("full", dateFilter)
@@ -470,7 +584,7 @@ export function OnlineOrders({
     onInsert: handleInsert,
     onUpdate: handleUpdate,
     onResubscribed: () => {
-      void loadOrders("incremental").catch((err) => {
+      void loadOrders("incremental", dateFilter).catch((err) => {
         setError(err instanceof Error ? err.message : "增量同步失敗");
       });
     },
@@ -602,6 +716,16 @@ export function OnlineOrders({
     return byDate.filter((order) => order.tabType === activeTab);
   }, [activeTab, dateFilter, ledgerOrders]);
 
+  // 匯出 CSV（2026-09-13）：把「當前 tab + 時間範圍」篩選後嘅線上單上報畀 `/orders` 頁，
+  // 由頁面統一決定要唔要落檔（避免兩張表各自砌一份匯出邏輯）。
+  // ⚠️ 用 ref 存 callback，避免因為 inline 函式 identity 每次 render 都變而無限 loop。
+  const onFilteredOrdersChangeRef = useRef(onFilteredOrdersChange);
+  useEffect(() => {
+    onFilteredOrdersChangeRef.current = onFilteredOrdersChange;
+  }, [onFilteredOrdersChange]);
+  useEffect(() => {
+    onFilteredOrdersChangeRef.current?.(filteredOrders);
+  }, [filteredOrders]);
   const stats = useMemo(() => {
     const pending = filteredOrders.filter((order) => rawLedgerStatus(order.status) === "pending").length;
     return { total: filteredOrders.length, pending };
@@ -611,7 +735,7 @@ export function OnlineOrders({
     setRefreshing(true);
     setError(null);
     try {
-      await loadOrders(syncCursorRef.current.since ? "incremental" : "full");
+      await loadOrders(syncCursorRef.current.since ? "incremental" : "full", dateFilter);
     } catch (err) {
       setError(err instanceof Error ? err.message : "刷新失敗");
     } finally {
@@ -1018,6 +1142,11 @@ export function OnlineOrders({
             <div className="mt-1 text-xs text-slate-500 sm:text-sm">
               {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單 {stats.pending} 張
             </div>
+            {truncated ? (
+              <div className="mt-1 text-xs font-medium text-amber-700">
+                ⚠️ 訂單較多，只載入最近 1000 張；如需完整資料請縮窄日期範圍。
+              </div>
+            ) : null}
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {TABS.map((tab) => (
@@ -1033,20 +1162,12 @@ export function OnlineOrders({
               </button>
             ))}
             {!embedded ? (
-              <div className="flex flex-wrap gap-1 rounded-full bg-slate-100 p-1">
-                {LEDGER_ORDER_DATE_FILTERS.map((filter) => (
-                  <button
-                    key={filter.key}
-                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                      filter.key === dateFilter ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                    }`}
-                    onClick={() => changeDateFilter(filter.key)}
-                    type="button"
-                  >
-                    {filter.label}
-                  </button>
-                ))}
-              </div>
+              <DateRangeFilterChips
+                options={LEDGER_ORDER_DATE_FILTERS}
+                value={typeof dateFilter === "string" ? dateFilter : dateFilter.key}
+                custom={typeof dateFilter === "string" ? null : dateFilter.custom ?? null}
+                onChange={changeDateFilter}
+              />
             ) : null}
           </div>
           <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">

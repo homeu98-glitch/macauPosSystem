@@ -302,3 +302,82 @@ assignOnlineOrderTable(order, table):
 2. **反向同步（Ledger → 本地）未做**：若另一部機／Ledger 側將單設做 `completed`，
    本地採納單仍然係 `paid` + `ready`（收銀可以照撳「完成」，Ledger 會係 idempotent 無變化）。
 3. **取消／退款一律唔行 `update_order_status`**：要繼續走 `merchant_resolve_order_change`。
+
+---
+
+# 11. 第三批（2026-09-13）：排位自動完成 + 修「排位後卡死」
+
+商家需求原文：
+
+> 「客人下單後，系統需先為其排位，**排位完成即代表訂單已開始製作**。所以當某張線上堂食單
+> 排位完成時，應自動一次性將該訂單依序推進至後續全部狀態：已接單、開始製作、製作完成、
+> 已出單，無需逐一手動更新。請確保此自動流程僅適用於線上堂食單，其他訂單類型的操作流程不受影響。」
+
+同時商家拍板：
+- 本地狀態用 `paid`（錢喺 Ledger 收咗），**但桌台卡要綠色**「已結帳 / 待收尾」；
+- Ledger 側**直接推到 `completed`**；
+- 返結**要出**（之後可能加菜）；
+- 排位後「開始製作」嗰批掣**應該攞走**；
+- 沖正 RPC **今次先唔接**（Ledger 文件仍標 Phase 2 未開放）。
+
+## 11.1 診斷：一個實案 bug（「排位後卡死」）
+
+**根因**：`assignLedgerOrderToTable()` 對「線上已付」單寫入 `status: "paid"`
+（`ledger-pos-bridge.ts`），但**全店結帳入口只認 `sent_to_kitchen` / `reopened`**：
+
+| 入口 | 舊寫法 |
+|---|---|
+| `pos-app.tsx` `currentSettlementOrder` | 只認當前枱 `sent_to_kitchen` / `reopened` |
+| `pos-app.tsx` `openSettlementModal()` | `{sent_to_kitchen, reopened}` 二選一 |
+| `pos-app.tsx` `confirmPayment()` / `confirmComp()` / `completeOnlinePaidOrder()` | 同上 + 全域 `unsettledOrder`（只認 `sent_to_kitchen`） |
+
+⇒ 撳「去結帳」彈「**目前沒有待結帳訂單**」；而枱面（`openOrders` **包含 `paid`**）
+永遠被佔用。其他出口亦封死：返結掣只喺 `settled` 出、退桌有 `!order.onlineOrderId` 守門、
+取消結帳只 `draft` / `sent_to_kitchen` → **完全冇出路**。
+
+**關鍵**：`prepaidAmount` 本來就係為呢個場景而設
+（`payableBeforeMember = max(0, total − discount − prepaid)` ＝只收加菜差額），
+所以放寬入口係**補返設計缺口，唔係新加能力**。
+
+**另一個隱藏 bug（同一個 case 引發出嚟）**：`mergeOrderLists()` 嘅「終態優先」分支
+**唔涵蓋 `paid`**（`paid` 按設計要佔枱、可加菜 → 唔算終態），所以「本地 `reopened`
+vs 雲端 `paid`」呢個組合直接跌落 LWW；而雲端 row 嘅 `updatedAt` 係 **server 蓋章時間**
+→ 一條舊 `paid` snapshot 只要 server 收件時間較新就會「扮新」贏出，
+**收銀撳完返結、掣轉頭消失**。伺服器端 `/api/pos/sync` 有同類缺口。
+
+## 11.2 已落地
+
+| # | 檔案 | 內容 |
+|---|---|---|
+| 1 | `src/lib/pos/online-dinein-labels.ts` | ① 新增 **`isOnlineDineInOrder()`**（帶 Ledger 單 id ＋ 真枱號 ≠ counter）—— 結帳放寬／排位自動推進**共用同一份**隔離閘；② 新增 **`isSettleableOrder()`**（未收款活躍單 ∪ 已付款線上堂食單） |
+| 2 | `src/lib/pos/online-dinein-fulfillment.ts`（新） | **`syncOnlineDineInCompletion()`**：由 `accepted` 起逐級爬到 `completed`（`DINEIN_LADDER`），「狀態唔啱」＝已過咗嗰級就繼續，其餘錯誤即刻停手；冪等。＋ `syncOnlineDineInCompletionInBackground()`（失敗 `console.error` ＋ toast，唔靜默） |
+| 3 | `src/lib/ledger/ledger-pos-bridge.ts` | `assignLedgerOrderToTable()` 排位後**即時**呼叫 `syncOnlineDineInCompletion()`，回傳加 `ledgerProgress` |
+| 4 | `src/components/quick-online-orders-panel.tsx` | `assignTable()` 讀 `ledgerProgress`，失敗彈 error toast（本地已排位但 Ledger 未推 → 客人端／對賬會對唔上，唔可以靜默） |
+| 5 | `src/components/pos-app.tsx` | 🔴 **四個結帳入口全部改用 `isSettleableOrder()`**：`currentSettlementOrder`、`openSettlementModal()`、`confirmPayment()`、`confirmComp()`、`completeOnlinePaidOrder()`；移除已無用嘅 `unsettledOrder`（`no-unused-vars` 會捉） |
+| 6 | `src/components/pos-app.tsx`（桌台卡） | 🔴 帶 `onlineOrderId` ＋ `status === "paid"` → **綠色底**（`bg-emerald-500`）＋「**已結帳 / 待收尾**」；其他狀態口徑完全不變 |
+| 7 | `src/components/local-orders-panel.tsx` | 🔴 返結掣守門由 `status === "settled" && isReopenable(order)` **放寬成 `isReopenable(order)`**（`isReopenable()` 本身已接受 `paid`，舊寫法多夾一個條件 → 同已放寬嘅結帳入口唔一致） |
+| 8 | `src/lib/pos-order-filters.ts` | 🔴 **`mergeOrderLists()` 加「返結守門」，排在「終態優先」之前**：本地 `reopened` ＋ incoming 係「未返結嘅已收款 snapshot」→ 拒收。分界用**返結審計欄**（`reopenedAt`）而唔係時間 —— 雲端 client 鐘可能來自另一部機（合法地較新），比時間唔可靠；返結審計欄係**單調**嘅（寫咗唔會冇） |
+| 9 | `src/app/api/pos/sync/route.ts` | 🔴 伺服器端同類守門 `isReopenRegression`（雲端 `reopened` ＋ incoming 非終態已收款 → 拒寫），加 `reopen-guard` reason。⚠️ 一定要排除終態（`settled` 本身就喺 `PAID_ORDER_STATUSES`），否則「返結 → 重結」呢條合法前進會被擋死 |
+| 10 | `src/lib/ledger/online-order-actions.ts` | 加註解記錄「排位後冇『開始製作』掣」嘅實際機制（靠 `transferredLedgerOrderIds()` 過濾，唔喺呢度做 —— `LedgerOnlineOrder` 冇 `tableId`） |
+
+## 11.3 驗證
+
+- `tsc --noEmit` ✅
+- `node --test` 全部 35 個測試檔：**643 / 643 pass** ✅
+  （新增：`online-dinein-fulfillment.test.ts` 4 個、`online-dinein-labels.test.ts` +6 個、
+  `pos-order-filters.test.ts` +5 個返結守門回歸測試）
+- `eslint` 對全部改動檔案：**0 error / 0 warning** ✅
+
+## 11.4 今次**刻意唔做**嘅嘢
+
+1. **沖正 RPC 唔接**（商家：「如果真係唔得，就算了」）→ 返結彈窗照舊顯示
+   「⚠️ 此單線上已付 … 返結唔會沖正／退款（款項喺會員通 Ledger）」
+   —— `docs/integration/ledger-client-api.md` 全版本仍標 `revert_transaction` **Phase 2 未開放**。
+2. **快餐 / 自取 / 外賣完全唔受影響**：佢哋唔符合 `isOnlineDineInOrder()`（冇真枱號），
+   所以唔會自動推狀態、唔會放寬結帳入口、桌台卡亦唔會變綠。
+   快餐照舊走 `syncOnlineQuickFulfillment()`（由 `preparing` 起，保留收銀自行撳「可取餐 / 完成」）。
+3. **同一個 case 但已攔安全**：排位競態窗口內理論上可以喺線上列表撳到「開始製作」，
+   但 `visibleOrders` 用 `transferredLedgerOrderIds(loadOrders())` 過濾
+   → 排位一寫入本地單，嗰張線上單即刻由列表剔走（`LedgerOnlineOrder` 冇 `tableId`，
+   冇可能喺 `getPrimaryOnlineOrderAction()` 層面做守門）。
+

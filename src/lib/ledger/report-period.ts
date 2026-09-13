@@ -1,4 +1,13 @@
-/** Macau (+08:00) date boundaries for Ledger `get_merchant_report_summary`. */
+/**
+ * Macau (+08:00) date boundaries for Ledger `get_merchant_report_summary`.
+ *
+ * ⚠️ 2026-09-13 加「自訂」：`ReportRangeKey` 多咗 `"custom"`，而所有 predicate
+ * （`orderMatchesReportRange` 等）嘅第二參數改為接受 **Either**：舊嘅 key 字串，
+ * 或 `{ key, custom }` selection object。自訂區間一律用 Macau 日曆起訖，
+ * 經 `date-range.ts` 統一處理。
+ */
+
+import { customRangeToISO, instantInRange, type CustomDateRange, type DateRangeSelection } from "./date-range";
 
 const MACAU_TZ = "Asia/Macau";
 
@@ -62,7 +71,10 @@ export function macauRollingRange(days: number, now = new Date()): { start: stri
   };
 }
 
-export type ReportRangeKey = "today" | "yesterday" | "7d" | "30d" | "all";
+export type ReportRangeKey = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
+
+/** 呼叫 predicate 時可以傳嘅第二參數（字串＝只用 key；object＝可帶 custom）。 */
+export type ReportRangeArg = ReportRangeKey | DateRangeSelection<ReportRangeKey>;
 
 export const REPORT_RANGE_OPTIONS: Array<{ key: ReportRangeKey; label: string }> = [
   { key: "today", label: "今天" },
@@ -70,13 +82,33 @@ export const REPORT_RANGE_OPTIONS: Array<{ key: ReportRangeKey; label: string }>
   { key: "7d", label: "最近 7 天" },
   { key: "30d", label: "最近 30 天" },
   { key: "all", label: "全部" },
+  { key: "custom", label: "自訂" },
 ];
+
+/** 拆解第二參數：回傳 key 同（如適用）自訂區間。 */
+export function splitReportRangeArg(arg: ReportRangeArg): {
+  key: ReportRangeKey;
+  custom: CustomDateRange | null;
+} {
+  if (typeof arg === "string") return { key: arg, custom: null };
+  return { key: arg.key, custom: arg.custom ?? null };
+}
+
+/** `custom` 區間 → Macau 起訖 ISO；其他 key 走原本邏輯。`null` ＝ 無上限（全部）。 */
+export function resolveReportRange(arg: ReportRangeArg, now = new Date()): { start: string; end: string } | null {
+  const { key, custom } = splitReportRangeArg(arg);
+  if (key === "custom") {
+    return custom ? customRangeToISO(custom) : null;
+  }
+  return ledgerReportRangeForKey(key, now);
+}
 
 export function ledgerReportRangeForKey(key: ReportRangeKey, now = new Date()): { start: string; end: string } | null {
   if (key === "today") return macauTodayRange(now);
   if (key === "yesterday") return macauYesterdayRange(now);
   if (key === "7d") return macauRollingRange(7, now);
   if (key === "30d") return macauRollingRange(30, now);
+  if (key === "custom") return null; // 由 resolveReportRange 處理
   // "all" — use 365-day window as practical upper bound for RPC
   return macauRollingRange(365, now);
 }
@@ -84,10 +116,13 @@ export function ledgerReportRangeForKey(key: ReportRangeKey, now = new Date()): 
 /** 以澳門日曆篩選本機訂單（優先 `updatedAt`，結帳／報表用）。 */
 export function orderMatchesReportRange(
   order: { updatedAt?: string; createdAt?: string },
-  range: ReportRangeKey,
+  range: ReportRangeArg,
   now = new Date(),
 ): boolean {
-  if (range === "all") return true;
+  const { key } = splitReportRangeArg(range);
+  if (key === "all") return true;
+  // 自訂：未揀區間 → 當「全部」
+  if (key === "custom" && !(typeof range !== "string" && range.custom)) return true;
 
   const ts = order.updatedAt || order.createdAt;
   if (!ts) return false;
@@ -95,22 +130,20 @@ export function orderMatchesReportRange(
   const instant = new Date(ts);
   if (Number.isNaN(instant.getTime())) return false;
 
-  // 「昨天／今天／7d／30d」統一用 macau{...}Range() 先計出 Macau 嘅起訖 ISO 字串，
-  // 再用 instant >= start && instant <= end 判斷，避免用 now.getTime() - 86400000 喺
+  // 「昨天／今天／7d／30d／自訂」統一先計出 Macau 起訖 ISO 字串，再用
+  // instant >= start && instant <= end 判斷，避免用 now.getTime() - 86400000 喺
   // 跨午夜邊界時嘅 off-by-one。Macau 與 UTC 相差 +08:00，毫秒級計算嘅昨日邊界
   // 喺凌晨 0–8 點可能跨越 Macau 日界，導致昨日的單被誤判到前天（或反之）。
-  const period = ledgerReportRangeForKey(range, now);
+  const period = resolveReportRange(range, now);
   if (period) {
-    const time = instant.getTime();
-    const startMs = Date.parse(period.start);
-    const endMs = Date.parse(period.end);
-    return time >= startMs && time <= endMs;
+    return instantInRange(instant, period);
   }
 
-  // 兜底：理論上唔會去到（ReportRangeKey enum 已窮舉）。
+  // 兜底：只有 "custom" 而未有區間會嚟到（上面已 return true）。
   return false;
 }
 
-export function reportRangeLabel(range: ReportRangeKey): string {
-  return REPORT_RANGE_OPTIONS.find((row) => row.key === range)?.label ?? range;
+export function reportRangeLabel(range: ReportRangeArg): string {
+  const { key } = splitReportRangeArg(range);
+  return REPORT_RANGE_OPTIONS.find((row) => row.key === key)?.label ?? key;
 }

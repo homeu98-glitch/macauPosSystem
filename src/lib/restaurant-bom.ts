@@ -4,7 +4,7 @@
 // 報表端用 BOM × 已售菜品份數 計出食材用量與成本，唔使喺落單時記錄。
 // 真後端（Ledger menu_item_ingredients）到位後，只要將 loadBom / saveBom 換做 RPC 即可。
 
-import { orderMatchesReportRange, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, type ReportRangeArg } from "@/lib/ledger/report-period";
 import type { PosOrder } from "@/lib/types";
 
 export interface BomIngredient {
@@ -107,6 +107,6 @@ export function inMacauMonth(o: PosOrder, ym: string): boolean {
   return orderMacauMonthKey(o.createdAt) === ym;
 }
 
-export function rangePredicate(range: ReportRangeKey): (o: PosOrder) => boolean {
+export function rangePredicate(range: ReportRangeArg): (o: PosOrder) => boolean {
   return (o) => orderMatchesReportRange(o, range);
 }

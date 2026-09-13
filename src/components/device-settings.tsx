@@ -1048,9 +1048,19 @@ export function DeviceSettings() {
                 打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。
               </div>
             </div>
-            {/* 右側控件：「線上訂單」狀態 toggle（放喺「返回收銀台」左邊）＋ 返回收銀台。
-                收銀一入設置頁就見到鋪頭開咗未，而且就地可以開返店 —— 唔使撳入分頁。 */}
+            {/* 右側控件：「工作台」入口（最左）＋「線上訂單」狀態 toggle ＋ 返回收銀台。
+                「工作台」入口 2026-09-13 由側欄搬上嚟 —— 側欄 72px 闊唔應該擺一次性設定，
+                但逃生門要保留（揀錯工作台唔應該逼人登出再打 8 位帳號 + PIN）。
+                行為同側欄原本嗰粒一模一樣：`href="/select-workbench"` 直接跳，冇二次確認。 */}
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <Link
+                className="flex items-center gap-2 rounded-full bg-orange-500 px-3 py-2 text-sm font-semibold text-white"
+                href="/select-workbench"
+                title="切換工作台（重新揀呢部機嘅崗位）"
+              >
+                <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
+                工作台
+              </Link>
               <MerchantOrderHeaderToggle />
               <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
                 返回收銀台
