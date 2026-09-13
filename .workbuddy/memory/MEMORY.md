@@ -38,6 +38,7 @@
 | React 依賴 | 父傳子嘅物件／函式 prop **一定** stable identity（`useMemo`／`useCallback`），否則無限 re-render、整個 tab 撳唔到（tsc/eslint/test 全綠，捉唔到） |
 | 打印區塊 | 加「靜態文字區塊」＝零跨 repo 改動；改區塊語義／加逐項欄位才要四端同步＋擰 `versionCode` |
 | 標籤機 | 型號按族過濾 `getLanModelOptions(family)`；用肯定式 `role === "zone"`（`!== "receipt"` 係危險否定式）；`USB_PRINTER_DB` 兩份硬編要同步 |
+| 打印機設定 UI | 品牌分組用 `groupModelsByBrand()`（通用歸「其他」且沉底）。🔴 **篩選狀態三個入口必 reset**：`selectRole`／`selectConnectionType`／`scanUsb` —— 漏一個＝清單空白但無 error。USB **唔使手動揀品牌**（Companion 自動讀 VID/PID）。驗證：`tools/verify-brand-grouping.cjs` |
 | 登入／工作台 | `allowedModules` **缺失＝全部開通**（唔係全閂）；新模組先改 `module-catalog.ts`；副作用只有 `apply-workbench.ts` |
 | Realtime | 「reload 先見到」＝訂錯 Supabase 專案（要 `NEXT_PUBLIC_POS_SUPABASE_URL/_ANON_KEY` ＋ redeploy） |
 | Ledger 契約 | `docs/integration/ledger-client-api.md` §5.4（欄名要防禦式解析） |

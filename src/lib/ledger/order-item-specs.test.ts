@@ -250,3 +250,99 @@ describe("端到端：商家實紙嗰張單", () => {
     ]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 真實 RPC 回應（2026-09-13 商家由 DevTools 抄出嚟；取餐碼 003）。
+//
+// 呢個 case 係「第一版漏咗 `selected_specs`」嘅回歸測試：
+// 舊版候選清單只有 `spec_selections` / `specSelections` / `selected_options` / `specs`
+// → 實機一個規格都 parse 唔到，但單元測試（用 `selected_options`）全綠。
+// **所以呢個 case 一定要用真欄名 `selected_specs` 嚟鎖住。**
+// ─────────────────────────────────────────────────────────────────────────────
+const REAL_RPC_ITEMS = [
+  {
+    id: "673459f6-real-0001",
+    qty: 1,
+    name: "快閃餐(沙姜炒豬頸肉饭)",
+    line_note: null,
+    product_id: "abc8e99d-real-0001",
+    selected_specs: [
+      { group_name: "飲料", option_name: "檸茶", price_delta_avos: 200 },
+      { group_name: "熱定凍", option_name: "凍", price_delta_avos: 200 },
+      { group_name: "加購", option_name: "蒸蛋", price_delta_avos: 500 },
+      { group_name: "要唔要膠袋?", option_name: "不要" },
+    ],
+    unit_price_avos: 5300,
+    promo_applied_qty: null,
+    promo_rate_permille: null,
+    discounted_unit_price_avos: null,
+  },
+  {
+    id: "fa5a46b7-real-0002",
+    qty: 3,
+    name: "南乳雞中亦",
+    line_note: null,
+    product_id: "93045a1f-real-0002",
+    selected_specs: [{ group_name: "加購", option_name: "蒸蛋", price_delta_avos: 100 }],
+    unit_price_avos: 500,
+    promo_applied_qty: null,
+    promo_rate_permille: null,
+    discounted_unit_price_avos: null,
+  },
+];
+
+describe("實機 RPC 回應（selected_specs）", () => {
+  it("真欄名 `selected_specs` 一定要 parse 到（回歸：舊版漏咗呢個名）", () => {
+    const specs = parseOrderItemSpecs(REAL_RPC_ITEMS[0]);
+    assert.deepEqual(
+      specs.map((spec) => [spec.groupName, spec.optionLabel, spec.priceDelta]),
+      [
+        ["飲料", "檸茶", 2],
+        ["熱定凍", "凍", 2],
+        ["加購", "蒸蛋", 5],
+        ["要唔要膠袋?", "不要", undefined],
+      ],
+    );
+  });
+
+  it("渲染成廚房單／收據嘅 spec 行（`group:option $X`）", () => {
+    const lines = toResolvedSpecs(parseOrderItemSpecs(REAL_RPC_ITEMS[0])).map((spec) => {
+      const head = `${spec.groupName}:${spec.optionLabel}`;
+      return spec.priceDelta === 0 ? head : `${head} $${Math.abs(spec.priceDelta)}`;
+    });
+    assert.deepEqual(lines, [
+      "飲料:檸茶 $2",
+      "熱定凍:凍 $2",
+      "加購:蒸蛋 $5",
+      "要唔要膠袋?:不要",
+    ]);
+  });
+
+  it("其餘真欄位（id / product_id / unit_price_avos …）唔會被當成規格", () => {
+    const lines = toResolvedSpecs(parseOrderItemSpecs(REAL_RPC_ITEMS[1])).map(
+      (spec) => `${spec.groupName}:${spec.optionLabel} $${spec.priceDelta}`,
+    );
+    assert.deepEqual(lines, ["加購:蒸蛋 $1"]);
+  });
+});
+
+describe("object map 形式（group → 已選選項）", () => {
+  it("欄名寫明 selected* 時，map 形式都收", () => {
+    const specs = parseOrderItemSpecs({
+      selected_specs: { 飲料: "檸茶", 加購: ["蒸蛋", "油菜"], 要多個膠袋: true },
+    });
+    assert.deepEqual(
+      specs.map((spec) => `${spec.groupName ?? ""}:${spec.optionLabel}`),
+      ["飲料:檸茶", "加購:蒸蛋", "加購:油菜", ":要多個膠袋"],
+    );
+    // `toResolvedSpecs` 會幫冇 group 名嘅補上「規格」，避免印出開頭係冒號嘅行。
+    assert.deepEqual(
+      toResolvedSpecs(specs).map((spec) => `${spec.groupName}:${spec.optionLabel}`),
+      ["飲料:檸茶", "加購:蒸蛋", "加購:油菜", "規格:要多個膠袋"],
+    );
+  });
+
+  it("欄名唔係 selected*（可能係「全部可選項」清單）→ map 形式唔收", () => {
+    assert.deepEqual(parseOrderItemSpecs({ options: { 飲料: "檸茶" } }), []);
+  });
+});

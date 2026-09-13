@@ -501,11 +501,32 @@ function buildLedgerPosOrder(
 }
 
 /**
- * 攞（必要時建立）一張線上單嘅本地 `PosOrder` 表示 —— 只為**收據**用途。
+ * 攞（必要時建立）一張線上單嘅本地 `PosOrder` 表示 —— 只為**收據／補打**用途。
  *
- * 優先返 `bridgedOrders` 入面嗰份（自動補印／接單時已經建立，內容同原單一致）；
- * 冇（例如從未喺本機接過單、或 reload 後 in-memory map 已清）就即時由 Ledger
- * `get_order_detail` 重建一份並註冊（map + 持久快取），等下一次補打唔使再打 API。
+ * ## 🔴 2026-09-13 修（商家實測：「查看」舊單仍然冇規格）
+ *
+ * 舊寫法**無條件先回傳** `bridgedOrders` 嘅 in-memory 投影：
+ *
+ * ```ts
+ * const bridged = getBridgedPosOrder(ledgerOrder.id);
+ * if (bridged) return bridged;   // ← 短路
+ * ```
+ *
+ * 問題係嗰份投影可能係「規格解析修好**之前**」建立嘅（冇 `selectedSpecs`、
+ * 冇 `line_note` 備註）。一旦存在就永遠短路 —— **即使 caller 已經抓咗最新嘅
+ * `get_order_detail`**，規格／備註都入唔到去 → 舊單永遠顯示唔到規格。
+ *
+ * ⇒ 改為：**caller 帶咗 `detail` 就一律用 `detail` 重建**（規格／備註嘅唯一
+ * 來源係 detail）；只有完全冇 detail 時，才退而用快取省一次 API。
+ *
+ * ## ⚠️ 重建要保留本機已推進嘅狀態
+ *
+ * `buildLedgerPosOrder()` 嘅 `status` / `fulfillmentStatus` 係**寫死**
+ * `sent_to_kitchen` / `preparing`，而 `registerLedgerProjection()` 會覆寫
+ * in-memory map ＋ store 快取。所以唔保留嘅話，一張「已結帳 / 已完成」嘅單
+ * 一撳補打收據，投影就會被**退回製作中**，之後 `findPosOrderForLedger()`
+ * 反查到嘅狀態就係錯嘅。⇒ 只覆寫「內容」（items / 金額 / 枱），
+ * 狀態類欄位沿用本機已知值。
  *
  * 對應線下 `reprintReceiptForOrder` 嘅「由 storage 重讀權威版訂單」一步 ——
  * 線上單嘅權威係 Ledger，本地只係打印用嘅投影。
@@ -514,13 +535,28 @@ export async function resolveLedgerPosOrderForReceipt(
   ledgerOrder: LedgerOnlineOrder,
   detail?: LedgerOrderDetail,
 ): Promise<PosOrder> {
-  const bridged = getBridgedPosOrder(ledgerOrder.id);
-  if (bridged) return bridged;
+  const cached = getBridgedPosOrder(ledgerOrder.id);
+  // 冇帶 detail（唔想再打 API）→ 用快取。內容同原單一致，冇規格缺失風險。
+  if (!detail && cached) return cached;
+
   const resolvedDetail = detail ?? (await getOrderDetail(ledgerOrder.id));
   const assigned = resolveAssignedTable(ledgerOrder.id);
   const built = buildLedgerPosOrder(ledgerOrder, resolvedDetail, assigned?.tableId, assigned?.tableName);
-  registerLedgerProjection(built);
-  return built;
+
+  // 保留本機已知嘅狀態類欄位（唔可以俾 projection 嘅預設值蓋掉）。
+  const known = cached ?? loadOrders().find((row) => row.id === built.id) ?? null;
+  const stable: PosOrder = known
+    ? {
+        ...built,
+        ...(known.status ? { status: known.status } : {}),
+        ...(known.fulfillmentStatus ? { fulfillmentStatus: known.fulfillmentStatus } : {}),
+        ...(known.prepaidAmount != null ? { prepaidAmount: known.prepaidAmount } : {}),
+        ...(known.createdAt ? { createdAt: known.createdAt } : {}),
+      }
+    : built;
+
+  registerLedgerProjection(stable);
+  return stable;
 }
 
 export async function bridgeLedgerOrderToPos(options: BridgeLedgerOrderOptions): Promise<{

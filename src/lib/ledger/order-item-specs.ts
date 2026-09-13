@@ -14,11 +14,26 @@
  *
  * ## 點解要「防禦式多欄名」
  *
- * Ledger RPC `get_order_detail` 嘅**欄位名從未確認**（本機冇 Ledger 源碼；
- * 文件 docs/integration/ledger-client-api.md §5.4 只寫「含 `items[]` 明細」）。
- * 餐牌側（`menu-spec.ts` `collectSpecSources`）早就係咁做 —— 一次過試
- * `spec_groups` / `specGroups` / `modifier_groups` / `options` …，命中就用。
- * 呢度照同一手法處理**訂單側**，兩邊口徑一致。
+ * 🔴🔴 **2026-09-13 實機已確認**：Ledger `get_order_detail` 回嘅 item 明細係
+ *
+ * ```jsonc
+ * {
+ *   "id": "...", "product_id": "...", "name": "快閃餐(沙姜炒豬頸肉饭)",
+ *   "qty": 1, "line_note": null, "unit_price_avos": 5300,
+ *   "promo_applied_qty": null, "promo_rate_permille": null,
+ *   "discounted_unit_price_avos": null,
+ *   "selected_specs": [                                   // ← 就係呢個
+ *     { "group_name": "飲料", "option_name": "檸茶", "price_delta_avos": 200 },
+ *     { "group_name": "熱定凍", "option_name": "凍",  "price_delta_avos": 200 },
+ *     { "group_name": "加購",  "option_name": "蒸蛋", "price_delta_avos": 500 },
+ *     { "group_name": "要唔要膠袋?", "option_name": "不要" }
+ *   ]
+ * }
+ * ```
+ *
+ * 但**唔可以**因此寫死單一欄名 —— Ledger 改版就會靜默壞（同 2026-09-13 漏咗
+ * `selected_specs` 造成「實機冇規格、單元測試全綠」係同一個死法）。
+ * 所以照 `menu-spec.ts:collectSpecSources` 同一手法：**系統化窮舉 + 逐個試**。
  *
  * ⚠️ 呢個檔**唔可以 import 任何 runtime 依賴**（`node --test` 要直接載入）。
  *
@@ -231,19 +246,54 @@ const NESTED_KEYS = [
   "spec_options",
 ] as const;
 
-/** item 上可能裝住規格嘅容器欄名（Ledger 欄名未確認 → 逐個試）。 */
+/**
+ * item 上可能裝住規格嘅容器欄名。
+ *
+ * 🔴🔴 **2026-09-13 實機確認：真正嘅欄名係 `selected_specs`**，
+ * 形狀 `[{ group_name, option_name, price_delta_avos }]`（扁平平鋪，冇 nested options）。
+ *
+ * ⚠️ **血淚教訓**：第一版呢個清單係手寫猜嘅，只有 `spec_selections` / `specSelections` /
+ * `selected_options` / `specs` —— **偏偏冇 `selected_specs`**，結果實機一個規格都 parse 唔到
+ * （單元測試用 `selected_options` 所以全綠，捉唔到）。
+ * ⇒ 所以改為**系統化窮舉**（`selected_*` × 名詞 × 單複數、camel/snake），
+ * 唔再靠「估中」；真實欄名一律排最前。
+ */
 const CONTAINER_KEYS = [
-  "options",
+  // ① 已確認（實機）
+  "selected_specs",
+  // ② 系統化窮舉：selected_*（snake / camel）
+  "selectedSpecs",
   "selected_options",
   "selectedOptions",
+  "selected_modifiers",
+  "selectedModifiers",
+  "selected_values",
+  "selectedValues",
+  "selected_choices",
+  "selectedChoices",
+  "selected_addons",
+  "selectedAddons",
+  "selected_extras",
+  "selected_items",
+  "selectedItems",
+  // ③ spec_* / option_* / modifier_*
   "specs",
+  "spec_options",
+  "specOptions",
   "spec_selections",
   "specSelections",
+  "spec_items",
+  "specItems",
+  "option_selections",
+  "optionSelections",
   "option_values",
   "optionValues",
-  "modifiers",
   "modifier_options",
   "modifierOptions",
+  "modifier_selections",
+  // ④ 其他常見
+  "options",
+  "modifiers",
   "choices",
   "selections",
   "addons",
@@ -312,11 +362,19 @@ function flattenEntry(entry: Rec, allowIdOnly: boolean): ParsedOrderSpec[] {
   for (const key of NESTED_KEYS) {
     const nested = entry[key];
     if (!Array.isArray(nested) || nested.length === 0) continue;
-    // `options: ["opt-id"]`（純字串陣列）唔算 group 結構，交返下面當 selection 處理。
-    if (nested.every((child) => typeof child === "string")) continue;
 
     const groupName = pickString(entry, GROUP_NAME_KEYS);
     const groupId = pickString(entry, GROUP_ID_KEYS);
+
+    // 純字串子項：`{ group_name: "飲料", options: ["湯", "可樂"] }`。
+    // 同「冇旗標 → 當列出嘅就係已選」同一口徑；但要排除「一串 id」誤當標籤。
+    if (nested.every((child) => typeof child === "string")) {
+      return nested
+        .map((child) => String(child).trim())
+        .filter((label) => looksLikeHumanLabel(label))
+        .map((label) => ({ groupId, groupName, optionLabel: label }));
+    }
+
     const children = nested
       .map((child) => asRecord(child))
       .filter((child): child is Rec => child !== null);
@@ -341,6 +399,65 @@ function flattenEntry(entry: Rec, allowIdOnly: boolean): ParsedOrderSpec[] {
       .filter((spec): spec is ParsedOrderSpec => spec !== null);
   }
   return [];
+}
+
+/**
+ * 分辨「人睇得明嘅選項文字」同「一串 id」。
+ *
+ * 用於**純字串**規格容器（冇 group/option 物件包住，冇 meta 可判斷）：
+ * `["湯","可樂"]` 應該收；`["opt-a1b2c3d4e5","9f8e..."]` 應該丟。
+ */
+function looksLikeHumanLabel(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  if (/[\u3400-\u9fff]/.test(v)) return true; // 有中文字 → 一定係人話
+  if (/\s/.test(v)) return true; // 有空格 → 多數係 "Milk Tea" 之類
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(v)) return false; // UUID
+  if (/^[a-z0-9_-]{12,}$/i.test(v)) return false; // 長 id 樣
+  return v.length > 1;
+}
+
+/**
+ * object map 容器：`{ "飲料": "檸茶" }`（group → 已選選項）。
+ *
+ * 只會喺容器欄名寫明 `selected*`（`allowIdOnly`）時被叫 —— 因為「map 入面列出嘅」
+ * 究竟係「已選」定「全部可選項」冇辦法從結構分辨，靠欄名嘅語義去判斷。
+ */
+function parseObjectContainer(container: Rec, allowIdOnly: boolean): ParsedOrderSpec[] {
+  const out: ParsedOrderSpec[] = [];
+  for (const [rawKey, value] of Object.entries(container)) {
+    const groupName = rawKey.trim();
+    if (!groupName) continue;
+
+    if (typeof value === "string") {
+      if (value.trim()) out.push({ groupName, optionLabel: value.trim() });
+      continue;
+    }
+    if (value === true) {
+      out.push({ optionLabel: groupName });
+      continue;
+    }
+    if (!Array.isArray(value) || !allowIdOnly) continue;
+
+    for (const child of value) {
+      if (typeof child === "string") {
+        if (looksLikeHumanLabel(child)) out.push({ groupName, optionLabel: child.trim() });
+        continue;
+      }
+      const rec = asRecord(child);
+      if (!rec || isExplicitlyUnselected(rec)) continue;
+      const label = pickString(rec, OPTION_LABEL_KEYS);
+      const optionId = pickString(rec, OPTION_ID_KEYS);
+      if (!label && !optionId) continue;
+      out.push({
+        groupName,
+        optionId,
+        optionLabel: label,
+        priceDelta: pickPriceDeltaMop(rec),
+      });
+    }
+  }
+  return out;
 }
 
 /** 單條 selection：`{ group_name: "飲料", option_name: "湯" }` */
@@ -398,7 +515,12 @@ export function parseOrderItemSpecs(
       out.push(...parseSpecText(value));
       continue;
     }
-    if (!Array.isArray(value)) continue;
+    if (!Array.isArray(value)) {
+      // object map 形式：`{ "飲料": "檸茶" }`（只喺欄位名寫明 `selected*` 時信任）。
+      const obj = allowIdOnly ? asRecord(value) : null;
+      if (obj) out.push(...parseObjectContainer(obj, allowIdOnly));
+      continue;
+    }
     for (const entry of value) {
       if (typeof entry === "string") {
         out.push(...parseSpecText(entry));

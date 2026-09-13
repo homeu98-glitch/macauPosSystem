@@ -1027,8 +1027,13 @@ Ledger 回覆 Q8／Q12 都寫「見契約 §5.12」，但本地
 
 **根因**：Ledger → POS 嘅投影路徑**從來冇建立 `OrderItem.selectedSpecs`**。
 - 斷點 ① `getOrderDetail()`（`src/lib/ledger/orders.ts`）：解析 `get_order_detail` RPC 時
-  只讀 `product_name`/`qty`/`unit_price_avos`/`menu_item_id`/`note`/折扣 → **冇任何規格欄位**。
+  只讀 `product_name`/`qty`/`unit_price_avos`/**`menu_item_id`**/**`note`**/折扣 → **冇任何規格欄位**。
+  ⚠️ 順帶兩個**欄位名錯配**（同日一併修）：真實係 `product_id`（唔係 `menu_item_id`）＋
+  真實係 `line_note`（唔係 `note`）→ 令 `resolveMenuItem()` 永遠對唔到（廚房分區退回 `"kitchen"`、
+  失去餐牌 fallback）＋品項備註**永遠 undefined**。
 - 斷點 ② `mapDetailToOrderItems()`（`src/lib/ledger/ledger-pos-bridge.ts`）：建 `OrderItem` 時**冇 `selectedSpecs`**。
+- 斷點 ③ `resolveLedgerPosOrderForReceipt()`：**無條件短路回傳舊投影** → 即使 caller 已經抓咗
+  最新 detail，規格仍然入唔到（見下方紅線）。
 - **下游一早已經全部支援**規格：`toPrintItemLine`（bridge L191）／`toPrintItemLines`（`escpos-render.ts`）／
   `print-jobs.ts:231`／`buildLabelContent`（`escpos-template.ts` L1145）／`escpos-render.ts:285` `hasSubLine`。
   ⇒ **只需補上游一格，唔使改渲染層**。
@@ -1036,14 +1041,27 @@ Ledger 回覆 Q8／Q12 都寫「見契約 §5.12」，但本地
 **修法**（2026-09-13）：
 1. 新增零依賴純函式模組 `src/lib/ledger/order-item-specs.ts`：
    `parseOrderItemSpecs()`（防禦式多欄名）＋ `enrichSpecsFromMenu()`（用本地同步餐牌補文字）＋ `toResolvedSpecs()`。
-2. `getOrderDetail()` 每個 item 加 `specs`（＋ dev-only 未知欄位 log）。
+2. `getOrderDetail()` 每個 item 加 `specs`（＋未知欄位 log，**生產版都出**）。
 3. `mapDetailToOrderItems()` 加 `selectedSpecs`（parse → enrich → toResolved）。
 4. `/orders` 查看彈窗（`online-orders.tsx`）＋快餐面板（`quick-online-orders-panel.tsx`）補顯示規格／備註。
+5. `resolveLedgerPosOrderForReceipt()`：**caller 帶咗 `detail` 就一定重建**（唔可以短路回舊投影）；
+   重建時**保留本機已推進嘅狀態**（`status`/`fulfillmentStatus`/`prepaidAmount`/`createdAt`），
+   否則「已結帳」嘅單一補打收據就被退回製作中。
 
 **紅線**：
-- 🔴 Ledger RPC **欄位名從未確認**（本機冇 Ledger repo；契約 §5.4 只寫「含 `items[]` 明細」）。
-  ⇒ 一律用「**防禦式多欄名**」手法（同餐牌側 `menu-spec.ts:collectSpecSources` 同一套路），
-  **唔可以**寫死單一欄名。保險：`getOrderDetail()` dev 會 log item 未識別欄位（每 session 一次）。
+- ✅ **欄位名已實機確認**（2026-09-13，商家由 DevTools 抄 `get_order_detail` response）：
+  - item 層：`id` / **`product_id`** / `name` / `qty` / **`line_note`** / `unit_price_avos` /
+    `promo_applied_qty` / `promo_rate_permille` / `discounted_unit_price_avos` /
+    **`selected_specs`**（`[{ group_name, option_name, price_delta_avos }]`，`price_delta_avos` 可缺）
+  - 訂單層：`total_avos` / `subtotal_avos` / `item_promo_discount_avos` / `fulfillment_discount_avos` /
+    `takeaway_box_fee_avos` / `delivery_fee_avos` / `pickup_code` / `merchant_id` / `promo_snapshot`
+- 🔴🔴 **中過一次大坑**：第一版候選清單係手寫嘅，偏偏**冇 `selected_specs`** → 生產版代碼已上線
+  （bundle 查得到新標記）但實機仍然冇規格。單測用 `selected_options` 做 fixture 所以**全綠**，
+  完全捉唔到。⇒ `CONTAINER_KEYS` 一定要**系統化窮舉**（真實欄名排最前）；
+  **回歸測試一定要用真欄名**（`order-item-specs.test.ts` 嘅 `REAL_RPC_ITEMS`）。
+- 🔴 一律用「**防禦式多欄名**」手法（同餐牌側 `menu-spec.ts:collectSpecSources` 同一套路），
+  **唔可以**寫死單一欄名。保險：`getOrderDetail()` 會 log item 未識別欄位（每 session 一次）。
+  ⚠️ 呢個 log **唔可以用 `NODE_ENV` 閘** —— 師父係喺已部署嘅 Vercel 生產版上面試，閘咗＝永遠睇唔到。
 - 🔴 **avos vs MOP**：規格加價欄名**含 `avos`** → 除 100；其餘（`price_delta`/`delta`/`extra_price`）
   當**已經係 MOP**（實紙 `+10`/`+5`/`+1` 都係 MOP）。
 - 🔴 **唔可以**把「全部可選項」當成「已選」。選取語義：任何 child 帶 `selected`/`is_selected`/`checked`
@@ -1052,8 +1070,20 @@ Ledger 回覆 Q8／Q12 都寫「見契約 §5.12」，但本地
 - 🟡 **備註鏈路本來就通**：品項備註 `item.note` → `OrderItem.note`（bridge）→
   `toPrintItemLine().note` → 廚房單；全單備註 `ledgerOrder.note` → `orderNote` → `content.order_note`
   （廚房模板預設開）。**唯一風險**同樣係 Ledger 用別名（`remark`/`comment`）→ 已加 `pickItemNote()` 兜住。
+- 🔴 **投影快取唔可以無條件短路**（`resolveLedgerPosOrderForReceipt`）：舊寫法
+  `if (bridged) return bridged;` 會令**修好前建立嘅舊投影永遠派返**（冇 `selectedSpecs`），
+  即使 caller 已經抓咗最新 detail。⇒ **有 `detail` 就一定重建**。重建時**保留本機已推進嘅狀態**
+  （`status`/`fulfillmentStatus`/`prepaidAmount`/`createdAt`，因為 `buildLedgerPosOrder()` 寫死
+  `sent_to_kitchen`/`preparing`）—— 否則「已結帳」單一補打收據就倒退返製作中。
 - 由 Ledger 資料建 `OrderItem` 嘅**唯一入口** = `mapDetailToOrderItems()`。加新欄位只需改呢一個。
-- 測試：`node --test src/lib/ledger/order-item-specs.test.ts`（20 項，含商家實紙端到端）。
+- 測試：`node --test src/lib/ledger/order-item-specs.test.ts`（**25 項**，含**真實 RPC response**
+  端到端 `REAL_RPC_ITEMS` —— 用真欄名 `selected_specs`/`product_id`/`line_note` 鎖死）。
+  ⚠️ **驗證測試真有效**：暫時將 `CONTAINER_KEYS` 嘅 `selected_specs` 改成 `MARKER_TEMP_REMOVED`
+  → 應該有 3 項變紅，還原後全綠。**唔紅就代表 fixture 用錯欄名，等於冇測過**。
+- 🔧 **排查工具：確認 Vercel 生產版有冇部署到新代碼** —— 抓 bundle 再比對標記字串。
+  ⚠️ SWC minify 會將非 ASCII escape 成 `\uXXXX`（`ledger→pos` 會變 `ledger\u2192pos`），
+  **一定要先 `unescapeUnicode()` 再比對**，否則會誤判「冇部署」。純 ASCII 標記（例如 `customisation_text`）
+  可做交叉驗證。同理 `process.env.NODE_ENV === "production"` 守衛嘅代碼喺 Next.js build 會**整體判死刪除**。
 
 ---
 

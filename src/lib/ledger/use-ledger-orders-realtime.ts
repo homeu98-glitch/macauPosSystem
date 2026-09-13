@@ -17,6 +17,30 @@ const RESUBSCRIBE_DEBOUNCE_MS = 3000;
 const RECONNECT_DELAY_MS = 3000;
 const SESSION_RETRY_DELAY_MS = 1500;
 
+let didReportOrderRowKeys = false;
+
+/**
+ * 🔍 臨時診斷：第一次收到 Realtime 推送就 log 一次 `orders` 表列嘅**欄位名**。
+ *
+ * **為咩要 log**：Realtime 推嘅係 Ledger `public.orders` 嘅**表列**（見契約 §6.2）。
+ * 若嗰張表本身有 `items`（jsonb）欄，就代表**唔使打多一次 RPC**都有齊明細＋規格，
+ * 連舊單都一樣拎得到 —— 呢個係比 `get_order_detail` 更好嘅來源。相反若冇，
+ * 就確認規格一定只可以經 RPC 拎。
+ *
+ * ⚠️ 只出**欄位名**，唔出值（表列含 `customer_phone` 等 PII）。
+ * 每次 session 只報一次；確認完可以整段刪走。
+ */
+function reportOrderRowKeysOnce(row: unknown): void {
+  if (didReportOrderRowKeys) return;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return;
+  didReportOrderRowKeys = true;
+  const keys = Object.keys(row as Record<string, unknown>);
+  console.info(
+    "[ledger→pos] Realtime orders 表列欄位：" +
+      `${keys.join(", ")}${keys.includes("items") ? "　← 有 items！" : ""}`,
+  );
+}
+
 export function useLedgerOrdersRealtime(merchantId: string | null, enabled: boolean, handlers: RealtimeHandlers) {
   const handlersRef = useRef(handlers);
   useEffect(() => {
@@ -71,6 +95,7 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
           { event: "INSERT", schema: "public", table: "orders", filter },
           (payload) => {
             const row = payload.new as LedgerOrderRow;
+            reportOrderRowKeysOnce(row);
             handlersRef.current.onInsert(mapLedgerOrderRow(row));
           },
         )
@@ -79,6 +104,7 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
           { event: "UPDATE", schema: "public", table: "orders", filter },
           (payload) => {
             const row = payload.new as LedgerOrderRow;
+            reportOrderRowKeysOnce(row);
             handlersRef.current.onUpdate(mapLedgerOrderRow(row));
           },
         )
