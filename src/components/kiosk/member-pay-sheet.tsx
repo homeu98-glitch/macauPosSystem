@@ -63,7 +63,8 @@ export function MemberPaySheet({
   networkError: string | null;
   onSelectMethod: (method: MemberPayMethod) => void;
   onConfirm: () => void;
-  onConfirmWithPin: (pin: string) => void;
+  /** S7「確認扣款」。`null` = 免 PIN（登入未滿 180 秒），唔使再驗。 */
+  onConfirmWithPin: (pin: string | null) => void;
   onCancelToCounter: () => void;
   onBackToChoose: () => void;
   onRetry: () => void;
@@ -302,7 +303,15 @@ export function MemberPaySheet({
             )}
 
             <button
-              onClick={() => (pinFreeAgoLabel ? onConfirm() : onConfirmWithPin(pin))}
+              // 🔴🔴 呢度一定要行「扣款」路徑（`onConfirmWithPin`），**唔可以**用 `onConfirm`。
+              //
+              //    `onConfirm` 嘅角色係 S6「確認付款」——作用只係由 S6 轉去 S7
+              //    （`setPayStage("deduct")`）。喺 **S7 再叫佢就係原地踏步**：
+              //    撳極都冇反應、冇 request、冇 error（2026-09-13 J 實案）。
+              //
+              //    免 PIN（`pinFreeAgoLabel` 有值，即登入未滿 180 秒）→ 傳 `null`，
+              //    表示唔使再驗 PIN；否則傳客人輸入嘅 4 位 PIN。
+              onClick={() => onConfirmWithPin(pinFreeAgoLabel ? null : pin)}
               disabled={busy || (!pinFreeAgoLabel && pin.length !== 4)}
               className={`w-full rounded-2xl bg-orange-500 font-semibold text-white disabled:opacity-50 active:scale-[0.98] ${
                 isKiosk ? "py-5 text-xl" : "py-3.5 text-lg"
