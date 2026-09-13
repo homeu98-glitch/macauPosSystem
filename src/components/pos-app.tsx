@@ -4027,6 +4027,24 @@ export function PosApp() {
         return;
       }
 
+      // 🔴🔴 防禦（2026-09-14 走數實案）：
+      // 行到呢度 = `memberLedgerOpsNeeded && merchantId && ledgerMember` 唔成立，
+      // 即係**唔會**執行 `executeLedgerMemberCheckout()`（唔扣會員餘額）。
+      //
+      // 但店員明明揀咗「會員餘額」！舊寫法會靜默行 `applyPaymentToOrder()` ——
+      // 張單被標記「已付款」，但客人嘅餘額**一毫子都冇扣**，而且**冇任何提示**
+      // （實案：小計 160、會員扣 85、Ledger 完全冇扣，店員以為結咗帳）。
+      //
+      // 走數比「結唔到帳」嚴重得多，所以呢度**寧願唔結帳**都要大聲講。
+      if (useMemberBalance && memberDeduction > 0) {
+        setToast({
+          tone: "info",
+          message:
+            "未能執行會員扣款（會員資料或商戶登入狀態不完整），已取消結帳。請重新輸入會員號碼查詢後再試。",
+        });
+        return;
+      }
+
       applyPaymentToOrder(targetOrder);
     };
 
