@@ -12,6 +12,7 @@
 - 🔴 `PrintJob` 必帶 `kind`；冇 `template` 時兜底渲染要按 kind 分流（**唔可以一律套廚房**）。驗證 `tools/verify-print-job-kind.cjs`。
 - 🔴 `git` 唔喺 PATH → 全路徑 `…/PortableGit/versions/1.2.0/cmd/git.exe`，前置 `CODEBUDDY_SAFE_DELETE_ENABLED=0`；**push 加 `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never`**（唔加＝無聲掛住等憑證 GUI 窗）。
 - 🔴 加 `PosLocalSettings` 新欄**必填** → tsc 逼你補 `normalizePosLocalSettings`＋`defaultPosLocalSettings`。漏白名單 = reload 靜靜剷走。
+- 🔴 已收款單（`paid`：快餐 counter 結帳／**線上已付堂食「排位」單**）加菜**必須保留 `paid`**。打返 `sent_to_kitchen` → 雲端 `paid-downgrade` 拒收**整條** `ORDER_UPDATED` → **items 上唔到雲**（只剩 `ORDER_SETTLED` 嘅金額 patch，佢唔重寫 items）→ 收據「1 項 $75、總額 160」。詳見 docs/113 §(3b)。
 
 ## 二、環境（呢部機）
 - ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；git-bash **冇 coreutils**（ls/grep/sed/head/tail 全無）。

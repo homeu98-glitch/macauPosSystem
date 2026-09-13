@@ -2171,19 +2171,50 @@ export function PosApp() {
           maxUsedDailyOrderSeq([...loadOrders(), ...orders], sequencePrefix),
         );
 
+    /**
+     * 🔴🔴 2026-09-14 加菜修復：**已收款單（`paid`）加菜唔可以將狀態打返
+     * `sent_to_kitchen`**（未收款 open 狀態）。
+     *
+     * 實案（J：「商家加菜後 `order.items` 冇更新，金額欄有更新」）：
+     * 掃碼／線上堂食單喺 Ledger 已收錢 → 排位後本地係 `paid`（`prepaidAmount` = 已收）。
+     * 商家加菜時舊寫法無條件寫 `status: nextStatus`（＝`sent_to_kitchen`）：
+     *   1. **雲端拒收**：`/api/pos/sync` 嘅「付款階段單向閘」（`paid` 唔可以被未收款
+     *      open snapshot 覆蓋，2026-09-12）→ 整條 `ORDER_UPDATED` 被 skip
+     *      （`applied:false, reason:"paid-downgrade"`）→ **`items` 永遠上唔到雲**，
+     *      只有之後 `ORDER_SETTLED` 嘅**金額 patch** 入到去（佢按設計唔重寫 `items`，
+     *      見 docs/83 §ORDER_SETTLED）→ 雲端/其他端出現「1 項但總額 160」嘅矛盾單，
+     *      一旦經 realtime / backfill merge 返本機（`mergeOrderLists` 係整張 LWW 覆蓋），
+     *      連本機啱嘅 `items` 都被蓋走 → 收據／訂單詳情少一項。
+     *   2. **本地狀態倒退**：`paid` 變返未收款 → 桌台卡由綠色「已結帳 / 待收尾」
+     *      彈返橙色「已下單」，同 `prepaidAmount` 語義自相矛盾。
+     *
+     * 語義上保留 `paid` 係正確嘅：加菜只係**加內容**，錢已經收咗（差額另外結帳），
+     * 同 `resolveExistingOrderForUpsert()` 對快餐 counter 已收款單「唔可以偷改原本嗰張」、
+     * 同 sync route 對匿名加菜「沿用 DB 現有 `status`」係**同一口徑**。
+     *
+     * ⚠️ 打印行為唔變：`isAddOnOrder`（決定票種 `addon`）本來就只認
+     * `sent_to_kitchen`，`paid` 單一向行「normal」全單票 —— 呢個改動只係將
+     * 本地狀態寫返同雲端一致。
+     *
+     * ⚠️ 亦唔可以順手清 `fulfillmentStatus`：線上單排位後係 `preparing`，
+     * 舊寫法喺非快餐分支硬寫 `undefined` 會連出餐狀態一齊抹走。
+     */
+    const keepPaidStatus = existingOrder?.status === "paid";
+
     const order: PosOrder = existingOrder
       ? {
           ...existingOrder,
           tableId: activeTable.id,
           tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
           partySize: existingOrder.partySize ?? seatedPartySizes[activeTable.id],
-          status: nextStatus,
+          status: keepPaidStatus ? existingOrder.status : nextStatus,
           sentToKitchenAt:
             nextStatus === "sent_to_kitchen"
               ? existingOrder.sentToKitchenAt ?? timestamp
               : existingOrder.sentToKitchenAt,
-          fulfillmentStatus:
-            isQuickMode && activeTable.id === "counter"
+          fulfillmentStatus: keepPaidStatus
+            ? existingOrder.fulfillmentStatus
+            : isQuickMode && activeTable.id === "counter"
               ? nextStatus === "sent_to_kitchen"
                 ? "preparing"
                 : existingOrder.fulfillmentStatus

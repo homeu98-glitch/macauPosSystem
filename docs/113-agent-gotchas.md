@@ -539,12 +539,53 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
 ⚠️ 一定要 `return null`，**唔可以**放行落下面「快餐 counter 可並存多張已收款單」分支 ——
 嗰個分支會搵任意一張未送廚嘅 counter 單嚟合併 →「加菜落咗隔籬張單」。
 
+### (3b) 🔴 加菜後 `order.items` 冇更新（金額欄有更新）—— 2026-09-14 實案
+
+**病症**：商家喺已收款嘅**線上堂食單**（排位後 `paid`）加菜 → 桌台／點餐頁見到 N 項，
+但「訂單詳情」同**收據只印 1 項 $75、總金額卻係 MOP 160**（自相矛盾）。
+
+**根因鏈（三層，缺一不可）**：
+
+1. `upsertCurrentOrder()`（`pos-app.tsx`）對 existing order **無條件寫
+   `status: nextStatus`（＝`sent_to_kitchen`）** → 已收款單被降級；
+2. `/api/pos/sync` 嘅「付款階段單向閘」（見上面 (2)）→ 整條 `ORDER_UPDATED`
+   **被拒收**（`applied:false, reason:"paid-downgrade"`）→ **`items` 上唔到雲**；
+3. `ORDER_SETTLED` 係**窄 patch**：只寫 `status` / `payment_method` / `discount_amount`
+   / `total` / `updated_at` …，**按設計唔重寫 `items`** → 雲端 row 變成
+   「`total` = 160、`items` = 1 項」。之後 realtime / backfill 經
+   `mergeOrderLists()`（**整張 LWW 覆蓋，冇字段級 merge**）把呢個矛盾版本 merge 返本機
+   → 連本機啱嘅 `items` 都被蓋走 → 收據／訂單詳情少一項。
+
+**修法（兩邊一齊）**：
+
+- client：`upsertCurrentOrder()` 加 `keepPaidStatus = existingOrder?.status === "paid"`
+  → **已收款單加菜保留 `paid`**，順帶**唔可以清 `fulfillmentStatus`**（線上單係 `preparing`）
+  → 雲端唔再判 downgrade → `items` + 金額一齊上雲。
+- server：`/api/pos/sync` —— 已授權裝置嘅**純加法**（`incomingQty > existingQty`）
+  落喺 `paid` 單上時，**沿用 DB 現有 `status`／`fulfillment_status`** 而唔拒收
+  （照顧未重建嘅 APK／desktop companion／舊網頁）。
+
+⚠️ **`paid` 加菜嘅打印行為唔會變**：`isAddOnOrder` 一向只認 `sent_to_kitchen`，
+所以 `paid` 單加菜本來就出「normal」全單票（唔係 `addon` 票）。
+**唔好**為咗「加菜出 addon 票」而改 `isAddOnOrder` —— 會連票種去重（`printedAddonSignatures`）
+一齊受影響。
+
+⚠️ **殘留風險（未修）**：`ORDER_SETTLED` 仍然唔重寫 `items`。若任何原因令
+`ORDER_UPDATED` 上唔到雲（離線、其他守門），雲端就會再次出現「金額新、items 舊」。
+要根治就必須令結帳事件／`ORDER_UPDATED` 兩者其一保證 items 一齊落地。
+
 ### 鐵律總結
 
-- **`paid` 只可能係快餐 counter 單**：三個寫入點（`confirmPayment` / `settleCompOrder` /
-  線上已支付）一律 `quickPaidFlow ? "paid" : "settled"`，而 `quickPaidFlow = isQuickMode && tableId === "counter"`。
-  → 上述所有守門**只影響快餐，堂食 100% 唔受影響**（用戶明確要求）。
+- **`paid` 有兩個來源（2026-09-13 起）**：
+  1. 快餐 counter 單結帳：三個寫入點（`confirmPayment` / `settleCompOrder` /
+     線上已支付）一律 `quickPaidFlow ? "paid" : "settled"`，而
+     `quickPaidFlow = isQuickMode && tableId === "counter"`；
+  2. 🔴 **線上已付堂食單「排位」**（`assignLedgerOrderToTable()` →
+     `upsertLedgerLocalOrder()` 寫 `paid` + `prepaidAmount = total`，帶 `onlineOrderId` ＋ 真枱號）。
+  ⇒ 舊口徑「`paid` 只可能係快餐 counter 單、堂食 100% 唔受影響」**已經過時**：
+  上述付款階段守門而家**一樣會影響線上已付堂食單**，而佢係「可加菜、要收差額」嘅正常場景。
 - **同上：`ready`、`paid` 都係單向閘**（已發生嘅事實唔可以由舊 snapshot 抹走）。
+- **加菜（純加法）永遠唔應該被付款階段守門擋死**：狀態沿用 DB，內容照寫。
 - **改 LWW 前先問**：呢個時間戳係邊個嘅鐘？server 蓋章 vs 裝置鐘**唔可以**直接比。
 - 回歸測試：`src/lib/pos-order-filters.test.ts`（`npm run test`）鎖住以上全部行為 ——
   改 `mergeOrderLists()` / `match*` 之前先跑。

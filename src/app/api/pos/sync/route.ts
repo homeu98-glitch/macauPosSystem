@@ -641,9 +641,48 @@ export async function POST(request: Request) {
         // 狀態機 owner 係收銀端。舊版客人加單會重寫整張單，把收銀已標記嘅
         // `sent_to_kitchen → preparing` 打返轉頭（非終態降級 server 唔擋）。
         // 家陣匿名寫入一律沿用 DB 現有狀態 / 出餐狀態，只更新 items / 備註。
-        const writeStatus = existing && !authorized ? existing.status ?? incomingStatus : incomingStatus;
-        const writeFulfillment =
-          existing && !authorized ? existing.fulfillment_status : text(order.fulfillmentStatus, 64);
+        //
+        // ── 🔴 2026-09-14 加菜修復（第二層閘，處理**舊 client**）──
+        //
+        // 實案：「商家加菜後 `order.items` 冇更新（金額欄有更新）」。
+        //
+        // 收銀端舊寫法喺已收款單（`paid`）加菜時無條件送 `status:"sent_to_kitchen"`
+        // → 下面嘅「付款階段單向閘」（d）會**拒收整條 `ORDER_UPDATED`**
+        // （`applied:false, reason:"paid-downgrade"`）→ `items` 永遠上唔到雲；
+        // 之後 `ORDER_SETTLED` 只 patch 金額、**按設計唔重寫 `items`**
+        // → 雲端單變成「1 項但總額 160」，再經 merge 蓋返本機 → 收據少一項。
+        //
+        // 新 client 已經喺 `upsertCurrentOrder()` 保留 `paid`（正本清源），但
+        // **Android APK／desktop companion／舊網頁** 唔會即時更新 ⇒ 呢度要容忍：
+        // 「已授權裝置 + 純加法（items 只變多）」時，**唔拒收**，改為沿用 DB 現有
+        // `status` / `fulfillment_status`（即維持 `paid`），但**照寫 items 同金額**。
+        //
+        // 語義安全：① 純加法唔可能覆蓋任何現有內容，只會新增；② 狀態沿用 DB
+        // → 唔會出現「已收款 → 未收款」嘅降級（呢個守門本意就係擋降級，唔係擋加菜）；
+        // ③ 匿名通道（客人加單）本來就唔會寫狀態，唔受影響。
+        const incomingQty = totalItemQuantity(
+          Array.isArray(order.items) ? (order.items as OrderItem[]) : undefined,
+        );
+        const existingQty = totalItemQuantity(
+          Array.isArray(existing?.items) ? (existing.items as OrderItem[]) : undefined,
+        );
+        /** 純加法更新（items 只變多）—— 收銀台加菜 / 客人加單共用同一判準。 */
+        const isAdditiveUpdate =
+          eventType === "ORDER_UPDATED" && Boolean(existing) && incomingQty > existingQty;
+        /** 已授權裝置向**已收款單**加菜：保留 DB 現有 `paid`，但照寫 items / 金額。 */
+        const paidAdditiveFromDevice =
+          isAdditiveUpdate &&
+          authorized &&
+          PAID_ORDER_STATUSES.has(existing?.status ?? "") &&
+          OPEN_ORDER_STATUSES.has(incomingStatus);
+        /** 沿用 DB 現有狀態（匿名一律；已授權但屬「已收款單加菜」亦然）。 */
+        const keepExistingStatus = Boolean(existing) && (!authorized || paidAdditiveFromDevice);
+        const writeStatus = keepExistingStatus
+          ? existing?.status ?? incomingStatus
+          : incomingStatus;
+        const writeFulfillment = keepExistingStatus
+          ? existing?.fulfillment_status ?? null
+          : text(order.fulfillmentStatus, 64);
 
         if (existing) {
           const incomingTs = parseIsoMs(incomingUpdatedAt);
@@ -660,16 +699,14 @@ export async function POST(request: Request) {
            * 「加單又冇反應」，而且今次連錯誤都冇（`ack(true, applied:false)`）。
            *
            * 語義上豁免係安全嘅：① 下面 `writeStatus` 已經強制沿用 DB 現有狀態
-           * （匿名加單改唔到狀態機）；② 「items 變多」唔可能覆蓋任何嘢，只會新增。
+           * （匿名加單改唔到狀態機；已授權但屬「已收款單加菜」亦然 —— 見上面
+           * `paidAdditiveFromDevice`）；② 「items 變多」唔可能覆蓋任何嘢，只會新增。
            * 所以「incoming 項目數 > 現有項目數」時唔應該因為時間戳就丟棄。
+           *
+           * ⚠️ `incomingQty` / `existingQty` / `isAdditiveUpdate` 已喺上面
+           * （`keepExistingStatus` 之前）算好 —— 嗰度嘅狀態閘要用同一個判準，
+           * 呢度**唔可以**再宣告一次（shadow 會令兩閘口徑分歧）。
            */
-          const incomingQty = totalItemQuantity(
-            Array.isArray(order.items) ? (order.items as OrderItem[]) : undefined,
-          );
-          const existingQty = totalItemQuantity(
-            Array.isArray(existing.items) ? (existing.items as OrderItem[]) : undefined,
-          );
-          const isAdditiveUpdate = eventType === "ORDER_UPDATED" && incomingQty > existingQty;
           // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫；
           // (b) 終態守門：settled/cancelled/refunded/partially_refunded 唔可以被 open snapshot
           //     降級。唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳）。
