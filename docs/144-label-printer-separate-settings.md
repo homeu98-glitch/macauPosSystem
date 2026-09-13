@@ -179,6 +179,178 @@ export type PaperSizeValue =
 POS 側 `PrinterCandidate` 加選填 `family`，USB 自動偵測路徑優先信 Companion 嘅判斷
 （`candidate.family ?? (labelish ? "label" : "receipt")`）。
 
+### 2.9 品牌層分組 / 篩選（同日追加，商家要求）
+
+> 商家原話：「於品牌層級再新增一層篩選/分組：先依品牌進行區分，若項目沒有對應
+> 品牌（例如通用類型），則統一歸入『其他』類別。」
+
+**純函式**（`printer-models.ts`，可 `node --test` 載入）：
+
+| 函式 | 作用 |
+| --- | --- |
+| `OTHER_BRAND` | `"其他"` 哨兵字串 |
+| `brandGroupOfModel(opt)` | 拎型號屬於邊個分組；`genericFallback` 或通用品牌名 → `"其他"` |
+| `groupByBrand(items, brandOf)` | 通用分組（保序 + 「其他」沉底） |
+| `groupModelsByBrand(opts)` | LAN 版糖衣 |
+| `brandGroupOfCandidate(c)` | USB 候選項版（`brand` 係 Companion 解析結果） |
+| `brandChipsOf(groups)` | 抽 chip 清單（開頭加「全部」） |
+| `brandChipLabel(brand, count)` | chip 文字（`佳博 Gprinter 2`） |
+| `BRAND_FILTER_ALL` | `"__all__"` 哨兵（**唔可以同真實品牌撞**） |
+
+**分組規則**：
+
+1. 先按 `brand` 分組，同品牌歸一組
+2. **冇對應品牌**（`genericFallback === true`，或品牌名係
+   `通用 ESC/POS` / `通用標籤機` / `USB 打印機` / 空白）→ 一律歸 **`「其他」`**
+3. 「其他」**永遠排最後**（穩定排序，其餘保持原樣）
+4. 排序跟 `USB_PRINTER_DB` 插入序 → 國內品牌自然行先
+
+**UI 顯示邏輯**：
+
+| 條件 | 行為 |
+| --- | --- |
+| 分組數 > 1 | 顯示品牌 chip 列（可橫向滑動） |
+| 分組數 ≤ 1 | **隱藏** chip 列 —— 篩選無意義，徒增視覺噪音 |
+| `brandFilter === ALL` | 顯示全部組，每組帶品牌小標題（`漢印 HPRT 3 ────`） |
+| 已篩選 | 只顯示該組，**收起標題**（標題變多餘），顯示「清除篩選」 |
+
+**重置時機（🔴 三個入口都要 reset，否則清單會空白）**：
+
+| 動作 | 為何 |
+| --- | --- |
+| `selectRole()` 換用途 | 標籤機同票據機品牌集合唔同 |
+| `selectConnectionType()` 換連線 | LAN 用型號表、USB 用偵測結果 —— chip 來源換咗 |
+| `scanUsb()` 重新掃描 | 候選清單換咗，品牌集合可能唔同 |
+
+漏咗任何一個 → `brandFilter` 指向一個唔存在嘅品牌 → **清單空白但無 error**
+（同 docs/113 嗰類「靜靜唔出紙」係同一種坑：條件唔對中，就靜靜乜都唔做）。
+
+**USB 唔使手動揀品牌（回答商家疑問）**：
+
+- **LAN**：冇 VID/PID 可讀 → 商家**要**憑機身標籤手動揀品牌型號
+- **USB**：Companion 經 node-usb 讀到 VID/PID → **自動**對照出品牌型號
+  （走 `resolveUsbMeta()` → `family` → `brandGroupOfCandidate()`）
+
+所以 USB 分支：
+1. 加綠色提示條明講「品牌由 USB 自動識別，唔使手動揀」
+2. 偵測結果**一樣按品牌分組顯示**（插多部機時易睇）
+3. 認唔到嘅設備（`USB Printer Class` 通用 / 無 VID 命中）→ 歸「其他」，
+   商家照揀得，只係型號名係通用名
+
+> ⚠️ 呢個設計刻意**唔**畀 USB 走「手動型號清單」—— 因為 USB 車道嘅價值就係
+> 免手填。若果偵測唔到，正確做法係查線 / 查驅動（UI 已提示），
+> 唔係叫商家手動揀一個佢部機未必啱嘅型號。
+
+### 2.10 標籤機紙寬限制（同日追加，商家告知實際機型）
+
+> 商家原話：「我現在標籤機是 20-60mm 芯華的。」
+
+**查證結果**：商家嘅機係 **Xprinter XP-235B**，廠商「珠海芯**燁**電子科技」
+（商家寫「芯華」應為「芯燁」）。規格引自官網 `xprinter.net/product/482.html`：
+
+| 項目 | 值 |
+| --- | --- |
+| 介質幅寬 | **20 mm ~ 60 mm** |
+| 打印寬度 | ≥56mm（標籤模式）／48mm（票據模式） |
+| 打印方式 | 熱敏標籤模式 **＋** 熱敏票據模式（**一機兩用**） |
+| 接口 | USB / USB+串口 / USB+藍牙 / **USB+網口** |
+| 解析度 / 條碼 | 203 DPI；29 種一維 + QR Code |
+
+#### 🔴 發現嘅問題
+
+**我之前嘅標籤紙選項超出商家部機嘅範圍** ——
+`LABEL_MODEL_PAPER_SIZES` 有 70×50、100×75、62mm，而 wizard 又用型號表預設
+（漢印 SL42 等 = 100×75mm）→ **自動選中 100×75mm**，但 XP-235B **最多 60mm 寬**，
+紙根本放唔落。商家要印到先知。
+
+#### 修正一：紙張選項帶**實際尺寸**
+
+```ts
+export interface LabelPaperOption {
+  value: PaperSizeValue;
+  label: string;
+  widthMm: number;   // 🔴 新增 —— 導軌限制就係比呢個
+  heightMm: number;  // 🔴 新增
+  hint: string;
+}
+```
+
+新增尺寸：`30x20mm`、`50x40mm`（原本最細係 40×30，20-60mm 機食得到更細）。
+
+#### 修正二：`labelPaperFitsModel()` + 機器紙寬欄位
+
+```ts
+labelPaperFitsModel(paperWidthMm, minWidthMm?, maxWidthMm?) → boolean
+```
+
+| 情況 | 行為 |
+| --- | --- |
+| 有上限 / 下限 | 檢查 |
+| **兩個都未知** | **一律放行** —— 唔可以因為資料缺失就攔住商家（但要喺 UI 提示自行核對） |
+
+`UsbModelMeta`、`ResolvedUsbMeta`、`LanModelOption`、`PrinterCandidate`、
+`DevicePrinterConfig` 全部加 `maxLabelWidthMm?` / `minLabelWidthMm?`。
+
+> ⚠️ `DevicePrinterConfig` 加選填欄位**唔使遷移**：`normalizeDeviceConfig()` 同
+> `normalizeKioskPrinters()` 都係 `...printer` spread，會保留。
+> （呢個同 `PosLocalSettings` 嘅「加欄必填逼白名單」係**相反**嘅坑 ——
+> `PosLocalSettings` 係逐欄重建，`DevicePrinterConfig` 係 spread。要分清。）
+
+**為何要反規範化落 config**：打印機列表（`printer-card-v2`）要即時攔錯。
+若果每次 render 去型號表查，就會出現「型號表改咗 → 舊機嘅限制靜靜變咗」嘅漂移。
+同 `paperSize` / `charset` 一樣，**選定時抄落去就定咗**。
+
+#### 修正三：`defaultLabelPaperFor()` 三段式
+
+```
+① 型號表 preferred 若果喺（已知）範圍內 → 用佢
+② 已知上限 → 範圍內最闊（例 20-60mm → 60×40mm；排除 62mm 舊預設）
+③ 都唔得 → FALLBACK_LABEL_PAPER = "60x40mm"
+```
+
+> 🔴 **點解「無限制」時唔揀最闊**：冇限制 = 我哋**唔知**，唔係「無限大」。
+> 呢個時候揀 100×75 係賭博 —— 猜錯就係商家放唔落紙。
+> 寧可預設細（放得落但可能唔夠位），都好過預設大到放唔落。
+>
+> ⭐ 呢個正係測試捉到嘅 bug：初版無條件揀「範圍內最闊」，
+> 測試斷言 `defaultLabelPaperFor(undefined, undefined, undefined) === "60x40mm"` 失敗
+> （實際返 `100x75mm`）。修正為「只有已知上限時才揀最闊」。
+
+#### 修正四：新增 `LAN_ONLY_MODELS`（LAN 專用型號目錄）
+
+【為何要另開一張表】`USB_PRINTER_DB` 係 `VID → PID → 型號` 嘅**自動偵測**表，
+每加型號就要一個**確認過嘅 PID**。但：
+- LAN 連接**完全唔經 VID/PID**（商家憑機身標籤揀），根本唔需要 PID
+- XP-235B 我哋知型號同規格，但**未確認 USB PID**（韌體版本多）
+
+硬塞入 `USB_PRINTER_DB` 就要**作一個 PID** —— 咁樣第日真機插上 USB 反而會
+**認錯型號**（比認唔到更差）。
+
+> 🔴 判準：**我係咪確認過 PID？** 確認咗 → `USB_PRINTER_DB`。
+> 未確認 → `LAN_ONLY_MODELS`（LAN 手動揀得到，USB 靠品牌 fallback）。
+
+新收錄：**XP-235B（20–60mm）**、XP-365B（20–72mm）、佳博 GP-1324D（20–104mm）、
+漢印 SL42 LAN 版（20–110mm）。商頌 POS-80 由原本硬編喺
+`getLanModelOptions()` 入面搬到呢度統一管理。
+
+#### 修正五：UI 攔錯
+
+| 位置 | 行為 |
+| --- | --- |
+| wizard Step 3 | 顯示「機型紙寬限制：20 – 60 mm」；超範圍尺寸**刪除線 + 變灰**；已揀咗超範圍 → 紅字警告 |
+| wizard（未知限制） | 黃字提示「未知此機型嘅紙寬限制，請自行核對卷裝標籤寬度」 |
+| 打印機卡片 | `<option disabled>` + 文字「（超出紙寬限制，放唔落）」；當前尺寸超範圍 → 紅字警告 |
+
+> **為何用 `disabled` 而唔直接 filter 走**：商家可能係換咗機 / 打錯型號。
+> 見到「點解冇咗 100×75」比見到「100×75 被禁用」更難 debug。
+> 同 `normalizeKioskPrinters` 嗰種「寧可剔走都唔好靜靜補假值」係一致思路。
+
+#### ⚠️ 一機兩用（未做）
+
+XP-235B **同時支援標籤模式同票據模式**。項目已經有 `roles?: PrinterRole[]`
+（`retail/printer-roles.ts`）支援一機兩用，但 wizard 目前只寫單一 `role`。
+需要嘅話要另外喺打印機列表改角色 —— **未做，唔喺本輪範圍**。
+
 ---
 
 ## 3. 未做 / 待辦
@@ -225,8 +397,11 @@ Android / print hub）都認得先有意義。而**四個 renderer 目前全部�
 | 測試 | 命令 | 結果 |
 | --- | --- | --- |
 | TypeScript | `node node_modules/typescript/bin/tsc --noEmit` | **0 errors** |
-| ESLint（3 個改動檔） | `node node_modules/eslint/bin/eslint.js <3 files>` | **0 problems** |
+| ESLint（改動檔） | `node node_modules/eslint/bin/eslint.js <files>` | **0 problems** |
+| 生產 build | `CODEBUDDY_SAFE_DELETE_ENABLED=0 node node_modules/next/dist/bin/next build` | **78/78 routes** |
 | 型號分流 | `node --experimental-strip-types tools/verify-label-model-split.cjs` | **9 / 9** |
+| **品牌分組** | `node --experimental-strip-types tools/verify-brand-grouping.cjs` | **9 / 9** |
+| **紙寬限制** | `node --experimental-strip-types tools/verify-label-paper-width.cjs` | **10 / 10** |
 | 兩表同步 | `node tools/verify-printer-db-parity.cjs` | **5 / 5** |
 | Companion e2e | `cd C:/dev/desktop-companion && node test-print-e2e.mjs` | **8 / 8** |
 | 跨 repo 硬編字串 | `cd C:/dev/desktop-companion && node test-crossrepo-parity.mjs` | **0 問題** |
@@ -258,18 +433,53 @@ Android / print hub）都認得先有意義。而**四個 renderer 目前全部�
 6. 標籤機品牌兩邊都係 `label`
 7. 標籤機型號唔用連續紙尺寸
 
+**`tools/verify-brand-grouping.cjs`** —— 驗證品牌分組（同日追加）：
+
+1. 哨兵值 `「其他」` / `BRAND_FILTER_ALL` 唔可以同真實品牌撞
+2. 通用兜底項一律歸「其他」
+3. 真實品牌唔會被誤歸「其他」
+4. 分組數量守恆 + 「其他」沉底 + 「其他」只可以有一個
+5. 保序：國內品牌行先（首組 = 芯燁 Xprinter）
+6. 標籤機分組正確（「通用標籤機」已併入「其他」，唔會獨立成組）
+7. chip 清單：首個係「全部」+ 數量啱
+8. USB 候選項品牌判斷（認得 → 品牌；認唔到 → 其他）
+9. 篩選：揀單一品牌只出該品牌，零混入
+
+**標籤機實際分組結果**（測試輸出）：
+
+```
+佳博 Gprinter 2 / 漢印 HPRT 3 / 得力 Deli 3 / 快麥 KuaiMai 2
+啟銳 Qirui 2 / 立象 Argox 2 / 斑馬 Zebra 2 / 台半 TSC 2 / 其他 3
+```
+
+**`tools/verify-label-paper-width.cjs`** —— 驗證紙寬限制（XP-235B 情境）：
+
+1. 每個紙張尺寸都有 `widthMm` / `heightMm` 且合理
+2. `labelPaperWidthMm()` 對未知尺寸返 `undefined`（唔會扮 0）
+3. XP-235B 已收錄，紙寬 20–60mm
+4. **XP-235B 紙寬判斷：30-60mm 合格；62/70/100mm 一律攔**（100×75 係原本嘅錯誤預設）
+5. 邊界值 inclusive（20 同 60 都合格）
+6. 未知限制 → 放行（唔會因為資料缺失攔人）
+7. 預設紙張：XP-235B → 60×40mm（範圍內最闊）
+8. 預設揀選次序正確（型號表預設 → 範圍內最闊 → 保守 60×40mm）
+9. 62mm 舊預設唔會自動選中，但手動仍可揀
+10. **XP-235B 冇作 PID**，只入 LAN 目錄（掃晒 `USB_PRINTER_DB` 確認零命中）
+
 ---
 
 ## 5. 改動檔案
 
 | 檔案 | 改動 |
 | --- | --- |
-| `src/lib/print-bridge/printer-models.ts` | ＋`PrinterFamily`、`resolveFamily`、`familyForRole`；`getLanModelOptions(family)`；＋7 VID / 23 型號；＋`alsoKnownAs`；＋`LABEL_MODEL_PAPER_SIZES`、`LABEL_COMMAND_SETS`、`suggestLabelCommandSet`；`PaperSizeValue` 擴充；`ResolvedUsbMeta` 加 `family` / `alsoKnownAs` |
-| `src/components/printer-wizard-modal.tsx` | `lanModels` 按角色過濾（`useMemo`）；分區只給 `zone`；＋標籤機專屬 Step 3 設定區；`selectRole` 切換時清空 model；`complete()` 嘅 `zoneId` 只給 `zone`；`paperSize` 標籤機用商家選嘅值；USB 分支信 Companion `family`；標題動態（「添加標籤機」） |
-| `src/components/printer-card-v2.tsx` | 分區只給 `zone`；＋標籤機紙張尺寸下拉 ＋ 紙張/指令集顯示；＋ `TSPL` 徽章；測試打印按鈕文案分標籤機 |
-| `src/lib/print-bridge/companion.ts` | `PrinterCandidate` ＋`family`；`UsbPrinterRow` ＋`family`；兩處映射帶 `family` |
-| `C:/dev/desktop-companion/companion-server.mjs` | `USB_PRINTER_DB` 同步 21 VID / 50 型號；＋`resolveFamily()`；`resolveUsbMeta()` ＋`family`；`enumerateUsbPrinters()` ＋`family` |
+| `src/lib/print-bridge/printer-models.ts` | ＋`PrinterFamily`、`resolveFamily`、`familyForRole`；`getLanModelOptions(family)`；＋7 VID / 23 型號；＋`alsoKnownAs`；＋`LABEL_MODEL_PAPER_SIZES`、`LABEL_COMMAND_SETS`、`suggestLabelCommandSet`；`PaperSizeValue` 擴充；`ResolvedUsbMeta` 加 `family` / `alsoKnownAs`；**＋品牌分組層**（`OTHER_BRAND`、`brandGroupOfModel`、`groupByBrand`、`groupModelsByBrand`、`brandGroupOfCandidate`、`brandChipsOf`、`brandChipLabel`、`BRAND_FILTER_ALL`）；**＋紙寬層**（`LAN_ONLY_MODELS`、`labelPaperFitsModel`、`LabelPaperOption`、`labelPaperOptionOf`、`labelPaperWidthMm`、`defaultLabelPaperFor`、`FALLBACK_LABEL_PAPER`） |
+| `src/components/printer-wizard-modal.tsx` | `lanModels` 按角色過濾（`useMemo`）；分區只給 `zone`；＋標籤機專屬 Step 3 設定區；`selectRole` 切換時清空 model；`complete()` 嘅 `zoneId` 只給 `zone`；`paperSize` 標籤機用商家選嘅值；USB 分支信 Companion `family`；標題動態（「添加標籤機」）；**＋品牌 chip 篩選列 ＋ 分組標題 ＋ USB 自動識別提示 ＋ 三處 reset `brandFilter` ＋ 紙寬限制提示 ＋ 超範圍尺寸刪除線/警告 ＋ `complete()` 寫入 `maxLabelWidthMm`** |
+| `src/components/printer-card-v2.tsx` | 分區只給 `zone`；＋標籤機紙張尺寸下拉 ＋ 紙張/指令集顯示；＋ `TSPL` 徽章；測試打印按鈕文案分標籤機；**＋紙寬範圍顯示 ＋ 超範圍 `<option disabled>` ＋ 當前尺寸超範圍紅字警告 ＋ 改用共享 `LABEL_MODEL_PAPER_SIZES`** |
+| `src/lib/types.ts` | **`DevicePrinterConfig` ＋`maxLabelWidthMm?` / `minLabelWidthMm?`**（選填，兩個 normalizer 都係 spread → 唔使遷移） |
+| `src/lib/print-bridge/companion.ts` | `PrinterCandidate` ＋`family` / `maxLabelWidthMm` / `minLabelWidthMm`；`UsbPrinterRow` 同步；兩處映射帶落去 |
+| `C:/dev/desktop-companion/companion-server.mjs` | `USB_PRINTER_DB` 同步 21 VID / 50 型號；＋`resolveFamily()`；`resolveUsbMeta()` ＋`family` / 紙寬；`enumerateUsbPrinters()` 帶落去 |
 | `tools/verify-label-model-split.cjs` | 新增 |
+| `tools/verify-brand-grouping.cjs` | 新增 |
+| `tools/verify-label-paper-width.cjs` | 新增 |
 | `tools/verify-printer-db-parity.cjs` | 新增 |
 
 ---
@@ -286,3 +496,22 @@ Android / print hub）都認得先有意義。而**四個 renderer 目前全部�
    只會令商家見到唔一致嘅型號名。`verify-printer-db-parity.cjs` 就係防線。
 5. **UI 收集咗設定但下游唔認 = 假同步，比唔加更危險** —— 所以 `labelCommandSet`
    刻意唔寫入 config，等 renderer 改好先一齊上。
+6. **篩選狀態有三個入口要 reset**（換用途 / 換連線 / 重掃 USB）——
+   漏一個就會「清單空白但無 error」。凡係由多個來源衍生嘅篩選值，
+   都要列清楚所有會令來源改變嘅入口。
+7. **「其他」要沉底 + 只可以有一個** —— 通用兜底項散落喺清單入面，
+   商家會以為「通用標籤機」係一個牌子。分組時要明確歸類，唔可以靠品牌名自然分。
+8. **硬件規格（紙寬）要落 config，唔可以每次查表** —— 否則型號表一改，
+   舊機嘅限制就靜靜漂移。同 `paperSize` / `charset` 一樣：選定時反規範化抄落去。
+9. **「未知」唔等於「無限制」** —— 資料缺失時要揀保守值（60×40mm），
+   唔可以揀最大（100×75）。呢個 bug 就係測試捉到嘅：
+   初版無條件揀「範圍內最闊」，`defaultLabelPaperFor(undefined, undefined, undefined)`
+   返 `100x75mm` 而唔係預期嘅 `60x40mm`。
+10. **`DevicePrinterConfig` 加欄位係安全嘅，`PosLocalSettings` 唔係** ——
+    前者兩個 normalizer 都係 `...printer` spread（保留）；
+    後者係逐欄重建（漏白名單就被靜靜剷走）。加欄位前先睇係邊一種。
+11. **未確認 PID 嘅型號另開一張 LAN 表，寧可唔自動配對** ——
+    硬塞一個假 PID 落 `USB_PRINTER_DB`，第日真機插上 USB 會**認錯型號**，
+    比「認唔到」更差。
+12. **超範圍選項用 `disabled` 而唔係 filter 走** —— 商家見到「點解冇咗」
+    比見到「被禁用」更難 debug。

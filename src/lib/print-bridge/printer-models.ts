@@ -23,8 +23,10 @@ export type PaperSizeValue =
   | "58mm"
   | "80mm"
   | "62mm"
+  | "30x20mm"
   | "40x30mm"
   | "50x30mm"
+  | "50x40mm"
   | "60x40mm"
   | "70x50mm"
   | "100x75mm";
@@ -65,6 +67,19 @@ export interface UsbModelMeta {
    * 商家買到嘅係另一個 PID 都認得出係同一族。
    */
   alsoKnownAs?: string[];
+  /**
+   * 標籤機**介質幅寬上限**（mm，可選）。
+   *
+   * 🔴 為何要：標籤紙係「成卷」嘅，紙寬超出機器導軌就**根本放唔落**。
+   * 例：Xprinter XP-235B 介質幅寬 20–60mm → 100×75mm 面單用唔到。
+   * 冇呢個值 = 未知，UI 唔會攔（但會提示「請自行核對紙寬」）。
+   *
+   * ⚠️ 呢個係**紙寬**（含底紙），唔係「打印寬度」—— 兩者差 2–4mm。
+   * 廠商 spec 通常寫「介質幅寬 / Media Width」，要抄嗰個。
+   */
+  maxLabelWidthMm?: number;
+  /** 標籤機介質幅寬下限（mm）。空缺 = 唔檢查下限。 */
+  minLabelWidthMm?: number;
 }
 
 export interface UsbVendorMeta {
@@ -504,6 +519,146 @@ export const USB_PRINTER_DB: Record<string, UsbVendorMeta> = {
 /** 已知嘅打印機 VID 集合（用嚟判斷枚舉到嘅 USB 設備係咪打印機） */
 export const KNOWN_USB_PRINTER_VIDS = new Set(Object.keys(USB_PRINTER_DB));
 
+/**
+ * **LAN 專用型號目錄**（2026-09-13 新增）。
+ *
+ * 【為何要另開一張表】`USB_PRINTER_DB` 係 `VID → PID → 型號` 嘅**自動偵測**表，
+ * 每加一個型號就要一個**確認過嘅 PID**。但：
+ *
+ *   - LAN 連接**完全唔經 VID/PID**（商家憑機身標籤揀），根本唔需要 PID
+ *   - 有啲常見機我哋知道型號同規格，但**未確認 PID**（韌體版本多）
+ *
+ * 硬塞入 `USB_PRINTER_DB` 就要**作一個 PID** —— 咁樣第日真機插上 USB 反而會
+ * **認錯型號**（比認唔到更差）。所以另開呢張表：只餵 LAN 手動清單，
+ * **絕對唔參與 USB 自動偵測**。
+ *
+ * 🔴 加新項目前問自己：我係咪確認過 PID？確認咗 → 入 `USB_PRINTER_DB`。
+ * 未確認 → 入呢度（LAN 手動揀得到，USB 靠 `resolveUsbMeta` 嘅品牌 fallback）。
+ */
+export interface LanOnlyModel {
+  brand: string;
+  model: string;
+  charset: CharsetValue;
+  paperSize: PaperSizeValue;
+  kanjiEnlarge?: "FS!" | "GS!";
+  family: PrinterFamily;
+  alsoKnownAs?: string[];
+  /** 標籤機介質幅寬上限（mm） */
+  maxLabelWidthMm?: number;
+  /** 標籤機介質幅寬下限（mm） */
+  minLabelWidthMm?: number;
+  /** 點解要手動列出（畀未來自己 / 同事睇） */
+  note?: string;
+}
+
+export const LAN_ONLY_MODELS: LanOnlyModel[] = [
+  {
+    /**
+     * Xprinter XP-235B —— 商家（J）手上嘅標籤機。
+     *
+     * 規格來源：珠海芯燁官網 `xprinter.net/product/482.html`（2026-09-13 查證）
+     *   - 介質幅寬 **20mm ~ 60mm**   ← 決定 `maxLabelWidthMm: 60`
+     *   - 打印寬度 ≥56mm（標籤模式）／48mm（票據模式）
+     *   - 接口 USB / USB+串口 / USB+藍牙 / **USB+網口**
+     *   - 203 DPI、29 種一維條碼 + QR Code、自動光感測紙
+     *
+     * 🔴 呢部機**同時支援「熱敏標籤模式」同「熱敏票據模式」**（一機兩用）。
+     * 即係佢理論上可以同時做 `label` + `receipt`（見 `retail/printer-roles.ts`
+     * 嘅 `roles?: PrinterRole[]`）。而家 wizard 只寫單一 `role`，
+     * 需要一機兩用嘅話要另外喺打印機列表改角色。
+     *
+     * ⚠️ **紙寬 20–60mm** 係硬限制：100×75mm 物流面單、70×50mm 外帶袋標籤
+     * **放唔落呢部機**。UI 會自動剔除超出範圍嘅尺寸（見 `labelPaperFitsModel`）。
+     */
+    brand: "芯燁 Xprinter",
+    model: "芯燁 XP-235B（標籤／票據兩用）",
+    charset: "utf-8",
+    paperSize: "60x40mm",
+    kanjiEnlarge: "GS!",
+    family: "label",
+    alsoKnownAs: ["XP-235B", "XP-234B", "XP-236B"],
+    maxLabelWidthMm: 60,
+    minLabelWidthMm: 20,
+    note: "介質幅寬 20-60mm；未確認 USB PID，故只入 LAN 目錄",
+  },
+  {
+    /**
+     * 芯燁 XP-365B —— XP-235B 嘅升級款，國內零售 / 餐飲常見。
+     * 紙寬 20–72mm（比 235B 闊少少，食得到 70×50）。
+     */
+    brand: "芯燁 Xprinter",
+    model: "芯燁 XP-365B（標籤）",
+    charset: "utf-8",
+    paperSize: "70x50mm",
+    kanjiEnlarge: "GS!",
+    family: "label",
+    alsoKnownAs: ["XP-365B"],
+    maxLabelWidthMm: 72,
+    note: "未確認 USB PID，故只入 LAN 目錄",
+  },
+  {
+    /** 佳博 GP-1324D —— 國內標籤機出貨量前列；紙寬 20–104mm */
+    brand: "佳博 Gprinter",
+    model: "佳博 GP-1324D（標籤）",
+    charset: "utf-8",
+    paperSize: "100x75mm",
+    kanjiEnlarge: "GS!",
+    family: "label",
+    alsoKnownAs: ["GP-1324D", "GP-1324DII"],
+    maxLabelWidthMm: 104,
+    note: "未確認 USB PID，故只入 LAN 目錄",
+  },
+  {
+    /** 漢印 HPRT SL42 —— 零售價籤主流；紙寬 20–110mm */
+    brand: "漢印 HPRT",
+    model: "漢印 SL42（標籤／LAN 版）",
+    charset: "utf-8",
+    paperSize: "100x75mm",
+    kanjiEnlarge: "GS!",
+    family: "label",
+    alsoKnownAs: ["SL42S", "SL42 Pro"],
+    maxLabelWidthMm: 110,
+    note: "USB PID 已收錄（0x2A17/0x0001）；呢項係網口版本嘅 LAN 手動入口",
+  },
+  {
+    /**
+     * 商頌 POS-80 —— USB Printer Class 通用票據機（國內 ODM 貼牌），
+     * 冇確認 PID（好多貼牌機共用同一顆晶片但 PID 各異）。
+     * 原本硬編喺 `getLanModelOptions()` 入面，搬到呢度統一管理。
+     */
+    brand: "商頌",
+    model: "商頌 POS-80",
+    charset: "gb18030",
+    paperSize: "80mm",
+    kanjiEnlarge: "GS!",
+    family: "receipt",
+    alsoKnownAs: ["POS-80", "POS-80II", "POS-58"],
+    note: "USB Printer Class 通用機，PID 未確認，故只入 LAN 目錄",
+  },
+];
+
+/**
+ * 標籤紙寬度檢查 —— 呢張紙放唔放得落呢部機？
+ *
+ * 規則：`minLabelWidthMm ≤ 紙寬 ≤ maxLabelWidthMm`。
+ * 機器**冇**標寬度限制（`max` 同 `min` 都係 undefined）→ 一律 `true`
+ * （唔好因為資料缺失就攔住商家，但要喺 UI 提示自行核對）。
+ *
+ * @param paperWidthMm 紙嘅寬度（mm）
+ * @param minWidthMm 機器下限（空缺 = 唔檢查）
+ * @param maxWidthMm 機器上限（空缺 = 唔檢查）
+ */
+export function labelPaperFitsModel(
+  paperWidthMm: number,
+  minWidthMm?: number,
+  maxWidthMm?: number,
+): boolean {
+  if (minWidthMm != null && paperWidthMm < minWidthMm) return false;
+  if (maxWidthMm != null && paperWidthMm > maxWidthMm) return false;
+  return true;
+}
+
+
 /** 將各種格式嘅 VID/PID 歸一化為 "0xXXXX" 大寫十六進制字串 */
 export function toHexId(raw: string | number | undefined | null): string {
   if (raw == null) return "";
@@ -537,6 +692,10 @@ export interface ResolvedUsbMeta {
   family: PrinterFamily;
   /** 姊妹型號（UI 顯示「同系列」用；冇就空陣列） */
   alsoKnownAs: string[];
+  /** 標籤機介質幅寬上限（mm）；undefined = 未知（UI 唔攔，只提示自行核對） */
+  maxLabelWidthMm?: number;
+  /** 標籤機介質幅寬下限（mm）；undefined = 未知 */
+  minLabelWidthMm?: number;
 }
 
 /**
@@ -575,6 +734,8 @@ export function resolveUsbMeta(
       generic: false,
       family: resolveFamily(vendor, model),
       alsoKnownAs: model.alsoKnownAs ?? [],
+      maxLabelWidthMm: model.maxLabelWidthMm,
+      minLabelWidthMm: model.minLabelWidthMm,
     };
   }
   return {
@@ -586,6 +747,9 @@ export function resolveUsbMeta(
     generic: true,
     family: resolveFamily(vendor, undefined),
     alsoKnownAs: [],
+    // 未命中型號 → 唔知紙寬限制（唔可以用品牌預設亂估）。
+    maxLabelWidthMm: undefined,
+    minLabelWidthMm: undefined,
   };
 }
 
@@ -628,6 +792,10 @@ export interface LanModelOption {
   alsoKnownAs: string[];
   /** true = 通用兜底項（唔對應特定品牌型號） */
   genericFallback?: boolean;
+  /** 標籤機介質幅寬上限（mm）；undefined = 未知（UI 唔攔，只提示） */
+  maxLabelWidthMm?: number;
+  /** 標籤機介質幅寬下限（mm）；undefined = 未知 */
+  minLabelWidthMm?: number;
 }
 
 /** wizard 用途 → 要顯示邊個硬件族。`receipt` 同 `zone` 都係票據機（連續紙）。 */
@@ -664,8 +832,32 @@ export function getLanModelOptions(family?: PrinterFamily): LanModelOption[] {
         kanjiEnlarge: model.kanjiEnlarge || vendor.defaultKanjiEnlarge || "FS!",
         family: fam,
         alsoKnownAs: model.alsoKnownAs ?? [],
+        maxLabelWidthMm: model.maxLabelWidthMm,
+        minLabelWidthMm: model.minLabelWidthMm,
       });
     }
+  }
+
+  /**
+   * LAN 專用型號目錄（未有確認 PID 嘅常見機）。
+   *
+   * 🔴 呢批**只**入 LAN 清單 —— 因為 LAN 唔靠 VID/PID，商家憑機身標籤揀。
+   * 混入 `USB_PRINTER_DB` 就要作 PID，第日真機插 USB 會認錯型號。
+   * 詳見 `LAN_ONLY_MODELS` 嘅 JSDoc。
+   */
+  for (const m of LAN_ONLY_MODELS) {
+    if (family && m.family !== family) continue;
+    opts.push({
+      brand: m.brand,
+      model: m.model,
+      charset: m.charset,
+      paperSize: m.paperSize,
+      kanjiEnlarge: m.kanjiEnlarge || "FS!",
+      family: m.family,
+      alsoKnownAs: m.alsoKnownAs ?? [],
+      maxLabelWidthMm: m.maxLabelWidthMm,
+      minLabelWidthMm: m.minLabelWidthMm,
+    });
   }
 
   // ── 通用兜底（按族分開，唔可以共用）─────────────────────────
@@ -690,19 +882,6 @@ export function getLanModelOptions(family?: PrinterFamily): LanModelOption[] {
       alsoKnownAs: [],
       genericFallback: true,
     });
-    // 商頌 POS-80（USB Printer Class + LAN 雙版本，國內貼牌機常見）
-    const hasShangsong = opts.some((o) => o.model.includes("商頌 POS-80"));
-    if (!hasShangsong) {
-      opts.push({
-        brand: "商頌",
-        model: "商頌 POS-80",
-        charset: "gb18030",
-        paperSize: "80mm",
-        kanjiEnlarge: "GS!",
-        family: "receipt",
-        alsoKnownAs: ["POS-80", "POS-80II", "POS-58"],
-      });
-    }
   }
 
   if (!family || family === "label") {
@@ -749,19 +928,95 @@ export function getLanModelOptions(family?: PrinterFamily): LanModelOption[] {
 }
 
 /**
- * 標籤機紙張預設（獨立於票據機嘅 58 / 80mm）。
+ * 標籤紙選項（含**實際尺寸**，唔止 label 字串）。
  *
- * 呢度刻意**唔 import** `@/lib/types` 嘅 `LABEL_PAPER_PRESETS` —— 呢個檔要維持
+ * 🔴 `widthMm` 係硬需要 —— 標籤紙係成卷嘅，**紙寬超出機器導軌就放唔落**。
+ * 冇呢個值，UI 就攔唔到「用 100×75 餵一部 20-60mm 機」呢種錯
+ * （商家要印到先知，浪費紙 + 時間）。
+ *
+ * ⚠️ 呢度刻意**唔 import** `@/lib/types` 嘅 `LABEL_PAPER_PRESETS` —— 呢個檔要維持
  * 純模組（`node --test` 載入時 `@/` 會 ERR_MODULE_NOT_FOUND）。
  * 兩邊嘅 id 口徑一致，改一邊要改另一邊（見 docs/144）。
  */
-export const LABEL_MODEL_PAPER_SIZES: Array<{ value: string; label: string; hint: string }> = [
-  { value: "40x30mm", label: "40 × 30 mm", hint: "細標籤 / 條碼" },
-  { value: "50x30mm", label: "50 × 30 mm", hint: "零售價籤、商品標示" },
-  { value: "60x40mm", label: "60 × 40 mm", hint: "飲品杯貼、成份表" },
-  { value: "70x50mm", label: "70 × 50 mm", hint: "外帶袋、備料標籤" },
-  { value: "100x75mm", label: "100 × 75 mm", hint: "物流面單、大標籤" },
+export interface LabelPaperOption {
+  value: PaperSizeValue;
+  label: string;
+  /** 紙寬（mm，含底紙）。機器導軌限制就係比呢個。 */
+  widthMm: number;
+  /** 紙高 / 標籤長（mm） */
+  heightMm: number;
+  hint: string;
+}
+
+export const LABEL_MODEL_PAPER_SIZES: LabelPaperOption[] = [
+  { value: "30x20mm", label: "30 × 20 mm", widthMm: 30, heightMm: 20, hint: "迷你標籤 / 試管貼" },
+  { value: "40x30mm", label: "40 × 30 mm", widthMm: 40, heightMm: 30, hint: "細標籤 / 條碼" },
+  { value: "50x30mm", label: "50 × 30 mm", widthMm: 50, heightMm: 30, hint: "零售價籤、商品標示" },
+  { value: "50x40mm", label: "50 × 40 mm", widthMm: 50, heightMm: 40, hint: "商品標示（較高）" },
+  { value: "60x40mm", label: "60 × 40 mm", widthMm: 60, heightMm: 40, hint: "飲品杯貼、成份表" },
+  { value: "70x50mm", label: "70 × 50 mm", widthMm: 70, heightMm: 50, hint: "外帶袋、備料標籤" },
+  { value: "100x75mm", label: "100 × 75 mm", widthMm: 100, heightMm: 75, hint: "物流面單、大標籤" },
+  { value: "62mm", label: "62 mm", widthMm: 62, heightMm: 40, hint: "舊系統預設（非業界標準，僅供沿用）" },
 ];
+
+/** 由 value 拎標籤紙選項（搵唔到 → undefined） */
+export function labelPaperOptionOf(value: string | undefined | null): LabelPaperOption | undefined {
+  if (!value) return undefined;
+  return LABEL_MODEL_PAPER_SIZES.find((p) => p.value === value);
+}
+
+/** 紙寬（mm）。未知尺寸 → undefined（唔可以用 0 代替，否則會被當「永遠合格」） */
+export function labelPaperWidthMm(value: string | undefined | null): number | undefined {
+  return labelPaperOptionOf(value)?.widthMm;
+}
+
+/**
+ * 標籤紙**最終 fallback**（連型號表建議值都冇 / 唔合格時用）。
+ *
+ * 揀 60×40 而唔係 100×75（物流面單）：**60mm 係小型標籤機常見上限**
+ * （Xprinter XP-235B 就係 20–60mm）。若果 default 揀 100×75，
+ * 大多數細機身上會「放唔落」── 而商家第一次設定時根本唔知要改。
+ *
+ * 寧可預設細（放得落但可能唔夠位），都好過預設大到放唔落。
+ */
+export const FALLBACK_LABEL_PAPER: PaperSizeValue = "60x40mm";
+
+/**
+ * 為一部**有紙寬限制**嘅機器揀最合適嘅預設標籤紙。
+ *
+ * 挑選次序：
+ *   1. 型號表自帶嘅 `preferred` —— 若果喺（已知）範圍內 → 用佢
+ *   2. 已知**上限**（受約束）→ 範圍內**最闊**嗰款（資訊量最大；
+ *      例 20–60mm → 60×40mm。排除 62mm 舊預設，佢係「沿用舊設定」唔係好選擇）
+ *   3. 都唔得 → `FALLBACK_LABEL_PAPER`（保守 60×40mm）
+ *
+ * 🔴 點解「無限制」時**唔**揀最闊：冇限制 = 我哋**唔知**，唔係「無限大」。
+ * 呢個時候揀 100×75 係賭博 —— 猜錯就係商家放唔落紙。
+ *
+ * @param maxWidthMm 機器紙寬上限；undefined = 未知
+ * @param minWidthMm 機器紙寬下限；undefined = 未知
+ * @param preferred 型號表建議值
+ */
+export function defaultLabelPaperFor(
+  maxWidthMm?: number,
+  minWidthMm?: number,
+  preferred?: string,
+): string {
+  const fits = (p: LabelPaperOption) => labelPaperFitsModel(p.widthMm, minWidthMm, maxWidthMm);
+
+  if (preferred) {
+    const p = labelPaperOptionOf(preferred);
+    if (p && fits(p)) return p.value;
+  }
+  // 只有喺**已知上限**（真正受約束）時，才敢揀範圍內最闊。
+  if (maxWidthMm != null) {
+    const widest = LABEL_MODEL_PAPER_SIZES.filter((p) => fits(p) && p.value !== "62mm").sort(
+      (a, b) => b.widthMm - a.widthMm,
+    )[0];
+    if (widest) return widest.value;
+  }
+  return FALLBACK_LABEL_PAPER;
+}
 
 /**
  * 標籤機指令集。
@@ -801,4 +1056,134 @@ export function suggestLabelCommandSet(brand: string): LabelCommandSet {
   if (b.includes("argox") || b.includes("立象")) return "epl";
   if (b.includes("brother")) return "escpos";
   return "tspl";
+}
+
+// ─────────────────────────────────────────────────────────────
+// 品牌層分組 / 篩選（2026-09-13 新增）
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 「其他」分組嘅顯示名。
+ *
+ * 🔴 商家要求：**冇對應品牌嘅項目（通用兜底類）一律歸入「其他」**。
+ * 唔可以散落喺清單入面扮成一個品牌 —— 商家會以為「通用標籤機」係一個牌子。
+ */
+export const OTHER_BRAND = "其他";
+
+/** 需要歸入「其他」嘅品牌名（通用兜底項嘅 `brand` 值）。 */
+const GENERIC_BRAND_NAMES = new Set(["通用 ESC/POS", "通用標籤機", "通用", "USB 打印機", ""]);
+
+/**
+ * 拎一個型號屬於邊個品牌分組。
+ *
+ * 規則（商家口徑）：
+ *   - `genericFallback === true` → `「其他」`
+ *   - 品牌名係通用字眼（通用 ESC/POS / 通用標籤機 / USB 打印機 / 空白）→ `「其他」`
+ *   - 其餘 → 用 `brand` 原文（**保留「中文 + 英文」**，商家喺機身見到嘅係中文）
+ */
+export function brandGroupOfModel(opt: LanModelOption): string {
+  if (opt.genericFallback) return OTHER_BRAND;
+  const b = (opt.brand ?? "").trim();
+  if (GENERIC_BRAND_NAMES.has(b)) return OTHER_BRAND;
+  return b || OTHER_BRAND;
+}
+
+export interface BrandGroup<T> {
+  /** 分組名（品牌名，或 `「其他」`） */
+  brand: string;
+  /** 該組有幾項 —— UI 顯示喺 chip 上，商家一眼知邊個牌子有幾多型號 */
+  count: number;
+  items: T[];
+}
+
+/**
+ * 按品牌分組，**保序**：
+ *   1. 跟原本清單嘅出現次序（= `USB_PRINTER_DB` 嘅插入序，即國內品牌行先）
+ *   2. **「其他」永遠排最後** —— 佢係兜底，唔應該擋喺前面
+ *
+ * 同時適用於：
+ *   - LAN 手動型號清單（`LanModelOption[]`）
+ *   - USB 自動偵測結果（`{ brand }` 物件），見 `brandGroupOfCandidate()`
+ *
+ * @param options 已按族過濾好嘅清單
+ * @param brandOf 拎品牌名嘅存取器（LAN / USB 用唔同欄位）
+ */
+export function groupByBrand<T>(options: readonly T[], brandOf: (item: T) => string): BrandGroup<T>[] {
+  const groups: BrandGroup<T>[] = [];
+  const index = new Map<string, BrandGroup<T>>();
+  for (const item of options) {
+    const brand = brandOf(item) || OTHER_BRAND;
+    let g = index.get(brand);
+    if (!g) {
+      g = { brand, count: 0, items: [] };
+      index.set(brand, g);
+      groups.push(g);
+    }
+    g.items.push(item);
+    g.count++;
+  }
+  // 「其他」沉底：穩定排序，其餘保持原序
+  return groups.sort((a, b) => {
+    const aOther = a.brand === OTHER_BRAND ? 1 : 0;
+    const bOther = b.brand === OTHER_BRAND ? 1 : 0;
+    return aOther - bOther;
+  });
+}
+
+/** `groupByBrand()` 嘅 LAN 版糖衣 */
+export function groupModelsByBrand(options: readonly LanModelOption[]): BrandGroup<LanModelOption>[] {
+  return groupByBrand(options, brandGroupOfModel);
+}
+
+/**
+ * USB 偵測結果嘅品牌名。
+ *
+ * ⚠️ USB 候選項嘅 `brand` 係 Companion 由 VID/PID 解析出嚟嘅 **型號名**
+ * （`resolveUsbMeta()` 未命中型號時會 fallback 成品牌名，例如 `"漢印 HPRT"`）。
+ * 所以呢度**唔可以**直接當 `LanModelOption` 用 —— 但要遵守同一條「其他」規則。
+ *
+ * 若候選項帶 `family`，而且品牌係已知品牌之一，就照該品牌分組；
+ * 認唔到（`model` 係「USB 打印機 0xXXXX」之類）一律歸「其他」。
+ */
+export function brandGroupOfCandidate(c: {
+  brand?: string;
+  model?: string;
+  name?: string;
+  family?: string;
+}): string {
+  const raw = (c.brand ?? c.model ?? c.name ?? "").trim();
+  if (!raw) return OTHER_BRAND;
+  if (GENERIC_BRAND_NAMES.has(raw)) return OTHER_BRAND;
+  // Companion 認唔到型號時會回 "USB 打印機" / "通用 ESC/POS (USB Printer Class)"
+  if (raw.startsWith("USB 打印機") || raw.includes("USB Printer Class")) return OTHER_BRAND;
+  // Companion 命中已知品牌但冇精確型號 → brand 就係品牌名（例："漢印 HPRT"）
+  return raw;
+}
+
+/** 「全部」篩選 chip 嘅哨兵值（唔可以同真實品牌名撞） */
+export const BRAND_FILTER_ALL = "__all__";
+
+/**
+ * 一個品牌 chip 要用邊個 label。
+ *
+ * 有 `count` 就帶埋數量（`佳博 Gprinter 2`），令商家一眼睇到邊個牌子有幾多型號。
+ */
+export function brandChipLabel(brand: string, count: number): string {
+  return brand === BRAND_FILTER_ALL ? `全部 ${count}` : `${brand} ${count}`;
+}
+
+/**
+ * 由品牌分組清單抽出所有 chip（含開頭嘅「全部」）。
+ *
+ * 只有一個品牌時**唔應該**顯示 chip 列（篩選無意義，徒增視覺噪音）——
+ * 所以 UI 要判 `groups.length > 1` 才 render。
+ *
+ * ⚠️ 參數刻意收窄成 `{ brand, count }`（唔用 `BrandGroup<T>`）—— 因為 LAN 型號表
+ * 同 USB 偵測結果係兩種唔同嘅 `T`，UI 要可以傳任何一種。
+ */
+export function brandChipsOf(
+  groups: readonly { brand: string; count: number }[],
+): Array<{ brand: string; count: number }> {
+  const total = groups.reduce((n, g) => n + g.count, 0);
+  return [{ brand: BRAND_FILTER_ALL, count: total }, ...groups.map((g) => ({ brand: g.brand, count: g.count }))];
 }

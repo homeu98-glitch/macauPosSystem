@@ -1,7 +1,12 @@
 "use client";
 
 import { DevicePrinterConfig } from "@/lib/types";
-import { suggestLabelCommandSet } from "@/lib/print-bridge/printer-models";
+import {
+  LABEL_MODEL_PAPER_SIZES,
+  labelPaperFitsModel,
+  labelPaperOptionOf,
+  suggestLabelCommandSet,
+} from "@/lib/print-bridge/printer-models";
 
 interface PrinterCardV2Props {
   printer: DevicePrinterConfig;
@@ -43,22 +48,10 @@ function connLabel(conn: DevicePrinterConfig["connectionType"]): string {
  * 所以卡片一定要顯示出嚟，唔可以只顯示「80mm」令商家以為同票據機一樣。
  */
 function labelPaperHint(paperSize: string | undefined): string {
-  switch (paperSize) {
-    case "40x30mm":
-      return "40 × 30 mm";
-    case "50x30mm":
-      return "50 × 30 mm";
-    case "60x40mm":
-      return "60 × 40 mm";
-    case "70x50mm":
-      return "70 × 50 mm";
-    case "100x75mm":
-      return "100 × 75 mm";
-    case "62mm":
-      return "62 mm（舊預設）";
-    default:
-      return paperSize ?? "未設定";
-  }
+  const opt = labelPaperOptionOf(paperSize);
+  if (opt) return `${opt.label}（${opt.hint}）`;
+  if (paperSize === "62mm") return "62 mm（舊預設）";
+  return paperSize ?? "未設定";
 }
 
 export function PrinterCardV2({
@@ -165,19 +158,50 @@ export function PrinterCardV2({
 
         {isLabel ? (
           <label className="grid gap-1 text-sm font-semibold text-slate-700">
-            <span className="text-xs text-slate-500">標籤紙尺寸</span>
+            <span className="text-xs text-slate-500">
+              標籤紙尺寸
+              {printer.maxLabelWidthMm != null || printer.minLabelWidthMm != null ? (
+                <span className="ml-1 font-normal text-slate-400">
+                  （機型支援 {printer.minLabelWidthMm ?? "?"}–{printer.maxLabelWidthMm ?? "?"} mm）
+                </span>
+              ) : null}
+            </span>
             <select
               className="rounded-2xl border border-violet-200 bg-white px-3 py-2 text-sm"
               onChange={(e) => onUpdate(printer.id, { paperSize: e.target.value })}
-              value={printer.paperSize ?? "100x75mm"}
+              value={printer.paperSize ?? "60x40mm"}
             >
-              <option value="40x30mm">40 × 30 mm（細標籤 / 條碼）</option>
-              <option value="50x30mm">50 × 30 mm（零售價籤）</option>
-              <option value="60x40mm">60 × 40 mm（飲品杯貼）</option>
-              <option value="70x50mm">70 × 50 mm（外帶袋 / 備料）</option>
-              <option value="100x75mm">100 × 75 mm（物流面單）</option>
-              <option value="62mm">62 mm（舊系統預設）</option>
+              {/*
+                🔴 超出機器介質幅寬嘅尺寸**唔可以靜靜畀人揀**。
+                標籤紙放唔落就係放唔落 —— 印到先知就浪費紙同時間。
+                但唔直接 filter 走：商家可能係換咗機 / 打錯型號，
+                見到「點解冇咗 100×75」比見到「100×75 被禁用」更難 debug。
+                所以用 disabled + 說明（同 `normalizeKioskPrinters` 嗰種
+                「寧可剔走都唔好靜靜補假值」係一致思路）。
+              */}
+              {LABEL_MODEL_PAPER_SIZES.map((p) => {
+                const fits = labelPaperFitsModel(p.widthMm, printer.minLabelWidthMm, printer.maxLabelWidthMm);
+                return (
+                  <option key={p.value} value={p.value} disabled={!fits}>
+                    {p.label}
+                    {fits ? "" : "（超出紙寬限制，放唔落）"}
+                  </option>
+                );
+              })}
             </select>
+            {/*
+              現有設定超範圍嘅警告（例如型號表更新過、或商家之前揀錯）。
+              🔴 一定要出聲 —— 靜靜唔出紙 / 出亂版係最難 debug 嘅一類 bug。
+            */}
+            {!labelPaperFitsModel(
+              labelPaperOptionOf(printer.paperSize)?.widthMm ?? 0,
+              printer.minLabelWidthMm,
+              printer.maxLabelWidthMm,
+            ) ? (
+              <span className="text-[11px] font-normal text-rose-600">
+                🔴 現時尺寸超出現時機型嘅紙寬限制，請改揀其他尺寸
+              </span>
+            ) : null}
           </label>
         ) : null}
 

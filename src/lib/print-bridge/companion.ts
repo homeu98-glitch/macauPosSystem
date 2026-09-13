@@ -517,6 +517,10 @@ export interface PrinterCandidate {
    * 空缺 = 舊版 Companion → POS 側按所選用途 fallback。
    */
   family?: "receipt" | "label" | "portable";
+  /** 標籤機介質幅寬上限（mm）。空缺 = 未知 → UI 唔攔，只提示自行核對紙寬。 */
+  maxLabelWidthMm?: number;
+  /** 標籤機介質幅寬下限（mm）。空缺 = 未知。 */
+  minLabelWidthMm?: number;
 }
 
 interface DiscoveredLanPrinter {
@@ -535,6 +539,8 @@ interface UsbPrinterRow {
   paperSize?: string;
   kanjiEnlarge?: "FS!" | "GS!";
   family?: "receipt" | "label" | "portable";
+  maxLabelWidthMm?: number;
+  minLabelWidthMm?: number;
   recognized?: boolean;
 }
 
@@ -584,6 +590,8 @@ export async function enumerateCompanionUsbPrinters(): Promise<PrinterCandidate[
         kanjiEnlarge: p.kanjiEnlarge,
         // Companion 已由 VID/PID 判斷好硬件族 → 直接帶落去，唔好喺 UI 再猜。
         family: p.family,
+        maxLabelWidthMm: p.maxLabelWidthMm,
+        minLabelWidthMm: p.minLabelWidthMm,
       } as PrinterCandidate;
     });
   } catch {
@@ -622,6 +630,8 @@ export async function listCompanionPrinters(): Promise<PrinterCandidate[]> {
         paperSize: p.paperSize,
         kanjiEnlarge: p.kanjiEnlarge,
         family: p.family,
+        maxLabelWidthMm: p.maxLabelWidthMm,
+        minLabelWidthMm: p.minLabelWidthMm,
       } as PrinterCandidate;
     });
     return [...lan, ...usb];

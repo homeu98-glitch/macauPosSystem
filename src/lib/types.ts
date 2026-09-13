@@ -281,6 +281,23 @@ export interface DevicePrinterConfig {
   bluetoothName?: string;
   /** 每次打單打印份數（1–9）；未設定或 ≤1 視為 1 份 */
   copies?: number;
+  /**
+   * 標籤機**介質幅寬限制**（mm，2026-09-13 新增）。
+   *
+   * 🔴 為何要落 config：標籤紙係成卷嘅，**紙寬超出機器導軌就放唔落**。
+   * 打印機列表要即時攔「用 100×75 餵一部 20-60mm 機」呢種錯 ——
+   * 所以要喺 render 時就知限制，唔可以等到出紙。
+   *
+   * 同 `paperSize` / `charset` 一樣係**型號表反規範化落嚟**嘅值
+   * （wizard 由 `LanModelOption` / Companion 嘅 `PrinterCandidate` 抄落去）。
+   *
+   * 空缺 = 未知（例如通用兜底機）→ UI 唔攔，只提示自行核對。
+   * ⚠️ 選填，所以**唔使遷移**：`normalizeDeviceConfig()` 同
+   * `normalizeKioskPrinters()` 都係 `...printer` spread，會保留呢個欄位。
+   */
+  maxLabelWidthMm?: number;
+  /** 標籤機介質幅寬下限（mm）。空缺 = 未知。 */
+  minLabelWidthMm?: number;
   /** true = 由 Companion 自動偵測加入（唔經手動輸入 VID/PID） */
   autoDetected?: boolean;
   // ── USB 連接（connectionType === "usb" 時使用）──

@@ -5,12 +5,20 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { DevicePrinterConfig, PrinterRole } from "@/lib/types";
 import { PrinterCandidate, enumerateCompanionUsbPrinters, isCompanionAvailable, probeLan } from "@/lib/print-bridge/companion";
 import {
+  BRAND_FILTER_ALL,
+  BrandGroup,
   LABEL_COMMAND_SETS,
   LABEL_MODEL_PAPER_SIZES,
   LanModelOption,
   LabelCommandSet,
+  brandChipLabel,
+  brandChipsOf,
+  brandGroupOfCandidate,
+  defaultLabelPaperFor,
   familyForRole,
   getLanModelOptions,
+  groupModelsByBrand,
+  labelPaperFitsModel,
   suggestLabelCommandSet,
 } from "@/lib/print-bridge/printer-models";
 
@@ -43,6 +51,16 @@ interface WizardState {
    * 用邊套指令，缺咗就靜靜用錯指令集 → 出白紙或亂碼。
    */
   labelCommandSet: LabelCommandSet;
+  /**
+   * 品牌層篩選（2026-09-13 新增）。
+   *
+   * 商家要求：型號清單要**先依品牌分組**，冇對應品牌嘅（通用類）歸「其他」。
+   * `BRAND_FILTER_ALL` = 唔篩選（顯示全部分組）。
+   *
+   * ⚠️ 轉換用途（`selectRole`）時要 reset 返 `BRAND_FILTER_ALL` —— 標籤機同
+   * 票據機嘅品牌集合唔同，留住舊值會令清單空白（篩選中一個唔存在嘅品牌）。
+   */
+  brandFilter: string;
   connectionTested: boolean;
   testing: boolean;
   usbCandidates: PrinterCandidate[];
@@ -80,6 +98,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     zoneId: null,
     labelPaperSize: "100x75mm",
     labelCommandSet: "tspl",
+    brandFilter: BRAND_FILTER_ALL,
     connectionTested: false,
     testing: false,
     usbCandidates: [],
@@ -98,7 +117,69 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     [state.role],
   );
 
+  /** LAN 型號 → 品牌分組（「其他」沉底） */
+  const lanGroups = useMemo(() => groupModelsByBrand(lanModels), [lanModels]);
+
+  /** 按 `brandFilter` 篩選後嘅分組。`BRAND_FILTER_ALL` = 全部分組 */
+  const visibleLanGroups = useMemo(
+    () =>
+      state.brandFilter === BRAND_FILTER_ALL
+        ? lanGroups
+        : lanGroups.filter((g) => g.brand === state.brandFilter),
+    [lanGroups, state.brandFilter],
+  );
+
+  /**
+   * USB 偵測結果 → 品牌分組。
+   *
+   * 🔴 **USB 唔使商家手動揀品牌** —— Companion 已經由 VID/PID 自動解析出品牌型號
+   * （見 `brandGroupOfCandidate` 註釋）。呢度分組純粹係**顯示用**：
+   * 插多部機時按品牌排好，商家一眼睇到邊部係邊個牌子。
+   */
+  const usbGroups = useMemo<BrandGroup<PrinterCandidate>[]>(() => {
+    const groups: BrandGroup<PrinterCandidate>[] = [];
+    const index = new Map<string, BrandGroup<PrinterCandidate>>();
+    for (const c of state.usbCandidates) {
+      const brand = brandGroupOfCandidate(c);
+      let g = index.get(brand);
+      if (!g) {
+        g = { brand, count: 0, items: [] };
+        index.set(brand, g);
+        groups.push(g);
+      }
+      g.items.push(c);
+      g.count++;
+    }
+    return groups.sort((a, b) => {
+      const aOther = a.brand === "其他" ? 1 : 0;
+      const bOther = b.brand === "其他" ? 1 : 0;
+      return aOther - bOther;
+    });
+  }, [state.usbCandidates]);
+
+  const visibleUsbGroups = useMemo(
+    () =>
+      state.brandFilter === BRAND_FILTER_ALL
+        ? usbGroups
+        : usbGroups.filter((g) => g.brand === state.brandFilter),
+    [usbGroups, state.brandFilter],
+  );
+
+  /** 依「用途 + 連接方式」決定顯示邊組 chip */
+  const brandGroupsForChips = state.connectionType === "usb" ? usbGroups : lanGroups;
+  const chipItems = useMemo(() => brandChipsOf(brandGroupsForChips), [brandGroupsForChips]);
+
   const isLabel = state.role === "label";
+
+  /**
+   * 已選機型嘅介質幅寬限制（mm）。
+   *
+   * LAN 路徑嚟自型號表（`LanModelOption`），USB 路徑嚟自 Companion 嘅
+   * VID/PID 解析結果 —— 兩邊都收斂到同一個 `resolvedMeta`。
+   * `undefined` = 未知（例如通用兜底機）→ UI 唔攔，只提示自行核對。
+   */
+  const maxLabelWidthMm = state.resolvedMeta?.maxLabelWidthMm;
+  const minLabelWidthMm = state.resolvedMeta?.minLabelWidthMm;
 
   // Reset wizard when opened
   useEffect(() => {
@@ -113,6 +194,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
         zoneId: printZones.length === 1 ? printZones[0].id : null,
         labelPaperSize: "100x75mm",
         labelCommandSet: "tspl",
+        brandFilter: BRAND_FILTER_ALL,
         connectionTested: false,
         testing: false,
         usbCandidates: [],
@@ -137,7 +219,13 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
         return;
       }
       const candidates = await enumerateCompanionUsbPrinters();
-      setState((s) => ({ ...s, usbCandidates: candidates, usbScanning: false }));
+      // 重新掃描會換走候選清單 → 品牌集合可能唔同，篩選一併 reset。
+      setState((s) => ({
+        ...s,
+        usbCandidates: candidates,
+        usbScanning: false,
+        brandFilter: BRAND_FILTER_ALL,
+      }));
     } catch {
       setState((s) => ({ ...s, usbScanning: false }));
     }
@@ -146,17 +234,20 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
   function selectRole(role: PrinterRole) {
     // 換用途 = 之前揀嘅型號一定唔啱（票據機型號 != 標籤機型號）→ 一齊清走。
     // 唔清 = 商家由「廚房機」改「標籤機」之後，model 仲留住上一份清單嘅值。
+    // 品牌篩選一樣要 reset：標籤機同票據機嘅品牌集合唔同，留住舊值 = 清單空白。
     setState((s) => ({
       ...s,
       role,
       model: null,
       resolvedMeta: null,
+      brandFilter: BRAND_FILTER_ALL,
       labelCommandSet: role === "label" ? "tspl" : s.labelCommandSet,
     }));
   }
 
   function selectConnectionType(connectionType: "lan" | "usb") {
-    setState((s) => ({ ...s, connectionType }));
+    // 換連線方式 = chip 來源換咗（LAN 用型號表、USB 用偵測結果）→ 篩選也要 reset。
+    setState((s) => ({ ...s, connectionType, brandFilter: BRAND_FILTER_ALL }));
   }
 
   function selectLanModel(opt: LanModelOption) {
@@ -166,7 +257,17 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
       resolvedMeta: opt,
       // 標籤機：由型號帶入建議指令集（商家可喺 Step 3 改）
       labelCommandSet: opt.family === "label" ? suggestLabelCommandSet(opt.brand) : s.labelCommandSet,
-      labelPaperSize: opt.family === "label" ? opt.paperSize : s.labelPaperSize,
+      /**
+       * 標籤紙預設：**必須尊重機器嘅介質幅寬**。
+       *
+       * 🔴 唔可以直接用 `opt.paperSize` —— 例如「漢印 SL42」型號表預設 100×75mm，
+       * 但若果商家部機係 20-60mm（如 Xprinter XP-235B），100mm 紙**根本放唔落**。
+       * `defaultLabelPaperFor()` 會喺範圍內揀最闊嗰款。
+       */
+      labelPaperSize:
+        opt.family === "label"
+          ? defaultLabelPaperFor(opt.maxLabelWidthMm, opt.minLabelWidthMm, opt.paperSize)
+          : s.labelPaperSize,
       step: 3,
     }));
   }
@@ -195,7 +296,10 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
       usbProductId: candidate.usbProductId,
       usbPort: "USB001", // Companion 會自動偵測，呢度係 fallback
       labelCommandSet: isLabelFamily ? suggestLabelCommandSet(opt.brand) : s.labelCommandSet,
-      labelPaperSize: isLabelFamily ? opt.paperSize : s.labelPaperSize,
+      // 同 `selectLanModel()` 一樣：尊重 Companion 回報嘅介質幅寬限制。
+      labelPaperSize: isLabelFamily
+        ? defaultLabelPaperFor(candidate.maxLabelWidthMm, candidate.minLabelWidthMm, opt.paperSize)
+        : s.labelPaperSize,
       step: 3,
     }));
   }
@@ -237,6 +341,17 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
       // 舊行為：`role !== "receipt"` 會塞一個 zoneId 落標籤機，令排位 / 分區
       // 邏輯誤以為佢係廚房機。
       zoneId: state.role === "zone" ? (state.zoneId ?? printZones[0]?.id ?? "kitchen") : undefined,
+      /**
+       * 標籤機介質幅寬限制 —— **反規範化落 config**。
+       *
+       * 🔴 為何要存：打印機列表（`printer-card-v2`）要即時攔「揀咗超出紙寬嘅尺寸」。
+       * 若果唔存、每次 render 去型號表查，就會出現「型號表改咗 → 舊機嘅限制
+       * 靜靜變咗」嘅漂移。同 `paperSize` / `charset` 一樣，選定時抄落去就定咗。
+       *
+       * 只喺標籤機寫；其他角色 `undefined`（唔關事）。
+       */
+      maxLabelWidthMm: isLabel ? maxLabelWidthMm : undefined,
+      minLabelWidthMm: isLabel ? minLabelWidthMm : undefined,
       /**
        * 標籤機指令集（TSPL / ZPL / ESC/POS…）。
        *
@@ -432,38 +547,120 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
             </div>
           ) : null}
 
-          {/* LAN 型號列表（已按用途過濾） */}
+          {/*
+            🔴 品牌層篩選（2026-09-13 商家要求）。
+            型號清單先依品牌分組，冇對應品牌（通用類）歸「其他」。
+            只有一個品牌時唔顯示 chip 列 —— 篩選無意義，徒增視覺噪音。
+          */}
+          {chipItems.length > 2 ? (
+            <div className="grid gap-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs font-semibold text-slate-700">
+                  品牌
+                  <span className="ml-1 font-normal text-slate-400">
+                    {state.brandFilter === BRAND_FILTER_ALL
+                      ? `${brandGroupsForChips.length} 個品牌`
+                      : "已篩選"}
+                  </span>
+                </span>
+                {state.brandFilter !== BRAND_FILTER_ALL ? (
+                  <button
+                    className="text-xs font-semibold text-indigo-600"
+                    onClick={() => setState((s) => ({ ...s, brandFilter: BRAND_FILTER_ALL }))}
+                    type="button"
+                  >
+                    清除篩選
+                  </button>
+                ) : null}
+              </div>
+              <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
+                {chipItems.map((chip) => {
+                  const active = state.brandFilter === chip.brand;
+                  const isOther = chip.brand === "其他" || chip.brand === BRAND_FILTER_ALL;
+                  return (
+                    <button
+                      key={chip.brand}
+                      className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                        active
+                          ? isOther
+                            ? "border-slate-900 bg-slate-900 text-white"
+                            : "border-violet-600 bg-violet-600 text-white"
+                          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                      }`}
+                      onClick={() => setState((s) => ({ ...s, brandFilter: chip.brand }))}
+                      type="button"
+                    >
+                      {chip.brand === BRAND_FILTER_ALL
+                        ? `全部 ${chip.count}`
+                        : brandChipLabel(chip.brand, chip.count)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {/* LAN 型號列表（已按用途 + 品牌雙重過濾） */}
           {state.connectionType === "lan" ? (
-            <div className="grid max-h-[400px] gap-2 overflow-y-auto">
-              {lanModels.length === 0 ? (
+            <div className="grid max-h-[400px] gap-3 overflow-y-auto">
+              {visibleLanGroups.length === 0 ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-700">
                   未收錄此用途嘅型號，請回上一步或改用 USB 自動偵測
                 </div>
               ) : (
-                lanModels.map((opt, i) => (
-                  <button
-                    key={`${opt.brand}-${opt.model}-${i}`}
-                    className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-slate-300"
-                    onClick={() => selectLanModel(opt)}
-                    type="button"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-slate-900">{opt.model}</div>
-                      <div className="truncate text-xs text-slate-500">
-                        {opt.brand} · {opt.paperSize}
-                        {opt.genericFallback ? " · 通用" : ""}
+                visibleLanGroups.map((group) => (
+                  <div key={group.brand} className="grid gap-1.5">
+                    {/* 分組標題：只在「全部」時顯示（已篩選 = 標題多餘） */}
+                    {state.brandFilter === BRAND_FILTER_ALL ? (
+                      <div className="flex items-center gap-2 px-1">
+                        <span
+                          className={`text-xs font-semibold ${
+                            group.brand === "其他" ? "text-slate-500" : "text-slate-900"
+                          }`}
+                        >
+                          {group.brand}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{group.count}</span>
+                        <div className="h-px flex-1 bg-slate-200" />
                       </div>
-                    </div>
-                    <span className="text-slate-300">→</span>
-                  </button>
+                    ) : null}
+                    {group.items.map((opt, i) => (
+                      <button
+                        key={`${opt.brand}-${opt.model}-${i}`}
+                        className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-slate-300"
+                        onClick={() => selectLanModel(opt)}
+                        type="button"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-bold text-slate-900">{opt.model}</div>
+                          <div className="truncate text-xs text-slate-500">
+                            {opt.brand} · {opt.paperSize}
+                            {opt.genericFallback ? " · 通用" : ""}
+                          </div>
+                        </div>
+                        <span className="text-slate-300">→</span>
+                      </button>
+                    ))}
+                  </div>
                 ))
               )}
             </div>
           ) : null}
 
-          {/* USB 偵測設備列表 */}
+          {/* USB 偵測設備列表（按品牌分組顯示；品牌由 Companion 自動判斷） */}
           {state.connectionType === "usb" ? (
             <div className="grid gap-3">
+              {/*
+                🔴 USB 唔使手動揀品牌 —— 回答商家疑問。
+                LAN 冇 VID/PID 可讀 → 商家要憑機身標籤手動揀；
+                USB 經 Companion node-usb 讀到 VID/PID → 自動對照出品牌型號。
+                所以要喺 UI 講清楚，否則商家會以為「點解得一部機、冇得揀牌子」。
+              */}
+              {!state.usbScanning && state.usbCandidates.length > 0 ? (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  ✅ 品牌由 USB 自動識別，<b>唔使手動揀</b>。只需揀返偵測到嘅設備。
+                </div>
+              ) : null}
               {state.usbScanning ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
                   正在偵測 USB 設備…
@@ -484,25 +681,42 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
                   </button>
                 </div>
               ) : (
-                <div className="grid max-h-[400px] gap-2 overflow-y-auto">
-                  {state.usbCandidates.map((candidate, i) => (
-                    <button
-                      key={`${candidate.usbVendorId}-${candidate.usbProductId}-${i}`}
-                      className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-slate-300"
-                      onClick={() => selectUsbDevice(candidate)}
-                      type="button"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-bold text-slate-900">
-                          {candidate.model || candidate.name}
+                <div className="grid max-h-[400px] gap-3 overflow-y-auto">
+                  {visibleUsbGroups.map((group) => (
+                    <div key={group.brand} className="grid gap-1.5">
+                      {state.brandFilter === BRAND_FILTER_ALL ? (
+                        <div className="flex items-center gap-2 px-1">
+                          <span
+                            className={`text-xs font-semibold ${
+                              group.brand === "其他" ? "text-slate-500" : "text-slate-900"
+                            }`}
+                          >
+                            {group.brand}
+                          </span>
+                          <span className="text-[10px] text-slate-400">{group.count}</span>
+                          <div className="h-px flex-1 bg-slate-200" />
                         </div>
-                        <div className="truncate text-xs text-slate-500">
-                          {candidate.paperSize || (isLabel ? "100x75mm" : "80mm")}
-                          {candidate.usbVendorId ? ` · ${candidate.usbVendorId}` : ""}
-                        </div>
-                      </div>
-                      <span className="text-slate-300">→</span>
-                    </button>
+                      ) : null}
+                      {group.items.map((candidate, i) => (
+                        <button
+                          key={`${candidate.usbVendorId}-${candidate.usbProductId}-${group.brand}-${i}`}
+                          className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-slate-300"
+                          onClick={() => selectUsbDevice(candidate)}
+                          type="button"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-bold text-slate-900">
+                              {candidate.model || candidate.name}
+                            </div>
+                            <div className="truncate text-xs text-slate-500">
+                              {candidate.paperSize || (isLabel ? "100x75mm" : "80mm")}
+                              {candidate.usbVendorId ? ` · ${candidate.usbVendorId}` : ""}
+                            </div>
+                          </div>
+                          <span className="text-slate-300">→</span>
+                        </button>
+                      ))}
+                    </div>
                   ))}
                   <button
                     className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700"
@@ -575,7 +789,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
           {/*
             🔴 標籤機專屬設定區（Step 3）。
             呢個係「標籤機應有自己獨立且合適嘅設置選項」嘅落點：
-              ① 標籤紙尺寸（40×30 … 100×75）—— 決定排版闊度
+              ① 標籤紙尺寸（30×20 … 100×75）—— 決定排版闊度
               ② 指令集（TSPL / ZPL / ESC/POS…）—— 決定下游用邊套 bytes
             呢兩項**票據機完全唔會見到**（下面 `!isLabel` 分支只有 IP/USB 確認）。
           */}
@@ -583,25 +797,73 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
             <div className="grid gap-3 rounded-2xl border border-violet-200 bg-violet-50/60 p-3">
               <div className="text-sm font-semibold text-violet-900">🏷️ 標籤機設定</div>
 
+              {/*
+                機器紙寬提示：商家一眼知「我部機食幾闊」，
+                唔會揀完 100×75 印唔到先發現。
+              */}
+              {maxLabelWidthMm != null || minLabelWidthMm != null ? (
+                <div className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-violet-800">
+                  機型紙寬限制：
+                  <b>
+                    {minLabelWidthMm != null ? ` ${minLabelWidthMm}` : " ?"}
+                    {" – "}
+                    {maxLabelWidthMm != null ? `${maxLabelWidthMm}` : "?"} mm
+                  </b>
+                  。超出此範圍嘅尺寸已標示為放唔落。
+                </div>
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+                  ⚠️ 未知此機型嘅紙寬限制，請自行核對卷裝標籤寬度。
+                </div>
+              )}
+
               <div className="grid gap-1">
                 <span className="text-xs font-semibold text-violet-800">標籤紙尺寸</span>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {LABEL_MODEL_PAPER_SIZES.map((p) => (
-                    <button
-                      key={p.value}
-                      className={`rounded-xl border-2 px-2 py-2 text-left text-xs transition ${
-                        state.labelPaperSize === p.value
-                          ? "border-violet-600 bg-white"
-                          : "border-violet-200 bg-white/70 hover:border-violet-300"
-                      }`}
-                      onClick={() => setState((s) => ({ ...s, labelPaperSize: p.value }))}
-                      type="button"
-                    >
-                      <div className="font-bold text-slate-900">{p.label}</div>
-                      <div className="mt-0.5 text-[10px] leading-tight text-slate-500">{p.hint}</div>
-                    </button>
-                  ))}
+                  {LABEL_MODEL_PAPER_SIZES.map((p) => {
+                    /**
+                     * 呢張紙放唔放得落？（機器未知限制時一律可揀）
+                     * ⚠️ `labelPaperFitsModel()` 唔會因為資料缺失而攔人。
+                     */
+                    const fits = labelPaperFitsModel(p.widthMm, minLabelWidthMm, maxLabelWidthMm);
+                    const active = state.labelPaperSize === p.value;
+                    return (
+                      <button
+                        key={p.value}
+                        className={`rounded-xl border-2 px-2 py-2 text-left text-xs transition ${
+                          active
+                            ? fits
+                              ? "border-violet-600 bg-white"
+                              : "border-rose-500 bg-rose-50"
+                            : fits
+                              ? "border-violet-200 bg-white/70 hover:border-violet-300"
+                              : "border-slate-200 bg-slate-50 opacity-60"
+                        }`}
+                        onClick={() => setState((s) => ({ ...s, labelPaperSize: p.value }))}
+                        type="button"
+                        title={fits ? undefined : "紙寬超出此機型嘅介質幅寬，放唔落"}
+                      >
+                        <div
+                          className={`font-bold ${fits ? "text-slate-900" : "text-slate-400 line-through"}`}
+                        >
+                          {p.label}
+                        </div>
+                        <div className="mt-0.5 text-[10px] leading-tight text-slate-500">
+                          {fits ? p.hint : `超出紙寬上限（${p.widthMm}mm）`}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
+                {!labelPaperFitsModel(
+                  LABEL_MODEL_PAPER_SIZES.find((p) => p.value === state.labelPaperSize)?.widthMm ?? 0,
+                  minLabelWidthMm,
+                  maxLabelWidthMm,
+                ) ? (
+                  <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+                    🔴 已揀嘅尺寸超出現時機型嘅紙寬範圍，請改揀其他尺寸。
+                  </div>
+                ) : null}
               </div>
 
               <label className="grid gap-1">
