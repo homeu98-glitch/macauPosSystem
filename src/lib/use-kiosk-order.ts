@@ -1488,6 +1488,13 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     return () => clearInterval(timer);
   }, [paySheetOpen, payStage]);
 
+  // 🔴 `memberRef` 同 state 同步：`setMember(null)`（skipMemberLogin / returnToHome）嗰兩處
+  // 都冇寫 ref，唔同步就會令 ref 殘留**上一位客人**嘅憑證 ——
+  // 之後 `runScanDebit` 讀 `memberRef.current` 就會攞到已作廢嘅 token（→ Ledger 401）。
+  useEffect(() => {
+    memberRef.current = member;
+  }, [member]);
+
   return {
     hydrated,
     menuLoading,

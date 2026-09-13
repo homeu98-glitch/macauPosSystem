@@ -164,6 +164,15 @@ async function callScanDebit(
         : typeof payload.error === "string" && payload.error.trim()
           ? payload.error
           : `Ledger 回應 ${response.status}`;
+
+    // 🔴 一定要 log 低 HTTP status ＋ Ledger 原文，否則「Ledger 登入已過期」呢類訊息
+    //    會令排查變成猜謎：分唔清係 **HMAC 簽名唔對**（→ 401）、
+    //    **顧客 token 被拒**（→ 401）、**未設 secret**（→ 503）定係**限流**（→ 429）。
+    //    ⚠️ 只 log code / status / message —— **唔可以** log body（含 quoteId）或 token。
+    console.error(
+      `[scan-debit] ${path} 失敗: status=${response.status} code=${ledgerCode ?? "(none)"} message=${message}`,
+    );
+
     throw new ScanDebitError(classified, message, response.status);
   }
 
