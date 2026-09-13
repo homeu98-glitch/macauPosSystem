@@ -129,7 +129,7 @@ export async function loginCustomer(params: {
   if (authError || !authData.user || !authData.session) {
     throw new CustomerLoginError("bad_credential");
   }
-  // 🔴 一定要攞住呢個 token 先 signOut（下面 signOut 只清 local session，唔會 invalidate token）。
+  // 🔴 喺呢一刻攞走 token（後面**唔會**再 signOut —— 見檔尾長註解）。
   const customerAccessToken = authData.session.access_token;
 
   // ── 契約 §4.5.2 步驟 5：**跳過** `merchant_staff` 檢查 ──
@@ -150,7 +150,6 @@ export async function loginCustomer(params: {
 
   if (walletError) {
     // 讀唔到餘額 ≠ 冇餘額。唔可以當 0 處理（否則客人會見到「餘額 0」而明明有錢）。
-    await supabase.auth.signOut({ scope: "local" });
     throw new CustomerLoginError("upstream", `讀取會員錢包失敗：${walletError.message}`);
   }
 
@@ -164,8 +163,17 @@ export async function loginCustomer(params: {
         : null;
   const displayName = displayNameRaw?.trim() ? displayNameRaw.trim().slice(0, 60) : null;
 
-  // 用完即棄：唔留顧客 session 喺 server client（下一個請求會開新 client，但唔好靠嗰個）。
-  await supabase.auth.signOut({ scope: "local" });
+  // 🔴🔴 **唔可以 `signOut`！**（2026-09-13 J 實案）
+  //
+  // 原本喺度叫 `signOut({ scope: "local" })`，以為「只清本地、唔 revoke」。但係實測落嚟：
+  // 客人登入成功、攞到 token，但係之後拎去 `scan-debit/quote` 打 Ledger 時被判
+  // 「**登入已過期**」（401）—— 即係 Ledger 側認為嗰個 session 已經唔有效。
+  //
+  // 原因：Supabase 嘅 `signOut` 會令該 session 失效；Ledger 驗 token 時若果會查
+  // session 狀態（唔係純 JWT 簽名驗證），就會即時 401。`scope` 嘅細節唔應該賭。
+  //
+  // 呢個 client 係**函式內嘅區域變數**，request 完結就會被 GC —— 本來就唔需要登出。
+  // 所以「唔登出」既安全（唔會殘留）又唔會誤殺 token。
 
   const row = (walletRow ?? null) as Record<string, unknown> | null;
   const paidBalanceAvos = Number(row?.paid_balance_avos ?? 0);
