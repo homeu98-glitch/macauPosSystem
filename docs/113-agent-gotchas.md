@@ -911,6 +911,50 @@ and j.status in ('pending', 'failed')
   `orders-hub.tsx` 匯出欄位中嘅 `客人電話` 一欄。
   `PosOrder`（線下單）本身**冇**電話欄位，所以線下 CSV 無此問題。
 
+## 🔴🔴 `/orders` 頁無限 re-render：整個 tab 卡死、連側欄都撳唔到（2026-09-13 用戶實案）
+
+**病症**：用戶原話 ——「**點完訂單後，按其他頁面完全沒反應**」。
+注意：**唔係**導航失效，係**整個瀏覽器 tab 被 render 死循環鎖死**（主執行緒 100%），
+所以任何 click（連側欄 Link）都冇反應。用戶往往會誤報成「頁面切換壞咗」。
+
+**根因**：`orders-hub.tsx` 傳落兩張表嘅 selection 物件**每次 render 都新建 ref**：
+
+```tsx
+// ❌ 錯：每次 render 新物件
+const dateSelection = { key: dateFilter, custom: customRange };
+```
+
+而兩個子元件都係「`useMemo` 依賴 `dateFilter` → `useEffect([filteredOrders])` 上報父層」：
+
+```tsx
+// local-orders-panel.tsx / online-orders.tsx
+const filteredOrders = useMemo(() => /* filter+sort → 一定新陣列 ref */, [dateFilter, ...]);
+useEffect(() => { onFilteredOrdersChangeRef.current?.(filteredOrders); }, [filteredOrders]);
+```
+
+死循環鏈（**唔會**觸發 React「Too many re-renders」——成因係 `useEffect` 內 `setState`，
+唔算 render-phase update，所以唔會 throw，只會**靜靜燒 CPU 到卡死**）：
+
+1. `OrdersHub` render → 新 `dateSelection` 物件（新 ref）
+2. 子元件 `useMemo([dateFilter,…])` 見 `Object.is` 唔相等 → 重算 → `filteredOrders` 新陣列 ref
+3. `useEffect([filteredOrders])` fire → `setOnlineRows(新陣列)` → 父層 state 變
+4. 父層 re-render → 返 step 1 🔁
+
+**鐵律**：
+
+- 🔴 **凡「子元件上報 → 父層 `setState` → 又傳返落子元件」嘅 prop，一定要穩定 identity**。
+  物件／陣列 prop 一律 `useMemo`；函式一律 `useCallback`。
+- 🔴 **子元件側加「內容簽名」保險**（`filteredOrders` 用 `length + id 序列` 做簽名，
+  簽名一樣就唔上報）—— 令呢類 bug 就算父層再傳不穩定 prop 都**唔會**死循環。
+  已落地喺 `local-orders-panel.tsx` / `online-orders.tsx`。
+- ⚠️ 呢類 bug **tsc / eslint / build 全綠**（唔係型別問題），`node --test` 亦捉唔到
+  （冇 React component 測試環境）→ **只能靠 code review 或實機**。審 `useEffect + setState` 
+  回報鏈時必查 prop identity。
+- 觸發時機嘅假象：用戶「點完訂單後」才覺得有事，其實**一入 `/orders` 就中** ——
+  同有冇點單無關（資料量只影響「幾快卡死」）。
+- 責任歸屬提示：呢個 bug 由 2026-09-13「時間篩選自訂 + CSV 匯出」批次引入
+  （見上一節），**唔係**同批「線上已付款堂食單」改動造成。
+
 ## 🔴🔴 v3.5 掃碼自助扣餘額：Ledger 回覆後嘅 4 個攔截點（2026-09-13 · 見 `docs/129`）
 
 Ledger 已回覆 `docs/126` Q1–Q15，方向上**可以開工**，但**唔係「照做」**：

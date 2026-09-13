@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
@@ -64,8 +64,25 @@ export function OrdersHub() {
   const [onlineRows, setOnlineRows] = useState<LedgerOnlineOrder[]>([]);
   const [localRows, setLocalRows] = useState<PosOrder[]>([]);
 
-  /** 傳落兩張表嘅 selection（key + 已套用嘅自訂區間）。 */
-  const dateSelection = { key: dateFilter, custom: customRange };
+  /**
+   * 傳落兩張表嘅 selection（key + 已套用嘅自訂區間）。
+   *
+   * 🔴 2026-09-13（實案：「點完訂單後按其他頁面完全冇反應」）—— **必須 `useMemo`**。
+   *
+   * `OnlineOrders` / `LocalOrdersPanel` 兩邊都係：
+   *   `filteredOrders = useMemo(..., [dateFilter, ...])`
+   *   → `useEffect(() => onFilteredOrdersChange(filteredOrders), [filteredOrders])`
+   *   → 回報畀呢個父層 `setOnlineRows` / `setLocalRows`。
+   *
+   * 如果呢度每次都新建 `{ key, custom }`（新 ref），`Object.is` 永遠唔相等 →
+   * 子層 useMemo 每次都重算 → `filteredOrders` 新陣列 ref → effect 又 fire →
+   * `setState` → 父層 re-render → 再建新物件……**無限循環**，主執行緒被鎖死，
+   * 成個 tab（連側欄）都撳唔到。呢個唔係「導航失效」，係 render 死循環。
+   */
+  const dateSelection = useMemo(
+    () => ({ key: dateFilter, custom: customRange }),
+    [dateFilter, customRange],
+  );
 
   const handleDateChange = useCallback((key: LedgerOrderDateFilterKey, custom: CustomDateRange | null) => {
     setDateFilter(key);

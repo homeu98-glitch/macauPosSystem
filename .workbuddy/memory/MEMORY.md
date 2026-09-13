@@ -2,6 +2,11 @@
 
 > ⚠️ 注入上限 3k 字元，超咗**靜默截斷**。只放最高頻紅線；坑總表 → [`docs/113-agent-gotchas.md`](../docs/113-agent-gotchas.md)（改動前必讀）。
 
+## React 依賴紅線（2026-09-13 實案：整個 tab 卡死）
+- 🔴 **子元件上報 → 父層 `setState` → 又傳返落子元件** 嘅 prop **一定要穩定 identity**（物件／陣列 `useMemo`、函式 `useCallback`）。否則 = 無限 re-render，**`useEffect` 內 setState 唔會 throw，只會靜靜燒 CPU 到整個 tab 撳唔到**（易誤報成「導航壞咗」）。
+- 🔴 實例：`orders-hub.tsx` `dateSelection = {key,custom}` inline（已改 `useMemo`）；子元件（`local-orders-panel`／`online-orders`）已加**內容簽名**守衛（`length|id 序列`）做第二道防線。
+- ⚠️ 呢類 bug **tsc／eslint／build／node --test 全綠**（冇 React component 測試環境）→ 只能 code review 或實機。
+
 ## 快餐（counter）單：兩維狀態
 - 出餐階段唯一真源 `isQuickOrderReady(o)`（＝`fulfillmentStatus==="ready"`），**唔可以**夾 `status==="paid"`（有路徑停在 `sent_to_kitchen`）。付款 `getPaymentBadge()` ＋出餐狀態**雙標籤並列**。
 - 按鈕：可取餐 → 完成（`markOrderCompleted` → `settled`）；列表／彈窗共用 `QuickOrderActions`。狀態唔准靜默。

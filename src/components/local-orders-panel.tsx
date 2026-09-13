@@ -289,11 +289,22 @@ export function LocalOrdersPanel({
 
   // 匯出 CSV（2026-09-13）：把「當前 tab + 時間範圍」篩選後嘅線下單上報畀 `/orders` 頁。
   // ⚠️ ref 存 callback，避免 inline 函式每次 render identity 都變 → 無限 loop。
+  //
+  // 🔴 2026-09-13（實案：/orders 頁無限 re-render 鎖死整個 tab）：父層 `setLocalRows`
+  // 係 state setter，收到新陣列 ref 就會令父層 re-render。父層傳落嚟嘅 `dateFilter`
+  // selection 若 identity 唔穩定 → 上面 `useMemo` 重算 → `filteredOrders` 新 ref →
+  // 本 effect 又 fire → 父層又 re-render → **死循環**（主執行緒鎖死、側欄都撳唔到）。
+  // 父層已改用 `useMemo` 穩定 selection；呢度再加**內容簽名**保險：只有「張單嘅組成」
+  // 真係變咗（id 序列／長度）才上報，單靠新 ref 唔會觸發。
+  const lastReportedSignatureRef = useRef<string | null>(null);
   const onFilteredOrdersChangeRef = useRef(onFilteredOrdersChange);
   useEffect(() => {
     onFilteredOrdersChangeRef.current = onFilteredOrdersChange;
   }, [onFilteredOrdersChange]);
   useEffect(() => {
+    const signature = `${filteredOrders.length}|${filteredOrders.map((order) => order.id).join(",")}`;
+    if (signature === lastReportedSignatureRef.current) return;
+    lastReportedSignatureRef.current = signature;
     onFilteredOrdersChangeRef.current?.(filteredOrders);
   }, [filteredOrders]);
   // 與線上訂單頁「stats.pending」對齊：當前 tab + dateFilter 範圍內，狀態仲係 draft（未送廚房）嘅訂單。
