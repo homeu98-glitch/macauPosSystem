@@ -115,6 +115,9 @@ export function OrdersHub() {
       付款狀態: o.paymentStatus === "paid" ? "已付款" : "未付款",
       付款方式: o.paymentMode ?? "",
       下單時間: o.createdAt ? formatMacauDateTime(o.createdAt) : "",
+      // 預約單（Ledger `scheduled_pickup_at`）：非預約單留空，唔好填「—」
+      // （留空先可以在 Excel 直接篩「有值 = 預約單」）。
+      預約時間: o.scheduledPickupAt ? formatMacauDateTime(o.scheduledPickupAt) : "",
       更新時間: o.updatedAt ? formatMacauDateTime(o.updatedAt) : "",
       備註: o.note ?? "",
       外送地址: o.deliveryAddress ?? "",
@@ -133,6 +136,7 @@ export function OrdersHub() {
         { key: "付款狀態", label: "付款狀態" },
         { key: "付款方式", label: "付款方式" },
         { key: "下單時間", label: "下單時間" },
+        { key: "預約時間", label: "預約時間" },
         { key: "更新時間", label: "更新時間" },
         { key: "備註", label: "備註" },
         { key: "外送地址", label: "外送地址" },

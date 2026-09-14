@@ -494,6 +494,9 @@ function buildLedgerPosOrder(
     total: detail.total ?? ledgerOrder.total,
     prepaidAmount: ledgerOrder.paymentStatus === "paid" ? ledgerOrder.total : 0,
     onlineOrderId: ledgerOrder.id,
+    // 預約單（`scheduled_pickup_at`）：一定要帶入投影，否則收據／廚房單嘅
+    // 「預約時間」區塊永遠係空（Ledger 真源 → PosOrder → buildReceiptContent）。
+    scheduledPickupAt: ledgerOrder.scheduledPickupAt,
     paymentMethod: ledgerOrder.paymentMode,
     createdAt: ledgerOrder.createdAt ?? timestamp,
     updatedAt: timestamp,

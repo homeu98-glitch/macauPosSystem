@@ -4,6 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
+import {
+  hasScheduledPickup,
+  ScheduledPickupChip,
+  ScheduledPickupTimeText,
+} from "@/components/scheduled-pickup-badge";
 import { TableAssignModal, type AssignableTable } from "@/components/table-assign-modal";
 import { assignLedgerOrderToTable, adoptLedgerOrderAsQuickCounter, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
 import {
@@ -158,6 +163,16 @@ export function QuickOnlineOrdersPanel({
     // `localOrdersTick` = 本機單變更；`orders` = Ledger 側刷新。
     [orders, localOrdersTick],
   );
+
+  /**
+   * 預約單「快到 / 已逾時」係時間函式 —— 快餐面板長期掛喺收銀台側邊，
+   * 冇 realtime 事件時都要自己轉色，所以每 30 秒 tick 一次重算。
+   */
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     function unlock() {
@@ -747,6 +762,8 @@ export function QuickOnlineOrdersPanel({
     const paymentLabel = paymentSummaryLabel(order, currency);
     const statusLabel = ledgerStatusBadgeLabel(order.status, order.fulfillmentType);
     const typeLabel = tabLabel(order.tabType);
+    // 預約單（Ledger `scheduled_pickup_at` 有值）：類型旁邊出「預約單」標籤 + 預約時間。
+    const scheduled = hasScheduledPickup(order);
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
     const primary = getPrimaryOnlineOrderAction(order);
     // 「排位」只喺堂食模式、而且係線上**堂食**單才出（快餐模式 → 出餐口自取，唔排位）。
@@ -775,7 +792,15 @@ export function QuickOnlineOrdersPanel({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
-              <div className="mt-0.5 text-xs text-slate-500">{typeLabel}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-slate-500">{typeLabel}</span>
+                {scheduled ? <ScheduledPickupChip order={order} nowMs={nowTick} compact /> : null}
+              </div>
+              {scheduled ? (
+                <div className="mt-0.5 text-[11px] font-semibold">
+                  <ScheduledPickupTimeText order={order} nowMs={nowTick} />
+                </div>
+              ) : null}
             </div>
             <span className="shrink-0 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
               {statusLabel}
@@ -850,7 +875,17 @@ export function QuickOnlineOrdersPanel({
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">
               {orderCodeLabel(order)} <span className="ml-2 text-xs font-semibold text-slate-500">{typeLabel}</span>
+              {scheduled ? (
+                <span className="ml-2 align-middle">
+                  <ScheduledPickupChip order={order} nowMs={nowTick} compact />
+                </span>
+              ) : null}
             </div>
+            {scheduled ? (
+              <div className="mt-1 text-xs font-semibold">
+                <ScheduledPickupTimeText order={order} nowMs={nowTick} />
+              </div>
+            ) : null}
             <div className="mt-1 text-xs text-slate-500">
               {statusLabel} · {paymentLabel}
             </div>
@@ -996,6 +1031,12 @@ export function QuickOnlineOrdersPanel({
             <div>客戶：{viewingOrder.customerName ?? "--"}</div>
             <div>電話：{viewingOrder.phone ?? "--"}</div>
             {viewingOrder.deliveryAddress ? <div>地址：{viewingOrder.deliveryAddress}</div> : null}
+            {hasScheduledPickup(viewingOrder) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <ScheduledPickupTimeText order={viewingOrder} nowMs={nowTick} full className="font-semibold" />
+                <ScheduledPickupChip order={viewingOrder} nowMs={nowTick} />
+              </div>
+            ) : null}
             {viewingOrder.note ? <div>備註：{viewingOrder.note}</div> : null}
             <div>
               支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}

@@ -31,11 +31,23 @@
 - ⚠️ **`normalizePosLocalSettings` 係白名單重建，漏欄即靜靜剷走**（`qrUrl`/`qrSize`、`LabelTemplate.paperSize`、`shiftPresets` 都中過招）→ 加欄必須手動加白名單。
 - **`EscPosTemplateSnapshot.cols` 係跨 repo 唯一真源**：POS `buildSnapshot(kind,tpl,cols?)` 計一次；四邊（companion / print hub / print-relay / print-agent-android）一律 `template.cols ?: paperColumns(printer)`，**唔好再各自判 paperSize**。出紙逐打印機計。
 - 其他不可改：`EscPosPreview` prop 係 `columns`（**唔係** `paperWidthMm`）；**`if(!text) continue` 唔可以改**（會改埋出紙）；62mm 只係 fallback。店級 0027 四槽 + 0030 第五槽 LWW，**0030 未跑兜底** `isMissingColumnError`(42703) → 只讀寫四舊欄；狀態 `pending`→`sent`→`printed`/`failed`，claim RPC 只揀 pending/failed。
+- ✅ **加「靜態文字區塊」＝唔使改下游三端、唔使擰 versionCode**（2026-09-14 `scheduled_pickup` 為例）：① `ReceiptSectionId`／`KitchenSectionId` 加 id；② `*_SECTION_META` 加中文標籤（設計頁自動出現）；③ `*_BLOCK_DEFAULTS` 加樣式；④ `DEFAULT_*_TEMPLATE.order` 加位置；⑤ `buildReceiptContent()`／`buildKitchenContent()` 加字串；⑥ `preview-fixtures.ts` 補範例值（否則 `assertPreviewCoverage()` 喺 dev console 報「預覽範例資料缺內容」）。⚠️ 對比「**逐項**資料」（如 `item_barcode`）要入 `PrintJob.items[]`、由客戶端各自 render → 嗰種才真要改四端 + 擰 `versionCode`。
+- ⚠️ **`mergeTemplateOrder()` 舊寫法把新區塊 append 到尾** → 新區塊永遠印喺頁尾（footer **之後**）。2026-09-14 改為「跟 `default` 位置：搵 `def` 前一個仍然存在嘅 id 做錨，插落佢後面」；已有 id 一律保留商家自己嘅順序（商家改過嘅位置優先）。舊商戶 localStorage 模板缺新區塊時，`storage.ts` normalize 呢步就會補好位置。
 
 ## 線上單取消/改單審核
 - Ledger `orders` **無 status 欄**，只有 `change_request_type`('cancel'|'modify'|null) + `_at`/`_by`/`_payload`。申請存在 = 待審。
 - 一律打 RPC **`merchant_resolve_order_change`**；**唔可以**用 `update_order_status('cancelled')` 同意取消。pending→直接 cancelled；accepted/preparing→只寫 type='cancel'；ready 後唔可申請。
 - approve 取消 → POS 自印作廢單（`printVoidForLedgerOrderOnce` 冪等防 echo 重印）；改單 → 補印廚房單。無 MQTT/輪詢/webhook。
+
+## 預約單（Ledger `scheduled_pickup_at`，2026-09-14）
+- **真源** = Ledger `orders.scheduled_pickup_at`（timestamptz | null，契約 §5.1「預約取餐」；`list_merchant_orders` 回應同 Realtime 表列都有）。非 null ＝ 預約單。鏈路：`mapLedgerOrderRow()` → `LedgerOnlineOrder.scheduledPickupAt` → `buildLedgerPosOrder()` → `PosOrder.scheduledPickupAt`（**打印用投影**，唔會經 sync 上雲 —— `/api/pos/sync` 嘅 `baseRecord` 係明確欄位白名單）。
+- 判斷／狀態**只准**用 `src/lib/pos/scheduled-pickup.ts`（零 import、`node --test` 覆蓋）：
+  `scheduledPickupKind()` → `scheduled`（仲有排）／`soon`（≤30 分鐘，「快到了」）／`overdue`（**剛好到點都算逾時**，否則永遠唔轉紅）；`scheduledPickupMinutesUntil()`（正＝仲有幾多分鐘、負＝逾時）。
+  UI 一律經 `components/scheduled-pickup-badge.tsx`（`ScheduledPickupChip`／`ScheduledPickupTimeText`／`hasScheduledPickup`），三處唔准各自寫 string。
+- **三處 UI**：線上訂單列表（類型欄加「預約單」chip、時間欄第二行 `預約 09/14 12:15`）／訂單詳情（`預約時間：`＋chip）／快餐面板卡片（strip 同 card 兩個 layout 都有）。列表同卡片每 **30 秒** `nowTick` 重算 —— 純時間函式，冇 realtime 事件時都要自己轉色。
+- **紙本**：收據／廚房單各有 `scheduled_pickup` 區塊（`預約時間: MM/DD HH:MM`，同「會員通」收據同格式，用 `formatMacauMonthDayTime()`）；非預約單字串空白 → renderer 略過（舊單零影響）。
+- **CSV**：`orders-hub.tsx` 線上單匯出多一欄「預約時間」（非預約單留空，方便 Excel 篩）。
+- ⚠️ 未驗證：RPC `list_merchant_orders` 首屏回應欄位由 Ledger 側控制。若回應冇 `scheduled_pickup_at`，列表首屏會冇預約時間（要等 Realtime update 才補上）。查法：`use-ledger-orders-realtime.ts` 已有 `[ledger→pos] Realtime orders 表列欄位` 診斷 log，開一次收銀台 console 即知。
 
 ## 掃碼點餐授權 + Kiosk 離線
 - repo **無 `middleware.ts`** → **分通道**：有 POS device token / admin token 放行全部事件；**匿名只准** `ORDER_CREATED`/`ORDER_UPDATED` 且 `source ∈ {scan,kiosk}`。QR 已公開 `store=<merchantId>`，驗證 ≠ 授權。
@@ -1332,8 +1344,43 @@ iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」tex
   （撳完 2–3 秒仍在，唔係一閃）。
 - ❌ **7 秒內（211 幀）虛擬鍵盤由頭到尾冇出現過**；下半螢幕亮度均值只在 142–162 之間浮動
   （手／通知造成），冇「鍵盤彈出」應有嘅大面積淺色跳變，即**唔存在「彈完即縮」**。
-⇒ **結論釘死：web 側（可編輯性 / 事件綁定 / 聚焦）全部正常，問題 100% 在系統鍵盤層。**
-   再改 textarea 嘅 focus 邏輯唔會令鍵盤出現。
+⇒ **焦點 / 可編輯性 / 事件綁定三樣都正常**（唔使再喺呢三樣落藥）。
+   ⚠️ 但**唔等於「唔關 web 事」** —— 下一節嘅 Ledger 對照證明係我哋自己嘅 viewport 設定。
+
+### 🔴🔴 根因鎖定（2026-09-14 11:10）：同 Ledger 網頁對照
+商家原話：「**我在 Ledger 的網頁上操作都是正常的，且目前沒有任何藍芽裝置在連接**」
+（Ledger = `https://membership-uat.macau-tech.com`，同一部 iPad）。實測兩站 `<head>`：
+
+| | viewport meta |
+|---|---|
+| Ledger（**正常** ✅） | `width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover` |
+| 我哋 POS（**唔彈** ❌） | `width=device-width, initial-scale=1, maximum-scale=1,`**`user-scalable=no`**`, viewport-fit=cover` |
+
+再加我哋獨有嘅 **`body { overflow: hidden }` + `h-full` 全屏非滾動外殼**（`layout.tsx`）。
+
+**兩個機制（官方/業界一致口徑）**：
+1. `user-scalable=no` 會**鎖死視口重繪**：iOS 彈鍵盤時要做一次 visual-viewport 重算（compressed
+   viewport），被鎖之後嗰步失敗 → 鍵盤唔彈（大量 iOS 文章都指 `user-scalable=no` 係「隱形殺手」，
+   建議直接刪 `maximum-scale` + `user-scalable`）。
+2. 文檔唔可滾（`body{overflow:hidden}`）時，iOS「scroll 去聚焦元素」嘅 focus reveal 會失敗；
+   同理，**輸入框嵌喺 `position: fixed` + `overflow: hidden` 祖先內會被截斷** → 鍵盤亦唔出。
+
+### ✅ 2026-09-14 修正（根治）
+| 檔案 | 改動 |
+|---|---|
+| `src/app/layout.tsx` | viewport **刪走 `maximumScale` / `userScalable`**，同 Ledger 睇齊（附長註解講明原因） |
+| `src/app/globals.css` | 🆕 `@media (pointer: coarse) { input/textarea/select { font-size: 16px } }` —— 唔禁縮放之後，< 16px 欄位會被 iOS focus 自動放大，16px 係iOS 慣例門檻，可完全避免。unlayered 規則會蓋過 Tailwind `text-sm`（cascade layer），唔使 `!important` |
+| `src/lib/pos/ios-keyboard.ts` | 🆕 `refocusForIosKeyboard()` —— iOS **只喺「焦點由無變有」時彈鍵盤**；若欄位已聚焦（autoFocus 已取焦／上一下撳過），再撳同一欄位唔會彈。呢個 handler 喺「鍵盤明顯未開」（`visualViewport.height < innerHeight*0.75`）時先 `blur()` 再 `focus()`，造出新鮮焦點改變 |
+| `src/components/pos-app.tsx` | 備註 textarea ＋ 免單備註 ＋ 折扣備註 三個自由文字欄位：`onPointerUp → refocusForIosKeyboard()` |
+| `src/components/ios-focus-helper.tsx` | 按業界口徑改用 `scrollIntoView({ block: "nearest" })`（唔用 `center`／`end`）＋ **喺 focus 事件內同步呼叫**（放 `setTimeout` 會被當非手勢上下文）＋ 260/420ms 各補一次＋ `visualViewport` resize 監聽 |
+
+### 📋 可輸入欄位盤點（2026-09-14，`node` 掃 `src/**/*.tsx|ts`）
+- **45 個檔案、合計 269 個可輸入元素**（`<input>` 199 ＋ `<textarea>` 11 ＋ `<select>` 59）。
+- **冇任何 `inputMode="none"`**（唯一會刻意禁鍵盤嘅寫法）✅
+- 只有 `printer-companion-panel.tsx` 一個 `readOnly` input（顯示用途，正常）✅
+- 最大頭：`device-settings.tsx`（40 input）、`retail-products.tsx`（22）、`pos-app.tsx`（13）。
+⇒ 所以**唔可以逐個欄位改**：viewport ＋ 粗指標字級兩條**全域**修正已經覆蓋全部 269 個。
+   iframe / `inert` / `pointer-events:none` 等會令欄位「撳唔到」嘅情況已另行掃過（冇）。
 
 ### 已排除（唔係呢啲）
 | 懷疑 | 結論 |
@@ -1354,19 +1401,18 @@ iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」tex
 - `runtimeRefreshTick` 只係 effect 依賴，**冇**用嚟做 `key` → 唔會 remount 令焦點消失。
 ⇒ 「之前可以、依家唔得」**唔係 web 改動造成**，指向裝置／系統層。
 
-### 最可能成因（按機率）
-1. **iPadOS 判定「有實體鍵盤」** ← 最符合「**完全**冇彈」。iPadOS 一偵測到硬件鍵盤就**永不**彈虛擬鍵盤：
-   Magic Keyboard／Smart Connector 保護套、藍牙鍵盤、**HID 掃碼槍／藍牙讀卡機**（都係 keyborad wedge）。
-   ⚠️ 呢個 POS 幾乎所有輸入都有自繪鍵盤（`numeric-keypad` / `fixed-number-pad` / `input-pad-modal`），
-   **只有「備註自由輸入」靠系統鍵盤** ⇒ 只有呢兩處會被商家發現 ⇒ 極易誤判成「只有備註壞咗」。
-2. **引導式存取（Guided Access）**：docs/116 §R4 建議用引導式存取鎖機，而 Guided Access 嘅
-   「選項」入面有 **「鍵盤」開關**，關掉＝永久冇虛擬鍵盤（撳欄位只會出編輯選單）。
+### 成因排查（2026-09-14 更新：裝置層已用 Ledger 對照排除）
+1. ~~iPadOS 判定「有實體鍵盤」~~ **❌ 已排除**：商家確認「冇任何藍芽裝置連接」，而**同一部 iPad
+   開 Ledger 網頁打字正常** ⇒ 系統鍵盤本身可以彈，唔係硬件鍵盤抑制。
+   （保留記錄：iPadOS 一偵測到硬件鍵盤就**永不**彈虛擬鍵盤：Magic Keyboard／Smart Connector 保護套、
+   藍牙鍵盤、HID 掃碼槍／藍牙讀卡機都算；将来再遇到「連 Safari 網址欄都冇鍵盤」就要查呢項。）
+2. ~~引導式存取（Guided Access）關咗鍵盤~~ **❌ 已排除**（同上：Ledger 打得入）。
 3. **iOS 全屏 PWA + `body{overflow:hidden}` + fixed 彈窗 + `user-scalable=no`**：
-   iOS 想 scroll 去聚焦元素但文檔唔可滾 → 部分版本索性唔彈（docs/109 §3.2-2 已描述過）。
+   iOS 想 scroll 去聚焦元素但文檔唔可滾 → 索性唔彈（docs/109 §3.2-2 已描述過）。
+   ⇒ **👈 2026-09-14 已用 Ledger 對照鎖定為真兇（見下面「根因鎖定」一節），修正已落 code。**
 4. iPad 分頁跑**舊版 JS**（docs/113 紅線：iPad 唔會自動換 JS）→ 先**強制 reload**。
-5. **iPadOS「鍵盤」清單被清空**：設定 → 一般 → 鍵盤 → 鍵盤 只剩「表情符號」→ 冇任何軟鍵盤可彈。
-6. 平板裝咗 **MDM／店鋪裝機／Kiosk 管理工具**（或 iPad 管理式設定）→ 可能統一停用軟鍵盤。
-   ⚠️ 呢個情況**任何 web 改動都救唔到**，要問裝機嘅人。
+5. ~~iPadOS「鍵盤」清單被清空~~ **❌ 已排除**（Ledger 打得入）。
+6. ~~MDM／店鋪裝機／Kiosk 管理工具停用軟鍵盤~~ **❌ 已排除**（Ledger 打得入）。
 7. ⚠️ 系統鍵盤一旦被抑制，**手寫／語音／表情符號鍵盤一樣冇**（佢哋都係軟鍵盤嘅一部分），
    所以「叫商家用手寫輸入」唔係可行替代方案。
 
@@ -1379,6 +1425,9 @@ iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」tex
 | `pos-app.tsx` 免單／折扣備註 | 同款 free-text `<input>` 一齊補 16px + IME 屬性 |
 
 ### 現場分流（最快 3 個測試）
+0. **🔴 先確認跑緊嘅版本**：本機改完要 **push → Vercel 部署**；iPad 分頁**唔會自動換 JS**
+   → 要**完全關閉分頁重開**（普通 reload 未必夠）。一秒判斷法：睇備註欄預設字級係咪已變大
+   （16px）、或者彈窗係咪可以撳遮罩關閉。
 1. **同一部 iPad 撳點餐頁「搜尋商品」欄打唔打得入**（相中可見，`text-sm` ＋ 冇 autoFocus 嘅普通 `input`）：
    - 打得入 → 系統鍵盤正常 ⇒ 問題只喺彈窗（第 3 項）→ 睇上面加固夠唔夠。
    - 一樣打唔入 → **裝置層**（第 1／2 項）→ 去下面檢查。

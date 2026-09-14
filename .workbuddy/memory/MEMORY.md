@@ -42,3 +42,4 @@
 | 登入／工作台 | `allowedModules` **缺失＝全部開通**；新模組先改 `module-catalog.ts` |
 | Realtime | 「reload 先見到」＝訂錯 Supabase 專案（`NEXT_PUBLIC_POS_SUPABASE_URL/_ANON_KEY`） |
 | Ledger 契約 | `docs/integration/ledger-client-api.md` §5.4（欄名防禦式解析） |
+| 預約單 | `scheduled_pickup_at` → `LedgerOnlineOrder.scheduledPickupAt` → `PosOrder.scheduledPickupAt`。判定／「快到‧逾時」**只准**用 `lib/pos/scheduled-pickup.ts`；UI 用 `components/scheduled-pickup-badge.tsx`；紙本 `scheduled_pickup` 係**靜態文字區塊**（唔使改下游三端、唔使擰 versionCode） |

@@ -117,6 +117,10 @@ export const PREVIEW_RECEIPT_ORDER: PosOrder = {
   originalSettledAt: "2026-09-10T12:34:00+08:00",
   createdAt: "2026-09-10T12:05:00+08:00",
   updatedAt: "2026-09-10T12:34:00+08:00",
+  // ── 預約時間範例（2026-09-14）────────────────────────────────
+  // 有值 → 收據／廚房單嘅「預約時間」區塊現形（同「會員通」收據嘅格式一致）。
+  // 冇填 → content 空 → renderer 略過 → 商家喺設計頁以為個區塊壞咗（見 assertPreviewCoverage）。
+  scheduledPickupAt: "2026-09-10T12:20:00+08:00",
 };
 
 /** 廚房單預覽：同收據共用一張單，等「設計 == 出紙」嘅資料基礎一致。 */

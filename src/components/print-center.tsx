@@ -46,6 +46,8 @@ import {
   buildSnapshot,
   cloneShiftTemplate,
   ensureDividerSection,
+  ensureKitchenScheduledPickup,
+  ensureReceiptScheduledPickup,
   ensureReceiptSections,
   KITCHEN_SECTION_META,
   LABEL_SECTION_META,
@@ -502,11 +504,13 @@ export function PrintCenter() {
     if (kind === "shift") {
       return normalizeShiftTemplate(raw as unknown as Partial<ShiftTemplate>) as unknown as AnyTemplate;
     }
-    // 舊 localStorage 設定（存檔時仲未有 qr_code）→ 喺設計介面即刻補返，
-    // 等「區塊順序」見到「二維碼」、選中時亦唔會因 blocks 缺 key 而炸。
+    // 舊 localStorage 設定（存檔時仲未有 qr_code / scheduled_pickup）→ 喺設計介面即刻補返，
+    // 等「區塊順序」見到「預約時間」、選中時亦唔會因 blocks 缺 key 而炸。
     const base = (kind === "receipt" || kind === "kiosk"
-      ? ensureReceiptSections(raw as never)
-      : raw) as unknown as AnyTemplate;
+      ? ensureReceiptScheduledPickup(ensureReceiptSections(raw as never))
+      : kind === "kitchen"
+        ? ensureKitchenScheduledPickup(raw as never)
+        : raw) as unknown as AnyTemplate;
     if (kind === "label") {
       // 標籤字型鎖死：舊設定可能存咗唔同 size，一律校正為固定檔位（設計同出紙一致）。
       // 標籤冇分格線 → 唔使補 divider 區塊。

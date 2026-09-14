@@ -350,6 +350,14 @@ export type ReceiptSectionId =
   | "order_no"
   | "table_name"
   | "order_time"
+  /**
+   * 預約時間（Ledger `scheduled_pickup_at` → `PosOrder.scheduledPickupAt`，2026-09-14）。
+   *
+   * 靜態文字區塊：內容由 POS 端 `buildReceiptContent()` 砌好（`預約時間: 09/14 12:15`），
+   * 三個下游 repo 唔識呢個 id 都照印得到 → **唔使改 Companion / APK / print-hub**。
+   * 非預約單內容空白 → renderer 略過（舊單零影響）。
+   */
+  | "scheduled_pickup"
   | "checkout_time"
   /** 服務員（操作人顯示名）；可選。見 docs/88 §5.4 */
   | "server"
@@ -430,6 +438,8 @@ export type KitchenSectionId =
   | "table_name"
   | "order_type"
   | "time"
+  /** 預約時間（`PosOrder.scheduledPickupAt`）—— 同收據一樣係靜態文字，非預約單自動略過。 */
+  | "scheduled_pickup"
   /**
    * 分格線（設定型區塊，語義同 ReceiptSectionId 嘅 `divider`）：控制自動分格線嘅粗細 / 開關。
    * 同收據一樣：**任何 size 都只佔一行**（dash 數量 = `dividerDashCount()`）。
@@ -1148,6 +1158,16 @@ export interface PosOrder {
   total: number;
   prepaidAmount?: number;
   onlineOrderId?: string;
+  /**
+   * 預約取餐時間（ISO 8601）—— Ledger `scheduled_pickup_at` 嘅本地投影鏡像。
+   *
+   * 只在**線上單**（`onlineOrderId` 有值）會出現，由 `buildLedgerPosOrder()` 帶入，
+   * 供收據／廚房單印「預約時間: 09/14 12:15」同詳情 UI 顯示。線下單永遠 undefined。
+   *
+   * ⚠️ 呢個係**打印／顯示用**嘅鏡像，Ledger 才是真源（唔會經 sync 寫入 `pos_orders`，
+   * 亦唔會當成可改欄位）。
+   */
+  scheduledPickupAt?: string;
   /**
    * 訂單來源（docs/87 §5.2 · 規格 7）。三處 UI 會顯示對應標記：訂單頁 / 收銀台快餐單卡片 / 結帳畫面。
    * - `"pos"`：員工喺收銀台落單（預設，舊單全部係呢個值）

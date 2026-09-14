@@ -57,6 +57,16 @@ export type LedgerOnlineOrder = {
   tabType: Exclude<LedgerOrderTab, "all">;
   pickupCode?: string;
   deliveryAddress?: string;
+  /**
+   * 預約取餐時間（Ledger `scheduled_pickup_at`，ISO 8601）。
+   *
+   * 有有效值 ＝ **預約單**（UI 顯示「預約單」標籤 + 預約時間；收據／廚房單印「預約時間: MM/DD HH:MM」）。
+   * `null` / 缺失 ＝ 即時單，所有預約相關 UI 完全不 render（佈局零改動）。
+   *
+   * ⚠️ 顯示前一定要經 `@/lib/pos/scheduled-pickup` 判斷（快到／已逾時係時間函式，
+   * 寫死喺 component 會三處分叉）。
+   */
+  scheduledPickupAt?: string;
   note?: string;
   itemSummary?: string;
   itemCount?: number;
@@ -97,6 +107,12 @@ export function mapLedgerOrderRow(row: LedgerOrderRow): LedgerOnlineOrder {
     : discountAmount != null
       ? Math.round((total + discountAmount) * 100) / 100
       : undefined;
+  // 預約取餐時間：契約 §5.1 有此欄位（`list_merchant_orders` 回傳 + Realtime 表列都有）。
+  // 空字串 / 空白當「冇」（防 Ledger 用 "" 代表 null，否則會被當成預約單）。
+  const scheduledPickupAt =
+    typeof row.scheduled_pickup_at === "string" && row.scheduled_pickup_at.trim()
+      ? row.scheduled_pickup_at.trim()
+      : undefined;
 
   return {
     id: row.id,
@@ -115,6 +131,7 @@ export function mapLedgerOrderRow(row: LedgerOrderRow): LedgerOnlineOrder {
     tabType,
     pickupCode: row.pickup_code ?? undefined,
     deliveryAddress: row.delivery_address_text ?? undefined,
+    scheduledPickupAt,
     note: row.note ?? undefined,
     itemSummary: row.first_item_name ?? undefined,
     itemCount: itemCount > 0 ? itemCount : undefined,

@@ -1,4 +1,4 @@
-import { formatMacauDateTime, formatMoney } from "@/lib/format";
+import { formatMacauDateTime, formatMacauMonthDayTime, formatMoney } from "@/lib/format";
 import { RECEIPT_PAPER_COLUMNS } from "@/lib/escpos-render";
 import { buildRetailReceiptBlocks } from "@/lib/retail/receipt-retail-blocks";
 import {
@@ -35,6 +35,15 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   { id: "order_no", label: "單號" },
   { id: "table_name", label: "類型 / 桌台" },
   { id: "order_time", label: "下單時間" },
+  /**
+   * 預約時間（Ledger `scheduled_pickup_at`，2026-09-14 新增）。
+   *
+   * 同零售那批一樣係**靜態文字區塊**（見 `ReceiptSectionId` 頂部註釋）：內容由 POS 端
+   * `buildReceiptContent()` 預先砌成字串，三個下游 repo 只 loop `snapshot.blocks` 印
+   * `content[id]` → **加呢個 id 唔使改 Companion / APK / print-hub，亦唔使擰 versionCode**。
+   * 非預約單內容空白 → renderer 自動略過（舊單零影響）。
+   */
+  { id: "scheduled_pickup", label: "預約時間" },
   { id: "checkout_time", label: "結帳時間" },
   { id: "server", label: "服務員" },
   /** 分格線：設定型區塊（唔會自己印一行），淨控制菜品明細前後 / 每件菜之間嗰啲 `----` 線嘅字體大小。 */
@@ -81,6 +90,11 @@ export const KITCHEN_SECTION_META: { id: KitchenSectionId; label: string }[] = [
   { id: "table_name", label: "桌台" },
   { id: "order_type", label: "單據類型" },
   { id: "time", label: "時間" },
+  /**
+   * 預約時間（Ledger `scheduled_pickup_at`）：廚房要知幾點要出餐，
+   * 所以同收據一樣出「預約時間: MM/DD HH:MM」。非預約單空白 → 自動略過。
+   */
+  { id: "scheduled_pickup", label: "預約時間" },
   /** 分格線：設定型區塊（唔會自己印一行），淨控制菜品明細前後 / 每件菜之間嗰啲 `----` 線嘅字體大小。 */
   { id: "divider", label: "分格線" },
   { id: "items", label: "菜品明細" },
@@ -148,6 +162,8 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   order_no: block(true, "s", false, "left"),
   table_name: block(true, "s", false, "left"),
   order_time: block(true, "s", false, "left"),
+  // 預約單專用（`scheduled_pickup_at`）。非預約單內容空白 → 自動略過，等於冇呢個區塊。
+  scheduled_pickup: block(true, "s", false, "left"),
   checkout_time: block(false, "s", false, "left"),
   server: block(false, "s", false, "left"),
   /**
@@ -236,6 +252,8 @@ const KITCHEN_BLOCK_DEFAULTS: Record<KitchenSectionId, EscPosBlockStyle> = {
   table_name: block(true, "s", false, "left"),
   order_type: block(true, "s", true, "left"),
   time: block(true, "s", false, "left"),
+  /** 預約時間（`scheduled_pickup_at`）；非預約單空白 → 自動略過。 */
+  scheduled_pickup: block(true, "s", false, "left"),
   /** 分格線（設定型）：`size` 控制 `----` 線嘅**粗細**（永遠一行），`visible=false` = 全張單唔印分格線。 */
   divider: block(true, "s", false, "left"),
   items: block(true, "m", true, "left", "s", "card"),
@@ -254,6 +272,8 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
     "exchange_of",
     "table_name",
     "order_time",
+    // 預約時間緊跟下單時間（時間軸相鄰，商家／客人都係同一個閱讀次序）
+    "scheduled_pickup",
     "checkout_time",
     "server",
     "divider",
@@ -332,7 +352,19 @@ export const DEFAULT_LABEL_TEMPLATE: LabelTemplate = {
 };
 export const DEFAULT_KITCHEN_TEMPLATE: KitchenTemplate = {
   blocks: { ...KITCHEN_BLOCK_DEFAULTS },
-  order: ["store_name", "order_no", "table_name", "order_type", "time", "divider", "items", "order_note", "footer"],
+  order: [
+    "store_name",
+    "order_no",
+    "table_name",
+    "order_type",
+    "time",
+    // 預約時間緊跟時間（時間軸相鄰；非預約單自動略過）
+    "scheduled_pickup",
+    "divider",
+    "items",
+    "order_note",
+    "footer",
+  ],
   headerText: "",
   footerText: "廚房留底",
 };
@@ -481,6 +513,42 @@ export function ensureReceiptSections(template: ReceiptTemplate): ReceiptTemplat
 
 /** 分格線區塊嘅預設樣式（設定型區塊：`size` = `----` 線嘅粗細（永遠一行），`visible` = 全張單出唔出線）。 */
 const DIVIDER_BLOCK_DEFAULT: EscPosBlockStyle = block(true, "s", false, "left");
+
+/**
+ * 舊模板補 `scheduled_pickup`（預約時間）區塊（向前兼容，2026-09-14）。
+ *
+ * 商家 `printTemplates` 係 localStorage 快照，唔會自動多出新區塊 →
+ * 唔補嘅話：① 設計頁見唔到「預約時間」開關；② 出紙永遠少咗嗰行。
+ *
+ * 插入位置：`anchors` 中**第一個搵得到**嘅區塊之後（收據用 `order_time`、廚房單用 `time`，
+ * 令時間軸兩行相鄰）；全部搵唔到先 push 去尾。已有就原封不動（唔改商家設定）。
+ */
+export function ensureScheduledPickupSection<
+  T extends { blocks: Record<string, EscPosBlockStyle>; order: string[] },
+>(template: T, defaults: EscPosBlockStyle, anchors: string[]): T {
+  if (template.blocks?.scheduled_pickup && template.order.includes("scheduled_pickup")) return template;
+  const blocks: Record<string, EscPosBlockStyle> = {
+    ...template.blocks,
+    scheduled_pickup: template.blocks?.scheduled_pickup ?? defaults,
+  };
+  const order = [...template.order];
+  if (!order.includes("scheduled_pickup")) {
+    const anchorIndex = anchors.map((id) => order.indexOf(id)).find((index) => index >= 0) ?? -1;
+    if (anchorIndex >= 0) order.splice(anchorIndex + 1, 0, "scheduled_pickup");
+    else order.push("scheduled_pickup");
+  }
+  return { ...template, blocks, order } as T;
+}
+
+/** 收據／自助點餐機模板補「預約時間」區塊（錨點 = 下單時間）。 */
+export function ensureReceiptScheduledPickup(template: ReceiptTemplate): ReceiptTemplate {
+  return ensureScheduledPickupSection(template, RECEIPT_BLOCK_DEFAULTS.scheduled_pickup, ["order_time"]);
+}
+
+/** 廚房單模板補「預約時間」區塊（錨點 = 時間）。 */
+export function ensureKitchenScheduledPickup(template: KitchenTemplate): KitchenTemplate {
+  return ensureScheduledPickupSection(template, KITCHEN_BLOCK_DEFAULTS.scheduled_pickup, ["time"]);
+}
 
 /**
  * 舊模板補 `divider` 區塊（向前兼容）。
@@ -634,7 +702,14 @@ export function buildSnapshot(
     paperSize?: string;
   };
 
-  const withReceipt = kind === "receipt" ? ensureReceiptSections(template as ReceiptTemplate) : template;
+  // 收據 / 廚房單都要補「預約時間」區塊（舊 localStorage 模板冇呢一項）。
+  // 插入錨點：收據跟 `order_time`、廚房單跟 `time` → 時間軸兩行永遠相鄰。
+  const withReceipt =
+    kind === "receipt"
+      ? ensureReceiptScheduledPickup(ensureReceiptSections(template as ReceiptTemplate))
+      : kind === "kitchen"
+        ? ensureKitchenScheduledPickup(template as KitchenTemplate)
+        : template;
   // ⚠️ 交班模板**唔補 divider**：交班單冇 `items` 區塊，而三個 repo 嘅分格線都係
   // 跟 items 自動生成 → 補咗只會多個撳咗冇反應嘅死開關（見 ShiftSectionId 註釋）。
   // 標籤同樣唔補 divider（標籤紙冇分格線）。
@@ -903,6 +978,9 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     order_no: order.localOrderNo,
     table_name: order.tableName,
     order_time: order.createdAt ? `下單時間: ${formatMacauDateTime(order.createdAt)}` : "",
+    // 預約時間（Ledger `scheduled_pickup_at`）：格式同「會員通」收據一致（`09/14 12:15`）。
+    // 非預約單（null / 缺失）→ 空字串 → renderer 跳過，唔會留空行。
+    scheduled_pickup: order.scheduledPickupAt ? `預約時間: ${formatMacauMonthDayTime(order.scheduledPickupAt)}` : "",
     checkout_time: checkoutTimeLabelWithPrefix(order),
     server: opts.serverName ? `服務員: ${opts.serverName}` : "",
     discount_breakdown: discountBreakdown,
@@ -1059,6 +1137,8 @@ export function buildKitchenContent(order: PosOrder, opts: KitchenContentOpts): 
     table_name: order.tableName,
     order_type: opts.typeLabel,
     time: opts.time,
+    // 預約時間（Ledger `scheduled_pickup_at`）：廚房要知幾點出餐。非預約單空白 → 自動略過。
+    scheduled_pickup: order.scheduledPickupAt ? `預約時間: ${formatMacauMonthDayTime(order.scheduledPickupAt)}` : "",
     order_note: opts.orderNote ?? "",
     footer: opts.footerText,
   };

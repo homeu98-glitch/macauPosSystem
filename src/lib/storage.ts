@@ -364,8 +364,23 @@ function mergeTemplateBlocks<T extends string>(
 function mergeTemplateOrder<T extends string>(def: T[], stored?: T[]): T[] {
   if (!Array.isArray(stored) || stored.length === 0) return [...def];
   const valid = stored.filter((id) => (def as T[]).includes(id));
-  const missing = def.filter((id) => !valid.includes(id));
-  return [...valid, ...missing];
+  // 🔴 新區塊（default 有、商家存檔未有）一定要插返**預設位置**，唔可以 append 到尾。
+  // 舊寫法 `[...valid, ...missing]` 會令新區塊永遠印喺最後一行 —— 例如 2026-09-14 加嘅
+  // 「預約時間」會出現喺頁尾文案（footer）之後。已有嘅 id 一律保持商家自己嘅順序，
+  // 唔准郁佢嘅排版（商家改過嘅位置比預設位置優先）。
+  for (const id of def) {
+    if (valid.includes(id)) continue;
+    let insertAt = 0;
+    for (let i = def.indexOf(id) - 1; i >= 0; i -= 1) {
+      const pos = valid.indexOf(def[i]);
+      if (pos >= 0) {
+        insertAt = pos + 1;
+        break;
+      }
+    }
+    valid.splice(insertAt, 0, id);
+  }
+  return valid;
 }
 
 export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | null | undefined): PosLocalSettings {

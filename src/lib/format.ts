@@ -57,6 +57,30 @@ export function formatMacauDateTime(iso: string | null | undefined): string {
   });
 }
 
+/**
+ * ISO 字串 → `MM/DD HH:MM`（澳門時間）。
+ *
+ * 專供**預約時間**顯示：同「會員通」出嘅收據同一口徑（`預約時間：09/14 12:15`），
+ * 列表 / 卡片空間有限，用短格式先塞得落（`formatMacauDateTime` 會出埋年份）。
+ * 需要完整年份（例如訂單詳情）就照用 `formatMacauDateTime`。
+ */
+export function formatMacauMonthDayTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const parts = new Intl.DateTimeFormat("zh-HK", {
+    timeZone: MACAU_TZ,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const map: Record<string, string> = {};
+  for (const part of parts) map[part.type] = part.value;
+  return `${map.month}/${map.day} ${map.hour}:${map.minute}`;
+}
+
 /** ISO 字串 → `HH:MM`（澳門時間）。 */
 export function formatMacauTime(iso: string | null | undefined): string {
   if (!iso) return "";

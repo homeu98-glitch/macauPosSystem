@@ -10,6 +10,11 @@ import { MerchantOpenPill } from "@/components/merchant-open-pill";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import {
+  hasScheduledPickup,
+  ScheduledPickupChip,
+  ScheduledPickupTimeText,
+} from "@/components/scheduled-pickup-badge";
+import {
   adoptLedgerOrderAsQuickCounter,
   assignLedgerOrderToTable,
   bridgeLedgerOrderToPos,
@@ -331,6 +336,17 @@ export function OnlineOrders({
     () => withoutTransferredOrders(orders, localOrdersTick),
     [orders, localOrdersTick],
   );
+
+  /**
+   * 預約單「快到 / 已逾時」係**時間函式**：列表靜置（冇 realtime 事件、冇撳掣）
+   * 都要自己轉色，否則收銀望住一版灰字會漏單。每 30 秒 tick 一次重算即可
+   * （顯示單位係「分鐘」，唔使更密）。
+   */
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -1304,6 +1320,9 @@ export function OnlineOrders({
               {filteredOrders.map((order) => {
                 const statusBadge = getLedgerStatusBadge(order);
                 const externalAccepted = rawLedgerStatus(order.status) === "accepted";
+                // 預約單（Ledger `scheduled_pickup_at` 有值）：類型欄出「預約單」標籤、
+                // 時間欄出預約時間。即時單兩處都唔會有任何變化。
+                const scheduled = hasScheduledPickup(order);
                 return (
                   <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
                     <td className={TD_CELL}>
@@ -1313,11 +1332,21 @@ export function OnlineOrders({
                       <div className="truncate text-xs text-slate-500">
                         {tabLabel(order.tabType)} · 客戶：{order.customerName ?? "--"}
                       </div>
+                      {scheduled ? (
+                        <div className="mt-1">
+                          <ScheduledPickupChip order={order} nowMs={nowTick} compact />
+                        </div>
+                      ) : null}
                     </td>
                     <td className={TD_CELL}>
                       <div className="text-xs tabular-nums text-slate-400">
                         {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
                       </div>
+                      {scheduled ? (
+                        <div className="mt-0.5 text-[11px] font-semibold">
+                          <ScheduledPickupTimeText order={order} nowMs={nowTick} />
+                        </div>
+                      ) : null}
                     </td>
                     <td className={TD_CELL}>
                       <div className="truncate text-xs text-slate-500">
@@ -1472,6 +1501,14 @@ export function OnlineOrders({
             <div>客戶：{viewingOrder.customerName ?? "--"}</div>
             <div>電話：{viewingOrder.phone ?? "--"}</div>
             {viewingOrder.deliveryAddress ? <div>地址：{viewingOrder.deliveryAddress}</div> : null}
+            {/* 預約單（Ledger `scheduled_pickup_at`）：時間 ＋ 狀態標籤。
+                非預約單完全唔 render（同線下單詳情版面一模一樣）。 */}
+            {hasScheduledPickup(viewingOrder) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <ScheduledPickupTimeText order={viewingOrder} nowMs={nowTick} full className="font-semibold" />
+                <ScheduledPickupChip order={viewingOrder} nowMs={nowTick} />
+              </div>
+            ) : null}
             {viewingOrder.note ? <div>備註：{viewingOrder.note}</div> : null}
             <div>
               支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}

@@ -74,6 +74,22 @@ label.grid > textarea {
   font-weight: 400;
 }
 
+/* ── 觸控裝置：可輸入欄位一律 ≥ 16px（2026-09-14 商家實紙）──────────────────
+   iOS Safari 對 font-size < 16px 嘅欄位會在 focus 時**自動放大**頁面；
+   POS 係全屏非滾動佈局（body overflow:hidden），一放大彈窗就會走位／被裁。
+   更嚴重係：若同時禁止縮放（viewport 寫 user-scalable=no）→ iOS 嘅視口重算會失敗
+   → **系統鍵盤完全唔彈**（實測：同一部 iPad 開 Ledger 網頁正常，差異就係佢冇 user-scalable=no）。
+   ⇒ 兩邊一齊做：① viewport 唔再禁縮放（layout.tsx）② 觸控裝置欄位拉到 16px（唔觸發放大）。
+   ⚠️ 呢個係 unlayered 規則 → 按 CSS cascade layer 規則**優先於** Tailwind 嘅 utilities layer
+      （即會蓋過 `text-sm`），唔需要 !important。 */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 button {
   transition:
     transform 120ms ease,
