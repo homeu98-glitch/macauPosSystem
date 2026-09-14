@@ -5678,12 +5678,14 @@ export function PosApp() {
             <div className="mt-4">
               <div className="text-xs font-semibold text-slate-500">自由輸入</div>
               {/*
-                iOS 鍵盤（2026-09-14 全單／單品備註「焦點有到、鍵盤唔彈」）三項必要設定：
+                iOS 鍵盤（2026-09-14 全單／單品備註「焦點有到、鍵盤唔彈」）四項必要設定：
                 ① autoFocus —— 焦點喺「開彈窗嗰下嘅 user gesture」內取得，iOS 最可靠會彈鍵盤；
                    （本 app 其餘 5 個輸入框全部都有，唯獨呢個漏咗）
                 ② text-base = 16px —— iOS 慣例：欄位字級 < 16px 會觸發「focus 自動放大」，
                    但 layout.tsx 係 maximumScale:1 / userScalable:false，放大被禁 → 部分版本鍵盤唔彈；
-                ③ autoCorrect/autoCapitalize/spellCheck 關閉 —— 中文輸入法組字唔會被系統「自動更正」食走。
+                ③ autoCorrect/autoCapitalize/spellCheck 關閉 —— 中文輸入法組字唔會被系統「自動更正」食走；
+                ④ onPointerUp 明確補 focus() —— iOS 首次 tap 有時被當成 scroll／雙擊縮放而**冇 focus**
+                   （docs/109 §3.2-3「兩段式點擊」）；已聚焦時 focus() 係 no-op，唔會干擾游標定位。
               */}
               <textarea
                 autoCapitalize="off"
@@ -5692,9 +5694,14 @@ export function PosApp() {
                 className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base leading-relaxed text-slate-900 outline-none focus:border-orange-400"
                 enterKeyHint="done"
                 onChange={(event) => setNoteDraft(event.target.value)}
+                onPointerUp={(event) => {
+                  const el = event.currentTarget;
+                  if (document.activeElement !== el) el.focus();
+                }}
                 placeholder="例如：不要吸管、少辣、走蔥..."
                 rows={4}
                 spellCheck={false}
+                style={{ touchAction: "manipulation", WebkitUserSelect: "text" }}
                 value={noteDraft}
               />
             </div>
