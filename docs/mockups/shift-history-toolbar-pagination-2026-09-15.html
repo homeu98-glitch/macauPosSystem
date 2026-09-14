@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>UI 確認稿 · 交班歷史（篩選一行 · 移除 Excel · 10 天分頁）</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#e2e8f0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
+       padding:18px 18px 40px;-webkit-font-smoothing:antialiased}
+  h2.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+  .stage{max-width:1180px;margin:0 auto;position:relative;overflow:hidden;border-radius:18px}
+  .canvas{width:1180px;height:1210px;position:absolute;top:0;left:0;transform-origin:top left;
+          display:flex;flex-direction:column;overflow:hidden;background:#f1f5f9;border-radius:18px}
+
+  .chrome{flex:none;height:58px;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;
+          justify-content:space-between;padding:0 20px}
+  .chrome .t{font-size:13px;font-weight:500}
+  .chrome .s{font-size:12px;color:#94a3b8}
+  .chrome .tag{font-size:11px;color:#0f172a;background:#e2e8f0;border-radius:999px;padding:3px 9px;margin-left:10px}
+
+  .prod{flex:1;min-height:0;padding:24px}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px}
+
+  .head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline}
+  .h1{font-size:16px;font-weight:500;color:#0f172a}
+  .h2s{font-size:13px;color:#64748b;margin-top:5px;line-height:1.45}
+
+  .bar{margin-top:16px;height:56px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;
+       display:flex;align-items:center;gap:10px;padding:0 12px;white-space:nowrap}
+  .lab{font-size:12px;color:#64748b}
+  .inp{height:40px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:0 10px;
+       font-size:13px;color:#0f172a;font-family:inherit}
+  .inp.date{width:132px}
+  .inp.sel{width:150px;padding-right:6px}
+  .sep{flex:none;width:1px;height:24px;background:#e2e8f0;margin:0 2px}
+  .grow{flex:1 1 auto;min-width:0}
+  .btn{height:40px;flex:none;border-radius:12px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;
+       font-size:13px;font-weight:500;font-family:inherit;padding:0 14px;cursor:pointer;display:inline-flex;
+       align-items:center;justify-content:center;gap:6px}
+  .btn.dark{background:#0f172a;border-color:#0f172a;color:#fff}
+  .btn[disabled]{opacity:.5;cursor:default}
+  .btn.ghost{border-color:transparent;background:transparent;color:#64748b;font-weight:400}
+
+  .tw{margin-top:16px;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden}
+  .scroll{height:602px;overflow-y:auto;overflow-x:hidden}
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  thead th{position:sticky;top:0;z-index:2;background:#f8fafc;text-align:left;
+           font-size:11px;font-weight:500;color:#64748b;padding:9px 12px;border-bottom:1px solid #e2e8f0;
+           line-height:1.35;white-space:normal}
+  tbody td{font-size:12px;color:#334155;padding:9px 10px;border-bottom:1px solid #f1f5f9;
+           vertical-align:top;line-height:1.45;overflow:hidden}
+  tr:last-child td{border-bottom:0}
+  tr.dayrow td{background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:6px 10px;
+               font-size:11px;color:#64748b;font-weight:500}
+  .num{white-space:nowrap;font-variant-numeric:tabular-nums}
+  .b{font-weight:500;color:#0f172a}
+  .em{font-weight:500;color:#047857}
+  .or{font-weight:500;color:#c2410c}
+  .rd{font-weight:500;color:#b91c1c}
+  .t2{display:block;font-size:11px;color:#94a3b8;line-height:1.4}
+  .t2b{display:block;font-size:11px;color:#cbd5e1}
+
+  .notebox{display:flex;min-width:0;align-items:center;gap:6px}
+  .ninp{min-width:0;flex:1 1 auto;height:34px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;
+        padding:0 9px;font-size:12px;color:#334155;font-family:inherit}
+  .save{flex:none;height:34px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;color:#0f172a;
+        font-size:12px;font-weight:500;font-family:inherit;padding:0 11px;cursor:pointer}
+  .acts{display:flex;flex-wrap:wrap;gap:8px}
+  .act{height:34px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;color:#0f172a;font-size:12px;
+       font-weight:500;font-family:inherit;padding:0 11px;cursor:pointer;white-space:nowrap}
+  .act.del{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
+
+  .pager{margin-top:16px;height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .pinfo{font-size:13px;color:#64748b}
+  .pinfo b{font-weight:500;color:#0f172a}
+  .pright{display:flex;align-items:center;gap:8px}
+  .more{height:44px;padding:0 18px;font-size:13px}
+
+  .notes{flex:none;margin-top:24px;background:#fff;border:1px dashed #b4b2a9;border-radius:16px;padding:16px}
+  .notes .nt{font-size:13px;font-weight:500;color:#0f172a}
+  .notes .ns{font-size:12px;color:#94a3b8;margin-top:4px}
+  .nlist{margin-top:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px}
+  .ni{font-size:12px;color:#334155;line-height:1.6}
+  .ni b{font-weight:500;color:#0f172a}
+  .ni.q b{color:#a32d2d}
+</style>
+</head>
+<body>
+<h2 class="sr-only">交班歷史工具列改版確認稿：篩選條件排成一行、只保留 CSV 導出、交班記錄按 10 天分頁並用查看更多載入。</h2>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <div class="chrome">
+      <div>
+        <span class="t">UI 確認稿 · 交班歷史</span>
+        <span class="tag">唔屬產品介面</span>
+      </div>
+      <div class="s">篩選同一行 · 只留 CSV · 每 10 天一頁 + 查看更多（可撳）</div>
+    </div>
+
+    <div class="prod">
+      <section class="card">
+        <div class="head">
+          <div style="min-width:0">
+            <div class="h1">交班歷史</div>
+            <div class="h2s" id="subtitle">保留最近 60 次交班記錄，方便追數與核對。｜已由雲端同步 10 筆（換機／多部機共用同一份）</div>
+          </div>
+        </div>
+
+        <div class="bar">
+          <span class="lab">交班日期</span>
+          <input class="inp date" id="from" type="date" value="" />
+          <span class="lab">至</span>
+          <input class="inp date" id="to" type="date" value="" />
+          <span class="sep"></span>
+          <span class="lab">員工</span>
+          <select class="inp sel" id="emp"></select>
+          <span class="sep"></span>
+          <span class="grow"></span>
+          <button class="btn" id="csv" type="button">導出 CSV</button>
+        </div>
+
+        <div class="tw">
+          <div class="scroll" id="scroll">
+            <table>
+              <colgroup>
+                <col style="width:86px" /><col style="width:74px" /><col style="width:76px" />
+                <col style="width:76px" /><col style="width:76px" /><col style="width:76px" />
+                <col style="width:74px" /><col style="width:78px" /><col style="width:68px" />
+                <col style="width:100px" /><col style="width:142px" /><col style="width:172px" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>交班時間</th><th>員工</th><th>營業額</th><th>應收金額合計</th><th>實收金額合計</th>
+                  <th>線上線下合計</th><th>退款</th><th>應收/實收現金</th><th>差額</th><th>待同步</th>
+                  <th>備註</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="pager">
+          <div class="pinfo" id="pinfo"></div>
+          <div class="pright" id="pright"></div>
+        </div>
+      </section>
+
+      <div class="notes">
+        <div class="nt">設計說明（以下唔屬產品介面）</div>
+        <div class="ns">三項要求點落實，以及兩處要你拍板嘅位</div>
+        <div class="nlist" id="notes"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  var PAGE_DAYS = 10;
+  var loadedDays = PAGE_DAYS;
+
+  var EMP = ["表嫂美食", "陳小明", "李美玲", "未記錄"];
+  var NOTES = ["", "補錄備註", "正常應該是 3022", "夜更交班，現金已點清", "客人退款 1 單"];
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function dayKey(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function fmtDate(d) { return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear(); }
+  function money(v) { return "MOP " + v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
+  function money2(v) { return "MOP " + v.toFixed(2); }
+
+  var WD = ["日", "一", "二", "三", "四", "五", "六"];
+
+  var ROWS = [];
+  (function seed() {
+    var base = new Date(2026, 8, 14);
+    var k = 7;
+    function rnd() { k = (k * 1103515245 + 12345) % 2147483648; return k / 2147483648; }
+    for (var d = 0; d < 28; d++) {
+      var day = new Date(base.getTime() - d * 86400000);
+      var shifts = d === 0 ? 2 : 1 + Math.floor(rnd() * 3);
+      for (var s = 0; s < shifts; s++) {
+        var emp = EMP[Math.floor(rnd() * EMP.length)];
+        var hours = s === 0 ? [11, 14, 18][Math.floor(rnd() * 3)] : [21, 22, 23][Math.floor(rnd() * 3)];
+        var mins = Math.floor(rnd() * 60);
+        var closed = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hours, mins);
+        var revenue = Math.round(rnd() * 4200) + 320;
+        var online = rnd() < 0.45 ? Math.round(rnd() * 900) : 0;
+        var recv = revenue + (rnd() < 0.4 ? Math.round(rnd() * 180) : 0);
+        var refunds = rnd() < 0.25 ? 1 + Math.floor(rnd() * 2) : 0;
+        var refundAmt = refunds * (38 + Math.round(rnd() * 120));
+        var actual = rnd() < 0.25 ? 0 : revenue + (rnd() < 0.5 ? 0 : (rnd() < 0.5 ? -12 : 8));
+        var diff = actual === 0 ? 0 : actual - revenue;
+        ROWS.push({
+          id: dayKey(day) + "-" + s,
+          day: dayKey(day),
+          dayLabel: fmtDate(day) + "（週" + WD[day.getDay()] + "）",
+          time: pad(hours) + ":" + pad(mins),
+          emp: emp,
+          dayNo: fmtDate(day),
+          revenue: revenue,
+          recv: recv,
+          paid: revenue,
+          online: online,
+          refunds: refunds,
+          refundAmt: refundAmt,
+          expectedCash: revenue,
+          actualCash: actual,
+          diff: diff,
+          pend: rnd() < 0.3 ? 1 + Math.floor(rnd() * 3) : 0,
+          prints: rnd() < 0.3 ? 1 + Math.floor(rnd() * 3) : 0,
+          failed: rnd() < 0.15 ? 1 : 0,
+          skipped: rnd() < 0.1 ? 1 : 0,
+          note: NOTES[Math.floor(rnd() * NOTES.length)]
+        });
+      }
+    }
+    ROWS.sort(function (a, b) { return a.day === b.day ? (a.time < b.time ? 1 : -1) : (a.day < b.day ? 1 : -1); });
+  })();
+
+  var elFrom = document.getElementById("from");
+  var elTo = document.getElementById("to");
+  var elEmp = document.getElementById("emp");
+  var elRows = document.getElementById("rows");
+  var elPinfo = document.getElementById("pinfo");
+  var elPright = document.getElementById("pright");
+  var elNotes = document.getElementById("notes");
+
+  (function fillEmp() {
+    var opts = ['<option value="">全部員工</option>'];
+    for (var i = 0; i < EMP.length; i++) {
+      opts.push('<option value="' + EMP[i] + '">' + EMP[i] + "</option>");
+    }
+    elEmp.innerHTML = opts.join("");
+  })();
+
+  var ALL_DAYS = (function () {
+    var set = {}, out = [];
+    for (var i = 0; i < ROWS.length; i++) {
+      if (!set[ROWS[i].day]) { set[ROWS[i].day] = true; out.push(ROWS[i].day); }
+    }
+    return out.length;
+  })();
+
+  function filtered() {
+    var from = elFrom.value, to = elTo.value, emp = elEmp.value;
+    return ROWS.filter(function (r) {
+      if (from && r.day < from) return false;
+      if (to && r.day > to) return false;
+      if (emp && r.emp !== emp) return false;
+      return true;
+    });
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function render() {
+    var list = filtered();
+    var groups = [], map = {};
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (!map[r.day]) { map[r.day] = { day: r.day, label: r.dayLabel, rows: [] }; groups.push(map[r.day]); }
+      map[r.day].rows.push(r);
+    }
+    var shown = groups.slice(0, loadedDays);
+    var html = [];
+    var rowCount = 0;
+    for (var g = 0; g < shown.length; g++) {
+      var grp = shown[g];
+      html.push('<tr class="dayrow"><td colspan="12">' + esc(grp.label) + " · " + grp.rows.length + " 個班次</td></tr>");
+      for (var j = 0; j < grp.rows.length; j++) {
+        var r = grp.rows[j];
+        rowCount++;
+        html.push(
+          "<tr>" +
+          '<td class="num">' + esc(r.dayNo) + '<span class="t2">' + esc(r.time) + "</span></td>" +
+          "<td>" + esc(r.emp) + "</td>" +
+          '<td class="num b">' + money(r.revenue) + "</td>" +
+          '<td class="num">' + money(r.recv) + "</td>" +
+          '<td class="num em">' + money(r.paid) + "</td>" +
+          '<td class="num or">' + money(r.paid + r.online) + "</td>" +
+          '<td class="num">' + r.refunds + '<span class="t2">' + money(r.refundAmt) + "</span></td>" +
+          '<td class="num">' + money(r.expectedCash) + (r.actualCash === 0 ? "" : '<span class="t2">/ ' + money(r.actualCash) + "</span>") + "</td>" +
+          '<td class="num ' + (r.diff === 0 ? "em" : "rd") + '">' + (r.actualCash === 0 ? "--" : money(r.diff)) + "</td>" +
+          '<td class="num">' + r.pend + " 事件" + '<span class="t2">' + r.prints + " 打印</span>" +
+          (r.failed ? '<span class="t2b">' + r.failed + " 失敗</span>" : "") +
+          (r.skipped ? '<span class="t2b">無歸屬 ' + r.skipped + "</span>" : "") + "</td>" +
+          '<td><div class="notebox"><input class="ninp" placeholder="補錄備註" value="' + esc(r.note) + '" />' +
+          '<button class="save" type="button">保存</button></div></td>' +
+          '<td><div class="acts"><button class="act" type="button">重打交班單</button>' +
+          '<button class="act del" type="button">刪除</button></div></td>' +
+          "</tr>"
+        );
+      }
+    }
+    if (rowCount === 0) {
+      html.push('<tr><td colspan="12" style="padding:16px 12px;color:#64748b">目前沒有符合條件的交班歷史。</td></tr>');
+    }
+    elRows.innerHTML = html.join("");
+
+    var totalRows = list.length;
+    var shownRows = 0;
+    for (var s = 0; s < shown.length; s++) shownRows += shown[s].rows.length;
+    elPinfo.innerHTML =
+      "已顯示最近 <b>" + shown.length + " 天</b> · <b>" + shownRows + " 筆</b>（合計 <b>" +
+      groups.length + " 天</b> · <b>" + totalRows + " 筆</b>）" +
+      (groups.length === 0 ? "" : "　·　每頁最多 10 天");
+
+    var canMore = groups.length > shown.length;
+    var btn = ["<button class=\"btn dark more\" id=\"moreBtn\" type=\"button\"" + (canMore ? "" : " disabled") + ">" +
+      (canMore ? "查看更多（再載入 " + Math.min(PAGE_DAYS, groups.length - shown.length) + " 天）" : "已全部載入") + "</button>"];
+    if (shown.length > PAGE_DAYS) {
+      btn.unshift('<button class="btn ghost" id="lessBtn" type="button">收起</button>');
+    }
+    elPright.innerHTML = btn.join("");
+
+    var mb = document.getElementById("moreBtn");
+    if (mb) mb.onclick = function () { loadedDays += PAGE_DAYS; render(); };
+    var lb = document.getElementById("lessBtn");
+    if (lb) lb.onclick = function () { loadedDays = PAGE_DAYS; render(); };
+  }
+
+  elFrom.onchange = function () { loadedDays = PAGE_DAYS; render(); };
+  elTo.onchange = function () { loadedDays = PAGE_DAYS; render(); };
+  elEmp.onchange = function () { loadedDays = PAGE_DAYS; render(); };
+  document.getElementById("csv").onclick = function () {};
+
+  var NOTES_HTML = [
+    "<b>① 篩選列排成一行</b>　標題同副標題移上去獨立一行；篩選全部收喺一條「篩選列」內：<b>交班日期 由 → 至 ｜ 員工 ｜（右）導出 CSV</b>，用 flex + nowrap，唔會換行。舊版副標題太長會同工具列搶寬度，逼到最後一粒掣換行、壓落表頭。",
+    "<b>② 只保留 CSV</b>　移除「導出 Excel」深色掣（實作同時刪 <code>exportShiftHistoryExcel()</code> 同 <code>exportingType</code> 嘅 <code>\"excel\"</code> 分支）。",
+    "<b>③ 每 10 天一頁</b>　篩選結果按「日」分組，一次最多顯示 10 天；底部顯示「已顯示 X 天 · N 筆（合計 Y 天 · M 筆）」＋「查看更多」載入下一個 10 天；展開後多一粒「收起」返回 10 天。",
+    "<b>④ 日分隔列（新增，可去掉）</b>　每日一行淺灰「日期（週X）· N 個班次」，令「每頁 10 天」睇得見；同一日有 2–3 個班次時亦唔會混淆。",
+    "<b>⑤ 觸控</b>　篩選欄 40px 高；「查看更多」44px 高；表格內細掣 34px 高（沿用原本尺寸）。",
+    "<b class=\"q\">要你拍板 Q1</b>　「10 天」= <b>10 個日曆日</b>（一日可能 2–3 個班次 → 實際 20+ 行）。確認稿按呢個理解做。",
+    "<b class=\"q\">要你拍板 Q2</b>　「查看更多」= <b>累加</b>（保留已載入嘅，再加 10 天）。如果你想要真正「換頁」（一次只見 10 天），講一聲。",
+    "<b class=\"q\">要你拍板 Q3</b>　「導出 CSV」導出 <b>篩選後全部</b>（唔受 10 天限制）。如果你要「只導出已載入嘅 10 天」，講一聲。",
+    "<b>⑥ 表格欄寬重排</b>　欄位字級 14px → 12px、內距 12px → 10px，12 欄闊度重新分配 ⇒ 所有金額欄**單行顯示**（舊版會切成「MOP 4,2…」）、員工名唔再斷字、操作欄「重打交班單 / 刪除」兩粒掣同一行（舊版會換行）。"
+  ];
+  elNotes.innerHTML = NOTES_HTML.map(function (s) { return '<div class="ni">' + s + "</div>"; }).join("");
+
+  var CANVAS_H = 1210;
+  function fit() {
+    var stage = document.getElementById("stage");
+    var canvas = document.getElementById("canvas");
+    var w = stage.clientWidth || 1180;
+    var s = Math.min(1, Math.max(w / 1180, 0.55));
+    canvas.style.transform = "scale(" + s + ")";
+    stage.style.height = Math.round(CANVAS_H * s) + "px";
+    stage.style.overflowX = (1180 * s > w) ? "auto" : "hidden";
+  }
+  window.onresize = fit;
+  fit();
+  render();
+  var prod = document.querySelector(".prod");
+  if (prod) {
+    var need = 58 + prod.scrollHeight;
+    if (need > CANVAS_H) {
+      document.getElementById("canvas").style.height = need + "px";
+    }
+  }
+})();
+</script>
+</body>
+</html>
