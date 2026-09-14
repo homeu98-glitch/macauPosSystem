@@ -21,6 +21,7 @@
 // ⚠️ 唔好喺度改「只計 completed」——咁做就係返去 RPC 嗰個滯後口徑。
 
 import { listMerchantOrders } from "@/lib/ledger/orders";
+import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { resolveReportRange, type ReportRangeArg } from "@/lib/ledger/report-period";
 
 export interface PaidLedgerOrdersTotal {
@@ -38,10 +39,11 @@ export interface PaidLedgerOrdersTotal {
    */
   incompleteIds: string[];
   /**
-   * 逐張已付款線上單嘅 id + 金額 —— 供呼叫端同**本地/POS 側**嘅線上投影單做聯集去重
-   * （同一張單本地已有收款記錄時，唔可以兩邊各計一次）。
+   * 逐張已付款線上單（**完整 row**）—— 供呼叫端
+   * ① 同本地/POS 側嘅線上投影單做聯集去重（同一張單唔可以兩邊各計一次）；
+   * ② 列出「Ledger 純線上單」明細（交班明細要見到 001 / 005 呢類從未入 POS DB 嘅單）。
    */
-  orders: { id: string; amountMop: number }[];
+  orders: LedgerOnlineOrder[];
 }
 
 /** `incompleteIds` 上限（防一次補推打爆 RPC；一日嘅量遠低於此）。 */
@@ -76,7 +78,7 @@ export async function sumPaidLedgerOrders(params: {
   let incompleteCount = 0;
   let incompleteAmountMop = 0;
   const incompleteIds: string[] = [];
-  const paidOrders: { id: string; amountMop: number }[] = [];
+  const paidOrders: LedgerOnlineOrder[] = [];
 
   // RPC `list_merchant_orders` 按 `updatedAt` DESC 排序，用 (since, sinceId) 由新到舊翻頁。
   let cursorSince: string | null = period.start;
@@ -109,7 +111,7 @@ export async function sumPaidLedgerOrders(params: {
       const safePaid = Number.isFinite(paid) ? paid : 0;
       amountMop += safePaid;
       count += 1;
-      paidOrders.push({ id: order.id, amountMop: round2(safePaid) });
+      paidOrders.push(order);
 
       if (String(order.status ?? "").toLowerCase() !== "completed") {
         incompleteCount += 1;

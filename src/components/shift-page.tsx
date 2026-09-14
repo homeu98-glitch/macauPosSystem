@@ -60,8 +60,20 @@ import { buildShiftPrintJobs } from "@/lib/print-jobs";
 // 所以呢度只換「落本機」嗰半步，入隊 / flush 照舊由下面自己控制。
 import { persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
 import { formatMoney } from "@/lib/format";
-import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
+import { buildOrderDetailNotes, buildOnlineOrderDetailNotes } from "@/lib/pos/order-notes";
+import { paymentModeLabel } from "@/lib/ledger/order-mapper";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
+
+/**
+ * Ledger 純線上單嘅「餐台」欄標籤（同報表明細同一套文案）。
+ * ⚠️ 報表頁有自己一份 private 版本；呢度只為交班明細顯示，唔涉及金額口徑。
+ */
+function ledgerFulfillmentLabel(fulfillmentType?: string | null): string {
+  const t = String(fulfillmentType ?? "").toLowerCase();
+  if (t === "pickup" || t === "self_pickup") return "線上·自取";
+  if (t === "delivery" || t === "merchant_delivery") return "線上·外送";
+  return "線上";
+}
 
 /**
  * 交班摘要（線下 POS）。
@@ -378,15 +390,19 @@ export function ShiftPage() {
     [onlineLocalOrders],
   );
 
-  /** Ledger 已付款單之中，本地冇對應投影單嘅嗰批（＝從未入 POS DB 嘅線上單）＋ 張數。 */
-  const ledgerOnlyOnline = useMemo(() => {
+  /** Ledger 已付款單之中，本地冇對應投影單嘅嗰批（＝從未入 POS DB 嘅線上單，例如 001／005 預約單）。 */
+  const ledgerOnlyRows = useMemo(() => {
     const localIds = new Set(onlineLocalOrders.map((o) => o.onlineOrderId as string));
-    const rest = (ledgerPaidOrders?.orders ?? []).filter((o) => !localIds.has(o.id));
-    return {
-      count: rest.length,
-      amountMop: Math.round(rest.reduce((s, o) => s + o.amountMop, 0) * 100) / 100,
-    };
+    return (ledgerPaidOrders?.orders ?? []).filter((o) => !localIds.has(o.id));
   }, [onlineLocalOrders, ledgerPaidOrders]);
+
+  const ledgerOnlyOnline = useMemo(() => {
+    const amount = ledgerOnlyRows.reduce(
+      (s, o) => s + (Number(o.total ?? o.paidAmount ?? 0) || 0),
+      0,
+    );
+    return { count: ledgerOnlyRows.length, amountMop: Math.round(amount * 100) / 100 };
+  }, [ledgerOnlyRows]);
 
   /**
    * 線上「實收」＝ **本地線上投影單 ∪ Ledger 已付款單**（按 Ledger order id 去重，本地為準）。
@@ -447,45 +463,64 @@ export function ShiftPage() {
         offlineMop += o.total || 0;
       }
     }
+    // Ledger 純線上單（從未入 POS DB）：同樣計入「線上」小計，令明細合計 = 卡片合計。
+    onlineCount += ledgerOnlyRows.length;
+    onlineMop += ledgerOnlyRows.reduce((s, o) => s + (Number(o.total ?? o.paidAmount ?? 0) || 0), 0);
     return {
       offlineCount,
       offlineMop: Math.round(offlineMop * 100) / 100,
       onlineCount,
       onlineMop: Math.round(onlineMop * 100) / 100,
     };
-  }, [detailOrders]);
+  }, [detailOrders, ledgerOnlyRows]);
 
-  // 訂單明細（逐筆）：同支付方式分項／線上實收同一批單，按結賬時間倒序。
-  // 🔴 2026-09-14：退款單（`partially_refunded` / `refunded`）**唔再列出** —— 商家口徑
-  // 「退款了就不應該顯示」。若照列全額，「實收」欄會同上方摘要（已剔除退款）自相矛盾。
-  const orderDetailRows = useMemo<OrderDetailRow[]>(
-    () =>
-      detailOrders
-        .map((o) => ({
-          id: o.id,
-          orderNo: o.localOrderNo,
-          table: o.tableName || o.tableId,
-          receivable:
-            o.items.reduce((sum, it) => sum + it.price * it.quantity, 0) +
-            (o.serviceChargeAmount ?? 0) +
-            (o.taxAmount ?? 0),
-          paid: o.total,
-          method: o.paymentMethod ?? "未記錄",
-          cashier: o.settledByName ?? o.settledBy ?? "未記錄",
-          settledAt: o.originalSettledAt ?? o.updatedAt,
-          // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
-          // 同報表明細、訂單紀錄用同一套，確保三處完全一致。
-          notes: buildOrderDetailNotes(o),
-          // 線上投影單（帶 onlineOrderId）顯示「線上」chip，同線下單一眼分得開。
-          online: !!o.onlineOrderId,
-        }))
-        .sort((a, b) => {
-          const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
-          const tb = b.settledAt ? Date.parse(b.settledAt) : 0;
-          return tb - ta;
-        }),
-    [detailOrders],
-  );
+  // 訂單明細（逐筆）＝ ① 本地已結帳單（含線上投影，標「線上」）
+  //                    ＋ ② **Ledger 純線上單**（從未入 POS DB，例如取餐碼 001／005 預約單；標「線上」+ 取餐碼）。
+  // 🔴 2026-09-14：退款單唔列出（商家口徑「退款了就不應該顯示」）；但**線上單一定要列出** ——
+  // 舊版只列本地單，令線上單金額計入帳但明細見唔到，商家一定問「點解明細冇線上訂單／點解唔見 001、005」。
+  const orderDetailRows = useMemo<OrderDetailRow[]>(() => {
+    const localRows: OrderDetailRow[] = detailOrders.map((o) => ({
+      id: o.id,
+      orderNo: o.localOrderNo,
+      table: o.tableName || o.tableId,
+      receivable:
+        o.items.reduce((sum, it) => sum + it.price * it.quantity, 0) +
+        (o.serviceChargeAmount ?? 0) +
+        (o.taxAmount ?? 0),
+      paid: o.total,
+      method: o.paymentMethod ?? "未記錄",
+      cashier: o.settledByName ?? o.settledBy ?? "未記錄",
+      settledAt: o.originalSettledAt ?? o.updatedAt,
+      // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
+      // 同報表明細、訂單紀錄用同一套，確保三處完全一致。
+      notes: buildOrderDetailNotes(o),
+      // 線上投影單（帶 onlineOrderId）顯示「線上」chip，同線下單一眼分得開。
+      online: !!o.onlineOrderId,
+    }));
+
+    const remoteRows: OrderDetailRow[] = ledgerOnlyRows.map((o) => {
+      const paid = Number(o.total ?? o.paidAmount ?? 0) || 0;
+      const subtotal = Number(o.subtotalBeforeDiscount ?? o.total + (o.discountAmount ?? 0));
+      return {
+        id: o.id,
+        pickupCode: o.pickupCode,
+        table: ledgerFulfillmentLabel(o.fulfillmentType),
+        receivable: Number.isFinite(subtotal) && subtotal > 0 ? subtotal : paid,
+        paid,
+        method: paymentModeLabel(o.paymentMode) || "線上單",
+        cashier: "客人",
+        settledAt: o.updatedAt ?? o.createdAt ?? "",
+        notes: buildOnlineOrderDetailNotes(o.discountAmount),
+        online: true,
+      };
+    });
+
+    return [...localRows, ...remoteRows].sort((a, b) => {
+      const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
+      const tb = b.settledAt ? Date.parse(b.settledAt) : 0;
+      return tb - ta;
+    });
+  }, [detailOrders, ledgerOnlyRows]);
 
   /**
    * 拉今日 Ledger 數據（RPC 摘要 + 已付款單加總）。
