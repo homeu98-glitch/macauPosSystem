@@ -4,11 +4,21 @@
 // salon/online 嘅 money()、各 component 嘅日期 toLocale* 格式化。
 // 統一到呢度，確保貨幣（MOP 預設、逗號分位）同日期（Macau zh-HK 顯示）一致。
 
+/**
+ * 貨幣**數值**格式化（唔帶貨幣前綴）：整數 + 逗號分位，同 {@link formatMoney} 同一套捨入。
+ *
+ * 用途：欄位窄嘅表（例如交班歷史 12 欄要喺 iPad 橫向塞得落）會把「MOP」寫喺**表頭**，
+ * 每格只顯示數字 ⇒ 每欄省約 24px。**唔可以**自己寫一套 `toLocaleString`，
+ * 否則捨入／分位口徑會同其他頁漂移。
+ */
+export function formatMoneyValue(amount: number): string {
+  const rounded = Math.round(Number.isFinite(amount) ? amount : 0);
+  return rounded.toLocaleString("en-US"); // 逗號分位，跨環境一致
+}
+
 /** 貨幣格式化：預設 MOP，整數 + 逗號分位（跨環境一致，Macau 用逗號）。 */
 export function formatMoney(amount: number, currency = "MOP"): string {
-  const rounded = Math.round(Number.isFinite(amount) ? amount : 0);
-  const grouped = rounded.toLocaleString("en-US"); // 逗號分位，跨環境一致
-  return `${currency} ${grouped}`;
+  return `${currency} ${formatMoneyValue(amount)}`;
 }
 
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"] as const;

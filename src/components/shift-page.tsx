@@ -61,7 +61,7 @@ import { buildShiftPrintJobs } from "@/lib/print-jobs";
 // 嘅自訂 flush（docs/111 —— 整條 queue 照推會撞 server 200 條上限 → 413 → 交班單反而上唔到雲）。
 // 所以呢度只換「落本機」嗰半步，入隊 / flush 照舊由下面自己控制。
 import { persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMoneyValue } from "@/lib/format";
 import { buildOrderDetailNotes, buildOnlineOrderDetailNotes } from "@/lib/pos/order-notes";
 import { paymentModeLabel } from "@/lib/ledger/order-mapper";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
@@ -89,6 +89,15 @@ const SHIFT_HISTORY_PAGE_DAYS = 10;
 /** 交班歷史表格最大高度（px）—— 框架尺寸固定嘅關鍵。 */
 const SHIFT_HISTORY_MAX_HEIGHT_PX = 620;
 const MACAU_WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+
+/**
+ * 表頭貨幣單位（黏喺表頭標籤下面一行）。
+ *
+ * 🔴 為何貨幣要搬上表頭：交班歷史有 12 欄，iPad 橫向（viewport 1180 → 內容約 1040px）
+ * 根本塞唔落。每格重複「MOP ⋯」＝每欄多 24–28px，7 個金額欄就多 ~170px；
+ * 搬上表頭之後 1130px → **1018px**，iPad 完全唔洗橫向滾動。
+ */
+const MONEY_UNIT = <div className="font-normal text-slate-400">MOP</div>;
 
 /**
  * 交班記錄 → 澳門日曆日 key（`YYYY-MM-DD`）。
@@ -1687,41 +1696,41 @@ export function ShiftPage() {
               className="mt-4 overflow-auto rounded-2xl border border-slate-200"
               style={{ maxHeight: `${SHIFT_HISTORY_MAX_HEIGHT_PX}px` }}
             >
-              <table className="w-full min-w-[1130px] table-fixed border-collapse text-xs">
+              <table className="w-full min-w-[1018px] table-fixed border-collapse text-xs">
                 {/*
                   欄寬用百分比（同 repo 其他表一致：table-fixed + 百分比 + min-w）。
-                  🔴 基準 = **1130px**，而且每個數字係**實測**（真瀏覽器量 `Range` 文字闊度），
-                  唔係估：12px 字「MOP 3,945」實測要 66–70px 內容闊度 ⇒ 營業額類欄位一定要 94px
-                  （58px 會斷成「MOP」/「3,945」兩行，實測中過）。
-                  ⇒ 容器（iPad 橫向約 1040px）唔夠闊時**橫向滾動** ~90px，欄位內容永遠完整。
+                  🔴 基準 = **1018px**，數字全部係**真瀏覽器實測**（`Range` 量文字闊度），唔係估：
+                  · 貨幣已搬上表頭 ⇒ 金額格只需放數字（「3,945」≈ 34px、5 位「12,345」≈ 46px）
+                  · 12px 字「14/09/2026」= 66px ⇒ 交班時間欄 90px
+                  ⇒ 1018px 可以塞落 iPad 橫向（內容約 1040px），**完全唔洗橫向滾動**。
                 */}
                 <colgroup>
-                  <col className="w-[7.96%]" />
-                  <col className="w-[6.37%]" />
-                  <col className="w-[8.32%]" />
-                  <col className="w-[8.32%]" />
-                  <col className="w-[8.32%]" />
-                  <col className="w-[8.32%]" />
-                  <col className="w-[5.84%]" />
-                  <col className="w-[9.03%]" />
-                  <col className="w-[6.02%]" />
-                  <col className="w-[5.13%]" />
-                  <col className="w-[11.86%]" />
-                  <col className="w-[14.51%]" />
+                  <col className="w-[8.83%]" />
+                  <col className="w-[7.07%]" />
+                  <col className="w-[7.27%]" />
+                  <col className="w-[7.47%]" />
+                  <col className="w-[7.47%]" />
+                  <col className="w-[7.47%]" />
+                  <col className="w-[5.89%]" />
+                  <col className="w-[7.86%]" />
+                  <col className="w-[6.09%]" />
+                  <col className="w-[5.70%]" />
+                  <col className="w-[13.16%]" />
+                  <col className="w-[15.72%]" />
                 </colgroup>
-                {/* 表頭 11px：欄闊係按 12px 內容實測值定死（1130px 基準），
+                {/* 表頭 11px：欄闊係按 12px 內容實測值定死（1018px 基準），
                     表頭用 11px 先可以全部單行顯示，唔會斷成「應收金額合 / 計」。 */}
                 <thead className="bg-slate-50 text-left text-[11px] font-semibold text-slate-500">
                   <tr>
                     <th className="border-b border-slate-200 px-3 py-2">交班時間</th>
                     <th className="border-b border-slate-200 px-3 py-2">員工</th>
-                    <th className="border-b border-slate-200 px-3 py-2">營業額</th>
-                    <th className="border-b border-slate-200 px-3 py-2">應收金額合計</th>
-                    <th className="border-b border-slate-200 px-3 py-2">實收金額合計</th>
-                    <th className="border-b border-slate-200 px-3 py-2">線上線下合計</th>
-                    <th className="border-b border-slate-200 px-3 py-2">退款</th>
-                    <th className="border-b border-slate-200 px-3 py-2">應收/實收現金</th>
-                    <th className="border-b border-slate-200 px-3 py-2">差額</th>
+                    <th className="border-b border-slate-200 px-3 py-2">營業額{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">應收金額合計{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">實收金額合計{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">線上線下合計{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">退款{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">應收/實收現金{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">差額{MONEY_UNIT}</th>
                     <th className="border-b border-slate-200 px-3 py-2">待同步</th>
                     <th className="border-b border-slate-200 px-3 py-2">備註</th>
                     <th className="border-b border-slate-200 px-3 py-2">操作</th>
@@ -1753,34 +1762,34 @@ export function ShiftPage() {
                       <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
                         <td className="px-3 py-3 text-slate-700">{formatMacauDateTime(row.closedAt)}</td>
                         <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
-                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
-                          {typeof row.receivableTotal === "number" ? formatMoney(row.receivableTotal) : "--"}
+                        <td className="overflow-hidden whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatMoneyValue(row.revenue)}</td>
+                        <td className="overflow-hidden whitespace-nowrap px-3 py-3 text-slate-700">
+                          {typeof row.receivableTotal === "number" ? formatMoneyValue(row.receivableTotal) : "--"}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-emerald-700">
-                          {typeof row.paidTotal === "number" ? formatMoney(row.paidTotal) : "--"}
+                        <td className="overflow-hidden whitespace-nowrap px-3 py-3 font-semibold text-emerald-700">
+                          {typeof row.paidTotal === "number" ? formatMoneyValue(row.paidTotal) : "--"}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-orange-700">
+                        <td className="overflow-hidden whitespace-nowrap px-3 py-3 font-semibold text-orange-700">
                           {typeof row.paidTotal === "number"
-                            ? formatMoney(row.paidTotal + (row.onlinePaidMop ?? 0))
+                            ? formatMoneyValue(row.paidTotal + (row.onlinePaidMop ?? 0))
                             : typeof row.onlinePaidMop === "number"
-                              ? formatMoney(row.onlinePaidMop)
+                              ? formatMoneyValue(row.onlinePaidMop)
                               : "--"}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
+                        <td className="overflow-hidden whitespace-nowrap px-3 py-3 text-slate-700">
                           {row.refundCount}
-                          {/* 金額另起一行 —— 一行寫成「0 / MOP 38」會超出欄闊被裁。 */}
-                          <div className="text-[11px] text-slate-500">{formatMoney(row.refundAmount)}</div>
+                          {/* 金額另起一行（貨幣見表頭）—— 欄窄時一行放唔落。 */}
+                          <div className="text-[11px] text-slate-500">{formatMoneyValue(row.refundAmount)}</div>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
-                          {formatMoney(row.expectedCash)}
-                          {/* 實收現金另外一行 —— 一行寫成「MOP a / MOP b」會超出欄闊被裁。 */}
+                        <td className="overflow-hidden whitespace-nowrap px-3 py-3 text-slate-700">
+                          {formatMoneyValue(row.expectedCash)}
+                          {/* 實收現金另外一行 —— 一行寫成「a / b」會超出欄闊被裁。 */}
                           {typeof row.actualCash === "number" ? (
-                            <div className="text-[11px] text-slate-500">/ {formatMoney(row.actualCash)}</div>
+                            <div className="text-[11px] text-slate-500">/ {formatMoneyValue(row.actualCash)}</div>
                           ) : null}
                         </td>
-                        <td className={`whitespace-nowrap px-3 py-3 font-semibold ${row.cashDifference === 0 ? "text-emerald-700" : "text-red-700"}`}>
-                          {typeof row.cashDifference === "number" ? formatMoney(row.cashDifference) : "--"}
+                        <td className={`overflow-hidden whitespace-nowrap px-3 py-3 font-semibold ${row.cashDifference === 0 ? "text-emerald-700" : "text-red-700"}`}>
+                          {typeof row.cashDifference === "number" ? formatMoneyValue(row.cashDifference) : "--"}
                         </td>
                         {/* 逐行拆開顯示（唔用「N 事件 / M 打印」一行）—— 欄窄時會斷成「3 打 / 印」。 */}
                         <td className="px-3 py-3 text-slate-700">
