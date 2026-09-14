@@ -150,8 +150,19 @@ export function AppSidebar() {
         ? "營業中 —— 撳一下可暫停店內營業"
         : "未讀到營業狀態（可能係讀取失敗），請重新載入頁面";
 
-  /** 寫入失敗（紅）優先，其次係連動結果提示（琥珀）。 */
-  const storeHint = storeOpen.error ?? storeOpen.notice;
+  /**
+   * 商店名卡下面嘅提示格：**只**顯示寫入失敗（紅）。
+   *
+   * 🔴 2026-09-14 J 指示：移除連動結果提示整格 —— 最典型嗰句係
+   * 「已恢復店內營業。線上接單仍暫停，如需接單請去設置頁開返。」，
+   * 側欄得 56px 內容闊、10px 字 → 30 個字 wrap 成 **7 行**，
+   * 一按完開關就多咗一大塊嘢，把上面嘅商店名卡擠走。
+   *
+   * ⚠️ `storeOpen.notice` **仍然由 `useStoreOpenToggle()` 產生**（行為層唔改），
+   * 只係目前冇任何 UI 消費佢 —— 將來搬去闊啲嘅入口（設置頁 / 手機底部）
+   * 可以直接接返，唔使再寫一次判斷邏輯。
+   */
+  const storeError = storeOpen.error;
 
 
 
@@ -215,7 +226,7 @@ export function AppSidebar() {
 
               aria-pressed={storeOpen.isOpen === null ? undefined : storeOpen.isOpen}
 
-              className={`rounded-2xl px-2 py-2 text-center text-[11px] font-semibold transition disabled:opacity-100 ${
+              className={`rounded-2xl px-1.5 py-2 text-center text-[10px] font-semibold leading-tight transition disabled:opacity-100 ${
 
                 storeOpen.isOpen === false
                   ? "bg-red-600 text-white hover:brightness-110"
@@ -243,14 +254,12 @@ export function AppSidebar() {
 
           ) : null}
 
-          {storeHint ? (
+          {storeError ? (
 
-            <div
-              className={`rounded-xl px-2 py-1.5 text-center text-[10px] font-semibold leading-snug ${
-                storeOpen.error ? "bg-red-500/20 text-red-200" : "bg-amber-500/20 text-amber-200"
-              }`}
-            >
-              {storeHint}
+            <div className="rounded-xl bg-red-500/20 px-2 py-1.5 text-center text-[10px] font-semibold leading-snug text-red-200">
+
+              {storeError}
+
             </div>
 
           ) : null}

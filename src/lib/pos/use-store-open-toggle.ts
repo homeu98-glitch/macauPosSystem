@@ -42,7 +42,13 @@ export type StoreOpenToggle = {
   loading: boolean;
   saving: boolean;
   error: string | null;
-  /** 連動結果提示（顯示完可以 dismiss）。 */
+  /**
+   * 連動結果提示（顯示完可以 dismiss）。
+   *
+   * ⚠️ 2026-09-14：**目前冇任何 UI 顯示佢** —— 側欄（唯一入口）嘅 72px 放唔落
+   * 一句 30 字嘅提示（會 wrap 成 7 行，蓋住商店名卡），J 指示移除嗰格。
+   * 判斷邏輯保留喺呢度（行為層），將來搬去闊啲嘅入口可以直接接返。
+   */
   notice: string | null;
   clearNotice: () => void;
   /** 未讀到／讀寫中 → false（UI 應該停用）。 */
