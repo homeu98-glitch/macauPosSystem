@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -8,6 +8,11 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
 import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/reports";
+// 線上「實收」＝已付款單逐張加總（唔用 RPC `order_paid_avos`：Ledger 只認「已完成」，會滯後
+// —— 客人已付款但訂單未推 completed 嘅話，交班就會少算。見 lib/ledger/paid-orders.ts）。
+import { sumPaidLedgerOrders, type PaidLedgerOrdersTotal } from "@/lib/ledger/paid-orders";
+// 補推：把「已付款但 Ledger 未 completed」嘅線上單推上梯頂（同一條堂食爬梯，零依賴可測）。
+import { syncOnlineDineInCompletionById } from "@/lib/pos/online-dinein-fulfillment";
 import { orderMatchesReportRange, macauTodayRange } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
@@ -58,12 +63,22 @@ import { formatMoney } from "@/lib/format";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 
+/**
+ * 交班摘要（線下 POS）。
+ *
+ * 🔴 2026-09-14（商家口徑）：**退款單唔再計入任何金額**。
+ * 舊寫法將 `refunded` / `partially_refunded` 單嘅 `order.total` **全額**計入實收
+ * （＝退款咗都照計全額）→ 有退款嘅日子實收偏高，商家明確指「呢個絕對係錯」。
+ * 而家：
+ * - **收入認列**（count / revenue / prepaid / receivableTotal / paidTotal / paymentBreakdown
+ *   /「應收現金」）**只計 `settled` 單**；
+ * - **退款單只入「退款」統計**（張數 + 累計 `refundedAmount`），唔入金額、唔入支付方式拆分。
+ * - 部分退嘅單連「實收部分」都唔計 —— 同報表 `isSaleCountable()`（退款一律排除）口徑一致，
+ *   保證交班同報表兩頁見到嘅係同一套數。
+ */
 function summarizeClosedOrders(orders: PosOrder[]) {
-  const closedOrders = orders.filter(
-    (order) =>
-      order.status === "settled" || order.status === "partially_refunded" || order.status === "refunded",
-  );
-  const refunded = closedOrders.filter(
+  const closedOrders = orders.filter((order) => order.status === "settled");
+  const refunded = orders.filter(
     (order) => order.status === "partially_refunded" || order.status === "refunded",
   );
   // 計算每筆訂單的「應收」(菜品原價合計 + 服務費 + 稅) 與「實收」(order.total)。
@@ -226,6 +241,11 @@ export function ShiftPage() {
   const [ledgerToday, setLedgerToday] = useState<LedgerReportSummary | null>(null);
   const [ledgerTodayLoading, setLedgerTodayLoading] = useState(false);
   const [ledgerTodayError, setLedgerTodayError] = useState<string | null>(null);
+  /**
+   * 線上（Ledger）「已付款單」加總（＝今日實際收到嘅線上錢，含未推 completed 嘅單）。
+   * `null` = 攞唔到（未登入／網絡問題）→ 退回 RPC 已完成口徑，UI 會標示。
+   */
+  const [ledgerPaidOrders, setLedgerPaidOrders] = useState<PaidLedgerOrdersTotal | null>(null);
   const [purchaseToday, setPurchaseToday] = useState<PurchaseApiResponse | null>(null);
   const authSession = useMemo(() => loadAuthSession(), []);
 
@@ -338,10 +358,40 @@ export function ShiftPage() {
 
   const summary = useMemo(() => summarizeClosedOrders(todayLocalOrders), [todayLocalOrders]);
 
+  /**
+   * 線上（Ledger）「實收」金額 —— 🔴 2026-09-14 商家口徑：「實收 = 今日實際收到嘅錢」。
+   *
+   * 優先「**已付款單逐張加總**」（`sumPaidLedgerOrders()`，含已付款但未推 completed 嘅單）；
+   * 攞唔到（未登入／網絡問題）→ 退回 RPC `orderPaidMop`（Ledger「已完成」口徑，
+   * 會靜默少計未完成單）→ 所以 UI 必須標示係「已完成口徑」，唔可以靜默。
+   */
+  const ledgerOnlineMop = ledgerPaidOrders?.amountMop ?? ledgerToday?.orderPaidMop ?? 0;
+  const ledgerOnlineIsPaidSum = ledgerPaidOrders !== null;
+
+  /**
+   * 可安全補推嘅目標：Ledger 未 `completed`，**但本地 POS 已經 `settled`** 嘅線上單。
+   *
+   * 🔴 安全閘：本地未完成嘅（例如快餐仲製作中、或堂食未結帳）**唔可以**補推 ——
+   * 推上去等於向 Ledger 謊報「已完成」，客人端／對帳都會錯。
+   * 只有「本地已結帳（＝真係完成）」先補，咁樣補推係還原真相，唔係造數。
+   */
+  const backfillTargets = useMemo(() => {
+    const settledOnlineIds = new Set(
+      orders
+        .filter((o) => !!o.onlineOrderId && o.status === "settled")
+        .map((o) => o.onlineOrderId as string),
+    );
+    return (ledgerPaidOrders?.incompleteIds ?? []).filter((id) => settledOnlineIds.has(id));
+  }, [ledgerPaidOrders, orders]);
+
   // 訂單明細（逐筆）：同 summary（支付方式分項）同一批今日已結帳訂單，按結賬時間倒序。
+  // 🔴 2026-09-14：退款單（`partially_refunded` / `refunded`）**唔再列出** —— 商家口徑
+  // 「退款了就不應該顯示」。若照列全額，「實收」欄會同上方摘要（已剔除退款）自相矛盾。
+  // 退款張數／金額仍然喺「今日摘要」同交班單嘅「退款」一行顯示，唔會失蹤。
   const orderDetailRows = useMemo<OrderDetailRow[]>(
     () =>
       todayLocalOrders
+        .filter((o) => o.status === "settled")
         .map((o) => ({
           id: o.id,
           orderNo: o.localOrderNo,
@@ -366,29 +416,77 @@ export function ShiftPage() {
     [todayLocalOrders],
   );
 
-  useEffect(() => {
-    async function loadLedgerToday() {
-      setLedgerTodayLoading(true);
-      setLedgerTodayError(null);
-      try {
-        const restored = await restoreLedgerSession();
-        if (!restored) {
-          setLedgerToday(null);
-          setLedgerTodayError("尚未登入 Ledger，無法讀取今日線上訂單。");
-          return;
-        }
-        const data = await getMerchantReportSummary("today");
-        setLedgerToday(data);
-      } catch (error) {
+  /**
+   * 拉今日 Ledger 數據（RPC 摘要 + 已付款單加總）。
+   * 抽成 callback 係因為「補推線上單狀態」之後要即刻重新拉一次（見 `handleBackfillOnlineCompleted`）。
+   */
+  const refreshLedgerToday = useCallback(async () => {
+    setLedgerTodayLoading(true);
+    setLedgerTodayError(null);
+    try {
+      const restored = await restoreLedgerSession();
+      if (!restored) {
         setLedgerToday(null);
-        setLedgerTodayError(error instanceof Error ? error.message : "讀取今日線上報表失敗");
-      } finally {
-        setLedgerTodayLoading(false);
+        setLedgerPaidOrders(null);
+        setLedgerTodayError("尚未登入 Ledger，無法讀取今日線上訂單。");
+        return;
       }
+      const data = await getMerchantReportSummary("today");
+      setLedgerToday(data);
+      // 線上「實收」＝已付款單逐張加總（含未完成單）。RPC `order_paid_avos` 只認「已完成」，
+      // 客人已付款但未推 completed 嘅單會漏 ⇒ 唔可以單靠 RPC 做「實收」。
+      const merchantId = loadAuthSession()?.merchantId ?? null;
+      if (merchantId) {
+        try {
+          setLedgerPaidOrders(await sumPaidLedgerOrders({ merchantId, range: "today" }));
+        } catch {
+          setLedgerPaidOrders(null);
+        }
+      } else {
+        setLedgerPaidOrders(null);
+      }
+    } catch (error) {
+      setLedgerToday(null);
+      setLedgerPaidOrders(null);
+      setLedgerTodayError(error instanceof Error ? error.message : "讀取今日線上報表失敗");
+    } finally {
+      setLedgerTodayLoading(false);
     }
-
-    void loadLedgerToday();
   }, []);
+
+  useEffect(() => {
+    void refreshLedgerToday();
+  }, [refreshLedgerToday]);
+
+  /**
+   * 補推：把「已付款但 Ledger 未 `completed`」嘅今日線上單逐張推上梯頂。
+   *
+   * 為何需要：`completeOnlinePaidOrder()`（客人已支付，完成訂單）同 `confirmPayment()` 舊寫法
+   * **完全冇推 Ledger**（2026-09-14 已修），所以之前嗰啲單會停留喺 `accepted`/`preparing`
+   * ⇒ Ledger 報表唔認嗰筆錢 ⇒ 交班「線上線下合計」少算。新單唔會再出現，舊單用呢個補推。
+   */
+  const [backfillingLedger, setBackfillingLedger] = useState(false);
+  const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
+  async function handleBackfillOnlineCompleted() {
+    const ids = backfillTargets;
+    if (backfillingLedger || ids.length === 0) return;
+    setBackfillingLedger(true);
+    setBackfillStatus(null);
+    let ok = 0;
+    const failures: string[] = [];
+    for (const id of ids) {
+      const result = await syncOnlineDineInCompletionById(id);
+      if (result.ok) ok += 1;
+      else failures.push(result.error ?? "未知錯誤");
+    }
+    setBackfillingLedger(false);
+    setBackfillStatus(
+      failures.length === 0
+        ? `已補推 ${ok} 張線上單至「已完成」。`
+        : `補推完成：成功 ${ok} 張、失敗 ${failures.length} 張（${failures[0]}）`,
+    );
+    await refreshLedgerToday();
+  }
 
   useEffect(() => {
     const acc = loadAuthSession()?.account;
@@ -472,7 +570,10 @@ export function ShiftPage() {
       online: ledgerToday
         ? {
             orderCount: ledgerToday.orderCount,
-            paidMop: ledgerToday.orderPaidMop,
+            // 🔴 「已付線上營業額」＝**已付款單加總**（＝實際收到嘅錢，含未推 completed 嘅單）。
+            // 交班單「線上線下合計（實收金額合計）」= store.paidTotal + 呢個數 ⇒ 紙本同報表一致。
+            paidMop: ledgerOnlineMop,
+            // 以下兩個係 Ledger「已完成」口徑嘅組成細項（加起來可能少過 paidMop ＝未完成單未計）。
             balancePaidMop: ledgerToday.orderBalancePaidMop,
             inStorePaidMop: ledgerToday.orderInStorePaidMop,
           }
@@ -1071,10 +1172,10 @@ export function ShiftPage() {
             <div className="mt-4">
               <div className="text-sm font-semibold text-slate-700">金額合計（線上 + 線下）</div>
               {/* 口徑說明（2026-09-14）：線下 = 本機 POS「全部支付方式」（現金／Mpay／會員餘額…），
-                  合計唔會剔走任何一種支付方式；線上 = Ledger 已完成且已付（order_paid_avos）。
-                  寫清楚係因為商家曾誤以為「合計漏咗現金」——實際上現金一向喺線下總額之內。 */}
+                  合計唔會剔走任何一種支付方式；線上 = Ledger **已付款單加總**（含未推 completed 嘅單，
+                  ＝實際收到嘅錢）。寫清楚係因為商家曾誤以為「合計漏咗現金」——實際上現金一向喺線下總額之內。 */}
               <div className="mt-1 text-xs text-slate-500">
-                線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = Ledger 已完成且已付款。
+                線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = Ledger 已付款單加總（＝實際收到嘅錢）。
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
@@ -1098,13 +1199,52 @@ export function ShiftPage() {
                 <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
                   <div className="text-sm text-orange-700">線上線下合計（實收）</div>
                   <div className="mt-2 text-2xl font-semibold text-orange-700">
-                    {formatMoney(summary.paidTotal + (ledgerToday?.orderPaidMop ?? 0))}
+                    {formatMoney(summary.paidTotal + ledgerOnlineMop)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    線下 {formatMoney(summary.paidTotal)}（已含現金）＋ 線上 {formatMoney(ledgerToday?.orderPaidMop ?? 0)}
+                    線下 {formatMoney(summary.paidTotal)}（已含現金）＋ 線上 {formatMoney(ledgerOnlineMop)}
                   </div>
+                  {ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0 ? (
+                    <div className="mt-1 text-xs text-amber-700">
+                      <div>
+                        其中 {ledgerPaidOrders?.incompleteCount} 張線上單已付款但未標記完成（
+                        {formatMoney(ledgerPaidOrders?.incompleteAmountMop ?? 0)}），已計入上數。
+                      </div>
+                      {/* 補推：把呢批單推上 Ledger `completed`（舊版結帳路徑冇推，2026-09-14 已修；
+                          舊單要靠呢粒掣補）。只推「本地已 settled」嗰啲，觸控目標 ≥ 40px。 */}
+                      {backfillTargets.length > 0 ? (
+                        <>
+                          <button
+                            className="mt-2 min-h-[40px] rounded-xl border border-amber-300 bg-amber-100 px-4 text-sm font-semibold text-amber-900 disabled:opacity-50"
+                            disabled={backfillingLedger}
+                            onClick={() => void handleBackfillOnlineCompleted()}
+                            type="button"
+                          >
+                            {backfillingLedger ? "補推中…" : `補推 ${backfillTargets.length} 張線上單狀態`}
+                          </button>
+                          {(ledgerPaidOrders?.incompleteCount ?? 0) > backfillTargets.length ? (
+                            <div className="mt-1">
+                              另 {(ledgerPaidOrders?.incompleteCount ?? 0) - backfillTargets.length} 張本地仲未完成，唔會補推。
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="mt-1">（本地仲未完成嘅單唔會補推）</div>
+                      )}
+                    </div>
+                  ) : null}
+                  {!ledgerOnlineIsPaidSum && ledgerToday ? (
+                    <div className="mt-1 text-xs text-amber-700">
+                      暫用 Ledger「已完成」口徑（未完成單未計）——已付款單加總讀取失敗。
+                    </div>
+                  ) : null}
                 </article>
               </div>
+              {backfillStatus ? (
+                <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                  {backfillStatus}
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
@@ -1179,7 +1319,13 @@ export function ShiftPage() {
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
                   <div className="text-sm text-slate-500">已付線上營業額</div>
                   <div className="mt-2 text-2xl font-semibold text-slate-900">
-                    {formatMoney(ledgerToday.orderPaidMop)}
+                    {formatMoney(ledgerOnlineMop)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    已付款單加總（＝實際收到）
+                    {ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0
+                      ? `｜其中 ${ledgerPaidOrders?.incompleteCount} 張未標記完成（${formatMoney(ledgerPaidOrders?.incompleteAmountMop ?? 0)}）`
+                      : ""}
                   </div>
                 </article>
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
@@ -1187,6 +1333,7 @@ export function ShiftPage() {
                   <div className="mt-2 text-base font-semibold text-slate-900">
                     {formatMoney(ledgerToday.orderBalancePaidMop)} / {formatMoney(ledgerToday.orderInStorePaidMop)}
                   </div>
+                  <div className="mt-1 text-xs text-slate-500">Ledger「已完成」單細項（供核對，未完成單未計）</div>
                 </article>
               </div>
             ) : null}

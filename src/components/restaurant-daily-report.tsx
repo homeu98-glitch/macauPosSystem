@@ -1876,18 +1876,26 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     const offlineCount = offline.length;
     const offlineRevenueMop = offline.reduce((s, o) => s + o.total, 0);
 
-    const ledgerCount = ledger.sel?.orderCount;
-    const ledgerRevenueMop = ledger.sel?.orderPaidMop;
-    const hasLedger = typeof ledgerCount === "number" && typeof ledgerRevenueMop === "number";
+    // 🔴 2026-09-14：線上「單數 + 金額」一律用「**已付款單**逐張加總」＝今日實際收到嘅錢。
+    // 唔再用 Ledger RPC 兩個欄位（各自有偏差）：
+    //  · `order_count` = **非取消單數**（含未完成／未付款）→ 同「金額」唔同口徑
+    //    ⇒ 客單價 = 金額 ÷ 單數 個分母偏大（今日 36 單 vs 已付 35 單）。
+    //  · `order_paid_avos` = 只認「**已完成**」→ 客人已付款但未推去 Ledger `completed`
+    //    就靜默少計（實案：本地「訂單 002」已完成、Ledger 未 completed ⇒ 少 38）。
+    // 商家口徑（明確）：「實收 = 實際收到嘅錢」⇒ 單數同金額都跟已付款單。
+    const onlineCount = onlineOrders.length;
+    const onlineRevenueMop =
+      Math.round(onlineOrders.reduce((s, o) => s + (Number(o.total ?? o.paidAmount ?? 0) || 0), 0) * 100) / 100;
+    const hasLedger = onlineFetchInfo.status === "success";
 
     if (hasLedger) {
       return {
         offlineCount,
         offlineRevenueMop,
-        onlineCount: ledgerCount,
-        onlineRevenueMop: ledgerRevenueMop,
-        totalCount: offlineCount + ledgerCount,
-        totalRevenueMop: offlineRevenueMop + ledgerRevenueMop,
+        onlineCount,
+        onlineRevenueMop,
+        totalCount: offlineCount + onlineCount,
+        totalRevenueMop: offlineRevenueMop + onlineRevenueMop,
         source: "ledger" as const,
       };
     }
@@ -1901,7 +1909,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       totalRevenueMop: agg.revenue,
       source: "pos" as const,
     };
-  }, [orders, range, ledger.sel, agg.onlineRevenue, agg.revenue]);
+  }, [orders, range, onlineOrders, onlineFetchInfo.status, agg.onlineRevenue, agg.revenue]);
 
   /**
    * 未結帳訂單統計（2026-09-07 新增）。

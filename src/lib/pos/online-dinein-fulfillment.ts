@@ -99,7 +99,21 @@ export async function syncOnlineDineInCompletion(
   order: Pick<PosOrder, "onlineOrderId" | "localOrderNo" | "tableId">,
 ): Promise<OnlineDineInProgress> {
   if (!isOnlineDineInOrder(order)) return { ok: true };
-  const ledgerOrderId = order.onlineOrderId as string;
+  return syncOnlineDineInCompletionById(order.onlineOrderId as string);
+}
+
+/**
+ * 同 {@link syncOnlineDineInCompletion} **完全同一條爬梯**，但直接以 Ledger order id 操作。
+ *
+ * 用途：**補推（backfill）** —— 手上只有 Ledger 單 id（例：由 `listMerchantOrders` 拎到嘅
+ * 「已付款但未推 `completed`」清單），冇本地 `PosOrder` 物件可以餵俾上面嗰個 wrapper。
+ *
+ * 2026-09-14 實案：`completeOnlinePaidOrder()`（客人已支付，完成訂單）舊寫法冇推 Ledger ⇒
+ * 訂單停留 `accepted`/`preparing` ⇒ Ledger 報表唔認嗰筆錢（交班少 38）。已修推送路徑，
+ * 但**當日之前嘅舊單**要靠呢個函式補推。
+ */
+export async function syncOnlineDineInCompletionById(ledgerOrderId: string): Promise<OnlineDineInProgress> {
+  if (!ledgerOrderId) return { ok: true };
 
   let completedAccepted = false;
   for (const status of DINEIN_LADDER) {

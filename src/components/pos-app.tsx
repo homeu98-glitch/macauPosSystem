@@ -158,6 +158,9 @@ import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBo
 import { formatMoney, formatMacauDateTime } from "@/lib/format";
 import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
 import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-fulfillment";
+// 🔴 2026-09-14：本地「完成／結帳」線上單之後，一定要順手推 Ledger 到 `completed`
+// （Ledger 報表 RPC 只認「已完成」；推唔到 ＝ 嗰筆錢喺 Ledger／交班「線上」度消失）。
+import { syncOnlineDineInCompletionInBackground } from "@/lib/pos/online-dinein-fulfillment";
 // 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
@@ -4144,6 +4147,16 @@ export function PosApp() {
       // 即時同步結帳狀態去 backend（唔等 30s 批量 flush）：收銀按結帳 → 客人掃碼 resume
       // 即刻見到「枱已完結」，唔會再因 backend 仲係 sent_to_kitchen 而顯示「已落單」。
       void syncNow([...queue, paymentEvent], { silent: true });
+
+      // 🔴 2026-09-14：線上單（帶 `onlineOrderId` 嘅真枱單）本地結帳後，推 Ledger 到 `completed`。
+      // 舊寫法只推 POS 雲端，Ledger 側靠「排位」時一次過推 —— 若嗰次推送失敗／冇經排位，
+      // Ledger 會停留喺 accepted/preparing，而 Ledger 報表 RPC `order_paid_avos`（只認「已完成」）
+      // 就永遠唔計嗰筆錢 ⇒ 交班「線上線下合計」同報表「營業額」齊齊少算
+      // （實案 2026-09-14 表嫂美食：本地「訂單 002」已完成但 Ledger 未 completed ⇒ 少 38）。
+      // 呢個呼叫係冪等（已完成會回 invalid transition → 讀返狀態確認），快餐 counter 單自動 no-op。
+      syncOnlineDineInCompletionInBackground(updatedOrder, (message) =>
+        setToast({ tone: "error", message: `已結帳，但會員通狀態未同步：${message}` }),
+      );
       setPayingOrderId(null);
       setActiveOrderId(null);
       setCartItems([]);
@@ -4492,6 +4505,15 @@ export function PosApp() {
     pushEvents([paymentEvent]);
     // 即時同步結帳狀態去 backend（唔等 30s 批量 flush），同上。
     void syncNow([...queue, paymentEvent], { silent: true });
+
+    // 🔴 2026-09-14 實案根因：呢條路（「客人已支付，完成訂單」）舊寫法**完全冇推 Ledger**。
+    // 於是本地 status 變 `settled`（甚至顯示「已完成」）＋ POS 雲端都更新咗，
+    // 但 Ledger 側冇人推 ⇒ 狀態停留 ⇒ Ledger 報表唔認呢筆錢 ⇒ 交班／報表少計。
+    // （表嫂美食 2026-09-14：訂單 002 = 線上已支付 MOP 38 ⇒ 交班「線上線下合計」少 38。）
+    // 冪等 + 自動 no-op（快餐 counter 單唔行堂食梯），失敗會出 error toast 唔會靜默。
+    syncOnlineDineInCompletionInBackground(updatedOrder, (message) =>
+      setToast({ tone: "error", message: `客人已支付，但會員通狀態未同步：${message}` }),
+    );
     setToast({
       tone: "success",
       message: quickPaidFlow
