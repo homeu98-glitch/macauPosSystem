@@ -25,14 +25,32 @@
 | **線上接單**（原名「線上訂單」） | **Ledger** `merchants.merchant_enabled`（RPC `merchant_set_order_enabled`） | `pos_online_order_settings.merchant_enabled`（0036，跨機 Realtime） | 會員通**線上**落唔到單；店內堂食／快餐／掃碼／kiosk **照舊** |
 | **店內營業**（本文件） | **POS DB** `pos_store_status.is_open`（0039） | 同一張表（跨機 Realtime） | 掃碼點餐（`/menu`、`/quick`）＋ kiosk（`/order`）落唔到單 |
 
-⚠️ 兩粒 pill **掣面都寫「營業中 / 已暫停」**（共用 `MerchantOpenPill` 視覺）→ 設置頁 header
-一定要靠 label 分清楚：`店內營業 · 營業中` ／ `線上接單 · 已暫停`。
-（2026-09-14 已將 header pill 同分頁由「線上訂單」改名做「**線上接單**」，就係為咗呢件事。）
+⚠️ **開關入口 = 側欄底部「商店名卡」**（2026-09-14 定案，見 §3.1）。設置頁 header 只剩
+「線上接單」一粒 pill（嗰粒同分頁已由「線上訂單」改名做「**線上接單**」）。
 
 ⚠️ `merchant-open-pill.tsx` 嘅**預設確認文案**寫死「只影響會員通（店內堂食、快餐、自助點餐
 不受影響）」—— 只適用於線上接單。店內營業用 `confirmMessage` prop 自己嗰句，否則會講大話。
 
 ---
+
+### 2.1 入口位置同顏色（2026-09-14 由設置頁 header 搬入側欄）
+
+**入口 = 側欄底部嘅「商店名卡」**（`app-sidebar.tsx`，即「表嫂美食／總部」嗰格）。
+
+| 狀態 | 外觀 | 角色行 |
+|---|---|---|
+| 營業中 | `bg-slate-800` ＋ `text-slate-200`（**完全保留現狀**） | 顯示角色（總部／店長／收銀） |
+| 已暫停 | `bg-red-600` ＋ 白字 | 讓位顯示「**已暫停**」 |
+| 未讀到（`null`） | 同「營業中」外觀但**停用** | — |
+
+- **撳商店名 = 撳開關**：營業中 → 彈二次確認；已暫停 → 即時開返；未讀到 → 停用（`title` 講明原因）。
+- 位置維持喺「同步／在線」徽章**上方**、**零額外行高**（同「工作台入口搬去設置頁」同一個
+  「側欄每行都係稀缺資源」取捨）。
+- ⚠️ 側欄「同步受阻」徽章本身都係 `bg-red-600` → **同一個紅有兩個意思**，
+  靠位置（商店名卡）同文字（已暫停／同步受阻）分辨。J 已知悉並拍板用紅。
+- 行為（二次確認文案、單向連動、失敗提示）全部喺 `src/lib/pos/use-store-open-toggle.ts`，
+  UI 只負責畫掣 → 下次再搬位唔使抄邏輯。
+- ⚠️ **只喺桌面側欄（`md:` 以上）有入口**；手機底部 nav 冇營業狀態顯示（如有需要再補）。
 
 ## 3. 單向連動（J 2026-09-14 拍板）
 
@@ -116,10 +134,11 @@ if (!authorized && storeClosed) {
 | `src/lib/pos/store-status.test.ts` | 新增 —— 11 個 `node --test`（鎖死 default true 同 `fromServer` 語意） |
 | `src/app/api/pos/store-status/route.ts` | 新增 —— GET（開放＋限流）/ POST（POS 憑證）；42P01 降級 |
 | `src/lib/pos/use-store-status.ts` | 新增 —— module store（server + Realtime + visibilitychange，禁 polling） |
-| `src/components/store-open-pill.tsx` | 新增 —— `StoreOpenHeaderToggle`（確認文案 ＋ 單向連動 ＋ 提示） |
+| `src/components/app-sidebar.tsx` | 改 —— **商店名卡變成營業狀態開關**（撳商店名 = 切換；已暫停 = `bg-red-600` ＋「已暫停」行；未讀到 = 停用） |
+| `src/lib/pos/use-store-open-toggle.ts` | 新增 —— **共用行為層**：`CONFIRM_CLOSE_STORE_MESSAGE` ＋ 二次確認 ＋ 單向連動 ＋ 提示 |
+| `src/components/device-settings.tsx` | 改 —— header **移除**「店內營業」pill（已搬側欄）；tab 改「線上接單」 |
 | `src/components/merchant-open-pill.tsx` | 改 —— 加 `confirmMessage` prop（預設文案唔可以借畀店內營業） |
 | `src/components/merchant-order-config-section.tsx` | 改 —— header pill 同 section 標題改「線上接單」 |
-| `src/components/device-settings.tsx` | 改 —— header 掛 `StoreOpenHeaderToggle`；tab 改「線上接單」 |
 | `src/lib/kiosk-order.ts` | 改 —— `KioskOrderRejectedError` 加 `reason`（4xx 帶 `myAck.reason`） |
 | `src/lib/use-kiosk-order.ts` | 改 —— `storeOpen` state ＋ 入頁讀一次 ＋ i18n ＋ catch `shop-closed` |
 | `src/lib/use-scan-order.ts` | 改 —— 轉發 `storeOpen` |
@@ -146,16 +165,18 @@ if (!authorized && storeClosed) {
 
 ## 7. 驗收
 
-1. **兩個 pill 分得清**：設置頁 header 見到 `店內營業 · 營業中` ＋ `線上接單 · 營業中`，
-   撳入分頁亦一致（同一個 module store）。
-2. **關店**：撳「店內營業」→ 確認框文案講明「掃碼／自助點餐機落唔到單 ＋ 會暫停線上接單」→
-   確認後兩粒 pill **都**變「已暫停」。
+1. **側欄一眼睇到**：營業中時商店名卡同現狀一模一樣（深灰 ＋ 角色行）；
+   撳一下 → 彈二次確認 → 確定後**變紅** ＋ 角色行顯示「已暫停」；
+   「同步／在線」徽章**唔受影響**（佢講網絡同資料同步）。
+   同一時間設置頁 header 只見到「線上接單」一粒 pill。
+2. **關店**：撳側欄商店名卡 → 確認框文案講明「掃碼／自助點餐機落唔到單 ＋ 會暫停線上接單」
+   → 確認後商店名卡變紅，設置頁「線上接單」pill 亦變「已暫停」。
 3. **掃碼**：客人手機開 `/quick?store=<storeId>` → 即刻「商家不在營業中」。
 4. **kiosk**：`/order` 同樣。
 5. **落單硬閘**：已開住菜單嘅客人撳落單 → 唔會「落單成功」，即刻轉全屏；
    `pos_orders` **冇**新 row。
 6. **收銀逃生門**：店已暫停時，收銀台**照樣**落單 / 結帳 / 補印（帶 POS 憑證唔受閘影響）。
-7. **重開**：撳返「營業中」→ 掃碼 / kiosk 即刻落得到；「線上接單」**仍然暫停** ＋ 出提示。
+7. **重開**：撳返側欄嗰格紅卡 → 掃碼 / kiosk 即刻落得到；「線上接單」**仍然暫停** ＋ 出提示。
 8. **跨機**：A 機撳關 → B 機（開住設置頁）3 秒內變「已暫停」
    （前提：Vercel 有 `NEXT_PUBLIC_POS_SUPABASE_URL` / `_ANON_KEY` 並已重新部署；
    否則 `crossTerminalSync` 會係 `on-enter`）。

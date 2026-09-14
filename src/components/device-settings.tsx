@@ -45,7 +45,6 @@ import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { MerchantOrderConfigSection, MerchantOrderHeaderToggle } from "@/components/merchant-order-config-section";
-import { StoreOpenHeaderToggle } from "@/components/store-open-pill";
 import {
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
@@ -1052,7 +1051,8 @@ export function DeviceSettings() {
             {/* 右側控件（由左至右）：「工作台」入口 ＋「店內營業」狀態 toggle
                 ＋「線上接單」狀態 toggle ＋ 返回收銀台。
                 ⚠️ 2026-09-14：兩粒狀態 pill 嘅掣面都寫「營業中 / 已暫停」，
-                一定要靠 label（店內營業 / 線上接單）分清楚 —— 詳見 store-open-pill.tsx。
+                一定要靠 label（店內營業 / 線上接單）分清楚 —— 而家「店內營業」已經
+                搬去側欄商店名卡（`app-sidebar.tsx`），header 只剩下面嗰粒「線上接單」。
                 「工作台」入口 2026-09-13 由側欄搬上嚟 —— 側欄 72px 闊唔應該擺一次性設定，
                 但逃生門要保留（揀錯工作台唔應該逼人登出再打 8 位帳號 + PIN）。
                 行為同側欄原本嗰粒一模一樣：`href="/select-workbench"` 直接跳，冇二次確認。 */}
@@ -1065,10 +1065,11 @@ export function DeviceSettings() {
                 <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
                 工作台
               </Link>
-              {/* 2026-09-14：「店內營業」（線下，擋掃碼／kiosk）放喺「線上接單」左邊。
-                  兩粒掣係**獨立開關**（唔同真源），但關「店內營業」會單向連動暫停
-                  「線上接單」—— 詳見 store-open-pill.tsx 檔頭。 */}
-              <StoreOpenHeaderToggle />
+              {/* 2026-09-14：「店內營業」（線下，擋掃碼／kiosk）**已經搬去側欄商店名卡**
+                  （`app-sidebar.tsx`：撳商店名 = 切換營業狀態、紅色 = 已暫停）。
+                  理由同「工作台入口搬走」一樣 —— 側欄每行都係稀缺資源，
+                  而商店名卡本身已經喺底部固定位置，整合入去＝零額外行高。
+                  行為邏輯（二次確認 ＋ 單向連動暫停「線上接單」）喺 `useStoreOpenToggle()`。 */}
               <MerchantOrderHeaderToggle />
               <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
                 返回收銀台

@@ -51,7 +51,8 @@ type MerchantOpenPillProps = {
    *
    * ⚠️ 預設嗰句講「**只**影響會員通（店內堂食、快餐、自助點餐不受影響）」，只適用於
    * **線上接單**。其他開關（例如新增嘅「店內營業」）一關就真係停掃碼／kiosk 落單 ——
-   * 一定要自己傳正確文案，否則會向收銀講大話（見 `store-open-pill.tsx`）。
+   * 一定要自己傳正確文案，否則會向收銀講大話（見 `use-store-open-toggle.ts`
+   * 嘅 `CONFIRM_CLOSE_STORE_MESSAGE`）。
    */
   confirmMessage?: string;
 };

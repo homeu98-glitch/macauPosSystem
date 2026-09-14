@@ -55,7 +55,12 @@
 
 ## 店內營業開關（線下，0039 · 2026-09-14）
 - 🔴 **兩個「營業中」唔可以撈埋**：`merchant_enabled`（Ledger 真源，RPC，0036 鏡像）= **線上接單**，只擋會員通線上落單；`pos_store_status.is_open`（**POS DB 真源**，0039）= **店內營業**，擋掃碼點餐（`/menu`、`/quick`）＋ kiosk（`/order`）。兩粒 pill 嘅掣面**都**寫「營業中／已暫停」→ 設置頁 header 靠 label 分（「店內營業」／「線上接單」）；`docs/125` 講嗰個「開關店」其實係前者。
-- 🔴 **`MerchantOpenPill` 預設確認文案唔可以借畀「店內營業」**：嗰句寫死「店內堂食、快餐、自助點餐**不受影響**」—— 套落店內營業就會講大話。已加 `confirmMessage` prop，新 call site 必須自己傳（`store-open-pill.tsx`）。
+- 🔴 **入口位置 = 側欄底部「商店名卡」**（`app-sidebar.tsx`，2026-09-14 由設置頁 header 搬入）：
+  撳商店名 = 切換；營業中＝`bg-slate-800`（現狀零改動）、已暫停＝`bg-red-600` ＋ 角色行讓位顯示「已暫停」。
+  ⚠️ 側欄「同步受阻」徽章都係 `bg-red-600` → **同一個紅兩個意思**，靠位置同文字分辨。
+  行為（確認文案／單向連動／提示）一律喺 `src/lib/pos/use-store-open-toggle.ts`，UI 只畫掣
+  → 下次再搬位（例如手機底部 nav）唔使抄邏輯。⚠️ 目前**只喺桌面側欄**有入口，手機底部 nav 冇。
+- 🔴 **`MerchantOpenPill` 預設確認文案唔可以借畀「店內營業」**：嗰句寫死「店內堂食、快餐、自助點餐**不受影響**」—— 套落店內營業就會講大話。已加 `confirmMessage` prop，新 call site 必須自己傳（文案 = `use-store-open-toggle.ts` 嘅 `CONFIRM_CLOSE_STORE_MESSAGE`）。
 - **單向連動**（J 拍板）：關「店內營業」→ 前端順手 `setMerchantEnabled(false)`（Ledger RPC）；切換「線上接單」**唔影響**「店內營業」；重開「店內營業」**唔會**自動開返「線上接單」（只出提示）。連動失敗（Ledger 未接通）**照關**店內營業 ＋ 提示手動撳。
 - **權威閘喺 server**：`/api/pos/sync` **2.55** 段，每 request 只查一次 `pos_store_status`（`!authorized` 時）。命中 → `ack(false, "商家不在營業中", { reason: "shop-closed" })` → 4xx `retryable:false`。⚠️ 只擋匿名：收銀台帶憑證**唔受影響**（逃生門）。`KioskOrderRejectedError` 已加 `reason`，客端靠 `shop-closed` 轉全屏（唔好叫客人「重試」）。
 - 🔴 **fail-open 兩邊都要**：客人端讀唔到（離線／表未建立 42P01）→ 當**營業中**，`fromServer:false` → `storeOpen` 保持 `null`（未知，唔阻）；server 查唔到 → **放行**。反過來當「已暫停」＝一斷網全店停業。（`DEFAULT_STORE_OPEN = true`，`store-status.test.ts` 鎖死。）

@@ -22,6 +22,7 @@ import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useSyncHealth } from "@/lib/pos/sync-acks";
 import { retryReconcileNow } from "@/lib/pos/sync-reconcile-daemon";
 import { SIDEBAR_MODULES } from "@/lib/pos/module-catalog";
+import { useStoreOpenToggle } from "@/lib/pos/use-store-open-toggle";
 
 
 
@@ -119,6 +120,39 @@ export function AppSidebar() {
 
   const roleLabel = session?.role === "admin" ? "總部" : session?.role === "manager" ? "店長" : "收銀";
 
+  /**
+   * 店內營業（線下）—— 2026-09-14 由**設置頁 header** 搬入商店名卡。
+   *
+   * ── 點解整合入商店名（而唔另開一粒掣）──────────────────────────────────
+   * 側欄得 72px 闊，每行都係稀缺資源（同「工作台入口搬去設置頁」同一個理由）。
+   * 商店名卡本身 3 行、位置固定喺底部堆最上，攞佢做開關＝**零額外行高**，
+   * 而且收銀一眼就睇到「呢間鋪而家開唔開門」。
+   *
+   * ── 顏色（2026-09-14 J 拍板）────────────────────────────────────────────
+   * - 營業中／未讀到：`bg-slate-800` ＋ 白字（**完全保留現狀**，唔加任何提示色）
+   * - 已暫停：`bg-red-600` ＋ 白字，角色行讓位顯示「**已暫停**」（56px 內容闊度
+   *   放唔落「總部 · 已暫停」，停業資訊優先）
+   *
+   * ⚠️ 側欄「同步／在線」徽章本身都會用 `bg-red-600`（同步受阻）——
+   * 兩者用同一個紅。位置（商店名卡 vs 徽章）同文字（已暫停 vs 同步受阻）係分辨依據。
+   *
+   * ── 行為 ───────────────────────────────────────────────────────────────
+   * 全部收喺 `useStoreOpenToggle()`：關店二次確認、關店單向連動暫停「線上接單」、
+   * 失敗提示。呢度只負責畫掣。
+   */
+  const storeOpen = useStoreOpenToggle(session?.merchantId ?? null);
+
+  /** 商店名卡嘅 tooltip：講清楚撳落去會發生咩事（唔可以只寫「營業中」）。 */
+  const storeToggleHint =
+    storeOpen.isOpen === false
+      ? "店內暫停營業中（掃碼點餐、自助點餐機落唔到單）—— 撳一下恢復營業"
+      : storeOpen.isOpen === true
+        ? "營業中 —— 撳一下可暫停店內營業"
+        : "未讀到營業狀態（可能係讀取失敗），請重新載入頁面";
+
+  /** 寫入失敗（紅）優先，其次係連動結果提示（琥珀）。 */
+  const storeHint = storeOpen.error ?? storeOpen.notice;
+
 
 
   return (
@@ -175,12 +209,48 @@ export function AppSidebar() {
 
           {session ? (
 
-            <div className="rounded-2xl bg-slate-800 px-2 py-2 text-center text-[11px] font-semibold text-slate-200">
+            <button
+
+              aria-label={storeToggleHint}
+
+              aria-pressed={storeOpen.isOpen === null ? undefined : storeOpen.isOpen}
+
+              className={`rounded-2xl px-2 py-2 text-center text-[11px] font-semibold transition disabled:opacity-100 ${
+
+                storeOpen.isOpen === false
+                  ? "bg-red-600 text-white hover:brightness-110"
+                  : "bg-slate-800 text-slate-200 hover:bg-slate-700"
+
+              } ${storeOpen.canToggle ? "cursor-pointer" : "cursor-default"}`}
+
+              disabled={!storeOpen.canToggle}
+
+              onClick={() => void storeOpen.toggle()}
+
+              title={storeToggleHint}
+
+              type="button"
+
+            >
 
               <div>{session.name}</div>
 
-              <div className="mt-1 text-slate-400">{roleLabel}</div>
+              <div className={`mt-1 ${storeOpen.isOpen === false ? "text-white/80" : "text-slate-400"}`}>
+                {storeOpen.isOpen === false ? "已暫停" : roleLabel}
+              </div>
 
+            </button>
+
+          ) : null}
+
+          {storeHint ? (
+
+            <div
+              className={`rounded-xl px-2 py-1.5 text-center text-[10px] font-semibold leading-snug ${
+                storeOpen.error ? "bg-red-500/20 text-red-200" : "bg-amber-500/20 text-amber-200"
+              }`}
+            >
+              {storeHint}
             </div>
 
           ) : null}

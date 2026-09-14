@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<title>側欄商店名卡整合「店內營業」— 確認稿 2026-09-14</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;
+  --slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;--slate-100:#f1f5f9;
+  --orange-500:#f97316;--emerald-600:#059669;
+  --red-600:#dc2626;--red-500:#ef4444;--red-950:#450a0a;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--indigo:#4f46e5;--amber:#fcd34d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK",sans-serif}
+
+.review{background:#0f172a;color:#e2e8f0;padding:13px 20px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:3px 0 0;font-size:12px;color:#94a3b8}
+.review .note{color:#fbbf24}
+.tabs{display:inline-flex;gap:6px;margin-top:10px}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+.stage{max-width:1180px;margin:18px auto 40px;position:relative;overflow:hidden;
+  border-radius:22px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.canvas{width:1180px;height:820px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;padding:18px 24px}
+.screenwrap.on{display:flex}
+
+.h1{font-size:15px;font-weight:600}
+.sub{font-size:12px;color:var(--muted);margin-top:3px}
+
+.cols{display:grid;grid-template-columns:348px minmax(0,1fr);gap:26px;
+  margin-top:14px;flex:1;min-height:0}
+.sbgrid{display:grid;grid-template-columns:repeat(4,72px);gap:20px;align-content:start}
+.sbcell{display:flex;flex-direction:column;gap:8px}
+.sblabel{font-size:11px;font-weight:600;line-height:1.35;color:var(--slate-600);
+  min-height:44px}
+.sblabel em{display:block;font-style:normal;font-weight:400;color:var(--muted)}
+
+.sb{height:508px;border-radius:16px;background:var(--slate-900);padding:12px 8px;
+  display:flex;flex-direction:column;overflow:hidden}
+.sb-scroll{flex:1;min-height:0;overflow-y:auto;display:grid;gap:8px;
+  align-content:start;grid-auto-rows:max-content}
+.sb-foot{margin-top:8px;border-top:1px solid var(--slate-700);padding-top:8px;
+  display:grid;gap:8px;flex:none}
+.nav{background:var(--slate-800);color:var(--slate-200);border-radius:16px;padding:12px 8px;
+  display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px;font-weight:600}
+.nav.on{background:var(--orange-500);color:#fff}
+.nav .ico{width:28px;height:28px;border-radius:999px;background:rgba(255,255,255,.1);
+  display:flex;align-items:center;justify-content:center;font-size:12px}
+.nav.more{background:transparent;color:var(--slate-400);font-size:11px;
+  padding:8px 0;justify-content:center}
+.footbtn{background:var(--slate-800);color:var(--slate-200);border-radius:16px;padding:8px;
+  text-align:center;font-size:12px;font-weight:600}
+.badge{border-radius:16px;padding:8px;text-align:center;font-size:12px;font-weight:600;
+  background:rgba(5,150,105,.9);color:#fff}
+.badge.red{background:var(--red-600);color:#fff}
+
+.store{border-radius:16px;padding:8px;text-align:center;font-size:11px;
+  font-weight:600;color:var(--slate-200);background:var(--slate-800);cursor:pointer}
+.store .srole{margin-top:4px;color:var(--slate-400)}
+.store .sstate{margin-top:4px}
+.store.closedA{background:var(--red-600);color:#fff}
+.store.closedA .sstate{color:#fff}
+.store.closedB{background:var(--red-950);color:#fee2e2;
+  box-shadow:inset 0 0 0 2px var(--red-500)}
+.store.closedB .sstate{color:#fca5a5}
+.store.hl{box-shadow:0 0 0 3px rgba(251,191,36,.85)}
+
+.zoombox{background:var(--slate-900);border-radius:16px;padding:16px;display:grid;
+  grid-template-columns:196px 196px minmax(0,1fr);gap:18px;align-items:start;
+  align-self:start}
+.zoomstage{height:170px;position:relative;overflow:hidden}
+.zoom3{position:absolute;top:0;left:0;transform:scale(2.6);transform-origin:top left;width:72px}
+.zoomhint{font-size:11px;color:var(--slate-400);margin-top:6px;line-height:1.5}
+.zcol .cap{font-size:11px;font-weight:600;color:var(--amber);margin-bottom:10px}
+.zspec{display:grid;gap:8px}
+.zspec .row{display:grid;grid-template-columns:66px minmax(0,1fr);gap:10px;align-items:baseline}
+.zspec .k{font-size:11px;font-weight:600;color:var(--amber)}
+.zspec .v{font-size:12px;color:#e2e8f0;line-height:1.55}
+.zspec code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px;color:#fde68a}
+.swatch{display:inline-block;width:11px;height:11px;border-radius:3px;
+  vertical-align:-1px;margin-right:5px}
+
+.flowrow{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr) 34px minmax(0,1fr) 34px minmax(0,1fr);
+  align-items:start;margin-top:14px}
+.arw{display:flex;align-items:center;justify-content:center;height:470px;
+  color:var(--slate-400);font-size:20px}
+.stepcap{font-size:11px;font-weight:600;color:var(--slate-600);min-height:42px;line-height:1.4}
+.steppanel{background:var(--slate-100);border-radius:14px;height:470px;padding:12px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  overflow:hidden}
+.sbmini{width:72px;border-radius:14px;background:var(--slate-900);padding:8px;
+  display:grid;gap:8px}
+
+.confirm{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;
+  box-shadow:0 8px 20px rgba(15,23,42,.18);font-size:12px;width:100%}
+.confirm .ct{font-weight:600;font-size:11.5px;margin-bottom:7px;color:var(--slate-600)}
+.confirm .cb{background:var(--slate-100);border-radius:8px;padding:8px;color:var(--slate-600);
+  white-space:pre-line;font-size:10.5px;line-height:1.6}
+.confirm .cbtns{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.confirm .cbtn{border:1px solid var(--line);background:#fff;border-radius:8px;
+  padding:4px 11px;font-size:11px;font-weight:600;color:var(--slate-600)}
+.confirm .cbtn.primary{background:var(--red-600);border-color:var(--red-600);color:#fff}
+
+.dsstack{display:grid;gap:7px;width:100%;justify-items:center}
+.pillwork{display:inline-flex;align-items:center;gap:6px;border-radius:999px;
+  background:var(--orange-500);padding:6px 12px;color:#fff;font-size:12px;font-weight:600}
+.pilllink{display:inline-flex;align-items:center;border-radius:999px;background:var(--indigo);
+  padding:6px 12px;color:#fff;font-size:12px;font-weight:600}
+.pillbtn{display:inline-flex;align-items:center;gap:6px;border-radius:999px;
+  background:var(--slate-100);padding:4px 10px;border:1px solid var(--line)}
+.pillbtn .pl{font-size:11px;font-weight:600;color:var(--slate-600)}
+.pillbtn .pv{border-radius:999px;padding:4px 12px;font-size:11px;font-weight:600;
+  background:var(--emerald-600);color:#fff}
+.pillbtn .pv.off{background:#fff;color:#b45309;box-shadow:inset 0 0 0 1px var(--amber)}
+.pillbtn.gone{opacity:.42;filter:grayscale(1)}
+.gonetag{font-size:10.5px;font-weight:600;color:var(--red-600)}
+
+.legend{margin-top:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.lg{border:1px solid var(--line);border-radius:14px;padding:11px}
+.lg .lt{font-size:12px;font-weight:600;margin-bottom:5px}
+.lg .lb{font-size:11.5px;color:var(--slate-600);line-height:1.6}
+
+.q{background:#fffbeb;border:1px solid var(--amber);border-radius:14px;
+  padding:11px 14px;margin-top:12px}
+.q .qt{font-size:12px;font-weight:600;color:#92400e;margin-bottom:5px}
+.q ol{margin:0;padding-left:18px;font-size:11.5px;color:#78350f;line-height:1.75}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <h1>側欄商店名卡 整合「店內營業」狀態 — 確認稿</h1>
+  <p>2026-09-14 · 產品畫面用真實色（Tailwind 真值）；呢個深色框係評審工具列，<span class="note">唔屬於產品介面</span></p>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="scr-compare">① 狀態對照</button>
+    <button data-tab="scr-flow">② 點擊流程</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ══════════ ① 狀態對照 ══════════ -->
+  <div class="screenwrap on" id="scr-compare">
+    <div>
+      <div class="h1">① 狀態對照 — 側欄底部（真實 72px 闊）</div>
+      <div class="sub">商店名卡由「純顯示」變成「可撳嘅掣」：撳落去＝切換店內營業。位置維持喺「在線」徽章 <b>上方</b>，高度唔變（唔另佔一行）。</div>
+    </div>
+
+    <div class="cols">
+      <div class="sbgrid">
+
+        <div class="sbcell">
+          <div class="sblabel">現況 · 營業中<em>完全保留目前樣式</em></div>
+          <div class="sb">
+            <div class="sb-scroll">
+              <div class="nav on"><span class="ico">點</span><span>點餐</span></div>
+              <div class="nav"><span class="ico">單</span><span>訂單</span></div>
+              <div class="nav"><span class="ico">會</span><span>會員</span></div>
+              <div class="nav more">… 其餘 5 個模組</div>
+            </div>
+            <div class="sb-foot">
+              <div class="store"><div>表嫂美食</div><div class="srole">總部</div></div>
+              <div class="badge">在線</div>
+              <div class="footbtn">登出</div>
+              <div class="footbtn">設置</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sbcell">
+          <div class="sblabel">方案 A · 已暫停<em>整卡紅底</em></div>
+          <div class="sb">
+            <div class="sb-scroll">
+              <div class="nav on"><span class="ico">點</span><span>點餐</span></div>
+              <div class="nav"><span class="ico">單</span><span>訂單</span></div>
+              <div class="nav"><span class="ico">會</span><span>會員</span></div>
+              <div class="nav more">… 其餘 5 個模組</div>
+            </div>
+            <div class="sb-foot">
+              <div class="store closedA"><div>表嫂美食</div><div class="sstate">已暫停</div></div>
+              <div class="badge">在線</div>
+              <div class="footbtn">登出</div>
+              <div class="footbtn">設置</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sbcell">
+          <div class="sblabel">方案 B · 已暫停<em>深紅底 ＋ 紅框</em></div>
+          <div class="sb">
+            <div class="sb-scroll">
+              <div class="nav on"><span class="ico">點</span><span>點餐</span></div>
+              <div class="nav"><span class="ico">單</span><span>訂單</span></div>
+              <div class="nav"><span class="ico">會</span><span>會員</span></div>
+              <div class="nav more">… 其餘 5 個模組</div>
+            </div>
+            <div class="sb-foot">
+              <div class="store closedB"><div>表嫂美食</div><div class="sstate">已暫停</div></div>
+              <div class="badge">在線</div>
+              <div class="footbtn">登出</div>
+              <div class="footbtn">設置</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sbcell">
+          <div class="sblabel">⚠️ 最壞情況<em>紅色已經有第二個意思</em></div>
+          <div class="sb">
+            <div class="sb-scroll">
+              <div class="nav on"><span class="ico">點</span><span>點餐</span></div>
+              <div class="nav"><span class="ico">單</span><span>訂單</span></div>
+              <div class="nav"><span class="ico">會</span><span>會員</span></div>
+              <div class="nav more">… 其餘 5 個模組</div>
+            </div>
+            <div class="sb-foot">
+              <div class="store closedA"><div>表嫂美食</div><div class="sstate">已暫停</div></div>
+              <div class="badge red">同步受阻</div>
+              <div class="footbtn">登出</div>
+              <div class="footbtn">設置</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="zoombox">
+        <div class="zcol">
+          <div class="cap">放大 2.6×　營業中</div>
+          <div class="zoomstage">
+            <div class="zoom3">
+              <div class="store"><div>表嫂美食</div><div class="srole">總部</div></div>
+            </div>
+          </div>
+          <div class="zoomhint"><span class="swatch" style="background:#1e293b"></span>deep slate 底、白字、角色行 —— <b>現狀零改動</b></div>
+        </div>
+        <div class="zcol">
+          <div class="cap">放大 2.6×　已暫停（方案 A）</div>
+          <div class="zoomstage">
+            <div class="zoom3">
+              <div class="store closedA"><div>表嫂美食</div><div class="sstate">已暫停</div></div>
+            </div>
+          </div>
+          <div class="zoomhint"><span class="swatch" style="background:#dc2626"></span>整卡紅底<br>方案 B 改用 <span class="swatch" style="background:#450a0a;box-shadow:inset 0 0 0 1px #ef4444"></span><code>bg-red-950</code> ＋ 紅框</div>
+        </div>
+        <div class="zspec">
+          <div class="row"><div class="k">撳落去</div><div class="v">營業中 → 彈二次確認（關店）；已暫停 → <b>即時開返</b>（唔阻手，同現有 pill 一致）</div></div>
+          <div class="row"><div class="k">營業中</div><div class="v"><code>bg-slate-800</code> ＋ <code>text-slate-200</code> ＋ 角色行（總部／店長／收銀）— <b>完全保留現狀</b></div></div>
+          <div class="row"><div class="k">已暫停 A</div><div class="v"><span class="swatch" style="background:#dc2626"></span><code>bg-red-600</code> ＋ 白字（最搶眼，但同「同步受阻」撞色）</div></div>
+          <div class="row"><div class="k">已暫停 B</div><div class="v"><span class="swatch" style="background:#450a0a;box-shadow:inset 0 0 0 1px #ef4444"></span><code>bg-red-950</code> ＋ <code>inset ring red-500</code>（暗紅＋紅框，兩個紅分得開）</div></div>
+          <div class="row"><div class="k">角色行</div><div class="v">停業時該行改顯示「<b>已暫停</b>」—— 56px 內容闊度放唔落「總部 · 已暫停」，停業資訊優先</div></div>
+          <div class="row"><div class="k">高度／觸控</div><div class="v">3 行 → 3 行，<b>側欄唔會加高</b>；整卡約 56×58px，遠超 40px 觸控下限</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="q">
+      <div class="qt">要你拍板（3 條）</div>
+      <ol>
+        <li><b>紅色用邊個方案？</b> A＝整卡紅底（最搶眼，但側欄「同步受阻」本身已經係同一個紅，兩個紅同時出現會唔知邊個打邊個）；B＝暗紅底＋紅框（分得開，但遠睇冇咁響）。</li>
+        <li><b>設置頁 header 嗰粒「店內營業」要唔要拆走？</b> 你講「整合」，我理解係搬去側欄、header 唔再重複（header 只留「線上接單」）。但設置頁本身就係改設定嘅地方，留住亦合理 —— 兩邊共用同一份狀態，唔會唔一致。</li>
+        <li><b>停業時要唔要保留角色（總部／收銀）？</b> 現方案係角色行讓位畀「已暫停」。要兩者都要就要加一行（側欄會高約 18px）。</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════ ② 點擊流程 ══════════ -->
+  <div class="screenwrap" id="scr-flow">
+    <div>
+      <div class="h1">② 點擊流程 — 撳商店名 ＝ 撳「店內營業」掣</div>
+      <div class="sub">行為同設置頁嗰粒完全一樣（共用同一份狀態）：關店要二次確認、開店即時生效、寫入失敗會 rollback 返灰。</div>
+    </div>
+
+    <div class="flowrow">
+      <div>
+        <div class="stepcap">① 營業中<br>（撳商店名卡本身）</div>
+        <div class="steppanel">
+          <div class="sbmini">
+            <div class="store hl"><div>表嫂美食</div><div class="srole">總部</div></div>
+            <div class="badge">在線</div>
+            <div class="footbtn">登出</div>
+            <div class="footbtn">設置</div>
+          </div>
+          <div class="zoomhint" style="color:var(--slate-600)">hover 變亮＋<code style="font-size:10.5px">cursor:pointer</code>；長按／桌面 hover 出 tooltip「撳一下可暫停店內營業」</div>
+        </div>
+      </div>
+
+      <div class="arw">→</div>
+
+      <div>
+        <div class="stepcap">② 撳落去 → 彈二次確認<br>（同現有 pill 同一段文案）</div>
+        <div class="steppanel">
+          <div class="confirm">
+            <div class="ct">系統對話框</div>
+            <div class="cb">確認暫停店內營業？
+
+客人將無法透過掃碼點餐、自助點餐機落單，同時會暫停「線上接單」（會員通）。
+收銀台仍可正常操作（堂食落單、結帳不受影響）。
+
+恢復營業時，喺同一個掣撳返「營業中」即可（「線上接單」唔會自動開返）。</div>
+            <div class="cbtns"><span class="cbtn">取消</span><span class="cbtn primary">確定</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arw">→</div>
+
+      <div>
+        <div class="stepcap">③ 已暫停<br>（商店名卡變紅）</div>
+        <div class="steppanel">
+          <div class="sbmini">
+            <div class="store closedA"><div>表嫂美食</div><div class="sstate">已暫停</div></div>
+            <div class="badge">在線</div>
+            <div class="footbtn">登出</div>
+            <div class="footbtn">設置</div>
+          </div>
+          <div class="zoomhint" style="color:var(--slate-600)">「在線」徽章<b>唔受影響</b> —— 佢講網絡／同步，同營業狀態係兩件事</div>
+        </div>
+      </div>
+
+      <div class="arw">→</div>
+
+      <div>
+        <div class="stepcap">④ 設置頁 header<br>（建議：唔再重複）</div>
+        <div class="steppanel">
+          <div class="dsstack">
+            <div class="pillwork">台 工作台</div>
+            <div class="pillbtn gone"><span class="pl">店內營業</span><span class="pv">營業中</span></div>
+            <div class="gonetag">↑ 建議移除（已搬去側欄）</div>
+            <div class="pillbtn"><span class="pl">線上接單</span><span class="pv">營業中</span></div>
+            <div class="pilllink">返回收銀台</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="lg">
+        <div class="lt">撳「取消」</div>
+        <div class="lb">值不變、商店名卡維持深灰。因為根本冇送出請求，唔會有 rollback 動作。</div>
+      </div>
+      <div class="lg">
+        <div class="lt">撳「確定」之後</div>
+        <div class="lb">商店名卡即刻轉紅（樂觀更新），跟住寫 DB；寫入失敗自動 rollback 返灰 ＋ 出紅字錯誤。</div>
+      </div>
+      <div class="lg">
+        <div class="lt">連帶動作</div>
+        <div class="lb">關店成功 → 自動暫停「線上接單」（Ledger）。若 Ledger 未接通，只出提示、唔阻止關店 —— 掃碼／kiosk 已經擋住。</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var DESIGN_W = 1180, DESIGN_H = 820;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || DESIGN_W;
+  var s = Math.min(1, Math.max(w / DESIGN_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DESIGN_H * s) + "px";
+  stage.style.overflowX = (DESIGN_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++){
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < btns.length; j++){
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+window.onresize = fit;
+
+/* 頁籤：用 el.onclick = fn 綁定（唔用 inline onclick 屬性）——
+   真瀏覽器同無瀏覽器煙霧測試都認得。即時綁，唔等 onload。 */
+(function bindTabs(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    (function(b){
+      b.onclick = function(){ showTab(b.getAttribute("data-tab")); };
+    })(btns[i]);
+  }
+})();
+
+window.onload = function(){ fit(); };
+</script>
+</body>
+</html>

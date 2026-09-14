@@ -216,7 +216,7 @@ export function useStoreStatus(storeId: string | null, enabled = true) {
    * @returns `true` = 已寫入 DB（UI 可以用嚟決定要唔要出提示）。
    *
    * ⚠️ **只改 `pos_store_status` 一欄**。同「線上接單」嘅連動（關店時順手
-   * 暫停線上接單）由 **call site**（`StoreOpenHeaderToggle`）負責 ——
+   * 暫停線上接單）由 **call site**（`use-store-open-toggle.ts` / `app-sidebar.tsx`）負責 ——
    * 呢個 hook 唔應該認識 Ledger，否則將來換連動方向要改兩處。
    */
   const setStoreOpen = useCallback(async (next: boolean): Promise<boolean> => {
