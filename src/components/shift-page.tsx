@@ -1070,6 +1070,12 @@ export function ShiftPage() {
             {/* 金額合計（線上 + 線下）第一行：對數先睇呢度，確認條數啱唔啱 */}
             <div className="mt-4">
               <div className="text-sm font-semibold text-slate-700">金額合計（線上 + 線下）</div>
+              {/* 口徑說明（2026-09-14）：線下 = 本機 POS「全部支付方式」（現金／Mpay／會員餘額…），
+                  合計唔會剔走任何一種支付方式；線上 = Ledger 已完成且已付（order_paid_avos）。
+                  寫清楚係因為商家曾誤以為「合計漏咗現金」——實際上現金一向喺線下總額之內。 */}
+              <div className="mt-1 text-xs text-slate-500">
+                線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = Ledger 已完成且已付款。
+              </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
                   <div className="text-sm text-indigo-700">應收金額合計</div>
@@ -1077,7 +1083,7 @@ export function ShiftPage() {
                     {formatMoney(summary.receivableTotal)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    線下 POS 原價合計 + 服務費 + 稅（線上 Ledger 應收暫以 paid 計）
+                    僅線下 POS：原價合計 + 服務費 + 稅（不含線上，線上見下方「會員通線上」）
                   </div>
                 </article>
                 <article className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
@@ -1085,7 +1091,9 @@ export function ShiftPage() {
                   <div className="mt-2 text-2xl font-semibold text-emerald-700">
                     {formatMoney(summary.paidTotal)}
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">線下 POS：菜品優惠後商家實際收到 = order.total</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    僅線下 POS：優惠後實際收到 = order.total（已含現金／Mpay／會員餘額）
+                  </div>
                 </article>
                 <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
                   <div className="text-sm text-orange-700">線上線下合計（實收）</div>
@@ -1093,7 +1101,7 @@ export function ShiftPage() {
                     {formatMoney(summary.paidTotal + (ledgerToday?.orderPaidMop ?? 0))}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    線下 {formatMoney(summary.paidTotal)} + 線上 {formatMoney(ledgerToday?.orderPaidMop ?? 0)}
+                    線下 {formatMoney(summary.paidTotal)}（已含現金）＋ 線上 {formatMoney(ledgerToday?.orderPaidMop ?? 0)}
                   </div>
                 </article>
               </div>
@@ -1706,7 +1714,7 @@ export function ShiftPage() {
                           <span>{formatMoney(previewData.online.inStorePaidMop)}</span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2 font-semibold">
-                          <span>線上線下合計</span>
+                          <span>線上線下合計（線下已含現金）</span>
                           <span>{formatMoney(previewData.store.paidTotal + previewData.online.paidMop)}</span>
                         </div>
                       </div>

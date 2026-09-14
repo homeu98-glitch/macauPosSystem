@@ -5,6 +5,7 @@
 
 ## 一、改動前必查
 - 🔴 建單／接單後必須 `appendPrintJobsWithSync()`；`RelayTransport.send()` 係 no-op → 淨 `savePrintJobs()` ＝零出紙＋零紅標。
+- 🔴 出紙只喺**內容事件**（新單／改單／加菜／結帳）發生 ——「轉換／採納／排位」一律**唔出紙**。同單去重判準用 `job.orderId`（＝`ledger-<id>`），唔可以靠 `mergePrintJobs`（只按 `job.id`）。docs/113「接單已出紙 → 排位唔可以再出」。
 - 🔴 「改咗代碼但行為唔變」＝① 出紙程式冇 re-build／冇擰 `versionCode`（4 份：relay／hub／android／companion）② 收銀機／desktop 載 **Vercel 部署** → 本機改完要 **deploy** 先生效。
 - 🔴 **列枱／選枱**一律用 `buildDisplayFloors(bootstrapTables, localSettings.floors)`。
 - 🔴 **Ledger 線上單**真欄名：`selected_specs`／`product_id`／`line_note`（防禦式解析）。建 `OrderItem` 唯一入口 = `mapDetailToOrderItems()`。
@@ -19,6 +20,8 @@
 - 🔴 兩個「營業中」唔准撈埋：`merchant_enabled`（Ledger，= **線上接單**，只擋會員通）vs `pos_store_status.is_open`（POS DB 0039，= **店內營業**，擋掃碼／kiosk）。權威閘 = `/api/pos/sync` §2.55（只擋匿名，收銀台逃生門）；兩邊**一律 fail-open**（讀唔到＝營業中）；客端 gating **必須**加「未落單」條件（否則蓋走扣款結果）。`MerchantOpenPill` 預設確認文案寫死「堂食唔受影響」→ 新開關要自己傳 `confirmMessage`。
 
 - 🔴 `<button>`／`<input>`／`<select>`／`<textarea>` 上面嘅 `text-*`／`font-*` **一律唔生效** —— `globals.css` 有一條**無 layer** 嘅 `font: inherit` 壓過 Tailwind utilities（實案：側欄商店名卡由 `<div>` 改 `<button>` 之後 11px→16px，改 px 完全冇反應）。要指定按鈕字級就寫喺按鈕嘅**仔元素**身上。詳見 docs/113 同名節。
+
+- 🔴 **iPad「加入主頁」（standalone）撳輸入欄位 → focus ring＋游標有到，但系統鍵盤完全唔彈**（同一部機 Safari 分頁正常）＝ iOS/iPadOS 側 bug（WebKit #279904／#235891），**唔係我哋代碼**（線上 viewport 已無 `user-scalable=no`，已部署）。**更新系統唔保證修好**（iPadOS 26.3.1、26.5 都仲有報告；26.6 更新說明冇任何鍵盤／WebKit 修正），刪主頁圖示重裝亦試過無效。⇒ iPad 上**一律唔可以依賴系統鍵盤**（登入頁要自繪鍵盤）。詳見 memory/2026-09-14.md。
 
 ## 二、環境（呢部機）
 - ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；**冇 coreutils** → 用 `node node_modules/{typescript/bin/tsc,eslint/bin/eslint.js}`＋`node --test`；檔案操作用 Read/Glob/Grep。

@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<title>設置頁 header 加返「店內營業」按鈕 — 確認稿 2026-09-14</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;
+  --slate-500:#64748b;--slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;--slate-100:#f1f5f9;
+  --orange-500:#f97316;--emerald-600:#059669;--indigo:#4f46e5;
+  --red-600:#dc2626;--amber-700:#b45309;--amber-300:#fcd34d;--amber-100:#fef3c7;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK",sans-serif}
+
+.review{background:#0f172a;color:#e2e8f0;padding:13px 20px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:3px 0 0;font-size:12px;color:#94a3b8}
+.review .note{color:#fbbf24}
+.tabs{display:inline-flex;gap:6px;margin-top:10px}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+.stage{max-width:1180px;margin:18px auto 40px;position:relative;overflow:hidden;
+  border-radius:22px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.canvas{width:1180px;height:660px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;padding:18px 24px;
+  overflow-y:auto}
+.screenwrap.on{display:flex}
+
+.h1{font-size:15px;font-weight:600}
+.sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.6}
+
+/* ── 真實設置頁 header ── */
+.hdr{background:#fff;border:1px solid var(--line);border-radius:14px;
+  padding:12px 16px 12px 88px;display:grid;
+  grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;margin-top:12px}
+.hdr .lh{min-width:0}
+.hdr .ttl{font-size:18px;font-weight:600}
+.hdr .cap2{font-size:13px;color:var(--slate-500);margin-top:3px}
+.hdr .rh{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+
+.pillwork{display:inline-flex;align-items:center;gap:8px;border-radius:999px;
+  background:var(--orange-500);padding:8px 12px;color:#fff;font-size:14px;font-weight:600}
+.pillwork .ic{width:20px;height:20px;border-radius:999px;background:rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;font-size:11px}
+.pilllink{display:inline-flex;align-items:center;border-radius:999px;background:var(--indigo);
+  padding:8px 12px;color:#fff;font-size:14px;font-weight:600}
+
+.contained{display:inline-flex;align-items:center;gap:8px;border-radius:999px;
+  background:var(--slate-100);padding:6px 12px;position:relative}
+.contained .lb{font-size:12px;font-weight:600;color:var(--slate-600)}
+.contained .pv{border-radius:999px;padding:6px 16px;font-size:12px;font-weight:600;
+  background:var(--emerald-600);color:#fff}
+.contained .pv.off{background:#fff;color:var(--amber-700);box-shadow:inset 0 0 0 1px var(--amber-300)}
+.contained .pv.closed{background:var(--red-600);color:#fff}
+.contained.new{box-shadow:0 0 0 3px rgba(251,191,36,.75)}
+.badge-new{position:absolute;top:-11px;left:12px;background:#fbbf24;color:#78350f;
+  font-size:10px;font-weight:600;border-radius:999px;padding:1px 7px;white-space:nowrap}
+
+.note{background:#fffbeb;border:1px solid var(--amber-300);border-radius:14px;
+  padding:11px 14px;margin-top:12px}
+.note .nt{font-size:12px;font-weight:600;color:#92400e;margin-bottom:5px}
+.note ul{margin:0;padding-left:18px;font-size:11.5px;color:#78350f;line-height:1.75}
+.note code{font-family:ui-monospace,Menlo,monospace;font-size:11px;
+  background:rgba(146,64,14,.1);padding:1px 5px;border-radius:4px}
+
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;
+  margin-top:12px}
+.card .ct{font-size:12.5px;font-weight:600;margin-bottom:8px}
+.card .cb{font-size:11.5px;color:var(--slate-600);line-height:1.7}
+.optrow{display:grid;grid-template-columns:88px minmax(0,1fr);gap:12px;align-items:center;
+  margin-top:8px}
+.optrow .ok{font-size:11px;font-weight:600;color:var(--slate-500)}
+.optrow .ov{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+
+.zoombox{background:var(--slate-900);border-radius:16px;padding:16px;margin-top:12px;
+  display:grid;grid-template-columns:330px minmax(0,1fr);gap:20px;align-items:start;
+  align-self:start}
+.zoomstage{height:96px;position:relative;overflow:hidden}
+.zoom2{position:absolute;top:0;left:0;transform:scale(1.9);transform-origin:top left}
+.zcap{font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:10px}
+.zspec{display:grid;gap:7px}
+.zspec .row{display:grid;grid-template-columns:70px minmax(0,1fr);gap:10px;align-items:baseline}
+.zspec .k{font-size:11px;font-weight:600;color:#fbbf24}
+.zspec .v{font-size:12px;color:#e2e8f0;line-height:1.55}
+.zspec code{font-family:ui-monospace,Menlo,monospace;font-size:11px;
+  background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px;color:#fde68a}
+.sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+
+.label{font-size:11px;font-weight:600;color:var(--slate-500);margin-top:10px}
+/* zoombox 係深色底 → 入面嘅說明文字一定要淺色，唔係會變「深灰字喺深藍底」= 睇唔到 */
+.zoombox .label{color:var(--slate-400);font-weight:400;line-height:1.5}
+.zoombox .label code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+  background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px;color:#fde68a}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <h1>設置頁 header 加返「店內營業」按鈕 — 確認稿</h1>
+  <p>2026-09-14 · 產品畫面用真實色（Tailwind 真值）；深色框係評審工具列，<span class="note">唔屬於產品介面</span></p>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="s1">① 位置</button>
+    <button data-tab="s2">② 開店／關店兩態</button>
+    <button data-tab="s3">③ 文案衝突</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ══════ ① 位置 ══════ -->
+  <div class="screenwrap on" id="s1">
+    <div>
+      <div class="h1">① 位置 — 設置頁 header 右側，「工作台」同「線上接單」之間</div>
+      <div class="sub">新 pill 插喺「線上接單」<b>左邊</b>（同你截圖一樣嘅排列：工作台 → <b>店內營業</b> → 線上接單 → 返回收銀台）。側欄商店名卡嗰個入口<b>保留</b>，兩邊共用同一份狀態。</div>
+    </div>
+
+    <div class="hdr">
+      <div class="lh">
+        <div class="ttl">設置</div>
+        <div class="cap2">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+      </div>
+      <div class="rh">
+        <span class="pillwork"><span class="ic">台</span>工作台</span>
+        <span class="contained new"><span class="badge-new">新</span><span class="lb">店內營業</span><span class="pv">營業中</span></span>
+        <span class="contained"><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+        <span class="pilllink">返回收銀台</span>
+      </div>
+    </div>
+
+    <div class="zoombox">
+      <div>
+        <div class="zcap">放大 1.9×　新 pill（開店中）</div>
+        <div class="zoomstage">
+          <div class="zoom2">
+            <span class="contained"><span class="lb">店內營業</span><span class="pv">營業中</span></span>
+          </div>
+        </div>
+        <div class="label">外層藥丸底 <code style="font-size:10.5px">bg-slate-100</code>，同隔籬「線上接單」完全對稱</div>
+      </div>
+      <div class="zspec">
+        <div class="row"><div class="k">位置</div><div class="v">「工作台」同「線上接單」之間 —— 同你截圖嗰條 bar 一樣嘅排列</div></div>
+        <div class="row"><div class="k">寬度</div><div class="v">4 粒控件合計約 574px，header 可用約 1076px → 一行放得落，唔會迫爆（窄屏仍然 <code>flex-wrap</code> 掉行，同現況一致）</div></div>
+        <div class="row"><div class="k">觸控</div><div class="v">掣面 <code>py-2</code> ＋ 外層 <code>py-1.5</code> → 實高約 40px，同「線上接單」一致</div></div>
+        <div class="row"><div class="k">同步</div><div class="v">側欄商店名卡 ＋ 呢粒 pill 共用同一個 module store → 一邊撳另一邊即時跟住變，唔會唔一致</div></div>
+        <div class="row"><div class="k">側欄</div><div class="v"><b>保留</b>（你話「多補一粒」）—— 側欄係日常一眼睇到，header 係設置時就地開關</div></div>
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="nt">⚠️ 呢個需求會引出一個文案問題（見第 ③ 頁）</div>
+      <ul>
+        <li>「線上接單」pill 嘅掣面文字<b>本身就係「營業中」</b>（Ledger <code>merchant_enabled</code>）。再加一粒「店內營業」都寫「營業中」→ <b>同一行出現兩個綠色「營業中」</b>。</li>
+        <li>呢兩粒管嘅嘢完全唔同：一粒管<b>會員通線上落單</b>，一粒管<b>掃碼點餐 ＋ 自助點餐機</b>。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══════ ② 兩態 ══════ -->
+  <div class="screenwrap" id="s2">
+    <div>
+      <div class="h1">② 開店／關店兩態 — 顏色同文字</div>
+      <div class="sub">你要求「在線時保留目前樣式、紅色代表不在營業中」：開店＝綠（同「線上接單」一致）、關店＝<b>紅</b>。</div>
+    </div>
+
+    <div class="label" style="margin-top:14px">開店中（營業中）</div>
+    <div class="hdr" style="margin-top:6px">
+      <div class="lh">
+        <div class="ttl">設置</div>
+        <div class="cap2">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+      </div>
+      <div class="rh">
+        <span class="pillwork"><span class="ic">台</span>工作台</span>
+        <span class="contained"><span class="lb">店內營業</span><span class="pv">營業中</span></span>
+        <span class="contained"><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+        <span class="pilllink">返回收銀台</span>
+      </div>
+    </div>
+
+    <div class="label">已關店（暫停營業）</div>
+    <div class="hdr" style="margin-top:6px">
+      <div class="lh">
+        <div class="ttl">設置</div>
+        <div class="cap2">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+      </div>
+      <div class="rh">
+        <span class="pillwork"><span class="ic">台</span>工作台</span>
+        <span class="contained"><span class="lb">店內營業</span><span class="pv closed">已關店</span></span>
+        <span class="contained"><span class="lb">線上接單</span><span class="pv off">已暫停</span></span>
+        <span class="pilllink">返回收銀台</span>
+      </div>
+    </div>
+
+    <div class="zoombox">
+      <div>
+        <div class="zcap">放大 1.9×　已關店（紅）</div>
+        <div class="zoomstage">
+          <div class="zoom2">
+            <span class="contained"><span class="lb">店內營業</span><span class="pv closed">已關店</span></span>
+          </div>
+        </div>
+        <div class="label">掣面 <code style="font-size:10.5px">bg-red-600</code> ＋ 白字（唔用暗紅，一眼就見到）</div>
+      </div>
+      <div class="zspec">
+        <div class="row"><div class="k">開店</div><div class="v"><span class="sw" style="background:#059669"></span><code>bg-emerald-600</code> ＋ 白字 —— 同隔籬「線上接單」同一個綠，睇落一致</div></div>
+        <div class="row"><div class="k">關店</div><div class="v"><span class="sw" style="background:#dc2626"></span><code>bg-red-600</code> ＋ 白字「<b>已關店</b>」</div></div>
+        <div class="row"><div class="k">未讀到</div><div class="v">灰底 ＋「未接通」＋ 停用（同「線上接單」現有處理一致，唔准猜）</div></div>
+        <div class="row"><div class="k">撳落去</div><div class="v">關店 → 二次確認（講明會停掃碼／kiosk ＋ 連帶暫停線上接單）；開店 → 即時生效</div></div>
+        <div class="row"><div class="k">連動</div><div class="v">關「店內營業」→ 隔籬「線上接單」自動變「已暫停」；<b>重開唔會自動開返</b>（只出提示）</div></div>
+        <div class="row"><div class="k">撳錯咩</div><div class="v">兩粒掣分開，誤撳一粒唔會影響另一粒嘅設定（除咗上面講嘅單向連動）</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════ ③ 文案衝突 ══════ -->
+  <div class="screenwrap" id="s3">
+    <div>
+      <div class="h1">③ 要你拍板 — 兩粒 pill 撞字問題</div>
+      <div class="sub">現時兩粒 pill 嘅「正常」狀態都會寫「營業中」→ 同一行兩個綠字，收銀好易撳錯（撳錯＝停業／停接單）。以下兩個寫法揀一個。</div>
+    </div>
+
+    <div class="card">
+      <div class="ct">方案 1（我建議）— 兩粒用唔同措辭，一眼分得清</div>
+      <div class="optrow">
+        <div class="ok">開店中</div>
+        <div class="ov">
+          <span class="contained"><span class="lb">店內營業</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">線上接單</span><span class="pv">接單中</span></span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok">已停</div>
+        <div class="ov">
+          <span class="contained"><span class="lb">店內營業</span><span class="pv closed">已關店</span></span>
+          <span class="contained"><span class="lb">線上接單</span><span class="pv off">已暫停</span></span>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:8px">
+        店內營業 →「<b>營業中／已關店</b>」（紅）；線上接單 →「<b>接單中／已暫停</b>」（現有琥珀）。
+        兩粒嘅「停」狀態本身顏色已經唔同（紅 vs 琥珀），再加唔同字，基本上唔會撳錯。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">方案 2 — 全部維持現有措辭（兩粒正常時都寫「營業中」）</div>
+      <div class="optrow">
+        <div class="ok">開店中</div>
+        <div class="ov">
+          <span class="contained"><span class="lb">店內營業</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok">已停</div>
+        <div class="ov">
+          <span class="contained"><span class="lb">店內營業</span><span class="pv closed">已暫停</span></span>
+          <span class="contained"><span class="lb">線上接單</span><span class="pv off">已暫停</span></span>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:8px">
+        唔改任何現有文案（改動最細），但要靠左邊嘅 label（店內營業／線上接單）先分得出 —— 撳之前一定要睇清楚標籤。
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="nt">另外 2 條想順便確認</div>
+      <ul>
+        <li><b>標籤用「店內營業」定「線下開店」？</b>現時用「店內營業」（同側欄一致）。你講「線下開店和關店」，想改就跟。</li>
+        <li><b>側欄商店名卡嗰個入口保留？</b>我按你「多補一粒」理解成<b>保留</b>（側欄＝日常一眼睇到；header＝設置時就地開關）。如果要收返側欄嗰個，講一聲。</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var DESIGN_W = 1180, DESIGN_H = 660;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || DESIGN_W;
+  var s = Math.min(1, Math.max(w / DESIGN_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DESIGN_H * s) + "px";
+  stage.style.overflowX = (DESIGN_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++){
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < btns.length; j++){
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+window.onresize = fit;
+
+(function bindTabs(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    (function(b){
+      b.onclick = function(){ showTab(b.getAttribute("data-tab")); };
+    })(btns[i]);
+  }
+})();
+
+window.onload = function(){ fit(); };
+</script>
+</body>
+</html>

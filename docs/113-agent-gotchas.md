@@ -863,6 +863,42 @@ and j.status in ('pending', 'failed')
 - 「**已認領未回報**」→ 中繼機攞咗單但冇回報（出紙／渲染失敗，APK 側）
 - 全部冇、但顯示「已發送」→ 正常已交畀通道，等雲端結果（8 秒輪詢）
 
+## 🔴🔴 線上堂食單：接單已經出紙 → 「排位」唔可以再出一張（2026-09-14 商家實案）
+
+**病症**：客人落線上堂食單（取餐碼 004、堂食、MOP 147、線上已支付）→ POS 收到後自動出 1 張
+廚房單 → 收銀按「排位」→ **又出 1 張**。同一張單兩張廚房單。
+商家口徑：「如果第一次已經出了單，那就已經足夠了，按排位不再需要出廚房單/標籤。」
+
+**根因**：兩條路徑各自出紙，而去重機制**攔唔到**。
+
+| 時機 | 入口 | 出紙 |
+|---|---|---|
+| 接單／自動補印 | `printKitchenForLedgerOrder()`、`bridgeLedgerOrderToPos()`（`ledger-pos-bridge.ts`）；自動補印＝`online-orders.tsx` `ensureKitchenPrintForAccepted()`（只認 `accepted`/`preparing` ＋ 本機冇該單 job 才跑） | 廚房單 ① |
+| 按「排位」 | `assignLedgerOrderToTable()` → `upsertLedgerLocalOrder()`，舊寫法尾段註釋寫住「補印廚房單（帶枱名）」= 無條件再出一次 | 廚房單 ② |
+
+- **點解去重攔唔到**：`print-job-merge.ts` 只按 `job.id` 去重，而 `buildPrintJobsForItems()`
+  每次都新 `uid("print")` → 兩張 id 唔同，兩張都上雲出紙。
+- 快餐採納（`adoptLedgerOrderAsQuickCounter()`）行**同一條** `upsertLedgerLocalOrder()` → 同一病。
+- 排位出嘅 `buildPrintJobs()` 同時涵蓋 `zone`（廚房單）＋ `label`（飲品標籤）→ **兩樣都重複**。
+- ⚠️ 排位掣出現條件（`online-orders.tsx` `renderOrderActions()`）**完全唔理訂單狀態**
+  （只 `!hasRequest && isOnlineDineIn(order)`）→ **已「已完成」嘅單一樣出掣**，按落去照樣再出紙；
+  而梯頂單爬梯時每級都 `invalid transition` 被跳過 ⇒ **靜默、零提示**（收銀只會見到多一張紙）。
+
+**✅ 修法（2026-09-14）**：`upsertLedgerLocalOrder()` 出紙前用 `hasPrintJobForOrder(projection.id)`
+查本機 `printJobs` 有冇同一 `ledger-<ledgerOrderId>` 嘅 job（＝「此單已出過紙」）→ 有就**唔再出**。
+本地單照 upsert、`ORDER_UPDATED` 照推、Ledger 爬梯照跑（**排位功能本身完全不變，只係唔再補紙**）。
+回傳新增 `printAlreadyDone` → 兩處 toast 分得清「已出過」同「設定唔出」
+（唔可以一律講「按打印設定未出廚房單」＝**講錯原因**）。
+
+**🔴 鐵律**：
+1. **「轉換／採納／排位」類操作一律唔出紙** —— 出紙只喺「新單 / 改單 / 加菜 / 結帳」呢類
+   **內容事件**發生。凡見「xxx 之後補印一張」都要先問：呢張係唔係同一張單嘅第二次？
+2. 「同一張單只出一次」**唔可以靠 `mergePrintJobs`**（佢只按 `job.id`）；
+   判準一定要用 `job.orderId`（＝ `ledger-<ledgerOrderId>`，接單／採納／排位三條路共用同一個 id）。
+3. 商家 2026-09-14 定案：**唔做「第一張失敗就補一張」** —— 打印中心有「列印失敗」紅標，
+   收銀可以喺點餐位置手動重打。方向係**寧少唔多**。
+4. ⚠️ 已知殘留（接受）：判準只看**本機** `printJobs` ⇒ 換另一部機排位仍可能多出一張。
+
 ## 「排位」後唔應該兩邊同時出現（2026-09-12 商家要求）
 
 - 病症：線上單排位之後，**線上訂單列表 + 店內線下訂單同時見到同一張單**，睇落好似兩張。
@@ -1593,6 +1629,57 @@ Tailwind v4 把所有 utilities 放入 `@layer utilities` ⇒ 呢條 reset **蓋
 `button,input,select,optgroup,textarea,…` 係 `@layer base < root`（Preflight，安全）；
 `button,input,select,textarea` 係 `root`（**unlayered，兇手**）；
 `.text-[8px]` 係 `@layer utilities < root`（被壓）。
+
+---
+
+## 🔴🔴 線上單「接單後零廚房單、打印中心一張 job 都冇」三個根因（2026-09-14 · 取餐碼 005 實案）
+
+**病症（J）**：取餐碼 **005**（外賣自取、已完成、餘額扣點、預約 18:15）接單後
+**冇出廚房單**，打印中心**連一張 job 都冇**（無紅標、無 error toast）。
+同店 **001 / 004 都印得出**，即通道／打印機／打印開關全部正常。
+
+### 三個根因（全部係「靜默」，缺一都唔會咁「鬼」）
+
+**(A) 補印兜底窗口太窄＋只有一頁有**
+- 舊寫法 `online-orders.tsx::ensureKitchenPrintForAccepted()` **只認 `accepted`／`preparing`**，
+  而且**只有「訂單 → 線上訂單」頁**會跑；POS 主介面嘅快捷面板
+  （`quick-online-orders-panel.tsx`，快餐條／堂食快捷操作都掛佢）**完全冇兜底**。
+- ⇒ 單係由**另一方**接（Ledger 側 `auto_accept`／Sunmi／另一部機），或 POS 當時冇開／
+  Realtime 斷線期間單由 `pending` 直跳 `ready`／`completed` ⇒ **本機永遠唔會建立 job**。
+- ⇢ 鐵律：**「呢部機有冇紙」唔可以取決於「當時開住邊一頁」**，兜底必須兩個入口共用。
+
+**(B) 自動接單（`silent`）完全唔報出紙結果 ＝ 假成功**
+- `runAccept(..., {silent:true})` 以前 0 張廚房 job 都照彈「已自動接單」；
+  `autoStartPreparing` 分支仲寫死「已接單並開始製作」。
+- 快餐模式更加差：`pos-app` 傳落 `quick-mode-orders-bar` 嘅 `onOnlineToast` 係
+  `tone: success ? success : info` ⇒ **`error` 都被降級成灰色 `info`**（等於冇提示）。
+- ⇢ 鐵律：自動流程**唔准靜默**；0 job 要有可見信號（`warning`），出紙失敗要 `error`。
+
+**(C) 打印中心「清除」係真刪 job 行 → 「已出過紙」判準會失效（重複出紙）**
+- `clearSentPrintJobs()` / `clearPrintedPrintJobs()` / `pruneSentPrintJobs()`
+  都係 `savePrintJobs(kept)` ＋ tombstone（`clearedPrintJobIds` 只存 **job id**）。
+- 所以清完紀錄之後 `hasPrintJobForOrder()`（只讀 `loadPrintJobs()`）返 false
+  ⇒ 之後撳「排位」／快餐採納會**再出一張**（同 2026-09-14 「同一張單只出一次紙」口徑相反）。
+- ⇢ 修法：新增一個 store-scope key `printedLedgerOrders`（只記 `orderId`，上限 300），
+  `hasPrintJobForOrder()` 一併查 —— 呢個帳本唔會因為「清打印紀錄」而消失。
+
+### 修法（已落 code，未 commit）
+| 檔案 | 改動 |
+|---|---|
+| `src/lib/pos/kitchen-backfill.ts`（**新**）＋ `.test.ts`（11/11 pass） | 補印窗口判定**純函式**：`accepted/preparing/ready` 一律補；`completed` **只補最近 `KITCHEN_BACKFILL_MAX_AGE_MS = 1 小時`**（冇時間戳＝當歷史單）；已出過紙／已試過／未接單狀態一律唔補 |
+| `src/lib/pos/accept-outcome.ts`（**新**） | 接單結果型別 `AcceptOutcome` ＋ `kitchenHintText()` ＋ `autoAcceptToast()`（**唯一口徑**：兩個入口共用文案，0 job 一定唔會返 null） |
+| `src/lib/ledger/ledger-pos-bridge.ts` | 新增 `ensureKitchenPrintForLedgerOrderOnce()`（**兩個入口共用**、三重去重：帳本＋session 記錄＋跨元件 in-flight）；`hasPrintJobForOrder()` 改為查 `printedLedgerOrders` 帳本；出紙成功即 `rememberPrintedLedgerOrder()` |
+| `src/lib/storage.ts` | 新 key `printedLedgerOrders` ＋ `loadPrintedLedgerOrderIds()` / `hasPrintedLedgerOrder()` / `rememberPrintedLedgerOrder()` |
+| `online-orders.tsx` / `quick-online-orders-panel.tsx` | 兜底改叫共用入口（**快餐面板第一次有兜底**）；`runAccept*` 回傳 `AcceptOutcome`；`silent` 由 caller 用 `autoAcceptToast()` 出提示；`getOrderDetail` 移入內層 try（唔再誤報「接單失敗」） |
+| `pos-app.tsx` / `quick-mode-orders-bar.tsx` | toast 唔再降級 `error`／`warning`；toast 自動消失 **2.6s → 2s**（`TOAST_AUTO_DISMISS_MS`，J 要求） |
+
+### ⚠️ 已知邊界（誠實記錄）
+- 去重全部係**本機**判準：同一店同時開兩個 POS 介面時，A 機出紙後 B 機要等下次載入
+  runtime state 才見到嗰張 job，中間有機會多印一張。要根治＝伺服器按 `order_id` 查
+  `pos_print_jobs`（未做）。
+- `completed` 窗口 1 小時：超過就唔補（收銀用打印中心手動重打）；要調整改一個常數。
+- 兜底**只出紙**，唔會代替接單路徑做快餐採納（本地 counter 單）—— 採納有收入／報表含意，
+  唔可以喺補印時順手做。
 
 
 

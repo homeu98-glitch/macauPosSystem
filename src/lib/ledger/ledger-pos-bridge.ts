@@ -8,11 +8,14 @@ import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
   cacheLedgerPosOrder,
+  hasPrintedLedgerOrder,
   loadBootstrapCache,
   loadDeviceConfig,
   loadOrders,
   loadPosLocalSettings,
+  loadPrintJobs,
   loadQueue,
+  rememberPrintedLedgerOrder,
   saveOrders,
   saveQueue,
 } from "@/lib/storage";
@@ -26,6 +29,10 @@ import {
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
+import {
+  decideKitchenBackfill,
+  type KitchenBackfillDecision,
+} from "@/lib/pos/kitchen-backfill";
 import {
   buildKitchenContent,
   buildSnapshot,
@@ -437,8 +444,89 @@ export async function printKitchenForLedgerOrder(
   // claim 唔到 → **一張紙都唔出，而且冇任何紅色失敗提示**。
   // （2026-09-11「線上訂單接單後冇出廚房單」的根因；同 2026-09-09 補打帳單印唔出同源。）
   appendPrintJobsWithSync(printJobs);
+  if (printJobs.length > 0) rememberPrintedLedgerOrder(projection.id);
 
   return printJobs;
+}
+
+/**
+ * 補印兜底：「呢部機錯過咗接單，但廚房應該已經收過紙」→ 補一張。
+ *
+ * ── 為咩要共用入口（2026-09-14 J 實案：取餐碼 005 零 job）──────────────
+ * 舊寫法係 `online-orders.tsx` 自己一個 `ensureKitchenPrintForAccepted()`：
+ *
+ *   1. 窗口太窄（只認 `accepted`／`preparing`）→ 單一跳到 `ready`／`completed`
+ *      就**永遠唔補印**（POS 冇開／Realtime 斷線／單係由另一方接）；
+ *   2. **只有「線上訂單」頁有** —— POS 主介面嘅快捷面板（`quick-online-orders-panel`）
+ *      完全冇兜底 → 同一張單「有冇紙」取決於當時開住邊一頁（docs/113 §725-727）。
+ *
+ * 兩處（線上訂單頁 / POS 主介面快捷面板）一律叫呢個函式，判定邏輯收喺
+ * `@/lib/pos/kitchen-backfill`（有 `node --test` 覆蓋）。
+ *
+ * ── 去重（三重，全部必要）────────────────────────────────────────────
+ *   1. `decideKitchenBackfill()` 查「已出過紙帳本 + 本機 job」→ 唔會重複印；
+ *   2. `kitchenBackfillAttempted`：同一個 session 每張單**只試一次**
+ *      （失敗都唔重試，否則每個 tick 都彈 toast 洗版）；
+ *   3. `kitchenBackfillInFlight`：**跨元件**（POS 主介面 + 線上訂單頁可能同時掛住）
+ *      防止兩邊同時通過判準 → 同一張單出兩張紙。
+ *
+ * ⚠️ **已知邊界（多終端）**：以上都係**本機**判準。若同一間店同時開住兩個 POS 介面
+ * （例如 iPad + 桌面版），A 機接單出紙之後，B 機要等到**下次載入 runtime state**
+ * （reload / 手動更新）才會經雲端 backfill 見到嗰張 job —— 中間呢段時間 B 機
+ * 有機會補印多一張。現階段接受（商家口徑：寧多一張，好過廚房零紙），
+ * 要根治就要喺伺服器按 `order_id` 查一次 `pos_print_jobs`（未做）。
+ */
+export type KitchenBackfillReason = KitchenBackfillDecision | "suppressed" | "error";
+
+export type KitchenBackfillResult = {
+  /** true = 真係新建立並入隊咗廚房 job。 */
+  printed: boolean;
+  reason: KitchenBackfillReason;
+  jobs: PrintJob[];
+  /** `reason === "error"` 時嘅訊息（畀 caller 決定要唔要彈 toast）。 */
+  errorMessage?: string;
+};
+
+const kitchenBackfillAttempted = new Set<string>();
+const kitchenBackfillInFlight = new Set<string>();
+
+export async function ensureKitchenPrintForLedgerOrderOnce(
+  order: LedgerOnlineOrder,
+): Promise<KitchenBackfillResult> {
+  // 先查 session 級記錄（純記憶體，唔使讀 localStorage）→ 大部分情況喺度就收工。
+  if (kitchenBackfillAttempted.has(order.id) || kitchenBackfillInFlight.has(order.id)) {
+    return { printed: false, reason: "in-flight", jobs: [] };
+  }
+
+  const orderId = `ledger-${order.id}`;
+  const decision = decideKitchenBackfill({
+    status: order.status,
+    updatedAt: order.updatedAt,
+    createdAt: order.createdAt,
+    nowMs: Date.now(),
+    hasJob: hasPrintJobForOrder(orderId),
+  });
+  if (decision !== "print") return { printed: false, reason: decision, jobs: [] };
+
+  kitchenBackfillInFlight.add(order.id);
+  try {
+    const jobs = await printKitchenForLedgerOrder(order);
+    kitchenBackfillAttempted.add(order.id);
+    // `jobs.length === 0` ＝ 打印設定熄咗（「線上訂單」或「廚房單＋標籤」兩個都熄）
+    // → 唔可以當「已補印」報成功（假成功），亦唔可以當錯誤（店主自己決定唔印）。
+    return { printed: jobs.length > 0, reason: jobs.length > 0 ? "print" : "suppressed", jobs };
+  } catch (err) {
+    // 失敗都算「試過」：冇 enabled 廚房機／Ledger 讀唔到明細等，重試只會不斷彈 toast。
+    kitchenBackfillAttempted.add(order.id);
+    return {
+      printed: false,
+      reason: "error",
+      jobs: [],
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    kitchenBackfillInFlight.delete(order.id);
+  }
 }
 
 export type BridgeLedgerOrderOptions = {
@@ -625,6 +713,8 @@ export async function assignLedgerOrderToTable(options: AssignLedgerOrderTableOp
   posOrder: PosOrder;
   printJobs: PrintJob[];
   created: boolean;
+  /** true = 同一張單已出過紙 → 今次排位刻意唔再出（見 `upsertLedgerLocalOrder`）。 */
+  printAlreadyDone: boolean;
   ledgerProgress: OnlineDineInProgress;
 }> {
   const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
@@ -667,11 +757,38 @@ export type AdoptLedgerOrderAsQuickCounterOptions = {
  */
 export async function adoptLedgerOrderAsQuickCounter(
   options: AdoptLedgerOrderAsQuickCounterOptions,
-): Promise<{ posOrder: PosOrder; printJobs: PrintJob[]; created: boolean }> {
+): Promise<{
+  posOrder: PosOrder;
+  printJobs: PrintJob[];
+  created: boolean;
+  printAlreadyDone: boolean;
+}> {
   const detail = options.detail ?? (await getOrderDetail(options.ledgerOrder.id));
   // 唔傳 tableId → resolveTableMeta 會落 counter + 自取／外賣／堂食。
   const projection = buildLedgerPosOrder(options.ledgerOrder, detail);
   return upsertLedgerLocalOrder(options.ledgerOrder, projection, "quick_counter_adopted");
+}
+
+/**
+ * 同一張單係唔係**已經出過紙**（廚房單 / 飲品標籤，任何 role 都算）。
+ *
+ * 判準 = 本機 `printJobs` 有冇 `orderId === "ledger-<ledgerOrderId>"` 嘅 job。
+ * 接單（`printKitchenForLedgerOrder`）、自動補印（`online-orders.tsx`
+ * `ensureKitchenPrintForAccepted`）、快餐採納產生嘅 job 全部都用呢個 id
+ * （＝ `buildLedgerPosOrder()` 嘅 `id`）⇒ 一條判準蓋齊所有出紙路徑。
+ *
+ * ⚠️ 本機 `printJobs` 係唯一睇得到嘅真源（雲端 `pos_print_jobs` 會 backfill 返本機），
+ * 所以「換機排位」嘅極端情況仍可能漏判 —— 接受：商家口徑係「寧願少印一張、
+ * 由收銀手動重打」，唔係「寧願多印」。
+ *
+ * 🔴 2026-09-14 補（J 實案）：**唔可以淨靠 `loadPrintJobs()`** —— 打印中心
+ * 「清除已發送／清除已成功」係**真刪** job 行（`clearSentPrintJobs()` 等），
+ * 清完之後呢個判準就會返 false → 同一張單會再出一張紙（重複出紙）。
+ * 所以要一併查獨立嘅「已出過紙」帳本（`storage.printedLedgerOrders`）。
+ */
+function hasPrintJobForOrder(orderId: string): boolean {
+  if (loadPrintJobs().some((job) => job.orderId === orderId)) return true;
+  return hasPrintedLedgerOrder(orderId);
 }
 
 /**
@@ -684,7 +801,13 @@ async function upsertLedgerLocalOrder(
   ledgerOrder: LedgerOnlineOrder,
   projection: PosOrder,
   action: string,
-): Promise<{ posOrder: PosOrder; printJobs: PrintJob[]; created: boolean }> {
+): Promise<{
+  posOrder: PosOrder;
+  printJobs: PrintJob[];
+  created: boolean;
+  /** true = 同一張單之前已出過紙，今次刻意唔再出（見函式尾部註釋）。 */
+  printAlreadyDone: boolean;
+}> {
   const paid = String(ledgerOrder.paymentStatus ?? "").toLowerCase() === "paid";
   const nowIso = new Date().toISOString();
 
@@ -709,9 +832,26 @@ async function upsertLedgerLocalOrder(
   registerLedgerProjection(localOrder);
   enqueueOrderEvent(localOrder, index >= 0, action);
 
-  // 補印廚房單（帶枱名）：唔做嘅話廚房只知有單、唔知送去邊張枱。
-  const printJobs = buildPrintJobs(localOrder);
-  appendPrintJobsWithSync(printJobs);
+  // 🔴 2026-09-14 商家口徑：**同一張單只出一次紙**。
+  //
+  // 舊寫法喺呢度無條件 `buildPrintJobs()` + `appendPrintJobsWithSync()`
+  //（註釋寫「補印廚房單（帶枱名）」）⇒ 接單已經出過一張，排位／快餐採納再出一張
+  // → **同一張單兩張廚房單**（2026-09-14 商家實案：取餐碼 004 堂食線上單）。
+  // 去重攔唔到係因為 `mergePrintJobs` 只按 `job.id` 去重，而每次 `uid("print")` 都係新 id。
+  //
+  // 排位／採納嘅職責係「把線上單轉成本地單」（枱面佔用 / 結帳 / 報表 / Ledger 爬梯），
+  // **唔係再出一次紙** —— 客人落單到出餐之間，第一次出咗就足夠。
+  //
+  // ⚠️ 刻意**唔**做「第一張失敗就補一張」：打印中心會出「列印失敗」紅標，
+  // 收銀可以喺點餐位置手動重打（商家 2026-09-14 明確指示）。
+  // ⚠️ 呢個檢查只覆蓋「同一部機」；換機排位可能仍會多出一張（接受，方向係寧少唔多）。
+  const printAlreadyDone = hasPrintJobForOrder(projection.id);
+  const printJobs = printAlreadyDone ? [] : buildPrintJobs(localOrder);
+  if (printJobs.length > 0) {
+    appendPrintJobsWithSync(printJobs);
+    // 「已出過紙」帳本：打印中心之後就算清除紀錄，排位／採納都唔會再出一張（見 storage 註釋）。
+    rememberPrintedLedgerOrder(projection.id);
+  }
 
-  return { posOrder: localOrder, printJobs, created: index < 0 };
+  return { posOrder: localOrder, printJobs, created: index < 0, printAlreadyDone };
 }

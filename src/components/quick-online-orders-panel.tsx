@@ -10,7 +10,7 @@ import {
   ScheduledPickupTimeText,
 } from "@/components/scheduled-pickup-badge";
 import { TableAssignModal, type AssignableTable } from "@/components/table-assign-modal";
-import { assignLedgerOrderToTable, adoptLedgerOrderAsQuickCounter, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
+import { assignLedgerOrderToTable, adoptLedgerOrderAsQuickCounter, ensureKitchenPrintForLedgerOrderOnce, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
 import {
   isOnlineDineIn,
   needsTableAssignment,
@@ -18,6 +18,14 @@ import {
   onlineTableAssignLabel,
   onlineTableBadge,
 } from "@/lib/pos/online-dinein-labels";
+import {
+  acceptFailed,
+  acceptOk,
+  autoAcceptToast,
+  kitchenHintText,
+  type AcceptOutcome,
+  type ToastPayload,
+} from "@/lib/pos/accept-outcome";
 import { loadOrders } from "@/lib/storage";
 import { transferredLedgerOrderIds } from "@/lib/pos-order-filters";
 import {
@@ -65,7 +73,12 @@ type QuickOnlineOrdersPanelProps = {
   currency: string;
   autoAccept: boolean;
   onAutoAcceptChange?: (next: boolean) => void;
-  onToast: (payload: { tone: "success" | "info" | "error"; message: string }) => void;
+  /**
+   * Toast 回報（由 POS 外殼 render）。
+   * ⚠️ 支援 `warning`（2026-09-14）：自動接單「冇出廚房單」一定要見到，
+   * 但要同「真係出錯」（error）分開 —— 店主刻意熄咗打印開關唔算錯誤。
+   */
+  onToast: (payload: ToastPayload) => void;
   /** 快餐模式：堂食線上單不安排桌台，出餐口取餐 */
   skipTableAssignment?: boolean;
   layout?: "stack" | "strip";
@@ -137,6 +150,15 @@ export function QuickOnlineOrdersPanel({
   const syncCursorRef = useRef<{ since: string | null; sinceId: string | null }>({ since: null, sinceId: null });
   const hasInitializedSnapshotRef = useRef(false);
   const autoAcceptProcessingRef = useRef<Set<string>>(new Set());
+  /**
+   * `onToast` 嘅 ref 版本：外層（`pos-app` / `quick-mode-orders-bar`）傳落嚟嘅係
+   * inline 箭頭函式 → identity 每次都變，唔可以直接做 effect dep（會令兜底 effect
+   * 每次 render 都重跑）。行為完全一樣，只係唔會無謂重算。
+   */
+  const onToastRef = useRef(onToast);
+  useEffect(() => {
+    onToastRef.current = onToast;
+  }, [onToast]);
 
   useEffect(() => {
     ordersRef.current = orders;
@@ -389,41 +411,58 @@ export function QuickOnlineOrdersPanel({
     async (
       order: LedgerOnlineOrder,
       options?: { silent?: boolean; autoStartPreparing?: boolean; tableId?: string; tableName?: string },
-    ): Promise<boolean> => {
+    ): Promise<AcceptOutcome> => {
       setActionLoadingKey(`${order.id}:accept`);
+      const silent = Boolean(options?.silent);
       try {
         const result = await acceptLedgerOrder(order);
         if (!result.ok) {
           if (result.code === "insufficient_balance") {
             setBalanceFallbackOrderId(order.id);
             onToast({ tone: "error", message: result.message });
-            return false;
+            return acceptFailed("insufficient_balance", result.message);
           }
           onToast({ tone: "error", message: result.message });
-          return false;
+          return acceptFailed("accept", result.message);
         }
 
-        const detail = await getOrderDetail(order.id);
         let kitchenJobCount = 0;
+        // 快餐採納時如果同一張單已經出過紙（接單 / 自動補印），
+        // `upsertLedgerLocalOrder()` 會刻意唔再出 → 提示文案要分得清
+        // 「設定冇出」同「已經出過」，唔可以一律講「按打印設定未出廚房單」。
+        let printAlreadyDone = false;
         try {
+          // ⚠️ `getOrderDetail()` 一定要喺呢個 try 入面：呢一步失敗 ＝ 「已接單但出紙
+          // 失敗」，唔可以跌落外層 catch 報「接單失敗」（單其實已經接咗，會誤導收銀）。
+          const detail = await getOrderDetail(order.id);
           if (quickCounter) {
-            // 快餐模式：採納成本地 counter 單（會一併出廚房單）。
+            // 快餐模式：採納成本地 counter 單（首次會一併出廚房單；已出過就唔會重複）。
             // 之後快餐 strip 嘅「可取餐 → 完成」即刻管得到，本地狀態亦會回寫 Ledger。
             const adopted = await adoptLedgerOrderAsQuickCounter({ ledgerOrder: order, detail });
             kitchenJobCount = adopted.printJobs.length;
+            printAlreadyDone = adopted.printAlreadyDone;
           } else {
             kitchenJobCount = (await printKitchenForLedgerOrder(order, detail)).length;
           }
         } catch (err) {
-          // 🔴 自動接單（silent）時呢個 catch 以前完全靜默 —— 出單失敗收銀零提示，
-          // 只會見到「已自動接單」＝假成功。至少要留一條 log 俾人追（2026-09-12）。
+          // 🔴 出單失敗以前喺 silent（自動接單）時完全靜默 —— 收銀零提示，
+          // 只會見到「已自動接單」＝假成功。呢度只負責留 log ＋人手接單時報錯；
+          // silent 嘅提示交由 caller（自動接單 effect）用 `autoAcceptToast()` 出。
           console.error(
             `[quick-online-orders] 廚房單建立失敗 ${order.id}：`,
             err instanceof Error ? err.message : err,
           );
-          if (!options?.silent) {
+          if (!silent) {
             onToast({ tone: "error", message: "已接單，但廚房單送出失敗，可稍後重打。" });
           }
+          // DB 已接：本地狀態照推進，唔可以因為出紙失敗而扮冇接單。
+          if (options?.autoStartPreparing) {
+            await updateOrderStatus(order.id, "preparing");
+            patchOrder(order, "preparing");
+          } else {
+            patchOrder(order, "accepted");
+          }
+          return acceptFailed("kitchen", err instanceof Error ? err.message : String(err));
         }
 
         if (options?.autoStartPreparing) {
@@ -433,11 +472,12 @@ export function QuickOnlineOrdersPanel({
           patchOrder(order, "accepted");
         }
 
-        if (!options?.silent) {
+        if (!silent) {
           // 🔴 自動接單（`autoStartPreparing`）以前寫死「已接單並開始製作」，
           // **完全忽略 `kitchenJobCount`** → 明明 0 張廚房 job 都照講成功（假成功）。
-          // 2026-09-12 修：兩個分支一律帶出「有冇真係送咗廚」。
-          const kitchenHint = kitchenJobCount > 0 ? "並已送廚" : "（按打印設定未出廚房單）";
+          // 2026-09-12 修：兩個分支一律帶出「有冇真係送咗廚」；
+          // 2026-09-14：後綴文字改由 `kitchenHintText()` 統一供應（同訂單頁同一口徑）。
+          const kitchenHint = kitchenHintText({ ok: true, kitchenJobCount, printAlreadyDone });
           onToast({
             tone: "success",
             message: options?.autoStartPreparing
@@ -445,10 +485,11 @@ export function QuickOnlineOrdersPanel({
               : `已接單${kitchenHint}：${orderCodeLabel(order)}`,
           });
         }
-        return true;
+        return acceptOk(kitchenJobCount, printAlreadyDone);
       } catch (err) {
-        onToast({ tone: "error", message: err instanceof Error ? err.message : "接單失敗" });
-        return false;
+        const message = err instanceof Error ? err.message : "接單失敗";
+        onToast({ tone: "error", message });
+        return acceptFailed("accept", message);
       } finally {
         setActionLoadingKey(null);
       }
@@ -470,16 +511,51 @@ export function QuickOnlineOrdersPanel({
     for (const order of pending) {
       autoAcceptProcessingRef.current.add(order.id);
       void runAccept(order, { silent: true, autoStartPreparing: true })
-        .then((ok) => {
-          if (ok) {
-            onToast({ tone: "success", message: `已自動接單：${orderCodeLabel(order)}` });
-          }
+        .then((outcome) => {
+          // 🔴 2026-09-14 J 要求：自動接單**唔准靜默**（實案：取餐碼 005 冇紙又冇 job，
+          // 但收銀只見到「已自動接單」）。文案同分類由 `autoAcceptToast()` 統一供應。
+          const payload = autoAcceptToast(orderCodeLabel(order), outcome);
+          if (payload) onToast(payload);
         })
         .finally(() => {
           autoAcceptProcessingRef.current.delete(order.id);
         });
     }
   }, [autoAccept, ledgerOrders, loading, onToast, runAccept, skipTableAssignment]);
+
+  /**
+   * 補印兜底（2026-09-14 新增 · J 實案 005）。
+   *
+   * 🔴 舊寫法**只有「訂單 → 線上訂單」頁**有兜底（`online-orders.tsx` 嘅
+   * `ensureKitchenPrintForAccepted`），POS 主介面嘅快捷面板（本元件，快餐條 /
+   * 堂食快捷操作都掛佢）**完全冇** ⇒ 同一張單「有冇紙」取決於當時開住邊一頁：
+   * 若果單係由另一方接（Ledger 側 `auto_accept` / Sunmi / 另一部機），
+   * 而收銀當時喺 POS 主介面 → 本機永遠唔會建立廚房 job（零紙、零紅燈、零提示）。
+   *
+   * 判定／去重／跨元件互斥全部收喺 `ensureKitchenPrintForLedgerOrderOnce()`
+   * （同訂單頁共用同一份，唔會兩邊各出一張紙）；函式內部有 session 級
+   * 「已試過」記錄，所以呢個 effect 每次 `ledgerOrders` 變都跑都係 idempotent。
+   */
+  useEffect(() => {
+    if (loading) return;
+    for (const order of ledgerOrders) {
+      void ensureKitchenPrintForLedgerOrderOnce(order).then((result) => {
+        if (result.printed) {
+          onToastRef.current({ tone: "success", message: `已補印廚房單：${orderCodeLabel(order)}` });
+          return;
+        }
+        if (result.reason === "error") {
+          onToastRef.current({
+            tone: "error",
+            message: `廚房單補印失敗：${orderCodeLabel(order)}（${result.errorMessage ?? "未知原因"}）`,
+          });
+        }
+      });
+    }
+    // ⚠️ 刻意**唔**將 `onToast` 放入 deps：`pos-app` 傳落嚟係 inline 箭頭函式
+    // （每次 render identity 都變）→ 放入去會令呢個 effect 每次 render 都重跑。
+    // 用 ref 保持最新實作，效果一樣但唔會無謂重算。
+  }, [ledgerOrders, loading]);
 
   const runAction = useCallback(
     async (order: LedgerOnlineOrder, action: OnlineOrderAction) => {

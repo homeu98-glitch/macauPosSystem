@@ -8,6 +8,7 @@ import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { useSelfOrderAutoAccept } from "@/components/self-order-auto-accept-toggle";
 import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
+import type { ToastPayload } from "@/lib/pos/accept-outcome";
 import { loadAuthSession } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 
@@ -15,7 +16,11 @@ type QuickModeOrdersBarProps = {
   currency: string;
   autoAcceptOnline: boolean;
   onAutoAcceptOnlineChange: (next: boolean) => void;
-  onOnlineToast: (payload: { tone: "success" | "info" | "error"; message: string }) => void;
+  /**
+   * 線上單 toast（`warning` 由 2026-09-14 加入：自動接單「未出廚房單」要見到。
+   * ⚠️ 外面 `pos-app` 唔可以再把它降級成 info，見該處註釋）。
+   */
+  onOnlineToast: (payload: ToastPayload) => void;
   preparingOrders: PosOrder[];
   waitingOrders: PosOrder[];
   completionLabel: (order: PosOrder) => string;

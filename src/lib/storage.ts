@@ -126,6 +126,19 @@ const STORE_SUFFIX = {
    * `isSaleCountable()` 見到幽靈單 → 日結多數。同 `retail-products` 同級待遇。
    */
   retailHolds: "retail-holds",
+  /**
+   * 線上單「已經出過廚房單／標籤單」嘅**獨立帳本**（2026-09-14 · J 實案 004/005）。
+   *
+   * 為咩唔可以淨靠 `print-jobs` 判「出過紙未」：打印中心「清除已發送 / 清除已成功 /
+   * 清除已失敗」係**真刪**（`clearSentPrintJobs()` 等：`savePrintJobs(kept)` + tombstone），
+   * 所以張 job 一旦被清走，`loadPrintJobs()` 就再搵唔到 →
+   * 「同一張單只出一次紙」嘅判準（`ledger-pos-bridge.hasPrintJobForOrder()`）失效
+   * → 之後撳「排位」／快餐採納會**再出一張**（重複出紙，商家 2026-09-14 明確唔要）。
+   *
+   * 呢度只記 `orderId`（＝`ledger-<uuid>`），有上限、唔會因為清打印紀錄而消失，
+   * 亦唔會參與收入／報表計算。
+   */
+  printedLedgerOrders: "printed-ledger-orders",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -867,6 +880,37 @@ export function addClearedPrintJobIds(ids: string[]) {
   if (ids.length === 0) return;
   const next = Array.from(new Set([...loadClearedPrintJobIds(), ...ids]));
   saveClearedPrintJobIds(next);
+}
+
+/**
+ * 「已經出過紙」帳本上限。超過就由**最舊**開始掉（純防 localStorage 無限累積；
+ * 300 張 ≈ 一日以上嘅線上單，足夠覆蓋「同一張單唔可以重複出紙」嘅實際窗口）。
+ */
+const PRINTED_LEDGER_ORDERS_MAX = 300;
+
+/**
+ * 本機已知「已經為呢張線上單出過廚房單／標籤單」嘅 `orderId` 清單
+ * （＝ `ledger-<ledgerOrderId>`，見 `buildLedgerPosOrder()` 嘅 `id`）。
+ *
+ * 🔴 呢個係「同一張單只出一次紙」嘅**第二重**判準：打印中心清除紀錄係真刪 job 行，
+ * 淨靠 `loadPrintJobs()` 會漏判 → 重複出紙（見 `STORE_SUFFIX.printedLedgerOrders` 註釋）。
+ */
+export function loadPrintedLedgerOrderIds(): string[] {
+  const rows = readStoreJson(STORE_SUFFIX.printedLedgerOrders, [] as string[]);
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row): row is string => typeof row === "string" && row.length > 0);
+}
+
+export function hasPrintedLedgerOrder(orderId: string): boolean {
+  if (!orderId) return false;
+  return loadPrintedLedgerOrderIds().includes(orderId);
+}
+
+export function rememberPrintedLedgerOrder(orderId: string): void {
+  if (!orderId || typeof window === "undefined") return;
+  const rows = loadPrintedLedgerOrderIds();
+  if (rows.includes(orderId)) return;
+  writeStoreJson(STORE_SUFFIX.printedLedgerOrders, [...rows, orderId].slice(-PRINTED_LEDGER_ORDERS_MAX));
 }
 
 /**

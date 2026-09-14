@@ -179,6 +179,15 @@ const printedAddonSignatures = new Map<string, Set<string>>();
  */
 const NOTICE_FOCUS_MS = 2400;
 
+/**
+ * Toast 自動消失時間（2026-09-14 J 要求：**2 秒**後自己走）。
+ *
+ * 收銀台係觸控高頻操作，提示唔應該長期蓋住操作區（以前 2.6 秒）。
+ * ⚠️ 若日後要顯示長文案，唔好直接調大呢個值（會令所有提示一齊變慢），
+ * 改為縮短該處文案 —— 提示係「一睇就知」，唔係閱讀材料。
+ */
+const TOAST_AUTO_DISMISS_MS = 2000;
+
 type Toast = {
   tone: "info" | "success" | "warning" | "error";
   message: string;
@@ -912,7 +921,7 @@ export function PosApp() {
   useEffect(() => {
     if (!toast) return;
 
-    const timer = window.setTimeout(() => setToast(null), 2600);
+    const timer = window.setTimeout(() => setToast(null), TOAST_AUTO_DISMISS_MS);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -4704,14 +4713,17 @@ export function PosApp() {
                         onAutoAcceptChange={(next) => void setAutoAcceptOnlineOrders(next)}
                         onToast={(payload) =>
                           setToast({
-                            // ⚠️ 唔可以把 `error` 降級成 `info`（2026-09-12 修）：
-                            // 線上單出單／排位失敗係要即刻見到嘅事，降級會令人以為冇事。
+                            // ⚠️ 唔可以把 `error`／`warning` 降級成 `info`（2026-09-12 修 error、
+                            // 2026-09-14 修 warning）：線上單出單／排位失敗、以及「自動接單但
+                            // 未出廚房單」都係要即刻見到嘅事，降級會令人以為冇事。
                             tone:
                               payload.tone === "success"
                                 ? "success"
                                 : payload.tone === "error"
                                   ? "error"
-                                  : "info",
+                                  : payload.tone === "warning"
+                                    ? "warning"
+                                    : "info",
                             message: payload.message,
                           })
                         }
@@ -5520,7 +5532,20 @@ export function PosApp() {
             onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
             onMarkReady={(orderId) => updateQuickFulfillment(orderId)}
             onOnlineToast={(payload) =>
-              setToast({ tone: payload.tone === "success" ? "success" : "info", message: payload.message })
+              // ⚠️ 快餐模式以前一律 `success ? success : info` —— 會把「出紙失敗」（error）
+              // 同「自動接單但未出廚房單」（warning）都降級成灰色 info，等於冇提示
+              // （2026-09-14 J 實案：取餐碼 005 冇紙又冇 job，收銀完全唔知）。
+              setToast({
+                tone:
+                  payload.tone === "success"
+                    ? "success"
+                    : payload.tone === "error"
+                      ? "error"
+                      : payload.tone === "warning"
+                        ? "warning"
+                        : "info",
+                message: payload.message,
+              })
             }
             onCheckout={(orderId) => setPayingOrderId(orderId)}
             onConfirmSelfOrder={(order) => {
