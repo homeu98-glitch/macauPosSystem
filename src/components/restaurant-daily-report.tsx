@@ -240,20 +240,27 @@ interface Agg {
   /** 外賣 / 快餐時長：下單 → 送廚 → 出餐 → 完成 → 整體 */
   quickServing: QuickServingBreakdown;
   /**
-   * 應收金額合計（**只計線下 POS 單**，即無 `onlineOrderId`）：菜品未優惠前的原價金額
-   * （= Σ item.price × quantity + serviceCharge + tax）；item.price = 落單時嘅 base price。
+   * 應收金額合計 —— **唯一真源 = 訂單明細每一行嘅「應收」加總**：
+   * ① 本店雲端單（`pos_orders`，**包括帶 `onlineOrderId` 嘅線上投影單**）逐張
+   *    `Σ item.price × quantity + serviceCharge + tax`；
+   * ② 未入 POS DB 嘅 Ledger 純線上單逐張 `subtotalBeforeDiscount`（缺就用 paid）。
    *
-   * 🔴 2026-09-14：線上（Ledger）金額**唔喺呢度累加**。KPI 卡一律用 RPC `orderPaidMop`
-   * （Ledger 定義：**已完成**且 `payment_status=paid`），同「營業額」／交班「線上線下合計」同源。
-   * 舊實作將「未入 POS DB 嘅 Ledger 線上單」逐張 `onlineOrder.total` 加總，會把
-   * **已付款但未完成**嘅單當收入（實案：同日 報表 3,022 vs 交班 2,984，差 38）。
+   * 🔴 2026-09-14（商家口徑「實收＝實際收到嘅錢」，已用截圖核實）：**唔可以**改用 Ledger RPC
+   * `order_paid_avos`（定義係「**已完成**且已付款」）—— 客人已付款但未推 `completed` 嘅單會靜默少計，
+   * 令「應收／實收金額合計」細過訂單明細加總（實案：2,984 vs 3,022，差 38；嗰筆錢係真嘅）。
+   * 呢兩個欄位必須同 `orderDetails` **同源同批**，否則三張表（KPI／明細／支付方式分項）夾唔到數。
    */
+  receivableTotal: number;
+  /** 實收金額合計（同上一批單，逐張 `order.total`／Ledger `paidAmount`）＝ 實際收到嘅錢。 */
+  paidTotal: number;
+  /** 同上但**只計線下 POS 單**（`!onlineOrderId`）—— 供 KPI 副標題拆「線下 / 線上」。 */
   offlineReceivableTotal: number;
+  /** Ledger 純線上單（未入 POS DB）嘅實收小計／張數 —— 供拆「線上」部分。 */
+  ledgerOnlyPaidTotal: number;
+  ledgerOnlyCount: number;
   /**
-   * 支付方式分項：key = 支付方式名（POS 用 `order.paymentMethod`）。
-   * **只計線下 POS 單**；線上單唔入此表（線上金額交由 Ledger RPC 嘅
-   * `order_paid_avos`（其中已包含 `balance` / `in_store` 兩個組成）呈現）。
-   * value = { receivable, paid, count }。
+   * 支付方式分項：POS 用 `order.paymentMethod`、Ledger 用 `paymentModeLabel`（餘額扣點／到店付款…）。
+   * **與訂單明細同一批單、同一口徑** ⇒ Σ 各 bucket = `paidTotal` = 明細加總。
    */
   paymentBreakdown: PaymentBreakdown;
   /**
@@ -461,9 +468,13 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
   let onlineRevenue = 0;
   let offlineRevenue = 0;
   let totalSoldQty = 0;
-  // 只累加「線下 POS 單」（無 onlineOrderId）嘅錢；線上金額一律由 RPC `orderPaidMop` 提供
-  // （見 Agg.offlineReceivableTotal 註釋），否則會同 Ledger 雙計 / 把未完成嘅已付單當收入。
+  // 🔴 金額一律「逐張單加總」＝實際收到嘅錢（同 `orderDetails` / `paymentBreakdown` 同源）。
+  // 唔可以改用 Ledger RPC（`order_paid_avos` 只認「已完成」，會令 KPI 細過明細加總）。
+  let receivableTotal = 0;
+  let paidTotal = 0;
   let offlineReceivableTotal = 0;
+  let ledgerOnlyPaidTotal = 0;
+  let ledgerOnlyCount = 0;
 
   const dishMap = new Map<string, DishRow>();
   const tableMap = new Map<string, TableRow>();
@@ -486,17 +497,18 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     const itemsGross = o.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
     const orderReceivable =
       itemsGross + (o.serviceChargeAmount ?? 0) + (o.taxAmount ?? 0);
-    // 🔴 2026-09-14：只計線下單（`!onlineOrderId`）。帶 onlineOrderId 嘅單屬線上渠道，
-    // 金額由 Ledger RPC 提供；呢度照計會同 Ledger 雙計（該單同時存在 pos_orders 同 Ledger）。
-    if (!isOnline) {
-      offlineReceivableTotal += orderReceivable;
-      const method = o.paymentMethod ?? "未記錄";
-      const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
-      bucket.receivable += orderReceivable;
-      bucket.paid += o.total;
-      bucket.count += 1;
-      paymentBreakdown[method] = bucket;
-    }
+    // 🔴 全部本店單都要入帳（包括帶 `onlineOrderId` 嘅線上投影單，例如掃碼／排位／快餐採納單）：
+    // 佢哋係喺店內真金白銀收過嘅錢，只係同步來源係 Ledger。Ledger 側同一張單唔會喺下面
+    // 「純線上單」迴圈重複計（`posOnlineIds` 已去重）。
+    receivableTotal += orderReceivable;
+    paidTotal += o.total;
+    if (!isOnline) offlineReceivableTotal += orderReceivable;
+    const method = o.paymentMethod ?? "未記錄";
+    const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
+    bucket.receivable += orderReceivable;
+    bucket.paid += o.total;
+    bucket.count += 1;
+    paymentBreakdown[method] = bucket;
 
     // 訂單明細（逐筆）：同支付方式分項同一口徑
     orderDetails.push(posOrderToDetailRow(o, orderReceivable));
@@ -536,11 +548,9 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
   // 以「線上」渠道併入菜品銷售排行。聚合 key 同 POS 快照一致（menuItemId|名稱），
   // 名稱用 Ledger 明細快照，唔強制對應當前餐牌。
   for (const { order: onlineOrder, items } of onlineWithItems ?? []) {
-    // Ledger 純線上單：**只入菜品明細 + 訂單明細**（供菜品排行／逐筆核對）。
-    // 🔴 2026-09-14：金額（應收／實收／支付方式分項）一律唔喺呢度入帳。線上收入唯一真源 =
-    // RPC `order_paid_avos`（**已完成**且 `payment_status=paid`，且已包含 balance／in_store 兩個組成桶）。
-    // 舊實作逐張加總 `onlineOrder.total` → 連「已付款但未完成」嘅單都當收入
-    // （實案：同日 報表「應收／實收金額合計」3,022 vs 交班「線上線下合計」2,984，差 38）。
+    // Ledger 純線上單（**未入 POS DB**，`posOnlineIds` 已去重）：逐張入帳，
+    // 令 KPI／訂單明細／支付方式分項三張表同源同批（＝實際收到嘅錢）。
+    // ⚠️ 唔可以用 RPC `order_paid_avos` 代替：嗰個只認「已完成」，已付款未完成嘅單會消失（差 38 實案）。
     const orderPaid = Number(onlineOrder.total ?? onlineOrder.paidAmount ?? 0);
     const orderReceivable = Number(
       onlineOrder.subtotalBeforeDiscount ?? onlineOrder.total + (onlineOrder.discountAmount ?? 0),
@@ -549,6 +559,15 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     const safeReceivable = Number.isFinite(orderReceivable) && orderReceivable > 0 ? orderReceivable : orderPaid;
     // 支付方式：Ledger 用 paymentModeLabel 翻譯 paymentMode（balance → 餘額扣點、in_store → 到店付款）
     const method = paymentModeLabel(onlineOrder.paymentMode) || "線上單";
+    receivableTotal += safeReceivable;
+    paidTotal += orderPaid;
+    ledgerOnlyPaidTotal += orderPaid;
+    ledgerOnlyCount += 1;
+    const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
+    bucket.receivable += safeReceivable;
+    bucket.paid += orderPaid;
+    bucket.count += 1;
+    paymentBreakdown[method] = bucket;
 
     // 訂單明細（逐筆）：Ledger 純線上單冇餐台號 → 用履約方式標籤；收銀員 = 下單客人
     orderDetails.push({
@@ -663,7 +682,11 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     serving,
     dineInServing,
     quickServing,
+    receivableTotal,
+    paidTotal,
     offlineReceivableTotal,
+    ledgerOnlyPaidTotal,
+    ledgerOnlyCount,
     paymentBreakdown,
     // 結賬時間倒序（最新單喺最上）；缺時間戳嘅排尾
     orderDetails: orderDetails.sort((a, b) => {
@@ -1876,40 +1899,29 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     const offlineCount = offline.length;
     const offlineRevenueMop = offline.reduce((s, o) => s + o.total, 0);
 
-    // 🔴 2026-09-14：線上「單數 + 金額」一律用「**已付款單**逐張加總」＝今日實際收到嘅錢。
-    // 唔再用 Ledger RPC 兩個欄位（各自有偏差）：
-    //  · `order_count` = **非取消單數**（含未完成／未付款）→ 同「金額」唔同口徑
-    //    ⇒ 客單價 = 金額 ÷ 單數 個分母偏大（今日 36 單 vs 已付 35 單）。
-    //  · `order_paid_avos` = 只認「**已完成**」→ 客人已付款但未推去 Ledger `completed`
-    //    就靜默少計（實案：本地「訂單 002」已完成、Ledger 未 completed ⇒ 少 38）。
-    // 商家口徑（明確）：「實收 = 實際收到嘅錢」⇒ 單數同金額都跟已付款單。
-    const onlineCount = onlineOrders.length;
+    // 🔴 2026-09-14（商家口徑「實收＝實際收到嘅錢」，已用截圖核實）：線上部分**必須**同
+    // `aggregate()` 同一批單推導，唔可以另開來源。舊寫法用 Ledger RPC
+    // （`order_count` = 非取消單數含未完成；`order_paid_avos` = 只認「已完成」）
+    // ⇒「營業額／訂單數」同「應收／實收金額合計」（＝訂單明細加總）各自表述，
+    //   出現 2,984 vs 3,022 差 38（嗰 38 係真收到嘅錢，被 Ledger 口徑食咗）。
+    // 而家：
+    //   · POS 側線上單（帶 onlineOrderId：掃碼／排位／採納）＝ agg.revenue − 線下 revenue
+    //   · Ledger 純線上單（未入 POS DB）＝ agg.ledgerOnlyPaidTotal
+    //   ⇒ 線下 ＋ 線上 ＝ agg.paidTotal ＝ 訂單明細加總。
+    const onlineCount = inRange.length - offlineCount + agg.ledgerOnlyCount;
     const onlineRevenueMop =
-      Math.round(onlineOrders.reduce((s, o) => s + (Number(o.total ?? o.paidAmount ?? 0) || 0), 0) * 100) / 100;
-    const hasLedger = onlineFetchInfo.status === "success";
+      Math.round((agg.revenue - offlineRevenueMop + agg.ledgerOnlyPaidTotal) * 100) / 100;
 
-    if (hasLedger) {
-      return {
-        offlineCount,
-        offlineRevenueMop,
-        onlineCount,
-        onlineRevenueMop,
-        totalCount: offlineCount + onlineCount,
-        totalRevenueMop: offlineRevenueMop + onlineRevenueMop,
-        source: "ledger" as const,
-      };
-    }
-    // Ledger 連不上：退回 POS DB 整體（包含帶 onlineOrderId 的線上單）。
     return {
       offlineCount,
       offlineRevenueMop,
-      onlineCount: inRange.length - offlineCount,
-      onlineRevenueMop: agg.onlineRevenue,
-      totalCount: inRange.length,
-      totalRevenueMop: agg.revenue,
-      source: "pos" as const,
+      onlineCount,
+      onlineRevenueMop,
+      totalCount: offlineCount + onlineCount,
+      totalRevenueMop: Math.round((offlineRevenueMop + onlineRevenueMop) * 100) / 100,
+      source: "ledger" as const,
     };
-  }, [orders, range, onlineOrders, onlineFetchInfo.status, agg.onlineRevenue, agg.revenue]);
+  }, [orders, range, agg.revenue, agg.ledgerOnlyPaidTotal, agg.ledgerOnlyCount]);
 
   /**
    * 未結帳訂單統計（2026-09-07 新增）。
@@ -2227,25 +2239,21 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
                     subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
                   />
-                  {/* 🔴 2026-09-14：兩張卡嘅「線上」一律用 Ledger RPC `orderPaidMop`
-                      （已完成且已付款；已包含 balance／in_store 組成），同「營業額」同源。
-                      舊寫法用「逐張 Ledger 單 total 加總」→ 會多計已付款但未完成嘅單（差 38），
-                      亦會同 Ledger 雙計（POS DB 內帶 onlineOrderId 嘅單）。 */}
+                  {/* 🔴 2026-09-14：三張表（KPI／訂單明細／支付方式分項）**必須同源同批** ——
+                      一律 = 逐張單加總（線下 ＋ 線上投影單 ＋ Ledger 純線上單）。
+                      唔可以用 Ledger RPC `order_paid_avos`（只認「已完成」）：已付款未完成嘅單會消失
+                      （實案：KPI 2,984 vs 訂單明細 3,022，差 38 —— 嗰 38 係真收到嘅錢）。 */}
                   <Kpi
                     label="應收金額合計"
-                    value={
-                      <Money
-                        amount={agg.offlineReceivableTotal + onlineOfflineSplit.onlineRevenueMop}
-                      />
-                    }
+                    value={<Money amount={agg.receivableTotal} />}
                     delta={null}
-                    subtitle={`線下原價合計 + 服務費 + 稅 ${formatMoney(agg.offlineReceivableTotal)} · 線上以已付計 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    subtitle={`原價合計 + 服務費 + 稅（＝訂單明細加總）· 線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
                   />
                   <Kpi
                     label="實收金額合計"
-                    value={<Money amount={onlineOfflineSplit.totalRevenueMop} />}
+                    value={<Money amount={agg.paidTotal} />}
                     delta={null}
-                    subtitle={`線下 order.total ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上已付 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    subtitle={`優惠後實際收到（＝訂單明細加總）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
                   />
                   <Kpi
                     label="訂單數"

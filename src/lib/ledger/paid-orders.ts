@@ -37,6 +37,11 @@ export interface PaidLedgerOrdersTotal {
    * 用途：UI「補推狀態」按鈕（`syncOnlineDineInCompletionById()`）。
    */
   incompleteIds: string[];
+  /**
+   * 逐張已付款線上單嘅 id + 金額 —— 供呼叫端同**本地/POS 側**嘅線上投影單做聯集去重
+   * （同一張單本地已有收款記錄時，唔可以兩邊各計一次）。
+   */
+  orders: { id: string; amountMop: number }[];
 }
 
 /** `incompleteIds` 上限（防一次補推打爆 RPC；一日嘅量遠低於此）。 */
@@ -71,6 +76,7 @@ export async function sumPaidLedgerOrders(params: {
   let incompleteCount = 0;
   let incompleteAmountMop = 0;
   const incompleteIds: string[] = [];
+  const paidOrders: { id: string; amountMop: number }[] = [];
 
   // RPC `list_merchant_orders` 按 `updatedAt` DESC 排序，用 (since, sinceId) 由新到舊翻頁。
   let cursorSince: string | null = period.start;
@@ -103,6 +109,7 @@ export async function sumPaidLedgerOrders(params: {
       const safePaid = Number.isFinite(paid) ? paid : 0;
       amountMop += safePaid;
       count += 1;
+      paidOrders.push({ id: order.id, amountMop: round2(safePaid) });
 
       if (String(order.status ?? "").toLowerCase() !== "completed") {
         incompleteCount += 1;
@@ -123,5 +130,6 @@ export async function sumPaidLedgerOrders(params: {
     incompleteCount,
     incompleteAmountMop: round2(incompleteAmountMop),
     incompleteIds,
+    orders: paidOrders,
   };
 }

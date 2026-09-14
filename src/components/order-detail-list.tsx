@@ -44,6 +44,12 @@ export interface OrderDetailRow {
   settledAt: string;
   /** 折扣 / 免單 / 抹零備註（可多個，例如一個單品折扣 + 一個抹零）。空陣列 = 冇任何調整。 */
   notes?: OrderDetailNote[];
+  /**
+   * 是否線上單（帶 `onlineOrderId`）—— 2026-09-14 加。
+   * 交班明細要同時列出「線上交單嘅本地投影」（掃碼／排位／快餐採納），
+   * 呢個 flag 令佢哋同線下單一眼分得開（顯示「線上」chip）。
+   */
+  online?: boolean;
 }
 
 const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
@@ -103,7 +109,14 @@ export function OrderDetailList({
           return (
             <tr key={row.id} className="border-t border-slate-100 even:bg-slate-50/60">
               <td className={TD_CELL}>
-                <div className="truncate text-sm font-semibold text-slate-900">{row.orderNo ?? "線上單"}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold text-slate-900">{row.orderNo ?? "線上單"}</span>
+                  {row.online ? (
+                    <span className="shrink-0 whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                      線上
+                    </span>
+                  ) : null}
+                </div>
                 {/* 取餐碼：原本係「狀態」欄，2026-09-11 併入呢度第二行（線下單冇 → 唔顯示） */}
                 {row.pickupCode ? (
                   <div className="mt-1">

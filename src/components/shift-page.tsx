@@ -365,7 +365,41 @@ export function ShiftPage() {
    * 攞唔到（未登入／網絡問題）→ 退回 RPC `orderPaidMop`（Ledger「已完成」口徑，
    * 會靜默少計未完成單）→ 所以 UI 必須標示係「已完成口徑」，唔可以靜默。
    */
-  const ledgerOnlineMop = ledgerPaidOrders?.amountMop ?? ledgerToday?.orderPaidMop ?? 0;
+  /**
+   * 本地／POS 側「帶 `onlineOrderId` 且已結帳」嘅單（＝線上交單嘅本地投影：掃碼／排位／快餐採納）。
+   * 呢啲單**本地有真實收款記錄**，金額一定要計入線上實收。
+   */
+  const onlineLocalOrders = useMemo(
+    () => orders.filter((o) => !!o.onlineOrderId && o.status === "settled"),
+    [orders],
+  );
+  const onlineLocalMop = useMemo(
+    () => Math.round(onlineLocalOrders.reduce((s, o) => s + (o.total || 0), 0) * 100) / 100,
+    [onlineLocalOrders],
+  );
+
+  /** Ledger 已付款單之中，本地冇對應投影單嘅嗰批（＝從未入 POS DB 嘅線上單）＋ 張數。 */
+  const ledgerOnlyOnline = useMemo(() => {
+    const localIds = new Set(onlineLocalOrders.map((o) => o.onlineOrderId as string));
+    const rest = (ledgerPaidOrders?.orders ?? []).filter((o) => !localIds.has(o.id));
+    return {
+      count: rest.length,
+      amountMop: Math.round(rest.reduce((s, o) => s + o.amountMop, 0) * 100) / 100,
+    };
+  }, [onlineLocalOrders, ledgerPaidOrders]);
+
+  /**
+   * 線上「實收」＝ **本地線上投影單 ∪ Ledger 已付款單**（按 Ledger order id 去重，本地為準）。
+   *
+   * 🔴 2026-09-14（商家口徑「實收＝實際收到嘅錢」）：
+   * - 只數 Ledger → 會漏「本地已收錢但 Ledger 未同步（未 `completed`／未付款）」嗰筆
+   *   （實案：訂單 002 = MOP 38，本地顯示已完成、Ledger 側冇 ⇒ 交班少 38）；
+   * - 只數本地 → 會漏從未入 POS DB 嘅線上單（kiosk／線上點餐）；
+   * ⇒ 兩邊聯集、按 id 去重，同報表「逐張單加總」同一口徑。
+   */
+  const ledgerOnlineMop = Math.round((onlineLocalMop + ledgerOnlyOnline.amountMop) * 100) / 100;
+  const ledgerOnlineCount = onlineLocalOrders.length + ledgerOnlyOnline.count;
+  /** `false` = Ledger 清單讀唔到（只計到本地線上單），UI 要標示。 */
   const ledgerOnlineIsPaidSum = ledgerPaidOrders !== null;
 
   /**
@@ -384,14 +418,49 @@ export function ShiftPage() {
     return (ledgerPaidOrders?.incompleteIds ?? []).filter((id) => settledOnlineIds.has(id));
   }, [ledgerPaidOrders, orders]);
 
-  // 訂單明細（逐筆）：同 summary（支付方式分項）同一批今日已結帳訂單，按結賬時間倒序。
+  /**
+   * 明細用：今日**所有**已結帳本地單 —— **包括帶 `onlineOrderId` 嘅線上投影單**
+   * （掃碼／排位／快餐採納：本地有真實收款記錄），並標「線上」chip 分辨。
+   *
+   * 🔴 2026-09-14 商家要求：舊版明細只列 `!onlineOrderId`（`isLocalPosOrder`），
+   * 令 002 呢類線上交單喺交班明細**完全消失**（金額卻計入帳）→ 對數對唔到張單。
+   * 退款單照樣唔列（口徑同上面「退款」統計一致）。
+   */
+  const detailOrders = useMemo(
+    () =>
+      orders.filter((o) => orderMatchesReportRange(o, "today") && o.status === "settled"),
+    [orders],
+  );
+
+  /** 明細兩個小計（令明細 ↔ 支付方式分項／線上實收 一眼對得上）。 */
+  const detailSplit = useMemo(() => {
+    let offlineCount = 0;
+    let offlineMop = 0;
+    let onlineCount = 0;
+    let onlineMop = 0;
+    for (const o of detailOrders) {
+      if (o.onlineOrderId) {
+        onlineCount += 1;
+        onlineMop += o.total || 0;
+      } else {
+        offlineCount += 1;
+        offlineMop += o.total || 0;
+      }
+    }
+    return {
+      offlineCount,
+      offlineMop: Math.round(offlineMop * 100) / 100,
+      onlineCount,
+      onlineMop: Math.round(onlineMop * 100) / 100,
+    };
+  }, [detailOrders]);
+
+  // 訂單明細（逐筆）：同支付方式分項／線上實收同一批單，按結賬時間倒序。
   // 🔴 2026-09-14：退款單（`partially_refunded` / `refunded`）**唔再列出** —— 商家口徑
   // 「退款了就不應該顯示」。若照列全額，「實收」欄會同上方摘要（已剔除退款）自相矛盾。
-  // 退款張數／金額仍然喺「今日摘要」同交班單嘅「退款」一行顯示，唔會失蹤。
   const orderDetailRows = useMemo<OrderDetailRow[]>(
     () =>
-      todayLocalOrders
-        .filter((o) => o.status === "settled")
+      detailOrders
         .map((o) => ({
           id: o.id,
           orderNo: o.localOrderNo,
@@ -407,13 +476,15 @@ export function ShiftPage() {
           // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
           // 同報表明細、訂單紀錄用同一套，確保三處完全一致。
           notes: buildOrderDetailNotes(o),
+          // 線上投影單（帶 onlineOrderId）顯示「線上」chip，同線下單一眼分得開。
+          online: !!o.onlineOrderId,
         }))
         .sort((a, b) => {
           const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
           const tb = b.settledAt ? Date.parse(b.settledAt) : 0;
           return tb - ta;
         }),
-    [todayLocalOrders],
+    [detailOrders],
   );
 
   /**
@@ -1175,7 +1246,7 @@ export function ShiftPage() {
                   合計唔會剔走任何一種支付方式；線上 = Ledger **已付款單加總**（含未推 completed 嘅單，
                   ＝實際收到嘅錢）。寫清楚係因為商家曾誤以為「合計漏咗現金」——實際上現金一向喺線下總額之內。 */}
               <div className="mt-1 text-xs text-slate-500">
-                線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = Ledger 已付款單加總（＝實際收到嘅錢）。
+                線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = 本地線上投影單 ∪ Ledger 已付款單（按單去重，＝實際收到嘅錢）。
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
@@ -1233,9 +1304,9 @@ export function ShiftPage() {
                       )}
                     </div>
                   ) : null}
-                  {!ledgerOnlineIsPaidSum && ledgerToday ? (
+                  {!ledgerOnlineIsPaidSum ? (
                     <div className="mt-1 text-xs text-amber-700">
-                      暫用 Ledger「已完成」口徑（未完成單未計）——已付款單加總讀取失敗。
+                      Ledger 已付款單讀取失敗 → 暫時只計本地線上投影單（MOP {formatMoney(onlineLocalMop)}）。
                     </div>
                   ) : null}
                 </article>
@@ -1297,7 +1368,11 @@ export function ShiftPage() {
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm font-semibold text-slate-900">訂單明細（今日已結帳）</div>
-              <div className="mt-1 text-xs text-slate-500">同支付方式分項同一批訂單，按結賬時間倒序。</div>
+              <div className="mt-1 text-xs text-slate-500">
+                線下 {detailSplit.offlineCount} 張 {formatMoney(detailSplit.offlineMop)}（＝上方「店內支付方式拆分（線下 POS）」合計）
+                ｜「線上」標記 {detailSplit.onlineCount} 張 {formatMoney(detailSplit.onlineMop)}（線上交單嘅本地投影，＝上方線上實收嘅本地部分）
+                ｜按結賬時間倒序；退款單唔列出。
+              </div>
               <div className="mt-3 max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
                 <OrderDetailList rows={orderDetailRows} emptyText="今天暫無已結帳訂單。" />
               </div>
@@ -1322,7 +1397,7 @@ export function ShiftPage() {
                     {formatMoney(ledgerOnlineMop)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    已付款單加總（＝實際收到）
+                    線上 {ledgerOnlineCount} 張（本地投影 {formatMoney(onlineLocalMop)} ＋ Ledger 純線上 {formatMoney(ledgerOnlyOnline.amountMop)}）＝ 實際收到
                     {ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0
                       ? `｜其中 ${ledgerPaidOrders?.incompleteCount} 張未標記完成（${formatMoney(ledgerPaidOrders?.incompleteAmountMop ?? 0)}）`
                       : ""}
