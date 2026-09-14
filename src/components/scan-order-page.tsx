@@ -42,6 +42,8 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
     hydrated,
     menuLoading,
     menuUnavailable,
+    /** 店內營業狀態（2026-09-14）：`false` → 全屏「商家不在營業中」；`null` = 未讀到 → 唔阻。 */
+    storeOpen,
     bootstrap,
     displayStoreName,
     language,
@@ -249,6 +251,34 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
         <div className="mb-4 text-6xl">🧾</div>
         <h1 className="mb-2 text-xl font-bold text-stone-900">{t("menuUnavailableTitle")}</h1>
         <p className="max-w-sm text-sm text-stone-500">{t("menuUnavailableBody")}</p>
+      </main>
+    );
+  }
+
+  // ── 商家暫停營業（2026-09-14，migration 0039）──
+  //
+  // 位置刻意喺「餐牌未開放」之後、「成功頁 / 本枱明細」之前，並加埋「未落單」條件：
+  //   - **未落單**（冇快餐取餐單、冇本枱單）→ 全屏停單，唔好呃客人揀完一輪先俾 server 拒
+  //   - **已落單 / 已有本枱單** → 照畀佢睇：取餐號、本枱明細，尤其係**扣款結果**
+  //     （S9 扣款未確認時「重試」係唯一入口，蓋走就等於嗰筆扣款永遠冇人知）
+  //
+  // ⚠️ 只認 `false`；`null`（未讀到）＝未知 → 唔阻（權威硬閘喺 server `/api/pos/sync`）。
+  if (storeOpen === false && !quickPickupOrder && !activeTableOrder) {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+        <div className="mb-4 text-6xl">🚪</div>
+        <h1 className="mb-2 text-xl font-bold text-stone-900">{t("storeClosedTitle")}</h1>
+        <p className="mb-6 max-w-sm text-sm text-stone-500">{t("storeClosedBody")}</p>
+        <button
+          className="w-full max-w-xs rounded-xl bg-white py-3 text-base font-semibold text-stone-700 ring-2 ring-stone-200"
+          onClick={() => {
+            // reload 會重新讀一次營業狀態（店開返之後客人唔使再掃一次碼）
+            if (typeof window !== "undefined") window.location.reload();
+          }}
+          type="button"
+        >
+          {t("retryPlace")}
+        </button>
       </main>
     );
   }

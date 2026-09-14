@@ -35,6 +35,11 @@ export function useScanOrder() {
     hydrated: core.hydrated,
     menuLoading: core.menuLoading,
     menuUnavailable: core.menuUnavailable,
+    /**
+     * 店內營業狀態（2026-09-14，migration 0039）：
+     * `false` → 全屏「商家不在營業中」；`null` = 未讀到 → **唔阻**（由 server 硬閘決定）。
+     */
+    storeOpen: core.storeOpen,
     bootstrap: core.bootstrap,
     displayStoreName: core.displayStoreName,
     language: core.language,

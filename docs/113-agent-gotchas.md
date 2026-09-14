@@ -53,6 +53,16 @@
 - **CSV**：`orders-hub.tsx` 線上單匯出多一欄「預約時間」（非預約單留空，方便 Excel 篩）。
 - ⚠️ 未驗證：RPC `list_merchant_orders` 首屏回應欄位由 Ledger 側控制。若回應冇 `scheduled_pickup_at`，列表首屏會冇預約時間（要等 Realtime update 才補上）。查法：`use-ledger-orders-realtime.ts` 已有 `[ledger→pos] Realtime orders 表列欄位` 診斷 log，開一次收銀台 console 即知。
 
+## 店內營業開關（線下，0039 · 2026-09-14）
+- 🔴 **兩個「營業中」唔可以撈埋**：`merchant_enabled`（Ledger 真源，RPC，0036 鏡像）= **線上接單**，只擋會員通線上落單；`pos_store_status.is_open`（**POS DB 真源**，0039）= **店內營業**，擋掃碼點餐（`/menu`、`/quick`）＋ kiosk（`/order`）。兩粒 pill 嘅掣面**都**寫「營業中／已暫停」→ 設置頁 header 靠 label 分（「店內營業」／「線上接單」）；`docs/125` 講嗰個「開關店」其實係前者。
+- 🔴 **`MerchantOpenPill` 預設確認文案唔可以借畀「店內營業」**：嗰句寫死「店內堂食、快餐、自助點餐**不受影響**」—— 套落店內營業就會講大話。已加 `confirmMessage` prop，新 call site 必須自己傳（`store-open-pill.tsx`）。
+- **單向連動**（J 拍板）：關「店內營業」→ 前端順手 `setMerchantEnabled(false)`（Ledger RPC）；切換「線上接單」**唔影響**「店內營業」；重開「店內營業」**唔會**自動開返「線上接單」（只出提示）。連動失敗（Ledger 未接通）**照關**店內營業 ＋ 提示手動撳。
+- **權威閘喺 server**：`/api/pos/sync` **2.55** 段，每 request 只查一次 `pos_store_status`（`!authorized` 時）。命中 → `ack(false, "商家不在營業中", { reason: "shop-closed" })` → 4xx `retryable:false`。⚠️ 只擋匿名：收銀台帶憑證**唔受影響**（逃生門）。`KioskOrderRejectedError` 已加 `reason`，客端靠 `shop-closed` 轉全屏（唔好叫客人「重試」）。
+- 🔴 **fail-open 兩邊都要**：客人端讀唔到（離線／表未建立 42P01）→ 當**營業中**，`fromServer:false` → `storeOpen` 保持 `null`（未知，唔阻）；server 查唔到 → **放行**。反過來當「已暫停」＝一斷網全店停業。（`DEFAULT_STORE_OPEN = true`，`store-status.test.ts` 鎖死。）
+- **客端 UI 唔可以蓋走成功頁**：gating 條件要加「未落單」（`!submittedOrder` / `!quickPickupOrder && !activeTableOrder`）—— 否則客人落單後店員一關店，**扣款結果／取餐號**就被蓋走（S9「重試」係唯一入口）。
+- ⚠️ **需求 4（用「開工」狀態擋單）刻意未做**（2026-09-14 J 拍板「唔查開工」）：`pos_shifts` 上「交班後未開工」同「從來冇開工」一樣係 `active = null`，分唔清就會誤傷未用開班制度嘅店。要加返：喺 2.55 段多查一次 `pos_shifts` 即可，`storeOpen` 通道唔使改。
+- ⚠️ migration 0039 未跑：GET 回 `fallback:true` + 營業中（唔會 500）；POST 回 **503** 講明寫唔到（唔可以靜靜當成功 —— 收銀以為停咗業、實際照收單）。
+
 ## 掃碼點餐授權 + Kiosk 離線
 - repo **無 `middleware.ts`** → **分通道**：有 POS device token / admin token 放行全部事件；**匿名只准** `ORDER_CREATED`/`ORDER_UPDATED` 且 `source ∈ {scan,kiosk}`。QR 已公開 `store=<merchantId>`，驗證 ≠ 授權。
 - 憑證 = HMAC-SHA256 無狀態（`pos/pos-device-token.ts`），**TTL 12h**；密鑰 `POS_DEVICE_TOKEN_SECRET` → `ADMIN_SESSION_SECRET` → `SUPABASE_SERVICE_ROLE_KEY`；**fail-closed**，`POS_REQUIRE_DEVICE_AUTH=0` 係應急回滾。

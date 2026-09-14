@@ -27,7 +27,8 @@ type MerchantOpenPillProps = {
   onChange: (next: boolean) => void;
   /**
    * 掣面左邊嘅細字標籤。預設「接單」（訂單頁／快餐標題列上下文已經好清楚）；
-   * 設置頁 header 嗰粒要寫明「線上訂單」（隔籬就係「返回收銀台」，唔寫清楚會唔知係邊個掣）。
+   * 設置頁 header 有**兩粒**（「店內營業」＋「線上接單」），兩粒嘅掣面都寫
+   * 「營業中／已暫停」—— 一定要靠呢個 label 分清楚，唔寫／寫一樣就一定撳錯。
    */
   label?: string;
   /** 讀取中 / 儲存中：掣停用，並喺 label 後面加細字提示。 */
@@ -45,6 +46,14 @@ type MerchantOpenPillProps = {
   variant?: "plain" | "contained";
   /** `sm`（11px）/ `md`（12px，標題列）。 */
   size?: "sm" | "md";
+  /**
+   * 關閉前嘅二次確認文案。
+   *
+   * ⚠️ 預設嗰句講「**只**影響會員通（店內堂食、快餐、自助點餐不受影響）」，只適用於
+   * **線上接單**。其他開關（例如新增嘅「店內營業」）一關就真係停掃碼／kiosk 落單 ——
+   * 一定要自己傳正確文案，否則會向收銀講大話（見 `store-open-pill.tsx`）。
+   */
+  confirmMessage?: string;
 };
 
 /** 關店確認文案 —— 一定要講清楚「只影響會員通」，否則收銀會以為連堂食都停。 */
@@ -62,6 +71,7 @@ export function MerchantOpenPill({
   unknownHint = "未讀到接單狀態",
   variant = "plain",
   size = "md",
+  confirmMessage = CONFIRM_CLOSE_MESSAGE,
 }: MerchantOpenPillProps) {
   const contained = variant === "contained";
   const sm = size === "sm";
@@ -103,7 +113,7 @@ export function MerchantOpenPill({
           if (!interactive) return;
           if (enabled) {
             // 關店：誤觸等於停業 → 一定要問清楚
-            if (typeof window !== "undefined" && !window.confirm(CONFIRM_CLOSE_MESSAGE)) return;
+            if (typeof window !== "undefined" && !window.confirm(confirmMessage)) return;
             onChange(false);
             return;
           }

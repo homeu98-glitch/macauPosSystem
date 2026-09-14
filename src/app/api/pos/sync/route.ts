@@ -357,6 +357,37 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, syncedCount: 0, receivedAt: new Date().toISOString() });
   }
 
+  // ── 2.55) 店內營業閘（2026-09-14，migration 0039）：匿名落單時服務端把關 ──
+  //
+  // 客人掃碼 / kiosk 落單係**匿名**（冇 POS 憑證），店員把「店內營業」撳成暫停之後，
+  // 客人端手上嗰個餐牌頁完全唔會知（除非佢自己 reload）—— 呢度就係**權威閘**。
+  //
+  // 口徑（同售罄校驗一致）：
+  //   - 只擋**匿名**（`!authorized`）。收銀台帶憑證落單 / 結帳**唔受影響** ——
+  //     店員要照樣做嘢（逃生門：客人已坐低、要補單之類）。
+  //   - 查唔到（migration 未跑 42P01 / 網絡失敗）→ **放行**（fail-open）。
+  //     反過來當「全部停業」就會一斷網全店客人落唔到單。
+  //   - 未設定過 row → 營業中（default true，見 0039）。
+  //
+  // ⚠️ 呢個查詢每個 request **只做一次**（唔好逐個 event 打 DB），
+  //    同下面 `soldoutSet` 同一個 pattern。
+  let storeClosed = false;
+  // ⚠️ 用 `!authorized` 而唔係 `anonymousOrderEvents`：後者喺下面 2.6 段先宣告，
+  //    而匿名請求本身就只准 ORDER_CREATED / ORDER_UPDATED（上面已擋其他類型）→ 兩者等價。
+  if (!authorized) {
+    const { data: statusRow, error: statusErr } = await supabase
+      .from("pos_store_status")
+      .select("is_open")
+      .eq("store_id", storeId)
+      .maybeSingle();
+    if (statusErr) {
+      // 表未建立（42P01）會行呢度 → 放行。唔可以當「已暫停」。
+      console.warn("[pos/sync] 營業狀態查詢失敗，本次放行:", statusErr.message);
+    } else if (statusRow && statusRow.is_open === false) {
+      storeClosed = true;
+    }
+  }
+
   // ── 2.6) 售罄校驗（2026-09-10 審查 P1-2）：匿名落單時服務端把關 ──
   // 客人端只靠 Realtime 增量，掃碼嗰刻已售罄嘅菜照樣落得到單。呢度喺 server 端
   // 對「匿名 + 有 order 事件」嘅請求預取本店售罄集合，命中即拒（收銀端有憑證，唔受影響）。
@@ -368,7 +399,7 @@ export async function POST(request: Request) {
         return t === "ORDER_CREATED" || t === "ORDER_UPDATED";
       })
     : [];
-  if (anonymousOrderEvents.length > 0) {
+  if (anonymousOrderEvents.length > 0 && !storeClosed) {
     const { data: soldoutRows, error: soldoutErr } = await supabase
       .from("pos_soldout")
       .select("menu_item_id")
@@ -598,6 +629,18 @@ export async function POST(request: Request) {
           console.warn(`[pos/sync] 拒收匿名訂單 ${orderId}（source=${orderSource}）`);
           rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 未經授權`);
           ack(false, "未經授權：匿名通道唔接受此訂單來源", { reason: "forbidden" });
+          continue;
+        }
+
+        // ── 店內營業閘（2026-09-14，migration 0039）──
+        // 店已暫停營業 → 客人掃碼 / kiosk 一律落唔到單（加單都唔准：店都落咗閘）。
+        // ⚠️ `!authorized` 把關：收銀台（帶 POS 憑證）唔受影響 —— 店員照樣要落單 / 結帳。
+        // `reason: "shop-closed"` 係客端 UI 嘅分流依據（轉全屏「商家不在營業中」，
+        // 唔好叫客人「重試」—— 重試一萬次都唔會成功）。
+        if (!authorized && storeClosed) {
+          console.warn(`[pos/sync] 拒收店已暫停營業嘅訂單 ${orderId}（source=${orderSource}）`);
+          rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 商家不在營業中`);
+          ack(false, "商家不在營業中", { reason: "shop-closed" });
           continue;
         }
 

@@ -45,6 +45,7 @@ import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { MerchantOrderConfigSection, MerchantOrderHeaderToggle } from "@/components/merchant-order-config-section";
+import { StoreOpenHeaderToggle } from "@/components/store-open-pill";
 import {
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
@@ -1045,10 +1046,13 @@ export function DeviceSettings() {
             <div className="min-w-0">
               <div className="text-lg font-semibold text-slate-900">設置</div>
               <div className="mt-1 text-sm text-slate-500">
-                打印機、菜品打印、樓層桌台、支付方式、線上訂單都集中在這裡。
+                打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。
               </div>
             </div>
-            {/* 右側控件：「工作台」入口（最左）＋「線上訂單」狀態 toggle ＋ 返回收銀台。
+            {/* 右側控件（由左至右）：「工作台」入口 ＋「店內營業」狀態 toggle
+                ＋「線上接單」狀態 toggle ＋ 返回收銀台。
+                ⚠️ 2026-09-14：兩粒狀態 pill 嘅掣面都寫「營業中 / 已暫停」，
+                一定要靠 label（店內營業 / 線上接單）分清楚 —— 詳見 store-open-pill.tsx。
                 「工作台」入口 2026-09-13 由側欄搬上嚟 —— 側欄 72px 闊唔應該擺一次性設定，
                 但逃生門要保留（揀錯工作台唔應該逼人登出再打 8 位帳號 + PIN）。
                 行為同側欄原本嗰粒一模一樣：`href="/select-workbench"` 直接跳，冇二次確認。 */}
@@ -1061,6 +1065,10 @@ export function DeviceSettings() {
                 <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
                 工作台
               </Link>
+              {/* 2026-09-14：「店內營業」（線下，擋掃碼／kiosk）放喺「線上接單」左邊。
+                  兩粒掣係**獨立開關**（唔同真源），但關「店內營業」會單向連動暫停
+                  「線上接單」—— 詳見 store-open-pill.tsx 檔頭。 */}
+              <StoreOpenHeaderToggle />
               <MerchantOrderHeaderToggle />
               <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
                 返回收銀台
@@ -1077,7 +1085,7 @@ export function DeviceSettings() {
             ["menu", "菜單"],
             ["tables", "樓層與桌台"],
             ["payments", "支付方式"],
-            ["online-orders", "線上訂單"],
+            ["online-orders", "線上接單"],
             ["notes", "備註"],
             ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],

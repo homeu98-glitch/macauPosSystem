@@ -1,0 +1,163 @@
+# 131. 「店內營業」開關（線下營業狀態）
+
+> **狀態**：2026-09-14 已實作（POS 側）。**migration 0039 要喺 Supabase SQL Editor 手動跑**。
+> **相關**：`docs/125`（線上接單／開關店 —— **係另一個開關**）、`docs/115`（掃碼模式）、
+> `docs/113`（坑總表 §店內營業開關）、`docs/87`（kiosk）。
+
+---
+
+## 1. 需求（J 2026-09-14）
+
+設置頁「線上接單」開關隔籬加一個「**營業中**」開關，控制**線下**營業狀態：
+
+1. 獨立於「線上接單」，切換「營業中」唔會影響線上接單設定……
+2. ……但**關店要連帶暫停線上接單**（J 拍板：單向連動）。
+3. 暫停營業 → 掃碼點餐同 kiosk 均無法落單，顯示「商家不在營業中」。
+4. 不影響現有「開工」／「交班」功能。
+5. ~~交班後未重新開工 → 同樣無法落單~~ → **J 拍板唔做**（見 §6）。
+
+---
+
+## 2. 🔴 兩個「營業中」一定要分清
+
+| 開關 | 真源 | 鏡像／儲存 | 關咗之後 |
+|---|---|---|---|
+| **線上接單**（原名「線上訂單」） | **Ledger** `merchants.merchant_enabled`（RPC `merchant_set_order_enabled`） | `pos_online_order_settings.merchant_enabled`（0036，跨機 Realtime） | 會員通**線上**落唔到單；店內堂食／快餐／掃碼／kiosk **照舊** |
+| **店內營業**（本文件） | **POS DB** `pos_store_status.is_open`（0039） | 同一張表（跨機 Realtime） | 掃碼點餐（`/menu`、`/quick`）＋ kiosk（`/order`）落唔到單 |
+
+⚠️ 兩粒 pill **掣面都寫「營業中 / 已暫停」**（共用 `MerchantOpenPill` 視覺）→ 設置頁 header
+一定要靠 label 分清楚：`店內營業 · 營業中` ／ `線上接單 · 已暫停`。
+（2026-09-14 已將 header pill 同分頁由「線上訂單」改名做「**線上接單**」，就係為咗呢件事。）
+
+⚠️ `merchant-open-pill.tsx` 嘅**預設確認文案**寫死「只影響會員通（店內堂食、快餐、自助點餐
+不受影響）」—— 只適用於線上接單。店內營業用 `confirmMessage` prop 自己嗰句，否則會講大話。
+
+---
+
+## 3. 單向連動（J 2026-09-14 拍板）
+
+```
+關「店內營業」 ──→ 前端順手 setMerchantEnabled(false)（Ledger RPC）
+                    └─ 失敗（未登入 / RPC 未上線）→ **照關**店內營業 ＋ 提示手動撳
+
+切「線上接單」 ──→ 唔影響「店內營業」
+
+開「店內營業」 ──→ **唔會**自動開返「線上接單」（原本暫停可能係刻意）
+                    └─ 若線上接單仍暫停 → 出提示「如需接單請撳隔籬嗰粒掣」
+```
+
+點解重開唔對稱開返：店主可能因為某啲原因（例如線上平台對帳）刻意暫停收線上單，
+唔應該由「開返鋪」呢個動作擅自幫佢開返。
+
+---
+
+## 4. 資料流
+
+```
+收銀撳「店內營業」
+  └─ POST /api/pos/store-status（要 POS 終端憑證）
+        └─ pos_store_status（POS DB）
+              ├─ 0039 Realtime publication → 其他收銀機 pill 即時跟住變
+              └─ /api/pos/sync 嘅 **2.55 營業中閘** 讀佢做權威判斷
+```
+
+| 讀者 | 途徑 | 憑證 | 失敗時 |
+|---|---|---|---|
+| 收銀機 pill（`useStoreStatus`） | GET + POST `/api/pos/store-status` | POST 要 POS 憑證 | `isOpen: null` → 顯示「未接通」＋停用 |
+| 客人端（掃碼 / kiosk） | GET 同上（入頁一次 ＋ 落單前） | **唔使** | 當營業中（fail-open） |
+| server 硬閘（`/api/pos/sync` 2.55） | 直接 service_role 讀 DB | — | 放行（fail-open） |
+
+### 4.1 點解兩邊都 fail-open
+
+| 情況 | 做法 | 理由 |
+|---|---|---|
+| 客人端讀唔到（離線 / 42P01） | 當**營業中**，`storeOpen` 保持 `null`（未知，唔阻） | 反過來＝一斷網全店掃碼＋kiosk 即停（誤停業）。最壞「多撳一下」由 server 擋 |
+| server 查唔到 | **放行** | 同售罄校驗「查唔到唔好當全部售罄」一致 |
+| `pos_store_status` 無 row | **營業中**（`DEFAULT_STORE_OPEN = true`） | 新店／舊店一上線唔可以即刻停業（同 0036 鏡像欄 DEFAULT true 同一考慮） |
+
+⚠️ 呢個 default **唔可以**改 false。`store-status.test.ts` 有測試鎖死。
+
+### 4.2 客端 UI gating
+
+`useOrderingCore()` 暴露 `storeOpen: boolean | null`（`useKioskOrder` 自動繼承；
+`useScanOrder` 有轉發）。三個頁面：
+
+- `app/order/page.tsx`（kiosk）：`storeOpen === false && !submittedOrder` → 全屏
+- `components/scan-order-page.tsx`（`/menu`、`/quick`）：
+  `storeOpen === false && !quickPickupOrder && !activeTableOrder` → 全屏
+
+🔴 **一定要加「未落單」條件**：客人落單之後店員一關店，如果無條件蓋走畫面，
+**扣款結果 / 取餐號**就冇咗 —— S9 扣款未確認時「重試」係唯一入口，蓋走等於嗰筆扣款永遠冇人知。
+
+### 4.3 落單被拒
+
+`/api/pos/sync` 2.55（只喺 `!authorized` 時查，每 request 一次）：
+
+```ts
+if (!authorized && storeClosed) {
+  rejectBusiness(...);
+  ack(false, "商家不在營業中", { reason: "shop-closed" });
+  continue;
+}
+```
+
+- 回 4xx `retryable:false` → client 側 `KioskOrderRejectedError`（已加 `reason`）
+- `placeOrder()` catch 到 `reason === "shop-closed"` → `setStoreOpen(false)` → 轉全屏
+- **唔會**入本地待同步隊列（重試一萬次都唔會成功）
+
+---
+
+## 5. 檔案清單
+
+| 檔案 | 動作 |
+|---|---|
+| `supabase/migrations/0039_pos_store_status.sql` | 新增 —— 表 / RLS（anon SELECT + service_role ALL）/ Realtime publication / 驗收 SQL |
+| `src/lib/pos/store-status.ts` | 新增 —— 純函式（`normalizeStoreOpen` / `readStoreOpenFromPayload`）＋ fetcher |
+| `src/lib/pos/store-status.test.ts` | 新增 —— 11 個 `node --test`（鎖死 default true 同 `fromServer` 語意） |
+| `src/app/api/pos/store-status/route.ts` | 新增 —— GET（開放＋限流）/ POST（POS 憑證）；42P01 降級 |
+| `src/lib/pos/use-store-status.ts` | 新增 —— module store（server + Realtime + visibilitychange，禁 polling） |
+| `src/components/store-open-pill.tsx` | 新增 —— `StoreOpenHeaderToggle`（確認文案 ＋ 單向連動 ＋ 提示） |
+| `src/components/merchant-open-pill.tsx` | 改 —— 加 `confirmMessage` prop（預設文案唔可以借畀店內營業） |
+| `src/components/merchant-order-config-section.tsx` | 改 —— header pill 同 section 標題改「線上接單」 |
+| `src/components/device-settings.tsx` | 改 —— header 掛 `StoreOpenHeaderToggle`；tab 改「線上接單」 |
+| `src/lib/kiosk-order.ts` | 改 —— `KioskOrderRejectedError` 加 `reason`（4xx 帶 `myAck.reason`） |
+| `src/lib/use-kiosk-order.ts` | 改 —— `storeOpen` state ＋ 入頁讀一次 ＋ i18n ＋ catch `shop-closed` |
+| `src/lib/use-scan-order.ts` | 改 —— 轉發 `storeOpen` |
+| `src/components/scan-order-page.tsx` | 改 —— 全屏停單頁 |
+| `src/app/order/page.tsx` | 改 —— 全屏停單頁 |
+| `src/app/api/pos/sync/route.ts` | 改 —— 2.55 營業中閘 |
+| `docs/113-agent-gotchas.md` | 改 —— 新增「店內營業開關」一節 |
+
+---
+
+## 6. ⚠️ 未做 / 已知限制
+
+1. **需求 4（交班後未重新開工 → 落唔到單）刻意未實作**（J 2026-09-14 拍板「唔查開工」）。
+   原因：`pos_shifts` 上「交班後未開工」同「從來冇開工」完全一樣（`active = null`），
+   一律擋就會令未用開班制度嘅店／新店永遠落唔到單。
+   要補返：喺 `/api/pos/sync` 2.55 段多查一次 `pos_shifts`（同一 pattern），
+   `storeOpen` 通道同客端 UI 唔使改。
+2. **客人端唔會即時知**（只喺入頁 / 返前景讀一次）。已經企喺 kiosk 前面揀緊菜嘅客人，
+   會喺**撳落單**嗰刻被拒（然後轉全屏）。冇做 Realtime 匿名訂閱 —— 成本同 RLS 風險唔值。
+3. **未跑 migration 0039**：收銀撳掣會回 503「表未建立」（**唔會**靜靜當成功）；
+   客人端照樣落得到單（fail-open）。
+
+---
+
+## 7. 驗收
+
+1. **兩個 pill 分得清**：設置頁 header 見到 `店內營業 · 營業中` ＋ `線上接單 · 營業中`，
+   撳入分頁亦一致（同一個 module store）。
+2. **關店**：撳「店內營業」→ 確認框文案講明「掃碼／自助點餐機落唔到單 ＋ 會暫停線上接單」→
+   確認後兩粒 pill **都**變「已暫停」。
+3. **掃碼**：客人手機開 `/quick?store=<storeId>` → 即刻「商家不在營業中」。
+4. **kiosk**：`/order` 同樣。
+5. **落單硬閘**：已開住菜單嘅客人撳落單 → 唔會「落單成功」，即刻轉全屏；
+   `pos_orders` **冇**新 row。
+6. **收銀逃生門**：店已暫停時，收銀台**照樣**落單 / 結帳 / 補印（帶 POS 憑證唔受閘影響）。
+7. **重開**：撳返「營業中」→ 掃碼 / kiosk 即刻落得到；「線上接單」**仍然暫停** ＋ 出提示。
+8. **跨機**：A 機撳關 → B 機（開住設置頁）3 秒內變「已暫停」
+   （前提：Vercel 有 `NEXT_PUBLIC_POS_SUPABASE_URL` / `_ANON_KEY` 並已重新部署；
+   否則 `crossTerminalSync` 會係 `on-enter`）。
+9. **離線／未跑 migration**：唔會停業（當營業中），收銀 pill 顯示「未接通」。
+10. `tsc --noEmit` 0 error ／ `eslint` 改動檔 0 error ／ `node --test store-status.test.ts` 11/11 pass。

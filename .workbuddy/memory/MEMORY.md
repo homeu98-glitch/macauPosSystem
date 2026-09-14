@@ -16,6 +16,7 @@
 - 🔴 結帳／免單／完成訂單嘅目標單一律 `resolveSettleTargetOrder()`（明確 id → 當前工作台 → **只限當前枱**），**唔准**全店 `orders.find()`（實案：A03 結帳去咗第二張枱）。「可結帳」=`isSettleableOrder()`（`paid`＋真枱，**唔要求** `onlineOrderId`）；桌台標籤同入口共用同一 predicate。
 - 🔴 **「RPC 冇拋錯」≠ 遠端狀態已改**：排位爬梯嘅無效轉換一律跳過 → 走完唔代表到咗 `completed`（已取消單都報成功）⇒ 要驗證（讀返狀態）或遠端親口回成功。⚠️ `invalid transition` 被 `mapRpcErrorMessage` **譯成中文**「目前狀態不可執行此操作。」，判定要同時認中文。爬梯口徑 = `lib/pos/online-dinein-ladder.ts`；兩個入口都要檢查 `ledgerProgress`。docs/113 §(3b)(3c)。
 - 🔴 狀態文案口徑唯一：**只有自取**（`pickup`／`takeaway`）= 「待取餐」，其餘（堂食／外賣／外送）= 「待交付」。真源 = `order-mapper.ledgerStatusLabel()`，唔准各處自創。
+- 🔴 兩個「營業中」唔准撈埋：`merchant_enabled`（Ledger，= **線上接單**，只擋會員通）vs `pos_store_status.is_open`（POS DB 0039，= **店內營業**，擋掃碼／kiosk）。權威閘 = `/api/pos/sync` §2.55（只擋匿名，收銀台逃生門）；兩邊**一律 fail-open**（讀唔到＝營業中）；客端 gating **必須**加「未落單」條件（否則蓋走扣款結果）。`MerchantOpenPill` 預設確認文案寫死「堂食唔受影響」→ 新開關要自己傳 `confirmMessage`。
 
 ## 二、環境（呢部機）
 - ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；**冇 coreutils** → 用 `node node_modules/{typescript/bin/tsc,eslint/bin/eslint.js}`＋`node --test`；檔案操作用 Read/Glob/Grep。

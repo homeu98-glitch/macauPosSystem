@@ -24,6 +24,7 @@ export default function OrderPage() {
     hydrated,
     menuLoading,
     menuUnavailable,
+    storeOpen,
     bootstrap,
     displayStoreName,
     language,
@@ -245,6 +246,35 @@ export default function OrderPage() {
           className="w-full max-w-xs rounded-xl bg-orange-500 py-3 text-lg font-semibold text-white"
         >
           前往登入綁店
+        </button>
+      </main>
+    );
+  }
+
+  // ── 商家暫停營業（2026-09-14，migration 0039）──
+  //
+  // 🔴 一定要放喺 `submittedOrder`（成功頁）**之前**判斷，但**唔可以**蓋走成功頁 ——
+  //    所以加 `!submittedOrder` 條件：
+  //    - 未落單 → 全屏停單（連 landing 都唔出，唔好呃客人撳一輪）
+  //    - 已落單 → 照畀佢睇成功頁（尤其**扣款結果**：`paySheetOpen` 時係唯一見到
+  //      「重試」嘅地方，蓋走就等於嗰筆扣款永遠冇人知）
+  //
+  // ⚠️ 只認 `false`；`null`（未讀到）＝未知 → 唔阻（server 硬閘仍然會擋）。
+  if (storeOpen === false && !submittedOrder) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-4 text-6xl">🚪</div>
+        <h1 className="mb-2 text-xl font-bold text-slate-900">{t("storeClosedTitle")}</h1>
+        <p className="mb-6 max-w-sm text-sm text-slate-500">{t("storeClosedBody")}</p>
+        <button
+          onClick={() => {
+            // 重新載入會重新讀一次營業狀態（店開返之後客人唔使掃多次碼）
+            if (typeof window !== "undefined") window.location.reload();
+          }}
+          className="w-full max-w-xs rounded-xl bg-white py-3 text-lg font-semibold text-slate-700 ring-2 ring-slate-200"
+          type="button"
+        >
+          {t("retryPlace")}
         </button>
       </main>
     );

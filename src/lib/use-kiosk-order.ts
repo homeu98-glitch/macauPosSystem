@@ -7,6 +7,7 @@ import { mockBootstrap } from "@/lib/mock-data";
 import { loadBootstrapCache, saveBootstrapCache, nextLocalDailyOrderNo, loadKioskPrinters, saveKioskPrinters } from "@/lib/storage";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { fetchKioskSettings } from "@/lib/pos/kiosk-settings";
+import { fetchStoreStatus } from "@/lib/pos/store-status";
 import { fetchStoreSoldoutIds } from "@/lib/pos/soldout";
 import { diffAddedItems } from "@/lib/pos/order-item-diff";
 import {
@@ -172,6 +173,10 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     syncPending: "訂單已收到，正在同步…",
     menuUnavailableTitle: "餐牌準備中",
     menuUnavailableBody: "本店餐牌尚未開放線上點餐，請聯絡職員協助。",
+    // ── 店內營業（2026-09-14，migration 0039 · 唔關「線上接單」事）──
+    // 只講「商家不在營業中」，唔好向客人解釋原因（手動閂店 vs 其他，客人唔需要知）。
+    storeClosedTitle: "商家不在營業中",
+    storeClosedBody: "本店暫停營業，暫時無法落單，請向職員查詢。",
     closeSheet: "關閉",
 
     // ── 會員登入 + 付款（2026-09-13，確認稿 member-login-payment-flow）──
@@ -343,6 +348,24 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   const [orderSyncPending, setOrderSyncPending] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
+  /**
+   * 店內營業狀態（2026-09-14，migration 0039 · `pos_store_status`）。
+   *
+   * - `false` = 店已暫停營業 → 掃碼 / kiosk 唔可以落單，UI 出全屏「商家不在營業中」
+   * - `true` = 營業中
+   * - `null` = **未讀到**（離線 / 表未建立 / 讀取失敗）→ **唔阻**（fail-open）
+   *
+   * 🔴 點解 `null` 要 fail-open：呢個係客人端嘅**提前提示**，唔係權威。
+   * 真閘喺 server `/api/pos/sync`（睇 `pos_store_status` 直接拒單，`reason: "shop-closed"`）。
+   * 如果客人端讀唔到就當停業，一斷網全店掃碼 + kiosk 即刻停 —— 遠比「撳落單俾 server 拒」
+   * 嚴重（後者最壞只係多撳一下）。同理，`pos_shifts` 嘅開工狀態刻意**唔**喺呢度查
+   * （2026-09-14 J 拍板：唔用開工狀態擋單）。
+   *
+   * ⚠️ 禁 polling：只有入頁一次 ＋ `visibilitychange`（見下面 effect）——
+   * 冇 `setInterval`（全專案禁 polling，見 docs/52）。
+   */
+  const [storeOpen, setStoreOpen] = useState<boolean | null>(null);
+
   // ── 會員登入 + 付款（2026-09-13，確認稿 member-login-payment-flow）──
   // 🔴 全部只係**記憶體** state —— 唔入 localStorage / sessionStorage（個資紅線 §7.2），
   //    亦刻意唔會因為 reload 而復原：Kiosk 係共用平板，上一位客人嘅會員狀態
@@ -396,6 +419,32 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   // 另外保留 URL 參數推導，令 `/order` 萬一被帶 ?tableId= 開都唔會當成 kiosk 落單。
   const isScanLink = variant === "scan" || Boolean(tableId) || Boolean(scanStoreId);
   const storeId = isScanLink ? scanStoreId ?? "" : binding?.storeId ?? "";
+
+  // ── 店內營業：入頁讀一次 ＋ 由背景返前景補一次（見上面 `storeOpen` 註解）──
+  // ⚠️ `fromServer === false`（讀唔到）一律維持 `null` ＝ 未知 → 唔阻客人。
+  //    唔可以當「營業中」又唔可以當「已暫停」：兩個方向都可以係講大話。
+  useEffect(() => {
+    if (!storeId) return;
+    let cancelled = false;
+
+    function sync(status: { fromServer: boolean; isOpen: boolean }) {
+      if (cancelled || !status.fromServer) return;
+      setStoreOpen(status.isOpen);
+    }
+
+    void fetchStoreStatus(storeId).then(sync);
+
+    // 客人撳去 WeChat ／鎖屏再返嚟（掃碼點餐常見）→ 補拉一次，避免用舊狀態落單
+    function onVisibility() {
+      if (document.visibilityState === "visible") void fetchStoreStatus(storeId).then(sync);
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [storeId]);
   const needsBinding = !storeId;
 
   // 按 storeId 讀**自己店**嘅 bootstrap cache：
@@ -708,6 +757,12 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
   async function placeOrder(): Promise<boolean> {
     if (cart.length === 0) return false;
     if (submittingRef.current) return false;
+    // 店已暫停營業（已讀到）→ 早一步告知客人，唔好呃佢撳完一輪先俾 server 拒。
+    // ⚠️ 只認 `false`。`null`（未讀到）＝未知 → 照落，由 server 硬閘決定。
+    if (storeOpen === false) {
+      setError(kioskT(language, "storeClosedBody"));
+      return false;
+    }
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
@@ -912,6 +967,12 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       setPayStage("choose");
       return true;
     } catch (e) {
+      // 店已暫停營業（server 硬閘 `reason: "shop-closed"`）→ 即刻轉全屏「商家不在營業中」。
+      // 🔴 唔可以當普通落單失敗叫客人「重試」：重試一萬次都唔會成功，
+      //    而且客人會以為自己部機壞（實際係鋪頭落咗閘）。
+      if (e instanceof KioskOrderRejectedError && e.reason === "shop-closed") {
+        setStoreOpen(false);
+      }
       setError(e instanceof Error ? e.message : String(e));
       return false;
     } finally {
@@ -1499,6 +1560,11 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     hydrated,
     menuLoading,
     menuUnavailable,
+    /**
+     * 店內營業狀態（2026-09-14，migration 0039）。
+     * `false` 一定要出全屏停單頁；`null` = 未讀到 → **唔阻**（見 `storeOpen` state 註解）。
+     */
+    storeOpen,
     bootstrap,
     language,
     setLanguage,

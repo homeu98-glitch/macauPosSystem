@@ -109,7 +109,7 @@ export function MerchantOrderConfigSection() {
     <section className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-base font-semibold text-slate-900">線上訂單（會員通）</div>
+          <div className="text-base font-semibold text-slate-900">線上接單（會員通）</div>
           <div className="mt-1 max-w-[52ch] text-sm text-slate-500">
             呢粒「接單」係全店線上單嘅總掣：關咗之後客人喺會員通落唔到新單。
             店內堂食、快餐、自助點餐完全不受影響。改動會即時同步到其他收銀機。
@@ -206,15 +206,21 @@ export function MerchantOrderConfigSection() {
       </div>
 
       <div className="mt-3 text-xs leading-relaxed text-slate-500">
-        開關店只改「開啟接單」一欄，唔會碰接單時段、盒費、折扣、付款方式。
+        線上接單只改「開啟接單」一欄，唔會碰接單時段、盒費、折扣、付款方式。
         自動接單同理，係獨立一欄。兩者都由 Ledger 做真源，POS 只係鏡像 ＋ 廣播。
+        ⚠️ 呢個掣**只管會員通線上落單**；要停店內掃碼點餐／自助點餐機，撳 header 嘅「店內營業」。
       </div>
     </section>
   );
 }
 
 /**
- * 設置頁 **header** 嘅「線上訂單」狀態 toggle —— 放喺「返回收銀台」左邊。
+ * 設置頁 **header** 嘅「線上接單」狀態 toggle —— 放喺「返回收銀台」左邊。
+ *
+ * ⚠️ 2026-09-14 由「線上訂單」改名做「**線上接單**」：同一行加咗一粒真正嘅
+ * 「店內營業」開關（`store-open-pill.tsx`），而呢粒 pill 嘅掣面本身就寫
+ * 「營業中 / 已暫停」—— 兩粒都叫「營業中」一定撳錯（撳錯＝停業）。
+ * 改名之後一行睇得清：`店內營業 · 營業中` ／ `線上接單 · 已暫停`。
  *
  * ── 點解要放 header ────────────────────────────────────────────────────
  * 收銀最常問嘅係「而家客人落唔落到單？」。以前呢個答案要撳入 tab 或者返收銀台
@@ -225,6 +231,8 @@ export function MerchantOrderConfigSection() {
  * → 兩邊即時一致、唔會開多一條 Realtime channel、唔會一個顯示營業中另一個顯示已暫停。
  *
  * 撳落去嘅行為同其他 call site 完全一樣（`MerchantOpenPill` 內部）：關店要二次確認。
+ * 🔴 但嗰句確認文案（「只影響會員通」）**唔可以**借畀「店內營業」用 —— 見
+ * `merchant-open-pill.tsx` 嘅 `confirmMessage` 註解。
  */
 export function MerchantOrderHeaderToggle() {
   // client-only：同 device-settings 其他 storeId 讀法一致（保 SSR/CSR 一致）
@@ -249,11 +257,11 @@ export function MerchantOrderHeaderToggle() {
       }
       disabled={!config.available || !storeId}
       error={config.saving === "none" ? config.error : null}
-      label="線上訂單"
+      label="線上接單"
       merchantEnabled={config.merchantEnabled}
       onChange={(next) => void config.setMerchantEnabled(next)}
       unknownHint={
-        storeId ? "未讀到 Ledger 接單狀態，請撳入「線上訂單」分頁重新整理。" : "尚未登入，無法讀取接單狀態。"
+        storeId ? "未讀到 Ledger 接單狀態，請撳入「線上接單」分頁重新整理。" : "尚未登入，無法讀取接單狀態。"
       }
       variant="contained"
     />

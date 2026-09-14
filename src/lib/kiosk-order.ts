@@ -370,11 +370,21 @@ export function defaultZoneNames(): Record<string, string> {
   return Object.fromEntries(defaultPosLocalSettings.printZones.map((zone) => [zone.id, zone.name]));
 }
 
-/** 落單失敗（永久性，例如 400 / 403 —— 重試唔會好）。 */
+/**
+ * 落單失敗（永久性，例如 400 / 403 —— 重試唔會好）。
+ *
+ * `reason` = server `/api/pos/sync` 回嘅機器可讀原因（`soldout` / `forbidden` /
+ * `bad-payload` / **`shop-closed`**…）。呼叫方靠佢分辨「客人操作問題」同
+ * 「店鋪狀態問題」—— 例如 `shop-closed` 應該即刻轉全屏「商家不在營業中」，
+ * 而唔係叫客人「重試落單」（重試一萬次都唔會成功）。
+ */
 export class KioskOrderRejectedError extends Error {
-  constructor(message: string) {
+  readonly reason?: string;
+
+  constructor(message: string, reason?: string) {
     super(message);
     this.name = "KioskOrderRejectedError";
+    this.reason = reason;
   }
 }
 
@@ -509,10 +519,13 @@ export async function submitKioskOrder(
     // 429（限流）：喺度硬重試只會令情況更差 → 即刻交本地隊列，等稍後慢慢補推。
     if (res.status === 429) throw new KioskOrderTransientError(msg);
 
-    // 4xx（非 429）＝ **業務拒絕**（售罄 / 未授權 / payload 有問題）：重試同一個請求
-    // 結果一樣，所以即刻拋永久錯誤，由 UI 直接告知客人（唔好靜默入隊造假成功）。
+    // 4xx（非 429）＝ **業務拒絕**（售罄 / 未授權 / 店已暫停營業 / payload 有問題）：
+    // 重試同一個請求結果一樣，所以即刻拋永久錯誤，由 UI 直接告知客人
+    // （唔好靜默入隊造假成功）。
+    // ⚠️ 一定要帶 `myAck.reason`：呼叫方要靠佢分辨係「售罄」定「商家不在營業中」，
+    //    兩者嘅 UI 處置完全唔同（前者叫客人改菜，後者要轉全屏停止點餐）。
     if (res.status >= 400 && res.status < 500) {
-      throw new KioskOrderRejectedError(msg);
+      throw new KioskOrderRejectedError(msg, myAck?.reason);
     }
 
     // 5xx / 其他：基建失敗，真係可以重試
