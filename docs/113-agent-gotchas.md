@@ -1550,5 +1550,49 @@ iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」tex
 「某個欄位打唔到字」唔等於「嗰個欄位壞咗」：先問**同一部機其他自由文字欄位得唔得**，
 再問「**鍵盤有冇彈**」（有彈但冇字＝IME／受控元件；完全冇彈＝裝置判定有實體鍵盤／IME 被禁）。
 
+## 🔴🔴 `button { font: inherit }` 會靜靜食掉按鈕上所有 `text-*` / `font-*`（2026-09-14）
+
+**病症**：側欄商店名卡（`app-sidebar.tsx`）嘅字級「越改越大」—— 改成 `text-[11px]`、
+`text-[10px]` 都冇用，真機仍然係 **16px**；連 `font-semibold`、`leading-tight` 都好似冇效果。
+
+**根因**：`globals.css` 有一條**冇 `@layer`** 嘅
+
+```css
+button, input, select, textarea { font: inherit; }
+```
+
+CSS cascade 規則：**冇 layer 嘅宣告優先於任何 `@layer` 內嘅宣告**（同 specificity 無關）。
+Tailwind v4 把所有 utilities 放入 `@layer utilities` ⇒ 呢條 reset **蓋走 `<button>` 上面所有
+`text-*`（font-size）同 `font-*`（weight）**，按鈕字級一律繼承 `body` 嘅 16px。
+（`font` 係 shorthand ⇒ `line-height`、`font-weight` 一齊重設。）
+
+**量度證據（唔靠肉眼，唔靠代碼表面）**：同一張卡 —— `<div>`（提示格）寫 `text-[10px]`
+→ 解碼 PNG 量到 **10px** ✅；`<button>`（商店名）寫 `text-[11px]` → 量到 **16px** ❌。
+（順帶：截圖卡闊 113px ÷ CSS 56px（72 − 2×8）＝ **2× retina**，所以「睇落好大」有一半係放大。）
+⚠️ 呢個陷阱亦解釋咗「改咗 px 完全冇反應」：唔係快取，係條 rule 壓住。
+
+**兩條路**：
+
+1. **局部（安全，商店名卡已用）**：字級寫喺 `<button>` 嘅**仔**（`<div>`）度 ——
+   元素自己嘅宣告永遠贏任何**繼承**值，唔受 reset 影響。
+2. **根治（影響面廣，須拍板）**：刪掉 globals.css 嗰條 unlayered 重複規則
+   （Tailwind Preflight 嘅 `base` layer 本身已經有同一句）。一刪 ⇒ 全 app 所有 button 嘅
+   `text-*` / `font-*` 即刻生效 → 大量按鈕由 16px 變返設計值（`text-xs` 12px、
+   `font-semibold` 由 400 變 600）→ **版面會大範圍變動，唔可以當順手做**。
+
+**影響面實測（2026-09-14）**：掃 439 個 `src/**/*.tsx` → **697 個 `<button>`**，
+其中 **478 個帶 `text-*`（font-size）**、**469 個帶 `font-*`（weight）** ⇒ 呢批按鈕今日
+一律係「繼承父層尺寸」，唔係 class 寫嗰個。（所以好多地方「睇落冇事」＝父層咁啱同級；
+一旦父層係普通 `div`（16px）就會露出原型，側欄商店名卡就係咁中招。）
+
+**判斷法**：凡「`<button>` 嘅字級／字重唔跟 class」→ 先懷疑呢條。
+`<a>`（`Link`）、`<div>`、`<span>` 唔受影響。
+
+**驗證方法（可重跑）**：`postcss([require("@tailwindcss/postcss")()]).process(src/app/globals.css)`
+→ 用 postcss AST 睇祖先鏈：
+`button,input,select,optgroup,textarea,…` 係 `@layer base < root`（Preflight，安全）；
+`button,input,select,textarea` 係 `root`（**unlayered，兇手**）；
+`.text-[8px]` 係 `@layer utilities < root`（被壓）。
+
 
 

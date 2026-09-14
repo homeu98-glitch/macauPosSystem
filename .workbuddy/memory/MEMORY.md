@@ -18,6 +18,8 @@
 - 🔴 狀態文案口徑唯一：**只有自取**（`pickup`／`takeaway`）= 「待取餐」，其餘（堂食／外賣／外送）= 「待交付」。真源 = `order-mapper.ledgerStatusLabel()`，唔准各處自創。
 - 🔴 兩個「營業中」唔准撈埋：`merchant_enabled`（Ledger，= **線上接單**，只擋會員通）vs `pos_store_status.is_open`（POS DB 0039，= **店內營業**，擋掃碼／kiosk）。權威閘 = `/api/pos/sync` §2.55（只擋匿名，收銀台逃生門）；兩邊**一律 fail-open**（讀唔到＝營業中）；客端 gating **必須**加「未落單」條件（否則蓋走扣款結果）。`MerchantOpenPill` 預設確認文案寫死「堂食唔受影響」→ 新開關要自己傳 `confirmMessage`。
 
+- 🔴 `<button>`／`<input>`／`<select>`／`<textarea>` 上面嘅 `text-*`／`font-*` **一律唔生效** —— `globals.css` 有一條**無 layer** 嘅 `font: inherit` 壓過 Tailwind utilities（實案：側欄商店名卡由 `<div>` 改 `<button>` 之後 11px→16px，改 px 完全冇反應）。要指定按鈕字級就寫喺按鈕嘅**仔元素**身上。詳見 docs/113 同名節。
+
 ## 二、環境（呢部機）
 - ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；**冇 coreutils** → 用 `node node_modules/{typescript/bin/tsc,eslint/bin/eslint.js}`＋`node --test`；檔案操作用 Read/Glob/Grep。
 - ⚠️ `node --test` 只可載入**零 runtime 依賴**純模組；import 要相對路徑＋`.ts`（`@/` 會爆）。

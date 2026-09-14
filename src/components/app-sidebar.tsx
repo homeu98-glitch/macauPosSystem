@@ -139,6 +139,26 @@ export function AppSidebar() {
    * ── 行為 ───────────────────────────────────────────────────────────────
    * 全部收喺 `useStoreOpenToggle()`：關店二次確認、關店單向連動暫停「線上接單」、
    * 失敗提示。呢度只負責畫掣。
+   *
+   * ── 🔴🔴 字級（2026-09-14 撲空咗兩次，必讀）─────────────────────────────
+   * `globals.css` 有一條**冇 `@layer`** 嘅：
+   *
+   *     button, input, select, textarea { font: inherit; }
+   *
+   * 冇 layer 嘅宣告**優先於** Tailwind 嘅 `@layer utilities` ⇒ 喺 `<button>` 身上
+   * 寫 `text-[11px]` / `text-xs` **完全冇效**，按鈕字級一律繼承 `body` 嘅 **16px**。
+   * （`font` 係 shorthand，連 `leading-tight`、`font-semibold` 都一齊被重設。）
+   *
+   * 2026-09-14 實證：同一張卡，`<div>`（提示格）寫 `text-[10px]` → 量到 10px ✅；
+   * `<button>`（商店名）寫 `text-[11px]` → 量到 **16px** ❌。呢個就係「商店名
+   * 忽然變大」嘅真正原因（2026-09-14 由 `<div>` 改成 `<button>` 之後開始）。
+   *
+   * ⇒ **字級一定要寫喺 button 嘅仔（`<div>`）身上** —— 元素自己嘅宣告永遠贏任何
+   *   繼承值。名稱 8px／角色 6px 就係分別寫喺兩個 `<div>`。
+   *   ⚠️ 唔好「順手」把 `text-[8px]` 搬返上 `<button>`：一搬就即刻變返 16px。
+   *   ⚠️ 同樣道理，其他 `<button>` 上面嘅 `text-*` / `font-*` 都係死碼
+   *      （全 app 性問題，未修；要修就係刪咗 globals.css 嗰條 unlayered 重複規則，
+   *      因為 Tailwind Preflight 本身已經有同一句，但影響面好廣，要 J 拍板）。
    */
   const storeOpen = useStoreOpenToggle(session?.merchantId ?? null);
 
@@ -226,7 +246,7 @@ export function AppSidebar() {
 
               aria-pressed={storeOpen.isOpen === null ? undefined : storeOpen.isOpen}
 
-              className={`rounded-2xl px-1.5 py-2 text-center text-[10px] font-semibold leading-tight transition disabled:opacity-100 ${
+              className={`rounded-2xl px-1.5 py-2 text-center font-semibold transition disabled:opacity-100 ${
 
                 storeOpen.isOpen === false
                   ? "bg-red-600 text-white hover:brightness-110"
@@ -244,9 +264,10 @@ export function AppSidebar() {
 
             >
 
-              <div>{session.name}</div>
+              {/* ⚠️ 字級一定要寫喺呢兩個 `<div>`（唔係 `<button>`）—— 見上面「字級」一段。 */}
+              <div className="text-[8px] leading-tight">{session.name}</div>
 
-              <div className={`mt-1 ${storeOpen.isOpen === false ? "text-white/80" : "text-slate-400"}`}>
+              <div className={`mt-1 text-[6px] leading-tight ${storeOpen.isOpen === false ? "text-white/80" : "text-slate-400"}`}>
                 {storeOpen.isOpen === false ? "已暫停" : roleLabel}
               </div>
 
