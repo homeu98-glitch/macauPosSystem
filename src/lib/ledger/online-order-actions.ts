@@ -27,7 +27,11 @@ export function ledgerStatusBadgeLabel(status: string, fulfillmentType: string):
   if (raw === "accepted") return "已接單";
   if (raw === "preparing") return "製作中";
   if (raw === "ready") {
-    return fulfillmentType === "takeaway" || fulfillmentType === "merchant_delivery" ? "待取餐" : "待取餐";
+    // 🔴 2026-09-14 口徑統一：與 `order-mapper.ledgerStatusLabel()` 完全一致 ——
+    // 自取／外賣（`takeaway`）＝「待取餐」；**其餘（堂食 dine_in、外送）＝「待交付」**。
+    // 舊寫法三個分支都回「待取餐」（copy-paste 遺留），令快捷面板嘅狀態膠囊
+    // 永遠睇唔到「待交付」，同一張單喺訂單頁表格卻寫「待交付」。
+    return fulfillmentType === "takeaway" ? "待取餐" : "待交付";
   }
   if (raw === "delivering") return "配送中";
   if (raw === "cancelled") return "已取消";
@@ -68,14 +72,11 @@ export function getPrimaryOnlineOrderAction(order: LedgerOnlineOrder): OnlineOrd
     };
   }
   if (raw === "preparing") {
-    const label =
-      order.tabType === "pickup"
-        ? "待取餐"
-        : order.fulfillmentType === "merchant_delivery"
-          ? "待交付"
-          : order.tabType === "dine_in"
-            ? "待取餐"
-            : "待取餐";
+    // 🔴 2026-09-14 口徑統一（同 `online-orders.tsx` 訂單頁表格一致）：
+    // **只有自取（`pickup`）＝「待取餐」**，堂食／外賣／外送一律「待交付」。
+    // 舊寫法堂食單（`dine_in`）顯示「待取餐」，同一張單喺訂單頁表格卻顯示「待交付」
+    // → 收銀兩邊睇到唔同字，誤以為係兩個唔同階段。
+    const label = order.tabType === "pickup" ? "待取餐" : "待交付";
     return {
       key: "mark_ready",
       label,

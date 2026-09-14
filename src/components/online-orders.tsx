@@ -910,12 +910,24 @@ export function OnlineOrders({
     try {
       const detail = await getOrderDetail(order.id);
       const result = await assignLedgerOrderToTable({ ledgerOrder: order, tableId, tableName, detail });
-      setToast({
-        tone: "success",
-        message: result.created
-          ? `已排位 ${tableName}：${orderCodeLabel(order)}`
-          : `已改枱到 ${tableName}：${orderCodeLabel(order)}`,
-      });
+      // 🔴 2026-09-14：排位會**同時**把 Ledger 推去「已完成」（商家口徑：排位＝開始製作）。
+      // 本地排位一般都會成功，但 Ledger 側可以失敗（登入過期／訂單已取消／推唔到梯頂）
+      // —— 一定要講清楚，否則收銀以為兩邊都同步好（同快捷面板同一口徑）。
+      if (!result.ledgerProgress.ok) {
+        setToast({
+          tone: "error",
+          message: `${result.created ? "已排位" : "已改枱到"} ${tableName}，但同步線上訂單狀態失敗：${
+            result.ledgerProgress.error ?? "未知錯誤"
+          }`,
+        });
+      } else {
+        setToast({
+          tone: "success",
+          message: result.created
+            ? `已排位 ${tableName}：${orderCodeLabel(order)}`
+            : `已改枱到 ${tableName}：${orderCodeLabel(order)}`,
+        });
+      }
       setAssigningOrderId(null);
       setViewingOrderId(null);
       applyOrders(mergeLedgerOrders(ordersRef.current, [{ ...order }]));

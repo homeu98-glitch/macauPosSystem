@@ -81,6 +81,49 @@ export async function fetchAdminLedgerOrders(params: {
   return json.orders ?? [];
 }
 
+/**
+ * 讀**單一張** Ledger 線上單嘅當前狀態（純讀，唔改任何嘢）。
+ *
+ * ## 為咩要有呢個函式（2026-09-14）
+ *
+ * 排位爬梯係「由 `accepted` 逐級試，遇到『目前狀態唔啱』就跳過」，所以**走完梯
+ * 唔代表真成功** —— 例如訂單已被取消／已退款，每一級都會 invalid transition，
+ * 舊寫法照樣回 `ok: true` ⇒ 收銀以為同步好，實際 Ledger 根本冇變成 `completed`。
+ * 要判斷就要讀一次真實狀態。
+ *
+ * 回傳 `null` = **讀唔到**（RLS 擋／單唔存在／回應冇 status 欄）⇒ 呼叫端當
+ * 「無法確認」處理：唔可以當 `completed`，亦唔應該當失敗（寫入其實可能已成功）。
+ *
+ * ⚠️ Ledger `public.orders` 係 Ledger 側嘅表（唔係 POS 自己嘅 `pos_orders`）；
+ * 商戶 session（anon + JWT）＋ RLS 同 realtime 訂閱同一套，所以一般讀得到。
+ *
+ * @see `src/lib/pos/online-dinein-fulfillment.ts`（唯一呼叫端：排位後確認）
+ */
+export async function getOrderStatus(orderId: string): Promise<string | null> {
+  const accessToken = await ensureLedgerSession();
+  if (!accessToken) {
+    throw new Error("Ledger 登入已過期，請重新登入。");
+  }
+
+  const client = getLedgerSupabaseClient();
+  if (!client) {
+    throw new Error("Ledger Supabase 尚未設定。");
+  }
+
+  const { data, error } = await client
+    .from("orders")
+    .select("status")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const status = (data as { status?: unknown } | null)?.status;
+  return typeof status === "string" && status.trim() ? status.trim().toLowerCase() : null;
+}
+
 export type LedgerOrderDetailItem = {
   name: string;
   qty: number;

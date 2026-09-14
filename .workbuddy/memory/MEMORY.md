@@ -14,6 +14,8 @@
 - 🔴 加 `PosLocalSettings` 新欄**必填** → tsc 逼你補 `normalizePosLocalSettings`＋`defaultPosLocalSettings`。
 - 🔴 已收款單（快餐 counter／排位單／**掃碼已付單**）加菜**必須保留 `paid`**；打返 `sent_to_kitchen` → 雲端 `paid-downgrade` 拒收整條 `ORDER_UPDATED` → **items 上唔到雲**（只剩金額 patch）→ 收據「1 項 $75、總額 160」。docs/113 §(3b)。
 - 🔴 結帳／免單／完成訂單嘅目標單一律 `resolveSettleTargetOrder()`（明確 id → 當前工作台 → **只限當前枱**），**唔准**全店 `orders.find()`（實案：A03 結帳去咗第二張枱）。「可結帳」=`isSettleableOrder()`（`paid`＋真枱，**唔要求** `onlineOrderId`）；桌台標籤同入口共用同一 predicate。
+- 🔴 **「RPC 冇拋錯」≠ 遠端狀態已改**：排位爬梯嘅無效轉換一律跳過 → 走完唔代表到咗 `completed`（已取消單都報成功）⇒ 要驗證（讀返狀態）或遠端親口回成功。⚠️ `invalid transition` 被 `mapRpcErrorMessage` **譯成中文**「目前狀態不可執行此操作。」，判定要同時認中文。爬梯口徑 = `lib/pos/online-dinein-ladder.ts`；兩個入口都要檢查 `ledgerProgress`。docs/113 §(3b)(3c)。
+- 🔴 狀態文案口徑唯一：**只有自取**（`pickup`／`takeaway`）= 「待取餐」，其餘（堂食／外賣／外送）= 「待交付」。真源 = `order-mapper.ledgerStatusLabel()`，唔准各處自創。
 
 ## 二、環境（呢部機）
 - ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；**冇 coreutils** → 用 `node node_modules/{typescript/bin/tsc,eslint/bin/eslint.js}`＋`node --test`；檔案操作用 Read/Glob/Grep。

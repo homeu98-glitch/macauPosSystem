@@ -927,6 +927,47 @@ and j.status in ('pending', 'failed')
 - ⚠️ **隔離閘只有一個**：`isOnlineDineInOrder()`（帶 `onlineOrderId` ＋ 真枱號 ≠ counter）。
   結帳放寬同排位自動推進**共用同一份** —— 改一邊等於改兩邊，唔准各寫一份。
 
+### (3b) 🔴 2026-09-14：爬梯「走完」**唔等於**到咗 `completed` → 排位必須驗證
+
+**病症（潛在，未爆但一定爆）**：排位後本地單已建立、線上列表已剔除該單，但 Ledger
+可能**完全冇動**（例如訂單早已 `cancelled`／已退款）。收銀見到「已排位」成功，
+兩邊狀態靜默不一致，**冇任何人有辦法發現**。
+
+**根因**：爬梯嘅跳過條件 `isInvalidTransition()` 唔分辨兩種無效轉換 ——
+(a) 「已經過咗呢級」＝成功路徑；(b) 「根本推唔到」＝真失敗。舊寫法兩種都 `continue`
+→ 收尾一律 `return { ok: true }`。
+
+**✅ 修法**（`online-dinein-fulfillment.ts` ＋ 新 `src/lib/pos/online-dinein-ladder.ts`）：
+
+1. 判定口徑（梯級順序／錯誤判定／完成判定）抽去**零依賴**嘅 `online-dinein-ladder.ts`
+   → `online-dinein-ladder.test.ts` 用 `node --test` 直接鎖死（8 個 case）。
+2. 爬梯時記住梯頂：**Ledger 親口接受 `completed` ⇒ 直接算成功**（正常情況零額外請求）。
+3. 梯頂被拒 → 讀一次真實狀態（新增 `getOrderStatus()`，`orders.ts`）：
+   - 明確讀到 `completed` → 成功（冪等：重複排位）；
+   - 明確讀到其他狀態（`cancelled`…）→ **`ok: false`** ＋ 文案
+     「線上訂單未能推進至「已完成」（Ledger 目前狀態：xxx）」；
+   - 讀唔到（RLS／網絡）→ 當「無法確認」維持樂觀 ＋ `console.warn` 留痕
+     —— **唔可以**因為驗證本身失敗而製造假失敗。
+
+🔴 **鐵律**：凡「本地寫入成功 ＋ 遠端要跟住變」嘅操作，**唔可以**用「RPC 冇拋錯」當成功；
+要嘛遠端親口回成功，要嘛讀返一次確認。
+
+⚠️ **兩個入口都要檢查 `ledgerProgress`**（漏一個就有靜默路）：`quick-online-orders-panel.tsx`
+（一向有）同 `online-orders.tsx` `assignDineInTable()`（**2026-09-14 補上**）。
+
+### (3c) 🔴 同一狀態兩個叫法：「待交付」vs「待取餐」（2026-09-14 統一）
+
+| 位置 | 舊寫法（堂食 `preparing`） | 現行 |
+|---|---|---|
+| 訂單頁表格 `online-orders.tsx` | 待交付 | 待交付（不變） |
+| 快捷面板按鈕 `online-order-actions.ts` | **待取餐 ❌** | 待交付 |
+| 快捷面板狀態膠囊 `ledgerStatusBadgeLabel()` | **待取餐 ❌**（`ready` 三分支都寫死同一句） | `takeaway` → 待取餐，其餘 → 待交付 |
+| `order-mapper.ledgerStatusLabel()` | 待交付（本來就正確） | 待交付（真源） |
+
+**口徑（唯一版本）**：只有**自取**（`tabType === "pickup"` / `fulfillmentType === "takeaway"`）
+係「待取餐」；**堂食／外賣／外送一律「待交付」**。
+⚠️ 新增任何狀態文案前，先喺 `order-mapper.ts` 睇同一狀態點寫，唔准各處自創。
+
 ## 版面：快捷操作欄只有 280px（2026-09-12 實案）
 
 - 點餐頁/桌台總覽嘅「快捷操作」欄 = `lg:280px / xl:330px`（`pos-app.tsx:4401`），
@@ -1346,6 +1387,17 @@ iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」tex
   （手／通知造成），冇「鍵盤彈出」應有嘅大面積淺色跳變，即**唔存在「彈完即縮」**。
 ⇒ **焦點 / 可編輯性 / 事件綁定三樣都正常**（唔使再喺呢三樣落藥）。
    ⚠️ 但**唔等於「唔關 web 事」** —— 下一節嘅 Ledger 對照證明係我哋自己嘅 viewport 設定。
+
+### 🎥 第二段影片（2026-09-14 11:27 登入頁實拍）：**連登入頁都唔彈 → 唔係彈窗獨有**
+- 登入頁（`login-screen.tsx`，**普通流式頁面、唔係 fixed 彈窗**）：帳號欄顯示 **8 位數字帶藍色
+  選取 highlight**（＝焦點確定、文字可選）、PIN 欄有 focus ring —— 一樣**零鍵盤**。
+  ⇒ 排除「只有 fixed 彈窗內先失敗」⇒ **係 app-wide 層面嘅問題**（同 viewport／`body{overflow:hidden}`
+  呢兩個全域設定完全吻合：每頁都會中）。
+- 畫面**冇狀態列、冇瀏覽器地址列**，右上角浮一粒 **「⋯」** 掣 ⇒ 唔係普通 Safari 分頁；
+  最可能係**主畫面 PWA（standalone）／Stage Manager 浮窗／WeChat 內開**其中一種。
+  ⇒ 下一個決定性測試（**唔使等部署**）：同一部 iPad **用 Safari 直接開
+  `https://macau-pos-system.vercel.app/login` 撳帳號欄** —— 彈得出鍵盤 ⇒ 問題係「開啟方式」；
+  一樣唔彈 ⇒ 就係 viewport/`overflow-hidden`（今輪修正，未部署）。
 
 ### 🔴🔴 根因鎖定（2026-09-14 11:10）：同 Ledger 網頁對照
 商家原話：「**我在 Ledger 的網頁上操作都是正常的，且目前沒有任何藍芽裝置在連接**」
