@@ -13,10 +13,14 @@ function get(url) {
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const SHA = "f9f8981cb1720e65488a31f870b0fbbea92d6a7d";
+const GIT = "C:/Users/surface/.workbuddy/binaries/PortableGit/versions/1.2.0/cmd/git.exe";
+const SHA =
+  process.argv[2] ||
+  require("child_process").execFileSync(GIT, ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const API = "https://api.github.com/repos/homeu98-glitch/macauPosSystem";
 
 (async () => {
+  console.log("monitoring sha:", SHA);
   const deadline = Date.now() + 5 * 60 * 1000;
   let verdict = null;
 
