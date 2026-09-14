@@ -390,11 +390,17 @@ export function ShiftPage() {
     [onlineLocalOrders],
   );
 
+  /** 本地線上投影單嘅 Ledger id 集合（去重／核對用）。 */
+  const localOnlineIds = useMemo(
+    () => new Set(onlineLocalOrders.map((o) => o.onlineOrderId as string)),
+    [onlineLocalOrders],
+  );
+
   /** Ledger 已付款單之中，本地冇對應投影單嘅嗰批（＝從未入 POS DB 嘅線上單，例如 001／005 預約單）。 */
-  const ledgerOnlyRows = useMemo(() => {
-    const localIds = new Set(onlineLocalOrders.map((o) => o.onlineOrderId as string));
-    return (ledgerPaidOrders?.orders ?? []).filter((o) => !localIds.has(o.id));
-  }, [onlineLocalOrders, ledgerPaidOrders]);
+  const ledgerOnlyRows = useMemo(
+    () => (ledgerPaidOrders?.orders ?? []).filter((o) => !localOnlineIds.has(o.id)),
+    [ledgerPaidOrders, localOnlineIds],
+  );
 
   const ledgerOnlyOnline = useMemo(() => {
     const amount = ledgerOnlyRows.reduce(
@@ -1446,6 +1452,42 @@ export function ShiftPage() {
                   <div className="mt-1 text-xs text-slate-500">Ledger「已完成」單細項（供核對，未完成單未計）</div>
                 </article>
               </div>
+            ) : null}
+
+            {ledgerPaidOrders ? (
+              <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                <summary className="cursor-pointer font-semibold text-slate-800">
+                  線上拆數（點開逐張核對）：本地投影 {onlineLocalOrders.length} 張 {formatMoney(onlineLocalMop)} ＋
+                  Ledger 已付款 {ledgerPaidOrders.count} 張 {formatMoney(ledgerPaidOrders.amountMop)}
+                  （其中 {ledgerOnlyRows.length} 張本地冇 → 計 {formatMoney(ledgerOnlyOnline.amountMop)}）
+                </summary>
+                <div className="mt-2 grid gap-1">
+                  {onlineLocalOrders.map((o) => (
+                    <div key={o.id} className="flex items-baseline justify-between gap-2">
+                      <span className="truncate">
+                        本地投影 · {o.localOrderNo} · onlineId {String(o.onlineOrderId).slice(0, 8)} · {o.paymentMethod ?? "—"}
+                      </span>
+                      <span className="shrink-0 font-semibold">{formatMoney(o.total)}</span>
+                    </div>
+                  ))}
+                  {ledgerPaidOrders.orders.map((o) => {
+                    const dup = localOnlineIds.has(o.id);
+                    const amount = Number(o.total ?? o.paidAmount ?? 0) || 0;
+                    return (
+                      <div
+                        key={o.id}
+                        className={`flex items-baseline justify-between gap-2 ${dup ? "text-slate-400" : ""}`}
+                      >
+                        <span className="truncate">
+                          Ledger · 取餐碼 {o.pickupCode ?? "—"} · id {o.id.slice(0, 8)} · {o.status}
+                          {dup ? "（本地已有 → 唔重複計）" : ""}
+                        </span>
+                        <span className="shrink-0 font-semibold">{formatMoney(amount)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
             ) : null}
           </section>
 
