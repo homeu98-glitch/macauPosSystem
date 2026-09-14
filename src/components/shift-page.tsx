@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -13,7 +13,7 @@ import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/repo
 import { sumPaidLedgerOrders, type PaidLedgerOrdersTotal } from "@/lib/ledger/paid-orders";
 // 補推：把「已付款但 Ledger 未 completed」嘅線上單推上梯頂（同一條堂食爬梯，零依賴可測）。
 import { syncOnlineDineInCompletionById } from "@/lib/pos/online-dinein-fulfillment";
-import { orderMatchesReportRange, macauTodayRange } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, macauTodayRange, macauDateKey } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
@@ -77,6 +77,39 @@ function ledgerFulfillmentLabel(fulfillmentType?: string | null): string {
   return "線上";
 }
 
+/**
+ * 交班歷史分頁（商家 2026-09-15 拍板）。
+ *
+ * - 口徑：「一頁 10 天」＝**10 個澳門日曆日**，一日可以有 2–3 個班次 → 實際行數可以多過 10。
+ * - 「查看更多」＝**累加**（保留已載入嘅，再加 10 天），唔係換頁。
+ * - 框架尺寸固定：載入更多日只會令表格**內部滾動**，個框唔會撐高（`max-h`）。
+ * - 「導出 CSV」＝**篩選後全部**，唔受 10 天限制。
+ */
+const SHIFT_HISTORY_PAGE_DAYS = 10;
+/** 交班歷史表格最大高度（px）—— 框架尺寸固定嘅關鍵。 */
+const SHIFT_HISTORY_MAX_HEIGHT_PX = 620;
+const MACAU_WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+
+/**
+ * 交班記錄 → 澳門日曆日 key（`YYYY-MM-DD`）。
+ *
+ * 🔴 唔可以用 `closedAt.slice(0, 10)`：`closedAt` 係 `toISOString()`（UTC），
+ * 澳門 00:00–08:00 收工嘅班次會被切到**前一日** —— 同格內顯示嘅澳門日期（`formatMacauDateTime`）
+ * 唔一致，令「日分隔列」講嘅日子同同一行嘅日期對唔上。一律用澳門邊界（`macauDateKey`）。
+ */
+function shiftHistoryDayKey(closedAt: string): string {
+  const d = new Date(closedAt);
+  if (Number.isNaN(d.getTime())) return "";
+  return macauDateKey(d);
+}
+
+/** 日分隔列標籤：`DD/MM/YYYY（週X）`，同格內顯示格式一致。 */
+function shiftHistoryDayLabel(day: string): string {
+  const parts = day.split("-");
+  if (parts.length !== 3) return day;
+  const wd = MACAU_WEEKDAY_LABELS[new Date(`${day}T00:00:00Z`).getUTCDay()] ?? "";
+  return `${parts[2]}/${parts[1]}/${parts[0]}（週${wd}）`;
+}
 /**
  * 交班摘要（線下 POS）。
  *
@@ -253,7 +286,7 @@ export function ShiftPage() {
   const [historyEmployeeFilter, setHistoryEmployeeFilter] = useState("");
   const [historyNoteDrafts, setHistoryNoteDrafts] = useState<Record<string, string>>({});
   const [reprintingShiftId, setReprintingShiftId] = useState<string | null>(null);
-  const [exportingType, setExportingType] = useState<"csv" | "excel" | null>(null);
+  const [exportingType, setExportingType] = useState<"csv" | null>(null);
   const [ledgerToday, setLedgerToday] = useState<LedgerReportSummary | null>(null);
   const [ledgerTodayLoading, setLedgerTodayLoading] = useState(false);
   const [ledgerTodayError, setLedgerTodayError] = useState<string | null>(null);
@@ -703,14 +736,54 @@ export function ShiftPage() {
       .reduce((sum, [, value]) => sum + (value?.paid ?? 0), 0);
   }, [summary.paymentBreakdown]);
   const filteredShiftHistory = useMemo(() => {
-    return shiftHistory.filter((row) => {
-      const day = row.closedAt.slice(0, 10);
+    const rows = shiftHistory.filter((row) => {
+      // 🔴 日期比較一律用**澳門日曆日**（同格內顯示、同日分隔列同一把尺）：
+      // 舊寫法用 `closedAt.slice(0, 10)`（UTC）→ 澳門 00:00–08:00 收工嘅班次會被算落前一日。
+      const day = shiftHistoryDayKey(row.closedAt);
       if (historyDateFrom && day < historyDateFrom) return false;
       if (historyDateTo && day > historyDateTo) return false;
       if (historyEmployeeFilter && (row.employeeAccount ?? "") !== historyEmployeeFilter) return false;
       return true;
     });
+    // 新 → 舊（同日按 closedAt 新→舊）；分頁按日切片一定要有穩定次序。
+    return rows.sort((a, b) => (Date.parse(b.closedAt) || 0) - (Date.parse(a.closedAt) || 0));
   }, [historyDateFrom, historyDateTo, historyEmployeeFilter, shiftHistory]);
+
+  /** 交班歷史按「澳門日曆日」分組（一日可以有多個班次）→ 分頁最小單位。 */
+  const shiftHistoryDayGroups = useMemo(() => {
+    const groups: Array<{ day: string; label: string; rows: typeof filteredShiftHistory }> = [];
+    const byDay = new Map<string, (typeof groups)[number]>();
+    for (const row of filteredShiftHistory) {
+      const day = shiftHistoryDayKey(row.closedAt);
+      if (!day) continue;
+      let group = byDay.get(day);
+      if (!group) {
+        group = { day, label: shiftHistoryDayLabel(day), rows: [] };
+        byDay.set(day, group);
+        groups.push(group);
+      }
+      group.rows.push(row);
+    }
+    return groups;
+  }, [filteredShiftHistory]);
+
+  /** 已載入幾多日（「查看更多」累加 10 天；框架尺寸固定，多咗只會內部滾動）。 */
+  const [historyLoadedDays, setHistoryLoadedDays] = useState(SHIFT_HISTORY_PAGE_DAYS);
+  // 篩選條件一改就回到第一頁，避免「篩完之後停喺第 30 天」嘅空框。
+  useEffect(() => {
+    setHistoryLoadedDays(SHIFT_HISTORY_PAGE_DAYS);
+  }, [historyDateFrom, historyDateTo, historyEmployeeFilter]);
+
+  const shiftHistoryVisibleGroups = useMemo(
+    () => shiftHistoryDayGroups.slice(0, historyLoadedDays),
+    [shiftHistoryDayGroups, historyLoadedDays],
+  );
+  const shiftHistoryVisibleRows = useMemo(
+    () => shiftHistoryVisibleGroups.reduce((sum, group) => sum + group.rows.length, 0),
+    [shiftHistoryVisibleGroups],
+  );
+  const shiftHistoryHasMore = shiftHistoryDayGroups.length > shiftHistoryVisibleGroups.length;
+
   const historyEmployeeOptions = useMemo(
     () =>
       Array.from(
@@ -1241,70 +1314,13 @@ export function ShiftPage() {
     setExportingType(null);
   }
 
-  function exportShiftHistoryExcel() {
-    if (exportingType) return;
-    setExportingType("excel");
-    if (filteredShiftHistory.length === 0 || typeof window === "undefined") {
-      setStatus("目前沒有符合條件的交班歷史可導出。");
-      setExportingType(null);
-      return;
-    }
-    const html = `
-      <table>
-        <thead>
-          <tr>
-            <th>交班時間</th>
-            <th>員工</th>
-            <th>營業額</th>
-            <th>應收金額合計</th>
-            <th>實收金額合計</th>
-            <th>線上已付</th>
-            <th>線上線下合計</th>
-            <th>退款金額</th>
-            <th>應收現金</th>
-            <th>實收現金</th>
-            <th>現金差額</th>
-            <th>待同步事件</th>
-            <th>待補傳打印</th>
-            <th>備註</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${filteredShiftHistory
-            .map(
-              (row) => `
-                <tr>
-                  <td>${formatMacauDateTime(row.closedAt)}</td>
-                  <td>${row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
-                  <td>${row.revenue}</td>
-                  <td>${row.receivableTotal ?? ""}</td>
-                  <td>${row.paidTotal ?? ""}</td>
-                  <td>${row.onlinePaidMop ?? ""}</td>
-                  <td>${(row.paidTotal ?? 0) + (row.onlinePaidMop ?? 0)}</td>
-                  <td>${row.refundAmount}</td>
-                  <td>${row.expectedCash}</td>
-                  <td>${row.actualCash ?? ""}</td>
-                  <td>${row.cashDifference ?? ""}</td>
-                  <td>${row.pendingEvents}</td>
-                  <td>${row.pendingPrints}</td>
-                  <td>${row.closingNote ?? ""}</td>
-                </tr>
-              `,
-            )
-            .join("")}
-        </tbody>
-      </table>
-    `;
-    const blob = new Blob([`\uFEFF${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "交班歷史.xls";
-    link.click();
-    URL.revokeObjectURL(url);
-    setStatus("交班歷史 Excel 已導出。");
-    setExportingType(null);
-  }
+  /**
+   * 🔴 2026-09-15（商家要求）：**移除 Excel 導出，只保留 CSV**。
+   *
+   * 原本嘅「導出 Excel」只係一個副檔名 `.xls` 嘅 HTML `<table>`（Excel 開會出格式警告），
+   * 而且同一批欄位要喺兩條導出函式各自維護 → 欄位口徑早晚漂移。
+   * CSV（UTF-8 BOM，Excel 直接開得正常）已涵蓋全部欄位，導出範圍＝**篩選後全部**（唔受 10 天分頁限制）。
+   */
 
   // —— 結數交班彈窗派生值（step 1 填寫時即時推算；step 2 二次確認顯示同一批數）——
   const parsedClosingDiff = interpretCashDiff(closingDiff);
@@ -1601,65 +1617,101 @@ export function ShiftPage() {
           </section>
 
           <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold text-slate-900">交班歷史</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  保留最近 60 次交班記錄，方便追數與核對。
-                  {historyCloudCount > 0
-                    ? `｜已由雲端同步 ${historyCloudCount} 筆（換機／多部機共用同一份）`
-                    : "｜交班記錄要上雲後才會跨機顯示。"}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setHistoryDateFrom(event.target.value)}
-                  type="date"
-                  value={historyDateFrom}
-                />
-                <span className="text-sm text-slate-400">至</span>
-                <input
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setHistoryDateTo(event.target.value)}
-                  type="date"
-                  value={historyDateTo}
-                />
-                <select
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                  onChange={(event) => setHistoryEmployeeFilter(event.target.value)}
-                  value={historyEmployeeFilter}
-                >
-                  <option value="">全部員工</option>
-                  {historyEmployeeOptions.map(([account, name]) => (
-                    <option key={account} value={account}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  aria-busy={exportingType === "csv"}
-                  className="rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
-                  disabled={Boolean(exportingType)}
-                  onClick={exportShiftHistoryCsv}
-                  type="button"
-                >
-                  {exportingType === "csv" ? "同步中…" : "導出 CSV"}
-                </button>
-                <button
-                  aria-busy={exportingType === "excel"}
-                  className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                  disabled={Boolean(exportingType)}
-                  onClick={exportShiftHistoryExcel}
-                  type="button"
-                >
-                  {exportingType === "excel" ? "同步中…" : "導出 Excel"}
-                </button>
+            <div>
+              <div className="text-base font-semibold text-slate-900">交班歷史</div>
+              <div className="mt-1 text-sm text-slate-500">
+                保留最近 60 次交班記錄，方便追數與核對。
+                {historyCloudCount > 0
+                  ? `｜已由雲端同步 ${historyCloudCount} 筆（換機／多部機共用同一份）`
+                  : "｜交班記錄要上雲後才會跨機顯示。"}
               </div>
             </div>
-            <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
-              <table className="w-full border-collapse text-sm">
-                <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
+            {/*
+              🔴 2026-09-15：篩選條件**一律排喺同一行**。
+              舊寫法標題同篩選同一個 flex 容器，副標題太長會搶走寬度 →
+              最後一粒掣被迫換行、壓落表頭。所以標題搬上去自己一行，
+              篩選收成獨立一條「篩選列」，並用 nowrap 保證唔會斷行
+              （容器太窄時改為橫向滾動，唔會拆行）。
+            */}
+            <div className="mt-4 flex items-center gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <span className="shrink-0 text-xs text-slate-500">交班日期</span>
+              <input
+                aria-label="交班日期（由）"
+                className="h-10 w-[150px] shrink-0 rounded-xl border border-slate-200 bg-white px-3"
+                onChange={(event) => setHistoryDateFrom(event.target.value)}
+                type="date"
+                value={historyDateFrom}
+              />
+              <span className="shrink-0 text-xs text-slate-400">至</span>
+              <input
+                aria-label="交班日期（至）"
+                className="h-10 w-[150px] shrink-0 rounded-xl border border-slate-200 bg-white px-3"
+                onChange={(event) => setHistoryDateTo(event.target.value)}
+                type="date"
+                value={historyDateTo}
+              />
+              <span className="h-6 w-px shrink-0 bg-slate-200" />
+              <span className="shrink-0 text-xs text-slate-500">員工</span>
+              <select
+                aria-label="員工"
+                className="h-10 w-[150px] shrink-0 rounded-xl border border-slate-200 bg-white px-2"
+                onChange={(event) => setHistoryEmployeeFilter(event.target.value)}
+                value={historyEmployeeFilter}
+              >
+                <option value="">全部員工</option>
+                {historyEmployeeOptions.map(([account, name]) => (
+                  <option key={account} value={account}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <span className="min-w-0 flex-1" />
+              <button
+                aria-busy={exportingType === "csv"}
+                className="h-10 shrink-0 rounded-xl bg-white px-4 font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+                disabled={Boolean(exportingType)}
+                onClick={exportShiftHistoryCsv}
+                type="button"
+              >
+                {exportingType === "csv" ? "同步中…" : "導出 CSV"}
+              </button>
+            </div>
+            {/*
+              🔴 2026-09-15：① 框架尺寸固定（`max-h` + 內部滾動）—— 撳「查看更多」載入更多日
+              只會令表格內部滾動，個框唔會撐高。② `table-layout:fixed` + `<colgroup>` 固定欄寬
+              ⇒ 金額唔再被切斷（舊版「MOP 4,2…」）、操作欄兩粒掣唔再換行。
+              ⚠️ 12 欄合計最少要 ~1102px；容器（iPad 橫向可用約 1100）唔夠闊時，
+              wrapper 會橫向滾動（本來就有 `overflow-auto`），唔會壓爛欄寬。
+            */}
+            <div
+              className="mt-4 overflow-auto rounded-2xl border border-slate-200"
+              style={{ maxHeight: `${SHIFT_HISTORY_MAX_HEIGHT_PX}px` }}
+            >
+              <table className="w-full min-w-[1130px] table-fixed border-collapse text-xs">
+                {/*
+                  欄寬用百分比（同 repo 其他表一致：table-fixed + 百分比 + min-w）。
+                  🔴 基準 = **1130px**，而且每個數字係**實測**（真瀏覽器量 `Range` 文字闊度），
+                  唔係估：12px 字「MOP 3,945」實測要 66–70px 內容闊度 ⇒ 營業額類欄位一定要 94px
+                  （58px 會斷成「MOP」/「3,945」兩行，實測中過）。
+                  ⇒ 容器（iPad 橫向約 1040px）唔夠闊時**橫向滾動** ~90px，欄位內容永遠完整。
+                */}
+                <colgroup>
+                  <col className="w-[7.96%]" />
+                  <col className="w-[6.37%]" />
+                  <col className="w-[8.32%]" />
+                  <col className="w-[8.32%]" />
+                  <col className="w-[8.32%]" />
+                  <col className="w-[8.32%]" />
+                  <col className="w-[5.84%]" />
+                  <col className="w-[9.03%]" />
+                  <col className="w-[6.02%]" />
+                  <col className="w-[5.13%]" />
+                  <col className="w-[11.86%]" />
+                  <col className="w-[14.51%]" />
+                </colgroup>
+                {/* 表頭 11px：欄闊係按 12px 內容實測值定死（1130px 基準），
+                    表頭用 11px 先可以全部單行顯示，唔會斷成「應收金額合 / 計」。 */}
+                <thead className="bg-slate-50 text-left text-[11px] font-semibold text-slate-500">
                   <tr>
                     <th className="border-b border-slate-200 px-3 py-2">交班時間</th>
                     <th className="border-b border-slate-200 px-3 py-2">員工</th>
@@ -1676,7 +1728,7 @@ export function ShiftPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredShiftHistory.length === 0 ? (
+                  {shiftHistoryDayGroups.length === 0 ? (
                     <tr>
                       <td className="px-3 py-4 text-slate-500" colSpan={12}>
                         目前沒有符合條件的交班歷史。
@@ -1686,44 +1738,66 @@ export function ShiftPage() {
                       </td>
                     </tr>
                   ) : (
-                    filteredShiftHistory.map((row) => (
+                    shiftHistoryVisibleGroups.map((group) => (
+                      <Fragment key={`day-${group.day}`}>
+                        {/* 日分隔列：令「每頁 10 天」睇得見；同一日多個班次唔會撈亂。 */}
+                        <tr className="bg-slate-50/80">
+                          <td
+                            className="border-b border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500"
+                            colSpan={12}
+                          >
+                            {group.label} · {group.rows.length} 個班次
+                          </td>
+                        </tr>
+                        {group.rows.map((row) => (
                       <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
                         <td className="px-3 py-3 text-slate-700">{formatMacauDateTime(row.closedAt)}</td>
                         <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
-                        <td className="px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
-                        <td className="px-3 py-3 text-slate-700">
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatMoney(row.revenue)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
                           {typeof row.receivableTotal === "number" ? formatMoney(row.receivableTotal) : "--"}
                         </td>
-                        <td className="px-3 py-3 font-semibold text-emerald-700">
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-emerald-700">
                           {typeof row.paidTotal === "number" ? formatMoney(row.paidTotal) : "--"}
                         </td>
-                        <td className="px-3 py-3 font-semibold text-orange-700">
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-orange-700">
                           {typeof row.paidTotal === "number"
                             ? formatMoney(row.paidTotal + (row.onlinePaidMop ?? 0))
                             : typeof row.onlinePaidMop === "number"
                               ? formatMoney(row.onlinePaidMop)
                               : "--"}
                         </td>
-                        <td className="px-3 py-3 text-slate-700">
-                          {row.refundCount} / {formatMoney(row.refundAmount)}
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
+                          {row.refundCount}
+                          {/* 金額另起一行 —— 一行寫成「0 / MOP 38」會超出欄闊被裁。 */}
+                          <div className="text-[11px] text-slate-500">{formatMoney(row.refundAmount)}</div>
                         </td>
-                        <td className="px-3 py-3 text-slate-700">
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
                           {formatMoney(row.expectedCash)}
-                          {typeof row.actualCash === "number" ? ` / ${formatMoney(row.actualCash)}` : ""}
+                          {/* 實收現金另外一行 —— 一行寫成「MOP a / MOP b」會超出欄闊被裁。 */}
+                          {typeof row.actualCash === "number" ? (
+                            <div className="text-[11px] text-slate-500">/ {formatMoney(row.actualCash)}</div>
+                          ) : null}
                         </td>
-                        <td className={`px-3 py-3 font-semibold ${row.cashDifference === 0 ? "text-emerald-700" : "text-red-700"}`}>
+                        <td className={`whitespace-nowrap px-3 py-3 font-semibold ${row.cashDifference === 0 ? "text-emerald-700" : "text-red-700"}`}>
                           {typeof row.cashDifference === "number" ? formatMoney(row.cashDifference) : "--"}
                         </td>
+                        {/* 逐行拆開顯示（唔用「N 事件 / M 打印」一行）—— 欄窄時會斷成「3 打 / 印」。 */}
                         <td className="px-3 py-3 text-slate-700">
-                          {row.pendingEvents} 事件 / {row.pendingPrints} 打印{row.failedEvents ? ` · ${row.failedEvents} 失敗` : ""}
+                          {row.pendingEvents} 事件
+                          <div className="text-[11px] text-slate-500">{row.pendingPrints} 打印</div>
+                          {row.failedEvents ? (
+                            <div className="text-[11px] text-red-600">{row.failedEvents} 失敗</div>
+                          ) : null}
                           {row.skippedEvents ? (
-                            <div className="mt-1 text-xs text-slate-500">無歸屬 {row.skippedEvents}</div>
+                            <div className="text-[11px] text-slate-500">無歸屬 {row.skippedEvents}</div>
                           ) : null}
                         </td>
                         <td className="px-3 py-3">
-                          <div className="flex min-w-[150px] items-center gap-2">
+                          {/* 唔可以加 `min-w-[150px]`：table-layout:fixed 之下會撐爆個格。 */}
+                          <div className="flex min-w-0 items-center gap-2">
                             <input
-                              className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                              className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-2 py-2 text-slate-700"
                               onChange={(event) =>
                                 setHistoryNoteDrafts((current) => ({
                                   ...current,
@@ -1734,7 +1808,7 @@ export function ShiftPage() {
                               value={historyNoteDrafts[row.id] ?? row.closingNote ?? ""}
                             />
                             <button
-                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                              className="shrink-0 rounded-xl bg-white px-2 py-2 font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                               onClick={() => saveHistoryNote(row.id)}
                               type="button"
                             >
@@ -1746,7 +1820,7 @@ export function ShiftPage() {
                           <div className="flex flex-wrap gap-2">
                             <button
                               aria-busy={reprintingShiftId === row.id}
-                              className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+                              className="whitespace-nowrap rounded-xl bg-white px-2.5 py-2 font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
                               disabled={Boolean(reprintingShiftId)}
                               onClick={() => reprintShiftRecord(row)}
                               type="button"
@@ -1754,7 +1828,7 @@ export function ShiftPage() {
                               {reprintingShiftId === row.id ? "打印中…" : "重打交班單"}
                             </button>
                             <button
-                              className="whitespace-nowrap rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
+                              className="whitespace-nowrap rounded-xl bg-red-50 px-2.5 py-2 font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
                               onClick={() => deleteHistoryRecord(row.id)}
                               type="button"
                             >
@@ -1763,10 +1837,47 @@ export function ShiftPage() {
                           </div>
                         </td>
                       </tr>
+                        ))}
+                      </Fragment>
                     ))
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* 分頁：每頁最多 10 個日曆日；「查看更多」累加（框尺寸固定）。 */}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-500">
+                已顯示最近 <span className="font-semibold text-slate-900">{shiftHistoryVisibleGroups.length} 天</span> ·{" "}
+                <span className="font-semibold text-slate-900">{shiftHistoryVisibleRows} 筆</span>
+                （合計 <span className="font-semibold text-slate-900">{shiftHistoryDayGroups.length} 天</span> ·{" "}
+                <span className="font-semibold text-slate-900">{filteredShiftHistory.length} 筆</span>）　·　每頁最多{" "}
+                {SHIFT_HISTORY_PAGE_DAYS} 天
+              </div>
+              <div className="flex items-center gap-2">
+                {shiftHistoryVisibleGroups.length > SHIFT_HISTORY_PAGE_DAYS ? (
+                  <button
+                    className="h-11 rounded-2xl px-4 font-semibold text-slate-500"
+                    onClick={() => setHistoryLoadedDays(SHIFT_HISTORY_PAGE_DAYS)}
+                    type="button"
+                  >
+                    收起
+                  </button>
+                ) : null}
+                <button
+                  className="h-11 rounded-2xl bg-slate-900 px-5 font-semibold text-white disabled:opacity-40"
+                  disabled={!shiftHistoryHasMore}
+                  onClick={() => setHistoryLoadedDays((current) => current + SHIFT_HISTORY_PAGE_DAYS)}
+                  type="button"
+                >
+                  {shiftHistoryHasMore
+                    ? `查看更多（再載入 ${Math.min(
+                        SHIFT_HISTORY_PAGE_DAYS,
+                        shiftHistoryDayGroups.length - shiftHistoryVisibleGroups.length,
+                      )} 天）`
+                    : "已全部載入"}
+                </button>
+              </div>
             </div>
           </section>
 
