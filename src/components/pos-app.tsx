@@ -160,7 +160,8 @@ import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-f
 // 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
-import { isOnlineDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
+import { isPaidDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
+import { resolveSettleTargetOrder as resolveSettleTargetOrderCore } from "@/lib/pos/settle-target";
 
 /**
  * 已補印嘅「加單」簽名（`orderId` → 已出過嘅新增菜品簽名集合）。
@@ -2013,6 +2014,46 @@ export function PosApp() {
     }
     return map;
   })();
+
+  /**
+   * 結帳目標解析 —— 🔴 2026-09-14 修：**唔可以再「全店掃第一張可結帳單」**。
+   *
+   * 【實案】A03 嘅掃碼堂食單係 `paid` ＋ 真枱 ＋ `prepaidAmount`，但舊
+   * `isSettleableOrder()` 要求 `onlineOrderId`（掃碼單冇）→ 判佢唔可結帳 →
+   * 結帳入口最後一重 fallback `orders.find((order) => isSettleableOrder(order))`
+   * 就喺**全店**揀咗另一張單 → 收銀以為結 A03，實際錢／狀態寫咗落**第二張枱**。
+   *
+   * 規則本體收喺**純函式** `@/lib/pos/settle-target`（有回歸測試鎖住「永不跨枱」），
+   * 呢度只負責餵 component state（快餐哨兵 `__cart__` 一律當「冇指定」）。
+   */
+  function resolveSettleTargetOrder(explicitId?: string | null): PosOrder | null {
+    return resolveSettleTargetOrderCore({
+      orders,
+      explicitId: explicitId && explicitId !== CART_PAYING_ID ? explicitId : null,
+      activeOrder,
+      workspaceOrder,
+      activeTableId,
+    });
+  }
+
+  /**
+   * 結帳失敗提示用：列出**本枱**所有單嘅狀態（冇單 → 「冇單」）。
+   *
+   * 目的：唔靠 devtools 都可以一眼睇到「枱上有單但解析唔到目標」嘅真因
+   * （實案：A03 明明有 `paid` 單，舊版 `isSettleableOrder()` 唔認 → 彈
+   * 「目前沒有待結帳訂單」，但完全冇線索指向邊張單出咗事）。
+   */
+  function describeTableOrderStates(): string {
+    const rows = activeTableId ? orders.filter((order) => order.tableId === activeTableId) : [];
+    if (rows.length === 0) return "冇單";
+    return rows.map((order) => order.status).join("／");
+  }
+
+  /** 揀唔到結帳目標時嘅提示（帶本枱狀態，方便即場判斷係「真係冇單」定「判準唔認」）。 */
+  function noSettleTargetMessage(): string {
+    return `目前沒有待結帳訂單（${activeTable?.name ?? "本枱"}：${describeTableOrderStates()}）。`;
+  }
+
   function persistOrders(nextOrders: PosOrder[]) {
     setOrders(nextOrders);
     saveOrders(nextOrders);
@@ -4089,14 +4130,13 @@ export function PosApp() {
       return;
     }
 
-    // 🔴 2026-09-13：最後一重 fallback 由「全店第一張 sent_to_kitchen」改為
-    // 「全店第一張可結帳單」（`isSettleableOrder`）。同樣係令排位後已付款嘅線上堂食單行到結帳。
-    const targetOrder =
-      (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null) ??
-      orders.find((order) => isSettleableOrder(order)) ??
-      null;
-    if (!targetOrder) return;
+    // 🔴 2026-09-14：目標解析統一收喺 `resolveSettleTargetOrder()` ——
+    // 舊寫法最後一重「全店第一張可結帳單」會令 A03 嘅結帳去咗第二張枱（見該函式註釋）。
+    const targetOrder = resolveSettleTargetOrder(payingOrderId);
+    if (!targetOrder) {
+      setToast({ tone: "info", message: noSettleTargetMessage() });
+      return;
+    }
 
     await runCheckout(targetOrder);
   }
@@ -4258,13 +4298,11 @@ export function PosApp() {
       return;
     }
 
-    const targetOrder =
-      (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null) ??
-      orders.find((order) => isSettleableOrder(order)) ??
-      null;
+    // 🔴 2026-09-14：同 `confirmPayment()` —— 只喺「明確指定 / 當前工作台 / 當前枱」之間揀，
+    // 唔可以喺全店亂揀（免單一樣係「落錯枱」嘅高危操作）。
+    const targetOrder = resolveSettleTargetOrder(payingOrderId);
     if (!targetOrder) {
-      setToast({ tone: "error", message: "搵唔到要免單嘅訂單。" });
+      setToast({ tone: "error", message: `搵唔到要免單嘅訂單（${activeTable?.name ?? "本枱"}：${describeTableOrderStates()}）。` });
       return;
     }
 
@@ -4273,12 +4311,13 @@ export function PosApp() {
 
   function completeOnlinePaidOrder() {
     if (!bootstrap) return;
-    const targetOrder =
-      (payingOrderId ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
-      (activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null) ??
-      orders.find((order) => isSettleableOrder(order)) ??
-      null;
-    if (!targetOrder) return;
+    // 🔴 2026-09-14：同上 —— 「客人已支付，完成訂單」都只可以作用喺
+    // 明確指定 / 當前工作台 / 當前枱嘅單（呢粒掣一樣會寫 status + 出收據）。
+    const targetOrder = resolveSettleTargetOrder(payingOrderId);
+    if (!targetOrder) {
+      setToast({ tone: "info", message: noSettleTargetMessage() });
+      return;
+    }
 
     const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
     const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
@@ -4360,10 +4399,12 @@ export function PosApp() {
 
     // 🔴 2026-09-13：判準收喺 `isSettleableOrder()`。舊寫法只認 `sent_to_kitchen` / `reopened`，
     // 令「排位後已付款嘅線上堂食單」（`paid` + `onlineOrderId` + 真枱）永遠撳唔到結帳。
-    const targetOrder =
-      activeOrder && isSettleableOrder(activeOrder) ? activeOrder : orders.find((order) => isSettleableOrder(order));
+    // 🔴 2026-09-14：但佢**唔可以**再 fallback 去全店任何一張單 ——
+    // 實案 A03（掃碼 paid 單，冇 `onlineOrderId`）撳「去結帳」時，
+    // 舊 fallback 就揀咗第二張枱嘅單入結帳頁（詳見 `resolveSettleTargetOrder()`）。
+    const targetOrder = resolveSettleTargetOrder(null);
     if (!targetOrder) {
-      setToast({ tone: "info", message: "目前沒有待結帳訂單。" });
+      setToast({ tone: "info", message: noSettleTargetMessage() });
       return;
     }
     setPayingOrderId(targetOrder.id);
@@ -4492,16 +4533,20 @@ export function PosApp() {
                     // 🔴 2026-09-13 商家口徑：線上已付款嘅堂食單排位入枱後，本地寫 `paid`
                     // （錢喺 Ledger 收咗，只等收尾／加菜）→ 桌台卡要**綠色**「已結帳 / 待收尾」，
                     // 唔可以同一般「已下單」嘅橙色混在一起（收銀一眼分唔到邊張已經收咗錢）。
-                    // 判準用 `isOnlineDineInOrder()`（帶 Ledger 單 id ＋ 真枱號），
-                    // 同結帳入口放寬、排位自動推進 Ledger 係**同一份**邊界條件。
-                    const isPaidOnlineDineInTable =
-                      !!tableOrder && status === "paid" && isOnlineDineInOrder(tableOrder);
+                    // 判準用 `isPaidDineInOrder()`（`paid` ＋ 真枱號）——
+                    // 同結帳入口（`isSettleableOrder()`）係**同一份**邊界條件。
+                    //
+                    // 🔴 2026-09-14 修：舊寫法用 `isOnlineDineInOrder()`（要求 `onlineOrderId`），
+                    // 令**客人掃碼堂食單**（冇 `onlineOrderId`）出現
+                    // 「橙色（有單）但標籤寫『空閒』」嘅自相矛盾，收銀完全睇唔出張單已收款。
+                    const isPaidDineInTable =
+                      !!tableOrder && isPaidDineInOrder(tableOrder);
                     // 枱狀態為空閒時，唔應再顯示舊單嘅入座人數，否則會出現「空閒 / 已坐 1/—」
                     const seatedCount = isOccupied ? (seatedPartySizes[table.id] ?? 0) : 0;
                     const total = table.capacity ?? 0;
                     const occupancy = total > 0 ? `${seatedCount}/${total}` : `${seatedCount}/—`;
                     const label =
-                      isPaidOnlineDineInTable
+                      isPaidDineInTable
                         ? "已結帳 / 待收尾"
                         : isReopenedTable
                           ? "待重結"
@@ -4513,7 +4558,7 @@ export function PosApp() {
                     const labelFull = label;
                     // 開桌（非空閒）枱：整張格子實底高對比配色，方便一眼分開「有單」vs「空閒」
                     // —— 已結帳待收尾用綠、待重結用琥珀、已下單/未下單用橙；空閒維持白底。
-                    const cardTone = isPaidOnlineDineInTable
+                    const cardTone = isPaidDineInTable
                       ? "border-emerald-600 bg-emerald-500 text-white"
                       : isReopenedTable
                         ? "border-amber-600 bg-amber-500 text-white"
@@ -4879,7 +4924,7 @@ export function PosApp() {
                     返回桌台
                   </button>
                   <div className="text-xs text-slate-500">
-                    狀態：{selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
+                    狀態：{selectedTableStatus === "paid" ? "已結帳 / 待收尾" : selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "reopened" ? "待重結" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
                   </div>
                 </div>
               ) : null}

@@ -13,6 +13,7 @@ import { describe, it } from "node:test";
 import {
   hasTableAssigned,
   isOnlineDineIn,
+  isPaidDineInOrder,
   isSettleableOrder,
   isTableSelectable,
   needsTableAssignment,
@@ -132,9 +133,18 @@ describe("可結帳判定（2026-09-13 · 修「排位後卡住」）", () => {
     );
   });
 
-  it("🔴 本地堂食 paid 單（冇 onlineOrderId）→ 唔可結帳（快餐 counter 口徑不受影響）", () => {
-    assert.equal(isSettleableOrder(settle({ status: "paid", onlineOrderId: null })), false);
-    assert.equal(isSettleableOrder(settle({ status: "paid", onlineOrderId: undefined })), false);
+  it("🔴 掃碼堂食 paid 單（冇 onlineOrderId 但有真枱）→ 可結帳（2026-09-14 修：唔再靠 onlineOrderId）", () => {
+    // 實案：客人掃碼落單 + 付款 → 本地單 `paid` + 真枱 + prepaidAmount；
+    // 舊寫法要求 onlineOrderId → 返 false → 結帳入口 fallback 走去結第二張枱。
+    assert.equal(isSettleableOrder(settle({ status: "paid", onlineOrderId: null })), true);
+    assert.equal(isSettleableOrder(settle({ status: "paid", onlineOrderId: undefined })), true);
+  });
+
+  it("isPaidDineInOrder：paid ＋ 真枱才成立（counter / 冇枱一律 false）", () => {
+    assert.equal(isPaidDineInOrder(settle({ status: "paid", tableId: "table-a02" })), true);
+    assert.equal(isPaidDineInOrder(settle({ status: "paid", tableId: "counter" })), false);
+    assert.equal(isPaidDineInOrder(settle({ status: "paid", tableId: null })), false);
+    assert.equal(isPaidDineInOrder(settle({ status: "sent_to_kitchen" })), false);
   });
 
   it("🔴 線上 counter 單（快餐／自取／外賣）paid → 唔可結帳", () => {

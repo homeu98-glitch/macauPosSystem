@@ -80,11 +80,30 @@ function isOpenSettleableStatus(status: string | undefined | null): boolean {
 }
 
 /**
+ * 已收款嘅**堂食**單（2026-09-14）。
+ *
+ * 判準：`status === "paid"` ＋ **真枱號**（`hasTableAssigned()`，`counter` 唔算）。
+ *
+ * 點解唔再要求 `onlineOrderId`：
+ *   - 線上單排位後 → 有 `onlineOrderId`（`assignLedgerOrderToTable()`）；
+ *   - **客人掃碼堂食單冇 `onlineOrderId`**（`buildKioskOrder()` 唔寫呢個欄），
+ *     佢付款後一樣係 `paid` ＋ 真枱 ＋ `prepaidAmount > 0`。
+ *   兩者對收銀台嚟講係**同一件事**：錢收咗，仲要收加菜差額 / 收尾。
+ *
+ * ⚠️ 堂食單入面 `paid` 只可能由「錢已經收咗」產生（排位寫 `prepaidAmount = total`，
+ * 或掃碼單付款事件），所以呢個 predicate 唔會誤中未收款單。
+ */
+export function isPaidDineInOrder(order: SettleableOrderInfo): boolean {
+  return order.status === "paid" && hasTableAssigned(order);
+}
+
+/**
  * 呢張單可唔可以入結帳流程（2026-09-13）。
  *
  * 兩條路：
  *   1. 未收款嘅活躍單：`sent_to_kitchen` / `reopened`（本地堂食 + 快餐都係咁，口徑不變）；
- *   2. 🔴 **已付款嘅線上堂食單**（已排位）：`onlineOrderId` ＋ 真枱號 ＋ `status === "paid"`。
+ *   2. 🔴 **已收款嘅堂食單**：`isPaidDineInOrder()`（`paid` ＋ 真枱號）——
+ *      包括「已排位嘅線上已付單」同「客人掃碼已付單」，兩者對收銀台係同一件事。
  *
  * ## 為何要第 2 條（實案 bug）
  *
@@ -98,12 +117,23 @@ function isOpenSettleableStatus(status: string | undefined | null): boolean {
  *
  * ⚠️ 只認「真枱」：快餐模式嘅線上 counter 單（`tableId === "counter"`）唔屬堂食流程，
  * 佢行快餐 strip 嘅「可取餐 → 完成」，唔應該經呢度結帳。
+ *
+ * ## 🔴 2026-09-14 再放寬（實案：「結帳去咗第二張枱」）
+ *
+ * 上面第 2 條仍然太窄 —— 佢要 `onlineOrderId`，但**掃碼堂食單根本冇
+ * `onlineOrderId`**（`buildKioskOrder()` 唔會寫；`onlineOrderId` 係「排位」之後先由
+ * `assignLedgerOrderToTable()` 補上）。客人掃碼落單 + 付款之後，本地單係
+ * `paid` ＋ 真枱 ＋ `prepaidAmount > 0`，但本函式返 **false** ⇒
+ * 撳「去結帳」時，結帳入口嘅最後一重 fallback
+ * （`orders.find((order) => isSettleableOrder(order))`）就會**喺全店亂揀一張單**
+ * → 收銀以為結 A03，實際結咗第二張枱嘅單。
+ *
+ * ⇒ 判準改為「已收款嘅**堂食**單」（見 `isPaidDineInOrder()`）：`paid` ＋ 真枱號。
+ * 快餐 counter 單靠 `hasTableAssigned()` 排除，口徑不變。
  */
 export function isSettleableOrder(order: SettleableOrderInfo): boolean {
   if (isOpenSettleableStatus(order.status)) return true;
-  return (
-    Boolean(order.onlineOrderId) && hasTableAssigned(order) && order.status === "paid"
-  );
+  return isPaidDineInOrder(order);
 }
 
 const BADGE_EMERALD: OnlineBadge = {

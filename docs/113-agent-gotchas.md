@@ -593,6 +593,58 @@ git rev-list --objects main | awk '{print $1}' | git cat-file --batch-check | gr
   **零依賴**嘅 `@/lib/pos/quick-labels`（`quick-order-fulfillment` 原處 re-export，call site 不變），
   而 `pos-order-filters.ts` 內部用 **相對 + 顯式 `.ts`** import（`./pos/quick-labels.ts`）。
 
+## 🔴 結帳目標唔可以喺「全店」揀（2026-09-14 · A03 實案）
+
+**病症**：對 A03 做「加菜 → 去結帳」，撳落去**結咗第二張枱嘅單**；
+A03 自己仍然係「已付款 / 應收 95」，而嗰張無辜嘅單被寫成已結帳。
+同一時間桌台卡出現「橙色（有單）但標籤寫『空閒』」嘅自相矛盾。
+
+**根因（兩層，互相放大）**：
+
+1. **可結帳判準太窄**：`isSettleableOrder()` 第 2 條要求 `onlineOrderId`，
+   但**掃碼堂食單本身冇呢個欄**（`buildKioskOrder()` 唔會寫；`onlineOrderId`
+   係「排位」時由 `assignLedgerOrderToTable()` 先補上）。客人掃碼落單＋付款之後，
+   本地單係 `paid` ＋ 真枱 ＋ `prepaidAmount > 0`，判準卻返 **false**。
+   同理，桌台卡嘅「已結帳 / 待收尾」判準（`isOnlineDineInOrder()`）亦因此跌返「空閒」。
+2. **全店 fallback**：結帳入口（`openSettlementModal` / `confirmPayment` /
+   `completeOnlinePaidOrder` / `confirmComp`）最後一重係
+   `orders.find((order) => isSettleableOrder(order))` —— **喺全店任意揀一張單**。
+   上一步判錯 → 呢一步就揀錯枱。
+
+**修法**：
+
+- `@/lib/pos/online-dinein-labels`：新增 **`isPaidDineInOrder()`**（`paid` ＋ 真枱號，
+  唔再要求 `onlineOrderId`），`isSettleableOrder()` 第 2 條改為叫佢；
+  桌台卡「已結帳 / 待收尾」亦改用同一份判準（**兩者必須同源**，否則會再出現
+  「有單但顯示空閒」）。
+- `pos-app.tsx`：新增 **`resolveSettleTargetOrder(explicitId)`**（規則本體喺純函式
+  `@/lib/pos/settle-target.ts`），四個結帳入口共用。
+  四層、**永不跨枱**：① 明確指定（桌台卡／訂單列／線上面板，含快餐 `__cart__` 哨兵排除）
+  → ② 當前工作台 `activeOrder` → ③ `activeOrderId` 載入嘅 `workspaceOrder`
+  → ④ **只限當前枱 `activeTableId`** 嘅最新可結帳單
+  → 都冇 → `null`（出「目前沒有待結帳訂單（{枱}：{本枱單狀態}）」）。
+  **寧願結唔到帳，都唔可以靜靜結錯枱。**
+- 失敗提示**帶本枱單狀態**（`describeTableOrderStates()`）：舊版彈「目前沒有待結帳訂單」
+  完全冇線索指向邊張單出咗事，今次就係靠呢個訊息一秒判斷「枱上有 `paid` 單但解析唔到」。
+- 點餐頁頂部「狀態：…」係**第三個**狀態映射（同桌台卡、`OrderStatusBadge` 各一份），
+  亦已補 `paid` → 「已結帳 / 待收尾」；三個映射要一齊改，唔係又會出現「有單但寫空閒」。
+
+**鐵律**：
+
+- 任何「跟住撳落去會寫 status / 收錢」嘅操作（結帳、免單、完成訂單、退款），
+  目標單一律要**明確指定**或**限定當前枱**；**唔准** `orders.find(...)` 全店掃。
+- 「可結帳」＝「未收款 active」**或**「已收款堂食單（`paid` ＋ 真枱）」。
+  快餐 counter 單靠 `hasTableAssigned()`（`counter` 唔算枱）排除，口徑不變。
+- 桌台卡／點餐頁標籤同結帳入口判準**共用同一個 predicate**；改一邊就要改另一邊。
+- 迴歸測試：`src/lib/pos/settle-target.test.ts`（鎖「永不跨枱」，含空枱＋隔籬枱有單
+  → 一定要 `null`）＋ `src/lib/pos/online-dinein-labels.test.ts`（掃碼 paid 單、
+  counter、冇枱號三組 case）。
+
+⚠️ **「改咗代碼但行為唔變」又一來源**：收銀機／desktop companion 載嘅係
+**Vercel 部署**（見 docs/113「三端架構」），所以本機改完**要 deploy 先生效**；
+判斷方法：桌台總覽 A03 卡應該變**綠色「已結帳 / 待收尾」**（唔再橙色＋空閒）——
+唔變就係 build 未更新，唔係邏輯未修。
+
 ## 🔴 「取消結帳」掣唔可以喺重構中消失（2026-09-12 · 用戶實案）
 
 **病症**：快餐單落單後幾秒內想取消 → **搵唔到「取消結帳」掣**，張單卡死冇得取消。
