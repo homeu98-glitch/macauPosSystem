@@ -45,6 +45,8 @@ import {
   serverActiveToLocal,
   serverCloseShift,
   serverOpenShift,
+  fetchServerShiftHistory,
+  updateServerShiftClosingNote,
 } from "@/lib/shift-sync";
 import { DeviceConfig, DevicePrinterConfig, PosOrder, QueueEvent, ShiftSettlementSnapshot } from "@/lib/types";
 import { buildShiftPrintJobs } from "@/lib/print-jobs";
@@ -244,6 +246,8 @@ export function ShiftPage() {
   const [closingNote, setClosingNote] = useState("");
   const [closingShift, setClosingShift] = useState(false);
   const [shiftHistory, setShiftHistory] = useState(() => loadShiftHistory());
+  /** 雲端回填到幾多筆（>0 = 有跨機記錄，顯示喺標題旁令用戶知來源）。 */
+  const [historyCloudCount, setHistoryCloudCount] = useState(0);
   const [historyDateFrom, setHistoryDateFrom] = useState("");
   const [historyDateTo, setHistoryDateTo] = useState("");
   const [historyEmployeeFilter, setHistoryEmployeeFilter] = useState("");
@@ -378,11 +382,21 @@ export function ShiftPage() {
    * 會靜默少計未完成單）→ 所以 UI 必須標示係「已完成口徑」，唔可以靜默。
    */
   /**
-   * 本地／POS 側「帶 `onlineOrderId` 且已結帳」嘅單（＝線上交單嘅本地投影：掃碼／排位／快餐採納）。
+   * 本地／POS 側「**今日**帶 `onlineOrderId` 且已結帳」嘅單（＝線上交單嘅本地投影：掃碼／排位／快餐採納）。
    * 呢啲單**本地有真實收款記錄**，金額一定要計入線上實收。
+   *
+   * 🔴 2026-09-15 修（商家實案：報表今日「線上」MOP 0、交班卻顯示 602）：
+   * 呢個 filter 以前**冇日期條件**，會把**往日**（甚至幾個星期前）嘅線上投影單一齊加落「今日」線上實收，
+   * 令交班「線上線下合計（實收）」長期大過報表。
+   * 同一個檔案裏面其餘三個口徑（`todayLocalOrders` 線下／`ledgerOnlyRows` Ledger 純線上／
+   * `detailOrders` 明細）**全部**係 `orderMatchesReportRange(o, "today")`，唯獨呢個冇 →
+   * 交班自己「卡片線上數」同「明細線上小計」都夾唔到，更加同報表夾唔到。
    */
   const onlineLocalOrders = useMemo(
-    () => orders.filter((o) => !!o.onlineOrderId && o.status === "settled"),
+    () =>
+      orders.filter(
+        (o) => !!o.onlineOrderId && o.status === "settled" && orderMatchesReportRange(o, "today"),
+      ),
     [orders],
   );
   const onlineLocalMop = useMemo(
@@ -569,6 +583,63 @@ export function ShiftPage() {
   useEffect(() => {
     void refreshLedgerToday();
   }, [refreshLedgerToday]);
+
+  /**
+   * 🔴 2026-09-15 交班歷史雲端回填（商家明確要求：「我在別的電腦登入這個帳號，需要上雲！」）。
+   *
+   * 交班記錄本身**一直有上雲**（每次 close 會將成個 record 寫入 `pos_shifts.summary`），
+   * 但舊版「交班歷史」表只讀本機 localStorage（`macau-pos/stores/<storeId>/shift-history`）
+   * ⇒ 換機／清 cache／另一部機交班 → 表格空白，令人誤以為「冇上 DB」。
+   *
+   * 呢度由 `/api/pos/shift?history=1` 拉返已收工班次：
+   * - **本機為先**（同 id 保留本機版本 → 唔會覆蓋本地嘅備註編輯），雲端只補本機冇嘅；
+   * - 合併後按 closedAt 新→舊排序、上限 60 筆，並**寫返本機**（下次離線都見到）；
+   * - 失敗（離線／未配置）靜默保留本機記錄，絕不令歷史變空。
+   */
+  const refreshShiftHistoryFromCloud = useCallback(async () => {
+    const storeId = resolveStoreId();
+    if (!storeId || !readNetworkOnline()) return;
+    try {
+      const cloud = await fetchServerShiftHistory(storeId, 60);
+      setHistoryCloudCount(cloud.length);
+      if (cloud.length === 0) return;
+      setShiftHistory((prev) => {
+        const byId = new Map<string, ShiftHistoryRecord>();
+        for (const row of prev) byId.set(row.id, row);
+        // 雲端為先（已收工班次嘅權威；備註改動亦已 PATCH 上雲），但：
+        // ① 本機獨有嘅記錄（雲端未同步）保留 → 唔會消失；
+        // ② 若本機備註比雲端新（例如啱啱改完、sync 未成功）→ 保留本機嗰個備註。
+        for (const row of cloud) {
+          const local = byId.get(row.id);
+          if (!local) {
+            byId.set(row.id, row);
+            continue;
+          }
+          const merged: ShiftHistoryRecord = {
+            ...row,
+            serverShiftId: local.serverShiftId ?? row.serverShiftId,
+          };
+          const localNoteTs = Date.parse(local.noteUpdatedAt ?? "");
+          const cloudNoteTs = Date.parse(row.noteUpdatedAt ?? "");
+          if (Number.isFinite(localNoteTs) && (!Number.isFinite(cloudNoteTs) || localNoteTs > cloudNoteTs)) {
+            merged.closingNote = local.closingNote;
+          }
+          byId.set(row.id, merged);
+        }
+        const merged = [...byId.values()]
+          .sort((a, b) => (Date.parse(b.closedAt) || 0) - (Date.parse(a.closedAt) || 0))
+          .slice(0, 60);
+        saveShiftHistory(merged);
+        return merged;
+      });
+    } catch {
+      // 離線 / 未配置：保留本機記錄（唔彈錯、唔清空）。
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshShiftHistoryFromCloud();
+  }, [refreshShiftHistoryFromCloud]);
 
   /**
    * 補推：把「已付款但 Ledger 未 `completed`」嘅今日線上單逐張推上梯頂。
@@ -957,18 +1028,22 @@ export function ShiftPage() {
     // 2026-09-07（問題一）：收工狀態上雲 —— forceSyncBeforeClose 已保證 online。
     // 失敗唔 block 收工/打印，但會喺狀態列提示；reconcile 會喺下次 online 自動補 close。
     let serverCloseFailed = false;
+    /** 雲端 `pos_shifts` row id —— 之後改備註要 PATCH 返呢一行（見 syncHistoryNoteToCloud）。 */
+    let serverShiftId: string | undefined;
     const closingStoreId = resolveStoreId();
     if (!closingStoreId) {
       serverCloseFailed = true; // 冇店舖識別都當同步失敗處理（唔好誤報「雲端已同步」）
     } else if (readNetworkOnline()) {
       try {
-        serverCloseFailed = !(await serverCloseShift({
+        const closed = await serverCloseShift({
           storeId: closingStoreId,
           closingNote: closingNoteText || undefined,
           actualCash: actualValue,
           cashDifference: diffValue,
           summary: historyRecord as unknown as Record<string, unknown>,
-        }));
+        });
+        serverCloseFailed = !closed;
+        serverShiftId = closed?.id;
       } catch {
         serverCloseFailed = true;
       }
@@ -980,7 +1055,9 @@ export function ShiftPage() {
     const finalNext = serverCloseFailed ? next : { ...next, lastCloseSummary: undefined };
     setShift(finalNext);
     saveShiftState(finalNext);
-    const nextHistory = [historyRecord, ...shiftHistory].slice(0, 60);
+    // 有 server row id 就寫入記錄：令「交班後改備註」可以直接 PATCH 雲端（跨機生效）。
+    const savedRecord: ShiftHistoryRecord = serverShiftId ? { ...historyRecord, serverShiftId } : historyRecord;
+    const nextHistory = [savedRecord, ...shiftHistory].slice(0, 60);
     setShiftHistory(nextHistory);
     saveShiftHistory(nextHistory);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: finalNext } }));
@@ -1073,12 +1150,44 @@ export function ShiftPage() {
     setClosingShift(false);
   }
 
+  /**
+   * 🔴 2026-09-15：交班備註編輯要**跨機同步** —— 除了寫本機，亦 PATCH 返雲端 `pos_shifts.closing_note`。
+   *
+   * 目標行優先次序：① 記錄帶嘅 `serverShiftId`（交班時由 server close 回傳、或雲端回填時帶入）
+   * → ② 用 `closedAt` 由 server 搵（±10 秒窗口，只限同一店）。
+   * 失敗（離線／未配置／舊記錄搵唔到）→ 只更新本機並喺狀態列講清楚，**唔會靜默**。
+   */
+  async function syncHistoryNoteToCloud(record: ShiftHistoryRecord, note: string) {
+    const storeId = resolveStoreId();
+    if (!storeId || !readNetworkOnline()) {
+      setStatus("已更新本機備註；離線中，未同步雲端。");
+      return;
+    }
+    try {
+      const ok = await updateServerShiftClosingNote({
+        storeId,
+        shiftId: record.serverShiftId,
+        closedAt: record.closedAt,
+        closingNote: note,
+      });
+      setStatus(
+        ok ? "已更新備註並同步雲端（換機都見到）。" : "已更新本機備註；雲端搵唔到對應班次，未同步。",
+      );
+    } catch {
+      setStatus("已更新本機備註；雲端同步失敗，請檢查網絡後再試。");
+    }
+  }
+
   function saveHistoryNote(recordId: string) {
     const note = (historyNoteDrafts[recordId] ?? "").trim();
-    const nextHistory = shiftHistory.map((row) => (row.id === recordId ? { ...row, closingNote: note } : row));
+    const target = shiftHistory.find((row) => row.id === recordId);
+    const nextHistory = shiftHistory.map((row) =>
+      row.id === recordId ? { ...row, closingNote: note, noteUpdatedAt: new Date().toISOString() } : row,
+    );
     setShiftHistory(nextHistory);
     saveShiftHistory(nextHistory);
     setStatus("已更新交班歷史備註。");
+    if (target) void syncHistoryNoteToCloud(target, note);
   }
 
   function deleteHistoryRecord(recordId: string) {
@@ -1495,7 +1604,12 @@ export function ShiftPage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-base font-semibold text-slate-900">交班歷史</div>
-                <div className="mt-1 text-sm text-slate-500">保留最近 60 次交班記錄，方便追數與核對。</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  保留最近 60 次交班記錄，方便追數與核對。
+                  {historyCloudCount > 0
+                    ? `｜已由雲端同步 ${historyCloudCount} 筆（換機／多部機共用同一份）`
+                    : "｜交班記錄要上雲後才會跨機顯示。"}
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -1566,6 +1680,9 @@ export function ShiftPage() {
                     <tr>
                       <td className="px-3 py-4 text-slate-500" colSpan={12}>
                         目前沒有符合條件的交班歷史。
+                        {historyCloudCount === 0
+                          ? "（本機同雲端都未有已收工班次；完成一次「結數交班」後就會出現，換機登入都睇得返。）"
+                          : ""}
                       </td>
                     </tr>
                   ) : (

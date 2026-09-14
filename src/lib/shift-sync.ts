@@ -14,7 +14,7 @@
  * - 本地已收工但 server 仲 active（上次收工離線）→ 自動補 close（heal），避免另一機又見到已開工。
  */
 
-import { loadShiftState, saveShiftState, type ShiftState } from "@/lib/storage";
+import { loadShiftState, saveShiftState, type ShiftHistoryRecord, type ShiftState } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
 
 /** 連續開工提醒門檻（10 小時）。 */
@@ -58,6 +58,74 @@ export async function fetchServerShiftState(storeId: string): Promise<{
   return { active: json.active ?? null, serverNow: json.serverNow ?? new Date().toISOString() };
 }
 
+/**
+ * 雲端班次 row（`summary` 內就係交班時成個 `ShiftHistoryRecord`）→ 本地 `ShiftHistoryRecord`。
+ *
+ * 每次 close 都會將整個 record 塞入 `pos_shifts.summary`（見 `closeShift()`），
+ * 所以原則上原封還原；但舊記錄／異常情況可能缺欄位 ⇒ 一律防禦式補預設值，
+ * 令列表同 CSV 唔會因為 undefined 爆掉。
+ */
+function serverRowToHistoryRecord(row: ShiftServerActive): ShiftHistoryRecord | null {
+  const s = (row.summary ?? {}) as Partial<ShiftHistoryRecord>;
+  const closedAt = (typeof s.closedAt === "string" && s.closedAt) || row.closedAt;
+  if (!closedAt) return null;
+  const num = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  return {
+    id: typeof s.id === "string" && s.id ? s.id : `shift-${closedAt}`,
+    // ⚠️ 直欄（DB column）優先於 `summary` 內嘅副本：交班後改備註只會寫直欄，
+    // 若果讀 summary 就會拎返舊備註（2026-09-15）。
+    employeeAccount: row.employeeAccount ?? s.employeeAccount,
+    employeeName: row.employeeName ?? s.employeeName,
+    openedAt: row.openedAt ?? s.openedAt,
+    closedAt,
+    openingNote: row.openingNote ?? s.openingNote,
+    closingNote: row.closingNote ?? s.closingNote,
+    actualCash: row.actualCash ?? s.actualCash,
+    cashDifference: row.cashDifference ?? s.cashDifference,
+    shiftNo: s.shiftNo,
+    storeName: s.storeName,
+    // 記住雲端 row id（改備註要 PATCH 返呢行）＋ 最後更新時間（雲端回填時判斷新舊用）。
+    serverShiftId: row.id,
+    noteUpdatedAt: row.updatedAt,
+    settledCount: num(s.settledCount),
+    revenue: num(s.revenue),
+    receivableTotal: typeof s.receivableTotal === "number" ? s.receivableTotal : undefined,
+    paidTotal: typeof s.paidTotal === "number" ? s.paidTotal : undefined,
+    onlinePaidMop: typeof s.onlinePaidMop === "number" ? s.onlinePaidMop : undefined,
+    purchasePaid: typeof s.purchasePaid === "number" ? s.purchasePaid : undefined,
+    prepaid: num(s.prepaid),
+    refundCount: num(s.refundCount),
+    refundAmount: num(s.refundAmount),
+    expectedCash: num(s.expectedCash),
+    paymentBreakdown: s.paymentBreakdown ?? {},
+    pendingEvents: num(s.pendingEvents),
+    failedEvents: typeof s.failedEvents === "number" ? s.failedEvents : undefined,
+    skippedEvents: typeof s.skippedEvents === "number" ? s.skippedEvents : undefined,
+    pendingPrints: num(s.pendingPrints),
+    detail: s.detail,
+  };
+}
+
+/**
+ * GET /api/pos/shift?storeId=&history=1 → 該店**已收工**班次記錄（新→舊）。
+ *
+ * 🔴 2026-09-15 新增（商家要求「換電腦登入都要睇到交班歷史」）：
+ * 交班記錄以往只存本機 localStorage，換機／清 cache 就空白；
+ * 其實每次 close 已寫入 `pos_shifts.summary`，呢個 fetcher 就係雲端回填來源。
+ * 失敗（離線／未配置）→ 拋錯，由呼叫端保留本機記錄（唔可以令 UI 變空）。
+ */
+export async function fetchServerShiftHistory(storeId: string, limit = 60): Promise<ShiftHistoryRecord[]> {
+  const res = await fetch(
+    `/api/pos/shift?storeId=${encodeURIComponent(storeId)}&history=1&limit=${encodeURIComponent(String(limit))}`,
+    { headers: { "Content-Type": "application/json" }, cache: "no-store" },
+  );
+  const json = await readJsonOrThrow<{ ok?: boolean; history?: ShiftServerActive[] }>(res);
+  const rows = Array.isArray(json.history) ? json.history : [];
+  return rows
+    .map((row) => serverRowToHistoryRecord(row))
+    .filter((row): row is ShiftHistoryRecord => row !== null);
+}
+
 /** POST open：回傳 server 最終 active（conflict=true 代表已有另一班次進行中）。 */
 export async function serverOpenShift(params: {
   storeId: string;
@@ -75,18 +143,44 @@ export async function serverOpenShift(params: {
   return { conflict: json.conflict === true, active: json.active };
 }
 
-/** POST close：收工（server active 必須存在；冇就返回 false，等 reconcile 自行處理）。 */
+/**
+ * POST close：收工（server active 必須存在；冇就回傳 `null`，等 reconcile 自行處理）。
+ *
+ * 🔴 2026-09-15：回傳**已收工嘅 row**（唔再淨係 boolean）—— 呼叫端要記住 `id`
+ * （寫入交班記錄嘅 `serverShiftId`），之後改備註先可以 PATCH 返同一行。
+ */
 export async function serverCloseShift(params: {
   storeId: string;
   closingNote?: string;
   actualCash?: number;
   cashDifference?: number;
   summary?: Record<string, unknown>;
-}): Promise<boolean> {
+}): Promise<ShiftServerActive | null> {
   const res = await fetch("/api/pos/shift", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "close", ...params }),
+  });
+  const json = await readJsonOrThrow<{ ok?: boolean; closed?: ShiftServerActive }>(res).catch(() => null);
+  return json?.ok === true ? (json.closed ?? null) : null;
+}
+
+/**
+ * POST updateClosingNote：交班後改備註 → 寫返雲端 `pos_shifts.closing_note`（2026-09-15）。
+ *
+ * 目標行：優先 `shiftId`（交班／回填時記低嘅 row id）；冇就用 `closedAt` 由 server 搵
+ * （±10 秒窗口，只限同一店）→ 舊記錄都改得到。回傳 `false` = server 搵唔到對應班次。
+ */
+export async function updateServerShiftClosingNote(params: {
+  storeId: string;
+  shiftId?: string;
+  closedAt?: string;
+  closingNote: string;
+}): Promise<boolean> {
+  const res = await fetch("/api/pos/shift", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "updateClosingNote", ...params }),
   });
   const json = await readJsonOrThrow<{ ok?: boolean }>(res).catch(() => null);
   return json?.ok === true;
@@ -189,7 +283,7 @@ export async function reconcileLocalShift(storeId: string): Promise<ReconcileRes
         actualCash: local.actualCash,
         cashDifference: local.cashDifference,
         summary: local.lastCloseSummary,
-      }).catch(() => false);
+      }).catch(() => null);
       if (healed && local.lastCloseSummary) {
         const cleared: ShiftState = { ...local, lastCloseSummary: undefined };
         saveShiftState(cleared);

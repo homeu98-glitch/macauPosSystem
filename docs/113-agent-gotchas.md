@@ -266,6 +266,25 @@
   寫降級時要 **omit 新欄**（唔可以傳 `null` / `[]`）。
 - ⚠️ 新欄位落地前後都要能跑：0034 未跑 → 讀寫全部 42703 降級，功能靜默停用（唔可以連帶令既有三個備註清單死）。
 
+## 🔴 報表「線上實收」vs 交班「線上線下合計」口徑（2026-09-15 · 交班 602 / 報表 0）
+- **症狀**：店舖每日營運總結（今日）**幾乎全 0**，同一刻交班頁「線上線下合計（實收）」＝ MOP 602。
+- **根因①（交班多算）**：`shift-page.tsx` 嘅 `onlineLocalOrders`（本地線上投影單：帶 `onlineOrderId` + `settled`）
+  **漏咗日期過濾**，而同一檔案其餘三個口徑（`todayLocalOrders` 線下／`ledgerOnlyRows` Ledger 純線上／
+  `detailOrders` 明細）**全部**都係 `orderMatchesReportRange(o, "today")`。
+  ⇒ 往日（甚至幾個星期前）嘅線上投影單一路被加落「今日」線上實收；報表嚴格按今日 → 兩邊長期夾唔到，
+  跨午夜 00:00 之後最明顯（報表新一日由 0 開始，交班卻仲帶住舊數）。
+- ✅ **修法①**：`onlineLocalOrders` 加 `orderMatchesReportRange(o, "today")`。
+  改完交班卡片「線上」＝交班明細「線上」小計＝報表「線上」。
+- 🔴 **根因②（報表少算，同批修）**：報表嘅 Ledger 純線上單金額**淨係**經 `onlineDishSource` 入 `aggregate()`
+  （`ledgerOnlyPaidTotal` ← 逐張 `order.total ?? paidAmount`），而 `onlineDishSource` 以前**只 push
+  `get_order_detail()` 成功嘅單** → 明細 RPC 一失敗，嗰筆錢就喺 KPI 靜默消失
+  （交班唔受影響，因為佢只讀 `list_merchant_orders`，完全唔需要明細）。**明細係為菜品排行，唔可以連錢一齊掉。**
+  ⇒ 而家失敗都 `push({ order: o, items: [] })`：**金額照計**，只係菜品排行少嗰張（`onlineDetailInfo.failed` 照報）。
+- 🔴 **口徑鐵律**：交班同報表嘅「線上實收」= 同一個 `list_merchant_orders` 篩選
+  （區間內 + 非取消 + `paymentStatus === "paid"`，見 `lib/ledger/paid-orders.ts`）
+  **∪** 同區間內嘅本地線上投影單（按 Ledger order id 去重，**本地為準**）。
+  任何一邊改範圍／改判準，另一邊一定要跟，否則就會出現「兩張頁講兩個數」。
+
 ## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
 - **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。
 - **根因**：env 兩邊指唔同專案。server 寫 `pos_orders` 用 `SUPABASE_URL`（`src/lib/supabase-server.ts:5`，POS 自有專案）；瀏覽器 `getPosSupabaseClient()` 用 `NEXT_PUBLIC_SUPABASE_URL`（`.env.example` A 段 = **Ledger 專案，冇任何 `pos_*` 表**，實案 ref `zymdemjflsckicwcinxl`）。

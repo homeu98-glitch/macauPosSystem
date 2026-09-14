@@ -24,6 +24,8 @@ import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 const MAX_STORE_ID_LEN = 64;
 const MAX_NAME_LEN = 200;
 const MAX_TEXT_LEN = 2000;
+/** `history=1` 一次最多回傳幾筆已收工班次（交班記錄上限亦係 60 筆）。 */
+const MAX_HISTORY_LIMIT = 200;
 const STORE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /** 截斷字串（防超長寫爆 text/jsonb 欄）。非字串一律 null。 */
@@ -129,6 +131,33 @@ export async function GET(request: Request) {
     );
   }
 
+  // 🔴 2026-09-15：`history=1` → 回傳該店**已收工**嘅班次記錄（新→舊，最多 200 筆）。
+  // 背景：交班記錄以往只存本機 localStorage（`shift-history`），換機／清 cache／多機睇唔返，
+  // 但其實每次 close 都已經寫入 `pos_shifts.summary`（整個 ShiftHistoryRecord）。
+  // ⇒ 呢個查詢就係「雲端回填」嘅來源，令跨裝置見到同一份交班歷史。
+  if ((searchParams.get("history") ?? "") === "1") {
+    const limitRaw = Number(searchParams.get("limit") ?? 60);
+    const limit = Number.isFinite(limitRaw)
+      ? Math.max(1, Math.min(MAX_HISTORY_LIMIT, Math.floor(limitRaw)))
+      : 60;
+    const { data, error } = await supabase
+      .from("pos_shifts")
+      .select("*")
+      .eq("store_id", storeId)
+      .not("closed_at", "is", null)
+      .order("closed_at", { ascending: false })
+      .limit(limit);
+    if (error) {
+      console.error("[pos/shift] GET history 失敗:", error.message);
+      return NextResponse.json({ ok: false, error: "讀取交班歷史失敗，請稍後重試。" }, { status: 500 });
+    }
+    return NextResponse.json({
+      ok: true,
+      history: (data ?? []).map(mapRow),
+      serverNow: new Date().toISOString(),
+    });
+  }
+
   const { data, error } = await activeShiftQuery(supabase, storeId);
   if (error) {
     console.error("[pos/shift] GET 失敗:", error.message);
@@ -160,8 +189,16 @@ export async function POST(request: Request) {
   }
   const payload = raw as Record<string, unknown>;
   const action = typeof payload.action === "string" ? payload.action : "";
-  if (action !== "open" && action !== "close" && action !== "ackOvertime") {
-    return NextResponse.json({ ok: false, error: "action 必須係 open / close / ackOvertime" }, { status: 400 });
+  if (
+    action !== "open" &&
+    action !== "close" &&
+    action !== "ackOvertime" &&
+    action !== "updateClosingNote"
+  ) {
+    return NextResponse.json(
+      { ok: false, error: "action 必須係 open / close / ackOvertime / updateClosingNote" },
+      { status: 400 },
+    );
   }
 
   const checked = validateStoreId(typeof payload.storeId === "string" ? payload.storeId.trim() : "");
@@ -256,6 +293,43 @@ export async function POST(request: Request) {
       );
     }
     return NextResponse.json({ ok: true, closed: mapRow(data) });
+  }
+
+  // ─────────────────────────────────────────────
+  // updateClosingNote：交班後改備註（跨機同步，2026-09-15）
+  // ─────────────────────────────────────────────
+  // 背景：交班記錄已上雲，但「改備註」以往只寫本機 ⇒ 換機睇唔到。呢個 action 令備註亦落 DB。
+  // 目標行：優先 `shiftId`（交班／回填時記低嘅 pos_shifts.id）；
+  //         冇就用 `closedAt` ±10 秒窗口搵（本地 closedAt 同 server closed_at 有秒級偏差）。
+  if (action === "updateClosingNote") {
+    const shiftId = text(payload.shiftId, 64);
+    const closedAt = isoOrNull(payload.closedAt);
+    if (!shiftId && !closedAt) {
+      return NextResponse.json({ ok: false, error: "缺少 shiftId 或 closedAt。" }, { status: 400 });
+    }
+    // 空字串 = 清空備註（`text()` 遇空會回 null，所以要 ?? ""）。
+    const closingNote = text(payload.closingNote) ?? "";
+    const notePatch = { closing_note: closingNote, updated_at: new Date().toISOString() };
+
+    let noteQuery = supabase.from("pos_shifts").update(notePatch).eq("store_id", storeId);
+    if (shiftId) {
+      noteQuery = noteQuery.eq("id", shiftId);
+    } else if (closedAt) {
+      const center = Date.parse(closedAt);
+      noteQuery = noteQuery
+        .not("closed_at", "is", null)
+        .gte("closed_at", new Date(center - 10_000).toISOString())
+        .lte("closed_at", new Date(center + 10_000).toISOString());
+    }
+    const { data: noted, error: noteError } = await noteQuery.select("*").maybeSingle();
+    if (noteError) {
+      console.error("[pos/shift] updateClosingNote 失敗:", noteError.message);
+      return NextResponse.json({ ok: false, error: "更新備註失敗，請稍後重試。" }, { status: 500 });
+    }
+    if (!noted) {
+      return NextResponse.json({ ok: false, code: "no_shift_row", error: "搵唔到對應班次。" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true, closed: mapRow(noted) });
   }
 
   // ─────────────────────────────────────────────

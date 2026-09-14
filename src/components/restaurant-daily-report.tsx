@@ -1780,17 +1780,24 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
           collected.push({ order: o, items: detail.items ?? [] });
         } catch {
           if (cancelled) return;
+          // 🔴 2026-09-15（同交班「線上」夾數）：明細抓唔到，**唔可以連張單嘅錢一齊掉**。
+          // `aggregate()` 嘅「Ledger 純線上單」迴圈係逐張把 `orderPaid` 計入
+          // 應收／實收／支付方式分項／訂單明細（＝`ledgerOnlyPaidTotal`），
+          // `items` 只用嚟砌菜品銷售排行。以前 catch 直接唔 push ⇒ 嗰筆錢喺 KPI 靜默消失，
+          // 報表「線上」就會少過交班（交班只讀 `list_merchant_orders`，完全唔需要明細）。
           failed += 1;
+          collected.push({ order: o, items: [] });
         }
       }
       if (cancelled) return;
       setOnlineDishSource(collected);
       setOnlineDetailInfo({
         total: countableOnlineOrders.length,
-        ok: collected.length,
+        ok: collected.length - failed,
         failed,
-        status: collected.length === 0 && failed > 0 ? "error" : "success",
-        lastError: failed > 0 ? `${failed} 單明細抓取失敗` : null,
+        status: collected.length === 0 ? "idle" : failed === collected.length ? "error" : "success",
+        lastError:
+          failed > 0 ? `${failed} 單明細抓取失敗（金額已計入，僅菜品明細未併入）` : null,
       });
     }
     void loadOnlineDetails();

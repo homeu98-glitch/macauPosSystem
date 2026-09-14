@@ -1334,6 +1334,13 @@ export type ShiftHistoryRecord = {
   shiftNo?: string;
   /** 交班當刻店名快照（重打印表頭用；舊記錄冇）。 */
   storeName?: string;
+  /**
+   * 雲端 `pos_shifts` row id（2026-09-15 加）。
+   * 交班時由 server close 回傳、或雲端回填時帶入 → 令「交班後改備註」可以 PATCH 返雲端（跨機生效）。
+   */
+  serverShiftId?: string;
+  /** 備註最後更新時間（雲端回填時取自 `pos_shifts.updated_at`），用嚟決定新舊。 */
+  noteUpdatedAt?: string;
   settledCount: number;
   revenue: number;
   /** 線下 POS 應收金額合計（菜品原價合計 + 服務費 + 稅）。 */
