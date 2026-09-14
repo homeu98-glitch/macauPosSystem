@@ -25,8 +25,15 @@
  */
 export const SCHEDULED_PICKUP_SOON_MINUTES = 30;
 
-/** 預約單時間狀態。`null`（由 kindOf 回傳）＝ 冇有效預約時間。 */
-export type ScheduledPickupKind = "scheduled" | "soon" | "overdue";
+/**
+ * 預約單時間狀態。`null`（由 `scheduledPickupKind()` 回傳）＝ 冇有效預約時間。
+ *
+ * 🔴 `closed` ＝ 訂單**已完結**（已完成／已取消／已結帳）—— 呢個狀態唔屬於「時間」判斷，
+ * 而係**優先於時間**：單都做完收咗錢，再標「已逾時 159 分鐘」係錯嘅資訊
+ * （2026-09-14 商家實案：14:54 睇一張 12:15 預約、狀態「已完成」嘅單，仍然紅色逾時）。
+ * 已完結單只保留中性嘅「預約單」標籤 ＋ 預約時間，唔再出相對時間／警示色。
+ */
+export type ScheduledPickupKind = "scheduled" | "soon" | "overdue" | "closed";
 
 /** 任何帶 `scheduledPickupAt` 嘅物件（`LedgerOnlineOrder` / `PosOrder` 都符合）。 */
 type ScheduledLike = { scheduledPickupAt?: string | null } | null | undefined;
@@ -65,22 +72,30 @@ export function scheduledPickupMinutesUntil(
 }
 
 /**
- * 預約時間狀態：`soon`（快到，含剛好到點）／`overdue`（已過）／`scheduled`（仲有排）。
+ * 預約時間狀態：`scheduled`（仲有排）／`soon`（≤30 分鐘，快到）／`overdue`（已過）／`closed`（單已完結）。
  * 冇有效預約時間 → `null`（caller 直接唔 render）。
+ *
+ * @param closed 訂單**已完結**（已完成／已取消）→ 一律回 `closed`，唔理時間。
+ *   ⚠️ 呢個一定要由 caller 傳（元件層經 `normalizeLedgerStatus()` 判斷）——
+ *   本模組刻意零 import，唔會自己讀 Ledger 狀態口徑。
  */
 export function scheduledPickupKind(
   value: string | null | undefined,
   nowMs: number = Date.now(),
   soonMinutes: number = SCHEDULED_PICKUP_SOON_MINUTES,
+  closed: boolean = false,
 ): ScheduledPickupKind | null {
   const minutes = scheduledPickupMinutesUntil(value, nowMs);
   if (minutes == null) return null;
+  if (closed) return "closed";
   if (minutes <= 0) return "overdue";
   return minutes <= soonMinutes ? "soon" : "scheduled";
 }
 
 /** 藥丸標籤文字（三處共用同一套文案，唔可以各自作）。 */
 export function scheduledPickupChipText(kind: ScheduledPickupKind): string {
+  // 已完結單淨係保留中性標籤：冇「快到了」亦冇「已逾時」。
+  if (kind === "closed") return "預約單";
   if (kind === "overdue") return "預約單 · 已逾時";
   if (kind === "soon") return "預約單 · 快到了";
   return "預約單";
@@ -88,13 +103,17 @@ export function scheduledPickupChipText(kind: ScheduledPickupKind): string {
 
 /**
  * 藥丸配色 token（同 `getLedgerStatusBadge()` 一致嘅 label + bg + dot 結構）。
- * 用得最多嘅正常態用琥珀（同預約時間文字同色系），逾時升紅，令收銀一眼掃到。
+ * 用得最多嘅正常態用琥珀（同預約時間文字同色系），逾時升紅，令收銀一眼掃到；
+ * **已完結單一律中性灰**（唔應該再用警示色搶收銀注意力）。
  */
 export function scheduledPickupChipBadge(kind: ScheduledPickupKind): {
   bgClass: string;
   textClass: string;
   dotClass: string;
 } {
+  if (kind === "closed") {
+    return { bgClass: "bg-slate-100", textClass: "text-slate-500", dotClass: "bg-slate-400" };
+  }
   if (kind === "overdue") {
     return { bgClass: "bg-red-50", textClass: "text-red-700", dotClass: "bg-red-500" };
   }
@@ -106,6 +125,7 @@ export function scheduledPickupChipBadge(kind: ScheduledPickupKind): {
 
 /** 預約時間文字用嘅 Tailwind 顏色 class（列表／卡片共用）。 */
 export function scheduledPickupTimeClass(kind: ScheduledPickupKind): string {
+  if (kind === "closed") return "text-slate-400";
   if (kind === "overdue") return "text-red-600";
   if (kind === "soon") return "text-amber-800";
   return "text-amber-700";

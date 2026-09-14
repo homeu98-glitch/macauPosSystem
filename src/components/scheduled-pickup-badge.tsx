@@ -13,6 +13,7 @@
  */
 
 import { formatMacauDateTime, formatMacauMonthDayTime } from "@/lib/format";
+import { normalizeLedgerStatus } from "@/lib/ledger/order-mapper";
 import {
   isScheduledOrder,
   scheduledPickupChipBadge,
@@ -23,7 +24,28 @@ import {
   scheduledPickupTimeClass,
 } from "@/lib/pos/scheduled-pickup";
 
-type ScheduledLike = { scheduledPickupAt?: string | null } | null | undefined;
+type ScheduledLike =
+  | { scheduledPickupAt?: string | null; status?: string | null }
+  | null
+  | undefined;
+
+/**
+ * 訂單係唔係**已完結**（唔應該再出「逾時」警示）。
+ *
+ * 🔴 2026-09-14 商家實案：14:54 睇一張 12:15 預約、狀態「已完成」嘅單，列表仍然紅色
+ * 「已逾時 159 分鐘」—— 單都做完收咗錢，逾時資訊已經冇意義（仲要搶注意力）。
+ *
+ * 判斷口徑：
+ * - Ledger 狀態一律經 `normalizeLedgerStatus()`（唯一真源）→ `completed` / `cancelled` 算完結。
+ * - 本地終態（`settled` / `refunded` / `partially_refunded`）一併認，防日後有 caller
+ *   餵 `PosOrder` 入嚟（Ledger 口徑唔包含呢幾個值）。
+ */
+export function isClosedScheduledOrder(order: ScheduledLike): boolean {
+  const raw = String(order?.status ?? "").toLowerCase();
+  if (raw === "settled" || raw === "refunded" || raw === "partially_refunded") return true;
+  const normalized = normalizeLedgerStatus(raw);
+  return normalized === "completed" || normalized === "cancelled";
+}
 
 /** 呢張單係唔係預約單（UI 入口統一由呢度問，唔好自己 `if (order.scheduledPickupAt)`）。 */
 export function hasScheduledPickup(order: ScheduledLike): boolean {
@@ -46,7 +68,8 @@ export function ScheduledPickupChip({
   /** 快餐面板／列表窄欄用：細一級字。 */
   compact?: boolean;
 }) {
-  const kind = scheduledPickupKind(order?.scheduledPickupAt, nowMs);
+  // 已完結單（已完成／已取消）→ `closed`，唔會再出「快到了／已逾時」。
+  const kind = scheduledPickupKind(order?.scheduledPickupAt, nowMs, undefined, isClosedScheduledOrder(order));
   if (!kind) return null;
   const badge = scheduledPickupChipBadge(kind);
   return (
@@ -79,10 +102,12 @@ export function ScheduledPickupTimeText({
   className?: string;
 }) {
   const iso = order?.scheduledPickupAt;
-  const kind = scheduledPickupKind(iso, nowMs);
+  const kind = scheduledPickupKind(iso, nowMs, undefined, isClosedScheduledOrder(order));
   if (!kind || !iso) return null;
   const timeText = full ? formatMacauDateTime(iso) : formatMacauMonthDayTime(iso);
-  const relative = full ? "" : scheduledPickupRelativeText(scheduledPickupMinutesUntil(iso, nowMs));
+  // ⚠️ `closed` 同 `full` 一樣唔出相對時間：單已完結，冇必要再講「已逾時 N 分鐘」。
+  const relative =
+    full || kind === "closed" ? "" : scheduledPickupRelativeText(scheduledPickupMinutesUntil(iso, nowMs));
   return (
     <span className={`tabular-nums ${scheduledPickupTimeClass(kind)} ${className}`.trim()}>
       {full ? `預約時間：${timeText}` : `預約 ${timeText}`}

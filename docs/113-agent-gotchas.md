@@ -42,7 +42,11 @@
 ## 預約單（Ledger `scheduled_pickup_at`，2026-09-14）
 - **真源** = Ledger `orders.scheduled_pickup_at`（timestamptz | null，契約 §5.1「預約取餐」；`list_merchant_orders` 回應同 Realtime 表列都有）。非 null ＝ 預約單。鏈路：`mapLedgerOrderRow()` → `LedgerOnlineOrder.scheduledPickupAt` → `buildLedgerPosOrder()` → `PosOrder.scheduledPickupAt`（**打印用投影**，唔會經 sync 上雲 —— `/api/pos/sync` 嘅 `baseRecord` 係明確欄位白名單）。
 - 判斷／狀態**只准**用 `src/lib/pos/scheduled-pickup.ts`（零 import、`node --test` 覆蓋）：
-  `scheduledPickupKind()` → `scheduled`（仲有排）／`soon`（≤30 分鐘，「快到了」）／`overdue`（**剛好到點都算逾時**，否則永遠唔轉紅）；`scheduledPickupMinutesUntil()`（正＝仲有幾多分鐘、負＝逾時）。
+  `scheduledPickupKind()` → `scheduled`（仲有排）／`soon`（≤30 分鐘，「快到了」）／`overdue`（**剛好到點都算逾時**，否則永遠唔轉紅）／`closed`（單已完結）；`scheduledPickupMinutesUntil()`（正＝仲有幾多分鐘、負＝逾時）。
+  🔴 **第 4 個參數 `closed` 必傳**（唔可以只比時間）：訂單已完結 → 回 `closed`，UI 轉中性灰、**唔再出「已逾時 N 分鐘」**。
+  判斷入口 = `components/scheduled-pickup-badge.tsx` 嘅 `isClosedScheduledOrder()`（`normalizeLedgerStatus()` 認 `completed`/`cancelled`；另認本地 `settled`/`refunded`/`partially_refunded`）。
+  ⚠️ **漏傳 = 已完成單照樣標紅逾時**（2026-09-14 商家實案：14:54 睇一張 12:15 預約、狀態「已完成」嘅單，列表顯示「預約單 · 已逾時 / 已逾時 159 分鐘」）。
+  **口徑**：逾時係「**未完成單**嘅時間壓力」指標，唔係歷史陳述 —— 任何狀態維度（完成／取消）一律壓過時間維度。
   UI 一律經 `components/scheduled-pickup-badge.tsx`（`ScheduledPickupChip`／`ScheduledPickupTimeText`／`hasScheduledPickup`），三處唔准各自寫 string。
 - **三處 UI**：線上訂單列表（類型欄加「預約單」chip、時間欄第二行 `預約 09/14 12:15`）／訂單詳情（`預約時間：`＋chip）／快餐面板卡片（strip 同 card 兩個 layout 都有）。列表同卡片每 **30 秒** `nowTick` 重算 —— 純時間函式，冇 realtime 事件時都要自己轉色。
 - **紙本**：收據／廚房單各有 `scheduled_pickup` 區塊（`預約時間: MM/DD HH:MM`，同「會員通」收據同格式，用 `formatMacauMonthDayTime()`）；非預約單字串空白 → renderer 略過（舊單零影響）。
@@ -1388,16 +1392,36 @@ iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」tex
 ⇒ **焦點 / 可編輯性 / 事件綁定三樣都正常**（唔使再喺呢三樣落藥）。
    ⚠️ 但**唔等於「唔關 web 事」** —— 下一節嘅 Ledger 對照證明係我哋自己嘅 viewport 設定。
 
-### 🎥 第二段影片（2026-09-14 11:27 登入頁實拍）：**連登入頁都唔彈 → 唔係彈窗獨有**
-- 登入頁（`login-screen.tsx`，**普通流式頁面、唔係 fixed 彈窗**）：帳號欄顯示 **8 位數字帶藍色
+### 🎥 第二段影片（2026-09-14 11:27 登入頁實拍）：**連登入頁都唔彈 → 唔係彈窗獨有**- 登入頁（`login-screen.tsx`，**普通流式頁面、唔係 fixed 彈窗**）：帳號欄顯示 **8 位數字帶藍色
   選取 highlight**（＝焦點確定、文字可選）、PIN 欄有 focus ring —— 一樣**零鍵盤**。
   ⇒ 排除「只有 fixed 彈窗內先失敗」⇒ **係 app-wide 層面嘅問題**（同 viewport／`body{overflow:hidden}`
   呢兩個全域設定完全吻合：每頁都會中）。
 - 畫面**冇狀態列、冇瀏覽器地址列**，右上角浮一粒 **「⋯」** 掣 ⇒ 唔係普通 Safari 分頁；
   最可能係**主畫面 PWA（standalone）／Stage Manager 浮窗／WeChat 內開**其中一種。
-  ⇒ 下一個決定性測試（**唔使等部署**）：同一部 iPad **用 Safari 直接開
+  ⇒ 決定性測試：同一部 iPad **用 Safari 分頁（唔用主畫面圖示）開
   `https://macau-pos-system.vercel.app/login` 撳帳號欄** —— 彈得出鍵盤 ⇒ 問題係「開啟方式」；
-  一樣唔彈 ⇒ 就係 viewport/`overflow-hidden`（今輪修正，未部署）。
+  一樣唔彈 ⇒ 就係 `overflow-hidden` 全屏殼。
+
+### ⚠️ 2026-09-14 11:50 覆核：**修正已部署，但商家仍然唔得**
+用 `node` 直接 fetch 線上檔案核實（唔靠估）：
+| 檢查 | 結果 |
+|---|---|
+| `https://macau-pos-system.vercel.app/login` viewport | `width=device-width, initial-scale=1, viewport-fit=cover` → **`user-scalable=no` 已消失 = 本輪修正已上線** ✅ |
+| 部署 CSS（`/_next/static/immutable/chunks/3oouq_kc91_hm.css`） | 已含 `@media (pointer:coarse){input…,textarea,select{font-size:16px}}` ✅ |
+| 部署 HTML `<body>` | 仍然係 `class="h-full overflow-hidden flex flex-col"`（全屏非滾動外殼未改） |
+| 部署 HTML meta | `mobile-web-app-capable=yes`、`apple-mobile-web-app-status-bar-style=black-translucent` |
+⇒ **「viewport + 16px」唔足以解決**（或商家未換版），成因要往 **PWA standalone 執行環境 /
+`overflow:hidden` 全屏殼 / 客戶端快取（未換版）** 三個方向收窄。
+⚠️ J 確認：**POS 係用 Safari「加到主畫面」嘅 PWA 方式開**。
+
+### 🔴 Service Worker 快取審計（`public/sw.js`，2026-09-14）
+- `CACHE_NAME = "macau-pos-v20-7-31"`（**硬編、唔跟 build**）；`APP_SHELL = ["/", "/login", "/manifest.webmanifest"]`
+  會在 `install` 時 `cache.addAll` **預快取 HTML 文檔**。
+- `fetch`：導航請求（`mode === "navigate"`）＝ **network-first**（好）；**其餘 GET ＝ cache-first**
+  並即場 `cache.put`（⚠️ 只排除 `/api/`，連**跨域 Supabase REST** 都會入快取 → 日後要留意資料新鮮度）。
+- ⇒ HTML 本身係 network-first，但 **iOS 主畫面 web app 長期唔換版**（docs/113 既有紅線）＋
+  SPA 內部切頁唔會重新抓 HTML ⇒ **商家嗰個 PWA 極可能仍跑舊文檔／舊 JS**，
+  即「server 已修但客戶端未換版」。判斷法：睇有冇新版可見特徵（欄位字級 16px）。
 
 ### 🔴🔴 根因鎖定（2026-09-14 11:10）：同 Ledger 網頁對照
 商家原話：「**我在 Ledger 的網頁上操作都是正常的，且目前沒有任何藍芽裝置在連接**」

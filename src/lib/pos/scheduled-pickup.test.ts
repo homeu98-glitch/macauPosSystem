@@ -89,3 +89,21 @@ test("接受 PosOrder（同一個 scheduledPickupAt 欄位形狀）", () => {
   assert.equal(isScheduledOrder({ scheduledPickupAt: iso }), true);
   assert.equal(scheduledPickupKind(iso, at(10)), "soon");
 });
+
+test("已完結單 → closed：唔會再標逾時（2026-09-14 商家實案）", () => {
+  // 實案：14:54 睇一張 12:15 預約、狀態「已完成」嘅單 → 唔應該出「已逾時 159 分鐘」。
+  const nowMs = at(-159);
+  assert.equal(scheduledPickupKind(iso, nowMs, undefined, false), "overdue");
+  assert.equal(scheduledPickupKind(iso, nowMs, undefined, true), "closed");
+  // 已完結但預約時間**未到** → 一樣係 closed（唔會出「18 分鐘後」）
+  assert.equal(scheduledPickupKind(iso, at(18), undefined, true), "closed");
+  assert.equal(scheduledPickupChipText("closed"), "預約單");
+  assert.match(scheduledPickupChipBadge("closed").textClass, /slate-500/);
+  assert.match(scheduledPickupTimeClass("closed"), /slate-400/);
+});
+
+test("closed 唔會無中生有：冇有效預約時間仍然係 null", () => {
+  assert.equal(scheduledPickupKind(null, T, undefined, true), null);
+  assert.equal(scheduledPickupKind("", T, undefined, true), null);
+  assert.equal(scheduledPickupKind("not-a-date", T, undefined, true), null);
+});
