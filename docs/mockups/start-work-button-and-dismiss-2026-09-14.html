@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<title>「今日未開工」彈窗加 ✕ ＋「開工」搬去頁首 — 確認稿 2026-09-14</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;
+  --slate-500:#64748b;--slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;--slate-100:#f1f5f9;
+  --orange-50:#fff7ed;--orange-500:#f97316;--orange-600:#ea580c;--orange-700:#c2410c;
+  --emerald-500:#10b981;--emerald-600:#059669;
+  --amber-50:#fffbeb;--amber-300:#fcd34d;--amber-500:#f59e0b;--amber-700:#b45309;--amber-900:#78350f;
+  --red-600:#dc2626;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK",sans-serif}
+
+/* ── 評審工具列（唔屬產品介面）────────────────────────── */
+.review{background:#0f172a;color:#e2e8f0;padding:13px 20px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:3px 0 0;font-size:12px;color:#94a3b8}
+.review .note{color:#fbbf24}
+.tabs{display:inline-flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+/* ── 固定畫布（無 @media）──────────────────────────── */
+.stage{max-width:1180px;margin:18px auto 40px;position:relative;overflow:hidden;
+  border-radius:22px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.canvas{width:1180px;height:820px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;gap:10px;padding:16px 20px 18px}
+.screenwrap.on{display:flex}
+
+.scrhead{flex:none}
+.h1{font-size:15px;font-weight:600}
+.sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.6}
+.sub b{color:#0f172a}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.lg{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+  background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:999px;padding:3px 10px}
+.lg .n{width:16px;height:16px;border-radius:999px;background:#dc2626;color:#fff;
+  display:grid;place-items:center;font-size:10px;font-weight:700}
+.lg.new{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+
+.frame{position:relative;flex:1;min-height:0;border:1px solid var(--slate-300);
+  border-radius:16px;overflow:hidden;background:var(--slate-100)}
+
+/* ── 產品畫面：側欄 + 主區 + 右欄 ──────────────────── */
+.app{position:relative;display:grid;grid-template-columns:72px minmax(0,1fr);
+  height:100%;min-height:0;background:var(--slate-100)}
+.sb{background:var(--slate-900);color:#fff;display:grid;grid-template-rows:1fr auto;
+  gap:8px;padding:12px 8px;min-height:0}
+.sbnav{display:grid;gap:8px;align-content:start}
+.sbitem{background:var(--slate-800);color:#cbd5e1;border-radius:16px;padding:9px 4px;
+  display:flex;flex-direction:column;align-items:center;gap:5px;
+  font-size:11px;font-weight:600;line-height:1.25;text-align:center}
+.sbitem.on{background:var(--orange-500);color:#fff}
+.sbic{width:26px;height:26px;border-radius:999px;background:rgba(255,255,255,.12);
+  display:grid;place-items:center;font-size:12px}
+.sbmore{border:1px dashed #475569;border-radius:14px;padding:7px 2px;text-align:center;
+  font-size:10px;color:var(--slate-400);line-height:1.4}
+.sbfoot{display:grid;gap:7px}
+.sbstore{background:var(--slate-800);border-radius:16px;padding:7px 4px;text-align:center}
+.sbn{font-size:8px;line-height:1.3}
+.sbr{margin-top:3px;font-size:6px;color:var(--slate-400)}
+.sbbadge{background:var(--emerald-600);border-radius:16px;padding:7px 2px;text-align:center;
+  font-size:11px;font-weight:600}
+
+.body{display:grid;grid-template-columns:minmax(0,1fr) 280px;min-height:0;min-width:0}
+.main{display:flex;flex-direction:column;min-height:0;min-width:0}
+
+.topbar{flex:none;background:#fff;border-bottom:1px solid var(--line);padding:14px 16px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+.tbl{min-width:0}
+.tbt{font-size:18px;font-weight:600}
+.tbc{font-size:14px;color:var(--slate-500);margin-top:4px;line-height:1.45}
+.hdracts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end}
+.btn{font-size:14px;font-weight:600;border-radius:16px;padding:8px 16px;background:#fff;
+  color:var(--ink);box-shadow:inset 0 0 0 1px var(--slate-200);white-space:nowrap}
+.btn.primary{background:var(--orange-500);color:#fff;box-shadow:none;padding:10px 18px}
+.btn.primary.hot{box-shadow:0 0 0 4px rgba(251,191,36,.9)}
+.rel{position:relative;display:inline-flex}
+.pin{position:absolute;width:22px;height:22px;border-radius:999px;background:var(--red-600);
+  color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;
+  box-shadow:0 0 0 2px #fff;z-index:3}
+
+.banner{flex:none;background:var(--amber-50);border-bottom:1px solid var(--amber-300);
+  color:#92400e;font-size:13px;font-weight:600;padding:10px 16px;
+  display:flex;align-items:center;gap:8px;line-height:1.4}
+.banner .bd{background:var(--amber-500);color:#fff;border-radius:999px;
+  padding:2px 9px;font-size:11px;font-weight:700;white-space:nowrap}
+
+.scroll{flex:1;min-height:0;overflow-y:auto;padding:16px}
+.floors{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.chip{font-size:14px;font-weight:600;border-radius:999px;padding:8px 16px;background:#fff;
+  color:var(--slate-700);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.chip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+
+.tgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;
+  grid-auto-rows:max-content;align-content:start;align-items:start}
+.tcard{border-radius:16px;border:1px solid var(--slate-200);background:#fff;color:var(--ink);
+  padding:14px;min-width:0}
+.tcard.busy{border-color:var(--orange-600);background:var(--orange-500);color:#fff}
+.tcard.paid{border-color:var(--emerald-600);background:var(--emerald-500);color:#fff}
+.tname{font-size:16px;font-weight:600;line-height:1.35}
+.tarea{font-size:12px;color:var(--slate-500);margin-top:6px;line-height:1.4}
+.tseat{font-size:12px;font-weight:600;color:var(--slate-700);margin-top:4px;line-height:1.4}
+.busy .tarea,.paid .tarea{color:rgba(255,255,255,.85)}
+.busy .tseat,.paid .tseat{color:rgba(255,255,255,.9)}
+.tdue{font-size:14px;font-weight:700;color:#fff;margin-top:4px;line-height:1.4}
+.tbadge{display:inline-flex;border-radius:999px;padding:4px 11px;font-size:12px;font-weight:600;
+  margin-top:10px;background:var(--orange-50);color:var(--orange-700);line-height:1.4}
+.busy .tbadge,.paid .tbadge{background:rgba(255,255,255,.25);color:#fff}
+
+.right{background:#fff;border-left:1px solid var(--line);display:flex;flex-direction:column;
+  min-height:0;min-width:0}
+.rhead{flex:none;border-bottom:1px solid var(--slate-100);padding:14px 16px}
+.rht{font-size:16px;font-weight:600}
+.rhc{font-size:12px;color:var(--slate-500);margin-top:4px;line-height:1.5}
+.rbody{flex:1;min-height:0;overflow-y:auto;padding:14px 16px}
+.qbtn{display:block;border-radius:16px;padding:11px 13px;font-size:13px;font-weight:600;
+  background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1px var(--slate-200);margin-bottom:8px}
+.qbtn.pri{background:var(--orange-500);color:#fff;box-shadow:none}
+
+/* ── 彈窗（ResponsiveModal 真值：bg-slate-900/45、rounded-3xl、max-w-md）── */
+.ovl{position:absolute;inset:0;z-index:52;background:rgba(15,23,42,.45);
+  display:grid;place-items:center;padding:8px}
+.panel{position:relative;width:448px;max-width:100%;margin-left:72px;background:#fff;
+  border-radius:24px;box-shadow:0 25px 50px -12px rgba(15,23,42,.4);padding:32px}
+.xbtn{position:absolute;top:12px;right:12px;width:44px;height:44px;border-radius:999px;
+  background:var(--slate-100);display:grid;place-items:center;border:0;cursor:pointer}
+.mk-tag{font-size:14px;font-weight:600;letter-spacing:.18em;color:var(--orange-500);text-align:center}
+.mk-ttl{font-size:24px;font-weight:600;color:var(--slate-900);text-align:center;margin-top:8px}
+.mk-desc{font-size:14px;color:var(--slate-500);text-align:center;margin-top:8px;line-height:1.65}
+.mk-hint{font-size:12px;color:var(--slate-400);text-align:center;margin-top:10px;line-height:1.6}
+.mk-big{display:block;width:100%;margin-top:24px;border-radius:24px;background:var(--orange-500);
+  color:#fff;padding:20px;font-size:20px;font-weight:600;text-align:center;border:0}
+
+/* ── 規格頁（第 ⑤ 頁）────────────────────────────── */
+.specgrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px;align-items:start}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.card + .card{margin-top:10px}
+.ct{font-size:12.5px;font-weight:600;margin-bottom:7px}
+.cb{font-size:11.5px;color:var(--slate-600);line-height:1.75}
+.cb code,.note code,pre{font-family:ui-monospace,Menlo,Consolas,monospace}
+.cb code{font-size:11px;background:var(--slate-100);padding:1px 5px;border-radius:4px}
+table.mx{width:100%;border-collapse:collapse;font-size:11.5px}
+table.mx th,table.mx td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+table.mx th{background:var(--slate-100);font-weight:600;color:var(--slate-700)}
+table.mx td.y{color:#047857;font-weight:600}
+table.mx td.n{color:#b91c1c;font-weight:600}
+table.mx td.k{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--slate-600)}
+.note{background:var(--amber-50);border:1px solid var(--amber-300);border-radius:14px;
+  padding:11px 14px;margin-top:10px}
+.note .nt{font-size:12px;font-weight:600;color:#92400e;margin-bottom:5px}
+.note ul{margin:0;padding-left:18px;font-size:11.5px;color:var(--amber-900);line-height:1.8}
+pre{margin:7px 0 0;background:var(--slate-900);color:#e2e8f0;border-radius:10px;
+  padding:10px 12px;font-size:10px;line-height:1.55;overflow-x:auto}
+#s5{overflow-y:auto}
+pre .c{color:#94a3b8}
+pre .a{color:#fbbf24}
+pre .d{color:#fca5a5}
+.toastdemo{margin-top:8px;display:inline-block;background:var(--slate-900);color:#fff;
+  border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600}
+.optdots{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--slate-900);font-weight:600}
+.dotg{width:10px;height:10px;border-radius:3px;background:var(--emerald-500)}
+.dotr{width:10px;height:10px;border-radius:3px;background:var(--red-600)}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <h1>「今日未開工」彈窗加 ✕ ＋「開工」掣搬去頁首 — 確認稿</h1>
+  <p>2026-09-14 · 產品畫面用真實色（Tailwind 真值）；深色框係評審工具列，<span class="note">唔屬於產品介面</span></p>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="s1">① 現狀</button>
+    <button data-tab="s2">② 改後 · 彈窗有 ✕</button>
+    <button data-tab="s3">③ 改後 · 收起彈窗</button>
+    <button data-tab="s4">④ 已開工 · 掣自動隱藏</button>
+    <button data-tab="s5">⑤ 邏輯 ＋ 待拍板</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ══════════ ① 現狀（改動前） ══════════ -->
+  <div class="screenwrap on" id="s1">
+    <div class="scrhead">
+      <div class="h1">① 現狀（改動前）— 彈窗只有一粒「開工」，關唔到</div>
+      <div class="sub">彈窗由 <b>ResponsiveModal</b> 畫，但冇傳 <code>onClose</code> ⇒ 右上角冇 ✕、撳背景亦冇反應。<b>打烊交班後</b>（<code>openedAt</code> 清空）返嚟對數，會被逼先開一個新班次。</div>
+      <div class="legend">
+        <span class="lg new"><span class="n">✕</span>無關閉方式（要你確認嘅問題）</span>
+        <span class="lg"><span class="n">1</span>頁首只有三粒掣，冇「開工」</span>
+      </div>
+    </div>
+
+    <div class="frame">
+      <div class="app">
+        <aside class="sb">
+          <div class="sbnav">
+            <div class="sbitem on"><span class="sbic">台</span>收銀台</div>
+            <div class="sbitem"><span class="sbic">單</span>訂單</div>
+            <div class="sbitem"><span class="sbic">菜</span>餐牌</div>
+            <div class="sbitem"><span class="sbic">報</span>報表</div>
+            <div class="sbmore">…其餘 6 個<br>模組</div>
+          </div>
+          <div class="sbfoot">
+            <div class="sbstore"><div class="sbn">表嫂美食</div><div class="sbr">店長</div></div>
+            <div class="sbbadge">在線</div>
+          </div>
+        </aside>
+
+        <div class="body">
+          <main class="main">
+            <div class="topbar">
+              <div class="tbl">
+                <div class="tbt">桌台總覽</div>
+                <div class="tbc">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+              </div>
+              <div class="hdracts">
+                <span class="rel"><span class="pin" style="top:-10px;left:-10px">1</span><span class="btn">手動更新</span></span>
+                <span class="btn">同步健康</span>
+                <span class="btn">查看線上訂單</span>
+              </div>
+            </div>
+            <div class="scroll">
+              <div class="floors">
+                <span class="chip on">全部</span><span class="chip">大堂</span><span class="chip">卡座</span>
+                <span class="chip">樓上</span><span class="chip">露台</span>
+              </div>
+              <div class="tgrid" id="grid-c1">
+                <div class="tcard"><div class="tname">A01</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A02</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">A03</div><div class="tarea">大堂</div><div class="tseat">已坐 3/4</div><div class="tdue">應收 MOP 268</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">A04</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A05</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A06</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">B01</div><div class="tarea">卡座</div><div class="tseat">已坐 5/6</div><div class="tdue">應收 MOP 512</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">B02</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard paid"><div class="tname">B03</div><div class="tarea">卡座</div><div class="tseat">已坐 2/6</div><div class="tbadge">已結帳 / 待收尾</div></div>
+                <div class="tcard"><div class="tname">B04</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C01</div><div class="tarea">樓上</div><div class="tseat">已坐 7/8</div><div class="tdue">應收 MOP 1,036</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">C02</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C03</div><div class="tarea">樓上</div><div class="tseat">已坐 4/8</div><div class="tbadge">未下單</div></div>
+                <div class="tcard"><div class="tname">C04</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D01</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D02</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D03</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D04</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+              </div>
+            </div>
+          </main>
+
+          <section class="right">
+            <div class="rhead"><div class="rht">快捷操作</div><div class="rhc">桌台流程、收銀入口與營運操作集中在這裡</div></div>
+            <div class="rbody">
+              <div class="qbtn pri">開桌 / 入座</div>
+              <div class="qbtn">加菜</div>
+              <div class="qbtn">結帳</div>
+              <div class="qbtn">併枱 / 移枱</div>
+              <div class="qbtn">取消單</div>
+            </div>
+          </section>
+        </div>
+
+        <div class="ovl">
+          <div class="panel">
+            <div class="mk-tag">今日未開工</div>
+            <div class="mk-ttl">開始今日營業</div>
+            <div class="mk-desc">未開工前不能點餐。按下方按鈕後，今日班次正式開始。</div>
+            <div class="mk-big">開工</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ ② 改後 · 彈窗有 ✕ ══════════ -->
+  <div class="screenwrap" id="s2">
+    <div class="scrhead">
+      <div class="h1">② 改動後（未開工，彈窗開住）— 右上角有 ✕；「開工」已搬到頁首</div>
+      <div class="sub">彈窗只剩「提示」功能：<b>✕ 收起視窗</b>＝唔開工都可以去對數、查帳、睇報表。要真正開始營業，就撳頁首嗰粒橙色「開工」。</div>
+      <div class="legend">
+        <span class="lg"><span class="n">1</span>新增 ✕（44×44，達觸控目標）</span>
+        <span class="lg"><span class="n">2</span>彈窗內唔再有「開工」掣，文案指向頁首</span>
+        <span class="lg"><span class="n">3</span>「開工」緊貼「手動更新」左邊 ＋ 琥珀光環提示</span>
+      </div>
+    </div>
+
+    <div class="frame">
+      <div class="app">
+        <aside class="sb">
+          <div class="sbnav">
+            <div class="sbitem on"><span class="sbic">台</span>收銀台</div>
+            <div class="sbitem"><span class="sbic">單</span>訂單</div>
+            <div class="sbitem"><span class="sbic">菜</span>餐牌</div>
+            <div class="sbitem"><span class="sbic">報</span>報表</div>
+            <div class="sbmore">…其餘 6 個<br>模組</div>
+          </div>
+          <div class="sbfoot">
+            <div class="sbstore"><div class="sbn">表嫂美食</div><div class="sbr">店長</div></div>
+            <div class="sbbadge">在線</div>
+          </div>
+        </aside>
+
+        <div class="body">
+          <main class="main">
+            <div class="topbar">
+              <div class="tbl">
+                <div class="tbt">桌台總覽</div>
+                <div class="tbc">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+              </div>
+              <div class="hdracts">
+                <span class="rel"><span class="pin" style="top:-10px;left:-10px">3</span><span class="btn primary hot">開工</span></span>
+                <span class="btn">手動更新</span>
+                <span class="btn">同步健康</span>
+                <span class="btn">查看線上訂單</span>
+              </div>
+            </div>
+            <div class="scroll">
+              <div class="floors">
+                <span class="chip on">全部</span><span class="chip">大堂</span><span class="chip">卡座</span>
+                <span class="chip">樓上</span><span class="chip">露台</span>
+              </div>
+              <div class="tgrid" id="grid-c2">
+                <div class="tcard"><div class="tname">A01</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A02</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">A03</div><div class="tarea">大堂</div><div class="tseat">已坐 3/4</div><div class="tdue">應收 MOP 268</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">A04</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A05</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A06</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">B01</div><div class="tarea">卡座</div><div class="tseat">已坐 5/6</div><div class="tdue">應收 MOP 512</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">B02</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard paid"><div class="tname">B03</div><div class="tarea">卡座</div><div class="tseat">已坐 2/6</div><div class="tbadge">已結帳 / 待收尾</div></div>
+                <div class="tcard"><div class="tname">B04</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C01</div><div class="tarea">樓上</div><div class="tseat">已坐 7/8</div><div class="tdue">應收 MOP 1,036</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">C02</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C03</div><div class="tarea">樓上</div><div class="tseat">已坐 4/8</div><div class="tbadge">未下單</div></div>
+                <div class="tcard"><div class="tname">C04</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D01</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D02</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D03</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D04</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+              </div>
+            </div>
+          </main>
+
+          <section class="right">
+            <div class="rhead"><div class="rht">快捷操作</div><div class="rhc">桌台流程、收銀入口與營運操作集中在這裡</div></div>
+            <div class="rbody">
+              <div class="qbtn pri">開桌 / 入座</div>
+              <div class="qbtn">加菜</div>
+              <div class="qbtn">結帳</div>
+              <div class="qbtn">併枱 / 移枱</div>
+              <div class="qbtn">取消單</div>
+            </div>
+          </section>
+        </div>
+
+        <div class="ovl">
+          <div class="panel">
+            <span class="pin" style="top:-8px;right:-8px">1</span>
+            <span class="pin" style="top:-8px;right:44px">2</span>
+            <button class="xbtn" type="button" aria-label="關閉">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#334155"
+                   stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <div class="mk-tag">今日未開工</div>
+            <div class="mk-ttl">開始今日營業</div>
+            <div class="mk-desc">未開工前不能點餐。要開始營業，請按頁首的「開工」；<br>如需直接對數／查帳，可按右上角 ✕ 關閉本視窗。</div>
+            <div class="mk-hint">關閉本視窗後仍未可點餐，直至開工為止。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ ③ 改後 · 收起彈窗 ══════════ -->
+  <div class="screenwrap" id="s3">
+    <div class="scrhead">
+      <div class="h1">③ 改動後（撳咗 ✕ 之後）— 彈窗收起，「開工」仍然喺頁首等住你</div>
+      <div class="sub">彈窗一走，頁首嗰粒「開工」就係唯一入口（橙色實底，一眼見到）。<b>呢一刻仍然唔可以落單</b>——只可以對數、查帳、睇報表。</div>
+      <div class="legend">
+        <span class="lg"><span class="n">1</span>橙色「開工」保留喺頁首（唔再擋住你做對數）</span>
+        <span class="lg"><span class="n">2</span>待拍板：要唔要加呢條常駐提示條？（方案 b）</span>
+      </div>
+    </div>
+
+    <div class="frame">
+      <div class="app">
+        <aside class="sb">
+          <div class="sbnav">
+            <div class="sbitem on"><span class="sbic">台</span>收銀台</div>
+            <div class="sbitem"><span class="sbic">單</span>訂單</div>
+            <div class="sbitem"><span class="sbic">菜</span>餐牌</div>
+            <div class="sbitem"><span class="sbic">報</span>報表</div>
+            <div class="sbmore">…其餘 6 個<br>模組</div>
+          </div>
+          <div class="sbfoot">
+            <div class="sbstore"><div class="sbn">表嫂美食</div><div class="sbr">店長</div></div>
+            <div class="sbbadge">在線</div>
+          </div>
+        </aside>
+
+        <div class="body">
+          <main class="main">
+            <div class="topbar">
+              <div class="tbl">
+                <div class="tbt">桌台總覽</div>
+                <div class="tbc">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+              </div>
+              <div class="hdracts">
+                <span class="rel"><span class="pin" style="top:-10px;left:-10px">1</span><span class="btn primary">開工</span></span>
+                <span class="btn">手動更新</span>
+                <span class="btn">同步健康</span>
+                <span class="btn">查看線上訂單</span>
+              </div>
+            </div>
+            <div class="banner">
+              <span class="bd">今日未開工</span>
+              <span>只可以查看／對數，落單功能暫停。要開始營業，請按頁首「開工」。</span>
+              <span class="pin" style="position:relative;top:0;left:0;box-shadow:none">2</span>
+            </div>
+            <div class="scroll">
+              <div class="floors">
+                <span class="chip on">全部</span><span class="chip">大堂</span><span class="chip">卡座</span>
+                <span class="chip">樓上</span><span class="chip">露台</span>
+              </div>
+              <div class="tgrid" id="grid-c3">
+                <div class="tcard"><div class="tname">A01</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A02</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">A03</div><div class="tarea">大堂</div><div class="tseat">已坐 3/4</div><div class="tdue">應收 MOP 268</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">A04</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A05</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A06</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">B01</div><div class="tarea">卡座</div><div class="tseat">已坐 5/6</div><div class="tdue">應收 MOP 512</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">B02</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard paid"><div class="tname">B03</div><div class="tarea">卡座</div><div class="tseat">已坐 2/6</div><div class="tbadge">已結帳 / 待收尾</div></div>
+                <div class="tcard"><div class="tname">B04</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C01</div><div class="tarea">樓上</div><div class="tseat">已坐 7/8</div><div class="tdue">應收 MOP 1,036</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">C02</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C03</div><div class="tarea">樓上</div><div class="tseat">已坐 4/8</div><div class="tbadge">未下單</div></div>
+                <div class="tcard"><div class="tname">C04</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D01</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D02</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D03</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D04</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+              </div>
+            </div>
+          </main>
+
+          <section class="right">
+            <div class="rhead"><div class="rht">快捷操作</div><div class="rhc">桌台流程、收銀入口與營運操作集中在這裡</div></div>
+            <div class="rbody">
+              <div class="qbtn pri">開桌 / 入座</div>
+              <div class="qbtn">加菜</div>
+              <div class="qbtn">結帳</div>
+              <div class="qbtn">併枱 / 移枱</div>
+              <div class="qbtn">取消單</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ ④ 已開工 ══════════ -->
+  <div class="screenwrap" id="s4">
+    <div class="scrhead">
+      <div class="h1">④ 已正常開工 — 「開工」掣自動隱藏，唔會再出現喺頁面任何位置</div>
+      <div class="sub">判準就係現有嘅 <code>shift.openedAt</code>：有值＝今日已開工 ⇒ 頁首唔 render 「開工」掣、彈窗亦唔會彈。頁首恢復原本三粒掣，<b>其他功能完全唔變</b>。</div>
+      <div class="legend">
+        <span class="lg"><span class="n">1</span>「開工」已隱藏（頁首只剩原有三粒掣）</span>
+        <span class="lg"><span class="n">2</span>提示條亦消失、落單功能回復正常</span>
+      </div>
+    </div>
+
+    <div class="frame">
+      <div class="app">
+        <aside class="sb">
+          <div class="sbnav">
+            <div class="sbitem on"><span class="sbic">台</span>收銀台</div>
+            <div class="sbitem"><span class="sbic">單</span>訂單</div>
+            <div class="sbitem"><span class="sbic">菜</span>餐牌</div>
+            <div class="sbitem"><span class="sbic">報</span>報表</div>
+            <div class="sbmore">…其餘 6 個<br>模組</div>
+          </div>
+          <div class="sbfoot">
+            <div class="sbstore"><div class="sbn">表嫂美食</div><div class="sbr">店長</div></div>
+            <div class="sbbadge">在線</div>
+          </div>
+        </aside>
+
+        <div class="body">
+          <main class="main">
+            <div class="topbar">
+              <div class="tbl">
+                <div class="tbt">桌台總覽</div>
+                <div class="tbc">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+              </div>
+              <div class="hdracts">
+                <span class="rel"><span class="pin" style="top:-10px;left:-10px">1</span><span class="btn">手動更新</span></span>
+                <span class="btn">同步健康</span>
+                <span class="btn">查看線上訂單</span>
+              </div>
+            </div>
+            <div class="scroll">
+              <div class="floors">
+                <span class="chip on">全部</span><span class="chip">大堂</span><span class="chip">卡座</span>
+                <span class="chip">樓上</span><span class="chip">露台</span>
+              </div>
+              <div class="tgrid" id="grid-c4">
+                <div class="tcard"><div class="tname">A01</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A02</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">A03</div><div class="tarea">大堂</div><div class="tseat">已坐 3/4</div><div class="tdue">應收 MOP 268</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">A04</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A05</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">A06</div><div class="tarea">大堂</div><div class="tseat">已坐 0/4</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">B01</div><div class="tarea">卡座</div><div class="tseat">已坐 5/6</div><div class="tdue">應收 MOP 512</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">B02</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard paid"><div class="tname">B03</div><div class="tarea">卡座</div><div class="tseat">已坐 2/6</div><div class="tbadge">已結帳 / 待收尾</div></div>
+                <div class="tcard"><div class="tname">B04</div><div class="tarea">卡座</div><div class="tseat">已坐 0/6</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C01</div><div class="tarea">樓上</div><div class="tseat">已坐 7/8</div><div class="tdue">應收 MOP 1,036</div><div class="tbadge">已下單</div></div>
+                <div class="tcard"><div class="tname">C02</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard busy"><div class="tname">C03</div><div class="tarea">樓上</div><div class="tseat">已坐 4/8</div><div class="tbadge">未下單</div></div>
+                <div class="tcard"><div class="tname">C04</div><div class="tarea">樓上</div><div class="tseat">已坐 0/8</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D01</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D02</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D03</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+                <div class="tcard"><div class="tname">D04</div><div class="tarea">露台</div><div class="tseat">已坐 0/2</div><div class="tbadge">空閒</div></div>
+              </div>
+            </div>
+          </main>
+
+          <section class="right">
+            <div class="rhead"><div class="rht">快捷操作</div><div class="rhc">桌台流程、收銀入口與營運操作集中在這裡</div></div>
+            <div class="rbody">
+              <div class="qbtn pri">開桌 / 入座</div>
+              <div class="qbtn">加菜</div>
+              <div class="qbtn">結帳</div>
+              <div class="qbtn">併枱 / 移枱</div>
+              <div class="qbtn">取消單</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ ⑤ 邏輯 ＋ 待拍板 ══════════ -->
+  <div class="screenwrap" id="s5">
+    <div class="scrhead">
+      <div class="h1">⑤ 顯示邏輯、實作落點、3 個要你拍板嘅位</div>
+      <div class="sub">全部判斷共用現有嘅 <b>shift.openedAt</b>（今日班次是否已開）——唔新增任何「營業中／未營業」嘅新概念，所以其他功能零影響。</div>
+    </div>
+
+    <div class="specgrid">
+      <div>
+        <div class="card">
+          <div class="ct">一、顯示邏輯（真值表）</div>
+          <table class="mx">
+            <tr><th style="width:150px">今日班次狀態</th><th style="width:110px">彈窗狀態</th><th style="width:110px">頁首「開工」掣</th><th>「今日未開工」彈窗</th></tr>
+            <tr>
+              <td class="k">shift.openedAt == null</td><td>未撳過 ✕</td>
+              <td class="y">顯示（橙色＋琥珀光環）</td>
+              <td class="y">彈出（有 ✕、無「開工」掣）</td>
+            </tr>
+            <tr>
+              <td class="k">shift.openedAt == null</td><td>已撳 ✕</td>
+              <td class="y">顯示</td>
+              <td class="n">收起（本次載入唔再彈）</td>
+            </tr>
+            <tr>
+              <td class="k">shift.openedAt 有值</td><td>—</td>
+              <td class="n">自動隱藏</td>
+              <td class="n">唔彈</td>
+            </tr>
+            <tr>
+              <td class="k">已交班（openedAt 清空）</td><td>—</td>
+              <td class="y">再次顯示</td>
+              <td class="y">再次彈出（＝你講嘅打烊後對數情境）</td>
+            </tr>
+          </table>
+          <div class="cb" style="margin-top:8px">
+            最後一行係關鍵：<code>closeShift()</code>（shift-page.tsx:734）交班時會將 <code>openedAt</code> 設為 <code>undefined</code>
+            ⇒ 而家打烊後返嚟，彈窗必定再現（且無法關掉）。加咗 ✕ 之後，呢個情境就順咗。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ct">二、實作落點（改動範圍極細，兩處）</div>
+          <div class="cb">
+            <b>① 頁首按鈕群</b>（pos-app.tsx:4483-4507，插喺「手動更新」左邊）＋ 新增一個 state。<br>
+            <b>② 「今日未開工」彈窗</b>（pos-app.tsx:7368-7388）：加 <code>onClose</code>、拆走「開工」大掣。
+          </div>
+          <pre><span class="c">// ① state（同其他 modal 開關放埋一齊）</span>
+const [startWorkPromptDismissed, setStartWorkPromptDismissed] = useState(false);
+
+<span class="c">// ② 頁首：緊貼「手動更新」左邊（只有未開工才 render）</span>
+{!shift.openedAt ? (
+  &lt;button type="button" onClick={startWork}
+    className="rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"&gt;
+    開工
+  &lt;/button&gt;
+) : <span class="d">null</span>}
+
+<span class="c">// ③ 彈窗：加 onClose ＋ 收起判斷；內裡唔再有「開工」掣</span>
+{!shift.openedAt && !startWorkPromptDismissed ? (
+  &lt;ResponsiveModal onClose={() =&gt; setStartWorkPromptDismissed(true)}
+    widthClassName="max-w-md" zIndexClassName="z-[52]" bodyClassName="text-center"&gt;
+    …
+  &lt;/ResponsiveModal&gt;
+) : <span class="d">null</span>}</pre>
+          <div class="cb" style="margin-top:8px">
+            <span class="optdots"><span class="dotg"></span>不影響：連續上班提醒（z-60）、開桌彈窗、同步健康等全部照舊</span>
+            <span class="optdots" style="margin-top:4px"><span class="dotr"></span>要注意：ResponsiveModal 嘅 ✕ 需要「<code>onClose</code> 有值」才會 render —— 所以一定要傳 <code>onClose</code>（第 ① 頁現狀就係冇傳）</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div class="ct">🔴 要你拍板 1 ／ 落單閘</div>
+          <div class="cb">
+            而家「未開工前不能點餐」<b>只靠彈窗擋住</b>，代碼本身冇第二道閘。撳 ✕ 之後，客人／伙記就可以直接開枱落單。
+            <br><b>我建議：仍然擋。</b>✕ 只係「收起提示」，唔等於解鎖。
+          </div>
+          <div class="note" style="margin-top:8px">
+            <div class="nt">兩條做法揀一條</div>
+            <div class="cb" style="color:var(--amber-900)">
+              <b>方案 a（唔加常駐 UI）</b>：撳枱落單嗰刻才彈提示。
+              <div class="toastdemo">今日未開工，請先撳頁首「開工」</div>
+            </div>
+            <div class="cb" style="color:var(--amber-900);margin-top:8px">
+              <b>方案 b（我建議，即第 ③ 頁嗰條）</b>：頁首下面一條幼身琥珀提示條，一眼知道「只可對數、未可落單」。
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ct">🔴 要你拍板 2 ／ 撳 ✕ 之後記幾久</div>
+          <div class="cb">
+            <b>建議：記到「本次載入」為止</b>（純 React state）——重新載入頁面會再提示一次。
+            <br>理由：未開工係一件要處理嘅事，唔想靜靜雞被永久收埋（對數完可能真係要開工）。
+            <br>另一個選擇：記入 <code>sessionStorage</code>，分頁開住期間唔再彈（唔想每轉一次頁都見到）。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ct">🔴 要你拍板 3 ／ 快餐模式放邊</div>
+          <div class="cb">
+            「手動更新」掣<b>只存在於桌台總覽嘅頁首</b>。快餐模式（<code>/quick</code>）嘅左欄頁首係「店名／快餐模式／返回桌台」，冇呢粒掣。
+            <br>⇒ 快餐模式嗰粒「開工」掣我準備放喺同一行的最右（或者你指定位置）。要唔要快餐模式都有？
+          </div>
+        </div>
+
+        <div class="note">
+          <div class="nt">順便問一句（可以唔做）</div>
+          <ul>
+            <li>已開工之後，要唔要喺頁首顯示一個細細嘅「已開工 09:12」狀態？而家完全冇任何標示，收銀要靠記憶。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var DESIGN_W = 1180, DESIGN_H = 820;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || DESIGN_W;
+  var s = Math.min(1, Math.max(w / DESIGN_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DESIGN_H * s) + "px";
+  stage.style.overflowX = (DESIGN_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++){
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < btns.length; j++){
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+window.onresize = fit;
+
+(function bindTabs(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    (function(b){
+      b.onclick = function(){ showTab(b.getAttribute("data-tab")); };
+    })(btns[i]);
+  }
+})();
+
+window.onload = function(){ fit(); };
+</script>
+</body>
+</html>

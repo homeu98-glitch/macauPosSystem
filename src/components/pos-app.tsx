@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { tryAutoPairCompanion } from "@/lib/print-bridge/auto-pair-companion";
 
@@ -533,6 +533,23 @@ export function PosApp() {
   const lastLoadedQueueRef = useRef<string>("");
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
+  /**
+   * 「今日未開工」彈窗嘅「收起」狀態（2026-09-14 需求）。
+   *
+   * 背景：打烊交班後 `closeShift()` 會清空 `openedAt` ⇒ 老闆返嚟對數時彈窗必現，
+   * 而舊寫法冇傳 `onClose`＝**完全關唔到**，逼住要先開一個新班次。
+   * 而家撳彈窗右上角 ✕ 就收起（唔會開工、亦唔會解鎖落單）。
+   *
+   * ⚠️ 只記喺 component state：重新載入頁面會再提示一次（唔想靜靜雞收埋「未開工」）。
+   */
+  const [startWorkPromptDismissed, setStartWorkPromptDismissed] = useState(false);
+  /** 彈窗「飛去頁首開工掣」嘅動畫參數（null = 冇動畫進行中）；此時彈窗保持掛載到動畫完為止。 */
+  const [startWorkFly, setStartWorkFly] = useState<{ dx: number; dy: number; scale: number } | null>(null);
+  /** 動畫落地後：頁首「開工」掣發光圈 ＋ 彈「開工喺呢度」提示泡泡。 */
+  const [startWorkHint, setStartWorkHint] = useState(false);
+  const startWorkButtonRef = useRef<HTMLButtonElement | null>(null);
+  const startWorkPanelRef = useRef<HTMLDivElement | null>(null);
+  const startWorkTimersRef = useRef<number[]>([]);
   // 2026-09-07：連續開工逾時提醒（>10h）彈窗開關；shiftSyncBusyRef 防 reconcile 重入。
   const [shiftOvertimeDue, setShiftOvertimeDue] = useState(false);
   const [shiftAcking, setShiftAcking] = useState(false);
@@ -802,6 +819,90 @@ export function PosApp() {
       }
     }
   }
+
+  // ── 今日未開工：「落單閘」＋ 彈窗收起／飛行動畫（2026-09-14）──────────────
+
+  /**
+   * 🔴 未開工 → **禁止落單**（唯一閘門，而且**唔靠彈窗**）。
+   *
+   * 點解要獨立一道閘：彈窗加咗 ✕ 之後，「撳 ✕ 收起彈窗」唔可以順手解鎖落單 ——
+   * 收起彈窗只係「我要先睇返盤數」，唔等於「我要開始做生意」。
+   *
+   * 過閘（會產生／推進銷售）：開枱（`selectTable` 空閒枱 / `confirmOpenTable`）、
+   * 加菜（`addMenuItem`）、下單／加單（`sendToKitchen`）、結帳（`openSettlementModal`
+   * 同埋二次確認 `confirmPayment`）。
+   * 唔過閘（對數要用）：睇枱／睇單、報表、補打帳單、取消單、同步健康、手動更新。
+   */
+  function ensureShiftOpened(): boolean {
+    if (shift.openedAt) return true;
+    setToast({ tone: "info", message: "今日未開工，請先按頁首「開工」，然後才可以開枱落單。" });
+    return false;
+  }
+
+  function pushStartWorkTimer(fn: () => void, ms: number) {
+    startWorkTimersRef.current.push(window.setTimeout(fn, ms));
+  }
+
+  /** 用戶喺系統層面關閉動畫 → 唔播飛航，直接收起彈窗（行為其餘完全一樣）。 */
+  function prefersReducedMotion(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  /**
+   * 撳彈窗 ✕：播「彈窗飛去頁首『開工』掣」動畫（純視覺），動畫完先真正收起彈窗。
+   *
+   * ⚠️ 呢度**唔會**寫任何班次狀態 —— 動畫只係話畀用戶知「開工掣而家喺頁首」，
+   * 開工一定要人手撳（見 `startWork()`）。落單閘亦照舊擋住（`ensureShiftOpened()`）。
+   */
+  function dismissStartWorkPrompt() {
+    if (startWorkFly || startWorkPromptDismissed) return;
+    const reduce = prefersReducedMotion();
+    const button = startWorkButtonRef.current;
+    const panel = startWorkPanelRef.current;
+    const buttonBox = button?.getBoundingClientRect();
+    const panelBox = panel?.getBoundingClientRect();
+    const canFly = !reduce && !!buttonBox && !!panelBox && buttonBox.width > 0 && panelBox.width > 0;
+
+    if (canFly && buttonBox && panelBox) {
+      setStartWorkFly({
+        dx: Math.round(buttonBox.left + buttonBox.width / 2 - (panelBox.left + panelBox.width / 2)),
+        dy: Math.round(buttonBox.top + buttonBox.height / 2 - (panelBox.top + panelBox.height / 2)),
+        scale: Math.max(0.07, Math.min(1, buttonBox.width / panelBox.width)),
+      });
+      pushStartWorkTimer(() => setStartWorkHint(true), 640); // 落地 → 目標掣發光圈
+      pushStartWorkTimer(() => {
+        setStartWorkFly(null);
+        setStartWorkPromptDismissed(true);
+      }, 740);
+      pushStartWorkTimer(() => setStartWorkHint(false), 3400);
+      return;
+    }
+
+    // 冇目標掣（正常唔會）／關閉動畫 → 即刻收起。
+    setStartWorkPromptDismissed(true);
+    if (!reduce) {
+      setStartWorkHint(true);
+      pushStartWorkTimer(() => setStartWorkHint(false), 2600);
+    }
+  }
+
+  /** 開工之後「收起」狀態就冇意義 → 清返，令之後交班（openedAt 再清空）時彈窗照樣會彈。 */
+  useEffect(() => {
+    if (shift.openedAt) setStartWorkPromptDismissed(false);
+  }, [shift.openedAt]);
+
+  /** 卸載時清乾淨動畫 timer（避免 setState on unmounted）。 */
+  useEffect(
+    () => () => {
+      for (const id of startWorkTimersRef.current) window.clearTimeout(id);
+      startWorkTimersRef.current = [];
+    },
+    [],
+  );
 
   function startWork() {
     const session = loadAuthSession();
@@ -2116,6 +2217,9 @@ export function PosApp() {
   function selectTable(tableId: string) {
     const existing = tableOrderMap.get(tableId);
     if (!existing) {
+      // 🔴 未開工：空閒枱 = 開新枱落單 → 擋。有單枱照樣可以入去睇
+      //    （加菜／下單／結帳各自有閘），即「先睇數」唔會被擋。
+      if (!ensureShiftOpened()) return;
       // 空閒枱 → 彈開桌窗揀入座人數，唔直接入點餐
       setOpenTablePartySize(1);
       setOpenTableModalTableId(tableId);
@@ -2128,6 +2232,8 @@ export function PosApp() {
   function confirmOpenTable(resolvedSize?: number) {
     const tableId = openTableModalTableId;
     if (!tableId) return;
+    // 🔴 未開工禁止開枱落單（落單閘：ensureShiftOpened）。
+    if (!ensureShiftOpened()) return;
     // 按鈕本身已限制 1..座位數；呢度再 clamp 一次（座位數中途被改細 / fallback 枱）防超座。
     const capacity = visibleTables.find((t) => t.id === tableId)?.capacity;
     const maxSeats = capacity && capacity > 0 ? capacity : OPEN_TABLE_FALLBACK_MAX_SEATS;
@@ -2641,6 +2747,8 @@ export function PosApp() {
 
   function addMenuItem(item: MenuItem) {
     if (isReadOnlySettled) return;
+    // 🔴 未開工禁止加菜／落單（落單閘：ensureShiftOpened）。
+    if (!ensureShiftOpened()) return;
     if (isItemSoldOut(item.id)) {
       setToast({ tone: "info", message: `${item.name} 已售罄。` });
       return;
@@ -3384,6 +3492,9 @@ export function PosApp() {
 
   async function sendToKitchen(options?: { silent?: boolean; forceNewOrder?: boolean }) {
     if (isReadOnlySettled) return null;
+    // 🔴 未開工禁止下單／加單（落單閘：ensureShiftOpened）。
+    //    注意：`silent: true` 嘅內部呼叫（結帳前自動落單）同樣要擋 —— 未開工連結帳都做唔到。
+    if (!ensureShiftOpened()) return null;
     if (!bootstrap || !activeTable || cartItems.length === 0) return null;
     if (orderSubmitting) return null;
     setOrderSubmitting(true);
@@ -3894,6 +4005,8 @@ export function PosApp() {
 
   async function confirmPayment(method: string) {
     if (!bootstrap || memberCheckoutSubmitting) return;
+    // 🔴 未開工禁止結帳（落單閘：ensureShiftOpened；結帳頁係二次確認，唔可以漏）。
+    if (!ensureShiftOpened()) return;
 
     if (memberLedgerOpsNeeded && offlineMode) {
       setToast({ tone: "info", message: "會員扣款／核銷券須連線，請恢復網絡後再試。" });
@@ -4396,6 +4509,8 @@ export function PosApp() {
 
   async function openSettlementModal() {
     if (isReadOnlySettled) return;
+    // 🔴 未開工禁止結帳（落單閘：ensureShiftOpened）。
+    if (!ensureShiftOpened()) return;
     if (isQuickMode) {
       if (cartItems.length === 0) {
         setToast({ tone: "info", message: "請先點餐再結帳。" });
@@ -4481,6 +4596,30 @@ export function PosApp() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {/* 「開工」（2026-09-14）：未開工才出，擺喺「手動更新」左邊。
+                        收起「今日未開工」彈窗之後，呢粒就係開工嘅入口。
+                        開工後自動隱藏（判準 `shift.openedAt`，同彈窗同一份真源）。
+                        ⚠️ 動畫期間呢粒掣會被 startWorkHint 加上光圈，唔可以蓋住佢（z 要夠高）。 */}
+                    {!shift.openedAt ? (
+                      <span className="relative inline-flex">
+                        <button
+                          ref={startWorkButtonRef}
+                          type="button"
+                          title="開始今日班次（未開工前不能開枱／落單）"
+                          onClick={startWork}
+                          className={`rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 ${
+                            startWorkHint ? "pos-start-work-pulse" : ""
+                          }`}
+                        >
+                          開工
+                        </button>
+                        {startWorkHint ? (
+                          <span className="pointer-events-none absolute left-1/2 top-[calc(100%+10px)] z-[8] -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg">
+                            👆 開工喺呢度
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       title="從伺服器強制拉取最新菜單及所有設定，套用後會重新載入頁面"
@@ -4507,6 +4646,16 @@ export function PosApp() {
                   </div>
                 </div>
               </div>
+
+              {/* 收起「今日未開工」彈窗之後嘅常駐提示（2026-09-14）：
+                  講清楚「只可以對數、未可以落單」，避免收銀以為系統壞咗。
+                  開工後（或彈窗仍在）唔會顯示。 */}
+              {!shift.openedAt && startWorkPromptDismissed ? (
+                <div className="flex flex-none items-center gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2.5 font-semibold text-amber-800">
+                  <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-bold text-white">今日未開工</span>
+                  <span className="text-[13px]">只可以查看／對數，落單功能暫停。要開始營業，請按頁首「開工」。</span>
+                </div>
+              ) : null}
 
               <div className="flex-1 overflow-auto p-4">
               <div className="mb-4 flex flex-wrap gap-2">
@@ -4915,8 +5064,32 @@ export function PosApp() {
                   ) : null}
                 </div>
                 {isQuickMode ? (
-                  <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                    快餐模式
+                  <div className="flex items-center gap-2">
+                    {/* 快餐模式頁首冇「手動更新」，所以「開工」掣要自己擺一個位（2026-09-14）。
+                        同堂食一樣：未開工才出，收起彈窗後就係唯一開工入口。 */}
+                    {!shift.openedAt ? (
+                      <span className="relative inline-flex">
+                        <button
+                          ref={startWorkButtonRef}
+                          type="button"
+                          title="開始今日班次（未開工前不能落單）"
+                          onClick={startWork}
+                          className={`rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 ${
+                            startWorkHint ? "pos-start-work-pulse" : ""
+                          }`}
+                        >
+                          開工
+                        </button>
+                        {startWorkHint ? (
+                          <span className="pointer-events-none absolute right-0 top-[calc(100%+10px)] z-[8] whitespace-nowrap rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg">
+                            👆 開工喺呢度
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                      快餐模式
+                    </div>
                   </div>
                 ) : (
                   <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
@@ -5450,7 +5623,8 @@ export function PosApp() {
                   <button
                     className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-busy={orderSubmitting}
-                    disabled={orderSubmitting || isReadOnlySettled}
+                    title={!shift.openedAt ? "今日未開工：請先按頁首「開工」" : undefined}
+                    disabled={orderSubmitting || isReadOnlySettled || !shift.openedAt}
                     onClick={() => void sendToKitchen()}
                     type="button"
                   >
@@ -5459,7 +5633,8 @@ export function PosApp() {
                 ) : null}
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={isReadOnlySettled}
+                  title={!shift.openedAt ? "今日未開工：請先按頁首「開工」" : undefined}
+                  disabled={isReadOnlySettled || !shift.openedAt}
                   onClick={() => void openSettlementModal()}
                   type="button"
                 >
@@ -7365,13 +7540,44 @@ export function PosApp() {
         </ResponsiveModal>
       ) : null}
 
-      {!shift.openedAt ? (
+      {/* 「今日未開工」提示彈窗（2026-09-14 改）——
+          ① 原「開工」掣**保留**（想即刻開工嘅人唔使多走一步）；
+          ② 新增右上角 ✕（＝`onClose`）：打烊後返嚟對數／查帳，唔想被逼開新班次；
+          ③ 撳 ✕ → 彈窗「飛」去頁首「開工」掣（純視覺引導），之後收起本彈窗；
+          ④ ⚠️ 收起彈窗**唔等於**可以落單 —— 落單閘獨立寫喺 `ensureShiftOpened()`。
+          動畫期間（`startWorkFly`）彈窗保持掛載，飛完先真正 unmount。 */}
+      {!shift.openedAt && (!startWorkPromptDismissed || startWorkFly) ? (
         <ResponsiveModal
           bodyClassName="text-center"
-          panelClassName="p-6 sm:p-8 md:ml-[72px]"
+          panelClassName={`p-6 sm:p-8 md:ml-[72px] ${startWorkFly ? "pos-start-work-fly" : ""}`}
+          panelRef={startWorkPanelRef}
+          panelStyle={
+            startWorkFly
+              ? ({
+                  "--pos-sw-x": `${startWorkFly.dx}px`,
+                  "--pos-sw-y": `${startWorkFly.dy}px`,
+                  "--pos-sw-s": String(startWorkFly.scale),
+                } as CSSProperties)
+              : undefined
+          }
           widthClassName="max-w-md"
           zIndexClassName="z-[52]"
+          overlayClassName={startWorkFly ? "pos-start-work-overlay pos-start-work-overlay-gone" : ""}
+          onClose={dismissStartWorkPrompt}
+          /* 唔用 ResponsiveModal 內建嘅「關閉」文字 pill：呢個彈窗要用**圓形 ✕**（44×44），
+             同確認稿一致，亦順手滿足觸控 ≥40px 嘅要求。 */
+          showCloseButton={false}
         >
+            <button
+              className="absolute right-3 top-3 grid h-11 w-11 place-items-center rounded-full bg-slate-100 hover:bg-slate-200"
+              onClick={dismissStartWorkPrompt}
+              type="button"
+              aria-label="關閉（唔開工，只查看資料／對數）"
+              title="關閉（唔開工，只查看資料／對數）"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#334155"
+                   strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
             <div className="text-sm font-semibold tracking-widest text-orange-500">今日未開工</div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">開始今日營業</div>
             <div className="mt-2 text-sm text-slate-500">
@@ -7384,6 +7590,9 @@ export function PosApp() {
             >
               開工
             </button>
+            <div className="mt-3 text-xs leading-relaxed text-slate-400">
+              只想先查帳／對數？按右上角 ✕ 收起本視窗，稍後按頁首「開工」即可開始。
+            </div>
         </ResponsiveModal>
       ) : null}
 

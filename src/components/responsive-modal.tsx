@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode } from "react";
+import { CSSProperties, ReactNode, Ref } from "react";
 
 type ResponsiveModalProps = {
   children: ReactNode;
@@ -12,8 +12,11 @@ type ResponsiveModalProps = {
   closeLabel?: string;
   widthClassName?: string;
   panelClassName?: string;
+  panelStyle?: CSSProperties;
+  panelRef?: Ref<HTMLDivElement>;
   bodyClassName?: string;
   zIndexClassName?: string;
+  overlayClassName?: string;
   showCloseButton?: boolean;
   placement?: "center" | "bottom";
   allowPointerEventsOnOverlay?: boolean;
@@ -29,18 +32,23 @@ export function ResponsiveModal({
   closeLabel = "關閉",
   widthClassName = "max-w-2xl",
   panelClassName = "",
+  panelStyle,
+  panelRef,
   bodyClassName = "",
   zIndexClassName = "z-50",
+  overlayClassName = "",
   showCloseButton = true,
   placement = "center",
   allowPointerEventsOnOverlay = true,
 }: ResponsiveModalProps) {
   return (
     <div
-      className={`fixed inset-0 ${zIndexClassName} ${placement === "bottom" ? "flex items-end justify-center" : "grid place-items-center"} bg-slate-900/45 p-2 sm:p-4 ${allowPointerEventsOnOverlay ? "" : "pointer-events-none"}`}
+      className={`fixed inset-0 ${zIndexClassName} ${placement === "bottom" ? "flex items-end justify-center" : "grid place-items-center"} bg-slate-900/45 p-2 sm:p-4 ${allowPointerEventsOnOverlay ? "" : "pointer-events-none"} ${overlayClassName}`}
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        style={panelStyle}
         className={`flex w-full ${widthClassName} max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[calc(100dvh-32px)] ${allowPointerEventsOnOverlay ? "" : "pointer-events-auto"} ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
       >
