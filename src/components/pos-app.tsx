@@ -5649,6 +5649,7 @@ export function PosApp() {
           onClose={() => setNoteModal(null)}
           title={noteModal.type === "order" ? "全單備註" : "單品備註"}
           widthClassName="max-w-2xl"
+          zIndexClassName="z-[70]"
         >
             <div>
               <div className="text-xs font-semibold text-slate-500">常用備註</div>
@@ -5676,11 +5677,24 @@ export function PosApp() {
 
             <div className="mt-4">
               <div className="text-xs font-semibold text-slate-500">自由輸入</div>
+              {/*
+                iOS 鍵盤（2026-09-14 全單／單品備註「焦點有到、鍵盤唔彈」）三項必要設定：
+                ① autoFocus —— 焦點喺「開彈窗嗰下嘅 user gesture」內取得，iOS 最可靠會彈鍵盤；
+                   （本 app 其餘 5 個輸入框全部都有，唯獨呢個漏咗）
+                ② text-base = 16px —— iOS 慣例：欄位字級 < 16px 會觸發「focus 自動放大」，
+                   但 layout.tsx 係 maximumScale:1 / userScalable:false，放大被禁 → 部分版本鍵盤唔彈；
+                ③ autoCorrect/autoCapitalize/spellCheck 關閉 —— 中文輸入法組字唔會被系統「自動更正」食走。
+              */}
               <textarea
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none focus:border-orange-400"
+                autoCapitalize="off"
+                autoCorrect="off"
+                autoFocus
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base leading-relaxed text-slate-900 outline-none focus:border-orange-400"
+                enterKeyHint="done"
                 onChange={(event) => setNoteDraft(event.target.value)}
                 placeholder="例如：不要吸管、少辣、走蔥..."
                 rows={4}
+                spellCheck={false}
                 value={noteDraft}
               />
             </div>
@@ -6940,10 +6954,14 @@ export function PosApp() {
             )}
           </div>
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
             autoFocus
-            className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+            className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
+            enterKeyHint="done"
             onChange={(event) => setCompNote(event.target.value)}
             placeholder="可自由輸入免單原因，例如：客人投訴補償"
+            spellCheck={false}
             value={compNote}
           />
         </ResponsiveModal>
@@ -7013,10 +7031,14 @@ export function PosApp() {
                   </div>
                 )}
                 <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   autoFocus
-                  className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+                  className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
+                  enterKeyHint="done"
                   onChange={(event) => setDiscountNoteDraft(event.target.value)}
                   placeholder="可自由輸入打折原因，例如：熟客介紹"
+                  spellCheck={false}
                   value={discountNoteDraft}
                 />
               </div>

@@ -1315,5 +1315,71 @@ savePrintJobs(nextPrintJobs);            // ← 繞過 mergePrintJobs（冇去�
 
 🔴 教訓：凡「落本機 print job」都應該行統一入口；繞過就會喺未來某次統一入口加嘢時靜靜漏更新。
 
+---
+
+## 🔴 備註欄「焦點有到、虛擬鍵盤唔彈」（2026-09-14 · 全單備註／單品備註）
+
+### 症狀
+iPad 上撳「全單備註」／「單品備註」彈窗嘅「自由輸入」textarea：
+**焦點有到**（iOS 系統編輯選單「貼上／自動填寫」彈得出）→ 但**虛擬鍵盤完全唔彈**，
+兩個入口（全單／單品）同一徵狀（同一個彈窗、同一段 JSX）。
+
+### 已排除（唔係呢啲）
+| 懷疑 | 結論 |
+|---|---|
+| 欄位被 `disabled` / `readOnly` | ❌ 都冇（`pos-app.tsx` 備註 textarea） |
+| 缺事件綁定 | ❌ `value={noteDraft}` ＋ `onChange` 齊全（受控元件） |
+| 輸入限制 | ❌ 冇 `maxLength` / `inputMode` / `pattern` |
+| 被鎖定擋住 | ❌ `orderNoteLocked` 只擋「保存」；單品入口鎖咗會**連彈窗都唔開** → 開得成即未鎖 |
+| 透明層食 tap | ❌ flash 層 `pointer-events-none`；`SelfOrderNoticeStack` ≤5 張卡亦 `pointer-events-none` |
+| 全域 handler `preventDefault` | ❌ 全 repo 冇任何 `touchstart/keydown` 全域攔截（只有 pwa-register 嘅 `beforeinstallprompt`／login Enter） |
+
+### 🔴 git 考古結論：**web code 冇回歸**
+逐項對過（唔好再靠估，直接用下面方法查）：
+- 備註彈窗由手寫 `fixed` div 換成 `ResponsiveModal`＝**2026-08-09**（`6580e42`），唔係近期。
+- 備註 textarea 實作由 8 月初至今**未變**（`git log -S'textarea' -- src/components/pos-app.tsx`）。
+- `viewport` `maximumScale:1 / userScalable:false` 同 `body{overflow:hidden}`＝**2026-08-04 首次提交**就有。
+- 冇任何 commit 近期加過全域 `keydown`／`touchstart` 攔截（`git log -S'preventDefault' -- src`）。
+- `runtimeRefreshTick` 只係 effect 依賴，**冇**用嚟做 `key` → 唔會 remount 令焦點消失。
+⇒ 「之前可以、依家唔得」**唔係 web 改動造成**，指向裝置／系統層。
+
+### 最可能成因（按機率）
+1. **iPadOS 判定「有實體鍵盤」** ← 最符合「**完全**冇彈」。iPadOS 一偵測到硬件鍵盤就**永不**彈虛擬鍵盤：
+   Magic Keyboard／Smart Connector 保護套、藍牙鍵盤、**HID 掃碼槍／藍牙讀卡機**（都係 keyborad wedge）。
+   ⚠️ 呢個 POS 幾乎所有輸入都有自繪鍵盤（`numeric-keypad` / `fixed-number-pad` / `input-pad-modal`），
+   **只有「備註自由輸入」靠系統鍵盤** ⇒ 只有呢兩處會被商家發現 ⇒ 極易誤判成「只有備註壞咗」。
+2. **引導式存取（Guided Access）**：docs/116 §R4 建議用引導式存取鎖機，而 Guided Access 嘅
+   「選項」入面有 **「鍵盤」開關**，關掉＝永久冇虛擬鍵盤（撳欄位只會出編輯選單）。
+3. **iOS 全屏 PWA + `body{overflow:hidden}` + fixed 彈窗 + `user-scalable=no`**：
+   iOS 想 scroll 去聚焦元素但文檔唔可滾 → 部分版本索性唔彈（docs/109 §3.2-2 已描述過）。
+4. iPad 分頁跑**舊版 JS**（docs/113 紅線：iPad 唔會自動換 JS）→ 先**強制 reload**。
+
+### 2026-09-14 已落嘅加固（web 側）
+| 檔案 | 改動 |
+|---|---|
+| `src/components/ios-focus-helper.tsx` | 🆕 **實作 docs/109 §3.4「修正 A」**（一直冇做）：全局 `focusin` → 把欄位捲入最近可滾動祖先中央；`visualViewport` resize/scroll 再補一次。元素本來完整可見就唔動（唔同 POS 自己嘅 scroll 打架）。 |
+| `src/app/layout.tsx` | 掛 `<IosFocusHelper />`（`ClientOnly` 內） |
+| `pos-app.tsx` 備註彈窗 | textarea 加 `autoFocus`（app 內其餘 5 個輸入框都有，唯獨呢個漏咗）、`text-base`(16px，避開 iOS focus 自動放大 vs `maximumScale:1` 衝突)、`autoCorrect/autoCapitalize/spellCheck` 關（中文組字唔會被自動更正食走）；彈窗 z-index `z-50` → **`z-[70]`**（同「免單備註」一致，脫離同層打架） |
+| `pos-app.tsx` 免單／折扣備註 | 同款 free-text `<input>` 一齊補 16px + IME 屬性 |
+
+### 現場分流（最快 3 個測試）
+1. **同一部 iPad 撳點餐頁「搜尋商品」欄打唔打得入**（相中可見，`text-sm` ＋ 冇 autoFocus 嘅普通 `input`）：
+   - 打得入 → 系統鍵盤正常 ⇒ 問題只喺彈窗（第 3 項）→ 睇上面加固夠唔夠。
+   - 一樣打唔入 → **裝置層**（第 1／2 項）→ 去下面檢查。
+2. 撳彈窗入面嘅「多飯／少冰」chip 有冇反應：有 → 彈窗互動正常，純粹係鍵盤；冇 → 彈窗被蓋住（另一條路）。
+3. **設定 → 藍牙**：斷開所有鍵盤／HID 裝置（鍵盤保護套要**拆**，唔係蓋住）；再檢查
+   **設定 → 輔助使用 → 引導式存取 → 選項 → 「鍵盤」**係咪開啟。
+   ⚠️ 兩者都解決唔到 = 真係要靠 app 自繪輸入（見下）。
+
+### 如果裝置層冇得救（未做，待拍板）
+「自由文字」係全 app 唯一冇自繪輸入基建嘅類型 → 要根治只有兩條路：
+① **擴大 `設置 → 備註 → 常用備註` chip 庫**（`notePresets`，已支援「撳 chip 疊加」）令日常 95% 情境
+   **唔使打字**；② 做備註專用「App 內建文字輸入板」（QWERTY／常用字＋貼上）。
+⚠️ 過渡期可用「貼上」：喺 iPad 備忘錄打好 → 長按備註欄 → 貼上（相中已見「貼上」選單彈得出＝焦點正常）。
+
+### 🔴 教訓
+「某個欄位打唔到字」唔等於「嗰個欄位壞咗」：先問**同一部機其他自由文字欄位得唔得**，
+再問「**鍵盤有冇彈**」（有彈但冇字＝IME／受控元件；完全冇彈＝裝置判定有實體鍵盤／IME 被禁）。
+
 
 

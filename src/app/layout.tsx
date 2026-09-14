@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ClientOnly } from "@/components/client-only";
+import { IosFocusHelper } from "@/components/ios-focus-helper";
 import { PosSyncFlushWorker } from "@/components/pos-sync-flush-worker";
 import { PwaRegister } from "@/components/pwa-register";
 import { PrintFlushWorker } from "@/components/print-flush-worker";
@@ -55,6 +56,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <PwaRegister />
           <PrintFlushWorker />
           <PosSyncFlushWorker />
+          <IosFocusHelper />
           {children}
         </ClientOnly>
       </body>
