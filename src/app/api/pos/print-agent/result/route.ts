@@ -49,19 +49,32 @@ export async function POST(request: Request) {
   const attempts = Number(job.attempts ?? 0);
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (status === "sent" || status === "printed") {
-    // 打印成功後設為終態 printed；RPC 只揀 pending/failed，printed 永遠唔會被 re-claim。
+    // 打印成功後設為終態 printed；RPC 只揀 pending/failed/printing，printed 永遠唔會被 re-claim。
     patch.status = "printed";
     patch.finished_at = new Date().toISOString();
     patch.last_error = null;
     patch.claimed_by = null;
+    // 🔴 2026-09-15（P2）：成功時一定要清零 `attempts`。
+    //
+    // 以前只清 `last_error` 唔清 `attempts` → 「成功過一次」同「失敗過 4 次」喺 DB 上面
+    // 完全分唔開。配合 0042 新增嘅 `finished_at is null` 守衛，`finished_at` 已經足以
+    // 擋住重複 claim，但清零 `attempts` 可以令「人工重印」（P3 端點）有個乾淨起點，
+    // 亦唔會令一張印咗 4 次先成功嘅單，喺 UI 顯示成「試過 4 次」而誤導。
+    patch.attempts = 0;
   } else {
     if (attempts < 5) {
       patch.status = "pending";
       patch.claimed_by = null;
+      patch.claimed_at = null;
     } else {
       patch.status = "failed";
+      patch.claimed_by = null;
+      patch.claimed_at = null;
     }
-    patch.last_error = (body.error ?? "").slice(0, 300) || null;
+    // P4（2026-09-15）：失敗原因加穩定前綴，令前端／告警唔使靠 APK 原文。
+    // `AGENT_FAILED:` 係固定標記，中繼機報咩文字都照樣歸一類。
+    const rawError = (body.error ?? "").slice(0, 240).trim();
+    patch.last_error = rawError ? `AGENT_FAILED: ${rawError}`.slice(0, 300) : "AGENT_FAILED";
   }
 
   const { error: uErr } = await supabase.from("pos_print_jobs").update(patch).eq("id", jobId);

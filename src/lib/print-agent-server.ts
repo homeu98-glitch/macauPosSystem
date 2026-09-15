@@ -29,6 +29,9 @@ export function sha256Hex(input: string): string {
  * 行為完全不變：只係「唔同長度 → false」＋「等長 → 定時安全比較」。
  */
 function safeEqualHex(a: string, b: string): boolean {
+  // 防禦性：`0020` 已寫明 `token_hash text not null`，但 DB 始終係外部輸入，
+  // 型別保證唔可以當成 runtime 保證（null 會令 `b.length` 直接 throw）。
+  if (typeof a !== "string" || typeof b !== "string") return false;
   if (a.length !== b.length) return false;
   try {
     return timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));

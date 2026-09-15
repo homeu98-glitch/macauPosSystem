@@ -119,6 +119,64 @@ function partySizeOrNull(value: unknown): number | null {
 }
 
 /**
+ * 打印任務有效期（`pos_print_jobs.ttl`，epoch **millis** 絕對期限）。
+ *
+ * ── 🔴 2026-09-15（P1）為咩要喺 server 端補呢個欄 ──────────────────────
+ * `ttl` 由 0020 加咗落表，`types.ts:1399` 亦有型別宣告，但**全 repo 冇任何一處寫入過**：
+ *   - 客戶端 `PrintJob` 從來冇設 `ttl`（所有 builder 都冇）；
+ *   - 呢個 route 舊寫法嘅 `contentPatch` 同 `insert` **都冇 `ttl`** ⇒ 恆為 NULL。
+ * ⇒ `0035` 第 60 行嘅守衛 `j.ttl is null or j.ttl > now_ms` **永遠成立 = 死代碼**，
+ *   即「隔夜補印」完全冇保護（2026-09-15 生產事故：58 張 9/11–9/15 嘅舊 pending 單
+ *   一直掛住，中繼機一恢復就全部出紙）。
+ *
+ * 做法：**由 server 落章**（唔靠 client），因為
+ *  ① 各端時鐘唔一致（client 可能係 iPad，時區／NTP 偏差）；
+ *  ② client 即使漏寫都仍然有保護（呢個 route 係上雲嘅唯一入口）。
+ *
+ * 期限 = `created_at + 12 小時`：
+ *  - 同一營業日足夠長（餐飲營業日一般 ≤ 12h）；
+ *  - 12 小時之後嘅單一定係跨日舊單，唔應該再突然出紙。
+ *
+ * ⚠️ 一定要用 `created_at` 計，唔可以用 `now()` 計 —— 否則一條**補推嘅舊事件**
+ *    （離線 2 日後才上雲）會被當成「新鮮單」，ttl 寫成「今日 + 12h」，
+ *    隔夜保護即刻失效。
+ */
+const PRINT_JOB_TTL_MS = 12 * 60 * 60 * 1000;
+
+function printJobTtl(createdAtIso: string | null): number {
+  const createdMs = createdAtIso ? Date.parse(createdAtIso) : NaN;
+  const base = Number.isFinite(createdMs) ? createdMs : Date.now();
+  return base + PRINT_JOB_TTL_MS;
+}
+
+/**
+ * 只保留「同一個澳門營業日」內嘅任務可以再被認領。
+ *
+ * 同 `ttl` 係**兩重**保護，唔係重複：
+ *  - `ttl` = 建單起 12 小時（Rolling，跨日都仲可能未過）。
+ *  - 呢個 = **絕對**邊界（澳門時間當日 23:59:59.999）→ 收工後唔會再出昨日嘅單。
+ *
+ * @returns 該單嘅營業日截止 epoch millis
+ */
+function printJobBusinessDayEnd(createdAtIso: string | null): number {
+  // 澳門 = UTC+8，冇夏令時間，所以固定 +8 小時偏移就準（同報表口徑一致）。
+  const MACAU_OFFSET_MS = 8 * 60 * 60 * 1000;
+  const createdMs = createdAtIso ? Date.parse(createdAtIso) : NaN;
+  const base = Number.isFinite(createdMs) ? createdMs : Date.now();
+  const macau = new Date(base + MACAU_OFFSET_MS);
+  const dayEndMacauMs = Date.UTC(
+    macau.getUTCFullYear(),
+    macau.getUTCMonth(),
+    macau.getUTCDate(),
+    23,
+    59,
+    59,
+    999,
+  );
+  return dayEndMacauMs - MACAU_OFFSET_MS;
+}
+
+/**
  * 收據二維碼點陣（0020 `pos_print_jobs.qr` jsonb，`{ size, bits }`）。
  *
  * ⚠️ 呢欄係 print-relay APK 出紙二維碼嘅**唯一來源**：APK `fromRow` 讀 row 嘅 `qr`
@@ -1108,6 +1166,14 @@ export async function POST(request: Request) {
           (typeof eventPayload.content === "object" && eventPayload.content !== null
             ? text((eventPayload.content as Record<string, unknown>).store_name, MAX_NAME_LEN)
             : null);
+        // 🆕 P1（2026-09-15）：job 絕對有效期（epoch millis）。
+        // 以前呢個 route 完全冇寫 `ttl` → 恆 NULL → 0035 嘅 ttl 守衛變死代碼
+        // → 隔夜舊單補印（當日事故）。由 server 落章，client 漏寫都有保護。
+        const jobCreatedAt = text(eventPayload.createdAt, 64) ?? new Date().toISOString();
+        const jobTtl = Math.min(
+          printJobTtl(jobCreatedAt),
+          printJobBusinessDayEnd(jobCreatedAt),
+        );
         const contentPatch = {
           order_id: text(eventPayload.orderId, MAX_ID_LEN),
           order_no: text(eventPayload.orderNo, MAX_NAME_LEN),
@@ -1116,6 +1182,9 @@ export async function POST(request: Request) {
           printer_group: text(eventPayload.printerGroup, 64) ?? "kitchen",
           printer_name: text(eventPayload.printerName, MAX_NAME_LEN),
           items: jobItems,
+          // ⚠️ ttl 只喺「首次建立」寫（見下面 update 分支註釋），所以兩個分支都帶住，
+          //    但 update 分支會手動剔除（唔可以改一張已存在 job 嘅有效期）。
+          ttl: jobTtl,
           // 0015 migration 新增：模板快照 / 靜態內容 / 打印機綁定。
           // 冇呢三欄，job 同步去第二部機會退化做硬編 fallback 渲染（冇店名／時間／單據類型／
           // 頁尾，亦唔理商家設嘅字型大小）→ 兩部機印出嚟唔一致。見 docs/87 §7。
@@ -1129,10 +1198,16 @@ export async function POST(request: Request) {
           // 0020 新增：Hub fallback renderer 用 store_name 印抬頭；寫入端一直漏填導致印出 "null"。
           store_name: contentStoreName,
         };
+        // 🔴 `ttl` **只可以喺 insert 寫一次**，唔可以喺 update 覆蓋：
+        //    重推同一條 PRINT_JOB_CREATED（離線補推 / 重試）時，如果連 ttl 都重算，
+        //    一張原本已經過期嘅舊單會被「續命」，令 0035 嘅隔夜保護再次失效。
+        //    有效期係「建單一刻」嘅屬性，唔應該隨每次推送改變。
+        const contentPatchWithoutTtl: Record<string, unknown> = { ...contentPatch };
+        delete contentPatchWithoutTtl.ttl;
         // 1) 先試 update（只更新內容，唔動 status）—— 命中即張 job 已存在，唔應該重置佢嘅打印狀態
         const { data: upd, error: uErr } = await supabase
           .from("pos_print_jobs")
-          .update(contentPatch)
+          .update(contentPatchWithoutTtl)
           .eq("id", jobId)
           .eq("store_id", storeId)
           .select("id");
@@ -1148,7 +1223,7 @@ export async function POST(request: Request) {
             store_id: storeId,
             ...contentPatch,
             status: text(eventPayload.status, 64) ?? "pending",
-            created_at: text(eventPayload.createdAt, 64) ?? new Date().toISOString(),
+            created_at: jobCreatedAt,
           });
           if (iErr) {
             console.error("[pos/sync] pos_print_jobs insert failed:", iErr.message);

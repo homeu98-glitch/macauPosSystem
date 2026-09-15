@@ -220,7 +220,19 @@ export function PrintCenter() {
    * @see `/api/pos/print-jobs/status` 同 migration `0035`（stale printing 自動重排）
    */
   const [cloudUnfinished, setCloudUnfinished] = useState<
-    Record<string, { status: "pending" | "printing"; attempts: number; claimedAt: string | null }>
+    Record<
+      string,
+      {
+        status: "pending" | "printing";
+        attempts: number;
+        claimedAt: string | null;
+        createdAt?: string | null;
+        /** P4：伺服器分類好嘅原因碼 + 中文標籤（見 `print-job-failure.ts`）。 */
+        reason?: string;
+        reasonLabel?: string;
+        reasonHint?: string;
+      }
+    >
   >({});
   /** 中繼打印機代理狀態（心跳時間），用嚟分辨「代理離線」定「代理在線但印唔出」。 */
   const [agentStatus, setAgentStatus] = useState<{ paired: boolean; lastSeenAt: string | null } | null>(null);
@@ -1052,18 +1064,37 @@ export function PrintCenter() {
             status: "pending" | "printing";
             attempts?: number;
             claimedAt?: string | null;
+            createdAt?: string | null;
+            reason?: string;
+            reasonLabel?: string;
+            reasonHint?: string;
           }>;
         }
       | null;
     if (!data?.ok || !Array.isArray(data.jobs)) return;
 
     // 未完成狀態：令「冇人認領 / 認領咗冇回報」喺 UI 見得到（見上面 state 註釋）。
-    const unfinishedMap: Record<string, { status: "pending" | "printing"; attempts: number; claimedAt: string | null }> = {};
+    const unfinishedMap: Record<
+      string,
+      {
+        status: "pending" | "printing";
+        attempts: number;
+        claimedAt: string | null;
+        createdAt?: string | null;
+        reason?: string;
+        reasonLabel?: string;
+        reasonHint?: string;
+      }
+    > = {};
     for (const row of data.unfinished ?? []) {
       unfinishedMap[row.id] = {
         status: row.status,
         attempts: Number(row.attempts ?? 0),
         claimedAt: row.claimedAt ?? null,
+        createdAt: row.createdAt ?? null,
+        reason: row.reason,
+        reasonLabel: row.reasonLabel,
+        reasonHint: row.reasonHint,
       };
     }
     setCloudUnfinished(unfinishedMap);
@@ -1706,6 +1737,21 @@ export function PrintCenter() {
                   if (rows.length === 0) return null;
                   const pendingCount = rows.filter((row) => row.status === "pending").length;
                   const printingCount = rows.length - pendingCount;
+                  // P4：按**伺服器分類嘅原因碼**彙總，唔再靠文字。
+                  // 咁做「一直冇認領」同「認領後中斷」一眼分得開（以前兩者都只顯示「已發送」）。
+                  const byReason = new Map<string, number>();
+                  for (const row of rows) {
+                    const key = row.reasonLabel ?? (row.status === "pending" ? "等待認領" : "已認領未回報");
+                    byReason.set(key, (byReason.get(key) ?? 0) + 1);
+                  }
+                  const reasonSummary = [...byReason.entries()]
+                    .map(([label, count]) => `${label} ${count} 張`)
+                    .join("、");
+                  // 有冇任何一行已經被判為「超時」（即真係出事，唔係單純等緊）。
+                  const timedOut = rows.filter(
+                    (row) => row.reason === "TIMEOUT_CLAIM" || row.reason === "TIMEOUT_STALE",
+                  );
+                  const firstHint = timedOut.find((row) => row.reasonHint)?.reasonHint ?? "";
                   const lastSeenMs = agentStatus?.lastSeenAt ? Date.parse(agentStatus.lastSeenAt) : NaN;
                   const minutesAgo = Number.isFinite(lastSeenMs)
                     ? Math.max(0, Math.round((Date.now() - lastSeenMs) / 60000))
@@ -1724,15 +1770,21 @@ export function PrintCenter() {
                         ⚠️ 有 {rows.length} 張打印任務雲端仲未完成：未認領 {pendingCount} 張、已認領未回報{" "}
                         {printingCount} 張
                       </div>
+                      {reasonSummary ? (
+                        <div className="mt-1 font-medium">原因分類：{reasonSummary}</div>
+                      ) : null}
                       <div className="mt-1 leading-relaxed">
                         {agentHint}
                         {pendingCount > 0
                           ? "「未認領」＝冇中繼打印機拎單（開返中繼機／重新配對）。"
                           : ""}
                         {printingCount > 0
-                          ? "「已認領未回報」＝中繼機拎咗單但冇回報（出紙失敗／中途死）；超過 60 秒會自動重排（migration 0035）。"
+                          ? "「已認領未回報」＝中繼機拎咗單但冇回報（出紙失敗／中途死）；90 秒後另一部機可接手，同一部機 6 分鐘後可重拎（migration 0042）。"
                           : ""}
                       </div>
+                      {firstHint ? (
+                        <div className="mt-1 font-medium">建議：{firstHint}</div>
+                      ) : null}
                     </div>
                   );
                 })()}
@@ -1881,15 +1933,66 @@ export function PrintCenter() {
                                     disabled={Boolean(retryingJobId)}
                                     onClick={() => {
                                       setRetryingJobId(job.id);
-                                      void retryFailedPrintJob(job.id)
-                                        .then((next) => {
-                                          setPrintJobs(next);
+                                      // 🔴 2026-09-15（P3）：先打**雲端**重試端點，再鏡像本機。
+                                      //
+                                      // 以前只 call 本機 `retryFailedPrintJob()`：
+                                      //   · 佢只改 localStorage，然後走本機 flush；
+                                      //   · relay 分支嘅 send() 係 no-op 但樂觀回 ok
+                                      //     → 本機狀態變 "sent" → 彈「已重新送出打印。」
+                                      //   · **雲端 `pos_print_jobs` 一行都冇改**（仲係 failed /
+                                      //     attempts=5）→ 中繼機永遠 claim 唔到 → 一張紙都唔出。
+                                      // = 靜默失敗（用戶見到「成功」但冇出紙）。
+                                      //
+                                      // 雲端改好之後，本機 flush 只負責把「本機顯示」推向一致；
+                                      // 真正出紙係「雲端 status=pending → 中繼機 claim」嗰條路。
+                                      void (async () => {
+                                        const storeId = resolveStoreId();
+                                        let cloudOk = false;
+                                        let cloudMessage = "";
+                                        if (storeId) {
+                                          try {
+                                            const res = await fetch("/api/pos/print-jobs/retry", {
+                                              method: "POST",
+                                              headers: {
+                                                "Content-Type": "application/json",
+                                                ...(await posDeviceAuthHeadersFresh()),
+                                              },
+                                              body: JSON.stringify({ storeId, jobId: job.id }),
+                                            });
+                                            const payload = (await res.json().catch(() => null)) as
+                                              | { ok?: boolean; error?: string }
+                                              | null;
+                                            cloudOk = Boolean(res.ok && payload?.ok);
+                                            if (!cloudOk) cloudMessage = payload?.error ?? "";
+                                          } catch {
+                                            cloudMessage = "網絡錯誤，請稍後再試。";
+                                          }
+                                        }
+                                        // 唔理雲端結果都行一次本機重試：本機 job 可能從未上雲
+                                        // （例如純本機 dispatch 成功但狀態髒咗），令兩邊都收斂。
+                                        const next = await retryFailedPrintJob(job.id);
+                                        setPrintJobs(next);
+                                        if (!storeId) {
+                                          setToast({
+                                            tone: "error",
+                                            message: "本機已重新送出；未取得店舖識別，無法確認雲端隊列。",
+                                          });
+                                        } else if (cloudOk) {
                                           setToast({
                                             tone: "success",
-                                            message:
-                                              next.find((row) => row.id === job.id)?.status === "sent"
-                                                ? "已重新送出打印。"
-                                                : "重試失敗，請檢查橋接服務與打印機。",
+                                            message: "已重新排入雲端打印隊列，中繼機上線後會出紙。",
+                                          });
+                                        } else {
+                                          setToast({
+                                            tone: "error",
+                                            message: cloudMessage || "雲端重試失敗，請檢查打印中繼服務。",
+                                          });
+                                        }
+                                      })()
+                                        .catch(() => {
+                                          setToast({
+                                            tone: "error",
+                                            message: "重試失敗，請檢查橋接服務與打印機。",
                                           });
                                         })
                                         .finally(() => setRetryingJobId(null));
