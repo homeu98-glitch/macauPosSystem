@@ -12,6 +12,16 @@
 - **數據來源可見**：`debugInfo.dataSource` ∈ `idle|cloud|cloud-partial|local-fallback|empty` → UI 警示條。任何一頁失敗即 `cloudFailed` → `status:"error"`（「部分成功」以前**靜默出偏少數字**）。
 - **自動刷新**：外殼每 3 分鐘 + 回前景即刷（去抖），離線唔刷。⚠️ **唔可以用 `key` remount**（admin「重新載入」嗰套）：remount 令 `dataReady` 歸 false → 11 張卡每 3 分鐘一齊閃 skeleton，兼丟滾動位置／inline edit。改用 `refreshToken` 加落**三條 fetch effect**（backfill / 線上單 / Ledger 彙總）；**唔可以**加落「切店／切範圍重置」effect（會清 orders → 閃）。
 - **`dataReady = backfillDone && ledgerDone`**；admin `loadOnlineByHour` early return **必須 setLedgerDone(true)**；切店/切帳號重置。
+  - ⚠️ 2026-09-15 之後 `dataReady` **只作診斷／提示條用**（`showUnsettledNotice`）。**渲染閘一律用 `fullPageLoading`**，見下節。🛑 唔可以再用 `dataReady` gate 任何區塊（佢唔包含線上單／明細／低庫存）。
+- 🔴 **全有或全無渲染閘（2026-09-15 商家要求）**：`fullPageLoading = freshLoading`（**純派生值**，零 state、零 ref）。
+  - `freshLoading = !backfillDone || !ledgerDone || onlineFetchInfo.status==="loading" || onlineDetailInfo.status==="loading" || lowStock===null`。
+  - 為何：`dataReady` **唔包含**線上單／明細抓取，而 `aggregate()` 嘅「應收／實收金額合計／訂單明細／支付方式分項」全部靠 `onlineDishSource` 補線上單金額 ⇒ 舊寫法會用未齊嘅 `agg` 先渲染，數據一到就跳。商家原話：「數據陸續載入後畫面內容位移跳動」。
+  - 🔴 **一定要放喺 `onlineFetchInfo`/`onlineDetailInfo`/`lowStock` 三個 `useState` 之後**，否則 TS2448（used before declaration）。
+  - 🛑 **唔可以用 `useRef` 記「曾否顯示過」**：`react-hooks/refs` 禁 render 期間讀 ref（`Cannot access refs during render`），而閘正正喺 render 用 → lint error。落 state 亦唔得（語義重複 + 多一次 render）。
+  - 🔴 **低庫存 `lowStock` 由 `null` 改成「未攞齊」嘅哨兵值**：所有 `setLowStock(null)` 分支（含 `catch`）都要改成 `setLowStock([])`，只有「未載入」保留 `null`。留一個 `null` 落 catch = **全頁永久 loading**。
+  - 🔴 **`lowStock` fetch 必須並行**（放 `Promise.all`），唔可以 sequential await 喺 Ledger 之後 —— 佢係 `ledgerDone` 嘅前置條件，sequential 會白白拖長 loading。
+  - 警示條（`ledgerError` / `dataSource` / `showUnsettledNotice`）同頁尾「說明」**全部 gate 埋**：佢哋都係數據派生，未載完就出會「先正常 → 再彈提示」二次跳動。
+  - 骨架相關：`ReportFullPageLoading`（整頁 spinner，`min-h-[320px] flex-1`）；舊嘅 `SectionSkeleton` / KPI 10 格 skeleton / `Card loading={!dataReady}` **已全部移除**（`Card` 仍保留 `loading` prop 但冇人傳）。
 - ⚠️ **admin 面板一律唔可以行 `/api/pos/state`（2026-09-10 修）**：該 API 自 P0-4 起要求 POS 終端憑證（或 admin token），但 admin 裝置冇 POS 登入 → `posDeviceAuthHeaders()` 係空 → **401**。症狀：admin「營業報表」**一選商家**（單店模式）就彈「POS 訂單：HTTP 401」，而「全部商家」正常。
   - 修法：`admin/reports/page.tsx` 單店分支**都要**傳 `adminOrderFetcher`，`adminOrderFetcher({ storeId })` 帶 `storeId` → 走 `GET /api/admin/orders?storeId=`（service-role + admin token，本身已支援單店）。`allStoresMode` 則**唔帶** `storeId` = 跨店彙總。
   - `/api/pos/state` 嘅 401 係「可以接受 `readAdminSessionFromRequest`」嘅，所以理論上帶 admin token 都通；但 admin 面板走 admin 通道係更一致嘅做法（同「全部商家」同一條 code path）。
@@ -319,6 +329,29 @@
   （區間內 + 非取消 + `paymentStatus === "paid"`，見 `lib/ledger/paid-orders.ts`）
   **∪** 同區間內嘅本地線上投影單（按 Ledger order id 去重，**本地為準**）。
   任何一邊改範圍／改判準，另一邊一定要跟，否則就會出現「兩張頁講兩個數」。
+
+## 🔴 交班頁「全有或全無」渲染閘（2026-09-15 商家要求 · `shift-page.tsx`）
+- **商家原話**：「只要任何一項數據尚未取得，整頁就應維持 loading；必須確認全部數據都拿齊後，才顯示完整內容。」
+- **兩個源**：① 訂單側 `refreshOrders`（本機 `loadOrders()` + 雲端 `/api/pos/state` merge）；
+  ② Ledger 側 `refreshLedgerToday`（`getMerchantReportSummary("today")` + `sumPaidLedgerOrders()`）。
+  「線上線下合計（實收）」= `summary.paidTotal + ledgerOnlineMop` ⇒ **兩邊都要有數**先算得出。
+- **閘**：`pageReady = ordersLoaded && ledgerLoaded`，兩者初始 `false`。
+  - 🛑 **唔可以偷雞**用「`orders` 已有本機值」當完成：`useState(() => loadOrders())` 係同步讀 localStorage，
+    佢係**舊資料**，雲端 merge 未跑完就渲染 = 數字由「本機版」跳到「雲端版」。
+- 🔴 **`setOrdersLoaded(true)` 必須放 `finally`**：`refreshOrders` 內部有多條 `return`
+  （未 ok / payload 唔啱 / `cloudSettled.length === 0`），全部代表「訂單側已完成（用本機）」。
+  另外兩條 early return（`!storeId` 未登入／`!readNetworkOnline()` 離線）**亦要即場 set true**。
+  漏任何一條 → **全頁永久 loading**，用戶連開工都做唔到。
+- 🔴 **`setLedgerLoaded(true)` 亦要放 `finally`**：`refreshLedgerToday` 嘅「未登入 Ledger」`return` 同 `catch`
+  都係合法結局（UI 各有錯誤橫幅）。唔放行 = 錯咗之後永久 loading，比半截畫面更差。
+- 🔴 **兩個 fetch 開頭都要先落返 `false`**：佢哋同時係「自動刷新」入口
+  （`refreshOrders` 掛 `focus` / `online` 事件；補推後 `await refreshLedgerToday()`）→
+  refresh 期間自動顯示整頁 loading，符合商家第 2 點要求。
+- 🛑 **唔可以 gate「開工 / 結數交班並打印」按鈕**：佢哋係操作入口唔係數據，gate 住會令用戶
+  喺載入期間連開工都撳唔到。商家要求嘅「唔渲染部分內容」係指**數據區塊**。
+- 舊寫法：Ledger 區塊內一句 `{ledgerTodayLoading ? "載入今日線上報表…" : null}` —— 已拆走
+  （全頁閘覆蓋後永遠唔會出現）。`ledgerTodayLoading` state 連帶刪除。
+- 骨架：`ShiftPageLoading`（單張卡 + spinner，`min-h-[320px]`），同報表頁 `ReportFullPageLoading` 同一視覺。
 
 ## 🔴 Realtime 訂錯 Supabase 專案 = 靜默失效（2026-09-10 · 收銀台「冇即時通知、唔自動彈單」）
 - **症狀**：掃碼／Kiosk 落單後收銀台**零反應**（冇提示、訂單唔彈、廚房單唔出）；**F5 reload 就即刻見到**（行 `/api/pos/state` backfill）。呢個「reload 就冇事」嘅組合本身就係 Realtime 冇推送嘅鐵證 —— backfill 走 server，推送走瀏覽器 anon client。

@@ -297,8 +297,20 @@ export function ShiftPage() {
   const [reprintingShiftId, setReprintingShiftId] = useState<string | null>(null);
   const [exportingType, setExportingType] = useState<"csv" | null>(null);
   const [ledgerToday, setLedgerToday] = useState<LedgerReportSummary | null>(null);
-  const [ledgerTodayLoading, setLedgerTodayLoading] = useState(false);
   const [ledgerTodayError, setLedgerTodayError] = useState<string | null>(null);
+  /**
+   * 🔴 2026-09-15（商家要求）：交班頁改為「**全有或全無**」渲染。
+   *
+   * 兩個獨立數據源（本機/雲端訂單 merge、Ledger 今日彙總）各自完成後才 set true；
+   * `pageReady = ordersLoaded && ledgerLoaded`。任何一項未齊 → 整頁 loading，
+   * **唔渲染任何部分內容**，避免「線下數先出、線上數後補」嘅跳動。
+   *
+   * ⚠️ 呢兩個旗標**初始值係 false**（唔可以偷雞用「orders 已有本機值」當完成）：
+   * `orders` 嘅初始值係 `loadOrders()`（同步讀本機 localStorage），
+   * 佢只係舊資料，雲端 merge 未跑完就渲染 = 數字會由「本機版」跳到「雲端版」。
+   */
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const [ledgerLoaded, setLedgerLoaded] = useState(false);
   /**
    * 線上（Ledger）「已付款單」加總（＝今日實際收到嘅線上錢，含未推 completed 嘅單）。
    * `null` = 攞唔到（未登入／網絡問題）→ 退回 RPC 已完成口徑，UI 會標示。
@@ -335,9 +347,18 @@ export function ShiftPage() {
     }
 
     async function refreshOrders() {
+      // 每次（重）跑都先落返「未完成」—— 呢個 effect 亦係 focus / online 事件嘅處理器，
+      // 即係「自動刷新」。refresh 期間顯示 loading 正正係商家要求（見 `pageReady` 註釋）。
+      setOrdersLoaded(false);
       setOrders(loadOrders());
       const storeId = resolveStoreId();
-      if (!storeId || !readNetworkOnline()) return;
+      // 🔴 兩條 early return 都**必須**放行 `ordersLoaded`，否則全頁 loading 一世都唔完：
+      // ① 未登入／未綁店：冇雲端單可拉，本機 orders 就係全部 → 直接完成。
+      // ② 離線：同上，離線交班係合法場景（本機 fallback），唔應該被 loading 擋住。
+      if (!storeId || !readNetworkOnline()) {
+        setOrdersLoaded(true);
+        return;
+      }
 
       try {
         const range = macauTodayRange();
@@ -361,6 +382,10 @@ export function ShiftPage() {
         setOrders((prev) => mergeByUpdatedAt(prev, cloudSettled));
       } catch {
         // 拉雲端失敗 → 維持本機（fallback），唔影響離線交班。
+      } finally {
+        // 🔴 `finally` 而唔係喺 try 尾：上面任何一條 `return`（未 ok / payload 唔啱 /
+        // 冇雲端單）都係「訂單側已完成（用本機）」，必須放行，否則 loading 卡死。
+        if (!cancelled) setOrdersLoaded(true);
       }
     }
 
@@ -589,8 +614,9 @@ export function ShiftPage() {
    * 抽成 callback 係因為「補推線上單狀態」之後要即刻重新拉一次（見 `handleBackfillOnlineCompleted`）。
    */
   const refreshLedgerToday = useCallback(async () => {
-    setLedgerTodayLoading(true);
     setLedgerTodayError(null);
+    // 每次重跑都落返「未完成」→ 全頁 loading（商家要求 refresh 期間顯示 loading）。
+    setLedgerLoaded(false);
     try {
       const restored = await restoreLedgerSession();
       if (!restored) {
@@ -618,7 +644,10 @@ export function ShiftPage() {
       setLedgerPaidOrders(null);
       setLedgerTodayError(error instanceof Error ? error.message : "讀取今日線上報表失敗");
     } finally {
-      setLedgerTodayLoading(false);
+      // 🔴 放 `finally`：上面「未登入 Ledger」嗰條 `return` 同 catch 都係「未拿到線上數」
+      // 兩種合法結局（UI 各自有明確錯誤橫幅）。若唔放行，錯咗之後全頁會**永久 loading**，
+      // 用戶連「尚未登入 Ledger」嗰句提示都睇唔到 —— 比半截畫面更差。
+      setLedgerLoaded(true);
     }
   }, []);
 
@@ -857,6 +886,29 @@ export function ShiftPage() {
       note: noteInput.trim(),
     };
   }
+
+  /**
+   * 🔴 2026-09-15（商家要求）：交班頁「全有或全無」渲染閘。
+   *
+   * ## 為何
+   *
+   * 交班頁有兩個**互相依賴**嘅數據源：
+   * ① 訂單側：本機 `loadOrders()` + 雲端 `/api/pos/state` merge（`refreshOrders`）；
+   * ② Ledger 側：`getMerchantReportSummary("today")` + `sumPaidLedgerOrders()`（`refreshLedgerToday`）。
+   *
+   * 「線上線下合計（實收）」= `summary.paidTotal + ledgerOnlineMop`，
+   * 即係**兩邊都要有數**先算得出。舊寫法淨係喺 Ledger 區塊顯示一句
+   * 「載入今日線上報表…」，其餘區塊（金額合計、支付拆分、訂單明細）照樣先渲染 ——
+   * 用戶會見到「線上線下合計」先出一個**未含線上**嘅數，Ledger 返嚟之後再跳一次。
+   * 商家原話：「只要任何一項數據尚未取得，整頁就應維持 loading」。
+   *
+   * ## 口徑
+   *
+   * - 初次 mount：兩個旗標都係 `false` → 整頁 loading，直到兩邊都完成；
+   * - 自動刷新（focus / online 事件重跑 `refreshOrders`、補推後重跑 `refreshLedgerToday`）：
+   *   兩者開頭都會落返 `false` → 整頁 loading，齊返先一次過換畫面。
+   */
+  const pageReady = ordersLoaded && ledgerLoaded;
 
   /**
    * 重打交班單（2026-09-10 改走「交班模板」管線）。
@@ -1410,6 +1462,23 @@ export function ShiftPage() {
           {status}
         </div>
 
+        {/*
+          🔴 2026-09-15（商家要求）：**全有或全無** 渲染閘。
+
+          數據未齊（訂單側 merge／Ledger 今日彙總任一未完成）→ 只出一個 loading 卡，
+          **唔渲染任何部分內容**；兩邊都攞齊合併完成先一次性出完整內容。
+
+          ⚠️ 為何連「今日摘要」標題都唔出：標題下第一格就係「應收金額合計」，
+          出標題 = 半截畫面（用戶見到框但冇數）。整頁一張 loading 卡最清楚。
+
+          ⚠️ 上面嘅「開工 / 結數交班並打印」按鈕**唔 gate**：佢哋係操作入口，
+          唔係報表數據；gate 住會令用戶喺 loading 期間連開工都撳唔到
+          （載入慢時尤其難受）。商家要求嘅「唔渲染部分內容」係指數據區塊。
+        */}
+        {!pageReady ? (
+          <ShiftPageLoading />
+        ) : (
+          <>
         <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
           <div className="text-base font-semibold text-slate-900">今日摘要</div>
             <div className="mt-1 text-xs text-slate-500">店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。</div>
@@ -1554,7 +1623,13 @@ export function ShiftPage() {
             </div>
 
             <div className="mt-6 text-sm font-semibold text-slate-700">會員通線上（Ledger）</div>
-            {ledgerTodayLoading ? <div className="mt-2 text-sm text-slate-500">載入今日線上報表…</div> : null}
+            {/*
+              ⚠️ 2026-09-15：原本呢度有一句 `{ledgerTodayLoading ? "載入今日線上報表…" : null}`。
+              而家全頁 `pageReady` 閘已經覆蓋（`ledgerLoaded` 未 true → 成頁 loading），
+              呢句永遠唔會出現，所以拆走 —— 留低只會令人以為「仲有第二層 loading」。
+              錯誤橫幅**保留**：佢係「已經載入完但失敗」嘅結果（例如未登入 Ledger），
+              屬於完成狀態，唔應該被 loading 蓋住。
+            */}
             {ledgerTodayError ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {ledgerTodayError}
@@ -1889,6 +1964,8 @@ export function ShiftPage() {
               </div>
             </div>
           </section>
+          </>
+        )}
 
       </div>
 
@@ -2334,5 +2411,30 @@ export function ShiftPage() {
         </ResponsiveModal>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 交班頁整頁載入中（2026-09-15「全有或全無」渲染閘）。
+ *
+ * 同報表頁 `ReportFullPageLoading` 同一套視覺（同一個 spinner + 文案節奏），
+ * 令兩頁在載入期間嘅觀感一致；`min-h` 撐住高度，避免載入完成時
+ * 「內容區由 0 高變成幾千 px」造成頁面彈跳。
+ */
+function ShiftPageLoading() {
+  return (
+    <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex min-h-[320px] flex-col items-center justify-center gap-3">
+        <div
+          className="h-10 w-10 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
+          role="status"
+          aria-label="載入中"
+        />
+        <div className="text-sm text-slate-500">正在載入交班數據…</div>
+        <div className="text-xs text-slate-400">
+          整合本機訂單與 Ledger 線上數據，完成後一次顯示。
+        </div>
+      </div>
+    </section>
   );
 }

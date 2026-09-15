@@ -782,9 +782,25 @@ const MIN_REFRESH_GAP_MS = 20 * 1000;
  * 唔應該搶走用戶手上嘅畫面。
  *
  * 所以改為傳 `refreshToken` 落主體，由主體**加落三條數據 effect 嘅依賴陣列**
- * （POS 訂單 backfill / Ledger 線上單 / Ledger 彙總）。舊數據一直留在畫面上，
- * 直到新數據返嚟先換 —— 同大部分 dashboard 嘅行為一致。
- * 範圍經 `initialRange` / `onRangeChange` 保住（其實唔 remount 都唔會丟）。
+ * （POS 訂單 backfill / Ledger 線上單 / Ledger 彙總）。範圍經
+ * `initialRange` / `onRangeChange` 保住（其實唔 remount 都唔會丟）。
+ *
+ * ## 🔴 2026-09-15 更新：refresh 期間改為顯示整頁 loading（商家要求）
+ *
+ * 上面「舊數據一直留在畫面上，直到新數據返嚟先換」係 2026-09-10 嘅設計，
+ * 但商家 2026-09-15 明確推翻：「refresh 期間顯示 loading 指示，等新數據
+ * （含 ledger 與線下數據）完整取得並合併後才更新畫面，避免更新過程中出現
+ * 內容閃動或數據不完整」。
+ *
+ * 原因：四條 fetch 係**各自獨立**返回（線上單明細逐張 RPC，可以慢過 Ledger 彙總
+ * 幾十秒），所以「各自返嚟先換」會見到 KPI／明細／支付分項**逐格跳**。
+ * 而家由 `fullPageLoading`（派生值）統一擋住，四源齊全先一次過換畫面。
+ *
+ * ⚠️ 但**仍然唔可以**用 `key` remount：
+ * ① remount 會丟失滾動位置同正在編輯嘅欄位（毛利率 inline edit）；
+ * ② remount 會令 `restoreLedgerSession()` 等重新跑，比軟刷新慢；
+ * ③ 軟刷新保留 `orders` 等 state 做 fallback，remount 期間係全空。
+ * ⇒ 只係改「幾時顯示」嘅閘，**唔改觸發方式**（仍然係 `refreshToken`）。
  *
  * ## 幾時刷
  *
@@ -871,7 +887,6 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   const [lowStock, setLowStock] = useState<
     Array<{ name: string; qty: number; unit: string; par: number }> | null
   >(null);
-  const [loading, setLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
   // 整體載入門檻：POS 訂單補載 + Ledger 彙總都完成過至少一次，先唔顯示真實資料。
   // 切店 / 切帳號時重置，令報表先顯示 skeleton 再載入新店資料（杜絕閃現舊店）。
@@ -915,6 +930,55 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     lastError: null,
   });
 
+  /**
+   * 🔴 2026-09-15（商家要求）：報表改為「**全有或全無**」渲染。
+   *
+   * ## 為何
+   *
+   * 舊寫法每個區塊各自 `loading={!dataReady}`，而 `dataReady = backfillDone && ledgerDone`
+   * **唔包含**「線上單抓取」同「線上單明細抓取」。所以嗰兩條（最慢、逐張 RPC，最多 200 張）
+   * 仲跑緊嘅時候，KPI 帶已經用**未併入線上單明細**嘅 `agg` 渲染出街 ——
+   * `aggregate()` 嘅「應收／實收金額合計」「訂單明細」「支付方式分項」全部靠
+   * `onlineDishSource` 補線上單金額（見下面 `aggregate` 嘅「Ledger 純線上單」迴圈），
+   * 數據一到就跟住變 → **數字陸續跳動**。
+   * 商家原話：「數據陸續載入後畫面內容位移跳動，造成困惑」。
+   *
+   * ## 口徑
+   *
+   * `freshLoading` = **只要有任何一個數據源仲未攞齊**就為 `true`：
+   * POS 訂單 backfill／Ledger 彙總／Ledger 線上單／線上單明細／低庫存。
+   *
+   * ⚠️ 同 `dataReady` 嘅分別：`dataReady` 係**單調遞增**（`useState(false)` + 只會 set `true`），
+   * 所以自動刷新（`refreshToken` 令四條 fetch effect 重跑）期間 `dataReady` 一直係 `true`
+   * → 舊資料留在畫面上、新資料返嚟逐個區塊換 → 仍然跳動。
+   * `freshLoading` 係**派生值**，refresh 一開始就 `true`，全部返齊先 `false`。
+   *
+   * ⚠️ **TDZ 陷阱**：呢段一定要喺 `onlineFetchInfo` / `onlineDetailInfo` / `lowStock`
+   * 三個 `useState` **之後**先可以宣告，否則 `tsc` 報 TS2448（used before declaration）。
+   */
+  const freshLoading =
+    !backfillDone ||
+    !ledgerDone ||
+    onlineFetchInfo.status === "loading" ||
+    onlineDetailInfo.status === "loading" ||
+    lowStock === null;
+  /**
+   * 「全有或全無」唯一開關：**初次載入同自動刷新共用**。
+   *
+   * 直接用 `freshLoading` 就夠：佢係純派生值 —— 任何一個數據源未攞齊就 `true`
+   * （初次 mount 五個源全部未齊，必然 `true`）；refresh 一開跑又會即時變返 `true`。
+   * 所以一條式同時滿足商家兩點要求：
+   * ① 初次載入：未合併完成前持續 loading，合併完成才一次性渲染；
+   * ② 自動刷新：refresh 期間照樣 loading，新數據齊全才更新畫面，唔會閃動／半截。
+   *
+   * 🔴 **唔可以**用 `useRef` 記「曾否顯示過」再 OR 落去（本檔試過）：
+   * `react-hooks/refs` 禁**render 期間讀 ref**（`Cannot access refs during render`），
+   * 而呢個閘正正喺 render 用 → 直接 lint error。落 state 亦唔得
+   * （會多一次無意義 render，且同 `freshLoading` 語義重複）。
+   * 呢個純派生寫法零額外狀態、零 lint 問題，語義亦最直接。
+   */
+  const fullPageLoading = freshLoading;
+
   // merchantId 解析：admin panel 傳入 merchantIdOverride 時以佢為準（admin 唔經
   // POS auth session）；POS 報表頁維持原本 useReportMerchantId() 行為不變。
   const sessionMerchantId = useReportMerchantId();
@@ -944,6 +1008,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     setBackfillDone(false);
     setLedgerDone(false);
     setDataReady(false);
+    // 切店 / 切範圍 = 一輪全新載入 → 五個數據源全部重設為「未齊」
+    // （`lowStock` 歸 null = 未讀取），`fullPageLoading` 隨之變 true。
+    setLowStock(null);
     setOnlineOrders([]);
     setOnlineByHour(new Array<number>(24).fill(0));
     setOnlineDishSource([]);
@@ -1665,22 +1732,61 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     }
 
     let cancelled = false;
+    /**
+     * 低庫存預警：讀本店 inv_products，current_qty <= reorder_level（par）即低庫存。
+     *
+     * 🔴 2026-09-15：抽成獨立函式並**放喺 `Promise.all` 一齊跑**（舊寫法喺攞完 Ledger
+     * 之後 sequential await）。原因：全頁「全有或全無」閘把 `lowStock === null`
+     * 當成「未攞齊」——若佢仲係 sequential，`ledgerDone` 會遲遲唔 set，
+     * 白白拖長 loading。並行之後三組請求同一輪完成。
+     */
+    async function loadLowStock() {
+      try {
+        const storeParam = merchantIdForQuery || (typeof window !== "undefined" ? loadAuthSession()?.merchantId ?? "" : "");
+        if (!storeParam) {
+          setLowStock([]);
+          return;
+        }
+        const invRes = await fetch(`/api/inventory/products?store=${encodeURIComponent(storeParam)}`);
+        const invJson = await invRes.json();
+        if (cancelled) return;
+        if (invJson?.ok && Array.isArray(invJson.products)) {
+          const low = invJson.products
+            .filter((p: { current_qty: number; reorder_level: number }) => p.reorder_level > 0 && p.current_qty <= p.reorder_level)
+            .map((p: { name: string; current_qty: number; unit: string; reorder_level: number }) => ({
+              name: p.name,
+              qty: Number(p.current_qty) || 0,
+              unit: p.unit ?? "份",
+              par: Number(p.reorder_level) || 0,
+            }))
+            .sort((a: { qty: number }, b: { qty: number }) => a.qty - b.qty);
+          setLowStock(low);
+        } else {
+          setLowStock([]);
+        }
+      } catch {
+        // 讀唔到庫存 → 當「空」而唔係 `null`。`null` 喺 UI 上係「未讀取」，
+        // 會令全頁 loading 永遠唔完（舊寫法 catch 都 set null）。
+        if (!cancelled) setLowStock([]);
+      }
+    }
+
     async function load() {
       if (isAdminMode) {
         // admin 模式：getMerchantReportSummary / fetchPurchaseSummary 都係按
         // 「當前登入商戶 JWT」取數，admin 裝置冇商戶身份 → 跳過（KPI 大數
         // 改由 POS 訂單聚合提供）。低庫存 API 係 server service-role by store
         // 參數，照常抓。會員充值 / 線上渠道等 Ledger 類模塊會顯示為零值。
+        await loadLowStock();
         if (cancelled) return;
         setLedger({ sel: null, d7: null, yest: null });
         setPurchase({ sel: null, yest: null });
         setLedgerError(null);
-        setLoading(false);
         setLedgerDone(true);
         return;
       }
-      setLoading(true);
       setLedgerError(null);
+      // 三組請求並行：Ledger 彙總 / 進貨成本 / 低庫存。
       const [sel, d7, yest] = await Promise.all([
         safeLedger(range),
         safeLedger("7d"),
@@ -1691,41 +1797,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       const [purSel, purYest] = await Promise.all([
         acc ? fetchPurchaseSummary(acc, range) : Promise.resolve(null),
         range === "today" && acc ? fetchPurchaseSummary(acc, "yesterday") : Promise.resolve(null),
+        loadLowStock(),
       ]);
 
       if (cancelled) return;
       setLedger({ sel, d7, yest });
       setPurchase({ sel: purSel?.summary ?? null, yest: purYest?.summary ?? null });
 
-      // 低庫存預警：讀本店 inv_products，current_qty <= reorder_level（par）即低庫存。
-      try {
-        const storeParam = merchantIdForQuery || (typeof window !== "undefined" ? loadAuthSession()?.merchantId ?? "" : "");
-        if (!storeParam) {
-          setLowStock(null);
-        } else {
-          const invRes = await fetch(`/api/inventory/products?store=${encodeURIComponent(storeParam)}`);
-          const invJson = await invRes.json();
-          if (invJson?.ok && Array.isArray(invJson.products)) {
-            const low = invJson.products
-              .filter((p: { current_qty: number; reorder_level: number }) => p.reorder_level > 0 && p.current_qty <= p.reorder_level)
-              .map((p: { name: string; current_qty: number; unit: string; reorder_level: number }) => ({
-                name: p.name,
-                qty: Number(p.current_qty) || 0,
-                unit: p.unit ?? "份",
-                par: Number(p.reorder_level) || 0,
-              }))
-              .sort((a: { qty: number }, b: { qty: number }) => a.qty - b.qty);
-            setLowStock(low);
-          } else {
-            setLowStock(null);
-          }
-        }
-      } catch {
-        setLowStock(null);
-      }
-
       if (!sel && !d7) setLedgerError("尚未連線 Ledger，會員/線上數據未能讀取（其餘模塊正常）。");
-      setLoading(false);
       setLedgerDone(true);
     }
     void load();
@@ -2155,6 +2234,20 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 f1cc8ad 曾一刀切改成 block，令 POS 模式內容超出視口被裁切、成頁滾唔到。
                 加 min-h-0 防止 flex item 預設 min-height:auto 令 overflow 失效。 */}
           <div className={isAdminMode ? "block p-4" : "min-h-0 flex-1 overflow-y-auto p-4"}>
+            {/*
+              🔴 2026-09-15（商家要求）：**全有或全無** 渲染閘。
+              數據未齊（POS 訂單 backfill／Ledger 彙總／Ledger 線上單／線上單明細／低庫存
+              任一未完成）→ 只出一個整頁 loading，**唔渲染任何部分內容**；
+              全部攞齊合併完成先一次性出完整報表。
+
+              為何連「警示條」都要 gate：警示條本身都係數據派生
+              （`debugInfo.dataSource` 由 backfill 結果決定）。未載入完就出，
+              會見到「先出正常畫面 → 再彈警示」嘅二次跳動。
+            */}
+            {fullPageLoading ? (
+              <ReportFullPageLoading />
+            ) : (
+              <>
             {ledgerError ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {ledgerError}
@@ -2229,9 +2322,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {/* DevTools debug panel：暫時由 UI 隱藏 */}
             {false}
 
-            {/* 核心 KPI 帶 — 一律一行 5 格（10 格 → 5-5） */}
-            {dataReady ? (
-              <>
+            {/* 核心 KPI 帶 — 一律一行 5 格（10 格 → 5-5）
+                ⚠️ 2026-09-15：原本外面有一層 `{dataReady ? … : skeleton}`；
+                而家由最外層 `fullPageLoading` 統一負責（`dataReady` 唔包含線上單／明細
+                抓取，留佢會令 KPI 用未齊嘅 `agg` 先渲染）。呢度只保留內容本身。 */}
+            <>
                 {/*
                   核心 KPI：**一律一行 5 格**（10 格 → 5-5），iPad 與電腦版排法一致。
                   ⚠️ 原先寫 `md:grid-cols-3 xl:grid-cols-5`，iPad 橫向內容區約 976px
@@ -2383,21 +2478,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     }
                   />
                 </div>
-              </>
-            ) : (
-              <>
-                {/* Skeleton 都要同真身一樣：一個 grid、5 欄、10 格（5-5），否則載入完會「跳版」 */}
-                <div className="mb-4 grid grid-cols-5 gap-3">
-                  {Array.from({ length: 10 }).map((_, i) => (
-                    <div key={`sk-${i}`} className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="flex h-16 items-center justify-center">
-                        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
+            </>
 
             {/*
               訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。
@@ -2408,7 +2489,6 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             <Card
               title="訂單明細"
               tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}
-              loading={!dataReady}
             >
               {agg.orderDetails.length === 0 ? (
                 <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
@@ -2442,7 +2522,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               該卡已整張移除 → 呢邊改為全寬單欄。
             */}
             <div className="mb-4">
-              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下" loading={!dataReady}>
+              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下">
                 {agg.dishes.length === 0 ? (
                   <Empty />
                 ) : (
@@ -2561,7 +2641,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 ⚠️ 位置：由 KPI 帶下方移到呢度（2026-09-10）。KPI 下面嘅第一、二個區塊
                 要係「訂單明細 → 菜品銷售排行」（用戶指定順序），所以食材消耗讓位。 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="食材消耗（本月）" tag="BOM × 已售份數" loading={!dataReady}>
+              <Card title="食材消耗（本月）" tag="BOM × 已售份數">
                 {!consMonth.hasRecipes ? (
                   <div>
                     <div className="text-xs text-slate-400">尚未設定菜品配方，模塊顯示空白。</div>
@@ -2586,7 +2666,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 )}
               </Card>
 
-              <Card title="食材使用量排行" tag="本月 · 按成本" loading={!dataReady}>
+              <Card title="食材使用量排行" tag="本月 · 按成本">
                 {!consMonth.hasRecipes ? (
                   <Empty />
                 ) : consMonth.rows.length === 0 ? (
@@ -2619,7 +2699,6 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             <Card
               title="支付方式分項（店內 POS 線下）"
               tag="只計無 onlineOrderId 嘅本店單；線上金額見上方「應收／實收金額合計」同會員 KPI。應收 = 原價合計 + 服務費 + 稅 · 實收 = order.total"
-              loading={!dataReady}
             >
               {Object.keys(agg.paymentBreakdown).length === 0 ? (
                 <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
@@ -2687,7 +2766,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
             {/* 模塊 7 + 模塊 8 */}
             <div className="mb-4 grid gap-4 md:grid-cols-2">
-              <Card title="沽清菜品" tag="即時" loading={!dataReady}>
+              <Card title="沽清菜品" tag="即時">
                 <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ${soldOut.length > 0 ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
                   {soldOut.length} 款沽清
                 </span>
@@ -2704,7 +2783,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 )}
               </Card>
 
-              <Card title="最熱門桌台排行" tag="單數 · 覆蓋人數" loading={!dataReady}>
+              <Card title="最熱門桌台排行" tag="單數 · 覆蓋人數">
                 {agg.tables.length === 0 ? (
                   <Empty />
                 ) : (
@@ -2736,7 +2815,6 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       ? `僅 POS · 高峰約 ${peakHour}:00`
                       : `POS · 高峰約 ${peakHour}:00`
                 }
-                loading={!dataReady}
               >
                 <div className="grid grid-cols-12 gap-1">
                   {combinedByHour.map((c, h) => {
@@ -2783,7 +2861,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 ) : null}
               </Card>
 
-              <Card title="營運指標 · 同環比" tag="vs 7 日均值" loading={!dataReady}>
+              <Card title="營運指標 · 同環比" tag="vs 7 日均值">
                 <div className="grid gap-1">
                   <Row label="營業額（7日均）" value={formatMoney(rev7dAvg)} />
                   <Row label="線上渠道佔比（7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
@@ -2800,7 +2878,6 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 tag={
                   agg.dineInServing.total.estimated || agg.quickServing.total.estimated ? "含估算" : "實測"
                 }
-                loading={!dataReady}
               >
                 {agg.dineInServing.total.count === 0 && agg.quickServing.total.count === 0 ? (
                   <Empty />
@@ -2881,7 +2958,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
             {/* 模塊 5 人流 + 低庫存預警 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用" loading={!dataReady}>
+              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用">
                 <div className="flex items-baseline gap-2">
                   <div className="text-3xl font-extrabold text-indigo-600">{footfallTotal}</div>
                   <div className="text-xs text-slate-500">選取範圍累計入店人次</div>
@@ -2910,7 +2987,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 </div>
               </Card>
 
-              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）" loading={!dataReady}>
+              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）">
                 {lowStock === null ? (
                   <div className="text-xs text-slate-400">
                     未能讀取庫存（未連線 macau-pos Supabase 或尚無庫存品）。
@@ -2938,45 +3015,75 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               </Card>
             </div>
 
-            {/* 模塊 9：自動化優化建議 */}
-            {dataReady ? (
-              <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-                <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
-                {loading ? (
-                  <div className="text-sm text-slate-500">載入中…</div>
-                ) : suggestions.length === 0 ? (
-                  <div className="text-sm text-slate-500">目前未觸發優化建議，營運狀況健康。</div>
-                ) : (
-                  <div className="grid gap-2">
-                    {suggestions.map((s, i) => (
-                      <div key={i} className="flex gap-3 rounded-xl border border-orange-200 bg-white p-3">
-                        <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                            s.level === "r" ? "bg-rose-100 text-rose-700" : s.level === "o" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
-                          }`}
-                        >
-                          {LEVEL_LABEL[s.level]}
-                        </span>
-                        <div className="text-sm leading-relaxed text-slate-700">
-                          <span className="font-semibold text-slate-900">{s.title}：</span>
-                          {s.action}
-                        </div>
+            {/* 模塊 9：自動化優化建議
+                ⚠️ 2026-09-15：外層 `{dataReady ? … : SectionSkeleton}` 已由最外層
+                `fullPageLoading` 取代（呢度一定係數據齊全嘅狀態）。
+                內部 `loading` 分支亦一併拆走 —— `loading` 係 Ledger 彙總嘅區域旗標，
+                佢未齊時外層已經 gate 住，唔會行到呢度。 */}
+            <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
+              <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
+              {suggestions.length === 0 ? (
+                <div className="text-sm text-slate-500">目前未觸發優化建議，營運狀況健康。</div>
+              ) : (
+                <div className="grid gap-2">
+                  {suggestions.map((s, i) => (
+                    <div key={i} className="flex gap-3 rounded-xl border border-orange-200 bg-white p-3">
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          s.level === "r" ? "bg-rose-100 text-rose-700" : s.level === "o" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        {LEVEL_LABEL[s.level]}
+                      </span>
+                      <div className="text-sm leading-relaxed text-slate-700">
+                        <span className="font-semibold text-slate-900">{s.title}：</span>
+                        {s.action}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <SectionSkeleton label="自動化優化建議" />
-            )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
               說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
               人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
               毛利為「營業額 − 買貨成本（已付）」估算。
             </div>
+              </>
+            )}
           </div>
         </main>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 報表整頁載入中（2026-09-15「全有或全無」渲染閘）。
+ *
+ * 🔴 為何要一個獨立嘅整頁 loading，而唔用返原本每張卡嘅骨架：
+ * 商家要嘅係「**任何一項數據未齊，整頁就維持 loading**」。若保留原本
+ * 「KPI 帶 skeleton + 11 張卡各自 skeleton」嘅做法，一來形狀同真身唔完全一致
+ * （真身係 10 格 5-5 grid，骨架係另一個 grid），二來逐卡載入完成會令個別卡先著燈
+ * —— 仍然係「部分內容」。整頁一個 spinner 最符合「一次性渲染」嘅要求。
+ *
+ * ⚠️ 高度用 `flex-1` 撐滿內容區（POS 模式內容區係 `min-h-0 flex-1`），
+ * 所以 loading 期間唔會出現「內容區高度塌陷 → 頁腳彈上彈落」嘅二次跳動。
+ */
+function ReportFullPageLoading() {
+  return (
+    <div className="flex min-h-[320px] flex-1 items-center justify-center py-16">
+      <div className="flex flex-col items-center gap-3">
+        <div
+          className="h-10 w-10 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
+          role="status"
+          aria-label="載入中"
+        />
+        <div className="text-sm text-slate-500">正在載入報表數據…</div>
+        <div className="text-xs text-slate-400">
+          整合本機訂單、Ledger 線上單與會員數據，完成後一次顯示。
+        </div>
       </div>
     </div>
   );
@@ -3038,21 +3145,6 @@ function Card({ title, tag, children, loading }: { title: string; tag?: string; 
       ) : (
         children
       )}
-    </div>
-  );
-}
-
-function SectionSkeleton({ label, height = 140 }: { label?: string; height?: number }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 h-4 w-40 animate-pulse rounded bg-slate-200">{label ? <span className="sr-only">{label}</span> : null}</div>
-      <div className="flex items-center justify-center rounded-xl bg-slate-50" style={{ minHeight: height }}>
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
-      </div>
-      <div className="mt-3 space-y-2">
-        <div className="h-3 w-full animate-pulse rounded bg-slate-100" />
-        <div className="h-3 w-4/5 animate-pulse rounded bg-slate-100" />
-      </div>
     </div>
   );
 }

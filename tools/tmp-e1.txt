@@ -1,0 +1,18 @@
+adc14e5610a2ed2f00ec6da109279098e7ddd66a
+
+ .workbuddy/memory/2026-09-15.md                    | 100 +++++++
+ .workbuddy/memory/MEMORY.md                        |  33 +--
+ docs/print-timeout-p2-claim-window-2026-09-15.md   | 290 +++++++++++++++++++++
+ docs/reviews/incident-2026-09-15-print-outage.md   | 147 +++++++++++
+ .../print-timeout-feasibility-2026-09-15.md        | 229 ++++++++++++++++
+ src/app/api/pos/print-agent/result/route.ts        |  17 +-
+ src/app/api/pos/print-jobs/retry/route.ts          |  99 +++++++
+ src/app/api/pos/print-jobs/status/route.ts         |  94 +++++--
+ src/app/api/pos/sync/route.ts                      |  79 +++++-
+ src/components/print-center.tsx                    | 123 ++++++++-
+ src/lib/pos/print-job-failure.test.ts              |  99 +++++++
+ src/lib/pos/print-job-failure.ts                   | 124 +++++++++
+ src/lib/print-agent-server.ts                      |   3 +
+ .../0042_print_claim_window_segmented.sql          | 180 +++++++++++++
+ tools/2026-09-15-void-stale-pending-print-jobs.sql | 139 ++++++++++
+ 15 files changed, 1707 insertions(+), 49 deletions(-)
