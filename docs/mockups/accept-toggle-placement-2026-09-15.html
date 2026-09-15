@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<title>接單總掣位置調整 — 確認稿 2026-09-15</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;
+  --slate-500:#64748b;--slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;--slate-100:#f1f5f9;
+  --orange-500:#f97316;--orange-600:#ea580c;--emerald-600:#059669;--indigo:#4f46e5;
+  --red-600:#dc2626;--amber-700:#b45309;--amber-500:#f59e0b;--amber-300:#fcd34d;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK",sans-serif}
+
+.review{background:#0f172a;color:#e2e8f0;padding:13px 20px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:3px 0 0;font-size:12px;color:#94a3b8}
+.review .hl{color:#fbbf24}
+.tabs{display:inline-flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+.stage{max-width:1180px;margin:18px auto 40px;position:relative;overflow:hidden;
+  border-radius:22px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.canvas{width:1180px;height:1050px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;padding:16px 20px 20px;
+  overflow-y:auto}
+.screenwrap.on{display:flex}
+/* 🔴 一定要 flex:none：唔係嘅話 flex column 會將 app 框／卡片壓扁（實測 app 520px 被壓到 110px） */
+.app,.quickframe,.optbox,.card,.note,.tbl,.hdrbox{flex:none}
+
+.h1{font-size:15px;font-weight:600}
+.sub{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7}
+.sub code,.card .cb code,.note code{font-family:ui-monospace,Menlo,monospace;font-size:11px;
+  background:rgba(100,116,139,.12);padding:1px 5px;border-radius:4px}
+.note code{background:rgba(146,64,14,.1)}
+.reqchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.reqchip{font-size:11px;font-weight:600;border-radius:999px;padding:3px 10px;
+  background:var(--slate-100);color:var(--slate-600);border:1px solid var(--slate-200)}
+.reqchip.on{background:#fff7ed;color:#c2410c;border-color:#fdba74}
+
+/* ══ 產品畫面（模擬真 app）══ */
+.app{display:grid;grid-template-columns:72px minmax(0,1fr) 286px;height:470px;
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:12px auto 0;
+  background:#f1f5f9}
+.sb{background:var(--slate-900);padding:8px 6px;display:flex;flex-direction:column;overflow:hidden}
+.sb-nav{display:grid;gap:6px}
+.sb-i{border-radius:12px;background:#1e293b;color:#cbd5e1;padding:6px 2px;text-align:center}
+.sb-i .ic{display:block;width:20px;height:20px;border-radius:999px;background:rgba(255,255,255,.1);
+  margin:0 auto 3px;font-size:9px;line-height:20px;font-weight:600}
+.sb-i .tx{display:block;font-size:8px;line-height:1.25;font-weight:600}
+.sb-i.on{background:var(--orange-500);color:#fff}
+.sb-foot{margin-top:auto;display:grid;gap:6px;padding-top:6px;border-top:1px solid #334155}
+.sb-f{border-radius:12px;background:#1e293b;color:#cbd5e1;padding:5px 2px;text-align:center;
+  font-size:9px;font-weight:600;line-height:1.3}
+.sb-f.sync{background:rgba(5,150,105,.9);color:#fff}
+
+.main{display:flex;flex-direction:column;min-width:0;background:#f1f5f9;overflow:hidden}
+.mhead{background:#fff;border-bottom:1px solid var(--line);padding:14px 16px}
+.mhr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+.mhr2{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:8px}
+.mhead .ttl{font-size:17px;font-weight:600}
+.mhead .cap{font-size:12px;color:var(--slate-500);margin-top:3px;line-height:1.6}
+/* 真產品實測：globals.css 有無 layer 嘅 `button{font:inherit}` → 掣面字級＝繼承 body 16px
+   （Tailwind 嘅 text-sm / text-xs 喺 <button> 身上失效）。呢度刻意用 16px 還原真值，
+   否則確認稿會比實作窄，實作一上就爆位。 */
+.hbtns{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+.btn{border-radius:14px;background:#fff;border:1px solid var(--slate-200);
+  padding:8px 16px;font-size:16px;font-weight:600;color:var(--slate-900);white-space:nowrap}
+.btn.orange{background:var(--orange-500);border-color:var(--orange-500);color:#fff}
+
+.contained{display:inline-flex;align-items:center;gap:8px;border-radius:999px;
+  background:var(--slate-100);padding:6px 12px;position:relative}
+.contained .lb{font-size:12px;font-weight:600;color:var(--slate-600);white-space:nowrap}
+.contained .pv{border-radius:999px;padding:8px 16px;font-size:16px;font-weight:600;
+  background:var(--emerald-600);color:#fff;white-space:nowrap}
+.contained .pv.off{background:#fff;color:var(--amber-700);box-shadow:inset 0 0 0 1px var(--amber-300)}
+.contained .pv.closed{background:var(--red-600);color:#fff}
+.contained.new{box-shadow:0 0 0 3px rgba(249,115,22,.8)}
+.contained.relabel{box-shadow:0 0 0 3px rgba(251,191,36,.95)}
+.badge-new{position:absolute;top:-11px;left:12px;background:var(--orange-500);color:#fff;
+  font-size:10px;font-weight:600;border-radius:999px;padding:1px 7px;white-space:nowrap}
+.badge-relabel{position:absolute;top:-11px;left:12px;background:#fbbf24;color:#78350f;
+  font-size:10px;font-weight:600;border-radius:999px;padding:1px 7px;white-space:nowrap}
+
+.mbody{flex:1;min-height:0;overflow:auto;padding:14px 16px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border-radius:999px;padding:7px 14px;font-size:12.5px;font-weight:600;
+  background:#fff;color:var(--slate-700);border:1px solid var(--slate-200)}
+.chip.on{background:var(--orange-500);color:#fff;border-color:var(--orange-500)}
+.tgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:14px;
+  grid-auto-rows:max-content}
+.tcard{background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:9px 11px}
+.tcard .tn{font-size:14px;font-weight:700}
+.tcard .tm{font-size:10.5px;color:var(--slate-500);margin-top:2px}
+.tcard .ts{display:inline-block;margin-top:7px;border-radius:8px;padding:2px 8px;
+  font-size:10px;font-weight:600;background:#fff7ed;color:#c2410c}
+
+.rc{background:#fff;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.rc-head{border-bottom:1px solid var(--slate-100);padding:14px 14px 12px}
+.rc-head .t{font-size:14px;font-weight:600}
+.rc-head .c{font-size:10.5px;color:var(--slate-500);margin-top:3px}
+.rc-body{flex:1;min-height:0;overflow:auto;padding:12px 14px}
+.rc-card{border:1px solid var(--slate-200);background:rgba(248,250,252,.7);border-radius:14px;padding:10px}
+.rc-card .rt{font-size:11.5px;font-weight:600;color:var(--slate-700)}
+.rc-row{display:flex;justify-content:flex-end;margin-top:8px}
+.ocard{border:1px solid var(--slate-200);background:#fff;border-radius:12px;padding:9px 10px;margin-top:8px}
+.ocard .o1{display:flex;align-items:center;gap:6px}
+.ocode{font-size:12.5px;font-weight:700}
+.otag{border-radius:6px;background:var(--slate-100);color:var(--slate-600);
+  font-size:9.5px;font-weight:600;padding:1px 6px}
+.ocard .o2{font-size:10px;color:var(--slate-500);margin-top:3px;line-height:1.5}
+.obtns{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.obn{border-radius:9px;font-size:10px;font-weight:600;padding:4px 9px;color:#fff;background:var(--slate-700)}
+.obn.or{background:var(--orange-500)}
+
+/* ══ 做法對照框 ══ */
+.optbox{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-top:12px}
+.optbox .hd{background:var(--slate-100);padding:8px 14px;font-size:11.5px;font-weight:600;
+  color:var(--slate-600);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}
+.optbox .hd b{color:var(--orange-600)}
+.hdrbox{background:#fff;padding:12px 16px}
+
+/* ══ 快餐底部訂單列 ══ */
+.quickframe{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:12px auto 0;background:#fff}
+.qftop{display:grid;grid-template-columns:288px minmax(0,1fr) 286px;height:118px}
+.qfcol{border-right:1px solid var(--line);padding:12px 14px;min-width:0}
+.qfcol:last-child{border-right:0}
+.qfstore .sn{font-size:14px;font-weight:600;line-height:1.3}
+.qfstore .ss{font-size:10.5px;color:var(--slate-500);margin-top:4px}
+.qfline{height:1px;background:var(--slate-100);margin:10px 0}
+.qfslot{border-radius:12px;background:var(--slate-100);height:26px;margin-top:6px}
+.qfslot.short{width:70%}
+.omitted{border-top:1px dashed var(--slate-300);border-bottom:1px dashed var(--slate-300);
+  background:var(--slate-100);padding:8px 14px;font-size:11.5px;color:var(--slate-500);
+  font-weight:600;text-align:center}
+.bar{border-top:1px solid var(--slate-200);background:#fff;
+  box-shadow:0 -4px 16px rgba(15,23,42,.07);
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.bsec{padding:11px 13px;min-width:0}
+.bsec+.bsec{border-left:1px solid var(--slate-200)}
+.bhead{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.bslabel{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--slate-500)}
+.bctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+
+/* ══ 說明區 ══ */
+.note{background:#fffbeb;border:1px solid var(--amber-300);border-radius:14px;
+  padding:11px 14px;margin-top:12px}
+.note.red{background:#fef2f2;border-color:#fca5a5}
+.note .nt{font-size:12px;font-weight:600;color:#92400e;margin-bottom:5px}
+.note.red .nt{color:#991b1b}
+.note ul{margin:0;padding-left:18px;font-size:11.5px;color:#78350f;line-height:1.85}
+.note.red ul{color:#7f1d1d}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-top:12px}
+.card .ct{font-size:12.5px;font-weight:600;margin-bottom:8px}
+.card .cb{font-size:11.5px;color:var(--slate-600);line-height:1.8}
+
+.specgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 22px;margin-top:4px}
+.specgrid .row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:baseline}
+.specgrid .k{font-size:11px;font-weight:600;color:var(--slate-500)}
+.specgrid .v{font-size:11.5px;color:var(--slate-700);line-height:1.7}
+.sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+
+.tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-top:12px}
+.tbl .tr{display:grid;grid-template-columns:48px 240px minmax(0,1fr);border-top:1px solid var(--line)}
+.tbl .tr:first-child{border-top:0;background:var(--slate-100)}
+.tbl .th,.tbl .td{padding:9px 12px;font-size:11.5px;line-height:1.7}
+.tbl .th{font-weight:600;color:var(--slate-600);font-size:11px}
+.tbl .td{color:var(--slate-700);border-left:1px solid var(--line)}
+.tbl .td:first-child{border-left:0}
+.tbl .num{font-weight:700;color:var(--orange-600);text-align:center;border-left:0}
+.tbl .before{color:var(--slate-500)}
+.tbl strong{color:var(--slate-900)}
+.tbl .td code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+  background:var(--slate-100);padding:1px 5px;border-radius:4px}
+.optrow{display:grid;grid-template-columns:112px minmax(0,1fr);gap:12px;align-items:center;margin-top:9px}
+.optrow .ok{font-size:11px;font-weight:600;color:var(--slate-500);line-height:1.5}
+.optrow .ov{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.pick{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;
+  border-radius:6px;border:1.5px solid var(--slate-300);font-size:11px;font-weight:700;color:transparent}
+.pick.a{border-color:var(--orange-500);background:var(--orange-500);color:#fff}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <h1>接單總掣位置調整 — 確認稿（4 項需求）</h1>
+  <p>2026-09-15 · 產品畫面用真實色值 ＋ 真實 computed 字級（掣面 16px）；深色框係評審工具列，<span class="hl">唔屬於產品介面</span></p>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="s1">① 堂食 · 桌台總覽</button>
+    <button data-tab="s2">② 快餐 · 點餐介面</button>
+    <button data-tab="s3">③ 4 項對照 ＋ 待你拍板</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ══════════════════════ ① 堂食 · 桌台總覽 ══════════════════════ -->
+  <div class="screenwrap on" id="s1">
+    <div class="h1">① 需求 1｜堂食模式 —「線上接單」＋「線下接單」放喺「桌台總覽」標題同一行右側</div>
+    <div class="sub">畫面闊度按你截圖嘅 <b>1084 CSS px</b>（iPad 橫向）繪製。標題列原本一行放 4 粒工具掣；加咗兩粒總掣之後<b>6 粒一行放唔落</b>（實測需要 1,114px、可用只有 692px），所以我把 4 粒工具掣降一行，兩粒新總掣就同「桌台總覽」同一行右側 —— 詳見下面量度數字同「做法 B」。</div>
+    <div class="reqchips">
+      <span class="reqchip on">需求 1 · 移到桌台總覽同列右側</span>
+      <span class="reqchip on">需求 2 · 接單 → 線下接單</span>
+    </div>
+
+    <div class="app" style="width:1084px">
+      <aside class="sb">
+        <div class="sb-nav">
+          <div class="sb-i on"><span class="ic">點</span><span class="tx">點餐</span></div>
+          <div class="sb-i"><span class="ic">會</span><span class="tx">會員</span></div>
+          <div class="sb-i"><span class="ic">單</span><span class="tx">訂單</span></div>
+          <div class="sb-i"><span class="ic">報</span><span class="tx">報表</span></div>
+          <div class="sb-i"><span class="ic">設</span><span class="tx">設置</span></div>
+        </div>
+        <div class="sb-foot">
+          <div class="sb-f">商戶名<br>收銀</div>
+          <div class="sb-f sync">在線</div>
+          <div class="sb-f">登出</div>
+        </div>
+      </aside>
+
+      <div class="main">
+        <div class="mhead">
+          <div class="mhr">
+            <div>
+              <div class="ttl">桌台總覽</div>
+              <div class="cap">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+            </div>
+            <div class="hbtns">
+              <span class="contained new"><span class="badge-new">新增</span><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+              <span class="contained new"><span class="badge-new">新增／改名</span><span class="lb">線下接單</span><span class="pv">營業中</span></span>
+            </div>
+          </div>
+          <div class="mhr2">
+            <span class="btn orange">開工</span>
+            <span class="btn">手動更新</span>
+            <span class="btn">同步健康</span>
+            <span class="btn">查看線上訂單</span>
+          </div>
+        </div>
+        <div class="mbody">
+          <div class="chips">
+            <span class="chip on">全部</span>
+            <span class="chip">1樓</span>
+            <span class="chip">2樓</span>
+            <span class="chip">澳門</span>
+            <span class="chip">MFOOD</span>
+            <span class="chip">外賣自取</span>
+          </div>
+          <div class="tgrid">
+            <div class="tcard"><div class="tn">A01</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A02</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A03</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A04</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A05</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A06</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A07</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A08</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">A09</div><div class="tm">1樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">B01</div><div class="tm">2樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">B02</div><div class="tm">2樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+            <div class="tcard"><div class="tn">B03</div><div class="tm">2樓</div><div class="tm">已坐 0/--</div><div class="ts">空閒</div></div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="rc">
+        <div class="rc-head">
+          <div class="t">快捷操作</div>
+          <div class="c">桌台流程、收銀入口與營運操作集中在這裡</div>
+        </div>
+        <div class="rc-body">
+          <div class="rc-card">
+            <div class="rt">線上訂單</div>
+            <div class="rc-row">
+              <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+            </div>
+            <div class="ocard">
+              <div class="o1"><span class="ocode">取餐碼 002</span><span class="otag">堂食</span></div>
+              <div class="o2">已接單 · 已支付 MOP 38</div>
+              <div class="obtns"><span class="obn">查看</span><span class="obn or">排位</span><span class="obn or">開始製作</span></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="optbox">
+      <div class="hd"><span><b>做法 B（替代）</b>— 4 粒工具掣完全唔動，兩粒總掣擺落第二行右側（＝你截圖嘅原排列加一行）</span><span>△ 改動最細，但唔算「同一列」</span></div>
+      <div class="hdrbox">
+        <div class="mhr">
+          <div>
+            <div class="ttl">桌台總覽</div>
+            <div class="cap">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+          </div>
+          <div class="hbtns">
+            <span class="btn orange">開工</span>
+            <span class="btn">手動更新</span>
+            <span class="btn">同步健康</span>
+            <span class="btn">查看線上訂單</span>
+          </div>
+        </div>
+        <div class="mhr2">
+          <span class="contained"><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">線下接單</span><span class="pv">營業中</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="note red">
+      <div class="nt">⚠️ 實測：6 粒控件 <b>一行放唔落</b>（唔係設計問題，係真嘅唔夠位）</div>
+      <ul>
+        <li>標題列可用闊度 = 1084 − 側欄 72 − 快捷操作欄 286 − padding 32 − 邊框 2 = <b>692px</b>。</li>
+        <li>6 粒同排需要 = 副標題（322）＋「線上接單」（160）＋「線下接單」（160）＋「開工」（66）＋「手動更新」（98）＋「同步健康」（98）＋「查看線上訂單」（130）＋ 5 個 8px 間距 = <b>1,114px</b> → 超出 <b>422px</b>。</li>
+        <li>即使已開工（「開工」隱藏）＋副標題縮短到 11 字，仍然超出約 <b>130px</b>。想真正同一行，就要再搬走「同步健康」或「查看線上訂單」其中一粒（各約 100–130px）。</li>
+        <li>做法 A 喺闊屏（≥1440 CSS px）之下 6 粒可以一行放齊；窄屏則「2 粒總掣第一行、4 粒工具掣第二行」，兩者都唔會爆版。</li>
+      </ul>
+    </div>
+
+    <div class="note">
+      <div class="nt">🔴 要你拍板：做法 A 定做法 B？</div>
+      <ul>
+        <li><b>A（本稿採用）</b>：兩粒總掣同「桌台總覽」同一行 → 完全符合你講嘅「同一列右側」；代價係 4 粒工具掣（開工／手動更新／同步健康／查看線上訂單）降去第二行。</li>
+        <li><b>B</b>：4 粒工具掣完全唔動，兩粒總掣放第二行右側 → 改動最細，但嚴格嚟講唔係「同一列」。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══════════════════════ ② 快餐 · 點餐介面 ══════════════════════ -->
+  <div class="screenwrap" id="s2">
+    <div class="h1">② 需求 2・3・4｜快餐模式 — 兩粒總掣各自貼喺對應「自動接單」嘅左邊</div>
+    <div class="sub">下方訂單列本來就分「線上訂單 / 線下訂單」兩格。<b>線上接單</b>（原本叫「接單」）貼喺線上嗰格嘅自動接單左側；<b>線下接單</b>（新增）貼喺線下嗰格嘅自動接單左側 → 兩格變成完全對稱。呢個位<b>夠位，唔會掉行</b>（每格可用 541px，新組合只需要 296px）。</div>
+    <div class="reqchips">
+      <span class="reqchip on">需求 2 · 接單 → 線下接單</span>
+      <span class="reqchip on">需求 3 · 線上接單 ↔ 線上自動接單左側</span>
+      <span class="reqchip on">需求 4 · 線下接單 ↔ 線下自動接單左側</span>
+    </div>
+
+    <div class="quickframe" style="width:1084px">
+      <div class="qftop">
+        <div class="qfcol qfstore">
+          <div class="sn">商戶名</div>
+          <div class="ss">快餐點餐台</div>
+          <div class="qfline"></div>
+          <div class="o2" style="margin:0">快餐模式</div>
+        </div>
+        <div class="qfcol">
+          <div class="o2" style="margin:0">＋ 點餐區（菜單格）— 今次不改</div>
+          <div class="qfslot"></div>
+          <div class="qfslot"></div>
+          <div class="qfslot short"></div>
+        </div>
+        <div class="qfcol">
+          <div class="o2" style="margin:0">訂單明細 ＋ 結帳 — 今次不改</div>
+          <div class="qfslot"></div>
+          <div class="qfslot short"></div>
+        </div>
+      </div>
+      <div class="omitted">▼ 以下係要改嘅下方訂單列</div>
+
+      <div class="bar">
+        <div class="bsec">
+          <div class="bhead">
+            <div class="bslabel">線上訂單</div>
+            <div class="bctl">
+              <span class="contained relabel"><span class="badge-relabel">改名：接單 → 線上接單</span><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+              <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+            </div>
+          </div>
+          <div class="ocard">
+            <div class="o1"><span class="ocode">取餐碼 002</span><span class="otag">堂食</span></div>
+            <div class="o2">已接單 · 已支付 MOP 38　·　快餐餐（金不換炒肉片豆腐飯）</div>
+            <div class="obtns"><span class="obn">查看</span><span class="obn or">排位</span><span class="obn or">開始製作</span></div>
+          </div>
+        </div>
+
+        <div class="bsec">
+          <div class="bhead">
+            <div class="bslabel">線下訂單</div>
+            <div class="bctl">
+              <span class="contained new"><span class="badge-new">新增</span><span class="lb">線下接單</span><span class="pv">營業中</span></span>
+              <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+            </div>
+          </div>
+          <div class="ocard">
+            <div class="o1"><span class="ocode">取餐碼 001</span><span class="otag">外賣自取</span></div>
+            <div class="o2">製作中 · 已支付 MOP 41</div>
+            <div class="obtns"><span class="obn">查看</span><span class="obn or">待取餐</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">兩格嘅前後對照（快餐模式 · 點餐介面下方訂單列）</div>
+      <div class="optrow">
+        <div class="ok">現況</div>
+        <div class="ov">
+          <span class="bslabel">線上訂單</span>
+          <span class="contained"><span class="lb">接單</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+          <span style="color:var(--slate-300)">｜</span>
+          <span class="bslabel">線下訂單</span>
+          <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok">調整後</div>
+        <div class="ov">
+          <span class="bslabel">線上訂單</span>
+          <span class="contained"><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+          <span style="color:var(--slate-300)">｜</span>
+          <span class="bslabel">線下訂單</span>
+          <span class="contained"><span class="lb">線下接單</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">自動接單</span><span class="pv">開</span></span>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:9px">
+        需求 3 只需要改 label（位置本來就啱）；需求 4 係新增一粒。兩者都唔需要改版面結構。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">兩粒新總掣嘅規格（做法 A / B、快餐模式都共用同一套）</div>
+      <div class="specgrid">
+        <div class="row"><div class="k">外觀</div><div class="v">同既有「自動接單」同一套藥丸底 <code>bg-slate-100</code> ＋ 圓掣</div></div>
+        <div class="row"><div class="k">真源</div><div class="v">線上接單 = Ledger <code>merchant_enabled</code>；線下接單 = POS DB <code>pos_store_status.is_open</code>（0039）</div></div>
+        <div class="row"><div class="k">實測尺寸</div><div class="v">每粒 <b>160 × 48px</b>（掣面真值 16px 字）；實高 48px ✔ 符合 ≥40px 觸控</div></div>
+        <div class="row"><div class="k">連動</div><div class="v">關「線下接單」→ 單向連動暫停「線上接單」；重開唔會自動開返（同側欄商店名卡一致）</div></div>
+        <div class="row"><div class="k">側欄</div><div class="v">商店名卡嗰個「店內營業」入口 <b>保留</b>，兩處共用同一份狀態</div></div>
+        <div class="row"><div class="k">未讀到</div><div class="v">灰底「未接通」＋ 停用 —— 唔准猜（同現有 pill 一致）</div></div>
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="nt">⚠️ 兩點要留意</div>
+      <ul>
+        <li>快餐模式嘅「線下接單」＝ <b>店內營業總掣</b>（擋掃碼點餐 ＋ 自助點餐機）。佢係全店性嘅，唔止影響快餐渠道。</li>
+        <li>關「線下接單」會一併暫停線上接單 → 快餐店落閘之後，會員通亦會即刻落唔到單（同側欄行為一致）。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══════════════════════ ③ 對照 ＋ 待拍板 ══════════════════════ -->
+  <div class="screenwrap" id="s3">
+    <div class="h1">③ 4 項需求逐條對照（現況 → 調整後）＋ 3 個需要你確認嘅點</div>
+    <div class="sub">「現況」已對過 <code>src/components/pos-app.tsx</code>、<code>quick-mode-orders-bar.tsx</code>、<code>merchant-open-pill.tsx</code> 嘅實際代碼。若果邊一格同你想嘅唔一樣，直接指出編號即可。</div>
+
+    <div class="tbl">
+      <div class="tr">
+        <div class="th num">#</div>
+        <div class="th">需求</div>
+        <div class="th">現況 → 調整後</div>
+      </div>
+      <div class="tr">
+        <div class="td num">1</div>
+        <div class="td">堂食模式：把「線上接單」＋「接單」一併移到「桌台總覽」同一列右側</div>
+        <div class="td">
+          <span class="before">現況：堂食模式嘅桌台總覽標題列<b>冇</b>任何接單總掣（只有 開工／手動更新／同步健康／查看線上訂單）；「線上接單」pill 只喺設置頁 header 出現。</span><br>
+          → 標題列右側加 <strong>[線上接單｜營業中] [線下接單｜營業中]</strong>，同「桌台總覽」同一行（做法 A）<br>
+          ⚠️ 6 粒一行放唔落（需要 1,114px、得 692px）→ 4 粒工具掣降第二行，或者揀做法 B
+        </div>
+      </div>
+      <div class="tr">
+        <div class="td num">2</div>
+        <div class="td">快餐與堂食模式：「接單」按鈕改名為「線下接單」</div>
+        <div class="td">
+          <span class="before">現況：<code>MerchantOpenPill</code> 嘅預設 label 係「接單」（訂單頁／快餐訂單列都食呢個預設）；側欄商店名卡嗰粒店內營業入口冇文字 label。</span><br>
+          → 統一叫 <strong>「線下接單」</strong>，同「線上接單」成對
+        </div>
+      </div>
+      <div class="tr">
+        <div class="td num">3</div>
+        <div class="td">快餐模式：「線上接單」放喺點餐介面「線上訂單的自動接單」左側</div>
+        <div class="td">
+          <span class="before">現況：位置已經係自動接單左邊（同一行），但字寫「接單」。</span><br>
+          → 同一位置，字改 <strong>「線上接單」</strong>（只改 label，唔搬位）
+        </div>
+      </div>
+      <div class="tr">
+        <div class="td num">4</div>
+        <div class="td">承接需求 2：「線下接單」放喺點餐介面「線下訂單的自動接單」左側</div>
+        <div class="td">
+          <span class="before">現況：線下訂單嗰格只有「自動接單」一粒。</span><br>
+          → 左邊加 <strong>[線下接單｜營業中]</strong>（＝店內營業總掣）
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">🔴 要你拍板 ①：「接單」指邊一粒掣？（本稿按 A 畫）</div>
+      <div class="optrow">
+        <div class="ok"><span class="pick a">✓</span> A</div>
+        <div class="ov">
+          <span style="font-size:11.5px;color:var(--slate-700);line-height:1.8">
+            <b>「接單」＝店內營業總掣</b>（<code>pos_store_status.is_open</code>，現時收埋喺側欄商店名卡、冇文字 label）。<br>
+            改名做「線下接單」之後同「線上接單」正好一對：線上＝會員通、線下＝掃碼／自助機／堂食。<b>本稿採用此解讀</b>（亦係唯一解得通「放到線下訂單嘅自動接單左側」嘅讀法）。
+          </span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok"><span class="pick">B</span> B</div>
+        <div class="ov">
+          <span style="font-size:11.5px;color:var(--slate-700);line-height:1.8">
+            <b>「接單」＝訂單頁／快餐列嗰粒 pill</b>（label 預設「接單」）。但佢同「線上接單」<b>係同一粒掣</b>（Ledger <code>merchant_enabled</code>）——
+            改名會變成兩粒掣控制同一樣嘢，唔建議。<br>
+            如果你其實係想講「兩邊 label 唔一致，統一叫『線上接單』」，同我講一聲，改 1 行就搞掂。
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">🔴 要你拍板 ②：堂食「點餐介面」要唔要都放？（需求 3、4 只寫咗快餐）</div>
+      <div class="cb">
+        現時堂食點餐介面冇接單總掣，只有底部「下單 / 去結帳」＋打印區。兩個做法：<br>
+        <b>(i) 唔加</b> —— 堂食嘅總掣集中喺桌台總覽一處（本稿採用，最簡潔，同需求 1 一致）；<br>
+        <b>(ii) 照抄快餐</b> —— 堂食點餐介面底部都加「線上接單 / 線下接單」，好處係落單途中都改得到，代價係底部已經有「下單／去結帳／打印」，會幾擠。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">🔴 要你拍板 ③：兩粒 pill 掣面都寫「營業中」→ 撞字（承接 9/14 嘅同一個問題）</div>
+      <div class="optrow">
+        <div class="ok">方案 1</div>
+        <div class="ov">
+          <span class="contained"><span class="lb">線上接單</span><span class="pv">接單中</span></span>
+          <span class="contained"><span class="lb">線下接單</span><span class="pv">營業中</span></span>
+          <span style="font-size:11px;color:var(--slate-500)">← 措辭唔同，一眼分得清（本稿建議，本稿畫稿用此版）</span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok">方案 2</div>
+        <div class="ov">
+          <span class="contained"><span class="lb">線上接單</span><span class="pv">營業中</span></span>
+          <span class="contained"><span class="lb">線下接單</span><span class="pv">營業中</span></span>
+          <span style="font-size:11px;color:var(--slate-500)">← 維持現有措辭，靠左邊 label 分辨</span>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:9px">
+        「停」狀態：線上 → 白底琥珀「已暫停」；線下 → 沿用側欄嗰套<b>紅底白字「已暫停」</b>（一眼睇到停業）。兩者顏色已經唔同，再加唔同措辭就基本上唔會撳錯。
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="nt">改動範圍（你確認之後先動手）</div>
+      <ul>
+        <li><code>pos-app.tsx</code> — 桌台總覽標題列加兩粒 pill（需求 1）</li>
+        <li><code>quick-mode-orders-bar.tsx</code> — 線上格 label 改「線上接單」；線下格加「線下接單」（需求 3、4）</li>
+        <li><code>merchant-open-pill.tsx</code> ／ <code>app-sidebar.tsx</code> ／ <code>use-store-open-toggle.ts</code> — 「接單」文案統一為「線下接單」（需求 2）</li>
+        <li>純 UI ＋ 文案改動，<b>唔涉及</b> RPC／DB schema／出紙邏輯；三端打包唔需要擰 versionCode（desktop／Android 載同一個 Vercel 網址，deploy 就生效）</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var DESIGN_W = 1180, DESIGN_H = 1050;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || DESIGN_W;
+  var s = Math.min(1, Math.max(w / DESIGN_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DESIGN_H * s) + "px";
+  stage.style.overflowX = (DESIGN_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++){
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < btns.length; j++){
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+window.onresize = fit;
+
+(function bindTabs(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    (function(b){
+      b.onclick = function(){ showTab(b.getAttribute("data-tab")); };
+    })(btns[i]);
+  }
+})();
+
+window.onload = function(){ fit(); };
+</script>
+</body>
+</html>

@@ -111,7 +111,7 @@ export function MerchantOrderConfigSection() {
         <div className="min-w-0">
           <div className="text-base font-semibold text-slate-900">線上接單（會員通）</div>
           <div className="mt-1 max-w-[52ch] text-sm text-slate-500">
-            呢粒「接單」係全店線上單嘅總掣：關咗之後客人喺會員通落唔到新單。
+            呢粒「線上接單」係全店線上單嘅總掣：關咗之後客人喺會員通落唔到新單。
             店內堂食、快餐、自助點餐完全不受影響。改動會即時同步到其他收銀機。
           </div>
         </div>
@@ -120,8 +120,11 @@ export function MerchantOrderConfigSection() {
             busy={busy}
             busyHint={busyHint}
             disabled={!config.available || !storeId}
+            enabledLabel="接單中"
             error={config.saving === "none" ? config.error : null}
+            label="線上接單"
             merchantEnabled={config.merchantEnabled}
+            offLabel="已暫停"
             onChange={(next) => void config.setMerchantEnabled(next)}
             unknownHint={
               storeId ? "未讀到 Ledger 接單狀態，請撳「重新整理」。" : "尚未登入，無法讀取接單狀態。"

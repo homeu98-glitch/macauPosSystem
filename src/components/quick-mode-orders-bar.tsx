@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
-import { MerchantOpenPill } from "@/components/merchant-open-pill";
+import { OnlineOpenPill } from "@/components/online-open-pill";
+import { StoreOpenPill } from "@/components/store-open-pill";
 import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { useSelfOrderAutoAccept } from "@/components/self-order-auto-accept-toggle";
@@ -43,8 +44,8 @@ type QuickModeOrdersBarProps = {
  * 真源同訂單頁嗰粒一樣：DB `pos_kiosk_settings.selfOrderAutoAccept`（per-store 全店共用），
  * **唔係** localStorage —— 自助點餐機同收銀台係兩部機，必須有共同真源（docs/87 §4.3）。
  *
- * 2026-09-01 改：用 `variant="contained" size="md"`（同線上訂單嗰粒完全對稱顯眼），
- * 之後 plain sm 留俾其他 call site（如文件入面線下嘅 contained md = 顯眼）。
+ * 2026-09-15 改：`variant="contained" size="xs"` —— 同隔籬「線下接單」精簡 pill
+ * 同一尺寸（約 80 × 40px），兩粒並排睇落先齊。
  */
 function QuickSelfOrderAutoAcceptPill() {
   const { enabled, loading, saving, error, storeId, setEnabled } = useSelfOrderAutoAccept();
@@ -59,18 +60,22 @@ function QuickSelfOrderAutoAcceptPill() {
       error={error}
       label="自動接單"
       onChange={setEnabled}
-      size="md"
+      size="xs"
       variant="contained"
     />
   );
 }
 
 /**
- * 快餐點餐介面 · 線上訂單嘅兩粒掣：「開啟接單（開關店）」＋「自動接單」。
+ * 快餐點餐介面 · 線上訂單嘅兩粒掣：「線上接單（開關店）」＋「自動接單」。
  *
  * 兩粒都要同一個 module store（`useMerchantOrderConfig`）嘅值：
  * 店關咗就要把「自動接單」灰掉，所以唔可以拆做兩個元件各自讀。
  * 同訂單頁／設備設定亦係同一個 store → 三邊即時一致，唔會開多幾條 Realtime channel。
+ *
+ * 2026-09-15 改名：「接單」→「**線上接單**」，掣面由「營業中」改「**接單中**」。
+ * 原因：同一行（甚至同一屏）會出現「線下接單」（店內營業），兩粒都寫「營業中」＋同一個綠
+ * 就會撳錯（撳錯＝停業）。詳見 `online-open-pill.tsx` 註釋。
  *
  * ⚠️ 關店關嘅係**成間舖嘅線上單**（唔止快餐），所以一定要二次確認（喺 pill 內部做）。
  */
@@ -101,16 +106,8 @@ function QuickOnlineOrderControls({
 
   return (
     <>
-      <MerchantOpenPill
-        busy={busy}
-        busyHint={busyHint}
-        disabled={!config.available}
-        error={config.saving === "none" ? config.error : null}
-        merchantEnabled={config.merchantEnabled}
-        onChange={(next) => void config.setMerchantEnabled(next)}
-        unknownHint="未讀到 Ledger 接單狀態，請去「設置 › 線上接單」重新整理。"
-        variant="contained"
-      />
+      {/* 線上接單（Ledger `merchant_enabled`）—— 掣面「接單中／已暫停」 */}
+      <OnlineOpenPill size="xs" />
       <AutoAcceptPill
         busy={busy}
         busyHint={busyHint}
@@ -118,7 +115,7 @@ function QuickOnlineOrderControls({
         enabled={autoAccept}
         label="自動接單"
         onChange={onAutoAcceptChange}
-        size="md"
+        size="xs"
         variant="contained"
       />
     </>
@@ -166,7 +163,13 @@ export function QuickModeOrdersBar({
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線下訂單</div>
-            <QuickSelfOrderAutoAcceptPill />
+            <div className="flex shrink-0 flex-nowrap items-center gap-2">
+              {/* 線下接單 = 店內營業總掣（`pos_store_status.is_open`）：
+                  擋掃碼點餐 ＋ 自助點餐機。掣面「營業中」／「已暫停（紅）」。
+                  同左邊「線上訂單」嗰組完全對稱（接單總掣喺左、自動接單喺右）。 */}
+              <StoreOpenPill size="xs" />
+              <QuickSelfOrderAutoAcceptPill />
+            </div>
           </div>
           <QuickLocalOrdersStrip
             completeLabel={completeLabel}

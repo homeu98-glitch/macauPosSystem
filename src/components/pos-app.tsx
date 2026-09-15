@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
@@ -21,6 +20,9 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
 import { SyncHealthModal } from "@/components/sync-health-modal";
+import { PosToolsMenu } from "@/components/pos-tools-menu";
+import { OnlineOpenPill } from "@/components/online-open-pill";
+import { StoreOpenPill } from "@/components/store-open-pill";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
@@ -4609,16 +4611,33 @@ export function PosApp() {
         {posMode === "tables" ? (
           <div className="grid h-[100dvh] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_330px]">
             <main className="flex h-full flex-col overflow-hidden bg-slate-100">
-              <div className="border-b border-slate-200 bg-white px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
+              {/* 桌台總覽標題列 —— 2026-09-15 J 拍板：**全部按鈕同一行，唔准掉第二行**。
+                  ── 為何要改 ─────────────────────────────────────────────────────
+                  iPad 橫向（1084px）標題列可用只有約 692px
+                  （1084 − 側欄 72 − 快捷操作欄 286 − padding 32 − 邊框 2）。
+                  擺齊「開工 ＋ 手動更新 ＋ 同步健康 ＋ 查看線上訂單 ＋ 線上接單 ＋ 線下接單」
+                  實測需要 1,076px → 必定掉第二行。所以三個配套一起做：
+                    ① 刪「查看線上訂單」（入口仍在側欄「訂單」＋右欄「快捷操作 › 線上訂單」卡片）
+                    ② 「手動更新 ＋ 同步健康」合併成一個 42px icon（`PosToolsMenu`，J 揀方案 A：彈小選單）
+                    ③ 兩粒接單總掣用精簡版 `size="xs"`（104 × 40px，高度仍然守 40px 觸控準則）
+                  ⇒ 控件簇 340px ≤ 可用 358px（692 − 副標題 322 − 12 間距）→ 單行唔會爆。
+                  🔴 CSS 用 `minmax(0,1fr)_auto` ＋ 右側 `flex-nowrap`：標題欄吸收剩餘寬度，
+                     控件簇**永遠唔會掉行** —— 唔靠 magic number 遷就。
+                  詳見 docs/mockups/accept-toggle-placement-2026-09-15-v2.html */}
+              <div className="border-b border-slate-200 bg-white px-4 py-3">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                  <div className="min-w-0">
                     <div className="text-lg font-semibold text-slate-900">桌台總覽</div>
-                    <div className="mt-1 text-sm text-slate-500">
+                    {/* ⚠️ 副標題刻意用 `text-xs`（12px）唔用 `text-sm`（14px）：
+                        14px 時自然闊約 376px，而標題欄只有約 350px → 會 wrap 成兩行，
+                        header 由 74px 變 95px（實測）。12px 只需約 322px → 穩穩一行。
+                        （v2 確認稿亦係 12px，J 已過目。） */}
+                    <div className="mt-0.5 text-xs text-slate-500">
                       點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {/* 「開工」（2026-09-14）：未開工才出，擺喺「手動更新」左邊。
+                  <div className="flex shrink-0 flex-nowrap items-center gap-2">
+                    {/* 「開工」（2026-09-14）：未開工才出，擺喺最左。
                         收起「今日未開工」彈窗之後，呢粒就係開工嘅入口。
                         開工後自動隱藏（判準 `shift.openedAt`，同彈窗同一份真源）。
                         ⚠️ 動畫期間呢粒掣會被 startWorkHint 加上光圈，唔可以蓋住佢（z 要夠高）。 */}
@@ -4642,29 +4661,20 @@ export function PosApp() {
                         ) : null}
                       </span>
                     ) : null}
-                    <button
-                      type="button"
-                      title="從伺服器強制拉取最新菜單及所有設定，套用後會重新載入頁面"
-                      onClick={() => void handleManualUpdate()}
-                      disabled={manualSyncing || isBootstrapping}
-                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      {manualSyncing ? "更新中…" : "手動更新"}
-                    </button>
-                    <button
-                      type="button"
-                      title="檢查有冇「已結帳但未上到雲」嘅訂單，失敗事件重試或補錄上雲"
-                      onClick={() => setShowSyncHealth(true)}
-                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                    >
-                      同步健康
-                    </button>
-                    <Link
-                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-                      href="/orders"
-                    >
-                      查看線上訂單
-                    </Link>
+                    {/* 維修工具（無文字）：手動更新 ＋ 同步健康。
+                        唔顯示文字係因為正常情況下商家唔會撳；有待上傳會出角標提醒。 */}
+                    <PosToolsMenu
+                      busy={manualSyncing || isBootstrapping}
+                      onManualUpdate={() => void handleManualUpdate()}
+                      onSyncHealth={() => setShowSyncHealth(true)}
+                    />
+                    {/* 兩個總掣成對出現：
+                        線上接單 = Ledger `merchant_enabled`（會員通線上落單）
+                        線下接單 = POS DB `pos_store_status.is_open`（擋掃碼點餐 ＋ 自助點餐機）
+                        ⚠️ 掣面措辭／顏色刻意唔同（接單中·綠 vs 營業中·綠／已暫停·紅），
+                           兩個都寫「營業中」會令收銀撳錯 = 停業。 */}
+                    <OnlineOpenPill size="xs" />
+                    <StoreOpenPill size="xs" />
                   </div>
                 </div>
               </div>

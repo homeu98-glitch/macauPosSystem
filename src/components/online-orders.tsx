@@ -1273,6 +1273,9 @@ export function OnlineOrders({
             {/*
               開關店（`merchant_enabled`）：全店線上單總掣。關咗之後**唔會**順手寫
               `auto_accept=false`，只係把下面嗰粒掣灰掉（開返店保留原設定）。
+              2026-09-15 命名統一：label「接單」→「**線上接單**」，掣面「營業中」→「**接單中**」。
+              因為同一套 pill 而家會同「線下接單」（店內營業，掣面「營業中」）並排出現 ——
+              兩粒都寫「營業中」＋同一個綠就會撳錯（撳錯＝停業）。詳見 online-open-pill.tsx。
             */}
             <MerchantOpenPill
               busy={merchantOrderConfig.loading || merchantOrderConfig.saving !== "none"}
@@ -1284,8 +1287,11 @@ export function OnlineOrders({
                     : undefined
               }
               disabled={!merchantOrderConfig.available || !merchantId}
+              enabledLabel="接單中"
               error={merchantOrderConfig.saving === "none" ? merchantOrderConfig.error : null}
+              label="線上接單"
               merchantEnabled={merchantOrderConfig.merchantEnabled}
+              offLabel="已暫停"
               onChange={(next) => void merchantOrderConfig.setMerchantEnabled(next)}
               unknownHint="未讀到 Ledger 接單狀態，請去「設置 › 線上接單」重新整理。"
               variant="contained"

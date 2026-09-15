@@ -37,8 +37,12 @@ type AutoAcceptPillProps = {
    * - `plain`：無底，直接 label + 掣（快餐點餐介面用，慳位）
    */
   variant?: "plain" | "contained";
-  /** `sm`（11px，快餐介面）/ `md`（12px，訂單頁）。 */
-  size?: "sm" | "md";
+  /**
+   * - `xs`（11px label / 12px 掣面，約 80 × 40px）：**精簡版**，
+   *   快餐訂單列用（2026-09-15 J 要求「所有按鈕同一行」＋ 同隔籬嘅接單總掣對齊）
+   * - `sm`（11px，快餐介面舊版）/ `md`（12px，訂單頁）
+   */
+  size?: "xs" | "sm" | "md";
 };
 
 export function AutoAcceptPill({
@@ -55,18 +59,36 @@ export function AutoAcceptPill({
 }: AutoAcceptPillProps) {
   const contained = variant === "contained";
   const sm = size === "sm";
+  const xs = size === "xs";
 
-  const labelClass = sm
-    ? "text-[11px] font-medium text-slate-500"
-    : "text-xs font-semibold text-slate-600";
-  const buttonSizeClass = sm
-    ? "rounded-full px-3 py-1 text-[11px] font-semibold"
-    : "rounded-full px-3 py-1 text-xs font-semibold";
+  const labelClass = xs
+    ? "text-[11px] font-semibold text-slate-600"
+    : sm
+      ? "text-[11px] font-medium text-slate-500"
+      : "text-xs font-semibold text-slate-600";
+  const buttonSizeClass = xs
+    ? "rounded-full px-1.5 py-[9px]"
+    : sm
+      ? "rounded-full px-3 py-1 text-[11px] font-semibold"
+      : "rounded-full px-3 py-1 text-xs font-semibold";
   const stateClass = enabled
     ? "bg-emerald-600 text-white"
     : contained
       ? "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"
       : "bg-slate-100 text-slate-700";
+
+  /*
+   * 🔴 `xs` 嘅掣面文字**一定要包一層 `<span>`**：
+   * `globals.css` 一條無 `@layer` 嘅 `button, input, select, textarea { font: inherit; }`
+   * 優先於 Tailwind utilities ⇒ 寫喺 `<button>` 身上嘅 `text-[12px]` 完全冇效（會變 16px）。
+   * 同 `MerchantOpenPill` 嘅 `xs` 完全同一個做法。
+   */
+  const stateText = enabled ? "開" : "關";
+  const stateNode = xs ? (
+    <span className="block text-[12px] font-semibold leading-[1.35]">{stateText}</span>
+  ) : (
+    stateText
+  );
 
   const inner = (
     <>
@@ -84,19 +106,25 @@ export function AutoAcceptPill({
         onClick={() => onChange(!enabled)}
         type="button"
       >
-        {enabled ? "開" : "關"}
+        {stateNode}
       </button>
       {error ? <span className="text-[11px] font-semibold text-red-600">· {error}</span> : null}
     </>
   );
 
   if (contained) {
+    // 🔴 `xs` 要**整組 padding 換走**（唔可以留 `px-3 py-1.5` 再加 `p-[3px]`）——
+    //    兩者 specificity 一樣，邊個贏睇產生順序；實測舊寫法會被 `px-3 py-1.5` 蓋過。
     return (
-      <div className="flex shrink-0 items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5">
+      <div
+        className={`flex shrink-0 items-center rounded-full bg-slate-100 ${
+          xs ? "gap-1.5 p-[3px]" : "gap-2 px-3 py-1.5"
+        }`}
+      >
         {inner}
       </div>
     );
   }
 
-  return <div className="flex shrink-0 items-center gap-2">{inner}</div>;
+  return <div className={`flex shrink-0 items-center ${xs ? "gap-1.5" : "gap-2"}`}>{inner}</div>;
 }

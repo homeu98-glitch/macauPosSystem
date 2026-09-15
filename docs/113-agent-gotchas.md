@@ -1670,6 +1670,70 @@ Tailwind v4 把所有 utilities 放入 `@layer utilities` ⇒ 呢條 reset **蓋
    `text-*` / `font-*` 即刻生效 → 大量按鈕由 16px 變返設計值（`text-xs` 12px、
    `font-semibold` 由 400 變 600）→ **版面會大範圍變動，唔可以當順手做**。
 
+### 🔴 2026-09-15 續：精簡 pill（`size="xs"`）就係靠呢條規則食死位
+
+`AutoAcceptPill` / `MerchantOpenPill` 新增 `size="xs"`（約 **104 × 40px**，快餐訂單列嘅
+自動接單係 **80 × 40px**）。關鍵：
+
+- **掣面文字一定要包一層 `<span className="block text-[12px] font-semibold leading-[1.35]">`**。
+  寫喺 `<button>` 身上嘅 `text-[12px]` 係死碼（上面條 rule 蓋走）→ 掣面變 16px → 精簡 pill 爆位。
+  `span` 唔受影響 ⇒ 字級寫落 `span` 就穩。
+- 外底間距：`xs` 用 `p-[3px]`，`md` 用 `px-3 py-1.5`。
+
+### 🔴 `p-[3px]` 同 `px-3 py-1.5` **唔可以並存** —— 邊個贏睇產生順序（2026-09-15 實測）
+
+第一版寫成 `rounded-full bg-slate-100 px-3 py-1.5 ${xs ? "p-[3px]" : ""}`，
+以為 arbitrary value 會蓋過 `px-3`。**錯**：兩者同屬 `@layer utilities`、specificity 一樣
+（都係單一 class），所以純粹睇 Tailwind 產生 CSS 嘅先後 —— 實測 **`px-3 py-1.5` 贏**，
+pill 量到 **122 × 46**（唔係設計嘅 104 × 40），而且**完全唔會報錯**。
+
+```tsx
+/* ✗ 122 × 46 */
+`... bg-slate-100 px-3 py-1.5 ${xs ? "gap-1.5 p-[3px]" : "gap-2"}`
+/* ✓ 104 × 40 —— 整組 padding 二選一 */
+`... bg-slate-100 ${xs ? "gap-1.5 p-[3px]" : "gap-2 px-3 py-1.5"}`
+```
+
+⇒ 鐵律：**同一個屬性唔可以有兩個 Tailwind class 並存**（包括 `px-3` vs `p-[3px]` 呢種
+「一大一小」組合）。要切換就成組換，唔好靠「後寫嘅贏」。
+
+## 🔴 標題列「所有按鈕同一行」嘅做法（2026-09-15 · 桌台總覽）
+
+**背景**：商家要求堂食桌台總覽標題列**唔准掉第二行**。實測 iPad 橫向（1084px，viewer 1084 −
+側欄 72 − 快捷欄 280 = main 732，扣 padding 32 ⇒ **可用 700px**），原本 6 件控件要 1,076px。
+
+**做法（三個配套，唔可以只做一個）**
+
+1. **CSS 用 `grid-cols-[minmax(0,1fr)_auto]` ＋ 右側控件簇 `flex-nowrap`**。
+   標題欄係 `minmax(0,1fr)` ⇒ 佢會吸收剩餘寬度（副標題自動 wrap），
+   右側 `auto` 欄永遠唔會被壓 ⇒ **控件簇永遠唔會掉行**。唔靠 magic number 遷就。
+2. 刪走「查看線上訂單」文字掣（入口仍在側欄「訂單」＋右欄「快捷操作 › 線上訂單」）。
+3. 「手動更新 ＋ 同步健康」合併成一個 **42 × 42 icon 掣**（`pos-tools-menu.tsx`，
+   撳落去彈小選單 —— 商家正常唔會撳，唔值得長期霸橫向空間）。
+   有待上傳出琥珀角標（真源 `useSyncHealth()`，同側欄一致）。
+4. 兩粒接單總掣用 `size="xs"`（各 104px）。
+
+**實測結果（真 Chromium，1084 × 820，未開工 = 最擠）**：
+控件簇 **338px / 1 行**；`開工 64×44`、`icon 42×42`、`線上接單 104×40`、`線下接單 104×40`。
+
+⚠️ 副標題要**用 `text-xs`（12px）**：`text-sm`（14px）自然闊約 376px > 標題欄 350px ⇒ 會 wrap
+成兩行、header 由 71px 變 95px。12px 只需約 322px ⇒ 一行。
+
+## 兩個接單總掣嘅命名／顏色（2026-09-15 商家拍板）
+
+| 掣 | 元件 | 真源 | label | 掣面（開 / 關） |
+|---|---|---|---|---|
+| 線上接單 | `online-open-pill.tsx` | Ledger `merchant_enabled` | 線上接單 | **接單中** / 已暫停（白底琥珀） |
+| 線下接單 | `store-open-pill.tsx` | POS DB `pos_store_status.is_open`（0039） | 線下接單 | **營業中** / 已暫停（**紅底**） |
+
+🔴 兩粒會**並排**出現（桌台總覽標題列、快餐訂單列），所以**措辭同顏色一定要分開**：
+兩個都寫「營業中」＋同一個綠 ⇒ 收銀撳錯 = 停業。
+掣面文字由 `MerchantOpenPill` 嘅 `enabledLabel` / `offLabel` / `offTone` 提供，唔再寫死。
+
+⚠️ `MerchantOpenPill` 嘅**預設 label 已由「接單」改成「線上接單」**（2026-09-15）。
+「線下接單」唔係同一粒掣：佢係**店內營業**（擋掃碼點餐＋自助點餐機），
+側欄商店名卡嗰個入口**保留**，兩邊共用 `useStoreOpenToggle()` 同一個 module store。
+
 **影響面實測（2026-09-14）**：掃 439 個 `src/**/*.tsx` → **697 個 `<button>`**，
 其中 **478 個帶 `text-*`（font-size）**、**469 個帶 `font-*`（weight）** ⇒ 呢批按鈕今日
 一律係「繼承父層尺寸」，唔係 class 寫嗰個。（所以好多地方「睇落冇事」＝父層咁啱同級；

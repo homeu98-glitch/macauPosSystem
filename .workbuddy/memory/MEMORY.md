@@ -17,11 +17,12 @@
 - 🔴 結帳／免單／完成訂單嘅目標單一律 `resolveSettleTargetOrder()`（明確 id → 當前工作台 → **只限當前枱**），**唔准**全店 `orders.find()`（實案：A03 結帳去咗第二張枱）。「可結帳」=`isSettleableOrder()`（`paid`＋真枱，**唔要求** `onlineOrderId`）；桌台標籤同入口共用同一 predicate。
 - 🔴 **「RPC 冇拋錯」≠ 遠端狀態已改**：排位爬梯嘅無效轉換一律跳過 → 走完唔代表到咗 `completed`（已取消單都報成功）⇒ 要驗證（讀返狀態）或遠端親口回成功。⚠️ `invalid transition` 被 `mapRpcErrorMessage` **譯成中文**「目前狀態不可執行此操作。」，判定要同時認中文。爬梯口徑 = `lib/pos/online-dinein-ladder.ts`；兩個入口都要檢查 `ledgerProgress`。docs/113 §(3b)(3c)。
 - 🔴 狀態文案口徑唯一：**只有自取**（`pickup`／`takeaway`）= 「待取餐」，其餘（堂食／外賣／外送）= 「待交付」。真源 = `order-mapper.ledgerStatusLabel()`，唔准各處自創。
+- 🔴 兩個接單總掣**唔可以同名／同色**：**線上接單**（Ledger `merchant_enabled`，掣面「接單中／已暫停」）＝ `online-open-pill.tsx`；**線下接單**（`pos_store_status.is_open`＝店內營業、擋掃碼＋kiosk，掣面「營業中／已暫停·紅」）＝ `store-open-pill.tsx`。精簡 pill `size="xs"` 掣面字級**一定要寫喺掣內 `<span>`**；`p-[3px]` 同 `px-3 py-1.5` **唔可以並存**（同 layer、同 specificity → 邊個贏睇產生順序，會靜默變 122×46 唔報錯）。
 - 🔴 兩個「營業中」唔准撈埋：`merchant_enabled`（Ledger，= **線上接單**，只擋會員通）vs `pos_store_status.is_open`（POS DB 0039，= **店內營業**，擋掃碼／kiosk）。權威閘 = `/api/pos/sync` §2.55（只擋匿名，收銀台逃生門）；兩邊**一律 fail-open**（讀唔到＝營業中）；客端 gating **必須**加「未落單」條件（否則蓋走扣款結果）。`MerchantOpenPill` 預設確認文案寫死「堂食唔受影響」→ 新開關要自己傳 `confirmMessage`。
 
 - 🔴 `<button>`／`<input>`／`<select>`／`<textarea>` 上面嘅 `text-*`／`font-*` **一律唔生效** —— `globals.css` 有一條**無 layer** 嘅 `font: inherit` 壓過 Tailwind utilities（實案：側欄商店名卡由 `<div>` 改 `<button>` 之後 11px→16px，改 px 完全冇反應）。要指定按鈕字級就寫喺按鈕嘅**仔元素**身上。詳見 docs/113 同名節。
 
-- 🔴 **iPad「加入主頁」（standalone）撳輸入欄位 → focus ring＋游標有到，但系統鍵盤完全唔彈**（同一部機 Safari 分頁正常）＝ iOS/iPadOS 側 bug（WebKit #279904／#235891），**唔係我哋代碼**（線上 viewport 已無 `user-scalable=no`，已部署）。**更新系統唔保證修好**（iPadOS 26.3.1、26.5 都仲有報告；26.6 更新說明冇任何鍵盤／WebKit 修正），刪主頁圖示重裝亦試過無效。⇒ iPad 上**一律唔可以依賴系統鍵盤**（登入頁要自繪鍵盤）。詳見 memory/2026-09-14.md。
+- 🔴 **iPad「加入主頁」(standalone) 撳輸入欄唔彈系統鍵盤** ＝ iOS/WebKit bug（#279904／#235891），唔係我哋代碼；更新系統／刪圖示重裝都無效 ⇒ iPad **一律唔可以依賴系統鍵盤**（登入頁要自繪鍵盤）。詳見 memory/2026-09-14.md。
 
 ## 二、環境（呢部機）
 - ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；**冇 coreutils** → 用 `node node_modules/{typescript/bin/tsc,eslint/bin/eslint.js}`＋`node --test`；檔案操作用 Read/Glob/Grep。
