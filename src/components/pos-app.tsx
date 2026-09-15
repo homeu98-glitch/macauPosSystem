@@ -1086,8 +1086,22 @@ export function PosApp() {
   // 收銀 mount / 重連 / queue 清空時一次過 pull 現有 state（event-driven，非 polling）
   useEffect(() => {
     if (offlineMode) return;
-    // 方案B：若本機仍有待同步事件，先不要拉取後台狀態，避免後台舊資料覆蓋本機即時狀態。
-    if (queue.some((event) => event.status !== "synced")) return;
+    // 方案B：若本機仍有**真正未推**嘅事件（pending），先不要拉取後台狀態。
+    //
+    // 🔴 2026-09-15 修（穩定性，最重要一項）：以前條件係 `status !== "synced"`，
+    // 即 `failed` 同 `skipped` 都會閘住 backfill。但兩者都可以係**終態**：
+    //   - `skipped` + `user-discarded`：`discardFailedSyncEvent()` 寫入，**永遠唔會變 synced**；
+    //   - `skipped` + `server-newer`：雲端已有較新版本，改由對賬守護補推，都唔會變 synced。
+    // ⇒ 只要本機殘留**一筆**呢類事件，`loadRuntimeState()` 就**永遠唔會再執行**，
+    //   其他終端／Kiosk／掃碼客落嘅新單，喺 realtime 斷線期間漏掉嘅部分**永遠補唔返**
+    //   （＝商家最怕嘅「掉線後永久收唔到單」）。
+    //
+    // 為何只擋 `pending` 仍然安全：
+    //   ① `pending` 才真正代表「我哋仲打算推呢件事件」，先至有被後台舊值覆蓋嘅風險；
+    //   ② backfill 本身係 `mergeOrderLists(loadOrders(), current, payload.orders)`
+    //      = **以本機為底**（見下方 1141 行），再過 tombstone（`filterResurrectedOrders`）
+    //      同孤兒單隔離，**本來就唔會覆蓋本機即時狀態** —— 原註解擔心嘅情況已被下面兩道防線處理。
+    if (queue.some((event) => event.status === "pending")) return;
     void loadRuntimeState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, runtimeRefreshTick, queue]);
@@ -1699,7 +1713,10 @@ export function PosApp() {
     onResubscribed: () => {
       // P0-2（R2）：加返 queue 同步保護，避免重連競態——未 sync 嘅離線新單未入 DB 前就 pull 清走。
       if (offlineMode) return;
-      if (queue.some((event) => event.status !== "synced")) return;
+      // 🔴 2026-09-15 修：同上面 mount effect 一樣，只擋真正未推嘅 `pending`。
+      // 舊條件 `status !== "synced"` 會被終態 `skipped` / `failed` 永久閘死 → 重連後
+      // 唔會 backfill，等於「realtime 一斷就永遠收唔返漏掉嘅單」。
+      if (queue.some((event) => event.status === "pending")) return;
       void loadRuntimeState();
     },
     /**
@@ -5292,7 +5309,7 @@ export function PosApp() {
                           ) : (
                             <>
                               <button
-                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -5302,9 +5319,9 @@ export function PosApp() {
                               >
                                 -
                               </button>
-                              <div className="w-7 text-center text-sm font-semibold text-slate-800">{item.quantity}</div>
+                              <div className="w-8 shrink-0 text-center text-base font-semibold text-slate-800">{item.quantity}</div>
                               <button
-                                className="grid h-7 w-7 place-items-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();

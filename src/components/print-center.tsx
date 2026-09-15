@@ -12,6 +12,7 @@ import { isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { isCompanionConfigured } from "@/lib/print-bridge/companion-config";
 import { isRelayConfigured } from "@/lib/print-bridge/relay-config";
 import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, findPosOrderForLedger, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
   getLocalSettingsKey,
@@ -396,7 +397,11 @@ export function PrintCenter() {
       // 中繼代理心跳：分辨「代理離線（冇人認領）」定「代理在線但認領咗印唔出」。
       const storeId = resolveStoreId();
       if (alive && storeId) {
-        void fetch(`/api/pos/print-agent/pair-status?storeId=${encodeURIComponent(storeId)}`)
+        // 🔒 2026-09-15：pair-status 已加鑑權閘 → 必須帶 POS 終端憑證。
+        void posDeviceAuthHeadersFresh()
+          .then((headers) =>
+            fetch(`/api/pos/print-agent/pair-status?storeId=${encodeURIComponent(storeId)}`, { headers }),
+          )
           .then((res) => (res.ok ? res.json() : null))
           .then((json: { paired?: boolean; lastSeenAt?: string | null } | null) => {
             if (alive && json) {
@@ -1029,7 +1034,11 @@ export function PrintCenter() {
     if (!storeId) return;
     let res: Response;
     try {
-      res = await fetch(`/api/pos/print-jobs/status?storeId=${encodeURIComponent(storeId)}`);
+      res = await fetch(`/api/pos/print-jobs/status?storeId=${encodeURIComponent(storeId)}`, {
+        // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+        headers: await posDeviceAuthHeadersFresh(),
+        cache: "no-store",
+      });
     } catch {
       return; // 離線 / 網絡錯 → 靜默，下個 tick 再試
     }

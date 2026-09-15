@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
@@ -15,9 +16,17 @@ export async function GET(request: Request) {
   // 🛡️ 加固（db review §4.1 #2）：冇 storeId 唔可以拎「全平台 updated_at 最新一行」，
   // 否則會把別店 terminal 配置（含打印機綁定 / local_settings）拉落嚟（見 docs/98 問題二）。
   // 冇 storeId → 返 null，寧可本機 localStorage 配置生效，都唔好洩露別店 terminal 設定。
+  //
+  // ⚠️ 呢個 early-return 刻意放喺 auth 閘**之前**：佢本來就唔會洩露任何嘢，
+  // 保留原位可以令「mock / 冇 storeId」嘅既有回應完全唔變。
   if (!storeId) {
     return NextResponse.json({ ok: true, deviceConfig: null, localSettings: null });
   }
+
+  // 🔒 2026-09-15 資安加固：以前任何知 storeId 嘅人（枱 QR 已公開）都可以讀走該店
+  // terminal 設定；而 `local_settings.printZones` 正是 **KDS 分區嘅權威來源**。
+  const denied = posRouteAuthGuard(request, storeId, "pos/device-config");
+  if (denied) return denied;
 
   const { data, error } = await supabase
     .from("pos_device_configs")
@@ -49,6 +58,14 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const payload = await request.json();
   const supabase = getSupabaseServerClient();
+
+  // 🔒 2026-09-15 資安加固：只喺真正會寫 DB 嘅情況（supabase 已配置）才要求憑證 ——
+  // 未配置時本端點本來就唔寫任何嘢，保留原有「只回 ok」行為完全不變。
+  if (supabase) {
+    const storeId = typeof payload?.storeId === "string" ? payload.storeId.trim() || null : null;
+    const denied = posRouteAuthGuard(request, storeId, "pos/device-config");
+    if (denied) return denied;
+  }
 
   if (supabase && payload?.action !== "test-print") {
     const { error } = await supabase.from("pos_device_configs").upsert(

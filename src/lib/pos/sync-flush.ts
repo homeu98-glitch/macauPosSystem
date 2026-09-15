@@ -69,6 +69,24 @@ const MAX_EVENTS_PER_FLUSH = 200;
 const FLUSH_INTERVAL_MS = 30_000;
 
 /**
+ * `POST /api/pos/sync` 嘅**客戶端硬逾時**（2026-09-15 加固）。
+ *
+ * 點解要有：以前呢個 fetch **冇 signal、冇 timeout**。流動網絡 half-open
+ * （連住 AP 但實際無互聯網）時 fetch 可以懸掛幾分鐘都唔 reject。
+ *
+ * 為咩會拖冧全店出紙：`src/lib/print-bridge/dispatch.ts` 有 module-level `isFlushing` 鎖，
+ * 而 relay transport 就係 `await flushPosSyncQueue({ silent: true })`
+ * （`src/lib/print-bridge/relay-transport.ts`）。fetch 一懸掛 → 鎖永遠唔放 →
+ * `PrintFlushWorker` 每 2.5 秒嘅 tick 全部 `return` → **連 native / companion 路徑都一齊停擺**。
+ *
+ * 20 秒係權衡：健康請求正常 < 2 秒；Vercel function 本身亦有上限，
+ * 所以 20 秒只會喺「真係懸掛」時觸發，唔會誤殺慢請求。
+ * 逾時走 catch 分支 → 保留 `pending`、**唔加 attempts**（同網絡抖動一樣待遇），
+ * 即係行為同「fetch 失敗」完全一致，唔會新增任何失敗態。
+ */
+const SYNC_FETCH_TIMEOUT_MS = 20_000;
+
+/**
  * `attempts` 到頂之後嘅**慢速重試**間隔（docs/112 M2，2026-09-10）。
  *
  * 舊行為：attempts ≥ MAX_SYNC_ATTEMPTS → `failed` → `selectFlippable` 永遠唔揀
@@ -554,6 +572,9 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   if (flippable.length === 0) return;
 
   let result: Response;
+  // 2026-09-15 加固：手動 AbortController（唔用 `AbortSignal.timeout`，因為舊 iOS Safari 唔支援）。
+  const controller = new AbortController();
+  const timeoutHandle = window.setTimeout(() => controller.abort(), SYNC_FETCH_TIMEOUT_MS);
   try {
     result = await fetch("/api/pos/sync", {
       method: "POST",
@@ -561,6 +582,9 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
       // 冇憑證 → server 只接受匿名通道（ORDER_CREATED / ORDER_UPDATED），
       // 收銀端嘅結帳 / 刪單 / 打印任務會被拒。
       headers: { "Content-Type": "application/json", ...posDeviceAuthHeaders() },
+      // 2026-09-15 加固：硬逾時，防止 half-open 網絡令 flush 永遠唔返回
+      // （會經 dispatch.ts 嘅 isFlushing 鎖拖冧全店打印）。
+      signal: controller.signal,
       body: JSON.stringify({
         ...(storeId ? { storeId } : {}),
         events: flippable.map((e) => ({
@@ -577,10 +601,12 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
       }),
     });
   } catch (err) {
-    // 離線 / 網絡錯誤：保留 pending，唔加 attempts（避免純網絡抖動快速 burn 掉 quota）
-     
+    // 離線 / 網絡錯誤 / 逾時：保留 pending，唔加 attempts（避免純網絡抖動快速 burn 掉 quota）
+    // 逾時（AbortError）刻意行同一條路 —— 待遇同「fetch 失敗」一致，唔新增失敗態。
     console.warn("[pos-sync-flush] fetch 失敗（保留 pending 等待下次 flush）：", err);
     return;
+  } finally {
+    window.clearTimeout(timeoutHandle);
   }
 
   const failedAt = new Date().toISOString();

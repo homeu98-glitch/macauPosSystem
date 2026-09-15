@@ -51,6 +51,8 @@ type KdsRealtimeHandlers = {
 };
 
 const RECONNECT_DELAY_MS = 3000;
+/** 指數退避上限（2026-09-15）：3s → 6s → 12s → 24s → 30s 封頂。 */
+const MAX_RECONNECT_DELAY_MS = 30_000;
 const RESUBSCRIBE_DEBOUNCE_MS = 3000;
 
 export function useKdsRealtime(
@@ -73,6 +75,10 @@ export function useKdsRealtime(
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let reconnectTimer: number | null = null;
     let resubscribeTimer: number | null = null;
+    /** 連續重連次數（算指數退避）；成功 SUBSCRIBED 歸零。 */
+    let reconnectAttempt = 0;
+    /** 防重入（2026-09-15 加固）：見 use-pos-realtime.ts 同名註解。 */
+    let subscribeInFlight = false;
 
     function scheduleResubscribedSync() {
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);
@@ -83,11 +89,17 @@ export function useKdsRealtime(
 
     async function subscribe() {
       if (cancelled || !supabase) return;
+      // 防重入：已有一次 subscribe 喺 in-flight 就唔好再開。
+      if (subscribeInFlight) return;
+      subscribeInFlight = true;
+      try {
       if (channel) {
-        await supabase.removeChannel(channel);
+        // 先清空變數再 await —— 避免 await 期間其他人讀到一條「即將被移除」嘅 channel。
+        const stale = channel;
         channel = null;
+        await supabase.removeChannel(stale);
       }
-
+      if (cancelled || !supabase) return;
       const filter = `store_id=eq.${storeId}`;
       channel = supabase
         .channel(`pos-kds:${storeId}`)
@@ -112,14 +124,29 @@ export function useKdsRealtime(
         )
         .subscribe((status) => {
           handlersRef.current.onStatusChange?.(status);
-          if (status === "SUBSCRIBED") scheduleResubscribedSync();
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          if (status === "SUBSCRIBED") {
+            // 連上就重置退避。
+            reconnectAttempt = 0;
+            scheduleResubscribedSync();
+            return;
+          }
+          // 2026-09-15 加固：加埋 `CLOSED`。
+          // KDS 另外有 60 秒看門狗兜底（use-kds-board.ts），但看門狗只救到「資料唔更新」，
+          // 救唔到「channel 已死但仍佔住連線」；呢度直接令佢自我復原。
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
             if (reconnectTimer) window.clearTimeout(reconnectTimer);
+            // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
+            const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
+            reconnectAttempt += 1;
             reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
               void subscribe();
-            }, RECONNECT_DELAY_MS);
+            }, delay);
           }
         });
+      } finally {
+        subscribeInFlight = false;
+      }
     }
 
     function onVisibilityChange() {

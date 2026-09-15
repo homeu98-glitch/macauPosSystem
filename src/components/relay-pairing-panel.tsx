@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import { isRunningInNativeShell } from "@/components/pwa-install-button";
 import { loadAuthSession } from "@/lib/storage";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import {
   clearRelayPairing,
   getRelayPairing,
@@ -133,6 +134,8 @@ export function RelayPairingPanel() {
       try {
         const r = await fetch(
           `/api/pos/print-agent/pair-status?storeId=${encodeURIComponent(storeId)}`,
+          // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+          { headers: await posDeviceAuthHeadersFresh() },
         );
         const data = (await r.json().catch(() => ({}))) as {
           paired?: boolean;
@@ -253,8 +256,12 @@ export function RelayPairingPanel() {
     try {
       await fetch("/api/pos/print-agent/unpair", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: pairing.agentId, storeId: pairing.storeId }),
+        // 🔒 2026-09-15：該端點已加鑑權閘（以前任何人知 agentId + storeId 就可以
+        // revoke 他店中繼機 → 雲端打印中斷）。兩條合法路徑一齊帶，最穩陣：
+        //   ① `Authorization`：本機已登入嘅 POS 終端憑證（自動續期）；
+        //   ② `token`：這個 agent 自己嘅 token（server 亦接受 agent 自證）。
+        headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
+        body: JSON.stringify({ agentId: pairing.agentId, storeId: pairing.storeId, token: pairing.token }),
       });
     } catch {
       /* 雲端 revoke 失敗都照清本地，避免卡死 */

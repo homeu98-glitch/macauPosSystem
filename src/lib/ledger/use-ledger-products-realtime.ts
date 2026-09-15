@@ -17,6 +17,8 @@ type RealtimeHandlers = {
 
 const RESUBSCRIBE_DEBOUNCE_MS = 3000;
 const RECONNECT_DELAY_MS = 3000;
+/** 指數退避上限（2026-09-15）：3s → 6s → 12s → 24s → 30s 封頂。 */
+const MAX_RECONNECT_DELAY_MS = 30_000;
 const SESSION_RETRY_DELAY_MS = 1500;
 
 /**
@@ -40,10 +42,17 @@ export function useLedgerProductsRealtime(merchantId: string | null, enabled: bo
     let reconnectTimer: number | null = null;
     let sessionRetryTimer: number | null = null;
     let channel: ReturnType<typeof supabase.channel> | null = null;
+    /** 連續重連次數（算指數退避）；成功 SUBSCRIBED 歸零。 */
+    let reconnectAttempt = 0;
+    /** 防重入（2026-09-15 加固）：見 use-pos-realtime.ts 同名註解。 */
+    let subscribeInFlight = false;
 
     async function subscribe() {
       if (cancelled || !supabase) return;
-
+      // 防重入：已有一次 subscribe 喺 in-flight 就唔好再開。
+      if (subscribeInFlight) return;
+      subscribeInFlight = true;
+      try {
       const accessToken = await ensureLedgerSession();
       if (!accessToken) {
         if (sessionRetryTimer) window.clearTimeout(sessionRetryTimer);
@@ -76,13 +85,26 @@ export function useLedgerProductsRealtime(merchantId: string | null, enabled: bo
         )
         .subscribe((status) => {
           handlersRef.current.onStatusChange?.(status);
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          if (status === "SUBSCRIBED") {
+            // 連上就重置退避。
+            reconnectAttempt = 0;
+            return;
+          }
+          // 2026-09-15 加固：加埋 `CLOSED`（以前一入 CLOSED 就永久靜默，餐牌改動收唔到）。
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
             if (reconnectTimer) window.clearTimeout(reconnectTimer);
+            // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
+            const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
+            reconnectAttempt += 1;
             reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
               void subscribe();
-            }, RECONNECT_DELAY_MS);
+            }, delay);
           }
         });
+      } finally {
+        subscribeInFlight = false;
+      }
     }
 
     function onVisibilityChange() {

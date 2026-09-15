@@ -75,14 +75,21 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     });
   };
 
+  /**
+   * 🔴 2026-09-15：`unhandledrejection` **刻意唔再觸發全屏修復畫面**（改為只 log）。
+   *
+   * 點解要改：呢個 app 有大量 fire-and-forget 非同步工作（同步 flush、打印派發、
+   * Realtime 重連、背景對賬守護…），佢哋 reject 之後**本身已經有自己嘅處理路徑**
+   * （保留 pending、入 outbox 遲啲重試、退避重連）。若將任何一個未 catch 嘅 promise
+   * rejection 都升級做全屏「頁面修復模式」，收銀員就會因為**一次無害嘅網絡失敗**
+   * 而被踢出收銀畫面 —— 比原本（只 console warn）**更差**，屬回歸。
+   *
+   * 所以：只 log，唔改 state（＝維持掛載前嘅既有行為）。
+   * 真正需要攔截嘅係 **render 期錯誤**（`getDerivedStateFromError`）
+   * 同 **window error**（`handleWindowError`）—— 嗰兩條路照舊觸發修復畫面。
+   */
   handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-    if (this.state.hasError) return;
-    const normalized = normalizeError(event.reason);
-    this.setState({
-      hasError: true,
-      message: normalized.message || "頁面初始化失敗",
-      detail: normalized.detail,
-    });
+    console.error("[app-error-boundary] 未處理嘅 promise rejection（唔會中斷畫面）：", event.reason);
   };
 
   clearLocalDataAndReload = async () => {

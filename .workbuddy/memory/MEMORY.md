@@ -1,54 +1,44 @@
-# 專案記憶索引（macauPos / macauPosSystem）
+# macauPos 記憶索引
 
-> ⚠️ 上限 **3k 字元**，超咗**靜默截斷**。只放最高頻紅線。
-> 詳細坑總表 → [`docs/113-agent-gotchas.md`](../docs/113-agent-gotchas.md)（**改動前必讀**）。
+> 上限 3k（超咗截斷）。必讀 `docs/113-agent-gotchas.md`；2026-09-15 報告在 `docs/reviews/`＋`docs/integration/print-relay-hardening-brief.md`。
 
-## 一、改動前必查
-- 🔴 建單／接單後必須 `appendPrintJobsWithSync()`；`RelayTransport.send()` 係 no-op → 淨 `savePrintJobs()` ＝零出紙＋零紅標。
-- 🔴 出紙只喺**內容事件**（新單／改單／加菜／結帳）發生 ——「轉換／採納／排位」一律**唔出紙**。同單去重判準用 `job.orderId`（＝`ledger-<id>`），唔可以靠 `mergePrintJobs`（只按 `job.id`）。docs/113「接單已出紙 → 排位唔可以再出」。
-- 🔴 「改咗代碼但行為唔變」＝① 出紙程式冇 re-build／冇擰 `versionCode`（4 份：relay／hub／android／companion）② 收銀機／desktop 載 **Vercel 部署** → 本機改完要 **deploy** 先生效。
-- 🔴 **列枱／選枱**一律用 `buildDisplayFloors(bootstrapTables, localSettings.floors)`。
-- 🔴 **Ledger 線上單**真欄名：`selected_specs`／`product_id`／`line_note`（防禦式解析）。建 `OrderItem` 唯一入口 = `mapDetailToOrderItems()`。
-- 🔴 `resolveLedgerPosOrderForReceipt()` 唔可以無條件短路：有 `detail` 一定重建，但要保留本機 `status`／`prepaidAmount`。
-- 🔴 `PrintJob` 必帶 `kind`；冇 `template` 時兜底渲染按 kind 分流。
-- 🔴 `git` 唔喺 PATH → 全路徑 `…/PortableGit/versions/1.2.0/cmd/git.exe`；**push 加 `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never`**（唔加＝無聲掛住等憑證窗）。
-- 🔴 加 `PosLocalSettings` 新欄**必填** → tsc 逼你補 `normalizePosLocalSettings`＋`defaultPosLocalSettings`。
-- 🔴 已收款單（快餐 counter／排位單／**掃碼已付單**）加菜**必須保留 `paid`**；打返 `sent_to_kitchen` → 雲端 `paid-downgrade` 拒收整條 `ORDER_UPDATED` → **items 上唔到雲**（只剩金額 patch）→ 收據「1 項 $75、總額 160」。docs/113 §(3b)。
-- 🔴 結帳／免單／完成訂單嘅目標單一律 `resolveSettleTargetOrder()`（明確 id → 當前工作台 → **只限當前枱**），**唔准**全店 `orders.find()`（實案：A03 結帳去咗第二張枱）。「可結帳」=`isSettleableOrder()`（`paid`＋真枱，**唔要求** `onlineOrderId`）；桌台標籤同入口共用同一 predicate。
-- 🔴 **「RPC 冇拋錯」≠ 遠端狀態已改**：排位爬梯嘅無效轉換一律跳過 → 走完唔代表到咗 `completed`（已取消單都報成功）⇒ 要驗證（讀返狀態）或遠端親口回成功。⚠️ `invalid transition` 被 `mapRpcErrorMessage` **譯成中文**「目前狀態不可執行此操作。」，判定要同時認中文。爬梯口徑 = `lib/pos/online-dinein-ladder.ts`；兩個入口都要檢查 `ledgerProgress`。docs/113 §(3b)(3c)。
-- 🔴 狀態文案口徑唯一：**只有自取**（`pickup`／`takeaway`）= 「待取餐」，其餘（堂食／外賣／外送）= 「待交付」。真源 = `order-mapper.ledgerStatusLabel()`，唔准各處自創。
-- 🔴 兩個接單總掣**唔可以同名／同色**：**線上接單**（Ledger `merchant_enabled`，掣面「接單中／已暫停」）＝ `online-open-pill.tsx`；**線下接單**（`pos_store_status.is_open`＝店內營業、擋掃碼＋kiosk，掣面「營業中／已暫停·紅」）＝ `store-open-pill.tsx`。精簡 pill `size="xs"` 掣面字級**一定要寫喺掣內 `<span>`**；`p-[3px]` 同 `px-3 py-1.5` **唔可以並存**（同 layer、同 specificity → 邊個贏睇產生順序，會靜默變 122×46 唔報錯）。
-- 🔴 兩個「營業中」唔准撈埋：`merchant_enabled`（Ledger，= **線上接單**，只擋會員通）vs `pos_store_status.is_open`（POS DB 0039，= **店內營業**，擋掃碼／kiosk）。權威閘 = `/api/pos/sync` §2.55（只擋匿名，收銀台逃生門）；兩邊**一律 fail-open**（讀唔到＝營業中）；客端 gating **必須**加「未落單」條件（否則蓋走扣款結果）。`MerchantOpenPill` 預設確認文案寫死「堂食唔受影響」→ 新開關要自己傳 `confirmMessage`。
+## 一、API 鑑權
+- 🔴 44/57 route 曾無鑑權、**冇 `middleware.ts`**；server client 用 service_role **繞 RLS** ⇒ 無鑑權＝裸奔 DB。
+- 加閘用 `posRouteAuthGuard(request, storeId, tag)`，**放喺「未配置 Supabase／缺 storeId」early-return 之後**；客戶端一律 `posDeviceAuthHeadersFresh()`（唔續期開過夜必 401）。
+- **匿名端點唔可以加閘**：bootstrap GET、sequence、sync 匿名通道、ledger/member-login、order-lookup、kds/*。
+- 回滾掣 `POS_REQUIRE_DEVICE_AUTH=0`（要 redeploy）。`print-agent/pair` **只由 APK 呼叫** → 唔可以硬加閘。
 
-- 🔴 `<button>`／`<input>`／`<select>`／`<textarea>` 上面嘅 `text-*`／`font-*` **一律唔生效** —— `globals.css` 有一條**無 layer** 嘅 `font: inherit` 壓過 Tailwind utilities（實案：側欄商店名卡由 `<div>` 改 `<button>` 之後 11px→16px，改 px 完全冇反應）。要指定按鈕字級就寫喺按鈕嘅**仔元素**身上。詳見 docs/113 同名節。
+## 二、DB
+- POS = `iyrywzormzisyppkokbi`、Ledger = `zymdemjflsckicwcinxl`（`.supabase.co`）。
+- **0016 已跑**、**0021 未跑**。
+- 🔴 `pos_orders`/`pos_print_jobs` anon policy **冇 store_id 過濾**（anon key 可讀 3 間店）。**唔可以就咁加**：收銀台/KDS/Hub 全用 anon key 訂 Realtime，加咗會**靜默收唔到事件**；根治要 per-store 簽名 token（0041 §3）。`0040` = pin_code 改 hash。
 
-- 🔴 **iPad「加入主頁」(standalone) 撳輸入欄唔彈系統鍵盤** ＝ iOS/WebKit bug（#279904／#235891），唔係我哋代碼；更新系統／刪圖示重裝都無效 ⇒ iPad **一律唔可以依賴系統鍵盤**（登入頁要自繪鍵盤）。詳見 memory/2026-09-14.md。
+## 三、打印
+- 🔴 建單/接單後必須 `appendPrintJobsWithSync()`；淨 `savePrintJobs()`＝**零出紙＋零紅標**。
+- 🔴 出紙只喺**內容事件**（新單/改單/加菜/結帳）；轉換/採納/排位**唔出紙**。去重靠 `job.orderId`。
+- 🔴 「改咗但行為唔變」＝① 冇 re-build／冇擰 `versionCode`（4 份）② 收銀機載 **Vercel 部署**。
+- 🔴 `PrintJob` 必帶 `kind`；`ttl` 係**絕對 epoch ms 期限**（`j.ttl > now*1000`）唔係時長，builder 冇寫 → 隔夜補印。收銀台只認 `failed` ⇒ `pending`/`printing` 卡住**零提示**。
 
-## 二、環境（呢部機）
-- ⚠️ `npm`／`npx` 經 git-bash **跑唔到**；**冇 coreutils** → 用 `node node_modules/{typescript/bin/tsc,eslint/bin/eslint.js}`＋`node --test`；檔案操作用 Read/Glob/Grep。
-- ⚠️ `node --test` 只可載入**零 runtime 依賴**純模組；import 要相對路徑＋`.ts`（`@/` 會爆）。
-- ⚠️ 本機**冇** `.env.local`、冇 supabase CLI → migration 要人手喺 Supabase SQL Editor 跑。
-- ⚠️ 可能有另一 session 同改同一 repo → `tsc` 偶發語法錯誤，重跑再判斷。
+## 四、訂單
+- 🔴 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱），唔准全店 `find()`；可結帳=`isSettleableOrder()`。
+- 🔴 已收款單加菜**必須保留 `paid`**，否則雲端 `paid-downgrade` 拒收整條 `ORDER_UPDATED`（items 上唔到雲）。
+- 🔴 「RPC 冇拋錯」≠ 遠端已改：爬梯（`online-dinein-ladder.ts`）無效轉換跳過 → 走完唔代表 `completed`。
+- 🔴 狀態文案唯一：只有 `pickup`/`takeaway`＝「待取餐」，其餘「待交付」（真源 `order-mapper.ledgerStatusLabel()`）。
+- 🔴 列枱/選枱用 `buildDisplayFloors(bootstrapTables, localSettings.floors)`。Ledger 真欄名 `selected_specs`/`line_note`；`resolveLedgerPosOrderForReceipt()` 保留本機 `status`/`prepaidAmount`。
 
-## 三、核心口徑
-- 收入認列 `isSaleCountable(o)`：只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`。
-- 日期一律 Macau 邊界 ISO（`ledger/report-period.ts`）。
-- 雲端讀到＝唯一可信源；雲端空＋成功＝空狀態，唔 fallback 本機。
-- store 隔離 strict `o.storeId === merchantId`；缺失一律唔拉。
-- 快餐單隔離靠 `isQuickCounterOrder`（`!onlineOrderId && tableId==="counter"`）。
-- 線上堂食：隔離閘 `isOnlineDineInOrder`（只認 `onlineOrderId`，**唔可以**改闊 —— 佢同時管推 Ledger 狀態）；可結帳／桌台標籤用 `isPaidDineInOrder`。
-- 報表 KPI 固定 `grid-cols-5`；合併 grid 必須刪中間 `</div>`。
-- admin 面板唔可以行 `/api/pos/state` → `adminOrderFetcher()`；取消線上單一律 RPC `merchant_resolve_order_change`。
-- 快餐／Kiosk 打印機真源 `pos_kiosk_settings`；`resolveJobPrinter()` 必須合併 kiosk 機。
+## 五、UI
+- 🔴 `button { font: inherit }`（globals.css **無 layer**）壓過 `text-*` ⇒ **按鈕字級寫喺仔元素**；`p-[3px]` 同 `px-3 py-1.5` **唔可以並存**。
+- 🔴 iPad standalone 撳輸入欄**唔彈鍵盤**（iOS bug）。`print-center.tsx` 有 16 個**既有** eslint error ⇒ `npm run lint` 本來就紅。
 
-## 四、主題索引（詳情見 docs/113 同名章節）
-| 主題 | 首要紅線 |
-|---|---|
-| 三端架構／打包 | desktop/Android 載**同一 Vercel 網址**；打包必加 `--config.win.signAndEditExecutable=false` |
-| React 依賴 | 父傳子物件／函式 prop **一定** stable identity，否則無限 re-render、整個 tab 撳唔到 |
-| 標籤機 | 型號按族過濾 `getLanModelOptions(family)`；`USB_PRINTER_DB` 兩份要同步 |
-| 打印機設定 UI | 品牌分組 `groupModelsByBrand()`。🔴 篩選狀態三入口必 reset（漏＝清單空白無 error） |
-| 登入／工作台 | `allowedModules` **缺失＝全部開通**；新模組先改 `module-catalog.ts` |
-| Realtime | 「reload 先見到」＝訂錯 Supabase 專案（`NEXT_PUBLIC_POS_SUPABASE_URL/_ANON_KEY`） |
-| Ledger 契約 | `docs/integration/ledger-client-api.md` §5.4（欄名防禦式解析） |
-| 預約單 | `scheduled_pickup_at` → `LedgerOnlineOrder.scheduledPickupAt` → `PosOrder.scheduledPickupAt`。判定／「快到‧逾時」**只准**用 `lib/pos/scheduled-pickup.ts`；UI 用 `components/scheduled-pickup-badge.tsx`；紙本 `scheduled_pickup` 係**靜態文字區塊**（唔使改下游三端、唔使擰 versionCode） |
+## 六、環境
+- ⚠️ `npm`/`npx` 跑唔到；**冇 coreutils**（ls/grep/head/sleep 全無）→ 用 Read/Glob/Grep 或 node fs。複雜 JS 寫 `.cjs`（`node -e` 會食反斜線）。
+- ⚠️ git 全路徑 `…/PortableGit/versions/1.2.0/cmd/git.exe`；push 加 `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never`。
+- ⚠️ `node --test` 只可載零依賴純模組。冇 `.env.local`／CLI → migration 人手跑。可能**另一 session 同改 repo**。UI 回歸 `tools/verify-pos-app-split.cjs`（**要 `localhost`**）。
+
+## 七、口徑
+- 收入認列 `isSaleCountable()`：只計 `settled`／帶 `onlineOrderId` 嘅 `paid`。日期用 Macau 邊界。報表 KPI 固定 `grid-cols-5`。
+- 雲端讀到＝唯一可信源；雲端空＋成功＝空狀態，唔 fallback 本機。store 隔離 `o.storeId === merchantId`。
+- 快餐單 `isQuickCounterOrder`；線上堂食 `isOnlineDineInOrder`（**唔可以改闊**）／`isPaidDineInOrder`。
+- admin 面板用 `adminOrderFetcher()`；取消線上單用 RPC `merchant_resolve_order_change`。快餐/Kiosk 打印機真源 `pos_kiosk_settings`。
+- 線上接單＝Ledger `merchant_enabled`／線下接單＝`pos_store_status.is_open`，**唔准同名同色**；權威閘 `/api/pos/sync` §2.55，兩邊 fail-open。
+- Realtime「reload 先見到」＝訂錯專案（`NEXT_PUBLIC_POS_SUPABASE_URL/_ANON_KEY`）。

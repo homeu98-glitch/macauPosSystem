@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ClientOnly } from "@/components/client-only";
+import { AppErrorBoundary } from "@/components/app-error-boundary";
 import { IosFocusHelper } from "@/components/ios-focus-helper";
 import { PosSyncFlushWorker } from "@/components/pos-sync-flush-worker";
 import { PwaRegister } from "@/components/pwa-register";
@@ -68,7 +69,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <PrintFlushWorker />
           <PosSyncFlushWorker />
           <IosFocusHelper />
-          {children}
+          {/*
+            2026-09-15 加固：掛上錯誤邊界。
+            以前 `app-error-boundary.tsx` **全 repo 零 import**（死碼），所以 `/`、`/orders`、
+            `/prints`、`/kitchen` 等全部冇錯誤邊界 —— 任何 render 期例外 = 白屏，
+            而且嗰個元件提供嘅三個自救入口（重新載入 / 清快取 / 返登入頁）全部叫唔到。
+            ⚠️ 只包 `children`，**唔包上面 4 個 worker**：worker 係背景任務，
+            出錯唔應該令畫面變全屏修復模式。
+          */}
+          <AppErrorBoundary>{children}</AppErrorBoundary>
         </ClientOnly>
       </body>
     </html>

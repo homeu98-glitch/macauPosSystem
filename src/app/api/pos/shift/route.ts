@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
@@ -131,6 +132,12 @@ export async function GET(request: Request) {
     );
   }
 
+  // 🔒 2026-09-15 資安加固：本端點以前**完全冇鑑權**。`history=1` 會回傳該店全部
+  // 已收工班次（含 `actual_cash` / `cash_difference` / `summary`）＝財務資料。
+  // 位置放喺 503 之後 → 未配置環境嘅既有回應完全不變。
+  const denied = posRouteAuthGuard(request, storeId, "pos/shift");
+  if (denied) return denied;
+
   // 🔴 2026-09-15：`history=1` → 回傳該店**已收工**嘅班次記錄（新→舊，最多 200 筆）。
   // 背景：交班記錄以往只存本機 localStorage（`shift-history`），換機／清 cache／多機睇唔返，
   // 但其實每次 close 都已經寫入 `pos_shifts.summary`（整個 ShiftHistoryRecord）。
@@ -212,6 +219,12 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
+
+  // 🔒 2026-09-15 資安加固：以前任何人知 storeId 就可以替他店**收工**、
+  // 篡改 `actual_cash` / `cash_difference` 對賬數字，或寫 `summary`。
+  // 位置放喺 503 之後 → 未配置環境嘅既有回應完全不變。
+  const denied = posRouteAuthGuard(request, storeId, "pos/shift");
+  if (denied) return denied;
 
   // ─────────────────────────────────────────────
   // open：開工

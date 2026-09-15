@@ -8,13 +8,33 @@
 //     -> 驗唔過返 401，APK 會清配對返去配對畫面。
 
 import "server-only";
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 
 /** sha256 hex（用嚟將 agent token 轉 token_hash 儲存 / 比對）。 */
 export function sha256Hex(input: string): string {
   return createHash("sha256").update(input).digest("hex");
+}
+
+/**
+ * 定時安全嘅 hex 字串比對（2026-09-15 資安加固）。
+ *
+ * 為何要：`token` 係由 client（APK）提供嘅值，屬**可遠端量測**嘅輸入。
+ * 以前用 `sha256Hex(token) !== agent.tokenHash` 直接字串比較 —— JS 嘅 `!==`
+ * 會喺第一個唔同嘅字元就返回，理論上可以用回應時間逐步還原 hash
+ * （timing side-channel）。同專案其他簽名驗證（`webhook-signature.ts`、
+ * `pos-device-token.ts`）都已用 `timingSafeEqual`，呢度係唯一漏網。
+ *
+ * 行為完全不變：只係「唔同長度 → false」＋「等長 → 定時安全比較」。
+ */
+function safeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 export interface PairedAgent {
@@ -62,7 +82,7 @@ export async function verifyAgent(agentId: string, token: string): Promise<Paire
   const agent = await loadPairedAgent(agentId);
   if (!agent) return null;
   if (agent.revokedAt) return null;
-  if (!token || sha256Hex(token) !== agent.tokenHash) return null;
+  if (!token || !safeEqualHex(sha256Hex(token), agent.tokenHash)) return null;
   return agent;
 }
 

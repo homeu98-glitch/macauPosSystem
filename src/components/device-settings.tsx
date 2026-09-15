@@ -184,7 +184,11 @@ export function DeviceSettings() {
       let adoptedFromDb = false;
       if (storeId && (needDeviceConfig || needLocalSettings)) {
         try {
-          const res = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`);
+          const res = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`, {
+            // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+            headers: await posDeviceAuthHeadersFresh(),
+            cache: "no-store",
+          });
           const payload = (await res.json()) as {
             ok?: boolean;
             deviceConfig?: DeviceConfig | null;
@@ -445,7 +449,11 @@ export function DeviceSettings() {
         // （防跨店洩露），變成新 terminal 永遠拉唔到本店已保存嘅打印機配置——同步通道係死嘅。
         const storeId = loadAuthSession()?.merchantId;
         if (!storeId) return; // 未登入：留空，登入後再同步
-        const response = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`);
+        const response = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`, {
+          // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+          headers: await posDeviceAuthHeadersFresh(),
+          cache: "no-store",
+        });
         const payload = (await response.json()) as {
           deviceConfig?: DeviceConfig | null;
         };
@@ -609,7 +617,8 @@ export function DeviceSettings() {
     try {
       const configRes = await fetch("/api/pos/device-config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // 🔒 2026-09-15：device-config / online-order-settings / note-presets 三條都已加鑑權閘。
+        headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
         body: JSON.stringify({
           ...updatedConfig,
           localSettings: serverSettings,
@@ -617,7 +626,7 @@ export function DeviceSettings() {
       });
       const onlineRes = await fetch("/api/online-order-settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
         body: JSON.stringify({
           ...localSettings.onlineOrderSettings,
           storeId: loadAuthSession()?.merchantId ?? null,
@@ -637,7 +646,7 @@ export function DeviceSettings() {
           try {
             const noteRes = await fetch("/api/pos/note-presets", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
               body: JSON.stringify({
                 storeId,
                 presets: {
@@ -683,7 +692,11 @@ export function DeviceSettings() {
     if (!storeId) return;
     (async () => {
       try {
-        const res = await fetch(`/api/pos/note-presets?storeId=${encodeURIComponent(storeId)}`);
+        const res = await fetch(`/api/pos/note-presets?storeId=${encodeURIComponent(storeId)}`, {
+          // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+          headers: await posDeviceAuthHeadersFresh(),
+          cache: "no-store",
+        });
         const payload = (await res.json()) as {
           ok?: boolean;
           found?: boolean;
@@ -874,7 +887,7 @@ export function DeviceSettings() {
     try {
       const res = await fetch("/api/pos/device-config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
         body: JSON.stringify({ ...updatedConfig, localSettings: serverSettings }),
       });
       const ok = res.ok;

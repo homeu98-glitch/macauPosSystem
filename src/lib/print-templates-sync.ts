@@ -1,3 +1,4 @@
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { PrintTemplates, ShiftTemplateVariant } from "@/lib/types";
 
 /**
@@ -8,6 +9,11 @@ import { PrintTemplates, ShiftTemplateVariant } from "@/lib/types";
  *
  * 任何網絡失敗都返 null（唔 throw）：離線 / server 503 時 caller 保留本地模板繼續用，
  * 同成個 POS 嘅「離線優先」一致（落唔到雲端就停喺本機，唔好彈 error 卡住收銀）。
+ *
+ * 🔒 2026-09-15 資安加固：`/api/pos/print-templates` 已加 POS 終端憑證閘
+ * → 兩個 fetcher 都要帶憑證，否則進入打印頁／儲存模板會 401。
+ * 一律用 `posDeviceAuthHeadersFresh()`（**會自動續期**）：token TTL 12h，
+ * 打印中心開住過夜就會過期。
  */
 
 /**
@@ -36,6 +42,7 @@ export async function fetchStorePrintTemplates(storeId: string): Promise<StorePr
   let res: Response;
   try {
     res = await fetch(`/api/pos/print-templates?storeId=${encodeURIComponent(storeId)}`, {
+      headers: await posDeviceAuthHeadersFresh(),
       cache: "no-store",
     });
   } catch {
@@ -70,7 +77,7 @@ export async function pushStorePrintTemplates(
   try {
     res = await fetch(`/api/pos/print-templates`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
       // shiftPresets 唔傳 = server 保留 DB 舊值（唔會清空範本庫）。
       body: JSON.stringify({ storeId, templates, shiftPresets }),
     });

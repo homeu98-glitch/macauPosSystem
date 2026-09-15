@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { MISSING_STORE_MESSAGE, posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 /**
@@ -28,7 +29,16 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
  * `pos_device_configs`「全店最新一條」係同一個坑）。現行讀寫 `pos_online_order_settings`（0019）。
  */
 
-const DEFAULT_STORE_ID = "macau-store-a";
+/**
+ * 2026-09-15：`DEFAULT_STORE_ID`（假店 `macau-store-a`）已移除。
+ *
+ * 原用途係「client 冇帶 storeId 時嘅 fallback」，但兩個問題：
+ *   ① 令「漏帶 storeId」呢類 bug 靜默化（寫／讀錯店而唔報錯）；
+ *   ② 資安上容忍「唔指定店」嘅請求。
+ * 而家 GET / POST 都要求明確 storeId（缺 → 400 `MISSING_STORE_MESSAGE`），
+ * 同 `validateStoreId()`（/api/pos/shift）同 `isPlaceholderStoreId()` 嘅
+ * 「假店一見即擋 / 寧願大聲失敗」口徑一致。
+ */
 
 function readStoreIdFromSearch(request: Request): string | null {
   const { searchParams } = new URL(request.url);
@@ -49,7 +59,7 @@ function isMissingMerchantEnabledColumn(message: string | null | undefined): boo
 }
 
 export async function GET(request: Request) {
-  const storeId = readStoreIdFromSearch(request) ?? DEFAULT_STORE_ID;
+  const requestedStoreId = readStoreIdFromSearch(request);
 
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -63,6 +73,22 @@ export async function GET(request: Request) {
       updatedSource: null,
     });
   }
+
+  // 🔒 2026-09-15 資安加固：**唔再 fallback 去 `DEFAULT_STORE_ID`（"macau-store-a" 假店）**。
+  //
+  // 兩個問題一次修：
+  //  ① 以前冇鑑權 → 知 storeId（枱 QR 已公開）就可以讀他店接單鏡像；
+  //  ② 以前冇 storeId 就靜默當成假店 `macau-store-a`，令「漏帶 storeId」呢類 bug
+  //     變成靜默查錯店（而唔係大聲失敗）。改為 400，符合全專案「寧願大聲失敗」口徑。
+  //
+  // ⚠️ 已核對：**入站 webhook 唔會行呢條 route**（`/api/integration/ledger/auto-accept`
+  // 自己直接 upsert `pos_online_order_settings`），所以加閘唔會斷 Ledger → POS 同步。
+  if (!requestedStoreId) {
+    return NextResponse.json({ ok: false, error: MISSING_STORE_MESSAGE }, { status: 400 });
+  }
+  const storeId = requestedStoreId;
+  const denied = posRouteAuthGuard(request, storeId, "online-order-settings");
+  if (denied) return denied;
 
   const SUPABASE_COLUMNS = "store_id, auto_accept, merchant_enabled, updated_at, updated_source";
 
@@ -103,10 +129,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "JSON body 格式錯誤。" }, { status: 400 });
   }
 
-  const storeId =
-    typeof payload.storeId === "string" && payload.storeId.trim()
-      ? payload.storeId.trim()
-      : DEFAULT_STORE_ID;
+  // 🔒 2026-09-15 資安加固：**唔再靜默 fallback 去假店 `DEFAULT_STORE_ID`**。
+  // 以前漏帶 storeId 會寫落 `macau-store-a`，令 bug 靜默化；改為大聲 400。
+  const storeId = typeof payload.storeId === "string" ? payload.storeId.trim() : "";
+  if (!storeId) {
+    return NextResponse.json({ ok: false, error: MISSING_STORE_MESSAGE }, { status: 400 });
+  }
 
   // 兩個欄位都可以單獨鏡像：只傳一個就**唔可以**動另一個
   // （以前寫死要 autoAccept，會令「開關店」鏡像順手覆蓋自動接單設定）。
@@ -130,6 +158,11 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
+
+  // 🔒 2026-09-15 資安加固：以前任何人知 storeId 就可以 POST 覆寫他店鏡像
+  // （例如關掉自動接單）。位置放喺 503 之後 → 未配置環境嘅既有回應完全不變。
+  const denied = posRouteAuthGuard(request, storeId, "online-order-settings");
+  if (denied) return denied;
 
   const updatedAt = new Date().toISOString();
   const row: Record<string, unknown> = {

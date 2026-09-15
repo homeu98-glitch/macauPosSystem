@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 
-import {
-  isMissingColumnError,
-  readNotePresets,
-  writeNotePresets,
-  type NotePresets,
-} from "@/lib/note-presets-server";
+import { isMissingColumnError, readNotePresets, writeNotePresets, type NotePresets } from "@/lib/note-presets-server";
+import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseServerClient, getSupabaseWriteClient } from "@/lib/supabase-server";
 
 /**
@@ -17,9 +13,10 @@ import { getSupabaseServerClient, getSupabaseWriteClient } from "@/lib/supabase-
  * 讀取端只拎 store_id「最新一條」，另一台機改動被靜默丟失（同 docs/52 autoAccept 同坑）。
  * 而家備註抽離做 per-store 真源：一店一行，store_id 係 primary key，天然唔會互蓋。
  *
- * 授權：同 kiosk-settings / shift / print-templates 一致 —— 寫入行 server service_role，
- * 讀取行 server client。storeId 由 client resolveStoreId()（登入 merchantId / kiosk 綁定）
- * 帶嚟，route 唔自行斷言「屬於邊間店」，同 /api/pos/state 嘅信任模型一致。
+ * 授權（2026-09-15 更新）：**本端點以前完全冇鑑權**，同 `kiosk-settings / shift / print-templates`
+ * 一樣係「信任 client 傳入 storeId」嘅舊模型。全面審查後已收口：讀寫都要
+ * **POS 終端憑證（綁店）或 admin session**，見 `@/lib/pos/pos-route-auth`。
+ * ⚠️ **匿名（掃碼 / Kiosk / KDS）唔會打呢條端點**（已核對全部呼叫點），所以加閘唔會影響客人落單。
  *
  * 讀寫細節（含 0034 未跑時嘅 42703 降級）集中喺 `@/lib/note-presets-server`，兩個 route 共用。
  */
@@ -49,6 +46,10 @@ export async function GET(request: Request) {
       updatedAt: null,
     });
   }
+
+  // 🔒 2026-09-15 資安加固（放喺兩個 early-return 之後 → mock / 缺 storeId 嘅既有回應完全不變）。
+  const denied = posRouteAuthGuard(request, storeId, "pos/note-presets");
+  if (denied) return denied;
 
   const result = await readNotePresets(supabase, storeId);
   if (!result.ok) {
@@ -94,6 +95,10 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
+
+  // 🔒 2026-09-15 資安加固（放喺 503 之後 → 未配置環境嘅既有回應完全不變）。
+  const denied = posRouteAuthGuard(request, storeId, "pos/note-presets");
+  if (denied) return denied;
 
   const result = await writeNotePresets(supabase, storeId, payload?.presets ?? {});
   if (!result.ok) {

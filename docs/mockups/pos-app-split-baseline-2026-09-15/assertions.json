@@ -1,0 +1,109 @@
+{
+  "at": "2026-09-15T09:23:47.254Z",
+  "baseline": {
+    "tableCards": 3,
+    "headerHeight": 71,
+    "headerHeightTolerance": 8
+  },
+  "results": [
+    {
+      "name": "已過 AuthGuard（停留喺 /）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "唔會卡喺 ClientOnly fallback",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "唔會卡喺「正在載入門店設定」",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "冇「今日未開工」彈窗（已開工種子生效）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "桌台卡數量 = 3",
+      "ok": true,
+      "detail": "實測 3"
+    },
+    {
+      "name": "標題列高度 ≈ 71（±8，未爆行）",
+      "ok": true,
+      "detail": "828×71"
+    },
+    {
+      "name": "撳枱後出現「開桌」彈窗（含入座人數）",
+      "ok": true,
+      "detail": "人數掣 12 個"
+    },
+    {
+      "name": "入座人數快速掣 ≥ 10 個",
+      "ok": true,
+      "detail": "實測 12"
+    },
+    {
+      "name": "開桌後進入點餐介面（有「返回桌台」）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "點餐介面有「訂單明細」區",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "有「下單」掣",
+      "ok": true,
+      "detail": "高 48px"
+    },
+    {
+      "name": "有「去結帳」掣",
+      "ok": true,
+      "detail": "高 48px"
+    },
+    {
+      "name": "主要動作掣 ≥ 40px",
+      "ok": true,
+      "detail": "下單 48 / 去結帳 48"
+    },
+    {
+      "name": "購物車加減掣：若存在則 ≥ 40px",
+      "ok": true,
+      "detail": "（mock 無商品 ⇒ 未出現，屬正常）"
+    },
+    {
+      "name": "可以「返回桌台」回到桌台總覽",
+      "ok": true,
+      "detail": "枱卡 3"
+    },
+    {
+      "name": "冇 pageerror",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "冇無限 re-render（Maximum update depth）",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": [
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ]
+}

@@ -8,6 +8,7 @@ import {
   ShiftTemplate,
   ShiftTemplateVariant,
 } from "@/lib/types";
+import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseServerClient, getSupabaseWriteClient } from "@/lib/supabase-server";
 import { normalizePrintTemplateSet } from "@/lib/storage";
 import {
@@ -78,6 +79,12 @@ export async function GET(request: Request) {
       updatedAt: null,
     });
   }
+
+  // 🔒 2026-09-15 資安加固：以前任何知 storeId 嘅人（枱 QR 已公開）都可以讀 / 改他店
+  // 收據及廚房單模板 —— 模板直接影響**實體出紙**，所以一定要綁店。
+  // 位置刻意放喺 mock / 缺 storeId 兩個 early-return 之後 → 既有回應完全不變。
+  const denied = posRouteAuthGuard(request, storeId, "pos/print-templates");
+  if (denied) return denied;
 
   // ⚠️ 兩個 select 一定要各自 inline，唔好抽成 `(columns: string) => supabase...select(columns)`
   // 呢種包裝 —— 參數一寫 `string`，supabase-js 嘅 `select<Query extends string>` 就推導唔到
@@ -176,6 +183,10 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
+
+  // 🔒 2026-09-15 資安加固（放喺 503 之後 → 未配置環境嘅既有回應完全不變）。
+  const denied = posRouteAuthGuard(request, storeId, "pos/print-templates");
+  if (denied) return denied;
 
   // 一店一行 upsert：任何一部終端儲存都會覆寫該店模板（last-write-wins）。
   // 為咗唔好整份 replace 前剷走「呢次請求冇帶但 DB 已有」嘅槽位（理論上舊 client 只帶

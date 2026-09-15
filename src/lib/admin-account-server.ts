@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import { defaultAccountStores, defaultAccountUsers, defaultPermissionGroups } from "@/lib/mock-data";
 import { getSupabaseAdminClient } from "@/lib/supabase-server";
 import { AuthSession } from "@/lib/storage";
@@ -55,6 +57,57 @@ function enrichAccounts(
   });
 }
 
+/** 機會式 PIN hash 升級失敗只 log 一次（避免每次登入都刷 log）。 */
+let warnedPinUpgradeSkip = false;
+
+/** 「有 pin_hash 但 AUTH_PIN_PEPPER 未設」只 log 一次。 */
+let warnedMissingPinPepper = false;
+
+/**
+ * 管理員 PIN 的 HMAC-SHA256 hash（2026-09-15 資安加固）。
+ *
+ * 公式必須同 migration `0040` 完全一致，否則登入會失敗：
+ *   pin_hash = HMAC-SHA256(key = AUTH_PIN_PEPPER, msg = `${account}:${pin}`) → 小寫 hex
+ *   SQL 版：encode(hmac(account || ':' || pin_code, <pepper>, 'sha256'), 'hex')
+ *
+ * `account` 當 salt ⇒ 兩個員工用同一個 PIN，hash 都唔同。
+ * 🔴 pepper 只存在 server env；4 位 PIN 只有 ~13 bits 熵，**唯一保護就係「pepper 唔喺 DB」**。
+ */
+function deriveAdminPinHash(account: string, pin: string, pepper: string): string {
+  return createHmac("sha256", pepper).update(`${account}:${pin}`).digest("hex");
+}
+
+/** 常數時間比對（長度唔同即 false），防 timing attack。 */
+function safeEqualText(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * 驗證 PIN：**優先 `pin_hash`（HMAC，新路徑）**，回退明文 `pin_code`（過渡期）。
+ *
+ * 回傳命中方式；`null` = 驗證失敗。
+ *
+ * 為何要保留明文回退（過渡期）：
+ *   ① migration `0040` 未跑 → row 冇 `pin_hash` 欄 ⇒ 只可以靠明文；
+ *   ② 0040 跑咗但某些帳號未回填（新加帳號）→ 都要靠明文。
+ *   少咗呢個回退，任何一步次序錯就會**鎖死登入**。
+ *   等 0040 §5 清空明文之後，呢個分支自然變成死碼（可以移走）。
+ */
+function verifyAdminPin(row: Record<string, unknown>, pin: string, pepper: string): "hash" | "plain" | null {
+  const pinHash = typeof row.pin_hash === "string" ? row.pin_hash : "";
+  if (pinHash && pepper) {
+    const account = typeof row.account === "string" ? row.account : "";
+    if (safeEqualText(deriveAdminPinHash(account, pin, pepper), pinHash)) return "hash";
+  }
+  const plain = typeof row.pin_code === "string" ? row.pin_code : "";
+  // 明文命中只喺「有明文」時才可能；`pin` 空字串唔可以命中空明文。
+  if (plain && pin && safeEqualText(pin, plain)) return "plain";
+  return null;
+}
+
 export async function authenticateAccountFromServer(account: string, pin: string) {
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
@@ -69,19 +122,56 @@ export async function authenticateAccountFromServer(account: string, pin: string
     return { ok: true as const, source: "mock" as const, session: buildSession({ ...matched, pin: "" }) };
   }
 
+  // 🔴 2026-09-15 資安加固：**唔再用 `.eq("pin_code", pin)`**（等同明文儲存 + 明文比對）。
+  // 改為只按 account 取 row，再喺 JS 內驗證（優先 `pin_hash`，回退明文）。
+  // ⚠️ 必須保持「查唔到帳號」同「密碼錯」回**同一個訊息** —— 唔可以洩露帳號是否存在。
   const { data: accountRow, error } = await supabase
     .from("admin_account_users")
     .select("*")
     .eq("account", account)
-    .eq("pin_code", pin)
     .maybeSingle();
 
   if (error || !accountRow) {
     return { ok: false as const, error: "帳號或密碼不正確。", source: "supabase" as const };
   }
 
+  const pinPepper = process.env.AUTH_PIN_PEPPER?.trim() ?? "";
+  // 🔴 誤配置偵測：DB 已經有 hash，但 server 冇 pepper ⇒ 只可以回退明文。
+  // 若連明文都清空（0040 §5）就會**完全登入唔到**。唔可以靜默，所以大聲 log 一次。
+  if (!pinPepper && typeof (accountRow as Record<string, unknown>).pin_hash === "string") {
+    if (!warnedMissingPinPepper) {
+      warnedMissingPinPepper = true;
+      console.error(
+        "[admin-account] ⚠️ 帳號已有 pin_hash，但 `AUTH_PIN_PEPPER` 未設 → 只能回退明文比對。" +
+          "若已執行 0040 §5 清空明文，將會**完全無法登入**。請即刻補設 Vercel env `AUTH_PIN_PEPPER`。",
+      );
+    }
+  }
+  const pinMatch = verifyAdminPin(accountRow as Record<string, unknown>, pin, pinPepper);
+  if (!pinMatch) {
+    return { ok: false as const, error: "帳號或密碼不正確。", source: "supabase" as const };
+  }
+
   if (!accountRow.active) {
     return { ok: false as const, error: "此帳戶已停用，請聯絡管理員。", source: "supabase" as const };
+  }
+
+  // ── 機會式升級（opportunistic upgrade）────────────────────────────────
+  // 明文命中且有 pepper → 即刻把 `pin_hash` 寫入該帳號。
+  // 效果：即使用戶**未跑** 0040 §2 嘅批量回填，活躍帳號都會喺第一次成功登入時自動上 hash。
+  // 🔴 失敗**絕對唔可以**阻礙登入（例：0040 未跑 → 42703 欄位唔存在）→ 只 log 一次。
+  if (pinMatch === "plain" && pinPepper) {
+    const { error: upgradeError } = await supabase
+      .from("admin_account_users")
+      .update({ pin_hash: deriveAdminPinHash(account, pin, pinPepper) })
+      .eq("id", accountRow.id);
+    if (upgradeError && !warnedPinUpgradeSkip) {
+      warnedPinUpgradeSkip = true;
+      console.warn(
+        "[admin-account] PIN 機會式升級未生效（可能 0040 未跑；**唔影響登入**）：",
+        upgradeError.message,
+      );
+    }
   }
 
   const [{ data: groups }, { data: bindings }] = await Promise.all([

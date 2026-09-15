@@ -22,6 +22,8 @@ type PosRealtimeHandlers = {
 };
 
 const RECONNECT_DELAY_MS = 3000;
+/** 指數退避上限（2026-09-15）：3s → 6s → 12s → 24s → 30s 封頂。 */
+const MAX_RECONNECT_DELAY_MS = 30_000;
 const RESUBSCRIBE_DEBOUNCE_MS = 3000;
 
 /**
@@ -48,6 +50,17 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let reconnectTimer: number | null = null;
     let resubscribeTimer: number | null = null;
+    /** 連續重連次數，用嚟算指數退避；成功 SUBSCRIBED 就歸零。 */
+    let reconnectAttempt = 0;
+    /**
+     * 防重入（2026-09-15 加固）。
+     *
+     * `subscribe()` 內 `await supabase.removeChannel(channel)` 係 async，
+     * 而 `visibilitychange`（每次回到前景）同重連 timer **可以同時觸發**。
+     * 以前兩條並發鏈會各自建一條同名 channel，但只有後建嗰條會被寫入 `channel`
+     * → 先建嗰條**永遠唔會被 remove**，channel 逐次累積洩漏。
+     */
+    let subscribeInFlight = false;
 
     function scheduleResubscribedSync() {
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);
@@ -58,11 +71,17 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
 
     async function subscribe() {
       if (cancelled || !supabase) return;
+      // 防重入：已有一次 subscribe 喺 in-flight 就唔好再開（見 subscribeInFlight 註解）。
+      if (subscribeInFlight) return;
+      subscribeInFlight = true;
+      try {
       if (channel) {
-        await supabase.removeChannel(channel);
+        // 先清空變數再 await —— 避免 await 期間其他人讀到一條「即將被移除」嘅 channel。
+        const stale = channel;
         channel = null;
+        await supabase.removeChannel(stale);
       }
-
+      if (cancelled || !supabase) return;
       const filter = `store_id=eq.${storeId}`;
       channel = supabase
         .channel(`pos-realtime:${storeId}`)
@@ -92,14 +111,34 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
         )
         .subscribe((status) => {
           handlersRef.current.onStatusChange?.(status);
-          if (status === "SUBSCRIBED") scheduleResubscribedSync();
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          if (status === "SUBSCRIBED") {
+            // 連上就重置退避，下次斷線由 3 秒重新開始。
+            reconnectAttempt = 0;
+            scheduleResubscribedSync();
+            return;
+          }
+          // 2026-09-15 加固：**加埋 `CLOSED`**。
+          //
+          // 以前只判 CHANNEL_ERROR / TIMED_OUT → channel 一旦入 `CLOSED`
+          // （socket 被伺服器關閉 / join 失敗）就**永遠唔會再訂閱**：
+          // 畫面照樣顯示已連線，但**永遠唔會再有事件** —— 同 docs/113
+          // 「Realtime 訂錯 Supabase 專案 = 靜默失效」同一型，只有 reload 或切前景才復原。
+          // （KDS 屏有 60 秒看門狗兜底，收銀台 `/` 冇有。）
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
             if (reconnectTimer) window.clearTimeout(reconnectTimer);
+            // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
+            // 舊行為係固定 3 秒無限重試：斷網時燒電、燒流量，而且冇任何 backoff 禮讓。
+            const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
+            reconnectAttempt += 1;
             reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
               void subscribe();
-            }, RECONNECT_DELAY_MS);
+            }, delay);
           }
         });
+      } finally {
+        subscribeInFlight = false;
+      }
     }
 
     function onVisibilityChange() {

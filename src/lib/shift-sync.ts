@@ -14,11 +14,27 @@
  * - 本地已收工但 server 仲 active（上次收工離線）→ 自動補 close（heal），避免另一機又見到已開工。
  */
 
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { loadShiftState, saveShiftState, type ShiftHistoryRecord, type ShiftState } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
 
 /** 連續開工提醒門檻（10 小時）。 */
 export const SHIFT_OVERTIME_MS = 10 * 60 * 60 * 1000;
+
+/**
+ * `/api/pos/shift` 嘅請求 headers（2026-09-15 資安加固）。
+ *
+ * 背景：`/api/pos/shift` 以前**完全冇鑑權**，2026-09-15 全面審查後已加
+ * POS 終端憑證閘（見 `src/lib/pos/pos-route-auth.ts`）→ **所有呼叫點都必須帶憑證**，
+ * 否則開工／收工／交班歷史全部會 401。
+ *
+ * ⚠️ 一定要用 `posDeviceAuthHeadersFresh()`（**會自動續期**），唔可以只讀
+ * `posDeviceAuthHeaders()`：token TTL 12 小時，收銀機／班次頁開住過夜就一定過期，
+ * 到時就會出現「掣撳得落但 server 回 401」呢種最難 debug 嘅症狀。
+ */
+async function shiftRequestHeaders(): Promise<Record<string, string>> {
+  return { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) };
+}
 
 /** /api/pos/shift 回傳嘅 active 班次（camelCase，對應 route 內 mapRow）。 */
 export type ShiftServerActive = {
@@ -50,7 +66,7 @@ export async function fetchServerShiftState(storeId: string): Promise<{
   serverNow: string;
 }> {
   const res = await fetch(`/api/pos/shift?storeId=${encodeURIComponent(storeId)}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: await shiftRequestHeaders(),
   });
   const json = await readJsonOrThrow<{ ok?: boolean; active?: ShiftServerActive | null; serverNow?: string }>(
     res,
@@ -117,7 +133,7 @@ function serverRowToHistoryRecord(row: ShiftServerActive): ShiftHistoryRecord | 
 export async function fetchServerShiftHistory(storeId: string, limit = 60): Promise<ShiftHistoryRecord[]> {
   const res = await fetch(
     `/api/pos/shift?storeId=${encodeURIComponent(storeId)}&history=1&limit=${encodeURIComponent(String(limit))}`,
-    { headers: { "Content-Type": "application/json" }, cache: "no-store" },
+    { headers: await shiftRequestHeaders(), cache: "no-store" },
   );
   const json = await readJsonOrThrow<{ ok?: boolean; history?: ShiftServerActive[] }>(res);
   const rows = Array.isArray(json.history) ? json.history : [];
@@ -136,7 +152,7 @@ export async function serverOpenShift(params: {
 }): Promise<{ conflict: boolean; active?: ShiftServerActive }> {
   const res = await fetch("/api/pos/shift", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await shiftRequestHeaders(),
     body: JSON.stringify({ action: "open", ...params }),
   });
   const json = await readJsonOrThrow<{ ok?: boolean; conflict?: boolean; active?: ShiftServerActive }>(res);
@@ -158,7 +174,7 @@ export async function serverCloseShift(params: {
 }): Promise<ShiftServerActive | null> {
   const res = await fetch("/api/pos/shift", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await shiftRequestHeaders(),
     body: JSON.stringify({ action: "close", ...params }),
   });
   const json = await readJsonOrThrow<{ ok?: boolean; closed?: ShiftServerActive }>(res).catch(() => null);
@@ -179,7 +195,7 @@ export async function updateServerShiftClosingNote(params: {
 }): Promise<boolean> {
   const res = await fetch("/api/pos/shift", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await shiftRequestHeaders(),
     body: JSON.stringify({ action: "updateClosingNote", ...params }),
   });
   const json = await readJsonOrThrow<{ ok?: boolean }>(res).catch(() => null);
@@ -190,7 +206,7 @@ export async function updateServerShiftClosingNote(params: {
 export async function serverAckOvertime(storeId: string): Promise<ShiftServerActive | null> {
   const res = await fetch("/api/pos/shift", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await shiftRequestHeaders(),
     body: JSON.stringify({ action: "ackOvertime", storeId }),
   });
   const json = await readJsonOrThrow<{ ok?: boolean; active?: ShiftServerActive }>(res).catch(() => null);

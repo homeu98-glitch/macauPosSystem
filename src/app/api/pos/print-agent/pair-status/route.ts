@@ -4,6 +4,7 @@
 // 回agentId 唔係秘密（同 QR 一樣公開），web 攞嚟寫落 localStorage 決定 isRelayConfigured()。
 import { NextResponse } from "next/server";
 
+import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +22,21 @@ export async function GET(request: Request) {
   if (!supabase) {
     return NextResponse.json({ paired: false, error: "Supabase 未配置" }, { status: 503 });
   }
+
+  /**
+   * 🔒 2026-09-15 資安加固：**綁店**才讀。
+   *
+   * 原檔頭註解寫「agentId 唔係秘密（同 QR 一樣公開）」—— 呢個前提已經唔成立：
+   * 知道 agentId 之後就有更多針對 agent 嘅攻擊面，而 `lastSeenAt` 本身亦係營運資訊
+   * （幾時有打印機上線／離線）。
+   *
+   * 加閘零功能影響嘅理由：本端點只由**已登入**嘅 web 呼叫 ——
+   * `print-center.tsx`（喺 `/prints`）同 `relay-pairing-panel.tsx`（喺 `/settings`），
+   * 兩者都喺 `AuthGuard` 之下。（APK 唔會打呢條，佢係輪詢 `/pair?agentId=`。）
+   * 位置放喺 503 之後 → 未配置環境嘅既有回應完全不變。
+   */
+  const denied = posRouteAuthGuard(request, storeId, "print-agent/pair-status");
+  if (denied) return denied;
 
   // ⚠️ 唔好 select `store_name` —— `pos_print_agents` 冇呢條欄（0020 只喺 pos_print_jobs 加咗）。
   // Select 佢會 42703 → 呢度變 500 → web 顯示「配對失敗」，但其實一早配對成功咗。

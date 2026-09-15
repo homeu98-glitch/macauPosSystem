@@ -9,6 +9,7 @@ import {
   type MerchantOrderConfig,
 } from "@/lib/ledger/order-config";
 import { UNKNOWN_ORDER_CONFIG } from "@/lib/ledger/order-config-parse";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { getPosRealtimeConfig, getPosSupabaseClient } from "@/lib/pos/supabase-client";
 import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
 
@@ -204,7 +205,8 @@ async function refreshMirror(storeId: string) {
   try {
     const response = await fetch(
       `/api/online-order-settings?storeId=${encodeURIComponent(storeId)}`,
-      { cache: "no-store" },
+      // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+      { headers: await posDeviceAuthHeadersFresh(), cache: "no-store" },
     );
     if (!response.ok) return;
 
@@ -236,7 +238,8 @@ async function mirrorToPosDb(
   try {
     const response = await fetch("/api/online-order-settings", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // 🔒 2026-09-15：該端點已加鑑權閘 → 必須帶 POS 終端憑證（會自動續期）。
+      headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
       body: JSON.stringify({ storeId, ...values }),
     });
     if (!response.ok && process.env.NODE_ENV !== "production") {

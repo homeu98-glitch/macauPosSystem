@@ -9,6 +9,7 @@
 //   failed  = 打印通道回報失敗（或本地派發失敗）
 import { NextResponse } from "next/server";
 
+import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
@@ -18,9 +19,16 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get("storeId")?.trim() || null;
 
-  if (!supabase || !storeId) {
+  // 維持原有「未配置 Supabase（mock / 本機）→ 回空 jobs」行為，唔會因為新閘而改變。
+  if (!supabase) {
     return NextResponse.json({ ok: true, jobs: [] });
   }
+
+  // 🔒 2026-09-15 資安加固：本端點以前**完全冇鑑權** —— 知道 storeId（枱 QR 內容已公開）
+  // 就可以讀走該店所有打印任務嘅 id / 狀態 / `last_error`。
+  // ⚠️ 閘一定放喺 `!supabase` 之後：避免改動 mock / 未配置環境嘅既有行為。
+  const denied = posRouteAuthGuard(request, storeId, "pos/print-jobs/status");
+  if (denied) return denied;
 
   const { data, error } = await supabase
     .from("pos_print_jobs")

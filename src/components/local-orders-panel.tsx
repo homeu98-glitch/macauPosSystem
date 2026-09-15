@@ -52,7 +52,7 @@ import { formatMoney } from "@/lib/format";
 import { orderItemDiscountTotal } from "@/lib/pos/discount";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { POS_SYNC_QUEUE_CHANGED_EVENT } from "@/lib/pos/sync-flush";
-import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+import { posDeviceAuthHeaders, posDeviceAuthHeadersFresh, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -216,7 +216,10 @@ export function LocalOrdersPanel({
   // 避免冚走本機未上雲嘅單（成因 P4）；fetch 失敗靜默（等下次觸發）。
   const pullServerOrders = useCallback(async () => {
     if (!merchantId) return;
-    if (loadQueue().some((event) => event.status !== "synced")) return;
+    // 🔴 2026-09-15 修（同 pos-app.tsx 兩處閘門一致）：只擋真正未推嘅 `pending`。
+    // 舊條件 `status !== "synced"` 會被終態 `skipped`（user-discarded / server-newer）
+    // 同 `failed` 永久閘死 → 訂單頁永遠唔會再拉雲端，其他終端落嘅單喺本機永遠見唔到。
+    if (loadQueue().some((event) => event.status === "pending")) return;
     try {
       // 先確保 POS 終端憑證有效（TTL 12h）
       await refreshPosDeviceTokenIfNeeded();
@@ -406,7 +409,11 @@ export function LocalOrdersPanel({
     setDeletingAll(true);
     try {
       // 1) DB 先清（store 隔離 + exclude Ledger 線上單），免 backfill 重拉返晒出嚟
-      const res = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(storeId)}`, { method: "DELETE" });
+      // 🔒 2026-09-15：該端點已加鑑權閘（以前任何人知 storeId 就可以清光該店線下訂單）。
+      const res = await fetch(`/api/pos/orders?storeId=${encodeURIComponent(storeId)}`, {
+        method: "DELETE",
+        headers: await posDeviceAuthHeadersFresh(),
+      });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; deleted?: number };
       if (!res.ok || data.ok === false) {
         setToast(`刪除失敗：${data.error ?? res.status}`);
