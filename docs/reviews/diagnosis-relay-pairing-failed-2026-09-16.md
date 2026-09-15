@@ -10,6 +10,9 @@
 
 **兩個訊息描述同一件事的兩半，並指向同一個根因：iPad 部裝置手上冇有效嘅 POS 終端憑證。**
 
+> 🔴🔴 **2026-09-16 01:10 更新 —— 真正原因已找到：`SUPABASE_ANON_KEY` 沒有 fallback**
+> 見下面「一 B」節。這也是為什麼「重 login 後 web 正常，但商米仍然配對失敗」。
+
 1. 商米的「**配對失敗: POS雲端未設定**」= APK 嘅 `RelayService` 拎唔到 `supabaseUrl` / `anonKey`
    → 即 `GET /api/pos/print-agent/pair` 回 `supabaseUrl: null, anonKey: null`。
 2. 網站的「**配對失敗**」= `relay-pairing-panel.tsx` 收到 `pair-status` 非 200
@@ -67,6 +70,60 @@ if (raw === undefined || raw === "") return true;   // ← fail closed
 而這批 09-16 的改動正好就是為了讓下次一眼看得出這類事故，**建議連這次修復一起 push + redeploy**。
 
 ### 成因排序（更新版）
+
+## 一 B、🔴🔴 真正原因：`SUPABASE_ANON_KEY` 在線上部沒有 fallback（01:10 找到）
+
+把線上實際部署的版本（`3d71dba`）拉出來看 `GET /pair`：
+
+```ts
+// src/app/api/pos/print-agent/pair/route.ts（3d71dba，線上版本）
+const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const anonKey = process.env.SUPABASE_ANON_KEY ?? "";
+return NextResponse.json({
+  status: "paired", storeId: agent.storeId, storeName: agent.storeName,
+  supabaseUrl: url, anonKey,
+});
+```
+
+🔴 **兩個變數的待遇完全不對稱：**
+
+| 變數 | fallback | 若缺失的後果 |
+|---|---|---|
+| `url` | 有 → `NEXT_PUBLIC_SUPABASE_URL` | ⚠️ **會靜默 fallback 去 Ledger 專案**（沒有 `pos_*` 表）→ 訂閱成功但零 event（靜默失效） |
+| `anonKey` | **沒有** | 🔴 `""` → APK `pollPair` 的 `takeIf { it.isNotBlank() }` 轉成 `null` → 「POS 雲端未設定」 |
+
+即：**只要 `SUPABASE_ANON_KEY` 沒設，商米就一定顯示「POS 雲端未設定」**，
+而且 Web 端（`pair-status`）依然會綠燈 —— 因為它查的是另一條完全不同的變數
+（`getSupabaseWriteClient()` 走 service role key）。
+
+### 這解釋了全部現象
+
+- ✅ Web「已配對」綠燈 —— service role key 那條路正常
+- ❌ 商米「POS 雲端未設定」—— anon key 那條路缺值
+- ❌「重 login 之後還是唔得」—— login 只補好了 `pair-status` 的 401，補不到 anon key
+- ❌「重 save env 之後還是唔得」—— 見下面部署時間線
+
+### 修復（`653ea43` 已 push + Vercel 已部署）
+
+我加的 `resolveRelayRealtimeConfig()`（`print-agent-server.ts`）正正根治這個不對稱：
+
+```ts
+export function resolveRelayRealtimeConfig(): { url: string; anonKey: string } | null {
+  const url = process.env.SUPABASE_URL?.trim();
+  const anonKey = process.env.SUPABASE_ANON_KEY?.trim();
+  if (!url || !anonKey) return null;   // ← 成對才有值
+  return { url, anonKey };
+}
+```
+刻意**不 fallback** `NEXT_PUBLIC_SUPABASE_URL`（= Ledger，沒有 `pos_*` 表）。
+
+**部署狀態（01:14 實測）**：live bundle **已含 `androidReady`** ⇒ `653ea43` 已完成部署。
+
+**⇒ 現在 `pair-status` 會回 `androidReady` 欄位。**
+iPad 重整 `/prints` 頁面後：
+- `androidReady: true` → env 已 OK
+- `androidReady: false` → **確證 `SUPABASE_URL` / `SUPABASE_ANON_KEY` 未成套套用**（要 Redeploy）
+  └─ 紅 banner 會直接寫「Android 側未拎到雲端連線憑證（supabaseUrl / anonKey）」
 
 | # | 成因 | 為什麼吻合 | 機率 |
 |---|---|---|---|
@@ -300,3 +357,100 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 ⚠️ 設好之後：**所有簽發中的 token 即刻失效 → 全部 POS 終端 / Admin 要重新登入一次**（一次性代價）。
 建議在非營業時間做，並且與 Step 2 的重登合併成一次。
+
+---
+
+## 九、2026-09-16 01:40 續——**配對已通**，新卡點係 `dispatch failed`
+
+> 上一節（01:10）判定嘅根因（ `SUPABASE_ANON_KEY` 冇 fallback）**已修並已部署**。
+> 本節係修好之後嘅**新現場證據**：雲端嗰截已經通咗，失敗點往前移咗一步。
+
+### 9.1 決定性變化：中繼機開始認領任務
+
+| 指標 | 01:14 之前 | **01:30（本次實測）** |
+|---|---|---|
+| `claimed_by` 有值嘅行 | **完全冇**（全部 NULL） | `ag-a466746da8946cd1421916043eb643e1` ✅ |
+| `claimed_at` | 全 NULL | `01:30:55` ✅ |
+| `attempts` | 恆 0 | 2 / 3 / 5（真係重試過） ✅ |
+| 任務狀態流轉 | 淨係 `pending` → 冇人理 | `pending → printing → failed` ✅ |
+
+⇒ **01:10 嗰個修復生效咗：APK 拎到雲端任務。** 剩低嘅問題已經唔係「配對／雲端」。
+
+### 9.2 新嘅失敗點：`AGENT_FAILED: dispatch failed`
+
+近 20 行入面 8 張全部同一個結局：
+
+```
+status=failed  attempts=5  last_error = "AGENT_FAILED: dispatch failed"
+```
+
+`result/route.ts:77` 嘅構造式：
+
+```ts
+patch.last_error = rawError ? `AGENT_FAILED: ${rawError}`.slice(0, 300) : "AGENT_FAILED";
+```
+
+⇒ **`dispatch failed` 係 APK 用 error 欄回傳上雲嘅原文**，server 只係加咗前綴。
+即係：**claim 成功、render 冇拋錯，但最後一段「送紙落打印機」失敗。**
+
+### 9.3 🔴 最可疑嘅結構性原因：雲端 job 完全冇帶打印機連線資料
+
+實測每一張 job：
+
+| 欄位 | 值 |
+|---|---|
+| `printer_name` | `廚房打印機` |
+| `printer_id` | `printer-kitchen-1` |
+| **`printer`（jsonb 快照）** | **`NULL`** ← server 從未寫過 |
+| **(claim 回傳 `printers[]`)** | **`[]`** ← `claim/route.ts:42` 硬編碼 |
+
+而三個版本嘅 APK `JobRunner.resolvePrinter()` 都係咁揀機：
+
+1. `row.printer`（jsonb 快照）→ **無**
+2. claim 嘅 `printers[]`（按 id → name 配對）→ **恒 `[]`**
+3. 本機已發現設備（按 name 配對）→ 要機上有同名設備先中
+4. **兜底**（最致命）：
+   - print-agent-android → `connectionType="sunmi"` 嘅「Sunmi 內置打印機」
+   - print-relay → `ipAddress=null` 嘅「LAN 打印機」
+
+⇒ 只要第 3 步配唔到（例如本機發現嘅設備唔叫「廚房打印機」、或 id 唔係 `printer-kitchen-1`），
+就**必然**跌落第 4 步嘅假打印機，跟住 100% dispatch 失敗。
+**呢個同「全部都係同一句 dispatch failed」完全吻合。**
+
+相關既有記載：`docs/98-print-hub-no-jobs-investigation-plan.md:452` 已註明 claim 嘅 `printers` 恒為空陣，
+屬已知但未修嘅 TODO。
+
+### 9.4 ⚠️ 「dispatch failed」唔喺本機任何源碼／APK 入面
+
+排查方法（可重用）：
+
+| 步驟 | 結果 |
+|---|---|
+| grep 全機 `C:/dev` 1389 個文字檔 | **0 命中**（只有無關嘅 `Callback dispatch failed.`） |
+| grep 三個 Android repo（`print-agent-android` / `print-relay` / `macauMemebershipPrintingService` / `print-agent-android.SOURCE-BACKUP`） | 全部得中文文案，例如 `"列印失敗（第 x/y 份）"`、`"打印機連線逾時…"`、`"Sunmi 內置打印機未就緒（…）"` |
+| **解 APK → inflate `classes*.dex` → 掃 13 個 APK** | **`dispatch failed` 全部 0 命中**；同時 `RelayState` / `列印失敗` / `printBytes` 有命中 ⇒ 掃描方法有效，唔係假陰性 |
+
+⇒ **而家機上跑緊嗰個 build，源碼唔喺呢部機。**
+要繼續精確定位，必須由用戶提供：部機裝嘅係邊個 APK（檔名／版本／邊度 build 出嚟）。
+
+> ⚠️ 坑：APK 嘅 `classes.dex` 喺 zip 入面係 **DEFLATE 壓縮**，
+> 直接 `fs.readFileSync(apk).includes("字串")` **一定掃唔到**（實測連 `RelayState` 都係 n）。
+> 必須先解 zip central directory → `zlib.inflateRawSync` → 再掃。工具：`tools/_apk-strings.cjs`。
+
+### 9.5 中繼機喺 01:30:57 之後又靜咗
+
+- 01:34:17 新建嘅 job → 到 01:40 仍然 `pending`、`claimed_by=NULL`
+- 最後一次寫入：**01:30:57**
+
+⇒ 活躍窗口得 **01:12 → 01:31（約 18 分鐘）**，之後冇再認領。
+最可能：APK 被手動開過／測過一次，退到背景後冇 foreground service 保住（同 09-15 事故 A/C 節同一個病）。
+
+### 9.6 建議（按優先序，全部待批，未動手）
+
+| # | 建議 | 點解 |
+|---|---|---|
+| **1** | 落葉 job 補打印機快照：寫 `printer` jsonb（或起碼令 `claim` 返真嘅 `printers[]`） | 根治 §9.3 —— 而家中繼機**結構上無可能**可靠揀機 |
+| **2** | 由用戶提供機上實裝 APK 檔 | 追唔到 `dispatch failed` 真身嘅唯一方法 |
+| **3** | APK 補 foreground service + 開機自啟 + 電池白名單 | 解決 §9.5「一退背景就死」 |
+| **4** | claim 失敗／無 perceived 心跳要喺**收銀台 `/`** 可見（現時只有 `/prints` 會顯示） | 今次又係要靠雲端 probe 先發現 |
+| 5 | 跑 `0042` migration（分段式 claim 窗口） | 仍然未跑 |

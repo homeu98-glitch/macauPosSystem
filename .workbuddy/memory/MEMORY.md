@@ -23,7 +23,11 @@
 - 🔴 「改咗但行為唔變」＝① 冇 re-build／冇擰 `versionCode`（4 份）② 收銀機載 **Vercel 部署**。
 - `PrintJob` 必帶 `kind`。`ttl` = **絕對 epoch ms**；`/api/pos/sync` 落章，**只喺 insert 寫** ⇒ 舊行恆 NULL＝永不過期。
 - 🔴 `0042`（未跑）= claim **分段式**：**同機 6min／跨機 90s**（純 90s 會令中繼機搶返自己長單 → **重複出紙**）＋ `finished_at is null`。
-- 「重試打印」走 **`POST /api/pos/print-jobs/retry`**（冪等；已成功回 409）。失敗原因唯一用 `print-job-failure.ts` 6 碼。### 中繼配對（易錯位，實測沉澱）
+- 「重試打印」走 **`POST /api/pos/print-jobs/retry`**（冪等；已成功回 409）。失敗原因唯一用 `print-job-failure.ts` 6 碼。
+- 🔴 **雲端 job 冇打印機連線資料**：`printer` jsonb **恆 NULL**（server 未寫）＋ `claim/route.ts:42` **硬編碼 `printers:[]`**
+  ⇒ APK `resolvePrinter()` 前三步必空 → 兜底「Sunmi 內置」/`ipAddress=null` 假機 → **100% dispatch 失敗**。根治要寫 `printer` jsonb 或令 claim 返真 printers。
+- 🔴 **APK dex 係 DEFLATE 壓縮**：直接 `readFileSync(apk).includes(字串)` 一定掃唔到 ⇒ 解 zip central dir + `zlib.inflateRawSync` 再掃（`tools/_apk-strings.cjs`）。
+### 中繼配對（易錯位，實測沉澱）
 - 🔴 `paired:true` 只係「`pos_print_agents` 有行」＝**歷史事實**，唔等於機活著（Web 綠＋App 死可同時成立）。
 - 🔴 **反向**：中繼機 render 得出狀態文字＝ **APK 活著**。**「POS 雲端未設定」唔喺 APK 源碼**（APK 只出「欠 supabaseUrl / anonKey，用 30s 輪詢兜底」＋Toast「配對失敗，請檢查網絡或店舖 ID 是否正確」）⇒ 見到要去 **iPad 側**揾。
 - 🔴 `pair-status` 401 → panel 顯示「配對失敗」→ **配對流程自己停擺**。401 正解＝**iPad 重新登入**，唔係搞商米。`GET /pair?agentId=<假>` 恆回 `pending` ⇒ 證明唔到 env 有無值。
