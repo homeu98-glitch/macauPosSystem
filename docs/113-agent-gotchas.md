@@ -421,6 +421,73 @@
   5. `git status` / `git log -1` / `git branch -a` 驗證；`git fsck --connectivity-only` 睇物件齊唔齊。
 - ⚠️ **回收筒 `find` / `ls -la` 會被 sandbox 中途 kill（SIGTERM）**：回收筒有 **59,000+** 項目，`ls -la`（逐個 stat）必定被殺。要 `ls`（唔加 `-la`）匯出去檔案先分析。
 
+### 🔴🔴 2026-09-16 第四次中 —— 更重版，但**唔使靠回收筒**就修好（新路線，優先採用）
+
+**本次損壞樣態**：`.git/refs/**` 全冇、4 個 `.idx` 在但 `.pack` 全冇、131 個 loose 目錄空的。
+**但 `objects/pack/pack-ad35001fee*.pack`（182MB）其實完好** —— `cat-file -t 3d71dba0` 回 `commit`。
+⇒ **唔好一見到「pack 冇咗」就當物件全滅**，先驗 `cat-file`。
+
+**新發現（三條，全部實測）**：
+
+1. 🔴 **`--git-dir=<abs path>` 參數一樣無效**：照樣報 `fatal: not a git repository: '<path>'`。
+   原因同 `HEAD` 無關 —— **缺 `refs/` 時 `is_git_directory()` 直接拒絕**，連「路徑唔存在」同「唔係 repo」都分唔開。
+   ⇒ 未修好 `refs/` 之前，**任何** git 指令（連 `rev-parse`）都用唔到，唔好浪費時間試參數。
+   ⇒ **第一步一定是 `mkdir -p .git/refs/{heads,tags,remotes/origin}` + 寫 `refs/heads/main`**，寫完 `rev-parse --show-toplevel` 即刻通。
+
+2. 🔴 **長 fetch 用 node `execFileSync` 跑 = 一定被 SIGTERM，且會留殘骸**：
+   阻塞式呼叫頂唔住幾分鐘下載，被砍之後 `objects/pack/` 會多一個 **`tmp_pack_XXXXXX`（本次 54MB）**，
+   而真正嘅 `.pack` 可能已經寫好一部分。⇒ **fetch 一律用 `run_in_background`**；
+   收尾時清 `tmp_pack_*`（唔清會被之後嘅 `fsck` 當垃圾或引發 pack 載入錯誤）。
+
+3. 🔴 **孤立 `.idx` 會令 `fsck` 報 `failed to load pack in position N`**：
+   `.idx` 無對應 `.pack` 就係孤兒（本次 4 個），**必須刪**；`multi-pack-index` 亦會引用已刪 idx，一併刪。
+   修完 `count-objects -v` 應見 `packs: 1, garbage: 0`。
+
+4. ⚠️ **reflog 清理要同時比對兩個欄位**：
+   reflog 行格式 = `<old SHA> <new SHA> <author> <ts> <tz>\t<action>`。
+   含遺失 SHA 嘅行，**遺失嘅可能係第 1 欄（old）而唔係第 2 欄**（本次兩行都係 old 欄遺失）。
+   只比對 new 會漏 → `fsck` 繼續報 `error: HEAD: invalid reflog entry <sha>`（exit 2）。
+   ⇒ 條件寫成 `!lost.includes(f[0]) && !lost.includes(f[1])`，同時處理 `/logs/HEAD` 同 `/logs/refs/heads/main`。
+
+**本次修復路線（比回收筒法快，優先試）**：
+```bash
+# 0. 備份
+cp -r .git ../_git_backup_<repo>_YYYYMMDD
+# 1. 問遠端要權威 SHA（唔靠 origin 名，remote 設定可能已爛）
+git ls-remote https://github.com/<user>/<repo>.git refs/heads/main
+# 2. 手動重建 refs 目錄樹（關鍵一步）
+mkdir -p .git/refs/heads .git/refs/tags .git/refs/remotes/origin
+printf '<SHA>\n' > .git/refs/heads/main
+printf '<SHA>\n' > .git/refs/remotes/origin/main
+printf 'ref: refs/remotes/origin/main\n' > .git/refs/remotes/origin/HEAD
+# 3. 拉物件（丟背景！）
+git -c gc.auto=0 fetch --no-tags <原始URL> main
+# 4. 清孤立 idx / tmp_pack_* / multi-pack-index
+# 5. 清 reflog（兩欄都比對）
+# 6. 驗收
+git fsck --connectivity-only && git fsck --full
+git status --porcelain=v1 --branch     # ← GitHub Desktop 判準，必須 exit 0
+git branch -vv                          # 應 = "<sha> [origin/main] up"
+git count-objects -v                    # packs: 1, garbage: 0
+```
+
+**判斷「有冇未推嘅 commit」（最緊要，決定能唔能用 fetch 路線）**：
+比對 `.git/FETCH_HEAD`（或 reflog 最後一條 commit 嘅 SHA）同 `git ls-remote origin`。
+**兩者一致 → 本地零未推、遠端完整 → 直接 fetch 還原，唔使 rebuild 歷史。**
+（09-16 本次兩者都係 `3d71dba0`，495 個 commit、09-01 起歷史全部保住。）
+
+**驗證歷史深度要用正確寫法（09-16 中過）**：
+```bash
+git rev-list --count main          # ✅ 正確：495
+git log --format='%h %ad %s' --date=short | tail -3   # ✅ 最早 3 個
+```
+- 🔴 **唔好用 `git log --reverse -1`**：`--reverse` 會**先套用 `-1` 截斷再反轉**，
+  結果返回「最新」而唔係「最早」。本次呢個寫法一度令我誤判「歷史斷咗、只有 1 個 commit」，
+  白白多花一輪排查。要睇最早 commit 就**唔加 `-n`**，取輸出嘅最後幾行。
+- 交叉驗證：`rev-list --count` 數值 == `log --oneline` 行數 == `count-objects -v` 的合理量級；
+  再隨機抽幾個歷史 SHA 跑 `cat-file -t` 應全回 `commit`。
+
+
 ## 模版設計頁「即時預覽」唔跟開關（2026-09-11 修）
 - **症狀**：商家喺 `print-center.tsx` 左邊「區塊順序」熄咗某個區塊（例如「門店名」），但右邊「**即時**預覽（**真實**熱敏樣式）」完全冇變 —— 字面同行為直接矛盾。
 - **根因**：`buildPreviewLines()` 舊版刻意 clone 一份 `visible` 全 `true` 嘅快照（只有 `divider` 例外），理由係「等商家一眼見到完整版面」，但代價係**開關對預覽零效應**（`escpos-render.ts:263` 嘅 `if (!b.visible) continue` 永遠唔會觸發）。

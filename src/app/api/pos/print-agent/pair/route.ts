@@ -10,7 +10,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
-import { loadPairedAgent, sha256Hex } from "@/lib/print-agent-server";
+import { loadPairedAgent, resolveRelayRealtimeConfig, sha256Hex } from "@/lib/print-agent-server";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
 export const dynamic = "force-dynamic";
@@ -78,14 +78,23 @@ export async function GET(request: Request) {
     return NextResponse.json({ status: "pending" });
   }
   // supabaseUrl / anonKey 由 server 落（唔 hardcode 喺 APK），APK 用嚟訂閱 Realtime 拎單。
-  const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-  const anonKey = process.env.SUPABASE_ANON_KEY ?? "";
+  const realtime = resolveRelayRealtimeConfig();
+  if (!realtime) {
+    // 唔可以回 error（會令 APK 嘅 pollPair 見 status!="paired" 而永遠配唔到），
+    // 亦唔可以靜默回 "" —— 要留一條 server log 令人查得到係環境未設好。
+    console.warn(
+      "[print-agent/pair] ⚠️ 缺少 SUPABASE_URL / SUPABASE_ANON_KEY（POS 專案）——" +
+        "APK 會配對成功但拎唔到 Realtime 憑證，只能靠 30s 輪詢兜底。請喺部署環境補齊並重新部署。",
+    );
+  }
   return NextResponse.json({
     status: "paired",
     storeId: agent.storeId,
     storeName: agent.storeName,
-    supabaseUrl: url,
-    anonKey,
+    // 缺值時明確回 null（唔係空字串），令 APK 側 `takeIf { isNotBlank() }` 一眼判斷到
+    // 「未拎到憑證」而唔係「拎到一個空值」。
+    supabaseUrl: realtime?.url ?? null,
+    anonKey: realtime?.anonKey ?? null,
   });
 }
 

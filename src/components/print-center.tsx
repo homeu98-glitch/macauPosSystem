@@ -235,7 +235,16 @@ export function PrintCenter() {
     >
   >({});
   /** 中繼打印機代理狀態（心跳時間），用嚟分辨「代理離線」定「代理在線但印唔出」。 */
-  const [agentStatus, setAgentStatus] = useState<{ paired: boolean; lastSeenAt: string | null } | null>(null);
+  const [agentStatus, setAgentStatus] = useState<{
+    paired: boolean;
+    lastSeenAt: string | null;
+    /**
+     * 🔴 2026-09-16：`paired` 只代表 `pos_print_agents` 有行（APK 註冊過）。
+     * `androidReady` 才代表 APK 由 `GET /pair` 拎到 **POS 專案** 嘅 supabaseUrl + anonKey
+     * → Realtime 訂得到 `pos_print_jobs`。兩者可以一個綠一個紅，所以分開存。
+     */
+    androidReady: boolean;
+  } | null>(null);
   const [orders] = useState<PosOrder[]>(() => loadOrders());
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
@@ -415,9 +424,14 @@ export function PrintCenter() {
             fetch(`/api/pos/print-agent/pair-status?storeId=${encodeURIComponent(storeId)}`, { headers }),
           )
           .then((res) => (res.ok ? res.json() : null))
-          .then((json: { paired?: boolean; lastSeenAt?: string | null } | null) => {
+          .then((json: { paired?: boolean; lastSeenAt?: string | null; androidReady?: boolean } | null) => {
             if (alive && json) {
-              setAgentStatus({ paired: Boolean(json.paired), lastSeenAt: json.lastSeenAt ?? null });
+              setAgentStatus({
+                paired: Boolean(json.paired),
+                lastSeenAt: json.lastSeenAt ?? null,
+                // 舊部署未回呢個欄 → 當 true，唔好無故將正常運作嘅店標紅。
+                androidReady: json.androidReady !== false,
+              });
             }
           })
           .catch(() => undefined);
@@ -1761,9 +1775,11 @@ export function PrintCenter() {
                       ? ""
                       : !agentStatus.paired
                         ? "中繼打印機：未配對。"
-                        : minutesAgo === null
-                          ? "中繼打印機：已配對（未有心跳紀錄）。"
-                          : `中繼打印機：最後心跳 ${minutesAgo} 分鐘前${minutesAgo >= 5 ? "（疑似離線）" : ""}。`;
+                        : !agentStatus.androidReady
+                          ? "中繼打印機：已配對，但 Android 側未拎到雲端連線憑證（supabaseUrl / anonKey）→ 收唔到即時通知，只靠 30 秒輪詢兜底。請檢查部署環境有冇設 SUPABASE_URL / SUPABASE_ANON_KEY。"
+                          : minutesAgo === null
+                            ? "中繼打印機：已配對（未有心跳紀錄）。"
+                            : `中繼打印機：最後心跳 ${minutesAgo} 分鐘前${minutesAgo >= 5 ? "（疑似離線）" : ""}。`;
                   return (
                     <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
                       <div className="font-semibold">

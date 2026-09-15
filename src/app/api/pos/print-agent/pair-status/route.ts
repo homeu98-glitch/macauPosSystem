@@ -5,6 +5,7 @@
 import { NextResponse } from "next/server";
 
 import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
+import { resolveRelayRealtimeConfig } from "@/lib/print-agent-server";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
@@ -75,5 +76,19 @@ export async function GET(request: Request) {
     // 「已發送但印唔出」事故入面，呢個係最快分得清「代理離線（冇人認領）」
     // 同「代理在線但認領咗冇回報」嘅一個數。
     lastSeenAt: (data.last_seen_at as string | null) ?? null,
+    /**
+     * 🔴 2026-09-16：`paired: true` **唔等於 Android 已就緒**。
+     *
+     * `paired` 只證明 `pos_print_agents` 有呢一行（即 APK 成功 POST 過 /pair）。
+     * 但 APK 仲要由 `GET /pair?agentId=` 拎到 **POS 專案** 嘅 `supabaseUrl` + `anonKey`
+     * 才訂得到 `pos_print_jobs`。若呢兩欄缺（部署環境冇設 `SUPABASE_URL` / `SUPABASE_ANON_KEY`），
+     * 或者唔小心 fallback 去咗 Ledger 專案，APK 會顯示「POS 雲端未設定」／
+     * 「欠 supabaseUrl / anonKey，用 30s 輪詢兜底」，而**呢個端點依然係綠**。
+     * 兩者可以同時成立 —— 所以一定要分開報。
+     *
+     * 判準同 `GET /pair` 用**同一個** helper，避免兩邊口徑漂移：
+     * 有值 → `androidReady: true`；缺值 → `false`，前端要顯示「Android 未就緒」而唔止「已配對」。
+     */
+    androidReady: resolveRelayRealtimeConfig() !== null,
   });
 }
