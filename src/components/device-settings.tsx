@@ -44,7 +44,7 @@ import { PrinterCardV2, PrinterEmptyState } from "@/components/printer-card-v2";
 import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
-import { MerchantOrderConfigSection, MerchantOrderHeaderToggle } from "@/components/merchant-order-config-section";
+import { MerchantOrderConfigSection } from "@/components/merchant-order-config-section";
 import {
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
@@ -1048,14 +1048,12 @@ export function DeviceSettings() {
                 打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。
               </div>
             </div>
-            {/* 右側控件（由左至右）：「工作台」入口 ＋「店內營業」狀態 toggle
-                ＋「線上接單」狀態 toggle ＋ 返回收銀台。
-                ⚠️ 2026-09-14：兩粒狀態 pill 嘅掣面都寫「營業中 / 已暫停」，
-                一定要靠 label（店內營業 / 線上接單）分清楚 —— 而家「店內營業」已經
-                搬去側欄商店名卡（`app-sidebar.tsx`），header 只剩下面嗰粒「線上接單」。
+            {/* 右側控件（由左至右）：只剩「工作台」入口 ＋ 返回收銀台。
                 「工作台」入口 2026-09-13 由側欄搬上嚟 —— 側欄 72px 闊唔應該擺一次性設定，
                 但逃生門要保留（揀錯工作台唔應該逼人登出再打 8 位帳號 + PIN）。
-                行為同側欄原本嗰粒一模一樣：`href="/select-workbench"` 直接跳，冇二次確認。 */}
+                行為同側欄原本嗰粒一模一樣：`href="/select-workbench"` 直接跳，冇二次確認。
+                ⚠️ 2026-09-15：狀態 pill（「店內營業」→側欄商店名卡、「線上接單」→營運畫面）
+                全部搬走，header 唔再放開關。 */}
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <Link
                 className="flex items-center gap-2 rounded-full bg-orange-500 px-3 py-2 text-sm font-semibold text-white"
@@ -1065,12 +1063,14 @@ export function DeviceSettings() {
                 <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
                 工作台
               </Link>
-              {/* 2026-09-14：「店內營業」（線下，擋掃碼／kiosk）**已經搬去側欄商店名卡**
-                  （`app-sidebar.tsx`：撳商店名 = 切換營業狀態、紅色 = 已暫停）。
-                  理由同「工作台入口搬走」一樣 —— 側欄每行都係稀缺資源，
-                  而商店名卡本身已經喺底部固定位置，整合入去＝零額外行高。
-                  行為邏輯（二次確認 ＋ 單向連動暫停「線上接單」）喺 `useStoreOpenToggle()`。 */}
-              <MerchantOrderHeaderToggle />
+              {/* 2026-09-15 J 拍板：**拿走 header 嗰粒「線上接單」**（原 `MerchantOrderHeaderToggle`）。
+                  理由：「線上接單」已經喺 4 個地方出現 ——
+                  ① 桌台總覽標題列 ② 訂單頁 › 線上訂單卡 ③ 快餐訂單列 › 線上訂單
+                  ④ 側欄商店名卡（線下接單／店內營業，共用同一套開關邏輯）。
+                  header 只係路過，唔係設定動作。下面「線上接單」**分頁**本身就有同一粒掣
+                  （`MerchantOrderConfigSection`，連同自動接單／重新整理）→ **該分頁嘅掣保留**。
+                  2026-09-14 舊決策（仍然適用）：側欄商店名卡 = 「店內營業」入口
+                  （撳商店名切換、紅色 = 已暫停）；行為一律喺 `useStoreOpenToggle()`。 */}
               <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
                 返回收銀台
               </Link>

@@ -8,6 +8,7 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
+import { StoreOpenPill } from "@/components/store-open-pill";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
@@ -504,11 +505,20 @@ export function LocalOrdersPanel({
           </div>
           <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
             {/*
-              規格 6：「自動接自助單」開關直接取代原「刪除全部訂單」掣位。
-              ⚠️ 「刪除全部訂單」嘅**邏輯保留**（handleDeleteAllOrders + 下方確認彈窗），只係
-              介面上唔再需要入口（用戶明確指示：logic 唔好刪、UI 唔再需要）。
-              要還原只要喺度加返一粒 onClick={() => setConfirmDeleteAllOpen(true)} 嘅掣就得。
+              2026-09-15 J 要求：加一粒「**線下接單**」—— 同上一張卡（`online-orders.tsx`
+              嘅「線上接單」）完全對稱：上卡「線上接單 ＋ 自動接單」，呢卡「線下接單 ＋ 自動接自助單」。
+              兩粒總掣嘅性質**完全唔同**（一定要記住）：
+              - 線下接單（本粒，`StoreOpenPill`）＝**店內營業總掣**
+                （`pos_store_status.is_open`，0039）→ 擋掃碼點餐 ＋ 自助點餐機；關咗＝停業，
+                掣面紅色「已暫停」＋ 二次確認，而且會**單向連動**暫停「線上接單」。
+              - 自動接自助單（`SelfOrderAutoAcceptToggle`）＝ 自助單要唔要自動接
+                （`pos_kiosk_settings.selfOrderAutoAccept`）→ 只影響流程，唔會停業。
+              ⚠️ 尺寸用 `md`（唔用精簡 xs）：要同上面嗰粒「線上接單」一樣大，上下兩卡先對稱。
+              ⚠️ 「刪除全部訂單」嘅**邏輯保留**（handleDeleteAllOrders + 下方確認彈窗），
+                 只係介面上唔再需要入口（用戶明確指示：logic 唔好刪、UI 唔再需要）。
+                 要還原只要喺度加返一粒 onClick={() => setConfirmDeleteAllOpen(true)} 嘅掣。
             */}
+            <StoreOpenPill size="md" />
             <SelfOrderAutoAcceptToggle />
           </div>
         </div>

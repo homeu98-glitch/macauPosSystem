@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<title>設置頁拿走線上接單 ＋ 訂單頁加線下接單 — 確認稿 v3 · 2026-09-15</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;
+  --slate-500:#64748b;--slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;--slate-100:#f1f5f9;
+  --orange-500:#f97316;--orange-600:#ea580c;--emerald-600:#059669;--indigo:#4f46e5;
+  --red-600:#dc2626;--amber-700:#b45309;--amber-500:#f59e0b;--amber-300:#fcd34d;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK",sans-serif}
+
+.review{background:#0f172a;color:#e2e8f0;padding:13px 20px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:3px 0 0;font-size:12px;color:#94a3b8}
+.review .hl{color:#fbbf24}
+.tabs{display:inline-flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+.stage{max-width:1180px;margin:18px auto 40px;position:relative;overflow:hidden;
+  border-radius:22px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.canvas{width:1180px;height:1060px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;padding:16px 20px 20px;
+  overflow-y:auto}
+.screenwrap.on{display:flex}
+/* 🔴 固定高度區塊一定要 flex:none，否則 flex column 會靜靜壓扁 */
+.setpage,.ordpage,.stripwrap,.card,.note,.tbl,.optbox{flex:none}
+
+.h1{font-size:15px;font-weight:600}
+.sub{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7}
+.sub code,.card .cb code,.note code,.specgrid .v code,.tbl code{font-family:ui-monospace,Menlo,monospace;
+  font-size:11px;background:rgba(100,116,139,.12);padding:1px 5px;border-radius:4px}
+.note code{background:rgba(146,64,14,.1)}
+.reqchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.reqchip{font-size:11px;font-weight:600;border-radius:999px;padding:3px 10px;
+  background:var(--slate-100);color:var(--slate-600);border:1px solid var(--slate-200)}
+.reqchip.on{background:#fff7ed;color:#c2410c;border-color:#fdba74}
+.reqchip.gone{background:#f1f5f9;color:#94a3b8;border-color:#e2e8f0;text-decoration:line-through}
+
+/* ══ 通用 pill（真產品實測：掣面字級＝16px，因為 button{font:inherit} 蓋走 Tailwind text-*）══ */
+.cpill{display:inline-flex;align-items:center;border-radius:999px;background:var(--slate-100);position:relative}
+.cpill .clb{font-weight:600;color:var(--slate-600);white-space:nowrap}
+.cpill .cpv{border-radius:999px;background:var(--emerald-600);color:#fff;white-space:nowrap}
+.cpill .cpv .tx{display:block;font-weight:600}
+/* md：外底 px-3 py-1.5、label 12px、掣面 px-4 py-2 + 16px */
+.cpill.md{gap:8px;padding:6px 12px}
+.cpill.md .clb{font-size:12px}
+.cpill.md .cpv{padding:8px 16px}
+.cpill.md .cpv .tx{font-size:16px;line-height:1.2}
+/* xs：外底 p-[3px]、label 11px、掣面 px-1.5 py-[9px] + 12px */
+.cpill.xs{gap:6px;padding:3px}
+.cpill.xs .clb{font-size:11px}
+.cpill.xs .cpv{padding:9px 6px}
+.cpill.xs .cpv .tx{font-size:12px;line-height:1.35}
+.cpill .cpv.off{background:#fff;color:var(--amber-700);box-shadow:inset 0 0 0 1px var(--amber-300)}
+.cpill .cpv.closed{background:var(--red-600);color:#fff}
+.cpill.new{box-shadow:0 0 0 3px rgba(249,115,22,.8)}
+.cpill.removed{outline:2px dashed #f87171;outline-offset:3px}
+.badge{position:absolute;top:-12px;left:10px;font-size:10px;font-weight:600;border-radius:999px;
+  padding:1px 7px;white-space:nowrap}
+.badge.add{background:var(--orange-500);color:#fff}
+.badge.del{background:#dc2626;color:#fff}
+
+/* ══ 設置頁（真值：max-w-1600 + px-4 + md:pl-[88px]）══ */
+.pagelabel{font-size:11px;font-weight:600;color:var(--slate-500);margin:14px 0 6px}
+.pagelabel b{color:var(--slate-700)}
+.app{display:grid;grid-template-columns:72px minmax(0,1fr);width:1084px;margin:0 auto;
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
+.app.tall{min-height:190px}
+.sb{background:var(--slate-900);padding:8px 6px;display:flex;flex-direction:column;gap:6px}
+.sb-i{border-radius:12px;background:#1e293b;color:#cbd5e1;padding:6px 2px;text-align:center}
+.sb-i .ic{display:block;width:20px;height:20px;border-radius:999px;background:rgba(255,255,255,.1);
+  margin:0 auto 3px;font-size:9px;line-height:20px;font-weight:600}
+.sb-i .tx{display:block;font-size:8px;line-height:1.25;font-weight:600}
+.sb-i.on{background:var(--orange-500);color:#fff}
+.sb-sp{flex:1}
+.body{padding:12px 16px 12px 16px;min-width:0}
+.sethead{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:16px;
+  padding-bottom:10px;border-bottom:1px solid var(--slate-100)}
+.sethead .ttl{font-size:18px;font-weight:600}
+.sethead .cap{font-size:13px;color:var(--slate-500);margin-top:3px}
+.setr{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.pw{display:inline-flex;align-items:center;gap:8px;border-radius:999px;background:var(--orange-500);
+  padding:8px 12px;color:#fff;font-size:14px;font-weight:600}
+.pw .ic2{width:20px;height:20px;border-radius:999px;background:rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;font-size:11px}
+.pl{display:inline-flex;align-items:center;border-radius:999px;background:var(--indigo);
+  padding:8px 12px;color:#fff;font-size:14px;font-weight:600}
+.tabrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.tabchip{border-radius:999px;padding:8px 16px;font-size:14px;font-weight:600;
+  background:#fff;color:var(--slate-700);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.tabchip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+.statusline{margin-top:12px;border:1px solid var(--slate-200);border-radius:14px;padding:10px 14px;
+  font-size:13px;color:var(--slate-600)}
+.section{margin-top:12px;border:1px solid var(--slate-200);border-radius:14px;padding:12px 14px}
+.section .sh{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}
+.section .st{font-size:15px;font-weight:600}
+.section .sc{font-size:13px;color:var(--slate-500);margin-top:4px;max-width:52ch;line-height:1.6}
+.section .sr{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.btn{display:inline-block;border-radius:999px;padding:8px 16px;font-size:16px;font-weight:600;
+  background:#fff;color:var(--slate-700);box-shadow:inset 0 0 0 1px var(--slate-200);white-space:nowrap}
+.btn.dark{background:var(--slate-900);color:#fff;box-shadow:none}
+
+/* ══ 訂單頁 ══ */
+.ordhead{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;
+  padding-bottom:10px;border-bottom:1px solid var(--slate-100)}
+.ordhead .ttl{font-size:18px;font-weight:600}
+.ordhead .cap{font-size:14px;color:var(--slate-500);margin-top:2px}
+.chipsrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+.dchips{display:flex;flex-wrap:wrap;gap:6px}
+.dchip{border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;background:var(--slate-100);color:var(--slate-600)}
+.dchip.on{background:var(--orange-500);color:#fff}
+.ocard{border-top:1px solid var(--line);background:#f8fafc;padding:12px 16px}
+.ocard.white{background:#fff}
+.ocard .oh{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.ocard .otitle{min-width:190px}
+.ocard .ot{font-size:14px;font-weight:600}
+.ocard .os{font-size:12px;color:var(--slate-500);margin-top:3px}
+.ocard .otabs{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.otab{border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600;background:var(--slate-100);color:var(--slate-700)}
+.otab.on{background:var(--orange-500);color:#fff}
+.ocard .oright{margin-left:auto;display:flex;flex-wrap:nowrap;align-items:center;gap:8px}
+.tablerow{display:grid;grid-template-columns:96px 92px 1fr 84px 96px;gap:8px;padding:7px 10px;
+  font-size:11.5px;color:var(--slate-600);border-top:1px solid var(--slate-100)}
+
+/* ══ 說明區 ══ */
+.note{background:#fffbeb;border:1px solid var(--amber-300);border-radius:14px;
+  padding:11px 14px;margin-top:12px}
+.note.green{background:#f0fdf4;border-color:#86efac}
+.note.red{background:#fef2f2;border-color:#fca5a5}
+.note .nt{font-size:12px;font-weight:600;color:#92400e;margin-bottom:5px}
+.note.green .nt{color:#166534}
+.note.red .nt{color:#991b1b}
+.note ul{margin:0;padding-left:18px;font-size:11.5px;color:#78350f;line-height:1.85}
+.note.green ul{color:#14532d}
+.note.red ul{color:#7f1d1d}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-top:12px}
+.card .ct{font-size:12.5px;font-weight:600;margin-bottom:8px}
+.card .cb{font-size:11.5px;color:var(--slate-600);line-height:1.8}
+.specgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 22px}
+.specgrid .row{display:grid;grid-template-columns:74px minmax(0,1fr);gap:10px;align-items:baseline}
+.specgrid .k{font-size:11px;font-weight:600;color:var(--slate-500)}
+.specgrid .v{font-size:11.5px;color:var(--slate-700);line-height:1.7}
+
+.tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-top:12px}
+.tbl .tr{display:grid;grid-template-columns:44px 250px minmax(0,1fr);border-top:1px solid var(--line)}
+.tbl .tr:first-child{border-top:0;background:var(--slate-100)}
+.tbl .th,.tbl .td{padding:9px 12px;font-size:11.5px;line-height:1.7}
+.tbl .th{font-weight:600;color:var(--slate-600);font-size:11px}
+.tbl .td{color:var(--slate-700);border-left:1px solid var(--line)}
+.tbl .td:first-child{border-left:0}
+.tbl .num{font-weight:700;text-align:center;border-left:0;color:var(--orange-600)}
+.tbl .num.del{color:#dc2626}
+.tbl strong{color:var(--slate-900)}
+.optrow{display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;align-items:center;margin-top:9px}
+.optrow .ok{font-size:11px;font-weight:600;color:var(--slate-500);line-height:1.5}
+.optrow .ov{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.pick{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;
+  border-radius:6px;border:1.5px solid var(--slate-300);font-size:11px;font-weight:700;color:transparent}
+.pick.a{border-color:var(--orange-500);background:var(--orange-500);color:#fff}
+.pillrowstrip{border:1px solid var(--line);border-radius:12px;background:#fff;padding:14px;
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:6px}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <h1>設置頁拿走「線上接單」 ＋ 訂單頁加「線下接單」 — 確認稿 v3（2026-09-15）</h1>
+  <p>產品畫面用真實色值 ＋ 真實 computed 字級（掣面 16px）；<span class="hl">橙／紅虛線框只係確認稿標記，唔會出現在實作</span>；深色框係評審工具列，唔屬於產品介面</p>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="s1">① 設置頁 · 拿走線上接單</button>
+    <button data-tab="s2">② 訂單頁 · 加線下接單</button>
+    <button data-tab="s3">③ 對照 ＋ 待你拍板</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ══════════════════ ① 設置頁 ══════════════════ -->
+  <div class="screenwrap on" id="s1">
+    <div class="h1">① 設置頁 — 拿走 header 嗰粒「線上接單」pill</div>
+    <div class="sub">「線上接單」而家已經喺 <b>桌台總覽標題列、訂單頁、快餐訂單列</b> 三個常用畫面出現，設置頁 header 嗰粒係重複入口（而且 header 只係路過，唔係設定動作）。拿走之後 header 由 3 件控件變 2 件。</div>
+    <div class="reqchips">
+      <span class="reqchip gone">設置 header：線上接單</span>
+      <span class="reqchip on">其餘全部保留</span>
+    </div>
+
+    <div class="pagelabel">調整前　<b>設置 header</b>（工作台 ｜ 線上接單 ｜ 返回收銀台）</div>
+    <div class="app">
+      <div class="sb">
+        <div class="sb-i on"><span class="ic">設</span><span class="tx">設置</span></div>
+        <div class="sb-i"><span class="ic">點</span><span class="tx">點餐</span></div>
+        <div class="sb-i"><span class="ic">單</span><span class="tx">訂單</span></div>
+        <div class="sb-sp"></div>
+        <div class="sb-i"><span class="ic">出</span><span class="tx">登出</span></div>
+      </div>
+      <div class="body">
+        <div class="sethead">
+          <div>
+            <div class="ttl">設置</div>
+            <div class="cap">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+          </div>
+          <div class="setr">
+            <span class="pw"><span class="ic2">台</span>工作台</span>
+            <span class="cpill md removed"><span class="badge del">拿走</span><span class="clb">線上接單</span><span class="cpv"><span class="tx">接單中</span></span></span>
+            <span class="pl">返回收銀台</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pagelabel">調整後　<b>設置 header</b>（工作台 ｜ 返回收銀台）</div>
+    <div class="app tall">
+      <div class="sb">
+        <div class="sb-i on"><span class="ic">設</span><span class="tx">設置</span></div>
+        <div class="sb-i"><span class="ic">點</span><span class="tx">點餐</span></div>
+        <div class="sb-i"><span class="ic">單</span><span class="tx">訂單</span></div>
+        <div class="sb-sp"></div>
+        <div class="sb-i"><span class="ic">出</span><span class="tx">登出</span></div>
+      </div>
+      <div class="body">
+        <div class="sethead" style="border-bottom:0;padding-bottom:0">
+          <div>
+            <div class="ttl">設置</div>
+            <div class="cap">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+          </div>
+          <div class="setr">
+            <span class="pw"><span class="ic2">台</span>工作台</span>
+            <span class="pl">返回收銀台</span>
+          </div>
+        </div>
+        <div class="tabrow">
+          <span class="tabchip">打印機</span>
+          <span class="tabchip">菜品打印設置</span>
+          <span class="tabchip">菜單</span>
+          <span class="tabchip">樓層與桌台</span>
+          <span class="tabchip">支付方式</span>
+          <span class="tabchip on">線上接單</span>
+          <span class="tabchip">備註</span>
+          <span class="tabchip">折扣</span>
+          <span class="tabchip">掃碼點餐</span>
+        </div>
+        <div class="statusline">已載入門店設定：表嫂美食 · MOP</div>
+
+        <div class="section">
+          <div class="sh">
+            <div>
+              <div class="st">線上接單（會員通）</div>
+              <div class="sc">呢粒「線上接單」係全店線上單嘅總掣：關咗之後客人喺會員通落唔到新單。店內堂食、快餐、自助點餐完全不受影響。改動會即時同步到其他收銀機。</div>
+            </div>
+            <div class="sr">
+              <span class="cpill md"><span class="clb">線上接單</span><span class="cpv"><span class="tx">接單中</span></span></span>
+              <span class="cpill md"><span class="clb">自動接單</span><span class="cpv"><span class="tx">開</span></span></span>
+              <span class="btn">重新整理</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="nt">⚠️ 呢頁（設置 › 線上接單 分區）嗰粒「線上接單」我<b>建議保留</b> —— 要唔要一齊拿走由你決定（見 ③）</div>
+      <ul>
+        <li>理由：分區係「設定」場景，就地開關最直觀；而且 Ledger 通道未接通時會喺嗰度顯示「重新整理」補救。</li>
+        <li>但如果你嘅原則係「線上接單只喺營運畫面（桌台總覽／訂單／快餐）出現，設置頁一律唔放」，我可以連嗰粒都拿走（③ 有兩種畫法）。</li>
+      </ul>
+    </div>
+
+    <div class="note green">
+      <div class="nt">✔ 拿走之後唔會失聯 —— 線上接單仲有 4 個入口</div>
+      <ul>
+        <li><b>桌台總覽標題列</b>（堂食，今日新加）</li>
+        <li><b>訂單頁 › 線上訂單卡標題列</b>（即 ② 頁上面嗰張卡）</li>
+        <li><b>快餐訂單列 › 線上訂單</b>（快餐模式）</li>
+        <li><b>側欄 › 商店名卡</b>（線下接單／店內營業；同一套開關邏輯，但唔係同一粒掣）</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══════════════════ ② 訂單頁 ══════════════════ -->
+  <div class="screenwrap" id="s2">
+    <div class="h1">② 訂單頁 — 「店內線下訂單」加一粒「線下接單」pill</div>
+    <div class="sub">訂單頁係<b>上下兩區、每區全寬</b>（實測每張卡 header 可用約 <b>980px</b>），所以加一粒唔會迫爆。加完之後上下兩區完全對稱：上區「線上接單 ＋ 自動接單」、下區「線下接單 ＋ 自動接自助單」。</div>
+    <div class="reqchips">
+      <span class="reqchip on">下區新增：線下接單</span>
+      <span class="reqchip on">上區（線上接單）不動</span>
+    </div>
+
+    <div class="pagelabel">調整後　<b>訂單頁</b>（上：會員通線上訂單　下：店內線下訂單）</div>
+    <div class="app">
+      <div class="sb">
+        <div class="sb-i"><span class="ic">點</span><span class="tx">點餐</span></div>
+        <div class="sb-i on"><span class="ic">單</span><span class="tx">訂單</span></div>
+        <div class="sb-i"><span class="ic">報</span><span class="tx">報表</span></div>
+        <div class="sb-sp"></div>
+        <div class="sb-i"><span class="ic">設</span><span class="tx">設置</span></div>
+      </div>
+      <div class="body" style="padding-bottom:0">
+        <div class="ordhead">
+          <div>
+            <div class="ttl">訂單</div>
+            <div class="cap">上：會員通線上訂單 · 下：店內線下訂單</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span class="btn dark">匯出線上單（3）</span>
+            <span class="btn" style="background:#e2e8f0;box-shadow:none">匯出線下單（2）</span>
+          </div>
+        </div>
+        <div style="margin-top:10px" class="chipsrow">
+          <div class="dchips">
+            <span class="dchip on">今日</span>
+            <span class="dchip">本週</span>
+            <span class="dchip">本月</span>
+            <span class="dchip">自訂</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ocard" style="width:1012px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line)">
+      <div class="oh">
+        <div class="otitle">
+          <div class="ot">線上訂單</div>
+          <div class="os">今日 · 全部 · 共 3 張 · 新單 1 張</div>
+        </div>
+        <div class="otabs">
+          <span class="otab on">全部</span>
+          <span class="otab">待接單</span>
+          <span class="otab">製作中</span>
+        </div>
+        <div class="oright">
+          <span class="cpill md"><span class="clb">線上接單</span><span class="cpv"><span class="tx">接單中</span></span></span>
+          <span class="cpill md"><span class="clb">自動接單</span><span class="cpv"><span class="tx">開</span></span></span>
+          <span class="btn">手動刷新</span>
+        </div>
+      </div>
+      <div class="tablerow"><span>取餐碼 002</span><span>堂食</span><span>金不換炒肉片豆腐飯 ×1</span><span>MOP 38</span><span style="color:#059669">已接單</span></div>
+    </div>
+
+    <div class="ocard white" style="width:1012px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line)">
+      <div class="oh">
+        <div class="otitle">
+          <div class="ot">店內線下訂單</div>
+          <div class="os">今日 · 全部 · 共 2 張 · 新單 0 張</div>
+        </div>
+        <div class="otabs">
+          <span class="otab on">全部</span>
+          <span class="otab">未下單</span>
+          <span class="otab">已下單</span>
+          <span class="otab">已結帳</span>
+        </div>
+        <div class="oright">
+          <span class="cpill md new"><span class="badge add">新增</span><span class="clb">線下接單</span><span class="cpv"><span class="tx">營業中</span></span></span>
+          <span class="cpill md"><span class="clb">自動接自助單</span><span class="cpv"><span class="tx">開</span></span></span>
+        </div>
+      </div>
+      <div class="tablerow"><span>A01</span><span>1樓</span><span>凍檸茶 ×2 · 乾炒牛河 ×1</span><span>MOP 118</span><span style="color:#059669">已結帳</span></div>
+    </div>
+
+    <div class="pagelabel">下區 header　<b>調整前</b>（只有「自動接自助單」）</div>
+    <div class="pillrowstrip" style="width:1012px;margin:0 auto">
+      <div class="otitle" style="flex:1">
+        <div class="ot">店內線下訂單</div>
+        <div class="os">今日 · 全部 · 共 2 張 · 新單 0 張</div>
+      </div>
+      <span class="cpill md"><span class="clb">自動接自助單</span><span class="cpv"><span class="tx">開</span></span></span>
+    </div>
+
+    <div class="note">
+      <div class="nt">⚠️ 呢粒「線下接單」管咩（同「自動接自助單」完全唔同性質）</div>
+      <ul>
+        <li>「線下接單」＝ <b>店內營業總掣</b>（`pos_store_status.is_open`）：擋<b>掃碼點餐 ＋ 自助點餐機</b>落單。關咗＝停業，所以掣面係<b>紅底「已暫停」</b>，而且關之前要二次確認。</li>
+        <li>「自動接自助單」＝ 自助單要唔要自動接（`pos_kiosk_settings.selfOrderAutoAccept`），只影響流程、唔會停業。</li>
+        <li>關「線下接單」會<b>單向連動</b>暫停「線上接單」；重開唔會自動開返線上（同側欄商店名卡行為一致）。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══════════════════ ③ 對照 ＋ 待拍板 ══════════════════ -->
+  <div class="screenwrap" id="s3">
+    <div class="h1">③ 兩項調整逐條對照 ＋ 2 個需要你確認嘅點</div>
+    <div class="sub">「現況」已對過 <code>device-settings.tsx</code>（header）、<code>orders-hub.tsx</code> / <code>local-orders-panel.tsx</code>（訂單頁兩區）嘅實際代碼。</div>
+
+    <div class="tbl">
+      <div class="tr"><div class="th num">#</div><div class="th">調整</div><div class="th">實作方式</div></div>
+      <div class="tr">
+        <div class="td num del">1</div>
+        <div class="td">設置頁內「線上接單」按鈕拿走</div>
+        <div class="td">刪 <code>device-settings.tsx</code> header 嘅 <code>&lt;MerchantOrderHeaderToggle /&gt;</code>（同一併清走 import 同該元件，避免死碼）。header 剩「工作台 ＋ 返回收銀台」。<br>
+        ⚠️ 設置 › 線上接單<b>分區</b>嗰粒建議保留 —— 見下面「待拍板 ②」。</div>
+      </div>
+      <div class="tr">
+        <div class="td num">2</div>
+        <div class="td">訂單頁 ›「店內線下訂單」加「線下接單」按鈕</div>
+        <div class="td">喺 <code>local-orders-panel.tsx</code> header 右側控件簇（<code>SelfOrderAutoAcceptToggle</code> 左邊）加 <code>&lt;StoreOpenPill /&gt;</code>。<br>
+        實測下區 header 可用約 980px，加一粒之後用約 710px → 唔會迫爆、唔會掉行。</div>
+      </div>
+      <div class="tr">
+        <div class="td num">3</div>
+        <div class="td">（不動）訂單頁 ›「線上訂單」卡嘅「線上接單」</div>
+        <div class="td"><span style="color:var(--slate-500)">保持原樣：<code>線上接單</code>（Ledger 真源，掣面「接單中／已暫停」）。上下兩區加完之後完全對稱。</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">🔴 要你拍板 ①：訂單頁嗰粒「線下接單」用邊個尺寸？</div>
+      <div class="optrow">
+        <div class="ok"><span class="pick a">✓</span> md（推薦）</div>
+        <div class="ov">
+          <span class="cpill md"><span class="clb">線下接單</span><span class="cpv"><span class="tx">營業中</span></span></span>
+          <span style="font-size:11px;color:var(--slate-500)">160 × 48 —— 同上一張卡嗰粒「線上接單」<b>完全一樣大</b>，上下對稱最整齊</span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok"><span class="pick">xs 精簡</span></div>
+        <div class="ov">
+          <span class="cpill xs"><span class="clb">線下接單</span><span class="cpv"><span class="tx">營業中</span></span></span>
+          <span style="font-size:11px;color:var(--slate-500)">104 × 40 —— 同「桌台總覽／快餐訂單列」嗰兩粒一樣，但同上面嗰粒大細唔一致</span>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:9px">我建議 <b>md</b>：訂單頁兩張卡係上下並排，尺寸一致睇落先似同一套系統；而且呢頁全寬，冇空間壓力。</div>
+    </div>
+
+    <div class="card">
+      <div class="ct">🔴 要你拍板 ②：設置 ›「線上接單」分區嗰粒要唔要一齊拿走？</div>
+      <div class="optrow">
+        <div class="ok"><span class="pick a">✓</span> 保留（推薦）</div>
+        <div class="ov">
+          <span class="cpill md"><span class="clb">線上接單</span><span class="cpv"><span class="tx">接單中</span></span></span>
+          <span class="cpill md"><span class="clb">自動接單</span><span class="cpv"><span class="tx">開</span></span></span>
+          <span class="btn">重新整理</span>
+          <span style="font-size:11px;color:var(--slate-500)">設定分區就地開關最直觀；Ledger 未接通時靠「重新整理」補救</span>
+        </div>
+      </div>
+      <div class="optrow">
+        <div class="ok"><span class="pick">一齊拿走</span></div>
+        <div class="ov">
+          <span class="cpill md"><span class="clb">自動接單</span><span class="cpv"><span class="tx">開</span></span></span>
+          <span class="btn">重新整理</span>
+          <span style="font-size:11px;color:var(--slate-500)">分區只剩「自動接單 ＋ 重新整理」；線上接單只喺營運畫面出現</span>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:9px">你原話係「把設置內的線上接單按鈕拿走」—— 如果你嘅意思<b>包括</b>呢粒，我就兩粒一齊拿走（改成下面嗰個）。</div>
+    </div>
+
+    <div class="note">
+      <div class="nt">改動範圍（你確認之後先動手）</div>
+      <ul>
+        <li><code>device-settings.tsx</code> — 刪 header 嘅 <code>&lt;MerchantOrderHeaderToggle /&gt;</code> ＋ import</li>
+        <li><code>merchant-order-config-section.tsx</code> — 刪 <code>MerchantOrderHeaderToggle</code> 元件（如無人用）；<b>如選「一齊拿走」就再刪分區嗰粒</b></li>
+        <li><code>local-orders-panel.tsx</code> — header 右側加 <code>&lt;StoreOpenPill size="md" /&gt;</code></li>
+        <li>純 UI，唔涉及 RPC／DB schema／出紙邏輯；deploy 即生效（三端載同一個 Vercel 網址）</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var DESIGN_W = 1180, DESIGN_H = 1060;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || DESIGN_W;
+  var s = Math.min(1, Math.max(w / DESIGN_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DESIGN_H * s) + "px";
+  stage.style.overflowX = (DESIGN_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++){
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < btns.length; j++){
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+window.onresize = fit;
+
+(function bindTabs(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    (function(b){
+      b.onclick = function(){ showTab(b.getAttribute("data-tab")); };
+    })(btns[i]);
+  }
+})();
+
+window.onload = function(){ fit(); };
+</script>
+</body>
+</html>
