@@ -20,8 +20,23 @@
  * 詳見 `docs/127-login-workbench-permission-plan.md`。
  */
 
-/** 工作台 id。注意：`retail` 係新增嘅（舊 `LoginMode` 冇）。 */
-export type WorkbenchId = "dinein" | "quick" | "retail" | "salon" | "kiosk" | "kitchen" | "expo";
+/**
+ * 工作台 id。注意：`retail` 係新增嘅（舊 `LoginMode` 冇）。
+ *
+ * `staff`（2026-09-16 新增）＝ **店員手機枱邊落單**：
+ * 一部手機做一個流動落單終端，唔係固定崗位。
+ * ⚠️ 佢**唔會**改店級掃碼模式（見 `apply-workbench.ts` `loginModeOf()`）——
+ * 收銀台先有資格決定「全店一碼／每枱一碼」，手機跟住就得。
+ */
+export type WorkbenchId =
+  | "dinein"
+  | "quick"
+  | "retail"
+  | "salon"
+  | "staff"
+  | "kiosk"
+  | "kitchen"
+  | "expo";
 
 /** 側欄模組 id（對應 `app-sidebar.tsx` 嘅 baseNavItems）。 */
 export type SidebarModuleId =
@@ -99,6 +114,17 @@ export const WORKBENCHES: readonly WorkbenchDef[] = [
     group: "counter",
     deviceRole: false,
     accent: "rose",
+  },
+  {
+    id: "staff",
+    label: "店員手機",
+    short: "員",
+    desc: "手機喺枱邊幫客人落單，送出即出廚房單",
+    homePath: "/staff",
+    group: "counter",
+    // ⚠️ 唔係裝置角色：手機係店員手上嘅流動終端，唔會綁死做單一崗位。
+    deviceRole: false,
+    accent: "sky",
   },
   {
     id: "kiosk",

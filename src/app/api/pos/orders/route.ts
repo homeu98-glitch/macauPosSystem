@@ -20,15 +20,23 @@ export async function GET(request: Request) {
    * 即係任何人唔使登入、唔使知任何店 ID，一次 GET 就拖走全部店嘅訂單
    * （枱號、菜品、備註、金額、時間）。
    *
-   * ⚠️ **為何呢條 GET 唔加 POS 憑證閘**（同其他 pos/* 唔一致，係刻意的）：
-   * `docs/integration/main-system-integration.md` 同 `docs/06-api-reference.md`
-   * 將本端點列為**對外嘅主系統整合 API**，外部主系統冇 `posDeviceToken`。
-   * 加閘會直接打斷整合，所以呢一步只收窄「全平台傾倒」；
-   * 要進一步收到「綁店」，需要同整合方協調另一套 service 憑證（已列入待辦）。
+   * 🔴 2026-09-16 再加固：**本 GET 已補上 POS 憑證閘**（同 DELETE 一致）。
+   *
+   * 舊註釋寫「本端點係對外主系統整合 API，所以唔加閘」—— 2026-09-16 實測
+   * （`tools/audit-anon-endpoints.cjs`）確認：**匿名帶 storeId 即可抽走 269 KB / 500 張單**，
+   * 而 storeId 係公開值（枱 QR = `/menu?tableId=…&store=<merchantId>`）⇒ 等於營業資料任人拖。
+   * 當時亦確認**倉內完全冇 in-app GET 呼叫**（`local-orders-panel.tsx` 只用 DELETE），
+   * 商家確認外部主系統未使用此端點 ⇒ 直接收閘。
+   *
+   * ⚠️ 若日後真係要對接外部主系統：唔好直接開返匿名，應該加一條服務憑證
+   * （例：`Authorization: Bearer <INTEGRATION_API_TOKEN>`，env 缺失時 fail closed）。
    */
   if (!storeId) {
     return NextResponse.json({ ok: false, error: MISSING_STORE_MESSAGE }, { status: 400 });
   }
+
+  const denied = posRouteAuthGuard(request, storeId, "pos/orders");
+  if (denied) return denied;
 
   const query = supabase
     .from("pos_orders")

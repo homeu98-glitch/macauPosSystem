@@ -9,6 +9,7 @@ import { saveActiveSalonStore } from "@/lib/salon/storage";
 import { saveOperatingMode, type AuthSession } from "@/lib/storage";
 import { findWorkbench, type WorkbenchId } from "@/lib/pos/module-catalog";
 import { saveKioskSettings } from "@/lib/pos/kiosk-settings";
+import { setOrderOnlyTerminal } from "@/lib/pos/order-only-terminal";
 import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
 import { scanModeForLoginMode, type LoginMode } from "@/lib/pos/scan-mode-from-login";
 
@@ -43,7 +44,13 @@ export type ApplyWorkbenchResult = {
 /** 裝置角色一律唔改店級掃碼設定（kiosk / kitchen / expo）。 */
 function loginModeOf(id: WorkbenchId): LoginMode | null {
   // `retail` 係新增嘅工作台，冇對應嘅 `LoginMode`（唔涉掃碼點餐）。
-  return id === "retail" ? null : id;
+  //
+  // 🔴 `staff`（店員手機）**亦一定要回 `null`**：
+  // 手機係「店員手上嘅落單工具」，唔係「全店客人點樣落單」嘅決定者。
+  // 如果手機登入時寫 `scanMode`，就會同收銀台互相覆蓋 ——
+  // 店員一用手機落單，全店枱 QR 就忽然變成（或不再係）每枱一碼。
+  // 「全店一碼／每枱一碼」呢個決定權只應該屬收銀台（dinein / quick）。
+  return id === "retail" || id === "staff" ? null : id;
 }
 
 /**
@@ -130,6 +137,10 @@ export async function applyWorkbenchSelection(
   // 同一部機之後補做收銀，就會靜靜變咗快餐／堂食。所以呢兩個跳過。
   // ⚠️ 零售（`retail`）亦跳過：`OperatingMode` 只有 dinein / quick 兩個值，
   // 冇「零售」呢個狀態；硬寫 dinein 會污染主 POS 嘅營運模式。
+  //
+  // ✅ `staff`（店員手機）**刻意唔跳過**：手機落單一定係堂食枱邊落單，
+  //    所以落到 `else` 分支寫 `dinein` 係正確嘅。而且 `OperatingMode` 係
+  //    **本機 localStorage**（per-terminal），唔會影響收銀台。
   if (workbench !== "kitchen" && workbench !== "expo" && workbench !== "retail") {
     saveOperatingMode(workbench === "kiosk" || workbench === "quick" ? "quick" : "dinein");
   }
@@ -163,6 +174,20 @@ export async function applyWorkbenchSelection(
   if (workbench === "salon" && session.merchantId) {
     saveActiveSalonStore(session.merchantId);
   }
+
+  // ── 落單專用終端旗標（2026-09-16）──
+  //
+  // 揀「店員手機」⇒ 呢部機標記為**落單專用**：`AuthGuard` 會攔住收銀台路由，
+  // 令店員唔會誤入 `/` 結帳。揀返其他工作台就即刻解除。
+  //
+  // ⚠️ 同 kiosk 唔同，呢度**兩個方向都要寫**（true / false）：
+  //    kiosk 刻意唔寫 false（免kiosk 旗標被其他工作台登入靜靜熄掉），
+  //    但「落單專用」係**跟隨工作台選擇**嘅 —— 店員喺同一部機揀返
+  //    「堂食收銀台」，即係佢明確要去做收銀，旗標當然要清。
+  //
+  // 🔴 呢個**唔係安全邊界**（只係前端路由攔截，可繞過）。
+  //    詳見 `@/lib/pos/order-only-terminal` 頂部註解。
+  setOrderOnlyTerminal(session.merchantId, workbench === "staff");
 
   return { homePath };
 }

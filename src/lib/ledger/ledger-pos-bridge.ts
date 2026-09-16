@@ -384,14 +384,30 @@ function registerLedgerProjection(order: PosOrder): void {
   cacheLedgerPosOrder(order);
 }
 
-/** 線上單 → 落 sync queue（`ORDER_CREATED` / `ORDER_UPDATED`）＋ 即時 flush。 */
+/**
+ * 線上單 → 落 sync queue（`ORDER_CREATED` / `ORDER_UPDATED`）＋ 即時 flush。
+ *
+ * 🔴 payload 形狀（2026-09-16 修，勿再改返）：`/api/pos/sync` 對 **ORDER_CREATED 讀裸 order**
+ * （同 `pos-app.tsx submitOrder()` / `kiosk-order.ts submitKioskOrder()` 一致）；
+ * 只有 `ORDER_UPDATED` 才係 `{ order, … }`。
+ *
+ * 舊寫法兩種 type 都送 `{ order }` → server 攞到 `order.id === undefined` →
+ * `ack(false, "事件 payload 缺少訂單 id")` + HTTP **400**（永久、重試冇用）⇒
+ * ① 每張首次排位／採納嘅線上單每次都失敗，卡死喺「同步健康檢查」；
+ * ② 該張單喺 POS 雲端冇完整記錄（`ORDER_SETTLED` 嘅 0 列 upsert 只補到最小欄位，冇 items）；
+ * ③ `sync-flush.ts pushedOrderStatus()` 因為拆唔到 status 而唔會寫上傳回執。
+ * 實案：2026-09-16 店舖 `8291f843…` 有 6 筆 `entity_id = ledger-<uuid>` 嘅 ORDER_CREATED
+ * 卡死喺 attempts≥5，用戶按「放棄」reload 後又彈返。
+ *
+ * （server 端亦已加兼容：兩種 type 都接受兩種形狀，令已經排隊嘅舊事件可以自動補上。）
+ */
 function enqueueOrderEvent(order: PosOrder, isUpdate: boolean, action?: string): void {
   if (typeof window === "undefined") return;
   const event: QueueEvent = {
     id: uid("evt"),
     type: isUpdate ? "ORDER_UPDATED" : "ORDER_CREATED",
     entityId: order.id,
-    payload: isUpdate ? { order, action: action ?? "table_assigned" } : { order },
+    payload: isUpdate ? { order, action: action ?? "table_assigned" } : order,
     status: "pending",
     createdAt: new Date().toISOString(),
   };

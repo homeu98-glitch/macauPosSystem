@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { MISSING_STORE_MESSAGE, posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { buildDefaultSalonBootstrap } from "@/lib/salon/mock-data";
 
 // Salon Bootstrap 配置（店家主數據）。
@@ -16,35 +17,45 @@ export async function GET(request: Request) {
     return NextResponse.json({ ...buildDefaultSalonBootstrap(), source: "mock" });
   }
 
-  let query = supabase.from("salon_bootstrap_config").select("*");
-  if (storeId) {
-    query = query.eq("store_id", storeId);
-  } else {
-    query = query.order("updated_at", { ascending: false }).limit(1);
+  /**
+   * 🔴 2026-09-16 資安加固：**必須帶 storeId + POS 終端憑證**。
+   *
+   * 舊版兩個洞（`tools/audit-anon-endpoints.cjs` 實測確認）：
+   *   ① `storeId` 係 optional；冇帶就 `.order("updated_at", desc).limit(1)`
+   *      → **回「最後更新嘅一間店」嘅 salon 主數據**（跨店讀取）；
+   *   ② 完全冇鑑權 → 任何人知道 storeId 就可以讀 salon 分店配置／服務／員工。
+   *
+   * 閘放喺 `!supabase`（mock）early-return 之後 ⇒ 未配置環境嘅既有回應完全不變。
+   */
+  if (!storeId) {
+    return NextResponse.json({ ok: false, error: MISSING_STORE_MESSAGE }, { status: 400 });
   }
+  const denied = posRouteAuthGuard(request, storeId, "salon/bootstrap");
+  if (denied) return denied;
 
-  const { data, error } = await query.maybeSingle();
+  const { data, error } = await supabase
+    .from("salon_bootstrap_config")
+    .select("*")
+    .eq("store_id", storeId)
+    .maybeSingle();
 
   // 指定 storeId 但無記錄 → 該店從未開過 salon，返回全空（唔種 demo 資料）。
   if (error || !data) {
-    if (storeId) {
-      return NextResponse.json({
-        source: "empty",
-        storeId,
-        storeName: "",
-        currency: "MOP",
-        serviceCategories: [],
-        serviceItems: [],
-        staff: [],
-        stations: [],
-        calendarSlotMinutes: 30,
-        depositEnabled: false,
-        defaultServiceDurationMinutes: 60,
-        products: [],
-        lastUpdatedAt: null,
-      });
-    }
-    return NextResponse.json({ ...buildDefaultSalonBootstrap(), source: "mock" });
+    return NextResponse.json({
+      source: "empty",
+      storeId,
+      storeName: "",
+      currency: "MOP",
+      serviceCategories: [],
+      serviceItems: [],
+      staff: [],
+      stations: [],
+      calendarSlotMinutes: 30,
+      depositEnabled: false,
+      defaultServiceDurationMinutes: 60,
+      products: [],
+      lastUpdatedAt: null,
+    });
   }
 
   return NextResponse.json({

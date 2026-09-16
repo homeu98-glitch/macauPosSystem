@@ -229,3 +229,71 @@ Vercel serverless 多實例下基本無效；而 `clientIp()` 只讀 `x-forwarde
 [ ] 一齊把 `ttl = 絕對 epoch ms` 寫入雙方契約文件
 [ ] end-to-end 驗收：落一張單 → 印得出紙 + 收銀台即時見到（唔可以只靠 F5）
 ```
+
+---
+
+## 8. 2026-09-16 更新：`device-config` 已收閘（Q1 已由實測回答：**有部署**）
+
+### 8.1 事實（我方實測，非推測）
+
+| 項目 | 證據 |
+|---|---|
+| 中繼機有部署、而且活著 | Vercel runtime log：`POST /api/pos/print-agent/heartbeat`（okhttp/4.12.0）每 30s 一次；`POST /api/pos/print-agent/claim` 有出 |
+| 兩個 App 都會拉 `device-config`，而且**冇帶憑證** | `print-relay`：`RelayApi.kt:221-225`（`Request.Builder().url(url).get().build()`，冇 header）<br>`macau-ledger-merchant`：`posrelay/RelayApi.kt:184` |
+| 現時該端點已加閘 | 2026-09-16 生產實測：匿名 `GET /api/pos/device-config?storeId=…` → **401** |
+
+### 8.2 影響評估（唔會硬停印，但會退化）
+
+- `RelayApi.fetchDeviceConfig()` 遇到非 2xx **回 `null`**（註釋明寫「caller 應保留舊值」）；
+- `HubService.kt:217` `if (list != null) RelayState.deviceConfigPrinters = list` ⇒ **保留上一次成功嘅值**；
+- 真正揀機係 `JobRunner.resolvePrinter()`（`JobRunner.kt:187-250`），四級 fallback：
+  ① job 內 `printer` → ② `deviceConfigPrinters`（**而家拉唔到**）→ ③ claim 回傳嘅 `printers`
+  （`claim/route.ts:42` 硬編碼 `printers:[]`）→ ④ **本機 LAN 發現**（按名匹配，再退到「第一個開 9100 嘅機」）。
+- 🔴 **風險點**：`RelayState.deviceConfigPrinters` 係**純記憶體**（`RelayState.kt:53` 初始 `emptyList()`）
+  ⇒ **中繼機一重啟**（斷電／App 更新／強制停止）就會失去權威路由。
+  **結果唔係停印，而係**：多打印機嘅店可能**印錯機**，而且 Hub UI 見唔到「邊部機負責印咩」。
+- ⇒ 過渡期指示：**唔好重啟中繼機**；每日營業前做一次測試打印。
+
+### 8.3 正式方案（兩邊都要改；**部署次序唔可以反**）
+
+**Step 1 — Server（我方，兼容優先，唔會打斷未升級嘅 APK）**
+
+`GET /api/pos/device-config` 由「`posRouteAuthGuard` 單閘」改為「**兩條路任一條通過**」：
+
+```ts
+const { agentId, token } = readAgentHeaders(request);          // x-agent-id / x-agent-token
+const agent = agentId && token ? await verifyAgent(agentId, token) : null;
+const viaAgent = Boolean(agent && agent.storeId === storeId);  // ⚠️ 一定要綁店
+const denied = viaAgent ? null : posRouteAuthGuard(request, storeId, "pos/device-config");
+```
+- 用既有 helper（`src/lib/print-agent-server.ts`：`readAgentHeaders` / `verifyAgent`）——**唔好另寫一套驗證**；
+- `verifyAgent` 已經檢查 `revoked_at is null` + `sha256(x-agent-token) === token_hash`；
+- 一定要驗 `agent.storeId === storeId`，否則任何一部中繼機都可以讀別店嘅打印機配置。
+
+**Step 2 — APK `print-relay`（com.macau.printhub）**
+
+`RelayApi.kt`：
+```kotlin
+fun fetchDeviceConfig(baseUrl: String, storeId: String, agentId: String, token: String): List<RoutingPrinter>? {
+    val req = Request.Builder().url(url)
+        .addHeader("x-agent-id", agentId)      // 同 post() 完全一樣嘅 header 名（RelayApi.kt:259-260）
+        .addHeader("x-agent-token", token)
+        .get().build()
+```
+`HubService.fetchDeviceConfig()`：由 `prefs` 傳入（`prefs.agentId` / `prefs.agentToken`），佢本來就有。
+
+**Step 3 — APK `macau-ledger-merchant`（com.macauledger.merchant）**：同 Step 2，位置 `posrelay/RelayApi.kt:184`。
+
+**Step 4 — 收尾**：兩部 App 都升級並確認正常之後，可以考慮把 `device-config` 嘅匿名通道完全關掉（連 `posRouteAuthGuard` 都只收 admin／POS 憑證）。
+
+### 8.4 驗收標準
+
+| # | 檢查 | 預期 |
+|---|---|---|
+| R1 | 匿名 `GET /api/pos/device-config?storeId=<真店>` | **401** |
+| R2 | 帶 `x-agent-id` + `x-agent-token`（該店已配對） | **200**，`deviceConfig.printers` 有內容 |
+| R3 | 帶 **甲店** agent 憑證去打 **乙店** storeId | **401**（綁店檢查生效） |
+| R4 | 帶已撤銷（`revoked_at` 非空）嘅 agent 憑證 | **401** |
+| R5 | 中繼機 App 內 UI | 睇得到「邊部機負責印咩內容」（路由配置有值） |
+| R6 | 重啟中繼機之後即時落一張單 | **印得出紙、而且印對機**（呢條就係今次改動嘅核心） |
+

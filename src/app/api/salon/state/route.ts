@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase-server";
+import { MISSING_STORE_MESSAGE, posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 
 // Salon 批量狀態拉取（開機 hydrate 用）。
 // 模式與餐飲 /api/pos/state 一致：server-only Supabase + 未配置時返空 + source=mock。
@@ -153,24 +154,28 @@ export async function GET(request: Request) {
     });
   }
 
-  const bookingsQuery = storeId
-    ? supabase.from("salon_bookings").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(500)
-    : supabase.from("salon_bookings").select("*").order("updated_at", { ascending: false }).limit(500);
-  const ordersQuery = storeId
-    ? supabase.from("salon_orders").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(500)
-    : supabase.from("salon_orders").select("*").order("updated_at", { ascending: false }).limit(500);
-  const customersQuery = storeId
-    ? supabase.from("salon_customers").select("*").eq("store_id", storeId)
-    : supabase.from("salon_customers").select("*");
-  const printJobsQuery = storeId
-    ? supabase.from("salon_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(300)
-    : supabase.from("salon_print_jobs").select("*").order("created_at", { ascending: false }).limit(300);
-  const packageTemplatesQuery = storeId
-    ? supabase.from("salon_package_templates").select("*").eq("store_id", storeId)
-    : supabase.from("salon_package_templates").select("*");
-  const customerPackagesQuery = storeId
-    ? supabase.from("salon_customer_packages").select("*").eq("store_id", storeId)
-    : supabase.from("salon_customer_packages").select("*");
+  /**
+   * 🔴 2026-09-16 資安加固：**必須帶 storeId + POS 終端憑證**。
+   *
+   * 舊版係 2026-09-15 審查已標記嘅 P0，但當時只加咗 storeId 要求、**冇加鑑權**；
+   * 而且冇 storeId 時會**回全平台 salon 資料**。2026-09-16 實測（唔帶 storeId）：
+   *   `GET /api/salon/state` → **200、19.6 KB，含 `customerName` + `customerPhone`（顧客 PII）**。
+   * （當次回嘅係 `mock-*` 種子資料，未涉及真實客人，但代碼路徑同真店完全一樣。）
+   *
+   * 閘放喺 `!supabase`（mock）early-return 之後 ⇒ 未配置環境嘅既有回應完全不變。
+   */
+  if (!storeId) {
+    return NextResponse.json({ ok: false, error: MISSING_STORE_MESSAGE }, { status: 400 });
+  }
+  const denied = posRouteAuthGuard(request, storeId, "salon/state");
+  if (denied) return denied;
+
+  const bookingsQuery = supabase.from("salon_bookings").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(500);
+  const ordersQuery = supabase.from("salon_orders").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(500);
+  const customersQuery = supabase.from("salon_customers").select("*").eq("store_id", storeId);
+  const printJobsQuery = supabase.from("salon_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(300);
+  const packageTemplatesQuery = supabase.from("salon_package_templates").select("*").eq("store_id", storeId);
+  const customerPackagesQuery = supabase.from("salon_customer_packages").select("*").eq("store_id", storeId);
 
   const [
     { data: bookings },

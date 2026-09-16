@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>店員手機下單 · 實機外觀確認稿（docs/staff-mobile-ordering-plan-2026-09-16）</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   店員手機下單 — 實機外觀確認稿
+   ─────────────────────────────────────────────────────────────────────
+   目的：畀用戶睇「最後實機大概會係點」。**唔係線框圖**，係高保真版面，
+        配色／圓角／字級全部對齊專案 globals.css 真實 design token：
+        --primary:#4f46e5  --background:#f3f5f9  --surface:#fff
+        --border:#d6dbea    --muted:#667085
+        卡片圓角 18px、藥丸 999px（同 .menu-card / .status-pill 一致）
+
+   手機外框：iPhone 14 Pro 邏輯尺寸 393×852（含 safe-area 上下 47/34px）。
+   每個 frame 用 transform:scale() 等比縮放，**完全冇 @media 斷點**，
+   確保喺任何屏寬睇都像素穩定、唔會走位。
+
+   六個畫面：
+     1 登入        2 選枱（格狀樓面圖）   3 點餐主畫面
+     4 購物車      5 送出確認            6 送出後回饋
+
+   ⚠️ 售罄菜已按用戶決定：**灰化保留，唔隱藏**（可以同客人講「賣晒，換款好嗎」）
+   ⚠️ 選枱只做**格狀**（用戶決定唔要列表切換）
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  --slate-50:#f8fafc; --slate-100:#f1f5f9; --slate-200:#e2e8f0; --slate-300:#cbd5e1;
+  --slate-400:#94a3b8; --slate-500:#64748b; --slate-600:#475569; --slate-700:#334155;
+  --slate-800:#1e293b; --slate-900:#0f172a;
+  --primary:#4f46e5; --primary-dark:#3730a3; --primary-50:#eef2ff; --primary-200:#c7d2fe;
+  --success:#0f9f6e; --success-50:#ecfdf3; --success-200:#a7f3d0;
+  --warning:#b45309; --warning-50:#fff7ed; --warning-200:#fed7aa;
+  --danger:#b91c1c; --danger-50:#fef2f2; --danger-200:#fecaca;
+  --surface:#ffffff; --border:#d6dbea; --muted:#667085; --foreground:#121826;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang HK","Microsoft JhengHei",
+    "Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:#e6eaf0;color:var(--foreground);-webkit-font-smoothing:antialiased;padding:16px 16px 40px}
+
+/* ══════════ 評審外框（唔屬產品介面） ══════════ */
+.review{max-width:1240px;margin:0 auto 14px;background:var(--slate-900);border-radius:16px;padding:14px 18px;color:#fff}
+.review .row1{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+.review .ttl{font-size:14px;font-weight:600;line-height:1.5}
+.review .ttl small{display:block;font-weight:400;color:var(--slate-400);font-size:11.5px;margin-top:3px}
+.review .tabs{display:grid;grid-auto-flow:column;gap:4px;background:var(--slate-800);padding:4px;border-radius:12px}
+.review .tabs button{border:0;background:transparent;color:var(--slate-400);font:inherit;font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.review .tabs button.on{background:#fff;color:var(--slate-900)}
+.review .row2{margin-top:12px;padding-top:12px;border-top:1px solid var(--slate-700);
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+.legend{display:grid;grid-auto-flow:column;gap:14px;justify-content:start;align-items:center}
+.legend .it{display:grid;grid-auto-flow:column;gap:6px;align-items:center;font-size:11.5px;color:var(--slate-400)}
+.legend .dot{width:11px;height:11px;border-radius:4px;border:1px solid rgba(255,255,255,.25)}
+.legend .dot.ok{background:#10b981}
+.legend .dot.busy{background:#f59e0b}
+.legend .dot.pay{background:#ef4444}
+.legend .dot.off{background:#94a3b8}
+.review .hint{font-size:11.5px;color:var(--slate-400);text-align:right;line-height:1.6}
+
+/* ══════════ 畫布：六個 frame 橫向排 ══════════ */
+.stage{max-width:1240px;margin:0 auto;display:grid;gap:22px;
+  grid-template-columns:repeat(auto-fit,minmax(340px,1fr));justify-items:center;align-items:start}
+.slot{display:grid;gap:10px;justify-items:center}
+.slot .cap{font-size:12.5px;font-weight:600;color:var(--slate-600);text-align:center;line-height:1.5}
+.slot .cap small{display:block;font-weight:400;color:var(--slate-500);font-size:11.5px;margin-top:2px}
+/* 手機外框：等比縮放，唔用 @media */
+.frame{width:343px;height:744px;transform:scale(1);transform-origin:top center}
+
+/* 機身 */
+.phone{width:393px;height:852px;background:#0b1220;border-radius:52px;padding:11px;
+  box-shadow:0 24px 56px rgba(15,23,42,.34);position:relative;transform:scale(.872);transform-origin:top left}
+.screen{width:371px;height:830px;background:var(--background);border-radius:42px;overflow:hidden;
+  position:relative;display:grid;grid-template-rows:auto minmax(0,1fr)}
+.notch{position:absolute;top:20px;left:50%;transform:translateX(-50%);width:104px;height:26px;
+  background:#0b1220;border-radius:14px;z-index:60}
+/* 狀態列 */
+.statusbar{height:47px;display:grid;grid-template-columns:1fr auto;align-items:end;padding:0 24px 5px;
+  font-size:12.5px;font-weight:600;color:#121826;position:relative;z-index:55}
+.statusbar .right{display:grid;grid-auto-flow:column;gap:5px;align-items:center;font-size:11px}
+/* home indicator */
+.hbar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:120px;height:5px;
+  border-radius:3px;background:rgba(15,23,42,.28);z-index:60}
+
+/* ══════════ 共用元件（對齊專案真實樣式） ══════════ */
+.body{min-height:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;gap:0}
+.topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:10px 16px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.topbar .t1{font-size:17px;font-weight:700;letter-spacing:-.01em}
+.topbar .t2{font-size:11.5px;color:var(--muted);margin-top:1px;display:flex;align-items:center;gap:5px}
+.pill{display:inline-flex;align-items:center;border-radius:999px;font-size:11px;font-weight:700;
+  padding:4px 9px;line-height:1.35;white-space:nowrap}
+.pill.indigo{background:var(--primary-50);color:var(--primary-dark)}
+.pill.green{background:var(--success-50);color:var(--success)}
+.pill.amber{background:var(--warning-50);color:var(--warning)}
+.pill.gray{background:#f4f4f5;color:#52525b}
+.pill.slate{background:var(--slate-100);color:var(--slate-600)}
+.btn{border:0;font:inherit;cursor:pointer;border-radius:12px;font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.sm{font-size:12.5px;padding:8px 13px;border-radius:10px;min-height:38px}
+.btn.lg{font-size:16px;padding:15px 18px;border-radius:16px;width:100%;min-height:52px;flex:none}
+/* 結算條內嘅大按鈕：唔好被 grid row 拉高 */
+.cartbar .btn.lg{height:52px}
+.btn.primary{background:var(--primary);color:#fff}
+.btn.amber{background:#f59e0b;color:#412402}
+.btn.ghost{background:#fff;color:var(--foreground);border:1px solid var(--border)}
+.btn.soft{background:var(--primary-50);color:var(--primary-dark)}
+
+/* ══════════ 1 登入 ══════════ */
+.login{background:linear-gradient(120deg,#0b1220,#2b1055,#0b2f4a,#2f2b0b);background-size:220% 220%;
+  min-height:100%;display:grid;align-content:center;gap:18px;padding:28px 24px}
+.login .brand{color:#fff;text-align:center;display:grid;gap:7px}
+.login .brand .logo{width:60px;height:60px;border-radius:18px;background:rgba(255,255,255,.13);
+  border:1px solid rgba(255,255,255,.22);display:grid;place-items:center;margin:0 auto;
+  font-size:25px;font-weight:700;color:#fff}
+.login .brand h1{font-size:22px;font-weight:700;letter-spacing:-.01em}
+.login .brand p{font-size:12.5px;color:rgba(255,255,255,.62);line-height:1.6}
+.login .card{background:rgba(255,255,255,.97);border-radius:20px;padding:18px;display:grid;gap:12px}
+.login .fld{display:grid;gap:6px}
+.login .fld label{font-size:12px;font-weight:600;color:var(--slate-600)}
+.login .inp{border:1px solid var(--border);border-radius:13px;padding:14px 15px;font-size:17px;
+  background:#fff;color:var(--foreground);min-height:52px;display:flex;align-items:center}
+.login .inp.ph{color:var(--slate-400);font-size:15px}
+.login .inp.cursor{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.13);letter-spacing:6px;font-weight:700}
+/* 自繪數字鍵盤 */
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.keypad .k{background:#fff;border:1px solid var(--border);border-radius:13px;font-size:21px;font-weight:600;
+  min-height:52px;display:grid;place-items:center;color:var(--foreground)}
+.keypad .k.fn{background:var(--slate-100);font-size:15px;color:var(--slate-600)}
+.login .tip{font-size:11px;color:rgba(255,255,255,.5);text-align:center;line-height:1.6}
+
+/* ══════════ 2 選枱（格狀樓面圖） ══════════ */
+.floors{background:var(--surface);border-bottom:1px solid var(--border);padding:9px 16px;
+  display:grid;grid-auto-flow:column;gap:7px;justify-content:start;overflow:hidden}
+.floors .f{font-size:12.5px;font-weight:600;padding:8px 15px;border-radius:999px;
+  background:#fff;border:1px solid var(--border);color:var(--slate-600);white-space:nowrap;min-height:36px;display:grid;place-items:center}
+.floors .f.on{background:var(--primary-50);border-color:var(--primary-200);color:var(--primary-dark)}
+.tables{min-height:0;overflow:hidden;padding:13px 16px;display:grid;gap:12px;align-content:start}
+.sec{font-size:11.5px;font-weight:700;color:var(--slate-500);letter-spacing:.04em;
+  display:flex;align-items:center;gap:7px}
+.sec .ln{flex:1;height:1px;background:var(--border)}
+.tgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.tbl{border-radius:14px;border:1px solid;padding:10px 8px;display:grid;gap:3px;min-height:74px;align-content:center;justify-items:center}
+.tbl .no{font-size:16px;font-weight:700;letter-spacing:-.01em}
+.tbl .meta{font-size:11px;font-weight:600;line-height:1.3;text-align:center}
+.tbl.free{background:var(--success-50);border-color:var(--success-200);color:#065f46}
+.tbl.busy{background:var(--warning-50);border-color:var(--warning-200);color:#7c2d12}
+.tbl.pay{background:var(--danger-50);border-color:var(--danger-200);color:#7f1d1d}
+.tbl.off{background:var(--slate-100);border-color:var(--slate-200);color:var(--slate-400)}
+
+/* ══════════ 3 點餐主畫面 ══════════ */
+.cats{background:var(--surface);border-bottom:1px solid var(--border);padding:9px 16px;
+  display:grid;grid-auto-flow:column;gap:7px;justify-content:start;overflow:hidden}
+.cats .c{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:999px;background:#fff;
+  border:1px solid var(--border);color:var(--slate-600);white-space:nowrap;min-height:36px;display:grid;place-items:center}
+.cats .c.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.menu{min-height:0;overflow:hidden;padding:12px 16px 6px;display:grid;gap:12px;align-content:start;position:relative}
+/* 底部漸層：示意「仲有更多菜可以捲」，唔係留白 */
+.menu::after{content:"";position:absolute;left:0;right:0;bottom:0;height:26px;pointer-events:none;
+  background:linear-gradient(to bottom,rgba(243,245,249,0),var(--background))}
+.mgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.mcard{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:12px;
+  display:grid;gap:5px;align-content:start;min-height:96px}
+.mcard .nm{font-size:14px;font-weight:700;line-height:1.32;color:var(--foreground)}
+.mcard .pr{font-size:15px;font-weight:700;color:var(--primary);font-family:var(--mono)}
+.mcard .tag{font-size:10.5px;font-weight:600;color:var(--muted)}
+.mcard.soldout{background:var(--slate-100);border-color:var(--slate-200);opacity:.75}
+.mcard.soldout .nm{color:var(--slate-400)}
+.mcard.soldout .pr{color:var(--slate-400)}
+.mcard.soldout .tag{color:var(--slate-400);text-decoration:line-through}
+/* 底部結算條 */
+.cartbar{background:var(--surface);border-top:1px solid var(--border);padding:12px 16px 14px;
+  display:grid;grid-auto-rows:max-content;gap:9px;align-content:start}
+/* 只有按鈕時（購物車 / 送單頁）：置中，唔好貼頂留白 */
+.cartbar.solo{align-content:center;gap:0}
+.cartbar > .btn{align-self:center}
+.cartbar .line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:baseline}
+.cartbar .l1{font-size:12.5px;color:var(--muted)}
+.cartbar .amt{font-size:22px;font-weight:700;font-family:var(--mono);color:var(--foreground);letter-spacing:-.02em}
+.cartbar .sub{font-size:11px;color:var(--muted);font-family:var(--mono)}
+
+/* ══════════ 4 購物車 ══════════ */
+.cartlist{min-height:0;overflow:hidden;padding:13px 16px;display:grid;gap:10px;align-content:start}
+.crow{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:12px 13px;display:grid;gap:9px}
+.crow .top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:start}
+.crow .nm{font-size:14px;font-weight:700;line-height:1.35}
+.crow .qty{display:grid;grid-auto-flow:column;gap:0;align-items:center;border:1px solid var(--border);
+  border-radius:11px;overflow:hidden;background:#fff}
+.crow .qty .qc{width:38px;height:38px;display:grid;place-items:center;font-size:17px;font-weight:700;color:var(--primary-dark);background:#fff}
+.crow .qty .qn{width:34px;height:38px;display:grid;place-items:center;font-size:14px;font-weight:700;
+  background:var(--primary-50);color:var(--primary-dark);border-left:1px solid var(--border);border-right:1px solid var(--border)}
+.crow .bot{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:baseline}
+.crow .unit{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.crow .sum{font-size:15px;font-weight:700;font-family:var(--mono)}
+.crow .spec{font-size:11.5px;color:var(--muted)}
+.crow .note{font-size:11.5px;color:var(--warning);background:var(--warning-50);border-radius:9px;padding:6px 9px}
+.totals{background:var(--primary-50);border-radius:18px;padding:14px 15px;display:grid;gap:8px;margin-top:2px}
+.totals .tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;font-size:13px}
+.totals .tr .k{color:var(--slate-600)}
+.totals .tr .v{font-family:var(--mono);font-weight:600}
+.totals .tr.big{font-size:17px;font-weight:700;padding-top:8px;border-top:1px dashed var(--border)}
+.totals .tr.big .v{color:var(--primary-dark);font-size:20px}
+
+/* ══════════ 5 送出確認（彈窗） ══════════ */
+.scrim{position:absolute;inset:0;background:rgba(15,23,42,.42);z-index:40;display:grid;align-items:center;padding:20px}
+.sheet{background:#fff;border-radius:22px;padding:20px;display:grid;gap:14px;width:100%}
+.sheet h2{font-size:18px;font-weight:700;text-align:center}
+.sheet .rows{display:grid;gap:9px;background:var(--slate-50);border-radius:15px;padding:13px}
+.sheet .row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;font-size:13.5px;align-items:baseline}
+.sheet .row .k{color:var(--muted)}
+.sheet .row .v{font-weight:700;font-family:var(--mono)}
+.sheet .warn{background:var(--warning-50);border:1px solid var(--warning-200);border-radius:13px;
+  padding:11px 13px;font-size:12px;color:#7c2d12;line-height:1.6;display:grid;gap:5px}
+.sheet .acts{display:grid;grid-template-columns:1fr 1.35fr;gap:10px}
+
+/* ══════════ 6 送出後回饋 ══════════ */
+.done{min-height:0;overflow:hidden;padding:20px 18px;display:grid;gap:14px;align-content:start}
+.done .hero{background:var(--success-50);border:1px solid var(--success-200);border-radius:20px;padding:20px 18px;
+  display:grid;gap:7px;justify-items:center;text-align:center}
+.done .hero .ic{width:54px;height:54px;border-radius:50%;background:var(--success);display:grid;place-items:center;
+  color:#fff;font-size:28px;font-weight:700}
+.done .hero .h1{font-size:19px;font-weight:700;color:#065f46;margin-top:3px}
+.done .hero .h2{font-size:13px;color:#047857;font-family:var(--mono)}
+.done .hero .h3{font-size:12px;color:var(--slate-500);font-family:var(--mono)}
+.card2{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:15px;display:grid;gap:11px}
+.card2 .ch{font-size:12.5px;font-weight:700;color:var(--slate-600);display:flex;align-items:center;
+  justify-content:space-between;gap:8px}
+.steps{display:grid;gap:0}
+.step{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0}
+.step .dot2{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700}
+.step .dot2.ok{background:var(--success);color:#fff}
+.step .dot2.now{background:#f59e0b;color:#412402}
+.step .dot2.wait{background:var(--slate-200);color:var(--slate-500)}
+.step .tx{font-size:13px;font-weight:600}
+.step .tx small{display:block;font-weight:400;color:var(--muted);font-size:11px;margin-top:1px}
+.step .tm{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.conn{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;
+  background:var(--primary-50);border-radius:13px;padding:11px 13px}
+.conn .ic2{width:32px;height:32px;border-radius:10px;background:var(--primary);color:#fff;display:grid;place-items:center;font-size:15px}
+.conn .ct{font-size:12.5px;font-weight:700;color:var(--primary-dark)}
+.conn .cs{font-size:11px;color:var(--slate-500);margin-top:1px}
+.banner{background:var(--danger-50);border:1px solid var(--danger-200);border-radius:13px;padding:11px 13px;
+  font-size:11.5px;color:#7f1d1d;line-height:1.6;display:grid;gap:4px}
+
+/* ══════════ 頁尾說明 ══════════ */
+.notes{max-width:1240px;margin:26px auto 0;background:#fff;border:1px solid var(--border);border-radius:16px;padding:18px 20px}
+.notes h3{font-size:14px;font-weight:700;margin-bottom:11px}
+.notes .g{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.notes .col{display:grid;gap:7px;align-content:start}
+.notes .col .h{font-size:12.5px;font-weight:700;color:var(--primary-dark)}
+.notes .col p{font-size:12px;color:var(--slate-600);line-height:1.7}
+.notes .col p b{color:var(--foreground)}
+.notes code{font-family:var(--mono);font-size:11px;background:var(--slate-100);padding:1.5px 5px;border-radius:5px;color:#7c2d12}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <div class="row1">
+    <div class="ttl">店員手機下單 · 實機外觀確認稿
+      <small>iPhone 14 Pro（393×852）· 六個畫面 · 配色對齊專案真實 design token（--primary #4f46e5 / --background #f3f5f9）</small>
+    </div>
+    <div class="tabs">
+      <button class="on">全部六畫面</button>
+    </div>
+  </div>
+  <div class="row2">
+    <div class="legend">
+      <div class="it"><span class="dot ok"></span>空枱</div>
+      <div class="it"><span class="dot busy"></span>用膳中</div>
+      <div class="it"><span class="dot pay"></span>即將結帳</div>
+      <div class="it"><span class="dot off"></span>停用 / 售罄</div>
+    </div>
+    <div class="hint">售罄菜：灰化保留（用戶決定）<br>選枱：只做格狀（用戶決定）</div>
+  </div>
+</div>
+
+<div class="stage">
+
+  <!-- ════════ 1 登入 ════════ -->
+  <div class="slot">
+    <div class="frame"><div class="phone"><div class="notch"></div><div class="screen">
+      <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌾ ▰</span></div>
+      <div class="login">
+        <div class="brand">
+          <div class="logo">澳</div>
+          <h1>店員點餐</h1>
+          <p>請輸入員工編號及 PIN 碼</p>
+        </div>
+        <div class="card">
+          <div class="fld">
+            <label>員工編號</label>
+            <div class="inp">A018</div>
+          </div>
+          <div class="fld">
+            <label>PIN 碼</label>
+            <div class="inp cursor">••••</div>
+          </div>
+          <div class="keypad">
+            <div class="k">1</div><div class="k">2</div><div class="k">3</div>
+            <div class="k">4</div><div class="k">5</div><div class="k">6</div>
+            <div class="k">7</div><div class="k">8</div><div class="k">9</div>
+            <div class="k fn">清除</div><div class="k">0</div><div class="k fn">⌫</div>
+          </div>
+          <button class="btn primary lg">登入</button>
+        </div>
+        <div class="tip">登入後 12 小時內免再登入<br>如遺失手機，請即通知管理員撤銷帳號</div>
+      </div>
+      <div class="hbar"></div>
+    </div></div></div>
+    <div class="cap">① 登入
+      <small>自繪數字鍵盤，避開 iOS 彈字母鍵盤</small>
+    </div>
+  </div>
+
+  <!-- ════════ 2 選枱 ════════ -->
+  <div class="slot">
+    <div class="frame"><div class="phone"><div class="notch"></div><div class="screen">
+      <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌾ ▰</span></div>
+      <div class="body">
+        <div class="topbar">
+          <div>
+            <div class="t1">選擇桌台</div>
+            <div class="t2">茶居·氹仔店　<span class="pill green">已連線</span></div>
+          </div>
+          <button class="btn ghost sm">A018</button>
+        </div>
+        <div class="floors">
+          <div class="f on">1 樓</div><div class="f">2 樓</div><div class="f">露台</div>
+        </div>
+        <div class="tables">
+          <div class="sec">A 區 · 大廳　<span class="ln"></span>　空 4 · 用 4</div>
+          <div class="tgrid">
+            <div class="tbl free"><span class="no">A01</span><span class="meta">4 位</span></div>
+            <div class="tbl busy"><span class="no">A02</span><span class="meta">3 位 · $268</span></div>
+            <div class="tbl pay"><span class="no">A03</span><span class="meta">2 位 · $186</span></div>
+            <div class="tbl free"><span class="no">A04</span><span class="meta">2 位</span></div>
+            <div class="tbl busy"><span class="no">A05</span><span class="meta">6 位 · $742</span></div>
+            <div class="tbl free"><span class="no">A06</span><span class="meta">6 位</span></div>
+            <div class="tbl free"><span class="no">A07</span><span class="meta">4 位</span></div>
+            <div class="tbl pay"><span class="no">A08</span><span class="meta">5 位 · $418</span></div>
+            <div class="tbl busy"><span class="no">A09</span><span class="meta">2 位 · $96</span></div>
+          </div>
+          <div class="sec">B 區 · 近窗　<span class="ln"></span>　空 2 · 用 1</div>
+          <div class="tgrid">
+            <div class="tbl free"><span class="no">B01</span><span class="meta">2 位</span></div>
+            <div class="tbl free"><span class="no">B02</span><span class="meta">4 位</span></div>
+            <div class="tbl busy"><span class="no">B03</span><span class="meta">8 位 · $1,240</span></div>
+            <div class="tbl off"><span class="no">B04</span><span class="meta">暫停使用</span></div>
+          </div>
+        </div>
+        <div class="cartbar">
+          <div class="line">
+            <div class="l1">撳枱卡開始點餐<br>橙色＝用膳中，撳入去可直接加菜</div>
+            <div class="pill indigo">格狀顯示</div>
+          </div>
+        </div>
+      </div>
+      <div class="hbar"></div>
+    </div></div></div>
+    <div class="cap">② 選枱（格狀樓面圖）
+      <small>枱況由 pos_orders 未結單即時計算</small>
+    </div>
+  </div>
+
+  <!-- ════════ 3 點餐 ════════ -->
+  <div class="slot">
+    <div class="frame"><div class="phone"><div class="notch"></div><div class="screen">
+      <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌾ ▰</span></div>
+      <div class="body">
+        <div class="topbar">
+          <div>
+            <div class="t1">A03　<span class="pill amber">加菜模式</span></div>
+            <div class="t2">2 位 · 已落 3 項 · $186</div>
+          </div>
+          <button class="btn ghost sm">切枱</button>
+        </div>
+        <div class="cats">
+          <div class="c on">全部</div><div class="c">飲品</div><div class="c">小食</div>
+          <div class="c">主菜</div><div class="c">甜品</div>
+        </div>
+        <div class="menu">
+          <div class="mgrid">
+            <div class="mcard">
+              <span class="nm">干炒牛河</span><span class="pr">$58</span>
+              <span class="tag">廚房 · 有規格</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">凍檸茶</span><span class="pr">$22</span>
+              <span class="tag">水吧</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">燒賣</span><span class="pr">$32</span>
+              <span class="tag">點心</span>
+            </div>
+            <div class="mcard soldout">
+              <span class="nm">叉燒包</span><span class="pr">$28</span>
+              <span class="tag">售罄</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">菠蘿炒飯</span><span class="pr">$62</span>
+              <span class="tag">廚房</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">凍奶茶</span><span class="pr">$24</span>
+              <span class="tag">水吧</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">蝦餃</span><span class="pr">$38</span>
+              <span class="tag">點心</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">避風塘炒蟹</span><span class="pr">$188</span>
+              <span class="tag">時價 · 廚房</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">楊枝甘露</span><span class="pr">$42</span>
+              <span class="tag">甜品</span>
+            </div>
+            <div class="mcard">
+              <span class="nm">豉油皇炒麵</span><span class="pr">$52</span>
+              <span class="tag">廚房</span>
+            </div>
+          </div>
+        </div>
+        <div class="cartbar">
+          <div class="line">
+            <span class="l1">已選 <b>3</b> 項<br><span class="sub">小計 $170 · 服務費 $17</span></span>
+            <span class="amt">$187.00</span>
+          </div>
+          <button class="btn primary lg">查看購物車</button>
+        </div>
+      </div>
+      <div class="hbar"></div>
+    </div></div></div>
+    <div class="cap">③ 點餐主畫面
+      <small>售罄灰化保留 · 底部結算條固定</small>
+    </div>
+  </div>
+
+  <!-- ════════ 4 購物車 ════════ -->
+  <div class="slot">
+    <div class="frame"><div class="phone"><div class="notch"></div><div class="screen">
+      <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌾ ▰</span></div>
+      <div class="body">
+        <div class="topbar">
+          <div>
+            <div class="t1">購物車</div>
+            <div class="t2">A03 · 2 位　<span class="pill amber">加菜模式</span></div>
+          </div>
+          <button class="btn ghost sm">返回</button>
+        </div>
+        <div class="cartlist">
+          <div class="crow">
+            <div class="top">
+              <div>
+                <div class="nm">干炒牛河</div>
+                <div class="spec">加大 · 少油</div>
+              </div>
+              <div class="qty"><span class="qc">−</span><span class="qn">2</span><span class="qc">＋</span></div>
+            </div>
+            <div class="bot"><span class="unit">$58 × 2</span><span class="sum">$116.00</span></div>
+          </div>
+          <div class="crow">
+            <div class="top">
+              <div>
+                <div class="nm">凍檸茶</div>
+                <div class="spec">少冰 · 少甜</div>
+              </div>
+              <div class="qty"><span class="qc">−</span><span class="qn">1</span><span class="qc">＋</span></div>
+            </div>
+            <div class="bot"><span class="unit">$22 × 1</span><span class="sum">$22.00</span></div>
+          </div>
+          <div class="crow">
+            <div class="top">
+              <div>
+                <div class="nm">燒賣</div>
+                <div class="spec">蒸</div>
+              </div>
+              <div class="qty"><span class="qc">−</span><span class="qn">1</span><span class="qc">＋</span></div>
+            </div>
+            <div class="bot"><span class="unit">$32 × 1</span><span class="sum">$32.00</span></div>
+          </div>
+          <div class="crow" style="border-style:dashed">
+            <div class="crow" style="border:0;padding:0;gap:7px">
+              <div class="note">單據備註：客人唔食蔥，全部走蔥</div>
+            </div>
+          </div>
+          <div class="totals">
+            <div class="tr"><span class="k">小計</span><span class="v">$170.00</span></div>
+            <div class="tr"><span class="k">服務費 10%</span><span class="v">$17.00</span></div>
+            <div class="tr big"><span class="k">合計</span><span class="v">$187.00</span></div>
+          </div>
+        </div>
+        <div class="cartbar solo">
+          <button class="btn amber lg">送出訂單</button>
+        </div>
+      </div>
+      <div class="hbar"></div>
+    </div></div></div>
+    <div class="cap">④ 購物車
+      <small>數量用大按鈕 · 金額分項列示</small>
+    </div>
+  </div>
+
+  <!-- ════════ 5 送出確認 ════════ -->
+  <div class="slot">
+    <div class="frame"><div class="phone"><div class="notch"></div><div class="screen">
+      <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌾ ▰</span></div>
+      <div class="body" style="grid-template-rows:minmax(0,1fr)">
+        <div class="cartlist" style="background:var(--slate-100)">
+          <div class="crow"><div class="top"><div class="nm">干炒牛河</div><div class="qty"><span class="qc">−</span><span class="qn">2</span><span class="qc">＋</span></div></div></div>
+          <div class="crow"><div class="top"><div class="nm">凍檸茶</div><div class="qty"><span class="qc">−</span><span class="qn">1</span><span class="qc">＋</span></div></div></div>
+        </div>
+      </div>
+      <div class="scrim">
+        <div class="sheet">
+          <h2>確定送出此單？</h2>
+          <div class="rows">
+            <div class="row"><span class="k">桌台</span><span class="v">A03 · 2 位</span></div>
+            <div class="row"><span class="k">新增項目</span><span class="v">3 項</span></div>
+            <div class="row"><span class="k">合計</span><span class="v">$187.00</span></div>
+          </div>
+          <div class="warn">
+            <span><b>送出後會即時列印廚房單</b>，無法撤回。</span>
+            <span>如需修改，請喺「加菜」前先確認清楚。</span>
+          </div>
+          <div class="acts">
+            <button class="btn ghost lg">取消</button>
+            <button class="btn amber lg">確定送出</button>
+          </div>
+        </div>
+      </div>
+      <div class="hbar"></div>
+    </div></div></div>
+    <div class="cap">⑤ 送出確認
+      <small>枱邊易誤觸 · 二次確認必要</small>
+    </div>
+  </div>
+
+  <!-- ════════ 6 送出後回饋 ════════ -->
+  <div class="slot">
+    <div class="frame"><div class="phone"><div class="notch"></div><div class="screen">
+      <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌾ ▰</span></div>
+      <div class="body">
+        <div class="topbar">
+          <div>
+            <div class="t1">已送出</div>
+            <div class="t2">A03 · 2 位</div>
+          </div>
+          <span class="pill green">同步正常</span>
+        </div>
+        <div class="done">
+          <div class="hero">
+            <div class="ic">✓</div>
+            <div class="h1">訂單已送出</div>
+            <div class="h2">$187.00　·　3 項</div>
+            <div class="h3">單號 #A03-0186</div>
+          </div>
+
+          <div class="card2">
+            <div class="ch"><span>廚房單狀態</span><span class="pill amber">列印中</span></div>
+            <div class="steps">
+              <div class="step">
+                <span class="dot2 ok">1</span>
+                <span class="tx">訂單已上雲<small>收銀台即時可見</small></span>
+                <span class="tm">9:41:02</span>
+              </div>
+              <div class="step">
+                <span class="dot2 ok">2</span>
+                <span class="tx">廚房單已排隊<small>寫入 pos_print_jobs</small></span>
+                <span class="tm">9:41:02</span>
+              </div>
+              <div class="step">
+                <span class="dot2 now">3</span>
+                <span class="tx">列印中<small>中繼機已領取任務</small></span>
+                <span class="tm">9:41:08</span>
+              </div>
+              <div class="step">
+                <span class="dot2 wait">4</span>
+                <span class="tx">已出紙<small>廚房已收到單</small></span>
+                <span class="tm">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="conn">
+            <span class="ic2">☁</span>
+            <div>
+              <div class="ct">訂單已同步至後台</div>
+              <div class="cs">收銀台 / 廚房屏 / 報表全部自動涵蓋</div>
+            </div>
+          </div>
+
+          <button class="btn primary lg">繼續為下一枱點餐</button>
+        </div>
+      </div>
+      <div class="hbar"></div>
+    </div></div></div>
+    <div class="cap">⑥ 送出後回饋
+      <small>顯示出紙四態，店員確認紙真係出咗</small>
+    </div>
+  </div>
+
+</div>
+
+<div class="notes">
+  <h3>設計說明（畀評審睇）</h3>
+  <div class="g">
+    <div class="col">
+      <div class="h">枱況三態</div>
+      <p>由 <code>pos_orders</code> 未結單即時計算，<b>唔另建表</b>。<br>
+      綠色＝空枱（撳入去填人數開新單）<br>
+      橙色＝用膳中（撳入去載入現有單加菜）<br>
+      紅色＝即將結帳（標示金額，仍可加菜）<br>
+      灰色＝暫停使用</p>
+    </div>
+    <div class="col">
+      <div class="h">售罄處理</div>
+      <p><b>灰化保留，唔隱藏。</b>店員可以向客人講「呢款賣晒，要唔要換第二款？」，比一片空白菜單好用。<br>
+      灰化同時劃走菜名，避免誤撳。</p>
+    </div>
+    <div class="col">
+      <div class="h">送出後自動流程</div>
+      <p><code>POST /api/pos/sync</code>（帶 POS 憑證）<br>
+      → 寫 <code>pos_orders</code>（已授權分支）<br>
+      → 建 <code>pos_print_jobs</code>（廚房單）<br>
+      → 中繼機 60 秒內 claim 出紙</p>
+    </div>
+    <div class="col">
+      <div class="h">手機端不負責三件事</div>
+      <p><b>不直連打印機</b>　無藍牙、無網段要求<br>
+      <b>不收款結帳</b>　waiter 角色無此權限<br>
+      <b>不印客人小票</b>　小票由收銀台結帳時出</p>
+    </div>
+    <div class="col">
+      <div class="h">🔴 關鍵安全點</div>
+      <p>店員單帶 POS 終端憑證 → 走「已授權」分支，<b>天然繞過匿名白名單</b>（<code>ANONYMOUS_ALLOWED_SOURCES</code>）。<br>
+      切勿把 <code>"staff"</code> 加入白名單 —— server client 用 service_role 繞 RLS，加錯等於開放匿名偽造店員單。</p>
+    </div>
+    <div class="col">
+      <div class="h">觸控規範（全畫面）</div>
+      <p>枱卡 74px 高　·　主要按鈕 52px　·　數量鍵 38px<br>
+      金額與菜名<b>完整顯示不截斷</b><br>
+      繁體中文介面，數字用等寬字體對齊</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

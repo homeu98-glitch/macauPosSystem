@@ -6,6 +6,11 @@ import { PropsWithChildren, useEffect } from "react";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { clearAuthSession, loadAuthSession, prepareStoreStorage } from "@/lib/storage";
 import { reconcileQueueScope } from "@/lib/pos/queue-outbox";
+import {
+  isOrderOnlyTerminal,
+  isPathAllowedOnOrderOnlyTerminal,
+  ORDER_ONLY_FALLBACK_PATH,
+} from "@/lib/pos/order-only-terminal";
 import { UserRole } from "@/lib/types";
 
 type AuthGuardProps = PropsWithChildren<{
@@ -22,6 +27,22 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const isAdminSession = Boolean(session?.adminSessionToken);
   const isLedgerSession = Boolean(session?.merchantId && session?.ledgerAccessToken);
   const roleBlocked = Boolean(session && allowedRoles && !allowedRoles.includes(session.role));
+
+  /**
+   * 落單專用終端（2026-09-16）：呢部機揀咗「店員手機」工作台，
+   * 唔應該去收銀台路由（避免誤入 `/` 結帳）。
+   *
+   * ⚠️ **呢個唔係安全邊界** —— 旗標住喺 localStorage，撳 F12 就改得。
+   *    佢解決嘅係「店員撳錯書籤／撳返上一頁，結果喺手機結咗張單」。
+   *    真權限要有 server 端角色真源（見 `@/lib/pos/order-only-terminal` 頂部）。
+   *
+   * ⚠️ 白名單一定要包 `/login`（憑證過期要重新登入）同
+   *    `/select-workbench`（逃生門）—— 冇逃生門，揀錯工作台部機就廢咗。
+   */
+  const orderOnlyBlocked =
+    Boolean(session?.merchantId) &&
+    isOrderOnlyTerminal(session?.merchantId) &&
+    !isPathAllowedOnOrderOnlyTerminal(pathname ?? "/");
 
   useEffect(() => {
     if (session?.merchantId) {
@@ -49,6 +70,12 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
       window.location.replace("/login");
       return;
     }
+    // ⚠️ 落單專用終端攔截要放喺「角色檢查」**之前**：
+    //    佢係「呢部機唔應該去呢度」，唔關帳號角色事。
+    if (orderOnlyBlocked) {
+      window.location.replace(ORDER_ONLY_FALLBACK_PATH);
+      return;
+    }
     if (roleBlocked) {
       window.location.replace("/");
       return;
@@ -63,7 +90,20 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     return () => {
       window.removeEventListener("pos-auth-changed", onAuthChanged);
     };
-  }, [isAdminSession, isLedgerSession, pathname, roleBlocked, router, session]);
+  }, [isAdminSession, isLedgerSession, orderOnlyBlocked, pathname, roleBlocked, router, session]);
+
+  if (orderOnlyBlocked) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+        <div>
+          <div className="text-base font-semibold text-slate-900">此裝置為落單專用</div>
+          <div className="mt-2 text-sm text-slate-500">
+            正在返回店員點餐介面…如需改用其他工作台，請到「選擇工作台」。
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if ((!session || roleBlocked) && pathname !== "/login") {
     return (

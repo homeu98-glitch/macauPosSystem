@@ -4,9 +4,11 @@ import { defaultBackofficeSyncJobs } from "@/lib/mock-data";
 import {
   loadAccountStores,
   loadAccountUsers,
+  loadAuthSession,
   loadPermissionGroups,
   saveAccountStores,
 } from "@/lib/storage";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
 import { loadSalonBootstrap } from "@/lib/salon/storage";
 import { AccountPermissionGroup, AccountStore, AccountUser, BackofficeSyncJob } from "@/lib/types";
 
@@ -63,7 +65,21 @@ export function loadLocalBackofficeOverview(): BackofficeOverviewPayload {
 
 export async function fetchBackofficeOverview(): Promise<BackofficeOverviewPayload> {
   try {
-    const response = await fetch("/api/backoffice/overview", { cache: "no-store" });
+    /**
+     * 🔒 2026-09-16：`/api/backoffice/overview` 已加鑑權閘（admin session 或 POS 終端憑證）。
+     *
+     * 舊版匿名即可抽走 **全部店舖清單（id + 名稱）＋帳號／權限組**
+     * ⇒ 等於免費列舉所有 storeId，再用嗰啲 storeId 打其他端點。
+     *
+     * 這裡兩者都試：`/backoffice` 由 `AuthGuard allowedRoles:["admin"]` 保護，
+     * 但商戶用 POS 帳號登入時**唔一定**有 `adminSessionToken` → 退用 POS 終端憑證。
+     * 兩者都冇 → 401 → 下面 `!response.ok` 會 fallback 去本機 mock（行為安全，唔會白屏）。
+     */
+    const adminToken = loadAuthSession()?.adminSessionToken;
+    const headers: Record<string, string> = adminToken
+      ? { Authorization: `Bearer ${adminToken}` }
+      : { ...posDeviceAuthHeaders() };
+    const response = await fetch("/api/backoffice/overview", { cache: "no-store", headers });
     const payload = (await response.json()) as Partial<BackofficeOverviewPayload>;
     if (!response.ok || !payload.ok) {
       throw new Error("backoffice overview unavailable");

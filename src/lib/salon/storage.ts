@@ -20,6 +20,7 @@ import {
   type SalonStaffShift,
   SALON_STORAGE_KEYS,
 } from "@/lib/salon/types";
+import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
 import type { PrintJob } from "@/lib/types";
 import { buildDefaultSalonBootstrap, buildEmptySalonBootstrap, DEFAULT_SALON_STORE_ID, defaultSalonCustomers, defaultSalonPackageTemplates, DEFAULT_SALON_LOYALTY, DEFAULT_SALON_PRODUCTS } from "@/lib/salon/mock-data";
 import {
@@ -296,9 +297,12 @@ export async function hydrateSalonFromPosDb(storeId?: string): Promise<void> {
   const sid = storeId ?? loadActiveSalonStore() ?? undefined;
   const q = sid ? `?storeId=${encodeURIComponent(sid)}` : "";
   try {
+    // 🔒 2026-09-16：`/api/salon/bootstrap` 同 `/api/salon/state` 已加 POS 終端憑證閘
+    // （舊版匿名 + 冇 storeId 時會回全平台 salon 資料，含顧客姓名／電話）。
+    // 冇憑證 → 401 → 下面 `!res.ok` 直接 return，salon 保留本地資料，行為安全。
     const [bootRes, stateRes] = await Promise.all([
-      fetch(`/api/salon/bootstrap${q}`),
-      fetch(`/api/salon/state${q}`),
+      fetch(`/api/salon/bootstrap${q}`, { headers: { ...posDeviceAuthHeaders() } }),
+      fetch(`/api/salon/state${q}`, { headers: { ...posDeviceAuthHeaders() } }),
     ]);
     if (!bootRes.ok || !stateRes.ok) return;
     const boot = await bootRes.json();

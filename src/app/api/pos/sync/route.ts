@@ -10,6 +10,7 @@ import {
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 import { totalItemQuantity } from "@/lib/pos/order-item-diff";
+import { addedItemsOfEventPayload, unwrapOrderEventPayload } from "@/lib/pos/sync-order-payload";
 import type { OrderItem } from "@/lib/types";
 
 /**
@@ -490,7 +491,12 @@ export async function POST(request: Request) {
     const p = (typeof ev.payload === "object" && ev.payload !== null ? ev.payload : {}) as Record<string, unknown>;
     let candidate: Record<string, unknown> | undefined;
     if (t === "ORDER_CREATED" || t === "ORDER_UPDATED") {
-      candidate = (t === "ORDER_UPDATED" ? p.order : p) as Record<string, unknown> | undefined;
+      // ⚠️ 兩種 type 用**同一條**拆解規則（`unwrapOrderEventPayload`，2026-09-16 修）：
+      // 舊寫法只喺 ORDER_UPDATED 拆 `.order` → 線上單橋接（`ledger-pos-bridge.ts`）嘅
+      // ORDER_CREATED（payload = `{ order }`）喺呢度預取唔到現有 row → LWW 守門靜默失效
+      // （有機會將已 settled 嘅單降級）。規則統一收喺 `@/lib/pos/sync-order-payload`，
+      // 附迴歸測試，唔好喺呢度再自己寫一份。
+      candidate = unwrapOrderEventPayload(p);
     } else if (t === "ORDER_SETTLED") {
       // 方案 C：settle 都要預取 —— 防止離線重排嘅舊 settled 事件把「已返結」單
       // 打回 settled（reopened 係唯一合法終態→open 轉移，唔可以被告 settle 覆蓋）。
@@ -659,17 +665,23 @@ export async function POST(request: Request) {
        * （kiosk / 掃碼）。呢個順序唔會誤判：`PosOrder` 自己冇 `order` 呢個欄位。
        * 同時抽出 `addedItems`（收銀台有帶）畀下面售罄校驗用「只驗新增菜品」。
        */
-      const nestedOrder =
-        typeof eventPayload.order === "object" && eventPayload.order !== null
-          ? (eventPayload.order as Record<string, unknown>)
-          : null;
-      const order = (eventType === "ORDER_UPDATED" ? nestedOrder ?? eventPayload : eventPayload) as
-        | Record<string, unknown>
-        | undefined;
+      /**
+       * ⚠️ **兩種 type、兩種形狀都要收**（2026-09-16 修）。
+       *
+       * 舊寫法只喺 ORDER_UPDATED 拆 `.order`；ORDER_CREATED 一律當 payload 本身就係張單。
+       * 但 `ledger-pos-bridge.ts` 嘅 `enqueueOrderEvent()`（線上單首次排位／採納）**兩種 type 都送
+       * `{ order }`** ⇒ 線上單嘅 ORDER_CREATED 每次都係 `order.id === undefined` → 落下面
+       * `ack(false, "事件 payload 缺少訂單 id")` → HTTP 400 → **永久失敗**（2026-09-16 實案：
+       * 6 筆 `entity_id = ledger-<uuid>` 事件喺「同步健康檢查」卡死，按「放棄」reload 後又彈返）。
+       * 後果唔止 UI：該張線上單喺 POS 雲端冇完整記錄（最壞情況一直唔存在，結帳時才由
+       * ORDER_SETTLED 嘅 0 列 upsert 兜底建一條最小記錄 → 冇 items）。
+       *
+       * 拆解規則已經抽去 `@/lib/pos/sync-order-payload`（附迴歸測試），
+       * 同一條規則亦用喺上面「LWW 預取」，兩處口徑唔可以再各自實作。
+       */
+      const order = unwrapOrderEventPayload(eventPayload);
       /** 收銀台帶嘅「本次新增菜品」（kiosk / 舊 client 冇）。 */
-      const addedItems = Array.isArray(eventPayload.addedItems)
-        ? (eventPayload.addedItems as Record<string, unknown>[])
-        : null;
+      const addedItems = addedItemsOfEventPayload(eventPayload);
       const orderId = order && typeof order.id === "string" ? order.id.slice(0, MAX_ID_LEN) : "";
       // `order &&` 要再寫多次：TS 唔會由 `orderId` 嘅 truthiness 反推 `order` 已經 narrowing 咗，
       // 唔加會令下面 23 處 `order.xxx` 全部報 TS18048「possibly undefined」。
