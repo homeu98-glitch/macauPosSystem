@@ -1,13 +1,19 @@
 /**
  * Print bridge 共用工具（舊 Printer Hub adapter 已於 2026-08 移除，見 docs/50）。
  *
- * 本檔現只保留三個被多個 transport 共用嘅函數：
+ * 本檔現只保留兩個被多個 transport 共用嘅函數：
  *   - resolveJobPrinter：按 PrintJob.printerGroup 由 config.printers ＋ kiosk 打印機搵目標打印機
  *     （單一真源，dispatch.ts 用；2026-09-11 起合併 `loadKioskPrinters()`，見 docs/87 §6.2）
- *   - applyPairText：解析 QR / 手動輸入嘅配對地址（Companion QR 掃描用）
- *   - loadJsQr：動態載入 jsQR（Companion QR 掃描用）
+ *   - loadJsQr：動態載入 jsQR
  *
  * 新打印通道：desktop 經 Companion（localhost）、Android 經 native bridge、互聯網備援經 relay。
+ *
+ * ⚠️ 2026-09-17：**已移除 `applyPairText()`**。它解析 `IP:8787` 配對地址，對應中繼機嘅
+ * `HubHttpServer`（NanoHTTPD 8787；該 APK 端檔案亦已同步刪除，見 print-relay v1.1.5）。
+ * 該通道要求網頁同中繼機**同一個 LAN 網段**才打得到，
+ * 但 iPad 根本打唔到（`127.0.0.1` 係 iPad 自己），Android 平板亦已有更好的 PosNative 直印；
+ * 結果設計目標同 relay 重疊，且**全 repo 零呼叫端**（從未接通）。
+ * 中繼機出紙一律走雲端 relay（Supabase Realtime → claim），見 `relay-config.ts`。
  */
 
 import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
@@ -23,30 +29,6 @@ declare global {
       options?: unknown,
     ) => { data: string } | null;
   }
-}
-
-/** 解析 QR / 手動輸入嘅配對地址。支援 http://IP:PORT / 純 IP:PORT / 純 IP。
- *  主要畀 Companion 代理地址配對用。 */
-export function applyPairText(raw: string): { ip: string; port: string } | null {
-  const text = String(raw || "").trim();
-  let ip = "";
-  let port = "8787";
-  try {
-    if (/^https?:\/\//i.test(text)) {
-      const u = new URL(text);
-      ip = u.hostname;
-      port = u.port || "8787";
-    } else {
-      const m = text.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d+))?$/);
-      if (m) {
-        ip = m[1];
-        port = m[2] || "8787";
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return ip ? { ip, port } : null;
 }
 
 /**
