@@ -165,7 +165,10 @@ export function StaffMobileApp() {
               )}
             </div>
           </div>
-          {/* 逃生門：落單專用終端只可以喺呢幾個路徑，冇呢個入口就換唔返工作台。 */}
+          {/* 逃生門：落單專用終端只可以喺白名單路徑內（見 `order-only-terminal.ts`）。
+              ⚠️ 一定要指 `/select-workbench`，**唔可以**指 `/` ——
+              `/` 唔喺白名單內（會導向 `/staff`），指佢會造成無限跳轉。
+              兩者 render 同一個元件，所以用邊條路徑睇落一樣。 */}
           <a
             href="/select-workbench"
             className="min-h-[40px] shrink-0 rounded-xl px-3 text-sm font-semibold leading-[40px] text-slate-600 ring-1 ring-slate-200 active:scale-[0.97]"

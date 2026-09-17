@@ -173,8 +173,13 @@ export function LoginScreen() {
         return;
       }
 
-      // 未揀過 / 冇記住 → 入選擇頁（整頁 reload，確保 session 一致）。
-      window.location.replace("/select-workbench");
+      // 未揀過 / 冇記住 → 入**統一入口**（`/`＝工作台選擇頁）。
+      //
+      // ⚠️ 2026-09-17：由 `/select-workbench` 改為 `/`。
+      //    兩者 render 同一個元件，但 `/` 先係對外嘅唯一入口 ——
+      //    書籤、文件、PWA start_url 一律用 `/`，避免商家要記兩條路徑。
+      //    （`/select-workbench` 保留為相容別名＋落單專用終端嘅逃生門。）
+      window.location.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
     } finally {

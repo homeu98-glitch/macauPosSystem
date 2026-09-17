@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
+import { readAgentHeaders, verifyAgent } from "@/lib/print-agent-server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings } from "@/lib/storage";
 
@@ -23,10 +24,34 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, deviceConfig: null, localSettings: null });
   }
 
-  // 🔒 2026-09-15 資安加固：以前任何知 storeId 嘅人（枱 QR 已公開）都可以讀走該店
-  // terminal 設定；而 `local_settings.printZones` 正是 **KDS 分區嘅權威來源**。
-  const denied = posRouteAuthGuard(request, storeId, "pos/device-config");
-  if (denied) return denied;
+  /**
+   * 🔒 授權（兩條路，任一條通過）：
+   *
+   * 1. **POS 終端 / admin session**（`posRouteAuthGuard`）—— POS「打印中心」／KDS 用。
+   * 2. **🆕 中繼機（print-agent）憑證**（2026-09-16）—— 雲端打印中繼 APK 用。
+   *
+   * 為何要開第 2 條：中繼 APK（`print-relay` / `macau-ledger-merchant`）由
+   * `RelayApi.fetchDeviceConfig()` 拉本端點攞打印機路由配置（IP:port），而佢**冇 POS 憑證**
+   * （只有配對時攞到嘅 `agentId` + `agentToken`）。2026-09-16 加閘之後佢一定 401，
+   * 令中繼機重啟後失去權威路由、退到 LAN 發現揀機（多打印機嘅店可能印錯機）。
+   *
+   * 規格見 `docs/integration/print-relay-device-config-runbook.md`（§3）＋
+   * `docs/integration/print-relay-hardening-brief.md`（§8）。
+   *
+   * 🔴 一定要驗 `agent.storeId === storeId`（綁店）—— 否則任何一部中繼機嘅憑證
+   * 都可以讀別店嘅打印機配置。`verifyAgent()` 已經驗 `revoked_at is null` +
+   * `sha256(token) === token_hash`，唔好另寫一套驗證。
+   */
+  const { agentId, token } = readAgentHeaders(request);
+  const agent = agentId && token ? await verifyAgent(agentId, token) : null;
+  const viaAgent = Boolean(agent && agent.storeId === storeId);
+
+  if (!viaAgent) {
+    const denied = posRouteAuthGuard(request, storeId, "pos/device-config");
+    if (denied) return denied;
+  } else {
+    console.info(`[pos/device-config] 中繼機憑證通道（agent=${agentId}, store=${storeId}）`);
+  }
 
   const { data, error } = await supabase
     .from("pos_device_configs")
@@ -51,7 +76,14 @@ export async function GET(request: Request) {
           updatedAt: data.updated_at,
         })
       : null,
-    localSettings: data?.local_settings ? normalizePosLocalSettings(data.local_settings) : null,
+    /**
+     * 🔻 最小權限（2026-09-16）：中繼機只讀 `deviceConfig.printers`
+     * （`print-relay/RelayApi.kt:231-232`；已核對兩個中繼 App 都**冇**用 `localSettings`），
+     * 而 `local_settings.printZones` 係 KDS 分區嘅權威來源 ⇒ 中繼憑證通道一律回 `null`。
+     * POS 終端 / admin 路徑行為完全不變。
+     */
+    localSettings:
+      !viaAgent && data?.local_settings ? normalizePosLocalSettings(data.local_settings) : null,
   });
 }
 

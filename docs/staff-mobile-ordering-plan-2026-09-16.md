@@ -35,7 +35,70 @@ curl -X POST /api/pos/sync -d '{"events":[{"type":"ORDER_SETTLED",...}]}'  // �
 它解決的是**誤操作**（店員撳錯書籤／上一頁而誤結單），不是權限。
 無法阻擋懂技術的人或直接呼叫 API。
 
-### 5.6 未做：帳號級角色（真權限）
+#### 🔴 前置條件：`POS_REQUIRE_DEVICE_AUTH` 必須開返
+
+**✅ 2026-09-17 09:26 實測：閘已經係開嘅**（與 09-16 09:00 記錄嘅 `0` 不同）。
+
+匿名零憑證探測結果（`tools/_probe-auth-state-20260917.cjs`）：
+
+| 端點 | 結果 |
+|---|---|
+| `/api/pos/state` | **401** |
+| `/api/pos/device-config` | **401** |
+| `/api/pos/print-jobs/status` | **401** |
+| `/api/pos/orders` | **401** |
+| `/api/pos/device-token`（假 token）| 401「Ledger 會話已失效」|
+| `/api/pos/device-token`（缺參數）| 400「缺少 accessToken」|
+
+判讀：
+- 全部 401 ⇒ `authEnforced === true` ⇒ **閘已開**
+- device-token 回 401（而非 503「Ledger 未配置」）⇒ **Ledger env 配置正常**
+
+#### ✅ 憑證鏈路實測：正在成功使用中
+
+最強證據唔係「簽發得唔得」，而係「**有冇人正在成功用**」。
+
+`pos_print_jobs` 於 **2026-09-17 09:17:57（Macau）** 有一筆 `PRINT_JOB_CREATED` 成功寫入
+（訂單15 重打帳單，狀態 `printed`）。
+
+而 `sync/route.ts:600`：
+
+```ts
+if (!authorized && !ANONYMOUS_ALLOWED_EVENTS.has(eventType)) {
+  ack(false, "未經授權：匿名通道只接受落單 / 加單事件", { reason: "unauthorized" });
+```
+
+`ANONYMOUS_ALLOWED_EVENTS = {ORDER_CREATED, ORDER_UPDATED}` ⇒
+**`PRINT_JOB_CREATED` 唔喺名單內 ⇒ 必須帶有效 POS 憑證**。
+
+⇒ 該筆寫入證明「**閘開嘅情況下，終端憑證仍然被接受**」。
+
+⚠️ 仍未 100% 證明**續期**（「過期後換新」）—— 只證明「當前憑證有效」。
+要完全確認需用真帳號跑一次登入。但「閘開 + 憑證全掛 = 全店停擺」嘅情境**已被排除**。
+
+#### 🔴 但呢個閘**保護唔到資料庫**
+
+開閘只擋住 **API route**。POS 專案嘅 anon key 係 `NEXT_PUBLIC_POS_SUPABASE_ANON_KEY`
+（**公開變數，隨 bundle 出街**），而 anon 對 `pos_orders` 有 SELECT 權限。
+
+2026-09-17 實測（`tools/_probe-anon-scope-20260917.cjs`）：只帶 anon key 直打 PostgREST，
+**成功讀到**：
+
+| 欄位 | 實例 |
+|---|---|
+| 菜品明細 | `items`：`細黃鱔石锅饭 / $88 / qty 1` |
+| 枱號 | `table_name`：`A01` |
+| 金額 | `total`：`88` |
+| 備註 | `order_note` |
+| 會員欄位 | `member_customer_id`、`member_deduction_avos` |
+
+⇒ **任何抽到 anon key 嘅人（即任何開過網站嘅人）都可以繞過 API 直接讀近 14 日訂單明細。**
+呢個係既有設計（KDS／掃碼 Realtime 需要 anon 訂閱），唔係今次改動造成，
+但**唔會因為開咗 `POS_REQUIRE_DEVICE_AUTH` 而收窄** —— 根治要 per-store token（0041 §3，未做）。
+
+---
+
+### 5.7 未做：帳號級角色（真權限）
 
 三個必要條件，缺一不可：
 
@@ -46,25 +109,16 @@ curl -X POST /api/pos/sync -d '{"events":[{"type":"ORDER_SETTLED",...}]}'  // �
    但值來自 Ledger ⇒ 要改成讀 POS 端角色覆寫。
 3. **`/api/pos/sync` 對「動錢」事件驗角色** —— `ORDER_SETTLED`、退菜、免單。
 
-#### 🔴 前置條件：`POS_REQUIRE_DEVICE_AUTH` 必須開返
+#### 前置條件：✅ 已滿足（見 §5.6）
 
-`src/lib/pos/pos-route-auth.ts:59`：
+`src/lib/pos/pos-route-auth.ts:59` 第一條分支係：
 
 ```ts
 if (!isPosDeviceAuthRequired()) return { ok: true, via: "disabled" };
 ```
 
-設成 `0` 時**第一條分支直接放行，根本不會讀取 POS 憑證** ⇒
-憑證裡的角色無從檢查 ⇒ 就算做完上面三步，角色限制一樣形同虛設。
-
-**驗證步驟**（不可跳步）：
-
-1. 先確認 `POST /api/pos/device-token` 回 200 + token（iPad 續期鏈路通）；
-2. 才把 `POS_REQUIRE_DEVICE_AUTH` 設為 `1`（或刪除該變數＝預設開啟）；
-3. **Redeploy**（Vercel 改 env 不會自動套用到現有 deployment）；
-4. 逐端點驗 401（未帶憑證時應被拒）。
-
-⚠️ 次序不可顛倒：iPad token 續期未通就開閘 ⇒ 全站即刻 401。
+設成 `0` 時**直接放行、根本唔讀憑證** ⇒ 角色無從檢查。
+**2026-09-17 實測閘已開**，呢個前置條件已滿足，故 §5.7 嘅三步可以開始做。
 
 ---
 

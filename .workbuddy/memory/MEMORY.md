@@ -7,10 +7,17 @@
 - 加閘用 `posRouteAuthGuard(request, storeId, tag)`，**放喺「未配置 Supabase／缺 storeId」early-return 之後**；客戶端用 `posDeviceAuthHeadersFresh()`。
 - **匿名端點唔可以加閘**：bootstrap GET、sequence、sync 匿名通道、ledger/member-login、order-lookup、kds/*、`print-agent/pair`。
 - 🔴 **`POS_REQUIRE_DEVICE_AUTH` 冇設 ＝ 閘照樣開著**（空值回 `true`）。**「冇設」≠「關閉」**。
-- 🔴 **2026-09-16 09:00 實測：此值已被設為 `0`（全局關閉）** —— 匿名零憑證打 `state`／`print-jobs/status`／`device-config`／`orders`／`pair-status` 全回 **200**。
-  `resolvePosRouteAuth()`（`pos-route-auth.ts:59`）第一條 `disabled` 分支直接放行 ⇒ 知道 `storeId` 就可讀寫該店。
-  ⚠️ **唔可以未確認就改返 `1`**（iPad token 續期未通 ⇒ 即刻全站 401）。**次序**：先確認 `POST /api/pos/device-token` 回 200+token ⇒ 再設 `=1` + Redeploy ⇒ 逐端點驗 401。
-- 簽名密鑰 `resolveSecret()`：`POS_DEVICE_TOKEN_SECRET` → `ADMIN_SESSION_SECRET` → `SUPABASE_SERVICE_ROLE_KEY`；TTL 12h。判簽發能力＝打 `POST /api/pos/device-token`（503＝真缺）。
+- 🔴🔴 **2026-09-17 09:26 實測：閘已開（enforcing）** —— 匿名零憑證打 `state`／`device-config`／
+  `print-jobs/status`／`orders` **全回 401**。（09-16 09:00 曾測到 `0`／全 200，**已過時**。）
+  憑證鏈路已實證可用：09-17 09:17 有 `PRINT_JOB_CREATED` 成功寫入，而該事件
+  **唔喺 `ANONYMOUS_ALLOWED_EVENTS = {ORDER_CREATED, ORDER_UPDATED}`** ⇒ 必須帶有效憑證。
+  判閘開關＝跑 `tools/_probe-auth-state-20260917.cjs`（一條命令）。
+- 🔴🔴 **開閘只擋 API route，擋唔到資料庫**：`NEXT_PUBLIC_POS_SUPABASE_ANON_KEY` 係**公開變數**
+  （隨 bundle 出街），anon 對 `pos_orders` 有 SELECT ⇒ 只帶 anon key 直打 PostgREST 就讀到
+  **菜品明細／枱號／金額／備註／會員欄位**（近 14 日）。根治要 per-store token（0041 §3，未做）。
+  回歸檢查＝`tools/_probe-anon-scope-20260917.cjs`。
+- 簽名密鑰 `resolveSecret()`：`POS_DEVICE_TOKEN_SECRET` → `ADMIN_SESSION_SECRET` → `SUPABASE_SERVICE_ROLE_KEY`；TTL 12h。
+  判簽發能力＝打 `POST /api/pos/device-token`（**503「Ledger 未配置」＝env 缺**；**401「會話已失效」＝env 正常**，假 token 嘅預期結果）。
 
 ## 二、DB
 - POS = `iyrywzormzisyppkokbi`、Ledger = `zymdemjflsckicwcinxl`。**已跑** 0016/0021/0041§1；**未跑 0042**。

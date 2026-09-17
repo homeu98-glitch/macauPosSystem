@@ -97,10 +97,14 @@ export default function OrderPage() {
   }, []);
 
   // 職員退出自助點餐模式：熄咗旗標再返收銀台（唔係「換店」，唔使重新登入）
+  //
+  // ⚠️ 2026-09-17：收銀台由 `/` 搬到 `/pos`。呢度一定要指 `/pos` ——
+  //    指 `/` 會去咗統一入口（工作台選擇頁），唔係「返收銀台」。
+  //    次序冇問題：`saveKioskMode(false)` 先寫，`/pos` 嘅 `KioskModeGate` 之後才讀。
   function exitKioskMode() {
     saveKioskMode(false);
     setKioskMode(false);
-    router.replace("/");
+    router.replace("/pos");
   }
 
   // kiosk 落單成功：3 秒倒數自動返回主頁（等下一位客人）

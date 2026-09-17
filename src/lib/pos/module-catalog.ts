@@ -80,7 +80,9 @@ export const WORKBENCHES: readonly WorkbenchDef[] = [
     label: "堂食收銀台",
     short: "堂",
     desc: "每張桌台各自一碼，客人掃碼落單綁定枱號",
-    homePath: "/",
+    // ⚠️ 2026-09-17：收銀台由 `/` 搬到 `/pos` —— 因為 `/` 改為**統一入口**
+    //（工作台選擇頁）。改呢個值同改 `src/app/pos/page.tsx` 必須同步。
+    homePath: "/pos",
     group: "counter",
     deviceRole: false,
     accent: "orange",
@@ -90,7 +92,7 @@ export const WORKBENCHES: readonly WorkbenchDef[] = [
     label: "快餐收銀台",
     short: "快",
     desc: "全店一個碼貼櫃檯，客人自助落單、冇枱號",
-    homePath: "/",
+    homePath: "/pos",
     group: "counter",
     deviceRole: false,
     accent: "orange",
@@ -167,7 +169,8 @@ export type SidebarModuleDef = {
 
 /** ⚠️ 順序 = 側欄顯示順序，唔好隨便調（商家已經記熟位置）。 */
 export const SIDEBAR_MODULES: readonly SidebarModuleDef[] = [
-  { id: "order", label: "點餐", short: "點", href: "/" },
+  // ⚠️ 2026-09-17：「點餐」即收銀台首頁，由 `/` 搬到 `/pos`（`/` 已成統一入口）。
+  { id: "order", label: "點餐", short: "點", href: "/pos" },
   { id: "orders", label: "訂單", short: "單", href: "/orders" },
   { id: "members", label: "會員", short: "會", href: "/members" },
   { id: "prints", label: "打印", short: "印", href: "/prints" },

@@ -46,6 +46,15 @@ const ORDER_ONLY_KEY_PREFIX = "pos.orderOnlyTerminal.";
  * - `/staff` —— 落單介面本身。
  * - `/login` —— 憑證過期要重新登入；攔住佢 = 部機永遠入唔返。
  * - `/select-workbench` —— **逃生門**：一定要留，否則揀錯工作台部機就廢咗。
+ *
+ * ⚠️ 2026-09-17：`/` 已經成為**統一入口**（工作台選擇頁），但**刻意唔加入白名單**。
+ *
+ * 原因：唔加 ⇒ 落單專用終端去 `/` 會被導向 `/staff`，
+ * 店員就唔會誤入選擇頁再揀「堂食收銀台」去結帳。
+ *
+ * 副作用（要知）：`/select-workbench` 同樣 render 選擇頁，所以逃生門本身
+ * 就係一條繞過路徑。呢個係**刻意保留**嘅 —— 冇逃生門，揀錯工作台部機就廢咗。
+ * 反正呢個旗標本來就唔係安全邊界（見檔頭），擋誤操作已經達到目的。
  */
 export const ORDER_ONLY_ALLOWED_PATHS: readonly string[] = [
   "/staff",

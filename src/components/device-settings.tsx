@@ -1068,9 +1068,13 @@ export function DeviceSettings() {
                 ⚠️ 2026-09-15：狀態 pill（「店內營業」→側欄商店名卡、「線上接單」→營運畫面）
                 全部搬走，header 唔再放開關。 */}
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {/* ⚠️ 2026-09-17：指向 `/`（統一入口）而唔係 `/select-workbench`。
+                  兩者 render 同一個元件，但 `/` 係對外唯一入口 ——
+                  側欄／文件／PWA 全部用 `/`，只留一條路徑畀商家記。
+                  （`/select-workbench` 仍然有效，係落單專用終端嘅逃生門。） */}
               <Link
                 className="flex items-center gap-2 rounded-full bg-orange-500 px-3 py-2 text-sm font-semibold text-white"
-                href="/select-workbench"
+                href="/"
                 title="切換工作台（重新揀呢部機嘅崗位）"
               >
                 <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
@@ -1084,7 +1088,9 @@ export function DeviceSettings() {
                   （`MerchantOrderConfigSection`，連同自動接單／重新整理）→ **該分頁嘅掣保留**。
                   2026-09-14 舊決策（仍然適用）：側欄商店名卡 = 「店內營業」入口
                   （撳商店名切換、紅色 = 已暫停）；行為一律喺 `useStoreOpenToggle()`。 */}
-              <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/">
+              {/* ⚠️ 2026-09-17：收銀台由 `/` 搬到 `/pos`（`/` 已改為統一入口／工作台選擇頁）。
+                  呢粒係「由設定頁返收銀台」，一定要指 `/pos` —— 指 `/` 會彈返選擇頁。 */}
+              <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/pos">
                 返回收銀台
               </Link>
             </div>
