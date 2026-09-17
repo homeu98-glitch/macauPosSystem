@@ -39,6 +39,8 @@ import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import { readNetworkOnline } from "@/lib/use-network-online";
 import type { PosOrder, PosLocalSettings } from "@/lib/types";
+// 退款淨額口徑（毛 / 淨兩個數並存）—— 算法住喺 .ts，方便 node --test 直接載入。
+import { netOf, refundOrderCountOf, refundTotalOf } from "@/lib/refund-net";
 import Link from "next/link";
 
 // 篩選順序統一：今天 / 昨天 / 7天 / 30天 / 全部 / 自訂（置右上）
@@ -221,7 +223,18 @@ function p95Of(sortedMs: number[]): number {
 }
 
 interface Agg {
+  /**
+   * 營業額（原口徑）= **已結帳（`settled`／`paid`）訂單總額**，退款單整張唔計。
+   * ⚠️ 呢個數**唔等於實收**：賣 100 退 30 時佢顯示 100，但實際落袋 70。
+   * 保留原口徑係為咗同歷史數字可比，UI 必須同時展示 {@link Agg.netRevenue}。
+   */
   revenue: number;
+  /** 🔴 2026-09-17 新增：淨營業額 = `revenue − refundTotal`（＝實收落袋）。 */
+  netRevenue: number;
+  /** 🔴 2026-09-17 新增：本區間退款總額（`refunded` / `partially_refunded` 單嘅累計退款）。 */
+  refundTotal: number;
+  /** 🔴 2026-09-17 新增：本區間有退款紀錄嘅單數（`refunded` / `partially_refunded`）。 */
+  refundCount: number;
   count: number;
   covers: number;
   discount: number;
@@ -364,6 +377,24 @@ export function isSaleCountable(o: PosOrder): boolean {
   if (o.status === "settled" || o.status === "paid") return true;
   return false;
 }
+
+/**
+ * 🔴 2026-09-17：退款單「未退部分」仍然係真金白銀收過嘅錢，唔應該隨退款一齊消失。
+ *
+ * 【問題】`isSaleCountable()` 將退款單**整張排除** ⇒ 「賣 100、退 30」正確實收 70，
+ * 但報表當 0 → 實收**偏低 30**。交班側（`shift-page.tsx`）2026-09-17 已改為淨額口徑，
+ * 呢度必須同步，否則兩頁夾唔到數（商家明確要求兩頁見同一套數）。
+ *
+ * 【口徑】**淨營業額 = 已計銷售單實收 − 退款總額**。
+ * 因為退款只會喺已計銷售（settled / paid）嘅單上發生，所以兩種寫法等價：
+ *   `Σ(countable.total) − Σ(refundedAmount)` ≡ `Σ(countable 未退部分)`
+ * 呢度用前者（改動最小），並喺 UI 明確標示「已扣退款」。
+ *
+ * ⚠️ 實際算法喺 `src/lib/refund-net.ts` —— 呢度只做 re-export，令既有 import 唔會斷。
+ * **唔可以**喺本檔（`.tsx`）重新實作一次：`node --test` 唔支援 `.tsx` 副檔名
+ * （`ERR_UNKNOWN_FILE_EXTENSION`），純計算邏輯寫入元件檔會令佢無法被單元測試。
+ */
+export { refundTotalOf } from "@/lib/refund-net";
 
 /** 訂單狀態碼 → 中文標籤（報表提示文案同狀態分佈顯示用）。 */
 const POS_ORDER_STATUS_LABELS: Record<string, string> = {
@@ -666,8 +697,22 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     total: summarizeSteps(quickTotal),
   };
 
+  // 🔴 2026-09-17 退貨修復（口徑 D）：報表同交班頁必須見同一套數。
+  // 「revenue」＝**已結帳（settled）訂單總額**，保持原口徑唔動（＝歷史數字可比）。
+  // 但退款單（refunded／partially_refunded）原本被 isSaleCountable() 整張剔走 ⇒
+  // 「賣 100 退 30」報表顯示 0，實際落袋 70。呢度補一個淨額口徑：
+  //   netRevenue = revenue − 退款總額
+  // ⚠️ 退款總額要由**全量 orders**（唔止 inRange）計，因為退款紀錄可能落喺
+  //    已結帳但結帳時間唔喺本區間嘅單上（跨日退貨）。
+  const refundTotal = refundTotalOf(orders);
+  const refundCount = refundOrderCountOf(orders);
+  const netRevenue = netOf(revenue, refundTotal);
+
   return {
     revenue,
+    netRevenue,
+    refundTotal,
+    refundCount,
     count: inRange.length,
     covers,
     discount,
@@ -2351,11 +2396,22 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     delta={null}
                     subtitle={`原價合計 + 服務費 + 稅（＝訂單明細加總）· 線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
                   />
+                  {/* 🔴 2026-09-17 退貨修復（口徑 D）：退款單原本被 isSaleCountable() 整張剔走，
+                      「賣 100 退 30」報表顯示 0，實際落袋 70 ⇒ 實收偏低。
+                      ⚠️ 呢度**唔可以另開卡片**：KPI 帶係固定 5 欄，格數必須係 5 嘅倍數
+                      （否則尾行殘缺；2026-09-10 / 09-11 兩次中過）。所以將「退款 / 淨額」
+                      拆解寫入呢格嘅 subtitle，**格數維持 10 格不變**。
+                      商家要嘅「淨額」同時喺下面「訂單明細」上方嘅退款摘要區有完整呈現。 */}
                   <Kpi
                     label="實收金額合計"
-                    value={<Money amount={agg.paidTotal} />}
+                    value={<Money amount={agg.netRevenue} />}
                     delta={null}
-                    subtitle={`優惠後實際收到（＝訂單明細加總）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    highlight={agg.refundTotal > 0}
+                    subtitle={
+                      agg.refundCount > 0
+                        ? `淨額＝毛實收 ${formatMoney(agg.paidTotal)} − 退款 ${formatMoney(agg.refundTotal)}（${agg.refundCount} 張退款單）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`
+                        : `優惠後實際收到（＝訂單明細加總）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`
+                    }
                   />
                   <Kpi
                     label="訂單數"
@@ -2479,6 +2535,36 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   />
                 </div>
             </>
+
+            {/* 🔴 2026-09-17 退貨修復（口徑 D）：退款摘要條。
+                KPI 帶係固定 5 欄，唔可以為咗退款另開卡片（格數會唔係 5 嘅倍數）。
+                所以退款拆解獨立成呢條橫幅 —— 只有真係有退款先顯示，
+                令「毛 / 淨」兩個數同時在場（商家對數要睇「做幾多生意、退幾多」）。
+                ⚠️ 口徑必須同交班頁（`shift-page.tsx` 淨實收）一致：兩頁夾唔到數 = 原本嘅投訴。 */}
+            {agg.refundCount > 0 ? (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                  <span className="font-semibold text-amber-900">
+                    退款拆解（{agg.refundCount} 張退款單）
+                  </span>
+                  <span className="text-amber-800">
+                    營業額（毛）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.revenue)}</span>
+                  </span>
+                  <span className="text-amber-800">
+                    − 退款總額
+                    <span className="ml-1 font-semibold">{formatMoney(agg.refundTotal)}</span>
+                  </span>
+                  <span className="text-amber-900">
+                    ＝ 淨營業額（落袋）
+                    <span className="ml-1 text-base font-bold">{formatMoney(agg.netRevenue)}</span>
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-amber-700">
+                  ⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。
+                </div>
+              </div>
+            ) : null}
 
             {/*
               訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。

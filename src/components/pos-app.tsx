@@ -4157,6 +4157,24 @@ export function PosApp() {
           // 全單折扣備註（0034）：結帳頁揀折扣時必填嘅原因，落 pos_orders.discount_note。
           // 單品折扣原因唔使喺呢度帶 —— 佢藏喺 ORDER_UPDATED 嘅 items 內（逐件 OrderItem）。
           discountNote: updatedOrder.discountNote ?? null,
+          // 🔴 2026-09-17 退貨修復：結帳時**補帶完整訂單內容**（items + 各層金額）。
+          //
+          // 【為何要帶】`ORDER_SETTLED` 舊設計係「純金額 patch，唔重寫 items」——
+          // 前提係 `ORDER_UPDATED` 一定先成功寫入過 items。但退貨 / 退菜會打破呢個前提：
+          // 帶 `sent_to_kitchen` 狀態嘅退貨更新會被「付款階段單向閘」拒收（`paid-downgrade`）
+          // ⇒ items 上唔到雲，之後只剩金額 patch ⇒ 雲端停留「舊數量 + 新金額」
+          // （實案：訂單06「×1 卻 MOP 62」、09-16 A03「1 項卻總額 160」），
+          // 再經 realtime / backfill merge 蓋返本機 ⇒ 收據／訂單詳情數量錯。
+          //
+          // 結帳係最後一次有完整內容嘅時機（收銀喺結帳頁見到嘅就係最終 items），
+          // 喺呢度補帶 = 俾雲端一次自愈機會。server 側只會喺有帶嘅時候才覆寫
+          // （見 `sync/route.ts` ORDER_SETTLED 段嘅 `"items" in ...` 判斷）。
+          order: {
+            items: updatedOrder.items,
+            subtotal: updatedOrder.subtotal,
+            serviceChargeAmount: updatedOrder.serviceChargeAmount,
+            taxAmount: updatedOrder.taxAmount,
+          },
         },
         status: "pending",
         createdAt: updatedOrder.updatedAt,

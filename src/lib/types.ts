@@ -755,6 +755,19 @@ export type ShiftSettlementSnapshot = {
     prepaid: number;
     refundCount: number;
     refundAmount: number;
+    /**
+     * 退款單「未退部分」（2026-09-17 新增，**可選** —— 舊快照冇呢兩欄）。
+     *
+     * 【為何要加】舊口徑「退款單一律唔計」會令實收**偏低**：
+     * 「賣 100、退 30」正確實收 70，舊寫法當 0。呢個欄記載「退款單中仍然收過嘅錢」，
+     * 令 `netPaidTotal = paidTotal + refundedRemainder` 等於實際落袋金額。
+     */
+    refundedRemainder?: number;
+    /**
+     * 淨實收（2026-09-17 新增，**可選**）= `paidTotal + refundedRemainder`
+     * = 已結帳單實收 − 退款總額。對帳時「毛 / 淨」兩個數都可以睇到。
+     */
+    netPaidTotal?: number;
   };
   /** 會員通線上（Ledger）——未登入 / 冇資料時 null（紙本成組唔印）。 */
   online: {

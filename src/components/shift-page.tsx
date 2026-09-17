@@ -17,6 +17,8 @@ import { orderMatchesReportRange, macauTodayRange, macauDateKey } from "@/lib/le
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
+// 退款淨額口徑（毛 / 淨兩個數並存）—— 必須同報表共用同一套算法，否則兩頁夾唔到數。
+import { refundAmountOf, refundTotalOf } from "@/lib/refund-net";
 import {
   loadAuthSession,
   loadBootstrapCache,
@@ -131,6 +133,21 @@ function shiftHistoryDayLabel(day: string): string {
  * - **退款單只入「退款」統計**（張數 + 累計 `refundedAmount`），唔入金額、唔入支付方式拆分。
  * - 部分退嘅單連「實收部分」都唔計 —— 同報表 `isSaleCountable()`（退款一律排除）口徑一致，
  *   保證交班同報表兩頁見到嘅係同一套數。
+ *
+ * 🔴🔴 2026-09-17 修正（商家實案）：上面嗰條口徑**會令實收偏低**，唔可以就咁當終點。
+ *
+ * 【問題】「賣 100、退 30」正確實收 = 70，但兩頁都當 0 ⇒ 實收**偏低 30**。
+ * 部分退嘅單，未退嘅部分係真金白銀收過嘅錢，唔應該連佢一齊消失。
+ *
+ * 【正確口徑】**淨額 = 已結帳單實收 − 退款總額**：
+ *   - `settled` 單照計全額（冇退過）；
+ *   - `partially_refunded` / `refunded` 單計 `total − refundedAmount`（未退部分）；
+ *   - 退款總額另行單獨列出（供對帳），所以「毛 / 淨」兩個數都睇得到。
+ *
+ * ⚠️ 為何唔索性「只加退款單嘅未退部分」就算：咁樣會令「毛收入」呢個概念消失，
+ *    商家對數時想睇「今日做咗幾多生意、當中退咗幾多」——兩個數都要有。
+ *    `netRevenue` / `netPaidTotal` 係新增欄位，原有 `revenue` / `paidTotal` 語義**不變**
+ *    （仍然只計 `settled`），避免改動既有報表口徑。
  */
 function summarizeClosedOrders(orders: PosOrder[]) {
   const closedOrders = orders.filter((order) => order.status === "settled");
@@ -160,16 +177,41 @@ function summarizeClosedOrders(orders: PosOrder[]) {
     },
     {},
   );
+
+  // ── 2026-09-17 淨額口徑（退款唔再令整張單消失）────────────────────────
+  // ⚠️ 算法住喺 `@/lib/refund-net` —— 同一套口徑畀報表（`restaurant-daily-report`）共用。
+  //    唔可以在本檔各自實現一份：兩頁夾唔到數就係商家最初投訴嘅症狀。
+  const refundAmount = refundTotalOf(refunded);
+  /** 退款單「未退部分」＝ 原單實收 − 已退金額（下限 0，防止退多過收造成負數）。 */
+  const refundedRemainder = refunded.reduce(
+    (sum, order) => sum + Math.max(0, (order.total || 0) - refundAmountOf(order)),
+    0,
+  );
+  const netPaidTotal = roundMoney(paidTotal + refundedRemainder);
+
   return {
     count: closedOrders.length,
     revenue: closedOrders.reduce((sum, order) => sum + order.total, 0),
     prepaid: closedOrders.reduce((sum, order) => sum + (order.prepaidAmount ?? 0), 0),
     refundCount: refunded.length,
-    refundAmount: refunded.reduce((sum, order) => sum + (order.refundedAmount ?? order.total), 0),
+    refundAmount: roundMoney(refundAmount),
+    /** 退款單未退部分（仍然係真金白銀收過嘅錢） */
+    refundedRemainder: roundMoney(refundedRemainder),
+    /**
+     * 🔴 淨實收 = 已結帳單實收 + 退款單未退部分 = 實際落袋嘅錢。
+     * 對帳口徑：`netPaidTotal = 毛實收 + 退款單未退部分`；
+     * 或者寫成 `settled 實收總額 − 退款總額`（兩者等價，因為退款只會喺已結帳單上發生）。
+     */
+    netPaidTotal,
     paymentBreakdown,
     receivableTotal,
     paidTotal,
   };
+}
+
+/** 金額四捨五入到分（避免浮點誤差令對帳差 0.01）。 */
+function roundMoney(v: number): number {
+  return Math.round((Number.isFinite(v) ? v : 0) * 100) / 100;
 }
 
 function uid(prefix: string) {
@@ -860,6 +902,9 @@ export function ShiftPage() {
         prepaid: summary.prepaid,
         refundCount: summary.refundCount,
         refundAmount: summary.refundAmount,
+        // 2026-09-17 淨額口徑：退款單未退部分 + 淨實收（見 summarizeClosedOrders 註解）。
+        refundedRemainder: summary.refundedRemainder,
+        netPaidTotal: summary.netPaidTotal,
       },
       online: ledgerToday
         ? {
@@ -1510,6 +1555,23 @@ export function ShiftPage() {
                   <div className="mt-1 text-xs text-slate-500">
                     僅線下 POS：優惠後實際收到 = order.total（已含現金／Mpay／會員餘額）
                   </div>
+                  {/* 🔴 2026-09-17 淨額口徑：舊寫法退款單整張唔計 → 部分退嘅未退部分蒸發。
+                      呢度明確列出「＋退款單未退部分 = 淨實收」，令商家對得上實際落袋金額。 */}
+                  {summary.refundCount > 0 ? (
+                    <div className="mt-2 rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-xs text-emerald-900">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>退款單未退部分</span>
+                        <span className="font-semibold">＋{formatMoney(summary.refundedRemainder)}</span>
+                      </div>
+                      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-emerald-200 pt-1">
+                        <span className="font-semibold">淨實收（落袋）</span>
+                        <span className="text-base font-semibold">{formatMoney(summary.netPaidTotal)}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-emerald-700">
+                        ＝已結帳單實收 − 退款總額 {formatMoney(summary.refundAmount)}
+                      </div>
+                    </div>
+                  ) : null}
                 </article>
                 <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
                   <div className="text-sm text-orange-700">線上線下合計（實收）</div>

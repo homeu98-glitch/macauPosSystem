@@ -9,7 +9,7 @@ import {
 } from "@/lib/pos/pos-device-token";
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
-import { totalItemQuantity } from "@/lib/pos/order-item-diff";
+import { totalItemQuantity, refundRecordCount } from "@/lib/pos/order-item-diff";
 import { addedItemsOfEventPayload, unwrapOrderEventPayload } from "@/lib/pos/sync-order-payload";
 import type { OrderItem } from "@/lib/types";
 
@@ -263,6 +263,17 @@ type ExistingOrderRow = {
    * 舊行 backfill 做 updated_at（舊 row 本來就係 client 蓋章）。
    */
   client_updated_at: string | null;
+  /**
+   * 🔴 退款審計欄（2026-09-17 退貨修復）—— 判斷「今次更新係唔係一次退貨」嘅唯一可靠信號。
+   *
+   * `refund_records` 只會**追加**（`applyReturnToOrder()` 永不覆寫）⇒ 筆數增加 = 新退款；
+   * `refunded_amount` 係累計值；`voided_items` 係退菜紀錄（餐飲全退 / 單項退）。
+   *
+   * 舊 row / 未跑 migration 嘅環境冇呢幾欄 → undefined，helpers 一律當 0 處理。
+   */
+  refund_records?: unknown;
+  refunded_amount?: number | null;
+  voided_items?: unknown;
 };
 
 /**
@@ -512,11 +523,36 @@ export async function POST(request: Request) {
   const existingById = new Map<string, ExistingOrderRow>();
   if (orderIds.size > 0) {
     const idArr = [...orderIds].slice(0, MAX_EVENTS_PER_REQUEST);
-    const { data: existingRows, error: existingErr } = await supabase
-      .from("pos_orders")
-      .select("id,status,fulfillment_status,items,updated_at,client_updated_at")
-      .eq("store_id", storeId)
-      .in("id", idArr);
+    const baseColumns = "id,status,fulfillment_status,items,updated_at,client_updated_at";
+    // 退貨修復（2026-09-17）：多取退款 / 退菜審計欄，用嚟辨認「呢次更新係一次退貨」。
+    // ⚠️ 舊環境可能未加呢幾欄（migration 未跑）→ 回 42703 unknown column。
+    // 呢個失敗會令 `existingById` 全空 ⇒ **LWW / 終態守門一齊失效**（降級為無條件寫入），
+    // 所以唔可以當佢係小事：一定要 fallback 去最基本嘅欄位再試一次。
+    const refundColumns = ",refund_records,refunded_amount,voided_items";
+    let existingRows: unknown[] | null = null;
+    let existingErr: { message?: string | null; code?: string | null } | null = null;
+    {
+      const res = await supabase
+        .from("pos_orders")
+        .select(`${baseColumns}${refundColumns}`)
+        .eq("store_id", storeId)
+        .in("id", idArr);
+      existingRows = res.data as unknown[] | null;
+      existingErr = res.error;
+    }
+    if (existingErr && isMissingColumnError(existingErr)) {
+      console.warn(
+        `[pos/sync] pos_orders 缺退款審計欄（migration 未跑）→ 降級查詢；` +
+          `退貨內容更新嘅守門豁免會失效。詳見 supabase/migrations 的退款欄位定義。`,
+      );
+      const res = await supabase
+        .from("pos_orders")
+        .select(baseColumns)
+        .eq("store_id", storeId)
+        .in("id", idArr);
+      existingRows = res.data as unknown[] | null;
+      existingErr = res.error;
+    }
     if (existingErr) {
       console.error("[pos/sync] 預取現有訂單失敗（LWW 守門降級為無條件寫入）:", existingErr.message);
     } else {
@@ -782,9 +818,52 @@ export async function POST(request: Request) {
         /** 純加法更新（items 只變多）—— 收銀台加菜 / 客人加單共用同一判準。 */
         const isAdditiveUpdate =
           eventType === "ORDER_UPDATED" && Boolean(existing) && incomingQty > existingQty;
+        /**
+         * 🔴 2026-09-17 退貨修復：**退貨 / 退菜令 items 變少**（`incomingQty < existingQty`）
+         * 係「減少」而唔係「降級」，但舊寫法只認 `isAdditiveUpdate`（只變多），
+         * 所以退貨事件：
+         *   ① 唔會豁免 stale → 被時間戳判 stale 而靜默丟棄；
+         *   ② 落唔到 `paidAdditiveFromDevice` → 被付款階段單向閘擋（`paid-downgrade`）。
+         * 結果 `items` 永遠上唔到雲，只有 `ORDER_SETTLED` 嘅**金額 patch** 入到去
+         * ⇒ 雲端停留「舊數量 + 新金額」嘅自相矛盾單（實案：訂單06「×1 卻 MOP 62」、
+         * 09-16 A03「1 項卻總額 160」）。再經 realtime / backfill merge 蓋返本機
+         * ⇒ 收據／訂單詳情數量錯。
+         *
+         * 【判定「呢次係退貨」】唔可以只睇「數量變少」——刪行／改數量都會令數量變少。
+         * 用**退款審計欄**（`refundRecords` / `refundedAmount`）做判準，同 client 端
+         * `mergeOrderLists()` 用「返結審計欄」分辨新舊 snapshot 係同一個手法：
+         * 退款欄係**單調**嘅（寫咗就唔會冇），所以係可靠嘅信號。
+         * `voidedItems` 長度變長 = 退菜（餐飲全退 / 單項退），同樣係合法內容變更。
+         *
+         * ⚠️ `incomingStatus` 已喺上面（`keepExistingStatus` 之前）宣告 —— 狀態閘同呢度
+         * 必須用**同一個**值，呢度唔可以再宣告一次（shadow 會令兩閘口徑分歧）。
+         */
+        const existingRefundedAmount = Number(existing?.refunded_amount ?? 0);
+        const incomingRefundedAmount = Number(order.refundedAmount ?? 0);
+        const existingRefundCount = refundRecordCount(existing?.refund_records);
+        const incomingRefundCount = Array.isArray(order.refundRecords) ? order.refundRecords.length : 0;
+        const existingVoidedCount = Array.isArray(existing?.voided_items) ? existing!.voided_items.length : 0;
+        const incomingVoidedCount = Array.isArray(order.voidedItems) ? order.voidedItems.length : 0;
+        /** 內容縮減更新（items 只變少）—— 退貨 / 退菜會令數量變少。 */
+        const isReductiveUpdate =
+          eventType === "ORDER_UPDATED" && Boolean(existing) && incomingQty < existingQty;
+        /**
+         * 呢次更新係「退貨 / 退菜」（有退款或作廢審計增量）→ 屬於**合法內容變更**，
+         * 唔應該被當成狀態降級擋走。
+         *
+         * ⚠️ 一定要係 `isReductiveUpdate` 或者退款欄有增量 —— 唔可以單靠「有退款欄」
+         * 就放行，因為退款之後嘅任何 snapshot 都會帶住退款欄。
+         */
+        const isRefundContentUpdate =
+          eventType === "ORDER_UPDATED" &&
+          Boolean(existing) &&
+          (incomingRefundedAmount > existingRefundedAmount ||
+            incomingRefundCount > existingRefundCount ||
+            incomingVoidedCount > existingVoidedCount) &&
+          (isReductiveUpdate || incomingQty === existingQty);
         /** 已授權裝置向**已收款單**加菜：保留 DB 現有 `paid`，但照寫 items / 金額。 */
         const paidAdditiveFromDevice =
-          isAdditiveUpdate &&
+          (isAdditiveUpdate || isRefundContentUpdate) &&
           authorized &&
           PAID_ORDER_STATUSES.has(existing?.status ?? "") &&
           OPEN_ORDER_STATUSES.has(incomingStatus);
@@ -823,10 +902,25 @@ export async function POST(request: Request) {
           // (a) LWW：incoming 舊過現有 row → stale，跳過唔寫；
           // (b) 終態守門：settled/cancelled/refunded/partially_refunded 唔可以被 open snapshot
           //     降級。唯一合法嘅終態 → open 轉移係明確 `reopened`（返結帳）。
-          const isStale = incomingTs > 0 && incomingTs < existingTs && !isAdditiveUpdate;
+          //
+          // 🔴 2026-09-17 退貨修復：`isRefundContentUpdate` 同 `isAdditiveUpdate` 一樣要豁免 stale。
+          //     原因同加菜完全對稱 —— 退貨亦係**合法內容變更**，而收銀機時鐘可能快過 /
+          //     慢過雲端那條 row 嘅 `client_updated_at`（iPad 冇 NTP，見上面 (a0)）。
+          //     若退貨事件被判 stale 丟棄，`items` 就永遠上唔到雲，只剩 `ORDER_SETTLED`
+          //     嘅金額 patch ⇒ 雲端停留「舊數量 + 新金額」（實案：訂單06「×1 卻 MOP 62」）。
+          //     語義安全：退款審計欄係單調嘅（只會增加），一條帶「更多退款紀錄」嘅 snapshot
+          //     唔可能係「舊狀態」。
+          const isStale =
+            incomingTs > 0 && incomingTs < existingTs && !isAdditiveUpdate && !isRefundContentUpdate;
           if (isAdditiveUpdate && incomingTs > 0 && incomingTs < existingTs) {
             console.info(
               `[pos/sync] 加菜豁免：接受較舊時間戳嘅加單 ${orderId}（項目 ${existingQty} → ${incomingQty}）`,
+            );
+          }
+          if (isRefundContentUpdate && incomingTs > 0 && incomingTs < existingTs) {
+            console.info(
+              `[pos/sync] 退貨豁免：接受較舊時間戳嘅退貨更新 ${orderId}（` +
+                `項目 ${existingQty} → ${incomingQty}，退款 ${existingRefundedAmount} → ${incomingRefundedAmount}）`,
             );
           }
           const isDowngrade =
@@ -869,9 +963,20 @@ export async function POST(request: Request) {
            * ⚠️ 判斷用 `writeStatus`（實際會寫入嘅狀態）而唔係 raw `incomingStatus`：
            * 匿名通道（kiosk / 掃碼）上面已經強制 `writeStatus = existing.status`，
            * 用 raw 值會令「kiosk 向已收款單加菜」成條事件被拒 → items 上唔到雲。
+           *
+           * 🔴 2026-09-17 退貨修復：`isRefundContentUpdate` 一併豁免。
+           * 收銀台退貨 / 退菜會先 `saveOrders()` 寫一次載入自 `sent_to_kitchen` 嘅
+           * snapshot（`writeStatus` 可能係 `sent_to_kitchen`），但云�� row 已經 `paid`
+           * → 舊寫法判 `isPaidDowngrade` 拒收 ⇒ 退貨嘅 `items` 永遠上唔到雲。
+           * 語義安全：① `paidAdditiveFromDevice` 已經將 `keepExistingStatus` 設 true
+           * → 實際寫入嘅 `writeStatus` 會沿用 DB 嘅 `paid`，唔會真係降級；
+           * ② 退款審計欄單調增加，唔可能係舊狀態。呢個豁免只放行「內容 + 退款欄」，
+           * 唔會令任何純狀態降級漏網（純狀態降級冇退款欄增量 → `isRefundContentUpdate` false）。
            */
           const isPaidDowngrade =
-            PAID_ORDER_STATUSES.has(existingStatus) && OPEN_ORDER_STATUSES.has(writeStatus);
+            PAID_ORDER_STATUSES.has(existingStatus) &&
+            OPEN_ORDER_STATUSES.has(writeStatus) &&
+            !isRefundContentUpdate;
           const isPaidUpgrade =
             OPEN_ORDER_STATUSES.has(existingStatus) && PAID_ORDER_STATUSES.has(writeStatus);
           /**
@@ -1091,6 +1196,52 @@ export async function POST(request: Request) {
         // 若無條件寫 null 會抹走之前 ORDER_UPDATED 寫入嘅值。
         const settledPartySize = partySizeOrNull(eventPayload.partySize);
         if (settledPartySize !== null) patch.party_size = settledPartySize;
+
+        // 🔴 2026-09-17 退貨修復：`ORDER_SETTLED` 唔再係「純金額 patch」。
+        //
+        // 【為何要改】舊註解話「按設計唔重寫 items」—— 呢個設計本身冇問題，
+        // 但**前提係 `ORDER_UPDATED` 一定先成功寫入過 `items`**。退貨正正打破呢個前提：
+        // 退貨事件帶 `sent_to_kitchen`（或 `paid`）狀態，撞正「付款階段單向閘」→ 被拒
+        // （見上面 `isPaidDowngrade`）⇒ `items` 上唔到雲，之後 `ORDER_SETTLED` 只 patch
+        // 金額 ⇒ 雲端停留「舊數量 + 新金額」嘅自相矛盾單（實案：訂單06「×1 卻 MOP 62」、
+        // 09-16 A03「1 項卻總額 160」）。再經 realtime / backfill merge 蓋返本機
+        // ⇒ 收據／訂單詳情少一項。
+        //
+        // 【點解喺呢度補】結帳 / 重結係**最後一次**有完整訂單內容嘅時機（收銀喺結帳頁
+        // 見到嘅就係最終 items）。喺呢度寫 items = 俾雲端一次自愈機會，即使之前
+        // 有 `ORDER_UPDATED` 被守門擋走，結帳都會將雲端校正返。
+        //
+        // 【保守寫法】同樣「**唯有** payload 有帶先寫」—— 舊 client 嘅 ORDER_SETTLED
+        // payload 冇 `order` / `items`，若無條件寫空陣列會**抹走**雲端已有嘅 items。
+        // 接受兩種形狀（同 ORDER_CREATED / ORDER_UPDATED 共用同一套拆解規則，見 docs/113）：
+        //   - `payload.order.items`（帶全張單嘅新 client）
+        //   - `payload.items`（只帶 items 嘅精簡寫法）
+        //
+        // ⚠️ `money()` 對缺值回 **0**（唔係 null）—— 所以**唔可以**用 `!== null` 判斷。
+        //    一定要用 `"key" in obj` 判斷「payload 有冇帶呢個欄」，否則會用 0
+        //    無條件抹走雲端已有嘅金額（離線重推時事件次序唔保證）。
+        const settledOrderSnapshot = unwrapOrderEventPayload(eventPayload);
+        const settledItems = Array.isArray(settledOrderSnapshot?.items)
+          ? (settledOrderSnapshot.items as unknown[]).slice(0, MAX_ORDER_ITEMS)
+          : Array.isArray(eventPayload.items)
+            ? (eventPayload.items as unknown[]).slice(0, MAX_ORDER_ITEMS)
+            : null;
+        if (settledItems) {
+          patch.items = settledItems;
+        }
+        // 逐個金額欄獨立判斷：nested（`payload.order.subtotal`）優先，唔存在就睇
+        // payload 自己（`payload.subtotal`）。**唔可以**用單一個 `snapshotSource` ——
+        // nested 存在但少一個欄（例如只帶 items 同 subtotal）就會漏寫另一個欄。
+        const settledField = (key: string): unknown => {
+          if (settledOrderSnapshot && key in settledOrderSnapshot) return settledOrderSnapshot[key];
+          if (key in eventPayload) return eventPayload[key];
+          return undefined;
+        };
+        if (settledField("subtotal") !== undefined) patch.subtotal = money(settledField("subtotal"));
+        if (settledField("serviceChargeAmount") !== undefined) {
+          patch.service_charge_amount = money(settledField("serviceChargeAmount"));
+        }
+        if (settledField("taxAmount") !== undefined) patch.tax_amount = money(settledField("taxAmount"));
 
         // 免單備註（docs/91）：免單正正喺結帳嗰刻發生，所以 ORDER_SETTLED 呢度係主寫入點。
         // 同樣**唯有 payload 有帶先寫** —— 一般結帳（現金／微信／信用卡）唔帶呢兩個欄，

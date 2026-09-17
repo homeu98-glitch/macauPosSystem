@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 // ⚠️ 一定要用**相對路徑 + .ts 副檔名**：`node --test` 用 Node 內建 type-stripping，
 // 唔識 tsconfig 嘅 `@/` path alias（會 ERR_MODULE_NOT_FOUND）。
-import { addedItemsSignature, diffAddedItems, orderItemKey, totalItemQuantity } from "./order-item-diff.ts";
+import { addedItemsSignature, diffAddedItems, diffReducedItems, orderItemKey, refundRecordCount, totalItemQuantity } from "./order-item-diff.ts";
 import type { OrderItem } from "../types.ts";
 
 function item(over: Partial<OrderItem> & Pick<OrderItem, "menuItemId" | "name">): OrderItem {
@@ -101,4 +101,89 @@ test("totalItemQuantity：加總件數", () => {
     5,
   );
   assert.equal(totalItemQuantity(undefined), 0);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// diffReducedItems（2026-09-17 退貨修復）
+// 用途：偵測「items 變少」＝疑似退貨／退菜，配合 refundRecordCount 判真偽。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("diffReducedItems：退掉一整行 → 回該行原數量", () => {
+  const base = [
+    item({ menuItemId: "m1", name: "牛肋條麵" }),
+    item({ menuItemId: "m2", name: "酸白菜牛肉麵", price: 85 }),
+  ];
+  const next = [item({ menuItemId: "m1", name: "牛肋條麵" })];
+  const reduced = diffReducedItems(base, next);
+  assert.equal(reduced.length, 1);
+  assert.equal(reduced[0].menuItemId, "m2");
+  assert.equal(reduced[0].quantity, 1);
+});
+
+test("diffReducedItems：同一行減數量（x3 → x1）→ 回差額 x2", () => {
+  const base = [item({ menuItemId: "m1", name: "A", quantity: 3 })];
+  const next = [item({ menuItemId: "m1", name: "A", quantity: 1 })];
+  const reduced = diffReducedItems(base, next);
+  assert.equal(reduced.length, 1);
+  assert.equal(reduced[0].quantity, 2);
+});
+
+test("diffReducedItems：加菜 / 無變化 / 空值 → 一律回空", () => {
+  const base = [item({ menuItemId: "m1", name: "A" })];
+  const grown = [item({ menuItemId: "m1", name: "A", quantity: 3 })];
+  assert.equal(diffReducedItems(base, grown).length, 0);
+  assert.equal(diffReducedItems(base, base).length, 0);
+  assert.equal(diffReducedItems(undefined, base).length, 0);
+  assert.equal(diffReducedItems(undefined, undefined).length, 0);
+});
+
+test("diffReducedItems：換菜（刪 A 加 B）→ 只回 A 減少嘅部分，唔會誤報 B", () => {
+  const base = [item({ menuItemId: "m1", name: "A" })];
+  const next = [item({ menuItemId: "m2", name: "B", price: 85 })];
+  const reduced = diffReducedItems(base, next);
+  assert.deepEqual(
+    reduced.map((i) => i.menuItemId),
+    ["m1"],
+  );
+});
+
+test("diffReducedItems：規格唔同視為兩款菜（同 orderItemKey 口徑一致）", () => {
+  const base = [
+    item({
+      menuItemId: "m1",
+      name: "麵",
+      selectedSpecs: [{ groupId: "g1", groupName: "麵", optionId: "o1", optionLabel: "細麵", priceDelta: 0 }],
+    }),
+  ];
+  const next = [
+    item({
+      menuItemId: "m1",
+      name: "麵",
+      selectedSpecs: [{ groupId: "g1", groupName: "麵", optionId: "o2", optionLabel: "寬麵", priceDelta: 0 }],
+    }),
+  ];
+  const reduced = diffReducedItems(base, next);
+  assert.equal(reduced.length, 1);
+  assert.equal(reduced[0].selectedSpecs?.[0]?.optionId, "o1");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// refundRecordCount（2026-09-17 退貨修復）
+// 用途：`refund_records` 單調遞增 ⇒ 筆數增加 = 可靠嘅「今次係退貨」信號。
+// 為何唔用金額：全額折扣單退貨實退 0 元，用金額會漏判。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("refundRecordCount：正常陣列回長度", () => {
+  assert.equal(refundRecordCount([]), 0);
+  assert.equal(refundRecordCount([{ amount: 30 }]), 1);
+  assert.equal(refundRecordCount([{ amount: 30 }, { amount: 0 }]), 2);
+});
+
+test("refundRecordCount：遷移未跑（undefined / null）＋ 髒資料 → 一律回 0，唔拋錯", () => {
+  assert.equal(refundRecordCount(undefined), 0);
+  assert.equal(refundRecordCount(null), 0);
+  // 雲端 jsonb 有機會係物件 / 字串（歷史髒資料）→ 當 0，唔可以 throw
+  assert.equal(refundRecordCount({ amount: 30 }), 0);
+  assert.equal(refundRecordCount("[]"), 0);
+  assert.equal(refundRecordCount(0), 0);
 });

@@ -60,6 +60,46 @@ export function totalItemQuantity(items: OrderItem[] | undefined): number {
 }
 
 /**
+ * 由 `base`（舊版本）→ `next`（新版本）之間**減少**嘅菜品，數量取差額。
+ *
+ * 退貨／退菜／改數量都會令 items 變少。同 `diffAddedItems()` 對稱：
+ * 只回 `delta > 0`（即「減少咗幾多」）嘅項目。
+ *
+ * ⚠️ 唔可以用「總件數變少」單獨判斷係唔係退貨 —— 刪行 / 改數量都會令總數變少。
+ * 要配合退款審計欄（見 `refundRecordCount`）一齊用。
+ */
+export function diffReducedItems(base: OrderItem[] | undefined, next: OrderItem[] | undefined): OrderItem[] {
+  const nextQty = new Map<string, number>();
+  for (const item of next ?? []) {
+    const key = orderItemKey(item);
+    nextQty.set(key, (nextQty.get(key) ?? 0) + (item.quantity ?? 0));
+  }
+
+  const reduced: OrderItem[] = [];
+  for (const item of base ?? []) {
+    const key = orderItemKey(item);
+    const delta = (item.quantity ?? 0) - (nextQty.get(key) ?? 0);
+    if (delta > 0) reduced.push({ ...item, quantity: delta });
+  }
+  return reduced;
+}
+
+/**
+ * 退款紀錄筆數（`pos_orders.refund_records` jsonb 陣列長度）。
+ *
+ * 【為何用「筆數」而唔用金額判「有冇退過貨」】
+ * `refund_records` 係**單調**嘅（`applyReturnToOrder()` 只會追加、唔會清空），
+ * 所以「筆數增加」係可靠嘅「今次係一次退貨」信號；而金額可以係 0
+ * （例如全額折扣單退貨，實退 0 元），用金額會漏判。
+ *
+ * ⚠️ 雲端呢兩欄要 migration 0007 之後先有（見 `supabase/migrations`）；
+ * 未跑嘅環境回 undefined → 統一當 0，唔會拋錯。
+ */
+export function refundRecordCount(records: unknown): number {
+  return Array.isArray(records) ? records.length : 0;
+}
+
+/**
  * 新增菜品嘅穩定簽名（用嚟去重：同一批新增菜唔應該補印兩次）。
  * 排序後串接，所以 items 次序唔影響結果。
  */

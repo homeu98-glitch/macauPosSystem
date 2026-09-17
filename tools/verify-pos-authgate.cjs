@@ -27,12 +27,19 @@ const GUARDED = [
   ["/api/pos/print-templates", "打印模板"],
   ["/api/pos/note-presets", "備註預設"],
   ["/api/online-order-settings", "線上接單設定"],
-  ["/api/pos/kiosk-settings", "自助機設定"],
 ];
 
-/** 設計上必須保持匿名（客人掃碼／自助機）→ 閘生效都應該唔係 401。 */
+/**
+ * 設計上必須保持匿名（客人掃碼／自助機）→ 閘生效都應該唔係 401。
+ *
+ * ⚠️ `/api/pos/kiosk-settings` 係 **GET 匿名、只有 POST 需要憑證**
+ * （`kiosk-settings/route.ts:119-122` 刻意開放 + rate limit 120/min；`:236-242` 才驗憑證）。
+ * 2026-09-17 修：以前呢條被錯誤列入 GUARDED，佢 normal 回 200 會被計成
+ * 「受保護端點仍然放行」→ 總結永遠印「閘尚未生效」，產生**假陰性**。
+ */
 const ANONYMOUS = [
   ["/api/pos/bootstrap", "餐牌 bootstrap（掃碼／自助機入頁靠佢）"],
+  ["/api/pos/kiosk-settings", "自助機設定（只有 GET 匿名；POST 需憑證）"],
   ["/api/pos/store-status", "店內營業狀態（客人端顯示）"],
   ["/api/pos/order-lookup", "客人查本枱未結單"],
 ];
