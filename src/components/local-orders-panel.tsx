@@ -577,14 +577,19 @@ export function LocalOrdersPanel({
                   return (
                     <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
                       <td className={TD_CELL}>
-                        {/* 🔴 返結標籤緊貼訂單號右側（2026-09-18）。
-                            ⚠️ 原本呢格係單一個 `truncate` div；加標籤要包一層 flex，
-                            並將 `truncate` 落返訂單號自己（否則標籤會被 truncate 食咗）。
-                            標籤用 `shrink-0` 保證窄螢幕都唔會被壓扁。 */}
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate text-sm font-semibold text-slate-900">
-                            {order.localOrderNo}
-                          </span>
+                        {/* 🔴 返結標籤放訂單號**下面**（2026-09-18 修正）。
+                            ⚠️ 原本寫「同號碼同一行 + flex」（緊貼右側），實測出事：
+                            訂單號欄窄（10%），`truncate` 會先被壓到 `min-content`
+                            （即只剩「訂」一個字），而標籤係 `shrink-0` 唔肯縮
+                            → 視覺上標籤霸咗第一行、訂單號被擠到似係喺標籤「上面」，
+                            兩者都睇唔清。改為上下堆疊：號碼獨佔一行（`truncate` 正常
+                            運作），標籤落第二行 —— 同下面「取餐碼」用同一套 `mt-1` 模式。 */}
+                        <div className="truncate text-sm font-semibold text-slate-900">
+                          {order.localOrderNo}
+                        </div>
+                        {/* 包一層 `div` 強制獨佔一行：`ReopenBadge` 係 `inline-flex`，
+                            靠前一元素係 block 才換行 —— 明示包住就唔怕日後上面改成 inline。 */}
+                        <div className="mt-1">
                           <ReopenBadge order={order} />
                         </div>
                       </td>

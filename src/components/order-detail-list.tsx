@@ -120,6 +120,8 @@ export function OrderDetailList({
           return (
             <tr key={row.id} className="border-t border-slate-100 even:bg-slate-50/60">
               <td className={TD_CELL}>
+                {/* 第一行：訂單號 ＋「線上」chip（兩者都短，可以並排）。
+                    ⚠️「線上」用 `shrink-0`、訂單號用 `truncate`：號碼太長時由號碼讓位。 */}
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-sm font-semibold text-slate-900">{row.orderNo ?? "線上單"}</span>
                   {row.online ? (
@@ -127,9 +129,14 @@ export function OrderDetailList({
                       線上
                     </span>
                   ) : null}
-                  {/* 🔴 返結標籤（2026-09-18）：同「線上」chip 同一個位置，
-                      緊貼訂單號。用 `shrink-0` 保證窄欄都唔會被壓扁。
-                      色系（indigo）同 pos-order-filters 嘅「已返結」狀態標籤一致。 */}
+                </div>
+                {/* 🔴 返結標籤放**第二行**（2026-09-18 修正）。
+                    原本同訂單號同一行（緊貼右側），實測出事：訂單號欄只 13%，
+                    同一行 flex 之下 `truncate` 會被壓到只剩一個字，而標籤
+                    `shrink-0` 佔住剩餘空間 → 睇落似係標籤喺上面、號碼被擠走。
+                    改為獨立一行，同下面「取餐碼」同一個 `mt-1` 堆疊模式。
+                    色系（indigo）同 pos-order-filters 嘅「已返結」狀態標籤一致。 */}
+                <div className="mt-1">
                   <ReopenBadge order={row} />
                 </div>
                 {/* 取餐碼：原本係「狀態」欄，2026-09-11 併入呢度第二行（線下單冇 → 唔顯示） */}
