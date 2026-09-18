@@ -80,6 +80,21 @@ type MerchantOpenPillProps = {
    * - `red`：紅底白字 —— **線下接單（店內營業）**用，一關就係停業，要一眼睇到
    */
   offTone?: "amber" | "red";
+  /**
+   * 「殘留接單通道」警示（2026-09-18）。
+   *
+   * `true` = 本通道已關，但**另一條通道仍然開住**（例如線下關咗、線上仲接單）
+   * → 喺 label 前面加一粒琥珀點 + tooltip，令收銀唔使逐粒 pill 對比都知仲有入口開住。
+   *
+   * 🔴 唔新增格子：側欄 72px 放唔落（J 2026-09-14 已指示移除嗰格），
+   *    所以警示必須寄生喺既有 pill 上面。
+   *
+   * ⚠️ 呼叫端負責判斷（`residual-channel.ts`）——**未讀到（`null`）唔算殘留**，
+   *    否則每次斷網都出假警報。
+   */
+  residual?: boolean;
+  /** `residual` 為 true 時嘅 tooltip 文案。 */
+  residualHint?: string;
 };
 
 /** 關店確認文案 —— 一定要講清楚「只影響會員通」，否則收銀會以為連堂食都停。 */
@@ -101,6 +116,8 @@ export function MerchantOpenPill({
   enabledLabel = "營業中",
   offLabel = "已暫停",
   offTone = "amber",
+  residual = false,
+  residualHint,
 }: MerchantOpenPillProps) {
   const contained = variant === "contained";
   const sm = size === "sm";
@@ -151,6 +168,19 @@ export function MerchantOpenPill({
   const inner = (
     <>
       <span className={labelClass}>
+        {/*
+          殘留通道警示點（2026-09-18）：寄生喺 label 前面，唔新增格子。
+          ⚠️ 用 `inline-block` + `align-middle`：`xs` 尺寸下 label 係 11px，
+             用 `animate-pulse` 嘅 8px 圓點要對齊文字基線先唔會「浮高」。
+        */}
+        {residual ? (
+          <span
+            aria-label={residualHint ?? "仍有接單通道開住"}
+            className="mr-1 inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500 align-middle"
+            role="img"
+            title={residualHint}
+          />
+        ) : null}
         {label}
         {busy && busyHint ? (
           <span className="ml-1 font-normal text-slate-400">{busyHint}</span>

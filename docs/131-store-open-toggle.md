@@ -151,15 +151,113 @@ if (!authorized && storeClosed) {
 
 ## 6. ⚠️ 未做 / 已知限制
 
-1. **需求 4（交班後未重新開工 → 落唔到單）刻意未實作**（J 2026-09-14 拍板「唔查開工」）。
-   原因：`pos_shifts` 上「交班後未開工」同「從來冇開工」完全一樣（`active = null`），
-   一律擋就會令未用開班制度嘅店／新店永遠落唔到單。
-   要補返：喺 `/api/pos/sync` 2.55 段多查一次 `pos_shifts`（同一 pattern），
-   `storeOpen` 通道同客端 UI 唔使改。
+1. ~~**需求 4（交班後未重新開工 → 落唔到單）刻意未實作**（J 2026-09-14 拍板「唔查開工」）~~
+   → **2026-09-18 已實作**（J 第三輪拍板「3. 做」）。見 §8 班次閘。
+   原判斷（「交班後未開工」同「從來冇開工」喺 `pos_shifts` 上完全一樣）仍然成立，
+   但結論改咗：正因為兩者一樣，**冇 open row 就係未開工**——呢個係事實記錄，
+   唔係「未設定」。所以 server 側可以放心擋（客端仍然只被動反應，唔自己查）。
 2. **客人端唔會即時知**（只喺入頁 / 返前景讀一次）。已經企喺 kiosk 前面揀緊菜嘅客人，
    會喺**撳落單**嗰刻被拒（然後轉全屏）。冇做 Realtime 匿名訂閱 —— 成本同 RLS 風險唔值。
 3. **未跑 migration 0039**：收銀撳掣會回 503「表未建立」（**唔會**靜靜當成功）；
    客人端照樣落得到單（fail-open）。
+4. **`/api/pos/store-status` 仍有假店 fallback**（`DEFAULT_STORE_ID = "macau-store-a"`，
+   GET 53 行 / POST 117-119 行）：缺 `storeId` 時會靜默寫入呢間假店，
+   同 `/api/online-order-settings` 2026-09-15 已移除 fallback 嘅做法唔一致。
+   **2026-09-18 記錄，未收緊**（改動會影響 URL 回溯兼容性，要另開一輪確認）。
+
+---
+
+## 8. 關店總掣（2026-09-18）
+
+### 8.1 需求（J 2026-09-18）
+
+> 「結數完成後，我發現線上系統和線下系統並沒有在同一個時間點被關閉……」
+> 「當完成結帳並執行關店操作後，要能一次性地將該門市的所有線上與線下通路全部一起關閉。」
+
+**根因**：`closeShift()` 以前**完全唔碰**任何接單開關 —— 班次收咗，
+但掃碼／kiosk（`pos_store_status.is_open`）同線上（Ledger `merchant_enabled`）
+照樣開住，客人仍然落得到單。三條軌道（班次／線下接單／線上接單）互不相干，
+係**設計現狀**，唔係 bug。
+
+### 8.2 四個取捨點（J 2026-09-18 拍板）
+
+| # | 取捨 | 拍板 |
+|---|---|---|
+| 1 | step2 勾選框預設狀態 | **預設勾** |
+| 2 | 線下關成功但線上失敗 | **保留線下已關 + 提示**（唔回滾） |
+| 3 | 順帶把「未開工不可落單」延伸到客人端 | **做** |
+| 4 | `/pos` 加「殘留通道」紅點 | **加** |
+
+### 8.3 執行紀律
+
+- **序列，唔並行**：先線下後線上（線下係店門口嗰道閘，次序有意義）。
+- **中途失敗繼續行**：線下關唔到**唔可以** `return`，否則連帶令線上永遠關唔到。
+- **`null`（未讀到）＝ `skipped`，唔算失敗**：本來就冇值可以關；寫落去會製造假狀態。
+- **永遠唔 throw**：交班流程唔應該因為關店出問題而中斷。
+- **位置**：喺 `forceSyncBeforeClose()` 之後、**兩個 early return 之前**
+  （打印總開關關咗 / server close 失敗嗰兩個 return 都會完成交班，關店唔可以排喺佢哋之後）。
+
+### 8.4 架構：為咩要 module-level 函式（A 方案）
+
+`closeShift()` 係普通 async function，**唔可以**呼叫 hook。兩個選擇之中揀咗 **A**：
+
+| | 做法 | 結果 |
+|---|---|---|
+| ~~B~~ | `ShiftPage` 掛 hook + setter 塞 ref | 多開 Realtime channel、stale closure 溫床 |
+| **A** | 兩個 hook 模組**額外 export 模組層函式** `applyStoreOpen()` / `applyMerchantEnabled()`，hook 內嘅 setter 轉呼叫佢 | 單一真源、可被非 React 呼叫端重用 |
+
+### 8.5 檔案清單
+
+| 檔案 | 改動 |
+|---|---|
+| `src/lib/pos/close-gate.ts` | **新增**（純決策 + 文案，**零 import**） |
+| `src/lib/pos/close-gate-run.ts` | **新增**（執行層：import 兩個 hook 模組，`runCloseGate()`） |
+| `src/lib/pos/close-gate.test.ts` | **新增**（14 test） |
+| `src/lib/pos/residual-channel.ts` | **新增**（殘留通道偵測，**零 import**） |
+| `src/lib/pos/residual-channel.test.ts` | **新增**（10 test） |
+| `src/lib/pos/use-store-status.ts` | 抽 `applyStoreOpen()` 出模組層（export） |
+| `src/lib/pos/use-merchant-order-config.ts` | 抽 `applyMerchantEnabled()` 出模組層（export） |
+| `src/components/shift-page.tsx` | step2 勾選、step3 回顯、`closeShift()` 接總掣、狀態列彙總 |
+| `src/components/merchant-open-pill.tsx` | 新增 `residual` / `residualHint` prop（label 前加警示點） |
+| `src/components/store-open-pill.tsx` | 傳 `residual`（線下關 + 線上開） |
+| `src/components/online-open-pill.tsx` | 傳 `residual`（線上關 + 線下開） |
+| `src/app/api/pos/sync/route.ts` | 新增 **2.56) 班次閘** + `reason: "shift-closed"` |
+| `src/lib/use-kiosk-order.ts` | `shiftClosed` state + i18n（`shiftClosedTitle` / `Body`） |
+| `src/lib/use-scan-order.ts` | 轉發 `shiftClosed` |
+| `src/app/order/page.tsx`、`src/components/scan-order-page.tsx` | 全屏「本店尚未開始營業」 |
+| `src/lib/kiosk-order.ts` | `KioskOrderRejectedError.reason` 文件補 `shift-closed` |
+
+### 8.6 班次閘口徑（`/api/pos/sync` 2.56 段）
+
+| 情況 | 行為 |
+|---|---|
+| 匿名 + `pos_shifts` 有 open row | 放行 |
+| 匿名 + **冇** open row | 拒單，`reason: "shift-closed"` |
+| 匿名 + 查詢失敗（42P01 等） | **放行**（fail-open —— 唔可以一斷網全店停單） |
+| **帶 POS 憑證**（收銀台） | **完全唔受影響**（逃生門） |
+
+🔴 **同 2.55 段嘅 default 方向刻意相反**：
+`pos_store_status` 冇 row ＝ 營業中（店主冇主動暫停過）；
+`pos_shifts` 冇 open row ＝ **真係未開工**（班次係事實記錄）。
+
+🔴 **`shop-closed` 同 `shift-closed` 唔可以撈埋**：
+前者係店主主動關門（叫客人等可能等到今日都唔開）；
+後者係未開工／已收工（叫客人「稍後再試」係有意義嘅）。所以客端分兩套文案。
+
+### 8.7 驗收
+
+1. **step2 勾選預設勾住**；取消勾選 → step3 顯示「接單狀態不變」+ step2 出琥珀警示。
+2. **交班 + 勾住** → 側欄商店名卡變紅、線上 pill 變「已暫停」；兩粒 pill **唔出**警示點。
+3. **部分失敗** → 狀態列出黃色／紅色附註，**明確講邊條通道未關** + 去側欄補救；
+   線下**維持已關**（唔回滾）。
+4. **未讀到（`null`）** → `skipped`，唔算失敗，狀態列唔出警告。
+5. **`residual` 警示點**：線下關 + 線上開 → 線下 pill 出點；
+   線上關 + 線下開 → 線上 pill 出點；兩粒**永遠唔會同時**出點。
+6. **客端**：未開工時客人撳落單 → server 拒 → 全屏「本店尚未開始營業」（**唔係**
+   「商家不在營業中」）；`pos_orders` **冇**新 row。
+7. **收銀逃生門**：未開工時收銀台**照樣**落單 / 結帳（帶憑證唔受閘影響）。
+8. `tsc --noEmit` 0 error ／ `node --test` 新增 24 test 全 pass。
+
 
 ---
 

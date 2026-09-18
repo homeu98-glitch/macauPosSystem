@@ -193,6 +193,8 @@ function AddPrinterWizard({
   const [btList, setBtList] = useState<PrinterCandidate[]>([]);
   const [btOpen, setBtOpen] = useState(false);
   const [btScanning, setBtScanning] = useState(false);
+  /** 藍牙掃描錯誤訊息（Android native `onBtDiscoveryError` 回報）。空 = 冇錯。 */
+  const [scanError, setScanError] = useState<string>("");
   const isAndroid = isNativeBridgeAvailable();
 
   // Android APK：接收原生藍牙/USB 發現回調（對應 PosNative 嘅 onBtPrinterFound / onUsbPrinterAttached）
@@ -201,6 +203,11 @@ function AddPrinterWizard({
     const w = window as unknown as {
       onBtPrinterFound?: (raw: Record<string, unknown>) => void;
       onUsbPrinterAttached?: (json: string) => void;
+      onUsbPrinterDetached?: (json: string) => void;
+      onUsbPermissionResult?: (vidOk: boolean, key: string, granted: boolean) => void;
+      onBtDiscoveryFinished?: () => void;
+      onBtDiscoveryError?: (msg: string) => void;
+      onBtPermissionNeeded?: () => void;
     };
     w.onBtPrinterFound = (raw) => {
       const cand: PrinterCandidate = {
@@ -218,9 +225,37 @@ function AddPrinterWizard({
       // 插機 auto-add：重拉 USB 清單
       void listNativeUsbPrinters().then(setUsbList);
     };
+    // ── 以下 5 個係 2026-09-18 補上 ──
+    // Android 側（UsbController / BtController）一直有發，但呢邊冇接收端 →
+    // 拔機唔更新清單、藍牙掃描永遠「掃描中」、授權／錯誤訊息靜默丟失。
+    w.onUsbPrinterDetached = () => {
+      void listNativeUsbPrinters().then(setUsbList);
+    };
+    w.onUsbPermissionResult = (_vidOk, _key, granted) => {
+      // 授權完成（無論准或拒）都要重拉，令 hasPermission 反映最新狀態
+      if (granted) void listNativeUsbPrinters().then(setUsbList);
+    };
+    w.onBtDiscoveryFinished = () => {
+      setBtScanning(false);
+    };
+    w.onBtDiscoveryError = (msg) => {
+      setBtScanning(false);
+      setScanError(String(msg || "藍牙掃描失敗"));
+    };
+    w.onBtPermissionNeeded = () => {
+      // Android 12+ 需要 BLUETOOTH_SCAN：觸發 runtime 授權後重試一次
+      void requestNativeBtPermission().then((r) => {
+        if (r.ok) void scanNativeBtPrinters();
+      });
+    };
     return () => {
       w.onBtPrinterFound = undefined;
       w.onUsbPrinterAttached = undefined;
+      w.onUsbPrinterDetached = undefined;
+      w.onUsbPermissionResult = undefined;
+      w.onBtDiscoveryFinished = undefined;
+      w.onBtDiscoveryError = undefined;
+      w.onBtPermissionNeeded = undefined;
     };
   }, [isAndroid]);
 
@@ -271,6 +306,7 @@ function AddPrinterWizard({
       return;
     }
     setBtScanning(true);
+    setScanError("");
     setBtOpen(true);
     setManualLanOpen(false);
     setUsbOpen(false);
@@ -360,6 +396,13 @@ function AddPrinterWizard({
         >
           {btScanning ? "探索中…" : "+ 藍牙打印機"}
         </button>
+
+        {/* 藍牙掃描錯誤（Android native onBtDiscoveryError 回報）—— 原本冇接收端，錯誤靜默丟失 */}
+        {scanError ? (
+          <span className="w-full text-[11px] text-rose-600" role="alert">
+            {scanError}
+          </span>
+        ) : null}
 
         <span className="w-full text-[11px] text-slate-400">auto search 失敗？用手動 fallback：</span>
 

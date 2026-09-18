@@ -63,6 +63,13 @@ import { buildShiftPrintJobs } from "@/lib/print-jobs";
 // 嘅自訂 flush（docs/111 —— 整條 queue 照推會撞 server 200 條上限 → 413 → 交班單反而上唔到雲）。
 // 所以呢度只換「落本機」嗰半步，入隊 / flush 照舊由下面自己控制。
 import { persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
+// 「關店總掣」（2026-09-18）：交班時一次過關閉線下 + 線上接單通路。
+// 決策／文案喺純模組 `close-gate.ts`；真正 call 兩個 hook 模組嘅執行層喺 `close-gate-run.ts`。
+import { describeCloseGate, isCloseGateClean, type CloseGateResult } from "@/lib/pos/close-gate";
+import { runCloseGate } from "@/lib/pos/close-gate-run";
+// 交班關店總掣要讀兩條接單通道嘅現值（module singleton，同側欄 pill 共用）
+import { useStoreStatus } from "@/lib/pos/use-store-status";
+import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
 import { formatMoney, formatMoneyValue } from "@/lib/format";
 import { buildOrderDetailNotes, buildOnlineOrderDetailNotes } from "@/lib/pos/order-notes";
 import { paymentModeLabel } from "@/lib/ledger/order-mapper";
@@ -329,6 +336,23 @@ export function ShiftPage() {
   const [closingDiff, setClosingDiff] = useState("");
   const [closingNote, setClosingNote] = useState("");
   const [closingShift, setClosingShift] = useState(false);
+  /**
+   * 「關店總掣」勾選（2026-09-18，J 拍板**預設勾**）。
+   *
+   * 勾住 = 交班完成後，一次過關閉本店全部接單通路：
+   *   ① 線下（掃碼 `/menu` `/quick` + kiosk `/order`）＝ `pos_store_status.is_open`
+   *   ② 線上（會員通）＝ Ledger `merchant_enabled`
+   *
+   * ⚠️ 點解預設勾：交班本身就係「今日唔再做」嘅動作，唔勾反而係例外情況
+   *    （例如提早交班但想繼續收線上單）。預設唔勾 = 每次都要人手記得撳，
+   *    漏撳就係 J 2026-09-18 回報嗰個「收咗班但客人仲落得到單」。
+   */
+  const [closeStoreGate, setCloseStoreGate] = useState(true);
+  /**
+   * 交班完成後嘅關店結果（`null` = 未執行過）。
+   * 交班完成後**唔會**即刻消失，要留住畀收銀睇到邊條通道未關到。
+   */
+  const [lastCloseGate, setLastCloseGate] = useState<CloseGateResult | null>(null);
   const [shiftHistory, setShiftHistory] = useState(() => loadShiftHistory());
   /** 雲端回填到幾多筆（>0 = 有跨機記錄，顯示喺標題旁令用戶知來源）。 */
   const [historyCloudCount, setHistoryCloudCount] = useState(0);
@@ -360,6 +384,22 @@ export function ShiftPage() {
   const [ledgerPaidOrders, setLedgerPaidOrders] = useState<PaidLedgerOrdersTotal | null>(null);
   const [purchaseToday, setPurchaseToday] = useState<PurchaseApiResponse | null>(null);
   const authSession = useMemo(() => loadAuthSession(), []);
+
+  /**
+   * 「關店總掣」（2026-09-18）——交班彈窗需要知道兩條接單通道**而家**開唔開，
+   * 先可以決定要唔要關、同埋畀收銀睇到「交班後會關咩」。
+   *
+   * ⚠️ 呢兩個 hook 只係**讀**。真正嘅寫入由 `close-gate-run.ts` 嘅
+   *    `runCloseGate()` 經 module-level 函式做（非 React 呼叫端唔可以 call hook）。
+   *
+   * ⚠️ 兩個都係 module singleton（見各自檔案），同側欄嘅 pill 共用同一份 state
+   *    同一條 Realtime channel —— 所以呢度掛 hook **唔會**多開連線。
+   */
+  const storeOpenStatus = useStoreStatus(authSession?.merchantId ?? null, Boolean(authSession?.merchantId));
+  const onlineOrderConfig = useMerchantOrderConfig(
+    authSession?.merchantId ?? null,
+    Boolean(authSession?.merchantId),
+  );
 
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
@@ -1147,6 +1187,30 @@ export function ShiftPage() {
       setClosingShift(false);
       return;
     }
+
+    /**
+     * ── 「關店總掣」（2026-09-18）────────────────────────────────────────
+     * 喺呢個位執行，係因為：
+     * ① 已經過咗 `forceSyncBeforeClose()`（網絡確認可用）；
+     * ② 早過下面**兩個 early return**（打印總開關關咗 / server close 失敗）——
+     *    呢兩個 return 都會完成交班，關店唔可以喺佢哋之後，否則就會漏。
+     *
+     * ⚠️ 讀值要喺 `runCloseGate()` **之前**捕捉：佢一 call 就會樂觀更新
+     *    module state，再讀就係新值（同 `useStoreOpenToggle` 捕捉意圖同一個道理）。
+     *
+     * ⚠️ 唔勾 = 完全唔碰（連 `lastCloseGate` 都唔寫），交班行為同以前一模一樣。
+     */
+    let gateResult: CloseGateResult | null = null;
+    if (closeStoreGate) {
+      gateResult = await runCloseGate({
+        storeOpen: storeOpenStatus.isOpen,
+        merchantEnabled: onlineOrderConfig.merchantEnabled,
+      });
+      setLastCloseGate(gateResult);
+    } else {
+      setLastCloseGate(null);
+    }
+
     const historyRecord = {
       id: `shift-${now}`,
       employeeAccount: authSession?.account,
@@ -1254,7 +1318,12 @@ export function ShiftPage() {
       // ⚠️ 重打交班單（reprintShiftRecord）係**手動**掣，唔受呢個影響，
       // 即使熄咗都可以喺交班歷史撳「重打」補印。
       if (!isPrintContentEnabled("shift")) {
-        setStatus("已交班（交班單打印已關閉，如需紙本請到交班歷史「重打」）。");
+        // ⚠️ 呢個係 early return —— 關店總掣已經喺上面行咗（一定要保持咁樣），
+        //    但結果要帶埋出狀態列，否則「收咗班但仲接單」會靜靜地冇人知。
+        setStatus(
+          "已交班（交班單打印已關閉，如需紙本請到交班歷史「重打」）。" +
+            (gateResult ? describeCloseGate(gateResult) : ""),
+        );
         setClosingShift(false);
         return;
       }
@@ -1322,7 +1391,9 @@ export function ShiftPage() {
       (print
         ? `已交班，交班明細（${snapshot.shiftNo}）已加入打印隊列，狀態已重置為待開工。`
         : `已交班（跳過打印，單號 ${snapshot.shiftNo}），狀態已重置為待開工。`) +
-        (serverCloseFailed ? "（⚠️ 收工狀態未能同步雲端，將自動重試，其他裝置可能仍顯示已開工。）" : "（雲端已同步，其他裝置會顯示已收工。）"),
+        (serverCloseFailed ? "（⚠️ 收工狀態未能同步雲端，將自動重試，其他裝置可能仍顯示已開工。）" : "（雲端已同步，其他裝置會顯示已收工。）") +
+        // 關店總掣結果：全部成功／無需動作 → `describeCloseGate` 回 ""，唔會多餘加字。
+        (gateResult ? describeCloseGate(gateResult) : ""),
     );
     setConfirmOpen(false);
     setPreviewData(null);
@@ -1440,6 +1511,31 @@ export function ShiftPage() {
   const closingActualCash =
     typeof closingDiffValue === "number" ? Math.round((expectedCash + closingDiffValue) * 100) / 100 : null;
 
+  /**
+   * 關店總掣嘅**現況摘要**（畀 step2 勾選框下面嗰行細字用）。
+   *
+   * 誠實回報「未讀到」：`null` 顯示「未接通」，唔可以當「已開」或者「已關」。
+   * 呢行字係收銀撳落去之前最後一次知道「而家開住咩」嘅機會。
+   */
+  const closeGateNow = (() => {
+    const storeLabel =
+      storeOpenStatus.isOpen === null
+        ? "未接通"
+        : storeOpenStatus.isOpen
+          ? "營業中"
+          : "已暫停";
+    const onlineLabel =
+      onlineOrderConfig.merchantEnabled === null
+        ? "未接通"
+        : onlineOrderConfig.merchantEnabled
+          ? "接單中"
+          : "已暫停";
+    return { storeLabel, onlineLabel };
+  })();
+  /** 兩條通道都已經關咗（或者未讀到）→ 勾唔勾都冇分別，UI 可以講清楚。 */
+  const closeGateNothingToDo =
+    storeOpenStatus.isOpen !== true && onlineOrderConfig.merchantEnabled !== true;
+
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
@@ -1462,6 +1558,30 @@ export function ShiftPage() {
               </label>
             ) : null}
           </div>
+
+          {/*
+            關店總掣殘留警示（2026-09-18）：交班彈窗一閂就會消失，但「仲有通道開住」
+            係一個**要跟進**嘅狀態。所以喺 header 常駐一格，只有真係有失敗才顯示 ——
+            冇失敗 = 唔渲染（唔會變噪音）。
+          */}
+          {lastCloseGate && !isCloseGateClean(lastCloseGate) ? (
+            <div className="w-full rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span className="font-semibold">⚠️ 交班已完成，但部分接單通道未能關閉</span>
+              <span className="ml-1">
+                {lastCloseGate.store === "failed" ? "店內接單（掃碼／自助機）" : ""}
+                {lastCloseGate.store === "failed" && lastCloseGate.online === "failed" ? "、" : ""}
+                {lastCloseGate.online === "failed" ? "線上接單" : ""}
+                仍然開住 —— 客人落得到單。請到側欄商店名卡手動關閉。
+              </span>
+              <button
+                className="ml-2 rounded-xl bg-white px-2 py-1 text-xs font-semibold text-amber-900 ring-1 ring-amber-300"
+                onClick={() => setLastCloseGate(null)}
+                type="button"
+              >
+                知道了
+              </button>
+            </div>
+          ) : null}
 
           <div className="flex flex-col items-end gap-3">
             <div className="text-right text-sm">
@@ -2226,8 +2346,13 @@ export function ShiftPage() {
                   並打印交班單。之後只能喺歷史補錄備註，<span className="font-semibold">唔可以再改任何金額或差額</span>
                   。請確認下面數字冇錯。
                 </div>
+                {closeStoreGate ? (
+                  <div className="mt-2 border-t border-red-200 pt-2">
+                    另外：<span className="font-semibold">本店線上／線下接單會一齊關閉</span>（打烊），
+                    客人即刻落唔到單；重開要人手。
+                  </div>
+                ) : null}
               </div>
-
               <div className="grid gap-3 md:grid-cols-2">
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
                   <div className="text-slate-500">已結帳訂單</div>
@@ -2294,6 +2419,60 @@ export function ShiftPage() {
                   {ledgerTodayError ? ledgerTodayError : null}
                 </div>
               ) : null}
+
+              {/*
+                ── 關店總掣（2026-09-18）──────────────────────────────────────
+                設計要點：
+                • 呢一格係**新功能**，唔可以遮蓋上面啲金額核對資訊（所以放最底）。
+                • 預設**已勾**（J 拍板）——交班本身就係「今日唔再做」。
+                • 觸控：整行 label 可撳（唔止個 checkbox），高度 ≥ 48px。
+                • 要老實講「而家開住咩」，收銀先知撳落去會改到啲乜。
+              */}
+              <div
+                className={`rounded-2xl border p-3 ${
+                  closeStoreGate ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50"
+                }`}
+              >
+                <label className="flex min-h-[48px] cursor-pointer items-start gap-3">
+                  <input
+                    checked={closeStoreGate}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-amber-600"
+                    disabled={closingShift}
+                    onChange={(event) => setCloseStoreGate(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span className="flex-1 text-sm">
+                    <span className="block font-semibold text-slate-900">
+                      同時關閉本店「線上 + 線下」接單（打烊）
+                    </span>
+                    <span className="mt-1 block text-slate-600">
+                      交班後客人將無法掃碼點餐、用自助點餐機落單，線上（會員通）亦會暫停接單。
+                    </span>
+                    <span className="mt-1 block text-xs text-slate-500">
+                      而家：店內接單 <strong className="text-slate-700">{closeGateNow.storeLabel}</strong>
+                      {" · "}
+                      線上接單 <strong className="text-slate-700">{closeGateNow.onlineLabel}</strong>
+                    </span>
+                  </span>
+                </label>
+
+                {closeStoreGate && closeGateNothingToDo ? (
+                  <div className="mt-2 rounded-xl bg-white/70 px-3 py-2 text-xs text-slate-600">
+                    兩條通道本身都未開（或未接通），交班唔會再改動接單狀態。
+                  </div>
+                ) : null}
+
+                {closeStoreGate ? (
+                  <div className="mt-2 rounded-xl bg-white/70 px-3 py-2 text-xs text-slate-600">
+                    ⚠ 重開需要人手：交班後到側欄商店名卡撳「營業中」，或設定頁開返線上接單。
+                    <strong className="text-slate-700">唔會</strong>自動開返。
+                  </div>
+                ) : (
+                  <div className="mt-2 rounded-xl border border-amber-200 bg-white/70 px-3 py-2 text-xs text-amber-800">
+                    ⚠ 已取消勾選：交班後接單狀態維持現狀，客人仍然落得到單。
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             <>
@@ -2317,6 +2496,19 @@ export function ShiftPage() {
                     : null}
                 </div>
               ) : null}
+
+              {/* step3 唯讀回顯：令收銀喺最後一刻仍然知道撳「打印」之後會發生咩事 */}
+              <div
+                className={`rounded-2xl border px-3 py-2 text-sm ${
+                  closeStoreGate
+                    ? "border-amber-300 bg-amber-50 text-amber-900"
+                    : "border-slate-200 bg-slate-50 text-slate-600"
+                }`}
+              >
+                {closeStoreGate
+                  ? "交班後：將一併關閉本店「線上 + 線下」接單（客人掃碼／自助機／線上點餐一律停單）。"
+                  : "交班後：接單狀態不變（客人仍可掃碼、自助機、線上落單）。"}
+              </div>
 
               {previewData ? (
                 <div className="mx-auto w-full max-w-[360px] rounded-2xl border-2 border-dashed border-slate-300 bg-white p-5 font-mono text-[13px] leading-relaxed text-slate-900">

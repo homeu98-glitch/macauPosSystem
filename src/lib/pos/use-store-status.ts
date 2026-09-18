@@ -168,6 +168,62 @@ function unsubscribeRealtime() {
 }
 
 /**
+ * 開 / 關店內營業 —— **模組層實作**（hook 內嘅 `setStoreOpen` 直接轉呼叫呢個）。
+ *
+ * ── 點解要抽成模組層函式（2026-09-18）──────────────────────────────────
+ * 「結數交班時一齊關店」呢個流程（`shift-page.tsx` 嘅 `closeShift()`）係一個
+ * **普通 async function**，唔係 component render 期 —— 佢**唔可以**呼叫 hook
+ * （違反 Hooks 規則）。但佢又一定要寫 `pos_store_status`。
+ *
+ * 兩條路都唔靚：① 喺 `ShiftPage` 掛 `useStoreStatus()` 再將 setter 塞入 ref →
+ * 令交班頁白白多開一條 Realtime channel，而且係 stale closure 溫床；
+ * ② 喺 `shift-page.tsx` 自己寫一份 fetch POST → 繞過 `available` 把關，
+ * 亦係「兩處各自維護」嘅經典死角。
+ *
+ * 所以將邏輯擺喺**唯一真源嘅模組層**：hook 同非 React 呼叫端（交班）
+ * 行同一段碼，唔會有第二份。
+ *
+ * ⚠️ 仍然**只改 `pos_store_status` 一欄**。「關店 → 連動暫停線上接單」嘅次序
+ *    由 call site 決定（`use-store-open-toggle.ts` 側欄掣，或交班 `closeShift()`）。
+ *
+ * @returns `true` = 已寫入 DB（UI 可以用嚟決定要唔要出提示）。
+ */
+export async function applyStoreOpen(next: boolean): Promise<boolean> {
+  const store = activeStoreId;
+  const previous = state.isOpen;
+
+  if (!store) {
+    setState({ error: "尚未登入，無法切換營業狀態。" });
+    return false;
+  }
+
+  // 樂觀更新：掣即刻有反應，失敗先 rollback（同 self-order-auto-accept 一致）
+  setState({ isOpen: next, saving: true, error: null });
+
+  try {
+    // ⚠️ POST 要 POS 終端憑證（同 kiosk-settings）。先續期再取 header，
+    //    否則過夜之後一撳就 401（GET 開放，所以「讀得到但存唔到」）。
+    const headers = await posDeviceAuthHeadersFresh();
+    const result = await saveStoreStatus(store, next, headers);
+    setState({
+      isOpen: result.isOpen,
+      updatedAt: result.updatedAt ?? state.updatedAt,
+      saving: false,
+      error: null,
+      source: "server",
+    });
+    return true;
+  } catch (e) {
+    setState({
+      isOpen: previous,
+      saving: false,
+      error: e instanceof Error ? e.message : "儲存營業狀態失敗",
+    });
+    return false;
+  }
+}
+
+/**
  * 店內營業狀態（讀 + 寫）。
  *
  * @param storeId 商家 id（`loadAuthSession()?.merchantId`，同 `pos_store_status.store_id` 同一套）
@@ -213,46 +269,14 @@ export function useStoreStatus(storeId: string | null, enabled = true) {
   /**
    * 開 / 關店內營業。
    *
-   * @returns `true` = 已寫入 DB（UI 可以用嚟決定要唔要出提示）。
+   * 實作喺 **模組層 `applyStoreOpen()`**（非 React 呼叫端，例如交班 `closeShift()`，
+   * 亦可以 import 同一個函式）—— 詳見該函式嘅註釋。
    *
    * ⚠️ **只改 `pos_store_status` 一欄**。同「線上接單」嘅連動（關店時順手
    * 暫停線上接單）由 **call site**（`use-store-open-toggle.ts` / `app-sidebar.tsx`）負責 ——
    * 呢個 hook 唔應該認識 Ledger，否則將來換連動方向要改兩處。
    */
-  const setStoreOpen = useCallback(async (next: boolean): Promise<boolean> => {
-    const store = activeStoreId;
-    const previous = state.isOpen;
-
-    if (!store) {
-      setState({ error: "尚未登入，無法切換營業狀態。" });
-      return false;
-    }
-
-    // 樂觀更新：掣即刻有反應，失敗先 rollback（同 self-order-auto-accept 一致）
-    setState({ isOpen: next, saving: true, error: null });
-
-    try {
-      // ⚠️ POST 要 POS 終端憑證（同 kiosk-settings）。先續期再取 header，
-      //    否則過夜之後一撳就 401（GET 開放，所以「讀得到但存唔到」）。
-      const headers = await posDeviceAuthHeadersFresh();
-      const result = await saveStoreStatus(store, next, headers);
-      setState({
-        isOpen: result.isOpen,
-        updatedAt: result.updatedAt ?? state.updatedAt,
-        saving: false,
-        error: null,
-        source: "server",
-      });
-      return true;
-    } catch (e) {
-      setState({
-        isOpen: previous,
-        saving: false,
-        error: e instanceof Error ? e.message : "儲存營業狀態失敗",
-      });
-      return false;
-    }
-  }, []);
+  const setStoreOpen = useCallback(async (next: boolean): Promise<boolean> => applyStoreOpen(next), []);
 
   /** 手動重新讀（設定頁「重新整理」掣 / 被拒後自我修正用）。 */
   const refreshNow = useCallback(async () => {

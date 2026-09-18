@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { DevicePrinterConfig, PrinterRole } from "@/lib/types";
 import { PrinterCandidate, enumerateCompanionUsbPrinters, isCompanionAvailable, probeLan } from "@/lib/print-bridge/companion";
+import { isAndroidNativeEnv } from "@/lib/print-bridge/native-environment";
+import { listNativeUsbPrinters, probeNativeLan } from "@/lib/print-bridge/native";
 import {
   BRAND_FILTER_ALL,
   BrandGroup,
@@ -210,9 +212,42 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     }
   }, [state.step, state.connectionType, state.usbCandidates.length, state.usbScanning]);
 
+  /**
+   * 掃描 USB 打印機。
+   *
+   * ─────────────────────────────────────────────────────────────
+   * 🔴 2026-09-18：加入 Android native 分支
+   * ─────────────────────────────────────────────────────────────
+   * 舊版無論咩環境都係：
+   *
+   *   1. `isCompanionAvailable(true)`  → GET http://127.0.0.1:9311/api/health
+   *   2. 唔 available 就 return
+   *   3. `enumerateCompanionUsbPrinters()` → GET /api/usb
+   *
+   * 喺純 website 上，「唔 available 就 return」係**正確**嘅（冇本地代理，
+   * 掃唔到任何機）。但喺 **Android native app** 上，裝置查詢能力係
+   * `window.PosNative.listUsbPrinters()`，唔關 `:9311` 事 —— 呢個閘會令
+   * Android 用戶永遠掃唔到 USB 機。
+   *
+   * 修正：先判環境（`native-environment.ts` 嘅三分法）。
+   *   · `android` → 走 `listNativeUsbPrinters()`（in-process bridge）
+   *   · `desktop` → 走 companion HTTP（原路不變）
+   *   · `website` → 冇本地代理，回空清單（原行為：return）
+   */
   async function scanUsb() {
     setState((s) => ({ ...s, usbScanning: true }));
     try {
+      if (isAndroidNativeEnv()) {
+        // Android native：唔使探 :9311，直接問 bridge。
+        const candidates = await listNativeUsbPrinters();
+        setState((s) => ({
+          ...s,
+          usbCandidates: candidates,
+          usbScanning: false,
+          brandFilter: BRAND_FILTER_ALL,
+        }));
+        return;
+      }
       const available = await isCompanionAvailable(true);
       if (!available) {
         setState((s) => ({ ...s, usbScanning: false }));
@@ -304,11 +339,26 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     }));
   }
 
+  /**
+   * 「測試連接」—— LAN 打印機 `ip:9100` 有冇 listening。
+   *
+   * 2026-09-18：加 Android native 分支。`probeLan()` 走 desktop 嘅
+   * `POST /api/probe-lan`；Android 上冇呢個 HTTP 路徑（APK 雖然有
+   * `/api/probe-lan`，但 native 環境行 in-process 更直接可靠），
+   * 所以分流去 `probeNativeLan()`。
+   *
+   * 兩者都係同步／近同步探測，超時 1.2s。
+   */
   async function testLanConnection() {
     const ip = state.ipAddress.trim();
     if (!ip) return;
     setState((s) => ({ ...s, testing: true }));
     try {
+      if (isAndroidNativeEnv()) {
+        const reachable = await probeNativeLan(ip, 9100);
+        setState((s) => ({ ...s, testing: false, connectionTested: reachable }));
+        return;
+      }
       const result = await probeLan(ip, 9100);
       setState((s) => ({ ...s, testing: false, connectionTested: result.ok }));
     } catch {

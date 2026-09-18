@@ -25,6 +25,7 @@ export default function OrderPage() {
     menuLoading,
     menuUnavailable,
     storeOpen,
+    shiftClosed,
     bootstrap,
     displayStoreName,
     language,
@@ -273,6 +274,32 @@ export default function OrderPage() {
         <button
           onClick={() => {
             // 重新載入會重新讀一次營業狀態（店開返之後客人唔使掃多次碼）
+            if (typeof window !== "undefined") window.location.reload();
+          }}
+          className="w-full max-w-xs rounded-xl bg-white py-3 text-lg font-semibold text-slate-700 ring-2 ring-slate-200"
+          type="button"
+        >
+          {t("retryPlace")}
+        </button>
+      </main>
+    );
+  }
+
+  // ── 未開工／已收工（2026-09-18，server 硬閘 `reason: "shift-closed"`）──
+  //
+  // 🔴 同上面「商家暫停營業」係**兩件事**，唔可以撈埋一套文案：
+  //    - 「暫停營業」＝店主主動關門 → 客人應該向職員查詢（等可能等到今日都唔開）
+  //    - 「未開始營業」＝未開工／已經收工 → 叫客人「稍後再試」係有意義嘅
+  //
+  // ⚠️ 同上面一樣要 `!submittedOrder`：唔可以蓋走成功頁（扣款結果喺嗰度）。
+  if (shiftClosed && !submittedOrder) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="mb-4 text-6xl">🕒</div>
+        <h1 className="mb-2 text-xl font-bold text-slate-900">{t("shiftClosedTitle")}</h1>
+        <p className="mb-6 max-w-sm text-sm text-slate-500">{t("shiftClosedBody")}</p>
+        <button
+          onClick={() => {
             if (typeof window !== "undefined") window.location.reload();
           }}
           className="w-full max-w-xs rounded-xl bg-white py-3 text-lg font-semibold text-slate-700 ring-2 ring-slate-200"

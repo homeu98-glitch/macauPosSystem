@@ -44,6 +44,7 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
     menuUnavailable,
     /** 店內營業狀態（2026-09-14）：`false` → 全屏「商家不在營業中」；`null` = 未讀到 → 唔阻。 */
     storeOpen,
+    shiftClosed,
     bootstrap,
     displayStoreName,
     language,
@@ -273,6 +274,32 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
           className="w-full max-w-xs rounded-xl bg-white py-3 text-base font-semibold text-stone-700 ring-2 ring-stone-200"
           onClick={() => {
             // reload 會重新讀一次營業狀態（店開返之後客人唔使再掃一次碼）
+            if (typeof window !== "undefined") window.location.reload();
+          }}
+          type="button"
+        >
+          {t("retryPlace")}
+        </button>
+      </main>
+    );
+  }
+
+  // ── 未開工／已收工（2026-09-18，server 硬閘 `reason: "shift-closed"`）──
+  //
+  // 🔴 同上面「商家暫停營業」係**兩件事**（文案分開）：
+  //    - 「暫停營業」＝店主主動關門 → 叫客人向職員查詢
+  //    - 「未開始營業」＝未開工／已收工 → 叫客人「稍後再試」係有意義嘅
+  //
+  // ⚠️ 同樣要「未落單」條件：唔可以蓋走取餐號 / 本枱明細 / 扣款結果。
+  if (shiftClosed && !quickPickupOrder && !activeTableOrder) {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
+        <div className="mb-4 text-6xl">🕒</div>
+        <h1 className="mb-2 text-xl font-bold text-stone-900">{t("shiftClosedTitle")}</h1>
+        <p className="mb-6 max-w-sm text-sm text-stone-500">{t("shiftClosedBody")}</p>
+        <button
+          className="w-full max-w-xs rounded-xl bg-white py-3 text-base font-semibold text-stone-700 ring-2 ring-stone-200"
+          onClick={() => {
             if (typeof window !== "undefined") window.location.reload();
           }}
           type="button"

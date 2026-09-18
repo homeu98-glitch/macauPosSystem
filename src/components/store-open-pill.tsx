@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 
 import { MerchantOpenPill } from "@/components/merchant-open-pill";
+import { STORE_RESIDUAL_HINT, storeResidualState } from "@/lib/pos/residual-channel";
 import { CONFIRM_CLOSE_STORE_MESSAGE, useStoreOpenToggle } from "@/lib/pos/use-store-open-toggle";
+import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
 import { loadAuthSession } from "@/lib/storage";
 
 /**
@@ -53,6 +55,17 @@ export function StoreOpenPill({
 
   const store = useStoreOpenToggle(storeId);
 
+  /**
+   * 殘留通道偵測（2026-09-18）：店內已關，但線上接單仍然開住 → 出警示點。
+   *
+   * ⚠️ 呢度要**額外掛** `useMerchantOrderConfig()` 先讀到線上狀態。
+   *    兩個 hook 都係 module singleton + 共用同一條 Realtime channel
+   *    （同 `useStoreOpenToggle` 內部已掛嘅係同一個 store），所以**唔會**多開連線。
+   *    唔可以為咗「慳一個 hook」而唔顯示 —— 呢個警示正正係要修嘅缺口。
+   */
+  const merchant = useMerchantOrderConfig(storeId, Boolean(storeId));
+  const residual = storeResidualState(store.isOpen, merchant.merchantEnabled) === "residual";
+
   if (!storeId) return null; // 冇登入記錄 → 唔顯示，避免商家以為設定咗
 
   const busyHint = store.loading
@@ -74,6 +87,8 @@ export function StoreOpenPill({
       offLabel="已暫停"
       offTone="red"
       onChange={() => void store.toggle()}
+      residual={residual}
+      residualHint={STORE_RESIDUAL_HINT}
       size={size}
       unknownHint="未讀到店內營業狀態（可能係讀取失敗），請重新載入頁面"
       variant={variant}

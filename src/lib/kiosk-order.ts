@@ -374,9 +374,13 @@ export function defaultZoneNames(): Record<string, string> {
  * 落單失敗（永久性，例如 400 / 403 —— 重試唔會好）。
  *
  * `reason` = server `/api/pos/sync` 回嘅機器可讀原因（`soldout` / `forbidden` /
- * `bad-payload` / **`shop-closed`**…）。呼叫方靠佢分辨「客人操作問題」同
- * 「店鋪狀態問題」—— 例如 `shop-closed` 應該即刻轉全屏「商家不在營業中」，
- * 而唔係叫客人「重試落單」（重試一萬次都唔會成功）。
+ * `bad-payload` / **`shop-closed`** / **`shift-closed`**…）。呼叫方靠佢分辨
+ * 「客人操作問題」同「店鋪狀態問題」—— 例如 `shop-closed` 應該即刻轉全屏
+ * 「商家不在營業中」，而唔係叫客人「重試落單」（重試一萬次都唔會成功）。
+ *
+ * ⚠️ `shop-closed`（店主主動暫停營業）同 `shift-closed`（未開工／已收工）
+ *    **唔可以撈埋**：兩者嘅客人下一步唔同 —— 前者叫客人等可能等到今日都唔開，
+ *    後者係「時間未到」，等一陣返嚟係有意義嘅。所以客端要分兩套文案。
  */
 export class KioskOrderRejectedError extends Error {
   readonly reason?: string;

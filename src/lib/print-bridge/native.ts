@@ -150,13 +150,60 @@ interface NativeBridge {
   requestBtPermission?: () => unknown;
 }
 
+/**
+ * Android：探測 LAN 打印機 `ip:port` 有冇 listening。
+ *
+ * 對應 desktop 條路嘅 `probeLan()`（`POST /api/probe-lan`）。
+ *
+ * ⚠️ 同 desktop 嘅分別：desktop 走 `companionFetch` → HTTP；
+ * Android 走 `window.PosNative.probeLan()` in-process（同步回 JSON）。
+ * 兩者回同一個形狀（`{ ok, ip, port, reachable }`），呼叫端唔使分環境。
+ *
+ * 注意：Android native 分支**唔受** `shouldUseCompanionChannel()` 限制 ——
+ * 呢個係 native 環境獨有嘅能力（見 native-environment.ts）。
+ */
+export async function probeNativeLan(ip: string, port = 9100): Promise<boolean> {
+  const b = getNativeBridge() as (NativeBridge & {
+    probeLan?: (ip: string, port: number) => unknown;
+  }) | null;
+  if (!b?.probeLan) return false;
+  try {
+    const res = b.probeLan(ip, port) as unknown;
+    const parsed =
+      typeof res === "string"
+        ? (JSON.parse(res) as { reachable?: boolean })
+        : (res as { reachable?: boolean });
+    return parsed?.reachable === true;
+  } catch {
+    return false;
+  }
+}
+
 function getNativeBridge(): NativeBridge | null {
   if (typeof window === "undefined") return null;
   const p = (window as unknown as { PosNative?: NativeBridge }).PosNative;
   return p ?? null;
 }
 
-/** Android：插住嘅 USB ESC/POS 打印機清單（VID/PID/label/權限）。 */
+/**
+ * Android：插住嘅 USB ESC/POS 打印機清單。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 🔴 2026-09-18：修正「欄位在半路被丟棄」
+ * ─────────────────────────────────────────────────────────────
+ * 舊版只 map 4 個欄位（`source / name / connectionType / usbVendorId / usbProductId`），
+ * 其餘全部丟棄 —— 就算 APK 側（`UsbPrinterCandidate.toJson()`）已經帶齊
+ * `charset` / `paperSize` / `kanjiEnlarge` / `family` / `max|minLabelWidthMm`，
+ * 呢個 mapper 都會將佢哋扔走。
+ *
+ * 後果（具體）：漢印 SL42 係標籤機（`family=label`、`charset=utf-8`、
+ * `paperSize=100x75mm`），`printer-wizard-modal.tsx` 嘅 `selectUsbDevice()`
+ * 收到冇 family 嘅 candidate → 當 `receipt` 處理 → 套 80mm 連續紙版面 →
+ * 打去 100×75 標籤卷 → **出紙亂版**。
+ *
+ * 而家與 desktop 條路（`companion.ts` 嘅 `enumerateCompanionUsbPrinters()`）對齊，
+ * 回同一個 `PrinterCandidate` 形狀。
+ */
 export async function listNativeUsbPrinters(): Promise<PrinterCandidate[]> {
   const b = getNativeBridge();
   if (!b?.listUsbPrinters) return [];
@@ -165,13 +212,40 @@ export async function listNativeUsbPrinters(): Promise<PrinterCandidate[]> {
     const parsed = typeof res === "string" ? (JSON.parse(res) as { printers?: unknown[] }) : (res as { printers?: unknown[] });
     const list = parsed.printers ?? [];
     return list.map((raw) => {
-      const p = raw as { vendorId?: number; productId?: number; label?: string; name?: string; productName?: string };
+      const p = raw as {
+        vendorId?: number;
+        productId?: number;
+        label?: string;
+        name?: string;
+        productName?: string;
+        model?: string;
+        charset?: string;
+        paperSize?: string;
+        kanjiEnlarge?: string;
+        family?: string;
+        maxLabelWidthMm?: number | null;
+        minLabelWidthMm?: number | null;
+      };
+      // 型號表認到就用型號名，否則退回品牌/產品名（與 desktop 同口徑）。
+      const displayName = p.model || p.label || p.productName || p.name || `USB 打印機 ${nativeHexId(p.vendorId)}`;
       return {
         source: "usb",
-        name: p.label || p.productName || p.name || `USB 打印機 ${nativeHexId(p.vendorId)}`,
+        name: displayName,
         connectionType: "usb",
         usbVendorId: nativeHexId(p.vendorId),
         usbProductId: nativeHexId(p.productId),
+        // ── 以下 6 個係 2026-09-18 補上（USB 型號表解析結果）──
+        // `selectUsbDevice()` 直接消費 model / charset / paperSize / kanjiEnlarge / family。
+        model: p.model,
+        charset: p.charset || undefined,
+        paperSize: p.paperSize || undefined,
+        kanjiEnlarge: p.kanjiEnlarge === "FS!" || p.kanjiEnlarge === "GS!" ? p.kanjiEnlarge : undefined,
+        family:
+          p.family === "receipt" || p.family === "label" || p.family === "portable"
+            ? p.family
+            : undefined,
+        maxLabelWidthMm: typeof p.maxLabelWidthMm === "number" ? p.maxLabelWidthMm : undefined,
+        minLabelWidthMm: typeof p.minLabelWidthMm === "number" ? p.minLabelWidthMm : undefined,
       } as PrinterCandidate;
     });
   } catch {

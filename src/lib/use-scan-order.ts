@@ -40,6 +40,14 @@ export function useScanOrder() {
      * `false` → 全屏「商家不在營業中」；`null` = 未讀到 → **唔阻**（由 server 硬閘決定）。
      */
     storeOpen: core.storeOpen,
+    /**
+     * 未開工／已收工（2026-09-18，server 硬閘 `reason: "shift-closed"`）：
+     * `true` → 全屏「本店尚未開始營業」（**另一套文案**，唔可以借用「商家不在營業中」）。
+     *
+     * ⚠️ 同 `storeOpen` 唔同：呢個**只會被動設定**（server 拒單之後），
+     *    客人端唔會自己查 `pos_shifts`。詳見 `useOrderingCore` 嘅 state 註解。
+     */
+    shiftClosed: core.shiftClosed,
     bootstrap: core.bootstrap,
     displayStoreName: core.displayStoreName,
     language: core.language,

@@ -318,6 +318,61 @@ function unsubscribeRealtime() {
 }
 
 /**
+ * 開 / 關「接單」（Ledger `merchant_enabled`）—— **模組層實作**
+ * （hook 內嘅 `setMerchantEnabled` 直接轉呼叫呢個）。
+ *
+ * ── 點解要抽成模組層函式（2026-09-18）──────────────────────────────────
+ * 「結數交班時一齊關店」嘅 `closeShift()`（`shift-page.tsx`）係普通 async function，
+ * **唔可以**呼叫 hook（違反 Hooks 規則），但佢一定要寫 Ledger 呢一欄。
+ * 抽喺模組層 → hook 同交班流程行同一段碼，唔會有第二份實作。
+ *
+ * ── 紀律（唔可以省）──────────────────────────────────────────────────────
+ * - `previous === null`（未讀到）→ **直接拒絕**，唔准樂觀寫（會令收銀見到假狀態）。
+ *   交班流程遇到呢個情況應該當「跳過」而唔係「失敗」—— 本來就冇值可以關。
+ * - 失敗 **rollback 成 `previous`**，並且唔會 rollback 已鏡像落 POS DB 嘅值。
+ *
+ * @returns `true` = Ledger 已接受（UI 用嚟決定要唔要出 success toast）。
+ */
+export async function applyMerchantEnabled(next: boolean): Promise<boolean> {
+  const store = activeStoreId;
+  const previous = state.merchantEnabled;
+
+  if (!store) {
+    setState({ error: "尚未登入 Ledger，無法開關接單。" });
+    return false;
+  }
+  if (previous === null) {
+    // 未讀到就唔好亂寫 —— 樂觀更新會令收銀見到一個假狀態
+    setState({ error: "未讀到 Ledger 接單狀態，請重新載入頁面。" });
+    return false;
+  }
+
+  setState({ merchantEnabled: next, saving: "merchant", error: null });
+
+  const result = await setMerchantOrderEnabled(store, next);
+  if (result.ok) {
+    // RPC 回傳就係最新狀態；merchantEnabled 缺欄時保留今次意圖值
+    applyConfig(
+      { ...result.config, merchantEnabled: result.config.merchantEnabled ?? next },
+      "server",
+    );
+    void mirrorToPosDb(store, {
+      merchantEnabled: result.config.merchantEnabled ?? next,
+      autoAccept: result.config.autoAccept,
+    });
+    return true;
+  }
+
+  setState({
+    merchantEnabled: previous,
+    saving: "none",
+    error: result.message,
+    available: result.code !== "unavailable",
+  });
+  return false;
+}
+
+/**
  * 商家接單設定（開啟接單 + 自動接單）。
  *
  * @param storeId 商家 id（`loadAuthSession()?.merchantId`，同 Ledger `merchant_id` 同一套）
@@ -372,44 +427,7 @@ export function useMerchantOrderConfig(storeId: string | null, enabled = true) {
    *
    * ⚠️ 只改 `merchant_enabled`。**唔會**順手寫 `auto_accept`／時段／付款方式。
    */
-  const setMerchantEnabled = useCallback(async (next: boolean): Promise<boolean> => {
-    const store = activeStoreId;
-    const previous = state.merchantEnabled;
-
-    if (!store) {
-      setState({ error: "尚未登入 Ledger，無法開關接單。" });
-      return false;
-    }
-    if (previous === null) {
-      // 未讀到就唔好亂寫 —— 樂觀更新會令收銀見到一個假狀態
-      setState({ error: "未讀到 Ledger 接單狀態，請重新載入頁面。" });
-      return false;
-    }
-
-    setState({ merchantEnabled: next, saving: "merchant", error: null });
-
-    const result = await setMerchantOrderEnabled(store, next);
-    if (result.ok) {
-      // RPC 回傳就係最新狀態；merchantEnabled 缺欄時保留今次意圖值
-      applyConfig(
-        { ...result.config, merchantEnabled: result.config.merchantEnabled ?? next },
-        "server",
-      );
-      void mirrorToPosDb(store, {
-        merchantEnabled: result.config.merchantEnabled ?? next,
-        autoAccept: result.config.autoAccept,
-      });
-      return true;
-    }
-
-    setState({
-      merchantEnabled: previous,
-      saving: "none",
-      error: result.message,
-      available: result.code !== "unavailable",
-    });
-    return false;
-  }, []);
+  const setMerchantEnabled = useCallback(async (next: boolean): Promise<boolean> => applyMerchantEnabled(next), []);
 
   /**
    * 自動接單（真源 = Ledger RPC）。

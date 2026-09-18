@@ -177,6 +177,11 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     // 只講「商家不在營業中」，唔好向客人解釋原因（手動閂店 vs 其他，客人唔需要知）。
     storeClosedTitle: "商家不在營業中",
     storeClosedBody: "本店暫停營業，暫時無法落單，請向職員查詢。",
+    // ── 未開工／已收工（2026-09-18，`reason: "shift-closed"`）──
+    // 🔴 同上面「暫停營業」**刻意分開**：呢個係「時間未到」，叫客人遲啲返嚟係有意義嘅；
+    //    「暫停營業」叫客人等就係講大話（可能今日都唔開）。
+    shiftClosedTitle: "本店尚未開始營業",
+    shiftClosedBody: "今日未開工或已經收工，暫時無法落單，請稍後再試或向職員查詢。",
     closeSheet: "關閉",
 
     // ── 會員登入 + 付款（2026-09-13，確認稿 member-login-payment-flow）──
@@ -365,6 +370,25 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
    * 冇 `setInterval`（全專案禁 polling，見 docs/52）。
    */
   const [storeOpen, setStoreOpen] = useState<boolean | null>(null);
+
+  /**
+   * 班次（開工）狀態（2026-09-18）。
+   *
+   * - `false` = 本店今日**未開工／已收工** → 掃碼 / kiosk 唔可以落單，UI 出全屏
+   *   「本店尚未開始營業」
+   * - `null` = **未知／未觸發** → 唔阻（fail-open）
+   *
+   * 🔴 同 `storeOpen` 嘅分別：
+   * - `storeOpen` 係**主動讀**返嚟（入頁 + 返前景查 `pos_store_status`），
+   *   因為嗰個掣係店主主動設定嘅，值得提前查。
+   * - 呢個**只會被動設定**：唯一來源係 server 硬閘回 `reason: "shift-closed"`。
+   *   客人端**刻意唔查** `pos_shifts`（2026-09-14 J 拍板「唔用開工狀態擋單」仍然有效：
+   *   客人端多查一次 = 多一個斷網就全店停單嘅位）。
+   *
+   *   呢個係 2026-09-18 加咗 server 側班次閘之後嘅**配套**：權威判斷留喺 server，
+   *   客人端只負責「被拒之後即刻轉正確嘅畫面」，唔會自己下判斷。
+   */
+  const [shiftClosed, setShiftClosed] = useState<boolean>(false);
 
   // ── 會員登入 + 付款（2026-09-13，確認稿 member-login-payment-flow）──
   // 🔴 全部只係**記憶體** state —— 唔入 localStorage / sessionStorage（個資紅線 §7.2），
@@ -763,6 +787,11 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       setError(kioskT(language, "storeClosedBody"));
       return false;
     }
+    // 未開工／已收工（被 server 拒過一次之後就記住，唔使客人連撳幾次都食同一口釘）
+    if (shiftClosed) {
+      setError(kioskT(language, "shiftClosedBody"));
+      return false;
+    }
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
@@ -972,6 +1001,12 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
       //    而且客人會以為自己部機壞（實際係鋪頭落咗閘）。
       if (e instanceof KioskOrderRejectedError && e.reason === "shop-closed") {
         setStoreOpen(false);
+      }
+      // 未開工／已收工（server 硬閘 `reason: "shift-closed"`）→ 同樣轉全屏，
+      // 但用**另一套文案**：呢個係「時間未到」，叫客人遲啲返嚟係有意義嘅
+      // （「暫停營業」叫客人等就可能等到今日都唔開）。
+      if (e instanceof KioskOrderRejectedError && e.reason === "shift-closed") {
+        setShiftClosed(true);
       }
       setError(e instanceof Error ? e.message : String(e));
       return false;
@@ -1565,6 +1600,16 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
      * `false` 一定要出全屏停單頁；`null` = 未讀到 → **唔阻**（見 `storeOpen` state 註解）。
      */
     storeOpen,
+    /**
+     * 未開工／已收工（2026-09-18，server 硬閘 `reason: "shift-closed"`）。
+     *
+     * `true` 一定要出全屏停單頁（用 **`shiftClosedTitle` / `shiftClosedBody`**，
+     * 唔可以借用「商家不在營業中」嗰套）。`false` = 未觸發過 → 唔阻。
+     *
+     * ⚠️ 呢個只會**由 server 拒單被動設定**，客人端唔會自己查 `pos_shifts`
+     *    （理由見 state 註解）。
+     */
+    shiftClosed,
     bootstrap,
     language,
     setLanguage,

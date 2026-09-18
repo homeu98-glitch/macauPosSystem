@@ -1,4 +1,4 @@
-# macauPos 記憶索引（2026-09-17 壓縮版）
+# macauPos 記憶索引（2026-09-18 更新）
 
 > 必讀 `docs/113-agent-gotchas.md`。POS=`iyrywzormzisyppkokbi`、Ledger=`zymdemjflsckicwcinxl`。已跑 0016/0021/0041§1，**未跑 0042**。
 
@@ -55,15 +55,27 @@
 - 「RPC 冇拋錯」≠ 遠端已改（`online-dinein-ladder.ts` 無效轉換跳過）。
 - 狀態文案：只 pickup/takeaway＝「待取餐」，其餘「待交付」。列枱用 `buildDisplayFloors()`。Ledger 真欄 selected_specs/line_note。
 
+## 四之二、交班／關店（2026-09-18 新增）
+- 🔴 **三條互不相干軌道**：班次（`pos_shifts`，只擋收銀台）／線下接單（`pos_store_status.is_open`，擋掃碼+kiosk）／線上接單（Ledger `merchant_enabled`）。`closeShift()` 本身**唔碰**任何接單開關。
+- 「關店總掣」＝`src/lib/pos/close-gate.ts`（純決策，**零 import**）＋`close-gate-run.ts`（執行層 `runCloseGate()`）。紀律：序列（先線下後線上）／線下失敗**唔 return**（否則連帶線上永遠關唔到）／`null`＝`skipped`（唔算失敗）／永遠唔 throw。
+- 🔴 關店必須排喺 `closeShift()` 嘅**兩個 early return 之前**（`forceSyncBeforeClose` 失敗、`!isPrintContentEnabled("shift")`）——後者**會完成交班**。
+- 🔴 **`pos_store_status` 同 `pos_shifts` 嘅 default 方向相反**：前者冇 row＝**營業中**（店主冇主動暫停過）；後者冇 open row＝**真係未開工**（事實記錄）。兩者都係「**查詢失敗**」才 fail-open。
+- 🔴 `reason: "shop-closed"`（店主主動關門）同 `"shift-closed"`（未開工/已收工）**唔可撈埋**，客端文案分開（「商家不在營業中」vs「本店尚未開始營業」）。
+- 殘留通道警示＝`src/lib/pos/residual-channel.ts`（純函式）。條件＝「一邊已關 + 另一邊仍然開」；**`null`（未讀到）永遠唔觸發**（否則斷網就出假警報）。寄生喺既有 pill（`merchant-open-pill.tsx` 嘅 `residual` prop），唔新增格子。
+- ⚠️ 遺留：`/api/pos/store-status` 仍有 `DEFAULT_STORE_ID="macau-store-a"` 假店 fallback（GET 53 行/POST 117-119 行），未收緊。
+
 ## 五、UI
 - 🔴 `button { font: inherit }`（globals.css 無 layer）壓過 `text-*` ⇒ 按鈕字級寫喺仔元素；`p-[3px]` 同 `px-3 py-1.5` 唔可並存。
 - 🔴 iPad standalone 撳輸入欄唔彈鍵盤。`print-center.tsx` 有 16 個既有 eslint error。
 
 ## 六、環境
 - npm/npx 跑唔到；冇 coreutils → 用 Read/Glob/Grep 或 node fs；複雜 JS 寫 `.cjs`。
+- 🔴🔴 **`npm test` ＝ `node --test`，唔認 `@/` 別名、唔行 bundler。** 可測模組必須**零 import**（`store-status.ts`、`date-range.ts`、`close-gate.ts`、`residual-channel.ts` 都係）。純邏輯同「有 import 嘅執行層」**一定要分檔**，否則測試即 `ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'`。
+- 跑全測試：`node --test "src/**/*.test.ts"`（傳目錄會 fail，要 glob）。
 - git 全路徑 `…/PortableGit/versions/1.2.0/cmd/git.exe`；push 加 `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never`。`.git` 易被沙箱破壞（skill `git-repo-rescue`）。
 - 同檔唔可同一 message 發多個 Edit。Glob 唔索引工作區外。
 - 🔴 Vercel 改 env 要 Redeploy 才生效。
+- ⚠️ eslint 喺本機**極慢**（13 個檔 ≈ 3分48秒）→ 用 `run_in_background`。
 
 ## 七、口徑
 - 收入 `isSaleCountable()`：只計 settled／帶 onlineOrderId 嘅 paid；日期用 Macau 邊界。

@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 
 import { MerchantOpenPill } from "@/components/merchant-open-pill";
+import { ONLINE_RESIDUAL_HINT, onlineResidualState } from "@/lib/pos/residual-channel";
 import { useMerchantOrderConfig } from "@/lib/pos/use-merchant-order-config";
+import { useStoreStatus } from "@/lib/pos/use-store-status";
 import { loadAuthSession } from "@/lib/storage";
 
 /**
@@ -42,6 +44,17 @@ export function OnlineOpenPill({
 
   const config = useMerchantOrderConfig(storeId, Boolean(storeId));
 
+  /**
+   * 殘留通道偵測（2026-09-18）：線上已暫停，但店內接單仍然開住 → 出警示點。
+   *
+   * 🔴 呢個方向**比線下嗰邊更易中招**：店主可能只係想「暫停接單」專心做堂食，
+   *    但掃碼 / kiosk 照樣落得到單。冇呢粒點，佢會以為已經冇單入。
+   *
+   * ⚠️ 兩個 hook 都係 module singleton + 共用同一條 Realtime channel → 唔會多開連線。
+   */
+  const store = useStoreStatus(storeId, Boolean(storeId));
+  const residual = onlineResidualState(store.isOpen, config.merchantEnabled) === "residual";
+
   if (!storeId) return null; // 冇登入記錄 → 唔顯示，避免商家以為設定咗
 
   const busyHint = config.loading
@@ -63,6 +76,8 @@ export function OnlineOpenPill({
       merchantEnabled={config.merchantEnabled}
       offLabel="已暫停"
       onChange={(next) => void config.setMerchantEnabled(next)}
+      residual={residual}
+      residualHint={ONLINE_RESIDUAL_HINT}
       size={size}
       unknownHint="未讀到 Ledger 接單狀態，請去「設置 › 線上接單」重新整理。"
       variant={variant}

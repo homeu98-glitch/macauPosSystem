@@ -58,10 +58,16 @@ export async function flushPendingPrintJobs(): Promise<PrintJob[]> {
     }
   }
 
-  // 有無任何派發通道：native bridge（Android APK）/ Companion（桌面）/ relay（互聯網備援）。
-  // 無通道先維持 pending 等下次 flush（店主配置 companion / relay 後自動重試）。
+  // 有無任何派發通道：native bridge（Android native app）/ Companion（desktop）/
+  // relay（互聯網備援）。無通道先維持 pending 等下次 flush（店主配置後自動重試）。
+  //
+  // ⚠️ 2026-09-18：`isCompanionConfigured()` 係「localStorage 有地址」嘅**靜態**判斷，
+  // 唔代表個環境真係有 companion。喺 Android 上，`shouldKeepCompanionAlive()` 已收窄至
+  // desktop（見 native-environment.ts），所以呢度加閘避免「有 stale URL 就當有通道」。
   const hasChannel =
-    isNativeBridgeAvailable() || isCompanionConfigured() || isRelayConfigured();
+    isNativeBridgeAvailable() ||
+    (shouldKeepCompanionAlive() && isCompanionConfigured()) ||
+    isRelayConfigured();
   let changed = false;
   const nextJobs = [...jobs];
 

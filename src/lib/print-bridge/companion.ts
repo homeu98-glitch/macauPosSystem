@@ -1,13 +1,27 @@
 /**
- * 桌面 Companion 代理客戶端（取代 Sunmi Printer Hub）。
+ * 桌面 Companion 代理客戶端（客戶端 ↔ `http://127.0.0.1:9311`）。
  *
  * 架構：POS（Vercel HTTPS / 本地 Electron）↔ Companion 代理（loopback http://127.0.0.1:9311）
  *        ↔ raw socket :9100 / node-usb / 藍牙 → 打印機。
  *
  * 優勢：
  *   - 零配置預配對：固定 loopback 地址 + 空 token，開 app 即自動連。
- *   - 跨平台：Windows / macOS / Linux 桌面 Electron 都經呢層打印（唔再靠 Android APK）。
+ *   - 跨平台：Windows / macOS / Linux 桌面 Electron 都經呢層打印。
  *   - 自動偵測：Companion 經 mDNS 掃區網 LAN 機、node-usb 枚舉 USB 機，商家唔使手填 VID/PID。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 🔴 2026-09-18：本檔**只服務 desktop companion 環境**
+ * ─────────────────────────────────────────────────────────────
+ * 打印環境已分三種（見 `native-environment.ts`）：
+ *
+ *   · **純 website**        → 只有 Cloud Print Relay
+ *   · **desktop companion** → 本檔（`:9311` HTTP），7 個端點全部由 Electron 提供
+ *   · **Android native**    → `native.ts`（`window.PosNative.*` in-process bridge），
+ *                             唔行本檔嘅裝置查詢／出紙；APK 內嘅 `NativeCompanionServer`
+ *                             只提供 3 個探測端點（health / config / probe-lan）
+ *
+ * 所以本檔嘅三個環境閘（`shouldUseCompanionChannel()` 等）一律**只認 "desktop"**。
+ * Android 上唔應該再出現「探唔到 `:9311`」嘅無意義請求。
  *
  * localStorage 命名空間：macau-pos-companion-url / macau-pos-companion-token
  */
@@ -16,6 +30,7 @@ import type { DevicePrinterConfig, PrintJob } from "@/lib/types";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import { loadDeviceConfig } from "@/lib/storage";
 import { toHexId } from "@/lib/print-bridge/printer-models";
+import { isDesktopCompanionEnv } from "@/lib/print-bridge/native-environment";
 
 export const COMPANION_DEFAULT_URL = "http://127.0.0.1:9311";
 
@@ -63,26 +78,42 @@ export function getCachedCompanionVersion(): string {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 執行環境判斷（三層規則，由嚴到寬，唔好混淆）
+// 執行環境判斷（**三分法**，2026-09-18 起）
 //
-//   ① shouldUseCompanionChannel()   ← 最嚴：淨係原生殼（PC Electron / Android APK）
+//   環境由 `detectPrintEnvironment()` 判定（見 native-environment.ts）：
+//     · "website"  —— 純網頁 / PWA
+//     · "desktop"  —— Electron 殼（`companionShell`），loopback :9311 有人住
+//     · "android"  —— Android native app（`PosNative`），走 in-process bridge
+//
+//   本檔嘅三個閘**只認 "desktop"**（+ URL 參數 / localhost dev）：
+//
+//   ① shouldUseCompanionChannel()   ← 最嚴：淨係 desktop 殼
 //   ② shouldKeepCompanionAlive()    ← ① + 帶 `?companion=` 參數
 //                                     用嚟決定「走唔走 companion 通道 / 起唔起輪詢」
 //   ③ shouldAutoDiscoverCompanion() ← ① + 本機 dev（localhost）
 //                                     用嚟決定「值唔值得探一次 loopback」
 //
-// 純 website / PWA（Vercel HTTPS、PWA standalone、自己打網址開）三個都 false
-// → 零 `http://127.0.0.1:9311/api/health` 請求，呢個就係呢層判斷存在嘅原因。
+//   🔴 **Android 唔再算 Companion 環境。** 佢有自己嘅 in-process bridge，
+//      所有裝置查詢同出紙一律經 `window.PosNative.*`（見 native.ts / dispatch.ts）。
+//      Android 上唯一仲會行 HTTP 嘅係 3 個探測端點（/api/health、/api/config、
+//      /api/probe-lan），由 APK 內嘅 `NativeCompanionServer` 喺 :9311 提供 ——
+//      嗰啲係 POS wizard 硬性要求探 loopback 嘅地方，唔係「companion 通道」。
+//
+//   純 website / PWA 三個都 false → 零 `http://127.0.0.1:9311/api/health` 請求，
+//   呢個就係呢層判斷存在嘅原因。
 // ─────────────────────────────────────────────────────────────
 
 /**
- * 「Companion 環境」**真實定義**：當前 page 跑喺我哋自己嘅原生殼入面。
- * 用原生殼主動注入嘅 bridge 標記（PosNative → Android APK WebView；
- * companionShell → PC Electron 殼），係 codebase 現有慣例
- * （見 `src/components/pwa-install-button.tsx`）。
+ * 「Companion 環境」**真實定義**：當前 page 跑喺 **Electron 殼**入面。
+ * 用原生殼主動注入嘅 `companionShell` 標記判斷（見 `electron/preload.cjs`）。
  *
  * **只有** 喺呢個環境入面，`http://127.0.0.1:9311/api/health` 嘅探測先有意義 —
  * 因為 desktop agent 喺 loopback 住，可以喺 web view 探到。
+ *
+ * ⚠️ 2026-09-18：**移除 `PosNative` 判定**。舊版係
+ * `hasPosNative || hasCompanionShell`，即係 Android 都被當 Companion 環境 →
+ * 持住一個唔存在嘅 `:9311` 係咁探。Android 而家行 native 通道（`native.ts`），
+ * 唔應該再入呢條路。
  *
  * 純 website / PWA（Chrome standalone、macau-pos-system.vercel.app、localhost:3000
  * 開個普通瀏覽器測）都**唔算** Companion 環境：loopback 探過去只會
@@ -96,9 +127,7 @@ export function getCachedCompanionVersion(): string {
 export function shouldUseCompanionChannel(): boolean {
   // 攤平 import：避免 companion.ts 對 UI 檔有依賴
   if (typeof window === "undefined") return false;
-  const hasPosNative = Boolean((window as unknown as { PosNative?: { printJob?: unknown } }).PosNative?.printJob);
-  const hasCompanionShell = Boolean((window as unknown as { companionShell?: unknown }).companionShell);
-  return hasPosNative || hasCompanionShell;
+  return isDesktopCompanionEnv();
 }
 
 /**
@@ -113,9 +142,13 @@ export function shouldUseCompanionChannel(): boolean {
  * 冇裝 Companion，呢個 fetch 只會永久掟 `ERR_CONNECTION_REFUSED`。
  *
  * 規則：**冇理由相信本機有 Companion，就唔好主動搵。**
- * 有理由 = ① 跑緊原生殼（PC Electron 殼 / Android APK WebView）→ 即
- *            `shouldUseCompanionChannel()`
+ * 有理由 = ① 跑緊 **desktop** 殼 → `shouldUseCompanionChannel()`
  *          ② 個 page 本身就喺 localhost（`npm run dev` / 本機架嘅 POS）
+ *
+ * ⚠️ 2026-09-18：**Android 唔再算「有理由」。** Android 上嘅 `:9311` 係由 APK
+ * 自己嘅 `NativeCompanionServer` 提供，POS 側唔需要主動探 —— `shouldShowCompanionUi()`
+ * 會經 `hasCompanionUrlParam()` 之外嘅路徑處理顯示；而 `isCompanionAvailable(true)`
+ * 喺 wizard 內係**明確**嘅探測（deliberate user path），唔受呢個閘限制。
  *
  * 仍然照行、唔受影響嘅 deliberate user 路徑（無論咩環境）：
  *   · URL `?companion=<url>` 參數（Companion 狀態頁「一鍵開 POS」帶入）
@@ -125,7 +158,7 @@ export function shouldUseCompanionChannel(): boolean {
  */
 export function shouldAutoDiscoverCompanion(): boolean {
   if (typeof window === "undefined") return false;
-  // 原生殼（PC Electron / Android APK）：Companion loopback 係呢個環境嘅設計一部分
+  // desktop 殼：Companion loopback 係呢個環境嘅設計一部分
   if (shouldUseCompanionChannel()) return true;
   // 本機（dev 或本機架嘅 POS）：loopback 探測有意義
   const h = window.location.hostname;
@@ -145,10 +178,11 @@ function hasCompanionUrlParam(): boolean {
 /**
  * 應唔應該**持續維持** Companion 連線（自動配對 + 健康檢查輪詢）？
  *
- * = 原生殼 **或** 帶咗 `?companion=` 參數。
+ * = **desktop 殼** **或** 帶咗 `?companion=` 參數。
  * 後者係桌面 Companion「一鍵開 POS」開出嚟嘅分頁 —— 就算係系統瀏覽器（唔係我哋個殼），
  * 用家都係由 Companion 嗰邊過嚟，desktop agent 的確喺度，所以要照輪詢、照顯示連線狀態。
  *
+ * ⚠️ 2026-09-18：Android 唔再包括在內（`shouldUseCompanionChannel()` 已收窄至 desktop）。
  * 純 website / PWA（自己打網址開、PWA standalone）一律 false → 零 /api/health 請求。
  */
 export function shouldKeepCompanionAlive(): boolean {
@@ -160,7 +194,7 @@ export function shouldKeepCompanionAlive(): boolean {
  *
  * 桌面 Companion agent 住喺本機 loopback（127.0.0.1:9311），**只有**以下情況
  * 先有可能連到，UI 出現先有意義：
- *   ① 跑喺原生殼（PC Electron / Android APK WebView）→ `shouldUseCompanionChannel()`
+ *   ① 跑喺 **desktop 殼** → `shouldUseCompanionChannel()`
  *   ② 分頁由 Companion「一鍵開 POS」帶 `?companion=<url>` 開出嚟
  *      （即使係系統瀏覽器，agent 的確喺度）→ `hasCompanionUrlParam()`
  *   ③ 本機（localhost / 127.0.0.1）dev 或自架 POS → `shouldAutoDiscoverCompanion()` 內含
@@ -168,6 +202,10 @@ export function shouldKeepCompanionAlive(): boolean {
  * **純 website / PWA（Vercel HTTPS、PWA standalone、自己打網址開）一律 false** →
  * 狀態卡完全隱藏，唔會出現「未連線（代理未啟動）」呢啲對純網店用家無意義、
  * 亦永遠解決唔到嘅紅燈。
+ *
+ * ⚠️ 2026-09-18：**Android 嘅打印機設定 UI 係另一條路**（`printer-companion-panel.tsx`
+ * 內嘅 `isAndroid = isNativeBridgeAvailable()` 分支），唔靠呢張「Companion 狀態卡」。
+ * 所以 Android 上呢個函式照樣可以 false，唔會令設定介面消失。
  *
  * 同 `shouldKeepCompanionAlive()` 嘅分別：輪詢（keepAlive）唔包括 localhost dev
  * （避免 dev 無謂輪詢），但 UI 顯示要包埋 localhost，否則本機開發測唔到張卡。

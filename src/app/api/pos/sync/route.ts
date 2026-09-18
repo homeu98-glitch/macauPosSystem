@@ -458,6 +458,44 @@ export async function POST(request: Request) {
     }
   }
 
+  // ── 2.56) 班次（開工）閘（2026-09-18）：匿名落單時服務端把關 ──
+  //
+  // ── 點解要加 ─────────────────────────────────────────────────────────────
+  // 收銀台落單本身有 `ensureShiftOpened()` 把關（未開工唔准開單），但**客人端冇**：
+  // 掃碼 / kiosk 係匿名通道，未開工照樣落得到單 → 收銀機收咗班、店入面冇人做嘢，
+  // 客人仍然落單，單只會靜靜躺喺雲端冇人接（J 2026-09-18 回報嘅同一個缺口）。
+  //
+  // ── 口徑（同 2.55 一致，刻意唔另立一套）────────────────────────────────
+  //   - 只擋**匿名**（`!authorized`）。收銀台帶憑證，即使未開工都唔受影響 ——
+  //     店員要開工前先試單、或者用收銀台補單嘅逃生門要留住。
+  //   - 查唔到（42P01 / 網絡失敗）→ **放行**（fail-open）。呢點極重要：
+  //     反過來「查唔到就當未開工」＝一斷網全店即刻落唔到單。
+  //   - **查唔到 `pos_shifts` 有任何未收工嘅班次 → 當未開工**（同 2.55 default 相反，
+  //     見下面解釋）。
+  //
+  // ── ⚠️ 同 2.55 嘅 default 方向唔同，係**故意**嘅 ─────────────────────────
+  // `pos_store_status` 未設定過 row ＝ 營業中（default true，0039）：因為嗰個掣
+  // 係「店主主動暫停」，冇設定過即係冇暫停過。
+  // 但 `pos_shifts` 冇 open row ＝ **真係未開工**：班次係每日開工時實際寫入嘅事實記錄，
+  // 冇記錄就係冇開過工。所以呢度唔會 fail-open 成「當已開工」。
+  //
+  // ⚠️ 同 2.55 一樣：每個 request **只查一次**，唔好逐個 event 打 DB。
+  let shiftClosed = false;
+  if (!authorized && !storeClosed) {
+    const { data: openShiftRows, error: shiftErr } = await supabase
+      .from("pos_shifts")
+      .select("id")
+      .eq("store_id", storeId)
+      .is("closed_at", null)
+      .limit(1);
+    if (shiftErr) {
+      // 表未建立（42P01）／查詢失敗 → 放行（fail-open，唔可以一斷網全店停單）
+      console.warn("[pos/sync] 班次狀態查詢失敗，本次放行:", shiftErr.message);
+    } else if ((openShiftRows ?? []).length === 0) {
+      shiftClosed = true;
+    }
+  }
+
   // ── 2.6) 售罄校驗（2026-09-10 審查 P1-2）：匿名落單時服務端把關 ──
   // 客人端只靠 Realtime 增量，掃碼嗰刻已售罄嘅菜照樣落得到單。呢度喺 server 端
   // 對「匿名 + 有 order 事件」嘅請求預取本店售罄集合，命中即拒（收銀端有憑證，唔受影響）。
@@ -747,6 +785,20 @@ export async function POST(request: Request) {
           console.warn(`[pos/sync] 拒收店已暫停營業嘅訂單 ${orderId}（source=${orderSource}）`);
           rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 商家不在營業中`);
           ack(false, "商家不在營業中", { reason: "shop-closed" });
+          continue;
+        }
+
+        // ── 班次（開工）閘（2026-09-18）──
+        // 本店冇任何未收工嘅班次 → 客人掃碼 / kiosk 一律落唔到單。
+        // ⚠️ `!authorized` 把關：收銀台（帶 POS 憑證）唔受影響。
+        // `reason: "shift-closed"` 係客端 UI 嘅分流依據 —— **唔可以**同 `shop-closed` 撈埋：
+        // 「店已暫停營業」係店主主動嘅決定（客人應該見到「商家不在營業中」）；
+        // 「未開工」係店員未夠鐘／已經收工，客人應該見到「未開始營業，請稍後再試」
+        // （叫佢遲啲返嚟係有意義嘅，叫佢重試就冇）。
+        if (!authorized && shiftClosed) {
+          console.warn(`[pos/sync] 拒收本店未開工嘅訂單 ${orderId}（source=${orderSource}）`);
+          rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 商家尚未開始營業`);
+          ack(false, "商家尚未開始營業", { reason: "shift-closed" });
           continue;
         }
 
