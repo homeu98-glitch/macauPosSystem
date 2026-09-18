@@ -665,6 +665,9 @@ export function ShiftPage() {
       notes: buildOrderDetailNotes(o),
       // 線上投影單（帶 onlineOrderId）顯示「線上」chip，同線下單一眼分得開。
       online: !!o.onlineOrderId,
+      // 🔴 2026-09-18：「已返結 ×N」標籤（訂單號右側）。
+      // 同報表明細同一個口徑 —— 傳次數，重結完仍然在（審計欄單調遞增）。
+      reopenCount: o.reopenCount ?? 0,
     }));
 
     const remoteRows: OrderDetailRow[] = ledgerOnlyRows.map((o) => {

@@ -1159,6 +1159,18 @@ export async function POST(request: Request) {
           //    單品折扣原因唔喺呢度：佢逐件存喺 `items` JSONB 內（OrderItem.discountNote），
           //    會跟 `items` 一齊上雲，唔需要另開欄。
           discount_note: text(order.discountNote, MAX_TEXT_LEN),
+          // ── 返結審計上雲（0043 migration，2026-09-18）─────────────────────
+          // 🔴 為何一定要上雲：報表同交班**讀雲端**（`pos_orders` 為唯一可信源），
+          //    雲端冇呢幾欄 ⇒ ① 「已返結 ×N」標籤永遠唔會出現喺報表 / 交班明細；
+          //    ② 換機 / 清 cache 之後完全睇唔出「呢張單被人返結改過」。
+          //    同 0038 member_* 一樣，係「逐欄顯式複製」漏抄，唔係被 RLS 擋。
+          //
+          // `reopen_count` 單調遞增（重結唔清零）—— 「返結過」係歷史事實，
+          // 前端 `reopen-badge.ts` 靠佢決定要唔要出標籤。
+          // 未跑 migration → 下面 42703 降級會拔走呢三欄（功能靜默停用，主流程不受影響）。
+          reopen_count: Math.max(0, Math.trunc(Number(order.reopenCount) || 0)),
+          reopened_at: isoOrNull(order.reopenedAt),
+          reopen_reason: text(order.reopenReason, MAX_TEXT_LEN),
           // 方案 B（2026-09-09）：`updated_at` 一律 server 蓋章（收件時間，單一鐘域）；
           // client 裝置時鐘時間戳另存 `client_updated_at`，專供 LWW 守門同鐘域比較。
           // 注意：`created_at` 維持 client 時間（首次建立）—— 訂單排序（compareOrderByLocalNo）
@@ -1187,13 +1199,18 @@ export async function POST(request: Request) {
           // 兩個 migration 邊個未跑都修得返；呢啲欄本身值係 NULL / 0，拔走無損。
           // 呢個降級係一次過嘅：migration 跑完之後寫入自然帶返新欄。
           console.warn(
-            `[pos/sync] pos_orders 新欄唔存在（0034 / 0038 未跑），降級寫入訂單 ${orderId}`,
+            `[pos/sync] pos_orders 新欄唔存在（0034 / 0038 / 0043 未跑），降級寫入訂單 ${orderId}`,
           );
           const legacyRecord = { ...baseRecord };
           delete legacyRecord.discount_note;
           delete legacyRecord.member_customer_id;
           delete legacyRecord.member_deduction_avos;
           delete legacyRecord.member_deduct_txn_id;
+          // 0043 返結審計欄 —— 未跑 migration 時拔走。代價只係「已返結標籤暫時唔顯示」，
+          // 金額 / items 全部照寫（唔可以因為新欄令整張單上唔到雲）。
+          delete legacyRecord.reopen_count;
+          delete legacyRecord.reopened_at;
+          delete legacyRecord.reopen_reason;
           ({ error: oErr } = await writeOrder(legacyRecord));
         }
         if (oErr) {
@@ -1315,15 +1332,40 @@ export async function POST(request: Request) {
           patch.discount_note = text(eventPayload.discountNote, MAX_TEXT_LEN);
         }
 
+        // ── 返結審計（0043，2026-09-18）：重結都係一個寫入點 ──
+        // 🔴 為何要喺呢度寫：返結 → 加菜 → **重結** 呢條流程，重結嗰刻
+        //    如果只靠 ORDER_UPDATED 寫 `reopen_count`，一旦加菜事件因為任何原因
+        //    （離線重推次序、時鐘偏移）冇成功寫入，標籤就會消失 —— 但實體上
+        //    張單明明返結過。喺結帳呢個「最後一次有完整內容嘅時機」補寫，
+        //    等標籤有一個可靠嘅兜底。
+        //    同理：`reopen_count` 用 `max()` 語義（唔可以倒退），同 ORDER_UPDATED
+        //    寫入嘅值一致（兩邊都係「只會增加」）。
+        // 判斷方式同 discountNote 一致：**payload 有冇帶 `reopenCount` key**
+        //   - 帶數字 → 寫入（只寫 >= 1 嘅值，0 = 從未返結 → 唔覆蓋舊值）
+        //   - 完全冇帶 → 唔關事（一般結帳唔會帶），唔好無條件寫而抹走 ORDER_UPDATED 嘅值
+        if ("reopenCount" in eventPayload) {
+          const settledReopenCount = Math.max(0, Math.trunc(Number(eventPayload.reopenCount) || 0));
+          // 只在 > 0 時寫：`0` 代表「從未返結」，唔應該覆蓋 DB 可能已有嘅 >0 值
+          //（離線重推時事件次序唔保證，保守寫法）。
+          if (settledReopenCount > 0) {
+            patch.reopen_count = settledReopenCount;
+            patch.reopened_at = isoOrNull(eventPayload.reopenedAt);
+            patch.reopen_reason = text(eventPayload.reopenReason, MAX_TEXT_LEN);
+          }
+        }
+
         const writeSettlePatch = async (record: Record<string, unknown>) =>
           await supabase.from("pos_orders").update(record).eq("id", settledOrderId).eq("store_id", storeId).select("id");
 
         let { data: settledRows, error: sErr } = await writeSettlePatch(patch);
         if (sErr && isMissingColumnError(sErr)) {
-          // 🔻 0034 未跑：拔走 `discount_note` 再寫，唔可以因為新欄令結帳狀態上唔到雲。
-          console.warn(`[pos/sync] pos_orders.discount_note 欄唔存在（0034 未跑），降級寫入結帳 ${settledOrderId}`);
+          // 🔻 0034 / 0043 未跑：拔走新欄再寫，唔可以因為新欄令結帳狀態上唔到雲。
+          console.warn(`[pos/sync] pos_orders 新欄唔存在（0034 / 0043 未跑），降級寫入結帳 ${settledOrderId}`);
           const legacyPatch = { ...patch };
           delete legacyPatch.discount_note;
+          delete legacyPatch.reopen_count;
+          delete legacyPatch.reopened_at;
+          delete legacyPatch.reopen_reason;
           ({ data: settledRows, error: sErr } = await writeSettlePatch(legacyPatch));
         }
 

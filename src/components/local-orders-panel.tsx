@@ -11,6 +11,7 @@ import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-t
 import { StoreOpenPill } from "@/components/store-open-pill";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
+import { ReopenBadge } from "@/components/reopen-badge";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import {
   dateFilterLabel,
@@ -576,7 +577,16 @@ export function LocalOrdersPanel({
                   return (
                     <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
                       <td className={TD_CELL}>
-                        <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                        {/* 🔴 返結標籤緊貼訂單號右側（2026-09-18）。
+                            ⚠️ 原本呢格係單一個 `truncate` div；加標籤要包一層 flex，
+                            並將 `truncate` 落返訂單號自己（否則標籤會被 truncate 食咗）。
+                            標籤用 `shrink-0` 保證窄螢幕都唔會被壓扁。 */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-sm font-semibold text-slate-900">
+                            {order.localOrderNo}
+                          </span>
+                          <ReopenBadge order={order} />
+                        </div>
                       </td>
                       <td className={TD_CELL}>
                         <div className="truncate text-xs text-slate-500">{order.tableName}</div>
@@ -798,9 +808,19 @@ export function LocalOrdersPanel({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xl font-semibold text-slate-900">訂單詳情</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {viewingOrder.localOrderNo} · {viewingOrder.tableName}
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-slate-500">
+                  <span>
+                    {viewingOrder.localOrderNo} · {viewingOrder.tableName}
+                  </span>
+                  {/* 返結標籤 + 原因（2026-09-18）：詳情頁空間夠，所以連原因一齊出。
+                      列表頁只出標籤 —— 原因塞落窄欄會截斷。 */}
+                  <ReopenBadge order={viewingOrder} size="md" />
                 </div>
+                {viewingOrder.reopenReason ? (
+                  <div className="mt-1 text-xs text-indigo-700">
+                    返結原因：{viewingOrder.reopenReason}
+                  </div>
+                ) : null}
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <div
@@ -1085,6 +1105,15 @@ export function LocalOrdersPanel({
           widthClassName="max-w-md"
         >
           <div className="grid gap-3">
+            {/* 🔴 返結標籤（2026-09-18）：收據預覽都要見到「呢張單返結過」。 */}
+            {receiptPreviewOrder.reopenCount ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <ReopenBadge order={receiptPreviewOrder} size="md" />
+                {receiptPreviewOrder.reopenReason ? (
+                  <span className="text-xs text-slate-500">{receiptPreviewOrder.reopenReason}</span>
+                ) : null}
+              </div>
+            ) : null}
             <ReceiptTicketPreview order={receiptPreviewOrder} />
             {hasReceivableReceipt(receiptPreviewOrder) ? (
               <button

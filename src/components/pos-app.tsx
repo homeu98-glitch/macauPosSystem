@@ -2378,7 +2378,33 @@ export function PosApp() {
      * ⚠️ 亦唔可以順手清 `fulfillmentStatus`：線上單排位後係 `preparing`，
      * 舊寫法喺非快餐分支硬寫 `undefined` 會連出餐狀態一齊抹走。
      */
-    const keepPaidStatus = existingOrder?.status === "paid";
+    /**
+     * 🔴🔴 2026-09-18 返結修復：**`reopened` 同 `paid` 一樣，唔可以被打返
+     * `sent_to_kitchen`**。
+     *
+     * 上面（2026-09-14）只認 `paid`，漏咗 `reopened`（返結單）。實案（表嫂美食 09-18）：
+     *   訂單02 結帳 44 → 撳返結（`status: "reopened"`，帶 temp 枱）→ 加 2 個菜
+     *   → 重結。重結前會先 `upsertCurrentOrder("sent_to_kitchen")` 落加菜，
+     *   而 `reopened` 唔喺豁免名單 → 寫成 `sent_to_kitchen`（未收款 open snapshot）
+     *   → 雲端「付款階段單向閘」判 `paid-downgrade` 拒收整條 `ORDER_UPDATED`
+     *   → 加嘅菜（盒×4/袋×4）**永遠上唔到雲**，只剩 `ORDER_SETTLED` 嘅金額 patch
+     *   → 雲端停留「舊數量（盒×3/袋×3）+ 新金額」，報表／交班讀雲端就出 42，
+     *     而實體收據（本機印）係 44 → 商家永遠見到對唔上嘅數。
+     *
+     * 語義上保留 `reopened` 係正確嘅：
+     *   - `reopened` 本身就係「終態 → open」嘅**合法反轉**（見 `pos-order-filters.ts`
+     *     嘅返結守門、`sync/route.ts` 嘅 `reopened` 例外），佢唔係「未收款」，
+     *     而係「已收過錢、但被退回編輯」→ 唔應該被當成全新未收款單；
+     *   - 加菜只係**加內容**，唔改變「呢張單已經收過錢／曾結帳」嘅事實；
+     *   - 保留 `reopened` 之後，重結嗰刻 `confirmPayment` 會正式寫 `settled`
+     *     （見 `applyPaymentToOrder`）→ 狀態機仍然係 reopened → settled 正常前進。
+     *
+     * ⚠️ 唔可以順手清 `reopenedAt` / `reopenCount` / `reopenReason`：
+     *   嗰三個係**返結審計欄**，重結時由 `applyPaymentToOrder` 原樣承襲
+     *   （「重結不重置」）→ 「已返結」標籤要靠佢哋才顯示得返。
+     */
+    const keepPaidStatus =
+      existingOrder?.status === "paid" || existingOrder?.status === "reopened";
 
     const order: PosOrder = existingOrder
       ? {

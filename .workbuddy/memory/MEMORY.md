@@ -1,6 +1,6 @@
 # macauPos 記憶索引（2026-09-18 更新）
 
-> 必讀 `docs/113-agent-gotchas.md`。POS=`iyrywzormzisyppkokbi`、Ledger=`zymdemjflsckicwcinxl`。已跑 0016/0021/0041§1，**未跑 0042**。
+> 必讀 `docs/113-agent-gotchas.md`。POS=`iyrywzormzisyppkokbi`、Ledger=`zymdemjflsckicwcinxl`。已跑 0016/0021/0041§1/**0043**，**未跑 0042**。
 
 ## 一、API 鑑權
 - 加閘 `posRouteAuthGuard(request, storeId, tag)`，放喺「未配置 Supabase／缺 storeId」early-return **之後**；客戶端 `posDeviceAuthHeadersFresh()`。
@@ -63,6 +63,16 @@
 - 🔴 `reason: "shop-closed"`（店主主動關門）同 `"shift-closed"`（未開工/已收工）**唔可撈埋**，客端文案分開（「商家不在營業中」vs「本店尚未開始營業」）。
 - 殘留通道警示＝`src/lib/pos/residual-channel.ts`（純函式）。條件＝「一邊已關 + 另一邊仍然開」；**`null`（未讀到）永遠唔觸發**（否則斷網就出假警報）。寄生喺既有 pill（`merchant-open-pill.tsx` 嘅 `residual` prop），唔新增格子。
 - ⚠️ 遺留：`/api/pos/store-status` 仍有 `DEFAULT_STORE_ID="macau-store-a"` 假店 fallback（GET 53 行/POST 117-119 行），未收緊。
+
+## 四之三、返結（反結賬）≠ 退款（2026-09-18 新增）
+- 🔴🔴 **`reopened` 唔喺任何狀態集合**（`TERMINAL`/`PAID`/`OPEN` 都冇）⇒ 寫 `reopened` 時 `isPaidDowngrade===false` ⇒ 放行。所以「保留 reopened」係正確，**唔可以改成 `paid`**。
+- 🔴 `upsertCurrentOrder()` 嘅 `keepPaidStatus` 必須同時認 `paid` **同** `reopened`（`pos-app.tsx:2406`）。只認 `paid` ⇒ 返結單加菜被寫成 `sent_to_kitchen` ⇒ 付款階段單向閘拒收整條 `ORDER_UPDATED` ⇒ **items 永遠上唔到雲**，只剩 `ORDER_SETTLED` 金額 patch（唔重寫 items）⇒ 雲端「舊數量＋新金額」。
+- 審計三欄 `reopen_count`/`reopened_at`/`reopen_reason`：**單調遞增、重結後唔清零**（「返結過」係歷史事實）。重結（`confirmPayment` / `settleCompOrder`）**原樣承襲**，唔准清。
+- 標籤＝`src/lib/pos/reopen-badge.ts`（**零 import**，6 test）＋`components/reopen-badge.tsx`；判定**只看 `reopenCount`，唔看 `status`**。位置＝緊貼訂單號右側（同「線上」chip 同格）；色＝indigo（同狀態標籤「已返結」同色）。
+- 覆蓋 5 面：訂單列表／訂單詳情／收據預覽（`local-orders-panel.tsx`）＋報表／交班明細（共用 `order-detail-list.tsx`）。
+- 🔴🔴 **加 pos_orders 欄位要改「四條讀取路徑」**（本專案結構性風險）：`pos-order-mapper.ts`（realtime/KDS）／`pos-order-row.ts`（`/api/pos/state`＝交班）／`/api/pos/orders` **內聯手寫 mapper**（＝報表）／`sync/route.ts` `baseRecord`（寫入）。漏任何一條＝標籤靜默唔出。
+- ⚠️ 遺留缺口：`reopenedBy` / `originalSettledAt` **一樣冇上雲**（0043 只做咗三欄）。標籤唔需要佢哋，故暫未補。
+- ⚠️ 歷史資料唔會自動回溯：0043 只加欄（default 0），舊返結單雲端 `reopen_count` 仍係 0 ⇒ 標籤唔出。要出就需人手 `UPDATE`（工具 `tools/fix-order02-reopen-20260918.sql`，J 已決定唔用，改為叫商家自行重新返結一次）。
 
 ## 五、UI
 - 🔴 `button { font: inherit }`（globals.css 無 layer）壓過 `text-*` ⇒ 按鈕字級寫喺仔元素；`p-[3px]` 同 `px-3 py-1.5` 唔可並存。

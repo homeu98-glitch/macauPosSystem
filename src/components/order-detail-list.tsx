@@ -18,6 +18,7 @@
 // 口徑同「支付方式分項」一致：應收 = 原價合計 + 服務費 + 稅；實收 = order.total。
 
 import { formatMacauDateTime, formatMoney } from "@/lib/format";
+import { ReopenBadge } from "@/components/reopen-badge";
 import type { OrderDetailNote, OrderDetailNoteKind } from "@/lib/pos/order-notes";
 
 // 備註型別嘅**真源**喺 `@/lib/pos/order-notes`（推導邏輯同型別綁埋一齊，避免兩處漂移）。
@@ -50,6 +51,16 @@ export interface OrderDetailRow {
    * 呢個 flag 令佢哋同線下單一眼分得開（顯示「線上」chip）。
    */
   online?: boolean;
+  /**
+   * 累計返結次數（`PosOrder.reopenCount`）—— 2026-09-18 加。
+   *
+   * `> 0` 時，訂單號右側出「已返結 ×N」標籤（同「線上」chip 同一個位置）。
+   * 🔴 刻意**傳次數而唔傳 boolean**：① 標籤文案要帶次數（`已返結 ×2`）；
+   *    ② 計數係**單調遞增**嘅審計欄，重結完都唔清零 → 標籤永久保留，
+   *       呢個正正係「呢張單被人改過」嘅對帳價值所在。
+   * 線上單（Ledger 投影）冇呢個概念 → 唔會帶。
+   */
+  reopenCount?: number;
 }
 
 const TH_CELL = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500";
@@ -116,6 +127,10 @@ export function OrderDetailList({
                       線上
                     </span>
                   ) : null}
+                  {/* 🔴 返結標籤（2026-09-18）：同「線上」chip 同一個位置，
+                      緊貼訂單號。用 `shrink-0` 保證窄欄都唔會被壓扁。
+                      色系（indigo）同 pos-order-filters 嘅「已返結」狀態標籤一致。 */}
+                  <ReopenBadge order={row} />
                 </div>
                 {/* 取餐碼：原本係「狀態」欄，2026-09-11 併入呢度第二行（線下單冇 → 唔顯示） */}
                 {row.pickupCode ? (

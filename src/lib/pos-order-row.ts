@@ -40,6 +40,18 @@ export type PosOrderDbRow = {
    * 舊 row / 未跑 migration 嘅環境會係 null / undefined。
    */
   client_updated_at?: string | null;
+  /**
+   * 返結審計（0043 migration，2026-09-18）。未跑 migration 嘅環境會係 undefined。
+   *
+   * 🔴 為咩一定要 map 返出嚟：交班頁靠 `/api/pos/state` → 呢個 `mapOrderRow()`，
+   *    漏抄 = 交班訂單明細永遠唔會出「已返結 ×N」標籤。
+   *    同 0034 `discount_note` 一樣係「逐欄顯式複製」漏抄，唔係被 RLS 擋。
+   *
+   * `reopen_count` 單調遞增、重結後唔清零（「返結過」係歷史事實）。
+   */
+  reopen_count?: number | null;
+  reopened_at?: string | null;
+  reopen_reason?: string | null;
 };
 
 /** `pos_orders` row → 領域物件。與 `/api/pos/state` 既有映射保持一致。 */
@@ -80,5 +92,11 @@ export function mapOrderRow(order: PosOrderDbRow) {
     // 否則一條「舊狀態 + server 時間較新」嘅 snapshot 會蓋走本機啱寫入嘅狀態
     // （實案：快餐單已結帳閃回未結帳）。睇 `mergeTimestamp()`。
     clientUpdatedAt: order.client_updated_at ?? undefined,
+    // 返結審計（0043 migration）：冇欄 / NULL / 0 一律當「從未返結」→ undefined。
+    // 交班「訂單明細」靠 `reopenCount` 出「已返結 ×N」標籤
+    //（見 `@/lib/pos/reopen-badge` 同 `OrderDetailList`）。
+    reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
+    reopenedAt: order.reopened_at ?? undefined,
+    reopenReason: order.reopen_reason ?? undefined,
   };
 }

@@ -65,6 +65,19 @@ export interface PosOrderRow {
   member_customer_id?: string | null;
   member_deduction_avos?: number | null;
   member_deduct_txn_id?: string | null;
+  /**
+   * 返結審計（0043 migration 新增；未跑 migration 嘅環境會冇呢幾欄 → undefined）。
+   *
+   * 🔴 為咩一定要 map 返出嚟：報表同交班**讀雲端**（`pos_orders` 為唯一可信源）。
+   *    寫入路徑（sync route `baseRecord`）有做、讀取路徑冇做 = 「已返結 ×N」標籤
+   *    永遠唔會出現喺報表 / 交班明細（同 0038 member_* 一模一樣嘅漏抄）。
+   *
+   * `reopen_count` **單調遞增、重結後唔清零** —— 「返結過」係歷史事實，
+   * 前端 `@/lib/pos/reopen-badge` 靠佢決定要唔要出標籤。
+   */
+  reopen_count?: number | null;
+  reopened_at?: string | null;
+  reopen_reason?: string | null;
 }
 
 export function mapPosOrderRow(row: PosOrderRow): PosOrder {
@@ -105,6 +118,11 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     memberCustomerId: row.member_customer_id ?? undefined,
     memberDeductionAvos: row.member_deduction_avos ? Number(row.member_deduction_avos) : undefined,
     memberDeductTxnId: row.member_deduct_txn_id ?? undefined,
+    // 返結審計（0043）：冇欄 / NULL / 0 一律當「從未返結」→ undefined。
+    // 見 migration 0043 + `@/lib/pos/reopen-badge`（標籤文案真源）。
+    reopenCount: row.reopen_count ? Number(row.reopen_count) : undefined,
+    reopenedAt: row.reopened_at ?? undefined,
+    reopenReason: row.reopen_reason ?? undefined,
   };
 }
 

@@ -72,6 +72,12 @@ export async function GET(request: Request) {
         paymentMethod: order.payment_method ?? undefined,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
+        // 🔴 返結審計（0043 migration，2026-09-18）：報表「訂單明細」要靠呢三欄出
+        //    「已返結 ×N」標籤。唔帶 = 標籤永遠唔顯示（同 0038 member_* 一樣嘅漏抄）。
+        //    未跑 migration 嘅環境 → 欄位唔存在 → undefined → 標籤靜默唔出（唔會爆）。
+        reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
+        reopenedAt: order.reopened_at ?? undefined,
+        reopenReason: order.reopen_reason ?? undefined,
       })) ?? [],
   });
 }

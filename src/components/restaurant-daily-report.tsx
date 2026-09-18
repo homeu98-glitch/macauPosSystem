@@ -484,6 +484,9 @@ function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
     // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
     // 同交班明細、訂單紀錄用同一套，確保三處完全一致。
     notes: buildOrderDetailNotes(o),
+    // 🔴 2026-09-18：「已返結 ×N」標籤（訂單號右側）。
+    // 傳次數而唔係 boolean —— 計數單調遞增，重結完仍然在，標籤永久保留。
+    reopenCount: o.reopenCount ?? 0,
   };
 }
 
