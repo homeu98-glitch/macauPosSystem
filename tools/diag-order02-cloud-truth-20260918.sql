@@ -6,6 +6,35 @@
 -- 檔案已移除所有 @ 符號，避免複製時同 git diff 混淆。
 -- 如果你之前見到 "syntax error at or near @ LINE 1: @ -0,0 +1,123 @@"
 -- 嗰段係 git diff 格式（唔係 SQL），代表複製來源錯咗，唔係 SQL 本身有問題。
+-- 提醒：只複製 SQL 語句本身，唔好連 "--" 註解區塊嘅裝飾一齊揀中。
+
+
+-- ===========================================================================
+-- 查詢 0：最優先執行 —— 本輪修復有冇生效（雙重根因驗證）
+--
+-- 背景：2026-09-18 14:29 部署咗 commit 63c0670，修好兩個根因：
+--   (a) reopenPosOrder() 以前從不推播上雲（只寫本機 localStorage）
+--   (b) ORDER_SETTLED payload 以前冇帶 reopenCount（兜底補寫永久失效）
+--
+-- 用法：先喺 iPad 上做一次完整「返結 → 加菜 → 重結」，
+--       然後執行下面查詢，睇 判別 欄位。
+-- ===========================================================================
+select
+  local_order_no                    as 訂單號,
+  status                            as 狀態,
+  total                             as 雲端總額,
+  reopen_count                      as 返結次數,
+  reopened_at at time zone 'Asia/Macau' as 返結時間,
+  reopen_reason                     as 返結原因,
+  updated_at at time zone 'Asia/Macau'  as 雲端更新時間,
+  case
+    when reopen_count > 0 then '通過：返結已上雲，報表應顯示標籤'
+    when status = 'reopened' then '部分：狀態上雲但審計欄未寫，檢查 ORDER_SETTLED payload'
+    else '未通過：返結仍上唔到雲，需再查'
+  end                               as 判別
+from public.pos_orders
+where created_at >= now() - interval '12 hours'
+order by created_at desc;
 
 
 -- ===========================================================================
