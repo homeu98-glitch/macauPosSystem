@@ -659,7 +659,26 @@ export function ShiftPage() {
       paid: o.total,
       method: o.paymentMethod ?? "未記錄",
       cashier: o.settledByName ?? o.settledBy ?? "未記錄",
-      settledAt: o.originalSettledAt ?? o.updatedAt,
+      // 🔴 2026-09-18 需求：「返結後，訂單明細內的時間應該更新到最新時間。」
+      //
+      // 【舊口徑】`o.originalSettledAt ?? o.updatedAt` —— `originalSettledAt` 係
+      // 「**首次**結帳時間」，由 `reopenPosOrder()` 鎖定（`pos-orders.ts:201`
+      // `order.originalSettledAt ?? order.updatedAt`）後**永遠唔會再改**。
+      // 所以返結 + 重結之後，呢一欄仍然顯示幾個鐘前嘅舊時間，客人／店長對唔上。
+      //
+      // 【新口徑】`o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt`：
+      //   1. 有返結過（`reopenedAt` 存在）→ 顯示**最近一次返結時間**，
+      //      即「呢張單最後一次被改動嘅時點」，同帳面金額（返結後價）對得上；
+      //   2. 未返結過但有結帳 → 顯示首次結帳時間（維持原行為，唔影響絕大多數單）；
+      //   3. 都冇 → 退回 `updatedAt`（防禦性，理論上唔會行到）。
+      //
+      // 【為何唔直接用 `updatedAt`】`updatedAt` 會被**任何**寫入改動（例如加菜、
+      // 改備註、雲端 backfill），唔一定代表「結帳動作」；`reopenedAt` 語意精準得多。
+      //
+      // 【`originalSettledAt` 有冇白白浪費】冇 —— 佢仍然係「首次結帳」嘅審計真源，
+      // 喺訂單詳情頁以「原結帳時間」獨立一行顯示（`pos-app.tsx:5252`），
+      // 商家需要追首次入帳時點時仲睇得到。
+      settledAt: o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
       // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
       // 同報表明細、訂單紀錄用同一套，確保三處完全一致。
       notes: buildOrderDetailNotes(o),

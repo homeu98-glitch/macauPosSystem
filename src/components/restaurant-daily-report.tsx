@@ -480,7 +480,12 @@ function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
     paid: o.total,
     method: o.paymentMethod ?? "未記錄",
     cashier: o.settledByName ?? o.settledBy ?? "未記錄",
-    settledAt: o.originalSettledAt ?? o.updatedAt,
+    // 🔴 2026-09-18 需求：「返結後，訂單明細內的時間應該更新到最新時間。」
+    // 口徑同交班明細完全一致（`shift-page.tsx` 同一行）：
+    //   有返結過 → 顯示最近返結時間；否則首次結帳時間；否則退回 `updatedAt`。
+    // 詳見 `shift-page.tsx` 該處註解（含「為何唔直接用 updatedAt」同
+    // 「originalSettledAt 仍作首次結帳審計保留喺訂單詳情頁」）。
+    settledAt: o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
     // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
     // 同交班明細、訂單紀錄用同一套，確保三處完全一致。
     notes: buildOrderDetailNotes(o),

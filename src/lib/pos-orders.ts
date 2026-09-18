@@ -149,8 +149,10 @@ export function removeReopenTempTable(orderId: string) {
  * 1. 強制原因（reason 不可空白）。
  * 2. 狀態切到 `reopened` + 寫審計（reopenedAt / reopenedBy / reopenReason / reopenCount / originalSettledAt）。
  * 3. 反向回滾會員餘額（best-effort：若 Ledger add RPC 尚未佈署，只記警告並繼續切狀態）。
- * 4. 印「返結單」到各區域 / 標籤機。
- * 5. dispatch `pos-orders-changed` 通知訂單面板刷新。
+ * 4. 🔴 **推 `ORDER_UPDATED`（action="reopened"）上雲**（2026-09-18 補）。
+ *    缺此步 ⇒ 雲端停留返結前狀態 ⇒ 報表／其他裝置永遠見唔到返結。
+ * 5. 印「返結單」到各區域 / 標籤機。
+ * 6. dispatch `pos-orders-changed` 通知同機訂單面板刷新。
  *
  * 重結由 POS 工作台（pos-app confirmPayment）針對同一 order.id 重新落單結帳完成。
  */
@@ -204,12 +206,49 @@ export async function reopenPosOrder(params: {
   next[idx] = updated;
   saveOrders(next);
 
-  // ③ 印返結單（受 reopen 細粒度開關控制，2026-09-08 引入）
+  // ③ 🔴 2026-09-18 修復：返結必須推播上雲。
+  //
+  // 【為何是 bug】`reopenPosOrder` 舊版本只 `saveOrders()`（寫本機 localStorage）
+  // + 派 `pos-orders-changed` 事件（只係通知同一個瀏覽器嘅 React 面板刷新）。
+  // 呢兩個動作**都唔會離開呢部機** ⇒ 雲端 `pos_orders` 永遠停留返結前狀態。
+  //
+  // 【後果鏈】報表（`restaurant-daily-report`）刻意純讀雲端、永遠唔 merge 本機；
+  // 交班（`shift-page`）雖然會 merge，但 `mergeByUpdatedAt` 係「雲端較新或同刻即贏」
+  // ⇒ 雲端舊值照樣壓返本機新值。所以返結喺下單機睇落正常，第二台機同報表全錯。
+  //
+  // 【實案】2026-09-18 表嫂美食訂單02：本機 `reopenCount=3`、金額 MOP 44，
+  // 雲端停留 `reopenCount=0`、金額 MOP 42，報表連「已返結」標籤都冇。
+  //
+  // 【為何帶 `status: "reopened"`】`sync/route.ts` 嘅「付款階段單向閘」
+  // （`isPaidDowngrade`）只當 `OPEN_ORDER_STATUSES = {draft, sent_to_kitchen}`
+  // 為降級；`reopened` 唔喺任何集合內 ⇒ 判定 false ⇒ 放行。
+  // 若帶成 `paid` 反而好易被誤判成降級而拒收，故**必須保留 `reopened`**。
+  //
+  // 【與 ORDER_SETTLED 嘅分工】呢個事件負責「把審計欄推上去」（reopenCount 由 0→N）；
+  // 重結時 `confirmPayment` 嘅 `ORDER_SETTLED` 負責「鎖定最終金額 + 保留審計欄」。
+  // 兩條路缺一，雲端就會「有金額冇標籤」或者「有標籤冇金額」。
+  const reopenEvent: QueueEvent = {
+    id: `evt-${crypto.randomUUID().slice(0, 8)}`,
+    type: "ORDER_UPDATED",
+    entityId: updated.id,
+    payload: {
+      order: updated,
+      action: "reopened",
+      reason,
+      operator: params.operator,
+    },
+    status: "pending",
+    createdAt: now,
+  };
+  saveQueue(enqueueEvents(loadQueue(), withStoreScope([reopenEvent])));
+  notifyQueueChanged();
+
+  // ④ 印返結單（受 reopen 細粒度開關控制，2026-09-08 引入）
   if (isPrintContentEnabled("reopen")) {
     appendPrintJobs(buildReopenPrintJobs(updated, reason, params.operator));
   }
 
-  // ④ 通知面板刷新
+  // ⑤ 通知面板刷新（同機 UI）
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
   }

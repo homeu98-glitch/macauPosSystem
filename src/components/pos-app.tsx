@@ -4195,6 +4195,26 @@ export function PosApp() {
           // 結帳係最後一次有完整內容嘅時機（收銀喺結帳頁見到嘅就係最終 items），
           // 喺呢度補帶 = 俾雲端一次自愈機會。server 側只會喺有帶嘅時候才覆寫
           // （見 `sync/route.ts` ORDER_SETTLED 段嘅 `"items" in ...` 判斷）。
+          // 🔴 2026-09-18 修復（第二個根因）：結帳時**必須補帶返結審計欄**。
+          //
+          // 【為何要帶】`sync/route.ts` 嘅 `ORDER_SETTLED` 分支有一句
+          // `if ("reopenCount" in eventPayload)` 才會寫 `reopen_count` / `reopened_at` /
+          // `reopen_reason`。舊 code 呢三個 key 一個都冇帶 ⇒ 條件永遠 false ⇒ 即使
+          // `ORDER_UPDATED(action="reopened")` 已經成功推上雲，之後「重結」嘅
+          // `ORDER_SETTLED` 亦**不會**再刷新審計欄（金額會更新、標籤資料唔會）。
+          //
+          // 【為何放在 payload 頂層而非 `order` 子物件內】server 側讀嘅係
+          // `eventPayload.reopenCount`（頂層），唔係 `eventPayload.order.reopenCount`。
+          // 而 `order` 子物件係設計成淨係「訂單內容」（items / 各層金額），
+          // 語意上係「結帳當刻見到嘅嘢」，唔應該塞審計欄入去。
+          //
+          // 【為何只在 count > 0 時才寫】server 側亦有 `settledReopenCount > 0` 才寫
+          // patch，兩邊一致 —— 避免普通結帳（count=0）把 `reopen_count` 覆寫成 0，
+          // 抹掉歷史上真係返結過嘅紀錄。單調遞增語意靠 `targetOrder.reopenCount ?? 0`
+          // 承襲保證（見上面 `updatedOrder` 構造）。
+          reopenCount: updatedOrder.reopenCount ?? 0,
+          reopenedAt: updatedOrder.reopenedAt ?? null,
+          reopenReason: updatedOrder.reopenReason ?? null,
           order: {
             items: updatedOrder.items,
             subtotal: updatedOrder.subtotal,
@@ -4439,6 +4459,12 @@ export function PosApp() {
         //      （0018 migration）→ 換機／清 cache 由 server state reload 都仲見到。
         compNote: reason,
         compedAt: now,
+        // 🔴 2026-09-18：免單同樣係「重結」嘅一條路徑（返結後可以免單收尾），
+        // 故一樣要補帶返結審計欄，否則免單收尾嘅單喺雲端會冇「已返結」標籤。
+        // 口徑同 `confirmPayment`：count > 0 才寫，避免覆寫成 0。
+        reopenCount: updatedOrder.reopenCount ?? 0,
+        reopenedAt: updatedOrder.reopenedAt ?? null,
+        reopenReason: updatedOrder.reopenReason ?? null,
       },
       status: "pending",
       createdAt: now,
@@ -5248,9 +5274,15 @@ export function PosApp() {
                     返結帳
                   </button>
                 </div>
-                {workspaceOrder?.originalSettledAt || workspaceOrder?.updatedAt ? (
+                {workspaceOrder?.reopenedAt || workspaceOrder?.originalSettledAt || workspaceOrder?.updatedAt ? (
                   <div className="mt-1 text-[11px] text-slate-500">
-                    結帳時間：{formatMacauDateTime(workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt)}
+                    {/* 🔴 2026-09-18：口徑同交班明細 / 報表明細（均為
+                        `reopenedAt ?? originalSettledAt ?? updatedAt`）。
+                        返結過 → 顯示最近返結時間；否則首次結帳時間。 */}
+                    結帳時間：
+                    {formatMacauDateTime(
+                      workspaceOrder.reopenedAt ?? workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt,
+                    )}
                   </div>
                 ) : null}
               </div>

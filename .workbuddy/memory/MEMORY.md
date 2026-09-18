@@ -2,6 +2,23 @@
 
 > 必讀 `docs/113-agent-gotchas.md`。POS=`iyrywzormzisyppkokbi`、Ledger=`zymdemjflsckicwcinxl`。已跑 0016/0021/0041§1/**0043**，**未跑 0042**。
 
+## 零、返結（反結賬）— 三條路徑 / 三種合併策略（2026-09-18 血淚）
+- 🔴 **同機顯示正常 ≠ 已上雲**。返結後必查雲端 `reopen_count`，唔好信本機畫面。
+- 🔴🔴 **`reopenPosOrder()` 曾經從不推播上雲**（只 `saveOrders()` + dispatch 本機 CustomEvent）⇒ 雲端永遠停留返結前。**已修**：加 `saveQueue(enqueueEvents(loadQueue(), withStoreScope([event])))` + `notifyQueueChanged()`，event=`ORDER_UPDATED`、`action:"reopened"`。
+- 🔴🔴 **`ORDER_SETTLED` payload 曾經冇帶 `reopenCount`**（`confirmPayment` + `settleCompOrder` 兩處）⇒ `sync/route.ts:1346` 嘅 `if ("reopenCount" in eventPayload)` 永遠 false ⇒ 兜底補寫永久失效。**已修**：兩處 payload **頂層**補帶 `reopenCount` / `reopenedAt` / `reopenReason`（server 讀頂層，唔係 `payload.order.*`）。
+- 🔴 **狀態必須維持 `reopened`**：`isPaidDowngrade()` 只當 `{draft,sent_to_kitchen}` 為降級；`reopened` 唔喺任何集合 ⇒ 放行（帶成 `paid` 反而危險）。
+- 🔴 **三處顯示不一致係結構性**，唔係 bug：
+  | 載體 | 資料源 | 合併策略 |
+  |---|---|---|
+  | 訂單（下單機） | 本機 localStorage | 本機優先 |
+  | 訂單（第二台） | `/api/pos/state` | 純雲端 |
+  | 交班 | 本機 + 雲端 | **LWW 合併**（`mergeByUpdatedAt`，雲端 `>=` 即贏）|
+  | **報表** | 純雲端 | **永不 merge 本機**（刻意設計，對帳用，見 `restaurant-daily-report.tsx:1107-1140`）|
+  ⇒ 報表 = 雲端真值。**唔可以**改報表去 merge 本機（會重蹈「換機數字唔同」）。
+- 🔴 **時間口徑**：`settledAt = o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt`（三處齊改：`shift-page.tsx:662`、`restaurant-daily-report.tsx:483`、`pos-app.tsx:5279`）。`originalSettledAt`＝**首次**結帳、鎖定後永不改，唔可以用嚟顯示「最後結帳時間」。
+- ⚠️ `reopenedBy` / `originalSettledAt` **冇上雲**（0043 只做 `reopen_count`/`reopened_at`/`reopen_reason`）→ 已知缺口。
+- ⚠️ 三個 mapper 要齊改：`pos-order-mapper.ts`（realtime/KDS）、`pos-order-row.ts`（`/api/pos/state`）、`/api/pos/orders` 內聯 mapper（報表）。
+
 ## 一、API 鑑權
 - 加閘 `posRouteAuthGuard(request, storeId, tag)`，放喺「未配置 Supabase／缺 storeId」early-return **之後**；客戶端 `posDeviceAuthHeadersFresh()`。
 - 🔴 `POS_REQUIRE_DEVICE_AUTH` **冇設＝開閘**（空值回 true）。「冇設」≠「關閉」。
@@ -73,6 +90,23 @@
 - 🔴🔴 **加 pos_orders 欄位要改「四條讀取路徑」**（本專案結構性風險）：`pos-order-mapper.ts`（realtime/KDS）／`pos-order-row.ts`（`/api/pos/state`＝交班）／`/api/pos/orders` **內聯手寫 mapper**（＝報表）／`sync/route.ts` `baseRecord`（寫入）。漏任何一條＝標籤靜默唔出。
 - ⚠️ 遺留缺口：`reopenedBy` / `originalSettledAt` **一樣冇上雲**（0043 只做咗三欄）。標籤唔需要佢哋，故暫未補。
 - ⚠️ 歷史資料唔會自動回溯：0043 只加欄（default 0），舊返結單雲端 `reopen_count` 仍係 0 ⇒ 標籤唔出。要出就需人手 `UPDATE`（工具 `tools/fix-order02-reopen-20260918.sql`，J 已決定唔用，改為叫商家自行重新返結一次）。
+
+### 🔴🔴 「同筆資料三處唔一致」嘅結構成因（2026-09-18 實案）
+**三條路徑、三種合併策略** —— 呢個係本專案最容易誤判嘅地方：
+
+| 載體 | 合併策略 | 檔案 |
+|---|---|---|
+| 訂單列表 | **本機 localStorage 為主**（`loadOrders()`） | `local-orders-panel.tsx:155/171` |
+| 交班明細 | **本機 + 雲端 LWW 合併**（`mergeByUpdatedAt`，雲端新才贏） | `shift-page.tsx:415-429` |
+| 報表明細 | **純雲端，永不 merge 本機** | `restaurant-daily-report.tsx:1426` |
+
+⇒ 只要雲端係舊值而本機係新值：**訂單／交班顯示本機（對），報表顯示雲端（舊）**，
+同一部機都會自相矛盾。**唔係報表壞，係雲端未更新。**
+🔴 **唔可以「改報表去 merge 本機」嚟修** —— 報表刻意純雲端（對帳用途，`:1107-1140` 有明文），
+改咗會重現「換機／清 cache 數字唔同」嘅舊 bug。正解＝修好上雲路徑令雲端變真值。
+- 判別捷徑：**報表數字 == 第二台機數字 ⇒ 兩者都係雲端真值；第一台機（44）先係本機真值。**
+- 部分上雲陷阱：`ORDER_SETTLED` 金額 patch 會寫入，但 `items` 被拒 ⇒ 雲端出現
+  「**新金額 + 舊數量**」矛盾單（本案 42 = 舊數量盒×3/袋×3，44 = 新數量盒×4/袋×4）。
 
 ## 五、UI
 - 🔴 `button { font: inherit }`（globals.css 無 layer）壓過 `text-*` ⇒ 按鈕字級寫喺仔元素；`p-[3px]` 同 `px-3 py-1.5` 唔可並存。
