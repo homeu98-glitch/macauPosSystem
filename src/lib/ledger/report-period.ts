@@ -7,7 +7,8 @@
  * 經 `date-range.ts` 統一處理。
  */
 
-import { customRangeToISO, instantInRange, type CustomDateRange, type DateRangeSelection } from "./date-range";
+import { customRangeToISO, instantInRange, type CustomDateRange, type DateRangeSelection } from "./date-range.ts";
+import { orderEventInstant } from "../pos/order-event-time.ts";
 
 const MACAU_TZ = "Asia/Macau";
 
@@ -113,9 +114,18 @@ export function ledgerReportRangeForKey(key: ReportRangeKey, now = new Date()): 
   return macauRollingRange(365, now);
 }
 
-/** 以澳門日曆篩選本機訂單（優先 `updatedAt`，結帳／報表用）。 */
+/**
+ * 以澳門日曆篩選本機訂單。
+ *
+ * 🔴 2026-09-19：時間欄位已收口去 `orderEventInstant()`（`pos/order-event-time.ts`），
+ * 唔再喺呢度自己讀 `updatedAt || createdAt`。原因見嗰個檔案 —— 訂單頁讀 `createdAt`、
+ * 報表讀 `updatedAt`，同一張單兩邊都通過篩選 ⇒ 重複計錢。
+ *
+ * ⚠️ 呢個 predicate 本身就係舊 bug 嘅「正確嗰半」，即係原本已經用 `updatedAt`。
+ * 保留成 wrapper 而唔刪，係為咗唔爆 6 個既有呼叫點。
+ */
 export function orderMatchesReportRange(
-  order: { updatedAt?: string; createdAt?: string },
+  order: { updatedAt?: string; createdAt?: string; reopenedAt?: string; originalSettledAt?: string },
   range: ReportRangeArg,
   now = new Date(),
 ): boolean {
@@ -124,11 +134,8 @@ export function orderMatchesReportRange(
   // 自訂：未揀區間 → 當「全部」
   if (key === "custom" && !(typeof range !== "string" && range.custom)) return true;
 
-  const ts = order.updatedAt || order.createdAt;
-  if (!ts) return false;
-
-  const instant = new Date(ts);
-  if (Number.isNaN(instant.getTime())) return false;
+  const eventMs = orderEventInstant(order);
+  if (eventMs <= 0) return false;
 
   // 「昨天／今天／7d／30d／自訂」統一先計出 Macau 起訖 ISO 字串，再用
   // instant >= start && instant <= end 判斷，避免用 now.getTime() - 86400000 喺
@@ -136,7 +143,7 @@ export function orderMatchesReportRange(
   // 喺凌晨 0–8 點可能跨越 Macau 日界，導致昨日的單被誤判到前天（或反之）。
   const period = resolveReportRange(range, now);
   if (period) {
-    return instantInRange(instant, period);
+    return instantInRange(eventMs, period);
   }
 
   // 兜底：只有 "custom" 而未有區間會嚟到（上面已 return true）。

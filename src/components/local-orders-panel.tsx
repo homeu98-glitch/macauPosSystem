@@ -53,6 +53,7 @@ import { formatMoney } from "@/lib/format";
 import { orderItemDiscountTotal } from "@/lib/pos/discount";
 import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { POS_SYNC_QUEUE_CHANGED_EVENT } from "@/lib/pos/sync-flush";
+import { orderEventISO } from "@/lib/pos/order-event-time";
 import { posDeviceAuthHeaders, posDeviceAuthHeadersFresh, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
@@ -64,9 +65,20 @@ const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "cancelled", label: "已取消" },
 ];
 
+/**
+ * 訂單列表嘅時間篩選（已收口）。
+ *
+ * 🔴 2026-09-19：以往呢個 function 把 `PosOrder` 削成 `{ createdAt, updatedAt }` 再傳入，
+ * 而 predicate 內部只讀 `createdAt` —— 但同一個面板**顯示**嘅係 `updatedAt`
+ * （見 `:601` `formatMacauDateTime(order.updatedAt || order.createdAt)`）。
+ * 「顯示用一個欄位、篩選用另一個」正正係 09-19 報表多算一張單嘅成因。
+ *
+ * 依家 `orderMatchesDateFilter` 內部已經用 `orderEventInstant()`（`reopenedAt` →
+ * `originalSettledAt` → `updatedAt` → `createdAt`），所以直接傳訂單就得，
+ * 唔需要再削——削走反而會令 `reopenedAt` / `originalSettledAt` 永遠睇唔到。
+ */
 function orderMatchesLocalDateFilter(order: PosOrder, filter: DateFilterArg): boolean {
-  const pseudo = { createdAt: order.createdAt, updatedAt: order.updatedAt };
-  return orderMatchesDateFilter(pseudo, filter);
+  return orderMatchesDateFilter(order, filter);
 }
 
 // 訂單列表（2026-09-10）：表頭 / 儲存格共用樣式。表頭 sticky，窄屏由外層 overflow 橫向滾動。
@@ -598,7 +610,7 @@ export function LocalOrdersPanel({
                       </td>
                       <td className={TD_CELL}>
                         <div className="text-xs tabular-nums text-slate-400">
-                          {formatMacauDateTime(order.updatedAt || order.createdAt || "")}
+                          {formatMacauDateTime(orderEventISO(order))}
                         </div>
                       </td>
                       <td className={TD_CELL}>

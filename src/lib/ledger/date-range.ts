@@ -26,6 +26,18 @@
  * - 唔喺呢度做「今天」嘅毫秒計算 —— 嗰個係 `order-date-filter.ts` 嘅既有行為，
  *   由該檔自己嘅 `resolve` 提供，避免改動訂單頁既有邊界語義（跨午夜 off-by-one 已修過）。
  *
+ * ## ⚠️ 2026-09-19 第二個收口點：「呢張單算邊日」
+ *
+ * 本檔統一嘅係**範圍形狀**（起訖點點計）。但仲有一半問題係**訂單用邊個欄位對範圍** ——
+ * 呢層由 `src/lib/pos/order-event-time.ts` 嘅 `orderEventInstant()` 統一。
+ *
+ * 實案：訂單頁讀 `createdAt`（下單）、報表讀 `updatedAt`（結帳）。同一張 38 元單
+ * 兩邊都通過「今天」篩選 ⇒ 報表多算一張（10 單 512 而非 9 單 474）。
+ *
+ * 兩個 predicate（`orderMatchesReportRange` / `orderMatchesDateFilter`）現已一齊
+ * 委派去 `orderEventInstant()`。**新 predicate 一律用佢，唔准再直接讀
+ * `order.updatedAt` / `order.createdAt`。**
+ *
  * @see docs/113-agent-gotchas.md
  */
 

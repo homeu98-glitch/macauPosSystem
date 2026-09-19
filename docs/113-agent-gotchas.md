@@ -4,6 +4,82 @@
 > 由 AI 助手維護：發現新「坑」就加落對應章節；日誌見 `.workbuddy/memory/YYYY-MM-DD.md`。
 > 建立：2026-09-10（由 MEMORY.md 拆分）；內容涵蓋 2026-09-04 ～ 2026-09-10。
 
+## 🔴🔴 訂單「算邊日」＝ 全站唯一口徑 `orderEventInstant()`（2026-09-19 實案）
+
+**一句話：唔准再直接讀 `order.createdAt` 或 `order.updatedAt` 去判斷「呢張單屬唔屬於今日」。**
+
+### 實案（用戶原話：「為什麼實收金額合計錯的?」）
+
+報表顯示 **10 單 / 營業額 512 / 客單價 51**；當日**實際只有 9 單 / 474 / 52.67**。
+差額 38 元 ＝ **同一張單（`001`）被計咗兩次**。當日**零退款**（所以唔係退款扣錯）。
+
+### 根因：兩個唔同欄位做同一件事
+
+| 清單 | predicate | 讀嘅欄位 |
+|---|---|---|
+| 線上接單 / 店內線下訂單（`/orders`） | `orderMatchesDateFilter`（`ledger/order-date-filter.ts`） | **`createdAt`**（下單） |
+| 報表 / 交班 | `orderMatchesReportRange`（`ledger/report-period.ts`） | **`updatedAt`**（結帳） |
+
+單 `001`：下單 10:57 Macau、最後更新 11:17 Macau。兩個清單各自用唔同欄位篩「今天」，
+於是同一筆 38 元兩邊都收 ⇒ 報表多一張單。算術完全對得上：`474 + 38 = 512`、
+`512 ÷ 10 = 51`（真實 `474 ÷ 9 = 52.67`）。
+
+### ✅ 修法（2026-09-19 已落）
+
+唯一真源 `src/lib/pos/order-event-time.ts`：
+
+```
+orderEventInstant(order)   // → epoch ms，無法解析 = 0
+orderEventISO(order)       // → 原始字串（顯示用），無法解析 = ""
+```
+
+優先序 **`reopenedAt` → `originalSettledAt` → `updatedAt` → `createdAt`**。
+即係「**呢張單最後一次成為『生意』嗰刻**」，唔係下單嗰刻 —— 對帳要對「今日收到幾多錢」。
+一張 23:58 落單、00:02 結帳嘅單，屬於**第二日**營業額。
+
+兩個 predicate 已一齊委派去佢；`local-orders-panel.tsx` / `online-orders.tsx` 嘅
+**顯示**亦改讀 `orderEventISO()`（以往「顯示用 `updatedAt`、篩選用 `createdAt`」正是土壤）。
+
+### 🔴 鐵律
+
+1. 新 predicate／新列表**一律**用 `orderEventInstant()`，唔准自寫 `updatedAt || createdAt`。
+2. **顯示同篩選必須同一個欄位**。以往 `local-orders-panel.tsx` 顯示 `updatedAt`、
+   篩選 `createdAt`（`online-orders.tsx` 顯示 `createdAt`、篩選亦係 `createdAt`）
+   ⇒ 兩個面板對「同一張單幾點」講唔同故仔，商家點睇都覺得錯。
+3. ⚠️ `originalSettledAt` ＝ **首次結帳、永不改**，**唔可以**當「最後結帳時間」顯示。
+   要顯示「最後結帳」用 `reopenedAt ?? updatedAt`；要**分日歸屬**才用 `orderEventInstant`。
+4. ⚠️ **已知未統一**（今次刻意唔掂）：`7d` / `30d` 嘅**邊界算法**兩邊仍然唔同 ——
+   訂單頁用滾動毫秒窗口、報表用 Macau 日曆起訖。今次只統一「用邊個欄位」。
+   邊界算法差異喺跨午夜前後 ±8h 內可能令兩頁對「最近 7 天」有 1 張單落差。
+5. 🔴 `node --test` **唔認 extensionless import** ⇒ 本模組同其依賴鏈一律用
+   **相對路徑 + 顯式 `.ts`**（`from "./date-range.ts"`）。Next/Turbopack 兩者都收。
+
+### 驗證
+
+- `src/lib/pos/order-event-time.test.ts` —— 8 test（優先序／髒資料／非字串／迴歸）。
+- `src/lib/ledger/report-range-criterion.test.ts` —— 6 test，**核心係「兩個 predicate 對同一張單必須畀同一答案」**，
+  即「統一」嘅驗收條件；另含 09-19 實案（474 vs 512）算術迴歸。
+
+## 🔴 退款「靜默變淨額」：KPI 卡唔可以綁 `netRevenue`（2026-09-19 一併修）
+
+**症狀**：KPI 帶三大指標（營業額／客單價／毛利）用**毛**、應收用 `receivableTotal`、
+下面「訂單明細」逐行加總亦係**毛** —— 唯獨「實收金額合計」卡綁 `agg.netRevenue`（毛 − 退款）。
+一旦有退款，商家就會見到「實收 474 但營業額 512、明細加起又係 512」而**夾唔到數**。
+
+**仲衰嘅係**：退款摘要橫幅原本 `refundCount > 0` 才顯示 ⇒ **冇退款嗰日橫幅完全唔出**，
+用戶見到數字夾唔埋**零線索**（09-19 實案就係咁，我同用戶都一度誤判成「有 38 元退款」）。
+
+**✅ 修法**：
+1. 「實收金額合計」卡改綁 **`agg.paidTotal`（毛）** ⇒ 同「訂單明細加總」永遠一致。
+2. 退款橫幅**無條件顯示**（退款 0 就照寫 0），並補一行「毛實收 ＝ 實收金額合計」。
+3. 交班頁（`shift-page.tsx`）同一陷阱一併修：**大數本身已係毛**（唔會靜默變淨額），
+   但「淨實收」區塊同樣由 `refundCount > 0` 才出 → 已改無條件。
+   ⚠️ 交班嘅 `netPaidTotal = 毛實收 + 退款單未退部分`（**加**，因為退款單已被剔走），
+   同報表嘅 `netRevenue = revenue − refundTotal`（**減**）方向相反 —— 兩者定義唔同，睇清楚先改。
+
+**🔴 鐵律**：KPI 帶**固定 5 欄、格數必須係 5 嘅倍數** ⇒ 唔可以為退款另開卡片，
+只可以寫入既有格嘅 subtitle 或另開橫幅（2026-09-10 / 09-11 兩次中過）。
+
 ## 報表（`restaurant-daily-report.tsx`）
 - 收入認列 `isSaleCountable(o)`：只計 `settled`（線下）／帶 `onlineOrderId` 嘅 `paid`。有未結帳 → 琥珀提示 + KPI，**唔好改口徑**。
 - 菜品排行 key = `menuItemId|單內菜名`，金額用快照 `it.price`。尖峰 `combinedByHour = agg.byHour + onlineByHour`；線上單 cursor 分頁（PAGE=500/MAX=8），拒 `paymentStatus!=="paid"`。

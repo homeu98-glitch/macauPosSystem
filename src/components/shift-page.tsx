@@ -155,6 +155,27 @@ function shiftHistoryDayLabel(day: string): string {
  *    商家對數時想睇「今日做咗幾多生意、當中退咗幾多」——兩個數都要有。
  *    `netRevenue` / `netPaidTotal` 係新增欄位，原有 `revenue` / `paidTotal` 語義**不變**
  *    （仍然只計 `settled`），避免改動既有報表口徑。
+ *
+ * ## 🔴 2026-09-19：卡片大數維持「毛」＋ 淨額區塊改為無條件顯示
+ *
+ * 商家投訴「報表同交班夾唔到數」之後，兩頁一齊對齊口徑。本頁嘅處理：
+ *
+ * - **大數 `summary.paidTotal` 保持不變** —— 佢本身就係**毛**（只計 `settled`），
+ *   唔似報表頁嗰張卡綁咗 `netRevenue`。所以本頁**冇**「靜默變淨額」問題。
+ * - **「淨實收」區塊由 `refundCount > 0` 改為無條件顯示**：同報表頁
+ *   `restaurant-daily-report.tsx` 一致。冇退款嗰日照寫「毛實收 / ＋0 / 淨實收」，
+ *   令商家永遠睇得到口徑，唔需要靠「區塊有冇出」去推斷。
+ *
+ * ⚠️ **兩頁嘅「淨」定義方向相反，改嘅時候睇清楚**：
+ *   - 交班：`netPaidTotal = 毛實收 + 退款單未退部分`（**加**，因為退款單已被剔出 `paidTotal`）
+ *   - 報表：`netRevenue   = 毛營業額 − 退款總額`（**減**，因為營業額已含退款單全額）
+ *   兩者最終都等於「實際落袋」，但算式唔可以互抄。
+ *
+ * ## 🔴 2026-09-19：時間口徑已收口
+ *
+ * 本頁所有「今日」篩選一律用 `orderMatchesReportRange`，而佢已委派去
+ * `orderEventInstant()`（`pos/order-event-time.ts`）。
+ * 唔准再自己讀 `o.updatedAt` / `o.createdAt` —— 詳見 docs/113 開頭嗰節。
  */
 function summarizeClosedOrders(orders: PosOrder[]) {
   const closedOrders = orders.filter((order) => order.status === "settled");
@@ -1698,22 +1719,30 @@ export function ShiftPage() {
                     僅線下 POS：優惠後實際收到 = order.total（已含現金／Mpay／會員餘額）
                   </div>
                   {/* 🔴 2026-09-17 淨額口徑：舊寫法退款單整張唔計 → 部分退嘅未退部分蒸發。
-                      呢度明確列出「＋退款單未退部分 = 淨實收」，令商家對得上實際落袋金額。 */}
-                  {summary.refundCount > 0 ? (
-                    <div className="mt-2 rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-xs text-emerald-900">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span>退款單未退部分</span>
-                        <span className="font-semibold">＋{formatMoney(summary.refundedRemainder)}</span>
-                      </div>
-                      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-emerald-200 pt-1">
-                        <span className="font-semibold">淨實收（落袋）</span>
-                        <span className="text-base font-semibold">{formatMoney(summary.netPaidTotal)}</span>
-                      </div>
-                      <div className="mt-1 text-[11px] text-emerald-700">
-                        ＝已結帳單實收 − 退款總額 {formatMoney(summary.refundAmount)}
-                      </div>
+                      呢度明確列出「＋退款單未退部分 = 淨實收」，令商家對得上實際落袋金額。
+                      ⚠️ 2026-09-19 改為**無條件顯示**（同報表頁 `restaurant-daily-report.tsx` 對齊）：
+                      原本 `refundCount > 0` 才出 ⇒ 冇退款嗰日商家見到「實收」同其他數字夾唔埋時
+                      **冇任何線索**。依家退款 0 就照寫 0，口徑永遠在場。
+                      注意上面大數 `summary.paidTotal` **本身就係毛**（唔係淨），所以卡片數唔會靜默變淨額。 */}
+                  <div className="mt-2 rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-xs text-emerald-900">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span>毛實收（已結帳單）</span>
+                      <span className="font-semibold">{formatMoney(summary.paidTotal)}</span>
                     </div>
-                  ) : null}
+                    <div className="mt-1 flex items-baseline justify-between gap-2">
+                      <span>退款單未退部分</span>
+                      <span className="font-semibold">＋{formatMoney(summary.refundedRemainder)}</span>
+                    </div>
+                    <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-emerald-200 pt-1">
+                      <span className="font-semibold">淨實收（落袋）</span>
+                      <span className="text-base font-semibold">{formatMoney(summary.netPaidTotal)}</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-emerald-700">
+                      {summary.refundCount > 0
+                        ? `＝已結帳單實收 − 退款總額 ${formatMoney(summary.refundAmount)}`
+                        : "本班次沒有退款單，所以「淨實收」＝「毛實收」。"}
+                    </div>
+                  </div>
                 </article>
                 <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
                   <div className="text-sm text-orange-700">線上線下合計（實收）</div>

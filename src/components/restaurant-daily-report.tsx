@@ -2410,16 +2410,19 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       （否則尾行殘缺；2026-09-10 / 09-11 兩次中過）。所以將「退款 / 淨額」
                       拆解寫入呢格嘅 subtitle，**格數維持 10 格不變**。
                       商家要嘅「淨額」同時喺下面「訂單明細」上方嘅退款摘要區有完整呈現。 */}
+                  {/* 🔴 2026-09-19 口徑修正（商家對數一致性）：
+                      卡片價值**改綁毛實收 `agg.paidTotal`**，唔再綁 `agg.netRevenue`。
+                      成因：三大指標本身就係毛口徑 —— 營業額／客單價／毛利用 `agg.revenue`、
+                      應收用 `agg.receivableTotal`、下面「訂單明細」逐行加總亦係毛。
+                      唯獨呢張卡綁淨額 ⇒ 一旦有退款，「實收 vs 明細」就夾唔到數，
+                      而退款橫幅又係 `refundCount > 0` 才出 ⇒ **冇橫幅時靜默變淨額、零提示**。
+                      依家：卡 = 毛（同明細加總一致）；淨額同退款拆解一律喺下面橫幅交代。 */}
                   <Kpi
                     label="實收金額合計"
-                    value={<Money amount={agg.netRevenue} />}
+                    value={<Money amount={agg.paidTotal} />}
                     delta={null}
                     highlight={agg.refundTotal > 0}
-                    subtitle={
-                      agg.refundCount > 0
-                        ? `淨額＝毛實收 ${formatMoney(agg.paidTotal)} − 退款 ${formatMoney(agg.refundTotal)}（${agg.refundCount} 張退款單）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`
-                        : `優惠後實際收到（＝訂單明細加總）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`
-                    }
+                    subtitle={`優惠後實際收到（＝訂單明細加總）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
                   />
                   <Kpi
                     label="訂單數"
@@ -2544,35 +2547,51 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 </div>
             </>
 
-            {/* 🔴 2026-09-17 退貨修復（口徑 D）：退款摘要條。
+            {/* 🔴 2026-09-17 退貨修復（口徑 D）；2026-09-19 **改為無條件顯示**。
                 KPI 帶係固定 5 欄，唔可以為咗退款另開卡片（格數會唔係 5 嘅倍數）。
-                所以退款拆解獨立成呢條橫幅 —— 只有真係有退款先顯示，
-                令「毛 / 淨」兩個數同時在場（商家對數要睇「做幾多生意、退幾多」）。
+                所以退款拆解獨立成呢條橫幅。
+
+                ⚠️ 2026-09-19 改動理由（實案）：原本係 `refundCount > 0` 才顯示。
+                冇退款嗰日，橫幅完全唔出 ⇒ 用戶見到「實收 474」但營業額 512，
+                **冇任何線索**知道差額係乜（實際係另一條 bug：重複計單）。
+                ⇒ 依家永遠顯示「毛 / − 退款 / ＝ 淨額」兩三行，退款 0 就照寫 0。
+                商家唔需要再靠「橫幅有冇出」去推斷口徑。
+
                 ⚠️ 口徑必須同交班頁（`shift-page.tsx` 淨實收）一致：兩頁夾唔到數 = 原本嘅投訴。 */}
-            {agg.refundCount > 0 ? (
-              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
-                  <span className="font-semibold text-amber-900">
-                    退款拆解（{agg.refundCount} 張退款單）
-                  </span>
-                  <span className="text-amber-800">
-                    營業額（毛）
-                    <span className="ml-1 font-semibold">{formatMoney(agg.revenue)}</span>
-                  </span>
-                  <span className="text-amber-800">
-                    − 退款總額
-                    <span className="ml-1 font-semibold">{formatMoney(agg.refundTotal)}</span>
-                  </span>
-                  <span className="text-amber-900">
-                    ＝ 淨營業額（落袋）
-                    <span className="ml-1 text-base font-bold">{formatMoney(agg.netRevenue)}</span>
-                  </span>
-                </div>
-                <div className="mt-1 text-[11px] text-amber-700">
-                  ⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。
-                </div>
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                <span className="font-semibold text-amber-900">
+                  {agg.refundCount > 0 ? `退款拆解（${agg.refundCount} 張退款單）` : "退款拆解（本期間無退款）"}
+                </span>
+                <span className="text-amber-800">
+                  營業額（毛）
+                  <span className="ml-1 font-semibold">{formatMoney(agg.revenue)}</span>
+                </span>
+                <span className="text-amber-800">
+                  − 退款總額
+                  <span className="ml-1 font-semibold">{formatMoney(agg.refundTotal)}</span>
+                </span>
+                <span className="text-amber-900">
+                  ＝ 淨營業額（落袋）
+                  <span className="ml-1 text-base font-bold">{formatMoney(agg.netRevenue)}</span>
+                </span>
               </div>
-            ) : null}
+              <div className="mt-1 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                <span className="text-amber-800">
+                  毛實收（＝訂單明細加總）
+                  <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
+                </span>
+                <span className="text-amber-900">
+                  ＝ 實收金額合計（上面卡片）
+                  <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
+                </span>
+              </div>
+              <div className="mt-1 text-[11px] text-amber-700">
+                {agg.refundCount > 0
+                  ? "⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
+                  : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
+              </div>
+            </div>
 
             {/*
               訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。

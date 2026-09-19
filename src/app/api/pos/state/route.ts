@@ -77,14 +77,19 @@ export async function GET(request: Request) {
   // 報表分頁時只需要訂單，跳過 queue/printJobs/deviceConfig 查詢，省時省流量。
   const ordersOnly = searchParams.get("ordersOnly") === "1";
 
-  // 報表區間過濾：只回傳 created_at **或** updated_at 落在 [start, end] 內嘅訂單（OR 語義）。
-  // OR 係 client 端 orderMatchesReportRange（`updatedAt || createdAt` 計數口徑）嘅超集，
-  // 涵蓋「區間內開單」同「區間內結帳/更新」兩種情況，亦涵蓋 NULL updated_at 嘅 legacy row。
+  // 報表區間過濾：只回傳 created_at **或** updated_at **或** reopened_at 落在 [start, end]
+  // 內嘅訂單（OR 語義）。
+  // OR 係 client 端 orderMatchesReportRange（2026-09-19 起改用 `orderEventInstant()`：
+  // `reopenedAt → originalSettledAt → updatedAt → createdAt`）嘅超集，涵蓋
+  // 「區間內開單」「區間內結帳/更新」「區間內返結重結」三種情況，
+  // 亦涵蓋 NULL updated_at 嘅 legacy row。
   // 問題 6（2026-09-06 修）：
   // - start / end 一律轉 UTC ISO（`...Z`）——避開 PostgREST 對 `+08:00` offset 值嘅解析歧義。
-  // - 過濾改用 fetchOrdersInRange() 兩腿合併（見 src/lib/pos-orders-range.ts），
+  // - 過濾改用 fetchOrdersInRange() 三腿合併（見 src/lib/pos-orders-range.ts），
   //   唔再用 `.or()` nested 語法（2026-09-04 引入，無長期生產驗證），
   //   亦唔會好似中間版本嘅 AND chain 咁漏「昨日開單、今日結帳」嘅單。
+  // 🔴 2026-09-19：加 `reopened_at` 腿 —— 返結唔一定刷新 `updated_at`，
+  //   兩腿版本會令「昨日開、今日返結」嘅單靜默消失（報表少錢）。
   const rangeStartRaw = searchParams.get("start")?.trim() || null;
   const rangeEndRaw = searchParams.get("end")?.trim() || null;
   const rangeStart = rangeStartRaw ? toUtcIso(rangeStartRaw) : null;

@@ -12,7 +12,8 @@
  * - `all` ＝ 無上限。
  */
 
-import { customRangeToISO, instantInRange, type CustomDateRange, type DateRangeSelection } from "./date-range";
+import { customRangeToISO, instantInRange, type CustomDateRange, type DateRangeSelection } from "./date-range.ts";
+import { orderEventInstant } from "../pos/order-event-time.ts";
 
 export type LedgerOrderDateFilterKey = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
 
@@ -43,36 +44,49 @@ function splitArg(arg: DateFilterArg): { key: LedgerOrderDateFilterKey; custom: 
   return { key: arg.key, custom: arg.custom ?? null };
 }
 
+/**
+ * 🔴 2026-09-19：時間欄位已收口去 `orderEventInstant()`（`pos/order-event-time.ts`）。
+ *
+ * **改咗嘅嘢**：以往讀 `order.createdAt`（下單），而報表讀 `updatedAt`（結帳）——
+ * 同一張單兩個清單都通過「今天」篩選 ⇒ 報表多計一張（實案 10 單 512 vs 真實 9 單 474）。
+ * 依家兩邊都用 `orderEventInstant()`，所以對同一張單**永遠一致**。
+ *
+ * **冇改嘅嘢（刻意保留）**：各 key 嘅**邊界算法**維持原樣 —— `today` / `yesterday`
+ * 比 Macau 日曆日，`7d` / `30d` 用滾動毫秒窗口，`custom` 用 Macau 日曆起訖。
+ * ⚠️ 呢個同 `report-period.ts` 嘅 `7d` / `30d`（Macau 日曆起訖）**仍然唔同**，
+ * 屬已知差異，唔喺今次範圍內 —— 今次只統一「用邊個欄位」，唔統一「邊界點計」。
+ */
 export function orderMatchesDateFilter(
-  order: { createdAt?: string },
+  order: { createdAt?: string; updatedAt?: string; reopenedAt?: string; originalSettledAt?: string },
   filter: DateFilterArg,
   now = new Date(),
 ): boolean {
   const { key, custom } = splitArg(filter);
   if (key === "all") return true;
-  if (!order.createdAt) return false;
 
-  const created = new Date(order.createdAt);
-  if (Number.isNaN(created.getTime())) return false;
+  const eventMs = orderEventInstant(order);
+  if (eventMs <= 0) return false;
+
+  const event = new Date(eventMs);
 
   if (key === "custom") {
     if (!custom) return true; // 未揀區間 → 當「全部」（同 chip 未套用時一致）
-    return instantInRange(created, customRangeToISO(custom));
+    return instantInRange(event, customRangeToISO(custom));
   }
 
   if (key === "today") {
-    return macauDateKey(created) === macauDateKey(now);
+    return macauDateKey(event) === macauDateKey(now);
   }
 
   if (key === "yesterday") {
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    return macauDateKey(created) === macauDateKey(yesterday);
+    return macauDateKey(event) === macauDateKey(yesterday);
   }
 
   const days = key === "7d" ? 7 : 30;
   const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
-  return created.getTime() >= cutoff;
+  return eventMs >= cutoff;
 }
 
 /** Ledger RPC `p_limit` 上限為 100；較長區間多拉一些以減少漏單。 */

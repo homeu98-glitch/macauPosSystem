@@ -77,6 +77,7 @@ import {
   type LedgerOrderDateFilterKey,
 } from "@/lib/ledger/order-date-filter";
 import type { CustomDateRange } from "@/lib/ledger/date-range";
+import { orderEventISO } from "@/lib/pos/order-event-time";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
@@ -1375,7 +1376,7 @@ export function OnlineOrders({
                     </td>
                     <td className={TD_CELL}>
                       <div className="text-xs tabular-nums text-slate-400">
-                        {order.createdAt ? formatMacauDateTime(order.createdAt) : "--"}
+                        {orderEventISO(order) ? formatMacauDateTime(orderEventISO(order)) : "--"}
                       </div>
                       {scheduled ? (
                         <div className="mt-0.5 text-[11px] font-semibold">
