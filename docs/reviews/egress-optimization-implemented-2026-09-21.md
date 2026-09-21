@@ -129,6 +129,69 @@ Supabase log 記嘅係 **PostgREST** 嘅 URL，**唔會**出現我哋自己嘅 `
 
 ---
 
+## 0.3 ✅ per-event upsert 優化（2026-09-21 第二輪）
+
+### 問題（實測數據）
+
+`/api/pos/sync` 嘅 `pos_queue_events` upsert **寫喺 per-event loop 之內**：
+
+```
+:637   for (const rawEvent of events) {          ← 逐個事件
+:733       await supabase.from("pos_queue_events").upsert({ ...1 行... }, { onConflict: "id" });
+       }
+```
+
+⇒ **N 個事件 ＝ N 個 PostgREST POST**。實測（Supabase log）：該表 **POST 150 次／21 分鐘** ＝
+該表 212 次請求嘅 **70.8%**，係**全專案請求數第一位** —— 而 client 其實只發咗**一個** `/api/pos/sync`。
+
+### 改動
+
+| 檔案 | 改動 |
+|---|---|
+| `src/lib/pos/queue-event-batch.ts`（新，**零 import**） | `uniqueRowsById()`（後者勝）、`chunkRows()`、`flushQueueEventRows()`（**client 由參數注入** ⇒ 可用假 client 做行為測試） |
+| `src/app/api/pos/sync/route.ts` | loop 內只 `queueRows.push(...)`；loop **完之後**一次過去重 + 分批寫（`QUEUE_EVENTS_UPSERT_CHUNK = 100`） |
+| `src/lib/pos/queue-event-batch.test.ts`（新，20 條） | 核心斷言：**「25 個事件 → 只發 1 個 upsert 請求」**（舊版 25 個） |
+
+### 三個唔可以省嘅點（都有測試或註釋鎖住）
+
+1. 🔴 **一定要去重**：`onConflict: "id"` 之下同一批內重複 id → Postgres **21000**
+   （`cannot affect row a second time`）⇒ **整批一齊失敗**、**全部審計行靜默寫唔入**（只係 warning，唔會 throw）。
+   「後者勝」保持同舊版「逐個 upsert、後者覆蓋」一致。
+2. 🔴 **一定要 `await`**：Vercel function 一 return 就可能被凍結 ⇒ fire-and-forget 嘅 write 靜默消失。
+3. 失敗只 push `warnings`，**唔可以**入 `infraErrors`（否則成批回 500 → client 重推已成功嘅事件 = 假失敗）；
+   規則同舊版逐條 upsert 完全一致。語義亦保持：loop 內任何 `continue`（業務拒絕 / 跨店事件）一樣唔留審計行。
+
+### 驗證
+
+| 檢查 | 結果 |
+|---|---|
+| `tsc --noEmit` | **0 error** |
+| `node --test "src/**/*.test.ts"` | **912 passed / 0 failed**（892 ＋ 20 新） |
+| `tools/verify-pos-sync-route.cjs`（新工具） | **8/8** —— 驗證鏈次序不變（缺 storeId→400、201 事件→413、`events` 非 array→唔會 500、示範店代碼→400）、合法輸入→503（本機未配置，非 crash）、回應 keys 不變（`ok,error`）、批次／去重路徑冇 crash |
+| `tools/verify-pos-flows-live.cjs` | **17/17 ✅、有問題嘅頁面數 0** |
+| eslint | 0 新增問題 |
+
+⚠️ **本機無法測試 loop 內真正嘅 upsert**（要 Supabase service role）——
+route 喺 `getSupabaseWriteClient()` 為 null 時會 early return 503，唔會行到 loop。
+所以嗰部分由 20 條單測（含注入假 client 嘅行為測試）覆蓋。**部署後應該喺 Supabase log 見到
+`pos_queue_events` 嘅 `POST` 由「每個事件一次」變成「每批一次」。**
+
+### 流程測試副產品：工具誤報修正（重要）
+
+`verify-pos-flows-live.cjs` 一度把一個**既有** React 警告判成回歸：
+`Cannot update a component (%s) while rendering a different component (%s) … AppSidebar PosApp PosApp`
+—— 源自 `pos-app.tsx` 喺 `setOrders()` updater 內呼叫 `saveOrders()` → 同步 dispatch
+`pos-orders-changed` → `AppSidebar`(`useSyncHealth`) `setState`。
+
+- **係既有**：嗰段碼唔喺今次改動範圍內；而且只有喺 `/api/pos/state` 回 200
+  （本機 `POS_REQUIRE_DEVICE_AUTH=0`）先觸發，帶鑑權閘跑（回 401）時唔會出現。
+- **兩個教訓寫入工具**：① 加 `KNOWN_PREEXISTING` 清單，把既有問題**分開報告**（⚠️ 而非 ❌），
+  避免遮蓋真回歸；② 🔴 Chrome 嘅 console 文字係 **format string**，元件名喺訊息**尾部**做參數
+  —— pattern **唔可以**寫死 `AppSidebar`，否則永遠唔命中（我第一次就係咁誤報）。
+  ⚠️ 呢個 React 警告本身值得日後修（`setOrders` updater 內唔應該做 side effect），但**唔喺本批**。
+
+---
+
 ## 1. 🔴 你提供嘅 Supabase log CSV：完全證實診斷（附實測數字）
 
 樣本：`2026-09-21 03:34:16 → 04:00:38 UTC`（＝**澳門 11:34 → 12:00，午市高峰**），1,000 筆。

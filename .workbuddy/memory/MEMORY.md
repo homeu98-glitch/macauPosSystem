@@ -202,10 +202,13 @@
 - 🔴 改任何「週期常數」（刷新間隔／TTL）之後，**一定要 grep 用戶可見文案**：
   2026-09-21 就係改咗 `AUTO_REFRESH_INTERVAL_MS` 但報表標題仍然寫死「每 3 分鐘自動更新」。
   正解＝由常數推導（`Math.round(X / 60_000)`），唔好寫死。
-- 🔴 `pos_queue_events` upsert 係**逐事件**做嘅（`sync/route.ts:637` 個 `for` 之內、`:708` upsert）
-  ⇒ N 個事件 = **N 個 PostgREST POST**（client 其實只發 1 個 `/api/pos/sync`）。
-  實測見「同一秒 25 條 `POST /rest/v1/pos_queue_events?on_conflict=id`」。
-  修法＝改成**一次 array upsert**（`upsert(rows, {onConflict:"id"})`）⇒ N→1；屬非真源審計表，改建 safe。
+- 🔴 `pos_queue_events` upsert 曾係**逐事件**做（`sync/route.ts` 個 `for` 之內）⇒ N 事件 = N POST。
+  ✅ **2026-09-21 已修**：loop 內只收集，loop 完**先去重再分批**（`QUEUE_EVENTS_UPSERT_CHUNK=100`）
+  一次過寫 ⇒ 日常 N→**1**。實作／測試喺 `src/lib/pos/queue-event-batch.ts`（零 import、
+  client 由參數注入 ⇒ 可用假 client 測「25 事件 → 1 請求」）。
+  🔴 兩個死穴：① **一定要去重**（同批重複 id → Postgres **21000** → **整批**審計行靜默寫唔入）；
+  ② **一定要 `await`**（Vercel function return 後凍結，fire-and-forget write 會消失）。
+  失敗只 push `warnings`，**唔可以**入 `infraErrors`（否則成批回 500 → client 重推已成功事件）。
 - 🔴 **幻影欄位**：`pos_orders` 嘅 `refund_records`／`refunded_amount`／`voided_items` ——
   **44 條 migration 全部冇定義、全 codebase 冇任何寫入**（camelCase 版 `refundRecords` 等係 `PosOrder` 欄，
   但 server 從不寫入 snake_case 欄）。`sync/route.ts:575` 每次試 9 欄 → 42703 → fallback 6 欄

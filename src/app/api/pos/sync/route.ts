@@ -11,6 +11,10 @@ import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 import { totalItemQuantity, refundRecordCount } from "@/lib/pos/order-item-diff";
 import { addedItemsOfEventPayload, unwrapOrderEventPayload } from "@/lib/pos/sync-order-payload";
+import {
+  flushQueueEventRows,
+  type QueueEventsUpsertClient,
+} from "@/lib/pos/queue-event-batch";
 import type { OrderItem } from "@/lib/types";
 
 /**
@@ -55,6 +59,38 @@ const MAX_PARTY_SIZE = 999; // 對齊 0017 migration 嘅 CHECK 約束
 const STORE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 // 注意：唔好加 DEFAULT_STORE_ID fallback。缺 storeId 一定要大聲失敗（400），
 // 否則會靜默寫入假店（舊日嘅 "macau-store-a"），令雲端中繼配咗對但一張都印唔出。
+
+/**
+ * `pos_queue_events` 每批 upsert 嘅行數上限（2026-09-21 egress 優化）。
+ *
+ * 背景：舊版**逐個事件** upsert（N 個事件 ＝ N 個 PostgREST POST）。
+ * 實測 2026-09-21（Supabase log）：單一表 `pos_queue_events` 26 分鐘內 **150 次 POST**，
+ * 係整個專案請求數第一位，而 `/api/pos/sync` 由 client 睇其實只係**一個** HTTP 請求。
+ *
+ * 為咩要分 chunk，唔一次過塞最多 200 行：
+ *   ① `payload` 係完整訂單快照（≈1.7 KB／行），200 行可以到 ~340 KB；分 100 行一批
+ *      令每個 body 保持細（~170 KB），對 PostgREST 嘅 body 上限留足餘量。
+ *   ② `onConflict: "id"` 之下，同一批內**重複 id** 會觸發 Postgres 21000
+ *      （cannot affect row a second time）→ 會令整批失敗。所以寫入前一定要先去重
+ *      （見下面 `queueRowsById`）。
+ */
+const QUEUE_EVENTS_UPSERT_CHUNK = 100;
+
+/**
+ * `pos_queue_events` 一批審計行嘅形狀（`payload` 直落 JSONB，所以係 unknown）。
+ *
+ * ⚠️ `entity_id` / `status` 保留 `| null`：`text()` 對非字串輸入會回 `null`，
+ * 而舊版逐條 upsert 就係直接寫呢個值 —— 型別要忠實反映，否則就係偷偷改咗行為。
+ */
+type QueueEventRow = {
+  id: string;
+  type: string;
+  entity_id: string | null;
+  payload: Record<string, unknown>;
+  status: string | null;
+  created_at: string;
+  store_id: string | null;
+};
 
 const VALID_EVENT_TYPES = new Set([
   "ORDER_CREATED",
@@ -633,6 +669,15 @@ export async function POST(request: Request) {
   };
   /** 按事件回執（方案 C）：正常路徑喺每次 iteration 尾 push。 */
   const results: EventAck[] = [];
+  /**
+   * 待寫入 `pos_queue_events` 嘅審計行（2026-09-21 egress 優化）。
+   *
+   * 收集成 array，loop 完之後**先去重再分批**一次過寫（見 loop 後嘅收尾）。
+   * 🔴 去重唔可以省：`onConflict: "id"` 之下同一批內有重複 id，
+   * Postgres 會回 21000（`cannot affect row a second time`）⇒ **整批一齊失敗**。
+   * 去重／分批嘅實作同測試喺 `@/lib/pos/queue-event-batch`。
+   */
+  const queueRows: QueueEventRow[] = [];
 
   for (const rawEvent of events) {
     if (typeof rawEvent !== "object" || rawEvent === null) {
@@ -705,28 +750,21 @@ export async function POST(request: Request) {
       ? event.payload
       : {}) as Record<string, unknown>;
 
-    const { error: qErr } = await supabase.from("pos_queue_events").upsert(
-      {
-        id: eventId,
-        type: eventType,
-        entity_id: text(event.entityId, MAX_ID_LEN),
-        payload: eventPayload,
-        status: text(event.status, 64),
-        created_at: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
-        // 🛡️ 跨店隔離：queue 行記錄事件歸屬店（/api/pos/state 按呢欄過濾派發）。
-        // 上面已驗證 eventStoreId === storeId（或 null legacy）→ 直接落 eventStoreId。
-        store_id: eventStoreId,
-      },
-      { onConflict: "id" },
-    );
-    if (qErr) {
-      // ⚠️ 只記 warning，**唔**令成批回 500：審計表寫入失敗唔代表訂單冇寫入成功。
-      // 舊版呢度 push 入 errors → 回應 500 → client 當失敗重推已成功嘅事件（假失敗）。
-      // `pos_queue_events` 唔係業務真源（`/api/pos/state` 直接讀 `pos_orders`），
-      // 所以降級 + 留 server log 排查就夠。
-      console.error("[pos/sync] queue_events upsert failed（降級為 warning）:", qErr.message);
-      warnings.push(`queue_events 寫入失敗：${qErr.message}`);
-    }
+    // 🔴 2026-09-21 egress 優化：**唔再逐個事件 upsert**（N 個事件 ＝ N 個 PostgREST POST），
+    //    改為收集入 `queueRows`，等 loop 完咗一次過去重 + 分批寫（見 loop 後嘅收尾）。
+    //    實測：呢個表曾經係全專案請求數第一位（26 分鐘 150 次 POST），
+    //    而 client 其實只發咗一個 `/api/pos/sync` 請求。
+    queueRows.push({
+      id: eventId,
+      type: eventType,
+      entity_id: text(event.entityId, MAX_ID_LEN),
+      payload: eventPayload,
+      status: text(event.status, 64),
+      created_at: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
+      // 🛡️ 跨店隔離：queue 行記錄事件歸屬店（/api/pos/state 按呢欄過濾派發）。
+      // 上面已驗證 eventStoreId === storeId（或 null legacy）→ 直接落 eventStoreId。
+      store_id: eventStoreId,
+    });
 
     if (eventType === "ORDER_CREATED" || eventType === "ORDER_UPDATED") {
       /**
@@ -1576,6 +1614,48 @@ export async function POST(request: Request) {
     // 冇明確下場嘅事件（ORDER_ITEM_VOIDED no-op、DEVICE_CONFIG_UPDATED、
     // TEST_PRINT_REQUESTED、缺 id 嘅 print job 等）：事件已記入 pos_queue_events，當 ok。
     ack(true);
+  }
+
+  // ── 收尾：一次過寫 pos_queue_events（2026-09-21 egress 優化）──
+  //
+  // 舊版係「每個事件一個 upsert」⇒ N 個事件 ＝ N 個 PostgREST POST
+  //（實測 2026-09-21：該表 26 分鐘內 150 次 POST，係全專案請求數第一位，
+  //  而 client 其實只發咗**一個** `/api/pos/sync` 請求）。
+  // 改成分批寫（每批 ≤ QUEUE_EVENTS_UPSERT_CHUNK 行）⇒ 常見情況（一批 flush 幾個事件）
+  // 由 N 次變 **1 次**。
+  //
+  // ⚠️ 一定要 `await`：Vercel function 一 return 就可能被凍結，
+  //    fire-and-forget 嘅 write 會靜默消失（同「送唔出嘅 outbox」同一型問題）。
+  // ⚠️ 失敗只記 warning，**唔** push 入 `infraErrors`（即唔可以令成批回 500）：
+  //    `pos_queue_events` 唔係業務真源（`/api/pos/state` 直接讀 `pos_orders`），
+  //    而 500 會令 client 重推已經成功寫入嘅事件（假失敗）。
+  //    呢條規則同舊版逐條 upsert 完全一致，唔可以改。
+  // ⚠️ 一定要喺 loop **之後**：loop 內任何 `continue`（業務拒絕 / 跨店事件）都唔應該
+  //    留下審計行 —— 舊版都係「過咗驗證先寫」，呢度保留同一語義。
+  if (queueRows.length > 0) {
+    // 去重（同一批內重複 id 會令 ON CONFLICT 報 21000 → 整批失敗）＋ 分批（控 body 大小）
+    // 兩件事都收喺 `flushQueueEventRows()`（純邏輯、零 import、有單測）。
+    const flush = await flushQueueEventRows({
+      // supabase-js 嘅 upsert 係多載 + 巨型泛型，同我哋嘅最小結構型別對唔上
+      // ⇒ 呢度做一次**純型別層面**嘅 assertion（runtime 完全一樣）。
+      client: supabase as unknown as QueueEventsUpsertClient<QueueEventRow>,
+      rows: queueRows,
+      chunkSize: QUEUE_EVENTS_UPSERT_CHUNK,
+      onError: ({ message, batchSize }) => {
+        console.error(
+          `[pos/sync] queue_events 批次 upsert 失敗（${batchSize} 行，降級為 warning）:`,
+          message,
+        );
+        warnings.push(`queue_events 寫入失敗：${message}`);
+      },
+    });
+    if (process.env.NODE_ENV !== "production") {
+      // 診斷用：確認「N 個事件 → 去重後幾多行 → 幾個請求」（優化前係 N 個請求）。
+      console.log(
+        `[pos/sync] queue_events：${queueRows.length} 個事件 → 去重後 ${flush.requested} 行，` +
+          `${flush.batches} 個請求${flush.error ? `（失敗：${flush.error}）` : ""}`,
+      );
+    }
   }
 
   // ── 回應（方案 C）：永遠帶按事件 results。狀態碼按**失敗性質**分流 ──

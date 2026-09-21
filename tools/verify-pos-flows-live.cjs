@@ -44,12 +44,40 @@ const ROUTES = [
 /** 呢啲文字出現 = 卡死（唔應該喺任何頁面見到）。 */
 const STUCK_MARKERS = ["正在載入頁面…", "正在載入門店設定…", "Application error"];
 
+/**
+ * 已知嘅**既有**問題（唔係回歸）—— 單獨報告，唔會判成 ❌。
+ *
+ * 收錄條件：① 喺改動之前已經存在；② 唔喺今次改動嘅檔案內；③ 唔影響功能。
+ * 每條都要寫明「為何已知」，否則呢個清單會變成遮蓋真回歸嘅工具。
+ */
+const KNOWN_PREEXISTING = [
+  {
+    // ⚠️ 唔可以用 `\(`AppSidebar`\)` 做 pattern：Chrome 嘅 console 文字係 format string，
+    //    收到嘅係 ``Cannot update a component (`%s`) while rendering a different component (`%s`)``
+    //    —— 元件名（AppSidebar / PosApp）喺訊息**尾部**做參數，唔會代入 %s。
+    //    （2026-09-21 實測：原本寫死元件名 → 判定永遠唔命中 → 誤報成回歸。）
+    pattern: /Cannot update a component \(.*\) while rendering a different component/i,
+    reason:
+      "React 警告：pos-app.tsx 喺 setOrders() updater 內呼叫 saveOrders() → 同步 dispatch " +
+      "pos-orders-changed → AppSidebar(useSyncHealth) setState。既有（2026-09-21 之前已在），" +
+      "且只喺 /api/pos/state 回 200（本機停用鑑權閘時）先會觸發。",
+  },
+];
+
 /** mock 模式下**預期**嘅網絡錯誤（唔算回歸）。 */
 function isExpectedNetworkNoise(text) {
   return (
     /Failed to fetch|net::ERR_|Load failed|503|401|AbortError|NetworkError/i.test(text) ||
     /socket|websocket|realtime/i.test(text)
   );
+}
+
+/** 命中「已知既有問題」清單？ */
+function knownPreExistingReason(text) {
+  for (const item of KNOWN_PREEXISTING) {
+    if (item.pattern.test(text)) return item.reason;
+  }
+  return null;
 }
 
 (async () => {
@@ -161,7 +189,13 @@ function isExpectedNetworkNoise(text) {
     await page.screenshot({ path: shot });
 
     const realErrors = pageErrors.filter((e) => !isExpectedNetworkNoise(e));
-    const realConsoleErrors = consoleErrors.filter((e) => !isExpectedNetworkNoise(e));
+    // 已知既有問題（唔計入回歸）／真嘅新 console.error（計入回歸）
+    const knownConsole = consoleErrors.filter(
+      (e) => !isExpectedNetworkNoise(e) && knownPreExistingReason(e),
+    );
+    const realConsoleErrors = consoleErrors.filter(
+      (e) => !isExpectedNetworkNoise(e) && !knownPreExistingReason(e),
+    );
 
     results.push({
       label: route.label,
@@ -174,6 +208,7 @@ function isExpectedNetworkNoise(text) {
       realErrors,
       consoleErrors: consoleErrors.length,
       realConsoleErrors,
+      knownConsole,
       head: info.head,
       navSample: info.navSample,
       shot,
@@ -185,13 +220,16 @@ function isExpectedNetworkNoise(text) {
   // ── 報告 ──
   console.log("================ 流程驗證結果 ================");
   let problems = 0;
+  const knownSeen = new Map();
   for (const r of results) {
     const bad = r.stuck.length > 0 || r.realErrors.length > 0 || r.realConsoleErrors.length > 0;
     if (bad) problems += 1;
+    for (const k of r.knownConsole) knownSeen.set(knownPreExistingReason(k), (knownSeen.get(knownPreExistingReason(k)) || 0) + 1);
     console.log(
       `${bad ? "❌" : "✅"} ${r.label.padEnd(22)} http=${String(r.status).padEnd(4)} 文字=${String(r.textLen).padStart(5)} pageError=${r.pageErrors} consoleErr=${r.consoleErrors}` +
         (r.gateClicked ? ` 過閘="${r.gateClicked}"` : "") +
-        (r.stuck.length ? ` 卡死標記=${JSON.stringify(r.stuck)}` : ""),
+        (r.stuck.length ? ` 卡死標記=${JSON.stringify(r.stuck)}` : "") +
+        (r.knownConsole.length ? ` ⚠️既有警告×${r.knownConsole.length}` : ""),
     );
     if (r.realErrors.length) console.log(`     🔴 真 pageerror：${r.realErrors.slice(0, 3).join(" ‖ ")}`);
     if (r.realConsoleErrors.length)
@@ -199,6 +237,10 @@ function isExpectedNetworkNoise(text) {
     console.log(`     開頭文字：${r.head.slice(0, 110)}`);
   }
   console.log(`\n有問題嘅頁面數：${problems} / ${results.length}`);
+  if (knownSeen.size > 0) {
+    console.log("\n⚠️ 命中「已知既有問題」清單（唔計回歸，但要知悉）：");
+    for (const [reason, n] of knownSeen) console.log(`   ×${n}  ${reason}`);
+  }
   console.log(`截圖目錄：${OUT}`);
 
   // 側欄文案（供人手核對導覽項）
