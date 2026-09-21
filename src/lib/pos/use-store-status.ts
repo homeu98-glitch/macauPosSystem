@@ -10,6 +10,7 @@ import {
 } from "@/lib/pos/store-status";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { getPosRealtimeConfig, getPosSupabaseClient } from "@/lib/pos/supabase-client";
+import { createSingleFlight } from "@/lib/pos/single-flight";
 
 /**
  * 「店內營業」開關 —— 收銀端狀態層（真源 = POS DB `pos_store_status`，migration 0039）。
@@ -99,8 +100,34 @@ function getServerSnapshot() {
   return INITIAL;
 }
 
+/**
+ * in-flight 去重（**single-flight**，2026-09-21 請求數優化）。
+ *
+ * ## 為咩要（實測）
+ *
+ * 開 `/pos` 一次過見到 **3 次 `GET /api/pos/store-status`**（同一秒）。
+ * 根因同 `use-merchant-order-config` 一樣：呢個係 module-level store，
+ * 但 `refresh()` 係喺**每個 mount 嘅 effect 內各自呼叫**，而 POS 主畫面有
+ * 多個 component 用 `useStoreStatus`（`online-open-pill`、`store-open-pill`、
+ * `use-store-open-toggle`…）⇒ N 個 mount ＝ N 個 GET。
+ *
+ * ## 為何零功能影響
+ *
+ * 同一個 `storeId`、同一刻嘅重複呼叫共用**同一個 promise** ⇒ 每個 mount 一樣等到
+ * 「同一次讀取嘅結果」（值完全相同）；唔涉及任何時間窗（唔係「X 秒內唔拉」）。
+ * 🔴 一定按 `storeId` 分開（切店唔可以餵錯）；失敗要 `.finally()` 清，
+ * 否則一次失敗會令之後所有呼叫共用同一個已失敗嘅 promise。
+ * 失敗行為不變：`fetchStoreStatus()` 本身 fail-open（回營業中、唔 throw），
+ * 而 `refresh()` 亦已經守住「讀唔到唔蓋走已知值」。
+ */
+const statusFlight = createSingleFlight<void>();
+
 /** 讀一次 server（唯一權威）。 */
-async function refresh(storeId: string) {
+function refresh(storeId: string): Promise<void> {
+  return statusFlight(storeId, () => runRefresh(storeId));
+}
+
+async function runRefresh(storeId: string) {
   const result = await fetchStoreStatus(storeId);
   setState({
     // ⚠️ 讀唔到（fromServer:false）**唔可以**蓋走已知值：維持「未讀到」或舊值，
@@ -110,6 +137,25 @@ async function refresh(storeId: string) {
     loading: false,
     error: null,
     source: "server",
+  });
+}
+
+/**
+ * 回到前景補拉用嘅**單一** listener（module-level，2026-09-21）。
+ *
+ * 原本每個 mount 各掛一個 ⇒ 一次返前景爆 N 次。收成一個之後值完全一樣，
+ * 只係唔再重複打；`activeStoreId` 為 null（refCount 0／未登入）時一樣 no-op。
+ * ⚠️ 刻意**唔加**時間窗（唔改變「幾時讀到新值」嘅語義）。
+ */
+let visibilityListenerInstalled = false;
+
+function ensureVisibilityListener() {
+  if (visibilityListenerInstalled || typeof document === "undefined") return;
+  visibilityListenerInstalled = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (!activeStoreId) return;
+    void refresh(activeStoreId);
   });
 }
 
@@ -248,16 +294,13 @@ export function useStoreStatus(storeId: string | null, enabled = true) {
     if (refCount === 1) subscribeRealtime(storeId);
 
     // 後備：由背景切返前景補拉一次（Ledger / 其他機改完冇推播時最多一秒內收斂）
-    function onVisibility() {
-      if (document.visibilityState === "visible" && activeStoreId) {
-        void refresh(activeStoreId);
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibility);
+    //
+    // 🔴 2026-09-21 請求數優化：改為**模組層單一 listener**（原本每個 mount 各掛一個，
+    //    ⇒ 一次返前景爆 N 次）。值完全一樣，只係唔再重複打。
+    ensureVisibilityListener();
 
     return () => {
       refCount -= 1;
-      document.removeEventListener("visibilitychange", onVisibility);
       if (refCount <= 0) {
         refCount = 0;
         activeStoreId = null;

@@ -255,6 +255,44 @@
     由 `src/lib/print-agent-server.test.ts`（source 掃描）守住：GET 路由唔可以出現 `recordActivity`。
     🔴 **一定要保留降級**：蓋章失敗**唔可以**當「驗證失敗」（驗證失敗回 401 ⇒ **APK 清配對、返配對畫面**！
     一次 UPDATE 鎖超時就會令收銀機要重新配對）⇒ update 失敗即退回純讀再驗一次。
+- ✅✅ **2026-09-21 egress 已崩塌到幾乎零（實測）**：Vercel log 15:56–16:35（38.8 分鐘）
+  **總 egress 0.45 MB**（之前 14:31–14:54 嘅 29.8 分鐘係 **92.47 MB**）⇒ **−99.6%**、
+  **每小時 0.7 MB** ⇒ 推算 **~6 MB／日**（原本 1.3~1.47 GB／日）。
+  · 全量拉取「無 skipQueue」103 → **0**；「有 skipQueue」10 → 1（424 KB，省 433 KB／次）。
+  · `queue GET limit=300` 35 → **1**；`ordersOnly+fields`（守護）45 KB／次（修前 ~7 MB）。
+  · `pos_print_agents` 由「70 GET ＋ 44 PATCH」變「**38 PATCH ＋ 3 GET**」（`f6471d5` 2A/2B 生效；
+    剩 3 GET 正正係 `device-config` GET ⇒ **「GET 唔寫入」守衛在生產環境確認**）。
+- 🔴 **現時最大請求來源（egress 唔再係問題，剩請求數）**：
+  ① **`print-agent/heartbeat` 每 32 秒**（73 次／38.8 min）② `online-order-settings` 每次頁面載入 **×5**（herd）
+  ③ `store-status` ×3 ④ `claim` 每 ~70 秒 ⑤ `pos/shift` 每 180 秒（關店都照拉）⑥ `topup/pending-count` 每 5 分鐘。
+  開 `/pos` 一次過 **14 個請求，其中 8 個係重複**（store-status ×3 ＋ online-order-settings ×5）
+  ⇒ 目標可減到 8（**−43%**）。
+- 🔴🔴 **`online-order-settings` herd 根因**：`use-merchant-order-config.ts` 係 module store，
+  但 `refreshMirror()`／`refreshFromLedger()`／`visibilitychange` listener **都係喺每個 mount 嘅 effect 內各自做**
+  ⇒ POS 主畫面有 4~5 個 component 用同一 hook ⇒ **5 個 mount ＝ 5 次**（切返前景同樣 5 次）。
+  正解＝**module 層 single-flight（共用 in-flight promise，按 storeId 分開）＋ 單一 listener**。
+  ⚠️ 六個 concern（切店要按 storeId／失敗要 `.finally` 清 inflight／唔可以加「X 秒內唔拉」時間窗
+  ——只做 same-tick 合併／`refreshFromLedger` 要一併收／保留「失敗靜默用 cache」語義／realtime 仍係真源）。
+  分析全文：`docs/reviews/page-load-calls-and-herd-2026-09-21.md`。
+- ✅ **2026-09-21 第三批已做（herd 合併）**：新檔 `src/lib/pos/single-flight.ts`（零 import、10 條單測）
+  —— `createSingleFlight<T>()` 令「同 key 同刻」嘅呼叫共用一個 promise。
+  `use-merchant-order-config`（`refreshFromLedger`/`refreshMirror`）＋ `use-store-status`（`refresh`）
+  各自包一層，並把 `visibilitychange` 由「每個 mount 各掛一個」改成**模組層單一 listener**。
+  真瀏覽器實測（`tools/verify-pos-request-count.cjs`）：`online-order-settings` 開頁 **5 → 1**、
+  切返前景 **5 → +1**；`store-status` 開頁 **3 → 1**、切返前景 **3 → +1**。
+  🔴🔴 **零功能影響嘅關鍵**：① 只合併「同一個 store、同一刻」嘅並發（值一樣、時機一樣）；
+  ② **刻意唔加時間窗**（「X 秒內唔拉」會改變「幾時讀到新值」嘅語義）；
+  ③ setState／cache／refCount／realtime 邏輯一行都冇改。
+  驗證：tsc 0、**939 tests 全綠**、17 路由 0 問題、API 契約 12/12。
+- ⏸️ **#3/#4/#5 刻意未做（都有明確功能影響，唔符合「零功能影響才改」）**：
+  · `topup/pending-count` 改按需 → **側欄紅點唔再自動更新**（且 1.2/min 多數係用家切 tab 觸發，收效低）
+  · `pos/shift` 關店唔拉 → **跨機班次對齊延遲 ⇒ 開工閘延遲解鎖**（真人會有感）
+  · `kiosk-settings` 延後 → 佢其實**唔係開頁觸發**（係「入工作台」時 apply），延後會令掃碼/kiosk 設定唔同步
+- ✅ heartbeat 回應已加 `nextPollMs: 60_000`（**預備接口**）。🔴 **已查證 APK 源碼**
+  （`_ref-macau-ledger-merchant`）：`RelayApi.kt` 用 `org.json` 嘅 `optBoolean`/`optString`
+  —— **會忽略未知欄位**（唔似 kotlinx.serialization 會 throw）⇒ 加欄位對現役 APK 零影響；
+  `PosJobRunner.kt` 有 `const val HEARTBEAT_MS = 30_000L`（實測 32 秒）。
+  ⚠️ APK 未讀之前呢個欄位**惰性**（唔會省請求）；真正省要 APK 改成讀 `nextPollMs`。
 - 🔴 **心跳頻率硬約束**：`last_seen_at` **只用於顯示**（全 repo 只有 print-center 讀、冇 server 邏輯靠佢撤銷），
   但 `print-center.tsx:1789` 寫死 **`minutesAgo >= 5` 就標「疑似離線」**
   ⇒ **心跳放慢上限 2~3 分鐘**；要 5 分鐘以上必須同時改呢個 UI 閾值。

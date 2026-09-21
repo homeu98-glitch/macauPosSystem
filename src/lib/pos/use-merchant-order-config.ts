@@ -11,6 +11,7 @@ import {
 import { UNKNOWN_ORDER_CONFIG } from "@/lib/ledger/order-config-parse";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { getPosRealtimeConfig, getPosSupabaseClient } from "@/lib/pos/supabase-client";
+import { createSingleFlight } from "@/lib/pos/single-flight";
 import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
 
 /**
@@ -174,8 +175,71 @@ function hydrateFromCache() {
   }
 }
 
+/**
+ * in-flight 去重（**single-flight**，2026-09-21 請求數優化）。
+ *
+ * ## 為咩要（實測）
+ *
+ * Supabase log 實測：`pos_online_order_settings` 喺**同一秒**出現 **4~5 次**：
+ * `23:06 ×4`、`35:29 ×5`、`36:42 ×1`、`36:43 ×3`。
+ * 根因：呢個檔係 module-level store（一份 state），但 `refreshMirror()` /
+ * `refreshFromLedger()` **係喺每個 mount 嘅 effect 內各自呼叫** ——
+ * 而 POS 主畫面同時有 4~5 個 component 用同一個 hook
+ *（`pos-app`、`store-open-pill`、`online-open-pill`、`quick-mode-orders-bar`、
+ *  `merchant-order-config-section`）⇒ **5 個 mount ＝ 5 個 GET**。
+ *
+ * ## 為何呢個改動係**零功能影響**
+ *
+ * · 同一個 `storeId`、同一刻嘅重複呼叫 → 只發**一個**請求，**所有人共用同一個 promise**
+ *   ⇒ 每個 mount 一樣會等到「同一次讀取嘅結果」（值本身完全相同）。
+ * · 唔涉及任何「時間窗」（唔係「X 秒內唔拉」）—— **只合併同刻並發**，
+ *   所以唔會改變「幾時會讀到新值」嘅語義。
+ * · 🔴 一定要**按 storeId 分開**：切店時舊 promise 唔可以餵落新店
+ *   ⇒ key 用 `storeId`，唔匹配就開新 flight。
+ * · 🔴 失敗一定要喺 `.finally()` 清走，否則一次失敗會令之後所有呼叫
+ *   共用同一個**已失敗**嘅 promise（永遠拿唔到值）。
+ * · 失敗之後嘅行為不變：`refreshFromLedger` 內部仍然係「讀唔到就靜靜用快取」。
+ */
+const ledgerFlight = createSingleFlight<void>();
+const mirrorFlight = createSingleFlight<void>();
+
+/**
+ * 回到前景補拉用嘅**單一** listener（module-level，2026-09-21 請求數優化）。
+ *
+ * ## 為何唔可以每個 mount 各掛一個
+ *
+ * 原本寫法係喺 `useMerchantOrderConfig` 嘅 effect 內 `document.addEventListener(...)`，
+ * 而 POS 主畫面有 4~5 個 component 用同一個 hook ⇒ **一次切返前景會發 4~5 次**
+ * `refreshFromLedger()` ＋ 4~5 次 `refreshMirror()`（實測 Supabase 同一秒 4~5 次）。
+ *
+ * ## 為何零功能影響
+ *
+ * 原本 N 個 listener 各自做「同一件事、同一個 store」；收成一個之後
+ * **結果完全一樣**（值相同），只係做少幾次重複請求。
+ * `refCount === 0`（全部卸載）或 `activeStoreId` 為 null（未登入）時一樣 no-op。
+ *
+ * ⚠️ 刻意**唔加**「X 秒內唔拉」嘅時間窗 —— 嗰樣會改變「幾時讀到新值」嘅語義。
+ */
+let visibilityListenerInstalled = false;
+
+function ensureVisibilityListener() {
+  if (visibilityListenerInstalled || typeof document === "undefined") return;
+  visibilityListenerInstalled = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const store = activeStoreId;
+    if (!store) return; // refCount 0 / 未登入 → no-op（同原本一樣）
+    void refreshFromLedger(store);
+    void refreshMirror(store);
+  });
+}
+
 /** 讀 Ledger（權威）。 */
 async function refreshFromLedger(storeId: string) {
+  return ledgerFlight(storeId, () => runRefreshFromLedger(storeId));
+}
+
+async function runRefreshFromLedger(storeId: string) {
   const result = await getMerchantOrderConfig(storeId);
 
   if (result.ok) {
@@ -202,6 +266,10 @@ async function refreshFromLedger(storeId: string) {
  * （鏡像可能係幾日前寫落嘅舊值）。
  */
 async function refreshMirror(storeId: string) {
+  return mirrorFlight(storeId, () => runRefreshMirror(storeId));
+}
+
+async function runRefreshMirror(storeId: string) {
   try {
     const response = await fetch(
       `/api/online-order-settings?storeId=${encodeURIComponent(storeId)}`,
@@ -403,17 +471,14 @@ export function useMerchantOrderConfig(storeId: string | null, enabled = true) {
     // 後備：由背景切返前景時補拉一次。唔係 polling —— 淨係用家真係返嚟嗰陣先 call。
     // 點解要：Ledger 側（Ledger Web / 另一部 Android）改咗 merchant_enabled 冇任何推播，
     // 呢條保證收銀返嚟之後最多一秒內見到正確狀態。
-    function onVisibility() {
-      if (document.visibilityState === "visible" && activeStoreId) {
-        void refreshFromLedger(activeStoreId);
-        void refreshMirror(activeStoreId);
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibility);
+    //
+    // 🔴 2026-09-21 請求數優化：改為**模組層單一 listener**（原本係每個 mount 各掛一個，
+    //    而 POS 主畫面有 4~5 個 component 用同一個 hook ⇒ 一次返前景爆 4~5 次 ×2 個請求）。
+    //    值完全一樣，只係唔再重複打；`activeStoreId` 為 null 時一樣 no-op。
+    ensureVisibilityListener();
 
     return () => {
       refCount -= 1;
-      document.removeEventListener("visibilitychange", onVisibility);
       if (refCount <= 0) {
         refCount = 0;
         activeStoreId = null;
