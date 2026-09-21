@@ -84,6 +84,51 @@ GET /api/pos/state?storeId=66123456&ordersOnly=1                     401 ← A6 
 
 ---
 
+## 0.2 ✅ 上線後實測驗收（2026-09-21，商家提供 Supabase log）
+
+部署：commit `9d8e1d5` → Vercel Production 13:14（澳門）。Migration 0036／0042／0043／0044／0045／0046 已跑。
+
+樣本：BEFORE ＝ 12:00（26.4 分鐘）／AFTER ＝ 13:22:50–13:43:32（20.7 分鐘）。
+工具：`tools/compare-egress-logs.cjs`（已換算成「每小時次數」以抵銷窗口長度差異）。
+
+| 指標 | BEFORE | AFTER | 判定 |
+|---|---|---|---|
+| 守護全店拉取（`limit=5000` 三腿） | 10 次 | **0 次** | ✅ **完全消失** |
+| 全量 state 訂單（`limit=200` 三腿） | 44 次 | **0 次** | ✅ 被 RPC 取代 |
+| 報表分頁（`limit=2000` 三腿） | 2 次 | **0 次** | ✅ |
+| **`POST /rest/v1/rpc/pos_orders_page`** | 0 | **65 次** | ✅ **RPC 生效、1 次取代 3 次** |
+| `pos_orders` 總請求 | 218（21.8%） | 95（9.5%） | ✅ −56%（而 AFTER 窗口其實更忙） |
+| `online_order_settings` legacy 4 欄重試 | 55 次 | 23 次（13:34 後歸零） | ✅ 同 0036 一致 |
+| `queue GET limit=300`（白拉） | 44 次 | 60 次（集中 13:22–13:27） | ⚠️ 見下 |
+
+**線上 bundle 版本標記 4/4 命中**（`tools/verify-deployed-bundle.cjs`，經 `/pos` 路由列舉 chunk）：
+`skipQueue=1`、`ordersOnly=1`、`分鐘自動更新` ⇒ **部署嘅客戶端程式碼正確**。
+
+### ⚠️ 唯一未閉環：`queue GET limit=300` 60 次
+
+- 全部集中喺 **13:22–13:27（6 分鐘、約 11 次/分鐘）**，**13:28 之後完全歸零**；
+- 同期 `pos_orders PATCH 30 次` ＝ 當時真的有單在結帳（午市高峰）；
+- 判斷：**該部裝置仍跑舊 bundle（未 reload）**，逐單觸發全量拉取時仍然連 queue 一齊拉；
+  午市一完（13:28）就冇再拉。**唔係 `skipQueue` 寫錯**（bundle 已證實有）。
+- **行動：叫所有 POS 裝置 reload／重啟 APP**，之後該項應變 0。
+  （之後可用 `[egress] pos/state` log 嘅 `skipQueue=` 欄位直接確認。）
+
+### 🔴 仍未處理、現已成「請求數第一位」
+
+`pos_queue_events` **POST 150 次／21 分鐘（7.1/分鐘）** ＝ 該表 212 次請求的 21.2%，全場第一。
+就係 §「per-event upsert」嗰項（`sync/route.ts:637` 個 `for` 之內、`:708` 逐事件 upsert）
+⇒ **N 個事件 ＝ N 個 PostgREST POST**。修法＝改一次 array upsert（N→1），屬非真源審計表、改建安全。
+
+### 📌 一個判讀陷阱（記錄）
+
+Supabase log 記嘅係 **PostgREST** 嘅 URL，**唔會**出現我哋自己嘅 `ordersOnly` / `skipQueue` / `fields`
+參數 ⇒ 喺 Supabase log 搜呢啲字串**必然係 0，唔代表冇生效**。
+要驗 `skipQueue` 只有兩條路：① Vercel log 嘅 `[egress] pos/state`（會印 `skipQueue=`／`queue=`／`ip=`）；
+② 睇 `queue GET limit=300` 有冇變 0（間接）。附註：`queue_events?select=*&limit=0` 2 次
+**就係** skipQueue／冇 storeId 嗰條路徑。
+
+---
+
 ## 1. 🔴 你提供嘅 Supabase log CSV：完全證實診斷（附實測數字）
 
 樣本：`2026-09-21 03:34:16 → 04:00:38 UTC`（＝**澳門 11:34 → 12:00，午市高峰**），1,000 筆。

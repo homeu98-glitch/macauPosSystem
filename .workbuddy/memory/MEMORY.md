@@ -163,9 +163,25 @@
   所以 topup 輪詢**唔會**計入 macauPos egress，但**會**計 Vercel invocations。唔可以撈埋。
 - 落實方案（含逐項 diff）：`docs/reviews/egress-optimization-plan-2026-09-21.md`。
 - ✅ **2026-09-21 已落實**（詳見 `docs/reviews/egress-optimization-implemented-2026-09-21.md`）：
-  守護投影+日期下限+每日 120 次上限；`?skipQueue=1`；`pos_orders_page` RPC（0046，未跑）；
+  守護投影+日期下限+每日 120 次上限；`?skipQueue=1`；`pos_orders_page` RPC；
   `fetchOrdersInRange` 預設投影；頻率（TTL 60min／報表 10min／打印中心 30s／badge 5min／班次 180s）；
-  `[egress]` log。驗證：tsc 0 error、**892 test 全綠**、eslint 0 新增。
+  `[egress]` log。驗證：tsc 0 error、**892 test 全綠**、eslint 0 新增。**已 push（`9d8e1d5`）＋ Vercel Production 已上線**。
+- **Migration 狀態（2026-09-21 更新）**：**已全部跑齊＝0036 / 0042 / 0043 / 0044 / 0045 / 0046**。
+  ⇒ 0046 生效後**三條時間腿已完全消失**（實測：守護 limit=5000 三腿 10→**0**、
+  state limit=200 三腿 44→**0**、報表 limit=2000 三腿 2→**0**、`rpc/pos_orders_page` **0→65**）。
+  ⇒ 0036 生效後，`online_order_settings` 4 欄 legacy 重試由 55→23 並於 13:34 後歸零。
+  ⚠️ **仍有裝置跑舊 bundle**（未 reload）⇒ 全量拉取仍然連 queue 一齊拉（`queue GET limit=300` 60 次／6 分鐘）。
+  叫商家 reload／重啟 POS APP 之後該項應歸零。
+- 🔴🔴 **日誌解讀陷阱**：Supabase log 記嘅係 **PostgREST** URL，**唔會**出現我哋自己嘅
+  `ordersOnly` / `skipQueue` / `fields` 參數 ⇒ 喺 Supabase log 搜呢啲字串必然係 0，
+  **唔代表冇生效**。要驗 `skipQueue`：① Vercel log 嘅 `[egress] pos/state`（會印 `skipQueue=`／`queue=`／`ip=`）；
+  ② 睇 `queue GET limit=300` 有冇變 0（間接）。`limit(0)` 版本 **就係** skipQueue/冇 storeId 嘅路徑。
+- 🔎 **before/after 對比工具**：`tools/compare-egress-logs.cjs <before.csv> <after.csv>`
+  （逐項核對：守護 limit=5000 三腿／state limit=200 三腿／RPC 有冇出現／queue 白拉／
+  online_order_settings legacy 重試／print_jobs），全部換算「每小時次數」以抵銷窗口長度差異。
+- 🔎 部署驗證工具：`tools/verify-deployed-bundle.cjs`（掃線上 chunk 找版本標記字串）。
+  ⚠️ lazy chunk（AuthGuard 後面嘅 `pos-app`）唔會出現喺 HTML，掃唔到**唔等於**未部署；
+  server-only 改動更加唔會出 bundle ⇒ 只可以用 commit／deployment sha 對照（GitHub API）。
 - 🔴🔴 **投影欄位清單必須同 `PosOrderDbRow` 由測試雙向焊死**（`pos-order-row.test.ts`）：
   漏欄 ＝ 靜默唔出（中過兩次：`discount_note`、`reopen_*`）；多欄 ＝ 42703 整個查詢失敗
   （已有自動降級 `select("*")`）。新增欄位只改 `PosOrderDbRow` ＋ `POS_ORDER_DB_COLUMNS` 兩處。
@@ -186,3 +202,15 @@
 - 🔴 改任何「週期常數」（刷新間隔／TTL）之後，**一定要 grep 用戶可見文案**：
   2026-09-21 就係改咗 `AUTO_REFRESH_INTERVAL_MS` 但報表標題仍然寫死「每 3 分鐘自動更新」。
   正解＝由常數推導（`Math.round(X / 60_000)`），唔好寫死。
+- 🔴 `pos_queue_events` upsert 係**逐事件**做嘅（`sync/route.ts:637` 個 `for` 之內、`:708` upsert）
+  ⇒ N 個事件 = **N 個 PostgREST POST**（client 其實只發 1 個 `/api/pos/sync`）。
+  實測見「同一秒 25 條 `POST /rest/v1/pos_queue_events?on_conflict=id`」。
+  修法＝改成**一次 array upsert**（`upsert(rows, {onConflict:"id"})`）⇒ N→1；屬非真源審計表，改建 safe。
+- 🔴 **幻影欄位**：`pos_orders` 嘅 `refund_records`／`refunded_amount`／`voided_items` ——
+  **44 條 migration 全部冇定義、全 codebase 冇任何寫入**（camelCase 版 `refundRecords` 等係 `PosOrder` 欄，
+  但 server 從不寫入 snake_case 欄）。`sync/route.ts:575` 每次試 9 欄 → 42703 → fallback 6 欄
+  （`isMissingColumnError` 已處理，**功能正常**），但每個 sync 請求白打一次註定失敗嘅查詢
+  ＋ 產生一條 Error 級 Postgres log（dashboard 嘅「Error 7」就係呢類）。
+  ⚠️ **唔好加 migration 補欄**（加咗都永遠 null，因為冇人寫入）——
+  正解係**移除嗰 3 欄**（fallback 本來就用 6 欄 ⇒ **行為完全等價**）。
+  若真要做退貨審計，要當一個完整 feature（加欄 + 寫入 + 讀取）去做。
