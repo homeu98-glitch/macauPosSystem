@@ -146,6 +146,13 @@ const METRICS = [
     better: "down",
   },
   {
+    name: "🔴 queue_events POST（per-event upsert）",
+    get: (s) => pick(s.shapes, (k) => k.startsWith("queue_events POST")),
+    unit: "次",
+    expect: "批次化後應由「每事件一次」變成「每批一次」⇒ 大降",
+    better: "down",
+  },
+  {
     name: "queue_events GET limit=300（白拉）",
     get: (s) => pick(s.shapes, (k) => k.startsWith("queue_events GET")),
     unit: "次",

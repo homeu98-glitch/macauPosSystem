@@ -192,6 +192,107 @@ route 喺 `getSupabaseWriteClient()` 為 null 時會 early return 503，唔會�
 
 ---
 
+## 0.4 ✅ Vercel log 實測驗收（2026-09-21 14:31–14:54，最權威嘅一次）
+
+樣本：`macau-pos-system-log-export-2026-09-21T06-54-59.csv`（393 行 ⇒ **131 個請求**）。
+工具：`tools/analyze-vercel-log.cjs`（**新增**）。
+
+> 🔴 Vercel 匯出**每個請求會出 3 行**（只有 1 行帶 `message`）⇒ 一定要按 `requestId` 去重，
+> 否則會報大 3 倍。呢個係第一次分析時踩到嘅坑。
+
+### 實測單次 payload（呢啲係真實 bytes，唔再係估算）
+
+| 類別 | 次數 | 平均 bytes | 對比 |
+|---|---|---|---|
+| `/api/pos/state` **全量、無 skipQueue** | 103 | **857 KB** | ← 最大來源 |
+| `/api/pos/state` 全量、**有 skipQueue** | 10 | **424 KB** | ✅ 省 **433 KB/次（50%）** |
+| `/api/pos/state` `ordersOnly`（報表／交班） | 13 | 266 KB | — |
+| `/api/pos/state` **`ordersOnly`＋`fields`（對賬守護）** | 5 | **20 KB** | ✅ 修前 ~7 MB ⇒ **−99.7%** |
+
+**合計 91.65 MB／22.9 分鐘**，其中 **88.3 MB（96%）** 來自「全量、無 skipQueue」嗰 103 次。
+
+### 🔴 觸發來源鎖定：realtime 重連補拉（唔係人手）
+
+- 時間軸：**06:35–06:43 連續 9 分鐘**，每分鐘 9–14 次全量拉取，之後**完全歸零**
+- **秒級間隔：中位 4.47 秒**（3–4s ×33、4–6s ×44、6–10s ×19），**冇任何兩次喺同一秒**
+  ⇒ **timer-like 循環**，唔係人手點擊（人手連續 9 分鐘每 4.5 秒點一次唔合理）
+- 對得上 `use-pos-realtime.ts` 嘅 `RESUBSCRIBE_DEBOUNCE_MS = 3000`：
+  channel 反覆 SUBSCRIBED → 3 秒去抖 → `onResubscribed()` → `loadRuntimeState()`（857 KB）
+- ⚠️ `backToTables()`（`pos-app.tsx:2486`）係另一條已知觸發路徑，但**唔符合**上面嘅等距特徵
+
+### 🔴 裝置：Mac Safari 仍跑舊 bundle
+
+| 裝置 | 有 skipQueue | 冇 skipQueue |
+|---|---|---|
+| **Mac Safari** | 2 次（829 KB） | **111 次（87,562 KB）** |
+| Windows Chrome | 8 次（3,315 KB） | 10 次（2,144 KB） |
+
+⇒ 嗰部 Mac **111/113 次冇帶 skipQueue** ⇒ 仍係 pre-13:14 嘅 JS。**reload 之後即由 857 → 424 KB**。
+
+### 行動建議（按 ROI）
+
+1. **Mac 硬刷新／重開 POS 分頁**（Safari → 設定 → 清除網站資料）⇒ 每次 −50%，零風險。
+2. **為 resubscribe 補拉加最短期間**（距上次全量拉取 <30s 就唔拉）⇒ 估 **−90%**。
+   短暫斷線（3 秒）唔值得拉 857 KB；長時間斷線照樣補，語義基本不變。**待商家拍板。**
+3. 喺嗰部 Mac 開 Browser Console，睇有冇 `[pos-realtime] 渠道狀態 CHANNEL_ERROR/CLOSED`
+   ⇒ 可確認 flapping 同成因（程式已有 log）。
+
+---
+
+## 0.5 ✅ 第三輪：realtime 重連補拉守衛（2026-09-21）
+
+### 問題（Vercel log 實測，佔全部 egress 96%）
+
+Vercel log 見到 **連續 9 分鐘、每 4.47 秒一次**嘅全量 state 拉取，每次 **857 KB**
+⇒ 單單嗰 9 分鐘 **80 MB** ＝ 該窗口全部 egress 嘅 **96%**。
+秒級間隔全部落喺 3–4.5 秒、103 次之中**冇任何兩次喺同一秒** ⇒ **定時循環**（唔係人手點）。
+
+對得上 `use-pos-realtime.ts` 嘅 `RESUBSCRIBE_DEBOUNCE_MS = 3000`：channel 反覆「訂上 → 即斷」時，
+每輪都 `onResubscribed()` → `loadRuntimeState()`；而每次成功訂上都 reset `reconnectAttempt`
+⇒ 重連永遠 3 秒（**Safari 背景分頁會殺 WebSocket**，最常見成因）。
+
+### 改動
+
+| 檔案 | 改動 |
+|---|---|
+| `src/lib/pos/resubscribe-guard.ts`（新，**零 import**） | `shouldBackfillOnResubscribe()`：把四道閘抽成純函式（offline → pending → **hidden** → **too-soon**） |
+| `src/lib/pos/resubscribe-guard.test.ts`（新，12 條） | 包括**模擬實測 burst**：背景 103 次重連 → **0 次拉取**（修前 103 次 ×857 KB） |
+| `src/components/pos-app.tsx` | `onResubscribed` 改用守衛；`loadRuntimeState()` 開跑時記 `lastFullStatePullAtRef`；新增常數 `RESUBSCRIBE_BACKFILL_MIN_GAP_MS = 30_000` |
+
+### 兩道新閘
+
+1. **分頁隱藏就唔拉** —— 背景分頁冇人睇，拉 857 KB 純浪費（背景循環嘅主閘）
+2. **距上次全量拉取 <30 秒就唔拉** —— 短暫斷線唔值得重拉
+
+### 為何**唔會漏事件**（正確性論證）
+
+分頁一返前景 → `visibilitychange` → `subscribe()` → `SUBSCRIBED` → 呢個 callback 再跑
+（此時 `visible` 且通常已隔足時間，而 `lastFullStatePullAt` 亦已超過 30 秒）⇒ **一定補到**。
+即係「睡醒之後一定睇到最新狀態」嘅保證完全保留。
+
+### 為何守衛**只可放呢度**（唔可以放 `loadRuntimeState()` 內）
+
+`loadRuntimeState()` 亦係 mount／手動更新／`backToTables()`（`setRuntimeRefreshTick`）嘅入口 ——
+全部都係**刻意即時刷新**，加節流會變成功能問題。
+
+### 驗證
+
+| 檢查 | 結果 |
+|---|---|
+| `tsc --noEmit` | **0 error** |
+| `node --test` | **924 passed / 0 failed**（912 ＋ 12 新） |
+| `tools/verify-pos-flows-live.cjs` | **17/17 ✅、有問題嘅頁面數 0** |
+
+### 仍待跟進（唔喺本批）
+
+- `backToTables()`（`pos-app.tsx:2486`）仍會每次刷新 —— **人手步速**，唔屬循環，暫不節流。
+- `usePosRealtime` 嘅 `visibilitychange → subscribe()` 會**拆掉再建** channel（即使已訂上）
+  ⇒ 每次切 tab 都重連一次。可改為「已訂上就唔重建」。呢個係 WebSocket churn（Supabase Realtime
+  只佔 ~1% egress），唔急。
+- `/api/online-order-settings` 嘅 thundering herd（實測 3 分鐘 53 次）—— 仍未修。
+
+---
+
 ## 1. 🔴 你提供嘅 Supabase log CSV：完全證實診斷（附實測數字）
 
 樣本：`2026-09-21 03:34:16 → 04:00:38 UTC`（＝**澳門 11:34 → 12:00，午市高峰**），1,000 筆。

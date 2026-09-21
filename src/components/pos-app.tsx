@@ -42,6 +42,7 @@ import {
   ORDER_NOTE_LOCKED_MESSAGE,
 } from "@/lib/pos/order-note-lock";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
+import { shouldBackfillOnResubscribe } from "@/lib/pos/resubscribe-guard";
 import { refocusForIosKeyboard } from "@/lib/pos/ios-keyboard";
 import {
   computeOrphanLocalOrders,
@@ -242,6 +243,32 @@ const CATEGORY_COLLAPSE_THRESHOLD = 8;
 // 開桌入座人數：桌台冇填座位數（capacity 缺失 / ≤0）時嘅按鈕數上限 fallback。
 // 正常情況按鈕數 = 該枱 capacity（1..capacity，一鍵設定，唔畀超過座位數）。
 const OPEN_TABLE_FALLBACK_MAX_SEATS = 12;
+
+/**
+ * 《realtime 重連補拉》最少間隔（2026-09-21 egress 優化，**唔可以拆**）。
+ *
+ * ## 為何要（實測數據，唔係估算）
+ *
+ * Vercel log 實測：**連續 9 分鐘、每 4.47 秒一次**嘅「全量 state 拉取」，
+ * 每次 **857 KB**（orders 200 ＋ queue 300 ＋ printJobs 200 ＋ 設定）⇒ 單單嗰 9 分鐘就 **80 MB**，
+ * 佔該窗口全部 egress **96%**。秒級間隔全部落在 3–4.5 秒、103 次之中**冇任何兩次喺同一秒**
+ * ⇒ 係**定時循環**（唔係人手點）。對得上 `use-pos-realtime.ts` 嘅
+ * `RESUBSCRIBE_DEBOUNCE_MS = 3000`：channel 反覆「訂上 → 即斷」時，每輪都會
+ * `onResubscribed()` → `loadRuntimeState()`，而每次成功訂上都 reset `reconnectAttempt`
+ * ⇒ 重連永遠 3 秒，形成穩定循環（Safari **背景分頁會殺 WebSocket**，最常見成因）。
+ *
+ * ## 兩重守衛（見下面 `onResubscribed`）
+ *
+ *   ① **分頁隱藏就唔拉** —— 背景分頁冇人睇，拉 857 KB 純浪費。
+ *      ✅ 正確性不變：使用者一返前景 → `visibilitychange` → `subscribe()` → `SUBSCRIBED`
+ *      → 照樣會補一次（即「睡醒之後一定睇到最新」嘅保證完全保留）。
+ *   ② **最少間隔** —— 短暫斷線（幾秒）唔值得重拉；長時間斷線照樣補。
+ *
+ * ⚠️ 只加喺 resubscribe 路徑，**唔可以**加落 `loadRuntimeState()` 本身：
+ *  mount／手動更新／`backToTables()`（`setRuntimeRefreshTick`）都係刻意即時刷新嘅入口。
+ * 要還原舊行為：把呢個常數設成 `0`（等於唔節流，但仍保留「隱藏唔拉」）。
+ */
+const RESUBSCRIBE_BACKFILL_MIN_GAP_MS = 30_000;
 
 export function PosApp() {
   const router = useRouter();
@@ -537,6 +564,14 @@ export function PosApp() {
   // 追蹤上一次 backfill 載入嘅 queue 簽名（id+status），避免 setQueue 建立新 array reference
   // 觸發自身 effect 依賴造成無限輪詢。saveQueue 仍然每次寫 localStorage，保持磁碟同步。
   const lastLoadedQueueRef = useRef<string>("");
+  /**
+   * 上一次**全量** state 拉取嘅時間（`loadRuntimeState()` 一開跑就記）。
+   *
+   * 用途：`onResubscribed` 嘅「最少間隔」守衛（見 `RESUBSCRIBE_BACKFILL_MIN_GAP_MS`）。
+   * 記喺 `loadRuntimeState()` 之內（而唔係某個呼叫點）係刻意嘅 —— 咁樣「mount 拉完 3 秒後
+   * channel 又訂上」都一樣會被擋，而唔係每個呼叫點各自維護一份時間。
+   */
+  const lastFullStatePullAtRef = useRef(0);
   const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
   const [shift, setShift] = useState(() => loadShiftState());
   /**
@@ -1126,6 +1161,9 @@ export function PosApp() {
       // 唔帶 storeId，server 返**全店** orders + queue，merge 落本地就係跨店污染入口。
       const storeId = resolveStoreId();
       if (!storeId) return 0;
+      // 記低「真正開始拉」嘅時間 —— 供 `onResubscribed` 嘅最少間隔守衛用
+      //（記喺呢度而唔係某個呼叫點，所有觸發路徑都會更新到；見 RESUBSCRIBE_BACKFILL_MIN_GAP_MS）。
+      lastFullStatePullAtRef.current = Date.now();
       // 2026-09-10 P0-3：先確保 POS 終端憑證仍然有效（TTL 12h，收銀機全日開住）。
       // 呢個係 fail-soft：拎唔到憑證都照行，之後 server 回 401 就當拉唔到（唔會爆）。
       await refreshPosDeviceTokenIfNeeded();
@@ -1725,13 +1763,33 @@ export function PosApp() {
     },
     // realtime (re)subscribe 成功 → 一次過 backfill 現有 open 單（event-driven，非 polling）。
     // 補返 realtime 唔 backfill 舊 row 嘅缺口；visibilitychange / CHANNEL_ERROR 重連都會觸發。
+    //
+    // 🔴🔴 2026-09-21 egress 守衛（**唔可以拆**，實測數據見 `RESUBSCRIBE_BACKFILL_MIN_GAP_MS`）：
+    //    Vercel log 見到「連續 9 分鐘、每 4.47 秒一次、每次 857 KB」嘅全量拉取，
+    //    單單嗰 9 分鐘就 80 MB（佔全部 egress 96%）—— 成因就係呢個 callback 被反覆觸發。
+    //    決策邏輯抽咗去 `@/lib/pos/resubscribe-guard`（純函式、有單測）：
+    //      ① offlineMode → 唔拉（原本已有）
+    //      ② 本機仲有 pending 事件 → 唔拉（原本已有，避免覆蓋未上雲嘅新單）
+    //      ③ **分頁隱藏 → 唔拉**（新增；背景分頁嘅循環主閘）
+    //      ④ **距上次全量拉取 <30 秒 → 唔拉**（新增）
+    //    ⚠️ 唔會漏事件：返前景 → visibilitychange → subscribe() → SUBSCRIBED → 呢個 callback
+    //       會再跑（此時 visible 且已隔足時間）⇒ 一定補到。
     onResubscribed: () => {
-      // P0-2（R2）：加返 queue 同步保護，避免重連競態——未 sync 嘅離線新單未入 DB 前就 pull 清走。
-      if (offlineMode) return;
-      // 🔴 2026-09-15 修：同上面 mount effect 一樣，只擋真正未推嘅 `pending`。
-      // 舊條件 `status !== "synced"` 會被終態 `skipped` / `failed` 永久閘死 → 重連後
-      // 唔會 backfill，等於「realtime 一斷就永遠收唔返漏掉嘅單」。
-      if (queue.some((event) => event.status === "pending")) return;
+      const decision = shouldBackfillOnResubscribe({
+        offlineMode: Boolean(offlineMode),
+        hasPendingEvents: queue.some((event) => event.status === "pending"),
+        visibilityState: typeof document === "undefined" ? "visible" : document.visibilityState,
+        lastFullPullAtMs: lastFullStatePullAtRef.current,
+        nowMs: Date.now(),
+        minGapMs: RESUBSCRIBE_BACKFILL_MIN_GAP_MS,
+      });
+      if (!decision.ok) {
+        // 只喺「真係有機會拉但被擋」時留痕，方便日後診斷（唔想每次都嘈）。
+        if (decision.reason === "hidden" || decision.reason === "too-soon") {
+          console.debug(`[pos-app] 重連補拉已跳過（${decision.reason}）`);
+        }
+        return;
+      }
       void loadRuntimeState();
     },
     /**

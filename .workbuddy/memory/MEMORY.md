@@ -209,6 +209,36 @@
   🔴 兩個死穴：① **一定要去重**（同批重複 id → Postgres **21000** → **整批**審計行靜默寫唔入）；
   ② **一定要 `await`**（Vercel function return 後凍結，fire-and-forget write 會消失）。
   失敗只 push `warnings`，**唔可以**入 `infraErrors`（否則成批回 500 → client 重推已成功事件）。
+  ✅ **上線驗證（commit `48b7571`，2026-09-21 14:28）**：`queue_events` POST
+  150 次/20.7min → **28 次/15.3min（−81%）**；`online_order_settings` legacy 4 欄 23 → **0**。
+- 🔴🔴 **頭號 egress 來源（2026-09-21 Vercel log 實測）：`/api/pos/state` 全量拉取
+  （`mode=full`，一次打 6~8 條 PostgREST）＝ 計 103 次／9 分鐘、平均 857 KB/次 ⇒ 80 MB
+  （佔該窗口全部 egress 96%）。**
+  🔎 **觸發來源已鎖定＝realtime 重連補拉**（`usePosRealtime` `onResubscribed` → `loadRuntimeState()`）。
+  證據：全量請求嘅**秒級間隔中位 4.47 秒**（3–4s ×33、4–6s ×44、6–10s ×19）、持續 9 分鐘、
+  **冇任何兩次喺同一秒** ⇒ **timer-like 循環，唔係人手點**。
+  成因：channel 反覆「訂上→即斷」（**Safari 背景分頁會殺 WebSocket**），
+  而每次成功訂上都 reset `reconnectAttempt` ⇒ 重連永遠 3 秒；配合
+  `RESUBSCRIBE_DEBOUNCE_MS = 3000` 就形成穩定 3~4.5 秒循環。
+  ✅ **2026-09-21 已修**：新檔 `src/lib/pos/resubscribe-guard.ts`（零 import、12 條單測，
+  含「背景 103 次重連 → 0 次拉取」模擬）＋ `pos-app.tsx` 喺 `onResubscribed` 加兩道閘：
+  ① **分頁隱藏唔拉** ② **距上次全量拉取 <30s 唔拉**（`RESUBSCRIBE_BACKFILL_MIN_GAP_MS`）。
+  🔴 **唔可以漏嘅論證**：返前景 → `visibilitychange` → `subscribe()` → `SUBSCRIBED` →
+  callback 再跑（此時 visible 且已隔足）⇒ **一定補到**，唔會漏事件。
+  🔴 **守衛只可放 `onResubscribed`**，唔可以放 `loadRuntimeState()` 內 ——
+  mount／手動更新／`backToTables()` 都係刻意即時刷新，加節流＝功能問題。
+  ⚠️ 仍未做：`backToTables()`（人手步速，非循環）、`usePosRealtime` 嘅
+  `visibilitychange → subscribe()` 會拆掉再建 channel（WebSocket churn，Realtime 只佔 ~1%）、
+  `/api/online-order-settings` thundering herd（實測 3 分鐘 53 次）。
+- 🔴 **舊 bundle 裝置**：Vercel log 顯示 **Mac Safari 111/113 次請求冇 `skipQueue`**
+  （Windows Chrome 8/18 有）⇒ 嗰部 Mac 仍跑舊 JS。reload 後 **857 KB → 424 KB（−50%，實測）**。
+- 🔎🔎 **Vercel log 匯出＝最強驗收工具**（`tools/analyze-vercel-log.cjs`）：
+  有 `requestQueryString`（睇得到 `skipQueue`／`ordersOnly`／`fields`，Supabase log 冇）、
+  `requestUserAgent`（分裝置）、同我加嘅 `[egress] … bytes=N`（實際 bytes，可直接加總）。
+  🔴 **一定要按 `requestId` 去重**：Vercel 匯出**每個請求 3 行**（只 1 行有 message）
+  ⇒ 唔去重會報大 3 倍，並製造「無 query string」嘅假分組。
+  📐 實測單次 bytes：全量無 skipQueue **857 KB**／全量有 skipQueue **424 KB**／
+  報表 ordersOnly **266 KB**／**守護 `ordersOnly+fields` 20 KB**（修前 ~7 MB ⇒ **−99.7%**）。
 - 🔴 **幻影欄位**：`pos_orders` 嘅 `refund_records`／`refunded_amount`／`voided_items` ——
   **44 條 migration 全部冇定義、全 codebase 冇任何寫入**（camelCase 版 `refundRecords` 等係 `PosOrder` 欄，
   但 server 從不寫入 snake_case 欄）。`sync/route.ts:575` 每次試 9 欄 → 42703 → fallback 6 欄
