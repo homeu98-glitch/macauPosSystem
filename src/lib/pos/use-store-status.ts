@@ -70,6 +70,17 @@ const INITIAL: StoreStatusState = {
 let state: StoreStatusState = INITIAL;
 const listeners = new Set<() => void>();
 
+/**
+ * 唯讀快照（2026-09-21）。
+ *
+ * 用途：畀**非 React 呼叫端**讀（輪詢閘 `poll-gate-client` 要判斷「兩條通路係咪都關咗」）。
+ * 呢個係純讀取 —— **唔會**觸發任何請求、唔會改 state、唔會 notify listener。
+ * React component 一律繼續用 `useStoreStatus()`（要 re-render）。
+ */
+export function getStoreStatusSnapshot(): StoreStatusState {
+  return state;
+}
+
 let activeStoreId: string | null = null;
 let refCount = 0;
 let channel: ReturnType<

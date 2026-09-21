@@ -38,6 +38,7 @@ import { buildOnlineOrderDetailNotes, buildOrderDetailNotes } from "@/lib/pos/or
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import { readNetworkOnline } from "@/lib/use-network-online";
+import { evaluatePollGate } from "@/lib/pos/poll-gate-client";
 import type { PosOrder, PosLocalSettings } from "@/lib/types";
 // 退款淨額口徑（毛 / 淨兩個數並存）—— 算法住喺 .ts，方便 node --test 直接載入。
 import { netOf, refundOrderCountOf, refundTotalOf } from "@/lib/refund-net";
@@ -895,6 +896,12 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
       if (!readNetworkOnline()) return;
+      // 🔴 2026-09-21 輪詢閘（`@/lib/pos/poll-gate`）：
+      //    J 嘅要求係「關店後仍然可以入報表對數，但只准**一次**查詢，唔可以不停打」。
+      //    所以：兩條接單通路都關／已收工／冇人用 ≥5 分鐘 → **停自動刷新**；
+      //    入頁同手動撳「更新」照樣即刻打（`kind` 唔關事，`bump()` 完全唔受影響）。
+      //    要還原舊行為：刪走 `evaluatePollGate` 呢句。
+      if (!evaluatePollGate({ tag: "reports/auto-refresh" }).poll) return;
       bump();
     }, AUTO_REFRESH_INTERVAL_MS);
 

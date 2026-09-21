@@ -10,6 +10,15 @@ import { readAgentHeaders, verifyAgent } from "@/lib/print-agent-server";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * 建議 APK 下次幾時再 claim（ms）—— **刪咗心跳之後嘅唯一節奏旋鈕**（2026-09-21）。
+ *
+ * ⚠️ 一定要 ≤ 180_000（3 分鐘）：POS 網頁 `print-center.tsx` 寫死
+ *    「`last_seen_at` ≥5 分鐘 → 疑似離線」，超過就會出**假警報**。
+ *    要再放慢（例如關店後 300 秒）就必須同時放寬嗰個 UI 閾值。
+ */
+const SUGGESTED_CLAIM_MS = 180_000;
+
 export async function POST(request: Request) {
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
@@ -43,5 +52,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "claim 失敗" }, { status: 500 });
   }
   // printers 可選（v1 返空陣；APK 用自己配置嘅 Sunmi / LAN 打印機）
-  return NextResponse.json({ ok: true, jobs: data ?? [], printers: [] });
+  //
+  // 🆕 2026-09-21：加 `nextPollMs` —— **建議 APK 下次幾時再 claim**。
+  //
+  // 為何放喺 claim 而唔係 heartbeat：`claim` 本來就要每輪打一次（拎任務），
+  // 而 `heartbeat` 唯一作用只係蓋 `last_seen_at`，**完全多餘**（`claim` 已經順手蓋）。
+  // 所以建議 APK **刪走獨立心跳迴圈**，改為由呢個欄位控制節奏 ⇒
+  // 服務端可以隨時調整（關店放慢／夜間放慢），唔使再出 APK。
+  //
+  // ⚠️ 值一定要 ≤ 180_000（3 分鐘）：POS 網頁 `print-center.tsx` 寫死
+  //    「`last_seen_at` ≥5 分鐘 → 疑似離線」，超過就會出假警報。
+  // ⚠️ 加欄位對現役 APK **零影響**（`org.json` 嘅 `opt*` 會忽略未知欄位）。
+  return NextResponse.json({
+    ok: true,
+    jobs: data ?? [],
+    printers: [],
+    nextPollMs: SUGGESTED_CLAIM_MS,
+  });
 }

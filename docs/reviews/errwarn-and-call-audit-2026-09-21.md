@@ -392,3 +392,232 @@ group by 1 order by 1;
 `tools/_reqdist-20260921.cjs`（Vercel / Supabase 請求分佈）、
 `tools/_sb-timeline-20260921.cjs`（逐表節奏指紋）、
 `tools/_vc-messages-20260921.cjs`（應用層 message 清單）。
+
+---
+
+# 附錄 A：20:19 覆核（部署後實測）— 🔴 循環未停
+
+> 樣本：`supabase_logs (6).csv` = **11:59:32Z → 12:19:13Z**（澳門 19:59:32–20:19:13，1174 秒、1000 行）
+> 對照：`macau-pos-system-log-export-2026-09-21T12-19-30.csv`
+
+## A.0 ⚠️ 先講一件要即刻處理嘅事：Vercel 匯出檔係舊嘅
+
+```
+3b127f881ac041cf  84346  macau-pos-system-log-export-2026-09-21T09-38-53.csv
+3b127f881ac041cf  84346  macau-pos-system-log-export-2026-09-21T12-19-30.csv
+content identical = true
+```
+
+**兩份檔 SHA-256 完全相同**（連時間戳都係 09:20:57 / 09:21:22）。
+即係 12:19 嗰次匯出**冇刷新到**，仍然係舊窗口（08:52–09:21Z）。
+⇒ **Vercel 側今次冇任何新資訊**；要做 Vercel 對質，請重新匯出
+**UTC 11:55 → 12:25（澳門 19:55 → 20:25）** 嘅 function log。
+
+## A.1 ✅ 已確認生效嘅改動
+
+| 項目 | 改前 | 今次實測（19.7 分鐘） | 判定 |
+|---|---|---|---|
+| 退款幻影欄位 `42703` ＋ `400` | 每 30 秒 1 條（2/min） | **3 條**（＝每個 server instance 各 1 次探測） | ✅ 修復生效 |
+| `GET pos_print_agents`（驗證用嘅 SELECT） | 70 次 / 24 min ≈ 2.9/min | **5 次 / 19.7 min ≈ 0.25/min** | ✅ `recordActivity` 生效 |
+| `PATCH pos_print_agents`（蓋章） | 44 次 / 24 min | **60 次 / 19.7 min ＝ 2.0/min** | ✅ 心跳 30s ＋ claim 60s（1 部中繼機） |
+| `rpc/pos_claim_print_jobs` | 每 65 秒 | **每 60.26 秒**（極穩定） | ✅ 符合 `TICK_MS = 60_000` |
+| 三條時間腿（`select` 三腿查詢） | 有 | **完全冇再出現** | ✅ 0046 生效 |
+
+驗 `GET pos_orders?select=6cols` **39 次**（＝每個 sync 都行到預取 ⇒ `orderIds.size > 0`），
+而 `select=9cols`（退款 3 欄）**只有 3 次** ⇒ 若冇修復，呢 3 欄會被試 **39 次**。
+**3 次＝冷啟次數**，即「試一次、記住結果」完全按設計運作。
+
+## A.2 🔴 全量拉取循環**仍然存在**（而且比「平均數」睇落更嚴重）
+
+```
+全量 state 次數=101   span=1174s   全窗口平均 = 5.16 次/分鐘
+
+--- 爆發段（gap > 20s 就切）---
+  🔴 循環  起 +0s     長 20s    次數 5   ≈12.0/min  間隔中位 4.78s
+  🔴 循環  起 +739s   長 435s   次數 96  ≈13.1/min  間隔中位 4.45s
+活躍總時長 ≈ 455s（佔窗口 39%）
+```
+
+六張表（`pos_device_configs` 104 ／ `rpc/pos_orders_page` 101 ／ `pos_print_jobs` 100 ／
+`pos_print_templates` 100 ／ `pos_note_presets` 99 ／ `pos_queue_events` 99）
+**時間戳仍然毫秒級對齊** ⇒ 仍然係同一個請求內六句查詢。
+
+### 兩點必須講清楚
+
+1. **「平均由 11.24/min 跌到 5.16/min」係假象**。跌嘅原因係**循環只佔窗口 39% 時間**，
+   唔係修好了。**活躍段頻率反而由 11.2 升到 13.1 次/分鐘**。
+   以後睇呢類數，一定要用 §A.2 嘅**分段（burst）**口徑，唔可以睇全窗口平均。
+2. **`d16c644`（19:30 已 commit ＋ push，含 `queueSignatureRef` / `replaceQueueFromStorage`
+   / single-flight）已經部署，而爆發由 20:11:54 開始、一路持續到 log 尾（20:19:13）**
+   ⇒ **今輪嘅「array 身分」守衛未足以令循環停**。
+
+### 爆發起點嘅現場（`tools/_sb-window-20260921.cjs`）
+
+```
++742.2s  20:11:54  GET  pos_shifts?closed_at=is.null
++748.3s  20:12:00  101  GET  /realtime/v1/websocket          ← Realtime 重新連上
++752.9s  20:12:05  GET  pos_online_order_settings
++753.0s  20:12:05  GET  pos_store_status
++758.9s  20:12:11  POST rpc/pos_claim_print_jobs
+```
+
+「12 分鐘完全冇全量拉取（19:59–20:11）→ 20:11:54 突然開始連續 435 秒」＋
+同一刻有 **WebSocket 重連 ＋ 兩支設定讀取**，形態上最似
+**分頁由背景返前景（`visibilitychange` → `subscribe()` → `SUBSCRIBED`）**。
+
+## A.3 成本（以今次窗口實測）
+
+| 假設 | 全窗口（19.6 min） | 每小時 | 開 10 小時 |
+|---|---:|---:|---:|
+| `skipQueue=1`（424,181 B/次） | 40.9 MB | 125 MB | **1.22 GB** |
+| 無 `skipQueue`（857 KB/次） | 82.5 MB | 253 MB | **2.47 GB** |
+
+⇒ 單單呢一個循環，仍然可以食掉 5 GB 免費額度嘅 1/4 至 1/2。
+
+## A.4 本輪新增：`x-pos-state-src` 呼叫來源標記（**待部署**）
+
+循環已經證明「唔可以靠推論定位」——`/api/pos/state` 四個入口
+（mount／`queue` 依賴／realtime 重連補拉／手動更新）喺 log 上**一模一樣**。
+所以加咗一個純診斷標記：
+
+- Client（`pos-app.tsx`）：`loadRuntimeState(src)` → fetch 時帶
+  `x-pos-state-src: mount | queue-dep | resubscribe | manual`。
+- Server（`state/route.ts`）：讀入、`.slice(0, 24)` 截斷，寫落 egress log：
+  ```
+  [egress] pos/state bytes=424181 mode=full src=queue-dep orders=200 queue=0 skipQueue=1 …
+  ```
+- **零行為影響嘅證明**：有／冇標頭／超長標頭，三次回應**都係 39 bytes、
+  `keys=ok,source,orders` 完全一致**（實測）。標頭唔參與查詢、授權或回應內容。
+- 守衛：`src/app/api/pos/state/state-egress-src.test.ts`（4 條）。
+
+⚠️ 本機 `next dev` 嘅 stdout 睇唔到 app 層 `console.info`（Next 16 + Turbopack），
+所以 `src=` 只可以喺**生產 Vercel log** 驗。
+
+## A.5 下一步（按優先次序）
+
+1. **部署 §A.4 嘅標記** → 再開一次收銀台，令循環重現。
+2. 匯出**同一段時間**（±10 分鐘）嘅 Vercel function log。
+3. 睇 `[egress] pos/state … src=<邊個>`：
+   - 若為 `queue-dep` ⇒ 循環由 effect 重跑驅動，要連 `queue` 依賴一齊改（報告 §4-B）。
+   - 若為 `resubscribe` ⇒ 30 秒下限守衛有漏洞（例如 `lastFullStatePullAtRef` 被其他路徑重置）。
+   - 若為 `mount` ⇒ 有元件**反覆重新 mount**（要查 `key` / 條件渲染 / HMR 之外嘅原因）。
+   - 若 `ip=` 出現**多過一個** ⇒ 係多部裝置／多個分頁各自循環（`GET /realtime/v1/websocket` 有 3 條）。
+4. 同時用 `pos-app-queue-identity.test.ts` 守住，確保守衛唔會被「順手清理」。
+
+---
+
+# 附錄 B：22:30 覆核 — 🎯 兇手鎖定（一部 Mac 嘅**舊分頁**）
+
+> 樣本：`macau-pos-system-log-export-2026-09-21T14-29-12.csv`（**787,061 B，新 hash** ✅ 真係刷新咗）
+> ＋ `supabase_logs (7).csv`（13:21:44Z–14:29:35Z ＝ 澳門 21:21–22:29，67.8 分鐘）
+
+## B.0 ⚠️ 先修正附錄 A 嘅推論
+
+附錄 A §A.2 我推「20:11:54 有一次全新 mount（有 WebSocket ＋ 兩支設定讀取）⇒
+所以守衛部署咗都擋唔到 ⇒ 守衛不足」。**呢個推論係錯嘅。**
+真相係「**背景分頁返前景**」（`visibilitychange` 一樣會重建 WebSocket 同刷新設定），
+而嗰個分頁跑嘅係**舊 bundle**。守衛從來冇失效 —— 見下面。
+
+## B.1 🎯 鐵證：`[egress]` 加總 ＋ IP／User-Agent 反查
+
+```
+[egress] 行數=167
+總 egress = 126.53 MB / 29.6 min = 256.8 MB/小時 = 開 10 小時 ≈ 2.51 GB
+
+--- 按 (tag / mode / ip / src) 分組 ---
+  149 次  123.05 MB (97.2%)  平均 865,924 B
+      pos/state full ip=60.246.53.111
+      樣本: {"mode":"full","orders":"200","queue":"300","skipQueue":"0","printJobs":"200","limit":"200"}
+
+   17 次    3.40 MB ( 2.7%)  平均 209,832 B   pos/state ordersOnly
+    1 次    0.09 MB ( 0.1%)  平均  90,080 B   pos/state full ip=60.246.45.220
+```
+
+再用 User-Agent 反查（`tools/_egress-who-20260921.cjs`）：
+
+```
+×147  122.23 MB  12:54:36 → 13:20:46
+     60.246.53.111  skipQueue=0  queue=300
+     Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) … Version/17.14 Safari/605.1.15
+
+×17    3.40 MB  12:52:38 → 13:17:23   （Mac Safari，ordersOnly）
+×2     0.81 MB  13:12:38 / 13:17:57
+     60.246.53.111  skipQueue=1  queue=0    ← 🔴 同一個 IP！
+×1     0.09 MB  13:20:59
+     60.246.45.220  skipQueue=1  queue=0    Android 16 WebView（自助機 / 店員機）
+```
+
+### 結論（三句）
+
+1. **一部 Mac（Macintosh / Safari 17.14，IP `60.246.53.111`）嘅一個分頁跑住舊 bundle**：
+   `skipQueue=0` ⇒ 冇跳過 300 條 queue，每次 **846 KB**（正常新版係 424 KB，**貴一倍**）。
+   26 分鐘內拉 **147 次、122.23 MB ＝ 全窗口 egress 96.6%**。
+2. **同一部 Mac 另一個分頁係新版**（`skipQueue=1`，2 次、0.81 MB）。
+   ⇒ 唔係「呢部機舊」，係「呢個**分頁**舊（開咗冇 reload）」。
+3. **Android 自助機／店員機（`60.246.45.220`）完全正常**：29.6 分鐘只拉 **1 次、90 KB**。
+
+### 為何可以斷定「真係舊 bundle」而唔係「flag 被設成 0」
+
+`skipQueue` 只在 `isOutboxV2Enabled()` 為 true 時才傳，而該 flag 係
+`localStorage["macau-pos/sync-outbox-v2"] !== "0"`（預設 true，**同源分頁共用**）。
+同一部機嘅新分頁傳 `skipQueue=1` ⇒ 該機嘅 flag **唔係 `"0"`**
+⇒ 舊分頁只可能係**跑住 17:18 之前嘅 JS**（嗰時根本冇 `skipQueue` 呢個參數）。
+
+### 仍未停
+
+`supabase_logs (7).csv`：**13:26:53Z–13:37:11Z 連續 498 秒、12.8 次/分鐘、間隔中位 4.60 秒**，
+一路到 22:29 都仲喺度。以 846 KB × 12.8/min 計 ⇒ **≈650 MB/小時 ⇒ 開 10 小時 ≈ 6.5 GB**
+（單一裝置就可以食爆 5 GB 免費額度）。
+
+## B.2 本輪新增：令呢種事自己報警（**待部署**）
+
+兩個都係**零行為改動**（只加 log／只讀標頭）：
+
+| 項目 | 內容 |
+|---|---|
+| `x-pos-state-src` | client 每次報上呼叫來源（`mount` / `queue-dep` / `resubscribe` / `manual`）→ 寫落 `[egress]` |
+| 🔴 **舊版 bundle 偵測** | `isLegacyFullState = !ordersOnly && !skipQueue` ⇒ `console.warn("[pos/state] 🔴 偵測到疑似舊版 bundle …")`，**每 IP 每分鐘最多 1 條**（`rateLimit(key,1,60_000)`），並喺 egress log 加 `legacy=1` |
+
+**判準為何要咁窄**：`ordersOnly=1`（報表／交班／對賬守護／本機訂單面板）**本身唔傳**
+`skipQueue` ⇒ 一定要排除，否則每次開報表都出假警報。
+「非 ordersOnly ＋ 冇 skipQueue」嘅唯一呼叫者就係 `pos-app` 嘅全量拉取。
+
+**實測驗證（本機 dev，四種參數組合）**：
+
+```
+A 全量（冇 skipQueue）＝舊版   → 200  bytes=16271  keys=ok,source,orders,queue,printJobs,…
+B 全量 + skipQueue=1（新版）   → 200  bytes=16271  keys=（完全一樣）
+C ordersOnly（冇 skipQueue）   → 200  bytes=39     keys=ok,source,orders
+D ordersOnly + skipQueue=1     → 200  bytes=39     keys=（完全一樣）
+
+[warn] 只出 1 條： [pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=::1 …
+```
+
+⇒ 回應**逐位元不變**、警報**只在應該出嗰時出、而且有節流**。
+（順帶發現：本機 `next dev` 見到 `console.warn`，但 app 層 `console.info` 唔會出 stdout
+⇒ `[egress]` 只可以喺生產 Vercel log 睇。）
+
+## B.3 建議行動
+
+### 🔴 即刻（唔需要改任何 code）
+
+1. 去嗰部 **Mac（Safari 17.14）**：**全部 POS 分頁都閂掉**，再開新分頁入 POS。
+   最好係 `Cmd + Shift + R` 硬重新載入（或直接閂 Safari 重開）。
+2. 之後睇 Vercel log：
+   `[egress] pos/state … skipQueue=1` 應該 100% 出現，
+   而 `… 偵測到疑似舊版 bundle …` 應該歸零。
+3. 預期 egress：**256 MB/小時 → ~1 MB/小時**。
+
+### 🟠 短期（建議排期）
+
+- **加「有新版本」提示**：`/api/pos/state` 回應標頭帶一個 build id，
+  client 發現同自己載入時唔同 → 出提示條叫收銀「重新載入」。
+  ⚠️ **強烈建議唔好自動 reload** —— 收銀落單／結帳中途 reload 會出事。
+  要自動，最多只可以喺「無 pending 事件 ＋ 分頁可見 ＋ 冇開啟中嘅結帳畫面」時做，並且要提示。
+
+### 🟡 中期
+
+- 檢視 `public/sw.js` 對 `/_next/static/**` 嘅 **cache-first** 策略。
+  Next 嘅 immutable chunk 係內容雜湊命名 ⇒ cache-first 本身安全；
+  但 `CACHE_NAME = "macau-pos-v20-7-31"` 係**寫死版本字串**，
+  建議改成由建置注入，避免日後有人以為 bump 咗其實冇 bump。

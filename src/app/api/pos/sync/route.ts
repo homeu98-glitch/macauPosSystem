@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { isMissingColumnError, isUniqueViolationError } from "@/lib/supabase-errors";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
+import { decideOrderWrite, describeWriteGateRejection } from "@/lib/pos/write-gate";
 import {
   isPosDeviceAuthRequired,
   readPosDeviceTokenFromRequest,
@@ -517,9 +518,25 @@ export async function POST(request: Request) {
   // ⚠️ 呢個查詢每個 request **只做一次**（唔好逐個 event 打 DB），
   //    同下面 `soldoutSet` 同一個 pattern。
   let storeClosed = false;
+  /**
+   * 🔴 2026-09-21：閘要唔要查，唔再單睇 `authorized`。
+   *
+   * 以前兩道閘（2.55 / 2.56）都係 `if (!authorized)` ⇒ **收銀台帶憑證就完全唔受影響**
+   * ⇒「店已關／已收工，收銀台照樣開新單」（J 2026-09-21 回報嘅錯行為）。
+   *
+   * 而家：只要請求**含有 `ORDER_CREATED` / `ORDER_UPDATED`**（＝可能係「開新生意」），
+   * 就一律查一次狀態（**每個 request 仍然只查一次**，唔會逐個 event 打 DB）。
+   * 純基建／出紙／結帳類事件唔會白查。
+   */
+  const hasOrderWriteEvents = events.some((rawEvent) => {
+    if (typeof rawEvent !== "object" || rawEvent === null) return false;
+    const t = (rawEvent as Record<string, unknown>).type;
+    return t === "ORDER_CREATED" || t === "ORDER_UPDATED";
+  });
+  const needsStoreGate = !authorized || hasOrderWriteEvents;
   // ⚠️ 用 `!authorized` 而唔係 `anonymousOrderEvents`：後者喺下面 2.6 段先宣告，
   //    而匿名請求本身就只准 ORDER_CREATED / ORDER_UPDATED（上面已擋其他類型）→ 兩者等價。
-  if (!authorized) {
+  if (needsStoreGate) {
     const { data: statusRow, error: statusErr } = await supabase
       .from("pos_store_status")
       .select("is_open")
@@ -556,7 +573,7 @@ export async function POST(request: Request) {
   //
   // ⚠️ 同 2.55 一樣：每個 request **只查一次**，唔好逐個 event 打 DB。
   let shiftClosed = false;
-  if (!authorized && !storeClosed) {
+  if (needsStoreGate && !storeClosed) {
     const { data: openShiftRows, error: shiftErr } = await supabase
       .from("pos_shifts")
       .select("id")
@@ -885,6 +902,43 @@ export async function POST(request: Request) {
           rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} 商家尚未開始營業`);
           ack(false, "商家尚未開始營業", { reason: "shift-closed" });
           continue;
+        }
+
+        // ── 授權通道寫入閘（2026-09-21）──────────────────────────────────────
+        //
+        // 🔴 以前上面兩段（2.55／2.56）**只擋匿名**，收銀台帶 POS 憑證就完全唔受影響
+        //    ⇒ 老闆撳「暫停營業」或交班之後，收銀台照樣開新單。
+        //    最危險嘅情境：一部開咗一整日冇 reload 嘅分頁，本機 `shift.openedAt`
+        //    仲係「開工」，另一部機已經交班 —— 佢落單，server 因為 `authorized`
+        //    而**照收**，收銀員以為落咗單，雲端同本機從此唔一致。
+        //
+        // 口徑（J 2026-09-21 拍板）：**只擋「開新生意」**——
+        //   · 拒：`ORDER_CREATED`、`ORDER_UPDATED` 帶 `addedItems`（加菜）
+        //   · 准：結帳（`ORDER_SETTLED`）、退菜、刪單、出紙、純狀態推進、`ledger-` 線上鏡像
+        // 完整理由同取捨見 `@/lib/pos/write-gate`（有單測）。
+        //
+        // ⚠️ 逃生門＝**重新開工**（開新班次），令補單變成有記錄、有意圖嘅動作，
+        //    而唔係靜默允許。
+        if (authorized) {
+          const writeDecision = decideOrderWrite({
+            eventType,
+            hasAddedItems: Array.isArray(addedItems) && addedItems.length > 0,
+            // `ledger-` 前綴 ＝ 線上鏡像（`ledger-pos-bridge` 為線上單補記錄）。
+            // 擋咗會令線上單喺 POS 雲端永遠冇完整記錄 ⇒ 一定要放行。
+            isOnlineMirror: orderId.startsWith("ledger-"),
+            storeClosed,
+            shiftClosed,
+          });
+          if (!writeDecision.allow) {
+            const message = describeWriteGateRejection(writeDecision.reason);
+            console.warn(
+              `[pos/sync] 拒收關店／收工後嘅新生意 ${orderId}` +
+                `（${writeDecision.reason}，source=${orderSource}）`,
+            );
+            rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} ${message}`);
+            ack(false, message, { reason: writeDecision.reason });
+            continue;
+          }
         }
 
         // ── P1-2：server 端售罄校驗（匿名通道）──

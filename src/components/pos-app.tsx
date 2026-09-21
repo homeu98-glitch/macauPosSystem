@@ -33,9 +33,11 @@ import {
   notifyQueueChanged,
   resolveStoreId,
   retryFailedSyncEvents,
+  POS_SYNC_BLOCKED_EVENT,
   POS_SYNC_FAILED_EVENT,
   withStoreScope,
 } from "@/lib/pos/sync-flush";
+import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -45,6 +47,12 @@ import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { shouldBackfillOnResubscribe } from "@/lib/pos/resubscribe-guard";
 import { queueSignature } from "@/lib/pos/queue-signature";
 import { createSingleFlight, SingleFlight } from "@/lib/pos/single-flight";
+import { ensureActivityTracking } from "@/lib/pos/activity-tracker";
+import {
+  evaluatePollGate,
+  reportRealtimeConnected,
+  subscribeIdleRecovery,
+} from "@/lib/pos/poll-gate-client";
 import { refocusForIosKeyboard } from "@/lib/pos/ios-keyboard";
 import {
   computeOrphanLocalOrders,
@@ -849,7 +857,16 @@ export function PosApp() {
     // 唔影響：`focus` / `online` / 開工收工本身都會即刻觸發 `syncOnce()`（見下面兩個
     // listener），所以「切返嚟就對齊」嘅保證完全不變。
     // 要還原舊行為：改返 60_000。
-    const timer = window.setInterval(() => void syncOnce(), 180_000);
+    // 🔴 2026-09-21 輪詢閘（`@/lib/pos/poll-gate`）：
+    //    · Realtime 通 → 兜底間隔放寬到 **5 分鐘**（push 優先）；
+    //    · 閒置 ≥5 分鐘／兩條接單通路都關／已收工 → **唔打**；
+    //    · 一切未知（null）→ 照跑（fail-open）。
+    //    interval 本身保留唔拆 —— tick 係本地零成本，request 才係成本。
+    //    要還原舊行為：刪走 `evaluatePollGate` 呢句。
+    const timer = window.setInterval(() => {
+      if (!evaluatePollGate({ tag: "pos/shift" }).poll) return;
+      void syncOnce();
+    }, 180_000);
     function onReconnect() {
       void syncOnce();
     }
@@ -858,11 +875,42 @@ export function PosApp() {
     }
     window.addEventListener(NETWORK_STATUS_EVENT, onReconnect);
     window.addEventListener("focus", onFocus);
+    // 輪詢閘配套（2026-09-21）：安裝真人互動追蹤（單一 listener、refCount），
+    // 並喺「由閒置恢復」嗰一刻**即刻**補一次同步 —— 令「停咗輪詢」唔會令人覺得鈍。
+    const uninstallActivityTracking = ensureActivityTracking();
+    const unsubscribeIdleRecovery = subscribeIdleRecovery(() => {
+      if (cancelled) return;
+      void syncOnce();
+    });
+    /**
+     * 🔴 G3（2026-09-21）：server 話「店已關／未開工」→
+     *   ① 提示收銀員（否則佢只會見到「未同步」徽章，唔知係被規則拒收）
+     *   ② **即刻由雲端重新對齊班次**（`reconcileLocalShift` 會 adopt 伺服器嘅「已收工」）
+     *
+     * 冇 ② 嘅話，一部舊分頁（本機以為仲開工）會一路白試到 `failed` 為止，
+     * 而收銀員完全唔知發生咩事。
+     */
+    function onSyncBlocked(rawEvent: Event) {
+      const detail = (rawEvent as CustomEvent<{ reason?: string; count?: number }>).detail;
+      const reason = detail?.reason;
+      if (reason !== "store-closed" && reason !== "shift-closed") return;
+      if (cancelled) return;
+      const label = reason === "store-closed" ? "店內已暫停營業" : "本店未開工／已收工";
+      setToast({
+        tone: "error",
+        message: `${label}：${detail?.count ?? 0} 筆操作被 server 拒收，正在由雲端更正本機狀態。`,
+      });
+      void syncOnce();
+    }
+    window.addEventListener(POS_SYNC_BLOCKED_EVENT, onSyncBlocked as EventListener);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener(NETWORK_STATUS_EVENT, onReconnect);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener(POS_SYNC_BLOCKED_EVENT, onSyncBlocked as EventListener);
+      unsubscribeIdleRecovery();
+      uninstallActivityTracking();
     };
   }, []);
 
@@ -949,6 +997,35 @@ export function PosApp() {
   function ensureShiftOpened(): boolean {
     if (shift.openedAt) return true;
     setToast({ tone: "info", message: "今日未開工，請先按頁首「開工」，然後才可以開枱落單。" });
+    return false;
+  }
+
+  /**
+   * 🔴 G2（2026-09-21）：**開新生意**時嘅「店內營業」閘。
+   *
+   * ── 為咩要有 ─────────────────────────────────────────────────────────────
+   * `ensureShiftOpened()` 只睇**本機** `shift.openedAt`，而 `pos_store_status.is_open`
+   * **完全冇檢查過** ⇒ 老闆撳「暫停營業」之後（未交班），收銀台照樣開枱落單。
+   * server 側嘅店內營業閘（`sync/route.ts` 2.55）**只擋匿名**，所以呢個係收銀台
+   * 唯一嘅本地防線（server 閘係第二道，見 `@/lib/pos/write-gate`）。
+   *
+   * ── ⚠️ 只可以喺「開新生意」入口呼叫 ──────────────────────────────────────
+   * 開枱／加菜／落單才叫。**結帳、睇單、對數、補打帳單一律唔可以擋** ——
+   * J 2026-09-21 拍板：**客人走唔到比「收到單」嚴重**。
+   *
+   * ── fail-open ────────────────────────────────────────────────────────────
+   * `isOpen === null`（未讀到 / 未接通）→ **放行**（同 server 嘅 fail-open 口徑一致）。
+   * 反過來「讀唔到就當已關」＝一斷網全店開唔到單。
+   *
+   * 註：`getStoreStatusSnapshot()` 之所以有值，係因為 pos-app 會 render `AppSidebar`
+   * → `useStoreOpenToggle()` → `useStoreStatus()`（模組層單例），所以唔需要另開 hook。
+   */
+  function ensureStoreOpenForNewBusiness(): boolean {
+    if (getStoreStatusSnapshot().isOpen !== false) return true;
+    setToast({
+      tone: "error",
+      message: "店內已暫停營業：暫時唔可以開新單或加菜。請到側欄商店名卡恢復營業。",
+    });
     return false;
   }
 
@@ -1210,7 +1287,15 @@ export function PosApp() {
     //      = **以本機為底**（見下方 1141 行），再過 tombstone（`filterResurrectedOrders`）
     //      同孤兒單隔離，**本來就唔會覆蓋本機即時狀態** —— 原註解擔心嘅情況已被下面兩道防線處理。
     if (queue.some((event) => event.status === "pending")) return;
-    void loadRuntimeState();
+    // 🔎 分辨「首次 mount」同「之後因為依賴變而重跑」——兩者喺 log 上要分得開：
+    //    首次 = mount（正常且必要）；之後每一次都代表有依賴變咗（＝循環嘅證據）。
+    const src = runtimeStateFirstRunRef.current ? "queue-dep" : "mount";
+    runtimeStateFirstRunRef.current = true;
+    // 🔴 2026-09-21 輪詢閘：呢個路徑係**事件驅動**（mount／queue 變化／手動），
+    //    唔係週期輪詢 ⇒ 用 `kind: "triggered"`（只受「冇 session」「分頁隱藏」限制）。
+    //    唔可以用週期閘，否則「未開工嘅收銀台」會連今日訂單都拉唔到。
+    if (!evaluatePollGate({ kind: "triggered", tag: `pos/state:${src}` }).poll) return;
+    void loadRuntimeState(src);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, runtimeRefreshTick, queue]);
 
@@ -1243,15 +1328,32 @@ export function PosApp() {
    * 要還原舊行為：把下面 `runLoadRuntimeState()` 呼叫改返直接呼叫。
    */
   const runtimeStateFlightRef = useRef<SingleFlight<number> | null>(null);
-  function loadRuntimeState(): Promise<number> {
+  /**
+   * 全量拉取 effect 係咪已經跑過第一次（用嚟分辨 `mount` vs `queue-dep`）。
+   * 見下面 effect 內嘅 `src` —— 純診斷，唔影響任何行為。
+   */
+  const runtimeStateFirstRunRef = useRef(false);
+  /**
+   * @param src 呼叫來源標記（`mount` / `queue-dep` / `resubscribe` / `manual`）——
+   *   **只會經 `x-pos-state-src` 標頭送去 server 寫入 `[egress]` log**，
+   *   唔參與任何查詢／授權／回應內容（見 `state/route.ts` 嘅 `stateSrc` 說明）。
+   *   用途：2026-09-21 見到「每 4.49 秒一次、連續 435 秒」嘅全量拉取爆發，
+   *   但四個入口喺 log 入面長得一模一樣 ⇒ 冇辦法定位。加呢個標記之後，
+   *   Vercel log 一行就睇得出係邊個入口。
+   *
+   *   ⚠️ single-flight 只按 `storeId` 分 key ⇒ 若「手動更新」撞正一條 in-flight 嘅
+   *   `queue-dep`，兩者會共用同一個請求，log 出嘅係**先開火嗰個**嘅 `src`。
+   *   呢個係刻意嘅（分 key 就等於取消去重），診斷上仍然睇得出邊個入口最頻繁。
+   */
+  function loadRuntimeState(src: string = "other"): Promise<number> {
     if (!runtimeStateFlightRef.current) {
       runtimeStateFlightRef.current = createSingleFlight<number>();
     }
     const flight = runtimeStateFlightRef.current;
-    return flight(resolveStoreId() ?? "", () => runLoadRuntimeState());
+    return flight(resolveStoreId() ?? "", () => runLoadRuntimeState(src));
   }
 
-  async function runLoadRuntimeState(): Promise<number> {
+  async function runLoadRuntimeState(src: string): Promise<number> {
     let quarantinedCount = 0;
     try {
       // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
@@ -1273,7 +1375,10 @@ export function PosApp() {
       const skipQueue = isOutboxV2Enabled() ? "&skipQueue=1" : "";
       const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}${skipQueue}`;
       // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（否則 401 未經授權）。
-      const response = await fetch(stateUrl, { headers: { ...posDeviceAuthHeaders() } });
+      // 2026-09-21：另加 `x-pos-state-src` 標頭（純診斷，見 `loadRuntimeState` 嘅 @param src）。
+      const response = await fetch(stateUrl, {
+        headers: { ...posDeviceAuthHeaders(), "x-pos-state-src": src },
+      });
       const payload = (await response.json()) as {
         orders?: PosOrder[];
         queue?: QueueEvent[];
@@ -1559,7 +1664,7 @@ export function PosApp() {
       //    floors／printTemplates／onlineOrderSettings／printContentToggles 保留本機
       //    （per-terminal 真源），其餘 server 優先；orders／printJobs 亦一併補返。
       //    2026-09-09 方案 A：全量拉取成功後自動隔離孤兒單（雲端冇、無 pending 事件支持）。
-      const quarantined = await loadRuntimeState();
+      const quarantined = await loadRuntimeState("manual");
       notes.push("設定已同步");
       if (quarantined > 0) {
         notes.push(`已隔離 ${quarantined} 張孤兒單，詳情喺「同步健康」`);
@@ -1889,7 +1994,7 @@ export function PosApp() {
         }
         return;
       }
-      void loadRuntimeState();
+      void loadRuntimeState("resubscribe");
     },
     /**
      * Realtime 渠道狀態（2026-09-10 P0）：記落 state 俾警示條用，同時出 console。
@@ -1900,6 +2005,17 @@ export function PosApp() {
      */
     onStatusChange: (status) => {
       setRealtimeStatus(status);
+      /**
+       * 輪詢閘用（2026-09-21）：報告 Realtime 通唔通。
+       *
+       * 🔴 **唔可以單靠 `SUBSCRIBED`** —— 訂錯 Supabase 專案一樣會 `SUBSCRIBED`，
+       * 但**永遠收唔到事件**（見 `use-store-status.ts:38-43` 嘅完整記錄）。
+       * 所以一定要**同時**確認 config 指向 POS 專案（`source === "pos"`）才算「通」；
+       * 否則輪詢閘會以為有 push 而放慢到 5 分鐘 ⇒ 收唔到單。
+       */
+      reportRealtimeConnected(
+        status === "SUBSCRIBED" && getPosRealtimeConfig()?.source === "pos",
+      );
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         console.warn(`[pos-realtime] 渠道狀態 ${status}（host=${safeHost(getPosRealtimeConfig()?.url ?? null) ?? "?"}）`);
       }
@@ -2413,7 +2529,8 @@ export function PosApp() {
     if (!existing) {
       // 🔴 未開工：空閒枱 = 開新枱落單 → 擋。有單枱照樣可以入去睇
       //    （加菜／下單／結帳各自有閘），即「先睇數」唔會被擋。
-      if (!ensureShiftOpened()) return;
+      // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（呢個係「開新生意」）。
+      if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
       // 空閒枱 → 彈開桌窗揀入座人數，唔直接入點餐
       setOpenTablePartySize(1);
       setOpenTableModalTableId(tableId);
@@ -2427,7 +2544,8 @@ export function PosApp() {
     const tableId = openTableModalTableId;
     if (!tableId) return;
     // 🔴 未開工禁止開枱落單（落單閘：ensureShiftOpened）。
-    if (!ensureShiftOpened()) return;
+    // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋。
+    if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
     // 按鈕本身已限制 1..座位數；呢度再 clamp 一次（座位數中途被改細 / fallback 枱）防超座。
     const capacity = visibleTables.find((t) => t.id === tableId)?.capacity;
     const maxSeats = capacity && capacity > 0 ? capacity : OPEN_TABLE_FALLBACK_MAX_SEATS;
@@ -2968,7 +3086,8 @@ export function PosApp() {
   function addMenuItem(item: MenuItem) {
     if (isReadOnlySettled) return;
     // 🔴 未開工禁止加菜／落單（落單閘：ensureShiftOpened）。
-    if (!ensureShiftOpened()) return;
+    // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（加菜＝新生意）。
+    if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
     if (isItemSoldOut(item.id)) {
       setToast({ tone: "info", message: `${item.name} 已售罄。` });
       return;
@@ -3720,7 +3839,8 @@ export function PosApp() {
     if (isReadOnlySettled) return null;
     // 🔴 未開工禁止下單／加單（落單閘：ensureShiftOpened）。
     //    注意：`silent: true` 嘅內部呼叫（結帳前自動落單）同樣要擋 —— 未開工連結帳都做唔到。
-    if (!ensureShiftOpened()) return null;
+    // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（此處係「開新單／加單」）。
+    if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return null;
     if (!bootstrap || !activeTable || cartItems.length === 0) return null;
     if (orderSubmitting) return null;
     setOrderSubmitting(true);

@@ -45,6 +45,67 @@ export async function GET(request: Request) {
   // 家陣要求 POS 終端憑證（`/api/ledger/login` 簽發）或 admin session token。
   // 應急回滾：設定 `POS_REQUIRE_DEVICE_AUTH=0`。
   const ip = clientIp(request);
+  /**
+   * 🔎 呼叫來源標記（2026-09-21 診斷用，**純記錄、零行為影響**）。
+   *
+   * ## 為咩需要
+   *
+   * 全量 state 拉取係本專案最大嘅 egress 來源（單次 424 KB）。2026-09-21 一度見到
+   * **每 4.49 秒一次、連續 435 秒**嘅爆發，但**冇辦法由 log 分辨係邊個入口觸發**
+   * —— `/api/pos/state` 有四個呼叫點（mount／`queue` 依賴效應／realtime 重連補拉／
+   * 手動更新），佢哋喺 Supabase log 入面**長得一模一樣**。
+   *
+   * 所以 client 用請求標頭 `x-pos-state-src` 報上自己嘅身分，
+   * 呢度只係**讀入嚟寫落 `[egress]` log**：
+   *
+   * ```
+   * [egress] pos/state bytes=424181 mode=full src=queue-dep orders=200 …
+   * ```
+   *
+   * ## 為何零行為影響
+   *
+   * · 標頭**唔參與任何查詢、授權或回應內容** —— 只做字串 slice 後入 log。
+   * · 舊 client／其他 caller 唔傳 → 落 `-`，回應**逐位元不變**。
+   * · 用標頭而唔用 query string，係避免污染 URL（URL 一變就可能繞過任何
+   *   CDN／快取鍵，雖然本 route 係 `force-dynamic`，但唔想留一個隱性依賴）。
+   * · `.slice(0, 24)` 防止有人用呢個欄位塞大字串去膨脹 log。
+   */
+  const stateSrc = (request.headers.get("x-pos-state-src") ?? "").trim().slice(0, 24) || "-";
+  /**
+   * 🔴 舊版 bundle 偵測（2026-09-21，**只加一條 log，唔改任何行為**）。
+   *
+   * ## 為何要
+   *
+   * 2026-09-21 實測：**一個開了一整日冇 reload 嘅 Mac Safari 分頁**，
+   * 仍然跑住 17:18 之前嘅舊 JS（唔識傳 `skipQueue=1`），結果
+   * **26 分鐘拉 147 次全量 state、每次 846 KB（`queue=300` 多咗 ≈500 KB）
+   * ⇒ 122 MB / 26 分鐘 ≈ 650 MB/小時**，佔該窗口全部 egress **96.6%**。
+   * 而同一部機另一個新分頁（有 `skipQueue=1`）29.6 分鐘只拉 **1 次、90 KB**。
+   *
+   * 呢種「舊分頁靜靜燒流量」**唔會報錯、唔會 crash**，只可以由 log 反推
+   * —— 所以索性令系統自己講出嚟。
+   *
+   * ## 判準（要精準，唔可以誤報）
+   *
+   * `skipQueue` 由 client 喺 `isOutboxV2Enabled()` 為 true 時才傳（預設 true）
+   * ⇒ **全新 bundle 嘅全量拉取一定有 `skipQueue`**。
+   * 而 `ordersOnly=1` 嘅呼叫（報表 / 交班 / 對賬守護 / 本機訂單面板）**本身唔傳**
+   * ⇒ 一定要排除，否則每次開報表都出假警報。
+   *
+   * 所以：**「非 ordersOnly 且冇 skipQueue」＝ 舊版全量拉取**（唯一呼叫者係 `pos-app`）。
+   * 實際判斷寫喺下面 `const skipQueue = …` 之後（避免重複 parse 同一個 query param）。
+   *
+   * ## 為何唔會嘈
+   *
+   * 用 `rateLimit(key, 1, 60_000)` ⇒ **每個 IP 每分鐘最多一條**。
+   * 舊 client 每分鐘會打 ~13 次，但 log 只出 1 條。
+   *
+   * ## 為何零功能影響
+   *
+   * 只係 `console.warn` ＋ 多一個 egress log 維度（`legacy=1`）；
+   * 唔改查詢、唔改授權、唔改回應內容。
+   * 要還原：刪走下面嗰段偵測（其餘不受影響）。
+   */
   if (!rateLimit(`pos-state:${ip}`, 240, 60_000)) {
     return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
   }
@@ -106,6 +167,17 @@ export async function GET(request: Request) {
   // ≈1 668 B，合共 ≈500 KB）→ 純浪費。
   // v2 client 會傳 `skipQueue=1`；v1（回溯舊行為）唔傳 = 照查，語義不變。
   const skipQueue = searchParams.get("skipQueue") === "1";
+
+  // 🔴 舊版 bundle 偵測（2026-09-21）——**只加一條 log，唔改任何行為**。
+  // 完整說明見上面 `stateSrc` 之前嘅大段註釋。判準：非 `ordersOnly` 且冇 `skipQueue`。
+  // 只為咗令「有部機靜靜跑住舊分頁、每分鐘燒 ~650 MB/小時 egress」呢種事**自己講出嚟**。
+  const isLegacyFullState = !ordersOnly && !skipQueue;
+  if (isLegacyFullState && rateLimit(`pos-state-legacy:${ip}`, 1, 60_000)) {
+    console.warn(
+      `[pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=${ip} —— ` +
+        `每次會多拉約 500 KB queue；請該裝置**重新載入頁面**。`,
+    );
+  }
 
   // 報表區間過濾：只回傳 created_at **或** updated_at **或** reopened_at 落在 [start, end]
   // 內嘅訂單（OR 語義）。
@@ -309,9 +381,13 @@ export async function GET(request: Request) {
       orders: orders?.length ?? 0,
       queue: queue?.length ?? 0,
       skipQueue: skipQueue ? 1 : 0,
+      // 🔴 舊版 bundle 全量拉取（無 skipQueue）＝ 每次多約 500 KB。見 `isLegacyFullState`。
+      legacy: isLegacyFullState ? 1 : 0,
       printJobs: printJobs?.length ?? 0,
       limit,
       ip,
+      // 🔎 呼叫來源（mount / queue-dep / resubscribe / manual / -）；見 `stateSrc` 嘅說明。
+      src: stateSrc,
     },
   );
 }

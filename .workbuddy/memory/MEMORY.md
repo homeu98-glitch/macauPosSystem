@@ -105,37 +105,53 @@
 - 🔴 計費口徑：PostgREST egress ＝ **Supabase → Vercel Function** 嗰段，**唔係** → 瀏覽器 ⇒
   改 route response／壓縮**對帳單零幫助**。實測 PostgREST **98.8~99.3%**／Realtime 0.7~1.2%
   ⇒ **唔可以為省流量關 Realtime**。
-- per-row 實測：`pos_orders`（帶 items）1 469 B／`pos_queue_events` 1 668 B／`pos_print_jobs` 1 165 B；
-  只投影 `id,status,updated_at` ＝ 91 B（16×）。
-- 📐 單次 bytes：全量 **857 KB**（無 skipQueue）／**424 KB**（有 skipQueue）／
-  報表 ordersOnly 266 KB／**守護 ordersOnly+fields 20 KB**（修前 ~7 MB ⇒ −99.7%）。
-- ✅ **已落實（`9d8e1d5` → `c5db7a0`，Production 已上線）**：守護投影 + 日期下限 + 每日 120 次上限／
-  `?skipQueue=1`／`pos_orders_page` RPC（0046，三條時間腿**歸零**）／頻率（TTL 60min、報表 10min、
-  打印中心 30s、badge 5min、班次 180s）／`[egress]` log／`queue_events` 批次 upsert（POST 150→28）／
-  `print-agent` GET 唔寫 DB（`recordActivity` 預設 false）。
-  報告：`docs/reviews/supabase-egress-root-cause-2026-09-21.md`、
-  `egress-optimization-implemented-2026-09-21.md`、`page-load-calls-and-herd-2026-09-21.md`、
-  `always-on-calls-inventory-2026-09-21.md`、**`errwarn-and-call-audit-2026-09-21.md`（最新）**。
-- ✅ 實測成效：egress **92.47 MB/29.8min → 0.45 MB/38.8min（−99.6%）**，推算 ~6 MB/日。
+- 📐 per-row：`pos_orders`（帶 items）1 469 B／`pos_queue_events` 1 668 B／`pos_print_jobs` 1 165 B；
+  只投影 `id,status,updated_at` ＝ 91 B（16×）。單次：全量 **857 KB**（無 skipQueue）／**424 KB**（有）／
+  報表 ordersOnly 266 KB／守護 `ordersOnly+fields` **20 KB**（修前 ~7 MB）。
+- ✅ **已落實（`9d8e1d5`→`c5db7a0`，Production）**：守護投影＋日期下限＋每日 120 次上限／`?skipQueue=1`／
+  `pos_orders_page` RPC（0046，三條時間腿**歸零**）／頻率（TTL 60min、報表 10min、打印中心 30s、
+  badge 5min、班次 180s）／`[egress]` log／`queue_events` 批次 upsert（POST 150→28）／
+  `print-agent` GET 唔寫 DB。**成效：92.47 MB/29.8min → 0.45 MB/38.8min（−99.6%）**。
 - 🔴🔴 **`loadPairedAgent(agentId, { recordActivity })`**：**預設純讀**，只 POST 路由傳 `true`。
-  ⚠️ 「改 `loadPairedAgent` 本身」做唔得 —— `device-config`、`print-agent/pair` 都有 **GET** 路由用同一 helper
-  ⇒ 會令 GET 寫 DB（違反 HTTP 語義）。由 `src/lib/print-agent-server.test.ts` 守住。
+  ⚠️「改 helper 本身」做唔得 —— `device-config`、`print-agent/pair` 都有 **GET** 路由用同一 helper
+  ⇒ 會令 GET 寫 DB（違反 HTTP 語義），由 `print-agent-server.test.ts` 守住。
   🔴 **蓋章失敗唔可以當驗證失敗**（失敗回 401 ⇒ APK 清配對）⇒ update 失敗即退回純讀再驗。
-- ✅ **2026-09-21 已修：`queue` 依賴自激迴圈（全量拉取 424 KB × 每 4.49 秒）**
-  · 病根：`pos-app.tsx` 嗰個 `useEffect(..., [offlineMode, runtimeRefreshTick, queue])` 認嘅係
-    **array 身分**，而三個入口用 `setQueue(loadQueue())`（`POS_SYNC_FAILED_EVENT` /
-    `SyncHealthModal onMutated` / 重試掣）**就算內容一樣都換身分** ⇒ 連鎖再拉一次全量 state。
-  · 修法：`src/lib/pos/queue-signature.ts`（零 import）＋ `queueSignatureRef` ＋
-    `replaceQueueFromStorage()`；backfill 嗰處內聯簽名**併入同一 ref**（`lastLoadedQueueRef` 已刪）。
-    🔴 簽名**唔可以**用 `id:status` 直接串（`{id:"a:b",status:"c"}` 會同 `{id:"a",status:"b:c"}` 撞）
-    —— 用 `JSON.stringify([id,status])` 排序後 `\n` join。
-  · 另加 `loadRuntimeState()` single-flight（key ＝ `resolveStoreId()`）。
-  · 守衛：`src/components/pos-app-queue-identity.test.ts`。
-    🔴 掃 `.tsx` source 前**一定要剝註釋行**，否則自己嘅解釋性註釋會令 `setQueue(loadQueue())`
-    誤報（本檔註釋刻意引用舊寫法）。
-  · ⏸️ 刻意**唔做** dep 收窄（`queue` → `hasPendingEvents`）：有語義差異，唔符合「零行為改動」。
-  · 取證/收口全流程已收錄成 skill **`pos-egress-call-forensics`**（用戶級）。
-- ⚠️ **仍有裝置跑舊 bundle（未 reload）** ⇒ 會見到「冇 skipQueue」嘅全量拉取。
+- ✅ **`queue` 身分自激迴圈**（已修）：`useEffect(..., [.., queue])` 認 array 身分，而三個入口用
+  `setQueue(loadQueue())` ⇒ 內容一樣都換身分 ⇒ 連鎖再拉 424 KB。修法＝`src/lib/pos/queue-signature.ts`
+  （零 import）＋ `replaceQueueFromStorage()`（`lastLoadedQueueRef` 已刪）＋ `loadRuntimeState()` single-flight。
+  🔴 簽名用 `JSON.stringify([id,status])` 排序後 `\n` join（**唔可以**用 `id:status` 直接串，會撞簽名）。
+  守衛 `pos-app-queue-identity.test.ts` —— 🔴 掃 `.tsx` 前**一定要剝註釋行**。
+- 🔴🔴 **真兇：一部 Mac（Safari 17.14、`60.246.53.111`）開咗一整日冇 reload 嘅舊分頁**
+  （2026-09-21 22:30 鎖定）。鐵證：149 次 / 29.6 分鐘 / **123 MB（佔 egress 97.2%）**、
+  平均 865,924 B、`skipQueue=0 queue=300`。**成本 846 KB × 12.8/min ⇒ ≈650 MB/小時 ⇒ 10 小時 6.5 GB。**
+  ⇒ 教訓：**「修正部署咗但症狀持續」→ 第一件事驗「客戶端係咪跑緊舊 bundle」**（睇 query string 有冇
+  `skipQueue`），唔好即刻推翻自己嘅修正。診斷工具：`tools/_egress-aggregate-20260921.cjs`（加總 bytes、按 ip/mode 分組）、
+  `tools/_egress-who-20260921.cjs`（反查 IP ＋ User-Agent ⇒ 邊部機邊個瀏覽器）。
+  已加零風險診斷（**待部署**）：`x-pos-state-src` 標頭 ＋ **舊版 bundle 偵測**
+  （`isLegacyFullState = !ordersOnly && !skipQueue` ⇒ warn，每 IP 每分鐘最多 1 條；守衛 `state-egress-src.test.ts`）。
+  ⚠️ 本機 `next dev` **見到 `console.warn` 但見唔到 app 層 `console.info`** ⇒ `[egress]` 只可以喺生產 Vercel log 睇。
+- 🔴 **根治（未做）**：回應標頭帶 build id ⇒ client 出「請重新載入」提示（**唔好自動 reload**）。
+  `public/sw.js` 對 `/_next/static/**` cache-first 本身安全，但 `CACHE_NAME` 寫死（`macau-pos-v20-7-31`）⇒ 建議建置注入。
+- 🔴🔴 **量度口徑陷阱：唔可以用「全窗口平均」**。循環係 burst 形態
+  ⇒ 平均會被 duty cycle 稀釋（11.24/min → 睇落 5.16/min，但**活躍段其實升到 13.1/min**）。
+  一律用 `tools/_fullstate-bursts-20260921.cjs` 做**分段（gap > 20s 就切）**口徑。
+- 🔴🔴 **Vercel log 匯出可能係舊檔，而且會落後**：① 先比 SHA-256（實例：兩次匯出**逐位元相同**）；
+  ② **檔名時間 ≠ 內容時間**：`…T15-10-53.csv`（澳門 23:10）內容其實係 `12:52–13:21Z`（澳門 20:52–21:21）。
+  ⇒ 一律用**內容**嘅 first/last `TimeUTC` 做窗口標籤。
+- 🔴 **「兩個來源各打一次」型重複**（同一型係早前嘅 thundering herd）：
+  `/api/pos/sync` 中位 **18.6s**（`sync-flush` 30s ＋ pos-app 批次 30s 交錯）；
+  `/api/pos/shift` 中位 **48.3s** 且**有 0.0s 成對**（180s timer ＋ `window focus` listener）；
+  `/api/topup/pending-count` 中位 **30.3s**（設計 60s/300s，⚠️ 剛好等於
+  `VISIBILITY_REFRESH_MIN_GAP_MS = 30_000` ⇒ 反覆切前景就變隱形輪詢）。
+- 🔴 **日誌解讀陷阱**：Supabase log 記嘅係 **PostgREST** URL，**唔會**出現 `ordersOnly`/`skipQueue`/`fields`
+  ⇒ 喺 Supabase log 搜呢啲字串必然 0，**唔代表冇生效**。
+- 🔴🔴 **最大單一 egress 來源＝「舊分頁跑舊 bundle」**（2026-09-21 實測鎖定）：
+  冇 reload 嘅分頁唔識傳 `skipQueue=1` ⇒ 每次全量拉取由 **424 KB 變 846 KB**（多拉 300 條 queue），
+  配合自激/重連循環 ⇒ **650 MB/小時**。**判斷方法**：Supabase log 睇唔到（只記 PostgREST URL），
+  要喺 **Vercel log** 睇 `/api/pos/state` 嘅 `requestQueryString` 有冇 `skipQueue`，
+  或者睇 `[egress] pos/state … skipQueue=` 同 `legacy=`。
+  工具：`tools/_egress-aggregate-20260921.cjs`（加總 bytes、按 ip/mode/src 分組）、
+  `tools/_egress-who-20260921.cjs`（反查 IP + User-Agent ⇒ 邊部機邊個瀏覽器）。
 - 🔴 **日誌解讀陷阱**：Supabase log 記嘅係 **PostgREST** URL，**唔會**出現 `ordersOnly`/`skipQueue`/`fields`
   ⇒ 喺 Supabase log 搜呢啲字串必然 0，**唔代表冇生效**。要驗就睇 Vercel log 嘅 `[egress] pos/state` 行。
 - 🔴 **幻影欄位**：`pos_orders` 嘅 `refund_records`／`refunded_amount`／`voided_items` ——
@@ -150,12 +166,78 @@
 - 🔴 `pos-orders-range.ts` 有 `import "server-only"` ⇒ `node --test` 載入唔到 ⇒ 決策邏輯要抽零 import 模組。
 - 🔴 改任何「週期常數」之後**一定要 grep 用戶可見文案**（2026-09-21 改咗間隔但標題仍寫死「每 3 分鐘」）。
   正解＝由常數推導。
-- 🔴 **現時最大請求來源**：`print-agent/heartbeat` 每 ~32 秒（APK 寫死 `HEARTBEAT_MS=30_000`；
-  web 已回 `nextPollMs: 60_000` 但 **APK 未讀**）／`online-order-settings` 開頁 ×5（herd，**已修 →1**）／
-  `store-status` ×3（**已修 →1**）／`claim` 每 ~70 秒／`pos/shift` 180 秒／`topup/pending-count`。
 - 🔴 心跳放慢上限：`print-center.tsx` 寫死 `minutesAgo >= 5` 就標「疑似離線」⇒ **最多 2~3 分鐘**。
-- ⏸️ 刻意未做（都有功能影響）：`topup/pending-count` 改按需（紅點唔自動更新）、
-  `pos/shift` 關店唔拉（開工閘延遲解鎖）、`kiosk-settings` 延後。
-  **唔可以動**：`POST /api/pos/sync`、`/api/pos/store-status`、Realtime。
+- 🔴 改任何「週期常數」之後**一定要 grep 用戶可見文案**（曾改咗間隔但標題仍寫死「每 3 分鐘」）。
+  正解＝由常數推導（`Math.round(X / 60_000)`）。
 - 🔴 睇用量圖**一定要先睇右上 filter**（`All projects` ＝ org 總和）。
   另：`/api/topup/*` 打 **Ledger** ⇒ 唔計 macauPos egress，但**計** Vercel invocations。
+- 📚 相關報告：`docs/reviews/` 內 `supabase-egress-root-cause-2026-09-21.md`、
+  `egress-optimization-implemented-2026-09-21.md`、`page-load-calls-and-herd-2026-09-21.md`、
+  `always-on-calls-inventory-2026-09-21.md`、`errwarn-and-call-audit-2026-09-21.md`（附錄 A/B）、
+  `after-close-calls-audit-2026-09-21.md`、`session-and-write-gate-design-2026-09-21.md`。
+  取證/收口全流程已收錄成用戶級 skill **`pos-egress-call-forensics`**。
+
+## 9. 寫入閘 / 輪詢閘 / 工作階段（2026-09-21 **已實作**）
+- 🔴🔴 **原則：Push 優先，Polling 只做兜底**（J 拍板：「不應該不停的 polling」）。
+  **你嘅系統已經有 push，唔需要新基建**：
+  · POS 網頁 → Realtime 4 條 channel（orders / print_jobs / soldout / store_status）。
+  · 🔴 **打印中繼 APK 亦有** —— `PosRealtimeSubscriber.kt:84-120` 訂 `pos_print_jobs` **INSERT**
+    → `onWake()` → `PosJobRunner.onRealtimeWake()` → claim → 出紙。
+    ⇒ APK 嘅 `claim`(60s) 同 `heartbeat`(30s) **本來就係兜底**，只係跑到太密。
+- ⚠️ **唔可以真「零輪詢」**：`use-store-status.ts:38-43` 記錄「Realtime 靜默失效」
+  （訂錯專案照 `SUBSCRIBED` 但永遠收唔到事件，Supabase 唔報錯）⇒ 保留 5 分鐘兜底，
+  將最壞情況由「全日」壓到「5 分鐘」。
+- ✅ 新檔：`src/lib/pos/poll-gate.ts`（零 import 純決策、24 單測）、
+  `poll-gate-client.ts`（執行層）、`activity-tracker.ts`（真人互動追蹤、單一 listener、零網絡）。
+  · 停：冇 session／分頁隱藏／**閒置 ≥5 分鐘**／兩條接單通路都關／已收工（無 pending）。
+  · **最短間隔**：Realtime 通 → **5 分鐘**；唔通／未知 → 60 秒。
+  · 🔴 `kind: "triggered"`（mount backfill／重連補拉／手勢）**只受「冇 session」「分頁隱藏」限制** ——
+    唔可以用週期閘擋，否則「未開工嘅收銀台連今日訂單都拉唔到」。
+  · 🔴 `urgent: true`（推本機事件上雲）**唔可以被閒置／關店擋**。
+  · 🔴 報告 Realtime 健康一定要**同時**驗 `getPosRealtimeConfig()?.source === "pos"` ——
+    單靠 `SUBSCRIBED` 會中「訂錯專案」嘅靜默失效。
+- ✅ **寫入閘**：`src/lib/pos/write-gate.ts`（零 import、15 單測）。
+  兩道 server 閘由「只查 `!authorized`」擴展到「含 `ORDER_CREATED`/`ORDER_UPDATED` 就查」，
+  再加**授權通道**閘。口徑（J 拍板）：
+  · **拒**：`ORDER_CREATED`、`ORDER_UPDATED` **帶 `addedItems`**（加菜）—— 舊 client 冇帶 → fail-open。
+  · **准**：`ORDER_SETTLED`（結帳，**客人走唔到更嚴重**）／退菜／刪單／出紙／純狀態推進。
+  · 🔴🔴 **`ledger-` 前綴線上鏡像一定要放行** —— 擋咗會令線上單喺 POS 雲端**永遠冇完整記錄**（靜默）。
+  · 逃生門＝**重新開工**（有記錄、有意義）。
+  · 收銀台加菜事件**有**帶 `addedItems`（`pos-app.tsx:3877`），所以攔得到。
+  守衛：`src/app/api/pos/sync/sync-route-write-gate.test.ts`。
+- 🔴 **兩道閘都係 fail-open**（查唔到就放行）——**刻意**，唔可以改 fail-closed
+  （一斷網全店落唔到單）。補償＝client 層擋 + 側欄警示。
+- 憑證 TTL：POS 終端 token／admin session 都係 **12 小時**（`pos-device-token.ts:31`）。
+- ⏭️ 未做：`pos_shifts` Realtime 訂閱、報表「自動更新已停用」文案、APK 側改動（交 Ledger）。
+- ✅ **G2／G3 已實作**（2026-09-21）：
+  · **G2**＝`pos-app` 新 `ensureStoreOpenForNewBusiness()`（**fail-open：只有 `isOpen === false` 才擋**），
+    掛喺 **4 個「開新生意」入口**（`selectTable` 空閒枱／`confirmOpenTable`／`addMenuItem`／`sendToKitchen`）。
+    🔴 **明確唔掛喺結帳**（`openSettlementModal`／`confirmPayment`）—— J 拍板「客人走唔到更嚴重」。
+    🔑 唔需要另開 hook：`pos-app` render `<AppSidebar>` → `useStoreOpenToggle()` → `useStoreStatus()`
+    係 module singleton ⇒ `getStoreStatusSnapshot()` 已經有值。
+  · **G3**＝`sync-flush.ts` 新增 `POS_SYNC_BLOCKED_EVENT`（**規則性拒收**，同 `POS_SYNC_FAILED_EVENT`
+    「嘗試到頂」分開），喺**兩條回執路徑**（非 200 / 200）都 `notifyBlockedByGate()`；
+    `pos-app` 收到 → toast 提示 ＋ 即刻 `syncOnce()` 由雲端重新對齊班次
+    （否則舊分頁一路白試到 `failed`）。
+  · 守衛：`src/components/pos-app-write-gate-client.test.ts`（7 條，含「結帳唔可以掛 G2」）。
+- 📄 **Ledger 中繼 APK 文件（第 2 版）**：`docs/integration/apk-optimization-handover-2026-09-21.md`
+  —— 核心＝**獨立心跳可以整個刪**（`claim` 已蓋 `last_seen_at`／心跳送嘅 IP server 從未讀過／
+  APK 已有 `PosRealtimeSubscriber`），claim 由 **`nextPollMs`** 控制（60s → 180s）⇒
+  **3.0 → 0.33 次/分鐘（−89%）**。🔴 上限 **180 秒**（POS 網頁 5 分鐘標「疑似離線」）。
+  伺服器已配合：`claim` 回應加 `nextPollMs`。
+- 設計 + 實作全文：**`docs/reviews/session-and-write-gate-design-2026-09-21.md`**。
+- 📌 **取證（2026-09-21 實查，做呢批改動嘅依據）**：
+  · 兩道 server 閘原本係 `sync/route.ts:519-534`（店內營業 2.55）、`558-572`（班次 2.56），
+    條件都係 `if (!authorized && …)`；`869`／`883` 一樣 ⇒
+    **收銀台（帶 POS 憑證）完全冇「店已關」閘**，而 `useStoreStatus()` **冇被 `pos-app` 用過**
+    （只用於 `app-sidebar`／`online-open-pill`／`shift-page`／`use-store-open-toggle`）。
+  · 收銀台開工閘 `pos-app.tsx:949-953 ensureShiftOpened()` **只讀本機 `shift.openedAt`**
+    ⇒ 另一部機交班後最長 180 秒才同步到；**舊分頁可以一直用過時狀態落單而 server 照收**。
+  · 改動前**全系統冇任何 idle／active session 偵測**（grep ＝ 0 命中）。
+  · ✅ 既有正確模式（照抄）：`pos-app.tsx:944-947` 已有「過閘／唔過閘」清單；
+    `close-gate.ts`（**零 import** 純決策）＋ `close-gate-run.ts`（執行層）係正確分檔法。
+  · 🔴 **Heartbeat 評估結論：唔適用**。① 推送式 ⇒ 關店／掛機照打，冇得暫停；
+    ② 只有 `print-center` 顯示用，**冇 server 邏輯靠佢**；③ 佔關店時段請求 **12%**（單一最大）；
+    ④ **完全冗餘** —— `claim`（60s、無條件）已經蓋同一個 `last_seen_at`；
+    ⑤ 送嘅 `ipAddress(s)` **server 從未讀過**。
+    ⇒ 刪獨立心跳迴圈，靠 `claim` 兼任（−100%）；保留 `nextPollMs` 作遠端旋鈕。

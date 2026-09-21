@@ -63,6 +63,22 @@ export const POS_SYNC_QUEUE_CHANGED_EVENT = "pos-sync-queue-changed";
  */
 export const POS_SYNC_FAILED_EVENT = "pos-sync-failed";
 
+/**
+ * 「**開新生意被 server 拒收**」（店已關／未開工）時廣播畀 UI（2026-09-21 G3）。
+ *
+ * 為何要有：2026-09-21 加咗授權通道寫入閘（見 `@/lib/pos/write-gate`），
+ * server 會對「關店後嘅新單／加菜」回 `ok:false, reason:"store-closed" | "shift-closed"`。
+ *
+ * UI 收到之後要做兩件事，缺一不可：
+ *   ① **提示收銀員**（otherwise 佢只會見到「未同步」徽章，唔知係「被規則拒收」）；
+ *   ② **由雲端重新對齊班次狀態** —— 舊分頁本機仲以為「開工中」，
+ *      對齊之後 `ensureShiftOpened()` 就會擋得住，唔會一路白試 5 次燒到 `failed`。
+ *
+ * ⚠️ 同 `POS_SYNC_FAILED_EVENT` 分開：後者係「嘗試到頂」，前者係「規則性拒收」——
+ * 處置方式完全唔同（前者要人手重試／放棄，後者係自動更正 + 提示）。
+ */
+export const POS_SYNC_BLOCKED_EVENT = "pos-sync-blocked";
+
 const MAX_SYNC_ATTEMPTS = 5;
 /** 對齊 server-side `MAX_EVENTS_PER_REQUEST`（/api/pos/sync 上限 200）。 */
 const MAX_EVENTS_PER_FLUSH = 200;
@@ -521,6 +537,30 @@ function applyEventResults(params: {
   return { next, acked, justFailed, superseded };
 }
 
+/**
+ * 由逐事件回執揀出「**規則性拒收**」（店已關／未開工）並廣播一次（2026-09-21 G3）。
+ *
+ * 唔可以只 log 就算：UI 要靠呢個事件去（a）提示收銀員（b）由雲端重新對齊班次，
+ * 否則舊分頁會一路白試到 `failed`。詳見 `POS_SYNC_BLOCKED_EVENT` 嘅說明。
+ *
+ * @returns 有冇廣播
+ */
+function notifyBlockedByGate(perEvent: EventAckResult[] | null): boolean {
+  if (typeof window === "undefined" || !perEvent) return false;
+  const blocked = perEvent.filter(
+    (r) => r.reason === "store-closed" || r.reason === "shift-closed",
+  );
+  if (blocked.length === 0) return false;
+  const reason = blocked[0].reason;
+  console.warn(
+    `[pos-sync-flush] ${blocked.length} 筆新生意被拒收（${reason}）—— 通知 UI 自動更正狀態`,
+  );
+  window.dispatchEvent(
+    new CustomEvent(POS_SYNC_BLOCKED_EVENT, { detail: { reason, count: blocked.length } }),
+  );
+  return true;
+}
+
 async function doFlush(options: { silent?: boolean }): Promise<void> {
   if (typeof window === "undefined") return;
   if (!readNetworkOnline()) return;
@@ -635,6 +675,9 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
       void refreshPosDeviceTokenIfNeeded(true);
     }
 
+    // G3（2026-09-21）：規則性拒收（店已關／未開工）→ 廣播畀 UI 自我修正 + 提示。
+    notifyBlockedByGate(perEvent);
+
     const { next, acked, justFailed, superseded } = applyEventResults({
       allQueue,
       flippable,
@@ -681,6 +724,9 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   } catch {
     // 空 body / 非 JSON（舊 server）→ 保持 null
   }
+
+  // G3（2026-09-21）：HTTP 200 都可能帶規則性拒收（`ok:false, reason:store-closed`）。
+  notifyBlockedByGate(okPerEvent);
 
   const appliedRes = applyEventResults({
     allQueue,

@@ -64,3 +64,38 @@ describe("/api/pos/print-agent/heartbeat ── APK 心跳合約", () => {
     assert.ok(/serverTime:/.test(SRC), "serverTime 係既有欄位，唔應該靜默移除");
   });
 });
+
+/**
+ * 🆕 2026-09-21：**刪咗心跳之後，節奏旋鈕搬去 `claim`**。
+ *
+ * 建議 APK 刪走獨立心跳迴圈（`claim` 已經順手蓋 `last_seen_at` ⇒ 心跳完全多餘），
+ * 之後由 `claim` 回應嘅 `nextPollMs` 控制節奏 ⇒ 服務端可以隨時調整、唔使再出 APK。
+ * 呢個守衛防「有人以為冇用而剝走佢」——剝走之後 APK 只可以寫死常數。
+ */
+const CLAIM_SRC = readFileSync(
+  new URL("../claim/route.ts", import.meta.url),
+  "utf8",
+);
+
+describe("/api/pos/print-agent/claim ── App 節奏旋鈕", () => {
+  it("🔴 回應一定要有 `nextPollMs`（刪咗心跳之後唯一嘅節奏控制）", () => {
+    assert.ok(
+      /nextPollMs:\s*SUGGESTED_CLAIM_MS/.test(CLAIM_SRC),
+      "`nextPollMs` 唔見咗 ⇒ 服務端失去節奏控制，要再出 APK 才改得到",
+    );
+  });
+
+  it("🔴 值必須 ≤ 180_000（否則 POS 網頁會出「疑似離線」假警報）", () => {
+    const m = CLAIM_SRC.match(/const SUGGESTED_CLAIM_MS\s*=\s*([\d_]+)\s*;/);
+    assert.ok(m, "搵唔到 SUGGESTED_CLAIM_MS");
+    const ms = Number(m[1].replace(/_/g, ""));
+    assert.ok(ms > 0 && ms <= 180_000, `建議值 ${ms}ms 超出 3 分鐘上限`);
+  });
+
+  it("`claim` 一定要帶 `recordActivity: true`（否則刪咗心跳就冇人蓋章）", () => {
+    assert.ok(
+      /verifyAgent\([^)]*recordActivity:\s*true/.test(CLAIM_SRC),
+      "claim 唔蓋 `last_seen_at` ⇒ 中繼機會被顯示成離線",
+    );
+  });
+});

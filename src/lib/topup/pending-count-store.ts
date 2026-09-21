@@ -4,6 +4,8 @@ import { ensureLedgerSession } from "@/lib/ledger/session";
 import { loadAuthSession } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
 
+import { evaluatePollGate } from "@/lib/pos/poll-gate-client";
+
 type PendingSnapshot = {
   pendingCount: number;
   loading: boolean;
@@ -80,6 +82,12 @@ function schedulePoll() {
   }
   if (slowPollers + fastPollers === 0) return;
   pollTimer = window.setInterval(() => {
+    // 🔴 2026-09-21 輪詢閘（`@/lib/pos/poll-gate`）：呢個只係側欄一個紅點，
+    //    冇必要喺「冇人用／店已關／已收工」嗰陣照打。Realtime 通時兜底亦放寬到 5 分鐘。
+    //    用戶一返嚟（手勢／切前景）即刻補拉 —— 見上面 `ensureVisibilityListener`，
+    //    所以實際感受唔到延遲。
+    //    要還原舊行為：刪走 `evaluatePollGate` 呢句。
+    if (!evaluatePollGate({ tag: "topup/pending-count" }).poll) return;
     void refreshTopupPendingCount();
   }, getPollIntervalMs());
 }

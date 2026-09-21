@@ -100,12 +100,27 @@ describe("pos-app ── 同步隊列唔可以無謂換 array 身分", () => {
       "冇 single-flight ⇒ 切返前景同時（resubscribe + queue 變）會連發 2~4 次全量拉取",
     );
     assert.ok(
-      /flight\(resolveStoreId\(\) \?\? "", \(\) => runLoadRuntimeState\(\)\)/.test(SRC),
+      /flight\(resolveStoreId\(\) \?\? "", \(\) => runLoadRuntimeState\(src\)\)/.test(SRC),
       "flight key 唔係 storeId ⇒ 切店時會拿到別店 in-flight 結果（餵錯店）",
     );
     assert.ok(
-      /async function runLoadRuntimeState\(\)/.test(SRC),
+      /async function runLoadRuntimeState\(src: string\)/.test(SRC),
       "搵唔到 runLoadRuntimeState（實際做嘢嗰個）",
     );
+  });
+
+  it("🔎 每個入口都要報上自己嘅 `src`（否則 Vercel log 分唔出循環由邊度嚟）", () => {
+    assert.ok(
+      /"x-pos-state-src": src/.test(SRC),
+      "冇送 `x-pos-state-src` 標頭 ⇒ 下次再爆都仲係冇辦法定位呼叫者",
+    );
+    const expectations: [string, RegExp][] = [
+      ["手動更新", /loadRuntimeState\("manual"\)/],
+      ["realtime 重連補拉", /loadRuntimeState\("resubscribe"\)/],
+      ["mount／queue 依賴", /"queue-dep"\s*:\s*"mount"/],
+    ];
+    for (const [label, re] of expectations) {
+      assert.ok(re.test(SRC), `${label} 冇報來源標記`);
+    }
   });
 });

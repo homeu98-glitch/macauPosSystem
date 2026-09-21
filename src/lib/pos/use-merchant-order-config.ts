@@ -99,6 +99,17 @@ const INITIAL: MerchantOrderConfigState = {
 let state: MerchantOrderConfigState = INITIAL;
 const listeners = new Set<() => void>();
 
+/**
+ * 唯讀快照（2026-09-21）。
+ *
+ * 用途：畀**非 React 呼叫端**讀（輪詢閘要判斷「線上通路係咪都關咗」）。
+ * 純讀取 —— **唔會**發請求、唔會改 state、唔會 notify。React component 繼續用
+ * `useMerchantOrderConfig()`。
+ */
+export function getMerchantOrderConfigSnapshot(): MerchantOrderConfigState {
+  return state;
+}
+
 let activeStoreId: string | null = null;
 let refCount = 0;
 let channel: ReturnType<
