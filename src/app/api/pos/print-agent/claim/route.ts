@@ -17,7 +17,11 @@ export async function POST(request: Request) {
   }
 
   const { agentId, token } = readAgentHeaders(request);
-  const agent = await verifyAgent(agentId, token);
+  // 🔴 2026-09-21：`recordActivity: true` —— claim 每次都會驗 agent，所以順手蓋 `last_seen_at`
+  //    ⇒ **成功嘅 claim 本身已經構成一次心跳**（實測 claim 每 65 秒一次）。
+  //    呢個係「日後 APK 可以唔發獨立 heartbeat」嘅前置條件（見 print-agent-server.ts 說明）。
+  //    ⚠️ 只可以喺 POST 路由用；GET 路由（device-config / pair）一律唔可以傳。
+  const agent = await verifyAgent(agentId, token, { recordActivity: true });
   if (!agent) {
     return NextResponse.json({ ok: false, error: "agent 驗證失敗" }, { status: 401 });
   }

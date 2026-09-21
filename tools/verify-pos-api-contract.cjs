@@ -64,11 +64,17 @@ async function probe(label, url, init) {
     ["pos/store-status", `/api/pos/store-status?storeId=${STORE}`],
     ["pos/orders（GET）", `/api/pos/orders?storeId=${STORE}`],
     ["pos/print-templates", `/api/pos/print-templates?storeId=${STORE}`],
+    // ── print-agent 三個 POST（2026-09-21 recordActivity 改動：確認 module 載得入、唔會 crash）──
+    // 本機無 Supabase ⇒ 一律 503（未配置）。重點係**唔可以 500**（＝import／型別錯誤）。
+    ["print-agent/heartbeat", "/api/pos/print-agent/heartbeat", { method: "POST" }],
+    ["print-agent/claim", "/api/pos/print-agent/claim", { method: "POST" }],
+    ["print-agent/result", "/api/pos/print-agent/result", { method: "POST" }],
+    ["device-config（GET，唔可以寫入）", `/api/pos/device-config?storeId=${STORE}`],
   ];
 
   const rows = [];
-  for (const [label, url] of cases) {
-    rows.push(await probe(label, url));
+  for (const [label, url, init] of cases) {
+    rows.push(await probe(label, url, init));
   }
 
   console.log("================ API 契約驗證 ================");
@@ -114,6 +120,15 @@ async function probe(label, url, init) {
   const offsetBad = byLabel["state offset 越界（要 400）"];
   checks.push(["limit 越界仍然 400（既有驗證冇被繞過）", limitBad && limitBad.status === "400"]);
   checks.push(["offset 越界仍然 400", offsetBad && offsetBad.status === "400"]);
+  // ── print-agent 三個 POST（recordActivity 改動）：本機未配置 → 503，重點係唔可以 500 ──
+  for (const label of ["print-agent/heartbeat", "print-agent/claim", "print-agent/result"]) {
+    const r = byLabel[label];
+    checks.push([`${label} → 503（唔係 500 / crash）`, r?.status === "503"]);
+  }
+  checks.push([
+    "device-config GET 仍然回答（唔可以 500）",
+    ["200", "401", "503"].includes(byLabel["device-config（GET，唔可以寫入）"]?.status ?? ""),
+  ]);
 
   for (const [name, ok] of checks) console.log(`${ok ? "✅" : "❌"} ${name}`);
 

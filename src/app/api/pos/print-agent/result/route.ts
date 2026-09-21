@@ -17,7 +17,9 @@ export async function POST(request: Request) {
   }
 
   const { agentId, token } = readAgentHeaders(request);
-  const agent = await verifyAgent(agentId, token);
+  // 🔴 2026-09-21：`recordActivity: true` —— 同 claim 一樣，順手蓋 `last_seen_at`
+  //    （出紙結果回報本來就證明 agent 活躍）。⚠️ 只可以喺 POST 路由用。
+  const agent = await verifyAgent(agentId, token, { recordActivity: true });
   if (!agent) {
     return NextResponse.json({ ok: false, error: "agent 驗證失敗" }, { status: 401 });
   }

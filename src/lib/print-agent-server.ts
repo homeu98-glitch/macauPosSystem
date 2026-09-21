@@ -50,7 +50,42 @@ export interface PairedAgent {
 }
 
 /**
+ * `pos_print_agents` 讀／寫共用嘅欄位清單（**唔好 select `store_name`**，見下面註解）。
+ */
+const PAIRED_AGENT_COLUMNS = "agent_id, store_id, name, revoked_at, token_hash";
+
+export interface LoadPairedAgentOptions {
+  /**
+   * 順手把 `last_seen_at` 蓋成現在 —— **一次 query 同時做「驗證 + 記活躍」**
+   *（2026-09-21 egress／請求數優化）。
+   *
+   * ## 為何要有
+   *
+   * 實測（Supabase log，關店後 24 分鐘）：`pos_print_agents` 共 **114 次**請求，
+   * 其中 **44 次 PATCH 係 `heartbeat` 專用嘅 `last_seen_at` 更新**，
+   * 另 **70 次 GET 係 `verifyAgent()`** —— 而 heartbeat 本身亦要 verify ⇒ 每次心跳 **2 個 query**。
+   *
+   * 但 `claim` / `result` 每次都會做 `verifyAgent()`，即係**已經有同等級嘅存在證明**
+   *（驗到 agent 存在、未 revoke、token 正確）⇒ **成功嘅 claim 本身已經構成一次心跳**。
+   * 所以只需要把「驗證」同「蓋章」合併成一個 query，就即刻省一半心跳查詢，
+   * 而且日後 APK 可以完全唔發獨立 heartbeat（需要 APK 改動，未做）。
+   *
+   * ## 🔴🔴 使用限制（唔可以違反）
+   *
+   * **只可以喺 POST 路由傳 `true`**（`print-agent/heartbeat`、`claim`、`result`）。
+   * `GET` 路由（`/api/pos/device-config`、`/api/pos/print-agent/pair`）**一樣會用呢個 helper 驗 agent**
+   * —— GET 必須**安全／可快取／可 prefetch**，喺 GET 內寫入係 HTTP 語義錯誤
+   * （瀏覽器預取、爬蟲、重試都會意外改寫 `last_seen_at`，令「中繼機在線」顯示失真）。
+   * ⇒ 預設 `false`（純讀）；**新增 GET 呼叫端時一律唔好傳呢個 flag**。
+   * 呢條規則由 `src/lib/print-agent-server.test.ts` 用 source 掃描守住。
+   */
+  recordActivity?: boolean;
+}
+
+/**
  * 由 agent_id 載入已配對 agent（service_role，可讀 token_hash）。
+ *
+ * @param options.recordActivity 見上面 —— **只有 POST 路由可以傳 `true`**。
  *
  * ⚠️ **唔好 select `store_name`** —— `pos_print_agents` 冇呢條欄（0020 migration 只係
  * 喺 `pos_print_jobs` 加咗 `store_name`，agents 表淨得 `name`）。Select 佢會出
@@ -61,14 +96,68 @@ export interface PairedAgent {
  * 店名喺 web 端由 auth session（`loadAuthSession().name`，即 `merchants.name`）直接攞，
  * 唔使落 DB，亦唔使為咗個顯示名加 migration。
  */
-export async function loadPairedAgent(agentId: string): Promise<PairedAgent | null> {
+export async function loadPairedAgent(
+  agentId: string,
+  options: LoadPairedAgentOptions = {},
+): Promise<PairedAgent | null> {
   const supabase = getSupabaseWriteClient();
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("pos_print_agents")
-    .select("agent_id, store_id, name, revoked_at, token_hash")
-    .eq("agent_id", agentId)
-    .maybeSingle();
+
+  type Row = {
+    agent_id: string;
+    store_id: string;
+    name: string | null;
+    revoked_at: string | null;
+    token_hash: string;
+  };
+  let data: Row | null = null;
+  let error: { message: string } | null = null;
+
+  if (options.recordActivity) {
+    // 一個 query 做完「驗證 + 蓋 last_seen_at」（`update ... returning`）。
+    // ⚠️ 一定要 `.select()` 先會有 returning；冇 select 就只係一個盲寫、驗唔到身份。
+    const res = await supabase
+      .from("pos_print_agents")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("agent_id", agentId)
+      .select(PAIRED_AGENT_COLUMNS)
+      .maybeSingle();
+    if (res.error) {
+      // 🔴🔴 降級：**蓋章失敗唔可以當「驗證失敗」**。
+      //
+      // 為何咁重要：驗證失敗一律回 **401**，而 APK 收到 401 會**清走配對、返配對畫面**
+      // （見 heartbeat route 頂部註解）。即係一次「UPDATE 鎖超時 / 連線抖動」就會令
+      // 收銀機要重新配對中繼機 —— 比「今次冇蓋到章」嚴重得多。
+      //
+      // 所以呢度退回純讀再驗一次（只喺罕有錯誤時多一個 query）：
+      //   · 讀得到 ⇒ print agent 照樣正常運作（只係呢一次冇更新 last_seen_at，下輪會補）
+      //   · 讀都失敗 ⇒ 同舊版一樣返 null（401）—— 行為不變
+      console.warn(
+        "[print-agent] 蓋 last_seen_at 失敗，降級為純讀驗證（避免誤判 401 令 APK 清配對）：",
+        res.error.message,
+      );
+      const fallback = await supabase
+        .from("pos_print_agents")
+        .select(PAIRED_AGENT_COLUMNS)
+        .eq("agent_id", agentId)
+        .maybeSingle();
+      data = fallback.data as Row | null;
+      error = fallback.error;
+    } else {
+      data = res.data as Row | null;
+      error = null;
+    }
+  } else {
+    // 純讀（所有 GET 路由行呢條）。
+    const res = await supabase
+      .from("pos_print_agents")
+      .select(PAIRED_AGENT_COLUMNS)
+      .eq("agent_id", agentId)
+      .maybeSingle();
+    data = res.data as Row | null;
+    error = res.error;
+  }
+
   if (error || !data) return null;
   return {
     agentId: data.agent_id,
@@ -80,9 +169,17 @@ export async function loadPairedAgent(agentId: string): Promise<PairedAgent | nu
   };
 }
 
-/** 驗證 agent（agentId + token 對得上且未 revoke）。失敗返 null。 */
-export async function verifyAgent(agentId: string, token: string): Promise<PairedAgent | null> {
-  const agent = await loadPairedAgent(agentId);
+/**
+ * 驗證 agent（agentId + token 對得上且未 revoke）。失敗返 null。
+ *
+ * @param options.recordActivity **只有 POST 路由可以傳 `true`**（見 `LoadPairedAgentOptions`）。
+ */
+export async function verifyAgent(
+  agentId: string,
+  token: string,
+  options: LoadPairedAgentOptions = {},
+): Promise<PairedAgent | null> {
+  const agent = await loadPairedAgent(agentId, options);
   if (!agent) return null;
   if (agent.revokedAt) return null;
   if (!token || !safeEqualHex(sha256Hex(token), agent.tokenHash)) return null;

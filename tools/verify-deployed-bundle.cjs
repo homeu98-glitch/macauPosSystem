@@ -65,7 +65,7 @@ function extractScriptUrls(html) {
   urls = [...new Set(urls)];
   console.log(`合共 ${urls.length} 個不重複 chunk`);
 
-  const markers = ["skipQueue=1", "skipQueue", "ordersOnly=1", "分鐘自動更新"];
+  const markers = ["skipQueue=1", "skipQueue", "ordersOnly=1", "分鐘自動更新", "重連補拉已跳過"];
   const found = Object.fromEntries(markers.map((m) => [m, []]));
   let scanned = 0;
   let bytes = 0;

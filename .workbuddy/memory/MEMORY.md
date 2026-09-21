@@ -232,6 +232,35 @@
   `/api/online-order-settings` thundering herd（實測 3 分鐘 53 次）。
 - 🔴 **舊 bundle 裝置**：Vercel log 顯示 **Mac Safari 111/113 次請求冇 `skipQueue`**
   （Windows Chrome 8/18 有）⇒ 嗰部 Mac 仍跑舊 JS。reload 後 **857 KB → 424 KB（−50%，實測）**。
+- 🔴 **關店後仍然持續嘅呼叫盤點（2026-09-21 實測，詳見 `docs/reviews/always-on-calls-inventory-2026-09-21.md`）**
+  · **全量 state 拉取仍然係最大項**：35~40 次／24 分鐘（每 ~36 秒），
+    指紋 `queue GET ≈ printJobs GET ≈ device_configs ≈ templates ≈ note_presets ≈ orders RPC`。
+  · **`print-agent` 相關（APK okhttp）**：`pos_print_agents` GET 70（`verifyAgent`）＋ PATCH 44（心跳）
+    ＝ **每 33 秒一次心跳**（設計文件 `docs/97:123` 寫 60s ⇒ 實測係兩倍頻率）；
+    `rpc/pos_claim_print_jobs` 22 ＝ **每 65 秒 claim 一次**。
+  · `pos_print_jobs` PATCH 28（sync 寫狀態）、POST 14（新 print job）。
+  · `pos_shifts` GET 5（180 秒班次同步）。
+- 🔴🔴 **`claim` 其實已經係 heartbeat**：`claim` route 每次都 `verifyAgent()` → `loadPairedAgent()`
+  → **SELECT `pos_print_agents`（驗存在／未 revoke／token 正確）**；而 `heartbeat` 唯一多做嘅係
+  `update last_seen_at`（`heartbeat/route.ts:24-27`）。⇒ 用戶直覺正確：**claim 成功已構成心跳**。
+  · 服務端可做（**零 APK 改動**）：① 把 `last_seen_at` 蓋章搬入 `pos_claim_print_jobs` RPC（零額外 round trip）
+    ② 或 `loadPairedAgent()` 由 `select` 改 `update(...).select(...)`（順手蓋章，每次由 2 query 變 1）。
+    ⚠️ ② 係「讀換寫」trade-off，唔係純賺。**要真正省請求就要改 APK**（停止獨立 heartbeat）＝ −77%。
+    ✅ **2026-09-21 已實作（② 嘅限定版）**：`loadPairedAgent(agentId, { recordActivity })` / `verifyAgent(..., options)`
+    —— **預設純讀**，只有 **POST 路由**（heartbeat / claim / result）傳 `true`。
+    heartbeat 由 **2 query 變 1 query**（`update … returning` 同時驗證＋蓋章，原本嘅獨立 UPDATE 已移除）；
+    claim / result 順手蓋章（query 數不變）⇒ **成功嘅 claim 正式兼任心跳**。
+    🔴🔴 **原版「改 `loadPairedAgent` 本身」做唔得**：`device-config` 同 `print-agent/pair` **都有 GET 路由**
+    用同一個 helper ⇒ 會令 GET 寫入（違反 HTTP 語義；預取／重試／爬蟲會意外改寫 `last_seen_at`）。
+    由 `src/lib/print-agent-server.test.ts`（source 掃描）守住：GET 路由唔可以出現 `recordActivity`。
+    🔴 **一定要保留降級**：蓋章失敗**唔可以**當「驗證失敗」（驗證失敗回 401 ⇒ **APK 清配對、返配對畫面**！
+    一次 UPDATE 鎖超時就會令收銀機要重新配對）⇒ update 失敗即退回純讀再驗一次。
+- 🔴 **心跳頻率硬約束**：`last_seen_at` **只用於顯示**（全 repo 只有 print-center 讀、冇 server 邏輯靠佢撤銷），
+  但 `print-center.tsx:1789` 寫死 **`minutesAgo >= 5` 就標「疑似離線」**
+  ⇒ **心跳放慢上限 2~3 分鐘**；要 5 分鐘以上必須同時改呢個 UI 閾值。
+- 🟠 其他可收口（未做）：`online-order-settings` thundering herd（實測 3 分鐘 53 次，多 hook 各自 mount）、
+  `pair-status` 已配對後可停輪詢、`topup/pending-count` 可再放慢（純 badge）、
+  `pos/shift` 關店後可停。**唔可以動**：`POST /api/pos/sync`、`/api/pos/store-status`、Realtime。
 - 🔎🔎 **Vercel log 匯出＝最強驗收工具**（`tools/analyze-vercel-log.cjs`）：
   有 `requestQueryString`（睇得到 `skipQueue`／`ordersOnly`／`fields`，Supabase log 冇）、
   `requestUserAgent`（分裝置）、同我加嘅 `[egress] … bytes=N`（實際 bytes，可直接加總）。
