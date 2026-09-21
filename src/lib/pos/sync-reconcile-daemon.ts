@@ -32,8 +32,10 @@
  * 回執帳本 `syncAcks` 原本係「寫過就永久有效」，形成死鎖：雲端被回水之後，
  * 本機因為「已有回執」而永遠唔會再核實嗰張單 → 燈一直綠、後台一直錯。
  *
- * 所以守護揀工作集時帶 `RECONCILE_ACK_TTL_MS`（10 分鐘）：回執過期即重新入返
- * 工作集，pull 一次核實、一致就寫返新回執。即每個 TTL 週期最多多打一次 pull。
+ * 所以守護揀工作集時帶 `RECONCILE_ACK_TTL_MS`（2026-09-21 起 **60 分鐘**，原本 10 分鐘）：
+ * 回執過期即重新入返工作集，pull 一次核實、一致就寫返新回執。
+ * ⚠️ 「一個 TTL 週期只多打一次 pull」係**錯**嘅理解：每輪上限 100 張，所以實際係
+ * ⌈N／100⌉ 次（詳見該常數註釋）。呢個就係 2026-09-21 egress 爆額嘅乘數放大器。
  * 健康燈**唔帶** TTL（永久有效），所以燈號唔會週期性閃。
  *
  * ## 開關
@@ -44,8 +46,13 @@ import { readNetworkOnline } from "@/lib/use-network-online";
 import { loadSyncBlocked, type SyncAckRow } from "@/lib/storage";
 import { PosOrder } from "@/lib/types";
 import { isTerminalOrderStatus } from "@/lib/pos-order-filters";
+import { POS_ORDER_VERIFY_SELECT } from "@/lib/pos-order-row";
 import { refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
-import { fetchServerOrders, pushOrderSnapshotForReconcile } from "@/lib/pos/sync-reconcile";
+import {
+  computeServerRangeStart,
+  fetchServerOrders,
+  pushOrderSnapshotForReconcile,
+} from "@/lib/pos/sync-reconcile";
 import { notifyQueueChanged, resolveStoreId } from "@/lib/pos/sync-flush";
 import {
   broadcastSyncHealth,
@@ -83,6 +90,45 @@ const BLOCKED_RECHECK_MS = 30 * 60_000;
  * 處理過，亂造記錄比唔造更危險。
  */
 const AUTO_PUSH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 每部機每日最多拉幾多次雲端（**2026-09-21 egress 加固**）。
+ *
+ * ## 為咩要有（呢個唔係「防手誤」，係防病態循環）
+ *
+ * 若一批單長期對唔上（`conflict` / `missing`，見下面 239-254 行），佢哋會一直留喺工作集
+ * （或被 `blocked` 30 分鐘後重新入集），配合 60 秒掃描 → 可以變成**24 小時不停拉全店**。
+ * 呢個就係「一間店用爆 5 GB 免費額度」嘅放大路徑之一。
+ *
+ * ## 為咩係 120
+ *
+ * 正常營業日遠低於此數：TTL 改 60 分鐘之後，7 日窗口 ≈ 每小時 ⌈N/100⌉ 次（通常 1~5 次）
+ * ⇒ 開 14 小時大約 14~70 次。120 留咗約 2 倍餘量，只有真正病態先會撞到。
+ *
+ * ## 到頂會點
+ *
+ * **只係停止拉取**（本日剩餘時間唔再打網絡）＋ 寫一條 `console.warn`。
+ * 守護本身唔會改任何訂單狀態（只會補推），所以對落單／結帳／出紙／交班**完全無影響**。
+ * 要人手處理就照樣開「同步健康」Modal（嗰條路唔受此閘限制）。
+ */
+const MAX_PULLS_PER_DAY = 120;
+
+// ── 每日拉取預算（in-memory；reload 後重新計，Macau 日界）──
+let pullBudgetDayKey = "";
+let pullsToday = 0;
+
+/** 檢查（並遞增）本日拉取額度。@returns 仲有額度＝true */
+function withinPullBudget(): boolean {
+  // Macau(+8) 日界，同營業日一致（唔用 UTC 以免跨日錯位）。
+  const key = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (key !== pullBudgetDayKey) {
+    pullBudgetDayKey = key;
+    pullsToday = 0;
+  }
+  if (pullsToday >= MAX_PULLS_PER_DAY) return false;
+  pullsToday += 1;
+  return true;
+}
 
 function orderTimeMs(order: PosOrder): number {
   return Date.parse(order.updatedAt || order.createdAt || "") || 0;
@@ -203,8 +249,37 @@ export async function runReconcileRound(
     // ② 憑證先確保有效（結帳 / 補推都要 POS 終端憑證）
     await refreshPosDeviceTokenIfNeeded();
 
-    // ③ 一次過 pull 雲端現況（同「同步健康」用同一條 ordersOnly 通道）
-    const { orders: serverOrders, error } = await fetchServerOrders(storeId, null);
+    // ②.5 🔴 每日拉取預算硬閘（防病態循環；正常日遠低於上限，見常數註釋）
+    if (!withinPullBudget()) {
+      console.warn(
+        `[sync-daemon] 已達本日拉取上限 ${MAX_PULLS_PER_DAY} 次（${reason}），` +
+          "本日餘下時間暫停自動對賬。落單／結帳／出紙／交班不受影響；" +
+          "要即刻處理請開「同步健康」Modal 手動核實。",
+      );
+      return 0;
+    }
+
+    // ③ pull 雲端現況（同「同步健康」用同一條 ordersOnly 通道）
+    //
+    // 🔴🔴 2026-09-21 egress 修正 —— **本專案最大單一用量來源就喺呢兩行**：
+    //
+    //   ① 舊版傳 `null` = **冇日期下限** ⇒ 每次拉「**全店歷史**」（limit 5 000）。
+    //      隔離嘅 `sync-health-modal.tsx` 早就用 `computeServerRangeStart()` 收窄範圍，
+    //      只有常駐守護漏用 → 每次 5 000 行 × 1 469 B ≈ **7 MB**，
+    //      而 `RECONCILE_ACK_TTL_MS` 令全部回執每 10 分鐘過期一次 ⇒ 反覆重拉（乘數放大器）。
+    //      改用同一個助手：**工作集最舊終態單 − 12 小時**。
+    //      覆蓋範圍係工作集嘅**超集**（每個工作集單嘅 updated_at ≥ 自己嗰刻 ≥ min − 12h），
+    //      所以「雲端查唔到呢張單」嘅判斷唔會因為收窄而出現假警報。
+    //   ② 加投影 `POS_ORDER_VERIFY_SELECT`：守護**只**比對 `server.status === order.status`，
+    //      完全唔讀 items／金額／備註（補推用嘅係**本機**快照，見下面 pushOrderSnapshotForReconcile）
+    //      ⇒ 每行 1 469 B → 91 B（**16×**），判斷結果完全等價。
+    //   ③ TTL 由 10 分鐘改 60 分鐘（`sync-acks.ts`）⇒ 拉取次數再變 1/6。
+    //
+    //   ⇒ 實測（2026-09-21 Supabase log）拉取頻率係每 2.6 分鐘一輪（10 次／26 分鐘），
+    //     每輪 3 條腿 × limit 5000；收窄之後同樣時間只需 1 輪 × 幾百行。
+    //     綜合降幅約 **99%**（GB／日 → MB／日 級）。
+    const startIso = computeServerRangeStart(all);
+    const { orders: serverOrders, error } = await fetchServerOrders(storeId, startIso, POS_ORDER_VERIFY_SELECT);
     if (error) {
       console.warn(`[sync-daemon] 拉雲端訂單失敗（${reason}）：${error}`);
       return 0;

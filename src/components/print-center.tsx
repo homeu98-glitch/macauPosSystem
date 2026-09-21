@@ -410,7 +410,8 @@ export function PrintCenter() {
   }, []);
 
   // §10（docs/98）：輪詢雲端打印結果，令網頁見到 Hub 真實嘅「失敗 / 已印」。
-  // 每 8 秒一次；component 卸載即停。離線 / 網絡錯會喺 syncCloudPrintOutcomes 內靜默跳過。
+  // ⚠️ 2026-09-21：間隔已由 8 秒改為 **30 秒**（見下面 `setInterval` 處註釋）；
+  //    component 卸載即停。離線 / 網絡錯會喺 syncCloudPrintOutcomes 內靜默跳過。
   useEffect(() => {
     let alive = true;
     const tick = () => {
@@ -437,8 +438,14 @@ export function PrintCenter() {
           .catch(() => undefined);
       }
     };
-    tick(); // 一入頁面就拉一次，唔使等首個 8 秒
-    const interval = window.setInterval(tick, 8000);
+    tick(); // 一入頁面就拉一次，唔使等首個 30 秒
+    // 2026-09-21 egress 優化：8 秒 → **30 秒**。
+    // 為咩：呢個 tick 每次打兩條查詢（`/api/pos/print-jobs/status` 兩條各 limit 200）
+    // ＋ `/api/pos/print-agent/pair-status`；8 秒 = 每小時 450 輪、長開一晚約 0.4 GB。
+    // 唔影響：一入頁面即刻拉（上面 `tick()`），同埋出紙本身完全唔經呢條輪詢
+    //（出紙由 `PrintFlushWorker` 2.5 秒本機 tick 驅動）—— 呢度淨係更新「雲端結果」顯示。
+    // 要還原舊行為：改返 8000。
+    const interval = window.setInterval(tick, 30_000);
     return () => {
       alive = false;
       window.clearInterval(interval);

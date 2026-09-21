@@ -54,7 +54,73 @@ export type PosOrderDbRow = {
   reopen_reason?: string | null;
 };
 
-/** `pos_orders` row → 領域物件。與 `/api/pos/state` 既有映射保持一致。 */
+/**
+ * `pos_orders` 需要讀嘅**全部** DB 欄位（PostgREST 投影用，逗號分隔）。
+ *
+ * ## 為咩要抽一個常數出嚟（2026-09-21 egress 優化）
+ *
+ * `select("*")` 會連一啲 mapper 完全唔讀嘅欄位都送出嚟；改成明確投影可以省 bytes
+ * （PostgREST egress 係按 Supabase → Vercel Function 嘅 bytes 計）。
+ *
+ * ## 🔴 鐵律（同 docs/113「四條讀取路徑」同一型陷阱）
+ *
+ * 呢份清單**必須**同上面 `PosOrderDbRow` 完全一致：
+ *   · 漏一欄 = 該欄靜默變 `undefined` → mapper 用 `?? 0` / `?? undefined` 兜底
+ *     → **唔會報錯、只會靜默唔出**（歷史上中過兩次：`discount_note`、`reopen_*`）。
+ *   · 多一欄 = 該欄唔存在時 PostgREST 回 42703 → 整個查詢失敗。
+ *     （所以下面有 42703 自動降級回 `select("*")` 嘅保險，見 pos-orders-range.ts。）
+ *
+ * 呢兩條都由 `pos-order-row.test.ts` 自動核對（type 同清單雙向比對），
+ * 所以**新增欄位時只需要改 `PosOrderDbRow` 同呢個陣列兩處**，測試會捉漏。
+ */
+export const POS_ORDER_DB_COLUMNS = [
+  "id",
+  "store_id",
+  "local_order_no",
+  "table_id",
+  "table_name",
+  "status",
+  "fulfillment_status",
+  "sent_to_kitchen_at",
+  "served_at",
+  "items",
+  "order_note",
+  "subtotal",
+  "tax_amount",
+  "service_charge_amount",
+  "discount_amount",
+  "total",
+  "prepaid_amount",
+  "online_order_id",
+  "source",
+  "party_size",
+  "comp_note",
+  "comped_at",
+  "discount_note",
+  "payment_method",
+  "created_at",
+  "updated_at",
+  "client_updated_at",
+  "reopen_count",
+  "reopened_at",
+  "reopen_reason",
+] as const;
+
+/** PostgREST `.select()` 用嘅投影字串（＝ 上面清單 join）。 */
+export const POS_ORDER_DB_SELECT = POS_ORDER_DB_COLUMNS.join(",");
+
+/**
+ * 對賬守護「只核實狀態」用嘅最小投影（2026-09-21 egress 優化）。
+ *
+ * 守護只做 `server.status === local.status` 嘅比對，完全唔讀 `items`／金額／備註
+ * ⇒ 一行由 1 469 B 降到 91 B（16×），而**判斷結果完全等價**。
+ * 同時帶住 `updated_at` / `client_updated_at`，令將來想加「時間戳一齊比對」都唔使再拉大 payload。
+ */
+export const POS_ORDER_VERIFY_SELECT = "id,status,updated_at,client_updated_at";
+
+/**
+ * `pos_orders` row → 領域物件。與 `/api/pos/state` 既有映射保持一致。
+ */
 export function mapOrderRow(order: PosOrderDbRow) {
   return {
     id: order.id,

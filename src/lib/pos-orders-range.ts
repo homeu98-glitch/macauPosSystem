@@ -2,7 +2,13 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { PosOrderDbRow } from "@/lib/pos-order-row";
+import { POS_ORDER_DB_SELECT, type PosOrderDbRow } from "@/lib/pos-order-row";
+import {
+  classifyOrdersRangeFailure,
+  decideReopenedLegOutcome,
+  mergeOrderLegs,
+  type OrdersRangeFailure,
+} from "@/lib/pos/orders-range-shared";
 
 /** 由 client 推導 FilterBuilder 型別（untyped client → any 泛型，唔使手寫 4-8 個泛型參數）。 */
 type OrderFilterBuilder = ReturnType<ReturnType<SupabaseClient["from"]>["select"]>;
@@ -53,6 +59,21 @@ export type OrdersInRangeParams = {
   end?: string | null;
   limit: number;
   offset: number;
+  /**
+   * PostgREST 欄位投影（逗號分隔）。**預設 ＝ `POS_ORDER_DB_SELECT`**（`pos_orders` 全部 mapper 會讀嘅欄）。
+   *
+   * 2026-09-21 egress 優化：`select("*")` 會連 mapper 完全唔讀嘅欄（DB 陸續加過嘅
+   * `member_*` 等）都傳出嚟，而 PostgREST egress 係按 bytes 計費。
+   * 投影清單同 `PosOrderDbRow` 由 `pos-order-row.test.ts` 焊死（漏欄／多欄都會即刻紅）。
+   *
+   * · 傳 `"*"` → 明確要求舊行為（全欄位）。
+   * · 傳自訂清單 → 只限白名單欄位（例如對賬守護只要 `id,status,updated_at`）。
+   *
+   * ⚠️ 若清單帶咗一個 DB 未有嘅欄（migration 未跑），PostgREST 會回 42703
+   * → 下面會**自動降級**做 `select("*")` 重試一次（同 note-presets-server 同一套做法），
+   * 保證「舊 DB + 新 client」唔會因為投影而整個報表 500。
+   */
+  columns?: string;
 };
 
 export type OrdersInRangeResult = {
@@ -72,14 +93,29 @@ function applyRange(
   return q;
 }
 
-export async function fetchOrdersInRange(params: OrdersInRangeParams): Promise<OrdersInRangeResult> {
+/**
+ * 三條腿嘅實際查詢（原邏輯，一行不改；只係 `select()` 改用傳入嘅投影）。
+ * @returns 合併結果 ＋ 失敗分類（`null` = 成功；供外層決定要唔要降級重試）。
+ */
+async function runThreeLegs(
+  params: OrdersInRangeParams,
+  columns: string,
+): Promise<{ result: OrdersInRangeResult; failure: OrdersRangeFailure | null }> {
   const { supabase, storeId, start, end, limit, offset } = params;
 
-  // 三腿基礎查詢（同 table、同 store 過濾）——先 .select("*") 轉 FilterBuilder，
+  // 三腿基礎查詢（同 table、同 store 過濾）——先 .select(columns) 轉 FilterBuilder，
   // 之後嘅 conditional .gte() / .lte() chain 先會全部喺同一型別上（PostgrestQueryBuilder
   // 嘅 .eq() 會跳去 FilterBuilder，直接 chain 會撞型別鴻溝）。
-  const base = () =>
-    storeId ? supabase.from("pos_orders").select("*").eq("store_id", storeId) : supabase.from("pos_orders").select("*");
+  //
+  // ⚠️ 型別註釋（2026-09-21）：`columns` 係 runtime 字串，supabase-js 對
+  //    `select(columns: string)` 會將結果元素型別推成 `GenericStringError[]`，
+  //    同上面由 ReturnType 推導嘅 `OrderFilterBuilder`（`unknown[]`）對唔上
+  //    （連帶觸發 TS2589「型別實例化過深」）。呢度做一次**純型別層面**嘅 assertion
+  //    收窄（runtime 完全一樣，`.gte()`/`.order()`/`.range()` 行為不變）。
+  //    原本寫死 `select("*")` 時唔會撞到，係改成可變字串投影後才出現。
+  const buildBase = () =>
+    supabase.from("pos_orders").select(columns) as unknown as OrderFilterBuilder;
+  const base = () => (storeId ? buildBase().eq("store_id", storeId) : buildBase());
 
   // 各腿只 filter 自己嘅時間欄位 + 同 window 分頁，plain chain、零 .or() 語法。
   const createdQuery = applyRange(base(), "created_at", start, end)
@@ -95,31 +131,121 @@ export async function fetchOrdersInRange(params: OrdersInRangeParams): Promise<O
 
   const [createdRes, updatedRes, reopenedRes] = await Promise.all([createdQuery, updatedQuery, reopenedQuery]);
 
-  if (createdRes.error) return { orders: [], error: createdRes.error.message };
-  if (updatedRes.error) return { orders: [], error: updatedRes.error.message };
+  // 頭兩條腿係必需：出錯就要向上報（由外層決定係降級定真失敗）。
+  // ⚠️ 判別收歸 `classifyOrdersRangeFailure()`（純函式、有單測）—— 唔可以喺呢度
+  //    自己寫 `code === "42703"`，因為「函數唔存在」同「欄位唔存在」要分開處理。
+  if (createdRes.error) {
+    return {
+      result: { orders: [], error: createdRes.error.message },
+      failure: classifyOrdersRangeFailure(createdRes.error),
+    };
+  }
+  if (updatedRes.error) {
+    return {
+      result: { orders: [], error: updatedRes.error.message },
+      failure: classifyOrdersRangeFailure(updatedRes.error),
+    };
+  }
   // ⚠️ reopened 腿係「加碼」而非「必需」：若該欄位／索引喺某個環境未就緒，
   // 唔應該令成個報表失敗（會由「少一張返結單」變成「全頁 error」）。
-  // 所以呢條腿出錯只當「冇命中」，其他兩腿照用。
+  // 所以呢條腿出錯**一般**只當「冇命中」，其他兩腿照用；
+  // 但投影類錯誤（42703）例外 —— 見 `decideReopenedLegOutcome()`（純函式、有單測）。
+  const reopenedOutcome = decideReopenedLegOutcome(reopenedRes.error);
+  if (reopenedOutcome === "fail") {
+    return {
+      result: { orders: [], error: reopenedRes.error?.message ?? "reopened 腿失敗" },
+      failure: "projection-missing",
+    };
+  }
   if (reopenedRes.error) {
     console.warn("[pos-orders-range] reopened_at 腿查詢失敗，已略過：", reopenedRes.error.message);
   }
 
-  // 按 id 去重合併（三腿之間必然有交集：多個時間欄位都喺區間內嘅單）
-  const merged = new Map<string, PosOrderDbRow>();
-  for (const row of (createdRes.data ?? []) as PosOrderDbRow[]) merged.set(row.id, row);
-  for (const row of (updatedRes.data ?? []) as PosOrderDbRow[]) {
-    if (!merged.has(row.id)) merged.set(row.id, row);
-  }
-  for (const row of (reopenedRes.data ?? []) as PosOrderDbRow[]) {
-    if (!merged.has(row.id)) merged.set(row.id, row);
+  // 按 id 去重合併 + 統一按 created_at DESC（純函式、有單測）。
+  const orders = mergeOrderLegs([
+    (createdRes.data ?? []) as PosOrderDbRow[],
+    (updatedRes.data ?? []) as PosOrderDbRow[],
+    (reopenedRes.data ?? []) as PosOrderDbRow[],
+  ]);
+
+  return { result: { orders, error: null }, failure: null };
+}
+
+/**
+ * 單一 SQL RPC 路徑（migration 0046 `pos_orders_page`）——**首選**。
+ *
+ * 好處（2026-09-21 egress）：一條 SQL 內做 OR + 去重 + 排序 + 分頁
+ * ⇒ **每行只回一次**（舊三腿係回三份、client 再去重）＝ 直接省 2/3。
+ * 實測（Supabase log）：`pos_orders` 嘅 `limit=5000` 三腿一組係當時最大單一來源。
+ *
+ * @returns `{ok:false, missingFunction:true}` = 未跑 migration 0046 → caller 降級三腿。
+ */
+async function runRpc(
+  params: OrdersInRangeParams,
+  columns: string,
+): Promise<
+  { ok: true; result: OrdersInRangeResult } | { ok: false; failure: OrdersRangeFailure; error: string }
+> {
+  const { supabase, storeId, start, end, limit, offset } = params;
+
+  const { data, error } = await supabase
+    .rpc("pos_orders_page", {
+      // ⚠️ `pos_orders.store_id` 係 **text**（見 0012），唔係 uuid。
+      p_store_id: storeId ?? null,
+      p_start: start ?? null,
+      p_end: end ?? null,
+      p_limit: limit,
+      p_offset: offset,
+    })
+    // PostgREST 對 `returns setof <table>` 嘅函數支援 `?select=` 投影
+    //（舊版 PostgREST 會忽略而回全欄位 —— 只會少省流量，唔會出錯）。
+    .select(columns);
+
+  if (error) {
+    return {
+      ok: false,
+      failure: classifyOrdersRangeFailure(error),
+      error: error.message,
+    };
   }
 
-  // 統一按 created_at DESC（client 聚合唔依賴順序，但穩定輸出方便診斷）
-  const orders = [...merged.values()].sort((a, b) => {
-    const ta = Date.parse(a.created_at ?? "") || 0;
-    const tb = Date.parse(b.created_at ?? "") || 0;
-    return tb - ta;
-  });
+  return {
+    ok: true,
+    result: { orders: (data ?? []) as unknown as PosOrderDbRow[], error: null },
+  };
+}
 
-  return { orders, error: null };
+export async function fetchOrdersInRange(params: OrdersInRangeParams): Promise<OrdersInRangeResult> {
+  const columns = params.columns?.trim() || POS_ORDER_DB_SELECT;
+
+  // ── ① 首選：單一 RPC（1 次 round trip、每行只回一次）──
+  const viaRpc = await runRpc(params, columns);
+  if (viaRpc.ok) return viaRpc.result;
+
+  // ── ② RPC 唔可用 → 降級：三條時間腿（舊行為）──
+  // 「未跑 migration 0046」係**預期**情況（正常 warn 一句就夠）；
+  // 其他錯誤（DB 故障 / 權限）就要令人見得到。
+  // ⚠️ `fatal`（超時之類）都一律行呢條路：寧願慢一次，都唔可以令報表變空。
+  if (viaRpc.failure === "rpc-missing") {
+    console.warn(
+      "[pos-orders-range] 搵唔到 pos_orders_page()（migration 0046 未跑）→ 降級用三條時間腿。" +
+        "跑咗 0046 之後會自動用返單一查詢（egress 省 2/3）。",
+    );
+  } else {
+    console.warn(`[pos-orders-range] RPC 失敗（${viaRpc.error}）→ 降級用三條時間腿。`);
+  }
+
+  const first = await runThreeLegs(params, columns);
+  if (first.failure !== "projection-missing") return first.result;
+
+  // ── ③ 再降級：投影帶咗一個 DB 未有嘅欄（migration 未跑 → 42703 / PGRST204）──
+  // 行為同「未改動之前」完全一致（select("*")），所以舊環境唔會退化。
+  // 只有 `projection-missing` 先會行到呢度 —— 真 DB 錯誤（超時 / 權限）唔會重試，
+  // 免得同一個慢查詢跑三次，而且真錯誤必須向上報（唔可以靜默變「今日冇單」）。
+  console.warn(
+    `[pos-orders-range] 欄位投影失敗（${first.result.error}），降級為 select("*") 重試。` +
+      "（跑齊 migration 之後就會自動用返投影）",
+  );
+  const fallback = await runThreeLegs(params, "*");
+  return fallback.result;
 }

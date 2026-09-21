@@ -45,3 +45,23 @@ export function isUniqueViolationError(error: SupabaseLikeError | null | undefin
     String(error.message ?? ""),
   );
 }
+
+/**
+ * 判斷係唔係「函數唔存在」類錯誤（2026-09-21，RPC 降級用）。
+ * - `42883` = undefined_function（Postgres）
+ * - `PGRST202` = PostgREST 喺 schema cache 搵唔到該 function
+ *
+ * 用途：`fetchOrdersInRange()` 改用 SQL RPC（`pos_orders_page`，見 migration 0046）
+ * 之後，遇到**未跑 migration 嘅環境**要自動降級回「三條時間腿」路徑。
+ * 唔可以只靠「有 error 就降級」：真係 DB 故障時降級會令同一個慢查詢變三次，
+ * 所以一定要判準確係「函數唔存在」先降級。
+ */
+export function isMissingFunctionError(error: SupabaseLikeError | null | undefined): boolean {
+  if (!error) return false;
+  const code = String(error.code ?? "");
+  if (code === "42883" || code === "PGRST202") return true;
+  const message = String(error.message ?? "");
+  // ⚠️ 唔可以用泛泛嘅 /schema cache/：PostgREST 嘅**欄位**錯誤都含呢個字
+  //    （"Could not find the 'x' column … in the schema cache"），會誤判。
+  return /function .* does not exist|Could not find the function/i.test(message);
+}

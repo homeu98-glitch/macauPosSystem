@@ -236,7 +236,10 @@ export function LocalOrdersPanel({
     try {
       // 先確保 POS 終端憑證有效（TTL 12h）
       await refreshPosDeviceTokenIfNeeded();
-      const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(merchantId)}`, {
+      // 2026-09-21 egress 優化：本 panel **只**需要 orders（下面只用 `payload.orders`），
+      // 原本打全量 state 會連 300 條 queue（≈500 KB）＋ 200 條 printJobs 一齊拉
+      // （合共 ≈0.98 MB／次，而每次落單／flush 都會觸發一次）⇒ 補上 `ordersOnly=1`。
+      const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(merchantId)}&ordersOnly=1`, {
         // 2026-09-10 P0-4：需要 POS 終端憑證
         headers: { ...posDeviceAuthHeaders() },
       });

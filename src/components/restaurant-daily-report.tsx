@@ -813,7 +813,18 @@ export type RestaurantDailyReportProps = {
 };
 
 /** 報表自動刷新間隔（只喺分頁可見時執行）。 */
-const AUTO_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
+/**
+ * 2026-09-21 egress 優化：3 分鐘 → **10 分鐘**。
+ *
+ * 為咩：報表係「對數」用途，唔需要 3 分鐘新鮮度；而每次刷新要拉
+ * 最多 10 頁 × 2000 單 × 3 條時間腿（實測 Supabase log：`limit=2000` 三腿一組），
+ * 屬本專案第二大 egress 來源。改 10 分鐘直接令呢條路徑成本變 1/3。
+ *
+ * 唔影響：切返分頁 / 按「重新整理」仍然會即刻刷新（見下面 `onVisibility` 同
+ * `bump()` 嘅手動入口），所以商家想睇最新數字隨時撳得到。
+ * 要還原舊行為：改返 `3 * 60 * 1000`。
+ */
+const AUTO_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 /** 兩次刷新之間嘅最短間隔 —— 去抖（避免 interval 同 visibilitychange 撞埋一齊）。 */
 const MIN_REFRESH_GAP_MS = 20 * 1000;
 
@@ -830,7 +841,8 @@ const MIN_REFRESH_GAP_MS = 20 * 1000;
  * ## 做法：軟刷新（唔 remount）
  *
  * 原本想用 admin「重新載入」嗰套 `key` remount —— 但**唔得**：remount 會令
- * `dataReady` 由 false 重新嚟過，全頁 11 張卡一齊變 skeleton，每 3 分鐘閃一次；
+ * `dataReady` 由 false 重新嚟過，全頁 11 張卡一齊變 skeleton，每個刷新週期閃一次
+ * （週期見 `AUTO_REFRESH_INTERVAL_MS`，2026-09-21 起 10 分鐘）；
  * 而且會丟失滾動位置同正在編輯嘅欄位（毛利率 inline edit）。自動刷新係背景行為，
  * 唔應該搶走用戶手上嘅畫面。
  *
@@ -2256,8 +2268,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 <div className="text-lg font-semibold text-slate-900">店鋪每日營運總結</div>
                 <div className="mt-1 text-sm text-slate-500">
                   {storeName} · {todayKey}（澳門）· 篩選影響全部模塊
-                  {/* 自動刷新提示（2026-09-10）：唔講明嘅話，商家見到數字自己變咗會以為壞咗。 */}
-                  <span className="text-slate-400"> · 每 3 分鐘自動更新</span>
+                  {/* 自動刷新提示（2026-09-10）：唔講明嘅話，商家見到數字自己變咗會以為壞咗。
+                      ⚠️ 2026-09-21：改為**由常數推導**（原本寫死「每 3 分鐘」）——
+                      頻率調整成 10 分鐘之後，寫死嘅文案就會同實際行為唔一致（會誤導商家）。
+                      推導之後無論日後改幾多，畫面都會自動跟。 */}
+                  <span className="text-slate-400">
+                    {" "}
+                    · 每 {Math.round(AUTO_REFRESH_INTERVAL_MS / 60_000)} 分鐘自動更新
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-2">

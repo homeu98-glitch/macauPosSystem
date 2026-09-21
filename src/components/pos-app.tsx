@@ -699,7 +699,8 @@ export function PosApp() {
   }, []);
 
   // 2026-09-07：開工/收工狀態跨裝置同步 + 連續開工逾時提醒（問題一 + 問題二）。
-  // 每 60 秒、網絡恢復、window focus 時 reconcile server active 班次：
+  // ⚠️ 2026-09-21：週期已由 60 秒改為 **180 秒**（見下面 `setInterval` 處註釋）。
+  // 每 180 秒、網絡恢復、window focus 時 reconcile server active 班次：
   //   - server 已開工而本地未開 → adopt server（開工 gate 自動解鎖，唔使再撳開工）；
   //   - server 冇而本地開工中 → 補上雲（離線開工事後同步）；
   //   - 攞埋 server 時鐘計「連續開工 >10 小時」due 狀態（跨裝置一致，ack 以 server 為準）。
@@ -742,7 +743,14 @@ export function PosApp() {
     }
 
     void syncOnce();
-    const timer = window.setInterval(() => void syncOnce(), 60_000);
+    // 2026-09-21 egress 優化：60 秒 → **180 秒**。
+    // 為咩：班次狀態（開工 / 收工 / 逾時）唔需要分鐘級新鮮度，而呢個 tick 每次打
+    // `/api/pos/shift`（實測 Supabase log：每約 48 秒一次 —— 即係仲有第二個來源
+    // 一齊打，見 `useStoreStatus`）。改 180 秒直接省 2/3 invocations。
+    // 唔影響：`focus` / `online` / 開工收工本身都會即刻觸發 `syncOnce()`（見下面兩個
+    // listener），所以「切返嚟就對齊」嘅保證完全不變。
+    // 要還原舊行為：改返 60_000。
+    const timer = window.setInterval(() => void syncOnce(), 180_000);
     function onReconnect() {
       void syncOnce();
     }
@@ -1121,7 +1129,13 @@ export function PosApp() {
       // 2026-09-10 P0-3：先確保 POS 終端憑證仍然有效（TTL 12h，收銀機全日開住）。
       // 呢個係 fail-soft：拎唔到憑證都照行，之後 server 回 401 就當拉唔到（唔會爆）。
       await refreshPosDeviceTokenIfNeeded();
-      const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}`;
+      // 2026-09-21 egress 優化：v2 outbox 之下 client **唔會** merge server queue
+      //（見下面 `if (Array.isArray(payload.queue) && !isOutboxV2Enabled())`），
+      // 但 server 每次都照查 300 條 `pos_queue_events`（每條 payload 係整張訂單快照，
+      // 合共 ≈500 KB／次）⇒ 純浪費。v2 時叫 server 跳過。
+      // v1（回溯）唔傳 = 舊行為，語義完全不變。
+      const skipQueue = isOutboxV2Enabled() ? "&skipQueue=1" : "";
+      const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}${skipQueue}`;
       // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（否則 401 未經授權）。
       const response = await fetch(stateUrl, { headers: { ...posDeviceAuthHeaders() } });
       const payload = (await response.json()) as {

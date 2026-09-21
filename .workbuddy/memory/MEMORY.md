@@ -123,3 +123,66 @@
   關「自助點餐機」模組擋唔到嘢（allowedModules 純 UI 導覽）。
 - 🔴 Vercel log CSV 冇 IP 欄 ⇒ 靠 `sync/route.ts:375` `console.info(ip=…)`（只在 auth 開著時執行）。
 - 時間軸一律換算 Macau(+8)。
+
+## 8. 🔴🔴 Supabase Egress（2026-09-21：一間店用爆 5 GB 免費額度）
+- 實測：**PostgREST 98.8~99.3%**／Realtime 0.7~1.2%／Auth ~0／Storage+Edge = 0。
+  ⇒ **唔可以為省流量關 Realtime**（只佔 1%，關咗即時性全失）。
+- 🔴 計費口徑：PostgREST egress ＝ **Supabase → Vercel Function** 嗰段，**唔係** → 瀏覽器。
+  改 route response／壓縮**對帳單零幫助**；只可以「令 PostgREST 回少啲 bytes、回少幾次」。
+- per-row 實測（`tools/_egen-estimate-20260921.cjs`）：`pos_orders` 帶 items **1 469 B**；
+  `pos_queue_events` **1 668 B**；`pos_print_jobs` **1 165 B**；只投影 `id,status,updated_at` ＝ **91 B（16×）**。
+  單次：全量 state **0.98 MB**／守護全店拉 **7 MB**／報表一頁(2000×3腿) **8.4 MB**／KDS 板 **0.42 MB**。
+- 四大元兇（頻率 × 大小）：
+  ① 對賬守護 `fetchServerOrders(storeId, **null**)`（`sync-reconcile-daemon.ts:207`）＝ 冇日期下限 + limit 5000，
+     而 `RECONCILE_ACK_TTL_MS=10min` ＋ `MAX_ORDERS_PER_ROUND=100` ⇒ ⌈N/100⌉ 輪**每輪都再拉 7 MB**。
+     ⚠️ 已有 `computeServerRangeStart()` 但守護冇用。504 MB~2.5 GB／日。
+  ② ⚠️ **KDS 睇門狗唔係「未用都跑」**：`useKdsBoard` 只喺 `app/kitchen`、`app/expo` 兩個 page 渲染 ⇒
+     **route-scoped，冇開頁就零拉取**（2026-09-21 商家已停用 KDS ⇒ 成本 0）。佢 15s tick、靜 60s 就拉，
+     `refresh()` 自己更新 lastEventAt ⇒ 開住時實際每 60s 拉全板 ≈0.42 MB（302 MB／日）。重開 KDS 前要改。
+     🔴 對比：**真正「唔用都照燒」嘅只有對賬守護** —— `PosSyncFlushWorker` 掛 `app/layout.tsx:70`（root layout），
+     `installSyncReconcileDaemon()` 零條件，任何頁面都裝。其他都係「開住某頁先燒」：
+     打印中心 `/prints` **每 8 秒**（≈40 KB／次，長開一晚 ≈0.4 GB）、報表 **每 3 分鐘**。
+  ③ 報表 3 分鐘自動刷新 × `PAGE=2000`×10 頁 × **三條時間腿**（`pos-orders-range.ts:85-96`）。
+  ④ 全量 state 每次都查 300 條 queue（≈500 KB）**而 v2 之下 client 根本唔用**（`pos-app.tsx:1209`）；
+     `local-orders-panel.tsx:239` 拉 state **漏帶 `ordersOnly=1`**，且每張單 enqueue 都 fire queue-changed → 佢就拉。
+- 🔴 修正後排名（2026-09-21，商家確認停用 KDS）：**對賬守護 75~95% ≫ 報表／全量 state／打印中心**。
+  估算：一日 30 單 → 7 日窗口 ≈210 張終態單 → 每 10 分鐘 3 輪 × 7 MB ⇒ 126 MB／hour ⇒ 開 10h ≈1.26 GB／日，
+  同實測 1.29 / 1.47 GB 吻合 ⇒ **守護單獨就解釋得晒**。
+- 🔴 睇用量圖**一定要先睇右上 filter**：`All projects` ＝ 整個 org（POS ＋ Ledger 兩個專案）總和，
+  要逐個專案切換睇。POS app 亦會讀 Ledger（`list_merchant_orders` RPC：`paid-orders.ts` 最多 8×200 行、
+  報表 `restaurant-daily-report.tsx:1694` 最多 8×500 行／每 3 分鐘）。
+- 判別：`pg_stat_statements` 按 **rows** 排序（rows 大＝egress 大）＋ Vercel log 數 `/api/pos/state`
+  （`limit=5000` 且冇 `start=` ＝ 守護）。報告：`docs/reviews/supabase-egress-root-cause-2026-09-21.md`。
+- 🔴 **兩條軌要分開治**（2026-09-21 加 Vercel 數據後）：
+  · **Supabase egress** ← 睇 **payload 大小** ⇒ 守護全店拉取 ／ 三腿 ×2000 ／ queue 白拉。
+  · **Vercel invocations** ← 睇 **請求次數** ⇒ 🔴 **`/api/topup/pending-count` 每 30 秒**
+    （側欄紅點！`app-sidebar.tsx:113` 掛 `pos-app.tsx:4716`，每次打 Ledger Auth + 2 select + **外部 topup 站 HTTP**）
+    ≈1 440 次／日 ≈ 23% invocations；其次班次同步 60s（720／日）、打印中心 8s、報表 3min。
+  · 交叉校準：Supabase PostgREST 回 6.07 GB vs Vercel Fast Origin Transfer 3 GB ⇒ 同批請求兩端，**診斷成立**。
+- 🔴 **頂up 專案歸屬**：`/api/topup/*` 打 **Ledger**（`prepareLedgerServerClient`），
+  所以 topup 輪詢**唔會**計入 macauPos egress，但**會**計 Vercel invocations。唔可以撈埋。
+- 落實方案（含逐項 diff）：`docs/reviews/egress-optimization-plan-2026-09-21.md`。
+- ✅ **2026-09-21 已落實**（詳見 `docs/reviews/egress-optimization-implemented-2026-09-21.md`）：
+  守護投影+日期下限+每日 120 次上限；`?skipQueue=1`；`pos_orders_page` RPC（0046，未跑）；
+  `fetchOrdersInRange` 預設投影；頻率（TTL 60min／報表 10min／打印中心 30s／badge 5min／班次 180s）；
+  `[egress]` log。驗證：tsc 0 error、**892 test 全綠**、eslint 0 新增。
+- 🔴🔴 **投影欄位清單必須同 `PosOrderDbRow` 由測試雙向焊死**（`pos-order-row.test.ts`）：
+  漏欄 ＝ 靜默唔出（中過兩次：`discount_note`、`reopen_*`）；多欄 ＝ 42703 整個查詢失敗
+  （已有自動降級 `select("*")`）。新增欄位只改 `PosOrderDbRow` ＋ `POS_ORDER_DB_COLUMNS` 兩處。
+- 🔴 `pos-orders-range.ts` 有 `import "server-only"` ⇒ `node --test` **載入唔到**
+  ⇒ 決策邏輯一定要抽去零 import 模組（`src/lib/pos/orders-range-shared.ts`），否則新邏輯零回歸保護。
+- 🔴 降級鏈：RPC →（PGRST202/42883）三腿 →（42703/PGRST204）`select("*")`；
+  **真 DB 錯誤（超時/權限）一律唔降級、如實上報** —— 否則會被靜默吞成「今日冇單」。
+- 🔎 對帳捷徑：Supabase log CSV 冇 bytes 欄，但 `event_message` 有**完整 URL**
+  ⇒ 用 `tools/_analyze-supabase-logs-20260921.cjs` 還原查詢形狀（`select=`／`limit=`／`order=`）。
+  另：Supabase PostgREST 請求數 ÷ Vercel Function Invocations ≈ **8.7**（一次全量 state ＝ 7~8 條查詢）。
+- ✅ **commit 前煙霧測試**（2026-09-21 新增，可重用）：
+  · `tools/verify-pos-flows-live.cjs` — 真瀏覽器巡 17 條路由（點餐／打印／設置／報表／後廚…），
+    檢查 http／pageerror／卡死標記；先開 `next dev -p 3017`。
+  · `tools/verify-pos-api-contract.cjs` — API 契約回歸（新 query param 唔可以改舊回應）。
+  ⚠️ 兩個都**唔可以**用 `127.0.0.1`（Next 16 封鎖跨來源 dev 資源），一定用 `localhost`；
+  ⚠️ API 契約測試要 `POS_REQUIRE_DEVICE_AUTH=0`，否則一律 401 測唔到。
+  ⚠️ 殺 dev server 後要刪 `.next/dev/types/validator.ts`（會被截斷 → 假 tsc error）。
+- 🔴 改任何「週期常數」（刷新間隔／TTL）之後，**一定要 grep 用戶可見文案**：
+  2026-09-21 就係改咗 `AUTO_REFRESH_INTERVAL_MS` 但報表標題仍然寫死「每 3 分鐘自動更新」。
+  正解＝由常數推導（`Math.round(X / 60_000)`），唔好寫死。

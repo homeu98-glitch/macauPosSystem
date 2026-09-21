@@ -136,15 +136,22 @@ export function loadFailedEvents() {
 
 /**
  * 拉取雲端訂單（ordersOnly 通道，同報表同一個 API）。
+ *
  * @param storeId 店 UUID
- * @param startIso 起始（UTC ISO）；null = 唔限（會好大，盡量傳）
+ * @param startIso 起始（UTC ISO）；null = 唔限（**會好大，盡量傳**）
+ * @param fields PostgREST 欄位投影（逗號分隔，server 端有白名單）。
+ *   2026-09-21 egress 優化：常駐對賬守護只需要 `id,status,updated_at` 去核實狀態，
+ *   但舊版每次拉齊 30 欄（5 000 行 × 1 469 B ≈ 7 MB）→ 投影後每行 91 B（**16×**）。
+ *   唔傳 = 全欄位（舊行為），所以手動工具（同步健康 Modal）可以照拉全集。
  */
 export async function fetchServerOrders(
   storeId: string,
   startIso: string | null,
+  fields?: string,
 ): Promise<{ orders: PosOrder[]; error?: string }> {
   const params = new URLSearchParams({ storeId, ordersOnly: "1", limit: "5000" });
   if (startIso) params.set("start", startIso);
+  if (fields) params.set("fields", fields);
   try {
     const res = await fetch(`/api/pos/state?${params.toString()}`, {
       // 2026-09-10 P0-4：需要 POS 終端憑證
