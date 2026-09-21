@@ -225,6 +225,24 @@
   APK 已有 `PosRealtimeSubscriber`），claim 由 **`nextPollMs`** 控制（60s → 180s）⇒
   **3.0 → 0.33 次/分鐘（−89%）**。🔴 上限 **180 秒**（POS 網頁 5 分鐘標「疑似離線」）。
   伺服器已配合：`claim` 回應加 `nextPollMs`。
+- 🔴🔴 **關店後殘餘流量 ＝ 100% 中繼 APK**（2026-09-21 22:51–23:50 實測，59.3 分鐘）：
+  `PATCH pos_print_agents` **208 次（3.3/min，間隔中位 18.24s）**／`rpc/pos_claim_print_jobs` 74
+  （60.21s）／`GET pos_device_configs` 17（250s）／`GET pos_print_agents` 18（250s）；
+  而 `pos_orders_page`／`pos_queue_events`／`pos_print_templates`／`pos_note_presets` **全部 0 次**
+  ⇒ **瀏覽器側完全乾淨**，殘餘全部係 APK（其中約六成係心跳）。
+- ✅ **配對驗真已修（2026-09-21，待補 env）**：`pair/route.ts` 嘅 `lookupMerchant()`
+  以前用 **POS 專案 client** 查 `merchants`（Ledger 表）⇒ 404/`PGRST205` ⇒ fail-open
+  ⇒ 驗真從未生效。已改用新 helper
+  **`src/lib/ledger/supabase-ledger-service.ts`**（`getLedgerServiceClient()`；
+  env ＝ `NEXT_PUBLIC_SUPABASE_URL`（Ledger URL）＋ **`LEDGER_SUPABASE_SERVICE_ROLE_KEY`**）。
+  ⚠️ **未設 env → 回 `null` → 維持 fail-open**（行為同修復前一樣，只係唔再白打一個 404）
+  ⇒ 可以先行上線，env 後補。**J 要喺 Vercel 加 env（Production scope）＋ Redeploy。**
+  🔴 **權限取捨**：呢支 key ＝ POS 部署可完整讀寫整個 Ledger（service_role bypass RLS），
+  由 anon 升級 ⇒ 影響面擴大。**更保守嘅替代**：請 Ledger 側開
+  `GET /api/integration/pos/merchant-exists?storeId=`（走 `LEDGER_INTEGRATION_BASE_URL`
+  ＋ `LEDGER_WEBHOOK_SECRET`，同 `ensure-customer` 同模式）⇒ POS 唔需要特權憑證。
+  守衛：`pair-merchant-lookup.test.ts`（8 條，守住「唔可以 fallback 去 POS key/URL」、
+  「null 要 fail-open 唔可以 throw」、「`22P02` 仍然要擋」）。
 - 設計 + 實作全文：**`docs/reviews/session-and-write-gate-design-2026-09-21.md`**。
 - 📌 **取證（2026-09-21 實查，做呢批改動嘅依據）**：
   · 兩道 server 閘原本係 `sync/route.ts:519-534`（店內營業 2.55）、`558-572`（班次 2.56），

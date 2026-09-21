@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
+import { getLedgerServiceClient } from "@/lib/ledger/supabase-ledger-service";
 import { loadPairedAgent, resolveRelayRealtimeConfig, sha256Hex } from "@/lib/print-agent-server";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
@@ -36,12 +37,31 @@ type MerchantLookup =
 /**
  * 查 `merchants` 表確認 storeId 係真商戶。
  * fail-open 只限基建錯誤（表唔存在 / 無權限），確保唔會因為環境問題誤殺所有配對。
+ *
+ * ── 🔴 2026-09-21 修：以前用**錯專案**嘅 client ──────────────────────────
+ * 舊版用 POS 專案嘅 `getSupabaseWriteClient()` 去查 `merchants` —— 但 `merchants`
+ * 係 **Ledger** 專案嘅表 ⇒ 一定 **404 / `PGRST205`** ⇒ 落入 `INFRA_ERROR_CODES`
+ * ⇒ `kind:"unknown"` ⇒ **fail-open 放行** ⇒ 呢道驗真**從未生效**。
+ * 實測證據：`supabase_logs (8).csv` 見到 `GET /rest/v1/merchants?id=eq.…` → 404。
+ *
+ * 後果正正就係本檔頂部註釋講嘅 silent failure：配一個唔存在嘅 storeId 都會「成功」，
+ * 但 Realtime filter 永遠唔 match、claim 返 0 列 ⇒ **顯示已連線但一張都印唔出**。
+ *
+ * 而家用 Ledger service-role client（`@/lib/ledger/supabase-ledger-service`）。
+ * ⚠️ 未設 `LEDGER_SUPABASE_SERVICE_ROLE_KEY` → 回 `null` → 呢度**維持 fail-open**
+ * （行為同修復前一樣，但**唔會再白打一個註定 404 嘅查詢**）。
  */
-async function lookupMerchant(
-  supabase: NonNullable<ReturnType<typeof getSupabaseWriteClient>>,
-  storeId: string,
-): Promise<MerchantLookup> {
-  const { data, error } = await supabase
+async function lookupMerchant(storeId: string): Promise<MerchantLookup> {
+  const ledger = getLedgerServiceClient();
+  if (!ledger) {
+    console.warn(
+      "[print-agent/pair] 未設 LEDGER_SUPABASE_SERVICE_ROLE_KEY ⇒ 無法驗真 storeId（放行）。" +
+        "注意：呢道驗真失去咗防「配咗對但印唔出」嘅作用，詳見 supabase-ledger-service.ts。",
+    );
+    return { kind: "unknown" };
+  }
+
+  const { data, error } = await ledger
     .from("merchants")
     .select("id")
     .eq("id", storeId)
@@ -136,7 +156,7 @@ export async function POST(request: Request) {
   }
 
   // ── 2) 驗真：storeId 必須對應真實商戶（防「配咗對但印唔出」）──
-  const merchant = await lookupMerchant(supabase, storeId);
+  const merchant = await lookupMerchant(storeId);
   if (merchant.kind === "missing") {
     return NextResponse.json(
       {

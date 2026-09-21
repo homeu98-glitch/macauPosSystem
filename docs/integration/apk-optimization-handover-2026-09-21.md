@@ -23,6 +23,10 @@
 | **中繼機合計** | **3.01 次/分鐘** | **0.33 次/分鐘** | **−89%** |
 | 出紙速度 | 即時（Realtime 叫醒） | **不變** | — |
 
+> 🔴 **最有說服力嘅一次實測（§1.4）**：**店已關、收銀台瀏覽器已閂埋**嘅 59 分鐘之內，
+> 中繼機仍然打咗 **363 次**（`PATCH pos_print_agents` 208 次 ＝ 3.3 次/分鐘），
+> 而同期間 POS 網頁側係 **0 次**。⇒ **關咗店之後嘅殘餘流量 100% 來自中繼 APK。**
+
 ---
 
 ## 1. 現況實測（2026-09-21，營業中同一間店）
@@ -58,6 +62,48 @@
 | `posrelay/RelayApi.kt:113-138` | `claim(...)` ← 建議由呢度讀 `nextPollMs` |
 | `posrelay/RelayApi.kt:182-219` | `fetchDeviceConfig(storeId)` ← P3 請核對憑證 |
 | `posrelay/RelayApi.kt:221-242` | `post(...)`（加 `x-agent-id` / `x-agent-token`）|
+
+---
+
+### 1.4 🔴 最有力嘅證據：**店已關、POS 瀏覽器已關**之後嘅 59 分鐘實測
+
+> 樣本：`supabase_logs (8).csv`，窗口 `14:51:33Z → 15:50:52Z`（澳門 **22:51 → 23:50**），363 行。
+
+**當時狀況**：門店已關、收銀台瀏覽器**已經閂咗**。
+
+| 操作 | 次數 | 節奏 | 來源 |
+|---|---:|---|---|
+| **`PATCH pos_print_agents`** | **208** | **3.3 次/分鐘**（間隔中位 **18.24 秒**）| 中繼 APK（heartbeat 蓋章 ＋ claim 蓋章）|
+| `rpc/pos_claim_print_jobs` | 74 | 每 60.21 秒 | 中繼 APK |
+| `GET pos_device_configs` | 17 | 每 250 秒 | 中繼 APK（device-config）|
+| `GET pos_print_agents` | 18 | 每 250 秒 | 中繼 APK（`verifyAgent` 純讀）|
+
+**而以下全部係 0 次**（＝瀏覽器真係已經關）：
+
+```
+pos_orders_page（全量 state）／pos_queue_events／pos_print_templates／pos_note_presets
+```
+
+### ⇒ 兩點結論
+
+1. ✅ **POS 網頁側完全乾淨** —— 零全量拉取、零 queue、零模板／備註查詢。
+2. 🔴 **殘餘 100% 係中繼 APK**：店關咗、收銀台關咗，APK 仍然每分鐘打 **3.3 次**。
+   拆解：`rpc/pos_claim_print_jobs` 74 次（每 60.21 秒，對得上 `TICK_MS`）
+   ＋ **心跳約 120 次（每 30 秒，對得上 `HEARTBEAT_MS`）** ＋ device-config 驗證約 18 次
+   ⇒ **心跳佔咗呢 208 次 PATCH 嘅約六成**，而佢唯一效果就係蓋一個**只有 UI 顯示用途**嘅時間戳。
+   **做完本文 P1 ＋ P2 之後：363 次 → 約 70 次（−81%）**，而且剩返嘅全部係「有實際用途嘅兜底」
+   （claim 領任務、device-config 拿打印機路由），唔再有一條「只為證明自己活著」嘅請求。
+
+> 呢個就係商家原話嘅意思：「**店都關了，client 也應該沒在開，但一堆 heartbeat 在 call。**」
+
+### 1.5 附帶發現（唔關本文 P1/P2，但值得知悉）
+
+同一份 log 有一條 `GET /rest/v1/merchants?id=eq.<uuid>` → **404**
+（`level: warning`）。成因：`/api/pos/print-agent/pair` 嘅 `lookupMerchant()`
+用 **POS 專案**嘅 client 去查 `merchants`，但 `merchants` 係 **Ledger** 專案嘅表
+⇒ 表唔存在（`PGRST205`）⇒ 程式碼按「基建問題」**fail-open 放行**。
+後果：配對時嘅「storeId 必須對應真實商戶」驗真**實際上從未生效**。
+（呢項由 macauPosSystem 側跟進，**唔需要**你哋做嘢；APK 日常只會在未配對時輪詢 `/pair`。）
 
 ---
 
