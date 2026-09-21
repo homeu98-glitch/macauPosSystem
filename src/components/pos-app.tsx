@@ -43,6 +43,8 @@ import {
 } from "@/lib/pos/order-note-lock";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { shouldBackfillOnResubscribe } from "@/lib/pos/resubscribe-guard";
+import { queueSignature } from "@/lib/pos/queue-signature";
+import { createSingleFlight, SingleFlight } from "@/lib/pos/single-flight";
 import { refocusForIosKeyboard } from "@/lib/pos/ios-keyboard";
 import {
   computeOrphanLocalOrders,
@@ -286,6 +288,62 @@ export function PosApp() {
   const networkOnline = useNetworkOnline();
   const offlineMode = !networkOnline;
   const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
+  /**
+   * ## 🔴🔴 同步隊列「array 身分」守衛（2026-09-21 egress 修復，**唔可以拆**）
+   *
+   * ### 病徵（實測）
+   *
+   * 下面 1132 行嗰個 effect 嘅 dependency 包含 `queue`：
+   *
+   * ```ts
+   * useEffect(() => {
+   *   if (offlineMode) return;
+   *   if (queue.some((e) => e.status === "pending")) return;
+   *   void loadRuntimeState();
+   * }, [offlineMode, runtimeRefreshTick, queue]);
+   * ```
+   *
+   * React 認嘅係 **array 身分**，唔係內容。所以 `setQueue(loadQueue())`
+   * ——即「由 localStorage 重新讀一份返嚟」——**就算內容一個字都冇變**都會令
+   * effect 重跑 ⇒ 再一次全量拉取。
+   *
+   * 2026-09-21 營業中實測：`/api/pos/state` 每 **4.49 秒**一次、每次 **424,181 B**
+   * ⇒ 5.5 分鐘 62 次 ≈ **25 MB**。上游只需一個秒級事件源（`pos-print-jobs-changed`
+   * 每 2.5 秒／`sync-acks` 每 15 秒／`POS_SYNC_QUEUE_CHANGED_EVENT` 每 30 秒）
+   * 就會形成**穩定嘅 4~5 秒循環**（103 次之中冇任何兩次喺同一秒 ⇒ 定時循環、唔係人手）。
+   *
+   * ### 修法
+   *
+   * 所有「重新讀 localStorage 塞返隊列」嘅入口一律改行 `replaceQueueFromStorage()`：
+   * 內容簽名一樣就**唔 `setQueue`** ⇒ 唔換身分 ⇒ effect 唔重跑。
+   *
+   * ### 為何零功能影響
+   *
+   * - **`saveQueue()` 照樣每次都寫 localStorage**（磁碟一致性完全保留）。
+   * - UI 只讀內容（`failedSyncCount`、`readySyncCount`、待同步提示）——
+   *   內容一樣 ⇒ 畫面／計算／DOM 結果**逐項相同**，只係少一輪無謂 re-render。
+   * - 內容**真係變咗**（狀態由 `pending` → `failed`／`synced`、多／少一筆）
+   *   ⇒ 簽名唔同 ⇒ 照樣 `setQueue`，UI 更新行為完全不變。
+   * - 同 1298 行既有嘅 backfill 簽名守衛**同一口徑**（現已統一用呢一個 ref），
+   *   ⇒ 唔會引入新盲點。
+   *
+   * 要還原舊行為（每次都換身分）：把 `replaceQueueFromStorage()` 改返
+   * `setQueue(loadQueue())`。但咁樣 424 KB 循環會即時返嚟。
+   */
+  const queueSignatureRef = useRef<string | null>(null);
+  // 首次 render 用當前 state 初始化（lazy，唔會每次 render 都算一次簽名）。
+  if (queueSignatureRef.current === null) queueSignatureRef.current = queueSignature(queue);
+  /**
+   * 由 localStorage 重新載入同步隊列；**內容冇變就唔換 array 身分**。
+   * 見上面 `queueSignatureRef` 嘅完整說明。
+   */
+  function replaceQueueFromStorage() {
+    const next = loadQueue();
+    const signature = queueSignature(next);
+    if (signature === queueSignatureRef.current) return;
+    queueSignatureRef.current = signature;
+    setQueue(next);
+  }
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   /**
    * 掃碼自助單「新訂單提示」（2026-09-10 需求）：右上角一個提示對應一張桌台。
@@ -467,7 +525,10 @@ export function PosApp() {
   // 注意：唔好聽 POS_SYNC_QUEUE_CHANGED_EVENT，嗰個係 flush 自己嘅 trigger，
   // 聽咗會每 30s 無謂 refresh。
   useEffect(() => {
-    const onSyncFailed = () => setQueue(loadQueue());
+    // 🔴 2026-09-21：改用 `replaceQueueFromStorage()`（內容冇變就唔換 array 身分）。
+    // 舊版係 `setQueue(loadQueue())` —— 每次都換身分，而 `queue` 係下面 1132 行
+    // effect 嘅 dependency ⇒ 會連鎖觸發一次 424 KB 全量拉取。詳見 `queueSignatureRef`。
+    const onSyncFailed = () => replaceQueueFromStorage();
     window.addEventListener(POS_SYNC_FAILED_EVENT, onSyncFailed);
     return () => window.removeEventListener(POS_SYNC_FAILED_EVENT, onSyncFailed);
   }, []);
@@ -561,9 +622,12 @@ export function PosApp() {
   const [kitchenPrintSubmitting, setKitchenPrintSubmitting] = useState(false);
   const [receiptPrintSubmitting, setReceiptPrintSubmitting] = useState(false);
   const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
-  // 追蹤上一次 backfill 載入嘅 queue 簽名（id+status），避免 setQueue 建立新 array reference
+  // 追蹤 backfill 載入嘅 queue 簽名（id+status），避免 setQueue 建立新 array reference
   // 觸發自身 effect 依賴造成無限輪詢。saveQueue 仍然每次寫 localStorage，保持磁碟同步。
-  const lastLoadedQueueRef = useRef<string>("");
+  //
+  // 2026-09-21：已同組件頂部嘅 `queueSignatureRef` 合併做**單一真源** ——
+  // 全部 `setQueue` 入口（含 `replaceQueueFromStorage()`）共用同一個 ref，
+  // 唔會再有「一邊以為內容冇變、另一邊照換身分」嘅口徑漂移。
   /**
    * 上一次**全量** state 拉取嘅時間（`loadRuntimeState()` 一開跑就記）。
    *
@@ -1153,7 +1217,41 @@ export function PosApp() {
   // 一次過 backfill 現有 state（realtime 唔 backfill 舊 row；realtime (re)subscribe 時 call）。
   // 以 localStorage 為底 merge，唔會 overwrite 本機即時狀態。component scope 定義俾 usePosRealtime onResubscribed 共用。
   // @returns 本次全量拉取自動隔離咗幾多張孤兒單（2026-09-09 方案 A；0 = 冇／冇拉取）。
-  async function loadRuntimeState(): Promise<number> {
+  /**
+   * ## Single-flight 去重（2026-09-21 請求數優化，**零行為改動**）
+   *
+   * `loadRuntimeState()` 一次要打 **6 條 PostgREST 查詢**（見 `/api/pos/state`），
+   * 而佢有 **四個** 觸發入口：mount effect、realtime 重連補拉、`backToTables()`、
+   * 以及 `queue` 變化。呢四個入口**可以同一刻一齊開火**（例如：切返前景 → channel
+   * 重新訂上 → 同一秒 `queue` 又被 flush 改咗）⇒ 以前會連發 2~4 次同一個請求。
+   *
+   * 用既有資產 `createSingleFlight()`（`@/lib/pos/single-flight`，10 條單測）
+   * 令「**同一個 store、同一刻**」嘅呼叫共用同一個 promise。
+   *
+   * ### 為何零功能影響
+   *
+   * - 合併嘅係 **same-tick 並發**，唔係「X 秒內唔拉」時間窗 ⇒
+   *   「幾時會讀到新值」嘅語義完全冇變（時間窗會改變語義，所以刻意唔做）。
+   * - 每個呼叫端都仍然 `await` 到**同一次**讀取嘅完整結果（同 promise）⇒
+   *   `quarantined` 回傳值、`setOrders` / `setQueue` / `setPrintJobs` 副作用
+   *   全部照跑一次，只係由 N 次變 1 次。
+   * - `createSingleFlight` 失敗時 `.finally` **只清自己嗰條** flight
+   *   ⇒ 一次失敗唔會毒死之後嘅呼叫（已有單測鎖死）。
+   * - key 用 `resolveStoreId()` ⇒ 切店時 B 店唔會拿到 A 店 in-flight 嘅結果
+   *   （唔會餵錯店；同 `single-flight.ts` 頂部「死穴①」同一防線）。
+   *
+   * 要還原舊行為：把下面 `runLoadRuntimeState()` 呼叫改返直接呼叫。
+   */
+  const runtimeStateFlightRef = useRef<SingleFlight<number> | null>(null);
+  function loadRuntimeState(): Promise<number> {
+    if (!runtimeStateFlightRef.current) {
+      runtimeStateFlightRef.current = createSingleFlight<number>();
+    }
+    const flight = runtimeStateFlightRef.current;
+    return flight(resolveStoreId() ?? "", () => runLoadRuntimeState());
+  }
+
+  async function runLoadRuntimeState(): Promise<number> {
     let quarantinedCount = 0;
     try {
       // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
@@ -1291,12 +1389,13 @@ export function PosApp() {
         // 只有內容真正改變先 setQueue：避免 effect 依賴 queue 觸發自激迴圈
         // （loadRuntimeState → setQueue(新 array ref) → effect 重跑 → loadRuntimeState → ...）。
         // saveQueue 仍然每次寫 localStorage 保持磁碟同步。
-        const signature = mergedQueue
-          .map((e) => `${e.id}:${e.status}`)
-          .sort()
-          .join("|");
-        if (signature !== lastLoadedQueueRef.current) {
-          lastLoadedQueueRef.current = signature;
+        //
+        // 2026-09-21：簽名計算同 ref 統一收歸 `queueSignature()` / `queueSignatureRef`
+        // ——以前呢度自己寫一份內聯版本、另外三處入口又各自 `setQueue(loadQueue())`，
+        // 兩邊口徑可以漂移（一邊以為「內容冇變」而漏更新、另一邊又換身分觸發循環）。
+        const signature = queueSignature(mergedQueue);
+        if (signature !== queueSignatureRef.current) {
+          queueSignatureRef.current = signature;
           setQueue(mergedQueue);
         }
         saveQueue(mergedQueue);
@@ -7607,7 +7706,7 @@ export function PosApp() {
         <SyncHealthModal
           open={showSyncHealth}
           onClose={() => setShowSyncHealth(false)}
-          onMutated={() => setQueue(loadQueue())}
+          onMutated={() => replaceQueueFromStorage()}
         />
       ) : null}
 
@@ -7625,7 +7724,7 @@ export function PosApp() {
                   className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
                   onClick={() => {
                     const revived = retryFailedSyncEvents();
-                    setQueue(loadQueue());
+                    replaceQueueFromStorage();
                     setToast(
                       revived > 0
                         ? { tone: "success", message: `已重新排入 ${revived} 筆同步資料` }

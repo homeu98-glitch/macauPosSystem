@@ -92,6 +92,39 @@ type QueueEventRow = {
   store_id: string | null;
 };
 
+/**
+ * `pos_orders` 嘅「退款 / 退菜審計 3 欄」係唔係存在？——**每個 server instance 只探一次**
+ *（2026-09-21 修正：營業中每 30 秒一個 Postgres `ERROR` 嘅根因）。
+ *
+ * ## 問題（實測）
+ *
+ * Supabase log（營業中，5.5 分鐘）：**11 個 `error 42703`**
+ * `column pos_orders.refund_records does not exist` ＋ **11 個 `warning 400`**
+ *（`GET /rest/v1/pos_orders?select=…,refund_records,refunded_amount,voided_items…`）
+ * —— 即係**每次 `/api/pos/sync` 都撞一次**（實測每 30 秒一次，＝每次 flush）。
+ *
+ * ## 成因
+ *
+ * `refund_records` / `refunded_amount` / `voided_items` 呢 3 欄：
+ *   · **43 條 migration 全部冇定義**（已 grep 全 repo 確認）；
+ *   · **全 codebase 冇任何地方寫入**（只有本檔讀）。
+ * ⇒ 舊版每次都試 9 欄、每次都 42703、每次都降級再查 6 欄
+ *   ⇒ **每個 sync 白打一個註定失敗嘅查詢 ＋ 白寫一條 Error 級 Postgres log**。
+ *
+ * ## 修法（為何係零功能影響）
+ *
+ * 加一個 **per-instance 快取**：第一次照試（保留「將來真係加咗欄就自動啟用」嘅能力），
+ * 確認唔存在之後就直接查 6 欄。
+ *
+ * · **結果完全相同**：呢 3 欄從來冇存在過 ⇒ 實際一直行嘅都係 6 欄嗰條
+ *   ⇒「降級之後嘅資料」同「唔試直接查」**逐欄一樣**。
+ * · **唔會鎖死**：快取係 per server instance（in-memory），每次 cold start 重探一次
+ *   ⇒ 將來真係跑 migration 加返呢 3 欄，新 instance 會自動用返 9 欄，**唔使改 code**。
+ * · **失敗行為不變**：6 欄查詢照樣有 error handling；`existingById` 全空時嘅
+ *   `console.error` 同「LWW 守門降級為無條件寫入」嘅既有行為一字不改。
+ */
+let refundAuditColumnsAvailable: boolean | null = null;
+
 const VALID_EVENT_TYPES = new Set([
   "ORDER_CREATED",
   "ORDER_UPDATED",
@@ -605,10 +638,13 @@ export async function POST(request: Request) {
     const idArr = [...orderIds].slice(0, MAX_EVENTS_PER_REQUEST);
     const baseColumns = "id,status,fulfillment_status,items,updated_at,client_updated_at";
     // 退貨修復（2026-09-17）：多取退款 / 退菜審計欄，用嚟辨認「呢次更新係一次退貨」。
-    // ⚠️ 舊環境可能未加呢幾欄（migration 未跑）→ 回 42703 unknown column。
-    // 呢個失敗會令 `existingById` 全空 ⇒ **LWW / 終態守門一齊失效**（降級為無條件寫入），
-    // 所以唔可以當佢係小事：一定要 fallback 去最基本嘅欄位再試一次。
-    const refundColumns = ",refund_records,refunded_amount,voided_items";
+    // ⚠️ 呢 3 欄喺**全部 migration 都冇定義**（亦冇任何地方寫入）⇒ 現實一直行 6 欄嗰條
+    //    （見 `refundAuditColumnsAvailable` 嘅完整說明）。舊版每次都試 9 欄
+    //    ⇒ 每次 sync 一個 PostgREST 400 ＋ 一條 Postgres `42703` ERROR log（實測每 30 秒一次）。
+    // ⚠️ 呢個探測**唔可以整段剷走**：將來真係加咗欄，改行 9 欄係為咗令
+    //    「呢次更新係一次退貨」嘅守門豁免生效（所以改成「試一次、記住結果」）。
+    const refundColumns =
+      refundAuditColumnsAvailable === false ? "" : ",refund_records,refunded_amount,voided_items";
     let existingRows: unknown[] | null = null;
     let existingErr: { message?: string | null; code?: string | null } | null = null;
     {
@@ -621,6 +657,8 @@ export async function POST(request: Request) {
       existingErr = res.error;
     }
     if (existingErr && isMissingColumnError(existingErr)) {
+      // 記住「呢 3 欄唔存在」→ 同一 instance 之後唔再試（省一個註定失敗嘅查詢 ＋ 一條 ERROR log）
+      refundAuditColumnsAvailable = false;
       console.warn(
         `[pos/sync] pos_orders 缺退款審計欄（migration 未跑）→ 降級查詢；` +
           `退貨內容更新嘅守門豁免會失效。詳見 supabase/migrations 的退款欄位定義。`,
@@ -632,6 +670,9 @@ export async function POST(request: Request) {
         .in("id", idArr);
       existingRows = res.data as unknown[] | null;
       existingErr = res.error;
+    } else if (!existingErr && refundColumns) {
+      // 9 欄查得通（＝將來真係加咗欄）→ 記住，之後直接行 9 欄
+      refundAuditColumnsAvailable = true;
     }
     if (existingErr) {
       console.error("[pos/sync] 預取現有訂單失敗（LWW 守門降級為無條件寫入）:", existingErr.message);
