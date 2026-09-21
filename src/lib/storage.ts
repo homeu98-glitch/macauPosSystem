@@ -22,6 +22,7 @@ import {
   MAX_SELF_ORDER_NOTICES,
   type SelfOrderNotice,
 } from "@/lib/pos/self-order-notice";
+import { PRINT_ONCE_KEYS_MAX, mergeOnceKeys } from "@/lib/pos/print-dedupe";
 import { normalizeKioskPrinters } from "@/lib/pos/kiosk-settings";
 import {
   normalizeMerchantGrants,
@@ -139,6 +140,20 @@ const STORE_SUFFIX = {
    * 亦唔會參與收入／報表計算。
    */
   printedLedgerOrders: "printed-ledger-orders",
+  /**
+   * 「同一張單 × 同一件事 × 同一部打印機」**已經出過紙**嘅內容唯一鍵帳本
+   * （2026-09-21 · 商家實案：訂單 001 在 6.3 秒內出 4 張收據）。
+   *
+   * 同 `printedLedgerOrders` 係同一個道理、但精細到「一件事」：只記自動路徑
+   * 寫咗 `PrintJob.onceKey` 嘅 job 鍵（`orderId|onceKey|printerId`）。
+   *
+   * 🔴 呢本帳本係**跨視窗共用**嘅（localStorage 同源共享）—— 兩個 POS 視窗各自
+   * 有獨立 JS realm，所以 `print-jobs.ts` 嘅 60 秒 in-memory once-guard
+   * 會各自放行一次（＝4 張收據嘅直接機制）；改為讀呢本持久帳本就攔得住。
+   *
+   * 唔參與任何收入／報表計算。
+   */
+  printedOnceKeys: "printed-once-keys",
 } as const;
 
 type StoreSuffix = (typeof STORE_SUFFIX)[keyof typeof STORE_SUFFIX];
@@ -911,6 +926,28 @@ export function rememberPrintedLedgerOrder(orderId: string): void {
   const rows = loadPrintedLedgerOrderIds();
   if (rows.includes(orderId)) return;
   writeStoreJson(STORE_SUFFIX.printedLedgerOrders, [...rows, orderId].slice(-PRINTED_LEDGER_ORDERS_MAX));
+}
+
+/**
+ * 「同一張單 × 同一件事 × 同一部打印機」已經出過紙嘅內容唯一鍵帳本
+ * （見 `STORE_SUFFIX.printedOnceKeys` 註釋）。
+ *
+ * 唔會因為打印中心「清除」而消失；上限 `PRINT_ONCE_KEYS_MAX`，由最舊開始掉。
+ */
+export function loadPrintedOnceKeys(): string[] {
+  const rows = readStoreJson(STORE_SUFFIX.printedOnceKeys, [] as string[]);
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row): row is string => typeof row === "string" && row.length > 0);
+}
+
+export function savePrintedOnceKeys(keys: string[]): void {
+  writeStoreJson(STORE_SUFFIX.printedOnceKeys, keys);
+}
+
+/** 記低今次真係入咗隊嘅一次性鍵（去重、上限、由最舊開始掉）。 */
+export function rememberPrintedOnceKeys(keys: string[]): void {
+  if (typeof window === "undefined" || keys.length === 0) return;
+  savePrintedOnceKeys(mergeOnceKeys(loadPrintedOnceKeys(), keys, PRINT_ONCE_KEYS_MAX));
 }
 
 /**

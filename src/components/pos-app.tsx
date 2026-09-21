@@ -59,6 +59,7 @@ import {
   reprintReceiptForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
+import { claimOncePrintJobs } from "@/lib/pos/print-job-enqueue";
 import {
   addSelfOrderNotice,
   dismissSelfOrderNotice,
@@ -3345,13 +3346,19 @@ export function PosApp() {
       : "未配置廚房（分區/標籤）打印機，請到設備設置添加。";
   }
 
-  /** 把 print jobs 落本機隊列 + 推上雲（PRINT_JOB_CREATED）。回傳入隊張數。 */
+  /** 把 print jobs 落本機隊列 + 推上雲（PRINT_JOB_CREATED）。回傳入隊張數。
+   *
+   * 🔴 2026-09-21：先過「內容唯一鍵」去重（`claimOncePrintJobs`）—— 同一張單 ×
+   * 同一件事 × 同一部打印機只出一張。只對自動路徑主動寫咗 `onceKey` 嘅 job 生效，
+   * 手動補打（冇 `onceKey`）一律照樣入隊（見 `@/lib/pos/print-dedupe`）。 */
   function enqueuePrintJobs(jobs: PrintJob[]): number {
     if (jobs.length === 0) return 0;
+    const kept = claimOncePrintJobs(jobs);
+    if (kept.length === 0) return 0;
     const timestamp = new Date().toISOString();
-    persistPrintJobs([...jobs, ...printJobs]);
+    persistPrintJobs([...kept, ...printJobs]);
     pushEvents(
-      jobs.map<QueueEvent>((printJob) => ({
+      kept.map<QueueEvent>((printJob) => ({
         id: uid("evt"),
         type: "PRINT_JOB_CREATED",
         entityId: printJob.id,
@@ -3360,7 +3367,7 @@ export function PosApp() {
         createdAt: timestamp,
       })),
     );
-    return jobs.length;
+    return kept.length;
   }
 
   /** 當前工作台嘅訂單（已落單 / 已結帳都算；冇就 null）。 */
@@ -3632,6 +3639,9 @@ export function PosApp() {
                 ticketType,
                 storeName: bootstrap.storeName ?? "門店",
                 itemsOverride: printTargetItems,
+                // 🔴 只有「落單 / 接單」呢件事帶內容唯一鍵（同一張單同一件事只出一張紙）。
+                // 加菜（addon）**唔可以**帶：每一輪加單都係一件新事，要照出紙。
+                onceKey: treatAsAddOn ? undefined : `kitchen:normal:${order.reopenCount ?? 0}`,
               })
             : []),
           ...(labelOn
@@ -3644,11 +3654,17 @@ export function PosApp() {
         ]
       : [];
 
-    persistPrintJobs([...nextPrintJobs, ...printJobs]);
+    // 🔴 2026-09-21：落單／加單嘅 job **唔行** `appendPrintJobsWithSync`（要用 React state +
+    //    `pushEvents` 保持一致），所以呢度一定要自己過一次 `claimOncePrintJobs()` ——
+    //    否則內容唯一鍵只會寫上雲，本機帳本漏記 → 第二個視窗仍然會建 job。
+    //    （加菜冇 `onceKey`，唔會被攔。）
+    const enqueuedPrintJobs = claimOncePrintJobs(nextPrintJobs);
+    persistPrintJobs([...enqueuedPrintJobs, ...printJobs]);
 
       // A3（docs/56）：有啟用打印機但呢張單 0 張 job 入隊 → 單據唔會打印，彈警告提示。
       // 兩種成因：① 冇任何 zone/label 打印機；② 菜品 printerGroup 對唔中任何 printer.zoneId。
       // 細粒度開關關閉（kitchen && label 都熄咗）係**預期**唔出單，唔好彈警告騷擾收銀。
+      // ⚠️ 只認「builder 產生唔到 job」；被內容去重攔落唔算設定問題（唔可以彈誤導警告）。
       if ((kitchenOn || labelOn) && nextPrintJobs.length === 0 && !options?.silent) {
         const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
         setToast({
@@ -3668,7 +3684,7 @@ export function PosApp() {
       createdAt: timestamp,
     };
 
-    const printEvents = nextPrintJobs.map<QueueEvent>((printJob) => ({
+    const printEvents = enqueuedPrintJobs.map<QueueEvent>((printJob) => ({
       id: uid("evt"),
       type: "PRINT_JOB_CREATED",
       entityId: printJob.id,
@@ -4039,7 +4055,11 @@ export function PosApp() {
     // 結帳收據總開關（2026-09-08）：設備設置 → 打印開關設置可獨立關閉。關閉後結帳唔出收據。
     // 手動掣（點餐介面「打印收據」）唔受呢個影響，照樣可出單。
     if (!isPrintContentEnabled("receipt")) return;
-    const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap);
+    // 🔴 `once: true`（2026-09-21 實案）：呢度係**自動**結帳收據，同 Ledger 回傳嗰條
+    // 完成收據係同一件事；兩個 POS 視窗又各有一份 realm 級守衛 ⇒ 一張單曾出 4 張。
+    // 加咗內容唯一鍵（`receipt:${reopenCount}`）之後只會出一張；
+    // 手動補打走 `reprintReceiptForOrder`／補打帳單掣，**唔帶** onceKey，照樣撳幾次印幾次。
+    const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap, { once: true });
     if (nextPrintJobs.length === 0) {
       if (process.env.NODE_ENV !== "production") {
         console.warn("[printReceipt] No receipt printer configured — skipping receipt print");

@@ -26,3 +26,22 @@ export function isMissingColumnError(error: SupabaseLikeError | null | undefined
   const message = String(error.message ?? "");
   return /column .* does not exist|Could not find the '.*' column/i.test(message);
 }
+
+/**
+ * 判斷係唔係「唯一約束衝突」（`23505` unique_violation）。
+ *
+ * 用途（2026-09-21 內容唯一鍵）：`pos_print_jobs.once_key` 有 partial unique index，
+ * 撞鍵代表**同一件事（同一張單 × 同一件事 × 同一部打印機）已經出過紙** ——
+ * 呢個係**預期結果**，唔係基礎設施故障：
+ *   · 唔可以當 `failInfra`（會令整批事件回 500、client 無限重試）；
+ *   · 亦唔可以靜默當成功而唔 log（會查唔到「點解少咗一張紙」）。
+ * ⇒ caller 應該：略過寫入 + `ack(true)` + `console.info` 留痕。
+ */
+export function isUniqueViolationError(error: SupabaseLikeError | null | undefined): boolean {
+  if (!error) return false;
+  const code = String(error.code ?? "");
+  if (code === "23505") return true;
+  return /duplicate key value violates unique constraint|already exists/i.test(
+    String(error.message ?? ""),
+  );
+}

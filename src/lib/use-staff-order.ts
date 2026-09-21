@@ -600,6 +600,8 @@ export function useStaffOrder(): StaffOrderApi {
           ticketType: existing ? "addon" : "normal",
           storeName: storeName || bootstrap.storeName || "門店",
           itemsOverride: existing ? addedItems : undefined,
+          // 新單（normal）帶內容唯一鍵 —— 同一張單同一件事只出一張；加菜每輪照出。
+          onceKey: existing ? undefined : `kitchen:normal:${order.reopenCount ?? 0}`,
         });
         kitchenJobCount = appendPrintJobsWithSync(jobs);
       }

@@ -1,0 +1,99 @@
+-- ============================================================================
+-- 0045_pos_print_jobs_once_key.sql
+--
+-- 目的：為 `pos_print_jobs` 加「**內容唯一鍵**」欄位 + 唯一索引，令同一件事
+--       （同一張單 × 同一件事 × 同一部打印機）**物理上唔可能**寫入兩行 ⇒ 唔可能出兩張紙。
+--
+-- ## 背景（2026-09-21 商家實案：訂單 001 一次過出 4 張收據）
+--
+-- 雲端 `pos_print_jobs` 查到 7 行全部屬於**同一張單**
+-- （`order_id = ledger-e26fa77b-…`，POS 單號 001 / A01）：
+--
+--   10:42:37  廚房單
+--   10:56:33  廚房單 ×2（同秒！）
+--   10:58:00  收據（table_name = 堂食）
+--   10:58:01  收據（A01）
+--   10:58:01  收據（堂食）
+--   10:58:06  收據（A01）
+--
+-- 根因唔係「邊個 bug 印多咗」，而係**去重鍵完全唔存在**：
+--   · `PrintJob.id` = `crypto.randomUUID().slice(0,8)` → 每次建 job 都係新 id，
+--     所以 client 側 `mergePrintJobs()`（只按 id 去重）**永遠攔唔到**內容相同嘅重複；
+--   · DB 亦冇任何 `(order_id, printer_id, ticket_type, …)` 內容約束 → 一行一個 id，全部照出紙；
+--   · 唯一嘅守衛係 60 秒 **in-memory** once-guard，而佢係**每個瀏覽器 realm 一份**
+--     ⇒ 開兩個 POS 視窗（商家已確認）兩個 realm 各自放行一次。
+--
+-- ## 內容唯一鍵嘅口徑
+--
+-- 鍵值由 client 砌好（`src/lib/pos/print-dedupe.ts`）：
+--
+--     once_key = "<orderId>|<onceScope>|<printerId>"
+--
+-- 而 `onceScope` **只有自動出紙路徑**才會寫，例如：
+--   · `receipt:<reopenCount>`                     ← 結帳／免單／線上單完成（每代結帳一張文件）
+--   · `kitchen:normal:<reopenCount>:<內容簽名>`    ← 落單／接單／補印兜底（改單後簽名變 ⇒ 照出新紙）
+--   · `kitchen:void:ledger_cancel:<reopenCount>`  ← 線上單被取消嘅作廢單
+--
+-- 🔴 **以下一律唔寫 once_key（＝NULL）**，因為佢哋本質上係**合法重複**：
+--   · 手動「補打帳單 / 重打整單 / 補打廚房單」——用家撳幾次就要印幾次；
+--   · 加菜（`addon`）——每一輪加單都要出新紙；
+--   · 收銀自己退菜、返結——同一張單可以退多次。
+--
+-- ⚠️ `onceScope` 一定要帶**世代計數**（用 `reopenCount`）：返結後重結係第二次
+--    合法結帳，要再出一張收據。唔帶世代就會被當重複而**靜默唔出紙**。
+--
+-- ## 為何用 partial unique index（`where once_key is not null`）
+--
+--   1. 手動／加菜／退菜 job 唔帶鍵（NULL）→ 唔會被索引約束，行為完全不變；
+--   2. Postgres 嘅 UNIQUE 索引對 NULL 係「互相唔相等」，但用 partial 更明確
+--      （索引亦細好多，只覆蓋自動出紙嘅 job）。
+--
+-- ## 部署順序（安全，兩個方向都可以）
+--
+--   `src/app/api/pos/sync/route.ts` 已做足容錯：
+--     · payload 冇 `onceKey`（舊 client / 手動路徑）→ 完全唔帶呢欄，行為同以前一樣；
+--     · migration **未跑** → insert 回 42703（unknown column）→ 自動**拔走 once_key 重寫一次**
+--       （同 0034 / 0043 新欄位嘅降級慣例一致），主流程唔會壞；
+--     · 撞唯一索引（23505）→ 當「呢件事已經出過紙」處理：**略過 insert 但 ack 成功**
+--       （唔可以 ack(false)，否則 client 會永遠重試同一條已出紙嘅事件）。
+--   ⇒ 先上 code 後跑 migration，或者先跑 migration 後上 code，都安全。
+--
+-- ## 執行方式（沿用本專案慣例）
+--
+--   喺 Supabase Dashboard → SQL Editor 貼上執行（專案 POS = `iyrywzormzisyppkokbi`）。
+--   全部 `if not exists` ⇒ 可重複執行（idempotent）。
+--
+-- ## 驗證（手動跑）
+--
+--   -- 1) 欄位 + 索引都在
+--   select indexname, indexdef
+--   from pg_indexes
+--   where schemaname = 'public' and tablename = 'pos_print_jobs'
+--     and indexname = 'pos_print_jobs_once_key_uniq';
+--   → 應該回 1 行，indexdef 帶 `WHERE (once_key IS NOT NULL)`。
+--
+--   -- 2) 歷史行全部係 NULL（唔會有假衝突）
+--   select count(*) filter (where once_key is null) as legacy_null,
+--          count(*) filter (where once_key is not null) as keyed
+--   from public.pos_print_jobs;
+--
+--   -- 3) 修完之後應該冇「同一張單 × 同一類單 × 同一部機」多過一行
+--   select order_id, printer_id, printer_group, ticket_type, count(*)
+--   from public.pos_print_jobs
+--   where once_key is not null
+--   group by 1, 2, 3, 4
+--   having count(*) > 1;
+--   → 應該回 0 行。
+-- ============================================================================
+
+-- 1) 內容唯一鍵（自動出紙路徑先有值；手動／加菜／退菜留 NULL）
+alter table public.pos_print_jobs
+  add column if not exists once_key text;
+
+comment on column public.pos_print_jobs.once_key is
+  '出紙內容唯一鍵（orderId|onceScope|printerId）。只有自動出紙路徑會寫；NULL = 唔參與去重（手動補打／加菜／退菜／返結）。見 supabase/migrations/0045 同 src/lib/pos/print-dedupe.ts。';
+
+-- 2) 唯一索引：同一間店、同一個內容鍵，物理上只可以有一行
+create unique index if not exists pos_print_jobs_once_key_uniq
+  on public.pos_print_jobs (store_id, once_key)
+  where once_key is not null;

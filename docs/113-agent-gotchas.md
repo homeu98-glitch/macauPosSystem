@@ -470,6 +470,54 @@ orderEventISO(order)       // → 原始字串（顯示用），無法解析 = "
 - 旁證：`print-center.tsx` 嘅 `syncCloudPrintOutcomes()` 靠雲端狀態覆寫本地，雲端冇行 → `cloudById.get(id)` = undefined → 永遠升唔到 `printed`。所以「已發送」會**卡死**，唔會自我修正。
 - 🔎 30 秒自檢：打印中心見到 job 係**綠色「已發送」但冇紙**、底部又冇紅標 → 九成係呢條。去 Supabase `pos_print_jobs` 查個 job id 有冇行。
 
+## 🔴🔴 同一張單重複出紙：`PrintJob.id` 冇內容語義 → 自動路徑一定要帶 `onceKey`（2026-09-21 實案）
+
+**商家原話**：「為什麼一次性打印了4張收據?」—— 訂單 001（線上單鏡像，A01，線上已支付 44）
+在 **6.3 秒內出咗 4 張收據**（雲端 `pos_print_jobs` 查實，同一個 `order_id`）：
+
+| 時間（澳門） | 種類 | 餐台（快照） | job id |
+|---|---|---|---|
+| 10:42:37 | 廚房單 | 堂食 | print-29ca3b09 |
+| 10:56:33 | 廚房單 ×2（**同秒**） | 堂食 | print-8c39bd90 / print-61e58318 |
+| 10:58:00 / 01 / 01 / 06 | **收據 ×4** | 堂食、A01、堂食、A01 | print-b5b5726f / 9795fff5 / cf238e80 / 739fa4f1 |
+
+- 同日**本地單**（`訂單02`）＝廚房 1 張 + 收據 1 張**完全正常** ⇒ 重複只發生喺**線上單**。
+- 4 張之中 2 張 `table_name = 堂食`、2 張 `= A01` ⇒ 係**唔止一條路徑**各自建 job，
+  而且建 job 嗰刻手上嘅訂單版本唔同（投影＝未排位「堂食」、本地鏡像單＝已排位 A01）。
+
+**根因（唔係「邊個 bug 印多咗」，而係去重鍵根本唔存在）**
+1. `PrintJob.id = uid("print") = crypto.randomUUID().slice(0,8)` → 每次建 job 都係新 id，
+   `mergePrintJobs()`（只按 id）**永遠攔唔到內容相同嘅重複**；DB 亦冇任何內容唯一約束。
+2. 唯一守衛係 `print-jobs.ts` 嘅 **60 秒 in-memory `Set`**，而佢係**每個瀏覽器 realm 一份**
+   ⇒ 開兩個 POS 視窗（商家已確認）兩個 realm **各自放行一次**；
+   而主介面結帳路徑（`pos-app.tsx printReceipt()`）連呢個守衛都**冇**。
+3. 收據本身有**三條獨立入口**：Ledger Realtime echo（status→completed 且已付）、
+   主介面「客人已支付，完成訂單／結帳／免單」、手動補打。⚠️ **「排位」會間接出收據**：
+   `assignLedgerOrderToTable` → `syncOnlineDineInCompletion` 爬梯到 `completed` → echo 觸發。
+
+**✅ 修法（2026-09-21 已落）**
+| 層 | 檔案 | 改動 |
+|---|---|---|
+| 純函式 | `src/lib/pos/print-dedupe.ts`（新，**零 import**）＋ `.test.ts`（15 test） | 鍵 = `orderId\|onceKey\|printerId`；`dedupeOnceJobs` / `mergeOnceKeys` / `printOnceContentSignature` |
+| 本機帳本 | `storage.ts` → `printedOnceKeys`（上限 600、唔受「清除」影響） | **跨視窗共用**（localStorage）補 realm 級守衛漏洞 |
+| 寫入收口 | `print-job-enqueue.ts` → `claimOncePrintJobs()`（`appendPrintJobsWithSync` 內） | 自動路徑去重；**只對帶 `onceKey` 嘅 job 生效** |
+| 路徑標記 | `print-jobs.ts`（收據／廚房）、`ledger-pos-bridge.ts`（接單／採納／補印兜底）、`pos-app.tsx`（結帳、落單）、`use-staff-order.ts` | 自動路徑寫 `onceKey` |
+| 雲端 | `supabase/migrations/0045_pos_print_jobs_once_key.sql` ＋ `sync/route.ts` | `once_key` 欄 + partial unique index；撞 23505 → 略過但仍 `ack(true)`；未跑 migration（42703）→ 拔欄重寫 |
+| 枱號 | `print-jobs.ts findPosOrderForLedger()` | 枱號以**本地鏡像單**為準（投影快取可能係排位前嘅「堂食」） |
+
+**🔴 鐵律**
+- 自動路徑嘅 `onceKey` **一定要帶世代計數**（用 `reopenCount`）：返結後重結係第二次**合法**結帳，
+  唔帶世代 = 靜默唔出紙。收據＝`receipt:${reopenCount}`（**每代結帳一張文件**，唔帶內容簽名）。
+- **廚房單要帶內容簽名**（`printOnceContentSignature`）：客人改單後補印係新內容 → 新鍵 → 要照出紙；
+  若只有 `orderId + scope`，改單補印會被當重複而**廚房永遠收舊單**。
+- **手動路徑一律唔寫 `onceKey`**（補打帳單／重打整單／補打廚房單：撳幾次印幾次），
+  加菜（`addon`）、退菜、返結亦唔寫（本質上可以合法重複）。
+- **標籤單唔參與去重**：同一杯飲品叫兩杯就係兩張標籤，誤攔代價（客人冇標籤）遠大於多印一張。
+- `pos-app.tsx` 有自己嘅 `enqueuePrintJobs()`（React state + `pushEvents`），**唔行** `appendPrintJobsWithSync`
+  ⇒ 兩個入口都必須叫 `claimOncePrintJobs()`，否則主介面路徑靜默繞過去重。
+- ⚠️ 帳本係**落本機鍵**（enqueue 一刻寫），所以「雲端寫入最終失敗」時帳本仍會話「出過紙」——
+  同 `printedLedgerOrders` 同一口徑（人手重打唔受影響，因為手動冇鍵）。
+
 ## 「線上訂單」打印開關（2026-09-11 新增 · `printContentToggles.online`）
 - 需求：Sunmi 系統本身會印線上訂單，部分店鋪唔想廚房再印一次。
 - 語義：**訂單來源**維度，同「廚房單／飲品標籤單」（內容維度）係**乘積** —— 線上單出廚房單要 `kitchen`（或 `label`）**同** `online` 都 true。

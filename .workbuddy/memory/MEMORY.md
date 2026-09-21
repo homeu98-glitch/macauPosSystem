@@ -67,6 +67,14 @@
 ## 4. 打印／中繼
 - 建單/接單後必須 `appendPrintJobsWithSync()`；淨 `savePrintJobs()`＝零出紙。
 - 出紙只喺**內容事件**；轉換/採納/排位唔出紙。
+- 🔴🔴 **同一張單重複出紙（2026-09-21 實案：4 張收據）＝ 內容唯一鍵 `onceKey`**：
+  `PrintJob.id` 係 randomUUID ⇒ `mergePrintJobs` 只按 id **永遠攔唔到**；唯一守衛（60s in-memory Set）
+  係 **per 瀏覽器 realm**（開兩個視窗各自放行）。已加 `src/lib/pos/print-dedupe.ts`（零 import）
+  ＋帳本 `printedOnceKeys`（跨視窗）＋雲端 `pos_print_jobs.once_key` 唯一索引（**migration 0045 未跑**）。
+  收口＝`claimOncePrintJobs()`；⚠️ `pos-app.tsx` 有 3 處繞過收口（`enqueuePrintJobs`、落單 `persistPrintJobs`）。
+  自動路徑 onceKey 必帶世代（`reopenCount`）；廚房單必帶內容簽名；手動／加菜／退菜／返結／標籤**唔帶**。
+  「排位」會經 Ledger echo 間接出收據（`syncOnlineDineInCompletion` → completed）。
+  取證：`tools/_probe-dup-receipt*.cjs`（唯讀查 `pos_print_jobs`）。
 - 🔴 判失敗真因睇 `last_error`：`failed to connect to /<印表機IP> from /<中繼IP>` ⇒ 網段不通；
   `dispatch failed` ⇒ 跑 `macau-ledger-merchant`（源碼 `C:\dev\_ref-macau-ledger-merchant`）。
   中繼機同印表機須同網段（192.168.31.x／10.61.x／172.20.10.x）。

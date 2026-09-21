@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
-import { isMissingColumnError } from "@/lib/supabase-errors";
+import { isMissingColumnError, isUniqueViolationError } from "@/lib/supabase-errors";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 import {
   isPosDeviceAuthRequired,
@@ -45,6 +45,12 @@ const MAX_ID_LEN = 128;
 const MAX_STORE_ID_LEN = 64;
 const MAX_TEXT_LEN = 2000; // order_note / 備註
 const MAX_NAME_LEN = 200;
+/**
+ * 出紙內容唯一鍵上限（`<orderId>|<onceScope>|<printerId>`，見 migration 0045）。
+ * 實際長度約 60–120 字（`ledger-<uuid>` 43 字 + scope + `printer-xxxxxxxx`）。
+ * ⚠️ 超過上限**唔用**（唔截斷）—— 截斷會令兩條唔同鍵撞成同一條 → 誤攔真出紙。
+ */
+const MAX_ONCE_KEY_LEN = 240;
 const MAX_PARTY_SIZE = 999; // 對齊 0017 migration 嘅 CHECK 約束
 const STORE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 // 注意：唔好加 DEFAULT_STORE_ID fallback。缺 storeId 一定要大聲失敗（400），
@@ -1461,7 +1467,22 @@ export async function POST(request: Request) {
         //    有效期係「建單一刻」嘅屬性，唔應該隨每次推送改變。
         const contentPatchWithoutTtl: Record<string, unknown> = { ...contentPatch };
         delete contentPatchWithoutTtl.ttl;
+        /**
+         * 🆕 內容唯一鍵（2026-09-21，migration `0045_pos_print_jobs_once_key.sql`）。
+         *
+         * `orderId|onceScope|printerId`，由 client（`src/lib/pos/print-dedupe.ts`）砌好。
+         * 只有**自動出紙路徑**會帶（收銀結帳／線上單完成／接單／補印兜底）；
+         * 手動補打、加菜、退菜、返結一律唔帶 ⇒ NULL ⇒ 唔受唯一索引約束（行為不變）。
+         *
+         * ⚠️ 長度超上限一律**唔用**呢個鍵（而唔係截斷）—— 截斷會令兩條唔同嘅鍵
+         * 撞成同一條 → 誤攔真出紙（客人冇紙），比「唔去重」危險得多。
+         */
+        const onceKeyRaw = typeof eventPayload.onceKey === "string" ? eventPayload.onceKey.trim() : "";
+        const onceKey = onceKeyRaw.length > 0 && onceKeyRaw.length <= MAX_ONCE_KEY_LEN ? onceKeyRaw : null;
+
         // 1) 先試 update（只更新內容，唔動 status）—— 命中即張 job 已存在，唔應該重置佢嘅打印狀態
+        //    ⚠️ `once_key` **刻意唔入 update**：佢係「首次建立」嘅身分，重推唔應該改（亦避免
+        //       未跑 migration 時 update 分支撞 42703）。
         const { data: upd, error: uErr } = await supabase
           .from("pos_print_jobs")
           .update(contentPatchWithoutTtl)
@@ -1475,13 +1496,35 @@ export async function POST(request: Request) {
           continue;
         } else if (!upd || upd.length === 0) {
           // 2) 冇命中 → 首次建立，呢刻先寫 status（用 payload 嘅，通常 pending）
-          const { error: iErr } = await supabase.from("pos_print_jobs").insert({
+          const insertRow: Record<string, unknown> = {
             id: jobId,
             store_id: storeId,
             ...contentPatch,
             status: text(eventPayload.status, 64) ?? "pending",
             created_at: jobCreatedAt,
-          });
+            ...(onceKey ? { once_key: onceKey } : {}),
+          };
+          let { error: iErr } = await supabase.from("pos_print_jobs").insert(insertRow);
+          // 🔻 降級：`once_key` 欄未加（migration 0045 未跑）→ 拔走重寫一次，主流程唔可以壞
+          //    （同 0034 discount_note / 0043 返結審計欄嘅降級慣例一致）。
+          if (iErr && onceKey && isMissingColumnError(iErr)) {
+            console.warn(
+              "[pos/sync] pos_print_jobs 缺 once_key（migration 0045 未跑）→ 降級寫入；" +
+                "內容唯一鍵去重暫時只在 client 側（localStorage 帳本）生效。",
+            );
+            const legacyRow = { ...insertRow };
+            delete legacyRow.once_key;
+            ({ error: iErr } = await supabase.from("pos_print_jobs").insert(legacyRow));
+          }
+          // 🔻 撞內容唯一索引（23505）＝ **同一件事已經出過紙** —— 呢個係預期結果：
+          //    唔插入、但要 ack 成功（ack(false) 會令 client 永遠重試同一條已出紙嘅事件）。
+          if (iErr && isUniqueViolationError(iErr)) {
+            console.info(
+              `[pos/sync] 內容唯一鍵重複 → 略過重複出紙（job=${jobId} once_key=${onceKey ?? "-"}）`,
+            );
+            ack(true);
+            continue;
+          }
           if (iErr) {
             console.error("[pos/sync] pos_print_jobs insert failed:", iErr.message);
             failInfra(`列印工作寫入失敗`);

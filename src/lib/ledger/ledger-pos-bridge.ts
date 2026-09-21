@@ -22,6 +22,7 @@ import {
 // ⚠️ 唔可以 import `@/lib/print-jobs`（佢反過來 import 咗呢個檔 → 循環依賴）。
 // 出紙入隊邏輯走獨立嘅 `@/lib/pos/print-job-enqueue`。
 import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
+import { printOnceContentSignature } from "@/lib/pos/print-dedupe";
 import {
   syncOnlineDineInCompletion,
   type OnlineDineInProgress,
@@ -233,6 +234,15 @@ function buildPrintJobsForItems(options: {
    * 2026-09-12 實案：唯一印唔出嘅 job 正好就係唯一冇快照嗰張。
    */
   sourceOrder?: PosOrder;
+  /**
+   * **自動路徑專用**內容唯一鍵標籤（`PrintJob.onceKey`）：接單／採納／補印兜底
+   * 一律 `kitchen:normal:${reopenCount}`，令「同一張單同一件事同一部機只出一張紙」。
+   *
+   * 🔴 2026-09-21 實案：同一個 realtime echo / backfill 會被**兩個 POS 視窗**各自
+   * 處理一次（60 秒 once-guard 係 per realm）→ 同一張廚房單出兩張（10:42:37 一張、
+   * 10:56:33 同秒再兩張）。詳見 `@/lib/pos/print-dedupe`。
+   */
+  onceKey?: string;
 }): PrintJob[] {
   // 「線上訂單」總開關（2026-09-11 新增）：呢個 builder **只**服務 Ledger 線上單
   // （`bridgeLedgerOrderToPos` / `printKitchenForLedgerOrder`）。
@@ -305,6 +315,12 @@ function buildPrintJobsForItems(options: {
       ...(template ? { template } : {}),
       status: resolvePrintJobStatus(true),
       createdAt: timestamp,
+      // 內容簽名一齊入鍵（見 `buildPrintJobsForItems` 的 onceKey 註釋）。
+      ...(options.onceKey
+        ? {
+            onceKey: `${options.onceKey}:${printOnceContentSignature(items.map(toPrintItemLine))}`,
+          }
+        : {}),
     };
   };
 
@@ -352,6 +368,10 @@ function buildPrintJobs(order: PosOrder): PrintJob[] {
     tableName: order.tableName,
     items: order.items,
     sourceOrder: order,
+    // 接單（`bridgeLedgerOrderToPos`）同排位／快餐採納（`upsertLedgerLocalOrder`）係
+    // **同一件事**（客人落單 → 廚房要嘅係同一張紙）→ 同一個 onceKey，只出一張。
+    // 內容一變（客人改單）簽名就變 → 照出新紙。
+    onceKey: `kitchen:normal:${order.reopenCount ?? 0}`,
   });
 }
 
@@ -446,6 +466,10 @@ export async function printKitchenForLedgerOrder(
     tableName: projection.tableName,
     items: projection.items,
     sourceOrder: projection,
+    // 接單（含補印兜底 `ensureKitchenPrintForLedgerOrderOnce`）—— 同一張單同一件事
+    // 只出一張紙。2026-09-21 實案：兩個 POS 視窗各自處理同一個 echo ⇒ 同秒出兩張。
+    // 客人改單後補印 → 內容簽名唔同 → 照出新紙。
+    onceKey: `kitchen:normal:${projection.reopenCount ?? 0}`,
   });
 
   // 🔴 一定要註冊投影（見 `registerLedgerProjection` 註釋）：唔做嘅話打印中心

@@ -1451,6 +1451,23 @@ export interface PrintJob {
    * 自助點餐單固定 1 張（規格），所以一定要喺 job 帶 `copies: 1` 落去。見 docs/87 §6.1。
    */
   copies?: number;
+  /**
+   * **內容唯一鍵**嘅一件事標籤（自動出紙路徑專用）；`undefined` = 唔參與去重。
+   *
+   * 2026-09-21 加（商家實案：訂單 001 在 6.3 秒內出 4 張收據）。
+   * `PrintJob.id` 每次建 job 都係新 `randomUUID`，所以 `mergePrintJobs()` 按 id 去重
+   * **永遠攔唔到內容相同嘅重複**；而唯一嘅 60 秒 once-guard 係**每個瀏覽器 realm 一份**
+   * ⇒ 開兩個視窗就各自放行一次。呢個欄位補上「同一張單 × 同一件事 × 同一部機」嘅鍵。
+   *
+   * 完整鍵 = `orderId|onceKey|printerId`（見 `@/lib/pos/print-dedupe`）。
+   *
+   * ⚠️ **一定要帶世代計數**（例如收據 `receipt:${reopenCount}`）：返結後重結係第二次
+   * 合法結帳，要再出一張；唔帶世代就會靜默唔出紙。
+   *
+   * ⚠️ **手動路徑一律唔寫**（補打帳單 / 重打整單 / 補打廚房單）—— 用家撳幾次就要印幾次。
+   * 加菜（addon）、退菜、返結亦唔寫（本質上可以合法重複）。
+   */
+  onceKey?: string;
 }
 
 // ── 跨平台雙路徑打印：統一傳輸層合約（Phase 0 骨架） ──

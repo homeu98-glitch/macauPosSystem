@@ -16,6 +16,7 @@ import {
 // 落本機 + 推上雲嘅共用實作抽離到 `@/lib/pos/print-job-enqueue`
 // （避免 print-jobs ↔ ledger-pos-bridge 循環依賴；見該檔頭註釋）。
 import { appendPrintJobsWithSync, persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
+import { printOnceContentSignature } from "@/lib/pos/print-dedupe";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
@@ -161,9 +162,23 @@ function buildTemplateReceiptJobs(
   }));
 }
 
-/** 收銀台結帳收據：用 `printTemplates.receipt` 槽位。 */
-export function buildReceiptPrintJobs(order: PosOrder, bootstrap: PosBootstrap): PrintJob[] {
-  return buildTemplateReceiptJobs(order, bootstrap, loadPosLocalSettings().printTemplates.receipt);
+/** 收銀台結帳收據：用 `printTemplates.receipt` 槽位。
+ *
+ * `opts.once`：自動出紙路徑（結帳／免單／線上單完成／補印兜底）要先寫 `onceKey`，
+ * 令「同一張單 × 同一代結帳 × 同一部收據機」**只出一張紙**。
+ * 手動補打（`reprintReceiptForOrder` / 補打帳單掣）**一定要留空** —— 用家撳幾次印幾次。
+ *
+ * 🔴 世代用 `reopenCount`：返結後重結係第二次**合法**結帳，要再出收據；
+ * 唔帶世代就會靜默唔出紙（見 `@/lib/pos/print-dedupe` 檔頭）。 */
+export function buildReceiptPrintJobs(
+  order: PosOrder,
+  bootstrap: PosBootstrap,
+  opts?: { once?: boolean },
+): PrintJob[] {
+  const jobs = buildTemplateReceiptJobs(order, bootstrap, loadPosLocalSettings().printTemplates.receipt);
+  if (!opts?.once) return jobs;
+  const onceKey = `receipt:${order.reopenCount ?? 0}`;
+  return jobs.map((job) => ({ ...job, onceKey }));
 }
 
 /**
@@ -210,6 +225,14 @@ export interface KitchenPrintOpts {
    * POS 冇 RPC 可以沖正（見 `reopenPosOrder` 註釋、docs/113）。
    */
   orderNoteOverride?: string;
+  /**
+   * **自動路徑專用**嘅內容唯一鍵標籤（`PrintJob.onceKey`）——「同一張單同一件事
+   * 同一部機只出一張紙」。例：落單／接單／補印兜底一律 `kitchen:normal:${reopenCount}`。
+   *
+   * ⚠️ 以下一律**留空**：手動補打廚房單、加菜（addon）、退菜、返結 —— 佢哋本質上可以
+   * 合法重複（見 `@/lib/pos/print-dedupe` 檔頭）。
+   */
+  onceKey?: string;
 }
 
 // ── 廚房 / 分區單：每台 zone 打印機一張（只印該分區嘅菜品），附廚房模板快照 ──
@@ -262,6 +285,11 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
       template: buildSnapshot("kitchen", kitchenTemplate, paperColumnsFromSize(printer.paperSize)),
       status: "pending",
       createdAt: timestamp,
+      // 自動路徑（落單／接單／補印兜底）先有；加菜／退菜／返結／手動補打一律冇。
+      // 鍵要帶**內容簽名**：客人改單後補印係新內容 → 新鍵 → 照出紙（唔會被當重複）。
+      ...(opts.onceKey
+        ? { onceKey: `${opts.onceKey}:${printOnceContentSignature(items)}` }
+        : {}),
     });
   }
   return jobs;
@@ -410,7 +438,7 @@ export function buildRetailLabelPrintJobs(
 export function buildVoidPrintJobsForOrder(
   order: PosOrder,
   reason: string,
-  opts?: { itemsOverride?: PosOrder["items"]; orderNoSuffix?: string },
+  opts?: { itemsOverride?: PosOrder["items"]; orderNoSuffix?: string; onceKey?: string },
 ): PrintJob[] {
   const storeName = loadBootstrapCache()?.storeName ?? "門店";
   const kitchenJobs = buildKitchenPrintJobs(order, {
@@ -420,6 +448,8 @@ export function buildVoidPrintJobsForOrder(
     itemNoteOverride: reason || "線上訂單已取消",
     itemsOverride: opts?.itemsOverride,
     orderNoSuffix: opts?.orderNoSuffix,
+    // 只有「自動」嘅作廢（例如線上單被取消）才帶 onceKey；收銀手動退菜唔帶（可以合法重複）。
+    onceKey: opts?.onceKey,
   });
   const labelJobs = buildLabelPrintJobs(order, {
     ticketType: "void",
@@ -427,6 +457,8 @@ export function buildVoidPrintJobsForOrder(
     itemNamePrefix: "（退）",
     itemsOverride: opts?.itemsOverride,
     orderNoSuffix: opts?.orderNoSuffix,
+    // ⚠️ 標籤單**刻意唔參與**內容去重：同一杯飲品叫兩杯就係兩張標籤，
+    //    誤攔嘅代價（客人冇標籤）遠大於多印一兩張。
   });
   return [...kitchenJobs, ...labelJobs];
 }
@@ -540,17 +572,48 @@ export function findPosOrderForLedger(ledgerOrderId: string): PosOrder | null {
   //      錯誤文案仲誤導用戶去「補打帳單」）；
   //   3) legacy persisted row（歷史上曾經 mirror 入 orders 嘅舊資料）。
   const bridged = getBridgedPosOrder(ledgerOrderId);
-  if (bridged) return bridged;
-  const cached = loadLedgerOrderCache()[ledgerOrderId];
-  if (cached) return cached;
+  const cached = bridged ?? loadLedgerOrderCache()[ledgerOrderId];
   const posOrderId = `ledger-${ledgerOrderId}`;
-  return loadOrders().find((row) => row.id === posOrderId || row.onlineOrderId === ledgerOrderId) ?? null;
+  const localRow =
+    loadOrders().find((row) => row.id === posOrderId || row.onlineOrderId === ledgerOrderId) ?? null;
+  const resolved = cached ?? localRow;
+  if (!resolved) return null;
+
+  /**
+   * 🔴 枱號以**本地鏡像單**為準（2026-09-21）。
+   *
+   * 投影快取（第 1／2 層）記錄嘅係「建立投影嗰刻」嘅枱 —— 若果投影係**排位之前**
+   * 建立（接單時 `buildLedgerPosOrder()` 對 dine_in 冇枱號會落「counter / 堂食」），
+   * 佢就會一直停留喺「堂食」，即使之後已經排位去 A01。
+   *
+   * 商家實案（訂單 001）：4 張收據之中 2 張印「堂食」、2 張印「A01」—— 就係兩個
+   * 視窗各自用咗唔同版本嘅快照。而「排位」會寫入本地 `orders` ＋ 上雲
+   * （`pos_orders.online_order_id`），嗰行先係**枱號嘅權威**（亦係收銀台／桌台總覽
+   * 顯示嘅同一個值）。
+   * ⇒ 只要本地鏡像單有真枱號，就覆蓋投影嘅預設值，令收據／重打整單嘅枱號永遠正確。
+   */
+  if (
+    localRow &&
+    localRow.tableId &&
+    localRow.tableId !== "counter" &&
+    localRow.tableId !== resolved.tableId
+  ) {
+    return { ...resolved, tableId: localRow.tableId, tableName: localRow.tableName };
+  }
+  return resolved;
 }
 
-export function printReceiptForPosOrder(order: PosOrder): number {
+/**
+ * 收據出紙收口。
+ *
+ * @param opts.once 自動路徑（結帳／免單／線上單完成／補印兜底）傳 `true` → 帶
+ *   `onceKey: receipt:${reopenCount}`，同一代結帳只出一張。
+ *   手動補打**唔可以**傳（用家撳幾次印幾次）。
+ */
+export function printReceiptForPosOrder(order: PosOrder, opts?: { once?: boolean }): number {
   const bootstrap = loadBootstrapCache();
   if (!bootstrap) return 0;
-  const jobs = buildReceiptPrintJobs(order, bootstrap);
+  const jobs = buildReceiptPrintJobs(order, bootstrap, opts);
   // 一定要帶 PRINT_JOB_CREATED 上雲（見 appendPrintJobsWithSync 註釋）：
   // 補打／自動收據嘅實體出紙係 print-relay APK claim 雲端 pos_print_jobs，
   // 淨寫本機 localStorage APK 永遠收唔到。
@@ -574,6 +637,7 @@ export function printReceiptForPosOrder(order: PosOrder): number {
  */
 export function reprintReceiptForOrder(order: PosOrder): number {
   const authoritative = loadOrders().find((row) => row.id === order.id) ?? order;
+  // ⚠️ 手動補打：**刻意唔傳 `{ once: true }`** —— 用家撳幾次就要印幾次。
   return printReceiptForPosOrder(authoritative);
 }
 
@@ -606,6 +670,7 @@ export async function reprintReceiptForLedgerOrder(
   detail?: LedgerOrderDetail,
 ): Promise<number> {
   const order = await resolveLedgerPosOrderForReceipt(ledgerOrder, detail);
+  // ⚠️ 手動補打：同上，唔傳 `{ once: true }`。
   return printReceiptForPosOrder(order);
 }
 
@@ -627,7 +692,11 @@ export function printVoidForLedgerOrder(ledgerOrderId: string, reason = "線上�
   if (!isPrintContentEnabled("void")) return 0;
   const order = findPosOrderForLedger(ledgerOrderId);
   if (!order || order.items.length === 0) return 0;
-  const jobs = buildVoidPrintJobsForOrder(order, reason);
+  // 🔴 線上單被取消係**自動**作廢：兩個視窗都會收到同一個 realtime echo
+  //（`printVoidForLedgerOrderOnce` 嘅 60 秒守衛係 per realm）⇒ 帶 onceKey 去重。
+  const jobs = buildVoidPrintJobsForOrder(order, reason, {
+    onceKey: `kitchen:void:ledger_cancel:${order.reopenCount ?? 0}`,
+  });
   // 2026-09-11 修：原本用 `appendPrintJobs`（只寫本機）→ 退菜單永遠上唔到雲端
   // `pos_print_jobs`，中繼 APK claim 唔到 → 靜默唔出紙（同線上單接單漏出廚房單同一根因）。
   appendPrintJobsWithSync(jobs);
@@ -647,7 +716,10 @@ export async function printReceiptForLedgerOrder(
     order = { ...order, paymentMethod: options.paymentMethod };
   }
 
-  return printReceiptForPosOrder(order);
+  // 🔴 `once: true`：呢條係 Ledger realtime echo 觸發嘅**自動**收據，同主介面
+  //「客人已支付，完成訂單」係**同一件事**（2026-09-21 實案：兩條路徑各出一張，
+  // 兩個視窗再各自出一次 = 4 張）。內容唯一鍵會將佢哋收成 1 張。
+  return printReceiptForPosOrder(order, { once: true });
 }
 
 const recentVoidLedgerIds = new Set<string>();

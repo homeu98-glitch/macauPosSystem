@@ -34,11 +34,14 @@
 import {
   loadClearedPrintJobIds,
   loadPrintJobs,
+  loadPrintedOnceKeys,
   loadQueue,
+  rememberPrintedOnceKeys,
   savePrintJobs,
   saveQueue,
 } from "@/lib/storage";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import { collectOnceKeys, dedupeOnceJobs, seenKeysFromJobs } from "@/lib/pos/print-dedupe";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import type { PrintJob, QueueEvent } from "@/lib/types";
@@ -94,11 +97,38 @@ export function enqueuePrintJobCreatedEvents(jobs: PrintJob[]): number {
  * 自動出紙（落單、加單、結帳、退菜、返結、線上單接單／取消、補打）一律用呢個。
  * 漏咗後半步 = 靜默唔出紙（見檔頭）。
  *
- * @returns 實際加入隊列嘅張數（0 = 冇嘢要加）
+ * @returns 實際加入隊列嘅張數（0 = 冇嘢要加／全部被內容唯一鍵去重攔落）
  */
 export function appendPrintJobsWithSync(jobs: PrintJob[]): number {
   if (jobs.length === 0 || typeof window === "undefined") return 0;
-  persistMergedPrintJobs(jobs);
-  enqueuePrintJobCreatedEvents(jobs);
-  return jobs.length;
+  const kept = claimOncePrintJobs(jobs);
+  if (kept.length === 0) return 0;
+  persistMergedPrintJobs(kept);
+  enqueuePrintJobCreatedEvents(kept);
+  return kept.length;
+}
+
+/**
+ * 出紙**內容唯一鍵**去重：回傳真正可以入隊嘅 job，並即時記入本機帳本。
+ *
+ * 🔴 2026-09-21 加（商家實案：訂單 001 在 6.3 秒內出 4 張收據）。
+ * 去重只對「自動路徑主動寫咗 `onceKey`」嘅 job 生效 —— 手動補打、加菜、退菜、
+ * 返結一律冇 `onceKey` ⇒ 行為完全不變（見 `@/lib/pos/print-dedupe` 檔頭）。
+ *
+ * 判準來源（兩層，缺一都會漏）：
+ *   ① 本機持久帳本 `printedOnceKeys` —— **跨視窗共用**（localStorage），
+ *      補到 60 秒 in-memory once-guard「每個 realm 一份」嘅漏洞；
+ *   ② 現存 job（含雲端 backfill 落本機嘅別台機 job）—— 換機／跨終端都攔得住。
+ */
+export function claimOncePrintJobs(jobs: PrintJob[]): PrintJob[] {
+  if (jobs.length === 0 || typeof window === "undefined") return jobs;
+  const seen = [...loadPrintedOnceKeys(), ...seenKeysFromJobs(loadPrintJobs())];
+  const { kept, skipped } = dedupeOnceJobs(jobs, seen);
+  if (skipped.length > 0 && process.env.NODE_ENV !== "production") {
+    console.info(
+      `[print-dedupe] 略過 ${skipped.length} 張重複出紙（同一張單／同一件事／同一部機）：${skipped.join(", ")}`,
+    );
+  }
+  if (kept.length > 0) rememberPrintedOnceKeys(collectOnceKeys(kept));
+  return kept;
 }
