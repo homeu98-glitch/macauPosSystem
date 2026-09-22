@@ -9,7 +9,9 @@
 //   failed  = 打印通道回報失敗（或本地派發失敗）
 import { NextResponse } from "next/server";
 
+import { jsonWithEgressLog } from "@/lib/egress-log-server";
 import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
+import { rateLimit } from "@/lib/pos/rate-limit";
 import {
   classifyPrintJobFailure,
   PRINT_JOB_FAILURE_HINTS,
@@ -35,33 +37,58 @@ export async function GET(request: Request) {
   const denied = posRouteAuthGuard(request, storeId, "pos/print-jobs/status");
   if (denied) return denied;
 
-  // 🔴 P1/P4（2026-09-15）：best-effort lazy sweep —— 把「已逾 ttl / 跨營業日」但仲未印完
-  // 嘅 job 標成 failed（原因碼 VOID_STALE），令佢哋喺打印中心**見得到**而唔係永遠「未認領」。
-  //
-  // ⚠️ 一定要 best-effort：sweep 失敗（例如 0042 未跑 → function 唔存在）**絕對不可以**
-  //    連累下面嘅主查詢。所以包 try + 唔檢查 error，只 log。
-  // ⚠️ 亦唔用 pg_cron（免費層未必開；唔想為一個衛生工作加外部依賴）。
+  /**
+   * 🧹 P2/P4（2026-09-22）：sweep 節流 **60 秒 → 5 分鐘**（每個 store）。
+   *
+   * ## 為何
+   *
+   * 呢個 sweep 係一個**衞生工作**（把逾 ttl / 跨營業日仲未印完嘅 job 標 failed），
+   * 唔需要每分鐘做一次；但打印中心每 30 秒就會打一次呢條 route
+   *（實測 Supabase log：`rpc/pos_void_stale_print_jobs` 間隔中位 **60.0 秒**、
+   * 12.3 分鐘 15 次）—— 即係「開住打印中心就每分鐘一個 RPC」。
+   *
+   * 5 分鐘嘅代價：一張卡死嘅 job 最多遲 4 分鐘才被標成 failed（顯示層面嘅延遲），
+   * 而 `pos_claim_print_jobs` 本身有 60 秒的 claimed_at 重排窗（0035）——
+   * 「重試」唔會因此變慢，只係「幾時喺 UI 見到紅標」遲幾分鐘。
+   *
+   * ⚠️ 同 `pos-state-legacy` 一樣用 in-memory `rateLimit`（每個 Vercel 實例一份）
+   * ⇒ 多實例之下實際間隔會短過 5 分鐘，屬可接受（fail-open，唔會影響正確性）。
+   */
+  const sweepAllowed = storeId ? rateLimit(`pos-print-sweep:${storeId}`, 1, 5 * 60_000) : false;
   try {
-    const { error: sweepErr } = await supabase.rpc("pos_void_stale_print_jobs", {
-      p_store_id: storeId,
-    });
-    if (sweepErr) {
-      // 0042 未跑就會 42883 function does not exist —— 屬預期，唔好當錯。
-      if (!/does not exist|42883/i.test(sweepErr.message)) {
-        console.warn("[pos/print-jobs/status] stale sweep failed:", sweepErr.message);
+    if (!sweepAllowed) {
+      // 節流期間唔查、唔寫 —— 直接跳過（下面兩條主查詢照跑）。
+    } else {
+      const { error: sweepErr } = await supabase.rpc("pos_void_stale_print_jobs", {
+        p_store_id: storeId,
+      });
+      if (sweepErr) {
+        // 0042 未跑就會 42883 function does not exist —— 屬預期，唔好當錯。
+        if (!/does not exist|42883/i.test(sweepErr.message)) {
+          console.warn("[pos/print-jobs/status] stale sweep failed:", sweepErr.message);
+        }
       }
     }
   } catch (err) {
     console.warn("[pos/print-jobs/status] stale sweep threw:", err);
   }
 
+  /**
+   * 兩條主查詢回傳上限：**200 → 120**（2026-09-22 P2）。
+   *
+   * 為何 120 夠：呢支 route 只係更新**已經喺本機清單**嘅 job 狀態（badge / 紅標），
+   * 而本機清單本身由 `/api/pos/state` 餵（P1 之後係增量）。打印中心開住時每 30 秒
+   * 拉一次，終態（printed/failed）一般喺幾分鐘內就出現 ⇒ 120 條已覆蓋數以小時計嘅出紙。
+   * 舊行為要還原：改返 200。
+   */
+  const STATUS_LIMIT = 120;
   const { data, error } = await supabase
     .from("pos_print_jobs")
     .select("id, status, last_error")
     .eq("store_id", storeId)
     .in("status", ["printed", "failed"])
     .order("updated_at", { ascending: false })
-    .limit(200);
+    .limit(STATUS_LIMIT);
 
   if (error) {
     console.error("[pos/print-jobs/status] query failed:", error.message);
@@ -113,14 +140,14 @@ export async function GET(request: Request) {
     .eq("store_id", storeId)
     .in("status", ["pending", "printing"])
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(STATUS_LIMIT);
   if (unfinishedError) {
     // ⚠️ 唔可以因為呢個查詢失敗連 printed/failed 都返唔到（向下兼容舊 DB）。
     console.error("[pos/print-jobs/status] unfinished query failed:", unfinishedError.message);
     return NextResponse.json({ ok: true, jobs });
   }
 
-  return NextResponse.json({
+  const payload = {
     ok: true,
     jobs,
     unfinished: (unfinished ?? []).map((row) => {
@@ -145,5 +172,14 @@ export async function GET(request: Request) {
         reasonHint: reason ? PRINT_JOB_FAILURE_HINTS[reason] : undefined,
       };
     }),
-  });
+  };
+  // 🆕 2026-09-22：改用 `jsonWithEgressLog` ⇒ ① 多一行 `[egress]` 審計（同 pos/state 一致）
+  // ② 順手記入 `pos_egress_daily`（admin「雲端用量」頁按店統計）。
+  // 回應內容完全一樣（同一個 payload、同一個 content-type）。
+  return jsonWithEgressLog(
+    "pos/print-jobs/status",
+    payload,
+    { jobs: jobs.length, unfinished: payload.unfinished.length, store: storeId ?? "-" },
+    { storeId },
+  );
 }

@@ -1,0 +1,193 @@
+==================== SUPABASE LOG ====================
+rows: 1000
+窗口（澳門時間）：2026-09-22 05:20:21  →  2026-09-22 05:32:40   長度 12.3 分鐘
+平均 81.1 次/分鐘
+
+--- 逐分鐘請求數（頭 5 / 尾 5）---
+2026-09-22 05:20 63
+2026-09-22 05:21 108
+2026-09-22 05:22 106
+2026-09-22 05:23 102
+2026-09-22 05:24 108
+...
+2026-09-22 05:28 105
+2026-09-22 05:29 94
+2026-09-22 05:30 72
+2026-09-22 05:31 46
+2026-09-22 05:32 50
+
+--- 逐端點（次數）---
+  222  /rest/v1/pos_print_jobs
+  101  
+   96  /rest/v1/pos_queue_events
+   82  /rest/v1/pos_orders
+   78  /rest/v1/rpc/pos_orders_page
+   73  /rest/v1/pos_print_templates
+   71  /rest/v1/pos_device_configs
+   69  /rest/v1/pos_note_presets
+   51  /rest/v1/pos_sessions
+   41  /rest/v1/pos_store_status
+   37  /rest/v1/pos_shifts
+   22  /rest/v1/pos_print_agents
+   15  /rest/v1/rpc/pos_void_stale_print_jobs
+   15  /rest/v1/pos_online_order_settings
+    8  /realtime/v1/websocket
+    5  /rest/v1/rpc/pos_claim_print_jobs
+    4  /rest-admin/v1/ready
+    3  /auth/v1/health
+    3  /rest/v1/inv_products
+    2  /rest/v1/pos_bootstrap_config
+
+--- 逐表／RPC（次數）---
+  222  pos_print_jobs
+  101  
+   96  pos_queue_events
+   82  pos_orders
+   78  rpc:pos_orders_page
+   73  pos_print_templates
+   71  pos_device_configs
+   69  pos_note_presets
+   51  pos_sessions
+   41  pos_store_status
+   37  pos_shifts
+   22  pos_print_agents
+   15  rpc:pos_void_stale_print_jobs
+   15  pos_online_order_settings
+    8  /realtime/v1/websocket
+    5  rpc:pos_claim_print_jobs
+    4  /rest-admin/v1/ready
+    3  /auth/v1/health
+    3  inv_products
+    2  pos_bootstrap_config
+
+--- 逐 store（次數）---
+  663  eq.8291f843-9def-4956-9d0b-1cfef2598306
+  337  (無)
+
+--- 帶 limit 嘅查詢（次數）＝大 payload 嫌疑 ---
+   71  /rest/v1/pos_device_configs limit=1 select=*
+   69  /rest/v1/pos_print_jobs limit=200 select=*
+   67  /rest/v1/pos_queue_events limit=300 select=*
+   26  /rest/v1/pos_shifts limit=1 select=id
+   15  /rest/v1/pos_print_jobs limit=200 select=id,status,claimed_at,attempts,created_at,last_error
+   15  /rest/v1/pos_print_jobs limit=200 select=id,status,last_error
+   15  /rest/v1/pos_print_agents limit=1 select=agent_id,store_id,name,last_seen_at
+   11  /rest/v1/pos_shifts limit=1 select=*
+    2  /rest/v1/pos_queue_events limit=0 select=*
+
+--- burst 分段（同一段內每個請求間隔 ≤20 秒；只列 n≥20）---
+2026-09-22 05:20:21→2026-09-22 05:26:12  590 次 / 352 秒 = 100.7 次/分鐘
+2026-09-22 05:27:34→2026-09-22 05:29:12  196 次 / 98 秒 = 120.1 次/分鐘
+2026-09-22 05:30:02→2026-09-22 05:31:03  87 次 / 61 秒 = 86.2 次/分鐘
+2026-09-22 05:31:32→2026-09-22 05:32:40  81 次 / 68 秒 = 71.3 次/分鐘
+
+[burst 2026-09-22 05:20:21] 端點分布：
+    127  /rest/v1/pos_print_jobs
+     79  /rest/v1/pos_queue_events
+     68  /rest/v1/pos_device_configs
+     67  /rest/v1/pos_note_presets
+     67  /rest/v1/pos_print_templates
+     67  /rest/v1/rpc/pos_orders_page
+     36  /rest/v1/pos_orders
+     18  /rest/v1/pos_sessions
+     17  /rest/v1/pos_shifts
+     15  
+
+[burst 2026-09-22 05:27:34] 端點分布：
+     64  
+     35  /rest/v1/pos_print_jobs
+     15  /rest/v1/pos_orders
+     13  /rest/v1/pos_sessions
+     12  /rest/v1/pos_store_status
+     10  /rest/v1/pos_shifts
+      8  /rest/v1/pos_queue_events
+      7  /rest/v1/pos_online_order_settings
+      6  /rest/v1/pos_print_agents
+      4  /rest/v1/rpc/pos_orders_page
+
+[burst 2026-09-22 05:30:02] 端點分布：
+     20  /rest/v1/pos_print_jobs
+     11  /rest/v1/pos_orders
+     10  /rest/v1/pos_sessions
+     10  
+      8  /rest/v1/pos_store_status
+      6  /rest/v1/rpc/pos_orders_page
+      5  /rest/v1/pos_online_order_settings
+      4  /rest/v1/pos_shifts
+      4  /realtime/v1/websocket
+      3  /rest/v1/pos_queue_events
+
+--- level ---
+{"success":919,"error":41,"warning":40}
+
+
+==================== VERCEL LOG ====================
+rows: 304
+唯一 requestId：150（原始 304 行）
+窗口（澳門時間）：2026-09-22 13:24:12  →  2026-09-22 13:32:10   長度 8.0 分鐘
+平均 18.83 次/分鐘
+
+--- 逐端點（次數）---
+   31  /api/pos/state
+   18  /api/pos/sync
+   15  /api/online-order-settings
+   15  /api/pos/store-status
+   15  /api/topup/pending-count
+   11  /api/pos/print-agent/pair-status
+   11  /api/pos/print-jobs/status
+    7  /api/pos/shift
+    6  /api/inventory/receipts
+    4  /api/pos/print-templates
+    4  /prints
+    3  /api/pos/print-agent/claim
+    3  /api/inventory/products
+    2  /reports
+    2  /api/pos/bootstrap
+    1  /api/pos/kiosk-settings
+    1  /orders
+    1  /api/pos/device-config
+
+--- 逐 User-Agent（判「係 APK 定瀏覽器」）---
+   99  Mozilla/5.0 (Windows NT 10.0; Win64; x64
+   47  Mozilla/5.0 (Macintosh; Intel Mac OS X 1
+    4  okhttp/4.12.0
+
+--- status ---
+{"200":146,"304":4}
+
+--- 逐分鐘（全部）---
+2026-09-22 13:24 17
+2026-09-22 13:25 15
+2026-09-22 13:26 4
+2026-09-22 13:27 5
+2026-09-22 13:28 47
+2026-09-22 13:29 2
+2026-09-22 13:30 38
+2026-09-22 13:31 17
+2026-09-22 13:32 5
+
+--- 端點＋query 指紋（次數）---
+   20  /api/pos/state?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+   18  /api/pos/sync?
+   15  /api/online-order-settings?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+   15  /api/pos/store-status?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+   15  /api/topup/pending-count?
+   11  /api/pos/print-agent/pair-status?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+   11  /api/pos/print-jobs/status?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+    7  /api/pos/shift?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+    5  /api/pos/state?storeId=8291f843-9def-4956-9d0b-1cfef2598306&limit=2000&offset=0&ordersOnly=1&start=2026-09-22T00%3A00%3A
+    4  /api/pos/print-templates?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+    4  /prints?
+    3  /api/pos/print-agent/claim?
+    3  /api/inventory/products?store=8291f843-9def-4956-9d0b-1cfef2598306
+    3  /api/inventory/receipts?account=65273599&range=yesterday
+    3  /api/inventory/receipts?account=65273599&range=today
+    2  /reports?
+    2  /api/pos/state?storeId=8291f843-9def-4956-9d0b-1cfef2598306&ordersOnly=1
+    2  /api/pos/state?storeId=8291f843-9def-4956-9d0b-1cfef2598306&skipQueue=1
+    2  /api/pos/bootstrap?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+    1  /api/pos/kiosk-settings?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+    1  /orders?
+    1  /api/pos/device-config?storeId=8291f843-9def-4956-9d0b-1cfef2598306
+    1  /api/pos/state?storeId=8291f843-9def-4956-9d0b-1cfef2598306&ordersOnly=1&limit=5000&start=2026-09-21T16%3A07%3A38.236Z&f
+    1  /api/pos/state?storeId=8291f843-9def-4956-9d0b-1cfef2598306&ordersOnly=1&limit=5000&start=2026-09-21T17%3A28%3A02.202Z&f

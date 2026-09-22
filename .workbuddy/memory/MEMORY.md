@@ -88,6 +88,14 @@
 
 ## 8 Egress／版本（2026-09-22 收口）
 - 計費口徑：PostgREST egress ＝ **Supabase → Vercel Function**，改 route response 對帳單零幫助。
+- ⭐ **最快取證＝直接解析 Vercel 嘅 `[egress]` 行**（自帶 `bytes/mode/orders/queue/printJobs/
+  skipQueue/legacy/ip/src`）⇒ 唔需要 Supabase log 就分得出「邊部機、幾大、幾密」。
+  工具：`tools/_egress-byip-20260922.cjs`／`_egress-deep-20260922.cjs`／`_egress-recheck-20260922.cjs`。
+- 🔴 最大單一來源**仍然係「舊分頁跑舊 bundle」**（2026-09-22 13:24 複發）：903 KB × 20 次 / 92 秒
+  ⇒ **690 MB/小時**（＝商家口中 500 MB/日 ≈ 開 45 分鐘）；新版 412 KB（−54%）。
+  ⇒ 唔可以只「拉細啲」，要**「少拉」**。
+- ⚠️ **Supabase dashboard CSV 匯出上限 1000 行** ⇒ 高流量時窗口會被截到十幾分鐘（唔可以當一日）；
+  一律用 `date` 欄（有 `Z`）解析，唔好用 `timestamp`（冇 `Z`、6 位微秒）。
 - 最大單一來源＝**舊分頁跑舊 bundle**（冇傳 `skipQueue=1` ⇒ 846 KB vs 424 KB，650 MB/小時）。
 - ⭐ 唔需 Vercel log 都判得到：`state/route.ts` 收唔到 skipQueue ⇒ 查 `limit=300`（舊）／
   收到 ⇒ `limit=0`（新）⇒ **Supabase log 嘅 `pos_queue_events` URL 就係 bundle 版本指紋**。

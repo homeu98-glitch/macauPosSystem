@@ -1,0 +1,52 @@
+=== [egress] 行數 === 31
+窗口（澳門）2026-09-22 13:24:15 → 2026-09-22 13:31:37  ＝ 7.4 分鐘
+
+=== 逐 IP（每次拉取幾大、幾密）===
+  ip=60.246.53.111  拉取 20 次（2.7/分）｜中位間隔 NaNs｜平均 903 KB｜本窗口共 17.6 MB
+        mode=full legacy=1 skipQueue=0 src=-
+  ip=182.93.6.133  拉取 2 次（0.3/分）｜中位間隔 NaNs｜平均 412 KB｜本窗口共 0.8 MB
+        mode=full legacy=0 skipQueue=1 src=mount
+  ip=(無 ip)  拉取 9 次（1.2/分）｜中位間隔 NaNs｜平均 78 KB｜本窗口共 0.7 MB
+        mode=ordersOnly legacy= skipQueue= src=
+
+窗口內 egress 合計 19.1 MB / 7.4 分鐘
+⇒ 外推：156 MB/小時 ｜ 3737.02 GB/日（24h 全開）
+⇒ 若每日營業 12 小時：1868.51 GB/日
+
+=== 逐 mode（full / ordersOnly）===
+    20 次｜共 17.6 MB｜平均 903 KB｜full legacy=1 skipQueue=0
+     2 次｜共 0.8 MB｜平均 412 KB｜full legacy=0 skipQueue=1
+     9 次｜共 0.7 MB｜平均 78 KB｜ordersOnly legacy= skipQueue=
+
+=== 時序（頭 40 條）===
+  2026-09-22 13:24:15   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:20   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:24   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:27   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:32   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:35   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:39   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:44   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:47   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:52   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:24:59   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:04   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:07   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:12   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:15   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:23   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:31   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:36   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:39   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:25:47   903 KB  full       orders=200 queue=300 printJobs=200 legacy=1 ip=60.246.53.111 src=-
+  2026-09-22 13:28:10     4 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:28:33   412 KB  full       orders=200 queue=0 printJobs=200 legacy=0 ip=182.93.6.133 src=mount
+  2026-09-22 13:28:39     4 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:28:46   412 KB  full       orders=200 queue=0 printJobs=200 legacy=0 ip=182.93.6.133 src=mount
+  2026-09-22 13:30:08    23 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:30:08    23 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:30:23   289 KB  ordersOnly orders=200 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:30:26   289 KB  ordersOnly orders=200 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:30:27    23 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:30:27    23 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=
+  2026-09-22 13:31:37    23 KB  ordersOnly orders=14 queue= printJobs= legacy= ip= src=

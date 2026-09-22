@@ -50,6 +50,9 @@ import {
 } from "@/lib/pos/order-note-lock";
 import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { shouldBackfillOnResubscribe } from "@/lib/pos/resubscribe-guard";
+// 🆕 2026-09-22 P1：增量拉取水位（決策係純函式 `state-sync-watermark`，
+// 執行層 `state-sync-client` 同訂單頁共用一份，避免兩邊口徑漂移）。
+import { beginStateSince, commitStateSince } from "@/lib/pos/state-sync-client";
 import { queueSignature } from "@/lib/pos/queue-signature";
 import { createSingleFlight, SingleFlight } from "@/lib/pos/single-flight";
 import { ensureActivityTracking } from "@/lib/pos/activity-tracker";
@@ -1368,7 +1371,11 @@ export function PosApp() {
    *   `queue-dep`，兩者會共用同一個請求，log 出嘅係**先開火嗰個**嘅 `src`。
    *   呢個係刻意嘅（分 key 就等於取消去重），診斷上仍然睇得出邊個入口最頻繁。
    */
-  function loadRuntimeState(src: string = "other"): Promise<number> {
+  function loadRuntimeState(src: string = "other", opts?: { forceFull?: boolean }): Promise<number> {
+    // 🔴 手動「更新」＝用家明確要求**雲端真值**（2026-09-22 P1）：
+    //    唔可以同 in-flight 嘅增量拉取合併（合併之後「更新」掣只會攞到差量）。
+    //    所以 forceFull 直接繞過 single-flight —— 呢條路係人手觸發，唔可能形成迴圈。
+    if (opts?.forceFull) return runLoadRuntimeState(src, { forceFull: true });
     if (!runtimeStateFlightRef.current) {
       runtimeStateFlightRef.current = createSingleFlight<number>();
     }
@@ -1376,7 +1383,7 @@ export function PosApp() {
     return flight(resolveStoreId() ?? "", () => runLoadRuntimeState(src));
   }
 
-  async function runLoadRuntimeState(src: string): Promise<number> {
+  async function runLoadRuntimeState(src: string, opts?: { forceFull?: boolean }): Promise<number> {
     let quarantinedCount = 0;
     try {
       // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
@@ -1396,7 +1403,19 @@ export function PosApp() {
       // 合共 ≈500 KB／次）⇒ 純浪費。v2 時叫 server 跳過。
       // v1（回溯）唔傳 = 舊行為，語義完全不變。
       const skipQueue = isOutboxV2Enabled() ? "&skipQueue=1" : "";
-      const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}${skipQueue}`;
+      /**
+       * 🆕 2026-09-22 **P1 增量拉取**：只有「上次成功同步」之後變更過嘅嘢才拉。
+       *
+       * 決策收喺**純函式** `resolveSince()`（12 條單測），呢度只負責：
+       *   ① 讀水位（store-scope localStorage）；
+       *   ② 傳 `since=`；
+       *   ③ 成功之後更新水位（撞 limit / 失敗就清水位，下次走全量）。
+       *
+       * ⚠️ 任何例外（冇水位、空機、水位太舊 / 壞 / 喺未來、`forceFull`）都**一定**
+       *    退回全量 —— 漏一次全量只係多流量；誤用增量而漏單就係收銀見到「少咗單」。
+       */
+      const sinceTicket = beginStateSince({ forceFull: Boolean(opts?.forceFull) });
+      const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}${skipQueue}${sinceTicket.param}`;
       // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（否則 401 未經授權）。
       // 2026-09-21：另加 `x-pos-state-src` 標頭（純診斷，見 `loadRuntimeState` 嘅 @param src）。
       const response = await fetch(stateUrl, {
@@ -1433,7 +1452,32 @@ export function PosApp() {
           } | null;
           updatedAt?: string | null;
         } | null;
+        /** 🆕 2026-09-22 P1：今次係增量拉取（只回差量）。 */
+        incremental?: boolean;
+        /** 🆕 2026-09-22 P1：增量結果唔完整（撞 limit／查詢失敗）⇒ 要清水位 + 重拉全量。 */
+        truncated?: boolean;
       };
+
+      /**
+       * 🆕 2026-09-22 P1：更新／清理**增量同步水位**。
+       *
+       * · 正常（增量或全量、冇截斷）→ 記低「請求開始時間」做新水位；
+       * · `truncated` → **清水位**（下次一定走全量）並且**排一次全量補拉**。
+       *
+       * ⚠️ 全量成功都要記水位：否則下一次又要全量（＝今次優化完全失效）。
+       */
+      if (payload.truncated) {
+        // commitStateSince(.., true) 會清水位（下次一定走全量）。
+        commitStateSince(sinceTicket, true);
+        console.warn("[pos-app] 增量拉取被截斷 → 已清水位，1 秒後補一次全量。");
+        // 延遲少少（唔可以 setTimeout 0）：single-flight 仲未釋放，即刻再叫會被合併返
+        // 同一個 in-flight 請求 ⇒ 補拉變成 no-op。呢條路極少發生（一個月可能幾次）。
+        window.setTimeout(() => {
+          void loadRuntimeState(`${src}:full`, { forceFull: true });
+        }, 1_000);
+      } else {
+        commitStateSince(sinceTicket);
+      }
 
       if (Array.isArray(payload.orders)) {
         // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
@@ -1446,16 +1490,23 @@ export function PosApp() {
           // 🧹 孤兒單對賬（方案 A）：雲端冇 + outbox 冇 pending/failed ORDER_* 事件支持
           // + 單齡 ≥ 10 分鐘嘅非終態本機單 → 移入隔離區（可喺「同步健康」還原）。
           // 根治「手動更新不斷拉返雲端根本冇嘅未結帳枱」（2026-09-09 實案：6 張孤兒單）。
-          const orphanRows = computeOrphanLocalOrders(cleaned, payload.orders!, loadQueue());
-          if (orphanRows.length > 0) {
-            const n = quarantineOrders(
-              orphanRows.map((r) => r.orderId),
-              "auto-full-pull",
-            );
-            if (n > 0) {
-              quarantinedCount = n;
-              const qIds = new Set(loadQuarantinedOrders().map((r) => r.order.id));
-              cleaned = cleaned.filter((o) => !qIds.has(o.id));
+          //
+          // 🔴🔴 2026-09-22 P1：**增量拉取之下一定唔可以跑呢段** ——
+          // 判準係「雲端 `payload.orders` 冇呢張單」，而增量回傳嘅只係**變更過嘅子集**
+          // ⇒ 全店未變更過嘅單都會被當成孤兒，一次過被移入隔離區（災難級誤判）。
+          // 呢個係本專案「partial payload 唔可以當全集用」嘅同一類陷阱。
+          if (!payload.incremental) {
+            const orphanRows = computeOrphanLocalOrders(cleaned, payload.orders!, loadQueue());
+            if (orphanRows.length > 0) {
+              const n = quarantineOrders(
+                orphanRows.map((r) => r.orderId),
+                "auto-full-pull",
+              );
+              if (n > 0) {
+                quarantinedCount = n;
+                const qIds = new Set(loadQuarantinedOrders().map((r) => r.order.id));
+                cleaned = cleaned.filter((o) => !qIds.has(o.id));
+              }
             }
           }
           saveOrders(cleaned);
@@ -1698,7 +1749,10 @@ export function PosApp() {
       //    floors／printTemplates／onlineOrderSettings／printContentToggles 保留本機
       //    （per-terminal 真源），其餘 server 優先；orders／printJobs 亦一併補返。
       //    2026-09-09 方案 A：全量拉取成功後自動隔離孤兒單（雲端冇、無 pending 事件支持）。
-      const quarantined = await loadRuntimeState("manual");
+      //    🔴 2026-09-22 P1：一定要 `forceFull` —— 呢粒掣嘅語義係「攞返雲端真值」，
+      //       而孤兒單對賬亦**只可以喺全量**之下跑（判準係「雲端冇呢張單」）。
+      //       呢條路係人手觸發 ⇒ 唔會形成流量迴圈。
+      const quarantined = await loadRuntimeState("manual", { forceFull: true });
       notes.push("設定已同步");
       if (quarantined > 0) {
         notes.push(`已隔離 ${quarantined} 張孤兒單，詳情喺「同步健康」`);

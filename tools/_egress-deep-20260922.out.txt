@@ -1,0 +1,113 @@
+=== 時間基準核對 ===
+CSV date 欄樣本: "2026-09-22T05:32:40.921Z" | parse → UTC ISO: 2026-09-22T05:20:21.372Z
+窗口（UTC 05:20:21 → 05:32:40）
+窗口（澳門 +8）：2026-09-22 13:20:21 → 2026-09-22 13:32:40
+
+=== ① 全量拉取（6 表對齊）節奏 ===
+以 pos_device_configs 為錨：71 次
+間隔中位 4.64 秒｜最小 0.12｜最大 166.38
+間隔分布: [["0s",1],["3s",19],["4s",13],["5s",19],["8s",15],["11s",1],["13s",1],["166s",1]]
+⇒ 全量拉取 71 次 / 12.3 分鐘 = 5.76 次/分鐘
+
+=== ② 各表次數（同窗口）===
+    78  /rest/v1/rpc/pos_orders_page
+    71  /rest/v1/pos_device_configs
+    73  /rest/v1/pos_print_templates
+    69  /rest/v1/pos_note_presets
+   222  /rest/v1/pos_print_jobs
+    96  /rest/v1/pos_queue_events
+  ---- 其餘 ----
+   101  (非 PostgREST)
+    82  /rest/v1/pos_orders
+    51  /rest/v1/pos_sessions
+    41  /rest/v1/pos_store_status
+    37  /rest/v1/pos_shifts
+    22  /rest/v1/pos_print_agents
+    15  /rest/v1/rpc/pos_void_stale_print_jobs
+    15  /rest/v1/pos_online_order_settings
+     8  /realtime/v1/websocket
+     5  /rest/v1/rpc/pos_claim_print_jobs
+     4  /rest-admin/v1/ready
+     3  /auth/v1/health
+     3  /rest/v1/inv_products
+     2  /rest/v1/pos_bootstrap_config
+     1  /admin/v1/network-bans/retrieve
+     1  /rest/v1/pos_kiosk_settings
+
+=== ③ 各端點自身間隔中位（搵其他輪詢源）===
+   222 次｜中位間隔 0.1 秒｜/rest/v1/pos_print_jobs
+    22 次｜中位間隔 17.5 秒｜/rest/v1/pos_print_agents
+    15 次｜中位間隔 60.0 秒｜/rest/v1/rpc/pos_void_stale_print_jobs
+    96 次｜中位間隔 4.4 秒｜/rest/v1/pos_queue_events
+   101 次｜中位間隔 0.0 秒｜(非 PostgREST)
+    82 次｜中位間隔 0.1 秒｜/rest/v1/pos_orders
+    37 次｜中位間隔 20.2 秒｜/rest/v1/pos_shifts
+    41 次｜中位間隔 27.6 秒｜/rest/v1/pos_store_status
+    51 次｜中位間隔 7.3 秒｜/rest/v1/pos_sessions
+     5 次｜中位間隔 180.2 秒｜/rest/v1/rpc/pos_claim_print_jobs
+    15 次｜中位間隔 4.6 秒｜/rest/v1/pos_online_order_settings
+    73 次｜中位間隔 4.6 秒｜/rest/v1/pos_print_templates
+     8 次｜中位間隔 5.7 秒｜/realtime/v1/websocket
+    78 次｜中位間隔 4.6 秒｜/rest/v1/rpc/pos_orders_page
+    71 次｜中位間隔 4.6 秒｜/rest/v1/pos_device_configs
+    69 次｜中位間隔 4.6 秒｜/rest/v1/pos_note_presets
+
+=== ④ error / warning 樣本 ===
+[error] 41 條：
+   35× duplicate key value violates unique constraint "pos_print_jobs_once_key_uniq"
+   5× column pos_orders.refund_records does not exist
+   1× duplicate key value violates unique constraint "schema_migrations_pkey"
+[warning] 40 條：
+   40× node
+
+=== ⑤ 無法解析 URL 嘅 log 樣本（頭 5 條）===
+  duplicate key value violates unique constraint "pos_print_jobs_once_key_uniq"
+  duplicate key value violates unique constraint "pos_print_jobs_once_key_uniq"
+  duplicate key value violates unique constraint "pos_print_jobs_once_key_uniq"
+  duplicate key value violates unique constraint "pos_print_jobs_once_key_uniq"
+  column pos_orders.refund_records does not exist
+
+=== ⑥ store 分布 ===
+   663  8291f843-9def-4956-9d0b-1cfef2598306
+   337  (無 store_id)
+
+=== ⑦ 位元組估算（每分鐘 / 每日）===
+    1621 KB/分  (18.0 次/分)  /rest/v1/pos_print_jobs
+     935 KB/分  (7.8 次/分)  /rest/v1/pos_queue_events
+     380 KB/分  (6.3 次/分)  /rest/v1/rpc/pos_orders_page
+     266 KB/分  (6.7 次/分)  /rest/v1/pos_orders
+      71 KB/分  (5.9 次/分)  /rest/v1/pos_print_templates
+      17 KB/分  (5.8 次/分)  /rest/v1/pos_device_configs
+       6 KB/分  (5.6 次/分)  /rest/v1/pos_note_presets
+       4 KB/分  (4.1 次/分)  /rest/v1/pos_sessions
+       3 KB/分  (3.3 次/分)  /rest/v1/pos_store_status
+       3 KB/分  (3.0 次/分)  /rest/v1/pos_shifts
+       2 KB/分  (8.2 次/分)  (非 PostgREST)
+       1 KB/分  (1.8 次/分)  /rest/v1/pos_print_agents
+       0 KB/分  (1.2 次/分)  /rest/v1/rpc/pos_void_stale_print_jobs
+       0 KB/分  (1.2 次/分)  /rest/v1/pos_online_order_settings
+       0 KB/分  (0.6 次/分)  /realtime/v1/websocket
+       0 KB/分  (0.4 次/分)  /rest/v1/rpc/pos_claim_print_jobs
+       0 KB/分  (0.3 次/分)  /rest-admin/v1/ready
+       0 KB/分  (0.2 次/分)  /auth/v1/health
+       0 KB/分  (0.2 次/分)  /rest/v1/inv_products
+       0 KB/分  (0.2 次/分)  /rest/v1/pos_bootstrap_config
+       0 KB/分  (0.1 次/分)  /admin/v1/network-bans/retrieve
+       0 KB/分  (0.1 次/分)  /rest/v1/pos_kiosk_settings
+  ─────────────────────────
+  合計 ≈ 3310 KB/分 = 4654.98 GB/日（按此窗口外推）
+  其中「全量拉取 6 表」≈ 1647 KB/分 ＝ 佔 49.8%
+
+=== ⑧ Vercel message 樣本（睇有冇大小／[egress] 標記）===
+  [warn] macau-pos-system.vercel.app/api/pos/print-agent/pair-status :: [print-agent/pair-status] store 8291f843-9def-4956-9d0b-1cfef2598306 有 7 部未撤銷中繼機並存，只回報最近活躍嗰部。如屬換機/重裝，建議喺 Dashboard revoke 舊嗰啲（見 tools/print-relay-revoke-stale-a
+  [warn] macau-pos-system.vercel.app/api/pos/sync :: [pos/sync] pos_orders 缺退款審計欄（migration 未跑）→ 降級查詢；退貨內容更新嘅守門豁免會失效。詳見 supabase/migrations 的退款欄位定義。
+  [info] macau-pos-system.vercel.app/api/pos/sync :: [pos/sync] 內容唯一鍵重複 → 略過重複出紙（job=print-90b3f936 once_key=receipt:0）
+  [info] macau-pos-system.vercel.app/api/pos/sync :: [pos/sync] 內容唯一鍵重複 → 略過重複出紙（job=print-fd75591a once_key=receipt:0）
+  [info] macau-pos-system.vercel.app/api/pos/state :: [egress] pos/state bytes=23346 mode=ordersOnly orders=14 limit=2000 offset=0 columns=default start=2026-09-22T00:00:00+08:00 end=2026-09-22T23:59:59.999+08:00
+  [info] macau-pos-system.vercel.app/api/pos/state :: [egress] pos/state bytes=296372 mode=ordersOnly orders=200 limit=200 offset=0 columns=default start=- end=-
+  [info] macau-pos-system.vercel.app/api/pos/device-config :: [pos/device-config] 中繼機憑證通道（agent=ag-59f5197b661b754cd68ca2820b5e3b9d, store=8291f843-9def-4956-9d0b-1cfef2598306）
+  [info] macau-pos-system.vercel.app/api/pos/state :: [egress] pos/state bytes=422031 mode=full orders=200 queue=0 skipQueue=1 legacy=0 printJobs=200 limit=200 ip=182.93.6.133 src=mount
+  [info] macau-pos-system.vercel.app/api/pos/state :: [egress] pos/state bytes=3747 mode=ordersOnly orders=14 limit=5000 offset=0 columns=id,status,updated_at,client_updated_at start=2026-09-21T16:07:38.236Z end=-
+  [info] macau-pos-system.vercel.app/api/pos/state :: [egress] pos/state bytes=3756 mode=ordersOnly orders=14 limit=5000 offset=0 columns=id,status,updated_at,client_updated_at start=2026-09-21T17:28:02.202Z end=-
+  [info] macau-pos-system.vercel.app/api/pos/state :: [egress] pos/state bytes=924718 mode=full orders=200 queue=300 skipQueue=0 legacy=1 printJobs=200 limit=200 ip=60.246.53.111 src=-
+  [warn] macau-pos-system.vercel.app/api/pos/state :: [pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=60.246.53.111 —— 每次會多拉約 500 KB queue；請該裝置**重新載入頁面**。

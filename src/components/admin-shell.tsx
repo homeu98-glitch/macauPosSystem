@@ -52,6 +52,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     // 背景：商家唔為意開咗幾個分頁，舊分頁靜靜燒 egress（實測佔 97%）⇒
     // 需要一個「睇得到、關得掉」嘅地方。
     { href: "/admin/sessions", label: "POS 工作階段" },
+    // 2026-09-22：雲端用量（migration 0048）。
+    // 背景：Supabase Dashboard 只俾專案總數，答唔到「邊間店食咗幾多」、
+    // 「加多一間店會唔會爆 5 GB」⇒ 由自己 route 記帳，呢度睇得到。
+    { href: "/admin/traffic", label: "雲端用量" },
   ];
 
   return (

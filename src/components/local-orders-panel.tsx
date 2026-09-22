@@ -55,6 +55,7 @@ import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
 import { POS_SYNC_QUEUE_CHANGED_EVENT } from "@/lib/pos/sync-flush";
 import { orderEventISO } from "@/lib/pos/order-event-time";
 import { posDeviceAuthHeaders, posDeviceAuthHeadersFresh, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+import { beginStateSince, commitStateSince } from "@/lib/pos/state-sync-client";
 
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -239,13 +240,26 @@ export function LocalOrdersPanel({
       // 2026-09-21 egress 優化：本 panel **只**需要 orders（下面只用 `payload.orders`），
       // 原本打全量 state 會連 300 條 queue（≈500 KB）＋ 200 條 printJobs 一齊拉
       // （合共 ≈0.98 MB／次，而每次落單／flush 都會觸發一次）⇒ 補上 `ordersOnly=1`。
-      const res = await fetch(`/api/pos/state?storeId=${encodeURIComponent(merchantId)}&ordersOnly=1`, {
-        // 2026-09-10 P0-4：需要 POS 終端憑證
-        headers: { ...posDeviceAuthHeaders() },
-      });
+      //
+      // 🆕 2026-09-22 P3：`ordersOnly=1` 仍然係「最近 200 張**完整**訂單」＝ **≈296 KB**，
+      // 而本 panel 嘅清單本身就係讀 localStorage（`loadOrders()`）——
+      // 呢次拉取嘅唯一目的係「**發現**其他裝置嘅變更」⇒ 用增量水位（同 pos-app 共用）。
+      // 冇水位 / 空機 / 水位太舊 ⇒ `beginStateSince()` 會自動退回全量（語義不變）。
+      const sinceTicket = beginStateSince();
+      const res = await fetch(
+        `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&ordersOnly=1${sinceTicket.param}`,
+        {
+          // 2026-09-10 P0-4：需要 POS 終端憑證
+          headers: { ...posDeviceAuthHeaders() },
+        },
+      );
       if (!res.ok) return;
-      const payload = (await res.json().catch(() => null)) as { orders?: PosOrder[] } | null;
+      const payload = (await res.json().catch(() => null)) as
+        | { orders?: PosOrder[]; truncated?: boolean }
+        | null;
       if (!payload || !Array.isArray(payload.orders)) return;
+      // 截斷 ⇒ 清水位（下次走全量），今次收到嘅子集照 merge（subset merge 安全）。
+      commitStateSince(sinceTicket, Boolean(payload.truncated));
       commitOrdersFromServer(payload.orders);
     } catch {
       // 離線／server 問題：realtime resubscribed / 網絡恢復 / 下次 queue 清空再試。

@@ -104,7 +104,9 @@ describe("pos-app ── 同步隊列唔可以無謂換 array 身分", () => {
       "flight key 唔係 storeId ⇒ 切店時會拿到別店 in-flight 結果（餵錯店）",
     );
     assert.ok(
-      /async function runLoadRuntimeState\(src: string\)/.test(SRC),
+      // 2026-09-22 P1：`runLoadRuntimeState` 多咗一個 optional `opts`（forceFull），
+      // 所以唔可以再死咬 `(src: string)` 收尾。
+      /async function runLoadRuntimeState\(src: string/.test(SRC),
       "搵唔到 runLoadRuntimeState（實際做嘢嗰個）",
     );
   });
@@ -115,7 +117,9 @@ describe("pos-app ── 同步隊列唔可以無謂換 array 身分", () => {
       "冇送 `x-pos-state-src` 標頭 ⇒ 下次再爆都仲係冇辦法定位呼叫者",
     );
     const expectations: [string, RegExp][] = [
-      ["手動更新", /loadRuntimeState\("manual"\)/],
+      // 2026-09-22 P1：手動更新多咗 `{ forceFull: true }`（要雲端真值 + 跑孤兒單對賬），
+      // 所以允許後面帶 options —— 但**一定要仍然報 "manual"** 呢個來源標記。
+      ["手動更新", /loadRuntimeState\("manual"(?:,\s*\{[^}]*\})?\)/],
       ["realtime 重連補拉", /loadRuntimeState\("resubscribe"\)/],
       ["mount／queue 依賴", /"queue-dep"\s*:\s*"mount"/],
     ];

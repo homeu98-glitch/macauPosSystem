@@ -11,6 +11,7 @@ import {
   DEFAULT_SHIFT_TEMPLATE_PRESET_ID,
   normalizeShiftTemplatePresets,
 } from "@/lib/escpos-template";
+import { isIncrementalTruncated } from "@/lib/pos/state-sync-watermark";
 import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
@@ -230,6 +231,57 @@ export async function GET(request: Request) {
     );
   }
 
+  /**
+   * 🩹 2026-09-22 **P0 止血**：舊版全量拉取一律**唔回 queue**（＝ `limit(0)`）。
+   *
+   * ## 為何
+   *
+   * 2026-09-22 實測：一部跑舊 bundle 嘅分頁 **每 4.6 秒**拉一次，
+   * `bytes=903 KB`（`orders=200 queue=300 printJobs=200`）⇒ **690 MB/小時**。
+   * 而新 bundle 同樣係全量，只係`queue=0`，bytes = **412 KB**
+   * ⇒ 兩者相減，**queue 一條就佔 502 KB（56%）**。
+   *
+   * ## 為何安全（唔會令舊分頁壞）
+   *
+   * · client 側嘅 merge 係**由本地為底再加上 server 事件**
+   *   （`pos-app.tsx`：`for (const e of payload.queue) {...}` 之後
+   *   `for (const e of localQueue) if (!seen.has(e.id)) mergedQueue.push(e)`）
+   *   ⇒ `payload.queue = []` 嘅結果係「**完整保留本地 queue**」，唔會清走任何未同步事件。
+   * · v2 outbox 之下 client 本來就唔 merge server queue（`skipQueue=1` 同呢個一模一樣）。
+   * · 舊分頁失去嘅只係「其他裝置嘅 queue 事件」呢個**次要**來源
+   *   （訂單／打印任務仍然照拉，兩者才是應用層真源）。
+   *
+   * ## 回滾
+   *
+   * 刪走 `legacyQueueSuppressed` 呢個條件即可（`queueQuery` 一行）。
+   */
+  const legacyQueueSuppressed = isLegacyFullState;
+
+  /**
+   * 🆕 2026-09-22 **P1 增量拉取**：`since=<ISO>` ⇒ 只回「變更過」嘅差量。
+   *
+   * ## 為何
+   *
+   * 全量拉取每次 **412 KB**（新 bundle）—— 但 POS 本身已經有齊本機 orders / printJobs，
+   * 開頁真正需要嘅只係差量。決策（幾時可以信 `since`）收喺**純函式**
+   * `@/lib/pos/state-sync-watermark`（12 條單測），呢度只負責執行查詢。
+   *
+   * ## 安全設計（三條）
+   *
+   * ① **`ordersOnly` 一律唔做增量**（報表／交班／對賬守護要完整區間，唔可以只回差量）。
+   * ② 增量查詢係**獨立一條腿**（單表 `updated_at > since`）——
+   *    唔會經 `fetchOrdersInRange()` 嘅三腿 OR 邏輯，避免兩套口徑互相污染。
+   * ③ 撞到 `limit` ⇒ 回 `truncated: true`，client 會即刻清水位（下次走全量）。
+   *    唔可以靜默截斷 —— 漏單比多拉幾 KB 嚴重得多。
+   *
+   * ## 新舊並存
+   *
+   * 唔傳 `since` ＝ **完全等於**未加呢個功能之前嘅行為（舊 client 零影響）。
+   */
+  const sinceRaw = searchParams.get("since")?.trim() || null;
+  const since = sinceRaw ? toUtcIso(sinceRaw) : null;
+  const incremental = Boolean(since) && !ordersOnly;
+
   // 報表區間過濾：只回傳 created_at **或** updated_at **或** reopened_at 落在 [start, end]
   // 內嘅訂單（OR 語義）。
   // OR 係 client 端 orderMatchesReportRange（2026-09-19 起改用 `orderEventInstant()`：
@@ -264,20 +316,38 @@ export async function GET(request: Request) {
     });
   }
 
-  // 訂單兩腿查詢即刻啟動（唔等下面 queue/printJobs/deviceConfig），保持並行度。
-  const ordersInRangePromise = fetchOrdersInRange({
-    supabase,
-    storeId,
-    start: rangeStart,
-    end: rangeEnd,
-    limit,
-    offset,
-    // undefined = 用預設投影（＝ mapper 會讀嘅全部欄，語義等同 select("*")）。
-    columns: ordersColumns,
-  });
+  // 訂單查詢即刻啟動（唔等下面 queue/printJobs/deviceConfig），保持並行度。
+  // · **增量**（有 `since`）→ 單腿 `updated_at > since`（1 條 query；最省）
+  // · 其餘（全量／報表／守護）→ 原本三腿區間查詢（語義完全不變）
+  //
+  // ⚠️ 兩條路刻意**唔互通**：`fetchOrdersInRange()` 係「區間 OR 三腿」，
+  // 增量係「單調水位」——撈埋一齊會產生「唔知邊條條件贏」嘅隱性行為。
+  const incrementalOrdersPromise =
+    incremental && storeId
+      ? supabase
+          .from("pos_orders")
+          .select(POS_ORDER_DB_COLUMNS.join(","))
+          .eq("store_id", storeId)
+          .gt("updated_at", since as string)
+          .order("updated_at", { ascending: false })
+          .limit(limit)
+      : null;
+  const ordersInRangePromise = incrementalOrdersPromise
+    ? null
+    : fetchOrdersInRange({
+        supabase,
+        storeId,
+        start: rangeStart,
+        end: rangeEnd,
+        limit,
+        offset,
+        // undefined = 用預設投影（＝ mapper 會讀嘅全部欄，語義等同 select("*")）。
+        columns: ordersColumns,
+      });
 
   // 報表分頁只拉訂單，跳過其餘 table。
-  if (ordersOnly) {
+  // （`ordersOnly` 之下 `incremental` 一定 false ⇒ `ordersInRangePromise` 一定存在。）
+  if (ordersOnly && ordersInRangePromise) {
     const ordersInRange = await ordersInRangePromise;
     const orders = ordersInRange.error ? [] : ordersInRange.orders.map(mapOrderRow);
     return withSessionHeaders(
@@ -306,14 +376,27 @@ export async function GET(request: Request) {
   // 2026-09-21 egress 優化：`skipQueue=1`（v2 client 會傳）同樣走 limit(0) ——
   // v2 之下 client 唔 merge server queue，呢 300 條 × 1 668 B（≈500 KB）係純浪費。
   // 沿用既有 limit(0) 寫法（同「冇 storeId」同一條路），語義同 fail-safe 一致。
-  const queueQuery = !skipQueue && storeId
+  //
+  // 2026-09-22 **P0**：`legacyQueueSuppressed`（舊版全量拉取）同 `incremental`
+  // 亦一律 limit(0) —— 前者每次省 502 KB（見上面註釋），後者本來就只需要差量。
+  const queueQuery = !skipQueue && !legacyQueueSuppressed && !incremental && storeId
     ? supabase.from("pos_queue_events").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(300)
     : supabase.from("pos_queue_events").select("*").limit(0);
   // 🛡️ 加固（db review §4.1 #3）：print jobs 同 device config 一律按 store 過濾。
   // 冇 storeId（未登入又冇 kiosk 綁定）→ limit(0) 返空，寧可無 print job / 無遠端 config，
   // 都唔好派發別店嘅打印任務或 terminal 設定（fail-safe；歷史行 store_id IS NULL 天然被 eq 排除）。
+  //
+  // 2026-09-22 P1：增量之下只回 `created_at > since` 嘅 print job ——
+  // 跨終端「內容唯一鍵」去重（`print-dedupe.ts`）只需要**新出現**嗰批，
+  // 舊嘅本機已經有（merge 係由本地為底）。
+  const printJobsBase = supabase.from("pos_print_jobs").select("*").eq("store_id", storeId);
   const printJobsQuery = storeId
-    ? supabase.from("pos_print_jobs").select("*").eq("store_id", storeId).order("created_at", { ascending: false }).limit(200)
+    ? (incremental
+        ? printJobsBase.gt("created_at", since as string)
+        : printJobsBase
+      )
+        .order("created_at", { ascending: false })
+        .limit(incremental ? Math.min(limit, 200) : 200)
     : supabase.from("pos_print_jobs").select("*").limit(0);
   const deviceConfigQuery = storeId
     ? supabase.from("pos_device_configs").select("*").eq("store_id", storeId).order("updated_at", { ascending: false }).limit(1)
@@ -338,8 +421,31 @@ export async function GET(request: Request) {
   const [{ data: queue }, { data: printJobs }, { data: deviceConfigs }, { data: printTemplatesRow }, notePresetsResult] =
     await Promise.all([queueQuery, printJobsQuery, deviceConfigQuery, printTemplatesQuery, notePresetsPromise]);
 
-  const ordersInRange = await ordersInRangePromise;
-  const orders = ordersInRange.error ? [] : ordersInRange.orders;
+  // 增量：單腿查詢結果；全量：原本三腿結果。兩者都係**未 map** 嘅 DB row。
+  // 型別用 `mapOrderRow` 嘅入參（＝映射真源），避免 supabase 泛型推導出 error union。
+  type OrderRow = Parameters<typeof mapOrderRow>[0];
+  const incrementalResult = incrementalOrdersPromise ? await incrementalOrdersPromise : null;
+  const ordersInRange = ordersInRangePromise ? await ordersInRangePromise : null;
+  const orders: OrderRow[] = incrementalResult
+    ? incrementalResult.error
+      ? []
+      : ((incrementalResult.data ?? []) as unknown as OrderRow[])
+    : ordersInRange && !ordersInRange.error
+      ? ordersInRange.orders
+      : [];
+
+  /**
+   * 增量結果係咪**唔完整**（查詢失敗／撞到 `limit`）⇒ client 要清水位、下次走全量。
+   *
+   * 🔴 唔可以靜默截斷：`updated_at > since` 撞 200 張，代表本地會永久缺嗰批單，
+   * 而且下一次（水位已更新）更加拉唔返 —— 「漏單」比多拉幾十 KB 嚴重得多。
+   */
+  const incrementalPrintJobLimit = incremental ? Math.min(limit, 200) : 200;
+  const incrementalTruncated = incremental
+    ? Boolean(incrementalResult?.error) ||
+      isIncrementalTruncated(orders.length, limit) ||
+      isIncrementalTruncated(printJobs?.length ?? 0, incrementalPrintJobLimit)
+    : false;
 
   const deviceConfigRow = deviceConfigs?.[0] ?? null;
 
@@ -350,6 +456,14 @@ export async function GET(request: Request) {
     ok: true,
     source: "supabase",
     orders: orders?.map(mapOrderRow) ?? [],
+    /**
+     * 🆕 2026-09-22 P1：今次係增量拉取（只回差量）。
+     * 舊 client 唔識呢個欄 → 完全忽略；新 client 見到就**唔可以**跑孤兒單對賬
+     * （佢嘅判準係「雲端冇呢張單」，增量回傳只係子集 —— 見 state-sync-watermark.ts）。
+     */
+    ...(incremental ? { incremental: true } : {}),
+    /** 🆕 增量結果唔完整（撞 limit／查詢失敗）⇒ client 要清水位並即刻重拉全量。 */
+    ...(incrementalTruncated ? { truncated: true } : {}),
     queue:
       queue?.map((event) => ({
         id: event.id,
@@ -437,12 +551,21 @@ export async function GET(request: Request) {
       skipQueue: skipQueue ? 1 : 0,
       // 🔴 舊版 bundle 全量拉取（無 skipQueue）＝ 每次多約 500 KB。見 `isLegacyFullState`。
       legacy: isLegacyFullState ? 1 : 0,
+      // 🆕 2026-09-22 P0：舊版拉取已被強制 `queue=0`（止血，每次省 ~502 KB）。
+      legacyQueueOff: legacyQueueSuppressed ? 1 : 0,
+      // 🆕 2026-09-22 P1：增量拉取（`since`）—— 呢個係「幾時傳 since」嘅診斷依據。
+      incr: incremental ? 1 : 0,
+      since: sinceRaw ?? "-",
+      truncated: incrementalTruncated ? 1 : 0,
       printJobs: printJobs?.length ?? 0,
       limit,
       ip,
       // 🔎 呼叫來源（mount / queue-dep / resubscribe / manual / -）；見 `stateSrc` 嘅說明。
       src: stateSrc,
     },
+    // 🆕 2026-09-22：記入 `pos_egress_daily`（admin「雲端用量」頁按店統計）。
+    // 只係量度，唔改回應內容；migration 未跑會自動停用。
+    { storeId },
     ),
   );
 
@@ -456,5 +579,13 @@ export async function GET(request: Request) {
    * ⚠️ 純**附加**回應標頭：唔改 body、唔改 status、唔加查詢，舊 client 完全唔理。
    */
   response.headers.set("x-pos-build", readServerBuildId());
+  /**
+   * 🩹 `x-pos-legacy-pull: 1` ＝ 呢個請求係舊版全量拉取，server 已經**強制 `queue=0`**。
+   *
+   * 純診斷用：舊分頁跑住舊 JS，唯一可以令佢停嘅方法係「重新載入頁面」
+   * （收銀台已經有「版本過期」橫幅，見 `build-stale-banner.tsx`）。
+   * 標頭本身唔改任何行為，只令將來的排查唔需要再推斷。
+   */
+  if (legacyQueueSuppressed) response.headers.set("x-pos-legacy-pull", "1");
   return response;
 }

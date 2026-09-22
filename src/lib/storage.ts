@@ -83,6 +83,10 @@ const STORE_SUFFIX = {
   // 備註預設雲端同步 meta（0028 migration）：同 printTemplateMeta 一樣嘅 LWW 基準，
   // 記錄「本機已知嘅 server 備註版本（updated_at）」，server 較新先採納。
   notePresetMeta: "note-preset-meta",
+  // 增量同步水位（2026-09-22 P1 egress 優化）：記錄「本機已知嘅雲端狀態水位」，
+  // 下次拉 `/api/pos/state` 時傳 `since=` ⇒ server 只回 `updated_at > since` 嘅差量
+  // （412 KB → 約 30 KB）。見 `src/lib/pos/state-sync-watermark.ts`。
+  stateSyncMeta: "state-sync-meta",
   // 孤兒單隔離區（2026-09-09 方案 A）：雲端冇、本機又冇 pending 事件支持嘅非終態單。
   // 隔離 = 由 orders 移出入呢個 store-scope list（唔刪除，可還原），防 merge 復活。
   quarantinedOrders: "quarantined-orders",
@@ -640,6 +644,47 @@ export function loadPrintTemplateSyncMeta(): PrintTemplateSyncMeta | null {
 
 export function savePrintTemplateSyncMeta(meta: PrintTemplateSyncMeta): boolean {
   return writeStoreJson(STORE_SUFFIX.printTemplateMeta, meta, resolveSettingsStoreScope());
+}
+
+/**
+ * 增量同步水位（2026-09-22 P1 egress 優化）——「本機已知嘅雲端狀態水位」。
+ *
+ * ## 為咩要（取證）
+ *
+ * 2026-09-22 實測：`/api/pos/state` 全量拉取單次 **412 KB（新）／903 KB（舊）**，
+ * 而一部跑舊分頁嘅機每 4.6 秒拉一次 ⇒ 690 MB/小時。即使新 bundle，
+ * 「開頁就拉 200 單 + 200 個 print job」本身就係大部分流量。
+ *
+ * 但 POS 本身**已經有齊**本機 orders / printJobs（localStorage 就係本機真源），
+ * 開頁真正需要嘅只係「**上次同步之後有咩變咗**」。
+ *
+ * ## 語義
+ *
+ * - `syncedAt` ＝ 上一次**成功**拉取時 client 記低嘅時間（帶少量安全邊際，見下）；
+ * - 下次拉取帶 `since=<syncedAt>` ⇒ server 只回 `updated_at > since` 嘅訂單
+ *   ＋ `created_at > since` 嘅 print job（其餘保持不變）；
+ * - **從未成功拉過 / 水位太舊（> 6 小時）/ 本機冇資料** ⇒ 傳唔到 `since` ⇒ 走全量
+ *   （＝ 現行行為，語義完全不變）。
+ *
+ * ## 為何用「client 記低時間」而唔係「server 回水位」
+ *
+ * 兩者都要持久化（reload 之後仲要記得），而本機已經有呢套 store-scope meta 基建
+ * （見 `printTemplateMeta` / `notePresetMeta`）。安全邊際（`STATE_SYNC_SAFETY_MS`）
+ * 覆蓋「client 同 server 時鐘有偏差」同「請求期間有新寫入」兩種情況；
+ * 多拉幾行係無害嘅（merge 係按 id LWW，重複套用同一次結果冇副作用）。
+ */
+export type StateSyncMeta = { syncedAt: string | null };
+
+export function loadStateSyncMeta(): StateSyncMeta | null {
+  return readStoreJson<StateSyncMeta | null>(
+    STORE_SUFFIX.stateSyncMeta,
+    null,
+    resolveSettingsStoreScope(),
+  );
+}
+
+export function saveStateSyncMeta(meta: StateSyncMeta): boolean {
+  return writeStoreJson(STORE_SUFFIX.stateSyncMeta, meta, resolveSettingsStoreScope());
 }
 
 /**
