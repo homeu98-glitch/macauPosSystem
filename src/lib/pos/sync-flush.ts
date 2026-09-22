@@ -548,7 +548,13 @@ function applyEventResults(params: {
 function notifyBlockedByGate(perEvent: EventAckResult[] | null): boolean {
   if (typeof window === "undefined" || !perEvent) return false;
   const blocked = perEvent.filter(
-    (r) => r.reason === "store-closed" || r.reason === "shift-closed",
+    (r) =>
+      r.reason === "store-closed" ||
+      r.reason === "shift-closed" ||
+      // 2026-09-22：管理員喺 admin 頁強制關閉咗呢個工作階段（`session-record.ts`）。
+      // 一定要一齊廣播：否則收銀員只會見到「未同步」徽章，
+      // 完全唔知係被管理員關咗（而正確反應係重新登入，唔係等佢自己好）。
+      r.reason === "session-closed",
   );
   if (blocked.length === 0) return false;
   const reason = blocked[0].reason;

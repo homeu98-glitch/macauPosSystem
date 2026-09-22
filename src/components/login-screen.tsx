@@ -12,6 +12,10 @@ import {
   type WorkbenchId,
 } from "@/lib/pos/module-catalog";
 import { resolveRememberedWorkbench } from "@/lib/pos/workbench-preference";
+import { readClientBuildInfo } from "@/lib/build-info";
+import { getPosSessionKey, rotatePosSessionKey } from "@/lib/pos/session-key";
+import { POS_BUILD_HEADER, POS_SESSION_HEADER } from "@/lib/pos/session-record";
+import { clearPosSessionRevoked } from "@/lib/pos/session-revoked";
 import { applyLedgerMerchantToBootstrap } from "@/lib/store-display";
 import {
   loadBootstrapCache,
@@ -116,9 +120,27 @@ export function LoginScreen() {
 
     setLoading(true);
     try {
+      // ── 工作階段身分（2026-09-22，migration 0047）────────────────────────
+      //
+      // ① **先換一個新識別碼**：管理員強制關閉之後，商家要重新登入；
+      //    如果沿用舊 key，新登入會續期**嗰行已經被撤銷**嘅紀錄 ⇒ admin 頁顯示
+      //    「已強制關閉」但商戶明明用緊（或者橫幅一登入就再彈）。
+      //    ⇒「重新登入 ＝ 新工作階段」，舊 row 留低做歷史。
+      //    （登入失敗都已經換咗 key：最多留一行冇再更新嘅紀錄，30 日後可清除。）
+      // ② 清咗「已被關閉」旗標（否則橫幅唔會消失）。
+      // ③ 帶住新 key + 內聯版本號去註冊（server 端唯一知道 merchantId 嘅地方）。
+      rotatePosSessionKey();
+      clearPosSessionRevoked();
+      const loginHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        [POS_SESSION_HEADER]: getPosSessionKey(),
+      };
+      const clientBuildId = readClientBuildInfo().id;
+      if (clientBuildId) loginHeaders[POS_BUILD_HEADER] = clientBuildId;
+
       const response = await fetch("/api/ledger/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: loginHeaders,
         body: JSON.stringify({ account: normalizedAccount, pin: normalizedPin }),
       });
       const payload = (await response.json()) as {

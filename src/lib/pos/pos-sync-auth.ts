@@ -1,5 +1,9 @@
 import { loadAuthSession, saveAuthSession, type AuthSession } from "@/lib/storage";
 
+import { readClientBuildInfo } from "@/lib/build-info";
+import { POS_BUILD_HEADER, POS_SESSION_HEADER } from "./session-record";
+import { getPosSessionKey } from "./session-key";
+
 /**
  * POS 終端憑證（`Authorization: Bearer`）嘅 **client 側** 讀取 + 續期。
  *
@@ -22,10 +26,34 @@ export function getPosDeviceToken(): string | null {
   return typeof token === "string" && token ? token : null;
 }
 
-/** 需要授權嘅 POS 端點用：`fetch(url, { headers: { ...jsonHeaders, ...posDeviceAuthHeaders() } })` */
+/**
+ * 需要授權嘅 POS 端點用：`fetch(url, { headers: { ...jsonHeaders, ...posDeviceAuthHeaders() } })`
+ *
+ * ── 2026-09-22 加兩個標頭：工作階段身分 + 分頁實際跑緊嘅版本 ──────────────
+ *
+ * | 標頭 | 值 | 用途 |
+ * |---|---|---|
+ * | `x-pos-session` | 每個分頁一個（`sessionStorage`）| server 登記／續期 `pos_sessions` |
+ * | `x-pos-build` | 內聯嘅 `NEXT_PUBLIC_BUILD_ID` | 管理員睇「邊個分頁跑住舊版」|
+ *
+ * 🔴 **零新增請求**：呢兩個標頭只係搭喺**已經會發生**嘅請求上。server 收到就順手
+ * 續期（POST 60 秒節流、GET 5 分鐘節流），唔會多打任何一次網絡。
+ *
+ * 🔴 為何要由 client 報版本：server 只知「線上最新部署」，**唔可能**知呢個分頁
+ * 實際跑緊邊份 JS（舊分頁跑舊 bundle 正是 2026-09-21 egress 事故嘅根源）。
+ */
 export function posDeviceAuthHeaders(): Record<string, string> {
   const token = getPosDeviceToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  // 匿名端點（掃碼客人）唔會有 token，但一樣會行到呢度 —— 唔緊要：
+  // 「客人手機開咗幾個分頁」唔係我哋要管嘅事，server 端亦只認已授權嘅請求。
+  if (token) {
+    headers[POS_SESSION_HEADER] = getPosSessionKey();
+    const buildId = readClientBuildInfo().id;
+    if (buildId) headers[POS_BUILD_HEADER] = buildId;
+  }
+  return headers;
 }
 
 /**

@@ -36,6 +36,7 @@ import { loadAuthSession, loadQueue, loadShiftState } from "@/lib/storage";
 
 import { getLastActivityAtMs, subscribeActivity } from "./activity-tracker.ts";
 import { decidePoll, type PollGateDecision } from "./poll-gate.ts";
+import { isPosSessionRevoked } from "./session-revoked.ts";
 import { getMerchantOrderConfigSnapshot } from "./use-merchant-order-config";
 import { getStoreStatusSnapshot } from "./use-store-status";
 
@@ -88,7 +89,10 @@ export function evaluatePollGate(
   const shift = loadShiftState();
 
   const decision = decidePoll({
-    sessionAlive: Boolean(session),
+    // 2026-09-22：管理員喺 admin 頁強制關閉嘅工作階段當**冇 session**處理
+    // ⇒ 即停（`no-session`），連 `triggered` 都擋得住（見 `poll-gate.ts` 嘅 kind 說明）。
+    // 呢個就係「強制關閉」真正止到血嘅地方：唔係停止該分頁顯示，而係停止佢繼續拉資料。
+    sessionAlive: Boolean(session) && !isPosSessionRevoked(),
     visibilityState: typeof document === "undefined" ? "visible" : document.visibilityState,
     lastActivityAtMs: getLastActivityAtMs(),
     nowMs,

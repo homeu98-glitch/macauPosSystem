@@ -48,6 +48,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const navItems = [
     { href: "/admin/dashboard", label: "店鋪總覽" },
     { href: "/admin/reports", label: "營業報表" },
+    // 2026-09-22：POS 工作階段總覽（migration 0047）。
+    // 背景：商家唔為意開咗幾個分頁，舊分頁靜靜燒 egress（實測佔 97%）⇒
+    // 需要一個「睇得到、關得掉」嘅地方。
+    { href: "/admin/sessions", label: "POS 工作階段" },
   ];
 
   return (

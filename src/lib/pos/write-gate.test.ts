@@ -142,3 +142,58 @@ describe("describeWriteGateRejection", () => {
     assert.equal(describeWriteGateRejection("ok"), "");
   });
 });
+
+describe("工作階段被管理員關閉（2026-09-22）", () => {
+  it("🔴 只擋新生意：建單／加菜拒收", () => {
+    assert.equal(
+      decideOrderWrite({ ...base, eventType: "ORDER_CREATED", sessionRevoked: true }).reason,
+      "session-closed",
+    );
+    assert.equal(
+      decideOrderWrite({ ...base, eventType: "ORDER_UPDATED", hasAddedItems: true, sessionRevoked: true }).allow,
+      false,
+    );
+  });
+
+  it("🔴 結帳／退款／刪單／出紙一律照准（客人走唔到更嚴重）", () => {
+    for (const type of ["ORDER_SETTLED", "ORDER_REFUNDED", "ORDER_DELETED", "PRINT_JOB_CREATED"]) {
+      const d = decideOrderWrite({ ...base, eventType: type, sessionRevoked: true });
+      assert.equal(d.allow, true, type);
+    }
+  });
+
+  it("🔴 線上鏡像（`ledger-`）唔受影響 —— 否則線上單永遠冇完整記錄", () => {
+    const d = decideOrderWrite({
+      ...base,
+      eventType: "ORDER_CREATED",
+      isOnlineMirror: true,
+      sessionRevoked: true,
+    });
+    assert.equal(d.allow, true);
+  });
+
+  it("舊 client／未跑 migration 0047 冇帶 sessionRevoked → 等同 false（fail-open）", () => {
+    assert.equal(decideOrderWrite({ ...base, eventType: "ORDER_CREATED" }).allow, true);
+    assert.equal(
+      decideOrderWrite({ ...base, eventType: "ORDER_CREATED", sessionRevoked: undefined }).allow,
+      true,
+    );
+  });
+
+  it("同時店已關 → 講「工作階段被關閉」（更明確嘅原因優先）", () => {
+    const d = decideOrderWrite({
+      ...base,
+      eventType: "ORDER_CREATED",
+      storeClosed: true,
+      sessionRevoked: true,
+    });
+    assert.equal(d.reason, "session-closed");
+  });
+
+  it("文案要叫店員「重新登入」，唔可以叫佢「恢復營業」", () => {
+    const msg = describeWriteGateRejection("session-closed");
+    assert.ok(/重新登入/.test(msg), "冇叫店員重新登入 ⇒ 佢會去撳錯嘢");
+    assert.ok(!/恢復營業/.test(msg));
+    assert.notEqual(msg, describeWriteGateRejection("store-closed"));
+  });
+});

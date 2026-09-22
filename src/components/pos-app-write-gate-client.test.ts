@@ -81,11 +81,21 @@ describe("G3 ── 被 server 拒收之後要自我修正", () => {
     assert.equal(hits.length, 3, `應該 1 定義 + 2 呼叫，實際 ${hits.length}`);
   });
 
-  it("🔴 只認 `store-closed` / `shift-closed`（唔可以撈埋其他 reason）", () => {
+  it("🔴 只認規則性拒收嘅 reason（唔可以撈埋其他 reason）", () => {
     const i = SYNC_FLUSH.indexOf("function notifyBlockedByGate");
     assert.ok(i > 0);
-    const body = SYNC_FLUSH.slice(i, i + 700);
-    assert.ok(/r\.reason === "store-closed" \|\| r\.reason === "shift-closed"/.test(body), "判準唔對");
+    const body = SYNC_FLUSH.slice(i, i + 900);
+    // 2026-09-22 加咗第三個：`session-closed`（管理員喺 admin 頁強制關閉呢個分頁）。
+    // ⚠️ 唔可以只比對「有冇出現呢三個字串」—— 一定要確認**判準只係呢三個**，
+    //    否則將來有人寫成「任何 reason 都當 blocked」都會過。
+    const reasons = new Set(
+      (body.match(/r\.reason === "([^"]+)"/g) ?? []).map((m) => /"([^"]+)"/.exec(m)?.[1] ?? m),
+    );
+    assert.deepEqual(
+      [...reasons].sort(),
+      ["session-closed", "shift-closed", "store-closed"],
+      "判準清單唔對（多咗＝會誤報；少咗＝收銀員唔知被拒收）",
+    );
     assert.ok(/dispatchEvent\(/.test(body), "冇廣播");
   });
 

@@ -40,6 +40,9 @@ import {
 import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
 import { setObservedServerBuildId } from "@/lib/build-info";
 import { BuildStaleBanner } from "@/components/build-stale-banner";
+import { SessionRevokedBanner } from "@/components/pos-session-revoked-banner";
+import { markPosSessionRevoked } from "@/lib/pos/session-revoked";
+import { POS_SESSION_CLOSED_HEADER } from "@/lib/pos/session-record";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -895,8 +898,23 @@ export function PosApp() {
     function onSyncBlocked(rawEvent: Event) {
       const detail = (rawEvent as CustomEvent<{ reason?: string; count?: number }>).detail;
       const reason = detail?.reason;
-      if (reason !== "store-closed" && reason !== "shift-closed") return;
+      if (reason !== "store-closed" && reason !== "shift-closed" && reason !== "session-closed") return;
       if (cancelled) return;
+
+      // 🔴 2026-09-22：管理員喺 admin 頁強制關閉咗**呢個分頁**。
+      // 同上面兩種「規則性拒收」嘅處理**唔同**：
+      //   · 唔可以 `syncOnce()` —— 由雲端重新對齊救唔到（問題係呢個分頁嘅身分被撤銷）；
+      //   · 要開「已被關閉」旗標 ⇒ 橫幅出現 + 輪詢閘即刻停（＝止住 egress，嗰個係原本目的）；
+      //   · 文案要叫店員「重新登入」，而唔係「恢復營業」（撳幾多次都冇用）。
+      if (reason === "session-closed") {
+        markPosSessionRevoked();
+        setToast({
+          tone: "error",
+          message: `此工作階段已被管理員關閉：${detail?.count ?? 0} 筆操作被拒收，請重新登入或開新視窗。`,
+        });
+        return;
+      }
+
       const label = reason === "store-closed" ? "店內已暫停營業" : "本店未開工／已收工";
       setToast({
         tone: "error",
@@ -1384,6 +1402,12 @@ export function PosApp() {
       // 🔎 2026-09-22：記下伺服器嘅建置識別碼（設置頁會同「本機跑緊嘅版本」對照）。
       //    純讀標頭 —— 讀唔到就係 null，唔影響任何流程。
       setObservedServerBuildId(response.headers.get("x-pos-build"));
+      // 🔴 2026-09-22：管理員喺 admin 頁強制關閉咗**呢個分頁**？
+      //    server 唔可能關掉別人嘅分頁，只可以通知 —— 呢個標頭就係「軟踢」回傳路徑。
+      //    收到之後：出橫幅 + 輪詢閘即刻停（唔會自動 reload，結帳中途 reload 會出事）。
+      if (response.headers.get(POS_SESSION_CLOSED_HEADER) === "1") {
+        markPosSessionRevoked();
+      }
       const payload = (await response.json()) as {
         orders?: PosOrder[];
         queue?: QueueEvent[];
@@ -5014,6 +5038,14 @@ export function PosApp() {
         {/* 🔴 版本過期橫幅（2026-09-22）：只有「本機版本 ≠ 線上最新」才出現。
             in-flow ⇒ 推低內容，唔會蓋住任何控制項。詳見 `build-stale-banner.tsx`。 */}
         <BuildStaleBanner
+          cartItemCount={cartItems.length}
+          pendingSyncCount={queue.filter((event) => event.status === "pending").length}
+          settlementOpen={Boolean(payingOrderId)}
+        />
+        {/* ⛔ 工作階段被管理員強制關閉（2026-09-22）：只有收到 server 訊號才出現。
+            同上面一樣係 in-flow（推低內容、唔蓋控制項），而且**唔會自動 reload**
+            （結帳中途 reload 會出事）。詳見 `pos-session-revoked-banner.tsx`。 */}
+        <SessionRevokedBanner
           cartItemCount={cartItems.length}
           pendingSyncCount={queue.filter((event) => event.status === "pending").length}
           settlementOpen={Boolean(payingOrderId)}

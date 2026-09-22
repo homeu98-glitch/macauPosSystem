@@ -37,7 +37,7 @@
  * 專案 `npm test` ＝ `node --test`（唔行 bundler、唔認 `@/` 別名）⇒ 可測模組唔准 import。
  */
 
-export type WriteGateReason = "ok" | "store-closed" | "shift-closed";
+export type WriteGateReason = "ok" | "store-closed" | "shift-closed" | "session-closed";
 
 export type WriteGateInput = {
   eventType: string;
@@ -49,6 +49,16 @@ export type WriteGateInput = {
   storeClosed: boolean;
   /** 班次閘：`pos_shifts` 冇任何未收工嘅班次。 */
   shiftClosed: boolean;
+  /**
+   * 工作階段閘（2026-09-22）：**管理員喺 admin 頁強制關閉咗呢個分頁**。
+   *
+   * 同上兩道閘同一個口徑：**只擋開新生意**（客人走唔到更嚴重）。
+   * 情境：商家唔為意開咗幾個分頁，舊分頁靜靜燒流量（實測佔 egress 97%），
+   * 管理員要止住佢 —— 但唔可以連正在結帳嘅客人一齊卡死。
+   *
+   * ⚠️ 舊 client／未跑 migration 0047 → `undefined` → 等同 `false`（fail-open）。
+   */
+  sessionRevoked?: boolean;
 };
 
 /**
@@ -72,6 +82,9 @@ export function decideOrderWrite(input: WriteGateInput): {
   if (!isNewBusinessEvent(input)) return { allow: true, reason: "ok" };
   // 線上單係客人先落、POS 側補記錄 ⇒ 唔可以因為「店已關」而擋（否則單據永遠唔完整）。
   if (input.isOnlineMirror) return { allow: true, reason: "ok" };
+  // 次序：**最明確嘅原因行先** —— 「管理員關閉咗呢個分頁」比「店已關」更具體，
+  // 而且店員跟住要做嘅事完全唔同（重新登入 vs 恢復營業）。
+  if (input.sessionRevoked) return { allow: false, reason: "session-closed" };
   // 次序同既有兩道閘一致：先講「店已關」，再講「未開工」——
   // 兩者文案唔可以撈埋（客人／店員需要知道分別）。
   if (input.storeClosed) return { allow: false, reason: "store-closed" };
@@ -83,5 +96,10 @@ export function decideOrderWrite(input: WriteGateInput): {
 export function describeWriteGateRejection(reason: WriteGateReason): string {
   if (reason === "store-closed") return "店內已暫停營業：唔可以開新單或加菜，請先恢復營業。";
   if (reason === "shift-closed") return "本店未開工／已收工：唔可以開新單或加菜，請先開工。";
+  // ⚠️ 一定要講「重新登入」：店員見到「被管理員關閉」嘅正確反應係重新登入／開新視窗，
+  //    而唔係去撳「恢復營業」（咁樣只會白做）。
+  if (reason === "session-closed") {
+    return "此工作階段已被管理員關閉：唔可以開新單或加菜，請重新登入或開新視窗。";
+  }
   return "";
 }

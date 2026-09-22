@@ -15,6 +15,15 @@ import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/po
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 import { readServerBuildId } from "@/lib/build-info";
+import { touchPosSession } from "@/lib/pos/session-registry-server";
+import {
+  POS_BUILD_HEADER,
+  POS_SESSION_CLOSED_HEADER,
+  POS_SESSION_HEADER,
+  SESSION_STATE_TOUCH_THROTTLE_MS,
+  sanitizeBuildId,
+  sanitizeSessionKey,
+} from "@/lib/pos/session-record";
 
 /** UTC ISO 轉換（lossless）：`2026-09-06T00:00:00+08:00` → `2026-09-05T16:00:00.000Z`。 */
 function toUtcIso(iso: string): string {
@@ -125,6 +134,47 @@ export async function GET(request: Request) {
     );
   }
 
+  // ── 工作階段續期（2026-09-22，**零新增請求**）────────────────────────────
+  //
+  // 背景：`pos_sessions`（migration 0047）要知「邊個分頁仲活住」。收銀機開住但冇人
+  // 掂嘅時段，唯一仲會出聲嘅就係呢支 state —— 所以喺呢度順手續期。
+  //
+  // 三個刻意的限制：
+  //   · **只續期、唔建立**（`allowCreate: false`）⇒ 保持「GET 唔創造狀態」嘅語義。
+  //     row 由 `/api/ledger/login`（權威）或 `POST /api/pos/sync` 建立。
+  //   · **5 分鐘節流**（＝同一支 API 嘅輪詢節奏）：一有上報就一定夠新鮮，
+  //     而成本係每部機 12 次/小時嘅單行 UPDATE。
+  //   · 舊 client 唔傳 `x-pos-session` ⇒ **完全唔查、完全唔寫**，行為逐位元不變。
+  //
+  // ⚠️ 唔可以因為呢段而阻擋任何讀取：`touchPosSession()` 永遠唔 throw，
+  //    失敗（未跑 migration 等）只會回 `found: false`。
+  const sessionKey = sanitizeSessionKey(request.headers.get(POS_SESSION_HEADER));
+  const sessionTouch =
+    sessionKey && storeId
+      ? await touchPosSession({
+          storeId,
+          sessionKey,
+          buildId: sanitizeBuildId(request.headers.get(POS_BUILD_HEADER)),
+          account: deviceClaims?.account ?? null,
+          role: deviceClaims?.role ?? null,
+          ip,
+          userAgent: request.headers.get("user-agent"),
+          throttleMs: SESSION_STATE_TOUCH_THROTTLE_MS,
+          allowCreate: false,
+        })
+      : null;
+  /**
+   * 回應標頭：`x-pos-session-closed: 1` ＝ 呢個分頁已被管理員強制關閉。
+   *
+   * POS 端見到就出橫幅 + 停輪詢（**唔會自動 reload** —— 結帳中途 reload 會出事）。
+   * 呢個就係「軟踢」嘅回傳路徑：server 唔可能關掉別人嘅分頁，只可以通知佢。
+   */
+  const sessionClosed = Boolean(sessionTouch?.revokedAt);
+  const withSessionHeaders = <T extends NextResponse>(response: T): T => {
+    if (sessionClosed) response.headers.set(POS_SESSION_CLOSED_HEADER, "1");
+    return response;
+  };
+
   // 訂單回傳上限：收銀工作台用預設 200（最新 200 單已足夠），
   // 報表頁需要更完整嘅歷史（今天/7天/30天/全部），可傳 `limit` 拉多啲。
   // 夾喺 [1, 5000]，超出即回報 400，避免惡意超大查詢。
@@ -230,18 +280,20 @@ export async function GET(request: Request) {
   if (ordersOnly) {
     const ordersInRange = await ordersInRangePromise;
     const orders = ordersInRange.error ? [] : ordersInRange.orders.map(mapOrderRow);
-    return jsonWithEgressLog(
-      "pos/state",
-      { ok: true, source: "supabase", orders },
-      {
-        mode: "ordersOnly",
-        orders: orders.length,
-        limit,
-        offset,
-        columns: ordersColumns ?? "default",
-        start: rangeStartRaw ?? "-",
-        end: rangeEndRaw ?? "-",
-      },
+    return withSessionHeaders(
+      jsonWithEgressLog(
+        "pos/state",
+        { ok: true, source: "supabase", orders },
+        {
+          mode: "ordersOnly",
+          orders: orders.length,
+          limit,
+          offset,
+          columns: ordersColumns ?? "default",
+          start: rangeStartRaw ?? "-",
+          end: rangeEndRaw ?? "-",
+        },
+      ),
     );
   }
 
@@ -291,8 +343,9 @@ export async function GET(request: Request) {
 
   const deviceConfigRow = deviceConfigs?.[0] ?? null;
 
-  const response = jsonWithEgressLog(
-    "pos/state",
+  const response = withSessionHeaders(
+    jsonWithEgressLog(
+      "pos/state",
     {
     ok: true,
     source: "supabase",
@@ -390,6 +443,7 @@ export async function GET(request: Request) {
       // 🔎 呼叫來源（mount / queue-dep / resubscribe / manual / -）；見 `stateSrc` 嘅說明。
       src: stateSrc,
     },
+    ),
   );
 
   /**

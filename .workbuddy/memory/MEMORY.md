@@ -82,6 +82,16 @@
 - 最大單一來源＝**舊分頁跑舊 bundle**（冇傳 `skipQueue=1` ⇒ 846 KB vs 424 KB，650 MB/小時）。
 - ⭐ 唔需 Vercel log 都判得到：`state/route.ts` 收唔到 skipQueue ⇒ 查 `limit=300`（舊）／
   收到 ⇒ `limit=0`（新）⇒ **Supabase log 嘅 `pos_queue_events` URL 就係 bundle 版本指紋**。
+- ✅✅ **2026-09-22 11:13 最終複核：全清**（商家完全閂掉 Safari 之後）：
+  Vercel **0.7 次/分鐘**（原 15.2，−95%），全部 200、零 error；
+  **`heartbeat` = 0**、**`/api/pos/state` = 0**、`claim` 每 180s、`device-config` 每 360s；
+  Supabase 側 `PATCH pos_print_agents` 9 : `claim` 9 ＝ **1:1** ⇒ **獨立心跳確證冇咗**
+  （若仍在會係 52:9）；瀏覽器側**全部表 0 次**、零 409／零 once_key 重複。
+  21 Sep **904 MB/日** → 估計 **10~20 MB/日（−98%）**。
+  ⚠️ **仍未確認**：該窗口**冇開 POS 頁**（只有 `/login` ×3）⇒ 「零」同時代表「冇循環」＋
+  「冇人開頁」；要一個**營業中、POS 開住**嘅窗口驗證先算完全收口。
+  🔴 同日 11:15:48 有 `23505 schema_migrations_pkey`＝**重複執行已套用嘅 migration**
+  （唔關 POS；手動跑無害，自動化重跑就要查）。
 - 已落實：RPC `pos_orders_page`(0046)、`?skipQueue=1`、投影＋日期下限＋每日上限、
   輪詢閘 `poll-gate.ts`、寫入閘 `write-gate.ts`、queue 身分簽名、APK `nextPollMs`、`[egress]` log。
 - 🔴 兩道 server 閘**刻意 fail-open**（一斷網全店落唔到單）；`kind:"triggered"` 只受
@@ -110,3 +120,11 @@
   `after-close-calls-audit`／`session-and-write-gate-design`（均 2026-09-21）。
   ⏭️ 未做：`pos_shifts` Realtime 訂閱、報表「自動更新已停用」文案、print-agent 配對驗真補 env
   （`LEDGER_SUPABASE_SERVICE_ROLE_KEY`）、per-store token。
+
+## 9 POS 工作階段（2026-09-22）
+- 表 `pos_sessions`（migration **0047**）／註冊點 `/api/ledger/login`／續期搭既有請求
+  （POST 60s、GET state 5min；**GET 只續期、唔建立**）／client 標頭 `x-pos-session`＋`x-pos-build`。
+- 🔴 key 存 **`sessionStorage`**（localStorage 會令多個分頁撞成同一行 ⇒ 測唔到「多開」）。
+- 管理頁 `/admin/sessions`；強制關閉＝**軟踢**（`x-pos-session-closed:1` ⇒ 橫幅＋停輪詢，
+  只擋新生意，結帳放行）；門檻：使用中 ≤6 分（輪詢閘 5 分＋1 分餘量）／閒置 ≤30 分。
+- 詳細取捨同實作清單見 `.workbuddy/memory/2026-09-22.md` 11:00 段。

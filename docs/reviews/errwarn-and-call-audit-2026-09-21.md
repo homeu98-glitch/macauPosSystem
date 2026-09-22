@@ -998,5 +998,100 @@ const queueQuery = !skipQueue && storeId
 L3 直接針對根源：**開多過一個 POS 視窗就提示**（唔擋、唔影響運作），商家即知要閂邊個。
 比「按版本硬擋」精準，而且**零停業風險**。
 
+---
+
+# 附錄 G：2026-09-22 11:20 最終複核 —— **全清** ✅
+
+> 樣本：`macau-pos-system-log-export-2026-09-22T03-17-44.csv`（新檔，sha `6701e77a0f915468`）
+> 內容窗口 **`02:45:24Z → 03:13:31Z`** ＝ 澳門 **10:45 → 11:13**（28.1 分鐘）
+> ＋ `supabase_logs (11).csv`（窗口 `02:50:21Z → 03:16:34Z` ＝ 澳門 **10:50 → 11:16**）
+> 背景：**商家已經完全閂掉 Safari**。
+
+## G.1 請求：15.2 → **0.7 次/分鐘（−95%）**
+
+Vercel 側 **20 個請求 / 28.1 分鐘，全部 200、零 error／warning**：
+
+| 次數 | /分鐘 | route | 來源 |
+|---:|---:|---|---|
+| 10 | 0.36 | `POST print-agent/claim` | APK（180s ✓）|
+| 5 | 0.18 | `GET pos/device-config` | APK（360s ✓）|
+| 3 | 0.11 | `GET /login` | 有人開登入頁 |
+| 1 | 0.04 | `/icon` | 瀏覽器 |
+| 1 | 0.04 | `/apple-icon` | 瀏覽器 |
+
+```
+🔴 POST /api/pos/print-agent/heartbeat   =  0 次   ← 心跳完全消失 ✅
+✅ GET  /api/pos/state                    =  0 次   ← 網頁側零全量拉取 ✅
+✅ GET  /api/pos/sync                     =  0 次
+```
+
+## G.2 Supabase 側：**零網頁流量、零 POS 相關錯誤**
+
+| 操作 | 次數 | 間隔中位 | 判斷 |
+|---|---:|---:|---|
+| `PATCH pos_print_agents` | 9 | **181.29s** | ✅ claim 蓋章（**冇 30 秒心跳**）|
+| `rpc/pos_claim_print_jobs` | 9 | **180.97s** | ✅ |
+| `GET pos_print_agents` | 5 | 361.90s | ✅ device-config |
+| `GET pos_device_configs` | 5 | 361.96s | ✅ |
+
+🔑 **最有力嘅一個比例**：`PATCH pos_print_agents` 9 次 vs `claim` 9 次 ＝ **1:1**
+⇒ 即係**每一個蓋章都係 claim 造成** ⇒ **獨立心跳真係冇咗**
+（若心跳仍在，會係 52:9）。
+
+**完全 0 次**（＝瀏覽器側真係停咗）：
+
+```
+pos_queue_events（舊 limit=300 / 新 limit=0 都係 0）
+pos_orders_page（RPC）／pos_print_templates／pos_note_presets／pos_print_jobs
+pos_orders／pos_shifts／pos_store_status／pos_online_order_settings
+```
+
+✅ **亦零 409、零 `once_key` 重複**（附錄 E.3 嗰條都冇再出現）。
+
+## G.3 兩點仍要注意
+
+### ① ⚠️ 未能確認「POS 頁面開住時」嘅行為（誠實講）
+呢個窗口 **`/login` 3 次、POS 主頁 0 次** ⇒ **嗰段時間根本冇開 POS 頁面**。
+所以「零」有兩重意思：**（a）循環冇咗**、**（b）冇人開頁**。兩者未能分開。
+
+⇒ 要**最後確認**，需要一個「**營業中、POS 開住**」嘅窗口：如果連續幾個鐘都
+**冇** `limit=300`（舊 bundle 指紋）出現 ⇒ 就真正收口。
+
+（已知嘅正面證據仍然有效：11:15 前一次實測，新 bundle 拉一次就停；
+舊 bundle 嗰部喺商家閂 Safari 之後亦冇再出現。）
+
+### ② 🔴 `schema_migrations_pkey` 重複鍵（唔關 POS，要你確認）
+```
+error 23505  duplicate key value violates unique constraint "schema_migrations_pkey"
+時間 2026-09-22T03:15:48.531Z ＝ 澳門 11:15:48
+```
+`schema_migrations` 係 **Supabase CLI 嘅遷移記錄表** ⇒ 呢條代表
+**喺 11:15:48 有人重複執行一個已經套用過嘅 migration**。
+
+- 如果係你（或者我哋）手動跑 migration ⇒ **無害**（CLI 會冚返，唔會改到資料）。
+- 如果係**自動化流程重跑** ⇒ 就要查（唔應該發生）。
+
+⚠️ 呢條唔係「殘留問題」，係一個**獨立事件**，但值得知悉。
+
+## G.4 總結：由 21 Sep 嘅 904 MB/日 → 現在估計 **10~20 MB/日（−98%）**
+
+| 指標 | 21 Sep（最差）| 22 Sep 08:24–08:53 | **22 Sep 10:45–11:13** |
+|---|---:|---:|---:|
+| 請求／分鐘 | 15.2 | 3.2 | **0.7** |
+| 中繼心跳 | 2.00/min | 1.93/min（未更新）| **0** |
+| 網頁全量拉取 | 5.65/min（循環）| 0 | **0** |
+| error／warning | 有 | 0 | **0** |
+| 每日 egress | **904 MB** | — | **≈10~20 MB** |
+
+### 三件事嘅貢獻（追溯）
+| 改動 | 效果 |
+|---|---|
+| APK 刪心跳 ＋ claim 180s | 3.0 → 0.33 次/分鐘 |
+| 輪詢閘（`poll-gate.ts`）＋ 手勢喚醒 | 網頁週期拉取 → 0 |
+| **商家完全閂掉舊 Safari 分頁** | **循環 → 0（今次最後一塊）** |
+
+⇒ **即係話：程式改動處理咗「系統會自己產生嘅流量」；但最後嗰 27 MB/小時 係一部
+跑住舊 JS 嘅分頁，只有「閂掉」先解決得到** —— 呢點同附錄 B／D／F 嘅結論完全一致。
+
 
 

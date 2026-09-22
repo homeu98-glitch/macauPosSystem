@@ -12,6 +12,14 @@ import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 import { totalItemQuantity, refundRecordCount } from "@/lib/pos/order-item-diff";
 import { addedItemsOfEventPayload, unwrapOrderEventPayload } from "@/lib/pos/sync-order-payload";
+import { touchPosSession } from "@/lib/pos/session-registry-server";
+import {
+  POS_BUILD_HEADER,
+  POS_SESSION_HEADER,
+  SESSION_TOUCH_THROTTLE_MS,
+  sanitizeBuildId,
+  sanitizeSessionKey,
+} from "@/lib/pos/session-record";
 import {
   flushQueueEventRows,
   type QueueEventsUpsertClient,
@@ -503,6 +511,44 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, syncedCount: 0, receivedAt: new Date().toISOString() });
   }
 
+  // ── 2.7) 工作階段續期（2026-09-22，migration 0047）──────────────────────
+  //
+  // 寫入請求係「有人喺度做嘢」嘅最強訊號，所以喺呢度續期（60 秒節流）。
+  // `allowCreate: true` —— 舊分頁（開喺 login 加 header 之前）第一次寫入就會自動登記，
+  // 唔需要佢重新登入。GET 側（`/api/pos/state`）係 `allowCreate: false`，
+  // 保持「讀取唔創造狀態」。
+  //
+  // 🔴 零新增請求、零阻擋：`touchPosSession()` 永遠唔 throw；查唔到就當「未知」。
+  const syncSessionKey = sanitizeSessionKey(request.headers.get(POS_SESSION_HEADER));
+  const syncSessionTouch =
+    authorized && deviceClaims && deviceClaims.storeId === storeId && syncSessionKey
+      ? await touchPosSession({
+          storeId,
+          sessionKey: syncSessionKey,
+          buildId: sanitizeBuildId(request.headers.get(POS_BUILD_HEADER)),
+          account: deviceClaims.account ?? null,
+          role: deviceClaims.role ?? null,
+          ip,
+          userAgent: request.headers.get("user-agent"),
+          throttleMs: SESSION_TOUCH_THROTTLE_MS,
+          allowCreate: true,
+        })
+      : null;
+  /**
+   * 管理員已強制關閉呢個工作階段？
+   *
+   * 交畀 `decideOrderWrite()`（下面授權通道寫入閘）一齊判斷，**唔喺呢度直接拒** ——
+   * 咁「只擋新生意、結帳／退款／刪單／出紙照放行」呢條口徑就只有一份
+   *（`@/lib/pos/write-gate`，有單測）。
+   */
+  const sessionRevoked = Boolean(syncSessionTouch?.revokedAt);
+  if (sessionRevoked) {
+    console.warn(
+      `[pos/sync] 此工作階段已被管理員關閉（store=${storeId}, session=${syncSessionKey}）` +
+        "：只擋新生意，結帳／退款／刪單／出紙照放行。",
+    );
+  }
+
   // ── 2.55) 店內營業閘（2026-09-14，migration 0039）：匿名落單時服務端把關 ──
   //
   // 客人掃碼 / kiosk 落單係**匿名**（冇 POS 憑證），店員把「店內營業」撳成暫停之後，
@@ -928,11 +974,14 @@ export async function POST(request: Request) {
             isOnlineMirror: orderId.startsWith("ledger-"),
             storeClosed,
             shiftClosed,
+            // 2026-09-22：管理員強制關閉咗呢個工作階段（admin 頁）⇒ 唔准開新生意。
+            // 同一道閘嘅既有口徑：結帳 / 退款 / 刪單 / 出紙一律照准。
+            sessionRevoked,
           });
           if (!writeDecision.allow) {
             const message = describeWriteGateRejection(writeDecision.reason);
             console.warn(
-              `[pos/sync] 拒收關店／收工後嘅新生意 ${orderId}` +
+              `[pos/sync] 拒收關店／收工／已關閉工作階段嘅新生意 ${orderId}` +
                 `（${writeDecision.reason}，source=${orderSource}）`,
             );
             rejectBusiness(`訂單 ${text(order.localOrderNo, MAX_NAME_LEN) ?? orderId} ${message}`);

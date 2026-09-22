@@ -5,6 +5,8 @@ import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
 import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
 import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
+import { registerPosSession } from "@/lib/pos/session-registry-server";
+import { POS_BUILD_HEADER, POS_SESSION_HEADER, sanitizeBuildId, sanitizeSessionKey } from "@/lib/pos/session-record";
 import { loadMerchantGrants } from "@/lib/pos/merchant-modules-server";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
@@ -176,6 +178,28 @@ export async function POST(request: Request) {
         "落單會走匿名通道（只准建單 / 加單），收銀端讀取 /api/pos/state 會被拒。",
     );
   }
+
+  // ── 工作階段註冊（2026-09-22，migration 0047）──────────────────────────
+  //
+  // 呢度係**註冊嘅權威點**：server 喺呢一刻才知道「邊間店 + 邊個員工」，而 client
+  // 會帶 `x-pos-session`（每個分頁一個，存 sessionStorage）過嚟。
+  //
+  // 為何要註冊：管理員要知「邊間店開住幾個 POS 分頁、各自跑住邊個版本」
+  //（商家唔為意開咗多個分頁 ⇒ 舊分頁靜靜燒流量，2026-09-21 實測佔 egress 97%）。
+  //
+  // 🔴 零成本：註冊**借用**呢個登入請求，唔會多一次 round-trip。
+  //   · 舊 client 唔傳 header → `registerPosSession()` 直接回 false，唔查 DB。
+  //   · 失敗（未跑 migration / DB 打嗝）→ **靜默忽略**，唔可以令登入失敗。
+  await registerPosSession({
+    storeId: staffRow.merchant_id,
+    sessionKey: sanitizeSessionKey(request.headers.get(POS_SESSION_HEADER)) ?? "",
+    account: phone,
+    role,
+    // 🔴 客戶端內聯嘅版本（＝呢個分頁實際跑緊邊份 JS）。server 唔可能自己知。
+    buildId: sanitizeBuildId(request.headers.get(POS_BUILD_HEADER)),
+    ip,
+    userAgent: request.headers.get("user-agent"),
+  });
 
   return NextResponse.json({
     ok: true,
