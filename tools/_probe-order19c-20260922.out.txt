@@ -1,0 +1,212 @@
+### A. 今日訂單 id / 單號 / 狀態
+order-c917dc49     | 訂單01    | settled          | 外賣自取1       |    47 | 落單=2026-09-22 09:22:27 | 更新=2026-09-22 12:07:38
+order-a55accd3     | 訂單02    | settled          | MFOOD1      |    62 | 落單=2026-09-22 10:15:42 | 更新=2026-09-22 10:15:51
+ledger-416102ae-18f7-4454-a30a-3265f15232ef | 002     | settled          | A01         |    44 | 落單=2026-09-22 10:50:17 | 更新=2026-09-22 11:42:52
+order-992540ee     | 訂單03    | settled          | MFOOD2      |    62 | 落單=2026-09-22 11:37:46 | 更新=2026-09-22 11:37:58
+order-8e3a3219     | 訂單04    | settled          | A01         |    48 | 落單=2026-09-22 11:54:35 | 更新=2026-09-22 13:04:50
+order-23d6f960     | 訂單05    | settled          | A02         |   157 | 落單=2026-09-22 12:15:44 | 更新=2026-09-22 12:56:30
+order-6aa823ac     | 訂單06    | settled          | MFOOD3      |    57 | 落單=2026-09-22 12:27:51 | 更新=2026-09-22 12:28:07
+order-ceeb81a2     | 訂單07    | settled          | A03         |    92 | 落單=2026-09-22 12:36:12 | 更新=2026-09-22 12:37:20
+order-09f8460d     | 訂單08    | settled          | A03         |    46 | 落單=2026-09-22 12:39:45 | 更新=2026-09-22 13:18:12
+order-08d8356c     | 訂單09    | settled          | A04         |    62 | 落單=2026-09-22 12:42:10 | 更新=2026-09-22 13:28:10
+order-e1a2f8d1     | 訂單10    | settled          | A05         |   101 | 落單=2026-09-22 12:54:06 | 更新=2026-09-22 12:55:13
+order-bca97c20     | 訂單11    | settled          | A01         |    60 | 落單=2026-09-22 13:06:15 | 更新=2026-09-22 14:00:36
+order-cef39163     | 訂單12    | settled          | A02         |    62 | 落單=2026-09-22 13:14:08 | 更新=2026-09-22 13:55:47
+order-683e1511     | 訂單13    | settled          | A05         |    92 | 落單=2026-09-22 13:15:41 | 更新=2026-09-22 14:06:32
+ledger-c284fe72-9bff-4671-8978-5201f1cd3235 | 004     | settled          | A07         |    55 | 落單=2026-09-22 13:36:07 | 更新=2026-09-22 13:55:46
+order-d0a1c643     | 訂單14    | settled          | A03         |    44 | 落單=2026-09-22 13:41:29 | 更新=2026-09-22 14:12:50
+order-8aef13fe     | 訂單15    | settled          | A06         |   112 | 落單=2026-09-22 13:43:36 | 更新=2026-09-22 14:00:59
+order-c5678ac2     | 訂單16    | settled          | 外賣自取1       |    38 | 落單=2026-09-22 13:48:06 | 更新=2026-09-22 13:48:26
+order-5415a943     | 訂單17    | settled          | MFOOD4      |    66 | 落單=2026-09-22 13:50:04 | 更新=2026-09-22 13:50:18
+order-0db2bfab     | 訂單18    | settled          | A01         |    44 | 落單=2026-09-22 14:06:33 | 更新=2026-09-22 14:45:49
+order-8317dc18     | 訂單19    | sent_to_kitchen  | A01         |    99 | 落單=2026-09-22 17:33:11 | 更新=2026-09-22 18:00:06
+order-3b2d959f     | 訂單20    | settled          | A02         |    82 | 落單=2026-09-22 17:46:25 | 更新=2026-09-22 18:17:22
+order-926a1f25     | 訂單21    | settled          | 澳覓3         |   120 | 落單=2026-09-22 18:10:19 | 更新=2026-09-22 18:10:37
+order-8863b3e4     | 訂單22    | settled          | A02         |    61 | 落單=2026-09-22 18:17:50 | 更新=2026-09-22 18:56:36
+order-1ca1b890     | 訂單23    | settled          | 外賣自取1       |   107 | 落單=2026-09-22 18:21:56 | 更新=2026-09-22 18:23:05
+order-61c53f81     | 訂單24    | settled          | A01         |    46 | 落單=2026-09-22 18:31:51 | 更新=2026-09-22 18:56:36
+order-e3f89991     | 訂單25    | sent_to_kitchen  | A03         |    41 | 落單=2026-09-22 18:40:15 | 更新=2026-09-22 19:01:04
+order-4a68f292     | 訂單26    | settled          | A04         |    74 | 落單=2026-09-22 18:47:20 | 更新=2026-09-22 19:16:24
+order-8c3fbd01     | 訂單27    | settled          | MFOOD5      |    70 | 落單=2026-09-22 19:03:47 | 更新=2026-09-22 19:04:38
+order-c4da9e79     | 訂單27    | settled          | 澳覓4         |   103 | 落單=2026-09-22 19:15:19 | 更新=2026-09-22 19:15:24
+order-738e6f03     | 訂單28    | settled          | A01         |    36 | 落單=2026-09-22 19:28:51 | 更新=2026-09-22 19:29:11
+order-68264985     | 訂單29    | sent_to_kitchen  | A01         |    98 | 落單=2026-09-22 19:33:30 | 更新=2026-09-22 19:35:59
+count=32
+重複單號: {"訂單27":2}
+
+### B. 今日 pos_queue_events（type / status）
+{
+  code: '42501',
+  details: null,
+  hint: 'Grant the required privileges to the current role with: GRANT SELECT ON public.pos_queue_events TO anon;',
+  message: 'permission denied for table pos_queue_events'
+}
+
+### C. 全部 receipt 類 job（不限日期）
+[
+ {
+  "order_no": "訂單26",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "status": "printed",
+  "finished_at": "2026-09-22T11:16:37.525+00:00",
+  "created_at": "2026-09-22T11:16:36.481+00:00",
+  "once_key": null
+ },
+ {
+  "order_no": "訂單15",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "status": "printed",
+  "finished_at": "2026-09-22T06:01:01.716+00:00",
+  "created_at": "2026-09-22T06:01:00.611+00:00",
+  "once_key": null
+ },
+ {
+  "order_no": "訂單07",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "status": "printed",
+  "finished_at": "2026-09-22T04:37:22.136+00:00",
+  "created_at": "2026-09-22T04:37:20.735+00:00",
+  "once_key": null
+ },
+ {
+  "order_no": "交班單 2026-09-21-01",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "status": "printed",
+  "finished_at": "2026-09-21T13:37:19.933+00:00",
+  "created_at": "2026-09-21T13:37:18.324+00:00",
+  "once_key": null
+ },
+ {
+  "order_no": "訂單17",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "status": "printed",
+  "finished_at": "2026-09-21T13:17:29.215+00:00",
+  "created_at": "2026-09-21T13:17:27.518+00:00",
+  "once_key": null
+ }
+]
+
+### D. 訂單22 / 24 / 27 嘅所有 print job（含 kitchen）
+[
+ {
+  "order_no": "訂單27",
+  "order_id": "order-c4da9e79",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-22T11:15:19.172+00:00",
+  "finished_at": "2026-09-22T11:15:21.083+00:00"
+ },
+ {
+  "order_no": "訂單27",
+  "order_id": "order-8c3fbd01",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-22T11:03:47.721+00:00",
+  "finished_at": "2026-09-22T11:04:37.799+00:00"
+ },
+ {
+  "order_no": "訂單24",
+  "order_id": "order-61c53f81",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-22T10:31:51.54+00:00",
+  "finished_at": "2026-09-22T10:31:52.964+00:00"
+ },
+ {
+  "order_no": "訂單22",
+  "order_id": "order-8863b3e4",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-22T10:17:50.356+00:00",
+  "finished_at": "2026-09-22T10:17:51.913+00:00"
+ },
+ {
+  "order_no": "訂單20",
+  "order_id": "order-3b2d959f",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-22T09:46:25.167+00:00",
+  "finished_at": "2026-09-22T09:46:42.408+00:00"
+ },
+ {
+  "order_no": "訂單19",
+  "order_id": "order-8317dc18",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-22T09:33:11.542+00:00",
+  "finished_at": "2026-09-22T09:33:12.884+00:00"
+ },
+ {
+  "order_no": "訂單22",
+  "order_id": "order-863e9080",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-21T12:53:12.562+00:00",
+  "finished_at": "2026-09-21T12:53:14.289+00:00"
+ },
+ {
+  "order_no": "訂單20",
+  "order_id": "order-c1842143",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-21T12:50:05.748+00:00",
+  "finished_at": "2026-09-21T12:50:07.475+00:00"
+ },
+ {
+  "order_no": "訂單19",
+  "order_id": "order-7679e0eb",
+  "kind": null,
+  "ticket_type": "addon",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-21T12:16:50.023+00:00",
+  "finished_at": "2026-09-21T12:16:51.367+00:00"
+ },
+ {
+  "order_no": "訂單19",
+  "order_id": "order-7679e0eb",
+  "kind": null,
+  "ticket_type": "addon",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-21T12:15:48.722+00:00",
+  "finished_at": "2026-09-21T12:15:50.467+00:00"
+ },
+ {
+  "order_no": "訂單19",
+  "order_id": "order-7679e0eb",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "created_at": "2026-09-21T11:52:06.33+00:00",
+  "finished_at": "2026-09-21T11:52:07.455+00:00"
+ }
+]

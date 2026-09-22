@@ -1,0 +1,838 @@
+anon key OK (iyrywzormzisyppkokbi)
+
+=== 今日 pos_orders === HTTP 200 len=7633
+rows=32
+[
+ {
+  "local_order_no": "訂單01",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "外賣自取1",
+  "total": 47,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T01:22:27.759+00:00",
+  "updated_at": "2026-09-22T04:07:38.236+00:00"
+ },
+ {
+  "local_order_no": "訂單02",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "MFOOD1",
+  "total": 62,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T02:15:42.946+00:00",
+  "updated_at": "2026-09-22T02:15:51.061+00:00"
+ },
+ {
+  "local_order_no": "002",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A01",
+  "total": 44,
+  "source": "pos",
+  "online_order_id": "416102ae-18f7-4454-a30a-3265f15232ef",
+  "created_at": "2026-09-22T02:50:17.840014+00:00",
+  "updated_at": "2026-09-22T03:42:52.272+00:00"
+ },
+ {
+  "local_order_no": "訂單03",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "MFOOD2",
+  "total": 62,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T03:37:46.588+00:00",
+  "updated_at": "2026-09-22T03:37:58.413+00:00"
+ },
+ {
+  "local_order_no": "訂單04",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A01",
+  "total": 48,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T03:54:35.376+00:00",
+  "updated_at": "2026-09-22T05:04:50.13+00:00"
+ },
+ {
+  "local_order_no": "訂單05",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A02",
+  "total": 157,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T04:15:44.718+00:00",
+  "updated_at": "2026-09-22T04:56:30.485+00:00"
+ },
+ {
+  "local_order_no": "訂單06",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "MFOOD3",
+  "total": 57,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T04:27:51.723+00:00",
+  "updated_at": "2026-09-22T04:28:07.283+00:00"
+ },
+ {
+  "local_order_no": "訂單07",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A03",
+  "total": 92,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T04:36:12.86+00:00",
+  "updated_at": "2026-09-22T04:37:20.009+00:00"
+ },
+ {
+  "local_order_no": "訂單08",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A03",
+  "total": 46,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T04:39:45.622+00:00",
+  "updated_at": "2026-09-22T05:18:12.501+00:00"
+ },
+ {
+  "local_order_no": "訂單09",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A04",
+  "total": 62,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T04:42:10.014+00:00",
+  "updated_at": "2026-09-22T05:28:10.793+00:00"
+ },
+ {
+  "local_order_no": "訂單10",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A05",
+  "total": 101,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T04:54:06.003+00:00",
+  "updated_at": "2026-09-22T04:55:13.608+00:00"
+ },
+ {
+  "local_order_no": "訂單11",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A01",
+  "total": 60,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:06:15.061+00:00",
+  "updated_at": "2026-09-22T06:00:36.827+00:00"
+ },
+ {
+  "local_order_no": "訂單12",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A02",
+  "total": 62,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:14:08.797+00:00",
+  "updated_at": "2026-09-22T05:55:47.73+00:00"
+ },
+ {
+  "local_order_no": "訂單13",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A05",
+  "total": 92,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:15:41.229+00:00",
+  "updated_at": "2026-09-22T06:06:32.995+00:00"
+ },
+ {
+  "local_order_no": "004",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A07",
+  "total": 55,
+  "source": "pos",
+  "online_order_id": "c284fe72-9bff-4671-8978-5201f1cd3235",
+  "created_at": "2026-09-22T05:36:07.052916+00:00",
+  "updated_at": "2026-09-22T05:55:46.733+00:00"
+ },
+ {
+  "local_order_no": "訂單14",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A03",
+  "total": 44,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:41:29.91+00:00",
+  "updated_at": "2026-09-22T06:12:50.28+00:00"
+ },
+ {
+  "local_order_no": "訂單15",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A06",
+  "total": 112,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:43:36.341+00:00",
+  "updated_at": "2026-09-22T06:00:59.894+00:00"
+ },
+ {
+  "local_order_no": "訂單16",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "外賣自取1",
+  "total": 38,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:48:06.301+00:00",
+  "updated_at": "2026-09-22T05:48:26.906+00:00"
+ },
+ {
+  "local_order_no": "訂單17",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "MFOOD4",
+  "total": 66,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T05:50:04.34+00:00",
+  "updated_at": "2026-09-22T05:50:18.546+00:00"
+ },
+ {
+  "local_order_no": "訂單18",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A01",
+  "total": 44,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T06:06:33.155+00:00",
+  "updated_at": "2026-09-22T06:45:49.481+00:00"
+ },
+ {
+  "local_order_no": "訂單19",
+  "status": "sent_to_kitchen",
+  "fulfillment_status": null,
+  "table_name": "A01",
+  "total": 99,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T09:33:11.457+00:00",
+  "updated_at": "2026-09-22T10:00:06.688+00:00"
+ },
+ {
+  "local_order_no": "訂單20",
+  "status": "settled",
+  "fulfillment_status": null,
+  "table_name": "A02",
+  "total": 82,
+  "source": "pos",
+  "online_order_id": null,
+  "created_at": "2026-09-22T09:46:25.031+00:00",
+  "updated_at": "2026-09-22T10:17:22.59
+
+=== 搵 19/23 === HTTP 200 len=10848
+rows=5
+[
+ {
+  "id": "order-74b5d6ad",
+  "local_order_no": "訂單23",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "1b2e0a5b-a6de-45ce-8666-270d0a6eb203",
+  "table_name": "MFOOD4",
+  "status": "settled",
+  "items": [
+   {
+    "name": "咸蛋肉餅飯",
+    "price": 42,
+    "quantity": 1,
+    "menuItemId": "ledger-1116df21-7fdc-4fdb-a656-1e5dbff48ccf",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "盒",
+    "price": 1,
+    "quantity": 4,
+    "menuItemId": "ledger-047c1779-fcff-4772-99c0-8e4420f37325",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "袋",
+    "price": 1,
+    "quantity": 4,
+    "menuItemId": "ledger-753437e1-21d2-4c94-ba04-07d70a320ef6",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   }
+  ],
+  "subtotal": 50,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 50,
+  "payment_method": "Mpay",
+  "created_at": "2026-09-19T13:17:45.878+00:00",
+  "updated_at": "2026-09-19T13:17:56.979+00:00",
+  "prepaid_amount": 0,
+  "online_order_id": null,
+  "order_note": null,
+  "fulfillment_status": null,
+  "sent_to_kitchen_at": "2026-09-19T13:17:45.878+00:00",
+  "served_at": "2026-09-19T13:17:48.735+00:00",
+  "source": "pos",
+  "party_size": 1,
+  "comp_note": null,
+  "comped_at": null,
+  "client_updated_at": "2026-09-19T13:17:48.735+00:00",
+  "discount_note": null,
+  "member_customer_id": null,
+  "member_deduction_avos": 0,
+  "member_deduct_txn_id": null,
+  "reopen_count": 0,
+  "reopened_at": null,
+  "reopen_reason": null,
+  "refund_records": null,
+  "refunded_amount": null,
+  "voided_items": null
+ },
+ {
+  "id": "order-3aa65611",
+  "local_order_no": "訂單23",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "979b1041-76b4-4595-b3d8-555f980500e4",
+  "table_name": "MFOOD1",
+  "status": "settled",
+  "items": [
+   {
+    "name": "表嫂肉餅飯",
+    "price": 64,
+    "quantity": 1,
+    "menuItemId": "ledger-851eec9a-ae4f-4826-8262-ff2b03232e8b",
+    "printerGroup": "kitchen",
+    "selectedSpecs": [
+     {
+      "groupId": "e7dadbc8-3b72-44b2-94f6-d1ea783719a2",
+      "optionId": "4a89b69c-6e12-4d98-bda7-dd7b7907b650",
+      "groupName": "肉餅種類",
+      "priceDelta": 0,
+      "optionLabel": "咸蛋"
+     },
+     {
+      "groupId": "fe76bbf7-9288-46f1-bc40-b8d18d363176",
+      "optionId": "ad6a2ea6-38ee-4289-a203-224156c12d44",
+      "groupName": "飯種類",
+      "priceDelta": 0,
+      "optionLabel": "白飯"
+     },
+     {
+      "groupId": "96643574-d2de-41a2-b3ab-846d4b4b14ee",
+      "optionId": "0a2fc34b-40d8-4693-ac8f-8b1d60afe66e",
+      "groupName": "飲料",
+      "priceDelta": 0,
+      "optionLabel": "湯"
+     },
+     {
+      "groupId": "343f5bef-196a-4764-9a19-bcba3b03bfe6",
+      "optionId": "20945e48-6877-41e1-b2ba-934e6f0b8894",
+      "groupName": "熱定凍",
+      "priceDelta": 0,
+      "optionLabel": "熱"
+     },
+     {
+      "groupId": "a1fb2286-e28c-4296-b007-0b138d18ed61",
+      "optionId": "31c937d5-afaa-4163-8f45-8ea6b8a4fd2d",
+      "groupName": "煎定蒸",
+      "priceDelta": 0,
+      "optionLabel": "煎"
+     },
+     {
+      "groupId": "4ef047c2-1089-4994-b35e-50eea5ff47bb",
+      "optionId": "3a384822-6223-4fd2-a32d-c77397633353",
+      "groupName": "加購",
+      "priceDelta": 5,
+      "optionLabel": "蒸蛋"
+     },
+     {
+      "groupId": "4ef047c2-1089-4994-b35e-50eea5ff47bb",
+      "optionId": "8dc10f7b-334e-4918-b9aa-23ffc1c6db45",
+      "groupName": "加購",
+      "priceDelta": 10,
+      "optionLabel": "油菜"
+     },
+     {
+      "groupId": "39dc7d7e-fdd0-409b-abed-ab5e070e961f",
+      "optionId": "c7fc72e0-ce6c-459e-a910-8e0c3e5ab98e",
+      "groupName": "要唔要膠袋?",
+      "priceDelta": 1,
+      "optionLabel": "要"
+     }
+    ]
+   },
+   {
+    "name": "盒",
+    "price": 1,
+    "quantity": 5,
+    "menuItemId": "ledger-047c1779-fcff-4772-99c0-8e4420f37325",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "袋",
+    "price": 1,
+    "quantity": 8,
+    "menuItemId": "ledger-753437e1-21d2-4c94-ba04-07d70a320ef6",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   }
+  ],
+  "subtotal": 77,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 77,
+  "payment_method": "Mpay",
+  "created_at": "2026-09-21T12:54:23.7+00:00",
+  "updated_at": "2026-09-21T12:54:39.155+00:00",
+  "prepaid_amount": 0,
+  "online_order_id": null,
+  "order_note": null,
+  "fulfillment_status": null,
+  "sent_to_kitchen_at": "2026-09-21T12:54:23.7+00:00",
+  "served_at": "2026-09-21T12:54:27.074+00:00",
+  "source": "pos",
+  "party_size": 1,
+  "comp_note": null,
+  "comped_at": null,
+  "client_updated_at": "2026-09-21T12:54:27.074+00:00",
+  "discount_note": null,
+  "member_customer_id": null,
+  "member_deduction_avos": 0,
+  "member_deduct_txn_id": null,
+  "reopen_count": 0,
+  "reopened_at": null,
+  "reopen_reason": null,
+  "refund_records": null,
+  "refunded_amount": null,
+  "voided_items": null
+ },
+ {
+  "id": "order-7679e0eb",
+  "local_order_no": "訂單19",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "table-a02",
+  "table_name": "A02",
+  "status": "settled",
+  "items": [
+   {
+    "name": "古法土魷肉餅飯",
+    "price": 45,
+    "quantity": 1,
+    "menuItemId": "ledger-120d6782-8640-40eb-b13b-882683ee71c4",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "快闪菜（椒盐九肚鱼）",
+    "price": 54,
+    "quantity": 1,
+    "menuItemId": "ledger-4b0f606c-7b0f-49b9-a9cf-e315fd8dfb1b",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "白飯",
+    "price": 10,
+    "quantity": 1,
+    "menuItemId": "ledger-72c73217-da3e-4b93-adfd-6a134d970795",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "油菜 生菜",
+    "price": 10,
+    "quantity": 1,
+    "menuItemId": "108c37d9-2a55-423b-ae54-66d7ccfb9a18",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   }
+  ],
+  "subtotal": 119,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 119,
+  "payment_method": "會員餘額",
+  "created_at": "2026-
+
+=== 今日 pos_print_jobs === HTTP 200 len=11904
+rows=38
+[
+ {
+  "order_no": "訂單29",
+  "kind": null,
+  "ticket_type": "addon",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T11:34:00.657+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T11:33:58.935+00:00",
+  "updated_at": "2026-09-22T11:34:00.657+00:00"
+ },
+ {
+  "order_no": "訂單28",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T11:28:52.475+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T11:28:51.18+00:00",
+  "updated_at": "2026-09-22T11:28:52.475+00:00"
+ },
+ {
+  "order_no": "訂單26",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "printer_group": "receipt",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T11:16:37.525+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T11:16:36.481+00:00",
+  "updated_at": "2026-09-22T11:16:37.525+00:00"
+ },
+ {
+  "order_no": "訂單27",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T11:15:21.083+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T11:15:19.172+00:00",
+  "updated_at": "2026-09-22T11:15:21.083+00:00"
+ },
+ {
+  "order_no": "訂單27",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T11:04:37.799+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T11:03:47.721+00:00",
+  "updated_at": "2026-09-22T11:04:37.799+00:00"
+ },
+ {
+  "order_no": "訂單26",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:47:21.783+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:47:20.296+00:00",
+  "updated_at": "2026-09-22T10:47:21.783+00:00"
+ },
+ {
+  "order_no": "訂單25",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:40:16.949+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:40:15.431+00:00",
+  "updated_at": "2026-09-22T10:40:16.949+00:00"
+ },
+ {
+  "order_no": "訂單24",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:31:52.964+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:31:51.54+00:00",
+  "updated_at": "2026-09-22T10:31:52.964+00:00"
+ },
+ {
+  "order_no": "訂單23",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:21:58.413+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:21:56.866+00:00",
+  "updated_at": "2026-09-22T10:21:58.413+00:00"
+ },
+ {
+  "order_no": "訂單22",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:17:51.913+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:17:50.356+00:00",
+  "updated_at": "2026-09-22T10:17:51.913+00:00"
+ },
+ {
+  "order_no": "訂單21",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:10:20.731+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:10:19.482+00:00",
+  "updated_at": "2026-09-22T10:10:20.731+00:00"
+ },
+ {
+  "order_no": "005",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:07:40.281+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:07:39.302+00:00",
+  "updated_at": "2026-09-22T10:07:40.281+00:00"
+ },
+ {
+  "order_no": "005",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T10:04:31.464+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T10:04:30.33+00:00",
+  "updated_at": "2026-09-22T10:04:31.464+00:00"
+ },
+ {
+  "order_no": "訂單20",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T09:46:42.408+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T09:46:25.167+00:00",
+  "updated_at": "2026-09-22T09:46:42.408+00:00"
+ },
+ {
+  "order_no": "訂單19",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T09:33:12.884+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T09:33:11.542+00:00",
+  "updated_at": "2026-09-22T09:33:12.884+00:00"
+ },
+ {
+  "order_no": "訂單15",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "小票機 · 通用 80mm 熱敏打印機",
+  "printer_group": "receipt",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+  "finished_at": "2026-09-22T06:01:01.716+00:00",
+  "last_error": null,
+  "created_at": "2026-09-22T06:01:00.611+00:00",
+  "updated_at": "2026-09-22T06:01:01.716+00:00"
+ },
+ {
+  "order_no": "訂單17",
+  "kind": null,
+  "ticket_type": "normal",
+  "printer_name": "printer",
+  "printer_group": "kitchen",
+  "status": "printed",
+  "attempts": 0,
+  "claimed_by": null,
+
+=== status 分佈原始 === HTTP 200 len=910
+rows=38
+[
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ },
+ {
+  "status": "printed"
+ }
+]
+

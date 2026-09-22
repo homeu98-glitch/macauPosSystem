@@ -72,6 +72,7 @@ import {
   buildLabelPrintJobs,
   buildReceiptPrintJobs,
   buildVoidPrintJobsForOrder,
+  describeNoReceiptPrinterError,
   isPrintContentEnabled,
   normalizePrintJobStatus,
   reprintReceiptForOrder,
@@ -3642,7 +3643,25 @@ export function PosApp() {
     // docs/111：入隊時按 coalesceKey 合併（同 type + 同目標嘅舊 pending 會被取代），
     // 取代舊版「flush 時同 entityId 淨推最新一條」嘅去重（會留低永久 pending 嘅輸家，
     // 仲可以令 ORDER_SETTLED 贏過 ORDER_CREATED → 離線單喺雲端消失）。
-    const nextQueue = enqueueEvents(queue, stamped);
+    //
+    // 🔴🔴 2026-09-22 修（結帳「有單冇錢」）：base **一定要用 `loadQueue()`**，
+    //    唔可以用 React state `queue`。
+    //
+    // 病徵（生產證據見 tools/_probe-order19*-20260922.out.txt）：
+    //   結帳 handler 同一個 tick 內 `pushEvents()` 會被呼叫**兩次** ——
+    //     ① `pushEvents([paymentEvent])`（ORDER_SETTLED，見 `confirmPayment`）
+    //     ② `printReceipt()` → `enqueuePrintJobs()` → `pushEvents([...printJobEvents])`
+    //   兩次都讀**同一個 render 嘅 `queue` 快照**（`setQueue` 要等 handler 完結先 flush）。
+    //   第 ② 次以「舊快照 + 自己嗰批」重建整條隊列再 `saveQueue()` ⇒
+    //   **第 ① 次啱啱入隊嘅 `ORDER_SETTLED` 被靜默冚走**（事件由未上雲變成唔存在）。
+    //   後果：雲端 `pos_orders` 永遠停留喺 `sent_to_kitchen` ⇒ 報表／交班（純雲端）
+    //   搵唔到嗰張單，收銀端卻顯示「已完成」。
+    //
+    // 同 3602 行 `syncNow()` 嘅註釋係**同一個病根**（當年已修過一次：唔可以攞
+    // stale 嘅 React state queue 做推送根據）—— 呢度係漏咗嘅第二處。
+    // `loadQueue()` 係唯一真源（`persistQueue` 每次都寫落去），以佢做 base 之後
+    // 同一 tick 多次 `pushEvents()` 會正確累加，跨 handler 亦唔會互相覆蓋。
+    const nextQueue = enqueueEvents(loadQueue(), stamped);
     persistQueue(nextQueue);
     // 觸發 sync flush worker（見 src/lib/pos/sync-flush.ts）。
     // 唔 await —— 唔阻 render / 唔阻下一個 handler；flush 係 fire-and-forget。
@@ -3730,26 +3749,34 @@ export function PosApp() {
 
   /** 把 print jobs 落本機隊列 + 推上雲（PRINT_JOB_CREATED）。回傳入隊張數。
    *
-   * 🔴 2026-09-21：先過「內容唯一鍵」去重（`claimOncePrintJobs`）—— 同一張單 ×
-   * 同一件事 × 同一部打印機只出一張。只對自動路徑主動寫咗 `onceKey` 嘅 job 生效，
-   * 手動補打（冇 `onceKey`）一律照樣入隊（見 `@/lib/pos/print-dedupe`）。 */
+   * 🔴 2026-09-22 收口：本函式由「自己再實作一次」改為**委派
+   * `appendPrintJobsWithSync()`**（`@/lib/pos/print-job-enqueue`）—— 全店只准一條
+   * 「落本機 + 上雲」路徑。
+   *
+   * 【病徵】收據（結帳自動 / 「打印收據」掣 / 補打）行呢條自製路徑，
+   * 廚房單（落單）行 `appendPrintJobsWithSync()`。實測（2026-09-22 生產
+   * `pos_print_jobs`）：今日 38 張 job 之中 **35 張 kitchen 全部 `printed`**，
+   * 而 receipt **只有 3 張**（且 `once_key` 全為 NULL ⇒ 全部係人手補打），
+   * 對比 28 張已結帳單 ⇒ 自動結帳收據**一張都冇上過雲**，
+   * 但打印中心照樣顯示綠色「已發送」（本機樂觀狀態）⇒ 客人永遠冇紙、店員零線索。
+   *
+   * 【舊寫法兩個實質差異】
+   *   ① base 用 React state `queue`（同一個 tick 內可能係 stale 快照）——
+   *      同上面 `pushEvents()`／`syncNow()` 嘅病根一樣；
+   *   ② `persistPrintJobs([...kept, ...printJobs])` 帶住一份 stale 嘅 state 陣列，
+   *      同 `persistMergedPrintJobs()`（以 localStorage 為真源 + tombstone 過濾）
+   *      係兩套語義，日後加欄位極容易只改一邊（同「加 pos_orders 欄位要改四條
+   *      讀取路徑」同一類陷阱）。
+   *
+   * 【委派之後仍然做齊】內容唯一鍵去重（`receipt:${reopenCount}` 世代）、
+   * merge 落 localStorage、推 `PRINT_JOB_CREATED`、dispatch
+   * `pos-print-jobs-changed`（打印中心即時刷新）。
+   * 呢度只補一步：同步返 React state，令同一個 tick 嘅畫面即刻一致。 */
   function enqueuePrintJobs(jobs: PrintJob[]): number {
     if (jobs.length === 0) return 0;
-    const kept = claimOncePrintJobs(jobs);
-    if (kept.length === 0) return 0;
-    const timestamp = new Date().toISOString();
-    persistPrintJobs([...kept, ...printJobs]);
-    pushEvents(
-      kept.map<QueueEvent>((printJob) => ({
-        id: uid("evt"),
-        type: "PRINT_JOB_CREATED",
-        entityId: printJob.id,
-        payload: printJob,
-        status: "pending",
-        createdAt: timestamp,
-      })),
-    );
-    return kept.length;
+    const count = appendPrintJobsWithSync(jobs);
+    setPrintJobs(loadPrintJobs());
+    return count;
   }
 
   /** 當前工作台嘅訂單（已落單 / 已結帳都算；冇就 null）。 */
@@ -4437,16 +4464,27 @@ export function PosApp() {
     if (!bootstrap) return;
     // 結帳收據總開關（2026-09-08）：設備設置 → 打印開關設置可獨立關閉。關閉後結帳唔出收據。
     // 手動掣（點餐介面「打印收據」）唔受呢個影響，照樣可出單。
-    if (!isPrintContentEnabled("receipt")) return;
+    //
+    // 🔴 2026-09-22：「靜默唔出紙」正是商家回報「所有收據都無法打印」時**最難查**嘅一環
+    //    （現場零提示、打印中心又照顯示綠色「已發送」）。所以呢兩個 early return
+    //    一律要**講出聲**，唔可以再靠 dev-only `console.warn`。
+    if (!isPrintContentEnabled("receipt")) {
+      setToast({
+        tone: "info",
+        message:
+          "已結帳，但「結帳收據」自動打印已關閉（設備設置 → 打印開關）。要印可按「打印收據」或補打帳單。",
+      });
+      return;
+    }
     // 🔴 `once: true`（2026-09-21 實案）：呢度係**自動**結帳收據，同 Ledger 回傳嗰條
     // 完成收據係同一件事；兩個 POS 視窗又各有一份 realm 級守衛 ⇒ 一張單曾出 4 張。
     // 加咗內容唯一鍵（`receipt:${reopenCount}`）之後只會出一張；
     // 手動補打走 `reprintReceiptForOrder`／補打帳單掣，**唔帶** onceKey，照樣撳幾次印幾次。
     const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap, { once: true });
     if (nextPrintJobs.length === 0) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn("[printReceipt] No receipt printer configured — skipping receipt print");
-      }
+      // 冇啟用嘅 `role === "receipt"` 打印機 ⇒ builder 回空。以前只喺 dev log，
+      // 生產環境完全靜默（客人白等、店員以為印咗）。補上診斷文案。
+      setToast({ tone: "error", message: `已結帳，但收據印唔出：${describeNoReceiptPrinterError()}` });
       return;
     }
 
