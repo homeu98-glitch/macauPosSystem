@@ -258,6 +258,48 @@ export async function GET(request: Request) {
   const legacyQueueSuppressed = isLegacyFullState;
 
   /**
+   * 🩹🩹 2026-09-22 **P0b 節流**（第二次覆核後加，比 P0 更重要）。
+   *
+   * ## 實測（2026-09-22 17:30 覆核，14:05 部署 P0 之後）
+   *
+   * P0 成功把舊分頁每次由 **843 KB → 404 KB（−52%）**，但——
+   * 🔴 **拉取頻率完全冇變**：仍係 **1.79 次/分鐘（約每 33 秒）**，
+   * 即 **43.5 MB/小時**，佔該時段全部 egress **51%**。
+   * 原因：舊 JS 冇輪詢閘（2026-09-21 修好嘅自激迴圈只喺新 bundle 生效），
+   * 所以「減 bytes」只係一半答案，**必須同時絞住頻率**。
+   *
+   * ## 做法：同一部機 90 秒內再次做 legacy 全量拉取 → 回**空骨架**
+   *
+   * 空骨架對 client 係 **no-op**（實測 merge 語義）：
+   *   · `orders: []` → `mergeOrderLists(local, current, [])` ＝ 不變；
+   *   · `queue: []` → client 保留本地 queue（見 `pos-app` 嘅 merge 迴圈）；
+   *   · `printJobs: []` → `persistPrintJobs([])` 早退 ＝ 不變；
+   *   · `localSettings / deviceConfig / 模板 / 備註: null` → 全部有 `if (…)` 守門，跳過。
+   *
+   * 🔴🔴 **一定要帶 `incremental: true`**：否則客戶端會以為「雲端真係冇呢啲單」，
+   * 而**孤兒單對賬會把全店未變更過嘅單一次過隔離**（收銀枱面清空）。
+   * 呢個正係 `state-incremental-contract.test.ts` 守住嗰條鐵律。
+   *
+   * ## 為何 key 用 `ip + user-agent` 而唔係淨 IP
+   *
+   * 店內多部裝置通常共用同一個對外 IP（NAT）⇒ 淨用 IP 會誤鎖新版裝置。
+   * 加上 UA 之後，同一部機／同一個瀏覽器才互相節流。
+   * （新 bundle 唔受影響：佢傳 `skipQueue=1` ⇒ `isLegacyFullState` 為 false。）
+   *
+   * ## 回滾
+   *
+   * 刪走 `legacyThrottled` 嘅判斷（或把 `LEGACY_FULL_MIN_GAP_MS` 設成 0）。
+   */
+  const LEGACY_FULL_MIN_GAP_MS = 90_000;
+  const legacyThrottled =
+    legacyQueueSuppressed &&
+    !rateLimit(
+      `pos-state-legacy-pull:${ip}:${(request.headers.get("user-agent") ?? "").slice(0, 40)}`,
+      1,
+      LEGACY_FULL_MIN_GAP_MS,
+    );
+
+  /**
    * 🆕 2026-09-22 **P1 增量拉取**：`since=<ISO>` ⇒ 只回「變更過」嘅差量。
    *
    * ## 為何
@@ -280,7 +322,60 @@ export async function GET(request: Request) {
    */
   const sinceRaw = searchParams.get("since")?.trim() || null;
   const since = sinceRaw ? toUtcIso(sinceRaw) : null;
-  const incremental = Boolean(since) && !ordersOnly;
+  /**
+   * 🩹 2026-09-22 覆核修（**我上一版嘅 bug**）：`ordersOnly` 之下**有 `since` 都要做增量**。
+   *
+   * 原本寫 `Boolean(since) && !ordersOnly`，但訂單頁 backfill 正正係
+   * `ordersOnly=1&since=…`（`local-orders-panel.tsx`，P3 改動）⇒ `since` 被無視，
+   * **P3 完全失效**：實測仍然每次拉 200 張完整訂單 = **289 KB × 0.37 次/分 ≈ 6.4 MB/小時**。
+   *
+   * 安全論證：**只有主動傳 `since` 嘅 caller 才受影響**。
+   * 報表／交班／對賬守護一律唔傳 `since`（佢哋要完整區間）⇒ 行為逐位元不變。
+   * 「完整區間」嘅語義由「唔傳 since」保證，而唔係由 `ordersOnly` 保證。
+   */
+  const incremental = Boolean(since);
+
+  /**
+   * 🩹 舊分頁節流（P0b）命中 → 回**空骨架**，即刻結束。
+   *
+   * 空骨架 ＝ 對 client no-op（見 `legacyThrottled` 嘅長註釋），
+   * 所以舊分頁照樣運作（Realtime 推送嘅新單仍然會到），只係唔會每 33 秒重拉全世界。
+   */
+  if (legacyThrottled) {
+    return withSessionHeaders(
+      jsonWithEgressLog(
+        "pos/state",
+        {
+          ok: true,
+          source: "supabase",
+          orders: [],
+          queue: [],
+          printJobs: [],
+          deviceConfig: null,
+          localSettings: null,
+          printTemplatesServer: null,
+          notePresetsServer: null,
+          // 🔴 見上面：唔帶呢個 flag 會令客戶端誤判「雲端冇呢啲單」而隔離全店未結單。
+          incremental: true,
+          legacyThrottled: true,
+        },
+        {
+          mode: "legacyThrottled",
+          orders: 0,
+          queue: 0,
+          printJobs: 0,
+          skipQueue: 1,
+          legacy: 1,
+          legacyQueueOff: 1,
+          incr: 1,
+          limit,
+          ip,
+          src: stateSrc,
+        },
+        { storeId },
+      ),
+    );
+  }
 
   // 報表區間過濾：只回傳 created_at **或** updated_at **或** reopened_at 落在 [start, end]
   // 內嘅訂單（OR 語義）。
@@ -345,8 +440,40 @@ export async function GET(request: Request) {
         columns: ordersColumns,
       });
 
-  // 報表分頁只拉訂單，跳過其餘 table。
-  // （`ordersOnly` 之下 `incremental` 一定 false ⇒ `ordersInRangePromise` 一定存在。）
+  // 報表分頁／訂單頁 backfill 只拉訂單，跳過其餘 table。
+  if (ordersOnly && incrementalOrdersPromise) {
+    // 🩹 增量（訂單頁 backfill 傳 `since`）→ 單腿 `updated_at > since`，通常 0–3 行。
+    const { data, error } = await incrementalOrdersPromise;
+    const rows = error ? [] : ((data ?? []) as unknown as OrderRow[]);
+    const truncated = Boolean(error) || isIncrementalTruncated(rows.length, limit);
+    return withSessionHeaders(
+      jsonWithEgressLog(
+        "pos/state",
+        {
+          ok: true,
+          source: "supabase",
+          orders: rows.map(mapOrderRow),
+          incremental: true,
+          ...(truncated ? { truncated: true } : {}),
+        },
+        {
+          mode: "ordersOnly",
+          orders: rows.length,
+          limit,
+          offset,
+          columns: ordersColumns ?? "default",
+          start: rangeStartRaw ?? "-",
+          end: rangeEndRaw ?? "-",
+          incr: 1,
+          truncated: truncated ? 1 : 0,
+          // 🔎 2026-09-22 覆核加：ordersOnly 原本冇記 ip／src ⇒ 38 MB 無法歸因。
+          ip,
+          src: stateSrc,
+        },
+        { storeId },
+      ),
+    );
+  }
   if (ordersOnly && ordersInRangePromise) {
     const ordersInRange = await ordersInRangePromise;
     const orders = ordersInRange.error ? [] : ordersInRange.orders.map(mapOrderRow);
@@ -362,7 +489,12 @@ export async function GET(request: Request) {
           columns: ordersColumns ?? "default",
           start: rangeStartRaw ?? "-",
           end: rangeEndRaw ?? "-",
+          incr: 0,
+          // 🔎 見上：冇 ip／src 就追唔到「邊條路徑／邊部機」食咗流量。
+          ip,
+          src: stateSrc,
         },
+        { storeId },
       ),
     );
   }

@@ -37,11 +37,21 @@ const SYNC_CLIENT = readFileSync(
 );
 
 describe("/api/pos/state ── 增量拉取（P1）", () => {
-  it("🔴 有讀 `since` 參數，而且 `ordersOnly` 一律唔做增量（報表／對賬要完整區間）", () => {
+  it("🔴 有 `since` 就增量（**包括 ordersOnly**）；「完整區間」由「唔傳 since」保證", () => {
     assert.ok(/searchParams\.get\("since"\)/.test(STATE_ROUTE), "冇讀 since ⇒ 增量功能消失");
     assert.ok(
-      /const incremental = Boolean\(since\) && !ordersOnly/.test(STATE_ROUTE),
-      "`ordersOnly` 冇被排除 ⇒ 報表／交班／對賬守護會攞到不完整區間（靜默少錢）",
+      /const incremental = Boolean\(since\);/.test(STATE_ROUTE),
+      "增量判斷唔見咗 —— 注意唔可以再加 `&& !ordersOnly`：" +
+        "訂單頁 backfill 就係 `ordersOnly=1&since=`，排除咗就會令 P3 完全失效（實測每次仍拉 200 張 289 KB）",
+    );
+    assert.ok(
+      /if \(ordersOnly && incrementalOrdersPromise\)/.test(STATE_ROUTE),
+      "ordersOnly 分支冇處理增量 ⇒ 有 since 都會走三腿全量",
+    );
+    // 報表／交班／對賬守護一律唔傳 since（要完整區間）—— 呢個係新契約嘅前提
+    assert.ok(
+      /if \(ordersOnly && ordersInRangePromise\)/.test(STATE_ROUTE),
+      "ordersOnly 嘅完整區間分支唔見咗（報表／交班／對賬會壞）",
     );
   });
 
@@ -101,6 +111,41 @@ describe("/api/pos/state ── 舊版止血（P0）", () => {
   it("仍然保留 `legacy=1` 嘅 egress log 維度（診斷唔可以斷）", () => {
     assert.ok(/legacy: isLegacyFullState \? 1 : 0/.test(STATE_ROUTE), "legacy 診斷欄唔見咗");
     assert.ok(/legacyQueueOff: legacyQueueSuppressed \? 1 : 0/.test(STATE_ROUTE), "止血狀態冇記錄");
+  });
+
+  it("🩹🩹 P0b：舊版全量拉取要**節流**（唔可以只減 bytes；頻率先係大戶）", () => {
+    assert.ok(
+      /const legacyThrottled =/.test(STATE_ROUTE) && /LEGACY_FULL_MIN_GAP_MS/.test(STATE_ROUTE),
+      "冇節流 ⇒ 舊分頁仍然每 33 秒拉一次 404 KB（實測 43.5 MB/小時 = 該時段 51%）",
+    );
+    // key 一定要含 UA：店內多機共用對外 IP，淨用 IP 會誤鎖新版裝置
+    assert.ok(
+      /pos-state-legacy-pull:\$\{ip\}:\$\{\(request\.headers\.get\("user-agent"\)/.test(STATE_ROUTE),
+      "節流 key 淨用 IP ⇒ NAT 之下會誤鎖其他裝置",
+    );
+  });
+
+  it("🩹🩹 節流回覆係**空骨架**，而且**一定要帶 `incremental: true`**", () => {
+    assert.ok(
+      /mode: "legacyThrottled"/.test(STATE_ROUTE),
+      "節流冇獨立 mode ⇒ 事後追唔到「有幾多請求係被節流」",
+    );
+    const at = STATE_ROUTE.indexOf('mode: "legacyThrottled"');
+    assert.ok(at > 0, "搵唔到節流回覆");
+    const block = STATE_ROUTE.slice(Math.max(0, at - 900), at);
+    assert.ok(
+      /incremental: true/.test(block),
+      "🔴 空骨架冇帶 incremental ⇒ 客戶端會當「雲端真係冇呢啲單」，" +
+        "孤兒單對賬會把全店未變更過嘅單一次過隔離（收銀枱面清空）",
+    );
+  });
+
+  it("🔎 ordersOnly 嘅 egress log 亦要記 `ip` / `src`（否則 38 MB 無法歸因）", () => {
+    const ordersOnlyBlock = STATE_ROUTE.slice(
+      STATE_ROUTE.indexOf('if (ordersOnly && incrementalOrdersPromise)'),
+      STATE_ROUTE.indexOf('// 🛡️ 跨店隔離 L2'),
+    );
+    assert.ok(/ip,/.test(ordersOnlyBlock) && /src: stateSrc/.test(ordersOnlyBlock), "ordersOnly 冇記來源");
   });
 });
 
