@@ -133,6 +133,19 @@ route 回 response（bytes 已知）
 | `node --test`（全套） | **1169 passed / 0 fail**（本次新增 39 條） |
 | 新增單測 | `state-sync-watermark` 12／12、`egress-usage` 14／14、`state-incremental-contract` 13／13 |
 | **真編譯／渲染煙霧測試** | `next dev`（port 3111）→ `/admin/traffic` `/` `/orders` `/prints` **全部 HTTP 200**、dev log **零編譯錯誤**、server 已正常關閉<br>（`tools/_smoke-pages-20260922.cjs`；⚠️ 本機冇 coreutils，等待／清理全部用 Node 自己做 + `taskkill /T`） |
+| **端到端 admin 鑑權驗證** | `tools/_smoke-admin-api-20260922.cjs`（dev + 本機 `ADMIN_SESSION_SECRET`）：<br>① 冇 token → **401** ✓｜② `POST /api/admin/session` → **200 + token** ✓｜③ 帶 token → **200**、`ok=true available=false rows=0`、`quotaBytes=5368709120`、`today=2026-09-22`、`windowDays=14` ✓｜④ 假 token → **401** ✓ |
+
+### 5.1 上線後即發現並修好嘅一個 bug（已加守衛）
+
+`/admin/traffic` 第一版嘅 `fetch()` **漏咗 `Authorization: Bearer <adminSessionToken>`** ⇒
+`AdminShell` 守衛係**客戶端讀 localStorage**，所以頁面「睇落登入咗」但 API 回 401：
+KPI 全部 0 ＋ 一句「未授權」。修法同 `/admin/sessions` 完全一致
+（`loadAuthSession()?.adminSessionToken` → `Authorization: Bearer`），並**冇 token 就即刻顯示未授權**（唔好照打）。
+
+新增守衛 `src/app/admin/traffic/traffic-auth-contract.test.ts`（4 條 source 掃描）：
+頁面必須讀 `adminSessionToken`、必須帶 `Authorization` 標頭、冇 token 要 early return、
+route 側必須仍然驗 `readAdminSessionFromRequest` 並回 401。
+（呢類「漏 header」tsc／eslint 都唔會出聲 —— 只可以靠源碼掃描守衛。）
 
 ---
 

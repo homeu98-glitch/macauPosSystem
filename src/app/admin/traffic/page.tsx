@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
+import { loadAuthSession } from "@/lib/storage";
 import {
   EGRESS_FREE_QUOTA_BYTES,
   formatBytes,
@@ -72,7 +73,19 @@ export default function AdminTrafficPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/traffic?days=${rangeDays}`, { cache: "no-store" });
+      // 🔴 admin API 用 `Authorization: Bearer <adminSessionToken>`（同 `/api/admin/sessions`
+      // 完全一樣嘅鑑權）。冇帶 ⇒ server 回 401 ⇒ 頁面只會見到「未授權」而 KPI 全部 0
+      // （2026-09-22 首次上線就係漏咗呢個 header）。
+      const token = loadAuthSession()?.adminSessionToken;
+      if (!token) {
+        setError("未授權，請重新登入管理後台。");
+        setData(null);
+        return;
+      }
+      const res = await fetch(`/api/admin/traffic?days=${rangeDays}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
       if (!res.ok) {
         setError(res.status === 401 ? "未授權，請重新登入管理後台。" : `讀取失敗（HTTP ${res.status}）。`);
         setData(null);
