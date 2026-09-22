@@ -38,6 +38,8 @@ import {
   withStoreScope,
 } from "@/lib/pos/sync-flush";
 import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
+import { setObservedServerBuildId } from "@/lib/build-info";
+import { BuildStaleBanner } from "@/components/build-stale-banner";
 import {
   isOrderNoteLocked,
   ITEM_SPEC_LOCKED_MESSAGE,
@@ -1379,6 +1381,9 @@ export function PosApp() {
       const response = await fetch(stateUrl, {
         headers: { ...posDeviceAuthHeaders(), "x-pos-state-src": src },
       });
+      // 🔎 2026-09-22：記下伺服器嘅建置識別碼（設置頁會同「本機跑緊嘅版本」對照）。
+      //    純讀標頭 —— 讀唔到就係 null，唔影響任何流程。
+      setObservedServerBuildId(response.headers.get("x-pos-build"));
       const payload = (await response.json()) as {
         orders?: PosOrder[];
         queue?: QueueEvent[];
@@ -5005,9 +5010,16 @@ export function PosApp() {
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="flex h-[100dvh] overflow-hidden md:pl-[72px]">
+      <div className="flex h-[100dvh] flex-col overflow-hidden md:pl-[72px]">
+        {/* 🔴 版本過期橫幅（2026-09-22）：只有「本機版本 ≠ 線上最新」才出現。
+            in-flow ⇒ 推低內容，唔會蓋住任何控制項。詳見 `build-stale-banner.tsx`。 */}
+        <BuildStaleBanner
+          cartItemCount={cartItems.length}
+          pendingSyncCount={queue.filter((event) => event.status === "pending").length}
+          settlementOpen={Boolean(payingOrderId)}
+        />
         {posMode === "tables" ? (
-          <div className="grid h-[100dvh] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_330px]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_330px]">
             <main className="flex h-full flex-col overflow-hidden bg-slate-100">
               {/* 桌台總覽標題列 —— 2026-09-15 J 拍板：**全部按鈕同一行，唔准掉第二行**。
                   ── 為何要改 ─────────────────────────────────────────────────────
@@ -5482,7 +5494,7 @@ export function PosApp() {
             </section>
           </div>
         ) : (
-        <div className="flex h-[100dvh] flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_330px]">
           <section className="flex h-full flex-col overflow-hidden border-r border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">

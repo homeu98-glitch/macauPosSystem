@@ -45,6 +45,7 @@ import { PrinterWizardModal } from "@/components/printer-wizard-modal";
 import { CompanionStatusCard } from "@/components/printer-companion-panel";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { MerchantOrderConfigSection } from "@/components/merchant-order-config-section";
+import { BuildVersionRow } from "@/components/build-version-row";
 import {
   tryAutoPairCompanion,
 } from "@/lib/print-bridge/companion";
@@ -1126,6 +1127,10 @@ export function DeviceSettings() {
   <div className="mb-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
     {status}
   </div>
+
+  {/* 🔎 版本列（2026-09-22）：顯示「呢部機跑緊嘅版本」＋ 對照線上最新部署。
+      放喺 status 隔籬（跨 tab 常駐），一入設置頁就見到，唔需要切 tab。 */}
+  <BuildVersionRow />
 
   {activeTab === "kiosk" ? (
     <div className="grid gap-3">

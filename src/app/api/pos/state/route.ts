@@ -14,6 +14,7 @@ import {
 import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
+import { readServerBuildId } from "@/lib/build-info";
 
 /** UTC ISO 轉換（lossless）：`2026-09-06T00:00:00+08:00` → `2026-09-05T16:00:00.000Z`。 */
 function toUtcIso(iso: string): string {
@@ -290,7 +291,7 @@ export async function GET(request: Request) {
 
   const deviceConfigRow = deviceConfigs?.[0] ?? null;
 
-  return jsonWithEgressLog(
+  const response = jsonWithEgressLog(
     "pos/state",
     {
     ok: true,
@@ -390,4 +391,16 @@ export async function GET(request: Request) {
       src: stateSrc,
     },
   );
+
+  /**
+   * 🔎 建置識別碼（2026-09-22）—— 畀設置頁顯示「線上最新部署」用。
+   *
+   * 點解要有：設置頁會顯示**客戶端內聯**嘅版本（＝呢部機跑緊嘅 JS）。
+   * 兩者一對照就知道**呢個分頁有冇過期** —— 呢個正是
+   * 「有商家長期掛住舊版、靜靜燒 egress」嘅客戶端對應（server log 側係 `legacy=1`）。
+   *
+   * ⚠️ 純**附加**回應標頭：唔改 body、唔改 status、唔加查詢，舊 client 完全唔理。
+   */
+  response.headers.set("x-pos-build", readServerBuildId());
+  return response;
 }
