@@ -77,6 +77,15 @@ const CLAIM_SRC = readFileSync(
   "utf8",
 );
 
+/**
+ * 🆕 2026-09-22：claim 嘅節奏常數搬去純模組（決策可單測）。
+ * 守衛要**同時掃呢個檔**，否則值域檢查會因為 route 已經冇 `const *_MS =` 而空轉綠燈。
+ */
+const CADENCE_SRC = readFileSync(
+  new URL("../../../../../lib/pos/print-agent-cadence.ts", import.meta.url),
+  "utf8",
+);
+
 describe("/api/pos/print-agent/claim ── App 節奏旋鈕", () => {
   it("🔴 回應一定要有 `nextPollMs`（刪咗心跳之後唯一嘅節奏控制）", () => {
     assert.ok(
@@ -90,8 +99,10 @@ describe("/api/pos/print-agent/claim ── App 節奏旋鈕", () => {
   });
 
   it("🔴 全部節奏值必須落喺 5_000 ~ 180_000（APK 有效範圍／UI 假警報界線）", () => {
-    const matches = [...CLAIM_SRC.matchAll(/const\s+([A-Z0-9_]*_MS)\s*=\s*([\d_]+)\s*;/g)];
-    assert.ok(matches.length >= 2, "搵唔到 claim 嘅節奏常數（應該有基礎 ＋ 積壓兩個檔位）");
+    // 2026-09-22：節奏常數搬去純模組 `print-agent-cadence.ts`
+    // ⇒ 值域檢查要掃嗰個檔（route 已經冇 `const *_MS =`，掃 route 會變空轉綠燈）。
+    const matches = [...CADENCE_SRC.matchAll(/const\s+([A-Z0-9_]*_MS)\s*=\s*([\d_]+)\s*;/g)];
+    assert.ok(matches.length >= 2, "搵唔到 cadence 常數（應該有後備／活躍／上限）");
     for (const m of matches) {
       const name = m[1];
       const ms = Number(m[2].replace(/_/g, ""));
@@ -104,14 +115,24 @@ describe("/api/pos/print-agent/claim ── App 節奏旋鈕", () => {
         `${name} = ${ms}ms > 3 分鐘 ⇒ 會超過 POS 網頁「5 分鐘＝疑似離線」閾值，出假警報`,
       );
     }
+    // 階梯（陣列）都要逐個檢查 —— 唔可以只驗單一常數
+    const ladder = [...CADENCE_SRC.matchAll(/CLAIM_IDLE_LADDER_MS\s*=\s*\[([^\]]+)\]/g)];
+    assert.equal(ladder.length, 1, "搵唔到空閒退避階梯");
+    for (const raw of ladder[0][1].split(",")) {
+      const ms = Number(raw.replace(/[^\d]/g, ""));
+      if (!ms) continue;
+      assert.ok(ms >= 5_000 && ms <= 180_000, `階梯值 ${ms}ms 超出 5_000..180_000`);
+    }
   });
 
-  it("🔴 雙檔自適應：取滿 `limit` ⇒ 用積壓檔（追趕）；否則用基礎檔", () => {
-    assert.ok(/const SUGGESTED_CLAIM_MS\s*=/.test(CLAIM_SRC), "搵唔到基礎檔常數 SUGGESTED_CLAIM_MS");
-    assert.ok(/const CLAIM_BACKLOG_MS\s*=/.test(CLAIM_SRC), "搵唔到積壓檔常數 CLAIM_BACKLOG_MS");
+  it("🔴 三檔 ＋ 空閒退避：有 job 快、冇 job 逐級放慢（唔可以又變返單一固定值）", () => {
     assert.ok(
-      /jobs\.length\s*>=\s*limit\s*\?\s*CLAIM_BACKLOG_MS\s*:\s*SUGGESTED_CLAIM_MS/.test(CLAIM_SRC),
-      "判斷式唔見咗 ⇒ 一批單會每輪只消化 `limit` 張，之後又要等足一個基礎間隔（10 張 = 6 分鐘）",
+      /nextClaimPollMs\(\{\s*claimed: jobs\.length,\s*limit,\s*emptyStreak: streak\s*\}\)/.test(CLAIM_SRC),
+      "claim 冇用 cadence 決策 ⇒ 又變返固定間隔（關店就會照樣每 30 秒打）",
+    );
+    assert.ok(
+      /nextEmptyStreak\(emptyStreakByAgent\.get\(agentId\) \?\? 0, jobs\.length\)/.test(CLAIM_SRC),
+      "冇記「連續冇 job」⇒ 退避永遠唔會啟動",
     );
   });
 

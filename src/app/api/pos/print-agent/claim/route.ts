@@ -5,44 +5,47 @@
 //       → 返 full pos_print_jobs row（snake_case），APK 用 PrintJobDto.fromRow() 食。
 import { NextResponse } from "next/server";
 
+import {
+  claimCadenceLabel,
+  nextClaimPollMs,
+  nextEmptyStreak,
+} from "@/lib/pos/print-agent-cadence";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { readAgentHeaders, verifyAgent } from "@/lib/print-agent-server";
 
 export const dynamic = "force-dynamic";
 
 /**
- * 建議 APK 下次幾時再 claim（ms）—— **刪咗心跳之後嘅唯一節奏旋鈕**（2026-09-21）。
+ * 🆕 2026-09-22（第三次覆核）**空閒退避** —— 節奏決策搬去純模組
+ * `@/lib/pos/print-agent-cadence`（9 條單測鎖住 5 秒~180 秒嘅硬性合約）。
  *
- * ## 2026-09-22 調快：180_000 → **30_000**（商家投訴「打印非常慢、非常不即時」）
+ * ## 演變（三日內三次，記住脈絡）
  *
- * 舊值 180 秒係為省請求數而設，但實測（2026-09-22）出紙延遲完全由呢個值支配：
- * 叫醒路徑（Realtime `pos_print_jobs` INSERT → `onWake()`）一旦唔通，一張單最壞要等
- * **整整 3 分鐘**才被認領，而 APK 每次最多只 claim 5 張 ⇒ 高峰吞吐只有 ~1.7 張/分鐘。
+ * | 版本 | 值 | 觸發 |
+ * |---|---|---|
+ * | 原始 | 60 秒 | — |
+ * | 2026-09-21 23:54 | **180 秒** | egress 事故（省請求） |
+ * | 2026-09-22 中午 | **30 秒** | 商家投訴「打印非常慢」 |
+ * | **2026-09-22 17:45（今次）** | **30 → 60 → 120 → 180 秒（按「連續冇 job」退避）** | 用戶：「關店唔應該 call 任何嘢」 |
  *
- * ## 為何 30 秒係**安全**嘅（成本已核算）
+ * ⇒ 之前兩個做法各有代價：固定 180 秒令高峰慢；固定 30 秒令**關店之後照樣每 30 秒打一次**
+ * （實測 152 次 / 192 分鐘）。退避同時滿足兩邊：**有單就快、冇單就自動慢落去**。
  *
- * · 請求數：30 秒 = 2 次/分鐘。**仍然低於優化之前嘅 3.0 次/分鐘**（當時係
- *   心跳 30 秒 ＋ claim 60 秒），唔會重回 egress 事故前嘅水平。
- * · 位元組：空 claim 嘅 Supabase 回應只有幾百 byte（RPC 0 行 ＋ PATCH 1 行），
- *   ≈ 1 MB/日。2026-09-22 已收口到 10~20 MB/日 ⇒ 呢項佔比可忽略。
- *   （當年 904 MB/日 嘅元兇係「舊 bundle 全量拉取」，唔係 claim 本身。）
- * · UI 閾值：值只可以**細**，唔可以大過 180 秒 —— POS 網頁 `print-center.tsx` 寫死
- *   「`last_seen_at` ≥5 分鐘 → 疑似離線」。
+ * ## 🔴 為何係「退避」而唔係「關店就 block」
  *
- * ⚠️ 任何值都一定要落喺 **5_000 ~ 180_000**：APK 側係
- * `resp.optInt("nextPollMs", 0).takeIf { it in 5_000..180_000 }`，
- * 超出範圍（例如圖快設 3_000）會**靜默 fallback 30 秒**，以為調快咗其實冇。
+ * 出紙通道只有「雲端 `pos_print_jobs` → 中繼 APK claim」一條，
+ * block 咗 ⇒ **關店後嘅結尾結帳收據、補打帳單永遠印唔出**。
+ * 而且 claim 成本實測只 ≈ 0.17 MB/日（相對舊分頁迴圈 1.4 GB/日 ＝ 0.01%）
+ * ⇒ **唔會**靠呢個解決超額；呢個係衞生／原則修正。
+ *
+ * 上限 180 秒係硬線：POS 網頁 `print-center.tsx` 寫死「`last_seen_at` ≥5 分鐘 → 疑似離線」。
+ *
+ * ## 為何用 in-memory 記「連續冇 job」
+ *
+ * 零額外查詢（唔想為判斷「店有冇開」每次多打 1–2 條 DB 查詢，反而更貴）。
+ * 多實例之下退避會唔準（最壞情況維持 30 秒）—— 屬安全側失效，唔會壞。
  */
-const SUGGESTED_CLAIM_MS = 30_000;
-
-/**
- * **仲有積壓**時嘅追趕節奏（ms）：今次 claim 已經取滿 `limit`（＝後面仲有單未認領）
- * ⇒ 叫 APK 幾乎即刻再嚟，令一批單可以連續消化，而唔係再等一輪基礎間隔
- * （舊行為：10 張單 = 2 輪 × 180 秒 = 6 分鐘）。
- *
- * ⚠️ 唔可以細過 5_000（APK 有效範圍下限）。
- */
-const CLAIM_BACKLOG_MS = 5_000;
+const emptyStreakByAgent = new Map<string, number>();
 
 export async function POST(request: Request) {
   const supabase = getSupabaseWriteClient();
@@ -85,16 +88,30 @@ export async function POST(request: Request) {
   // 所以建議 APK **刪走獨立心跳迴圈**，改為由呢個欄位控制節奏 ⇒
   // 服務端可以隨時調整（關店放慢／夜間放慢），唔使再出 APK。
   //
-  // 🆕 2026-09-22：改為**雙檔自適應**（見上面兩個常數嘅說明）——
-  //   ① 今次取滿 `limit` ⇒ 仲有單未認領 ⇒ `CLAIM_BACKLOG_MS`（連續消化，唔再等一輪）；
-  //   ② 否則 ⇒ `SUGGESTED_CLAIM_MS`（基礎兜底節奏）。
+  // 🆕 2026-09-22：**三檔 ＋ 空閒退避**（見檔頭）。
+  //
+  // 為何放喺 claim 而唔係 heartbeat：`claim` 本來就要每輪打一次（拎任務），
+  // 而 `heartbeat` 唯一作用只係蓋 `last_seen_at`，**完全多餘**（`claim` 已經順手蓋）。
+  // 所以建議 APK **刪走獨立心跳迴圈**，改為由呢個欄位控制節奏 ⇒
+  // 服務端可以隨時調整（有單加快／冇單退避），唔使再出 APK。
+  //
   // ⚠️ 加欄位對現役 APK **零影響**（`org.json` 嘅 `opt*` 會忽略未知欄位）。
   const jobs = data ?? [];
-  const nextPollMs = jobs.length >= limit ? CLAIM_BACKLOG_MS : SUGGESTED_CLAIM_MS;
+  const streak = nextEmptyStreak(emptyStreakByAgent.get(agentId) ?? 0, jobs.length);
+  emptyStreakByAgent.set(agentId, streak);
+  // 記憶體保護：一個實例最多記 500 個 agent（正常一間店一兩個）
+  if (emptyStreakByAgent.size > 500) {
+    const firstKey = emptyStreakByAgent.keys().next().value;
+    if (firstKey) emptyStreakByAgent.delete(firstKey);
+  }
+  const nextPollMs = nextClaimPollMs({ claimed: jobs.length, limit, emptyStreak: streak });
   return NextResponse.json({
     ok: true,
     jobs,
     printers: [],
     nextPollMs,
+    // 🆕 診斷：一眼睇得出「點解係呢個間隔」（舊 APK 忽略未知欄位，零影響）。
+    cadence: claimCadenceLabel(jobs.length, limit),
+    idleStreak: streak,
   });
 }

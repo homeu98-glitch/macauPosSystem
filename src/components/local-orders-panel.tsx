@@ -224,12 +224,41 @@ export function LocalOrdersPanel({
     window.dispatchEvent(new CustomEvent("pos-orders-changed"));
   }, []);
 
+  /**
+   * 🔴🔴 最少間隔守衛（2026-09-22 17:45 覆核加 —— **實測到迴圈**）。
+   *
+   * ## 實測（Supabase log，15:00–15:15 澳門）
+   *
+   * `pos_sessions` **109 次** ＋ `rpc/pos_orders_page` **107 次**，**中位間隔 3.0 秒**，
+   * 全程冇 `device_configs` / `print_jobs` / `templates`（＝`ordersOnly=1` 特徵）
+   * ⇒ 就係**本 panel** 嘅 `pullServerOrders` 被反覆觸發（每次 291 KB 完整訂單）
+   * ⇒ 15 分鐘 ≈ **87 MB（未壓縮）**。用戶形容「一上線數據量就好可怕」就係呢段。
+   *
+   * ## 為何會咁密
+   *
+   * 觸發③ 監聽 `POS_SYNC_QUEUE_CHANGED_EVENT`，而 flush 每推一批就 dispatch 一次
+   * ⇒ 只要部機有嘢喺度入隊／flush，就會不停「再拉一次」。
+   *
+   * ## 為何加 15 秒係**安全**嘅
+   *
+   * · **新單唔會遲到**：真即時路徑係 `usePosRealtime.onOrderUpsert`（Realtime 推送單張
+   *   訂單即刻 merge），本 panel 嘅拉取**只係兜底**發現其他裝置嘅變更。
+   * · ref 係 per-page-instance ⇒ 入頁第一次一定放行（`lastPullAtRef = 0`）。
+   * · `force` 保留逃生門（未來若有「用戶撳更新」需要即刻拉）。
+   */
+  const lastPullAtRef = useRef(0);
+  const PULL_MIN_GAP_MS = 15_000;
+
   // 一次過 backfill（mount / realtime resubscribed / queue 清空時 call；event-driven）。
   // 同 pos-app loadRuntimeState 一致：冇 merchant 唔拉（admin / kiosk 無店身份）；
   // **方案 B**：本機 queue 有任一未同步（pending / 永久 failed / skipped）事件就唔拉，
   // 避免冚走本機未上雲嘅單（成因 P4）；fetch 失敗靜默（等下次觸發）。
-  const pullServerOrders = useCallback(async () => {
+  const pullServerOrders = useCallback(async (opts?: { force?: boolean }) => {
     if (!merchantId) return;
+    // 🔴 最少間隔（見上面長註釋）：3 秒一次嘅連打會燒 291 KB × 20/分鐘。
+    const nowMs = Date.now();
+    if (!opts?.force && nowMs - lastPullAtRef.current < PULL_MIN_GAP_MS) return;
+    lastPullAtRef.current = nowMs;
     // 🔴 2026-09-15 修（同 pos-app.tsx 兩處閘門一致）：只擋真正未推嘅 `pending`。
     // 舊條件 `status !== "synced"` 會被終態 `skipped`（user-discarded / server-newer）
     // 同 `failed` 永久閘死 → 訂單頁永遠唔會再拉雲端，其他終端落嘅單喺本機永遠見唔到。
@@ -250,7 +279,9 @@ export function LocalOrdersPanel({
         `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&ordersOnly=1${sinceTicket.param}`,
         {
           // 2026-09-10 P0-4：需要 POS 終端憑證
-          headers: { ...posDeviceAuthHeaders() },
+          // 🔎 2026-09-22：另加來源標記（server 寫落 `[egress]` log）——
+          //    之前 ordersOnly 完全冇 `src`，令 63.8 MB 無法歸因（實測教訓）。
+          headers: { ...posDeviceAuthHeaders(), "x-pos-state-src": "orders-panel" },
         },
       );
       if (!res.ok) return;

@@ -186,4 +186,20 @@ describe("client ── 增量拉取嘅兩條安全閘", () => {
     const commit = POS_APP.indexOf("commitStateSince(sinceTicket");
     assert.ok(at > 0 && commit > at, "水位更新唔喺成功回應之後 ⇒ 失敗都會推進水位（會漏單）");
   });
+
+  it("🔴🔴 訂單頁要有**最少間隔守衛**（實測 3 秒一次連打 15 分鐘 = 87 MB）", () => {
+    assert.ok(
+      /PULL_MIN_GAP_MS/.test(LOCAL_ORDERS) && /nowMs - lastPullAtRef\.current < PULL_MIN_GAP_MS/.test(LOCAL_ORDERS),
+      "冇最少間隔 ⇒ `POS_SYNC_QUEUE_CHANGED_EVENT` 會令訂單頁每 3 秒拉一次 291 KB（實測 15:00–15:15 燒 87 MB）",
+    );
+    // 但要有逃生門（未來「用戶撳更新」要即刻拉）
+    assert.ok(/opts\?\.force/.test(LOCAL_ORDERS), "冇 force 逃生門 ⇒ 之後想加『手動更新』會拉唔到");
+  });
+
+  it("🔎 訂單頁要報上自己嘅 `src`（ordersOnly 以前冇 `src` ⇒ 63.8 MB 無法歸因）", () => {
+    assert.ok(
+      /"x-pos-state-src": "orders-panel"/.test(LOCAL_ORDERS),
+      "訂單頁冇報來源 ⇒ 下次再有 ordersOnly 迴圈都追唔到",
+    );
+  });
 });
