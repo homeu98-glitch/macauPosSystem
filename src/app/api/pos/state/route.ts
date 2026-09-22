@@ -60,24 +60,14 @@ const ORDER_FIELD_WHITELIST: ReadonlySet<string> = new Set<string>(POS_ORDER_DB_
  *   永久跌出增量窗口 —— 之後每次拉都唔會再見到佢（`truncated` 亦唔會觸發，
  *   因為行數根本冇撞 limit）。Realtime 只推「變更」，補唔返歷史。
  *
- * 修法：增量之下**額外**多拉一次「該店全部未結帳單」（通常 0–5 張，投影不變）。
- *   成本係幾行（≈1–3 KB），但「未結帳單」係唯一**會漏錢**嘅類別 ⇒ 唔可以靠增量。
+ * 修法（**最終版，2026-09-22**）：舊 client 唯一會撞到嘅「假全集」係下面
+ *   `legacyThrottled` 空骨架 —— 嗰條路改為**回本店全部未結帳單**（0–5 行）就足夠，
+ *   因為舊 client 永遠唔會傳 `since`（增量路徑只服務新 bundle，而新 bundle 尊重
+ *   `incremental` 旗標、唔會跑孤兒對賬）。
+ *   ⇒ **增量之下唔再額外查詢**（每條增量拉取少一次 DB round trip）。
  *   終態單冇呢個問題：本機唔見都唔影響收錢，而且報表本身係純雲端、永不 merge。
  */
 const OPEN_ORDER_STATUSES = ["draft", "sent_to_kitchen", "paid", "reopened"] as const;
-
-/** 兩個批次按 `id` 去重合併（前者優先，保留其欄位；缺 `id` 嘅 row 直接丟）。 */
-function mergeRowsById<T extends { id?: unknown }>(primary: readonly T[], extra: readonly T[]): T[] {
-  const out: T[] = [];
-  const seen = new Set<string>();
-  for (const row of [...primary, ...extra]) {
-    const id = String(row?.id ?? "");
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    out.push(row);
-  }
-  return out;
-}
 
 export async function GET(request: Request) {
   const supabase = getSupabaseServerClient();
@@ -513,41 +503,40 @@ export async function GET(request: Request) {
    * 真係撞到 100 亦只會「少兜底」，唔會令請求失敗（唔參與 truncated 判定，
    * 免得 false positive 令 client 每次都被迫走全量）。
    */
-  const openOrdersPromise =
-    incremental && storeId
-      ? supabase
-          .from("pos_orders")
-          .select(POS_ORDER_DB_COLUMNS.join(","))
-          .eq("store_id", storeId)
-          .in("status", [...OPEN_ORDER_STATUSES])
-          .order("created_at", { ascending: false })
-          .limit(100)
-      : null;
+  /**
+   * 🚫 2026-09-22 **已移除「增量之下嘅未結帳單兜底腿」**（原本每條增量拉取多打一條查詢）。
+   *
+   * 移除理由（兩點，都係實測）：
+   *   ① **對目標客戶冇用**：`incremental` 只可能出現喺**新 bundle** 嘅請求
+   *      （`since` 係 P1 新增參數；舊 bundle 永遠唔會傳）——但需要兜底嘅**正正係舊 bundle**
+   *      （佢唔識 `incremental`，會誤跑孤兒對賬）。舊 bundle 走嘅係下面
+   *      `legacyThrottled` 骨架路徑，嗰邊已經改為**回未結帳單**（真正有用嘅修法）。
+   *   ② **新 bundle 唔需要**：新 bundle 尊重 `incremental` 旗標、唔會跑孤兒對賬；
+   *      加上 client 側水位已收緊為「只喺真係收到 `orders` 陣列時才推進」（見 `pos-app.tsx`），
+   *      增量窗口唔會再被錯誤跳過。
+   *
+   * ⇒ 淨影響：**每條增量拉取少一次 DB 查詢**（對商家「唔可以增加任何流量」嘅要求係負數，即減）。
+   */
 
   // 報表分頁／訂單頁 backfill 只拉訂單，跳過其餘 table。
   if (ordersOnly && incrementalOrdersPromise) {
     // 🩹 增量（訂單頁 backfill 傳 `since`）→ 單腿 `updated_at > since`，通常 0–3 行。
-    // 🆕 同時等「未結帳單兜底腿」：增量窗口漏咗嘅未結帳單要靠佢補返本機。
-    const [{ data, error }, openRes] = await Promise.all([incrementalOrdersPromise, openOrdersPromise]);
+    const { data, error } = await incrementalOrdersPromise;
     const rows = error ? [] : ((data ?? []) as unknown as OrderRow[]);
-    // ⚠️ truncated 一定要**用未合併嘅增量行數**計：兜底腿係刻意「多回」，
-    //    唔可以令 client 誤判撞 limit 而要每次走全量。
     const truncated = Boolean(error) || isIncrementalTruncated(rows.length, limit);
-    const openRows = openRes && !openRes.error ? ((openRes.data ?? []) as unknown as OrderRow[]) : [];
-    const mergedRows = mergeRowsById(rows, openRows);
     return withSessionHeaders(
       jsonWithEgressLog(
         "pos/state",
         {
           ok: true,
           source: "supabase",
-          orders: mergedRows.map(mapOrderRow),
+          orders: rows.map(mapOrderRow),
           incremental: true,
           ...(truncated ? { truncated: true } : {}),
         },
         {
           mode: "ordersOnly",
-          orders: mergedRows.length,
+          orders: rows.length,
           limit,
           offset,
           columns: ordersColumns ?? "default",
@@ -655,22 +644,9 @@ export async function GET(request: Request) {
       ? ordersInRange.orders
       : [];
 
-  // 🔴 增量之下補返「未結帳單兜底腿」（見 `OPEN_ORDER_STATUSES` 嘅完整病歷）。
-  //    ⚠️ 一定要喺下面 `isIncrementalTruncated(orders.length, …)` **之前**記錄原始行數，
-  //       否則兜底腿多回嘅行會令 client 誤判「撞 limit、要清水位走全量」。
-  const incrementalRawOrderCount = incrementalResult
-    ? incrementalResult.error
-      ? 0
-      : ((incrementalResult.data ?? []) as unknown as OrderRow[]).length
-    : orders.length;
-  const openFallbackRows = openOrdersPromise ? await openOrdersPromise : null;
-  if (incremental && openFallbackRows && !openFallbackRows.error) {
-    orders.splice(
-      0,
-      orders.length,
-      ...mergeRowsById(orders, (openFallbackRows.data ?? []) as unknown as OrderRow[]),
-    );
-  }
+  // 🚫 2026-09-22：原本呢度會喺增量之下多拉一條「未結帳單兜底腿」再合併 —— 已移除，
+  //    理由見上面（對舊 bundle 冇用、新 bundle 唔需要、而且係每條增量拉取多一次查詢）。
+  //    ⇒ 增量之下保持**單腿零額外查詢**。
 
   /**
    * 增量結果係咪**唔完整**（查詢失敗／撞到 `limit`）⇒ client 要清水位、下次走全量。
@@ -681,8 +657,7 @@ export async function GET(request: Request) {
   const incrementalPrintJobLimit = incremental ? Math.min(limit, 200) : 200;
   const incrementalTruncated = incremental
     ? Boolean(incrementalResult?.error) ||
-      // ⚠️ 用**未合併兜底腿之前**嘅行數：兜底腿係刻意多回，唔代表增量撞 limit。
-      isIncrementalTruncated(incrementalRawOrderCount, limit) ||
+      isIncrementalTruncated(orders.length, limit) ||
       isIncrementalTruncated(printJobs?.length ?? 0, incrementalPrintJobLimit)
     : false;
 

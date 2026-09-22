@@ -528,11 +528,11 @@ export function SyncHealthModal({
                 )}
               </section>
 
-              {/* ── L4：已隔離訂單（快照保留，可還原 / 永久刪除）── */}
+              {/* ── L4：舊隔離區（2026-09-22 停用；開頁時已自動全部還原，正常應該係空）── */}
               <section className="mt-5">
                 <div className="mb-2 flex items-center justify-between">
                   <h2 className="text-sm font-semibold text-slate-800">
-                    已隔離訂單
+                    本機保留嘅訂單（舊隔離區）
                     <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
                       {quarantinedRows.length} 張
                     </span>
@@ -541,13 +541,14 @@ export function SyncHealthModal({
 
                 {quarantinedRows.length === 0 ? (
                   <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                    隔離區係空嘅。
+                    隔離區已停用（空）。本機訂單一律保留到同步上雲為止，唔會再被自動移走。
                   </div>
                 ) : (
                   <>
                     <div className="mb-2 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
-                      呢啲訂單已被移出桌台（雲端冇記錄，無法同步）。如果確認係真實消費，
-                      可以「還原」返入本機再手動處理；確認係廢單就「永久刪除」。
+                      ⚠️ 「隔離」機制已於 2026-09-22 停用（開頁時會自動把呢啲單還原返本機）——
+                      本機訂單唔會再因為「雲端夾唔到」而被移走。下面呢批係停用前剩落嘅記錄，
+                      可以「還原」返入本機，或確認係廢單之後「永久刪除」。
                     </div>
                     <ul className="space-y-2">
                       {quarantinedRows.map((row) => (

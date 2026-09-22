@@ -63,8 +63,7 @@ import {
 } from "@/lib/pos/poll-gate-client";
 import { refocusForIosKeyboard } from "@/lib/pos/ios-keyboard";
 import {
-  computeOrphanLocalOrders,
-  quarantineOrders,
+  restoreAllQuarantinedOrders,
 } from "@/lib/pos/sync-reconcile";
 import {
   buildKitchenPrintJobs,
@@ -1304,6 +1303,31 @@ export function PosApp() {
     };
   }, [offlineMode]);
 
+  /**
+   * 🚫🚫 2026-09-22 **一次性清走舊隔離區**（停用「隔離」概念）。
+   *
+   * 舊機制會把「雲端 payload 冇呢張單」嘅本機未結帳單**移出 localStorage** ⇒
+   * 枱面「閃一下變空閒」，並累積咗 111 張垃圾（`print-xxxxxxxx` ＝ PrintJob 漏入 orders）。
+   * 商家拍板：**訂單一律保留在本機，直到同步上雲為止**（offline 都保留）。
+   *
+   * 呢個 effect 只跑一次、只讀寫本機 localStorage ⇒ **零請求、零 egress**；
+   * 冇隔離記錄時係 no-op。`restoreAllQuarantinedOrders()` 內部會經 `saveOrders()`
+   * 派 `pos-orders-changed`，所以畫面會自動刷新，唔使喺度再 `setOrders`。
+   */
+  useEffect(() => {
+    const { restored, discarded } = restoreAllQuarantinedOrders();
+    if (restored > 0 || discarded > 0) {
+      setToast({
+        tone: "info",
+        message:
+          `已還原 ${restored} 張本機訂單` +
+          (discarded > 0 ? `、清走 ${discarded} 筆非訂單資料` : "") +
+          `。本機訂單以後唔會再被自動移走。`,
+      });
+    }
+    // 只喺 mount 跑一次（`setToast` 係穩定 setter，唔使入 deps）。
+  }, []);
+
   // 收銀 mount / 重連 / queue 清空時一次過 pull 現有 state（event-driven，非 polling）
   useEffect(() => {
     if (offlineMode) return;
@@ -1394,7 +1418,6 @@ export function PosApp() {
   }
 
   async function runLoadRuntimeState(src: string, opts?: { forceFull?: boolean }): Promise<number> {
-    let quarantinedCount = 0;
     try {
       // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
       // 無登入時 kiosk 綁定店）。冇 store 一律唔拉 —— 以前會 fetch /api/pos/state
@@ -1471,11 +1494,19 @@ export function PosApp() {
       /**
        * 🆕 2026-09-22 P1：更新／清理**增量同步水位**。
        *
-       * · 正常（增量或全量、冇截斷）→ 記低「請求開始時間」做新水位；
-       * · `truncated` → **清水位**（下次一定走全量）並且**排一次全量補拉**。
+       * · `truncated` → **清水位**（下次一定走全量）＋ 1 秒後補一次全量；
+       * · 正常（增量或全量、冇截斷、**而且真係收到 `orders` 陣列**）→ 記低「請求開始時間」做新水位；
+       * · 其餘（`orders` 唔係陣列：舊 server／降級回應／錯誤 JSON）→ 🔴 **唔郁水位**。
        *
        * ⚠️ 全量成功都要記水位：否則下一次又要全量（＝今次優化完全失效）。
+       *
+       * 🔴🔴 為何一定要 gate 住 `Array.isArray(payload.orders)`：
+       *    水位一旦被推過，之後每次拉取都只回 `updated_at > since` 嘅**差量**
+       *    ⇒ **今次冇收到嘅訂單永遠補唔返**（要等水位過期或人手「更新」）。
+       *    呢個正是「網絡唔穩／半死之後訂單靜默失蹤」嘅成因 —— 同隔離一樣，
+       *    都係「用一個唔完整嘅回應去當完整」嘅同一類錯誤。
        */
+      const payloadHasOrders = Array.isArray(payload.orders);
       if (payload.truncated) {
         // commitStateSince(.., true) 會清水位（下次一定走全量）。
         commitStateSince(sinceTicket, true);
@@ -1485,18 +1516,20 @@ export function PosApp() {
         window.setTimeout(() => {
           void loadRuntimeState(`${src}:full`, { forceFull: true });
         }, 1_000);
-      } else {
+      } else if (payloadHasOrders) {
         commitStateSince(sinceTicket);
+      } else {
+        console.warn("[pos-app] 回應冇 orders 陣列 → 唔推進增量水位（避免永久漏單）。");
       }
 
-      if (Array.isArray(payload.orders)) {
+      if (payloadHasOrders) {
         // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
         // docs/52：合併後過濾本機已真刪（tombstone）+ 伺服器單邊終態單，防 backfill 復活。
         // 2026-09-09 方案 A：隔離區 id 一併剔除（孤兒單唔可以經 merge / backfill 復活）。
         setOrders((current) => {
           const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
           const quarantineIds = loadQuarantinedOrders().map((r) => r.order.id);
-          let cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders(), quarantineIds);
+          const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders(), quarantineIds);
           // 🧹 孤兒單對賬（方案 A）：雲端冇 + outbox 冇 pending/failed ORDER_* 事件支持
           // + 單齡 ≥ 10 分鐘嘅非終態本機單 → 移入隔離區（可喺「同步健康」還原）。
           // 根治「手動更新不斷拉返雲端根本冇嘅未結帳枱」（2026-09-09 實案：6 張孤兒單）。
@@ -1505,31 +1538,22 @@ export function PosApp() {
           // 判準係「雲端 `payload.orders` 冇呢張單」，而增量回傳嘅只係**變更過嘅子集**
           // ⇒ 全店未變更過嘅單都會被當成孤兒，一次過被移入隔離區（災難級誤判）。
           // 呢個係本專案「partial payload 唔可以當全集用」嘅同一類陷阱。
-          if (!payload.incremental) {
-            const orphanRows = computeOrphanLocalOrders(cleaned, payload.orders!, loadQueue());
-            if (orphanRows.length > 0) {
-              const n = quarantineOrders(
-                orphanRows.map((r) => r.orderId),
-                "auto-full-pull",
-              );
-              if (n > 0) {
-                quarantinedCount = n;
-                const qIds = new Set(loadQuarantinedOrders().map((r) => r.order.id));
-                cleaned = cleaned.filter((o) => !qIds.has(o.id));
-                // 🔴 2026-09-22：隔離係「由 localStorage 移走」＝枱面卡片即刻變「空閒」，
-                //    而呢條路（自動全量拉取）**原本零可見提示** —— 收銀只見到「張單閃一下
-                //    就唔見」。（人手「更新」路徑有 notes，但緊接就 reload，睇唔到。）
-                //    用 queueMicrotask 而唔直接 setToast：呢段喺 `setOrders()` 嘅 updater 內
-                //    （render 階段），直接 setState 會被 React 警告。
-                queueMicrotask(() => {
-                  setToast({
-                    tone: "error",
-                    message: `有 ${n} 張未結帳單被自動隔離（枱面變空閒）：去「設定 → 同步健康 → 隔離區」可還原。`,
-                  });
-                });
-              }
-            }
-          }
+          // 🚫🚫 2026-09-22：**自動隔離已停用**（商家拍板：「不應存在隔離的概念」）。
+          //
+          // 原本呢度會把「本機非終態 ＋ 今次 payload 冇呢張單 ＋ 冇 pending 事件 ＋ 齡 ≥10 分鐘」
+          // 嘅訂單**移出 localStorage**（`quarantineOrders`）⇒ 枱面卡片即刻變「空閒」。
+          // 實案（同日）：
+          //   · A03（訂單25, MOP 41）連 A01（訂單29, MOP 98）喺桌台總覽「閃一下」就消失；
+          //   · 累積 111 張 `print-xxxxxxxx`（PrintJob 漏入 orders，本來就唔係訂單）。
+          //
+          // 根本問題：判準「payload 冇呢張單」**唔可靠** —— payload 可以係
+          // ① 空骨架（P0b 節流）② 增量差量（只回變更過嘅）③ 投影子集。
+          // 唔可以用一個 partial payload 去斷定「雲端冇呢張單」，更唔可以據此刪本機資料。
+          //
+          // ⇒ 而家本機訂單**一律保留**（offline 都保留），直到真正同步上雲為止。
+          //    要清走只有一個入口：「同步健康 → 永久刪除」（明確意圖 + tombstone）。
+          //    ⚠️ `orders` 本身唔會囤積垃圾：`loadOrders()` 有 id 命名空間守衛。
+          // @see `@/lib/pos/sync-reconcile`（restoreAllQuarantinedOrders / 停用原因）
           saveOrders(cleaned);
           // backfill 補建：收銀端恢復在線時，檢查有冇未出廚房單嘅自助單（docs/87 §11）
           const selfOrdersNeedKitchen = cleaned.filter(
@@ -1714,7 +1738,9 @@ export function PosApp() {
     } catch {
       // ignore
     }
-    return quarantinedCount;
+    // 🚫 2026-09-22：回傳值原本係「今次自動隔離咗幾多張孤兒單」。隔離機制已停用
+    //    （本機訂單一律保留到同步上雲），所以一律回 0；保留回傳型別唔改呼叫端。
+    return 0;
   }
 
   // ── 桌台總覽右上角「手動更新」（2026-09-09）────────────────────────────

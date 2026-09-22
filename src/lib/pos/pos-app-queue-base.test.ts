@@ -80,9 +80,35 @@ describe("pos-app.tsx：pushEvents / enqueuePrintJobs 契約（2026-09-22）", (
    * 🔴 自動隔離（`auto-full-pull`）會令枱面卡片即刻變「空閒」——
    *    如果冇可見提示，收銀只會見到「張單閃一下就走」，完全無從入手（2026-09-22 實案）。
    */
-  it("自動隔離孤兒單一定要出可見提示（唔可以靜默移走）", () => {
-    assert.match(src, /被自動隔離/, "隔離時要出 toast 文案");
-    assert.match(src, /queueMicrotask\(/, "要向 setOrders updater 之外拋（避免 render 階段 setState）");
+  it("🚫 唔准再自動隔離本機訂單（商家拍板：本機訂單一律保留到同步上雲）", () => {
+    assert.doesNotMatch(src, /quarantineOrders\(/, "pos-app 唔應該再有任何自動隔離呼叫");
+    assert.match(src, /restoreAllQuarantinedOrders\(/, "要一次性把舊隔離區還原返本機");
+  });
+
+  /**
+   * 🔴 水位一旦被推過，之後只回差量 ⇒ 今次冇收到嘅訂單**永遠補唔返**。
+   *    所以一定要等真係收到 `orders` 陣列才 commit 水位。
+   */
+  it("增量水位只可以在真係收到 orders 陣列時才推進", () => {
+    assert.match(src, /const payloadHasOrders = Array\.isArray\(payload\.orders\)/, "缺 payloadHasOrders 守門");
+    assert.match(src, /\} else if \(payloadHasOrders\) \{\s*\n\s*commitStateSince\(sinceTicket\);/, "commit 未綁住 payloadHasOrders");
+    assert.doesNotMatch(
+      src,
+      /\} else \{\s*\n\s*commitStateSince\(sinceTicket\);\s*\n\s*\}/,
+      "唔可以喺 else 分支無條件 commit 水位",
+    );
+  });
+});
+
+describe("storage.ts：orders store 有 id 命名空間守衛（2026-09-22）", () => {
+  const src = stripComments(readFileSync(path.resolve(HERE, "..", "storage.ts"), "utf8"));
+
+  it("loadOrders 一定要過 splitNonOrderRows，並自我修復寫返乾淨版本", () => {
+    const at = src.indexOf("export function loadOrders(");
+    assert.notEqual(at, -1, "搵唔到 loadOrders()");
+    const body = src.slice(at, at + 1600);
+    assert.match(body, /splitNonOrderRows\(/, "loadOrders 冇過 id 命名空間守衛");
+    assert.match(body, /writeStoreJson\(STORE_SUFFIX\.orders, orders\)/, "發現垃圾後冇自我修復");
   });
 });
 
@@ -91,18 +117,25 @@ describe("state/route.ts：唔可以回「雲端冇單」嘅假象（2026-09-22�
     readFileSync(path.resolve(HERE, "..", "..", "app", "api", "pos", "state", "route.ts"), "utf8"),
   );
 
-  it("增量之下有未結帳兜底腿", () => {
+  it("未結帳狀態集合只由 legacyThrottled 骨架使用（唯一需要兜底嘅路徑）", () => {
     assert.match(src, /const OPEN_ORDER_STATUSES = \[[^\]]*"sent_to_kitchen"/, "缺 OPEN_ORDER_STATUSES");
-    assert.match(src, /\.in\(\s*"status"\s*,\s*\[\.\.\.OPEN_ORDER_STATUSES\]\s*\)/, "未見 open 腿查詢");
-    assert.match(src, /mergeRowsById\(/, "未見按 id 去重合併");
+    assert.match(src, /\.in\(\s*"status"\s*,\s*\[\.\.\.OPEN_ORDER_STATUSES\]\s*\)/, "未見 open 查詢");
   });
 
-  it("truncated 判準一定要用「未合併兜底腿之前」嘅行數", () => {
-    assert.match(src, /incrementalRawOrderCount/, "缺 incrementalRawOrderCount");
+  /**
+   * 🔴 商家硬要求「唔可以增加任何流量」。增量拉取係**最頻繁**嘅一條路（每次開頁／
+   *    水位差量），所以佢一定要保持**單腿零額外查詢**；任何「兜底腿」都唔准加返。
+   */
+  it("增量拉取唔准加任何額外查詢（零流量增長）", () => {
     assert.doesNotMatch(
       src,
+      /openOrdersPromise|openFallbackRows|mergeRowsById/,
+      "增量之下又加咗兜底查詢／合併 —— 每條拉取多一次 round trip，違反「唔增加流量」",
+    );
+    assert.match(
+      src,
       /isIncrementalTruncated\(orders\.length,\s*limit\)/,
-      "唔可以用合併後 orders.length —— 兜底腿刻意多回，會誤判撞 limit 令 client 每次走全量",
+      "truncated 判準應該直接用實際回傳行數",
     );
   });
 

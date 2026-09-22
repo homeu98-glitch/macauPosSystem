@@ -37,6 +37,7 @@ import {
 } from "@/lib/storage";
 import { PosOrder, QueueEvent } from "@/lib/types";
 import { isTerminalOrderStatus } from "@/lib/pos-order-filters";
+import { isNonOrderId } from "@/lib/pos/order-id-guard";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, retryFailedSyncEvents, resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
@@ -392,4 +393,62 @@ export function discardQuarantinedOrder(orderId: string): boolean {
   const filtered = local.filter((o) => o.id !== orderId);
   if (filtered.length !== local.length) saveOrders(filtered);
   return true;
+}
+
+/**
+ * 🚫 **停用「隔離」概念**（2026-09-22 商家拍板）—— 一次性把隔離區全部還原返本機。
+ *
+ * ## 為何要拆（實案：隔離區 111 張）
+ *
+ * 自動隔離本身係一個**破壞性、而且判斷唔可靠**嘅機制：
+ * 判準係「今次 `/api/pos/state` 嘅 `orders` 冇呢張單」——但嗰個 payload 可能係
+ * 空骨架／增量差量／投影子集，唔係全集。結果：
+ *   · 2026-09-22 舊 bundle 收到 P0b 節流空骨架 ⇒ 兩張未結帳枱（A01/A03）被隔離，
+ *     枱面「閃一下就變空閒」；
+ *   · 111 張**根本唔係訂單**嘅 `print-xxxxxxxx`（PrintJob 漏入 orders）亦被逐張隔離。
+ *
+ * 商家口徑（2026-09-22）：
+ * > 「不應存在『隔離』的概念，即使是 offline 狀態，訂單也應一直保留在本機內，
+ * >   直到連網成功後才 sync 上去。」
+ *
+ * ⇒ 本機訂單**永遠唔會被自動移走**。真係要清走，只有兩個明確意圖嘅入口：
+ *   ① 用戶喺「同步健康」逐張「永久刪除」（寫 tombstone）；② 清機／換店。
+ *
+ * ## 呢個函式做咩
+ *
+ * 把舊隔離區（migration 前累積落嚟）全部還原返 `orders`：
+ *   · `print-` / `evt-` 等**明顯非訂單** id → 直接丟棄（唔還原，佢哋本來就唔應該喺 orders）；
+ *   · 已經喺 `orders` 有嘅 id → 唔重複加；
+ *   · 其餘（真訂單）→ 還原。
+ * 之後**清空隔離區**（唔再寫入）。
+ *
+ * @returns `{ restored, discarded }` —— 還原幾多張真單、丟棄幾多筆垃圾
+ */
+export function restoreAllQuarantinedOrders(): { restored: number; discarded: number } {
+  if (typeof window === "undefined") return { restored: 0, discarded: 0 };
+  const rows = loadQuarantinedOrders();
+  if (rows.length === 0) return { restored: 0, discarded: 0 };
+
+  const local = loadOrders();
+  const known = new Set(local.map((o) => o.id));
+  let restored = 0;
+  let discarded = 0;
+  for (const row of rows) {
+    const order = row?.order;
+    // 垃圾（打印 job / 事件 id 漏入 orders）／重複／壞資料 → 丟，唔還原。
+    if (!order?.id || isNonOrderId(order.id) || known.has(order.id)) {
+      discarded += 1;
+      continue;
+    }
+    local.push(order);
+    known.add(order.id);
+    restored += 1;
+  }
+  saveQuarantinedOrders([]);
+  if (restored > 0) saveOrders(local);
+  console.log(
+    `[sync-reconcile] 已停用隔離區：還原 ${restored} 張本機訂單、丟棄 ${discarded} 筆非訂單資料` +
+      `（本機訂單自此唔會再被自動移走）`,
+  );
+  return { restored, discarded };
 }

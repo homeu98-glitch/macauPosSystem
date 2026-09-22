@@ -47,7 +47,8 @@ APK：TICK 60s；獨立心跳已刪；claim 由 `nextPollMs` 控（60→180s，�
 
 ## 5 訂單／交班
 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱）。
-孤兒單號 `print-xxxxxxxx`＝localStorage、從未上雲 ⇒ 永久刪除（「還原」係陷阱）。
+孤兒單號 `print-xxxxxxxx`＝**PrintJob 漏入 orders**（唔係訂單）⇒ 已由 `order-id-guard` 永久擋住；
+隔離機制已停用（見 §8），唔存在「還原／永久刪除」呢個抉擇。
 🔴 三條互不相干軌道：`pos_shifts`（只擋收銀台）／`pos_store_status.is_open`（線下接單）／
 Ledger `merchant_enabled`（線上接單）；`closeShift()` 唔碰任何接單開關。
 總掣＝`close-gate.ts`＋`close-gate-run.ts`：先線下後線上／線下失敗唔 return／null＝skipped／永不 throw；
@@ -66,9 +67,8 @@ Ledger `merchant_enabled`（線上接單）；`closeShift()` 唔碰任何接單�
 🔴 `button { font: inherit }` 壓過 `text-*` ⇒ 字級寫喺仔元素。
 🔴🔴 `npm test`＝`node --test`：唔認 `@/` 別名、唔支援 `.tsx` ⇒ 可測模組零 import、邏輯/執行分檔；
 import 鏈用相對路徑＋顯式 `.ts`。跑法：`node node_modules/typescript/bin/tsc --noEmit`、`node --test`。
-npm/npx 跑唔到；冇 coreutils（用 Read/Glob/Grep）；複雜 JS 寫 `.cjs`；
-⚠️ 改 memory／報告唔好經 `node -e`（反引號被命令替換、靜默食內容）。
-git 用全路徑 PortableGit；push 前 export PATH；Vercel 改 env 要 **Redeploy**。
+（其他環境陷阱：npm 跑唔到／冇 coreutils／`node -e` 反引號被食 —— 見用戶級 MEMORY。）
+Vercel 改 env 要 **Redeploy**。
 
 ## 7 判別／取證
 `isSaleCountable()`：只計 settled／帶 onlineOrderId 嘅 paid，日期用 Macau 邊界
@@ -84,7 +84,7 @@ id 前綴＝建單程式：`order-` 收銀台/快餐／`staff-` 店員手機／`
 計費＝Supabase → Vercel Function（改 response 對帳單無幫助）。⭐ 最快取證＝解析 Vercel `[egress]` 行
 （`tools/_egress-*.cjs`）。最大來源＝**舊分頁跑舊 bundle**（903KB ⇒ 690MB/h；新版 412KB）
 ⇒ 要「少拉」唔係「拉細」。指紋：`limit=300`＝舊、`limit=0`＝新。⚠️ Supabase CSV 匯出上限 1000 行。
-✅ 2026-09-22 覆核：全清（0.7 次/分、心跳 0、claim 每 180s、904MB/日 → 估 10~20MB/日）。
+✅ 2026-09-22 egress 已收口（904MB/日 → 估 10~20MB/日）；⚠️ 未喺「營業中開 POS」窗口覆核過。
 🔴🔴 **伺服器唔可以用「partial payload ＋ 一個新欄位」去保護舊 client**（2026-09-22 P0b 迴歸）：
 舊 client **唔會睇個新欄位**。凡係「可能令 `orders` 變空」嘅回應路徑，必須**要麼回真資料
 （至少未結帳單），要麼唔回 200**。實案：`legacyThrottled` 回空骨架 → 舊 bundle 唔識
@@ -93,15 +93,19 @@ id 前綴＝建單程式：`order-` 收銀台/快餐／`staff-` 店員手機／`
 `mode=legacyThrottled` 或 `[pos/state] 🔴 疑似舊版 bundle` ⇒ 即刻叫佢重新載入。
 🔴 舊 bundle 亦冇 `skipped/server-newer` 終態 ⇒ 確定性拒收事件（stale／降級）**無限重推**
 （實測 924 行 warn／45 秒、77 張單）＝ log 洗版 + 持續 egress。**唔好手動重跑 migration。**
-🔴 **增量拉取（`since`）一定要兜底「未結帳單」**（`OPEN_ORDER_STATUSES` 一腿，2026-09-22 修）：
-水位推過就**永久漏**且**唔觸發 `truncated`** ⇒ 連走全量嘅兜底都冇。
-實案：訂單19（A01, 99）雲端 open、收銀機完全唔知 ⇒ 同枱再開新單，99 蚊冇人發現。
+🚫 **「隔離」機制已整組停用**（2026-09-22 商家拍板）：本機訂單**一律保留**（offline 都保留）
+直到 sync 上雲；舊隔離區由 `restoreAllQuarantinedOrders()` 開頁自動還原（垃圾直接丟棄）。
+🔴 唔可以用 **partial payload**（空骨架／增量差量／投影子集）斷定「雲端冇呢張單」再刪本機資料。
+🔴 `orders` store 只准放訂單 id：`loadOrders()` 過 `@/lib/pos/order-id-guard`（黑名單 `print-`/`evt-`/`q-`）。
+   實案：隔離區 111 張 `print-xxxxxxxx`（**PrintJob 漏入 orders**，MOP 0.00）＋ A03 枱卡「閃一下」消失。
+🔴 增量水位只可以喺 `Array.isArray(payload.orders)` 時推進（否則失敗／降級回應會**永久漏單**）。
+🔴 增量拉取保持**單腿零額外查詢**（兜底腿已移除：`since` 只有新 bundle 會傳，兜底幫唔到舊 bundle）。
 已落實：RPC `pos_orders_page`(0046)、`?skipQueue=1`、投影＋日期下限＋每日上限、
 `poll-gate.ts`／`write-gate.ts`、queue 身分簽名、APK `nextPollMs`、`[egress]` log。
 🔴 兩道 server 閘刻意 fail-open；`urgent:true` 唔可擋。版本：`build-info.ts`
 （`NEXT_PUBLIC_BUILD_ID` 逐字面寫 `process.env.X`）；`x-pos-build` 標頭；只提示唔自動 reload。
-✅ `build-stale-banner.tsx`（`/pos` 最頂 in-flow、有「立即重新載入」）：🔴 配套排版
-外層 flex→flex-col、根 `h-[100dvh]`→`min-h-0 flex-1`（唔改底部被裁切）；守衛 `pos-app-stale-banner.test.ts`。
+✅ `build-stale-banner.tsx`（版本過期橫幅）／`pos-app-stale-banner.test.ts` 已上線；🔴 配套排版
+（外層 flex→flex-col、根 `h-[100dvh]`→`min-h-0 flex-1`）唔改底部會被裁切。
 🔴 量度陷阱：唔可用全窗口平均（burst 會被稀釋）⇒ 用 gap>20s 分段。
 
 ## 9 POS 工作階段

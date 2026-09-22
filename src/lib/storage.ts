@@ -18,6 +18,7 @@ import {
 } from "@/lib/types";
 import type { RetailProduct } from "@/lib/retail/types";
 import type { RetailHoldOrder } from "@/lib/retail/hold-orders";
+import { splitNonOrderRows } from "@/lib/pos/order-id-guard";
 import {
   MAX_SELF_ORDER_NOTICES,
   type SelfOrderNotice,
@@ -869,8 +870,36 @@ export function saveQueue(events: QueueEvent[]) {
   writeStoreJson(STORE_SUFFIX.queue, events);
 }
 
+/**
+ * 讀訂單（本機真源）。
+ *
+ * 🧹 **id 命名空間守衛（2026-09-22）**：`orders` store 曾經被 **`PrintJob` 物件**
+ * 污染（實案：商家 iPad 嘅隔離區出現 111 張 `print-xxxxxxxx`、`MOP 0.00`、
+ * 枱名係打印 job 自己嘅 `table_name`）。佢哋係「非訂單」實體，卻因為 status 唔屬
+ * 終態訂單狀態而被孤兒對賬當成未結帳單，每次全量拉取都被「隔離」一次，永遠清唔完。
+ *
+ * 呢度係**最上游**嘅一道閘：凡是 id 屬已知非訂單命名空間（`print-` / `evt-` / `q-`）
+ * 一律唔會離開 storage ⇒ 唔會上 UI、唔會入 sync queue、唔會被隔離。
+ * 同時**自我修復**：一發現就寫返乾淨版本（一次過，之後讀到嘅已經係乾淨）。
+ *
+ * @see `@/lib/pos/order-id-guard`（純函式 + 單測；黑名單制，唔會誤刪真訂單）
+ */
 export function loadOrders(merchantId?: string | null) {
-  return readStoreJson(STORE_SUFFIX.orders, [] as PosOrder[], merchantId);
+  const rows = readStoreJson(STORE_SUFFIX.orders, [] as PosOrder[], merchantId);
+  const { orders, junk } = splitNonOrderRows(rows);
+  if (junk.length > 0) {
+    if (!merchantId) writeStoreJson(STORE_SUFFIX.orders, orders);
+    if (typeof window !== "undefined") {
+      console.warn(
+        `[storage] 已剔除 ${junk.length} 筆非訂單資料（orders store 被其他實體污染）：` +
+          junk
+            .slice(0, 5)
+            .map((row) => String(row?.id ?? "?"))
+            .join("、"),
+      );
+    }
+  }
+  return orders;
 }
 
 export function saveOrders(orders: PosOrder[]) {

@@ -150,11 +150,25 @@ describe("/api/pos/state ── 舊版止血（P0）", () => {
 });
 
 describe("client ── 增量拉取嘅兩條安全閘", () => {
-  it("🔴🔴 孤兒單對賬只可以喺**全量**之下跑", () => {
+  /**
+   * 🚫 2026-09-22 **契約升級**（原本：「增量之下唔准跑孤兒對賬」；現在：「任何情況都唔准」）。
+   *
+   * 舊契約仍然錯誤地假設「全量 payload = 全集」。實案證明佢唔成立：
+   *   · P0b 節流對舊 bundle 回**空骨架** ⇒ 兩張未結帳枱（A01／A03）「閃一下」變空閒；
+   *   · 隔離區累積 **111 張 `print-xxxxxxxx`**（PrintJob 漏入 orders，本來就唔係訂單）。
+   * 商家拍板：「不應存在隔離的概念，即使 offline，訂單也應一直保留在本機內，
+   * 直到連網成功後才 sync 上去。」
+   *
+   * ⇒ 新契約＝**pos-app 完全唔准自動移走本機訂單**，並且要一次性還原舊隔離區。
+   */
+  it("🔴🔴 自動隔離／孤兒對賬已完全移除（本機訂單一律保留到同步上雲）", () => {
     assert.ok(
-      /if \(!payload\.incremental\) \{[\s\S]{0,600}?computeOrphanLocalOrders\(/.test(POS_APP) ||
-        /payload\.incremental[\s\S]{0,200}?computeOrphanLocalOrders\(/.test(POS_APP),
-      "增量之下照跑孤兒單對賬 ⇒ 全店未變更過嘅單會一次過被隔離（災難級）",
+      !/computeOrphanLocalOrders\(/.test(POS_APP) && !/quarantineOrders\(/.test(POS_APP),
+      "pos-app 唔應該再有任何自動隔離／孤兒對賬呼叫（partial payload 唔可以當全集）",
+    );
+    assert.ok(
+      /restoreAllQuarantinedOrders\(/.test(POS_APP),
+      "冇一次性還原舊隔離區 ⇒ 舊裝置升級之後啲單永遠卡喺隔離區",
     );
   });
 
