@@ -80,16 +80,39 @@ const CLAIM_SRC = readFileSync(
 describe("/api/pos/print-agent/claim ── App 節奏旋鈕", () => {
   it("🔴 回應一定要有 `nextPollMs`（刪咗心跳之後唯一嘅節奏控制）", () => {
     assert.ok(
-      /nextPollMs:\s*SUGGESTED_CLAIM_MS/.test(CLAIM_SRC),
+      /nextPollMs\s*[,}]/.test(CLAIM_SRC),
       "`nextPollMs` 唔見咗 ⇒ 服務端失去節奏控制，要再出 APK 才改得到",
+    );
+    assert.ok(
+      /const\s+nextPollMs\s*=/.test(CLAIM_SRC),
+      "`nextPollMs` 必須係計出嚟嘅值（雙檔自適應），唔可以又寫死一個常數",
     );
   });
 
-  it("🔴 值必須 ≤ 180_000（否則 POS 網頁會出「疑似離線」假警報）", () => {
-    const m = CLAIM_SRC.match(/const SUGGESTED_CLAIM_MS\s*=\s*([\d_]+)\s*;/);
-    assert.ok(m, "搵唔到 SUGGESTED_CLAIM_MS");
-    const ms = Number(m[1].replace(/_/g, ""));
-    assert.ok(ms > 0 && ms <= 180_000, `建議值 ${ms}ms 超出 3 分鐘上限`);
+  it("🔴 全部節奏值必須落喺 5_000 ~ 180_000（APK 有效範圍／UI 假警報界線）", () => {
+    const matches = [...CLAIM_SRC.matchAll(/const\s+([A-Z0-9_]*_MS)\s*=\s*([\d_]+)\s*;/g)];
+    assert.ok(matches.length >= 2, "搵唔到 claim 嘅節奏常數（應該有基礎 ＋ 積壓兩個檔位）");
+    for (const m of matches) {
+      const name = m[1];
+      const ms = Number(m[2].replace(/_/g, ""));
+      assert.ok(
+        ms >= 5_000,
+        `${name} = ${ms}ms < 5 秒 ⇒ APK 嘅 takeIf { it in 5_000..180_000 } 會當無效、靜默 fallback 30 秒`,
+      );
+      assert.ok(
+        ms <= 180_000,
+        `${name} = ${ms}ms > 3 分鐘 ⇒ 會超過 POS 網頁「5 分鐘＝疑似離線」閾值，出假警報`,
+      );
+    }
+  });
+
+  it("🔴 雙檔自適應：取滿 `limit` ⇒ 用積壓檔（追趕）；否則用基礎檔", () => {
+    assert.ok(/const SUGGESTED_CLAIM_MS\s*=/.test(CLAIM_SRC), "搵唔到基礎檔常數 SUGGESTED_CLAIM_MS");
+    assert.ok(/const CLAIM_BACKLOG_MS\s*=/.test(CLAIM_SRC), "搵唔到積壓檔常數 CLAIM_BACKLOG_MS");
+    assert.ok(
+      /jobs\.length\s*>=\s*limit\s*\?\s*CLAIM_BACKLOG_MS\s*:\s*SUGGESTED_CLAIM_MS/.test(CLAIM_SRC),
+      "判斷式唔見咗 ⇒ 一批單會每輪只消化 `limit` 張，之後又要等足一個基礎間隔（10 張 = 6 分鐘）",
+    );
   });
 
   it("`claim` 一定要帶 `recordActivity: true`（否則刪咗心跳就冇人蓋章）", () => {

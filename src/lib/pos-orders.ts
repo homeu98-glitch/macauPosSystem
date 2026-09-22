@@ -1,13 +1,18 @@
 "use client";
 
 import {
-  appendPrintJobs,
   buildKioskReceiptPrintJobs,
   buildKitchenPrintJobs,
   buildLabelPrintJobs,
   buildReopenPrintJobs,
   isPrintContentEnabled,
 } from "@/lib/print-jobs";
+// 🔴 2026-09-22：**唔可以**用 `appendPrintJobs`（`@/lib/print-jobs`）—— 佢嘅語義
+// 已於 2026-09-11（commit 1e08343）改為「**只寫本機、唔上雲**」，而店內實體出紙
+// 通道係「雲端 pos_print_jobs → 中繼 APK claim」。淨寫本機 = 打印中心永遠綠色
+// 「已發送」但一張紙都唔出、零紅標、零症狀（返結單／確認自助單曾因此靜默失效 11 日）。
+// 詳見 `docs/reviews/print-out-failure-and-latency-2026-09-22.md`。
+import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { isSelfOrder } from "@/lib/pos/order-source";
@@ -244,8 +249,10 @@ export async function reopenPosOrder(params: {
   notifyQueueChanged();
 
   // ④ 印返結單（受 reopen 細粒度開關控制，2026-09-08 引入）
+  // 🔴 2026-09-22：一定要 `appendPrintJobsWithSync`（上雲）—— 原本用 `appendPrintJobs`
+  //    ⇒ 返結單永遠上唔到雲端 `pos_print_jobs` ⇒ 中繼 APK claim 唔到 ⇒ 靜默唔出紙。
   if (isPrintContentEnabled("reopen")) {
-    appendPrintJobs(buildReopenPrintJobs(updated, reason, params.operator));
+    appendPrintJobsWithSync(buildReopenPrintJobs(updated, reason, params.operator));
   }
 
   // ⑤ 通知面板刷新（同機 UI）
@@ -311,7 +318,11 @@ export function confirmSelfOrder(orderId: string): ConfirmSelfOrderResult {
     jobs.push(...buildKioskReceiptPrintJobs(updated, bootstrap));
   }
 
-  appendPrintJobs(jobs);
+  // 🔴 2026-09-22：一定要上雲（`appendPrintJobsWithSync`）—— 收銀台確認自助單
+  //    （kiosk／掃碼）係本店**最常走**嘅出紙路徑之一，用 `appendPrintJobs` 會靜默唔出紙。
+  //    掃碼單順帶嘅顧客小票都係**收銀端**打印機出，所以同樣要上雲；
+  //    Kiosk 自己嗰張小票係另一條路（`printKioskReceiptForOrder`，本機限定）✅。
+  appendPrintJobsWithSync(jobs);
 
   // 推同步事件（ORDER_UPDATED）
   const event: QueueEvent = {

@@ -36,6 +36,10 @@
 
 ## 4 打印／中繼
 - 建單/接單後必 `appendPrintJobsWithSync()`（淨 `savePrintJobs()`＝零出紙）。
+- 🔴🔴 `appendPrintJobs()` 同名反轉語義（2026-09-11 `1e08343`）：舊版＝會上雲，新版＝**只寫本機**。
+  5 處未搬 ⇒ 靜默零出紙（**返結單**、確認自助單、自助單 realtime 新單／加單／backfill）。
+  唯一合法用法＝`printKioskReceiptForOrder()`（kiosk 本機小票）。詳見
+  `docs/reviews/print-out-failure-and-latency-2026-09-22.md`。
 - 重複出紙靠**內容唯一鍵 `onceKey`** ＋ `claimOncePrintJobs()`（`PrintJob.id` 係 randomUUID，
   按 id merge 永遠攔唔到）；⚠️ `pos-app.tsx` 仍有 3 處繞過；自動路徑必帶世代。
 - 🔴 `paired:true`＝DB 有列＝歷史事實，**唔等於在線**；在線睇 `last_seen_at` 或打 `pair-status`。
@@ -43,7 +47,12 @@
 - APK：`PosJobRunner.kt` TICK 60s／DEVICE_CONFIG 每 5 tick；**獨立心跳已刪**（`claim` 已蓋
   `last_seen_at`，`heartbeat/route.ts` 從未讀 IP）⇒ claim 由 `nextPollMs` 控制（60→180s，
   🔴 上限 180s，因 POS 網頁 `>= 5 分鐘` 標「疑似離線」）。
-- 🔴 落結論前一定用**生產 log** 核對，唔好憑本機 Kotlin 副本斷定（三個副本都係舊版）。
+- 🔴 出紙**慢**嘅三大來源（2026-09-22）：① `SUGGESTED_CLAIM_MS=180s`（實測 median 180.5s）
+  ② APK `claim` **一次最多 5 張**（`p_limit`）＝高峰 1.7 張/分鐘 ③ 打印中心結果回填 8s→30s。
+  叫醒路徑（`pos_print_jobs` INSERT → `onWake`）通＝1–3 秒、唔通＝等足 180 秒。
+  建議自適應：`jobs.length >= limit` 回 `3_000`，否則 `180_000`。
+- 🔴 落結論前一定用**生產 log** 核對，唔好憑本機 Kotlin 副本斷定（三個副本都係舊版；
+  5 個副本全部無 `nextPollMs` 實作，但生產 log 證明現役 APK 有讀 ⇒ 現役源碼唔喺本機）。
 
 ## 5 訂單／交班
 - 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱），唔准全店 find()。

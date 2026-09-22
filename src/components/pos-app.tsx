@@ -64,7 +64,6 @@ import {
   quarantineOrders,
 } from "@/lib/pos/sync-reconcile";
 import {
-  appendPrintJobs,
   buildKitchenPrintJobs,
   buildKioskReceiptPrintJobs,
   buildLabelPrintJobs,
@@ -75,7 +74,11 @@ import {
   reprintReceiptForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
-import { claimOncePrintJobs } from "@/lib/pos/print-job-enqueue";
+// 🔴 2026-09-22：自助單（掃碼／kiosk）嘅自動出紙一律用 `appendPrintJobsWithSync`。
+// `appendPrintJobs`（`@/lib/print-jobs`）語義已於 2026-09-11 改為「**只寫本機、唔上雲**」，
+// 用佢 = 打印中心綠色「已發送」但永遠唔出紙（零紅標、零症狀）。見
+// `docs/reviews/print-out-failure-and-latency-2026-09-22.md`。
+import { appendPrintJobsWithSync, claimOncePrintJobs } from "@/lib/pos/print-job-enqueue";
 import {
   addSelfOrderNotice,
   dismissSelfOrderNotice,
@@ -1485,7 +1488,9 @@ export function PosApp() {
             if (o.source === "scan" && bootstrap && kioskOn) {
               jobs.push(...buildKioskReceiptPrintJobs(o, bootstrap));
             }
-            appendPrintJobs(jobs);
+            // 🔴 2026-09-22：backfill 補建嘅自助單廚房單／標籤單一定要**上雲**
+            //    （原本 `appendPrintJobs` ＝只寫本機 ⇒ 補建完全冇紙）。
+            appendPrintJobsWithSync(jobs);
           }
           return cleaned;
         });
@@ -1902,7 +1907,9 @@ export function PosApp() {
           if (order.source === "scan" && bootstrap && kioskOn) {
             jobs.push(...buildKioskReceiptPrintJobs(order, bootstrap));
           }
-          appendPrintJobs(jobs);
+          // 🔴 2026-09-22：realtime 收到新自助單（掃碼／kiosk）嘅廚房單＋標籤單
+          //    一定要**上雲**（原本 `appendPrintJobs` ＝只寫本機 ⇒ 廚房永遠收唔到紙）。
+          appendPrintJobsWithSync(jobs);
         }
       }
 
@@ -1946,7 +1953,9 @@ export function PosApp() {
             seen.add(signature);
             printedAddonSignatures.set(order.id, seen);
             if (jobs.length > 0) {
-              appendPrintJobs(jobs);
+              // 🔴 2026-09-22：自助單加菜嘅廚房單／標籤單一定要**上雲**
+              //    （原本 `appendPrintJobs` ⇒ 客人加咗嘅菜廚房永遠收唔到紙）。
+              appendPrintJobsWithSync(jobs);
               setToast({
                 tone: "info",
                 message: `${order.tableName || order.localOrderNo} 加單 ${addedItems.length} 項，已補出廚房單。`,
