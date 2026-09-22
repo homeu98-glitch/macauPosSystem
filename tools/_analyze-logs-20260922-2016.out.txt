@@ -1,0 +1,187 @@
+================ VERCEL LOG ================
+rows=1466  窗口 2026-09-22 11:56:33 → 2026-09-22 12:12:44（澳門）
+
+唯一 requestId = 305（每請求通常 2–3 行 ⇒ 實際請求少於行數）
+
+### level 分佈（3 種）
+    928  warn   [2026-09-22 11:57:23 → 2026-09-22 12:12:45]
+    438  (empty)   [2026-09-22 11:56:33 → 2026-09-22 12:12:44]
+    100  info   [2026-09-22 11:56:34 → 2026-09-22 12:12:45]
+
+### 路徑分佈（前 20）（22 種）
+    957  POST /api/pos/sync   [2026-09-22 12:11:59 → 2026-09-22 12:12:45]
+    225  GET /api/pos/state   [2026-09-22 11:56:33 → 2026-09-22 12:12:45]
+     70  GET /api/online-order-settings   [2026-09-22 12:07:38 → 2026-09-22 12:12:44]
+     42  GET /api/pos/shift   [2026-09-22 11:57:13 → 2026-09-22 12:12:41]
+     37  POST /api/topup/pending-count   [2026-09-22 11:56:42 → 2026-09-22 12:12:41]
+     35  GET /api/pos/store-status   [2026-09-22 12:07:38 → 2026-09-22 12:12:44]
+     18  GET /api/pos/bootstrap   [2026-09-22 12:07:38 → 2026-09-22 12:12:41]
+     16  GET /pos   [2026-09-22 12:07:37 → 2026-09-22 12:12:41]
+     13  POST /api/pos/print-agent/claim   [2026-09-22 11:56:49 → 2026-09-22 12:12:25]
+     11  GET /api/pos/kiosk-settings   [2026-09-22 12:07:43 → 2026-09-22 12:12:44]
+     11  GET /orders   [2026-09-22 12:07:42 → 2026-09-22 12:12:44]
+      6  GET /api/pos/device-config   [2026-09-22 11:58:50 → 2026-09-22 12:09:53]
+      4  GET /api/inventory/receipts   [2026-09-22 12:09:33 → 2026-09-22 12:10:14]
+      4  POST /api/pos/kiosk-settings   [2026-09-22 12:07:35 → 2026-09-22 12:09:25]
+      3  GET /api/pos/print-agent/pair-status   [2026-09-22 12:10:39 → 2026-09-22 12:10:39]
+      3  GET /api/pos/print-jobs/status   [2026-09-22 12:10:39 → 2026-09-22 12:10:39]
+      2  GET /members   [2026-09-22 12:10:37 → 2026-09-22 12:12:14]
+      2  GET /api/pos/print-templates   [2026-09-22 12:10:39 → 2026-09-22 12:10:39]
+      2  GET /api/inventory/products   [2026-09-22 12:09:33 → 2026-09-22 12:10:14]
+      2  GET /reports   [2026-09-22 12:09:32 → 2026-09-22 12:10:13]
+
+### 疑似 error/warning 訊息（正規化後）（6 種）
+    825  [pos/sync] 拒絕覆寫訂單 <id>（現有=settled@<ts>+00:00，incoming=sent_to_kitchen@<ts>Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     44  [pos/sync] 拒絕覆寫訂單 ledger-<uuid>（現有=settled@<ts>+00:00，incoming=paid@<ts>Z，                stale（incoming 較舊））   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     22  [pos/sync] 拒絕覆寫訂單 <id>（現有=settled@<ts>+00:00，incoming=sent_to_kitchen@<ts>Z，                終態降級）   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     22  [pos/sync] 拒絕覆寫訂單 ledger-<uuid>（現有=settled@<ts>+00:00，incoming=sent_to_kitchen@<ts>Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  [pos/sync] 拒絕覆寫訂單 <id>（現有=sent_to_kitchen@<ts>+00:00，incoming=sent_to_kitchen@<ts>Z，                stale（incoming 較舊））   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+      3  [pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=60.246.53.111 —— 每次會多拉約 500 KB queue；請該裝置**重新載入頁面**。   [2026-09-22 11:57:23 → 2026-09-22 12:12:20]
+
+### 錯誤集中嘅路徑（2 種）
+    924  /api/pos/sync | warn   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+      3  /api/pos/state | warn   [2026-09-22 11:57:23 → 2026-09-22 12:12:20]
+
+### 🔴 pos/sync 拒絕覆寫訂單：共 924 行
+  [2026-09-22 12:12:45] [pos/sync] 拒絕覆寫訂單 order-251dfe1a（現有=settled@2026-09-14T12:43:59.411+00:00，incoming=sent_to_kitchen@2026-09-14T12:43:38.544Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））
+  [2026-09-22 12:12:45] [pos/sync] 拒絕覆寫訂單 order-76350106（現有=settled@2026-09-14T13:19:03.87+00:00，incoming=sent_to_kitchen@2026-09-14T13:18:42.978Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））
+  [2026-09-22 12:12:45] [pos/sync] 拒絕覆寫訂單 order-39884787（現有=settled@2026-09-15T01:58:54.675+00:00，incoming=sent_to_kitchen@2026-09-15T01:58:34.131Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））
+  [2026-09-22 12:12:45] [pos/sync] 拒絕覆寫訂單 order-393110e5（現有=settled@2026-09-15T01:59:34.815+00:00，incoming=sent_to_kitchen@2026-09-15T01:59:14.418Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））
+  … 最後一行 [2026-09-22 12:12:00] [pos/sync] 拒絕覆寫訂單 order-41ccd63c（現有=settled@2026-09-22T11:41:20.813+00:00，incoming=sent_to_kitchen@2026-09-22T11:41:04.922Z，                付款階段降級（已收款唔可以被未收款 snapshot 覆蓋））
+
+### 🔴 疑似舊版 bundle 全量拉取：共 3 行
+  [2026-09-22 12:12:20] [pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=60.246.53.111 —— 每次會多拉約 500 KB queue；請該裝置**重新載入頁面**。
+  [2026-09-22 12:12:10] [pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=60.246.53.111 —— 每次會多拉約 500 KB queue；請該裝置**重新載入頁面**。
+  [2026-09-22 11:57:23] [pos/state] 🔴 偵測到疑似舊版 bundle 嘅全量拉取（冇 skipQueue）ip=60.246.53.111 —— 每次會多拉約 500 KB queue；請該裝置**重新載入頁面**。
+
+### [egress] 行：共 75 行
+  [2026-09-22 12:12:45] [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.53.111 src=orders-panel
+  [2026-09-22 12:12:44] [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  [2026-09-22 12:12:41] [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:12:29.434Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  … 最後一行 [2026-09-22 11:56:34] [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+
+### level=error 共 0 行
+
+### 拒絕覆寫：涉及邊張單／現有狀態（84 種）
+     11  order-251dfe1a  現有=現有=settled@2026-09-14T12:43:59.411+00:00，incoming=sent_to_kitchen@2026-09-14T12:43:38.544Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-76350106  現有=現有=settled@2026-09-14T13:19:03.87+00:00，incoming=sent_to_kitchen@2026-09-14T13:18:42.978Z，                付款階段降級（已收款唔可以被未收款 snapsho   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-39884787  現有=現有=settled@2026-09-15T01:58:54.675+00:00，incoming=sent_to_kitchen@2026-09-15T01:58:34.131Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-393110e5  現有=現有=settled@2026-09-15T01:59:34.815+00:00，incoming=sent_to_kitchen@2026-09-15T01:59:14.418Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-252de09b  現有=現有=settled@2026-09-15T03:18:01.137+00:00，incoming=sent_to_kitchen@2026-09-15T03:17:40.615Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-078ec9ae  現有=現有=settled@2026-09-15T03:58:49.575+00:00，incoming=sent_to_kitchen@2026-09-15T03:19:24.554Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-1505b571  現有=現有=settled@2026-09-15T03:57:31.844+00:00，incoming=sent_to_kitchen@2026-09-15T03:54:02.142Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-078ec9ae  現有=現有=settled@2026-09-15T03:58:49.575+00:00，incoming=sent_to_kitchen@2026-09-15T03:57:58.089Z，                終態降級   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  ledger-8ef07fe9-4f65-45ab-b7d9-41b5968a1a18  現有=現有=settled@2026-09-15T03:59:56.322+00:00，incoming=paid@2026-09-15T03:59:39.422Z，                stale（   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-9a4b434f  現有=現有=settled@2026-09-15T04:18:09.863+00:00，incoming=sent_to_kitchen@2026-09-15T04:18:01.598Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-93d4c3ad  現有=現有=settled@2026-09-15T04:25:26.865+00:00，incoming=sent_to_kitchen@2026-09-15T04:25:11.941Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-62bea070  現有=現有=settled@2026-09-15T05:24:24.171+00:00，incoming=sent_to_kitchen@2026-09-15T05:24:03.756Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-57544388  現有=現有=settled@2026-09-15T05:58:08.689+00:00，incoming=sent_to_kitchen@2026-09-15T05:57:58.439Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-1418a897  現有=現有=settled@2026-09-15T09:38:44.933+00:00，incoming=sent_to_kitchen@2026-09-15T09:38:27.602Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-ab94f1f1  現有=現有=settled@2026-09-15T10:08:50.62+00:00，incoming=sent_to_kitchen@2026-09-15T10:07:13.933Z，                付款階段降級（已收款唔可以被未收款 snapsho   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-5e843eb2  現有=現有=settled@2026-09-15T10:09:50.742+00:00，incoming=sent_to_kitchen@2026-09-15T10:09:38.236Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-9772d5a2  現有=現有=settled@2026-09-15T10:49:31.265+00:00，incoming=sent_to_kitchen@2026-09-15T10:48:31.135Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-73a72b8e  現有=現有=settled@2026-09-15T11:24:04.956+00:00，incoming=sent_to_kitchen@2026-09-15T11:23:44.344Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-458f7ddc  現有=現有=settled@2026-09-15T12:10:31.219+00:00，incoming=sent_to_kitchen@2026-09-15T11:27:33.752Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+     11  order-42391cc9  現有=現有=settled@2026-09-15T11:59:47.571+00:00，incoming=sent_to_kitchen@2026-09-15T11:58:00.958Z，                付款階段降級（已收款唔可以被未收款 snapsh   [2026-09-22 12:12:00 → 2026-09-22 12:12:45]
+
+### [egress] 模式／行數分佈（11 種）
+     21  mode=legacyThrottled legacy=1 orders=0   [2026-09-22 11:56:34 → 2026-09-22 12:12:44]
+     17  mode=full legacy=0 orders=3   [2026-09-22 12:07:52 → 2026-09-22 12:12:41]
+     11  mode=ordersOnly legacy=? orders=3   [2026-09-22 12:07:43 → 2026-09-22 12:12:45]
+     11  mode=ordersOnly legacy=? orders=339   [2026-09-22 11:57:13 → 2026-09-22 12:12:31]
+      5  mode=ordersOnly legacy=? orders=34   [2026-09-22 12:08:27 → 2026-09-22 12:10:13]
+      2  mode=full legacy=0 orders=200   [2026-09-22 12:10:10 → 2026-09-22 12:12:39]
+      2  mode=full legacy=1 orders=200   [2026-09-22 12:12:10 → 2026-09-22 12:12:20]
+      2  mode=ordersOnly legacy=? orders=223   [2026-09-22 12:11:45 → 2026-09-22 12:11:50]
+      2  mode=ordersOnly legacy=? orders=189   [2026-09-22 12:07:37 → 2026-09-22 12:07:41]
+      1  mode=? legacy=? orders=?   [2026-09-22 12:10:39 → 2026-09-22 12:10:39]
+      1  mode=full legacy=0 orders=11   [2026-09-22 12:07:39 → 2026-09-22 12:07:39]
+[egress] 總 bytes（本窗口、已去重前）= 8.70 MB
+
+
+================ SUPABASE LOG ================
+rows=1000  窗口 "2026-09-22T11:50:21.217Z" → "2026-09-22T12:14:20.701Z"（澳門）
+
+### level（3 種）
+    997  success   ["2026-09-22T11:50:21.217Z" → "2026-09-22T12:14:20.701Z"]
+      2  error   ["2026-09-22T11:52:51.176Z" → "2026-09-22T12:06:47.326Z"]
+      1  warning   ["2026-09-22T11:52:51.147Z" → "2026-09-22T11:52:51.147Z"]
+
+### log_type（2 種）
+    933  edge   ["2026-09-22T11:50:21.217Z" → "2026-09-22T12:14:20.701Z"]
+     67  postgres   ["2026-09-22T11:50:24.714Z" → "2026-09-22T12:10:28.548Z"]
+
+### 狀態碼 × 路徑（前 25）（36 種）
+    104  200 GET /rest/v1/pos_sessions   ["2026-09-22T11:50:42.205Z" → "2026-09-22T12:14:19.404Z"]
+    103  200 GET /rest/v1/pos_orders   ["2026-09-22T11:50:21.253Z" → "2026-09-22T12:14:20.676Z"]
+     91  200 GET /rest/v1/pos_store_status   ["2026-09-22T11:50:42.174Z" → "2026-09-22T12:14:20.466Z"]
+     76  200 GET /rest/v1/pos_shifts   ["2026-09-22T11:50:21.217Z" → "2026-09-22T12:14:20.492Z"]
+     65  00000     ["2026-09-22T11:50:24.714Z" → "2026-09-22T12:10:28.548Z"]
+     58  200 GET /rest/v1/pos_online_order_settings   ["2026-09-22T11:50:42.182Z" → "2026-09-22T12:14:20.484Z"]
+     55  200 POST /rest/v1/rpc/pos_orders_page   ["2026-09-22T11:50:45.675Z" → "2026-09-22T12:14:19.341Z"]
+     53  101 GET /realtime/v1/websocket   ["2026-09-22T11:50:42.126Z" → "2026-09-22T12:14:11.315Z"]
+     46  200 GET /rest/v1/pos_print_jobs   ["2026-09-22T11:50:42.295Z" → "2026-09-22T12:14:20.593Z"]
+     45  200 GET /rest/v1/pos_device_configs   ["2026-09-22T11:50:42.292Z" → "2026-09-22T12:14:20.572Z"]
+     43  200 GET /rest/v1/pos_print_templates   ["2026-09-22T11:50:42.291Z" → "2026-09-22T12:14:20.577Z"]
+     41  200 GET /rest/v1/pos_queue_events   ["2026-09-22T11:50:42.279Z" → "2026-09-22T12:14:20.581Z"]
+     40  200 GET /rest/v1/pos_note_presets   ["2026-09-22T11:50:42.284Z" → "2026-09-22T12:14:19.341Z"]
+     31  200 POST /rest/v1/pos_queue_events   ["2026-09-22T11:50:21.314Z" → "2026-09-22T12:14:19.577Z"]
+     28  204 POST /rest/v1/rpc/pos_bump_egress   ["2026-09-22T11:51:47.348Z" → "2026-09-22T12:14:19.538Z"]
+     24  200 GET /rest/v1/pos_bootstrap_config   ["2026-09-22T11:50:42.184Z" → "2026-09-22T12:14:20.701Z"]
+     18  200 PATCH /rest/v1/pos_print_agents   ["2026-09-22T11:52:49.613Z" → "2026-09-22T12:12:25.670Z"]
+     17  200 GET /rest/v1/pos_kiosk_settings   ["2026-09-22T11:52:22.391Z" → "2026-09-22T12:13:42.702Z"]
+     17  200 POST /rest/v1/rpc/pos_claim_print_jobs   ["2026-09-22T11:52:49.672Z" → "2026-09-22T12:12:25.715Z"]
+      8  200 GET /rest/v1/inv_products   ["2026-09-22T11:52:12.033Z" → "2026-09-22T12:14:11.721Z"]
+      5  204 PATCH /rest/v1/pos_sessions   ["2026-09-22T11:52:12.280Z" → "2026-09-22T12:13:32.885Z"]
+      4  200 GET /rest/v1/pos_print_agents   ["2026-09-22T11:52:49.383Z" → "2026-09-22T12:09:53.933Z"]
+      4  200 POST /rest/v1/pos_kiosk_settings   ["2026-09-22T12:07:37.025Z" → "2026-09-22T12:09:26.023Z"]
+      4  200 PATCH /rest/v1/pos_print_jobs   ["2026-09-22T11:52:48.650Z" → "2026-09-22T11:52:52.372Z"]
+      3  201 POST /rest/v1/pos_queue_events   ["2026-09-22T11:52:48.818Z" → "2026-09-22T11:52:57.638Z"]
+
+### 非 2xx／error（66 種）
+     33  101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, li   ["2026-09-22T11:50:42.126Z" → "2026-09-22T12:14:11.315Z"]
+     20  101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko   ["2026-09-22T12:07:38.193Z" → "2026-09-22T12:11:02.734Z"]
+      5  00000   :: checkpoint starting: time   ["2026-09-22T11:50:24.714Z" → "2026-09-22T12:10:24.991Z"]
+      1  00000   :: checkpoint complete: wrote 36 buffers (0.1%); 0 WAL file(s) added, 0 removed, 3 recycled; write=3.521 s, sync=0.002 s, total=3.559 s; sync files=20, longest=0.002 s, average=0.001 s; distance=<n> kB   ["2026-09-22T12:10:28.548Z" → "2026-09-22T12:10:28.548Z"]
+      1  23505   :: duplicate key value violates unique constraint "schema_migrations_pkey"   ["2026-09-22T12:06:47.326Z" → "2026-09-22T12:06:47.326Z"]
+      1  00000   :: execute <unnamed>: -- ── pos_soldout（<n> 已建，呢度補雙保險）──
+alter table pos_soldout add column if not exists store_id text   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_soldout add column if not exists menu_item_id text   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_soldout add column if not exists updated_at timestamptz   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_queue_events add column if not exists created_at timestamptz   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_soldout add column if not exists sold_out boolean   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_queue_events add column if not exists payload jsonb   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_queue_events add column if not exists status text   ["2026-09-22T12:06:47.319Z" → "2026-09-22T12:06:47.319Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists updated_at timestamptz   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: alter table pos_device_configs add column if not exists terminal_name text   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: alter table pos_device_configs add column if not exists updated_at timestamptz   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: -- ── pos_queue_events（sync / state）──
+alter table pos_queue_events add column if not exists type text   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: alter table pos_queue_events add column if not exists entity_id text   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: alter table pos_device_configs add column if not exists local_settings jsonb   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: alter table pos_device_configs add column if not exists printers jsonb   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: -- ── pos_device_configs（state / device-config）──
+alter table pos_device_configs add column if not exists store_id text   ["2026-09-22T12:06:47.318Z" → "2026-09-22T12:06:47.318Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists currency text   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists menu_items jsonb   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists rules jsonb   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists printer_groups jsonb   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists tables jsonb   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists categories jsonb   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: -- ── pos_bootstrap_config（server service_role 讀寫）──
+alter table pos_bootstrap_config add column if not exists source_version integer   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_bootstrap_config add column if not exists store_name text   ["2026-09-22T12:06:47.317Z" → "2026-09-22T12:06:47.317Z"]
+      1  00000   :: execute <unnamed>: alter table pos_print_jobs add column if not exists status text   ["2026-09-22T12:06:47.316Z" → "2026-09-22T12:06:47.316Z"]
+      1  00000   :: execute <unnamed>: alter table pos_print_jobs add column if not exists ticket_type text   ["2026-09-22T12:06:47.316Z" → "2026-09-22T12:06:47.316Z"]
+
+### Supabase 非 2xx / error 共 121 行，樣本：
+  ["2026-09-22T12:14:11.315Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:13:47.256Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:13:44.379Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:13:42.697Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:13:37.327Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:13:32.620Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:12:44.890Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:12:41.332Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:12:29.941Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15
+  ["2026-09-22T12:12:28.795Z"] 101 GET /realtime/v1/websocket :: GET | 101 | https://iyrywzormzisyppkokbi.supabase.co/realtime/v1/websocket?apikey=REDACTED&eventsPerSecond=5&vsn=2.0.0 | Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.14 Safari/605.1.15

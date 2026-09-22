@@ -532,8 +532,10 @@ export function LocalOrdersPanel({
       setViewingOrderId(null);
       setReopenTargetOrderId(null);
       // 跳去點餐枱面：進入 temp 枱可編輯「返結帳」狀態，可加餐 / 改價 / 重結（原枱唔會被取代）
+      // 🔴 2026-09-22：同「查看」一樣，一定要用 `/pos`（`/` 自 2026-09-17 起係選擇工作台頁）。
+      //    以前返結完會掉去「請選擇要進入嘅工作台」⇒ 收銀做唔到重結。
       const tableId = result.tempTable?.id ?? (order.tableId && order.tableId !== "counter" ? order.tableId : "");
-      router.push(`/?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`);
+      router.push(`/pos?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`);
     } finally {
       setReopenSubmitting(false);
     }
@@ -724,8 +726,14 @@ export function LocalOrdersPanel({
                                 setViewingOrderId(order.id);
                               } else {
                                 // 未結堂食單（本地枱單 + 已轉枱線上堂食單）→ 直接跳枱面編輯
+                                //
+                                // 🔴 2026-09-22 修：路徑一定要係 **`/pos`**。
+                                // 2026-09-17 起 `/` 已經由「收銀台」改成「**統一入口／選擇工作台**」
+                                // 頁（見 `src/app/page.tsx`），收銀台搬去 `/pos`。
+                                // 舊寫法 push `/?tableId=…` ⇒ 撳「查看」會掉去「請選擇要進入嘅工作台」，
+                                // 收銀員完全入唔到枱面（商家 2026-09-22 回報：「一按查看就跳去工作台」）。
                                 router.push(
-                                  `/?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
+                                  `/pos?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
                                 );
                               }
                             }}

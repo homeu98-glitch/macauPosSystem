@@ -485,7 +485,10 @@ export function PosApp() {
     return () => window.removeEventListener("pos-bootstrap-changed", onBootstrapChanged);
   }, []);
 
-  // ── Deep-link：orders 面板「查看」非 counter 單會跳到 /?tableId=...&orderId=... ──
+  // ── Deep-link：orders 面板「查看」非 counter 單會跳到 `/pos?tableId=...&orderId=...` ──
+  // ⚠️ 2026-09-22：來源一定要 `router.push("/pos?…")`。`/` 自 2026-09-17 起係「選擇工作台」頁，
+  //    推去 `/` 會令收銀員卡喺選擇頁（見 `local-orders-panel.tsx` 兩處呼叫點）。
+  //    呢個 effect 自己用 `window.location.search` 讀 query，所以路徑改動唔影響佢。
   // 喺呢度載入單到工作台（已結/未結/已返結一律支援，搵全量 orders 唔靠 openOrders）。
   // quick mode 下 activeTable 鎖死 counter、真枱載唔到，故遇到堂食單要切返 dinein。
   // 用 ref 做 one-shot，避免 router.replace 後重複觸發。
@@ -512,8 +515,14 @@ export function PosApp() {
     if (targetFloor) setActiveFloorId(targetFloor.id);
     // 用 history.replaceState 清 query，唔用 router.replace —— 否則會觸發 Next 導航令 PosApp 重掛載、
     // posMode 被重置做初始 "tables" 而彈返枱面介面。
+    //
+    // 🔴 2026-09-22 修：**唔可以寫死 `"/"`**。`/` 自 2026-09-17 起係「統一入口／選擇工作台」
+    // 頁（收銀台已搬去 `/pos`）⇒ 清 query 嗰刻會連**路徑**一齊改走：地址列變 `/`，
+    // 之後任何 reload / 返回 / 分享都會彈去「請選擇要進入嘅工作台」，
+    // 而收銀員明明只係撳咗列表嘅「查看」（商家 2026-09-22 回報）。
+    // 只清 query、保留當前 pathname，無論呢個 component 掛喺邊個路由都正確。
     if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", "/");
+      window.history.replaceState(null, "", window.location.pathname);
     }
     // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1507,6 +1516,17 @@ export function PosApp() {
                 quarantinedCount = n;
                 const qIds = new Set(loadQuarantinedOrders().map((r) => r.order.id));
                 cleaned = cleaned.filter((o) => !qIds.has(o.id));
+                // 🔴 2026-09-22：隔離係「由 localStorage 移走」＝枱面卡片即刻變「空閒」，
+                //    而呢條路（自動全量拉取）**原本零可見提示** —— 收銀只見到「張單閃一下
+                //    就唔見」。（人手「更新」路徑有 notes，但緊接就 reload，睇唔到。）
+                //    用 queueMicrotask 而唔直接 setToast：呢段喺 `setOrders()` 嘅 updater 內
+                //    （render 階段），直接 setState 會被 React 警告。
+                queueMicrotask(() => {
+                  setToast({
+                    tone: "error",
+                    message: `有 ${n} 張未結帳單被自動隔離（枱面變空閒）：去「設定 → 同步健康 → 隔離區」可還原。`,
+                  });
+                });
               }
             }
           }

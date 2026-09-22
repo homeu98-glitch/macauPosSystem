@@ -56,6 +56,12 @@ Ledger `merchant_enabled`（線上接單）；`closeShift()` 唔碰任何接單�
 `residual-channel.ts`：`null`（未讀到）永不觸發。
 
 ## 6 UI／環境（硬性）
+🔴 **路由**：`/` ＝統一入口「選擇工作台」（2026-09-17 起）；**收銀台係 `/pos`**；`/orders`＝訂單頁。
+深連結（查看未結堂食單／返結後跳枱面）一律 `/pos?tableId=…&orderId=…`，**唔准推 `/`**；
+清 query 用 `history.replaceState(null,"",window.location.pathname)`（唔可以寫死 `"/"`，否則 reload 會跌返選擇頁）。
+守衛 `src/lib/pos/pos-deeplink-path.test.ts`。
+🔴 `local-orders-panel` 嘅「查看」設計（唔好亂改）：`settled`→收據預覽；冇枱／counter→小窗唯讀；
+**未結堂食單→直接跳枱面編輯**。
 🔴 KPI 帶固定 5 欄、格數須為 5 倍數 ⇒ 新指標寫入既有格 subtitle。
 🔴 `button { font: inherit }` 壓過 `text-*` ⇒ 字級寫喺仔元素。
 🔴🔴 `npm test`＝`node --test`：唔認 `@/` 別名、唔支援 `.tsx` ⇒ 可測模組零 import、邏輯/執行分檔；
@@ -78,23 +84,29 @@ id 前綴＝建單程式：`order-` 收銀台/快餐／`staff-` 店員手機／`
 計費＝Supabase → Vercel Function（改 response 對帳單無幫助）。⭐ 最快取證＝解析 Vercel `[egress]` 行
 （`tools/_egress-*.cjs`）。最大來源＝**舊分頁跑舊 bundle**（903KB ⇒ 690MB/h；新版 412KB）
 ⇒ 要「少拉」唔係「拉細」。指紋：`limit=300`＝舊、`limit=0`＝新。⚠️ Supabase CSV 匯出上限 1000 行。
-✅ 2026-09-22 覆核：全清（0.7 次/分、heartbeat=0、claim 每 180s、904MB/日 → 估 10~20MB/日）；
-⚠️ 但該窗口冇開 POS 頁 ⇒ 嚴格嚟講仍未算完全收口。
+✅ 2026-09-22 覆核：全清（0.7 次/分、心跳 0、claim 每 180s、904MB/日 → 估 10~20MB/日）。
+🔴🔴 **伺服器唔可以用「partial payload ＋ 一個新欄位」去保護舊 client**（2026-09-22 P0b 迴歸）：
+舊 client **唔會睇個新欄位**。凡係「可能令 `orders` 變空」嘅回應路徑，必須**要麼回真資料
+（至少未結帳單），要麼唔回 200**。實案：`legacyThrottled` 回空骨架 → 舊 bundle 唔識
+`incremental` → 照跑孤兒對賬 → **本機所有未結帳單被移入隔離區**（列表清空、每 3 秒重演）。
+已修（節流骨架改回未結帳單）。**上游永遠係「仲有一部機跑舊 bundle」**：`[egress]` 見
+`mode=legacyThrottled` 或 `[pos/state] 🔴 疑似舊版 bundle` ⇒ 即刻叫佢重新載入。
+🔴 舊 bundle 亦冇 `skipped/server-newer` 終態 ⇒ 確定性拒收事件（stale／降級）**無限重推**
+（實測 924 行 warn／45 秒、77 張單）＝ log 洗版 + 持續 egress。**唔好手動重跑 migration。**
 🔴 **增量拉取（`since`）一定要兜底「未結帳單」**（`OPEN_ORDER_STATUSES` 一腿，2026-09-22 修）：
-水位推過就**永久漏**且**唔觸發 `truncated`**（行數冇撞 limit）⇒ 連走全量嘅兜底都冇。
+水位推過就**永久漏**且**唔觸發 `truncated`** ⇒ 連走全量嘅兜底都冇。
 實案：訂單19（A01, 99）雲端 open、收銀機完全唔知 ⇒ 同枱再開新單，99 蚊冇人發現。
 已落實：RPC `pos_orders_page`(0046)、`?skipQueue=1`、投影＋日期下限＋每日上限、
 `poll-gate.ts`／`write-gate.ts`、queue 身分簽名、APK `nextPollMs`、`[egress]` log。
 🔴 兩道 server 閘刻意 fail-open；`urgent:true` 唔可擋。版本：`build-info.ts`
 （`NEXT_PUBLIC_BUILD_ID` 逐字面寫 `process.env.X`）；`x-pos-build` 標頭；只提示唔自動 reload。
-✅ `build-stale-banner.tsx`：`/pos` 最頂 in-flow、有「立即重新載入」；🔴 配套排版
-（外層 flex→flex-col、根 `h-[100dvh]`→`min-h-0 flex-1`）；守衛 `pos-app-stale-banner.test.ts`。
-❌ 唔好做「版本唔正確就 block 請求」（舊 bundle 唔送 id ⇒ 全舊裝置即死；被擋嘅正是要救嘅收銀台）。
+✅ `build-stale-banner.tsx`（`/pos` 最頂 in-flow、有「立即重新載入」）：🔴 配套排版
+外層 flex→flex-col、根 `h-[100dvh]`→`min-h-0 flex-1`（唔改底部被裁切）；守衛 `pos-app-stale-banner.test.ts`。
 🔴 量度陷阱：唔可用全窗口平均（burst 會被稀釋）⇒ 用 gap>20s 分段。
 
 ## 9 POS 工作階段
 表 `pos_sessions`（0047）／註冊 `/api/ledger/login`／續期搭既有請求（GET 只續期唔建立）／
 client 標頭 `x-pos-session`＋`x-pos-build`。🔴 key 存 `sessionStorage`。
 管理頁 `/admin/sessions`；強制關閉＝軟踢（只擋新生意、結帳放行）；門檻：使用中 ≤6 分／閒置 ≤30 分。
-⏭️ 未做：`pos_shifts` Realtime 訂閱、報表「自動更新已停用」文案、print-agent 配對驗真補 env、
-per-store token、`pos_print_jobs.kind` 未寫入、同日重複單號（訂單27 ×2）。
+⏭️ 未做：`pos_shifts` Realtime 訂閱、print-agent 配對驗真補 env、per-store token、
+`pos_print_jobs.kind`、同日重複單號（訂單27 ×2）、「同步健康」顯示舊 bundle 可見警告。

@@ -75,16 +75,23 @@ describe("pos-app.tsx：pushEvents / enqueuePrintJobs 契約（2026-09-22）", (
     assert.match(body, /describeNoReceiptPrinterError\(/, "冇收據機時要出診斷文案");
     assert.match(body, /isPrintContentEnabled\("receipt"\)[\s\S]{0,400}?setToast\(/, "總開關關咗要講出聲");
   });
+
+  /**
+   * 🔴 自動隔離（`auto-full-pull`）會令枱面卡片即刻變「空閒」——
+   *    如果冇可見提示，收銀只會見到「張單閃一下就走」，完全無從入手（2026-09-22 實案）。
+   */
+  it("自動隔離孤兒單一定要出可見提示（唔可以靜默移走）", () => {
+    assert.match(src, /被自動隔離/, "隔離時要出 toast 文案");
+    assert.match(src, /queueMicrotask\(/, "要向 setOrders updater 之外拋（避免 render 階段 setState）");
+  });
 });
 
-describe("state/route.ts：增量之下必須兜底未結帳單（2026-09-22）", () => {
-  const raw = readFileSync(
-    path.resolve(HERE, "..", "..", "app", "api", "pos", "state", "route.ts"),
-    "utf8",
+describe("state/route.ts：唔可以回「雲端冇單」嘅假象（2026-09-22）", () => {
+  const src = stripComments(
+    readFileSync(path.resolve(HERE, "..", "..", "app", "api", "pos", "state", "route.ts"), "utf8"),
   );
-  const src = stripComments(raw);
 
-  it("有未結帳狀態集合，並且真係查落去", () => {
+  it("增量之下有未結帳兜底腿", () => {
     assert.match(src, /const OPEN_ORDER_STATUSES = \[[^\]]*"sent_to_kitchen"/, "缺 OPEN_ORDER_STATUSES");
     assert.match(src, /\.in\(\s*"status"\s*,\s*\[\.\.\.OPEN_ORDER_STATUSES\]\s*\)/, "未見 open 腿查詢");
     assert.match(src, /mergeRowsById\(/, "未見按 id 去重合併");
@@ -97,5 +104,23 @@ describe("state/route.ts：增量之下必須兜底未結帳單（2026-09-22）"
       /isIncrementalTruncated\(orders\.length,\s*limit\)/,
       "唔可以用合併後 orders.length —— 兜底腿刻意多回，會誤判撞 limit 令 client 每次走全量",
     );
+  });
+
+  /**
+   * 🔴 舊 bundle 唔識 `incremental` 欄 ⇒ 空 `orders` 會被佢嘅孤兒對賬當成
+   *    「雲端一張單都冇」⇒ 本機所有未結帳單一次過被隔離（枱面清空）。
+   *    legacyThrottled 只會發生喺舊 bundle，所以呢條路**絕對唔可以**回 `orders: []`。
+   */
+  it("legacyThrottled 節流骨架一定要回未結帳單，唔可以回空 orders", () => {
+    const at = src.indexOf("if (legacyThrottled && supabase) {");
+    assert.notEqual(at, -1, "搵唔到 legacyThrottled 分支（或者漏咗 `&& supabase` 守門）");
+    // ⚠️ 一定要**只切到呢個分支為止**：再落少少就係 mock 模式嘅 `orders: []`
+    //    （`if (!supabase)`），會產生假失敗。
+    const end = src.indexOf("if (!supabase)", at);
+    assert.notEqual(end, -1, "搵唔到 legacyThrottled 分支嘅結尾（下一個 `if (!supabase)`）");
+    const branch = src.slice(at, end);
+    assert.match(branch, /const openRes = await supabase/, "節流骨架冇查未結帳單");
+    assert.match(branch, /throttleOrders/, "節流骨架冇用查返嚟嘅未結帳單");
+    assert.doesNotMatch(branch, /orders:\s*\[\]/, "唔可以回空 orders（會被舊 client 當成雲端冇單）");
   });
 });

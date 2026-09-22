@@ -235,3 +235,47 @@ node --test src/lib/pos/pos-app-queue-base.test.ts      # ✅ 5 pass
 
 **未修（已記錄，另一個獨立議題）**：同日重複單號（`訂單27` ×2）、
 `pos_print_jobs.kind` 冇寫入、`pos_shifts` Realtime 訂閱、per-store token。
+
+---
+
+## 附錄 A（20:10 追加）：撳「查看」跳去「選擇工作台」—— 舊路徑未跟改
+
+### 病徵
+
+商家：「我一按訂單19嘅查看，就會跳到工作台的介面」——即係彈出
+「請選擇要進入嘅工作台（堂食收銀台／快餐收銀台／…）」，入唔到枱面。
+
+### 根因：2026-09-17「統一入口」改動漏改兩處深連結
+
+`/` 自 2026-09-17 起由**收銀台**改成**統一入口／選擇工作台**頁（`src/app/page.tsx`），
+收銀台搬去 `/pos`（`src/app/pos/page.tsx`）。但 `local-orders-panel.tsx` 兩處仍然推 `/?…`：
+
+| 位置 | 情境 | 舊寫法 |
+|---|---|---|
+| 「查看」掣（非 settled、真枱號） | 未結堂食單 → 跳枱面編輯 | `router.push(\`/?tableId=…&orderId=…\`)` |
+| 返結成功之後 | 跳去 temp 枱重結 | `router.push(\`/?tableId=…&orderId=…\`)` |
+
+⇒ 一次過影響兩條重要流程（**睇單** 同 **返結後重結**）。
+
+**更陰險嘅第二層**：`pos-app.tsx` deep-link 消費完 query 之後係
+`window.history.replaceState(null, "", "/")` —— 連**路徑**都改走。
+即係就算推嘅係 `/pos`，收銀員一 reload／一按返回／一分享，都會跌返選擇頁。
+
+> 「查看」掣本身嘅**設計**係：`settled` → 收據預覽；冇枱號／counter → 小窗唯讀；
+> **未結堂食單 → 直接跳枱面**（因為要加菜／結帳，唔係純睇）。呢個設計唔變。
+
+### 已修
+
+| 檔案 | 改動 |
+|---|---|
+| `src/components/local-orders-panel.tsx` | 「查看」＋返結後嘅 `router.push` → **`/pos?tableId=…&orderId=…`** |
+| `src/components/pos-app.tsx` | deep-link 清 query 改用 `window.location.pathname`（保留路徑） |
+| `src/lib/pos/pos-deeplink-path.test.ts` | 新增守衛：全 `src/` 唔准 router 推根路徑；`replaceState` 必須保留 pathname |
+
+### 部署後驗證
+
+1. 去 `/orders` → 未結嘅堂食單撳「查看」⇒ 應該直接入到**枱面**（見到該枱已載入），
+   地址列係 `/pos?...`（消費完 query 會被清、但**路徑保持 `/pos`**）。
+2. 撳「返結帳」完成之後 ⇒ 同樣應該落到 temp 枱可重結，唔會彈選擇工作台。
+3. 隨手按瀏覽器 reload ⇒ 應該停留喺收銀台，唔會彈「請選擇要進入嘅工作台」。
+

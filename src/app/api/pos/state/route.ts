@@ -327,6 +327,9 @@ export async function GET(request: Request) {
   const LEGACY_FULL_MIN_GAP_MS = 90_000;
   const legacyThrottled =
     legacyQueueSuppressed &&
+    // 🔴 一定要有 storeId：冇 storeId 就砌唔出「安全骨架」（見下面 legacyThrottled 分支），
+    //    寧願唔節流都唔可以回一個會被舊 client 當成「雲端冇單」嘅回應。
+    Boolean(storeId) &&
     !rateLimit(
       `pos-state-legacy-pull:${ip}:${(request.headers.get("user-agent") ?? "").slice(0, 40)}`,
       1,
@@ -375,27 +378,55 @@ export async function GET(request: Request) {
    * 空骨架 ＝ 對 client no-op（見 `legacyThrottled` 嘅長註釋），
    * 所以舊分頁照樣運作（Realtime 推送嘅新單仍然會到），只係唔會每 33 秒重拉全世界。
    */
-  if (legacyThrottled) {
+  // ⚠️ 一定要帶 `&& supabase`：呢個分支排喺下面 `if (!supabase)`（mock 模式）**之前**，
+  //    而下面要真查 DB。冇 supabase 就唔節流、直接交返 mock 分支（唔可以 `supabase.from` 撞 null）。
+  if (legacyThrottled && supabase) {
+    /**
+     * 🔴🔴 2026-09-22 **修（實案：下單 iPad「未結帳單又不見了」）** —— 原本回 `orders: []`。
+     *
+     * 原設計嘅安全論證係：「帶咗 `incremental: true`，client 就唔會跑孤兒對賬」。
+     * ⚠️ 但呢條路**只會發生喺舊 bundle**（新 bundle 傳 `skipQueue=1` ⇒ `isLegacyFullState` 為 false），
+     * 而**舊 bundle 根本唔識 `incremental` 呢個欄位**（今日 P1 才加）⇒ 佢照跑孤兒對賬，
+     * 而孤兒判準係「雲端 `payload.orders` 冇呢張單」（`computeOrphanLocalOrders`）。
+     * ⇒ 空陣列等於「雲端一張單都冇」⇒ **本機所有未結帳單一次過移入隔離區**，
+     *   收銀台列表即刻清空（呢個正是 `pos-app.tsx` 1504 行註釋自己寫嘅「災難級誤判」）。
+     * 一個契約**唔可以要求舊 client 遵守一個佢唔認識嘅新欄位**。
+     *
+     * 修法：唔回空陣列，改回「**本店全部未結帳單**」（通常 0–5 行 ≈ 1–3 KB）——
+     *   · 舊 client 嘅孤兒判準即刻變 no-op（本機未結帳單全部喺 server 名單內）；
+     *   · 終態單照樣唔回（舊 client 嘅孤兒邏輯本身唔理終態單）；
+     *   · 節流目標（唔回 300 條 queue ＋ 200 張單 ≈ 500 KB）**完全保留**。
+     */
+    const openRes = await supabase
+      .from("pos_orders")
+      .select(POS_ORDER_DB_COLUMNS.join(","))
+      .eq("store_id", storeId as string)
+      .in("status", [...OPEN_ORDER_STATUSES])
+      .order("created_at", { ascending: false })
+      .limit(100);
+    const throttleOrders = (openRes.error ? [] : (openRes.data ?? [])) as unknown as Parameters<
+      typeof mapOrderRow
+    >[0][];
     return withSessionHeaders(
       jsonWithEgressLog(
         "pos/state",
         {
           ok: true,
           source: "supabase",
-          orders: [],
+          orders: throttleOrders.map(mapOrderRow),
           queue: [],
           printJobs: [],
           deviceConfig: null,
           localSettings: null,
           printTemplatesServer: null,
           notePresetsServer: null,
-          // 🔴 見上面：唔帶呢個 flag 會令客戶端誤判「雲端冇呢啲單」而隔離全店未結單。
+          // 🔴 新 client 靠呢個 flag 停用孤兒對賬；舊 client 唔識，所以上面仍要回未結帳單。
           incremental: true,
           legacyThrottled: true,
         },
         {
           mode: "legacyThrottled",
-          orders: 0,
+          orders: throttleOrders.length,
           queue: 0,
           printJobs: 0,
           skipQueue: 1,

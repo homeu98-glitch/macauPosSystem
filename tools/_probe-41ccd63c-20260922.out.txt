@@ -1,0 +1,91 @@
+### A. order-41ccd63c 完整
+[
+ {
+  "id": "order-41ccd63c",
+  "local_order_no": "訂單30",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "979b1041-76b4-4595-b3d8-555f980500e4",
+  "table_name": "MFOOD1",
+  "status": "settled",
+  "items": [
+   {
+    "name": "N8 勝瓜肉片飯",
+    "price": 36,
+    "quantity": 1,
+    "menuItemId": "ledger-a3e340a3-e4d4-4dca-96b2-8e108cb9565e",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "盒",
+    "price": 1,
+    "quantity": 3,
+    "menuItemId": "ledger-047c1779-fcff-4772-99c0-8e4420f37325",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   },
+   {
+    "name": "袋",
+    "price": 1,
+    "quantity": 5,
+    "menuItemId": "ledger-753437e1-21d2-4c94-ba04-07d70a320ef6",
+    "printerGroup": "kitchen",
+    "selectedSpecs": []
+   }
+  ],
+  "subtotal": 44,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 44,
+  "payment_method": "Mpay",
+  "created_at": "2026-09-22T11:41:04.922+00:00",
+  "updated_at": "2026-09-22T11:41:20.813+00:00",
+  "prepaid_amount": 0,
+  "online_order_id": null,
+  "order_note": null,
+  "fulfillment_status": null,
+  "sent_to_kitchen_at": "2026-09-22T11:41:04.922+00:00",
+  "served_at": "2026-09-22T11:41:08.655+00:00",
+  "source": "pos",
+  "party_size": 1,
+  "comp_note": null,
+  "comped_at": null,
+  "client_updated_at": "2026-09-22T11:41:08.655+00:00",
+  "discount_note": null,
+  "member_customer_id": null,
+  "member_deduction_avos": 0,
+  "member_deduct_txn_id": null,
+  "reopen_count": 0,
+  "reopened_at": null,
+  "reopen_reason": null,
+  "refund_records": null,
+  "refunded_amount": null,
+  "voided_items": null
+ }
+]
+
+### B. 最近 2 小時有動靜嘅訂單（updated_at >= 19:00 澳門 → 11:00Z）
+訂單31    | settled          | A02         |    40 | Mpay      | 落單=2026-09-22 19:52:47 | 更新=2026-09-22 19:52:57 | client=2026-09-22 19:52:50 |  | id=order-f20becef
+訂單29    | sent_to_kitchen  | A01         |    98 | -         | 落單=2026-09-22 19:33:30 | 更新=2026-09-22 19:45:48 | client=2026-09-22 19:33:58 |  | id=order-68264985
+訂單30    | settled          | MFOOD1      |    44 | Mpay      | 落單=2026-09-22 19:41:04 | 更新=2026-09-22 19:41:20 | client=2026-09-22 19:41:08 |  | id=order-41ccd63c
+訂單28    | settled          | A01         |    36 | Mpay      | 落單=2026-09-22 19:28:51 | 更新=2026-09-22 19:29:11 | client=2026-09-22 19:28:53 |  | id=order-738e6f03
+訂單26    | settled          | A04         |    74 | Mpay      | 落單=2026-09-22 18:47:20 | 更新=2026-09-22 19:16:24 | client=2026-09-22 19:16:15 |  | id=order-4a68f292
+訂單27    | settled          | 澳覓4         |   103 | Mpay      | 落單=2026-09-22 19:15:19 | 更新=2026-09-22 19:15:24 | client=2026-09-22 19:15:22 |  | id=order-c4da9e79
+訂單27    | settled          | MFOOD5      |    70 | Mpay      | 落單=2026-09-22 19:03:47 | 更新=2026-09-22 19:04:38 | client=2026-09-22 19:03:50 |  | id=order-8c3fbd01
+訂單25    | sent_to_kitchen  | A03         |    41 | -         | 落單=2026-09-22 18:40:15 | 更新=2026-09-22 19:01:04 | client=2026-09-22 18:40:15 |  | id=order-e3f89991
+
+### C. 今日狀態分佈
+{"settled":31,"sent_to_kitchen":3}
+今日總數 = 34
+未結帳（draft/sent_to_kitchen/paid/reopened）: [{"status":"sent_to_kitchen","local_order_no":"訂單29"},{"status":"sent_to_kitchen","local_order_no":"訂單25"},{"status":"sent_to_kitchen","local_order_no":"訂單19"}]
+
+### D. 最近 2 小時 pos_print_jobs
+訂單31    | kitchen  | printer                        | printed  | 建=2026-09-22 19:52:47 | 完成=2026-09-22 19:52:50 | once=kitchen:normal:0:pja40i | 
+訂單30    | kitchen  | printer                        | printed  | 建=2026-09-22 19:41:05 | 完成=2026-09-22 19:41:06 | once=kitchen:normal:0:1kqs5td | 
+訂單29    | kitchen  | printer                        | printed  | 建=2026-09-22 19:33:58 | 完成=2026-09-22 19:34:00 | once=- | 
+訂單28    | kitchen  | printer                        | printed  | 建=2026-09-22 19:28:51 | 完成=2026-09-22 19:28:52 | once=kitchen:normal:0:n28mvc | 
+訂單26    | receipt  | 小票機 · 通用 80mm 熱敏打印機            | printed  | 建=2026-09-22 19:16:36 | 完成=2026-09-22 19:16:37 | once=- | 
+訂單27    | kitchen  | printer                        | printed  | 建=2026-09-22 19:15:19 | 完成=2026-09-22 19:15:21 | once=kitchen:normal:0:13k59jd | 
+訂單27    | kitchen  | printer                        | printed  | 建=2026-09-22 19:03:47 | 完成=2026-09-22 19:04:37 | once=kitchen:normal:0:1v2gyil | 
+count= 7

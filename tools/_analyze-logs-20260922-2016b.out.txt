@@ -1,0 +1,260 @@
+=========== VERCEL（時間已校正為澳門） ===========
+rows=1466  窗口 2026-09-22 19:56:33 → 2026-09-22 20:12:45（澳門）
+唯一 requestId = 305（16 分鐘內）
+
+### 每分鐘請求數（去重後；只列 pos/sync 同 pos/state）
+  --- 2026-09-22 ---
+       16  19:56
+       21  19:57
+       12  20:07
+       22  20:08
+       12  20:09
+       12  20:10
+       16  20:11
+        1  20:11
+       40  20:12
+      956  20:12
+
+### 拒絕覆寫：共 924 行，涉及 77 張單
+  —— 每張單被拒次數（前 25）——
+     22  order-078ec9ae
+     22  order-42391cc9
+     22  order-62c1dd32
+     22  order-13bc9b00
+     22  order-923eb5de
+     22  order-677bf628
+     22  order-03383cdb
+     11  order-251dfe1a
+     11  order-76350106
+     11  order-39884787
+     11  order-393110e5
+     11  order-252de09b
+     11  order-1505b571
+     11  ledger-8ef07fe9-4f65-45ab-b7d9-41b5968a1a18
+     11  order-9a4b434f
+     11  order-93d4c3ad
+     11  order-62bea070
+     11  order-57544388
+     11  order-1418a897
+     11  order-ab94f1f1
+     11  order-5e843eb2
+     11  order-9772d5a2
+     11  order-73a72b8e
+     11  order-458f7ddc
+     11  order-ab1b7bdf
+  —— 理由分佈 ——
+    847  付款階段降級（已收款唔可以被未收款 snapshot 覆蓋
+     55  stale（incoming 較舊
+     22  終態降級
+
+### 最多被拒嘅單 order-078ec9ae：22 次；首尾 = 2026-09-22 20:12:45 → 2026-09-22 20:12:00
+  間隔（ms）中位=0 最小=-11000 最大=0
+
+### 所有 pos/state [egress] 行（去重，按時間 asc）
+  2026-09-22 19:56:34  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:37  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:43  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:46  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:49  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:52  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:55  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:56:58  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:06  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:10  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:13  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 19:57:19  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:23  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:28  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:31  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:35  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:40  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 19:57:44  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:07:37  [egress] pos/state bytes=49935 mode=ordersOnly orders=189 limit=5000 offset=0 columns=id,status,updated_at,client_updated_at start=2026-09-15T00:10:31.219Z end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:07:39  [egress] pos/state bytes=53562 mode=full orders=11 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T10:41:55.149Z truncated=0 printJobs=8 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:07:41  [egress] pos/state bytes=49935 mode=ordersOnly orders=189 limit=5000 offset=0 columns=id,status,updated_at,client_updated_at start=2026-09-15T00:10:31.219Z end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:07:43  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.45.220 src=orders-panel
+  2026-09-22 20:07:52  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:07:32.836Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:07:53  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.45.220 src=orders-panel
+  2026-09-22 20:08:03  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:07:42.670Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:08:06  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.45.220 src=orders-panel
+  2026-09-22 20:08:09  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:07:55.987Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:08:11  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:08:11  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=2026-09-08T00:56:18.725Z end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:08:13  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:08:13  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=2026-09-08T00:56:18.725Z end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:08:24  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.45.220 src=orders-panel
+  2026-09-22 20:08:27  [egress] pos/state bytes=8993 mode=ordersOnly orders=34 limit=5000 offset=0 columns=id,status,updated_at,client_updated_at start=2026-09-21T23:04:38.911Z end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:08:37  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:08:13.779Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:08:42  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.45.220 src=orders-panel
+  2026-09-22 20:09:26  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:08:31.877Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:09:33  [egress] pos/state bytes=53886 mode=ordersOnly orders=34 limit=2000 offset=0 columns=default start=2026-09-22T00:00:00+08:00 end=2026-09-22T23:59:59.999+08:00 incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:09:51  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:09:15.861Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:09:54  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:09:54  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=2026-09-08T00:56:18.725Z end=- incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:10:10  [egress] pos/state bytes=423088 mode=full orders=200 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=0 since=- truncated=0 printJobs=200 limit=200 ip=60.246.45.220 src=manual
+  2026-09-22 20:10:12  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:10:00.027Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:10:13  [egress] pos/state bytes=53886 mode=ordersOnly orders=34 limit=2000 offset=0 columns=default start=2026-09-22T00:00:00+08:00 end=2026-09-22T23:59:59.999+08:00 incr=0 ip=60.246.45.220 src=-
+  2026-09-22 20:10:39  [egress] pos/print-jobs/status bytes=5196 jobs=120 unfinished=0 store=8291f843-9def-4956-9d0b-1cfef2598306
+  2026-09-22 20:10:44  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:10:01.662Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:10:54  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.45.220 src=orders-panel
+  2026-09-22 20:11:03  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:10:43.756Z truncated=0 printJobs=0 limit=200 ip=60.246.45.220 src=mount
+  2026-09-22 20:11:12  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T11:55:53.340Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=resubscribe
+  2026-09-22 20:11:44  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:11:01.867Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=resubscribe
+  2026-09-22 20:11:45  [egress] pos/state bytes=331236 mode=ordersOnly orders=223 limit=5000 offset=0 columns=default start=2026-09-13T14:29:23.297Z end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 20:11:45  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 20:11:50  [egress] pos/state bytes=331236 mode=ordersOnly orders=223 limit=5000 offset=0 columns=default start=2026-09-13T14:29:23.297Z end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 20:11:50  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 20:11:59  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.53.111 src=orders-panel
+  2026-09-22 20:12:01  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:11:49.536Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  2026-09-22 20:12:05  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.53.111 src=orders-panel
+  2026-09-22 20:12:08  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:11:55.648Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  2026-09-22 20:12:10  [egress] pos/state bytes=423088 mode=full orders=200 queue=0 skipQueue=0 legacy=1 legacyQueueOff=1 incr=0 since=- truncated=0 printJobs=200 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:12:10  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 20:12:17  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:11:58.285Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  2026-09-22 20:12:18  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.53.111 src=orders-panel
+  2026-09-22 20:12:19  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:12:08.124Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  2026-09-22 20:12:20  [egress] pos/state bytes=423088 mode=full orders=200 queue=0 skipQueue=0 legacy=1 legacyQueueOff=1 incr=0 since=- truncated=0 printJobs=200 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:12:28  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.53.111 src=orders-panel
+  2026-09-22 20:12:30  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:12:18.584Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  2026-09-22 20:12:31  [egress] pos/state bytes=514528 mode=ordersOnly orders=339 limit=5000 offset=0 columns=default start=- end=- incr=0 ip=60.246.53.111 src=-
+  2026-09-22 20:12:32  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:12:35  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:12:38  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:12:39  [egress] pos/state bytes=423088 mode=full orders=200 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=0 since=- truncated=0 printJobs=200 limit=200 ip=60.246.53.111 src=manual
+  2026-09-22 20:12:41  [egress] pos/state bytes=39521 mode=full orders=3 queue=0 skipQueue=1 legacy=0 legacyQueueOff=0 incr=1 since=2026-09-22T12:12:29.434Z truncated=0 printJobs=0 limit=200 ip=60.246.53.111 src=mount
+  2026-09-22 20:12:44  [egress] pos/state bytes=205 mode=legacyThrottled orders=0 queue=0 printJobs=0 skipQueue=1 legacy=1 legacyQueueOff=1 incr=1 limit=200 ip=60.246.53.111 src=-
+  2026-09-22 20:12:45  [egress] pos/state bytes=4594 mode=ordersOnly orders=3 limit=200 offset=0 columns=default start=- end=- incr=1 truncated=0 ip=60.246.53.111 src=orders-panel
+
+### User-Agent 分佈
+   1190  Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) V
+    257  Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/15
+     19  okhttp/4.12.0
+
+
+=========== SUPABASE（時間已校正為澳門） ===========
+rows=1000  窗口 2026-09-22 19:50:21 → 2026-09-22 20:14:20（澳門）
+
+### 非 2xx（已修正引號，只列真正異常）
+     5  00000   | checkpoint starting: time
+     2  00000   | execute <unnamed>: ALTER TABLE supabase_migrations.schema_migrations ADD COLUMN IF NOT EXI
+     1  00000   | checkpoint complete: wrote 36 buffers (0.1%); 0 WAL file(s) added, 0 removed, 3 recycled; 
+     1  23505   | duplicate key value violates unique constraint "schema_migrations_pkey
+     1  00000   | execute <unnamed>: -- ── pos_soldout（0010 已建，呢度補雙保險）──
+alter table pos_soldout add column 
+     1  00000   | execute <unnamed>: alter table pos_soldout add column if not exists menu_item_id text
+     1  00000   | execute <unnamed>: alter table pos_soldout add column if not exists updated_at timestamptz
+     1  00000   | execute <unnamed>: alter table pos_queue_events add column if not exists created_at timest
+     1  00000   | execute <unnamed>: alter table pos_soldout add column if not exists sold_out boolean
+     1  00000   | execute <unnamed>: alter table pos_queue_events add column if not exists payload jsonb
+     1  00000   | execute <unnamed>: alter table pos_queue_events add column if not exists status text
+     1  00000   | execute <unnamed>: alter table pos_bootstrap_config add column if not exists updated_at ti
+     1  00000   | execute <unnamed>: alter table pos_device_configs add column if not exists terminal_name t
+     1  00000   | execute <unnamed>: alter table pos_device_configs add column if not exists updated_at time
+     1  00000   | execute <unnamed>: -- ── pos_queue_events（sync / state）──
+alter table pos_queue_events add
+     1  00000   | execute <unnamed>: alter table pos_queue_events add column if not exists entity_id text
+     1  00000   | execute <unnamed>: alter table pos_device_configs add column if not exists local_settings 
+     1  00000   | execute <unnamed>: alter table pos_device_configs add column if not exists printers jsonb
+     1  00000   | execute <unnamed>: -- ── pos_device_configs（state / device-config）──
+alter table pos_devic
+     1  00000   | execute <unnamed>: alter table pos_bootstrap_config add column if not exists currency text
+
+### level=error / warning 原文
+  [2026-09-22 20:06:47] error 23505  :: duplicate key value violates unique constraint "schema_migrations_pkey
+  [2026-09-22 19:52:51] error 23505  :: duplicate key value violates unique constraint "pos_print_jobs_once_key_uniq
+  [2026-09-22 19:52:51] warning 409 /rest/v1/pos_print_jobs :: POST | 409 | https://iyrywzormzisyppkokbi.supabase.co/rest/v1/pos_print_jobs | node
+
+### 每分鐘 Supabase 寫入（POST/PATCH）節奏
+    2  2026-09-22 19:50 POST /rest/v1/pos_queue_events
+    1  2026-09-22 19:50 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 19:51 POST /rest/v1/rpc/pos_bump_egress
+    3  2026-09-22 19:52 PATCH /rest/v1/pos_orders
+    2  2026-09-22 19:52 PATCH /rest/v1/pos_print_agents
+    5  2026-09-22 19:52 PATCH /rest/v1/pos_print_jobs
+    1  2026-09-22 19:52 PATCH /rest/v1/pos_sessions
+    1  2026-09-22 19:52 POST /rest/v1/pos_orders
+    2  2026-09-22 19:52 POST /rest/v1/pos_print_jobs
+   12  2026-09-22 19:52 POST /rest/v1/pos_queue_events
+    1  2026-09-22 19:52 POST /rest/v1/rpc/next_daily_sequence
+    3  2026-09-22 19:52 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 19:52 POST /rest/v1/rpc/pos_claim_print_jobs
+   14  2026-09-22 19:52 POST /rest/v1/rpc/pos_orders_page
+    2  2026-09-22 19:53 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 19:53 POST /rest/v1/rpc/pos_bump_egress
+    2  2026-09-22 19:53 POST /rest/v1/rpc/pos_claim_print_jobs
+    1  2026-09-22 19:53 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 19:54 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 19:54 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 19:54 POST /rest/v1/rpc/pos_claim_print_jobs
+    1  2026-09-22 19:54 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 19:55 PATCH /rest/v1/pos_sessions
+    1  2026-09-22 19:55 POST /rest/v1/pos_queue_events
+    1  2026-09-22 19:55 POST /rest/v1/rpc/pos_bump_egress
+    2  2026-09-22 19:55 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 19:56 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 19:56 POST /rest/v1/pos_queue_events
+    1  2026-09-22 19:56 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 19:56 POST /rest/v1/rpc/pos_claim_print_jobs
+    2  2026-09-22 19:56 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 19:57 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 19:57 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 19:58 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 19:58 POST /rest/v1/rpc/pos_claim_print_jobs
+    1  2026-09-22 20:01 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:01 POST /rest/v1/rpc/pos_claim_print_jobs
+    1  2026-09-22 20:04 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:04 POST /rest/v1/rpc/pos_claim_print_jobs
+    1  2026-09-22 20:05 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:05 POST /rest/v1/rpc/pos_claim_print_jobs
+    1  2026-09-22 20:06 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:06 POST /rest/v1/rpc/pos_claim_print_jobs
+    2  2026-09-22 20:07 POST /rest/v1/pos_kiosk_settings
+    2  2026-09-22 20:07 POST /rest/v1/rpc/pos_orders_page
+    2  2026-09-22 20:08 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:08 POST /rest/v1/pos_kiosk_settings
+    2  2026-09-22 20:08 POST /rest/v1/rpc/pos_bump_egress
+    2  2026-09-22 20:08 POST /rest/v1/rpc/pos_claim_print_jobs
+    5  2026-09-22 20:08 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 20:09 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:09 POST /rest/v1/pos_kiosk_settings
+    2  2026-09-22 20:09 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 20:09 POST /rest/v1/rpc/pos_claim_print_jobs
+    4  2026-09-22 20:09 POST /rest/v1/rpc/pos_orders_page
+    2  2026-09-22 20:10 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:10 POST /rest/v1/rpc/pos_bump_egress
+    2  2026-09-22 20:10 POST /rest/v1/rpc/pos_claim_print_jobs
+    3  2026-09-22 20:10 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 20:10 POST /rest/v1/rpc/pos_void_stale_print_jobs
+    1  2026-09-22 20:11 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:11 PATCH /rest/v1/pos_sessions
+    4  2026-09-22 20:11 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 20:11 POST /rest/v1/rpc/pos_claim_print_jobs
+    4  2026-09-22 20:11 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 20:12 PATCH /rest/v1/pos_print_agents
+    1  2026-09-22 20:12 PATCH /rest/v1/pos_sessions
+   11  2026-09-22 20:12 POST /rest/v1/pos_queue_events
+    4  2026-09-22 20:12 POST /rest/v1/rpc/pos_bump_egress
+    1  2026-09-22 20:12 POST /rest/v1/rpc/pos_claim_print_jobs
+    5  2026-09-22 20:12 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 20:13 PATCH /rest/v1/pos_sessions
+    5  2026-09-22 20:13 POST /rest/v1/pos_queue_events
+    2  2026-09-22 20:13 POST /rest/v1/rpc/pos_bump_egress
+    7  2026-09-22 20:13 POST /rest/v1/rpc/pos_orders_page
+    2  2026-09-22 20:14 POST /rest/v1/pos_queue_events
+    4  2026-09-22 20:14 POST /rest/v1/rpc/pos_bump_egress
+    3  2026-09-22 20:14 POST /rest/v1/rpc/pos_orders_page
+    1  2026-09-22 20:14 POST /rest/v1/rpc/pos_void_stale_print_jobs
+
+### pos_orders 讀取：每分鐘 GET 次數（睇有冇循環）
+    3  2026-09-22 19:50
+   18  2026-09-22 19:52
+    1  2026-09-22 19:55
+    2  2026-09-22 19:56
+    8  2026-09-22 20:07
+   12  2026-09-22 20:08
+    4  2026-09-22 20:09
+    6  2026-09-22 20:10
+    8  2026-09-22 20:11
+   31  2026-09-22 20:12
+    9  2026-09-22 20:13
+    5  2026-09-22 20:14
