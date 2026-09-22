@@ -189,6 +189,7 @@ import { syncOnlineDineInCompletionInBackground } from "@/lib/pos/online-dinein-
 // 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
+import { tableOrderBadge } from "@/lib/pos/table-order-badge";
 import { isPaidDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
 import { resolveSettleTargetOrder as resolveSettleTargetOrderCore } from "@/lib/pos/settle-target";
 
@@ -5347,6 +5348,21 @@ export function PosApp() {
                           : "border-slate-200 bg-white text-slate-900";
                     const areaTone = isOccupied ? "text-white/85" : "text-slate-500";
                     const badgeTone = isOccupied ? "bg-white/25 text-white" : "bg-orange-50 text-orange-700";
+                    // 🔴 2026-09-22 商家需求：枱格右上角「訂單號」角標。
+                    //   顯示規則抽去 `@/lib/pos/table-order-badge`（有單先出／空閒枱唔出／
+                    //   單號空白唔出），唔喺 UI 重寫 —— 有 `table-order-badge.test.ts` 守。
+                    //   角標用**白底 + 同卡身同色系文字**（橙／琥珀／綠），係彩色實底卡上對比最高嘅寫法；
+                    //   排版用 flex 兩欄（枱名 `truncate` 讓位 + 角標 `shrink-0`），**唔用 absolute**，
+                    //   確保枱名長（例如「外賣自取 3」）都唔會被角標壓住／截斷。
+                    const orderBadge = tableOrderBadge({
+                      status,
+                      localOrderNo: tableOrder?.localOrderNo,
+                    });
+                    const orderBadgeTone = isPaidDineInTable
+                      ? "text-emerald-700"
+                      : isReopenedTable
+                        ? "text-amber-700"
+                        : "text-orange-700";
                     // 應收金額（桌台總覽）：該枱最新一張未結帳單嘅 total 扣返已預付（prepaid）。
                     // 未結帳單 total = subtotal + 服務費 + 稅（結帳嗰刻先扣折扣/抹零重寫），同結帳頁 paymentBase 口徑一致。
                     const tableDueAmount = tableOrder
@@ -5361,8 +5377,20 @@ export function PosApp() {
                         onClick={() => selectTable(table.id)}
                         type="button"
                       >
-                        <div className="text-base font-semibold text-inherit">
-                          {table.name}
+                        {/* 枱名（左）＋ 訂單號角標（右上角）。
+                            `min-w-0` 容許枱名 `truncate` 讓位，角標 `shrink-0` 永不變形。 */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 truncate text-base font-semibold text-inherit">
+                            {table.name}
+                          </div>
+                          {orderBadge.show ? (
+                            <span
+                              className={`-mr-1 -mt-1 max-w-[68%] shrink-0 truncate rounded-lg bg-white px-2 py-0.5 text-[11px] font-bold leading-5 shadow-sm ring-1 ring-black/10 ${orderBadgeTone}`}
+                              title={`訂單號：${orderBadge.text}`}
+                            >
+                              {orderBadge.text}
+                            </span>
+                          ) : null}
                         </div>
                         <div className={`mt-2 text-xs ${areaTone}`}>
                           {table.area}

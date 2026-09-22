@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -20,6 +21,7 @@ import {
   describeOpenDuration,
   describePosSessionState,
   groupPosSessions,
+  isRevokePending,
   isSessionBehind,
   sanitizeBuildId,
   sanitizeSessionKey,
@@ -284,11 +286,18 @@ describe("summarizePosSessions ── admin KPI", () => {
       row({ id: "a1", store_id: "st_a", opened_at: ago(26 * 60 * 60_000) }),
       row({ id: "a2", store_id: "st_a", build_id: "c5db7a0" }),
       row({ id: "b1", store_id: "st_b" }),
+      /**
+       * 🔴 2026-09-22 **契約更新**：`revokedPending` 由「有 revoked_at 就算」
+       * 收緊為「已下達**但未確認生效**」（`isRevokePending()`），否則 KPI 一升就永遠唔跌。
+       *   · r1：下達之後**仲有上報**（last_seen 較新）⇒ 已收到軟踢 ⇒ 唔算；
+       *   · r2：下達之後冇再上報、但**仍在離線門檻內** ⇒ 算 pending。
+       */
       row({ id: "r1", store_id: "st_c", revoked_at: ago(60_000) }),
+      row({ id: "r2", store_id: "st_d", revoked_at: ago(60_000), last_seen_at: ago(10 * 60_000) }),
     ];
     const s = summarizePosSessions(rows, NOW, SERVER_BUILD);
-    assert.equal(s.total, 4);
-    assert.equal(s.stores, 3);
+    assert.equal(s.total, 5);
+    assert.equal(s.stores, 4);
     assert.equal(s.multiOpenStores, 1);
     assert.equal(s.behind, 1);
     assert.equal(s.revokedPending, 1);
@@ -319,6 +328,72 @@ describe("canClearPosSession ── 唔准清仲活躍嘅", () => {
 
   it("已強制關閉 → 准清", () => {
     assert.equal(canClearPosSession(row({ revoked_at: ago(60_000) }), NOW), true);
+  });
+});
+
+describe("isRevokePending ── 「待生效」KPI 要識得自然歸零（2026-09-22 實案）", () => {
+  /**
+   * 舊寫法 `Boolean(revoked_at) && classify() === "rev"` —— 因為 `classifyPosSession()`
+   * 只要 `revoked_at` 有值就永遠回 "rev"，所以 KPI **一升就永遠唔跌**
+   * （商家：「我強制關掉後，一直都是卡在那邊」）。
+   */
+  it("下達之後仲有上報過 ⇒ 唔算待生效（該分頁已經連過線、收到軟踢）", () => {
+    const r = row({
+      revoked_at: new Date(NOW - 5 * 60_000).toISOString(),
+      last_seen_at: new Date(NOW - 60_000).toISOString(),
+    });
+    assert.equal(isRevokePending(r, NOW), false);
+  });
+
+  it("下達之後未上報、但仍喺離線門檻內 ⇒ 算待生效（可能只係未到輪詢週期）", () => {
+    const r = row({
+      revoked_at: new Date(NOW - 2 * 60_000).toISOString(),
+      last_seen_at: new Date(NOW - 20 * 60_000).toISOString(),
+    });
+    assert.equal(isRevokePending(r, NOW), true);
+  });
+
+  it("下達之後一直冇上報、已過離線門檻 ⇒ 唔算（部機根本唔喺度，屬「可清除」）", () => {
+    const r = row({
+      revoked_at: new Date(NOW - 3 * 60 * 60_000).toISOString(),
+      last_seen_at: new Date(NOW - 4 * 60 * 60_000).toISOString(),
+    });
+    assert.equal(isRevokePending(r, NOW), false);
+  });
+
+  it("冇 revoked_at ／ 讀唔到時間 ⇒ 一律 false（唔可以無中生有）", () => {
+    assert.equal(isRevokePending(row(), NOW), false);
+    assert.equal(isRevokePending(row({ revoked_at: "garbage" }), NOW), false);
+    assert.equal(
+      isRevokePending(row({ revoked_at: new Date(NOW - 60_000).toISOString(), last_seen_at: "garbage" }), NOW),
+      false,
+    );
+  });
+
+  it("summarize：3 小時前下達 ⇒ revokedPending 回 0（唔會長期卡住）", () => {
+    const rows = [
+      row({
+        revoked_at: new Date(NOW - 3 * 60 * 60_000).toISOString(),
+        last_seen_at: new Date(NOW - 4 * 60 * 60_000).toISOString(),
+      }),
+    ];
+    assert.equal(summarizePosSessions(rows, NOW, SERVER_BUILD).revokedPending, 0);
+  });
+});
+
+describe("admin 頁 ── 已強制關閉嘅 row 一定要有清除入口（2026-09-22）", () => {
+  const page = readFileSync(new URL("../../app/admin/sessions/page.tsx", import.meta.url), "utf8");
+
+  it("列表行嘅 rev 分支一定要有 onClear（唔可以只出「已下達」badge）", () => {
+    const at = page.indexOf('{state === "rev" ? (');
+    const end = page.indexOf(") : canClear ?", at);
+    assert.ok(at > 0 && end > at, "搵唔到列表行嘅 rev 分支");
+    const branch = page.slice(at, end);
+    assert.ok(/onClear/.test(branch), "rev 行冇清除入口 ⇒ 被軟踢嘅工作階段會永遠卡喺列表");
+  });
+
+  it("詳情 drawer 嘅 rev 狀態要有「清除紀錄」掣", () => {
+    assert.ok(/清除紀錄/.test(page), "detail drawer 冇「清除紀錄」掣");
   });
 });
 

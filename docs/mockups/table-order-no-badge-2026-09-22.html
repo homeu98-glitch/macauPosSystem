@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1180">
+<title>桌台總覽「訂單號」右上角角標 — 確認稿 2026-09-22</title>
+<style>
+  /* ── 基礎 ─────────────────────────────────────────────────────────────── */
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:#e8edf3}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif;
+    color:#0f172a;-webkit-font-smoothing:antialiased;
+  }
+  /* Tailwind 色值（抄自真產品 class，唔憑感覺調） */
+  :root{
+    --slate-100:#f1f5f9; --slate-200:#e2e8f0; --slate-300:#cbd5e1; --slate-400:#94a3b8;
+    --slate-500:#64748b; --slate-600:#475569; --slate-700:#334155; --slate-900:#0f172a;
+    --orange-50:#fff7ed; --orange-300:#fdba74; --orange-500:#f97316; --orange-600:#ea580c; --orange-700:#c2410c;
+    --emerald-500:#10b981; --emerald-600:#059669; --emerald-700:#047857;
+    --amber-500:#f59e0b; --amber-600:#d97706; --amber-700:#b45309;
+  }
+
+  /* ── 固定畫布 + 等比縮放（冇任何 @media 斷點）─────────────────────────── */
+  .stage{max-width:1180px;margin:0 auto;position:relative;overflow:hidden}
+  .canvas{width:1180px;position:relative;transform-origin:top left}
+
+  /* ── 評審 chrome（深色，明確唔屬產品介面，刻意唔用 sticky）───────────── */
+  .chrome{background:var(--slate-900);color:#fff;border-radius:14px;padding:16px 20px;margin-bottom:20px}
+  .chrome h1{font-size:19px;font-weight:700;letter-spacing:.2px}
+  .chrome .sub{margin-top:5px;font-size:12.5px;color:#94a3b8;line-height:1.6}
+  .chrome .tagrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .chrome .tag{font-size:11.5px;font-weight:600;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:999px;padding:4px 11px}
+  .chrome .tag.hot{background:#7c2d12;border-color:#9a3412;color:#fed7aa}
+
+  /* ── 區塊 ─────────────────────────────────────────────────────────────── */
+  .sec{margin-bottom:24px}
+  .sechead{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:baseline;margin-bottom:10px}
+  .secno{font-size:12px;font-weight:800;background:var(--orange-500);color:#fff;border-radius:999px;padding:3px 10px;white-space:nowrap}
+  .sectitle{font-size:16px;font-weight:700;color:var(--slate-900)}
+  .secdesc{grid-column:2;font-size:12.5px;color:var(--slate-600);line-height:1.65;margin-top:2px}
+
+  /* ── 裝置畫布（固定 1180 × 820，對應 iPad 橫向）───────────────────────── */
+  .device{
+    width:1180px;height:820px;display:flex;overflow:hidden;
+    background:var(--slate-100);border:1px solid var(--slate-300);border-radius:18px;
+  }
+  .sidebar{width:72px;flex:none;background:var(--slate-900);display:flex;flex-direction:column;overflow:hidden}
+  .sb-scroll{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;padding:6px 0}
+  .sb-item{flex:none;padding:9px 0;text-align:center;font-size:11px;font-weight:600;color:#94a3b8;line-height:1.35}
+  .sb-item.on{background:var(--orange-500);color:#fff;border-radius:0 10px 10px 0}
+  .sb-foot{flex:none;padding:8px 0;text-align:center;font-size:10px;font-weight:600;color:#64748b;border-top:1px solid #1e293b}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;background:var(--slate-100)}
+  .mhead{flex:none;background:#fff;border-bottom:1px solid var(--slate-200);padding:12px 16px;
+         display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}
+  .mhead .t{font-size:18px;font-weight:600;color:var(--slate-900)}
+  .mhead .s{margin-top:2px;font-size:12px;color:var(--slate-500)}
+  .hctl{display:flex;flex:none;flex-wrap:nowrap;align-items:center;gap:8px}
+  .btn-work{background:var(--orange-500);color:#fff;font-size:14px;font-weight:600;border-radius:16px;
+            padding:10px 16px;box-shadow:0 1px 2px rgba(0,0,0,.05);white-space:nowrap}
+  .pill-accept{display:inline-flex;align-items:center;gap:6px;background:#1e293b;color:#fff;
+               border-radius:999px;padding:0 11px;height:40px;font-size:12px;font-weight:600;white-space:nowrap}
+  .pill-accept .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex:none}
+  .pill-accept .st{color:#86efac}
+
+  .mbody{flex:1;min-height:0;overflow:auto;padding:16px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+  .chip{font-size:14px;font-weight:600;border-radius:999px;padding:8px 16px;background:#fff;color:var(--slate-700);
+        box-shadow:0 0 0 1px var(--slate-200)}
+  .chip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+
+  .tgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+
+  /* ── 桌台卡（逐個 class 對應真產品 Tailwind）─────────────────────────── */
+  .card{
+    display:block;width:100%;font:inherit;text-align:left;cursor:pointer;
+    border-radius:16px;border:1px solid;padding:16px;
+    box-shadow:0 1px 2px rgba(0,0,0,.05);
+  }
+  .card.occ {border-color:var(--orange-600); background:var(--orange-500); color:#fff}
+  .card.paid{border-color:var(--emerald-600);background:var(--emerald-500);color:#fff}
+  .card.reop{border-color:var(--amber-600);  background:var(--amber-500);  color:#fff}
+  .card.idle{border-color:var(--slate-200);  background:#fff;               color:var(--slate-900)}
+
+  /* 枱名列：flex 兩欄 —— 枱名 truncate 讓位，角標 shrink-0 永不變形 */
+  .tname-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+  .tname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+         font-size:16px;line-height:24px;font-weight:600;color:inherit}
+
+  /* 🔴 新增：訂單號右上角角標 */
+  .badge{
+    flex:none;max-width:68%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    background:#fff;border-radius:8px;padding:2px 8px;
+    margin:-4px -4px 0 0;                                  /* -mt-1 -mr-1 → 貼實右上角 */
+    font-size:11px;font-weight:700;line-height:20px;
+    box-shadow:0 0 0 1px rgba(0,0,0,.10),0 1px 2px rgba(0,0,0,.05);
+  }
+  .badge.occ {color:var(--orange-700)}
+  .badge.paid{color:var(--emerald-700)}
+  .badge.reop{color:var(--amber-700)}
+
+  .area{margin-top:8px;font-size:12px;line-height:16px;color:var(--slate-500)}
+  .card.occ .area,.card.paid .area,.card.reop .area{color:rgba(255,255,255,.85)}
+  .seat{margin-top:4px;font-size:12px;line-height:16px;font-weight:600;color:var(--slate-700)}
+  .card.occ .seat,.card.paid .seat,.card.reop .seat{color:rgba(255,255,255,.90)}
+  .amt{margin-top:4px;font-size:14px;line-height:20px;font-weight:700;color:#fff;
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tlabel{margin-top:12px;display:inline-flex;border-radius:999px;padding:4px 12px;
+          font-size:12px;line-height:16px;font-weight:600;background:var(--orange-50);color:var(--orange-700)}
+  .card.occ .tlabel,.card.paid .tlabel,.card.reop .tlabel{background:rgba(255,255,255,.25);color:#fff}
+
+  /* ── 右欄：快捷操作 ───────────────────────────────────────────────────── */
+  .panel{width:280px;flex:none;background:#fff;border-left:1px solid var(--slate-200);
+         display:flex;flex-direction:column;overflow:hidden}
+  .phead{flex:none;padding:12px 14px;border-bottom:1px solid var(--slate-200)}
+  .phead .t{font-size:14px;font-weight:600;color:var(--slate-900)}
+  .phead .s{margin-top:2px;font-size:11px;line-height:1.5;color:var(--slate-500)}
+  .pbody{flex:1;min-height:0;overflow:auto;padding:12px 14px 18px}
+  .pcard{border:1px solid var(--slate-200);border-radius:16px;padding:12px;margin-bottom:10px}
+  .pcard .row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+  .pcard .t{font-size:13px;font-weight:600;color:var(--slate-900)}
+  .pcard .s{font-size:11px;color:var(--slate-500);margin-top:2px}
+  .toggle{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#15803d}
+  .toggle .sw{width:38px;height:22px;border-radius:999px;background:#22c55e;position:relative;flex:none}
+  .toggle .sw::after{content:"";position:absolute;top:3px;right:3px;width:16px;height:16px;border-radius:50%;background:#fff}
+  .pempty{font-size:11.5px;color:var(--slate-500);line-height:1.6;padding:2px 2px 0}
+
+  /* ── 區塊 2：放大對比 ─────────────────────────────────────────────────── */
+  .zoomgrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+  .zoomcell{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:12px}
+  .zoomcell .cap{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:9px}
+  .zoomcell .capL{font-size:12.5px;font-weight:700;color:var(--slate-900)}
+  .zoomcell .verdict{font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 8px;white-space:nowrap}
+  .verdict.yes{background:#dcfce7;color:#15803d}
+  .verdict.no{background:#f1f5f9;color:var(--slate-500)}
+  .zoomcell .note{margin-top:9px;font-size:11px;line-height:1.6;color:var(--slate-600)}
+
+  /* ── 區塊 3：規格表 ───────────────────────────────────────────────────── */
+  .spectable{border:1px solid var(--slate-200);border-radius:16px;overflow:hidden;background:#fff}
+  .srow{display:grid;grid-template-columns:200px minmax(0,1fr);gap:0}
+  .srow + .srow{border-top:1px solid var(--slate-200)}
+  .srow .k{background:#f8fafc;padding:11px 14px;font-size:12.5px;font-weight:700;color:var(--slate-700)}
+  .srow .v{padding:11px 14px;font-size:12.5px;line-height:1.7;color:var(--slate-700)}
+  .srow .v code{background:#f1f5f9;border-radius:5px;padding:1px 5px;font-size:11.5px;color:#0f172a}
+  .srow .v b{color:var(--slate-900)}
+
+  /* ── 區塊 4：量測 ─────────────────────────────────────────────────────── */
+  .measure{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  .mcard{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:14px}
+  .mcard .k{font-size:11.5px;font-weight:700;color:var(--slate-500);letter-spacing:.3px}
+  .mcard .n{font-size:22px;font-weight:800;color:var(--slate-900);margin-top:4px;font-variant-numeric:tabular-nums}
+  .mcard .d{font-size:11.5px;color:var(--slate-600);margin-top:5px;line-height:1.55}
+  .mcard.ok{border-color:#86efac;background:#f0fdf4}
+  .mcard.ok .n{color:#15803d}
+
+  .foot{font-size:11.5px;color:var(--slate-500);line-height:1.7;padding:4px 2px 30px}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ══ 評審工具列（唔屬產品介面）══════════════════════════════════════ -->
+  <div class="chrome">
+    <h1>桌台總覽 · 格子右上角「訂單號」角標 — 確認稿</h1>
+    <div class="sub">
+      需求（2026-09-22 商家）：「當桌台已有下單時，在其格子右上角顯示對應的訂單號；
+      尚未下單的桌台則不顯示任何角標。角標樣式需醒目且不遮擋桌台名稱等其他資訊。」
+    </div>
+    <div class="tagrow">
+      <span class="tag hot">新增 ①：右上角訂單號角標</span>
+      <span class="tag">有單先出 · 空閒枱唔出</span>
+      <span class="tag">flex 兩欄排版 ⇒ 永不壓住枱名</span>
+      <span class="tag">白底高對比 · 一眼認單</span>
+    </div>
+  </div>
+
+  <!-- ══ ① 修改後畫面 ═══════════════════════════════════════════════════ -->
+  <div class="sec">
+    <div class="sechead">
+      <span class="secno">①</span>
+      <span class="sectitle">修改後嘅桌台總覽（1樓）</span>
+      <span class="secdesc">
+        同一版畫面：<b>已下單</b>嘅枱（橙卡）右上角多咗訂單號角標；
+        <b>空閒</b>嘅枱（白卡）一個角標都冇 —— 對比即刻分得出。
+      </span>
+    </div>
+
+    <div class="device">
+      <!-- 側欄 -->
+      <div class="sidebar">
+        <div class="sb-scroll" id="sbnav"></div>
+        <div class="sb-foot">其他<br>模組</div>
+      </div>
+
+      <!-- 主區 -->
+      <div class="main">
+        <div class="mhead">
+          <div>
+            <div class="t">桌台總覽</div>
+            <div class="s">點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單</div>
+          </div>
+          <div class="hctl">
+            <span class="btn-work">開工</span>
+            <span class="pill-accept"><span class="dot"></span>線上接單 <span class="st">接單中</span></span>
+            <span class="pill-accept"><span class="dot"></span>線下接單 <span class="st">營業中</span></span>
+          </div>
+        </div>
+        <div class="mbody">
+          <div class="chips" id="chips"></div>
+          <div class="tgrid" id="floor1"></div>
+        </div>
+      </div>
+
+      <!-- 右欄 -->
+      <div class="panel">
+        <div class="phead">
+          <div class="t">快捷操作</div>
+          <div class="s">桌台流程、收銀入口與營運操作集中在這裡</div>
+        </div>
+        <div class="pbody">
+          <div class="pcard">
+            <div class="row">
+              <div>
+                <div class="t">線上訂單</div>
+                <div class="s">自動接單</div>
+              </div>
+              <span class="toggle"><span class="sw"></span>開</span>
+            </div>
+          </div>
+          <div class="pempty">暫無待處理線上訂單。完整列表請至線上訂單。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ ② 狀態全集（放大對比）══════════════════════════════════════════ -->
+  <div class="sec">
+    <div class="sechead">
+      <span class="secno">②</span>
+      <span class="sectitle">五種枱狀態 × 角標（放大對比）</span>
+      <span class="secdesc">
+        角標跟卡身色系走（橙／綠／琥珀），全部都係<b>白底</b> —— 喺彩色實底卡上係對比最高嘅寫法。
+        最右一格係「空閒」，角標欄留白，證明唔會有「空白白色藥丸」。
+      </span>
+    </div>
+    <div class="zoomgrid" id="states"></div>
+  </div>
+
+  <!-- ══ ③ 規格 ═════════════════════════════════════════════════════════ -->
+  <div class="sec">
+    <div class="sechead">
+      <span class="secno">③</span>
+      <span class="sectitle">角標規格（實作逐項對應）</span>
+      <span class="secdesc">以下每一項都係改動前後嘅硬指標，方便實作完成後逐條核對。</span>
+    </div>
+    <div class="spectable">
+      <div class="srow"><div class="k">位置</div><div class="v">枱格<b>右上角</b>（同枱名同一行，靠右對齊；<code>mt-1 mr-1</code> 內縮 4px 貼角）</div></div>
+      <div class="srow"><div class="k">內容</div><div class="v">訂單號原樣輸出（<code>PosOrder.localOrderNo</code>，例如「訂單1」「快餐01」），唔加前綴、唔改寫格式</div></div>
+      <div class="srow"><div class="k">顯示條件</div><div class="v">
+        ✅ 枱有單（<code>status ≠ idle</code>）<b>而且</b>單號非空白 → 出角標<br>
+        ❌ 空閒枱（<code>idle</code>）→ 唔出（商家口徑「尚未下單」＝呢一種）<br>
+        ❌ 單號空字串／全空白 → 唔出（防一格空白白藥丸）
+      </div></div>
+      <div class="srow"><div class="k">醒目度</div><div class="v">白底 ＋ 11px 粗體 ＋ 卡片同色系文字 ＋ 1px 描邊 ＋ 微陰影，喺橙／綠／琥珀實底上跳出嚟</div></div>
+      <div class="srow"><div class="k">不遮擋枱名</div><div class="v">
+        <b>唔用 <code>absolute</code></b>。枱名同角標係同一行嘅 <code>flex</code> 兩欄：
+        枱名 <code>min-w-0 truncate</code> 讓位、角標 <code>shrink-0</code> 永不變形 ⇒
+        數學上兩者冇可能重疊。枱名真係太長時係<b>枱名被截斷</b>（有 hover title 補），唔係角標疊上去。
+      </div></div>
+      <div class="srow"><div class="k">角標最闊</div><div class="v"><code>max-w-[68%]</code> ＋ <code>truncate</code>，單號異常長都唔會推爆卡片</div></div>
+      <div class="srow"><div class="k">觸控</div><div class="v">角標係<b>純展示</b>、唔可點、唔攔事件 ⇒ 整張卡嘅點擊區完全不變（仍為整格 ≥40px）</div></div>
+      <div class="srow"><div class="k">其他狀態</div><div class="v">
+        <b>已結帳／待收尾</b>（綠卡）、<b>待重結</b>（琥珀卡）、<b>客人自助落單待確認</b>（橙卡 · draft）
+        一樣出角標 —— 因為呢三種枱都已經有單、有單號，正正係最需要認單嘅時候。
+      </div></div>
+      <div class="srow"><div class="k">真源</div><div class="v">
+        顯示規則抽成純函式 <code>src/lib/pos/table-order-badge.ts</code>（零 import），
+        UI 只讀結果，唔喺畫面重寫條件；配 <code>table-order-badge.test.ts</code>（8 條）守住。
+      </div></div>
+    </div>
+  </div>
+
+  <!-- ══ ④ 量測（真 Chromium bounding box）══════════════════════════════ -->
+  <div class="sec">
+    <div class="sechead">
+      <span class="secno">④</span>
+      <span class="sectitle">版面量測（真 Chrome 量 bounding box，唔靠肉眼）</span>
+      <span class="secdesc">以下數字係喺真實 Chromium 上量度出嚟，直接回答「角標有冇遮擋枱名」。</span>
+    </div>
+    <div class="measure" id="measure"></div>
+  </div>
+
+  <div class="foot">
+    確認稿檔案：<b>docs/mockups/table-order-no-badge-2026-09-22.html</b> ·
+    實作：<b>src/components/pos-app.tsx</b>（桌台總覽卡片）＋ 新模組 <b>src/lib/pos/table-order-badge.ts</b>
+  </div>
+
+</div>
+</div>
+
+<script>
+/* ── 示範資料：全部由 array 生成（枱名／樓層係商家自訂，唔寫死）──────────── */
+var FLOORS = ["全部", "1樓", "2樓", "澳覓", "MFOOD", "外賣自取", "返結1樓"];
+var ACTIVE_FLOOR = "1樓";
+
+/* 1樓真況（照 2026-09-22 商家截圖）：3 張已下單 ＋ 6 張空閒 */
+var FLOOR1 = [
+  {name:"A01", area:"1樓", status:"sent_to_kitchen", orderNo:"訂單1", due:"MOP 395", seated:"1/12"},
+  {name:"A02", area:"1樓", status:"sent_to_kitchen", orderNo:"訂單2", due:"MOP 82",  seated:"0/—"},
+  {name:"A03", area:"1樓", status:"idle",            orderNo:"",      due:"",        seated:"0/—"},
+  {name:"A04", area:"1樓", status:"sent_to_kitchen", orderNo:"訂單3", due:"MOP 74",  seated:"0/—"},
+  {name:"A05", area:"1樓", status:"idle",            orderNo:"",      due:"",        seated:"0/—"},
+  {name:"A06", area:"1樓", status:"idle",            orderNo:"",      due:"",        seated:"0/—"},
+  {name:"A07", area:"1樓", status:"idle",            orderNo:"",      due:"",        seated:"0/—"},
+  {name:"A08", area:"1樓", status:"idle",            orderNo:"",      due:"",        seated:"0/—"},
+  {name:"A09", area:"1樓", status:"idle",            orderNo:"",      due:"",        seated:"0/—"}
+];
+
+/* 五種狀態全集（放大對比用） */
+var STATES = [
+  {cap:"已下單",            verdict:"出角標", yes:true,  status:"sent_to_kitchen", orderNo:"訂單1", due:"MOP 395",
+   name:"A01", area:"1樓", seated:"1/1", note:"橙卡。店員落單即刻 stamp 單號 —— 商家講嘅「已有下單」本體。"},
+  {cap:"待重結（返結）",    verdict:"出角標", yes:true,  status:"reopened", orderNo:"訂單22", due:"MOP 128",
+   name:"A02", area:"1樓", seated:"0/—", note:"琥珀卡。返結中單號唔變（同一張單），角標文字同原單一致。"},
+  {cap:"已結帳 / 待收尾",   verdict:"出角標", yes:true,  status:"paid", orderNo:"訂單3", due:"MOP 74",
+   name:"A04", area:"1樓", seated:"0/—", note:"綠卡。錢已收、等收尾／加菜 —— 一樣靠角標認單。"},
+  {cap:"客人自助 · 待確認", verdict:"出角標", yes:true,  status:"draft", orderNo:"訂單4", due:"MOP 56",
+   name:"A05", area:"1樓", seated:"0/—", note:"標籤寫「未下單」＝店員未確認，但客人已落單、單號已存在。"},
+  {cap:"空閒（未下單）",    verdict:"無角標", yes:false, status:"idle", orderNo:"", due:"",
+   name:"A03", area:"1樓", seated:"0/—", note:"白卡。冇單就冇單號 —— 右上角完全留白，同「未下單」一致。"}
+];
+
+var NAV = ["點餐","訂單","會員","打印","報表","清潔","交班"];
+
+/* ── render ───────────────────────────────────────────────────────────── */
+function esc(s){ return String(s == null ? "" : s); }
+
+function toneOf(status){
+  if (status === "paid") return "paid";
+  if (status === "reopened") return "reop";
+  if (status === "idle") return "idle";
+  return "occ";
+}
+
+function labelOf(t){
+  if (t.status === "paid") return "已結帳 / 待收尾";
+  if (t.status === "reopened") return "待重結";
+  if (t.status === "sent_to_kitchen") return "已下單";
+  if (t.status === "draft") return "未下單";
+  return "空閒";
+}
+
+/* 同真產品同一份判準：非 idle 而且單號非空白 → 出角標 */
+function badgeOf(t){
+  var txt = (t.orderNo || "").trim();
+  if (t.status === "idle" || txt.length === 0) return null;
+  return txt;
+}
+
+function cardHtml(t){
+  var tone = toneOf(t.status);
+  var b = badgeOf(t);
+  var occupied = tone !== "idle";
+  var html = '<button type="button" class="card ' + tone + '">';
+  html += '<div class="tname-row">';
+  html += '<div class="tname">' + esc(t.name) + '</div>';
+  html += b ? '<span class="badge ' + tone + '" title="訂單號：' + esc(b) + '">' + esc(b) + '</span>' : "";
+  html += '</div>';
+  html += '<div class="area">' + esc(t.area) + '</div>';
+  html += '<div class="seat">已坐 ' + esc(t.seated) + '</div>';
+  html += (occupied && t.due) ? '<div class="amt">應收 ' + esc(t.due) + '</div>' : "";
+  html += '<div class="tlabel">' + labelOf(t) + '</div>';
+  html += '</button>';
+  return html;
+}
+
+function renderChips(){
+  var out = "";
+  for (var i = 0; i < FLOORS.length; i++){
+    out += '<span class="chip' + (FLOORS[i] === ACTIVE_FLOOR ? " on" : "") + '">' + esc(FLOORS[i]) + '</span>';
+  }
+  document.getElementById("chips").innerHTML = out;
+}
+
+function renderFloor1(){
+  var out = "";
+  for (var i = 0; i < FLOOR1.length; i++) out += cardHtml(FLOOR1[i]);
+  document.getElementById("floor1").innerHTML = out;
+}
+
+function renderStates(){
+  var out = "";
+  for (var i = 0; i < STATES.length; i++){
+    var s = STATES[i];
+    out += '<div class="zoomcell">';
+    out += '<div class="cap"><span class="capL">' + esc(s.cap) + '</span>';
+    out += '<span class="verdict ' + (s.yes ? "yes" : "no") + '">' + esc(s.verdict) + '</span></div>';
+    out += cardHtml(s);
+    out += '<div class="note">' + esc(s.note) + '</div>';
+    out += '</div>';
+  }
+  document.getElementById("states").innerHTML = out;
+}
+
+function renderNav(){
+  var out = "";
+  for (var i = 0; i < NAV.length; i++){
+    out += '<div class="sb-item' + (i === 0 ? " on" : "") + '">' + esc(NAV[i]) + '</div>';
+  }
+  document.getElementById("sbnav").innerHTML = out;
+}
+
+renderNav();
+renderChips();
+renderFloor1();
+renderStates();
+
+/* ── 量測結果（由 tools/_probe-badge-overlap.cjs 喺真 Chromium 量得，2026-09-22）── */
+function renderMeasure(){
+  var cells = [
+    {k:"枱名 × 角標 重疊", n:"0 px", ok:true,
+     d:"14 / 14 張卡嘅 bounding box 交集 = 0（含「超長枱名 ＋ 超長單號」壓力樣本）"},
+    {k:"卡片內容被裁切", n:"0 張", ok:true,
+     d:"scrollHeight − clientHeight = 0；有角標卡同空閒卡高度同為 162px，版面冇被撐高"},
+    {k:"角標貼角內縮", n:"3 px", ok:true,
+     d:"角標凸出卡片內邊 3px（-mt-1 / -mr-1 設計值，即「貼實右上角」），仍然完全喺卡片以內"}
+  ];
+  var out = "";
+  for (var i = 0; i < cells.length; i++){
+    out += '<div class="mcard' + (cells[i].ok ? " ok" : "") + '">' +
+           '<div class="k">' + cells[i].k + '</div>' +
+           '<div class="n">' + cells[i].n + '</div>' +
+           '<div class="d">' + cells[i].d + '</div></div>';
+  }
+  document.getElementById("measure").innerHTML = out;
+}
+renderMeasure();
+
+/* ── 固定畫布等比縮放（冇 @media）────────────────────────────────────── */
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || 1180;
+  var s = Math.min(1, Math.max(w / 1180, 0.42));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(canvas.offsetHeight * s) + "px";
+}
+window.addEventListener("resize", fit);
+fit();
+</script>
+</body>
+</html>

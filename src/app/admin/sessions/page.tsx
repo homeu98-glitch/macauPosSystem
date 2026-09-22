@@ -621,6 +621,7 @@ export default function AdminSessionsPage() {
           busy={busy}
           onClose={() => setDetailId(null)}
           onRevoke={() => setConfirmIds([detailRow.id])}
+          onClear={() => void submitAction("clear", [detailRow.id])}
         />
       ) : null}
 
@@ -783,7 +784,32 @@ function SessionRow({
       <p className="truncate font-mono text-[11px] text-slate-500">{row.ip ?? "—"}</p>
       <div className="text-right">
         {state === "rev" ? (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">已下達</span>
+          /**
+           * 🔴 2026-09-22 修：已強制關閉嘅行**一定要保留「清除」入口**。
+           *
+           * 舊寫法 `state === "rev"` 就直接出一個「已下達」badge、唔出任何掣；
+           * 但 `canClearPosSession()` 對 `rev` 係回 `true`（＝**後端准清、前端冇入口**）
+           * ⇒ 被軟踢嘅工作階段**永遠卡喺列表**（商家 2026-09-22 回報：
+           * 「我強制關掉後，一直都是卡在那邊」）。
+           */
+          <div className="flex items-center justify-end gap-1.5">
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+              已下達
+            </span>
+            {canClear ? (
+              <button
+                type="button"
+                title="移除紀錄（該分頁若仍然開住，下次連線會重新建立一個新工作階段）"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClear();
+                }}
+                className="min-h-[32px] whitespace-nowrap rounded-lg border border-slate-200 px-3 text-xs text-slate-500 hover:bg-slate-50"
+              >
+                清除
+              </button>
+            ) : null}
+          </div>
         ) : canClear ? (
           <button
             type="button"
@@ -820,6 +846,7 @@ function SessionDetailDrawer({
   busy,
   onClose,
   onRevoke,
+  onClear,
 }: {
   row: AdminSessionRow;
   nowMs: number;
@@ -828,6 +855,8 @@ function SessionDetailDrawer({
   busy: boolean;
   onClose: () => void;
   onRevoke: () => void;
+  /** 🔴 2026-09-22：已強制關閉嘅工作階段一定要有清除入口（見列表行同一條註釋）。 */
+  onClear: () => void;
 }) {
   const state = classifyPosSession(row, nowMs);
   const behind = isSessionBehind(row, serverBuildId);
@@ -948,9 +977,21 @@ function SessionDetailDrawer({
         </div>
         <div className="flex gap-2 border-t border-slate-100 bg-slate-50 px-4 py-3">
           {classifyPosSession(row, nowMs) === "rev" ? (
-            <span className="flex-1 rounded-lg border border-slate-200 py-2.5 text-center text-xs text-slate-500">
-              已下達強制關閉，等該分頁下次連線確認
-            </span>
+            <>
+              <span className="flex-1 rounded-lg border border-slate-200 px-3 py-2.5 text-center text-xs text-slate-500">
+                已下達強制關閉，等該分頁下次連線確認
+              </span>
+              {/* 🔴 2026-09-22：已強制關閉嘅 row 一樣要可以清除（見列表行同一條註釋）。 */}
+              <button
+                type="button"
+                disabled={busy}
+                title="移除紀錄（該分頁若仍然開住，下次連線會重新建立一個新工作階段）"
+                onClick={onClear}
+                className="min-h-[40px] rounded-lg border border-slate-200 px-4 text-center text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                清除紀錄
+              </button>
+            </>
           ) : (
             <button
               type="button"

@@ -139,7 +139,7 @@ export type PosSessionSummary = {
   multiOpenStores: number;
   behind: number;
   oldestOpenedAt: string | null;
-  /** 已下達強制關閉但 POS 端未確認（＝未生效）嘅數量。 */
+  /** 已下達強制關閉但**未確認生效**（＝該分頁仍然連得到）嘅數量；會自然歸零。 */
   revokedPending: number;
   /** 開啟超過 24 小時仍未關（最值得清理）。 */
   openOver24h: number;
@@ -345,7 +345,7 @@ export function summarizePosSessions(
     multiOpenStores: groups.filter((g) => g.multiOpen).length,
     behind: rows.filter((r) => isSessionBehind(r, serverBuildId)).length,
     oldestOpenedAt: openedMs.length ? new Date(Math.min(...openedMs)).toISOString() : null,
-    revokedPending: rows.filter((r) => Boolean(r.revoked_at) && classifyPosSession(r, nowMs) === "rev").length,
+    revokedPending: rows.filter((r) => isRevokePending(r, nowMs)).length,
     openOver24h: rows.filter((r) => {
       const ms = isoToMs(r.opened_at);
       return ms !== null && nowMs - ms > 24 * 60 * 60 * 1000;
@@ -362,6 +362,39 @@ export function summarizePosSessions(
 export function canClearPosSession(row: Pick<PosSessionRow, "last_seen_at" | "revoked_at">, nowMs: number): boolean {
   const state = classifyPosSession(row, nowMs);
   return state === "off" || state === "rev";
+}
+
+/**
+ * 「已下達強制關閉，但**仲未確認生效**」—— admin 頁 KPI「已下達待生效」用。
+ *
+ * ## 為何要一個獨立判準（2026-09-22 實案）
+ *
+ * 舊寫法係 `Boolean(revoked_at) && classify() === "rev"`。但 `classifyPosSession()` 只要
+ * `revoked_at` 有值就**永遠**回 `"rev"` ⇒ 呢個 KPI **一升就永遠唔會跌**：
+ * 商家強制關掉一個分頁之後，數字一直掛住「1」，睇落好似「卡住咗、未生效」
+ * （商家 2026-09-22 回報：「我強制關掉後，一直都是卡在那邊」）。
+ *
+ * ## 口徑（三個情況都要分開）
+ *
+ * | 情況 | 判斷 | 理由 |
+ * |---|---|---|
+ * | 下達**之後**仲有上報過（`last_seen_at > revoked_at`） | **唔算**待生效 | 該分頁已經連過線 ⇒ 一定收到軟踢 header（POS 端見到就停輪詢） |
+ * | 下達之後冇上報，但**仍在離線門檻內**（≤ 30 分） | **算**待生效 | 分頁可能只係下一個輪詢週期未到（輪詢閘最多 5 分鐘） |
+ * | 下達之後冇上報，而且**已過離線門檻** | **唔算**待生效 | 部機根本唔喺度（分頁已閂／已斷網）⇒ 冇「等生效」可言，屬「可以清除」 |
+ *
+ * ⇒ 呢個 KPI 會自然歸零，唔會再長期卡住。
+ */
+export function isRevokePending(
+  row: Pick<PosSessionRow, "last_seen_at" | "revoked_at">,
+  nowMs: number,
+): boolean {
+  if (!row.revoked_at) return false;
+  const revMs = isoToMs(row.revoked_at);
+  if (revMs === null) return false;
+  const lastMs = isoToMs(row.last_seen_at);
+  if (lastMs === null) return false;
+  if (lastMs > revMs) return false;
+  return nowMs - lastMs <= SESSION_OFFLINE_WINDOW_MS;
 }
 
 /**
