@@ -3,8 +3,8 @@
 > 開工前必讀 `docs/113-agent-gotchas.md`；流程已成 skills：`pos-egress-call-forensics`／
 > `pos-order-sync-triage`／`pos-close-gate-feature`／`pos-api-auth-hardening`／`pos-ui-live-verify`／
 > `pos-admin-config-feature`。
-> POS=`iyrywzormzisyppkokbi`；Ledger=`zymdemjflsckicwcinxl`。Migration 至 0049 已跑；
-> ⚠️ **0050（版本控制）未跑**。
+> POS=`iyrywzormzisyppkokbi`；Ledger=`zymdemjflsckicwcinxl`。Migration **至 0050 已跑完**
+> （0050 於 2026-09-23 09:39 執行：建表＋RLS＋`pos_activate_release_version` RPC 皆已驗證）。
 > 📄 最新個案：`docs/reviews/order19-and-receipt-print-2026-09-22.md`；
 > 最新功能：`docs/146-app-download-version-control.md`。
 
@@ -29,8 +29,18 @@ predicate ＋ 顯示全委派它（「顯示 updatedAt／篩選 createdAt」曾�
 ## 3 鑑權
 閘＝`posRouteAuthGuard(request, storeId, tag)`，須放喺 early-return **之後**。
 🔴 `POS_REQUIRE_DEVICE_AUTH` **冇設＝開閘**（「冇設」≠「關閉」）。
-anon key 公開 ⇒ 可直讀近 14 日明細（連 `pos_print_jobs` 都讀到；`pos_queue_events` 係 42501
-→ 要 service role）。根治＝per-store token（未做）。憑證 TTL：POS token／admin session 皆 12h。
+🔴🔴 **anon 可讀 `pos_orders`／`pos_print_jobs` 係「刻意的時間窗 RLS」，唔係漏做，唔可以移除。**
+窗口：`pos_orders` **72h**（0041，由 14 日收窄）／`pos_print_jobs` **24h**（0021）。
+理由：**三個 Realtime 消費者全部用 anon key 訂 `postgres_changes`** ——
+`use-pos-realtime.ts`（收銀台）／`use-kds-realtime.ts`（後廚）／中繼 APK
+（`resolveRelayRealtimeConfig()` 派 `SUPABASE_ANON_KEY`）。anon 冇 store claim ⇒
+收緊＝**一個事件都唔推，而 channel 照樣 SUBSCRIBED（零 error）** ⇒
+列印由 1–3 秒退化成最長 180 秒、訂單唔再自動彈出。`0041` 檔頭明文禁止；
+窗口亦唔可以再收短（Realtime UPDATE/DELETE 事件用 **row 自身 `created_at`** 過 policy）。
+根治＝per-store token（JWT 帶 `store_id` claim，**必須連 token 一齊做**，未立項）。
+`pos_queue_events`／`pos_sessions`／`pos_print_agents`／`pos_device_configs`／`pos_egress_daily`
+等 10 張表已 401。守衛：`src/lib/pos/print-and-order-realtime-guard.test.ts`（14 條）。
+憑證 TTL：POS token／admin session 皆 12h。
 
 ## 4 打印／中繼
 🔴🔴 **入隊只准一條路徑 `appendPrintJobsWithSync()`**（2026-09-22 收口）。`pos-app.tsx` 曾有
@@ -79,9 +89,15 @@ Vercel 改 env 要 **Redeploy**。
 id 前綴＝建單程式：`order-` 收銀台/快餐／`staff-` 店員手機／`kiosk-` 自助機／`ledger-` 線上鏡像。
 列表顯示時間＝最後更新；建立睇 `pos_orders.created_at`。事件 payload 兩形狀 ⇒ `sync-order-payload.ts`。
 `storeId` 係公開值（枱 QR `?store=`）⇒ kiosk 手動輸入＝無密碼落單入口。
-⭐ 生產取證最有效：`tools/_probe-*.cjs`（由 deployed bundle 抽 anon key 直讀 PostgREST，唯讀）
-＋ `analyze-vercel-log.cjs`（按 `requestId` 去重）。Vercel log 冇 IP ⇒ route 內 `console.info(ip=…)`；
-時間一律換 Macau(+8)。真瀏覽器驗證用 `localhost`（唔可 127.0.0.1）。
+⭐ 生產取證最有效：`tools/log-recheck.cjs --both <vercel.csv> <supabase.csv>`（**2026-09-23 新增**，
+一次出齊請求去重／路徑組成／`limit=` 指紋／逐 `agent_id` 節奏／`[egress]` 原文／postgres error）
+＋ `tools/probe-anon-exposure.cjs`（自動抽 anon key 逐表探測曝光面）；
+舊有 `tools/_probe-*.cjs`（由 deployed bundle 抽 anon key 直讀 PostgREST，唯讀）。
+🔴 **三個量度陷阱**：① Vercel **一行 `console.log` = 一行 CSV**（同一請求共用 `requestId`）
+—— 實測 160 行＝**只有 60 個唯一請求**，唔去重會高估 2.7 倍 ② 兩份 log 窗口通常唔重疊，
+只可比**速率**唔可逐項對質 ③ CSV 有引號內換行，唔可以 `split('\n')`（1,220 行 → 實際 1,000 筆）。
+🔴 多部中繼機混算 claim 間隔會被腰斬（2 部各 180s → 混算中位 94s）⇒ **一定逐 `agent_id` 拆開睇**。
+Vercel log 冇 IP ⇒ route 內 `console.info(ip=…)`；時間一律換 Macau(+8)。真瀏覽器驗證用 `localhost`（唔可 127.0.0.1）。
 
 ## 8 Egress／版本／同步
 計費＝Supabase → Vercel Function（改 response 對帳單無幫助）。⭐ 最快取證＝解析 Vercel `[egress]` 行
@@ -119,7 +135,7 @@ client 標頭 `x-pos-session`＋`x-pos-build`。🔴 key 存 `sessionStorage`。
 `pos_print_jobs.kind`、同日重複單號（訂單27 ×2）、「同步健康」顯示舊 bundle 可見警告。
 
 ## 10 下載入口／版本控制（2026-09-23）
-表 `pos_release_versions`（**0050，未跑**）＋ Storage bucket `macauposapk`（public，POS 專案）。
+表 `pos_release_versions`（**0050 已跑，2026-09-23 09:39**）＋ Storage bucket `macauposapk`（public，POS 專案）。
 登入頁 `/login` 按 UA 出「下載 APK」（Android）／「下載安裝包」（desktop）→
 公開 API `/api/release/versions/active`（免登入，60s CDN 快取）→ 目前 active 版本。
 admin 頁 `/admin/versions`＋`/api/admin/release-versions`（GET/POST/PATCH/DELETE）。
@@ -139,4 +155,44 @@ iPhone／iPad 刻意歸 `desktop`。舊行為改動：新版本預設**唔 activ
 Supabase Dashboard 放）。**唔係漏做，唔好自作主張加**。若真要做要先解決：
 Vercel request body 4.5 MB 上限（唔可以經自家 API route 收檔，要簽 signed upload URL 直上 Storage）、
 Supabase 免費層單檔一般 50 MB。刪版本唔刪 Storage 檔案（刻意）。
-⏭️ 未做：0050 未跑。
+⏭️ 未做：per-store token（`pos_orders`／`pos_print_jobs` 仍 anon 可讀，2026-09-23 覆核確認；
+其餘 10 張表已 401）；把心跳 PATCH 併入 claim RPC；舊 outbox 殘留（確定性拒收加 6h TTL）；
+resubscribe 路徑帶 `?fields=` 投影；realtime 每 11.8 分鐘重連待查；
+「營業中」窗口 egress 覆核（09-22 至今一直未補）。
+
+## 11 egress 新基準（2026-09-23 覆核，關店時段）
+`legacy=1`／`queue=300`／`limit=300` **全部 0 次**（基準 1,050／928）⇒ 舊分頁大戶消失。
+`pos/state` 單次 **34,989 B**（基準 843 KB→404 KB）；`legacyThrottled` 0 次。
+中繼機 claim **每部中位 180s**（基準 76s）；stale 拒收 924 行 → **79 行**（每張 1 次）。
+待機請求 **2.17/分（3,121/日）**，**79% 係「輪詢三角」**：`PATCH print_agents` ＋ `claim RPC`
+＋ `GET device_configs` ＋ `GET print_agents`(verify) —— 每部機 60 次/小時，實際只需 1–2 個 round trip。
+⚠️ `pos/state` 喺 `incr=1`／`orders=0` 之下**仍回 35 KB 全量 config**，觸發源係 realtime 重連
+（每 11.8 分鐘一次）⇒ resubscribe 路徑應帶 `?fields=`。詳見
+`docs/reviews/recheck-2026-09-23-egress-and-relay.md`。⚠️ 一部中繼機曾靜默 ≥2 小時（07:43 起）。
+
+## 12 per-store token（2026-09-23 評估，未實作）
+⭐ **專案已經有 per-store token**：`pos-device-token.ts` 嘅 `pv1`（HMAC、payload 帶 `storeId`、
+TTL 12h、簽發 `/api/ledger/login`、續期 `/api/pos/device-token`）。缺嘅只係 **Supabase 認得嘅 JWT**
+⇒ 立項＝把已有店身份包裝成 JWT，抽純模組 `realtime-token.ts`（將來換非對稱金鑰只改一檔）。
+6 張 anon 可讀表；**5 張可 store-scope**（`pos_orders`/`pos_print_jobs`/`pos_kds_item_state`/
+`pos_store_status`/`pos_online_order_settings`），
+🔴 **`pos_soldout` 例外要保留 anon**（客人掃碼／kiosk 匿名讀，冇身份）。
+導入＝四階段**加性**：加 `to authenticated` policy → Web 帶 JWT（保留 anon fallback）→
+中繼 APK 帶 JWT（`/pair` 加可選欄位）→ **最後才 drop anon**（唯一有風險一步，秒級回滾）。
+🔴🔴 **驗收閘唔可以用 Supabase log `auth_user`（實測 1,000 筆全 `null`）**
+⇒ 用自有表：`pos_sessions.realtime_auth` ＋ `pos_print_agents.realtime_auth`（搭既有請求順帶上報）；
+**最終判準係功能實測**（秒級彈窗／秒級出紙）。
+⚠️ Supabase 兩條硬限制：Realtime 授權係「每事件 × 每訂閱者」（policy 要走索引，已齊）；
+**DELETE 事件唔受 RLS 保護** ⇒ client 側靠 payload `storeId` skip 外店嘅 L3 閘唔可以拆。
+報告：`docs/reviews/per-store-token-assessment-2026-09-23.md`。
+🔴🔴 **重大修正（2026-09-23 11:10）**：Supabase 專案**已由 legacy HS256 輪換到
+非對稱簽名金鑰（ECC P-256）**（Dashboard → Settings → JWT Keys：Current=ECC、Legacy=previous）。
+官方 FAQ 明文 **私鑰／shared secret 無法由 Supabase 取出** ⇒
+**「用 Current key 自簽 JWT」技術上唔存在**；而 HS256 shared secret 官方「唔建議生產用」
+⇒ **自簽路已否決**。修正後可行路：①（推薦）**Supabase Auth 簽發** ——
+終端用 `signInAnonymously()` 攞 `authenticated` JWT，server 用 Admin API 把 `store_id` 寫入
+**`app_metadata`**（只有 service_role 寫得入）⇒ claim＝`auth.jwt() -> 'app_metadata' ->> 'store_id'`；
+②完全唔用 JWT：Realtime 只推**無敏感信號表**，客戶端再走 API 攞真資料（可真正全撤 anon 讀取）。
+**已加 migration `0052_pos_store_scoped_dual_claim.sql`**：5 條政策改成
+`coalesce(auth.jwt() -> 'app_metadata' ->> 'store_id', auth.jwt() ->> 'store_id')`
+⇒ 兩種機制都通、唔使再改 policy。守衛 `print-and-order-realtime-guard.test.ts` **19 條**（同時守 0051/0052）。
