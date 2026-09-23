@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-
+import { buildJson } from "@/lib/build-info-server";
 import { posRouteAuthGuard } from "@/lib/pos/pos-route-auth";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
@@ -89,22 +88,28 @@ function activeShiftQuery(
     .maybeSingle();
 }
 
-/** storeId 驗證（同 /api/pos/sync 口徑）。合法就回傳，否則回傳 error response。 */
-function validateStoreId(rawStoreId: string): { storeId: string } | { error: NextResponse } {
+/**
+ * storeId 驗證（同 /api/pos/sync 口徑）。合法就回傳，否則回傳 error response。
+ *
+ * ⚠️ 回傳型別用 `Response`（唔係 `NextResponse`）：呢個 route 一律經
+ * `buildJson()` 產生回應（自動帶 `x-pos-build` 版本標頭），
+ * 所以唔需要、亦唔應該再 import `next/server` 嘅 `NextResponse`。
+ */
+function validateStoreId(rawStoreId: string): { storeId: string } | { error: Response } {
   if (!rawStoreId) {
     return {
-      error: NextResponse.json(
+      error: buildJson(
         { ok: false, error: "缺少 storeId：請重新登入 POS 帳號後再試。" },
         { status: 400 },
       ),
     };
   }
   if (rawStoreId.length > MAX_STORE_ID_LEN || !STORE_ID_PATTERN.test(rawStoreId)) {
-    return { error: NextResponse.json({ ok: false, error: "storeId 格式不合法" }, { status: 400 }) };
+    return { error: buildJson({ ok: false, error: "storeId 格式不合法" }, { status: 400 }) };
   }
   if (isPlaceholderStoreId(rawStoreId)) {
     return {
-      error: NextResponse.json(
+      error: buildJson(
         {
           ok: false,
           error:
@@ -126,7 +131,7 @@ export async function GET(request: Request) {
 
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
-    return NextResponse.json(
+    return buildJson(
       { ok: false, error: "Supabase 伺服器端未配置（缺少 SUPABASE_SERVICE_ROLE_KEY）。" },
       { status: 503 },
     );
@@ -156,9 +161,9 @@ export async function GET(request: Request) {
       .limit(limit);
     if (error) {
       console.error("[pos/shift] GET history 失敗:", error.message);
-      return NextResponse.json({ ok: false, error: "讀取交班歷史失敗，請稍後重試。" }, { status: 500 });
+      return buildJson({ ok: false, error: "讀取交班歷史失敗，請稍後重試。" }, { status: 500 });
     }
-    return NextResponse.json({
+    return buildJson({
       ok: true,
       history: (data ?? []).map(mapRow),
       serverNow: new Date().toISOString(),
@@ -168,10 +173,10 @@ export async function GET(request: Request) {
   const { data, error } = await activeShiftQuery(supabase, storeId);
   if (error) {
     console.error("[pos/shift] GET 失敗:", error.message);
-    return NextResponse.json({ ok: false, error: "讀取班次狀態失敗，請稍後重試。" }, { status: 500 });
+    return buildJson({ ok: false, error: "讀取班次狀態失敗，請稍後重試。" }, { status: 500 });
   }
 
-  return NextResponse.json({
+  return buildJson({
     ok: true,
     active: data ? mapRow(data) : null,
     serverNow: new Date().toISOString(),
@@ -181,18 +186,18 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const declaredLen = Number(request.headers.get("content-length") ?? 0);
   if (declaredLen > 128 * 1024) {
-    return NextResponse.json({ ok: false, error: "請求內容過大" }, { status: 413 });
+    return buildJson({ ok: false, error: "請求內容過大" }, { status: 413 });
   }
 
   let raw: unknown;
   try {
     raw = await request.json();
   } catch {
-    return NextResponse.json({ ok: false, error: "請求格式錯誤（不是合法 JSON）" }, { status: 400 });
+    return buildJson({ ok: false, error: "請求格式錯誤（不是合法 JSON）" }, { status: 400 });
   }
 
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return NextResponse.json({ ok: false, error: "請求格式錯誤" }, { status: 400 });
+    return buildJson({ ok: false, error: "請求格式錯誤" }, { status: 400 });
   }
   const payload = raw as Record<string, unknown>;
   const action = typeof payload.action === "string" ? payload.action : "";
@@ -202,7 +207,7 @@ export async function POST(request: Request) {
     action !== "ackOvertime" &&
     action !== "updateClosingNote"
   ) {
-    return NextResponse.json(
+    return buildJson(
       { ok: false, error: "action 必須係 open / close / ackOvertime / updateClosingNote" },
       { status: 400 },
     );
@@ -214,7 +219,7 @@ export async function POST(request: Request) {
 
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
-    return NextResponse.json(
+    return buildJson(
       { ok: false, error: "Supabase 伺服器端未配置（缺少 SUPABASE_SERVICE_ROLE_KEY）。" },
       { status: 503 },
     );
@@ -234,10 +239,10 @@ export async function POST(request: Request) {
     const { data: existing, error: existingError } = await activeShiftQuery(supabase, storeId);
     if (existingError) {
       console.error("[pos/shift] open 查 active 失敗:", existingError.message);
-      return NextResponse.json({ ok: false, error: "開工失敗，請稍後重試。" }, { status: 500 });
+      return buildJson({ ok: false, error: "開工失敗，請稍後重試。" }, { status: 500 });
     }
     if (existing) {
-      return NextResponse.json({ ok: true, conflict: true, active: mapRow(existing) });
+      return buildJson({ ok: true, conflict: true, active: mapRow(existing) });
     }
 
     const openedAt = isoOrNull(payload.openedAt) ?? new Date().toISOString();
@@ -258,12 +263,12 @@ export async function POST(request: Request) {
       // 23505 = 撞 unique（另一部機喺 check 同 insert 之間開咗工）→ 照返現有 active。
       if (error.code === "23505") {
         const { data: raced } = await activeShiftQuery(supabase, storeId);
-        if (raced) return NextResponse.json({ ok: true, conflict: true, active: mapRow(raced) });
+        if (raced) return buildJson({ ok: true, conflict: true, active: mapRow(raced) });
       }
       console.error("[pos/shift] open 失敗:", error.message);
-      return NextResponse.json({ ok: false, error: "開工寫入失敗，請稍後重試。" }, { status: 500 });
+      return buildJson({ ok: false, error: "開工寫入失敗，請稍後重試。" }, { status: 500 });
     }
-    return NextResponse.json({ ok: true, conflict: false, active: data ? mapRow(data) : undefined });
+    return buildJson({ ok: true, conflict: false, active: data ? mapRow(data) : undefined });
   }
 
   // ─────────────────────────────────────────────
@@ -297,15 +302,15 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error("[pos/shift] close 失敗:", error.message);
-      return NextResponse.json({ ok: false, error: "收工寫入失敗，請稍後重試。" }, { status: 500 });
+      return buildJson({ ok: false, error: "收工寫入失敗，請稍後重試。" }, { status: 500 });
     }
     if (!data) {
-      return NextResponse.json(
+      return buildJson(
         { ok: false, code: "no_active_shift", error: "沒有進行中的班次（可能已被另一部機收工）。" },
         { status: 404 },
       );
     }
-    return NextResponse.json({ ok: true, closed: mapRow(data) });
+    return buildJson({ ok: true, closed: mapRow(data) });
   }
 
   // ─────────────────────────────────────────────
@@ -318,7 +323,7 @@ export async function POST(request: Request) {
     const shiftId = text(payload.shiftId, 64);
     const closedAt = isoOrNull(payload.closedAt);
     if (!shiftId && !closedAt) {
-      return NextResponse.json({ ok: false, error: "缺少 shiftId 或 closedAt。" }, { status: 400 });
+      return buildJson({ ok: false, error: "缺少 shiftId 或 closedAt。" }, { status: 400 });
     }
     // 空字串 = 清空備註（`text()` 遇空會回 null，所以要 ?? ""）。
     const closingNote = text(payload.closingNote) ?? "";
@@ -337,12 +342,12 @@ export async function POST(request: Request) {
     const { data: noted, error: noteError } = await noteQuery.select("*").maybeSingle();
     if (noteError) {
       console.error("[pos/shift] updateClosingNote 失敗:", noteError.message);
-      return NextResponse.json({ ok: false, error: "更新備註失敗，請稍後重試。" }, { status: 500 });
+      return buildJson({ ok: false, error: "更新備註失敗，請稍後重試。" }, { status: 500 });
     }
     if (!noted) {
-      return NextResponse.json({ ok: false, code: "no_shift_row", error: "搵唔到對應班次。" }, { status: 404 });
+      return buildJson({ ok: false, code: "no_shift_row", error: "搵唔到對應班次。" }, { status: 404 });
     }
-    return NextResponse.json({ ok: true, closed: mapRow(noted) });
+    return buildJson({ ok: true, closed: mapRow(noted) });
   }
 
   // ─────────────────────────────────────────────
@@ -358,13 +363,13 @@ export async function POST(request: Request) {
     .maybeSingle();
   if (ackError) {
     console.error("[pos/shift] ackOvertime 失敗:", ackError.message);
-    return NextResponse.json({ ok: false, error: "更新提醒狀態失敗，請稍後重試。" }, { status: 500 });
+    return buildJson({ ok: false, error: "更新提醒狀態失敗，請稍後重試。" }, { status: 500 });
   }
   if (!acked) {
-    return NextResponse.json(
+    return buildJson(
       { ok: false, code: "no_active_shift", error: "沒有進行中的班次。" },
       { status: 404 },
     );
   }
-  return NextResponse.json({ ok: true, active: mapRow(acked) });
+  return buildJson({ ok: true, active: mapRow(acked) });
 }

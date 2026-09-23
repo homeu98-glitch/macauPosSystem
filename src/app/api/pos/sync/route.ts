@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-
+import { buildJson } from "@/lib/build-info-server";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { isMissingColumnError, isUniqueViolationError } from "@/lib/supabase-errors";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
@@ -384,18 +383,18 @@ export async function POST(request: Request) {
   // ── 0) body 大小閘：超大 body 直接拒，唔好入 JSON.parse ──
   const declaredLen = Number(request.headers.get("content-length") ?? 0);
   if (declaredLen > MAX_BODY_BYTES) {
-    return NextResponse.json({ ok: false, error: "請求內容過大" }, { status: 413 });
+    return buildJson({ ok: false, error: "請求內容過大" }, { status: 413 });
   }
 
   let raw: unknown;
   try {
     raw = await request.json();
   } catch {
-    return NextResponse.json({ ok: false, error: "請求格式錯誤（不是合法 JSON）" }, { status: 400 });
+    return buildJson({ ok: false, error: "請求格式錯誤（不是合法 JSON）" }, { status: 400 });
   }
 
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return NextResponse.json({ ok: false, error: "請求格式錯誤" }, { status: 400 });
+    return buildJson({ ok: false, error: "請求格式錯誤" }, { status: 400 });
   }
 
   const payload = raw as Record<string, unknown>;
@@ -406,7 +405,7 @@ export async function POST(request: Request) {
   if (!rawStoreId) {
     // 大聲失敗：寧願 sync 報錯，都唔好靜默寫入預設店。
     // 正常情況下 client 會由 resolveStoreId()（登入 merchantId 或 kiosk 綁定）帶上 storeId。
-    return NextResponse.json(
+    return buildJson(
       {
         ok: false,
         error:
@@ -417,14 +416,14 @@ export async function POST(request: Request) {
   }
   const storeId = rawStoreId;
   if (storeId.length > MAX_STORE_ID_LEN || !STORE_ID_PATTERN.test(storeId)) {
-    return NextResponse.json({ ok: false, error: "storeId 格式不合法" }, { status: 400 });
+    return buildJson({ ok: false, error: "storeId 格式不合法" }, { status: 400 });
   }
   // ⚠️ 格式檢查擋唔到假店：`macau-store-a` 完全符合 STORE_ID_PATTERN。
   // 照寫落 pos_print_jobs.store_id 會變「雲端中繼配咗對、但一張單都印唔出」嘅
   // silent failure（Realtime filter 永遠唔 match）。所以呢度要額外過黑名單。
   // 見 src/lib/pos/store-id-guard.ts 嘅註解。
   if (isPlaceholderStoreId(storeId)) {
-    return NextResponse.json(
+    return buildJson(
       {
         ok: false,
         error:
@@ -437,7 +436,7 @@ export async function POST(request: Request) {
 
   // ── 2) events 數量閘 ──
   if (events.length > MAX_EVENTS_PER_REQUEST) {
-    return NextResponse.json(
+    return buildJson(
       { ok: false, error: `單次同步事件過多（上限 ${MAX_EVENTS_PER_REQUEST}）` },
       { status: 413 },
     );
@@ -485,7 +484,7 @@ export async function POST(request: Request) {
   const rlKey = authorized ? `pos-sync:store:${storeId}` : `pos-sync:ip:${ip}`;
   const rlMax = authorized ? 600 : 300;
   if (!rateLimit(rlKey, rlMax, 60_000)) {
-    return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。", retryable: true }, { status: 429 });
+    return buildJson({ ok: false, error: "請求過於頻繁，請稍後再試。", retryable: true }, { status: 429 });
   }
 
   /** 匿名通道只准嘅事件類型。 */
@@ -497,7 +496,7 @@ export async function POST(request: Request) {
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
     console.error("[pos/sync] SUPABASE_SERVICE_ROLE_KEY 未設定，寫入拒絕。");
-    return NextResponse.json(
+    return buildJson(
       {
         ok: false,
         error:
@@ -508,7 +507,7 @@ export async function POST(request: Request) {
   }
 
   if (events.length === 0) {
-    return NextResponse.json({ ok: true, syncedCount: 0, receivedAt: new Date().toISOString() });
+    return buildJson({ ok: true, syncedCount: 0, receivedAt: new Date().toISOString() });
   }
 
   // ── 2.7) 工作階段續期（2026-09-22，migration 0047）──────────────────────
@@ -1824,7 +1823,7 @@ export async function POST(request: Request) {
   const warningsField = warnings.length > 0 ? { warnings } : {};
 
   if (infraErrors.length > 0) {
-    return NextResponse.json(
+    return buildJson(
       {
         ok: false,
         retryable: true,
@@ -1839,7 +1838,7 @@ export async function POST(request: Request) {
   }
 
   if (businessRejections.length > 0) {
-    return NextResponse.json(
+    return buildJson(
       {
         ok: false,
         retryable: false,
@@ -1852,7 +1851,7 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({
+  return buildJson({
     ok: true,
     retryable: false,
     syncedCount: events.length,

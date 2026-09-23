@@ -935,6 +935,12 @@ const queueQuery = !skipQueue && storeId
 
 ## F.1 已實作：收銀台橫幅 ＋ 一鍵重新載入
 
+> 🔗 **2026-09-23 跟進**：橫幅本身冇改，但**偵測時機**有問題 ——
+> `x-pos-build` 原本只喺 `/api/pos/state`（事件驅動、冇週期輪詢）出現，
+> 實測一部開住嘅收銀機可能幾個鐘都唔會再拉 state ⇒ 橫幅唔出。
+> 已改為搭既有週期請求（`/api/pos/sync` 30 秒、`/api/pos/shift` 180 秒），
+> **零新增請求**。詳見 **`docs/147-build-stale-detection-coverage.md`**。
+
 | 項目 | 決定 |
 |---|---|
 | **位置** | `/pos` **頁面最頂**（`pos-app` flex-col 容器嘅第一個 child）——**in-flow，會推低內容，唔會蓋住任何控制項** |

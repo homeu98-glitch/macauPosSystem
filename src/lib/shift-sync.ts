@@ -14,6 +14,7 @@
  * - 本地已收工但 server 仲 active（上次收工離線）→ 自動補 close（heal），避免另一機又見到已開工。
  */
 
+import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { loadShiftState, saveShiftState, type ShiftHistoryRecord, type ShiftState } from "@/lib/storage";
 import { readNetworkOnline } from "@/lib/use-network-online";
@@ -68,6 +69,11 @@ export async function fetchServerShiftState(storeId: string): Promise<{
   const res = await fetch(`/api/pos/shift?storeId=${encodeURIComponent(storeId)}`, {
     headers: await shiftRequestHeaders(),
   });
+  // 版本偵測（2026-09-23，**零額外請求**）：呢個 GET 本來每 180 秒就會打一次
+  // （`pos-app` 嘅班次 reconcile 循環），順手讀返伺服器版本標頭，
+  // 令「版本過期橫幅」唔使等到下次拉 `/api/pos/state` 才出現。
+  // 🔴 唔准為咗呢件事加任何新請求／輪詢 —— 見 `@/lib/build-info-server` 檔頭。
+  observeServerBuildFromResponse(res);
   const json = await readJsonOrThrow<{ ok?: boolean; active?: ShiftServerActive | null; serverNow?: string }>(
     res,
   );

@@ -38,7 +38,7 @@ import {
   withStoreScope,
 } from "@/lib/pos/sync-flush";
 import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
-import { setObservedServerBuildId } from "@/lib/build-info";
+import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
 import { BuildStaleBanner } from "@/components/build-stale-banner";
 import { SessionRevokedBanner } from "@/components/pos-session-revoked-banner";
 import { markPosSessionRevoked } from "@/lib/pos/session-revoked";
@@ -1457,7 +1457,10 @@ export function PosApp() {
       });
       // 🔎 2026-09-22：記下伺服器嘅建置識別碼（設置頁會同「本機跑緊嘅版本」對照）。
       //    純讀標頭 —— 讀唔到就係 null，唔影響任何流程。
-      setObservedServerBuildId(response.headers.get("x-pos-build"));
+      //    2026-09-23：改用共用讀取器（標頭名嘅真源喺 `@/lib/pos/session-record`，
+      //    唔喺呢度寫死字串）；同一支亦掛喺 `sync-flush` / `shift-sync`
+      //    兩個**本來就會打**嘅週期請求上 ⇒ 零新增請求。
+      observeServerBuildFromResponse(response);
       // 🔴 2026-09-22：管理員喺 admin 頁強制關閉咗**呢個分頁**？
       //    server 唔可能關掉別人嘅分頁，只可以通知 —— 呢個標頭就係「軟踢」回傳路徑。
       //    收到之後：出橫幅 + 輪詢閘即刻停（唔會自動 reload，結帳中途 reload 會出事）。

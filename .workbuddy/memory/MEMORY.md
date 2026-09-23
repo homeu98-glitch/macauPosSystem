@@ -120,6 +120,16 @@ Vercel log 冇 IP ⇒ route 內 `console.info(ip=…)`；時間換 Macau(+8)。�
 `process.env.X`）；`x-pos-build` 標頭；只提示唔自動 reload。
 ✅ `build-stale-banner.tsx`／`pos-app-stale-banner.test.ts` 已上線；🔴 配套排版（外層 flex→flex-col、
 根 `h-[100dvh]`→`min-h-0 flex-1`）唔改底部會被裁切。🔴 量度：唔可用全窗口平均 ⇒ 用 gap>20s 分段。
+🔴 **橫幅只喺 `/pos`**（`BuildStaleBanner` 全 repo 只掛喺 `pos-app.tsx`；`/retail`/`/staff`/`/kitchen`/`/expo`/
+`/order`/`/admin/*` **完全冇**）；形態係**頁頂 in-flow 橫幅唔係 toast**（`fixed` overlay 會蓋住
+「開工／接單」控制項，附錄 F.1 明文否決）。`/api/pos/state` 嘅 401 路徑**唔帶**標頭（early return）。
+✅ **09-23 已擴大偵測面（零新增請求）**：`x-pos-build` 除咗 `/api/pos/state`（事件驅動、冇週期輪詢、
+可能幾個鐘唔打 ⇒ 橫幅唔出），亦加咗落 **`/api/pos/sync`（30s）** 同 **`/api/pos/shift`（180s）**。
+做法＝`src/lib/build-info-server.ts` 嘅 **`buildJson()` 包裝**（sync 13／shift 28 個 return 全部覆蓋，
+連 503 都帶；**唔可以**逐個手動 set，漏一個係靜默）＋ client `observeServerBuildFromResponse()`
+（`build-info-observe.ts`，永不 throw）。守衛 `src/lib/pos/build-header-contract.test.ts`（9 條，
+含「版本模組唔可以有 `fetch`/`setInterval`」）。詳見 `docs/147`。
+⭐ 通用模式：**「要偵測快啲」唔等於「加請求」** —— 搭一個本來就會定期打嘅請求，喺回應上加標頭。
 
 ## 9 POS 工作階段
 表 `pos_sessions`（0047）／註冊 `/api/ledger/login`／續期搭既有請求（`/api/pos/sync` 60s、`/api/pos/state` 5 分鐘；

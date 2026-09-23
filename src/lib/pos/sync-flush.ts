@@ -40,6 +40,7 @@
  * 全部改動受 `isOutboxV2Enabled()` feature flag 保護（`localStorage` 設 "0" 即還原）。
  */
 
+import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
 import { readNetworkOnline } from "@/lib/use-network-online";
 import { loadAuthSession, loadOrders, loadQueue, saveQueue, type SyncAckRow } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
@@ -656,6 +657,13 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   }
 
   const failedAt = new Date().toISOString();
+
+  // 版本偵測（2026-09-23，**零額外請求**）：呢個 POST 本來就會打（有 pending 時每 30 秒），
+  // 順手讀返伺服器版本標頭 ⇒「版本過期橫幅」唔使等下次拉 `/api/pos/state`
+  //（state 係事件驅動、冇週期輪詢，可能幾個鐘都唔打一次）。
+  // 🔴 唔准為咗呢件事加任何新請求／輪詢 —— 見 `@/lib/build-info-server` 檔頭。
+  // ⚠️ 一定要放喺 `if (!result.ok)` **之前**：失敗回應一樣帶標頭，早讀早知。
+  observeServerBuildFromResponse(result);
 
   if (!result.ok) {
     // Server-side error。方案 C（2026-09-09）+ docs/112 L1：server 會喺 body 帶按事件
