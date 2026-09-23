@@ -56,6 +56,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     // 背景：Supabase Dashboard 只俾專案總數，答唔到「邊間店食咗幾多」、
     // 「加多一間店會唔會爆 5 GB」⇒ 由自己 route 記帳，呢度睇得到。
     { href: "/admin/traffic", label: "雲端用量" },
+    // 2026-09-23：版本控制（migration 0050）。
+    // 背景：登入頁要派「下載 APK / 下載安裝包」⇒ 派邊個版本唔應該寫死喺代碼
+    // （改連結要改代碼 + 重新部署，出事時退唔返）。
+    { href: "/admin/versions", label: "版本控制" },
   ];
 
   return (

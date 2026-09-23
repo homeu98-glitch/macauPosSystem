@@ -1,9 +1,12 @@
-# macauPos 記憶（2026-09-22 收斂版）
+# macauPos 記憶（2026-09-23 收斂版）
 
 > 開工前必讀 `docs/113-agent-gotchas.md`；流程已成 skills：`pos-egress-call-forensics`／
-> `pos-order-sync-triage`／`pos-close-gate-feature`／`pos-api-auth-hardening`／`pos-ui-live-verify`。
-> POS=`iyrywzormzisyppkokbi`；Ledger=`zymdemjflsckicwcinxl`。Migration 至 0047 已跑齊。
-> 📄 最新個案：`docs/reviews/order19-and-receipt-print-2026-09-22.md`。
+> `pos-order-sync-triage`／`pos-close-gate-feature`／`pos-api-auth-hardening`／`pos-ui-live-verify`／
+> `pos-admin-config-feature`。
+> POS=`iyrywzormzisyppkokbi`；Ledger=`zymdemjflsckicwcinxl`。Migration 至 0049 已跑；
+> ⚠️ **0050（版本控制）未跑**。
+> 📄 最新個案：`docs/reviews/order19-and-receipt-print-2026-09-22.md`；
+> 最新功能：`docs/146-app-download-version-control.md`。
 
 ## 0 訂單時間（唯一真源）
 `src/lib/pos/order-event-time.ts` `orderEventInstant()`：reopenedAt → originalSettledAt → updatedAt → createdAt。
@@ -114,3 +117,26 @@ client 標頭 `x-pos-session`＋`x-pos-build`。🔴 key 存 `sessionStorage`。
 管理頁 `/admin/sessions`；強制關閉＝軟踢（只擋新生意、結帳放行）；門檻：使用中 ≤6 分／閒置 ≤30 分。
 ⏭️ 未做：`pos_shifts` Realtime 訂閱、print-agent 配對驗真補 env、per-store token、
 `pos_print_jobs.kind`、同日重複單號（訂單27 ×2）、「同步健康」顯示舊 bundle 可見警告。
+
+## 10 下載入口／版本控制（2026-09-23）
+表 `pos_release_versions`（**0050，未跑**）＋ Storage bucket `macauposapk`（public，POS 專案）。
+登入頁 `/login` 按 UA 出「下載 APK」（Android）／「下載安裝包」（desktop）→
+公開 API `/api/release/versions/active`（免登入，60s CDN 快取）→ 目前 active 版本。
+admin 頁 `/admin/versions`＋`/api/admin/release-versions`（GET/POST/PATCH/DELETE）。
+核心：`src/lib/release/release-core.ts`（**零 import**，裝置偵測／砌連結／驗證）、
+`release-row.ts`（row↔DTO）、`release-server.ts`（server-only base URL ＋ 錯誤分類）。
+🔴 **每平台最多一個 active ＝ partial unique index**；切換走 RPC
+`pos_activate_release_version`（先落閘後上位），**唔可以**喺 route 分兩條 update。
+🔴 **base URL 唔可以 fallback 去 `NEXT_PUBLIC_SUPABASE_URL`**（＝Ledger，冇 `macauposapk`）
+⇒ 會派 404 死 link 而**零 log**。次序：`RELEASE_DOWNLOAD_BASE_URL`→`SUPABASE_URL`
+→`NEXT_PUBLIC_POS_SUPABASE_URL`→`null`。砌路徑要**逐段 encode**（整條 encode 會 `%2F` ⇒ 404）。
+🔴 DTO 分開 `downloadUrl`（解析後）／`explicitDownloadUrl`（DB 原值）——admin 編輯表單用後者，
+否則「由路徑砌」會被寫死成一條 URL。
+🔴 裝置偵測要喺 `useEffect` 做（SSR 冇 navigator，用初始值 ⇒ hydration mismatch）；
+偵測失敗／冇 active 版本一律**靜默唔出按鈕**（登入頁唔可以因下載入口而白屏或彈錯）。
+iPhone／iPad 刻意歸 `desktop`。舊行為改動：新版本預設**唔 active**（要另撳「設為目前版本」）。
+🚫 **冇檔案上傳 UI ＝ 商家 2026-09-23 明確決定**（只要「喺頁面管理 link」，檔案自己經
+Supabase Dashboard 放）。**唔係漏做，唔好自作主張加**。若真要做要先解決：
+Vercel request body 4.5 MB 上限（唔可以經自家 API route 收檔，要簽 signed upload URL 直上 Storage）、
+Supabase 免費層單檔一般 50 MB。刪版本唔刪 Storage 檔案（刻意）。
+⏭️ 未做：0050 未跑。

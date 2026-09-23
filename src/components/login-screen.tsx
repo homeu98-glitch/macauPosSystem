@@ -2,6 +2,7 @@
 
 import { KeyboardEvent, useState } from "react";
 
+import { AppDownloadButton } from "@/components/app-download-button";
 import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
@@ -286,6 +287,16 @@ export function LoginScreen() {
           >
             {loading ? "正在登入…" : "登入"}
           </button>
+
+          {/*
+            下載入口（2026-09-23）——裝置偵測決定文案：
+              Android ⇒「下載 APK」；其他 ⇒「下載安裝包」。
+            連去 admin「版本控制」頁目前設為 active 嘅版本。
+            ⚠️ 元件自己判斷「原生殼內唔顯示」同「拎唔到版本就唔顯示」，
+               所以呢度**唔需要**再加條件；亦唔可以喺呢度包一層 `isNativeShell`
+               判斷 —— 邏輯收喺元件內只有一份，唔會兩邊走樣。
+          */}
+          <AppDownloadButton />
 
           {isNativeShell ? null : <PwaInstallButton />}
 
