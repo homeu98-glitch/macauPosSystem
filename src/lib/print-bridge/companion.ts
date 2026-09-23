@@ -229,7 +229,15 @@ async function companionFetch(
     "Content-Type": "application/json",
     ...(opts.headers as Record<string, string>),
   };
-  if (token) headers["X-POS-Token"] = token;
+  // Token header 名同 `companion-transport.ts:56` 統一用 `x-companion-token`。
+  //
+  // 🔴 2026-09-23 修：以前呢度用 `X-POS-Token`，同 transport 唔一致 ——
+  // Companion（desktop）只認 `x-companion-token`，所以一旦配對咗 token，
+  // 呢條路（`/api/health`、`/api/config`、`/api/usb`、`/api/discover`、`/api/printers`、
+  // `/api/bluetooth`、`/api/probe-lan`）全部 401；
+  // 而 `X-POS-Token` 亦唔喺 Companion 嘅 CORS `Access-Control-Allow-Headers` 白名單，
+  // HTTPS 頁面打 loopback HTTP 會喺 preflight 就被擋（唔會 fallback 去真請求）。
+  if (token) headers["x-companion-token"] = token;
   return fetch(`${url}${path}`, { ...opts, headers, cache: "no-store" });
 }
 
@@ -506,25 +514,21 @@ export async function probeLan(ip: string, port = 9100): Promise<ProbeLanResult>
 // ─────────────────────────────────────────────────────────────
 // 發送 PrintJob
 // ─────────────────────────────────────────────────────────────
-
-export async function sendJobToCompanion(
-  job: PrintJob,
-  printer: DevicePrinterConfig,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const url = getCompanionUrl();
-  if (!url) return { ok: false, error: "未配對 Companion 代理（http://127.0.0.1:9311 未啟動）" };
-  try {
-    const r = await companionFetch(url, "/api/print", {
-      method: "POST",
-      body: JSON.stringify({ job, printer }),
-    });
-    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    if (r.ok && (j.ok || r.status === 200)) return { ok: true };
-    return { ok: false, error: j.error || `Companion 回應 HTTP ${r.status}` };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "發送到 Companion 失敗" };
-  }
-}
+//
+// 🔴 2026-09-23：`sendJobToCompanion()` **已移除**。
+//
+// 佢只送 `{ job, printer }`，**冇 `kind` 亦冇 `storeName`** —— 而 POS 嘅權威票種係由
+// `dispatch.ts:140-143` 算好再放入 payload 嘅（見 `PrintSendOptions`）。用佢會迫使
+// Companion 退返去 `template.kind ?? printer.role` 猜，而 POS `types.ts:1416-1430`
+// 明文否決呢個寫法。實際踩過嘅個案就係「測試列印」：
+//   · 出紙格式同 APK 嘅 `renderTestPage` 唔一致；
+//   · 冇 `storeName` → Companion 抬頭 fallback 去打印機名（例如「廚房打印機」）。
+//
+// ✅ 唯一正確路徑（本檔唔再提供第二條出紙路徑）：
+//   `getCompanionTransport().send(job, printer, { kind, storeName, paymentMethod, total })`
+//   —— `dispatch.ts` 同 `printer-test-print.ts` 而家都係咁做。
+//   本檔保留職責：裝置查詢（/api/usb、/api/discover、/api/printers、/api/bluetooth）、
+//   探測（/api/health、/api/probe-lan）、自動配對、共用 helper。
 
 // ─────────────────────────────────────────────────────────────
 // 打印機發現（Meituan 式：商家唔使手填 VID/PID）

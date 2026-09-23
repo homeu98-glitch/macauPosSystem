@@ -2,7 +2,8 @@
 
 import { loadBootstrapCache } from "@/lib/storage";
 import type { DevicePrinterConfig, PrintJob, PrintKind } from "@/lib/types";
-import { isCompanionConfigured, sendJobToCompanion, shouldKeepCompanionAlive } from "@/lib/print-bridge/companion";
+import { isCompanionConfigured, shouldKeepCompanionAlive } from "@/lib/print-bridge/companion";
+import { getCompanionTransport } from "@/lib/print-bridge/companion-config";
 import { dispatchJobToNative, isNativeBridgeAvailable } from "@/lib/print-bridge/native";
 import { getRelayTransport, isRelayConfigured } from "@/lib/print-bridge/relay-config";
 
@@ -84,20 +85,30 @@ export async function sendTestPrint(printer: DevicePrinterConfig): Promise<TestP
     //    否則會無謂打 5s 連唔到嘅 loopback（companion-transport.ts 嘅 5s AbortController
     //    超時先返），同 `dispatchOneJob` 嘅 companion 分支語義完全對齊。
     if (shouldKeepCompanionAlive() && isCompanionConfigured()) {
-      let lastErr = "";
-      for (let i = 0; i < copies; i++) {
-        const r = await sendJobToCompanion(testJob, printer);
-        if (!r.ok) {
-          lastErr = r.error ?? "";
-          break;
+      const companion = getCompanionTransport();
+      if (companion) {
+        let lastErr = "";
+        for (let i = 0; i < copies; i++) {
+          // 🔴 2026-09-23：唔可以再叫舊嘅 `sendJobToCompanion()` —— 佢只送 `{ job, printer }`，
+          // **冇 `kind`、冇 `storeName`**。後果（實測 Companion ≥0.1.18）：
+          //   · Companion 只能靠 `printer.role` 猜票種 → 出紙同 APK 嘅 `renderTestPage` 唔一致；
+          //   · 冇 `storeName` → Companion 抬頭 fallback 去打印機名（例如「廚房打印機」）。
+          // 改走 `CompanionTransport`（同 `dispatch.ts` 完全同一條路），帶齊 `kind: "test"` +
+          // `storeName`。Companion 側已加 `kind === "test"` 專屬測試頁（見 desktop
+          // `companion-server.mjs`，內容對齊 Android `EscPosRenderer.renderTestPage`）。
+          const r = await companion.send(testJob, printer, { kind, storeName });
+          if (!r.ok) {
+            lastErr = r.error ?? "";
+            break;
+          }
         }
+        return {
+          ok: !lastErr,
+          message: lastErr
+            ? `Companion 測試打印失敗：${lastErr}`
+            : `已透過 Companion 送出 ${printer.name} 測試打印（${copies} 份）。`,
+        };
       }
-      return {
-        ok: !lastErr,
-        message: lastErr
-          ? `Companion 測試打印失敗：${lastErr}`
-          : `已透過 Companion 送出 ${printer.name} 測試打印（${copies} 份）。`,
-      };
     }
 
     // 3) Cloud Print Relay（雲端中繼，互聯網備援）——
