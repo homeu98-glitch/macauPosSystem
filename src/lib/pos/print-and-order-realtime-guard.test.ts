@@ -60,6 +60,28 @@ function readSrc(rel: string): string {
 }
 
 /**
+ * 剝走 TypeScript／TSX 註釋行（`//`、`*`、`/*` 開頭）。
+ *
+ * 🔴 一定要做：呢個檔有幾條斷言係掃「有冇用某個 API」。但解釋性註解成日都會
+ * **提及**嗰個 API（例如 realtime-bind route 嘅註解就寫住「唔可以用 user_metadata」），
+ * 唔剝註解就會出現**假失敗**（實測中過一次）。
+ */
+function stripTsComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      return !(t.startsWith("//") || t.startsWith("*") || t.startsWith("/*"));
+    })
+    .join("\n");
+}
+
+/** 讀原始碼並剝註釋（掃「有冇用某 API」嘅斷言一律用呢個）。 */
+function readSrcCode(rel: string): string {
+  return stripTsComments(readSrc(rel));
+}
+
+/**
  * 讀單一份 migration（**剝註釋 + 壓平**）；唔存在回 `null`。
  *
  * ⚠️ 一定要剝註釋：`0051` 嘅**回滾 SQL 係刻意用註解留低**嘅（`-- drop policy ...`），
@@ -419,5 +441,142 @@ describe("per-store token 第 1 階段（0051 / 0052）—— 加性政策", () 
         `${file}：pos_print_jobs 窗口收窄到 ${jobs![1]} 小時（唔可以 < 24）`,
       );
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E. per-store token 第 2 階段（2026-09-23）—— 接線守衛
+//
+// 呢一組守衛嘅目的：第 2 階段嘅每一個接線位都係「錯咗唔會 crash，但會靜默收唔到
+// Realtime 事件」型（列印失去即時喚醒、訂單唔再自動彈出、零 error）。
+// 所以就算日後有人重構，呢幾條口徑都唔可以走樣。
+// ─────────────────────────────────────────────────────────────────────────────
+describe("per-store token 第 2 階段 —— 接線守衛", () => {
+  it("🔴 0053 存在：為 pos_soldout 加 authenticated 讀取，並且保留 anon", () => {
+    const MIG = readMigrationOrNull("0053_pos_soldout_authenticated_read.sql");
+    assert.ok(
+      MIG !== null,
+      "0053 唔見咗 —— 冇咗佢，POS client 一旦升級做 authenticated，" +
+        "`pos_soldout` 就會**靜默讀唔到**（0016 曾經 revoke 走 authenticated 嘅 select），" +
+        "即售罄標記失效 + soldout channel 收唔到事件。",
+    );
+    assert.ok(
+      /create policy "pos_soldout authenticated read" on public\.pos_soldout for select to authenticated using \(true\)/.test(
+        MIG!,
+      ),
+      "pos_soldout 嘅 authenticated 政策唔見咗或者唔再係 `using (true)`" +
+        "（客人端係匿名，唔可以改成按 store 過濾）",
+    );
+    assert.ok(
+      /grant select on table public\.pos_soldout to authenticated/.test(MIG!),
+      "缺 grant select to authenticated",
+    );
+    // 唔可以有寫入權限
+    assert.ok(
+      !/grant\s+(all|insert|update|delete|truncate)[^;]*to\s+authenticated/i.test(MIG!),
+      "🔴 0053 唔可以畀 authenticated 任何寫入權限（只准 SELECT）",
+    );
+    // 唔可以 drop anon 政策
+    const dropped = [...MIG!.matchAll(/drop policy if exists "([^"]*)"/gi)].map((m) => m[1]);
+    assert.deepEqual(
+      dropped.filter((n) => /anon/i.test(n)),
+      [],
+      "0053 唔可以 drop anon 政策（加性推進）",
+    );
+  });
+
+  it("🔴 `/api/pos/realtime-bind`：身份一定要由終端憑證嚟，唔可以由 body 自報 store", () => {
+    const ROUTE = readSrcCode("app/api/pos/realtime-bind/route.ts");
+    assert.ok(
+      /readPosDeviceTokenFromRequest/.test(ROUTE),
+      "必須用 POS 終端憑證做身份來源（唯一權威知道呢部機係邊間店）",
+    );
+    assert.ok(
+      /is_anonymous\s*!==\s*true/.test(ROUTE),
+      "🔴 一定要拒絕對「非匿名帳號」綁店 —— 否則擁有任何 auth 帳號就等於可以自選一間店去讀",
+    );
+    assert.ok(
+      /app_metadata/.test(ROUTE),
+      "🔴 綁定一定要寫 `app_metadata`（只有 service_role 寫得入）",
+    );
+    assert.ok(
+      !/user_metadata/.test(ROUTE),
+      "🔴 唔可以用 `user_metadata` —— 用戶自己改得到，等於冇綁（RLS 形同虛設）",
+    );
+    assert.ok(
+      /supabase\.auth\.getUser\(/.test(ROUTE),
+      "access token 一定要交畀 Supabase Auth 驗簽名（唔可以自己解 JWT 就當驗過）",
+    );
+  });
+
+  it("🔴 四個 realtime hook 都必須**喺建立 channel 之前** await Realtime 憑證", () => {
+    const hooks = [
+      "lib/pos/use-pos-realtime.ts",
+      "lib/kds/use-kds-realtime.ts",
+      "lib/pos/use-store-status.ts",
+      "lib/pos/use-merchant-order-config.ts",
+    ];
+    for (const h of hooks) {
+      const src = readSrcCode(h);
+      const authIdx = src.indexOf("ensureRealtimeAuth(");
+      const channelIdx = src.indexOf(".channel(");
+      assert.ok(authIdx >= 0, `${h} 冇用 ensureRealtimeAuth —— Realtime 會永遠停留喺 anon 身份`);
+      assert.ok(channelIdx >= 0, `${h} 搵唔到 .channel(`);
+      assert.ok(
+        authIdx < channelIdx,
+        `🔴 ${h}：\`ensureRealtimeAuth\` 出現喺 \`.channel(\` 之後 —— ` +
+          "Realtime 身份係**每條連線**，遲咗設定就等於全部 channel 都用錯身份；" +
+          "Supabase 官方要求 `setAuth` 一定要喺建立 channel 之前。",
+      );
+    }
+  });
+
+  it("🔴 收銀台 / 後廚 realtime 必須喺 token 續期時重新 subscribe", () => {
+    for (const h of ["lib/pos/use-pos-realtime.ts", "lib/kds/use-kds-realtime.ts"]) {
+      const src = readSrcCode(h);
+      assert.ok(
+        /onRealtimeAuthChanged\(/.test(src),
+        `🔴 ${h} 冇掛 onRealtimeAuthChanged —— JWT 過期後連線仍然用舊 token，` +
+          "RLS 會全拒而**零 error**（靜默失效）。",
+      );
+      assert.ok(
+        /offAuthChanged\(\)/.test(src),
+        `${h} 冇喺 cleanup 解除 onRealtimeAuthChanged 訂閱（會洩漏 listener）`,
+      );
+    }
+  });
+
+  it("🔴 POS 瀏覽器 client 一定要 persistSession + autoRefreshToken", () => {
+    const CLIENT = readSrcCode("lib/pos/supabase-client.ts");
+    assert.ok(
+      /persistSession:\s*true/.test(CLIENT),
+      "🔴 `persistSession` 一定要 true —— 否則每次重新載入都建立**一個新匿名用戶**" +
+        "（用戶表爆炸 + 每次都要重新綁店）",
+    );
+    assert.ok(
+      /autoRefreshToken:\s*true/.test(CLIENT),
+      "🔴 `autoRefreshToken` 一定要 true —— 否則 token 1 小時後過期冇人續，" +
+        "Realtime RLS 全拒而零 error",
+    );
+  });
+
+  it("🔴 客戶端綁店流程一定要 refreshSession 之後才交 token 出去", () => {
+    const SRC = readSrcCode("lib/pos/realtime-auth.ts");
+    assert.ok(
+      /refreshSession\(\)/.test(SRC),
+      "🔴 綁完一定要 refreshSession —— JWT 係簽發時快照，改 app_metadata 唔會令舊 token 帶 store_id",
+    );
+    assert.ok(
+      /isUsableBoundToken\(/.test(SRC),
+      "🔴 交出去之前一定要用 isUsableBoundToken 驗一次（冇 store claim 就唔可以 setAuth）",
+    );
+    assert.ok(
+      /realtime\.setAuth\(/.test(SRC),
+      "冇呼叫 realtime.setAuth —— 攞到 token 但冇用，等於冇升級",
+    );
+    assert.ok(
+      /catch\s*\(/.test(SRC),
+      "執行層一定要吞錯（任何一步失敗都要保持 anon，唔可以令訂閱鏈斷）",
+    );
   });
 });

@@ -61,7 +61,31 @@ export function getPosSupabaseClient(): SupabaseClient | null {
   }
 
   cached = createClient(config.url, config.anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
+    /**
+     * 🆕 2026-09-23（per-store token 第 2 階段）：由
+     * `{ persistSession: false, autoRefreshToken: false }` 改為**開**。
+     *
+     * 為何要開：Realtime 嘅 RLS 需要一個帶 `app_metadata.store_id` 嘅 JWT
+     * （Supabase 已用非對稱簽名金鑰，私鑰取唔出 ⇒ 唔可以自簽，只能用
+     * `signInAnonymously()` 由 Supabase Auth 簽）。而匿名 session：
+     *   · `persistSession: false` ⇒ **每次重新載入都建立一個新匿名用戶**
+     *     （用戶表爆炸 + 每次都要重新綁店）；
+     *   · `autoRefreshToken: false` ⇒ **1 小時後 token 過期，冇人續**
+     *     ⇒ Realtime 嘅 RLS 開始全拒，但 channel 照樣 `SUBSCRIBED`、**零 error**
+     *     ——即 docs/113「靜默失效」同一型（列印失去即時喚醒、訂單唔再自動彈出）。
+     *
+     * 🔴 對「未登入嘅匿名端」（掃碼 `/menu`、Kiosk `/order`）**行為完全不變**：
+     *    佢哋冇 POS 終端憑證 ⇒ `ensureRealtimeAuth()` 唔會登入
+     *    ⇒ client 冇 session ⇒ PostgREST 照用 anon key ⇒ 同今日一樣。
+     *    （`pos_soldout` 亦因此仍然行 anon 政策；登入後嘅終端則由 0053 政策覆蓋。）
+     *
+     * `storageKey` 明寫，避免同其他 Supabase client（Ledger 專案）爭同一個 key。
+     */
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      storageKey: "macaupos-realtime-auth",
+    },
     realtime: { params: { eventsPerSecond: 5 } },
   });
   return cached;

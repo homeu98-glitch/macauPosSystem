@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import { getPosSupabaseClient } from "@/lib/pos/supabase-client";
+import { ensureRealtimeAuth, onRealtimeAuthChanged } from "@/lib/pos/realtime-auth";
 import { mapPosOrderRow, type PosOrderRow } from "@/lib/pos/pos-order-mapper";
 import type { PosOrder } from "@/lib/types";
 
@@ -93,6 +94,12 @@ export function useKdsRealtime(
       if (subscribeInFlight) return;
       subscribeInFlight = true;
       try {
+      /**
+       * 🆕 per-store token（2026-09-23，第 2 階段）：建立 channel **之前**等 Realtime
+       * 身份升級（見 `use-pos-realtime.ts` 同名詳解）。失敗回 `null` ⇒ 保持 anon。
+       */
+      await ensureRealtimeAuth(storeId);
+      if (cancelled || !supabase) return;
       if (channel) {
         // 先清空變數再 await —— 避免 await 期間其他人讀到一條「即將被移除」嘅 channel。
         const stale = channel;
@@ -155,9 +162,18 @@ export function useKdsRealtime(
 
     void subscribe();
     document.addEventListener("visibilitychange", onVisibilityChange);
+    /**
+     * 🆕 per-store token（2026-09-23）：憑證改變（綁店完成／自動續期）⇒ 重新 subscribe。
+     * 唔做嘅話，token 一過期 Realtime RLS 就全拒而**零 error**（見
+     * `use-pos-realtime.ts` 同名註解）。
+     */
+    const offAuthChanged = onRealtimeAuthChanged(() => {
+      if (!cancelled) void subscribe();
+    });
 
     return () => {
       cancelled = true;
+      offAuthChanged();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);

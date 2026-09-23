@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import { ensureRealtimeAuth, onRealtimeAuthChanged } from "@/lib/pos/realtime-auth";
 import { getPosSupabaseClient } from "@/lib/pos/supabase-client";
 import {
   mapPosOrderRow,
@@ -71,10 +72,25 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
 
     async function subscribe() {
       if (cancelled || !supabase) return;
-      // 防重入：已有一次 subscribe 喺 in-flight 就唔好再開（見 subscribeInFlight 註解）。
-      if (subscribeInFlight) return;
-      subscribeInFlight = true;
-      try {
+        // 防重入：已有一次 subscribe 喺 in-flight 就唔好再開（見 subscribeInFlight 註解）。
+        if (subscribeInFlight) return;
+        subscribeInFlight = true;
+        try {
+        /**
+         * 🆕 per-store token（2026-09-23，第 2 階段）：喺建立 channel **之前**把
+         * Realtime 連線嘅身份升級做「帶 `app_metadata.store_id` 嘅 JWT」。
+         *
+         * 🔴 一定要喺建立 channel 之前（Supabase 官方要求），而且一定要**等**：
+         *    Realtime 嘅身份係**每條 WebSocket 連線**（唔係每個 channel），
+         *    同一 client 上六條 channel 全部共用；遲咗 `setAuth` 就全部用錯身份。
+         *
+         * 🔴 失敗／未綁店 → 回 `null` ⇒ **保持 anon**（＝今日行為）。
+         *    所以呢一步永遠唔會令事情變差；最壞情況只係「未升級」。
+         *    四個 realtime hook 都係同一寫法，而 `ensureRealtimeAuth` 內部
+         *    single-flight，所以佢哋會共用同一個 promise、唔會重複登入。
+         */
+        await ensureRealtimeAuth(storeId);
+        if (cancelled || !supabase) return;
       if (channel) {
         // 先清空變數再 await —— 避免 await 期間其他人讀到一條「即將被移除」嘅 channel。
         const stale = channel;
@@ -147,9 +163,23 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
 
     void subscribe();
     document.addEventListener("visibilitychange", onVisibilityChange);
+    /**
+     * 🆕 per-store token（2026-09-23）：Realtime 憑證改變（綁店完成／Supabase 自動續期）
+     * ⇒ **重新 subscribe**。
+     *
+     * 為何一定要做：JWT 有有效期（預設 1 小時）。若果連線一直用住舊 token，
+     * 舊 token 一過期，Realtime 嘅 RLS 就開始**全拒**，而 channel 照樣 `SUBSCRIBED`、
+     * **零 error** ⇒ 就係 docs/113「靜默失效」：收銀台永遠收唔到新單、
+     * 出紙失去即時喚醒（退化成最長 180 秒嘅兜底輪詢）。
+     * 頻率有上界（每次成功綁店 + 每小時續期一次），成本可接受。
+     */
+    const offAuthChanged = onRealtimeAuthChanged(() => {
+      if (!cancelled) void subscribe();
+    });
 
     return () => {
       cancelled = true;
+      offAuthChanged();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (resubscribeTimer) window.clearTimeout(resubscribeTimer);

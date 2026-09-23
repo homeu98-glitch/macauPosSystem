@@ -196,3 +196,14 @@ TTL 12h、簽發 `/api/ledger/login`、續期 `/api/pos/device-token`）。缺�
 **已加 migration `0052_pos_store_scoped_dual_claim.sql`**：5 條政策改成
 `coalesce(auth.jwt() -> 'app_metadata' ->> 'store_id', auth.jwt() ->> 'store_id')`
 ⇒ 兩種機制都通、唔使再改 policy。守衛 `print-and-order-realtime-guard.test.ts` **19 條**（同時守 0051/0052）。
+**第 2 階段已實作（2026-09-23，未部署）**：`0053`（`pos_soldout` 加 `authenticated using (true)`
+—— 冇佢 client 一升級就靜默讀唔到 soldout）／`POST /api/pos/realtime-bind`（身份只由終端憑證嚟、
+只綁 `is_anonymous`、寫 `app_metadata`）／`realtime-auth.ts`（signInAnonymously→bind→**refreshSession**→
+`setAuth`；失敗冷卻 5 分鐘且永不 throw）／`realtime-auth-claims.ts`（純決策，19 單測）／
+`supabase-client.ts` 改 `persistSession+autoRefreshToken: true`（否則每次 reload 建新匿名用戶 + 過期靜默失效）／
+4 個 realtime hook 一律喺 `.channel(` **之前** `await ensureRealtimeAuth`（Realtime 身份係**每條連線**，
+六條 channel 共用）；後兩者係同步 module-level 函式 ⇒ 加 async 包裝 + **世代守衛**防 channel 洩漏。
+守衛擴至 **25 條**（含「`ensureRealtimeAuth` 必須出現喺 `.channel(` 之前」）。
+✅ 實測匿名註冊 200、`role:authenticated`／`is_anonymous:true`／`app_metadata:{}`。
+**驗收閘＝Dashboard → Authentication → Users 見匿名用戶帶 `store_id`** ＋ **功能實測**（唔需要新欄位）。
+🔴 第 4 階段（drop anon）**未做、唔可以提早做**；第 3 階段只需為 `pos_print_jobs` 一張表改 APK。

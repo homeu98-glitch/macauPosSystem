@@ -11,6 +11,7 @@ import {
 import { UNKNOWN_ORDER_CONFIG } from "@/lib/ledger/order-config-parse";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { getPosRealtimeConfig, getPosSupabaseClient } from "@/lib/pos/supabase-client";
+import { ensureRealtimeAuth } from "@/lib/pos/realtime-auth";
 import { createSingleFlight } from "@/lib/pos/single-flight";
 import { loadPosLocalSettings, savePosLocalSettings } from "@/lib/storage";
 
@@ -331,8 +332,30 @@ async function mirrorToPosDb(
   }
 }
 
-/** 第 3 步：訂閱 Realtime，其他收銀機 toggle 完即時跟住變（**唔 polling**）。 */
+/** 訂閱世代計數：unsubscribe／重新訂閱會遞增，令進行中嘅非同步訂閱自我放棄。 */
+let realtimeGeneration = 0;
+
+/**
+ * 第 3 步：訂閱 Realtime，其他收銀機 toggle 完即時跟住變（**唔 polling**）。
+ *
+ * 🆕 per-store token（2026-09-23，第 2 階段）：**先等 Realtime 身份升級**再建 channel。
+ * `setAuth` 必須喺建立 channel 之前完成（Supabase 官方要求），而 Realtime 身份係
+ * **每條 WebSocket 連線**（同一 client 上六條 channel 共用）⇒ 呢條都要等。
+ * `ensureRealtimeAuth()` 失敗／未綁店回 null ⇒ 保持 anon（今日行為），零退化。
+ *
+ * ⚠️ 因為變成非同步，一定要有世代守衛：否則「訂閱 → 未返就 unsubscribe」
+ *    會喺 unsubscribe 之後才建出一條永遠冇人清理嘅 channel（連線洩漏）。
+ */
 function subscribeRealtime(storeId: string) {
+  const generation = ++realtimeGeneration;
+  void (async () => {
+    await ensureRealtimeAuth(storeId).catch(() => null);
+    if (generation !== realtimeGeneration) return;
+    subscribeRealtimeNow(storeId);
+  })();
+}
+
+function subscribeRealtimeNow(storeId: string) {
   const supabase = getPosSupabaseClient();
   if (!supabase) {
     setState({ crossTerminalSync: "on-enter" });
@@ -391,6 +414,8 @@ function subscribeRealtime(storeId: string) {
 }
 
 function unsubscribeRealtime() {
+  // 令進行中嘅非同步訂閱自我放棄（見 subscribeRealtime 嘅世代守衛）。
+  realtimeGeneration += 1;
   if (!channel) return;
   void channel.unsubscribe();
   channel = null;
