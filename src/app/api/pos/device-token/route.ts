@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { parsePhoneFromLedgerAuthEmail } from "@/lib/ledger/phone";
 import { createLedgerServerClient, prepareLedgerServerClient } from "@/lib/ledger/supabase-server-auth";
 import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
@@ -51,6 +52,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Ledger 會話已失效，請重新登入。" }, { status: 401 });
   }
 
+  // ── 審計身分：由 Ledger Auth email 還原 8 位登入電話（2026-09-23）──────────
+  //
+  // 🔴🔴 **唔可以再用寫死字串**（呢度曾經硬編碼 `"ledger-session"`）。
+  //
+  // 為何咁嚴重：`account` 會經 token claims → `/api/pos/sync`（60 秒節流）／
+  // `/api/pos/state`（5 分鐘節流）→ `touchPosSession()` → `session-registry-server.ts`
+  // 嘅 `patch.account = input.account`，**無條件覆寫** `pos_sessions.account`。
+  // 而續期係「12 小時自動發生一次」嘅事：任何開超過一個班次嘅分頁，第一次續期之後
+  // admin 頁「員工／裝置」就會由真電話變成寫死值，按電話搜尋亦搵唔返嗰行。
+  //
+  // 為何 email 係權威來源：`/api/ledger/login` 用 `ledgerAuthEmail(phone)` 做
+  // `signInWithPassword` 嘅 email（格式 `<8 位電話>@phone.macau-ledger.app`），
+  // 所以呢個 email 係 **Auth 驗證過嘅身分**，唔係 client 自己報嘅電話 ——
+  // 比信 request body 可靠。`parsePhoneFromLedgerAuthEmail()` 就係佢嘅精確反函式。
+  //
+  // ⚠️ 一定要簽出**非空** `account`：`verifyPosDeviceToken()` 會拒收 `account` 為空
+  // 嘅 token ⇒ 空值會令續期**整體失效**（全店 401），比顯示錯更嚴重。
+  // 所以有兩層兜底：非電話格式就用 email 原文，連 email 都冇就用 user id 前綴。
+  const authEmail = typeof userData?.user?.email === "string" ? userData.user.email : "";
+  const account = parsePhoneFromLedgerAuthEmail(authEmail) || authEmail || `uid:${userId.slice(0, 8)}`;
+
   const { data: staffRows, error: staffError } = await client
     .from("merchant_staff")
     .select("merchant_id, staff_role")
@@ -68,7 +90,7 @@ export async function POST(request: Request) {
   }
 
   const role = String(staffRows?.[0]?.staff_role ?? "").toLowerCase() === "owner" ? "admin" : "cashier";
-  const token = issuePosDeviceToken({ storeId: merchantId, account: "ledger-session", role });
+  const token = issuePosDeviceToken({ storeId: merchantId, account, role });
   if (!token) {
     console.error("[pos/device-token] 未能簽發（未設定任何 server secret）。");
     return NextResponse.json({ ok: false, error: "系統未設定終端憑證密鑰。" }, { status: 503 });
