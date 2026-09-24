@@ -74,6 +74,11 @@ function fullRow(): PosOrderDbRow {
     reopen_count: 1,
     reopened_at: "2026-09-20T05:00:00.000Z",
     reopen_reason: "客人改單",
+    platform_fees: [
+      { label: "餐盒費", amount: 4 },
+      { label: "商家活動支出", amount: -9 },
+      { label: "配送費", amount: 7, excluded: true },
+    ],
   };
 }
 
@@ -156,5 +161,45 @@ describe("投影等價性（證明收窄欄位唔會改變 mapper 輸出）", ()
     assert.equal(out.status, "settled");
     assert.equal(out.total, 0);
     assert.deepEqual(out.items, []);
+  });
+});
+
+/**
+ * 🔴 回歸（2026-09-24 實案）：平台單費用明細「入庫有、出庫冇」。
+ *
+ * 入站 route（`/api/integration/grabber/orders`）一直都有寫 `platform_fees`，
+ * 但**出庫路徑漏抄** —— `POS_ORDER_DB_COLUMNS` 冇呢一欄、`PosOrderDbRow` 冇宣告、
+ * `mapOrderRow()` 冇 map ⇒ 收銀台拎到嘅 `PosOrder` 冇 `platformFees`
+ * ⇒ **收據同訂單詳情嘅「餐盒費／膠袋費／商家優惠／配送費」全部靜默唔出**。
+ * 使用者喺 POS 睇極都冇，DB 明明有值，查足一輪。
+ *
+ * 呢個就係上面註釋講嘅「漏一欄 → 靜默」第三次中招，所以特地加一條明確斷言。
+ */
+describe("platform_fees（外賣平台費用明細）唔可以再漏抄", () => {
+  it("清單一定要有 platform_fees（否則 PostgREST 根本唔會 select 佢）", () => {
+    assert.ok(
+      (POS_ORDER_DB_COLUMNS as readonly string[]).includes("platform_fees"),
+      "POS_ORDER_DB_COLUMNS 缺 platform_fees —— 平台單費用明細會靜默唔出",
+    );
+  });
+
+  it("有值 → 一定 map 出 platformFees（收據同訂單詳情都靠佢）", () => {
+    const out = mapOrderRow(fullRow());
+    assert.deepEqual(out.platformFees, [
+      { label: "餐盒費", amount: 4 },
+      { label: "商家活動支出", amount: -9 },
+      { label: "配送費", amount: 7, excluded: true },
+    ]);
+  });
+
+  it("NULL / 未跑 migration（undefined）→ undefined（店內單零影響）", () => {
+    assert.equal(mapOrderRow({ ...fullRow(), platform_fees: null }).platformFees, undefined);
+    const noCol = { ...fullRow() } as Record<string, unknown>;
+    delete noCol.platform_fees;
+    assert.equal(mapOrderRow(noCol as PosOrderDbRow).platformFees, undefined);
+  });
+
+  it("空陣列 → 保留空陣列（代表「確實冇費用」，唔等於「冇呢個欄」）", () => {
+    assert.deepEqual(mapOrderRow({ ...fullRow(), platform_fees: [] }).platformFees, []);
   });
 });

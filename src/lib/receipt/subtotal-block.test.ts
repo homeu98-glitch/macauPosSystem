@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildSubtotalBlock, resolveExtraFee, roundMoney } from "./subtotal-block.ts";
+import { buildSubtotalBlock, resolveExtraFee, roundMoney, splitPlatformFees } from "./subtotal-block.ts";
 
 /**
  * 收據「原價合計」區塊 ＋ 殘差嘅不變式測試。
@@ -217,4 +217,53 @@ test("真實澳覓樣本：250 + 4 + 3 + 0 − 9 = 248（收據逐行加返等�
   ]);
   assertAddsUp(lines, 248, "澳覓真實樣本");
   assert.equal(fallbackOf(lines).length, 0);
+});
+
+// ── splitPlatformFees：收據同訂單詳情共用嘅唯一分組來源 ────────
+
+/**
+ * 🔴 呢支函式嘅存在理由：收據（`buildSubtotalBlock`）同 POS 訂單詳情
+ *    （`PlatformFeeBreakdown` 元件）**一定要用同一支**去分組／過濾。
+ *    2026-09-24 實案：費用行只喺收據出現，訂單詳情完全冇 → 使用者以為功能失效。
+ *    如果兩邊各自寫一套過濾，之後一定會走樣。
+ */
+test("splitPlatformFees：分成「計入營業額」同「唔計入」兩組，順序保持不變", () => {
+  const r = splitPlatformFees([
+    { label: "餐盒費", amount: 4 },
+    { label: "配送費", amount: 12, excluded: true },
+    { label: "商家活動支出", amount: -9 },
+    { label: "商家配送費減免", amount: -12, excluded: true },
+    { label: "膠袋費", amount: 3 },
+  ]);
+  assert.deepEqual(r.included, [
+    { label: "餐盒費", amount: 4 },
+    { label: "商家活動支出", amount: -9 },
+    { label: "膠袋費", amount: 3 },
+  ]);
+  assert.deepEqual(r.excluded, [
+    { label: "配送費", amount: 12, excluded: true },
+    { label: "商家配送費減免", amount: -12, excluded: true },
+  ]);
+});
+
+test("splitPlatformFees：0 / NaN / 空白標籤一律略過；undefined / null 安全", () => {
+  const r = splitPlatformFees([
+    { label: "餐盒費", amount: 0 },
+    { label: "", amount: 5 },
+    { label: "   ", amount: 5 },
+    { label: "膠袋費", amount: Number.NaN },
+    { label: "服務費", amount: 2 },
+    null as unknown as { label: string; amount: number },
+  ]);
+  assert.deepEqual(r.included, [{ label: "服務費", amount: 2 }]);
+  assert.deepEqual(r.excluded, []);
+
+  assert.deepEqual(splitPlatformFees(undefined), { included: [], excluded: [] });
+  assert.deepEqual(splitPlatformFees(null), { included: [], excluded: [] });
+  assert.deepEqual(splitPlatformFees([]), { included: [], excluded: [] });
+});
+
+test("splitPlatformFees：標籤會 trim（唔會出現「 餐盒費 」呢種前後空白）", () => {
+  const r = splitPlatformFees([{ label: "  餐盒費  ", amount: 4 }]);
+  assert.deepEqual(r.included, [{ label: "餐盒費", amount: 4 }]);
 });

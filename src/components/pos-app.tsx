@@ -13,6 +13,7 @@ import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { NoticeFocusCard } from "@/components/notice-focus-card";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
+import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
@@ -7091,6 +7092,10 @@ export function PosApp() {
                   </span>
                 </div>
               ) : null}
+              {/* 外賣平台非菜品費用明細（餐盒費／膠袋費／商家優惠／配送費）：
+                  2026-09-24 使用者要求 —— 之前只喺收據印，訂單詳情完全睇唔到，
+                  令佢以為插件冇推到。店內單冇 `platformFees` → 組件自己唔 render。 */}
+              <PlatformFeeBreakdown currency={bootstrap.currency} fees={viewingOrder.platformFees} />
               <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
                 <span>總計</span>
                 <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>

@@ -11,6 +11,7 @@ import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-t
 import { StoreOpenPill } from "@/components/store-open-pill";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
+import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
 import { ReopenBadge } from "@/components/reopen-badge";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import {
@@ -1021,6 +1022,10 @@ export function LocalOrdersPanel({
                 </span>
               </div>
             ) : null}
+            {/* 外賣平台非菜品費用明細（餐盒費／膠袋費／商家優惠／配送費）：
+                2026-09-24 使用者要求 —— 之前只喺收據印，訂單詳情完全睇唔到，
+                令佢以為插件冇推到。店內單冇 `platformFees` → 組件自己唔 render。 */}
+            <PlatformFeeBreakdown currency={currency} fees={viewingOrder.platformFees} />
             <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
               <span>總計</span>
               <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</span>

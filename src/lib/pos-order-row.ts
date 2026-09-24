@@ -52,6 +52,20 @@ export type PosOrderDbRow = {
   reopen_count?: number | null;
   reopened_at?: string | null;
   reopen_reason?: string | null;
+  /**
+   * 外賣平台（澳覓 / MFOOD）非菜品費用明細（0056 migration，2026-09-24）。
+   * 未跑 migration 嘅環境會係 undefined；店內單永遠 NULL。
+   *
+   * 🔴 為咩一定要 map 返出嚟：**收據同訂單詳情嘅費用明細都靠呢一欄**
+   *    （`buildSubtotalBlock()` / `PlatformFeeBreakdown`）。漏咗 = 平台單
+   *    「餐盒費／膠袋費／商家優惠／配送費」全部靜默唔出 —— 2026-09-24 實案：
+   *    入庫（`/api/integration/grabber/orders`）一直都正確，
+   *    但**出庫路徑漏抄**，使用者喺 POS 睇極都冇，白查一輪。
+   *
+   * 形狀刻意寫 inline（唔 import `PosOrder`）—— 呢個模組要保持**零 import**，
+   * 先可以被 `node --test` 直接驗（同 `discount_note` / `reopen_*` 同一個理由）。
+   */
+  platform_fees?: Array<{ label: string; amount: number; excluded?: boolean }> | null;
 };
 
 /**
@@ -104,6 +118,8 @@ export const POS_ORDER_DB_COLUMNS = [
   "reopen_count",
   "reopened_at",
   "reopen_reason",
+  // 外賣平台費用明細（0056 migration，2026-09-24）。收據同訂單詳情都靠佢。
+  "platform_fees",
 ] as const;
 
 /** PostgREST `.select()` 用嘅投影字串（＝ 上面清單 join）。 */
@@ -164,5 +180,9 @@ export function mapOrderRow(order: PosOrderDbRow) {
     reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
     reopenedAt: order.reopened_at ?? undefined,
     reopenReason: order.reopen_reason ?? undefined,
+    // 外賣平台非菜品費用明細（0056 migration）：冇欄 / NULL → undefined
+    // （收據同詳情自動跳過，形同以前；店內單零影響）。
+    // 🔴 漏抄呢行 = 平台單嘅費用明細永遠唔會出（2026-09-24 實案）。
+    platformFees: Array.isArray(order.platform_fees) ? order.platform_fees : undefined,
   };
 }

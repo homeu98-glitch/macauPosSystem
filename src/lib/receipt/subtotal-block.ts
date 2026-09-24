@@ -26,6 +26,44 @@ export interface SubtotalParts {
   orderTotal: number;
 }
 
+/** 外賣平台嘅一項非菜品費用。 */
+export interface PlatformFeeLine {
+  label: string;
+  amount: number;
+  /** `true` = 唔計入營業額（例如顧客自己付嘅配送費），只作對數資訊。 */
+  excluded?: boolean;
+}
+
+export interface SplitPlatformFees {
+  /** 計入營業額嘅行（含**負數**嘅商家承擔優惠：商家活動支出／滿減／代金券）。 */
+  included: PlatformFeeLine[];
+  /** 唔計入營業額嘅資訊行（例如顧客支付嘅配送費、商家配送費減免）。 */
+  excluded: PlatformFeeLine[];
+}
+
+/**
+ * 把 `platformFees` 分成「計入營業額」同「唔計入」兩組，並套用**同一個**過濾規則：
+ * 金額唔係有限數 / 等於 0 / 標籤空白 → 一律略過（唔會印出空行）。
+ *
+ * 🔴 收據（`buildSubtotalBlock`）同 POS 訂單詳情（`PlatformFeeBreakdown` 元件）
+ *    一定要用**同一支**函式。2026-09-24 嘅實案就係「收據有費用行、訂單詳情完全冇」
+ *    → 使用者以為功能冇生效，白查一輪。共用一支就唔會走樣。
+ */
+export function splitPlatformFees(platformFees?: PlatformFeeLine[] | null): SplitPlatformFees {
+  const included: PlatformFeeLine[] = [];
+  const excluded: PlatformFeeLine[] = [];
+  for (const fee of platformFees ?? []) {
+    if (!fee) continue;
+    const amount = Number(fee.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    const label = String(fee.label ?? "").trim();
+    if (!label) continue;
+    if (fee.excluded) excluded.push({ label, amount, excluded: true });
+    else included.push({ label, amount });
+  }
+  return { included, excluded };
+}
+
 /**
  * 收據嘅「附加費」＝ 唔屬任何菜品、但計入總金額嘅費用（外送費／餐盒費）。
  *
@@ -79,40 +117,28 @@ export function buildSubtotalBlock(
   parts: SubtotalParts,
   format: (amount: number) => string,
   /** 外賣平台嘅非菜品費用（餐盒費／膠袋費／服務費），逐項印。店內單唔會有。 */
-  platformFees?: Array<{ label: string; amount: number; excluded?: boolean }>,
+  platformFees?: PlatformFeeLine[],
 ): string {
   const lines = [`原價合計: ${format(parts.subtotalBefore)}`];
 
-  // 計入營業額嘅行。順便累加，後面算殘差要用（見下面 🔴）。
-  let printedFeeSum = 0;
+  // 過濾規則同分組都交畀 `splitPlatformFees()`（收據同一詳情共用，唔可以各寫一套）。
+  const { included, excluded } = splitPlatformFees(platformFees);
 
-  for (const fee of platformFees ?? []) {
-    if (!fee || fee.excluded) continue;
-    const amount = Number(fee.amount);
-    // 🔴 容許負數：商家承擔嘅優惠（商家活動支出／滿減／代金券）
-    //    以負數行表示，同平台後台嘅費用清單一模一樣 —— 商家對數時逐項睇得到。
-    if (!Number.isFinite(amount) || amount === 0) continue;
-    const label = String(fee.label ?? "").trim();
-    if (!label) continue;
-    lines.push(`${label}: ${format(amount)}`);
-    printedFeeSum += amount;
+  // 計入營業額嘅行。順便累加，後面算殘差要用（見下面 🔴）。
+  // 🔴 容許負數：商家承擔嘅優惠（商家活動支出／滿減／代金券）
+  //    以負數行表示，同平台後台嘅費用清單一模一樣 —— 商家對數時逐項睇得到。
+  let printedFeeSum = 0;
+  for (const fee of included) {
+    lines.push(`${fee.label}: ${format(fee.amount)}`);
+    printedFeeSum += fee.amount;
   }
 
   // 唔計入營業額嘅行（例如顧客支付嘅配送費）：分開一組，並加一句說明，
   // 免得商家以為加總少咗一筆。
   // ⚠️ 呢組**唔可以**計入下面嘅殘差扣減 —— 佢哋本身唔屬總金額嘅一部分。
-  const excludedLines = (platformFees ?? []).filter(
-    (fee) => fee && fee.excluded && Number(fee.amount) !== 0,
-  );
-  if (excludedLines.length > 0) {
+  if (excluded.length > 0) {
     lines.push("（以下不計入營業額）");
-    for (const fee of excludedLines) {
-      const amount = Number(fee.amount);
-      if (!Number.isFinite(amount)) continue;
-      const label = String(fee.label ?? "").trim();
-      if (!label) continue;
-      lines.push(`${label}: ${format(amount)}`);
-    }
+    for (const fee of excluded) lines.push(`${fee.label}: ${format(fee.amount)}`);
   }
 
   // 殘差：列出費用之後仍然對唔上（例如平台新增咗某種費用）→ 補一行，
