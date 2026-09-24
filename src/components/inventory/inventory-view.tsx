@@ -50,9 +50,14 @@ const STATUS_LABEL: Record<string, string> = { paid: "已付款", unpaid: "未�
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 
 /* ---------------- 收據表單（置中 modal，可編輯/刪除） ---------------- */
+type Supplier = { id: string; name: string };
+
 type FormItem = { name: string; unit_price: string; quantity: string };
 type FormState = {
   id?: string;
+  /** 由下拉選單揀選時帶 id（server 直接用，唔行 upsert ⇒ 唔會撞 unique）。 */
+  merchant_id: string;
+  /** 手動輸入／新增時用（server 會 upsert 建立）。 */
   merchant_name: string;
   date: string;
   receipt_number: string;
@@ -64,6 +69,7 @@ type FormState = {
 
 function emptyForm(): FormState {
   return {
+    merchant_id: "",
     merchant_name: "",
     date: todayStr(),
     receipt_number: "",
@@ -77,6 +83,7 @@ function emptyForm(): FormState {
 function formFromReceipt(r: Receipt): FormState {
   return {
     id: r.id,
+    merchant_id: r.merchant_id ?? "",
     merchant_name: r.merchant_name,
     date: r.receipt_date,
     receipt_number: r.raw_ocr_data?.receipt_number ?? "",
@@ -92,14 +99,14 @@ function formFromReceipt(r: Receipt): FormState {
 function ReceiptFormModal({
   open,
   initial,
-  supplierNames,
+  suppliers,
   account,
   onClose,
   onSaved,
 }: {
   open: boolean;
   initial: Receipt | null;
-  supplierNames: string[];
+  suppliers: Supplier[];
   account: string;
   onClose: () => void;
   onSaved: () => void;
@@ -124,16 +131,25 @@ function ReceiptFormModal({
 
   const total = form.items.reduce((s, it) => s + (Number(it.unit_price) || 0) * (Number(it.quantity) || 1), 0);
 
+  // 供應商：優先認 id。若收據嘅 merchant_id 唔喺清單入面（例如已被刪／未同步），
+  // 兜去「手動輸入」模式用 name 顯示，避免 select 顯示空白。
+  const knownSupplier = Boolean(form.merchant_id) && suppliers.some((s) => s.id === form.merchant_id);
+  const supplierSelectValue = knownSupplier ? form.merchant_id : form.merchant_name ? "__custom__" : "";
+  const showManualSupplier = supplierSelectValue === "__custom__";
+
   const save = async () => {
     setErr(null);
-    if (!form.merchant_name.trim()) return setErr("請填寫供應商");
+    if (!form.merchant_id && !form.merchant_name.trim()) return setErr("請選擇或輸入供應商");
     if (!form.date) return setErr("請選擇收據日期");
     const items = form.items
       .filter((it) => it.name.trim())
       .map((it) => ({ name: it.name.trim(), unit_price: Number(it.unit_price) || 0, quantity: Number(it.quantity) || 1 }));
     const payload = {
       account,
-      merchant_name: form.merchant_name.trim(),
+      // 有 id 就送 id（server 直接採用，唔會 upsert by name ⇒ 唔會撞 unique）；
+      // 冇 id（手動輸入／新供應商）先至送 name。
+      merchant_id: form.merchant_id || undefined,
+      merchant_name: form.merchant_name.trim() || undefined,
       receipt_number: form.receipt_number || undefined,
       category: form.category.trim() || undefined,
       payment_method: form.payment_method,
@@ -215,18 +231,40 @@ function ReceiptFormModal({
         <div className="space-y-4">
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-700">供應商</label>
-            <input
-              list="supplier-list"
+            <select
               className={fieldCls}
-              value={form.merchant_name}
-              onChange={(e) => setForm({ ...form, merchant_name: e.target.value })}
-              placeholder="輸入或選擇供應商"
-            />
-            <datalist id="supplier-list">
-              {supplierNames.map((n) => (
-                <option key={n} value={n} />
+              value={supplierSelectValue}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "__custom__") setForm({ ...form, merchant_id: "", merchant_name: form.merchant_name });
+                else if (!v) setForm({ ...form, merchant_id: "", merchant_name: "" });
+                else {
+                  const hit = suppliers.find((s) => s.id === v);
+                  setForm({ ...form, merchant_id: v, merchant_name: hit?.name ?? "" });
+                }
+              }}
+            >
+              <option value="">— 選擇供應商 —</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
               ))}
-            </datalist>
+              <option value="__custom__">＋ 手動輸入 / 新增供應商</option>
+            </select>
+            {showManualSupplier && (
+              <input
+                className={`${fieldCls} mt-2`}
+                value={form.merchant_name}
+                onChange={(e) => setForm({ ...form, merchant_id: "", merchant_name: e.target.value })}
+                placeholder="輸入供應商名稱（新的會自動建立）"
+              />
+            )}
+            <p className="mt-1.5 text-xs text-slate-400">
+              {suppliers.length === 0
+                ? "尚無供應商，選「手動輸入 / 新增供應商」直接打名建立。"
+                : "由已建立的供應商選擇；選現有供應商唔會重複建立。"}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -301,28 +339,40 @@ function ReceiptFormModal({
             </div>
             <div className="space-y-2">
               {form.items.map((it, i) => (
-                <div key={i} className="flex items-end gap-2">
-                  <div className="min-w-0 flex-1">
+                /* 🔴 2026-09-25 修正：以前係 `flex` + `${fieldCls} w-28`，而 fieldCls
+                   內含 `w-full`；本專案 Tailwind v4 產生順序係 `.w-full` 喺 `.w-28`
+                   之後 ⇒ `w-full` 勝出 ⇒ 單價／數量 flex-basis = 100%，
+                   `flex-1`（basis 0）嘅品名欄分到 **0 寬** ⇒ 睇唔到亦撳唔到。
+                   改用 grid 固定軌寬（每格入面 w-full = 軌寬，唔會再互相搶位），
+                   窄螢幕則換行：品名一整行，單價／數量／刪除第二行。 */
+                <div
+                  key={i}
+                  className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_5rem_auto]"
+                >
+                  <div className="col-span-2 min-w-0 sm:col-span-1">
                     <input
                       className={fieldCls}
                       value={it.name}
                       onChange={(e) => setItem(i, { name: e.target.value })}
                       placeholder="品名"
+                      aria-label={`第 ${i + 1} 項品名`}
                     />
                   </div>
                   <input
-                    className={`${fieldCls} w-28`}
+                    className={fieldCls}
                     inputMode="decimal"
                     value={it.unit_price}
                     onChange={(e) => setItem(i, { unit_price: e.target.value })}
                     placeholder="單價"
+                    aria-label={`第 ${i + 1} 項單價`}
                   />
                   <input
-                    className={`${fieldCls} w-20`}
+                    className={fieldCls}
                     inputMode="decimal"
                     value={it.quantity}
                     onChange={(e) => setItem(i, { quantity: e.target.value })}
                     placeholder="數量"
+                    aria-label={`第 ${i + 1} 項數量`}
                   />
                   <button
                     type="button"
@@ -405,10 +455,19 @@ export function InventoryView() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [formInitial, setFormInitial] = useState<Receipt | null>(null);
-  const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
+  /** 供應商操作（新增／改名／刪除）嘅提示 —— **顯示喺供應商區入面**。
+   *  🔴 以前放喺頁面最頂（KPI 上面）：供應商區喺頁面下半部，開住 modal 或者
+   *  捲咗落去嘅時候根本睇唔到 ⇒ 用戶以為「完全冇提示」。 */
+  const [supplierMsg, setSupplierMsg] = useState<string | null>(null);
+  /** true = 成功（綠），false = 警告／錯誤（amber）。 */
+  const [supplierMsgOk, setSupplierMsgOk] = useState(false);
 
   const [merchantDraft, setMerchantDraft] = useState("");
   const [editingSupplier, setEditingSupplier] = useState<{ id: string; name: string } | null>(null);
+  /** 供應商**全部**清單（直接由 merchants 表讀，唔再由收據反推）。 */
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  /** 撞「已存在」時 highlight 返嗰個供應商，等用戶知道佢其實一早喺度。 */
+  const [highlightSupplierId, setHighlightSupplierId] = useState<string | null>(null);
 
   useEffect(() => {
     const s = loadAuthSession();
@@ -449,12 +508,31 @@ export function InventoryView() {
   const summary = data?.summary;
   const rangeLabel = reportRangeLabel(range);
 
-  const suppliers = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const r of receipts) if (r.merchant_id) map.set(r.merchant_id, r.merchant_name);
-    return Array.from(map, ([id, name]) => ({ id, name }));
-  }, [receipts]);
-  const supplierNames = useMemo(() => suppliers.map((s) => s.name), [suppliers]);
+  /**
+   * 🔴 2026-09-25：供應商改由 `GET /api/inventory/merchants` 讀全量。
+   * 舊寫法係由「range 過濾後嘅 receipts」反推 ⇒ 冇收據嘅供應商唔會出現、
+   * 換 range 又會消失，係「新增咗但睇唔到」同「重複新增撞 key」嘅根因。
+   */
+  const loadSuppliers = useCallback(async () => {
+    if (!account) return;
+    try {
+      const res = await fetch(`/api/inventory/merchants?account=${encodeURIComponent(account)}`);
+      const json = (await res.json()) as { ok?: boolean; merchants?: Array<{ id: string; name: string }> };
+      if (json.ok && Array.isArray(json.merchants)) {
+        setSuppliers(
+          json.merchants
+            .map((m) => ({ id: String(m.id), name: String(m.name ?? "") }))
+            .filter((m) => m.id && m.name),
+        );
+      } else setSuppliers([]);
+    } catch {
+      setSuppliers([]);
+    }
+  }, [account]);
+
+  useEffect(() => {
+    void loadSuppliers();
+  }, [loadSuppliers]);
 
   const doCreateMerchant = async () => {
     if (!account || !merchantDraft.trim()) return;
@@ -464,13 +542,31 @@ export function InventoryView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account, name: merchantDraft.trim() }),
       });
-      const json = await res.json();
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        code?: string;
+        merchant?: { id: string; name: string };
+      };
       if (json.ok) {
         setMerchantDraft("");
+        setHighlightSupplierId(null);
+        setSupplierMsgOk(true);
+        setSupplierMsg(`已新增「${merchantDraft.trim()}」，可喺收據選用。`);
+        void loadSuppliers();
         void loadAll();
-      } else setDeleteMsg(json.error || "新增供應商失敗");
+        return;
+      }
+      setSupplierMsgOk(false);
+      // 「已經存在」→ 唔清空輸入、highlight 返嗰個供應商，等用戶知佢一早喺度
+      // （以前係丟一句英文 duplicate key 出嚟，或者靜默失敗，兩個都等於冇提示）。
+      if (json.code === "ALREADY_EXISTS" && json.merchant?.id) {
+        setHighlightSupplierId(json.merchant.id);
+        void loadSuppliers();
+      }
+      setSupplierMsg(json.error || "新增供應商失敗");
     } catch {
-      setDeleteMsg("網絡錯誤");
+      setSupplierMsg("網絡錯誤");
     }
   };
 
@@ -481,10 +577,19 @@ export function InventoryView() {
         method: "DELETE",
       });
       const json = await res.json();
-      if (json.ok) void loadAll();
-      else setDeleteMsg(json.error || "刪除供應商失敗");
+      if (json.ok) {
+        setHighlightSupplierId(null);
+        setSupplierMsgOk(true);
+        setSupplierMsg("已刪除供應商。");
+        void loadSuppliers();
+        void loadAll();
+      } else {
+        setSupplierMsgOk(false);
+        setSupplierMsg(json.error || "刪除供應商失敗");
+      }
     } catch {
-      setDeleteMsg("網絡錯誤");
+      setSupplierMsgOk(false);
+      setSupplierMsg("網絡錯誤");
     }
   };
 
@@ -499,10 +604,17 @@ export function InventoryView() {
       const json = await res.json();
       if (json.ok) {
         setEditingSupplier(null);
+        setSupplierMsgOk(true);
+        setSupplierMsg("已更新供應商名稱。");
+        void loadSuppliers();
         void loadAll();
-      } else setDeleteMsg(json.error || "修改供應商失敗");
+      } else {
+        setSupplierMsgOk(false);
+        setSupplierMsg(json.error || "修改供應商失敗");
+      }
     } catch {
-      setDeleteMsg("網絡錯誤");
+      setSupplierMsgOk(false);
+      setSupplierMsg("網絡錯誤");
     }
   };
 
@@ -568,15 +680,6 @@ export function InventoryView() {
         {error && (
           <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{error}</div>
         )}
-        {deleteMsg && (
-          <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
-            {deleteMsg}
-            <button type="button" className="ml-2 underline" onClick={() => setDeleteMsg(null)}>
-              知道了
-            </button>
-          </div>
-        )}
-
         {/* KPI */}
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -659,7 +762,12 @@ export function InventoryView() {
 
         {/* 供應商管理 */}
         <section className="mb-6">
-          <h2 className="mb-3 text-sm font-medium text-slate-600">供應商（新增 / 修改 / 刪除）</h2>
+          <h2 className="mb-3 text-sm font-medium text-slate-600">
+            供應商（新增 / 修改 / 刪除）
+            <span className="ml-2 text-xs font-normal text-slate-400">
+              全部 {suppliers.length} 個（唔受日期篩選影響）
+            </span>
+          </h2>
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-3 flex gap-2">
               <input
@@ -676,12 +784,31 @@ export function InventoryView() {
                 新增
               </button>
             </div>
+            {supplierMsg && (
+              <div
+                className={`mb-3 flex items-start justify-between gap-2 rounded-xl px-4 py-3 text-sm ring-1 ${
+                  supplierMsgOk
+                    ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
+                    : "bg-amber-50 text-amber-800 ring-amber-200"
+                }`}
+              >
+                <span>{supplierMsg}</span>
+                <button type="button" className="shrink-0 underline" onClick={() => setSupplierMsg(null)}>
+                  知道了
+                </button>
+              </div>
+            )}
             {suppliers.length === 0 ? (
               <div className="text-sm text-slate-400">尚無供應商。</div>
             ) : (
               <ul className="divide-y divide-slate-100">
                 {suppliers.map((s) => (
-                  <li key={s.id} className="flex items-center justify-between py-2">
+                  <li
+                    key={s.id}
+                    className={`flex items-center justify-between rounded-lg py-2 ${
+                      highlightSupplierId === s.id ? "bg-amber-50 px-2 ring-1 ring-amber-300" : ""
+                    }`}
+                  >
                     {editingSupplier?.id === s.id ? (
                       <input
                         autoFocus
@@ -777,10 +904,13 @@ export function InventoryView() {
       <ReceiptFormModal
         open={formOpen}
         initial={formInitial}
-        supplierNames={supplierNames}
+        suppliers={suppliers}
         account={account}
         onClose={() => setFormOpen(false)}
-        onSaved={() => void loadAll()}
+        onSaved={() => {
+          void loadAll();
+          void loadSuppliers();
+        }}
       />
     </div>
   );

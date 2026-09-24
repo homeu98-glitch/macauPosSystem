@@ -50,7 +50,30 @@ export async function resolveMerchantId(
     .upsert({ name: opts.merchant_name, user_id: userId }, { onConflict: "user_id, name" })
     .select("id")
     .single();
-  if (error) return { error: error.message, status: 500 };
+  if (error) {
+    // 🔴 2026-09-25：撞 unique（例如 merchants.name 跨店唯一）時，若**本店已經有**
+    // 同名供應商，就直接复用（upsert 語義上本來就係「有就唔新建」），唔好成張收據
+    // 存唔到。本店冇嗰個名先至算真失敗（唔可以掛起第二間店嘅 merchant）。
+    const msg = error.message ?? "";
+    const isConflict =
+      error.code === "23505" || error.code === "42P10" ||
+      /duplicate key/i.test(msg) || /no unique or exclusion constraint/i.test(msg);
+    if (isConflict) {
+      const { data: mine } = await client
+        .from("merchants")
+        .select("id")
+        .eq("user_id", userId)
+        .ilike("name", opts.merchant_name)
+        .maybeSingle();
+      if (mine?.id) return { merchantId: String(mine.id) };
+      const constraint = /constraint "([^"]+)"/.exec(msg)?.[1] ?? "未知約束";
+      return {
+        error: `供應商「${opts.merchant_name}」與資料庫既有供應商衝突（${constraint}），請改用其他名稱。`,
+        status: 409,
+      };
+    }
+    return { error: error.message, status: 500 };
+  }
   return { merchantId: data.id };
 }
 

@@ -980,6 +980,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     sel: null,
     yest: null,
   });
+  /**
+   * 🔴 2026-09-25：進貨（PurchaseSummary）「讀唔到」同「讀到但係 0」係兩回事。
+   * 三種情況會讀唔到：① admin 模式（冇商戶身份，刻意跳過）② account 配對唔到
+   * expenseRecorder 店戶（`matched:false`）③ 表未建 / expense client 未設定
+   * （`schemaReady:false`、503）。三者舊寫法一律 `?? 0` ⇒ cogs = 0 ⇒
+   * **毛利＝營業額、毛利率 100%**，報表講大話。而家分開記住，UI 要標示。
+   */
+  const [purchaseUnavailable, setPurchaseUnavailable] = useState(false);
   const [lowStock, setLowStock] = useState<
     Array<{ name: string; qty: number; unit: string; par: number }> | null
   >(null);
@@ -1888,6 +1896,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
         if (cancelled) return;
         setLedger({ sel: null, d7: null, yest: null });
         setPurchase({ sel: null, yest: null });
+        setPurchaseUnavailable(true);
         setLedgerError(null);
         setLedgerDone(true);
         return;
@@ -1909,7 +1918,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
       if (cancelled) return;
       setLedger({ sel, d7, yest });
-      setPurchase({ sel: purSel?.summary ?? null, yest: purYest?.summary ?? null });
+      // 讀唔到（null／matched:false／schemaReady:false）→ 一律當「未能讀取」，
+      // 唔可以當進貨 = 0（否則毛利會等如營業額）。
+      const selUnavailable = !purSel || purSel.matched === false || purSel.schemaReady === false;
+      const yestUnavailable = !purYest || purYest.matched === false || purYest.schemaReady === false;
+      setPurchaseUnavailable(selUnavailable);
+      setPurchase({ sel: selUnavailable ? null : purSel?.summary ?? null, yest: yestUnavailable ? null : purYest?.summary ?? null });
 
       if (!sel && !d7) setLedgerError("尚未連線 Ledger，會員/線上數據未能讀取（其餘模塊正常）。");
       setLedgerDone(true);
@@ -2242,6 +2256,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
   const displayGrossProfit =
     gpMarginPct != null ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100 : grossProfit;
+
+  // 🔴 2026-09-25：講清楚口徑。進貨成本係「**當日已付款嘅收據總額**」——係現金流
+  // 口徑，唔係真正 COGS（未付嘅貨唔計、補付舊貨又會令今日成本暴升）。
+  // 讀唔到進貨數據時更要明講，否則用戶會以為毛利率真係 100%。
+  const gpSubtitle =
+    gpMarginPct != null
+      ? `毛利率 ${gpMarginPct}%（營業額 × ${gpMarginPct}%）`
+      : purchaseUnavailable
+        ? "注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考"
+        : "系統估算：營業額 − 進貨成本（當日已付收據）";
 
   const soldOut = useMemo(() => {
     const map = loadSoldOutState();
@@ -2648,8 +2672,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       )
                     }
                     highlight
-                    delta={gpMarginPct != null ? null : grossProfitYest === null ? null : pct(grossProfit, grossProfitYest)}
-                    subtitle={gpMarginPct != null ? `毛利率 ${gpMarginPct}%（營業額 × ${gpMarginPct}%）` : "系統估算：營業額 − 進貨成本"}
+                    delta={
+                      gpMarginPct != null || purchaseUnavailable
+                        ? null
+                        : grossProfitYest === null
+                          ? null
+                          : pct(grossProfit, grossProfitYest)
+                    }
+                    subtitle={gpSubtitle}
                     action={
                       gpEditing ? (
                         <div className="flex items-center gap-1">
@@ -3309,7 +3339,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             </div>
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
-              說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level）。
+              說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level，只由「收據同步種子」與人手盤點改動，落單暫不扣庫存）。
+              {purchaseUnavailable && (
+                <span className="mt-1 block text-amber-700">
+                  注意：本店進貨（收據）數據未能讀取，毛利估算未扣成本。
+                </span>
+              )}
               人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
               毛利為「營業額 − 買貨成本（已付）」估算。
             </div>
