@@ -5679,13 +5679,33 @@ export function PosApp() {
                                     {quickCompleteLabel(order)}
                                   </button>
                                 ) : null}
-                                <button
-                                  className="flex-1 whitespace-nowrap rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-                                  onClick={() => setPayingOrderId(order.id)}
-                                  type="button"
-                                >
-                                  結帳
-                                </button>
+                                {/*
+                                  🔴 外賣平台單（澳覓 / MFOOD）一律**線上已付款** ——
+                                  POS 冇嘢可以再收，所以唔應該出現「結帳」掣。
+
+                                  刻意只針對平台單（用 `order.source` 直接判斷，
+                                  **唔用** `orderSourceOf()` —— 佢對未知 source 會回退
+                                  `"pos"`，分辨唔到平台單）。
+
+                                  其餘來源（pos / kiosk / scan / 舊單）行為完全不變。
+                                */}
+                                {/*
+                                  ⚠️ 型別註解：`PosOrder["source"]` 目前只有
+                                  `pos | kiosk | scan`，所以比對要 cast 成 string。
+                                  正式做法係擴聯集 + 同步改 order-source.ts 同 badge 元件
+                                  （三處必須一起改，否則型別會爆）—— 嗰件事仍待使用者決定，
+                                  所以呢度先用最小改動，只影響平台單，唔碰任何既有來源。
+                                */}
+                                {(order.source as string) !== "aomi" &&
+                                (order.source as string) !== "mfood" ? (
+                                  <button
+                                    className="flex-1 whitespace-nowrap rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                                    onClick={() => setPayingOrderId(order.id)}
+                                    type="button"
+                                  >
+                                    結帳
+                                  </button>
+                                ) : null}
                               </>
                             )}
                           </div>

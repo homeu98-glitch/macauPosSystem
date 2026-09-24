@@ -1153,6 +1153,23 @@ export interface PosOrder {
   serviceChargeAmount: number;
   discountAmount: number;
   /**
+   * 外賣平台嘅非菜品費用（餐盒費／膠袋費／服務費），逐項顯示用。
+   *
+   * 🔴 只包含**計入營業額**嘅費用 —— 配送費唔計入（見真實單據反推：
+   *    澳覓 172+5+1−21=157、mfood 118+3+1−4=118，兩個都唔含配送費）。
+   * 店內單永遠 undefined（`platform_fees` 欄為 NULL）→ 收據不變。
+   */
+  platformFees?: Array<{
+    label: string;
+    amount: number;
+    /**
+     * true = **唔計入營業額**（例如顧客支付嘅配送費）。
+     * 收據會分開一組顯示，並標明「以下不計入營業額」——
+     * 商家睇得到每一項，加總亦唔會被污染。
+     */
+    excluded?: boolean;
+  }>;
+  /**
    * 系統抹零（金額，例如 0.4）。total = subtotal - discount - rounding。
    * 收據「系統抹零」區段負值顯示；舊單（schema 升級前）冇呢個 field → 收據自動 hidden。
    * 見 docs/88。

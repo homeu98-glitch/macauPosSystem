@@ -12,6 +12,7 @@ import {
   matchMenuItem,
   normalizeAomiLifecycle,
   normalizeMfoodLifecycle,
+  platformFeeLines,
   projectGrabberOrder,
   type GrabberOrder,
   type MenuLike,
@@ -191,11 +192,21 @@ test("投影：訂單層欄位一次過驗（枱號／來源／狀態／已付�
   assert.equal(row.service_charge_amount, 0);
 });
 
-test("投影：自動接單開 → 直接製作中；關 → draft 等員工確認", () => {
+test("🔴 投影：平台單一律 paid（線上已付款）；自動接單只控制出餐階段", () => {
   const on = projectGrabberOrder({ order: mfoodOrder(), storeId: "s", autoAccept: true });
   const off = projectGrabberOrder({ order: mfoodOrder(), storeId: "s", autoAccept: false });
-  assert.equal(on.row!.status, "sent_to_kitchen");
-  assert.equal(off.row!.status, "draft");
+
+  // 🔴 一定要係 `paid`：
+  //    `pos-order-filters.getPaymentBadge()` 只認
+  //    `paid | settled | refunded | partially_refunded` 為「已結帳」，
+  //    用 `draft` / `sent_to_kitchen` 會顯示「未結帳」＋出現「結帳」掣
+  //    （2026-09-24 使用者實案：澳覓#98 明明線上已付款卻顯示未結帳）。
+  assert.equal(on.row!.status, "paid", "自動接單開：已付款");
+  assert.equal(off.row!.status, "paid", "自動接單關：一樣係已付款（錢一早收咗）");
+
+  // 待確認 vs 製作中 改用 fulfillmentStatus 區分
+  assert.equal(on.row!.fulfillment_status, "preparing", "自動接單開 → 製作中");
+  assert.equal(off.row!.fulfillment_status, null, "自動接單關 → 等員工接受");
 });
 
 test("投影：差額 = 菜品原價合計 − 營業額（含平台補貼），且唔可以係負數", () => {
@@ -318,4 +329,206 @@ test("投影：raw_json 原樣保存，方便事後重算", () => {
   const order = mfoodOrder();
   const r = projectGrabberOrder({ order, storeId: "s", menuItems: MENU });
   assert.equal(r.row!.raw_json, order);
+});
+
+// ── 費用逐項化（用 2026-09-24 使用者提供嘅**真實 payload** 做測試資料）──
+
+test("🔴 澳覓真實單：172 + 5 + 1 + 0 − 21 = 157（逐項加得起來）", () => {
+  // 真實 payload：TK001521260916184023332
+  const order: GrabberOrder = {
+    source: "aomi",
+    externalOrderId: "TK001521260916184023332",
+    storeSeqNo: "1",
+    stateEnum: "ORDER_ARRIVED",
+    amount: {
+      turnoverAmount: 157, // turnoverAmt 15700 分 → 元
+      totalAmt: 172, // 菜品原價合計
+      boxAmt: 5, // boxAmt 500
+      plasticAmt: 1, // plasticAmt 100
+      holidayServiceAmt: 0,
+      merchantActAmt: 21, // merchantActAmt 2100
+      sendAmt: 10, // 顧客支付配送費（唔入營業額）
+    },
+    items: [
+      { displayName: "即叫即蒸魚飯", quantity: 1, unitPrice: 68 },
+      { displayName: "肉片炒時菜", quantity: 1, unitPrice: 48 },
+      { displayName: "表嫂口水雞", quantity: 1, unitPrice: 56 },
+    ],
+  };
+
+  const r = projectGrabberOrder({ order, storeId: "s" });
+  const feeSum = r.row!.platform_fees.reduce((n, x) => (x.excluded ? n : n + x.amount), 0);
+
+  assert.equal(r.row!.subtotal, 172, "菜品原價合計");
+  assert.equal(r.row!.total, 157, "總額 = 營業額");
+  assert.equal(
+    r.row!.subtotal + feeSum - r.row!.discount_amount,
+    r.row!.total,
+    "🔴 菜品 + 費用 − 優惠 === 營業額",
+  );
+  // 逐項要有餐盒費、膠袋費、商家活動支出（負數）
+  const labels = r.row!.platform_fees.map((f) => f.label);
+  assert.ok(labels.includes("餐盒費"), "要有餐盒費");
+  assert.ok(labels.includes("膠袋費"), "要有膠袋費");
+  assert.ok(labels.includes("商家活動支出"), "要有商家活動支出");
+  const act = r.row!.platform_fees.find((f) => f.label === "商家活動支出");
+  assert.equal(act!.amount, -21, "商家活動支出要係負數");
+  // 列出費用後殘差應該係 0
+  assert.equal(r.row!.discount_amount, 0, "逐項列出後殘差 = 0");
+});
+
+test("🔴 mfood 真實單：118 + 3 + 1 − 4 = 118（逐項加得起來）", () => {
+  // 真實 payload：CRD202609212007281125023
+  const order: GrabberOrder = {
+    source: "mfood",
+    externalOrderId: "202609212007281125023",
+    orderNumber: 1,
+    orderStatus: "completed",
+    transactionStatus: "paid",
+    amount: {
+      businessAmount: 118, // businessAmtn 118
+      boxFee: 3,
+      plasticBagFee: 1,
+      serviceFee: 0,
+      voucherAmtn: 0,
+      fullReductionAmtn: 4,
+      memberUpMoneyAmt: 0,
+      merchantDisDeliveryAmtn: 12, // 商家配送費減免（唔入營業額）
+      deliverySubsidyAmtn: 0.8,
+    },
+    // 品項單價要用實收價：productAmtn 67 / 51（唔係 skuPrice 58）
+    items: [
+      { displayName: "表嫂手打肉餅", quantity: 1, unitPrice: 67 },
+      { displayName: "A17.紅燒肉碎燜茄子", quantity: 1, unitPrice: 51 },
+    ],
+  };
+
+  const r = projectGrabberOrder({ order, storeId: "s" });
+  const feeSum = r.row!.platform_fees.reduce((n, x) => (x.excluded ? n : n + x.amount), 0);
+
+  assert.equal(r.row!.subtotal, 118, "菜品加總（用 productAmtn）");
+  assert.equal(r.row!.total, 118, "總額 = 營業額");
+  assert.equal(
+    r.row!.subtotal + feeSum - r.row!.discount_amount,
+    r.row!.total,
+    "🔴 菜品 + 費用 − 優惠 === 營業額",
+  );
+  const labels = r.row!.platform_fees.map((f) => f.label);
+  assert.ok(labels.includes("餐盒費"), "要有餐盒費");
+  assert.ok(labels.includes("膠袋費"), "要有膠袋費");
+  assert.ok(labels.includes("商家滿減"), "要有商家滿減");
+  const full = r.row!.platform_fees.find((f) => f.label === "商家滿減");
+  assert.equal(full!.amount, -4, "商家滿減要係負數");
+  assert.equal(r.row!.discount_amount, 0, "逐項列出後殘差 = 0");
+});
+
+test("🔴 澳覓真實單 #2（專送）：250 + 4 + 3 + 0 − 9 = 248", () => {
+  // 真實 payload：T20220924185044482686
+  //
+  // 🔴 呢張單同時證實咗「配送費」嘅歸屬：
+  //    營業額 248 = 250 + 4 + 3 − 9（**冇**配送費）
+  //    顧客實付 255 = 250 + 4 + 3 + 7(配送費) − 9 ✓
+  //    ⇒ 配送費屬「顧客支付」，唔入商家營業額 —— 所以收據要標「不計入營業額」。
+  //
+  // 亦確認：呢間店嘅單冇「配送費(商家)」「配送費商家減免」（sendTypeEnum: ZHUANSONG，
+  // 平台專送，商家唔使承擔配送費）→ 兩項恆為 0，由殘差行兜底即可。
+  const order: GrabberOrder = {
+    source: "aomi",
+    externalOrderId: "T20220924185044482686",
+    storeSeqNo: "10",
+    stateEnum: "ORDER_ARRIVED",
+    amount: {
+      turnoverAmount: 248, // turnoverAmt 24800
+      totalAmt: 250, // 菜品原價合計
+      boxAmt: 4, // boxAmt 400
+      plasticAmt: 3, // plasticAmt 300
+      sendAmt: 7, // sendAmt 700（顧客支付配送費）
+      holidayServiceAmt: 0,
+      merchantActAmt: 9, // merchantActAmt 900
+      goodsAllAmount: 257, // 商品總金額 = 250 + 4 + 3
+    },
+    items: [
+      { displayName: "牛肉炒时菜", quantity: 1, unitPrice: 52 },
+      { displayName: "表嫂酸菜魚", quantity: 1, unitPrice: 198 },
+    ],
+  };
+
+  const r = projectGrabberOrder({ order, storeId: "s" });
+  const feeSum = r.row!.platform_fees.reduce((n, x) => (x.excluded ? n : n + x.amount), 0);
+
+  assert.equal(r.row!.subtotal, 250, "菜品原價合計");
+  assert.equal(r.row!.total, 248, "總額 = 營業額");
+  assert.equal(
+    r.row!.subtotal + feeSum - r.row!.discount_amount,
+    r.row!.total,
+    "🔴 菜品 + 費用 − 優惠 === 營業額",
+  );
+  assert.equal(r.row!.discount_amount, 0, "殘差 = 0（費用已逐項齊全，唔使兜底）");
+
+  // 配送費要出現（使用者要求不可省略），但係 excluded，唔會污染加總
+  const delivery = r.row!.platform_fees.find((f) => f.label === "配送費");
+  assert.ok(delivery, "要有配送費行");
+  assert.equal(delivery!.amount, 7, "配送費 = sendAmt");
+  assert.equal(delivery!.excluded, true, "🔴 配送費要標明不計入營業額");
+
+  // 計入加總嘅費用唔可以包含配送費
+  const included = r.row!.platform_fees.filter((f) => !f.excluded);
+  assert.equal(
+    included.reduce((n, x) => n + x.amount, 0),
+    -2,
+    "計入加總嘅只有 餐盒4 + 膠袋3 − 商家活動9 = −2",
+  );
+});
+
+test("🔴 用「插件實際送出嘅欄位名」驗 mfood 商家優惠（回歸）", () => {
+  // 教訓（2026-09-24）：先前測試用**平台原始名**（`fullReductionAmtn`），
+  // 但插件 bridge 正規化之後送出嘅係 `fullReductionAmount` → POS 搵唔到 →
+  // 真實單嘅「商家滿減／代金券／月卡紅包」一個都唔會出現，靠殘差行兜底。
+  // ⇒ 測試一定要用**實際會出現嘅名字**。
+  const order: GrabberOrder = {
+    source: "mfood",
+    externalOrderId: "NORM-1",
+    amount: {
+      businessAmount: 66,
+      // bridge 正規化後嘅名（`*Amount`）—— 真實 payload 就係咁
+      boxFee: 3,
+      plasticBagFee: 1,
+      serviceFee: 0,
+      voucherAmount: 0,
+      fullReductionAmount: 6,
+      memberUpAmount: 0,
+      merchantDeliveryAmount: 12,
+      deliverySubsidyAmount: 0.8,
+    },
+    items: [{ displayName: "表嫂手打肉餅", quantity: 1, unitPrice: 68 }],
+  };
+
+  const r = projectGrabberOrder({ order, storeId: "s" });
+  const labels = r.row!.platform_fees.map((f) => f.label);
+  assert.ok(labels.includes("商家滿減"), "🔴 要認得 `fullReductionAmount`");
+  const full = r.row!.platform_fees.find((f) => f.label === "商家滿減");
+  assert.equal(full!.amount, -6);
+  assert.ok(labels.includes("商家配送費減免"), "🔴 要認得 `merchantDeliveryAmount`");
+
+  const feeSum = r.row!.platform_fees.reduce((n, x) => (x.excluded ? n : n + x.amount), 0);
+  assert.equal(r.row!.subtotal + feeSum - r.row!.discount_amount, r.row!.total);
+  assert.equal(r.row!.discount_amount, 0, "逐項齊全 → 殘差 0");
+});
+
+test("零費用唔會出現空行（amount === 0 一律略過）", () => {
+  const order: GrabberOrder = {
+    source: "mfood",
+    externalOrderId: "X1",
+    amount: {
+      businessAmount: 100,
+      boxFee: 0,
+      plasticBagFee: 0,
+      serviceFee: 0,
+      voucherAmtn: 0,
+      fullReductionAmtn: 0,
+    },
+    items: [{ displayName: "某菜", quantity: 1, unitPrice: 100 }],
+  };
+  const r = projectGrabberOrder({ order, storeId: "s" });
+  assert.deepEqual(r.row!.platform_fees, [], "全部係 0 → 唔應該有費用行");
 });

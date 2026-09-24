@@ -18,6 +18,8 @@ export interface PosOrderRow {
   tax_amount: number;
   service_charge_amount: number;
   discount_amount: number;
+  /** 外賣平台非菜品費用明細（0056 migration）。未跑 migration / 店內單 → null。 */
+  platform_fees?: PosOrder["platformFees"] | null;
   total: number;
   prepaid_amount: number;
   online_order_id: string | null;
@@ -96,6 +98,8 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     taxAmount: Number(row.tax_amount ?? 0),
     serviceChargeAmount: Number(row.service_charge_amount ?? 0),
     discountAmount: Number(row.discount_amount ?? 0),
+    // 非菜品費用明細：冇欄 / NULL → undefined（收據自動跳過，形同以前）。
+    platformFees: Array.isArray(row.platform_fees) ? row.platform_fees : undefined,
     total: Number(row.total ?? 0),
     prepaidAmount: Number(row.prepaid_amount ?? 0),
     onlineOrderId: row.online_order_id ?? undefined,

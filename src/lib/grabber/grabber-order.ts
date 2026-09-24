@@ -68,6 +68,7 @@ export interface GrabberOrderRow {
   table_id: string;
   table_name: string;
   status: PosOrder["status"];
+  fulfillment_status: PosOrder["fulfillmentStatus"] | null;
   items: OrderItem[];
   order_note: string | null;
   subtotal: number;
@@ -82,6 +83,8 @@ export interface GrabberOrderRow {
   updated_at: string;
   client_updated_at: string;
   external_order_id: string;
+  /** 非菜品費用明細（餐盒／膠袋／服務費）。migration 0056 嘅 `platform_fees`。 */
+  platform_fees: Array<{ label: string; amount: number; excluded?: boolean }>;
   raw_json: GrabberOrder;
 }
 
@@ -224,6 +227,67 @@ export function grabberTurnover(order: GrabberOrder): { total: number; fellBack:
   if (business > 0) return { total: business, fellBack: false };
 
   return { total: num(a.payAmount), fellBack: true };
+}
+
+/**
+ * 由 payload 抽出**計入營業額**嘅非菜品費用（逐項顯示用）。
+ *
+ * 🔴 規則由真實單據反推，兩個平台都符合：
+ *   澳覓 172 + 5(餐盒) + 1(膠袋) − 21(商家活動) = 157 ✓
+ *   mfood 118 + 3(餐盒) + 1(膠袋) − 4(商家滿減)  = 118 ✓
+ *   ⇒ 只計「餐盒費 + 膠袋費 + 服務費」；**配送費唔計入營業額**，唔列。
+ *
+ * 平台欄位名：澳覓用 `*Amt`、mfood 用 `*Fee`，所以兩邊都試。
+ */
+export function platformFeeLines(order: GrabberOrder): Array<{ label: string; amount: number; excluded?: boolean }> {
+  const a = order.amount ?? {};
+  const pick = (...keys: string[]): number => {
+    for (const k of keys) {
+      const v = num(a[k]);
+      if (v > 0) return v;
+    }
+    return 0;
+  };
+
+  const out: Array<{ label: string; amount: number }> = [];
+  const add = (label: string, amount: number) => {
+    if (Number.isFinite(amount) && amount !== 0) out.push({ label, amount });
+  };
+
+  // ── 正數費用（計入營業額）──
+  add("餐盒費", pick("boxAmt", "boxFee"));
+  add("膠袋費", pick("plasticAmt", "plasticBagFee"));
+  add("服務費", pick("serviceFee"));
+  // 澳覓：節假日服務費
+  add("節假日服務費", pick("holidayServiceAmt"));
+
+  // ── 商家承擔嘅優惠（負數；公式係「減」呢幾項）──
+  //
+  // 🔴 每個都試**兩個名**：
+  //    · 插件 bridge 正規化之後嘅名（`*Amount`）—— 實際 payload 用嘅就係佢
+  //    · 平台原始名（`*Amt`）—— 保留做保險，萬一有人直接送原始 payload
+  //    之前只寫原始名 → 真實單入到 POS 全部搵唔到（2026-09-24 實案）。
+  // 澳覓：商家活動支出（代金券 + 滿減…已合併為一個數）
+  add("商家活動支出", -pick("merchantActAmt", "merchantActAmount"));
+  // mfood：公式 = − 商家代金券 − 商家滿減 − 月卡紅包升級金額
+  add("商家代金券", -pick("voucherAmount", "voucherAmtn"));
+  add("商家滿減", -pick("fullReductionAmount", "fullReductionAmtn"));
+  add("月卡紅包升級", -pick("memberUpAmount", "memberUpMoneyAmt"));
+
+  // ── 唔計入營業額嘅資訊行（只作對數用）──
+  //    配送費係**顧客付**嘅，官方公式冇將佢計入營業額。
+  //    真實 payload：澳覓 `sendAmt`（屬 payAmt 公式）、
+  //                mfood `deliveryFee` 同 `merchantDisDeliveryAmtn`。
+  const excluded: Array<{ label: string; amount: number; excluded?: boolean }> = [];
+  const addExcluded = (label: string, amount: number) => {
+    if (Number.isFinite(amount) && amount !== 0) {
+      excluded.push({ label, amount, excluded: true });
+    }
+  };
+  addExcluded("配送費", pick("sendAmt", "deliveryFee", "basicDeliveryFee"));
+  addExcluded("商家配送費減免", -pick("merchantDeliveryAmount", "merchantDisDeliveryAmtn"));
+
+  return out.concat(excluded);
 }
 
 /** 菜品原價合計（items 加總）—— 用嚟同營業額對比，差額入 discountAmount。 */
@@ -417,9 +481,21 @@ export function projectGrabberOrder(input: ProjectInput): ProjectResult {
   const { total, fellBack } = grabberTurnover(order);
   if (fellBack) warnings.push("payload 冇營業額欄位（turnoverAmount / businessAmount），已退回 payAmount");
 
-  // 差額 = 菜品原價合計 − 營業額（包含平台補貼與商家活動）。
-  // 唔可以係負數（平台價有時會高過 POS 價）。
-  const discountAmount = Math.max(0, Math.round((subtotal - total) * 100) / 100);
+  // 非菜品費用（餐盒／膠袋／服務費）：逐項顯示，令收據同平台單一致。
+  const fees = platformFeeLines(order);
+  // 🔴 只計「計入營業額」嘅行；excluded 行（配送費）唔可以入加總。
+  const feeSum = fees.reduce((n, x) => (x.excluded ? n : n + x.amount), 0);
+
+  // 逐項列出費用（含負數嘅商家優惠）之後，理論上已經加得起來：
+  //   澳覓 172 + 5 + 1 + 0 − 21 = 157 ✓
+  //   mfood 118 + 3 + 1 + 0 − 0 − 4 − 0 = 118 ✓
+  // 所以呢度只係**殘差保險**（正常係 0）：萬一平台新增費用種類而我們未識別，
+  // 收據嗰邊仲有一行「外送費／餐盒費」兜底，加總永遠對得上。
+  const discountAmount = Math.max(
+    0,
+    Math.round((subtotal + feeSum - total) * 100) / 100,
+  );
+  // 殘差 > 0 代表「仲有未識別嘅費用」→ 由收據嗰行兜底
 
   const now = input.now ?? new Date();
   const at = String(
@@ -434,8 +510,19 @@ export function projectGrabberOrder(input: ProjectInput): ProjectResult {
     local_order_no: grabberLocalOrderNo(order),
     table_id: COUNTER_TABLE_ID,
     table_name: "外賣",
-    // 自動接單開 → 直接製作中；否則 draft（待確認），等員工按接受
-    status: input.autoAccept ? "sent_to_kitchen" : "draft",
+    // 🔴 平台單一律**線上已付款** → status 用 `paid`。
+    //
+    //    點解唔可以用 `draft` / `sent_to_kitchen`：
+    //    `pos-order-filters.getPaymentBadge()` 只認
+    //    `paid | settled | refunded | partially_refunded` 為「已結帳」，
+    //    其餘一律顯示「未結帳」→ 收銀員會以為仲要收錢，仲會出現「結帳」掣。
+    //    平台單嘅錢一早由平台收咗，POS 冇嘢可以再收。
+    //
+    //    出餐階段改用 `fulfillmentStatus`（preparing = 製作中），
+    //    呢個亦係 POS 既有設計（見 pos-order-filters 嘅註解：
+    //    「已結帳 + 製作中」＝正常流程）。
+    status: "paid",
+    fulfillment_status: input.autoAccept ? "preparing" : null,
     items,
     order_note: String(order.customer?.remark ?? "").trim() || null,
     subtotal,
@@ -451,6 +538,7 @@ export function projectGrabberOrder(input: ProjectInput): ProjectResult {
     updated_at: stamp,
     client_updated_at: stamp,
     external_order_id: externalOrderId,
+    platform_fees: fees,
     raw_json: order,
   };
 
