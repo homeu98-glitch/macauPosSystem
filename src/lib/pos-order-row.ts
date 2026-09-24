@@ -53,6 +53,15 @@ export type PosOrderDbRow = {
   reopened_at?: string | null;
   reopen_reason?: string | null;
   /**
+   * 最近一次結帳時間（0057 migration，2026-09-24）—— **裝置鐘、server 永不覆蓋**。
+   * 未跑 migration / 未結帳單 / 舊 client 寫入嘅單 → undefined。
+   *
+   * 🔴 為咩一定要 map 返出嚟：報表／交班嘅日歸屬（`orderEventInstant()`）以佢為準。
+   *    漏抄 = 雲端明明有值，client 照樣落返 `updated_at`（server 蓋章、重推會漂）
+   *    ⇒ 跨日漂移照舊（同 0043 `reopen_*`／0056 `platform_fees` 一模一樣嘅漏抄）。
+   */
+  settled_at?: string | null;
+  /**
    * 外賣平台（澳覓 / MFOOD）非菜品費用明細（0056 migration，2026-09-24）。
    * 未跑 migration 嘅環境會係 undefined；店內單永遠 NULL。
    *
@@ -118,6 +127,8 @@ export const POS_ORDER_DB_COLUMNS = [
   "reopen_count",
   "reopened_at",
   "reopen_reason",
+  // 不可變業務時間（0057 migration，2026-09-24）。報表／交班日歸屬嘅唯一可信真源。
+  "settled_at",
   // 外賣平台費用明細（0056 migration，2026-09-24）。收據同訂單詳情都靠佢。
   "platform_fees",
 ] as const;
@@ -180,6 +191,9 @@ export function mapOrderRow(order: PosOrderDbRow) {
     reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
     reopenedAt: order.reopened_at ?? undefined,
     reopenReason: order.reopen_reason ?? undefined,
+    // 不可變業務時間（0057 migration）：冇欄 / NULL → undefined（orderEventInstant 落返舊鏈）。
+    // 🔴 漏抄呢行 = 雲端有 settled_at 都讀唔返 ⇒ 跨日漂移保護即刻失效。
+    settledAt: order.settled_at ?? undefined,
     // 外賣平台非菜品費用明細（0056 migration）：冇欄 / NULL → undefined
     // （收據同詳情自動跳過，形同以前；店內單零影響）。
     // 🔴 漏抄呢行 = 平台單嘅費用明細永遠唔會出（2026-09-24 實案）。

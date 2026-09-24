@@ -74,6 +74,7 @@ function fullRow(): PosOrderDbRow {
     reopen_count: 1,
     reopened_at: "2026-09-20T05:00:00.000Z",
     reopen_reason: "客人改單",
+    settled_at: "2026-09-20T05:05:00.000Z",
     platform_fees: [
       { label: "餐盒費", amount: 4 },
       { label: "商家活動支出", amount: -9 },
@@ -201,5 +202,30 @@ describe("platform_fees（外賣平台費用明細）唔可以再漏抄", () => 
 
   it("空陣列 → 保留空陣列（代表「確實冇費用」，唔等於「冇呢個欄」）", () => {
     assert.deepEqual(mapOrderRow({ ...fullRow(), platform_fees: [] }).platformFees, []);
+  });
+});
+
+/**
+ * 🔴 回歸（2026-09-24 跨日漂移根治）：`settled_at`（0057）係報表／交班日歸屬嘅
+ * 唯一可信真源。漏抄 = 雲端明明有值，client 照樣落返 server 蓋章嘅 `updated_at`
+ * ⇒ 重推照漂 —— 同 `discount_note`／`reopen_*`／`platform_fees` 一模一樣嘅漏抄病。
+ */
+describe("settled_at（0057 不可變業務時間）唔可以再漏抄", () => {
+  it("清單一定要有 settled_at（否則 PostgREST 根本唔會 select 佢）", () => {
+    assert.ok(
+      (POS_ORDER_DB_COLUMNS as readonly string[]).includes("settled_at"),
+      "POS_ORDER_DB_COLUMNS 缺 settled_at —— 跨日漂移保護會靜默失效",
+    );
+  });
+
+  it("有值 → 一定 map 出 settledAt（orderEventInstant 嘅首選欄）", () => {
+    assert.equal(mapOrderRow(fullRow()).settledAt, "2026-09-20T05:05:00.000Z");
+  });
+
+  it("NULL / 未跑 migration（undefined）→ undefined（落返舊鏈，行為不變）", () => {
+    assert.equal(mapOrderRow({ ...fullRow(), settled_at: null }).settledAt, undefined);
+    const noCol = { ...fullRow() } as Record<string, unknown>;
+    delete noCol.settled_at;
+    assert.equal(mapOrderRow(noCol as PosOrderDbRow).settledAt, undefined);
   });
 });

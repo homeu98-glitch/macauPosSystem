@@ -724,7 +724,11 @@ export function ShiftPage() {
       // 【`originalSettledAt` 有冇白白浪費】冇 —— 佢仍然係「首次結帳」嘅審計真源，
       // 喺訂單詳情頁以「原結帳時間」獨立一行顯示（`pos-app.tsx:5252`），
       // 商家需要追首次入帳時點時仲睇得到。
-      settledAt: o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
+      //
+      // 【2026-09-24 · 0057】`o.settledAt`（最近一次結帳，裝置鐘、server 永不覆蓋）
+      // 排最前：佢先係「最後一次成為生意嗰刻」嘅精準值（重結嗰刻覆寫），
+      // 而且唔似 `updatedAt`（雲端係 server 蓋章）會被重推漂走；舊單冇 → 落返舊鏈。
+      settledAt: o.settledAt ?? o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
       // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
       // 同報表明細、訂單紀錄用同一套，確保三處完全一致。
       notes: buildOrderDetailNotes(o),

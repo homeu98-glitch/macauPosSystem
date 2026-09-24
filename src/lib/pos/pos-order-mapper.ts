@@ -81,6 +81,13 @@ export interface PosOrderRow {
   reopen_count?: number | null;
   reopened_at?: string | null;
   reopen_reason?: string | null;
+  /**
+   * 最近一次結帳時間（0057 migration，2026-09-24）—— **裝置鐘、server 永不覆蓋**。
+   * 未跑 migration / 未結帳單 → undefined。
+   * 🔴 Realtime echo 係本機單被雲端覆蓋嘅主要途徑：漏 map = 本機 `settledAt`
+   *    被 realtime 行（冇呢欄）整唔見 ⇒ 跨日漂移保護失效。
+   */
+  settled_at?: string | null;
 }
 
 export function mapPosOrderRow(row: PosOrderRow): PosOrder {
@@ -128,6 +135,8 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     reopenCount: row.reopen_count ? Number(row.reopen_count) : undefined,
     reopenedAt: row.reopened_at ?? undefined,
     reopenReason: row.reopen_reason ?? undefined,
+    // 不可變業務時間（0057）：冇欄 / NULL → undefined（orderEventInstant 落返舊鏈）。
+    settledAt: row.settled_at ?? undefined,
   };
 }
 

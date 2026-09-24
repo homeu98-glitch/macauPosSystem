@@ -972,6 +972,11 @@ async function upsertLedgerLocalOrder(
     prepaidAmount: paid ? (projection.total ?? 0) : 0,
     clientUpdatedAt: nowIso,
     updatedAt: stamp,
+    // 不可變業務時間（0057，2026-09-24 事故根治）：補建（forceSettled）時同 stamp 一致
+    // （＝ Ledger 事件時間）⇒ 補昨日單永遠歸昨日，之後呢張單俾人重推 N 次
+    // （server 重蓋 updated_at）都漂唔返去其他日。正常採納路徑唔寫 —— 張單仲未結帳，
+    // 由之後嘅 completeOnlinePaidOrder / confirmPayment 喺結帳嗰刻寫。
+    ...(options?.forceSettled ? { settledAt: stamp } : {}),
     // 改枱 / 重複採納要保留原本建立時間（單據／排序都靠佢）。
     ...(index >= 0 ? { createdAt: existing[index].createdAt } : {}),
   };

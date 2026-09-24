@@ -29,6 +29,42 @@ test("orderEventInstant：優先序 reopenedAt → originalSettledAt → updated
   );
 });
 
+test("orderEventInstant / orderEventISO：`settledAt` 排最前（0057，2026-09-24）", () => {
+  const withSettled = { ...T, settledAt: "2026-09-19T04:00:00.000Z" };
+  assert.equal(
+    orderEventInstant(withSettled),
+    Date.parse(withSettled.settledAt),
+    "有 settledAt → 用佢（連 reopenedAt 都讓路 —— 佢先係最近一次結帳嘅精準時間）",
+  );
+  assert.equal(orderEventISO(withSettled), withSettled.settledAt);
+  // 冇 settledAt → 行為同之前逐位元一樣（上面嗰條 test 已鎖死）
+  assert.equal(orderEventInstant(T), Date.parse(T.reopenedAt));
+});
+
+/**
+ * 🔴🔴 2026-09-24 「補完更錯」事故迴歸 —— 呢條鏈存在嘅理由。
+ *
+ * 取餐碼 002：09-23 結帳；09-24 被補建重推 ⇒ 雲端 `updated_at` 被 server 重蓋成 09-24
+ * ⇒ 舊鏈（冇雲端 settledAt）將佢漂到 09-24 ⇒ 09-23 報表少一張、09-24 多一張。
+ * 有咗 `settledAt`（裝置結帳嗰刻寫、server 永不覆蓋）之後：重推 N 次都歸返 09-23。
+ */
+test("迴歸：重推令 updatedAt 漂移，settledAt 鎖死日歸屬", () => {
+  const macau = (ts: number) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date(ts));
+  const drifted = {
+    settledAt: "2026-09-23T04:57:19.000Z", // 裝置寫嘅結帳時間（澳門 09-23 12:57）
+    updatedAt: "2026-09-24T13:24:40.000Z", // server 重推蓋章（澳門 09-24 21:24）
+    createdAt: "2026-09-23T03:25:15.000Z",
+  };
+  assert.equal(macau(orderEventInstant(drifted)), "2026-09-23", "有 settledAt：重推 N 次都歸返結帳嗰日");
+  const legacy = { updatedAt: drifted.updatedAt, createdAt: drifted.createdAt };
+  assert.equal(
+    macau(orderEventInstant(legacy)),
+    "2026-09-24",
+    "舊單冇 settledAt：落返 updatedAt（＝而家嘅行為，backfill 前唔會突然變）",
+  );
+});
+
 test("orderEventInstant：`originalSettledAt` 缺席時唔可以令 `updatedAt` 被跳過", () => {
   assert.equal(
     orderEventInstant({ updatedAt: T.updatedAt, createdAt: T.createdAt }),
@@ -50,7 +86,7 @@ test("orderEventInstant：空／非法／缺欄一律 0（唔會拋）", () => {
 test("orderEventInstant：只認字串，唔會將非字串欄位當有效", () => {
   // @ts-expect-error 刻意傳錯型別，確認 runtime 唔會炸
   assert.equal(orderEventInstant({ updatedAt: 12345 }), 0);
-  // @ts-expect-error 同上
+  // @ts-expect-error 同上：物件唔係時間字串
   assert.equal(orderEventInstant({ updatedAt: {} }), 0, "物件唔可以被當成時間字串");
   assert.equal(orderEventInstant({ updatedAt: null }), 0, "null 唔算有效時間");
 });

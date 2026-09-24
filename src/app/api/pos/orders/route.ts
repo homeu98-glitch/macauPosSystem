@@ -78,6 +78,9 @@ export async function GET(request: Request) {
         reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
         reopenedAt: order.reopened_at ?? undefined,
         reopenReason: order.reopen_reason ?? undefined,
+        // 不可變業務時間（0057 migration，2026-09-24）：報表／交班日歸屬以佢為準。
+        //    未跑 migration 嘅環境 → 欄位唔存在 → undefined → 落返舊鏈（唔會爆）。
+        settledAt: order.settled_at ?? undefined,
       })) ?? [],
   });
 }

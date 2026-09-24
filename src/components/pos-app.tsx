@@ -4331,6 +4331,9 @@ export function PosApp() {
       // ── 結帳審計：快餐標記完成（= 結帳）都記錄操作人 ──
       settledBy: authSession?.account ?? targetOrder.settledBy,
       settledByName: authSession?.name ?? targetOrder.settledByName,
+      // ── 不可變業務時間（0057）：快餐單嘅「收錢嗰刻」喺 confirmPayment 已寫入，
+      //    呢度係出餐完成、**唔可以覆寫**；舊單（冇值）先用而家兜底。──
+      settledAt: targetOrder.settledAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
@@ -4766,6 +4769,10 @@ export function PosApp() {
         memberDeductionAvos: deductAvos > 0 ? deductAvos : 0,
         // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
         originalSettledAt: targetOrder.originalSettledAt ?? now,
+        // ── 不可變業務時間（0057，2026-09-24 跨日漂移根治）：每次結帳都寫
+        //    （重結＝覆寫為重結時間＝「最後一次成為生意嗰刻」）。server 永不覆蓋 ⇒
+        //    之後重推／離線補傳／補建都改佢唔到，日歸屬以佢為準。──
+        settledAt: now,
         // ── 結帳審計：記錄收銀員（訂單明細「收銀員」欄位）──
         settledBy: authSession?.account ?? targetOrder.settledBy,
         settledByName: authSession?.name ?? targetOrder.settledByName,
@@ -4854,6 +4861,9 @@ export function PosApp() {
           reopenCount: updatedOrder.reopenCount ?? 0,
           reopenedAt: updatedOrder.reopenedAt ?? null,
           reopenReason: updatedOrder.reopenReason ?? null,
+          // 不可變業務時間（0057）：結帳嗰刻嘅裝置鐘。server 只接受字串值、永不自己落章
+          // （見 sync/route.ts ORDER_SETTLED 段），所以冇值嘅舊單都唔會被呢度抹走。
+          settledAt: updatedOrder.settledAt ?? null,
           order: {
             items: updatedOrder.items,
             subtotal: updatedOrder.subtotal,
@@ -5045,6 +5055,8 @@ export function PosApp() {
       memberDeductionAvos: 0,
       // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
       originalSettledAt: targetOrder.originalSettledAt ?? now,
+      // ── 不可變業務時間（0057）：免單都係一次結帳，照寫（重結＝覆寫為重結時間）──
+      settledAt: now,
       // ── 結帳審計：免單都記錄操作人 ──
       settledBy: authSession?.account ?? targetOrder.settledBy,
       settledByName: authSession?.name ?? targetOrder.settledByName,
@@ -5104,6 +5116,8 @@ export function PosApp() {
         reopenCount: updatedOrder.reopenCount ?? 0,
         reopenedAt: updatedOrder.reopenedAt ?? null,
         reopenReason: updatedOrder.reopenReason ?? null,
+        // 不可變業務時間（0057）：server 只接受字串值、永不自己落章（見 sync/route.ts）。
+        settledAt: updatedOrder.settledAt ?? null,
       },
       status: "pending",
       createdAt: now,
@@ -5198,6 +5212,8 @@ export function PosApp() {
       // ── 結帳審計：線上已支付都記錄操作人 ──
       settledBy: authSession?.account ?? targetOrder.settledBy,
       settledByName: authSession?.name ?? targetOrder.settledByName,
+      // ── 不可變業務時間（0057）：完成線上已支付單都係一次結帳，照寫（重結＝覆寫）──
+      settledAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
@@ -5225,6 +5241,8 @@ export function PosApp() {
         discountNote: updatedOrder.discountNote ?? null,
         // 入座人數上雲（docs/89 §3）：線上支付結帳都要補傳。
         partySize: updatedOrder.partySize ?? null,
+        // 不可變業務時間（0057）：server 只接受字串值、永不自己落章（見 sync/route.ts）。
+        settledAt: updatedOrder.settledAt ?? null,
       },
       status: "pending",
       createdAt: updatedOrder.updatedAt,
@@ -5975,14 +5993,20 @@ export function PosApp() {
                     返結帳
                   </button>
                 </div>
-                {workspaceOrder?.reopenedAt || workspaceOrder?.originalSettledAt || workspaceOrder?.updatedAt ? (
+                {workspaceOrder?.settledAt ||
+                workspaceOrder?.reopenedAt ||
+                workspaceOrder?.originalSettledAt ||
+                workspaceOrder?.updatedAt ? (
                   <div className="mt-1 text-[11px] text-slate-500">
-                    {/* 🔴 2026-09-18：口徑同交班明細 / 報表明細（均為
-                        `reopenedAt ?? originalSettledAt ?? updatedAt`）。
-                        返結過 → 顯示最近返結時間；否則首次結帳時間。 */}
+                    {/* 🔴 2026-09-24・0057：口徑同交班明細 / 報表明細（均為
+                        `settledAt ?? reopenedAt ?? originalSettledAt ?? updatedAt`）。
+                        有 settledAt（最近一次結帳，server 永不覆蓋）優先；舊單落返舊鏈。 */}
                     結帳時間：
                     {formatMacauDateTime(
-                      workspaceOrder.reopenedAt ?? workspaceOrder.originalSettledAt ?? workspaceOrder.updatedAt,
+                      workspaceOrder.settledAt ??
+                        workspaceOrder.reopenedAt ??
+                        workspaceOrder.originalSettledAt ??
+                        workspaceOrder.updatedAt,
                     )}
                   </div>
                 ) : null}

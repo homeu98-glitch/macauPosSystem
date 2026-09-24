@@ -70,6 +70,9 @@ export function markQuickOrderCompletedInStore(
     servedAt: target.servedAt ?? updatedAt,
     settledBy: session?.account ?? target.settledBy,
     settledByName: session?.name ?? target.settledByName,
+    // 不可變業務時間（0057）：「收錢嗰刻」喺 confirmPayment 已寫入，標記完成唔可以覆寫；
+    // 舊單（冇值）先用而家兜底。
+    settledAt: target.settledAt ?? updatedAt,
     updatedAt,
   };
   const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));

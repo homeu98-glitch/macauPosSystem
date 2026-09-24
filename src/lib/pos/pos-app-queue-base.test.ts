@@ -152,7 +152,14 @@ describe("state/route.ts：唔可以回「雲端冇單」嘅假象（2026-09-22�
     const end = src.indexOf("if (!supabase)", at);
     assert.notEqual(end, -1, "搵唔到 legacyThrottled 分支嘅結尾（下一個 `if (!supabase)`）");
     const branch = src.slice(at, end);
-    assert.match(branch, /const openRes = await supabase/, "節流骨架冇查未結帳單");
+    // 兩種形狀都接受：直查 `await supabase…`，或經 42703 降級包裝
+    // `await runOrderQueryWithColumnFallback((columns) => supabase…)`（2026-09-24・0057 起）。
+    // 重點係「有查未結帳單」同「唔可以回空」，唔係查詢寫喺邊一度。
+    assert.match(
+      branch,
+      /const openRes = await (runOrderQueryWithColumnFallback|supabase)/,
+      "節流骨架冇查未結帳單",
+    );
     assert.match(branch, /throttleOrders/, "節流骨架冇用查返嚟嘅未結帳單");
     assert.doesNotMatch(branch, /orders:\s*\[\]/, "唔可以回空 orders（會被舊 client 當成雲端冇單）");
   });

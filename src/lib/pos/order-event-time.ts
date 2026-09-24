@@ -18,10 +18,19 @@
  *
  * **`orderEventInstant(order)`** —— 一張單「屬於邊個時刻」：
  *
- *   1. `reopenedAt`（最近一次返結）——現行口徑，見 `settledAt`（`shift-page.tsx` /
+ *   1. `settledAt`（最近一次結帳，**裝置鐘、server 永不覆蓋**；0057，2026-09-24）
+ *      —— 唯一唔會被重推／離線補傳／補建改變嘅時間，日歸屬嘅可信真源
+ *   2. `reopenedAt`（最近一次返結）——現行口徑，見 `settledAt`（`shift-page.tsx` /
  *      `restaurant-daily-report.tsx` / `pos-app.tsx` 三處一致）
- *   2. `originalSettledAt`（首次結帳，永不改）
- *   3. `updatedAt`（最後更新，兜底）
+ *   3. `originalSettledAt`（首次結帳，永不改）
+ *   4. `updatedAt`（最後更新，兜底）
+ *
+ * 🔴 點解 `settledAt` 排最前（2026-09-24 「補完更錯」事故）：
+ *    雲端 `updated_at` 係 **server 蓋章**（收件時間）—— 任何重推舊單都會把佢推成
+ *    重推當刻 ⇒ 舊鏈（reopenedAt → originalSettledAt → updatedAt）喺雲端冇一個
+ *    唔會郁嘅錨（`originalSettledAt` 從未上雲）。`settledAt` 由裝置喺結帳嗰刻寫入、
+ *    server 只接受 client 值 ⇒ 重推 N 次日歸屬都唔漂。
+ *    舊單／舊 client 冇 `settledAt` → 自動落返 2–4，行為同之前**逐位元一樣**。
  *
  * 即係話：**「呢張單計落邊日」＝ 佢最後一次成為「生意」嗰刻**，唔係下單嗰刻。
  * 理由：對帳要對「今日收到幾多錢」，唔係「今日開咗幾多張單」。
@@ -46,7 +55,9 @@
  * 因為 Ledger 線上單同 POS 單都有呢幾欄但型別唔同）。
  */
 export type TimeStampableOrder = {
-  /** 最近一次返結時間（返結後覆寫）—— 最高優先。 */
+  /** 最近一次結帳時間（**裝置鐘、server 永不覆蓋**；0057）—— 最高優先。 */
+  settledAt?: string | null;
+  /** 最近一次返結時間（返結後覆寫）。 */
   reopenedAt?: string | null;
   /** 首次結帳時間；一經寫入**永不改**（審計用，唔可以當「最後結帳」）。 */
   originalSettledAt?: string | null;
@@ -59,7 +70,7 @@ export type TimeStampableOrder = {
 /**
  * 一張單「屬於邊個時刻」—— **全站計數／篩選嘅唯一時間口徑**。
  *
- * 優先序：`reopenedAt` → `originalSettledAt` → `updatedAt` → `createdAt`。
+ * 優先序：`settledAt` → `reopenedAt` → `originalSettledAt` → `updatedAt` → `createdAt`。
  *
  * ⚠️ `originalSettledAt` 係「首次結帳」且永不改，所以**唔可以**用嚟顯示「最後結帳時間」；
  * 但用嚟做「分日歸屬」係啱嘅 —— 佢嘅職責只係「呢張單有冇結過帳、幾時第一次結」。
@@ -68,7 +79,7 @@ export type TimeStampableOrder = {
  */
 export function orderEventInstant(order: TimeStampableOrder | null | undefined): number {
   if (!order) return 0;
-  for (const raw of [order.reopenedAt, order.originalSettledAt, order.updatedAt, order.createdAt]) {
+  for (const raw of [order.settledAt, order.reopenedAt, order.originalSettledAt, order.updatedAt, order.createdAt]) {
     const ts = parseInstant(raw);
     if (ts > 0) return ts;
   }
@@ -81,7 +92,7 @@ export function orderEventInstant(order: TimeStampableOrder | null | undefined):
  */
 export function orderEventISO(order: TimeStampableOrder | null | undefined): string {
   if (!order) return "";
-  for (const raw of [order.reopenedAt, order.originalSettledAt, order.updatedAt, order.createdAt]) {
+  for (const raw of [order.settledAt, order.reopenedAt, order.originalSettledAt, order.updatedAt, order.createdAt]) {
     if (parseInstant(raw) > 0) return raw as string;
   }
   return "";

@@ -143,7 +143,14 @@ function servingMinutes(o: PosOrder): { ms: number; estimated: boolean } | null 
   const served = o.servedAt ? Date.parse(o.servedAt) : null;
   if (sent && served) return { ms: Math.max(0, served - sent), estimated: false };
   const s = sent ?? Date.parse(o.createdAt);
-  const e = served ?? (o.originalSettledAt ? Date.parse(o.originalSettledAt) : Date.parse(o.updatedAt));
+  // 0057：結帳時間優先用 `settledAt`（裝置鐘、server 永不覆蓋），舊單落返 originalSettledAt／updatedAt。
+  const e =
+    served ??
+    (o.settledAt
+      ? Date.parse(o.settledAt)
+      : o.originalSettledAt
+        ? Date.parse(o.originalSettledAt)
+        : Date.parse(o.updatedAt));
   if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
   return { ms: Math.max(0, e - s), estimated: true };
 }
@@ -162,11 +169,14 @@ function quickStepsForOrder(o: PosOrder): {
   const created = Date.parse(o.createdAt);
   const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
   const served = o.servedAt ? Date.parse(o.servedAt) : null;
-  const settled = o.originalSettledAt
-    ? Date.parse(o.originalSettledAt)
-    : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
-      ? Date.parse(o.updatedAt)
-      : NaN;
+  // 0057：結帳時間優先用 `settledAt`（裝置鐘、server 永不覆蓋），舊單落返舊鏈。
+  const settled = o.settledAt
+    ? Date.parse(o.settledAt)
+    : o.originalSettledAt
+      ? Date.parse(o.originalSettledAt)
+      : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
+        ? Date.parse(o.updatedAt)
+        : NaN;
   return {
     orderToKitchen:
       sent && Number.isFinite(created) ? { ms: Math.max(0, sent - created), estimated: false } : null,
@@ -189,11 +199,14 @@ function dineInStepsForOrder(o: PosOrder): {
 } {
   const created = Date.parse(o.createdAt);
   const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
-  const settled = o.originalSettledAt
-    ? Date.parse(o.originalSettledAt)
-    : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
-      ? Date.parse(o.updatedAt)
-      : NaN;
+  // 0057：結帳時間優先用 `settledAt`（裝置鐘、server 永不覆蓋），舊單落返舊鏈。
+  const settled = o.settledAt
+    ? Date.parse(o.settledAt)
+    : o.originalSettledAt
+      ? Date.parse(o.originalSettledAt)
+      : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
+        ? Date.parse(o.updatedAt)
+        : NaN;
   return {
     orderToKitchen:
       sent && Number.isFinite(created) ? { ms: Math.max(0, sent - created), estimated: false } : null,
@@ -496,7 +509,8 @@ function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
     //   有返結過 → 顯示最近返結時間；否則首次結帳時間；否則退回 `updatedAt`。
     // 詳見 `shift-page.tsx` 該處註解（含「為何唔直接用 updatedAt」同
     // 「originalSettledAt 仍作首次結帳審計保留喺訂單詳情頁」）。
-    settledAt: o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
+    // 2026-09-24 · 0057：`o.settledAt`（最近一次結帳，server 永不覆蓋）排最前；舊單落返舊鏈。
+    settledAt: o.settledAt ?? o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
     // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
     // 同交班明細、訂單紀錄用同一套，確保三處完全一致。
     notes: buildOrderDetailNotes(o),

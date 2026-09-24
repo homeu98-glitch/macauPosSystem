@@ -1307,6 +1307,18 @@ export async function POST(request: Request) {
             }
           : {};
 
+        // ── 不可變業務時間（0057 migration，2026-09-24 跨日漂移根治）──
+        //
+        // 🔴 鐵律：server **永不**用自己嘅時鐘落章呢一欄 —— 只接受 client 帶上嚟嘅值
+        //    （裝置喺結帳嗰刻寫）。呢個正正係同 `updated_at`（server 蓋章）嘅分別：
+        //    重推／離線補傳／補建會改 `updated_at`，但改唔到 `settled_at` ⇒ 日歸屬唔漂。
+        //
+        // 🔴 同 member_* 一樣「有值才寫」：舊 client（未刷新 bundle）payload 冇呢個 key。
+        //    若無條件寫 NULL，會**無條件抹走**新 client 啱啱寫入嘅 settled_at
+        //    ⇒ 漂移防線即刻失效。undefined = 「呢個 client 唔識呢欄」→ 保留雲端已有值。
+        const settledAtRecord: Record<string, unknown> =
+          order.settledAt !== undefined ? { settled_at: isoOrNull(order.settledAt) } : {};
+
         const baseRecord: Record<string, unknown> = {
           id: orderId,
           local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
@@ -1366,6 +1378,7 @@ export async function POST(request: Request) {
           updated_at: new Date().toISOString(),
           client_updated_at: incomingUpdatedAt,
           ...memberRecord,
+          ...settledAtRecord,
         };
         const writeOrder = async (record: Record<string, unknown>) =>
           existing
@@ -1399,6 +1412,8 @@ export async function POST(request: Request) {
           delete legacyRecord.reopen_count;
           delete legacyRecord.reopened_at;
           delete legacyRecord.reopen_reason;
+          // 0057 不可變業務時間 —— 未跑 migration 時拔走（漂移保護暫時停用，主流程不受影響）。
+          delete legacyRecord.settled_at;
           ({ error: oErr } = await writeOrder(legacyRecord));
         }
         if (oErr) {
@@ -1500,6 +1515,15 @@ export async function POST(request: Request) {
         }
         if (settledField("taxAmount") !== undefined) patch.tax_amount = money(settledField("taxAmount"));
 
+        // ── 不可變業務時間（0057，2026-09-24 跨日漂移根治）──
+        // 結帳係 `settled_at` 嘅主寫入點（client 喺結帳嗰刻用裝置鐘寫入，跟 payload 上嚟）。
+        // 🔴 server 永不自己落章：只接受**字串**值（`null` / 缺 key 一律當「冇帶」→ 唔寫，
+        //    唔可以抹走雲端已有值 —— 舊 client 重推呢條事件時 payload 根本冇呢個 key）。
+        const settledAtInput = settledField("settledAt");
+        if (typeof settledAtInput === "string") {
+          patch.settled_at = isoOrNull(settledAtInput);
+        }
+
         // 免單備註（docs/91）：免單正正喺結帳嗰刻發生，所以 ORDER_SETTLED 呢度係主寫入點。
         // 同樣**唯有 payload 有帶先寫** —— 一般結帳（現金／微信／信用卡）唔帶呢兩個欄，
         // 若無條件寫 null 會抹走 ORDER_UPDATED 寫入嘅值（雖然正常唔會發生，但離線重推
@@ -1554,6 +1578,8 @@ export async function POST(request: Request) {
           delete legacyPatch.reopen_count;
           delete legacyPatch.reopened_at;
           delete legacyPatch.reopen_reason;
+          // 0057 不可變業務時間 —— 未跑 migration 時拔走（主流程不受影響）。
+          delete legacyPatch.settled_at;
           ({ data: settledRows, error: sErr } = await writeSettlePatch(legacyPatch));
         }
 
@@ -1583,6 +1609,9 @@ export async function POST(request: Request) {
               created_at: text(event.createdAt, 64) ?? new Date().toISOString(),
               updated_at: new Date().toISOString(),
               client_updated_at: isoOrNull(event.createdAt) ?? new Date().toISOString(),
+              // 0057：client 有帶 settledAt 先寫（server 永不自己落章）；冇帶 → NULL，
+              // 之後 ORDER_CREATED 推到時會用完整 snapshot 補（「有值才寫」唔會抹走）。
+              ...(typeof settledAtInput === "string" ? { settled_at: isoOrNull(settledAtInput) } : {}),
             },
             { onConflict: "id" },
           );

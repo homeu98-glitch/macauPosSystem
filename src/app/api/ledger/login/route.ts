@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+import { reportPosClientPresence } from "@/lib/ledger/client-presence";
 import { deriveLedgerAuthPassword } from "@/lib/ledger/pin.server";
 import { isValidMacauPhone, ledgerAuthEmail, normalizePhone } from "@/lib/ledger/phone";
+import { readServerBuildId } from "@/lib/build-info";
 import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
 import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 import { registerPosSession } from "@/lib/pos/session-registry-server";
@@ -199,6 +201,28 @@ export async function POST(request: Request) {
     buildId: sanitizeBuildId(request.headers.get(POS_BUILD_HEADER)),
     ip,
     userAgent: request.headers.get("user-agent"),
+  });
+
+  // ── 商戶端活躍上報（2026-09-24，Ledger 契約 §4.6）──────────────────────
+  //
+  // Ledger Admin `/admin`「商戶端活躍與接入」嘅 **POS 欄**，資料**只**嚟自客戶端主動回報
+  //（Ledger 唔 poll POS、亦唔讀 POS 自有 Supabase）。所以店員登入成功嗰一刻要報一次。
+  //
+  // 🔴 借用呢個登入請求 ＝ **零新增請求**（同上面 `registerPosSession()` 同一手法）：
+  //    server 端喺呢一刻已經有「Ledger 專案 + **店員 session**」嘅 client（上面 `setSession()`），
+  //    亦已經知道 `merchant_id` ⇒ 直接 `.rpc()`，唔使 client 再打一次，亦唔使處理 CORS。
+  // ⚠️ 一定要用店員 session：用顧客 JWT 打會被拒（契約 §4.6 禁止項）；
+  //    亦唔可以用 POS 自有 Supabase client（唔同專案，RPC 唔存在）。
+  // 🔴 失敗／超時一律**靜默放過**，絕對唔可以令店員登入唔到（同 `registerPosSession()` 同一鐵律）。
+  //    呢度**要 await**：Vercel serverless 回應之後會凍結，唔 await 嘅 promise 隨時永遠唔完成
+  //   （模組內部有 3 秒超時封頂，所以最壞情況只係拖慢登入少少，唔會拖死）。
+  // ⚠️ 版本字串用 `x-pos-build`（＝**呢個分頁實際跑緊邊份 JS**，登入頁本身已經帶上嚟），
+  //    讀唔到就退回伺服器建置號。兩者都係建置識別碼，唔含 PIN／電話（契約要求）。
+  await reportPosClientPresence({
+    client: supabase,
+    merchantId: staffRow.merchant_id,
+    appVersion: sanitizeBuildId(request.headers.get(POS_BUILD_HEADER)) ?? readServerBuildId(),
+    source: "login",
   });
 
   return NextResponse.json({

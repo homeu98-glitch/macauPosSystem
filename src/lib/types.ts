@@ -1297,6 +1297,17 @@ export interface PosOrder {
   reopenCount?: number;
   /** 首次結帳（settled）時間，重結後保留以便對帳 */
   originalSettledAt?: string;
+  /**
+   * 🔴 最近一次結帳時間（**寫入嗰部裝置嘅鐘**；0057 migration，2026-09-24）。
+   *
+   * 結帳嗰刻由 client 寫一次；返結後**重結**先再寫（覆寫為重結時間）。
+   * server（`/api/pos/sync`）**永不覆蓋、永唔用 server 時鐘落章** —— 所以
+   * 重推／離線補傳／補建都改佢唔到，係「日歸屬」嘅唯一可信真源
+   * （`updatedAt` 喺雲端係 server 收件時間，重推會漂；`originalSettledAt` 只係本機審計、從未上雲）。
+   *
+   * 未結帳單／舊 client 寫入嘅單 → undefined（`orderEventInstant()` 落返舊鏈，行為不變）。
+   */
+  settledAt?: string;
   // ── 結帳審計（訂單明細「收銀員」欄位用）──
   /** 結帳操作人帳號（confirmPayment / settleCompOrder / completeOnlinePaidOrder / markOrderCompleted 寫入；舊單冇 → 顯示「未記錄」） */
   settledBy?: string;

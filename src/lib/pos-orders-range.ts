@@ -17,10 +17,16 @@ type OrderFilterBuilder = ReturnType<ReturnType<SupabaseClient["from"]>["select"
  * 報表區間訂單查詢（兩腿合併，OR 語義）——2026-09-06 問題 6 根治。
  *
  * 【口徑】報表計數用 `orderMatchesReportRange`（src/lib/ledger/report-period.ts），
- *   而佢 2026-09-19 起改用 `orderEventInstant()`：
- *   `reopenedAt → originalSettledAt → updatedAt → createdAt` 取第一個有效值，
+ *   而佢經 `orderEventInstant()` 取第一個有效值（2026-09-24 起嘅鏈：
+ *   `settledAt → reopenedAt → originalSettledAt → updatedAt → createdAt`），
  *   落喺 Macau 區間 [start, end] 內就算。
  *   所以 SQL layer 必須回傳**超集**：任何一條腿命中就要回。
+ *
+ *   🔴 2026-09-24 加第四條腿 `settled_at`（0057，跨日漂移根治）：
+ *   `updated_at` 係 server 蓋章，重推舊單會把佢推成重推當刻 ⇒ 一張「昨日結帳、
+ *   今日被重推」嘅單，頭三腿喺**昨日**區間全部唔命中；client 口徑改用 `settledAt`
+ *   做首選之後，SQL 超集一定要包埋呢條腿，否則昨日報表靜默少單。
+ *   呢條腿係純 best-effort（migration 未跑嘅過渡期 42703 係常態 ⇒ 任何錯誤當冇命中）。
  *
  *   🔴 2026-09-19 加第三條腿 `reopened_at`：原本只有 created / updated 兩腿。
  *   返結（反結賬）會寫 `reopened_at`，但**唔一定**同時刷新 `updated_at`
@@ -37,13 +43,16 @@ type OrderFilterBuilder = ReturnType<ReturnType<SupabaseClient["from"]>["select"
  *   - 中間版本改過 `.filter()` chain（AND 語義）——**錯**：會漏「昨日開單、今日結帳」
  *     （created_at < start 但 updated_at ∈ 區間）嘅單，同 client 口徑矛盾。
  *
- * 【而家嘅做法】三條**完全無 logic 語法**嘅 plain indexed 查詢並行：
+ * 【而家嘅做法】四條**完全無 logic 語法**嘅 plain indexed 查詢並行：
  *   - created 腿：`created_at ∈ [start,end]`（涵蓋 NULL updated_at 嘅 legacy row）
  *   - updated 腿：`updated_at ∈ [start,end]`（涵蓋昨日開單今日結帳）
  *   - reopened 腿：`reopened_at ∈ [start,end]`（涵蓋昨日開單今日返結重結）
- *   Server 端按 `id` 去重合併 + `created_at` DESC 排序。三腿各自 `.range(offset, offset+limit-1)`
+ *   - settled 腿：`settled_at ∈ [start,end]`（涵蓋昨日結帳、今日被重推；0057）
+ *   Server 端按 `id` 去重合併 + `created_at` DESC 排序。四腿各自 `.range(offset, offset+limit-1)`
  *   分頁；合併結果係超集，client 用「回傳筆數 < PAGE 就停」嘅迴圈仍可收齊全部
- *   （每頁最多 3×limit，多拉一頁即可收完，終止條件不受影響）。
+ *   （每頁最多 4×limit，多拉一頁即可收完，終止條件不受影響）。
+ *   ⚠️ 呢條係 **RPC 唔可用時嘅降級路**；首選係單一 RPC `pos_orders_page`（0046/0057），
+ *   佢喺 SQL 內做四腿 OR ⇒ 每行只回一次（唔會有四倍流量）。
  *
  * 【時區】start / end 喺呼叫端先轉成 UTC ISO（`...Z`），徹底避開 `+08:00` offset
  *   喺 filter 值入面嘅解析歧義（UTC 轉換係 lossless：同一 instant）。
@@ -83,7 +92,7 @@ export type OrdersInRangeResult = {
 
 function applyRange(
   query: OrderFilterBuilder,
-  column: "created_at" | "updated_at" | "reopened_at",
+  column: "created_at" | "updated_at" | "reopened_at" | "settled_at",
   start?: string | null,
   end?: string | null,
 ) {
@@ -94,10 +103,11 @@ function applyRange(
 }
 
 /**
- * 三條腿嘅實際查詢（原邏輯，一行不改；只係 `select()` 改用傳入嘅投影）。
+ * 四條腿嘅實際查詢（原三腿邏輯，一行不改；只係 `select()` 改用傳入嘅投影，
+ * 外加 0057 嘅第四條 `settled_at` 腿）。
  * @returns 合併結果 ＋ 失敗分類（`null` = 成功；供外層決定要唔要降級重試）。
  */
-async function runThreeLegs(
+async function runTimeLegs(
   params: OrdersInRangeParams,
   columns: string,
 ): Promise<{ result: OrdersInRangeResult; failure: OrdersRangeFailure | null }> {
@@ -128,8 +138,19 @@ async function runThreeLegs(
   const reopenedQuery = applyRange(base(), "reopened_at", start, end)
     .order("reopened_at", { ascending: false })
     .range(offset, offset + limit - 1);
+  // 🔴 第四腿（0057 `settled_at`，跨日漂移根治）：client 口徑 2026-09-24 起以
+  //    `settledAt` 為日歸屬首選 —— 一張「昨日結帳、今日被重推（updated_at 漂到今日）」
+  //    嘅單，頭三腿喺**昨日**區間全部唔命中，要靠呢條腿補返，否則昨日報表靜默少單。
+  const settledQuery = applyRange(base(), "settled_at", start, end)
+    .order("settled_at", { ascending: false })
+    .range(offset, offset + limit - 1);
 
-  const [createdRes, updatedRes, reopenedRes] = await Promise.all([createdQuery, updatedQuery, reopenedQuery]);
+  const [createdRes, updatedRes, reopenedRes, settledRes] = await Promise.all([
+    createdQuery,
+    updatedQuery,
+    reopenedQuery,
+    settledQuery,
+  ]);
 
   // 頭兩條腿係必需：出錯就要向上報（由外層決定係降級定真失敗）。
   // ⚠️ 判別收歸 `classifyOrdersRangeFailure()`（純函式、有單測）—— 唔可以喺呢度
@@ -161,11 +182,20 @@ async function runThreeLegs(
     console.warn("[pos-orders-range] reopened_at 腿查詢失敗，已略過：", reopenedRes.error.message);
   }
 
+  // 🔴 settled 腿係**純 best-effort**：`settled_at` 係 0057 先加嘅欄，migration 人手跑 ⇒
+  //    「新 code 已上、DB 未跑」係預期嘅過渡狀態（可以維持幾日），呢段時間佢 42703 係常態。
+  //    ⇒ **任何錯誤都當冇命中**（冇 reopened 腿嗰種 42703 例外 —— 投影類錯誤會先喺
+  //    頭兩條必需腿爆，由外層降級 `select("*")`，唔使靠呢條腿探測）。
+  if (settledRes.error) {
+    console.warn("[pos-orders-range] settled_at 腿查詢失敗，已略過：", settledRes.error.message);
+  }
+
   // 按 id 去重合併 + 統一按 created_at DESC（純函式、有單測）。
   const orders = mergeOrderLegs([
     (createdRes.data ?? []) as PosOrderDbRow[],
     (updatedRes.data ?? []) as PosOrderDbRow[],
     (reopenedRes.data ?? []) as PosOrderDbRow[],
+    (settledRes.data ?? []) as PosOrderDbRow[],
   ]);
 
   return { result: { orders, error: null }, failure: null };
@@ -228,14 +258,14 @@ export async function fetchOrdersInRange(params: OrdersInRangeParams): Promise<O
   // ⚠️ `fatal`（超時之類）都一律行呢條路：寧願慢一次，都唔可以令報表變空。
   if (viaRpc.failure === "rpc-missing") {
     console.warn(
-      "[pos-orders-range] 搵唔到 pos_orders_page()（migration 0046 未跑）→ 降級用三條時間腿。" +
-        "跑咗 0046 之後會自動用返單一查詢（egress 省 2/3）。",
+      "[pos-orders-range] 搵唔到 pos_orders_page()（migration 0046 未跑）→ 降級用四條時間腿。" +
+        "跑咗 0046 之後會自動用返單一查詢（egress 省成截）。",
     );
   } else {
-    console.warn(`[pos-orders-range] RPC 失敗（${viaRpc.error}）→ 降級用三條時間腿。`);
+    console.warn(`[pos-orders-range] RPC 失敗（${viaRpc.error}）→ 降級用四條時間腿。`);
   }
 
-  const first = await runThreeLegs(params, columns);
+  const first = await runTimeLegs(params, columns);
   if (first.failure !== "projection-missing") return first.result;
 
   // ── ③ 再降級：投影帶咗一個 DB 未有嘅欄（migration 未跑 → 42703 / PGRST204）──
@@ -246,6 +276,6 @@ export async function fetchOrdersInRange(params: OrdersInRangeParams): Promise<O
     `[pos-orders-range] 欄位投影失敗（${first.result.error}），降級為 select("*") 重試。` +
       "（跑齊 migration 之後就會自動用返投影）",
   );
-  const fallback = await runThreeLegs(params, "*");
+  const fallback = await runTimeLegs(params, "*");
   return fallback.result;
 }

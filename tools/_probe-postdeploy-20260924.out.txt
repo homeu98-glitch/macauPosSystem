@@ -1,0 +1,10 @@
+=== 部署後（>=13:00 UTC / 21:00 HKT）新 print jobs ===  status 200
+count = 2
+  2026-09-24T13:16:19.856+00:00  normal     printed   once_key="order-e4205b7c|receipt:0|printer-22a790b1"  order=訂單27
+  2026-09-24T13:13:57.883+00:00  normal     printed   once_key="ledger-bf19ba82-c5c5-4ecb-9f5c-4fb0b2ddc06b|receipt:0|printer-22a790b1"  order=008
+
+=== once_key='receipt:0' 嘅行（24h 窗口內）===  status 200
+[]
+
+=== 部署後 once_key 格式統計 ===
+composed(含|)=2  raw(唔含|)=0

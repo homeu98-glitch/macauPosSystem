@@ -5,6 +5,7 @@ import { jsonWithEgressLog } from "@/lib/egress-log-server";
 import { readNotePresets, type NotePresetsReadResult } from "@/lib/note-presets-server";
 import { mapOrderRow, POS_ORDER_DB_COLUMNS } from "@/lib/pos-order-row";
 import { fetchOrdersInRange } from "@/lib/pos-orders-range";
+import { isMissingColumnError } from "@/lib/supabase-errors";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { normalizeDeviceConfig, normalizePosLocalSettings, normalizePrintTemplateSet } from "@/lib/storage";
 import {
@@ -46,6 +47,36 @@ function toUtcIso(iso: string): string {
  * 而核實結果完全等價（`sync-reconcile-daemon.ts` 只比對 `status`）。
  */
 const ORDER_FIELD_WHITELIST: ReadonlySet<string> = new Set<string>(POS_ORDER_DB_COLUMNS);
+
+/** 訂單查詢嘅寬鬆結果形狀（supabase thenable await 完嘅 {data,error} 子集）。 */
+type OrderQueryResult = {
+  data: unknown;
+  error: { code?: string | null; message?: string | null } | null;
+};
+
+/**
+ * 42703 降級（2026-09-24 · 0057 `settled_at` 起嘅標準寫法）。
+ *
+ * 投影清單（`POS_ORDER_DB_COLUMNS`）帶咗 DB 未有嘅欄（migration 未跑）時，
+ * PostgREST 回 42703。**唔可以將個錯漏出去**：
+ *   · `legacyThrottled` 路：error → 回空 `orders` ⇒ 舊 bundle 孤兒對賬會將
+ *     本機全部未結帳單移入隔離區（下面 `legacyThrottled` 段嘅災難級註釋）；
+ *   · incremental 路：error → `truncated` ⇒ client 每 30s 清水位重拉全量（流量爆升）。
+ *
+ * 所以 server 側即刻用 `select("*")` 重試一次：42703 錯誤回應得 ~100 B，
+ * 重試先係真正嘅數據。migration 跑咗之後呢段自然唔會再觸發（零成本）。
+ * （`fetchOrdersInRange()` 嘅三腿路徑本身已有同款三級降級，呢度係兩條裸查詢嘅保險。）
+ */
+async function runOrderQueryWithColumnFallback(
+  run: (columns: string) => PromiseLike<OrderQueryResult>,
+): Promise<OrderQueryResult> {
+  const first = await run(POS_ORDER_DB_COLUMNS.join(","));
+  if (first.error && isMissingColumnError(first.error)) {
+    console.warn('[pos/state] pos_orders 投影撞 42703（migration 未跑）→ 降級 select("*") 重試');
+    return run("*");
+  }
+  return first;
+}
 
 /**
  * 「未結帳」狀態集合（同 `pos-order-filters.ts` 嘅 open 口徑一致）。
@@ -389,13 +420,15 @@ export async function GET(request: Request) {
      *   · 終態單照樣唔回（舊 client 嘅孤兒邏輯本身唔理終態單）；
      *   · 節流目標（唔回 300 條 queue ＋ 200 張單 ≈ 500 KB）**完全保留**。
      */
-    const openRes = await supabase
-      .from("pos_orders")
-      .select(POS_ORDER_DB_COLUMNS.join(","))
-      .eq("store_id", storeId as string)
-      .in("status", [...OPEN_ORDER_STATUSES])
-      .order("created_at", { ascending: false })
-      .limit(100);
+    const openRes = await runOrderQueryWithColumnFallback((columns) =>
+      supabase
+        .from("pos_orders")
+        .select(columns)
+        .eq("store_id", storeId as string)
+        .in("status", [...OPEN_ORDER_STATUSES])
+        .order("created_at", { ascending: false })
+        .limit(100),
+    );
     const throttleOrders = (openRes.error ? [] : (openRes.data ?? [])) as unknown as Parameters<
       typeof mapOrderRow
     >[0][];
@@ -476,13 +509,15 @@ export async function GET(request: Request) {
   // 增量係「單調水位」——撈埋一齊會產生「唔知邊條條件贏」嘅隱性行為。
   const incrementalOrdersPromise =
     incremental && storeId
-      ? supabase
-          .from("pos_orders")
-          .select(POS_ORDER_DB_COLUMNS.join(","))
-          .eq("store_id", storeId)
-          .gt("updated_at", since as string)
-          .order("updated_at", { ascending: false })
-          .limit(limit)
+      ? runOrderQueryWithColumnFallback((columns) =>
+          supabase
+            .from("pos_orders")
+            .select(columns)
+            .eq("store_id", storeId)
+            .gt("updated_at", since as string)
+            .order("updated_at", { ascending: false })
+            .limit(limit),
+        )
       : null;
   const ordersInRangePromise = incrementalOrdersPromise
     ? null
