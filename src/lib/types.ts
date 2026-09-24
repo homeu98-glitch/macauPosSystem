@@ -986,6 +986,27 @@ export interface PosLocalSettings {
    *
    * 真源同 `autoPrint` 一樣：本機 `PosLocalSettings`（store scope），唔跨店。
    */
+  /**
+   * 「平台打印機」（2026-09-24 · 方案 A「分區式」）：外賣平台單（澳覓 / MFOOD）嘅廚房單
+   * 由**邊個打印分區**出紙。空字串 = 跟隨廚房分區（＝各品項原本嘅 `printerGroup`，
+   * 行為同堂食單一致）。
+   *
+   * 🔴 存嘅係 **`printZones[].id`（分區 id）而唔係單一台打印機 id** —— 呢個係刻意嘅：
+   * 派發模型係「一張 job → 一台機」（`resolveJobPrinter()` 單一真源、`dispatch.ts` 逐張派），
+   * 要「多台同時出紙」就要改路由核心。而現有 `item.printerGroup === printer.zoneId`
+   * 天生支援**一個分區 ↔ 多台機** ⇒「想幾台機出平台單 = 幾台機都綁去同一個分區」，
+   * 零改動派發核心。
+   *
+   * 🔴 為何放 `PosLocalSettings` 而唔係 `DeviceConfig`：device config 每次
+   * `/api/pos/state` 同步都會被 server 回應**整份覆蓋**（該回應只回
+   * `deviceId / terminalName / storeId / printers / updatedAt` 五個欄位）
+   * ⇒ 放喺 DeviceConfig 嘅欄位會靜默消失（`shiftPrinterId` 就係這樣受害者，見 docs/113 同類坑）。
+   * `PosLocalSettings` 經 `local_settings` jsonb 持久化，而且 merge 時可列做**本機優先**
+   * （同 `printContentToggles` 一樣屬 per-terminal 出單行為）。
+   *
+   * ⚠️ 一定要同時加落 `normalizePosLocalSettings()` 白名單（逐欄重建，漏咗會被剷走）。
+   */
+  platformPrinterZoneId: string;
   printContentToggles: PrintContentToggles;
   /**
    * 毛利（估）手動設定嘅「毛利率 %」。報表「毛利（估）」格子嘅 edit 掣輸入。
@@ -1056,6 +1077,19 @@ export type PrintContentKind =
    * 亦唔影響任何手動重打。
    */
   | "online"
+  /**
+   * **外賣平台單（澳覓 / MFOOD）專屬閘門**：平台單入機時出嘅廚房單。
+   *
+   * 2026-09-24 新增。同 `online` 一樣係**乘積**關係（要 `kitchen` 同 `platform`
+   * 同時為 true 先出紙），但**兩粒掣互不影響**：
+   *   · `online`   = 會員通（Ledger）線上單；
+   *   · `platform` = 外賣平台單（插件推入）。
+   * 日後想熄其中一邊都唔會連累另一邊。
+   *
+   * 用途：唔想平台單佔用廚房機（或者想平台單去專屬分區）嘅店鋪可獨立控制。
+   * 出紙去向係 `DeviceConfig.platformPrinterZoneId`（唔設 = 跟隨廚房分區）。
+   */
+  | "platform"
   /** 結帳收據（receipt 機）：收銀結帳、免單、線上單完成+已付、到店付款 */
   | "receipt"
   /** 退菜／退桌單：收銀退菜、退桌、線上單取消（廚房 + 標籤機） */
@@ -1072,6 +1106,11 @@ export interface PrintContentToggles {
   label: boolean;
   /** 線上訂單（Ledger／會員通）接單時出廚房單／標籤單（2026-09-11 新增，預設 true）。 */
   online: boolean;
+  /**
+   * 外賣平台單（澳覓 / MFOOD）入機時出廚房單（2026-09-24 新增，預設 true）。
+   * 乘積關係：要 `kitchen` 亦為 true 先出紙；去向見 `DeviceConfig.platformPrinterZoneId`。
+   */
+  platform: boolean;
   receipt: boolean;
   void: boolean;
   reopen: boolean;
@@ -1411,7 +1450,24 @@ export interface PrintJob {
     /** 折讓 = (base − discounted) × quantity；0 = 冇折讓唔顯示。 */
     savingAmount?: number;
   }>;
-  status: "pending" | "sent" | "failed" | "printed";
+  /**
+   * 派發 / 出紙狀態。
+   *
+   * 本機生命週期：`pending` →（`PrintFlushWorker` 派發）→ `sent` / `failed`；
+   * `printed` 係雲端（中繼 APK）確認**真正出紙**之後回填嘅終態。
+   *
+   * 🔴 2026-09-24 加 `"printing"`（**過渡態**：中繼機已認領、未回報）。
+   * 雲端 `pos_print_jobs.status` 由 `pos_claim_print_jobs()` 寫成 `'printing'`
+   *（migration 0020 / 0035 / 0042），會經 Realtime 同 `/api/pos/state` 落到本機。
+   * 以前型別冇呢個值 ⇒ `normalizePrintJobStatus()` 一律當「狀態欄位異常」標**失敗**
+   *（商家 2026-09-24 見到一排「空白單號 + kitchen + 狀態欄位異常」就係咁嚟，
+   *  當中冇一張真係印唔到）。詞彙表同一對照真源：`@/lib/pos/print-job-status`。
+   *
+   * ⚠️ 語義：`printing` **唔可以派發**（`dispatch.ts` 只揀 `pending`）、
+   * **唔算失敗**（唔應該出紅標）、亦**唔可以覆寫**本機已有嘅 `sent`
+   *（見 `pos-app.tsx` `onPrintJobUpsert` 嘅「只向上覆寫」規則）。
+   */
+  status: "pending" | "printing" | "sent" | "failed" | "printed";
   /**
    * 最近一次派發失敗嘅原因（嚟自 `dispatchOneJob()` 嘅 error）。
    *

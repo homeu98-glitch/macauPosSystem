@@ -1,0 +1,14 @@
+bundle keys: sb_publishable_WpIr6L4VRjOaKEP8RgFExQ_MQ…
+  eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ…
+
+[Ledger] sb_publishable_WpIr6L4VRjOaKEP… → orders status=401
+   {"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.orders TO anon;","message":"permission denied for table orders"}
+
+[Ledger] eyJhbGciOiJIUzI1NiIsInR5cCI6Ik… → orders status=401
+   {"message":"Invalid API key","hint":"Double check your Supabase `anon` or `service_role` API key."}
+
+[POS] sb_publishable_WpIr6L4VRjOaKEP… → orders status=401
+   {"message":"Invalid API key","hint":"Double check the provided API key for typos. This API key might also be owned by another Supabase project."}
+
+[POS] eyJhbGciOiJIUzI1NiIsInR5cCI6Ik… → orders status=404
+   {"code":"PGRST205","details":null,"hint":"Perhaps you meant the table 'public.pos_orders'","message":"Could not find the table 'public.orders' in the schema cache"}

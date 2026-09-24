@@ -1,4 +1,5 @@
 import { PosOrder, PrintJob, PrinterGroup } from "@/lib/types";
+import { cloudRowToPrintJobStatus } from "@/lib/pos/print-job-status";
 
 /** `pos_orders` 資料表 row（snake_case）→ `PosOrder` 領域物件。
  *  映射與 `/api/pos/state/route.ts` 保持一致，作為收銀側 Realtime 訂閱嘅單一映射真源。 */
@@ -163,7 +164,15 @@ export function mapPosPrintJobRow(row: PosPrintJobRow): PrintJob {
     printerGroup: (row.printer_group as PrinterGroup) ?? "kitchen",
     printerName: row.printer_name ?? row.printer_group ?? "kitchen",
     items: Array.isArray(row.items) ? row.items : [],
-    status: (row.status as PrintJob["status"]) ?? "pending",
+    /**
+     * 🔴 2026-09-24：一定要經白名單（`cloudRowToPrintJobStatus`），唔可以裸 cast。
+     *
+     * 雲端 claim RPC 會寫 `status = 'printing'`（過渡態）。舊寫法直接 `as PrintJob["status"]`
+     * ⇒ 型別上「睇落合法」但 runtime 係非法值 ⇒ 落到打印中心被
+     * `normalizePrintJobStatus()` 標成「失敗（狀態欄位異常）」，令一張其實正常嘅單出假紅標
+     *（商家 2026-09-24 實案）。未知值一律當 `pending`（＝仲要跟），唔可以當 `failed`。
+     */
+    status: cloudRowToPrintJobStatus(row.status),
     createdAt: row.created_at,
     printerId: row.printer_id ?? undefined,
     template: row.template ?? undefined,

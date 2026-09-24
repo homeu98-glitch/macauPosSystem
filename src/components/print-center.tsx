@@ -15,6 +15,11 @@ import { resolveStoreId, withStoreScope } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { buildKitchenPrintJobs, buildLabelPrintJobs, clearFailedPrintJobs, clearPrintedPrintJobs, clearSentPrintJobs, findPosOrderForLedger, normalizePrintJobStatus } from "@/lib/print-jobs";
 import {
+  PRINT_JOB_STATUS_LABELS,
+  PRINT_JOB_STATUS_TONES,
+  isPrintJobStatus,
+} from "@/lib/pos/print-job-status";
+import {
   getLocalSettingsKey,
   loadBootstrapCache,
   loadDeviceConfig,
@@ -1880,33 +1885,36 @@ export function PrintCenter() {
                             <td className={TD_CELL}>
                               {/* 狀態藥丸：顏色／文字沿用原本卡片，縮到表格尺寸 */}
                               {(() => {
+                                /**
+                                 * 標籤／顏色一律查詞彙表（`@/lib/pos/print-job-status`）。
+                                 *
+                                 * 🔴 2026-09-24：以前呢度係硬編 if-chain，**漏咗雲端 `printing`
+                                 * 過渡態**（中繼機已認領未回報）⇒ 落到 catch-all
+                                 *「失敗（狀態異常）」，將一排其實正常嘅單顯示成失敗
+                                 *（商家當日截圖：空白單號 + kitchen + 狀態欄位異常）。
+                                 * 未知值（localStorage 損壞）照樣行 catch-all，唔會靜默當成功。
+                                 */
                                 const s = job.status;
+                                const tone = isPrintJobStatus(s) ? PRINT_JOB_STATUS_TONES[s] : "red";
                                 const dot =
-                                  s === "printed"
+                                  tone === "sky"
                                     ? "bg-sky-500"
-                                    : s === "sent"
+                                    : tone === "emerald"
                                       ? "bg-emerald-500"
-                                      : s === "pending"
+                                      : tone === "amber"
                                         ? "bg-amber-500"
                                         : "bg-red-500";
                                 const cls =
-                                  s === "printed"
+                                  tone === "sky"
                                     ? "bg-sky-50 text-sky-700"
-                                    : s === "sent"
+                                    : tone === "emerald"
                                       ? "bg-emerald-50 text-emerald-700"
-                                      : s === "pending"
+                                      : tone === "amber"
                                         ? "bg-amber-50 text-amber-700"
                                         : "bg-red-50 text-red-700";
-                                const label =
-                                  s === "printed"
-                                    ? "打印成功"
-                                    : s === "sent"
-                                      ? "已發送"
-                                      : s === "pending"
-                                        ? "待補傳"
-                                        : s === "failed"
-                                          ? "失敗"
-                                          : "失敗（狀態異常）";
+                                const label = isPrintJobStatus(s)
+                                  ? PRINT_JOB_STATUS_LABELS[s]
+                                  : "失敗（狀態異常）";
                                 return (
                                   <span className="inline-flex flex-wrap items-center gap-1">
                                     <span
@@ -2084,13 +2092,9 @@ export function PrintCenter() {
                 <div className="text-sm font-semibold text-slate-900">{activeJob.printerName}</div>
                 <div className="mt-1 text-xs text-slate-500">
                   {activeJob.printerGroup} · {ticketTypeLabel(activeJob.ticketType)} ·{" "}
-                  {activeJob.status === "printed"
-                    ? "打印成功"
-                    : activeJob.status === "sent"
-                      ? "已發送"
-                      : activeJob.status === "pending"
-                        ? "待補傳"
-                        : "失敗"}
+                  {isPrintJobStatus(activeJob.status)
+                    ? PRINT_JOB_STATUS_LABELS[activeJob.status]
+                    : "失敗"}
                 </div>
               </div>
               <div className="text-right text-xs text-slate-500">{formatMacauDateTime(activeJob.createdAt)}</div>

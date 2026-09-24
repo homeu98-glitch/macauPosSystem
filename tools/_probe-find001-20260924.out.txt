@@ -1,0 +1,33 @@
+
+[依 id（ledger- 前綴）] status=200
+（冇呢張單）
+
+[依 online_order_id] status=200
+（冇呢張單）
+
+[依 local_order_no=001] status=200
+[
+  {
+    "id": "ledger-cf100f81-c565-4407-babd-041360d38c25",
+    "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+    "status": "settled",
+    "total": 48,
+    "local_order_no": "001",
+    "online_order_id": "cf100f81-c565-4407-babd-041360d38c25",
+    "created_at": "2026-09-23T02:47:06.284401+00:00",
+    "updated_at": "2026-09-23T03:14:19.869+00:00"
+  }
+]
+
+[local_order_no like *001*] status=200
+[
+ {
+  "id": "ledger-cf100f81-c565-4407-babd-041360d38c25",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "status": "settled",
+  "total": 48,
+  "local_order_no": "001",
+  "online_order_id": "cf100f81-c565-4407-babd-041360d38c25",
+  "created_at": "2026-09-23T02:47:06.284401+00:00"
+ }
+]

@@ -1,0 +1,12 @@
+09-24（澳門日界起）pos_orders 共 46 張
+
+store=8291f843-9def-4956-9d0b-1cfef2598306
+  total=32  可計(settled|paid)=30
+  source: {"pos":32}
+  status: {"settled":30,"sent_to_kitchen":2}
+store=d564b932-0c91-45e9-86fd-0ec8e2711f13
+  total=14  可計(settled|paid)=14
+  source: {"mfood":6,"aomi":7,"pos":1}
+  status: {"settled":13,"paid":1}
+
+=== 冇 store_id 或唔係主店嘅單 ===

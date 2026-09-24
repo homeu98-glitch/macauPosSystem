@@ -15,8 +15,17 @@ const TICKET_LABEL: Record<PrintJob["ticketType"], string> = {
   void: "作廢",
 };
 
+/**
+ * 狀態文案／顏色。
+ *
+ * ⚠️ Salon 打印任務係**本機限定**（`loadSalonPrintJobs()`，自己一個 localStorage key），
+ * 永遠唔會經雲端 → 實際上唔會出現 `printing`（雲端 claim RPC 嘅過渡態）。
+ * 但 `PrintJob["status"]` 係本專案共用詞彙表（`@/lib/pos/print-job-status`）⇒
+ * 型別要求填齊，缺一就會 compile error（2026-09-24 加 `printing` 時就係咁捉到）。
+ */
 const STATUS_LABEL: Record<PrintJob["status"], string> = {
   pending: "待列印",
+  printing: "列印中",
   sent: "已送出",
   failed: "失敗",
   printed: "已列印",
@@ -24,6 +33,7 @@ const STATUS_LABEL: Record<PrintJob["status"], string> = {
 
 const STATUS_COLORS: Record<PrintJob["status"], string> = {
   pending: "bg-amber-100 text-amber-700",
+  printing: "bg-amber-100 text-amber-700",
   sent: "bg-emerald-100 text-emerald-700",
   failed: "bg-rose-100 text-rose-700",
   printed: "bg-emerald-100 text-emerald-700",

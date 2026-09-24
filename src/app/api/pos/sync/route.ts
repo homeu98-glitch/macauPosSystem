@@ -23,6 +23,7 @@ import {
   flushQueueEventRows,
   type QueueEventsUpsertClient,
 } from "@/lib/pos/queue-event-batch";
+import { printOnceDbKey } from "@/lib/pos/print-dedupe";
 import type { OrderItem } from "@/lib/types";
 
 /**
@@ -1658,8 +1659,40 @@ export async function POST(request: Request) {
          * ⚠️ 長度超上限一律**唔用**呢個鍵（而唔係截斷）—— 截斷會令兩條唔同嘅鍵
          * 撞成同一條 → 誤攔真出紙（客人冇紙），比「唔去重」危險得多。
          */
-        const onceKeyRaw = typeof eventPayload.onceKey === "string" ? eventPayload.onceKey.trim() : "";
-        const onceKey = onceKeyRaw.length > 0 && onceKeyRaw.length <= MAX_ONCE_KEY_LEN ? onceKeyRaw : null;
+        const onceKeyRawText = typeof eventPayload.onceKey === "string" ? eventPayload.onceKey.trim() : "";
+        const onceKeyScope =
+          onceKeyRawText.length > 0 && onceKeyRawText.length <= MAX_ONCE_KEY_LEN ? onceKeyRawText : null;
+        /**
+         * 🔴🔴 2026-09-24 修：DB 存嘅键一定要**含訂單身分**。
+         *
+         * 舊寫法直接寫 client 嘅原始 `onceKey`，而**自動收據**嘅 onceKey 係
+         * `receipt:<reopenCount>`（`buildReceiptPrintJobs()`）⇒ 全店每一張單都係
+         * `receipt:0`。但唯一索引係 `(store_id, once_key)`（0045）⇒
+         * **全店只可能有一行 `receipt:0`**，第二張自動收據 insert 即 23505
+         * → 下面 `isUniqueViolationError` 分支當「已出過紙」→ 本地永遠停「已發送」、
+         * 雲端零行、冇紙冇紅標（商家 2026-09-24 實案，43 分鐘撞 3 次）。
+         * 廚房單只係靠內容簽名分開而僥倖少撞，兩張單菜品相同一樣會靜默漏單。
+         *
+         * ⇒ 由 **server 統一一砌** composed 鍵（`printOnceDbKey`）：
+         *   ① 舊 bundle 唔使更新都即刻受保護（呢條 route 係上雲唯一入口）；
+         *   ② 同 client 本機帳本 `printOnceKey()` 嘅格式一致 ⇒ 兩層去重同一把尺。
+         * ⚠️ 砌唔到（缺 orderId／過長）→ 一律 `null`（＝唔去重）。寧可重複出紙，
+         *    都唔可以幾張唔同嘅單共用一條鍵而靜默唔出紙。
+         */
+        const onceKey = onceKeyScope
+          ? printOnceDbKey({
+              orderId: text(eventPayload.orderId, MAX_ID_LEN),
+              onceKey: onceKeyScope,
+              printerId: text(eventPayload.printerId, MAX_ID_LEN),
+              printerName: text(eventPayload.printerName, MAX_NAME_LEN),
+            })
+          : null;
+        if (onceKeyScope && !onceKey) {
+          console.warn(
+            `[pos/sync] print job ${jobId} 有 onceKey 但砌唔到去重鍵（缺 orderId 或過長）→ 今次唔去重：` +
+              onceKeyScope.slice(0, 60),
+          );
+        }
 
         // 1) 先試 update（只更新內容，唔動 status）—— 命中即張 job 已存在，唔應該重置佢嘅打印狀態
         //    ⚠️ `once_key` **刻意唔入 update**：佢係「首次建立」嘅身分，重推唔應該改（亦避免
@@ -1703,7 +1736,19 @@ export async function POST(request: Request) {
             console.info(
               `[pos/sync] 內容唯一鍵重複 → 略過重複出紙（job=${jobId} once_key=${onceKey ?? "-"}）`,
             );
-            ack(true);
+            /**
+             * 🔴 2026-09-24：**唔可以當「成功」就算**。
+             *
+             * `ack(true)` 係必須嘅（`ack(false)` 會令 client 永遠重推同一條已出紙嘅事件），
+             * 但一定要補 `applied:false` + `reason`：否則 client 以為呢張紙已經上雲，
+             * 本地永遠停「已發送」而雲端根本冇呢一行 ⇒ **靜默冇紙、冇紅標、唔會自我修正**
+             *（商家 2026-09-24 實案）。
+             *
+             * 新 client：`applyEventResults` 見到 `ok && !applied` → 事件轉 `skipped` 終態
+             * ＋ 將對應 job 標紅（「雲端判定為重複、本機未出紙」）。
+             * 舊 client：同樣只係轉 `skipped`／`synced` 終態，唔會重推 —— 行為等價，零迴歸。
+             */
+            ack(true, undefined, { applied: false, reason: "print-dedupe-skip" });
             continue;
           }
           if (iErr) {

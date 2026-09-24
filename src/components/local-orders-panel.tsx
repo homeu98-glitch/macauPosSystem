@@ -36,7 +36,8 @@ import {
   updateQuickFulfillmentInStore,
 } from "@/lib/quick-order-fulfillment";
 import { isSelfOrder } from "@/lib/pos/order-source";
-import { confirmSelfOrder, isReopenable, cancelLocalOrder, rejectSelfOrder, reopenPosOrder } from "@/lib/pos-orders";
+import { confirmSelfOrder, isReopenable, cancelLocalOrder, rejectSelfOrder, reopenPosOrder, voidPlatformOrder } from "@/lib/pos-orders";
+import { canVoidPlatformOrder, isPlatformOrder } from "@/lib/pos/platform-order";
 import { describeNoReceiptPrinterError, reprintReceiptForOrder } from "@/lib/print-jobs";
 import {
   addDeletedOrderIds,
@@ -390,15 +391,23 @@ export function LocalOrdersPanel({
   const cancelTarget = cancelTargetOrderId ? orders.find((row) => row.id === cancelTargetOrderId) ?? null : null;
 
   /**
-   * 「取消結帳」可唔可以撳（2026-09-12 補回）。
+   * 「取消」可唔可以撳。
    *
-   * 只限**未收款**狀態（`draft` / `sent_to_kitchen`）—— 正正係「客人落單後幾秒內反悔」
-   * 嘅窗口。`paid` / `settled` 已經收咗錢，作廢要走返結／退款，唔可以當「取消」靜靜抹走
-   * （口徑同收銀台結帳彈窗一致：`status !== "paid"` 先顯示取消結帳）。
-   * `draft` 自助單唔出 —— 佢已經有「拒絕」掣，同一件事唔重複。
+   * 兩套語意，**唔可以撈埋**：
+   * 1. **本地單**（pos / kiosk / scan）＝「取消結帳」（2026-09-12 補回）。
+   *    只限**未收款**（`draft` / `sent_to_kitchen`）—— 正正係「客人落單後幾秒內反悔」
+   *    嘅窗口。`paid` / `settled` 已經收咗錢，作廢要走返結／退款，唔可以當「取消」靜靜抹走
+   *    （口徑同收銀台結帳彈窗一致）。`draft` 自助單唔出 —— 佢已有「拒絕」掣。
+   *
+   * 2. 🔴 **外賣平台單**（aomi / mfood）＝「作廢（覆寫）」（2026-09-24 使用者要求）。
+   *    **唔可以由狀態流程推導** —— 平台單嘅錢係平台收，我哋只記錄營業額；平台取消咗
+   *    （可能喺任何階段，甚至已完成之後）我哋就要跟住唔計入報表。
+   *    ⇒ `paid` / `settled` 都要出，只擋已作廢／已退款（後者會令報表淨額出錯）。
+   *    規則本體：`@/lib/pos/platform-order`（零 import、有單測）。
    */
   function canCancelSettle(order: PosOrder | null): boolean {
     if (!order) return false;
+    if (canVoidPlatformOrder(order)) return true;
     if (order.status !== "draft" && order.status !== "sent_to_kitchen") return false;
     if (order.status === "draft" && isSelfOrder(order)) return false;
     return true;
@@ -414,12 +423,23 @@ export function LocalOrdersPanel({
     if (!cancelTarget) return;
     setCancelSubmitting(true);
     try {
-      const result = cancelLocalOrder(cancelTarget.id, cancelReason.trim() || undefined);
+      /**
+       * 平台單走「作廢（覆寫）」（唔理狀態）；本地單走「取消結帳」（只限未收款）。
+       * 兩者嘅准入條件唔同，**唔可以**互換 —— 見 `canCancelSettle()` 註釋。
+       */
+      const reason = cancelReason.trim() || undefined;
+      const result = isPlatformOrder(cancelTarget)
+        ? voidPlatformOrder(cancelTarget.id, reason)
+        : cancelLocalOrder(cancelTarget.id, reason);
       if (!result.ok) {
         setToast(result.error ?? "取消失敗");
         return;
       }
-      setToast(`已取消 ${cancelTarget.localOrderNo}`);
+      setToast(
+        isPlatformOrder(cancelTarget)
+          ? `已取消（覆寫）${cancelTarget.localOrderNo}，已唔計入報表`
+          : `已取消 ${cancelTarget.localOrderNo}`,
+      );
       setCancelTargetOrderId(null);
       setCancelReason("");
       setViewingOrderId(null);
@@ -866,14 +886,21 @@ export function LocalOrdersPanel({
               {/* 快餐出餐：可取餐 → 完成（同列表一行嘅掣共用 QuickOrderActions，行為一定同步） */}
               <QuickOrderActions onChanged={handleQuickAction} order={viewingOrder} variant="modal" />
               {/* 「取消結帳」（2026-09-12 補回，同點餐頁「訂單詳情」彈窗一致）：
-                  客人落單後約 2 秒內仍可能反悔，必須保留逃生口，否則訂單會卡死冇得取消。 */}
+                  客人落單後約 2 秒內仍可能反悔，必須保留逃生口，否則訂單會卡死冇得取消。
+                  🔴 外賣平台單行「作廢（覆寫）」語意（任何階段都可以）→ 文字用「取消」，
+                  同本地單嘅「取消結帳」分辨開（見 `canCancelSettle()` 註釋）。 */}
               {canCancelSettle(viewingOrder) ? (
                 <button
                   className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
                   onClick={() => openCancelSettle(viewingOrder)}
+                  title={
+                    isPlatformOrder(viewingOrder)
+                      ? "平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表"
+                      : undefined
+                  }
                   type="button"
                 >
-                  取消結帳
+                  {isPlatformOrder(viewingOrder) ? "取消" : "取消結帳"}
                 </button>
               ) : null}
             </>
@@ -1093,10 +1120,18 @@ export function LocalOrdersPanel({
             setCancelTargetOrderId(null);
             setCancelReason("");
           }}
-          title="取消結帳"
+          title={cancelTarget && isPlatformOrder(cancelTarget) ? "取消平台單（覆寫）" : "取消結帳"}
           widthClassName="max-w-md"
         >
           <div className="grid gap-3">
+            {cancelTarget && isPlatformOrder(cancelTarget) ? (
+              /* 🔴 講清楚呢個係 override：唔跟狀態流程，而且會即刻影響報表。 */
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
+                平台單作廢（覆寫）：<b>任何階段都可以用</b>（含已結帳／已完成）。
+                執行後呢張單會變成「已取消」，<b>即刻唔計入營業額／報表</b>。
+                平台照樣收錢嘅話，請自行對帳。
+              </p>
+            ) : null}
             <p className="text-xs text-slate-500">
               訂單 <span className="font-semibold text-slate-900">{cancelTarget.localOrderNo}</span>
               （{cancelTarget.tableName}）會被標記為「已取消」，唔會計入營業額。

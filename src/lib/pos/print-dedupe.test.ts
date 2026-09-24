@@ -11,7 +11,9 @@ import {
   dedupeOnceJobs,
   mergeOnceKeys,
   printOnceContentSignature,
+  printOnceDbKey,
   printOnceKey,
+  printOnceScopeFromDbKey,
   seenKeysFromJobs,
 } from "./print-dedupe.ts";
 
@@ -176,4 +178,66 @@ test("廚房單：同一次事件（同 scope＋同內容）→ 同一鍵，只�
   // 返結後重結（世代 +1）→ 新鍵，唔會被攔。
   const nextGen: Job = { ...job, onceKey: `kitchen:normal:1:${sig}` };
   assert.equal(dedupeOnceJobs([nextGen], [printOnceKey(job)!]).kept.length, 1);
+});
+
+// ── 2026-09-24 DB 側鍵（`pos_print_jobs.once_key`）──────────────────────────
+// 病根：DB 唯一索引係 (store_id, once_key)，而舊寫法只寫**原始 onceKey**
+// ⇒ 自動收據 `receipt:0` 全店共用一條鍵 ⇒ 第二張起全部 23505 被靜默吞掉。
+
+test("🔴 DB 鍵必須含訂單身分：兩張唔同單嘅自動收據唔可以撞同一條鍵", () => {
+  const a = printOnceDbKey({ orderId: "order-aaa", onceKey: "receipt:0", printerId: "p-rec" });
+  const b = printOnceDbKey({ orderId: "order-bbb", onceKey: "receipt:0", printerId: "p-rec" });
+  assert.ok(a && b);
+  assert.notEqual(a, b); // 舊寫法兩者都係 "receipt:0" → 必撞
+  // 同一張單同一代 → 一定要一樣（呢個係去重成立嘅前提）
+  assert.equal(
+    a,
+    printOnceDbKey({ orderId: " order-aaa ", onceKey: " receipt:0 ", printerId: "p-rec" }),
+  );
+});
+
+test("DB 鍵：冇 printerId 時退回 printerName；兩者都冇仍然成鍵（尾巴留空）", () => {
+  assert.equal(
+    printOnceDbKey({ orderId: "o1", onceKey: "receipt:0", printerName: "小票機" }),
+    "o1|receipt:0|小票機",
+  );
+  assert.equal(printOnceDbKey({ orderId: "o1", onceKey: "receipt:0" }), "o1|receipt:0|");
+});
+
+test("🔴 DB 鍵：冇 orderId → null（寧可唔去重，都唔可以幾張單共用一條鍵）", () => {
+  assert.equal(printOnceDbKey({ onceKey: "receipt:0", printerId: "p1" }), null);
+  assert.equal(printOnceDbKey({ orderId: "o1", onceKey: "", printerId: "p1" }), null);
+  assert.equal(printOnceDbKey({ orderId: "o1", printerId: "p1" }), null);
+  assert.equal(printOnceDbKey({ orderId: null, onceKey: null }), null);
+});
+
+test("DB 鍵超長 → null（唔可以截斷：截斷會令兩條唔同嘅鍵撞埋）", () => {
+  const long = "x".repeat(600);
+  assert.equal(printOnceDbKey({ orderId: "o1", onceKey: long, printerId: "p1" }), null);
+  const okLen = "y".repeat(400);
+  assert.equal(typeof printOnceDbKey({ orderId: "o1", onceKey: okLen, printerId: "p1" }), "string");
+});
+
+test("DB 鍵 → 原始 onceKey 還原（state backfill 要用返原始值，否則 compose 兩次對唔上）", () => {
+  const composed = printOnceDbKey({ orderId: "order-aaa", onceKey: "kitchen:normal:0:abc", printerId: "p1" });
+  assert.ok(composed);
+  assert.equal(printOnceScopeFromDbKey(composed, "order-aaa", "p1"), "kitchen:normal:0:abc");
+  // state payload 冇 printer_id → 剪最後一段都一樣還原得到
+  assert.equal(printOnceScopeFromDbKey(composed, "order-aaa", null), "kitchen:normal:0:abc");
+  assert.equal(printOnceScopeFromDbKey(composed, "order-aaa", undefined), "kitchen:normal:0:abc");
+});
+
+test("還原：舊格式（raw）／空值／唔匹配訂單 → 原樣返回（行為同以前一樣）", () => {
+  assert.equal(printOnceScopeFromDbKey("receipt:0", "order-aaa", "p1"), "receipt:0");
+  assert.equal(printOnceScopeFromDbKey("kitchen:normal:0:abc", null, null), "kitchen:normal:0:abc");
+  assert.equal(printOnceScopeFromDbKey("", "o1", "p1"), undefined);
+  assert.equal(printOnceScopeFromDbKey(null, "o1", "p1"), undefined);
+  assert.equal(printOnceScopeFromDbKey(undefined, "o1", "p1"), undefined);
+});
+
+test("還原 → 再 compose = 原鍵（round-trip 唔會走樣）", () => {
+  const dbKey = printOnceDbKey({ orderId: "order-aaa", onceKey: "receipt:0", printerId: "p-rec" });
+  assert.ok(dbKey);
+  const scope = printOnceScopeFromDbKey(dbKey, "order-aaa", "p-rec");
+  assert.equal(printOnceDbKey({ orderId: "order-aaa", onceKey: scope, printerId: "p-rec" }), dbKey);
 });

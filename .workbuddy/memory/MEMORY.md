@@ -19,6 +19,7 @@
 
 ## 4 打印／中繼
 🔴🔴 入隊只准 `appendPrintJobsWithSync()`；`appendPrintJobs()` **只寫本機**（唯一用途 `printKioskReceiptForOrder()`）。`pushEvents()` base 一定要 `loadQueue()`。去重靠 `onceKey`（id 係 randomUUID ⇒ 按 id merge 攔唔到）。`paired:true`≠在線。爆紙用 `pos_void_stale_print_jobs()`。claim 60s（有 job）／180s 封頂（idle）。🔴 落結論前用生產 log／DB 核對。
+🔴🔴 2026-09-24：DB `once_key` 存嘅係 **client 原始 `PrintJob.onceKey`**（唔係 0045 檔頭寫嘅 `orderId|scope|printerId`），而唯一索引係 `(store_id, once_key)`。自動收據 onceKey ＝ `receipt:<reopenCount>` ⇒ **全店只得一行 `receipt:0`**，其餘自動收據 23505 被 sync route `ack(true)` 靜默吞掉（本地永遠「已發送」、冇紙、冇紅標）。廚房單靠內容簽名分開所以多數撞唔到，但菜品相同一樣會撞（漏單）。`once_key` 一日未補 orderId，呢個病就一日在。
 
 ## 5 訂單／交班
 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱）。`print-xxxxxxxx`＝PrintJob 漏入 orders，已由 `order-id-guard` 擋住。🔴 三軌互不相干：`pos_shifts`（擋收銀台）／`pos_store_status.is_open`（線下）／Ledger `merchant_enabled`（線上）。總掣 `close-gate.ts`＋`close-gate-run.ts`：先線下後線上／線下失敗唔 return／null＝skipped／永不 throw；須排喺 `closeShift()` early return **之前**。🔴 `pos_store_status` 冇 row＝營業中；`pos_shifts` 冇 open row＝未開工（**方向相反**）。

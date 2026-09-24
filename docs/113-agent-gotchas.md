@@ -518,6 +518,47 @@ orderEventISO(order)       // → 原始字串（顯示用），無法解析 = "
 - ⚠️ 帳本係**落本機鍵**（enqueue 一刻寫），所以「雲端寫入最終失敗」時帳本仍會話「出過紙」——
   同 `printedLedgerOrders` 同一口徑（人手重打唔受影響，因為手動冇鍵）。
 
+### 🔴🔴 2026-09-24 補：上面嘅修法**漏咗一半** —— DB 側鍵冇訂單身分（商家實案）
+
+**商家原話**：「廚房單出現大量重複打印」「收據結帳時打印未成功，狀態一直停留在『已發送』，
+無法轉為『打印成功』，持續卡住」「還有很多空的、沒有訂單號的打印」。
+
+**根因（上面 09-21 修法只做咗 client 側）**
+
+`printOnceKey()` 砌嘅 `orderId|onceKey|printerId` **只用喺本機 localStorage 帳本**；
+寫入 DB `pos_print_jobs.once_key` 嘅一直係**原始 `PrintJob.onceKey`**（`sync/route.ts`），
+而唯一索引係 `unique (store_id, once_key)` ⇒ 鍵**冇訂單身分**：
+
+| 後果 | 機制 |
+|---|---|
+| **收據永遠印唔出** | 自動收據 onceKey ＝ `receipt:<reopenCount>`（`buildReceiptPrintJobs`）⇒ **全店每張單都係 `receipt:0`** ⇒ 全店只可能有一行；第二張 insert 即 23505 ⇒ `sync` 當「已出過紙」`ack(true)` ⇒ client 剷事件 ⇒ 本地永遠「已發送」、雲端零行、**冇紙冇紅標唔會自我修正** |
+| **廚房單重複** | 一條路帶鍵、另一條（下面三個呼叫端）**完全冇 onceKey ⇒ NULL**，而 NULL 永不衝突 ⇒ 唯一索引攔唔到 ⇒ 兩張紙（實證：訂單 004／005 兩張 job **同一秒**各自 insert，全部 printed） |
+| **廚房靜默漏單（潛在）** | 兩張單菜品完全相同 ⇒ 內容簽名相同 ⇒ 一樣撞 23505 |
+
+**同時發現嘅「空白單號 / 狀態欄位異常」**：雲端 claim RPC 會寫 `status='printing'`（過渡態），
+而 `PrintJob["status"]` 舊聯集冇呢個值、mapper 只做型別 cast ⇒ `normalizePrintJobStatus()`
+一律標 **失敗＋「狀態欄位異常」**。商家睇到嗰排「空白單號 + kitchen + 失敗」**冇一張真係印唔到**
+（雲端同一行係 `printed`）。
+
+**✅ 修法（2026-09-24 已落）**
+| 層 | 檔案 | 改動 |
+|---|---|---|
+| DB 鍵 | `print-dedupe.ts` `printOnceDbKey()` / `printOnceScopeFromDbKey()` ＋ `sync/route.ts` | server 統一一砌 `orderId\|onceScope\|printerId`；砌唔到（缺 orderId）→ **NULL（寧可重複，唔可以誤攔真出紙）** |
+| 讀回 | `state/route.ts` | backfill 落本機之前**還原做原始 onceKey**（否則 compose 兩次對唔上 ⇒ 跨終端去重失效） |
+| 三個漏網呼叫端 | `pos-app.tsx`（**兩處**：開機 backfill ＋ realtime 首見自助單）、`pos-orders.ts confirmSelfOrder` | 補 `onceKey: kitchen:normal:${reopenCount}`（同 `ledger-pos-bridge` 同一條 scope） |
+| 狀態詞彙表 | **新** `src/lib/pos/print-job-status.ts`（零 import）＋ `.test.ts` | `pending\|printing\|sent\|failed\|printed` 單一真源＋白名單轉換；`types.ts`、兩個 mapper、`print-center.tsx`、`print-jobs.ts normalizePrintJobStatus()`、salon 全部共用 |
+| 唔再假成功 | `sync/route.ts` 23505 分支 ＋ `sync-flush.ts` | 23505 改 `ack(true, undefined, {applied:false, reason:"print-dedupe-skip"})`；client 收到就將該 job **標紅**（「雲端判定為重複、本機未出紙」）——唔再靜默 |
+| 診斷／止血 SQL | `tools/2026-09-24-print-once-key-collision.sql` | 逐段診斷（鍵分佈／結帳 vs 收據 job 張數／重複組／空白單號）＋ 把**舊格式鍵**（不含 `\|`）設 NULL |
+| 守衛 | `print-job-status.test.ts`（含 4 條原始碼守衛）、`print-dedupe.test.ts` | 鎖住：`types.ts` 有 `printing`、兩個 mapper 經白名單、sync 用 `printOnceDbKey`、三條呼叫端有 onceKey |
+
+**🔴 新增鐵律**
+- **DB `once_key` 一定要含 `orderId`**（`|` 分隔）。舊行（不含 `|`）同新鍵唔衝突，所以**唔需要 migration**、部署即生效。
+- **`once_key` 唔可以截斷**（超長 → 用 NULL）：截斷會令兩條唔同鍵撞埋 ⇒ 靜默唔出紙。
+- **雲端狀態一定要經白名單**（`print-job-status.ts`）：未知值 → `pending`，**唔可以**當 `failed`（假紅標會蓋住真失敗單）。
+- **server 對出紙事件嘅 `ack(true)` 唔等於「出咗紙」**：`applied:false` 係必要訊號，client 一定要有對應顯示。
+- ⚠️ 同一個 bug 家族第 **三** 次（09-11 建單唔推事件、09-21 冇去重鍵、09-24 鍵冇訂單身分）——
+  凡「多一條入隊路徑」或「多一份狀態／鍵詞彙」，**一定要有原始碼守衛測試**。
+
 ## 「線上訂單」打印開關（2026-09-11 新增 · `printContentToggles.online`）
 - 需求：Sunmi 系統本身會印線上訂單，部分店鋪唔想廚房再印一次。
 - 語義：**訂單來源**維度，同「廚房單／飲品標籤單」（內容維度）係**乘積** —— 線上單出廚房單要 `kitchen`（或 `label`）**同** `online` 都 true。

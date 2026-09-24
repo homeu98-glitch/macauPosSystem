@@ -42,7 +42,7 @@
 
 import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
 import { readNetworkOnline } from "@/lib/use-network-online";
-import { loadAuthSession, loadOrders, loadQueue, saveQueue, type SyncAckRow } from "@/lib/storage";
+import { loadAuthSession, loadOrders, loadPrintJobs, loadQueue, savePrintJobs, saveQueue, type SyncAckRow } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import { QueueEvent } from "@/lib/types";
 import { classifyQueueEvent, gcSyncQueue, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
@@ -479,13 +479,47 @@ function recordPushAcks(events: ExtendedQueueEvent[]): void {
  * 呢啲事件一律落 `skipped / server-newer` —— 重推同一條冇意義，
  * 補救由對賬守護用「本機終態完整快照」重新入隊一條新事件。
  */
+/**
+ * 🔴 2026-09-24（商家實案）：server 回報「呢條內容唯一鍵已經出過紙，所以今次冇寫入」時，
+ * **一定唔可以當成功就算**。
+ *
+ * 原因：`/api/pos/sync` 對 23505 一律 `ack(true)`（唔可以令 client 無限重推），
+ * 以前就係咁樣令本機永遠顯示「已發送」、雲端根本冇呢一行 ⇒
+ * **冇紙、冇紅標、亦唔會自我修正**（自動收據全店共用 `receipt:0` 一條鍵，日日發生）。
+ *
+ * 呢度將對應 job 標紅並寫低可行動嘅原因；**只喺未出紙嘅狀態下寫**
+ *（`printed` / 已 `failed` 一律唔覆蓋，後者保留更原始嘅原因）。
+ */
+function markPrintJobsDedupeSkipped(jobIds: string[]): void {
+  if (typeof window === "undefined" || jobIds.length === 0) return;
+  const ids = new Set(jobIds);
+  let changed = false;
+  const next = loadPrintJobs().map((job) => {
+    if (!ids.has(job.id)) return job;
+    if (job.status === "printed" || job.status === "failed") return job;
+    changed = true;
+    return {
+      ...job,
+      status: "failed" as const,
+      lastError:
+        "雲端判定為重複出紙（同一張單、同一件事、同一部機已經出過紙），今次冇寫入亦冇出紙。" +
+        "如需補印請用「補打帳單」或「重打整單」。",
+    };
+  });
+  if (!changed) return;
+  savePrintJobs(next);
+  window.dispatchEvent(
+    new CustomEvent("pos-print-jobs-changed", { detail: { printJobs: next } }),
+  );
+}
+
 function applyEventResults(params: {
   allQueue: ExtendedQueueEvent[];
   flippable: ExtendedQueueEvent[];
   perEvent: EventAckResult[] | null;
   failedAt: string;
   fallbackError: string;
-}): { next: ExtendedQueueEvent[]; acked: ExtendedQueueEvent[]; justFailed: number; superseded: number } {
+}): { next: ExtendedQueueEvent[]; acked: ExtendedQueueEvent[]; justFailed: number; superseded: number; dedupeSkipped: string[] } {
   const { allQueue, flippable, perEvent, failedAt, fallbackError } = params;
   const outboxV2 = isOutboxV2Enabled();
   const flippedIds = new Set(flippable.map((e) => e.id));
@@ -494,6 +528,8 @@ function applyEventResults(params: {
   const acked: ExtendedQueueEvent[] = [];
   let justFailed = 0;
   let superseded = 0;
+  /** 被雲端判定「已出過紙、冇寫入」嘅出紙 job id（要喺 UI 標紅，唔可以靜默）。 */
+  const dedupeSkipped: string[] = [];
 
   const next = allQueue.flatMap((event): ExtendedQueueEvent[] => {
     if (!flippedIds.has(event.id)) return [event];
@@ -510,12 +546,19 @@ function applyEventResults(params: {
 
     if (ok && !applied) {
       superseded += 1;
+      // 🔴 出紙任務被「內容唯一鍵」攔落 = 呢張紙冇出（見 markPrintJobsDedupeSkipped）。
+      if (r?.reason === "print-dedupe-skip" && event.type === "PRINT_JOB_CREATED") {
+        dedupeSkipped.push(event.entityId);
+      }
       return [
         {
           ...event,
           status: "skipped" as const,
           skipReason: "server-newer" as const,
-          lastError: `雲端已有較新版本（${r?.reason ?? "stale"}），改由對賬守護補推`,
+          lastError:
+            r?.reason === "print-dedupe-skip"
+              ? "雲端判定為重複出紙（同一件事已出過紙），今次冇寫入"
+              : `雲端已有較新版本（${r?.reason ?? "stale"}），改由對賬守護補推`,
         },
       ];
     }
@@ -535,7 +578,7 @@ function applyEventResults(params: {
     ];
   });
 
-  return { next, acked, justFailed, superseded };
+  return { next, acked, justFailed, superseded, dedupeSkipped };
 }
 
 /**
@@ -692,7 +735,7 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
     // G3（2026-09-21）：規則性拒收（店已關／未開工）→ 廣播畀 UI 自我修正 + 提示。
     notifyBlockedByGate(perEvent);
 
-    const { next, acked, justFailed, superseded } = applyEventResults({
+    const { next, acked, justFailed, superseded, dedupeSkipped } = applyEventResults({
       allQueue,
       flippable,
       perEvent,
@@ -701,6 +744,8 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
     });
     saveQueue(next);
     recordPushAcks(acked);
+    // 🔴 出紙任務被雲端當重複攔落 → 本機一定要標紅（否則永遠靜默「已發送」）。
+    markPrintJobsDedupeSkipped(dedupeSkipped);
 
     if (justFailed > 0) {
       window.dispatchEvent(
@@ -751,6 +796,8 @@ async function doFlush(options: { silent?: boolean }): Promise<void> {
   });
   saveQueue(appliedRes.next);
   recordPushAcks(appliedRes.acked);
+  // 🔴 同上：HTTP 200 之下都可能係「內容唯一鍵重複 → 冇寫入」（見 markPrintJobsDedupeSkipped）。
+  markPrintJobsDedupeSkipped(appliedRes.dedupeSkipped);
   if (appliedRes.superseded > 0) {
     console.warn(
       `[pos-sync-flush] ${appliedRes.superseded} 筆事件雲端已有較新版本（已交對賬守護補推）`,

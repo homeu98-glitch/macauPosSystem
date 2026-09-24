@@ -1,0 +1,32 @@
+pos_device_configs status = 401
+{"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.pos_device_configs TO anon;","message":"permission denied for table pos_device_configs"}
+
+=== once_key 非 NULL 嘅行（全部）===
+筆數 = 26
+重複鍵 = []
+  print-3a5c38d6 no=訂單22 normal/kitchen printer st=printed once=kitchen:normal:0:575gcb
+  print-1a487d00 no=訂單21 normal/kitchen printer st=printed once=kitchen:normal:0:3uoc1f
+  print-5ffccc76 no=訂單20 normal/kitchen printer st=printed once=kitchen:normal:0:a6v8fc
+  print-5299968d no=訂單19 normal/kitchen printer st=printed once=kitchen:normal:0:gi1cg4
+  print-d2b617a3 no=007 normal/kitchen printer st=printed once=kitchen:normal:0:xl295z
+  print-a1948640 no=訂單18 normal/kitchen printer st=printed once=kitchen:normal:0:g49oz0
+  print-fdc09237 no=訂單17 normal/kitchen printer st=printed once=kitchen:normal:0:um1dvj
+  print-6ef66484 no=訂單16 normal/kitchen printer st=printed once=kitchen:normal:0:m6b869
+  print-790afdfe no=訂單15 normal/kitchen printer st=printed once=kitchen:normal:0:ucti4o
+  print-40f79cb6 no=訂單14 normal/kitchen printer st=printed once=kitchen:normal:0:1lrejef
+  print-da6bc468 no=006 normal/kitchen printer st=printed once=kitchen:normal:0:1gnn003
+  print-5dcbb69d no=004 normal/kitchen printer st=printed once=kitchen:normal:0:1h7x2d8
+  print-f4fa398a no=005 normal/kitchen printer st=printed once=kitchen:normal:0:f5eas8
+  print-fe0157f5 no=004 normal/kitchen printer st=printed once=kitchen:normal:0:tvwt29
+  print-c7166b33 no=訂單10 normal/kitchen printer st=printed once=kitchen:normal:0:99hyh6
+  print-a337e5ba no=訂單09 normal/kitchen printer st=printed once=kitchen:normal:0:g7n324
+  print-df387a62 no=訂單08 normal/kitchen printer st=printed once=kitchen:normal:0:t207e7
+  print-be20d519 no=訂單07 normal/kitchen printer st=printed once=kitchen:normal:0:1ke7xyc
+  print-d4c7f444 no=訂單06 normal/kitchen printer st=printed once=kitchen:normal:0:1lb7k6m
+  print-ec3190ca no=訂單05 normal/kitchen printer st=printed once=kitchen:normal:0:108qo9m
+  print-77d0071f no=訂單04 normal/kitchen printer st=printed once=kitchen:normal:0:1n3jyya
+  print-7403cb4b no=003 normal/kitchen printer st=printed once=kitchen:normal:0:sy1pty
+  print-d4f2b345 no=002 normal/kitchen printer st=printed once=kitchen:normal:0:1ah9q6a
+  print-11e37b9e no=訂單02 normal/kitchen printer st=printed once=kitchen:normal:0:1fvtpr3
+  print-db206d3b no=001 normal/kitchen printer st=printed once=kitchen:normal:0:3sigr5
+  print-65c07354 no=訂單01 normal/kitchen printer st=printed once=kitchen:normal:0:uzi2az

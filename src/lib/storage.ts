@@ -19,6 +19,12 @@ import {
 import type { RetailProduct } from "@/lib/retail/types";
 import type { RetailHoldOrder } from "@/lib/retail/hold-orders";
 import { splitNonOrderRows } from "@/lib/pos/order-id-guard";
+/**
+ * 「平台打印機」分區設定嘅正規化（外賣平台單廚房單去邊個分區）。
+ * 零依賴純函式 → 收 `unknown`（值可能來自手改過嘅 localStorage、舊版 device config、
+ * 或者雲端回填），同一個實作畀 UI／print-jobs／storage 三邊共用。
+ */
+import { normalizePlatformPrinterZone } from "@/lib/pos/platform-kitchen-print";
 import {
   MAX_SELF_ORDER_NOTICES,
   type SelfOrderNotice,
@@ -545,6 +551,11 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     // 否則廚房會無啦啦收唔到單。
     autoPrint:
       typeof settings?.autoPrint === "boolean" ? settings.autoPrint : defaultPosLocalSettings.autoPrint,
+    // 「平台打印機」（2026-09-24）：外賣平台單（澳覓 / MFOOD）廚房單嘅派發分區。
+    // 空 = 跟隨廚房分區。⚠️ 同一款白名單陷阱（逐欄重建）：漏咗呢行 = 商家揀嘅分區
+    // 每次同步都被重設返「跟隨廚房」，而 UI 又會顯示返舊值 → 靜默走數。
+    platformPrinterZoneId: normalizePlatformPrinterZone(settings?.platformPrinterZoneId)
+      || defaultPosLocalSettings.platformPrinterZoneId,
     // 細粒度打印開關（2026-09-08 引入）。舊 localStorage 冇呢欄 → 全部預設 true，
     // 確保已上線嘅機升級後唔會一夜之間唔出單。逐 kind fallback 同舊 autoPrint 嘅
     // 「唔可以靜默關閉」原則一致。
@@ -554,6 +565,9 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
       // 線上訂單（2026-09-11 新增）：⚠️ 呢度係白名單重建，加咗欄但漏咗呢行 = 舊機升級後
       // 呢個掣嘅值會被靜默剷走（中過 qrUrl / paperSize / shiftPresets 同一款坑，見 docs/113）。
       online: readToggle(settings?.printContentToggles?.online, defaultPosLocalSettings.printContentToggles.online),
+      // 外賣平台單（2026-09-24 新增）：同一款白名單 —— 漏咗呢行 = 舊機升級後商家
+      // 熄咗嘅掣會被靜默重設返 true（或者反過來），同 qrUrl / paperSize 一樣嘅坑。
+      platform: readToggle(settings?.printContentToggles?.platform, defaultPosLocalSettings.printContentToggles.platform),
       receipt: readToggle(settings?.printContentToggles?.receipt, defaultPosLocalSettings.printContentToggles.receipt),
       void: readToggle(settings?.printContentToggles?.void, defaultPosLocalSettings.printContentToggles.void),
       reopen: readToggle(settings?.printContentToggles?.reopen, defaultPosLocalSettings.printContentToggles.reopen),

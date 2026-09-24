@@ -537,14 +537,20 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   autoAcceptSelfOrder: true,
   // 「自動打印」開關：預設開（落單出廚房單、結帳出收據）。見 PosLocalSettings.autoPrint。
   autoPrint: true,
+  // 「平台打印機」（2026-09-24）：外賣平台單（澳覓 / MFOOD）嘅廚房單去邊個打印分區。
+  // 空字串 = 跟隨廚房分區（＝行為同堂食單一致）。商家喺設備設置 → 打印機 → 平台打印機改。
+  platformPrinterZoneId: "",
   // 細粒度打印開關：每個類型預設全開。商家可喺設備設置 → 打印開關設置逐項關閉。
-  // 見 PosLocalSettings.printContentToggles。
+  // 見 PosLocalSettings.printContentToggles.
   printContentToggles: {
     kitchen: true,
     label: true,
     // 線上訂單接單時出廚房單／標籤單。預設 true：Sunmi 系統會自己印線上單，
     // 唔想廚房重複出紙嘅店鋪可去設備設置 → 打印開關設置熄佢。
     online: true,
+    // 外賣平台單（澳覓 / MFOOD）入機時出廚房單。預設 true：平台單一入嚟就自動出紙，
+    // 員工零額外操作。唔想出／想改用其他分區 → 去設備設置（打印開關設置 + 平台打印機）。
+    platform: true,
     receipt: true,
     void: true,
     reopen: true,

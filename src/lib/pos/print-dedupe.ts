@@ -58,6 +58,14 @@ export interface PrintOnceSubject {
 /** 帳本上限：600 條 ≈ 覆蓋一日以上嘅自動出紙，足夠「同一件事唔重複」嘅實際窗口。 */
 export const PRINT_ONCE_KEYS_MAX = 600;
 
+/**
+ * DB `pos_print_jobs.once_key` 嘅長度上限（composed 格式）。
+ *
+ * ⚠️ 比 client 原始 onceKey 嘅上限（server 側 `MAX_ONCE_KEY_LEN = 240`）大 ——
+ * composed 格式要裝齊 `orderId` ＋ `onceKey` ＋ `printerId`。
+ */
+export const PRINT_ONCE_DB_KEY_MAX_LEN = 512;
+
 function seg(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -76,6 +84,73 @@ export function printOnceKey(job: PrintOnceSubject | null | undefined): string |
   if (!orderId || !onceKey) return null;
   const printer = seg(job.printerId) || seg(job.printerName);
   return `${orderId}|${onceKey}|${printer}`;
+}
+
+/**
+ * 🔴 2026-09-24 **DB 側**用嘅內容唯一鍵 —— 由 `orderId` ＋ **原始 onceKey** ＋ `printerId` 砌。
+ *
+ * ## 為咩要分開兩個函式（血淚教訓）
+ *
+ * `pos_print_jobs_once_key_uniq` 係 `unique (store_id, once_key)`，而一直以來
+ * **寫入 DB 嘅係 client 原始 `PrintJob.onceKey`，唔係上面 `printOnceKey()` 嘅 composed 格式**
+ * （`/api/pos/sync` 直接收 payload.onceKey）⇒ 鍵完全冇訂單身分：
+ *
+ *   · 自動收據 onceKey ＝ `receipt:<reopenCount>`（`buildReceiptPrintJobs()`）
+ *     ⇒ **全店每一張單都係 `receipt:0`** ⇒ 只可能有一行入得去；
+ *   · 第二張自動收據 insert → 23505 → `/api/pos/sync` 當「已出過紙」→ ack 成功
+ *     → client 剷走事件 ⇒ 本地永遠停「已發送」、雲端零行、**冇紙冇紅標**（商家 2026-09-24 實案）。
+ *   · 廚房單靠內容簽名分開所以僥倖少撞，但兩張單菜品相同一樣會撞 ⇒ **廚房靜默漏單**。
+ *
+ * ⇒ 只有**兩邊（本機帳本 ＋ DB 索引）用同一種「含訂單身分」嘅鍵**，去重才真正成立。
+ * 呢個函式就係 DB 側嘅版本，由 server 統一砌（舊 bundle 唔使更新都即刻受保護）。
+ *
+ * @returns 冇 `orderId` 或冇 `onceKey` → `null`。**冇 orderId 時刻意唔寫鍵（＝唔去重）**：
+ *   寧可容許重複出紙，都唔可以幾張唔同嘅單共用同一條鍵而**靜默唔出紙**。
+ */
+export function printOnceDbKey(input: {
+  orderId?: string | null;
+  onceKey?: string | null;
+  printerId?: string | null;
+  printerName?: string | null;
+}): string | null {
+  const orderId = seg(input.orderId);
+  const onceKey = seg(input.onceKey);
+  if (!orderId || !onceKey) return null;
+  const printer = seg(input.printerId) || seg(input.printerName);
+  const key = `${orderId}|${onceKey}|${printer}`;
+  return key.length <= PRINT_ONCE_DB_KEY_MAX_LEN ? key : null;
+}
+
+/**
+ * `printOnceDbKey()` 嘅反函式：由 DB 讀返嘅 composed 鍵還原出**原始 onceKey**。
+ *
+ * 為咩要還原：`/api/pos/state` 會將雲端 job backfill 落本機，而本機嘅
+ * `seenKeysFromJobs()` 係用 `printOnceKey()`（自己再 compose 一次）去對帳 ——
+ * 若果傳返已經 compose 過嘅值，就會變成 compose 兩次 ⇒ **永遠對唔上**
+ * ⇒ 換機／重載之後跨終端去重失效。
+ *
+ * 容錯：唔匹配（舊格式 `receipt:0`、或根本係新 client 嘅 raw 值）→ **原樣返回**，
+ * 行為同以前完全一樣。
+ */
+export function printOnceScopeFromDbKey(
+  dbKey: string | null | undefined,
+  orderId?: string | null,
+  printer?: string | null,
+): string | undefined {
+  const raw = seg(dbKey);
+  if (!raw) return undefined;
+  const prefix = seg(orderId) ? `${seg(orderId)}|` : "";
+  if (!prefix || !raw.startsWith(prefix)) return raw;
+  const rest = raw.slice(prefix.length);
+  // printer 段已知 → 精準剪走；未知（例如 state payload 冇 printer_id）→ 剪最後一段。
+  const printerSeg = seg(printer);
+  if (printerSeg && rest.endsWith(`|${printerSeg}`)) {
+    const scope = rest.slice(0, rest.length - printerSeg.length - 1);
+    return scope || raw;
+  }
+  const lastPipe = rest.lastIndexOf("|");
+  if (lastPipe > 0) return rest.slice(0, lastPipe);
+  return rest || raw;
 }
 
 /**

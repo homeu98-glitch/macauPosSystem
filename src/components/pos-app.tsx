@@ -15,6 +15,11 @@ import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
 import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
+import {
+  PLATFORM_VOID_DEFAULT_REASON,
+  canVoidPlatformOrder,
+  isPlatformOrder,
+} from "@/lib/pos/platform-order";
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -70,6 +75,7 @@ import {
   buildKitchenPrintJobs,
   buildKioskReceiptPrintJobs,
   buildLabelPrintJobs,
+  buildPlatformKitchenPrintJobs,
   buildReceiptPrintJobs,
   buildVoidPrintJobsForOrder,
   describeNoReceiptPrinterError,
@@ -78,6 +84,11 @@ import {
   reprintReceiptForOrder,
 } from "@/lib/print-jobs";
 import { isSelfOrder } from "@/lib/pos/order-source";
+import {
+  decidePlatformKitchenBackfill,
+  normalizePlatformPrinterZone,
+  platformZonePrinterCount,
+} from "@/lib/pos/platform-kitchen-print";
 // 🔴 2026-09-22：自助單（掃碼／kiosk）嘅自動出紙一律用 `appendPrintJobsWithSync`。
 // `appendPrintJobs`（`@/lib/print-jobs`）語義已於 2026-09-11 改為「**只寫本機、唔上雲**」，
 // 用佢 = 打印中心綠色「已發送」但永遠唔出紙（零紅標、零症狀）。見
@@ -619,7 +630,13 @@ export function PosApp() {
   const [compNote, setCompNote] = useState("");
   const [orderActionRequest, setOrderActionRequest] = useState<
     | {
-        type: "cancel_order" | "refund_order";
+        /**
+         * `cancel_order`：本地單「取消結帳」（只限未收款）。
+         * `void_platform_order`：外賣平台單「作廢（覆寫）」—— 任何階段都可以，
+         *   包括已結帳／已完成（2026-09-24 使用者要求，規則見 `@/lib/pos/platform-order`）。
+         * `refund_order`：退款。
+         */
+        type: "cancel_order" | "void_platform_order" | "refund_order";
         orderId: string;
       }
     | null
@@ -1581,7 +1598,17 @@ export function PosApp() {
             const kioskOn = isPrintContentEnabled("kiosk");
             const jobs: PrintJob[] = [];
             if (kitchenOn) {
-              jobs.push(...buildKitchenPrintJobs(o, { ticketType: "normal", storeName }));
+              // 🔴 2026-09-24：補建嘅正常廚房單**一定要帶 onceKey**（見 pos-orders.ts 同源註釋）：
+              //    呢條路同線上單接單（`ledger-pos-bridge`）會為**同一張單**各出一張，
+              //    唔帶鍵就會繞過 DB 唯一索引 ⇒ 廚房重複出紙。
+              //    舊單（一次性 backfill）簽名一樣 ⇒ 就算真係重複被觸發亦只出一張。
+              jobs.push(
+                ...buildKitchenPrintJobs(o, {
+                  ticketType: "normal",
+                  storeName,
+                  onceKey: `kitchen:normal:${o.reopenCount ?? 0}`,
+                }),
+              );
             }
             if (labelOn) {
               jobs.push(...buildLabelPrintJobs(o, { ticketType: "normal", storeName }));
@@ -1592,6 +1619,40 @@ export function PosApp() {
             // 🔴 2026-09-22：backfill 補建嘅自助單廚房單／標籤單一定要**上雲**
             //    （原本 `appendPrintJobs` ＝只寫本機 ⇒ 補建完全冇紙）。
             appendPrintJobsWithSync(jobs);
+          }
+
+          /*
+           * 外賣平台單開機補印（2026-09-24 · 方案 A「分區式」）。
+           *
+           * POS 收機／斷線期間插件照樣推單 → 開機時本機未出過紙嘅平台單要補一張，
+           * 否則廚房永遠收唔到（＝靜默漏單）。呢條同上面自助單 backfill 同一道理。
+           *
+           * 🔴 一定要有時效（`decidePlatformKitchenBackfill`，預設 1 小時）：
+           *    冇就會一開機把**幾十張歷史單**一次過出紙（測試期已累積唔少），
+           *    洗版又浪費紙。舊單唔補 —— 要補就喺打印中心手動重打。
+           */
+          const platformBackfillNowMs = Date.now();
+          for (const o of cleaned) {
+            if (!isPlatformOrder(o)) continue;
+            if (
+              decidePlatformKitchenBackfill({
+                createdAt: o.createdAt,
+                nowMs: platformBackfillNowMs,
+              }) !== "print"
+            ) {
+              continue;
+            }
+            // 先篩走已經出過紙嘅（`ensurePlatformKitchenPrint()` 內部會再查一次，
+            // 呢度只係避免每張單都掃一次 job 帳本）。
+            const alreadyPrinted = loadPrintJobs().some(
+              (job) =>
+                job.orderId === o.id &&
+                job.ticketType === "normal" &&
+                job.printerGroup !== "receipt" &&
+                (job.items?.length ?? 0) > 0,
+            );
+            if (alreadyPrinted) continue;
+            ensurePlatformKitchenPrint(o);
           }
           return cleaned;
         });
@@ -1730,6 +1791,10 @@ export function PosApp() {
             ? (serverNote!.compNotePresets ?? local.compNotePresets)
             : local.compNotePresets,
           onlineOrderSettings: local.onlineOrderSettings,
+          // 2026-09-24：「平台打印機」（外賣平台單去邊個分區）同 `printContentToggles`
+          // 一樣係 per-terminal 出單行為（唔同終端有唔同打印機綁定）→ 一律保留本機，
+          // 唔畀 server 份（「全店最新一條 terminal」）蓋走。
+          platformPrinterZoneId: local.platformPrinterZoneId,
           // 2026-09-08：細粒度打印開關同 `printTemplates` / `onlineOrderSettings` 一樣，
           // 屬於 per-terminal 設定（呢部收銀機嘅出單行為），唔應該被 server 默認值蓋走。
           // 見 PosLocalSettings.printContentToggles JSDoc。
@@ -1936,6 +2001,57 @@ export function PosApp() {
     [selfOrderNotices, orders],
   );
 
+  /**
+   * 外賣平台單（澳覓 / MFOOD）廚房單：**realtime 新單** 同 **開機補印** 兩條路徑共用
+   * （2026-09-24 · 方案 A「分區式」）。
+   *
+   * 出紙去向＝`PosLocalSettings.platformPrinterZoneId`（設定頁「平台打印機」，
+   * 空 = 跟隨廚房分區），規則／空值語意喺 `@/lib/pos/platform-kitchen-print`（有單測）。
+   * ⚠️ 刻意唔存喺 `DeviceConfig`：嗰邊每次 `/api/pos/state` 同步都會被 server 回應整份覆蓋。
+   *
+   * 閘門＝**乘積**（同「線上訂單」一致）：`kitchen`（內容維度）**同** `platform`
+   * （來源維度）都要開。所以結帳區「自動打印」一鍵全關會令平台單一齊停 —— 符合
+   * 「唔想出任何紙」嘅直覺。
+   *
+   * ⚠️ 幂等：用「本機係咪已經有該單嘅 kitchen job」做守門（同自助單補建一樣嘅判準），
+   *    平台狀態更新（插件重推）唔會重複出紙。
+   */
+  function ensurePlatformKitchenPrint(order: PosOrder) {
+    if (!isPrintContentEnabled("kitchen") || !isPrintContentEnabled("platform")) return;
+    // 🔴 一律由 localStorage 即時讀（唔用 render 期嘅 state）：呢個函式喺 realtime
+    //    回呼同 loadRuntimeState 嘅 effect closure 入面跑，state 可能係舊 render 嘅值；
+    //    設定頁改完係即時寫 localStorage 嘅，所以即時讀先係最新。
+    const freshSettings = loadPosLocalSettings();
+    const deviceConfig = loadDeviceConfig() ?? defaultDeviceConfig;
+    const zone = normalizePlatformPrinterZone(freshSettings.platformPrinterZoneId);
+    // 🔴 揀咗一個冇啟用分區機嘅分區 = 平台單會**靜默零出紙**（本專案反覆中招嘅病）。
+    //    呢種情況一定要出聲，唔可以靜靜地當「商家自己決定唔印」。
+    if (zone && platformZonePrinterCount(zone, deviceConfig.printers) === 0) {
+      const zoneName = freshSettings.printZones.find((item) => item.id === zone)?.name ?? zone;
+      setToast({
+        tone: "error",
+        message: `平台單未出紙：打印分區「${zoneName}」冇啟用嘅分區打印機，請去「設置 → 打印機」綁一台。`,
+      });
+      return;
+    }
+    const hasKitchen = loadPrintJobs().some(
+      (job) =>
+        job.orderId === order.id &&
+        job.ticketType === "normal" &&
+        job.printerGroup !== "receipt" &&
+        (job.items?.length ?? 0) > 0,
+    );
+    if (hasKitchen) return;
+    const jobs = buildPlatformKitchenPrintJobs(order, {
+      ticketType: "normal",
+      storeName: bootstrap?.storeName ?? "門店",
+      // 自動路徑專用：同一張單同一件事同一代只出一張紙（內容簽名由 builder 附加）。
+      onceKey: `kitchen:normal:${order.reopenCount ?? 0}`,
+    });
+    if (jobs.length === 0) return;
+    appendPrintJobsWithSync(jobs);
+  }
+
   // Kiosk 客人自點：即時訂閱 pos_orders / pos_print_jobs（Realtime，禁 polling）。
   // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 只喺 mount / (re)subscribe 一次過 backfill（event-driven，非週期）。
   const kioskStoreId = useMemo(
@@ -2004,7 +2120,15 @@ export function PosApp() {
           const kioskOn = isPrintContentEnabled("kiosk");
           const jobs: PrintJob[] = [];
           if (kitchenOn) {
-            jobs.push(...buildKitchenPrintJobs(order, { ticketType: "normal", storeName }));
+            // 🔴 2026-09-24：見上面 backfill 嘅同源註釋 —— realtime 首次見到自助單
+            //    呢條路同線上單接單會為同一張單各出一張，必須帶同一條 onceKey 才攔得住。
+            jobs.push(
+              ...buildKitchenPrintJobs(order, {
+                ticketType: "normal",
+                storeName,
+                onceKey: `kitchen:normal:${order.reopenCount ?? 0}`,
+              }),
+            );
           }
           if (labelOn) {
             jobs.push(...buildLabelPrintJobs(order, { ticketType: "normal", storeName }));
@@ -2017,6 +2141,21 @@ export function PosApp() {
           //    一定要**上雲**（原本 `appendPrintJobs` ＝只寫本機 ⇒ 廚房永遠收唔到紙）。
           appendPrintJobsWithSync(jobs);
         }
+      }
+
+      /*
+       * 外賣平台單（澳覓 / MFOOD）新單 → 出廚房單（2026-09-24 · 方案 A「分區式」）。
+       *
+       * 守門用 `!existing`（本機未見過呢張單）—— 同自助單一致：插件重推同一張單
+       * （平台狀態變化會再推一次）／realtime 重送 → 第二次 `existing` 已經有 → 唔會再出紙。
+       * 再加 `ensurePlatformKitchenPrint()` 內部嘅「已有 kitchen job」守門做雙重保險
+       * （reload 之後 `existing` 靠 localStorage，job 帳本更可靠）。
+       *
+       * ⚠️ 平台單入庫即 `status = "paid"`（線上已付，見 `grabber-order.ts`），
+       *    **唔會**係 `sent_to_kitchen` ⇒ 唔可以照抄自助單嗰個 status 條件。
+       */
+      if (!existing && isPlatformOrder(order)) {
+        ensurePlatformKitchenPrint(order);
       }
 
       /**
@@ -4219,11 +4358,19 @@ export function PosApp() {
     const targetOrder = orders.find((order) => order.id === orderId);
     if (!targetOrder) return;
     const updatedAt = new Date().toISOString();
+    /**
+     * 外賣平台單（澳覓 / MFOOD）行「作廢（覆寫）」語意 —— 冇填原因時要有**可辨識**嘅
+     * 預設文字，唔可以同本地單嘅「未填寫原因」撈埋（事後審計／對數要靠佢分辨）。
+     * 見 `@/lib/pos/platform-order`。
+     */
+    const fallbackReason = isPlatformOrder(targetOrder)
+      ? PLATFORM_VOID_DEFAULT_REASON
+      : "未填寫原因";
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: "cancelled",
       cancelledAt: updatedAt,
-      cancelledReason: reason || "未填寫原因",
+      cancelledReason: reason || fallbackReason,
       updatedAt,
     };
     persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
@@ -6421,6 +6568,14 @@ export function PosApp() {
               return result;
             }}
             onViewOrder={(orderId) => setViewingOrderId(orderId)}
+            /**
+             * 外賣平台單「取消（覆寫）」：卡上按鈕 → 開同一個原因彈窗（`void_platform_order`）。
+             * 唔直接寫入 —— 一定要店主／員工填原因（審計 + 影響報表）。
+             */
+            onVoidPlatformOrder={(order) => {
+              setOrderActionRequest({ type: "void_platform_order", orderId: order.id });
+              setOrderActionReason("");
+            }}
             noticeFocus={noticeFocus}
             preparingOrders={quickPreparingOrders}
             waitingOrders={quickWaitingOrders}
@@ -6739,6 +6894,29 @@ export function PosApp() {
                 const isBothDone = isPaid && isReady;
                 const completeText = quickCompleteLabel(v);
 
+                /**
+                 * 🔴 外賣平台單（澳覓 / MFOOD）「取消（覆寫）」（2026-09-24 使用者要求）。
+                 *
+                 * **刻意唔跟狀態流程**：平台單嘅錢係平台收，我哋只係記錄營業額；
+                 * 平台嗰邊取消咗（可能喺任何階段，甚至已完成之後）我哋就要跟住唔計入報表。
+                 * 所以 `paid` / `settled` 都要出呢粒掣，唔可以因為「已收款」而收埋。
+                 * 只有已作廢／已退款先隱藏（後者要用退款流程，否則報表淨額會出錯）。
+                 * 規則本體：`@/lib/pos/platform-order`（零 import、有單測）。
+                 */
+                const platformVoidBtn = canVoidPlatformOrder(v) ? (
+                  <button
+                    className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                    onClick={() => {
+                      setOrderActionRequest({ type: "void_platform_order", orderId: v.id });
+                      setOrderActionReason("");
+                    }}
+                    title="平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表"
+                    type="button"
+                  >
+                    取消
+                  </button>
+                ) : null;
+
                 // draft 自助單：外面 strip 出「接受 / 拒絕」，彈窗要 mirror（2026-09-11 補）。
                 // ⚠️ 舊版呢個 case 三個掣都被 `v.status !== "draft"` 擋走 → 撳「查看」之後
                 // 彈窗完全冇接單入口，收銀只可以關窗再返出去撳卡。而家同外面完全一致：
@@ -6837,7 +7015,9 @@ export function PosApp() {
                   // 而消失 —— 客人落單後約 2 秒內仍可能反悔，冇咗呢粒掣張單就卡死冇得取消。
                   // 只喺未收款（`sent_to_kitchen` / `draft`）出現：`paid` 已經收咗錢，
                   // 作廢要走返結／退款，唔應該用「取消結帳」靜靜抹走。
-                  const cancelButton = isPaid ? null : (
+                  const cancelButton = canVoidPlatformOrder(v) ? (
+                    platformVoidBtn
+                  ) : isPaid ? null : (
                     <button
                       className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
                       onClick={() => {
@@ -6910,6 +7090,10 @@ export function PosApp() {
                         去結帳
                       </button>
                     ) : null}
+                    {/* 🔴 已結帳／已完成嘅外賣平台單要靠呢度先有掣（`isQuick` 分支只處理
+                        open 狀態）—— 平台單任何階段都要可以作廢（覆寫）。
+                        非平台單一律 null，本地單口徑完全不變。 */}
+                    {platformVoidBtn}
                   </>
                 );
               })()}
@@ -7574,20 +7758,44 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                {orderActionRequest.type === "refund_order" ? "確認退款" : "確認取消"}
+                {orderActionRequest.type === "refund_order"
+                  ? "確認退款"
+                  : orderActionRequest.type === "void_platform_order"
+                    ? "確認取消（覆寫）"
+                    : "確認取消"}
               </button>
             </>
           }
           description={orders.find((order) => order.id === orderActionRequest.orderId)?.localOrderNo ?? "--"}
-          title={orderActionRequest.type === "refund_order" ? "退款原因" : "取消結帳原因"}
+          title={
+            orderActionRequest.type === "refund_order"
+              ? "退款原因"
+              : orderActionRequest.type === "void_platform_order"
+                ? "取消平台單（覆寫）"
+                : "取消結帳原因"
+          }
           widthClassName="max-w-md"
           zIndexClassName="z-[60]"
         >
+              {orderActionRequest.type === "void_platform_order" ? (
+                /* 🔴 講清楚呢個係 override：唔跟狀態流程，而且會即刻影響報表。 */
+                <p className="mb-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
+                  平台單作廢（覆寫）：<b>任何階段都可以用</b>（含已結帳／已完成）。
+                  執行後呢張單會變成「已取消」，<b>即刻唔計入營業額／報表</b>。
+                  平台照樣收錢嘅話，請自行對帳。
+                </p>
+              ) : null}
               <input
                 autoFocus
                 className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
                 onChange={(event) => setOrderActionReason(event.target.value)}
-                placeholder={orderActionRequest.type === "refund_order" ? "例如：客人退款 / 支付失敗" : "例如：客人不要了 / 重開一單"}
+                placeholder={
+                  orderActionRequest.type === "refund_order"
+                    ? "例如：客人退款 / 支付失敗"
+                    : orderActionRequest.type === "void_platform_order"
+                      ? "例如：客人已取消 / 平台已退款（唔填＝平台單作廢（覆寫））"
+                      : "例如：客人不要了 / 重開一單"
+                }
                 value={orderActionReason}
               />
         </ResponsiveModal>

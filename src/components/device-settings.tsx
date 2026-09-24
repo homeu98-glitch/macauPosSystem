@@ -51,6 +51,10 @@ import {
 } from "@/lib/print-bridge/companion";
 import { sendTestPrint } from "@/lib/print-bridge/printer-test-print";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
+import {
+  normalizePlatformPrinterZone,
+  platformZonePrinterCount,
+} from "@/lib/pos/platform-kitchen-print";
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -559,6 +563,43 @@ export function DeviceSettings() {
       shiftPrinterId: printerId || undefined,
     }));
     setStatus(printerId ? "交班單打印機已更改，請按「保存」生效。" : "交班單打印機已還原為跟隨收據打印機，請按「保存」生效。");
+  }
+
+  // ── 平台打印機指定（2026-09-24 · 方案 A「分區式」）──
+  // ⚠️ 存喺 `PosLocalSettings.platformPrinterZoneId`（**唔係** DeviceConfig）：
+  //    device config 每次 `/api/pos/state` 同步都會被 server 回應整份覆蓋
+  //    （嗰個回應只回 deviceId / terminalName / storeId / printers / updatedAt）
+  //    ⇒ 放喺嗰度嘅設定會靜默消失。PosLocalSettings 走 `local_settings` jsonb，
+  //    而且喺 pos-app 嘅 merge 入面列咗做**本機優先**（同 printContentToggles 一樣）。
+  //
+  // 即時寫入（唔等頁面「保存」掣）—— 同「打印開關設置」一致：呢啲係**出單行為**，
+  // 撳完就應該即刻生效，唔應該因為未撳保存而靜默沿用舊分區。
+  //
+  // ⚠️ 揀嘅係**打印分區 id**（唔係單一台打印機 id）：平台單一律歸同一個分區，
+  //    想出多台機 = 多台機綁去同一個分區 → 完全唔使改派發核心。
+  function updatePlatformZoneSetting(zoneId: string) {
+    const updated = { ...localSettings, platformPrinterZoneId: zoneId };
+    setLocalSettings(updated);
+    savePosLocalSettings(updated);
+    setStatus(zoneId ? "平台打印機已更新。" : "平台打印機已還原為跟隨廚房分區。");
+  }
+
+  /**
+   * 平台打印分區「揀咗但冇啟用分區機」嘅警示文字（冇問題 → `null`）。
+   *
+   * 為什麼要喺設定頁就出聲：揀咗一個冇機嘅分區 ⇒ 平台單**靜默零出紙**
+   * （零 job、零錯誤、收銀唔會知）。呢個係本專案反覆中招嘅病，寧願喺呢度即時見到。
+   */
+  function platformZoneWarningText(): string | null {
+    const zone = normalizePlatformPrinterZone(localSettings.platformPrinterZoneId);
+    if (!zone) return null;
+    if (platformZonePrinterCount(zone, config.printers) > 0) return null;
+    return printZoneNameOf(zone);
+  }
+
+  /** 分區 id → 顯示名（對唔到 → 原 id，方便一眼睇到係「殘留舊分區」）。 */
+  function printZoneNameOf(zoneId: string): string {
+    return localSettings.printZones.find((item) => item.id === zoneId)?.name ?? zoneId;
   }
 
   // ── saveAll：合併保存（本機 + 同步後台）──
@@ -1224,6 +1265,13 @@ export function DeviceSettings() {
                                 zoneId === zone.id ? fallbackZoneId : zoneId,
                               ]),
                             ),
+                            // 🔴 「平台打印機」都要一齊 remap —— 唔做就會留下一個指向
+                            // **唔存在分區**嘅死值 ⇒ 平台單靜默零出紙（同 menuPrinterOverrides
+                            // 一樣嘅道理，2026-09-24 新增，見 platform-kitchen-print.ts 檔頭）。
+                            platformPrinterZoneId:
+                              localSettings.platformPrinterZoneId === zone.id
+                                ? fallbackZoneId
+                                : localSettings.platformPrinterZoneId,
                           };
                           setLocalSettings(nextSettings);
                           setConfig((current) => ({
@@ -1298,6 +1346,54 @@ export function DeviceSettings() {
                           </option>
                         ))}
                       </select>
+                    </div>
+                    {/* ── 平台打印機（2026-09-24 · 方案 A「分區式」）─────────────────
+                        外賣平台單（澳覓 / MFOOD）嘅廚房單由邊個**打印分區**出紙。
+
+                        ⚠️ 揀嘅係「分區」而唔係「單一台機」—— 呢個係刻意設計：
+                          · 平台菜單唔存在於 POS（菜名係 free text），逐項分流做唔到
+                            ⇒ 平台單所有品項一律歸同一個分區；
+                          · 想出多台機 = 多台機都綁去同一個分區（現有
+                            `item.printerGroup === printer.zoneId` 天生一對多，
+                            零改動派發核心 / `pos_print_jobs` 一張 job 一列嘅模型）。
+                        空 = 跟隨廚房分區（＝行為同堂食單一致，可預期）。 */}
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-sm font-semibold text-slate-900">平台打印機</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        澳覓 / MFOOD 平台單嘅廚房單由邊個打印分區出紙；唔揀 = 跟隨廚房分區（同堂食單一樣去廚房機）。
+                      </div>
+                      <select
+                        className="mt-2 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        onChange={(event) => updatePlatformZoneSetting(event.target.value)}
+                        value={localSettings.platformPrinterZoneId ?? ""}
+                      >
+                        <option value="">跟隨廚房分區（預設）</option>
+                        {localSettings.printZones.map((zone) => (
+                          <option key={zone.id} value={zone.id}>
+                            {zone.name}（{platformZonePrinterCount(zone.id, config.printers)} 台機）
+                          </option>
+                        ))}
+                        {/* 殘留舊分區（分區被刪但設定仲指住佢）：一定要顯示出嚟，
+                            否則下拉會靜默顯示「跟隨廚房分區」而實際仍然指住一個唔存在嘅分區
+                            ⇒ 平台單零出紙但冇人知。 */}
+                        {localSettings.platformPrinterZoneId &&
+                        !localSettings.printZones.some(
+                          (zone) => zone.id === localSettings.platformPrinterZoneId,
+                        ) ? (
+                          <option value={localSettings.platformPrinterZoneId}>
+                            {localSettings.platformPrinterZoneId}（分區已刪除）
+                          </option>
+                        ) : null}
+                      </select>
+                      <div className="mt-1 text-xs text-slate-400">
+                        想多台機同時出平台單 → 把嗰幾台機嘅「打印分區」都設成同一個分區就得。
+                      </div>
+                      {platformZoneWarningText() ? (
+                        <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                          注意：分區「{platformZoneWarningText()}」冇啟用嘅分區打印機
+                          → 平台單會收唔到紙。請去下面把該台機嘅「打印分區」設成佢，或者改用其他分區。
+                        </div>
+                      ) : null}
                     </div>
                     {config.printers.map((printer) => (
                       <PrinterCardV2
@@ -3984,6 +4080,8 @@ export function DeviceSettings() {
 //   飲品標籤單    — 收銀落單／加單 + 線上單接單（label role 機）
 //   線上訂單      — **只**管線上（Ledger／會員通）訂單接單時出嘅廚房單／標籤單
 //                   （2026-09-11 新增；Sunmi 系統本身已印線上單，可熄咗避免重複出紙）
+//   平台廚房單    — **只**管外賣平台單（澳覓 / MFOOD）入機時出嘅廚房單
+//                   （2026-09-24 新增；出紙分區見「打印機 → 平台打印機」）
 //   結帳收據      — 收銀結帳 + 免單 + 線上單完成+已付 + 到店付款
 //   退菜單        — 收銀退菜／退桌 + 線上單取消
 //   返結單        — 已結單退回可編輯
@@ -4020,6 +4118,12 @@ const PRINT_CONTENT_TOGGLE_ROWS: ReadonlyArray<PrintContentToggleRow> = [
     label: "線上訂單",
     description:
       "線上（Ledger／會員通）訂單接單時，喺廚房出單。若 Sunmi 系統本身已經會印線上單，可熄呢個掣避免重複出紙。唔影響本地堂食／掃碼單。",
+  },
+  {
+    key: "platform",
+    label: "平台廚房單",
+    description:
+      "外賣平台單（澳覓 / MFOOD）入機時，喺廚房出單（去邊個分區由「打印機 → 平台打印機」決定）。同「廚房單」係乘積關係：兩者都要開先出紙。唔影響會員通（Ledger）線上單。",
   },
   {
     key: "receipt",

@@ -29,7 +29,25 @@
 --
 --     once_key = "<orderId>|<onceScope>|<printerId>"
 --
--- 而 `onceScope` **只有自動出紙路徑**才會寫，例如：
+-- 🔴🔴 2026-09-24 事故（商家回報「收據一直停已發送、廚房單重複」）＋ 補充：
+--
+--   上面呢句**寫嘅時候係打算咁做，但實際上從來冇落實過** —— 寫入 DB 嘅一直係
+--   client 原始 `PrintJob.onceKey`（即 `receipt:0` / `kitchen:normal:0:<sig>`），
+--   **完全冇 orderId**。後果（因為索引係 `(store_id, once_key)`）：
+--
+--     · 自動收據 onceKey ＝ `receipt:<reopenCount>` ⇒ 全店每張單都係 `receipt:0`
+--       ⇒ 全店只可能有一行 `receipt:0` ⇒ 第二張自動收據 insert 撞 23505
+--       ⇒ `/api/pos/sync` 當「已出過紙」`ack(true)` ⇒ 本地永遠停「已發送」、
+--         雲端零行、**冇紙、冇紅標、唔會自我修正**（43 分鐘撞 3 次）。
+--     · 廚房單只係靠內容簽名分開而僥倖少撞；兩張單菜品相同一樣會**靜默漏單**。
+--
+--   修法（**唔需要改呢個 migration**，索引定義正確）：由 server 統一砌 composed 鍵
+--   —— 見 `src/lib/pos/print-dedupe.ts` `printOnceDbKey()` 同
+--   `src/app/api/pos/sync/route.ts` 嘅 `PRINT_JOB_CREATED` 分支。
+--   舊行（raw 格式，不含 `|`）同新鍵唔衝突 ⇒ 部署後即刻唔會再被攔。
+--   清理／診斷 SQL：`tools/2026-09-24-print-once-key-collision.sql`。
+--
+-- ## 而 `onceScope` **只有自動出紙路徑**才會寫，例如：
 --   · `receipt:<reopenCount>`                     ← 結帳／免單／線上單完成（每代結帳一張文件）
 --   · `kitchen:normal:<reopenCount>:<內容簽名>`    ← 落單／接單／補印兜底（改單後簽名變 ⇒ 照出新紙）
 --   · `kitchen:void:ledger_cancel:<reopenCount>`  ← 線上單被取消嘅作廢單

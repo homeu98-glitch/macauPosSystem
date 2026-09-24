@@ -1,0 +1,195 @@
+09-24 print_jobs 共 50 張
+
+欄位: id,store_id,order_id,order_no,table_name,ticket_type,printer_group,printer_name,items,status,created_at,template,content,printer_id,printer,kind,store_name,payment_method,total,qr,qr_url,copies,ttl,updated_at,claimed_by,claimed_at,attempts,last_error,finished_at,once_key 
+
+09-24T01:46:50 | 訂單01           | order-94e50ac8           | kitchen    | printed      | kitchen:normal:0:uzi2az
+09-24T02:25:37 | 001            | ledger-f74b4a98-c28c-4af | kitchen    | printed      | kitchen:normal:0:3sigr5
+09-24T02:35:27 | 訂單02           | order-778dbb99           | kitchen    | printed      | kitchen:normal:0:1fvtpr3
+09-24T02:57:41 | 002            | ledger-2cc9593f-449e-4c5 | kitchen    | printed      | kitchen:normal:0:1ah9q6a
+09-24T03:15:54 | 003            | ledger-7b295237-0a9c-4c7 | kitchen    | printed      | kitchen:normal:0:sy1pty
+09-24T03:27:14 | 003            | ledger-7b295237-0a9c-4c7 | kitchen    | printed      | -
+09-24T03:40:18 | 訂單04           | order-ee7d1fea           | kitchen    | printed      | kitchen:normal:0:1n3jyya
+09-24T03:52:25 | 訂單05           | order-ee656bae           | kitchen    | printed      | kitchen:normal:0:108qo9m
+09-24T03:53:17 | 訂單06           | order-20b4b1b0           | kitchen    | printed      | kitchen:normal:0:1lb7k6m
+09-24T04:00:00 | 訂單07           | order-ca18cff0           | kitchen    | printed      | kitchen:normal:0:1ke7xyc
+09-24T04:03:33 | 訂單08           | order-8c98310a           | kitchen    | printed      | kitchen:normal:0:t207e7
+09-24T04:09:45 | 訂單04           | order-ee7d1fea           | kitchen    | printed      | -
+09-24T04:10:30 | 訂單09           | order-dcf1eec3           | kitchen    | printed      | kitchen:normal:0:g7n324
+09-24T04:13:29 | 訂單09           | order-dcf1eec3           | kitchen    | printed      | -
+09-24T04:13:41 | 訂單09           | order-dcf1eec3           | kitchen    | printed      | -
+09-24T04:16:56 | 訂單09           | order-dcf1eec3           | receipt    | printed      | -
+09-24T04:24:47 | 訂單10           | order-49c4f672           | kitchen    | printed      | kitchen:normal:0:99hyh6
+09-24T04:26:21 | 訂單10           | order-49c4f672           | kitchen    | printed      | -
+09-24T05:22:31 | 004            | ledger-7e5579c8-b75b-44e | kitchen    | printed      | kitchen:normal:0:tvwt29
+09-24T05:22:31 | 004            | ledger-7e5579c8-b75b-44e | kitchen    | printed      | -
+09-24T05:23:39 | 005            | ledger-12f1e6a8-dbd7-41a | kitchen    | printed      | kitchen:normal:0:f5eas8
+09-24T05:23:39 | 005            | ledger-12f1e6a8-dbd7-41a | kitchen    | printed      | -
+09-24T05:24:03 | 004            | ledger-7e5579c8-b75b-44e | kitchen    | printed      | kitchen:normal:0:1h7x2d8
+09-24T05:29:54 | 006            | ledger-7f156cfb-ee36-4b1 | kitchen    | printed      | kitchen:normal:0:1gnn003
+09-24T05:30:53 | 訂單14           | order-c5c907fd           | kitchen    | printed      | kitchen:normal:0:1lrejef
+09-24T05:31:49 | 003            | ledger-7b295237-0a9c-4c7 | kitchen    | printed      | -
+09-24T05:39:31 | 訂單15           | order-b1d03f97           | kitchen    | printed      | kitchen:normal:0:ucti4o
+09-24T05:41:35 | 訂單15           | order-b1d03f97           | kitchen    | printed      | -
+09-24T05:45:59 | 006            | ledger-7f156cfb-ee36-4b1 | kitchen    | printed      | -
+09-24T05:57:03 | 訂單16           | order-0cb6d157           | kitchen    | printed      | kitchen:normal:0:m6b869
+09-24T06:03:46 | 訂單15           | order-b1d03f97           | receipt    | printed      | -
+09-24T06:09:14 | 訂單16           | order-0cb6d157           | kitchen    | printed      | -
+09-24T06:09:55 | 訂單16           | order-0cb6d157           | kitchen    | printed      | -
+09-24T06:17:54 | 訂單17           | order-e8715fdf           | kitchen    | printed      | kitchen:normal:0:um1dvj
+09-24T06:24:44 | 訂單18           | order-ae93dc28           | kitchen    | printed      | kitchen:normal:0:g49oz0
+09-24T09:47:34 | 訂單07           | order-ca18cff0           | receipt    | printed      | -
+09-24T10:32:17 | 007            | ledger-4b0efbd2-d3e5-4e1 | kitchen    | printed      | kitchen:normal:0:xl295z
+09-24T10:55:46 | 訂單19           | order-2dc96a10           | kitchen    | printed      | kitchen:normal:0:gi1cg4
+09-24T11:00:22 | 訂單09           | order-dcf1eec3           | receipt    | printed      | -
+09-24T11:00:36 | 007            | ledger-4b0efbd2-d3e5-4e1 | kitchen    | printed      | -
+09-24T11:09:41 | 訂單20           | order-7d0c37c5           | kitchen    | printed      | kitchen:normal:0:a6v8fc
+09-24T11:10:49 | 訂單20           | order-7d0c37c5           | kitchen    | printed      | -
+09-24T11:39:26 | 訂單21           | order-6b8554ca           | kitchen    | printed      | kitchen:normal:0:3uoc1f
+09-24T11:46:07 | 訂單22           | order-eee918e7           | kitchen    | printed      | kitchen:normal:0:575gcb
+09-24T12:04:17 | 訂單20           | order-7d0c37c5           | receipt    | printed      | -
+09-24T12:30:08 | 訂單23           | order-e5f2bc45           | kitchen    | printed      | kitchen:normal:0:7kcyhm
+09-24T12:34:03 | 訂單24           | order-d6600a3b           | kitchen    | printed      | kitchen:normal:0:16udjvv
+09-24T12:37:55 | 訂單25           | order-809ae217           | kitchen    | printed      | kitchen:normal:0:cm8ij5
+09-24T12:39:54 | 訂單26           | order-9e146258           | kitchen    | printed      | kitchen:normal:0:1fi2el5
+09-24T12:41:20 | 訂單23           | order-e5f2bc45           | receipt    | printed      | -
+
+=== order_no / order_id 含 001 或 43 元嘅 job ===
+[
+  {
+    "id": "print-db206d3b",
+    "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+    "order_id": "ledger-f74b4a98-c28c-4afb-9727-b8c86d84338c",
+    "order_no": "001",
+    "table_name": "自取",
+    "ticket_type": "normal",
+    "printer_group": "kitchen",
+    "printer_name": "printer",
+    "items": [
+      {
+        "name": "快閃餐(榄菜肉碎四季豆饭)",
+        "specs": [
+          "飲料:湯",
+          "熱定凍:熱",
+          "要唔要膠袋?:要"
+        ],
+        "quantity": 1
+      }
+    ],
+    "status": "printed",
+    "created_at": "2026-09-24T02:25:37.497+00:00",
+    "template": {
+      "cols": 48,
+      "kind": "kitchen",
+      "blocks": [
+        {
+          "id": "store_name",
+          "bold": true,
+          "size": "m",
+          "align": "center",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "order_no",
+          "bold": false,
+          "size": "s",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "table_name",
+          "bold": false,
+          "size": "l",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "order_type",
+          "bold": true,
+          "size": "s",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "time",
+          "bold": false,
+          "size": "s",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "scheduled_pickup",
+          "bold": false,
+          "size": "s",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "items",
+          "bold": true,
+          "size": "l",
+          "align": "left",
+          "layout": "card",
+          "subSize": "l",
+          "visible": true
+        },
+        {
+          "id": "order_note",
+          "bold": false,
+          "size": "l",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "divider",
+          "bold": false,
+          "size": "s",
+          "align": "left",
+          "subSize": "s",
+          "visible": true
+        },
+        {
+          "id": "footer",
+          "bold": false,
+          "size": "s",
+          "align": "center",
+          "subSize": "s",
+          "visible": false
+        }
+      ]
+    },
+    "content": {
+      "time": "2026-09-24 10:25",
+      "footer": "廚房留底",
+      "order_no": "001",
+      "order_note": "",
+      "order_type": "落單",
+      "store_name": "表嫂美食",
+      "table_name": "自取",
+      "scheduled_pickup": "預約時間: 09/24 13:00"
+    },
+    "printer_id": "printer-861f2f6e",
+    "printer": null,
+    "kind": null,
+    "store_name": "表嫂美食",
+    "payment_method": null,
+    "total": null,
+    "qr": null,
+    "qr_url": null,
+    "copies": null,
+    "ttl": 1790259937497,
+    "updated_at": "2026-09-24T02:25:38.811+00:00",
+    "claimed_by": null,
+    "claimed_at": "2026-09-24T02:25:38.362035+00:00",
+    "attempts": 0,
+    "last_error": null,
+    "finished_at": "2026-09-24T02:25:38.811+00:00",
+    "once_key": "kitchen:normal:0:3sigr5"
+  }
+]

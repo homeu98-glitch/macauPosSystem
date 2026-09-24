@@ -36,6 +36,8 @@ type QuickModeOrdersBarProps = {
   /** draft 自助單（自動接單關掉）→ 卡片上嘅人手「接受 / 拒絕」。 */
   onConfirmSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
   onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
+  /** 外賣平台單「作廢（覆寫）」—— 規則見 `@/lib/pos/platform-order`。 */
+  onVoidPlatformOrder?: (order: PosOrder) => void;
 };
 
 /**
@@ -138,6 +140,7 @@ export function QuickModeOrdersBar({
   noticeFocus,
   onConfirmSelfOrder,
   onRejectSelfOrder,
+  onVoidPlatformOrder,
 }: QuickModeOrdersBarProps) {
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
@@ -182,6 +185,7 @@ export function QuickModeOrdersBar({
             onMarkReady={onMarkReady}
             onRejectSelfOrder={onRejectSelfOrder}
             onViewOrder={onViewOrder}
+            onVoidPlatformOrder={onVoidPlatformOrder}
             preparingOrders={preparingOrders}
             waitingOrders={waitingOrders}
           />

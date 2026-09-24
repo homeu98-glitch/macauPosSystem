@@ -16,6 +16,12 @@ import { appendPrintJobsWithSync } from "@/lib/pos/print-job-enqueue";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { isSelfOrder } from "@/lib/pos/order-source";
+import {
+  PLATFORM_VOID_DEFAULT_REASON,
+  PLATFORM_VOID_TARGET_STATUS,
+  isPlatformOrder,
+  platformVoidDenyReason,
+} from "@/lib/pos/platform-order";
 import { TEMP_REOPEN_ID_PREFIX } from "@/lib/pos/table-scope";
 import {
   loadBootstrapCache,
@@ -309,7 +315,22 @@ export function confirmSelfOrder(orderId: string): ConfirmSelfOrderResult {
   const bootstrap = loadBootstrapCache();
   const storeName = bootstrap?.storeName ?? "門店";
   const jobs = [
-    ...buildKitchenPrintJobs(updated, { ticketType: "normal", storeName }),
+    /**
+     * 🔴 2026-09-24：**一定要寫 `onceKey`**（同 `ledger-pos-bridge.ts:374/472` 用同一條 scope）。
+     *
+     * 同一張 QR／掃碼單會同時經兩條路出紙：① 線上單接單（Ledger bridge，帶鍵）；
+     * ② 收銀端確認自助單（就係呢度）。舊寫法呢度**唔帶鍵** ⇒ DB 兩行
+     * （一行 NULL、一行有鍵，NULL 永不衝突）⇒ 唯一索引攔唔到 ⇒ **廚房出兩張紙**
+     *（2026-09-24 實案：訂單 004／005 兩張 job 同一秒各自 insert）。
+     *
+     * ⚠️ 世代用 `reopenCount`、內容簽名由 `buildKitchenPrintJobs()` 自動附上
+     *（客人改單後簽名變 ⇒ 照出新紙）；加菜／退菜／手動重打**唔行呢條路**，唔受影響。
+     */
+    ...buildKitchenPrintJobs(updated, {
+      ticketType: "normal",
+      storeName,
+      onceKey: `kitchen:normal:${updated.reopenCount ?? 0}`,
+    }),
     ...buildLabelPrintJobs(updated, { ticketType: "normal", storeName }),
   ];
 
@@ -377,12 +398,65 @@ export function cancelLocalOrder(orderId: string, reason?: string): { ok: boolea
     return { ok: false, error: "訂單已退款" };
   }
 
+  return writeCancelledOrder(orders, idx, reason || "收銀取消結帳");
+}
+
+/**
+ * 🔴 平台單「作廢（覆寫）」—— 使用者 2026-09-24 明確要求。
+ *
+ * 同 `cancelLocalOrder()` 嘅**唯一分別**：**唔理現有狀態**。
+ *   · `cancelLocalOrder`：只准未收款（draft / sent_to_kitchen）→ 本地單口徑，唔改。
+ *   · `voidPlatformOrder`：`draft` / `sent_to_kitchen` / `paid` / `settled` / `reopened`
+ *     **全部**可以 →  因為平台單嘅錢係**平台收**，我哋只係記錄營業額；
+ *     平台嗰邊取消咗（可能喺任何階段，甚至已完成之後），
+ *     我哋就要跟住唔計入報表 —— 呢個係 **override**，唔係「狀態流程嘅下一步」。
+ *
+ * 報表效果（`cancelled` 係終態）：
+ *   · `isSaleCountable()` → false ⇒ **即刻唔計營業額**（呢個正正係使用者要嘅效果）
+ *   · `refundTotalOf()` 只認退款狀態 ⇒ 唔受影響（所以亦**唔准**改退款單，見下）
+ *
+ * ⚠️ 仍然擋 `refunded` / `partially_refunded` —— 唔係「未開放」，而係**會令報表變錯**：
+ *    淨額 = Σ(可計銷售) − Σ(退款)，而退款額只認退款狀態嘅單；
+ *    一改走退款狀態，退款額就會消失 ⇒ 淨額反而多咗一筆退款。要用退款流程。
+ *
+ * ⚠️ `cancelled` 亦擋（避免重複寫事件）。
+ *
+ * 規則本體喺 `@/lib/pos/platform-order`（零 import、有單測），呢度只做 I/O。
+ */
+export function voidPlatformOrder(orderId: string, reason?: string): { ok: boolean; error?: string } {
+  const orders = loadOrders();
+  const idx = orders.findIndex((o) => o.id === orderId);
+  if (idx < 0) return { ok: false, error: "找不到訂單" };
+
+  const order = orders[idx];
+  // 先確認真係平台單 —— 唔可以因為「擋嘅狀態唔中」就當可以，否則本地單會繞過
+  // cancelLocalOrder 嘅 paid/settled 保護。
+  if (!isPlatformOrder(order)) return { ok: false, error: "只可以對外賣平台單作廢" };
+  const deny = platformVoidDenyReason(order);
+  if (deny) return { ok: false, error: deny };
+
+  return writeCancelledOrder(orders, idx, reason || PLATFORM_VOID_DEFAULT_REASON);
+}
+
+/**
+ * 把一張單寫成 `cancelled`（本地 + outbox 事件）—— `cancelLocalOrder` 同
+ * `voidPlatformOrder` 共用嘅唯一寫入路徑。
+ *
+ * 拆出嚟嘅理由：兩者只差**准入條件**，寫入必須完全一致（否則會出現
+ * 「一個寫事件、一個唔寫」呢種靜默分歧）。
+ */
+function writeCancelledOrder(
+  orders: PosOrder[],
+  idx: number,
+  cancelledReason: string,
+): { ok: boolean; error?: string } {
+  const order = orders[idx];
   const now = new Date().toISOString();
   const updated: PosOrder = {
     ...order,
-    status: "cancelled",
+    status: PLATFORM_VOID_TARGET_STATUS as PosOrder["status"],
     cancelledAt: now,
-    cancelledReason: reason || "收銀取消結帳",
+    cancelledReason,
     updatedAt: now,
   };
 

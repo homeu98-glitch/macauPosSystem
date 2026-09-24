@@ -1,0 +1,285 @@
+anon key OK (ref=iyrywzormzisyppkokbi)
+
+查詢失敗，退回 select=*： 400 {"code":"42703","details":null,"hint":"Perhaps you meant to reference the column \"pos_orders.served_at\".","message":"column pos_orders.settled_at does not exist"}
+近 72h pos_orders 共 67 張（按 updated_at desc）
+
+local_no | status | total | online_order_id | src | created | updated | settled | reopen | table
+澳覓#30    | settled              | 495    | -                  | aomi       | 09-25T01:09:40 | 09-24T18:00:08 | - | 0   | 外賣
+澳覓#39    | paid                 | 259    | -                  | aomi       | 09-24T22:25:09 | 09-24T18:00:11 | - | 0   | 外賣
+訂單24     | sent_to_kitchen      | 48     | -                  | pos        | 09-24T20:34:03 | 09-24T20:34:07 | - | 0   | A01
+訂單23     | sent_to_kitchen      | 63     | -                  | pos        | 09-24T20:30:08 | 09-24T20:33:39 | - | 0   | 外賣自取1
+訂單22     | settled              | 107    | -                  | pos        | 09-24T19:46:07 | 09-24T19:46:10 | - | 0   | 澳覓4
+訂單21     | settled              | 74     | -                  | pos        | 09-24T19:39:26 | 09-24T20:10:00 | - | 0   | A01
+訂單20     | settled              | 104    | -                  | pos        | 09-24T19:09:41 | 09-24T20:04:12 | - | 0   | A05
+訂單19     | settled              | 60     | -                  | pos        | 09-24T18:55:46 | 09-24T18:59:54 | - | 0   | 澳覓3
+007      | settled              | 48     | 4b0efbd2-d3e5-4e1b | pos        | 09-24T18:31:42 | 09-24T18:55:43 | - | 0   | A01
+訂單01     | settled              | 77     | -                  | pos        | 09-24T18:07:42 | 09-24T18:07:45 | - | 0   | A03
+MFOOD#786777 | settled              | 118    | -                  | mfood      | 09-24T17:06:26 | 09-24T17:59:38 | - | 0   | 外賣
+澳覓#10    | settled              | 248    | -                  | aomi       | 09-24T17:04:00 | 09-24T17:59:38 | - | 0   | 外賣
+澳覓#10    | settled              | 248    | -                  | aomi       | 09-24T17:03:36 | 09-24T17:54:40 | - | 0   | 外賣
+MFOOD#594220 | settled              | 118    | -                  | mfood      | 09-24T17:03:14 | 09-24T17:03:47 | - | 0   | 外賣
+澳覓#98    | settled              | 65     | -                  | aomi       | 09-24T16:43:01 | 09-24T17:03:59 | - | 0   | 外賣
+MFOOD#358708 | settled              | 66     | -                  | mfood      | 09-24T16:42:38 | 09-24T17:03:21 | - | 0   | 外賣
+澳覓#98    | settled              | 65     | -                  | aomi       | 09-24T16:03:27 | 09-24T16:43:23 | - | 0   | 外賣
+MFOOD#485706 | settled              | 66     | -                  | mfood      | 09-24T15:54:45 | 09-24T16:01:18 | - | 0   | 外賣
+MFOOD#75 | settled              | 650    | -                  | mfood      | 09-24T15:05:16 | 09-24T17:59:33 | - | 0   | 外賣
+澳覓#98    | settled              | 126    | -                  | aomi       | 09-24T14:36:23 | 09-24T14:37:08 | - | 0   | 外賣
+MFOOD#761173 | settled              | 62     | -                  | mfood      | 09-24T14:36:01 | 09-24T14:36:50 | - | 0   | 外賣
+訂單18     | settled              | 103    | -                  | pos        | 09-24T14:24:44 | 09-24T14:50:42 | - | 0   | A02
+訂單17     | settled              | 36     | -                  | pos        | 09-24T14:17:54 | 09-24T14:50:42 | - | 0   | A01
+訂單16     | settled              | 60     | -                  | pos        | 09-24T13:57:03 | 09-24T14:17:46 | - | 0   | A09
+訂單15     | settled              | 97     | -                  | pos        | 09-24T13:39:31 | 09-24T14:03:39 | - | 0   | 外賣自取1
+訂單14     | settled              | 64     | -                  | pos        | 09-24T13:30:53 | 09-24T14:17:46 | - | 0   | A02
+006      | settled              | 20     | 7f156cfb-ee36-4b18 | pos        | 09-24T13:29:54 | 09-24T14:09:07 | - | 0   | A03
+005      | settled              | 52     | 12f1e6a8-dbd7-41ac | pos        | 09-24T13:23:38 | 09-24T14:09:07 | - | 0   | A06
+004      | settled              | 78     | 7e5579c8-b75b-44ee | pos        | 09-24T13:22:28 | 09-24T14:09:07 | - | 0   | A07
+訂單13     | settled              | 40     | -                  | pos        | 09-24T13:12:05 | 09-24T13:44:50 | - | 0   | A01
+訂單12     | settled              | 40     | -                  | pos        | 09-24T13:05:06 | 09-24T13:52:20 | - | 0   | A05
+訂單11     | settled              | 40     | -                  | pos        | 09-24T12:38:17 | 09-24T13:20:39 | - | 0   | A04
+訂單10     | settled              | 80     | -                  | pos        | 09-24T12:24:46 | 09-24T12:37:55 | - | 0   | A04
+訂單09     | settled              | 120    | -                  | pos        | 09-24T12:10:30 | 09-24T12:16:49 | - | 0   | 外賣自取1
+訂單08     | settled              | 102    | -                  | pos        | 09-24T12:03:32 | 09-24T12:06:37 | - | 0   | A02
+訂單07     | settled              | 95     | -                  | pos        | 09-24T12:00:00 | 09-24T12:01:13 | - | 0   | 外賣自取1
+訂單06     | settled              | 44     | -                  | pos        | 09-24T11:53:17 | 09-24T12:24:39 | - | 0   | A01
+訂單05     | settled              | 48     | -                  | pos        | 09-24T11:52:24 | 09-24T12:13:17 | - | 0   | A05
+訂單04     | settled              | 41     | -                  | pos        | 09-24T11:40:18 | 09-24T12:13:17 | - | 0   | A06
+訂單03     | settled              | 40     | -                  | pos        | 09-24T11:36:54 | 09-24T12:16:49 | - | 0   | A07
+003      | settled              | 43     | 7b295237-0a9c-4c78 | pos        | 09-24T11:15:40 | 09-24T13:39:22 | - | 0   | A08
+002      | settled              | 40     | 2cc9593f-449e-4c56 | pos        | 09-24T10:57:21 | 09-24T11:26:35 | - | 0   | A08
+訂單02     | settled              | 40     | -                  | pos        | 09-24T10:35:27 | 09-24T13:20:39 | - | 0   | A09
+訂單01     | settled              | 62     | -                  | pos        | 09-24T09:46:50 | 09-24T10:35:13 | - | 0   | MFOOD1
+訂單20     | settled              | 44     | -                  | pos        | 09-23T20:21:56 | 09-23T20:53:26 | - | 0   | 外賣自取1
+訂單19     | settled              | 51     | -                  | pos        | 09-23T20:20:01 | 09-23T20:20:04 | - | 0   | A02
+訂單18     | settled              | 43     | -                  | pos        | 09-23T19:51:29 | 09-23T19:53:03 | - | 0   | 外賣自取1
+訂單18     | settled              | 144    | -                  | pos        | 09-23T19:43:24 | 09-23T20:25:10 | - | 0   | A01
+訂單17     | settled              | 94     | -                  | pos        | 09-23T18:19:35 | 09-23T19:02:00 | - | 0   | 外賣自取1
+訂單16     | settled              | 48     | -                  | pos        | 09-23T18:15:47 | 09-23T19:51:22 | - | 0   | A09
+訂單15     | settled              | 94     | -                  | pos        | 09-23T18:08:43 | 09-23T18:54:06 | - | 0   | A03
+訂單14     | settled              | 91     | -                  | pos        | 09-23T18:01:05 | 09-23T18:05:44 | - | 0   | 返結 外賣自取5
+訂單13     | settled              | 97     | -                  | pos        | 09-23T17:59:36 | 09-23T18:57:02 | - | 0   | A02
+003      | settled              | 129    | 79f94f1f-b2bb-48bf | pos        | 09-23T17:54:47 | 09-23T18:48:42 | - | 0   | A08
+訂單10     | settled              | 68     | -                  | pos        | 09-23T17:48:46 | 09-23T17:55:11 | - | 0   | MFOOD2
+訂單09     | settled              | 49     | -                  | pos        | 09-23T17:44:52 | 09-23T18:15:29 | - | 0   | A01
+訂單08     | cancelled            | 101    | -                  | pos        | 09-23T17:32:00 | 09-23T18:01:01 | - | 1   | 返結 外���自取5
+訂單07     | settled              | 27     | -                  | pos        | 09-23T13:46:28 | 09-23T13:46:32 | - | 0   | A02
+訂單06     | settled              | 64     | -                  | pos        | 09-23T13:10:12 | 09-23T13:48:13 | - | 0   | A09
+訂單05     | settled              | 120    | -                  | pos        | 09-23T12:39:19 | 09-23T13:37:25 | - | 0   | A06
+訂單04     | settled              | 132    | -                  | pos        | 09-23T12:30:30 | 09-23T13:17:25 | - | 0   | A05
+訂單03     | settled              | 51     | -                  | pos        | 09-23T12:24:49 | 09-23T13:17:25 | - | 0   | A02
+訂單02     | settled              | 48     | -                  | pos        | 09-23T11:37:36 | 09-23T13:51:13 | - | 0   | A01
+002      | settled              | 69     | 0f2c52b2-8edd-44cd | pos        | 09-23T11:25:15 | 09-23T12:57:19 | - | 0   | A08
+訂單01     | settled              | 95     | -                  | pos        | 09-23T11:00:17 | 09-23T11:00:21 | - | 0   | A03
+001      | settled              | 48     | cf100f81-c565-4407 | pos        | 09-23T10:47:06 | 09-23T11:14:19 | - | 0   | A09
+訂單01     | settled              | 62     | -                  | pos        | 09-23T09:34:24 | 09-23T11:07:05 | - | 0   | MFOOD1
+
+=== 命中「001」或 total=43 嘅單 ===
+{
+  "id": "ledger-7b295237-0a9c-4c78-9b66-01390806559f",
+  "local_order_no": "003",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "a115530f-9f9d-4c76-8b96-55b7d445d415",
+  "table_name": "A08",
+  "status": "settled",
+  "items": [
+    {
+      "name": "快閃餐（湿炒豉椒猪杂河粉）",
+      "price": 41,
+      "quantity": 1,
+      "menuItemId": "ledger-aa9448e9-a390-42a6-ad50-f237c546c97a",
+      "printerGroup": "kitchen",
+      "selectedSpecs": [
+        {
+          "groupId": "b5f80a2e-915e-428c-8b04-13322e57fe7a",
+          "optionId": "a3e788e2-c5fc-4254-bb91-f83a1e4132f8",
+          "groupName": "饮料",
+          "priceDelta": 0,
+          "optionLabel": "例汤"
+        },
+        {
+          "groupId": "f122867c-f9f4-4b8d-aa99-2bc7ed5170ec",
+          "optionId": "e69eeee6-f0b5-4c61-b8cf-a45139d5b96b",
+          "groupName": "熱定凍",
+          "priceDelta": 0,
+          "optionLabel": "熱"
+        },
+        {
+          "groupId": "",
+          "optionId": "",
+          "groupName": "要唔要膠袋",
+          "priceDelta": 1,
+          "optionLabel": "要"
+        }
+      ]
+    },
+    {
+      "name": "盒",
+      "price": 1,
+      "quantity": 2,
+      "menuItemId": "ledger-047c1779-fcff-4772-99c0-8e4420f37325",
+      "printerGroup": "kitchen",
+      "selectedSpecs": []
+    }
+  ],
+  "subtotal": 43,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 43,
+  "payment_method": "Mpay",
+  "created_at": "2026-09-24T03:15:40.777624+00:00",
+  "updated_at": "2026-09-24T05:39:22.63+00:00",
+  "prepaid_amount": 0,
+  "online_order_id": "7b295237-0a9c-4c78-9b66-01390806559f",
+  "order_note": null,
+  "fulfillment_status": null,
+  "sent_to_kitchen_at": "2026-09-24T05:31:49.008+00:00",
+  "served_at": "2026-09-24T05:31:51.436+00:00",
+  "source": "pos",
+  "party_size": null,
+  "comp_note": null,
+  "comped_at": null,
+  "client_updated_at": "2026-09-24T05:31:51.436+00:00",
+  "discount_note": null,
+  "member_customer_id": null,
+  "member_deduction_avos": 0,
+  "member_deduct_txn_id": null,
+  "reopen_count": 0,
+  "reopened_at": null,
+  "reopen_reason": null,
+  "refund_records": null,
+  "refunded_amount": null,
+  "voided_items": null,
+  "external_order_id": null,
+  "raw_json": null,
+  "platform_fees": null
+}
+{
+  "id": "order-43ce0f1e",
+  "local_order_no": "訂單18",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "81be3010-8984-4201-880e-46539e66035c",
+  "table_name": "外賣自取1",
+  "status": "settled",
+  "items": [
+    {
+      "name": "蝦醬肉餅飯",
+      "price": 42,
+      "quantity": 1,
+      "menuItemId": "ledger-5c64980b-e303-403a-b072-8f8b521067fb",
+      "printerGroup": "kitchen",
+      "selectedSpecs": []
+    },
+    {
+      "name": "盒",
+      "price": 1,
+      "quantity": 1,
+      "menuItemId": "ledger-047c1779-fcff-4772-99c0-8e4420f37325",
+      "printerGroup": "kitchen",
+      "selectedSpecs": []
+    }
+  ],
+  "subtotal": 43,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 43,
+  "payment_method": "Mpay",
+  "created_at": "2026-09-23T11:51:29.421+00:00",
+  "updated_at": "2026-09-23T11:53:03.901+00:00",
+  "prepaid_amount": 0,
+  "online_order_id": null,
+  "order_note": null,
+  "fulfillment_status": null,
+  "sent_to_kitchen_at": "2026-09-23T11:51:29.421+00:00",
+  "served_at": "2026-09-23T11:51:34.586+00:00",
+  "source": "pos",
+  "party_size": 1,
+  "comp_note": null,
+  "comped_at": null,
+  "client_updated_at": "2026-09-23T11:51:34.586+00:00",
+  "discount_note": null,
+  "member_customer_id": null,
+  "member_deduction_avos": 0,
+  "member_deduct_txn_id": null,
+  "reopen_count": 0,
+  "reopened_at": null,
+  "reopen_reason": null,
+  "refund_records": null,
+  "refunded_amount": null,
+  "voided_items": null,
+  "external_order_id": null,
+  "raw_json": null,
+  "platform_fees": null
+}
+{
+  "id": "ledger-cf100f81-c565-4407-babd-041360d38c25",
+  "local_order_no": "001",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "table_id": "7632414a-aba9-4992-b5cb-5251b8653bcb",
+  "table_name": "A09",
+  "status": "settled",
+  "items": [
+    {
+      "name": "快閃餐(薄荷叶炒牛肉饭)",
+      "price": 48,
+      "quantity": 1,
+      "menuItemId": "ledger-abc8e99d-80d8-4552-a28e-8113bd2a1d2a",
+      "printerGroup": "kitchen",
+      "selectedSpecs": [
+        {
+          "groupId": "82961204-9e5f-4726-9ac8-1d93ccaaaf2a",
+          "optionId": "8a9c5134-33a9-40bb-b880-d8ae218a639b",
+          "groupName": "飲料",
+          "priceDelta": 0,
+          "optionLabel": "湯"
+        },
+        {
+          "groupId": "4ec05892-c2fd-42d6-abb7-135fdd528ef0",
+          "optionId": "fb5e560c-ad68-4d2e-b638-c578a5874cab",
+          "groupName": "熱定凍",
+          "priceDelta": 0,
+          "optionLabel": "熱"
+        },
+        {
+          "groupId": "c87785bf-5e6d-4003-a920-850e8a930d27",
+          "optionId": "078b53ab-4a25-4cc0-99d4-9ba5e03f3c1b",
+          "groupName": "要唔要膠袋?",
+          "priceDelta": 0,
+          "optionLabel": "不要"
+        }
+      ]
+    }
+  ],
+  "subtotal": 48,
+  "tax_amount": 0,
+  "service_charge_amount": 0,
+  "discount_amount": 0,
+  "total": 48,
+  "payment_method": "線上已支付",
+  "created_at": "2026-09-23T02:47:06.284401+00:00",
+  "updated_at": "2026-09-23T03:14:19.869+00:00",
+  "prepaid_amount": 48,
+  "online_order_id": "cf100f81-c565-4407-babd-041360d38c25",
+  "order_note": "少鹽少油11:20到轉紅米",
+  "fulfillment_status": null,
+  "sent_to_kitchen_at": null,
+  "served_at": null,
+  "source": "pos",
+  "party_size": null,
+  "comp_note": null,
+  "comped_at": null,
+  "client_updated_at": "2026-09-23T03:14:19.603+00:00",
+  "discount_note": null,
+  "member_customer_id": null,
+  "member_deduction_avos": 0,
+  "member_deduct_txn_id": null,
+  "reopen_count": 0,
+  "reopened_at": null,
+  "reopen_reason": null,
+  "refund_records": null,
+  "refunded_amount": null,
+  "voided_items": null,
+  "external_order_id": null,
+  "raw_json": null,
+  "platform_fees": null
+}

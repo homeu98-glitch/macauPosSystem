@@ -17,6 +17,12 @@ import {
 // （避免 print-jobs ↔ ledger-pos-bridge 循環依賴；見該檔頭註釋）。
 import { appendPrintJobsWithSync, persistMergedPrintJobs } from "@/lib/pos/print-job-enqueue";
 import { printOnceContentSignature } from "@/lib/pos/print-dedupe";
+// 狀態詞彙表（單一真源）：雲端 `printing` 過渡態由 2026-09-24 起係法定值。
+import { isPrintJobStatus } from "@/lib/pos/print-job-status";
+import {
+  kitchenPrinterTakesItem,
+  normalizePlatformPrinterZone,
+} from "@/lib/pos/platform-kitchen-print";
 import { resolveStoreTel } from "@/lib/pos/store-tel";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeaders } from "@/lib/pos/pos-sync-auth";
@@ -64,15 +70,20 @@ export { isPrintContentEnabled };
 /**
  * 列印任務狀態標準化。
  *
- * 列印任務 `status` 法定值係 `"pending" | "sent" | "failed"`，但舊 localStorage 或雲端
- * 回填可能寫入無效值（例如 undefined / 空字串），導致 UI 徽章 catch-all 顯示「失敗」
- * 但「失敗」分頁用 `=== "failed"` 過濾唔到。呢度喺讀取嗰陣把所有無效值歸一化為
- * `"failed"`，確保徽章、過濾器、Toast 都睇同一個真相。
+ * 列印任務 `status` 法定值住喺 `@/lib/pos/print-job-status`（單一詞彙表），
+ * 但舊 localStorage 或雲端回填可能寫入無效值（例如 undefined / 空字串），
+ * 導致 UI 徽章 catch-all 顯示「失敗」但「失敗」分頁用 `=== "failed"` 過濾唔到。
+ * 呢度喺讀取嗰陣把所有無效值歸一化為 `"failed"`，確保徽章、過濾器、Toast 都睇同一個真相。
+ *
+ * 🔴 2026-09-24：**`"printing"` 由今次起係法定值**（雲端 `pos_claim_print_jobs()`
+ * 寫嘅過渡態）。以前唔在詞彙表內 ⇒ 一排其實正常嘅單被標成
+ *「狀態欄位異常，已自動標記為失敗」（商家當日截圖）。詞彙表改為共用之後，
+ * 呢度唔會再誤判；真正嘅壞值（localStorage 損壞）照樣大聲標失敗 —— 呢個係刻意嘅。
  *
  * @see `print-center.tsx` 嘅徽章邏輯、pos-app.tsx 嘅 failedPrintJobs 過濾。
  */
 export function normalizePrintJobStatus(job: PrintJob): PrintJob {
-  if (job.status === "pending" || job.status === "sent" || job.status === "failed" || job.status === "printed") {
+  if (isPrintJobStatus(job.status)) {
     return job;
   }
   return {
@@ -233,6 +244,17 @@ export interface KitchenPrintOpts {
    * 合法重複（見 `@/lib/pos/print-dedupe` 檔頭）。
    */
   onceKey?: string;
+  /**
+   * 覆寫**所有**品項嘅派發分區（唔理品項自己嘅 `printerGroup`）。
+   *
+   * 唯一用途：外賣平台單（澳覓 / MFOOD）用「平台訂單打印分區」統一齣紙（方案 A）——
+   * 平台菜單唔存在於 POS，逐項分流做唔到，所以一律歸同一個分區。
+   * 規則／空值語意喺 `@/lib/pos/platform-kitchen-print`（有單測）。
+   *
+   * ⚠️ **空值 / 空字串 = 唔覆寫**（＝跟隨廚房分區）。唔可以當成一個真分區 id，
+   * 否則全部品項都對唔到任何機 ⇒ 零 job、零出紙、零錯誤。
+   */
+  zoneOverride?: string;
 }
 
 // ── 廚房 / 分區單：每台 zone 打印機一張（只印該分區嘅菜品），附廚房模板快照 ──
@@ -249,7 +271,16 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
 
   const jobs: PrintJob[] = [];
   for (const printer of zonePrinters) {
-    const matched = sourceItems.filter((it) => !printer.zoneId || it.printerGroup === printer.zoneId);
+    // 派發規則（catch-all ＋ 分區比對 ＋ 平台單 zoneOverride）住喺
+    // `@/lib/pos/platform-kitchen-print`：嗰邊零 import ⇒ 有單測鎖住；
+    // 寫喺呢度嘅話 `print-jobs.ts` 載唔到入 `node --test`（見該模組檔頭）。
+    const matched = sourceItems.filter((it) =>
+      kitchenPrinterTakesItem({
+        printerZoneId: printer.zoneId,
+        itemPrinterGroup: it.printerGroup,
+        zoneOverride: opts.zoneOverride,
+      }),
+    );
     if (matched.length === 0) continue;
     const items: PrintItemLine[] = matched.map((it) => ({
       name: opts.itemNamePrefix ? `${opts.itemNamePrefix}${it.name}` : it.name,
@@ -293,6 +324,33 @@ export function buildKitchenPrintJobs(order: PosOrder, opts: KitchenPrintOpts): 
     });
   }
   return jobs;
+}
+
+/**
+ * 外賣平台單（澳覓 / MFOOD）廚房單（2026-09-24 · 方案 A「分區式」）。
+ *
+ * 同 `buildKitchenPrintJobs()` 唯一分別：出紙去向由
+ * **`PosLocalSettings.platformPrinterZoneId`**（商家喺「設置 → 打印機 → 平台打印機」
+ * 揀嘅打印分區）話事；空 = 跟隨廚房分區（＝行為同堂食單一致）。
+ *
+ * ⚠️ 刻意唔讀 `DeviceConfig`：device config 每次 `/api/pos/state` 同步都會被 server
+ * 回應整份覆蓋（只回 5 個欄位）⇒ 放喺嗰度嘅設定會靜默消失。
+ *
+ * 🔴 回傳空陣列有**兩種**意思，呼叫端必須分清（唔可以靜默）：
+ *   ① 根本冇啟用嘅分區機（同堂食單一樣）；
+ *   ② **揀咗嘅分區冇任何啟用分區機** → 平台單會靜默零出紙。
+ * 用 `platformZonePrinterCount()` 判斷 ②，喺 UI 出聲。
+ *
+ * 為什麼唔喺呢度 fallback 返廚房機：咁樣紙會出喺**錯嘅機**，比唔出紙更難查
+ * （而且商家明明指定咗另一台，靜靜改用廚房機完全違反意圖）。
+ */
+export function buildPlatformKitchenPrintJobs(
+  order: PosOrder,
+  opts: KitchenPrintOpts,
+): PrintJob[] {
+  const zone = normalizePlatformPrinterZone(loadPosLocalSettings().platformPrinterZoneId);
+  // 空字串（未設定）→ 唔傳 zoneOverride，各品項保留自己嘅 printerGroup。
+  return buildKitchenPrintJobs(order, zone ? { ...opts, zoneOverride: zone } : opts);
 }
 
 export interface LabelPrintOpts {

@@ -1,0 +1,16 @@
+count(全部 anon 可見) = 49 | status 206
+count(store 8291f843) = 48
+store 分佈 = {"8291f843-9def-4956-9d0b-1cfef2598306":48,"d564b932-0c91-45e9-86fd-0ec8e2711f13":1}
+
+--- order_no=eq.007 ---
+  print-c7d241ce no=007 tbl=堂食 tt=normal grp=kitchen printer=printer st=printed once=- created=09-24T19:00:36 fin=09-24T19:00:38
+  print-d2b617a3 no=007 tbl=堂食 tt=normal grp=kitchen printer=printer st=printed once=kitchen:normal:0:xl295z created=09-24T18:32:17 fin=09-24T18:32:19
+
+--- order_no=like.*007* ---
+  print-c7d241ce no=007 tbl=堂食 tt=normal grp=kitchen printer=printer st=printed once=- created=09-24T19:00:36 fin=09-24T19:00:38
+  print-d2b617a3 no=007 tbl=堂食 tt=normal grp=kitchen printer=printer st=printed once=kitchen:normal:0:xl295z created=09-24T18:32:17 fin=09-24T18:32:19
+
+printer_name|group|kind 分佈 = {
+ "printer / kitchen / -": 42,
+ "小票機 · 通用 80mm 熱敏打印機 / receipt / -": 6
+}

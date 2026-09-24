@@ -6,6 +6,7 @@ import { PosOrder } from "@/lib/types";
 import { formatMoney, formatMacauTime } from "@/lib/format";
 import { compareOrderByLocalNo, getPaymentBadge, isQuickCounterOrder, isQuickOrderReady } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
+import { canVoidPlatformOrder } from "@/lib/pos/platform-order";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
@@ -36,6 +37,14 @@ type QuickLocalOrdersStripProps = {
    */
   onConfirmSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
   onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
+  /**
+   * 外賣平台單「作廢（覆寫）」（2026-09-24 使用者要求）。
+   *
+   * 平台單嘅錢係**平台收**，我哋只記錄營業額；平台嗰邊取消咗（可能喺任何階段，
+   * 甚至已完成之後）我哋就要跟住唔計入報表 —— 所以呢粒掣**唔可以由狀態流程推導**，
+   * `paid` / `settled` 都要出。規則本體喺 `@/lib/pos/platform-order`。
+   */
+  onVoidPlatformOrder?: (order: PosOrder) => void;
 };
 
 function OrderCard({
@@ -51,6 +60,7 @@ function OrderCard({
   focusKey,
   onConfirmSelfOrder,
   onRejectSelfOrder,
+  onVoidPlatformOrder,
 }: {
   order: PosOrder;
   currency: string;
@@ -71,6 +81,8 @@ function OrderCard({
   focusKey: number | null;
   onConfirmSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
   onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
+  /** 外賣平台單「作廢（覆寫）」—— 見 `QuickLocalOrdersStripProps` 嘅說明。 */
+  onVoidPlatformOrder?: (order: PosOrder) => void;
 }) {
   const completeText = completeLabel(order);
   const orderTime = formatMacauTime(order.createdAt);
@@ -215,6 +227,22 @@ function OrderCard({
         >
           查看
         </button>
+        {/* 🔴 外賣平台單「取消（覆寫）」（2026-09-24 使用者要求）：
+            **刻意唔跟狀態流程** —— 平台單嘅錢係平台收，平台取消咗（可能喺任何階段，
+            甚至已完結之後）我哋就要跟住唔計入報表。所以 `paid` / `settled` 都要出呢粒掣。
+            只有已作廢／已退款先隱藏（後者會令報表淨額出錯，要用退款流程）。
+            規則本體：`@/lib/pos/platform-order`（有單測）。 */}
+        {canVoidPlatformOrder(order) && onVoidPlatformOrder ? (
+          <button
+            aria-label={`取消（覆寫）平台單 ${order.localOrderNo}`}
+            className="shrink-0 whitespace-nowrap rounded-xl bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
+            onClick={() => onVoidPlatformOrder(order)}
+            title="平台單作廢（覆寫）：無論任何階段（含已結帳／已完成）都可以用，會將呢張單唔計入報表"
+            type="button"
+          >
+            取消
+          </button>
+        ) : null}
         {/* draft 自助單 → 人手「接受 / 拒絕」（2026-09-11 新增）。
             呢個 case 之下三粒掣（查看／接受／拒絕）等闊平分整行；非 draft 單維持「查看」貼左。 */}
         {showSelfOrderActions && onConfirmSelfOrder && onRejectSelfOrder ? (
@@ -310,6 +338,7 @@ export function QuickLocalOrdersStrip({
   noticeFocus,
   onConfirmSelfOrder,
   onRejectSelfOrder,
+  onVoidPlatformOrder,
 }: QuickLocalOrdersStripProps) {
   // 單一列、全部按單號由小到大：**唔分「製作中 / 待取餐」兩段**。
   // 分段的話，張單一撳「可取餐」就由左面彈去右面一段（即係「按狀態排」——
@@ -346,6 +375,7 @@ export function QuickLocalOrdersStrip({
           onMarkReady={onMarkReady}
           onRejectSelfOrder={onRejectSelfOrder}
           onViewOrder={onViewOrder}
+          onVoidPlatformOrder={onVoidPlatformOrder}
           order={order}
         />
       ))}

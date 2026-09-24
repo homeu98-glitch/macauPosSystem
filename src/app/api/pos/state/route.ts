@@ -12,6 +12,8 @@ import {
   normalizeShiftTemplatePresets,
 } from "@/lib/escpos-template";
 import { isIncrementalTruncated } from "@/lib/pos/state-sync-watermark";
+import { printOnceScopeFromDbKey } from "@/lib/pos/print-dedupe";
+import { cloudRowToPrintJobStatus } from "@/lib/pos/print-job-status";
 import { isPosDeviceAuthRequired, readPosDeviceTokenFromRequest } from "@/lib/pos/pos-device-token";
 import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
@@ -704,9 +706,16 @@ export async function GET(request: Request) {
         printerId: job.printer_id ?? undefined,
         // 內容唯一鍵（migration 未跑時 undefined，無害）：本機 job 帶返鍵，
         // `seenKeysFromJobs()` 就認得出「呢件事已經出過紙」。
-        onceKey: job.once_key ?? undefined,
+        //
+        // 🔴 2026-09-24：由呢日起 server 寫入 DB 嘅係 **composed 鍵**
+        // （`orderId|onceScope|printerId`，見 `printOnceDbKey`）。返落本機之前一定要
+        // **還原做原始 onceKey**，否則本機 `printOnceKey()` 會再 compose 一次 → 永遠對唔上
+        // → 換機／重載之後跨終端去重失效。舊格式（raw `receipt:0`）原樣返回 ⇒ 零迴歸。
+        onceKey: printOnceScopeFromDbKey(job.once_key, job.order_id, job.printer_id),
         items: Array.isArray(job.items) ? job.items : [],
-        status: job.status,
+        // 🔴 2026-09-24：經白名單轉換，唔可以裸透傳 —— 雲端 `printing`（認領未回報）
+        // 過渡態若原樣落到本機，會被 `normalizePrintJobStatus()` 標成「狀態欄位異常」失敗。
+        status: cloudRowToPrintJobStatus(job.status),
         createdAt: job.created_at,
       })) ?? [],
     deviceConfig: deviceConfigRow

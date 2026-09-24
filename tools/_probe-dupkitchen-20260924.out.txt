@@ -1,0 +1,157 @@
+anon key ref = iyrywzormzisyppkokbi | chunks = 23
+
+=== pos_print_jobs status = 200 ===
+筆數 = 50
+表頭 = id,store_id,order_id,order_no,table_name,ticket_type,printer_group,printer_name,items,status,created_at,template,content,printer_id,printer,kind,store_name,payment_method,total,qr,qr_url,copies,ttl,updated_at,claimed_by,claimed_at,attempts,last_error,finished_at,once_key
+狀態分佈 = {"printed":49,"pending":1}
+空/異常 order_no 筆數 = 0 / 50
+ticket_type|printer_group|status = {
+ "normal/receipt/printed": 6,
+ "normal/kitchen/printed": 33,
+ "addon/kitchen/printed": 6,
+ "normal/kitchen/pending": 1,
+ "void/kitchen/printed": 4
+}
+
+=== 逐行（澳門時間）===
+id                   st        kind     tt      grp       orderNo       table       try by                  once_key                                  created         finished        err
+print-16a127f4      printed   -        normal  receipt   訂單20          A05         0/-                     -                                         09-24T20:04:17  09-24T20:04:18  
+print-3a5c38d6      printed   -        normal  kitchen   訂單22          澳覓4         0/-                     kitchen:normal:0:575gcb                   09-24T19:46:07  09-24T19:46:08  
+print-1a487d00      printed   -        normal  kitchen   訂單21          A01         0/-                     kitchen:normal:0:3uoc1f                   09-24T19:39:26  09-24T19:39:28  
+print-5610f3ad      printed   -        addon   kitchen   訂單20          A05         0/-                     -                                         09-24T19:10:49  09-24T19:10:51  
+print-5ffccc76      printed   -        normal  kitchen   訂單20          A05         0/-                     kitchen:normal:0:a6v8fc                   09-24T19:09:41  09-24T19:09:42  
+print-c7d241ce      printed   -        normal  kitchen   007           堂食          0/-                     -                                         09-24T19:00:36  09-24T19:00:38  
+print-f956aeed      printed   -        normal  receipt   訂單09          外賣自取1       0/-                     -                                         09-24T19:00:22  09-24T19:00:23  
+print-5299968d      printed   -        normal  kitchen   訂單19          澳覓3         0/-                     kitchen:normal:0:gi1cg4                   09-24T18:55:46  09-24T18:55:48  
+print-d2b617a3      printed   -        normal  kitchen   007           堂食          0/-                     kitchen:normal:0:xl295z                   09-24T18:32:17  09-24T18:32:19  
+print-3e3b6c7f      pending   -        normal  kitchen   訂單01          A03         0/-                     kitchen:normal:0:oy7h5h                   09-24T18:07:42  -               
+print-d39dbcfb      printed   -        normal  receipt   訂單07          外賣自取1       0/-                     -                                         09-24T17:47:34  09-24T17:47:36  
+print-a1948640      printed   -        normal  kitchen   訂單18          A02         0/-                     kitchen:normal:0:g49oz0                   09-24T14:24:44  09-24T14:24:45  
+print-fdc09237      printed   -        normal  kitchen   訂單17          A01         0/-                     kitchen:normal:0:um1dvj                   09-24T14:17:54  09-24T14:17:55  
+print-ba909894      printed   -        addon   kitchen   訂單16          A09         0/-                     -                                         09-24T14:09:55  09-24T14:09:56  
+print-d7827697      printed   -        void    kitchen   訂單16          A09         0/-                     -                                         09-24T14:09:14  09-24T14:09:15  
+print-75d6ce79      printed   -        normal  receipt   訂單15          外賣自取1       0/-                     -                                         09-24T14:03:46  09-24T14:03:48  
+print-6ef66484      printed   -        normal  kitchen   訂單16          A09         0/-                     kitchen:normal:0:m6b869                   09-24T13:57:03  09-24T13:57:05  
+print-7ea722c1      printed   -        normal  kitchen   006           A03         0/-                     -                                         09-24T13:45:59  09-24T13:46:00  
+print-504210e5      printed   -        void    kitchen   訂單15          外賣自取1       0/-                     -                                         09-24T13:41:35  09-24T13:41:36  
+print-790afdfe      printed   -        normal  kitchen   訂單15          外賣自取1       0/-                     kitchen:normal:0:ucti4o                   09-24T13:39:31  09-24T13:39:33  
+print-987fdbea      printed   -        addon   kitchen   003           A08         0/-                     -                                         09-24T13:31:49  09-24T13:31:50  
+print-40f79cb6      printed   -        normal  kitchen   訂單14          A02         0/-                     kitchen:normal:0:1lrejef                  09-24T13:30:53  09-24T13:30:54  
+print-da6bc468      printed   -        normal  kitchen   006           堂食          0/-                     kitchen:normal:0:1gnn003                  09-24T13:29:54  09-24T13:30:39  
+print-5dcbb69d      printed   -        normal  kitchen   004           堂食          0/-                     kitchen:normal:0:1h7x2d8                  09-24T13:24:03  09-24T13:24:04  
+print-93eecf2e      printed   -        normal  kitchen   005           堂食          0/-                     -                                         09-24T13:23:39  09-24T13:23:40  
+print-f4fa398a      printed   -        normal  kitchen   005           堂食          0/-                     kitchen:normal:0:f5eas8                   09-24T13:23:39  09-24T13:23:40  
+print-3e6b0f74      printed   -        normal  kitchen   004           堂食          0/-                     -                                         09-24T13:22:31  09-24T13:22:33  
+print-fe0157f5      printed   -        normal  kitchen   004           堂食          0/-                     kitchen:normal:0:tvwt29                   09-24T13:22:31  09-24T13:22:33  
+print-fb990640      printed   -        addon   kitchen   訂單10          A04         0/-                     -                                         09-24T12:26:21  09-24T12:26:21  
+print-c7166b33      printed   -        normal  kitchen   訂單10          A04         0/-                     kitchen:normal:0:99hyh6                   09-24T12:24:47  09-24T12:24:48  
+print-74698fa7      printed   -        normal  receipt   訂單09          外賣自取1       0/-                     -                                         09-24T12:16:56  09-24T12:16:57  
+print-c95aabe3      printed   -        void    kitchen   訂單09          外賣自取1       0/-                     -                                         09-24T12:13:41  09-24T12:13:45  
+print-8797dde8      printed   -        void    kitchen   訂單09          外賣自取1       0/-                     -                                         09-24T12:13:29  09-24T12:13:30  
+print-a337e5ba      printed   -        normal  kitchen   訂單09          外賣自取1       0/-                     kitchen:normal:0:g7n324                   09-24T12:10:30  09-24T12:10:31  
+print-a8c19c52      printed   -        addon   kitchen   訂單04          A06         0/-                     -                                         09-24T12:09:45  09-24T12:09:46  
+print-df387a62      printed   -        normal  kitchen   訂單08          A02         0/-                     kitchen:normal:0:t207e7                   09-24T12:03:33  09-24T12:03:34  
+print-be20d519      printed   -        normal  kitchen   訂單07          外賣自取1       0/-                     kitchen:normal:0:1ke7xyc                  09-24T12:00:00  09-24T12:00:01  
+print-d4c7f444      printed   -        normal  kitchen   訂單06          A01         0/-                     kitchen:normal:0:1lb7k6m                  09-24T11:53:17  09-24T11:53:19  
+print-ec3190ca      printed   -        normal  kitchen   訂單05          A05         0/-                     kitchen:normal:0:108qo9m                  09-24T11:52:25  09-24T11:52:26  
+print-77d0071f      printed   -        normal  kitchen   訂單04          A06         0/-                     kitchen:normal:0:1n3jyya                  09-24T11:40:18  09-24T11:40:19  
+print-caab6bc9      printed   -        normal  kitchen   003           A08         0/-                     -                                         09-24T11:27:14  09-24T11:27:16  
+print-7403cb4b      printed   -        normal  kitchen   003           堂食          0/-                     kitchen:normal:0:sy1pty                   09-24T11:15:54  09-24T11:15:55  
+print-d4f2b345      printed   -        normal  kitchen   002           堂食          0/-                     kitchen:normal:0:1ah9q6a                  09-24T10:57:41  09-24T10:57:42  
+print-11e37b9e      printed   -        normal  kitchen   訂單02          A09         0/-                     kitchen:normal:0:1fvtpr3                  09-24T10:35:27  09-24T10:35:28  
+print-db206d3b      printed   -        normal  kitchen   001           自取          0/-                     kitchen:normal:0:3sigr5                   09-24T10:25:37  09-24T10:25:38  
+print-65c07354      printed   -        normal  kitchen   訂單01          MFOOD1      0/-                     kitchen:normal:0:uzi2az                   09-24T09:46:50  09-24T09:46:52  
+print-b5a5bde5      printed   -        normal  receipt   交班單 2026-09-23-01-           0/-                     -                                         09-23T21:25:53  09-23T21:25:54  
+print-6f08fb49      printed   -        addon   kitchen   訂單20          外賣自取1       0/-                     -                                         09-23T20:22:32  09-23T20:22:33  
+print-b81d36d2      printed   -        normal  kitchen   訂單20          外賣自取1       0/-                     kitchen:normal:0:zagxti                   09-23T20:21:56  09-23T20:21:58  
+print-8e3f150d      printed   -        normal  kitchen   訂單19          A02         0/-                     kitchen:normal:0:b5x8xo                   09-23T20:20:01  09-23T20:20:02  
+
+=== 重複分組（order_id + printer_id + ticket_type）===
+重複組數 = 7（涉及 15 行）／ 總組數 42
+  ×3 ledger-7e5579c8-b75b-44ee-abdb-4aff0996547b|printer-861f2f6e|normal|kitchen
+      print-5dcbb69d st=printed once=kitchen:normal:0:1h7x2d8 created=09-24T13:24:03 fin=09-24T13:24:04 err=
+      print-3e6b0f74 st=printed once=- created=09-24T13:22:31 fin=09-24T13:22:33 err=
+      print-fe0157f5 st=printed once=kitchen:normal:0:tvwt29 created=09-24T13:22:31 fin=09-24T13:22:33 err=
+  ×2 ledger-4b0efbd2-d3e5-4e1b-8045-721d4aedaf7c|printer-861f2f6e|normal|kitchen
+      print-c7d241ce st=printed once=- created=09-24T19:00:36 fin=09-24T19:00:38 err=
+      print-d2b617a3 st=printed once=kitchen:normal:0:xl295z created=09-24T18:32:17 fin=09-24T18:32:19 err=
+  ×2 order-dcf1eec3|printer-22a790b1|normal|receipt
+      print-f956aeed st=printed once=- created=09-24T19:00:22 fin=09-24T19:00:23 err=
+      print-74698fa7 st=printed once=- created=09-24T12:16:56 fin=09-24T12:16:57 err=
+  ×2 ledger-7f156cfb-ee36-4b18-aa32-948e6bc8cf47|printer-861f2f6e|normal|kitchen
+      print-7ea722c1 st=printed once=- created=09-24T13:45:59 fin=09-24T13:46:00 err=
+      print-da6bc468 st=printed once=kitchen:normal:0:1gnn003 created=09-24T13:29:54 fin=09-24T13:30:39 err=
+  ×2 ledger-12f1e6a8-dbd7-41ac-b9af-65602773db3d|printer-861f2f6e|normal|kitchen
+      print-93eecf2e st=printed once=- created=09-24T13:23:39 fin=09-24T13:23:40 err=
+      print-f4fa398a st=printed once=kitchen:normal:0:f5eas8 created=09-24T13:23:39 fin=09-24T13:23:40 err=
+  ×2 order-dcf1eec3|printer-861f2f6e|void|kitchen
+      print-c95aabe3 st=printed once=- created=09-24T12:13:41 fin=09-24T12:13:45 err=
+      print-8797dde8 st=printed once=- created=09-24T12:13:29 fin=09-24T12:13:30 err=
+  ×2 ledger-7b295237-0a9c-4c78-9b66-01390806559f|printer-861f2f6e|normal|kitchen
+      print-caab6bc9 st=printed once=- created=09-24T11:27:14 fin=09-24T11:27:16 err=
+      print-7403cb4b st=printed once=kitchen:normal:0:sy1pty created=09-24T11:15:54 fin=09-24T11:15:55 err=
+
+=== 同張單出紙總數 top 15 ===
+  order-dcf1eec3 → 5 行
+  order-7d0c37c5 → 3 行
+  order-0cb6d157 → 3 行
+  order-b1d03f97 → 3 行
+  ledger-7b295237-0a9c-4c78-9b66-01390806559f → 3 行
+  ledger-7e5579c8-b75b-44ee-abdb-4aff0996547b → 3 行
+  ledger-4b0efbd2-d3e5-4e1b-8045-721d4aedaf7c → 2 行
+  order-ca18cff0 → 2 行
+  ledger-7f156cfb-ee36-4b18-aa32-948e6bc8cf47 → 2 行
+  ledger-12f1e6a8-dbd7-41ac-b9af-65602773db3d → 2 行
+  order-49c4f672 → 2 行
+  order-ee7d1fea → 2 行
+  order-6c059ea7 → 2 行
+  order-eee918e7 → 1 行
+  order-6b8554ca → 1 行
+
+=== once_key IS NULL 筆數 = 21 ===
+ 分組 = {"normal/receipt":6,"addon/kitchen":6,"normal/kitchen":5,"void/kitchen":4}
+
+=== pos_print_agents ===
+{"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.pos_print_agents TO anon;","message":"permission denied for table pos_print_agents
+
+=== pos_orders 近 40 張 ===
+  aomi-FAKE-AOMI-271287-9892 no=澳覓#30 table=外賣 st=settled src=aomi created=09-25T01:09:40
+  aomi-FAKE-AOMI-710282-6058 no=澳覓#39 table=外賣 st=paid src=aomi created=09-24T22:25:09
+  order-eee918e7 no=訂單22 table=澳覓4 st=settled src=pos created=09-24T19:46:07
+  order-6b8554ca no=訂單21 table=A01 st=settled src=pos created=09-24T19:39:26
+  order-7d0c37c5 no=訂單20 table=A05 st=settled src=pos created=09-24T19:09:41
+  order-2dc96a10 no=訂單19 table=澳覓3 st=settled src=pos created=09-24T18:55:46
+  ledger-4b0efbd2-d3e5-4e1b-8045-721d4aedaf7c no=007 table=A01 st=settled src=pos created=09-24T18:31:42
+  order-a474aab1 no=訂單01 table=A03 st=settled src=pos created=09-24T18:07:42
+  mfood-FAKE-MFOOD-786777 no=MFOOD#786777 table=外賣 st=settled src=mfood created=09-24T17:06:26
+  aomi-FAKE-AOMI-640046 no=澳覓#10 table=外賣 st=settled src=aomi created=09-24T17:04:00
+  aomi-FAKE-AOMI-616353 no=澳覓#10 table=外賣 st=settled src=aomi created=09-24T17:03:36
+  mfood-FAKE-MFOOD-594220 no=MFOOD#594220 table=外賣 st=settled src=mfood created=09-24T17:03:14
+  aomi-FAKE-AOMI-381746 no=澳覓#98 table=外賣 st=settled src=aomi created=09-24T16:43:01
+  mfood-FAKE-MFOOD-358708 no=MFOOD#358708 table=外賣 st=settled src=mfood created=09-24T16:42:38
+  aomi-FAKE-AOMI-007982 no=澳覓#98 table=外賣 st=settled src=aomi created=09-24T16:03:27
+  mfood-FAKE-MFOOD-485706 no=MFOOD#485706 table=外賣 st=settled src=mfood created=09-24T15:54:45
+  mfood-FAKE-MFOOD-75-8616 no=MFOOD#75 table=外賣 st=settled src=mfood created=09-24T15:05:16
+  aomi-FAKE-AOMI-783559 no=澳覓#98 table=外賣 st=settled src=aomi created=09-24T14:36:23
+  mfood-FAKE-MFOOD-761173 no=MFOOD#761173 table=外賣 st=settled src=mfood created=09-24T14:36:01
+  order-ae93dc28 no=訂單18 table=A02 st=settled src=pos created=09-24T14:24:44
+  order-e8715fdf no=訂單17 table=A01 st=settled src=pos created=09-24T14:17:54
+  order-0cb6d157 no=訂單16 table=A09 st=settled src=pos created=09-24T13:57:03
+  order-b1d03f97 no=訂單15 table=外賣自取1 st=settled src=pos created=09-24T13:39:31
+  order-c5c907fd no=訂單14 table=A02 st=settled src=pos created=09-24T13:30:53
+  ledger-7f156cfb-ee36-4b18-aa32-948e6bc8cf47 no=006 table=A03 st=settled src=pos created=09-24T13:29:54
+  ledger-12f1e6a8-dbd7-41ac-b9af-65602773db3d no=005 table=A06 st=settled src=pos created=09-24T13:23:38
+  ledger-7e5579c8-b75b-44ee-abdb-4aff0996547b no=004 table=A07 st=settled src=pos created=09-24T13:22:28
+  order-a7abea9b no=訂單13 table=A01 st=settled src=pos created=09-24T13:12:05
+  order-82f90c8f no=訂單12 table=A05 st=settled src=pos created=09-24T13:05:06
+  order-3f36f8d2 no=訂單11 table=A04 st=settled src=pos created=09-24T12:38:17
+  order-49c4f672 no=訂單10 table=A04 st=settled src=pos created=09-24T12:24:46
+  order-dcf1eec3 no=訂單09 table=外賣自取1 st=settled src=pos created=09-24T12:10:30
+  order-8c98310a no=訂單08 table=A02 st=settled src=pos created=09-24T12:03:32
+  order-ca18cff0 no=訂單07 table=外賣自取1 st=settled src=pos created=09-24T12:00:00
+  order-20b4b1b0 no=訂單06 table=A01 st=settled src=pos created=09-24T11:53:17
+  order-ee656bae no=訂單05 table=A05 st=settled src=pos created=09-24T11:52:24
+  order-ee7d1fea no=訂單04 table=A06 st=settled src=pos created=09-24T11:40:18
+  order-338a94c5 no=訂單03 table=A07 st=settled src=pos created=09-24T11:36:54
+  ledger-7b295237-0a9c-4c78-9b66-01390806559f no=003 table=A08 st=settled src=pos created=09-24T11:15:40
+  ledger-2cc9593f-449e-4c56-b0db-3157804d82f4 no=002 table=A08 st=settled src=pos created=09-24T10:57:21

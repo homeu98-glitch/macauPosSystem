@@ -1,0 +1,13 @@
+雲端 pos_orders：32 張
+今日 print_jobs：50 張
+
+出過紙嘅單（去重）：29 張
+
+🔴 有出紙但雲端 pos_orders 冇嘅單：1 張
+  09-24T10:25:37  no=001          id=ledger-f74b4a98-c28c-4afb-9727-b8c86d84338c  票=kitchen/normal
+
+雲端有單但今日冇出過紙：
+  no=訂單13         id=order-a7abea9b status=settled total=40 online=—
+  no=訂單12         id=order-82f90c8f status=settled total=40 online=—
+  no=訂單11         id=order-3f36f8d2 status=settled total=40 online=—
+  no=訂單03         id=order-338a94c5 status=settled total=40 online=—
