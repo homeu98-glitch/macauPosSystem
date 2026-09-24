@@ -577,11 +577,21 @@ export function ShiftPage() {
     [onlineLocalOrders],
   );
 
-  /** 本地線上投影單嘅 Ledger id 集合（去重／核對用）。 */
-  const localOnlineIds = useMemo(
-    () => new Set(onlineLocalOrders.map((o) => o.onlineOrderId as string)),
-    [onlineLocalOrders],
-  );
+  /**
+   * 「本地已經有 POS 投影單」嘅 Ledger id 集合（去重／核對用）。
+   *
+   * 🔴 2026-09-24 修正（事故）：唔可以只用**今日**嘅 `onlineLocalOrders`。
+   * 較早日期嘅 POS 投影單唔喺今日 ⇒ 對應嘅 Ledger 單（Ledger 側今日有更新 ⇒
+   * `sumPaidLedgerOrders("today")` 會收錄）會被誤判「Ledger 純線上單」⇒
+   * 加落**今日**線上實收 ⇒ 同**昨日**已經入帳嘅 POS 單**雙計**。
+   *
+   * ⇒ 補上本機全量（`loadOrders()`，**零請求**）。
+   */
+  const localOnlineIds = useMemo(() => {
+    const ids = new Set(onlineLocalOrders.map((o) => o.onlineOrderId as string));
+    for (const o of loadOrders()) if (o.onlineOrderId) ids.add(o.onlineOrderId);
+    return ids;
+  }, [onlineLocalOrders]);
 
   /** Ledger 已付款單之中，本地冇對應投影單嘅嗰批（＝從未入 POS DB 嘅線上單，例如 001／005 預約單）。 */
   const ledgerOnlyRows = useMemo(

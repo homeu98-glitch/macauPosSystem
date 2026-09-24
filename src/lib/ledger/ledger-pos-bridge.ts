@@ -861,6 +861,22 @@ export async function adoptCompletedLedgerOrderToLocal(
   if (String(order.paymentStatus ?? "").toLowerCase() !== "paid") return null;
   if (normalizeLedgerStatus(String(order.status ?? "")) !== "completed") return null;
 
+  // 🔴🔴 2026-09-24 事故修正（必讀）：**已經有本地單（任何狀態）⇒ 唔係「漏帳」，唔可以補。**
+  //
+  // 只靠報表當前 range 嘅 `posOnlineIds` 判斷**唔夠**：較早日期嘅 POS 單唔喺今日 range，
+  // 會被誤判成「未入 POS」。一旦補建，`upsertLedgerLocalOrder()` 會 upsert **覆蓋舊單**，
+  // 而 `/api/pos/sync` 嘅 `updated_at` 係 **server 蓋章**（Vercel 時鐘，見 `sync/route.ts`
+  // 第 342-349 行）⇒ 舊單嘅日期被推成**今日** ⇒
+  //   ① 舊日報表少一張、今日多一張；
+  //   ② 同日出現兩個相同取餐碼（取餐碼每日重用）⇒ 睇落好似「重複」；
+  //   ③ 用 Ledger 明細重建會覆蓋店內加菜（金額縮水）。
+  //
+  // 2026-09-24 實案：補建 4 張，其中 2 張係**昨日**（09-23）嘅單（取餐碼 002 / 003），
+  // 被移去今日 ⇒ 報表由 28 張變 37 張、金額由 1,778 變 2,423，商家以為「補完更錯」。
+  //
+  // ⇒ 補建**只可以**用於「POS 從來冇記錄過」嘅單。呢個檢查零請求（讀 localStorage）。
+  if (loadOrders().some((row) => row.id === `ledger-${order.id}`)) return null;
+
   const detail = options.detail ?? (await getOrderDetail(order.id));
   const projection = buildLedgerPosOrder(order, detail);
 

@@ -1,0 +1,63 @@
+表嫂 pos_orders（updated_at >= 09-23T16:00Z）共 37 張
+
+狀態分佈: {"settled":37}
+
+可計 ＋ updated_at ∈ 澳門 09-24 ⇒ 37 張 / MOP 2427
+（報表截圖：37 張 / MOP 2423）
+
+=== 明細（updated_at desc）===
+09-24T21:24:45  008          settled       68  線上  自取         id=ledger-bf19ba82-c5c5-4ecb-9f5c-4fb0b2ddc06b
+09-24T21:24:42  001          settled       43  線上  自取         id=ledger-f74b4a98-c28c-4afb-9727-b8c86d84338c
+09-24T21:24:40  002          settled       59  線上  堂食         id=ledger-0f2c52b2-8edd-44cd-a0fd-a2750a983b1e
+09-24T21:24:36  003          settled      129  線上  堂食         id=ledger-79f94f1f-b2bb-48bf-8389-b71686c30f8d
+09-24T21:17:50  訂單27         settled      139  —   A01        id=order-e4205b7c
+09-24T20:44:46  訂單24         settled       48  —   A01        id=order-d6600a3b
+09-24T20:40:53  訂單23         settled       63  —   外賣自取1      id=order-e5f2bc45
+09-24T20:40:53  訂單26         settled       61  —   外賣自取2      id=order-9e146258
+09-24T20:39:36  訂單25         settled       39  —   外賣自取2      id=order-809ae217
+09-24T20:10:00  訂單21         settled       74  —   A01        id=order-6b8554ca
+09-24T20:04:12  訂單20         settled      104  —   A05        id=order-7d0c37c5
+09-24T19:46:10  訂單22         settled      107  —   澳覓4        id=order-eee918e7
+09-24T18:59:54  訂單19         settled       60  —   澳覓3        id=order-2dc96a10
+09-24T18:55:43  007          settled       48  線上  A01        id=ledger-4b0efbd2-d3e5-4e1b-8045-721d4aedaf7c
+09-24T14:50:42  訂單17         settled       36  —   A01        id=order-e8715fdf
+09-24T14:50:42  訂單18         settled      103  —   A02        id=order-ae93dc28
+09-24T14:17:46  訂單16         settled       60  —   A09        id=order-0cb6d157
+09-24T14:17:46  訂單14         settled       64  —   A02        id=order-c5c907fd
+09-24T14:09:07  006          settled       20  線上  A03        id=ledger-7f156cfb-ee36-4b18-aa32-948e6bc8cf47
+09-24T14:09:07  004          settled       78  線上  A07        id=ledger-7e5579c8-b75b-44ee-abdb-4aff0996547b
+09-24T14:09:07  005          settled       52  線上  A06        id=ledger-12f1e6a8-dbd7-41ac-b9af-65602773db3d
+09-24T14:03:39  訂單15         settled       97  —   外賣自取1      id=order-b1d03f97
+09-24T13:52:20  訂單12         settled       40  —   A05        id=order-82f90c8f
+09-24T13:44:50  訂單13         settled       40  —   A01        id=order-a7abea9b
+09-24T13:39:22  003          settled       43  線上  A08        id=ledger-7b295237-0a9c-4c78-9b66-01390806559f
+09-24T13:20:39  訂單11         settled       40  —   A04        id=order-3f36f8d2
+09-24T13:20:39  訂單02         settled       40  —   A09        id=order-778dbb99
+09-24T12:37:55  訂單10         settled       80  —   A04        id=order-49c4f672
+09-24T12:24:39  訂單06         settled       44  —   A01        id=order-20b4b1b0
+09-24T12:16:49  訂單03         settled       40  —   A07        id=order-338a94c5
+09-24T12:16:49  訂單09         settled      120  —   外賣自取1      id=order-dcf1eec3
+09-24T12:13:17  訂單04         settled       41  —   A06        id=order-ee7d1fea
+09-24T12:13:17  訂單05         settled       48  —   A05        id=order-ee656bae
+09-24T12:06:37  訂單08         settled      102  —   A02        id=order-8c98310a
+09-24T12:01:13  訂單07         settled       95  —   外賣自取1      id=order-ca18cff0
+09-24T11:26:35  002          settled       40  線上  A08        id=ledger-2cc9593f-449e-4c56-b0db-3157804d82f4
+09-24T10:35:13  訂單01         settled       62  —   MFOOD1     id=order-94e50ac8
+
+=== 🔴 重複檢測 ===
+（冇同一 online_order_id 兩張單）
+
+單號重複（同單號同建立日 ≥2 張）：
+  （冇）
+
+=== id 以 ledger- 開頭嘅單（＝線上投影／補建）===
+  09-24T21:24:45 008        settled 68 online=bf19ba82-c5c5-4ecb-9f5c-4fb0b2ddc06b id=ledger-bf19ba82-c5c5-4ecb-9f5c-4fb0b2ddc06b
+  09-24T21:24:42 001        settled 43 online=f74b4a98-c28c-4afb-9727-b8c86d84338c id=ledger-f74b4a98-c28c-4afb-9727-b8c86d84338c
+  09-24T21:24:40 002        settled 59 online=0f2c52b2-8edd-44cd-a0fd-a2750a983b1e id=ledger-0f2c52b2-8edd-44cd-a0fd-a2750a983b1e
+  09-24T21:24:36 003        settled 129 online=79f94f1f-b2bb-48bf-8389-b71686c30f8d id=ledger-79f94f1f-b2bb-48bf-8389-b71686c30f8d
+  09-24T18:55:43 007        settled 48 online=4b0efbd2-d3e5-4e1b-8045-721d4aedaf7c id=ledger-4b0efbd2-d3e5-4e1b-8045-721d4aedaf7c
+  09-24T14:09:07 006        settled 20 online=7f156cfb-ee36-4b18-aa32-948e6bc8cf47 id=ledger-7f156cfb-ee36-4b18-aa32-948e6bc8cf47
+  09-24T14:09:07 004        settled 78 online=7e5579c8-b75b-44ee-abdb-4aff0996547b id=ledger-7e5579c8-b75b-44ee-abdb-4aff0996547b
+  09-24T14:09:07 005        settled 52 online=12f1e6a8-dbd7-41ac-b9af-65602773db3d id=ledger-12f1e6a8-dbd7-41ac-b9af-65602773db3d
+  09-24T13:39:22 003        settled 43 online=7b295237-0a9c-4c78-9b66-01390806559f id=ledger-7b295237-0a9c-4c78-9b66-01390806559f
+  09-24T11:26:35 002        settled 40 online=2cc9593f-449e-4c56-b0db-3157804d82f4 id=ledger-2cc9593f-449e-4c56-b0db-3157804d82f4

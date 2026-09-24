@@ -1,0 +1,48 @@
+=== 受影響兩張單嘅現況（雲端）===
+
+002  (0f2c52b2-8edd-44cd-a0fd-a2750a983b1e)
+  status=settled total=59 subtotal=59 prepaid=59
+  created_at=09-23T11:25:15  updated_at=09-24T21:24:40  client_updated=09-24T09:08:16
+  table=堂食 source=pos reopen=0
+  items: ["蒸魚飯×1@59"]
+  voided: null  refund: null
+
+003  (79f94f1f-b2bb-48bf-8389-b71686c30f8d)
+  status=settled total=129 subtotal=129 prepaid=129
+  created_at=09-23T17:54:47  updated_at=09-24T21:24:36  client_updated=09-24T09:08:13
+  table=堂食 source=pos reopen=0
+  items: ["快闪菜（𧐢仔煎蛋）×1@39","快閃餐(薄荷叶炒牛肉饭)×1@48","A9 手撕包菜×1@42"]
+  voided: null  refund: null
+
+
+=== pos_print_jobs 內呢兩張單嘅快照（可還原 items）===
+
+002  (ledger-0f2c52b2-8edd-44cd-a0fd-a2750a983b1e) ⇒ 0 張 job
+
+003  (ledger-79f94f1f-b2bb-48bf-8389-b71686c30f8d) ⇒ 0 張 job
+
+
+=== 09-23（澳門）全部 pos_orders（睇下有冇其他都受影響）===
+共 22 張（按 created_at）
+  09-23T09:34:24 訂單01       settled      62  upd=09-23T11:07:05  — id=order-f39edc2e
+  09-23T10:47:06 001        settled      48  upd=09-23T11:14:19  線上 id=ledger-cf100f81-c565-4407-babd-041360d38c25
+  09-23T11:25:15 002        settled      59  upd=09-24T21:24:40  線上 id=ledger-0f2c52b2-8edd-44cd-a0fd-a2750a983b1e
+  09-23T11:37:36 訂單02       settled      48  upd=09-23T13:51:13  — id=order-0f52649c
+  09-23T12:24:49 訂單03       settled      51  upd=09-23T13:17:25  — id=order-3a600d00
+  09-23T12:30:30 訂單04       settled     132  upd=09-23T13:17:25  — id=order-723fb2cc
+  09-23T12:39:19 訂單05       settled     120  upd=09-23T13:37:25  — id=order-9bc39f5f
+  09-23T13:10:12 訂單06       settled      64  upd=09-23T13:48:13  — id=order-76f523ac
+  09-23T13:46:28 訂單07       settled      27  upd=09-23T13:46:32  — id=order-d8b0508e
+  09-23T17:32:00 訂單08       cancelled   101  upd=09-23T18:01:01  — id=order-bbe795fa
+  09-23T17:44:52 訂單09       settled      49  upd=09-23T18:15:29  — id=order-d8e2ff1b
+  09-23T17:48:46 訂單10       settled      68  upd=09-23T17:55:11  — id=order-e0402f3b
+  09-23T17:54:47 003        settled     129  upd=09-24T21:24:36  線上 id=ledger-79f94f1f-b2bb-48bf-8389-b71686c30f8d
+  09-23T17:59:36 訂單13       settled      97  upd=09-23T18:57:02  — id=order-430edbee
+  09-23T18:01:05 訂單14       settled      91  upd=09-23T18:05:44  — id=order-926eab47
+  09-23T18:08:43 訂單15       settled      94  upd=09-23T18:54:06  — id=order-75952835
+  09-23T18:15:47 訂單16       settled      48  upd=09-23T19:51:22  — id=order-15dbf2a7
+  09-23T18:19:35 訂單17       settled      94  upd=09-23T19:02:00  — id=order-d59c21ab
+  09-23T19:43:24 訂單18       settled     144  upd=09-23T20:25:10  — id=order-b16c70d1
+  09-23T19:51:29 訂單18       settled      43  upd=09-23T19:53:03  — id=order-43ce0f1e
+  09-23T20:20:01 訂單19       settled      51  upd=09-23T20:20:04  — id=order-ef04be62
+  09-23T20:21:56 訂單20       settled      44  upd=09-23T20:53:26  — id=order-6c059ea7

@@ -1908,10 +1908,28 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
   // Ledger 純線上單入報表前，先剔除已經同步入 POS DB 嘅單（以 POS onlineOrderId ↔ Ledger id 對應），
   // 避免人流 / 時長統計雙重計算。剩低嘅就係「從未入 POS DB」嘅線上單。
-  const posOnlineIds = useMemo(
-    () => new Set(orders.map((o) => o.onlineOrderId).filter((v): v is string => !!v)),
-    [orders],
-  );
+  /**
+   * 「已經入過 POS」嘅 Ledger 單 id 集合 —— 用嚟剔除 Ledger 純線上單
+   * （避免雙計、亦避免誤報「漏帳」）。
+   *
+   * 🔴 2026-09-24 修正（事故）：**唔可以只用當前 range 嘅 `orders`**。
+   * 較早日期嘅 POS 單唔喺今日 range ⇒ 該 Ledger 單會被誤判「未入 POS」，後果三重：
+   *   ① 今日報表雙計（嗰張單**昨日**已經計過）；
+   *   ② 橙色警示誤報；
+   *   ③ 更嚴重：被「補建」覆蓋 ⇒ 舊日報表少一張、今日多一張
+   *      （實案：取餐碼 002／003 由 09-23 被移到 09-24，金額亦被 Ledger 明細覆蓋）。
+   *
+   * ⇒ 補上**本機全量**（`loadOrders()`，**零請求**）。本機係唯一有「當前 range 以外」
+   *   歷史單嘅地方；換機時本機冇歷史係已知邊界，但一定唔會比「唔補」差。
+   */
+  const posOnlineIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const o of orders) if (o.onlineOrderId) ids.add(o.onlineOrderId);
+    for (const o of loadOrders()) if (o.onlineOrderId) ids.add(o.onlineOrderId);
+    return ids;
+    // `refreshKey`：軟刷新／補建後要重算（本機 orders 已變）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, refreshKey]);
   const countableOnlineOrders = useMemo(
     () => onlineOrders.filter((o) => !posOnlineIds.has(o.id)),
     [onlineOrders, posOnlineIds],
