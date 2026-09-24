@@ -1,6 +1,6 @@
 "use client";
 
-import { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
+import { LedgerOnlineOrder, normalizeLedgerStatus } from "@/lib/ledger/order-mapper";
 import { toLedgerMenuItemId } from "@/lib/ledger/menu-import";
 import { getOrderDetail, LedgerOrderDetail, LedgerOrderDetailItem } from "@/lib/ledger/orders";
 import { enrichSpecsFromMenu, toResolvedSpecs } from "@/lib/ledger/order-item-specs";
@@ -30,6 +30,8 @@ import {
 import { enqueueEvents } from "@/lib/pos/queue-outbox";
 import { notifyQueueChanged, withStoreScope } from "@/lib/pos/sync-flush";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
+// 補建漏帳單時要保留 Ledger 事件時間（全站唯一時間口徑）。
+import { orderEventISO } from "@/lib/pos/order-event-time";
 import {
   decideKitchenBackfill,
   type KitchenBackfillDecision,
@@ -809,6 +811,74 @@ export async function adoptLedgerOrderAsQuickCounter(
   return upsertLedgerLocalOrder(options.ledgerOrder, projection, "quick_counter_adopted");
 }
 
+export type AdoptCompletedLedgerOrderOptions = {
+  ledgerOrder: LedgerOnlineOrder;
+  /** 已抓過嘅明細（省一次 RPC）。唔傳就即場抓。 */
+  detail?: LedgerOrderDetail;
+};
+
+/**
+ * **補建漏帳單**：把「Ledger 已完成 ＋ 已付款、但 POS 從未入帳」嘅線上單，
+ * 寫成一張本地 `settled` 單並推上雲（2026-09-24）。
+ *
+ * ## 為咩要有呢個（表嫂美食 · 取餐碼 001 · MOP 43 · 餘額扣點 實案）
+ *
+ * 「外賣自取」嘅線上單，POS 收到後只行**出紙兜底**（`ensureKitchenPrintForLedgerOrderOnce`），
+ * 唔會建本地單。商家若冇喺 POS 撳「採納／完成」，就會出現：
+ *
+ * | 位置 | 有冇 |
+ * |---|---|
+ * | Ledger（客人真係用餘額扣咗 43） | ✅ 已完成 ＋ 已付款 |
+ * | POS `pos_orders`（雲端） | ❌ 完全冇 |
+ * | 營業報表 / 交班明細（讀雲端） | ❌ 見唔到 |
+ *
+ * ⇒ 錢收到，但**報表靜默少計**，而且冇任何提示。呢個函式就係修補入口。
+ *
+ * ## 安全閘（唔可以拆）
+ *
+ * 只接受 `paymentStatus === "paid"` 且 `status` 正規化為 `completed` 嘅單。
+ * 未付款／未完成嘅單補上去 ＝ 向報表謊報收入，係造數，唔係還原真相。
+ *
+ * ## 去重（三重，缺一都會出錯）
+ *
+ * 1. `upsertLedgerLocalOrder()` 用 `id = ledger-<ledgerId>` upsert ⇒ 同一張 Ledger 單
+ *    永遠只有一張本地單（append 會令收入雙計，報表靠 `onlineOrderId` 去重）。
+ * 2. `skipPrint: true` ⇒ **唔會出紙**（單已經做過，廚房唔應該再收一張）。
+ * 3. `updatedAtOverride` 用 Ledger 事件時間 ⇒ 補建**昨日**嘅漏單會入**昨日**，
+ *    唔會被當成今日生意。
+ *
+ * @returns `null` ＝ 唔符安全閘（未付款／未完成），呼叫端應靜默略過。
+ */
+export async function adoptCompletedLedgerOrderToLocal(
+  options: AdoptCompletedLedgerOrderOptions,
+): Promise<{
+  posOrder: PosOrder;
+  printJobs: PrintJob[];
+  created: boolean;
+  printAlreadyDone: boolean;
+} | null> {
+  const order = options.ledgerOrder;
+  if (String(order.paymentStatus ?? "").toLowerCase() !== "paid") return null;
+  if (normalizeLedgerStatus(String(order.status ?? "")) !== "completed") return null;
+
+  const detail = options.detail ?? (await getOrderDetail(order.id));
+  const projection = buildLedgerPosOrder(order, detail);
+
+  // 🔴 保留 Ledger 事件時間。只接受「過去」嘅值 —— Ledger 平台單有機會回未來時間
+  // （實測 `created_at` 曾出現 +1 日），夾唔到就 fallback 用 now（寧可歸屬今日，
+  // 都唔可以令單嘅時間戳跑到未來）。
+  const eventIso = orderEventISO(order);
+  const eventMs = Date.parse(eventIso);
+  const updatedAtOverride =
+    Number.isFinite(eventMs) && eventMs > 0 && eventMs <= Date.now() ? eventIso : undefined;
+
+  return upsertLedgerLocalOrder(order, projection, "completed_backfill", {
+    forceSettled: true,
+    skipPrint: true,
+    updatedAtOverride,
+  });
+}
+
 /**
  * 同一張單係唔係**已經出過紙**（廚房單 / 飲品標籤，任何 role 都算）。
  *
@@ -841,6 +911,31 @@ async function upsertLedgerLocalOrder(
   ledgerOrder: LedgerOnlineOrder,
   projection: PosOrder,
   action: string,
+  options?: {
+    /**
+     * 強制寫成 `settled`（2026-09-24 新增）—— 補建「Ledger 已完成＋已付款、
+     * 但 POS 從未入帳」嘅線上單時用。
+     *
+     * 背景：正常路徑（排位／快餐採納）嘅單仲未完成，所以只可以係 `paid`；
+     * 但補建嘅單係**已經做完先發現漏帳**，報表認 `settled`/`paid`、交班只認 `settled`
+     * ⇒ 只有 `settled` 兩邊都入。
+     */
+    forceSettled?: boolean;
+    /**
+     * 唔出紙（2026-09-24 新增）—— 補建歷史單用。
+     *
+     * 補建嘅單係「已經做過、只係冇入帳」，廚房唔應該再收到一張新紙。
+     * 正常路徑唔可以傳呢個（接單／採納本身就要出紙）。
+     */
+    skipPrint?: boolean;
+    /**
+     * 覆寫 `updatedAt`（2026-09-24 新增）—— 補建時保留 Ledger 事件時間。
+     *
+     * 🔴 唔覆寫就會用 `now` ⇒ 補一張**昨日**嘅漏單會計入**今日**營業額（錯得更厲害）。
+     * ⚠️ 呼叫端必須先驗值（只可以係過去時間），呢度唔會再夾。
+     */
+    updatedAtOverride?: string;
+  },
 ): Promise<{
   posOrder: PosOrder;
   printJobs: PrintJob[];
@@ -850,15 +945,17 @@ async function upsertLedgerLocalOrder(
 }> {
   const paid = String(ledgerOrder.paymentStatus ?? "").toLowerCase() === "paid";
   const nowIso = new Date().toISOString();
+  /** 事件時間：補建時用 Ledger 時間，否則用「現在」（＝本機最後改動時間）。 */
+  const stamp = options?.updatedAtOverride ?? nowIso;
 
   const existing = loadOrders();
   const index = existing.findIndex((row) => row.id === projection.id);
   const localOrder: PosOrder = {
     ...projection,
-    status: paid ? "paid" : "sent_to_kitchen",
+    status: options?.forceSettled ? "settled" : paid ? "paid" : "sent_to_kitchen",
     prepaidAmount: paid ? (projection.total ?? 0) : 0,
     clientUpdatedAt: nowIso,
-    updatedAt: nowIso,
+    updatedAt: stamp,
     // 改枱 / 重複採納要保留原本建立時間（單據／排序都靠佢）。
     ...(index >= 0 ? { createdAt: existing[index].createdAt } : {}),
   };
@@ -885,7 +982,8 @@ async function upsertLedgerLocalOrder(
   // ⚠️ 刻意**唔**做「第一張失敗就補一張」：打印中心會出「列印失敗」紅標，
   // 收銀可以喺點餐位置手動重打（商家 2026-09-14 明確指示）。
   // ⚠️ 呢個檢查只覆蓋「同一部機」；換機排位可能仍會多出一張（接受，方向係寧少唔多）。
-  const printAlreadyDone = hasPrintJobForOrder(projection.id);
+  // ⚠️ `skipPrint`（補建歷史單）唔會出紙：單已經做過，廚房唔應該再收到新紙。
+  const printAlreadyDone = options?.skipPrint === true || hasPrintJobForOrder(projection.id);
   const printJobs = printAlreadyDone ? [] : buildPrintJobs(localOrder);
   if (printJobs.length > 0) {
     appendPrintJobsWithSync(printJobs);

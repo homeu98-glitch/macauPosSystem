@@ -24,6 +24,11 @@ import {
   savePosLocalSettings,
 } from "@/lib/storage";
 import { orderMatchesReportRange, reportRangeLabel, resolveReportRange, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
+// 🔴 Ledger 線上單嘅「屬於邊一日」必須用同一個時間口徑（見 `order-event-time.ts`）。
+// 唔可以自己寫 `createdAt ?? updatedAt`：RPC `list_merchant_orders` 係按 **`updated_at` DESC**
+// 排序，若用 `createdAt` 判斷就會「排序鍵 ≠ 過濾鍵」——一張「昨日落單、今日完成」嘅預約單
+// 會令 `break outer` 提早中止翻頁，之後嘅線上單全部靜默消失（2026-09-24 取餐碼 001 實案）。
+import { orderEventInstant, orderEventISO } from "@/lib/pos/order-event-time";
 import {
   computeIngredientConsumption,
   inMacauMonth,
@@ -36,6 +41,11 @@ import {
 import { formatMoney } from "@/lib/format";
 import { buildOnlineOrderDetailNotes, buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
+// P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
+// ⚠️ 補建函式（`ledger-pos-bridge`）刻意用**動態 import** —— 佢係大模組，
+//    唔應該為咗一個罕用按鈕而加進報表頁嘅初始 bundle。
+import { OnlineReconcileBanner } from "@/components/online-reconcile-banner";
+import { reconcileOnlineOrders } from "@/lib/pos/online-reconcile";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import { readNetworkOnline } from "@/lib/use-network-online";
 import { evaluatePollGate } from "@/lib/pos/poll-gate-client";
@@ -1063,6 +1073,15 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
    *  fetch effect 嘅依賴陣列；**唔可以**加落「切店/切範圍重置」effect，
    *  否則會清空 orders → 全頁 skeleton 閃一下（正正就係要避免嘅嘢）。 */
   const refreshToken = props.refreshToken ?? 0;
+  /**
+   * P1 補建後嘅軟刷新信號（2026-09-24）。
+   *
+   * **唔另開請求路徑** —— 只係令下面三條 fetch effect 重跑一次（同外殼 `refreshToken`
+   * 完全同一個機制）。補建係罕見動作（正常一日 0–1 張），所以唔會造成持續流量。
+   */
+  const [reconcileRefresh, setReconcileRefresh] = useState(0);
+  /** 合成刷新鍵：外殼軟刷新 ＋ 補建後刷新。三條 fetch effect 一律依賴呢個。 */
+  const refreshKey = refreshToken * 1000 + reconcileRefresh;
   const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
   const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date()).substring(0, 7);
   const bom: BomEntry[] = useMemo(() => loadBom(merchantId ?? ""), [merchantId]);
@@ -1554,7 +1573,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [merchantId, backfillSeq, range, adminAllStoresMode, adminOrderFetcher, refreshToken]);
+  }, [merchantId, backfillSeq, range, adminAllStoresMode, adminOrderFetcher, refreshKey]);
 
   // 訂閱 authSession 變更：切換帳號時重置 orders 並強制重跑 backfill。
   // root cause 修復（2026-09-04）：React 唔會自動訂閱 localStorage，冇呢個 listener
@@ -1606,10 +1625,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
           const byHour = new Array<number>(24).fill(0);
           const kept: LedgerOnlineOrder[] = [];
           for (const o of rows) {
-            const ts = o.createdAt ?? o.updatedAt;
-            if (!ts) continue;
-            const t = Date.parse(ts);
-            if (!Number.isFinite(t)) continue;
+            // 🔴 同非 admin 路徑同一口徑（`updatedAt` 優先）。admin 通道 server 端亦已同步改為
+            // 以 `updated_at` 篩區間，兩邊必須一致，否則 admin 報表仍會漏線上單。
+            const t = orderEventInstant(o);
+            if (t <= 0) continue;
             if (rangeStartMs != null && t < rangeStartMs) {
               outOfRange++;
               continue;
@@ -1626,7 +1645,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               unpaidCount++;
               continue;
             }
-            const hour = macauHour(ts);
+            const hour = macauHour(orderEventISO(o));
             byHour[hour] += 1;
             counted++;
             kept.push(o);
@@ -1720,10 +1739,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
           if (rows.length === 0) break;
 
           for (const o of rows) {
-            const ts = o.createdAt ?? o.updatedAt;
-            if (!ts) continue;
-            const t = Date.parse(ts);
-            if (!Number.isFinite(t)) continue;
+            // 🔴 時間口徑必須同 RPC 排序鍵（`updated_at` DESC）一致，否則下面嘅
+            // `break outer` 會誤殺：一張「昨日落單、今日完成」嘅預約單會令翻頁提早中止，
+            // 之後嘅線上單全部靜默消失（2026-09-24 取餐碼 001 實案）。
+            const t = orderEventInstant(o);
+            if (t <= 0) continue;
 
             // 篩掉超出範圍嘅單 + cancelled + unpaid。
             if (rangeStartMs != null && t < rangeStartMs) {
@@ -1744,8 +1764,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               unpaidCount++;
               continue;
             }
-            // 依「下單時間」createdAt 入帳；fallback updatedAt。
-            const hour = macauHour(ts);
+            // 尖峰時段分組：同上面「歸屬邊一日」用**同一個**口徑（`orderEventISO` = updatedAt 優先），
+            // 唔可以各自解讀，否則同一張單嘅「歸屬日」同「鐘頭」會讀唔同欄位。
+            const hour = macauHour(orderEventISO(o));
             byHour[hour] += 1;
             counted++;
             kept.push(o);
@@ -1790,7 +1811,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [merchantId, range, isAdminMode, refreshToken]);
+  }, [merchantId, range, isAdminMode, refreshKey]);
 
   useEffect(() => {
     async function safeLedger(r: ReportRangeArg): Promise<LedgerReportSummary | null> {
@@ -1883,7 +1904,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [range, merchantId, merchantIdForQuery, isAdminMode, refreshToken]);
+  }, [range, merchantId, merchantIdForQuery, isAdminMode, refreshKey]);
 
   // Ledger 純線上單入報表前，先剔除已經同步入 POS DB 嘅單（以 POS onlineOrderId ↔ Ledger id 對應），
   // 避免人流 / 時長統計雙重計算。剩低嘅就係「從未入 POS DB」嘅線上單。
@@ -1895,6 +1916,67 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     () => onlineOrders.filter((o) => !posOnlineIds.has(o.id)),
     [onlineOrders, posOnlineIds],
   );
+
+  /**
+   * P0 對數（2026-09-24）：邊幾張「Ledger 已付款」單 POS 訂單庫完全冇記錄。
+   *
+   * 🔴 **零新請求** —— 純由上面已經抓到嘅 `onlineOrders` / `orders` 推導。
+   * 呢個就係 2026-09-24 取餐碼 001 漏帳嘅可視化入口（之前完全冇提示）。
+   */
+  const onlineReconcile = useMemo(
+    () => reconcileOnlineOrders({ ledgerOrders: countableOnlineOrders, posOrders: orders }),
+    [countableOnlineOrders, orders],
+  );
+
+  /** P1 補建狀態（busy 防連點；message 顯示結果）。 */
+  const [backfillBusy, setBackfillBusy] = useState(false);
+  const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
+
+  /**
+   * P1 補建（2026-09-24）：把「Ledger 已完成＋已付款、但 POS 冇記錄」嘅單
+   * 補建成本地 `settled` 單並推上雲。
+   *
+   * 流量足跡（**只喺用戶主動撳先發生**，唔會週期性重複）：
+   * - 每張單 1 次 `get_order_detail`（Ledger RPC）；
+   * - 每張單 1 次 `saveOrders()`（本機）＋ 1 批 outbox 上雲（`POST /api/pos/sync`）；
+   * - 完成後 1 次軟刷新（重跑既有三條 effect），**唔新增任何請求路徑**。
+   *
+   * 正常情況（冇漏帳）呢個按鈕根本唔會出現 ⇒ **日常流量零變化**。
+   */
+  const handleBackfillUnadopted = useCallback(async () => {
+    if (backfillBusy) return;
+    const targets = countableOnlineOrders;
+    if (targets.length === 0) return;
+    setBackfillBusy(true);
+    setBackfillMessage(null);
+    try {
+      // 動態 import：`ledger-pos-bridge` 係大模組，唔應該加進報表頁初始 bundle。
+      const { adoptCompletedLedgerOrderToLocal } = await import("@/lib/ledger/ledger-pos-bridge");
+      let done = 0;
+      let skipped = 0;
+      let failed = 0;
+      for (const order of targets) {
+        try {
+          const result = await adoptCompletedLedgerOrderToLocal({ ledgerOrder: order });
+          if (result) done += 1;
+          else skipped += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      const parts = [`已補建 ${done} 張`];
+      if (skipped > 0) parts.push(`略過 ${skipped} 張（未付款／未完成）`);
+      if (failed > 0) parts.push(`失敗 ${failed} 張（可再撳一次重試）`);
+      setBackfillMessage(
+        `${parts.join("、")}。補建單會即時上雲，報表／交班／線下訂單／對帳之後都會見到。`,
+      );
+      setReconcileRefresh((v) => v + 1);
+    } catch (err) {
+      setBackfillMessage(`補建失敗：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBackfillBusy(false);
+    }
+  }, [backfillBusy, countableOnlineOrders]);
 
   // Ledger 線上單明細：對「可計入」嘅線上單逐張抓 get_order_detail，
   // 令菜品銷售排行可以涵蓋從未入 POS DB 嘅線上單（快閃餐／線上點餐）。
@@ -2624,6 +2706,17 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               預設只出頭 ORDER_DETAIL_PREVIEW 行 + 「顯示全部」，否則逐筆列表會佔滿首屏，
               把下面所有區塊（菜品排行、食材消耗…）推到很遠。
             */}
+            {/* P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
+                冇警示／冇漏帳時整個元件 render `null` ⇒ 佈局零改動。 */}
+            <OnlineReconcileBanner
+              reconcile={onlineReconcile}
+              fetchStatus={onlineFetchInfo.status}
+              fetchError={onlineFetchInfo.lastError}
+              busy={backfillBusy}
+              onBackfill={handleBackfillUnadopted}
+              backfillMessage={backfillMessage}
+            />
+
             <Card
               title="訂單明細"
               tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}

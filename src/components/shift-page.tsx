@@ -17,6 +17,9 @@ import { orderMatchesReportRange, macauTodayRange, macauDateKey } from "@/lib/le
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
+// P0（2026-09-24）：線上單對數 —— 抓出「Ledger 已付款、但 POS 訂單庫冇記錄」嘅單。
+// 純判定（零依賴），由已經抓到嘅資料推導 ⇒ **零新請求**。
+import { reconcileOnlineOrders, unadoptedNotice } from "@/lib/pos/online-reconcile";
 // 退款淨額口徑（毛 / 淨兩個數並存）—— 必須同報表共用同一套算法，否則兩頁夾唔到數。
 import { refundAmountOf, refundTotalOf } from "@/lib/refund-net";
 import {
@@ -584,6 +587,18 @@ export function ShiftPage() {
   const ledgerOnlyRows = useMemo(
     () => (ledgerPaidOrders?.orders ?? []).filter((o) => !localOnlineIds.has(o.id)),
     [ledgerPaidOrders, localOnlineIds],
+  );
+
+  /**
+   * P0 對數（2026-09-24）：`ledgerOnlyRows` 已經係「未入 POS 記錄」嘅單，
+   * 呢度包成統一結果物件，令提示文案同報表頁**同一套**（`unadoptedNotice()`）。
+   *
+   * ⚠️ 呢啲單**仍然計入上面嘅「線上實收」**（交班從 Ledger 逐張加總），
+   * 所以警示講嘅係「POS 冇記錄」，唔係「錢冇計」。
+   */
+  const onlineReconcile = useMemo(
+    () => reconcileOnlineOrders({ ledgerOrders: ledgerOnlyRows, posOrders: [] }),
+    [ledgerOnlyRows],
   );
 
   const ledgerOnlyOnline = useMemo(() => {
@@ -1788,6 +1803,23 @@ export function ShiftPage() {
                   ) : null}
                 </article>
               </div>
+              {/* P0（2026-09-24）：Ledger 已付款、但 POS 訂單庫冇記錄嘅單。
+                  以前完全冇提示 ⇒ 商家只會見到「交班／報表同實收夾唔埋」，無從判斷成因
+                  （2026-09-24 實案：表嫂美食取餐碼 001 · MOP 43 · 餘額扣點）。
+                  補建入口喺「營業報表 → 訂單明細」上方同一個警示條。 */}
+              {onlineReconcile.unadoptedCount > 0 ? (
+                <div
+                  role="alert"
+                  className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                >
+                  <div className="font-semibold">有線上單未入 POS 記錄</div>
+                  <div className="mt-0.5">
+                    {unadoptedNotice(onlineReconcile)}
+                    呢批單嘅錢已經計入上面「線上」實收，但 POS 訂單庫冇記錄 ⇒
+                    「線下訂單」／對帳／明細都見唔到。可喺「營業報表 → 訂單明細」上方一鍵補建入 POS。
+                  </div>
+                </div>
+              ) : null}
               {backfillStatus ? (
                 <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
                   {backfillStatus}

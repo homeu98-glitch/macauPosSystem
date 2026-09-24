@@ -145,8 +145,39 @@ limit 50;
 
 
 -- ---------------------------------------------------------------------------
+-- §5b 🔴 精準止血：刪走「阻塞住所有自動收據」嘅嗰一行（2026-09-24 實測：佢一直存在）
+-- ---------------------------------------------------------------------------
+-- 背景：§3 輸出見到 `ledger-931f55c2… / 002 / printer-22a790b1` 有一對
+--       `["receipt:0", null]` ⇒ **嗰條 `receipt:0` 由 2026-09-21 12:02 一直霸住個索引**，
+--       之後每一次自動收據 insert 都撞 23505 被靜默丟棄（商家見到嘅「已發送卡住」）。
+--       ⚠️ 佢係 3 日前嘅行，所以 anon 24 小時窗口**睇唔到**（我早前嘅唯讀探測因此漏咗）。
+--
+-- 步驟 1：確認持有者（應該只回 1 行 —— partial unique index 保證）
+select id, order_id, order_no, status, printer_group, printer_id, once_key,
+       created_at at time zone 'Asia/Macau' as created_macau,
+       finished_at at time zone 'Asia/Macau' as finished_macau
+  from public.pos_print_jobs
+ where store_id = '8291f843-9def-4956-9d0b-1cfef2598306'
+   and once_key = 'receipt:0';
+
+-- 步驟 2：確認佢係「已經印完嘅舊單」之後，逐條 id 刪（**只刪呢一行，唔好加其他條件**）：
+--   2026-09-24 實測持有者 ＝ `print-fb179f3f`（09-21 12:02、ledger-931f55c2… / 002）。
+--
+-- delete from public.pos_print_jobs
+--  where id = 'print-fb179f3f'
+--    and store_id = '8291f843-9def-4956-9d0b-1cfef2598306';
+
+-- ⚠️ 效果同限制（一定要講清楚）：
+--   · 清走之後，**下一張**結帳單嘅自動收據就插得入、即刻有紙；
+--   · 但因為線上仲跑緊**舊 bundle**（未部署），嗰張新收據又會以 `receipt:0` 寫入
+--     ⇒ 再變返做新嘅阻塞行 ⇒ **每清一次只回復一張**。
+--   ⇒ 真正解法係部署代碼（新鍵含 order id，唔會再同任何人撞）。
+--   · 商家人手做法（唔使 SQL）：打印中心 →「清除已成功」會真刪呢類舊行，效果一樣。
+--
+-- ---------------------------------------------------------------------------
 -- §6 驗收（代碼部署之後，落一張真單結帳）
 -- ---------------------------------------------------------------------------
+
 -- 6.1 新寫入嘅鍵一定要帶訂單身分（見到 `|` 就正確）：
 -- select id, order_id, order_no, once_key, status,
 --        created_at at time zone 'Asia/Macau' as created_macau

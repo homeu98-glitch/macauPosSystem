@@ -14,15 +14,24 @@
 // 方便 UI 解釋同 Ledger RPC 嘅差額。
 //
 // 篩選條件同報表頁（`restaurant-daily-report.tsx` 嘅 Ledger 線上單）完全一致：
-//   ① 區間內（依 `createdAt ?? updatedAt`；澳門時區界線由 `resolveReportRange()` 提供）
+//   ① 區間內（依 `orderEventInstant()` —— `updatedAt` 優先，見下）
 //   ② 非取消（`status` 含 "cancel" 一律剔）
 //   ③ `paymentStatus === "paid"`（未付款唔算錢）
+//
+// 🔴 2026-09-24：① 由舊寫法 `createdAt ?? updatedAt` 改為 `orderEventInstant()`。
+//    RPC `list_merchant_orders` 係按 **`updated_at` DESC** 排序，若用 `createdAt` 判斷
+//    「係唔係已過區間起點」，就會出現「排序鍵 ≠ 過濾鍵」：
+//    一張「昨日落單、今日完成」嘅預約單（createdAt 喺區間外、updatedAt 喺區間內）
+//    會令下面嘅 `break outer` 提早中止，**之後所有線上單一齊消失**（交班線上實收靜默少計）。
+//    2026-09-24 實案：表嫂美食取餐碼 001（MOP 43、餘額扣點、預約單）就係咁樣唔入報表／交班。
+//    `orderEventInstant()` 同時係全站唯一時間口徑（見 `src/lib/pos/order-event-time.ts`）。
 //
 // ⚠️ 唔好喺度改「只計 completed」——咁做就係返去 RPC 嗰個滯後口徑。
 
 import { listMerchantOrders } from "@/lib/ledger/orders";
 import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { resolveReportRange, type ReportRangeArg } from "@/lib/ledger/report-period";
+import { orderEventInstant } from "@/lib/pos/order-event-time";
 
 export interface PaidLedgerOrdersTotal {
   /** 已付款線上單 `total` 加總（MOP）＝ 商家實際收到嘅線上錢。 */
@@ -94,10 +103,11 @@ export async function sumPaidLedgerOrders(params: {
     if (rows.length === 0) break;
 
     for (const order of rows) {
-      const ts = order.createdAt ?? order.updatedAt;
-      if (!ts) continue;
-      const t = Date.parse(ts);
-      if (!Number.isFinite(t)) continue;
+      // 🔴 時間口徑同上面第 ① 點：一定要用 `orderEventInstant()`（updatedAt 優先），
+      // 令「過濾鍵」同 RPC「排序鍵」（`updated_at` DESC）一致。用 `createdAt` 會令下面
+      // 嘅 `break outer` 提早中止 ⇒ 之後所有線上單一齊消失（2026-09-24 實案）。
+      const t = orderEventInstant(order);
+      if (t <= 0) continue;
 
       if (Number.isFinite(startMs) && t < startMs) {
         // 排序係由新到舊：一過區間起點，後面全部更舊 → 收工。

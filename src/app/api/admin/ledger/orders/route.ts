@@ -15,8 +15,15 @@ import { mapLedgerOrderRow, type LedgerOrderRow, type LedgerOnlineOrder } from "
  * Query params：
  * - merchantId（可選）：不帶 = 全部商家（「全部」彙總）；帶 = 指定商家 UUID
  *   （Ledger merchant_id == POS store_id，同一個 UUID，可直接用）
- * - start / end（可選）：ISO 區間，過濾口徑 = `created_at ∈ 區間`
- *   （同 POS / 報表 client 端口徑一致，轉 UTC ISO 避開 `+08:00` 解析歧義）
+ * - start / end（可選）：ISO 區間，過濾口徑 = **`updated_at` ∈ 區間**
+ *   （同 POS / 報表 client 端口徑一致 —— 前端用 `orderEventInstant()`，即 `updatedAt` 優先）
+ *
+ * 🔴 2026-09-24 改：由 `created_at` 改為 `updated_at`。
+ *   前端口徑（`restaurant-daily-report.tsx` admin 分支）係 `orderEventInstant()`
+ *   （`reopenedAt → originalSettledAt → updatedAt → createdAt`），若 server 仍按
+ *   `created_at` 篩，就會靜默丟棄「昨日落單、今日完成」嘅預約單 ——
+ *   2026-09-24 實案：表嫂美食取餐碼 001（MOP 43、餘額扣點）就係咁樣唔入報表。
+ *   排序同時改為 `updated_at DESC`（同 RPC `list_merchant_orders` 一致）。
  *
  * 把關：admin session token。service-role key 只存 server，絕不落 client bundle。
  * 未配置 `LEDGER_SERVICE_ROLE_KEY` → fail-closed 出 503（唔可以靜默返空，否則
@@ -81,11 +88,13 @@ export async function GET(request: Request) {
       let q = supabase
         .from("orders")
         .select("*")
-        .order("created_at", { ascending: false })
+        .order("updated_at", { ascending: false })
         .range(off, off + PAGE - 1);
       if (merchantId) q = q.eq("merchant_id", merchantId);
-      if (start) q = q.gte("created_at", start);
-      if (end) q = q.lte("created_at", end);
+      // 🔴 一定要 `updated_at`：前端口徑係 `orderEventInstant()`（updatedAt 優先）。
+      // 用 `created_at` 會靜默丟棄「昨日落單、今日完成」嘅預約單（2026-09-24 實案）。
+      if (start) q = q.gte("updated_at", start);
+      if (end) q = q.lte("updated_at", end);
 
       const { data, error } = await q;
       if (error) {
