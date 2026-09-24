@@ -27,6 +27,16 @@ import {
   ShiftTemplate,
   ShiftTemplateVariant,
 } from "@/lib/types";
+// 收據「原價合計」區塊 ＋ 殘差：已抽去純函式模組（可被 `node --test` 直接驗）。
+// 🔴 re-export 係刻意嘅：以前有人可能 `import { resolveExtraFee } from "@/lib/escpos-template"`，
+//    搬檔唔應該令嗰啲 import 爆（零影響原則）。
+import {
+  buildSubtotalBlock,
+  resolveExtraFee,
+  roundMoney,
+} from "@/lib/receipt/subtotal-block";
+
+export { buildSubtotalBlock, resolveExtraFee };
 
 // ── 區塊中繼資料（id + 中文標籤），設計介面 / 預覽共用 ──
 export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
@@ -1022,104 +1032,6 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
   };
-}
-
-/** 金額四捨五入到 2 位小數；NaN / 負數一律當 0（收據唔會印負數金額）。 */
-function roundMoney(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.round(value * 100) / 100;
-}
-
-/**
- * 收據嘅「附加費」＝ 唔屬任何菜品、但計入總金額嘅費用（外送費／餐盒費）。
- *
- * 🔴 為什麼需要佢：外賣平台單嘅「營業額」包含外送費／餐盒費，但**冇對應菜品**
- *    → 總金額會大過原價合計。收據嘅不變式係
- *      `原價合計 + 服務費 + 稅 − 抹零 − 優惠合計 === 總金額`，
- *    而 `resolveTotalDiscount` 會正確地拒絕「負優惠」
- *    （反向推出來嘅差額係負數 → 唔可信 → 忽略）。
- *    結果就係「原價合計 67 / 總金額 126」而**冇任何說明**，睇落似算錯。
- *
- * 所以呢度把嗰個差額當成**正數附加費**補一行，令加總對得返。
- *
- * ⚠️ 店內單嘅差額係 0（或負數，例如系統抹零）→ `roundMoney` 回 0
- *    → **唔會多咗行**，輸出同以前一模一樣。
- */
-export function resolveExtraFee(parts: {
-  subtotalBefore: number;
-  serviceCharge: number;
-  tax: number;
-  rounding: number;
-  totalDiscount: number;
-  orderTotal: number;
-}): number {
-  return roundMoney(
-    parts.orderTotal -
-      parts.subtotalBefore -
-      parts.serviceCharge -
-      parts.tax +
-      parts.rounding +
-      parts.totalDiscount,
-  );
-}
-
-/**
- * 「原價合計」區塊嘅完整內容。
- *
- * 正常情況只有一行；有附加費（外送費／餐盒費）時多一行。
- * ⚠️ 刻意**唔另開一個 template field id**：收據模板係 per-store 儲喺 DB，
- *    新 field 唔會自動出現喺現有店舖嘅模板 → 要逐店改模板才印得出。
- *    而 `subtotal_before_discount` 係每個模板都有嘅欄位，且內容支援 `\n`。
- */
-export function buildSubtotalBlock(
-  parts: {
-    subtotalBefore: number;
-    serviceCharge: number;
-    tax: number;
-    rounding: number;
-    totalDiscount: number;
-    orderTotal: number;
-  },
-  format: (amount: number) => string,
-  /** 外賣平台嘅非菜品費用（餐盒費／膠袋費／服務費），逐項印。店內單唔會有。 */
-  platformFees?: Array<{ label: string; amount: number; excluded?: boolean }>,
-): string {
-  const lines = [`原價合計: ${format(parts.subtotalBefore)}`];
-
-  // 計入營業額嘅行。
-  for (const fee of platformFees ?? []) {
-    if (!fee || fee.excluded) continue;
-    const amount = Number(fee.amount);
-    // 🔴 容許負數：商家承擔嘅優惠（商家活動支出／滿減／代金券）
-    //    以負數行表示，同平台後台嘅費用清單一模一樣 —— 商家對數時逐項睇得到。
-    if (!Number.isFinite(amount) || amount === 0) continue;
-    const label = String(fee.label ?? "").trim();
-    if (!label) continue;
-    lines.push(`${label}: ${format(amount)}`);
-  }
-
-  // 唔計入營業額嘅行（例如顧客支付嘅配送費）：分開一組，並加一句說明，
-  // 免得商家以為加總少咗一筆。
-  const excludedLines = (platformFees ?? []).filter(
-    (fee) => fee && fee.excluded && Number(fee.amount) !== 0,
-  );
-  if (excludedLines.length > 0) {
-    lines.push("（以下不計入營業額）");
-    for (const fee of excludedLines) {
-      const amount = Number(fee.amount);
-      if (!Number.isFinite(amount)) continue;
-      const label = String(fee.label ?? "").trim();
-      if (!label) continue;
-      lines.push(`${label}: ${format(amount)}`);
-    }
-  }
-
-  // 殘差：列出費用之後仍然對唔上（例如平台新增咗某種費用）→ 補一行，
-  // 保證「原價合計 + 費用 … − 優惠合計 === 總金額」永遠成立。
-  const extra = resolveExtraFee(parts);
-  if (extra > 0) lines.push(`外送費／餐盒費: ${format(extra)}`);
-
-  return lines.join("\n");
 }
 
 /**

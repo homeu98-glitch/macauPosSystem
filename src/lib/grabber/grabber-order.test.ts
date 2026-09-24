@@ -112,6 +112,41 @@ test("localOrderNo：兩個編號都冇時，用外部單號尾 6 位兜底（�
   );
 });
 
+/**
+ * 🔴 回歸測試（2026-09-24 由「假單 payload vs 真 bridge payload 對比」發現）：
+ *
+ * `aomi-bridge.js::normalizeDetail()` 真正發嘅係 `storeSeq` ＋ `localOrderNo`，
+ * **唔係** `storeSeqNo`（後者只有插件嘅假單生成器會寫）。
+ * 若 `grabberLocalOrderNo()` 只認 `storeSeqNo`，真實澳覓單就會靜靜走 fallback，
+ * 單號變 `澳覓#<外部單號尾6位>` —— 同平台後台對唔上，對單即刻失效。
+ */
+test("localOrderNo：真澳覓 payload 用 storeSeq / localOrderNo 都認得（唔可以只認 storeSeqNo）", () => {
+  // 真 bridge 形狀：storeSeq: "10"、localOrderNo: "#10"，冇 storeSeqNo
+  assert.equal(
+    grabberLocalOrderNo({ source: "aomi", externalOrderId: "AOMI-abc123", storeSeq: "10" }),
+    "澳覓#10",
+  );
+  assert.equal(
+    grabberLocalOrderNo({ source: "aomi", externalOrderId: "AOMI-abc123", localOrderNo: "#10" }),
+    "澳覓#10",
+  );
+  // 兩個都有（現實會咁）→ 一樣出同一個單號
+  assert.equal(
+    grabberLocalOrderNo({
+      source: "aomi",
+      externalOrderId: "AOMI-abc123",
+      storeSeq: "10",
+      localOrderNo: "#10",
+    }),
+    "澳覓#10",
+  );
+  // 冇 storeSeqNo 都唔可以跌到「外部單號尾6位」呢條 fallback
+  assert.notEqual(
+    grabberLocalOrderNo({ source: "aomi", externalOrderId: "AOMI-abc123", storeSeq: "10" }),
+    "澳覓#abc123",
+  );
+});
+
 // ── ③ 金額口徑 ───────────────────────────────────────────────
 
 test("營業額：澳覓用 turnoverAmount，唔用客人實付 payAmount", () => {
@@ -531,4 +566,73 @@ test("零費用唔會出現空行（amount === 0 一律略過）", () => {
   };
   const r = projectGrabberOrder({ order, storeId: "s" });
   assert.deepEqual(r.row!.platform_fees, [], "全部係 0 → 唔應該有費用行");
+});
+
+/**
+ * `platformFeeLines()` 直接測試（唔經投影）。
+ *
+ * 🔴 呢個函式曾經只認**平台原始欄位名**（`*Amt` / `*Amtn`），但插件 bridge
+ *    送過嚟嘅係**正規化名**（`*Amount`）→ 真實單入到 POS 全部搵唔到費用
+ *    （2026-09-24 實案）。所以每個欄位**兩個名都要認**，呢度逐個驗。
+ */
+test("platformFeeLines：正規化名（插件實際送出）同原始名（平台原文）兩邊都要認", () => {
+  // 澳覓：bridge 出 `boxAmt` / `plasticAmt` / `merchantActAmt` / `holidayServiceAmt` / `sendAmt`
+  assert.deepEqual(
+    platformFeeLines({
+      source: "aomi",
+      amount: { boxAmt: 4, plasticAmt: 3, merchantActAmt: 9, holidayServiceAmt: 2, sendAmt: 7 },
+    }),
+    [
+      { label: "餐盒費", amount: 4 },
+      { label: "膠袋費", amount: 3 },
+      { label: "節假日服務費", amount: 2 },
+      { label: "商家活動支出", amount: -9 },
+      { label: "配送費", amount: 7, excluded: true },
+    ],
+  );
+
+  // mfood：bridge 出 `boxFee` / `plasticBagFee` / `serviceFee` / `deliveryFee` /
+  //        `merchantDeliveryAmount` / `voucherAmount` / `fullReductionAmount` / `memberUpAmount`
+  assert.deepEqual(
+    platformFeeLines({
+      source: "mfood",
+      amount: {
+        boxFee: 3,
+        plasticBagFee: 1,
+        serviceFee: 2,
+        deliveryFee: 12,
+        merchantDeliveryAmount: 12,
+        voucherAmount: 5,
+        fullReductionAmount: 4,
+        memberUpAmount: 2,
+      },
+    }),
+    [
+      { label: "餐盒費", amount: 3 },
+      { label: "膠袋費", amount: 1 },
+      { label: "服務費", amount: 2 },
+      { label: "商家代金券", amount: -5 },
+      { label: "商家滿減", amount: -4 },
+      { label: "月卡紅包升級", amount: -2 },
+      { label: "配送費", amount: 12, excluded: true },
+      { label: "商家配送費減免", amount: -12, excluded: true },
+    ],
+  );
+
+  // 原始名（如果有人直接送平台原文，唔經 bridge）都要照認
+  assert.deepEqual(platformFeeLines({ source: "mfood", amount: { voucherAmtn: 5, fullReductionAmtn: 4 } }), [
+    { label: "商家代金券", amount: -5 },
+    { label: "商家滿減", amount: -4 },
+  ]);
+});
+
+test("platformFeeLines：配送費屬「唔計入營業額」嘅資訊行（excluded: true）", () => {
+  const lines = platformFeeLines({ source: "aomi", amount: { boxAmt: 4, sendAmt: 7 } });
+  const excluded = lines.filter((l) => l.excluded);
+  assert.deepEqual(excluded, [{ label: "配送費", amount: 7, excluded: true }]);
+  // 計入營業額嘅只有餐盒費
+  assert.deepEqual(
+    lines.filter((l) => !l.excluded),
+    [{ label: "餐盒費", amount: 4 }],
+  );
 });

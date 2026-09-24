@@ -39,8 +39,18 @@ export interface GrabberItem {
 export interface GrabberOrder {
   source?: string | null;
   externalOrderId?: string | null;
-  /** 澳覓：訂單編號（`#2` 連 #）；mfood 冇，要靠 orderNumber */
+  /**
+   * 澳覓：訂單編號（`#2` 連 #）。
+   *
+   * ⚠️ **實際 `aomi-bridge.js::normalizeDetail()` 冇發呢個名** —— 佢發 `storeSeq`
+   * （`"10"`）同 `localOrderNo`（`"#10"`）。呢個名只有插件嘅假單生成器會寫。
+   * 所以 `grabberLocalOrderNo()` **唔可以只認佢**（否則真單永遠走 fallback）。
+   */
   storeSeqNo?: string | null;
+  /** 澳覓：`aomi-bridge.js` 真正發嘅訂單編號（唔帶 `#`）。 */
+  storeSeq?: string | null;
+  /** 澳覓：`aomi-bridge.js` 真正發嘅顯示單號（帶 `#`）。 */
+  localOrderNo?: string | null;
   /** mfood：訂單編號（數字） */
   orderNumber?: string | number | null;
   /** 澳覓狀態 enum（ASCII，例：`ORDER_ARRIVED`） */
@@ -189,16 +199,32 @@ export function grabberLocalOrderNo(order: GrabberOrder): string {
   const src = normalizeGrabberSource(order.source);
   const prefix = src ? PLATFORM_LABEL[src] : "外賣";
 
-  const seq = String(order.storeSeqNo ?? "").trim();
-  if (seq) return prefix + (seq.startsWith("#") ? seq : `#${seq}`);
+  /** 統一補 `#`：`#3` / `3` 都要出 `澳覓#3`。 */
+  const withHash = (v: unknown): string => {
+    const s = String(v ?? "").trim();
+    if (!s) return "";
+    return prefix + (s.startsWith("#") ? s : `#${s}`);
+  };
+
+  // 🔴 呢三個名**全部要試**（順序：POS 已知名 → bridge 真正發嘅名）。
+  //    實際 payload 出嘅係：
+  //      · 澳覓 `aomi-bridge.js::normalizeDetail()` → `storeSeq`（`"10"`）＋ `localOrderNo`（`"#10"`）
+  //      · mfood `mfood-bridge.js::normalizeDetail()` → `orderNumber`（數字）
+  //      · `storeSeqNo` **只有插件嘅假單生成器會寫**
+  //    只認 `storeSeqNo` 嘅後果：真單永遠走最後嗰條 fallback →
+  //    單號變 `澳覓#<外部單號尾6位>`，同平台後台對唔上 → 對單即失效。
+  //    （2026-09-24 由「假單 payload vs 真 bridge payload 命名對比」發現。）
+  for (const candidate of [order.storeSeqNo, order.storeSeq, order.localOrderNo]) {
+    const out = withHash(candidate);
+    if (out) return out;
+  }
 
   const num = order.orderNumber;
   if (num !== null && num !== undefined && String(num).trim() !== "") {
-    const s = String(num).trim();
-    return prefix + (s.startsWith("#") ? s : `#${s}`);
+    return withHash(num);
   }
 
-  // 兩個都冇 → 用外部單號尾 6 位，起碼唔會兩張單撞同一個顯示名
+  // 全部冇 → 用外部單號尾 6 位，起碼唔會兩張單撞同一個顯示名
   return `${prefix}#${String(order.externalOrderId ?? "").slice(-6)}`;
 }
 
@@ -433,7 +459,7 @@ export function projectGrabberOrder(input: ProjectInput): ProjectResult {
 
     const qty = num(it.quantity) > 0 ? num(it.quantity) : 1;
     const price = num(it.unitPrice);
-    const { menu, matchedBy } = matchMenuItem(it, index);
+    const { menu } = matchMenuItem(it, index);
     if (!menu) unmatched.push(name);
 
     // 規格：平台只給純文字（冇 groupId / optionId / priceDelta），
