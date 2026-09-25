@@ -37,3 +37,11 @@
 
 ## 9 POS 工作階段
 `pos_sessions`(0047)；續期搭 `sync`(60s)＋`state`(5 分，GET 只續期)；標頭 `x-pos-session`／`x-pos-build`；key 存 `sessionStorage`。🔴 `account` **唔可以**傳空/null（`verifyPosDeviceToken` 拒收 ⇒ 全店 401）。
+
+## 10 庫存／帳目（expenseRecorder 跨專案）
+🔴🔴 **供應商 duplicate key 根因＝`merchants.name` 有「全表唯一」約束**（`supabase_schema.sql:7`），同時 `(user_id,name)` 亦唯一 ⇒ `onConflict:"user_id,name"` 唔會報 42P10，但新行撞 `merchants_name_key` 報 23505 ⇒ **兩店唔可以同名**。J 2026-09-25 決定**保持全表唯一**，POS 端只做優雅提示（`ALREADY_EXISTS` 自動選用／`NAME_TAKEN` **唔可回 id**）。
+🔴 expenseRecorder 將設定**偷藏喺 `merchants` 表**用保留名做 KV：`__shop_settings__:<uid>`／`__global_settings__`（全域單位＋支付方式主檔），內容放 `address`。真實供應商名唔會 `__` 開頭 ⇒ 一律濾走（**唔可以用 PostgREST `.not("name","like","__%")`**：SQL `_` 係通配符，會濾走全部）。
+🔴 `__global_settings__` 一條列裝多個 key ⇒ 寫入**一定要 merge**（`patchGlobalSettings`），整份覆蓋會靜靜蓋走另一邊。
+🔴 支付方式主檔真源＝expenseRecorder `/admin/payment-methods`（admin 帳號 60000000／0000）；POS 讀 `GET /api/inventory/payment-methods`，`scope` 分 `purchase`／`checkout`／`both`。兩 repo 各有一份預設，靠 `payment-method-defaults-parity.test.ts` 對齊。**「未設定」vs「空清單」一律用 `Array.isArray` 分**（否則 admin 清唔走）。
+🔴 `normalizePosLocalSettings()` 逐欄重建 ⇒ 新欄位漏白名單會被**靜靜剷走**（今次 `invCategories` 已補）。
+🔴 expenseRecorder `node_modules/next@16.2.9` 安裝**唔完整**（缺 `types.d.ts`／`dist/types`）⇒ 本機 `next build` 型別檢查必掛喺 Next 自己生成嘅 `.next/{dev/,}types/validator.ts`（TS7016）。**與代碼無關**；要 `npm i next@16.3.0`（同 POS 對齊）才修得好。

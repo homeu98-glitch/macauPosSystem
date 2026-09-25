@@ -617,6 +617,23 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
           ? settings.retailApprovalRules.maxLineSaving
           : defaultPosLocalSettings.retailApprovalRules.maxLineSaving,
     },
+    /**
+     * ⚠️ 2026-09-25 新增：進貨品類清單（庫存 → 設置 → 品類）。
+     *
+     * 呢度係**逐欄重建**（唔係展開合併），所以新欄位一定要手動加落嚟，
+     * 否則商家建好嘅品類一 reload / 雲端同步就被靜靜剷走
+     * —— 同 `receipt.qrUrl`、`standaloneSpecGroups`、`shiftTemplatePresets` 係同一個坑。
+     * 過濾空字串：品類係用嚟做選單選項，空字串會變成一格「揀唔到」嘅死項。
+     */
+    invCategories: Array.isArray(settings?.invCategories)
+      ? Array.from(
+          new Set(
+            settings.invCategories
+              .map((c) => (typeof c === "string" ? c.trim() : ""))
+              .filter((c) => c.length > 0),
+          ),
+        )
+      : defaultPosLocalSettings.invCategories,
   };
 }
 

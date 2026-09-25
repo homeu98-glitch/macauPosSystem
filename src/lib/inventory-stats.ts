@@ -28,6 +28,94 @@ export const PAYMENT_STATUS_LABEL: Record<string, string> = {
   unpaid: "未付款",
 };
 
+/* ─────────────── 支付方式主檔（2026-09-25）─────────────── */
+
+/**
+ * 支付方式適用範圍（同 expenseRecorder `PaymentMethodScope` 一致）。
+ * - `purchase`：只喺進貨／收據出現（月結、銀行轉賬、支票…）
+ * - `checkout`：只喺收銀結帳出現
+ * - `both`：兩邊都出現（現金、信用卡…）
+ */
+export type PaymentMethodScope = "purchase" | "checkout" | "both";
+
+/** 主檔一項。`code` 會直接寫入 `receipts.raw_ocr_data.payment_method`。 */
+export type PaymentMethodDef = {
+  code: string;
+  label: string;
+  enabled: boolean;
+  scope: PaymentMethodScope;
+};
+
+/**
+ * 內建兜底主檔。
+ *
+ * 🔴 **同 expenseRecorder `lib/account-settings.ts` 嘅 `getDefaultGlobalPaymentMethods()`
+ * 必須逐字對齊**（code + label + scope）。兩邊係唔同 repo，冇共用型別，
+ * 所以靠 `payment-method-defaults-parity.test.ts` 喺本機同時見到兩個 repo 時自動比對
+ * （見唔到就 skip，唔會令 CI 紅）。
+ *
+ * 只有喺「主檔未設定過」或者「讀唔到 expenseRecorder」時先用呢份。
+ */
+export const DEFAULT_PAYMENT_METHODS: PaymentMethodDef[] = [
+  { code: "cash", label: "現金", enabled: true, scope: "both" },
+  { code: "card", label: "信用卡", enabled: true, scope: "both" },
+  { code: "transfer", label: "轉帳", enabled: true, scope: "both" },
+  { code: "on_delivery", label: "貨到付款", enabled: true, scope: "purchase" },
+  { code: "monthly", label: "月結", enabled: true, scope: "purchase" },
+  { code: "pay_later", label: "稍後付款", enabled: true, scope: "purchase" },
+  { code: "bank_transfer", label: "銀行轉賬", enabled: true, scope: "purchase" },
+  { code: "cheque", label: "支票", enabled: true, scope: "purchase" },
+  { code: "fps", label: "轉數快", enabled: true, scope: "checkout" },
+];
+
+function normalizeScope(value: unknown): PaymentMethodScope {
+  return value === "purchase" || value === "checkout" || value === "both" ? value : "both";
+}
+
+/**
+ * 正規化主檔（防禦式：資料由另一個 app 嘅 DB 嚟，唔可以當佢一定啱）。
+ *
+ * 🔴 `raw` **唔係陣列**（＝從未設定過）⇒ 回內建預設；
+ *    `raw` **係陣列**（即使係空陣列）⇒ 照用，**唔補預設**。
+ * 呢個區分係刻意嘅：冇咗佢，admin 就永遠清唔空個主檔。
+ */
+export function normalizePaymentMethods(raw: unknown): PaymentMethodDef[] {
+  if (!Array.isArray(raw)) return DEFAULT_PAYMENT_METHODS;
+  const seen = new Set<string>();
+  const out: PaymentMethodDef[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const code = typeof row.code === "string" ? row.code.trim() : "";
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    const label = typeof row.label === "string" && row.label.trim() ? row.label.trim() : code;
+    out.push({ code, label, enabled: row.enabled !== false, scope: normalizeScope(row.scope) });
+  }
+  return out;
+}
+
+/** 某個介面（進貨／結帳）實際應該顯示嘅方法，**保持主檔次序**。 */
+export function paymentMethodsForScope(
+  list: PaymentMethodDef[],
+  scope: "purchase" | "checkout",
+): PaymentMethodDef[] {
+  return list.filter((m) => m.enabled && (m.scope === scope || m.scope === "both"));
+}
+
+/**
+ * code → 顯示名。主檔優先，其次係內建標籤表。
+ *
+ * 為何要保留內建表做兜底：主檔係 admin 可以改嘅，一旦 admin 改走／刪走某個 code
+ * （或者停用某款），**舊收據照樣存住嗰個 code**。冇兜底就會喺收據卡片顯示原始英文 key
+ * （同 2026-09-25「月結顯示唔到」係同一類問題）。
+ */
+export function paymentMethodLabelMap(list: PaymentMethodDef[]): Record<string, string> {
+  const out: Record<string, string> = { ...PAYMENT_METHOD_LABEL };
+  for (const m of list) out[m.code] = m.label;
+  return out;
+}
+
 /**
  * 取值可能係 **canonical key**（`monthly`）或者 **中文標籤**（`月結`）：
  * POS 自己寫入嘅收據一定係 key，但 expenseRecorder 嗰邊嘅舊資料有機會直接存中文。

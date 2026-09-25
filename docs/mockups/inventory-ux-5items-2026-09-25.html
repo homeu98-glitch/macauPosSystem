@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>澳門 POS 庫存 UX 五項優化・確認稿（2026-09-25）</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#e9edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;color:#0f172a;padding:14px}
+
+/* ---------- 評審工具列（深色・唔屬產品介面） ---------- */
+.review{max-width:1180px;margin:0 auto 10px;background:#0f172a;color:#e2e8f0;border-radius:14px;padding:10px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+.rv-tabs{display:flex;flex-wrap:wrap;gap:6px}
+.rv-tabs button{min-height:34px;padding:0 12px;border-radius:999px;border:1px solid #334155;background:#1e293b;color:#cbd5e1;font-size:12px;font-weight:600;cursor:pointer}
+.rv-tabs button.on{background:#f8fafc;color:#0f172a;border-color:#f8fafc}
+.rv-note{font-size:11px;color:#94a3b8;white-space:nowrap}
+
+/* ---------- 固定畫布 ---------- */
+.stage{max-width:1180px;margin:0 auto;position:relative;overflow:hidden;border-radius:22px;background:#f6f8fb}
+.canvas{width:1180px;height:880px;position:absolute;top:0;left:0;transform-origin:top left;display:flex;flex-direction:column;overflow:hidden;background:#f6f8fb}
+.screenwrap{display:none;flex:1;min-height:0;flex-direction:column;padding:18px;gap:14px;flex-grow:1}
+.screenwrap.on{display:flex}
+.screenwrap.modal{padding:0;gap:0}
+.fx{flex:none}
+
+/* ---------- 通用元件 ---------- */
+.topbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;height:58px;flex:none}
+.h1{font-size:19px;font-weight:650;letter-spacing:.2px}
+.sub{font-size:12px;color:#64748b;margin-top:3px}
+.btns{display:flex;gap:8px;align-items:center}
+.btn{min-height:46px;padding:0 18px;border-radius:14px;border:1px solid transparent;font-size:14px;font-weight:600;cursor:pointer;background:#0f172a;color:#fff}
+.btn.ghost{background:#fff;color:#0f172a;border-color:#cbd5e1}
+.btn.green{background:#059669;border-color:#059669;color:#fff}
+.btn.warn{background:#fff;border-color:#f59e0b;color:#b45309}
+.btn.sm{min-height:38px;padding:0 12px;font-size:12px;border-radius:11px}
+.btn.block{width:100%;min-height:58px;font-size:17px;border-radius:16px}
+
+.strip{height:1px;background:#e2e8f0;flex:none}
+.filterrow{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;flex:none}
+.filterlabel{font-size:12px;font-weight:600;color:#64748b;white-space:nowrap}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{min-height:38px;padding:0 14px;border-radius:999px;background:#eef2f7;border:1px solid transparent;color:#475569;font-size:13px;font-weight:600;cursor:pointer}
+.chip.on{background:#0f172a;color:#fff}
+.chip.dot:before{content:"";display:inline-block;width:8px;height:8px;border-radius:99px;background:#cbd5e1;margin-right:7px;vertical-align:1px}
+.chip.on.dot:before{background:#34d399}
+
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;flex:none}
+.kpi{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:13px 15px}
+.kpi .k{font-size:12px;color:#64748b}
+.kpi .v{font-size:19px;font-weight:650;margin-top:5px}
+.kpi.g{background:#ecfdf5;border-color:#a7f3d0}
+.kpi.g .k{color:#047857}.kpi.g .v{color:#047857}
+.kpi.a{background:#fffbeb;border-color:#fde68a}
+.kpi.a .k{color:#b45309}.kpi.a .v{color:#b45309}
+
+.sechead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;flex:none}
+.sechead .t{font-size:13px;font-weight:650;color:#334155}
+.sechead .n{font-size:12px;color:#94a3b8}
+
+.reclist{flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:max-content;gap:12px;align-content:start;padding-bottom:4px}
+.reccard{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:14px 15px;display:flex;flex-direction:column;gap:8px;cursor:pointer}
+.reccard .r1{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:start}
+.reccard .nm{font-size:15px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reccard .amt{font-size:15px;font-weight:650;white-space:nowrap}
+.reccard .meta{font-size:12px;color:#64748b}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;border-radius:999px;font-size:11px;font-weight:650;background:#f1f5f9;color:#475569}
+.tag.pay{background:#eef2ff;color:#4338ca}
+.tag.pay.month{background:#fff7ed;color:#c2410c}
+.tag.ok{background:#ecfdf5;color:#047857}
+.tag.no{background:#fffbeb;color:#b45309}
+
+.footnote{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:#fff;border:1px dashed #cbd5e1;border-radius:14px;padding:11px 14px;font-size:12px;color:#64748b}
+
+/* ---------- 設置畫面 ---------- */
+.setgrid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.panel{background:#fff;border:1px solid #e2e8f0;border-radius:18px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.phead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:14px 15px;border-bottom:1px solid #eef2f7;flex:none}
+.phead .t{font-size:14px;font-weight:650}
+.phead .h{font-size:11px;color:#94a3b8;margin-top:2px}
+.plist{flex:1;min-height:0;overflow-y:auto;padding:10px 12px 10px;display:flex;flex-direction:column;gap:8px}.row{display:grid;grid-template-columns:26px minmax(0,1fr) auto auto;gap:10px;align-items:center;min-height:54px;border:1px solid #eef2f7;border-radius:14px;padding:0 12px;background:#fbfcfe}
+.row .grip{color:#cbd5e1;font-size:15px;text-align:center}
+.row .nm{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .use{font-size:11px;color:#94a3b8;margin-top:2px}
+.row .ico{min-height:38px;min-width:42px;border-radius:11px;border:1px solid #e2e8f0;background:#fff;font-size:13px;cursor:pointer;color:#475569}
+.row .ico.del{color:#dc2626;border-color:#fecaca;background:#fef2f2}
+.addbar{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:12px 14px;border-top:1px solid #eef2f7;background:#fafbfd}
+.tapin{min-height:50px;border-radius:14px;border:1px solid #cbd5e1;background:#fff;padding:0 14px;font-size:15px;color:#0f172a;display:flex;align-items:center}
+
+/* ---------- 觸屏 modal ---------- */
+.modalback{position:absolute;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center}
+.sheet{width:1060px;max-height:840px;background:#fff;border-radius:24px 24px 0 0;display:flex;flex-direction:column;overflow:hidden}
+.sheet.small{width:760px}
+.shead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:16px 20px;border-bottom:1px solid #eef2f7;flex:none}
+.shead .t{font-size:18px;font-weight:650}
+.shead .h{font-size:12px;color:#64748b;margin-top:3px}
+.sbody{flex:1;min-height:0;overflow-y:auto;padding:16px 20px 18px;display:flex;flex-direction:column;gap:14px}
+.sfoot{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;padding:14px 20px;border-top:1px solid #eef2f7;background:#fafbfd}
+
+.field{display:flex;flex-direction:column;gap:7px}
+.flabel{font-size:12px;font-weight:650;color:#475569}
+.tapbtn{min-height:56px;border-radius:16px;border:1px solid #cbd5e1;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:0 16px;font-size:16px;font-weight:600;cursor:pointer;text-align:left}
+.tapbtn .ph{color:#94a3b8;font-weight:500}
+.tapbtn .cv{font-size:13px;color:#94a3b8}
+.tapbtn.on{border-color:#0f172a;box-shadow:0 0 0 2px rgba(15,23,42,.08)}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.paybtn{min-height:60px;border-radius:16px;border:1px solid #cbd5e1;background:#fff;font-size:15px;font-weight:650;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+.paybtn.on{background:#0f172a;border-color:#0f172a;color:#fff}
+.seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.seg button{min-height:56px;border-radius:16px;border:1px solid #cbd5e1;background:#fff;font-size:15px;font-weight:650;cursor:pointer}
+.seg button.on{background:#fffbeb;border-color:#f59e0b;color:#b45309}
+.seg button.on.paid{background:#ecfdf5;border-color:#10b981;color:#047857}
+.itemblocks{display:flex;flex-direction:column;gap:10px}
+.itemrow{display:grid;grid-template-columns:minmax(0,1fr) 148px 176px 56px;gap:10px;align-items:center;background:#fbfcfe;border:1px solid #eef2f7;border-radius:16px;padding:10px 12px}
+.nmbtn{min-height:56px;border-radius:14px;border:1px solid #cbd5e1;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:0 14px;font-size:15px;font-weight:600;cursor:pointer;text-align:left}
+.nmbtn .hint{font-size:11px;color:#94a3b8}
+.stepper{display:grid;grid-template-columns:52px minmax(0,1fr) 52px;gap:6px;align-items:center}
+.stepper button{height:52px;border-radius:13px;border:1px solid #cbd5e1;background:#fff;font-size:20px;font-weight:600;cursor:pointer;color:#0f172a}
+.stepper .q{text-align:center;font-size:17px;font-weight:650}
+.amtin{height:56px;border-radius:14px;border:1px solid #cbd5e1;display:flex;align-items:center;padding:0 14px;font-size:16px;font-weight:600}
+.delbtn{height:56px;border-radius:14px;border:1px solid #fecaca;background:#fef2f2;color:#dc2626;font-size:18px;cursor:pointer}
+
+/* ---------- 選取 sheet（供應商 / 品項） ---------- */
+.picklist{display:flex;flex-direction:column;gap:10px}
+.pick{min-height:66px;border-radius:16px;border:1px solid #e2e8f0;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:0 16px;cursor:pointer;text-align:left}
+.pick.on{border-color:#0f172a;background:#f8fafc;box-shadow:0 0 0 2px rgba(15,23,42,.08)}
+.pick .nm{font-size:16px;font-weight:650}
+.pick .mt{font-size:12px;color:#94a3b8;margin-top:3px}
+.pick .ck{font-size:13px;font-weight:700;color:#059669}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.tile{min-height:96px;border-radius:16px;border:1px solid #e2e8f0;background:#fff;display:flex;flex-direction:column;justify-content:center;gap:6px;padding:0 14px;cursor:pointer;text-align:left}
+.tile .nm{font-size:15px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .mt{font-size:12px;color:#64748b}
+.tile .mt b{color:#0f172a}
+.reclabels{display:flex;flex-wrap:wrap;gap:8px}
+.reclabel{min-height:40px;padding:0 14px;border-radius:999px;background:#eef2f7;font-size:13px;font-weight:600;color:#475569;display:inline-flex;align-items:center;cursor:pointer}
+
+/* ---------- 支付方式權責（admin + 商家） ---------- */
+.twoP{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.payrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #eef2f7;border-radius:14px;padding:9px 12px;background:#fbfcfe}
+.payrow .nm{font-size:14px;font-weight:650}
+.payrow .cd{font-size:11px;color:#94a3b8;margin-top:2px}
+.sw{display:flex;gap:14px;align-items:center}
+.switem{display:flex;flex-direction:column;gap:5px;align-items:center;font-size:11px;color:#64748b}
+.toggle{width:62px;height:34px;border-radius:999px;background:#e2e8f0;position:relative;cursor:pointer;border:none}
+.toggle:after{content:"";position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:99px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.25)}
+.toggle.on{background:#10b981}
+.toggle.on:after{left:32px}
+.badge{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;border-radius:999px;font-size:11px;font-weight:650;background:#f1f5f9;color:#475569}
+.badge.g{background:#ecfdf5;color:#047857}
+.badge.a{background:#fffbeb;color:#b45309}
+.checkoutbox{flex:none;background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:14px}
+.checkline{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:10px}
+.co-btn{min-height:58px;border-radius:16px;border:1px solid #cbd5e1;background:#fff;font-size:16px;font-weight:650;cursor:pointer}
+.co-btn.hide{background:#f8fafc;border-style:dashed;color:#cbd5e1}
+.note{flex:none;background:#0f172a;color:#e2e8f0;border-radius:14px;padding:10px 14px;font-size:11.5px;line-height:1.6}
+.note b{color:#fff}
+.hl{color:#c2410c;font-weight:650}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <div class="rv-tabs" id="tabs">
+    <button data-tab="scr-stock">① 庫存總覽</button>
+    <button data-tab="scr-set">② 庫存・設置</button>
+    <button data-tab="scr-receipt">③ 新增收據（觸屏）</button>
+    <button data-tab="scr-sup">④ 選供應商＋即時新增</button>
+    <button data-tab="scr-item">⑤ 品項快速選取</button>
+    <button data-tab="scr-pay">⑥ 支付方式權責</button>
+  </div>
+  <div class="rv-note">深色列唔屬產品介面・示範資料</div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ============ ① 庫存總覽 ============ -->
+  <section class="screenwrap on" id="scr-stock">
+    <div class="topbar fx">
+      <div>
+        <div class="h1">庫存管理</div>
+        <div class="sub">店別：測試門店（示範）・帳號：60000002</div>
+      </div>
+      <div class="btns">
+        <button class="btn green" type="button">＋ 新增收據</button>
+        <button class="btn ghost" type="button">⚙ 設置</button>
+        <button class="btn ghost" type="button">重新整理</button>
+      </div>
+    </div>
+
+    <div class="filterrow fx">
+      <span class="filterlabel">日期</span>
+      <div class="chips">
+        <button class="chip on" type="button">今天</button>
+        <button class="chip" type="button">昨天</button>
+        <button class="chip" type="button">最近 7 天</button>
+        <button class="chip" type="button">最近 30 天</button>
+        <button class="chip" type="button">自訂…</button>
+      </div>
+    </div>
+
+    <div class="filterrow fx">
+      <span class="filterlabel">付款方式</span>
+      <div class="chips" id="paychips"></div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="k">今天總支出</div><div class="v">MOP 4,891.00</div></div>
+      <div class="kpi"><div class="k">收據數</div><div class="v">7</div></div>
+      <div class="kpi g"><div class="k">已付</div><div class="v">MOP 2,312.00</div></div>
+      <div class="kpi a"><div class="k">未付（含月結）</div><div class="v">MOP 2,579.00</div></div>
+    </div>
+
+    <div class="sechead">
+      <div class="t">收據清單（expenseRecorder・今天）<span class="n">　共 7 張・點卡片開啟編輯</span></div>
+      <div class="n">供應商 12 個・品類 6 個</div>
+    </div>
+
+    <div class="reclist" id="reclist"></div>
+
+    <div class="footnote">
+      <span>供應商／品類嘅新增・修改・刪除已經收埋入「⚙ 設置」，主頁唔再顯示（唔常用嘅操作唔霸版面）。</span>
+      <button class="btn ghost sm" type="button">前往設置 →</button>
+    </div>
+  </section>
+
+  <!-- ============ ② 庫存・設置 ============ -->
+  <section class="screenwrap" id="scr-set">
+    <div class="topbar fx">
+      <div>
+        <div class="h1">庫存・設置</div>
+        <div class="sub">只放「唔常用但一定要改到」嘅主檔：供應商、品類、庫存品、支付方式顯示</div>
+      </div>
+      <div class="btns">
+        <button class="btn ghost" type="button">← 返回庫存</button>
+        <button class="btn" type="button">保存</button>
+      </div>
+    </div>
+
+    <div class="chips fx">
+      <button class="chip on" type="button">供應商</button>
+      <button class="chip" type="button">品類</button>
+      <button class="chip" type="button">庫存品</button>
+      <button class="chip" type="button">支付方式顯示</button>
+    </div>
+
+    <div class="setgrid">
+      <div class="panel">
+        <div class="phead">
+          <div>
+            <div class="t">供應商</div>
+            <div class="h">可改名、刪除、排序；有收據引用中嘅唔可以刪</div>
+          </div>
+          <span class="badge">12 個</span>
+        </div>
+        <div class="plist" id="suplist"></div>
+        <div class="addbar">
+          <input class="tapin" placeholder="新增供應商名稱（例：永發凍肉）" value="">
+          <button class="btn" type="button">新增</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="phead">
+          <div>
+            <div class="t">品類</div>
+            <div class="h">新增收據／新增庫存品時會以 chips 形式出現</div>
+          </div>
+          <span class="badge">6 個</span>
+        </div>
+        <div class="plist" id="catlist"></div>
+        <div class="addbar">
+          <input class="tapin" placeholder="新增品類（例：包裝耗材）" value="">
+          <button class="btn" type="button">新增</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="footnote">
+      <span>兩個清單都係由數據生成（唔寫死）：商家改名／新增即刻反映落收據表單同庫存表。</span>
+      <span>收藏用：拖 ⠿ 可排序</span>
+    </div>
+  </section>
+
+  <!-- ============ ③ 新增收據（觸屏） ============ -->
+  <section class="screenwrap modal" id="scr-receipt">
+    <div class="modalback">
+      <div class="sheet">
+        <div class="shead">
+          <div>
+            <div class="t">新增收據</div>
+            <div class="h">全部欄位都係「撳一下開選單」，唔需要打字都填得到</div>
+          </div>
+          <button class="btn ghost" type="button">關閉</button>
+        </div>
+
+        <div class="sbody">
+          <div class="field">
+            <span class="flabel">供應商</span>
+            <button class="tapbtn on" type="button">
+              <span>黃記凍肉</span>
+              <span class="cv">最近使用 ▾</span>
+            </button>
+          </div>
+
+          <div class="field">
+            <span class="flabel">品類</span>
+            <div class="chips">
+              <button class="chip on" type="button">食材</button>
+              <button class="chip" type="button">飲料</button>
+              <button class="chip" type="button">清潔用品</button>
+              <button class="chip" type="button">餐具</button>
+              <button class="chip" type="button">＋ 新增</button>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <span class="flabel">付款方式（只顯示已啟用）</span>
+              <div class="chips">
+                <button class="chip on" type="button">現金</button>
+                <button class="chip" type="button">月結</button>
+                <button class="chip" type="button">轉帳</button>
+              </div>
+            </div>
+            <div class="field">
+              <span class="flabel">付款狀態</span>
+              <div class="seg">
+                <button class="on" type="button">未付款</button>
+                <button class="paid" type="button">已付款</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <span class="flabel">收據日期</span>
+              <div class="chips">
+                <button class="chip on" type="button">今天 09/25</button>
+                <button class="chip" type="button">昨天</button>
+                <button class="chip" type="button">選日期…</button>
+              </div>
+            </div>
+            <div class="field">
+              <span class="flabel">收據編號（選填）</span>
+              <div class="tapin">INV-0930</div>
+            </div>
+          </div>
+
+          <div class="field">
+            <span class="flabel">品項</span>
+            <div class="itemblocks">
+              <div class="itemrow">
+                <button class="nmbtn" type="button">
+                  <span>凍豬肉</span>
+                  <span class="hint">上次 MOP 48 ▾</span>
+                </button>
+                <div class="amtin">MOP 48</div>
+                <div class="stepper">
+                  <button type="button">−</button>
+                  <div class="q">12 kg</div>
+                  <button type="button">＋</button>
+                </div>
+                <button class="delbtn" type="button">✕</button>
+              </div>
+              <div class="itemrow">
+                <button class="nmbtn" type="button">
+                  <span class="ph" style="color:#94a3b8;font-weight:500">撳一下選常用品項</span>
+                  <span class="hint">常用 ▾</span>
+                </button>
+                <div class="amtin" style="color:#94a3b8">MOP —</div>
+                <div class="stepper">
+                  <button type="button">−</button>
+                  <div class="q">1</div>
+                  <button type="button">＋</button>
+                </div>
+                <button class="delbtn" type="button">✕</button>
+              </div>
+              <div class="chips">
+                <button class="chip dot" type="button">＋ 加一行</button>
+                <button class="chip" type="button">🕘 常用品項</button>
+                <button class="chip" type="button">最近單張帶入</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sfoot">
+          <div style="font-size:15px;font-weight:650">合計　MOP 576.00</div>
+          <button class="btn green" style="min-height:58px;padding:0 34px;font-size:17px;border-radius:16px" type="button">儲存收據</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ④ 選供應商 + 即時新增 ============ -->
+  <section class="screenwrap modal" id="scr-sup">
+    <div class="modalback">
+      <div class="sheet small">
+        <div class="shead">
+          <div>
+            <div class="t">選擇供應商</div>
+            <div class="h">常用嘅排前面；搵唔到可以喺下面即刻新增，唔需要離開收據</div>
+          </div>
+          <button class="btn ghost" type="button">關閉</button>
+        </div>
+        <div class="sbody">
+          <div class="tapin" style="color:#94a3b8">🔍 搜尋供應商（可打字或直接揀）</div>
+          <div class="sechead">
+            <div class="t">最近使用</div>
+            <div class="n">依你最近 30 張收據</div>
+          </div>
+          <div class="reclabels" id="recent-sup"></div>
+          <div class="sechead">
+            <div class="t">全部供應商</div>
+            <div class="n">12 個・示意 6 個</div>
+          </div>
+          <div class="picklist" id="pick-sup"></div>
+        </div>
+        <div class="sfoot">
+          <input class="tapin" placeholder="即時新增供應商（例：永發凍肉）" value="永發凍肉">
+          <button class="btn" style="min-height:50px" type="button">新增並選用</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ⑤ 品項快速選取 ============ -->
+  <section class="screenwrap modal" id="scr-item">
+    <div class="modalback">
+      <div class="sheet small">
+        <div class="shead">
+          <div>
+            <div class="t">選品項</div>
+            <div class="h">由歷史收據聚合：常用排前面，附上次單價，撳一下即刻帶入名同價</div>
+          </div>
+          <button class="btn ghost" type="button">關閉</button>
+        </div>
+        <div class="sbody">
+          <div class="tapin" style="color:#94a3b8">🔍 輸入品名關鍵字…</div>
+          <div class="sechead">
+            <div class="t">常用品項</div>
+            <div class="n">依使用次數排序</div>
+          </div>
+          <div class="tiles" id="quickgrid"></div>
+          <div class="sechead">
+            <div class="t">最近 5 次買過</div>
+            <div class="n">帶入你上次嘅單價</div>
+          </div>
+          <div class="reclabels" id="recent-items"></div>
+        </div>
+        <div class="sfoot">
+          <span style="font-size:12px;color:#64748b">搵唔到？喺下面直接打新品名，單價可以留空之後再改。</span>
+          <button class="btn ghost" style="min-height:50px" type="button">＋ 手動輸入新品項</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ⑥ 支付方式權責 ============ -->
+  <section class="screenwrap" id="scr-pay">
+    <div class="topbar fx">
+      <div>
+        <div class="h1">支付方式：admin 統一設置、商家控制顯示</div>
+        <div class="sub">商家唔可以改名／刪除（避免歷史單據對唔上），只可以決定邊啲喺自己店顯示</div>
+      </div>
+      <div class="btns">
+        <span class="badge g">master 由 admin 維護</span>
+      </div>
+    </div>
+
+    <div class="twoP">
+      <div class="panel">
+        <div class="phead">
+          <div>
+            <div class="t">① 後台（admin）・支付方式主檔</div>
+            <div class="h">全平台一份；可新增、停用、排序</div>
+          </div>
+          <button class="btn sm" type="button">＋ 新增</button>
+        </div>
+        <div class="plist" id="paymaster"></div>
+      </div>
+
+      <div class="panel">
+        <div class="phead">
+          <div>
+            <div class="t">② POS 商家設定・顯示開關</div>
+            <div class="h">「結帳」＝收銀收款用；「進貨」＝收據／庫存用</div>
+          </div>
+          <span class="badge a">唯讀名稱</span>
+        </div>
+        <div class="plist" id="paymerchant"></div>
+      </div>
+    </div>
+
+    <div class="checkoutbox fx">
+      <div class="sechead">
+        <div class="t">結帳頁實際會見到（只列已開啟嘅）</div>
+        <div class="n">例：只開「現金／月結」→ 信用卡就唔會出現</div>
+      </div>
+      <div class="checkline" id="checkout"></div>
+    </div>
+
+    <div class="note fx">
+      <b>為什麼要分兩層？</b> 支付方式係「<b>平台詞彙</b>」——同一間店嘅收據、日報表、交班、會計口徑都要對得上，所以名稱由 admin 統一；
+      但「我間店收唔收信用卡」係<b>商家營運決定</b>，所以顯示與否由商家自己 toggle，而且歷史單據照樣保留原本方式，唔會因為停用而變空白。
+      收據（進貨）嗰組付款方式亦由呢個 master 提供，唔再寫死喺程式碼。
+    </div>
+  </section>
+
+</div>
+</div>
+
+<script>
+var SUPPLIERS = [
+  { n: "黃記凍肉", u: 14 }, { n: "澳門水產", u: 9 }, { n: "永發凍肉", u: 7 },
+  { n: "聯興蔬菜", u: 6 }, { n: "大昌行", u: 4 }, { n: "南光石油氣", u: 3 },
+  { n: "好味飲料", u: 3 }, { n: "潔淨清潔", u: 2 }, { n: "順記米行", u: 2 },
+  { n: "新宇宙餐具", u: 1 }, { n: "氹仔雜貨", u: 1 }, { n: "其他雜項", u: 1 }
+];
+var CATS = ["食材", "飲料", "清潔用品", "餐具", "乾貨", "包裝耗材"];
+var ITEMS = [
+  { n: "凍豬肉", p: 48, u: "kg", c: 12 }, { n: "牛腩", p: 96, u: "kg", c: 9 },
+  { n: "走地雞", p: 62, u: "隻", c: 8 }, { n: "生菜", p: 14, u: "斤", c: 8 },
+  { n: "洗潔精", p: 38, u: "桶", c: 5 }, { n: "外賣盒", p: 0.9, u: "個", c: 4 },
+  { n: "可樂", p: 42, u: "箱", c: 4 }, { n: "米", p: 128, u: "包", c: 3 }
+];
+var PAY = [
+  { code: "cash", n: "現金", k: "現金", ho: true, co: true },
+  { code: "monthly", n: "月結", k: "記帳", ho: true, co: true },
+  { code: "card", n: "信用卡", k: "銀行卡", ho: false, co: false },
+  { code: "mpay", n: "Mpay", k: "電子錢包", ho: false, co: true },
+  { code: "boc", n: "中銀", k: "電子錢包", ho: false, co: true },
+  { code: "transfer", n: "轉帳", k: "銀行卡", ho: true, co: false }
+];
+var RECEIPTS = [
+  { s: "黃記凍肉", a: "MOP 576.00", d: "2026/09/25", it: 3, p: "cash", ps: "paid" },
+  { s: "澳門水產", a: "MOP 1,280.00", d: "2026/09/25", it: 5, p: "monthly", ps: "unpaid" },
+  { s: "聯興蔬菜", a: "MOP 412.00", d: "2026/09/25", it: 6, p: "cash", ps: "paid" },
+  { s: "好味飲料", a: "MOP 968.00", d: "2026/09/25", it: 4, p: "transfer", ps: "paid" },
+  { s: "潔淨清潔", a: "MOP 209.00", d: "2026/09/25", it: 2, p: "card", ps: "unpaid" },
+  { s: "永發凍肉", a: "MOP 1,090.00", d: "2026/09/25", it: 4, p: "monthly", ps: "unpaid" },
+  { s: "大昌行", a: "MOP 356.00", d: "2026/09/25", it: 3, p: "cash", ps: "paid" }
+];
+var PAYNAME = { cash: "現金", monthly: "月結", card: "信用卡", mpay: "Mpay", boc: "中銀", transfer: "轉帳" };
+
+function esc(s) { return String(s == null ? "" : s); }
+function $(id) { return document.getElementById(id); }
+function html(id, s) { var el = $(id); if (el) el.innerHTML = s; }
+
+/* ① 庫存總覽：付款方式 chips（0 張都顯示） */
+function renderPayChips() {
+  var counts = { all: RECEIPTS.length, cash: 0, monthly: 0, card: 0, transfer: 0, mpay: 0, boc: 0 };
+  RECEIPTS.forEach(function (r) { counts[r.p] = (counts[r.p] || 0) + 1; });
+  var out = '<button class="chip on" type="button">全部（' + counts.all + '）</button>';
+  ["cash", "monthly", "card", "transfer"].forEach(function (k) {
+    out += '<button class="chip" type="button">' + esc(PAYNAME[k]) + '（' + (counts[k] || 0) + '）</button>';
+  });
+  html("paychips", out);
+}
+
+/* ① 收據卡 */
+function renderReceipts() {
+  var out = "";
+  RECEIPTS.forEach(function (r) {
+    var month = r.p === "monthly" ? " month" : "";
+    out += '<div class="reccard">'
+      + '<div class="r1"><div class="nm">' + esc(r.s) + '</div><div class="amt">' + esc(r.a) + '</div></div>'
+      + '<div class="meta">' + esc(r.d) + '・' + r.it + ' 項</div>'
+      + '<div class="tags">'
+      + '<span class="tag pay' + month + '">' + esc(PAYNAME[r.p]) + '</span>'
+      + '<span class="tag ' + (r.ps === "paid" ? "ok" : "no") + '">' + (r.ps === "paid" ? "已付款" : "未付款") + '</span>'
+      + '<span class="tag">食材</span>'
+      + '</div></div>';
+  });
+  html("reclist", out);
+}
+
+/* ② 設置：供應商 / 品類 清單（可改名・刪除・排序） */
+function renderSettings() {
+  var s = "";
+  SUPPLIERS.slice(0, 8).forEach(function (x, i) {
+    s += '<div class="row">'
+      + '<div class="grip">⠿</div>'
+      + '<div><div class="nm">' + esc(x.n) + '</div><div class="use">用過 ' + x.u + ' 次</div></div>'
+      + '<button class="ico" type="button">改名</button>'
+      + '<button class="ico del" type="button">刪</button>'
+      + '</div>';
+  });
+  html("suplist", s);
+  var c = "";
+  CATS.forEach(function (x) {
+    c += '<div class="row">'
+      + '<div class="grip">⠿</div>'
+      + '<div><div class="nm">' + esc(x) + '</div><div class="use">收據／庫存品共用</div></div>'
+      + '<button class="ico" type="button">改名</button>'
+      + '<button class="ico del" type="button">刪</button>'
+      + '</div>';
+  });
+  html("catlist", c);
+}
+
+/* ④ 選供應商：最近 + 全部 */
+function renderPicker() {
+  var rec = "";
+  SUPPLIERS.slice(0, 4).forEach(function (x) {
+    rec += '<span class="reclabel">' + esc(x.n) + '</span>';
+  });
+  html("recent-sup", rec);
+  var out = "";
+  SUPPLIERS.slice(0, 6).forEach(function (x, i) {
+    var on = i === 0 ? " on" : "";
+    out += '<div class="pick' + on + '">'
+      + '<div><div class="nm">' + esc(x.n) + '</div><div class="mt">用過 ' + x.u + ' 次・最後 MOP ' + (x.u * 42) + '</div></div>'
+      + '<span class="ck">' + (i === 0 ? "✓ 已選" : "") + '</span>'
+      + '</div>';
+  });
+  html("pick-sup", out);
+}
+
+/* ⑤ 品項快速選取 */
+function renderItemPicker() {
+  var out = "";
+  ITEMS.forEach(function (x) {
+    out += '<div class="tile"><div class="nm">' + esc(x.n) + '</div>'
+      + '<div class="mt">上次 <b>MOP ' + x.p + '</b>／' + esc(x.u) + '</div>'
+      + '<div class="mt">買過 ' + x.c + ' 次</div></div>';
+  });
+  html("quickgrid", out);
+  var rec = "";
+  ITEMS.slice(0, 5).forEach(function (x) {
+    rec += '<span class="reclabel">' + esc(x.n) + '・MOP ' + x.p + '</span>';
+  });
+  html("recent-items", rec);
+}
+
+/* ⑥ 支付方式權責 */
+function renderPay() {
+  var m = "";
+  PAY.forEach(function (p) {
+    m += '<div class="payrow">'
+      + '<div><div class="nm">' + esc(p.n) + ' <span class="badge">' + esc(p.k) + '</span></div>'
+      + '<div class="cd">code: ' + esc(p.code) + '・已啟用於 128 間店</div></div>'
+      + '<div class="sw"><button class="toggle on" type="button"></button><span class="badge g">啟用</span></div>'
+      + '</div>';
+  });
+  html("paymaster", m);
+
+  var g = "";
+  PAY.forEach(function (p) {
+    g += '<div class="payrow">'
+      + '<div><div class="nm">' + esc(p.n) + '</div><div class="cd">名稱由 admin 設定（商家唯讀）</div></div>'
+      + '<div class="sw">'
+      + '<span class="switem"><button class="toggle' + (p.co ? " on" : "") + '" type="button"></button>結帳</span>'
+      + '<span class="switem"><button class="toggle' + (p.ho ? " on" : "") + '" type="button"></button>進貨</span>'
+      + '</div></div>';
+  });
+  html("paymerchant", g);
+
+  var co = "";
+  PAY.forEach(function (p) {
+    if (p.co) co += '<button class="co-btn" type="button">' + esc(p.n) + '</button>';
+  });
+  PAY.forEach(function (p) {
+    if (!p.co) co += '<button class="co-btn hide" type="button">' + esc(p.n) + '（已隱藏）</button>';
+  });
+  html("checkout", co);
+}
+
+function showTab(id) {
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++) {
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#tabs button");
+  for (var j = 0; j < btns.length; j++) {
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+function fit() {
+  var stage = $("stage");
+  var canvas = $("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || 1180;
+  var s = Math.min(1, Math.max(w / 1180, 0.5));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(880 * s) + "px";
+  stage.style.overflowX = (1180 * s > w) ? "auto" : "hidden";
+}
+
+renderPayChips();
+renderReceipts();
+renderSettings();
+renderPicker();
+renderItemPicker();
+renderPay();
+
+var tabs = document.querySelectorAll("#tabs button");
+for (var k = 0; k < tabs.length; k++) {
+  (function (el) {
+    el.onclick = function () { showTab(el.getAttribute("data-tab")); };
+  })(tabs[k]);
+}
+
+/* 容器內自己綁 handler：渲染出嚟嘅卡片／列都要可撳（唔靠出面再 query） */
+var picks = document.querySelectorAll("#pick-sup .pick");
+for (var p = 0; p < picks.length; p++) {
+  (function (el) {
+    el.onclick = function () {
+      for (var q = 0; q < picks.length; q++) picks[q].classList.remove("on");
+      el.classList.add("on");
+    };
+  })(picks[p]);
+}
+var tiles = document.querySelectorAll("#quickgrid .tile");
+for (var t = 0; t < tiles.length; t++) {
+  (function (el) {
+    el.onclick = function () { el.classList.toggle("on"); };
+  })(tiles[t]);
+}
+
+showTab("scr-stock");
+window.addEventListener("resize", fit);
+fit();
+</script>
+</body>
+</html>

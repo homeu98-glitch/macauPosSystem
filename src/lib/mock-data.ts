@@ -570,4 +570,9 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   customLabelPapers: [],
   // 改價一律要閘；低於 9 折或單品優惠 > $50 要主管授權。
   retailApprovalRules: { minDiscountRate: 90, maxLineSaving: 50 },
+
+  // ── 庫存（2026-09-25）──────────────────────────────────────────
+  // 進貨品類：預設空 → 商家第一次入「庫存 → 設置 → 品類」自己建。
+  // 空 = 新增收據嘅品類欄會顯示「尚無品類」提示，仍然可以手動輸入（唔會鎖死）。
+  invCategories: [],
 };

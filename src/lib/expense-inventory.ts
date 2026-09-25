@@ -19,6 +19,23 @@ export type InventoryReceiptInput = {
 export type ResolvedUser = { userId: string } | { error: string; status: number };
 
 /**
+ * 判斷錯誤係唔係「表或欄唔存在」＝ schema 未就緒。
+ *
+ * - `42P01` = `undefined_table`（relation does not exist）
+ * - `42703` = `undefined_column`（column does not exist）
+ *
+ * 🔴 兩者都要當「降級」而唔係「500」。expenseRecorder 係另一個專案、
+ * 另一個部署節奏，POS 唔可以假設對方所有欄位都已經補齊
+ * （實例：`receipt_items.user_id` 就唔喺任何一支現存 SQL 檔入面，
+ * 係靠人手 ALTER 加嘅）。表未就緒應該顯示「暫無資料」而唔係整頁爆掉。
+ */
+export function isMissingColumnOrTable(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === "42P01" || err.code === "42703") return true;
+  return /relation .* does not exist|column .* does not exist/i.test(err.message ?? "");
+}
+
+/**
  * account(8位) → shop_users.login_id → shop_users.id（與唯讀 route 相同關聯）。
  * 所有寫入都須先解析出 user_id 做店別 scope。
  */

@@ -1,14 +1,26 @@
 import { NextResponse } from "next/server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
-import { resolveExpenseUserId } from "@/lib/expense-inventory";
+import { isMissingColumnOrTable, resolveExpenseUserId } from "@/lib/expense-inventory";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isMissingTable(err: { code?: string; message?: string } | null): boolean {
-  if (!err) return false;
-  if (err.code === "42P01") return true;
-  return /relation .* does not exist/i.test(err.message ?? "");
+/**
+ * 🔴 expenseRecorder 會將「設定」偷藏喺 `merchants` 表，用保留名做 key：
+ *   · `__shop_settings__:<userId>` → 門店設定（自訂單位、賬戶狀態）
+ *   · `__global_settings__`        → 全域設定（單位清單、支付方式主檔）
+ * 呢啲唔係供應商。`merchants.name` 係**全表唯一**，所以保留名唔會同真實供應商撞，
+ * 但**只要查詢冇加 user_id 篩選／冇過濾**就會漏佢出嚟，變成下拉選單一項叫
+ * `__shop_settings__:xxxxxxxx-...` 嘅假供應商。
+ *
+ * 規則：真實供應商名唔會以 `__` 開頭 ⇒ 一律當保留名濾走。
+ *
+ * ⚠️ 刻意喺 JS 過濾而唔用 PostgREST `.not("name","like","__%")`：
+ * SQL `LIKE` 嘅 `_` 係「任一字元」通配符，`__%` 實際會 match 幾乎所有名
+ * （＝會濾走全部供應商），要正確就要 escape backslash，好易靜靜搞錯。
+ */
+function isReservedMerchantName(name: string): boolean {
+  return name.startsWith("__");
 }
 
 /**
@@ -37,14 +49,16 @@ export async function GET(request: Request) {
     .eq("user_id", resolved.userId)
     .order("name", { ascending: true });
   if (error) {
-    if (isMissingTable(error))
+    if (isMissingColumnOrTable(error))
       return NextResponse.json({ ok: true, schemaReady: false, merchants: [] });
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
   return NextResponse.json({
     ok: true,
-    merchants: (data ?? []).map((m) => ({ id: String(m.id), name: String(m.name ?? "") })),
+    merchants: (data ?? [])
+      .map((m) => ({ id: String(m.id), name: String(m.name ?? "") }))
+      .filter((m) => m.id && m.name && !isReservedMerchantName(m.name)),
   });
 }
 
@@ -60,6 +74,13 @@ export async function POST(request: Request) {
 
   if (!body.name || !body.name.trim()) return NextResponse.json({ ok: false, error: "缺少 name" }, { status: 400 });
   const name = body.name.trim();
+
+  // 🔴 唔畀用保留名前綴：`__` 開頭係 expenseRecorder 嘅內部設定列
+  // （`__global_settings__` 等）。雖然全域 unique 會擋住覆蓋，但錯誤訊息會變成
+  // 一句莫名奇妙嘅 unique 衝突；喺入口直接講清楚好過。
+  if (name.startsWith("__")) {
+    return NextResponse.json({ ok: false, error: "供應商名稱不可以「__」開頭。" }, { status: 400 });
+  }
 
   const { data, error } = await client
     .from("merchants")

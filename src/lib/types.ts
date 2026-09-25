@@ -1052,6 +1052,21 @@ export interface PosLocalSettings {
     /** 單品優惠金額超過呢個數就要閾 */
     maxLineSaving: number;
   };
+  /**
+   * 進貨品類清單（2026-09-25「庫存・設置」新增）。
+   *
+   * 商家喺「庫存 → 設置 → 品類」自己維護（例如 食材 / 清潔用品 / 餐具），
+   * 新增收據時直接揀，唔使每次手打（順便杜絕「食材」同「食材 」兩個分類）。
+   *
+   * ⚠️ 一定要同時加落 `normalizePosLocalSettings()` 白名單
+   * （`src/lib/storage.ts`）＋ `defaultPosLocalSettings`：嗰度係**逐欄重建**，
+   * 漏咗就會喺 reload / 雲端同步 normalize 嗰陣被**靜靜剷走**
+   * （`receipt.qrUrl`、`standaloneSpecGroups`、`shiftTemplatePresets` 都中過同一個坑）。
+   *
+   * ⚠️ 呢個係**門店層**設定（存 `local_settings` jsonb，跟 store scope 同步），
+   * 同「支付方式主檔」唔同：後者由 admin 統一派發，呢個由商家自己管。
+   */
+  invCategories: string[];
 }
 
 /**
