@@ -43,5 +43,10 @@
 🔴 expenseRecorder 將設定**偷藏喺 `merchants` 表**用保留名做 KV：`__shop_settings__:<uid>`／`__global_settings__`（全域單位＋支付方式主檔），內容放 `address`。真實供應商名唔會 `__` 開頭 ⇒ 一律濾走（**唔可以用 PostgREST `.not("name","like","__%")`**：SQL `_` 係通配符，會濾走全部）。
 🔴 `__global_settings__` 一條列裝多個 key ⇒ 寫入**一定要 merge**（`patchGlobalSettings`），整份覆蓋會靜靜蓋走另一邊。
 🔴 支付方式主檔真源＝expenseRecorder `/admin/payment-methods`（admin 帳號 60000000／0000）；POS 讀 `GET /api/inventory/payment-methods`，`scope` 分 `purchase`／`checkout`／`both`。兩 repo 各有一份預設，靠 `payment-method-defaults-parity.test.ts` 對齊。**「未設定」vs「空清單」一律用 `Array.isArray` 分**（否則 admin 清唔走）。
-🔴 `normalizePosLocalSettings()` 逐欄重建 ⇒ 新欄位漏白名單會被**靜靜剷走**（今次 `invCategories` 已補）。
+🔴 `normalizePosLocalSettings()` 逐欄重建 ⇒ 新欄位漏白名單會被**靜靜剷走**（今次 `invCategories`／`invSupplierOrder`／`invCategoryOrder` 已補）。
+🔴 **「庫存・設置」係彈窗（J 2026-09-26 拍板，唔可以改成全頁）**：4 個 chips 係**多選**（供應商／品類／庫存品／支付方式顯示），最少開一個；供應商＋品類預設並排。**冇「保存」按鈕**（每項即時寫入，加「保存」會誤導）。「支付方式顯示」**唯讀**（主檔歸 expenseRecorder admin）。
+🔴 主檔顯示次序存 `PosLocalSettings.invSupplierOrder`／`invCategoryOrder`（**用名做 key，唔用 id**）；純函式喺 `inventory-order.ts`（**零 import** 才可被 `node --test` 直接 import）。新項目一定要排最後（唔可以因排序設定而消失）。
+🔴 篩選 chips「只顯示有資料嘅」＝確認稿要求，但**零筆數嘅唔可以刪**（2026-09-25 原 bug：月結 0 張 ⇒ chip 唔出現 ⇒ 商家以為冇呢個功能）。做法＝收埋喺「＋N 個未用過」展開器，且**當前選中嘅 key 唔准收埋**。
+🔴 同一元件兩處 render（主頁 `InventoryTable` ＋ 設置 panel）＝**兩個獨立 state**，要 `onMutated` ＋ `key={productsVersion}` 強制換 instance 才同步。
+🔴 `GET /api/inventory/master-usage`（供應商「用過 N 次」）**只拉 `merchant_id` 一個欄**、`SCAN_LIMIT=1500`、**lazy（只喺設置面板開住時叫）**；**唔可以拉 `raw_ocr_data`**（mg 級 egress）。品類冇佔比統計（靠收據反推成本太高）。
 🔴 expenseRecorder `node_modules/next@16.2.9` 安裝**唔完整**（缺 `types.d.ts`／`dist/types`）⇒ 本機 `next build` 型別檢查必掛喺 Next 自己生成嘅 `.next/{dev/,}types/validator.ts`（TS7016）。**與代碼無關**；要 `npm i next@16.3.0`（同 POS 對齊）才修得好。

@@ -30,6 +30,8 @@ import {
   type SelfOrderNotice,
 } from "@/lib/pos/self-order-notice";
 import { PRINT_ONCE_KEYS_MAX, mergeOnceKeys } from "@/lib/pos/print-dedupe";
+// 庫存主檔顯示次序清洗（零依賴純函式，同一個實作畀測試直接用）。
+import { sanitizeKeyList } from "@/lib/inventory-order";
 import { normalizeKioskPrinters } from "@/lib/pos/kiosk-settings";
 import {
   normalizeMerchantGrants,
@@ -634,6 +636,15 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
           ),
         )
       : defaultPosLocalSettings.invCategories,
+    /**
+     * ⚠️ 2026-09-26 新增：供應商／品類嘅顯示次序（設置頁拖 ⠿ 排序）。
+     *
+     * 同上面 `invCategories` **同一個坑**：呢度係逐欄重建，漏咗就係「商家拖好嘅次序
+     * 一 reload / 雲端同步就彈返去字母序」。用 `sanitizeKeyList()` 統一清洗
+     * （剔非字串、trim、剔空、去重、保序），令儲存側同讀取側完全一致。
+     */
+    invSupplierOrder: sanitizeKeyList(settings?.invSupplierOrder) ?? defaultPosLocalSettings.invSupplierOrder,
+    invCategoryOrder: sanitizeKeyList(settings?.invCategoryOrder) ?? defaultPosLocalSettings.invCategoryOrder,
   };
 }
 

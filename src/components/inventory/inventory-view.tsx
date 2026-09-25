@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadAuthSession, loadPosLocalSettings, normalizePosLocalSettings, savePosLocalSettings } from "@/lib/storage";
+import type { PosLocalSettings } from "@/lib/types";
+// 主檔顯示次序（拖 ⠿）嘅純函式：設置面板排序 + 收據 modal 嘅品類 chips 都要跟同一份次序。
+import { reorderByStored } from "@/lib/inventory-order";
 import { REPORT_RANGE_OPTIONS, reportRangeLabel, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import {
@@ -58,6 +61,17 @@ const money = (n: number) =>
   `MOP ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
+/**
+ * 昨日（`YYYY-MM-DD`）。
+ *
+ * ⚠️ 唔可以用 `new Date(Date.now() - 86400000)` 再 `toISOString()`：嗰個係 UTC，
+ * 澳門（UTC+8）凌晨 0–8 點會算錯一日。用本地 `Date.setDate()` ＋ `en-CA` 先正確。
+ */
+const yesterdayStr = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA");
+};
 
 const ALL_METHODS = "all";
 
@@ -151,6 +165,13 @@ function ReceiptFormModal({
   /** 目前展開歷史品項建議嘅品項行（-1 = 冇）。 */
   const [pickerIndex, setPickerIndex] = useState<number>(-1);
 
+  /**
+   * 收據日期：確認稿係 chips（今天／昨天／選日期…），唔係一開頭就一個原生 date input。
+   * 觸屏日曆揀日期要兩步（開日曆 → 揀日），而實際九成單都係「今天／昨天」，
+   * 所以預設收起日曆，撳「選日期…」先展開（舊值仍然會顯示喺 chip 上面）。
+   */
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
   useEffect(() => {
     if (open) {
       setForm(initial ? formFromReceipt(initial) : emptyForm(paymentMethods));
@@ -161,6 +182,7 @@ function ReceiptFormModal({
       setSupplierHint(null);
       setManualCategory(false);
       setPickerIndex(-1);
+      setShowDatePicker(false);
     }
     // paymentMethods 唔列入 deps：開 modal 一刻嘅主檔就夠，途中變更唔應該重設用戶輸入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,6 +194,22 @@ function ReceiptFormModal({
     setForm((f) => ({ ...f, items: f.items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)) }));
 
   const total = form.items.reduce((s, it) => s + (Number(it.unit_price) || 0) * (Number(it.quantity) || 1), 0);
+
+  /** 收據日期係唔係「今天／昨天」（兩個快選 chip 之一）。 */
+  const isQuickDate = form.date === todayStr() || form.date === yesterdayStr();
+
+  /**
+   * 數量 stepper（− / ＋）。
+   *
+   * 空白 = 當 0（唔係 1）：用戶撳「＋」應該由 0 變 1，唔係由 1 變 2。
+   * 保留三位小數（食材按 kg 落 0.5 / 1.25 都常見），同樣唔會出負數。
+   */
+  const stepQty = (i: number, delta: number) => {
+    const raw = form.items[i]?.quantity ?? "";
+    const base = raw.trim() === "" ? 0 : Number(raw.replace(/,/g, "")) || 0;
+    const next = Math.max(0, Math.round((base + delta) * 1000) / 1000);
+    setItem(i, { quantity: String(next) });
+  };
 
   // 供應商：優先認 id。若收據嘅 merchant_id 唔喺清單入面（例如已被刪／未同步），
   // 兜去「手動輸入」模式用 name 顯示，避免 select 顯示空白。
@@ -503,12 +541,43 @@ function ReceiptFormModal({
             </div>
             <div>
               <label className={labelCls}>收據日期</label>
-              <input
-                type="date"
-                className={fieldCls}
-                value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-              />
+              {/* 確認稿：chips（今天／昨天／選日期…）。原生日曆要兩步先揀到一日，
+                  而實際九成單都係「今天」，所以收起日曆直到撳「選日期…」。 */}
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: "today", label: "今天", value: todayStr() },
+                  { key: "yesterday", label: "昨天", value: yesterdayStr() },
+                ].map((c) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    className={chipCls(form.date === c.value)}
+                    onClick={() => {
+                      setForm({ ...form, date: c.value });
+                      setShowDatePicker(false);
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={chipCls(!isQuickDate)}
+                  onClick={() => setShowDatePicker(true)}
+                >
+                  {isQuickDate ? "選日期…" : form.date}
+                </button>
+              </div>
+              {showDatePicker && (
+                <input
+                  type="date"
+                  className={`${fieldCls} mt-2`}
+                  value={form.date}
+                  autoFocus
+                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                  aria-label="收據日期"
+                />
+              )}
             </div>
           </div>
 
@@ -587,8 +656,11 @@ function ReceiptFormModal({
                         之後 ⇒ `w-full` 勝出 ⇒ 單價／數量 flex-basis = 100%，
                         `flex-1`（basis 0）嘅品名欄分到 **0 寬** ⇒ 睇唔到亦撳唔到。
                         改用 grid 固定軌寬（每格入面 w-full = 軌寬，唔會再互相搶位），
-                        窄螢幕則換行：品名一整行，單價／數量／刪除第二行。 */}
-                    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_5rem_auto]">
+                        窄螢幕則換行：品名一整行，單價＋數量 stepper 第二行，刪除第三行。
+
+                        2026-09-26：數量由純輸入框改成「− 數量 ＋」stepper（對齊確認稿），
+                        所以數量軌由 5rem 加闊到 10rem；仍然係 grid 固定軌，唔會搶位。 */}
+                    <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_10rem_auto]">
                       <div className="col-span-2 min-w-0 sm:col-span-1">
                         <input
                           className={fieldCls}
@@ -611,17 +683,39 @@ function ReceiptFormModal({
                         placeholder="單價"
                         aria-label={`第 ${i + 1} 項單價`}
                       />
-                      <input
-                        className={fieldCls}
-                        inputMode="decimal"
-                        value={it.quantity}
-                        onChange={(e) => setItem(i, { quantity: e.target.value })}
-                        placeholder="數量"
-                        aria-label={`第 ${i + 1} 項數量`}
-                      />
+                      {/* 數量 stepper（確認稿：− 12 ＋）。仍然可以直接打字（連續落單時更快），
+                          stepper 只係補返觸屏「加一次」嘅需要。下限 0，唔會出負數。
+                          ⚠️ `overflow-hidden` 令兩個按鈕嘅 hover 底色唔會突出圓角。 */}
+                      <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <button
+                          type="button"
+                          onClick={() => stepQty(i, -1)}
+                          disabled={!(Number(it.quantity) > 0)}
+                          className="h-12 text-lg font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-30"
+                          aria-label={`第 ${i + 1} 項數量減一`}
+                        >
+                          −
+                        </button>
+                        <input
+                          className="h-12 w-full min-w-0 border-0 bg-transparent text-center text-base font-semibold text-slate-900 outline-none"
+                          inputMode="decimal"
+                          value={it.quantity}
+                          onChange={(e) => setItem(i, { quantity: e.target.value })}
+                          placeholder="數量"
+                          aria-label={`第 ${i + 1} 項數量`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => stepQty(i, 1)}
+                          className="h-12 text-lg font-semibold text-slate-700 hover:bg-slate-50"
+                          aria-label={`第 ${i + 1} 項數量加一`}
+                        >
+                          ＋
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        className="shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100"
+                        className="col-span-2 shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100 sm:col-span-1"
                         onClick={() => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) })}
                         aria-label="刪除品項"
                       >
@@ -742,6 +836,21 @@ export function InventoryView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 進貨品類清單（來源：`PosLocalSettings.invCategories`）。 */
   const [categories, setCategories] = useState<string[]>([]);
+  /**
+   * 供應商／品類嘅顯示次序（`PosLocalSettings.invSupplierOrder` / `invCategoryOrder`）。
+   * 商家喺設置頁拖 ⠿ 之後寫入，空 = 未排過（供應商跟 DB 字母序、品類跟建立次序）。
+   */
+  const [supplierOrder, setSupplierOrder] = useState<string[]>([]);
+  const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
+  /**
+   * 庫存表嘅「重載鑰匙」。
+   *
+   * 🔴 為何需要：主頁嘅 `InventoryTable` 同「設置 → 庫存品」panel 係**兩個
+   * component instance**，各自有一份 `products` state。喺設置入面刪咗／改咗一件，
+   * 主頁嗰份唔會知 ⇒ 商家閂咗彈窗仲見到「已經刪咗」嘅貨。
+   * 用 `key` 換 instance ＝ 強制重新載入（比喺兩個 instance 之間做狀態同步簡單可靠）。
+   */
+  const [productsVersion, setProductsVersion] = useState(0);
 
   /**
    * 支付方式主檔（admin 統一設置，`GET /api/inventory/payment-methods`）。
@@ -755,6 +864,8 @@ export function InventoryView() {
 
   /** 付款方式篩選：`"all"` 或其中一個 method code。 */
   const [methodFilter, setMethodFilter] = useState<string>(ALL_METHODS);
+  /** 付款方式 chips 係唔係展開「未用過」嗰批（見 `methodChipGroups`）。 */
+  const [showZeroMethods, setShowZeroMethods] = useState(false);
 
   useEffect(() => {
     const s = loadAuthSession();
@@ -763,7 +874,10 @@ export function InventoryView() {
       setStoreName(s.name || "");
       if (s.merchantId) setMerchantId(s.merchantId);
     }
-    setCategories(loadPosLocalSettings().invCategories);
+    const local = loadPosLocalSettings();
+    setCategories(local.invCategories);
+    setSupplierOrder(local.invSupplierOrder);
+    setCategoryOrder(local.invCategoryOrder);
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -860,18 +974,59 @@ export function InventoryView() {
     void loadRecentItems();
   }, [loadRecentItems]);
 
-  /** 儲存品類清單（門店層設定，經 `PosLocalSettings` 同步）。 */
-  const saveCategories = useCallback(async (next: string[]) => {
-    const merged = normalizePosLocalSettings({ ...loadPosLocalSettings(), invCategories: next });
+  /**
+   * 寫入門店層設定（`PosLocalSettings`）並把相關 state 同步返嚟。
+   *
+   * ⚠️ 一定要經 `normalizePosLocalSettings()` 合併：呢個函式係**逐欄重建**，
+   * 直接 `savePosLocalSettings({ invCategories })` 會靜靜剷走其餘欄位
+   * （打印模板、樓層…）。所有局部更新一律經呢個入口。
+   */
+  const patchLocalSettings = useCallback((patch: Partial<PosLocalSettings>) => {
+    const merged = normalizePosLocalSettings({ ...loadPosLocalSettings(), ...patch });
     savePosLocalSettings(merged);
     setCategories(merged.invCategories);
+    setSupplierOrder(merged.invSupplierOrder);
+    setCategoryOrder(merged.invCategoryOrder);
   }, []);
+
+  /** 儲存品類清單（門店層設定，經 `PosLocalSettings` 同步）。 */
+  const saveCategories = useCallback(
+    async (next: string[]) => patchLocalSettings({ invCategories: next }),
+    [patchLocalSettings],
+  );
+
+  /** 儲存供應商顯示次序（拖 ⠿ 之後）。 */
+  const saveSupplierOrder = useCallback(
+    async (next: string[]) => patchLocalSettings({ invSupplierOrder: next }),
+    [patchLocalSettings],
+  );
+
+  /** 儲存品類顯示次序（拖 ⠿ 之後）。 */
+  const saveCategoryOrder = useCallback(
+    async (next: string[]) => patchLocalSettings({ invCategoryOrder: next }),
+    [patchLocalSettings],
+  );
 
   /** 進貨可見嘅付款方式（主檔 + scope 過濾）。 */
   const purchaseMethods = useMemo(() => paymentMethodsForScope(masterMethods, "purchase"), [masterMethods]);
 
   /** code → 顯示名（主檔優先，內建標籤兜底，令舊單據嘅 key 唔會變裸英文）。 */
   const labelMap = useMemo(() => paymentMethodLabelMap(masterMethods), [masterMethods]);
+
+  /**
+   * 品類清單要跟商家喺設置頁拖好嘅次序（`categoryOrder`）。
+   * 唔跟就會出現「設置入面排好、開單時又變返原本次序」＝排序等於冇用。
+   */
+  const orderedCategories = useMemo(
+    () => reorderByStored(categories, categoryOrder, (c) => c),
+    [categories, categoryOrder],
+  );
+
+  /** 供應商下拉選單亦跟拖好嘅次序（同一個來源，開單時唔使搵）。 */
+  const orderedSuppliers = useMemo(
+    () => reorderByStored(suppliers, supplierOrder, (s) => s.name),
+    [suppliers, supplierOrder],
+  );
 
   /**
    * 付款方式篩選（2026-09-25 加）：client-side 過濾，**零新增請求**。
@@ -906,16 +1061,39 @@ export function InventoryView() {
     return keys;
   }, [masterMethods, receipts]);
 
+  /**
+   * 篩選 chip 分兩組（2026-09-26 對齊確認稿）：
+   *   · `withData`：**有資料嘅**（確認稿只顯示呢批，例：全部7 / 現金3 / 月結2）
+   *   · `zero`：主檔有、但**當前範圍 0 筆**嘅（默認收埋）
+   *
+   * 🔴 為何唔可以直接「只顯示有資料嘅」：呢個正是 2026-09-25 嘅原 bug
+   * —— 月結收據 0 張時 chip 完全唔出現，商家以為系統冇月結呢個選項。
+   * 所以零筆數嘅唔刪、只係收起，用「＋N 個未用過」一撳就展開。
+   *
+   * 🔴 當前**已選中**嘅 key 一定唔可以收埋：否則「撳完月結再收埋」會出現
+   * 「篩選中但冇 chip 顯示」＝用戶以為篩選失效（實際上表已經被過濾）。
+   */
+  const methodChipGroups = useMemo(() => {
+    const withData: Array<{ key: string; label: string }> = [];
+    const zero: Array<{ key: string; label: string }> = [];
+    for (const key of methodFilterKeys) {
+      const count = methodCounts.get(key) ?? 0;
+      const item = { key, label: `${labelMap[key] ?? key}（${count}）` };
+      if (count > 0 || key === methodFilter) withData.push(item);
+      else zero.push(item);
+    }
+    // 有資料嘅按筆數多寡排（商家最常用嘅付款方式排最前，唔使橫向掃）。
+    withData.sort((a, b) => (methodCounts.get(b.key) ?? 0) - (methodCounts.get(a.key) ?? 0));
+    return { withData, zero };
+  }, [methodFilterKeys, methodCounts, labelMap, methodFilter]);
+
   const methodFilterOptions = useMemo(
     () => [
       { key: ALL_METHODS, label: `全部（${receipts.length}）` },
-      ...methodFilterKeys.map((m) => ({
-        key: m,
-        // 0 張都會出現（只要喺主檔內）：唔會因為暫時冇月結收據而「睇唔到有月結呢個選項」。
-        label: `${labelMap[m] ?? m}（${methodCounts.get(m) ?? 0}）`,
-      })),
+      ...methodChipGroups.withData,
+      ...(showZeroMethods ? methodChipGroups.zero : []),
     ],
-    [receipts.length, methodFilterKeys, methodCounts, labelMap],
+    [receipts.length, methodChipGroups, showZeroMethods],
   );
 
   const visibleReceipts = useMemo(
@@ -1000,7 +1178,7 @@ export function InventoryView() {
           />
         </div>
 
-        {/* 付款方式篩選（2026-09-25：改由 admin 主檔驅動） */}
+        {/* 付款方式篩選（2026-09-25：改由 admin 主檔驅動；2026-09-26：零筆數收埋） */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-slate-500">付款方式</span>
           <DateRangeFilterChips
@@ -1008,6 +1186,15 @@ export function InventoryView() {
             value={methodFilter}
             onChange={(key) => setMethodFilter(key)}
           />
+          {methodChipGroups.zero.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowZeroMethods((v) => !v)}
+              className="inline-flex min-h-[36px] items-center rounded-full px-3 py-1.5 text-xs font-semibold text-slate-500 underline decoration-dotted hover:text-slate-700"
+            >
+              {showZeroMethods ? "收埋未用過嘅" : `＋${methodChipGroups.zero.length} 個未用過`}
+            </button>
+          )}
         </div>
 
         {masterWarning && (
@@ -1127,9 +1314,11 @@ export function InventoryView() {
           )}
         </section>
 
-        {/* 庫存表（POS 內建庫存概念） */}
+        {/* 庫存表（POS 內建庫存概念）
+            `key={productsVersion}`：設置面板改過庫存品之後強制換 instance 重載，
+            否則呢份 state 唔會知（見 `productsVersion` 嘅註釋）。 */}
         {merchantId && (
-          <InventoryTable merchantId={merchantId} account={account} />
+          <InventoryTable key={productsVersion} merchantId={merchantId} account={account} />
         )}
 
         {/* 統計（多圖表） */}
@@ -1186,13 +1375,31 @@ export function InventoryView() {
             </div>
           </section>
         )}
+
+        {/* 底部提示條（確認稿嘅 footnote）：講清「主檔管理已經收埋入設置」，
+            並留一個直接入口 —— 商家撳完就唔會再喺主頁搵唔到供應商管理。 */}
+        <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3">
+          <p className="text-xs leading-relaxed text-slate-500">
+            供應商／品類嘅新增・修改・刪除已經收埋入「設置」，主頁唔再顯示（唔常用嘅操作唔霸版面）。
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setHighlightSupplierId(null);
+              setSettingsOpen(true);
+            }}
+            className="shrink-0 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 ring-1 ring-slate-200"
+          >
+            前往設置 →
+          </button>
+        </div>
       </div>
 
       <ReceiptFormModal
         open={formOpen}
         initial={formInitial}
-        suppliers={suppliers}
-        categories={categories}
+        suppliers={orderedSuppliers}
+        categories={orderedCategories}
         paymentMethods={purchaseMethods}
         labelMap={labelMap}
         recentItems={recentItems}
@@ -1212,14 +1419,22 @@ export function InventoryView() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         account={account}
+        merchantId={merchantId}
         suppliers={suppliers}
         onSuppliersChanged={async () => {
           await loadSuppliers();
           await loadAll();
         }}
+        supplierOrder={supplierOrder}
+        onSaveSupplierOrder={saveSupplierOrder}
         categories={categories}
+        categoryOrder={categoryOrder}
         onSaveCategories={saveCategories}
+        onSaveCategoryOrder={saveCategoryOrder}
+        paymentMethods={masterMethods}
+        paymentWarning={masterWarning}
         highlightSupplierId={highlightSupplierId}
+        onProductsChanged={() => setProductsVersion((n) => n + 1)}
       />
     </div>
   );

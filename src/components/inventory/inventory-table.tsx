@@ -27,9 +27,23 @@ const num = (n: number, d = 2) =>
 type Props = {
   merchantId: string;
   account: string;
+  /**
+   * 嵌喺「庫存・設置 → 庫存品」panel 入面（2026-09-26）。
+   * `true` = 唔再重複顯示面板已經有嘅大標題，只保留動作列。
+   */
+  embedded?: boolean;
+  /**
+   * 有任何**寫入**（新增／編輯／盤點／刪除／從收據同步）之後通知外層。
+   *
+   * 🔴 為何需要：同一個店嘅庫存品可能喺兩個地方同時 render（主頁嘅庫存表
+   * ＋ 設置 panel）。設置入面刪咗一件，主頁嗰份係**另一個 component instance**，
+   * 唔會自動知 ⇒ 商家閂咗彈窗仲見到嗰件「已刪」嘅貨，以為冇刪到。
+   * 冇呢個 callback 就會出現「兩份唔同步」嘅假象。
+   */
+  onMutated?: () => void;
 };
 
-export function InventoryTable({ merchantId, account }: Props) {
+export function InventoryTable({ merchantId, account, embedded = false, onMutated }: Props) {
   const [products, setProducts] = useState<InvProduct[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -72,6 +86,7 @@ export function InventoryTable({ merchantId, account }: Props) {
         const s = json.summary as { created: number; updated: number; total_after: number; scanned_receipts: number; scanned_items: number };
         setSyncMsg(`同步完成：新增 ${s.created} 個，更新 ${s.updated} 個（掃描 ${s.scanned_receipts} 張收據 / ${s.scanned_items} 個品項，總計 ${s.total_after} 個庫存品）`);
         void loadProducts();
+        onMutated?.();
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "網絡錯誤");
@@ -88,6 +103,7 @@ export function InventoryTable({ merchantId, account }: Props) {
       else {
         setConfirmDelete(null);
         void loadProducts();
+        onMutated?.();
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "網絡錯誤");
@@ -100,16 +116,21 @@ export function InventoryTable({ merchantId, account }: Props) {
   const lowStock = products.filter((p) => p.reorder_level > 0 && p.current_qty < p.reorder_level).length;
 
   return (
-    <section className="mb-6">
+    <section className={embedded ? "" : "mb-6"}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium text-slate-600">
-            庫存表（POS 內建・{totalCount} 個）
-            <span className="ml-2 text-xs font-normal text-slate-400">
-              基於 expenseRecorder 收據，可盤點/手動維護
-            </span>
-          </h2>
-        </div>
+        {embedded ? (
+          // 嵌喺設置 panel 入面：panel header 已經有「庫存品」標題，唔重複。
+          <span className="text-xs text-slate-400">共 {totalCount} 個・可盤點／手動維護</span>
+        ) : (
+          <div>
+            <h2 className="text-sm font-medium text-slate-600">
+              庫存表（POS 內建・{totalCount} 個）
+              <span className="ml-2 text-xs font-normal text-slate-400">
+                基於 expenseRecorder 收據，可盤點/手動維護
+              </span>
+            </h2>
+          </div>
+        )}
         <div className="flex gap-2">
           <button
             type="button"
@@ -169,7 +190,7 @@ export function InventoryTable({ merchantId, account }: Props) {
           尚無庫存品。點「從收據同步」從 expenseRecorder 收據帶入，或「新增庫存品」手動建立。
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={`grid grid-cols-1 gap-3 ${embedded ? "" : "sm:grid-cols-2 xl:grid-cols-3"}`}>
           {products.map((p) => {
             const isLow = p.reorder_level > 0 && p.current_qty < p.reorder_level;
             return (
@@ -249,7 +270,10 @@ export function InventoryTable({ merchantId, account }: Props) {
           initial={editing}
           merchantId={merchantId}
           onClose={() => setEditing(undefined)}
-          onSaved={() => void loadProducts()}
+          onSaved={() => {
+            void loadProducts();
+            onMutated?.();
+          }}
         />
       )}
 
@@ -257,7 +281,10 @@ export function InventoryTable({ merchantId, account }: Props) {
         <StocktakeModal
           product={stocktaking}
           onClose={() => setStocktaking(null)}
-          onSaved={() => void loadProducts()}
+          onSaved={() => {
+            void loadProducts();
+            onMutated?.();
+          }}
         />
       )}
 

@@ -575,4 +575,8 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   // 進貨品類：預設空 → 商家第一次入「庫存 → 設置 → 品類」自己建。
   // 空 = 新增收據嘅品類欄會顯示「尚無品類」提示，仍然可以手動輸入（唔會鎖死）。
   invCategories: [],
+  // 供應商／品類嘅顯示次序（2026-09-26）：空 = 未排過，跟預設次序（供應商讀 DB 字母序、
+  // 品類跟建立次序）。商家拖過 ⠿ 之後先寫入（見 `inventory-order.ts`）。
+  invSupplierOrder: [],
+  invCategoryOrder: [],
 };

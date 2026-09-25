@@ -53,16 +53,38 @@ describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
 
   it("品項 row 一律用 grid 固定軌寬（flex + 百分比 basis 會搶位）", () => {
     const src = read(VIEW);
+    // 2026-09-26：數量由純輸入框改成 stepper ⇒ 數量軌由 5rem 加闊到 10rem。
     assert.ok(
-      /sm:grid-cols-\[minmax\(0,1fr\)_7rem_5rem_auto\]/.test(src),
-      "品項 row 要係 sm:grid-cols-[minmax(0,1fr)_7rem_5rem_auto]",
+      /sm:grid-cols-\[minmax\(0,1fr\)_7rem_10rem_auto\]/.test(src),
+      "品項 row 要係 sm:grid-cols-[minmax(0,1fr)_7rem_10rem_auto]",
     );
     assert.ok(/col-span-2 min-w-0 sm:col-span-1/.test(src), "品名欄窄螢幕要佔一整行");
   });
 
-  it("品名／單價／數量三個 input 都要有 aria-label（冇 placeholder 當 label 用）", () => {
+  it("品名／單價／數量三個欄都要有 aria-label（冇 placeholder 當 label 用）", () => {
     const src = read(VIEW);
-    assert.equal((src.match(/aria-label=\{`第 \$\{i \+ 1\} 項/g) ?? []).length, 3);
+    // 收窄到逐個欄名：數量 stepper 嘅「＋／−」按鈕都帶「第 N 項數量…」前綴，
+    // 用舊嘅寬鬆寫法會數到 5 個（假紅）。呢度逐個精確比對。
+    assert.equal((src.match(/aria-label=\{`第 \$\{i \+ 1\} 項品名`\}/g) ?? []).length, 1);
+    assert.equal((src.match(/aria-label=\{`第 \$\{i \+ 1\} 項單價`\}/g) ?? []).length, 1);
+    assert.equal((src.match(/aria-label=\{`第 \$\{i \+ 1\} 項數量`\}/g) ?? []).length, 1);
+  });
+
+  it("數量要有 stepper（− / ＋），下限 0 而且唔會出負數", () => {
+    const src = read(VIEW);
+    assert.ok(/const stepQty = \(i: number, delta: number\)/.test(src), "要有 stepQty");
+    assert.ok(/Math\.max\(0, Math\.round\(\(base \+ delta\) \* 1000\) \/ 1000\)/.test(src), "下限 0、保留三位小數");
+    assert.ok(/aria-label=\{`第 \$\{i \+ 1\} 項數量減一`\}/.test(src));
+    assert.ok(/aria-label=\{`第 \$\{i \+ 1\} 項數量加一`\}/.test(src));
+  });
+
+  it("收據日期要係 chips（今天／昨天／選日期…），唔可以一開頭就係原生 date input", () => {
+    const src = read(VIEW);
+    assert.ok(/const yesterdayStr = \(\) =>/.test(src), "要有 yesterdayStr()");
+    assert.ok(/label: "今天", value: todayStr\(\)/.test(src));
+    assert.ok(/label: "昨天", value: yesterdayStr\(\)/.test(src));
+    assert.ok(/選日期…/.test(src));
+    assert.ok(/showDatePicker/.test(src), "日曆要收起直到撳「選日期…」");
   });
 });
 
@@ -205,10 +227,19 @@ describe("付款方式：admin 主檔驅動（唔可以再硬編碼）", () => {
     );
   });
 
-  it("付款方式冇收據時 chip 一樣要出現（0 張都顯示）", () => {
+  it("付款方式冇收據時 chip 一樣要出現（0 張都仍然撳得到）", () => {
     const src = read(VIEW);
-    assert.ok(/methodCounts\.get\(m\) \?\? 0/.test(src));
-    assert.ok(!/filter\(\([^)]*\) => \(methodCounts\.get/.test(src), "唔可以因為 0 張就隱藏 chip");
+    assert.ok(/methodCounts\.get\(key\) \?\? 0/.test(src));
+    // 2026-09-26：確認稿只顯示「有資料」嘅付款方式，所以零筆數嘅改為默認收埋
+    // —— 但**唔係刪走**：仍然要 (a) 撳得到展開、(b) 當前選中嘅唔准收埋。
+    // 呢兩點就係守住 2026-09-25「睇唔到有月結」原 bug 嘅防線。
+    assert.equal(
+      /filter\(\(?[^)]*\)?\s*=>\s*\(?methodCounts\.get/.test(src),
+      false,
+      "唔可以真係 filter 走 0 張嘅 chip（會令商家以為系統冇呢個付款方式）",
+    );
+    assert.ok(/count > 0 \|\| key === methodFilter/.test(src), "選中嘅 chip 唔准收埋");
+    assert.ok(/methodChipGroups\.zero\.length > 0/.test(src), "零筆數嘅要有展開入口");
   });
 
   it("篩選後 KPI 要跟住重算（用 buildPurchaseSummary，唔可以繼續用 server 全量 summary）", () => {
@@ -316,5 +347,204 @@ describe("merchants API：duplicate key 要轉做中文明確提示", () => {
   it("表／欄未就緒（42P01 / 42703）要降級而唔係 500", () => {
     assert.ok(/export function isMissingColumnOrTable/.test(read("src/lib/expense-inventory.ts")));
     assert.ok(/isMissingColumnOrTable\(/.test(read(MERCHANTS)));
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 2026-09-26：對齊確認稿 `docs/mockups/inventory-ux-5items-2026-09-25.html`
+ * 商家當日問「為什麼 UI 跟你畫的差那麼遠?」之後嘅收口。
+ * 呢批守衛嘅目的係：確認稿講好嘅四點（4 個 chips／兩個 panel 並排／
+ * 「用過 N 次」／拖 ⠿ 排序）唔會再無聲被簡化返。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const USAGE_API = "src/app/api/inventory/master-usage/route.ts";
+const ORDER_LIB = "src/lib/inventory-order.ts";
+
+describe("設置面板：對齊確認稿（4 個 chips ＋ 兩個 panel 並排）", () => {
+  it("要有 4 個區塊：供應商／品類／庫存品／支付方式顯示", () => {
+    const panel = read(PANEL);
+    assert.ok(/type PanelId = "supplier" \| "category" \| "product" \| "payment"/.test(panel));
+    assert.ok(
+      /const PANEL_ORDER: PanelId\[\] = \["supplier", "category", "product", "payment"\]/.test(panel),
+    );
+    for (const label of ["供應商", "品類", "庫存品", "支付方式顯示"]) {
+      assert.ok(panel.includes(label), `PANEL_LABEL 缺少「${label}」`);
+    }
+  });
+
+  it("預設要同時開住「供應商 ＋ 品類」，並且兩個 panel 並排（唔係單選 tab）", () => {
+    const panel = read(PANEL);
+    assert.ok(/supplier: true,\s*category: true/.test(panel), "預設要開供應商＋品類");
+    assert.ok(/md:grid-cols-2/.test(panel), "兩個 panel 要並排");
+    // 舊寫法係單選 tab（`tab === t.id`）—— 已經唔可以返去，否則冇得同時睇兩個主檔。
+    assert.equal(/const \[tab, setTab\]/.test(panel), false, "唔可以返去單選 tab");
+  });
+
+  it("最少要留一個 panel（全部關咗個彈窗會一片空白）", () => {
+    const panel = read(PANEL);
+    assert.ok(/if \(!PANEL_ORDER\.some\(\(k\) => next\[k\]\)\) return cur;/.test(panel));
+  });
+
+  it("「庫存品」panel 要掛現成 InventoryTable（唔可以另寫一套 CRUD）", () => {
+    const panel = read(PANEL);
+    assert.ok(/import \{ InventoryTable \} from "\.\/inventory-table"/.test(panel));
+    assert.ok(/<InventoryTable[\s\S]{0,200}?embedded/.test(panel));
+  });
+
+  it("🔴「支付方式顯示」係唯讀：面板唔可以直接寫主檔（主檔歸 expenseRecorder admin）", () => {
+    const panel = read(PANEL);
+    assert.equal(
+      /payment-methods/.test(panel),
+      false,
+      "支付方式 panel 只可以顯示 props，唔可以呼叫 payment-methods API 寫入",
+    );
+    const view = read(VIEW);
+    assert.ok(/paymentMethods=\{masterMethods\}/.test(view), "主頁要把完整主檔交落面板");
+    assert.equal(
+      /fetch\(`\/api\/inventory\/payment-methods`[\s\S]{0,120}?method: "(POST|PATCH|DELETE)"/.test(view),
+      false,
+      "POS 唔可以寫支付方式主檔",
+    );
+  });
+
+  it("彈窗要保留（商家拍板），但唔可以有「保存」按鈕（改動即時寫入，會誤導）", () => {
+    const panel = read(PANEL);
+    assert.ok(/fixed inset-0 z-50/.test(panel), "設置要保持彈窗");
+    assert.ok(/完成/.test(panel), "右上角應該係「完成」");
+    assert.equal(/保存/.test(panel), false, "每項操作都即時寫入，唔可以有「保存」製造錯誤預期");
+  });
+});
+
+describe("拖 ⠿ 排序：次序要落 PosLocalSettings 白名單", () => {
+  it("PosLocalSettings 要有 invSupplierOrder / invCategoryOrder", () => {
+    const types = read("src/lib/types.ts");
+    assert.ok(/invSupplierOrder: string\[\]/.test(types));
+    assert.ok(/invCategoryOrder: string\[\]/.test(types));
+  });
+
+  it("defaultPosLocalSettings 要帶兩個新欄", () => {
+    const mock = read("src/lib/mock-data.ts");
+    assert.ok(/invSupplierOrder: \[\]/.test(mock));
+    assert.ok(/invCategoryOrder: \[\]/.test(mock));
+  });
+
+  it("🔴 normalizePosLocalSettings 一定要白名單帶返（漏咗 = 拖完一 reload 彈返字母序）", () => {
+    const storage = read("src/lib/storage.ts");
+    assert.ok(/sanitizeKeyList\(settings\?\.invSupplierOrder\)/.test(storage));
+    assert.ok(/sanitizeKeyList\(settings\?\.invCategoryOrder\)/.test(storage));
+  });
+
+  it("面板要有 pointer 拖拽（mouse + 觸屏同一套）＋ touch-action:none", () => {
+    const panel = read(PANEL);
+    assert.ok(/function beginDrag\(/.test(panel));
+    assert.ok(/function moveDrag\(/.test(panel));
+    assert.ok(/function endDrag\(/.test(panel));
+    assert.ok(/setPointerCapture/.test(panel));
+    assert.ok(/touch-none/.test(panel), "把手要 touch-action:none，否則手指拖動會被當成捲動");
+    assert.ok(/data-drag-row/.test(panel), "行要標記 data-drag-row 先量得到中線");
+  });
+
+  it("排序要即時寫入 PosLocalSettings（唔可以只喺本機 state）", () => {
+    const view = read(VIEW);
+    assert.ok(/onSaveSupplierOrder/.test(view));
+    assert.ok(/onSaveCategoryOrder/.test(view));
+    assert.ok(/invSupplierOrder: next/.test(view));
+    assert.ok(/invCategoryOrder: next/.test(view));
+  });
+
+  it("收據 modal 嘅供應商／品類要跟同一份次序（否則設置排好都冇用）", () => {
+    const view = read(VIEW);
+    assert.ok(/reorderByStored\(categories, categoryOrder/.test(view));
+    assert.ok(/reorderByStored\(suppliers, supplierOrder/.test(view));
+    assert.ok(/suppliers=\{orderedSuppliers\}/.test(view));
+    assert.ok(/categories=\{orderedCategories\}/.test(view));
+  });
+});
+
+describe("「用過 N 次」：lazy route，唔可以燒 egress", () => {
+  it("要有 master-usage route，並以 user_id 做店別 scope", () => {
+    const src = read(USAGE_API);
+    assert.ok(/export async function GET/.test(src));
+    assert.ok(/eq\("user_id", resolved\.userId\)/.test(src));
+  });
+
+  it("🔴 只准拉 merchant_id 一個欄，唔可以拉 raw_ocr_data（mg 級 egress）", () => {
+    const src = read(USAGE_API);
+    assert.ok(/\.select\("merchant_id"/.test(src));
+    assert.equal(/raw_ocr_data/.test(src), false, "唔准拉 raw_ocr_data 落 server 只為數次數");
+  });
+
+  it("要有上限，並喺回應講明係「近期」（唔可以扮成總數）", () => {
+    const src = read(USAGE_API);
+    assert.ok(/const SCAN_LIMIT = \d+/.test(src));
+    assert.ok(/\.limit\(SCAN_LIMIT\)/.test(src));
+    assert.ok(/capped/.test(src));
+  });
+
+  it("表未就緒要降級（唔可以令設置面板爆掉）", () => {
+    assert.ok(/isMissingColumnOrTable/.test(read(USAGE_API)));
+  });
+
+  it("面板要 lazy fetch：只喺供應商 panel 開住嘅時候先叫", () => {
+    const panel = read(PANEL);
+    assert.ok(/if \(!open \|\| !visible\.supplier \|\| !account\) return;/.test(panel));
+    assert.ok(/\/api\/inventory\/master-usage\?account=/.test(panel));
+    // 唔可以跟住主頁輪詢：唔應該喺 inventory-view 出現呢支 API。
+    assert.equal(
+      /master-usage/.test(read(VIEW)),
+      false,
+      "用量只喺設置面板內 lazy 拉，唔可以混入主頁載入路徑",
+    );
+  });
+
+  it("純函式要另開零 import 模組（node --test 唔認 @/ alias）", () => {
+    const lib = read(ORDER_LIB);
+    assert.equal(/^\s*import /m.test(lib), false, "inventory-order.ts 一定要零 import 先可以被測試直接 import");
+    assert.ok(/export function reorderByStored/.test(lib));
+    assert.ok(/export function moveWithin/.test(lib));
+    assert.ok(/export function sanitizeKeyList/.test(lib));
+  });
+});
+
+describe("主頁：付款方式 chips 只顯示有資料（但唔可以返去 2026-09-25 嘅 bug）", () => {
+  it("要分「有資料」同「零筆數」兩組", () => {
+    const view = read(VIEW);
+    assert.ok(/const methodChipGroups = useMemo\(/.test(view));
+    assert.ok(/const withData: Array<\{ key: string; label: string \}> = \[\]/.test(view));
+    assert.ok(/const zero: Array<\{ key: string; label: string \}> = \[\]/.test(view));
+  });
+
+  it("🔴 當前已選中嘅 key 一定唔可以收埋（否則會出現「篩選中但冇 chip」）", () => {
+    const view = read(VIEW);
+    assert.ok(/count > 0 \|\| key === methodFilter/.test(view));
+  });
+
+  it("零筆數嘅要留一個展開入口（唔可以真係刪走 → 商家以為冇呢個付款方式）", () => {
+    const view = read(VIEW);
+    assert.ok(/個未用過/.test(view));
+    assert.ok(/showZeroMethods/.test(view));
+  });
+
+  it("主頁底部要有確認稿嘅 footnote ＋「前往設置 →」", () => {
+    const view = read(VIEW);
+    assert.ok(/border-dashed border-slate-300/.test(view));
+    assert.ok(/已經收埋入「設置」/.test(view));
+    assert.ok(/前往設置 →/.test(view));
+  });
+});
+
+describe("庫存表兩個 instance 唔可以唔同步", () => {
+  it("主頁庫存表要用 key 強制重載（設置 panel 改過之後）", () => {
+    const view = read(VIEW);
+    assert.ok(/productsVersion/.test(view), "要有重載鑰匙");
+    assert.ok(/<InventoryTable key=\{productsVersion\}/.test(view));
+    assert.ok(/onProductsChanged=\{\(\) => setProductsVersion\(\(n\) => n \+ 1\)\}/.test(view));
+  });
+
+  it("InventoryTable 嘅寫入要通知外層（onMutated）", () => {
+    const table = read("src/components/inventory/inventory-table.tsx");
+    assert.ok(/onMutated\?: \(\) => void/.test(table));
+    // 四個寫入點：從收據同步 / 刪除 / 新增編輯 / 盤點
+    assert.equal((table.match(/onMutated\?\.\(\)/g) ?? []).length, 4);
   });
 });

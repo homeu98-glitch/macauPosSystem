@@ -1067,6 +1067,20 @@ export interface PosLocalSettings {
    * 同「支付方式主檔」唔同：後者由 admin 統一派發，呢個由商家自己管。
    */
   invCategories: string[];
+  /**
+   * 供應商嘅**顯示次序**（2026-09-26「設置」加拖 ⠿ 排序）。
+   *
+   * 只存**名字**（唔存 id）：供應商係「刪咗再建就換一個新 id」，
+   * 用 id 做 key 會令排序喺重建之後靜靜失效。清單入面**冇**嘅名
+   * （＝新建立／未排過）一律排最後，所以新增供應商永遠即刻見到
+   * （見 `inventory-order.ts` `reorderByStored()`）。
+   *
+   * ⚠️ 同 `invCategories` 一樣：一定要加落 `normalizePosLocalSettings()` 白名單，
+   * 否則拖完一 reload 就被剷走。空陣列 = 用預設（讀 DB 嘅字母序）。
+   */
+  invSupplierOrder: string[];
+  /** 品類嘅顯示次序（同上，用**品類名**做 key）。 */
+  invCategoryOrder: string[];
 }
 
 /**
