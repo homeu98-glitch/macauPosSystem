@@ -531,7 +531,25 @@ export function projectGrabberOrder(input: ProjectInput): ProjectResult {
   const stamp = now.toISOString();
 
   const row: GrabberOrderRow = {
-    id: `${source}-${externalOrderId}`,
+    /**
+     * 🔴 **一定要含 `storeId`**（2026-09-25 實案）。
+     *
+     * 舊寫法係 `${source}-${externalOrderId}` —— 同一張平台單推去**兩間唔同嘅店**
+     * 就會產生**同一個 `id`**：
+     *   ① 店 A 入咗 → `pos_orders.id = "mfood-XXX"`；
+     *   ② 店 B 再入 → PK 撞，但 `ON CONFLICT (store_id, source, external_order_id)`
+     *      嘅目標係 `(B, mfood, XXX)`，同既有行 `(A, mfood, XXX)` **唔相同**
+     *      ⇒ ON CONFLICT **救唔到 PK 衝突** ⇒ Postgres 回 23505
+     *      ⇒ POS route 回 500「duplicate key value violates unique constraint "pos_orders_pkey"」
+     *      ⇒ 商家見到「送出失敗」，而該店永遠收唔到呢張單（靜默卡死）。
+     *
+     * 商户實況：同一部機試唔同店（`storeId` 由 A 改成 B）就會即刻中。
+     *
+     * ⚠️ 改格式係安全嘅：`pos_orders` 對 `(store_id, source, external_order_id)`
+     *    有唯一索引，所以舊格式嘅既有行仍然會令 upsert `DO NOTHING`（唔會出兩張）。
+     *    亦冇任何代碼靠 `mfood-` / `aomi-` 前綴解析（`order-id-guard` 係黑名單機制）。
+     */
+    id: `${source}-${storeId}-${externalOrderId}`,
     store_id: storeId,
     local_order_no: grabberLocalOrderNo(order),
     table_id: COUNTER_TABLE_ID,

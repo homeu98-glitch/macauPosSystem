@@ -214,7 +214,8 @@ test("投影：訂單層欄位一次過驗（枱號／來源／狀態／已付�
   const r = projectGrabberOrder({ order: mfoodOrder(), storeId: "store-1", menuItems: MENU });
   assert.equal(r.ok, true);
   const row = r.row!;
-  assert.equal(row.id, "mfood-463403");
+  // 🔴 id 一定要含 store_id（見下面「同一張單推去兩間店」嘅測試）
+  assert.equal(row.id, "mfood-store-1-463403");
   assert.equal(row.external_order_id, "463403");
   assert.equal(row.source, "mfood");
   assert.equal(row.store_id, "store-1");
@@ -225,6 +226,30 @@ test("投影：訂單層欄位一次過驗（枱號／來源／狀態／已付�
   assert.equal(row.prepaid_amount, 62, "平台單一律線上已付");
   assert.equal(row.tax_amount, 0);
   assert.equal(row.service_charge_amount, 0);
+});
+
+test("🔴 投影：同一張平台單推去兩間店，id 一定要唔同（PK 衝突 500 回歸）", () => {
+  // 實案（2026-09-25）：商家同一部機試唔同店（storeId 由 A 改成 B）。
+  // 舊寫法 `id = ${source}-${externalOrderId}` 唔含 store_id：
+  //   ① 店 A 入咗 → pos_orders.id = "mfood-XXX"
+  //   ② 店 B 再入 → PK 撞，但 ON CONFLICT (store_id, source, external_order_id)
+  //      嘅目標 (B,…) 同既有行 (A,…) 唔相同 ⇒ 救唔到 PK ⇒ Postgres 23505
+  //      ⇒ POS 回 500「duplicate key value violates unique constraint "pos_orders_pkey"」
+  //      ⇒ 商家見到「送出失敗」，而店 B 永遠收唔到呢張單。
+  const a = projectGrabberOrder({ order: mfoodOrder(), storeId: "store-a" });
+  const b = projectGrabberOrder({ order: mfoodOrder(), storeId: "store-b" });
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.notEqual(a.row!.id, b.row!.id, "兩間店嘅 id 唔可以一樣");
+  assert.equal(a.row!.id, "mfood-store-a-463403");
+  assert.equal(b.row!.id, "mfood-store-b-463403");
+  // 同店重推 → id 一樣（幂等：由 (store_id, source, external_order_id) 唯一索引 DO NOTHING 擋）
+  const again = projectGrabberOrder({ order: mfoodOrder(), storeId: "store-a" });
+  assert.equal(again.row!.id, a.row!.id);
+  // 唯一鍵嘅三個成員都要齊（ON CONFLICT 靠佢）
+  assert.equal(a.row!.store_id, "store-a");
+  assert.equal(a.row!.source, "mfood");
+  assert.equal(a.row!.external_order_id, "463403");
 });
 
 test("🔴 投影：平台單一律 paid（線上已付款）；自動接單只控制出餐階段", () => {
