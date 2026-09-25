@@ -1,5 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
-
 import { NextResponse } from "next/server";
 
 import {
@@ -8,6 +6,13 @@ import {
   type GrabberOrder,
   type GrabberOrderRow,
 } from "@/lib/grabber/grabber-order";
+// 密鑰驗證抽去 `@/lib/grabber/grabber-secret` —— 加咗 `grabber/store` 之後，
+// 兩條 route 必須用同一份實作，否則會出現「一條補咗加固、另一條冇」嘅靜默分歧。
+import {
+  grabberSecretsMatch,
+  readGrabberSecretFromRequest,
+  readGrabberSharedSecret,
+} from "@/lib/grabber/grabber-secret";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 /**
@@ -36,8 +41,6 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
  *   插件目前發嘅 header 名係 `X-Grabber-Secret`（見 `grabPush()`）。
  */
 
-const SECRET_HEADER = "x-grabber-secret";
-
 /** 限流：每分鐘 60 次（插件每 5 秒抓一次，一張單可能分列表＋詳情兩次送）。 */
 const WINDOW_MS = 60_000;
 const MAX_ATTEMPTS = 60;
@@ -61,13 +64,6 @@ function clientIp(request: Request): string {
   return request.headers.get("x-real-ip") ?? "unknown";
 }
 
-/** Constant-time 比對（避免用時間差逐字猜密鑰）。 */
-function secretsMatch(given: string, expected: string): boolean {
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
 
 /**
  * 讀「自動接單」設定（**與 Ledger 線上單共用同一粒掣**，2026-09-24 使用者拍板）。
@@ -92,14 +88,13 @@ async function readAutoAccept(
 }
 
 export async function POST(request: Request) {
-  const expected = process.env.GRABBER_SHARED_SECRET;
+  const expected = readGrabberSharedSecret();
   if (!expected) {
     console.error("[integration/grabber/orders] GRABBER_SHARED_SECRET 未設定");
     return NextResponse.json({ ok: false, error: "伺服器未設定共享密鑰。" }, { status: 500 });
   }
 
-  const given = request.headers.get(SECRET_HEADER) ?? "";
-  if (!given || !secretsMatch(given, expected)) {
+  if (!grabberSecretsMatch(readGrabberSecretFromRequest(request), expected)) {
     return NextResponse.json({ ok: false, error: "密鑰驗證失敗。" }, { status: 401 });
   }
 
