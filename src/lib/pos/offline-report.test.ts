@@ -214,6 +214,34 @@ describe("RPC 回值嚴格驗證（契約 §欄位表：型別不符 ⇒ 唔可�
     assert.equal(validateOfflineReportRpc(null, expected).ok, false);
   });
 
+  it("🔴 超過 90 日：**SQL 自己截斷**後嘅回傳值要收（from = to − 89、clamped = true）", () => {
+    // 2026-09-25 實案：route 曾經先截斷再傳 ⇒ SQL 回 clamped=false ⇒ 驗值 503。
+    // 正確流程係「傳原始區間 → SQL 回截斷後嘅值 → 用回傳值核對」。
+    const expectedBig = clampOfflineReportRange("2026-01-01", "2026-09-24");
+    assert.deepEqual(expectedBig, { from: "2026-06-27", to: "2026-09-24", clamped: true });
+
+    const fromSql = { ...good, from: "2026-06-27", to: "2026-09-24", clamped: true };
+    const r = validateOfflineReportRpc(fromSql, expectedBig);
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      // 回應要 echo SQL 實際用嘅區間
+      assert.equal(r.from, "2026-06-27");
+      assert.equal(r.to, "2026-09-24");
+      assert.equal(r.clamped, true);
+    }
+
+    // 反例：SQL 回 clamped=false（＝ route 先截斷再傳嘅後果）⇒ 一定要拒，唔可以靜默出錯數
+    const wrong = { ...good, from: "2026-06-27", to: "2026-09-24", clamped: false };
+    assert.equal(validateOfflineReportRpc(wrong, expectedBig).ok, false);
+  });
+
+  it("🔴 回傳值缺 `from`／`to`（或非字串）⇒ 拒", () => {
+    const { from: _from, ...noFrom } = good;
+    void _from;
+    assert.equal(validateOfflineReportRpc(noFrom, expected).ok, false);
+    assert.equal(validateOfflineReportRpc({ ...good, to: 20260924 }, expected).ok, false);
+  });
+
   it("byPayment：method 空／超 32 字／非陣列 ⇒ 拒（契約：> 32 字整包拒收）", () => {
     assert.equal(validateOfflineReportRpc({ ...good, byPayment: [{ method: "", amountAvos: 1 }] }, expected).ok, false);
     assert.equal(

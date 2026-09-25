@@ -241,6 +241,9 @@ export type RpcValidation =
   | {
       ok: true;
       found: boolean;
+      /** RPC **實際**用嘅區間（已核對過同 `expected` 逐位相等）。回應要 echo 呢兩個值。 */
+      from: string;
+      to: string;
       clamped: boolean;
       kpi: OfflineReportKpi;
       byPayment: OfflineReportPaymentBucket[];
@@ -254,13 +257,18 @@ export type RpcValidation =
  *    與其送一份 Ledger 會扔嘅 payload，不如**我哋自己回 503**（Ledger 顯示降級一行），
  *    呢個就係「**唔可以渲染假零**」嘅落實位。任何唔確定 ⇒ 唔回 200。
  *
- * `expected` 由 route 自己按 clamp 規則算出；RPC 回嘅 `from`/`to`/`clamped` 一定要**逐位相等**
- * （Ledger 亦會核對，兩邊各自驗一次 = 雙保險）。
+ * 🔴 `expected` 係由 route 按**請求嘅原始區間**算出（`clampOfflineReportRange(原始 from, 原始 to)`）。
+ *    截斷嘅**唯一權威係 SQL**（route 只係計一個預期值嚟核對）——
+ *    若 route 先截斷再傳落 SQL，SQL 收到嘅已經係 90 日內 ⇒ 會回 `clamped=false`
+ *    而同 `expected.clamped=true` 對唔上 ⇒ 驗值即刻 503（2026-09-25 實案，已修）。
  */
 export function validateOfflineReportRpc(raw: unknown, expected: ClampedRange): RpcValidation {
   if (!isPlainObject(raw)) return { ok: false, reason: "rpc-not-object" };
   if (typeof raw.found !== "boolean") return { ok: false, reason: "rpc-bad-found" };
   if (typeof raw.clamped !== "boolean") return { ok: false, reason: "rpc-bad-clamped" };
+  if (typeof raw.from !== "string" || typeof raw.to !== "string") {
+    return { ok: false, reason: "rpc-bad-range-type" };
+  }
   if (raw.from !== expected.from || raw.to !== expected.to) {
     return { ok: false, reason: "rpc-range-mismatch" };
   }
@@ -295,6 +303,8 @@ export function validateOfflineReportRpc(raw: unknown, expected: ClampedRange): 
   return {
     ok: true,
     found: raw.found,
+    from: raw.from,
+    to: raw.to,
     clamped: raw.clamped,
     kpi: {
       orderCount: raw.orderCount as number,

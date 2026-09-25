@@ -34,6 +34,13 @@ import { getSupabaseWriteClient } from "@/lib/supabase-server";
  * `0058_pos_offline_report()`（stable、service_role-only）喺 DB 內一次過加總 ⇒
  * 90 日窗口都只係一個請求、幾個 byte；逐行拉落 Vercel 再加總會反覆踩 egress 紀律。
  *
+ * ## 範圍截斷：權威在 SQL（2026-09-25 修正）
+ *
+ * 超過 90 日嘅請求，**一定要把請求嘅原始 `from`／`to` 傳落 RPC**，等 0058 自己截斷並回
+ * `clamped=true`；route 只係自己算一個 `expected` 嚟**核對回傳值**。
+ * 🔴 曾經喺 route 先截斷再傳 ⇒ SQL 收到嘅已經係 90 日內 ⇒ 回 `clamped=false` ⇒
+ *    同 `expected.clamped=true` 對唔上 ⇒ 驗值即 503（單日對得上，長區間全滅）。
+ *
  * ## 「唔可以渲染假零」
  *
  * 契約明文：任何欄位型別唔符 ⇒ Ledger 整包丟棄並顯示「暫時無法取得」。所以本 route 嘅原則係
@@ -109,8 +116,13 @@ export async function GET(request: Request) {
     return fail("too_many_requests", 429);
   }
 
-  // ── 4. 範圍截斷（契約 §驗證順序 4）——route 自己算一次，用嚟核對 RPC 回值 ──
-  const range = clampOfflineReportRange(fromParam, toParam);
+  // ── 4. 範圍：截斷嘅唯一權威係 SQL ──
+  // 🔴 一定要傳**請求嘅原始** from／to 落 RPC，等 0058 自己截斷並回 `clamped`。
+  //    若 route 先截斷再傳：SQL 收到嘅已經係 90 日內 ⇒ 會回 `clamped=false`，
+  //    同下面 `expected.clamped=true` 對唔上 ⇒ `validateOfflineReportRpc` 即刻 503
+  //    （2026-09-25 實案：單日對得上，但超過 90 日嘅請求全部 503）。
+  //    呢度仍然自己算一次 `expected`，用途係**核對回傳值**（雙保險，Ledger 亦會核對）。
+  const expected = clampOfflineReportRange(fromParam, toParam);
 
   const supabase = getSupabaseWriteClient();
   if (!supabase) {
@@ -120,8 +132,8 @@ export async function GET(request: Request) {
 
   const { data, error } = await supabase.rpc("pos_offline_report", {
     p_store_id: storeId,
-    p_from: range.from,
-    p_to: range.to,
+    p_from: fromParam,
+    p_to: toParam,
   });
 
   if (error) {
@@ -134,7 +146,7 @@ export async function GET(request: Request) {
   }
 
   // ── 5. 嚴格驗證 + 組 payload ──
-  const validated = validateOfflineReportRpc(data, range);
+  const validated = validateOfflineReportRpc(data, expected);
   if (!validated.ok) {
     console.error(`${TAG} RPC 回傳值驗證失敗：${validated.reason}`);
     return fail("upstream_unavailable", 503);
@@ -143,7 +155,8 @@ export async function GET(request: Request) {
 
   const payload = buildOfflineReportResponse({
     storeId,
-    range: { from: range.from, to: range.to, clamped: validated.clamped },
+    // echo **SQL 實際用嘅**區間（已核對過同 expected 相等；clamped 時 from 已推後）
+    range: { from: validated.from, to: validated.to, clamped: validated.clamped },
     kpi: validated.kpi,
     byPayment: validated.byPayment,
     generatedAt: new Date().toISOString(),

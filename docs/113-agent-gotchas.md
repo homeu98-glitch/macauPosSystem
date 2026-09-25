@@ -120,6 +120,14 @@ orderEventISO(order)       // → 原始字串（顯示用），無法解析 = "
   ③ secret 未設 ⇒ **500 fail-closed**，唔可以放行、唔可以回 401 矇混。
 - 🔴 **唔可以渲染假零**：上游未部署／回值驗唔過 ⇒ **5xx**（Ledger 顯示「暫時無法取得」）。
   KPI 一定要 DB 聚合出，**唔可以**任何情況回硬編 0。
+- 🔴🔴 **「權威只可以有一個」——凡上游會回 processed／flag 值，一律傳原始輸入 + 用回傳值核對。**
+  90 日 clamp 嘅權威在 **SQL（0058）**，route 只可以自己算一次 `expected` 嚟**核對**。
+  ❌ 錯法（2026-09-25 實案）：route 先 `clampOfflineReportRange()` 再傳落 RPC ⇒ SQL 收到嘅已經係
+  90 日內 ⇒ 回 `clamped=false` ⇒ 同 `expected.clamped=true` 對唔上 ⇒ **單日對得上、超過 90 日全部 503**。
+  ✅ 正法：`p_from: fromParam, p_to: toParam`（**請求嘅原始值**），回應 echo `validated.from`／`validated.to`／
+  `validated.clamped`；`RpcValidation` 要帶埋 `from`／`to` 出去。
+  同一道理適用於任何「呼叫端同上游都能做同一種正規化」嘅場合（時區轉換、大小寫、trim、四捨五入）。
+  ⚠️ 呢個 bug **同 migration 無關**，改 route 就夠，唔使亦唔應該重跑 0058。
 - 🔴 **唔可以照抄 `docs/94` 嘅 `report_ro.build_full_report()`**：佢 body 引用 83 號嘅 22 個
   `report_ro.v_*` view，而 83 從未在 production 建立 ⇒ 唔係權限問題（`security definer` 都救唔到），
   **係 view 唔存在**，`create` 都 create 唔到。新聚合函數直接讀 `public.pos_orders`。

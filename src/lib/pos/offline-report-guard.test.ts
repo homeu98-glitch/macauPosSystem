@@ -102,7 +102,7 @@ describe("route：唔可以渲染假零（鐵律 3）", () => {
   });
 
   it("🔴 RPC 回值一定要過 `validateOfflineReportRpc` 才回 200", () => {
-    assert.ok(routeCode.includes("validateOfflineReportRpc(data, range)"));
+    assert.ok(routeCode.includes("validateOfflineReportRpc(data,"), "冇驗 RPC 回值");
     assert.ok(/if\s*\(!validated\.ok\)[\s\S]{0,160}?fail\(["']upstream_unavailable["'],\s*503\)/.test(routeCode));
   });
 
@@ -132,6 +132,28 @@ describe("route：驗簽用原字串 + 範圍由 route 自己算（契約 §驗�
   it("範圍截斷要用共用純函數（同測試同一套邏輯）", () => {
     assert.ok(routeCode.includes("clampOfflineReportRange(fromParam, toParam)"));
     assert.ok(routeCode.includes("normalizeStoreId")); // UUID 驗證 + 小寫化
+  });
+
+  it("🔴 傳落 RPC 嘅一定係**請求嘅原始** from／to（截斷權威在 SQL，route 只核對回傳值）", () => {
+    // 2026-09-25 實案：先截斷再傳 ⇒ SQL 回 clamped=false ⇒ 同 expected 對唔上 ⇒ 長區間全部 503
+    assert.ok(
+      /p_from:\s*fromParam\s*,\s*\n?\s*p_to:\s*toParam\s*,/.test(routeCode),
+      "RPC 冇收到原始 fromParam／toParam",
+    );
+    assert.ok(
+      !/p_from:\s*expected\.from/.test(routeCode) && !/p_from:\s*range\.from/.test(routeCode),
+      "🔴 route 先截斷再傳 —— SQL 會回 clamped=false，驗值即 503",
+    );
+    assert.ok(routeCode.includes("validateOfflineReportRpc(data, expected)"), "冇用 expected 核對回傳值");
+  });
+
+  it("回應要 echo SQL 回嘅區間（`validated.from` / `validated.to`）", () => {
+    assert.ok(
+      /range:\s*\{\s*from:\s*validated\.from\s*,\s*to:\s*validated\.to\s*,\s*clamped:\s*validated\.clamped\s*\}/.test(
+        routeCode,
+      ),
+      "回應冇用 SQL 回傳值砌 from／to",
+    );
   });
 });
 
