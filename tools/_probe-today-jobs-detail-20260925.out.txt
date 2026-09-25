@@ -1,0 +1,285 @@
+=== 今日兩條 job 全文 ===
+[
+ {
+  "id": "print-03e343b5",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "order_id": "ledger-c5a19d31-1dc5-4cf3-a013-e502390901cb",
+  "order_no": "002",
+  "table_name": "自取",
+  "ticket_type": "normal",
+  "printer_group": "kitchen",
+  "printer_name": "printer",
+  "items": [
+   {
+    "name": "快閃餐（南乳炸鸡翼饭）",
+    "specs": [
+     "饮料:例汤",
+     "熱定凍:熱",
+     "要唔要膠袋:要"
+    ],
+    "quantity": 1
+   }
+  ],
+  "status": "printed",
+  "created_at": "2026-09-25T01:30:52.255+00:00",
+  "template": {
+   "cols": 48,
+   "kind": "kitchen",
+   "blocks": [
+    {
+     "id": "store_name",
+     "bold": true,
+     "size": "m",
+     "align": "center",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "order_no",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "table_name",
+     "bold": false,
+     "size": "l",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "order_type",
+     "bold": true,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "time",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "scheduled_pickup",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "items",
+     "bold": true,
+     "size": "l",
+     "align": "left",
+     "layout": "card",
+     "subSize": "l",
+     "visible": true
+    },
+    {
+     "id": "order_note",
+     "bold": false,
+     "size": "l",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "divider",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "footer",
+     "bold": false,
+     "size": "s",
+     "align": "center",
+     "subSize": "s",
+     "visible": false
+    }
+   ]
+  },
+  "content": {
+   "time": "2026-09-25 09:30",
+   "footer": "廚房留底",
+   "order_no": "002",
+   "order_note": "飯，轉「五谷飯」，謝謝",
+   "order_type": "落單",
+   "store_name": "表嫂美食",
+   "table_name": "自取",
+   "scheduled_pickup": "預約時間: 09/25 12:00"
+  },
+  "printer_id": "printer-861f2f6e",
+  "printer": null,
+  "kind": null,
+  "store_name": "表嫂美食",
+  "payment_method": null,
+  "total": null,
+  "qr": null,
+  "qr_url": null,
+  "copies": null,
+  "ttl": 1790343052255,
+  "updated_at": "2026-09-25T01:30:52.929+00:00",
+  "claimed_by": null,
+  "claimed_at": "2026-09-25T01:30:52.558123+00:00",
+  "attempts": 0,
+  "last_error": null,
+  "finished_at": "2026-09-25T01:30:52.929+00:00",
+  "once_key": "ledger-c5a19d31-1dc5-4cf3-a013-e502390901cb|kitchen:normal:0:1xos25y|printer-861f2f6e"
+ },
+ {
+  "id": "print-a973f43f",
+  "store_id": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "order_id": "ledger-b2aa7a13-5c68-415c-87ff-f476e564c202",
+  "order_no": "001",
+  "table_name": "自取",
+  "ticket_type": "normal",
+  "printer_group": "kitchen",
+  "printer_name": "printer",
+  "items": [
+   {
+    "name": "快閃餐（南乳炸鸡翼饭）",
+    "specs": [
+     "饮料:例汤",
+     "熱定凍:熱",
+     "要唔要膠袋:要"
+    ],
+    "quantity": 1
+   }
+  ],
+  "status": "printed",
+  "created_at": "2026-09-25T01:27:29.277+00:00",
+  "template": {
+   "cols": 48,
+   "kind": "kitchen",
+   "blocks": [
+    {
+     "id": "store_name",
+     "bold": true,
+     "size": "m",
+     "align": "center",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "order_no",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "table_name",
+     "bold": false,
+     "size": "l",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "order_type",
+     "bold": true,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "time",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "scheduled_pickup",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "items",
+     "bold": true,
+     "size": "l",
+     "align": "left",
+     "layout": "card",
+     "subSize": "l",
+     "visible": true
+    },
+    {
+     "id": "order_note",
+     "bold": false,
+     "size": "l",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "divider",
+     "bold": false,
+     "size": "s",
+     "align": "left",
+     "subSize": "s",
+     "visible": true
+    },
+    {
+     "id": "footer",
+     "bold": false,
+     "size": "s",
+     "align": "center",
+     "subSize": "s",
+     "visible": false
+    }
+   ]
+  },
+  "content": {
+   "time": "2026-09-25 09:27",
+   "footer": "廚房留底",
+   "order_no": "001",
+   "order_note": "轉五谷飯",
+   "order_type": "落單",
+   "store_name": "表嫂美食",
+   "table_name": "自取",
+   "scheduled_pickup": "預約時間: 09/25 12:00"
+  },
+  "printer_id": "printer-861f2f6e",
+  "printer": null,
+  "kind": null,
+  "store_name": "表嫂美食",
+  "payment_method": null,
+  "total": null,
+  "qr": null,
+  "qr_url": null,
+  "copies": null,
+  "ttl": 1790342849277,
+  "updated_at": "2026-09-25T01:27:30.854+00:00",
+  "claimed_by": null,
+  "claimed_at": "2026-09-25T01:27:30.332059+00:00",
+  "attempts": 0,
+  "last_error": null,
+  "finished_at": "2026-09-25T01:27:30.854+00:00",
+  "once_key": "ledger-b2aa7a13-5c68-415c-87ff-f476e564c202|kitchen:normal:0:1xos25y|printer-861f2f6e"
+ }
+]
+
+=== 相關 pos_orders ===
+{
+ "code": "42703",
+ "details": null,
+ "hint": null,
+ "message": "column pos_orders.note does not exist"
+}

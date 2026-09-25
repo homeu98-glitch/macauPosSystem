@@ -1,0 +1,7 @@
+=== 今日 pos_orders（澳門 09-25，按 created_at asc）===
+status 200
+筆數 = 0
+
+=== pos_orders 今日 02:00Z 之後所有 online_order_id 非空 ===
+筆數 = undefined
+{"code":"42703","details":null,"hint":null,"message":"column pos_orders.pickup_code does not exist"}

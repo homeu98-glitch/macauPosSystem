@@ -19,7 +19,9 @@
 
 ## 4 打印／中繼
 🔴🔴 入隊只准 `appendPrintJobsWithSync()`；`appendPrintJobs()` **只寫本機**（唯一用途 `printKioskReceiptForOrder()`）。`pushEvents()` base 一定要 `loadQueue()`。去重靠 `onceKey`（id 係 randomUUID ⇒ 按 id merge 攔唔到）。`paired:true`≠在線。爆紙用 `pos_void_stale_print_jobs()`。claim 60s（有 job）／180s 封頂（idle）。🔴 落結論前用生產 log／DB 核對。
-🔴🔴 2026-09-24：DB `once_key` 存嘅係 **client 原始 `PrintJob.onceKey`**（唔係 0045 檔頭寫嘅 `orderId|scope|printerId`），而唯一索引係 `(store_id, once_key)`。自動收據 onceKey ＝ `receipt:<reopenCount>` ⇒ **全店只得一行 `receipt:0`**，其餘自動收據 23505 被 sync route `ack(true)` 靜默吞掉（本地永遠「已發送」、冇紙、冇紅標）。廚房單靠內容簽名分開所以多數撞唔到，但菜品相同一樣會撞（漏單）。`once_key` 一日未補 orderId，呢個病就一日在。
+🔴🔴 2026-09-24 舊病：DB `once_key` 曾存 **client 原始 `PrintJob.onceKey`** ⇒ 自動收據全店共用 `receipt:0`、其餘 23505 被 `ack(true)` 靜默吞掉（本地永遠「已發送」、冇紙、冇紅標）。**✅ 2026-09-25 已核實修好並上線**：生產 `once_key` 係 composed `orderId|onceScope|printerId`；`/api/pos/state` 亦用 `printOnceScopeFromDbKey()` 還原原始鍵＋補 `printerId`，跨終端去重才生效。
+🔴🔴 2026-09-25：**「本地有 job」帳本全部係 per-瀏覽器**（`printedOnceKeys`／`printedLedgerOrders`／`loadPrintJobs()`／`kitchenBackfillAttempted` in-memory）。**多終端（iPad＋桌面）同時開 ⇒ 後掛載嗰台會為「已經出過紙嘅線上單」再造一條廚房 job**（`ledger-pos-bridge.ts` L515-519 明文承認此邊界，商家口徑「寧多一張」）。雲端 DB 內容唯一鍵只擋得住 **relay 路徑**；若該台有 **Companion／native** 就會**本機直接出紙、完全繞過唯一鍵**（＝真・第二張紙）。根治方向（註釋自認「未做」）＝補印前喺**伺服器按 `order_id` 查一次 `pos_print_jobs`**。
+🔴 `/api/pos/state` 嘅 printJobs 映射**剝走 `template` 同 `content`**（egress 考量），而 `pos-app.tsx` `persistPrintJobs(payload.printJobs)` 會把雲端 job 種入本機 ⇒ 該類 job 喺預覽落兜底分支：硬寫店名**「門店」**、冇時間／預約時間／全單備註。**預覽唔等於出紙**，唔可以憑預覽差異推論印咗兩張。
 
 ## 5 訂單／交班
 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱）。`print-xxxxxxxx`＝PrintJob 漏入 orders，已由 `order-id-guard` 擋住。🔴 三軌互不相干：`pos_shifts`（擋收銀台）／`pos_store_status.is_open`（線下）／Ledger `merchant_enabled`（線上）。總掣 `close-gate.ts`＋`close-gate-run.ts`：先線下後線上／線下失敗唔 return／null＝skipped／永不 throw；須排喺 `closeShift()` early return **之前**。🔴 `pos_store_status` 冇 row＝營業中；`pos_shifts` 冇 open row＝未開工（**方向相反**）。

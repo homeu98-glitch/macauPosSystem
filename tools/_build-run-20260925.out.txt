@@ -1,0 +1,140 @@
+▲ Next.js 16.3.0 (Turbopack)
+✓ Running next.config.ts took 93ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 46s
+  Running TypeScript ...
+  Finished TypeScript in 39.5s ...
+  Collecting page data using 7 workers ...
+  Generating static pages using 7 workers (0/91) ...
+  Generating static pages using 7 workers (22/91) 
+  Generating static pages using 7 workers (45/91) 
+  Generating static pages using 7 workers (68/91) 
+✓ Generating static pages using 7 workers (91/91) in 5.2s
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /admin
+├ ○ /admin/dashboard
+├ ○ /admin/reports
+├ ○ /admin/sessions
+├ ○ /admin/traffic
+├ ○ /admin/versions
+├ ƒ /api/admin/ledger/orders
+├ ƒ /api/admin/merchants
+├ ƒ /api/admin/merchants/modules
+├ ƒ /api/admin/merchants/status
+├ ƒ /api/admin/orders
+├ ƒ /api/admin/release-versions
+├ ƒ /api/admin/session
+├ ƒ /api/admin/sessions
+├ ƒ /api/admin/traffic
+├ ƒ /api/auth/login
+├ ƒ /api/backoffice/overview
+├ ƒ /api/backoffice/stores/[storeId]
+├ ○ /api/desktop-release
+├ ƒ /api/integration/grabber/orders
+├ ƒ /api/integration/ledger/auto-accept
+├ ƒ /api/integration/ledger/offline-report
+├ ƒ /api/inventory/health
+├ ƒ /api/inventory/merchants
+├ ƒ /api/inventory/merchants/[id]
+├ ƒ /api/inventory/products
+├ ƒ /api/inventory/products/[id]
+├ ƒ /api/inventory/products/[id]/adjust
+├ ƒ /api/inventory/products/sync-from-receipts
+├ ƒ /api/inventory/receipts
+├ ƒ /api/inventory/receipts/[id]
+├ ƒ /api/inventory/soldout
+├ ƒ /api/ledger/ensure-customer
+├ ƒ /api/ledger/login
+├ ƒ /api/ledger/member-login
+├ ƒ /api/ledger/scan-debit/commit
+├ ƒ /api/ledger/scan-debit/quote
+├ ƒ /api/members
+├ ƒ /api/online-order-settings
+├ ƒ /api/online-orders
+├ ƒ /api/pos/bootstrap
+├ ƒ /api/pos/device-config
+├ ƒ /api/pos/device-token
+├ ƒ /api/pos/kds/board
+├ ƒ /api/pos/kds/items
+├ ƒ /api/pos/kds/orders
+├ ƒ /api/pos/kiosk-settings
+├ ƒ /api/pos/note-presets
+├ ƒ /api/pos/order-lookup
+├ ƒ /api/pos/orders
+├ ƒ /api/pos/print-agent/claim
+├ ƒ /api/pos/print-agent/heartbeat
+├ ƒ /api/pos/print-agent/pair
+├ ƒ /api/pos/print-agent/pair-status
+├ ƒ /api/pos/print-agent/result
+├ ƒ /api/pos/print-agent/unpair
+├ ƒ /api/pos/print-jobs/retry
+├ ƒ /api/pos/print-jobs/status
+├ ƒ /api/pos/print-templates
+├ ƒ /api/pos/realtime-bind
+├ ƒ /api/pos/sequence
+├ ƒ /api/pos/shift
+├ ƒ /api/pos/state
+├ ƒ /api/pos/store-status
+├ ƒ /api/pos/sync
+├ ƒ /api/release/versions/active
+├ ƒ /api/salon/bootstrap
+├ ƒ /api/salon/state
+├ ƒ /api/salon/sync
+├ ƒ /api/topup/owner-embed
+├ ƒ /api/topup/owner/[...slug]
+├ ƒ /api/topup/pending-count
+├ ○ /apple-icon
+├ ○ /backoffice
+├ ○ /backoffice/accounts
+├ ○ /backoffice/stores
+├ ƒ /backoffice/stores/[storeId]
+├ ○ /backoffice/sync
+├ ○ /expo
+├ ○ /icon
+├ ○ /inventory
+├ ○ /kitchen
+├ ○ /login
+├ ○ /manifest.webmanifest
+├ ○ /members
+├ ○ /menu
+├ ○ /order
+├ ○ /orders
+├ ○ /pos
+├ ○ /prints
+├ ○ /quick
+├ ○ /reports
+├ ○ /reports/bom
+├ ○ /retail
+├ ○ /retail/inventory
+├ ○ /retail/products
+├ ○ /retail/returns
+├ ○ /retail/settings
+├ ○ /salon
+├ ƒ /salon/booking/[id]
+├ ○ /salon/booking/new
+├ ○ /salon/calendar
+├ ƒ /salon/checkout/[bookingId]
+├ ○ /salon/customers
+├ ƒ /salon/customers/[id]
+├ ○ /salon/online
+├ ○ /salon/prints
+├ ○ /salon/reports
+├ ○ /salon/settings
+├ ○ /salon/staff
+├ ƒ /salon/staff/[id]
+├ ○ /select-workbench
+├ ○ /settings
+├ ○ /shift
+├ ○ /soldout
+├ ○ /staff
+└ ○ /topup
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

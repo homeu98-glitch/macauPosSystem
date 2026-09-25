@@ -1,0 +1,29 @@
+anon key ref = iyrywzormzisyppkokbi （應為 iyrywzormzisyppkokbi）
+
+=== anon 可見 pos_orders 最新 109 行（limit=300）===
+store_id = d564b932-0c91-45e9-86fd-0ec8e2711f13
+  行數=16  online_order_id 非空=0  settled_at 有值=16
+  status: {"settled":15,"cancelled":1}
+  source: {"aomi":7,"pos":3,"mfood":6}
+  total 樣本: [495,100,259,77,118,248,248,118]
+store_id = 8291f843-9def-4956-9d0b-1cfef2598306
+  行數=93  online_order_id 非空=13  settled_at 有值=91
+  status: {"settled":91,"cancelled":2}
+  source: {"pos":93}
+  total 樣本: [139,68,61,39,48,63,107,74]
+
+=== 欄位存在性（HTTP 200 = 存在；400/42703 = 未加） ===
+  total              HTTP 200 OK
+  settled_at         HTTP 200 OK
+  reopened_at        HTTP 200 OK
+  refunded_amount    HTTP 200 OK
+  party_size         HTTP 200 OK
+  payment_method     HTTP 200 OK
+  table_id           HTTP 200 OK
+  online_order_id    HTTP 200 OK
+
+=== 澳門今日（自 2026-09-24T16:00:00.000Z）1 行 ===
+  Σ total（settled|paid，全部）  = 495.00 MOP
+  Σ total（線下，排除線上投影）  = 495.00 MOP  ← 契約 kpi.revenueAvos 應等於呢個 ×100
+  Σ total（線上投影單）          = 0.00 MOP  ← 契約要求排除
+  線下 byPayment: {"外賣平台":495}

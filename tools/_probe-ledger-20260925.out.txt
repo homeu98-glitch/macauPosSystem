@@ -1,0 +1,5 @@
+chunks = 23
+bundle 內 supabase 網址： https://zymdemjflsckicwcinxl.supabase.co, https://iyrywzormzisyppkokbi.supabase.co
+JWT refs： iyrywzormzisyppkokbi()
+  ref=iyrywzormzisyppkokbi role=anon iat=2026-08-04
+❌ bundle 冇 Ledger 專案 key（前端可能唔直接連 Ledger）

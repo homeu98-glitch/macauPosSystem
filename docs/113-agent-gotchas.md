@@ -107,6 +107,26 @@ orderEventISO(order)       // → 原始字串（顯示用），無法解析 = "
 - `merchantId = staff_accounts.merchant_id`；DB 用 `store_id`；`useReportMerchantId()` 訂 `pos-auth-changed`。讀 strict `o.storeId === merchantId`，undefined legacy 寧棄；初始 orders 空防 hydration 錯 scope。錯店靠重綁 `macau-pos-kiosk-device`／`?store=`（`60000003` 係真 UUID）。
 - `getMerchantReportSummary` 強型別 topup{`topupMop`(=paid+gift)/`topupPaidMop`/`topupGiftMop`}、order{`orderCount`/`orderPaidMop`(=balance+in_store)}。禁 `console.table` Record（TS2769）。admin Ledger 走 `/api/admin/ledger/orders`；會員充值/扣點 RPC 需商戶 JWT → admin 仍空（已知）。
 
+## 對外整合 route：HMAC 入站（2026-09-25 · Ledger 線下報表契約）
+
+- 兩條 HMAC 入站 route，**方向唔同、secret 一定要分家**：
+  - `POST /api/integration/ledger/auto-accept`（Ledger → POS，**寫入**；`LEDGER_WEBHOOK_SECRET`，`ts.body`）
+  - `GET /api/integration/ledger/offline-report`（Ledger → POS，**唯讀**；`LEDGER_OFFLINE_REPORT_HMAC_SECRET`，`ts.GET.pathWithQuery`）
+  ⇒ 唔可以共用一把，亦唔可以互相 fallback（共用 ＝ 一邊爆兩邊爆）。
+- 🔴 `offline-report` 係**全專案唯一刻意唔行 `posRouteAuthGuard()` 嘅業務 GET**（呼叫方係 Ledger 伺服器，冇 POS 終端憑證）。
+  匿名端點審計（`tools/audit-anon-endpoints.cjs`）見到佢回 401 係**正常**（冇簽名就打得到 401），唔係漏網。
+- 🔴 驗簽三個死穴：① `pathWithQuery` 一定要用**收到嘅原字串**（重排 query／`decode` 再 `encode` 都一定對唔上）；
+  ② 先擋 `/^[0-9a-f]{64}$/i` 才 `timingSafeEqual`（`Buffer.from(壞hex, "hex")` 會**靜默截斷**尾碼 ⇒ 前綴相同就當過）；
+  ③ secret 未設 ⇒ **500 fail-closed**，唔可以放行、唔可以回 401 矇混。
+- 🔴 **唔可以渲染假零**：上游未部署／回值驗唔過 ⇒ **5xx**（Ledger 顯示「暫時無法取得」）。
+  KPI 一定要 DB 聚合出，**唔可以**任何情況回硬編 0。
+- 🔴 **唔可以照抄 `docs/94` 嘅 `report_ro.build_full_report()`**：佢 body 引用 83 號嘅 22 個
+  `report_ro.v_*` view，而 83 從未在 production 建立 ⇒ 唔係權限問題（`security definer` 都救唔到），
+  **係 view 唔存在**，`create` 都 create 唔到。新聚合函數直接讀 `public.pos_orders`。
+- 新增 SQL 用 `tools/check-pos-offline-report-sql.py` 驗語法（pglast／libpg_query；本機冇 Postgres 都驗到）。
+- 口徑：線下報表＝`status in ('settled','paid')` ＋ 排除 `online_order_id` ＋
+  `coalesce(settled_at, reopened_at, updated_at, created_at)` 轉 `Asia/Macau`；詳見 `docs/150`。
+
 ## 單號（2026-09-10 修：同一單號出現兩次）
 - 兩個獨立計數器：server `next_daily_sequence`（0022，store/kind/Asia-Macau 日原子）+ 本機 `localDailySeq` fallback。取號失敗／iOS 清 localStorage → fallback 由細號重數 → 撞號（實例 `訂單03` 兩條 row）。
 - 純函式拆去 **`src/lib/pos/daily-order-seq.ts`（零 import ＋ 9 個 `node --test` 測試）** —— `storage.ts` 用 `@/` alias，單測加載唔到。`maxUsedDailyOrderSeq` 只係注入 `macauDateKey` 嘅薄包裝。

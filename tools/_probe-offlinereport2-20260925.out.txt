@@ -1,0 +1,36 @@
+anon 可見 pos_orders 109 行（72h 窗 + limit 300）
+
+════ store_id = d564b932-0c91-45e9-86fd-0ec8e2711f13（16 行）════
+  【2026-09-24】status: {"cancelled":1,"settled":14}
+      全部 settled|paid : 14 張 / 2504.00 MOP
+      ★ 線下（契約口徑）  : 14 張 / 2504.00 MOP = 250400 avos，covers=17
+      byPayment: {"現金":177,"外賣平台":2327}
+  【2026-09-23】status: {"settled":1}
+      全部 settled|paid : 1 張 / 95.00 MOP
+      ★ 線下（契約口徑）  : 1 張 / 95.00 MOP = 9500 avos，covers=8
+      byPayment: {"現金":95}
+
+════ store_id = 8291f843-9def-4956-9d0b-1cfef2598306（93 行）════
+  【2026-09-24】status: {"settled":35}
+      全部 settled|paid : 35 張 / 2239.00 MOP
+      其中線上投影單    : 8 張 / 392.00 MOP ← 契約要求排除
+      ★ 線下（契約口徑）  : 27 張 / 1847.00 MOP = 184700 avos，covers=27
+      byPayment: {"Mpay":1532,"現金":231,"會員餘額":84}
+  【2026-09-23】status: {"settled":21,"cancelled":1}
+      全部 settled|paid : 21 張 / 1563.00 MOP
+      其中線上投影單    : 3 張 / 236.00 MOP ← 契約要求排除
+      ★ 線下（契約口徑）  : 18 張 / 1327.00 MOP = 132700 avos，covers=18
+      byPayment: {"Mpay":989,"中銀":144,"會員餘額":145,"現金":49}
+  【2026-09-22】status: {"settled":35,"cancelled":1}
+      全部 settled|paid : 35 張 / 2757.00 MOP
+      其中線上投影單    : 2 張 / 99.00 MOP ← 契約要求排除
+      ★ 線下（契約口徑）  : 33 張 / 2658.00 MOP = 265800 avos，covers=33
+      byPayment: {"Mpay":2464,"會員餘額 + Mpay":62,"會員餘額":132}
+
+=== 全窗 payment_method 值域（Ledger 要顯示，唔可以自己發明） ===
+  "現金"  Σ 552.00 MOP
+  "外賣平台"  Σ 2327.00 MOP
+  "Mpay"  Σ 4985.00 MOP
+  "會員餘額"  Σ 361.00 MOP
+  "中銀"  Σ 144.00 MOP
+  "會員餘額 + Mpay"  Σ 62.00 MOP

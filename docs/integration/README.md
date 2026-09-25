@@ -15,6 +15,9 @@
 | [ledger-client-api-v2-source.md](./ledger-client-api-v2-source.md) | Ledger 官方 v2 契約原文（2026-08-11） | 與 Ledger 團隊對齊時參考 |
 | [ecosystem-modules.md](./ecosystem-modules.md) | 整個生態系（Ledger、Android、充值、派送） | 理解跨 repo 關係 |
 | [pos-member-system-requirements.md](./pos-member-system-requirements.md) | **POS → Ledger 會員對接需求書**（待 Ledger 回覆契約） | 會員查詢、新增、扣點、券 |
+| [pos-offline-report-api.md](./pos-offline-report-api.md) | **Ledger → POS 線下營業摘要契約 v1**（2026-09-24 原件歸檔） | 實作 `offline-report` route 前必讀 |
+| [pos-offline-report-contract-review-2026-09-25.md](./pos-offline-report-contract-review-2026-09-25.md) | 契約審視：5 處口徑出入、實作方案、生產對數底稿 | 想知道「點解唔可以照契約字面做」 |
+| [pos-offline-report-reply-2026-09-25.md](./pos-offline-report-reply-2026-09-25.md) | 回覆 Ledger：要佢哋改嘅 5 處、實際 payload、三條待回問題 | 同 Ledger 對契約 |
 
 ---
 
