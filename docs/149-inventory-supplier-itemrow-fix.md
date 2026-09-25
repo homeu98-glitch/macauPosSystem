@@ -87,6 +87,29 @@ idx w-20 = 4641 < idx w-28 = 4693 < idx w-full = 4745   ⇒ w-full 勝出
 UI 顯示「注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考」，並停用同比 delta；
 正常時亦標明「系統估算：營業額 − 進貨成本（當日已付收據）」。頁尾說明補上「落單暫不扣庫存」。
 
+## 5 付款方式：加「月結」＋付款方式篩選（2026-09-25 追加）
+
+用戶回報「睇唔到有月結選項，亦冇顯示月結；filter 應該可以按月結／到款篩」。
+
+- `inventory-stats.ts`：`PAYMENT_METHOD_LABEL` 加 `monthly: "月結"`，並抽出
+  `PAYMENT_STATUS_LABEL`（`paid/unpaid`）。以前冇 `monthly` ⇒ 月結收據只會顯示原始英文 key。
+- **正規化**（`normalizePaymentMethod` / `normalizePaymentStatus`）：expenseRecorder 舊資料
+  有機會**直接存中文**（`月結`／`已付款`），POS 寫入嘅係 key（`monthly`／`paid`）。
+  讀取（GET route）同寫入（POST / PATCH）一律行 normalizer，
+  否則付款方式篩選同 `paid/unpaid` 彙總會**靜默計錯**（月結數唔到、付款狀態倒轉）。
+- `inventory-view.tsx`：
+  - `PAYMENT_METHODS` 加 `monthly`（新增收據 modal 下拉可選）；
+  - 加付款方式 chips（`DateRangeFilterChips` 複用，複用既定觸控規格）：
+    全部 / 現金 / 信用卡 / 轉帳 / **月結** / 貨到付款，**每格帶張數**；
+    **0 張都照顯示**（唔會因為暫時冇月結收據就「睇唔到月結呢個選項」）；
+  - client-side 過濾（**零新增請求**），連 KPI／圖表都用同一個 `buildPurchaseSummary()`
+    喺本機重算 ⇒ 篩選後數字同清單一致（server 只識計 range）；
+  - 清單標題、空狀態、KPI 標籤都會帶付款方式名（例如「今日・月結總支出」）。
+- modal 加提示：「貨到付款／現金／信用卡／轉帳／月結。月結收據通常先記未付款，月底結算後改做已付款。」
+- 守衛（`inventory-contract-guard.test.ts`，原 `inventory-item-row-guard` 改名）：
+  月結 label、`PAYMENT_METHODS`／`METHOD_FILTER_KEYS` 必須對齊、normalizer 必須用喺讀寫路徑、
+  篩選後 KPI 必須重算。16/16 綠。
+
 ## 驗證
 
 - `tsc --noEmit` 綠；eslint 0 error（restaurant-daily-report 剩 4 個既有 warning）。

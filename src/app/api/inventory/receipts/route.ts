@@ -8,6 +8,8 @@ import {
 } from "@/lib/expense-inventory";
 import {
   buildPurchaseSummary,
+  normalizePaymentMethod,
+  normalizePaymentStatus,
   receiptDateMatchesRange,
   type StatReceipt,
 } from "@/lib/inventory-stats";
@@ -146,8 +148,10 @@ export async function GET(request: Request) {
       merchant_name: merchantNameById.get(String(r.merchant_id ?? "")) ?? "未知供應商",
       receipt_date: typeof r.receipt_date === "string" ? r.receipt_date : "",
       total_amount: Number(r.total_amount) || 0,
-      payment_status: getRaw("payment_status") || "unpaid",
-      payment_method: getRaw("payment_method") || "on_delivery",
+      // 🔴 2026-09-25：expenseRecorder 舊資料有機會直接存中文（「月結」／「已付款」），
+      // 統一正規化做 canonical key，否則付款方式篩選同 paid/unpaid 計算會靜默計錯。
+      payment_status: normalizePaymentStatus(getRaw("payment_status")),
+      payment_method: normalizePaymentMethod(getRaw("payment_method")),
       category: getRaw("category") || "",
       items: receiptItems,
     };
@@ -211,8 +215,8 @@ export async function POST(request: Request) {
     raw_ocr_data: {
       receipt_number: body.receipt_number || null,
       category: body.category || null,
-      payment_method: body.payment_method || "on_delivery",
-      payment_status: body.payment_status || "unpaid",
+      payment_method: normalizePaymentMethod(body.payment_method),
+      payment_status: normalizePaymentStatus(body.payment_status),
       input_method: "pos_manual",
     },
   };

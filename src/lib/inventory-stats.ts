@@ -6,13 +6,55 @@
 import { macauDateKey, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
 import { customRangeToISO, instantInRange } from "@/lib/ledger/date-range";
 
+/**
+ * 付款方式顯示名（庫存頁／日報表付款方式分佈共用）。
+ *
+ * 🔴 2026-09-25 加 `monthly`（月結）：商家對供應商最常见嘅兩種結帳方式係
+ * 「貨到付款（到款）」同「月結（月底一筆過結算）」。以前冇 `monthly`，
+ * 收據一旦標月結就只會顯示原始英文 key ⇒ 收銀以為冇呢個選項。
+ */
 export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   on_delivery: "貨到付款",
   cash: "現金",
   card: "信用卡",
   transfer: "轉帳",
+  monthly: "月結",
   unknown: "未知",
 };
+
+/** 付款／付款狀態嘅中文顯示名（2026-09-25 抽出嚟同 server 共用）。 */
+export const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  paid: "已付款",
+  unpaid: "未付款",
+};
+
+/**
+ * 取值可能係 **canonical key**（`monthly`）或者 **中文標籤**（`月結`）：
+ * POS 自己寫入嘅收據一定係 key，但 expenseRecorder 嗰邊嘅舊資料有機會直接存中文。
+ * 若唔統一，付款方式篩選同 `paid/unpaid` 計算會靜默計錯。
+ */
+function reverseLookup(labels: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, label] of Object.entries(labels)) out[label] = key;
+  return out;
+}
+
+const METHOD_KEY_BY_LABEL = reverseLookup(PAYMENT_METHOD_LABEL);
+const STATUS_KEY_BY_LABEL = reverseLookup(PAYMENT_STATUS_LABEL);
+
+export function normalizePaymentMethod(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "on_delivery";
+  if (PAYMENT_METHOD_LABEL[raw]) return raw;
+  return METHOD_KEY_BY_LABEL[raw] ?? raw;
+}
+
+export function normalizePaymentStatus(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "unpaid";
+  if (PAYMENT_STATUS_LABEL[raw]) return raw;
+  return STATUS_KEY_BY_LABEL[raw] ?? raw;
+}
 
 export type StatItem = {
   name: string;

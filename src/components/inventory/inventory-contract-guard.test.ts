@@ -88,6 +88,57 @@ describe("供應商欄：下拉選單 + merchant_id", () => {
   });
 });
 
+describe("付款方式：一定要有「月結」並可以篩選", () => {
+  it("PAYMENT_METHOD_LABEL 要認得 monthly（月結）", () => {
+    const src = read("src/lib/inventory-stats.ts");
+    assert.ok(/monthly: "月結"/.test(src), "缺少 monthly → 月結收據只會顯示英文 key");
+  });
+
+  it("收據 modal 嘅付款方式下拉要包含 monthly", () => {
+    const src = read(VIEW);
+    const line = /const PAYMENT_METHODS = \[([^\]]+)\]/.exec(src)?.[1] ?? "";
+    assert.ok(line.includes('"monthly"'), "PAYMENT_METHODS 要包 monthly");
+  });
+
+  it("中文標籤要同 canonical key 互通（expenseRecorder 舊資料有機會直接存中文）", () => {
+    const src = read("src/lib/inventory-stats.ts");
+    assert.ok(/export function normalizePaymentMethod/.test(src));
+    assert.ok(/export function normalizePaymentStatus/.test(src));
+    assert.ok(/月結/.test(src) && /已付款/.test(src));
+  });
+
+  it("收據讀取／寫入都要行 normalizer（否則篩選同 paid/unpaid 會靜默計錯）", () => {
+    const list = read("src/app/api/inventory/receipts/route.ts");
+    assert.ok(/payment_method: normalizePaymentMethod\(getRaw\("payment_method"\)\)/.test(list));
+    assert.ok(/payment_status: normalizePaymentStatus\(getRaw\("payment_status"\)\)/.test(list));
+    const patch = read("src/app/api/inventory/receipts/[id]/route.ts");
+    assert.ok(/raw\.payment_method = normalizePaymentMethod\(/.test(patch));
+    assert.ok(/raw\.payment_status = normalizePaymentStatus\(/.test(patch));
+  });
+
+  it("篩選 chips 要覆蓋全部 PAYMENT_METHODS（漏一個 = 嗰種付款方式篩唔到）", () => {
+    const src = read(VIEW);
+    for (const m of ["cash", "card", "transfer", "monthly", "on_delivery"]) {
+      assert.ok(src.includes(`"${m}"`), `PAYMENT_METHODS 缺少 ${m}`);
+    }
+    const filterLine = /const METHOD_FILTER_KEYS = \[([^\]]+)\]/.exec(src)?.[1] ?? "";
+    for (const m of ["cash", "card", "transfer", "monthly", "on_delivery"]) {
+      assert.ok(filterLine.includes(`"${m}"`), `METHOD_FILTER_KEYS 缺少 ${m}`);
+    }
+  });
+
+  it("付款方式冇收據時 chip 一樣要出現（0 張都顯示）", () => {
+    const src = read(VIEW);
+    assert.ok(/methodCounts\.get\(m\) \?\? 0/.test(src));
+    assert.ok(!/filter\(\([^)]*\) => \(methodCounts\.get/.test(src), "唔可以因為 0 張就隱藏 chip");
+  });
+
+  it("篩選後 KPI 要跟住重算（用 buildPurchaseSummary，唔可以繼續用 server 全量 summary）", () => {
+    const src = read(VIEW);
+    assert.ok(/buildPurchaseSummary\(visibleReceipts\)/.test(src));
+  });
+});
+
 describe("merchants API：duplicate key 要轉做中文明確提示", () => {
   it("POST 要捕捉 23505 / 42P10，並區分 ALREADY_EXISTS 同 NAME_TAKEN", () => {
     const src = read("src/app/api/inventory/merchants/route.ts");

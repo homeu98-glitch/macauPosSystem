@@ -5,7 +5,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { loadAuthSession } from "@/lib/storage";
 import { REPORT_RANGE_OPTIONS, reportRangeLabel, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
-import { PAYMENT_METHOD_LABEL, type PurchaseSummary } from "@/lib/inventory-stats";
+import {
+  buildPurchaseSummary,
+  normalizePaymentMethod,
+  PAYMENT_METHOD_LABEL,
+  PAYMENT_STATUS_LABEL,
+  type PurchaseSummary,
+} from "@/lib/inventory-stats";
 import { AreaChart } from "./charts/AreaChart";
 import { DonutChart } from "./charts/DonutChart";
 import { LineChart } from "./charts/LineChart";
@@ -45,9 +51,15 @@ type ReceiptsResponse = {
 const money = (n: number) =>
   `MOP ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const PAYMENT_METHODS = ["on_delivery", "cash", "card", "transfer"] as const;
-const STATUS_LABEL: Record<string, string> = { paid: "已付款", unpaid: "未付款" };
 const todayStr = () => new Date().toLocaleDateString("en-CA");
+
+/** 收據付款方式（新增收據 modal 下拉用；`monthly` = 月結，2026-09-25 加）。 */
+const PAYMENT_METHODS = ["on_delivery", "cash", "card", "transfer", "monthly"] as const;
+
+/** 付款方式篩選 chips 嘅固定次序（「全部」以外一定要同 PAYMENT_METHODS 對齊）。 */
+const METHOD_FILTER_KEYS = ["cash", "card", "transfer", "monthly", "on_delivery"] as const;
+
+const ALL_METHODS = "all";
 
 /* ---------------- 收據表單（置中 modal，可編輯/刪除） ---------------- */
 type Supplier = { id: string; name: string };
@@ -325,6 +337,10 @@ function ReceiptFormModal({
               </select>
             </div>
           </div>
+          <p className="-mt-1 text-xs text-slate-400">
+            付款方式：<b className="font-medium text-slate-600">貨到付款</b>／現金／信用卡／轉帳／
+            <b className="font-medium text-slate-600">月結</b>。月結收據通常先記「未付款」，月底結算後記得返嚟改做「已付款」。
+          </p>
 
           <div>
             <div className="mb-1.5 flex items-center justify-between">
@@ -468,6 +484,8 @@ export function InventoryView() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   /** 撞「已存在」時 highlight 返嗰個供應商，等用戶知道佢其實一早喺度。 */
   const [highlightSupplierId, setHighlightSupplierId] = useState<string | null>(null);
+  /** 付款方式篩選：`"all"` 或其中一個 `PAYMENT_METHODS`（含 `monthly` 月結）。 */
+  const [methodFilter, setMethodFilter] = useState<string>(ALL_METHODS);
 
   useEffect(() => {
     const s = loadAuthSession();
@@ -505,8 +523,55 @@ export function InventoryView() {
   }, [account, loadAll]);
 
   const receipts = useMemo(() => data?.receipts ?? [], [data]);
-  const summary = data?.summary;
   const rangeLabel = reportRangeLabel(range);
+
+  /**
+   * 付款方式篩選（2026-09-25 加）：client-side 過濾，**零新增請求**。
+   * 由範圍查詢本身已經拉齊晒 range 內嘅收據，喺本機再揀付款方式最慳 egress。
+   */
+  const methodCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    // normalize：expenseRecorder 舊資料有機會存中文（「月結」），server 雖然已經正規化，
+    // 呢度再兜一次，確保「月結」chip 數得到。
+    for (const r of receipts) {
+      const key = normalizePaymentMethod(r.payment_method);
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return map;
+  }, [receipts]);
+
+  const methodFilterOptions = useMemo(
+    () => [
+      { key: ALL_METHODS, label: `全部（${receipts.length}）` },
+      ...METHOD_FILTER_KEYS.map((m) => ({
+        key: m,
+        // 0 張都照顯示：唔會因為暫時冇月結收據而「睇唔到有月結呢個選項」。
+        label: `${PAYMENT_METHOD_LABEL[m] ?? m}（${methodCounts.get(m) ?? 0}）`,
+      })),
+    ],
+    [receipts.length, methodCounts],
+  );
+
+  const visibleReceipts = useMemo(
+    () =>
+      methodFilter === ALL_METHODS
+        ? receipts
+        : receipts.filter((r) => normalizePaymentMethod(r.payment_method) === methodFilter),
+    [receipts, methodFilter],
+  );
+
+  /**
+   * KPI／統計一定要跟住篩選行，否則「淨睇月結」時上面嘅總支出仍然係全部付款方式，
+   * 兩個數字互相打臉。server 只計 range，所以非「全部」時喺本機用同一個
+   * `buildPurchaseSummary()` 重算（純函式，口徑同 server 一致）。
+   */
+  const summary: PurchaseSummary | undefined = useMemo(() => {
+    if (!data) return undefined;
+    if (methodFilter === ALL_METHODS) return data.summary;
+    return buildPurchaseSummary(visibleReceipts);
+  }, [data, methodFilter, visibleReceipts]);
+
+  const methodLabel = methodFilter === ALL_METHODS ? "" : `${PAYMENT_METHOD_LABEL[methodFilter] ?? methodFilter}・`;
 
   /**
    * 🔴 2026-09-25：供應商改由 `GET /api/inventory/merchants` 讀全量。
@@ -667,6 +732,16 @@ export function InventoryView() {
           />
         </div>
 
+        {/* 付款方式篩選（2026-09-25 加：月結 / 到款…） */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-slate-500">付款方式</span>
+          <DateRangeFilterChips
+            options={methodFilterOptions}
+            value={methodFilter}
+            onChange={(key) => setMethodFilter(key)}
+          />
+        </div>
+
         {data && data.schemaReady === false && (
           <div className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
             expenseRecorder 資料表尚未建立（receipts 不存在）。請在 expenseRecorder 專案執行 supabase_schema.sql。
@@ -683,12 +758,20 @@ export function InventoryView() {
         {/* KPI */}
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs text-slate-500">{rangeLabel}總支出</div>
+            <div className="text-xs text-slate-500">
+              {rangeLabel}
+              {methodLabel}總支出
+            </div>
             <div className="mt-1 text-lg font-semibold text-slate-900">{money(summary?.total ?? 0)}</div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-xs text-slate-500">收據數</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{summary?.count ?? 0}</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">
+              {summary?.count ?? 0}
+              {methodFilter !== ALL_METHODS && visibleReceipts.length !== receipts.length ? (
+                <span className="ml-1 text-xs font-normal text-slate-400">／{receipts.length}</span>
+              ) : null}
+            </div>
           </div>
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-xs text-emerald-700">已付</div>
@@ -703,8 +786,12 @@ export function InventoryView() {
         {/* 收據清單：點擊任意位置開啟置中 modal（編輯+刪除） */}
         <section className="mb-6">
           <h2 className="mb-3 text-sm font-medium text-slate-600">
-            收據清單（expenseRecorder・{rangeLabel}）
-            <span className="ml-2 text-xs font-normal text-slate-400">點擊任一卡片開啟編輯</span>
+            收據清單（expenseRecorder・{rangeLabel}
+            {methodFilter !== ALL_METHODS ? `・${PAYMENT_METHOD_LABEL[methodFilter] ?? methodFilter}` : ""}）
+            <span className="ml-2 text-xs font-normal text-slate-400">
+              共 {visibleReceipts.length} 張
+              {methodFilter !== ALL_METHODS ? `（全部付款方式 {receipts.length} 張）` : ""} ・ 點擊任一卡片開啟編輯
+            </span>
           </h2>
           {loading ? (
             <p className="text-sm text-slate-500">載入中…</p>
@@ -712,9 +799,16 @@ export function InventoryView() {
             <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
               尚無收據。點擊「新增收據」建立第一張。
             </div>
+          ) : visibleReceipts.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+              {rangeLabel}內冇「{PAYMENT_METHOD_LABEL[methodFilter] ?? methodFilter}」嘅收據（共 {receipts.length} 張其他付款方式）。
+              <button type="button" className="ml-2 underline" onClick={() => setMethodFilter(ALL_METHODS)}>
+                睇全部
+              </button>
+            </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {receipts.map((r) => {
+              {visibleReceipts.map((r) => {
                 const paid = r.payment_status === "paid";
                 const lineNo = r.raw_ocr_data?.receipt_number;
                 return (
@@ -749,7 +843,7 @@ export function InventoryView() {
                               : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
                           }`}
                         >
-                          {STATUS_LABEL[r.payment_status] ?? r.payment_status}
+                          {PAYMENT_STATUS_LABEL[paid ? "paid" : "unpaid"]}
                         </span>
                       </div>
                     </div>

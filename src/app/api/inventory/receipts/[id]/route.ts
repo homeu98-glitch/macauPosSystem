@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
+import { normalizePaymentMethod, normalizePaymentStatus } from "@/lib/inventory-stats";
 import {
   buildReceiptItems,
   resolveExpenseUserId,
@@ -39,8 +40,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const raw: Record<string, unknown> = {};
   if (body.receipt_number !== undefined) raw.receipt_number = body.receipt_number || null;
   if (body.category !== undefined) raw.category = body.category || null;
-  if (body.payment_method) raw.payment_method = body.payment_method;
-  if (body.payment_status) raw.payment_status = body.payment_status;
+  if (body.payment_method) raw.payment_method = normalizePaymentMethod(body.payment_method);
+  if (body.payment_status) raw.payment_status = normalizePaymentStatus(body.payment_status);
   if (Object.keys(raw).length > 0) {
     const { data: cur } = await client.from("receipts").select("raw_ocr_data").eq("id", id).eq("user_id", userId).maybeSingle();
     update.raw_ocr_data = { ...(cur?.raw_ocr_data ?? {}), ...raw };
