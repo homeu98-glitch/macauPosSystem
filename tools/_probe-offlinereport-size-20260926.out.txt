@@ -1,0 +1,28 @@
+anon key: eyJhbGciOiJIUzI1NiIsInR5… (208 chars)
+
+HTTP 200  body 89.7 KB
+拉到 67 行（anon 72h 窗）
+
+── 逐澳門日（線下可計銷售單）──
+  2026-09-24  線下  35 張  平均 2.0 行/張
+  2026-09-25  線下  29 張  平均 2.6 行/張
+
+── 結構統計（近 2 日，線下 64 張）──
+  平均 32.0 張/日
+  平均 2.28 行菜品/張
+  明細單頭：平均 230 B/張、最大 288 B
+  連逐項菜品：平均 577 B/張、最大 1333 B
+  菜品排名：40 款
+
+── 90 日外推（最壞情況：全期都有單）──
+  預計線下單數 ≈ 2880 張
+  方案 A（只回單頭）      ≈ 648 KB
+  方案 B（單頭 + 逐項）    ≈ 1622 KB
+  菜品排名（現時款數 ×90 日推）≈ 2.2 KB
+  現有 v1 KPI payload      ≈ 0.7 KB
+
+  ⇒ A 總計 ≈ 651 KB　B 總計 ≈ 1625 KB
+
+── 抽樣：最新一張線下單嘅 items 形狀 ──
+  訂單26  status=settled  items=1
+  第 1 行 raw: {"name":"盒","price":1,"quantity":5,"menuItemId":"ledger-047c1779-fcff-4772-99c0-8e4420f37325","printerGroup":"kitchen","selectedSpecs":[]}

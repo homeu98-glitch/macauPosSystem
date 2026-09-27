@@ -5,6 +5,7 @@
 > **審視**：[`docs/integration/pos-offline-report-contract-review-2026-09-25.md`](../integration/pos-offline-report-contract-review-2026-09-25.md)
 > **回覆 Ledger**：[`docs/integration/pos-offline-report-reply-2026-09-25.md`](../integration/pos-offline-report-reply-2026-09-25.md)
 > **狀態**：**已實作、未部署**（等 Vercel push ＋ 商家跑 0058 ＋ Ledger 交換 secret）
+> **後續（2026-09-26）**：加 `orders[]`（訂單明細）＋ `dishes[]`（菜品排名）⇒ [**153**](./153-ledger-offline-report-orders-dishes.md)（migration `0059`、同一簽名 `create or replace`）
 
 ---
 

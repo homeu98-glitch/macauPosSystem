@@ -1,6 +1,6 @@
 # 整合文檔索引
 
-> **最後更新**：2026-08-13
+> **最後更新**：2026-09-26
 
 本目錄包含 macauPosSystem 與外部系統的所有對接說明。
 
@@ -18,6 +18,8 @@
 | [pos-offline-report-api.md](./pos-offline-report-api.md) | **Ledger → POS 線下營業摘要契約 v1**（2026-09-24 原件歸檔） | 實作 `offline-report` route 前必讀 |
 | [pos-offline-report-contract-review-2026-09-25.md](./pos-offline-report-contract-review-2026-09-25.md) | 契約審視：5 處口徑出入、實作方案、生產對數底稿 | 想知道「點解唔可以照契約字面做」 |
 | [pos-offline-report-reply-2026-09-25.md](./pos-offline-report-reply-2026-09-25.md) | 回覆 Ledger：要佢哋改嘅 5 處、實際 payload、三條待回問題 | 同 Ledger 對契約 |
+| [pos-offline-report-reply-2026-09-25.md](./pos-offline-report-reply-2026-09-25.md) | 回覆 Ledger：要佢哋改嘅 5 處、實際 payload、三條待回問題 | 同 Ledger 對契約 |
+| [pos-offline-report-v1-addendum-2026-09-26.md](./pos-offline-report-v1-addendum-2026-09-26.md) | **v1 增補**：加 `orders[]`（訂單明細）+ `dishes[]`（菜品排名）；caps 標頭、截斷、口徑 | 2026-09-26 之後嘅整合（可直接轉貼） |
 
 ---
 

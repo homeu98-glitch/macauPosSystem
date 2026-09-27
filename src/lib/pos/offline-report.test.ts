@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import {
   OFFLINE_REPORT_MAX_DAYS,
+  OFFLINE_REPORT_MAX_DISHES,
+  OFFLINE_REPORT_MAX_ORDERS,
   OFFLINE_REPORT_PATH,
   buildOfflineReportResponse,
   clampOfflineReportRange,
@@ -11,19 +13,21 @@ import {
   isDateKey,
   isStoreId,
   normalizeStoreId,
+  offlineReportCapsHeader,
   shiftDateKey,
   validateOfflineReportRpc,
   verifyOfflineReportSignature,
 } from "./offline-report.ts";
 
 /**
- * Ledger「線下營業摘要」契約純邏輯測試（2026-09-25）。
+ * Ledger「線下營業摘要」契約純邏輯測試（2026-09-25；2026-09-26 加 orders／dishes）。
  *
  * 每個 describe 對應契約原文嘅一條要求：
  *   · 範圍截斷（§驗證順序 4 ＋ 驗收清單 `2026-01-01→2026-09-24 ⇒ from=2026-06-27`）
  *   · 驗簽（§驗證順序 1–2 ＋ 驗簽參考實作）
  *   · RPC 回值嚴格驗證（§欄位表「型別不符整包丟棄」）
  *   · 回應形狀（§回應 200）
+ *   · 2026-09-26 增補：`orders[]`／`dishes[]` ＋ **部署次序安全閥**（0059 未跑要優雅降級）
  */
 
 const SECRET = "a".repeat(64);
@@ -162,7 +166,8 @@ describe("HMAC 驗簽（契約 §驗證順序 1–2）", () => {
 
 describe("RPC 回值嚴格驗證（契約 §欄位表：型別不符 ⇒ 唔可以回 200）", () => {
   const expected = { from: "2026-09-01", to: "2026-09-24", clamped: false };
-  const good = {
+  /** KPI 部分（＝ 舊版 0058 嘅完整輸出；冇 0059 嘅四個 key）。 */
+  const kpiOnly = {
     found: true,
     from: "2026-09-01",
     to: "2026-09-24",
@@ -174,12 +179,29 @@ describe("RPC 回值嚴格驗證（契約 §欄位表：型別不符 ⇒ 唔可�
     covers: 30,
     byPayment: [{ method: "Mpay", amountAvos: 123450 }],
   };
+  /** 0059 增補部分。 */
+  const detail = {
+    ordersTotal: 3,
+    orders: [
+      { orderNo: "001", totalAvos: 184700, status: "settled" },
+      { orderNo: "002", totalAvos: 3800, status: "draft" },
+      { orderNo: null, totalAvos: 0, status: "unknown" },
+    ],
+    dishesTotal: 2,
+    dishes: [
+      { name: "凍檸茶", qty: 42, revenueAvos: 84000 },
+      { name: "豬扒飯", qty: 7, revenueAvos: 49000 },
+    ],
+  };
+  /** 0058 ＋ 0059 之後嘅完整回值。 */
+  const good = { ...kpiOnly, ...detail };
 
   it("正常回值通過，並逐欄抄出", () => {
     const r = validateOfflineReportRpc(good, expected);
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.equal(r.found, true);
+    assert.equal(r.hasDetail, true);
     assert.deepEqual(r.kpi, {
       orderCount: 12,
       revenueAvos: 123450,
@@ -257,14 +279,210 @@ describe("RPC 回值嚴格驗證（契約 §欄位表：型別不符 ⇒ 唔可�
   });
 });
 
+describe("RPC 回值：訂單明細 orders（0059 增補）", () => {
+  const expected = { from: "2026-09-01", to: "2026-09-24", clamped: false };
+  const detail = {
+    ordersTotal: 2,
+    orders: [
+      { orderNo: "001", totalAvos: 184700, status: "settled" },
+      { orderNo: null, totalAvos: 3800, status: "draft" },
+    ],
+    dishesTotal: 0,
+    dishes: [],
+  };
+  const base = {
+    found: true,
+    from: "2026-09-01",
+    to: "2026-09-24",
+    clamped: false,
+    orderCount: 1,
+    revenueAvos: 184700,
+    refundedAvos: 0,
+    discountAvos: 0,
+    covers: 2,
+    byPayment: [{ method: "現金", amountAvos: 184700 }],
+    ...detail,
+  };
+
+  it("三個欄位照抄出，未截斷時 ordersTruncated = false", () => {
+    const r = validateOfflineReportRpc(base, expected);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.deepEqual(r.orders, [
+      { orderNo: "001", totalAvos: 184700, status: "settled" },
+      { orderNo: null, totalAvos: 3800, status: "draft" },
+    ]);
+    assert.equal(r.ordersTotal, 2);
+    assert.equal(r.ordersTruncated, false);
+  });
+
+  it("🔴 未結帳狀態（draft／sent_to_kitchen／reopened）要收 —— 呢個係增補嘅重點", () => {
+    for (const status of ["draft", "sent_to_kitchen", "reopened", "paid", "settled", "refunded", "partially_refunded"]) {
+      const r = validateOfflineReportRpc({ ...base, orders: [{ orderNo: "001", totalAvos: 1, status }] , ordersTotal: 1}, expected);
+      assert.equal(r.ok, true, status);
+    }
+  });
+
+  it("🔴 欄位型別唔對 ⇒ 拒（唔可以令 Ledger 收到會整包丟棄嘅 payload）", () => {
+    const bad = [
+      { orderNo: 123, totalAvos: 1, status: "settled" },          // orderNo 要 string|null
+      { orderNo: "x".repeat(65), totalAvos: 1, status: "settled" }, // 超 64 字
+      { orderNo: "001", totalAvos: -1, status: "settled" },        // 負金額
+      { orderNo: "001", totalAvos: 1.5, status: "settled" },       // 浮點
+      { orderNo: "001", totalAvos: 1, status: "" },                // 空狀態
+      { orderNo: "001", totalAvos: 1, status: "x".repeat(33) },    // 超 32 字
+      { orderNo: "001", totalAvos: 1 },                            // 缺 status
+    ];
+    for (const row of bad) {
+      const r = validateOfflineReportRpc({ ...base, orders: [row], ordersTotal: 1 }, expected);
+      assert.equal(r.ok, false, JSON.stringify(row));
+    }
+    assert.equal(validateOfflineReportRpc({ ...base, orders: "no" }, expected).ok, false);
+    assert.equal(validateOfflineReportRpc({ ...base, ordersTotal: -1 }, expected).ok, false);
+    assert.equal(validateOfflineReportRpc({ ...base, ordersTotal: undefined }, expected).ok, false);
+  });
+
+  it("🔴 回多過 SQL 講嘅總數 ⇒ 拒（SQL where 漏咗嘅訊號）", () => {
+    const r = validateOfflineReportRpc({ ...base, ordersTotal: 1 }, expected);
+    assert.deepEqual(r, { ok: false, reason: "rpc-orders-exceed-total" });
+  });
+
+  it("截斷：ordersTotal > orders.length ⇒ ordersTruncated = true（總數仍以 SQL 為準）", () => {
+    const rows = Array.from({ length: 3000 }, (_, i) => ({
+      orderNo: String(i),
+      totalAvos: 100,
+      status: "settled",
+    }));
+    const r = validateOfflineReportRpc({ ...base, orders: rows, ordersTotal: 4321 }, expected);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.orders.length, 3000);
+    assert.equal(r.ordersTotal, 4321);
+    assert.equal(r.ordersTruncated, true);
+  });
+
+  it("🔴 四個 key 只出現一部分 ⇒ 當 SQL 有 bug，拒（唔可以靜靜降級）", () => {
+    const { ordersTotal: _ot, ...noTotal } = base;
+    void _ot;
+    assert.deepEqual(validateOfflineReportRpc(noTotal, expected), { ok: false, reason: "rpc-partial-detail-keys" });
+  });
+});
+
+describe("RPC 回值：菜品排名 dishes（0059 增補）", () => {
+  const expected = { from: "2026-09-01", to: "2026-09-24", clamped: false };
+  const base = {
+    found: true,
+    from: "2026-09-01",
+    to: "2026-09-24",
+    clamped: false,
+    orderCount: 1,
+    revenueAvos: 84000,
+    refundedAvos: 0,
+    discountAvos: 0,
+    covers: 1,
+    byPayment: [{ method: "現金", amountAvos: 84000 }],
+    ordersTotal: 0,
+    orders: [],
+    dishesTotal: 1,
+    dishes: [{ name: "凍檸茶", qty: 42, revenueAvos: 84000 }],
+  };
+
+  it("正常一列照抄出", () => {
+    const r = validateOfflineReportRpc(base, expected);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.deepEqual(r.dishes, [{ name: "凍檸茶", qty: 42, revenueAvos: 84000 }]);
+    assert.equal(r.dishesTotal, 1);
+    assert.equal(r.dishesTruncated, false);
+  });
+
+  it("🔴 空名要拒（Ledger 顯示唔到，而且通常代表 SQL 漏了 coalesce）", () => {
+    assert.equal(validateOfflineReportRpc({ ...base, dishes: [{ name: "", qty: 1, revenueAvos: 1 }] }, expected).ok, false);
+    assert.equal(
+      validateOfflineReportRpc({ ...base, dishes: [{ name: "x".repeat(65), qty: 1, revenueAvos: 1 }] }, expected).ok,
+      false,
+    );
+    assert.equal(
+      validateOfflineReportRpc({ ...base, dishes: [{ name: 1, qty: 1, revenueAvos: 1 }] }, expected).ok,
+      false,
+    );
+  });
+
+  it("🔴 qty／金額唔係非負安全整數 ⇒ 拒", () => {
+    assert.equal(validateOfflineReportRpc({ ...base, dishes: [{ name: "a", qty: -1, revenueAvos: 1 }] }, expected).ok, false);
+    assert.equal(validateOfflineReportRpc({ ...base, dishes: [{ name: "a", qty: 1.5, revenueAvos: 1 }] }, expected).ok, false);
+    assert.equal(
+      validateOfflineReportRpc({ ...base, dishes: [{ name: "a", qty: 1, revenueAvos: "1" }] }, expected).ok,
+      false,
+    );
+  });
+
+  it("截斷：dishesTotal > dishes.length ⇒ dishesTruncated = true", () => {
+    const rows = Array.from({ length: 300 }, (_, i) => ({ name: `菜${i}`, qty: 1, revenueAvos: 100 }));
+    const r = validateOfflineReportRpc({ ...base, dishes: rows, dishesTotal: 412 }, expected);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.dishes.length, 300);
+    assert.equal(r.dishesTotal, 412);
+    assert.equal(r.dishesTruncated, true);
+  });
+
+  it("🔴 回多過 dishesTotal ⇒ 拒", () => {
+    const r = validateOfflineReportRpc(
+      { ...base, dishes: [{ name: "a", qty: 1, revenueAvos: 1 }], dishesTotal: 0 },
+      expected,
+    );
+    assert.deepEqual(r, { ok: false, reason: "rpc-dishes-exceed-total" });
+  });
+});
+
+describe("部署次序安全閥：0059 未跑（四個 key 全缺）要優雅降級", () => {
+  const expected = { from: "2026-09-01", to: "2026-09-24", clamped: false };
+  const legacy = {
+    found: true,
+    from: "2026-09-01",
+    to: "2026-09-24",
+    clamped: false,
+    orderCount: 12,
+    revenueAvos: 123450,
+    refundedAvos: 0,
+    discountAvos: 500,
+    covers: 30,
+    byPayment: [{ method: "Mpay", amountAvos: 123450 }],
+  };
+
+  it("🔴 舊版 0058 回值 ⇒ ok（唔可以 503，否則 Ledger 現有嗰張已對數嘅卡會死）", () => {
+    const r = validateOfflineReportRpc(legacy, expected);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.hasDetail, false);
+    // 空陣列只係內部預設，**唔可以**當成「今日冇單」回出去（buildOfflineReportResponse 會 omit）
+    assert.deepEqual(r.orders, []);
+    assert.deepEqual(r.dishes, []);
+    assert.equal(r.ordersTruncated, false);
+    assert.equal(r.dishesTruncated, false);
+    // KPI 照樣齊全 —— 呢個就係「降級但唔假零」
+    assert.equal(r.kpi.orderCount, 12);
+  });
+});
+
 describe("回應形狀（契約 §回應 200）", () => {
-  it("固定 v=1、flags.refundsNetted=false、breakdown 只有 byPayment（dineIn/quick 刻意缺席）", () => {
+  const common = {
+    storeId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    range: { from: "2026-09-01", to: "2026-09-24", clamped: true },
+    kpi: { orderCount: 1, revenueAvos: 2, refundedAvos: 0, discountAvos: 0, covers: 1 },
+    byPayment: [{ method: "現金", amountAvos: 2 }],
+    generatedAt: "2026-09-25T01:00:00.000Z",
+  };
+
+  it("hasDetail=false（0059 未跑）⇒ 連 key 都唔出 —— 唔可以回空陣列（空陣列 = 假零）", () => {
     const payload = buildOfflineReportResponse({
-      storeId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      range: { from: "2026-09-01", to: "2026-09-24", clamped: true },
-      kpi: { orderCount: 1, revenueAvos: 2, refundedAvos: 0, discountAvos: 0, covers: 1 },
-      byPayment: [{ method: "現金", amountAvos: 2 }],
-      generatedAt: "2026-09-25T01:00:00.000Z",
+      ...common,
+      hasDetail: false,
+      orders: [],
+      ordersTotal: 0,
+      dishes: [],
+      dishesTotal: 0,
     });
 
     assert.equal(payload.v, 1);
@@ -284,5 +502,69 @@ describe("回應形狀（契約 §回應 200）", () => {
     assert.match(payload.generatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/);
     // 唔可以有 `undefined` 漏出去
     assert.equal(JSON.stringify(payload).includes("undefined"), false);
+  });
+
+  it("hasDetail=true ⇒ 出 orders／dishes／兩個總數，flags 亦帶兩個 truncated", () => {
+    const payload = buildOfflineReportResponse({
+      ...common,
+      hasDetail: true,
+      orders: [{ orderNo: "001", totalAvos: 184700, status: "settled" }],
+      ordersTotal: 1,
+      dishes: [{ name: "凍檸茶", qty: 42, revenueAvos: 84000 }],
+      dishesTotal: 1,
+    });
+
+    assert.equal(payload.v, 1, "🔴 加欄位唔可以升 v（Ledger 可能 assert v===1）");
+    assert.deepEqual(Object.keys(payload).sort(), [
+      "breakdown",
+      "dishes",
+      "dishesTotal",
+      "flags",
+      "from",
+      "generatedAt",
+      "kpi",
+      "orders",
+      "ordersTotal",
+      "storeId",
+      "to",
+      "v",
+    ]);
+    assert.deepEqual(payload.orders, [{ orderNo: "001", totalAvos: 184700, status: "settled" }]);
+    assert.deepEqual(payload.dishes, [{ name: "凍檸茶", qty: 42, revenueAvos: 84000 }]);
+    assert.deepEqual(payload.flags, {
+      refundsNetted: false,
+      clamped: true,
+      ordersTruncated: false,
+      dishesTruncated: false,
+    });
+    assert.equal(JSON.stringify(payload).includes("undefined"), false);
+  });
+
+  it("🔴 flags 嘅 truncated 係由「SQL 總數 vs 實際筆數」推導，route 唔自己截", () => {
+    const payload = buildOfflineReportResponse({
+      ...common,
+      hasDetail: true,
+      orders: [{ orderNo: "001", totalAvos: 1, status: "settled" }],
+      ordersTotal: 4321,
+      dishes: [{ name: "a", qty: 1, revenueAvos: 1 }],
+      dishesTotal: 412,
+    });
+    assert.equal(payload.flags.ordersTruncated, true);
+    assert.equal(payload.flags.dishesTruncated, true);
+    // 內容唔准被 route 改動（無聲截斷 = 假資料）
+    assert.equal(payload.orders?.length, 1);
+    assert.equal(payload.dishes?.length, 1);
+  });
+});
+
+describe("能力探測標頭（`v` 唔可以升 ⇒ 用 caps 代替）", () => {
+  it("hasDetail=true ⇒ 宣告四項；false ⇒ 只宣告 KPI 兩項", () => {
+    assert.equal(offlineReportCapsHeader(true), "kpi,byPayment,orders,dishes");
+    assert.equal(offlineReportCapsHeader(false), "kpi,byPayment");
+  });
+
+  it("上限常數同 0059 SQL 一致（改咗一邊就要改另一邊）", () => {
+    assert.equal(OFFLINE_REPORT_MAX_ORDERS, 3000);
+    assert.equal(OFFLINE_REPORT_MAX_DISHES, 300);
   });
 });

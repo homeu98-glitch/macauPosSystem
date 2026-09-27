@@ -132,6 +132,24 @@ orderEventISO(order)       // → 原始字串（顯示用），無法解析 = "
   `report_ro.v_*` view，而 83 從未在 production 建立 ⇒ 唔係權限問題（`security definer` 都救唔到），
   **係 view 唔存在**，`create` 都 create 唔到。新聚合函數直接讀 `public.pos_orders`。
 - 新增 SQL 用 `tools/check-pos-offline-report-sql.py` 驗語法（pglast／libpg_query；本機冇 Postgres 都驗到）。
+  ⚠️ 佢**只驗 body**，唔驗 `comment on` 等尾段字串 ⇒ 口徑守衛要用「只取 `as $$…$$;` 之間」嘅
+  helper（`offline-report-guard.test.ts` `sqlBody()`），否則註釋／`comment on` 內嘅關鍵字會令斷言空轉綠燈。
+- 🔴🔴 **已經 live 嘅契約要加欄位：`v` 唔可以升，改用能力標頭。**
+  2026-09-26 實案：契約寫死「`v` 固定 `1`」而 Ledger 已對數成功。升 `v: 2` 會令對方
+  `v === 1` 嘅檢查失敗 ⇒ **整包丟棄**。⇒ 維持 `v: 1`，新增欄位一律 additive，
+  另回 `x-pos-offline-report-caps: kpi,byPayment,orders,dishes` 做能力探測。
+- 🔴🔴 **加欄位要配「部署次序安全閥」**（Vercel `push` 即自動部署，route 一定快過商家手動跑 SQL）：
+  若嚴格要求新 key 齊全，舊函數回一份冇新 key 嘅 payload ⇒ 驗值失敗 ⇒ 503 ⇒
+  **對方現有嗰張已對數嘅卡即刻死**（人為故障）。正解係分三種情況：
+  ① 新 key **全缺** ＝ 舊版本 ⇒ **優雅降級**（回應 **omit** 該節、caps 唔宣告）；
+  ② 只出現**一部分** ＝ SQL bug ⇒ 503（失敗得響，唔好靜靜降級）；
+  ③ 齊全 ⇒ 正常。
+  ⚠️ 降級時**唔可以回空陣列** —— `orders: []` 會被對方讀成「今日冇單」＝ **假零**。
+  「缺席」同「空」係兩件事。
+- 🔴 **回明細唔等於可以回自由文字**：`order_note` / item `note` / `discount_note` / `comp_note`
+  係店員手打，可能寫咗顧客姓名／電話 ⇒ 屬個資（契約 v1 明文「不是訂單明細／顧客個資」）。
+  對外 route 只回**結構化欄位**；守衛用「白名單」限定 `items` 只准讀
+  `name` / `menuItemId` / `quantity` / `price` / `voided`，其餘欄位出現即 fail。
 - 口徑：線下報表＝`status in ('settled','paid')` ＋ 排除 `online_order_id` ＋
   `coalesce(settled_at, reopened_at, updated_at, created_at)` 轉 `Asia/Macau`；詳見 `docs/150`。
 

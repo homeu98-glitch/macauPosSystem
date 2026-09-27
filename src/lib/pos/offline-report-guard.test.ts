@@ -17,6 +17,12 @@ import { describe, it } from "node:test";
  *    金額 ×100 轉 avos、90 日 clamp、只 grant service_role。
  * 5. **鑑權例外要寫明**：呢條係全專案唯一「唔行 `posRouteAuthGuard()`」嘅業務 GET
  *    （呼叫方係 Ledger 伺服器），一定要有註釋講清楚，否則下一輪匿名端點審計會誤判成漏網。
+ * 6. **2026-09-26 增補（`orders[]` + `dishes[]`）**：
+ *    · `v` **唔可以升**（Ledger 可能 assert `v === 1`）⇒ 能力探測走 caps 標頭；
+ *    · 截斷權威喺 SQL ⇒ route 只可以依 `ordersTotal` 推導 `ordersTruncated`，唔可以自己截；
+ *    · **唔可以回自由文字**（`order_note` / item `note` / `discount_note` / `comp_note`）——
+ *      呢啲係店員手打，可能藏顧客識別資訊；
+ *    · `orders[]` 要包未結帳單（只剔除 `cancelled`），`dishes[]` 只計 `settled`／`paid`。
  *
  * ⚠️ `node --test` 只可以 import node 內建模組 ⇒ 用**源碼掃描**（專案慣例）。
  * 🔴 needle 一律字串拼接砌，唔好寫成完整字面量（否則掃到註釋／自己）。
@@ -50,9 +56,24 @@ function stripSql(src: string): string {
     .join("\n");
 }
 
+/**
+ * 只取 plpgsql **body** 並去註解。
+ *
+ * 🔴 點解要：migration 尾部有 `comment on function … is '…'` 嘅**字串**，
+ *    佢會提到同樣嘅關鍵字（`cancelled`、`settled`…）。用整份檔做斷言會誤中，
+ *    令「口徑守衛」變成綠燈但空。所有口徑斷言一律落喺 body 上。
+ */
+function sqlBody(src: string): string {
+  const start = src.indexOf("as $$");
+  const end = src.lastIndexOf("$$;");
+  if (start < 0 || end <= start) return "";
+  return stripSql(src.slice(start + "as $$".length, end));
+}
+
 const ROUTE = "app/api/integration/ledger/offline-report/route.ts";
 const LIB = "lib/pos/offline-report.ts";
 const MIGRATION = "supabase/migrations/0058_pos_offline_report_rpc.sql";
+const MIGRATION_DETAIL = "supabase/migrations/0059_pos_offline_report_detail.sql";
 const ENV_EXAMPLE = ".env.example";
 
 const ENV_SECRET = `${"LEDGER_OFFLINE"}_REPORT_HMAC_SECRET`;
@@ -63,6 +84,8 @@ const route = readSrc(ROUTE);
 const routeCode = stripJs(route);
 const migration = readRepo(MIGRATION);
 const migrationCode = stripSql(migration);
+const detailSql = readRepo(MIGRATION_DETAIL);
+const detailBody = sqlBody(detailSql);
 
 describe("route：secret 分家 + fail-closed（鐵律 1、2）", () => {
   it("🔴 只讀 `LEDGER_OFFLINE_REPORT_HMAC_SECRET`", () => {
@@ -257,5 +280,181 @@ describe("lib 純邏輯：契約常數同檔案分離原因", () => {
     const lib = stripJs(readSrc(LIB));
     assert.ok(!lib.includes('from "@/'), "lib 有 @/ 別名 import");
     assert.ok(!lib.includes(".tsx"), "lib 唔應該拖到 tsx");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2026-09-26 增補：`orders[]` ＋ `dishes[]`
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("0059 migration：同 0058 同一簽名（唔可以改簽名）", () => {
+  it("🔴 `create or replace` 同一簽名 ⇒ 唔使改 grants、舊呼叫唔會斷", () => {
+    // 先確保 `sqlBody()` 真係拆到 body（拆唔到就會令下面所有口徑斷言變空轉綠燈）
+    assert.ok(detailBody.length > 500, "sqlBody 拆唔到 0059 body —— 下面所有口徑斷言會變空轉");
+    assert.ok(
+      /create or replace function public\.pos_offline_report\(\s*p_store_id text,\s*p_from\s+date default null,\s*p_to\s+date default null\s*\)/.test(
+        detailSql,
+      ),
+      "0059 改咗簽名 —— 舊 grants／呼叫會失效，必須同 0058 一模一樣",
+    );
+  });
+
+  it("🔴 只 grant service_role（唔可以開畀 anon，否則繞過 0041 嘅 72 小時窗）", () => {
+    assert.ok(
+      /revoke all on function public\.pos_offline_report\(text, date, date\) from public, anon, authenticated;/.test(
+        detailSql,
+      ),
+      "0059 冇 revoke anon／authenticated",
+    );
+    assert.ok(
+      /grant execute on function public\.pos_offline_report\(text, date, date\) to service_role;/.test(detailSql),
+      "0059 冇 grant service_role",
+    );
+    assert.ok(!/\bgrant execute\b[^;]*\bto\b[^;]*\banon\b/.test(detailSql), "grant 咗 anon");
+  });
+
+  it("🔴 唯讀 stable、唔用 security definer、唔包 transaction", () => {
+    assert.ok(detailSql.includes("stable"), "唔係 stable");
+    assert.ok(detailSql.includes("security invoker"), "唔係 security invoker");
+    assert.ok(!detailSql.includes("security definer"), "出現 security definer");
+    assert.ok(!/^\s*begin\s*;/im.test(detailSql), "出現 begin;（商家會誤解 commit = git commit）");
+    assert.ok(!/^\s*commit\s*;/im.test(detailSql), "出現 commit;");
+    assert.ok(!detailSql.includes("report_ro."), "引用咗 83／94 嘅 report_ro view");
+  });
+});
+
+describe("0059 migration：orders[] 口徑", () => {
+  it("🔴 回四個 key（ordersTotal / orders / dishesTotal / dishes）—— 少一個 route 就 503", () => {
+    for (const key of ["'ordersTotal'", "'orders'", "'dishesTotal'", "'dishes'"]) {
+      assert.ok(detailBody.includes(key), `0059 回值缺 ${key}`);
+    }
+  });
+
+  it("🔴 orders 一列只有三個欄位（orderNo / totalAvos / status）", () => {
+    for (const key of ["'orderNo'", "'totalAvos'", "'status'"]) {
+      assert.ok(detailBody.includes(key), `orders 缺 ${key}`);
+    }
+  });
+
+  it("🔴 要包未結帳單：只剔除 `cancelled`，**唔可以**收窄到 settled／paid", () => {
+    // 2026-09-26 用戶拍板：Ledger 要睇「邊張未埋單」⇒ orders[] ≠ KPI 那批
+    assert.ok(detailBody.includes("<> 'cancelled'"), "orders 冇剔除 cancelled");
+    assert.ok(detailBody.includes("left(o.local_order_no"), "orders 冇取本地單號");
+  });
+
+  it("🔴 排除線上投影單 ＋ 四條時間腿 ＋ Asia/Macau（同 KPI 同一套日歸屬）", () => {
+    assert.ok(detailBody.includes("o.online_order_id is null"), "orders 冇排除線上投影單");
+    assert.ok(
+      detailBody.includes("coalesce(o.settled_at, o.reopened_at, o.updated_at, o.created_at)"),
+      "orders 缺四條時間腿",
+    );
+    assert.ok(detailBody.includes("at time zone k_tz"), "orders 冇轉 Asia/Macau");
+  });
+
+  it("🔴 有上限，而且係 SQL 自己截（保留最新：倒序 + limit）", () => {
+    assert.ok(detailBody.includes("limit k_max_orders"), "orders 冇 limit");
+    assert.ok(/order by p\.ev desc nulls last/.test(detailBody), "orders 唔係最新優先");
+    assert.ok(detailBody.includes("count(*) over ()"), "冇用 window count 拎未截斷總數");
+  });
+
+  it("金額轉 avos 並夾非負（契約：金額一律非負整數）", () => {
+    assert.ok(detailBody.includes("greatest(0, round(coalesce(p.total, 0) * 100))"), "orders 金額冇夾非負 / 冇轉 avos");
+  });
+});
+
+describe("0059 migration：dishes[] 口徑", () => {
+  it("🔴 只計 settled／paid（同 KPI 同一批單）", () => {
+    assert.ok(detailBody.includes("o.status in ('settled', 'paid')"), "dishes 冇收窄到可計銷售狀態");
+  });
+
+  it("🔴 排除已退菜（voided 只入 voidQty，唔入菜品銷售）", () => {
+    assert.ok(detailBody.includes("coalesce(e.it ->> 'voided', 'false') <> 'true'"), "dishes 冇排除已退菜");
+  });
+
+  it("🔴 展開 items 要防非陣列（`jsonb_typeof` 守門，唔可以硬 cast）", () => {
+    assert.ok(detailBody.includes("jsonb_typeof(o.items) = 'array'"), "items 冇 jsonb_typeof 守門");
+    assert.ok(detailBody.includes("jsonb_array_elements"), "冇展開 items");
+  });
+
+  it("🔴 聚合 key ＝ `menuItemId|名稱` 快照（同名改價各自一行，歷史唔會失蹤）", () => {
+    assert.ok(detailBody.includes("|| '|' ||"), "聚合 key 唔係 menuItemId|名稱");
+    assert.ok(detailBody.includes("group by dkey"), "冇按 dkey 分組");
+  });
+
+  it("🔴 有上限，而且銷量倒序", () => {
+    assert.ok(detailBody.includes("limit k_max_dishes"), "dishes 冇 limit");
+    assert.ok(/order by r\.qty_total desc/.test(detailBody), "dishes 唔係銷量倒序");
+  });
+
+  it("名稱唔可以空（空字串會令 Ledger 顯示唔到 → route 會拒）", () => {
+    assert.ok(detailBody.includes("'(未命名)'"), "冇為空名稱補 fallback");
+  });
+});
+
+describe("🔴 唔可以回自由文字／顧客個資（契約：不是訂單明細／顧客個資）", () => {
+  it("orders／dishes 段一律唔准掂備註類欄位", () => {
+    // 呢啲係店員手打，可能寫咗「陳先生」「13xxxxxx」等顧客識別資訊
+    for (const needle of ["order_note", "discount_note", "comp_note", "comped_at", "raw_json", "'note'"]) {
+      assert.ok(!detailBody.includes(needle), `0059 body 出現疑似個資欄位：${needle}`);
+    }
+  });
+
+  it("items 逐項展開只准讀 name／menuItemId／quantity／price／voided", () => {
+    const used = detailBody.match(/e\.it ->> '([a-zA-Z_]+)'/g) ?? [];
+    const allowed = new Set(["menuItemId", "name", "quantity", "price", "voided"]);
+    for (const m of used) {
+      const field = m.replace(/.*'([a-zA-Z_]+)'/, "$1");
+      assert.ok(allowed.has(field), `dishes 讀咗未授權嘅 item 欄位：${field}`);
+    }
+  });
+});
+
+describe("route：caps 標頭 ＋ 截斷權威在 SQL（唔可以自己截）", () => {
+  it("🔴 response 一定要帶 `x-pos-offline-report-caps`（v 唔升 ⇒ 靠佢探測能力）", () => {
+    assert.ok(routeCode.includes('"x-pos-offline-report-caps"'), "冇 caps 標頭");
+    assert.ok(
+      routeCode.includes("offlineReportCapsHeader(validated.hasDetail)"),
+      "caps 標頭冇跟 RPC 實際能力 —— Ledger 會以為有 orders 但其實冇",
+    );
+  });
+
+  it("🔴 `v` 一定係 1（加欄位唔可以升 v）", () => {
+    const lib = stripJs(readSrc(LIB));
+    assert.ok(lib.includes("OFFLINE_REPORT_VERSION = 1"), "v 唔係 1");
+    assert.ok(!/OFFLINE_REPORT_VERSION\s*=\s*[2-9]/.test(lib), "v 被升級咗");
+  });
+
+  it("🔴 route 唔可以自己截 orders／dishes（截斷權威只可以喺 SQL）", () => {
+    for (const bad of [
+      /\.slice\(0,\s*OFFLINE_REPORT_MAX_ORDERS/,
+      /\.splice\(0,\s*OFFLINE_REPORT_MAX_ORDERS/,
+      /\.slice\(0,\s*OFFLINE_REPORT_MAX_DISHES/,
+      /\.splice\(0,\s*OFFLINE_REPORT_MAX_DISHES/,
+    ]) {
+      assert.ok(!bad.test(routeCode), `route 自己截斷：${bad}`);
+    }
+    // truncated 要由 SQL 嘅總數推導
+    assert.ok(
+      routeCode.includes("hasDetail: validated.hasDetail"),
+      "route 冇把 hasDetail 交給 payload 組裝",
+    );
+  });
+
+  it("🔴 上限常數同 0059 SQL 兩邊一致（改咗一邊就會靜默分叉）", () => {
+    const lib = readSrc(LIB);
+    assert.ok(lib.includes("OFFLINE_REPORT_MAX_ORDERS = 3000"), "lib 嘅 orders 上限唔係 3000");
+    assert.ok(lib.includes("OFFLINE_REPORT_MAX_DISHES = 300"), "lib 嘅 dishes 上限唔係 300");
+    assert.ok(detailBody.includes("k_max_orders      constant int  := 3000"), "0059 k_max_orders 唔係 3000");
+    assert.ok(detailBody.includes("k_max_dishes      constant int  := 300"), "0059 k_max_dishes 唔係 300");
+  });
+
+  it("🔴 0059 未跑要優雅降級（唔可以因為缺 key 就 503 死咗 Ledger 現有張卡）", () => {
+    const lib = stripJs(readSrc(LIB));
+    assert.ok(lib.includes("rpc-partial-detail-keys"), "冇區分「全缺（舊版）」同「只缺部分（bug）」");
+    assert.ok(lib.includes("hasDetail"), "lib 冇 hasDetail 概念");
+    assert.ok(
+      /hasDetail:\s*false/.test(lib) || /presentDetailKeys\.length !== 0/.test(lib),
+      "冇實作「四個 key 全缺 = 舊版」嘅判定",
+    );
   });
 });

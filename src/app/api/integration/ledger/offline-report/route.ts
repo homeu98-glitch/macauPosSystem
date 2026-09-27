@@ -7,6 +7,7 @@ import {
   clampOfflineReportRange,
   isDateKey,
   normalizeStoreId,
+  offlineReportCapsHeader,
   validateOfflineReportRpc,
   verifyOfflineReportSignature,
 } from "@/lib/pos/offline-report";
@@ -33,6 +34,25 @@ import { getSupabaseWriteClient } from "@/lib/supabase-server";
  *
  * `0058_pos_offline_report()`（stable、service_role-only）喺 DB 內一次過加總 ⇒
  * 90 日窗口都只係一個請求、幾個 byte；逐行拉落 Vercel 再加總會反覆踩 egress 紀律。
+ *
+ * ## 2026-09-26 增補：`orders[]` ＋ `dishes[]`（仍係同一個 RPC、同一次請求）
+ *
+ * Ledger 要「報表頁一次過拎齊」。做法係 `0059` 用**同一簽名** `create or replace`
+ * 0058 嗰支函數，多回四個 key（`orders` / `ordersTotal` / `dishes` / `dishesTotal`）。
+ * ⇒ 仍然係「一次 DB 往返」：DB 內砌好 JSON，唔會拉 2 880 行落 Vercel 再砌。
+ * 實測 90 日最壞情況 payload ≈ 300 KB（明細每張只有 3 個欄位）。
+ *
+ * 🔴 `v` **維持 1**：加欄位係 additive，升 `v` 反而會令 Ledger 既有可能嘅 `v === 1`
+ *    檢查失效 ⇒ 整包丟棄。能力探測改用回應標頭 `x-pos-offline-report-caps`。
+ *
+ * 🔴 **部署次序唔可以靠「記得先跑 0059」**（Vercel push 即自動部署）：
+ *    舊 `0058` 會回一份**冇** `orders` / `dishes` 嘅 payload。嗰個情況**唔會** 503，
+ *    而係優雅降級 —— 兩節整節 omit（唔出空陣列，因為空陣列 = 假零），
+ *    caps 標頭亦只宣告 `kpi,byPayment` ⇒ Ledger 現有嗰張已對數嘅卡零影響。
+ *    ⚠️ 但「四個 key 只出現一部分」＝ SQL 有 bug ⇒ 照樣 503（失敗得響）。
+ *
+ * 🔴 截斷（3000 張單 / 300 款菜）嘅**唯一權威係 SQL** —— route 只依 `ordersTotal`
+ *    推導 `flags.ordersTruncated`，**唔可以自己再截一次**（同 90 日 clamp 同一原則）。
  *
  * ## 範圍截斷：權威在 SQL（2026-09-25 修正）
  *
@@ -159,6 +179,12 @@ export async function GET(request: Request) {
     range: { from: validated.from, to: validated.to, clamped: validated.clamped },
     kpi: validated.kpi,
     byPayment: validated.byPayment,
+    // 2026-09-26 增補：訂單明細 ＋ 菜品排名（截斷由 SQL 決定，route 只照抄）
+    hasDetail: validated.hasDetail,
+    orders: validated.orders,
+    ordersTotal: validated.ordersTotal,
+    dishes: validated.dishes,
+    dishesTotal: validated.dishesTotal,
     generatedAt: new Date().toISOString(),
   });
 
@@ -169,6 +195,9 @@ export async function GET(request: Request) {
       // 契約固定值；日後改回應格式一定要改呢個並事先通知 Ledger。
       "x-pos-offline-report-v": String(payload.v),
       "x-pos-offline-report-path": OFFLINE_REPORT_PATH,
+      // 🔴 `v` 按契約寫死係 1 ⇒ 加欄位唔會反映喺 `v`。用呢個標頭做能力探測：
+      //    舊部署（0059 未跑）唔會有 orders／dishes，Ledger 見到 caps 冇呢兩項就自動退回只顯示 KPI。
+      "x-pos-offline-report-caps": offlineReportCapsHeader(validated.hasDetail),
     },
   });
 }
