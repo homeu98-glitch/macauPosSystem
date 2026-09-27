@@ -28,7 +28,9 @@
 病（2026-09-27 Ledger 配額事故）：`subscribe()` 開頭自己 `removeChannel(舊)` ⇒ supabase-js 會對**舊 channel** 送 `CLOSED`；四個 hook 都把 `CLOSED` 當斷線 ⇒ 死循環（移除→CLOSED→3 秒重連→再移除健康 channel→…），每圈 `SUBSCRIBED` 後 debounce 3 秒打一次增量 ⇒ 正式環境同一台 iPad 一日約 **1,980 次** `list_merchant_orders`（晚市每 6 秒一次）。**只要回前景一次就循環到關頁。**
 🔴 教訓：`use-pos-realtime`／`use-kds-realtime` 2026-09-15 已用「先清空變數再 await」**仍然中招** —— 清空只治**洩漏**，唔治**回授**；根治必須 callback 自比 `channel !== ch`。
 🔴 `CLOSED` **唔可以**為修迴圈而刪走（2026-09-15 加固：唔判 `CLOSED` ⇒ channel 一死就永久靜默、零 error）。
-守衛 `realtime-resubscribe-loop.test.ts`（21 條，含行為模擬＋對照組＋topic 唯一性）。
+🔴 `await supabase.removeChannel(stale)` 之後**一定要**再判 `if (cancelled) return;`（2026-09-27）：`channel` 已係 null ⇒ cleanup 唔會清 ⇒ 留下冇人清嘅訂閱。四個 hook 一致。
+🔴 `subscribe()` 開頭清未觸發嘅 `reconnectTimer` 時，**順序**＝先 `if (subscribeInFlight) return;` 才清（反過來會殺死有效重連排程 ⇒ 永久唔再連）。
+守衛 `realtime-resubscribe-loop.test.ts`（29 條，含行為模擬＋對照組＋topic 唯一性＋上述兩條）。
 🔴 topic 唯一性：`pos-ledger-orders:<merchantId>` 只有兩個消費者（`quick-online-orders-panel` 只喺 `/pos`／`online-orders` 只喺 `/orders`）⇒ **當前路由下唔會同頁**；同 topic 兩條 channel 會互相 `removeChannel` 踩死，一頁只准掛一個。
 
 ## 5 訂單／交班

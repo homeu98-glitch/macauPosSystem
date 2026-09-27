@@ -91,7 +91,16 @@ export function useKdsRealtime(
     async function subscribe() {
       if (cancelled || !supabase) return;
       // 防重入：已有一次 subscribe 喺 in-flight 就唔好再開。
+      // ⚠️ 一定要**先**判重入才清 reconnectTimer（見 use-pos-realtime.ts 同名詳解）：
+      //    清咗 timer 之後才 return，就會殺死一個仍然有效嘅重連排程。
       if (subscribeInFlight) return;
+      // 🔴 清走未觸發嘅重連 timer（2026-09-27）：斷線重連排咗 3 秒，呢 3 秒內若掉頭
+      // 回前景／收到憑證更新，兩個排程會撞埋 ⇒ 白白多建一次 channel、
+      // 多一次 KDS 補拉（60 秒看門狗之外嘅額外負擔）。
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       subscribeInFlight = true;
       try {
       /**

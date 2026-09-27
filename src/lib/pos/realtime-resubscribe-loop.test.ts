@@ -137,6 +137,65 @@ describe("Realtime 重連死循環 —— 移除舊 channel 前要先清空變�
       );
     });
   }
+
+  /**
+   * 🔴 補漏（2026-09-27 覆核）：`await supabase.removeChannel(stale)` 之後要再判 `cancelled`。
+   *
+   * 病：`removeChannel` 係 async。期間頁面完全可能 unmount（`cancelled = true`）——
+   * 例如用戶喺「回前景 → 重連 → 移除舊 channel」嘅空檔閂頁／切走路由。
+   * 而 cleanup 只會 `if (channel) void supabase.removeChannel(channel);`，
+   * 但 `channel` 喺 await **之前**已經被設成 `null` ⇒ **冇人會去清嗰條新 channel**。
+   * 一條冇人清嘅訂閱會一直掛住（佔 Realtime 連線配額、白收事件）。
+   *
+   * ⚠️ 呢個 case 以前只有 `use-pos-realtime` / `use-kds-realtime` 有防（`if (cancelled || !supabase) return;`），
+   *    兩個 Ledger hook 漏咗 —— 兩邊**都要**有，所以呢度一次過覆核四個。
+   */
+  for (const [label, rel] of HOOKS) {
+    it(`🔴 ${label}（${rel}）：removeChannel(stale) 之後要再判 cancelled`, () => {
+      const src = stripTsComments(readSrc(rel));
+      assert.ok(
+        /await\s+supabase\.removeChannel\(stale\)\s*;([\s\S]{0,160}?)(if\s*\(\s*cancelled\s*(?:\|\|\s*!supabase\s*)?\)\s*return\s*;)/.test(
+          src,
+        ),
+        `🔴 ${rel}：\`await supabase.removeChannel(stale);\` 之後冇再判 \`cancelled\`。\n` +
+          "後果：移除舊 channel 期間頁面 unmount，`channel` 已係 null ⇒ cleanup 唔會清，" +
+          "於是留下一條**永遠冇人清**嘅訂閱（漏連線、白收事件）。\n" +
+          "正確寫法：`const stale = channel; channel = null; await supabase.removeChannel(stale);` " +
+          "⇒ **下一句** `if (cancelled) return;`（同 use-pos-realtime／use-kds-realtime 一致）。",
+      );
+    });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b. 次要項：subscribe() 開頭清走未觸發嘅重連 timer（唔好同回前景撞埋）
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Realtime 重連 —— 手動 subscribe 要清走未觸發嘅重連 timer", () => {
+  /**
+   * 病（輕微，唔會死循環）：斷線後已經排咗一個 3 秒重連 timer，
+   * 呢 3 秒內用戶掉頭回前景（`visibilitychange`）又觸發一次 `subscribe()`。
+   * 若唔清 timer，兩個排程會前後腳各建一次 channel ⇒ 多一次建／拆連線、
+   * 多一次 `onResubscribed` 增量（Ledger 側就係多一次 RPC）。
+   *
+   * 🔴 順序鐵律：**先**判 `subscribeInFlight` 重入，**才**清 timer。
+   *    反過來寫（先清再判）會殺死一個仍然有效嘅重連排程 ⇒ 該 hook 永久唔再連。
+   */
+  for (const [label, rel] of HOOKS) {
+    it(`🔴 ${label}（${rel}）：subscribe() 開頭清 reconnectTimer 且順序正確`, () => {
+      const src = stripTsComments(readSrc(rel));
+      assert.ok(
+        /if\s*\(\s*subscribeInFlight\s*\)\s*return\s*;[\s\S]{0,900}?if\s*\(\s*reconnectTimer\s*\)\s*\{[\s\S]{0,80}?window\.clearTimeout\(reconnectTimer\)/m.test(
+          src,
+        ),
+        `🔴 ${rel}：\`subscribe()\` 冇喺開頭清走未觸發嘅 \`reconnectTimer\`，` +
+          "或者清 timer 嘅位置排喺 `if (subscribeInFlight) return;` **之前**。\n" +
+          "後果：斷線重連同「回前景」同時發生時會多建一次 channel、多打一次增量；" +
+          "而若順序反咗，就會連一個仍然有效嘅重連排程都殺埋（永久唔再連）。\n" +
+          "正確寫法：`if (subscribeInFlight) return;` ⇒ `if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null; }` " +
+          "⇒ `subscribeInFlight = true;`",
+      );
+    });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
