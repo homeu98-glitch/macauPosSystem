@@ -23,6 +23,14 @@
 🔴🔴 2026-09-25：**「本地有 job」帳本全部係 per-瀏覽器**（`printedOnceKeys`／`printedLedgerOrders`／`loadPrintJobs()`／`kitchenBackfillAttempted` in-memory）。**多終端（iPad＋桌面）同時開 ⇒ 後掛載嗰台會為「已經出過紙嘅線上單」再造一條廚房 job**（`ledger-pos-bridge.ts` L515-519 明文承認此邊界，商家口徑「寧多一張」）。雲端 DB 內容唯一鍵只擋得住 **relay 路徑**；若該台有 **Companion／native** 就會**本機直接出紙、完全繞過唯一鍵**（＝真・第二張紙）。根治方向（註釋自認「未做」）＝補印前喺**伺服器按 `order_id` 查一次 `pos_print_jobs`**。
 🔴 `/api/pos/state` 嘅 printJobs 映射**剝走 `template` 同 `content`**（egress 考量），而 `pos-app.tsx` `persistPrintJobs(payload.printJobs)` 會把雲端 job 種入本機 ⇒ 該類 job 喺預覽落兜底分支：硬寫店名**「門店」**、冇時間／預約時間／全單備註。**預覽唔等於出紙**，唔可以憑預覽差異推論印咗兩張。
 
+## 4.5 Realtime 重連（四個 hook 同一寫法）
+🔴🔴 **subscribe callback 第一行一定要有「現用 channel」守衛**：`if (cancelled || channel !== ch) return;`（`ch` ＝ 建立時 `const ch = supabase.channel(...)...`，之後 `channel = ch`）。亦有移除舊 channel 前**先清空變數**（`const stale = channel; channel = null; await removeChannel(stale)`）。
+病（2026-09-27 Ledger 配額事故）：`subscribe()` 開頭自己 `removeChannel(舊)` ⇒ supabase-js 會對**舊 channel** 送 `CLOSED`；四個 hook 都把 `CLOSED` 當斷線 ⇒ 死循環（移除→CLOSED→3 秒重連→再移除健康 channel→…），每圈 `SUBSCRIBED` 後 debounce 3 秒打一次增量 ⇒ 正式環境同一台 iPad 一日約 **1,980 次** `list_merchant_orders`（晚市每 6 秒一次）。**只要回前景一次就循環到關頁。**
+🔴 教訓：`use-pos-realtime`／`use-kds-realtime` 2026-09-15 已用「先清空變數再 await」**仍然中招** —— 清空只治**洩漏**，唔治**回授**；根治必須 callback 自比 `channel !== ch`。
+🔴 `CLOSED` **唔可以**為修迴圈而刪走（2026-09-15 加固：唔判 `CLOSED` ⇒ channel 一死就永久靜默、零 error）。
+守衛 `realtime-resubscribe-loop.test.ts`（21 條，含行為模擬＋對照組＋topic 唯一性）。
+🔴 topic 唯一性：`pos-ledger-orders:<merchantId>` 只有兩個消費者（`quick-online-orders-panel` 只喺 `/pos`／`online-orders` 只喺 `/orders`）⇒ **當前路由下唔會同頁**；同 topic 兩條 channel 會互相 `removeChannel` 踩死，一頁只准掛一個。
+
 ## 5 訂單／交班
 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱）。`print-xxxxxxxx`＝PrintJob 漏入 orders，已由 `order-id-guard` 擋住。🔴 三軌互不相干：`pos_shifts`（擋收銀台）／`pos_store_status.is_open`（線下）／Ledger `merchant_enabled`（線上）。總掣 `close-gate.ts`＋`close-gate-run.ts`：先線下後線上／線下失敗唔 return／null＝skipped／永不 throw；須排喺 `closeShift()` early return **之前**。🔴 `pos_store_status` 冇 row＝營業中；`pos_shifts` 冇 open row＝未開工（**方向相反**）。
 

@@ -67,12 +67,15 @@ export function useLedgerProductsRealtime(merchantId: string | null, enabled: bo
       if (cancelled) return;
 
       if (channel) {
-        await supabase.removeChannel(channel);
+        // 🔴 先清空變數再 await（2026-09-27）：見 `use-ledger-orders-realtime.ts` 同名詳解
+        // ——`removeChannel` 會令舊 channel 收 `CLOSED`，要喺 callback 靠 `channel !== ch` 忽略。
+        const stale = channel;
         channel = null;
+        await supabase.removeChannel(stale);
       }
 
       const filter = `merchant_id=eq.${merchantId}`;
-      channel = supabase
+      const ch = supabase
         .channel(`pos-ledger-products:${merchantId}`)
         .on(
           "postgres_changes",
@@ -82,26 +85,33 @@ export function useLedgerProductsRealtime(merchantId: string | null, enabled: bo
             const record = eventType === "DELETE" ? payload.old : payload.new;
             handlersRef.current.onChange({ record, eventType });
           },
-        )
-        .subscribe((status) => {
-          handlersRef.current.onStatusChange?.(status);
-          if (status === "SUBSCRIBED") {
-            // 連上就重置退避。
-            reconnectAttempt = 0;
-            return;
-          }
-          // 2026-09-15 加固：加埋 `CLOSED`（以前一入 CLOSED 就永久靜默，餐牌改動收唔到）。
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-            if (reconnectTimer) window.clearTimeout(reconnectTimer);
-            // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
-            const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
-            reconnectAttempt += 1;
-            reconnectTimer = window.setTimeout(() => {
-              reconnectTimer = null;
-              void subscribe();
-            }, delay);
-          }
-        });
+        );
+      channel = ch;
+      ch.subscribe((status) => {
+        /**
+         * 🔴🔴 2026-09-27 修正（Ledger 配額事故）：**只處理「現用」channel 嘅狀態**。
+         * 自己 `removeChannel` 換走嘅舊 channel 回 `CLOSED` ⇒ 忽略，唔可以當斷線排重連
+         * （否則形成「回前景 → 移除 → CLOSED → 3 秒後再移除健康 channel」嘅死循環）。
+         */
+        if (cancelled || channel !== ch) return;
+        handlersRef.current.onStatusChange?.(status);
+        if (status === "SUBSCRIBED") {
+          // 連上就重置退避。
+          reconnectAttempt = 0;
+          return;
+        }
+        // 2026-09-15 加固：加埋 `CLOSED`（以前一入 CLOSED 就永久靜默，餐牌改動收唔到）。
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          if (reconnectTimer) window.clearTimeout(reconnectTimer);
+          // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
+          const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
+          reconnectAttempt += 1;
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            void subscribe();
+          }, delay);
+        }
+      });
       } finally {
         subscribeInFlight = false;
       }

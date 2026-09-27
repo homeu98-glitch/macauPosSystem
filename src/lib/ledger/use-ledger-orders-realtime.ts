@@ -92,12 +92,16 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
       if (cancelled) return;
 
       if (channel) {
-        await supabase.removeChannel(channel);
+        // 🔴 先清空變數再 await（2026-09-27）：`removeChannel` 會令舊 channel 嘅
+        // subscribe callback 收到 `CLOSED`。我哋自己移除嘅 channel 唔應該觸發重連，
+        // 所以一定要喺 callback 入面靠 `channel !== ch` 分辨「舊」同「現用」。
+        const stale = channel;
         channel = null;
+        await supabase.removeChannel(stale);
       }
 
       const filter = `merchant_id=eq.${merchantId}`;
-      channel = supabase
+      const ch = supabase
         .channel(`pos-ledger-orders:${merchantId}`)
         .on(
           "postgres_changes",
@@ -116,27 +120,42 @@ export function useLedgerOrdersRealtime(merchantId: string | null, enabled: bool
             reportOrderRowKeysOnce(row);
             handlersRef.current.onUpdate(mapLedgerOrderRow(row));
           },
-        )
-        .subscribe((status) => {
-          handlersRef.current.onStatusChange?.(status);
-          if (status === "SUBSCRIBED") {
-            // 連上就重置退避。
-            reconnectAttempt = 0;
-            scheduleResubscribedSync();
-            return;
-          }
-          // 2026-09-15 加固：加埋 `CLOSED`（以前一入 CLOSED 就永久靜默收唔到新單）。
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-            if (reconnectTimer) window.clearTimeout(reconnectTimer);
-            // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
-            const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
-            reconnectAttempt += 1;
-            reconnectTimer = window.setTimeout(() => {
-              reconnectTimer = null;
-              void subscribe();
-            }, delay);
-          }
-        });
+        );
+      channel = ch;
+      ch.subscribe((status) => {
+        /**
+         * 🔴🔴 2026-09-27 修正（Ledger 配額事故）：**只處理「現用」channel 嘅狀態**。
+         *
+         * 病：`subscribe()` 開頭自己 `removeChannel(舊 channel)`，supabase-js 亦會對
+         * 舊 channel 嘅 subscribe callback 送 `CLOSED`。而下面又把 `CLOSED` 當「斷線要重連」
+         * ⇒ 形成死循環：回前景 → 移除舊 channel → 收 `CLOSED` → 排 3 秒重連 →
+         * 3 秒後又移除**剛建好嘅健康 channel** → 又 `CLOSED` → 無限循環。
+         * 每圈 `SUBSCRIBED` 後 debounce 3 秒就打一次 `list_merchant_orders`
+         * ⇒ 正式環境同一台 iPad 一日約 1,980 次（晚市高峰每 6 秒一次）。
+         *
+         * 修法：`channel !== ch` ＝ 呢條 callback 來自**已經被我哋換走嘅舊 channel**
+         * ⇒ 直接忽略（包括唔好排重連、唔好重置退避）。
+         */
+        if (cancelled || channel !== ch) return;
+        handlersRef.current.onStatusChange?.(status);
+        if (status === "SUBSCRIBED") {
+          // 連上就重置退避。
+          reconnectAttempt = 0;
+          scheduleResubscribedSync();
+          return;
+        }
+        // 2026-09-15 加固：加埋 `CLOSED`（以前一入 CLOSED 就永久靜默收唔到新單）。
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          if (reconnectTimer) window.clearTimeout(reconnectTimer);
+          // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
+          const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
+          reconnectAttempt += 1;
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            void subscribe();
+          }, delay);
+        }
+      });
       } finally {
         subscribeInFlight = false;
       }

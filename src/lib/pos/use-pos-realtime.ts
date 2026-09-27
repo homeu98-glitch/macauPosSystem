@@ -99,7 +99,7 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
       }
       if (cancelled || !supabase) return;
       const filter = `store_id=eq.${storeId}`;
-      channel = supabase
+      const ch = supabase
         .channel(`pos-realtime:${storeId}`)
         .on(
           "postgres_changes",
@@ -124,34 +124,48 @@ export function usePosRealtime(storeId: string | null, enabled: boolean, handler
             const row = payload.new as PosSoldoutRow;
             if (row && row.menu_item_id) handlersRef.current.onSoldoutUpsert?.(mapPosSoldoutRow(row));
           },
-        )
-        .subscribe((status) => {
-          handlersRef.current.onStatusChange?.(status);
-          if (status === "SUBSCRIBED") {
-            // 連上就重置退避，下次斷線由 3 秒重新開始。
-            reconnectAttempt = 0;
-            scheduleResubscribedSync();
-            return;
-          }
-          // 2026-09-15 加固：**加埋 `CLOSED`**。
-          //
-          // 以前只判 CHANNEL_ERROR / TIMED_OUT → channel 一旦入 `CLOSED`
-          // （socket 被伺服器關閉 / join 失敗）就**永遠唔會再訂閱**：
-          // 畫面照樣顯示已連線，但**永遠唔會再有事件** —— 同 docs/113
-          // 「Realtime 訂錯 Supabase 專案 = 靜默失效」同一型，只有 reload 或切前景才復原。
-          // （KDS 屏有 60 秒看門狗兜底，收銀台 `/` 冇有。）
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-            if (reconnectTimer) window.clearTimeout(reconnectTimer);
-            // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
-            // 舊行為係固定 3 秒無限重試：斷網時燒電、燒流量，而且冇任何 backoff 禮讓。
-            const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
-            reconnectAttempt += 1;
-            reconnectTimer = window.setTimeout(() => {
-              reconnectTimer = null;
-              void subscribe();
-            }, delay);
-          }
-        });
+        );
+      channel = ch;
+      ch.subscribe((status) => {
+        /**
+         * 🔴🔴 2026-09-27 修正（Ledger 配額事故，同型 bug）：**只處理「現用」channel 嘅狀態**。
+         *
+         * 上面 `subscribe()` 開頭自己 `removeChannel(舊 channel)` —— **即使已經「先清空變數
+         * 再 await」都唔夠**：舊 channel 嘅 subscribe callback 依然會收到 `CLOSED`，
+         * 而本 callback 以前冇分辨「係咪現用 channel」就把 `CLOSED` 當斷線排重連 ⇒
+         * 回前景一次就會形成「移除 → CLOSED → 3 秒後再移除健康 channel → CLOSED」死循環。
+         *
+         * 對照：`use-ledger-orders-realtime.ts` 同一寫法每日打咗約 1,980 次增量 RPC。
+         * 呢個 hook 嘅 `onResubscribed` 雖然有 15s/30s 間隔守衛，但死循環本身仍會
+         * 不停拆建 WebSocket（耗電／耗流量／拖慢事件送達），所以一併修。
+         */
+        if (cancelled || channel !== ch) return;
+        handlersRef.current.onStatusChange?.(status);
+        if (status === "SUBSCRIBED") {
+          // 連上就重置退避，下次斷線由 3 秒重新開始。
+          reconnectAttempt = 0;
+          scheduleResubscribedSync();
+          return;
+        }
+        // 2026-09-15 加固：**加埋 `CLOSED`**。
+        //
+        // 以前只判 CHANNEL_ERROR / TIMED_OUT → channel 一旦入 `CLOSED`
+        // （socket 被伺服器關閉 / join 失敗）就**永遠唔會再訂閱**：
+        // 畫面照樣顯示已連線，但**永遠唔會再有事件** —— 同 docs/113
+        // 「Realtime 訂錯 Supabase 專案 = 靜默失效」同一型，只有 reload 或切前景才復原。
+        // （KDS 屏有 60 秒看門狗兜底，收銀台 `/` 冇有。）
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          if (reconnectTimer) window.clearTimeout(reconnectTimer);
+          // 指數退避（3s → 6s → 12s → 24s → 30s 封頂）。
+          // 舊行為係固定 3 秒無限重試：斷網時燒電、燒流量，而且冇任何 backoff 禮讓。
+          const delay = Math.min(RECONNECT_DELAY_MS * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY_MS);
+          reconnectAttempt += 1;
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            void subscribe();
+          }, delay);
+        }
+      });
       } finally {
         subscribeInFlight = false;
       }
