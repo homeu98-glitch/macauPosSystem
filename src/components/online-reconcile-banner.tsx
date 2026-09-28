@@ -22,41 +22,41 @@ import {
  *
  * 商家只會見到「報表同實收夾唔埋」，無從判斷係計錯定漏單。
  *
+ * ## 2026-09-27 改（商家口徑：唔應該要商家撳）
+ *
+ * 商家原話：「商家不應該需要按這個」。所以**移除**「補建入 POS」按鈕 ——
+ * 補建改由系統自動完成（見 `ledger-pos-bridge` 嘅自動採納 ＋
+ * `/api/pos/reconcile-online` 嘅被動兜底），呢個元件**只負責顯示**。
+ *
+ * ⇒ 元件變回**純展示、零副作用**：冇 `onBackfill` 呼叫、冇 busy state、
+ *   冇結果訊息。任何殘留嘅未入帳單都會喺下一次自動補建節拍自行消失。
+ *
  * ## 顯示規則（冇事就完全唔 render —— 佈局零改動）
  *
  * | 情況 | 顯示 |
  * |---|---|
  * | Ledger 抓取 `error` / `skipped` | 紅色警示：今日線上金額可能不完整 |
- * | 有「已付款但 POS 冇單」 | 橙色警示 ＋ 「補建入 POS」按鈕 |
+ * | 有「已付款但 POS 冇單」 | 橙色警示（**純提示，冇按鈕**） |
  * | 兩者皆無 | `null`（唔佔位） |
  *
- * ⚠️ 呢個元件**唔會自己抓資料**（零新請求）：全部輸入由呼叫端已經抓到嘅資料推導。
- *    補建亦只喺用戶主動撳先發生（一次 `get_order_detail` ＋ 一次上雲 sync）。
+ * ⚠️ 呢個元件**唔會自己抓資料、唔會自己寫資料**（零請求、零副作用）：
+ *    全部輸入由呼叫端已經抓到嘅資料推導。
  */
 export type OnlineReconcileBannerProps = {
   reconcile: OnlineReconcile;
   fetchStatus: OnlineFetchStatus;
   fetchError?: string | null;
-  /** 補建進行中（防連點）。 */
-  busy?: boolean;
-  /** 撳「補建入 POS」；冇傳 = 只顯示、唔提供動作（例如交班唯讀視圖）。 */
-  onBackfill?: () => void;
-  /** 補建結果說明（成功／失敗），由呼叫端提供。 */
-  backfillMessage?: string | null;
 };
 
 export function OnlineReconcileBanner({
   reconcile,
   fetchStatus,
   fetchError,
-  busy = false,
-  onBackfill,
-  backfillMessage,
 }: OnlineReconcileBannerProps) {
   const warning = onlineFetchWarning(fetchStatus, fetchError ?? null);
   const notice = unadoptedNotice(reconcile);
 
-  if (!warning && !notice && !backfillMessage) return null;
+  if (!warning && !notice) return null;
 
   return (
     <div className="space-y-2">
@@ -81,8 +81,8 @@ export function OnlineReconcileBanner({
             {reconcile.unadoptedCount > 0 ? (
               <>
                 {" "}
-                未補建前，交班／「線下訂單」／對帳都唔會見到呢
-                {reconcile.unadoptedCount} 張單。
+                呢批單嘅錢已經計入線上實收，但 POS 訂單庫未有記錄 ⇒
+                交班／「線下訂單」／對帳暫時都見唔到。系統會自動補入，唔需要手動處理。
               </>
             ) : null}
           </div>
@@ -98,22 +98,6 @@ export function OnlineReconcileBanner({
               {formatMoney(reconcile.unadoptedAmountMop)}
             </div>
           ) : null}
-          {onBackfill ? (
-            <button
-              type="button"
-              onClick={onBackfill}
-              disabled={busy}
-              className="mt-2 inline-flex min-h-[44px] items-center rounded-lg bg-amber-600 px-4 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy ? "補建中…" : `補建入 POS（${reconcile.unadoptedCount} 張）`}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {backfillMessage ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
-          {backfillMessage}
         </div>
       ) : null}
     </div>

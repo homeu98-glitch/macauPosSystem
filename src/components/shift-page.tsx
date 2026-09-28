@@ -1820,7 +1820,8 @@ export function ShiftPage() {
               {/* P0（2026-09-24）：Ledger 已付款、但 POS 訂單庫冇記錄嘅單。
                   以前完全冇提示 ⇒ 商家只會見到「交班／報表同實收夾唔埋」，無從判斷成因
                   （2026-09-24 實案：表嫂美食取餐碼 001 · MOP 43 · 餘額扣點）。
-                  補建入口喺「營業報表 → 訂單明細」上方同一個警示條。 */}
+                  🔴 2026-09-27：補建已改為**系統自動**（商家唔需要撳任何掣），
+                     所以呢度維持純提示、唔再指向任何按鈕。 */}
               {onlineReconcile.unadoptedCount > 0 ? (
                 <div
                   role="alert"
@@ -1829,8 +1830,8 @@ export function ShiftPage() {
                   <div className="font-semibold">有線上單未入 POS 記錄</div>
                   <div className="mt-0.5">
                     {unadoptedNotice(onlineReconcile)}
-                    呢批單嘅錢已經計入上面「線上」實收，但 POS 訂單庫冇記錄 ⇒
-                    「線下訂單」／對帳／明細都見唔到。可喺「營業報表 → 訂單明細」上方一鍵補建入 POS。
+                    呢批單嘅錢已經計入上面「線上」實收，但 POS 訂單庫未有記錄 ⇒
+                    「線下訂單」／對帳／明細暫時見唔到。系統會自動補入，唔需要手動處理。
                   </div>
                 </div>
               ) : null}

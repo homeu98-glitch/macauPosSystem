@@ -1238,6 +1238,29 @@ export interface PosOrder {
     excluded?: boolean;
   }>;
   /**
+   * 外賣平台**實收**金額（0060 migration，2026-09-26）。
+   * ＝ 平台扣服務費後過數嘅錢（mfood `storeReceiveAmtn`）。
+   *
+   * ── 為咩要有（使用者 2026-09-26 需求）──────────────────────────────
+   * `total`（營業額）係**客付**金額；`platformNetAmount` 係**平台過數**金額。
+   * 兩者唔同，差額 ＝ 平台抽成。報表 MFOOD 區塊嘅「差額率」就係計呢個。
+   *
+   * 🔴 `undefined` ＝ **未對帳**（平台帳期未出），**唔可以當 0**：
+   *    顯示 `MOP 0.00` 會令店員以為平台冇畀錢而去追數。
+   *    店內單 / 線上單永遠 undefined。
+   */
+  platformNetAmount?: number;
+  /**
+   * 外賣平台**補貼後實收**（0060 migration，2026-09-26）＝ 真正到帳金額。
+   * 冇補貼時等於 `platformNetAmount`。UI 顯示「實際到帳」用呢個（`actualPayout()`）。
+   */
+  platformSubsidyNet?: number;
+  /**
+   * 收到平台結算資料嘅時間（0060 migration，2026-09-26）。
+   * 有值 ＝ 已對帳；`undefined` ＝ 待對帳。
+   */
+  platformSettledAt?: string;
+  /**
    * 系統抹零（金額，例如 0.4）。total = subtotal - discount - rounding。
    * 收據「系統抹零」區段負值顯示；舊單（schema 升級前）冇呢個 field → 收據自動 hidden。
    * 見 docs/88。
@@ -1256,6 +1279,17 @@ export interface PosOrder {
   total: number;
   prepaidAmount?: number;
   onlineOrderId?: string;
+  /**
+   * 平台／外部系統嘅訂單號（＝ `pos_orders.external_order_id`，0055 migration）。
+   *
+   * 外賣平台單（澳覓 / MFOOD）由 grabber 寫入平台自己嘅單號
+   * （例：mfood `#1` / 澳覓 `463403`）。店內單 / 線上單永遠 undefined。
+   *
+   * 🔴 為咩要拉入 `PosOrder`：平台結算（0060）就係用呢個號配對
+   *    （`/api/integration/grabber/settlement` 按 `(store_id, source, external_order_id)` 搵單），
+   *    而且店員要攞住佢去平台後台對數。冇咗呢欄，POS 側完全睇唔到平台單號。
+   */
+  externalOrderId?: string;
   /**
    * 預約取餐時間（ISO 8601）—— Ledger `scheduled_pickup_at` 嘅本地投影鏡像。
    *

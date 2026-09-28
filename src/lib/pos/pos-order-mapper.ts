@@ -88,6 +88,23 @@ export interface PosOrderRow {
    *    被 realtime 行（冇呢欄）整唔見 ⇒ 跨日漂移保護失效。
    */
   settled_at?: string | null;
+  /**
+   * 外賣平台結算金額（0060 migration，2026-09-26）。
+   *
+   * 🔴 Realtime echo 係本機被雲端覆蓋嘅主要途徑 —— 漏 map 的話，
+   *    KDS／收銀台嘅 realtime 行會冇呢幾欄 ⇒ 已經對好帳嘅實收「閃返待對帳」。
+   *    同 0038 `member_*` / 0043 `reopen_*` 一模一樣嘅漏抄型 bug。
+   */
+  platform_net_amount?: number | string | null;
+  platform_subsidy_net?: number | string | null;
+  platform_settled_at?: string | null;
+  /**
+   * 平台／外部訂單號（0055 migration）。
+   *
+   * 🔴 同 `platform_net_amount` 一齊要 map：real-time 行如果冇呢欄，
+   *    收銀台平台單嘅「平台單號」會閃返空白（店員冇得同平台後台對數）。
+   */
+  external_order_id?: string | null;
 }
 
 export function mapPosOrderRow(row: PosOrderRow): PosOrder {
@@ -111,6 +128,9 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     total: Number(row.total ?? 0),
     prepaidAmount: Number(row.prepaid_amount ?? 0),
     onlineOrderId: row.online_order_id ?? undefined,
+    // 平台／外部訂單號（0055）：冇欄 / NULL → undefined（店內單零影響）。
+    // 🔴 漏抄 = 平台單嘅平台單號喺 KDS／realtime 行消失（同 platform_fees 同型）。
+    externalOrderId: row.external_order_id ?? undefined,
     // 未跑 migration / 舊列會冇 source → fallback "pos"（收銀台落單，唔顯示來源標記）
     source: (row.source as PosOrder["source"]) ?? "pos",
     // 入座人數：冇欄 / NULL → undefined（前端「--」可改）。見 docs/89 §3。
@@ -137,7 +157,20 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     reopenReason: row.reopen_reason ?? undefined,
     // 不可變業務時間（0057）：冇欄 / NULL → undefined（orderEventInstant 落返舊鏈）。
     settledAt: row.settled_at ?? undefined,
+    // 外賣平台結算金額（0060）：冇欄 / NULL → undefined。
+    // 🔴 唔可以用 `?? 0`：「未對帳」唔等於「實收 0」，填 0 會令店員去追平台數。
+    //    PostgREST 回 numeric 可能係字串，一律經 Number() 轉。
+    platformNetAmount: numOrUndef(row.platform_net_amount),
+    platformSubsidyNet: numOrUndef(row.platform_subsidy_net),
+    platformSettledAt: row.platform_settled_at ?? undefined,
   };
+}
+
+/** 可選金額 → `number` | `undefined`（`null` / `""` / `NaN` 一律當「冇值」，唔當 0）。 */
+function numOrUndef(value: number | string | null | undefined): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 /** `pos_print_jobs` 資料表 row → `PrintJob`。 */

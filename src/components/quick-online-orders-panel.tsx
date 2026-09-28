@@ -11,6 +11,7 @@ import {
 } from "@/components/scheduled-pickup-badge";
 import { TableAssignModal, type AssignableTable } from "@/components/table-assign-modal";
 import { assignLedgerOrderToTable, adoptLedgerOrderAsQuickCounter, ensureKitchenPrintForLedgerOrderOnce, printKitchenForLedgerOrder } from "@/lib/ledger/ledger-pos-bridge";
+import { useAdoptCompletedLedgerOrders } from "@/lib/pos/use-adopt-completed-ledger-orders";
 import {
   isOnlineDineIn,
   needsTableAssignment,
@@ -556,6 +557,25 @@ export function QuickOnlineOrdersPanel({
     // （每次 render identity 都變）→ 放入去會令呢個 effect 每次 render 都重跑。
     // 用 ref 保持最新實作，效果一樣但唔會無謂重算。
   }, [ledgerOrders, loading]);
+
+  /**
+   * 🔴 2026-09-27 新增（商家口徑：「商家唔應該需要按呢個」）：
+   * 自動補建「Ledger 已完成 ＋ 已付款、但 POS 從未入帳」嘅漏帳單。
+   *
+   * ⚠️ 呢個 hook **只新增**，唔改上面任何既有 effect／handler。
+   * ⚠️ 補建一律 `skipPrint`（由 `adoptCompletedLedgerOrderToLocal` 內部處理）
+   *    ⇒ **唔會重新出紙**，同上面嘅廚房單兜底互不干擾。
+   * 詳見 `@/lib/pos/use-adopt-completed-ledger-orders` 檔頭（三條鐵律）。
+   */
+  useAdoptCompletedLedgerOrders({
+    ledgerOrders,
+    loading,
+    merchantId,
+    adopt: async (order) => {
+      const { adoptCompletedLedgerOrderToLocal } = await import("@/lib/ledger/ledger-pos-bridge");
+      return adoptCompletedLedgerOrderToLocal({ ledgerOrder: order });
+    },
+  });
 
   const runAction = useCallback(
     async (order: LedgerOnlineOrder, action: OnlineOrderAction) => {

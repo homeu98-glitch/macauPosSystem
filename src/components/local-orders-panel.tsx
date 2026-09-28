@@ -12,6 +12,7 @@ import { StoreOpenPill } from "@/components/store-open-pill";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
+import { PlatformSettlementBreakdown } from "@/components/platform-settlement-breakdown";
 import { ReopenBadge } from "@/components/reopen-badge";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import {
@@ -1053,6 +1054,12 @@ export function LocalOrdersPanel({
                 2026-09-24 使用者要求 —— 之前只喺收據印，訂單詳情完全睇唔到，
                 令佢以為插件冇推到。店內單冇 `platformFees` → 組件自己唔 render。 */}
             <PlatformFeeBreakdown currency={currency} fees={viewingOrder.platformFees} />
+            {/* 平台實收（2026-09-26 需求）：營業額 vs 平台實際過數。
+                🔴 只喺平台單出現 —— 店內單／線上單唔應該見到「待對帳」提示，
+                   否則店員會以為自己啲單有問題。 */}
+            {isPlatformOrder(viewingOrder) ? (
+              <PlatformSettlementBreakdown order={viewingOrder} currency={currency} />
+            ) : null}
             <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
               <span>總計</span>
               <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</span>
@@ -1228,6 +1235,14 @@ export function LocalOrdersPanel({
               </div>
             ) : null}
             <ReceiptTicketPreview order={receiptPreviewOrder} />
+            {/* 平台實收（2026-09-28）：已結帳嘅平台單，列表「查看」開嘅係**收據預覽**
+                （見上面 L741：`status === "settled"` 刻意跳過詳情彈窗）——
+                即係話平台單**永遠入唔到**詳情彈窗嗰邊嘅平台實收區塊。
+                唔喺呢度補返，商戶就完全睇唔到「呢張平台單實收幾多」（最介意嘅一種「睇唔到」）。
+                🔴 只喺平台單出現 —— 店內單冇 externalOrderId 亦冇結算欄位。 */}
+            {isPlatformOrder(receiptPreviewOrder) ? (
+              <PlatformSettlementBreakdown order={receiptPreviewOrder} currency={currency} />
+            ) : null}
             {hasReceivableReceipt(receiptPreviewOrder) ? (
               <button
                 type="button"

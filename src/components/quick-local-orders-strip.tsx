@@ -6,7 +6,8 @@ import { PosOrder } from "@/lib/types";
 import { formatMoney, formatMacauTime } from "@/lib/format";
 import { compareOrderByLocalNo, getPaymentBadge, isQuickCounterOrder, isQuickOrderReady } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
-import { canVoidPlatformOrder } from "@/lib/pos/platform-order";
+import { canVoidPlatformOrder, isPlatformOrder } from "@/lib/pos/platform-order";
+import { actualPayout } from "@/lib/pos/platform-settlement";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
@@ -190,10 +191,29 @@ function OrderCard({
             const itemSaving = orderItemDiscountTotal(order.items);
             const wholeSaving = Math.max(0, order.discountAmount ?? 0);
             const totalSaving = itemSaving + wholeSaving;
+            // 🔴 平台實收（2026-09-26 需求）：卡片地方細，只喺已對帳時
+            //    喺金額下面加一行細字「實收 X」，唔加區塊。
+            //    未對帳唔顯示任何嘢 —— 卡片冇位解釋「待對帳」，
+            //    解釋留返訂單詳情（嗰度有完整區塊）。
+            const payout = isPlatformOrder(order)
+              ? actualPayout({
+                  netAmount: order.platformNetAmount ?? null,
+                  subsidyNet: order.platformSubsidyNet ?? null,
+                })
+              : null;
+            const payoutLine =
+              payout !== null && order.platformSettledAt ? (
+                <div className="text-[10px] tabular-nums text-emerald-700">
+                  實收 {formatMoney(payout, currency)}
+                </div>
+              ) : null;
             if (totalSaving <= 0) {
               return (
-                <div className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
-                  {formatMoney(order.total, currency)}
+                <div className="shrink-0 text-right">
+                  <div className="text-sm font-bold tabular-nums text-slate-900">
+                    {formatMoney(order.total, currency)}
+                  </div>
+                  {payoutLine}
                 </div>
               );
             }
@@ -203,6 +223,7 @@ function OrderCard({
               <div className="shrink-0 text-right">
                 <div className="text-sm font-bold tabular-nums text-amber-700">{formatMoney(order.total, currency)}</div>
                 <div className="text-[10px] tabular-nums text-slate-400 line-through">{formatMoney(original, currency)}</div>
+                {payoutLine}
               </div>
             );
           })()}

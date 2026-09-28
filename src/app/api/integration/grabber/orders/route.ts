@@ -39,6 +39,15 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
  *   `GRABBER_SHARED_SECRET`（環境變數）↔ 插件 `background.js` 嘅
  *   `POS_SHARED_SECRET`，兩邊要一樣。用 constant-time 比對。
  *   插件目前發嘅 header 名係 `X-Grabber-Secret`（見 `grabPush()`）。
+ *
+ * ── 🔴 結算欄位（0060）刻意唔喺呢條 route 寫 ─────────────────────────
+ *   `platform_net_amount` / `platform_subsidy_net` / `platform_settled_at`
+ *   由 `/api/integration/grabber/settlement` **單獨**寫入（UPDATE 語意）。
+ *   呢條 route 係 `DO NOTHING`（唔覆蓋已存在嘅列）⇒ 就算插件誤將結算欄位
+ *   塞入 `orders` payload，因為**列已存在**（平台單先入單後對帳），
+ *   嗰次寫入會被整條 skip ⇒ 結算欄位唔會經呢個途徑被覆蓋。
+ *   `projectGrabberOrder()` 嘅 `GrabberOrderRow` 亦**冇**呢三個欄位
+ *   （型別層面已經擋住），所以連「誤塞」都送唔到落 DB。
  */
 
 /** 限流：每分鐘 60 次（插件每 5 秒抓一次，一張單可能分列表＋詳情兩次送）。 */

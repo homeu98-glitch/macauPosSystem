@@ -63,6 +63,7 @@ function fullRow(): PosOrderDbRow {
     prepaid_amount: 0,
     online_order_id: null,
     source: "pos",
+    external_order_id: "PLATFORM-20260920001",
     party_size: 2,
     comp_note: null,
     comped_at: null,
@@ -227,5 +228,25 @@ describe("settled_at（0057 不可變業務時間）唔可以再漏抄", () => {
     const noCol = { ...fullRow() } as Record<string, unknown>;
     delete noCol.settled_at;
     assert.equal(mapOrderRow(noCol as PosOrderDbRow).settledAt, undefined);
+  });
+});
+
+describe("external_order_id（平台訂單號）唔可以漏抄", () => {
+  it("清單一定要有 external_order_id（否則 PostgREST 根本唔會 select 佢）", () => {
+    assert.ok(
+      (POS_ORDER_DB_COLUMNS as readonly string[]).includes("external_order_id"),
+      "POS_ORDER_DB_COLUMNS 缺 external_order_id —— 平台結算配對會靜默失效",
+    );
+  });
+
+  it("有值 → 一定 map 出 externalOrderId（平台對帳／對數靠佢）", () => {
+    assert.equal(mapOrderRow(fullRow()).externalOrderId, "PLATFORM-20260920001");
+  });
+
+  it("NULL / 未跑 migration（undefined）→ undefined（店內單零影響）", () => {
+    assert.equal(mapOrderRow({ ...fullRow(), external_order_id: null }).externalOrderId, undefined);
+    const noCol = { ...fullRow() } as Record<string, unknown>;
+    delete noCol.external_order_id;
+    assert.equal(mapOrderRow(noCol as PosOrderDbRow).externalOrderId, undefined);
   });
 });

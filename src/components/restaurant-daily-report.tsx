@@ -41,6 +41,11 @@ import {
 import { formatMoney } from "@/lib/format";
 import { buildOnlineOrderDetailNotes, buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
+// 外賣平台結算（2026-09-26）：報表 10 格下方「MFOOD 區塊」三格。
+// 🔴 計算一律經 `computeMfoodTotals()`（純函式、有單測），唔可以喺呢度另寫一套
+//    —— 部分對帳嘅「分子分母要同一批」判斷好易寫錯（見該函式註釋）。
+import { computeMfoodTotals } from "@/lib/pos/platform-settlement";
+import { isPlatformOrderSource } from "@/lib/pos/platform-order";
 // P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
 // ⚠️ 補建函式（`ledger-pos-bridge`）刻意用**動態 import** —— 佢係大模組，
 //    唔應該為咗一個罕用按鈕而加進報表頁嘅初始 bundle。
@@ -1096,12 +1101,24 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
    *  否則會清空 orders → 全頁 skeleton 閃一下（正正就係要避免嘅嘢）。 */
   const refreshToken = props.refreshToken ?? 0;
   /**
-   * P1 補建後嘅軟刷新信號（2026-09-24）。
+   * 自動補建後嘅軟刷新信號（2026-09-24 引入 · 2026-09-27 改為自動觸發）。
    *
    * **唔另開請求路徑** —— 只係令下面三條 fetch effect 重跑一次（同外殼 `refreshToken`
-   * 完全同一個機制）。補建係罕見動作（正常一日 0–1 張），所以唔會造成持續流量。
+   * 完全同一個機制）。
+   *
+   * 🔴 2026-09-27：補建已改為**系統自動**（見 `use-adopt-completed-ledger-orders`），
+   * 所以刷新信號改為訂閱 `pos-orders-changed`（`saveOrders()` 會派發）——
+   * 自動補建一寫入本機，呢頁就自動重算，提示條隨之消失，商家唔需要撳任何掣。
+   * ⚠️ 呢個 listener 零成本（只加一個計數），冇補建時等於唔存在。
    */
   const [reconcileRefresh, setReconcileRefresh] = useState(0);
+  useEffect(() => {
+    function onLocalOrdersChanged() {
+      setReconcileRefresh((count) => count + 1);
+    }
+    window.addEventListener("pos-orders-changed", onLocalOrdersChanged);
+    return () => window.removeEventListener("pos-orders-changed", onLocalOrdersChanged);
+  }, []);
   /** 合成刷新鍵：外殼軟刷新 ＋ 補建後刷新。三條 fetch effect 一律依賴呢個。 */
   const refreshKey = refreshToken * 1000 + reconcileRefresh;
   const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
@@ -1974,55 +1991,18 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     [countableOnlineOrders, orders],
   );
 
-  /** P1 補建狀態（busy 防連點；message 顯示結果）。 */
-  const [backfillBusy, setBackfillBusy] = useState(false);
-  const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
-
   /**
-   * P1 補建（2026-09-24）：把「Ledger 已完成＋已付款、但 POS 冇記錄」嘅單
-   * 補建成本地 `settled` 單並推上雲。
+   * 2026-09-27 改（商家口徑：「商家不應該需要按這個」）。
    *
-   * 流量足跡（**只喺用戶主動撳先發生**，唔會週期性重複）：
-   * - 每張單 1 次 `get_order_detail`（Ledger RPC）；
-   * - 每張單 1 次 `saveOrders()`（本機）＋ 1 批 outbox 上雲（`POST /api/pos/sync`）；
-   * - 完成後 1 次軟刷新（重跑既有三條 effect），**唔新增任何請求路徑**。
+   * 舊寫法喺呢度有個手動「補建入 POS」按鈕（`handleBackfillUnadopted`）＋ busy／message
+   * 兩個 state。補建已改由**系統自動**完成：
+   *   - (a) 主動採納：見 `online-orders.tsx`／`quick-online-orders-panel.tsx` 嘅自動採納 effect；
+   *   - (b) 被動兜底：見 `/api/pos/reconcile-online` ＋ `pos-app.tsx` 嘅對數節拍。
+   * ⇒ 呢頁只保留**純提示**（`OnlineReconcileBanner`），按鈕已移除。
    *
-   * 正常情況（冇漏帳）呢個按鈕根本唔會出現 ⇒ **日常流量零變化**。
+   * ⚠️ `posOnlineIds` / `countableOnlineOrders` 嘅「併本機全量」防線**唔可以拆**
+   *    （2026-09-24 事故，見上面註釋）—— 佢係防止「舊日單被誤判漏帳」嘅唯一保障。
    */
-  const handleBackfillUnadopted = useCallback(async () => {
-    if (backfillBusy) return;
-    const targets = countableOnlineOrders;
-    if (targets.length === 0) return;
-    setBackfillBusy(true);
-    setBackfillMessage(null);
-    try {
-      // 動態 import：`ledger-pos-bridge` 係大模組，唔應該加進報表頁初始 bundle。
-      const { adoptCompletedLedgerOrderToLocal } = await import("@/lib/ledger/ledger-pos-bridge");
-      let done = 0;
-      let skipped = 0;
-      let failed = 0;
-      for (const order of targets) {
-        try {
-          const result = await adoptCompletedLedgerOrderToLocal({ ledgerOrder: order });
-          if (result) done += 1;
-          else skipped += 1;
-        } catch {
-          failed += 1;
-        }
-      }
-      const parts = [`已補建 ${done} 張`];
-      if (skipped > 0) parts.push(`略過 ${skipped} 張（未付款／未完成）`);
-      if (failed > 0) parts.push(`失敗 ${failed} 張（可再撳一次重試）`);
-      setBackfillMessage(
-        `${parts.join("、")}。補建單會即時上雲，報表／交班／線下訂單／對帳之後都會見到。`,
-      );
-      setReconcileRefresh((v) => v + 1);
-    } catch (err) {
-      setBackfillMessage(`補建失敗：${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBackfillBusy(false);
-    }
-  }, [backfillBusy, countableOnlineOrders]);
 
   // Ledger 線上單明細：對「可計入」嘅線上單逐張抓 get_order_detail，
   // 令菜品銷售排行可以涵蓋從未入 POS DB 嘅線上單（快閃餐／線上點餐）。
@@ -2208,6 +2188,43 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       source: "ledger" as const,
     };
   }, [orders, range, agg.revenue, agg.ledgerOnlyPaidTotal, agg.ledgerOnlyCount]);
+
+  /**
+   * 外賣平台（MFOOD / 澳覓）結算統計 —— 報表 10 格下方「MFOOD 區塊」用。
+   *
+   * ── 為咩要獨立一組（2026-09-26 使用者需求）──────────────────────────
+   * 原本 10 格嘅「營業額」係**客付**金額，平台單嘅錢其實係**平台收**，
+   * 商家真正落袋嘅係扣費後過數嘅錢。兩個數唔同，差額＝平台抽成。
+   * 使用者要一眼睇到「平台食幾多」⇒ 應收／實收／差額率三格。
+   *
+   * ── 口徑（使用者原話）──────────────────────────────────────────────
+   *   「第三格為實收與營業額的差額率，例如營業額 100、實收 50 即 50%」
+   *   ⇒ `1 − 實收 ÷ 應收`。
+   *
+   * ── ⚠️ 唔放入原本 10 格 ────────────────────────────────────────────
+   * KPI 帶固定 5 欄、格數必須係 5 嘅倍數（2026-09-10 / 09-11 中過兩次），
+   * 加格會令尾行殘缺。所以另開獨立區塊。
+   *
+   * ── 🔴 部分對帳嘅陷阱 ─────────────────────────────────────────────
+   * `computeMfoodTotals()` 內部已處理「分子分母要同一批」（見該函式註釋）。
+   * 呢度只負責餵「已計入銷售嘅平台單」。
+   */
+  const mfoodSettlement = useMemo(() => {
+    // 只計平台單（source = aomi / mfood），且要同報表口徑一致：
+    // 已計入銷售 ＋ 命中查詢區間。（未結帳／已作廢嘅平台單唔應該計。）
+    const platformOrders = orders
+      .filter((o) => isSaleCountable(o))
+      .filter((o) => orderMatchesReportRange(o, range))
+      .filter((o) => isPlatformOrderSource(o.source));
+
+    return computeMfoodTotals(platformOrders, (o) => {
+      // 由訂單拎佢嘅結算金額。冇（未對帳）→ null。
+      const net = o.platformNetAmount;
+      const sub = o.platformSubsidyNet;
+      if (net === undefined && sub === undefined) return null;
+      return { netAmount: net ?? null, subsidyNet: sub ?? null };
+    });
+  }, [orders, range]);
 
   /**
    * 未結帳訂單統計（2026-09-07 新增）。
@@ -2716,6 +2733,115 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 </div>
             </>
 
+            {/* 🔴 外賣平台結算區塊（2026-09-26 使用者需求）—— 刻意**唔放入**上面 10 格。
+                KPI 帶固定 5 欄、格數必須係 5 嘅倍數（2026-09-10 / 09-11 中過兩次：
+                加一格會令尾行殘缺）。另開獨立區塊既可加三格，又唔會破壞原版面，
+                仲可以喺標題交代「非即時」。
+
+                ⚠️ 只喺區間內**有平台單**時才 render ——
+                    冇平台單嘅店（只做堂食）完全唔會見到呢個區塊，零視覺影響。 */}
+            {mfoodSettlement.receivable > 0 || mfoodSettlement.settledCount > 0 ? (
+              <div className="mb-4 overflow-hidden rounded-xl border border-emerald-200">
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-emerald-800 to-emerald-600 px-4 py-2.5">
+                  <span className="flex items-center gap-2 text-sm font-bold text-white">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                    外賣平台結算
+                  </span>
+                  <span className="text-[11px] font-semibold text-emerald-100">
+                    資料來源：平台財務對帳（非即時）
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 divide-x divide-slate-200">
+                  {/* ① 應收金額（＝營業額總和，POS 即時有） */}
+                  <div className="px-4 py-3">
+                    <div className="text-[11.5px] font-semibold text-slate-500">應收金額</div>
+                    <div className="mt-1 truncate text-xl font-bold tabular-nums text-slate-900">
+                      {formatMoney(mfoodSettlement.receivable)}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      平台單營業額總和（POS 即時，共{" "}
+                      {mfoodSettlement.settledCount + mfoodSettlement.pendingCount} 張）
+                    </div>
+                  </div>
+
+                  {/* ② 實收金額（＝平台到帳總和） */}
+                  <div className="px-4 py-3">
+                    <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500">
+                      實收金額
+                      {mfoodSettlement.received === null ? (
+                        <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                          待對帳
+                        </span>
+                      ) : mfoodSettlement.pendingCount > 0 ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                          部分未對帳
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                          已對帳
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className={`mt-1 truncate text-xl font-bold tabular-nums ${
+                        mfoodSettlement.received === null ? "text-slate-300" : "text-emerald-700"
+                      }`}
+                    >
+                      {mfoodSettlement.received === null ? "—" : formatMoney(mfoodSettlement.received)}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      {mfoodSettlement.received === null
+                        ? "平台帳期未生成，對帳後自動補上"
+                        : `平台實際到帳總和（已配對 ${mfoodSettlement.settledCount} 張${
+                            mfoodSettlement.pendingCount > 0
+                              ? `，另 ${mfoodSettlement.pendingCount} 張未對帳`
+                              : ""
+                          }）`}
+                    </div>
+                  </div>
+
+                  {/* ③ 差額率（＝平台抽成比例） */}
+                  <div className="px-4 py-3">
+                    <div className="text-[11.5px] font-semibold text-slate-500">平台差額率</div>
+                    <div
+                      className={`mt-1 truncate text-xl font-bold tabular-nums ${
+                        mfoodSettlement.feeRate === null ? "text-amber-600" : "text-violet-700"
+                      }`}
+                    >
+                      {mfoodSettlement.feeRate === null
+                        ? "待對帳"
+                        : `${(mfoodSettlement.feeRate * 100).toFixed(1)}%`}
+                    </div>
+                    {mfoodSettlement.feeRate === null ? (
+                      <div className="mt-1 text-[11px] text-slate-400">
+                        冇實收就計唔到差額率（唔會用 0 濫竽充數）
+                      </div>
+                    ) : (
+                      <>
+                        {/* 比例條：左邊實收（淺）、右邊平台抽成（深） */}
+                        <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                          <span
+                            className="block bg-violet-300"
+                            style={{ width: `${(1 - mfoodSettlement.feeRate) * 100}%` }}
+                          />
+                          <span
+                            className="block bg-violet-600"
+                            style={{ width: `${mfoodSettlement.feeRate * 100}%` }}
+                          />
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-400">
+                          1 − {mfoodSettlement.received !== null ? formatMoney(mfoodSettlement.received) : "—"} ÷{" "}
+                          {formatMoney(mfoodSettlement.receivable)}
+                          {mfoodSettlement.pendingCount > 0 ? "（只計已對帳嗰批）" : ""}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {/* 🔴 2026-09-17 退貨修復（口徑 D）；2026-09-19 **改為無條件顯示**。
                 KPI 帶係固定 5 欄，唔可以為咗退款另開卡片（格數會唔係 5 嘅倍數）。
                 所以退款拆解獨立成呢條橫幅。
@@ -2768,15 +2894,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               預設只出頭 ORDER_DETAIL_PREVIEW 行 + 「顯示全部」，否則逐筆列表會佔滿首屏，
               把下面所有區塊（菜品排行、食材消耗…）推到很遠。
             */}
-            {/* P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
-                冇警示／冇漏帳時整個元件 render `null` ⇒ 佈局零改動。 */}
+            {/* P0（2026-09-24，2026-09-27 改為純提示）：線上單對數警示。
+                冇警示／冇漏帳時整個元件 render `null` ⇒ 佈局零改動。
+                🔴 補建按鈕已移除（商家口徑「唔應該要商家撳」）—— 自動化路徑見
+                   `pos-app.tsx` 嘅對數節拍 ＋ `/api/pos/reconcile-online`。 */}
             <OnlineReconcileBanner
               reconcile={onlineReconcile}
               fetchStatus={onlineFetchInfo.status}
               fetchError={onlineFetchInfo.lastError}
-              busy={backfillBusy}
-              onBackfill={handleBackfillUnadopted}
-              backfillMessage={backfillMessage}
             />
 
             <Card

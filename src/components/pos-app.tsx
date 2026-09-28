@@ -14,6 +14,7 @@ import { NoticeFocusCard } from "@/components/notice-focus-card";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
 import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
+import { PlatformSettlementBreakdown } from "@/components/platform-settlement-breakdown";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import {
   PLATFORM_VOID_DEFAULT_REASON,
@@ -7308,6 +7309,15 @@ export function PosApp() {
                 <span>總計</span>
                 <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>
               </div>
+              {/* 平台實收（2026-09-26 需求）：營業額 vs 平台實際過數。
+                  🔴 同 local-orders-panel 用同一組件 —— 兩邊唔可以各寫一套口徑。
+                  🔴 只喺平台單出現（店內單／線上單唔應該見到「待對帳」）。 */}
+              {isPlatformOrder(viewingOrder) ? (
+                <PlatformSettlementBreakdown
+                  order={viewingOrder}
+                  currency={bootstrap.currency}
+                />
+              ) : null}
               {viewingOrder.orderNote ? (
                 <div className="mt-2 text-sm text-slate-500">
                   全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
