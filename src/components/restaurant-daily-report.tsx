@@ -50,6 +50,7 @@ import { isPlatformOrderSource } from "@/lib/pos/platform-order";
 // ⚠️ 補建函式（`ledger-pos-bridge`）刻意用**動態 import** —— 佢係大模組，
 //    唔應該為咗一個罕用按鈕而加進報表頁嘅初始 bundle。
 import { OnlineReconcileBanner } from "@/components/online-reconcile-banner";
+import { InfoBubble } from "@/components/info-bubble";
 import { reconcileOnlineOrders } from "@/lib/pos/online-reconcile";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import { readNetworkOnline } from "@/lib/use-network-online";
@@ -2573,6 +2574,31 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     highlight
                     delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
                     subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    /*
+                     * 🔴 2026-09-28（J 口徑）：退款資訊由常駐橫幅收埋成呢個小球。
+                     * 按下才彈，顯示「退款多少」即可；冇退款時球照在、內容寫 0。
+                     * ⚠️ 口徑同原本橫幅**逐字相同**（毛營業額 − 退款 ＝ 淨營業額），
+                     *    只換呈現方式，唔改任何計算。
+                     */
+                    action={
+                      <InfoBubble label="營業額口徑與退款拆解">
+                        <span className="block font-semibold text-slate-800">
+                          {agg.refundCount > 0
+                            ? `退款拆解（${agg.refundCount} 張退款單）`
+                            : "退款拆解（本期間無退款）"}
+                        </span>
+                        <span className="mt-1 block tabular-nums">
+                          營業額（毛）{formatMoney(agg.revenue)}
+                          <br />− 退款總額 {formatMoney(agg.refundTotal)}
+                          <br />＝ 淨營業額（落袋）{formatMoney(agg.netRevenue)}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          {agg.refundCount > 0
+                            ? "退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
+                            : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
+                        </span>
+                      </InfoBubble>
+                    }
                   />
                   {/* 🔴 2026-09-14：三張表（KPI／訂單明細／支付方式分項）**必須同源同批** ——
                       一律 = 逐張單加總（線下 ＋ 線上投影單 ＋ Ledger 純線上單）。
@@ -2852,41 +2878,50 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 ⇒ 依家永遠顯示「毛 / − 退款 / ＝ 淨額」兩三行，退款 0 就照寫 0。
                 商家唔需要再靠「橫幅有冇出」去推斷口徑。
 
-                ⚠️ 口徑必須同交班頁（`shift-page.tsx` 淨實收）一致：兩頁夾唔到數 = 原本嘅投訴。 */}
-            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-              <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
-                <span className="font-semibold text-amber-900">
-                  {agg.refundCount > 0 ? `退款拆解（${agg.refundCount} 張退款單）` : "退款拆解（本期間無退款）"}
-                </span>
-                <span className="text-amber-800">
-                  營業額（毛）
-                  <span className="ml-1 font-semibold">{formatMoney(agg.revenue)}</span>
-                </span>
-                <span className="text-amber-800">
-                  − 退款總額
-                  <span className="ml-1 font-semibold">{formatMoney(agg.refundTotal)}</span>
-                </span>
-                <span className="text-amber-900">
-                  ＝ 淨營業額（落袋）
-                  <span className="ml-1 text-base font-bold">{formatMoney(agg.netRevenue)}</span>
-                </span>
+                ⚠️ 口徑必須同交班頁（`shift-page.tsx` 淨實收）一致：兩頁夾唔到數 = 原本嘅投訴。
+
+                🔴🔴 2026-09-28（J 口徑）：**整條橫幅隱藏** —— 佢佔位又長期顯示「本期間無退款」，
+                對日常營運係噪音。退款資訊改為收喺上面「營業額」格嘅**小提示球**（見 `Kpi`
+                嘅 `action` 槽位）：需要時按下才彈，唔需要時完全唔佔位。
+                ✅ 數值口徑**完全冇變**（`agg.revenue` / `refundTotal` / `netRevenue` 照計），
+                   只係換咗呈現方式；下面「毛利」等區塊完全唔受影響。
+                ⚠️ 還原方法：把下面 `{false ? (...)}` 改成原本嘅 `true`／直接 render。 */}
+            {false ? (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                  <span className="font-semibold text-amber-900">
+                    {agg.refundCount > 0 ? `退款拆解（${agg.refundCount} 張退款單）` : "退款拆解（本期間無退款）"}
+                  </span>
+                  <span className="text-amber-800">
+                    營業額（毛）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.revenue)}</span>
+                  </span>
+                  <span className="text-amber-800">
+                    − 退款總額
+                    <span className="ml-1 font-semibold">{formatMoney(agg.refundTotal)}</span>
+                  </span>
+                  <span className="text-amber-900">
+                    ＝ 淨營業額（落袋）
+                    <span className="ml-1 text-base font-bold">{formatMoney(agg.netRevenue)}</span>
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                  <span className="text-amber-800">
+                    毛實收（＝訂單明細加總）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
+                  </span>
+                  <span className="text-amber-900">
+                    ＝ 實收金額合計（上面卡片）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-amber-700">
+                  {agg.refundCount > 0
+                    ? "⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
+                    : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
+                </div>
               </div>
-              <div className="mt-1 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
-                <span className="text-amber-800">
-                  毛實收（＝訂單明細加總）
-                  <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
-                </span>
-                <span className="text-amber-900">
-                  ＝ 實收金額合計（上面卡片）
-                  <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
-                </span>
-              </div>
-              <div className="mt-1 text-[11px] text-amber-700">
-                {agg.refundCount > 0
-                  ? "⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
-                  : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
-              </div>
-            </div>
+            ) : null}
 
             {/*
               訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。
@@ -2897,12 +2932,20 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {/* P0（2026-09-24，2026-09-27 改為純提示）：線上單對數警示。
                 冇警示／冇漏帳時整個元件 render `null` ⇒ 佈局零改動。
                 🔴 補建按鈕已移除（商家口徑「唔應該要商家撳」）—— 自動化路徑見
-                   `pos-app.tsx` 嘅對數節拍 ＋ `/api/pos/reconcile-online`。 */}
-            <OnlineReconcileBanner
-              reconcile={onlineReconcile}
-              fetchStatus={onlineFetchInfo.status}
-              fetchError={onlineFetchInfo.lastError}
-            />
+                   `use-adopt-completed-ledger-orders`（自動補建）＋
+                   `/api/pos/adopted-online-ids`（雲端交叉核對）。
+
+                🔴🔴 2026-09-28（J 口徑）：**隱藏呢條橙色警示條** —— 自動補建已經令
+                「未入帳」變成短暫過渡狀態，長期掛住一條橙色警示只會嚇到商家。
+                ✅ 自動補建邏輯**完全保留**（hook 照跑、照補、照上雲），只係唔再顯示橫幅。
+                ⚠️ 還原方法：把下面 `{false ? (...)}` 改回直接 render。 */}
+            {false ? (
+              <OnlineReconcileBanner
+                reconcile={onlineReconcile}
+                fetchStatus={onlineFetchInfo.status}
+                fetchError={onlineFetchInfo.lastError}
+              />
+            ) : null}
 
             <Card
               title="訂單明細"

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>營業額小球球 — 效果確認</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0; padding: 24px; background: #f1f5f9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    color: #0f172a;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .hint { font-size: 12.5px; color: #64748b; margin-bottom: 18px; line-height: 1.6; }
+  .kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .kpi {
+    position: relative; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px;
+    padding: 16px; min-height: 104px;
+  }
+  .kpi .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .kpi .label { font-size: 12px; color: #64748b; }
+  .kpi .val { margin-top: 4px; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi .val.orange { color: #ea580c; }
+  .kpi .val .cur { font-size: 14px; font-weight: 500; color: #94a3b8; margin-right: 4px; }
+  .kpi .sub { margin-top: 2px; font-size: 11px; color: #64748b; }
+  .kpi .delta { margin-top: 4px; font-size: 11px; color: #16a34a; }
+
+  /* ── InfoBubble（與 src/components/info-bubble.tsx 逐項對齊）── */
+  .bubble-root { position: relative; display: inline-flex; }
+  .bubble-btn {
+    width: 22px; height: 22px; border-radius: 9999px;
+    border: 1px solid #cbd5e1; background: #fff; color: #94a3b8;
+    font-size: 11px; font-weight: 700; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: .15s;
+  }
+  .bubble-btn:hover { border-color: #94a3b8; color: #475569; }
+  .bubble-btn.on { border-color: #94a3b8; color: #475569; }
+  .bubble-pop {
+    position: absolute; right: 0; top: 26px; z-index: 40;
+    width: max-content; max-width: min(320px, calc(100vw - 24px));
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
+    padding: 8px 12px; text-align: left; font-size: 12px; line-height: 1.65;
+    color: #334155; box-shadow: 0 10px 24px rgba(15,23,42,.14);
+  }
+  .bubble-pop .t { display: block; font-weight: 600; color: #1e293b; }
+  .bubble-pop .n { display: block; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .bubble-pop .f { display: block; margin-top: 4px; font-size: 11px; color: #64748b; }
+
+  .legend { margin-top: 26px; font-size: 13px; color: #475569; line-height: 1.9; }
+  .legend b { color: #0f172a; }
+  .gone {
+    margin-top: 22px; padding: 12px 16px; border: 1px dashed #cbd5e1; border-radius: 12px;
+    background: #fff; font-size: 12.5px; color: #64748b; line-height: 1.8;
+  }
+  .gone s { color: #ef4444; opacity: .75; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>營業額格 — 小提示球效果</h1>
+  <div class="hint">按下「營業額」格右上角嘅 ⓘ 圓球，會像 tips 一樣彈出退款拆解。點外面或按 Esc 收起。</div>
+
+  <div class="kpi-row">
+    <!-- 營業額（有球） -->
+    <div class="kpi">
+      <div class="top">
+        <div class="label">營業額</div>
+        <span class="bubble-root">
+          <button class="bubble-btn" id="ball" aria-label="營業額口徑與退款拆解">i</button>
+          <span class="bubble-pop" id="pop" hidden>
+            <span class="t" id="popTitle">退款拆解（本期間無退款）</span>
+            <span class="n" id="popBody">營業額（毛）MOP 8,692<br>− 退款總額 MOP 0<br>＝ 淨營業額（落袋）MOP 8,692</span>
+            <span class="f" id="popFoot">本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。</span>
+          </span>
+        </span>
+      </div>
+      <div class="val orange"><span class="cur">MOP</span>8,692</div>
+      <div class="sub">線下 MOP 8,394 · 線上 MOP 298</div>
+      <div class="delta">▲ 12.4%</div>
+    </div>
+
+    <div class="kpi">
+      <div class="top"><div class="label">應收金額合計</div></div>
+      <div class="val"><span class="cur">MOP</span>8,989</div>
+      <div class="sub">原價 + 服務費 + 稅</div>
+    </div>
+    <div class="kpi">
+      <div class="top"><div class="label">實收金額合計</div></div>
+      <div class="val"><span class="cur">MOP</span>8,989</div>
+      <div class="sub">優惠後實際收到</div>
+    </div>
+    <div class="kpi">
+      <div class="top"><div class="label">訂單數</div></div>
+      <div class="val">128</div>
+      <div class="sub">線下 120 · 線上 8</div>
+    </div>
+    <div class="kpi">
+      <div class="top"><div class="label">客單價</div></div>
+      <div class="val"><span class="cur">MOP</span>67</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>有退款時</b>（球嘅內容自動切換）：<br>
+    標題「退款拆解（3 張退款單）」· 內文顯示「營業額（毛）MOP 8,692 − 退款總額 MOP 210 ＝ 淨營業額（落袋）MOP 8,482」。
+  </div>
+
+  <div class="gone">
+    已隱藏（唔再佔位）：<br>
+    <s>退款拆解（本期間無退款）　營業額（毛）MOP 8,692 − 退款總額 MOP 0 ＝ 淨營業額（落袋）MOP 8,692 …</s><br>
+    <s>有線上單未入 POS 記錄　有 7 張線上已付款單（MOP 297）POS 冇記錄，只靠 Ledger 計入。取餐碼：001、003…</s>
+  </div>
+</div>
+
+<script>
+  // 示範用：兩組資料切換（模擬「有退款 / 無退款」）
+  const demo = {
+    none: {
+      t: '退款拆解（本期間無退款）',
+      n: '營業額（毛）MOP 8,692<br>− 退款總額 MOP 0<br>＝ 淨營業額（落袋）MOP 8,692',
+      f: '本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。',
+    },
+    some: {
+      t: '退款拆解（3 張退款單）',
+      n: '營業額（毛）MOP 8,692<br>− 退款總額 MOP 210<br>＝ 淨營業額（落袋）MOP 8,482',
+      f: '退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。',
+    },
+  };
+  let mode = 'none';
+  const ball = document.getElementById('ball');
+  const pop = document.getElementById('pop');
+  const t = document.getElementById('popTitle');
+  const n = document.getElementById('popBody');
+  const f = document.getElementById('popFoot');
+
+  function render() {
+    t.textContent = demo[mode].t;
+    n.innerHTML = demo[mode].n;
+    f.textContent = demo[mode].f;
+  }
+  function setOpen(v) {
+    pop.hidden = !v;
+    ball.classList.toggle('on', v);
+  }
+  ball.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // 每次開啟輪流示範兩種內容，方便對照
+    if (pop.hidden) { mode = mode === 'none' ? 'some' : 'none'; render(); }
+    setOpen(pop.hidden);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.bubble-root')) setOpen(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+  render();
+</script>
+</body>
+</html>
