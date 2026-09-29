@@ -46,10 +46,8 @@ import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-
 //    —— 部分對帳嘅「分子分母要同一批」判斷好易寫錯（見該函式註釋）。
 import {
   computeSettlementTotals,
-  type PlatformPeriodAmounts,
   type SettlementTotals,
 } from "@/lib/pos/platform-settlement";
-import { PLATFORM_ORDER_SOURCES } from "@/lib/pos/platform-order";
 
 // ── 外賣平台結算：分平台卡片（2026-09-29 使用者需求）─────────────────────────
 // MFOOD 用橙（#FB8F01）、澳覓用玫紅（#FF3159），來自使用者提供嘅參考圖取色。
@@ -1325,26 +1323,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // 雲端訂單補載序號：改變佢會強制重跑 backfill effect（切店 / 手動重新拉取）。
   const [backfillSeq, setBackfillSeq] = useState(0);
 
-  /**
-   * 平台**帳期級**結算金額（應收／實收）—— 報表 MFOOD 區塊三格嘅保底來源。
-   *
-   * ── 為什麼要（2026-09-28 真機實證）────────────────────────────────
-   * 逐單口徑靠 `tradeNo` ↔ `external_order_id` 配對，**實測配對唔上**
-   * ⇒ `platformNetAmount` 全 `undefined` ⇒ 三格永遠「待對帳」。
-   * 而帳期金額平台一定有（插件抓 `_list` 自帶）⇒ 用它做保底。
-   *
-   * ⚠️ `null` ＝ 未讀取 / 讀唔到（唔可以當「冇對帳」去顯示）——
-   *    `computeSettlementTotals` 會自行 fallback 落逐單口徑，行為同以前一致。
-   *
-   * 🔴 2026-09-29：由「單一最新帳期」改為「按 source 分開存」——
-   *    報表已經分平台（MFOOD / 澳覓）顯示，必須各自拎各自 source 嘅帳期，
-   *    唔可以將某個 source 嘅帳期套落另一個 source（會計錯實收）。
-   *    key ＝ `pos_platform_settlements.source`（`"mfood"` / `"aomi"`）。
-   */
-  const [periodSettlement, setPeriodSettlement] = useState<Record<
-    string,
-    PlatformPeriodAmounts
-  > | null>(null);
+  // 🔴 2026-09-29：報表三格改「一律逐單」，`computeSettlementTotals` 已移除
+  //    帳期 fallback ⇒ 唔再喺呢度讀 / 存平台帳期級金額（避免死碼 ＋ 無謂 API）。
 
   // 切店 / 首次確認 merchantId 時立即清空舊店數據，杜絕閃現外店資料。
   // 切店 / 切範圍 / 切帳號時重置，杜絕閃現舊店／舊範圍資料（2026-09-06 加 range）。
@@ -1375,73 +1355,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     setBackfillSeq((n) => n + 1);
   }, [merchantId, range, adminAllStoresMode]);
 
-  /**
-   * 讀平台**帳期級**結算金額。
-   *
-   * ── 為咩同 backfill effect 分開（而唔係塞埋一齊）─────────────────────
-   * ① 生命週期唔同：`range`（今日／昨日／本月）同**帳期**係兩個口徑，
-   *    切 range 唔應該令帳期金額重抓（帳期本身唔跟 range 變）。
-   * ② 容錯唔同：呢個請求失敗唔應該影響訂單載入（反過來亦一樣）——
-   *    塞埋一齊就會「帳期 500 → 報表整塊壞」。
-   * ⇒ 獨立 effect，依賴只有 store + 刷新鍵。
-   *
-   * ── 🔴 失敗語意 ────────────────────────────────────────────────────
-   * 任何失敗（網絡 / 401 / 未跑 0061）一律 `setPeriodSettlement(null)`，
-   * 令 `computeSettlementTotals` 落返逐單口徑 —— 行為同未加呢個功能時**完全一樣**。
-   * **唔可以**回一個 `{should:0, receive:0}` 假值（會顯示 100% 抽成）。
-   */
-  useEffect(() => {
-    let cancelled = false;
-    if (!merchantId) {
-      setPeriodSettlement(null);
-      return;
-    }
-
-    async function loadPeriodSettlement() {
-      try {
-        await refreshPosDeviceTokenIfNeeded();
-        // 🔴 逐 source 讀最新帳期，再砌成 `{ [source]: amounts }` ——
-        //    報表分平台顯示，每個平台必須用自己 source 嘅帳期，唔可以共用。
-        //    某個 source 失敗（401／500／無資料）唔影響另一個：各自 try/catch。
-        const results = await Promise.all(
-          PLATFORM_ORDER_SOURCES.map(async (src) => {
-            try {
-              const res = await fetch(
-                `/api/pos/platform-settlements?storeId=${encodeURIComponent(
-                  merchantIdForQuery,
-                )}&limit=1&source=${src}`,
-                { headers: { ...posDeviceAuthHeaders() } },
-              );
-              if (!res.ok) return null;
-              const payload = (await res.json()) as {
-                ok?: boolean;
-                latest?: PlatformPeriodAmounts | null;
-              };
-              return payload?.ok && payload.latest
-                ? { source: src, latest: payload.latest }
-                : null;
-            } catch {
-              return null;
-            }
-          }),
-        );
-        if (cancelled) return;
-        const map: Record<string, PlatformPeriodAmounts> = {};
-        for (const r of results) {
-          if (r?.latest) map[r.source] = r.latest;
-        }
-        // 全 empty（兩個 source 都冇資料／失敗）→ null，令 computeSettlementTotals 落返逐單口徑。
-        setPeriodSettlement(Object.keys(map).length > 0 ? map : null);
-      } catch {
-        if (!cancelled) setPeriodSettlement(null);
-      }
-    }
-
-    void loadPeriodSettlement();
-    return () => {
-      cancelled = true;
-    };
-  }, [merchantId, merchantIdForQuery, refreshKey]);
+  // 🔴 2026-09-29：平台帳期讀取 effect 已移除 —— 報表三格改「一律逐單」，
+  //    唔再需要 `/api/pos/platform-settlements` 嘅帳期保底（見 computeSettlementTotals）。
 
   // 菜品銷售排行「更多」彈窗
   const [dishModalOpen, setDishModalOpen] = useState(false);
@@ -2505,20 +2420,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       //    故 cast 成 string 做比對（同原本 `isPlatformOrderSource` 收 unknown 嘅做法一致）。
       .filter((o) => (o.source as string | undefined) === "mfood");
 
-    return computeSettlementTotals(
-      platformOrders,
-      (o) => {
-        // 由訂單拎佢嘅結算金額。冇（未對帳）→ null。
-        const net = o.platformNetAmount;
-        const sub = o.platformSubsidyNet;
-        if (net === undefined && sub === undefined) return null;
-        return { netAmount: net ?? null, subsidyNet: sub ?? null };
-      },
-      // 帳期級金額：逐單配對唔上時嘅保底（見 computeSettlementTotals 註釋）。
-      // 🔴 2026-09-29：只拎 mfood 自己 source 嘅帳期，唔可以套用 aomi 嘅。
-      periodSettlement?.["mfood"],
-    );
-  }, [orders, range, periodSettlement]);
+    // 🔴 2026-09-29：一律逐單（computeSettlementTotals 已移除帳期 fallback），
+    //    三格永遠以 POS 同步單為準，平台帳期數字唔再蓋過。
+    return computeSettlementTotals(platformOrders, (o) => {
+      // 由訂單拎佢嘅結算金額。冇（未對帳）→ null。
+      const net = o.platformNetAmount;
+      const sub = o.platformSubsidyNet;
+      if (net === undefined && sub === undefined) return null;
+      return { netAmount: net ?? null, subsidyNet: sub ?? null };
+    });
+  }, [orders, range]);
 
   const aomiSettlement = useMemo(() => {
     // 只計 澳覓（aomi）來源平台單，其餘口徑同上。
@@ -2527,18 +2438,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       .filter((o) => orderMatchesReportRange(o, range))
       .filter((o) => (o.source as string | undefined) === "aomi");
 
-    return computeSettlementTotals(
-      platformOrders,
-      (o) => {
-        const net = o.platformNetAmount;
-        const sub = o.platformSubsidyNet;
-        if (net === undefined && sub === undefined) return null;
-        return { netAmount: net ?? null, subsidyNet: sub ?? null };
-      },
-      // 🔴 只拎 aomi 自己 source 嘅帳期，唔可以套用 mfood 嘅。
-      periodSettlement?.["aomi"],
-    );
-  }, [orders, range, periodSettlement]);
+    // 🔴 2026-09-29：一律逐單（computeSettlementTotals 已移除帳期 fallback）。
+    return computeSettlementTotals(platformOrders, (o) => {
+      const net = o.platformNetAmount;
+      const sub = o.platformSubsidyNet;
+      if (net === undefined && sub === undefined) return null;
+      return { netAmount: net ?? null, subsidyNet: sub ?? null };
+    });
+  }, [orders, range]);
 
   /**
    * 未結帳訂單統計（2026-09-07 新增）。

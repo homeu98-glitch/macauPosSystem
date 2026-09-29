@@ -486,80 +486,45 @@ export interface SettlementTotals {
 }
 
 /**
- * 報表 MFOOD 區塊三格 —— 逐單優先，唔齊就落帳期。
+ * 報表 MFOOD／澳覓 區塊三格 —— **一律逐單**（2026-09-29 改口徑）。
  *
- * ── 🔴 為什麼要落帳期（2026-09-28 真機實證）────────────────────────
- * 逐單口徑要靠 `tradeNo` ↔ `external_order_id` 配對，**實測配對唔上**
- * （平台 transaction 號同 POS 記錄嘅平台單號唔一致）⇒ `received` 永遠 `null`
- * ⇒ 商家永遠見唔到實收。而帳期金額平台**一定**有（頁面自帶）。
- * ⇒ 逐單配唔上唔應該令報表三格變「待對帳」。
+ * ── 🔴 改口徑原因（使用者實證）──────────────────────────────────────
+ * 舊邏輯喺「逐單唔齊」時會 fallback 去平台帳期金額（v1.73 起 `should` 有值），
+ * 令商家報表顯示成「平台帳期營業額」（例 MOP 1,329），但 admin 因讀唔到帳期
+ * （無 POS 終端憑證 → `/api/pos/platform-settlements` 回 401）落返逐單
+ * （例 MOP 180）—— 同一批單兩個介面數字唔同。使用者要嘅係
+ * 「以 sync 過去嘅單為準」（＝ admin 個口徑，見 2026-09-29 截圖）。
  *
- * ── 何時用邊個（次序）──────────────────────────────────────────────
- *   ① 逐單對齊（`pendingCount === 0` 且 `settledCount > 0`）→ 用逐單
- *   ② 否則（完全冇 / 只有部分對到帳）而**有帳期金額** → 用帳期
- *   ③ 兩者都冇 → `basis: "none"`，`received: null`
+ * ⇒ 改為：**三格永遠用逐單加總**，平台帳期數字唔再蓋過：
+ *    - 應收 ＝ POS 同步平台單營業額總和
+ *    - 實收 ＝ 已對帳嗰批（`null`＝完全冇對到帳 → UI 顯示「待對帳」）
+ *    - 未對帳只加「部分未對帳」標示，唔用帳期補數
  *
- * ⚠️ **唔可以**逐單實收 ＋ 帳期實收相加 —— 帳期本身已包含嗰批單，
- *    相加 = 雙計（2026-09-14 線上/線下雙計同類事故）。
+ * 🔴 平台帳期之前係「逐單配對唔上」嘅保底，但 2026-09-29 `tradeNoCore`
+ *    前綴無關配對修好之後，逐單配對已可靠，保底反而令報表數字同 admin
+ *    唔一致 ⇒ 成個移除（唔再接收 `periodAmounts`）。
  *
  * @param orders 只傳**平台單**（呼叫端已 filter 過）。
  * @param settlementOf 由訂單取逐單結算結果（`null` ＝ 未對帳）。
- * @param periodAmounts 帳期金額（插件已寫落 DB 嗰筆）；冇 → 傳 `null`。
  */
 export function computeSettlementTotals<T extends SettlementOrderLike>(
   orders: readonly T[],
   settlementOf: (order: T) => PlatformSettlementAmounts | null | undefined,
-  periodAmounts?: PlatformPeriodAmounts | null,
 ): SettlementTotals {
+  // 🔴 一律逐單：永遠以 POS 同步單為準，平台帳期數字唔再蓋過。
   const perOrder = computeMfoodTotals(orders, settlementOf);
-  const period = normalizePeriodAmounts(periodAmounts ?? null);
 
-  const periodPayoutValue = periodPayout(period);
-  const periodShould = period ? period.should : null;
+  const hasOrders = perOrder.settledCount > 0 || perOrder.pendingCount > 0;
+  const basis: SettlementTotals["basis"] = hasOrders ? "per-order" : "none";
 
-  // 帳期口徑要計得出差額率：應收同實收**都**要有值
-  const periodUsable = periodPayoutValue !== null && periodShould !== null && periodShould > 0;
-
-  // ① 逐單完全對齊 → 用逐單（最準）
-  if (perOrder.settledCount > 0 && perOrder.pendingCount === 0) {
-    return {
-      receivable: perOrder.receivable,
-      received: perOrder.received,
-      feeRate: perOrder.feeRate,
-      basis: "per-order",
-      pendingCount: 0,
-      settledCount: perOrder.settledCount,
-      periodLabel: null,
-      usedPeriodFallback: false,
-    };
-  }
-
-  // ② 逐單唔齊（或者完全冇）→ 有帳期就落帳期
-  if (periodUsable) {
-    const received = round2(periodPayoutValue);
-    const receivable = round2(periodShould);
-    return {
-      receivable,
-      received,
-      feeRate: Math.max(0, Math.min(1, 1 - received / receivable)),
-      basis: "period",
-      pendingCount: perOrder.pendingCount,
-      settledCount: perOrder.settledCount,
-      periodLabel: period ? period.period : null,
-      // 逐單有對到帳但唔齊 → 標示「換咗口徑」，UI 要提示
-      usedPeriodFallback: perOrder.settledCount > 0,
-    };
-  }
-
-  // ③ 兩者都冇
   return {
     receivable: perOrder.receivable,
     received: perOrder.received,
     feeRate: perOrder.feeRate,
-    basis: "none",
+    basis,
     pendingCount: perOrder.pendingCount,
     settledCount: perOrder.settledCount,
-    periodLabel: period ? period.period : null,
+    periodLabel: null,
     usedPeriodFallback: false,
   };
 }

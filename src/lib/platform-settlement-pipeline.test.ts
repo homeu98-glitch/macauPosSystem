@@ -839,19 +839,11 @@ describe("帳期級結算：route 要收 periodAmounts（唔可以見 transactio
 });
 
 /**
- * 報表要讀帳期金額 —— 元件接線鎖。
+ * 報表三格口徑接線鎖（2026-09-29：一律逐單）。
  */
-describe("帳期級結算：報表元件接線", () => {
+describe("報表三格：一律逐單接線鎖", () => {
   const readReport = () =>
     readFileSync(new URL("../components/restaurant-daily-report.tsx", import.meta.url), "utf8");
-
-  it("🔴 報表要 fetch /api/pos/platform-settlements", () => {
-    const src = readReport();
-    assert.ok(
-      src.includes("/api/pos/platform-settlements"),
-      "報表冇讀帳期金額 —— 逐單配對唔上時三格永遠『待對帳』",
-    );
-  });
 
   it("🔴 報表要用 computeSettlementTotals（唔可以自己另寫一套合併邏輯）", () => {
     const src = readReport();
@@ -861,29 +853,19 @@ describe("帳期級結算：報表元件接線", () => {
     );
   });
 
-  it("🔴 帳期口徑一定要有 UI 標示（兩種口徑數字唔同）", () => {
+  it("🔴 報表唔可以再 fetch /api/pos/platform-settlements（一律逐單，唔要帳期保底）", () => {
     const src = readReport();
     assert.ok(
-      /basis\s*===\s*"period"/.test(src),
-      "報表冇顯示「帳期口徑」標示 —— 商家會以為報表數字亂跳",
-    );
-    assert.ok(
-      src.includes("帳期口徑"),
-      "冇『帳期口徑』字樣 —— 使用者睇唔出數字係邊個來源",
+      !/fetch\(\s*["'`][^"'`]*\/api\/pos\/platform-settlements/.test(src),
+      "一律逐單後報表仲喺度 fetch 平台帳期 → 會靜默蓋過逐單數字",
     );
   });
 
-  it("🔴 fetch 失敗要維持 null（唔可以回假 0）", () => {
+  it("🔴 報表唔可以再引用 periodSettlement（帳期狀態已移除）", () => {
     const src = readReport();
-    const seg = src.match(/async function loadPeriodSettlement[\s\S]*?\n  \}/);
-    assert.ok(seg, "搵唔到 loadPeriodSettlement（結構改咗？）");
     assert.ok(
-      !/setPeriodSettlement\(\s*\{\s*should\s*:\s*0/.test(src),
-      "🔴 唔可以回 {should:0} 假值 —— 會顯示 100% 抽成（假數）",
-    );
-    assert.ok(
-      seg[0].includes("setPeriodSettlement(null)"),
-      "失敗路徑冇 setPeriodSettlement(null)",
+      !src.includes("periodSettlement"),
+      "報表仲喺度讀 / 存平台帳期 → 一律逐單口徑會被悄悄推翻",
     );
   });
 });
