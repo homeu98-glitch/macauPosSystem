@@ -1,0 +1,15 @@
+anonKey len = 208
+
+=== pos_orders (source=aomi|mfood) ===
+total rows = 2
+store_id = 8291f843-9def-4956-9d0b-1cfef2598306
+
+── 按 created_at 日期分佈 ──
+   2026-09-29 × 2
+
+── 逐張：local_no | src | created_at(平台) | updated_at(入庫/更新) | client_updated_at | settled_at | total/discount ──
+MFOOD#883658      mfood  2026-09-29 05:13:34  | upd 2026-09-29 06:11:10  | cli 2026-09-29 06:11:04  | pset —  | 63/0  ext=202609291313345883658
+澳覓#1              aomi   2026-09-29 13:31:41  | upd 2026-09-29 06:08:58  | cli 2026-09-29 06:02:32  | pset —  | 67/0  ext=TK001165260929133047856
+
+=== pos_platform_settlements（最近 20）===
+NOT ARRAY: {"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.pos_platform_settlements TO anon;","message":"permission denied for table pos_platform_settlements"}

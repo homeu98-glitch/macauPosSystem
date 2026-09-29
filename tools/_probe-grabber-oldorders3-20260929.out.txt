@@ -1,0 +1,15 @@
+anonKey len = 208 | ref = iyrywzormzisyppkokbi
+
+===== exact count（唔受 limit 影響）=====
+  [① pos_orders 全表總數] HTTP 200 | Content-Range = 0-14/15 
+  [② created_at 落喺 2026-09-24] HTTP 200 | Content-Range = */0 
+  [②b updated_at 落喺 2026-09-24] HTTP 200 | Content-Range = */0 
+  [③ external_order_id 以 FAKE- 開頭（假單指紋）] HTTP 200 | Content-Range = */0 
+  [④ local_order_no like 'MFOOD%'] HTTP 200 | Content-Range = 0-0/1 
+  [④b local_order_no like '澳覓%'] HTTP 200 | Content-Range = 0-0/1 
+  [⑤ source=aomi|mfood 總數] HTTP 200 | Content-Range = 0-1/2 
+
+===== ⑥ 所有平台單（最多 1000）=====
+count = 2
+   澳覓#1             aomi   2026-09-29T13:31:41  ext=TK001165260929133047856
+   MFOOD#883658     mfood  2026-09-29T05:13:34  ext=202609291313345883658

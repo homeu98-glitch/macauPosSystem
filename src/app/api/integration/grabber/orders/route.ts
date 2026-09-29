@@ -209,6 +209,31 @@ export async function POST(request: Request) {
 
   const created = Array.isArray(inserted) ? inserted.length : 0;
 
+  // ── 稽核（0062）─────────────────────────────────────────────────────────
+  //
+  // 🔴 為什麼要寫：2026-09-29 排查「24/09 舊單係咪重發咗」時撞到死牆 ——
+  //    插件 log 有容量裁剪（只留 300 條）、註冊表只留 120 張、計數器冇明細，
+  //    而伺服器側**原本完全冇留痕** ⇒ 事後根本無法回答「送過咩、入咗幾張」。
+  //
+  // 🔴 但係：**入單係主業，稽核係副產品**。
+  //    所以呢度一律 best-effort：寫唔到（例如 0062 未跑 → 42P01）都**照返 ok:true**，
+  //    只係標 `auditLogged: false`。
+  //    ⇒ 唔可以因為稽核寫唔到就令成批單失敗（會把「冇 trace」升級成「冇單」）。
+  //    ⇒ 但亦**唔可以**靜默吞掉 —— `auditLogged` 一定要出而家 response 俾人睇到。
+  const auditLogged = await writePushLog(supabase, {
+    storeId,
+    source,
+    clientVersion: typeof payload.clientVersion === "string" ? payload.clientVersion : null,
+    receivedCount: orders.length,
+    createdCount: created,
+    skippedCount: rows.length - created,
+    rejectedCount: rejected.length,
+    externalOrderIds: orders.map((o) => String(o?.externalOrderId ?? "")),
+    localOrderNos: rows.map((r) => r.local_order_no),
+    rejectedDetail: rejected,
+    capturedAt: typeof payload.capturedAt === "string" ? payload.capturedAt : null,
+  });
+
   return NextResponse.json({
     ok: true,
     received: orders.length,
@@ -218,5 +243,63 @@ export async function POST(request: Request) {
     warnings: warnings.slice(0, 10),
     autoAccept,
     autoAcceptReadOk: readOk,
+    auditLogged,
   });
+}
+
+/**
+ * 寫一筆推送稽核（`pos_grabber_push_log`，0062）。
+ *
+ * 🔴 一律**唔 throw**：寫唔到就 `console.error` ＋ 回 `false`。
+ *    理由見呼叫點註釋 —— 稽核失敗唔可以拖死入單。
+ */
+async function writePushLog(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  entry: {
+    storeId: string;
+    source: string;
+    clientVersion: string | null;
+    receivedCount: number;
+    createdCount: number;
+    skippedCount: number;
+    rejectedCount: number;
+    externalOrderIds: string[];
+    localOrderNos: string[];
+    rejectedDetail: { externalOrderId: string; reason: string }[];
+    capturedAt: string | null;
+  },
+): Promise<boolean> {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("pos_grabber_push_log").insert({
+      store_id: entry.storeId,
+      source: entry.source,
+      client_version: entry.clientVersion,
+      received_count: entry.receivedCount,
+      created_count: entry.createdCount,
+      skipped_count: entry.skippedCount,
+      rejected_count: entry.rejectedCount,
+      external_order_ids: entry.externalOrderIds,
+      local_order_nos: entry.localOrderNos,
+      rejected_detail: entry.rejectedDetail,
+      captured_at: entry.capturedAt,
+    });
+    if (error) {
+      // 42P01 = undefined_table（0062 未跑）⇒ 呢個係「已知可接受」嘅降級，
+      // 但要印清楚，否則會同真正嘅寫入失敗撈亂。
+      console.error(
+        "[integration/grabber/orders] 推送稽核寫入失敗（入單不受影響）",
+        error.code,
+        error.message,
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error(
+      "[integration/grabber/orders] 推送稽核拋錯（入單不受影響）",
+      e instanceof Error ? e.message : String(e),
+    );
+    return false;
+  }
 }

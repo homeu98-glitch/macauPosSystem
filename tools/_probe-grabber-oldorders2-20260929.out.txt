@@ -1,0 +1,31 @@
+anonKey len = 208
+
+=== ① created_at 落喺 2026-09-24 嘅單（全部 source）===
+count = 0
+source 分佈 = []
+
+=== ② updated_at 落喺 2026-09-24 嘅單 ===
+count = 0
+
+=== ③ local_order_no like *883658* ===
+count = 1
+MFOOD#883658      mfood   settled          2026-09-29 05:13:34  | upd 2026-09-29 06:11:10  | 63
+
+=== ③ local_order_no like *786777* ===
+count = 0
+
+=== ③ local_order_no like *594220* ===
+count = 0
+
+=== ③ local_order_no like *358708* ===
+count = 0
+
+=== ③ local_order_no like *%25E6%25BE%25B3%25E8%25A6%2593%2523* ===
+count = 0
+
+=== ③ local_order_no like *FAKE-* ===
+count = 0
+
+=== ④ 全表（最新 1000）source 分佈 ===
+count = 15 [["aomi",1],["pos",13],["mfood",1]]
+store 分佈 = [["8291f843",15]]

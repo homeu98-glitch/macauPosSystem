@@ -208,12 +208,24 @@ export function grabberLocalOrderNo(order: GrabberOrder): string {
 
   // 🔴 呢三個名**全部要試**（順序：POS 已知名 → bridge 真正發嘅名）。
   //    實際 payload 出嘅係：
-  //      · 澳覓 `aomi-bridge.js::normalizeDetail()` → `storeSeq`（`"10"`）＋ `localOrderNo`（`"#10"`）
-  //      · mfood `mfood-bridge.js::normalizeDetail()` → `orderNumber`（數字）
+  //      · 澳覓 `aomi-bridge.js`（列表 `145`／詳情 `192`）→ `storeSeq`（`"10"`）
+  //        ＋ `localOrderNo`（`"#10"`）⇒ **兩條路徑都有**
+  //      · mfood **列表** `normalizeListRow()` → `orderNumber` ＋ `localOrderNo` ⇒ 有
   //      · `storeSeqNo` **只有插件嘅假單生成器會寫**
   //    只認 `storeSeqNo` 嘅後果：真單永遠走最後嗰條 fallback →
   //    單號變 `澳覓#<外部單號尾6位>`，同平台後台對唔上 → 對單即失效。
   //    （2026-09-24 由「假單 payload vs 真 bridge payload 命名對比」發現。）
+  //
+  // 🔴🔴 2026-09-29 更正（**舊註釋係錯嘅，呢條錯註釋就係一直冇人發現嘅原因**）：
+  //    舊版本寫住「mfood `normalizeDetail()` → `orderNumber`（數字）」——
+  //    **實際上 mfood 詳情路徑到當日為止完全冇單號欄位**。
+  //    後果：凡係「補 items 嗰輪由詳情路徑送出」嘅 mfood 單，下面四個候選全空
+  //    ⇒ 必然跌到最尾嗰條 fallback ⇒ `MFOOD#883658`（實案）
+  //    ⇒ 同 popup 由**列表**記低嘅 `#75` 唔同 ⇒ 商家當係「寄錯單」。
+  //    已修：`mfood-bridge.js` 兩條路徑共用 `normalizeOrderNo()`，
+  //    再加 `background.js::grabFillMissingOrderNo()` 由註冊表兜底。
+  //    ⇒ **呢度唔可以再自己加第五個 fallback**：下面嗰條「尾 6 位」只應該喺
+  //      真係冇單號時先出現，加多一層只會令 bug 更難睇。
   for (const candidate of [order.storeSeqNo, order.storeSeq, order.localOrderNo]) {
     const out = withHash(candidate);
     if (out) return out;
