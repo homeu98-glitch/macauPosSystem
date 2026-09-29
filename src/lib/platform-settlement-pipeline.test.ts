@@ -6,7 +6,9 @@ import { mapOrderRow, POS_ORDER_DB_COLUMNS, type PosOrderDbRow } from "./pos-ord
 import {
   actualPayout,
   computeMfoodTotals,
+  computeSettlementTotals,
   groupSettlementByOrder,
+  normalizePeriodAmounts,
   settlementForOrder,
   type PlatformSettlementTxn,
 } from "./pos/platform-settlement.ts";
@@ -636,5 +638,171 @@ describe("平台實收：UI 接線（詳情彈窗 ＋ 收據預覽都要有）",
       "utf8",
     );
     assert.ok(comp.includes("externalOrderId"), "元件冇讀 externalOrderId —— 平台單號顯示唔到");
+  });
+});
+
+/**
+ * 帳期級閉環（2026-09-28）—— 插件抓到嘅**帳期金額**要一路落到 DB 同報表。
+ *
+ * 🔴 為咩要鎖（真機實證）：
+ *   逐單配對（上面嗰批測試）靠 `tradeNo` ↔ `external_order_id`，
+ *   但實測**配對唔上** ⇒ 報表三格永遠「待對帳」。
+ *   帳期金額係平台一定有嘅數字（`_list` 回應自帶），係報表嘅保底。
+ *   而保底最容易死喺兩個位：
+ *     ① route 見到 `transactions: []` 就 early return（靜默丟棄帳期金額）
+ *     ② route 冇 upsert 落 `pos_platform_settlements`
+ *   ⇒ 兩者都要鎖死（讀 source 斷言，因為 route 有 `next/server` 依賴載唔入）。
+ */
+describe("帳期級結算：route 要收 periodAmounts（唔可以見 transactions 空就丟）", () => {
+  const readRoute = () =>
+    readFileSync(
+      new URL("../app/api/integration/grabber/settlement/route.ts", import.meta.url),
+      "utf8",
+    );
+
+  it("🔴 route 讀 payload.periodAmounts 並經 normalizePeriodAmounts 正規化", () => {
+    const route = readRoute();
+    assert.ok(
+      route.includes("payload.periodAmounts"),
+      "route 冇讀 payload.periodAmounts —— 帳期金額會被靜默丟棄",
+    );
+    assert.ok(
+      /normalizePeriodAmounts\(/.test(route),
+      "route 冇經 normalizePeriodAmounts —— 唔可以自己另寫一套正規化",
+    );
+  });
+
+  it("🔴🔴 唔可以「transactions 空 → early return」（帳期金額要寫得入）", () => {
+    const route = readRoute();
+    // 反例：`if (txns.length === 0) { return ... }` 之前冇處理 periodAmounts
+    // 正確：條件必須係 `txns.length === 0 && !periodAmounts`
+    assert.ok(
+      /if\s*\(\s*txns\.length\s*===\s*0\s*&&\s*!periodAmounts\s*\)/.test(route),
+      "route 嘅 early return 條件唔係 `txns.length === 0 && !periodAmounts` —— 只有帳期金額嗰次會被丟棄",
+    );
+  });
+
+  it("🔴 route 要 upsert 落 pos_platform_settlements（唯一鍵 store_id,source,period）", () => {
+    const route = readRoute();
+    assert.ok(
+      route.includes("pos_platform_settlements"),
+      "route 冇寫 pos_platform_settlements —— 帳期金額落唔到 DB",
+    );
+    assert.ok(
+      /upsert[(]/.test(route),
+      "route 冇用 upsert —— 重抓同一帳期會撞唯一鍵而失敗",
+    );
+    assert.ok(
+      /onConflict:\s*["']store_id,source,period["']/.test(route),
+      "upsert 冇指定 onConflict store_id,source,period —— 同 migration 0061 唯一鍵唔一致",
+    );
+  });
+
+  it("🔴 帳期寫入失敗唔可以靜默（要寫 log，唔可以只回成功）", () => {
+    const route = readRoute();
+    assert.ok(
+      /帳期金額寫入失敗/.test(route),
+      "帳期寫入失敗冇 log —— 商家只會見到「成功但冇數」",
+    );
+  });
+
+  it("🔴 讀取 route 存在且回應 latest（報表要嘅帳期金額）", () => {
+    const read = readFileSync(
+      new URL("../app/api/pos/platform-settlements/route.ts", import.meta.url),
+      "utf8",
+    );
+    assert.ok(
+      read.includes("pos_platform_settlements"),
+      "讀取 route 冇查 pos_platform_settlements",
+    );
+    assert.ok(
+      read.includes("posRouteAuthGuard"),
+      "🔴 財務數字係敏感資料 —— 讀取 route 一定要過 posRouteAuthGuard",
+    );
+    assert.ok(
+      /latest/.test(read),
+      "讀取 route 冇回 latest —— 報表要靠佢拎最新帳期",
+    );
+  });
+
+  it("🔴 migration 0061 存在且與 route 嘅欄位名一致", () => {
+    const sql = readFileSync(
+      new URL("../../supabase/migrations/0061_pos_platform_settlements.sql", import.meta.url),
+      "utf8",
+    );
+    for (const col of [
+      "should_amount",
+      "receive_amount",
+      "subsidy_amount",
+      "service_fee",
+    ]) {
+      assert.ok(sql.includes(col), `migration 0061 冇 ${col}`);
+    }
+    assert.ok(
+      /unique\s*\(\s*store_id\s*,\s*source\s*,\s*period\s*\)/.test(sql),
+      "migration 0061 嘅唯一鍵唔係 (store_id, source, period) —— 同 route 嘅 onConflict 對唔上",
+    );
+    assert.ok(
+      /enable row level security/.test(sql),
+      "migration 0061 未開 RLS —— 平台抽成數字會經 anon key 外洩",
+    );
+  });
+
+  it("🔴 帳期金額正規化：route 用嘅係同一個純函式（唔會兩邊漂移）", () => {
+    const n = normalizePeriodAmounts({ period: "P1", should: 100, receive: 50, subsidy: 40 });
+    assert.ok(n);
+    assert.equal(n.should, 100);
+    assert.equal(n.receive, 50);
+    assert.equal(n.subsidy, 40);
+  });
+});
+
+/**
+ * 報表要讀帳期金額 —— 元件接線鎖。
+ */
+describe("帳期級結算：報表元件接線", () => {
+  const readReport = () =>
+    readFileSync(new URL("../components/restaurant-daily-report.tsx", import.meta.url), "utf8");
+
+  it("🔴 報表要 fetch /api/pos/platform-settlements", () => {
+    const src = readReport();
+    assert.ok(
+      src.includes("/api/pos/platform-settlements"),
+      "報表冇讀帳期金額 —— 逐單配對唔上時三格永遠『待對帳』",
+    );
+  });
+
+  it("🔴 報表要用 computeSettlementTotals（唔可以自己另寫一套合併邏輯）", () => {
+    const src = readReport();
+    assert.ok(
+      src.includes("computeSettlementTotals("),
+      "報表冇用 computeSettlementTotals —— 口徑合併邏輯會漂移",
+    );
+  });
+
+  it("🔴 帳期口徑一定要有 UI 標示（兩種口徑數字唔同）", () => {
+    const src = readReport();
+    assert.ok(
+      /basis\s*===\s*"period"/.test(src),
+      "報表冇顯示「帳期口徑」標示 —— 商家會以為報表數字亂跳",
+    );
+    assert.ok(
+      src.includes("帳期口徑"),
+      "冇『帳期口徑』字樣 —— 使用者睇唔出數字係邊個來源",
+    );
+  });
+
+  it("🔴 fetch 失敗要維持 null（唔可以回假 0）", () => {
+    const src = readReport();
+    const seg = src.match(/async function loadPeriodSettlement[\s\S]*?\n  \}/);
+    assert.ok(seg, "搵唔到 loadPeriodSettlement（結構改咗？）");
+    assert.ok(
+      !/setPeriodSettlement\(\s*\{\s*should\s*:\s*0/.test(src),
+      "🔴 唔可以回 {should:0} 假值 —— 會顯示 100% 抽成（假數）",
+    );
+    assert.ok(
+      seg[0].includes("setPeriodSettlement(null)"),
+      "失敗路徑冇 setPeriodSettlement(null)",
+    );
   });
 });

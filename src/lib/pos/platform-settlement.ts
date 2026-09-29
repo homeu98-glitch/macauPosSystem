@@ -130,6 +130,86 @@ export function settlementForOrder(
   return byOrder.get(key) ?? null;
 }
 
+// ============================================================================
+// 帳期級結算（2026-09-28 新增）—— 報表三格嘅**保底**來源
+// ============================================================================
+
+/**
+ * 平台帳期級金額（由插件抓平台財務頁帳期列表得嚟）。
+ *
+ * ── 為什麼要另設一層（真機實證）────────────────────────────────────
+ * 逐單口徑（`PlatformSettlementTxn`）要靠 `tradeNo` 配 `external_order_id`，
+ * 但**實測配對唔上** ⇒ 全部 `notFound` ⇒ 報表三格永遠「待對帳」。
+ * 而平台頁面**一載入就已經有**帳期級金額（`_list` 回應自帶）。
+ * ⇒ 逐單配唔上唔應該拖死整件事：帳期數字一定有，報表就用佢。
+ *
+ * ⚠️ 帳期口徑同逐單口徑**唔可以相加**（帳期含平台側雜項、期間亦可能唔對齊）。
+ */
+export interface PlatformPeriodAmounts {
+  /** 帳期識別（日期區間字串，例 `"2026-09-16 ~ 2026-09-30"`）。空 → 唔可以入庫。 */
+  period?: string | null;
+  /** 應收＝平台側營業額。 */
+  should?: number | null;
+  /** 實收＝扣平台服務費後。 */
+  receive?: number | null;
+  /** 補貼後實收＝實際到帳。 */
+  subsidy?: number | null;
+  /** 平台服務費（核對用）。 */
+  fee?: number | null;
+}
+
+/** 正規化後嘅帳期金額（可以直接 upsert 落 DB）。 */
+export interface NormalizedPeriodAmounts {
+  period: string;
+  should: number | null;
+  receive: number | null;
+  subsidy: number | null;
+  fee: number | null;
+}
+
+/**
+ * 正規化插件送嚟嘅 `periodAmounts`。
+ *
+ * @returns `null` ＝ 唔可用（冇 period、或者三個金額全部冇值）——
+ *          呼叫端**唔應該**寫一筆空帳期落 DB。
+ *
+ * 🔴 全 `null` 唔可以寫成 0：報表睇到 0 會以為「平台一毫都冇畀」而去追數。
+ * 🔴 `period` 一定要有：佢係唯一鍵一部分，冇咗就分唔清係邊個帳期
+ *    （重抓時會互相覆蓋，變成永遠只有一筆）。
+ */
+export function normalizePeriodAmounts(
+  raw: unknown,
+): NormalizedPeriodAmounts | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+
+  const period = typeof r.period === "string" ? r.period.trim() : "";
+  if (!period) return null;
+
+  const should = toAmountOrNull(r.should);
+  const receive = toAmountOrNull(r.receive);
+  const subsidy = toAmountOrNull(r.subsidy);
+  const fee = toAmountOrNull(r.fee);
+
+  // 一個金額都冇 → 唔寫（避免落一筆全 NULL 嘅帳期，之後睇落似「已對帳」）
+  if (should === null && receive === null && subsidy === null) return null;
+
+  return { period, should, receive, subsidy, fee };
+}
+
+/**
+ * 「帳期實際到帳」口徑：補貼後優先，否則落返實收。
+ * @returns `null` ＝ 兩者都冇（待對帳）。
+ */
+export function periodPayout(
+  p: PlatformPeriodAmounts | null | undefined,
+): number | null {
+  if (!p) return null;
+  const sub = toAmountOrNull(p.subsidy);
+  if (sub !== null) return sub;
+  return toAmountOrNull(p.receive);
+}
+
 /**
  * 「實際到帳」口徑：有 `subsidyNet` 用佢，否則落返 `netAmount`。
  *
@@ -239,5 +319,121 @@ export function computeMfoodTotals<T extends SettlementOrderLike>(
     settledCount,
     pendingCount,
     feeRate,
+  };
+}
+
+// ============================================================================
+// 報表三格：逐單 ＋ 帳期級 兩級口徑合併
+// ============================================================================
+
+/**
+ * 報表三格最終結果（連口徑標示）。
+ *
+ * `basis` 係**必要**嘅：兩種口徑嘅數字唔同，UI 唔講清楚用邊個，
+ * 商家見到今日 1803、聽日 1850 會以為報表有 bug。
+ */
+export interface SettlementTotals {
+  /** 應收金額。 */
+  receivable: number;
+  /** 實收金額；`null` ＝ 完全冇數（UI 顯示「待對帳」）。 */
+  received: number | null;
+  /** 差額率 ＝ `1 − 實收 ÷ 對應應收`；`null` ＝ 計唔到。 */
+  feeRate: number | null;
+  /**
+   * 口徑：
+   *   `"per-order"` → 全部用逐單加總（最準，但有未對帳單）
+   *   `"period"`    → 用帳期金額（**唔受逐單配對成敗影響**）
+   *   `"none"`      → 兩者都冇（顯示「待對帳」）
+   */
+  basis: "per-order" | "period" | "none";
+  /** 逐單口徑下屬平台但未對帳嘅單數。 */
+  pendingCount: number;
+  /** 逐單口徑下已對到帳嘅單數（帳期口徑時仍會帶出，供 UI 顯示「逐單仲有 N 張未對帳」）。 */
+  settledCount: number;
+  /** 帳期口徑下嘅帳期標示（UI 顯示「帳期 2026-09-16 ~ 09-30」）。 */
+  periodLabel: string | null;
+  /**
+   * 🔴 是否用咗帳期口徑 —— 即「逐單有數但**未齊**」而改用帳期。
+   * UI 要藉此顯示「明細仲有 N 張未對帳」嘅提示，唔好靜默換口徑。
+   */
+  usedPeriodFallback: boolean;
+}
+
+/**
+ * 報表 MFOOD 區塊三格 —— 逐單優先，唔齊就落帳期。
+ *
+ * ── 🔴 為什麼要落帳期（2026-09-28 真機實證）────────────────────────
+ * 逐單口徑要靠 `tradeNo` ↔ `external_order_id` 配對，**實測配對唔上**
+ * （平台 transaction 號同 POS 記錄嘅平台單號唔一致）⇒ `received` 永遠 `null`
+ * ⇒ 商家永遠見唔到實收。而帳期金額平台**一定**有（頁面自帶）。
+ * ⇒ 逐單配唔上唔應該令報表三格變「待對帳」。
+ *
+ * ── 何時用邊個（次序）──────────────────────────────────────────────
+ *   ① 逐單對齊（`pendingCount === 0` 且 `settledCount > 0`）→ 用逐單
+ *   ② 否則（完全冇 / 只有部分對到帳）而**有帳期金額** → 用帳期
+ *   ③ 兩者都冇 → `basis: "none"`，`received: null`
+ *
+ * ⚠️ **唔可以**逐單實收 ＋ 帳期實收相加 —— 帳期本身已包含嗰批單，
+ *    相加 = 雙計（2026-09-14 線上/線下雙計同類事故）。
+ *
+ * @param orders 只傳**平台單**（呼叫端已 filter 過）。
+ * @param settlementOf 由訂單取逐單結算結果（`null` ＝ 未對帳）。
+ * @param periodAmounts 帳期金額（插件已寫落 DB 嗰筆）；冇 → 傳 `null`。
+ */
+export function computeSettlementTotals<T extends SettlementOrderLike>(
+  orders: readonly T[],
+  settlementOf: (order: T) => PlatformSettlementAmounts | null | undefined,
+  periodAmounts?: PlatformPeriodAmounts | null,
+): SettlementTotals {
+  const perOrder = computeMfoodTotals(orders, settlementOf);
+  const period = normalizePeriodAmounts(periodAmounts ?? null);
+
+  const periodPayoutValue = periodPayout(period);
+  const periodShould = period ? period.should : null;
+
+  // 帳期口徑要計得出差額率：應收同實收**都**要有值
+  const periodUsable = periodPayoutValue !== null && periodShould !== null && periodShould > 0;
+
+  // ① 逐單完全對齊 → 用逐單（最準）
+  if (perOrder.settledCount > 0 && perOrder.pendingCount === 0) {
+    return {
+      receivable: perOrder.receivable,
+      received: perOrder.received,
+      feeRate: perOrder.feeRate,
+      basis: "per-order",
+      pendingCount: 0,
+      settledCount: perOrder.settledCount,
+      periodLabel: null,
+      usedPeriodFallback: false,
+    };
+  }
+
+  // ② 逐單唔齊（或者完全冇）→ 有帳期就落帳期
+  if (periodUsable) {
+    const received = round2(periodPayoutValue);
+    const receivable = round2(periodShould);
+    return {
+      receivable,
+      received,
+      feeRate: Math.max(0, Math.min(1, 1 - received / receivable)),
+      basis: "period",
+      pendingCount: perOrder.pendingCount,
+      settledCount: perOrder.settledCount,
+      periodLabel: period ? period.period : null,
+      // 逐單有對到帳但唔齊 → 標示「換咗口徑」，UI 要提示
+      usedPeriodFallback: perOrder.settledCount > 0,
+    };
+  }
+
+  // ③ 兩者都冇
+  return {
+    receivable: perOrder.receivable,
+    received: perOrder.received,
+    feeRate: perOrder.feeRate,
+    basis: "none",
+    pendingCount: perOrder.pendingCount,
+    settledCount: perOrder.settledCount,
+    periodLabel: period ? period.period : null,
+    usedPeriodFallback: false,
   };
 }

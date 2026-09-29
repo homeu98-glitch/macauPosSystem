@@ -44,7 +44,7 @@ import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-
 // 外賣平台結算（2026-09-26）：報表 10 格下方「MFOOD 區塊」三格。
 // 🔴 計算一律經 `computeMfoodTotals()`（純函式、有單測），唔可以喺呢度另寫一套
 //    —— 部分對帳嘅「分子分母要同一批」判斷好易寫錯（見該函式註釋）。
-import { computeMfoodTotals } from "@/lib/pos/platform-settlement";
+import { computeSettlementTotals, type PlatformPeriodAmounts } from "@/lib/pos/platform-settlement";
 import { isPlatformOrderSource } from "@/lib/pos/platform-order";
 // P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
 // ⚠️ 補建函式（`ledger-pos-bridge`）刻意用**動態 import** —— 佢係大模組，
@@ -1129,6 +1129,19 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // 雲端訂單補載序號：改變佢會強制重跑 backfill effect（切店 / 手動重新拉取）。
   const [backfillSeq, setBackfillSeq] = useState(0);
 
+  /**
+   * 平台**帳期級**結算金額（應收／實收）—— 報表 MFOOD 區塊三格嘅保底來源。
+   *
+   * ── 為什麼要（2026-09-28 真機實證）────────────────────────────────
+   * 逐單口徑靠 `tradeNo` ↔ `external_order_id` 配對，**實測配對唔上**
+   * ⇒ `platformNetAmount` 全 `undefined` ⇒ 三格永遠「待對帳」。
+   * 而帳期金額平台一定有（插件抓 `_list` 自帶）⇒ 用它做保底。
+   *
+   * ⚠️ `null` ＝ 未讀取 / 讀唔到（唔可以當「冇對帳」去顯示）——
+   *    `computeSettlementTotals` 會自行 fallback 落逐單口徑，行為同以前一致。
+   */
+  const [periodSettlement, setPeriodSettlement] = useState<PlatformPeriodAmounts | null>(null);
+
   // 切店 / 首次確認 merchantId 時立即清空舊店數據，杜絕閃現外店資料。
   // 切店 / 切範圍 / 切帳號時重置，杜絕閃現舊店／舊範圍資料（2026-09-06 加 range）。
   // 舊版只 merchantId 變化時重置 → 切「全部」→「今天」期間 orders 仍殘留「全部」嘅結果，
@@ -1157,6 +1170,62 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     });
     setBackfillSeq((n) => n + 1);
   }, [merchantId, range, adminAllStoresMode]);
+
+  /**
+   * 讀平台**帳期級**結算金額。
+   *
+   * ── 為咩同 backfill effect 分開（而唔係塞埋一齊）─────────────────────
+   * ① 生命週期唔同：`range`（今日／昨日／本月）同**帳期**係兩個口徑，
+   *    切 range 唔應該令帳期金額重抓（帳期本身唔跟 range 變）。
+   * ② 容錯唔同：呢個請求失敗唔應該影響訂單載入（反過來亦一樣）——
+   *    塞埋一齊就會「帳期 500 → 報表整塊壞」。
+   * ⇒ 獨立 effect，依賴只有 store + 刷新鍵。
+   *
+   * ── 🔴 失敗語意 ────────────────────────────────────────────────────
+   * 任何失敗（網絡 / 401 / 未跑 0061）一律 `setPeriodSettlement(null)`，
+   * 令 `computeSettlementTotals` 落返逐單口徑 —— 行為同未加呢個功能時**完全一樣**。
+   * **唔可以**回一個 `{should:0, receive:0}` 假值（會顯示 100% 抽成）。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    if (!merchantId) {
+      setPeriodSettlement(null);
+      return;
+    }
+
+    async function loadPeriodSettlement() {
+      try {
+        await refreshPosDeviceTokenIfNeeded();
+        const res = await fetch(
+          `/api/pos/platform-settlements?storeId=${encodeURIComponent(merchantIdForQuery)}&limit=1`,
+          { headers: { ...posDeviceAuthHeaders() } },
+        );
+        if (cancelled) return;
+        if (!res.ok) {
+          // 401（未登入）／500 等 → 維持 null，唔當「冇對帳」
+          setPeriodSettlement(null);
+          return;
+        }
+        const payload = (await res.json()) as {
+          ok?: boolean;
+          latest?: PlatformPeriodAmounts | null;
+        };
+        if (cancelled) return;
+        if (payload?.ok && payload.latest) {
+          setPeriodSettlement(payload.latest);
+        } else {
+          setPeriodSettlement(null);
+        }
+      } catch {
+        if (!cancelled) setPeriodSettlement(null);
+      }
+    }
+
+    void loadPeriodSettlement();
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId, merchantIdForQuery, refreshKey]);
 
   // 菜品銷售排行「更多」彈窗
   const [dishModalOpen, setDishModalOpen] = useState(false);
@@ -2218,14 +2287,19 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       .filter((o) => orderMatchesReportRange(o, range))
       .filter((o) => isPlatformOrderSource(o.source));
 
-    return computeMfoodTotals(platformOrders, (o) => {
-      // 由訂單拎佢嘅結算金額。冇（未對帳）→ null。
-      const net = o.platformNetAmount;
-      const sub = o.platformSubsidyNet;
-      if (net === undefined && sub === undefined) return null;
-      return { netAmount: net ?? null, subsidyNet: sub ?? null };
-    });
-  }, [orders, range]);
+    return computeSettlementTotals(
+      platformOrders,
+      (o) => {
+        // 由訂單拎佢嘅結算金額。冇（未對帳）→ null。
+        const net = o.platformNetAmount;
+        const sub = o.platformSubsidyNet;
+        if (net === undefined && sub === undefined) return null;
+        return { netAmount: net ?? null, subsidyNet: sub ?? null };
+      },
+      // 帳期級金額：逐單配對唔上時嘅保底（見 computeSettlementTotals 註釋）
+      periodSettlement,
+    );
+  }, [orders, range, periodSettlement]);
 
   /**
    * 未結帳訂單統計（2026-09-07 新增）。
@@ -2766,7 +2840,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
                 ⚠️ 只喺區間內**有平台單**時才 render ——
                     冇平台單嘅店（只做堂食）完全唔會見到呢個區塊，零視覺影響。 */}
-            {mfoodSettlement.receivable > 0 || mfoodSettlement.settledCount > 0 ? (
+            {mfoodSettlement.receivable > 0 ||
+            mfoodSettlement.settledCount > 0 ||
+            mfoodSettlement.basis === "period" ? (
               <div className="mb-4 overflow-hidden rounded-xl border border-emerald-200">
                 <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-emerald-800 to-emerald-600 px-4 py-2.5">
                   <span className="flex items-center gap-2 text-sm font-bold text-white">
@@ -2778,6 +2854,26 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   </span>
                 </div>
 
+                {/* 🔴 口徑標示（2026-09-28）—— 兩種口徑數字唔同，唔講清楚商家會以為報表壞。
+                    帳期口徑 = 平台自己嘅帳期匯總（保證有數，但同 POS 逐單唔一定對齊）。 */}
+                {mfoodSettlement.basis === "period" ? (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-emerald-100 bg-emerald-50/70 px-4 py-2 text-[11px] text-emerald-800">
+                    <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                      帳期口徑
+                    </span>
+                    <span>
+                      以下三格為平台**帳期匯總**
+                      {mfoodSettlement.periodLabel ? `（${mfoodSettlement.periodLabel}）` : ""}
+                      ，非逐單加總。
+                    </span>
+                    {mfoodSettlement.usedPeriodFallback ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                        逐單仲有 {mfoodSettlement.pendingCount} 張未對帳
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="grid grid-cols-3 divide-x divide-slate-200">
                   {/* ① 應收金額（＝營業額總和，POS 即時有） */}
                   <div className="px-4 py-3">
@@ -2786,8 +2882,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       {formatMoney(mfoodSettlement.receivable)}
                     </div>
                     <div className="mt-1 text-[11px] text-slate-400">
-                      平台單營業額總和（POS 即時，共{" "}
-                      {mfoodSettlement.settledCount + mfoodSettlement.pendingCount} 張）
+                      {mfoodSettlement.basis === "period"
+                        ? `平台帳期營業額（${
+                            mfoodSettlement.periodLabel ?? "帳期"
+                          }）`
+                        : `平台單營業額總和（POS 即時，共 ${
+                            mfoodSettlement.settledCount + mfoodSettlement.pendingCount
+                          } 張）`}
                     </div>
                   </div>
 
@@ -2798,6 +2899,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       {mfoodSettlement.received === null ? (
                         <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
                           待對帳
+                        </span>
+                      ) : mfoodSettlement.basis === "period" ? (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                          帳期
                         </span>
                       ) : mfoodSettlement.pendingCount > 0 ? (
                         <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
@@ -2819,11 +2924,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     <div className="mt-1 text-[11px] text-slate-400">
                       {mfoodSettlement.received === null
                         ? "平台帳期未生成，對帳後自動補上"
-                        : `平台實際到帳總和（已配對 ${mfoodSettlement.settledCount} 張${
-                            mfoodSettlement.pendingCount > 0
-                              ? `，另 ${mfoodSettlement.pendingCount} 張未對帳`
-                              : ""
-                          }）`}
+                        : mfoodSettlement.basis === "period"
+                          ? "平台帳期實際到帳（補貼後，平台官方口徑）"
+                          : `平台實際到帳總和（已配對 ${mfoodSettlement.settledCount} 張${
+                              mfoodSettlement.pendingCount > 0
+                                ? `，另 ${mfoodSettlement.pendingCount} 張未對帳`
+                                : ""
+                            }）`}
                     </div>
                   </div>
 
@@ -2859,7 +2966,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         <div className="mt-1 text-[11px] text-slate-400">
                           1 − {mfoodSettlement.received !== null ? formatMoney(mfoodSettlement.received) : "—"} ÷{" "}
                           {formatMoney(mfoodSettlement.receivable)}
-                          {mfoodSettlement.pendingCount > 0 ? "（只計已對帳嗰批）" : ""}
+                          {mfoodSettlement.basis === "period"
+                            ? "（帳期口徑）"
+                            : mfoodSettlement.pendingCount > 0
+                              ? "（只計已對帳嗰批）"
+                              : ""}
                         </div>
                       </>
                     )}

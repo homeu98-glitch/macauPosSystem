@@ -4,8 +4,11 @@ import { describe, it } from "node:test";
 import {
   actualPayout,
   computeMfoodTotals,
+  computeSettlementTotals,
   groupSettlementByOrder,
+  normalizePeriodAmounts,
   normalizeTradeNo,
+  periodPayout,
   settlementForOrder,
   toAmountOrNull,
 } from "./platform-settlement.ts";
@@ -288,5 +291,187 @@ describe("computeMfoodTotals：報表三格", () => {
     assert.equal(r.received, 68.39);
     assert.equal(r.settledCount, 2);
     assert.equal(r.pendingCount, 0);
+  });
+});
+
+// ============================================================================
+// 帳期級結算（2026-09-28）—— 逐單配對唔上時嘅**保底**來源
+// ============================================================================
+
+describe("normalizePeriodAmounts：帳期金額正規化", () => {
+  it("冇 period → null（唯一鍵一部分，冇咗會互相覆蓋）", () => {
+    assert.equal(normalizePeriodAmounts({ should: 100, receive: 50 }), null);
+    assert.equal(normalizePeriodAmounts({ period: "   ", should: 100, receive: 50 }), null);
+  });
+
+  it("三個金額全空 → null（唔可以落一筆假帳期）", () => {
+    assert.equal(
+      normalizePeriodAmounts({ period: "2026-09-16 ~ 2026-09-30", should: null, receive: null, subsidy: null }),
+      null,
+    );
+  });
+
+  it("只有 fee（服務費）都算空 —— 三個口徑金額一個都冇", () => {
+    assert.equal(
+      normalizePeriodAmounts({ period: "P1", should: null, receive: null, subsidy: null, fee: 12 }),
+      null,
+    );
+  });
+
+  it("正常帳期：原樣保留（元，唔除 100）＋ 去前後空白", () => {
+    const n = normalizePeriodAmounts({
+      period: " 2026-09-16 ~ 2026-09-30 ",
+      should: 1803.34,
+      receive: 1353.17,
+      subsidy: 1212.37,
+      fee: 490.83,
+    });
+    assert.ok(n);
+    assert.equal(n.period, "2026-09-16 ~ 2026-09-30");
+    assert.equal(n.should, 1803.34);
+    assert.equal(n.receive, 1353.17);
+    assert.equal(n.subsidy, 1212.37);
+    assert.equal(n.fee, 490.83);
+  });
+
+  it("字串 numeric 要轉成 number（PostgREST 會回字串）", () => {
+    const n = normalizePeriodAmounts({ period: "P1", should: "1803.34", receive: "1353.17" });
+    assert.ok(n);
+    assert.equal(n.should, 1803.34);
+    assert.equal(n.receive, 1353.17);
+  });
+
+  it("非物件 / 陣列 → null", () => {
+    assert.equal(normalizePeriodAmounts(null), null);
+    assert.equal(normalizePeriodAmounts(undefined), null);
+    assert.equal(normalizePeriodAmounts("x"), null);
+    assert.equal(normalizePeriodAmounts([{ period: "P1", receive: 1 }]), null);
+  });
+
+  it("只有 should（冇實收）都算可用 —— 應收係合法資訊", () => {
+    const n = normalizePeriodAmounts({ period: "P1", should: 1803.34 });
+    assert.ok(n);
+    assert.equal(n.should, 1803.34);
+    assert.equal(n.receive, null);
+  });
+});
+
+describe("periodPayout：帳期「實際到帳」口徑", () => {
+  it("補貼後優先（同逐單 actualPayout 一致）", () => {
+    assert.equal(periodPayout({ subsidy: 31.91, receive: 35.11 }), 31.91);
+  });
+
+  it("冇補貼 → 落返實收", () => {
+    assert.equal(periodPayout({ subsidy: null, receive: 35.11 }), 35.11);
+  });
+
+  it("補貼係 0 係合法值（唔可以當「冇資料」而退回 receive）", () => {
+    assert.equal(periodPayout({ subsidy: 0, receive: 35.11 }), 0);
+  });
+
+  it("兩者都冇 → null（待對帳）", () => {
+    assert.equal(periodPayout({ subsidy: null, receive: null }), null);
+    assert.equal(periodPayout(null), null);
+  });
+});
+
+describe("computeSettlementTotals：逐單優先、唔齊落帳期", () => {
+  const ord = (id: string, total: number) => ({ externalOrderId: id, total });
+  const settled = (net: number, sub: number) => () => ({ netAmount: net, subsidyNet: sub });
+
+  const PERIOD = {
+    period: "2026-09-16 ~ 2026-09-30",
+    should: 1803.34,
+    receive: 1353.17,
+    subsidy: 1212.37,
+    fee: 490.83,
+  };
+
+  it("🔴 逐單完全對齊 → 用逐單（帳期金額唔應該搶）", () => {
+    const t = computeSettlementTotals([ord("A", 62)], settled(35.11, 31.91), PERIOD);
+    assert.equal(t.basis, "per-order");
+    assert.equal(t.receivable, 62, "用 POS 逐單應收，唔用帳期 1803.34");
+    assert.equal(t.received, 31.91);
+    assert.equal(t.periodLabel, null);
+    assert.equal(t.usedPeriodFallback, false);
+  });
+
+  it("🔴🔴 逐單一張都配唔上 → 落帳期（呢個正係真機實況）", () => {
+    const t = computeSettlementTotals([ord("A", 62), ord("B", 48)], () => null, PERIOD);
+    assert.equal(t.basis, "period");
+    assert.equal(t.receivable, 1803.34, "帳期應收");
+    assert.equal(t.received, 1212.37, "帳期補貼後實收");
+    assert.equal(t.periodLabel, "2026-09-16 ~ 2026-09-30");
+    assert.equal(t.pendingCount, 2, "逐單仲有 2 張未對帳（要報出嚟）");
+    // 1 - 1212.37/1803.34
+    assert.ok(Math.abs((t.feeRate ?? 0) - (1 - 1212.37 / 1803.34)) < 1e-9);
+  });
+
+  it("🔴 逐單部分對齊 → 落帳期，並標示用咗 fallback", () => {
+    const t = computeSettlementTotals(
+      [ord("A", 62), ord("B", 48)],
+      (o) => (o.externalOrderId === "A" ? { netAmount: 35.11, subsidyNet: 31.91 } : null),
+      PERIOD,
+    );
+    assert.equal(t.basis, "period");
+    assert.equal(t.usedPeriodFallback, true, "逐單有數但唔齊 → 要標示換咗口徑");
+    assert.equal(t.settledCount, 1);
+    assert.equal(t.pendingCount, 1);
+    // 🔴 唔可以係 31.91（逐單）或者 31.91+1212.37（相加雙計）
+    assert.equal(t.received, 1212.37);
+  });
+
+  it("🔴 冇帳期金額 → 行為同未加呢個功能時完全一樣", () => {
+    const t = computeSettlementTotals([ord("A", 62)], settled(35.11, 31.91), null);
+    assert.equal(t.basis, "per-order");
+    assert.equal(t.received, 31.91);
+
+    const none = computeSettlementTotals([ord("A", 62)], () => null, null);
+    assert.equal(none.basis, "none");
+    assert.equal(none.receivable, 62);
+    assert.equal(none.received, null, "冇帳期又冇逐單 → null（唔可以 0）");
+    assert.equal(none.feeRate, null);
+  });
+
+  it("🔴 帳期只有應收冇實收 → 唔可以用（計唔到差額率）", () => {
+    const t = computeSettlementTotals(
+      [ord("A", 62)],
+      () => null,
+      { period: "P1", should: 1803.34, receive: null, subsidy: null },
+    );
+    assert.equal(t.basis, "none", "冇實收 → 唔算可用");
+    assert.equal(t.received, null);
+  });
+
+  it("🔴 帳期應收 0 → 唔可以用（除數為 0）", () => {
+    const t = computeSettlementTotals([ord("A", 62)], () => null, { period: "P1", should: 0, receive: 0 });
+    assert.equal(t.basis, "none");
+    assert.equal(t.feeRate, null);
+  });
+
+  it("帳期差額率夾在 0..1（平台倒貼唔可以出負數）", () => {
+    const t = computeSettlementTotals([ord("A", 62)], () => null, {
+      period: "P1",
+      should: 100,
+      receive: 120,
+      subsidy: 120,
+    });
+    assert.equal(t.basis, "period");
+    assert.equal(t.feeRate, 0);
+  });
+
+  it("冇任何平台單、但有帳期金額 → 仍然出帳期（商家要睇平台正式數字）", () => {
+    const t = computeSettlementTotals([], () => null, PERIOD);
+    assert.equal(t.basis, "period");
+    assert.equal(t.receivable, 1803.34);
+    assert.equal(t.received, 1212.37);
+  });
+
+  it("空輸入 + 冇帳期 → 全 0 / null（區塊唔 render）", () => {
+    const t = computeSettlementTotals([], () => null, null);
+    assert.equal(t.receivable, 0);
+    assert.equal(t.received, null);
+    assert.equal(t.feeRate, null);
+    assert.equal(t.basis, "none");
   });
 });

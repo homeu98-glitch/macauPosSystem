@@ -8,6 +8,7 @@ import {
 } from "@/lib/grabber/grabber-secret";
 import {
   groupSettlementByOrder,
+  normalizePeriodAmounts,
   normalizeTradeNo,
   toAmountOrNull,
   type PlatformSettlementTxn,
@@ -86,6 +87,35 @@ function readTxns(raw: unknown): PlatformSettlementTxn[] {
   return out;
 }
 
+/**
+ * 讀插件送嚟嘅**帳期級**金額（`payload.periodAmounts`）。
+ *
+ * ── 為什麼要有（2026-09-28 真機實證）────────────────────────────────
+ * 逐單配對（上面 `readTxns` ＋ `external_order_id`）**實測配對唔上**：
+ * 平台 transaction 嘅 `tradeNo` 同 POS 記錄嘅平台單號唔一致 ⇒ 全部 `notFound`
+ * ⇒ 報表三格永遠「待對帳」。
+ * 但平台財務頁**一載入就已經有**帳期級金額（`_list` 回應自帶）。
+ * ⇒ 呢筆係報表嘅**保底**：逐單配唔上，三格仍然有數。
+ *
+ * 正規化用 `normalizePeriodAmounts()`（純函式、有單測）—— route 唔可以自己再寫一套。
+ *
+ * @returns `null` ＝ 插件冇送 / 送咗但唔可用（冇 period 或者金額全空）。
+ *          呢種情況**唔會**寫 DB（免得落一筆假帳期）。
+ */
+function readPeriodAmounts(raw: unknown) {
+  const n = normalizePeriodAmounts(raw);
+  if (!n) return null;
+  return {
+    period: n.period,
+    should: n.should,
+    receive: n.receive,
+    subsidy: n.subsidy,
+    fee: n.fee,
+    // 原始物件原樣存落 `raw` jsonb（審計用：事後核對數字點嚟）
+    raw: raw && typeof raw === "object" ? raw : null,
+  };
+}
+
 export async function POST(request: Request) {
   const expected = readGrabberSharedSecret();
   if (!expected) {
@@ -125,7 +155,13 @@ export async function POST(request: Request) {
   }
 
   const txns = readTxns(payload.transactions);
-  if (txns.length === 0) {
+  const periodAmounts = readPeriodAmounts(payload.periodAmounts);
+
+  // 🔴 兩者都冇才當「冇資料」。
+  //    舊寫法係 `txns.length === 0` 就 early return —— 但零重放路徑（v1.61）
+  //    抓唔到 transaction 明細、只有帳期金額，會被呢句靜默丟棄
+  //    ⇒ 報表三格永遠冇數（正是商家最介意嘅靜默失敗）。
+  if (txns.length === 0 && !periodAmounts) {
     return NextResponse.json({ ok: true, received: 0, updated: 0, message: "冇結算資料。" });
   }
 
@@ -139,6 +175,56 @@ export async function POST(request: Request) {
       { ok: false, error: "Supabase 伺服器端未配置，無法寫入結算資料。" },
       { status: 503 },
     );
+  }
+
+  // ── 帳期級：upsert（同一店 + 來源 + 帳期 = 一筆，重抓覆蓋）────────────
+  //    呢步同逐單 UPDATE 完全獨立：逐單配唔上唔影響呢筆寫入。
+  let periodSaved = false;
+  if (periodAmounts) {
+    const { error: periodError } = await supabase
+      .from("pos_platform_settlements")
+      .upsert(
+        {
+          store_id: storeId,
+          source,
+          period: periodAmounts.period,
+          should_amount: periodAmounts.should,
+          receive_amount: periodAmounts.receive,
+          subsidy_amount: periodAmounts.subsidy,
+          service_fee: periodAmounts.fee,
+          raw: periodAmounts.raw,
+          fetched_at: new Date().toISOString(),
+        },
+        { onConflict: "store_id,source,period" },
+      );
+
+    if (periodError) {
+      // 🔴 唔可以靜默 —— 帳期金額係報表三格嘅保底，寫唔入要即刻知
+      console.error("[integration/grabber/settlement] 帳期金額寫入失敗", periodError.message);
+    } else {
+      periodSaved = true;
+    }
+  }
+
+  // 冇 transaction 明細：帳期寫成功就可以收工（唔係錯誤）
+  if (txns.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      received: 0,
+      orders: 0,
+      updated: 0,
+      notFound: [],
+      failed: [],
+      unmatchedCount: 0,
+      periodSaved,
+      period: periodAmounts?.period ?? null,
+      periodShould: periodAmounts?.should ?? null,
+      periodReceive: periodAmounts?.receive ?? null,
+      // 帳期寫入失敗時，訊息要明講（唔可以報「成功但冇數」）
+      message: periodSaved
+        ? "已寫入帳期金額（冇逐單明細）。"
+        : "帳期金額寫入失敗（請查看伺服器日誌）。",
+    });
   }
 
   // 同一 tradeNo 多筆 transaction → 加總（拆單／部分退款會出現）。
@@ -220,5 +306,10 @@ export async function POST(request: Request) {
     // 冇 tradeNo 嘅 transaction（無法配對）—— 唔好靜默掉
     unmatchedCount,
     settledAt,
+    // 帳期級寫入結果（報表三格嘅保底來源；唔受 notFound 影響）
+    periodSaved,
+    period: periodAmounts?.period ?? null,
+    periodShould: periodAmounts?.should ?? null,
+    periodReceive: periodAmounts?.receive ?? null,
   });
 }
