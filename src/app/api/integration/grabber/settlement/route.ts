@@ -7,10 +7,12 @@ import {
   readGrabberSharedSecret,
 } from "@/lib/grabber/grabber-secret";
 import {
+  createTradeNoIdIndex,
   groupSettlementByOrder,
   normalizePeriodAmounts,
   normalizeTradeNo,
   toAmountOrNull,
+  tradeNoQueryKeys,
   type PlatformSettlementTxn,
 } from "@/lib/pos/platform-settlement";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
@@ -30,7 +32,12 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
  *   一次覆蓋就會把店員已推進嘅狀態打返，係最嚴重嘅一種資料損壞。
  *
  * ── 配對鍵 ──────────────────────────────────────────────────────────
- *   platform `tradeNo` ＝ `pos_orders.external_order_id`
+ *   platform `tradeNo` ↔ `pos_orders.external_order_id`
+ *   🔴 兩個口徑差一個前綴（2026-09-29 SQL 截圖確診）：
+ *      · 接單列表 `id` ＝ `202609250937046870290`（純數字）＝ external_order_id
+ *      · 財務頁明細 `tradeNo` ＝ `CRD202609250937046870290`（多 `CRD`）
+ *      ⇒ 一定要經「前綴無關」配對（`createTradeNoIdIndex`，見 platform-settlement.ts）；
+ *        攞 `tradeNo` 直接 `.in(external_order_id)` 會**一條都唔中** ⇒ 全部 notFound。
  *   ⚠️ 唔可以用 `local_order_no`（`#1` / `#2`）—— 嗰個係 POS 本地序號，
  *      平台完全唔知呢個號，兩邊配對唔上。
  *
@@ -91,9 +98,11 @@ function readTxns(raw: unknown): PlatformSettlementTxn[] {
  * 讀插件送嚟嘅**帳期級**金額（`payload.periodAmounts`）。
  *
  * ── 為什麼要有（2026-09-28 真機實證）────────────────────────────────
- * 逐單配對（上面 `readTxns` ＋ `external_order_id`）**實測配對唔上**：
+ * 逐單配對（上面 `readTxns` ＋ `external_order_id`）當年**實測配對唔上**：
  * 平台 transaction 嘅 `tradeNo` 同 POS 記錄嘅平台單號唔一致 ⇒ 全部 `notFound`
  * ⇒ 報表三格永遠「待對帳」。
+ * （真因 2026-09-29 確診：`tradeNo` 多一個 `CRD` 前綴，見 `tradeNoCore` —— 已修。
+ *   呢筆帳期保底照留：帳期數字平台一定有，唔受逐單配對成敗影響。）
  * 但平台財務頁**一載入就已經有**帳期級金額（`_list` 回應自帶）。
  * ⇒ 呢筆係報表嘅**保底**：逐單配唔上，三格仍然有數。
  *
@@ -230,13 +239,21 @@ export async function POST(request: Request) {
   // 同一 tradeNo 多筆 transaction → 加總（拆單／部分退款會出現）。
   const { byOrder, unmatchedCount } = groupSettlementByOrder(txns);
 
-  // 一次過查返呢批單號喺本店嘅 id（配對用）。分批查避免 URL 過長。
+  // ── 逐單配對：一定要「前綴無關」（2026-09-29 確診，見 `tradeNoCore`）────
+  //
+  // 🔴 舊寫法攞 `tradeNo` 直接 `.in("external_order_id", …)`：mfood 接單 `id`
+  //    係純數字、財務頁 `tradeNo` 多一個 `CRD` ⇒ 一條都唔中 ⇒ 全部 notFound
+  //    ⇒ 訂單詳情永遠「待平台對帳」（下面嘅帳期級 upsert 就係嗰陣嘅繞路）。
+  //
+  // 查詢用「原值 ＋ 核心」兩種鍵；配對 exact 優先、核心兜底 ——
+  // 全部收喺 `createTradeNoIdIndex()`（純函式、有單測），route 唔可以自己再寫一套。
   const tradeNos = [...byOrder.keys()];
+  const queryKeys = tradeNoQueryKeys(tradeNos);
   const CHUNK = 200;
-  const idByTradeNo = new Map<string, string>();
+  const idIndex = createTradeNoIdIndex();
 
-  for (let i = 0; i < tradeNos.length; i += CHUNK) {
-    const chunk = tradeNos.slice(i, i + CHUNK);
+  for (let i = 0; i < queryKeys.length; i += CHUNK) {
+    const chunk = queryKeys.slice(i, i + CHUNK);
     const { data, error } = await supabase
       .from("pos_orders")
       .select("id,external_order_id")
@@ -251,11 +268,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: `查訂單失敗：${error.message}` }, { status: 500 });
     }
 
-    for (const row of data ?? []) {
-      const key = normalizeTradeNo(row.external_order_id);
-      const id = typeof row.id === "string" ? row.id : null;
-      if (key && id) idByTradeNo.set(key, id);
-    }
+    idIndex.add(data ?? []);
   }
 
   const settledAt = new Date().toISOString();
@@ -264,7 +277,7 @@ export async function POST(request: Request) {
   const failed: { tradeNo: string; reason: string }[] = [];
 
   for (const [tradeNo, s] of byOrder) {
-    const orderId = idByTradeNo.get(tradeNo);
+    const orderId = idIndex.get(tradeNo);
     if (!orderId) {
       // 平台有、POS 冇 → 可能係「未抓到嘅單」或者「已作廢／已刪」。
       // 🔴 一定要回報，唔可以靜默掉 —— 商家要靠呢個數字判斷抓取係唔係完整。

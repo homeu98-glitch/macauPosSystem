@@ -69,6 +69,109 @@ export function normalizeTradeNo(value: unknown): string | null {
   return s === "" ? null : s;
 }
 
+// ============================================================================
+// 平台單號「前綴無關」配對（2026-09-29 確診）
+// ============================================================================
+
+/**
+ * 🔴🔴 mfood 嘅單號有**兩個口徑**（真機確診 2026-09-29，商家 SQL 截圖證實）：
+ *
+ *   · 接單列表 `id` ＝ `202609250937046870290`（純數字）→ `pos_orders.external_order_id`
+ *   · 財務頁明細 `tradeNo` ＝ `CRD202609250937046870290`（**多一個 `CRD` 前綴**）
+ *
+ * 舊寫法攞 `tradeNo` 直接 `.in("external_order_id", …)` ⇒ **一條都唔中** ⇒
+ * 全部 `notFound` ⇒ 逐單 UPDATE 係死代碼，訂單詳情永遠「待平台對帳」。
+ * （migration 0061 嘅帳期級保底就係嗰陣為咗繞過呢個先開嘅 —— 見該檔 L7-9。）
+ *
+ * 「核心」＝ 剝走**開頭英文字母**前綴。兩個口徑嘅核心相同 ⇒ 用核心做兜底配對鍵。
+ * （刻意唔可以只剝 `CRD`：平台改版換前綴（`TK…`／`MFO…`）時一樣要對得上；
+ *   亦唔可以剝中間／尾嘅字母 —— 只有開頭前綴先係「同一個號嘅兩種寫法」。）
+ *
+ * @returns 剝走前綴後嘅字串；空值或全部係字母（剝完變空）→ `null`。
+ */
+export function tradeNoCore(value: unknown): string | null {
+  const s = normalizeTradeNo(value);
+  if (!s) return null;
+  const core = s.replace(/^[A-Za-z]+/, "");
+  return core === "" ? null : core;
+}
+
+/**
+ * 一批平台 `tradeNo` → 查 DB 用嘅**候選鍵清單**（原值 ＋ 核心，去重保序）。
+ *
+ * ⚠️ 一定要**兩種都查**：而家 DB 存純數字、平台送有前綴（要靠核心先中）；
+ *    第日如果反轉（DB 有前綴、平台送純數字），就靠原值嗰條兜住。
+ */
+export function tradeNoQueryKeys(values: readonly unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of values ?? []) {
+    const exact = normalizeTradeNo(v);
+    if (exact && !seen.has(exact)) {
+      seen.add(exact);
+      out.push(exact);
+    }
+    const core = tradeNoCore(v);
+    if (core && !seen.has(core)) {
+      seen.add(core);
+      out.push(core);
+    }
+  }
+  return out;
+}
+
+/** `createTradeNoIdIndex().add()` 收嘅 DB 行（淨需要兩個欄位）。 */
+export interface TradeNoIdRow {
+  id: unknown;
+  external_order_id: unknown;
+}
+
+/**
+ * 逐單配對索引：平台 `tradeNo` → `pos_orders.id`。
+ *
+ * ── 為什麼要「exact 優先、核心兜底」兩層 ─────────────────────────────
+ * 核心配對有一個理論風險：`CRD123` 同 `123` 會被當同一張單。
+ * exact 先中就用 exact ⇒ **完全相同**嘅情況零行為改變，
+ * 只有原本配對唔上（＝今次真正嘅 bug）先會行核心兜底。
+ *
+ * 🔴 呢個係 `settlement/route.ts` 逐單 UPDATE 嘅**唯一**配對入口 ——
+ *    唔可以喺 route 入面自己再寫一份（歷史上就係咁漂移）。
+ */
+export interface TradeNoIdIndex {
+  /** 分批查 DB 後逐批餵入（跨 chunk 累積）。 */
+  add(rows: readonly TradeNoIdRow[] | null | undefined): void;
+  /** exact 優先、核心兜底；配對唔到 → `null`（＝notFound，唔可以靜默掉）。 */
+  get(tradeNo: unknown): string | null;
+}
+
+export function createTradeNoIdIndex(): TradeNoIdIndex {
+  const byExact = new Map<string, string>();
+  const byCore = new Map<string, string>();
+
+  return {
+    add(rows) {
+      for (const row of rows ?? []) {
+        if (!row || typeof row !== "object") continue;
+        const id =
+          typeof row.id === "string" && row.id.trim() !== "" ? row.id : null;
+        if (!id) continue;
+        const exact = normalizeTradeNo(row.external_order_id);
+        if (exact) byExact.set(exact, id);
+        const core = tradeNoCore(row.external_order_id);
+        if (core) byCore.set(core, id);
+      }
+    },
+
+    get(tradeNo) {
+      const key = normalizeTradeNo(tradeNo);
+      const exactHit = key ? byExact.get(key) : undefined;
+      if (exactHit) return exactHit;
+      const core = tradeNoCore(tradeNo);
+      return core ? byCore.get(core) ?? null : null;
+    },
+  };
+}
+
 /**
  * 一批 transaction 按 `tradeNo` 分組加總。
  *

@@ -11,6 +11,10 @@ import {
   periodPayout,
   settlementForOrder,
   toAmountOrNull,
+  tradeNoCore,
+  tradeNoQueryKeys,
+  createTradeNoIdIndex,
+  type TradeNoIdRow,
 } from "./platform-settlement.ts";
 
 /**
@@ -473,5 +477,195 @@ describe("computeSettlementTotals：逐單優先、唔齊落帳期", () => {
     assert.equal(t.received, null);
     assert.equal(t.feeRate, null);
     assert.equal(t.basis, "none");
+  });
+});
+
+// ============================================================================
+// 平台單號「前綴無關」配對（2026-09-29 確診真案）
+// ============================================================================
+
+/**
+ * 🔴🔴 mfood 單號有兩個口徑：
+ *   - 接單列表 `id`         = `202609250937046870290`（純數字，寫入 DB）
+ *   - 財務頁   `tradeNo`    = `CRD202609250937046870290`（多一個 `CRD` 前綴）
+ *
+ * 舊 code 直接拎 `tradeNo` 去 `.in("external_order_id")` 查 DB
+ * ⇒ 一條都唔中 ⇒ 全部 notFound ⇒ 實收價格永遠補唔返（2026-09-29 使用者實案）。
+ *
+ * 呢組測試要鎖死：核心配對可以跨前綴，但**完全相同要優先**（零行為改變）。
+ */
+
+describe("tradeNoCore：剝走開頭英文字母前綴", () => {
+  it("🔴 真案：CRD202609250937046870290 → 202609250937046870290", () => {
+    assert.equal(tradeNoCore("CRD202609250937046870290"), "202609250937046870290");
+  });
+
+  it("本身冇前綴 → 原樣返回（唔可以改數字）", () => {
+    assert.equal(tradeNoCore("202609250937046870290"), "202609250937046870290");
+  });
+
+  it("🔴 平台改版換前綴（CRD → MFD）都對得上（刻意唔只剝 CRD）", () => {
+    assert.equal(tradeNoCore("MFD202609250937046870290"), "202609250937046870290");
+    assert.equal(tradeNoCore("crd202609250937046870290"), "202609250937046870290");
+  });
+
+  it("null / undefined / 空字串 / 純空白 → null", () => {
+    assert.equal(tradeNoCore(null), null);
+    assert.equal(tradeNoCore(undefined), null);
+    assert.equal(tradeNoCore(""), null);
+    assert.equal(tradeNoCore("   "), null);
+  });
+
+  it("全係字母（剝完變空）→ null（唔可以回空字串當 key）", () => {
+    assert.equal(tradeNoCore("CRD"), null);
+  });
+});
+
+describe("tradeNoQueryKeys：查 DB 用嘅候選鍵（原值＋核心）", () => {
+  it("🔴 有 CRD 前綴 → 出兩個候選（原值 + 核心）", () => {
+    assert.deepEqual(tradeNoQueryKeys(["CRD202609250937046870290"]), [
+      "CRD202609250937046870290",
+      "202609250937046870290",
+    ]);
+  });
+
+  it("🔴 去重：原值同核心一樣嘅時候唔可以重複出現在 IN 清單", () => {
+    assert.deepEqual(tradeNoQueryKeys(["202609250937046870290"]), ["202609250937046870290"]);
+    assert.deepEqual(
+      tradeNoQueryKeys(["202609250937046870290", "CRD202609250937046870290"]),
+      ["202609250937046870290", "CRD202609250937046870290"],
+    );
+  });
+
+  it("無效值（null / 空）全部掉棄", () => {
+    assert.deepEqual(tradeNoQueryKeys([null, "", "  ", undefined]), []);
+  });
+
+  it("空陣列 / null → 空陣列（唔可以崩）", () => {
+    assert.deepEqual(tradeNoQueryKeys([]), []);
+    assert.deepEqual(tradeNoQueryKeys(null as unknown as readonly unknown[]), []);
+  });
+});
+
+describe("createTradeNoIdIndex：DB 列 → 單號索引（exact 優先、核心兜底）", () => {
+  const DB_ROW = { id: "uuid-1", external_order_id: "202609250937046870290" };
+
+  it("🔴 真案：財務頁 tradeNo（CRD…）要配到 DB 嗰張（無 CRD）", () => {
+    const idx = createTradeNoIdIndex();
+    idx.add([DB_ROW]);
+    assert.equal(idx.get("CRD202609250937046870290"), "uuid-1");
+  });
+
+  it("完全相同 → 直接命中（舊行為零改變）", () => {
+    const idx = createTradeNoIdIndex();
+    idx.add([DB_ROW]);
+    assert.equal(idx.get("202609250937046870290"), "uuid-1");
+  });
+
+  it("🔴 exact 優先：兩張單（一張帶前綴、一張純數字）唔可以配錯", () => {
+    const idx = createTradeNoIdIndex();
+    idx.add([
+      { id: "uuid-core", external_order_id: "202609250937046870290" },
+      { id: "uuid-exact", external_order_id: "CRD202609250937046870290" },
+    ]);
+    assert.equal(idx.get("CRD202609250937046870290"), "uuid-exact");
+    assert.equal(idx.get("202609250937046870290"), "uuid-core");
+  });
+
+  it("搵唔到 → null（唔可以亂配）", () => {
+    const idx = createTradeNoIdIndex();
+    idx.add([DB_ROW]);
+    assert.equal(idx.get("CRD999999999999999999999"), null);
+    assert.equal(idx.get(null), null);
+    assert.equal(idx.get(""), null);
+  });
+
+  it("空索引 → null（唔可以崩）", () => {
+    const idx = createTradeNoIdIndex();
+    assert.equal(idx.get("CRD202609250937046870290"), null);
+  });
+
+  it("冇效列（冇 id / 非物件 / 冇單號）要安全掉棄", () => {
+    const idx = createTradeNoIdIndex();
+    // 故意塞入唔合型別嘅列（DB 回傳有可能唔乾淨）——索引要安全掉棄，唔可以崩
+    idx.add([
+      { id: "", external_order_id: "202609250937046870290" },
+      { id: "uuid-2", external_order_id: null },
+      null,
+      "not-an-object",
+    ] as unknown as TradeNoIdRow[]);
+    assert.equal(idx.get("CRD202609250937046870290"), null);
+    idx.add([{ id: "uuid-3", external_order_id: "CRD202609250937046870290" }]);
+    assert.equal(idx.get("202609250937046870290"), "uuid-3");
+  });
+
+  it("分批 add（chunk 200 查詢）結果要累積，唔可以互相覆蓋", () => {
+    const idx = createTradeNoIdIndex();
+    idx.add([{ id: "uuid-a", external_order_id: "202609250937046870290" }]);
+    idx.add([{ id: "uuid-b", external_order_id: "202609251303412269108" }]);
+    assert.equal(idx.get("CRD202609250937046870290"), "uuid-a");
+    assert.equal(idx.get("CRD202609251303412269108"), "uuid-b");
+  });
+
+  it("add(null) / add(undefined) 唔可以崩", () => {
+    const idx = createTradeNoIdIndex();
+    idx.add(null);
+    idx.add(undefined);
+    assert.equal(idx.get("CRD202609250937046870290"), null);
+  });
+});
+
+describe("🔴 端到端真案：mfood 財務頁（CRD）→ pos_orders（無 CRD）", () => {
+  /**
+   * 呢條係 2026-09-29 使用者實案嘅**整條鏈**重演：
+   *   插件原始列 → readTxns 改名 → groupSettlementByOrder → tradeNoQueryKeys
+   *   → （DB `.in(external_order_id)`）→ createTradeNoIdIndex → update
+   * 任何一環改壞，呢條就會紅。
+   */
+  const RAW_ROW = {
+    // `_get-order-summary-list` 嘅 result[] 原始列：兩個號同時存在
+    id: "202609250937046870290",
+    tradeNo: "CRD202609250937046870290",
+    storeBusinessAmtn: 62,
+    storeReceiveAmtn: 35.11,
+    subsidyStoreReceiveAmtn: 31.91,
+  };
+
+  it("🔴 tradeNo 帶 CRD 都要配到 DB 嗰張單（舊寫法會全部 notFound）", () => {
+    // ① route.readTxns() 嘅改名（`tradeNo` 優先）
+    const txn = {
+      externalOrderId: normalizeTradeNo(RAW_ROW.tradeNo) ?? normalizeTradeNo(RAW_ROW.id),
+      netAmount: toAmountOrNull(RAW_ROW.storeReceiveAmtn),
+      subsidyNet: toAmountOrNull(RAW_ROW.subsidyStoreReceiveAmtn),
+      businessAmount: toAmountOrNull(RAW_ROW.storeBusinessAmtn),
+      serviceFee: null,
+    };
+    assert.equal(txn.externalOrderId, "CRD202609250937046870290");
+
+    // ② 分組
+    const { byOrder, unmatchedCount } = groupSettlementByOrder([txn]);
+    assert.equal(unmatchedCount, 0);
+    assert.equal(byOrder.size, 1);
+
+    // ③ 查 DB 嘅候選鍵一定要包埋「無 CRD」嗰個
+    const queryKeys = tradeNoQueryKeys([...byOrder.keys()]);
+    assert.ok(queryKeys.includes("202609250937046870290"), "IN 清單一定要有核心鍵");
+    assert.ok(queryKeys.includes("CRD202609250937046870290"), "IN 清單要有原值鍵");
+
+    // ④ DB 回傳（`external_order_id` 由接單列表 `id` 寫入 ⇒ 無 CRD）
+    const idx = createTradeNoIdIndex();
+    idx.add([{ id: "order-uuid-1", external_order_id: RAW_ROW.id }]);
+
+    // ⑤ 配對：拎財務頁 tradeNo 去查 → 要中
+    const orderId = idx.get("CRD202609250937046870290");
+    assert.equal(orderId, "order-uuid-1", "🔴 呢條就係當年配唔上嘅地方");
+
+    // ⑥ 實收金額（報表三格用）
+    const s = byOrder.get("CRD202609250937046870290");
+    assert.ok(s);
+    assert.equal(s.txnCount, 1);
+    assert.equal(s.netAmount, 35.11, "平台過數（補貼前）");
+    assert.equal(s.subsidyNet, 31.91, "補貼後");
+    assert.equal(actualPayout(s), 31.91, "🔴 實收價＝補貼後（31.91），唔係 35.11");
   });
 });
