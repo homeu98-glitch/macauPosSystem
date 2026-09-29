@@ -44,8 +44,204 @@ import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-
 // 外賣平台結算（2026-09-26）：報表 10 格下方「MFOOD 區塊」三格。
 // 🔴 計算一律經 `computeMfoodTotals()`（純函式、有單測），唔可以喺呢度另寫一套
 //    —— 部分對帳嘅「分子分母要同一批」判斷好易寫錯（見該函式註釋）。
-import { computeSettlementTotals, type PlatformPeriodAmounts } from "@/lib/pos/platform-settlement";
-import { isPlatformOrderSource } from "@/lib/pos/platform-order";
+import {
+  computeSettlementTotals,
+  type PlatformPeriodAmounts,
+  type SettlementTotals,
+} from "@/lib/pos/platform-settlement";
+import { PLATFORM_ORDER_SOURCES } from "@/lib/pos/platform-order";
+
+// ── 外賣平台結算：分平台卡片（2026-09-29 使用者需求）─────────────────────────
+// MFOOD 用橙（#FB8F01）、澳覓用玫紅（#FF3159），來自使用者提供嘅參考圖取色。
+// 狀態色（待對帳＝amber、帳期口徑＝emerald）保持不變，避免同平台色混淆。
+
+type PlatformSettlementTheme = {
+  /** 卡片外框。 */
+  border: string;
+  /** 標題漸層（平台主色 → 略深）。 */
+  headerGradient: string;
+  /** 標題小圓點。 */
+  dot: string;
+  /** 標題右側副標題字色。 */
+  subtitle: string;
+  /** 實收金額數值字色（有值時）。 */
+  receivedValue: string;
+  /** 差額率數值字色（有值時）。 */
+  feeValue: string;
+  /** 比例條：實收部分（淺）。 */
+  barLight: string;
+  /** 比例條：平台抽成部分（深）。 */
+  barDark: string;
+};
+
+const MFOOD_THEME: PlatformSettlementTheme = {
+  border: "border-orange-200",
+  headerGradient: "bg-gradient-to-r from-orange-500 to-orange-600",
+  dot: "bg-orange-300",
+  subtitle: "text-orange-100",
+  receivedValue: "text-orange-700",
+  feeValue: "text-orange-700",
+  barLight: "bg-orange-300",
+  barDark: "bg-orange-600",
+};
+
+const AOMI_THEME: PlatformSettlementTheme = {
+  border: "border-rose-200",
+  headerGradient: "bg-gradient-to-r from-rose-500 to-rose-600",
+  dot: "bg-rose-300",
+  subtitle: "text-rose-100",
+  receivedValue: "text-rose-700",
+  feeValue: "text-rose-700",
+  barLight: "bg-rose-300",
+  barDark: "bg-rose-600",
+};
+
+/** 單一平台嘅結算三格卡片（MFOOD / 澳覓 共用，只係配色同標題唔同）。 */
+function PlatformSettlementCard({
+  totals,
+  theme,
+  label,
+}: {
+  totals: SettlementTotals;
+  theme: PlatformSettlementTheme;
+  label: string;
+}) {
+  return (
+    <div className={`mb-0 overflow-hidden rounded-xl border ${theme.border}`}>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-2 ${theme.headerGradient} px-4 py-2.5`}
+      >
+        <span className="flex items-center gap-2 text-sm font-bold text-white">
+          <span className={`h-1.5 w-1.5 rounded-full ${theme.dot}`} />
+          {label}
+        </span>
+        <span className={`text-[11px] font-semibold ${theme.subtitle}`}>
+          平台財務對帳
+        </span>
+      </div>
+
+      {/* 口徑標示（狀態色，唔跟平台色）—— 帳期 / 逐單 兩個口徑數字唔同，必須講清楚。 */}
+      {totals.basis === "period" ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-200 bg-emerald-50/70 px-4 py-2 text-[11px] text-emerald-800">
+          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">
+            帳期口徑
+          </span>
+          <span>
+            以下三格為平台**帳期匯總**
+            {totals.periodLabel ? `（${totals.periodLabel}）` : ""}
+            ，非逐單加總。
+          </span>
+          {totals.usedPeriodFallback ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+              逐單仲有 {totals.pendingCount} 張未對帳
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-3 divide-x divide-slate-200">
+        {/* ① 應收金額（＝營業額總和，POS 即時有） */}
+        <div className="px-4 py-3">
+          <div className="text-[11.5px] font-semibold text-slate-500">應收金額</div>
+          <div className="mt-1 truncate text-xl font-bold tabular-nums text-slate-900">
+            {formatMoney(totals.receivable)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-400">
+            {totals.basis === "period"
+              ? `平台帳期營業額（${totals.periodLabel ?? "帳期"}）`
+              : `平台單營業額總和（POS 即時，共 ${
+                  totals.settledCount + totals.pendingCount
+                } 張）`}
+          </div>
+        </div>
+
+        {/* ② 實收金額（＝平台到帳總和） */}
+        <div className="px-4 py-3">
+          <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500">
+            實收金額
+            {totals.received === null ? (
+              <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                待對帳
+              </span>
+            ) : totals.basis === "period" ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                帳期
+              </span>
+            ) : totals.pendingCount > 0 ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                部分未對帳
+              </span>
+            ) : (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                已對帳
+              </span>
+            )}
+          </div>
+          <div
+            className={`mt-1 truncate text-xl font-bold tabular-nums ${
+              totals.received === null ? "text-slate-300" : theme.receivedValue
+            }`}
+          >
+            {totals.received === null ? "—" : formatMoney(totals.received)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-400">
+            {totals.received === null
+              ? "平台帳期未生成，對帳後自動補上"
+              : totals.basis === "period"
+                ? "平台帳期實際到帳（補貼後，平台官方口徑）"
+                : `平台實際到帳總和（已配對 ${totals.settledCount} 張${
+                    totals.pendingCount > 0
+                      ? `，另 ${totals.pendingCount} 張未對帳`
+                      : ""
+                  }）`}
+          </div>
+        </div>
+
+        {/* ③ 差額率（＝平台抽成比例） */}
+        <div className="px-4 py-3">
+          <div className="text-[11.5px] font-semibold text-slate-500">平台差額率</div>
+          <div
+            className={`mt-1 truncate text-xl font-bold tabular-nums ${
+              totals.feeRate === null ? "text-amber-600" : theme.feeValue
+            }`}
+          >
+            {totals.feeRate === null
+              ? "待對帳"
+              : `${(totals.feeRate * 100).toFixed(1)}%`}
+          </div>
+          {totals.feeRate === null ? (
+            <div className="mt-1 text-[11px] text-slate-400">
+              冇實收就計唔到差額率（唔會用 0 濫竽充數）
+            </div>
+          ) : (
+            <>
+              {/* 比例條：左邊實收（淺）、右邊平台抽成（深） */}
+              <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <span
+                  className={`block ${theme.barLight}`}
+                  style={{ width: `${(1 - totals.feeRate) * 100}%` }}
+                />
+                <span
+                  className={`block ${theme.barDark}`}
+                  style={{ width: `${totals.feeRate * 100}%` }}
+                />
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                1 − {totals.received !== null ? formatMoney(totals.received) : "—"} ÷{" "}
+                {formatMoney(totals.receivable)}
+                {totals.basis === "period"
+                  ? "（帳期口徑）"
+                  : totals.pendingCount > 0
+                    ? "（只計已對帳嗰批）"
+                    : ""}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 // P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
 // ⚠️ 補建函式（`ledger-pos-bridge`）刻意用**動態 import** —— 佢係大模組，
 //    唔應該為咗一個罕用按鈕而加進報表頁嘅初始 bundle。
@@ -1139,8 +1335,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
    *
    * ⚠️ `null` ＝ 未讀取 / 讀唔到（唔可以當「冇對帳」去顯示）——
    *    `computeSettlementTotals` 會自行 fallback 落逐單口徑，行為同以前一致。
+   *
+   * 🔴 2026-09-29：由「單一最新帳期」改為「按 source 分開存」——
+   *    報表已經分平台（MFOOD / 澳覓）顯示，必須各自拎各自 source 嘅帳期，
+   *    唔可以將某個 source 嘅帳期套落另一個 source（會計錯實收）。
+   *    key ＝ `pos_platform_settlements.source`（`"mfood"` / `"aomi"`）。
    */
-  const [periodSettlement, setPeriodSettlement] = useState<PlatformPeriodAmounts | null>(null);
+  const [periodSettlement, setPeriodSettlement] = useState<Record<
+    string,
+    PlatformPeriodAmounts
+  > | null>(null);
 
   // 切店 / 首次確認 merchantId 時立即清空舊店數據，杜絕閃現外店資料。
   // 切店 / 切範圍 / 切帳號時重置，杜絕閃現舊店／舊範圍資料（2026-09-06 加 range）。
@@ -1196,26 +1400,38 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     async function loadPeriodSettlement() {
       try {
         await refreshPosDeviceTokenIfNeeded();
-        const res = await fetch(
-          `/api/pos/platform-settlements?storeId=${encodeURIComponent(merchantIdForQuery)}&limit=1`,
-          { headers: { ...posDeviceAuthHeaders() } },
+        // 🔴 逐 source 讀最新帳期，再砌成 `{ [source]: amounts }` ——
+        //    報表分平台顯示，每個平台必須用自己 source 嘅帳期，唔可以共用。
+        //    某個 source 失敗（401／500／無資料）唔影響另一個：各自 try/catch。
+        const results = await Promise.all(
+          PLATFORM_ORDER_SOURCES.map(async (src) => {
+            try {
+              const res = await fetch(
+                `/api/pos/platform-settlements?storeId=${encodeURIComponent(
+                  merchantIdForQuery,
+                )}&limit=1&source=${src}`,
+                { headers: { ...posDeviceAuthHeaders() } },
+              );
+              if (!res.ok) return null;
+              const payload = (await res.json()) as {
+                ok?: boolean;
+                latest?: PlatformPeriodAmounts | null;
+              };
+              return payload?.ok && payload.latest
+                ? { source: src, latest: payload.latest }
+                : null;
+            } catch {
+              return null;
+            }
+          }),
         );
         if (cancelled) return;
-        if (!res.ok) {
-          // 401（未登入）／500 等 → 維持 null，唔當「冇對帳」
-          setPeriodSettlement(null);
-          return;
+        const map: Record<string, PlatformPeriodAmounts> = {};
+        for (const r of results) {
+          if (r?.latest) map[r.source] = r.latest;
         }
-        const payload = (await res.json()) as {
-          ok?: boolean;
-          latest?: PlatformPeriodAmounts | null;
-        };
-        if (cancelled) return;
-        if (payload?.ok && payload.latest) {
-          setPeriodSettlement(payload.latest);
-        } else {
-          setPeriodSettlement(null);
-        }
+        // 全 empty（兩個 source 都冇資料／失敗）→ null，令 computeSettlementTotals 落返逐單口徑。
+        setPeriodSettlement(Object.keys(map).length > 0 ? map : null);
       } catch {
         if (!cancelled) setPeriodSettlement(null);
       }
@@ -2280,12 +2496,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
    * 呢度只負責餵「已計入銷售嘅平台單」。
    */
   const mfoodSettlement = useMemo(() => {
-    // 只計平台單（source = aomi / mfood），且要同報表口徑一致：
+    // 只計 MFOOD 來源平台單，且要同報表口徑一致：
     // 已計入銷售 ＋ 命中查詢區間。（未結帳／已作廢嘅平台單唔應該計。）
     const platformOrders = orders
       .filter((o) => isSaleCountable(o))
       .filter((o) => orderMatchesReportRange(o, range))
-      .filter((o) => isPlatformOrderSource(o.source));
+      // 🔴 `o.source` 嘅 TS 型別未包含平台值（"aomi"/"mfood"），但 runtime 確實有，
+      //    故 cast 成 string 做比對（同原本 `isPlatformOrderSource` 收 unknown 嘅做法一致）。
+      .filter((o) => (o.source as string | undefined) === "mfood");
 
     return computeSettlementTotals(
       platformOrders,
@@ -2296,8 +2514,29 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
         if (net === undefined && sub === undefined) return null;
         return { netAmount: net ?? null, subsidyNet: sub ?? null };
       },
-      // 帳期級金額：逐單配對唔上時嘅保底（見 computeSettlementTotals 註釋）
-      periodSettlement,
+      // 帳期級金額：逐單配對唔上時嘅保底（見 computeSettlementTotals 註釋）。
+      // 🔴 2026-09-29：只拎 mfood 自己 source 嘅帳期，唔可以套用 aomi 嘅。
+      periodSettlement?.["mfood"],
+    );
+  }, [orders, range, periodSettlement]);
+
+  const aomiSettlement = useMemo(() => {
+    // 只計 澳覓（aomi）來源平台單，其餘口徑同上。
+    const platformOrders = orders
+      .filter((o) => isSaleCountable(o))
+      .filter((o) => orderMatchesReportRange(o, range))
+      .filter((o) => (o.source as string | undefined) === "aomi");
+
+    return computeSettlementTotals(
+      platformOrders,
+      (o) => {
+        const net = o.platformNetAmount;
+        const sub = o.platformSubsidyNet;
+        if (net === undefined && sub === undefined) return null;
+        return { netAmount: net ?? null, subsidyNet: sub ?? null };
+      },
+      // 🔴 只拎 aomi 自己 source 嘅帳期，唔可以套用 mfood 嘅。
+      periodSettlement?.["aomi"],
     );
   }, [orders, range, periodSettlement]);
 
@@ -2838,146 +3077,47 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 加一格會令尾行殘缺）。另開獨立區塊既可加三格，又唔會破壞原版面，
                 仲可以喺標題交代「非即時」。
 
-                ⚠️ 只喺區間內**有平台單**時才 render ——
-                    冇平台單嘅店（只做堂食）完全唔會見到呢個區塊，零視覺影響。 */}
-            {mfoodSettlement.receivable > 0 ||
-            mfoodSettlement.settledCount > 0 ||
-            mfoodSettlement.basis === "period" ? (
-              <div className="mb-4 overflow-hidden rounded-xl border border-emerald-200">
-                <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-emerald-800 to-emerald-600 px-4 py-2.5">
-                  <span className="flex items-center gap-2 text-sm font-bold text-white">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                    外賣平台結算
-                  </span>
-                  <span className="text-[11px] font-semibold text-emerald-100">
-                    資料來源：平台財務對帳（非即時）
-                  </span>
+                ⚠️ 只喺區間內**有平台單**時才 render（按 source 各自判斷）——
+                    冇平台單嘅店（只做堂食）完全唔會見到呢個區塊，零視覺影響。
+
+                🔴 2026-09-29：由「單一 MFOOD 區塊」拆成「MFOOD ＋ 澳覓」左右並排，
+                    各自用平台專屬色（MFOOD＝橙 #FB8F01、澳覓＝玫紅 #FF3159）。
+                    窄螢幕自動疊成一欄（同一份元件，唔使另一套 code）。 */}
+            {(() => {
+              const showMfood =
+                mfoodSettlement.receivable > 0 ||
+                mfoodSettlement.settledCount > 0 ||
+                mfoodSettlement.basis === "period";
+              const showAomi =
+                aomiSettlement.receivable > 0 ||
+                aomiSettlement.settledCount > 0 ||
+                aomiSettlement.basis === "period";
+              if (!showMfood && !showAomi) return null;
+              // 兩個平台都有數 → 左右並排（md 以上）；得一個 → 該卡獨佔整行（同改版前外觀）。
+              const both = showMfood && showAomi;
+              return (
+                <div
+                  className={`mb-4 grid gap-3 ${
+                    both ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"
+                  }`}
+                >
+                  {showMfood ? (
+                    <PlatformSettlementCard
+                      totals={mfoodSettlement}
+                      theme={MFOOD_THEME}
+                      label="MFOOD 結算"
+                    />
+                  ) : null}
+                  {showAomi ? (
+                    <PlatformSettlementCard
+                      totals={aomiSettlement}
+                      theme={AOMI_THEME}
+                      label="澳覓 結算"
+                    />
+                  ) : null}
                 </div>
-
-                {/* 🔴 口徑標示（2026-09-28）—— 兩種口徑數字唔同，唔講清楚商家會以為報表壞。
-                    帳期口徑 = 平台自己嘅帳期匯總（保證有數，但同 POS 逐單唔一定對齊）。 */}
-                {mfoodSettlement.basis === "period" ? (
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-emerald-100 bg-emerald-50/70 px-4 py-2 text-[11px] text-emerald-800">
-                    <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                      帳期口徑
-                    </span>
-                    <span>
-                      以下三格為平台**帳期匯總**
-                      {mfoodSettlement.periodLabel ? `（${mfoodSettlement.periodLabel}）` : ""}
-                      ，非逐單加總。
-                    </span>
-                    {mfoodSettlement.usedPeriodFallback ? (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                        逐單仲有 {mfoodSettlement.pendingCount} 張未對帳
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <div className="grid grid-cols-3 divide-x divide-slate-200">
-                  {/* ① 應收金額（＝營業額總和，POS 即時有） */}
-                  <div className="px-4 py-3">
-                    <div className="text-[11.5px] font-semibold text-slate-500">應收金額</div>
-                    <div className="mt-1 truncate text-xl font-bold tabular-nums text-slate-900">
-                      {formatMoney(mfoodSettlement.receivable)}
-                    </div>
-                    <div className="mt-1 text-[11px] text-slate-400">
-                      {mfoodSettlement.basis === "period"
-                        ? `平台帳期營業額（${
-                            mfoodSettlement.periodLabel ?? "帳期"
-                          }）`
-                        : `平台單營業額總和（POS 即時，共 ${
-                            mfoodSettlement.settledCount + mfoodSettlement.pendingCount
-                          } 張）`}
-                    </div>
-                  </div>
-
-                  {/* ② 實收金額（＝平台到帳總和） */}
-                  <div className="px-4 py-3">
-                    <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500">
-                      實收金額
-                      {mfoodSettlement.received === null ? (
-                        <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
-                          待對帳
-                        </span>
-                      ) : mfoodSettlement.basis === "period" ? (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                          帳期
-                        </span>
-                      ) : mfoodSettlement.pendingCount > 0 ? (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                          部分未對帳
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                          已對帳
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      className={`mt-1 truncate text-xl font-bold tabular-nums ${
-                        mfoodSettlement.received === null ? "text-slate-300" : "text-emerald-700"
-                      }`}
-                    >
-                      {mfoodSettlement.received === null ? "—" : formatMoney(mfoodSettlement.received)}
-                    </div>
-                    <div className="mt-1 text-[11px] text-slate-400">
-                      {mfoodSettlement.received === null
-                        ? "平台帳期未生成，對帳後自動補上"
-                        : mfoodSettlement.basis === "period"
-                          ? "平台帳期實際到帳（補貼後，平台官方口徑）"
-                          : `平台實際到帳總和（已配對 ${mfoodSettlement.settledCount} 張${
-                              mfoodSettlement.pendingCount > 0
-                                ? `，另 ${mfoodSettlement.pendingCount} 張未對帳`
-                                : ""
-                            }）`}
-                    </div>
-                  </div>
-
-                  {/* ③ 差額率（＝平台抽成比例） */}
-                  <div className="px-4 py-3">
-                    <div className="text-[11.5px] font-semibold text-slate-500">平台差額率</div>
-                    <div
-                      className={`mt-1 truncate text-xl font-bold tabular-nums ${
-                        mfoodSettlement.feeRate === null ? "text-amber-600" : "text-violet-700"
-                      }`}
-                    >
-                      {mfoodSettlement.feeRate === null
-                        ? "待對帳"
-                        : `${(mfoodSettlement.feeRate * 100).toFixed(1)}%`}
-                    </div>
-                    {mfoodSettlement.feeRate === null ? (
-                      <div className="mt-1 text-[11px] text-slate-400">
-                        冇實收就計唔到差額率（唔會用 0 濫竽充數）
-                      </div>
-                    ) : (
-                      <>
-                        {/* 比例條：左邊實收（淺）、右邊平台抽成（深） */}
-                        <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-100">
-                          <span
-                            className="block bg-violet-300"
-                            style={{ width: `${(1 - mfoodSettlement.feeRate) * 100}%` }}
-                          />
-                          <span
-                            className="block bg-violet-600"
-                            style={{ width: `${mfoodSettlement.feeRate * 100}%` }}
-                          />
-                        </div>
-                        <div className="mt-1 text-[11px] text-slate-400">
-                          1 − {mfoodSettlement.received !== null ? formatMoney(mfoodSettlement.received) : "—"} ÷{" "}
-                          {formatMoney(mfoodSettlement.receivable)}
-                          {mfoodSettlement.basis === "period"
-                            ? "（帳期口徑）"
-                            : mfoodSettlement.pendingCount > 0
-                              ? "（只計已對帳嗰批）"
-                              : ""}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : null}
+              );
+            })()}
 
             {/* 🔴 2026-09-17 退貨修復（口徑 D）；2026-09-19 **改為無條件顯示**。
                 KPI 帶係固定 5 欄，唔可以為咗退款另開卡片（格數會唔係 5 嘅倍數）。
