@@ -1,0 +1,6 @@
+# tests 1871
+# suites 283
+# pass 1871
+# fail 0
+# cancelled 0
+# skipped 0

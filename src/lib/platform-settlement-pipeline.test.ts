@@ -197,7 +197,33 @@ describe("平台實收：入庫（平台 payload → DB row）", () => {
     const g = groupSettlementByOrder([mfoodTxn({ netAmount: null, subsidyNet: undefined })]);
     const s = settlementForOrder(g.byOrder, "CRD202609161003178839221");
     assert.ok(s);
-    assert.equal(s.netAmount, 0, "完全冇任何金額 → 0（DB 要 numeric，唔可以 NULL 成欄）");
+    // 🔴🔴 2026-09-29 修正：呢個斷言原本寫 `assert.equal(s.netAmount, 0)`，
+    //    同測試名（「唔可以變 0」）自相矛盾 —— 等於**把假零 bug 鎖死**。
+    //    正解係 `null`：DB 欄位本身就係 nullable（0060 特意冇 NOT NULL / DEFAULT 0），
+    //    「未對帳」＝ NULL，POS 端先可以顯示「待對帳」而唔係「實收 0」。
+    assert.equal(
+      s.netAmount,
+      null,
+      "完全冇任何金額 → null（＝未對帳）；填 0 會被 POS 當成「實收 0」假零",
+    );
+    assert.equal(s.subsidyNet, null, "同上：冇值就係 null，唔可以造假零");
+  });
+
+  it("🔴🔴 澳覓形態（有 netAmount、但完全冇補貼口徑）→ subsidyNet 一定要係 null", () => {
+    // 澳覓 bridge 嘅 `normalizeTxn()` 每筆都送 `subsidyNet: null`（澳覓冇補貼兩段口徑）。
+    const g = groupSettlementByOrder([
+      { externalOrderId: "TK001165260929133047856", netAmount: 43.21, subsidyNet: null },
+    ]);
+    const s = settlementForOrder(g.byOrder, "TK001165260929133047856");
+    assert.ok(s);
+    assert.equal(s.netAmount, 43.21);
+    assert.equal(
+      s.subsidyNet,
+      null,
+      "冇補貼口徑 ⇒ 必須 null；若變 0，route 會寫 platform_subsidy_net=0 ⇒ POS 顯示實收 0",
+    );
+    // POS 端口徑：subsidy 係 null ⇒ 正確落返 netAmount（唔會變 0）
+    assert.equal(actualPayout({ netAmount: s.netAmount, subsidyNet: s.subsidyNet }), 43.21);
   });
 });
 
@@ -546,6 +572,61 @@ describe("平台實收：真 pipeline（payload → DB → mapper → 報表三�
     assert.ok(
       Math.abs((t.feeRate ?? 0) - (1 - 31.91 / 62)) < 1e-9,
       "差額率分母只可以用已對帳嘅 62，唔可以被未對帳嘅 100 溝淡",
+    );
+  });
+
+  it("🔴🔴 澳覓真 pipeline（事故回歸）：只有 netAmount ⇒ 報表實收要係 43.21 而唔係 0", () => {
+    // ① 澳覓 bridge `normalizeTxn()` 嘅真實輸出（`costAmount` ÷ 100 → netAmount；
+    //    澳覓冇補貼口徑 ⇒ `subsidyNet: null`）。
+    const rawPayload = [
+      { tradeNo: "TK001165260929133047856", netAmount: 43.21, grossAmount: 67, subsidyNet: null },
+    ];
+
+    // ② 改名（＝ route `readTxns`）→ 分組（＝ route 寫 DB 前嘅最後一步）
+    const g = groupSettlementByOrder(readTxnsLike(rawPayload));
+    const s = settlementForOrder(g.byOrder, "TK001165260929133047856");
+    assert.ok(s);
+    assert.equal(s.netAmount, 43.21);
+    assert.equal(
+      s.subsidyNet,
+      null,
+      "🔴 route 會寫 platform_subsidy_net = null（唔可以係 0，否則下面報表變實收 0）",
+    );
+
+    // ③ 落 DB 之後撈出嚟嘅 row（snake_case；2026-09-29 生產 DB 實測值）
+    const row = mfoodDbRow({
+      id: "aomi-1",
+      source: "aomi",
+      local_order_no: "澳覓#1",
+      table_name: "外賣",
+      external_order_id: "TK001165260929133047856",
+      total: 67,
+      subtotal: 67,
+      prepaid_amount: 67,
+      platform_net_amount: s.netAmount,
+      platform_subsidy_net: s.subsidyNet,
+      platform_settled_at: "2026-09-29T11:20:24.000Z",
+    });
+
+    // ④ 出庫（真 mapper 實跑）
+    const o = mapOrderRow(row);
+    assert.equal(o.platformNetAmount, 43.21);
+    assert.equal(o.platformSubsidyNet, undefined, "NULL → undefined（唔可以變 0）");
+
+    // ⑤ 報表三格（同 restaurant-daily-report 嘅 settlementOf 同款）
+    const t = computeMfoodTotals([o], (x) => {
+      const net = x.platformNetAmount;
+      const sub = x.platformSubsidyNet;
+      if (net === undefined && sub === undefined) return null;
+      return { netAmount: net ?? null, subsidyNet: sub ?? null };
+    });
+    assert.equal(t.receivable, 67);
+    assert.equal(t.received, 43.21, "🔴 回歸：唔可以係 0（2026-09-29 生產事故）");
+    assert.equal(t.settledCount, 1, "1 張已配對（徽章顯示「已對帳」）");
+    assert.equal(t.pendingCount, 0);
+    assert.ok(
+      Math.abs((t.feeRate ?? 0) - (1 - 43.21 / 67)) < 1e-9,
+      "差額率 ~35.5%，唔可以係 100%",
     );
   });
 

@@ -1,0 +1,10 @@
+
+===== pos_orders（source in aomi,mfood）共 2 張 =====
+單號          source  status          total   net       subsidy   settled_at            external_order_id
+----------------------------------------------------------------------------------------------------------------------------------
+澳覓#1        aomi    settled         67      43.21     0         2026-09-29 11:20:24   TK001165260929133047856
+MFOOD#883658mfood   settled         63      (null)    (null)                          202609291313345883658
+
+查 pos_platform_settlements 失敗： {"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.pos_platform_settlements TO anon;","message":"permission denied for table pos_platform_settlements"}
+
+欄位 platform_net_amount 存在性： 存在

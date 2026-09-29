@@ -272,7 +272,17 @@ export async function POST(request: Request) {
   }
 
   const settledAt = new Date().toISOString();
-  const updated: { tradeNo: string; orderId: string; netAmount: number; subsidyNet: number }[] = [];
+  // 🔴 兩個金額都可以係 `null`（＝平台冇提供呢個口徑，例如澳覓冇「補貼」）——
+  //    入庫就係寫 NULL，令 POS 端 `actualPayout()` 可以落返另一欄。
+  //    ⚠️ 唔可以寫 0：`0` 喺 POS 端係一個**有效值**（補貼後真係 0），
+  //       `actualPayout()` 見到 0 就唔會再 fallback ⇒ 報表變「實收 0」假零。
+  //       （2026-09-29 澳覓事故：上游 `groupSettlementByOrder` 造假零所致，已修。）
+  const updated: {
+    tradeNo: string;
+    orderId: string;
+    netAmount: number | null;
+    subsidyNet: number | null;
+  }[] = [];
   const notFound: string[] = [];
   const failed: { tradeNo: string; reason: string }[] = [];
 

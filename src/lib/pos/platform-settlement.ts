@@ -42,10 +42,24 @@ export interface PlatformSettlementTxn {
 
 /** 配對／加總後，單一 POS 訂單嘅結算結果。 */
 export interface PlatformSettlementForOrder {
-  /** 平台實收合計（多筆 transaction 加總）。 */
-  netAmount: number;
-  /** 補貼後實收合計。 */
-  subsidyNet: number;
+  /**
+   * 平台實收合計（多筆 transaction 加總）。
+   * 🔴 `null` ＝ 今批 transaction **完全冇呢個口徑嘅值**（≠ 0）。
+   */
+  netAmount: number | null;
+  /**
+   * 補貼後實收合計。`null` ＝ 冇任何一筆有呢個口徑。
+   *
+   * 🔴🔴 「冇值」一定要保持 `null`，**唔可以變 0**（2026-09-29 澳覓真機事故）：
+   *    澳覓根本冇「補貼」口徑（每一筆 `subsidyNet` 都係 `null`），
+   *    舊寫法把 `null` 當 0 加 ⇒ 加總結果變 `subsidyNet: 0`（**假零**）⇒
+   *    route 寫落 DB `platform_subsidy_net = 0` ⇒ POS 端
+   *    `actualPayout()`（`subsidyNet ?? netAmount`）見到 **0 唔係 null**
+   *    ⇒ 直接回 0 ⇒ 報表顯示「**已對帳 + 實收 MOP 0**」，
+   *    而實際 `netAmount` 明明係 43.21（popup 亦顯示 43.21）。
+   *    ⇒ 商家會以為平台一毫都冇過數而去追數。
+   */
+  subsidyNet: number | null;
   /** 加總用咗幾多筆 transaction（審計／UI 提示「N 筆」）。 */
   txnCount: number;
 }
@@ -186,6 +200,12 @@ export function createTradeNoIdIndex(): TradeNoIdIndex {
  * ⚠️ 兩個金額**獨立**判斷「有冇值」：
  *    某筆只有 `netAmount`、另一筆只有 `subsidyNet` 係有可能嘅（平台資料形態），
  *    所以唔可以「兩個都冇才當 0」。只要有任何一筆有值，該欄就有值。
+ *
+ * 🔴🔴 **「有值」＝ 加總後係 number；「完全冇值」＝ 保持 `null`（唔可以變 0）**
+ *    （2026-09-29 澳覓真機事故，見 `PlatformSettlementForOrder.subsidyNet` 註釋）
+ *    ⇒ 逐欄獨立加總：`if (v !== null) 累加`，而**唔係** `cur + (v ?? 0)`。
+ *    ⇒ 呢個函式嘅輸出會直接寫落 DB，所以佢係「未對帳 vs 實收 0」
+ *      呢條分界線嘅**唯一**守門人。
  */
 export function groupSettlementByOrder(txns: readonly PlatformSettlementTxn[]): {
   /** key = 正規化後嘅 `tradeNo`。 */
@@ -206,12 +226,15 @@ export function groupSettlementByOrder(txns: readonly PlatformSettlementTxn[]): 
     const net = toAmountOrNull(txn?.netAmount);
     const sub = toAmountOrNull(txn?.subsidyNet);
 
+    // 🔴 初始值係 `null`（＝仲未有過任何值），唔係 0。
     const cur =
-      byOrder.get(key) ?? { netAmount: 0, subsidyNet: 0, txnCount: 0 };
+      byOrder.get(key) ?? { netAmount: null, subsidyNet: null, txnCount: 0 };
 
     // 只有「本身有值」才加 —— 否則 `null` 會被當 0 混入（而 0 同「冇資料」唔同）。
-    cur.netAmount = round2(cur.netAmount + (net ?? 0));
-    cur.subsidyNet = round2(cur.subsidyNet + (sub ?? 0));
+    // 🔴 唔可以寫成 `cur.netAmount + (net ?? 0)`：咁樣「完全冇值」會變 0，
+    //    同「平台真係畀 0」分唔開（就係上面嗰個假零事故）。
+    if (net !== null) cur.netAmount = round2((cur.netAmount ?? 0) + net);
+    if (sub !== null) cur.subsidyNet = round2((cur.subsidyNet ?? 0) + sub);
     cur.txnCount += 1;
 
     byOrder.set(key, cur);
