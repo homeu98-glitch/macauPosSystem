@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
 import { AdminMerchantModulesDialog } from "@/components/admin-merchant-modules-dialog";
+import { orderEventISO } from "@/lib/pos/order-event-time";
 import { loadAuthSession } from "@/lib/storage";
 import type { PosOrder } from "@/lib/types";
 
@@ -478,7 +479,7 @@ export default function AdminDashboardPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
-                    <th className="px-4 py-2 font-medium">時間</th>
+                    <th className="px-4 py-2 font-medium" title="結帳時間優先（同營業報表／交班同一口徑）">時間</th>
                     <th className="px-4 py-2 font-medium">店舖</th>
                     <th className="px-4 py-2 font-medium">單號</th>
                     <th className="px-4 py-2 font-medium">狀態</th>
@@ -489,7 +490,11 @@ export default function AdminDashboardPage() {
                 <tbody>
                   {orders.slice(0, 200).map((o) => (
                     <tr key={o.id} className="border-b border-slate-100 last:border-0">
-                      <td className="px-4 py-2 tabular-nums text-slate-600">{fmtTime(o.createdAt)}</td>
+                      {/* 🔴 2026-09-30：改讀 `orderEventInstant()` 口徑（結帳時間優先），
+                          同上方店鋪總覽統計、營業報表、交班一致。
+                          舊版讀 `createdAt` —— 澳覓單因插件時區偏移而顯示成未來時間
+                          （實案：實際 19:47 卻顯示 09-30 03:47）。 */}
+                      <td className="px-4 py-2 tabular-nums text-slate-600">{fmtTime(orderEventISO(o))}</td>
                       <td className="px-4 py-2 text-slate-900">{storeNameById.get(o.storeId ?? "") ?? o.storeId ?? "—"}</td>
                       <td className="px-4 py-2 font-mono text-xs text-slate-600">{o.localOrderNo ?? o.id.slice(0, 8)}</td>
                       <td className="px-4 py-2">{orderStatusBadge(o.status)}</td>
@@ -508,6 +513,8 @@ export default function AdminDashboardPage() {
 
         <p className="text-xs text-slate-400">
           狀態口徑：{ORDER_STATUSES.join(" / ")}。銷售統計只計 settled / paid（同單店報表一致），退款與取消不計入營業額。
+          日歸屬一律用「結帳時間」（`orderEventInstant()`：settled_at → reopened_at → updated_at → created_at），
+          同營業報表／交班同一口徑 —— 即係 23:58 落單、00:02 結帳嘅單算**第二日**。
         </p>
       </div>
 

@@ -6,10 +6,11 @@
 > 09-24 營業中 egress 覆核（0.06／250 GB）→ §G；下載入口／版本控制 → §H。
 
 ## 0 訂單時間（唯一真源）
-`order-event-time.ts` `orderEventInstant()`：reopenedAt→originalSettledAt→updatedAt→createdAt；篩選＋顯示全委派它。雲端冇 `original_settled_at` ⇒ 靠 `updated_at` ⇒ 🔴 週期性推前 `updated_at` 會令單**跨日漂移**（DETAIL §G.1）。`fetchOrdersInRange()` 三腿（0044）。
+`order-event-time.ts` `orderEventInstant()`：**settledAt**→reopenedAt→originalSettledAt→updatedAt→createdAt（0057 後 `settled_at` 排最前）；篩選＋顯示全委派它。雲端冇 `original_settled_at` ⇒ 舊單靠 `updated_at` ⇒ 🔴 週期性推前 `updated_at` 會令單**跨日漂移**（DETAIL §G.1）。`fetchOrdersInRange()` 四腿（0044／0057）。
 
 ## 1 數字夾唔埋
 下單機＝本機優先／第二台＝純雲端 state／交班＝LWW／**報表＝純雲端永不 merge**。實收＝毛＝`agg.paidTotal`。🔴 交班 `netPaidTotal`（＋未退）vs 報表 `netRevenue`（−退款）方向相反，唔可互抄。要逐張加總對 UI，唔可憑「差額合理」落結論。
+🔴🔴 2026-09-30：**admin 總覽同報表嘅日歸屬字段唔同** ⇒ 同一日永遠可能差幾張。總覽 `/api/admin/merchants` 用 `created_at`（`.gte` 更**冇上限**）；報表／交班用 `orderEventInstant()`。實案 21 單/1,407 vs 20 單/1,294。真兇＝**澳覓單 `created_at` 被 +8h**（插件 `aomi-bridge.js` 傳澳門本地時間字串 → `grabber-order.ts:539-542` 直寫 `timestamptz` → Postgres 當 UTC）；mfood 冇事（`timeline.created` 自帶 offset）。判別法：`settled_at` **早過** `created_at` ＝ 資料錯，此時**報表嗰邊才對**。
 
 ## 2 返結四鐵律
 ①同機正常≠已上雲（查 `reopen_count`）②維持 `reopened`＋`keepPaidStatus` 認 `paid`/`reopened`（否則 items 永不上雲）③reopen_count/at/reason 單調遞增 ④🔴 加 `pos_orders` 欄位要改**四條**讀取路徑：`pos-order-mapper`／`pos-order-row`／`/api/pos/orders` 內聯 mapper／`sync` `baseRecord`。

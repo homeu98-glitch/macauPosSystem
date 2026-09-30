@@ -1,0 +1,36 @@
+anon key: eyJhbGciOiJIUzI1NiIsInR5…
+拉取 51 張（created_at 或 updated_at ≥ 2026-09-28T16:00:00Z）
+
+狀態分佈: {"settled":51}
+
+① 店鋪總覽口徑（可計 + created_at ∈ 澳門 09-30）⇒ 21 張
+② 營業報表口徑（可計 + eventInstant ∈ 澳門 09-30）⇒ 20 張
+
+=== 🔴 總覽有 · 報表冇 1 張 ===
+  澳覓#2         settled       113  created=09-30T03:47:07  updated=09-29T20:26:40  reopened=-  settled=09-29T20:23:02  線下 src=aomi
+
+=== 🟡 報表有 · 總覽冇 0 張 ===
+
+=== 報表口徑全部 20 張（eventInstant 倒序）===
+  09-30T14:35:03  訂單11         settled        14  線下
+  09-30T14:31:49  訂單09         settled        96  線下
+  09-30T14:22:24  訂單10         settled        34  線下
+  09-30T14:16:15  澳覓#2         settled        65  線下
+  09-30T14:16:15  澳覓#1         settled       127  線下
+  09-30T14:06:24  訂單07         settled       122  線下
+  09-30T13:59:10  訂單08         settled        50  線下
+  09-30T13:51:08  訂單06         settled        51  線下
+  09-30T13:51:03  訂單05         settled        69  線下
+  09-30T13:44:36  訂單04         settled        57  線下
+  09-30T13:25:34  訂單01         settled        54  線下
+  09-30T13:20:17  003          settled        50  線上
+  09-30T12:51:45  訂單03         settled        55  線下
+  09-30T12:16:07  訂單02         settled       154  線下
+  09-30T12:07:43  訂單02         settled        54  線下
+  09-30T12:03:29  002          settled        28  線上
+  09-30T11:53:40  MFOOD#3      settled        59  線下
+  09-30T11:15:46  MFOOD#2      settled        46  線下
+  09-30T11:10:06  MFOOD#1      settled        65  線下
+  09-30T10:51:41  001          settled        44  線上
+
+報表口徑金額合計 1294.00 · 總覽口徑金額合計 1407.00
