@@ -2831,9 +2831,22 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     /* 🔴 2026-10-01（J 口徑）：原本寫「原價合計 + 服務費 + 稅」，但本店冇啟用
                        服務費／稅（兩欄永遠 0），顯示出嚟係噪音 ⇒ 拿走。同時 J 指出「應收」
                        一詞含糊：定義係「未扣任何優惠前嘅原價」，唔講清會同「實收」混淆。
-                       ⇒ 改寫成明確標示「未扣優惠」，令商家一眼睇出佢係原價口徑。
-                       ⚠️ 計法**完全冇改**（`agg.receivableTotal`），只改文案。 */
-                    subtitle={`未扣任何優惠前嘅原價（＝訂單明細加總）· 線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
+                       ⇒ 口徑解釋收埋入右上角提示球（`info`），card 面只留數字分拆。
+                       ⚠️ 計法**完全冇改**（`agg.receivableTotal`），只改呈現。 */
+                    subtitle={`線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">應收金額合計</span>
+                        <span className="mt-1 block">
+                          ＝<span className="font-semibold">未扣任何優惠前</span>嘅原價（單品原價 × 數量），
+                          同下面「訂單明細」逐行加總一致。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          同「實收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
+                          應收<span className="font-semibold">未扣</span>優惠，實收<span className="font-semibold">已扣</span>優惠。
+                        </span>
+                      </>
+                    }
                   />
                   {/* 🔴 2026-09-17 退貨修復（口徑 D）：退款單原本被 isSaleCountable() 整張剔走，
                       「賣 100 退 30」報表顯示 0，實際落袋 70 ⇒ 實收偏低。
@@ -2853,13 +2866,38 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     value={<Money amount={agg.paidTotal} />}
                     delta={null}
                     highlight={agg.refundTotal > 0}
-                    subtitle={`優惠後實際收到（＝訂單明細加總）· 線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">實收金額合計</span>
+                        <span className="mt-1 block">
+                          ＝<span className="font-semibold">已扣優惠後</span>實際收到嘅錢
+                          （原價 − 全單優惠折扣 − 抹零），同下面「訂單明細」逐行加總一致。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
+                          退款未計入呢個數（退款拆解見「營業額」格嘅提示球）。
+                        </span>
+                      </>
+                    }
                   />
                   <Kpi
                     label="訂單數"
                     value={String(onlineOfflineSplit.totalCount)}
                     delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
                     subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">訂單數</span>
+                        <span className="mt-1 block">
+                          只計<span className="font-semibold">已結帳</span>嘅可入帳單
+                          （含帶 onlineOrderId 嘅線上投影單）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          未結帳（送廚中／未付款）嘅單唔會計入，請見下面「未結帳訂單」格。
+                        </span>
+                      </>
+                    }
                   />
                   <Kpi
                     label="客單價"
@@ -2878,6 +2916,17 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         : 0,
                       ticketMopYest,
                     )}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">客單價</span>
+                        <span className="mt-1 block">
+                          ＝營業額 ÷ 訂單數（兩邊同源，都係線下 + 線上）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          用嘅係毛營業額，唔係扣除退款後嘅淨額。
+                        </span>
+                      </>
+                    }
                   />
 
                 {/*
@@ -2898,23 +2947,71 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         ? `${formatMoney(pendingSplit.amountMop)} · ${unsettledStatusLabel}`
                         : "冇待收款訂單"
                     }
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">未結帳訂單</span>
+                        <span className="mt-1 block">
+                          已落單但<span className="font-semibold">未結帳</span>嘅單
+                          （送廚中／已出餐／未付款等）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          呢啲單唔計入營業額／應收／實收 —— 錢未收到。
+                          金額＝呢批單嘅應付總額，狀態分佈見上面提示行。
+                        </span>
+                      </>
+                    }
                   />
                   <Kpi
                     label="餘額總額"
                     value={ledger.sel?.balanceTotalMop != null ? <Money amount={ledger.sel.balanceTotalMop} /> : "—"}
                     delta={null}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">餘額總額</span>
+                        <span className="mt-1 block">
+                          所有會員<span className="font-semibold">錢包未用完</span>嘅餘額加總
+                          （含充值本金 + 贈送金額）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          係「仲欠客人幾多」嘅負債口徑，唔係本期間收入 —— 唔可以當營業額。
+                          破折號（—）＝未能讀取會員數據。
+                        </span>
+                      </>
+                    }
                   />
                   <Kpi
                     label="會員充值"
                     value={<Money amount={ledger.sel?.topupMop ?? 0} />}
                     delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null}
                     subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">會員充值</span>
+                        <span className="mt-1 block">
+                          本期間會員充值總額 ＝實際收款 ＋ 贈送金額。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          入帳時只有「實際」嘅現金收入才算營業額；贈送部分係負債，唔算收入。
+                        </span>
+                      </>
+                    }
                   />
                   <Kpi
                     label="會員扣點"
                     value={<Money amount={ledger.sel?.deductMop ?? 0} />}
                     delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null}
                     subtitle={`已付 ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">會員扣點</span>
+                        <span className="mt-1 block">
+                          本期間用會員餘額／點數支付嘅總額 ＝已付本金 ＋ 贈送部分扣減。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          呢啲錢係之前充值時已收，本期間唔會再計一次收入，避免重複入帳。
+                        </span>
+                      </>
+                    }
                   />
                   <Kpi
                     label="毛利（估）"
@@ -2948,6 +3045,21 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           : pct(grossProfit, grossProfitYest)
                     }
                     subtitle={gpSubtitle}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">毛利（估）</span>
+                        <span className="mt-1 block">
+                          {gpMarginPct != null
+                            ? `手動設定毛利率：營業額 × ${gpMarginPct}%。`
+                            : "系統估算：營業額 − 進貨成本。"}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          進貨成本係「當日已付款嘅收據總額」—— 屬<span className="font-semibold">現金流口徑</span>，
+                          唔係真正 COGS（未付嘅貨唔計、補付舊貨會令今日成本暴升）。
+                          要更準可撳右上角 edit 直接輸入毛利率。
+                        </span>
+                      </>
+                    }
                     action={
                       gpEditing ? (
                         <div className="flex items-center gap-1">
@@ -3725,6 +3837,7 @@ function Kpi({
   delta,
   subtitle,
   action,
+  info,
 }: {
   label: string;
   value: React.ReactNode;
@@ -3734,12 +3847,26 @@ function Kpi({
   subtitle?: string;
   /** 右上角操作位（如「毛利（估）」嘅 edit 掣）。 */
   action?: React.ReactNode;
+  /**
+   * 口徑說明（2026-10-01 J 口徑）：**唔佔版面**嘅提示球內容。
+   *
+   * 原本「應收／實收」等口徑解釋直接寫死喺 subtitle，長期佔一行細字，
+   * 但商家九成時間只睇數字、唔睇解釋 ⇒ 收埋入右上角球，按下才彈。
+   * ⚠️ 同 `action` 同時存在時兩個都 render（球排喺 action 左邊）。
+   */
+  info?: React.ReactNode;
 }) {
+  const hasAside = info != null || action != null;
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs text-slate-500">{label}</div>
-        {action}
+        {hasAside ? (
+          <span className="flex shrink-0 items-center gap-1">
+            {info != null ? <InfoBubble label={`${label}口徑說明`}>{info}</InfoBubble> : null}
+            {action}
+          </span>
+        ) : null}
       </div>
       <div className={`mt-1 text-2xl font-bold ${highlight ? "text-orange-600" : "text-slate-900"}`}>{value}</div>
       {subtitle ? <div className="mt-0.5 text-[11px] text-slate-500">{subtitle}</div> : null}
