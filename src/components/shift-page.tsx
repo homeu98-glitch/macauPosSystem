@@ -1902,15 +1902,38 @@ export function ShiftPage() {
               </div>
             </div>
 
-            <div className="mt-6 text-sm font-semibold text-slate-700">會員通線上（Ledger）</div>
             {/*
-              ⚠️ 2026-09-15：原本呢度有一句 `{ledgerTodayLoading ? "載入今日線上報表…" : null}`。
-              而家全頁 `pageReady` 閘已經覆蓋（`ledgerLoaded` 未 true → 成頁 loading），
-              呢句永遠唔會出現，所以拆走 —— 留低只會令人以為「仲有第二層 loading」。
-              錯誤橫幅**保留**：佢係「已經載入完但失敗」嘅結果（例如未登入 Ledger），
-              屬於完成狀態，唔應該被 loading 蓋住。
+              🔴🔴 2026-10-01（J 口徑）：**整個「會員通線上（Ledger）」區塊隱藏** ——
+              商家唔需要知道線上（Ledger）嗰邊嘅拆數，見到只會混亂。
+
+              隱藏範圍（全部收埋喺下面 `{false ? … : null}`）：
+                1. 標題「會員通線上（Ledger）」
+                2. `ledgerTodayError` 橙色錯誤橫幅
+                3. 三張卡（線上訂單數／已付線上營業額／餘額扣點·到店付款）
+                4. 「線上拆數（點開逐張核對）」`<details>` 明細
+
+              ⚠️⚠️ **計算一律保留、零改動** —— 呢點好重要：
+                - `ledgerOnlineMop` 仍然計、仍然被上方「線上線下合計（實收）」引用
+                  （見 `summary.paidTotal + ledgerOnlineMop`）。商家睇到嘅**總數不變**，
+                  只係唔再見到「線上佔幾多」嘅拆解。
+                - 落庫（交班記錄 `store.online`）亦完全不受影響。
+                - `ledgerPaidOrders` 嘅「未完成訂單補推」邏輯**照跑**（見上方 1784–1804 行
+                  嘅警示），唔會被今次隱藏波及。
+
+              ⚠️ 還原方法：把下面 `{false ? (` 改回 `{true ? (`（或直接 render）。
+                  切勿只還原部分 —— 四項係一組，拆開會出殘缺版面。
             */}
-            {ledgerTodayError ? (
+            {false ? (
+              <>
+                <div className="mt-6 text-sm font-semibold text-slate-700">會員通線上（Ledger）</div>
+                {/*
+                  ⚠️ 2026-09-15：原本呢度有一句 `{ledgerTodayLoading ? "載入今日線上報表…" : null}`。
+                  而家全頁 `pageReady` 閘已經覆蓋（`ledgerLoaded` 未 true → 成頁 loading），
+                  呢句永遠唔會出現，所以拆走 —— 留低只會令人以為「仲有第二層 loading」。
+                  錯誤橫幅**保留**：佢係「已經載入完但失敗」嘅結果（例如未登入 Ledger），
+                  屬於完成狀態，唔應該被 loading 蓋住。
+                */}
+                {ledgerTodayError ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {ledgerTodayError}
               </div>
@@ -1919,7 +1942,7 @@ export function ShiftPage() {
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
                   <div className="text-sm text-slate-500">線上訂單數</div>
-                  <div className="mt-2 text-2xl font-semibold text-slate-900">{ledgerToday.orderCount}</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">{ledgerToday?.orderCount}</div>
                 </article>
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
                   <div className="text-sm text-slate-500">已付線上營業額</div>
@@ -1936,7 +1959,7 @@ export function ShiftPage() {
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
                   <div className="text-sm text-slate-500">餘額扣點 / 到店付款</div>
                   <div className="mt-2 text-base font-semibold text-slate-900">
-                    {formatMoney(ledgerToday.orderBalancePaidMop)} / {formatMoney(ledgerToday.orderInStorePaidMop)}
+                    {formatMoney(ledgerToday?.orderBalancePaidMop ?? 0)} / {formatMoney(ledgerToday?.orderInStorePaidMop ?? 0)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">Ledger「已完成」單細項（供核對，未完成單未計）</div>
                 </article>
@@ -1947,7 +1970,7 @@ export function ShiftPage() {
               <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
                 <summary className="cursor-pointer font-semibold text-slate-800">
                   線上拆數（點開逐張核對）：本地投影 {onlineLocalOrders.length} 張 {formatMoney(onlineLocalMop)} ＋
-                  Ledger 已付款 {ledgerPaidOrders.count} 張 {formatMoney(ledgerPaidOrders.amountMop)}
+                  Ledger 已付款 {ledgerPaidOrders?.count} 張 {formatMoney(ledgerPaidOrders?.amountMop ?? 0)}
                   （其中 {ledgerOnlyRows.length} 張本地冇 → 計 {formatMoney(ledgerOnlyOnline.amountMop)}）
                 </summary>
                 <div className="mt-2 grid gap-1">
@@ -1959,7 +1982,7 @@ export function ShiftPage() {
                       <span className="shrink-0 font-semibold">{formatMoney(o.total)}</span>
                     </div>
                   ))}
-                  {ledgerPaidOrders.orders.map((o) => {
+                  {(ledgerPaidOrders?.orders ?? []).map((o) => {
                     const dup = localOnlineIds.has(o.id);
                     const amount = Number(o.total ?? o.paidAmount ?? 0) || 0;
                     return (
@@ -1977,6 +2000,8 @@ export function ShiftPage() {
                   })}
                 </div>
               </details>
+            ) : null}
+              </>
             ) : null}
           </section>
 
