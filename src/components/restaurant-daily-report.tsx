@@ -2799,9 +2799,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                      * 按下才彈，顯示「退款多少」即可；冇退款時球照在、內容寫 0。
                      * ⚠️ 口徑同原本橫幅**逐字相同**（毛營業額 − 退款 ＝ 淨營業額），
                      *    只換呈現方式，唔改任何計算。
+                     * 🔴 2026-10-01（J 口徑）：由 `action` 改為 `info` —— 三張金額卡
+                     *    （營業額／應收／實收）統一用 `info` 槽出球，樣式、大小、
+                     *    位置邏輯全部一致（同一顆 `InfoBubble`）；`action` 槽留返做
+                     *    真正嘅操作掣（例如毛利嘅 edit），語意唔再撈亂。
                      */
-                    action={
-                      <InfoBubble label="營業額口徑與退款拆解">
+                    info={
+                      <>
                         <span className="block font-semibold text-slate-800">
                           {agg.refundCount > 0
                             ? `退款拆解（${agg.refundCount} 張退款單）`
@@ -2817,7 +2821,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             ? "退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
                             : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
                         </span>
-                      </InfoBubble>
+                      </>
                     }
                   />
                   {/* 🔴 2026-09-14：三張表（KPI／訂單明細／支付方式分項）**必須同源同批** ——
@@ -3848,11 +3852,14 @@ function Kpi({
   /** 右上角操作位（如「毛利（估）」嘅 edit 掣）。 */
   action?: React.ReactNode;
   /**
-   * 口徑說明（2026-10-01 J 口徑）：**唔佔版面**嘅提示球內容。
+   * 口徑說明（2026-10-01 J 口徑）：**唔佔版面**嘅右上角提示球內容。
    *
-   * 原本「應收／實收」等口徑解釋直接寫死喺 subtitle，長期佔一行細字，
-   * 但商家九成時間只睇數字、唔睇解釋 ⇒ 收埋入右上角球，按下才彈。
-   * ⚠️ 同 `action` 同時存在時兩個都 render（球排喺 action 左邊）。
+   * 傳入嘅係氣泡**內容**，球本身由 `Kpi` 統一 render（同一顆 `InfoBubble`）。
+   * ⚠️ 千祈唔好喺呼叫端自己再包一層 `InfoBubble`（會變成兩顆球疊住）。
+   *
+   * 🔴 2026-10-01：營業額／應收／實收三張金額卡**一律用呢個槽** ——
+   *    保證樣式、大小、位置邏輯完全一致。`action` 槽只留返真正嘅操作掣
+   *    （如毛利嘅 edit），語意唔再撈亂。
    */
   info?: React.ReactNode;
 }) {
