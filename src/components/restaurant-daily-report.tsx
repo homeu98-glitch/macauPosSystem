@@ -2828,7 +2828,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     label="應收金額合計"
                     value={<Money amount={agg.receivableTotal} />}
                     delta={null}
-                    subtitle={`原價合計 + 服務費 + 稅（＝訂單明細加總）· 線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
+                    /* 🔴 2026-10-01（J 口徑）：原本寫「原價合計 + 服務費 + 稅」，但本店冇啟用
+                       服務費／稅（兩欄永遠 0），顯示出嚟係噪音 ⇒ 拿走。同時 J 指出「應收」
+                       一詞含糊：定義係「未扣任何優惠前嘅原價」，唔講清會同「實收」混淆。
+                       ⇒ 改寫成明確標示「未扣優惠」，令商家一眼睇出佢係原價口徑。
+                       ⚠️ 計法**完全冇改**（`agg.receivableTotal`），只改文案。 */
+                    subtitle={`未扣任何優惠前嘅原價（＝訂單明細加總）· 線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
                   />
                   {/* 🔴 2026-09-17 退貨修復（口徑 D）：退款單原本被 isSaleCountable() 整張剔走，
                       「賣 100 退 30」報表顯示 0，實際落袋 70 ⇒ 實收偏低。
@@ -3317,7 +3322,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數（只計店內 POS 線下單） */}
             <Card
               title="支付方式分項（店內 POS 線下）"
-              tag="只計無 onlineOrderId 嘅本店單；線上金額見上方「應收／實收金額合計」同會員 KPI。應收 = 原價合計 + 服務費 + 稅 · 實收 = order.total"
+              tag="只計無 onlineOrderId 嘅本店單；線上金額見上方「應收／實收金額合計」同會員 KPI。應收 = 未扣優惠前嘅原價 · 實收 = order.total"
             >
               {Object.keys(agg.paymentBreakdown).length === 0 ? (
                 <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
