@@ -497,11 +497,28 @@ export function ShiftPage() {
     }
 
     refreshOrders();
-    window.addEventListener("focus", refreshOrders);
+    /**
+     * 🔴🔴 2026-10-01（交班頁不停閃爍／持續 Refresh 嘅根因修復）：**唔可以**監聽 `focus`。
+     *
+     * `refreshOrders()` 開頭 `setOrdersLoaded(false)`；而 `pageReady = ordersLoaded && ledgerLoaded`
+     * ⇒ 每次觸發都會令**整頁**掉落 `ShiftPageLoading`（320px 大轉圈）再彈返。
+     * `focus` 事件喺頁面**內部**都會狂發（撳掣、切 input、點 tooltip、iframe／子元素焦點轉移…），
+     * 商家實際感受就係「頁面不停閃、不斷重新整理」。
+     *
+     * ✅ 正解：只聽 `visibilitychange`，而且**只在真正由背景變可見**時才刷 ——
+     *    呢個才係「返到前台要攞最新數」嘅真實意圖，頁內操作完全唔會觸發。
+     *    （`online` 保留：由離線變上線係真事件，供應鏈側確實要重拉，且冇 focus 咁頻密。）
+     */
+    const handleVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void refreshOrders();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("online", refreshOrders);
     return () => {
       cancelled = true;
-      window.removeEventListener("focus", refreshOrders);
+      document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("online", refreshOrders);
     };
   }, []);
@@ -1774,7 +1791,9 @@ export function ShiftPage() {
               <div className="mt-1 text-xs text-slate-500">
                 線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = 本地線上投影單 ∪ Ledger 已付款單（按單去重，＝實際收到嘅錢）。
               </div>
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
+              {/* 🔴 2026-10-01：由 3 欄改 2 欄 —— 「線上線下合計（實收）」已移除
+                  （實收已擴為線下＋線上），剩「應收」＋「實收」兩張同範圍、可直接對數嘅卡。 */}
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
                   {/*
                     🔴 2026-10-01（J 口徑）：應收由「僅線下」改為「**線下 ＋ 線上**」，
@@ -1812,78 +1831,90 @@ export function ShiftPage() {
                 </article>
                 <article className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
                   {/*
-                    🔴 2026-10-01（J 口徑）：呢張卡**刻意維持只算線下**（＝線下 POS 子集），
-                       全集由右邊「線上線下合計（實收）」提供。加提示球講清楚，
-                       否則商家會同「應收（線下＋線上）」對唔上而以為計錯。
+                    🔴 2026-10-01（J 口徑·最終版）：實收**擴為線下 ＋ 線上**，做完「實收」嘅唯一一張卡
+                       ⇒ 原本右邊「線上線下合計（實收）」變冗餘，同時移除（同範圍嘅數出兩次＝噪音）。
+                       同「應收金額合計」範圍完全對稱（都係線下＋線上），
+                       所以可以直接「應收 − 實收 ＝ 全單優惠折扣 + 抹零」對數。
+                       ⚠️ 定義**保持「已扣優惠」**（＝ order.total），唔可以改成未扣優惠 ——
+                          否則會同「應收金額合計」完全重複。
                   */}
                   <div className="flex items-start justify-between gap-2">
                     <div className="text-sm text-emerald-700">實收金額合計</div>
                     <InfoBubble label="實收金額合計口徑說明">
-                      <span className="block font-semibold text-slate-800">實收金額合計（僅線下 POS）</span>
+                      <span className="block font-semibold text-slate-800">實收金額合計（線下 ＋ 線上）</span>
                       <span className="mt-1 block">
-                        ＝已結帳店內單嘅 order.total（已扣全單優惠 ＋ 抹零）。
+                        ＝<span className="font-semibold">已扣優惠</span>後實際收到嘅錢（線下單 order.total ＋ 線上實收）。
+                      </span>
+                      <span className="mt-1 block tabular-nums text-slate-600">
+                        線下 {formatMoney(summary.paidTotal)}
+                        <br />＋ 線上 {formatMoney(ledgerOnlineMop)}
+                        <br />＝ {formatMoney(summary.paidTotal + ledgerOnlineMop)}
                       </span>
                       <span className="mt-1 block text-[11px] text-slate-500">
-                        呢張卡<span className="font-semibold">只計線下</span>；線下＋線上嘅全集見右邊「線上線下合計（實收）」。
-                        同「應收金額合計」（線下＋線上）範圍唔同 —— 唔可以直接相減。
+                        同報表頁「實收金額合計」係同一範圍。
+                        同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
+                      </span>
+                      <span className="mt-1 block text-[11px] text-slate-500">
+                        呢個數係<span className="font-semibold">毛</span>（未扣退款）；
+                        扣退款後嘅落袋金額見卡內下方「淨實收」。
                       </span>
                     </InfoBubble>
                   </div>
                   <div className="mt-2 text-2xl font-semibold text-emerald-700">
-                    {formatMoney(summary.paidTotal)}
+                    {formatMoney(summary.paidTotal + ledgerOnlineMop)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    僅線下 POS：優惠後實際收到 = order.total（已含現金／Mpay／會員餘額）
+                    線下 {formatMoney(summary.paidTotal)}（已含現金／Mpay／會員餘額）＋ 線上{" "}
+                    {formatMoney(ledgerOnlineMop)}
                   </div>
-                  {/* 🔴 2026-09-17 淨額口徑：舊寫法退款單整張唔計 → 部分退嘅未退部分蒸發。
-                      呢度明確列出「＋退款單未退部分 = 淨實收」，令商家對得上實際落袋金額。
-                      ⚠️ 2026-09-19 改為**無條件顯示**（同報表頁 `restaurant-daily-report.tsx` 對齊）：
-                      原本 `refundCount > 0` 才出 ⇒ 冇退款嗰日商家見到「實收」同其他數字夾唔埋時
-                      **冇任何線索**。依家退款 0 就照寫 0，口徑永遠在場。
-                      注意上面大數 `summary.paidTotal` **本身就係毛**（唔係淨），所以卡片數唔會靜默變淨額。 */}
+                  {/* 🔴 2026-10-01（J 口徑·C1 誠實版）：「毛實收」一行移除 —— 佢同上面大數
+                      （線下部分）完全重複，商家睇完大數再睇呢行冇任何新資訊。
+                      保留「退款」同「淨實收（落袋）」兩行成同一條算式：
+                          大數（毛）− 退款 ＝ 淨實收（落袋）
+                      ⚠️ 退款**只列 POS 線下**，而且標籤明寫 —— 唔可以寫成「線下＋線上」：
+                          Ledger 側（`list_merchant_orders` RPC / `LedgerOnlineOrder`）
+                          **完全冇任何退款欄位**（`refunded_amount` 只存在 POS 自己嘅 `pos_orders`），
+                          即「Ledger 純線上單嘅退款」POS 根本冇資料源。
+                          硬標成「線下＋線上」＝ 把已在線下算過嘅投影單退款**重複計一次**
+                          ⇒ 淨實收會偏離真實落袋金額。誠實標示邊界 > 名義上嘅完整。
+                      ⚠️ 口徑必須同報表頁（`restaurant-daily-report.tsx` 營業額球）一致：
+                          毛 − 退款 ＝ 淨額。兩頁夾唔到數 = 商家最初嘅投訴。
+                      ⚠️ 退款 0 都照顯示（2026-09-19 起無條件顯示）：口徑永遠在場，
+                          商家唔需要靠「有冇顯示」去推斷。 */}
                   <div className="mt-2 rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-xs text-emerald-900">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span>毛實收（已結帳單）</span>
-                      <span className="font-semibold">{formatMoney(summary.paidTotal)}</span>
-                    </div>
-                    <div className="mt-1 flex items-baseline justify-between gap-2">
-                      <span>退款單未退部分</span>
-                      <span className="font-semibold">＋{formatMoney(summary.refundedRemainder)}</span>
+                      <span>退款（POS 線下）</span>
+                      <span className="font-semibold">− {formatMoney(summary.refundAmount)}</span>
                     </div>
                     <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-emerald-200 pt-1">
                       <span className="font-semibold">淨實收（落袋）</span>
-                      <span className="text-base font-semibold">{formatMoney(summary.netPaidTotal)}</span>
+                      <span className="text-base font-semibold">
+                        {formatMoney(summary.paidTotal + ledgerOnlineMop - summary.refundAmount)}
+                      </span>
                     </div>
                     <div className="mt-1 text-[11px] text-emerald-700">
                       {summary.refundCount > 0
-                        ? `＝已結帳單實收 − 退款總額 ${formatMoney(summary.refundAmount)}`
-                        : "本班次沒有退款單，所以「淨實收」＝「毛實收」。"}
+                        ? `＝實收金額合計（毛）− ${summary.refundCount} 張退款單嘅退款總額 ${formatMoney(summary.refundAmount)}`
+                        : "本班次沒有退款單，所以「淨實收」＝「實收金額合計」。"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-emerald-600/80">
+                      ⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。
                     </div>
                   </div>
                 </article>
                 <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
                   {/*
-                    呢張卡係「實收」嘅**全集** —— 同左邊「實收金額合計（僅線下）」係
-                    子集／全集關係，而唔係兩個唔同指標（2026-10-01 J 口徑澄清）。
+                    🔴 2026-10-01（J 口徑·最終版）：原本呢個位係「線上線下合計（實收）」卡。
+                       因為「實收金額合計」已經擴為**線下＋線上**（同範圍），呢張卡變冗餘 ⇒ 移除。
+                       ⚠️ 但卡內**唯一有價值嘅內容**唔可以一齊刪走：線上單「已付款但未標記完成」
+                          嘅提示＋補推掣（見下），呢個係商家實際要用嘅操作入口 ⇒ 原樣搬到呢度。
+                          卡面標題改為中性嘅「線上單狀態」，避免商家以為又係一個金額指標。
                   */}
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm text-orange-700">線上線下合計（實收）</div>
-                    <InfoBubble label="線上線下合計口徑說明">
-                      <span className="block font-semibold text-slate-800">線上線下合計（實收）</span>
-                      <span className="mt-1 block">
-                        ＝左邊「實收金額合計（僅線下）」＋ 線上實收 —— 即<span className="font-semibold">全部渠道</span>實際收到嘅錢。
-                      </span>
-                      <span className="mt-1 block text-[11px] text-slate-500">
-                        線上 ＝ 本地線上投影單 ∪ Ledger 已付款單（按單去重）。
-                        呢個數同報表頁「實收金額合計」係同一範圍。
-                      </span>
-                    </InfoBubble>
-                  </div>
-                  <div className="mt-2 text-2xl font-semibold text-orange-700">
-                    {formatMoney(summary.paidTotal + ledgerOnlineMop)}
+                    <div className="text-sm text-orange-700">線上單狀態</div>
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    線下 {formatMoney(summary.paidTotal)}（已含現金）＋ 線上 {formatMoney(ledgerOnlineMop)}
+                    線上實收 {formatMoney(ledgerOnlineMop)}（已計入左邊「實收金額合計」）
                   </div>
                   {ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0 ? (
                     <div className="mt-1 text-xs text-amber-700">
@@ -2017,12 +2048,12 @@ export function ShiftPage() {
                 4. 「線上拆數（點開逐張核對）」`<details>` 明細
 
               ⚠️⚠️ **計算一律保留、零改動** —— 呢點好重要：
-                - `ledgerOnlineMop` 仍然計、仍然被上方「線上線下合計（實收）」引用
+                - `ledgerOnlineMop` 仍然計、仍然被上方「實收金額合計」引用
                   （見 `summary.paidTotal + ledgerOnlineMop`）。商家睇到嘅**總數不變**，
                   只係唔再見到「線上佔幾多」嘅拆解。
                 - 落庫（交班記錄 `store.online`）亦完全不受影響。
-                - `ledgerPaidOrders` 嘅「未完成訂單補推」邏輯**照跑**（見上方 1784–1804 行
-                  嘅警示），唔會被今次隱藏波及。
+                - `ledgerPaidOrders` 嘅「未完成訂單補推」邏輯**照跑**（2026-10-01 起該提示
+                  已由「線上線下合計」卡搬去上方「線上單狀態」卡內），唔會被今次隱藏波及。
 
               ⚠️ 還原方法：把下面 `{false ? (` 改回 `{true ? (`（或直接 render）。
                   切勿只還原部分 —— 四項係一組，拆開會出殘缺版面。

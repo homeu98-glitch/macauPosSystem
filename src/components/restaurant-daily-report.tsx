@@ -2381,6 +2381,34 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     const onlineRevenueMop =
       Math.round((agg.revenue - offlineRevenueMop + agg.ledgerOnlyPaidTotal) * 100) / 100;
 
+    /**
+     * 🔴 2026-10-01（J 口徑）：營業額改為**直接顯示已扣退款嘅淨額**。
+     *
+     * 【為何】J 要求營業額格唔再單獨出退款拆解，大數直接係淨額（毛 − 退款），
+     * 另加提示球說明「營業額不包含退款金額」。
+     *
+     * 【口徑】退款**只從線下部分扣**：
+     *   `agg.refundTotal` 由 `refundTotalOf(orders)` 計，涵蓋嘅係**有 `refund_records`
+     *   嘅 POS 單**（`pos_orders.refunded_amount`）。Ledger 純線上單（`ledgerOnlyPaidTotal`）
+     *   喺 Ledger 側**冇任何退款欄位**（`list_merchant_orders` 唔回退款，見 `LedgerOrderRow`）
+     *   ⇒ 呢批單嘅退款無從得知，唔可以亂扣。
+     *
+     * ⚠️ 因此 `offlineRevenueMop − refundTotal` 係**唯一正確**嘅扣法：
+     *    - 扣喺 `totalRevenueMop`（大數）上 → 數學上等價，但語意模糊（唔知扣咗邊邊）；
+     *    - 扣喺線上 → 錯（線上根本冇退款資料）。
+     *   而 `netRevenueMop = offlineRevenueMop - refundTotal + onlineRevenueMop`
+     *   同 `totalRevenueMop - refundTotal` 完全相等。
+     *
+     * ⚠️ 底線保護：退款理論上唔會大過線下實收，但資料髒（例如跨日退款、手動改數）時
+     *   可能出現負數 ⇒ `Math.max(0, …)` 防止 UI 出負營業額。
+     */
+    const offlineRevenueNetMop = Math.max(
+      0,
+      Math.round((offlineRevenueMop - agg.refundTotal) * 100) / 100,
+    );
+    const totalRevenueNetMop =
+      Math.round((offlineRevenueNetMop + onlineRevenueMop) * 100) / 100;
+
     return {
       offlineCount,
       offlineRevenueMop,
@@ -2388,9 +2416,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       onlineRevenueMop,
       totalCount: offlineCount + onlineCount,
       totalRevenueMop: Math.round((offlineRevenueMop + onlineRevenueMop) * 100) / 100,
+      /** 線下營業額（已扣退款）—— 副標題用，令分拆加總 = 大數。 */
+      offlineRevenueNetMop,
+      /** 🔴 營業額大數（已扣退款）＝ 線下淨額 ＋ 線上毛額。 */
+      totalRevenueNetMop,
       source: "ledger" as const,
     };
-  }, [orders, range, agg.revenue, agg.ledgerOnlyPaidTotal, agg.ledgerOnlyCount]);
+  }, [orders, range, agg.revenue, agg.ledgerOnlyPaidTotal, agg.ledgerOnlyCount, agg.refundTotal]);
 
   /**
    * 外賣平台（MFOOD / 澳覓）結算統計 —— 報表 10 格下方「MFOOD 區塊」用。
@@ -2812,36 +2844,43 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 <div className="mb-4 grid grid-cols-5 gap-3">
                   <Kpi
                     label="營業額"
-                    value={<Money amount={onlineOfflineSplit.totalRevenueMop} />}
+                    /*
+                     * 🔴🔴 2026-10-01（J 口徑）：大數由**毛**改為**淨**（已扣退款）。
+                     *     J 明確要求：營業額格唔再單獨顯示「退款拆解」，直接出已扣退款嘅淨額，
+                     *     另加提示球說明「營業額不包含退款金額」。
+                     * ⚠️ 副標題嘅線下分拆**必須同步扣退款**（`offlineRevenueNetMop`），
+                     *    否則「線下 ＋ 線上 ≠ 大數」，商家會覺得夾唔埋。
+                     */
+                    value={<Money amount={onlineOfflineSplit.totalRevenueNetMop} />}
                     highlight
-                    delta={pct(onlineOfflineSplit.totalRevenueMop, aggYest?.revenue ?? null)}
-                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    delta={pct(onlineOfflineSplit.totalRevenueNetMop, aggYest?.netRevenue ?? aggYest?.revenue ?? null)}
+                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueNetMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
                     /*
                      * 🔴 2026-09-28（J 口徑）：退款資訊由常駐橫幅收埋成呢個小球。
-                     * 按下才彈，顯示「退款多少」即可；冇退款時球照在、內容寫 0。
-                     * ⚠️ 口徑同原本橫幅**逐字相同**（毛營業額 − 退款 ＝ 淨營業額），
-                     *    只換呈現方式，唔改任何計算。
                      * 🔴 2026-10-01（J 口徑）：由 `action` 改為 `info` —— 三張金額卡
                      *    （營業額／應收／實收）統一用 `info` 槽出球，樣式、大小、
-                     *    位置邏輯全部一致（同一顆 `InfoBubble`）；`action` 槽留返做
-                     *    真正嘅操作掣（例如毛利嘅 edit），語意唔再撈亂。
+                     *    位置邏輯全部一致（同一顆 `InfoBubble`）。
+                     * 🔴🔴 2026-10-01（J 口徑·最新）：球內容**唔再出「退款拆解」算式**，
+                     *    改為解釋大數口徑。J 原話：營業額欄位唔需要再單獨顯示退款拆解或
+                     *    退款明細，只要提示「營業額不包含退款金額」。
                      */
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">
-                          {agg.refundCount > 0
-                            ? `退款拆解（${agg.refundCount} 張退款單）`
-                            : "退款拆解（本期間無退款）"}
+                        <span className="block font-semibold text-slate-800">營業額（已扣退款）</span>
+                        <span className="mt-1 block">
+                          此數<span className="font-semibold">不包含退款金額</span>
+                          ：＝線下＋線上嘅收款 − 退款總額。
                         </span>
-                        <span className="mt-1 block tabular-nums">
-                          營業額（毛）{formatMoney(agg.revenue)}
+                        <span className="mt-1 block tabular-nums text-slate-600">
+                          收款（毛）{formatMoney(onlineOfflineSplit.totalRevenueMop)}
                           <br />− 退款總額 {formatMoney(agg.refundTotal)}
-                          <br />＝ 淨營業額（落袋）{formatMoney(agg.netRevenue)}
+                          <br />＝ {formatMoney(onlineOfflineSplit.totalRevenueNetMop)}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          {agg.refundCount > 0
-                            ? "退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
-                            : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
+                          退款只涵蓋 POS 訂單（含線上單嘅本地投影）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          ⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。
                         </span>
                       </>
                     }
@@ -2902,7 +2941,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
-                          退款未計入呢個數（退款拆解見「營業額」格嘅提示球）。
+                          呢個數係<span className="font-semibold">毛</span>（未扣退款）；
+                          扣退款後嘅落袋金額見「營業額」格嘅退款拆解。
                         </span>
                       </>
                     }
