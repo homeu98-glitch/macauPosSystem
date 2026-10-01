@@ -22,8 +22,10 @@ import {
   loadPosLocalSettings,
   loadSoldOutState,
   savePosLocalSettings,
+  saveSoldOutState,
 } from "@/lib/storage";
 import { orderMatchesReportRange, reportRangeLabel, resolveReportRange, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { resolveSoldOutDisplay, dropSoldOutKeys } from "@/lib/pos/soldout-display";
 // 🔴 Ledger 線上單嘅「屬於邊一日」必須用同一個時間口徑（見 `order-event-time.ts`）。
 // 唔可以自己寫 `createdAt ?? updatedAt`：RPC `list_merchant_orders` 係按 **`updated_at` DESC**
 // 排序，若用 `createdAt` 判斷就會「排序鍵 ≠ 過濾鍵」——一張「昨日落單、今日完成」嘅預約單
@@ -2505,12 +2507,32 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
         ? "注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考"
         : "系統估算：營業額 − 進貨成本（當日已付收據）";
 
+  /**
+   * 沽清菜品清單。
+   *
+   * 🔴 2026-10-01 修復（J 截圖：卡面倒出 `ledger-074cf1d4-...` 原始 UUID）：
+   *    舊寫法 `names.get(k) ?? k` 搵唔到名就直接顯示原始 key；而沽清狀態喺本機
+   *    localStorage **只增不減**，菜品被刪／換機／清快取後舊 ID 就變孤兒。
+   *    ⇒ 對照邏輯抽到純函式 `@/lib/pos/soldout-display`（可被 `node --test` 直接測），
+   *      顯示層跳過孤兒、資料層順手清除寫回。
+   *    ⚠️ `soldOut.length` 由「含孤兒總數」變成「**真實仍在賣嘅沽清菜品數**」—— 呢個才啱。
+   */
   const soldOut = useMemo(() => {
-    const map = loadSoldOutState();
-    const names = new Map((loadBootstrapCache()?.menuItems ?? []).map((m) => [m.id, m.name]));
-    const items = Object.entries(map)
-      .filter(([k, v]) => !k.startsWith("specopt:") && (v?.remainingQty ?? 1) <= 0)
-      .map(([k]) => names.get(k) ?? k);
+    const { items, orphans } = resolveSoldOutDisplay(
+      loadSoldOutState(),
+      loadBootstrapCache()?.menuItems ?? [],
+    );
+
+    if (orphans.length > 0) {
+      const current = loadSoldOutState();
+      const next = dropSoldOutKeys(current, orphans);
+      // `dropSoldOutKeys` 冇改動時回原參照 ⇒ 唔會無謂寫入。
+      if (next !== current && typeof window !== "undefined") {
+        saveSoldOutState(next);
+        window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: next } }));
+      }
+    }
+
     return items;
   }, []);
 

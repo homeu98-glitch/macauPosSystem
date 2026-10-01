@@ -265,11 +265,34 @@ export function patchMenuFromRealtimeRecord(
 
   if (eventType === "DELETE") {
     const hadItem = bootstrap.menuItems.some((row) => row.id === posId);
-    if (!hadItem) return { changed: false };
-    const nextItems = bootstrap.menuItems.filter((row) => row.id !== posId);
+    /*
+     * 🔴 2026-10-01 修復：沽清記錄清理唔可以跟「菜品仲喺唔喺 bootstrap」綁死。
+     *
+     * 舊寫法：`if (!hadItem) return` —— 菜品已經唔喺本機 bootstrap（換機／清快取後
+     * 重新同步，或者之前漏咗同步）時會**提早返回，跳過下面嘅沽清清理**。
+     * 結果沽清狀態（本機 localStorage，只增不減）永遠留住嗰個 ID ⇒
+     * 報表「沽清菜品」卡就會倒出 `ledger-xxxxxxxx-...` 原始 UUID 出街（J 截圖實案）。
+     *
+     * 新寫法：**無論菜品仲喺唔喺 bootstrap，都一定清沽清記錄**；
+     * 只有「bootstrap 有改動」才需要寫回 cache 同派事件。
+     */
     const nextSoldOut = { ...loadSoldOutState() };
-    delete nextSoldOut[posId];
-    saveSoldOutState(nextSoldOut);
+    const hadSoldOut = Object.prototype.hasOwnProperty.call(nextSoldOut, posId);
+    if (hadSoldOut) {
+      delete nextSoldOut[posId];
+      saveSoldOutState(nextSoldOut);
+    }
+
+    if (!hadItem) {
+      // 菜單本身冇改動 ⇒ 唔寫 cache、唔派 bootstrap 事件；
+      // 但沽清記錄若真係清咗，照樣派 `pos-soldout-changed` 令相關 UI 即時更新。
+      if (hadSoldOut && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: nextSoldOut } }));
+      }
+      return { changed: false };
+    }
+
+    const nextItems = bootstrap.menuItems.filter((row) => row.id !== posId);
     saveBootstrapCache({ ...bootstrap, menuItems: nextItems, lastUpdatedAt: new Date().toISOString() });
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("pos-bootstrap-changed"));
