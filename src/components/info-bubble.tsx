@@ -20,7 +20,8 @@
  *   POS 觸控規範係「主要操作 ≥ 40px」，但呢個係**輔助提示**，唔係主要操作，
  *   且刻意唔可以搶眼 ⇒ 用 28px 熱區 + 四邊 `-m` 補償）。
  * - **點外面／Esc 關閉**：避免「彈咗之後唔識收」。
- * - **氣泡定位**：絕對定位喺球嘅**下方靠右**（KPI 格喺頁面上方，向下彈唔會出界）。
+ * - **氣泡定位**：絕對定位喺球嘅**下方靠左**（2026-10-01 J：營業額係第一張 KPI 卡，
+ *   靠右彈會向左伸出去撞側欄被裁切 ⇒ 改為向右伸）。
  */
 import { useEffect, useRef, useState } from "react";
 
@@ -73,7 +74,7 @@ export function InfoBubble({ children, label, className }: InfoBubbleProps) {
       {open ? (
         <span
           role="tooltip"
-          className="absolute right-0 top-[26px] z-40 w-max max-w-[min(320px,calc(100vw-24px))] rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-[12px] leading-relaxed text-slate-700 shadow-lg"
+          className="absolute left-0 top-[26px] z-40 w-max max-w-[min(320px,calc(100vw-24px))] rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-[12px] leading-relaxed text-slate-700 shadow-lg"
         >
           {children}
         </span>
