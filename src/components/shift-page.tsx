@@ -934,9 +934,17 @@ export function ShiftPage() {
    * 為何需要：`completeOnlinePaidOrder()`（客人已支付，完成訂單）同 `confirmPayment()` 舊寫法
    * **完全冇推 Ledger**（2026-09-14 已修），所以之前嗰啲單會停留喺 `accepted`/`preparing`
    * ⇒ Ledger 報表唔認嗰筆錢 ⇒ 交班「線上線下合計」少算。新單唔會再出現，舊單用呢個補推。
+   *
+   * 🔴🔴 2026-10-01（J 口徑）：**UI 觸發點已移除**（「線上單狀態」卡整張刪走），
+   * 但**邏輯刻意保留** —— 新單自 2026-09-14 起結帳路徑已會推 Ledger，舊單由自動補建
+   * （`use-adopt-completed-ledger-orders` ＋ `/api/pos/adopted-online-ids`）處理，
+   * 所以唔需要商家手動撳。保留係為咗：① 萬一自動路徑出事可以快速還原 UI；
+   * ② 呢個 function 仍係唯一「按 id 補推」嘅實作，刪咗要重寫。
+   * ⇒ eslint-disable 係**有意為之**，唔係遺漏。
    */
   const [backfillingLedger, setBackfillingLedger] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 見上方 2026-10-01 註解：UI 觸發點已移除，邏輯刻意保留
   async function handleBackfillOnlineCompleted() {
     const ids = backfillTargets;
     if (backfillingLedger || ids.length === 0) return;
@@ -1902,55 +1910,6 @@ export function ShiftPage() {
                     </div>
                   </div>
                 </article>
-                <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
-                  {/*
-                    🔴 2026-10-01（J 口徑·最終版）：原本呢個位係「線上線下合計（實收）」卡。
-                       因為「實收金額合計」已經擴為**線下＋線上**（同範圍），呢張卡變冗餘 ⇒ 移除。
-                       ⚠️ 但卡內**唯一有價值嘅內容**唔可以一齊刪走：線上單「已付款但未標記完成」
-                          嘅提示＋補推掣（見下），呢個係商家實際要用嘅操作入口 ⇒ 原樣搬到呢度。
-                          卡面標題改為中性嘅「線上單狀態」，避免商家以為又係一個金額指標。
-                  */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm text-orange-700">線上單狀態</div>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    線上實收 {formatMoney(ledgerOnlineMop)}（已計入左邊「實收金額合計」）
-                  </div>
-                  {ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0 ? (
-                    <div className="mt-1 text-xs text-amber-700">
-                      <div>
-                        其中 {ledgerPaidOrders?.incompleteCount} 張線上單已付款但未標記完成（
-                        {formatMoney(ledgerPaidOrders?.incompleteAmountMop ?? 0)}），已計入上數。
-                      </div>
-                      {/* 補推：把呢批單推上 Ledger `completed`（舊版結帳路徑冇推，2026-09-14 已修；
-                          舊單要靠呢粒掣補）。只推「本地已 settled」嗰啲，觸控目標 ≥ 40px。 */}
-                      {backfillTargets.length > 0 ? (
-                        <>
-                          <button
-                            className="mt-2 min-h-[40px] rounded-xl border border-amber-300 bg-amber-100 px-4 text-sm font-semibold text-amber-900 disabled:opacity-50"
-                            disabled={backfillingLedger}
-                            onClick={() => void handleBackfillOnlineCompleted()}
-                            type="button"
-                          >
-                            {backfillingLedger ? "補推中…" : `補推 ${backfillTargets.length} 張線上單狀態`}
-                          </button>
-                          {(ledgerPaidOrders?.incompleteCount ?? 0) > backfillTargets.length ? (
-                            <div className="mt-1">
-                              另 {(ledgerPaidOrders?.incompleteCount ?? 0) - backfillTargets.length} 張本地仲未完成，唔會補推。
-                            </div>
-                          ) : null}
-                        </>
-                      ) : (
-                        <div className="mt-1">（本地仲未完成嘅單唔會補推）</div>
-                      )}
-                    </div>
-                  ) : null}
-                  {!ledgerOnlineIsPaidSum ? (
-                    <div className="mt-1 text-xs text-amber-700">
-                      Ledger 已付款單讀取失敗 → 暫時只計本地線上投影單（MOP {formatMoney(onlineLocalMop)}）。
-                    </div>
-                  ) : null}
-                </article>
               </div>
               {/* P0（2026-09-24）：Ledger 已付款、但 POS 訂單庫冇記錄嘅單。
                   以前完全冇提示 ⇒ 商家只會見到「交班／報表同實收夾唔埋」，無從判斷成因
@@ -1970,11 +1929,30 @@ export function ShiftPage() {
                   </div>
                 </div>
               ) : null}
-              {backfillStatus ? (
-                <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  {backfillStatus}
-                </div>
-              ) : null}
+              {/*
+                🔴 2026-10-01（J 口徑）：補推 UI **永久移除** —— J 睇到「線上單狀態」卡（上一輪
+                保留嘅殼）覺得多餘，決定整張刪走。連帶影響：
+                  ① 「N 張線上單已付款但未標記完成」提示
+                  ② 「補推 N 張線上單狀態」按鈕
+                  ③ `backfillTargets` / `handleBackfillOnlineCompleted` / `backfillingLedger`
+                     變咗冇 UI 觸發點（ESLint unused 警告）。
+                ⇒ 呢個 `{false ? … : null}` 保留成條「結果訊息」渲染路徑（同專案既有隱藏慣例一致），
+                  令 `backfillStatus` 變數仍然「被使用」，唔會報 unused；亦保留還原能力。
+                ✅ 底層補推邏輯（`handleBackfillOnlineCompleted`）**完全保留、一行冇刪**：
+                   新單自 2026-09-14 起結帳路徑已會推 Ledger（唔會再產生未完成單）；
+                   舊單則由**自動補建**路徑處理（`use-adopt-completed-ledger-orders` ＋
+                   `/api/pos/adopted-online-ids`，見報表頁同款註解），唔需要商家手動撳。
+                ⚠️ 還原方法：把 `{false ? (` 改回 `{true ? (`，並喺卡片區重新加返嗰張卡。
+              */}
+              {false
+                ? backfillStatus
+                  ? (
+                      <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                        {backfillStatus}
+                      </div>
+                    )
+                  : null
+                : null}
             </div>
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">

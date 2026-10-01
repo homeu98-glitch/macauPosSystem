@@ -11,6 +11,13 @@
 ## 1 數字夾唔埋
 下單機＝本機優先／第二台＝純雲端 state／交班＝LWW／**報表＝純雲端永不 merge**。實收＝毛＝`agg.paidTotal`。🔴 交班 `netPaidTotal`（＋未退）vs 報表 `netRevenue`（−退款）方向相反，唔可互抄。要逐張加總對 UI，唔可憑「差額合理」落結論。
 🔴🔴 2026-09-30：**admin 總覽同報表嘅日歸屬字段唔同** ⇒ 同一日永遠可能差幾張。總覽 `/api/admin/merchants` 用 `created_at`（`.gte` 更**冇上限**）；報表／交班用 `orderEventInstant()`。實案 21 單/1,407 vs 20 單/1,294。真兇＝**澳覓單 `created_at` 被 +8h**（插件 `aomi-bridge.js` 傳澳門本地時間字串 → `grabber-order.ts:539-542` 直寫 `timestamptz` → Postgres 當 UTC）；mfood 冇事（`timeline.created` 自帶 offset）。判別法：`settled_at` **早過** `created_at` ＝ 資料錯，此時**報表嗰邊才對**。
+🔴🔴 **2026-10-01 退款口徑（J 拍板，兩頁）**：
+- **交班頁**：資金卡帶 **2 張**（應收／實收，**都係線下＋線上**，範圍對稱 ⇒ 可直接「應收 − 實收 ＝ 全單優惠折扣＋抹零」對數）。實收大數＝**毛**；卡內方框只列「**退款（POS 線下）** − X」與「**淨實收（落袋）**」兩行（原本嘅「毛實收」行已刪 —— 同大數重複）。
+- **報表頁**：營業額大數改為**淨額**（`totalRevenueNetMop` ＝ 線下收款 − 退款 ＋ 線上收款）；副標題線下分拆**必須同步扣退款**（否則分拆加總 ≠ 大數）；提示球唔再出退款拆解算式，只講「營業額不包含退款金額」。
+- 🔴🔴 **Ledger 側完全冇退款資料源**（已查證）：`list_merchant_orders` 只回 `total_avos`/`discount_avos`/`subtotal_avos`；`LedgerOrderRow` 冇任何退款欄；`orders.ts` 全文 `refund` 出現 **0 次**；`refunded_amount` 只存在 POS 自己嘅 `pos_orders`（遷移 0049）。
+  ⇒ 「Ledger 純線上單嘅退款」**POS 根本睇唔到**。唯一睇得到嘅線上退款係「本地投影單」嗰批，而佢哋**本身就係 POS 單、早已計入線下** ⇒ 硬標「線下＋線上」＝**重複計算**。✅ 正解：**退款只從線下扣**，並喺 UI 標明「Ledger 純線上退款未計入」。
+  （數學上 `毛 − 退款` ≡ `(線下收款 − 退款) + 線上收款`；用 `agg.netRevenue` 係錯嘅 —— 佢唔含 `ledgerOnlyPaidTotal`。）
+- ⚠️ 專案內有兩處 `{false ? …}` 隱藏區含**舊文案**（報表舊退款橫幅／交班「會員通線上（Ledger）」區塊）—— 還原前**必須先更新文案**，否則同新口徑打架。
 
 ## 2 返結四鐵律
 ①同機正常≠已上雲（查 `reopen_count`）②維持 `reopened`＋`keepPaidStatus` 認 `paid`/`reopened`（否則 items 永不上雲）③reopen_count/at/reason 單調遞增 ④🔴 加 `pos_orders` 欄位要改**四條**讀取路徑：`pos-order-mapper`／`pos-order-row`／`/api/pos/orders` 內聯 mapper／`sync` `baseRecord`。
@@ -39,6 +46,9 @@
 
 ## 6 UI／環境
 收銀台＝`/pos`；`/`＝工作台選擇。深連結一律 `/pos?tableId=&orderId=`，**唔准推 `/`**；清 query 用 `replaceState(null,"",location.pathname)`（守衛 `pos-deeplink-path.test.ts`）。KPI 帶固定 5 欄。`button{font:inherit}` 壓過 `text-*` ⇒ 字級寫仔元素。🔴 `npm test`＝`node --test`：唔認 `@/`／`.tsx` ⇒ 可測模組零 import、邏輯與執行分檔。
+🔴🔴 **條件式警示卡要「整卡條件 render」，唔可以留空殼**（2026-10-01 教訓）：刪一張卡時，卡內「有價值嘅內容」若係**條件式**（例如「N 張線上單未標記完成」提示＋補推掣），唔應該保留外殼改成中性標題 —— 冇異常時會剩一張**常年空卡**（只有「已計入左邊某某」嗰種廢話），商家會直接問「這又是什麼?」。✅ 正解：整卡連標題一齊條件 render（同 `onlineReconcile.unadoptedCount > 0` 慣例一致）。⚠️ 若真要保留底層邏輯（唔想刪 function），用 `{false ? … : null}` 收埋渲染路徑 ＋ `eslint-disable-next-line` ＋ 明文註解「**有意為之，唔係遺漏**」，避免 ESLint unused 警告變噪音。
+🔴 **JSX 內唔可以用 Markdown `**粗體**` 或 `<b>`／`<strong>`**（會原樣顯示／不符慣例）⇒ 用 `<span className="font-semibold">`。`InfoBubble` 氣泡內層係 `<span>` ⇒ 內容只可以用 `<span className="block">` 分行，唔可以放 `<div>`／`<p>`。
+🔴 **JSX 屬性位置用 `/* */` 塊註解**（`{/* */}` 只可以喺 children 位置）；`//` 單行註解喺屬性之間會爆語法錯。
 
 ## 7 判別／取證
 `isSaleCountable()`：只計 settled／帶 `onlineOrderId` 嘅 paid，Macau 日界 ⇒ 未結帳單永不入報表。id 前綴＝建單程式。`storeId` 係公開值。⭐ `tools/log-recheck.cjs --both`、`probe-anon-exposure.cjs`（DETAIL §F）。🔴 量度陷阱：Vercel 一行 log＝一行 CSV 且倍數**可變** ⇒ 按 `requestId` 去重；兩份 log 窗口通常唔重疊，只比速率；CSV 有引號內換行。多部中繼機混算 claim 會被腰斬 ⇒ **逐 `agent_id` 拆**。🔴 anon 唯讀探測只有 24h 窗（`pos_orders` 72h）⇒ **睇唔到跨日行**，唔可以據此斷定「DB 冇呢一行」（2026-09-24 靠呢點漏咗一條 3 日前嘅阻塞行，要靠商家跑 SQL Editor 才見到）。
