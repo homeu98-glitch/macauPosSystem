@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { InfoBubble } from "@/components/info-bubble";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import { isPrintContentEnabled } from "@/lib/print-toggles";
@@ -632,6 +633,50 @@ export function ShiftPage() {
   const ledgerOnlineCount = onlineLocalOrders.length + ledgerOnlyOnline.count;
   /** `false` = Ledger 清單讀唔到（只計到本地線上單），UI 要標示。 */
   const ledgerOnlineIsPaidSum = ledgerPaidOrders !== null;
+
+  /**
+   * 線上「**應收**」＝ 未扣優惠前嘅原價（2026-10-01 新增，J 口徑）。
+   *
+   * 🔴 為何要加：交班原本三張卡口徑**唔對稱** ——
+   *    「實收」有兩個版本（線下 / 線下＋線上），但「應收」只有線下版。
+   *    商家見到「應收 MOP 0」而「線上線下合計（實收）MOP 0」，無法判斷應收係咪漏咗線上，
+   *    亦無法用「應收 − 實收 ＝ 折扣＋抹零」對數。
+   *    ⇒ 應收一律改為**線下＋線上**，同報表頁（`restaurant-daily-report.tsx`）一致。
+   *
+   * 公式（同報表頁**逐字相同**，唔可以各自實現）：
+   *   `subtotalBeforeDiscount ?? (total + discountAmount)`，兩者皆無才退回 `paid`。
+   *   Ledger 側 `subtotalBeforeDiscount` 由 `subtotal_avos` 推導（見 `order-mapper.ts`），
+   *   本身就係「未扣優惠前」口徑 —— 同 POS 側 `Σ(item.price×qty)` 語意一致。
+   *
+   * ⚠️ 範圍必須同 `ledgerOnlineMop` **完全一樣**（本地投影 ∪ Ledger 純線上，按 id 去重），
+   *    否則「應收 − 實收」會出現莫名差額。
+   */
+  const ledgerOnlineReceivableMop = useMemo(() => {
+    const sum = (orders: Array<{ subtotalBeforeDiscount?: number; total?: number; discountAmount?: number; paidAmount?: number }>) =>
+      orders.reduce((s, o) => {
+        const paid = Number(o.total ?? o.paidAmount ?? 0) || 0;
+        const raw = Number(o.subtotalBeforeDiscount ?? paid + (o.discountAmount ?? 0));
+        return s + (Number.isFinite(raw) && raw > 0 ? raw : paid);
+      }, 0);
+
+    // 本地線上投影單：用 POS 側口徑 —— ⚠️ 必須同報表頁**逐字相同**：
+    //   `Σ(item.price × quantity) + 服務費 + 稅`（`item.price` ＝落單當時 base price，
+    //   未套單品折扣率，且含 voided 菜品原價）。
+    //   唔可以用 `total + discountAmount` 代替 —— 兩者喺有 void 菜品時**唔相等**，
+    //   會令交班同報表夾唔到數（正正係商家最初投訴嘅症狀）。
+    const localPart = onlineLocalOrders.reduce((s, o) => {
+      const itemsGross = o.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      return s + itemsGross + (o.serviceChargeAmount ?? 0) + (o.taxAmount ?? 0);
+    }, 0);
+
+    return Math.round((localPart + sum(ledgerOnlyRows)) * 100) / 100;
+  }, [onlineLocalOrders, ledgerOnlyRows]);
+
+  /** 線下＋線上 應收合計（＝交班「應收金額合計」卡上顯示嘅數）。 */
+  const receivableTotalAll = useMemo(
+    () => Math.round((summary.receivableTotal + ledgerOnlineReceivableMop) * 100) / 100,
+    [summary.receivableTotal, ledgerOnlineReceivableMop],
+  );
 
   /**
    * 可安全補推嘅目標：Ledger 未 `completed`，**但本地 POS 已經 `settled`** 嘅線上單。
@@ -1731,16 +1776,59 @@ export function ShiftPage() {
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
-                  <div className="text-sm text-indigo-700">應收金額合計</div>
+                  {/*
+                    🔴 2026-10-01（J 口徑）：應收由「僅線下」改為「**線下 ＋ 線上**」，
+                       同報表頁一致。原本只有線下版 ⇒ 同「實收」範圍唔對稱
+                       （實收有線下／線下＋線上兩版），商家無法用
+                       「應收 − 實收 ＝ 折扣＋抹零」對數。
+                       ⚠️ 同時拿走「＋服務費＋稅」（本店冇啟用，兩欄恆為 0，
+                          寫住只係噪音；報表頁已同步改走）。
+                  */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm text-indigo-700">應收金額合計</div>
+                    <InfoBubble label="應收金額合計口徑說明">
+                      <span className="block font-semibold text-slate-800">應收金額合計（線下 ＋ 線上）</span>
+                      <span className="mt-1 block">
+                        ＝<span className="font-semibold">未扣任何優惠前</span>嘅原價（單品原價 × 數量）。
+                      </span>
+                      <span className="mt-1 block tabular-nums text-slate-600">
+                        線下 {formatMoney(summary.receivableTotal)}
+                        <br />＋ 線上 {formatMoney(ledgerOnlineReceivableMop)}
+                        <br />＝ {formatMoney(receivableTotalAll)}
+                      </span>
+                      <span className="mt-1 block text-[11px] text-slate-500">
+                        同報表頁「應收金額合計」同一口徑（本店冇服務費／稅）。
+                        同「實收」嘅差額 ＝ 全單優惠折扣 + 抹零。
+                      </span>
+                    </InfoBubble>
+                  </div>
                   <div className="mt-2 text-2xl font-semibold text-indigo-700">
-                    {formatMoney(summary.receivableTotal)}
+                    {formatMoney(receivableTotalAll)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    僅線下 POS：原價合計 + 服務費 + 稅（不含線上，線上見下方「會員通線上」）
+                    未扣優惠前嘅原價 · 線下 {formatMoney(summary.receivableTotal)} ＋ 線上{" "}
+                    {formatMoney(ledgerOnlineReceivableMop)}
                   </div>
                 </article>
                 <article className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
-                  <div className="text-sm text-emerald-700">實收金額合計</div>
+                  {/*
+                    🔴 2026-10-01（J 口徑）：呢張卡**刻意維持只算線下**（＝線下 POS 子集），
+                       全集由右邊「線上線下合計（實收）」提供。加提示球講清楚，
+                       否則商家會同「應收（線下＋線上）」對唔上而以為計錯。
+                  */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm text-emerald-700">實收金額合計</div>
+                    <InfoBubble label="實收金額合計口徑說明">
+                      <span className="block font-semibold text-slate-800">實收金額合計（僅線下 POS）</span>
+                      <span className="mt-1 block">
+                        ＝已結帳店內單嘅 order.total（已扣全單優惠 ＋ 抹零）。
+                      </span>
+                      <span className="mt-1 block text-[11px] text-slate-500">
+                        呢張卡<span className="font-semibold">只計線下</span>；線下＋線上嘅全集見右邊「線上線下合計（實收）」。
+                        同「應收金額合計」（線下＋線上）範圍唔同 —— 唔可以直接相減。
+                      </span>
+                    </InfoBubble>
+                  </div>
                   <div className="mt-2 text-2xl font-semibold text-emerald-700">
                     {formatMoney(summary.paidTotal)}
                   </div>
@@ -1774,7 +1862,23 @@ export function ShiftPage() {
                   </div>
                 </article>
                 <article className="rounded-2xl border border-orange-200 bg-orange-50/40 p-4">
-                  <div className="text-sm text-orange-700">線上線下合計（實收）</div>
+                  {/*
+                    呢張卡係「實收」嘅**全集** —— 同左邊「實收金額合計（僅線下）」係
+                    子集／全集關係，而唔係兩個唔同指標（2026-10-01 J 口徑澄清）。
+                  */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm text-orange-700">線上線下合計（實收）</div>
+                    <InfoBubble label="線上線下合計口徑說明">
+                      <span className="block font-semibold text-slate-800">線上線下合計（實收）</span>
+                      <span className="mt-1 block">
+                        ＝左邊「實收金額合計（僅線下）」＋ 線上實收 —— 即<span className="font-semibold">全部渠道</span>實際收到嘅錢。
+                      </span>
+                      <span className="mt-1 block text-[11px] text-slate-500">
+                        線上 ＝ 本地線上投影單 ∪ Ledger 已付款單（按單去重）。
+                        呢個數同報表頁「實收金額合計」係同一範圍。
+                      </span>
+                    </InfoBubble>
+                  </div>
                   <div className="mt-2 text-2xl font-semibold text-orange-700">
                     {formatMoney(summary.paidTotal + ledgerOnlineMop)}
                   </div>
