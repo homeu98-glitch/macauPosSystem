@@ -1800,8 +1800,78 @@ export function ShiftPage() {
                 線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = 本地線上投影單 ∪ Ledger 已付款單（按單去重，＝實際收到嘅錢）。
               </div>
               {/* 🔴 2026-10-01：由 3 欄改 2 欄 —— 「線上線下合計（實收）」已移除
-                  （實收已擴為線下＋線上），剩「應收」＋「實收」兩張同範圍、可直接對數嘅卡。 */}
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  （實收已擴為線下＋線上），剩「應收」＋「實收」兩張同範圍、可直接對數嘅卡。
+                  🔴 2026-10-05（J 拍板）：再改為 **3 欄**，加入「已付支出」並排第一：
+                      已付支出 ｜ 應收金額合計 ｜ 實收金額合計
+                  ⚠️ 「已付支出」係**獨立參考數**，同右邊兩張收入卡**唔可以加減**
+                      （上面兩張只計銷售訂單；供應商貨款尤其月結唔係當日營業額嘅扣減）。
+                      詳見 `purchaseToday` state 註解。 */}
+              <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                {/* ── 第 1 欄：已付支出（今日買貨）──
+                    🔴 資料源＝`purchaseToday`（`/api/inventory/receipts`，"today"），
+                       該請求**本來就發**（state 早已存在）⇒ 零新增 egress。
+                    ⚠️ `purchaseToday` **唔喺 `pageReady` 閘內**（pageReady = ordersLoaded && ledgerLoaded），
+                       API 失敗時佢永遠 null ⇒ **唔可以用佢做 loading 判斷**，否則卡會永久卡 loading。
+                       呢度做法同 `summary`（由本機 orders 計出）一致：null ⇒ 出空狀態。 */}
+                {purchaseToday?.summary ? (
+                  <article className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="text-sm text-rose-700">已付支出</div>
+                      <InfoBubble label="已付支出口徑說明">
+                        <span className="block font-semibold text-slate-800">已付支出（今日買貨）</span>
+                        <span className="mt-1 block">
+                          ＝今日收據入面<span className="font-semibold">「已付款」</span>嗰批嘅總額，
+                          即今日真正流出嘅貨錢。
+                        </span>
+                        <span className="mt-1 block tabular-nums text-slate-600">
+                          {purchaseToday.summary.count} 張收據
+                          <br />已付 {formatMoney(purchaseToday.summary.paid)}
+                        </span>
+                        {/* ⚠️ 未付**唔顯示**（2026-10-05 J 拍板）—— 資料照抓、只係收埋。
+                            唔好因為「有資料」就加返，商家會誤以為要即刻俾錢。 */}
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          只計已付款收據。來源：庫存收據（expenseRecorder）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-rose-700">
+                          ⚠ 呢個係<span className="font-semibold">獨立參考數</span>，
+                          唔可以同隔籬兩張收入卡加減 —— 佢係買貨開支，唔係當日營業額嘅扣減。
+                        </span>
+                      </InfoBubble>
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-rose-700">
+                      {formatMoney(purchaseToday.summary.paid)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {purchaseToday.summary.count} 張收據 · 供貨商 {purchaseToday.summary.supplierStats.length} 間
+                    </div>
+                    {/* 供貨商分拆：預設收起（J 拍板），撳一下先展開 */}
+                    {purchaseToday.summary.supplierStats.length > 0 ? (
+                      <details className="mt-2 rounded-xl border border-rose-200 bg-white/70 px-3 py-2 text-xs text-slate-600">
+                        <summary className="cursor-pointer font-semibold text-slate-700">
+                          供貨商分拆（{purchaseToday.summary.supplierStats.length} 間 · 撳開逐張核對）
+                        </summary>
+                        <div className="mt-2 grid gap-1">
+                          {purchaseToday.summary.supplierStats.map((s) => (
+                            <div key={s.name} className="flex items-baseline justify-between gap-2">
+                              <span className="truncate">
+                                {s.name} · {s.count} 張
+                              </span>
+                              <span className="shrink-0 font-semibold">{formatMoney(s.total)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : null}
+                  </article>
+                ) : (
+                  <article className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div className="text-sm text-slate-500">已付支出</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-400">—</div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      今日暫無買貨收據（或庫存資料未載入）。
+                    </div>
+                  </article>
+                )}
                 <article className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
                   {/*
                     🔴 2026-10-01（J 口徑）：應收由「僅線下」改為「**線下 ＋ 線上**」，
