@@ -78,6 +78,10 @@ export async function GET(request: Request) {
         reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
         reopenedAt: order.reopened_at ?? undefined,
         reopenReason: order.reopen_reason ?? undefined,
+        // 返結原枱快照（0063 migration，2026-10-05）：跨機重結靠佢還原原枱。
+        //    未跑 migration → 欄位唔存在 → undefined → 唔會還原（= 現時行為，屬安全降級）。
+        reopenOriginalTableId: order.reopen_original_table_id ?? undefined,
+        reopenOriginalTableName: order.reopen_original_table_name ?? undefined,
         // 不可變業務時間（0057 migration，2026-09-24）：報表／交班日歸屬以佢為準。
         //    未跑 migration 嘅環境 → 欄位唔存在 → undefined → 落返舊鏈（唔會爆）。
         settledAt: order.settled_at ?? undefined,

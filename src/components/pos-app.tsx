@@ -202,6 +202,7 @@ import { syncOnlineDineInCompletionInBackground } from "@/lib/pos/online-dinein-
 // 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
+import { reopenAccountRows } from "@/lib/pos/reopen-account-rows";
 import { tableOrderBadge } from "@/lib/pos/table-order-badge";
 import { isPaidDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
 import { resolveSettleTargetOrder as resolveSettleTargetOrderCore } from "@/lib/pos/settle-target";
@@ -2430,6 +2431,18 @@ export function PosApp() {
       ),
     [orders],
   );
+
+  /**
+   * 「返結帳」清單（2026-10-05，跨機返結失聯修復）。
+   *
+   * 🔴 背景：返結時訂單會被搬去 `temp-reopen-*` 枱，而**該枱只存在下單機本機**
+   *    （`device-settings` 推上 server 前會 `stripReopenTempTables()` 剝走）⇒
+   *    另一部機桌台總覽完全見唔到重結入口，商家喺該機冇辦法重結。
+   *
+   * ⚠️ 資料源係現成嘅 `openOrders`（已含 `reopened`）⇒ **零新增 API / 零新增 DB 查詢**，
+   *    egress 完全唔受影響。純函式喺 `@/lib/pos/reopen-account-rows`（有單元測試守衛）。
+   */
+  const reopenAccountList = useMemo(() => reopenAccountRows(openOrders), [openOrders]);
 
   // 30s 批量同步（只在在線 + 有 pending 時進行；成功/失敗不彈 toast，避免打擾收銀）
   useEffect(() => {
@@ -5474,6 +5487,73 @@ export function PosApp() {
                   </button>
                 ))}
               </div>
+
+              {/**
+               * 「返結帳（N）」區塊（2026-10-05，跨機返結失聯修復）。
+               *
+               * 🔴 點解要呢個區塊：返結時訂單會被搬去 `temp-reopen-*` 枱，而**該枱只存在
+               *    執行返結嗰部機嘅本機**（推上 server 前會 `stripReopenTempTables()` 剝走，
+               *    否則會永久升級做真實枱）⇒ **另一部機桌台總覽完全冇重結入口**，
+               *    商家喺該機冇辦法完成重結（原枱反而顯示「空閒」）。
+               *    呢個區塊**唔依賴枱**，直接列出所有 `reopened` 單 ⇒ 跨機一樣見到。
+               *
+               * ⚠️ 整卡**條件 render**（記憶 §6 教訓）：冇返結單就唔 render 任何嘢 ——
+               *    唔可以保留空殼，否則商家會問「這又是什麼?」。
+               *
+               * 同 temp 枱**並存**（唔係取代）：下單機既有「返結 A01」枱照樣顯示，
+               *    兩者指向同一張單（同一 `order.id`），重結後都係同一張。
+               */}
+              {reopenAccountList.length > 0 ? (
+                <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-bold text-white">
+                      待重結 {reopenAccountList.length} 張
+                    </span>
+                    <span className="text-[13px] font-semibold text-amber-900">返結帳</span>
+                    <span className="text-[11px] text-amber-700">
+                      呢啲單已反結（錢未收），唔計入營業額。改價／加餐後要喺呢度重結。
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {reopenAccountList.map((row) => {
+                      const target = openOrders.find((o) => o.id === row.id);
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          onClick={() => {
+                            if (!target) return;
+                            // 🔴 落單機以外嘅機：temp 枱唔存在於本機 `floors`，
+                            //    所以**唔好**順住 `tableId` 鎖 floor（會鎖到一個唔存在嘅
+                            //    display floor，枱 grid 變空）。直接載單入工作台最穩陣。
+                            loadOrderIntoWorkspace(target, target.tableId);
+                            setPosMode("order");
+                          }}
+                          className="flex min-h-[40px] items-center gap-2 rounded-xl border border-amber-400 bg-white px-3 py-2 text-left text-amber-900 hover:bg-amber-100"
+                        >
+                          <span className="text-[13px] font-semibold">{row.orderNo}</span>
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                            {row.tableLabel}
+                          </span>
+                          <span className="text-[13px] font-semibold">
+                            {formatMoney(row.total)}
+                          </span>
+                          {row.reopenCount ? (
+                            <span className="text-[11px] font-semibold text-indigo-700">
+                              已返結 ×{row.reopenCount}
+                            </span>
+                          ) : null}
+                          {row.reopenReason ? (
+                            <span className="max-w-[220px] truncate text-[11px] text-amber-700">
+                              {row.reopenReason}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
                 <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
                   {visibleTables.map((table) => {

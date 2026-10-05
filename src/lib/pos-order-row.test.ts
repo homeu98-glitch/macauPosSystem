@@ -75,6 +75,8 @@ function fullRow(): PosOrderDbRow {
     reopen_count: 1,
     reopened_at: "2026-09-20T05:00:00.000Z",
     reopen_reason: "客人改單",
+    reopen_original_table_id: "A01",
+    reopen_original_table_name: "A01",
     settled_at: "2026-09-20T05:05:00.000Z",
     platform_fees: [
       { label: "餐盒費", amount: 4 },
@@ -231,8 +233,48 @@ describe("settled_at（0057 不可變業務時間）唔可以再漏抄", () => {
   });
 });
 
-describe("external_order_id（平台訂單號）唔可以漏抄", () => {
-  it("清單一定要有 external_order_id（否則 PostgREST 根本唔會 select 佢）", () => {
+/**
+ * 🔴 回歸（2026-10-05 跨機返結失聯）：`reopen_original_table_id`（0063）係
+ * **跨機重結還原原枱**嘅唯一來源。返結時 `table_id` 會被搬去 temp 枱
+ * （`temp-reopen-*`），而 temp 枱**唔上雲**；原本「原枱」只記喺下單機 localStorage
+ * ⇒ 另一部機重結時唔知原枱係邊 ⇒ `isReopenRestore` 為 false ⇒ 唔會還原
+ * ⇒ 張單永久卡喺一張該機唔存在嘅枱（枱面空枱、單懸空）。
+ *
+ * 漏抄呢兩欄 = 跨機 bug 修唔到（同 `settled_at` / `reopen_*` 同一型漏抄病）。
+ */
+describe("reopen_original_table_id（0063 跨機重結還原原枱）唔可以漏抄", () => {
+  it("投影清單一定要有兩欄（否則 PostgREST 根本唔會 select 佢）", () => {
+    assert.ok(
+      (POS_ORDER_DB_COLUMNS as readonly string[]).includes("reopen_original_table_id"),
+      "POS_ORDER_DB_COLUMNS 缺 reopen_original_table_id —— 跨機重結會永久卡喺 temp 枱",
+    );
+    assert.ok(
+      (POS_ORDER_DB_COLUMNS as readonly string[]).includes("reopen_original_table_name"),
+      "POS_ORDER_DB_COLUMNS 缺 reopen_original_table_name —— UI 顯示唔到原枱名",
+    );
+  });
+
+  it("有值 → 一定 map 出（confirmPayment 嘅 isReopenRestore 靠佢）", () => {
+    const row = mapOrderRow(fullRow());
+    assert.equal(row.reopenOriginalTableId, "A01");
+    assert.equal(row.reopenOriginalTableName, "A01");
+  });
+
+  it("NULL / 未跑 migration（undefined）→ undefined（= 現時行為，安全降級）", () => {
+    assert.equal(
+      mapOrderRow({ ...fullRow(), reopen_original_table_id: null }).reopenOriginalTableId,
+      undefined,
+    );
+    const noCol = { ...fullRow() } as Record<string, unknown>;
+    delete noCol.reopen_original_table_id;
+    delete noCol.reopen_original_table_name;
+    const out = mapOrderRow(noCol as PosOrderDbRow);
+    assert.equal(out.reopenOriginalTableId, undefined);
+    assert.equal(out.reopenOriginalTableName, undefined);
+  });
+});
+
+describe("external_order_id（平台訂單號）唔可以漏抄", () => {  it("清單一定要有 external_order_id（否則 PostgREST 根本唔會 select 佢）", () => {
     assert.ok(
       (POS_ORDER_DB_COLUMNS as readonly string[]).includes("external_order_id"),
       "POS_ORDER_DB_COLUMNS 缺 external_order_id —— 平台結算配對會靜默失效",

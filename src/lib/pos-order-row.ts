@@ -83,6 +83,21 @@ export type PosOrderDbRow = {
   reopened_at?: string | null;
   reopen_reason?: string | null;
   /**
+   * 返結當刻嘅**原枱** id（0063 migration，2026-10-05）。
+   * 未跑 migration / 未返結單 / 舊 client 寫入嘅單 → undefined。
+   *
+   * 🔴 為咩一定要 map 返出嚟（跨機返結失聯，2026-10-05 實案）：
+   *    返結時 `tableId` 會被搬去 **temp 枱**（`temp-reopen-<orderId>`），
+   *    而 temp 枱**刻意唔上雲**（寫入 `pos_bootstrap_config.tables` 會永久升級
+   *    做真實枱 ⇒ `device-settings` 推上 server 前會 `stripReopenTempTables()`）。
+   *    原本「原枱」只記喺下單機 localStorage → **另一部機重結時完全唔知原枱係邊**
+   *    ⇒ `isReopenRestore` 為 false ⇒ 唔會還原 ⇒ 張單永久卡喺 temp 枱
+   *    （該機冇呢張枱）＝ 枱面空枱、單懸空。
+   *    漏抄呢兩欄 = 呢個跨機 bug 修唔到（同 0043 `reopen_*` 同一型漏抄）。
+   */
+  reopen_original_table_id?: string | null;
+  reopen_original_table_name?: string | null;
+  /**
    * 最近一次結帳時間（0057 migration，2026-09-24）—— **裝置鐘、server 永不覆蓋**。
    * 未跑 migration / 未結帳單 / 舊 client 寫入嘅單 → undefined。
    *
@@ -181,6 +196,10 @@ export const POS_ORDER_DB_COLUMNS = [
   "reopen_count",
   "reopened_at",
   "reopen_reason",
+  // 返結當刻嘅原枱快照（0063 migration，2026-10-05）。跨機重結靠佢還原原枱；
+  // 唔投影 = 寫得入、讀唔出（呢個檔頭鐵律講嘅典型漏抄）。
+  "reopen_original_table_id",
+  "reopen_original_table_name",
   // 不可變業務時間（0057 migration，2026-09-24）。報表／交班日歸屬嘅唯一可信真源。
   "settled_at",
   // 外賣平台費用明細（0056 migration，2026-09-24）。收據同訂單詳情都靠佢。
@@ -253,6 +272,11 @@ export function mapOrderRow(order: PosOrderDbRow) {
     reopenCount: order.reopen_count ? Number(order.reopen_count) : undefined,
     reopenedAt: order.reopened_at ?? undefined,
     reopenReason: order.reopen_reason ?? undefined,
+    // 返結原枱快照（0063）：冇欄 / NULL → undefined。
+    // 跨機重結靠呢兩個 field 還原原枱（`pos-app.tsx` `isReopenRestore`）。
+    // 未跑 migration → undefined → 行為等同現時（唔會還原），屬安全降級。
+    reopenOriginalTableId: order.reopen_original_table_id ?? undefined,
+    reopenOriginalTableName: order.reopen_original_table_name ?? undefined,
     // 不可變業務時間（0057 migration）：冇欄 / NULL → undefined（orderEventInstant 落返舊鏈）。
     // 🔴 漏抄呢行 = 雲端有 settled_at 都讀唔返 ⇒ 跨日漂移保護即刻失效。
     settledAt: order.settled_at ?? undefined,

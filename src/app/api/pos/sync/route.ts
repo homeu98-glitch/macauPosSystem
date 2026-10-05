@@ -1319,6 +1319,36 @@ export async function POST(request: Request) {
         const settledAtRecord: Record<string, unknown> =
           order.settledAt !== undefined ? { settled_at: isoOrNull(order.settledAt) } : {};
 
+        /**
+         * ── 返結「原枱」快照上雲（0063 migration，2026-10-05）────────────────────
+         *
+         * 🔴 背景（跨機返結失聯實案 · 表嫂美食 訂單02）：
+         *    返結時 `tableId` 會被搬去 **temp 枱**（`temp-reopen-<orderId>`），
+         *    而 temp 枱**刻意唔上雲**（`device-settings` 推上 server 前會
+         *    `stripReopenTempTables()` 剝走，否則會永久升級做真實枱）。
+         *    「原枱」原本只記喺下單機 localStorage（`pos_orders` 由 0043 起
+         *    冇對應欄位）⇒ **另一部機重結時完全唔知原枱係邊**
+         *    ⇒ `isReopenRestore` 為 false ⇒ 唔會還原原枱
+         *    ⇒ 張單永久卡喺一張該機唔存在嘅枱（枱面空枱、單懸空）。
+         *
+         * 🔴 為咩要「有值才寫」（同 `memberRecord` / `settledAtRecord` 同一哲學）：
+         *    舊 client（未刷新 bundle）payload 完全冇呢兩個 key。若照樣寫 `NULL`，
+         *    就會**無條件抹走**另一部機已經寫入嘅原枱快照
+         *    （呢個 update 唔經 LWW 守門，係直接覆寫）
+         *    ⇒ 跨機重結又還原唔到原枱，功能靜默失效但**冇任何報錯**。
+         *
+         * ⚠️ server **永不**用自己嘅值填充：temp 枱只存在 client 本機，
+         *    server 推斷唔到原枱係邊（一律會錯寫成 temp 枱 id）。
+         */
+        const writesReopenOriginalTable =
+          order.reopenOriginalTableId !== undefined || order.reopenOriginalTableName !== undefined;
+        const reopenOriginalTableRecord: Record<string, unknown> = writesReopenOriginalTable
+          ? {
+              reopen_original_table_id: text(order.reopenOriginalTableId, MAX_ID_LEN),
+              reopen_original_table_name: text(order.reopenOriginalTableName, MAX_NAME_LEN),
+            }
+          : {};
+
         const baseRecord: Record<string, unknown> = {
           id: orderId,
           local_order_no: text(order.localOrderNo, MAX_NAME_LEN),
@@ -1380,6 +1410,10 @@ export async function POST(request: Request) {
           ...memberRecord,
           ...settledAtRecord,
         };
+        // 🔴 0063 返結原枱快照**刻意唔併入 baseRecord**，改用獨立第二次 update（見下面）。
+        //    理由：baseRecord 一旦帶住未跑 migration 嘅新欄，會觸發 42703 降級路徑；
+        //    而降級清單係**硬編碼手寫**嘅 —— 將新欄塞入 baseRecord 等於將「新功能失敗」
+        //    同「整張單上唔到雲（落單主流程）」綁埋一齊。獨立寫入 = 新欄失敗完全唔影響主流程。
         const writeOrder = async (record: Record<string, unknown>) =>
           existing
             ? await supabase.from("pos_orders").update(record).eq("id", orderId).eq("store_id", storeId)
@@ -1422,6 +1456,42 @@ export async function POST(request: Request) {
           ack(false, "訂單寫入失敗", { reason: "db-error" });
           continue;
         }
+
+        /**
+         * ── 0063 返結原枱快照：**獨立第二次 update**（best-effort）────────────────
+         *
+         * 🔴 為咩唔併入 `baseRecord`（呢個係本段設計嘅核心）：
+         *    `baseRecord` 嘅 42703 降級機制係**硬編碼手寫刪欄清單**
+         *    （見上面 `legacyRecord`）。將新欄塞入 `baseRecord` 等於將
+         *    「新功能同步唔到」同「整張單上唔到雲（落單主流程被拖冧）」綁埋一齊 ——
+         *    一旦漏改降級清單，後果係**收銀落單直接失敗**，代價完全唔對稱。
+         *    （呢個係 2026-10-05 影響範圍調查發現嘅 R-1 風險。）
+         *
+         *    改為獨立寫入後，新欄最差就係**功能靜默停用**（＝現時行為），
+         *    落單／結帳／金額／items 全部照寫，零回歸風險。
+         *
+         * ⚠️ 一定要喺 `baseRecord` **寫入成功之後**先做：未跑 migration 嘅環境
+         *    冇呢兩欄，upsert 路徑根本唔會建立該行，update 會 0 rows（PostgREST 唔報錯）。
+         *    兩種情況都唔會影響上面已經成功嘅主流程。
+         *
+         * 🔴 跨店隔離：`update` 一律帶 `.eq("store_id", storeId)`，同 `writeOrder` 同一約束。
+         */
+        if (writesReopenOriginalTable && existing) {
+          const { error: reopenTableErr } = await supabase
+            .from("pos_orders")
+            .update(reopenOriginalTableRecord)
+            .eq("id", orderId)
+            .eq("store_id", storeId);
+          if (reopenTableErr) {
+            // ⚠️ 刻意**唔 fail**、唔影響 ack：主流程已成功，呢兩欄只係審計快照。
+            //    未跑 0063 migration → 42703 → 跨機重結唔會還原原枱（＝現時行為）。
+            console.warn(
+              `[pos/sync] 0063 reopen_original_table 寫入失敗（${reopenTableErr.message}）` +
+                `，跨機重結將唔會還原原枱（訂單 ${orderId}，主流程不受影響）`,
+            );
+          }
+        }
+
         ack(true);
       } else {
         // 帶咗 ORDER_CREATED/UPDATED 但 payload 冇 order.id → 冇嘢可寫。

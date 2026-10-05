@@ -21,6 +21,9 @@
 
 ## 2 返結四鐵律
 ①同機正常≠已上雲（查 `reopen_count`）②維持 `reopened`＋`keepPaidStatus` 認 `paid`/`reopened`（否則 items 永不上雲）③reopen_count/at/reason 單調遞增 ④🔴 加 `pos_orders` 欄位要改**四條**讀取路徑：`pos-order-mapper`／`pos-order-row`／`/api/pos/orders` 內聯 mapper／`sync` `baseRecord`。
+🔴🔴 **2026-10-05 跨機返結失聯**：`createReopenTempTable()`（`pos-orders.ts:94`）嘅 temp 枱**只寫本機** `localSettings.floors`，`device-settings.tsx:633/909` 推上 server 時刻意 `stripReopenTempTables()` 剝走（寫入 `bootstrap.tables` 會永久升級做真實枱）。⇒ **另一部機唔會見到「返結」枱，商家喺該機完全冇重結入口**（A01 顯示空閒＝已搬去 temp 枱，屬設計）。J 拍板解法＝**桌台總覽另開「返結帳（N）」區塊、唔依賴枱**（零雲端風險、免 migration），整卡**條件 render**（§6 教訓）。
+🔴🔴 同一病灶的第二個 bug（未修）：`reopenOriginalTableId`/`Name` **完全冇上雲**（`pos_orders` 由 0043 起只有 reopen_count/at/reason；四條讀取路徑 0 hit）⇒ 跨機重結時 `isReopenRestore` 為 false ⇒ **唔會還原原枱**，張單永久卡喺 `temp-reopen-xxx`（該機冇呢張枱）＝枱面空枱、單懸空。修＝加 migration 寫 `reopen_original_table_id`/`_name` ＋ 改四條路徑。
+✅ `reopened` **唔計營業額、唔入訂單明細係正確口徑**（`isSaleCountable()` 只認 settled/paid；錢未收）。J 拍板維持，靠 KPI「未結帳訂單 … 已重開 N 張」睇。唔好當成 bug 亂改報表。
 
 ## 3 鑑權
 閘＝`posRouteAuthGuard()`，須放喺 early-return **之後**。🔴 `POS_REQUIRE_DEVICE_AUTH` **冇設＝開閘**。TTL 12h。🔴🔴 anon 讀 `pos_orders`(72h/0041)、`pos_print_jobs`(24h/0021) 係**刻意時間窗 RLS**，唔可移除或收短（三個 Realtime 消費者靠 anon 訂 `postgres_changes`；收緊＝零事件但照 `SUBSCRIBED`）⇒ 出紙 1–3 秒變最長 180 秒。守衛 `print-and-order-realtime-guard.test.ts`（25 條）。per-store token 見 DETAIL §A（自簽已否決：ECC P-256 私鑰取唔到）。

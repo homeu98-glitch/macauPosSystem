@@ -82,6 +82,17 @@ export interface PosOrderRow {
   reopened_at?: string | null;
   reopen_reason?: string | null;
   /**
+   * 返結當刻嘅**原枱** id / 名（0063 migration，2026-10-05）。
+   *
+   * 🔴 為咩一定要 map 返出嚟：返結時訂單會被搬去 temp 枱，而 temp 枱**唔上雲**
+   *    ⇒ 跨機重結時 `reopenOriginalTableId` 係 undefined ⇒ 唔會還原原枱
+   *    ⇒ 張單永久卡喺一張該機唔存在嘅枱（枱面空枱、單懸空）。
+   *    Realtime echo 係本機單被雲端覆蓋嘅主要途徑，漏 map = 呢個 bug 喺
+   *    另一部機永遠修唔到（同 0038 `member_*` / 0043 `reopen_*` 同一型漏抄）。
+   */
+  reopen_original_table_id?: string | null;
+  reopen_original_table_name?: string | null;
+  /**
    * 最近一次結帳時間（0057 migration，2026-09-24）—— **裝置鐘、server 永不覆蓋**。
    * 未跑 migration / 未結帳單 → undefined。
    * 🔴 Realtime echo 係本機單被雲端覆蓋嘅主要途徑：漏 map = 本機 `settledAt`
@@ -155,6 +166,9 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     reopenCount: row.reopen_count ? Number(row.reopen_count) : undefined,
     reopenedAt: row.reopened_at ?? undefined,
     reopenReason: row.reopen_reason ?? undefined,
+    // 返結原枱快照（0063）：冇欄 / NULL → undefined（跨機重結唔會還原原枱 = 現時行為）。
+    reopenOriginalTableId: row.reopen_original_table_id ?? undefined,
+    reopenOriginalTableName: row.reopen_original_table_name ?? undefined,
     // 不可變業務時間（0057）：冇欄 / NULL → undefined（orderEventInstant 落返舊鏈）。
     settledAt: row.settled_at ?? undefined,
     // 外賣平台結算金額（0060）：冇欄 / NULL → undefined。
