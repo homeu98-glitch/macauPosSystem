@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
   reopenAccountRows,
   reopenAccountCount,
+  excludeRowsWithLocalTempTable,
   type ReopenListOrder,
 } from "./reopen-account-rows.ts";
 
@@ -183,5 +184,53 @@ describe("reopenAccountCount", () => {
   it("冇返結單 → 0（嗰陣 UI 應該整卡唔 render，唔係 render 空卡）", () => {
     assert.equal(reopenAccountCount([order({ status: "settled" })]), 0);
     assert.equal(reopenAccountCount(null), 0);
+  });
+});
+
+/**
+ * 🔴 方案 C 守衛（2026-10-05）：返結卡同枱格共用同一個 grid ⇒ 唔排除「本機已有
+ * temp 枱」嘅單，就會同一個 grid 出現兩張指向同一 order.id 嘅卡（似兩張未結單）。
+ */
+describe("excludeRowsWithLocalTempTable（方案 C：避免同一單喺 grid 出現兩次）", () => {
+  it("本機有 temp 枱嘅單 → 排除（下單機用 temp 枱做入口，既有行為）", () => {
+    const rows = reopenAccountRows([order({ id: "a" }), order({ id: "b" })]);
+    const out = excludeRowsWithLocalTempTable(rows, ["a"]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].id, "b");
+  });
+
+  it("跨機（冇任何 temp 枱）→ 全部保留（呢個正正係修復目標，唔可以過度排除）", () => {
+    const rows = reopenAccountRows([order({ id: "a" }), order({ id: "b" })]);
+    assert.equal(excludeRowsWithLocalTempTable(rows, []).length, 2);
+    assert.equal(excludeRowsWithLocalTempTable(rows, null).length, 2);
+    assert.equal(excludeRowsWithLocalTempTable(rows, undefined).length, 2);
+  });
+
+  it("temp 枱全部對應到 → 清單變空（UI 靠 length=0 整段唔 render）", () => {
+    const rows = reopenAccountRows([order({ id: "a" })]);
+    assert.equal(excludeRowsWithLocalTempTable(rows, ["a"]).length, 0);
+  });
+
+  it("唔可以改動原陣列（caller 可能重用）", () => {
+    const rows = reopenAccountRows([order({ id: "a" }), order({ id: "b" })]);
+    const out = excludeRowsWithLocalTempTable(rows, ["a"]);
+    assert.equal(rows.length, 2);
+    assert.notEqual(out, rows);
+  });
+
+  it("temp 單 id 有空白／空字串 → 忽略，唔可以因為空白而誤排除", () => {
+    const rows = reopenAccountRows([order({ id: "a" })]);
+    assert.equal(excludeRowsWithLocalTempTable(rows, ["", "   "]).length, 1);
+  });
+
+  it("rows 係 null／undefined → 回空陣列（唔可以 crash）", () => {
+    assert.deepEqual(excludeRowsWithLocalTempTable(null, ["a"]), []);
+    assert.deepEqual(excludeRowsWithLocalTempTable(undefined, ["a"]), []);
+  });
+
+  it("排除係按 order.id 精準配對，唔可以掃到其他單", () => {
+    const rows = reopenAccountRows([order({ id: "a" }), order({ id: "ab" })]);
+    const out = excludeRowsWithLocalTempTable(rows, ["a"]);
+    assert.deepEqual(out.map((r) => r.id), ["ab"]);
   });
 });

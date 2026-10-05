@@ -133,3 +133,35 @@ export function reopenAccountRows(orders: ReopenListOrder[] | null | undefined):
 export function reopenAccountCount(orders: ReopenListOrder[] | null | undefined): number {
   return reopenAccountRows(orders).length;
 }
+
+/**
+ * 由返結清單排除「**本機已經有對應 temp 枱**」嘅單（2026-10-05 方案 C）。
+ *
+ * ## 點解要排除（唔排除就會重複渲染）
+ *
+ * 方案 C 將返結卡**插入同一個枱格網格**（唔另開區塊）⇒ 如果一張返結單**同時**
+ * 有 temp 枱（下單機）又有返結卡，收銀就會喺同一個 grid 見到**兩張指向同一 `order.id`
+ * 嘅卡**（temp 枱「返結 A01」+ 返結卡「A01」）—— 睇落似兩張未結單，必然出事。
+ *
+ * 下單機：有 temp 枱 ⇒ 用 temp 枱做入口（既有行為，完全唔動）⇒ 排除返結卡。
+ * 跨機：冇 temp 枱 ⇒ 返結卡係**唯一**入口 ⇒ 一定要出（呢個正正係修復目標）。
+ *
+ * ⚠️ 判準係 `reopenOrderId`（`createReopenTempTable` 寫入嘅**單 id**），
+ *    唔可以用枱 id 或枱名 —— 嗰啲唔穩定（枱可改名／temp 枱名含原枱名）。
+ *
+ * @param rows          `reopenAccountRows()` 嘅輸出
+ * @param tempOrderIds  本機 temp 枱關聯嘅單 id（由 caller 由 `floors` 抽）
+ */
+export function excludeRowsWithLocalTempTable(
+  rows: ReopenAccountRow[] | null | undefined,
+  tempOrderIds: Iterable<string> | null | undefined,
+): ReopenAccountRow[] {
+  const covered = new Set<string>();
+  for (const id of tempOrderIds ?? []) {
+    const t = text(id);
+    if (t) covered.add(t);
+  }
+  if (covered.size === 0) return [...(rows ?? [])];
+  return (rows ?? []).filter((row) => !covered.has(row.id));
+}
+

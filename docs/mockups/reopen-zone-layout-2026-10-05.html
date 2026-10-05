@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>桌台總覽 —「返結區」版面確認稿（2026-10-05）</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+
+/* ── 真實 Tailwind 色值（抄自 pos-app.tsx 現有 class）── */
+:root{
+  --slate-50:#f8fafc; --slate-100:#f1f5f9; --slate-200:#e2e8f0; --slate-300:#cbd5e1;
+  --slate-400:#94a3b8; --slate-500:#64748b; --slate-600:#475569; --slate-700:#334155;
+  --slate-900:#0f172a;
+  --amber-50:#fffbeb; --amber-100:#fef3c7; --amber-200:#fde68a; --amber-300:#fcd34d;
+  --amber-500:#f59e0b; --amber-600:#d97706; --amber-700:#b45309; --amber-800:#92400e;
+  --amber-900:#78350f;
+  --orange-50:#fff7ed; --orange-100:#ffedd5; --orange-300:#fdba74;
+  --orange-500:#f97316; --orange-600:#ea580c; --orange-700:#c2410c;
+  --emerald-500:#10b981; --emerald-600:#059669; --emerald-700:#047857;
+  --indigo-600:#4f46e5; --indigo-700:#4338ca;
+  --bg-app:#eef1f6;
+}
+body{background:#dfe4ec;font-family:-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;color:var(--slate-900)}
+
+/* ══ 評審列（深色，唔屬產品介面；position:relative，唔用 sticky）══ */
+.reviewbar{position:relative;background:#0f172a;color:#e2e8f0;padding:14px 20px}
+.rb-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;max-width:1180px;margin:0 auto}
+.rb-tag{background:#1e293b;border:1px solid #334155;color:#94a3b4;font-size:11px;padding:3px 8px;border-radius:6px;white-space:nowrap}
+.rb-t{font-size:13px;font-weight:700;color:#f8fafc}
+.rb-s{font-size:11.5px;color:#94a3b8;line-height:1.5}
+.rb-tabs{display:flex;gap:6px;margin-left:auto}
+.rb-tabs button{background:#1e293b;border:1px solid #334155;color:#cbd5e1;font:inherit;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;cursor:pointer}
+.rb-tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+.rb-tools{display:flex;gap:6px;margin-left:10px}
+.rb-tools button{background:#1e293b;border:1px solid #334155;color:#cbd5e1;font:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer}
+.rb-tools button.on{background:#0ea5e9;border-color:#0ea5e9;color:#fff}
+
+/* ══ 固定畫布 + 等比縮放（無 @media）══ */
+.stage{max-width:1180px;margin:14px auto 40px;position:relative;overflow:hidden;border-radius:22px;box-shadow:0 18px 48px rgba(15,23,42,.22)}
+.canvas{width:1180px;height:900px;position:absolute;top:0;left:0;transform-origin:top left;background:var(--bg-app);overflow:hidden}
+
+.app{height:900px;display:flex;overflow:hidden}
+
+/* ── 左側深色導航（72px）── */
+.sidebar{width:72px;flex:none;align-self:stretch;height:100%;background:#0f172a;display:flex;flex-direction:column;overflow:hidden}
+.sb-scroll{flex:1;min-height:0;overflow-y:auto;padding:8px 0;display:flex;flex-direction:column;gap:2px}
+.sb-item{display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 2px;color:#cbd5e1;font-size:10.5px;font-weight:600;line-height:1.2;text-align:center}
+.sb-ico{width:30px;height:30px;border-radius:9px;background:#1e293b;display:flex;align-items:center;justify-content:center;font-size:13px;color:#e2e8f0}
+.sb-item.on .sb-ico{background:#f97316;color:#fff}
+.sb-item.on{color:#fff}
+.sb-more{text-align:center;padding:8px 4px;color:#64748b;font-size:10px;line-height:1.35}
+.sb-foot{flex:none;border-top:1px solid #1e293b;padding:8px 0 10px;display:flex;flex-direction:column;gap:2px}
+
+/* ── 主區 ── */
+.mainarea{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--slate-100)}
+.scrhead{flex:none;background:#fff;border-bottom:1px solid var(--slate-200);padding:12px 18px;display:flex;align-items:center;gap:14px}
+.scrhead h1{font-size:19px;font-weight:800;letter-spacing:.01em}
+.scrhead p{font-size:11.5px;color:var(--slate-500);margin-top:2px}
+.head-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:6px;background:var(--slate-50);border:1px solid var(--slate-200);border-radius:999px;padding:5px 10px;font-size:11.5px;color:var(--slate-600);white-space:nowrap}
+.pill b{font-size:11.5px;font-weight:700;color:var(--emerald-600)}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:var(--emerald-500)}
+
+/* 屏幕容器（頁籤切換 display:none/flex） */
+.screenwrap{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.pane{flex:1;min-height:0;overflow-y:auto;padding:16px}
+.pane::-webkit-scrollbar{width:8px}
+.pane::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px}
+
+/* ── 樓層 chips（位置同現有：pane 內第一行）── */
+.chips{flex:none;display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.chip{border:none;font:inherit;cursor:pointer;background:#fff;color:var(--slate-700);border-radius:999px;padding:8px 16px;font-size:14px;font-weight:600;box-shadow:0 0 0 1px var(--slate-200)}
+.chip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+
+/* ══ 方案 A：返結區獨立一行（喺全部區域之上）══════════════════════ */
+.rowA{flex:none;display:flex;flex-direction:column;gap:14px}
+.sect{position:relative}
+.sect-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.sect-t{font-size:16px;font-weight:800;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
+.sect-t .pip{width:9px;height:9px;border-radius:3px;background:var(--amber-500)}
+.cnt{background:var(--amber-500);color:#fff;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.sect-s{font-size:11.5px;color:var(--slate-500);line-height:1.45}
+
+/* 返結區邊界框（本身就係「範圍邊界」—— 柔和琥珀虛線） */
+.zone{position:relative;border:1.5px dashed var(--amber-300);border-radius:16px;background:
+  linear-gradient(180deg,rgba(255,251,235,.9),rgba(255,251,235,.35));padding:12px 8px}
+.zone-h{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.zone-t{font-size:15px;font-weight:800;color:var(--amber-900);display:flex;align-items:center;gap:8px}
+.zone-t .pip{width:9px;height:9px;border-radius:3px;background:var(--amber-600)}
+.zone-n{background:var(--amber-600);color:#fff;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.zone-s{font-size:11.5px;color:var(--amber-800);line-height:1.45}
+.zone-warn{margin-left:auto;font-size:11px;font-weight:700;color:var(--amber-800);background:var(--amber-100);border-radius:6px;padding:3px 8px;white-space:nowrap}
+
+.grid6{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;align-items:stretch;grid-auto-rows:max-content}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:stretch;grid-auto-rows:max-content}
+.sect-label{font-size:12px;font-weight:700;color:var(--slate-400);margin:2px 0 10px;letter-spacing:.04em}
+
+/* ══ 桌台卡：完全照抄 pos-app.tsx 現有 5 行結構 ══ */
+.tcard{border-radius:16px;border:1px solid;padding:16px;text-align:left;box-shadow:0 1px 2px rgba(0,0,0,.05);width:100%;font:inherit;cursor:pointer;display:block}
+.tcard.idle{border-color:var(--slate-200);background:#fff;color:var(--slate-900)}
+.tcard.occ{border-color:var(--orange-600);background:var(--orange-500);color:#fff}
+.tcard.paid{border-color:var(--emerald-600);background:var(--emerald-500);color:#fff}
+.tcard.re{border-color:var(--amber-600);background:var(--amber-500);color:#fff}
+
+.trow1{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.tname{min-width:34px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:700}
+.tord{flex:none;max-width:66%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:8px;background:#fff;padding:0 8px;font-size:11px;font-weight:800;line-height:20px;box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px rgba(0,0,0,.10);margin:-4px -4px 0 0}
+.tord.am{color:var(--amber-700)} .tord.or{color:var(--orange-700)} .tord.em{color:var(--emerald-700)}
+.tarea{margin-top:8px;font-size:12px}
+.idle .tarea{color:var(--slate-500)} .occ .tarea,.paid .tarea,.re .tarea{color:rgba(255,255,255,.85)}
+.tmeta{margin-top:4px;font-size:12px;font-weight:600}
+.idle .tmeta{color:var(--slate-700)} .occ .tmeta,.paid .tmeta,.re .tmeta{color:rgba(255,255,255,.9)}
+.tdue{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:800;color:#fff}
+.tbadge{margin-top:12px;display:inline-flex;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:700;align-self:flex-start;white-space:nowrap}
+.idle .tbadge{background:var(--orange-50);color:var(--orange-700)}
+.occ .tbadge{background:rgba(255,255,255,.25);color:#fff}
+.re .tbadge{background:#fff;color:var(--amber-800)}
+.paid .tbadge{background:rgba(255,255,255,.25);color:#fff}
+
+/* ══ 方案 C：同一網格插入 ══ */
+.divrow{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:2px 0 0;flex-wrap:wrap}
+.divrow .dt{font-size:13.5px;font-weight:800;display:flex;align-items:center;gap:7px}
+.divrow .dt .pip{width:8px;height:8px;border-radius:3px}
+.divrow.am{border-top:1.5px dashed var(--amber-300);padding-top:10px}
+.divrow.am .dt{color:var(--amber-900)} .divrow.am .dt .pip{background:var(--amber-500)}
+.divrow.gy{border-top:1px solid var(--slate-200);padding-top:12px}
+.divrow.gy .dt{color:var(--slate-400)} .divrow.gy .dt .pip{background:var(--slate-300)}
+.divrow .ds{font-size:11.5px;color:var(--slate-500);margin-left:auto}
+
+/* ══ 方案 B：左欄並排 ══ */
+.rowB{flex:none;display:grid;grid-template-columns:206px minmax(0,1fr);gap:16px;align-items:start}
+.colL{position:relative}
+.stack{display:flex;flex-direction:column;gap:12px}
+
+/* ── 右側快捷操作（fixed 闊度三件套）── */
+.quick{width:240px;flex:none;align-self:stretch;height:100%;background:#fff;border-left:1px solid var(--slate-200);display:flex;flex-direction:column;overflow:hidden}
+.q-scroll{flex:1;min-height:0;overflow-y:auto;padding:14px 16px}
+.q-foot{flex:none;border-top:1px solid var(--slate-200);padding:12px 16px}
+.q-t{font-size:15px;font-weight:800;margin-bottom:4px}
+.q-s{font-size:11.5px;color:var(--slate-500);margin-bottom:14px;line-height:1.45}
+.qbox{border:1px solid var(--slate-200);border-radius:12px;padding:11px 12px;margin-bottom:10px;background:var(--slate-50)}
+.qbox-l{font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.qbox-s{font-size:11px;color:var(--slate-500);margin-top:3px}
+.pill2{background:var(--emerald-500);color:#fff;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px}
+.note{font-size:11px;color:var(--slate-400);line-height:1.5}
+
+/* ══ 標註層（設計註解，可切換）══ */
+.anno{position:absolute;z-index:60;pointer-events:none;display:none}
+body.anno-on .anno{display:block}
+.anno .dash{position:absolute;border:1.5px dashed var(--indigo-600);border-radius:10px}
+.anno .dash2{position:absolute;border:1.5px dashed var(--indigo-600);border-radius:12px}
+.alab{position:absolute;background:var(--indigo-600);color:#fff;font-size:11px;font-weight:800;line-height:1.35;padding:4px 8px;border-radius:7px;white-space:nowrap;box-shadow:0 3px 10px rgba(79,70,229,.35)}
+.alab.s{background:#fff;color:var(--indigo-700);border:1.5px solid var(--indigo-600);box-shadow:0 2px 6px rgba(15,23,42,.14)}
+.an-n{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#fff;color:var(--indigo-700);font-size:10px;font-weight:800;margin-right:5px;vertical-align:1px}
+
+/* 標註用輔助（平時隱藏，量度時用） */
+/* ══ 金額截斷對照（真機同樣限制，畀 J 揀）══ */
+.cmp{flex:none;margin-top:10px;border:1px solid var(--slate-200);background:#fff;border-radius:12px;padding:9px 11px}
+.cmp-t{font-size:11.5px;font-weight:800;color:var(--slate-900);margin-bottom:6px;display:flex;align-items:center;gap:6px;line-height:1.35}
+.cmp-t .pip{width:8px;height:8px;border-radius:3px;background:var(--slate-400)}
+.cmp-g{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.cmp-c{border:1px solid var(--slate-200);border-radius:9px;padding:6px 8px;background:var(--slate-50)}
+.cmp-c .k{font-size:10.5px;font-weight:800;color:var(--slate-900);display:flex;align-items:center;gap:4px;line-height:1.3}
+.cmp-c .k .n{width:12px;height:12px;flex:none;border-radius:50%;background:var(--slate-700);color:#fff;font-size:8.5px;display:inline-flex;align-items:center;justify-content:center;font-weight:800}
+.cmp-c .d{font-size:9.5px;color:var(--slate-500);line-height:1.4;margin-top:3px}
+.cmp-c .d b{color:var(--slate-800)}
+.cmp-c.rec{border-color:var(--emerald-500);background:#ecfdf5}
+.cmp-c.rec .k{color:var(--emerald-700)} .cmp-c.rec .n{background:var(--emerald-600)}
+
+.meas{position:absolute;visibility:hidden}
+</style>
+</head>
+<body>
+
+<!-- ══ 評審列（唔屬產品介面）══ -->
+<div class="reviewbar">
+  <div class="rb-row">
+    <span class="rb-tag">評審用 · 非產品介面</span>
+    <span class="rb-t">桌台總覽「返結區」版面確認稿</span>
+    <span class="rb-s">2026-10-05 · 依 J 需求 1-5 · 卡片樣式／間距／色值全部抄自 pos-app.tsx 現有 class</span>
+    <div class="rb-tabs" id="tabs">
+      <button data-tab="a" class="on">方案 A · 獨立一行（建議）</button>
+      <button data-tab="b">方案 B · 左欄並排</button>
+      <button data-tab="c">方案 C · 同一網格插入</button>
+    </div>
+    <div class="rb-tools">
+      <button id="annoBtn">標註：關</button>
+    </div>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+<div class="app">
+
+  <!-- ══════ 左側導航 ══════ -->
+  <nav class="sidebar">
+    <div class="sb-scroll">
+      <div class="sb-item on"><span class="sb-ico">🍽</span>點餐</div>
+      <div class="sb-item"><span class="sb-ico">📋</span>訂單</div>
+      <div class="sb-item"><span class="sb-ico">👤</span>會員</div>
+      <div class="sb-item"><span class="sb-ico">🖨</span>打印</div>
+      <div class="sb-more">… 其餘 6 個模組</div>
+    </div>
+    <div class="sb-foot">
+      <div class="sb-item" style="color:#fff"><span class="sb-ico" style="background:#16a34a">●</span>在線</div>
+      <div class="sb-item"><span class="sb-ico">⇥</span>登出</div>
+      <div class="sb-item"><span class="sb-ico">⚙</span>設置</div>
+    </div>
+  </nav>
+
+  <!-- ══════ 主區 ══════ -->
+  <div class="mainarea">
+    <div class="scrhead">
+      <div>
+        <h1>桌台總覽</h1>
+        <p>長期桌子後入座人數配位　枱台狀態：空閒 / 未下單 / 已下單</p>
+      </div>
+      <div class="head-right">
+        <span class="pill"><span class="dot"></span>線上接單 <b>接單中</b></span>
+        <span class="pill"><span class="dot"></span>線下營業 <b>營業中</b></span>
+      </div>
+    </div>
+
+    <!-- ───── 畫面 1：方案 A ───── -->
+    <div class="screenwrap" id="scr-a" data-tab="a">
+      <div class="pane">
+        <div class="chips">
+          <button class="chip on">全部</button>
+          <button class="chip">1樓</button>
+          <button class="chip">2樓</button>
+          <button class="chip">澳覓</button>
+          <button class="chip">MFOOD</button>
+          <button class="chip">外賣自取</button>
+        </div>
+
+        <div class="rowA">
+
+          <!-- ★ 返結區（獨立區塊，喺全部區域之上）★ -->
+          <div class="sect" id="zoneA">
+            <div class="zone">
+              <div class="zone-h">
+                <span class="zone-t"><span class="pip"></span>返結區</span>
+                <span class="zone-n">3 張待重結</span>
+                <span class="zone-warn">已反結 · 錢未收 · 唔計入營業額</span>
+              </div>
+              <div class="grid6">
+
+                <button class="tcard re">
+                  <div class="trow1"><div class="tname">A01</div><span class="tord am">訂單02</span></div>
+                  <div class="tarea">1樓</div>
+                  <div class="tmeta">返結 11:46</div>
+                  <div class="tdue">應收 MOP 101</div>
+                  <span class="tbadge">返結</span>
+                </button>
+
+                <button class="tcard re">
+                  <div class="trow1"><div class="tname">B03</div><span class="tord am">訂單07</span></div>
+                  <div class="tarea">1樓</div>
+                  <div class="tmeta">返結 11:32</div>
+                  <div class="tdue">應收 MOP 268</div>
+                  <span class="tbadge">返結</span>
+                </button>
+
+                <button class="tcard re">
+                  <div class="trow1"><div class="tname">A05</div><span class="tord am">訂單11</span></div>
+                  <div class="tarea">2樓</div>
+                  <div class="tmeta">返結 10:58</div>
+                  <div class="tdue">應收 MOP 154</div>
+                  <span class="tbadge">返結</span>
+                </button>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- ★ 全部區域（原有排版，一格不改）★ -->
+          <div class="sect" id="allA">
+            <div class="sect-label">全部 · 9 張枱</div>
+            <div class="grid6">
+              <button class="tcard idle"><div class="trow1"><div class="tname">A01</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A02</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A03</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard occ"><div class="trow1"><div class="tname">A04</div><span class="tord or">訂單15</span></div><div class="tarea">1樓</div><div class="tmeta">已坐 4/—</div><div class="tdue">應收 MOP 428</div><span class="tbadge">已下單</span></button>
+              <button class="tcard paid"><div class="trow1"><div class="tname">A05</div><span class="tord em">訂單12</span></div><div class="tarea">2樓</div><div class="tmeta">已坐 2/—</div><div class="tdue">應收 MOP 96</div><span class="tbadge">已結帳 / 待收尾</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A06</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A07</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard occ"><div class="trow1"><div class="tname">A08</div><span class="tord or">訂單16</span></div><div class="tarea">1樓</div><div class="tmeta">已坐 6/—</div><div class="tdue">應收 MOP 712</div><span class="tbadge">已下單</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A09</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            </div>
+          </div>
+
+          <!-- ══ 待決項目：金額欄位截斷（真機 125px 卡闊已到頂，唔係稿嘅問題）══ -->
+          <div class="cmp">
+            <div class="cmp-t"><span class="pip"></span>待拍板：「應收 MOP 268」差 3px 被截（6 欄卡 125px 闊，現有桌台卡同樣限制）</div>
+            <div class="cmp-g">
+              <div class="cmp-c rec">
+                <div class="k"><span class="n">1</span>維持 125px，金額照 truncate（建議）</div>
+                <div class="d">與<b>現有桌台卡同一規則</b>，零例外。<b>MOP 268</b> 顯示「應收 MOP 26…」，hover 見全文。</div>
+              </div>
+              <div class="cmp-c">
+                <div class="k"><span class="n">2</span>返結卡獨立 5 欄（150px）</div>
+                <div class="d">金額完整，但<b>兩區欄位唔對齊</b>（6 欄 vs 5 欄），界線會歪。</div>
+              </div>
+              <div class="cmp-c">
+                <div class="k"><span class="n">3</span>唔顯示金額，只留返結時間</div>
+                <div class="d">最闊綽，但<b>收銀對數要靠金額</b>，跨機重結少一項核對依據。</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ───── 畫面 2：方案 B（左欄並排）───── -->
+    <div class="screenwrap" id="scr-b" data-tab="b" style="display:none">
+      <div class="pane">
+        <div class="chips">
+          <button class="chip on">全部</button>
+          <button class="chip">1樓</button>
+          <button class="chip">2樓</button>
+          <button class="chip">澳覓</button>
+          <button class="chip">MFOOD</button>
+          <button class="chip">外賣自取</button>
+        </div>
+
+        <div class="rowB">
+          <!-- ★ 左欄：返結區 ★ -->
+          <div class="colL" id="zoneB">
+            <div class="zone" style="padding:10px">
+              <div class="zone-h" style="flex-direction:column;align-items:flex-start;gap:6px;margin-bottom:10px">
+                <span class="zone-t"><span class="pip"></span>返結區</span>
+                <span class="zone-n">3 張待重結</span>
+                <span class="zone-s" style="font-size:10.5px">已反結 · 錢未收 · 唔計營業額</span>
+              </div>
+              <div class="stack">
+                <button class="tcard re">
+                  <div class="trow1"><div class="tname">A01</div><span class="tord am">訂單02</span></div>
+                  <div class="tarea">1樓</div>
+                  <div class="tmeta">返結 11:46</div>
+                  <div class="tdue">應收 MOP 101</div>
+                  <span class="tbadge">返結</span>
+                </button>
+                <button class="tcard re">
+                  <div class="trow1"><div class="tname">B03</div><span class="tord am">訂單07</span></div>
+                  <div class="tarea">1樓</div>
+                  <div class="tmeta">返結 11:32</div>
+                  <div class="tdue">應收 MOP 268</div>
+                  <span class="tbadge">返結</span>
+                </button>
+                <button class="tcard re">
+                  <div class="trow1"><div class="tname">A05</div><span class="tord am">訂單11</span></div>
+                  <div class="tarea">2樓</div>
+                  <div class="tmeta">返結 10:58</div>
+                  <div class="tdue">應收 MOP 154</div>
+                  <span class="tbadge">返結</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ★ 右側：全部區域（被迫收窄成 3 欄）★ -->
+          <div class="sect" id="allB">
+            <div class="sect-label">全部 · 9 張枱（由 6 欄縮成 3 欄）</div>
+            <div class="grid3">
+              <button class="tcard idle"><div class="trow1"><div class="tname">A01</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A02</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A03</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard occ"><div class="trow1"><div class="tname">A04</div><span class="tord or">訂單15</span></div><div class="tarea">1樓</div><div class="tmeta">已坐 4/—</div><div class="tdue">應收 MOP 428</div><span class="tbadge">已下單</span></button>
+              <button class="tcard paid"><div class="trow1"><div class="tname">A05</div><span class="tord em">訂單12</span></div><div class="tarea">2樓</div><div class="tmeta">已坐 2/—</div><div class="tdue">應收 MOP 96</div><span class="tbadge">已結帳 / 待收尾</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A06</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A07</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+              <button class="tcard occ"><div class="trow1"><div class="tname">A08</div><span class="tord or">訂單16</span></div><div class="tarea">1樓</div><div class="tmeta">已坐 6/—</div><div class="tdue">應收 MOP 712</div><span class="tbadge">已下單</span></button>
+              <button class="tcard idle"><div class="trow1"><div class="tname">A09</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───── 畫面 3：方案 C（同一網格插入，返結卡排喺 A01 之前）───── -->
+    <div class="screenwrap" id="scr-c" data-tab="c" style="display:none">
+      <div class="pane">
+        <div class="chips">
+          <button class="chip on">全部</button>
+          <button class="chip">1樓</button>
+          <button class="chip">2樓</button>
+          <button class="chip">澳覓</button>
+          <button class="chip">MFOOD</button>
+          <button class="chip">外賣自取</button>
+        </div>
+
+        <div class="sect" id="zoneC">
+          <div class="grid6">
+            <!-- 跨欄分隔列：返結區標題 -->
+            <div class="divrow am">
+              <span class="dt"><span class="pip"></span>返結區</span>
+              <span class="zone-n">3 張待重結</span>
+              <span class="ds">已反結 · 錢未收 · 唔計入營業額 · 依返結時間新→舊</span>
+            </div>
+
+            <button class="tcard re">
+              <div class="trow1"><div class="tname">A01</div><span class="tord am">訂單02</span></div>
+              <div class="tarea">1樓</div>
+              <div class="tmeta">返結 11:46</div>
+              <div class="tdue">應收 MOP 101</div>
+              <span class="tbadge">返結</span>
+            </button>
+            <button class="tcard re">
+              <div class="trow1"><div class="tname">B03</div><span class="tord am">訂單07</span></div>
+              <div class="tarea">1樓</div>
+              <div class="tmeta">返結 11:32</div>
+              <div class="tdue">應收 MOP 268</div>
+              <span class="tbadge">返結</span>
+            </button>
+            <button class="tcard re">
+              <div class="trow1"><div class="tname">A05</div><span class="tord am">訂單11</span></div>
+              <div class="tarea">2樓</div>
+              <div class="tmeta">返結 10:58</div>
+              <div class="tdue">應收 MOP 154</div>
+              <span class="tbadge">返結</span>
+            </button>
+
+            <!-- 跨欄分隔列：全部區域起頭 -->
+            <div class="divrow gy">
+              <span class="dt"><span class="pip"></span>全部 · 9 張枱</span>
+              <span class="ds">以下為原有桌台，排版完全不改</span>
+            </div>
+
+            <button class="tcard idle"><div class="trow1"><div class="tname">A01</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            <button class="tcard idle"><div class="trow1"><div class="tname">A02</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            <button class="tcard idle"><div class="trow1"><div class="tname">A03</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            <button class="tcard occ"><div class="trow1"><div class="tname">A04</div><span class="tord or">訂單15</span></div><div class="tarea">1樓</div><div class="tmeta">已坐 4/—</div><div class="tdue">應收 MOP 428</div><span class="tbadge">已下單</span></button>
+            <button class="tcard paid"><div class="trow1"><div class="tname">A05</div><span class="tord em">訂單12</span></div><div class="tarea">2樓</div><div class="tmeta">已坐 2/—</div><div class="tdue">應收 MOP 96</div><span class="tbadge">已結帳 / 待收尾</span></button>
+            <button class="tcard idle"><div class="trow1"><div class="tname">A06</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            <button class="tcard idle"><div class="trow1"><div class="tname">A07</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+            <button class="tcard occ"><div class="trow1"><div class="tname">A08</div><span class="tord or">訂單16</span></div><div class="tarea">1樓</div><div class="tmeta">已坐 6/—</div><div class="tdue">應收 MOP 712</div><span class="tbadge">已下單</span></button>
+            <button class="tcard idle"><div class="trow1"><div class="tname">A09</div></div><div class="tarea">1樓</div><div class="tmeta">已坐 0/—</div><span class="tbadge">空閒</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════ 右側快捷操作 ══════ -->
+  <aside class="quick">
+    <div class="q-scroll">
+      <div class="q-t">快捷操作</div>
+      <div class="q-s">枱台整理、收銀入口與快捷集中這裡</div>
+      <div class="qbox">
+        <div class="qbox-l"><span>線上打單</span><span class="pill2">開</span></div>
+        <div class="qbox-s">自動接單</div>
+      </div>
+      <div class="qbox">
+        <div class="qbox-l"><span>暫停新處理線上打單</span></div>
+        <div class="qbox-s">完整列表至線上打單。</div>
+      </div>
+    </div>
+    <div class="q-foot">
+      <div class="note">版面示意稿 · 非最終實作尺寸依 device  breakpoints 調整</div>
+    </div>
+  </aside>
+
+</div>
+</div>
+</div>
+
+<script>
+/* ── 等比縮放（無 @media，固定 1180×820）── */
+var MIN_SCALE = 0.55;
+function fit(){
+  var stage  = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || 1180;
+  var s = Math.min(1, Math.max(w / 1180, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(900 * s) + "px";
+  stage.style.overflowX = (1180 * s > w) ? "auto" : "hidden";
+}
+window.addEventListener("resize", fit);
+
+function pickTab(id, btn){
+  var all = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < all.length; i++){
+    all[i].style.display = (all[i].getAttribute("data-tab") === id) ? "flex" : "none";
+  }
+  var bs = document.querySelectorAll("#tabs button");
+  for (var k = 0; k < bs.length; k++){
+    bs[k].classList.toggle("on", !!btn && bs[k] === btn);
+  }
+  fit();
+}
+window.pickTab = pickTab;   /* 供量度腳本直接切畫面 */
+var tabBtns = document.querySelectorAll("#tabs button");
+for (var i = 0; i < tabBtns.length; i++){
+  (function(el){
+    el.onclick = function(){ pickTab(el.getAttribute("data-tab"), el); };
+  })(tabBtns[i]);
+}
+
+/* 標註切換（喺兩個畫面各自錨定，所以兩份 anno 都跟同一個 body class）*/
+var annoBtn = document.getElementById("annoBtn");
+annoBtn.onclick = function(){
+  var on = document.body.classList.toggle("anno-on");
+  annoBtn.classList.toggle("on", on);
+  annoBtn.textContent = on ? "標註：開" : "標註：關";
+  if (on) layoutAnno();
+  fit();
+};
+
+/* 標註定位：量返真實 rect 再擺（避免手算偏） */
+function layoutAnno(){
+  var c = document.getElementById("canvas");
+  var cr = c.getBoundingClientRect();
+  var scale = cr.width / c.offsetWidth || 1;
+  var groups = [
+    { host: "zoneA", items: [
+      { sel: ".zone",        lab: "① 返結區範圍邊界（琥珀虛線框）",  pos: "br" },
+      { sel: ".zone-t",      lab: "② 區塊標題「返結區」+ 數量徽章",  pos: "bl" },
+      { sel: ".zone-warn",   lab: "⑤ 狀態說明：已反結 · 錢未收",      pos: "tl" },
+      { sel: ".zone .tcard", lab: "③ 桌台編號（原枱 A01／B03／A05）", pos: "br" },
+      { sel: ".zone .tbadge",lab: "④ 狀態標記「返結」",               pos: "bl" }
+    ]},
+    { host: "allA", items: [
+      { sel: ".sect-label",  lab: "⑥ 全部區域（原有排版，一格不改）", pos: "tr" }
+    ]},
+    { host: "zoneB", items: [
+      { sel: ".zone",        lab: "① 返結區範圍邊界",  pos: "tl" },
+      { sel: ".zone-t",      lab: "② 區塊標題",        pos: "bl" },
+      { sel: ".zone .tbadge",lab: "④ 狀態標記「返結」", pos: "tr" }
+    ]},
+    { host: "allB", items: [
+      { sel: ".sect-label",  lab: "⑥ 全部區域被迫 6 欄 → 3 欄", pos: "tr" }
+    ]},
+    { host: "zoneC", items: [
+      { sel: ".divrow.am",        lab: "② 區塊標題（跨欄分隔列）",     pos: "tl" },
+      { sel: ".divrow.am ~ .tcard", lab: "③ 桌台編號 + ④ 狀態標記",   pos: "bl" },
+      { sel: ".divrow.gy",        lab: "⑥ 全部區域分隔（排版唔改）",   pos: "tl" }
+    ]}
+  ];
+  for (var g = 0; g < groups.length; g++){
+    var host = document.getElementById(groups[g].host);
+    if (!host) continue;
+    if (host.offsetParent === null) continue;   /* 隱藏畫面跳過 */
+    var layer = document.createElement("div");
+    layer.className = "anno";
+    for (var k = 0; k < groups[g].items.length; k++){
+      var it = groups[g].items[k];
+      var el = host.querySelector(it.sel);
+      if (!el) continue;
+      var r  = el.getBoundingClientRect();
+      var hr = host.getBoundingClientRect();
+      var x  = (r.left - cr.left) / scale;
+      var y  = (r.top  - cr.top ) / scale;
+      var w  = r.width / scale;
+      var h  = r.height / scale;
+      var hx = (hr.left - cr.left) / scale;
+      var hy = (hr.top  - cr.top ) / scale;
+
+      var d = document.createElement("div");
+      d.className = "dash2";
+      d.style.left = (x - 3) + "px"; d.style.top = (y - 3) + "px";
+      d.style.width = (w + 6) + "px"; d.style.height = (h + 6) + "px";
+      layer.appendChild(d);
+
+      var l = document.createElement("div");
+      l.className = "alab";
+      l.textContent = it.lab;
+      if (it.pos === "br"){ l.style.left = (x + w - 6) + "px"; l.style.top = (y + h + 8) + "px"; }
+      if (it.pos === "bl"){ l.style.left = (x - 4) + "px";       l.style.top = (y + h + 8) + "px"; }
+      if (it.pos === "tr"){ l.style.left = (x + w - 6) + "px"; l.style.top = (y - 26) + "px"; }
+      if (it.pos === "tl"){ l.style.left = (x - 4) + "px";       l.style.top = (y - 26) + "px"; }
+      layer.appendChild(l);
+    }
+    if (layer.childNodes.length) host.appendChild(layer);
+  }
+}
+
+fit();
+</script>
+</body>
+</html>

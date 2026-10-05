@@ -193,7 +193,7 @@ import {
 import { getPosRealtimeConfig } from "@/lib/pos/supabase-client";
 import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
 import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, ShiftTemplateVariant, StoreTable } from "@/lib/types";
-import { formatMoney, formatMacauDateTime } from "@/lib/format";
+import { formatMoney, formatMacauDateTime, formatMacauTime } from "@/lib/format";
 import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
 import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-fulfillment";
 // 🔴 2026-09-14：本地「完成／結帳」線上單之後，一定要順手推 Ledger 到 `completed`
@@ -202,7 +202,7 @@ import { syncOnlineDineInCompletionInBackground } from "@/lib/pos/online-dinein-
 // 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
 import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { isReopenTempTable } from "@/lib/pos/table-scope";
-import { reopenAccountRows } from "@/lib/pos/reopen-account-rows";
+import { excludeRowsWithLocalTempTable, reopenAccountRows } from "@/lib/pos/reopen-account-rows";
 import { tableOrderBadge } from "@/lib/pos/table-order-badge";
 import { isPaidDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
 import { resolveSettleTargetOrder as resolveSettleTargetOrderCore } from "@/lib/pos/settle-target";
@@ -2441,8 +2441,21 @@ export function PosApp() {
    *
    * ⚠️ 資料源係現成嘅 `openOrders`（已含 `reopened`）⇒ **零新增 API / 零新增 DB 查詢**，
    *    egress 完全唔受影響。純函式喺 `@/lib/pos/reopen-account-rows`（有單元測試守衛）。
+   *
+   * 🔴 2026-10-05（J 拍板方案 C + 金額選項 1）：清單同枱格**共用同一個 6 欄網格**，
+   *    返結卡排喺全部枱之前 ⇒ 必須排除「本機已有對應 temp 枱」嘅單，
+   *    否則同一張單會喺 grid 出現**兩次**（temp 枱一次 + 返結卡一次），
+   *    收銀撳落去係同一張單但睇落似兩張 —— 商家會以為有兩張未結單。
+   *    判準用 `temp.reopenOrderId`（`createReopenTempTable` 寫入），係單一真源。
+   *    ⚠️ 跨機嗰部冇 temp 枱 ⇒ 全部返結單都會出現（呢個正正係修復目標）。
    */
-  const reopenAccountList = useMemo(() => reopenAccountRows(openOrders), [openOrders]);
+  const reopenAccountList = useMemo(() => {
+    const tempOrderIds = floors
+      .flatMap((floor) => floor.tables)
+      .filter((table) => isReopenTempTable(table) && !!table.reopenOrderId)
+      .map((table) => table.reopenOrderId as string);
+    return excludeRowsWithLocalTempTable(reopenAccountRows(openOrders), tempOrderIds);
+  }, [openOrders, floors]);
 
   // 30s 批量同步（只在在線 + 有 pending 時進行；成功/失敗不彈 toast，避免打擾收銀）
   useEffect(() => {
@@ -5489,37 +5502,46 @@ export function PosApp() {
               </div>
 
               {/**
-               * 「返結帳（N）」區塊（2026-10-05，跨機返結失聯修復）。
+               * 桌台格仔網 —— 全部枱 + 返結卡**同一個 6 欄網格**（2026-10-05 J 拍板方案 C）。
                *
-               * 🔴 點解要呢個區塊：返結時訂單會被搬去 `temp-reopen-*` 枱，而**該枱只存在
-               *    執行返結嗰部機嘅本機**（推上 server 前會 `stripReopenTempTables()` 剝走，
-               *    否則會永久升級做真實枱）⇒ **另一部機桌台總覽完全冇重結入口**，
-               *    商家喺該機冇辦法完成重結（原枱反而顯示「空閒」）。
-               *    呢個區塊**唔依賴枱**，直接列出所有 `reopened` 單 ⇒ 跨機一樣見到。
+               * 🔴 為咩唔另開一個區塊（方案 A 被否決）：
+               *    需求明確要求返結枱「排在全部區域第一張枱之前」，而且卡片樣式要
+               *    同現有枱**完全一致**（同一欄寬、同一網格線）。另開區塊會令兩區
+               *    各自一套欄數，格線對唔埋。
                *
-               * ⚠️ 整卡**條件 render**（記憶 §6 教訓）：冇返結單就唔 render 任何嘢 ——
-               *    唔可以保留空殼，否則商家會問「這又是什麼?」。
+               * 🔴 為咩唔用左欄並排（方案 B 被否決）：
+               *    左欄 206px 會令全部區域由 6 欄壓成 3 欄，桌面被推走一半。
                *
-               * 同 temp 枱**並存**（唔係取代）：下單機既有「返結 A01」枱照樣顯示，
-               *    兩者指向同一張單（同一 `order.id`），重結後都係同一張。
+               * 做法：把「返結區標題」同「全部區域標題」做成兩個**跨欄分隔列**
+               * （`col-span-full`），插喺同一個 grid 內。返結卡緊接第一條分隔列，
+               * 因此自然排喺 A01（第一張枱）之前。
                */}
-              {reopenAccountList.length > 0 ? (
-                <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-3">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-bold text-white">
-                      待重結 {reopenAccountList.length} 張
-                    </span>
-                    <span className="text-[13px] font-semibold text-amber-900">返結帳</span>
-                    <span className="text-[11px] text-amber-700">
-                      呢啲單已反結（錢未收），唔計入營業額。改價／加餐後要喺呢度重結。
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
+                {/**
+                 * 返結區分隔列（跨滿所有欄）。
+                 * ⚠️ 整段**條件 render**（記憶 §6 教訓）：冇返結單就完全唔 render，
+                 *    連標題都唔出 —— 唔可以留一條空標題。
+                 */}
+                {reopenAccountList.length > 0 ? (
+                  <>
+                    <div className="col-span-full flex flex-wrap items-center gap-2 border-t-[1.5px] border-dashed border-amber-300 pt-3">
+                      <span className="flex items-center gap-1.5 text-[13.5px] font-extrabold text-amber-900">
+                        <span className="h-2 w-2 rounded-[3px] bg-amber-500" />
+                        返結區
+                      </span>
+                      <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[11px] font-extrabold text-white">
+                        {reopenAccountList.length} 張待重結
+                      </span>
+                      <span className="ml-auto text-[11.5px] text-amber-800">
+                        已反結 · 錢未收 · 唔計入營業額 · 依返結時間新→舊
+                      </span>
+                    </div>
+
                     {reopenAccountList.map((row) => {
                       const target = openOrders.find((o) => o.id === row.id);
                       return (
                         <button
-                          key={row.id}
+                          key={`reopen-${row.id}`}
                           type="button"
                           onClick={() => {
                             if (!target) return;
@@ -5529,35 +5551,62 @@ export function PosApp() {
                             loadOrderIntoWorkspace(target, target.tableId);
                             setPosMode("order");
                           }}
-                          className="flex min-h-[40px] items-center gap-2 rounded-xl border border-amber-400 bg-white px-3 py-2 text-left text-amber-900 hover:bg-amber-100"
+                          // 同現有桌台卡**同一套 tone**（`isReopenedTable` 嗰條琥珀分支），
+                          // 只係內容換成返結單嘅欄位。卡闊／圓角／內距完全一致。
+                          className="rounded-2xl border border-amber-600 bg-amber-500 p-4 text-left text-white shadow-sm transition-colors hover:border-amber-700"
                         >
-                          <span className="text-[13px] font-semibold">{row.orderNo}</span>
-                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
-                            {row.tableLabel}
-                          </span>
-                          <span className="text-[13px] font-semibold">
-                            {formatMoney(row.total)}
-                          </span>
-                          {row.reopenCount ? (
-                            <span className="text-[11px] font-semibold text-indigo-700">
-                              已返結 ×{row.reopenCount}
+                          {/* 枱名（原枱，例如 A01）＋ 單號角標 —— 同現有卡同一 flex 兩欄排版 */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 truncate text-base font-semibold text-inherit">
+                              {row.tableLabel}
+                            </div>
+                            <span
+                              className="-mr-1 -mt-1 max-w-[66%] shrink-0 truncate rounded-lg bg-white px-2 py-0.5 text-[11px] font-bold leading-5 text-amber-700 shadow-sm ring-1 ring-black/10"
+                              title={`訂單號：${row.orderNo}`}
+                            >
+                              {row.orderNo}
                             </span>
+                          </div>
+                          {/* 第 2 行：返結時間（取代現有卡嘅「樓層」，因為返結單已離開原枱，
+                              樓層對跨機對數冇意義；時間才係對數依據）。 */}
+                          <div className="mt-2 text-xs text-white/85">
+                            {row.reopenedAt ? `返結 ${formatMacauTime(row.reopenedAt)}` : "—"}
+                          </div>
+                          {/* 第 3 行：返結次數（對應現有卡嘅「已坐 N/—」位置） */}
+                          <div className="mt-1 text-xs font-semibold text-white/90">
+                            {row.reopenCount ? `已返結 ×${row.reopenCount}` : "待重結"}
+                          </div>
+                          {/* 第 4 行：應收金額（對應現有卡嘅「應收」位置）。
+                              🔴 J 拍板選項 1：維持 truncate，同現有桌台卡完全同一規則。
+                              卡闊受 6 欄限制（約 125px），三位數金額會截 —— 用 title 補全文。 */}
+                          {row.total > 0 ? (
+                            <div
+                              className="mt-1 truncate text-sm font-bold text-white"
+                              title={`應收 ${formatMoney(row.total)}`}
+                            >
+                              應收 {formatMoney(row.total)}
+                            </div>
                           ) : null}
-                          {row.reopenReason ? (
-                            <span className="max-w-[220px] truncate text-[11px] text-amber-700">
-                              {row.reopenReason}
-                            </span>
-                          ) : null}
+                          {/* 第 5 行：狀態標記（同現有卡嘅 badge 同一位置／形狀） */}
+                          <div className="mt-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-800">
+                            返結
+                          </div>
                         </button>
                       );
                     })}
-                  </div>
-                </div>
-              ) : null}
 
-                <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
-                  {visibleTables.map((table) => {
-                    const tableOrder = tableOrderMap.get(table.id);
+                    {/* 全部區域分隔列（跨滿所有欄） */}
+                    <div className="col-span-full mt-1 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
+                      <span className="flex items-center gap-1.5 text-[13.5px] font-extrabold text-slate-400">
+                        <span className="h-2 w-2 rounded-[3px] bg-slate-300" />
+                        全部 · {visibleTables.length} 張枱
+                      </span>
+                    </div>
+                  </>
+                ) : null}
+
+                {visibleTables.map((table) => {
+                  const tableOrder = tableOrderMap.get(table.id);
                     const status = tableOrder?.status ?? "idle";
                     const isReopenedTable = status === "reopened";
                     const isOccupied = status !== "idle";
