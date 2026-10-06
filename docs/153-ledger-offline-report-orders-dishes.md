@@ -37,7 +37,7 @@
 ordersTotal : int     符合條件嘅線下單總數（未截斷前）
 orders[]    : { orderNo: string|null, totalAvos: int, status: string }   事件時間倒序
 dishesTotal : int     菜品款數（未截斷前）
-dishes[]    : { name: string, qty: int, revenueAvos: int }               銷量倒序
+dishes[]    : { name: string, qty: int, revenueAvos: int }               金額倒序
 flags.ordersTruncated / flags.dishesTruncated : bool
 ```
 
@@ -50,7 +50,7 @@ flags.ordersTruncated / flags.dishesTruncated : bool
 | 排除已退菜 `voided` | — | ✅ | （KPI 唔涉 item） |
 | 日歸屬 | 四條時間腿 + `Asia/Macau` | 同左 | 同左 |
 | 金額 | `greatest(0, round(total*100))` | `greatest(0, round(Σ(price×qty)*100))` | `round(Σtotal*100)` |
-| 排序 | 事件時間倒序 | 銷量倒序（並列按名稱） | — |
+| 排序 | 事件時間倒序 | 金額倒序（`revenueAvos` 由大至小，並列按名稱）🔁 2026-10-05 由銷量倒序改 | — |
 | 上限 | 3 000（保留最新） | 300 | — |
 | 聚合 key（dishes） | — | `menuItemId｜名稱`（下單當時快照） | — |
 

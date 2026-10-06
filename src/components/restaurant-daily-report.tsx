@@ -863,8 +863,17 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     }
   }
 
+  /*
+   * 🔴 2026-10-05（J 拍板）：菜品排行排序由「銷量倒序」改為「**金額倒序**」。
+   *    理由：銷量序會令「賣得多但平」嘅品項（例如凍檸茶）排前，睇唔出邊款菜
+   *    對營業額貢獻最大。金額 = Σ price×qty，同 Ledger 側 `dishes[]` 口徑一致。
+   *    ⚠️ Ledger 側排序真源喺 SQL（migration 0060 嘅 `order by revenue_avos desc`），
+   *       呢度只係 POS 本機聚合（Ledger 線上單細項併入後）嘅同一口徑，
+   *       兩邊必須一致，否則同一份報表兩個入口會排出唔同次序。
+   *    ⚠️ 並列時按名稱升序（同 SQL `dname asc` 一致）——保持穩定、可重現。
+   */
   const dishes = Array.from(dishMap.values()).sort(
-    (a, b) => b.offlineQty + b.onlineQty - (a.offlineQty + a.onlineQty),
+    (a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name),
   );
   const tables = Array.from(tableMap.values()).sort((a, b) => b.orders - a.orders);
 
@@ -2303,14 +2312,21 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     return { dineIn, counter, online };
   }, [orders, range, countableOnlineOrders]);
 
+  /*
+   * 🔴 2026-10-05（J 拍板）：成本口徑由「已付（`paid`，現金流）」改為「**買貨總額（`total`，已付＋未付）**」。
+   *    理由：只用「已付」會漏計月結／賒數貨 ⇒ 入咗貨但未付嘅期間毛利被高估。
+   *    改用 `total` ＝「入貨當期認成本」，同 `gpSubtitle` 文字一致。
+   *    ⚠️ 仍然**未扣存貨變動**（入大批貨當期毛利會偏低；冇入貨當期會偏高）——
+   *       呢個係已知限制，UI 有寫明；要更準可手動輸入毛利率。
+   */
   const grossProfit = useMemo(() => {
-    const cogs = purchase.sel?.paid ?? 0;
+    const cogs = purchase.sel?.total ?? 0;
     return agg.revenue - cogs;
   }, [agg.revenue, purchase.sel]);
 
   const grossProfitYest = useMemo(() => {
     if (!aggYest) return null;
-    const cogs = purchase.yest?.paid ?? 0;
+    const cogs = purchase.yest?.total ?? 0;
     return aggYest.revenue - cogs;
   }, [aggYest, purchase.yest]);
 
@@ -2529,15 +2545,15 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   const displayGrossProfit =
     gpMarginPct != null ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100 : grossProfit;
 
-  // 🔴 2026-09-25：講清楚口徑。進貨成本係「**當日已付款嘅收據總額**」——係現金流
-  // 口徑，唔係真正 COGS（未付嘅貨唔計、補付舊貨又會令今日成本暴升）。
+  // 🔴 2026-10-05（J 拍板）：成本口徑改為「**買貨總額（已付 ＋ 未付）**」。
+  // 比舊嘅「當日已付收據」準（月結／賒數貨唔會漏計），但仍**未扣存貨變動**。
   // 讀唔到進貨數據時更要明講，否則用戶會以為毛利率真係 100%。
   const gpSubtitle =
     gpMarginPct != null
       ? `毛利率 ${gpMarginPct}%（營業額 × ${gpMarginPct}%）`
       : purchaseUnavailable
         ? "注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考"
-        : "系統估算：營業額 − 進貨成本（當日已付收據）";
+        : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）";
 
   /**
    * 沽清菜品清單。
@@ -2841,7 +2857,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   落 `md`（3 格）→ 殘成 3-3-3-1；電腦 ≥1280 落 `xl`（5 格）。
                   家陣固定 5 欄，兩邊都係 5-5（2026-09-10 iPad 版面對齊）。
                 */}
-                <div className="mb-4 grid grid-cols-5 gap-3">
+                <div className="mb-3 grid grid-cols-5 gap-3">
                   <Kpi
                     label="營業額"
                     /*
@@ -2982,6 +2998,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         : 0,
                       ticketMopYest,
                     )}
+                    /* 🔴 2026-10-05（J 拍板·版面重組）：「未結帳訂單」原本佔 KPI 帶一格，
+                       令 KPI 帶變 10 格（5-5）。重組後 KPI 帶只留 5 格，未結帳資訊
+                       併入「客單價」嘅副標題 ＋ 提示球，唔再另佔一格。 */
+                    subtitle={
+                      pendingSplit.count > 0
+                        ? `未結帳 ${pendingSplit.count} 張 · ${formatMoney(pendingSplit.amountMop)} · ${unsettledStatusLabel}`
+                        : "冇待收款訂單"
+                    }
                     info={
                       <>
                         <span className="block font-semibold text-slate-800">客單價</span>
@@ -2991,90 +3015,100 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         <span className="mt-1 block text-[11px] text-slate-500">
                           用嘅係毛營業額，唔係扣除退款後嘅淨額。
                         </span>
-                      </>
-                    }
-                  />
-
-                {/*
-                  以下 5 格同上面 5 格係**同一個 grid** —— ⚠️ 中間**絕對唔可以有 `</div>`**。
-                  10 格一次過排才會穩定 5-5；拆兩個 5 格 grid 喺窄螢幕會各自斷行。
-                  ⚠️ 2026-09-11 中過：合併時漏刪咗第一個 grid 嘅 `</div>`，令尾 5 格掉出 grid、
-                  各自佔滿一行且緊貼無 gap；而 JSX 仍然平衡 → typecheck / eslint / build 全綠捉唔到。
-                  未結帳訂單 / 餘額總額 / 會員充值 / 會員扣點 / 毛利（估）
-                */}
-                  {/* 2026-09-07 新增：未結帳訂單（sent_to_kitchen 等）唔計入營業額，
-                      但要顯示出嚟，否則報表會出現「有單但全空」嘅假象。 */}
-                  <Kpi
-                    label="未結帳訂單"
-                    value={`${pendingSplit.count} 張`}
-                    delta={null}
-                    subtitle={
-                      pendingSplit.count > 0
-                        ? `${formatMoney(pendingSplit.amountMop)} · ${unsettledStatusLabel}`
-                        : "冇待收款訂單"
-                    }
-                    info={
-                      <>
-                        <span className="block font-semibold text-slate-800">未結帳訂單</span>
+                        <span className="mt-1 block border-t border-slate-100 pt-1 font-semibold text-slate-800">
+                          未結帳訂單
+                        </span>
                         <span className="mt-1 block">
                           已落單但<span className="font-semibold">未結帳</span>嘅單
-                          （送廚中／已出餐／未付款等）。
+                          （送廚中／已出餐／未付款等）：{pendingSplit.count} 張 ·
+                          {formatMoney(pendingSplit.amountMop)} · {unsettledStatusLabel}。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           呢啲單唔計入營業額／應收／實收 —— 錢未收到。
-                          金額＝呢批單嘅應付總額，狀態分佈見上面提示行。
                         </span>
                       </>
                     }
                   />
+                </div>
+
+                {/*
+                  ── 成本與毛利（2026-10-05 J 拍板·獨立 4 格）──────────────────────
+                  🔴 為何獨立成 4 格而**唔併入上面 KPI 帶**：KPI 帶固定 5 欄，
+                     格數必須係 5 嘅倍數。加 4 格落去會變 9 格（尾行殘缺，
+                     2026-09-10 / 09-11 中過兩次）⇒ 另開一個 `lg:grid-cols-4` 區塊。
+                  ⚠️ 用 `grid-cols-2 lg:grid-cols-4`（唔用 `md:`）：iPad 直向／窄螢幕
+                     一卡資料較長，2 欄比 4 欄好讀；≥1024px（iPad 橫向）才 4 欄一行。
+                */}
+                <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
                   <Kpi
-                    label="餘額總額"
-                    value={ledger.sel?.balanceTotalMop != null ? <Money amount={ledger.sel.balanceTotalMop} /> : "—"}
+                    label="買貨總額"
+                    value={
+                      purchaseUnavailable ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <Money amount={purchase.sel?.total ?? 0} />
+                      )
+                    }
                     delta={null}
+                    subtitle={`共 ${purchase.sel?.count ?? 0} 張收據 · 含未付`}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">餘額總額</span>
+                        <span className="block font-semibold text-slate-800">買貨總額</span>
                         <span className="mt-1 block">
-                          所有會員<span className="font-semibold">錢包未用完</span>嘅餘額加總
-                          （含充值本金 + 贈送金額）。
+                          ＝本期間所有進貨收據嘅總額（已付 ＋ 未付）。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          係「仲欠客人幾多」嘅負債口徑，唔係本期間收入 —— 唔可以當營業額。
-                          破折號（—）＝未能讀取會員數據。
+                          呢個係「入貨當期認成本」嘅口徑，比只睇「已付」準
+                          （月結貨唔會漏計）。但仍未扣存貨變動。
+                          破折號（—）＝庫存系統未能讀取。
                         </span>
                       </>
                     }
                   />
                   <Kpi
-                    label="會員充值"
-                    value={<Money amount={ledger.sel?.topupMop ?? 0} />}
-                    delta={ledger.yest ? pct(ledger.sel?.topupMop ?? 0, ledger.yest.topupMop) : null}
-                    subtitle={`實際 ${formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.topupGiftMop ?? 0)}`}
+                    label="已付支出"
+                    value={
+                      purchaseUnavailable ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <Money amount={purchase.sel?.paid ?? 0} />
+                      )
+                    }
+                    delta={null}
+                    subtitle="本期間現金已付出嘅貨款"
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">會員充值</span>
+                        <span className="block font-semibold text-slate-800">已付支出</span>
                         <span className="mt-1 block">
-                          本期間會員充值總額 ＝實際收款 ＋ 贈送金額。
+                          ＝本期間已付款嘅進貨收據總額（現金流口徑）。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          入帳時只有「實際」嘅現金收入才算營業額；贈送部分係負債，唔算收入。
+                          係獨立參考數，**唔可以**同上面「應收／實收」加減 ——
+                          貨款（尤其月結）唔係當日營業額嘅扣減項。
                         </span>
                       </>
                     }
                   />
                   <Kpi
-                    label="會員扣點"
-                    value={<Money amount={ledger.sel?.deductMop ?? 0} />}
-                    delta={ledger.yest ? pct(ledger.sel?.deductMop ?? 0, ledger.yest.deductMop) : null}
-                    subtitle={`已付 ${formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送 ${formatMoney(ledger.sel?.deductGiftMop ?? 0)}`}
+                    label="未付支出"
+                    value={
+                      purchaseUnavailable ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <Money amount={purchase.sel?.unpaid ?? 0} />
+                      )
+                    }
+                    delta={null}
+                    subtitle="本期間已入貨但未付款嘅貨款"
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">會員扣點</span>
+                        <span className="block font-semibold text-slate-800">未付支出</span>
                         <span className="mt-1 block">
-                          本期間用會員餘額／點數支付嘅總額 ＝已付本金 ＋ 贈送部分扣減。
+                          ＝本期間已入貨（收據已開）但<span className="font-semibold">未付款</span>嘅金額。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          呢啲錢係之前充值時已收，本期間唔會再計一次收入，避免重複入帳。
+                          月結／賒數貨一般落呢邊。呢筆錢遲啲要付，
+                          但唔影響當日現金流。
                         </span>
                       </>
                     }
@@ -3117,11 +3151,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         <span className="mt-1 block">
                           {gpMarginPct != null
                             ? `手動設定毛利率：營業額 × ${gpMarginPct}%。`
-                            : "系統估算：營業額 − 進貨成本。"}
+                            : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）。"}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          進貨成本係「當日已付款嘅收據總額」—— 屬<span className="font-semibold">現金流口徑</span>，
-                          唔係真正 COGS（未付嘅貨唔計、補付舊貨會令今日成本暴升）。
+                          成本用嘅係<span className="font-semibold">買貨總額</span>（含未付），
+                          ＝入貨當期認成本 —— 比只用「已付」準（月結貨唔會漏計）。
+                          但仍<span className="font-semibold">未扣存貨變動</span>
+                          （入大批貨當期毛利會偏低；冇入貨當期會偏高）。
                           要更準可撳右上角 edit 直接輸入毛利率。
                         </span>
                       </>
@@ -3160,6 +3196,82 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     }
                   />
                 </div>
+
+                {/*
+                  ── 會員錢包（2026-10-05 J 拍板·摺疊）──────────────────────────
+                  🔴 為何收起：`餘額總額` / `會員充值` / `會員扣點` 三個都係
+                      **Ledger 負債類**數字（「仲欠客人幾多」、「之前已收嘅錢」），
+                      同營業額唔同層。原本 3 格同上收入層混排，令商家以為佢哋係收入。
+                  ⚠️ 收埋但**唔可以**唔見：摘要行照出三個數，需要時撳一下展開細節。
+                      語意標籤寫明「負債口徑 · 唔屬營業額」。
+                  ⚠️ 用原生 `<details>`（唔用 state）—— 呢個係純顯示開關，
+                      唔需要記住狀態，亦唔應該因為 re-render 而自動彈開。
+                */}
+                <details className="mb-4 rounded-2xl border border-slate-200 bg-white">
+                  <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+                    <span className="text-base font-semibold text-slate-900">會員錢包</span>
+                    <span className="text-[11px] text-slate-400">負債口徑 · 唔屬營業額</span>
+                    <span className="ml-auto flex flex-wrap items-baseline gap-x-5 gap-y-1">
+                      <span className="text-[11px] text-slate-400">
+                        餘額總額{" "}
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"}
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        充值{" "}
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {formatMoney(ledger.sel?.topupMop ?? 0)}
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        扣點{" "}
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {formatMoney(ledger.sel?.deductMop ?? 0)}
+                        </span>
+                      </span>
+                    </span>
+                  </summary>
+                  <div className="grid gap-1 border-t border-slate-100 px-4 py-3">
+                    <div className="flex items-baseline justify-between gap-3 py-1.5">
+                      <span className="text-sm text-slate-700">
+                        餘額總額（仲欠客人幾多）
+                        <span className="ml-2 text-[11px] text-slate-400">負債口徑，唔可以當營業額</span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                        {ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 py-1.5">
+                      <span className="text-sm text-slate-700">
+                        會員充值
+                        <span className="ml-2 text-[11px] text-slate-400">
+                          實際 {formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送{" "}
+                          {formatMoney(ledger.sel?.topupGiftMop ?? 0)}；只有「實際」算收入
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                        {formatMoney(ledger.sel?.topupMop ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 py-1.5">
+                      <span className="text-sm text-slate-700">
+                        會員扣點
+                        <span className="ml-2 text-[11px] text-slate-400">
+                          已付 {formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送{" "}
+                          {formatMoney(ledger.sel?.deductGiftMop ?? 0)}；之前充值时已收，唔再計一次
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                        {formatMoney(ledger.sel?.deductMop ?? 0)}
+                      </span>
+                    </div>
+                    <div className="pt-1 text-[11px] text-slate-400">
+                      ⚠️ 會員類數字來自 Ledger，admin 後台模式（冇商戶身份）顯示為 0 或 —；
+                      破折號（—）＝未能讀取會員數據。
+                    </div>
+                  </div>
+                </details>
             </>
 
             {/* 🔴 外賣平台結算區塊（2026-09-26 使用者需求）—— 刻意**唔放入**上面 10 格。
@@ -3265,6 +3377,157 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             ) : null}
 
             {/*
+              ── 買貨明細（2026-10-05 J 拍板·新增）────────────────────────────
+              🔴 為何新增：KPI 帶只出「買貨總額／已付／未付」三個大數，
+                 睇唔到「錢花喺邊款貨」。此卡以**庫存品項**為單位排行，
+                 並補付款方式分佈 ＋ 近 6 個月趨勢。
+              ⚠️ 只在有買貨數據時才 render（`purchase.sel.count > 0`）——
+                 冇收據嘅期間完全唔會出現，避免空白卡。
+              ⚠️ 品項細項已喺 API 側截斷（`PURCHASE_ITEMS_PREVIEW`）——
+                 呢度唔可以再拉全量（egress）。
+            */}
+            {purchaseUnavailable ? null : purchase.sel && purchase.sel.count > 0 ? (
+              <div className="mb-4">
+                <Card
+                  title="買貨明細"
+                  tag={`${purchase.sel.count} 張收據 · ${purchase.sel.itemsTotal} 款品項`}
+                >
+                  <div className="mb-4 grid gap-4 lg:grid-cols-2">
+                    {/* 左：貨品細項（按金額倒序，API 已排好） */}
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">
+                        貨品細項（按金額）
+                      </div>
+                      {purchase.sel.items.length === 0 ? (
+                        <div className="text-sm text-slate-400">本期間冇貨品細項資料。</div>
+                      ) : (
+                        <>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-[11px] text-slate-400">
+                                <th className="pb-1 font-medium">品項</th>
+                                <th className="pb-1 text-right font-medium">數量</th>
+                                <th className="pb-1 text-right font-medium">單價</th>
+                                <th className="pb-1 text-right font-medium">金額</th>
+                              </tr>
+                            </thead>
+                            <tbody className="tabular-nums">
+                              {purchase.sel.items.slice(0, 5).map((it) => (
+                                <tr key={it.key} className="border-t border-slate-100">
+                                  <td className="py-1.5 pr-2 text-slate-700">{it.name}</td>
+                                  <td className="py-1.5 text-right text-slate-600">
+                                    {it.qty}
+                                    {it.unit ? ` ${it.unit}` : ""}
+                                  </td>
+                                  <td className="py-1.5 text-right text-slate-600">
+                                    {formatMoney(it.avgPrice)}
+                                  </td>
+                                  <td className="py-1.5 text-right font-semibold text-slate-900">
+                                    {formatMoney(it.amount)}
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
+                                <td className="py-1.5 pr-2">合計</td>
+                                <td className="py-1.5 text-right text-slate-400">—</td>
+                                <td className="py-1.5 text-right text-slate-400">—</td>
+                                <td className="py-1.5 text-right">
+                                  {formatMoney(purchase.sel.total)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div className="mt-2 text-[11px] text-slate-400">
+                            以庫存「品項」為單位聚合 · 同名品項跨收據合併 · 顯示前{" "}
+                            {Math.min(5, purchase.sel.items.length)} 項
+                            {purchase.sel.itemsTotal > 5 ? `（共 ${purchase.sel.itemsTotal} 款）` : ""}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* 右：付款方式分佈 */}
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">付款方式分佈</div>
+                      {purchase.sel.paymentMethodBreakdown.length === 0 ? (
+                        <div className="text-sm text-slate-400">本期間冇付款方式資料。</div>
+                      ) : (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-[11px] text-slate-400">
+                              <th className="pb-1 font-medium">付款方式</th>
+                              <th className="pb-1 text-right font-medium">張數</th>
+                              <th className="pb-1 text-right font-medium">金額</th>
+                            </tr>
+                          </thead>
+                          <tbody className="tabular-nums">
+                            {purchase.sel.paymentMethodBreakdown.map((pm) => (
+                              <tr key={pm.method} className="border-t border-slate-100">
+                                <td className="py-1.5 pr-2 text-slate-700">{pm.label}</td>
+                                <td className="py-1.5 text-right text-slate-600">{pm.count}</td>
+                                <td className="py-1.5 text-right font-semibold text-slate-900">
+                                  {formatMoney(pm.total)}
+                                </td>
+                              </tr>
+                            ))}
+                            <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
+                              <td className="py-1.5 pr-2">合計</td>
+                              <td className="py-1.5 text-right">{purchase.sel.count}</td>
+                              <td className="py-1.5 text-right">{formatMoney(purchase.sel.total)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 下：近 6 個月買貨支出柱狀圖 */}
+                  {purchase.sel.monthlyExpenses.length > 0 ? (
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">
+                        近 6 個月買貨支出
+                      </div>
+                      <div className="flex items-end gap-2" style={{ height: 96 }}>
+                        {(() => {
+                          const max = Math.max(
+                            ...purchase.sel.monthlyExpenses.map((m) => m.amount),
+                            1,
+                          );
+                          const lastIdx = purchase.sel.monthlyExpenses.length - 1;
+                          return purchase.sel.monthlyExpenses.map((m, idx) => (
+                            <div key={m.key} className="flex flex-1 flex-col items-center gap-1">
+                              <div className="flex w-full flex-1 items-end">
+                                <div
+                                  className={`w-full rounded-t ${idx === lastIdx ? "bg-orange-500" : "bg-slate-300"}`}
+                                  style={{
+                                    height: `${Math.max(4, Math.round((m.amount / max) * 100))}%`,
+                                  }}
+                                  title={formatMoney(m.amount)}
+                                />
+                              </div>
+                              <div className="text-[10px] text-slate-400">{m.name}</div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-400">
+                        {purchase.sel.monthlyExpenses
+                          .slice()
+                          .reverse()
+                          .slice(0, 3)
+                          .map((m) => `${m.name} ${formatMoney(m.amount)}`)
+                          .join(" · ")}
+                        {purchase.sel.trend.up + purchase.sel.trend.down > 0
+                          ? ` · 單價上升 ${purchase.sel.trend.up} 款 · 下降 ${purchase.sel.trend.down} 款`
+                          : ""}
+                      </div>
+                    </div>
+                  ) : null}
+                </Card>
+              </div>
+            ) : null}
+
+            {/*
               訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。
               ⚠️ 位置：緊貼 KPI 帶之下（2026-09-10 用戶要求「訂單明細要顯示在格仔下方」）。
               預設只出頭 ORDER_DETAIL_PREVIEW 行 + 「顯示全部」，否則逐筆列表會佔滿首屏，
@@ -3322,9 +3585,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               菜品銷售排行：緊接訂單明細之下（2026-09-10 用戶要求）。
               原本同「會員充值 & 會員數」併排喺 `lg:grid-cols-[1.4fr_1fr]`；
               該卡已整張移除 → 呢邊改為全寬單欄。
+              🔴 2026-10-05（J 拍板）：排序由「銷量倒序」改為「**金額倒序**」，
+                 同 Ledger `dishes[]`（migration 0060）一致。
             */}
             <div className="mb-4">
-              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下">
+              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下 · 按金額由高到低">
                 {agg.dishes.length === 0 ? (
                   <Empty />
                 ) : (
@@ -3855,7 +4120,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 </span>
               )}
               人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
-              毛利為「營業額 − 買貨成本（已付）」估算。
+              買貨（收據）數據來自庫存系統：買貨總額＝已付＋未付；毛利為「營業額 − 買貨總額（已付＋未付）」估算，**未扣存貨變動**。菜品排行按金額由高到低。
             </div>
               </>
             )}
@@ -3872,7 +4137,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
  * 🔴 為何要一個獨立嘅整頁 loading，而唔用返原本每張卡嘅骨架：
  * 商家要嘅係「**任何一項數據未齊，整頁就維持 loading**」。若保留原本
  * 「KPI 帶 skeleton + 11 張卡各自 skeleton」嘅做法，一來形狀同真身唔完全一致
- * （真身係 10 格 5-5 grid，骨架係另一個 grid），二來逐卡載入完成會令個別卡先著燈
+ * （真身係 5 格 KPI 帶 ＋ 4 格成本毛利，骨架係另一個 grid），二來逐卡載入完成會令個別卡先著燈
  * —— 仍然係「部分內容」。整頁一個 spinner 最符合「一次性渲染」嘅要求。
  *
  * ⚠️ 高度用 `flex-1` 撐滿內容區（POS 模式內容區係 `min-h-0 flex-1`），

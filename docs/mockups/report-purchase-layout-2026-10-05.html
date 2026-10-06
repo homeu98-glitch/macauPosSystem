@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>報表頁買貨優化 — 實機確認稿 2026-10-05</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;background:#f1f5f9;color:#0f172a;font-size:14px;line-height:1.5}
+  .shell{display:flex;min-height:100vh}
+  .side{width:72px;background:#0f172a;flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:20px}
+  .side i{width:36px;height:36px;border-radius:10px;background:#1e293b;display:block}
+  .side i.on{background:#f97316}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .bar{background:#fff;border-bottom:1px solid #e2e8f0;padding:16px}
+  .bar .row{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}
+  .h1{font-size:18px;font-weight:600}
+  .sub{margin-top:4px;font-size:13px;color:#64748b}
+  .sub .muted{color:#94a3b8}
+  .ctrls{display:flex;align-items:center;gap:8px}
+  .csv{background:#0f172a;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+  .chips{display:flex;gap:4px;background:#f1f5f9;border-radius:9px;padding:3px}
+  .chips button{border:0;background:transparent;border-radius:6px;padding:5px 11px;font-size:12px;color:#475569;cursor:pointer;font-family:inherit}
+  .chips button.on{background:#fff;color:#0f172a;font-weight:600;box-shadow:0 1px 2px rgba(15,23,42,.08)}
+  .body{flex:1;padding:16px}
+
+  .grid5{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:12px}
+  .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
+  @media(max-width:1100px){.grid5{grid-template-columns:repeat(3,minmax(0,1fr))}.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:700px){.grid5,.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+  .kpi{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px}
+  .kpi .top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+  .kpi .lbl{font-size:12px;color:#64748b}
+  .kpi .val{margin-top:4px;font-size:24px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums}
+  .kpi .val .cur{font-size:14px;font-weight:500;color:#94a3b8;margin-right:4px}
+  .kpi .val.hi{color:#ea580c}
+  .kpi .ss{margin-top:2px;font-size:11px;color:#64748b}
+  .kpi .dl{margin-top:4px;font-size:11px}
+  .up{color:#059669}.dn{color:#e11d48}.fl{color:#94a3b8}
+  .ball{flex-shrink:0;width:16px;height:16px;border-radius:50%;border:1px solid #cbd5e1;background:#f8fafc;color:#94a3b8;font-size:10px;line-height:14px;text-align:center;cursor:help;font-weight:600}
+  .edit{flex-shrink:0;font-size:11px;color:#94a3b8;border:0;background:transparent;cursor:pointer;font-family:inherit;padding:1px 4px;border-radius:5px}
+  .edit:hover{background:#fff7ed;color:#ea580c}
+
+  .kpi.cost{background:#fff9f6;border-color:#fecdd3}
+  .kpi.cost .lbl{color:#b91c1c}
+  .kpi.cost .val{color:#b91c1c}
+  .kpi.cost .ss{color:#991b1b}
+  .kpi.cost.hero{background:#fef2f2;border:2px solid #f87171}
+  .kpi.cost .val.sm{font-size:20px}
+
+  .band{background:#fff;border:1px solid #e2e8f0;border-radius:16px;margin-bottom:12px;overflow:hidden}
+  .band>summary{list-style:none;cursor:pointer;padding:14px 16px;display:flex;align-items:center;gap:8px}
+  .band>summary::-webkit-details-marker{display:none}
+  .band>summary::before{content:"";width:0;height:0;border-left:5px solid #94a3b8;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s;flex-shrink:0}
+  .band[open]>summary::before{transform:rotate(90deg)}
+  .band .bt{font-size:14px;font-weight:600;white-space:nowrap}
+  .band .bd{padding:0 16px 16px}
+  .mini{display:flex;gap:22px;margin-left:auto;margin-right:4px;flex-shrink:0}
+  .mini div{text-align:right}
+  .mini .ml{font-size:10px;color:#94a3b8;white-space:nowrap}
+  .mini .mv{font-size:13px;font-weight:600;color:#0f172a;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .mf{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #f1f5f9}
+  .mf:first-child{border-top:0}
+  .mf .n{flex:1;font-size:13px;color:#334155}
+  .mf .v{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;margin-bottom:12px}
+  .card .ch{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .card .ct{font-size:14px;font-weight:600}
+  .card .cg{font-size:12px;color:#94a3b8}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead{background:#f8fafc}
+  th{text-align:right;font-size:11px;font-weight:600;color:#64748b;padding:8px 10px;border-bottom:1px solid #e2e8f0}
+  th:first-child{text-align:left}
+  td{text-align:right;padding:8px 10px;border-bottom:1px solid #f1f5f9;font-variant-numeric:tabular-nums}
+  td:first-child{text-align:left;font-weight:600;color:#0f172a}
+  tr:last-child td{border-bottom:0}
+  tr.tot td{background:#f8fafc;font-weight:700}
+  .grn{color:#047857}.amb{color:#b45309}.mut{color:#94a3b8}
+
+  .bars{display:flex;align-items:flex-end;gap:6px;height:84px;padding-top:4px}
+  .bars .b{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px}
+  .bars .b .fill{width:100%;border-radius:4px;background:#bae6fd;min-height:2px}
+  .bars .b .fill.now{background:#0284c7}
+  .bars .b .cap{font-size:10px;color:#94a3b8;font-variant-numeric:tabular-nums}
+
+  .three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:12px}
+  @media(max-width:1000px){.three{grid-template-columns:1fr}}
+  .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:12px}
+  @media(max-width:900px){.two{grid-template-columns:1fr}}
+  .plat{border:1px solid #e2e8f0;border-left:4px solid #ccc;border-radius:12px;overflow:hidden;background:#fff}
+  .ph-head{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;color:#fff;font-size:14px;font-weight:600}
+  .ph-body{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .pc{padding:12px 14px;border-right:1px solid #f1f5f9}
+  .pc:last-child{border-right:0}
+  .pl{font-size:11px;color:#64748b;display:flex;align-items:center;gap:6px}
+  .pv{margin-top:6px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+  .pv.mut{color:#cbd5e1;font-weight:500}
+  .pv.amb{color:#b45309;font-size:18px}
+  .pn{margin-top:6px;font-size:11px;color:#94a3b8;line-height:1.6}
+  .tag{font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:#fef3c7;color:#b45309}
+  .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px}
+  .row:last-child{border-bottom:0}
+  .row .k{color:#475569}
+  .row .v{font-weight:600;font-variant-numeric:tabular-nums}
+
+  .ph{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;margin-bottom:12px}
+  .ph .pt{font-size:14px;font-weight:600;color:#94a3b8}
+  .ph .pd{margin-top:6px;font-size:12px;color:#cbd5e1}
+
+  .note{background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:16px}
+  .note .nt{font-size:14px;font-weight:600}
+  .note .ni{margin-top:8px;display:flex;gap:10px;background:#fff;border:1px solid #fed7aa;border-radius:12px;padding:10px}
+  .note .badge{flex-shrink:0;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:#fee2e2;color:#b91c1c;height:fit-content}
+  .note .badge.o{background:#fef3c7;color:#b45309}
+  .note .badge.i{background:#f1f5f9;color:#475569}
+
+  .flag{position:absolute;top:-10px;right:14px;background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;letter-spacing:.3px}
+  .rel{position:relative}
+  .newline{border-top:2px dashed #f87171;margin:16px 0 12px;position:relative}
+  .newline span{position:absolute;top:-9px;left:16px;background:#f1f5f9;padding:0 8px;font-size:11px;font-weight:700;color:#dc2626}
+  .foot{margin-top:12px;background:#f8fafc;border-radius:12px;padding:12px 16px;font-size:12px;color:#94a3b8;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><i class="on"></i><i></i><i></i><i></i><i></i></aside>
+  <div class="main">
+
+    <div class="bar">
+      <div class="row">
+        <div>
+          <div class="h1">店鋪每日營運總結</div>
+          <div class="sub">表嫂美食 · 2026-10-05（澳門）· 篩選影響全部模塊 <span class="muted">· 每 10 分鐘自動更新</span></div>
+        </div>
+        <div class="ctrls">
+          <button class="csv">導出 CSV</button>
+          <div class="chips">
+            <button class="on">今天</button><button>昨天</button><button>7天</button><button>30天</button><button>全部</button><button>自訂</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="body">
+
+      <!-- ① 營運核心 5 格 -->
+      <div class="grid5">
+        <div class="kpi">
+          <div class="top"><div class="lbl">營業額</div><span class="ball" title="已扣退款">i</span></div>
+          <div class="val hi"><span class="cur">MOP</span>3,486</div>
+          <div class="ss">線下 2,180 · 線上 1,306</div>
+          <div class="dl up">▲ 12% vs 昨日</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">應收金額合計</div><span class="ball" title="未扣優惠前原價">i</span></div>
+          <div class="val"><span class="cur">MOP</span>3,712</div>
+          <div class="ss">線下 2,384 · 線上 1,328</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">實收金額合計</div><span class="ball" title="已扣優惠後">i</span></div>
+          <div class="val"><span class="cur">MOP</span>3,486</div>
+          <div class="ss">線下 2,180 · 線上 1,306</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">訂單數</div><span class="ball" title="只計已結帳">i</span></div>
+          <div class="val">42</div>
+          <div class="ss">線下 29 單 · 線上 13 單</div>
+          <div class="dl up">▲ 8% vs 昨日</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">客單價</div><span class="ball" title="營業額 ÷ 訂單數">i</span></div>
+          <div class="val"><span class="cur">MOP</span>83</div>
+          <div class="ss">未結帳 3 張 · MOP 246 · 送廚中 2 張</div>
+        </div>
+      </div>
+
+      <!-- ② 成本與毛利 4 格（新增） -->
+      <div class="grid4">
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">買貨總額</div><span class="ball" title="已付 + 未付">i</span></div>
+          <div class="val"><span class="cur">MOP</span>1,842</div>
+          <div class="ss">5 張收據 · 4 間供貨商</div>
+        </div>
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">已付支出</div><span class="ball" title="現金流口徑">i</span></div>
+          <div class="val"><span class="cur">MOP</span>1,376</div>
+          <div class="ss">4 張收據 · 同交班頁一致</div>
+        </div>
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">未付支出</div><span class="ball" title="月結應付">i</span></div>
+          <div class="val"><span class="cur">MOP</span>466</div>
+          <div class="ss">1 張月結單 · 新増負債</div>
+        </div>
+        <div class="kpi cost hero">
+          <div class="top"><div class="lbl">毛利（估）</div><button class="edit">edit</button></div>
+          <div class="val sm"><span class="cur">MOP</span>2,110</div>
+          <div class="ss">成本率 52.8% · 營業額 − 買貨總額</div>
+          <div class="dl fl">毛利率 60.5%</div>
+        </div>
+      </div>
+
+      <div class="newline"><span>↑ 以上 9 格為新配置（原 10 格）　↓ 以下為原有區塊</span></div>
+
+      <!-- ③ 會員錢包（收起） -->
+      <details class="band">
+        <summary>
+          <span class="bt">會員錢包</span>
+          <span style="font-size:11px;color:#94a3b8">負債口徑 · 唔屬營業額</span>
+          <div class="mini">
+            <div><div class="ml">餘額總額</div><div class="mv">MOP 28,640</div></div>
+            <div><div class="ml">充值</div><div class="mv">MOP 1,200</div></div>
+            <div><div class="ml">扣點</div><div class="mv">MOP 860</div></div>
+          </div>
+        </summary>
+        <div class="bd">
+          <div class="mf"><span class="n">餘額總額（仲欠客人幾多）</span><span class="v">MOP 28,640</span></div>
+          <div class="mf"><span class="n">會員充值（實際 1,000 · 贈送 200）</span><span class="v">MOP 1,200</span></div>
+          <div class="mf"><span class="n">會員扣點（已付 700 · 贈送 160）</span><span class="v">MOP 860</span></div>
+        </div>
+      </details>
+
+      <!-- 外賣平台結算（維持左右分欄 · 保留原設計） -->
+      <div class="two">
+        <div class="plat" style="border-left-color:#FB8F01">
+          <div class="ph-head" style="background:#FB8F01">
+            <span>MFOOD 結算</span><span style="font-size:11px;font-weight:500;opacity:.9">平台財務對賬</span>
+          </div>
+          <div class="ph-body">
+            <div class="pc"><div class="pl">應收金額</div><div class="pv">MOP 214</div><div class="pn">平台單營業額總和（POS 即時 · 共 3 張）</div></div>
+            <div class="pc"><div class="pl">實收金額 <span class="tag">待對賬</span></div><div class="pv mut">——</div><div class="pn">平台帳期未生成，對賬後自動補上</div></div>
+            <div class="pc"><div class="pl">平台差額率</div><div class="pv amb">待對賬</div><div class="pn">有實收就計，喺到差額率（唔會用 0 當字充數）</div></div>
+          </div>
+        </div>
+        <div class="plat" style="border-left-color:#FF3159">
+          <div class="ph-head" style="background:#FF3159">
+            <span>澳覓 結算</span><span style="font-size:11px;font-weight:500;opacity:.9">平台財務對賬</span>
+          </div>
+          <div class="ph-body">
+            <div class="pc"><div class="pl">應收金額</div><div class="pv">MOP 388</div><div class="pn">平台單營業額總和（POS 即時 · 共 6 張）</div></div>
+            <div class="pc"><div class="pl">實收金額 <span class="tag">待對賬</span></div><div class="pv mut">——</div><div class="pn">平台帳期未生成，對賬後自動補上</div></div>
+            <div class="pc"><div class="pl">平台差額率</div><div class="pv amb">待對賬</div><div class="pn">有實收就計，喺到差額率（唔會用 0 當字充數）</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ④ 買貨明細（新增） -->
+      <div class="card rel">
+        <span class="flag">新增</span>
+        <div class="ch"><span class="ct">買貨明細</span><span class="cg">2026-10-05 · 5 張收據 · 12 款品項</span></div>
+
+        <div class="two" style="margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px">貨品細項（按金額）</div>
+            <table>
+              <thead><tr><th>品項</th><th>數量</th><th>單價</th><th>金額</th></tr></thead>
+              <tbody>
+                <tr><td>和牛西冷</td><td>4 kg</td><td>MOP 186</td><td>MOP 744</td></tr>
+                <tr><td>新鮮豬扒</td><td>18 kg</td><td>MOP 27</td><td>MOP 486</td></tr>
+                <tr><td>海蝦（大）</td><td>6 kg</td><td>MOP 78</td><td>MOP 466</td></tr>
+                <tr><td>墨魚滑</td><td>2 包</td><td>MOP 40</td><td>MOP 80</td></tr>
+                <tr><td>生油</td><td>2 罐</td><td>MOP 74</td><td>MOP 148</td></tr>
+                <tr class="tot"><td>合計</td><td>—</td><td>—</td><td>MOP 1,842</td></tr>
+              </tbody>
+            </table>
+            <div style="margin-top:8px;font-size:11px;color:#94a3b8">以庫存「品項」為單位聚合 · 同名品項跨收據合併 · 顯示前 5 項</div>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px">付款方式分佈</div>
+            <table>
+              <thead><tr><th>付款方式</th><th>張數</th><th>金額</th></tr></thead>
+              <tbody>
+                <tr><td>現金</td><td>2</td><td>MOP 890</td></tr>
+                <tr><td>轉帳</td><td>2</td><td>MOP 486</td></tr>
+                <tr><td>月結（未付）</td><td>1</td><td>MOP 466</td></tr>
+                <tr class="tot"><td>合計</td><td>5</td><td>MOP 1,842</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px">近 6 個月買貨支出</div>
+        <div class="bars">
+          <div class="b"><div class="fill" style="height:52%"></div><div class="cap">5月</div></div>
+          <div class="b"><div class="fill" style="height:64%"></div><div class="cap">6月</div></div>
+          <div class="b"><div class="fill" style="height:44%"></div><div class="cap">7月</div></div>
+          <div class="b"><div class="fill" style="height:78%"></div><div class="cap">8月</div></div>
+          <div class="b"><div class="fill" style="height:61%"></div><div class="cap">9月</div></div>
+          <div class="b"><div class="fill now" style="height:70%"></div><div class="cap">10月</div></div>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:#94a3b8">
+          本月 MOP 12,480 · 9 月 MOP 10,920 · 8 月 MOP 13,860 · 單價上升 3 款 · 下降 1 款
+        </div>
+      </div>
+
+      <!-- 訂單明細（維持） -->
+      <div class="card">
+        <div class="ch"><span class="ct">訂單明細</span><span class="cg">共 42 張 · 結賬時間倒序</span></div>
+        <div class="ph" style="border:1px dashed #e2e8f0;padding:24px;text-align:center;margin:0">
+          <div class="pd" style="margin:0">逐筆列表（內滾 420px）· 預設出頭 10 行</div>
+        </div>
+      </div>
+
+      <!-- 菜品銷售排行 -->
+      <div class="card">
+        <div class="ch"><span class="ct">菜品銷售排行</span><span class="cg">按下單當時快照名稱 · 線上＋線下 · 按金額由高到低</span></div>
+        <div class="row"><span class="k">1. 招牌豬扒包</span><span class="v">86 份 · MOP 2,064</span></div>
+        <div class="row"><span class="k">2. 干炒牛河</span><span class="v">54 份 · MOP 2,052</span></div>
+        <div class="row"><span class="k">3. 凍檸茶</span><span class="v">128 份 · MOP 1,792</span></div>
+        <div class="row"><span class="k">4. 鮮蝦雲吞麵</span><span class="v">48 份 · MOP 1,680</span></div>
+        <div style="margin-top:10px;padding:8px 10px;background:#f0f9ff;border:1px dashed #7dd3fc;border-radius:8px;font-size:11px;color:#0369a1;line-height:1.6">
+          排序改為<b>金額倒序</b>（原為銷量倒序）。留意凍檸茶銷量最高（128 份）但金額只排第 3
+          —— 因為單價低。<br>
+          ⚠️ 同步改 SQL：<code style="background:#e0f2fe;padding:1px 4px;border-radius:3px">order by r.qty_total desc</code>
+          → <code style="background:#e0f2fe;padding:1px 4px;border-radius:3px">order by r.revenue_avos desc, r.dname asc</code>（0059 兩處）
+        </div>
+      </div>
+
+      <!-- 三欄：食材消耗 / 使用量 / 買貨趨勢 -->
+      <div class="three">
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">食材消耗（本月）</span><span class="cg">BOM × 已售份數</span></div>
+          <div class="val" style="font-size:30px;font-weight:800;color:#ea580c">MOP 9,240</div>
+          <div class="ss" style="font-size:12px;color:#64748b;margin-top:4px">本月食材成本（至今日）· 28 款食材</div>
+          <div class="ss" style="font-size:12px;color:#94a3b8;margin-top:8px">選取範圍（今天）：MOP 1,180 · 12 款</div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">食材使用量排行</span><span class="cg">本月 · 按成本</span></div>
+          <div class="row"><span class="k">1. 豬扒</span><span class="v">62 kg</span></div>
+          <div class="row"><span class="k">2. 河粉</span><span class="v">48 kg</span></div>
+          <div class="row"><span class="k">3. 檸檬</span><span class="v">24 kg</span></div>
+        </div>
+        <div class="card rel" style="margin:0">
+          <span class="flag">新增</span>
+          <div class="ch"><span class="ct">買貨 vs 消耗</span><span class="cg">本月 · 損耗線索</span></div>
+          <div class="row"><span class="k">買貨（本月）</span><span class="v">MOP 12,480</span></div>
+          <div class="row"><span class="k">食材消耗（BOM）</span><span class="v">MOP 9,240</span></div>
+          <div class="row"><span class="k">差額（存貨增加／損耗）</span><span class="v amb">MOP 3,240</span></div>
+          <div style="margin-top:8px;font-size:11px;color:#94a3b8;line-height:1.6">差額＝本期買入未消耗嘅部分（存貨）或損耗。長期睇趨勢比單日準。</div>
+        </div>
+      </div>
+
+      <!-- 支付方式分項 -->
+      <div class="card">
+        <div class="ch"><span class="ct">支付方式分項（店內 POS 線下）</span><span class="cg">只計無 onlineOrderId 嘅本店單</span></div>
+        <table>
+          <thead><tr><th>支付方式</th><th>訂單數</th><th>應收金額合計</th><th>實收金額合計</th><th>折扣差額</th></tr></thead>
+          <tbody>
+            <tr><td>現金</td><td>16</td><td>MOP 1,320</td><td class="grn">MOP 1,248</td><td class="amb">-MOP 72</td></tr>
+            <tr><td>澳門通</td><td>8</td><td>MOP 640</td><td class="grn">MOP 620</td><td class="amb">-MOP 20</td></tr>
+            <tr><td>會員餘額</td><td>5</td><td>MOP 424</td><td class="grn">MOP 312</td><td class="amb">-MOP 112</td></tr>
+            <tr class="tot"><td>合計</td><td>29</td><td>MOP 2,384</td><td class="grn">MOP 2,180</td><td class="amb">-MOP 204</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="two">
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">沽清菜品</span><span class="cg">即時</span></div>
+          <div style="display:inline-flex;background:#fee2e2;color:#b91c1c;font-size:12px;font-weight:700;border-radius:999px;padding:4px 10px">2 款沽清</div>
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+            <span style="border:1px solid #fecdd3;background:#fff1f2;color:#b91c1c;border-radius:999px;padding:3px 10px;font-size:12px">椒鹽鮮魷</span>
+            <span style="border:1px solid #fecdd3;background:#fff1f2;color:#b91c1c;border-radius:999px;padding:3px 10px;font-size:12px">楊枝甘露</span>
+          </div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">最熱門桌台排行</span><span class="cg">單數 · 覆蓋人數</span></div>
+          <div class="row"><span class="k">1. A03</span><span class="v">6 單 · 18 人</span></div>
+          <div class="row"><span class="k">2. B01</span><span class="v">5 單 · 22 人</span></div>
+        </div>
+      </div>
+
+      <div class="three">
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">尖峰時段（每小時訂單）</span><span class="cg">POS+Ledger · 高峰約 12:00</span></div>
+          <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:3px">
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+            <div style="height:28px;border-radius:4px;background:#fb923c"></div>
+            <div style="height:28px;border-radius:4px;background:#ef4444"></div>
+            <div style="height:28px;border-radius:4px;background:#fb923c"></div>
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+            <div style="height:28px;border-radius:4px;background:#fb923c"></div>
+            <div style="height:28px;border-radius:4px;background:#fb923c"></div>
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+            <div style="height:28px;border-radius:4px;background:#cbd5e1"></div>
+          </div>
+          <div style="margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">
+            <div><div style="font-size:11px;color:#94a3b8">退菜率</div><div style="font-size:13px;font-weight:600">2%</div></div>
+            <div><div style="font-size:11px;color:#94a3b8">折扣佔比</div><div style="font-size:13px;font-weight:600">6%</div></div>
+            <div><div style="font-size:11px;color:#94a3b8">線上佔比</div><div style="font-size:13px;font-weight:600">31%</div></div>
+          </div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">營運指標 · 同環比</span><span class="cg">vs 7 日均值</span></div>
+          <div class="row"><span class="k">營業額（7日均）</span><span class="v">MOP 3,120</span></div>
+          <div class="row"><span class="k">線上渠道佔比（7日均）</span><span class="v">28%</span></div>
+          <div class="row"><span class="k">會員充值（7日均）</span><span class="v">MOP 940</span></div>
+          <div class="row"><span class="k">總售出份數</span><span class="v">418 份</span></div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">時長統計（堂食 / 外賣）</span><span class="cg">實測</span></div>
+          <div class="row"><span class="k">堂食·整體</span><span class="v">38 分鐘</span></div>
+          <div class="row"><span class="k">外賣·整體</span><span class="v">16 分鐘</span></div>
+        </div>
+      </div>
+
+      <div class="two">
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">當日人流（入店人次）</span><span class="cg">自動計算 · 參考用</span></div>
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <div style="font-size:30px;font-weight:800;color:#4f46e5">146</div>
+            <div style="font-size:12px;color:#64748b">選取範圍累計入店人次</div>
+          </div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="ch"><span class="ct">低庫存預警</span><span class="cg">current_qty ≤ par</span></div>
+          <div style="font-size:13px;font-weight:600;color:#e11d48">3 款低庫存</div>
+          <div class="row"><span class="k">豬扒</span><span class="v" style="color:#e11d48">4 / 10 kg</span></div>
+        </div>
+      </div>
+
+      <div class="note">
+        <div class="nt">🔔 自動化優化建議（今天）</div>
+        <div style="display:grid;gap:8px;margin-top:10px">
+          <div class="ni"><span class="badge">優先</span><span style="font-size:13px;line-height:1.6"><b>已沽清 2 款菜品：</b>即日補貨；優先處理高銷菜品（椒鹽鮮魷、楊枝甘露）。</span></div>
+          <div class="ni"><span class="badge o">注意</span><span style="font-size:13px;line-height:1.6"><b>買貨佔營業額 52.8%：</b>高於 7 日均值 46.2%，留意是否入大批貨或單價上漲。</span></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products。<br>
+        <span style="color:#b45309">買貨（收據）數據來自庫存系統：已付＝現金流口徑，未付＝月結應付；毛利為「營業額 − 買貨總額」估算，未扣存貨變動。</span>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>

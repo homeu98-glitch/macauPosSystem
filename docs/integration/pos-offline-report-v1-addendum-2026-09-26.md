@@ -61,7 +61,7 @@
 | `orders[].totalAvos` | ✅ | 該單金額（avos 整數、非負）。未結帳單 ＝ 當前應收 |
 | `orders[].status` | ✅ | 原始 POS 狀態（**封閉值域**，見下表） |
 | `dishesTotal` | ✅ | 不同菜品款數（未截斷前） |
-| `dishes[]` | ✅ | `{name, qty, revenueAvos}`。**銷量倒序**（並列時按名稱） |
+| `dishes[]` | ✅ | `{name, qty, revenueAvos}`。**金額倒序**（`revenueAvos` 由大至小，並列時按名稱）<br>⚠️ 2026-10-05 修正：原本係「銷量倒序」，已改為金額倒序（migration `0060`） |
 | `flags.ordersTruncated` | ✅ | `orders[]` 是否被 3000 筆上限截斷 |
 | `flags.dishesTruncated` | ✅ | `dishes[]` 是否被 300 款上限截斷 |
 

@@ -111,7 +111,7 @@ export async function GET(request: Request) {
   if (ids.length > 0) {
     const { data: itemRows, error: iErr } = await client
       .from("receipt_items")
-      .select("id, receipt_id, name, unit_price, quantity")
+      .select("id, receipt_id, name, unit_price, quantity, quantity_unit")
       .in("receipt_id", ids);
     if (iErr) {
       if (isMissingTable(iErr))
@@ -141,6 +141,10 @@ export async function GET(request: Request) {
         name: typeof item.name === "string" ? item.name : "未命名品項",
         unit_price: Number(item.unit_price) || 0,
         quantity: Number(item.quantity) || 1,
+        // 2026-10-05：貨品細項要顯示單位（kg／包／罐）。expenseRecorder 嘅
+        // `receipt_items` 有 `quantity_unit` 就用；冇（舊資料／欄位未加）留空，
+        // UI 只出數量唔出單位，**唔可以**亂填「個」之類嘅假單位。
+        quantity_unit: typeof item.quantity_unit === "string" ? item.quantity_unit : "",
       };
     });
     return {

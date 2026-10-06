@@ -5,6 +5,12 @@
  */
 import { macauDateKey, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
 import { customRangeToISO, instantInRange } from "@/lib/ledger/date-range";
+/**
+ * 貨品細項聚合（零 import 純函式，獨立成檔令 `node --test` 可以直接跑）。
+ * ⚠️ 呢度**同時** import 嚟本地用（`buildPurchaseSummary` 要用），
+ *    並喺檔尾 re-export 畀外部（取代原本重複實作）。
+ */
+import { buildItemStats, PURCHASE_ITEMS_PREVIEW, type ItemStat } from "@/lib/purchase-items";
 
 /**
  * 付款方式顯示名（庫存頁／日報表付款方式分佈共用）。
@@ -179,6 +185,14 @@ export type PurchaseSummary = {
   trend: TrendSummary;
   paymentMethodBreakdown: PaymentMethodBreakdown[];
   priceTrendSeries: PriceTrendPoint[];
+  /**
+   * 貨品細項排行（2026-10-05 J 要求）—— 以庫存品項為單位，金額倒序。
+   * UI 只需要睇頭幾行，故此喺 summary 就截斷，避免 payload 無謂膨脹。
+   * ⚠️ 截斷前嘅總款數見 {@link itemsTotal}。
+   */
+  items: ItemStat[];
+  /** 未截斷前嘅不同品項總數（畀 UI 講「共 N 款」）。 */
+  itemsTotal: number;
 };
 
 export type PurchaseApiResponse = {
@@ -251,6 +265,14 @@ export function buildPurchaseSummary(receipts: StatReceipt[]): PurchaseSummary {
     if (r.payment_status === "paid") paid += amt;
     else unpaid += amt;
   }
+  /**
+   * 🔴 2026-10-05：貨品細項要截斷，唔可以原樣回全部。
+   * 一個月嘅收據行可以幾百至過千（每張收據平均 5–15 行）⇒ 全部塞入每 30 秒／
+   * 10 分鐘刷新一次嘅 summary 會係純 egress 浪費。UI 只顯示頭 5–8 行，
+   * 故此喺**呢度**截斷（`PURCHASE_ITEMS_PREVIEW`），並回 `itemsTotal` 講「共 N 款」。
+   * ⚠️ 截斷只影響「明細列表」，**唔影響** `total`/`paid`/`unpaid`（嗰啲由 receipts 直接加）。
+   */
+  const allItems = buildItemStats(receipts);
   return {
     total: round2(total),
     paid: round2(paid),
@@ -261,8 +283,15 @@ export function buildPurchaseSummary(receipts: StatReceipt[]): PurchaseSummary {
     trend: buildTrendSummary(receipts),
     paymentMethodBreakdown: buildPaymentMethodBreakdown(receipts),
     priceTrendSeries: buildPriceTrendSeries(receipts, 6),
+    items: allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
+    itemsTotal: allItems.length,
   };
 }
+
+/**
+ * `summary.items` 最多回幾行貨品細項 —— 定義喺 `purchase-items.ts`（零 import），
+ * 呢度經下方 re-export 轉出，避免兩個檔各有一份定義而靜默走樣。
+ */
 
 export function buildSupplierStats(receipts: StatReceipt[]): SupplierStat[] {
   const totals = new Map<string, { name: string; count: number; total: number }>();
@@ -407,6 +436,25 @@ export function buildTrendSummary(receipts: StatReceipt[]): TrendSummary {
   }
   return { up, down };
 }
+
+/* ─────────────── 貨品細項（2026-10-05 J 要求）─────────────── */
+
+/**
+ * 貨品細項排行 —— re-export from `@/lib/purchase-items`。
+ *
+ * 🔴 為何純函式本體唔喺呢個檔：本專案 `npm test` 係 `node --test`，**唔識解析 `@/` alias**，
+ *    而呢個檔有 `@/lib/ledger/...` import ⇒ 一被測試檔 import 就爆。
+ *    所以本體放喺**零 import** 嘅 `purchase-items.ts`（同 `inventory-order.ts` 同一套路），
+ *    呢邊只做轉出，令 UI／API 仍可以繼續 `import { buildItemStats } from "@/lib/inventory-stats"`。
+ */
+export {
+  buildItemStats,
+  PURCHASE_ITEMS_PREVIEW,
+  type ItemStat,
+  type PurchaseItemInput,
+  type PurchaseReceiptInput,
+} from "@/lib/purchase-items";
+
 
 /** 客戶端封裝：呼叫庫存收據 API 並取回買貨統計（含 schemaReady/matched 降級）。
  *
