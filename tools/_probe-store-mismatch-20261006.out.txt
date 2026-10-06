@@ -1,0 +1,14 @@
+═══ ① pos_print_agents（agent → store 綁定）═══
+status=401
+{"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.pos_print_agents TO anon;","message":"permission denied for table pos_print_agents"}
+
+═══ ② 搵 merchant 60000002 嘅 store uuid ═══
+  pos_orders → 206 欄位: id,local_order_no,store_id,table_id,table_name,status,items,subtotal,tax_amount,service_charge_amount,discount_amount,total,payment_method,created_at,updated_at,prepaid_amount,online_order_id,order_note,fulfillment_status,sent_to_kitchen_at,served_at,source,party_size,comp_note,comped_at,client_upda
+  pos_store_status → 206 欄位: store_id,is_open,updated_at,updated_source,updated_by
+
+═══ ③ pos_orders 全部 store_id（近 7 日）═══
+  8291f843-9def-4956-9d0b-1cfef2598306 → {"pos":50,"mfood":6}
+  d564b932-0c91-45e9-86fd-0ec8e2711f13 → {"pos":2}
+
+═══ ④ agent store 有冇單 ═══
+  有 mfood 單嘅 store: 8291f843-9def-4956-9d0b-1cfef2598306

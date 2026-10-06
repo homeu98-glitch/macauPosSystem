@@ -1,0 +1,12 @@
+── pos_orders（來源 mfood，最新）──
+status=200
+  MFOOD#2 | 202610061113037060522 | settled | sub=259 disc=0 total=232 fees=[{"label":"餐盒費","amount":7},{"label":"膠袋費","amount":2},{"label":"商家代金券","amount":-30},{"label":"商家滿減","amount":-6},{"label":"配送費","amount":12,"excluded":true}] | 6/10/2026 上午11:13:03
+  MFOOD#1 | 202610060932135358741 | settled | sub=64 disc=0 total=62 fees=[{"label":"餐盒費","amount":2},{"label":"膠袋費","amount":1},{"label":"商家代金券","amount":-3},{"label":"商家滿減","amount":-2},{"label":"配送費","amount":13.9,"excluded":true}] | 6/10/2026 上午9:32:12
+  MFOOD#4 | 202610052011242327105 | settled | sub=69 disc=0 total=70 fees=[{"label":"餐盒費","amount":2},{"label":"膠袋費","amount":1},{"label":"商家滿減","amount":-2},{"label":"配送費","amount":12,"excluded":true}] | 5/10/2026 下午8:11:24
+  MFOOD#3 | 202610051844501497017 | settled | sub=77 disc=0 total=79 fees=[{"label":"餐盒費","amount":3},{"label":"膠袋費","amount":1},{"label":"商家滿減","amount":-2},{"label":"配送費","amount":12,"excluded":true}] | 5/10/2026 下午6:44:49
+  MFOOD#2 | 202610051132412541389 | settled | sub=64 disc=0 total=65 fees=[{"label":"餐盒費","amount":2},{"label":"膠袋費","amount":1},{"label":"商家滿減","amount":-2},{"label":"配送費","amount":13.9,"excluded":true}] | 5/10/2026 上午11:32:40
+  MFOOD#1 | 202610050931230454712 | cancelled | sub=64 disc=0 total=65 fees=[{"label":"餐盒費","amount":2},{"label":"膠袋費","amount":1},{"label":"商家滿減","amount":-2},{"label":"配送費","amount":13.9,"excluded":true}] | 5/10/2026 上午9:31:22
+
+全部外賣平台單 content-range = 
+
+pos_grabber_inbox（anon 視角，預期 42501）→ 401

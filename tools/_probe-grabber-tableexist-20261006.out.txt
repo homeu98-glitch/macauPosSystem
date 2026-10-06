@@ -1,0 +1,7 @@
+✅ POS anon key 已確認（ref=iyrywzormzisyppkokbi）
+
+① 一定唔存在                → 404  PGRST205 Could not find the table 'public.zz_definitely_not_a_table_20261006' in the schema cac
+② grabber inbox        → 401  42501 permission denied for table pos_grabber_inbox
+③ grabber capability   → 401  42501 permission denied for table pos_grabber_capability
+④ push log (0062)      → 401  42501 permission denied for table pos_grabber_push_log
+⑤ 對照 pos_orders        → 206  
