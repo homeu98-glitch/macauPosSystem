@@ -24,6 +24,7 @@ import { NextResponse } from "next/server";
 
 import {
   projectGrabberOrder,
+  type GrabberItem,
   type GrabberOrder,
   type GrabberOrderRow,
 } from "@/lib/grabber/grabber-order";
@@ -56,6 +57,66 @@ interface IngestRow {
   net_amount_mop?: unknown;
   is_settled?: unknown;
   raw?: unknown;
+  /**
+   * 🔴 2026-10-06 修法 A：品項。
+   *
+   * 之前**冇呢個欄位** ⇒ `order.items` 永遠 `undefined`
+   * ⇒ `projectGrabberOrder()` 回 `payload 內冇可用品項`
+   * ⇒ 單永遠入唔到 `pos_orders`（只停留喺 `pos_grabber_inbox`）。
+   *
+   * 根因：平台訂單列表 API 回應**完全冇品項**（實機已列齊 39 個欄位），
+   * 品項只喺單張詳情 `order/_get`（body `{id}`，回應 `prdtList[]`）。
+   * APK 端已加「逐單撳詳情 + 被動攔截」補抓。
+   *
+   * ⚠️ 形狀必須係**真正 array**。若 APK 送 JSON 字串 `"[{...}]"`，
+   *    `Array.isArray` = false ⇒ 又回到失敗（已喺 APK 端修正序列化）。
+   */
+  items?: unknown;
+}
+
+/**
+ * 🔴 逐項讀 `items`，並轉成 `GrabberItem[]`。
+ *
+ * ## 點解要咁嚴謹
+ * `GrabberItem` 有 `[key: string]: unknown` 索引簽章，餵錯欄位名 **唔會**報錯，
+ * 但投影會靜靜讀到 `undefined`（品項名空、數量 0）⇒ `pos_orders` 落錯單。
+ *
+ * @returns `null` = payload 冇 `items`（未抓到）—— 要同「真係空單」區分開。
+ */
+function parseItems(v: unknown): GrabberItem[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: GrabberItem[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const o = raw as Record<string, unknown>;
+    // `displayName` = 名 + 規格 + 加料（APK 端已拼好）；冇就退回 `name`
+    const displayName = str(o.displayName) ?? str(o.name);
+    const name = str(o.name) ?? displayName;
+    const quantity = num(o.quantity);
+    // 名同數量至少一個有先算 usable（否則投影會出「空名 0 份」嘅假品項）
+    if (!displayName && !name) continue;
+    if (quantity !== undefined && quantity <= 0) continue;
+    out.push({
+      name,
+      displayName,
+      skuName: str(o.skuName),
+      quantity,
+      unitPrice: num(o.unitPrice),
+      // 🔴 2026-10-07：`specs` 兩種形狀都要收。
+        //   · **字串陣列** `["馬蹄","米飯","加蒸蛋"]` ← extension `normalizeItems()` 真實輸出，
+        //     亦係而家 APK 嘅輸出（`propertiesNames`+`ingredientNames`+`extendNames` 合併）。
+        //   · **物件** `{...}` ← 舊 APK 曾經用嚟裝附加資訊（已改名 `extra`），保留兼容。
+        // ⚠️ 舊寫法 `typeof o.specs === "object"` 會**同時**收兩者但 cast 成 Record ——
+        //    陣列 cast 落 Record 會令下游讀 `specs.skuName` 之類變 undefined。呢度收窄返。
+      specs:
+        Array.isArray(o.specs) && o.specs.every((x) => typeof x === "string")
+          ? (o.specs as string[])
+          : o.specs && typeof o.specs === "object" && !Array.isArray(o.specs)
+            ? (o.specs as Record<string, unknown>)
+            : null,
+    });
+  }
+  return out;
 }
 
 /** 數字欄位容錯讀取：JSON number、數字字串、null／缺欄 → undefined。 */
@@ -210,6 +271,9 @@ export async function POST(request: Request) {
     const gross = num(r.gross_amount_mop);
     const net = num(r.net_amount_mop);
 
+    // 🔴 修法 A：先解析品項（parse 一次，夠用就好）。
+    const grabberItems = parseItems(r.items) ?? [];
+
     // ⚠️ 餵畀**共用**嘅投影函式。
     //
     // 🔴 形狀必須對齊 `GrabberOrder`（`lib/grabber/grabber-order.ts:39`）：
@@ -233,6 +297,11 @@ export async function POST(request: Request) {
       },
       ...(str(r.status_text) ? { orderStatus: str(r.status_text) } : {}),
       occurredAt,
+      // 🔴 2026-10-06 修法 A：**必須傳品項**。
+      //    冇 `items` ⇒ `projectGrabberOrder()` 回「payload 內冇可用品項」⇒ 單入唔到 pos_orders。
+      //    ⚠️ `items: null`（未抓到）vs `items: []`（真係空）語義唔同，
+      //       所以只喺真係有內容時先塞 array。
+      ...(grabberItems.length ? { items: grabberItems } : {}),
       // 🔴 raw 一律帶上（0064 嘅存在意義之一）：投影函式會從入面抽
       //    餐盒費／膠袋費／服務費，所以**唔可以**只留 `__apk` 摘要。
       raw: {

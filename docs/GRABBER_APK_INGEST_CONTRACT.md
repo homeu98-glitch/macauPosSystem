@@ -90,9 +90,50 @@ APK grabber/GrabberIngest.kt
   "business_amount_mop": 118.0,
   "status_text": "completed",
   "placed_at_ms": 1791278267394,
+  "items": [
+    { "name": "肉餅", "displayName": "肉餅（大份）", "skuName": "大份",
+      "quantity": 1, "unitPrice": 88.0,
+      "specs": { "amountMop": 88.0, "originalAmountMop": 98.0,
+                 "pocketNo": "0", "boxQty": 1 } },
+    { "name": "酸菜魚", "displayName": "酸菜魚", "skuName": "",
+      "quantity": 1, "unitPrice": 130.0,
+      "specs": { "amountMop": 130.0, "pocketNo": "0" } }
+  ],
   "raw": { /* 平台原始回應（會存落 inbox） */ }
 }
 ```
+
+#### 🔴 `items`（2026-10-06 修法 A）— **必填，否則投影失敗**
+
+**為什麼突然變必填**：原本 APK **冇送** `items` ⇒ `projectGrabberOrder()` 收到空
+`items` 就回 `payload 內冇可用品項` ⇒ 單永遠停留喺 `pos_grabber_inbox`
+（`parse_ok=false`），**入唔到 `pos_orders`**。實機已確認（2026-10-06）。
+
+**根因**：平台訂單**列表** API 回應**完全冇品項**（已列齊 39 個欄位），品項只喺
+**單張詳情** `POST /merchants/takeouts/order/_get`（body `{id: row.id}`，回應 `prdtList[]`）。
+APK 已加「逐單撳詳情 + 被動攔截」補抓。取證：`macau-ledger-merchant/docs/GRABBER_MFOOD_ORDER_DETAIL_FINDINGS.md`。
+
+**`items[]` 每項欄位**（對齊 `GrabberItem`）
+
+| 欄位 | 型別 | 必需 | 來源（mFood `prdtList[]`） |
+|---|---|---|---|
+| `name` | string | ✅ | `prdtName` |
+| `displayName` | string | — | APK 拼好：名 + `（規格）` + 加料。**冇就退回 `name`** |
+| `skuName` | string | — | `skuName` |
+| `quantity` | number | ✅（>0） | `buyCount` |
+| `unitPrice` | number | — | `skuPrice` |
+| `specs` | object | — | APK 附加：`{amountMop, originalAmountMop, pocketNo, boxQty, isPurchase, isDiscount, isSpecial}` |
+
+**🔴 三個容易踩嘅坑**
+
+1. **`items` 必須係真正 JSON array。** 若 APK 送字串 `"[{...}]"`，`Array.isArray` = false
+   ⇒ 又回到失敗。（已喺 APK `GrabberIngest.toOrgJsonValue()` 修正。）
+2. **`name`／`quantity` 缺一項就整項丟棄**（唔會產生「空名 0 份」假品項）。
+3. **`items: []` 與「冇 `items` 欄」語義唔同** —— 前者係「真係零品項」，後者係「未抓到」。
+   POS 只喺 `items.length > 0` 時先塞入 `order.items`。
+
+**向後相容**：舊 APK（冇 `items`）會繼續收到 `payload 內冇可用品項` 並落 inbox（唔會 500），
+所以呢個改動**唔會**令任何現有流程報錯。
 
 **`rows[]` 每列欄位**（`kind=settlement`）
 ```json
