@@ -45,6 +45,14 @@ interface IngestRow {
   dedup_key?: unknown;
   source_id?: unknown;
   trade_no?: unknown;
+  /**
+   * 🔴 2026-10-07：平台**後台單號**（人眼對單用）。
+   *
+   * 冇呢個 ⇒ `grabberLocalOrderNo()` 四個候選全空 ⇒ 跌到 fallback
+   * 「外部單號尾 6 位」（例 `MFOOD#358741`）⇒ 顯示唔係後台真單號，
+   * 亦令「按單號排序」失效（用戶 2026-10-07 反映「訂單冇按 1、2、3 排序」）。
+   */
+  order_number?: unknown;
   store_name?: unknown;
   amount_mop?: unknown;
   business_amount_mop?: unknown;
@@ -287,6 +295,9 @@ export async function POST(request: Request) {
       source: platform,
       externalOrderId: sourceId,
       ...(str(r.trade_no) ? { tradeNo: str(r.trade_no) } : {}),
+      // 🔴 2026-10-07：後台單號（`orderNumber`）—— `grabberLocalOrderNo()` 靠佢出
+      //    `MFOOD#1` / `澳覓#3` 呢種同後台一致嘅單號；冇就跌到外部單號尾 6 位。
+      ...(str(r.order_number) ? { orderNumber: str(r.order_number) } : {}),
       ...(str(r.store_name) ? { storeName: str(r.store_name) } : {}),
       // 🔴 `amount` 用物件形狀。`turnoverAmount` = 計入營業額（已扣商家活動支出），
       //    係投影函式優先讀嘅欄位，所以由 `business_amount_mop` 餵。
