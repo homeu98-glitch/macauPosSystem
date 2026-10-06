@@ -5,11 +5,23 @@ import {
   buildReceiptItems,
   resolveExpenseUserId,
   resolveMerchantId,
+  stripQuantityUnit,
   type InventoryReceiptInput,
 } from "@/lib/expense-inventory";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * 🔴 2026-10-06：`receipt_items.quantity_unit` 係 expenseRecorder 側新加嘅欄位。
+ * 舊環境未有 ⇒ insert 會回 `42703`。降級：剝走該欄重試（單位唔寫入但照存收據）。
+ * 同 `expense-inventory.ts isMissingColumnOrTable()` 語意一致（此處只針對欄）。
+ */
+function isMissingColumn(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === "42703") return true;
+  return /column .* does not exist|Could not find the '.*' column|schema cache/i.test(err.message ?? "");
+}
 
 /**
  * 更新收據（mirror save-receipt 的 update 路徑）：表頭欄位 + 合併 raw_ocr_data；
@@ -55,7 +67,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (dErr) return NextResponse.json({ ok: false, error: dErr.message }, { status: 500 });
     const itemRows = buildReceiptItems(id, userId, body.items);
     if (itemRows.length > 0) {
-      const { error: iErr } = await client.from("receipt_items").insert(itemRows);
+      let { error: iErr } = await client.from("receipt_items").insert(itemRows);
+      if (iErr && isMissingColumn(iErr)) {
+        ({ error: iErr } = await client.from("receipt_items").insert(stripQuantityUnit(itemRows)));
+      }
       if (iErr) return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
     }
   }

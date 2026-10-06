@@ -28,6 +28,8 @@ type ReceiptItem = {
   name: string;
   unit_price: number;
   quantity: number;
+  /** 單位（kg／包／罐…）；舊資料／欄位未補時為空字串。 */
+  quantity_unit?: string;
 };
 
 type Receipt = {
@@ -77,7 +79,12 @@ const ALL_METHODS = "all";
 
 /* ---------------- 收據表單（置中 modal，可編輯/刪除） ---------------- */
 
-type FormItem = { name: string; unit_price: string; quantity: string };
+/**
+ * 收據品項行。
+ * 🔴 2026-10-06：新增 `unit`（單位，如 kg／包／罐）。舊收據冇此值 ⇒ 空字串，
+ * UI 照顯示空框，商家可補填。寫入 expenseRecorder `receipt_items.quantity_unit`。
+ */
+type FormItem = { name: string; unit_price: string; quantity: string; unit: string };
 type FormState = {
   id?: string;
   /** 由下拉選單揀選時帶 id（server 直接用，唔行 upsert ⇒ 唔會撞 unique）。 */
@@ -102,7 +109,7 @@ function emptyForm(paymentMethods: PaymentMethodDef[]): FormState {
     // 第一個可用嘅進貨付款方式做預設（主檔次序 = 商家想嘅優先次序）。
     payment_method: paymentMethods[0]?.code ?? "on_delivery",
     payment_status: "unpaid",
-    items: [{ name: "", unit_price: "", quantity: "1" }],
+    items: [{ name: "", unit_price: "", quantity: "1", unit: "" }],
   };
 }
 
@@ -117,8 +124,13 @@ function formFromReceipt(r: Receipt): FormState {
     payment_method: r.payment_method,
     payment_status: r.payment_status,
     items: r.items.length
-      ? r.items.map((it) => ({ name: it.name, unit_price: String(it.unit_price), quantity: String(it.quantity) }))
-      : [{ name: "", unit_price: "", quantity: "1" }],
+      ? r.items.map((it) => ({
+          name: it.name,
+          unit_price: String(it.unit_price),
+          quantity: String(it.quantity),
+          unit: it.quantity_unit ?? "",
+        }))
+      : [{ name: "", unit_price: "", quantity: "1", unit: "" }],
   };
 }
 
@@ -296,7 +308,13 @@ function ReceiptFormModal({
     if (!form.date) return setErr("請選擇收據日期");
     const items = form.items
       .filter((it) => it.name.trim())
-      .map((it) => ({ name: it.name.trim(), unit_price: Number(it.unit_price) || 0, quantity: Number(it.quantity) || 1 }));
+      .map((it) => ({
+        name: it.name.trim(),
+        unit_price: Number(it.unit_price) || 0,
+        quantity: Number(it.quantity) || 1,
+        // 2026-10-06：單位（kg／包／罐…）。空字串 = 未填，server 會照寫空值。
+        quantity_unit: it.unit.trim(),
+      }));
     const payload = {
       account,
       // 有 id 就送 id（server 直接採用，唔會 upsert by name ⇒ 唔會撞 unique）；
@@ -641,7 +659,7 @@ function ReceiptFormModal({
               <button
                 type="button"
                 className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
-                onClick={() => setForm({ ...form, items: [...form.items, { name: "", unit_price: "", quantity: "1" }] })}
+                onClick={() => setForm({ ...form, items: [...form.items, { name: "", unit_price: "", quantity: "1", unit: "" }] })}
               >
                 ＋ 品項
               </button>
@@ -660,7 +678,7 @@ function ReceiptFormModal({
 
                         2026-09-26：數量由純輸入框改成「− 數量 ＋」stepper（對齊確認稿），
                         所以數量軌由 5rem 加闊到 10rem；仍然係 grid 固定軌，唔會搶位。 */}
-                    <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_10rem_auto]">
+                    <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_5.5rem_auto]">
                       <div className="col-span-2 min-w-0 sm:col-span-1">
                         <input
                           className={fieldCls}
@@ -713,6 +731,15 @@ function ReceiptFormModal({
                           ＋
                         </button>
                       </div>
+                      {/* 單位（kg／包／罐…）。2026-10-06 新增：配合報表頁「買貨明細」
+                          顯示貨品單位。留空 = 未填，報表只出數量。 */}
+                      <input
+                        className={fieldCls}
+                        value={it.unit}
+                        onChange={(e) => setItem(i, { unit: e.target.value })}
+                        placeholder="單位"
+                        aria-label={`第 ${i + 1} 項單位`}
+                      />
                       <button
                         type="button"
                         className="col-span-2 shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100 sm:col-span-1"

@@ -54,11 +54,22 @@ describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
   it("品項 row 一律用 grid 固定軌寬（flex + 百分比 basis 會搶位）", () => {
     const src = read(VIEW);
     // 2026-09-26：數量由純輸入框改成 stepper ⇒ 數量軌由 5rem 加闊到 10rem。
+    // 2026-10-06：新增「單位」欄 ⇒ 軌變 6 軌 [品名_單價_數量_單位_刪除]。
     assert.ok(
-      /sm:grid-cols-\[minmax\(0,1fr\)_7rem_10rem_auto\]/.test(src),
-      "品項 row 要係 sm:grid-cols-[minmax(0,1fr)_7rem_10rem_auto]",
+      /sm:grid-cols-\[minmax\(0,1fr\)_6\.5rem_9rem_5\.5rem_auto\]/.test(src),
+      "品項 row 要係 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_5.5rem_auto]",
     );
     assert.ok(/col-span-2 min-w-0 sm:col-span-1/.test(src), "品名欄窄螢幕要佔一整行");
+  });
+
+  it("🔴 品項 row 要有「單位」欄，並寫入 quantity_unit（2026-10-06）", () => {
+    const src = read(VIEW);
+    assert.ok(/setItem\(i, \{ unit: e\.target\.value \}\)/.test(src), "要有單位輸入欄");
+    assert.ok(/aria-label=\{`第 \$\{i \+ 1\} 項單位`\}/.test(src), "單位欄要有 aria-label");
+    assert.ok(
+      /quantity_unit: it\.unit\.trim\(\)/.test(src),
+      "儲存時要把 unit 映射去 quantity_unit（否則永遠寫唔入 expenseRecorder）",
+    );
   });
 
   it("品名／單價／數量三個欄都要有 aria-label（冇 placeholder 當 label 用）", () => {

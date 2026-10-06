@@ -4,6 +4,7 @@ import {
   buildReceiptItems,
   resolveExpenseUserId,
   resolveMerchantId,
+  stripQuantityUnit,
   type InventoryReceiptInput,
 } from "@/lib/expense-inventory";
 import {
@@ -24,6 +25,21 @@ function isMissingTable(err: DbError): boolean {
   if (!err) return false;
   if (err.code === "42P01") return true;
   return /relation .* does not exist/i.test(err.message ?? "");
+}
+/**
+ * 🔴 2026-10-06：`receipt_items.quantity_unit` 係新增欄位（expenseRecorder 側人手 ALTER），
+ * 舊環境未有 ⇒ select 該欄會回 `42703 undefined_column`，整條報表會 500。
+ * 故此要**優雅降級**：偵測到缺欄就改回唔選 `quantity_unit` 嘅 select（單位一律留空），
+ * 令買貨統計照出，唔好因為一個可選欄位而令成個模組掛掉。
+ * ⚠️ 呢個係 `isMissingColumnOrTable()`（`expense-inventory.ts`）嘅「只針對欄」版本 ——
+ *    表缺失要當 `schemaReady:false` 處理，欄缺失只係降級，兩者語意唔同，故分開。
+ */
+function isMissingColumn(err: DbError): boolean {
+  if (!err) return false;
+  if (err.code === "42703") return true;
+  if (/column .* does not exist/i.test(err.message ?? "")) return true;
+  // PostgREST schema cache 未刷新時會回「Could not find the 'x' column」
+  return /Could not find the '.*' column|schema cache/i.test(err.message ?? "");
 }
 
 const VALID_RANGES: ReportRangeKey[] = ["today", "yesterday", "7d", "30d", "all", "custom"];
@@ -109,16 +125,32 @@ export async function GET(request: Request) {
   const ids = (receipts ?? []).map((r) => r.id);
   let items: Array<Record<string, unknown>> = [];
   if (ids.length > 0) {
-    const { data: itemRows, error: iErr } = await client
+    /*
+     * 🔴 2026-10-06：先試帶 `quantity_unit`（新欄位）；若該欄未存在（舊 expenseRecorder
+     * 環境）就降級為唔選該欄 —— 單位留空，貨品細項照出。唔可以因為一個可選欄位令
+     * 成個買貨統計 500。
+     */
+    let iErr: DbError = null;
+    const withUnit = await client
       .from("receipt_items")
       .select("id, receipt_id, name, unit_price, quantity, quantity_unit")
       .in("receipt_id", ids);
+    if (withUnit.error && isMissingColumn(withUnit.error)) {
+      const legacy = await client
+        .from("receipt_items")
+        .select("id, receipt_id, name, unit_price, quantity")
+        .in("receipt_id", ids);
+      iErr = legacy.error;
+      items = legacy.data ?? [];
+    } else {
+      iErr = withUnit.error;
+      items = withUnit.data ?? [];
+    }
     if (iErr) {
       if (isMissingTable(iErr))
         return NextResponse.json({ ok: true, schemaReady: false, matched: true, receipts: [], summary: buildPurchaseSummary([]) });
       return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
     }
-    items = itemRows ?? [];
   }
 
   const itemsByReceipt = new Map<string, Array<Record<string, unknown>>>();
@@ -234,7 +266,16 @@ export async function POST(request: Request) {
 
   const itemRows = buildReceiptItems(receipt.id, userId, body.items);
   if (itemRows.length > 0) {
-    const { error: iErr } = await client.from("receipt_items").insert(itemRows);
+    /*
+     * 🔴 2026-10-06：`quantity_unit` 係 expenseRecorder 側新加嘅欄位（人手 ALTER）。
+     * 舊環境未有 ⇒ insert 會回 `42703`。降級：剝走該欄重試一次（單位唔寫入但照存收據），
+     * 唔可以因為一個可選欄位令整張收據插入失敗（收據本身係主體，單位係 bonus）。
+     */
+    let { error: iErr } = await client.from("receipt_items").insert(itemRows);
+    if (iErr && isMissingColumn(iErr)) {
+      const legacyRows = stripQuantityUnit(itemRows);
+      ({ error: iErr } = await client.from("receipt_items").insert(legacyRows));
+    }
     if (iErr) return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
   }
 

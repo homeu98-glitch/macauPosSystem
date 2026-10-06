@@ -13,7 +13,7 @@ export type InventoryReceiptInput = {
   payment_status?: string;
   date?: string;
   total_amount?: number;
-  items?: Array<{ name?: string; unit_price?: number; quantity?: number }>;
+  items?: Array<{ name?: string; unit_price?: number; quantity?: number; quantity_unit?: string }>;
 };
 
 export type ResolvedUser = { userId: string } | { error: string; status: number };
@@ -94,7 +94,15 @@ export async function resolveMerchantId(
   return { merchantId: data.id };
 }
 
-/** 由收據輸入組出 receipt_items 批次（mirror save-receipt 的欄位）。 */
+/**
+ * 由收據輸入組出 receipt_items 批次（mirror save-receipt 的欄位）。
+ *
+ * 🔴 2026-10-06：加 `quantity_unit`（kg／包／罐…）。呢欄係 expenseRecorder 側新加嘅，
+ *   舊環境可能未有 ⇒ **呼叫方必須自行降級**（偵測 `42703` 後移除該 key 重試），
+ *   詳見 `src/app/api/inventory/receipts/route.ts` POST。
+ *   ⚠️ 唔可以因為欄位未加就「靜默丟棄單位」——要由呼叫方明確決定降級，
+ *      否則工程師會以為寫入成功但其實冇寫到單位。
+ */
 export function buildReceiptItems(receiptId: string, userId: string, items: InventoryReceiptInput["items"]) {
   if (!Array.isArray(items)) return [];
   return items
@@ -104,6 +112,20 @@ export function buildReceiptItems(receiptId: string, userId: string, items: Inve
       name: String(it.name ?? ""),
       unit_price: Number(it.unit_price) || 0,
       quantity: Number(it.quantity) || 1,
+      quantity_unit: typeof it.quantity_unit === "string" ? it.quantity_unit.trim() : "",
     }))
     .filter((it) => it.name.trim().length > 0);
+}
+
+/**
+ * 移除 payload 內嘅 `quantity_unit` 欄 —— 用於偵測到 expenseRecorder 未加該欄時降級重試。
+ * 回新陣列，唔改原物件。
+ */
+export function stripQuantityUnit<T extends Record<string, unknown>>(rows: T[]): T[] {
+  return rows.map((row) => {
+    if (!("quantity_unit" in row)) return row;
+    const copy = { ...row };
+    delete (copy as Record<string, unknown>).quantity_unit;
+    return copy;
+  });
 }
