@@ -1093,6 +1093,41 @@ export function InventoryView() {
     [patchLocalSettings],
   );
 
+  /**
+   * 🔴 2026-10-07（P2 項目 2）：收據有寫入之後，**主動觸發一次庫存同步**。
+   *
+   * 為何唔可以只靠「進入頁面時同步」：
+   *   商家 typischerweise 流程 = 入一張新收據 → 去庫存頁睇下成本有冇變。
+   *   如果同步只喺「進入頁面」做，而商家**已經**喺庫存頁（App Router 唔會
+   *   因為你切 tab 而重新 mount），佢就會見到舊數字，以為同步壞咗。
+   *
+   * ⚠️ 所以呢度係「進頁面同步」嘅**互補**，唔係替代：
+   *    · 進頁面同步 = 兜底（處理喺 expenseRecorder 直接改資料、或另一部機入單）
+   *    · 寫入後同步 = 即時（處理「剛剛入完單想即刻睇」）
+   *
+   * 🔴 **fire-and-forget，唔可以 await、唔可以 throw**：
+   *    收據已經存好（主體成功），庫存同步失敗唔應該令商家以為儲存失敗。
+   *    失敗時靜默 —— 下次進頁面會自動補做。
+   */
+  const syncProductsAfterReceiptWrite = useCallback(() => {
+    void fetch(`/api/inventory/products/sync-from-receipts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ store: merchantId, account, mode: "auto" }),
+    })
+      .then((res) => res.json())
+      .then((json: { ok?: boolean; summary?: { created: number; updated: number } }) => {
+        if (!json?.ok) return;
+        // 有真嘅變化 → 通知外層庫存表換 instance 重載（否則顯示舊數字）
+        if ((json.summary?.created ?? 0) > 0 || (json.summary?.updated ?? 0) > 0) {
+          setProductsVersion((n) => n + 1);
+        }
+      })
+      .catch(() => {
+        /* 靜默：離線／網絡問題唔阻流程 */
+      });
+  }, [merchantId, account]);
+
   /** 進貨可見嘅付款方式（主檔 + scope 過濾）。 */
   const purchaseMethods = useMemo(() => paymentMethodsForScope(masterMethods, "purchase"), [masterMethods]);
 
@@ -1540,6 +1575,9 @@ export function InventoryView() {
           void loadAll();
           void loadSuppliers();
           void loadRecentItems();
+          // 🔴 2026-10-07（P2）：收據寫入（新增／編輯／刪除）後主動同步庫存品 ——
+          //    商家「入完單即刻想睇成本」係最常見流程，唔可以等佢離開再入頁面。
+          syncProductsAfterReceiptWrite();
         }}
         onSuppliersChanged={async () => {
           await loadSuppliers();

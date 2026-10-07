@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   collectAnalysisFilterOptions,
@@ -13,6 +13,7 @@ import {
   type ItemAnalysisSortKey,
   type ItemAnalysisSummary,
 } from "@/lib/item-analysis";
+import { syncSummaryText } from "@/lib/inventory-sync-diff";
 import { DonutChart } from "./charts/DonutChart";
 
 /* ─────────────── 型別 ─────────────── */
@@ -190,40 +191,89 @@ export function ItemAnalysisView({
    *
    * ⚠️ 同 `inventory-table.tsx` 嘅 `doSync` 打同一支 API（單一寫入路徑），
    *    唔喺呢度自砌第二套同步邏輯 —— 基準價嘅鎖定時機只有一個真源。
+   *
+   * 🔴 `silent`（2026-10-07 P2 項目 2）：自動同步時冇變化**唔出提示**、
+   *    失敗**唔彈紅字**。手動按掣永遠有明確回饋。
    */
-  const doSync = useCallback(async () => {
-    if (!merchantId || !account) return;
-    setSyncing(true);
-    setSyncMsg(null);
-    setError(null);
-    try {
-      const res = await fetch("/api/inventory/products/sync-from-receipts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ store: merchantId, account }),
-      });
-      const json = (await res.json()) as {
-        ok?: boolean;
-        error?: string;
-        summary?: { created: number; updated: number; total_after: number };
-      };
-      if (!json.ok) {
-        setError(json.error || "同步失敗");
-      } else {
-        const s = json.summary;
-        setSyncMsg(
-          s
-            ? `同步完成：新增 ${s.created} 個、更新 ${s.updated} 個，共 ${s.total_after} 個庫存品。`
-            : "同步完成。",
-        );
-        await load();
+  const runSync = useCallback(
+    async ({ mode, silent }: { mode: "auto" | "manual"; silent: boolean }) => {
+      if (!merchantId || !account) return;
+      setSyncing(true);
+      if (!silent) {
+        setSyncMsg(null);
+        setError(null);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSyncing(false);
-    }
-  }, [account, merchantId, load]);
+      try {
+        const res = await fetch("/api/inventory/products/sync-from-receipts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ store: merchantId, account, mode }),
+        });
+        const json = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          summary?: {
+            created: number;
+            updated: number;
+            skipped_unchanged?: number;
+            total_after: number;
+          };
+        };
+        if (!json.ok) {
+          if (!silent) setError(json.error || "同步失敗");
+          return;
+        }
+        const s = json.summary;
+        if (silent) {
+          // 靜默原則：只有真嘅有變化才提示（見 inventory-sync-diff.syncSummaryText）
+          const text = syncSummaryText({
+            created: s?.created ?? 0,
+            updated: s?.updated ?? 0,
+            skipped_unchanged: s?.skipped_unchanged ?? 0,
+          });
+          if (text) setSyncMsg(text);
+        } else {
+          setSyncMsg(
+            s
+              ? `同步完成：新增 ${s.created} 個、更新 ${s.updated} 個` +
+                `（略過 ${s.skipped_unchanged ?? 0} 個無變化），共 ${s.total_after} 個庫存品。`
+              : "同步完成。",
+          );
+        }
+        await load();
+      } catch (e) {
+        // 🔴 自動同步失敗一律靜默（離線唔應該擋住分析頁）
+        if (!silent) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [account, merchantId, load],
+  );
+
+  /** 手動按「立即從收據同步」：有明確回饋。 */
+  const doSync = useCallback(
+    () => runSync({ mode: "manual", silent: false }),
+    [runSync],
+  );
+
+  /**
+   * 🔴 2026-10-07（P2 項目 2）：進入「品項分析」分頁時自動同步一次。
+   *
+   * 分析頁最需要新資料 —— 佢顯示嘅係成本漲跌，冇同步就等於睇緊舊價。
+   * 用 `didAutoSync` ref 保證同一個 mount 只做一次。
+   *
+   * ⚠️ deps 刻意**唔包 `runSync`**（佢嘅身份隨 render 改變）——
+   *    一旦入 deps 就會變成每次 render 都同步。呢個係刻意的。
+   */
+  const didAutoSync = useRef(false);
+  useEffect(() => {
+    if (!merchantId || !account) return;
+    if (didAutoSync.current) return;
+    didAutoSync.current = true;
+    void runSync({ mode: "auto", silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merchantId, account]);
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const summary = data?.summary ?? null;

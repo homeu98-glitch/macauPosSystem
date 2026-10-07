@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { syncSummaryText } from "@/lib/inventory-sync-diff";
 
 type InvProduct = {
   id: string;
@@ -51,6 +53,12 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
   const [editing, setEditing] = useState<InvProduct | null | undefined>(undefined); // undefined=closed, null=new
   const [stocktaking, setStocktaking] = useState<InvProduct | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<InvProduct | null>(null);
+  /**
+   * 自動同步進行中（2026-10-07 項目 2）。
+   * 🔴 只係一個**非阻塞**嘅細提示 —— 唔可以出全屏 loading 蓋住庫存表，
+   *    因為商家可能即刻想睇庫存（同步只係背景更新，唔係載入前置條件）。
+   */
+  const [autoSyncing, setAutoSyncing] = useState(false);
 
   /**
    * 庫存表「顯示全部」開關。
@@ -90,27 +98,102 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
     void loadProducts();
   }, [loadProducts]);
 
+  /**
+   * 同步核心（手動同自動共用）。
+   *
+   * 🔴 `mode` 只係一個**語意標籤**落到 server log，唔改變行為。
+   *    真正嘅行為差異在 `silent`：
+   *    · 自動同步（進頁面）→ `silent = true`：冇變化**唔出聲**、
+   *      失敗**唔彈紅字**（POS 支援離線，唔可以因為同步失敗擋住商家睇庫存）。
+   *    · 手動按掣 → `silent = false`：一定要有明確回饋（商家撳咗要有反應）。
+   */
+  const runSync = useCallback(
+    async ({ mode, silent }: { mode: "auto" | "manual"; silent: boolean }) => {
+      try {
+        const res = await fetch(`/api/inventory/products/sync-from-receipts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ store: merchantId, account, mode }),
+        });
+        const json = await res.json();
+        if (!json.ok) {
+          if (!silent) setErr(json.error || "同步失敗");
+          return;
+        }
+        const s = json.summary as {
+          created: number;
+          updated: number;
+          skipped_unchanged?: number;
+          total_after: number;
+          scanned_receipts: number;
+          scanned_items: number;
+        };
+
+        if (silent) {
+          /*
+           * 🔴 靜默原則（2026-10-07）：冇真嘅變化就**唔彈任何提示**。
+           *
+           * 為何關鍵：舊寫法會顯示「更新 31 個」（其實係「掃到 31 個品項」），
+           * J 要求每次進頁面都同步 ⇒ 商家每次入庫存頁都見到「更新 31 個」，
+           * 會以為系統一直有問題。加咗優化 A 之後 `updated` 係**真正寫入數**，
+           * 所以 0 就真係 0 —— 呢個時候提示係純噪音。
+           */
+          const text = syncSummaryText({
+            created: s.created,
+            updated: s.updated,
+            skipped_unchanged: s.skipped_unchanged ?? 0,
+          });
+          if (text) setSyncMsg(text);
+          void loadProducts();
+          onMutated?.();
+        } else {
+          setSyncMsg(
+            `同步完成：新增 ${s.created} 個，更新 ${s.updated} 個` +
+              `（略過 ${s.skipped_unchanged ?? 0} 個無變化，掃描 ${s.scanned_receipts} 張收據 / ` +
+              `${s.scanned_items} 個品項，總計 ${s.total_after} 個庫存品）`,
+          );
+          void loadProducts();
+          onMutated?.();
+        }
+      } catch (e) {
+        // 🔴 自動同步失敗一律靜默（離線／網絡問題唔應該擋 UI）
+        if (!silent) setErr(e instanceof Error ? e.message : "網絡錯誤");
+      }
+    },
+    [merchantId, account, loadProducts, onMutated],
+  );
+
+  /** 手動按「從收據同步」：永遠保留，有明確回饋。 */
   const doSync = async () => {
     setSyncMsg(null);
     setErr(null);
-    try {
-      const res = await fetch(`/api/inventory/products/sync-from-receipts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ store: merchantId, account }),
-      });
-      const json = await res.json();
-      if (!json.ok) setErr(json.error || "同步失敗");
-      else {
-        const s = json.summary as { created: number; updated: number; total_after: number; scanned_receipts: number; scanned_items: number };
-        setSyncMsg(`同步完成：新增 ${s.created} 個，更新 ${s.updated} 個（掃描 ${s.scanned_receipts} 張收據 / ${s.scanned_items} 個品項，總計 ${s.total_after} 個庫存品）`);
-        void loadProducts();
-        onMutated?.();
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "網絡錯誤");
-    }
+    await runSync({ mode: "manual", silent: false });
   };
+
+  /**
+   * 🔴 項目 2（2026-10-07 J 拍板）：**進入頁面時自動同步一次**。
+   *
+   * 為何要用 ref 擋：`runSync` 嘅 deps 包含 `loadProducts`，而 `loadProducts`
+   * 又依賴 `merchantId`；如果直接寫 `useEffect(() => { void runSync(...) }, [runSync])`，
+   * 同步 → `loadProducts()` → `setProducts` → re-render（但 `runSync` 身份唔變，
+   * 所以其實唔會無限迴圈）。**真正嘅風險係 strict mode 嘅雙重 mount 同
+   * merchantId 切換**：兩次 mount 會打兩次同步。
+   *
+   * 用 `didAutoSync` ref 保證**同一個 mount 只做一次**，語意最清晰。
+   * ⚠️ deps 刻意**唔包 `loadProducts`／`runSync`** —— 佢哋會隨 render 改變身份，
+   * 一旦入 deps 就會變成「每次 render 都同步」。呢個係刻意的，唔係漏寫。
+   */
+  const didAutoSync = useRef(false);
+  useEffect(() => {
+    if (!merchantId || !account) return;
+    if (didAutoSync.current) return;
+    didAutoSync.current = true;
+    setAutoSyncing(true);
+    void runSync({ mode: "auto", silent: true }).finally(() => setAutoSyncing(false));
+    // 🔴 eslint-disable：刻意只喺 mount／merchantId 改變時跑一次。
+    //    加 runSync 入 deps 會令每次 render 都重新同步（見上方註釋）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merchantId, account]);
 
   const doDelete = async (p: InvProduct) => {
     try {
@@ -176,6 +259,12 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
               <span className="ml-2 text-xs font-normal text-slate-400">
                 基於 expenseRecorder 收據，可盤點/手動維護
               </span>
+              {/* 🔴 項目 2（2026-10-07）：自動同步中嘅非阻塞提示。
+                  冇提示嘅話商家唔知「點解貨品數字會自己跳」。
+                  用 inline 小字而唔係 spinner 蓋層 —— 唔阻商家即刻睇庫存。 */}
+              {autoSyncing && (
+                <span className="ml-2 text-xs font-normal text-slate-400">・同步中…</span>
+              )}
             </h2>
           </div>
         )}
@@ -183,14 +272,17 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
           <button
             type="button"
             onClick={() => void doSync()}
-            className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white"
+            disabled={autoSyncing}
+            className={`min-h-[40px] rounded-xl px-4 py-2.5 text-sm font-semibold text-white ${
+              autoSyncing ? "cursor-not-allowed bg-slate-400" : "bg-slate-900"
+            }`}
           >
-            從收據同步
+            {autoSyncing ? "同步中…" : "從收據同步"}
           </button>
           <button
             type="button"
             onClick={() => setEditing(null)}
-            className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white"
+            className="min-h-[40px] rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white"
           >
             ＋ 新增庫存品
           </button>

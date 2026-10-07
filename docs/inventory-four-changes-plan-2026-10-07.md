@@ -510,13 +510,83 @@ if (failedPhotoCount > 0) {
 
 ## 3. 建議實施順序
 
-| 批次 | 內容 | 風險 | 理由 |
+| 批次 | 內容 | 風險 | 狀態 |
 |---|---|---|---|
-| **P1** | 項目 3（時間格式）＋ 項目 1（前端收合）＋ 項目 4A（品類必填） | 低 | 純前端，立即可交付 |
-| **P2** | 項目 2（自動同步）＋ **優化 A（只寫有變的行）** | 中 | 需要 `updated` 數字正確才有意義 |
-| **P3** | 項目 4B（拍照上傳） | 中高 | 需建 bucket + 跨專案寫入 |
+| **P1** | 項目 3（時間格式）＋ 項目 1（前端收合）＋ 項目 4A（品類必填） | 低 | ✅ **已完成**（commit `bae01f6`） |
+| **P2** | 項目 2（自動同步）＋ **優化 A（只寫有變的行）** | 中 | ✅ **已完成**（見 §5） |
+| **P3** | 項目 4B（拍照上傳） | 中高 | ⬜ 未開始 |
 
-**每批之間跑全套測試**（現時基線：**2047 tests / 298 suites / 0 fail**）。
+**每批之間跑全套測試**（P1 後基線：**1907 tests** ⇒ P2 後：**1947 tests / 0 fail**）。
+
+---
+
+## 5. P2 實作記錄（2026-10-07）
+
+### 5.1 優化 A：只寫有變的行
+
+**新增** `src/lib/inventory-sync-diff.ts`（零 import 純函式，可被 `node --test` 直接測）：
+
+| 匯出 | 作用 |
+|---|---|
+| `hasMaterialChange(target, current, hasBaselinePatch)` | 逐欄比對，有實質差異才回 `true` |
+| `shouldWriteBaseline(currentBaseline, candidate)` | 基準價只喺 NULL 時鎖一次 |
+| `syncSummaryText({created, updated, skipped_unchanged})` | 砌提示；**無變化回 `null`**（靜默原則） |
+| `COST_EPSILON = 0.005` | 浮點容差 |
+
+**`inventory-products.ts` 改動**：
+- update 分支加 `hasMaterialChange` 短路 ⇒ 冇變化 `skippedUnchanged += 1; continue;`（**零寫入**）
+- `SyncSummary` 加 `skipped_unchanged`
+- 🔴 **順手修一個潛伏 bug**：duplicate-key fallback 路徑原本用
+  `Number(dupRows?.baseline_unit_cost) > 0` 判斷「有冇基準」——
+  `Number(null) === 0`、`Number(undefined) === NaN`，而且**基準價可以係 0**（免費贈品）
+  ⇒ 會誤判成「未有基準」而反覆覆寫，令基準價飄移。
+  改用同主路徑一致嘅 `shouldWriteBaseline()`。
+
+**效果**：日常（冇新收據）由 N 次寫入 → **0 次**。1,000 品項時每月省 30 萬次寫入。
+
+### 5.2 項目 2：進入頁面自動同步
+
+**觸發點（三處）**：
+
+| 位置 | 做法 |
+|---|---|
+| 庫存表 mount | `didAutoSync` ref 擋，`deps = [merchantId, account]` |
+| 品項分析 mount | 同上 |
+| 收據新增／編輯／刪除後 | `syncProductsAfterReceiptWrite()` —— **fire-and-forget**，有變化才 `setProductsVersion` 重載 |
+
+**🔴 靜默原則（關鍵）**：
+- 自動同步：冇變化**唔出提示**、失敗**唔彈紅字**（POS 支援離線，唔可以擋 UI）
+- 手動按掣：永遠有完整回饋（「同步完成：新增 0 個，更新 0 個（略過 34 個無變化…）」）
+- 為何重要：加咗優化 A 之後 `updated` 係**真正寫入數**，
+  冇變化時顯示「更新 31 個」會令商家以為系統壞咗
+
+**`mode` 參數**：只係 log 標籤，**唔做任何行為分支** ——
+保證「手動同步嘅結果永遠同自動一樣」。
+
+### 5.3 驗證
+
+| 項目 | 結果 |
+|---|---|
+| `inventory-sync-diff.test.ts` | 22 pass（容差邊界、null/空字串等價、基準價 0） |
+| `inventory-p2-guard.test.ts` | 18 pass（源碼掃描守衛） |
+| 全量 `node --test src/lib/**/*.test.ts` | **1947 pass / 0 fail** |
+| `tsc --noEmit` | 0 error |
+| ESLint（5 個改動檔） | 0 訊息 |
+| 真實 Chrome headless | **14 pass / 0 fail** |
+
+**實測 sync 呼叫序列：`auto, auto, manual, auto`**
+= 進庫存頁 1 次 + 重載後 1 次 + 手動 1 次 + 切分析頁 1 次 ⇒ **完全冇迴圈**。
+
+截圖：`docs/mockups/p2-verify-2026-10-07/`（4 張）。
+
+### 5.4 ⚠️ 驗證踩過嘅坑
+
+**守衛測試唔可以「`indexOf` + 固定窗口」**：
+`stripComments()` 會把 `//` 註解換成 **200 個空白**，
+所以由 marker 往後切 400–500 字，真實斷言目標可能落在被清空嘅註解區**之外** ⇒
+報一個完全唔存在嘅假 failure。✅ 正解：用括號追蹤搵返 effect 邊界
+（見 `effectDepsAfter()`），或者把窗口放寬到 1200 字。
+
 
 ---
 

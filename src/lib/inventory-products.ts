@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { pickEarlierBaseline } from "./item-price-baseline.ts";
+import { hasMaterialChange, shouldWriteBaseline } from "./inventory-sync-diff.ts";
 
 export type InvProduct = {
   id: string;
@@ -39,7 +40,16 @@ export type InvProductInput = {
 
 export type SyncSummary = {
   created: number;
+  /** 真正有改到（有寫入）嘅既有品項數。 */
   updated: number;
+  /**
+   * 掃到但**冇任何變化**、已跳過寫入嘅既有品項數。
+   *
+   * 🔴 2026-10-07（優化 A）：呢個數字就係「省咗幾多次 UPDATE」。
+   *    日常冇新收據時，`updated = 0` 而且 `skipped_unchanged = N`
+   *    ⇒ 舊版本係 N 次寫入，現在 0 次。
+   */
+  skipped_unchanged: number;
   total_after: number;
   scanned_receipts: number;
   scanned_items: number;
@@ -202,7 +212,7 @@ export async function syncFromReceipts(
     allReceipts = (receipts ?? []) as typeof allReceipts;
   }
   if (allReceipts.length === 0) {
-    return { summary: { created: 0, updated: 0, total_after: 0, scanned_receipts: 0, scanned_items: 0 } };
+    return { summary: { created: 0, updated: 0, skipped_unchanged: 0, total_after: 0, scanned_receipts: 0, scanned_items: 0 } };
   }
 
   // 2) 讀 merchants（取名稱）
@@ -217,7 +227,7 @@ export async function syncFromReceipts(
     .in("receipt_id", ids);
   if (iErr) {
     if (/does not exist/i.test(iErr.message)) {
-      return { summary: { created: 0, updated: 0, total_after: 0, scanned_receipts: ids.length, scanned_items: 0 } };
+      return { summary: { created: 0, updated: 0, skipped_unchanged: 0, total_after: 0, scanned_receipts: ids.length, scanned_items: 0 } };
     }
     return { error: iErr.message, status: 500 };
   }
@@ -285,6 +295,7 @@ export async function syncFromReceipts(
 
   let created = 0;
   let updated = 0;
+  let skippedUnchanged = 0;
 
   for (const row of agg.values()) {
     const avg = row.total_qty > 0 ? Math.round((row.weighted_cost / row.total_qty) * 100) / 100 : 0;
@@ -294,21 +305,56 @@ export async function syncFromReceipts(
     //    刻意唔做 `baseline_unit_cost: hit.baseline_unit_cost ?? row.first_unit_cost` 以外嘅事
     //    —— 尤其唔可以因為「搵到更早日期」就改寫，因為舊收據可能被刪／補登，
     //    令基準價飄移 = 已報告咗嘅上漲金額會變，數字會「自己郁」。
-    const baselinePatch =
-      hit && hit.baseline_unit_cost !== null && hit.baseline_unit_cost !== undefined
-        ? {}
-        : row.first_unit_cost !== null
-          ? { baseline_unit_cost: row.first_unit_cost, baseline_at: row.first_date }
-          : {};
+    const writeBaseline = shouldWriteBaseline(hit?.baseline_unit_cost, row.first_unit_cost);
+    const baselinePatch: Record<string, unknown> = writeBaseline
+      ? { baseline_unit_cost: row.first_unit_cost, baseline_at: row.first_date }
+      : {};
+
+    // 目標值：同原本寫入語意完全一致（掃到嘅優先，掃唔到保留舊值）。
+    // 🔴 呢兩行一定要同下面 update 嘅 payload 對齊，否則「差異判斷」會同實際寫入唔一致。
+    const nextLastDate = row.last_date ?? hit?.last_purchase_date ?? null;
+    const nextLastSupplier = row.last_supplier ?? hit?.last_supplier ?? null;
+    const nextCategory = row.category ?? hit?.category ?? null;
 
     if (hit) {
+      /*
+       * 🔴 2026-10-07（優化 A，J 拍板）：只寫**真嘅有變**嘅行。
+       *
+       * 原本係「掃到幾多個既有品項就 UPDATE 幾多次」，即使資料完全冇變。
+       * J 要求每次進入頁面都同步 ⇒ 成本 = 品項數 × 開頁次數，
+       * 1,000 品項時每月 30 萬次寫入。
+       *
+       * 加咗呢個判斷之後：日常（冇新收據）= **0 次寫入**。
+       * 🔴 語意完全不變 —— 有變嘅時候寫入內容同原本一模一樣。
+       */
+      if (
+        !hasMaterialChange(
+          {
+            avgUnitCost: avg,
+            lastPurchaseDate: nextLastDate,
+            lastSupplier: nextLastSupplier,
+            category: nextCategory,
+          },
+          {
+            avgUnitCost: hit.avg_unit_cost,
+            lastPurchaseDate: hit.last_purchase_date,
+            lastSupplier: hit.last_supplier,
+            category: hit.category,
+          },
+          writeBaseline,
+        )
+      ) {
+        skippedUnchanged += 1;
+        continue;
+      }
+
       const { error: uErr } = await macau
         .from("inv_products")
         .update({
           avg_unit_cost: avg,
-          last_purchase_date: row.last_date ?? hit.last_purchase_date,
-          last_supplier: row.last_supplier ?? hit.last_supplier,
-          category: row.category ?? hit.category,
+          last_purchase_date: nextLastDate,
+          last_supplier: nextLastSupplier,
+          category: nextCategory,
           ...baselinePatch,
         })
         .eq("id", hit.id)
@@ -342,7 +388,19 @@ export async function syncFromReceipts(
             .limit(1)
             .maybeSingle();
           if (dSelErr) return { error: dSelErr.message, status: 500 };
-          const hasBase = Number(dupRows?.baseline_unit_cost) > 0;
+          /*
+           * 🔴 2026-10-07：呢度原本係 `Number(dupRows?.baseline_unit_cost) > 0`，
+           * 有兩個問題：
+           *   ① `Number(null)` = 0、`Number(undefined)` = NaN ⇒ 兩者都當「冇基準」，
+           *      但語意上 `undefined`（欄位唔存在／未 select 到）同 `null`（明確冇值）唔同；
+           *   ② 基準價理論上可以係 **0**（免費贈品、0 元進貨），
+           *      `> 0` 會把「基準價係 0」誤判成「未有基準」⇒ 反覆覆寫。
+           * 改用同 update 分支一致嘅 helper，兩條路徑行為對齊。
+           */
+          const writeBaseline = shouldWriteBaseline(
+            dupRows?.baseline_unit_cost as number | null | undefined,
+            row.first_unit_cost,
+          );
           const { error: uErr2 } = await macau
             .from("inv_products")
             .update({
@@ -350,10 +408,9 @@ export async function syncFromReceipts(
               last_purchase_date: row.last_date,
               last_supplier: row.last_supplier,
               category: row.category,
-              ...(hasBase ? {} : {
-                baseline_unit_cost: row.first_unit_cost,
-                baseline_at: row.first_date,
-              }),
+              ...(writeBaseline
+                ? { baseline_unit_cost: row.first_unit_cost, baseline_at: row.first_date }
+                : {}),
             })
             .eq("store_id", storeId)
             .ilike("name", row.name);
@@ -369,5 +426,14 @@ export async function syncFromReceipts(
   }
 
   const { count } = await macau.from("inv_products").select("id", { count: "exact", head: true }).eq("store_id", storeId);
-  return { summary: { created, updated, total_after: count ?? 0, scanned_receipts: ids.length, scanned_items: (items ?? []).length } };
+  return {
+    summary: {
+      created,
+      updated,
+      skipped_unchanged: skippedUnchanged,
+      total_after: count ?? 0,
+      scanned_receipts: ids.length,
+      scanned_items: (items ?? []).length,
+    },
+  };
 }
