@@ -123,10 +123,54 @@ describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
     // 2026-09-26：數量由純輸入框改成 stepper ⇒ 數量軌由 5rem 加闊到 10rem。
     // 2026-10-06：新增「單位」欄 ⇒ 軌變 6 軌 [品名_單價_數量_單位_刪除]。
     assert.ok(
-      /sm:grid-cols-\[minmax\(0,1fr\)_6\.5rem_9rem_5\.5rem_auto\]/.test(src),
-      "品項 row 要係 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_5.5rem_auto]",
+      /sm:grid-cols-\[minmax\(0,1fr\)_6\.5rem_9rem_[\d.]+rem_auto\]/.test(src),
+      "品項 row 要係 grid 固定軌（品名 minmax(0,1fr) + 單價/數量/單位/刪除四個固定軌）",
     );
     assert.ok(/col-span-2 min-w-0 sm:col-span-1/.test(src), "品名欄窄螢幕要佔一整行");
+  });
+
+  /**
+   * 🔴 2026-10-07：單位欄「揀完顯示不全」嘅防復發守衛。
+   *
+   * 病：單位軌得 5.5rem（88px），格內仲要並排一個 `✎` 掣（`px-3` ≈ 40px），
+   *     而個 `<select>` 沿用 `fieldCls`（含 `px-4` ＝ 左右 32px），再加 native
+   *     下拉箭咀 ≈ 20px ⇒ 88 − 40 − 4 − 32 − 20 < 0 ⇒ **淨係剩個箭咀**。
+   *
+   * ⚠️ 按 §6.1 教訓：呢度**守行為不變量（幾何上擺得落）**，唔係守死一句代碼。
+   *    否則將來任何一次無意嘅 padding／按鈕改動都會令測試報錯，但真 bug
+   *    （例如把掣塞返入 select 同一格）反而可能唔爆。
+   */
+  it("🔴 單位欄一定要擺得落：軌闊 ≥ 7rem、select 用窄 padding、唔可以同文字掣並排", () => {
+    const src = read(VIEW);
+
+    // ① 軌闊：直接由 grid template 抽出單位軌（4th）嘅 rem 數值。
+    const tracks = /sm:grid-cols-\[minmax\(0,1fr\)_([\d.]+)rem_([\d.]+)rem_([\d.]+)rem_auto\]/.exec(src);
+    assert.ok(tracks, "搵唔到品項 row 嘅 grid 模板");
+    const unitRem = Number(tracks[3]);
+    // 8rem − px-3(24) − native 箭咀(20) ≈ 84px 文字空間，夠放 3–4 個中文字。
+    // 門檻 7rem：再窄就會跌返入「只剩箭咀」區間。
+    assert.ok(unitRem >= 7, `單位軌要 ≥ 7rem，而家係 ${unitRem}rem（太窄會顯示不全）`);
+
+    // ② select／input 要用窄 padding 嘅專用 class，唔可以用含 px-4 嘅 fieldCls。
+    assert.ok(/const unitFieldCls =/.test(src), "要有單位專用嘅 field class");
+    const unitClsBody = /const unitFieldCls =\s*\n?\s*"([^"]+)"/.exec(src)?.[1] ?? "";
+    assert.ok(unitClsBody.length > 0, "unitFieldCls 要有內容");
+    assert.ok(
+      unitClsBody.includes("px-3") && !unitClsBody.includes("px-4"),
+      `unitFieldCls 要用 px-3（原生 select 右邊已有箭咀空間），唔可以 px-4：${unitClsBody}`,
+    );
+    assert.ok(unitClsBody.includes("min-w-0"), "unitFieldCls 要有 min-w-0（grid 內唔可以撐爆）");
+
+    // ③ select 唔可以再同一個「有文字或固定闊度」嘅掣擺埋一格。
+    //    做法：搵出 <select> 區塊，assert 佢係自己一格（無 grid-cols-[…_auto] 包住）。
+    const selIdx = src.indexOf("<select");
+    assert.ok(selIdx > 0, "搵唔到單位嘅 <select>");
+    const selOpen = src.lastIndexOf("<div", selIdx);
+    const wrapper = src.slice(selOpen, selIdx);
+    assert.ok(
+      !/grid-cols-\[[^\]]*_auto\]/.test(wrapper),
+      `select 唔可以同掣並排（會把文字欄夾窄）：${wrapper.trim().slice(0, 160)}`,
+    );
   });
 
   it("🔴 品項 row 要有「單位」欄，並寫入 quantity_unit（2026-10-06）", () => {

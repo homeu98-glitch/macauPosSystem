@@ -780,6 +780,33 @@ function ReceiptFormModal({
   // 加大輸入框：py-3.5 + text-base，品項 row 用 grid 對齊讓格寬合理
   const fieldCls =
     "w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base text-slate-900 outline-none focus:border-slate-400";
+  /**
+   * 🔴 單位欄專用樣式（2026-10-07 修「揀完單位顯示不全」）。
+   *
+   * 病根：品項 row 嘅 grid 軌當初畀單位 **5.5rem（88px）**，而格內仲要並排
+   * 一個 `✎` 按鈕（`px-3` ≈ 40px）。`fieldCls` 另有 `px-4`（左右各 16px＝32px），
+   * 88 − 32 − 40 − 4(gap) ≈ **12px** 文字空間，再加 native `<select>` 自己
+   * 嘅下拉箭咀（≈ 20px）⇒ 淨剩唔到 0 ⇒ **淨係見到個箭咀，揀咗乜都睇唔到**。
+   *
+   * ⇒ 三個動作：① 軌闊到 8rem；② `px-3`（原生 select 右邊本身已有箭咀空間，
+   *   唔使再靠 padding 預留）；③ **移走多餘嘅 `✎` 按鈕** —— `<select>` 內
+   *   已經有「其他…」（`CUSTOM_UNIT`）做同一件事，兩個入口係純粹重複。
+   *
+   * ⚠️ 唔可以直接用 `fieldCls`：咁樣 `px-4` 會令 8rem 軌再度被夾窄。
+   */
+  const unitFieldCls =
+    "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3.5 text-base text-slate-900 outline-none focus:border-slate-400";
+  /**
+   * 單位欄嘅「模式切換」細掣（手動輸入 ⇄ 從清單揀）。
+   *
+   * 🔴 必須係 **固定 40px 方形**，唔可以用 `px-3` 加文字：品項 row 嘅單位軌
+   *    得 8rem，掣一闊就會再次把輸入框／下拉夾到顯示不全（就係原本 `✎` 咁嘅病）。
+   *    40px 亦啱好係觸屏點擊目標下限。
+   * ⚠️ 圖示語意：`▾` ＝ 從清單揀（同一個 select 自己嘅下拉箭咀），
+   *    唔使靠 `title`／aria-label 以外嘅提示；兩個模式都靠 `aria-label` 講明。
+   */
+  const unitToggleCls =
+    "grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-sm text-slate-600 ring-1 ring-slate-200 hover:bg-slate-200";
   /** 觸屏 chip：付款方式／品類都用呢個，唔用下拉（下拉喺觸屏要兩步、選項細）。 */
   const chipCls = (active: boolean) =>
     `rounded-xl px-4 py-3 text-base font-medium transition ${
@@ -1220,8 +1247,12 @@ function ReceiptFormModal({
                         窄螢幕則換行：品名一整行，單價＋數量 stepper 第二行，刪除第三行。
 
                         2026-09-26：數量由純輸入框改成「− 數量 ＋」stepper（對齊確認稿），
-                        所以數量軌由 5rem 加闊到 10rem；仍然係 grid 固定軌，唔會搶位。 */}
-                    <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_5.5rem_auto]">
+                        所以數量軌由 5rem 加闊到 10rem；仍然係 grid 固定軌，唔會搶位。
+
+                        2026-10-07：單位軌由 5.5rem 加闊到 8rem。5.5rem 扣掉格內
+                        `✎` 掣（40px）＋ `fieldCls` 嘅 `px-4`（32px）＋ native 箭咀
+                        只剩約 12px ⇒ 揀完單位淨係見到個箭咀。詳見 `unitFieldCls` 註解。 */}
+                    <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_8rem_auto]">
                       <div className="col-span-2 min-w-0 sm:col-span-1">
                         <input
                           className={fieldCls}
@@ -1288,7 +1319,7 @@ function ReceiptFormModal({
                       {manualUnitRows[i] || units.length === 0 ? (
                         <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] gap-1 sm:col-span-1">
                           <input
-                            className={fieldCls}
+                            className={unitFieldCls}
                             value={it.unit}
                             onChange={(e) => setItem(i, { unit: e.target.value })}
                             placeholder="單位"
@@ -1297,18 +1328,25 @@ function ReceiptFormModal({
                           {units.length > 0 && (
                             <button
                               type="button"
-                              className="shrink-0 rounded-xl bg-slate-100 px-3 py-3 text-sm font-medium text-slate-600 ring-1 ring-slate-200"
+                              className={unitToggleCls}
                               onClick={() => setManualUnitRows((m) => ({ ...m, [i]: false }))}
+                              title="改為從單位清單揀"
                               aria-label={`第 ${i + 1} 項改為揀清單`}
                             >
-                              揀清單
+                              ▾
                             </button>
                           )}
                         </div>
                       ) : (
-                        <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] gap-1 sm:col-span-1">
+                        /* 🔴 手動輸入 → 清單嘅切換掣**唔可以**擺喺 select 右手邊：
+                           原版嗰個 `✎`（px-3 ≈ 40px）令 8rem 軌嘅 select 剩返
+                           ~84px，再扣 `fieldCls` 嘅 `px-4` 同 native 箭咀 ⇒
+                           **揀完只見到箭咀**。而 `<select>` 內嘅「其他…」
+                           （CUSTOM_UNIT）本身就係同一個入口，兩個掣純重複。
+                           ⇒ 下拉模式淨係得 select，手動模式先有一個 40px 方形切換掣。 */
+                        <div className="col-span-2 sm:col-span-1">
                           <select
-                            className={fieldCls}
+                            className={unitFieldCls}
                             value={manualUnitRows[i] ? CUSTOM_UNIT : it.unit}
                             onChange={(e) => {
                               const v = e.target.value;
@@ -1320,7 +1358,11 @@ function ReceiptFormModal({
                             }}
                             aria-label={`第 ${i + 1} 項單位`}
                           >
-                            <option value="">單位（選填）</option>
+                            {/* ⚠️ 呢句係細螢幕（grid 變 2 欄、每欄獨立一行）唯一嘅
+                                欄位識別標記 —— 嗰時冇 label，所以唔可以簡化成「單位」
+                                以外嘅空字串；亦**唔可以**加長（例如「單位（選填）」），
+                                8rem 軌扣 px-3＋箭咀之後放唔落 6 個中文字，會再出現截斷。 */}
+                            <option value="">單位</option>
                             {unitOptionsFor(it.unit).map((u) => (
                               <option key={u} value={u}>
                                 {u}
@@ -1328,20 +1370,6 @@ function ReceiptFormModal({
                             ))}
                             <option value={CUSTOM_UNIT}>其他…</option>
                           </select>
-                          {it.unit.trim() && (
-                            <button
-                              type="button"
-                              className="shrink-0 rounded-xl bg-slate-100 px-3 py-3 text-sm font-medium text-slate-600 ring-1 ring-slate-200"
-                              onClick={() => {
-                                // 清走值先撳「其他」：唔然舊值會塞入一個看似已填嘅輸入框。
-                                setItem(i, { unit: "" });
-                                setManualUnitRows((m) => ({ ...m, [i]: true }));
-                              }}
-                              aria-label={`第 ${i + 1} 項手動輸入單位`}
-                            >
-                              ✎
-                            </button>
-                          )}
                         </div>
                       )}
                       <button
