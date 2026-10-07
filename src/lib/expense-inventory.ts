@@ -14,6 +14,15 @@ export type InventoryReceiptInput = {
   date?: string;
   total_amount?: number;
   items?: Array<{ name?: string; unit_price?: number; quantity?: number; quantity_unit?: string }>;
+  /**
+   * 收據相片路徑（`raw_ocr_data.photo_paths`，存 expenseRecorder Storage）。
+   *
+   * 🔴 三態語意（同 PATCH 嘅 `!== undefined` 判斷配套）：
+   *   - `undefined`  → 唔理相片，保留原有（例如只改金額）
+   *   - `[]`         → **商家主動刪光相片**（有效指令，唔可以當「冇提供」）
+   *   - `["a.jpg"]`  → 覆蓋成呢個新清單
+   */
+  photo_paths?: string[];
 };
 
 export type ResolvedUser = { userId: string } | { error: string; status: number };
@@ -128,4 +137,26 @@ export function stripQuantityUnit<T extends Record<string, unknown>>(rows: T[]):
     delete (copy as Record<string, unknown>).quantity_unit;
     return copy;
   });
+}
+
+/**
+ * 收據相片路徑清洗（`raw_ocr_data.photo_paths`）。
+ *
+ * 只保留「安全字串」：非空、去頭尾空白、唔可以係絕對路徑或含路徑穿越。
+ * 去重（同一張相被加兩次冇意義，而且會令刪除時多一次無效呼叫）。
+ *
+ * 🔴 回傳**新陣列**，呼叫方要自己判斷「有冇提供」——
+ *    空陣列（`[]`）係合法值，代表「商家主動刪光相片」，
+ *    **唔可以**當成 falsy 而略過寫入（否則「刪光」會靜默失效）。
+ */
+export function sanitizePhotoPaths(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  for (const item of input) {
+    if (typeof item !== "string") continue;
+    const t = item.trim();
+    if (!t || t.startsWith("/") || t.includes("..")) continue;
+    if (!out.includes(t)) out.push(t);
+  }
+  return out;
 }

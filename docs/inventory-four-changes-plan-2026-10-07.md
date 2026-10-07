@@ -419,6 +419,9 @@ on conflict (id) do nothing;
 
 #### 4B.4 前端關鍵實作
 
+> ⚠️ 本節保留**設計原意**；實際落地版本見 §6「P3 實作記錄」——裡面有幾個
+> 第一版設計被實測推翻的地方（`sr-only`、`maxEdge 1600`、獨立說明行）。
+
 **① 輸入（不加 `capture`）**
 
 ```tsx
@@ -438,6 +441,11 @@ on conflict (id) do nothing;
 
 ⚠️ **不要加 `capture="environment"`** —— iOS 會直接開相機、跳過「選相片」。
 不加的話，iOS 會彈「拍照 / 相片圖庫 / 瀏覽」三選單，符合你「拍照或上傳」的需求。
+
+🔴🔴 **但 `className="sr-only"` 唔可以用**（實測 2026-10-07）：本專案從未用過
+`sr-only`，Tailwind v4 JIT 只為「實際出現過」的 class 生成 CSS ⇒ dev server
+產出的 CSS **完全冇 `.sr-only`** ⇒ 原生 file input 原樣顯示（連
+「未選擇任何檔案」都出埋）。✅ 改用 inline `style`（詳見 §6.4）。
 
 **② 壓縮（必要，不是優化）**
 
@@ -514,9 +522,13 @@ if (failedPhotoCount > 0) {
 |---|---|---|---|
 | **P1** | 項目 3（時間格式）＋ 項目 1（前端收合）＋ 項目 4A（品類必填） | 低 | ✅ **已完成**（commit `bae01f6`） |
 | **P2** | 項目 2（自動同步）＋ **優化 A（只寫有變的行）** | 中 | ✅ **已完成**（見 §5） |
-| **P3** | 項目 4B（拍照上傳） | 中高 | ⬜ 未開始 |
+| **P3** | 項目 4B（拍照上傳） | 中高 | ✅ **已完成**（見 §6） |
 
-**每批之間跑全套測試**（P1 後基線：**1907 tests** ⇒ P2 後：**1947 tests / 0 fail**）。
+**每批之間跑全套測試**（P1 後基線：**1907 tests** ⇒ P2 後：**1947 tests / 0 fail**
+⇒ P3 後：**2196 tests / 0 fail**）。
+
+> ✅ **2026-10-07 已清零**：P3 完成時全庫仍有 4 個 fail，追查後發現**兩個係既有真 bug
+> ＋ 兩個係測試寫得太死**（P3 本身無關）。詳見 §7。
 
 ---
 
@@ -586,6 +598,204 @@ if (failedPhotoCount > 0) {
 所以由 marker 往後切 400–500 字，真實斷言目標可能落在被清空嘅註解區**之外** ⇒
 報一個完全唔存在嘅假 failure。✅ 正解：用括號追蹤搵返 effect 邊界
 （見 `effectDepsAfter()`），或者把窗口放寬到 1200 字。
+
+
+---
+
+## 6. P3 實作記錄（2026-10-07）
+
+### 6.1 交付清單
+
+| 檔案 | 狀態 | 內容 |
+|---|---|---|
+| `src/lib/image-compress-plan.ts` | **新增** | 壓縮**決策邏輯**（零 import，可 `node --test`）。`MAX_UPLOAD_BYTES=200*1024`、`MAX_EDGE=1600`、`QUALITY_LADDER=[0.82,0.72,0.62,0.5]`、`EDGE_LADDER=[1600,1280,1024,800]`、`buildCompressPlan`、`fitWithin`（**永不放大**）、`isWithinLimit`（**嚴格 `<`**）、`humanSize` |
+| `src/lib/image-compress-plan.test.ts` | **新增** | 30 條 |
+| `src/lib/image-compress.ts` | **新增** | 瀏覽器端機械壓縮。`createImageBitmap`（自動 EXIF）→ fallback `<img>`+`createObjectURL`；`renderJpeg` 先填白底再 `drawImage`（PNG 透明 → 白）；**走完梯級仍超標就回 `ok:false`，永不回原檔** |
+| `src/app/api/inventory/receipt-photos/route.ts` | **新增** | `POST`（multipart，server 端**再驗** 200KB／MIME；超標 413、類型 415、缺 bucket 503 `code:BUCKET_MISSING`）；`DELETE`（只刪 `${userId}/` 前綴，**移除失敗只 warn、永遠回 ok**） |
+| `src/app/api/inventory/receipt-photos/url/route.ts` | **新增** | `GET` → `{urls:{path:signedUrl},expiresIn:3600}`。用 `createSignedUrl`（bucket 係 private），**逐條簽**（唔用 batch，免一錯全滅） |
+| `src/lib/expense-inventory.ts` | 改 | `InventoryReceiptInput.photo_paths?`；新增 `sanitizePhotoPaths()`（trim／濾空／濾 `/` 開頭／濾 `..`／去重，**永遠回新陣列**，令 `[]` 保持語意） |
+| `src/app/api/inventory/receipts/route.ts` | 改 | GET 的 `enriched` 帶 `photo_paths`；POST 寫入 `raw_ocr_data.photo_paths` |
+| `src/app/api/inventory/receipts/[id]/route.ts` | 改 | PATCH `if (body.photo_paths !== undefined)`（**唔用 truthiness**）；DELETE 先讀出路徑 → 刪 items → 刪 row → 成功後才刪 Storage 相片，回 `{ok, photosDeleted}` |
+| `src/components/inventory/inventory-view.tsx` | 改 | 見 6.3 |
+| `src/lib/inventory-p3-photo-guard.test.ts` | **新增** | 39 條原始碼掃描守衛 |
+
+**Supabase 一次性設定**（expenseRecorder 專案，`fjvfvpedklhdenavbcjg`）：
+```sql
+insert into storage.buckets (id, name, public)
+values ('receipt-photos', 'receipt-photos', false)   -- private
+on conflict (id) do nothing;
+```
+⚠️ 因為 route 用 `getExpenseSupabaseClient()`（**service_role**）⇒ 繞過 RLS ⇒
+**唔需要寫任何 Storage RLS policy**。
+
+### 6.2 三態契約（本批最易踩嘅陷阱）
+
+| 前端送 | 結果 | 判斷 |
+|---|---|---|
+| 唔送 `photo_paths` | 保留原有 | ✅ 唔想動相片 |
+| 送 `photo_paths: []` | **清空** | ✅ 商家刪光相片 |
+| 送新陣列 | 覆蓋 | ✅ 加／減相片 |
+
+🔴 一定要寫成 `if (body.photo_paths !== undefined)`。
+寫 `if (body.photo_paths)` 會令「**刪光相片**」靜默失效（空陣列係 falsy）。
+→ 2 條守衛測試專門盯呢一點。
+
+### 6.3 前端要點
+
+- `useSignedPhotoUrls(account, paths)`：deps 用**join 出嚟嘅字串**，
+  唔可以用 `paths`（每次 render identity 都變 ⇒ 無限重簽）。
+- 縮圖用 **單行橫向捲動**（`flex-nowrap overflow-x-auto`）：高度**永遠一行**，
+  唔受張數影響。用 `flex-wrap` 的話第 4–5 張就會把下面嘅品項／合計推出可視區。
+- 收據卡片只顯示 `📷 N` badge，**唔喺列表度簽縮圖**（否則一頁簽 N 條 URL）。
+- 儲存流程：**先上傳相片** → `photoPaths = [...form.photo_paths, ...upload.paths]`
+  → 永遠送 `photo_paths`。`failed > 0` ⇒ `window.alert("收據已儲存，但有 N 張相片上傳失敗…")`。
+  **收據永遠照存**（J 明確要求）。
+
+### 6.4 🔴 兩個實測推翻設計嘅坑
+
+**① `sr-only` 完全冇效（最陰險）**
+
+本專案**從未**用過 `sr-only`。Tailwind v4 係 JIT，**只為實際出現過嘅 class 生成 CSS**
+⇒ 檢查 dev server 產出嘅 CSS：`sr-only found: false`
+⇒ 個原生 file input **原樣顯示**（連「未選擇任何檔案」都出埋），
+但**代碼睇落完全正確**。✅ 改用 inline style：
+
+```jsx
+style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
+         overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
+```
+
+⚠️ **我當時嘅測試係「錯」嘅**：只 assert `className.includes("sr-only")` ⇒ 綠燈但功能爆。
+→ 已改成**量實際 bounding box**（`visW<=2 && visH<=2`）+ assert 唔可以出現「未選擇任何檔案」。
+
+**② modal 高度係硬約束：所有說明文字必須併入標題行**
+
+收據 modal = `max-h-[92vh] overflow-y-auto`，上面已有供應商／品類／日期／付款方式／付款狀態五區。
+第一版寫咗三段獨立說明（移除提示／虛線框含義／200KB）＝ **+48px**，
+令相片縮圖 bottom **922px** > 面板 bottom **864px** ⇒ **整行被裁切**。
+
+✅ 最終做法（零額外高度）：
+- 「付款狀態」提示 → 移到 label 同一行（`flex-wrap items-baseline justify-between`）
+- 「單據照片」提示 → 同樣併入 label 行：
+  - 冇相：`自動壓縮至 200KB 以下`
+  - 有相：`共 N 張・虛線＝未上傳`
+- 縮圖由 `h-14 w-14` 收窄到 **`h-12 w-12`**
+
+實測（1280×900，最差情況）：縮圖 bottom **892**、面板 bottom **864** ⇒
+越界 **28px**（48px 高縮圖見到 20px）。已收窄至接受範圍。
+
+### 6.5 驗證
+
+| 項目 | 結果 |
+|---|---|
+| `node --test "src/**/*.test.ts"` | **2195 tests / 2191 pass / 4 fail**（4 個係既有，見 §3 註） |
+| `tsc --noEmit` | **0 error** |
+| ESLint（16 個 P3 檔案） | **0 error / 0 warning** |
+| 真實 Chrome headless（2 情境） | **24 / 24 PASS** |
+
+實機驗證涵蓋：
+- 上傳掣 ≥40px（實測 52px）、`accept=image/*`、`multiple`、
+  **冇 `capture`**（保住 iOS「選相片」）、file input **實際 1×1**、
+  冇原生「未選擇任何檔案」文案
+- 揀相 → 壓縮 → 待上傳縮圖（虛線框）+ 大小標示 + ✕ 移除
+- 已存相片 → **signed URL** 縮圖 ×2 + ✕ 移除
+- **儲存 payload 只帶剩下的 1 條**（`["66123456/2026-10/def.jpg"]`）
+  ⇒ 證明「`[]` 清空」同「部分移除」都正確（唔係 `undefined`、亦唔係 2）
+- 兩個情境都 **0 個真實 page error**（已濾 mock env 噪音）
+
+截圖：`docs/mockups/p3-photo-verify-2026-10-07/`（4 張）。
+
+### 6.6 ⚠️ 尚未做（部署前必做）
+
+**Bucket 未建立。** 到生產環境要**先**在 expenseRecorder 專案執行 §6.1 嘅 SQL，
+否則上傳會回 `503 { code:"BUCKET_MISSING" }`。
+（端點已設計成優雅降級：收據照存，只係冇相片。）
+
+
+---
+
+## 7. 清零既有 4 個 fail（2026-10-07 · J 指示）
+
+J 指示：「4 個既有 fail 修掉再一起上」。
+
+先用 `git stash -u` 暫存全部 P3 改動、重跑 `main` 確認：**4 個 fail 確實係既有**。
+追查後分成兩類 —— **2 個係真 bug、2 個係測試寫得太死**。
+
+### 7.1 🔴🔴 真 bug：duplicate-key 補插路徑會靜默清空商家資料
+
+**位置**：`src/lib/inventory-products.ts` 嘅 `duplicate key|unique constraint` 分支。
+
+**病徵**：呢條路徑原本只 `select("id, baseline_unit_cost")`，然後直接寫
+`last_purchase_date: row.last_date` / `last_supplier: row.last_supplier` / `category: row.category`
+—— **冇**主路徑嗰個 `?? 現有值` 降級。
+
+而 `row.last_date` / `row.last_supplier` / `row.category` 係可以係 **`null`**
+（該品項今次掃到嘅收據冇日期／供應商／品類）。
+
+⇒ 一旦走 duplicate-key 補插（兩部機同時新建同名品項、或同步撞名），
+會把商家已經填好嘅 `last_supplier` / `category` **靜默清空成 `null`** —— **資料無聲損失**。
+
+**為何之前冇人發現**：主路徑（`hit` 存在）行為正確，而 duplicate-key 只在併發／撞名時才走，
+平常測試路徑踩唔到。呢個正是 P2 文件自己寫過嘅警語（「兩行一定要同 update payload 對齊」）的漏網之魚。
+
+**修法**：
+```ts
+.select("id, baseline_unit_cost, last_purchase_date, last_supplier, category")  // 補齊三欄
+...
+const dupNextLastDate =
+  row.last_date ?? (dupRows?.last_purchase_date as string | null | undefined) ?? null;
+const dupNextLastSupplier = row.last_supplier ?? (dupRows?.last_supplier ...) ?? null;
+const dupNextCategory = row.category ?? (dupRows?.category ...) ?? null;
+```
+
+**回歸守衛**（`inventory-contract-guard.test.ts`）：
+「🔴 duplicate-key 路徑唔可以用 null 覆蓋既有嘅日期／供應商／品類」——
+① select 必須包含三個欄位；② update payload 唔可以直接寫 `col: row.x`；
+③ 至少 3 個 `row.x ??` 降級。
+
+✅ **已驗證守衛有效**：把修正暫時還原成舊寫法，守衛即刻報
+`🔴 duplicate-key 分支要 select last_purchase_date（…會用 null 覆蓋商家資料）`。
+
+### 7.2 測試寫得太死（守「代碼字串」而非「行為」）
+
+| # | 測試 | 問題 | 修法 |
+|---|---|---|---|
+| 1 | `InventoryTable 嘅寫入要通知外層（onMutated）` | 斷言「**剛好 4 個** `onMutated?.()`」，但 `runSync` 嘅 `silent ? : ` 兩分支各要 notify ⇒ 實際 5 個 | 改守「覆蓋範圍」：≥4 個，而且 `runSync` / `doDelete` 各自一定要有、`runSync` 兩分支都要有、兩個 modal `onSaved` 都要有 |
+| 2 | `duplicate-key …（用 hasBase 判斷）` | 斷言字串 `/hasBase/` —— 實作已改用共用 helper `shouldWriteBaseline()` + `writeBaseline` 變數 | 改守「兩條路徑都要經 `shouldWriteBaseline()`」＋「唔可以再用 `Number(x) > 0`」 |
+| 3 | `🔴 syncFromReceipts 只喺 baseline 係 NULL 時先寫入` | 斷言 `hit.baseline_unit_cost !== null && …` 逐字；實作已變 `shouldWriteBaseline(hit?.baseline_unit_cost, …)`（有 `?.`）；另外 `const baselinePatch =` 實際有型別標註 `const baselinePatch: Record<string, unknown> =` | 改守行為：必須經 `shouldWriteBaseline(hit?.…)`；`baselinePatch` 用 `[:=]` 容忍型別標註 |
+| 4 | `🔴 一鍵同步要打同一支 sync API` | 斷言整句 `body: JSON.stringify({ store: merchantId, account })` —— P2 加咗 `mode` 就爆，但 `store`/`account` 一直齊、**契約冇壞** | 改為逐個必要欄位檢查（`store: merchantId`、`account`），唔理次序／額外欄位 |
+
+**⭐ 通則**：
+> 守衛測試要守「**行為不變量**」（缺咗會出咩事），唔係「某一行代碼長點樣」。
+> 寫死一整句代碼 ⇒ 任何無害重構都會爆，而**真正壞掉時反而可能唔爆**。
+
+### 7.3 新工具：`functionBody(src, fnName)`
+
+呢輪為守衛測試加咗一個抽函式體嘅 helper（`inventory-contract-guard.test.ts`）。
+
+**為何需要**：唔可以「搵第一個 `{`」—— 好多寫法嘅**參數**本身就係 destructure／型別字面量：
+```ts
+const runSync = useCallback(async ({ mode, silent }: { mode: "auto" | "manual"; silent: boolean }) => {
+```
+第一個 `{` 會命中 `{ mode, silent }` ⇒ 只拿到參數，唔係函式體。
+
+✅ **策略**：由宣告處往後，逐個 `{` 試配對（跳過字串／模板），**取內容最長者**
+—— 參數／型別一定短過真正嘅函式體。搵到 >100 字嘅候選就收工。
+
+**踩過嘅坑**：
+1. 🔴 **檔案係 CRLF**：`stripComments()` 用 `^[ \t]*//.*$` 多行模式對唔上 `\r\n`
+   ⇒ 要**先 `replace(/\r\n/g, "\n")`**。
+2. 🔴 唔可以「搵到候選就 `break`」用「>40 字」門檻 —— `{ mode, silent }: { mode: "auto" | "manual"; silent: boolean }`
+   本身就 **44 字**，會誤中參數。用「最長者勝」+ 較高門檻。
+
+### 7.4 驗證
+
+| 項目 | 結果 |
+|---|---|
+| `node --test "src/**/*.test.ts"` | **2196 tests / 298 suites / 0 fail** ✅ |
+| `tsc --noEmit` | **0 error** |
+| ESLint（`inventory-products.ts` + 守衛測試） | **0 error / 0 warning** |
+| 回歸守衛有效性 | 暫時還原 bug ⇒ 守衛**即刻報錯**（已實測） |
 
 
 ---

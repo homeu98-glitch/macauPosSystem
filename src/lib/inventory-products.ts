@@ -379,10 +379,25 @@ export async function syncFromReceipts(
       if (iErr2) {
         // 名稱衝突（unique）→ 視為已存在，改走 update
         if (/duplicate key|unique constraint/i.test(iErr2.message)) {
-          // ⚠️ 呢條路徑用 ilike 而唔係 id，所以要用 select 拎返 baseline 做判斷
+          /*
+           * ⚠️ 呢條路徑用 ilike 而唔係 id，所以要用 select 拎返現有值：
+           *   ① baseline_unit_cost → 決定要唔要鎖基準價
+           *   ② last_purchase_date / last_supplier / category → 做 `?? 保留舊值` 降級
+           *
+           * 🔴🔴 2026-10-07 修正（真 bug，唔止係測試問題）：
+           *    呢條路徑原本只 select `id, baseline_unit_cost`，然後直接寫
+           *    `last_purchase_date: row.last_date` 等（冇 `?? 現有值`降級）。
+           *    但 `row.last_date` / `row.last_supplier` / `row.category` 係可以係 **null**
+           *    （該品項今次掃到嘅收據冇日期／供應商／品類）。
+           *    主 update 路徑用 `nextLastDate = row.last_date ?? hit?.last_purchase_date ?? null`
+           *    刻意保留舊值 —— 兩條路徑**行為唔一致**：
+           *      ⇒ 走 duplicate-key 補插時，會把商家填好嘅 `last_supplier` / `category`
+           *        **靜默清空成 null**（資料無聲損失）。
+           *    ✅ 修法：呢度一樣 select 齊三個欄位，並用同主路徑逐字一致嘅 `?? 保留` 降級。
+           */
           const { data: dupRows, error: dSelErr } = await macau
             .from("inv_products")
-            .select("id, baseline_unit_cost")
+            .select("id, baseline_unit_cost, last_purchase_date, last_supplier, category")
             .eq("store_id", storeId)
             .ilike("name", row.name)
             .limit(1)
@@ -401,13 +416,20 @@ export async function syncFromReceipts(
             dupRows?.baseline_unit_cost as number | null | undefined,
             row.first_unit_cost,
           );
+          // ⚠️ 必須同上面主路徑嘅 `nextLastDate` / `nextLastSupplier` / `nextCategory` 一致
+          const dupNextLastDate =
+            row.last_date ?? (dupRows?.last_purchase_date as string | null | undefined) ?? null;
+          const dupNextLastSupplier =
+            row.last_supplier ?? (dupRows?.last_supplier as string | null | undefined) ?? null;
+          const dupNextCategory =
+            row.category ?? (dupRows?.category as string | null | undefined) ?? null;
           const { error: uErr2 } = await macau
             .from("inv_products")
             .update({
               avg_unit_cost: avg,
-              last_purchase_date: row.last_date,
-              last_supplier: row.last_supplier,
-              category: row.category,
+              last_purchase_date: dupNextLastDate,
+              last_supplier: dupNextLastSupplier,
+              category: dupNextCategory,
               ...(writeBaseline
                 ? { baseline_unit_cost: row.first_unit_cost, baseline_at: row.first_date }
                 : {}),

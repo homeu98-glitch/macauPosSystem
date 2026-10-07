@@ -4,6 +4,7 @@ import {
   buildReceiptItems,
   resolveExpenseUserId,
   resolveMerchantId,
+  sanitizePhotoPaths,
   stripQuantityUnit,
   type InventoryReceiptInput,
 } from "@/lib/expense-inventory";
@@ -221,6 +222,21 @@ export async function GET(request: Request) {
        *    舊資料／未填時回 null，前端要 fallback 只出日期。
        */
       created_at: typeof src?.created_at === "string" ? src.created_at : null,
+      /*
+       * 🔴 2026-10-07（P3）：相片路徑（`raw_ocr_data.photo_paths`）。
+       *
+       * 呢度一定要**由 raw_ocr_data 抽出黎做頂層欄位**，唔可以只靠
+       * `raw_ocr_data` 本身：前端 `Receipt` 型別嘅 `raw_ocr_data` 只宣告咗
+       * receipt_number／payment_method／payment_status／category 四個 key，
+       * 我哋唔想喺每個使用點都做型別拓寬。
+       *
+       * ⚠️ 語意：呢度回嘅係 **Storage path**，唔係可直接 `<img src>` 嘅 URL。
+       *    Bucket 係 private ⇒ 要經 `/api/inventory/receipt-photos/url` 換 signed URL
+       *    （見該端點）。唔可以當佢係公開 URL 用。
+       */
+      photo_paths: sanitizePhotoPaths(
+        (src?.raw_ocr_data as Record<string, unknown> | null | undefined)?.photo_paths,
+      ),
     };
   });
 
@@ -284,6 +300,14 @@ export async function POST(request: Request) {
       payment_method: normalizePaymentMethod(body.payment_method),
       payment_status: normalizePaymentStatus(body.payment_status),
       input_method: "pos_manual",
+      /*
+       * 2026-10-07（P3）：收據相片路徑 —— 存 expenseRecorder Storage。
+       * 🔴 相片係**非必填**（J 拍板）。前端可能一張都冇（`[]`），
+       *    亦可能已上傳好幾張先至儲存收據。
+       *    `raw_ocr_data` 本來就係 JSONB ⇒ 加呢個 key **零 migration**。
+       * ⚠️ 呢度係 POST（新增），冇「保留原有」嘅問題 ⇒ 直接寫清洗後嘅陣列。
+       */
+      photo_paths: sanitizePhotoPaths(body.photo_paths),
     },
   };
 

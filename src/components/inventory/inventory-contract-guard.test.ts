@@ -29,11 +29,76 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..", "..");
 
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  // 🔴 先統一 LF：本專案檔案係 CRLF，唔統一嘅話 `^[ \t]*//.*$` 對唔上。
+  return src
+    .replace(/\r\n/g, "\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
 }
 
 function read(rel: string): string {
   return stripComments(readFileSync(path.join(ROOT, rel), "utf8"));
+}
+
+/** 由 `{` 開始搵配對嘅 `}`，跳過字串／模板字面量。回 index 或 -1。 */
+function matchBrace(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i += 1) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i += 1; i < src.length; i += 1) {
+        if (src[i] === "\\") i += 1;
+        else if (src[i] === c) break;
+      }
+      continue;
+    }
+    if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * 抽某個函式嘅**函式體**（含最外層 `{}`）。
+ *
+ * 🔴 為何唔可以「搵第一個 `{`」：
+ *    好多寫法嘅**參數**本身就係 destructure 或型別字面量，例如
+ *      `const runSync = useCallback(async ({ mode, silent }: { ... }) => {`
+ *      `function f(): Promise<{ id: string }> {`
+ *    第一個 `{` 會命中參數 ⇒ 只拿到參數，唔係函式體。
+ *
+ * ✅ 策略：由宣告處往後，逐個 `{` 試配對，**取內容最長者**。
+ *    參數／型別一定短過真正嘅函式體 ⇒ 最長者就係函式體。
+ *    一旦搵到明顯係函式體嘅候選（>100 字）就收工，避免掃到下一個函式。
+ *
+ * ⚠️ `functionBody(table, "runSync")` 之類嘅**字串**比較用 `indexOf` 就可以，
+ *    唔需要呢個 helper。
+ */
+function functionBody(src: string, fnName: string, from = 0): string {
+  const decl = src.indexOf(fnName, from);
+  if (decl === -1) return "";
+  let best = "";
+  for (let i = decl; i < src.length; i += 1) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i += 1; i < src.length; i += 1) {
+        if (src[i] === "\\") i += 1;
+        else if (src[i] === c) break;
+      }
+      continue;
+    }
+    if (c !== "{") continue;
+    const close = matchBrace(src, i);
+    if (close === -1) continue;
+    const body = src.slice(i, close + 1);
+    if (body.length > best.length) best = body;
+    i = close; // 跳過整個候選，唔好掃入去
+    if (best.length > 100) break;
+  }
+  return best;
 }
 
 const VIEW = "src/components/inventory/inventory-view.tsx";
@@ -557,8 +622,42 @@ describe("庫存表兩個 instance 唔可以唔同步", () => {
   it("InventoryTable 嘅寫入要通知外層（onMutated）", () => {
     const table = read("src/components/inventory/inventory-table.tsx");
     assert.ok(/onMutated\?: \(\) => void/.test(table));
-    // 四個寫入點：從收據同步 / 刪除 / 新增編輯 / 盤點
-    assert.equal((table.match(/onMutated\?\.\(\)/g) ?? []).length, 4);
+    /*
+     * 🔴 2026-10-07 修正：原本斷言「**剛好 4 個** `onMutated?.()`」，但實際有 5 個。
+     *    原因：`runSync` 內嘅 `silent ? … : …` 兩個分支**各自**要 notify
+     *    （自動同步／手動同步都要），所以同一個「寫入點」佔兩行。
+     *
+     * ⚠️ 為何唔應該改代碼去迎合數字：
+     *    抽走任何一個分支嘅 notify，就會有一條路徑改完庫存但**主頁庫存表唔重載**
+     *    （J 2026-10-07 報過嘅症狀）。呢度要守嘅係「行為」——
+     *    即係「每個真係改到庫存嘅地方都有 notify」，唔係一個魔術數字。
+     *
+     * ✅ 改為守「覆蓋範圍」：4 個語意寫入點 = 同步（silent/非 silent 各一）／
+     *    刪除／新增編輯／盤點。
+     */
+    assert.ok(
+      (table.match(/onMutated\?\.\(\)/g) ?? []).length >= 4,
+      "最少要有 4 個 notify 呼叫（同步 / 刪除 / 新增編輯 / 盤點）",
+    );
+    // 逐個負責真寫入嘅函式都要有 notify —— 唔可以只數總數
+    for (const fn of ["runSync", "doDelete"]) {
+      const body = functionBody(table, fn);
+      assert.ok(
+        /onMutated\?\.\(\)/.test(body),
+        `🔴 ${fn}() 改完庫存一定要 notify 外層，否則主頁庫存表唔會重載`,
+      );
+    }
+    // 同步嘅兩個分支都要 notify（唔可以只 notify 其中一邊）
+    const syncBody = functionBody(table, "runSync");
+    assert.ok(
+      (syncBody.match(/onMutated\?\.\(\)/g) ?? []).length >= 2,
+      "🔴 runSync 嘅 silent 同非 silent 兩條分支都要 notify（自動／手動同步都會改庫存）",
+    );
+    // 兩個 modal 嘅 onSaved 都要 notify
+    assert.ok(
+      (table.match(/onSaved=\{\(\) => \{[\s\S]*?onMutated\?\.\(\)[\s\S]*?\}\}/g) ?? []).length >= 2,
+      "ProductFormModal / StocktakeModal 嘅 onSaved 都要 notify",
+    );
   });
 });
 
@@ -587,10 +686,27 @@ describe("品項分析：基準價（首次進貨單價）", () => {
 
   it("🔴 syncFromReceipts 只喺 baseline 係 NULL 時先寫入（永不覆寫）", () => {
     const lib = read(PRODUCTS_LIB);
+
+    /*
+     * 🔴 2026-10-07 修正：原本斷言字面字串
+     *    `hit.baseline_unit_cost !== null && hit.baseline_unit_cost !== undefined`，
+     *    但實作已抽成共用 helper `shouldWriteBaseline(hit?.baseline_unit_cost, …)`
+     *    （而且有 optional chaining `hit?.`）。
+     *    ⇒ 舊斷言係喺度守「一行特定嘅代碼字串」，代碼一重構就爆，
+     *      但**真正嘅不變量（永不覆寫）其實一直守得住**。
+     *
+     * ✅ 改為守行為：
+     *    ① 主 update 路徑必須經 `shouldWriteBaseline()` 判斷；
+     *    ② 冇任何 update 會「無條件」寫 `baseline_unit_cost`；
+     *    ③ `shouldWriteBaseline` 本身只認 null／undefined（見另一條測試）。
+     */
+    const mainPath = functionBody(lib, "const writeBaseline");
+    assert.ok(mainPath.length > 0, "搵唔到主 update 路徑嘅 writeBaseline 判斷");
     assert.ok(
-      /hit\.baseline_unit_cost !== null && hit\.baseline_unit_cost !== undefined/.test(lib),
-      "update 分支一定要先睇 baseline 係咪 NULL，唔可以無條件覆寫",
+      /shouldWriteBaseline\s*\(\s*hit\?\.baseline_unit_cost/.test(lib),
+      "update 分支一定要先睇 baseline 係咪 NULL（用 shouldWriteBaseline + 現有值），唔可以無條件覆寫",
     );
+
     // 🔴 `row.first_unit_cost` 只可以出現喺 **insert**（全新品首次建立），
     //    或者喺有守衛嘅 update 之內。
     //    毫無條件咁寫入 update() ⇒ 每次同步都覆寫 ⇒ 基準會飄移、已報告嘅金額會自己郁。
@@ -599,9 +715,9 @@ describe("品項分析：基準價（首次進貨單價）", () => {
     for (const call of updateCalls) {
       if (!/baseline_unit_cost:\s*row\.first_unit_cost/.test(call)) continue;
       assert.ok(
-        /(hasBase\s*\?|baselinePatch|\.\.\.baselinePatch)/.test(call),
+        /(writeBaseline\s*\?|baselinePatch|\.\.\.baselinePatch)/.test(call),
         "🔴 update() 之內唔可以無條件寫 baseline_unit_cost: row.first_unit_cost —— " +
-          "咁每次同步都會覆寫，已報告咗嘅上漲金額會自己郁（必須用 hasBase / baselinePatch 守衛）",
+          "咁每次同步都會覆寫，已報告咗嘅上漲金額會自己郁（必須經 writeBaseline / baselinePatch 守衛）",
       );
     }
     // 允許嘅唯一無條件位置：insert（brand-new 品項，當時就係首次進貨）
@@ -610,13 +726,98 @@ describe("品項分析：基準價（首次進貨單價）", () => {
       "insert 分支應該直接寫入首次進貨單價做基準",
     );
     // 兩條 update 路徑都要有守衛
-    assert.ok(/const baselinePatch =/.test(lib), "要有 baselinePatch 呢個共用守衛變數");
-    assert.ok(/\.\.\.baselinePatch/.test(lib), "update 分支要用 ...baselinePatch 注入");
+    assert.ok(
+      /const baselinePatch[:=]/.test(lib),
+      "要有 baselinePatch 呢個共用守衛變數（⚠️ 唔可以寫死 `const baselinePatch =`，實作有型別標註）",
+    );
+    assert.ok(/\.\.\.baselinePatch/.test(lib), "主 update 分支要用 ...baselinePatch 注入");
   });
 
   it("duplicate-key 補插嗰條路徑都要守住 baseline（用 hasBase 判斷）", () => {
     const lib = read(PRODUCTS_LIB);
-    assert.ok(/hasBase/.test(lib), "ilike 補插路徑要先查返 baseline 再決定寫唔寫");
+    /*
+     * 🔴 2026-10-07 修正：原本只斷言字串 `/hasBase/`，但代碼用嘅係
+     *    `shouldWriteBaseline()`（共用 helper）+ `writeBaseline` 變數名。
+     *    ⇒ 測試係喺度守「一個特定嘅變數名」，而唔係守「行為」。
+     *
+     * ✅ 改為守真正嘅不變量：
+     *    ① 兩條 update 路徑都必須經過 `shouldWriteBaseline()` 判斷；
+     *    ② 該 helper 只認 `null`／`undefined`（唔可以 `Number(x) > 0`，
+     *       因為基準價可以合法地係 0）。
+     */
+    const dupBody = functionBody(lib, "duplicate key|unique constraint");
+    assert.ok(dupBody.length > 0, "搵唔到 duplicate-key 分支");
+
+    // ① duplicate-key 分支一定要有 baseline 守衛，唔可以無條件寫
+    assert.ok(
+      /shouldWriteBaseline\s*\(/.test(dupBody),
+      "ilike 補插路徑要先查返 baseline 再決定寫唔寫（用 shouldWriteBaseline 判斷）",
+    );
+    // ② 而且寫入嘅 baseline 一定要由該判斷閘住（唔可以直接寫死）
+    assert.ok(
+      /writeBaseline[\s\S]{0,400}baseline_unit_cost/.test(dupBody),
+      "🔴 duplicate-key 分支寫 baseline_unit_cost 之前一定要過 writeBaseline 判斷",
+    );
+    // ③ 唔可以再出現舊寫法 `Number(...) > 0`
+    assert.ok(
+      !/Number\([^)]*baseline_unit_cost[^)]*\)\s*>\s*0/.test(lib),
+      "🔴 唔可以用 `Number(x) > 0` 判斷有冇基準（Number(null)=0、基準價可以係 0）",
+    );
+    // ④ 兩條 update 路徑（主路徑 + duplicate-key）都要用到同一個 helper
+    assert.ok(
+      (lib.match(/shouldWriteBaseline\s*\(/g) ?? []).length >= 2,
+      "主 update 路徑同 duplicate-key 路徑都要用同一個 helper（否則行為會漂移）",
+    );
+  });
+
+  /*
+   * 🔴🔴 2026-10-07 真實 bug 回歸守衛（唔止係測試問題）。
+   *
+   * 病徵：`duplicate key` 補插路徑**只** select `id, baseline_unit_cost`，
+   *      然後直接寫 `last_purchase_date: row.last_date` / `last_supplier: row.last_supplier`
+   *      / `category: row.category` —— 冇主路徑嗰個 `?? 現有值` 降級。
+   *      而 `row.*` 係可以係 `null`（該品項今次掃到嘅收據冇日期／供應商／品類）。
+   *      ⇒ 一旦走 duplicate-key 補插，會把商家填好嘅供應商／品類**靜默清空成 null**。
+   *
+   * ✅ 修法：該路徑一樣 select 齊三個欄位，並用同主路徑一致嘅 `?? 保留` 降級。
+   */
+  it("🔴 duplicate-key 路徑唔可以用 null 覆蓋既有嘅日期／供應商／品類", () => {
+    const lib = read(PRODUCTS_LIB);
+    const dupBody = functionBody(lib, "duplicate key|unique constraint");
+    assert.ok(dupBody.length > 0, "搵唔到 duplicate-key 分支");
+
+    // ① 要 select 齊做降級判斷所需嘅欄位（唔可以只拎 baseline）
+    const selMatch = dupBody.match(/\.select\(([^)]*)\)/);
+    assert.ok(selMatch, "duplicate-key 分支要先 select 出現有值");
+    const selected = selMatch[1];
+    for (const col of ["baseline_unit_cost", "last_purchase_date", "last_supplier", "category"]) {
+      assert.ok(
+        new RegExp(`\\b${col}\\b`).test(selected),
+        `🔴 duplicate-key 分支要 select \`${col}\`（否則冇得做 \`?? 保留舊值\` 降級 ⇒ 會用 null 覆蓋商家資料）`,
+      );
+    }
+
+    // ② update payload 唔可以直接用 `row.x`（要用帶 `??` 降級嘅變數）
+    const updMatch = dupBody.match(/\.update\(\{([\s\S]*?)\}\)/);
+    assert.ok(updMatch, "搵唔到 duplicate-key 嘅 update payload");
+    const payload = updMatch[1];
+    for (const col of ["last_purchase_date", "last_supplier", "category"]) {
+      const direct = new RegExp(`\\b${col}\\s*:\\s*row\\.`).test(payload);
+      assert.ok(
+        !direct,
+        `🔴 duplicate-key update 唔可以寫 \`${col}: row.x\` —— ` +
+          "`row.x` 可以是 null，會靜默清空商家已填嘅資料。要同主路徑一樣用 `row.x ?? 現有值 ?? null`。",
+      );
+      assert.ok(
+        new RegExp(`${col}\\s*:\\s*\\w+`).test(payload),
+        `duplicate-key update 仍然要寫 \`${col}\`（只係唔可以直接用 row.*）`,
+      );
+    }
+    // ③ 至少要有 3 個 `??` 降級（三個欄位各一）
+    assert.ok(
+      (dupBody.match(/row\.\w+\s*\?\?/g) ?? []).length >= 3,
+      "🔴 duplicate-key 分支要為日期／供應商／品類各做一次 `row.x ?? 現有值` 降級",
+    );
   });
 
   it("基準要鎖『最早』嗰筆，並且揀價低者（保守，令漲幅唔誇大）", () => {
@@ -852,7 +1053,21 @@ describe('品項分析：UI 契約', () => {
       /\/api\/inventory\/products\/sync-from-receipts/.test(view),
       '🔴 同步只有一個寫入路徑（基準價鎖定時機唯一真源），要打同一支 API',
     );
-    assert.ok(/body: JSON\.stringify\(\{ store: merchantId, account \}\)/.test(view), '要帶 store + account');
+    /*
+     * 🔴 2026-10-07 修正：原本斷言**整句字面值**
+     *    `/body: JSON\.stringify\(\{ store: merchantId, account \}\)/`
+     *    P2 加咗 `mode`（auto/manual）之後就爆 —— 但 `store` / `account`
+     *    其實一直都齊，**契約冇壞**，只係斷言太死。
+     *
+     * ✅ 改為逐個必要欄位檢查（唔理次序、唔理額外欄位）：
+     *    `store` / `account` 係鑑權 + 租戶隔離嘅必要參數，
+     *    缺任何一個都會令 server 端拒絕或寫錯店。
+     */
+    const bodyMatch = view.match(/body:\s*JSON\.stringify\(\{([^}]*)\}\)/);
+    assert.ok(bodyMatch, '要見到 sync 嘅 body 送出（JSON.stringify）');
+    const fields = bodyMatch[1];
+    assert.ok(/\bstore\b\s*:\s*merchantId/.test(fields), '要帶 store（租戶隔離，缺咗會寫錯店）');
+    assert.ok(/\baccount\b/.test(fields), '要帶 account（POS 終端鑑權，缺咗會 401）');
   });
 
   it('同步進行中要 disable 掣（防止連按造成重複同步）', () => {

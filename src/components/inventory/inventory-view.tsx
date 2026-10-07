@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { loadAuthSession, loadPosLocalSettings, normalizePosLocalSettings, savePosLocalSettings } from "@/lib/storage";
 import type { PosLocalSettings } from "@/lib/types";
@@ -24,6 +24,8 @@ import { InventoryTable } from "./inventory-table";
 import { ItemAnalysisView } from "./item-analysis-view";
 import { InventorySettingsPanel, type Supplier } from "./inventory-settings-panel";
 import { formatReceiptStamp, isBackdatedReceipt, receiptStampLabel } from "@/lib/receipt-timestamp";
+import { compressImage } from "@/lib/image-compress";
+import { humanSize } from "@/lib/image-compress-plan";
 
 type ReceiptItem = {
   id: string;
@@ -54,6 +56,14 @@ type Receipt = {
    * ⚠️ 舊資料／未部署新版 API 時可能係 `undefined` ⇒ 顯示降級為只出日期。
    */
   created_at?: string | null;
+  /**
+   * 收據相片（Storage path，**唔係 URL**）。
+   *
+   * 由 `/api/inventory/receipts` GET 抽自 `raw_ocr_data.photo_paths`。
+   * ⚠️ bucket 係 private ⇒ 唔可以直接 `<img src={path}>`，
+   *    要經 `/api/inventory/receipt-photos/url` 換 signed URL（見 `ReceiptPhotos`）。
+   */
+  photo_paths?: string[];
   items: ReceiptItem[];
 };
 
@@ -109,6 +119,24 @@ type FormState = {
   payment_method: string;
   payment_status: string;
   items: FormItem[];
+  /**
+   * 已上傳成功嘅相片路徑（expenseRecorder Storage）。
+   *
+   * 🔴 只放**已經上傳成功**嘅 path —— 未上傳完嘅係 `pendingPhotos`（本地 blob），
+   *    兩者分開令「儲存收據」唔使等相片。
+   * 🔴 三態語意：提交時**一定**會帶 `photo_paths`（可能係 `[]`）。
+   *    帶 `[]` = 商家刪光相片，server 要覆蓋成空（見 PATCH route 嘅 `!== undefined`）。
+   */
+  photo_paths: string[];
+};
+
+/** 本地待上傳相片（已壓縮、未上傳）。`previewUrl` 係 objectURL，用完要 revoke。 */
+type PendingPhoto = {
+  id: string;
+  blob: Blob;
+  previewUrl: string;
+  /** 壓縮後大小（byte）。顯示用 + 上傳前把關。 */
+  size: number;
 };
 
 function emptyForm(paymentMethods: PaymentMethodDef[]): FormState {
@@ -122,6 +150,7 @@ function emptyForm(paymentMethods: PaymentMethodDef[]): FormState {
     payment_method: paymentMethods[0]?.code ?? "on_delivery",
     payment_status: "unpaid",
     items: [{ name: "", unit_price: "", quantity: "1", unit: "" }],
+    photo_paths: [],
   };
 }
 
@@ -143,7 +172,169 @@ function formFromReceipt(r: Receipt): FormState {
           unit: it.quantity_unit ?? "",
         }))
       : [{ name: "", unit_price: "", quantity: "1", unit: "" }],
+    photo_paths: r.photo_paths ?? [],
   };
+}
+
+/**
+ * 把 Storage path 換成 signed URL（private bucket，唔可以直接 `<img src>`）。
+ *
+ * 🔴 為何唔喺 GET `/api/inventory/receipts` 就簽好？
+ *   清單可能有幾十張收據 × 每張幾張相 ⇒ 幾百次簽名呼叫，但商家根本冇打開睇。
+ *   而且 signed URL 有 TTL（1 小時）⇒ 擺喺清單資料度會過期。
+ *   ⇒ 按需簽名（打開相片檢視器嘅一刻）。
+ *
+ * ⚠️ 簽唔到嘅 path **唔會出現喺回傳 map** ⇒ 呼叫方要自己出「無法載入」佔位，
+ *    唔可以當佢係空白（否則商家以為冇相）。
+ */
+function useSignedPhotoUrls(account: string | null, paths: string[]) {
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  /** path 排序後串埋做 key，避免 array identity 每次都變而無限重跑。 */
+  const key = paths.join("\u0000");
+
+  useEffect(() => {
+    if (!account || paths.length === 0) {
+      setUrls({});
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/inventory/receipt-photos/url?account=${encodeURIComponent(account)}&paths=${encodeURIComponent(paths.join(","))}`,
+        );
+        const json = (await res.json()) as { ok?: boolean; urls?: Record<string, string> };
+        if (cancelled) return;
+        setUrls(json.ok && json.urls ? json.urls : {});
+      } catch {
+        if (!cancelled) setUrls({});
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // 🔴 deps 用 `key`（字串）而唔係 `paths`（陣列）：陣列每次 render 都係新 identity
+    //    ⇒ 直接放 `paths` 會令 effect 每次都重跑 = 無限請求迴圈。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, key]);
+
+  return { urls, loading };
+}
+
+/**
+ * 已存相片縮圖列（讀取用，private bucket ⇒ 要 signed URL）。
+ *
+ * 用喺兩處：① 收據卡片（唯讀縮圖，一撳開大圖）；② 收據 modal（可刪）。
+ */
+function StoredPhotoStrip({
+  account,
+  paths,
+  onRemove,
+  onOpen,
+  size = "h-16 w-16",
+  nowrap = false,
+}: {
+  account: string | null;
+  paths: string[];
+  onRemove?: (path: string) => void;
+  onOpen?: (path: string) => void;
+  size?: string;
+  /**
+   * `true` = 單行橫向排列（唔換行），由外層 `overflow-x-auto` 捲動。
+   *
+   * 🔴 收據 modal 內一定要開：modal 高度有限，換行會把下面嘅
+   *    品項／合計／儲存掣推出可視範圍（實測被裁切）。
+   */
+  nowrap?: boolean;
+}) {
+  const { urls, loading } = useSignedPhotoUrls(account, paths);
+  if (paths.length === 0) return null;
+
+  return (
+    <div className={nowrap ? "flex shrink-0 flex-nowrap gap-2" : "flex flex-wrap gap-2"}>
+      {paths.map((p) => {
+        const url = urls[p];
+        return (
+          <div key={p} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen?.(p);
+              }}
+              className={`block overflow-hidden rounded-xl ring-1 ring-slate-200 ${size} bg-slate-100`}
+              aria-label="檢視單據相片"
+            >
+              {url ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src={url} alt="單據相片" className="h-full w-full object-cover" />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
+                  {loading ? "載入…" : "無法載入"}
+                </span>
+              )}
+            </button>
+            {onRemove && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(p);
+                }}
+                className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white ring-2 ring-white"
+                aria-label="移除這張相片"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+/**
+ * 單張已存相片嘅大圖檢視器（自己簽 URL）。
+ *
+ * 為何唔用 `StoredPhotoStrip`？strip 係「一排縮圖」，而開大圖係「一張」——
+ * 兩者需要嘅資料形狀唔同。硬用同一個元件反而要傳一大堆唔關事嘅 props。
+ */
+function PhotoViewer({ account, path, onClose }: { account: string | null; path: string; onClose: () => void }) {
+  const { urls, loading } = useSignedPhotoUrls(account, [path]);
+  const url = urls[path];
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-black/80 p-4"
+      onClick={onClose}
+    >
+      {url ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={url}
+          alt="單據相片"
+          className="max-h-[80vh] max-w-full rounded-xl bg-white object-contain"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <p className="rounded-xl bg-white px-4 py-3 text-sm text-slate-600">
+          {loading ? "載入中…" : "無法載入相片"}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-slate-800"
+      >
+        關閉
+      </button>
+    </div>
+  );
 }
 
 function ReceiptFormModal({
@@ -196,6 +387,20 @@ function ReceiptFormModal({
    */
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+  /* ---------------- 單據相片（P3） ---------------- */
+
+  /** 隱藏嘅 file input（撳「📷 上傳單據照片」時由按鈕觸發）。 */
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  /** 已壓縮、**未上傳**嘅相片。 */
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  /** 相片相關提示（上傳進度／失敗原因）。**唔會**阻擋儲存。 */
+  const [photoMsg, setPhotoMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  /** 大圖檢視器（本地待上傳 blob URL）。 */
+  const [lightbox, setLightbox] = useState<{ url: string; label: string } | null>(null);
+  /** 大圖檢視器（已存 path，需要簽名 ⇒ 交給 `PhotoViewer` 處理）。 */
+  const [storedViewer, setStoredViewer] = useState<string | null>(null);
+
   useEffect(() => {
     if (open) {
       setForm(initial ? formFromReceipt(initial) : emptyForm(paymentMethods));
@@ -207,6 +412,19 @@ function ReceiptFormModal({
       setManualCategory(false);
       setPickerIndex(-1);
       setShowDatePicker(false);
+      /*
+       * 🔴 每次開 modal 一定要清相片狀態。
+       *   若唔清，上一張收據嘅待上傳相片會「跟」到下一張
+       *   ⇒ 商家開 B 單卻見到 A 單未上傳嘅相，一儲存就上錯單。
+       */
+      setPendingPhotos((prev) => {
+        // objectURL 要主動釋放，否則連續開關 modal 會累積記憶體（iPad Safari 緊）。
+        for (const p of prev) URL.revokeObjectURL(p.previewUrl);
+        return [];
+      });
+      setPhotoMsg(null);
+      setLightbox(null);
+      setStoredViewer(null);
     }
     // paymentMethods 唔列入 deps：開 modal 一刻嘅主檔就夠，途中變更唔應該重設用戶輸入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -314,6 +532,102 @@ function ReceiptFormModal({
     }
   };
 
+  /* ---------------- 相片：揀檔 → 壓縮 → 入待上傳列 ---------------- */
+
+  /**
+   * 使用者揀完相片。
+   *
+   * 🔴 呢個 handler 內**只做壓縮**，唔即刻上傳。
+   *    上傳留到「儲存收據」一刻（`uploadPendingPhotos()`），原因：
+   *    ① 分開之後，「儲存」掣嘅語意單純（唔會有一半相上咗、一半冇）；
+   *    ② 商家可以揀完相、睇清楚先刪走唔想要嘅，避免上傳白費流量。
+   */
+  const handlePhotoPick = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setPhotoMsg(null);
+    setPhotoBusy(true);
+    const added: PendingPhoto[] = [];
+    const failed: string[] = [];
+    try {
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith("image/")) {
+          failed.push(`${file.name}：唔係圖片`);
+          continue;
+        }
+        const r = await compressImage(file, (stage) => setPhotoMsg({ ok: true, text: stage }));
+        if (!r.ok) {
+          failed.push(`${file.name}：${r.error}`);
+          continue;
+        }
+        added.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          blob: r.blob,
+          previewUrl: URL.createObjectURL(r.blob),
+          size: r.blob.size,
+        });
+      }
+      if (added.length > 0) setPendingPhotos((prev) => [...prev, ...added]);
+      if (failed.length > 0) {
+        setPhotoMsg({ ok: false, text: failed.join("；") });
+      } else if (added.length > 0) {
+        const total = added.reduce((s, p) => s + p.size, 0);
+        setPhotoMsg({ ok: true, text: `已加入 ${added.length} 張（共 ${humanSize(total)}），儲存時自動上傳。` });
+      }
+    } finally {
+      setPhotoBusy(false);
+      // 🔴 清空 input.value：否則連續揀**同一張**相唔會觸發 change（瀏覽器認為值冇變）。
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
+  };
+
+  const removePendingPhoto = (id: string) => {
+    setPendingPhotos((prev) => {
+      const hit = prev.find((p) => p.id === id);
+      if (hit) URL.revokeObjectURL(hit.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  };
+
+  /** 移除一張**已上傳／已存在**嘅相片（改 `form.photo_paths`；真正刪檔喺儲存時）。 */
+  const removeStoredPhoto = (path: string) => {
+    setForm((f) => ({ ...f, photo_paths: f.photo_paths.filter((p) => p !== path) }));
+  };
+
+  /**
+   * 把待上傳相片逐張上傳，回傳成功嘅 path 陣列。
+   *
+   * 🔴 **失敗唔阻擋儲存**（J 拍板）：收據本身（金額／品項／品類）係主體，
+   *    商家填咗一堆品項，唔可以因為相片上唔到而白費。
+   *    ⇒ 上傳失敗只記錄喺 `photoMsg`，照樣帶住已成功嘅 path 去儲存。
+   */
+  const uploadPendingPhotos = async (): Promise<{ paths: string[]; failed: number }> => {
+    if (pendingPhotos.length === 0) return { paths: [], failed: 0 };
+    let failed = 0;
+    const paths: string[] = [];
+    for (let i = 0; i < pendingPhotos.length; i++) {
+      const p = pendingPhotos[i];
+      setPhotoMsg({ ok: true, text: `上傳相片 ${i + 1}/${pendingPhotos.length}…` });
+      try {
+        const fd = new FormData();
+        fd.append("account", account);
+        // 🔴 副檔名一定要 `.jpg`：`compressImage()` 一定輸出 JPEG，
+        //    但 server 係認 `file.type` 推副檔名 —— 所以呢度要明確指定型別，
+        //    否則 FormData 會用 blob 預設嘅 `application/octet-stream` 而被 415 拒絕。
+        fd.append("file", p.blob, `receipt-${i + 1}.jpg`);
+        const res = await fetch("/api/inventory/receipt-photos", { method: "POST", body: fd });
+        const json = (await res.json()) as { ok?: boolean; path?: string; error?: string };
+        if (json.ok && json.path) paths.push(json.path);
+        else {
+          failed += 1;
+          if (failed === 1) setPhotoMsg({ ok: false, text: json.error || "相片上傳失敗" });
+        }
+      } catch {
+        failed += 1;
+      }
+    }
+    return { paths, failed };
+  };
+
   const save = async () => {
     setErr(null);
     if (!form.merchant_id && !form.merchant_name.trim()) return setErr("請選擇或輸入供應商");
@@ -331,6 +645,25 @@ function ReceiptFormModal({
         // 2026-10-06：單位（kg／包／罐…）。空字串 = 未填，server 會照寫空值。
         quantity_unit: it.unit.trim(),
       }));
+    setSaving(true);
+    /*
+     * 🔴 2026-10-07（P3）：先上傳相片，再存收據。
+     *
+     * 次序：**上傳相片 → 儲存收據**。
+     *   反過黎（先存收據再上傳）會有兩個問題：
+     *   ① 收據已存在但相片路徑要再 PATCH 一次 ⇒ 多一次往返、多一個失敗點；
+     *   ② 上傳途中商家關咗 modal ⇒ 收據已存但相片永遠上唔到（幽靈狀態）。
+     *
+     * ⚠️ 相片上傳失敗**唔會** return，只係 `failedPhotoCount > 0`，
+     *    最後喺成功提示帶一句警告（見下面）。呢個係 J 拍板嘅明確要求。
+     */
+    const upload = await uploadPendingPhotos();
+    const failedPhotoCount = upload.failed;
+    // 🔴 `pendingPhotos` 內**成功嘅** path ＋ 原有（未被移除嘅）`form.photo_paths`。
+    //    ⚠️ 一定要**明確傳** `photo_paths`（即使係空陣列）：
+    //       PATCH 靠 `!== undefined` 判斷「商家主動刪光相片」，
+    //       唔傳就等於「唔想改相片」⇒ 刪相會靜默失效。
+    const photoPaths = [...form.photo_paths, ...upload.paths];
     const payload = {
       account,
       // 有 id 就送 id（server 直接採用，唔會 upsert by name ⇒ 唔會撞 unique）；
@@ -344,8 +677,8 @@ function ReceiptFormModal({
       date: form.date,
       total_amount: Math.round(total * 100) / 100,
       items,
+      photo_paths: photoPaths,
     };
-    setSaving(true);
     try {
       const res = form.id
         ? await fetch(`/api/inventory/receipts/${form.id}`, {
@@ -361,6 +694,15 @@ function ReceiptFormModal({
       const json = await res.json();
       if (!json.ok) setErr(json.error || "儲存失敗");
       else {
+        /*
+         * 相片上傳失敗但收據已存 ⇒ 唔可以當「一切都好」靜默收場，
+         * 否則商家以為相片都上咗。用 `window.alert` 係因為 modal 即將閂，
+         * 冇地方擺提示（POS 其他流程亦有用 alert 做不可忽略嘅通知）。
+         * ⚠️ 只喺**有失敗**時才彈，成功唔彈（唔好煩擾）。
+         */
+        if (failedPhotoCount > 0) {
+          window.alert(`收據已儲存，但有 ${failedPhotoCount} 張相片上傳失敗。\n可以重新開啟這張收據再上傳一次。`);
+        }
         onSaved();
         onClose();
       }
@@ -659,7 +1001,18 @@ function ReceiptFormModal({
           </div>
 
           <div>
-            <label className={labelCls}>付款狀態</label>
+            {/*
+             * 🔴 付款狀態標題同「月結」提示**必須排成同一行**。
+             *    POS 係觸屏，modal 高度得 92vh；獨立一行提示會把
+             *    下方「單據照片」區推出可視範圍（實測溢出 58px）。
+             *    收埋做標題右側一行細字＝零額外高度，商家照樣睇得到。
+             */}
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+              <label className={labelCls}>付款狀態</label>
+              <span className="text-xs leading-snug text-slate-400">
+                「月結」通常先記「未付款」，月底結算後記得返嚟改做「已付款」。
+              </span>
+            </div>
             <div className="flex flex-wrap gap-2">
               {([
                 { code: "unpaid", label: "未付款" },
@@ -675,9 +1028,127 @@ function ReceiptFormModal({
                 </button>
               ))}
             </div>
-            <p className="mt-1.5 text-xs text-slate-400">
-              「月結」通常先記「未付款」，月底結算後記得返嚟改做「已付款」。
-            </p>
+          </div>
+
+          {/* ── 單據相片（P3・非必填） ── */}
+          <div>
+            <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+              <label className="text-sm font-medium text-slate-700">
+                單據照片
+                <span className="ml-1.5 text-xs font-normal text-slate-400">（選填）</span>
+              </label>
+              {form.photo_paths.length + pendingPhotos.length > 0 ? (
+                <span className="text-xs text-slate-400">
+                  共 {form.photo_paths.length + pendingPhotos.length} 張・虛線＝未上傳
+                </span>
+              ) : (
+                <span className="text-xs leading-snug text-slate-400">自動壓縮至 200KB 以下</span>
+              )}
+            </div>
+
+            {/*
+             * 🔴 file input **唔可以加 `capture="environment"`**。
+             *    加了之後 iOS 會直接開相機、跳過「相片圖庫／瀏覽檔案」選項，
+             *    咁就連「上傳已影好嘅相」都做唔到（J 要求係「拍照**或**上傳」）。
+             *    唔加就係 iOS 標準三選單（拍照／圖庫／瀏覽）。
+             *
+             * 🔴🔴 唔可以用 Tailwind `sr-only` 嚟隱藏！
+             *    本專案**未有任何地方用過** `sr-only`，Tailwind v4 只會為實際出現過嘅
+             *    class 生成 CSS —— 實測 dev server 產出嘅 CSS **完全冇 `.sr-only`**，
+             *    所以個原生 file input 會**原樣顯示**（連「未選擇任何檔案」都出埋）。
+             *    ⇒ 用 inline style 直接令佢「存在但唔可見／唔佔位」，唔靠任何 utility class。
+             */}
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
+              onChange={(e) => void handlePhotoPick(e.target.files)}
+              aria-label="選擇單據照片"
+            />
+
+            <button
+              type="button"
+              disabled={photoBusy}
+              onClick={() => photoInputRef.current?.click()}
+              className="w-full rounded-xl bg-slate-100 px-4 py-3.5 text-base font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200 disabled:opacity-60"
+            >
+              {photoBusy ? "處理中…" : "📷 上傳單據照片"}
+            </button>
+
+            {/*
+             * 🔴 相片縮圖用**單一行橫向捲動**（`flex-nowrap overflow-x-auto`）。
+             *
+             * 為何唔用 `flex-wrap`（換行）：
+             *   收據 modal 有 `max-h-[92vh] overflow-y-auto`，而上面已經有供應商／品類／
+             *   日期／付款方式／付款狀態五大區。若縮圖會換行，加到第 4–5 張就會把
+             *   **下面嘅品項／合計／儲存掣**推到 modal 可視範圍以外 ——
+             *   實測第一版就係咁：縮圖 bottom 918px > 面板 bottom 864px，被裁切。
+             *   ⇒ 橫向捲動令高度**永遠只有一行**（56px），唔受張數影響。
+             */}
+            {(form.photo_paths.length > 0 || pendingPhotos.length > 0) && (
+              <div className="mt-3 flex flex-nowrap items-start gap-2 overflow-x-auto pb-1">
+                {/* 已存在（private bucket ⇒ signed URL） */}
+                {form.photo_paths.length > 0 && (
+                  <StoredPhotoStrip
+                    account={account}
+                    paths={form.photo_paths}
+                    onRemove={removeStoredPhoto}
+                    size="h-12 w-12"
+                    nowrap
+                    onOpen={(p) => setStoredViewer(p)}
+                  />
+                )}
+
+                {/* 待上傳（本地已壓縮，尚未上傳） */}
+                {pendingPhotos.map((p) => (
+                  <div key={p.id} className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setLightbox({ url: p.previewUrl, label: `待上傳・${humanSize(p.size)}` })}
+                      className="block h-12 w-12 overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white"
+                      aria-label="檢視待上傳相片"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={p.previewUrl} alt="待上傳單據相片" className="h-full w-full object-cover" />
+                    </button>
+                    <span className="absolute bottom-0 left-0 rounded-br-xl rounded-tl-md bg-black/60 px-1.5 text-[10px] font-medium text-white tabular-nums">
+                      {humanSize(p.size)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removePendingPhoto(p.id)}
+                      className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white ring-2 ring-white"
+                      aria-label="移除這張待上傳相片"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {photoMsg && (
+              <p
+                className={`mt-2 rounded-xl px-3 py-2 text-xs font-medium ${
+                  photoMsg.ok ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-800"
+                }`}
+              >
+                {photoMsg.text}
+              </p>
+            )}
+
+            {/*
+             * 🔴 呢個區**唔可以再加任何獨立一行嘅說明文字**。
+             *    收據 modal 係 `max-h-[92vh] overflow-y-auto`，而上面已有供應商／
+             *    品類／日期／付款方式／付款狀態五區。第一版寫咗三段說明（移除提示／
+             *    虛線框含義／200KB 說明）＝ +48px，正好把上傳掣同縮圖推出可視範圍
+             *    （實測縮圖 bottom 922 > 面板 bottom 864，被裁切）。
+             *    ✅ 現行做法＝把所有提示**併入標題行**（`共 N 張・虛線＝未上傳`／
+             *       `自動壓縮至 200KB 以下`），零額外高度。
+             *    POS 係觸屏，商家唔會為睇說明而捲；提示要短、要貼住標題。
+             */}
           </div>
 
           {/* ── 品項：支援歷史品項快速選取 ── */}
@@ -862,10 +1333,42 @@ function ReceiptFormModal({
             disabled={saving}
             className="w-full rounded-2xl bg-emerald-600 py-3.5 text-base font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
           >
-            {saving ? "儲存中…" : "儲存收據"}
+            {saving ? (pendingPhotos.length > 0 ? "上傳相片並儲存中…" : "儲存中…") : "儲存收據"}
           </button>
         </div>
       </div>
+
+      {/* 大圖檢視器：本地待上傳（blob URL） */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-black/80 p-4"
+          onClick={(e) => {
+            e.stopPropagation();
+            setLightbox(null);
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightbox.url}
+            alt="單據相片"
+            className="max-h-[80vh] max-w-full rounded-xl bg-white object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <p className="text-xs text-white/80">{lightbox.label}</p>
+          <button
+            type="button"
+            onClick={() => setLightbox(null)}
+            className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-slate-800"
+          >
+            關閉
+          </button>
+        </div>
+      )}
+
+      {/* 大圖檢視器：已存（private bucket ⇒ 要簽名） */}
+      {storedViewer && account && (
+        <PhotoViewer account={account} path={storedViewer} onClose={() => setStoredViewer(null)} />
+      )}
     </div>
   );
 }
@@ -1455,6 +1958,13 @@ export function InventoryView() {
                         {r.category && (
                           <div className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
                             {r.category}
+                          </div>
+                        )}
+                        {/* 2026-10-07（P3）：相片數標記。清單唔出縮圖（要逐張簽 URL＝貴），
+                            只標「📷 N」提示有相，撳入 modal 才載入。 */}
+                        {(r.photo_paths?.length ?? 0) > 0 && (
+                          <div className="ml-1 mt-1 inline-block rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 ring-1 ring-sky-200">
+                            📷 {r.photo_paths!.length}
                           </div>
                         )}
                       </div>

@@ -49,6 +49,20 @@
 🔴 **JSX 內唔可以用 Markdown `**粗體**` 或 `<b>`／`<strong>`** ⇒ 用 `<span className="font-semibold">`。`InfoBubble` 內層係 `<span>` ⇒ 只可用 `<span className="block">` 分行，唔可放 `<div>`／`<p>`。
 🔴 **JSX 屬性位置用 `/* */` 塊註解**（`{/* */}` 只可喺 children 位置）；`//` 單行註解喺屬性之間會爆語法錯。
 
+### 6.1 守衛測試設計（2026-10-07 血淚）
+🔴🔴 **守「行為不變量」，唔好守「代碼字串」**。寫死一整句代碼 ⇒ 任何無害重構都爆，
+而**真正壞掉時反而可能唔爆**。實例：斷言 `body: JSON.stringify({store, account})` 整句，
+加一個 `mode` 就爆（但契約其實冇壞）；斷言 `hit.baseline_unit_cost !== null` 逐字，
+抽出 helper 後變 `shouldWriteBaseline(hit?.…)` 就爆。✅ 改為逐欄／逐行為檢查。
+🔴 亦唔好斷言「**剛好 N 個**」（如 `onMutated?.()` 剛好 4 個）—— 要守「每個寫入點都有就夠」。
+🔴 **Tailwind 只為「實際用過」嘅 class 生成 CSS**：首次用某 utility（如 `sr-only`）會**完全冇 CSS**
+⇒ 元素原樣顯示、零 error。✅ 唔可只驗 class 名，要**量實際 bounding box**。
+🔴 **檔案係 CRLF**：守衛測試做多行 regex（`^…$`）前要**先 `replace(/\r\n/g,"\n")`**，否則對唔上。
+🔴 **抽函式體唔可以「搵第一個 `{`」** —— 參數本身可能係 destructure／型別字面量
+（`async ({mode, silent}: {…}) => {`）。✅ 由宣告處逐個 `{` 試配對、**取內容最長者**
+（見 `inventory-contract-guard.test.ts` `functionBody()`）。門檻唔可以太細：
+`{ mode, silent }: { mode: "auto" | "manual"; silent: boolean }` 本身就 44 字。
+
 ## 7 判別／取證
 `isSaleCountable()`：只計 settled／帶 `onlineOrderId` 嘅 paid，Macau 日界 ⇒ 未結帳單永不入報表。id 前綴＝建單程式。`storeId` 係公開值。⭐ `tools/log-recheck.cjs --both`、`probe-anon-exposure.cjs`（DETAIL §F）。🔴 量度陷阱：Vercel 一行 log＝一行 CSV 且倍數**可變** ⇒ 按 `requestId` 去重；兩份 log 窗口通常唔重疊，只比速率；CSV 有引號內換行。多部中繼機混算會被腰斬 ⇒ **逐 `agent_id` 拆**。🔴 anon 唯讀探測只有 24h 窗（`pos_orders` 72h）⇒ **睇唔到跨日行**，唔可據此斷定「DB 冇呢一行」。
 
