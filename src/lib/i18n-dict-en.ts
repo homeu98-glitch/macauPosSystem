@@ -100,6 +100,11 @@ export const EN_DICT: Record<string, string> = {
   收銀: "Cashier",
   已暫停: "Paused",
   以此身份登出: "Sign out of this role",
+  "店內暫停營業中（掃碼點餐、自助點餐機落唔到單）—— 撳一下恢復營業":
+    "In-store ordering is paused (QR ordering and the self-order kiosk cannot take orders). Tap to resume.",
+  "營業中 —— 撳一下可暫停店內營業": "Open. Tap to pause in-store ordering.",
+  "未讀到營業狀態（可能係讀取失敗），請重新載入頁面":
+    "Could not read the open/closed state (it may have failed to load). Reload the page.",
 
   // ─── 設置頁 · 打印開關設置 ───
   打印開關設置: "Automatic print switches",
@@ -325,7 +330,7 @@ export const EN_DICT: Record<string, string> = {
   "手機喺枱邊幫客人落單，送出即出廚房單":
     "Order at the table on a phone; sending fires the kitchen ticket",
   "客人喺呢部機直接落單": "Guests place orders directly on this device",
-  "逐件菜撳✓（入去先揀分區）": "Tap each dish to serve (pick a zone first)",
+  "逐件菜撳 ✓（入去先揀分區）": "Tap each dish to serve (pick a zone first)",
   核對整單出餐: "Check the full order before serving",
 
   // ─── 工作台 · 分組標題 ───

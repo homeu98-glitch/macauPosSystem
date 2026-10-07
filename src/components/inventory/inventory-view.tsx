@@ -21,6 +21,7 @@ import { AreaChart } from "./charts/AreaChart";
 import { DonutChart } from "./charts/DonutChart";
 import { LineChart } from "./charts/LineChart";
 import { InventoryTable } from "./inventory-table";
+import { ItemAnalysisView } from "./item-analysis-view";
 import { InventorySettingsPanel, type Supplier } from "./inventory-settings-panel";
 
 type ReceiptItem = {
@@ -894,6 +895,37 @@ export function InventoryView() {
   /** 付款方式 chips 係唔係展開「未用過」嗰批（見 `methodChipGroups`）。 */
   const [showZeroMethods, setShowZeroMethods] = useState(false);
 
+  /**
+   * 頁籤：`"overview"`（現有全部內容）或 `"analysis"`（品項分析）。
+   *
+   * 🔴 為何要分頁而唔係直接加喺下面：
+   *    庫存頁已經有 KPI＋收據清單＋庫存表＋5 張圖；再加「品項分析」（自己 4 張 KPI
+   *    ＋2 張圖＋一張 10 欄長表）會令單頁變成無限滾動，商家搵唔到嘢。
+   *
+   * 🔴 分析畫面嘅 fetch 只喺切到該 tab 才發生（`ItemAnalysisView` 係條件 render）
+   *    —— 唔可以一開始就掛載，否則「總覽」白白多打一個貴請求（Supabase egress 敏感）。
+   *
+   * ⚠️ 用 `window.location` 直接讀寫 query 而唔用 `useSearchParams()`：
+   *    呢個 component 掛喺 `/inventory` 之下，加 `useSearchParams` 會強制成棵樹
+   *    走 client-side render bailout（Next 16 要求包 `<Suspense>`），
+   *    而呢個分頁只係「刷新後保留位置」，唔值得為此改動頁面結構。
+   *    寫入一律 `replaceState(null, "", pathname + search)`，**唔可以寫死 "/"**。
+   */
+  const [tab, setTab] = useState<"overview" | "analysis">(() => {
+    if (typeof window === "undefined") return "overview";
+    return new URLSearchParams(window.location.search).get("tab") === "analysis" ? "analysis" : "overview";
+  });
+
+  const switchTab = useCallback((next: "overview" | "analysis") => {
+    setTab(next);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (next === "analysis") params.set("tab", "analysis");
+    else params.delete("tab");
+    const qs = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+  }, []);
+
   useEffect(() => {
     const s = loadAuthSession();
     if (s?.account) {
@@ -1195,6 +1227,42 @@ export function InventoryView() {
           </div>
         </header>
 
+        {/* 頁籤（2026-10-07：「品項分析」新功能。見上方 tab state 註釋）
+            ⚠️ 「新增收據」掣留喺 header 係刻意嘅 —— 佢喺兩個 tab 都用得著。
+            時間／付款方式篩選則只屬「總覽」（收據統計），故收喺 overview 分支內。 */}
+        <div className="mb-4 flex flex-wrap gap-2">
+          {(
+            [
+              { key: "overview", label: "總覽" },
+              { key: "analysis", label: "品項分析" },
+            ] as const
+          ).map((t) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => switchTab(t.key)}
+                aria-current={active ? "page" : undefined}
+                className={`inline-flex min-h-[40px] items-center rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+                  active ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {tab === "analysis" ? (
+          <ItemAnalysisView
+            account={account}
+            merchantId={merchantId}
+            supplierOrder={supplierOrder}
+            categoryOrder={categoryOrder}
+          />
+        ) : (
+          <>
         {/* 時間篩選（2026-09-13：改用共用元件，加「自訂」） */}
         <div className="mb-4 flex flex-wrap gap-2">
           <DateRangeFilterChips
@@ -1420,6 +1488,8 @@ export function InventoryView() {
             前往設置 →
           </button>
         </div>
+          </>
+        )}
       </div>
 
       <ReceiptFormModal

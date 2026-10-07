@@ -660,3 +660,182 @@ describe("品項分析：基準價（首次進貨單價）", () => {
     assert.ok(/unitCost <= 0/.test(pure), "unit_price <= 0 要直接淘汰");
   });
 });
+
+const ANALYSIS_LIB = 'src/lib/item-analysis.ts';
+const ANALYSIS_API = 'src/app/api/inventory/item-analysis/route.ts';
+const ANALYSIS_VIEW = 'src/components/inventory/item-analysis-view.tsx';
+
+/* ─────── 品項分析：API / UI 契約（2026-10-07） ─────── */
+
+describe('品項分析：API 契約', () => {
+  it('route 一定要有降級：macau client 缺就 503（庫存係核心，冇得降）', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/getSupabaseAdminClient()/.test(api), '要用 macau admin client');
+    assert.ok(/status: 503/.test(api), 'macau client 未設定要 503');
+    assert.ok(/缺少 store/.test(api), '要驗 store 參數');
+  });
+
+  it('expense 側係可選依賴，唔可以令整頁 500', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/getExpenseSupabaseClient()/.test(api), '要用 expense client 做店戶存在性檢查');
+    assert.ok(/isMissingColumnOrTable/.test(api), '要偵測 expense 表缺失並降級');
+    // 唔可以有 isMissingColumnOrTable 分支直接 500
+    const idx = api.indexOf('isMissingColumnOrTable(suErr)');
+    assert.ok(idx > -1, '要有專門處理 shop_users 缺表嘅分支');
+  });
+
+  it('🔴 migration 0065 未跑時要有明確 warning（靜默降級 = 長期顯示 0 漲價）', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/detectMissingBaselineColumn/.test(api), '要主動偵測 baseline 欄位缺席');
+    assert.ok(/hasOwnProperty\.call\(p, "baseline_unit_cost"\)/.test(api), '用 hasOwnProperty 判斷欄位存在');
+    assert.ok(/warning/.test(api), '要回 warning 欄位畀 UI 出提示條');
+    assert.ok(/0065/.test(api), 'warning 文案要指得出係 0065 migration');
+  });
+
+  it('route 只讀不算：基準價唯一真源係 inv_products（唔可以即時重算 receipt_items）', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(!/receipt_items/.test(api), '🔴 唔可以由 receipt_items 即時重算基準 —— 會同 syncFromReceipts 變成雙真源');
+    assert.ok(/listProducts\(macau, store\)/.test(api), '要用 listProducts 讀 inv_products');
+  });
+
+  it('一定要用零 import 嘅 item-analysis.ts（node --test 唔認 alias）', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/@\/lib\/item-analysis/.test(api), 'API 用 @/ alias import 純函式');
+    const pure = read(ANALYSIS_LIB);
+    assert.equal(/^import /m.test(pure), false, '🔴 item-analysis.ts 必須零 import，否則測唔到');
+  });
+
+  it('range 冇參與過濾時要明講（stockRangeIgnored），唔可以靜默', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/stockRangeIgnored/.test(api), '要明示 range 未 filter，避免前端誤會');
+  });
+});
+
+describe('品項分析：純函式口徑', () => {
+  it('🔴 漲／跌分開累加', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/totalUpAmount/.test(pure) && /totalDownAmount/.test(pure));
+    assert.ok(!/totalChangeAmount/.test(pure), '唔可以有單一 net 合計（會互相抵消）');
+  });
+
+  it('🔴 new 品項唔入漲跌統計', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/r\.direction === "new"/.test(pure), '要明確攔截 new');
+    assert.ok(/newCount \+= 1/.test(pure));
+  });
+
+  it('總值為 0 時佔比要 null（唔可以報 0%）', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/stockTotal > 0 \? \(stockValue \/ stockTotal\) \* 100 : null/.test(pure), '佔比要 null 守衛');
+    assert.ok(/total > 0 \? \(r\.stockValue \/ total\) \* 100 : null/.test(pure), '排名佔比同樣');
+  });
+
+  it('基準 <= 0 一律當未有基準（避免 Infinity）', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/base === null || base <= 0/.test(pure));
+  });
+
+  it('🔴 唔可以 （0 會被當真基準）', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.equal(
+      /baseline_unit_cost\s*\?\?\s*0/.test(pure),
+      false,
+      '用 ?? 0 會令「冇基準」變成「基準係 0」，direction 同金額都會錯',
+    );
+  });
+
+  it('排序要穩定：null 一定要排最後', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/nullLast/.test(pure), '要有 null 排最後嘅比較器');
+  });
+
+  it('篩選／排序唔可以改動傳入陣列', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/const sorted = \[\.\.\.filtered\]/.test(pure), '要先複製再 sort');
+  });
+
+  it('分類選項由實際資料 distinct 得出（唔可以寫死清單）', () => {
+    const pure = read(ANALYSIS_LIB);
+    assert.ok(/collectAnalysisFilterOptions/.test(pure));
+    assert.ok(/catSet.add/.test(pure), '分類要由 rows 累積，唔可以 hardcode');
+  });
+});
+
+describe('品項分析：UI 契約', () => {
+  it('🔴 顏色語意同報表頁相反：成本升 = 紅', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/bg-red-50 text-red-700 ring-red-200/.test(view), '漲價 badge 要紅');
+    assert.ok(/bg-emerald-50 text-emerald-700 ring-emerald-200/.test(view), '跌幅 badge 要綠');
+    assert.ok(
+      /成本升|成本上升/.test(view) || /對門店不利/.test(view),
+      '要喺文案講明紅色代表成本上升',
+    );
+  });
+
+  it('🔴 唔可以照抄 reports 頁嘅 pct()（升綠跌紅）', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.equal(/text-emerald-600[^\n]*up/.test(view), false, '漲幅唔可以用綠色');
+    assert.ok(/up \? "bg-red-50/.test(view) || /r\.direction === "up"\s*\?\s*"text-red-600"/.test(view));
+  });
+
+  it('🔴 空狀態唔可以渲染假零（0% / MOP 0.00 冒充「冇資料」）', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/avgChangePercent === null/.test(view), '平均漲幅 null 要出「—」');
+    assert.ok(/changeAmount === null/.test(view), 'changeAmount null 要出「—」');
+    assert.ok(/baselineUnitCost === null/.test(view), '首次記錄要出說明文字，唔可以出 MOP 0.00');
+  });
+
+  it('首次記錄品項要標「首次記錄」並排除喺統計外', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/首次記錄/.test(view));
+    assert.ok(/排除喺漲跌統計外/.test(view));
+  });
+
+  it('table 要有合計列，漲／跌分開兩行', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/<tfoot>/.test(view), '要有 tfoot 合計列');
+    assert.ok(/viewSummary\.totalUpAmount/.test(view) && /viewSummary\.totalDownAmount/.test(view));
+    assert.ok(/分開計/.test(view), '要明講漲跌分開計');
+  });
+
+  it('🔴 手機版要卡片式（唔可以只靠 md: 表格）', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/md:hidden/.test(view), '要有 md:hidden 嘅手機版卡片區');
+    assert.ok(/hidden[^"]*md:block/.test(view), '桌面表格要 md 以下隱藏');
+  });
+
+  it('觸控下限：篩選控件要 >= 36px', () => {
+    const view = read(ANALYSIS_VIEW);
+    const controls = view.match(/min-h-\[\d+px\]/g) ?? [];
+    assert.ok(controls.length >= 4, '篩選控件要有 min-h 觸控下限');
+  });
+
+  it('數字要用 tabular-nums', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/tabular-nums/.test(view));
+  });
+});
+
+describe('品項分析：tab 接線', () => {
+  it('inventory-view 要 import 並條件 render ItemAnalysisView', () => {
+    const src = read(VIEW);
+    assert.ok(/import { ItemAnalysisView }/.test(src), '要 import 分析畫面');
+    assert.ok(/tab === "analysis" ?/.test(src), '🔴 一定要條件 render（唔可以一開始就掛載，會白打請求）');
+  });
+
+  it('🔴 切 tab 唔可以推導航／唔可以寫死 "/"', () => {
+    const src = read(VIEW);
+    assert.ok(/window.location.pathname/.test(src), '清 query 要保留 pathname');
+    assert.equal(
+      /replaceState\([^)]*,\s*"\/"\s*\)/.test(src),
+      false,
+      '🔴 replaceState 寫死 "/" 會令商家離開庫存頁（deep-link 鐵律）',
+    );
+  });
+
+  it('分析畫面接收 supplierOrder / categoryOrder（跟商家拖過嘅次序）', () => {
+    const src = read(VIEW);
+    assert.ok(/supplierOrder={supplierOrder}/.test(src));
+    assert.ok(/categoryOrder={categoryOrder}/.test(src));
+  });
+});

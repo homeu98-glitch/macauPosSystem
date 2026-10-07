@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { missingEnKeys, orphanEnKeys, SHORT_EN_DICT } from "./i18n-dict-en.ts";
+import { EN_DICT, missingEnKeys, orphanEnKeys, SHORT_EN_DICT } from "./i18n-dict-en.ts";
 import { SHORT_ZH_DICT, ZH_HANT_DICT } from "./i18n-dict-zh.ts";
 import {
   DEFAULT_UI_LANG,
@@ -29,6 +30,19 @@ const SRC = new URL("../../", import.meta.url);
 
 function readSrc(rel: string): string {
   return readFileSync(new URL(rel, SRC), "utf8");
+}
+
+/** 遞歸列出 `src/` 底下所有 `.ts` / `.tsx`（絕對路徑）。 */
+function walkSrc(rel: string): string[] {
+  const dir = new URL(rel, SRC); // SRC 尾部有 `/`，`rel` 為相對路徑（如 "src/" / "src/app/"）
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) out.push(...walkSrc(rel + e.name + "/"));
+    // ⚠️ 唔可以用 `new URL(...).pathname` —— Windows 會變成 `/C:/…`，
+    // 拼埋 `readFileSync` 就變 `C:\C:\…`（2026-10-07 實測）。
+    else if (/\.tsx?$/.test(e.name)) out.push(fileURLToPath(new URL(e.name, dir)));
+  }
+  return out;
 }
 
 /**
@@ -348,22 +362,23 @@ test("module-catalog 嘅 label / short 維持中文（係字典 key 來源）", 
   }
 });
 
-test("字典 key 覆蓋 module-catalog 全部 label / short", () => {
+test("🔴 字典 key 覆蓋 module-catalog 全部 label / short / desc", () => {
+  // ⚠️ 2026-10-07 病：`desc: "逐件菜撳 ✓（…）"` 多咗個空格，
+  // 字典寫 `"逐件菜撳✓（…）"`（冇空格）⇒ `t()` 查唔到，英文版顯示中文。
+  // **零 throw、零 error** —— 肉眼先捉到。所以呢個守衛唔可以只查 label/short，
+  // `desc` 一定要包（工作台卡片副標就係佢）。
   const code = readSrc("src/lib/pos/module-catalog.ts");
-  const raws = [...code.matchAll(/(?:label|short):\s*"([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(raws.length > 0, "抽唔到 label/short");
+  const raws = [...code.matchAll(/(label|short|desc):\s*"([^"]+)"/g)].map((m) => [m[1], m[2]] as const);
+  assert.ok(raws.length > 30, `只抽到 ${raws.length} 條，掃描範圍可能壞咗`);
 
-  const missingLabel: string[] = [];
-  const missingShort: string[] = [];
-  for (const raw of raws) {
-    if ([...raw].length === 1 && !raw.includes("\n")) {
-      if (!(raw in SHORT_ZH_DICT)) missingShort.push(raw);
-    } else if (!(raw in ZH_HANT_DICT)) {
-      missingLabel.push(raw);
-    }
+  const miss: string[] = [];
+  for (const [kind, raw] of raws) {
+    // `short` 係單字徽章 ⇒ 查 SHORT 字典；`label` / `desc` 查主字典
+    const dicts = kind === "short" ? [SHORT_ZH_DICT, SHORT_EN_DICT] : [ZH_HANT_DICT, EN_DICT];
+    if (!(raw in dicts[0])) miss.push(`${kind} 缺繁中：${raw}`);
+    if (!(raw in dicts[1])) miss.push(`${kind} 缺英文：${raw}`);
   }
-  assert.deepEqual(missingLabel, [], `module-catalog label 冇翻譯：${missingLabel.join(" / ")}`);
-  assert.deepEqual(missingShort, [], `module-catalog short 冇翻譯：${missingShort.join(" / ")}`);
+  assert.deepEqual(miss, [], `module-catalog 文案冇翻譯：\n  ${miss.join("\n  ")}`);
 });
 
 test("WORKBENCH_GROUP_LABEL 兩個值都有翻譯", () => {
@@ -467,6 +482,46 @@ test("🔴 字典 key 語法：含中文標點嘅 key 一定要加引號", () =>
     const parsed = new Function(`return ${literal};`)() as Record<string, string>;
     assert.ok(Object.keys(parsed).length > 0, `${name} 係空`);
   }
+});
+
+test("🔴 全專案 t() 嘅 key 必須喺兩本字典都有（漏翻譯 = 永遠顯示中文）", () => {
+  // 病：2026-10-07 `t("…都設成同一個分區就得。")` 喺字典入面寫成「就行。」
+  // ⇒ 差一個字就靜靜漏翻譯，**唔會 throw、唔會報錯**，英文版照樣顯示中文。
+  // 之前 `missingEnKeys()` 捉唔到，因為佢只比對「zh 有、en 缺」，
+  // 捉唔到「代碼用嘅 key 同字典個 key 根本唔一樣」。
+  //
+  // ⚠️ 只掃 `from "@/components/lang-provider"` 嘅檔案 ——
+  // `order/page.tsx` / `kiosk/*` 有自己嘅 `t`（`kioskT`，用英文 key），
+  // 唔屬於呢套字典，掃埋佢哋會產生 90+ 誤報。
+  const files = walkSrc("src/").filter(
+    (f) => !/i18n-dict-|i18n\.ts$/.test(f) && /from "@\/components\/lang-provider"/.test(readFileSync(f, "utf8")),
+  );
+  const RE = /\bt\(\s*"((?:[^"\\]|\\.)*)"/g;
+  /** key → 第一次出現嘅位置（方便報錯） */
+  const sites = new Map<string, string>();
+  for (const f of files) {
+    // ⚠️ 一定要 `stripComments()` —— 呢個 guard 檔自己嘅註解就係一大堆示例 key，
+    // 唔剝就會掃到自己（2026-10-07 實測：病例 key 響註解入面，變成假 failure）。
+    const code = stripComments(readFileSync(f, "utf8"));
+    for (const m of code.matchAll(RE)) {
+      if (sites.has(m[1])) continue;
+      const line = code.slice(0, m.index).split("\n").length;
+      sites.set(m[1], `${f.replace(/\\/g, "/").split("/macauPosSystem/")[1]}:${line}`);
+    }
+  }
+  assert.ok(sites.size > 100, `只掃到 ${sites.size} 個 key，掃描範圍可能壞咗`);
+
+  // 純 ascii key 多數係變數名（`t(someVar)` 嘅值），唔算漏翻譯
+  const isCjk = (k: string) => /[一-鿿]/.test(k);
+  const missEn: string[] = [];
+  const missZh: string[] = [];
+  for (const [k, site] of sites) {
+    if (!isCjk(k)) continue;
+    if (!(k in EN_DICT)) missEn.push(`${k}  @ ${site}`);
+    if (!(k in ZH_HANT_DICT)) missZh.push(`${k}  @ ${site}`);
+  }
+  assert.deepEqual(missEn, [], `英文缺 ${missEn.length} 條：\n  ${missEn.join("\n  ")}`);
+  assert.deepEqual(missZh, [], `繁中缺 ${missZh.length} 條：\n  ${missZh.join("\n  ")}`);
 });
 
 test("UI_LANGS：暫時 2 個（繁中 + 英文），預設繁中", () => {
