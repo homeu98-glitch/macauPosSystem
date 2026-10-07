@@ -198,18 +198,31 @@ export async function GET(request: Request) {
     .filter((r) => receiptDateMatchesRange(String(r.receipt_date ?? ""), rangeArg))
     .map(toStatReceipt);
 
-  const enriched = statReceipts.map((sr) => ({
-    id: sr.id,
-    total_amount: sr.total_amount,
-    receipt_date: sr.receipt_date,
-    merchant_id: (receipts ?? []).find((r) => r.id === sr.id)?.merchant_id ?? null,
-    merchant_name: sr.merchant_name,
-    payment_method: sr.payment_method,
-    payment_status: sr.payment_status,
-    category: sr.category ?? "",
-    raw_ocr_data: (receipts ?? []).find((r) => r.id === sr.id)?.raw_ocr_data ?? null,
-    items: sr.items,
-  }));
+  const enriched = statReceipts.map((sr) => {
+    const src = (receipts ?? []).find((r) => r.id === sr.id);
+    return {
+      id: sr.id,
+      total_amount: sr.total_amount,
+      receipt_date: sr.receipt_date,
+      merchant_id: src?.merchant_id ?? null,
+      merchant_name: sr.merchant_name,
+      payment_method: sr.payment_method,
+      payment_status: sr.payment_status,
+      category: sr.category ?? "",
+      raw_ocr_data: src?.raw_ocr_data ?? null,
+      items: sr.items,
+      /*
+       * 🔴 2026-10-07：`created_at` 一直有喺上面 SQL select（L116），但之前喺呢度
+       * 組 enriched 時被漏掉 ⇒ 前端攞唔到。品項分析「收據時間到秒」需要佢。
+       *
+       * ⚠️ 語意提醒：`receipt_date` 係 date 型別（只有年月日），時分秒只能黎自
+       *    `created_at` ＝ **錄入時間**，唔係單據本身嘅時間。兩者可以差幾日
+       *    （例如補登舊單）。UI 必須標明，唔可以令商家以為係單據時間。
+       *    舊資料／未填時回 null，前端要 fallback 只出日期。
+       */
+      created_at: typeof src?.created_at === "string" ? src.created_at : null,
+    };
+  });
 
   const summary = buildPurchaseSummary(statReceipts);
 
@@ -236,6 +249,22 @@ export async function POST(request: Request) {
   const userId = resolved.userId;
 
   if (!body.date) return NextResponse.json({ ok: false, error: "缺少 date" }, { status: 400 });
+  /*
+   * 🔴 2026-10-07 J 拍板：品類必填（前端 UI 已擋，呢度係 server 側第二道閘）。
+   *
+   * 點解要有 server 側驗證：前端驗證只保護「經 POS UI 入嘅單」，
+   * 但呢支 API 係公開端點（見 `docs/` 鑑權審計），直接 POST 可以繞過 UI。
+   * 而品類係品項分析／品類報表嘅分組鍵 —— 一旦有單冇品類入庫，
+   * 報表就會多一個「未分類」黑洞，之後好難追。
+   *
+   * ⚠️ 只加喺 POST（新增）。PATCH（編輯）**唔可以**擋：舊收據本來就冇品類，
+   *    若 PATCH 都硬性要求，商家連「改個金額」都做唔到 —— 變成資料鎖死。
+   *    舊單嘅品類補填由前端引導（UI 顯示 * 標記 + save() 提示），
+   *    呢個係漸進收斂，唔係一下子斷龍。
+   */
+  if (!body.category || !String(body.category).trim()) {
+    return NextResponse.json({ ok: false, error: "請選擇品類（必填）" }, { status: 400 });
+  }
 
   const merchant = await resolveMerchantId(client, userId, {
     merchant_id: body.merchant_id,
@@ -250,7 +279,8 @@ export async function POST(request: Request) {
     receipt_date: body.date,
     raw_ocr_data: {
       receipt_number: body.receipt_number || null,
-      category: body.category || null,
+      // 2026-10-07：品類已係必填（上面驗證），所以呢度一定會有值。
+      category: String(body.category).trim(),
       payment_method: normalizePaymentMethod(body.payment_method),
       payment_status: normalizePaymentStatus(body.payment_status),
       input_method: "pos_manual",

@@ -52,6 +52,25 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
   const [stocktaking, setStocktaking] = useState<InvProduct | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<InvProduct | null>(null);
 
+  /**
+   * 庫存表「顯示全部」開關。
+   *
+   * 🔴 2026-10-07 J 拍板（項目 1 第 1 層）：**預設唔全部顯示**。
+   *
+   * 原因：品項同步之後，庫存品數量 = 收據歷史嘅去重品項數，會隨時間單向增長
+   * （商家每日入單，品項只加不減）。全部 render 出嚟：
+   *   · 首屏要砌幾百個卡片 DOM ⇒ 觸屏（iPad）捲動卡頓；
+   *   · 商家真正關心嘅係「邊樣唔夠貨」，唔係「全部有幾多」。
+   *
+   * ✅ 做法：預設只出 **低庫存 + 最近有採購嘅前 N 個**，
+   *    其餘收喺「顯示全部（+N）」後面。**低庫存嘅永遠唔會被摺埋** ——
+   *    唔可以因為「收合」而令商家睇唔到要補貨嘅貨。
+   *
+   * ⚠️ 呢個係**純渲染層**收合，唔涉及查詢改動（見 docs 計劃書 §1.1 第 1 層）。
+   *    資料量嘅真正優化喺第 2 層（分頁／搜尋），要等商家品項過千先做。
+   */
+  const [showAll, setShowAll] = useState(false);
+
   const loadProducts = useCallback(async () => {
     setLoading(true);
     setErr(null);
@@ -113,7 +132,36 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
   // Stats
   const totalCount = products.length;
   const stockValue = products.reduce((s, p) => s + (p.current_qty || 0) * (p.avg_unit_cost || 0), 0);
-  const lowStock = products.filter((p) => p.reorder_level > 0 && p.current_qty < p.reorder_level).length;
+  const isLow = (p: InvProduct) => p.reorder_level > 0 && p.current_qty < p.reorder_level;
+  const lowStock = products.filter(isLow).length;
+
+  /**
+   * 🔴 2026-10-07（項目 1 第 1 層）：預設收合嘅切割。
+   *
+   * 規則（次序有意義）：
+   *   1. **低庫存嘅一律顯示** —— 呢個係商家入庫存頁嘅唯一剛需，
+   *      「收合」唔可以犧牲佢（否則等於將警示藏起）。
+   *   2. 其餘按「最後採購日」由新到舊補夠 `COLLAPSED_LIMIT` 個
+   *      —— 常用貨大概率係最近買過嘅，比字母序更貼近實際使用頻率。
+   *   3. 剩下嘅收埋，用「顯示全部（+N）」展開。
+   *
+   * ⚠️ 搜尋／篩選功能**未做**（第 2 層）。所以 `showAll` 係必要嘅逃生門：
+   *    想搵一件非低庫存嘅貨，一定要有方法睇到佢。
+   */
+  const COLLAPSED_LIMIT = embedded ? 6 : 9;
+  const lowList = products.filter(isLow);
+  const normalList = products
+    .filter((p) => !isLow(p))
+    .sort((a, b) => {
+      // 有採購日期嘅排前面（新→舊）；冇日期嘅排最後。
+      const da = a.last_purchase_date ?? "";
+      const db = b.last_purchase_date ?? "";
+      if (da !== db) return db.localeCompare(da);
+      return a.name.localeCompare(b.name);
+    });
+  const normalVisible = normalList.slice(0, Math.max(0, COLLAPSED_LIMIT - lowList.length));
+  const hiddenCount = normalList.length - normalVisible.length;
+  const visibleProducts = showAll ? products : [...lowList, ...normalVisible];
 
   return (
     <section className={embedded ? "" : "mb-6"}>
@@ -191,12 +239,12 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
         </div>
       ) : (
         <div className={`grid grid-cols-1 gap-3 ${embedded ? "" : "sm:grid-cols-2 xl:grid-cols-3"}`}>
-          {products.map((p) => {
-            const isLow = p.reorder_level > 0 && p.current_qty < p.reorder_level;
+          {visibleProducts.map((p) => {
+            const isLowItem = isLow(p);
             return (
               <div
                 key={p.id}
-                className={`rounded-2xl border bg-white p-4 ${isLow ? "border-amber-300 ring-1 ring-amber-200" : "border-slate-200"}`}
+                className={`rounded-2xl border bg-white p-4 ${isLowItem ? "border-amber-300 ring-1 ring-amber-200" : "border-slate-200"}`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
@@ -210,7 +258,7 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
                       <span>單位：{p.unit}</span>
                     </div>
                   </div>
-                  {isLow && (
+                  {isLowItem && (
                     <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-300">
                       低庫存
                     </span>
@@ -262,6 +310,27 @@ export function InventoryTable({ merchantId, account, embedded = false, onMutate
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* 🔴 2026-10-07（項目 1 第 1 層）：收合提示＋展開／收起。
+          只有「真係有嘢收埋」或者「已經展開」時才出，唔好留一條常年無意義嘅橫幅
+          （見 memory §6：條件式 UI 要整塊條件 render，唔可以剩空殼）。 */}
+      {!loading && products.length > 0 && (hiddenCount > 0 || showAll) && (
+        <div className="mt-3 flex flex-col items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          {!showAll && (
+            <p className="text-center text-xs text-slate-500">
+              已顯示 {visibleProducts.length} / {totalCount} 個
+              {lowStock > 0 && <span className="ml-1 text-amber-700">（含 {lowStock} 個低庫存，全部已列出）</span>}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="min-h-[40px] rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          >
+            {showAll ? `收起（只顯示常用）` : `顯示全部（+${hiddenCount}）`}
+          </button>
         </div>
       )}
 

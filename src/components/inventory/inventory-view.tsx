@@ -23,6 +23,7 @@ import { LineChart } from "./charts/LineChart";
 import { InventoryTable } from "./inventory-table";
 import { ItemAnalysisView } from "./item-analysis-view";
 import { InventorySettingsPanel, type Supplier } from "./inventory-settings-panel";
+import { formatReceiptStamp, isBackdatedReceipt, receiptStampLabel } from "@/lib/receipt-timestamp";
 
 type ReceiptItem = {
   id: string;
@@ -43,6 +44,16 @@ type Receipt = {
   payment_status: string;
   category?: string;
   raw_ocr_data?: { receipt_number?: string; payment_method?: string; payment_status?: string; category?: string } | null;
+  /**
+   * 🔴 錄入時間（`receipts.created_at`，Supabase timestamptz）。
+   *
+   * 由 `/api/inventory/receipts` 嘅 GET 帶出（`enriched` 組裝時補上）。
+   * 2026-10-07 起用嚟顯示「年月日時分秒」—— `receipt_date` 係 date 型別，
+   * **本身冇時分秒**，唯一有時分秒嘅來源就係呢個欄位。
+   *
+   * ⚠️ 舊資料／未部署新版 API 時可能係 `undefined` ⇒ 顯示降級為只出日期。
+   */
+  created_at?: string | null;
   items: ReceiptItem[];
 };
 
@@ -307,6 +318,10 @@ function ReceiptFormModal({
     setErr(null);
     if (!form.merchant_id && !form.merchant_name.trim()) return setErr("請選擇或輸入供應商");
     if (!form.date) return setErr("請選擇收據日期");
+    // 🔴 2026-10-07 J 拍板：品類必填。
+    // 舊收據（品類為空）一經編輯儲存就會被要求補揀 —— 呢個係預期行為，
+    // 因為品項分析／品類報表要靠品類分組，空品類會出現「未分類」黑洞。
+    if (!form.category.trim()) return setErr("請選擇品類（必填）");
     const items = form.items
       .filter((it) => it.name.trim())
       .map((it) => ({
@@ -498,7 +513,11 @@ function ReceiptFormModal({
           {/* ── 品類：chip 直接揀（觸屏），清單由「設置」管理 ── */}
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <label className="text-sm font-medium text-slate-700">品類</label>
+              {/* 🔴 2026-10-07 J 拍板：「品類」改必填（原本可留空 = 不指定）。
+                  舊收據冇品類 ⇒ 一撳入去編輯、儲存時會被要求補揀（見 save() 驗證）。 */}
+              <label className="text-sm font-medium text-slate-700">
+                品類 <span className="text-red-500">*</span>
+              </label>
               <button
                 type="button"
                 onClick={() => {
@@ -516,8 +535,9 @@ function ReceiptFormModal({
                   className={fieldCls}
                   value={form.category}
                   onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  placeholder="輸入品類（例如：食材）"
+                  placeholder="輸入品類（必填，例如：食材）"
                   aria-label="品類"
+                  required
                 />
                 {categoryOptions.length === 0 && (
                   <p className="mt-1.5 text-xs text-slate-400">
@@ -527,13 +547,9 @@ function ReceiptFormModal({
               </>
             ) : (
               <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={chipCls(!form.category)}
-                  onClick={() => setForm({ ...form, category: "" })}
-                >
-                  不指定
-                </button>
+                {/* 🔴 2026-10-07：「不指定」chip 已移除 —— 品類改必填。
+                    冇咗呢個 chip 之後，未揀品類時係「一個都冇選中」嘅狀態，
+                    唔會誤導用戶以為已經揀咗一個有效值。 */}
                 {categoryOptions.map((c) => (
                   <button
                     key={c}
@@ -596,6 +612,17 @@ function ReceiptFormModal({
                   onChange={(e) => setForm({ ...form, date: e.target.value })}
                   aria-label="收據日期"
                 />
+              )}
+              {/* 🔴 2026-10-07：顯示「錄入時間」（年月日時分秒）。
+                  單據日期係商家填嘅；錄入時間係系統寫入嘅，兩者係唔同概念 ——
+                  補登舊單時一定唔同日，所以要寫明係邊個時間，唔可以混淆。 */}
+              {initial?.created_at && (
+                <p className="mt-2 text-xs text-slate-500 tabular-nums">
+                  錄入時間：{formatReceiptStamp(initial.receipt_date, initial.created_at)}
+                  {isBackdatedReceipt(initial.receipt_date, initial.created_at) && (
+                    <span className="ml-1 text-amber-600">（補登，非當日錄入）</span>
+                  )}
+                </p>
               )}
             </div>
           </div>
@@ -1366,6 +1393,7 @@ export function InventoryView() {
               {visibleReceipts.map((r) => {
                 const paid = r.payment_status === "paid";
                 const lineNo = r.raw_ocr_data?.receipt_number;
+                const stamp = receiptStampLabel(r.receipt_date, r.created_at);
                 return (
                   <button
                     key={r.id}
@@ -1376,10 +1404,16 @@ export function InventoryView() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="text-base font-medium text-slate-900">{r.merchant_name}</div>
-                        <div className="mt-0.5 text-xs text-slate-500">
-                          {r.receipt_date}
+                        {/* 🔴 2026-10-07：時間格式改為「年/月/日 時:分:秒」。
+                            時分秒來源係 created_at（錄入時間），因為 receipt_date 只有日期。
+                            補登舊單時兩者會唔同日 ⇒ 加註「時間為錄入時間」避免誤會。 */}
+                        <div className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                          {stamp.primary}
                           {lineNo ? ` ・ #${lineNo}` : ""} ・ {r.items.length} 項
                         </div>
+                        {stamp.note && (
+                          <div className="mt-0.5 text-[11px] text-slate-400">{stamp.note}</div>
+                        )}
                         <div className="mt-0.5 text-xs text-slate-400">
                           付款方式：{labelMap[normalizePaymentMethod(r.payment_method)] ?? r.payment_method}
                         </div>
