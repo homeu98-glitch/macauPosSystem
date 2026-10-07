@@ -55,6 +55,11 @@ function detectMissingBaselineColumn(products: InvProduct[]): boolean {
  *   · expense 表未建立（42P01）  → 照回庫存資料，`schemaReady:false`
  *   · baseline 欄未存在（0065）  → 照回資料，附 `warning` 明確講明
  *
+ * 🔴 2026-10-07 加 `receiptCount`：令前端分得清「真係冇貨」同「有收據但未同步」。
+ *    實例 —— 商家錄咗兩日收據從未按過同步 ⇒ 分析頁永遠空白，而畫面只叫佢
+ *    「去設置按同步」，佢唔知有一步未做。有 `receiptCount` 就可以直接喺
+ *    空狀態嗰度出一鍵同步，唔使人自己去搵。
+ *
  * Query：
  *   `store`（必填，＝ merchantId）· `account`（選填，只作店戶存在性檢查）
  *   `range`（`today|yesterday|7d|30d|90d|all|custom`，選填）＋ `start`/`end`。
@@ -87,6 +92,21 @@ export async function GET(request: Request) {
   let matched: boolean | null = null;
   let schemaReady = true;
   let message: string | undefined;
+  /**
+   * 🔴 2026-10-07：就算 `inv_products` 係空，都要答得出「係真係冇貨，定係未同步」。
+   *
+   * 呢個係實際發生過嘅事故：商家連續兩日錄咗 35 張收據，但從未按過
+   * 「從收據同步」⇒ `inv_products` 一直係空 ⇒ 品項分析永遠顯示空狀態，
+   * 而畫面只叫佢「請先到設置按同步」，佢根本唔知原來有一步未做。
+   *
+   * ⇒ 回一個 `receiptCount`，前端就可以分辨：
+   *      receiptCount > 0 且 rows 為空 ＝ 「有待同步嘅收據」→ 出**一鍵同步**按鈕
+   *      receiptCount ＝ 0              ＝ 真係冇收據 → 出普通空狀態
+   *
+   * ⚠️ 只喺 rows 為空時先查（有貨就冇必要多打一個 count 請求 —— egress 敏感）。
+   * ⚠️ count 用 `head: true` 唔拉任何列，成本近乎零。
+   */
+  let receiptCount: number | null = null;
   const expense = getExpenseSupabaseClient();
   if (!expense) {
     matched = null;
@@ -112,6 +132,14 @@ export async function GET(request: Request) {
       message = "expenseRecorder 找不到相同帳號的店戶。";
     } else {
       matched = true;
+      // 只喺「庫存空」時才探測收據數（見上方註釋）
+      if (rows.length === 0) {
+        const { count, error: cErr } = await expense
+          .from("receipts")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", shopUser.id);
+        if (!cErr) receiptCount = count ?? 0;
+      }
     }
   }
 
@@ -131,6 +159,8 @@ export async function GET(request: Request) {
     schemaReady,
     ...(message ? { message } : {}),
     ...(warning ? { warning } : {}),
+    /** 該店戶在 expenseRecorder 嘅收據總數；`null` ＝ 未探測／探測失敗。 */
+    receiptCount,
     /** 明示 `range` 未參與過濾，防止前端誤會（見 route 註釋）。 */
     stockRangeIgnored: true,
     rows,

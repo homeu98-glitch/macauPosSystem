@@ -709,6 +709,30 @@ describe('品項分析：API 契約', () => {
     const api = read(ANALYSIS_API);
     assert.ok(/stockRangeIgnored/.test(api), '要明示 range 未 filter，避免前端誤會');
   });
+
+  /* 🔴 2026-10-07 事故：商家錄咗兩日收據但從未按過「從收據同步」，
+     inv_products 一直係空 ⇒ 分析頁永遠空白。空狀態必須答得出「係未同步定真係冇貨」。 */
+  it('🔴 空庫存時要回 receiptCount，令前端分得清「未同步」同「真係冇貨」', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/receiptCount/.test(api), '要回 receiptCount 訊號');
+    assert.ok(
+      /rows\.length === 0/.test(api),
+      '🔴 receiptCount 只可以喺 rows 為空時才查 —— 有貨就唔應該多打一個 count 請求（egress）',
+    );
+    assert.ok(
+      /count: "exact", head: true/.test(api),
+      'count 要用 head:true 唔拉列（成本近乎零）',
+    );
+    assert.ok(
+      /\.eq\("user_id", shopUser\.id\)/.test(api),
+      'count 要按店戶 scope，唔可以數全平台收據',
+    );
+  });
+
+  it('receiptCount 探測失敗唔可以令整條 route 爆（降級成 null）', () => {
+    const api = read(ANALYSIS_API);
+    assert.ok(/if \(!cErr\) receiptCount/.test(api), 'count 出錯要靜默降級做 null，唔可以 throw');
+  });
 });
 
 describe('品項分析：純函式口徑', () => {
@@ -813,6 +837,28 @@ describe('品項分析：UI 契約', () => {
   it('數字要用 tabular-nums', () => {
     const view = read(ANALYSIS_VIEW);
     assert.ok(/tabular-nums/.test(view));
+  });
+
+  /* 🔴 2026-10-07：空狀態必須分兩種 —— 「有收據未同步」（出一鍵同步）vs「真係冇收據」。 */
+  it('🔴 空狀態要區分「有收據未同步」同「真係冇貨」', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/data\.receiptCount \?\? 0\) > 0/.test(view), '要用 receiptCount 分岔');
+    assert.ok(/立即從收據同步/.test(view), '未同步嗰種要出一個掣，唔可以只叫商家自己去搵');
+  });
+
+  it('🔴 一鍵同步要打同一支 sync API（唔可以自砌第二套同步邏輯）', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(
+      /\/api\/inventory\/products\/sync-from-receipts/.test(view),
+      '🔴 同步只有一個寫入路徑（基準價鎖定時機唯一真源），要打同一支 API',
+    );
+    assert.ok(/body: JSON\.stringify\(\{ store: merchantId, account \}\)/.test(view), '要帶 store + account');
+  });
+
+  it('同步進行中要 disable 掣（防止連按造成重複同步）', () => {
+    const view = read(ANALYSIS_VIEW);
+    assert.ok(/disabled=\{syncing\}/.test(view), '同步中要 disable');
+    assert.ok(/min-h-\[40px\]/.test(view), '同步掣要符合觸控下限 40px');
   });
 });
 

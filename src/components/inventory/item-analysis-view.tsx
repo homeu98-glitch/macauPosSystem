@@ -22,6 +22,8 @@ type AnalysisResponse = {
   matched?: boolean | null;
   schemaReady?: boolean;
   stockRangeIgnored?: boolean;
+  /** 該店戶在 expenseRecorder 嘅收據總數；`null` ＝ 未探測／探測失敗。 */
+  receiptCount?: number | null;
   rows?: ItemAnalysisRow[];
   summary?: ItemAnalysisSummary;
   amountRanking?: AmountRankPoint[];
@@ -144,6 +146,16 @@ export function ItemAnalysisView({
   const [data, setData] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * 🔴 一鍵同步：空狀態時若偵測到「有收據但冇庫存品」就提供。
+   *
+   * 為何要做呢個：商家錄完收據後**冇任何提示**要去按「從收據同步」，
+   * 而該步喺「設置 → 庫存品」入面（要自己搵）。實際發生過連續兩日
+   * 錄咗 35 張收據都冇同步 ⇒ 分析頁永遠空白而唔知點解。
+   * 呢度直接喺空狀態出掣，唔使人離開當前頁面去搵。
+   */
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const [onlyUp, setOnlyUp] = useState(false);
   const [category, setCategory] = useState<string>(ANY);
@@ -172,6 +184,46 @@ export function ItemAnalysisView({
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * 觸發「從收據同步」再重載分析。
+   *
+   * ⚠️ 同 `inventory-table.tsx` 嘅 `doSync` 打同一支 API（單一寫入路徑），
+   *    唔喺呢度自砌第二套同步邏輯 —— 基準價嘅鎖定時機只有一個真源。
+   */
+  const doSync = useCallback(async () => {
+    if (!merchantId || !account) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/inventory/products/sync-from-receipts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ store: merchantId, account }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        summary?: { created: number; updated: number; total_after: number };
+      };
+      if (!json.ok) {
+        setError(json.error || "同步失敗");
+      } else {
+        const s = json.summary;
+        setSyncMsg(
+          s
+            ? `同步完成：新增 ${s.created} 個、更新 ${s.updated} 個，共 ${s.total_after} 個庫存品。`
+            : "同步完成。",
+        );
+        await load();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  }, [account, merchantId, load]);
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const summary = data?.summary ?? null;
@@ -324,9 +376,35 @@ export function ItemAnalysisView({
       {loading ? (
         <p className="text-sm text-slate-500">載入中…</p>
       ) : allRows.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
-          尚無庫存品。請先到「設置 → 庫存品」按「從收據同步」帶入品項。
-        </div>
+        /* 🔴 空狀態要分兩種，唔可以當同一件事：
+             (a) 有收據但未同步 → 一鍵同步掣（真正嘅解法，商家唔使去別處搵）
+             (b) 真係冇收據     → 普通說明
+           之前只出 (b) 嘅文案，商家有 35 張收據都見到「尚無庫存品」而唔知點解。 */
+        data && (data.receiptCount ?? 0) > 0 ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center">
+            <p className="text-sm font-semibold text-amber-900">
+              偵測到 {data.receiptCount} 張收據，但尚未同步成庫存品
+            </p>
+            <p className="mx-auto mt-1 max-w-xl text-xs leading-relaxed text-amber-800">
+              品項分析只讀「庫存品」主檔。收據錄入後需要同步一次，系統才會把品項、
+              加權進價與<span className="font-semibold">首次進貨基準價</span>帶入。
+            </p>
+            <button
+              type="button"
+              onClick={() => void doSync()}
+              disabled={syncing}
+              className="mt-4 inline-flex min-h-[40px] items-center rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {syncing ? "同步中…" : "立即從收據同步"}
+            </button>
+            {syncMsg && <p className="mt-3 text-xs text-amber-800">{syncMsg}</p>}
+            {error && <p className="mt-3 text-xs text-red-700">{error}</p>}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+            尚無庫存品。請先到「設置 → 庫存品」按「從收據同步」帶入品項。
+          </div>
+        )
       ) : (
         <>
           {/* KPI 四卡（全量口徑，唔跟篩選 —— 同報表頁嘅「總覽」語意一致） */}
