@@ -1,0 +1,46 @@
+抓取：Content-Range 聲稱 94｜實際抓到 94｜去重後 94
+窗口 2026-07-10→2026-10-07：94 張，涉日 ["2026-10-05","2026-10-06","2026-10-07"]
+
+（供文件引用）只喺新 key 出現嘅純線上菜品 5 款：
+   Y14 表嫂肉碎生菜包              qty=1 rev=5800（全部 onlineQty=1）
+   M5 椒鹽豆腐                  qty=1 rev=4400（全部 onlineQty=1）
+   冬菇紅棗蒸滑雞飯                 qty=1 rev=3800（全部 onlineQty=1）
+   B3 香腸雞蛋炒飯                qty=1 rev=3800（全部 onlineQty=1）
+   鱼皮                       qty=1 rev=2600（全部 onlineQty=1）
+
+=== 恆等式逐條 ===
+  OK   全店 rows                                      got=94 want=94
+  OK   窗口 rows                                      got=94 want=94
+  OK   settled/paid（全渠道）                            got=93 want=93
+  OK   kpi.orderCount（v1）                           got=74 want=74
+  OK   kpi.revenueAvos（v1）                          got=547100 want=547100
+  OK   ordersTotal（v1）                              got=74 want=74
+  OK   ordersByChannelTotal（全渠道）                    got=93 want=93
+  OK   dishesTotal                                  got=58 want=58
+  OK   dishes Σqty                                  got=198 want=198
+  OK   dishes Σrev                                  got=549900 want=549900
+  OK   dishesByChannelTotal                         got=63 want=63
+  OK   dishesByChannel Σqty                         got=225 want=225
+  OK   dishesByChannel Σrev                         got=667600 want=667600
+  OK   拆欄數量守恆（全部行）                                  got=63 want=63
+  OK   拆欄金額守恆（全部行）                                  got=63 want=63
+  OK   舊 dishes[] 每個名都喺 dishesByChannel[] 出現（舊 ⊂ 新） got=0 want=0
+  OK   dishesByChannel[] 多出嘅名全部 offlineQty=0（純線上菜）  got=5 want=5
+  OK   同名行：dishes[].qty >= dishesByChannel[].offlineQty（全部行） got=58 want=58
+  OK   同名行：dishes[].revenueAvos >= dishesByChannel[].offlineRevenueAvos（全部行） got=58 want=58
+  OK   Σdishes[].qty − ΣofflineQty ＝ 平台單菜品 qty      got=14 want=14
+  OK   Σdishes[].rev − ΣofflineRev ＝ 平台單菜品 rev      got=72700 want=72700
+  OK   平台單菜品 rev − 平台單 kpi rev ＝ 平台抽成差（對 paymentBreakdown 外賣平台 diffAvos） got=2800 want=2800
+  OK   ordersByChannelTotal − ordersTotal = online_projection 張數 got=19 want=19
+  OK   kpi.offline + onlinePlatform = v1 kpi        got=547100 want=547100
+  OK   全渠道 revenue = offline+projection+platform    got=666800 want=666800
+  OK   舊 orders[] 出現 online_projection 嘅行數          got=0 want=0
+  OK   舊 dishes[] 冇任何 qty===42                      got=0 want=0
+  OK   舊 dishes[] 冇任何 rev===84000                   got=0 want=0
+  OK   舊 dishes[] 冇任何 rev===108000                  got=0 want=0
+  OK   全店冇「凍檸茶」                                     got=0 want=0
+  OK   dishes 排序單調不升                                got=true want=true
+
+總計 31 條，失敗 0 條
+
+已寫 tools/_probe-offlinereport-truth-20261007.json

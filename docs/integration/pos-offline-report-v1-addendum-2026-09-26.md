@@ -6,6 +6,27 @@
 > **關係**：**additive 增補** —— [v1 原件](./pos-offline-report-api.md) 全部條款**繼續有效**，
 > 本檔只係新增兩節資料。`v` **仍然係 `1`**。
 > **本檔可以直接轉貼畀 Ledger。**
+>
+> ---
+>
+> 🔴🔴 **2026-10-07 警告：下面所有 JSON 數值都係「格式示例」，唔係實測基線。**
+>
+> 本檔示例入面嘅 `{"name": "凍檸茶", "qty": 42, "revenueAvos": 84000}`
+> （同 `ordersTotal: 27` / `dishesTotal: 12`）**從來冇對過生產**。
+> 2026-10-07 用 PostgREST 逐字重算 0060 口徑（生產 94 張單）證實：
+> * 全店**冇任何一行** `qty === 42`
+> * 全店**冇任何一行** `revenueAvos === 84,000`（或 `108,000`）
+> * 全店**冇「凍檸茶」**呢道菜（唯一含「茶」嘅係「快闪菜（沙茶啫啫豆腐煲）」）
+> * 最大單行 `revenueAvos` = **55,600**（表嫂肉餅飯）
+>
+> 呢啲示例數字後來被錯誤地抄入驗收註解，導致「照住對數會得出**正確**結果
+> 卻以為仲未修好」。詳見
+> [`pos-offline-report-channel-addendum-2026-10-07.md`](./pos-offline-report-channel-addendum-2026-10-07.md)
+> 同 `docs/154-ledger-offline-report-online-channel.md` §10。
+>
+> ✅ **正確用法：只睇欄位名同型別，唔好睇數值。** 數值一律用恆等式對
+> （`Σ byPayment = kpi.revenueAvos`、`ordersTotal = length(orders)` 等），
+> 因為 `ordersTotal`／`dishesTotal`／`Σqty`／`Σrev` **全部會隨日期滾動**。
 
 ---
 

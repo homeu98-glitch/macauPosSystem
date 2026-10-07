@@ -1,0 +1,893 @@
+{
+  "generatedAt": "2026-10-07T16:51:36.376Z",
+  "store": "8291f843-9def-4956-9d0b-1cfef2598306",
+  "range": [
+    "2026-07-10",
+    "2026-10-07"
+  ],
+  "days": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07"
+  ],
+  "totalRows": 94,
+  "claimedByContentRange": 94,
+  "v1": {
+    "orderCount": 74,
+    "revenueAvos": 547100,
+    "ordersTotal": 74,
+    "dishesTotal": 58,
+    "dishesSumQty": 198,
+    "dishesSumRevenue": 549900
+  },
+  "allChannel": {
+    "settledPaid": 93,
+    "revenueAvos": 666800,
+    "ordersByChannelTotal": 93,
+    "dishesByChannelTotal": 63,
+    "dishesSumQty": 225,
+    "dishesSumRevenue": 667600
+  },
+  "dishes": [
+    {
+      "name": "表嫂肉餅飯",
+      "qty": 11,
+      "revenueAvos": 55600
+    },
+    {
+      "name": "酸菜魚飯套餐（海鱸魚）",
+      "qty": 6,
+      "revenueAvos": 36500
+    },
+    {
+      "name": "快閃餐(湿炒豉椒猪杂河粉)",
+      "qty": 8,
+      "revenueAvos": 32700
+    },
+    {
+      "name": "快閃餐（金不换炒蝦仁饭）",
+      "qty": 6,
+      "revenueAvos": 28900
+    },
+    {
+      "name": "蒸魚飯",
+      "qty": 4,
+      "revenueAvos": 23400
+    },
+    {
+      "name": "快閃餐（香茅煎雞饭）",
+      "qty": 5,
+      "revenueAvos": 21000
+    },
+    {
+      "name": "豉汁蒸",
+      "qty": 6,
+      "revenueAvos": 21000
+    },
+    {
+      "name": "表嫂手打肉餅",
+      "qty": 3,
+      "revenueAvos": 19200
+    },
+    {
+      "name": "快閃餐(腐乳肉碎蒸茄子饭)",
+      "qty": 4,
+      "revenueAvos": 17200
+    },
+    {
+      "name": "表嫂酸菜魚",
+      "qty": 2,
+      "revenueAvos": 13800
+    },
+    {
+      "name": "表嫂雞飯",
+      "qty": 3,
+      "revenueAvos": 13800
+    },
+    {
+      "name": "即叫即蒸魚飯",
+      "qty": 2,
+      "revenueAvos": 13000
+    },
+    {
+      "name": "Y5 卜卜白蜆煲",
+      "qty": 1,
+      "revenueAvos": 12800
+    },
+    {
+      "name": "時價菜",
+      "qty": 4,
+      "revenueAvos": 12700
+    },
+    {
+      "name": "青島",
+      "qty": 7,
+      "revenueAvos": 11900
+    },
+    {
+      "name": "姜蔥炒蝦（半斤）",
+      "qty": 1,
+      "revenueAvos": 10800
+    },
+    {
+      "name": "蒸黄花鱼饭",
+      "qty": 2,
+      "revenueAvos": 10400
+    },
+    {
+      "name": "E6 白灼基圍蝦（半斤）",
+      "qty": 1,
+      "revenueAvos": 9800
+    },
+    {
+      "name": "細黃鱔石锅饭",
+      "qty": 1,
+      "revenueAvos": 8800
+    },
+    {
+      "name": "A13 豉汁炒葡蜆",
+      "qty": 1,
+      "revenueAvos": 8800
+    },
+    {
+      "name": "A9 手撕包菜",
+      "qty": 2,
+      "revenueAvos": 8400
+    },
+    {
+      "name": "例湯",
+      "qty": 6,
+      "revenueAvos": 8100
+    },
+    {
+      "name": "快闪菜（沙茶啫啫豆腐煲）",
+      "qty": 2,
+      "revenueAvos": 7800
+    },
+    {
+      "name": "椒盐九肚鱼",
+      "qty": 1,
+      "revenueAvos": 7800
+    },
+    {
+      "name": "快閃餐(西兰花肉片饭)",
+      "qty": 2,
+      "revenueAvos": 7600
+    },
+    {
+      "name": "N16 欖菜四季豆飯",
+      "qty": 2,
+      "revenueAvos": 7200
+    },
+    {
+      "name": "N6 魚香茄子飯",
+      "qty": 2,
+      "revenueAvos": 6800
+    },
+    {
+      "name": "N7.蕃茄燜黃花魚飯",
+      "qty": 1,
+      "revenueAvos": 6200
+    },
+    {
+      "name": "土鱿肉饼",
+      "qty": 1,
+      "revenueAvos": 5600
+    },
+    {
+      "name": "清蒸/豉汁蒸時魚飯",
+      "qty": 1,
+      "revenueAvos": 5500
+    },
+    {
+      "name": "快闪菜（南乳莲藕炆腩仔）",
+      "qty": 1,
+      "revenueAvos": 5400
+    },
+    {
+      "name": "酸菜卢鱼饭",
+      "qty": 1,
+      "revenueAvos": 5300
+    },
+    {
+      "name": "白飯",
+      "qty": 5,
+      "revenueAvos": 5000
+    },
+    {
+      "name": "冬菇肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4800
+    },
+    {
+      "name": "C9 蒜蓉粉絲蒸勝瓜",
+      "qty": 1,
+      "revenueAvos": 4800
+    },
+    {
+      "name": "古法土魷肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4500
+    },
+    {
+      "name": "快闪菜（酥炸墨魚餅）",
+      "qty": 1,
+      "revenueAvos": 4400
+    },
+    {
+      "name": "盒",
+      "qty": 44,
+      "revenueAvos": 4400
+    },
+    {
+      "name": "A10 金沙四季豆",
+      "qty": 1,
+      "revenueAvos": 4400
+    },
+    {
+      "name": "快閃餐（紫苏煎雞饭）",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "沙姜鸡饭",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "咸蛋肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "蔥油鸡饭",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "薯仔肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "A23 酸辣炒薯仔絲",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "N1.薯仔燜雞飯",
+      "qty": 1,
+      "revenueAvos": 4200
+    },
+    {
+      "name": "油菜 生菜",
+      "qty": 4,
+      "revenueAvos": 4000
+    },
+    {
+      "name": "N6.魚香茄子飯",
+      "qty": 1,
+      "revenueAvos": 3900
+    },
+    {
+      "name": "冬菇蒸滑雞饭",
+      "qty": 1,
+      "revenueAvos": 3800
+    },
+    {
+      "name": "N8 勝瓜肉片飯",
+      "qty": 1,
+      "revenueAvos": 3600
+    },
+    {
+      "name": "可乐",
+      "qty": 3,
+      "revenueAvos": 2400
+    },
+    {
+      "name": "營養五穀飯",
+      "qty": 2,
+      "revenueAvos": 2400
+    },
+    {
+      "name": "Q6.例湯(熱)",
+      "qty": 1,
+      "revenueAvos": 1500
+    },
+    {
+      "name": "袋",
+      "qty": 12,
+      "revenueAvos": 1200
+    },
+    {
+      "name": "水蛋",
+      "qty": 2,
+      "revenueAvos": 1000
+    },
+    {
+      "name": "細份蒸水蛋Steamed Egg",
+      "qty": 1,
+      "revenueAvos": 600
+    },
+    {
+      "name": "積分水蛋",
+      "qty": 4,
+      "revenueAvos": 0
+    },
+    {
+      "name": "積分換油菜",
+      "qty": 5,
+      "revenueAvos": 0
+    }
+  ],
+  "dishesByChannel": [
+    {
+      "name": "表嫂肉餅飯",
+      "qty": 11,
+      "revenueAvos": 55600,
+      "offlineQty": 11,
+      "offlineRevenueAvos": 55600,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "快閃餐（金不换炒蝦仁饭）",
+      "qty": 11,
+      "revenueAvos": 53400,
+      "offlineQty": 6,
+      "offlineRevenueAvos": 28900,
+      "onlineQty": 5,
+      "onlineRevenueAvos": 24500
+    },
+    {
+      "name": "快閃餐(腐乳肉碎蒸茄子饭)",
+      "qty": 11,
+      "revenueAvos": 47400,
+      "offlineQty": 4,
+      "offlineRevenueAvos": 17200,
+      "onlineQty": 7,
+      "onlineRevenueAvos": 30200
+    },
+    {
+      "name": "酸菜魚飯套餐（海鱸魚）",
+      "qty": 6,
+      "revenueAvos": 36500,
+      "offlineQty": 6,
+      "offlineRevenueAvos": 36500,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "蒸魚飯",
+      "qty": 6,
+      "revenueAvos": 35000,
+      "offlineQty": 4,
+      "offlineRevenueAvos": 23400,
+      "onlineQty": 2,
+      "onlineRevenueAvos": 11600
+    },
+    {
+      "name": "快閃餐(湿炒豉椒猪杂河粉)",
+      "qty": 8,
+      "revenueAvos": 32700,
+      "offlineQty": 8,
+      "offlineRevenueAvos": 32700,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "快閃餐（香茅煎雞饭）",
+      "qty": 5,
+      "revenueAvos": 21000,
+      "offlineQty": 5,
+      "offlineRevenueAvos": 21000,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "豉汁蒸",
+      "qty": 6,
+      "revenueAvos": 21000,
+      "offlineQty": 6,
+      "offlineRevenueAvos": 21000,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "表嫂手打肉餅",
+      "qty": 3,
+      "revenueAvos": 19200,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 3,
+      "onlineRevenueAvos": 19200
+    },
+    {
+      "name": "表嫂雞飯",
+      "qty": 4,
+      "revenueAvos": 18500,
+      "offlineQty": 3,
+      "offlineRevenueAvos": 13800,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4700
+    },
+    {
+      "name": "快閃餐(西兰花肉片饭)",
+      "qty": 4,
+      "revenueAvos": 15300,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 7600,
+      "onlineQty": 2,
+      "onlineRevenueAvos": 7700
+    },
+    {
+      "name": "表嫂酸菜魚",
+      "qty": 2,
+      "revenueAvos": 13800,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 2,
+      "onlineRevenueAvos": 13800
+    },
+    {
+      "name": "青島",
+      "qty": 8,
+      "revenueAvos": 13600,
+      "offlineQty": 7,
+      "offlineRevenueAvos": 11900,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 1700
+    },
+    {
+      "name": "即叫即蒸魚飯",
+      "qty": 2,
+      "revenueAvos": 13000,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 2,
+      "onlineRevenueAvos": 13000
+    },
+    {
+      "name": "Y5 卜卜白蜆煲",
+      "qty": 1,
+      "revenueAvos": 12800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 12800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "時價菜",
+      "qty": 4,
+      "revenueAvos": 12700,
+      "offlineQty": 4,
+      "offlineRevenueAvos": 12700,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "A9 手撕包菜",
+      "qty": 3,
+      "revenueAvos": 12600,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 8400,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4200
+    },
+    {
+      "name": "快闪菜（沙茶啫啫豆腐煲）",
+      "qty": 3,
+      "revenueAvos": 11700,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 7800,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 3900
+    },
+    {
+      "name": "姜蔥炒蝦（半斤）",
+      "qty": 1,
+      "revenueAvos": 10800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 10800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "蒸黄花鱼饭",
+      "qty": 2,
+      "revenueAvos": 10400,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 10400,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "E6 白灼基圍蝦（半斤）",
+      "qty": 1,
+      "revenueAvos": 9800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 9800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "快闪菜（酥炸墨魚餅）",
+      "qty": 2,
+      "revenueAvos": 8800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4400,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4400
+    },
+    {
+      "name": "細黃鱔石锅饭",
+      "qty": 1,
+      "revenueAvos": 8800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 8800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "A10 金沙四季豆",
+      "qty": 2,
+      "revenueAvos": 8800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4400,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4400
+    },
+    {
+      "name": "A13 豉汁炒葡蜆",
+      "qty": 1,
+      "revenueAvos": 8800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 8800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "例湯",
+      "qty": 6,
+      "revenueAvos": 8100,
+      "offlineQty": 6,
+      "offlineRevenueAvos": 8100,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "椒盐九肚鱼",
+      "qty": 1,
+      "revenueAvos": 7800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 7800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "N16 欖菜四季豆飯",
+      "qty": 2,
+      "revenueAvos": 7200,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 7200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "N6 魚香茄子飯",
+      "qty": 2,
+      "revenueAvos": 6800,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 6800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "N7.蕃茄燜黃花魚飯",
+      "qty": 1,
+      "revenueAvos": 6200,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 6200
+    },
+    {
+      "name": "Y14 表嫂肉碎生菜包",
+      "qty": 1,
+      "revenueAvos": 5800,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 5800
+    },
+    {
+      "name": "土鱿肉饼",
+      "qty": 1,
+      "revenueAvos": 5600,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 5600,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "清蒸/豉汁蒸時魚飯",
+      "qty": 1,
+      "revenueAvos": 5500,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 5500
+    },
+    {
+      "name": "快闪菜（南乳莲藕炆腩仔）",
+      "qty": 1,
+      "revenueAvos": 5400,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 5400,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "酸菜卢鱼饭",
+      "qty": 1,
+      "revenueAvos": 5300,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 5300,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "白飯",
+      "qty": 5,
+      "revenueAvos": 5000,
+      "offlineQty": 5,
+      "offlineRevenueAvos": 5000,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "冬菇肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4800,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4800
+    },
+    {
+      "name": "C9 蒜蓉粉絲蒸勝瓜",
+      "qty": 1,
+      "revenueAvos": 4800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "古法土魷肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4500,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4500,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "盒",
+      "qty": 44,
+      "revenueAvos": 4400,
+      "offlineQty": 44,
+      "offlineRevenueAvos": 4400,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "M5 椒鹽豆腐",
+      "qty": 1,
+      "revenueAvos": 4400,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4400
+    },
+    {
+      "name": "快閃餐（紫苏煎雞饭）",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "沙姜鸡饭",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "咸蛋肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "蔥油鸡饭",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "薯仔肉餅飯",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "A23 酸辣炒薯仔絲",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 4200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "N1.薯仔燜雞飯",
+      "qty": 1,
+      "revenueAvos": 4200,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 4200
+    },
+    {
+      "name": "油菜 生菜",
+      "qty": 4,
+      "revenueAvos": 4000,
+      "offlineQty": 4,
+      "offlineRevenueAvos": 4000,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "N6.魚香茄子飯",
+      "qty": 1,
+      "revenueAvos": 3900,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 3900
+    },
+    {
+      "name": "冬菇紅棗蒸滑雞飯",
+      "qty": 1,
+      "revenueAvos": 3800,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 3800
+    },
+    {
+      "name": "冬菇蒸滑雞饭",
+      "qty": 1,
+      "revenueAvos": 3800,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 3800,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "B3 香腸雞蛋炒飯",
+      "qty": 1,
+      "revenueAvos": 3800,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 3800
+    },
+    {
+      "name": "N8 勝瓜肉片飯",
+      "qty": 1,
+      "revenueAvos": 3600,
+      "offlineQty": 1,
+      "offlineRevenueAvos": 3600,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "鱼皮",
+      "qty": 1,
+      "revenueAvos": 2600,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 2600
+    },
+    {
+      "name": "可乐",
+      "qty": 3,
+      "revenueAvos": 2400,
+      "offlineQty": 3,
+      "offlineRevenueAvos": 2400,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "營養五穀飯",
+      "qty": 2,
+      "revenueAvos": 2400,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 2400,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "Q6.例湯(熱)",
+      "qty": 1,
+      "revenueAvos": 1500,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 1500
+    },
+    {
+      "name": "袋",
+      "qty": 12,
+      "revenueAvos": 1200,
+      "offlineQty": 12,
+      "offlineRevenueAvos": 1200,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "水蛋",
+      "qty": 2,
+      "revenueAvos": 1000,
+      "offlineQty": 2,
+      "offlineRevenueAvos": 1000,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "細份蒸水蛋Steamed Egg",
+      "qty": 1,
+      "revenueAvos": 600,
+      "offlineQty": 0,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 1,
+      "onlineRevenueAvos": 600
+    },
+    {
+      "name": "積分水蛋",
+      "qty": 4,
+      "revenueAvos": 0,
+      "offlineQty": 4,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    },
+    {
+      "name": "積分換油菜",
+      "qty": 5,
+      "revenueAvos": 0,
+      "offlineQty": 5,
+      "offlineRevenueAvos": 0,
+      "onlineQty": 0,
+      "onlineRevenueAvos": 0
+    }
+  ],
+  "failedChecks": []
+}

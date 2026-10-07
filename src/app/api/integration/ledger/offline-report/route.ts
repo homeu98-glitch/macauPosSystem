@@ -54,7 +54,37 @@ import { getSupabaseWriteClient } from "@/lib/supabase-server";
  * 🔴 截斷（3000 張單 / 300 款菜）嘅**唯一權威係 SQL** —— route 只依 `ordersTotal`
  *    推導 `flags.ordersTruncated`，**唔可以自己再截一次**（同 90 日 clamp 同一原則）。
  *
- * ## 範圍截斷：權威在 SQL（2026-09-25 修正）
+ * ## 2026-10-07 增補：渠道（channel）維度（`0066_pos_offline_report_channel.sql`）
+ *
+ * ### 🔴🔴 J 拍板嘅鐵律：**JSON 數據架構唔可以改**
+ *   Ledger 已經照 `v:1` 現有架構砌咗 UI ⇒ 現有欄位名／型別／層級／**數值**全部唔准郁。
+ *   呢條 route 因此**只做 pass-through**：舊欄照抄、新欄新 key，唔重新計算任何數字。
+ *
+ *   ⚠️⚠️ 呢條要守**三樣**：① 欄位名 ② 型別／層級 ③ **數值**。
+ *      2026-10-07 事故就係守咗 ①② 漏咗 ③：`dishes[].qty` 由 42 變 54、
+ *      `orders[]` 由 75 張變 93 張，而舊 code 收到新 payload **唔會 503**（照送 200）
+ *      ⇒ Ledger 張已對數嘅卡即刻跳數。J 拍板**方案 A**：舊欄還原，線上另開新 key。
+ *
+ *   特別注意 `kpi`：v1 嘅口徑係 `online_order_id is null`，而**外賣平台單冇呢個欄位**
+ *   ⇒ 平台單一直被包埋喺「線下」入面。實測 90 日 v1 `kpi` = 74 張 / MOP 5,471。
+ *   🔴 **絕對唔可以喺呢版「修正」成 4,772** —— 改咗佢張已對數嘅卡即刻跳數。
+ *      精確拆分放咗喺新 key `kpi.offline` / `kpi.online` / `kpi.onlinePlatform`。
+ *
+ *   🔴 `orders[]`／`dishes[]` **唔會**有線上投影單（還原咗 0060 嘅 `online_order_id is null`）。
+ *      線上單淨係喺 `ordersByChannel[]`／`dishesByChannel[]` 出现 ⇒ 舊 Ledger 完全零影響。
+ *
+ * ### 降級閥（`hasChannel`）
+ *   **六個 key 要麼全有、要麼全無**（`kpiByChannel`／`paymentBreakdown`／
+ *   `ordersByChannel`＋`ordersByChannelTotal`／`dishesByChannel`＋`dishesByChannelTotal`）：
+ *   · 全缺 ＝ 0066 未跑 ⇒ 優雅降級（唔出渠道欄、caps 亦唔宣告）⇒ Ledger 零影響；
+ *   · 部分缺 ＝ SQL 有 bug ⇒ 503 失敗得響。
+ *   ⚠️ `hasChannel` 依賴 `hasDetail`：冇明細就冇嘢可標示來源 ⇒ 舊版唔宣告。
+ *
+ * ### 🔴 舊欄 `dishes[]` 出現拆欄 = 503（`rpc-dish-split-on-legacy`）
+ *   唔係「optional 欄位」，而係**違規訊號**：加拆欄而唔移除 `online_order_id is null` 過濾，
+ *   `offlineQty` 會永遠等於 `qty`、`onlineQty` 永遠 0 ⇒ 兩欄都係假資料，比唔加更壞。
+ *
+ * ### 範圍截斷：權威在 SQL（2026-09-25 修正）
  *
  * 超過 90 日嘅請求，**一定要把請求嘅原始 `from`／`to` 傳落 RPC**，等 0058 自己截斷並回
  * `clamped=true`；route 只係自己算一個 `expected` 嚟**核對回傳值**。
@@ -181,10 +211,17 @@ export async function GET(request: Request) {
     byPayment: validated.byPayment,
     // 2026-09-26 增補：訂單明細 ＋ 菜品排名（截斷由 SQL 決定，route 只照抄）
     hasDetail: validated.hasDetail,
+    // 2026-10-07 增補：渠道能力（0066）。降級時 `hasChannel=false` ⇒ 響應唔出渠道欄。
+    hasChannel: validated.hasChannel,
     orders: validated.orders,
     ordersTotal: validated.ordersTotal,
     dishes: validated.dishes,
     dishesTotal: validated.dishesTotal,
+    paymentBreakdown: validated.paymentBreakdown,
+    ordersByChannel: validated.ordersByChannel,
+    ordersByChannelTotal: validated.ordersByChannelTotal,
+    dishesByChannel: validated.dishesByChannel,
+    dishesByChannelTotal: validated.dishesByChannelTotal,
     generatedAt: new Date().toISOString(),
   });
 
@@ -196,8 +233,8 @@ export async function GET(request: Request) {
       "x-pos-offline-report-v": String(payload.v),
       "x-pos-offline-report-path": OFFLINE_REPORT_PATH,
       // 🔴 `v` 按契約寫死係 1 ⇒ 加欄位唔會反映喺 `v`。用呢個標頭做能力探測：
-      //    舊部署（0059 未跑）唔會有 orders／dishes，Ledger 見到 caps 冇呢兩項就自動退回只顯示 KPI。
-      "x-pos-offline-report-caps": offlineReportCapsHeader(validated.hasDetail),
+      //    舊部署唔會有 orders／dishes／kpiByChannel，Ledger 見到 caps 冇呢幾項就自動退回舊 render。
+      "x-pos-offline-report-caps": offlineReportCapsHeader(validated.hasDetail, validated.hasChannel),
     },
   });
 }
