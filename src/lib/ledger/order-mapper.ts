@@ -1,4 +1,6 @@
 /** Raw row from `list_merchant_orders` or Realtime `orders` table. */
+import { posPaymentMethodLabel } from "../pos/payment-method-label.ts";
+
 export type LedgerOrderRow = {
   id: string;
   status: string;
@@ -215,11 +217,18 @@ export function rawLedgerStatus(status: string): string {
   return String(status).toLowerCase();
 }
 
+/**
+ * 🔴 **唔可以**自己再寫一份映射表 —— 統一真源係 `@/lib/pos/payment-method-label`
+ * （`pos_orders.payment_method` 同 Ledger enum 撈埋一齊，只有嗰度知道全量子集）。
+ *
+ * ⚠️ 呢度保留 `fallback = "--"`（唔係 `"未記錄"`）係**刻意**嘅行為差異：
+ * Ledger 側係「線上單列表」逐單顯示，`--` 係舊寫法；改咗會令下拉／詳情顯示變。
+ * 報表 breakdown 兩條路都會再過 `posPaymentMethodLabel(..., "未記錄")`。
+ */
 export function paymentModeLabel(mode?: string): string {
-  const value = String(mode ?? "").toLowerCase();
-  if (value === "balance") return "餘額扣點";
-  if (value === "in_store") return "到店付款";
-  return mode ?? "--";
+  const value = String(mode ?? "").trim();
+  if (!value) return "--";
+  return posPaymentMethodLabel(value, "--");
 }
 
 /**

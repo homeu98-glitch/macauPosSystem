@@ -19,6 +19,7 @@ import {
   getOrderStatusBadge,
   getPaymentBadge,
 } from "@/lib/pos-order-filters";
+import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
 import type { PosOrder } from "@/lib/types";
 
 /** 今日嘅 Macau 日曆日（`YYYY-MM-DD`），用於匯出檔名。 */
@@ -160,7 +161,9 @@ export function OrdersHub() {
       折扣: o.discountAmount ?? "",
       狀態: getOrderStatusBadge(o).label,
       付款: getPaymentBadge(o).label,
-      支付方式: o.paymentMethod ?? "",
+      // 🔴 同畫面／報表同一映射：線上單投影會把 Ledger enum 原文寫入 `paymentMethod`，
+      // CSV 係商家拎去對帳嘅，英文 enum 一樣唔可以漏出去。
+      支付方式: posPaymentMethodLabel(o.paymentMethod, ""),
       下單時間: o.createdAt ? formatMacauDateTime(o.createdAt) : "",
       結帳時間: o.updatedAt ? formatMacauDateTime(o.updatedAt) : "",
     }));

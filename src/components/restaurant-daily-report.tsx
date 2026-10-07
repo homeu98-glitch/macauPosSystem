@@ -12,7 +12,9 @@ import {
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { getOrderDetail, listMerchantOrders, fetchAdminLedgerOrders, type LedgerOrderDetailItem } from "@/lib/ledger/orders";
 import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
-import { paymentModeLabel } from "@/lib/ledger/order-mapper";
+// 🔴 支付方式標籤唯一真源（2026-10-07）：`pos_orders.payment_method` 會載住
+// Ledger enum 原文（`in_store` / `balance`），唔過呢層就會有英文行出畫面。
+import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
 import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stats";
 import {
   loadAuthSession,
@@ -704,7 +706,8 @@ function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
     table: o.tableName || o.tableId,
     receivable,
     paid: o.total,
-    method: o.paymentMethod ?? "未記錄",
+    // 🔴 同 `aggregate()` 嘅 breakdown key **必須同一個函式**，否則分項表同明細表對唔到。
+    method: posPaymentMethodLabel(o.paymentMethod),
     cashier: o.settledByName ?? o.settledBy ?? "未記錄",
     // 🔴 2026-09-18 需求：「返結後，訂單明細內的時間應該更新到最新時間。」
     // 口徑同交班明細完全一致（`shift-page.tsx` 同一行）：
@@ -769,7 +772,11 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     receivableTotal += orderReceivable;
     paidTotal += o.total;
     if (!isOnline) offlineReceivableTotal += orderReceivable;
-    const method = o.paymentMethod ?? "未記錄";
+    // 🔴 2026-10-07：唔可以直接用 `o.paymentMethod` 做 breakdown key。
+    // 線上單投影（`ledger-pos-bridge.ts`）把 Ledger enum **原文**寫入 `pos_orders.payment_method`
+    // （`in_store` / `balance`…）⇒ 未翻譯就會喺「支付方式分項」出現英文行。
+    // 統一真源：`posPaymentMethodLabel()`（連 Ledger 純線上單都經同一個函式 ⇒ 兩邊夾得返）。
+    const method = posPaymentMethodLabel(o.paymentMethod);
     const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
     bucket.receivable += orderReceivable;
     bucket.paid += o.total;
@@ -823,8 +830,9 @@ function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: 
     );
     // 應收 fallback：若 subtotalBeforeDiscount 同 discountAmount 都冇，就退而用 paid
     const safeReceivable = Number.isFinite(orderReceivable) && orderReceivable > 0 ? orderReceivable : orderPaid;
-    // 支付方式：Ledger 用 paymentModeLabel 翻譯 paymentMode（balance → 餘額扣點、in_store → 到店付款）
-    const method = paymentModeLabel(onlineOrder.paymentMode) || "線上單";
+    // 支付方式：同上面 POS 單行**用同一個函式**（`posPaymentMethodLabel`）——
+    // 分別只喺 fallback（呢邊冇值叫「線上單」，POS 單叫「未記錄」）。
+    const method = posPaymentMethodLabel(onlineOrder.paymentMode, "線上單");
     receivableTotal += safeReceivable;
     paidTotal += orderPaid;
     ledgerOnlyPaidTotal += orderPaid;
@@ -2683,7 +2691,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
         金額: o.total,
         折扣: o.discountAmount,
         入座人數: o.partySize ?? 0,
-        支付: o.paymentMethod ?? "",
+        // 🔴 同畫面表同一映射：CSV 係商家拎去做對帳／交數嘅，英文 enum 一樣唔可以漏出去。
+        支付: posPaymentMethodLabel(o.paymentMethod, ""),
         時間: o.createdAt,
       }));
     const headers = Object.keys(rows[0] ?? { 單號: "" });
@@ -3762,10 +3771,17 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               </Card>
             </div>
 
-            {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數（只計店內 POS 線下單） */}
+            {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數。
+
+              🔴 2026-10-07 卡片名／tag 修正：舊名「（店內 POS 線下）」**同實際口徑不符**。
+              實際 `aggregate()` 會把三類單一齊入帳（見下面 `orderDetails` 註解）：
+              ① 純線下 POS 單 ② 線上單投影（帶 `onlineOrderId`，錢係喺店內收）
+              ③ Ledger 純線上單（客人自己落單線上付款）。
+              ②③ 之前會令 `in_store` / `balance` 等Ledger enum 出現喺一張「線下」卡裡 = 語意矛盾。
+              改名「店內收款」因為三者都係**本店實際收到嘅錢**，同一批單、同一口徑。*/}
             <Card
-              title="支付方式分項（店內 POS 線下）"
-              tag="只計無 onlineOrderId 嘅本店單；線上金額見上方「應收／實收金額合計」同會員 KPI。應收 = 未扣優惠前嘅原價 · 實收 = order.total"
+              title="支付方式分項（店內收款）"
+              tag="涵蓋範圍內所有已結帳單：店內 POS 單＋線上單投影＋Ledger 純線上單（皆為本店實際收款，各單只計一次）。應收 = 未扣優惠前嘅原價 · 實收 = order.total · 已扣退款；各行實收相加 = 上方「實收金額合計」"
             >
               {Object.keys(agg.paymentBreakdown).length === 0 ? (
                 <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>

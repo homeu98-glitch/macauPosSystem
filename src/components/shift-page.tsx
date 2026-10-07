@@ -14,6 +14,7 @@ import { getMerchantReportSummary, LedgerReportSummary } from "@/lib/ledger/repo
 import { sumPaidLedgerOrders, type PaidLedgerOrdersTotal } from "@/lib/ledger/paid-orders";
 // 補推：把「已付款但 Ledger 未 completed」嘅線上單推上梯頂（同一條堂食爬梯，零依賴可測）。
 import { syncOnlineDineInCompletionById } from "@/lib/pos/online-dinein-fulfillment";
+import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
 import { orderMatchesReportRange, macauTodayRange, macauDateKey } from "@/lib/ledger/report-period";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
@@ -199,7 +200,10 @@ function summarizeClosedOrders(orders: PosOrder[]) {
         itemsGross + (order.serviceChargeAmount ?? 0) + (order.taxAmount ?? 0);
       receivableTotal += orderReceivable;
       paidTotal += order.total;
-      const key = order.paymentMethod ?? "未記錄";
+      // 🔴 2026-10-07：唔可以直接用 `order.paymentMethod` 做 key—— 線上單投影
+      // （`ledger-pos-bridge.ts`）把 Ledger enum 原文寫入（`in_store` / `balance`），
+      // 會令交班單紙本同畫面都出現英文行。統一真源同報表 `aggregate()` 一致。
+      const key = posPaymentMethodLabel(order.paymentMethod);
       const bucket = acc[key] ?? { receivable: 0, paid: 0, count: 0 };
       bucket.receivable += orderReceivable;
       bucket.paid += order.total;
@@ -321,12 +325,27 @@ function shiftRowToSettlement(row: ShiftHistoryRecord): ShiftSettlementSnapshot 
       onlinePaid > 0
         ? { orderCount: 0, paidMop: onlinePaid, balancePaidMop: 0, inStorePaidMop: 0 }
         : null,
-    payments: Object.entries(row.paymentBreakdown).map(([method, value]) => ({
-      method,
-      receivable: typeof value === "number" ? value : value.receivable,
-      paid: typeof value === "number" ? value : value.paid,
-      count: typeof value === "number" ? 1 : value.count,
-    })),
+    // 🔴 2026-10-07：歷史交班記錄嘅 `paymentBreakdown` 係**寫落DB 當時**嘅 key，
+    // 即係可能仲係 Ledger enum 原文（`in_store` / `balance`）⇒ 補印舊交班單都會出英文。
+    // ⚠️ 映射後可能撞名（同一日有「到店付款」中文舊值 + `in_store` 新值）⇒ **必須合併**，
+    // 否則紙會出現兩行同名，商家以為對唔到數。
+    payments: Object.entries(row.paymentBreakdown).reduce<
+      { method: string; receivable: number; paid: number; count: number }[]
+    >((acc, [method, value]) => {
+      const label = posPaymentMethodLabel(method);
+      const receivable = typeof value === "number" ? value : value.receivable;
+      const paid = typeof value === "number" ? value : value.paid;
+      const count = typeof value === "number" ? 1 : value.count;
+      const hit = acc.find((item) => item.method === label);
+      if (hit) {
+        hit.receivable += receivable;
+        hit.paid += paid;
+        hit.count += count;
+        return acc;
+      }
+      acc.push({ method: label, receivable, paid, count });
+      return acc;
+    }, []),
     purchase: typeof row.purchasePaid === "number" ? { paid: row.purchasePaid, unpaid: 0 } : null,
     cash: { expected: row.expectedCash, actual: row.actualCash, diff: row.cashDifference },
     pendingEvents: row.pendingEvents,
@@ -765,7 +784,8 @@ export function ShiftPage() {
         (o.serviceChargeAmount ?? 0) +
         (o.taxAmount ?? 0),
       paid: o.total,
-      method: o.paymentMethod ?? "未記錄",
+      // 🔴 同 `paymentBreakdown` 用同一個映射，否則交班單明細同支付方式分項表對唔到。
+      method: posPaymentMethodLabel(o.paymentMethod),
       cashier: o.settledByName ?? o.settledBy ?? "未記錄",
       // 🔴 2026-09-18 需求：「返結後，訂單明細內的時間應該更新到最新時間。」
       //
@@ -2160,7 +2180,7 @@ export function ShiftPage() {
                   {onlineLocalOrders.map((o) => (
                     <div key={o.id} className="flex items-baseline justify-between gap-2">
                       <span className="truncate">
-                        本地投影 · {o.localOrderNo} · onlineId {String(o.onlineOrderId).slice(0, 8)} · {o.paymentMethod ?? "—"}
+                        本地投影 · {o.localOrderNo} · onlineId {String(o.onlineOrderId).slice(0, 8)} · {posPaymentMethodLabel(o.paymentMethod, "—")}
                       </span>
                       <span className="shrink-0 font-semibold">{formatMoney(o.total)}</span>
                     </div>

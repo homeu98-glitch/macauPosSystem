@@ -1,6 +1,7 @@
 import { formatMacauDateTime, formatMacauMonthDayTime, formatMoney } from "@/lib/format";
 import { RECEIPT_PAPER_COLUMNS } from "@/lib/escpos-render";
 import { buildRetailReceiptBlocks } from "@/lib/retail/receipt-retail-blocks";
+import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
 import {
   findLabelPaperPreset,
   paperColumnsFromSize as paperColumnsFromSizeImpl,
@@ -1020,7 +1021,10 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     change_amount: (order.changeAmount ?? 0) > 0 ? `找零: ${formatMoney(order.changeAmount ?? 0, opts.currency)}` : "",
     // 其他金額區塊一律係「標題: 值」（原價合計: / 結帳時間: / 服務員: …），
     // 得呢一格以前淨印值（「現金」），顧客睇唔出嗰個係乜。補返「支付方式: 」前綴保持一致。
-    payment_method: `支付方式: ${order.paymentMethod ?? "現金"}`,
+    // 🔴 2026-10-07：統一映射。線上單投影會把 Ledger enum 原文（`in_store` / `balance`）
+    // 寫入 `payment_method`，紙單係客人／商家都會睇嘅，唔可以印英文。
+    // fallback 維持「現金」—— 呢個區塊係**未收費單**（bill），未收費時用預設值係舊有行為。
+    payment_method: `支付方式: ${posPaymentMethodLabel(order.paymentMethod, "現金")}`,
     // ── 零售新增（2026-09-13）──────────────────────────────────────
     // 邏輯**唔喺呢度**：抽出 `@/lib/retail/receipt-retail-blocks`（純函式、有單測），
     // 因為本檔有 runtime import → `node --test` 載入唔到，寫喺呢度就冇測試覆蓋。
