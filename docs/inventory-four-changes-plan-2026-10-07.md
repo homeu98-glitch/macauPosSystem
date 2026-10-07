@@ -807,3 +807,84 @@ const runSync = useCallback(async ({ mode, silent }: { mode: "auto" | "manual"; 
 2. **相片 bucket 建議設為 private**（用 signed URL 顯示）。如你希望直接可讀取（簡化），要講。
 3. **舊收據沒品類**：品類改成必填後，編輯舊收據會被擋，需補選。這是預期行為？
 4. **刪除收據時一併刪相片** —— 確認要做（否則 Storage 會累積垃圾）。
+
+---
+
+## 8. 追加修復：門店層設定（品類／單位）真正同步到雲端（2026-10-07）
+
+### 8.1 症狀（J 實案）
+
+喺**另一台電腦**新增品類 → 本機／其他裝置永遠睇唔到
+（庫存 → 設置 → 品類顯示「0 個」），但**成功提示照出**
+（`await onSaveCategories(...)` 唔會拋錯），所以商家以為「已保存」。
+
+「再加一次」解決唔到 —— 因為問題唔係「未保存」，而係**從來冇出過呢部機**。
+
+### 8.2 三個病灶（唔修齊就等於冇修）
+
+| # | 病灶 | 位置 | 症狀 |
+|---|---|---|---|
+| 1 | 只寫 localStorage，全 repo 冇任何一行推雲 | `inventory-view.tsx` `patchLocalSettings()` | 雲端永遠冇品類 |
+| 2 | 拉雲端嘅閘係**死條件** | `device-settings.tsx` `needLocalSettings` | 永遠唔採用雲端 `local_settings` |
+| 3 | 病灶 2 嘅閘只覆蓋**全新裝置** | 同上 | 已用過嘅第二台機永遠唔拉 |
+
+**病灶 1**：`saveCategories`／`saveUnits`／`saveSupplierOrder`／`saveCategoryOrder`／`saveUnitOrder`
+全部經 `patchLocalSettings()`，而佢只有 `savePosLocalSettings(merged)`。
+✅ 修：寫完本機即刻 `POST /api/pos/device-config`。三個必要細節：
+- 帶 `posDeviceAuthHeadersFresh()`（該端點有鑑權閘）。
+- **推前 `stripReopenTempTables(merged.floors)`** —— 唔剝會令返結暫存枱永久升級做真實枱
+  （`lib/pos/table-scope.ts` 鐵律表）。`device-settings` 兩處推雲都做咗，口徑一致。
+- body 係 `{ ...deviceConfig, storeId, updatedAt, localSettings }`：
+  該端點係 `upsert(..., { onConflict: "device_id" })`，
+  **只送 `{ storeId, localSettings }` 會令 `device_id` 變 null 而炸**。
+- 失敗只 `console.warn`，**唔 rollback、唔 throw**（本機已寫入＝資料唔會丟；
+  商家下次喺「設備設定」按保存會全量重推）。
+
+**病灶 2**：`loadPosLocalSettings()` **永遠**回 normalized 物件
+（key 唔存在就回 `defaultPosLocalSettings`）⇒ `!cachedLocalSettings` **恆為 false**
+⇒ `if (needLocalSettings && payload.localSettings)` 永不執行。
+`storage.ts` 本來就有 `hasPosLocalSettings()`（raw key 探測）專為分辨而寫，但冇用到。
+✅ 改用 `!hasPosLocalSettings()`；補 default 嘅 guard（原本 `&& !loadPosLocalSettings()` 亦係死條件）同步改用。
+🔴 Guard **唔可以**改用 `adoptedFromDb` flag：若雲端只有 deviceConfig、`localSettings` 係 null，
+就補唔到 default ⇒ `needLocalSettings` 永遠 true ⇒ **每次 render 重複打 API**。
+
+**病灶 3**：`!hasPosLocalSettings()` 對「用過嘅第二台機」永遠 false
+⇒ 推咗上雲都照樣顯示「0 個」。
+✅ 庫存頁加一次性雲端補值 effect，兩條安全規則：
+- **逐欄「只補空」**（本地 `length === 0` 且雲端非空才補）⇒ **絕不可能**令商家已見到嘅資料消失。
+- **本地齊全時完全唔發請求** ⇒ 正常裝置零額外 egress。
+- 另：用 `useRef` 一次性 guard；刻意**唔經** `patchLocalSettings()`、唔回寫雲端（避免兩台互推）；
+  失敗（離線／401）靜默保持本機值。
+
+### 8.3 守衛測試（8 條，全部做過反證）
+
+`inventory-contract-guard.test.ts` 新增 describe「門店層設定（品類／單位）：改動要推雲，雲端設定要拉得返」。
+
+| 反證（故意改壞） | 紅燈結果 |
+|---|---|
+| 推雲 URL 改成 no-op | 只有 test 1 紅 ✅ |
+| gate 改返 `!cachedLocalSettings` | 只有 test 5 紅 ✅ |
+| 補值 URL 改壞 + 移除寫入本機 | 只有 test 7、8 紅 ✅ |
+
+⇒ 守衛精準、唔會互相掩蓋。
+
+🔴 `functionBody(VIEW, "patchLocalSettings")` 抽函式體 —— 註解已被 `stripComments()` 剝走，
+所以斷言 `/api/pos/device-config` 只會命中真代碼（呢份文件／該測試檔自身都提過呢個字串）。
+
+### 8.4 驗證
+
+| 項目 | 結果 |
+|---|---|
+| `node --test "src/**/*.test.ts"` | **2230 tests / 300 suites / 0 fail** ✅ |
+| `tsc --noEmit` | **0 error** |
+| ESLint（7 個改動檔） | **0 error**（11 個 warning 全部係既有風格問題） |
+| 反證 | 8 條守衛全部做過「改壞→紅燈→還原」 |
+
+### 8.5 附帶一併提交（crash 前未提交嘅工作）
+
+`git status` 揭發工作區有**上一回合 crash 前未提交**嘅「單位」主檔改動：
+`types.ts`／`mock-data.ts`／`storage.ts`／`inventory-settings-panel.tsx`（+ 部分 view／test）。
+已同 J 申報並一併提交（見 `.workbuddy/memory/2026-10-07.md` 該節）。
+
+🔴 **流程教訓**：唔可以見到「最近一次 push 後以為乾淨」就當作冇嘢，
+開工前一定要 `git status --short`；唔屬於自己今次改嘅檔案**先問清楚**再決定是否一併提交。

@@ -1081,6 +1081,22 @@ export interface PosLocalSettings {
   invSupplierOrder: string[];
   /** 品類嘅顯示次序（同上，用**品類名**做 key）。 */
   invCategoryOrder: string[];
+  /**
+   * **單位**清單（2026-10-07「設置 → 單位」）。
+   *
+   * 用於「新增單據」品項 row 嘅「單位」欄：建好之後嗰欄變成**下拉選單**
+   * （kg／包／罐…），唔使每次手打。同一個單位（例如「包」）可以用喺唔同品項。
+   *
+   * ⚠️ 完全跟 `invCategories` 嘅結構同規矩：
+   *   · 一定要加落 `normalizePosLocalSettings()` 白名單 ＋ `defaultPosLocalSettings`
+   *     （嗰度逐欄重建，漏咗就會喺 reload / 雲端同步被**靜靜剷走**）。
+   *   · **門店層**設定（`local_settings` jsonb），由商家自己管，唔係 admin 主檔。
+   *   · 呢個係**選填**欄嘅選項來源 —— 清單為空時品項 row 仍然可以手動輸入單位，
+   *     所以清單唔係欄位嘅必要條件。
+   */
+  invUnits: string[];
+  /** 單位嘅顯示次序（拖 ⠿ 排序；用**單位名**做 key，同上）。 */
+  invUnitOrder: string[];
 }
 
 /**

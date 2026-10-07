@@ -2,8 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { loadAuthSession, loadPosLocalSettings, normalizePosLocalSettings, savePosLocalSettings } from "@/lib/storage";
+import {
+  loadAuthSession,
+  loadDeviceConfig,
+  loadPosLocalSettings,
+  normalizePosLocalSettings,
+  savePosLocalSettings,
+} from "@/lib/storage";
 import type { PosLocalSettings } from "@/lib/types";
+// 🔴 推雲前必須剝走返結 temp 枱（見 `table-scope.ts` 鐵律表：唔剝會永久升級做真實枱）。
+import { stripReopenTempTables } from "@/lib/pos/table-scope";
+// 🔴 門店設定推雲要帶 POS 終端憑證（會自動續期；`/api/pos/device-config` 已加鑑權閘）。
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 // 主檔顯示次序（拖 ⠿）嘅純函式：設置面板排序 + 收據 modal 嘅品類 chips 都要跟同一份次序。
 import { reorderByStored } from "@/lib/inventory-order";
 import { REPORT_RANGE_OPTIONS, reportRangeLabel, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
@@ -342,6 +352,7 @@ function ReceiptFormModal({
   initial,
   suppliers,
   categories,
+  units,
   paymentMethods,
   labelMap,
   recentItems,
@@ -354,6 +365,13 @@ function ReceiptFormModal({
   initial: Receipt | null;
   suppliers: Supplier[];
   categories: string[];
+  /**
+   * 單位選單（`PosLocalSettings.invUnits`，經「庫存 → 設置 → 單位」維護）。
+   *
+   * ⚠️ 空陣列都係合法狀態（商家未建過單位）⇒ 品項 row 會退回自由輸入，
+   *    唔會因為清單空咗就鎖死欄位（同一個取態：`invCategories`）。
+   */
+  units: string[];
   /** 進貨可見嘅付款方式（已按 scope 過濾，保持主檔次序）。 */
   paymentMethods: PaymentMethodDef[];
   labelMap: Record<string, string>;
@@ -376,6 +394,17 @@ function ReceiptFormModal({
 
   /** 品類「其他…」手動輸入模式。 */
   const [manualCategory, setManualCategory] = useState(false);
+
+  /**
+   * 🔴 2026-10-07：品項「單位」嘅**逐行**手動輸入模式（`{ 行號: 開 }`）。
+   *
+   * 點解唔用一個全域 toggle（品類嗰個就係）：單位係**每個品項各自一個欄**，
+   * 同一張單可以「豬肉＝kg、膠袋＝包」。一個全域掣會迫住全部品項一齊切換。
+   */
+  const [manualUnitRows, setManualUnitRows] = useState<Record<number, boolean>>({});
+
+  /** `<select>` 嘅「手動輸入」哨兵值（唔可能撞到真實單位名）。 */
+  const CUSTOM_UNIT = "__custom_unit__";
 
   /** 目前展開歷史品項建議嘅品項行（-1 = 冇）。 */
   const [pickerIndex, setPickerIndex] = useState<number>(-1);
@@ -474,6 +503,21 @@ function ReceiptFormModal({
     if (current && !list.includes(current)) list.push(current);
     return list;
   })();
+
+  /**
+   * 某個品項嘅單位選項（2026-10-07）＝設置清單 ∪ 該項現有值。
+   *
+   * 🔴 同 `categoryOptions` **同一個理由**：舊收據嘅單位可能係自由文字
+   *    （2026-10-06 之前冇得揀），亦可能單位已經喺「設置」被改名／刪除。
+   *    如果唔補返現有值落選項，`<select>` 會顯示空白，而**React 讀到嘅值**
+   *    仍然係舊字串 ⇒ 使用者以為冇咗，一儲存就靜靜變咗另一個單位。
+   */
+  const unitOptionsFor = (current: string): string[] => {
+    const list = [...units];
+    const cur = current.trim();
+    if (cur && !list.includes(cur)) list.push(cur);
+    return list;
+  };
 
   const suggestionsFor = (query: string): ItemSuggestion[] => {
     const q = query.trim().toLowerCase();
@@ -1230,15 +1274,76 @@ function ReceiptFormModal({
                           ＋
                         </button>
                       </div>
-                      {/* 單位（kg／包／罐…）。2026-10-06 新增：配合報表頁「買貨明細」
-                          顯示貨品單位。留空 = 未填，報表只出數量。 */}
-                      <input
-                        className={fieldCls}
-                        value={it.unit}
-                        onChange={(e) => setItem(i, { unit: e.target.value })}
-                        placeholder="單位"
-                        aria-label={`第 ${i + 1} 項單位`}
-                      />
+                      {/* 單位（kg／包／罐…）。2026-10-06 新增為自由輸入；
+                          2026-10-07 改為「設置 → 單位」主檔驅動嘅下拉選單。
+
+                          🔴 三個模式（缺一不可）：
+                          ① 有主檔 → `<select>`（選填，第一格係空白＝唔填）
+                          ② 該行撳「其他」或主檔為空 → 自由輸入
+                          ③ 舊值唔喺主檔 → 已經由 unitOptionsFor() 補入選項，
+                             所以唔會出現「有值但個框顯示空白」嘅幽靈狀態。
+
+                          ⚠️ 欄位仍然係**選填**（同原本行為一致）：留空 = 未填單位，
+                             報表只出數量。唔會因為單位清單空咗就鎖死呢一欄。 */}
+                      {manualUnitRows[i] || units.length === 0 ? (
+                        <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] gap-1 sm:col-span-1">
+                          <input
+                            className={fieldCls}
+                            value={it.unit}
+                            onChange={(e) => setItem(i, { unit: e.target.value })}
+                            placeholder="單位"
+                            aria-label={`第 ${i + 1} 項單位`}
+                          />
+                          {units.length > 0 && (
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-xl bg-slate-100 px-3 py-3 text-sm font-medium text-slate-600 ring-1 ring-slate-200"
+                              onClick={() => setManualUnitRows((m) => ({ ...m, [i]: false }))}
+                              aria-label={`第 ${i + 1} 項改為揀清單`}
+                            >
+                              揀清單
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] gap-1 sm:col-span-1">
+                          <select
+                            className={fieldCls}
+                            value={manualUnitRows[i] ? CUSTOM_UNIT : it.unit}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === CUSTOM_UNIT) {
+                                setManualUnitRows((m) => ({ ...m, [i]: true }));
+                                return;
+                              }
+                              setItem(i, { unit: v });
+                            }}
+                            aria-label={`第 ${i + 1} 項單位`}
+                          >
+                            <option value="">單位（選填）</option>
+                            {unitOptionsFor(it.unit).map((u) => (
+                              <option key={u} value={u}>
+                                {u}
+                              </option>
+                            ))}
+                            <option value={CUSTOM_UNIT}>其他…</option>
+                          </select>
+                          {it.unit.trim() && (
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-xl bg-slate-100 px-3 py-3 text-sm font-medium text-slate-600 ring-1 ring-slate-200"
+                              onClick={() => {
+                                // 清走值先撳「其他」：唔然舊值會塞入一個看似已填嘅輸入框。
+                                setItem(i, { unit: "" });
+                                setManualUnitRows((m) => ({ ...m, [i]: true }));
+                              }}
+                              aria-label={`第 ${i + 1} 項手動輸入單位`}
+                            >
+                              ✎
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <button
                         type="button"
                         className="col-span-2 shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100 sm:col-span-1"
@@ -1400,6 +1505,10 @@ export function InventoryView() {
    */
   const [supplierOrder, setSupplierOrder] = useState<string[]>([]);
   const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
+  /** 單位清單（來源：`PosLocalSettings.invUnits`，2026-10-07）。 */
+  const [units, setUnits] = useState<string[]>([]);
+  /** 單位顯示次序（`PosLocalSettings.invUnitOrder`；拖 ⠿ 之後先寫入）。 */
+  const [unitOrder, setUnitOrder] = useState<string[]>([]);
   /**
    * 庫存表嘅「重載鑰匙」。
    *
@@ -1467,7 +1576,92 @@ export function InventoryView() {
     setCategories(local.invCategories);
     setSupplierOrder(local.invSupplierOrder);
     setCategoryOrder(local.invCategoryOrder);
+    setUnits(local.invUnits);
+    setUnitOrder(local.invUnitOrder);
   }, []);
+
+  /**
+   * ☁️ 由雲端補返門店層設定（2026-10-07 · J 實案：「品類的設置似乎沒有同步到雲端」）
+   *
+   * ## 為何要有呢個 effect（同步斷鏈嘅**第三**個病灶）
+   *
+   * 1. `patchLocalSettings()` 只寫本機 → 已修（依家會推雲）。
+   * 2. `device-settings` 拉雲端嘅閘係死條件 → 已修。
+   *    ⚠️ 但嗰個閘只覆蓋「**從未建立過設定嘅新裝置**」（`!hasPosLocalSettings()`）。
+   *    一間店用過嘅第二台機永遠行唔到 adopt 分支
+   *    ⇒ 品類就算推咗上雲，第二台機照樣顯示「0 個」。呢個 effect 就係補呢個缺口。
+   *
+   * ## 兩條安全規則（都唔可以放鬆）
+   *
+   * - **只補空，唔覆寫**：逐欄檢查，本地有值就唔碰（本機優先）。
+   *   所以呢個 effect 永遠唔可能令商家已見到嘅資料消失 ——
+   *   唔存在「一拉雲端就唔見嘢」嘅風險。
+   * - **只喺「本地有欄位係空」時才發請求**：正常裝置（本地已有品類／單位）
+   *   **零額外請求** ⇒ 唔會為咗修一個 bug 而增加日常 egress。
+   *
+   * ⚠️ 刻意**唔**經 `patchLocalSettings()`（嗰個會推雲）：拉落嚟嘅嘢唔需要即刻推返上去，
+   *    否則兩台機會互相推來推去。亦刻意**唔**喺拉完之後回寫雲端。
+   *
+   * ⚠️ 失敗（離線 / 401 / 未登入）一律靜默保持本機值 —— 拉唔到唔可以清空任何嘢。
+   */
+  const cloudHydrateDone = useRef(false);
+  useEffect(() => {
+    if (!merchantId || cloudHydrateDone.current) return;
+    const local = loadPosLocalSettings();
+    // 本地齊全 → 唔需要拉（保持零 egress）。
+    const nothingMissing =
+      local.invCategories.length > 0 &&
+      local.invUnits.length > 0 &&
+      local.invSupplierOrder.length > 0;
+    if (nothingMissing) {
+      cloudHydrateDone.current = true;
+      return;
+    }
+    cloudHydrateDone.current = true; // 標記咗先，避免 StrictMode 開發模式重複打
+    let cancelled = false;
+    const storeId = merchantId;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/pos/device-config?storeId=${encodeURIComponent(storeId)}`, {
+          headers: await posDeviceAuthHeadersFresh(),
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const payload = (await res.json()) as { ok?: boolean; localSettings?: PosLocalSettings | null };
+        if (cancelled || !payload.ok || !payload.localSettings) return;
+        const cloud = normalizePosLocalSettings(payload.localSettings);
+        const base = loadPosLocalSettings();
+        // 逐欄「只補空」——本地已有值嘅欄位一律唔碰。
+        const patch: Partial<PosLocalSettings> = {};
+        if (base.invCategories.length === 0 && cloud.invCategories.length > 0) {
+          patch.invCategories = cloud.invCategories;
+        }
+        if (base.invUnits.length === 0 && cloud.invUnits.length > 0) patch.invUnits = cloud.invUnits;
+        if (base.invSupplierOrder.length === 0 && cloud.invSupplierOrder.length > 0) {
+          patch.invSupplierOrder = cloud.invSupplierOrder;
+        }
+        if (base.invCategoryOrder.length === 0 && cloud.invCategoryOrder.length > 0) {
+          patch.invCategoryOrder = cloud.invCategoryOrder;
+        }
+        if (base.invUnitOrder.length === 0 && cloud.invUnitOrder.length > 0) {
+          patch.invUnitOrder = cloud.invUnitOrder;
+        }
+        if (Object.keys(patch).length === 0) return; // 雲端都係空 → 冇嘢好補
+        const merged = normalizePosLocalSettings({ ...base, ...patch });
+        savePosLocalSettings(merged);
+        setCategories(merged.invCategories);
+        setSupplierOrder(merged.invSupplierOrder);
+        setCategoryOrder(merged.invCategoryOrder);
+        setUnits(merged.invUnits);
+        setUnitOrder(merged.invUnitOrder);
+      } catch {
+        // 離線 / 未登入 / 401 → 保持本機值（拉唔到唔可以清空任何嘢）。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId]);
 
   const loadAll = useCallback(async () => {
     if (!account) return;
@@ -1569,18 +1763,80 @@ export function InventoryView() {
    * ⚠️ 一定要經 `normalizePosLocalSettings()` 合併：呢個函式係**逐欄重建**，
    * 直接 `savePosLocalSettings({ invCategories })` 會靜靜剷走其餘欄位
    * （打印模板、樓層…）。所有局部更新一律經呢個入口。
+   *
+   * 🔴🔴 2026-10-07 修（J 實案：另一台電腦加咗品類，其他機永遠睇唔到）：
+   *    以前呢個函式**只寫 localStorage**，全個 repo 冇任何一行把 `invCategories`
+   *    推上雲 ⇒ 品類係「本機私有」嘅。商家嘅心理模型係「設置就係全店共用」
+   *    （供應商做得到，因為供應商走 expenseRecorder `merchants` 表），
+   *    呢個落差令佢以為「已保存」。所以寫本機之後**一定要推雲**。
+   *
+   * ## 推雲嘅兩個死穴（都係照抄 `device-settings.tsx` 嘅既有口徑）
+   *
+   * 1. **一定要剝走返結 temp 枱**：`localSettings.floors` 內含
+   *    `temp-reopen-*`（返結單編輯期間嘅暫存枱）。原封不動推上雲會令佢
+   *    永久升級做真實枱（見 `lib/pos/table-scope.ts` 嘅鐵律表）。
+   *    `device-settings` 兩處推雲（L636 / L912）都做咗 `stripReopenTempTables()`。
+   * 2. **`localSettings` 要同 deviceConfig 一齊送**：`POST /api/pos/device-config`
+   *    係 `upsert(..., { onConflict: "device_id" })`，一次過寫 device 欄位
+   *    ＋ `local_settings`。所以 body 係 `{ ...updatedConfig, localSettings }`；
+   *    只送 `{ storeId, localSettings }` 會令 `device_id` 變 null 而炸。
+   *
+   * ## 失敗策略（同 `device-settings` 一致）
+   *
+   * 本機已寫入 = **資料唔會丟**。雲端推失敗（離線／401／5xx）只記 warning，
+   * 唔 rollback、唔 throw —— 商家下次開「設備設定頁」按保存時會全量重推。
    */
-  const patchLocalSettings = useCallback((patch: Partial<PosLocalSettings>) => {
+  const patchLocalSettings = useCallback(async (patch: Partial<PosLocalSettings>) => {
     const merged = normalizePosLocalSettings({ ...loadPosLocalSettings(), ...patch });
     savePosLocalSettings(merged);
     setCategories(merged.invCategories);
     setSupplierOrder(merged.invSupplierOrder);
     setCategoryOrder(merged.invCategoryOrder);
+    setUnits(merged.invUnits);
+    setUnitOrder(merged.invUnitOrder);
+
+    // ── 推雲（best-effort；本機已寫入，失敗唔影響商家操作） ──
+    const storeId = loadAuthSession()?.merchantId;
+    if (!storeId) return;
+    const deviceConfig = loadDeviceConfig();
+    if (!deviceConfig) return; // 未初始化設備設定 → 交返「設備設定頁」首次保存去建
+    try {
+      const serverSettings: PosLocalSettings = {
+        ...merged,
+        floors: stripReopenTempTables(merged.floors),
+      };
+      const res = await fetch("/api/pos/device-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await posDeviceAuthHeadersFresh()) },
+        body: JSON.stringify({
+          ...deviceConfig,
+          storeId,
+          updatedAt: new Date().toISOString(),
+          localSettings: serverSettings,
+        }),
+      });
+      if (!res.ok) {
+        console.warn(
+          `[inventory] 門店設定推雲失敗（HTTP ${res.status}）：本機已保存，稍後喺「設備設定」按保存會補推。`,
+        );
+      }
+    } catch {
+      // 離線 / 網絡錯誤 → 同上，靜默（本機已寫入，唔可以中斷商家流程）。
+    }
   }, []);
 
   /** 儲存品類清單（門店層設定，經 `PosLocalSettings` 同步）。 */
   const saveCategories = useCallback(
     async (next: string[]) => patchLocalSettings({ invCategories: next }),
+    [patchLocalSettings],
+  );
+
+  /** 儲存單位清單（2026-10-07；同 `saveCategories` 同一通道）。 */
+  const saveUnits = useCallback(async (next: string[]) => patchLocalSettings({ invUnits: next }), [patchLocalSettings]);
+
+  /** 儲存單位顯示次序（拖 ⠿ 之後）。 */
+  const saveUnitOrder = useCallback(
+    async (next: string[]) => patchLocalSettings({ invUnitOrder: next }),
     [patchLocalSettings],
   );
 
@@ -1651,6 +1907,9 @@ export function InventoryView() {
     () => reorderByStored(suppliers, supplierOrder, (s) => s.name),
     [suppliers, supplierOrder],
   );
+
+  /** 單位下拉選單亦跟拖好嘅次序（2026-10-07，同品類完全一致）。 */
+  const orderedUnits = useMemo(() => reorderByStored(units, unitOrder, (u) => u), [units, unitOrder]);
 
   /**
    * 付款方式篩選（2026-09-25 加）：client-side 過濾，**零新增請求**。
@@ -2076,6 +2335,7 @@ export function InventoryView() {
         initial={formInitial}
         suppliers={orderedSuppliers}
         categories={orderedCategories}
+        units={orderedUnits}
         paymentMethods={purchaseMethods}
         labelMap={labelMap}
         recentItems={recentItems}
@@ -2110,6 +2370,10 @@ export function InventoryView() {
         categoryOrder={categoryOrder}
         onSaveCategories={saveCategories}
         onSaveCategoryOrder={saveCategoryOrder}
+        units={units}
+        unitOrder={unitOrder}
+        onSaveUnits={saveUnits}
+        onSaveUnitOrder={saveUnitOrder}
         paymentMethods={masterMethods}
         paymentWarning={masterWarning}
         highlightSupplierId={highlightSupplierId}

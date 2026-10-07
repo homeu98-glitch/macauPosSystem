@@ -12,6 +12,7 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { RelayPairingPanel } from "@/components/relay-pairing-panel";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
+  hasPosLocalSettings,
   loadAuthSession,
   loadBootstrapCache,
   loadDeviceConfig,
@@ -183,10 +184,24 @@ export function DeviceSettings() {
   // 樓層桌台維持 fallback defaultPosLocalSettings。
   // 舊行為會即刻 saveDeviceConfig(defaultDeviceConfig)，令新 iPad 一開設定頁就出現
   // 4 台 mock 打印機——呢個 pre-seed 已刪除，打印機設定只可以由 DB 或用家手動添加。
+  //
+  // 🔴🔴 2026-10-07 修（J 實案：另一台機改咗品類，本機永遠拉唔到）：
+  //    呢行以前係 `const needLocalSettings = !cachedLocalSettings;`。
+  //    但 `loadPosLocalSettings()` **永遠唔會回 null** —— 佢把「key 唔存在」
+  //    normalize 成 `defaultPosLocalSettings` 再回傳（`storage.ts` L1196-1198），
+  //    所以 `!cachedLocalSettings` **恆為 false** ⇒ 下面 `adoptSettingsFromDb()`
+  //    嘅 `if (needLocalSettings && payload.localSettings)` 永遠唔會執行
+  //    ⇒ 本機永遠唔會採用雲端 `local_settings`。
+  //
+  //    而 `hasPosLocalSettings()`（`storage.ts` L1222）正正就係為咗分辨
+  //    「key 真係唔存在」同「存咗嘅就係 default」而寫，註解都寫明係為新 device 用 ——
+  //    但呢度冇用到佢。改用 raw key 探測後，未建立過設定的裝置才會 adopt 雲端設定，
+  //    已建立過的裝置維持「本機優先」（唔會被雲端反覆覆寫，符合 LWW 交班口徑）。
   useEffect(() => {
     let cancelled = false;
     const needDeviceConfig = !cachedConfig;
-    const needLocalSettings = !cachedLocalSettings;
+    /** raw key 探測（唔可以用 normalize 過嘅物件判斷，見上面註解）。 */
+    const needLocalSettings = !hasPosLocalSettings();
     async function adoptSettingsFromDb() {
       const storeId = loadAuthSession()?.merchantId;
       let adoptedFromDb = false;
@@ -226,7 +241,17 @@ export function DeviceSettings() {
       if (cancelled) return;
       // localSettings 冇雲端數據先 fallback default（樓層桌台等，維持 2026-09-08 決定）；
       // deviceConfig 冇雲端數據就唔會 save 任何嘢——列表留空，唔好填充 mock。
-      if (needLocalSettings && !loadPosLocalSettings()) {
+      //
+      // 🔴 2026-10-07：`loadPosLocalSettings()` 係**恆真值**（永遠回 normalized 物件），
+      //    所以原本嗰個 `&& !loadPosLocalSettings()` 係死條件，一定會行到。
+      //    真正要問嘅係「本地有冇存過 localSettings key」→ 用 `hasPosLocalSettings()`。
+      //
+      //    呢個 guard 同時負責**終止重抓迴圈**：`savePosLocalSettings()` 一寫入，
+      //    `hasPosLocalSettings()` 即刻變 true ⇒ 下次 effect 唔會再補 default。
+      //    所以**唔可以**改用 `adoptedFromDb` 之類嘅 flag 做條件 —— 萬一雲端只有
+      //    deviceConfig、`localSettings` 係 null，就會連 default 都補唔到，
+      //    令 `needLocalSettings` 永遠為 true ⇒ 每次 render 都重複打一次 API。
+      if (needLocalSettings && !hasPosLocalSettings()) {
         savePosLocalSettings(defaultPosLocalSettings);
         setLocalSettings(defaultPosLocalSettings);
       }

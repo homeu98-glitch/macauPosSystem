@@ -62,10 +62,14 @@
 🔴 expenseRecorder 設定偷藏喺 `merchants` 表用保留名 KV（`__shop_settings__:<uid>`／`__global_settings__`，內容放 `address`）。真實供應商名唔會 `__` 開頭 ⇒ 一律濾走（**唔可以用 `.not("name","like","__%")`**：SQL `_` 係通配符）。`__global_settings__` 一條列裝多 key ⇒ 寫入**一定要 merge**。
 🔴 支付方式主檔＝expenseRecorder `/admin/payment-methods`；POS 讀 `GET /api/inventory/payment-methods`，`scope` 分 purchase/checkout/both。**「未設定」vs「空清單」用 `Array.isArray` 分**。
 🔴 `normalizePosLocalSettings()` 逐欄重建 ⇒ 新欄位漏白名單會被**靜靜剷走**。
-🔴 **「庫存・設置」係彈窗**：4 chips **多選**、最少開一個、**冇「保存」按鈕**（即時寫入）；「支付方式顯示」唯讀。顯示次序存 `invSupplierOrder`／`invCategoryOrder`（**用名做 key**），純函式喺 `inventory-order.ts`（零 import）。新項目排最後。
+🔴 **「庫存・設置」係彈窗**：5 chips **多選**、最少開一個、**冇「保存」按鈕**（即時寫入）；「支付方式顯示」唯讀。顯示次序存 `invSupplierOrder`／`invCategoryOrder`／`invUnitOrder`（**用名做 key**），純函式喺 `inventory-order.ts`（零 import）。新項目排最後。
 🔴 篩選 chips 零筆數嘅唔可以刪 ⇒ 收喺「＋N 個未用過」展開器，當前選中嘅唔准收埋。
 🔴 同一元件兩處 render＝兩個獨立 state，要 `onMutated` ＋ `key={productsVersion}`。
-🔴🔴 **「庫存・設置」嘅品類（`invCategories`）完全冇上雲**：`patchLocalSettings()` 只寫 localStorage，零 `device-config` 呼叫 ⇒ 另一台機永遠見唔到。✅ 唯一現成出口＝去**設備設定頁**撳「保存」（POST `/api/pos/device-config` 帶 `localSettings`）。✅ 根治＝`patchLocalSettings()` 加推同一通道 + outbox。（「再加一次」解決唔到。）
+✅🔴🔴 **門店層設定（品類／單位／排序）上雲已修（2026-10-07）**。三個病灶，**任何一個未修都會呈現為「已保存但另一台機睇唔到」**：
+① `patchLocalSettings()` 只寫 localStorage ⇒ 已加 `POST /api/pos/device-config`（**必須** `posDeviceAuthHeadersFresh()` ＋ **推前 `stripReopenTempTables()`**，唔剝會令返結暫存枱永久變真枱；body 要 `{...deviceConfig, storeId, localSettings}` —— 只送 `{storeId, localSettings}` 會令 `device_id` 變 null 而炸；失敗只 warn 唔 throw）。
+② `device-settings.tsx` 原本 `needLocalSettings = !cachedLocalSettings` 係**死條件**（`loadPosLocalSettings()` 永遠回 normalized 物件、唔會 null）⇒ 永遠唔採用雲端。✅ 改 `!hasPosLocalSettings()`（raw key）。🔴 唔可以用 `adoptedFromDb` flag 代替：雲端只有 deviceConfig 時會令 guard 恆 false ⇒ 每次 render 重複打 API。
+③ ②嘅閘只覆蓋**全新裝置** ⇒ 庫存頁另加一次性雲端補值：**逐欄只補空、絕不覆寫**，本地齊全時**零請求**（唔增日常 egress），唔經 `patchLocalSettings`（避免兩台互推）。
+守衛 8 條喺 `inventory-contract-guard.test.ts`（已做「改壞→紅燈→還原」反證）。
 🔴 `GET /api/inventory/master-usage` **只拉 `merchant_id`**、`SCAN_LIMIT=1500`、lazy；**唔可以拉 `raw_ocr_data`**（mg 級 egress）。
 🔴 expenseRecorder `next@16.2.9` 安裝不完整 ⇒ 本機 build 必掛；要 `npm i next@16.3.0`。
 

@@ -11,27 +11,28 @@ import { InventoryTable } from "./inventory-table";
 export type Supplier = { id: string; name: string };
 
 /**
- * 設置面板嘅四個區塊（＝確認稿 `scr-set` 嘅 4 個 chips）。
+ * 設置面板嘅五個區塊（＝確認稿 `scr-set` 嘅 chips）。
  *
- * 為何係「多選」而唔係四選一嘅 tab：
+ * 為何係「多選」而唔係逐個 tab：
  * 確認稿畫嘅係**供應商 ＋ 品類兩個 panel 同時並排**（兩者都係「開單時要揀嘅主檔」，
  * 擺埋一齊睇先知道邊個供應商／品類仲未建）。單選 tab 會令商家要撳兩次先睇齊兩邊。
  * 所以 chips ＝「要唔要顯示呢個 panel」，預設開 供應商 ＋ 品類，最少要開一個。
  */
-type PanelId = "supplier" | "category" | "product" | "payment";
+type PanelId = "supplier" | "category" | "unit" | "product" | "payment";
 
-const PANEL_ORDER: PanelId[] = ["supplier", "category", "product", "payment"];
+const PANEL_ORDER: PanelId[] = ["supplier", "category", "unit", "product", "payment"];
 
 const PANEL_LABEL: Record<PanelId, string> = {
   supplier: "供應商",
   category: "品類",
+  unit: "單位",
   product: "庫存品",
   payment: "支付方式顯示",
 };
 
 type Msg = { ok: boolean; text: string } | null;
 
-type DragState = { kind: "supplier" | "category"; from: number; to: number };
+type DragState = { kind: "supplier" | "category" | "unit"; from: number; to: number };
 
 /**
  * 「庫存・設置」面板（2026-09-25 初版、2026-09-26 對齊確認稿）。
@@ -67,6 +68,10 @@ export function InventorySettingsPanel({
   categoryOrder,
   onSaveCategories,
   onSaveCategoryOrder,
+  units,
+  unitOrder,
+  onSaveUnits,
+  onSaveUnitOrder,
   paymentMethods,
   paymentWarning,
   highlightSupplierId,
@@ -87,6 +92,12 @@ export function InventorySettingsPanel({
   categoryOrder: string[];
   onSaveCategoryOrder: (next: string[]) => void | Promise<void>;
   onSaveCategories: (next: string[]) => void | Promise<void>;
+  /** 單位清單（`PosLocalSettings.invUnits`，門店層設定）。 */
+  units: string[];
+  /** 單位顯示次序（`PosLocalSettings.invUnitOrder`）。 */
+  unitOrder: string[];
+  onSaveUnits: (next: string[]) => void | Promise<void>;
+  onSaveUnitOrder: (next: string[]) => void | Promise<void>;
   /** 支付方式主檔（唯讀；由 expenseRecorder admin 派發）。 */
   paymentMethods: PaymentMethodDef[];
   paymentWarning?: string | null;
@@ -98,6 +109,7 @@ export function InventorySettingsPanel({
   const [visible, setVisible] = useState<Record<PanelId, boolean>>({
     supplier: true,
     category: true,
+    unit: false,
     product: false,
     payment: false,
   });
@@ -112,15 +124,20 @@ export function InventorySettingsPanel({
   const [editingCategory, setEditingCategory] = useState<{ from: string; to: string } | null>(null);
   const [confirmDeleteCategory, setConfirmDeleteCategory] = useState<string | null>(null);
 
+  const [unitDraft, setUnitDraft] = useState("");
+  const [editingUnit, setEditingUnit] = useState<{ from: string; to: string } | null>(null);
+  const [confirmDeleteUnit, setConfirmDeleteUnit] = useState<string | null>(null);
+
   /** 「用過 N 次」（lazy：只喺供應商 panel 開住嘅時候先拉一次）。 */
   const [usage, setUsage] = useState<Record<string, number>>({});
   const [usageNote, setUsageNote] = useState<string | null>(null);
   const [usageTick, setUsageTick] = useState(0);
 
   const [dragState, setDragState] = useState<DragState | null>(null);
-  const dragRef = useRef<{ kind: "supplier" | "category"; from: number; to: number; midYs: number[] } | null>(null);
+  const dragRef = useRef<{ kind: "supplier" | "category" | "unit"; from: number; to: number; midYs: number[] } | null>(null);
   const supplierListRef = useRef<HTMLUListElement | null>(null);
   const categoryListRef = useRef<HTMLUListElement | null>(null);
+  const unitListRef = useRef<HTMLUListElement | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -129,7 +146,9 @@ export function InventorySettingsPanel({
       setConfirmDeleteSupplierId(null);
       setEditingCategory(null);
       setConfirmDeleteCategory(null);
-      setVisible({ supplier: true, category: true, product: false, payment: false });
+      setEditingUnit(null);
+      setConfirmDeleteUnit(null);
+      setVisible({ supplier: true, category: true, unit: false, product: false, payment: false });
       setUsageTick((n) => n + 1);
     }
   }, [open]);
@@ -185,12 +204,18 @@ export function InventorySettingsPanel({
 
   const orderedSuppliers = reorderByStored(suppliers, supplierOrder, (s) => s.name);
   const orderedCategories = reorderByStored(categories, categoryOrder, (c) => c);
+  const orderedUnits = reorderByStored(units, unitOrder, (u) => u);
 
-  function beginDrag(kind: "supplier" | "category", index: number, e: React.PointerEvent<HTMLButtonElement>) {
-    const listEl = kind === "supplier" ? supplierListRef.current : categoryListRef.current;
+  const listRefFor = (kind: "supplier" | "category" | "unit") =>
+    kind === "supplier" ? supplierListRef.current : kind === "category" ? categoryListRef.current : unitListRef.current;
+  const countFor = (kind: "supplier" | "category" | "unit") =>
+    kind === "supplier" ? orderedSuppliers.length : kind === "category" ? orderedCategories.length : orderedUnits.length;
+
+  function beginDrag(kind: "supplier" | "category" | "unit", index: number, e: React.PointerEvent<HTMLButtonElement>) {
+    const listEl = listRefFor(kind);
     if (!listEl) return;
     const rows = Array.from(listEl.querySelectorAll<HTMLElement>("[data-drag-row]"));
-    const expected = kind === "supplier" ? orderedSuppliers.length : orderedCategories.length;
+    const expected = countFor(kind);
     // 行數唔對就唔開始拖：寧願冇反應，都唔可以搬錯行（索引同 DOM 一定要一一對應）。
     if (rows.length !== expected) return;
     const midYs = rows.map((row) => {
@@ -225,10 +250,14 @@ export function InventorySettingsPanel({
       const next = orderKeys(moveWithin(orderedSuppliers, d.from, d.to), (s) => s.name);
       setMsg({ ok: true, text: "已更新供應商次序。" });
       void onSaveSupplierOrder(next);
-    } else {
+    } else if (d.kind === "category") {
       const next = orderKeys(moveWithin(orderedCategories, d.from, d.to), (c) => c);
       setMsg({ ok: true, text: "已更新品類次序。" });
       void onSaveCategoryOrder(next);
+    } else {
+      const next = orderKeys(moveWithin(orderedUnits, d.from, d.to), (u) => u);
+      setMsg({ ok: true, text: "已更新單位次序。" });
+      void onSaveUnitOrder(next);
     }
   }
 
@@ -359,6 +388,52 @@ export function InventorySettingsPanel({
     setMsg({ ok: true, text: `已刪除品類「${name}」。舊收據不受影響。` });
   }
 
+  /* ─────────────── 單位（結構完全對齊品類）─────────────── */
+
+  async function addUnit() {
+    const name = unitDraft.trim();
+    if (!name) return;
+    if (units.some((u) => u === name)) {
+      setMsg({ ok: false, text: `已經有「${name}」呢個單位。` });
+      return;
+    }
+    await onSaveUnits([...units, name]);
+    await onSaveUnitOrder(orderKeys([...orderedUnits, name], (u) => u));
+    setUnitDraft("");
+    setMsg({ ok: true, text: `已新增單位「${name}」。` });
+  }
+
+  async function renameUnit(from: string, to: string) {
+    const trimmed = to.trim();
+    if (!trimmed || trimmed === from) {
+      setEditingUnit(null);
+      return;
+    }
+    if (units.some((u) => u === trimmed)) {
+      setMsg({ ok: false, text: `已經有「${trimmed}」呢個單位。` });
+      setEditingUnit(null);
+      return;
+    }
+    await onSaveUnits(units.map((u) => (u === from ? trimmed : u)));
+    if (unitOrder.includes(from)) {
+      await onSaveUnitOrder(unitOrder.map((n) => (n === from ? trimmed : n)));
+    }
+    setEditingUnit(null);
+    setMsg({
+      ok: true,
+      text: `已改名為「${trimmed}」。⚠️ 舊收據仍然顯示「${from}」，改名唔會追溯。`,
+    });
+  }
+
+  async function deleteUnit(name: string) {
+    await onSaveUnits(units.filter((u) => u !== name));
+    if (unitOrder.includes(name)) {
+      await onSaveUnitOrder(unitOrder.filter((n) => n !== name));
+    }
+    setConfirmDeleteUnit(null);
+    setMsg({ ok: true, text: `已刪除單位「${name}」。舊收據不受影響。` });
+  }
+
   function togglePanel(id: PanelId) {
     setMsg(null);
     setVisible((cur) => {
@@ -395,7 +470,7 @@ export function InventorySettingsPanel({
           <div className="min-w-0">
             <h3 className="text-xl font-semibold text-slate-900">庫存・設置</h3>
             <p className="mt-0.5 text-xs leading-snug text-slate-500">
-              只放「唔常用但一定要改到」嘅主檔：供應商、品類、庫存品、支付方式顯示。改動即時儲存。
+              只放「唔常用但一定要改到」嘅主檔：供應商、品類、單位、庫存品、支付方式顯示。改動即時儲存。
             </p>
           </div>
           <button
@@ -407,7 +482,7 @@ export function InventorySettingsPanel({
           </button>
         </div>
 
-        {/* ── 4 個 chips：切換要顯示邊幾個 panel（最少一個）── */}
+        {/* ── chips：切換要顯示邊幾個 panel（最少一個）── */}
         <div className="flex flex-wrap gap-2 px-5 pt-4" role="group" aria-label="設置區塊">
           {PANEL_ORDER.map((id) => (
             <button
@@ -687,6 +762,123 @@ export function InventorySettingsPanel({
                   disabled={false}
                   placeholder="輸入品類名稱（例：包裝耗材）"
                   ariaLabel="新增品類名稱"
+                  className={fieldCls}
+                  btnClass={btnPrimary}
+                />
+              </Panel>
+            )}
+
+            {/* ══════════ 單位 ══════════ */}
+            {visible.unit && (
+              <Panel
+                title="單位"
+                hint="新增收據時品項嘅「單位」欄會變成下拉選單"
+                badge={`${orderedUnits.length} 個`}
+                testId="panel-unit"
+              >
+                <ul ref={unitListRef} className="flex flex-col gap-2">
+                  {orderedUnits.length === 0 ? (
+                    <li className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
+                      尚無單位。冇單位都開得到收據（品項嘅「單位」欄可以手動輸入），但建立清單之後落單會快好多。
+                    </li>
+                  ) : (
+                    orderedUnits.map((u, index) => {
+                      const dragging = dragState?.kind === "unit" && dragState.from === index;
+                      const dropTarget = dragState?.kind === "unit" && dragState.to === index && dragState.from !== index;
+                      return (
+                        <li
+                          key={u}
+                          data-drag-row
+                          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border px-2 py-1.5 transition ${
+                            dragging
+                              ? "border-slate-900 bg-slate-50"
+                              : dropTarget
+                                ? "border-dashed border-slate-400 bg-slate-50"
+                                : "border-slate-100 bg-slate-50/60"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            aria-label={`拖動排序：${u}`}
+                            title="按住拖動排序"
+                            className={gripCls}
+                            onPointerDown={(e) => beginDrag("unit", index, e)}
+                            onPointerMove={moveDrag}
+                            onPointerUp={endDrag}
+                            onPointerCancel={endDrag}
+                          >
+                            ⠿
+                          </button>
+
+                          {editingUnit?.from === u ? (
+                            <input
+                              autoFocus
+                              className="min-w-0 rounded-lg border border-slate-300 px-3 py-2.5 text-base outline-none"
+                              defaultValue={u}
+                              onBlur={(e) => void renameUnit(u, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void renameUnit(u, (e.target as HTMLInputElement).value);
+                                if (e.key === "Escape") setEditingUnit(null);
+                              }}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="min-w-0 text-left"
+                              onClick={() => setEditingUnit({ from: u, to: u })}
+                              title="撳一下改名"
+                            >
+                              <span className="block truncate text-sm font-semibold text-slate-800">{u}</span>
+                              <span className="block text-[11px] text-slate-400">品項單位共用</span>
+                            </button>
+                          )}
+
+                          {editingUnit?.from === u ? (
+                            <div className="flex gap-1.5">
+                              <button type="button" className={btnGhost} onClick={() => setEditingUnit(null)}>
+                                取消
+                              </button>
+                            </div>
+                          ) : confirmDeleteUnit === u ? (
+                            <div className="flex gap-1.5">
+                              <button type="button" className={btnGhost} onClick={() => setConfirmDeleteUnit(null)}>
+                                取消
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-xl bg-red-600 px-3.5 py-2.5 text-sm font-semibold text-white"
+                                onClick={() => void deleteUnit(u)}
+                              >
+                                確定刪除
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1.5">
+                              <button type="button" className={btnGhost} onClick={() => setEditingUnit({ from: u, to: u })}>
+                                改名
+                              </button>
+                              <button type="button" className={btnDanger} onClick={() => setConfirmDeleteUnit(u)}>
+                                刪
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+
+                <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500 ring-1 ring-slate-100">
+                  單位係你門店自己嘅主檔（kg／包／罐…），唔影響帳目。喺呢度建好之後，新增收據品項嘅「單位」欄就會變成直接揀。
+                </p>
+
+                <AddBar
+                  value={unitDraft}
+                  onChange={setUnitDraft}
+                  onSubmit={() => void addUnit()}
+                  disabled={false}
+                  placeholder="輸入單位名稱（例：kg）"
+                  ariaLabel="新增單位名稱"
                   className={fieldCls}
                   btnClass={btnPrimary}
                 />

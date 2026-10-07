@@ -579,4 +579,10 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   // 品類跟建立次序）。商家拖過 ⠿ 之後先寫入（見 `inventory-order.ts`）。
   invSupplierOrder: [],
   invCategoryOrder: [],
+  // 單位清單（2026-10-07）：預設空 → 商家第一次入「庫存 → 設置 → 單位」自己建。
+  // ⚠️ 刻意**唔預設** kg/包/罐：預設值一旦寫死，商家就會見到一堆自己唔用嘅選項，
+  // 而且分唔清「系統預設」同「自己建嘅」。（品類都係同樣取態。）
+  // 空 = 品項 row 嘅單位欄照可以用（手動輸入），唔會鎖死。
+  invUnits: [],
+  invUnitOrder: [],
 };

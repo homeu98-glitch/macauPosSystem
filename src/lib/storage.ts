@@ -637,6 +637,21 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
         )
       : defaultPosLocalSettings.invCategories,
     /**
+     * ⚠️ 2026-10-07 新增：單位清單（庫存 → 設置 → 單位），品項 row 嘅「單位」欄用佢做選單。
+     *
+     * 同 `invCategories` **完全同一個坑**（逐欄重建，漏咗就靜靜剷走）。
+     * 清洗邏輯刻意一致：剔非字串、trim、剔空、去重、保序。
+     */
+    invUnits: Array.isArray(settings?.invUnits)
+      ? Array.from(
+          new Set(
+            settings.invUnits
+              .map((u) => (typeof u === "string" ? u.trim() : ""))
+              .filter((u) => u.length > 0),
+          ),
+        )
+      : defaultPosLocalSettings.invUnits,
+    /**
      * ⚠️ 2026-09-26 新增：供應商／品類嘅顯示次序（設置頁拖 ⠿ 排序）。
      *
      * 同上面 `invCategories` **同一個坑**：呢度係逐欄重建，漏咗就係「商家拖好嘅次序
@@ -645,6 +660,7 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
      */
     invSupplierOrder: sanitizeKeyList(settings?.invSupplierOrder) ?? defaultPosLocalSettings.invSupplierOrder,
     invCategoryOrder: sanitizeKeyList(settings?.invCategoryOrder) ?? defaultPosLocalSettings.invCategoryOrder,
+    invUnitOrder: sanitizeKeyList(settings?.invUnitOrder) ?? defaultPosLocalSettings.invUnitOrder,
   };
 }
 

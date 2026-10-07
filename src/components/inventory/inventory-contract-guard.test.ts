@@ -385,6 +385,237 @@ describe("品類：納入「設置」，並要頂得住 whitelist normalize", ()
   });
 });
 
+/**
+ * 門店層設定同步（2026-10-07，J 實案：「品類的設置似乎沒有同步到雲端」）
+ *
+ * ## 症狀
+ * 喺另一台電腦新增品類 → 本機／其他裝置永遠睇唔到；商家以為「已保存」，
+ * 因為成功提示照出（`await onSaveCategories(...)` 冇拋錯）。
+ *
+ * ## 兩個獨立病灶（兩者缺一都唔會同步，所以兩者都要守）
+ *
+ * **A. 只寫本機、從來冇推雲。**
+ *    `patchLocalSettings()` 以前只有 `savePosLocalSettings(merged)`，
+ *    全 repo 冇任何一行把 `invCategories` 推上雲 ⇒ 品類係「本機私有」。
+ *    （供應商冇呢個問題，因為供應商走 expenseRecorder `merchants` 表，
+ *      係另一條 HTTP 路 —— 呢個落差正正係商家困惑嘅來源。）
+ *
+ * **B. 拉雲端嘅閘係死條件。**
+ *    `device-settings.tsx` 以前寫 `const needLocalSettings = !cachedLocalSettings;`，
+ *    但 `loadPosLocalSettings()` **永遠**回 normalized 物件（key 唔存在就回 default），
+ *    所以恆為 `false` ⇒ `if (needLocalSettings && payload.localSettings)` 永不執行
+ *    ⇒ 從來唔會採用雲端 `local_settings`。
+ *
+ * ## ⚠️ 守行為、唔守字串（見本檔開頭 §6.1 血淚）
+ * 一律抽**函式體**再逐項檢查必要行為（推雲／帶 storeId／剝 temp 枱／catch），
+ * 唔寫死整句代碼 —— 否則一次無害重構就爆，真正壞掉時反而可能唔爆。
+ */
+describe("門店層設定（品類／單位）：改動要推雲，雲端設定要拉得返", () => {
+  const DEVICE_SETTINGS = "src/components/device-settings.tsx";
+
+  it("🔴 patchLocalSettings 寫完本機之後一定要推雲（否則品類只係本機私有）", () => {
+    const body = functionBody(read(VIEW), "patchLocalSettings");
+    assert.ok(body.length > 200, "抽唔到 patchLocalSettings 函式體（抽函式邏輯有問題？）");
+    assert.ok(
+      /\/api\/pos\/device-config/.test(body),
+      "🔴 冇推雲 ⇒ 另一台電腦永遠睇唔到（J 實案：品類顯示 0 個）",
+    );
+    assert.ok(/method:\s*"POST"/.test(body), "要用 POST（GET 唔會寫入）");
+  });
+
+  it("🔴 推雲要帶 storeId（租戶隔離；缺咗後端一律 400 拒絕）", () => {
+    const body = functionBody(read(VIEW), "patchLocalSettings");
+    assert.ok(/\bstoreId\b/.test(body), "要先解析 storeId");
+    assert.ok(/storeId\s*[,}]/.test(body), "送出嘅 body 要包含 storeId");
+  });
+
+  it("🔴 推雲前一定要剝走返結 temp 枱（唔剝會永久升級做真實枱）", () => {
+    const body = functionBody(read(VIEW), "patchLocalSettings");
+    assert.ok(
+      /stripReopenTempTables\s*\(/.test(body),
+      "🔴 localSettings.floors 內含 temp-reopen-*，原封推上雲會令假枱變真枱（table-scope 鐵律）",
+    );
+  });
+
+  it("推雲失敗唔可以中斷商家流程（要有 catch、唔可以 throw）", () => {
+    const body = functionBody(read(VIEW), "patchLocalSettings");
+    assert.ok(
+      /catch\s*[({]/.test(body),
+      "🔴 離線時 fetch 會 reject，一定要 catch —— 唔可以因為推唔到雲就炸咗個介面",
+    );
+    assert.equal(
+      /\bthrow\b/.test(body),
+      false,
+      "本機已寫入 = 資料唔會丟；唔應該 throw 出去（商家撳一下品類就見紅）",
+    );
+    assert.ok(/res\.ok/.test(body), "要 check res.ok，否則後台拒收（401／5xx）都會靜靜當成功");
+  });
+
+  it("🔴 device-settings 嘅 needLocalSettings 要用 raw key 探測（唔可以用 normalize 過嘅物件）", () => {
+    const src = read(DEVICE_SETTINGS);
+    assert.ok(
+      /const needLocalSettings = !hasPosLocalSettings\(\)/.test(src),
+      "🔴 loadPosLocalSettings() 永遠回 normalized 物件 ⇒ !cachedLocalSettings 恆為 false，雲端設定永遠拉唔到",
+    );
+    assert.equal(
+      /!\s*cachedLocalSettings\b/.test(src),
+      false,
+      "🔴 唔可以再用 !cachedLocalSettings 做閘（死條件，等於冇呢個閘）",
+    );
+  });
+
+  it("拉雲端設定嘅閘仍然存在（唔可以為咗修 bug 而拆咗個 gate）", () => {
+    const src = read(DEVICE_SETTINGS);
+    assert.ok(
+      /if \(needLocalSettings && payload\.localSettings\)/.test(src),
+      "adopt from DB 嘅分支唔可以拆走",
+    );
+    assert.ok(
+      /!hasPosLocalSettings\(\)/.test(src),
+      "補 default 嘅 guard 要用 raw key 探測（唔係死條件），否則會每次 render 重複打 API",
+    );
+  });
+
+  /**
+   * 第三塊：庫存頁自己拉雲端。
+   *
+   * 為何仲要呢塊 —— `device-settings` 嗰個 adopt 分支**只覆蓋全新裝置**
+   * （`!hasPosLocalSettings()`）。一間店用過嘅第二台機永遠行唔到，
+   * 品類推咗上雲都照樣顯示「0 個」。所以庫存頁要自己拉。
+   */
+  it("🔴 庫存頁要由雲端補返品類／單位（否則已用過嘅第二台機永遠睇唔到）", () => {
+    const src = read(VIEW);
+    const start = src.indexOf("cloudHydrateDone");
+    const end = src.indexOf("const patchLocalSettings");
+    const block = src.slice(start, end);
+    assert.ok(block.length > 200, "搵唔到雲端補值區塊（effect 被移除？）");
+    assert.ok(
+      /\/api\/pos\/device-config\?storeId=/.test(block),
+      "要 GET 該店嘅 device-config 攞雲端 local_settings",
+    );
+    assert.ok(/cloudHydrateDone/.test(block), "要有一次性 guard（避免重複打；StrictMode 會行兩次）");
+  });
+
+  it("🔴 補值只可以「只補空」，唔可以覆寫本機已有嘅值", () => {
+    const src = read(VIEW);
+    const block = src.slice(src.indexOf("cloudHydrateDone"), src.indexOf("const patchLocalSettings"));
+    // 逐欄：本地空 且 雲端非空 才補。
+    const perField = block.match(/base\.inv\w+\.length === 0 && cloud\.inv\w+\.length > 0/g) ?? [];
+    assert.ok(
+      perField.length >= 3,
+      `要有逐欄「只補空」判斷（搵到 ${perField.length} 個）—— 否則一拉雲端就會蓋走商家本機嘅改動`,
+    );
+    assert.ok(
+      /savePosLocalSettings\(merged\)/.test(block),
+      "補完要寫返本機，否則下次開又變返空",
+    );
+    assert.equal(
+      /patchLocalSettings\(/.test(block),
+      false,
+      "🔴 拉落嚟嘅嘢唔可以即刻推返上去（兩台機會互相推來推去）",
+    );
+  });
+});
+
+/**
+ * 單位（2026-10-07）：結構完全沿用「品類」，所以守嘅係**同一批契約** ——
+ * 設定欄位 → 白名單 → 設置面板 → 開單下拉 → 舊資料唔會被改走。
+ *
+ * ⚠️ 呢度刻意**唔**寫死 `unitOptionsFor` 嘅完整句子（同 §6.1 教訓）：
+ *    守「存在一個把現有值補入選項嘅做法」而唔係守逐字代碼。
+ */
+describe("單位：納入「設置」，並喺新增單據時以下拉選單呈現", () => {
+  it("PosLocalSettings 要有 invUnits 同 invUnitOrder", () => {
+    const types = read("src/lib/types.ts");
+    assert.ok(/invUnits: string\[\]/.test(types), "要有單位清單欄位");
+    assert.ok(/invUnitOrder: string\[\]/.test(types), "要有單位顯示次序欄位");
+  });
+
+  it("defaultPosLocalSettings 要帶 invUnits / invUnitOrder", () => {
+    const mock = read("src/lib/mock-data.ts");
+    assert.ok(/invUnits: \[\]/.test(mock));
+    assert.ok(/invUnitOrder: \[\]/.test(mock));
+  });
+
+  it("🔴 normalizePosLocalSettings 白名單一定要帶返 invUnits / invUnitOrder（漏咗會被靜靜剷走）", () => {
+    const storage = read("src/lib/storage.ts");
+    // storage.ts 係逐欄重建，漏一個欄位 = 商家喺設置建好嘅單位一 reload 就消失。
+    assert.ok(/invUnits: Array\.isArray\(settings\?\.invUnits\)/.test(storage), "invUnits 唔在白名單");
+    assert.ok(/invUnitOrder: sanitizeKeyList\(settings\?\.invUnitOrder\)/.test(storage), "invUnitOrder 唔在白名單");
+  });
+
+  it("設置面板要有「單位」區塊（新增／改名／刪除／拖排序）", () => {
+    const panel = read(PANEL);
+    assert.ok(/unit: "單位"/.test(panel), "chips 要有「單位」入口");
+    assert.ok(/testId="panel-unit"/.test(panel), "要有 panel-unit 區塊");
+    // 四個操作（結構對齊品類）。
+    assert.ok(/async function addUnit\(/.test(panel), "要可以新增");
+    assert.ok(/async function renameUnit\(/.test(panel), "要可以改名");
+    assert.ok(/async function deleteUnit\(/.test(panel), "要可以刪除");
+    assert.ok(/onSaveUnitOrder\(next\)/.test(panel), "拖排序要寫入次序");
+  });
+
+  it("面板嘅單位儲存要經 onSaveUnits 出去（唔可以自己寫死 localStorage）", () => {
+    const panel = read(PANEL);
+    assert.ok(/units: string\[\]/.test(panel), "要有 units prop");
+    assert.ok(/unitOrder: string\[\]/.test(panel), "要有 unitOrder prop");
+    assert.ok(/onSaveUnits/.test(panel), "要有 onSaveUnits callback");
+  });
+
+  it("主頁要把單位 state 讀返、並喺 patchLocalSettings 之後同步返 UI", () => {
+    const view = read(VIEW);
+    assert.ok(/const \[units, setUnits\] = useState<string\[\]>\(\[\]\)/.test(view), "要有 units state");
+    assert.ok(/const \[unitOrder, setUnitOrder\] = useState<string\[\]>\(\[\]\)/.test(view), "要有 unitOrder state");
+    // 由 PosLocalSettings 讀入（否則清單永遠空白）。
+    assert.ok(/setUnits\(local\.invUnits\)/.test(view), "要由 local settings 讀入");
+    // 寫入之後同步返 state（兩個獨立 component instance 唔會自動同步）。
+    assert.ok(/setUnits\(merged\.invUnits\)/.test(view), "patch 之後要同步返 state");
+    assert.ok(/saveUnits/.test(view) && /saveUnitOrder/.test(view), "要有兩個 save callback");
+  });
+
+  it("新增單據嘅品項單位欄要用下拉（select），唔係淨係自由輸入", () => {
+    const view = read(VIEW);
+    assert.ok(/units: string\[\]/.test(view), "modal 要收 units prop");
+    // `<select>` 係「下拉」嘅唯一可靠證據（chips 唔算 —— 需求明確講「選單／下拉」）。
+    assert.ok(/<select/.test(view), "品項單位欄要用 <select> 下拉");
+    assert.ok(/CUSTOM_UNIT/.test(view), "要有「其他…」手動輸入嘅哨兵值");
+  });
+
+  it("🔴 舊收據嘅單位唔可以喺下拉消失（否則一儲存就被改走）", () => {
+    const view = read(VIEW);
+    // 守行為：存在一個「把該項現有值補入選項清單」嘅做法。
+    // （品類嘅 categoryOptions 都係同一個做法，所以呢個斷言兩邊都覆蓋。）
+    assert.ok(
+      /if \(cur && !list\.includes\(cur\)\) list\.push\(cur\)/.test(view),
+      "單位選項一定要補返現有值，否則舊收據編輯時單位會被靜靜改走",
+    );
+  });
+
+  it("🔴 單位清單為空唔可以鎖死欄位（要退回自由輸入）", () => {
+    const view = read(VIEW);
+    assert.ok(
+      /manualUnitRows\[i\] \|\| units\.length === 0/.test(view),
+      "清單空時要顯示自由輸入框，否則商家未建單位就填唔到",
+    );
+  });
+
+  it("單位仍然係選填（唔會因為加咗主檔就變必填）", () => {
+    const view = read(VIEW);
+    // 對比：品類 2026-10-07 改咗必填，單位刻意**保持選填** ⇒ 唔可以出現 required。
+    const unitBlock = /CUSTOM_UNIT[\s\S]{0,2600}/.exec(view)?.[0] ?? "";
+    assert.ok(unitBlock.length > 0, "搵唔到單位欄位區塊");
+    assert.ok(!/\brequired\b/.test(unitBlock), "單位欄唔可以係必填");
+  });
+
+  it("儲存時仍然寫入 quantity_unit（欄位名唔可以改）", () => {
+    const view = read(VIEW);
+    assert.ok(
+      /quantity_unit: it\.unit\.trim\(\)/.test(view),
+      "單位一定要映射去 expenseRecorder 嘅 quantity_unit，否則永遠寫唔入",
+    );
+  });
+});
+
 describe("merchants API：duplicate key 要轉做中文明確提示", () => {
   it("POST 要捕捉 23505 / 42P10，並區分 ALREADY_EXISTS 同 NAME_TAKEN", () => {
     const src = read(MERCHANTS);
@@ -438,14 +669,45 @@ describe("merchants API：duplicate key 要轉做中文明確提示", () => {
 const USAGE_API = "src/app/api/inventory/master-usage/route.ts";
 const ORDER_LIB = "src/lib/inventory-order.ts";
 
-describe("設置面板：對齊確認稿（4 個 chips ＋ 兩個 panel 並排）", () => {
-  it("要有 4 個區塊：供應商／品類／庫存品／支付方式顯示", () => {
+describe("設置面板：對齊確認稿（多個 chips ＋ 兩個 panel 並排）", () => {
+  /**
+   * 🔴 2026-10-07：呢條**唔再**寫死「4 個區塊」。
+   *
+   * 原本斷言 `type PanelId = "supplier" | "category" | "product" | "payment"` 逐字，
+   * 加咗「單位」之後就爆 —— 但**契約其實冇壞**（只係多咗一個區塊）。
+   * 呢個就係記憶 §6.1 講嘅「唔好守代碼字串」：無害擴充會爆，真正壞掉時反而可能唔爆。
+   *
+   * ✅ 改為守真正嘅不變量：**每個 panel id 都一定要喺 `PanelId` 型別、`PANEL_ORDER`
+   *    同 `PANEL_LABEL` 三處同時存在**（漏任何一處都係「撳到 chip 但開唔到 panel」）。
+   */
+  it("每個 panel id 都要喺 PanelId 型別、PANEL_ORDER、PANEL_LABEL 三處齊全", () => {
     const panel = read(PANEL);
-    assert.ok(/type PanelId = "supplier" \| "category" \| "product" \| "payment"/.test(panel));
-    assert.ok(
-      /const PANEL_ORDER: PanelId\[\] = \["supplier", "category", "product", "payment"\]/.test(panel),
-    );
-    for (const label of ["供應商", "品類", "庫存品", "支付方式顯示"]) {
+    const typeBody = /type PanelId =([^;]+);/.exec(panel)?.[1] ?? "";
+    const orderBody = /const PANEL_ORDER: PanelId\[\] = \[([^\]]*)\]/.exec(panel)?.[1] ?? "";
+    assert.ok(typeBody.length > 0, "搵唔到 PanelId 型別");
+    assert.ok(orderBody.length > 0, "搵唔到 PANEL_ORDER");
+
+    const fromType = Array.from(typeBody.matchAll(/"([a-z]+)"/g)).map((m) => m[1]);
+    const fromOrder = Array.from(orderBody.matchAll(/"([a-z]+)"/g)).map((m) => m[1]);
+    assert.ok(fromType.length > 0 && fromOrder.length > 0, "抽唔到 panel id");
+
+    // 型別同 ORDER 唔可以有一個係另一個嘅真子集（漏一個就係「有 order 冇 type」嘅編譯錯）。
+    assert.deepEqual([...fromType].sort(), [...fromOrder].sort(), "PanelId 同 PANEL_ORDER 要完全對應");
+
+    // 每個 id 都要有中文 label，否則 chip 會顯示 undefined。
+    for (const id of fromType) {
+      const label = new RegExp(`\\b${id}:\\s*"[^"]+"`).test(panel);
+      assert.ok(label, `PANEL_LABEL 缺少 id「${id}」嘅中文名`);
+    }
+  });
+
+  it("現有區塊一個都唔可以少（供應商／品類／單位／庫存品／支付方式顯示）", () => {
+    const panel = read(PANEL);
+    const orderBody = /const PANEL_ORDER: PanelId\[\] = \[([^\]]*)\]/.exec(panel)?.[1] ?? "";
+    for (const id of ["supplier", "category", "unit", "product", "payment"]) {
+      assert.ok(orderBody.includes(`"${id}"`), `PANEL_ORDER 缺少「${id}」`);
+    }
+    for (const label of ["供應商", "品類", "單位", "庫存品", "支付方式顯示"]) {
       assert.ok(panel.includes(label), `PANEL_LABEL 缺少「${label}」`);
     }
   });
