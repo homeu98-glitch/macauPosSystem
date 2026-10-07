@@ -16,14 +16,34 @@
  * ## 設計要點
  *
  * - **零依賴**：唔引入 popover 套件（專案行 `node --test`、唔想加 runtime 依賴）。
- * - **觸控友好**：`min-h-[22px] min-w-[22px]`（球本身細，但用 `p-1` 撐大熱區至 ~28px；
+ * - **觸控友好**：`h-[22px] w-[22px]`（球本身細，但用 `p-1` 撐大熱區至 ~28px；
  *   POS 觸控規範係「主要操作 ≥ 40px」，但呢個係**輔助提示**，唔係主要操作，
  *   且刻意唔可以搶眼 ⇒ 用 28px 熱區 + 四邊 `-m` 補償）。
  * - **點外面／Esc 關閉**：避免「彈咗之後唔識收」。
- * - **氣泡定位**：絕對定位喺球嘅**下方靠左**（2026-10-01 J：營業額係第一張 KPI 卡，
- *   靠右彈會向左伸出去撞側欄被裁切 ⇒ 改為向右伸）。
+ *
+ * ## 🔴 自動定位（2026-10-07）
+ *
+ * 原本氣泡寫死 `absolute left-0 top-[26px]`（永遠喺球下面靠左）。
+ * 實拍證實：KPI 卡**右上角**嘅球（營業額／客單價／毛利）本身就貼住卡片右緣，
+ * 氣泡向右伸展 ⇒ **超出螢幕右邊界被切走**，商家見唔到內容。
+ *
+ * 而家改成：量度實際錨點座標 ＋ 可視範圍（含 safe area／visual viewport），
+ * 交畀純函式 `computeTooltipPlacement()`（`src/lib/pos/tooltip-placement.ts`，
+ * 有獨立守衛測試）決定：
+ *
+ *   預設（下方靠左）→ 唔啱就**改為向左伸展**（右側錨點）→ 再唔啱就**翻到上面**
+ *   → 仲唔啱就**夾入**可視區（先水平、後垂直）。
+ *
+ * ⚠️ 氣泡用 `position: fixed` + 由 JS 計好嘅 `left/top`（唔再靠 Tailwind 定位 class），
+ *    因為夾位係按**實際量到嘅闊高**計，class 表達唔到。
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+
+import {
+  computeTooltipPlacement,
+  readTooltipViewport,
+  type TooltipPlacement,
+} from "@/lib/pos/tooltip-placement";
 
 export type InfoBubbleProps = {
   /** 氣泡內容（按下球之後顯示）。 */
@@ -36,7 +56,13 @@ export type InfoBubbleProps = {
 
 export function InfoBubble({ children, label, className }: InfoBubbleProps) {
   const [open, setOpen] = useState(false);
+  /**
+   * 氣泡落位。`null` ＝ 未量到（闔埋 render，避免用錯位閃一格）。
+   * 用 `useLayoutEffect` 量度 ⇒ 計算喺**繪製之前**完成，使用者見唔到跳位。
+   */
+  const [placement, setPlacement] = useState<TooltipPlacement | null>(null);
   const rootRef = useRef<HTMLSpanElement>(null);
+  const bubbleRef = useRef<HTMLSpanElement>(null);
 
   // 點擊氣泡以外位置 ／ Esc ⇒ 關閉。
   useEffect(() => {
@@ -54,6 +80,52 @@ export function InfoBubble({ children, label, className }: InfoBubbleProps) {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
+
+  // 闔埋時清走落位（下次彈出要由零重算 —— 錨點可能已經換位／換頁）。
+  useEffect(() => {
+    if (!open) setPlacement(null);
+  }, [open]);
+
+  /** 量錨點 ＋ 氣泡自身尺寸 ⇒ 重算落位。 */
+  const reposition = useCallback(() => {
+    const root = rootRef.current;
+    const bubble = bubbleRef.current;
+    if (!root || !bubble) return;
+    // 氣泡闔住（display:none / 未有寬高）就唔好計 —— 會用 0 高度計出錯位。
+    const bubbleWidth = bubble.offsetWidth;
+    const bubbleHeight = bubble.offsetHeight;
+    if (bubbleWidth <= 0 || bubbleHeight <= 0) return;
+    setPlacement(
+      computeTooltipPlacement({
+        anchor: root.getBoundingClientRect(),
+        bubble: { width: bubbleWidth, height: bubbleHeight },
+        viewport: readTooltipViewport(),
+      }),
+    );
+  }, []);
+
+  // 彈出嘅瞬間（繪製前）就定位好。
+  useLayoutEffect(() => {
+    if (!open) return;
+    reposition();
+  }, [open, reposition, children]);
+
+  // 彈住期間：捲動／旋轉／鍵盤彈起（visual viewport 變化）都要跟住重算。
+  useEffect(() => {
+    if (!open) return;
+    const onViewportChange = () => reposition();
+    // `true` = capture，咁樣內部任何可捲動容器捲動都收得到（氣泡唔會「甩低」）。
+    window.addEventListener("scroll", onViewportChange, true);
+    window.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("scroll", onViewportChange);
+    return () => {
+      window.removeEventListener("scroll", onViewportChange, true);
+      window.removeEventListener("resize", onViewportChange);
+      window.visualViewport?.removeEventListener("resize", onViewportChange);
+      window.visualViewport?.removeEventListener("scroll", onViewportChange);
+    };
+  }, [open, reposition]);
 
   return (
     <span ref={rootRef} className="relative inline-flex">
@@ -73,8 +145,18 @@ export function InfoBubble({ children, label, className }: InfoBubbleProps) {
 
       {open ? (
         <span
+          ref={bubbleRef}
           role="tooltip"
-          className="absolute left-0 top-[26px] z-40 w-max max-w-[min(320px,calc(100vw-24px))] rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-[12px] leading-relaxed text-slate-700 shadow-lg"
+          /* 落位由 JS 按實測尺寸計；未量到之前唔好畫（`invisible` 唔佔位）。 */
+          style={{
+            position: "fixed",
+            left: placement ? `${placement.left}px` : undefined,
+            top: placement ? `${placement.top}px` : undefined,
+            maxWidth: placement ? `${placement.maxWidth}px` : undefined,
+            maxHeight: placement ? `${placement.maxHeight}px` : undefined,
+            visibility: placement ? "visible" : "hidden",
+          }}
+          className="z-50 w-max overflow-y-auto rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-[12px] leading-relaxed text-slate-700 shadow-lg"
         >
           {children}
         </span>
