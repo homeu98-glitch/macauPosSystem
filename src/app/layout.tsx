@@ -4,6 +4,7 @@ import "./globals.css";
 import { ClientOnly } from "@/components/client-only";
 import { AppErrorBoundary } from "@/components/app-error-boundary";
 import { IosFocusHelper } from "@/components/ios-focus-helper";
+import { LangProvider } from "@/components/lang-provider";
 import { PosSyncFlushWorker } from "@/components/pos-sync-flush-worker";
 import { PwaRegister } from "@/components/pwa-register";
 import { PrintFlushWorker } from "@/components/print-flush-worker";
@@ -77,7 +78,24 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             ⚠️ 只包 `children`，**唔包上面 4 個 worker**：worker 係背景任務，
             出錯唔應該令畫面變全屏修復模式。
           */}
-          <AppErrorBoundary>{children}</AppErrorBoundary>
+          {/*
+            2026-10-07 UI 語言（第 1 層顯示文案）—— `LangProvider` 刻意喺
+            `<AppErrorBoundary>` **之外**（即係包住錯誤邊界）：
+
+            · 喺 `<ClientOnly>` 之內 ⇒ server 階段淨係出靜態 fallback，client 首次
+              render 就讀到本機語言，**唔會有首次閃爍**（ClientOnly 嘅
+              `getServerSnapshot()` 回 false，server 永遠唔 render children）。
+            · 喺 `<AppErrorBoundary>` 之外 ⇒ 萬一 Provider 自己出錯（例：本機儲存
+              讀到垃圾值），錯誤邊界仍然顯示到「重新載入／清快取／返登入頁」三個自救
+              入口。如果包咗喺入面，Provider 同 children 一齊死，畫面就永久白屏。
+            · 喺 4 個 background worker 之外 ⇒ worker 出錯唔應該令畫面變修復模式。
+
+            ⚠️ `useLang()` 本身**唔會**靜靜 fallback（搵唔到 Provider 會 throw），
+            所以「Provider 掛錯」一定會被上面嘅錯誤邊界捉到，而唔係靜靜顯示中文。
+          */}
+          <LangProvider>
+            <AppErrorBoundary>{children}</AppErrorBoundary>
+          </LangProvider>
         </ClientOnly>
       </body>
     </html>

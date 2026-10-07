@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { useT } from "@/components/lang-provider";
+
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
 import {
   WORKBENCHES,
@@ -43,13 +45,21 @@ import { signOutLedgerSession } from "@/lib/ledger/session";
  * 開埋「記住呢部機嘅選擇」就會連呢一頁都跳過（見 `workbench-preference`）。
  */
 
-function roleLabel(role: AuthSession["role"]): string {
-  if (role === "admin") return "管理員";
-  if (role === "manager") return "店長";
-  return "收銀員";
+/**
+ * 角色名。
+ *
+ * ⚠️ 呢個係**顯示文案**，所以可以翻譯。
+ * 但唔好搞混：`session.role` 本身（`admin` / `manager` / `cashier`）
+ * 係持久化業務值，一樣唔可以翻譯。
+ */
+function roleLabel(role: AuthSession["role"], t: (zh: string) => string): string {
+  if (role === "admin") return t("管理員");
+  if (role === "manager") return t("店長");
+  return t("收銀員");
 }
 
 export function SelectWorkbenchScreen() {
+  const t = useT();
   const [session, setSession] = useState<AuthSession | null>(null);
   const [ready, setReady] = useState(false);
   const [busyId, setBusyId] = useState<WorkbenchId | null>(null);
@@ -93,8 +103,11 @@ export function SelectWorkbenchScreen() {
     if (!session || busyId) return;
 
     if (!grantedSet.has(workbench.id)) {
+      // ⚠️ `workbench.label` 係中文原文（字典 key 來源）⇒ 插值前要先 t()。
       setNotice(
-        `「${workbench.label}」仲未開通。請聯絡管理員喺「後台 → 商家 → 模組授權」開通，之後重新登入就會見到。`,
+        t("「{name}」仲未開通。請聯絡管理員喺「後台 → 商家 → 模組授權」開通，之後重新登入就會見到。", {
+          name: t(workbench.label),
+        }),
       );
       return;
     }
@@ -111,7 +124,9 @@ export function SelectWorkbenchScreen() {
       window.location.replace(workbench.homePath);
     } catch (err) {
       setBusyId(null);
-      setNotice(err instanceof Error ? err.message : "進入工作台失敗，請重試。");
+      // 🔴 `err.message` 係 `apply-workbench` 抛出嘅中文訊息（會原樣顯示）。
+      //    呢度翻譯唔到（唔係字典 key）⇒ 保留原文，唔好 t() 硬套。
+      setNotice(err instanceof Error ? err.message : t("進入工作台失敗，請重試。"));
     }
   }
 
@@ -124,7 +139,7 @@ export function SelectWorkbenchScreen() {
   if (!ready || !session) {
     return (
       <div className="fixed inset-0 grid place-items-center bg-slate-950 text-sm text-slate-400">
-        載入中…
+        {t("載入中…")}
       </div>
     );
   }
@@ -153,8 +168,8 @@ export function SelectWorkbenchScreen() {
           </div>
           <div className="min-w-0 flex-1">
             <div className="truncate text-base font-bold text-white">{session.name}</div>
-            <div className="mt-0.5 text-xs text-white/55">
-              帳號 {session.account} · {roleLabel(session.role)}
+<div className="mt-0.5 text-xs text-white/55">
+              帳號 {session.account} · {roleLabel(session.role, t)}
             </div>
           </div>
           <button
@@ -162,15 +177,15 @@ export function SelectWorkbenchScreen() {
             onClick={logout}
             type="button"
           >
-            登出
+            {t("登出")}
           </button>
         </div>
 
         {/* 標題 */}
         <div className="mt-6">
-          <h1 className="text-2xl font-bold text-white">請選擇要進入嘅工作台</h1>
+          <h1 className="text-2xl font-bold text-white">{t("請選擇要進入嘅工作台")}</h1>
           <p className="mt-2 text-sm text-white/60">
-            呢部裝置今次開機做邊個崗位？入到去之後，可以再喺「設置」入面切換。
+            {t("呢部裝置今次開機做邊個崗位？入到去之後，可以再喺「設置」入面切換。")}
           </p>
         </div>
 
@@ -209,10 +224,10 @@ export function SelectWorkbenchScreen() {
               ?
             </div>
             <div>
-              <div className="text-sm font-bold text-white">搵唔到想用嘅模組？</div>
+              <div className="text-sm font-bold text-white">{t("搵唔到想用嘅模組？")}</div>
               <div className="mt-1 text-xs leading-relaxed text-white/55">
-                呢一頁只列出<b className="text-orange-200">後台已開通</b>嘅模組。如果想用嘅模組灰住或者冇出現，
-                請聯絡管理員喺「後台 → 商家 → 模組授權」開通，之後重新登入就會見到。
+                {t("呢一頁只列出後台已開通嘅模組。如果想用嘅模組灰住或者冇出現，")}{" "}
+                <b className="text-orange-200">{t("請聯絡管理員喺「後台 → 商家 → 模組授權」開通，之後重新登入就會見到。")}</b>
               </div>
             </div>
           </div>
@@ -229,12 +244,13 @@ export function SelectWorkbenchScreen() {
                   onChange={(event) => setRemember(event.target.checked)}
                   type="checkbox"
                 />
-                記住呢部機嘅選擇（下次開機直接進入，唔使再揀）
+                {t("記住呢部機嘅選擇（下次開機直接進入，唔使再揀）")}
               </label>
               {lockedWorkbenches.length > 0 ? (
                 <div className="mt-2 text-xs text-white/45">
-                  仲有 <b className="text-orange-200">{lockedWorkbenches.length} 個模組未開通</b>
-                  （{lockedWorkbenches.map((w) => w.label).join("、")}）。如需使用，請聯絡管理員喺後台開通。
+                  {t("仲有 {n} 個模組未開通", { n: lockedWorkbenches.length })}{" "}
+                  （{lockedWorkbenches.map((w) => t(w.label)).join("、")}）。
+                  {t("如需使用，請聯絡管理員喺後台開通。")}
                 </div>
               ) : null}
             </div>
@@ -243,7 +259,7 @@ export function SelectWorkbenchScreen() {
               onClick={logout}
               type="button"
             >
-              以此身份登出
+              {t("以此身份登出")}
             </button>
           </div>
         </div>

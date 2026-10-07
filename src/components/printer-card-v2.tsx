@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/lang-provider";
 import { DevicePrinterConfig } from "@/lib/types";
 import {
   LABEL_MODEL_PAPER_SIZES,
@@ -18,27 +19,42 @@ interface PrinterCardV2Props {
   onUpdate: (id: string, patch: Partial<DevicePrinterConfig>) => void;
 }
 
-function readinessDot(printer: DevicePrinterConfig): { color: string; label: string } {
-  if (!printer.enabled) return { color: "bg-slate-300", label: "已停用" };
+/**
+ * ⚠️ 呢個 component **唔可以**改成 module-level 純函式。
+ * `readinessDot` / `roleLabel` 都要 `t`，所以要喺 component 入面 call。
+ */
+function readinessDot(
+  printer: DevicePrinterConfig,
+  t: (zh: string) => string,
+): { color: string; label: string } {
+  if (!printer.enabled) return { color: "bg-slate-300", label: t("已停用") };
   if (printer.connectionType === "lan") {
     return printer.ipAddress
-      ? { color: "bg-emerald-500", label: "已連線" }
-      : { color: "bg-rose-500", label: "未連線" };
+      ? { color: "bg-emerald-500", label: t("已連線") }
+      : { color: "bg-rose-500", label: t("未連線") };
   }
   if (printer.connectionType === "usb") {
     return printer.usbVendorId
-      ? { color: "bg-emerald-500", label: "已連線" }
-      : { color: "bg-rose-500", label: "未連線" };
+      ? { color: "bg-emerald-500", label: t("已連線") }
+      : { color: "bg-rose-500", label: t("未連線") };
   }
-  return { color: "bg-rose-500", label: "未連線" };
+  return { color: "bg-rose-500", label: t("未連線") };
 }
 
-function roleLabel(role: DevicePrinterConfig["role"]): string {
-  return role === "receipt" ? "小票機" : role === "label" ? "標籤機" : "廚房機";
+/**
+ * `role` 係**持久化業務值**（`receipt` / `label` / `zone`），唔翻譯；
+ * 只有顯示出嚟嘅中文先翻譯。
+ */
+function roleLabel(role: DevicePrinterConfig["role"], t: (zh: string) => string): string {
+  return role === "receipt"
+    ? t("小票機")
+    : role === "label"
+      ? t("標籤機")
+      : t("廚房機");
 }
 
-function connLabel(conn: DevicePrinterConfig["connectionType"]): string {
-  return conn === "lan" ? "LAN" : conn === "usb" ? "USB" : "藍牙";
+function connLabel(conn: DevicePrinterConfig["connectionType"], t: (zh: string) => string): string {
+  return conn === "lan" ? "LAN" : conn === "usb" ? "USB" : t("藍牙");
 }
 
 /**
@@ -46,12 +62,15 @@ function connLabel(conn: DevicePrinterConfig["connectionType"]): string {
  *
  * 標籤機同票據機最關鍵嘅分別就係**紙張尺寸**（成卷標籤 vs 連續紙），
  * 所以卡片一定要顯示出嚟，唔可以只顯示「80mm」令商家以為同票據機一樣。
+ *
+ * ⚠️ `opt.label`（`30 × 20 mm`）係純數值單位，唔翻譯；
+ * `opt.hint`（`迷你標籤 / 試管貼`）係顯示文案 → 翻譯。
  */
-function labelPaperHint(paperSize: string | undefined): string {
+function labelPaperHint(paperSize: string | undefined, t: (zh: string) => string): string {
   const opt = labelPaperOptionOf(paperSize);
-  if (opt) return `${opt.label}（${opt.hint}）`;
-  if (paperSize === "62mm") return "62 mm（舊預設）";
-  return paperSize ?? "未設定";
+  if (opt) return `${opt.label}（${t(opt.hint)}）`;
+  if (paperSize === "62mm") return t("62 mm（舊預設）");
+  return paperSize ?? t("未設定");
 }
 
 export function PrinterCardV2({
@@ -63,7 +82,8 @@ export function PrinterCardV2({
   onTestPrint,
   onUpdate,
 }: PrinterCardV2Props) {
-  const dot = readinessDot(printer);
+  const t = useT();
+  const dot = readinessDot(printer, t);
   const isLabel = printer.role === "label";
   const isZone = printer.role === "zone";
 
@@ -85,7 +105,8 @@ export function PrinterCardV2({
             ) : null}
           </div>
           <div className="mt-1 break-words text-xs text-slate-500">
-            {roleLabel(printer.role)} · {connLabel(printer.connectionType)} · {printer.model ?? "未知型號"}
+            {roleLabel(printer.role, t)} · {connLabel(printer.connectionType, t)} ·{" "}
+            {printer.model ?? t("未知型號")}
             <span className="ml-1 text-slate-400">🔒</span>
           </div>
         </div>
@@ -96,14 +117,14 @@ export function PrinterCardV2({
               onChange={(e) => onToggle(printer.id, e.target.checked)}
               type="checkbox"
             />
-            啟用
+            {t("啟用")}
           </label>
           <button
             className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-rose-600 shadow-sm ring-1 ring-slate-200 hover:bg-rose-50"
             onClick={() => onRemove(printer.id)}
             type="button"
           >
-            刪除
+            {t("刪除")}
           </button>
         </div>
       </div>
@@ -112,7 +133,7 @@ export function PrinterCardV2({
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         {printer.connectionType === "lan" ? (
           <label className="grid gap-1 text-sm font-semibold text-slate-700">
-            <span className="text-xs text-slate-500">IP 地址</span>
+            <span className="text-xs text-slate-500">{t("IP 地址")}</span>
             <input
               className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
               onChange={(e) => onUpdate(printer.id, { ipAddress: e.target.value })}
@@ -125,9 +146,9 @@ export function PrinterCardV2({
 
         {printer.connectionType === "usb" ? (
           <div className="grid gap-1 text-sm font-semibold text-slate-700">
-            <span className="text-xs text-slate-500">USB 連接</span>
+            <span className="text-xs text-slate-500">{t("USB 連接")}</span>
             <div className="rounded-2xl border border-slate-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-              ✅ 已連接
+              ✅ {t("已連接")}
             </div>
           </div>
         ) : null}
@@ -141,7 +162,7 @@ export function PrinterCardV2({
         */}
         {isZone ? (
           <label className="grid gap-1 text-sm font-semibold text-slate-700">
-            <span className="text-xs text-slate-500">打印分區</span>
+            <span className="text-xs text-slate-500">{t("打印分區")}</span>
             <select
               className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
               onChange={(e) => onUpdate(printer.id, { zoneId: e.target.value })}
@@ -159,10 +180,13 @@ export function PrinterCardV2({
         {isLabel ? (
           <label className="grid gap-1 text-sm font-semibold text-slate-700">
             <span className="text-xs text-slate-500">
-              標籤紙尺寸
+              {t("標籤紙尺寸")}
               {printer.maxLabelWidthMm != null || printer.minLabelWidthMm != null ? (
                 <span className="ml-1 font-normal text-slate-400">
-                  （機型支援 {printer.minLabelWidthMm ?? "?"}–{printer.maxLabelWidthMm ?? "?"} mm）
+                  {t("（機型支援 {min}–{max} mm）", {
+                    min: printer.minLabelWidthMm ?? "?",
+                    max: printer.maxLabelWidthMm ?? "?",
+                  })}
                 </span>
               ) : null}
             </span>
@@ -184,7 +208,7 @@ export function PrinterCardV2({
                 return (
                   <option key={p.value} value={p.value} disabled={!fits}>
                     {p.label}
-                    {fits ? "" : "（超出紙寬限制，放唔落）"}
+                    {fits ? "" : t("（超出紙寬限制，放唔落）")}
                   </option>
                 );
               })}
@@ -199,7 +223,7 @@ export function PrinterCardV2({
               printer.maxLabelWidthMm,
             ) ? (
               <span className="text-[11px] font-normal text-rose-600">
-                🔴 現時尺寸超出現時機型嘅紙寬限制，請改揀其他尺寸
+                🔴 {t("現時尺寸超出現時機型嘅紙寬限制，請改揀其他尺寸")}
               </span>
             ) : null}
           </label>
@@ -207,9 +231,9 @@ export function PrinterCardV2({
 
         {isLabel ? (
           <div className="grid gap-1 text-sm font-semibold text-slate-700">
-            <span className="text-xs text-slate-500">紙張 / 指令集</span>
+            <span className="text-xs text-slate-500">{t("紙張 / 指令集")}</span>
             <div className="rounded-2xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-800">
-              {labelPaperHint(printer.paperSize)}
+              {labelPaperHint(printer.paperSize, t)}
               {" · "}
               {suggestLabelCommandSet(printer.model ?? "").toUpperCase()}
             </div>
@@ -218,9 +242,9 @@ export function PrinterCardV2({
 
         {printer.role === "receipt" ? (
           <div className="grid gap-1 text-sm font-semibold text-slate-700">
-            <span className="text-xs text-slate-500">用途</span>
+            <span className="text-xs text-slate-500">{t("用途")}</span>
             <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-              收銀台收據打印機
+              {t("收銀台收據打印機")}
             </div>
           </div>
         ) : null}
@@ -235,7 +259,7 @@ export function PrinterCardV2({
           onClick={() => onTestPrint(printer)}
           type="button"
         >
-          {testing ? "打印中…" : isLabel ? "測試打印標籤" : "測試打印"}
+          {testing ? t("打印中…") : isLabel ? t("測試打印標籤") : t("測試打印")}
         </button>
       </div>
     </article>
@@ -244,16 +268,17 @@ export function PrinterCardV2({
 
 // ── Helper: empty state ──
 export function PrinterEmptyState({ onAdd }: { onAdd: () => void }) {
+  const t = useT();
   return (
     <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
-      <div className="text-sm font-semibold text-slate-600">尚未添加打印機</div>
-      <div className="mt-1 text-xs text-slate-400">點擊下方按鈕，一步一步引導添加</div>
+      <div className="text-sm font-semibold text-slate-600">{t("尚未添加打印機")}</div>
+      <div className="mt-1 text-xs text-slate-400">{t("點擊下方按鈕，一步一步引導添加")}</div>
       <button
         className="mt-4 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
         onClick={onAdd}
         type="button"
       >
-        + 添加打印機
+        + {t("添加打印機")}
       </button>
     </div>
   );

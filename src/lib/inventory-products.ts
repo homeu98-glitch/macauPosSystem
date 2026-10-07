@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { pickEarlierBaseline } from "./item-price-baseline.ts";
 
 export type InvProduct = {
   id: string;
@@ -15,6 +16,14 @@ export type InvProduct = {
   reorder_level: number;
   note: string | null;
   is_active: boolean;
+  /**
+   * 🔴 基準價（首次進貨單價）—— J 2026-10-07 拍板。
+   * 供「品項分析」計上漲金額／漲幅。**一經寫入永不覆寫**（唔跟 avg_unit_cost 走）。
+   * `null` ＝ 未有基準（手動新增、或首次進貨紀錄已不存在）⇒ UI 標「首次記錄」並排除喺漲跌統計外。
+   */
+  baseline_unit_cost: number | null;
+  /** 基準價生效日（首次進貨收據嘅 receipt_date）；只供顯示。 */
+  baseline_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -156,6 +165,13 @@ type AggregatedRow = {
   last_date: string | null;
   last_supplier: string | null;
   category: string | null;
+  /**
+   * 🔴 本輪掃描見到嘅**最早一筆**進貨單價（基準價候選）。
+   * 只喺對應 inv_products 嘅 `baseline_unit_cost` 仍然係 NULL 時先會寫入，
+   * 寫完之後就唔會再被覆寫（見下方 update 分支）。
+   */
+  first_unit_cost: number | null;
+  first_date: string | null;
 };
 
 /**
@@ -225,6 +241,13 @@ export async function syncFromReceipts(
     })();
 
     const row = agg.get(name);
+    // 基準價候選：只收 unit_price > 0 嘅行；「邊次算首次」由共用 helper 決定
+    const firstPick = pickEarlierBaseline(
+      row?.first_unit_cost === null || row === undefined
+        ? null
+        : { unitCost: row.first_unit_cost, date: row.first_date },
+      { unitCost: Math.round(price * 100) / 100, date },
+    );
     if (row) {
       row.total_qty += qty;
       row.weighted_cost += price * qty;
@@ -233,6 +256,8 @@ export async function syncFromReceipts(
         row.last_supplier = supplier;
       }
       if (!row.category && cat) row.category = cat;
+      row.first_unit_cost = firstPick?.unitCost ?? row.first_unit_cost;
+      row.first_date = firstPick?.date ?? row.first_date;
     } else {
       agg.set(name, {
         name,
@@ -241,6 +266,8 @@ export async function syncFromReceipts(
         last_date: date,
         last_supplier: supplier,
         category: cat,
+        first_unit_cost: firstPick?.unitCost ?? null,
+        first_date: firstPick?.date ?? null,
       });
     }
   }
@@ -262,6 +289,18 @@ export async function syncFromReceipts(
   for (const row of agg.values()) {
     const avg = row.total_qty > 0 ? Math.round((row.weighted_cost / row.total_qty) * 100) / 100 : 0;
     const hit = existingByName.get(row.name.toLowerCase());
+
+    // 🔴 基準價（J 2026-10-07）：**只喺 NULL 時鎖定一次**，之後永不覆寫。
+    //    刻意唔做 `baseline_unit_cost: hit.baseline_unit_cost ?? row.first_unit_cost` 以外嘅事
+    //    —— 尤其唔可以因為「搵到更早日期」就改寫，因為舊收據可能被刪／補登，
+    //    令基準價飄移 = 已報告咗嘅上漲金額會變，數字會「自己郁」。
+    const baselinePatch =
+      hit && hit.baseline_unit_cost !== null && hit.baseline_unit_cost !== undefined
+        ? {}
+        : row.first_unit_cost !== null
+          ? { baseline_unit_cost: row.first_unit_cost, baseline_at: row.first_date }
+          : {};
+
     if (hit) {
       const { error: uErr } = await macau
         .from("inv_products")
@@ -270,6 +309,7 @@ export async function syncFromReceipts(
           last_purchase_date: row.last_date ?? hit.last_purchase_date,
           last_supplier: row.last_supplier ?? hit.last_supplier,
           category: row.category ?? hit.category,
+          ...baselinePatch,
         })
         .eq("id", hit.id)
         .eq("store_id", storeId);
@@ -286,10 +326,23 @@ export async function syncFromReceipts(
         last_purchase_date: row.last_date,
         last_supplier: row.last_supplier,
         reorder_level: 0,
+        // 新品：今次掃到嘅最早一筆就係佢嘅首次進貨
+        baseline_unit_cost: row.first_unit_cost,
+        baseline_at: row.first_date,
       });
       if (iErr2) {
         // 名稱衝突（unique）→ 視為已存在，改走 update
         if (/duplicate key|unique constraint/i.test(iErr2.message)) {
+          // ⚠️ 呢條路徑用 ilike 而唔係 id，所以要用 select 拎返 baseline 做判斷
+          const { data: dupRows, error: dSelErr } = await macau
+            .from("inv_products")
+            .select("id, baseline_unit_cost")
+            .eq("store_id", storeId)
+            .ilike("name", row.name)
+            .limit(1)
+            .maybeSingle();
+          if (dSelErr) return { error: dSelErr.message, status: 500 };
+          const hasBase = Number(dupRows?.baseline_unit_cost) > 0;
           const { error: uErr2 } = await macau
             .from("inv_products")
             .update({
@@ -297,6 +350,10 @@ export async function syncFromReceipts(
               last_purchase_date: row.last_date,
               last_supplier: row.last_supplier,
               category: row.category,
+              ...(hasBase ? {} : {
+                baseline_unit_cost: row.first_unit_cost,
+                baseline_at: row.first_date,
+              }),
             })
             .eq("store_id", storeId)
             .ilike("name", row.name);

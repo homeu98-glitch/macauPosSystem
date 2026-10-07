@@ -50,3 +50,6 @@ print-agent-android/
 /desktop-companion
 desktop-companion.rar
 supabase/.temp/
+
+# 量度／截圖臨時產物（pixel-stable-ui-mockup 驗證用，唔入版本庫）
+docs/mockups/_shots/

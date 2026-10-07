@@ -11,6 +11,7 @@ import { useState } from "react";
 
 
 import { PendingDot } from "@/components/pending-dot";
+import { useT, useTShort } from "@/components/lang-provider";
 
 import { useNetworkOnline } from "@/lib/use-network-online";
 
@@ -66,6 +67,8 @@ export function AppSidebar() {
    *
    * 正常時它係純狀態徽章（`disabled`）；有嘢未上雲才變成可按嘅「立即重試」。
    */
+  const t = useT();
+  const tShort = useTShort();
   const syncHealth = useSyncHealth();
   /** 重試中：避免撳完好似冇反應（`retryReconcileNow` 通常 <1s，但慢網可能幾秒）。 */
   const [syncRetrying, setSyncRetrying] = useState(false);
@@ -75,24 +78,28 @@ export function AppSidebar() {
    */
   const syncBadgeLabel =
     syncHealth.level === "blocked"
-      ? "同步受阻"
+      ? t("同步受阻")
       : syncHealth.level === "pending"
-        ? `${syncHealth.waitingAck || syncHealth.pending || syncHealth.failed} 張待傳`
+        ? t("{n} 張待傳", { n: String(syncHealth.waitingAck || syncHealth.pending || syncHealth.failed) })
         : syncHealth.level === "offline"
-          ? "離線待傳"
+          ? t("離線待傳")
           : networkOnline
-            ? "在線"
-            : "離線";
+            ? t("在線")
+            : t("離線");
   const syncBadgeTitle =
     syncHealth.level === "blocked"
-      ? `有 ${syncHealth.blocked} 張訂單連續多次補推都對唔上雲端，撳一下即刻再試。`
+      ? t("有 {n} 張訂單連續多次補推都對唔上雲端，撳一下即刻再試。", { n: String(syncHealth.blocked) })
       : syncHealth.level === "pending"
-        ? `待上傳：${syncHealth.waitingAck} 張終態訂單未確認、${syncHealth.pending} 條事件排隊、${syncHealth.failed} 條退避重試。撳一下即刻再試。`
+        ? t("待上傳：{a} 張終態訂單未確認、{b} 條事件排隊、{c} 條退避重試。撳一下即刻再試。", {
+            a: String(syncHealth.waitingAck),
+            b: String(syncHealth.pending),
+            c: String(syncHealth.failed),
+          })
         : syncHealth.level === "offline"
-          ? "而家離線，恢復網絡後會自動補傳（資料已保留喺本機）。"
+          ? t("而家離線，恢復網絡後會自動補傳（資料已保留喺本機）。")
           : networkOnline
-            ? "網絡已連接；所有已結帳／已取消訂單都已確認上雲。"
-            : "網絡已斷開；目前冇待上傳資料。";
+            ? t("網絡已連接；所有已結帳／已取消訂單都已確認上雲。")
+            : t("網絡已斷開；目前冇待上傳資料。");
   /** 徽章底色：最壞情況優先（受阻 → 待傳 → 離線 → 一切正常才用網絡色）。 */
   const syncBadgeClass =
     syncHealth.level === "blocked"
@@ -118,7 +125,7 @@ export function AppSidebar() {
 
 
 
-  const roleLabel = session?.role === "admin" ? "總部" : session?.role === "manager" ? "店長" : "收銀";
+  const roleLabel = session?.role === "admin" ? t("總部") : session?.role === "manager" ? t("店長") : t("收銀");
 
   /**
    * 店內營業（線下）—— 2026-09-14 由**設置頁 header** 搬入商店名卡。
@@ -223,9 +230,16 @@ export function AppSidebar() {
 
                 ) : null}
 
-                <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">{item.short}</span>
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">{tShort(item.short)}</span>
 
-                <span className="whitespace-pre-line text-center leading-tight">{item.label}</span>
+                {/*
+                  ⚠️ 英文版面：呢個 `<span>` 係 `whitespace-pre-line` **冇truncate**
+                  （側欄 72px → `px-2` → 內容淨 56px）。中文 2 字啱啱好，
+                  英文 "Inventory"(9) / "Sold out"(8) 會自動摺行而唔會被剪走 ——
+                  係刻意保留咗呢個特性，唔好為咗塞英文加 `truncate`。
+                  註解見 memory「英文較長溢出處理 · 側欄 56px」。
+                */}
+                <span className="whitespace-pre-line text-center leading-tight">{t(item.label)}</span>
 
               </Link>
 
@@ -268,7 +282,7 @@ export function AppSidebar() {
               <div className="text-[8px] leading-tight">{session.name}</div>
 
               <div className={`mt-1 text-[6px] leading-tight ${storeOpen.isOpen === false ? "text-white/80" : "text-slate-400"}`}>
-                {storeOpen.isOpen === false ? "已暫停" : roleLabel}
+                {storeOpen.isOpen === false ? t("已暫停") : roleLabel}
               </div>
 
             </button>
@@ -304,7 +318,7 @@ export function AppSidebar() {
 
           >
 
-            {syncRetrying ? "重試中…" : syncBadgeLabel}
+            {syncRetrying ? t("重試中…") : syncBadgeLabel}
 
           </button>
 
@@ -333,7 +347,7 @@ export function AppSidebar() {
 
             >
 
-              登出
+              {t("以此身份登出")}
 
             </button>
 
@@ -359,7 +373,7 @@ export function AppSidebar() {
 
           >
 
-            設置
+            {t("設置")}
 
           </Link>
 
@@ -404,9 +418,11 @@ export function AppSidebar() {
 
                 ) : null}
 
-                <span className="grid h-6 w-6 place-items-center rounded-full bg-black/5">{item.short}</span>
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-black/5">{tShort(item.short)}</span>
 
-                <span className="leading-tight">{item.label.replace("\n", "")}</span>
+                {/* `.replace("\n","")` 保留：中文 label 內可以有換行（例如「店員\n手機」），
+                    移動底欄刻意剷走換行避免兩行過高。翻譯後同樣處理。 */}
+                <span className="leading-tight">{t(item.label).replace("\n", "")}</span>
 
               </Link>
 

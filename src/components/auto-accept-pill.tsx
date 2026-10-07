@@ -21,6 +21,8 @@
  *            **唔對接 Ledger**，docs/87 §11 明確標明範圍外）
  */
 
+import { useT } from "@/components/lang-provider";
+
 type AutoAcceptPillProps = {
   enabled: boolean;
   onChange: (next: boolean) => void;
@@ -57,6 +59,10 @@ export function AutoAcceptPill({
   variant = "plain",
   size = "md",
 }: AutoAcceptPillProps) {
+  const t = useT();
+  // ⚠️ `label` 係「顯示文案」（字典 key）⇒ 翻譯；
+  // call site 若已經自己 `t()` 咗（傳入英文），`t()` 查唔到 key 會原樣返，冇副作用。
+  const labelText = t(label);
   const contained = variant === "contained";
   const sm = size === "sm";
   const xs = size === "xs";
@@ -83,7 +89,7 @@ export function AutoAcceptPill({
    * 優先於 Tailwind utilities ⇒ 寫喺 `<button>` 身上嘅 `text-[12px]` 完全冇效（會變 16px）。
    * 同 `MerchantOpenPill` 嘅 `xs` 完全同一個做法。
    */
-  const stateText = enabled ? "開" : "關";
+  const stateText = enabled ? t("開") : t("關");
   const stateNode = xs ? (
     <span className="block text-[12px] font-semibold leading-[1.35]">{stateText}</span>
   ) : (
@@ -93,13 +99,13 @@ export function AutoAcceptPill({
   const inner = (
     <>
       <span className={labelClass}>
-        {label}
+        {labelText}
         {busy && busyHint ? (
-          <span className="ml-1 font-normal text-slate-400">{busyHint}</span>
+          <span className="ml-1 font-normal text-slate-400">{t(busyHint)}</span>
         ) : null}
       </span>
       <button
-        aria-label={ariaLabel ?? label}
+        aria-label={ariaLabel ? t(ariaLabel) : labelText}
         aria-pressed={enabled}
         className={`${buttonSizeClass} ${stateClass} disabled:opacity-50`}
         disabled={disabled || busy}

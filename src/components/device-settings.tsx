@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { useLang, useT } from "@/components/lang-provider";
+import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
 import { ScanModePanel } from "@/components/scan-mode-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
@@ -65,6 +67,7 @@ function cloneSpecGroups(specGroups?: MenuSpecGroup[]) {
 }
 
 export function DeviceSettings() {
+  const t = useT();
   const cachedConfig = loadDeviceConfig();
   const cachedLocalSettings = loadPosLocalSettings();
   const cachedBootstrap = loadBootstrapCache() ?? mockBootstrap;
@@ -1098,9 +1101,9 @@ export function DeviceSettings() {
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
           <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 md:pl-[88px]">
             <div className="min-w-0">
-              <div className="text-lg font-semibold text-slate-900">設置</div>
+              <div className="text-lg font-semibold text-slate-900">{t("設置")}</div>
               <div className="mt-1 text-sm text-slate-500">
-                打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。
+                {t("打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。")}
               </div>
             </div>
             {/* 右側控件（由左至右）：只剩「工作台」入口 ＋ 返回收銀台。
@@ -1117,10 +1120,10 @@ export function DeviceSettings() {
               <Link
                 className="flex items-center gap-2 rounded-full bg-orange-500 px-3 py-2 text-sm font-semibold text-white"
                 href="/"
-                title="切換工作台（重新揀呢部機嘅崗位）"
+                title={t("切換工作台（重新揀呢部機嘅崗位）")}
               >
                 <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
-                工作台
+                {t("工作台")}
               </Link>
               {/* 2026-09-15 J 拍板：**拿走 header 嗰粒「線上接單」**（原 `MerchantOrderHeaderToggle`）。
                   理由：「線上接單」已經喺 4 個地方出現 ——
@@ -1133,7 +1136,7 @@ export function DeviceSettings() {
               {/* ⚠️ 2026-09-17：收銀台由 `/` 搬到 `/pos`（`/` 已改為統一入口／工作台選擇頁）。
                   呢粒係「由設定頁返收銀台」，一定要指 `/pos` —— 指 `/` 會彈返選擇頁。 */}
               <Link className="rounded-full bg-indigo-600 px-3 py-2 text-sm font-semibold text-white" href="/pos">
-                返回收銀台
+                {t("返回收銀台")}
               </Link>
             </div>
           </div>
@@ -1160,7 +1163,7 @@ export function DeviceSettings() {
               onClick={() => setActiveTab(key as typeof activeTab)}
               type="button"
             >
-              {label}
+              {t(label)}
             </button>
           ))}
         </div>
@@ -1186,9 +1189,9 @@ export function DeviceSettings() {
           <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-base font-semibold text-slate-900">打印機綁定</div>
+                  <div className="text-base font-semibold text-slate-900">{t("打印機綁定")}</div>
                   <div className="mt-1 text-sm text-slate-500">
-                    支援自定義分區、唯一收據打印機，以及綁定分區的標籤機。
+                    {t("支援自定義分區、唯一收據打印機，以及綁定分區的標籤機。")}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1202,7 +1205,7 @@ export function DeviceSettings() {
                     onClick={() => void saveAll()}
                     type="button"
                   >
-                    {syncingConfig ? "同步中…" : "保存"}
+                    {syncingConfig ? t("同步中…") : t("保存")}
                   </button>
                 </div>
               </div>
@@ -1215,7 +1218,7 @@ export function DeviceSettings() {
                   onClick={() => setDevicePrinterTab("zones")}
                   type="button"
                 >
-                  打印分區
+                  {t("打印分區")}
                 </button>
                 <button
                   className={`rounded-full px-4 py-2 text-sm font-semibold ${
@@ -1224,15 +1227,17 @@ export function DeviceSettings() {
                   onClick={() => setDevicePrinterTab("printers")}
                   type="button"
                 >
-                  打印機列表
+                  {t("打印機列表")}
                 </button>
               </div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
               {devicePrinterTab === "zones" ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">打印分區</div>
-                <div className="mt-1 text-xs text-slate-500">分區可自由新增，例如：廚房、水吧、甜品、燒味。</div>
+                <div className="text-sm font-semibold text-slate-900">{t("打印分區")}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {t("分區可自由新增，例如：廚房、水吧、甜品、燒味。")}
+                </div>
                 <div className="mt-3 grid gap-2">
                   {localSettings.printZones.map((zone) => (
                     <div key={zone.id} className="flex items-center gap-2">
@@ -1281,11 +1286,11 @@ export function DeviceSettings() {
                             ),
                           }));
                           savePosLocalSettings(nextSettings);
-                          setStatus("已刪除打印分區。");
+                          setStatus(t("已刪除打印分區。"));
                         }}
                         type="button"
                       >
-                        刪除
+                        {t("刪除")}
                       </button>
                     </div>
                   ))}
@@ -1294,7 +1299,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[240px]"
                     onChange={(event) => setNewPrintZoneName(event.target.value)}
-                    placeholder="新增分區，例如：甜品"
+                    placeholder={t("新增分區，例如：甜品")}
                     value={newPrintZoneName}
                   />
                   <button
@@ -1312,11 +1317,11 @@ export function DeviceSettings() {
                       setLocalSettings(next);
                       savePosLocalSettings(next);
                       setNewPrintZoneName("");
-                      setStatus("已新增打印分區。");
+                      setStatus(t("已新增打印分區。"));
                     }}
                     type="button"
                   >
-                    新增分區
+                    {t("新增分區")}
                   </button>
                 </div>
               </div>
@@ -1329,20 +1334,20 @@ export function DeviceSettings() {
                 ) : (
                   <div className="grid gap-3">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-sm font-semibold text-slate-900">交班單打印機</div>
+                      <div className="text-sm font-semibold text-slate-900">{t("交班單打印機")}</div>
                       <div className="mt-1 text-xs text-slate-500">
-                        指定結數交班明細由邊台打印機出紙；唔揀 = 跟隨收據打印機。已停用嘅打印機唔會出紙。
+                        {t("指定結數交班明細由邊台打印機出紙；唔揀 = 跟隨收據打印機。已停用嘅打印機唔會出紙。")}
                       </div>
                       <select
                         className="mt-2 w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                         onChange={(event) => updateShiftPrinterSetting(event.target.value)}
                         value={config.shiftPrinterId ?? ""}
                       >
-                        <option value="">跟隨收據打印機（預設）</option>
+                        <option value="">{t("跟隨收據打印機（預設）")}</option>
                         {config.printers.map((printer) => (
                           <option key={printer.id} value={printer.id} disabled={!printer.enabled}>
                             {printer.name}
-                            {!printer.enabled ? "（已停用）" : ""}
+                            {!printer.enabled ? t("（已停用）") : ""}
                           </option>
                         ))}
                       </select>
@@ -1358,18 +1363,19 @@ export function DeviceSettings() {
                             零改動派發核心 / `pos_print_jobs` 一張 job 一列嘅模型）。
                         空 = 跟隨廚房分區（＝行為同堂食單一致，可預期）。 */}
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-sm font-semibold text-slate-900">平台打印機</div>
+                      <div className="text-sm font-semibold text-slate-900">{t("平台打印機")}</div>
                       <div className="mt-1 text-xs text-slate-500">
-                        澳覓 / MFOOD 平台單嘅廚房單由邊個打印分區出紙；唔揀 = 跟隨廚房分區（同堂食單一樣去廚房機）。
+                        {t("澳覓 / MFOOD 平台單嘅廚房單由邊個打印分區出紙；唔揀 = 跟隨廚房分區（同堂食單一樣去廚房機）。")}
                       </div>
                       <select
                         className="mt-2 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                         onChange={(event) => updatePlatformZoneSetting(event.target.value)}
                         value={localSettings.platformPrinterZoneId ?? ""}
                       >
-                        <option value="">跟隨廚房分區（預設）</option>
+                        <option value="">{t("跟隨廚房分區（預設）")}</option>
                         {localSettings.printZones.map((zone) => (
                           <option key={zone.id} value={zone.id}>
+                            {/* ⚠️ `zone.name` 係商家自己輸入嘅持久化值 ⇒ 唔翻譯 */}
                             {zone.name}（{platformZonePrinterCount(zone.id, config.printers)} 台機）
                           </option>
                         ))}
@@ -1381,19 +1387,28 @@ export function DeviceSettings() {
                           (zone) => zone.id === localSettings.platformPrinterZoneId,
                         ) ? (
                           <option value={localSettings.platformPrinterZoneId}>
-                            {localSettings.platformPrinterZoneId}（分區已刪除）
+                            {localSettings.platformPrinterZoneId}
+                            {t("（分區已刪除）")}
                           </option>
                         ) : null}
                       </select>
                       <div className="mt-1 text-xs text-slate-400">
-                        想多台機同時出平台單 → 把嗰幾台機嘅「打印分區」都設成同一個分區就得。
+                        {t("想多台機同時出平台單 → 把嗰幾台機嘅「打印分區」都設成同一個分區就得。")}
                       </div>
-                      {platformZoneWarningText() ? (
-                        <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-800 ring-1 ring-amber-200">
-                          注意：分區「{platformZoneWarningText()}」冇啟用嘅分區打印機
-                          → 平台單會收唔到紙。請去下面把該台機嘅「打印分區」設成佢，或者改用其他分區。
-                        </div>
-                      ) : null}
+                      {/* ⚠️ `platformZoneWarningText()` 係 `string | null`，
+                          但已經喺上面嘅 `? :` 收窄咗；`t()` 嘅 vars 唔接受 null
+                          ⇒ 用 `?? ""` 明確表達「呢度一定有值」。 */}
+                      {(() => {
+                        const warningZone = platformZoneWarningText();
+                        return warningZone ? (
+                          <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                            {t(
+                              "注意：分區「{zone}」冇啟用嘅分區打印機 → 平台單會收唔到紙。請去下面把該台機嘅「打印分區」設成佢，或者改用其他分區。",
+                              { zone: warningZone },
+                            )}
+                          </div>
+                        ) : null;
+                      })()}
                     </div>
                     {config.printers.map((printer) => (
                       <PrinterCardV2
@@ -1413,7 +1428,7 @@ export function DeviceSettings() {
                         onClick={() => setPrinterWizardOpen(true)}
                         type="button"
                       >
-                        + 添加打印機
+                        + {t("添加打印機")}
                       </button>
                     </div>
                   </div>
@@ -1423,6 +1438,8 @@ export function DeviceSettings() {
 
               </div>
             </section>
+
+          <LanguageSection />
 
           <PrintContentTogglesSection
             toggles={localSettings.printContentToggles}
@@ -4152,6 +4169,57 @@ const PRINT_CONTENT_TOGGLE_ROWS: ReadonlyArray<PrintContentToggleRow> = [
   },
 ] as const;
 
+/**
+ * UI 語言切換（只存本機 device，唔上雲）。
+ *
+ * 刻意跟 `PrintContentTogglesSection` 同一種寫法：**自足 component + props callback**，
+ * 即時寫入、冇「保存」掣。理由同 `printContentToggles` 一致（見 device-settings.tsx:1430）——
+ * 每粒掣一撳即刻生效，語言呢類顯示偏好唔應該要等另一個掣。
+ *
+ * ⚠️ **唔入 `PosLocalSettings`**：`local_settings` 會經
+ * `device-config/route.ts:109` 上雲，直接違反「偏好只存本機 device」嘅需求；
+ * 而且 `normalizePosLocalSettings()`（storage.ts:427）逐欄重建，漏白名單會被靜靜剷走。
+ * 真源係 `src/lib/ui-preference.ts`（獨立 localStorage key）。
+ */
+function LanguageSection() {
+  const { lang, setLang } = useLang();
+  const t = useT();
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-base font-semibold text-slate-900">{t("介面語言")}</div>
+          <div className="mt-1 text-sm text-slate-500">
+            {t(
+              "切換語言會即時生效，唔使重新載入。紙單同收據維持繁體中文，唔受呢個設定影響。",
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          {UI_LANGS.map((candidate) => {
+            const active = candidate === lang;
+            return (
+              <button
+                key={candidate}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setLang(candidate)}
+                className={`min-h-[40px] rounded-full px-4 text-sm font-semibold ${
+                  active
+                    ? "bg-orange-500 text-white"
+                    : "bg-white text-slate-700 ring-1 ring-slate-200"
+                }`}
+              >
+                {LANG_DISPLAY_NAME[candidate]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PrintContentTogglesSection({
   toggles,
   onChange,
@@ -4159,14 +4227,14 @@ function PrintContentTogglesSection({
   toggles: PrintContentToggles;
   onChange: (next: PrintContentToggles) => void;
 }) {
+  const t = useT();
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-base font-semibold text-slate-900">打印開關設置</div>
+          <div className="text-base font-semibold text-slate-900">{t("打印開關設置")}</div>
           <div className="mt-1 text-sm text-slate-500">
-            關閉後對應類型嘅自動打印唔會出單（例如唔想出退菜單就熄「退菜／退桌單」）。
-            手動掣（打印廚房單、打印收據、重打整單、重打交班單等）永遠不受呢啲開關影響。
+            {t("關閉後對應類型嘅自動打印唔會出單（例如唔想出退菜單就熄「退菜／退桌單」）。手動掣（打印廚房單、打印收據、重打整單、重打交班單等）永遠不受呢啲開關影響。")}
           </div>
         </div>
       </div>
@@ -4177,22 +4245,23 @@ function PrintContentTogglesSection({
             // 嚴格只接受 boolean：normalizePosLocalSettings 已保證 default 填好；
             // 呢度用 `!== false` 係雙重保險，避免任何 undefined 導致 UI 顯示成「關」。
             const enabled = toggles[row.key] !== false;
+            const label = t(row.label);
             return (
               <div
                 key={row.key}
                 className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-slate-900">{row.label}</div>
+                  <div className="text-sm font-semibold text-slate-900">{label}</div>
                   <div className="mt-0.5 text-xs leading-relaxed text-slate-500">
-                    {row.description}
+                    {t(row.description)}
                   </div>
                 </div>
                 <div className="shrink-0 pt-0.5">
                   <AutoAcceptPill
-                    ariaLabel={`${row.label}打印`}
+                    ariaLabel={t("{label}打印", { label })}
                     enabled={enabled}
-                    label={enabled ? "自動打印" : "已關閉"}
+                    label={enabled ? t("自動打印") : t("已關閉")}
                     onChange={(next) => onChange({ ...toggles, [row.key]: next })}
                     size="sm"
                   />

@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/components/lang-provider";
+
 import { useEffect, useState } from "react";
 
 import type { DevicePrinterConfig } from "@/lib/types";
@@ -53,6 +55,7 @@ function uid(prefix: string): string {
 type StatusState = "checking" | "online" | "offline";
 
 export function CompanionStatusCard() {
+  const t = useT();
   const [status, setStatus] = useState<StatusState>("checking");
   const [version, setVersion] = useState("");
   const [testing, setTesting] = useState(false);
@@ -107,11 +110,11 @@ export function CompanionStatusCard() {
   const label =
     status === "online"
       ? version
-        ? `已連線（v${version}）`
-        : "已連線"
+        ? t("已連線（v{version}）", { version })
+        : t("已連線")
       : status === "offline"
-        ? "未連線（代理未啟動）"
-        : "偵測中…";
+        ? t("未連線（代理未啟動）")
+        : t("偵測中…");
 
   // 未判定環境（SSR / 首次 render）或純 website / PWA：唔顯示呢張卡
   if (!envVisible) return null;
@@ -122,7 +125,7 @@ export function CompanionStatusCard() {
         <div className="flex items-center gap-2">
           <span className={`h-3 w-3 rounded-full ${dot}`} />
           <div>
-            <div className="text-sm font-semibold text-slate-800">桌面 Companion 代理</div>
+            <div className="text-sm font-semibold text-slate-800">{t("桌面 Companion 代理")}</div>
             <div className="text-xs text-slate-500">{label}</div>
           </div>
         </div>
@@ -132,13 +135,13 @@ export function CompanionStatusCard() {
           disabled={testing}
           className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
-          {testing ? "測試中…" : "測試連線"}
+          {testing ? t("測試中…") : t("測試連線")}
         </button>
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <label className="block">
-          <span className="text-xs text-slate-500">代理地址（固定，無須設定）</span>
+          <span className="text-xs text-slate-500">{t("代理地址（固定，無須設定）")}</span>
           <input
             value={COMPANION_DEFAULT_URL}
             readOnly
@@ -147,9 +150,9 @@ export function CompanionStatusCard() {
           />
         </label>
         <label className="block">
-          <span className="text-xs text-slate-500">配對 Token（留空即可）</span>
+          <span className="text-xs text-slate-500">{t("配對 Token（留空即可）")}</span>
           <input
-            value="（留空）"
+            value={t("（留空）")}
             readOnly
             disabled
             className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-100 px-2 py-1.5 text-sm text-slate-500"
@@ -157,7 +160,7 @@ export function CompanionStatusCard() {
         </label>
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-        代理地址固定為 loopback（127.0.0.1:9311），開 App 自動配對；商家無須輸入 IP 或 Token。
+        {t("代理地址固定為 loopback（127.0.0.1:9311），開 App 自動配對；商家無須輸入 IP 或 Token。")}
       </p>
     </div>
   );
@@ -172,6 +175,7 @@ function AddPrinterWizard({
   roles: PrinterRoleOption[];
   onAddPrinter: (p: DevicePrinterConfig) => void;
 }) {
+  const t = useT();
   const [scanning, setScanning] = useState<null | "lan" | "usb">(null);
   const [candidates, setCandidates] = useState<PrinterCandidate[]>([]);
   const [selected, setSelected] = useState<PrinterCandidate | null>(null);
@@ -366,9 +370,9 @@ function AddPrinterWizard({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-sm font-semibold text-slate-800">加入打印機（自動偵測）</div>
+      <div className="text-sm font-semibold text-slate-800">{t("加入打印機（自動偵測）")}</div>
       <p className="mt-1 text-xs text-slate-500">
-        按下面掃描，Companion 會列出區網 / USB 打印機，唔使手填 VID/PID。
+        {t("按下面掃描，Companion 會列出區網 / USB 打印機，唔使手填 VID/PID。")}
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -378,7 +382,7 @@ function AddPrinterWizard({
           disabled={scanning !== null}
           className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
-          {scanning === "lan" ? "掃描中…" : "+ 區網 / LAN 打印機"}
+          {scanning === "lan" ? t("掃描中…") : t("+ 區網 / LAN 打印機")}
         </button>
         <button
           type="button"
@@ -386,7 +390,7 @@ function AddPrinterWizard({
           disabled={scanning !== null}
           className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
-          {scanning === "usb" ? "枚舉中…" : "+ USB 打印機"}
+          {scanning === "usb" ? t("枚舉中…") : t("+ USB 打印機")}
         </button>
         <button
           type="button"
@@ -394,7 +398,7 @@ function AddPrinterWizard({
           disabled={btScanning}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
-          {btScanning ? "探索中…" : "+ 藍牙打印機"}
+          {btScanning ? t("探索中…") : t("+ 藍牙打印機")}
         </button>
 
         {/* 藍牙掃描錯誤（Android native onBtDiscoveryError 回報）—— 原本冇接收端，錯誤靜默丟失 */}
@@ -404,28 +408,28 @@ function AddPrinterWizard({
           </span>
         ) : null}
 
-        <span className="w-full text-[11px] text-slate-400">auto search 失敗？用手動 fallback：</span>
+        <span className="w-full text-[11px] text-slate-400">{t("auto search 失敗？用手動 fallback：")}</span>
 
         <button
           type="button"
           onClick={startManualLan}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
-          手動+ 區網 / LAN 打印機
+          {t("手動+ 區網 / LAN 打印機")}
         </button>
         <button
           type="button"
           onClick={startManualUsb}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
-          手動+ USB 打印機
+          {t("手動+ USB 打印機")}
         </button>
         <button
           type="button"
           onClick={startManualBt}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
-          手動+ 藍牙打印機
+          {t("手動+ 藍牙打印機")}
         </button>
       </div>
 
@@ -447,10 +451,10 @@ function AddPrinterWizard({
 
       {manualLanOpen && (
         <div className="mt-3 space-y-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
-          <div className="text-xs font-medium text-slate-600">手動加入 LAN 打印機（輸入 IP）</div>
+          <div className="text-xs font-medium text-slate-600">{t("手動加入 LAN 打印機（輸入 IP）")}</div>
           <div className="flex flex-wrap items-end gap-2">
             <label className="block">
-              <span className="text-[11px] text-slate-500">IP 位址</span>
+              <span className="text-[11px] text-slate-500">{t("IP 位址")}</span>
               <input
                 value={lanIp}
                 onChange={(e) => setLanIp(e.target.value)}
@@ -459,7 +463,7 @@ function AddPrinterWizard({
               />
             </label>
             <label className="block">
-              <span className="text-[11px] text-slate-500">連接埠</span>
+              <span className="text-[11px] text-slate-500">{t("連接埠")}</span>
               <input
                 value={lanPort}
                 onChange={(e) => setLanPort(e.target.value)}
@@ -472,14 +476,14 @@ function AddPrinterWizard({
               disabled={!lanIp.trim()}
               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
             >
-              以此 IP 加入
+              {t("以此 IP 加入")}
             </button>
             <button
               type="button"
               onClick={() => setManualLanOpen(false)}
               className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
             >
-              取消
+              {t("取消")}
             </button>
           </div>
         </div>
@@ -487,10 +491,10 @@ function AddPrinterWizard({
 
       {usbOpen && (
         <div className="mt-3 space-y-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
-          <div className="text-xs font-medium text-slate-600">手動選擇已連接嘅 USB 打印機</div>
+          <div className="text-xs font-medium text-slate-600">{t("手動選擇已連接嘅 USB 打印機")}</div>
           {usbList.length === 0 ? (
             <div className="text-[11px] text-slate-500">
-              未枚舉到 USB 打印機（請確認已插好並安裝驅動；未知型號可用 VID/PID 手填）。
+              {t("未枚舉到 USB 打印機（請確認已插好並安裝驅動；未知型號可用 VID/PID 手填）。")}
             </div>
           ) : (
             <select
@@ -503,7 +507,7 @@ function AddPrinterWizard({
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             >
               <option value="" disabled>
-                — 選擇打印機 —
+                {t("— 選擇打印機 —")}
               </option>
               {usbList.map((c, i) => (
                 <option key={i} value={i}>
@@ -517,10 +521,10 @@ function AddPrinterWizard({
 
       {btOpen && (
         <div className="mt-3 space-y-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
-          <div className="text-xs font-medium text-slate-600">手動選擇藍牙（SPP）打印機</div>
+          <div className="text-xs font-medium text-slate-600">{t("手動選擇藍牙（SPP）打印機")}</div>
           {btList.length === 0 ? (
             <div className="text-[11px] text-slate-500">
-              未列舉到藍牙序列埠（請先於系統配對，Windows 會出虛擬 COM port；Companion 需裝 serialport 套件）。
+              {t("未列舉到藍牙序列埠（請先於系統配對，Windows 會出虛擬 COM port；Companion 需裝 serialport 套件）。")}
             </div>
           ) : (
             <select
@@ -533,7 +537,7 @@ function AddPrinterWizard({
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             >
               <option value="" disabled>
-                — 選擇藍牙裝置 —
+                {t("— 選擇藍牙裝置 —")}
               </option>
               {btList.map((c, i) => (
                 <option key={i} value={i}>
@@ -548,12 +552,13 @@ function AddPrinterWizard({
       {selected && (
         <div className="mt-3 space-y-3 border-t border-slate-100 pt-3">
           <div className="text-xs font-medium text-slate-600">
-            已選：{selected.name}
+            {/* ⚠️ `selected.name` 係掃描結果／商家輸入，唔翻譯 */}
+            {t("已選：{name}", { name: selected.name })}
             {selected.usbVendorId ? `（VID ${selected.usbVendorId} / PID ${selected.usbProductId}）` : ""}
           </div>
 
           <label className="block">
-            <span className="text-xs text-slate-500">名稱</span>
+            <span className="text-xs text-slate-500">{t("名稱")}</span>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -563,7 +568,7 @@ function AddPrinterWizard({
 
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-xs text-slate-500">類型</span>
+              <span className="text-xs text-slate-500">{t("類型")}</span>
               <select
                 value={role}
                 onChange={(e) => setRole(e.target.value as "zone" | "receipt" | "label")}
@@ -571,7 +576,8 @@ function AddPrinterWizard({
               >
                 {roles.map((r) => (
                   <option key={r.value} value={r.value}>
-                    {r.label}
+                    {/* ⚠️ `PrinterRoleOption.value` 係 enum（唔翻譯），`label` 係顯示文案 */}
+                    {t(r.label)}
                   </option>
                 ))}
               </select>
@@ -579,7 +585,7 @@ function AddPrinterWizard({
 
             {role === "zone" && (
               <label className="block">
-                <span className="text-xs text-slate-500">對應分區</span>
+                <span className="text-xs text-slate-500">{t("對應分區")}</span>
                 <select
                   value={zoneId}
                   onChange={(e) => setZoneId(e.target.value)}
@@ -596,7 +602,7 @@ function AddPrinterWizard({
             )}
 
             <label className="block">
-              <span className="text-xs text-slate-500">紙張</span>
+              <span className="text-xs text-slate-500">{t("紙張")}</span>
               <select
                 value={paperSize}
                 onChange={(e) => setPaperSize(e.target.value)}
@@ -611,7 +617,7 @@ function AddPrinterWizard({
             </label>
 
             <label className="block">
-              <span className="text-xs text-slate-500">編碼</span>
+              <span className="text-xs text-slate-500">{t("編碼")}</span>
               <select
                 value={charset}
                 onChange={(e) => setCharset(e.target.value)}
@@ -628,18 +634,20 @@ function AddPrinterWizard({
 
           {selected.connectionType === "usb" && (
             <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-              型號自動偵測：VID {selected.usbVendorId} / PID {selected.usbProductId}
-              （唔使手填）
+              {t("型號自動偵測：VID {vid} / PID {pid}（唔使手填）", {
+                vid: selected.usbVendorId ?? "?",
+                pid: selected.usbProductId ?? "?",
+              })}
             </div>
           )}
 
           {selected.connectionType === "bluetooth" && (
             <label className="block">
-              <span className="text-xs text-slate-500">藍牙名稱 / 配對位址</span>
+              <span className="text-xs text-slate-500">{t("藍牙名稱 / 配對位址")}</span>
               <input
                 value={bluetoothName}
                 onChange={(e) => setBluetoothName(e.target.value)}
-                placeholder="例如 BT-Printer-AB12"
+                placeholder={t("例如 BT-Printer-AB12")}
                 className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
               />
             </label>
@@ -654,7 +662,7 @@ function AddPrinterWizard({
               }}
               className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
             >
-              取消
+              {t("取消")}
             </button>
             <button
               type="button"
@@ -662,7 +670,7 @@ function AddPrinterWizard({
               disabled={role === "zone" && !zoneId}
               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
             >
-              加入呢部機
+              {t("加入呢部機")}
             </button>
           </div>
         </div>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import { isRunningInNativeShell } from "@/components/pwa-install-button";
+import { useT } from "@/components/lang-provider";
 import { loadAuthSession } from "@/lib/storage";
 import { resolveStoreId } from "@/lib/pos/sync-flush";
 import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
@@ -67,6 +68,7 @@ function setAutoPairStopped(stopped: boolean): void {
 }
 
 export function RelayPairingPanel() {
+  const t = useT();
   // 原生殼（Android APK WebView / PC Companion）入面唔使、亦唔應該顯示雲端中繼配對 UI：
   // 呢啲環境本身就係打印終端（PosNative bridge / CompanionShell），relay 係畀純 website / PWA
   // 嘅 iPad、PC browser 用。喺原生殼入面隱藏，亦順便慳咗無謂嘅 /pair-status 探測。
@@ -286,9 +288,9 @@ export function RelayPairingPanel() {
     <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-base font-semibold text-slate-900">雲端列印中繼（relay）</div>
+          <div className="text-base font-semibold text-slate-900">{t("雲端列印中繼（relay）")}</div>
           <div className="mt-1 text-sm text-slate-500">
-            iPad / 瀏覽器 POS 經雲端將單據轉交店內 Android 中繼機出紙（解決 HTTPS 打唔到 LAN 打印機）。
+            {t("iPad / 瀏覽器 POS 經雲端將單據轉交店內 Android 中繼機出紙（解決 HTTPS 打唔到 LAN 打印機）。")}
           </div>
         </div>
         <StatusBadge paired={paired} autoPairing={autoPairing} manualUnpaired={manualUnpaired} state={state} />
@@ -296,16 +298,17 @@ export function RelayPairingPanel() {
 
       {!storeId ? (
         <div className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
-          未登入 POS 帳號，讀取唔到店舖識別。請先登入，雲端中繼要先知道係邊間店先配到對。
+          {t("未登入 POS 帳號，讀取唔到店舖識別。請先登入，雲端中繼要先知道係邊間店先配到對。")}
         </div>
       ) : null}
 
       {paired && pairing ? (
         <div className="mt-4 grid gap-3">
           <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            已連線：{storeName || pairing.storeName || pairing.storeId}
+            {/* ⚠️ `storeName` / `pairing.storeName` 係商家資料值 ⇒ 唔翻譯 */}
+            {t("已連線：{name}", { name: storeName || pairing.storeName || pairing.storeId })}
             <div className="mt-1 text-xs font-normal text-emerald-700">
-              列印單據會經雲端中繼送到店內 Android 中繼機出紙。
+              {t("列印單據會經雲端中繼送到店內 Android 中繼機出紙。")}
             </div>
           </div>
           <button
@@ -314,7 +317,7 @@ export function RelayPairingPanel() {
             onClick={() => void unpair()}
             type="button"
           >
-            {busy ? "處理中…" : "解除配對"}
+            {busy ? t("處理中…") : t("解除配對")}
           </button>
         </div>
       ) : (
@@ -322,29 +325,31 @@ export function RelayPairingPanel() {
           <ol className="grid gap-1.5 text-sm leading-relaxed text-slate-600">
             <li>
               <span className="font-semibold text-slate-800">1.</span>{" "}
-              喺店內 Android 中繼機開「Macau Print Hub」。
+              {t("喺店內 Android 中繼機開「Macau Print Hub」。")}
             </li>
             <li>
               <span className="font-semibold text-slate-800">2.</span>{" "}
-              用你嘅 POS 登入號碼（8 位電話 + 4 位 PIN）登入並撳「配對」。
+              {t("用你嘅 POS 登入號碼（8 位電話 + 4 位 PIN）登入並撳「配對」。")}
             </li>
             <li>
               <span className="font-semibold text-slate-800">3.</span>{" "}
-              唔使做任何嘢——呢邊會自動配對，中繼機現身即自動接上。
+              {t("唔使做任何嘢——呢邊會自動配對，中繼機現身即自動接上。")}
             </li>
           </ol>
           {autoPairing ? (
             <div className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              <div className="font-semibold">自動配對中…</div>
+              <div className="font-semibold">{t("自動配對中…")}</div>
               <div className="mt-1 font-normal">
-                每 5 秒自動檢查一次，直到配對成功為止；成功後會即時停止重試。
+                {t("每 5 秒自動檢查一次，直到配對成功為止；成功後會即時停止重試。")}
               </div>
             </div>
           ) : (
             <div className="rounded-xl bg-slate-100 px-3 py-2 text-sm text-slate-700">
-              <div className="font-semibold">{manualUnpaired ? "已解除配對" : "自動配對已停止"}</div>
+              <div className="font-semibold">
+                {manualUnpaired ? t("已解除配對") : t("自動配對已停止")}
+              </div>
               <div className="mt-1 font-normal">
-                唔會自動重新配對；按下面「配對」先會重新開始自動配對。
+                {t("唔會自動重新配對；按下面「配對」先會重新開始自動配對。")}
               </div>
             </div>
           )}
@@ -356,7 +361,7 @@ export function RelayPairingPanel() {
                 onClick={stopAutoPairing}
                 type="button"
               >
-                停止自動配對
+                {t("停止自動配對")}
               </button>
             ) : (
               <button
@@ -365,7 +370,7 @@ export function RelayPairingPanel() {
                 onClick={startAutoPairing}
                 type="button"
               >
-                配對
+                {t("配對")}
               </button>
             )}
             <button
@@ -374,7 +379,7 @@ export function RelayPairingPanel() {
               onClick={() => void checkStatus()}
               type="button"
             >
-              {busy ? "檢查中…" : "立即檢查"}
+              {busy ? t("檢查中…") : t("立即檢查")}
             </button>
           </div>
         </div>
@@ -384,28 +389,29 @@ export function RelayPairingPanel() {
 
       {lastCheckedAt ? (
         <div className="mt-2 text-xs text-slate-400">
-          上次檢查：{lastCheckedAt.toLocaleTimeString("zh-Hant-MO", { hour12: false })}
+          {t("上次檢查：{time}", { time: lastCheckedAt.toLocaleTimeString("zh-Hant-MO", { hour12: false }) })}
           {paired
             ? null
             : autoPairing
-              ? "　·　自動配對中：每 5 秒重試一次"
-              : "　·　自動配對已停止"}
+              ? t("　·　自動配對中：每 5 秒重試一次")
+              : t("　·　自動配對已停止")}
         </div>
       ) : null}
 
       {/* Debug 細字：對唔到 storeId 時一眼睇得出（預設摺埋，唔騷擾用戶） */}
       <details className="mt-3 text-xs text-slate-400">
-        <summary className="cursor-pointer select-none">技術資料（店舖識別）</summary>
+        <summary className="cursor-pointer select-none">{t("技術資料（店舖識別）")}</summary>
         <div className="mt-2 grid gap-1 break-all">
           <div>
-            storeId（本機用緊）：
+            {t("storeId（本機用緊）：")}
             <code className="rounded bg-slate-100 px-1 py-0.5 text-slate-600">
-              {storeId || "（無）"}
+              {storeId || t("（無）")}
             </code>
           </div>
           <div>
-            中繼機 ID：<code className="rounded bg-slate-100 px-1 py-0.5 text-slate-600">
-              {pairing?.agentId ?? "（未配對）"}
+            {t("中繼機 ID：")}
+            <code className="rounded bg-slate-100 px-1 py-0.5 text-slate-600">
+              {pairing?.agentId ?? t("（未配對）")}
             </code>
           </div>
         </div>
@@ -425,44 +431,45 @@ function StatusBadge({
   manualUnpaired: boolean;
   state: CheckState;
 }): ReactElement {
+  const t = useT();
   if (paired) {
     return (
       <span className="shrink-0 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-        已配對
+        {t("已配對")}
       </span>
     );
   }
   if (autoPairing) {
     return (
       <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-        自動配對中…
+        {t("自動配對中…")}
       </span>
     );
   }
   if (manualUnpaired) {
     return (
       <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-        已解除配對
+        {t("已解除配對")}
       </span>
     );
   }
   if (state.kind === "failed") {
     return (
       <span className="shrink-0 rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
-        配對失敗
+        {t("配對失敗")}
       </span>
     );
   }
   if (state.kind === "checking") {
     return (
       <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-        檢查中…
+        {t("檢查中…")}
       </span>
     );
   }
   return (
     <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-      尚未配對
+      {t("尚未配對")}
     </span>
   );
 }
@@ -476,21 +483,24 @@ function ResultMessage({
   paired: boolean;
   autoPairing: boolean;
 }): ReactElement | null {
+  const t = useT();
   if (state.kind === "paired") {
     return (
       <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
-        配對成功，雲端中繼已連線。
+        {t("配對成功，雲端中繼已連線。")}
       </div>
     );
   }
   if (state.kind === "unpaired") {
     return (
       <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-        <div className="font-semibold">{autoPairing ? "自動配對中" : "尚未配對"}</div>
+        <div className="font-semibold">{autoPairing ? t("自動配對中") : t("尚未配對")}</div>
         <div className="mt-1 font-normal">
-          雲端仲未搵到呢間店嘅中繼機。請確認 Android 中繼機已用<b>同一個</b> POS
-          登入號碼（8 位電話 + 4 位 PIN）登入並撳咗「配對」
-          {autoPairing ? "；偵測到配對成功後會自動接上，唔使手動重試。" : "，再撳「配對」重新開始。"}
+          {/* ⚠️ `state.detail`（failed 分支）係 server 原樣返回嘅錯誤字串 ⇒ 唔翻譯 */}
+          {t("雲端仲未搵到呢間店嘅中繼機。請確認 Android 中繼機已用同一個 POS 登入號碼（8 位電話 + 4 位 PIN）登入並撳咗「配對」")}
+          {autoPairing
+            ? t("；偵測到配對成功後會自動接上，唔使手動重試。")
+            : t("，再撳「配對」重新開始。")}
         </div>
       </div>
     );
@@ -498,7 +508,7 @@ function ResultMessage({
   if (state.kind === "failed") {
     return (
       <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">
-        <div className="font-semibold">配對失敗</div>
+        <div className="font-semibold">{t("配對失敗")}</div>
         <div className="mt-1 whitespace-pre-wrap break-words font-normal">{state.detail}</div>
       </div>
     );

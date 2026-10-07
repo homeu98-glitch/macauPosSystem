@@ -1,6 +1,7 @@
 "use client";
 
 import { type WorkbenchDef, type WorkbenchId } from "@/lib/pos/module-catalog";
+import { useT, useTShort } from "@/components/lang-provider";
 
 /**
  * 工作台卡（選擇工作台頁嘅一格）—— **共用元件**。
@@ -63,6 +64,13 @@ export function WorkbenchCardGroup({
    */
   columns?: 2 | 3;
 }) {
+  // ⚠️ Hook 必須喺下面嘅空組 early return **之前** 呼叫。
+  // React 規則：同一個 component 嘅 hook 呼叫次序要穩定，唔可以因為 props 改變
+  // 就突然少叫一個 hook（會令 React 認錯hook 順序而爆 "Rendered fewer hooks than expected"）。
+  // （2026-10-07 首次實作時擺錯咗位置，已修正。）
+  const t = useT();
+  const tShort = useTShort();
+
   if (workbenches.length === 0) return null;
 
   const gridCols = columns === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2";
@@ -70,7 +78,7 @@ export function WorkbenchCardGroup({
   return (
     <section className="mt-4">
       <div className="mb-2.5 flex items-center gap-3">
-        <span className="text-xs font-extrabold tracking-wide text-white/70">{title}</span>
+        <span className="text-xs font-extrabold tracking-wide text-white/70">{t(title)}</span>
         <span className="h-px flex-1 bg-white/10" />
       </div>
 
@@ -98,12 +106,12 @@ export function WorkbenchCardGroup({
             >
               {isLast && granted ? (
                 <span className="absolute -top-2 right-3 rounded-full bg-orange-500 px-2.5 py-0.5 text-[10px] font-extrabold tracking-wide text-white">
-                  上次使用
+                  {t("上次使用")}
                 </span>
               ) : null}
               {!granted ? (
                 <span className="absolute -top-2 right-3 rounded-full bg-slate-700 px-2.5 py-0.5 text-[10px] font-extrabold tracking-wide text-slate-300">
-                  未開通
+                  {t("未開通")}
                 </span>
               ) : null}
 
@@ -112,21 +120,26 @@ export function WorkbenchCardGroup({
                   granted ? "bg-white/10 text-white" : "bg-white/5 text-white/40"
                 }`}
               >
-                {w.short}
+                {tShort(w.short)}
               </span>
 
+              {/*
+                ⚠️ 中間欄係 `minmax(0,1fr)`（自適應）**冇 truncate**，
+                而且 `w.desc` 用 `text-[11.5px] leading-snug` 可以摺行 ——
+                英文 desc 長 3 倍都唔會被剪，只會令卡片高少少。刻意保留。
+              */}
               <span className="min-w-0">
                 <span
                   className={`block text-sm font-bold ${granted ? "text-white" : "text-white/45"}`}
                 >
-                  {w.label}
+                  {t(w.label)}
                 </span>
                 <span
                   className={`mt-1 block text-[11.5px] leading-snug ${
                     granted ? "text-white/55" : "text-white/30"
                   }`}
                 >
-                  {w.desc}
+                  {t(w.desc)}
                 </span>
               </span>
 
@@ -135,7 +148,7 @@ export function WorkbenchCardGroup({
                   granted ? "text-white/45" : "text-white/25"
                 }`}
               >
-                {busy ? "進入中…" : granted ? "進入 →" : "🔒"}
+                {busy ? t("進入中…") : granted ? t("進入 →") : "🔒"}
               </span>
 
               {granted ? (

@@ -42,6 +42,8 @@ const STATS = "src/lib/inventory-stats.ts";
 const MERCHANTS = "src/app/api/inventory/merchants/route.ts";
 const METHODS_API = "src/app/api/inventory/payment-methods/route.ts";
 const ITEMS_API = "src/app/api/inventory/receipt-items/route.ts";
+const PRODUCTS_LIB = "src/lib/inventory-products.ts";
+const BASELINE_LIB = "src/lib/item-price-baseline.ts";
 
 describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
   it("庫存頁原始碼唔可以有 `${…Cls} w-<number>` 寫法", () => {
@@ -557,5 +559,104 @@ describe("庫存表兩個 instance 唔可以唔同步", () => {
     assert.ok(/onMutated\?: \(\) => void/.test(table));
     // 四個寫入點：從收據同步 / 刪除 / 新增編輯 / 盤點
     assert.equal((table.match(/onMutated\?\.\(\)/g) ?? []).length, 4);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
+ * 品項分析：基準價（baseline）契約守衛 —— J 2026-10-07
+ *
+ * 背景：`avg_unit_cost` 每次同步都會被覆寫，所以「上漲金額」需要一個
+ * **穩定不變**嘅基準（＝首次進貨單價）。呢度守住三件事：
+ *  1. 基準價喺 DB 有真欄位（唔係前端現算）。
+ *  2. `syncFromReceipts` 只喺 NULL 時寫入 —— 🔴 永不覆寫，
+ *     否則已報告咗嘅上漲金額會隨住補登／刪除舊收據而「自己郁」。
+ *  3. 冇基準 ⇒ direction = "new"，唔可以當 0% 報（渲染假零）。
+ * ──────────────────────────────────────────────────────────────────────── */
+describe("品項分析：基準價（首次進貨單價）", () => {
+  it("migration 0065 一定要加 baseline_unit_cost / baseline_at", () => {
+    const sql = read("supabase/migrations/0065_inv_products_baseline_cost.sql");
+    assert.ok(/add column if not exists baseline_unit_cost numeric\(12,2\)/.test(sql), "要有 baseline_unit_cost");
+    assert.ok(/add column if not exists baseline_at date/.test(sql), "要有 baseline_at");
+  });
+
+  it("InvProduct type 要暴露兩個基準欄位", () => {
+    const lib = read(PRODUCTS_LIB);
+    assert.ok(/baseline_unit_cost: number \| null/.test(lib));
+    assert.ok(/baseline_at: string \| null/.test(lib));
+  });
+
+  it("🔴 syncFromReceipts 只喺 baseline 係 NULL 時先寫入（永不覆寫）", () => {
+    const lib = read(PRODUCTS_LIB);
+    assert.ok(
+      /hit\.baseline_unit_cost !== null && hit\.baseline_unit_cost !== undefined/.test(lib),
+      "update 分支一定要先睇 baseline 係咪 NULL，唔可以無條件覆寫",
+    );
+    // 🔴 `row.first_unit_cost` 只可以出現喺 **insert**（全新品首次建立），
+    //    或者喺有守衛嘅 update 之內。
+    //    毫無條件咁寫入 update() ⇒ 每次同步都覆寫 ⇒ 基準會飄移、已報告嘅金額會自己郁。
+    const updateCalls = lib.match(/\.update\(\{[\s\S]*?\}\)/g) ?? [];
+    assert.ok(updateCalls.length >= 2, `應該有最少 2 個 update 呼叫（實際 ${updateCalls.length}）`);
+    for (const call of updateCalls) {
+      if (!/baseline_unit_cost:\s*row\.first_unit_cost/.test(call)) continue;
+      assert.ok(
+        /(hasBase\s*\?|baselinePatch|\.\.\.baselinePatch)/.test(call),
+        "🔴 update() 之內唔可以無條件寫 baseline_unit_cost: row.first_unit_cost —— " +
+          "咁每次同步都會覆寫，已報告咗嘅上漲金額會自己郁（必須用 hasBase / baselinePatch 守衛）",
+      );
+    }
+    // 允許嘅唯一無條件位置：insert（brand-new 品項，當時就係首次進貨）
+    assert.ok(
+      /\.insert\(\{[\s\S]*?baseline_unit_cost:\s*row\.first_unit_cost/.test(lib),
+      "insert 分支應該直接寫入首次進貨單價做基準",
+    );
+    // 兩條 update 路徑都要有守衛
+    assert.ok(/const baselinePatch =/.test(lib), "要有 baselinePatch 呢個共用守衛變數");
+    assert.ok(/\.\.\.baselinePatch/.test(lib), "update 分支要用 ...baselinePatch 注入");
+  });
+
+  it("duplicate-key 補插嗰條路徑都要守住 baseline（用 hasBase 判斷）", () => {
+    const lib = read(PRODUCTS_LIB);
+    assert.ok(/hasBase/.test(lib), "ilike 補插路徑要先查返 baseline 再決定寫唔寫");
+  });
+
+  it("基準要鎖『最早』嗰筆，並且揀價低者（保守，令漲幅唔誇大）", () => {
+    const pure = read(BASELINE_LIB);
+    assert.ok(
+      /export function pickEarlierBaseline/.test(pure),
+      "『邊次算首次』嘅規則要抽成共用 helper，寫入端／查詢端唔可以各寫一份（會漂移）",
+    );
+    assert.ok(
+      /candidate\.unitCost < current\.unitCost/.test(pure),
+      "同日多筆要揀單價低者，令算出嚟嘅漲幅偏細",
+    );
+  });
+
+  it("同步邏輯要引用共用 helper（唔可以自己再實作一次比較）", () => {
+    const lib = read(PRODUCTS_LIB);
+    assert.ok(
+      /from "\.\/item-price-baseline\.ts"/.test(lib),
+      "要用相對路徑連 .ts（node --test 唔認 alias）",
+    );
+    assert.ok(/pickEarlierBaseline\(/.test(lib));
+  });
+
+  it("🔴 冇基準要標 new，唔可以當 0%（渲染假零）", () => {
+    const pure = read(BASELINE_LIB);
+    assert.ok(/base === null \|\| base <= 0/.test(pure), "基準 null 或 <= 0 都要走 new 分支");
+    assert.ok(/changeAmount: null/.test(pure), "changeAmount 喺 new 分支要係 null，唔係 0");
+    assert.ok(/export function isComparable/.test(pure), "要有 isComparable 將 new 排除喺漲跌統計外");
+  });
+
+  it("漲／跌金額要分開加，唔可以互相抵消", () => {
+    const pure = read(BASELINE_LIB);
+    assert.ok(
+      /totalUpAmount/.test(pure) && /totalDownAmount/.test(pure),
+      "🔴 唔可以淨計 Σ(changeAmount) —— 咁漲跌會互相抵消，睇唔出真實影響",
+    );
+  });
+
+  it("非正單價唔可以做基準（唔會整出除零／負漲幅）", () => {
+    const pure = read(BASELINE_LIB);
+    assert.ok(/unitCost <= 0/.test(pure), "unit_price <= 0 要直接淘汰");
   });
 });

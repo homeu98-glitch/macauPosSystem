@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>庫存 · 品項分析 — UI 線框確認稿 2026-10-07</title>
+<style>
+:root{
+  --slate-50:#f8fafc; --slate-100:#f1f5f9; --slate-200:#e2e8f0; --slate-300:#cbd5e1;
+  --slate-400:#94a3b8; --slate-500:#64748b; --slate-600:#475569; --slate-700:#334155;
+  --slate-900:#0f172a;
+  --emerald-50:#ecfdf5; --emerald-200:#a7f3d0; --emerald-600:#059669; --emerald-700:#047857;
+  --red-50:#fef2f2; --red-200:#fecaca; --red-600:#dc2626; --red-700:#b91c1c;
+  --amber-50:#fffbeb; --amber-200:#fde68a; --amber-700:#b45309;
+  --orange-50:#fff7ed;
+  --font: "PingFang HK","Microsoft JhengHei","Noto Sans TC",-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#eef1f6;font-family:var(--font);color:var(--slate-900);padding:20px 0 60px;-webkit-font-smoothing:antialiased}
+
+/* ── 評審列（唔屬產品介面） ── */
+.review{background:#0f172a;color:#cbd5e1;padding:14px 20px;margin:0 auto 22px;max-width:1280px;position:relative;border-radius:0 0 14px 14px}
+.review .rv-t{font-size:12px;letter-spacing:.14em;color:#94a3b8;margin-bottom:10px}
+.rtabs{display:flex;gap:8px;flex-wrap:wrap}
+.rtabs button{background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:999px;
+  padding:7px 16px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;min-height:34px}
+.rtabs button.on{background:#f8fafc;color:#0f172a;border-color:#f8fafc}
+
+/* ── 固定畫布 + 等比縮放 ── */
+.stage{max-width:1280px;margin:0 auto;position:relative;overflow:hidden;border-radius:20px;
+  box-shadow:0 18px 44px rgba(15,23,42,.16)}
+.canvas{width:1280px;height:1230px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden;background:var(--slate-50)}
+.canvas.mob{width:420px;height:1300px;background:#e8ecf3;padding:14px}
+#scr-fields{height:2700px}
+.wrap{flex:1;min-height:0;display:flex;flex-direction:column}
+.wrap.hide,.canvas.hide{display:none}
+
+/* ── 共用元件（抄 inventory-view.tsx class 慣例） ── */
+.app{flex:1;min-height:0;display:flex;overflow:hidden}
+.sidebar{width:72px;flex:none;align-self:stretch;height:100%;background:#fff;border-right:1px solid var(--slate-200);
+  display:flex;flex-direction:column;overflow:hidden}
+.sb-scroll{flex:1;min-height:0;overflow-y:auto;padding:10px 0}
+.sb-item{display:block;width:52px;margin:0 auto 6px;padding:8px 0;text-align:center;border-radius:10px;
+  font-size:10px;color:var(--slate-500)}
+.sb-item.on{background:var(--slate-900);color:#fff;font-weight:600}
+.sb-item i{display:block;width:18px;height:18px;margin:0 auto 4px;border-radius:5px;background:var(--slate-200)}
+.sb-item.on i{background:#475569}
+.sb-foot{flex:none;border-top:1px solid var(--slate-200);padding:10px 0}
+
+.page{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;padding:24px 24px 30px;
+  width:100%}
+.page.wide{max-width:none}
+h1.t{font-size:20px;font-weight:600;line-height:1.2}
+.sub{font-size:14px;color:var(--slate-500);margin-top:4px}
+h2.sec{font-size:14px;font-weight:500;color:var(--slate-600);margin-bottom:12px}
+h2.sec .note{font-size:12px;font-weight:400;color:var(--slate-400);margin-left:8px}
+
+/* 分頁 tab（全頁 pill，抄 device-settings / online-orders） */
+.tabs{display:flex;gap:8px;margin:18px 0 20px;flex:none}
+.tabs button{border-radius:999px;padding:8px 16px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  background:#fff;color:var(--slate-700);box-shadow:inset 0 0 0 1px var(--slate-200);min-height:36px}
+.tabs button.on{background:var(--slate-900);color:#fff;box-shadow:none}
+
+/* 篩選列 */
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px;flex:none}
+.chip{background:#fff;color:var(--slate-700);border:1px solid var(--slate-200);border-radius:999px;
+  padding:6px 12px;font:inherit;font-size:12px;cursor:pointer;min-height:32px}
+.chip.on{background:var(--slate-900);color:#fff;border-color:var(--slate-900);font-weight:600}
+.sel{background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:8px 28px 8px 12px;
+  font:inherit;font-size:13px;color:var(--slate-700);min-height:36px}
+.search{background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:8px 12px;
+  font:inherit;font-size:13px;min-height:36px;width:190px}
+.spacer{flex:1}
+.tgl{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--slate-700);
+  background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:6px 12px;min-height:36px}
+.tgl .sw{width:34px;height:20px;border-radius:999px;background:var(--slate-900);position:relative;flex:none}
+.tgl .sw::after{content:"";position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:999px;background:#fff}
+.tgl.off .sw{background:var(--slate-300)}
+.tgl.off .sw::after{left:2px;right:auto}
+
+/* KPI 卡（抄 inventory-view.tsx:1246-1271） */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;flex:none}
+.kpi{border-radius:16px;border:1px solid var(--slate-200);background:#fff;padding:16px}
+.kpi .k-l{font-size:12px;color:var(--slate-500)}
+.kpi .k-v{margin-top:4px;font-size:18px;font-weight:600;color:var(--slate-900)}
+.kpi .k-s{margin-top:3px;font-size:11px;color:var(--slate-400)}
+.kpi.red{border-color:var(--red-200);background:var(--red-50)} .kpi.red .k-l,.kpi.red .k-v{color:var(--red-700)}
+.kpi.amber{border-color:var(--amber-200);background:var(--amber-50)} .kpi.amber .k-l,.kpi.amber .k-v{color:var(--amber-700)}
+.kpis.k2{grid-template-columns:repeat(2,1fr);gap:10px}
+
+/* 兩欄圖表區 */
+.charts{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;margin-bottom:20px;flex:none}
+.card{border-radius:16px;border:1px solid var(--slate-200);background:#fff;padding:16px;flex:none}
+.card .c-t{font-size:14px;font-weight:600;color:var(--slate-700);margin-bottom:2px}
+.card .c-s{font-size:11px;color:var(--slate-400);margin-bottom:12px}
+.bars{display:flex;flex-direction:column;gap:9px}
+.bar{display:grid;grid-template-columns:104px minmax(0,1fr) 96px;gap:10px;align-items:center}
+.bar .bn{font-size:12px;color:var(--slate-700);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .bt{height:16px;border-radius:4px;background:var(--slate-100);overflow:hidden}
+.bar .bf{display:block;height:100%;background:var(--slate-700);border-radius:4px}
+.bar .bf.rise{background:var(--red-600)}
+.bar .bv{font-size:12px;text-align:right;color:var(--slate-700);font-variant-numeric:tabular-nums}
+.bar .bv em{font-style:normal;color:var(--slate-400);font-size:11px;margin-left:6px}
+.donut{display:flex;align-items:center;gap:14px}
+.donut .ring{width:104px;height:104px;border-radius:50%;flex:none;
+  background:conic-gradient(var(--slate-900) 0 38%, var(--slate-400) 38% 63%, #f59e0b 63% 81%, var(--slate-200) 81% 100%);
+  position:relative}
+.donut .ring::after{content:"";position:absolute;inset:22px;border-radius:50%;background:#fff}
+.donut .ring em{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-style:normal;font-size:12px;font-weight:600;color:var(--slate-900);z-index:1}
+.lgd{display:flex;flex-direction:column;gap:7px;min-width:0;flex:1}
+.lgd div{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:7px;align-items:center;font-size:12px;color:var(--slate-600)}
+.lgd i{width:10px;height:10px;border-radius:3px;display:block}
+.lgd b{font-weight:600;color:var(--slate-900);font-variant-numeric:tabular-nums}
+
+/* 表格（抄 restaurant-daily-report.tsx:3405-3438） */
+.tbl{width:100%;font-size:13px;border-collapse:collapse}
+.tbl th{text-align:left;font-size:11px;color:var(--slate-400);font-weight:500;padding:0 8px 8px 0;white-space:nowrap}
+.tbl td{padding:9px 8px 9px 0;border-top:1px solid var(--slate-100);color:var(--slate-700);white-space:nowrap}
+.tbl th.r,.tbl td.r{text-align:right;padding-right:0;padding-left:8px}
+/* 原價 / 最新單價：右對齊但保留右 padding，避免同下一欄貼埋 */
+.tbl th.p,.tbl td.p{text-align:right;padding-right:18px}
+.tbl tbody{font-variant-numeric:tabular-nums}
+.tbl .nm{font-weight:600;color:var(--slate-900);max-width:170px;overflow:hidden;text-overflow:ellipsis}
+.tbl tr.total td{border-top:2px solid var(--slate-300);border-bottom:0;font-weight:600;color:var(--slate-900);padding-top:11px}
+.tag{display:inline-block;background:var(--slate-100);border-radius:999px;padding:2px 8px;font-size:11px;
+  font-weight:500;color:var(--slate-600)}
+.up{color:var(--red-700);font-weight:600}
+.down{color:var(--emerald-700);font-weight:600}
+.flat{color:var(--slate-400)}
+.pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600}
+.pill.r{background:var(--red-50);color:var(--red-700);box-shadow:inset 0 0 0 1px var(--red-200)}
+.pill.g{background:var(--emerald-50);color:var(--emerald-700);box-shadow:inset 0 0 0 1px var(--emerald-200)}
+.pill.n{background:var(--slate-100);color:var(--slate-500);box-shadow:inset 0 0 0 1px var(--slate-200)}
+.mini{font-size:11px;color:var(--slate-400);margin-top:10px;line-height:1.7}
+.mini b{color:var(--slate-600);font-weight:600}
+.warn{background:var(--amber-50);border:1px solid var(--amber-200);color:var(--amber-700);
+  border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.6;margin-bottom:14px;flex:none}
+.warn b{font-weight:600}
+
+/* ── 手機版 ── */
+.mobwrap{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;
+  background:#f1f5f9;border-radius:18px;padding:12px;gap:10px}
+.m-hd{flex:none;background:#fff;border-radius:16px;border:1px solid var(--slate-200);padding:14px}
+.m-hd .t{font-size:17px;font-weight:600}
+.m-hd .s{font-size:12px;color:var(--slate-500);margin-top:2px}
+.m-tabs{display:flex;gap:6px;margin-top:12px;overflow-x:auto;padding-bottom:2px;flex:none}
+.m-tabs button{flex:none;border-radius:999px;padding:6px 13px;font:inherit;font-size:12px;font-weight:600;
+  background:#fff;color:var(--slate-600);box-shadow:inset 0 0 0 1px var(--slate-200);min-height:32px;cursor:pointer}
+.m-tabs button.on{background:var(--slate-900);color:#fff;box-shadow:none}
+.m-filter{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;flex:none}
+.m-filter .chip{flex:none}
+.m-kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:none}
+.m-kpi .kpi{padding:11px}
+.m-kpi .k-v{font-size:16px}
+.m-sec{font-size:12px;font-weight:500;color:var(--slate-600);padding:2px 2px 0;flex:none;display:flex;justify-content:space-between}
+.m-sec span{color:var(--slate-400);font-weight:400}
+/* 漲價卡 */
+.m-card{background:#fff;border:1px solid var(--red-200);border-left:3px solid var(--red-600);
+  border-radius:12px;padding:11px 12px;flex:none}
+.m-card .r1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.m-card .nm{font-size:14px;font-weight:600;color:var(--slate-900);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.m-card .meta{font-size:11px;color:var(--slate-400);margin-top:2px}
+.m-card .r2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-top:9px}
+.m-card .pr{font-size:12px;color:var(--slate-500);font-variant-numeric:tabular-nums}
+.m-card .pr del{color:var(--slate-400);text-decoration:line-through;margin-right:6px}
+.m-card .pr b{color:var(--slate-900);font-size:14px}
+.m-card .amt{text-align:right;font-size:11px;color:var(--slate-500);font-variant-numeric:tabular-nums}
+.m-card .amt b{display:block;font-size:14px;color:var(--red-700)}
+.m-card .r3{display:grid;grid-template-columns:1fr 96px;gap:8px;align-items:center;margin-top:9px;
+  border-top:1px solid var(--slate-100);padding-top:8px;font-size:11px;color:var(--slate-500)}
+.m-card .r3 em{font-style:normal;font-weight:600;color:var(--slate-900);font-variant-numeric:tabular-nums}
+.mbar{height:5px;border-radius:999px;background:var(--slate-100);overflow:hidden;margin-top:7px}
+.mbar i{display:block;height:100%;background:var(--red-600);border-radius:999px}
+/* 全品項清單 */
+.m-list{background:#fff;border:1px solid var(--slate-200);border-radius:12px;flex:none}
+.m-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px 12px;align-items:center}
+.m-row+.m-row{border-top:1px solid var(--slate-100)}
+.m-row .nm{font-size:13px;font-weight:600;color:var(--slate-900);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.m-row .sub2{font-size:11px;color:var(--slate-400);margin-top:2px;font-variant-numeric:tabular-nums}
+.m-row .rv{text-align:right;font-variant-numeric:tabular-nums}
+.m-row .rv b{font-size:13px;color:var(--slate-900);font-weight:600}
+.m-row .rv em{font-style:normal;font-size:11px;color:var(--slate-500);display:block}
+.m-row .rv .u{color:var(--red-600);font-weight:600}
+.m-total{background:var(--slate-900);color:#fff;border-radius:12px;padding:12px 14px;flex:none;
+  display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+.m-total .l{font-size:12px;opacity:.75}
+.m-total .r{text-align:right;font-variant-numeric:tabular-nums}
+.m-total .r b{font-size:16px;font-weight:600}
+.m-total .r em{font-style:normal;display:block;font-size:11px;color:#fca5a5}
+
+/* 欄位對照頁 */
+.fields{flex:1;min-height:0;overflow-y:auto;padding:24px;background:#fff;margin:14px;border-radius:16px;
+  border:1px solid var(--slate-200)}
+.fgrp{margin-bottom:22px}
+.fgrp h3{font-size:14px;font-weight:600;color:var(--slate-900);margin-bottom:3px}
+.fgrp .src{font-size:11px;color:var(--slate-400);margin-bottom:9px;font-family:ui-monospace,Menlo,monospace}
+.ftab{width:100%;font-size:12px;border-collapse:collapse}
+.ftab th{text-align:left;font-size:11px;color:var(--slate-400);font-weight:500;padding:0 10px 7px 0;
+  border-bottom:1px solid var(--slate-200)}
+.ftab td{padding:8px 10px 8px 0;border-top:1px solid var(--slate-100);color:var(--slate-700);vertical-align:top}
+.ftab td.m{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--slate-600);white-space:nowrap}
+.ftab td.m b{color:var(--slate-900)}
+.ftab tr.new td{background:#fffbeb}
+.ftab .pill.r{white-space:nowrap}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--slate-500);padding:10px 0 0}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <div class="rv-t">UI 評審工具列（唔屬產品介面）　·　庫存 › 品項分析　·　2026-10-07　·　沿用現有 slate／emerald 設計語言</div>
+  <div class="rtabs" id="rtabs">
+    <button data-tab="scr-desk" class="on">桌面版 1280px</button>
+    <button data-tab="scr-mob">手機版 420px</button>
+    <button data-tab="scr-fields">欄位 / 資料來源對照</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<!-- ═══════════════ 桌面版 ═══════════════ -->
+<div class="canvas" id="scr-desk">
+ <div class="wrap">
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sb-scroll">
+        <span class="sb-item on"><i></i>收銀台</span>
+        <span class="sb-item"><i></i>訂單</span>
+        <span class="sb-item"><i></i>餐牌</span>
+        <span class="sb-item"><i></i>庫存</span>
+        <span class="sb-item"><i></i>報表</span>
+        <span class="sb-item"><i></i>交班</span>
+      </div>
+      <div class="sb-foot">
+        <span class="sb-item"><i></i>設定</span>
+      </div>
+    </aside>
+
+    <main class="page">
+      <header>
+        <h1 class="t">庫存管理</h1>
+        <p class="sub">店別：澳門 runners 茶餐廳 ・ 帳號：runner-store</p>
+      </header>
+
+      <div class="tabs" id="desktabs">
+        <button data-dt="ov">總覽</button>
+        <button data-dt="rcpt">收據</button>
+        <button data-dt="tbl">庫存表</button>
+        <button data-dt="an" class="on">品項分析</button>
+      </div>
+
+      <div class="warn">
+        <b>⚠ 基準價口徑（J 2026-10-07 拍板）：</b>「上漲金額」嘅基準 ＝
+        <b>該品項「首次進貨紀錄」嘅單價</b>（歷史最早一筆收據），<b>一經鎖定永不覆寫</b>；
+        後續批次／更新後嘅加權價一律唔用。冇首次進貨紀錄 ⇒ 標「首次記錄」並<b>排除喺漲跌統計外</b>。
+      </div>
+
+      <!-- 篩選 / 排序 -->
+      <div class="filters">
+        <button class="chip on" data-k="range-all">全部期間</button>
+        <button class="chip" data-k="range-30">近 30 日</button>
+        <button class="chip" data-k="range-90">近 90 日</button>
+        <span style="width:10px"></span>
+        <select class="sel" data-k="flt-cat"><option>分類：全部分類</option><option>肉類</option><option>海鮮</option><option>蔬菜</option><option>乾貨</option><option>飲品</option></select>
+        <select class="sel" data-k="flt-sup"><option>供應商：全部</option><option>新苗肉食</option><option>澳門海鮮行</option><option>泰國大米</option></select>
+        <span class="spacer"></span>
+        <span class="tgl" data-k="only-up"><span class="sw"></span>只看漲價品項</span>
+        <select class="sel" data-k="sort"><option>排序：漲幅高→低</option><option>漲幅低→高</option><option>庫存金額 高→低</option><option>金額佔比 高→低</option><option>品項名稱</option></select>
+        <input class="search" data-k="q" placeholder="搜尋品項名稱…">
+      </div>
+
+      <!-- KPI -->
+      <div class="kpis">
+        <div class="kpi"><div class="k-l">庫存總值（成本）</div><div class="k-v">MOP 128,540.00</div><div class="k-s">Σ 庫存數量 × 加權進價 ・ 全部 48 個品項</div></div>
+        <div class="kpi"><div class="k-l">品項總數</div><div class="k-v">48</div><div class="k-s">8 個分類 ・ 3 個供應商</div></div>
+        <div class="kpi red"><div class="k-l">漲價品項</div><div class="k-v">6</div><div class="k-s">佔全部品項 12.5%（已排除 1 個首次記錄）</div></div>
+        <div class="kpi amber"><div class="k-l">漲價影響金額</div><div class="k-v">MOP 2,160.00</div><div class="k-s">（最新 − 首次進貨價）× 現有庫存量</div></div>
+      </div>
+
+      <!-- 圖表區 -->
+      <h2 class="sec">庫存金額佔比 <span class="note">Top 6 品項 ・ 點擊列可跳去該品項</span></h2>
+      <div class="charts">
+        <div class="card">
+          <div class="c-t">品項庫存金額排名</div>
+          <div class="c-s">長條＝MOP 金額；灰色括號＝佔庫存總值百分比</div>
+          <div class="bars">
+            <div class="bar"><span class="bn">泰國香米</span><span class="bt"><i class="bf" style="width:100%"></i></span><span class="bv">MOP 28,400<em>22.1%</em></span></div>
+            <div class="bar"><span class="bn">豬扒（無骨）</span><span class="bt"><i class="bf" style="width:71%"></i></span><span class="bv">MOP 18,240<em>14.2%</em></span></div>
+            <div class="bar"><span class="bn">椰菜</span><span class="bt"><i class="bf" style="width:38%"></i></span><span class="bv">MOP 9,760<em>7.6%</em></span></div>
+            <div class="bar"><span class="bn">急凍蝦仁</span><span class="bt"><i class="bf" style="width:29%"></i></span><span class="bv">MOP 7,410<em>5.8%</em></span></div>
+            <div class="bar"><span class="bn">椰奶</span><span class="bt"><i class="bf" style="width:22%"></i></span><span class="bv">MOP 5,520<em>4.3%</em></span></div>
+            <div class="bar"><span class="bn">珍珠</span><span class="bt"><i class="bf" style="width:16%"></i></span><span class="bv">MOP 3,960<em>3.1%</em></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="c-t">分類佔比</div>
+          <div class="c-s">按庫存金額</div>
+          <div class="donut">
+            <span class="ring"><em>6 類</em></span>
+            <div class="lgd">
+              <div><i style="background:#0f172a"></i><span>乾貨</span><b>38%</b></div>
+              <div><i style="background:#94a3b8"></i><span>肉類</span><b>25%</b></div>
+              <div><i style="background:#f59e0b"></i><span>蔬菜</span><b>18%</b></div>
+              <div><i style="background:#cbd5e1"></i><span>海鮮</span><b>11%</b></div>
+              <div><i style="background:#e2e8f0"></i><span>飲品・其他</span><b>8%</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 漲價清單表 -->
+      <h2 class="sec">價格上漲品項清單 <span class="note">依「漲幅」排序 ・ 紅色＝成本上升（對門店不利）</span></h2>
+      <div class="card" style="padding:16px 16px 8px">
+        <table class="tbl">
+          <thead><tr>
+            <th>品項</th><th>分類</th><th class="r">庫存數量</th><th class="r">庫存金額</th>
+            <th class="r">金額佔比</th><th class="p">原價（首次進貨）</th><th class="p">最新單價</th>
+            <th class="r">上漲金額</th><th class="r">漲幅</th><th>供應商</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td class="nm">急凍蝦仁</td><td><span class="tag">海鮮</span></td>
+              <td class="r">120.000 kg</td><td class="r">MOP 7,410.00</td><td class="r">5.8%</td>
+              <td class="p">MOP 58.00</td><td class="p" style="font-weight:600;color:var(--slate-900)">MOP 62.00</td>
+              <td class="r up">+MOP 480.00</td><td class="r"><span class="pill r">▲ 6.9%</span></td>
+              <td>澳門海鮮行</td>
+            </tr>
+            <tr>
+              <td class="nm">豬扒（無骨）</td><td><span class="tag">肉類</span></td>
+              <td class="r">45.000 kg</td><td class="r">MOP 18,240.00</td><td class="r">14.2%</td>
+              <td class="p">MOP 392.00</td><td class="p" style="font-weight:600;color:var(--slate-900)">MOP 408.00</td>
+              <td class="r up">+MOP 720.00</td><td class="r"><span class="pill r">▲ 4.1%</span></td>
+              <td>新苗肉食</td>
+            </tr>
+            <tr>
+              <td class="nm">泰國香米</td><td><span class="tag">乾貨</span></td>
+              <td class="r">200.000 kg</td><td class="r">MOP 28,400.00</td><td class="r">22.1%</td>
+              <td class="p">MOP 138.00</td><td class="p" style="font-weight:600;color:var(--slate-900)">MOP 142.00</td>
+              <td class="r up">+MOP 800.00</td><td class="r"><span class="pill r">▲ 2.9%</span></td>
+              <td>泰國大米</td>
+            </tr>
+            <tr>
+              <td class="nm">椰奶</td><td><span class="tag">飲品</span></td>
+              <td class="r">48.000 罐</td><td class="r">MOP 5,520.00</td><td class="r">4.3%</td>
+              <td class="p">MOP 112.00</td><td class="p" style="font-weight:600;color:var(--slate-900)">MOP 115.00</td>
+              <td class="r up">+MOP 144.00</td><td class="r"><span class="pill r">▲ 2.7%</span></td>
+              <td>新苗肉食</td>
+            </tr>
+            <tr>
+              <td class="nm">蒜蓉</td><td><span class="tag">蔬菜</span></td>
+              <td class="r">8.000 kg</td><td class="r">MOP 1,240.00</td><td class="r">1.0%</td>
+              <td class="p">MOP 148.00</td><td class="p" style="font-weight:600;color:var(--slate-900)">MOP 155.00</td>
+              <td class="r up">+MOP 56.00</td><td class="r"><span class="pill r">▲ 4.7%</span></td>
+              <td>澳門海鮮行</td>
+            </tr>
+            <tr>
+              <td class="nm">蛋</td><td><span class="tag">肉類</span></td>
+              <td class="r">60.000 個</td><td class="r">MOP 1,320.00</td><td class="r">1.0%</td>
+              <td class="p">MOP 21.00</td><td class="p" style="font-weight:600;color:var(--slate-900)">MOP 20.50</td>
+              <td class="r down">−MOP 30.00</td><td class="r"><span class="pill g">▼ 2.4%</span></td>
+              <td>新苗肉食</td>
+            </tr>
+            <tr>
+              <td class="nm">椰菜</td><td><span class="tag">蔬菜</span></td>
+              <td class="r">32.000 kg</td><td class="r">MOP 9,760.00</td><td class="r">7.6%</td>
+              <td colspan="2" class="p" style="color:var(--slate-400);font-size:12px">首次記錄，無基準價可比</td>
+              <td class="r flat">—</td><td class="r"><span class="pill n">首次記錄</span></td>
+              <td>澳門海鮮行</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr class="total">
+              <td colspan="2">合計（7 個品項）</td>
+              <td class="r">513.000</td>
+              <td class="r">MOP 72,310.00</td><td class="r">56.2%</td>
+              <td colspan="2" class="p" style="font-weight:400;color:var(--slate-500);font-size:12px">平均漲幅 +4.3%（已排除首次記錄）</td>
+              <td class="r"><span class="up">+MOP 2,160.00</span><br><span class="down" style="font-size:11px">−MOP 30.00</span></td>
+              <td class="r"><span class="pill r">5 漲 1 跌 1 新</span></td><td></td>
+            </tr>
+          </tfoot>
+        </table>
+        <p class="mini">
+          <b>欄位口徑：</b>庫存金額 ＝ <b>current_qty × avg_unit_cost</b>；
+          <b>原價</b> ＝ <b>baseline_unit_cost</b>（<b>該品項首次進貨紀錄嘅單價，一經鎖定永不覆寫</b>）；
+          上漲金額 ＝ <b>(最新單價 − 原價) × current_qty</b>；
+          漲幅 ＝ <b>(最新 − 原價) ÷ 原價 × 100%</b>，四捨五入至整數。<br>
+          <b>🔴 合計列唔可以淨計一個數：</b>漲價金額同跌價金額<b>分開兩行</b>，唔可以互相抵消（否則睇唔出真實影響）。
+          「首次記錄」品項<b>完全唔入</b>漲跌統計（唔當 0% 報）。跌幅用綠色 badge（成本下降對門店有利）。
+        </p>
+      </div>
+    </main>
+  </div>
+ </div>
+</div>
+
+<!-- ═══════════════ 手機版 ═══════════════ -->
+<div class="canvas mob hide" id="scr-mob">
+  <div class="wrap">
+    <div class="mobwrap">
+      <div class="m-hd">
+        <div class="t">庫存管理</div>
+        <div class="s">店別：澳門 runners 茶餐廳</div>
+        <div class="m-tabs" id="mobtabs">
+          <button data-mt="ov">總覽</button>
+          <button data-mt="rcpt">收據</button>
+          <button data-mt="tbl">庫存表</button>
+          <button data-mt="an" class="on">品項分析</button>
+        </div>
+      </div>
+
+      <div class="m-filter">
+        <button class="chip on" data-k="range-all">全部期間</button>
+        <button class="chip" data-k="range-30">近 30 日</button>
+        <button class="chip" data-k="only-up">只看漲價</button>
+        <button class="chip" data-k="sort">排序 ⌄</button>
+        <button class="chip" data-k="flt">篩選 ⌄</button>
+      </div>
+
+      <div class="m-kpi">
+        <div class="kpi"><div class="k-l">庫存總值</div><div class="k-v">MOP 128,540</div><div class="k-s">48 個品項</div></div>
+        <div class="kpi red"><div class="k-l">漲價品項</div><div class="k-v">6</div><div class="k-s">佔 12.5%</div></div>
+        <div class="kpi amber"><div class="k-l">漲價影響</div><div class="k-v">MOP 2,160</div><div class="k-s">基準＝首次進貨價</div></div>
+        <div class="kpi"><div class="k-l">平均漲幅</div><div class="k-v" style="color:var(--red-700)">+4.3%</div><div class="k-s">5 漲 1 跌 1 新</div></div>
+      </div>
+
+      <div class="m-sec">價格上漲品項<span>依漲幅排序（高→低） ・ 最多顯示 5 個</span></div>
+
+      <div class="m-card">
+        <div class="r1">
+          <div style="min-width:0">
+            <div class="nm">急凍蝦仁</div>
+            <div class="meta">海鮮 ・ 澳門海鮮行 ・ 120.000 kg</div>
+          </div>
+          <span class="pill r">▲ 6.9%</span>
+        </div>
+        <div class="r2">
+          <div class="pr"><del>MOP 58.00</del>→<b>MOP 62.00</b></div>
+          <div class="amt">上漲金額<b>+MOP 480.00</b></div>
+        </div>
+        <div class="r3"><span>庫存金額 <em>MOP 7,410.00</em></span><span style="text-align:right">佔總值 <em>5.8%</em></span></div>
+        <div class="mbar"><i style="width:5.8%"></i></div>
+      </div>
+
+      <div class="m-card">
+        <div class="r1">
+          <div style="min-width:0">
+            <div class="nm">豬扒（無骨）</div>
+            <div class="meta">肉類 ・ 新苗肉食 ・ 45.000 kg</div>
+          </div>
+          <span class="pill r">▲ 4.1%</span>
+        </div>
+        <div class="r2">
+          <div class="pr"><del>MOP 392.00</del>→<b>MOP 408.00</b></div>
+          <div class="amt">上漲金額<b>+MOP 720.00</b></div>
+        </div>
+        <div class="r3"><span>庫存金額 <em>MOP 18,240.00</em></span><span style="text-align:right">佔總值 <em>14.2%</em></span></div>
+        <div class="mbar"><i style="width:14.2%"></i></div>
+      </div>
+
+      <div class="m-card">
+        <div class="r1">
+          <div style="min-width:0">
+            <div class="nm">泰國香米</div>
+            <div class="meta">乾貨 ・ 泰國大米 ・ 200.000 kg</div>
+          </div>
+          <span class="pill r">▲ 2.9%</span>
+        </div>
+        <div class="r2">
+          <div class="pr"><del>MOP 138.00</del>→<b>MOP 142.00</b></div>
+          <div class="amt">上漲金額<b>+MOP 800.00</b></div>
+        </div>
+        <div class="r3"><span>庫存金額 <em>MOP 28,400.00</em></span><span style="text-align:right">佔總值 <em>22.1%</em></span></div>
+        <div class="mbar"><i style="width:22.1%"></i></div>
+      </div>
+
+      <div class="m-sec">全部品項<span>按庫存金額排序</span></div>
+      <div class="m-list">
+        <div class="m-row"><div style="min-width:0"><div class="nm">椰菜</div><div class="sub2">蔬菜 ・ 32.000 kg ・ 首次記錄</div></div>
+          <div class="rv"><b>MOP 9,760.00</b><em>7.6% ・ <span class="u">首次記錄</span></em></div></div>
+        <div class="m-row"><div style="min-width:0"><div class="nm">蛋</div><div class="sub2">肉類 ・ 60.000 個</div></div>
+          <div class="rv"><b>MOP 1,320.00</b><em>1.0% ・ <span style="color:var(--emerald-600);font-weight:600">▼ 2.4%</span></em></div></div>
+        <div class="m-row"><div style="min-width:0"><div class="nm">蒜蓉</div><div class="sub2">蔬菜 ・ 8.000 kg</div></div>
+          <div class="rv"><b>MOP 1,240.00</b><em>1.0% ・ <span class="u">▲ 4.7%</span></em></div></div>
+        <div class="m-row"><div style="min-width:0"><div class="nm">珍珠</div><div class="sub2">乾貨 ・ 60.000 包</div></div>
+          <div class="rv"><b>MOP 3,960.00</b><em>3.1% ・ <span class="u">▲ 1.2%</span></em></div></div>
+        <div class="m-row"><div style="min-width:0"><div class="nm">豆漿粉</div><div class="sub2">乾貨 ・ 25.000 包</div></div>
+          <div class="rv"><b>MOP 890.00</b><em>0.7% ・ 持平</em></div></div>
+      </div>
+
+      <div class="m-total">
+        <div><div class="l">合計（48 個品項）</div><div class="l" style="opacity:.6;margin-top:2px">5 漲 ・ 1 跌 ・ 1 首次記錄</div></div>
+        <div class="r"><b>MOP 128,540.00</b><em>漲 +2,160 ・ 跌 −30（分開計）</em></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ 欄位對照 ═══════════════ -->
+<div class="canvas hide" id="scr-fields">
+ <div class="wrap">
+  <div class="fields">
+   <h2 class="sec" style="font-size:16px;color:var(--slate-900);font-weight:600">品項分析 — 區塊 / 欄位 / 資料來源對照</h2>
+   <p style="font-size:12px;color:var(--slate-500);margin:4px 0 20px;line-height:1.7">
+     下表逐區塊列出畫面上每個欄位對應嘅資料來源。所有「🔴 新增」欄位都係現時系統冇、必須先加落 DB 嘅。
+   </p>
+
+   <div class="fgrp">
+    <h3>1. 頁面標題區</h3>
+    <div class="src">src/components/inventory/inventory-view.tsx:1166-1169</div>
+    <table class="ftab"><thead><tr><th style="width:120px">畫面欄位</th><th style="width:200px">來源欄位</th><th>表 / 來源</th><th>說明</th></tr></thead><tbody>
+      <tr><td>庫存管理</td><td class="m">— （靜態文案）</td><td class="m">—</td><td>沿用現有 h1，同層級 <span class="m">text-xl font-semibold</span></td></tr>
+      <tr><td>店別</td><td class="m">storeName</td><td class="m">PosLocalSettings → merchants.name</td><td>沿用現有副標第一段</td></tr>
+      <tr><td>帳號</td><td class="m">account</td><td class="m">expenseRecorder.shop_users.id</td><td>沿用現有副標第二段</td></tr>
+      <tr><td>品項分析（頁籤）</td><td class="m">🔴 activeTab （URL ?tab=）</td><td class="m">—</td><td>跟 <span class="m">members-page.tsx:150-158</span> 做法，刷新／分享可保留</td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>2. 篩選 / 排序列</h3>
+    <div class="src">src/app/api/inventory/receipts/route.ts（期間）＋ products/route.ts（品項）</div>
+    <table class="ftab"><thead><tr><th style="width:120px">畫面欄位</th><th style="width:200px">來源欄位</th><th>表 / 來源</th><th>說明</th></tr></thead><tbody>
+      <tr><td>全部期間 / 近30日 / 近90日</td><td class="m">range</td><td class="m">URL query → receipts.receipt_date</td><td>沿用 <span class="m">receiptDateMatchesRange()</span>，加 <b>90d</b> 一個選項</td></tr>
+      <tr><td>分類</td><td class="m">category</td><td class="m">inv_products.category</td><td>自由文字，選項由現有資料 distinct 得出（<b>唔係</b>寫死清單）</td></tr>
+      <tr><td>供應商</td><td class="m">last_supplier</td><td class="m">inv_products.last_supplier</td><td>名稱字串，非 id；跟 <span class="m">invSupplierOrder</span> 次序</td></tr>
+      <tr><td>只看漲價品項</td><td class="m">🔴 direction === 'up'</td><td class="m">buildItemRows()</td><td>開關預設關閉，避免一開就只剩 6 行</td></tr>
+      <tr><td>排序</td><td class="m">🔴 sortBy</td><td class="m">前端排序</td><td>5 選項；預設「漲幅高→低」</td></tr>
+      <tr><td>搜尋品項</td><td class="m">name</td><td class="m">inv_products.name</td><td>小寫 trim 後 includes；對齊 <span class="m">purchase-items.ts</span> 嘅 key 規則</td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>3. KPI 四卡</h3>
+    <div class="src">macau 專案 → inv_products；expense 專案 → receipt_items / receipts</div>
+    <table class="ftab"><thead><tr><th style="width:120px">畫面欄位</th><th style="width:200px">來源欄位</th><th>表 / 來源</th><th>說明</th></tr></thead><tbody>
+      <tr><td>庫存總值（成本）</td><td class="m">current_qty × avg_unit_cost</td><td class="m">inv_products</td><td>Σ 全部品項；口徑同 <span class="m">inventory-table.tsx:115</span> 一致</td></tr>
+      <tr><td>品項總數</td><td class="m">count(id)</td><td class="m">inv_products</td><td>只計 is_active = true</td></tr>
+      <tr><td>分類・供應商數</td><td class="m">count(distinct category / last_supplier)</td><td class="m">inv_products</td><td>—</td></tr>
+      <tr><td>漲價品項數</td><td class="m">direction === 'up'</td><td class="m"><span class="m">summarizePriceChanges()</span></td><td>🔴 <b>new（首次記錄）唔入數</b>，避免虛高</td></tr>
+      <tr class="new"><td>漲價影響金額</td><td class="m">Σ changeAmount（direction = up）</td><td class="m"><span class="m">summarizePriceChanges()</span> → totalUpAmount</td><td>🔴 <b>只加漲價嗰批</b>；跌價另計 totalDownAmount，<b>唔可以互相抵消</b></td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>4. 圖表區</h3>
+    <div class="src">src/components/inventory/charts/（BarChart 無現成，需新增；DonutChart / AreaChart 已有）</div>
+    <table class="ftab"><thead><tr><th style="width:120px">畫面欄位</th><th style="width:200px">來源欄位</th><th>表 / 來源</th><th>說明</th></tr></thead><tbody>
+      <tr><td>品項庫存金額排名（長條）</td><td class="m">name, current_qty × avg_unit_cost</td><td class="m">inv_products</td><td>Top 6；<b>橫向長條圖元件現時未見，需新增</b></td></tr>
+      <tr><td>金額佔比 %</td><td class="m">品項金額 ÷ 庫存總值 × 100</td><td class="m">同上（前端計）</td><td>同屏只用同類貨幣，唔需要單位換算</td></tr>
+      <tr><td>分類佔比（環圖）</td><td class="m">category, current_qty × avg_unit_cost</td><td class="m">inv_products</td><td>用現有 <span class="m">DonutChart.tsx</span></td></tr>
+      <tr><td>點擊長條跳轉</td><td class="m">name</td><td class="m">—</td><td>同名即唯一（<span class="m">unique(store_id, lower(name))</span>）</td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>5. 價格上漲品項清單 ★ 關鍵區塊</h3>
+    <div class="src">inv_products（全部欄位，基準價已落 DB）＋ 前端 <span class="m">item-price-baseline.ts</span> 計算</div>
+    <table class="ftab"><thead><tr><th style="width:120px">畫面欄位</th><th style="width:200px">來源欄位</th><th>表 / 來源</th><th>說明</th></tr></thead><tbody>
+      <tr><td>品項名</td><td class="m">name</td><td class="m">inv_products.name</td><td>主鍵，兩邊用 <span class="m">lower(trim(name))</span> 對齊</td></tr>
+      <tr><td>分類</td><td class="m">category</td><td class="m">inv_products.category</td><td>可為 null → 顯示「未分類」，唔可以填假值</td></tr>
+      <tr><td>庫存數量</td><td class="m">current_qty</td><td class="m">inv_products.current_qty</td><td>numeric(12,3) → 顯示 <b>3 位小數</b> + 單位</td></tr>
+      <tr><td>庫存金額</td><td class="m">current_qty × avg_unit_cost</td><td class="m">inv_products</td><td>一律 <span class="m">round2</span></td></tr>
+      <tr><td>金額佔比</td><td class="m">庫存金額 ÷ Σ庫存總值</td><td class="m">前端計</td><td>整數百分比</td></tr>
+      <tr class="new"><td>原價（首次進貨）</td><td class="m">baseline_unit_cost</td><td class="m"><b>inv_products（0065 新欄）</b></td><td>＝<b>該品項首次進貨紀錄嘅單價</b>。<b>一經鎖定永不覆寫</b>（唔跟 avg_unit_cost 走）</td></tr>
+      <tr class="new"><td>原價生效日</td><td class="m">baseline_at</td><td class="m"><b>inv_products（0065 新欄）</b></td><td>該筆首次進貨收據嘅 <span class="m">receipt_date</span>；只供顯示，唔參與計算</td></tr>
+      <tr><td>最新單價</td><td class="m">avg_unit_cost</td><td class="m">inv_products.avg_unit_cost</td><td>加權平均進價，每次同步會變（呢個正正就係要對比基準嘅原因）</td></tr>
+      <tr class="new"><td>上漲金額</td><td class="m">(avg_unit_cost − baseline_unit_cost) × current_qty</td><td class="m"><span class="m">computePriceChange()</span></td><td>冇基準 ⇒ <b>null</b>（唔係 0）</td></tr>
+      <tr class="new"><td>漲跌幅 %</td><td class="m">(avg − baseline) ÷ baseline × 100</td><td class="m"><span class="m">computePriceChange()</span></td><td>基準 ≤ 0 ⇒ <b>null</b>（唔會出 Infinity）</td></tr>
+      <tr><td>方向 badge</td><td class="m">direction</td><td class="m"><span class="m">computePriceChange()</span></td><td>up 紅 / down 綠 / same 灰 / <b>new 灰「首次記錄」</b></td></tr>
+      <tr><td>供應商</td><td class="m">last_supplier</td><td class="m">inv_products.last_supplier</td><td>名稱字串，null → 「—」</td></tr>
+      <tr><td>合計列</td><td class="m">totalUpAmount / totalDownAmount</td><td class="m"><span class="m">summarizePriceChanges()</span></td><td>🔴 <b>漲／跌分開兩行</b>，唔可以淨計一個數（會互相抵消）；new 唔入數</td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>5b. 基準價點樣鎖定（同碼差異）</h3>
+    <div class="src">supabase/migrations/0065 + src/lib/inventory-products.ts:262-360 + src/lib/item-price-baseline.ts</div>
+    <table class="ftab"><thead><tr><th style="width:150px">情境</th><th style="width:220px">處理</th><th>結果</th></tr></thead><tbody>
+      <tr><td>全新品（首次出現）</td><td class="m">insert baseline_unit_cost</td><td>今次掃到嘅最早一筆就係佢嘅首次進貨</td></tr>
+      <tr><td>舊品，baseline 仍 NULL</td><td class="m">...baselinePatch（僅此一次）</td><td>下次同步鎖定歷史最早一筆，之後<b>永不覆寫</b></td></tr>
+      <tr><td>舊品，已有 baseline</td><td class="m">baselinePatch ＝ {}</td><td>🔴 完全唔會被覆寫（補登／刪舊收據都唔會令數字飄移）</td></tr>
+      <tr><td>名稱 unique 衝突</td><td class="m">...（hasBase ? {} : …）</td><td>補插路徑同樣守住 baseline</td></tr>
+      <tr><td>同日多筆收據</td><td class="m">pickEarlierBaseline()</td><td>揀<b>單價較低</b>者（保守 ⇒ 漲幅偏細，唔會誇大）</td></tr>
+      <tr><td>單價 ≤ 0</td><td class="m">unitCost &lt;= 0 → 淘汰</td><td>唔會做基準（避免除零／負漲幅）</td></tr>
+      <tr class="new"><td>🔴 完全冇首次進貨紀錄</td><td class="m">baseline 留 NULL → direction "new"</td><td>UI 標「首次記錄」，<b>排除喺漲跌統計外</b>，唔會當 0% 報</td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>6. 手機版差異（同一批欄位，改為卡片式）</h3>
+    <div class="src">同 3/4/5，純版面改變、唔加新欄</div>
+    <table class="ftab"><thead><tr><th style="width:150px">區塊</th><th style="width:200px">顯示欄位</th><th>與桌面版差異</th></tr></thead><tbody>
+      <tr><td>KPI</td><td class="m">庫存總值・漲價品項・漲價影響・平均漲幅</td><td>4 欄由 <span class="m">md:grid-cols-4</span> 改 2×2 網格</td></tr>
+      <tr><td>漲價卡（上）</td><td class="m">name・category・last_supplier・current_qty＋unit・baseline_unit_cost → avg_unit_cost・上漲金額・漲幅 badge・庫存金額・佔比</td><td>一行 10 欄 → 一卡 3 行；漲幅 badge 移到右上，佔比變細進度條</td></tr>
+      <tr><td>全部品項清單</td><td class="m">name・current_qty＋unit・庫存金額・佔比・方向</td><td>表格 → 兩行式清單，庫存金額為主、佔比＋漲幅為輔</td></tr>
+      <tr><td>合計列</td><td class="m">Σ 品項數・Σ 庫存金額・Σ 上漲影響・漲跌筆數</td><td>置底深色條，唔用表格合計行</td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="fgrp">
+    <h3>7. 顏色 / 格式對照（沿用系統現有值）</h3>
+    <div class="src">inventory-view.tsx:1394-1401（漲跌卡）＋ LineChart.tsx:10-11（圖表色）</div>
+    <table class="ftab"><thead><tr><th style="width:120px">元素</th><th style="width:200px">值</th><th>來源 / 理由</th></tr></thead><tbody>
+      <tr><td>漲價 badge</td><td class="m">bg-red-50 text-red-700 ring-red-200</td><td>跟 <span class="m">inventory-view.tsx:1327-1331</span> 現有紅色 badge</td></tr>
+      <tr><td>跌幅 badge</td><td class="m">bg-emerald-50 text-emerald-700</td><td>跟 <span class="m">inventory-view.tsx:1398-1401</span>；<b>成本下降 = 對門店有利 = 綠</b></td></tr>
+      <tr><td>📌 注意</td><td class="m">—</td><td>本頁<b>唔跟</b> reports 頁 <span class="m">pct()</span>（升綠跌紅）——嗰個係「營業額升＝好」語意，呢度係「成本升＝壞」，兩者相反</td></tr>
+      <tr><td>金額格式</td><td class="m">MOP 1,234.56（zh-MO，2 位小數）</td><td>跟同頁 <span class="m">inventory-view.tsx:62</span>，<b>唔用</b> format.ts 整數版</td></tr>
+      <tr><td>數量格式</td><td class="m">3 位小數 + 單位</td><td>numeric(12,3)，跟 <span class="m">inventory-table.tsx:223</span></td></tr>
+      <tr><td>數字對齊</td><td class="m">tabular-nums</td><td>跟 <span class="m">restaurant-daily-report.tsx:3414</span></td></tr>
+      <tr><td>卡片圓角</td><td class="m">rounded-2xl（卡）／rounded-xl（輸入、掣）</td><td>跟 <span class="m">inventory-view.tsx:1247, 1174</span></td></tr>
+      <tr><td>區塊標題</td><td class="m">text-sm font-medium text-slate-600</td><td>跟 <span class="m">inventory-view.tsx:1275</span>，<b>唔用 slate-900</b></td></tr>
+      <tr><td>觸控下限</td><td class="m">min-h-[44px]（手機）／36px（桌面）</td><td>跟 <span class="m">inventory-settings-panel.tsx:418</span></td></tr>
+    </tbody></table>
+   </div>
+
+   <div class="legend">
+     <span><b style="color:var(--slate-900)">🔴 新增</b> ＝ 系統現時冇、必須先加落 DB 或先寫入嘅欄位</span>
+     <span>共 <b style="color:var(--slate-900)">2 個新欄</b>（migration 0065）：<span class="m">baseline_unit_cost</span> / <span class="m">baseline_at</span>；<span class="m">direction</span> 為前端衍生（<span class="m">item-price-baseline.ts</span>）</span>
+   </div>
+  </div>
+ </div>
+</div>
+</div>
+
+<script>
+var TABS = ["scr-desk","scr-mob","scr-fields"];
+function fit(){
+  var stage = document.getElementById("stage"), canvas = document.querySelector(".canvas:not(.hide)");
+  if(!canvas) return;
+  var w = stage.clientWidth || 1280, base = canvas.offsetWidth;
+  var s = Math.min(1, Math.max(w / base, 0.42));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(canvas.offsetHeight * s) + "px";
+  stage.style.overflowX = (base * s > w) ? "auto" : "hidden";
+  stage.style.maxWidth = (base === 420 ? 420 : 1280) + "px";
+}
+function pickTab(id){
+  TABS.forEach(function(t){
+    var el = document.getElementById(t);
+    if(!el) return;
+    el.className = "canvas" + (t === "scr-mob" ? " mob" : "") + (t === id ? "" : " hide");
+  });
+  document.querySelectorAll("#rtabs button").forEach(function(b){
+    b.classList.toggle("on", b.getAttribute("data-tab") === id);
+  });
+  fit();
+}
+document.querySelectorAll("#rtabs button").forEach(function(b){
+  b.onclick = function(){ pickTab(b.getAttribute("data-tab")); };
+});
+
+/* 頁內 tab / chip（純示意，唔切換內容） */
+function bindGroup(sel, attr){
+  document.querySelectorAll(sel).forEach(function(b){
+    b.onclick = function(){
+      var p = b.parentNode;
+      Array.prototype.forEach.call(p.children, function(x){ if(x.tagName === "BUTTON") x.classList.remove("on"); });
+      b.classList.add("on");
+    };
+  });
+}
+bindGroup("#desktabs button");
+bindGroup("#mobtabs button");
+bindGroup(".filters .chip", "k");
+bindGroup(".m-filter .chip", "k");
+document.querySelectorAll('[data-k="only-up"]').forEach(function(el){
+  el.onclick = function(){ el.classList.toggle("off"); };
+});
+document.querySelectorAll('.card').forEach(function(c){ if(c.querySelector(".bar")) c.style.cursor="pointer"; });
+
+window.addEventListener("resize", fit);
+fit();
+</script>
+</body>
+</html>
