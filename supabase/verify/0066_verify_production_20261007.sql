@@ -138,7 +138,9 @@ select
   (r ->> 'ordersTotal')::bigint as legacy_orders_total,
   (r ->> 'ordersByChannelTotal')::bigint as all_orders_total,
   (r ->> 'ordersByChannelTotal')::bigint - (r ->> 'ordersTotal')::bigint as online_only,
-  (select count(*) from jsonb_array_elements(r -> 'ordersByChannel')
+  -- 🔴 `as p` 唔可以漏：`jsonb_array_elements` 無 alias 時 Postgres 唔會認 `p` 呢個名
+  --    （2026-10-08 實案：漏咗就報 42703 column "p" does not exist）
+  (select count(*) from jsonb_array_elements(r -> 'ordersByChannel') p
     where p ->> 'channel' = 'online_projection') as n_projection
 from public.pos_offline_report(
   '8291f843-9def-4956-9d0b-1cfef2598306', '2026-07-10', '2026-10-07'
@@ -177,7 +179,7 @@ from public.pos_offline_report(
 --       legacy_missing_in_new = 0        （舊每個名都喺新 key 出現）
 --       new_only_rows 的 offlineQty/offlineRevenueAvos 全部 = 0（純線上菜）
 --       冇一行 legacy.qty < ch.qty（舊 = offline + platform ⇒ 舊 >= 純 offline）
---       legacy_rows - ch_rows = 平台單獨有嘅菜品數（>= 0）
+--       ch_rows - legacy_rows = 純線上菜款數（>= 0；實測 5）
 -- ============================================================================
 with r as (
   select public.pos_offline_report(
@@ -210,8 +212,10 @@ select
   (select count(*) from legacy l
      join ch c on c.name = l.name
      where l.qty < c.qty or l.revenue < c.revenue) as legacy_smaller_than_offline,
-  -- ℹ️ 平台單獨有嘅菜品數（>= 0，正常）
-  (select count(*) from legacy) - (select count(*) from ch) as platform_only_dishes;
+  -- 🔴 2026-10-08 本地真跑修正：方向原本計反咗（58 − 63 = −5，負數）。
+  --    正確語意：新 key 會**多出**純線上菜（舊 dishes[] 冇）⇒ `ch − legacy >= 0`。
+  --    實測 63 − 58 = 5 款純線上菜。
+  (select count(*) from ch) - (select count(*) from legacy) as online_only_dishes;
 -- ✅ legacy_missing_in_new = 0、new_only_with_offline_amount = 0、legacy_smaller_than_offline = 0
 -- ℹ️ platform_only_dishes 實測 = 58 - 58 = 0（呢間店平台單嘅菜都同線下撞名）
 --    ⚠️ 唔好斷言佢一定係 0 —— 平台單賣獨有菜時會 > 0。
@@ -259,23 +263,32 @@ where (b ->> 'paidAvos')::bigint > (b ->> 'receivableAvos')::bigint;
 -- ============================================================================
 -- ⑫ 菜品排序單調不升（舊 dishes[] 同新 dishesByChannel[] 都要驗）
 -- ============================================================================
-select 'legacy' as which, bool_and(rev >= lag(rev) over () or lag(rev) over () is null) as ok
-from (
-  select (d ->> 'revenueAvos')::bigint as rev
+-- 🔴🔴 呢條之前有**兩個** bug（2026-10-08 本地真跑捉到）：
+--   ① `bool_and(... lag(...) over () ...)` ＝ **aggregate 入面包 window function** ⇒ Postgres 直接拒
+--      （`aggregate function calls cannot contain window function calls`）。
+--   ② `lag(...) over ()` **冇 ORDER BY** ⇒ window 次序未定義，驗咗等於冇驗。
+--   ③ 比較方向寫反咗：註解話「單調不升」（金額倒序），代碼卻寫 `rev >= lag(rev)`（＝升序）。
+--   ✅ 正解：用 `with ordinality` 記住 array 次序，`lag` 排 `ord`，先 window 後 aggregate（分兩層）。
+with a as (
+  select 'legacy' as which, ord, ((d.v) ->> 'revenueAvos')::bigint as rev
   from public.pos_offline_report(
     '8291f843-9def-4956-9d0b-1cfef2598306', '2026-07-10', '2026-10-07'
   ) r
-    cross join lateral jsonb_array_elements(r -> 'dishes') d
-) a
-union all
-select 'byChannel', bool_and(rev >= lag(rev) over () or lag(rev) over () is null)
-from (
-  select (d ->> 'revenueAvos')::bigint as rev
+    cross join lateral jsonb_array_elements(r -> 'dishes') with ordinality as d(v, ord)
+),
+b as (
+  select 'byChannel' as which, ord, ((d.v) ->> 'revenueAvos')::bigint as rev
   from public.pos_offline_report(
     '8291f843-9def-4956-9d0b-1cfef2598306', '2026-07-10', '2026-10-07'
   ) r
-    cross join lateral jsonb_array_elements(r -> 'dishesByChannel') d
-) b;
+    cross join lateral jsonb_array_elements(r -> 'dishesByChannel') with ordinality as d(v, ord)
+),
+u as (select * from a union all select * from b),
+w as (
+  select which, rev, lag(rev) over (partition by which order by ord) as prev from u
+)
+-- 🔴 金額倒序 ⇒ 單調**不升** ⇒ `rev <= prev`
+select which, bool_and(rev <= prev or prev is null) as ok from w group by which;
 -- → 兩行都 true
 
 -- ============================================================================

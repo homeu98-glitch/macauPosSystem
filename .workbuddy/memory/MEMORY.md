@@ -71,6 +71,10 @@
 ③ ②嘅閘只覆蓋**全新裝置** ⇒ 庫存頁另加一次性雲端補值：**逐欄只補空、絕不覆寫**，本地齊全時**零請求**（唔增日常 egress），唔經 `patchLocalSettings`（避免兩台互推）。
 守衛 8 條喺 `inventory-contract-guard.test.ts`（已做「改壞→紅燈→還原」反證）。
 🔴 `GET /api/inventory/master-usage` **只拉 `merchant_id`**、`SCAN_LIMIT=1500`、lazy；**唔可以拉 `raw_ocr_data`**（mg 級 egress）。
+🔴🔴 **品項建議（新增收據）按供應商過濾（2026-10-08）**：`GET /api/inventory/receipt-items` 加 optional `merchantId`，**兩步查詢**＝先 `merchants(id,user_id)` 驗歸屬（唔驗＝可讀其他店進貨史）→ `receipts(merchant_id)` 取 id（cap 200）→ `receipt_items(...).in("receipt_id", ids)`；回傳加 `unit`（＝最近一次 `quantity_unit`）。**唔用 PostgREST embedding**（唔賭 FK 偵測）。聚合純函式喺 `src/lib/inventory-item-suggestions.ts`（**零 import**，可被 `node --test` 直接測）。
+🔴 前端（`inventory-view.tsx` `ReceiptFormModal`）：per-supplier 快取 `scopedItems{key,items,ready}`；**已揀供應商時唔准 fallback 落全店清單**（loading 都唔准，否則閃出無關品項）；零歷史 ⇒ 空狀態 ＋「顯示全部品項」逃生門（改供應商即重置）。`applySuggestion` 帶入單位，**只喺空白時**（同單價口徑）。
+🔴🔴 **單位由「選填」改「必填」（2026-10-08 J 拍板，推翻 10-07 決定，且含編輯模式）**：六個必填＝供應商／品項／數量／單位／付款方式／付款狀態。驗證**一律喺 `save()` 明文寫**，**唔可以用 HTML `required`**（modal 唔係 `<form>`，原生 required 根本唔觸發；守衛會掃 `CUSTOM_UNIT` 後 2600 字內有冇 `required`）。逐欄標紅用 `ring-2 ring-red-300`，**唔可以用 `border-*`**（同 `fieldCls` 嘅 `border-slate-200` 係同一 property，勝負睇產生次序）。數量驗證唔可以靠 `Number(x) || 1`（空字串會靜靜變 1）。
+🔴 守衛測試寫 regex 時：**`/,/g` 唔可以塞入 regex literal**（會令整個測試檔 lexing 爆 `Expected ',', got '<lexing error>'`）⇒ 改用 `view.includes('...')` 字串比對。
 🔴 expenseRecorder `next@16.2.9` 安裝不完整 ⇒ 本機 build 必掛；要 `npm i next@16.3.0`。
 
 ## 11 交班頁庫存支出

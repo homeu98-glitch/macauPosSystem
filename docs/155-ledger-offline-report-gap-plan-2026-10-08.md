@@ -1,7 +1,90 @@
 # 155 · Ledger offline report 需求盤點與補回方案（2026-10-08）
 
-> **狀態：方案書，未執行。** 等 J 確認後先動 code。
-> 本輪只做唯讀盤點，未修改任何程式碼。
+> **狀態：P0 已完成並上線**（commit `20952f3`，Vercel 部署 `success`）。
+> 其餘等 J 確認後先動 code。
+
+## 0.5 🆕 2026-10-08 更新（J 已回覆部分問題）
+
+| 問題 | J 嘅答覆 | 結論 |
+|---|---|---|
+| Q2：0066 係咪已重跑 | 「我直接一整條跑了」 | ✅ 確認已跑（含兩條 CTE 漏欄 fix） |
+| Q4：平台單算唔算 Ledger 線上營收 | **「算」** | 🔴 已寫入對外契約：Ledger **唔可以**再把 `kpi.onlinePlatform` 加落自己嘅平台數（會雙重計） |
+| Q5：grabber 單有冇未投影 | 「反正 pos_orders 的單子都放上去」 | ✅ 唔使改，0066 只讀 `pos_orders` 就夠 |
+| Q3：Ledger 讀新 key 嘅進度 | 「不確定」 | 🔴 **呢個就係「未見到新數據」最可能嘅原因**（見 §0.6） |
+| Q1：`kpiByChannel` 形狀 | **未答** | 🔴 因為 code 已上線，呢條而家變得**緊急** |
+
+### 0.6 點解 push 咗都「未見到尋日嘅數」
+
+已排查，我哋呢邊**全部正常**：
+
+| 檢查 | 結果 |
+|---|---|
+| commit `20952f3` 已 push | ✅ HEAD 有 39 處 `dishesByChannel` |
+| Vercel 部署 | ✅ `success` |
+| 兩個 route 活着 | ✅ `/api/integration/ledger/offline-report` → 401（無簽名，正確） |
+| **尋日（2026-10-07）有冇單** | ✅ **36 張 / MOP 2,823**（線下 23＋投影 11＋平台 2） |
+| 今日（2026-10-08） | ⚠️ **0 張** |
+
+⇒ 所以「冇見到」只可能係以下其中一個，要你確認：
+
+1. **Ledger 嗰邊未開發讀新 key**（Q3 不確定）—— additive 設計下，
+   我哋出咗新 key 佢哋 UI 都唔會顯示。呢個係**最可能**。
+2. **報表預設睇「今日」** —— 今日 0 單，所以空白。要手動揀 10-07。
+3. 真係有 bug —— 要你畀截圖／實際日期我先可以再查。
+
+**逐日實測**（事件時間四腿 + Asia/Macau）：
+
+```text
+2026-10-05   30 張（29 settled）  線下 20 / 投影 6 / 平台 4   MOP 1,781
+2026-10-06   28 張（28 settled）  線下 23 / 投影 2 / 平台 3   MOP 2,064
+2026-10-07   36 張（36 settled）  線下 23 / 投影 11 / 平台 2  MOP 2,823
+```
+
+### 0.7 🔴 關鍵澄清：**我哋 push 唔會令 Ledger 畫面變**
+
+兩個係**各自獨立**嘅系統：
+
+| 系統 | 部署方式 | 狀態 |
+|---|---|---|
+| **macauPosSystem**（我哋） | 我哋 commit/push → Vercel 自動部署 | ✅ 已完成（`20952f3` success） |
+| **Ledger**（另一個系統） | **佢哋自己** commit/push → 佢哋自己部署 | ❌ 未做（Q3 不確定） |
+
+我哋嘅 push **只會**令我哋嘅 API 多回六個新 key；
+Ledger 嘅畫面係佢哋自己嘅 code 砌嘅，**唔會因為我哋 push 而變**。
+
+**而且 —— 舊卡數字「冇更新」係啱嘅**，呢個正正係方案 A 嘅鐵律
+「舊欄一個數字都唔可以變」。線上數據全部去咗新 key。
+
+#### 尋日（2026-10-07）我哋實際會出嘅數（`tools/probe-offline-report-day.cjs` 實跑）
+
+**舊欄（Ledger 現有嗰張卡讀呢組 —— 應該同事故前一模一樣）**：
+
+```text
+kpi.orderCount      25 張
+kpi.revenueAvos     MOP 2,161.00
+byPayment           Mpay MOP 1,553 ＋ 會員餘額 MOP 484 ＋ 外賣平台 MOP 124
+orders[]            25 張 ｜ dishes[]  30 款
+```
+
+👉 **如果 Ledger 顯示嘅係呢組數，即係一切正常**，唔使做任何嘢。
+
+**新 key（要 Ledger 自己寫 code 讀先會顯示）**：
+
+```text
+kpiByChannel.offline         23 張   MOP 2,037
+kpiByChannel.online          11 張   MOP   662
+kpiByChannel.onlinePlatform   2 張   MOP   124      （23 + 2 = 25 ✓ 對返舊 kpi）
+ordersByChannel[]            36 張 ｜ dishesByChannel[]  31 款
+paymentBreakdown[]            7 行
+```
+
+#### 所以要見到線上／線下拆分，要做嘅係：
+
+1. 交 `docs/integration/pos-offline-report-channel-addendum-2026-10-07.md`（v2 契約）畀 Ledger
+2. 佢哋讀 **`x-pos-offline-report-caps`** 標頭；見到
+   `kpiByChannel` / `paymentBreakdown` / `ordersByChannel` / `dishesByChannel` 就用新 key
+3. **佢哋**開發 ＋ 部署，畫面先會變
+4. ⚠️ 按 Q4 拍板：平台單歸佢哋線上營收 ⇒ 唔好再把 `kpi.onlinePlatform` 加落自己嘅平台數
 
 ---
 
@@ -144,11 +227,41 @@ Ledger enum（`in_store`/`balance`）基本上唔會出現，所以而家冇事�
   route 傳 `validated` 入面嘅渠道 KPI；加**行為測試**（唔係守代碼字串）。
 - 揀 (a)：改 `OFFLINE_REPORT_CAPS_CHANNEL` 唔宣告 `kpiByChannel`；改兩份 contract 文件。
 
-### P2 · 跑 production 驗收 SQL
+### P2 · 跑 production 驗收 SQL ✅ **已完成（本地真跑）**
 
-`supabase/verify/0066_verify_production_20261007.sql`（14 條，service role）。
-重點第 ⑧ 條四個值：`legacy_missing_in_new=0`、`new_only_with_offline_amount=0`、
-`legacy_smaller_than_offline=0`、`platform_only_dishes>=0`。
+`supabase/verify/0066_verify_production_20261007.sql` —— **16 條語句全部執行成功**
+（14 條實質檢查 + 2 條 `set role` 本地跳過，要喺 Supabase 驗）。
+
+🔴🔴 **第一次交畀你跑係坏嘅**（`42703: column "p" does not exist`），
+原因同 0066 嗰兩條 CTE 漏欄一模一樣：**我只跑咗語法檢查，冇真正執行過**。
+而家加咗 `tools/verify-offline-report-sql-runtime.cjs`（PGlite 落 production 94 行逐條跑），
+一捉就捉到**三個**語法檢查睇唔到嘅 bug：
+
+| # | 語句 | bug | 修法 |
+|---|---|---|---|
+| 1 | ⑥ | `jsonb_array_elements(...)` **漏咗 `as p`** | 補 alias |
+| 2 | ⑫ | `bool_and(... lag(...) over () ...)` ＝ **aggregate 包 window function**，Postgres 直接拒 | `with ordinality` 記次序，先 window 後 aggregate（分兩層） |
+| 3 | ⑫ | `lag(...) over ()` **冇 ORDER BY** ⇒ 次序未定義，驗咗等於冇驗 | `lag(rev) over (partition by which order by ord)` |
+| 4 | ⑫ | 比較方向**寫反咗**：註解話「單調不升」，代碼寫 `rev >= lag(rev)`（＝升序） | 改 `rev <= prev` |
+| 5 | ⑧ | `platform_only_dishes` 計反方向（58−63 = **−5**） | 改 `ch − legacy`，改名 `online_only_dishes`（實測 5） |
+
+本地實跑結果（production 94 行）：
+
+```text
+② kpi_n=74  kpi_rev=547,100  byPayment_sum=547,100  orders=74  dishes=58/198/549,900
+⑤ 六個 key 全 true；obc_len=93=obc_total；dbc_len=63=dbc_total
+⑥ legacy=74  all=93  online_only=19  n_projection=19
+⑦ rows=63  qty_mismatch=0  rev_mismatch=0  complete=63
+⑧ legacy_rows=58  ch_rows=63  missing_in_new=0  new_only_with_offline=0
+   legacy_smaller=0  online_only_dishes=5
+⑨ offline 66/477,200  online 19/119,700  platform 8/69,900  legacy_kpi_n=74
+⑩ pb_paid_sum=666,800  kpi_rev=547,100
+⑪ 兩行 diffAvos<0（in_store −1,800 / balance −200）
+⑫ legacy ok=true、byChannel ok=true
+⑬ top-level 20 個 key（含 kpiByChannel）
+```
+
+👉 你喺 Supabase 跑嗰陣，對上面呢組數字就得。
 
 ### P3 · 交付對外契約畀 Ledger
 

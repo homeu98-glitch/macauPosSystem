@@ -55,6 +55,29 @@ v1 稿曾經建議「把 `orders[]`／`dishes[]` 由淨線下改成全渠道」�
 
 另外兩個輔助 flag：`flags.channelBreakdownAvailable` / `flags.ledgerOwnsOnlineRevenue`。
 
+### ⚠️ 關於 ④ 嘅**實際 JSON 形狀**（2026-10-08 更新，請以呢段為準）
+
+我哋嘅 **RPC 層**確實回一個頂層 key `kpiByChannel`，但 **API 回應層**會把它攤平
+放入 `kpi` 入面。即係你哋實際收到嘅係：
+
+```json
+"kpi": {
+  "orderCount": 25, "revenueAvos": 216100, "...": "（五個舊欄，完全不變）",
+  "offline":        { "orderCount": 23, "revenueAvos": 203700, "covers": 23, "...": "" },
+  "online":         { "orderCount": 11, "revenueAvos": 66200,  "covers": 11, "...": "" },
+  "onlinePlatform": { "orderCount": 2,  "revenueAvos": 12400,  "covers": 2,  "...": "" }
+}
+```
+
+🔴 **請讀 `kpi.offline` / `kpi.online` / `kpi.onlinePlatform`（嵌套），
+唔好讀頂層 `kpiByChannel`** —— API 回應**冇**呢個頂層 key。
+（我哋 `x-pos-offline-report-caps` 標頭入面嗰個 `kpiByChannel` 係**能力名稱**，
+指「渠道 KPI 可用」，唔係 JSON key 名；呢點我哋會喺下一版標頭厘清。）
+
+⚠️ 第三個渠道 `onlinePlatform` ＝ 外賣平台單（澳覓／mfood）。
+按雙方 2026-10-08 確認：**平台單歸你哋嘅線上營收** ⇒
+你哋**唔好**再把 `kpi.onlinePlatform` 加落自己嘅平台數（會雙重計）。見下面 §第二件事。
+
 ---
 
 ## 🔴🔴 第一件事：你哋**唔好**改現有 UI 嘅任何一行
@@ -86,7 +109,7 @@ v1 稿曾經建議「把 `orders[]`／`dishes[]` 由淨線下改成全渠道」�
 `kpi` 五欄嘅口徑係「`online_order_id IS NULL`」，而**外賣平台單（Grabber 推入）冇呢個欄位**
 ⇒ **平台單現時已經被包埋喺 `kpi` 入面**。
 
-主店 90 日實測（`tools/_probe-offlinereport-v1base-20261007.cjs`）：
+主店 90 日實測：
 
 | | 張數 | 營業額 |
 |---|---|---|
@@ -107,6 +130,27 @@ v1 稿曾經建議「把 `orders[]`／`dishes[]` 由淨線下改成全渠道」�
 
 **請照佋行：線上營業額以你哋自己嘅數據源為準，我哋 `kpi` 唔好再加落去。**
 要睇 POS 側嘅渠道拆分，請讀下面嘅 `kpi.offline` / `kpi.online` / `kpi.onlinePlatform`。
+
+### 🔴🔴 2026-10-08 追加（J 拍板：**平台單算你哋嘅線上營收**）
+
+呢個拍板令上面嗰條規則**更具體**，請一齊睇：
+
+| 渠道 | 歸邊 | 你哋應該點用 |
+|---|---|---|
+| `kpi.offline`（線下 POS） | 我哋獨有 | ✅ 直接用 |
+| `kpi.online`（線上投影：掃碼／排位／快餐採納） | 我哋獨有 | ✅ 直接用 |
+| `kpi.onlinePlatform`（外賣平台：澳覓／mfood） | **算你哋嘅線上營收** | 🔴 **唔可以再加落你哋自己嘅平台數** |
+
+即係話：
+
+```text
+你哋嘅「線上營業額」＝ 你自己 public.orders 嘅數（已含平台單）
+                   ＋ kpi.online（我哋嘅線上投影單）
+                   ⛔ 唔好加 kpi.onlinePlatform   ← 呢筆你哋已經有，加就雙重計
+```
+
+⚠️ `kpi.onlinePlatform` 嘅用途係**對數／稽核**（例如核對平台抽成），
+**唔係**畀你哋加落營業額。實測 90 日呢筆係 8 張 / MOP 699。
 
 ---
 
@@ -667,7 +711,8 @@ select (r -> 'kpiByChannel' -> 'offline'        ->> 'orderCount')::bigint as off
 select (r ->> 'ordersTotal')::bigint as legacy_total,
        (r ->> 'ordersByChannelTotal')::bigint as all_total,
        (r ->> 'ordersByChannelTotal')::bigint - (r ->> 'ordersTotal')::bigint as online_only,
-       (select count(*) from jsonb_array_elements(r -> 'ordersByChannel')
+       -- 🔴 `as p` 唔可以漏（2026-10-08 實案：漏咗報 42703 column "p" does not exist）
+       (select count(*) from jsonb_array_elements(r -> 'ordersByChannel') p
          where p ->> 'channel' = 'online_projection') as n_projection
   from public.pos_offline_report('<STORE>', '2026-07-10', '2026-10-07') r;
 -- ✅ online_only = n_projection

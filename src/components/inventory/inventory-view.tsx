@@ -36,6 +36,8 @@ import { InventorySettingsPanel, type Supplier } from "./inventory-settings-pane
 import { formatReceiptStamp, isBackdatedReceipt, receiptStampLabel } from "@/lib/receipt-timestamp";
 import { compressImage } from "@/lib/image-compress";
 import { humanSize } from "@/lib/image-compress-plan";
+// 歷史品項建議嘅型別（同 API route 共用；該模組零 import，先可以被 node --test 直接測）。
+import type { ItemSuggestion } from "@/lib/inventory-item-suggestions";
 
 type ReceiptItem = {
   id: string;
@@ -88,8 +90,12 @@ type ReceiptsResponse = {
   error?: string;
 };
 
-/** 歷史品項建議（`GET /api/inventory/receipt-items`）。 */
-type ItemSuggestion = { name: string; unit_price: number; last_date: string; count: number };
+/*
+ * 🔴 歷史品項建議（`GET /api/inventory/receipt-items`）嘅型別 ＝ `ItemSuggestion`，
+ *    2026-10-08 起由 `@/lib/inventory-item-suggestions` import 入嚟。
+ *    搬去 lib 嘅原因：聚合邏輯一定要可以被 `node --test` 直接測，而嗰個 runner
+ *    唔認 `.tsx`／`@/` alias ⇒ 型別同純函式必須一齊擺喺零 import 模組。
+ */
 
 const money = (n: number) =>
   `MOP ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -383,6 +389,20 @@ function ReceiptFormModal({
 }) {
   const [form, setForm] = useState<FormState>(() => emptyForm(paymentMethods));
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * 🔴 2026-10-08：驗證失敗時要標紅嘅欄位（`null` = 全部正常）。
+   *
+   * 為何要逐欄標紅而唔止出一句 banner：收據 modal 係 `max-h-[92vh] overflow-y-auto`
+   * 嘅長表單，商家唔一定睇得到 banner 講嘅係邊一行 —— 紅框 ＋
+   * 「第 N 項「魚」的單位必填」兩者一齊，先算「明確嘅驗證提示」。
+   */
+  const [fieldErr, setFieldErr] = useState<
+    | { kind: "supplier" }
+    | { kind: "payment_method" }
+    | { kind: "payment_status" }
+    | { kind: "item"; row: number; field: "name" | "quantity" | "unit" }
+    | null
+  >(null);
   const [saving, setSaving] = useState(false);
   const [askDelete, setAskDelete] = useState(false);
 
@@ -410,6 +430,32 @@ function ReceiptFormModal({
   const [pickerIndex, setPickerIndex] = useState<number>(-1);
 
   /**
+   * 🔴 2026-10-08：**目前所選供應商**嘅歷史品項
+   * （`GET /api/inventory/receipt-items?account=…&merchantId=…`）。
+   *
+   * 需求：揀咗「大大超市」之後，品項建議只可以出喺大大超市買過嘅嘢。
+   *
+   * 為何要 `key`（= merchant_id）＋ `ready` 兩個欄位而唔係單純一個 array：
+   * - `key` 令切換供應商時唔會誤用上一個供應商嘅結果（race）；
+   * - `ready` 區分「仲未載入完」同「真係零歷史」——
+   *   🔴 未載入完**唔可以**退回全店清單，否則商家會見到一批
+   *      明明唔係呢個供應商買過嘅品項閃出嚟，比空白更誤導。
+   */
+  const [scopedItems, setScopedItems] = useState<{ key: string; items: ItemSuggestion[]; ready: boolean }>({
+    key: "",
+    items: [],
+    ready: false,
+  });
+
+  /**
+   * 商家主動撳「顯示全部品項」嘅逃生門（只喺該供應商確認冇歷史時出現）。
+   *
+   * ⚠️ 呢個 flag 只係**顯示開關**，唔會改 `form.merchant_id` —— 供應商一改
+   *    （或重開 modal）就會自動重置，避免商家帶住「全店清單」嘅錯誤預期落第二張單。
+   */
+  const [showAllItems, setShowAllItems] = useState(false);
+
+  /**
    * 收據日期：確認稿係 chips（今天／昨天／選日期…），唔係一開頭就一個原生 date input。
    * 觸屏日曆揀日期要兩步（開日曆 → 揀日），而實際九成單都係「今天／昨天」，
    * 所以預設收起日曆，撳「選日期…」先展開（舊值仍然會顯示喺 chip 上面）。
@@ -434,6 +480,7 @@ function ReceiptFormModal({
     if (open) {
       setForm(initial ? formFromReceipt(initial) : emptyForm(paymentMethods));
       setErr(null);
+      setFieldErr(null);
       setAskDelete(false);
       setShowNewSupplier(false);
       setNewSupplierName("");
@@ -441,6 +488,8 @@ function ReceiptFormModal({
       setManualCategory(false);
       setPickerIndex(-1);
       setShowDatePicker(false);
+      // 2026-10-08：「顯示全部品項」嘅逃生門唔可以跨單殘留。
+      setShowAllItems(false);
       /*
        * 🔴 每次開 modal 一定要清相片狀態。
        *   若唔清，上一張收據嘅待上傳相片會「跟」到下一張
@@ -458,6 +507,49 @@ function ReceiptFormModal({
     // paymentMethods 唔列入 deps：開 modal 一刻嘅主檔就夠，途中變更唔應該重設用戶輸入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initial]);
+
+  /**
+   * 🔴 2026-10-08：拉「目前所選供應商」嘅歷史品項
+   * （`GET /api/inventory/receipt-items?...&merchantId=…`）。
+   *
+   * 需求：商家揀咗「大大超市」，品項彈窗只應該出喺大大超市買過嘅嘢。
+   *
+   * 三個死穴（唔可以簡化）：
+   * ① **`merchant_id` 一定要真係喺 `suppliers` 清單入面**先拉 ——
+   *    「其他（手動輸入）」冇 id，冇得查歷史 ⇒ 維持全店「最近用過」。
+   * ② **一定要 `cancelled` 守衛**：商家快速切幾個供應商時，慢嗰個回應會覆蓋
+   *    快嗰個嘅結果 ⇒ 彈窗出另一個供應商嘅品項（同 Realtime hook 同一種病灶）。
+   * ③ 配對用 `scopedItems.key === 當前 id`，**配唔中就當「載入中」而唔係 fallback
+   *    落全店清單** —— 否則切換供應商時會閃出一批唔屬於呢個供應商嘅品項。
+   *
+   * ⚠️ egress：同一個 modal session 內同一供應商只打一次（`ready` 快取），
+   *    商家打字係本機過濾，唔會再打 server。
+   */
+  useEffect(() => {
+    if (!open || !account) return;
+    const key = suppliers.some((s) => s.id === form.merchant_id) ? form.merchant_id : "";
+    if (!key) return; // 未揀供應商／手動輸入 ⇒ 沿用全店清單
+    if (scopedItems.key === key && scopedItems.ready) return; // 已快取
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/inventory/receipt-items?account=${encodeURIComponent(account)}&merchantId=${encodeURIComponent(key)}`,
+        );
+        const json = (await res.json()) as { ok?: boolean; items?: ItemSuggestion[] };
+        if (cancelled) return;
+        setScopedItems({ key, items: json.ok && Array.isArray(json.items) ? json.items : [], ready: true });
+      } catch {
+        if (cancelled) return;
+        // 網絡失敗 ⇒ 當「零歷史」（唔會退回全店，見上面 ③）。
+        setScopedItems({ key, items: [], ready: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, account, form.merchant_id, suppliers, scopedItems]);
 
   if (!open) return null;
 
@@ -519,9 +611,26 @@ function ReceiptFormModal({
     return list;
   };
 
+  /**
+   * 品項建議嘅來源（2026-10-08）。
+   *
+   * - **已揀到具體供應商**（`merchant_id` 真係喺 `suppliers` 清單，唔係手動輸入）
+   *   ⇒ 只出該供應商嘅歷史品項。仲未載入完／確認零歷史時**唔會**退回全店清單
+   *   （只可以由商家主動撳「顯示全部品項」）。
+   * - **未揀供應商／「其他（手動輸入）」** ⇒ 沿用全店「最近用過」（＝原本行為）。
+   */
+  const supplierScopeId = knownSupplier ? form.merchant_id : "";
+  const scopedReady = Boolean(supplierScopeId) && scopedItems.key === supplierScopeId && scopedItems.ready;
+  const suggestionSource: ItemSuggestion[] =
+    !supplierScopeId || showAllItems ? recentItems : scopedReady ? scopedItems.items : [];
+  /** 已揀供應商 ＋ 確認真係零歷史（唔係載入中）＋ 未撳「顯示全部品項」。 */
+  const scopedEmpty = Boolean(supplierScopeId) && scopedReady && scopedItems.items.length === 0 && !showAllItems;
+  /** 供應商名（建議清單標題／空狀態文案用）。 */
+  const supplierScopeName = suppliers.find((s) => s.id === form.merchant_id)?.name ?? form.merchant_name;
+
   const suggestionsFor = (query: string): ItemSuggestion[] => {
     const q = query.trim().toLowerCase();
-    const list = q ? recentItems.filter((i) => i.name.toLowerCase().includes(q)) : recentItems;
+    const list = q ? suggestionSource.filter((i) => i.name.toLowerCase().includes(q)) : suggestionSource;
     return list.slice(0, 8);
   };
 
@@ -530,6 +639,11 @@ function ReceiptFormModal({
       name: s.name,
       // 只喺單價空白時才自動填：唔好蓋走用戶已經改過嘅價錢。
       unit_price: form.items[i]?.unit_price?.trim() ? form.items[i].unit_price : String(s.unit_price || ""),
+      // 2026-10-08：單位同單價**同一口徑** —— 只喺空白時帶入歷史單位，
+      // 唔會蓋走商家編輯舊單時已經揀好嘅單位。
+      // ⚠️ 歷史單位未必喺「設置 → 單位」主檔內，但 `unitOptionsFor()` 會自動補入
+      //    `<select>` 選項 ⇒ 一定顯示得到，唔會出現「有值但個框空白」幽靈狀態。
+      unit: form.items[i]?.unit?.trim() ? form.items[i].unit : s.unit || "",
     });
     setPickerIndex(-1);
   };
@@ -674,19 +788,65 @@ function ReceiptFormModal({
 
   const save = async () => {
     setErr(null);
-    if (!form.merchant_id && !form.merchant_name.trim()) return setErr("請選擇或輸入供應商");
-    if (!form.date) return setErr("請選擇收據日期");
+    setFieldErr(null);
+    if (!form.merchant_id && !form.merchant_name.trim()) {
+      setFieldErr({ kind: "supplier" });
+      return setErr("請選擇供應商（必填）");
+    }
+    if (!form.date) return setErr("請選擇收據日期（必填）");
     // 🔴 2026-10-07 J 拍板：品類必填。
     // 舊收據（品類為空）一經編輯儲存就會被要求補揀 —— 呢個係預期行為，
     // 因為品項分析／品類報表要靠品類分組，空品類會出現「未分類」黑洞。
     if (!form.category.trim()) return setErr("請選擇品類（必填）");
+
+    /*
+     * 🔴 2026-10-08 J 拍板：付款方式／付款狀態／品項／數量／單位一律必填，
+     *    而且**包含編輯模式**（唔止新增）。
+     *
+     * ⚠️ 呢個係**推翻** 2026-10-07「單位保持選填」嘅拍板。副作用（J 已確認接受）：
+     *    所有舊收據（單位為空）一經編輯儲存就會被要求補齊單位。
+     *    同步已改寫 `inventory-contract-guard.test.ts` 嗰條守舊口徑嘅守衛。
+     */
+    if (!form.payment_method) {
+      setFieldErr({ kind: "payment_method" });
+      return setErr("請選擇付款方式（必填）");
+    }
+    if (!form.payment_status) {
+      setFieldErr({ kind: "payment_status" });
+      return setErr("請選擇付款狀態（必填）");
+    }
+
+    /*
+     * 品項驗證：
+     * - **完全空白**嘅行（連品名都冇）照舊被丟棄 —— 「＋ 品項」撳多咗一行係常態，
+     *   唔應該因為一行空殼而擋住成張單（同原本 `.filter(it => it.name.trim())` 一致）。
+     * - 但只要有**品名**，該行嘅數量同單位就一律要填。
+     *   ⚠️ 數量空白／0 都要當「未填」：`Number("") || 1` 會靜靜變 1，
+     *      唔可以靠原本嘅 `|| 1` 做驗證。
+     */
+    const namedRows = form.items.map((it, idx) => ({ it, idx })).filter((x) => x.it.name.trim());
+    if (namedRows.length === 0) {
+      setFieldErr({ kind: "item", row: 0, field: "name" });
+      return setErr("請至少輸入一個品項（必填）");
+    }
+    const badQty = namedRows.find((x) => !(Number((x.it.quantity || "").replace(/,/g, "")) > 0));
+    if (badQty) {
+      setFieldErr({ kind: "item", row: badQty.idx, field: "quantity" });
+      return setErr(`第 ${badQty.idx + 1} 項「${badQty.it.name.trim()}」的數量必填（要大於 0）`);
+    }
+    const badUnitRow = namedRows.find((x) => !x.it.unit.trim());
+    if (badUnitRow) {
+      setFieldErr({ kind: "item", row: badUnitRow.idx, field: "unit" });
+      return setErr(`第 ${badUnitRow.idx + 1} 項「${badUnitRow.it.name.trim()}」的單位必填`);
+    }
+
     const items = form.items
       .filter((it) => it.name.trim())
       .map((it) => ({
         name: it.name.trim(),
         unit_price: Number(it.unit_price) || 0,
         quantity: Number(it.quantity) || 1,
-        // 2026-10-06：單位（kg／包／罐…）。空字串 = 未填，server 會照寫空值。
+        // 2026-10-06：單位（kg／包／罐…）。2026-10-08 起必填（上面已驗）。
         quantity_unit: it.unit.trim(),
       }));
     setSaving(true);
@@ -814,6 +974,20 @@ function ReceiptFormModal({
     }`;
   const labelCls = "mb-1.5 block text-sm font-medium text-slate-700";
 
+  /**
+   * 驗證失敗欄位嘅紅框（2026-10-08）。
+   *
+   * ⚠️ 用 `ring` 而**唔可以**用 `border`：`fieldCls`／`unitFieldCls` 本身已經有
+   *    `border border-slate-200`，而 Tailwind v4 嘅 `border-*` 顏色係同一個 property，
+   *    兩個邊個贏係睇**產生次序**而唔係 class 字串次序 ⇒ 加 `border-red-400`
+   *    隨時被 `border-slate-200` 蓋過（同 `.w-full` 壓 `.w-28` 係同一種地雷）。
+   *    `ring` 係獨立 property，一定唔會打架。
+   */
+  const errRing = (on: boolean) => (on ? " ring-2 ring-red-300" : "");
+  /** 該品項行嘅某個欄位係唔係驗證失敗。 */
+  const itemFieldErr = (idx: number, field: "name" | "quantity" | "unit") =>
+    fieldErr?.kind === "item" && fieldErr.row === idx && fieldErr.field === field;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3"
@@ -840,10 +1014,13 @@ function ReceiptFormModal({
             <label className={labelCls}>供應商</label>
             <div className="flex gap-2">
               <select
-                className={fieldCls}
+                className={fieldCls + errRing(fieldErr?.kind === "supplier")}
                 value={supplierSelectValue}
                 onChange={(e) => {
                   const v = e.target.value;
+                  // 2026-10-08：一改供應商就收返「顯示全部品項」嘅逃生門 ——
+                  // 否則商家切到下一個供應商仍然望住全店清單，會誤以為嗰啲都買過。
+                  setShowAllItems(false);
                   if (v === "__custom__") setForm({ ...form, merchant_id: "", merchant_name: form.merchant_name });
                   else if (!v) setForm({ ...form, merchant_id: "", merchant_name: "" });
                   else {
@@ -1043,7 +1220,7 @@ function ReceiptFormModal({
           {/* ── 付款方式：chip（主檔驅動） ── */}
           <div>
             <label className={labelCls}>付款方式</label>
-            <div className="flex flex-wrap gap-2">
+            <div className={"flex flex-wrap gap-2 rounded-xl" + errRing(fieldErr?.kind === "payment_method")}>
               {paymentMethods.length === 0 ? (
                 <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
                   系統未設定任何「進貨」付款方式，請聯絡管理員喺後台設定。
@@ -1084,7 +1261,7 @@ function ReceiptFormModal({
                 「月結」通常先記「未付款」，月底結算後記得返嚟改做「已付款」。
               </span>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className={"flex flex-wrap gap-2 rounded-xl" + errRing(fieldErr?.kind === "payment_status")}>
               {([
                 { code: "unpaid", label: "未付款" },
                 { code: "paid", label: "已付款" },
@@ -1255,7 +1432,7 @@ function ReceiptFormModal({
                     <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_8rem_auto]">
                       <div className="col-span-2 min-w-0 sm:col-span-1">
                         <input
-                          className={fieldCls}
+                          className={fieldCls + errRing(itemFieldErr(i, "name"))}
                           value={it.name}
                           onChange={(e) => {
                             setItem(i, { name: e.target.value });
@@ -1278,7 +1455,12 @@ function ReceiptFormModal({
                       {/* 數量 stepper（確認稿：− 12 ＋）。仍然可以直接打字（連續落單時更快），
                           stepper 只係補返觸屏「加一次」嘅需要。下限 0，唔會出負數。
                           ⚠️ `overflow-hidden` 令兩個按鈕嘅 hover 底色唔會突出圓角。 */}
-                      <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                      <div
+                        className={
+                          "grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-1 overflow-hidden rounded-xl border border-slate-200 bg-white" +
+                          errRing(itemFieldErr(i, "quantity"))
+                        }
+                      >
                         <button
                           type="button"
                           onClick={() => stepQty(i, -1)}
@@ -1319,7 +1501,7 @@ function ReceiptFormModal({
                       {manualUnitRows[i] || units.length === 0 ? (
                         <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] gap-1 sm:col-span-1">
                           <input
-                            className={unitFieldCls}
+                            className={unitFieldCls + errRing(itemFieldErr(i, "unit"))}
                             value={it.unit}
                             onChange={(e) => setItem(i, { unit: e.target.value })}
                             placeholder="單位"
@@ -1346,7 +1528,7 @@ function ReceiptFormModal({
                            ⇒ 下拉模式淨係得 select，手動模式先有一個 40px 方形切換掣。 */
                         <div className="col-span-2 sm:col-span-1">
                           <select
-                            className={unitFieldCls}
+                            className={unitFieldCls + errRing(itemFieldErr(i, "unit"))}
                             value={manualUnitRows[i] ? CUSTOM_UNIT : it.unit}
                             onChange={(e) => {
                               const v = e.target.value;
@@ -1382,34 +1564,72 @@ function ReceiptFormModal({
                       </button>
                     </div>
 
-                    {suggestions.length > 0 && (
+                    {/*
+                      建議清單（2026-10-08：已按當前所選供應商過濾）。
+                      🔴 條件要**同時包埋空狀態** —— 已揀供應商但真係零歷史時，
+                         如果咩都唔 render，商家會以為功能壞咗（「明明喺呢間買過魚」）。
+                      ⚠️ `suggestions` 只喺 `pickerIndex === i` 時先有值，
+                         所以空狀態要自己再判一次 `pickerIndex === i`。
+                    */}
+                    {(suggestions.length > 0 || (pickerIndex === i && scopedEmpty)) && (
                       <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
                         <p className="px-2 pb-1 text-xs font-medium text-slate-500">
-                          最近用過（撳一下自動填入品名，單價空白時一併填入）
+                          {supplierScopeId && !showAllItems ? (
+                            <>
+                              <span className="font-semibold">{supplierScopeName}</span>
+                              {"　常用品項（撳一下自動填入品名、單位；單價空白時一併填入）"}
+                            </>
+                          ) : (
+                            "最近用過（撳一下自動填入品名，單價空白時一併填入）"
+                          )}
                         </p>
-                        <div className="flex flex-wrap gap-2">
-                          {suggestions.map((s) => (
+                        {suggestions.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {suggestions.map((s) => (
+                              <button
+                                key={s.name}
+                                type="button"
+                                /* 🔴 用 onPointerDown + preventDefault 而唔係 onClick：
+                                   撳落去嘅一刻 input 會先 blur，而 onBlur 會收埋個建議清單
+                                   ⇒ onClick 永遠唔會觸發（建議清單「撳唔到」）。 */
+                                onPointerDown={(e) => {
+                                  e.preventDefault();
+                                  applySuggestion(i, s);
+                                }}
+                                className="rounded-xl bg-white px-3 py-2.5 text-sm font-medium text-slate-800 ring-1 ring-slate-200"
+                              >
+                                {s.name}
+                                {/* 2026-10-08：連歷史單位一齊顯示，商家撳之前就知會帶入咩。
+                                    ⚠️ 單價可以係 0（免費／未填），所以要分開判 —— 只有
+                                       單位都要顯示得到，唔可以整個 span 收埋。 */}
+                                {s.unit_price || s.unit ? (
+                                  <span className="ml-2 text-xs font-normal text-slate-400">
+                                    {s.unit_price ? money(s.unit_price) : ""}
+                                    {s.unit ? `${s.unit_price ? " / " : ""}${s.unit}` : ""}
+                                  </span>
+                                ) : null}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2 px-2 pb-1">
+                            <p className="text-xs text-slate-500">
+                              「{supplierScopeName}」的歷史單據未有品項，可以直接輸入品名。
+                            </p>
                             <button
-                              key={s.name}
                               type="button"
-                              /* 🔴 用 onPointerDown + preventDefault 而唔係 onClick：
-                                 撳落去嘅一刻 input 會先 blur，而 onBlur 會收埋個建議清單
-                                 ⇒ onClick 永遠唔會觸發（建議清單「撳唔到」）。 */
+                              /* 同建議 chip 一樣一定要 onPointerDown + preventDefault：
+                                 撳落去 input 會先 blur，onBlur 即刻收埋成個清單 ⇒ 撳唔到。 */
                               onPointerDown={(e) => {
                                 e.preventDefault();
-                                applySuggestion(i, s);
+                                setShowAllItems(true);
                               }}
-                              className="rounded-xl bg-white px-3 py-2.5 text-sm font-medium text-slate-800 ring-1 ring-slate-200"
+                              className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
                             >
-                              {s.name}
-                              {s.unit_price ? (
-                                <span className="ml-2 text-xs font-normal text-slate-400">
-                                  {money(s.unit_price)}
-                                </span>
-                              ) : null}
+                              顯示全部品項
                             </button>
-                          ))}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

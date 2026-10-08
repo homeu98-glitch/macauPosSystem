@@ -107,6 +107,7 @@ const STATS = "src/lib/inventory-stats.ts";
 const MERCHANTS = "src/app/api/inventory/merchants/route.ts";
 const METHODS_API = "src/app/api/inventory/payment-methods/route.ts";
 const ITEMS_API = "src/app/api/inventory/receipt-items/route.ts";
+const SUGGEST_LIB = "src/lib/inventory-item-suggestions.ts";
 const PRODUCTS_LIB = "src/lib/inventory-products.ts";
 const BASELINE_LIB = "src/lib/item-price-baseline.ts";
 
@@ -398,6 +399,133 @@ describe("品項快速選取（歷史品項）", () => {
   });
 });
 
+/**
+ * 2026-10-08 需求：品項彈窗由「最近用過（全店）」改為**按當前所選供應商**過濾，
+ * 並喺撳建議時帶入該品項喺歷史單據用過嘅**單位**。
+ *
+ * 🔴 最容易做錯嘅一步：只喺前端 `.filter()`。
+ *    呢支 route 只回全域最近 400 行 ⇒ 某供應商較舊嘅品項根本唔喺嗰批，
+ *    前端點篩都會漏（商家會話「明明喺呢間買過」）。所以條件一定要落 server。
+ */
+describe("品項建議：按當前所選供應商過濾（2026-10-08）", () => {
+  it("API 要接受 merchantId，並用 receipts.merchant_id → receipt_items 兩步收窄", () => {
+    const api = read(ITEMS_API);
+    assert.ok(/searchParams\.get\("merchantId"\)/.test(api), "要有 merchantId 參數");
+    assert.ok(/\.eq\("merchant_id", merchantId\)/.test(api), "要用 receipts.merchant_id 取該供應商嘅收據");
+    assert.ok(/\.in\("receipt_id", receiptIds\)/.test(api), "要用收據 id 收窄 receipt_items");
+    assert.ok(/SUPPLIER_RECEIPT_LIMIT/.test(api), "收據 id 清單要有上限（老店單數可以幾千）");
+  });
+
+  it("🔴 merchantId 一定要驗所屬，否則可以讀其他店嘅進貨歷史", () => {
+    const api = read(ITEMS_API);
+    assert.ok(
+      /\.from\("merchants"\)[\s\S]{0,240}?\.eq\("user_id", resolved\.userId\)/.test(api),
+      "merchants 跨店共用 ⇒ 一定要用 user_id 驗歸屬",
+    );
+  });
+
+  it("🔴 供應商唔屬本店／冇單 ⇒ 回空清單，唔可以退回全店", () => {
+    const api = read(ITEMS_API);
+    assert.ok(
+      /if \(!merchant\) return NextResponse\.json\(\{ ok: true, items: \[\], matched: false \}\)/.test(api),
+      "唔屬本店要當「冇歷史」，退回全店會令商家以為呢批係呢個供應商買過",
+    );
+    assert.ok(/if \(receiptIds\.length === 0\)/.test(api), "零收據要短路，唔可以照查 receipt_items");
+  });
+
+  it("要回 quantity_unit（帶入歷史單位），並保留 42703 legacy 降級", () => {
+    const api = read(ITEMS_API);
+    assert.ok(/select\("name, unit_price, quantity_unit, created_at"\)/.test(api), "要選 quantity_unit");
+    assert.ok(/isMissingColumnOrTable\(error\)/.test(api), "舊 schema 冇該欄要降級而唔係 500");
+  });
+
+  it("🔴 聚合邏輯要抽成零 import 純函式（node --test 唔認 @/ 同 .tsx）", () => {
+    const lib = read(SUGGEST_LIB);
+    assert.equal(/^\s*import /m.test(lib), false, "必須零 import，否則測唔到");
+    assert.ok(/export function aggregateItemSuggestions/.test(lib));
+    assert.ok(/export type ItemSuggestion/.test(lib));
+    assert.ok(/unit: typeof row\.quantity_unit === "string"/.test(lib), "單位缺席要回空字串，唔可以造假單位");
+    assert.ok(/existing\.count \+= 1/.test(lib), "同名要累加 count");
+  });
+
+  it("🔴 已揀供應商時唔可以 fallback 落全店清單（唔准閃出無關品項）", () => {
+    const view = read(VIEW);
+    assert.ok(/const suggestionSource: ItemSuggestion\[\] =/.test(view), "要有單一來源變數");
+    assert.ok(
+      /!supplierScopeId \|\| showAllItems \? recentItems/.test(view),
+      "只有『未揀供應商』或『主動顯示全部』先可以用全店清單",
+    );
+    assert.ok(
+      /scopedItems\.key === supplierScopeId && scopedItems\.ready/.test(view),
+      "要用 key 配對，配唔中當載入中（唔可以退回全店）",
+    );
+  });
+
+  it("切換供應商要 cancel 慢回應（同 Realtime 重連同一種病灶）", () => {
+    const view = read(VIEW);
+    assert.ok(/let cancelled = false;/.test(view), "要有 cancelled 守衛");
+    assert.ok(/if \(cancelled\) return;/.test(view), "回應返嚟要先判 cancelled");
+    assert.ok(/merchantId=\$\{encodeURIComponent\(key\)\}/.test(view), "要帶 merchantId 打 API");
+  });
+
+  it("撳建議要帶入歷史單位，但唔可以蓋走已有單位", () => {
+    const view = read(VIEW);
+    assert.ok(
+      /unit: form\.items\[i\]\?\.unit\?\.trim\(\) \? form\.items\[i\]\.unit : s\.unit \|\| ""/.test(view),
+      "單位要同單價同一口徑：只喺空白時帶入",
+    );
+  });
+
+  it("零歷史時要出空狀態 ＋「顯示全部品項」逃生門，唔可以留空殼", () => {
+    const view = read(VIEW);
+    assert.ok(/scopedEmpty/.test(view), "要有『確認零歷史』嘅判別（唔可以同『載入中』混為一談）");
+    assert.ok(/顯示全部品項/.test(view), "要有逃生門");
+    assert.ok(/setShowAllItems\(true\)/.test(view), "逃生門要真係切換來源");
+  });
+});
+
+/**
+ * 2026-10-08 J 拍板：新增／編輯收據六個欄位必填
+ * （品項／數量／單位／付款方式／付款狀態／供應商），**包含編輯模式**。
+ *
+ * ⚠️ 呢個推翻 2026-10-07「單位保持選填」嘅拍板 ⇒ 舊收據（單位為空）
+ *    編輯時會被要求補齊。J 已確認接受。
+ */
+describe("新增／編輯收據：必填驗證（2026-10-08）", () => {
+  it("六個必填都要明文驗並喺驗證失敗時 return", () => {
+    const view = read(VIEW);
+    assert.ok(/請選擇供應商（必填）/.test(view));
+    assert.ok(/請選擇付款方式（必填）/.test(view));
+    assert.ok(/請選擇付款狀態（必填）/.test(view));
+    assert.ok(/請至少輸入一個品項（必填）/.test(view), "冇品名嘅品項要擋");
+    assert.ok(/的數量必填/.test(view));
+    assert.ok(/的單位必填/.test(view));
+  });
+
+  it("錯誤提示要指明第幾項同品名（唔可以只出一句通用錯誤）", () => {
+    const view = read(VIEW);
+    assert.ok(/第 \$\{badQty\.idx \+ 1\} 項「\$\{badQty\.it\.name\.trim\(\)\}」/.test(view));
+    assert.ok(/第 \$\{badUnitRow\.idx \+ 1\} 項「\$\{badUnitRow\.it\.name\.trim\(\)\}」/.test(view));
+  });
+
+  it("🔴 逐欄標紅要用 ring，唔可以用 border（會被 fieldCls 嘅 border-slate-200 蓋過）", () => {
+    const view = read(VIEW);
+    assert.ok(/const errRing = \(on: boolean\)/.test(view));
+    assert.ok(/ring-2 ring-red-300/.test(view));
+    assert.equal(/border-red-300/.test(view), false, "border-* 顏色係同一 property，勝負睇產生次序");
+  });
+
+  it("數量驗證唔可以靠 `Number(x) || 1`（空字串會靜靜變 1）", () => {
+    // ⚠️ 用字串比對（`includes`）而唔用 regex：`/,/g` 呢種寫法塞入 regex literal
+    //    會直接令本檔 lexing 爆（`Expected ',', got '<lexing error>'`），實測中過。
+    const view = read(VIEW);
+    assert.ok(
+      view.includes('Number((x.it.quantity || "").replace(/,/g, "")) > 0'),
+      "要先當空字串係未填，唔可以靠 fallback 1",
+    );
+  });
+});
+
 describe("品類：納入「設置」，並要頂得住 whitelist normalize", () => {
   it("PosLocalSettings 要有 invCategories", () => {
     assert.ok(/invCategories: string\[\]/.test(read("src/lib/types.ts")));
@@ -643,12 +771,14 @@ describe("單位：納入「設置」，並喺新增單據時以下拉選單呈�
     );
   });
 
-  it("單位仍然係選填（唔會因為加咗主檔就變必填）", () => {
+  it("🔴 單位 2026-10-08 改必填，但 JSX 仍然唔用原生 required", () => {
     const view = read(VIEW);
-    // 對比：品類 2026-10-07 改咗必填，單位刻意**保持選填** ⇒ 唔可以出現 required。
+    // 為何唔可以用 HTML `required`：收據 modal 唔係 <form>，撳「儲存」係直接呼叫
+    // save()，原生 required 根本唔會觸發 ⇒ 加咗只會令人以為已經驗咗。
+    // 驗證一律喺 save() 明文寫死（見「新增／編輯收據：必填驗證」嗰組）。
     const unitBlock = /CUSTOM_UNIT[\s\S]{0,2600}/.exec(view)?.[0] ?? "";
     assert.ok(unitBlock.length > 0, "搵唔到單位欄位區塊");
-    assert.ok(!/\brequired\b/.test(unitBlock), "單位欄唔可以係必填");
+    assert.ok(!/\brequired\b/.test(unitBlock), "單位欄唔用原生 required");
   });
 
   it("儲存時仍然寫入 quantity_unit（欄位名唔可以改）", () => {

@@ -20,6 +20,12 @@
 | [pos-offline-report-reply-2026-09-25.md](./pos-offline-report-reply-2026-09-25.md) | 回覆 Ledger：要佢哋改嘅 5 處、實際 payload、三條待回問題 | 同 Ledger 對契約 |
 | [pos-offline-report-reply-2026-09-25.md](./pos-offline-report-reply-2026-09-25.md) | 回覆 Ledger：要佢哋改嘅 5 處、實際 payload、三條待回問題 | 同 Ledger 對契約 |
 | [pos-offline-report-v1-addendum-2026-09-26.md](./pos-offline-report-v1-addendum-2026-09-26.md) | **v1 增補**：加 `orders[]`（訂單明細）+ `dishes[]`（菜品排名）；caps 標頭、截斷、口徑 | 2026-09-26 之後嘅整合（可直接轉貼） |
+| [pos-offline-report-channel-addendum-2026-10-07.md](./pos-offline-report-channel-addendum-2026-10-07.md) | 🔴 **渠道增補 v2（最新）**：菜品分渠道、訂單來源、支付方式分項、渠道 KPI。**舊欄一個數字都唔改** | **要畀 Ledger 嘅就係呢份**（可直接轉貼） |
+
+> 📦 **畀 Ledger 嘅 offline-report 交付包**（三份一齊）：
+> ① [`pos-offline-report-api.md`](./pos-offline-report-api.md)（v1 主契約）
+> ② [`pos-offline-report-v1-addendum-2026-09-26.md`](./pos-offline-report-v1-addendum-2026-09-26.md)（09-26 增補）
+> ③ [`pos-offline-report-channel-addendum-2026-10-07.md`](./pos-offline-report-channel-addendum-2026-10-07.md)（10-07 渠道增補，**重點**）
 
 ---
 
